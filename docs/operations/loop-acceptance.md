@@ -77,3 +77,15 @@ classification and supporting diagnostics. Record that the queue limit,
 promotion freeze and attended mode held throughout the sequence. The operator
 decides whether that evidence establishes acceptance; authoring this procedure
 or passing repository tests does not itself execute the loop.
+
+## Evidence record
+
+For each attempt, fill in a row in the following Markdown table and post the
+record as a comment on the stabilization tracker issue. The completed record is
+runtime evidence under the repository's source/runtime classification: do not
+commit it to the repository. Keep this template in source so that three
+consecutive passes can be audited from GitHub alone.
+
+| Attempt number | Issue | Run id | PR | Merged commit | Wall time enqueue→merge | Station-caused failure (none or cause) | Counter after the attempt |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| <attempt> | #<issue> | <run-id> | #<pr> | <merged-commit> | <elapsed time> | <none or cause> | <counter> |
