@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import test from "node:test";
 import { queueReadiness } from "../../src/queue.ts";
-import { readServiceEnvironment } from "../../../launcher/src/service-environment.ts";
+import { readServiceEnvironment } from "@a4s/launcher/service-environment";
 import { declareService } from "../fixtures/service-environment.ts";
 import { parse } from "yaml";
 

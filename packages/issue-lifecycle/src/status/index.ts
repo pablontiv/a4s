@@ -1,4 +1,4 @@
-import { readServiceEnvironment } from "../../../launcher/src/service-environment.ts";
+import { readServiceEnvironment } from "@a4s/launcher/service-environment";
 import { recordRunObservation, receiptCompatibility } from "./receipt.ts";
 import { setTimeout as delay } from "node:timers/promises";
 import { execFile } from "node:child_process";
@@ -21,8 +21,8 @@ import { WorkflowsWidget } from "./widget.ts";
 import type { WidgetUI, WidgetView } from "./widget.ts";
 import { cancellationState, readCancellation } from "../cancellation.ts";
 import { join } from "node:path";
-import { isRecord } from "../../../launcher/src/type-guard.ts";
-import { cancellationReceipt } from "../../../launcher/src/select.ts";
+import { isRecord } from "@a4s/launcher/type-guard";
+import { cancellationReceipt } from "@a4s/launcher/select";
 
 interface NoticeStorage {
   transitions: TransitionStorage;

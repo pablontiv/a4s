@@ -1,6 +1,6 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { schedulerTools } from "../../../launcher/src/service-environment.ts";
+import { schedulerTools } from "@a4s/launcher/service-environment";
 
 /** Isolated operator-owned declaration; production never writes these files. */
 export function declareService(home: string, endpoint: string, path?: string): NodeJS.ProcessEnv {

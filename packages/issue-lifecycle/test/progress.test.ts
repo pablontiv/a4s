@@ -8,7 +8,7 @@ import { BUNDLE_VERSION } from "../src/bundle.ts";
 import { currentStep, renderOffline, renderRun, renderWidget, runBundleState, runLabel, Transitions } from "../src/status/progress.ts";
 import { resolveRunPrimary } from "../src/run-primary.ts";
 import type { RunDetails } from "../src/status/progress.ts";
-import { SHARED_FORMATS } from "../../launcher/src/contracts.ts";
+import { SHARED_FORMATS } from "@a4s/launcher/contracts";
 
 function selectBuild(root: string, version: string, commit: string): void {
   mkdirSync(root, { recursive: true });

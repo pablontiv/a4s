@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { Generation, type Factory } from "@a4s/hot-reload";
-import { registrationHash } from "../../launcher/src/contracts.ts";
+import { registrationHash } from "@a4s/launcher/contracts";
 import { validateRegistrations } from "../../loader/src/manifest.ts";
 import { main } from "../src/cli.ts";
 import status from "../src/status/index.ts";

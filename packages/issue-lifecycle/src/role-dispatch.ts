@@ -1,5 +1,5 @@
-import { readServiceEnvironment } from "../../launcher/src/service-environment.ts";
-import { isRecord } from "../../launcher/src/type-guard.ts";
+import { readServiceEnvironment } from "@a4s/launcher/service-environment";
+import { isRecord } from "@a4s/launcher/type-guard";
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";

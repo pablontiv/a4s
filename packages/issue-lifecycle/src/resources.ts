@@ -1,11 +1,11 @@
-import { readServiceEnvironment } from "../../launcher/src/service-environment.ts";
+import { readServiceEnvironment } from "@a4s/launcher/service-environment";
 import { execFile } from "node:child_process";
 import { realpath, stat } from "node:fs/promises";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import type { CallDecision, Event } from "./triage/guard.ts";
-import { readCommittedConfig } from "../../launcher/src/config.ts";
-import { resolveHostPrimary } from "../../launcher/src/primary.ts";
+import { readCommittedConfig } from "@a4s/launcher/config";
+import { resolveHostPrimary } from "@a4s/launcher/primary";
 import { resolveRunPrimary } from "./run-primary.ts";
 
 const exec = promisify(execFile);

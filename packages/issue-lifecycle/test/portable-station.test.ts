@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { parseAllDocuments } from "yaml";
-import { exampleConfig } from "../../launcher/src/config.ts";
+import { exampleConfig } from "@a4s/launcher/config";
 import { agentDirectory } from "../src/agent-directory.ts";
 import { main } from "../src/commands/bundle.ts";
 import { LIFECYCLE_DAGS, materializeDag } from "../src/materialize.ts";

@@ -1,5 +1,5 @@
 import type { RunDetails } from "./status/progress.ts";
-import { primaryFromSpec } from "../../launcher/src/primary.ts";
+import { primaryFromSpec } from "@a4s/launcher/primary";
 
 export function runParam(run: RunDetails, name: string): string | undefined {
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Consume launcher helpers through explicit `@a4s/launcher` package exports rather
+  than relative source imports, preserving per-module loading boundaries. Move
+  artifact-cache unit and live coverage into the launcher workspace.
 - Render identity-bound snapshot `run` scripts as literal block scalars after the
   station-shell preamble. Flow styles escaped quotes, so the verbatim
   `"$A4S_BIN" role-jobs stage implement` text that role dispatch authorizes

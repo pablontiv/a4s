@@ -1,4 +1,4 @@
-import { readServiceEnvironment } from "../../../launcher/src/service-environment.ts";
+import { readServiceEnvironment } from "@a4s/launcher/service-environment";
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 
@@ -6,8 +6,8 @@ import { join, resolve } from "node:path";
 import { parse } from "yaml";
 import { receiptPath } from "../admission.ts";
 import { receiptArtifact } from "../artifact-receipt.ts";
-import { HOST_PRIMARY_REFERENCE, resolveHostPrimary, workspaceLabel } from "../../../launcher/src/primary.ts";
-import { isRecord } from "../../../launcher/src/type-guard.ts";
+import { HOST_PRIMARY_REFERENCE, resolveHostPrimary, workspaceLabel } from "@a4s/launcher/primary";
+import { isRecord } from "@a4s/launcher/type-guard";
 
 interface Run { name: string; dagRunId: string; statusLabel: string; params?: string }
 interface Captured { run: Run; spec: string; args: string[]; snapshot: string }

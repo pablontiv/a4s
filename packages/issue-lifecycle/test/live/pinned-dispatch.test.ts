@@ -10,7 +10,7 @@ import test from "node:test";
 import { admissionFixture, compiledA4sBin, compiledArtifact } from "../fixtures/admission.ts";
 import { makeArchive } from "../fixtures/artifact.ts";
 import { roleAdmission } from "../role-job-fixtures.ts";
-import { artifactToken, parseArtifact, type ArtifactTuple } from "../../../launcher/src/release.ts";
+import { artifactToken, parseArtifact, type ArtifactTuple } from "@a4s/launcher/release";
 import { runMutationDecision } from "../../src/triage/run-guard.ts";
 import { receiptCompatibility, recordRunObservation } from "../../src/status/receipt.ts";
 import { renderWidget, type RunDetails } from "../../src/status/progress.ts";
@@ -19,11 +19,11 @@ import { roleRuntimeFixture } from "../fixtures/role-runtime.ts";
 import { RunArtifactScope } from "../../src/run-artifact.ts";
 import { verifyJobResult } from "../../src/role-jobs.ts";
 import { verifyTriageResult } from "../../src/role-dispatch.ts";
-import { cachePath, inspectArtifact } from "../../../launcher/src/artifact-cache.ts";
+import { cachePath, inspectArtifact } from "@a4s/launcher/artifact-cache";
 
 function save(f: ReturnType<typeof admissionFixture>, run: string, artifact: ArtifactTuple): void {
   if (!existsSync(join(f.home, "cache/a4s/state.json"))) {
-    execFileSync(process.execPath, ["--import", import.meta.resolve("tsx"), fileURLToPath(new URL("../../../launcher/src/cli.ts", import.meta.url)), "station", "init", "--artifact", artifactToken(artifact)],
+    execFileSync(process.execPath, ["--import", import.meta.resolve("tsx"), fileURLToPath(new URL("@a4s/launcher/cli", import.meta.url)), "station", "init", "--artifact", artifactToken(artifact)],
       { cwd: f.packageDir, env: stationEnvironment({ ...process.env, DAGU_HOME: f.home }), stdio: "pipe" });
   }
   const receipt = roleAdmission(f.packageDir, f.home, run, 'env: []\nsteps:\n  - run: \'"$A4S_BIN" role-jobs stage triage\'\n', artifact);

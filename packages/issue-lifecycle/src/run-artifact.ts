@@ -1,21 +1,21 @@
-import { readServiceEnvironment } from "../../launcher/src/service-environment.ts";
+import { readServiceEnvironment } from "@a4s/launcher/service-environment";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { readFileSync, realpathSync, rmSync } from "node:fs";
 
 import { join } from "node:path";
 import { parseAllDocuments } from "yaml";
 import { receiptArtifact, assertExecutingArtifact } from "./artifact-receipt.ts";
-import { artifactToken, parseArtifact, sameArtifact } from "../../launcher/src/release.ts";
+import { artifactToken, parseArtifact, sameArtifact } from "@a4s/launcher/release";
 import { compiled } from "./executable.ts";
-import { isRecord } from "../../launcher/src/type-guard.ts";
-import { fileDigest, inspectArtifact, type CachedArtifact } from "../../launcher/src/artifact-cache.ts";
+import { isRecord } from "@a4s/launcher/type-guard";
+import { fileDigest, inspectArtifact, type CachedArtifact } from "@a4s/launcher/artifact-cache";
 import { identity } from "./identity.ts";
 import type { Receipt } from "./admission.ts";
-import { restoreArtifact } from "../../launcher/src/select.ts";
-import { createLeaseLocked } from "../../launcher/src/lease.ts";
-import { stationRoot, stationTransaction } from "../../launcher/src/station-state.ts";
-import { assertReceiptStation } from "../../launcher/src/station-binding.ts";
-import { readRecoveryEvidence } from "../../launcher/src/station-recovery-evidence.ts";
+import { restoreArtifact } from "@a4s/launcher/select";
+import { createLeaseLocked } from "@a4s/launcher/lease";
+import { stationRoot, stationTransaction } from "@a4s/launcher/station-state";
+import { assertReceiptStation } from "@a4s/launcher/station-binding";
+import { readRecoveryEvidence } from "@a4s/launcher/station-recovery-evidence";
 
 import * as cancellationGuards from "./cancellation.ts";
 const NATIVE_FLAGS: Record<string, "value" | "boolean"> = {

@@ -1,7 +1,7 @@
-import { readServiceEnvironment, serviceEnvironmentPath, type ServiceEnvironment } from "../../launcher/src/service-environment.ts";
+import { readServiceEnvironment, serviceEnvironmentPath, type ServiceEnvironment } from "@a4s/launcher/service-environment";
 import { readFileSync } from "node:fs";
 import { basename, join } from "node:path";
-import type { LifecycleConfig } from "../../launcher/src/config.ts";
+import type { LifecycleConfig } from "@a4s/launcher/config";
 import type { CoordinatingSession } from "./planning-transcript.ts";
 import { isScalar, parseAllDocuments, Scalar, visit } from "yaml";
 

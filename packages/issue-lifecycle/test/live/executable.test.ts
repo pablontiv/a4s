@@ -12,13 +12,13 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { engineCommand } from "../../src/executable.ts";
 import { identity } from "../../src/identity.ts";
-import { cachePath } from "../../../launcher/src/artifact-cache.ts";
+import { cachePath } from "@a4s/launcher/artifact-cache";
 import type { Receipt } from "../../src/admission.ts";
 import { USED_CONTRACTS } from "../../src/artifact-receipt.ts";
 import { gitBuildIdentity } from "../../../../scripts/release-identity.mjs";
 import { roleRuntimeFixture } from "../fixtures/role-runtime.ts";
 import { installGithubFixture, makeArchive, writeReleaseDirectory } from "../fixtures/artifact.ts";
-import { selectPayload } from "../../../launcher/src/select.ts";
+import { selectPayload } from "@a4s/launcher/select";
 
 const root = fileURLToPath(new URL("../../../../", import.meta.url));
 const cli = fileURLToPath(new URL("../../src/cli.ts", import.meta.url));

@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { basename } from "node:path";
 import { shellWords } from "../resources.ts";
 import { verifiedRun } from "../run-artifact.ts";
-import { artifactToken } from "../../../launcher/src/release.ts";
+import { artifactToken } from "@a4s/launcher/release";
 import type { CallDecision, Event } from "./guard.ts";
 import { readProtection } from "../integration-protection.ts";
 

@@ -7,7 +7,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { queueReadiness, stationReadiness } from "../src/queue.ts";
 import { declareService, useDefaultStation } from "./fixtures/service-environment.ts";
-import { main as launcher } from "../../launcher/src/cli.ts";
+import { main as launcher } from "@a4s/launcher/cli";
 import { main as release } from "../src/cli.ts";
 import { parse } from "yaml";
 

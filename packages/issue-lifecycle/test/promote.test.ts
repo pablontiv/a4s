@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createLeaseLocked } from "../../launcher/src/lease.ts";
-import { initializeStation, promote, rollback } from "../../launcher/src/station.ts";
-import { stationTransaction } from "../../launcher/src/station-state.ts";
+import { createLeaseLocked } from "@a4s/launcher/lease";
+import { initializeStation, promote, rollback } from "@a4s/launcher/station";
+import { stationTransaction } from "@a4s/launcher/station-state";
 import { configSupport, stationFixture } from "./fixtures/station.ts";
 
 test("highest eligible ID wins independently of completion order, never late lower IDs", async t => {

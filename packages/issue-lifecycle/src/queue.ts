@@ -1,8 +1,8 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseDocument } from "yaml";
-import { isRecord } from "../../launcher/src/type-guard.ts";
-import { readServiceEnvironment } from "../../launcher/src/service-environment.ts";
+import { isRecord } from "@a4s/launcher/type-guard";
+import { readServiceEnvironment } from "@a4s/launcher/service-environment";
 
 export interface ReadinessReport { ready: boolean; checks: string[] }
 

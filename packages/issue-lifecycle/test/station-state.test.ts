@@ -4,10 +4,10 @@ import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSy
 import { join } from "node:path";
 import { test } from "node:test";
 import { DatabaseSync } from "node:sqlite";
-import { initializeStation, promote, rollback, gc } from "../../launcher/src/station.ts";
-import { selectStationBuild } from "../../launcher/src/lease.ts";
-import { readStationState, stationRoot, validateState } from "../../launcher/src/station-state.ts";
-import { inventoryStation, listStationRuns } from "../../launcher/src/station-inventory.ts";
+import { initializeStation, promote, rollback, gc } from "@a4s/launcher/station";
+import { selectStationBuild } from "@a4s/launcher/lease";
+import { readStationState, stationRoot, validateState } from "@a4s/launcher/station-state";
+import { inventoryStation, listStationRuns } from "@a4s/launcher/station-inventory";
 import { stationFixture } from "./fixtures/station.ts";
 
 for (const point of ["before-rename", "after-rename"] as const) {

@@ -1,9 +1,9 @@
-import { readServiceEnvironment } from "../../../launcher/src/service-environment.ts";
+import { readServiceEnvironment } from "@a4s/launcher/service-environment";
 
 import { join } from "node:path";
-import { gc, initializeStation, promote } from "../../../launcher/src/station.ts";
-import { readStationState } from "../../../launcher/src/station-state.ts";
-import { parseArtifact } from "../../../launcher/src/release.ts";
+import { gc, initializeStation, promote } from "@a4s/launcher/station";
+import { readStationState } from "@a4s/launcher/station-state";
+import { parseArtifact } from "@a4s/launcher/release";
 
 export async function main(args: string[]): Promise<void> {
   const home = readServiceEnvironment().DAGU_HOME;

@@ -1,5 +1,5 @@
-import { readServiceEnvironment } from "../../launcher/src/service-environment.ts";
-import { executableOnPath } from "../../launcher/src/station-binding.ts";
+import { readServiceEnvironment } from "@a4s/launcher/service-environment";
+import { executableOnPath } from "@a4s/launcher/station-binding";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -8,7 +8,7 @@ import { parseAllDocuments } from "yaml";
 import { packageRoot } from "./executable.ts";
 import { classifyRuns } from "./reconcile-classify.ts";
 import { invokeRun } from "./run-artifact.ts";
-import { isRecord } from "../../launcher/src/type-guard.ts";
+import { isRecord } from "@a4s/launcher/type-guard";
 
 /** Invoke the operator-installed launcher, never this tick's cached payload. */
 function stationCommand(launcher: string, command: "promote" | "gc"): void {

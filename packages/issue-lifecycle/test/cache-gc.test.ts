@@ -5,11 +5,11 @@ import { syncBuiltinESMExports } from "node:module";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
-import { gc } from "../../launcher/src/station.ts";
-import { selectStationBuild } from "../../launcher/src/lease.ts";
-import { probeProcess } from "../../launcher/src/process-identity.ts";
-import { stationRoot } from "../../launcher/src/station-state.ts";
-import { listStationRuns, type StationRun } from "../../launcher/src/station-inventory.ts";
+import { gc } from "@a4s/launcher/station";
+import { selectStationBuild } from "@a4s/launcher/lease";
+import { probeProcess } from "@a4s/launcher/process-identity";
+import { stationRoot } from "@a4s/launcher/station-state";
+import { listStationRuns, type StationRun } from "@a4s/launcher/station-inventory";
 import { gcFixture, GC_NOW } from "./fixtures/cache-gc.ts";
 
 for (const source of ["current", "previous", "keep-10"] as const) {

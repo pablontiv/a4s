@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { archiveName, checksumDigest, nativePlatform, parseArtifact, releaseRepository, resolveRelease, type Github } from "../../launcher/src/release.ts";
+import { archiveName, checksumDigest, nativePlatform, parseArtifact, releaseRepository, resolveRelease, type Github } from "@a4s/launcher/release";
 const commitA = "a".repeat(40), digest = "c".repeat(64);
 function githubFixture(releases: { tag_name: string; commit: string }[], annotated = false) {
   const calls: string[][] = [];

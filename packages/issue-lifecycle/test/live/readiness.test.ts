@@ -11,7 +11,7 @@ import { promisify } from "node:util";
 import test from "node:test";
 import { liveDagu } from "../fixtures/live-dagu.ts";
 import { declareService } from "../fixtures/service-environment.ts";
-import { readServiceEnvironment } from "../../../launcher/src/service-environment.ts";
+import { readServiceEnvironment } from "@a4s/launcher/service-environment";
 
 const exec = promisify(execFile);
 const cli = fileURLToPath(new URL("../../bin/dagu-feature-bundle.ts", import.meta.url));

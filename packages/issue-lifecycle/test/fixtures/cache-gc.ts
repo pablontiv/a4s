@@ -1,9 +1,9 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { TestContext } from "node:test";
-import { initializeStation, type StationDependencies } from "../../../launcher/src/station.ts";
-import { stationRoot, writeJsonDurable } from "../../../launcher/src/station-state.ts";
-import type { ArtifactTuple } from "../../../launcher/src/release.ts";
+import { initializeStation, type StationDependencies } from "@a4s/launcher/station";
+import { stationRoot, writeJsonDurable } from "@a4s/launcher/station-state";
+import type { ArtifactTuple } from "@a4s/launcher/release";
 import { stationFixture } from "./station.ts";
 
 export const GC_NOW = Date.parse("2026-10-30T12:00:00Z");

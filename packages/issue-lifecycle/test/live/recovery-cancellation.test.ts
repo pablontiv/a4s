@@ -11,7 +11,7 @@ import { parse, stringify } from "yaml";
 import { liveDagu, liveDaguVersion } from "../fixtures/live-dagu.ts";
 import { compiledArtifact } from "../fixtures/admission.ts";
 import { stationEnvironment } from "../fixtures/service-environment.ts";
-import { inspectArtifact } from "../../../launcher/src/artifact-cache.ts";
+import { inspectArtifact } from "@a4s/launcher/artifact-cache";
 
 const engineHome = mkdtempSync(join(tmpdir(), "recovery-engine-"));
 const engine = liveDagu.skip ? undefined : await inspectArtifact(engineHome, compiledArtifact(engineHome));
