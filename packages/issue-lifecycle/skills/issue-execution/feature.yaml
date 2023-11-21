@@ -84,6 +84,46 @@ env:
         [[ "$value" == /* && "$value" != *'$'* && "$value" != *[[:space:]] && "$value" != [[:space:]]* ]] || return 1
         printf '%s\n' "$value"
       }
+      resource_owner_run() {
+        local target=$1 predecessor=$RESOURCE_PREVIOUS_OWNER seen=" $RUN " common row status candidate branch issue worktree spec workspace
+        [[ "$target" != "$RUN" ]] || return 0
+        common=$(git -C "$PRIMARY" rev-parse --absolute-git-dir) || return 1
+        # Claims can advance before start_gate transfers either candidate record.
+        # Verify each link back to the recorded owner, never an unrelated run.
+        while [[ -n "$predecessor" ]]; do
+          [[ "$predecessor" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ && "$seen" != *" $predecessor "* ]] || return 1
+          seen+="$predecessor "
+          dagu history feature --format json --from 1970-01-01 --run-id "$predecessor" --limit 1000 > "$RESOURCE_LOCK/owner-history" || return 1
+          row=$(jq -er --arg run "$predecessor" '
+            [.[] | select(.dagRunId == $run)] |
+            if length == 1 then .[0] else error("predecessor missing or ambiguous") end |
+            if (.params|type) != "string" then error("params must be a string") else . end |
+            def p($k): (try (.params|capture("(^| )"+$k+"=(?<v>.*?)(?= [A-Z_]+=|$)").v | if startswith("\"") or startswith("\u0027") then .[1:-1] else . end) catch "") // "";
+            [(.status|ascii_downcase), (p("PRIMARY") | if . == "" then "@snapshot" else . end),
+             (p("BRANCH") as $branch | if $branch == "" then "dagu/issue-" + p("ISSUE") else $branch end),
+             (p("ISSUE") | if . == "" then "-" else . end),
+             (p("WORKTREE") | if . == "" then "-" else . end)] | @tsv' "$RESOURCE_LOCK/owner-history") || return 1
+          IFS=$'\t' read -r status candidate branch issue worktree <<<"$row"
+          case "$status" in
+            succeeded|failed|aborted|rejected|partially_succeeded) ;;
+            *) return 1 ;;
+          esac
+          if [[ "$candidate" == @snapshot ]]; then
+            spec=$(curl -fsS "http://127.0.0.1:${DAGU_PORT:-8080}/api/v1/dag-runs/feature/$(jq -nr --arg run "$predecessor" '$run|@uri')/spec") || return 1
+            candidate=$(jq -er '.spec | split("\n")[] | select(startswith("  - PRIMARY: ")) | ltrimstr("  - PRIMARY: ") | fromjson' <<<"$spec") || return 1
+            workspace=$(jq -r '[.spec | split("\n")[] | select(startswith("  - workspace=")) | ltrimstr("  - workspace=")] | first // ""' <<<"$spec") || return 1
+            candidate=$(resolve_primary_binding "$candidate" "$workspace") || return 1
+          fi
+          [[ -d "$candidate" ]] || return 1
+          candidate=$(cd "$candidate" && pwd -P) || return 1
+          [[ "$candidate" == "$PRIMARY" && "$branch" == "$BRANCH" && "$issue" == "$ISSUE" &&
+             ( "$worktree" == - || "$worktree" == "$WORKTREE" ) ]] || return 1
+          [[ "$predecessor" != "$target" ]] || return 0
+          [[ -f "$common/dagu-feature/runs/$predecessor/previous-owner" ]] || return 1
+          predecessor=$(cat "$common/dagu-feature/runs/$predecessor/previous-owner") || return 1
+        done
+        return 1
+      }
       resource_lock() {
         local operation=$1 primary root expected actual common key attempt owner run status candidate branch issue jq_status
         command -v jq >/dev/null 2>&1 ||
@@ -161,7 +201,11 @@ env:
             { echo "dagu-feature: cannot verify recorded owner $owner" >&2; exit 1; }
           case "$status" in
             succeeded|failed|aborted|rejected|partially_succeeded) ;;
-            queued|running|waiting) printf 'dagu-feature: %s belongs to active run %s (%s); requesting_run=%s expected_owner=%s\n' "$expected" "$owner" "$status" "$RUN" "$RUN" >&2; exit 1 ;;
+            queued|running|waiting)
+              if declare -F reject >/dev/null; then
+                printf 'rule=start_gate.resource_identity expected=terminal_predecessor observed=%s:%s ' "$owner" "$status" >&2
+              fi
+              printf 'dagu-feature: %s belongs to active run %s (%s); requesting_run=%s expected_owner=%s\n' "$expected" "$owner" "$status" "$RUN" "$RUN" >&2; exit 1 ;;
             *) printf 'dagu-feature: cannot verify recorded owner %s (%s); resource=%s requesting_run=%s expected_owner=%s\n' "$owner" "$status" "$expected" "$RUN" "$RUN" >&2; exit 1 ;;
           esac
         fi
@@ -179,6 +223,9 @@ env:
           candidate=$(cd "$candidate" && pwd -P)
           [[ "$candidate" == "$primary" && ( "$issue" == "$ISSUE" || "$branch" == "$BRANCH" ) ]] || continue
           if [[ "$run" != "$RUN" && ( "$status" == running || "$status" == waiting || ( "$status" == queued && ( ( -n "$owner" && "$owner" != "$RUN" ) || ( -z "$owner" && "$operation" == cleanup ) ) ) ) ]]; then
+            if declare -F reject >/dev/null; then
+              printf 'rule=start_gate.resource_identity expected=exclusive_terminal_predecessors observed=%s:%s ' "$run" "$status" >&2
+            fi
             printf 'dagu-feature: %s belongs to active run %s (%s); requesting_run=%s expected_owner=%s\n' "$expected" "$run" "$status" "$RUN" "$RUN" >&2; exit 1
           fi
         done < "$key.lock/rows"
@@ -608,11 +655,11 @@ steps:
       OWNER=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/resources/$(printf '%s' "$BRANCH" | git hash-object --stdin).json")
       mkdir -p "$STATE" "${OWNER%/*}"
       if [[ -f "$OWNER" ]]; then
-        jq -e --arg run "$RUN" --arg previous "$RESOURCE_PREVIOUS_OWNER" \
-          --arg primary "$primary_path" --arg branch "$BRANCH" --arg worktree "$WORKTREE" \
-          '.primary == $primary and .branch == $branch and .worktree == $worktree and
-           (.run == $run or ($previous != "" and .run == $previous))' "$OWNER" >/dev/null ||
-          reject resource_identity "primary=$primary_path branch=$BRANCH worktree=$WORKTREE run=$RUN previous=$RESOURCE_PREVIOUS_OWNER" "$(cat "$OWNER")"
+        jq -e --arg primary "$primary_path" --arg branch "$BRANCH" --arg worktree "$WORKTREE" \
+          '.primary == $primary and .branch == $branch and .worktree == $worktree' "$OWNER" >/dev/null &&
+          recorded_run=$(jq -er '.run | select(type == "string" and length > 0)' "$OWNER") &&
+          resource_owner_run "$recorded_run" ||
+          reject resource_identity "primary=$primary_path branch=$BRANCH worktree=$WORKTREE run=$RUN previous=$RESOURCE_PREVIOUS_OWNER terminal predecessor chain" "$(cat "$OWNER")"
       fi
       poc_carry_base=
       poc_carry_patch=
@@ -671,8 +718,10 @@ steps:
         if [[ "$(cat "$owner")" == "$identity" ]]; then
           : # Adoption already completed by this run.
         elif [[ -n "$previous_owner" && "$previous_owner" != "$RUN" ]]; then
-          jq -e --argjson expected "$identity" --arg previous "$previous_owner" \
-            '.primary == $expected.primary and .worktree == $expected.worktree and .branch == $expected.branch and .session == $expected.session and .run == $previous' "$owner" >/dev/null ||
+          jq -e --argjson expected "$identity" \
+            '.primary == $expected.primary and .worktree == $expected.worktree and .branch == $expected.branch and .session == $expected.session' "$owner" >/dev/null &&
+            recorded_run=$(jq -er '.run | select(type == "string" and length > 0)' "$owner") &&
+            resource_owner_run "$recorded_run" ||
             ownership_refused "$owner"
         else
           ownership_refused "$owner"
