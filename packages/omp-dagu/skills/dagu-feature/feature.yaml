@@ -95,7 +95,7 @@ env:
         owner=
         if [[ -f "$key" ]]; then IFS=$'\t' read -r owner branch < "$key"; fi
         if [[ -n "$owner" && "$branch" != "$BRANCH" ]]; then
-          echo 'dagu-feature: retained candidate branch mismatch; preserved' >&2; exit 1
+          printf 'dagu-feature: retained candidate branch mismatch; resource=%s requesting_run=%s observed_owner=%s observed_branch=%s expected_branch=%s; preserved\n' "$expected" "$RUN" "$owner" "$branch" "$BRANCH" >&2; exit 1
         fi
         if [[ -n "$owner" && "$owner" != "$RUN" ]]; then
           if ! dagu history feature --format json --from 1970-01-01 --run-id "$owner" --limit 1000 > "$key.lock/owner-history"; then
@@ -105,8 +105,8 @@ env:
             { echo "dagu-feature: cannot verify recorded owner $owner" >&2; exit 1; }
           case "$status" in
             succeeded|failed|aborted|rejected|partially_succeeded) ;;
-            queued|running|waiting) printf 'dagu-feature: %s belongs to active run %s (%s)\n' "$expected" "$owner" "$status" >&2; exit 1 ;;
-            *) printf 'dagu-feature: cannot verify recorded owner %s (%s)\n' "$owner" "$status" >&2; exit 1 ;;
+            queued|running|waiting) printf 'dagu-feature: %s belongs to active run %s (%s); requesting_run=%s expected_owner=%s\n' "$expected" "$owner" "$status" "$RUN" "$RUN" >&2; exit 1 ;;
+            *) printf 'dagu-feature: cannot verify recorded owner %s (%s); resource=%s requesting_run=%s expected_owner=%s\n' "$owner" "$status" "$expected" "$RUN" "$RUN" >&2; exit 1 ;;
           esac
         fi
         while IFS=$'\t' read -r run status candidate branch issue; do
@@ -114,14 +114,22 @@ env:
           candidate=$(cd "$candidate" && pwd -P)
           [[ "$candidate" == "$primary" && ( "$issue" == "$ISSUE" || "$branch" == "$BRANCH" ) ]] || continue
           if [[ "$run" != "$RUN" && ( "$status" == running || "$status" == waiting || ( "$status" == queued && ( ( -n "$owner" && "$owner" != "$RUN" ) || ( -z "$owner" && "$operation" == cleanup ) ) ) ) ]]; then
-            printf 'dagu-feature: %s belongs to active run %s (%s)\n' "$expected" "$run" "$status" >&2; exit 1
+            printf 'dagu-feature: %s belongs to active run %s (%s); requesting_run=%s expected_owner=%s\n' "$expected" "$run" "$status" "$RUN" "$RUN" >&2; exit 1
           fi
         done < "$key.lock/rows"
         if [[ "$operation" == cleanup && -n "$owner" && "$owner" != "$RUN" ]]; then
-          printf 'dagu-feature: %s now belongs to run %s; cleanup rejected\n' "$expected" "$owner" >&2; exit 1
+          printf 'dagu-feature: %s now belongs to run %s; cleanup rejected; requesting_run=%s expected_owner=%s\n' "$expected" "$owner" "$RUN" "$RUN" >&2; exit 1
         fi
         RESOURCE_PREVIOUS_OWNER=$owner
         if [[ "$operation" == claim ]]; then
+          state="$common/dagu-feature/runs/$RUN"
+          mkdir -p "$state"
+          if [[ -n "$owner" && "$owner" != "$RUN" ]]; then
+            printf '%s\n' "$owner" > "$state/previous-owner"
+          fi
+          if [[ -f "$state/previous-owner" ]]; then
+            RESOURCE_PREVIOUS_OWNER=$(cat "$state/previous-owner")
+          fi
           printf '%s\t%s\n' "$RUN" "$BRANCH" > "$key.lock/owner"
           mv "$key.lock/owner" "$key"
         fi
@@ -417,15 +425,25 @@ steps:
       identity=$(jq -nc --arg primary "$primary_path" --arg worktree "$(cd "$WORKTREE" && pwd -P)" \
         --arg branch "$BRANCH" --arg run "$RUN" --arg session "$OMP_SESSION_ID" \
         '{primary:$primary,worktree:$worktree,branch:$branch,run:$run,session:$session}')
+      ownership_refused() {
+        printf 'dagu-feature: ownership identity mismatch; resource=%s requesting_run=%s observed=%s expected=%s; preserved\n' \
+          "$1" "$RUN" "$(cat "$1")" "$identity (previous owner $previous_owner)" >&2
+        exit 1
+      }
       if test -f "$owner"; then
-        if [[ -n "$previous_owner" && "$previous_owner" != "$RUN" ]]; then
+        if [[ "$(cat "$owner")" == "$identity" ]]; then
+          : # Adoption already completed by this run.
+        elif [[ -n "$previous_owner" && "$previous_owner" != "$RUN" ]]; then
           jq -e --argjson expected "$identity" --arg previous "$previous_owner" \
-            '.primary == $expected.primary and .worktree == $expected.worktree and .branch == $expected.branch and .run == $previous' "$owner" >/dev/null
+            '.primary == $expected.primary and .worktree == $expected.worktree and .branch == $expected.branch and .session == $expected.session and .run == $previous' "$owner" >/dev/null ||
+            ownership_refused "$owner"
         else
-          test "$(cat "$owner")" = "$identity"
+          ownership_refused "$owner"
         fi
       fi
-      if test -f "$STATE/identity"; then test "$(cat "$STATE/identity")" = "$identity"; fi
+      if test -f "$STATE/identity"; then
+        test "$(cat "$STATE/identity")" = "$identity" || ownership_refused "$STATE/identity"
+      fi
       mkdir -p "$STATE"
       printf '%s\n' "$identity" > "$owner"
       printf '%s\n' "$identity" > "$STATE/identity"

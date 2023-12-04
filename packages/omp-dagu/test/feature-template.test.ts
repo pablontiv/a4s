@@ -814,6 +814,129 @@ function extractStep(source: string, id: string): string {
 }
 
 const daguAvailable = spawnSync("dagu", ["version"], { encoding: "utf8" });
+for (const [name, definition] of definitions) {
+  test(`${name} real Dagu reenqueue adopts retained worktree from terminal owner`, {
+    skip: daguAvailable.status !== 0 || !/2\.20\.1/.test(daguAvailable.stdout) ? "Dagu 2.20.1 binary required for live integration" : false,
+    timeout: 115_000,
+  }, async (t) => {
+    const repo = repository();
+    git(repo.primary, "worktree", "remove", repo.worktree);
+    git(repo.primary, "branch", "-D", repo.branch);
+    rmSync(join(repo.root, "bin", "dagu"));
+    stubGh(repo, "OPEN\n", 0);
+    const home = join(repo.root, "dagu-home");
+    mkdirSync(join(home, "dags"), { recursive: true });
+    const listener = createServer();
+    await new Promise<void>(resolve => listener.listen(0, "127.0.0.1", resolve));
+    const address = listener.address();
+    assert.ok(address && typeof address !== "string");
+    const port = address.port;
+    await new Promise<void>(resolve => listener.close(() => resolve()));
+    writeFileSync(join(home, "config.yaml"), `host: 127.0.0.1\nport: ${port}\nauth:\n  mode: none\ncoordinator:\n  enabled: false\nscheduler:\n  port: 0\n`);
+    const env: NodeJS.ProcessEnv = { ...process.env, ...featureScriptEnv(repo), DAGU_HOME: home, DAGU_COORDINATOR_ENABLED: "false", OMP_SESSION_ID: "retained-owner" };
+    let serviceLog = "";
+    const service = spawn("dagu", ["start-all", "--host", "127.0.0.1", "--port", String(port)], {
+      cwd: repo.root, env, stdio: ["ignore", "pipe", "pipe"],
+    });
+    service.stdout.on("data", data => { serviceLog += data; });
+    service.stderr.on("data", data => { serviceLog += data; });
+    const api = `http://127.0.0.1:${port}/api/v1`;
+    const dagu = (...args: string[]) => execFileSync("dagu", args, { env, cwd: repo.root, encoding: "utf8" }).trim();
+    type Detail = { statusLabel: string; nodes: Array<{ step: { name: string }; statusLabel: string; stdout?: string; stderr?: string }>; onExit?: { statusLabel: string; stdout?: string; stderr?: string } };
+    async function until<T>(description: string, probe: () => Promise<T | undefined>): Promise<T> {
+      const deadline = Date.now() + 30_000;
+      while (Date.now() < deadline) {
+        const value = await probe();
+        if (value !== undefined) return value;
+        await delay(150);
+      }
+      throw new Error(`Timed out: ${description}\n${serviceLog}`);
+    }
+    async function state(id: string, status: string): Promise<Detail> {
+      return until(`${id} ${status}`, async () => {
+        const response = await fetch(`${api}/dag-runs/feature/${id}`);
+        if (!response.ok) return undefined;
+        const run = (await response.json() as { dagRunDetails: Detail }).dagRunDetails;
+        if (run.statusLabel === status && (status !== "failed" || run.onExit?.statusLabel === "succeeded")) return run;
+        if (run.nodes.some(node => node.step.name === "recover_start_gate" && node.statusLabel === "waiting")) {
+          throw new Error(run.nodes.map(node => `${node.step.name}: ${node.stderr && existsSync(node.stderr) ? readFileSync(node.stderr, "utf8") : node.statusLabel}`).join("\n"));
+        }
+        return undefined;
+      });
+    }
+    try {
+      await until("isolated Dagu ready", async () => {
+        try { return (await fetch(`${api}/dag-runs`)).ok ? true : undefined; } catch { return undefined; }
+      });
+      const source = readFileSync(definition, "utf8");
+      const file = join(home, "dags", "feature.yaml");
+      writeFileSync(file, [
+        "type: graph\nshell: bash\nmax_active_steps: 1\n",
+        `params:\n  - ISSUE: "189"\n  - PRIMARY: ${repo.primary}\n  - BRANCH: ${repo.branch}\n  - BASE_BRANCH: main\n  - PR_NUMBER: ""\n  - GATE: "true"\n  - REQUIRED_CHECK: validate\n  - OMP_SESSION_ID: retained-owner\n`,
+        `env:\n  - PATH: ${env.PATH}\n  - WORKTREE: ${repo.worktree}\n  - RUN: \${context.run.id}\n  - DAGU_FEATURE_BUNDLE: test\n`,
+        source.slice(source.indexOf("  - DAGU_RESOURCE_GUARD: |"), source.indexOf("steps:\n")),
+        "steps:\n", extractStep(source, "admit"),
+        "  - id: triage\n    depends: admit\n    run: echo POC=no >> \"$DAGU_OUTPUT_FILE\"\n    outputs:\n      - name: POC\n",
+        "  - id: triage_decision\n    depends: triage\n    run: echo reviewed\n",
+        ...["detect_start_primary", "start_primary_unavailable", "start_gate", "recover_start_gate", "implement", "capture"].map(id => extractStep(source, id)),
+        "handler_on:\n", source.slice(source.indexOf("  exit:\n")),
+      ].join(""));
+      dagu("validate", file);
+      const first = "retained-189", second = `${first}-v2`;
+      dagu("enqueue", "--run-id", first, file);
+      await state(first, "waiting");
+      writeFileSync(join(repo.worktree, "retained.txt"), "retained candidate\n");
+      git(repo.worktree, "add", ".");
+      git(repo.worktree, "commit", "-m", "precommitted candidate");
+      const head = git(repo.worktree, "rev-parse", "HEAD");
+      dagu("human-task", "complete", "feature", "--run-id", first, "--step", "implement",
+        "--input", "MESSAGE=fix: retained candidate", "--input", "SUMMARY=Retained candidate");
+      const failed = await state(first, "failed");
+      const capture = failed.nodes.find(node => node.step.name === "capture")!;
+      assert.equal(capture.statusLabel, "failed");
+      assert.match(readFileSync(capture.stderr!, "utf8"), /HEAD differs from Dagu candidate/);
+      const owner = git(repo.worktree, "rev-parse", "--path-format=absolute", "--git-path", "dagu-feature-owner");
+      assert.equal(JSON.parse(readFileSync(owner, "utf8")).run, first);
+      dagu("enqueue", "--run-id", second, file);
+      const adopted = await state(second, "waiting");
+      for (const id of ["admit", "start_gate"]) assert.equal(adopted.nodes.find(node => node.step.name === id)?.statusLabel, "succeeded");
+      assert.equal(adopted.nodes.find(node => node.step.name === "implement")?.statusLabel, "waiting");
+      const stateDir = join(repo.primary, ".git", "dagu-feature", "runs", second);
+      assert.equal(readFileSync(join(stateDir, "previous-owner"), "utf8").trim(), first);
+      assert.equal(readFileSync(join(repo.primary, ".git", "dagu-feature", "owners", "issue-189"), "utf8"), `${second}\t${repo.branch}\n`);
+      assert.equal(JSON.parse(readFileSync(owner, "utf8")).run, second);
+      assert.equal(readFileSync(owner, "utf8"), readFileSync(join(stateDir, "identity"), "utf8"));
+      assert.equal(git(repo.worktree, "rev-parse", "HEAD"), head);
+      assert.equal(readFileSync(join(repo.worktree, "retained.txt"), "utf8"), "retained candidate\n");
+      const retry = spawnSync("bash", ["-c", extractScript(definition, "  - id: start_gate")], {
+        env: { ...env, RUN: second, DAGU_FEATURE_BUNDLE: "test" }, encoding: "utf8",
+      });
+      assert.equal(retry.status, 0, retry.stderr);
+      const valid = readFileSync(owner, "utf8");
+      writeFileSync(owner, JSON.stringify({ ...JSON.parse(valid), session: "different-session" }));
+      const mismatch = spawnSync("bash", ["-c", extractScript(definition, "  - id: start_gate")], {
+        env: { ...env, RUN: second, DAGU_FEATURE_BUNDLE: "test" }, encoding: "utf8",
+      });
+      assert.equal(mismatch.status, 1);
+      assert.match(mismatch.stderr, /ownership identity mismatch.*requesting_run=retained-189-v2.*observed=.*expected=/);
+      writeFileSync(owner, valid);
+      const active = spawnSync("bash", ["-c", extractScript(definition, "  - id: admit")], {
+        env: { ...env, RUN: `${second}-other` }, encoding: "utf8",
+      });
+      assert.equal(active.status, 1);
+      assert.match(active.stderr, /belongs to active run retained-189-v2/);
+      assert.equal(git(repo.worktree, "rev-parse", "HEAD"), head);
+      const evidence = [...failed.nodes, ...adopted.nodes].filter(node => ["admit", "start_gate", "capture"].includes(node.step.name))
+        .map(node => ({ step: node.step.name, status: node.statusLabel,
+          stdout: node.stdout && readFileSync(node.stdout, "utf8"), stderr: node.stderr && readFileSync(node.stderr, "utf8") }));
+      t.diagnostic(`Dagu ${daguAvailable.stdout.trim()}; runs=${first}:failed/capture,${second}:waiting/implement; HEAD=${head}; owner=${valid.trim()}; logs=${JSON.stringify(evidence)}; onExit=${failed.onExit?.stdout ? readFileSync(failed.onExit.stdout, "utf8") : JSON.stringify(failed.onExit)}`);
+    } finally {
+      service.kill("SIGTERM");
+      await new Promise<void>(resolve => service.once("exit", () => resolve()));
+      rmSync(repo.root, { recursive: true, force: true });
+    }
+  });
+}
 test("real Dagu retries rebase after a six-second index lock", {
   skip: daguAvailable.status !== 0 || !/2\.20\.1/.test(daguAvailable.stdout),
   timeout: 150_000,

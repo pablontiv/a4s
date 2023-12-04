@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.18
+
+- Preserve the terminal resource owner's provenance between admission and worktree adoption, with identity diagnostics and real-Dagu reenqueue coverage (#338).
+
 ## 0.3.17
 
 - Run the live index-lock retry test with real Dagu and safely await running service shutdown so startup failures retain their captured diagnostics (#336).
