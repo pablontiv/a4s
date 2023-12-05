@@ -76,6 +76,10 @@ export async function liveWatcher(binary = "dagu"): Promise<string[]> {
         const { dagRunDetails: run } = await response.json() as { dagRunDetails: { statusLabel: string; nodes: Array<{ step: { name: string }; statusLabel: string; approvalIteration?: number }> } };
         return run.statusLabel === "waiting" && run.nodes.some(node => node.step.name === step && node.statusLabel === "waiting" && (node.approvalIteration ?? 0) === iteration);
       });
+      // A checkpoint wake describes a currently open task, not a closed opening
+      // recovered later from the ledger.
+      await until(`${step}/${iteration} owner notice`, async () => received.some(message =>
+        message.includes(`step=${step} `) && message.endsWith(`iteration=${iteration}`)));
       if (iteration === 0 && step === "c") dagu("human-task", "push-back", "feature", "--run-id", runId, "--step", step, "--expected-iteration", "0");
       else dagu("human-task", "complete", "feature", "--run-id", runId, "--step", step);
     }

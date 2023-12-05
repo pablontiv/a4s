@@ -316,12 +316,9 @@ for (const scenario of [
       assert.deepEqual(notifications, [{
         message: `dagu · feature outage-run ${scenario.terminal}`, type, round: finalRound,
       }]);
-      // Success wake delivery belongs to the independent durable event-log watcher.
-      if (scenario.terminal !== "succeeded") {
-        assert.equal(received.length, 1);
-        assert.equal(received[0]!.round, finalRound);
-        assert.match(received[0]!.message, new RegExp(`^\\[DAGU STATE\\] run=outage-run status=${scenario.terminal} step=gate dag=feature `));
-      }
+      // All owner wakes belong to the independent durable watcher. This fixture
+      // disables its discovery above, leaving only the widget's terminal toast.
+      assert.deepEqual(received, []);
     }
   } finally {
     handlers.session_shutdown!(null, ctx);
