@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Compare the selected plugin registration's validated version and commit with the loaded extension generation, including older releases and same-version relinks. Unknown identities do not trigger restart warnings; the warning names the verified native OMP restart remedy and explains why `/reload-plugins` cannot switch package bindings (#745).
+
 ## 0.7.8
 
 - Skip the CI aggregate job on workflow cancellation, diagnose empty workspace matrices explicitly, and classify each required check from its newest workflow run on the current SHA so superseded concurrency-cancelled jobs cannot trigger owner escalations (#776).

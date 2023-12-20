@@ -104,7 +104,7 @@ for (const drift of [undefined, "main", "bundle", "invalid JSON", "unreadable ma
     for (const message of received) {
       const mainVersion = drift === "main" ? "0.3.8"
         : drift === "invalid JSON" || drift === "unreadable manifest" ? "unknown" : BUNDLE_VERSION;
-      assert.ok(message.includes(`main=${mainVersion} compat=ok installed=${BUNDLE_VERSION}`), message);
+      assert.ok(message.includes(`main=${mainVersion} compat=ok installed=unknown`), message);
     }
   } finally {
     handlers.session_shutdown!(null, ctx);

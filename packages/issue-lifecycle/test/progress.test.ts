@@ -244,17 +244,20 @@ test("notices distinguish release pending from restart pending and refresh the i
   assert.equal(homedir(), process.env.DAGU_HOME);
   mkdirSync(join(primary, "packages/issue-lifecycle"), { recursive: true });
   mkdirSync(join(plugin, ".."), { recursive: true });
-  const transitions = new Transitions("session-a", "0.7.4");
+  const loadedCommit = "a".repeat(40);
+  const transitions = new Transitions("session-a", "0.7.4", loadedCommit);
+  const warning = "Restart OMP to load the selected @a4s/issue-lifecycle release. /reload-plugins does not switch an already-loaded package binding. In-flight runs keep their admitted snapshots.";
   const candidate = {
     ...waitingAt("feature", "implement"),
     params: "ISSUE=176 OMP_SESSION_ID=session-a",
     resolvedPrimary: primary,
     labels: ["dagu-feature-bundle=0.7.4"],
   };
-  const install = (version: string): void => {
-    const release = join(primary, version);
+  const install = (version: string, commit = loadedCommit): void => {
+    const release = join(primary, `${version}-${commit}`);
     mkdirSync(release, { recursive: true });
     writeFileSync(join(release, "package.json"), JSON.stringify({ name: "@a4s/issue-lifecycle", version }));
+    writeFileSync(join(release, "identity.json"), JSON.stringify({ version, commit }));
     rmSync(plugin, { force: true });
     symlinkSync(release, plugin, "dir");
   };
@@ -264,15 +267,15 @@ test("notices distinguish release pending from restart pending and refresh the i
     const releasePending = transitions.observe(candidate);
     assert.match(releasePending.wakeMessage!, /extension=0\.7\.4 main=0\.7\.7 compat=ok installed=0\.7\.4/);
     assert.equal(releasePending.warningMessage, undefined);
-    assert.equal(runBundleState(candidate, "0.7.4").restartPending, false);
+    assert.equal(runBundleState(candidate, "0.7.4", loadedCommit).restartPending, false);
     assert.deepEqual(transitions.observe(candidate), {});
 
     install("0.7.7");
     candidate.nodes![0]!.approvalIteration = 1;
     const restartPending = transitions.observe(candidate);
     assert.match(restartPending.wakeMessage!, /extension=0\.7\.4 main=0\.7\.7 compat=stale installed=0\.7\.7/);
-    assert.match(restartPending.warningMessage!, /^Restart OMP/);
-    assert.equal(runBundleState(candidate, "0.7.4").restartPending, true);
+    assert.equal(restartPending.warningMessage, warning);
+    assert.equal(runBundleState(candidate, "0.7.4", loadedCommit).restartPending, true);
     assert.deepEqual(transitions.observe(candidate), {});
 
     // One warning per new notice batch, regardless of the primary's version.
@@ -280,28 +283,96 @@ test("notices distinguish release pending from restart pending and refresh the i
     candidate.nodes = [...waitingAt("feature", "triage").nodes!, ...waitingAt("feature", "implement", 2).nodes!];
     const batch = transitions.observe(candidate);
     assert.equal(batch.wakeMessages?.length, 2);
-    assert.match(batch.warningMessage!, /^Restart OMP/);
+    assert.equal(batch.warningMessage, warning);
     assert.deepEqual(transitions.observe(candidate), {});
 
     rmSync(manifest);
     candidate.nodes = waitingAt("feature", "implement", 3).nodes!;
     const consumer = transitions.observe(candidate);
     assert.match(consumer.wakeMessage!, /main=n\/a compat=stale installed=0\.7\.7/);
-    assert.match(consumer.warningMessage!, /^Restart OMP/);
+    assert.equal(consumer.warningMessage, warning);
 
     install("0.7.3");
     candidate.nodes = waitingAt("feature", "implement", 4).nodes!;
-    assert.equal(transitions.observe(candidate).warningMessage, undefined, "an older installed release cannot fix the loaded version");
-    writeFileSync(join(plugin, "package.json"), "{");
+    const older = transitions.observe(candidate);
+    assert.match(older.wakeMessage!, /main=n\/a compat=stale installed=0\.7\.3/);
+    assert.equal(older.warningMessage, warning, "an older selected release still requires loading");
+
+    const selectedCommit = "b".repeat(40);
+    install("0.7.4", selectedCommit);
     candidate.nodes![0]!.approvalIteration = 5;
-    const unknown = transitions.observe(candidate);
-    assert.match(unknown.wakeMessage!, /installed=unknown/);
-    assert.equal(unknown.warningMessage, undefined, "an unreadable installed version is not evidence a restart helps");
+    const sameVersion = transitions.observe(candidate);
+    assert.match(sameVersion.wakeMessage!, /extension=0\.7\.4 main=n\/a compat=stale installed=0\.7\.4/);
+    assert.equal(sameVersion.warningMessage, warning, "same-version relinks compare commits, not ordering");
+    assert.deepEqual(transitions.observe(candidate), {});
+
+    // A newly loaded generation matches the selected identity and clears the warning.
+    const restarted = new Transitions("session-a", "0.7.4", selectedCommit).observe(candidate);
+    assert.match(restarted.wakeMessage!, /compat=ok installed=0\.7\.4/);
+    assert.equal(restarted.warningMessage, undefined);
+    assert.equal(runBundleState(candidate, "0.7.4", selectedCommit).restartPending, false);
+
+    // Switching back to the originally loaded identity also clears staleness.
+    install("0.7.4");
+    candidate.nodes![0]!.approvalIteration = 6;
+    assert.equal(transitions.observe(candidate).warningMessage, undefined);
   } finally {
     rmSync(plugin, { force: true });
     rmSync(primary, { recursive: true, force: true });
   }
 });
+
+for (const scenario of [
+  "absent registration", "dangling registration", "missing manifest", "invalid manifest JSON", "invalid manifest version",
+  "missing identity", "invalid identity JSON", "disagreeing versions", "invalid identity version",
+  "missing commit", "invalid commit", "non-string commit", "unknown loaded identity",
+] as const) {
+  test(`notices do not recommend restart for ${scenario}`, () => {
+    const release = mkdtempSync(join(tmpdir(), "omp-dagu-identity-"));
+    const plugin = join(homedir(), ".omp/plugins/node_modules/@a4s/issue-lifecycle");
+    assert.equal(homedir(), process.env.DAGU_HOME);
+    mkdirSync(join(plugin, ".."), { recursive: true });
+    const manifest = join(release, "package.json");
+    const identity = join(release, "identity.json");
+    const commit = "a".repeat(40);
+    try {
+      writeFileSync(manifest, JSON.stringify({ version: "0.7.4" }));
+      writeFileSync(identity, JSON.stringify({ version: "0.7.4", commit }));
+      if (scenario !== "absent registration") symlinkSync(
+        scenario === "dangling registration" ? join(release, "absent") : release, plugin, "dir",
+      );
+      if (scenario === "missing manifest") rmSync(manifest);
+      if (scenario === "invalid manifest JSON") writeFileSync(manifest, "{");
+      if (scenario === "invalid manifest version") writeFileSync(manifest, '{"version":"unknown"}');
+      if (scenario === "missing identity") rmSync(identity);
+      if (scenario === "invalid identity JSON") writeFileSync(identity, "{");
+      if (scenario === "disagreeing versions") writeFileSync(identity, JSON.stringify({ version: "0.7.5", commit }));
+      if (scenario === "invalid identity version") writeFileSync(identity, JSON.stringify({ version: null, commit }));
+      if (scenario === "missing commit") writeFileSync(identity, '{"version":"0.7.4"}');
+      if (scenario === "invalid commit") writeFileSync(identity, '{"version":"0.7.4","commit":"unbuilt"}');
+      if (scenario === "non-string commit") writeFileSync(identity, '{"version":"0.7.4","commit":123}');
+
+      for (const [version, compat] of [["0.7.4", "ok"], ["0.2.0", "incompatible"], [undefined, "unstamped"]] as const) {
+        const candidate = {
+          ...waitingAt("feature", "implement"),
+          labels: version ? [`dagu-feature-bundle=${version}`] : [],
+        };
+        // Source-loaded extensions have no release commit; never infer it from the selected link.
+        const transitions = scenario === "unknown loaded identity"
+          ? new Transitions("session-a")
+          : new Transitions("session-a", "0.7.4", commit);
+        const effects = transitions.observe(candidate);
+        assert.ok(effects.wakeMessage);
+        assert.ok(effects.wakeMessage.includes(`compat=${compat}`), effects.wakeMessage);
+        assert.ok(effects.wakeMessage.includes(`installed=${scenario === "unknown loaded identity" ? "0.7.4" : "unknown"}`), effects.wakeMessage);
+        assert.equal(effects.warningMessage, undefined);
+      }
+    } finally {
+      rmSync(plugin, { force: true });
+      rmSync(release, { recursive: true, force: true });
+    }
+  });
+}
 
 for (const scenario of [
   "consumer equal", "consumer patch", "consumer minor", "consumer major", "consumer unstamped",
