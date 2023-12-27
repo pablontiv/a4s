@@ -39,7 +39,7 @@ test("release checks execute the intended commands and publish the checked artif
   assert.match(runs("reproducibility"), /sha256sum --check \*\.sha256/);
   assert.deepEqual(jobs.smoke.strategy.matrix.include, [
     { runner: "ubuntu-latest", platform: "linux-x64" },
-    { runner: "macos-14", platform: "darwin-arm64" },
+    { runner: "macos-15", platform: "darwin-arm64" },
   ]);
   assert.match(runs("smoke"), /\.\/payload\/a4s version/);
   assert.match(runs("smoke"), /\.\/launcher\/a4s-launch launcher-version/);
