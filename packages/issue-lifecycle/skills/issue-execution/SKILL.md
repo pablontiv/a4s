@@ -1119,6 +1119,39 @@ exits. Dagu retains its normal gate retry/recovery and cancellation semantics.
 Only gate bodies serialize: the repository queue keeps its declared capacity
 (`a4s=8`), and unrelated control, push and CI-wait steps proceed.
 
+### Structured gate timing
+
+The installed `dagu-gate` helper wraps the declared `GATE` without replacing,
+splitting or selecting its commands. Its Node preload observes `npm ci` and npm
+test/typecheck lifecycle shells, including each workspace in a root dispatcher.
+The original child process, arguments, exit status and output remain unchanged.
+Non-npm gates retain a `command` phase for the complete declared command.
+
+`<git-common-dir>/dagu-feature/runs/<RUN>/gate.json` has `schemaVersion: 1`,
+the current `sha`, exact `gate`, latest `result` (`RUNNING|PASS|FAIL`), and
+an append-only `attempts` array for that candidate. Each entry contains `id`,
+native run-wide `iteration`, `startedAt`, `endedAt`, `durationMs`, `exitCode`,
+`result` and `phases`. Times are Unix epoch milliseconds; durations are
+milliseconds. Each phase contains `name`, `startedAt`, `endedAt`, `durationMs`
+and `exitCode`, with `workspace` (repository-relative directory) and `command`
+when observed for an npm lifecycle. Names are `lock_wait`, `pre_checks`,
+`install`, `tests`, `typecheck`, `command`, `post_checks` and `overhead`.
+Leaf workspace phases replace aggregate npm dispatcher intervals; uncovered
+time is explicitly `overhead`. Sequential commands have non-overlapping
+intervals within the attempt window; explicitly concurrent commands retain
+their actual overlapping intervals and must be unioned for elapsed totals.
+
+The attempt is persisted before waiting for the kernel lock and finalized by
+the gate body's EXIT trap on success or failure. A native retry appends another
+attempt rather than overwriting its predecessor. A process killed before its
+EXIT trap retains `RUNNING` with null end/status (unknown, not a fabricated
+success); its raw `gate-attempts/<id>.jsonl` journal retains observed boundaries.
+A candidate change archives the entire previous `gate.json` under
+`historical/<SHA>/` using the existing candidate lifecycle.
+Reconcile/report consumers read `attempts[].phases` directly, including failed
+attempts, rather than reconstructing intervals from `gate-output.log`.
+
+
 ### Optional repository validation
 
 Bootstrap's optional `VALIDATION` answer is rendered as both the parameter default

@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import { test } from "node:test";
+import { after, test } from "node:test";
 import { Transitions } from "../src/status/progress.ts";
 import type { RunDetails } from "../src/status/progress.ts";
 import { BUNDLE_VERSION } from "../src/bundle.ts";
@@ -19,6 +19,11 @@ import { roleAssignment, runRoleJob } from "../src/role-dispatch.ts";
 import "./waiting-cancellation.test.ts";
 import { testRunId } from "./fixtures/run-id.ts";
 import { renderedFeature, renderedPoc } from "./fixtures/rendered-feature.ts";
+
+const timingBin = mkdtempSync(join(tmpdir(), "a4s-gate-cli-"));
+symlinkSync(fileURLToPath(new URL("../bin/dagu-gate.cjs", import.meta.url)), join(timingBin, "dagu-gate"));
+process.env.PATH = `${timingBin}:${process.env.PATH ?? ""}`;
+after(() => rmSync(timingBin, { recursive: true, force: true }));
 
 const definitions = [
   ["template", fileURLToPath(new URL("../skills/issue-execution/feature.yaml", import.meta.url))],
@@ -1728,6 +1733,7 @@ async function recoveryFixture(extraConfig = ""): Promise<RecoveryFixture> {
   const env: NodeJS.ProcessEnv = { ...process.env, DAGU_PARAMS_JSON: "{}", DAGU_HOME: home, DAGU_PORT: String(port), DAGU_COORDINATOR_ENABLED: "false" };
   // Fixture CLI retries are user requests; its scheduler supplies dispatch context.
   delete env.DAGU_QUEUE_DISPATCH_RETRY;
+  delete env.DAG_PUSHBACK_ITERATION;
   writeFileSync(join(home, "config.yaml"), `host: 127.0.0.1\nport: ${port}\nauth:\n  mode: none\ncoordinator:\n  enabled: false\nscheduler:\n  port: 0\n${extraConfig}`);
   let serviceLog = "";
   const service = spawn("dagu", ["start-all", "--host", "127.0.0.1", "--port", String(port)], {
@@ -2465,7 +2471,9 @@ for (const [name, definition] of definitions) {
     writeFileSync(join(state, "identity"), identity);
     writeFileSync(git(repo.worktree, "rev-parse", "--path-format=absolute", "--git-path", "dagu-feature-owner"), identity);
     const fixtureBin = join(repo.root, "role-bin"); mkdirSync(fixtureBin);
-    const env = { ...process.env, PATH: `${fixtureBin}:${process.env.PATH}`, DAGU_PARAMS_JSON: "{}", DAGU_HOME: home, DAGU_PORT: String(port), DAGU_COORDINATOR_ENABLED: "false" };
+    const env: NodeJS.ProcessEnv = { ...process.env, PATH: `${fixtureBin}:${process.env.PATH}`, DAGU_PARAMS_JSON: "{}", DAGU_HOME: home, DAGU_PORT: String(port), DAGU_COORDINATOR_ENABLED: "false" };
+    // This scheduler owns a new run's iteration independently of the parent role job.
+    delete env.DAG_PUSHBACK_ITERATION;
     writeFileSync(join(home, "config.yaml"), `host: 127.0.0.1\nport: ${port}\nauth:\n  mode: none\ncoordinator:\n  enabled: false\n`);
     const source = readFileSync(definition, "utf8");
     const commandImplementation = extractStep(source, "implement").includes("dagu-role-jobs stage implement");
@@ -3037,7 +3045,13 @@ test("real Dagu gate exclusion covers completion, retry, native rewind, BEHIND a
           ? window.filter((event, index) => event.run !== firstRun || index === 0) : window;
         assertGateWindows(killedWindow, firstRun, secondRun, killedAt);
         assert.equal(readFileSync(join(second.state, "candidate.json"), "utf8"), candidate);
-        assert.equal(JSON.parse(readFileSync(join(second.state, "gate.json"), "utf8")).sha, git(second.worktree, "rev-parse", "HEAD"));
+        const timing: GateEvidence = JSON.parse(readFileSync(join(second.state, "gate.json"), "utf8"));
+        assert.equal(timing.sha, git(second.worktree, "rev-parse", "HEAD"));
+        const wait = timing.attempts.at(-1)!.phases.find(phase => phase.name === "lock_wait")!;
+        const releaseAt = killedAt ?? window.find(event => event.run === firstRun && event.kind === "END")!.at;
+        assert.ok(wait.startedAt <= releaseAt / 1_000_000);
+        assert.ok(wait.endedAt >= Math.floor(releaseAt / 1_000_000));
+        assert.ok(wait.durationMs > 0);
         assert.ok(readFileSync(join(runtime.home, "config.yaml"), "utf8").endsWith(queueConfig));
         t.diagnostic(`Dagu ${liveDaguVersion}; entry=${entry}; holder=${firstRun}/${holderResult.statusLabel}; waiter=${secondRun}; queue=a4s/8; independent=${controlRun}; windows=${JSON.stringify(window)}`);
       } finally {
@@ -3059,4 +3073,128 @@ test("real Dagu gate exclusion covers completion, retry, native rewind, BEHIND a
       }
     }
   } finally { await runtime.close(); }
+});
+
+type GatePhase = { name: string; workspace?: string; startedAt: number; endedAt: number; exitCode: number; durationMs: number };
+type GateAttempt = { id: string; iteration: number; startedAt: number; endedAt: number; exitCode: number; result: string; durationMs: number; phases: GatePhase[] };
+type GateEvidence = { schemaVersion: number; sha: string; gate: string; result: string; attempts: GateAttempt[] };
+
+function timedNpmGate(repo: Repository): string {
+  const failOnce = join(repo.root, "fail-once");
+  writeFileSync(failOnce, "");
+  writeFileSync(join(repo.worktree, "package.json"), JSON.stringify({
+    name: "gate-fixture", private: true, workspaces: ["packages/*"],
+    scripts: { test: "npm test --workspaces", typecheck: "npm run typecheck --workspaces" },
+  }));
+  writeFileSync(join(repo.worktree, ".gitignore"), "node_modules/\n");
+  for (const workspace of ["first", "second"]) {
+    const fail = workspace === "second"
+      ? `const fs=require('node:fs');if(fs.existsSync(${JSON.stringify(failOnce)})){fs.unlinkSync(${JSON.stringify(failOnce)});process.exit(17)}`
+      : "";
+    writeFileSync(join(repo.worktree, "packages", workspace, "package.json"), JSON.stringify({
+      name: workspace, version: "1.0.0",
+      scripts: {
+        test: `node -e ${JSON.stringify(fail || "process.exit(0)")}`,
+        typecheck: "tsc --noEmit --allowJs check.js",
+      },
+    }));
+    writeFileSync(join(repo.worktree, "packages", workspace, "check.js"), "const value = 1;\n");
+  }
+  execFileSync("npm", ["install", "--package-lock-only", "--ignore-scripts", "--no-audit", "--no-fund"], {
+    cwd: repo.worktree, env: { ...process.env, A4S_GATE_JOURNAL: "" }, stdio: "pipe",
+  });
+  git(repo.worktree, "add", ".");
+  git(repo.worktree, "commit", "-m", "test: real npm gate phases");
+  recordCandidate(repo);
+  return "npm ci --ignore-scripts --no-audit --no-fund && npm test && npm run typecheck";
+}
+
+function assertTimedAttempt(attempt: GateAttempt, exitCode: number): void {
+  assert.equal(attempt.exitCode, exitCode);
+  assert.equal(attempt.result, exitCode === 0 ? "PASS" : "FAIL");
+  assert.equal(attempt.durationMs, attempt.endedAt - attempt.startedAt);
+  let cursor = attempt.startedAt;
+  for (const phase of attempt.phases) {
+    assert.ok(phase.startedAt >= cursor, JSON.stringify(attempt));
+    assert.ok(phase.endedAt >= phase.startedAt && phase.endedAt <= attempt.endedAt, JSON.stringify(phase));
+    assert.equal(phase.durationMs, phase.endedAt - phase.startedAt);
+    cursor = phase.endedAt;
+  }
+  assert.equal(cursor, attempt.endedAt);
+  assert.ok(attempt.phases.some(phase => phase.name === "lock_wait"));
+  assert.ok(attempt.phases.some(phase => phase.name === "install"));
+  assert.deepEqual(attempt.phases.filter(phase => phase.name === "tests").map(phase => phase.workspace),
+    ["packages/first", "packages/second"]);
+}
+
+for (const [name, definition] of definitions) {
+  test(`${name} gate records failed phases and preserves a second passing attempt`, { timeout: 30_000 }, () => {
+    const repo = repository();
+    try {
+      const gate = timedNpmGate(repo);
+      const script = extractScript(definition, "  - id: gate");
+      const env = { ...featureScriptEnv(repo), GATE: gate };
+      const failed = spawnSync("bash", ["-c", script], { env, encoding: "utf8" });
+      // npm translates a lifecycle script's 17 into its own nonzero status.
+      assert.notEqual(failed.status, 0, failed.stdout + failed.stderr);
+      const first: GateEvidence = JSON.parse(readFileSync(join(repo.state, "gate.json"), "utf8"));
+      assert.equal(first.schemaVersion, 1);
+      assert.equal(first.result, "FAIL");
+      assert.equal(first.gate, gate);
+      assert.equal(first.attempts.length, 1);
+      assertTimedAttempt(first.attempts[0]!, failed.status!);
+      assert.equal(first.attempts[0]!.phases.find(phase => phase.name === "tests" && phase.workspace === "packages/second")?.exitCode, 17);
+      assert.ok(first.attempts[0]!.phases.every(phase => phase.name !== "typecheck" && phase.name !== "post_checks"));
+      const passed = spawnSync("bash", ["-c", script], { env, encoding: "utf8" });
+      assert.equal(passed.status, 0, passed.stdout + passed.stderr);
+      const evidence: GateEvidence = JSON.parse(readFileSync(join(repo.state, "gate.json"), "utf8"));
+      assert.equal(evidence.attempts.length, 2);
+      assert.deepEqual(evidence.attempts[0], first.attempts[0]);
+      assert.notEqual(evidence.attempts[0]!.id, evidence.attempts[1]!.id);
+      const attempt = evidence.attempts[1]!;
+      assertTimedAttempt(attempt, 0);
+      assert.deepEqual(attempt.phases.filter(phase => phase.name === "typecheck").map(phase => phase.workspace),
+        ["packages/first", "packages/second"]);
+      assert.ok(attempt.phases.some(phase => phase.name === "post_checks"));
+      assert.ok(attempt.phases.every(phase => phase.exitCode === 0));
+    } finally { rmSync(repo.root, { recursive: true, force: true }); }
+  });
+}
+
+test("real Dagu gate timing retains failed automatic retry and every npm phase inside the step window", {
+  ...liveDagu, timeout: 60_000,
+}, async (t) => {
+  const runtime = await recoveryFixture();
+  const id = testRunId("gate-timing");
+  const repo = repository(id);
+  try {
+    const gate = timedNpmGate(repo);
+    const variables = { ...featureScriptEnv(repo), RUN: id, GATE: gate };
+    const step = extractStep(readFileSync(definitions[0][1], "utf8"), "gate")
+      .replace("    depends: conflict_review_cancellation\n", "");
+    const dag = join(runtime.home, "dags", "feature.yaml");
+    writeFileSync(dag, "type: graph\nshell: bash\nenv:\n"
+      + Object.entries(variables).filter(([, value]) => value !== undefined).map(([key, value]) => `  - ${key}: ${JSON.stringify(value)}\n`).join("")
+      + "steps:\n" + step);
+    const start = Date.now();
+    execFileSync("dagu", ["enqueue", "--run-id", id, dag], { env: runtime.env, stdio: "pipe" });
+    await runtime.state(id, "succeeded");
+    const end = Date.now();
+    const evidence: GateEvidence = JSON.parse(readFileSync(join(repo.state, "gate.json"), "utf8"));
+    assert.equal(evidence.attempts.length, 2);
+    assert.equal(evidence.result, "PASS");
+    for (const [index, attempt] of evidence.attempts.entries()) {
+      assertTimedAttempt(attempt, index === 0 ? attempt.exitCode : 0);
+      assert.equal(attempt.iteration, 0);
+      assert.ok(attempt.startedAt >= start && attempt.endedAt <= end);
+    }
+    assert.notEqual(evidence.attempts[0]!.exitCode, 0);
+    assert.equal(evidence.attempts[0]!.phases.find(phase => phase.name === "tests" && phase.workspace === "packages/second")?.exitCode, 17);
+    assert.deepEqual(evidence.attempts[1]!.phases.filter(phase => phase.name === "typecheck").map(phase => phase.workspace),
+      ["packages/first", "packages/second"]);
+    t.diagnostic(`Dagu ${liveDaguVersion}; run=${id}; gate.json=${JSON.stringify(evidence)}`);
+  } finally {
+    await runtime.close();
+    rmSync(repo.root, { recursive: true, force: true });
+  }
 });
