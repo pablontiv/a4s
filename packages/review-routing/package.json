@@ -1,14 +1,14 @@
 {
-  "name": "@a4s/omp-cross-family-review",
+  "name": "@a4s/review-routing",
   "version": "0.3.0",
   "private": true,
   "license": "UNLICENSED",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/pablontiv/a4s.git",
-    "directory": "packages/omp-cross-family-review"
+    "directory": "packages/review-routing"
   },
-  "homepage": "https://github.com/pablontiv/a4s/tree/main/packages/omp-cross-family-review#readme",
+  "homepage": "https://github.com/pablontiv/a4s/tree/main/packages/review-routing#readme",
   "bugs": {
     "url": "https://github.com/pablontiv/a4s/issues"
   },

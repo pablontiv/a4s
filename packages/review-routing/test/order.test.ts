@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { Settings, withActiveSettings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { lookup } from "@oh-my-pi/pi-coding-agent/config/registry";
 import { registerReviewHook, bindQualityImplementer } from "../src/index.ts";
-import type * as CrossFamilyModule from "../src/index.ts";
+import type * as ReviewRoutingModule from "../src/index.ts";
 import { orderReviewModels } from "../src/order.ts";
 import type { Model, Models, ReviewModels } from "../src/order.ts";
 
@@ -194,10 +194,15 @@ test("quality routing compares only the runtime-effective implementer", () => {
 });
 test("quality bindings reach separately loaded extension graphs", async () => {
   // Intentional module-loading boundary: OMP imports each extension graph separately.
-  const binder: typeof CrossFamilyModule = await import(`../src/index.ts?instance=${Date.now()}`);
+  const binder: typeof ReviewRoutingModule = await import(`../src/index.ts?instance=${Date.now()}`);
   assert.notEqual(binder.bindQualityImplementer, bindQualityImplementer);
   binder.bindQualityImplementer("SeparateQA359", gpt);
+  const registry: unknown = Reflect.get(globalThis, Symbol.for("@a4s/review-routing/quality-implementers"));
+  assert.ok(registry instanceof Map);
+  assert.deepEqual(registry.get("SeparateQA359"), gpt);
   assert.deepEqual(spawn({ agent: "qa", spawnKey: "SeparateQA359", patterns: ["gpt", "opus"] })?.model, ["opus", "@slow"]);
+  assert.equal(registry.has("SeparateQA359"), false);
+  assert.deepEqual(spawn({ agent: "qa", spawnKey: "SeparateQA359", patterns: ["gpt", "opus", "gemini"] })?.model, ["gemini"]);
 });
 test("candidate diagnostics contain model identity and family", () => {
   const models = facade();

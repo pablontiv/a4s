@@ -8,7 +8,7 @@ Repository of private libraries, verified extensions, agents and skills distribu
 
 ## Extensiones
 - [`packages/orca-integration/`](packages/orca-integration/): worker lifecycle and explicit model-routing contracts for OMP coordinators using Orca workers.
-- [`packages/omp-cross-family-review/`](packages/omp-cross-family-review/): selección cross-family de modelos para subagentes revisores de OMP.
+- [`packages/review-routing/`](packages/review-routing/): strict cross-family model selection for OMP review subagents.
 - [`packages/omp-dagu/`](packages/omp-dagu/): widget, despertar dirigido de la sesión coordinadora y guard OMP para Dagu, agente `triage-reviewer` y skill `dagu-feature`.
 - [`packages/pi-tool-row-presentation/`](packages/pi-tool-row-presentation/): presentación configurable de tool rows para Pi/Pion.
 - [`packages/synagent/core/`](packages/synagent/core/): adaptadores de mensajería Synagent para Pi, OMP y Claude.
@@ -122,7 +122,7 @@ apps. Pull requests select the longest owning workspace for both current and
 previous rename paths, then its transitive declared consumers. Root files,
 lockfiles, CI helpers, shared hot-reload changes and unmapped/deleted workspace
 roots select all current workspaces. Pushes select all workspaces. This retains
-`@a4s/omp-cross-family-review` typechecking and follows future moved/renamed
+`@a4s/review-routing` typechecking and follows future moved/renamed
 manifests without inventing workspace names.
 
 Selected workspaces run their declared tests and typechecks under main's existing

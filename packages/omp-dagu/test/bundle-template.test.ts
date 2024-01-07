@@ -157,8 +157,8 @@ type CiWorkspace = {
 const ciJobs = (...names: string[]) => names.sort().map(name => ({ name, test: true, typecheck: true }));
 const mainWorkspaces: CiWorkspace[] = [
   { dir: "packages/context-expert", name: "@a4s/context-expert" },
-  { dir: "packages/omp-cross-family-review", name: "@a4s/omp-cross-family-review" },
-  { dir: "packages/omp-dagu", name: "@a4s/omp-dagu", dependencies: { "@a4s/omp-cross-family-review": "*" } },
+  { dir: "packages/review-routing", name: "@a4s/review-routing" },
+  { dir: "packages/omp-dagu", name: "@a4s/omp-dagu", dependencies: { "@a4s/review-routing": "*" } },
   { dir: "packages/hot-reload", name: "@a4s/hot-reload" },
   { dir: "packages/orca-integration", name: "@a4s/orca-integration" },
   { dir: "packages/pi-tool-row-presentation", name: "@a4s/pi-tool-row-presentation" },
@@ -205,7 +205,7 @@ test("CI selects checked-out main manifests, nested owners and declared routing 
   try {
     const cases: [unknown[], string[]][] = [
       [["packages/context-expert/src/index.ts"], ["@a4s/context-expert"]],
-      [["packages/omp-cross-family-review/src/settings.ts"], ["@a4s/omp-cross-family-review", "@a4s/omp-dagu"]],
+      [["packages/review-routing/src/settings.ts"], ["@a4s/omp-dagu", "@a4s/review-routing"]],
       [["packages/synagent/core/src/index.ts"], ["@a4s/synagent"]],
       [[{ filename: "packages/synagent/bus/src/deleted.ts", status: "removed" }], ["@a4s/synagent-bus"]],
       [[{ filename: "packages/synagent/core/src/new.ts", previous_filename: "packages/synagent/core/src/old.ts" }],

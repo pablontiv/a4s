@@ -5,7 +5,7 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
-import { registerReviewHook } from "@a4s/omp-cross-family-review";
+import { registerReviewHook } from "@a4s/review-routing";
 import { inspectImplementer, inspectVerdict, qualityDecision, qualityMarker, verifyQuality } from "../src/triage/quality.ts";
 import type { TranscriptRow } from "../src/triage/quality.ts";
 import { nativeQualityFixture, qualityFixture, readQualityPolicies } from "./quality-fixtures.ts";

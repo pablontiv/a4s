@@ -8,7 +8,7 @@ import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
-import { registerReviewHook } from "@a4s/omp-cross-family-review";
+import { registerReviewHook } from "@a4s/review-routing";
 import { Transitions } from "../src/status/progress.ts";
 import type { RunDetails } from "../src/status/progress.ts";
 import { BUNDLE_VERSION } from "../src/bundle.ts";

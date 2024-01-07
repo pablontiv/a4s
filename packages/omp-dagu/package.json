@@ -41,7 +41,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@a4s/omp-cross-family-review": "0.3.0",
+    "@a4s/review-routing": "0.3.0",
     "@a4s/hot-reload": "0.1.0",
     "yaml": "2.9.0"
   },
