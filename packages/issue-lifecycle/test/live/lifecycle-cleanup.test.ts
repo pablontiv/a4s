@@ -176,6 +176,8 @@ function run(script: string, repo: Repo, extra: Record<string, string> = {}) {
     env: {
       HOME: process.env.HOME,
       A4S_BIN: a4sBin,
+      // Pipes can look like remote-shell stdin; preserve the fixture's stub PATH.
+      SHLVL: "1",
       PATH: `${join(repo.root, "bin")}:${process.env.PATH ?? ""}`,
       ISSUE: "209",
       PR_NUMBER: "",

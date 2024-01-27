@@ -9,6 +9,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
+import { parse, stringify } from "yaml";
 import { Transitions } from "../../src/status/progress.ts";
 import type { RunDetails } from "../../src/status/progress.ts";
 import { readConfigFile } from "../../src/config.ts";
@@ -152,6 +153,7 @@ function materializeFeature(run: string, fresh: boolean): Repository {
   };
   if (!fresh) settleCopiedRepository([repo.primary, repo.worktree]);
   writeFileSync(join(repo.state, "receipt.json"), JSON.stringify(roleAdmission(repo.primary, join(root, "dagu-home"), run, readFileSync(definitions[0][1], "utf8"))));
+  stubGh(repo, "[]\n", 0);
   return repo;
 }
 
@@ -263,6 +265,8 @@ test("maintained close completes without inspecting changed files or re-sealing 
 function featureScriptEnv(repo: Repository): NodeJS.ProcessEnv {
   return {
     HOME: process.env.HOME,
+    // Node's socket-backed stdin must not turn isolated Bash children into remote-login shells.
+    SHLVL: "1",
     A4S_BIN: a4sBin,
     DAGU_HOME: join(repo.root, "dagu-home"),
     DAGU_OUTPUT_FILE: join(repo.root, "step-output"),
@@ -419,7 +423,7 @@ cp "$STATE/triage.md" "$PUBLISHED"`);
       const calls = join(repo.root, "publication-calls");
       const published = join(repo.root, "published.md");
       const gh = join(repo.root, "bin", "gh");
-      writeFileSync(gh, `#!/bin/bash
+      writeFileSync(gh, `#!/usr/bin/env bash
 set -euo pipefail
 case "$1 $2" in
   "pr view")
@@ -1210,7 +1214,7 @@ for (const [name, definition] of definitions) {
   test(`${name} checkpoint recovery retains the exact failed-gate candidate after exit`, () => {
     const repo = repository();
     try {
-      stubGh(repo, "", 1);
+      stubGh(repo, "[]\n", 0);
       commit(repo, "README.txt", "recoverable candidate\n");
       const head = git(repo.worktree, "rev-parse", "HEAD");
       runScript(checkpointScript, repo);
@@ -1303,6 +1307,253 @@ for (const [name, definition] of definitions) {
   const gateScript = extractScript(definition, "  - id: gate");
   const pushScript = extractScript(definition, "  - id: push");
   const autoMergeScript = extractScript(definition, "  - id: auto_merge");
+  for (const mergeStateStatus of ["CLEAN", "BLOCKED"]) {
+    test(`${name} armed correction disarms before publishing then requests the admitted ${mergeStateStatus} SHA`, () => {
+      const repo = repository();
+      try {
+        const remote = join(repo.root, "remote.git");
+        const headRef = `refs/heads/${repo.branch}`;
+        const old = git(repo.worktree, "rev-parse", "HEAD");
+        git(repo.worktree, "push", "origin", `HEAD:${headRef}`);
+        commit(repo, "README.txt", "corrected candidate\n");
+        const sha = git(repo.worktree, "rev-parse", "HEAD");
+        const armed = join(repo.root, "armed");
+        const events = join(repo.root, "events");
+        const observed = join(repo.root, "observed");
+        writeFileSync(armed, "old request\n");
+        writeFileSync(events, "");
+        const observation = {
+          number: 190, state: "OPEN", headRefName: repo.branch, baseRefName: "main",
+          headRefOid: old, autoMergeRequest: { enabledAt: "old" }, mergeCommit: null, mergeStateStatus,
+        };
+        writeFileSync(observed, JSON.stringify(observation));
+        writeFileSync(join(repo.root, "bin", "gh"), `#!/usr/bin/env bash
+set -euo pipefail
+case "$*" in
+  "pr list "*) jq -s . ${JSON.stringify(observed)} ;;
+  "pr view 190 --repo "*) cat ${JSON.stringify(observed)} ;;
+  "pr merge 190 --repo "*" --disable-auto")
+    [[ "$(git --git-dir=${JSON.stringify(remote)} rev-parse ${JSON.stringify(headRef)})" == "${old}" ]]
+    printf 'disarm\\n' >> ${JSON.stringify(events)}
+    rm ${JSON.stringify(armed)}
+    jq '.autoMergeRequest = null' ${JSON.stringify(observed)} > ${JSON.stringify(`${observed}.next`)}
+    mv ${JSON.stringify(`${observed}.next`)} ${JSON.stringify(observed)} ;;
+  "pr view 190 --json headRefOid --jq .headRefOid") git --git-dir=${JSON.stringify(remote)} rev-parse ${JSON.stringify(headRef)} ;;
+  "pr view 190 --json state,mergeStateStatus,autoMergeRequest,mergeCommit,headRefOid")
+    jq --arg sha "${sha}" '.headRefOid = $sha' ${JSON.stringify(observed)} ;;
+  "pr view 190 --json number --jq .number") printf '190\\n' ;;
+  "pr merge 190 "*)
+    [[ ! -e ${JSON.stringify(armed)} ]]
+    [[ "$(git --git-dir=${JSON.stringify(remote)} rev-parse ${JSON.stringify(headRef)})" == "${sha}" ]]
+    [[ "$*" == *"--match-head-commit ${sha}"* ]]
+    printf 'request ${sha}\\n' >> ${JSON.stringify(events)} ;;
+  *) echo "unexpected gh $*" >&2; exit 1 ;;
+esac
+`, { mode: 0o755 });
+        writeFileSync(join(remote, "hooks", "pre-receive"), `#!/usr/bin/env bash
+set -euo pipefail
+while read -r old new ref; do
+  if [[ "$ref" == "${headRef}" ]]; then
+    [[ ! -e ${JSON.stringify(armed)} ]]
+    [[ "$new" == "${sha}" ]]
+    printf 'publish %s\\n' "$new" >> ${JSON.stringify(events)}
+  fi
+done
+`, { mode: 0o755 });
+        runScript(checkpointScript, repo);
+        assert.equal(git(remote, "rev-parse", headRef), old);
+        assert.equal(existsSync(armed), true);
+        assert.equal(readFileSync(events, "utf8"), "");
+        runScript(gateScript, repo);
+        const refused = spawnSync("bash", ["-c", pushScript], {
+          encoding: "utf8", env: { ...featureScriptEnv(repo), VALIDATION: "operator smoke", APPROVED: "yes", TESTED_SHA: old },
+        });
+        assert.notEqual(refused.status, 0);
+        assert.equal(readFileSync(events, "utf8"), "");
+        const approved = spawnSync("bash", ["-c", pushScript], {
+          encoding: "utf8", env: { ...featureScriptEnv(repo), VALIDATION: "operator smoke", APPROVED: "yes", TESTED_SHA: sha },
+        });
+        assert.equal(approved.status, 0, approved.stdout + approved.stderr);
+        assert.equal(readFileSync(join(repo.state, "published-sha"), "utf8"), `${sha}\n`);
+        assert.equal(JSON.parse(readFileSync(join(repo.state, "validation.json"), "utf8")).sha, sha);
+        runScript(autoMergeScript, repo);
+        assert.deepEqual(readFileSync(events, "utf8").trim().split("\n"), ["disarm", `publish ${sha}`, `request ${sha}`]);
+      } finally { rmSync(repo.root, { recursive: true, force: true }); }
+    });
+  }
+  for (const failure of ["wrong identity", "disable rejected", "request remains armed"]) {
+    test(`${name} push preserves the remote candidate when ${failure}`, () => {
+      const repo = repository();
+      try {
+        const remote = join(repo.root, "remote.git");
+        const old = git(repo.worktree, "rev-parse", "HEAD");
+        git(repo.worktree, "push", "origin", `HEAD:refs/heads/${repo.branch}`);
+        commit(repo, "README.txt", "corrected candidate\n");
+        runScript(gateScript, repo);
+        const events = join(repo.root, "events");
+        writeFileSync(events, "");
+        const pr = { number: 190, state: "OPEN", headRefName: failure === "wrong identity" ? "another-branch" : repo.branch,
+          baseRefName: "main", headRefOid: old, autoMergeRequest: { enabledAt: "old" }, mergeCommit: null };
+        writeFileSync(join(repo.root, "bin", "gh"), `#!/usr/bin/env bash
+case "$*" in
+  "pr list "*) printf '%s\\n' '${JSON.stringify([pr])}' ;;
+  "pr view 190 --repo "*) printf '%s\\n' '${JSON.stringify(pr)}' ;;
+  "pr merge 190 --repo "*" --disable-auto") printf 'disable\\n' >> ${JSON.stringify(events)}; exit ${failure === "disable rejected" ? 1 : 0} ;;
+  *) echo "unexpected gh $*" >&2; exit 1 ;;
+esac
+`, { mode: 0o755 });
+        const result = spawnSync("bash", ["-c", pushScript], { encoding: "utf8", env: featureScriptEnv(repo) });
+        assert.notEqual(result.status, 0);
+        assert.equal(git(remote, "rev-parse", `refs/heads/${repo.branch}`), old);
+        assert.equal(existsSync(join(repo.state, "published-sha")), false);
+        assert.equal(readFileSync(events, "utf8"), failure === "wrong identity" ? "" : "disable\n");
+      } finally { rmSync(repo.root, { recursive: true, force: true }); }
+    });
+  }
+
+  for (const checkpoint of ["checkpoint_push", "push"]) {
+    for (const deleted of [false, true]) {
+      for (const retained of ["none", "dirty", "newer", "identity", "wrong-branch"]) {
+        test(`${name} already MERGED at ${checkpoint}, remote ${deleted ? "deleted" : "present"}, ${retained} local work follows integrated cleanup`, () => {
+          const repo = repository();
+          try {
+            commit(repo, "README.txt", "integrated candidate\n");
+            const sha = git(repo.worktree, "rev-parse", "HEAD");
+            runScript(checkpointScript, repo);
+            git(repo.worktree, "push", "origin", `HEAD:refs/heads/${repo.branch}`);
+            git(repo.primary, "merge", "--squash", repo.branch);
+            git(repo.primary, "commit", "-m", "squash delivery");
+            const squash = git(repo.primary, "rev-parse", "HEAD");
+            git(repo.primary, "push", "origin", "main");
+            if (deleted) git(repo.primary, "push", "origin", `:refs/heads/${repo.branch}`);
+            if (retained === "dirty") writeFileSync(join(repo.worktree, "untracked"), "recover me\n");
+            if (retained === "newer") commit(repo, "newer", "recover this commit\n");
+            if (retained === "identity") {
+              const resource = JSON.parse(readFileSync(join(repo.state, "resource.json"), "utf8"));
+              writeFileSync(join(repo.state, "resource.json"), JSON.stringify({ ...resource, run: "another-owner" }));
+            }
+            if (retained === "wrong-branch") git(repo.worktree, "checkout", "-b", "recoverable-work");
+            const local = git(repo.worktree, "rev-parse", "HEAD");
+            const pr = { number: 190, state: "MERGED", headRefName: repo.branch, baseRefName: "main",
+              headRefOid: sha, autoMergeRequest: null, mergeCommit: { oid: squash } };
+            const gh = join(repo.root, "bin", "gh");
+            writeFileSync(gh, `#!/usr/bin/env bash
+case "$*" in
+  "pr list "*) printf '%s\\n' '${JSON.stringify([pr])}' ;;
+  "pr view 190 --repo "*) printf '%s\\n' '${JSON.stringify(pr)}' ;;
+  *) echo "unexpected gh $*" >&2; exit 1 ;;
+esac
+`, { mode: 0o755 });
+            const hookEvents = join(repo.root, "publications");
+            writeFileSync(hookEvents, "");
+            writeFileSync(join(repo.root, "remote.git", "hooks", "pre-receive"), `#!/usr/bin/env bash
+while read -r old new ref; do
+  [[ "$new" == 0000000000000000000000000000000000000000 ]] || exit 1
+  printf '%s\\n' "$ref" >> ${JSON.stringify(hookEvents)}
+done
+`, { mode: 0o755 });
+            const output = join(repo.root, "outputs");
+            assert.match(runScript(extractScript(definition, `  - id: ${checkpoint}`), repo, { DAGU_OUTPUT_FILE: output }),
+              /already MERGED.*no publication/);
+            assert.equal(readFileSync(output, "utf8"), "INTEGRATED=yes\n");
+            const evidence = JSON.parse(readFileSync(join(repo.state, "integrated.json"), "utf8"));
+            assert.equal(evidence.headRefOid, sha);
+            assert.equal(evidence.candidate, local);
+            assert.equal(evidence.checkpoint, checkpoint);
+            runScript(extractScript(definition, "  exit:"), repo);
+            if (retained === "none") {
+              assert.equal(existsSync(repo.worktree), false);
+              assert.equal(hasRef(repo.primary, `refs/heads/${repo.branch}`), false);
+              assert.equal(hasRef(join(repo.root, "remote.git"), `refs/heads/${repo.branch}`), false);
+              assert.equal(hasRef(join(repo.root, "remote.git"), "refs/dagu/checkpoints/issue-189"), false);
+              assert.equal(readFileSync(join(repo.state, "cleanup-phase"), "utf8"), "complete\n");
+              const proof = JSON.parse(readFileSync(join(repo.state, "cleanup-proof.json"), "utf8"));
+              assert.equal(proof.candidate, sha);
+              assert.equal(proof.proof, "squash");
+              assert.equal(proof.squash, squash);
+              assert.equal(existsSync(join(repo.state, "cleanup-diagnostic")), false);
+            } else {
+              assert.equal(existsSync(repo.worktree), true);
+              assert.equal(git(repo.worktree, "rev-parse", "HEAD"), local);
+              const diagnostic = readFileSync(join(repo.state, "cleanup-diagnostic"), "utf8");
+              const reason = retained === "dirty" ? /dirty worktree/ : retained === "newer" ? /PR head SHA differs/
+                : retained === "identity" ? /resource owner or identity changed/ : /resource proof or cleanup operation failed/;
+              assert.match(diagnostic, reason);
+              assert.ok(diagnostic.includes(repo.worktree));
+              assert.ok(diagnostic.includes(repo.branch));
+              assert.equal(readFileSync(hookEvents, "utf8"), "");
+            }
+          } finally { rmSync(repo.root, { recursive: true, force: true }); }
+        });
+      }
+    }
+  }
+  for (const checkpoint of ["checkpoint_push", "push"]) {
+    test(`${name} native graph succeeds after already MERGED at ${checkpoint} with a deleted remote branch`, { ...liveDagu, timeout: 60_000 }, async () => {
+      const fixture = await recoveryFixture();
+      const run = testRunId(`integrated-${checkpoint}`);
+      const repo = repository(run);
+      try {
+        commit(repo, "README.txt", "already integrated\n");
+        const sha = git(repo.worktree, "rev-parse", "HEAD");
+        git(repo.worktree, "push", "origin", `HEAD:refs/heads/${repo.branch}`);
+        git(repo.primary, "merge", "--ff-only", repo.branch);
+        git(repo.primary, "push", "origin", "main", `:refs/heads/${repo.branch}`);
+        const pr = { number: 190, state: "MERGED", headRefName: repo.branch, baseRefName: "main",
+          headRefOid: sha, autoMergeRequest: null, mergeCommit: { oid: sha } };
+        writeFileSync(join(repo.root, "bin", "gh"), `#!/usr/bin/env bash
+case "$*" in
+  "pr list "*) printf '%s\\n' '${JSON.stringify([pr])}' ;;
+  "pr view 190 --repo "*) printf '%s\\n' '${JSON.stringify(pr)}' ;;
+  *) echo "unexpected gh $*" >&2; exit 1 ;;
+esac
+`, { mode: 0o755 });
+        writeFileSync(join(repo.root, "remote.git", "hooks", "pre-receive"), '#!/usr/bin/env bash\nwhile read -r old new ref; do [[ "$new" == 0000000000000000000000000000000000000000 ]] || exit 1; done\n', { mode: 0o755 });
+        rmSync(join(repo.root, "bin", "dagu"));
+        const home = fixture.home;
+        const source = parse(readFileSync(definition, "utf8")) as {
+          env: Array<Record<string, string>>; steps: Array<{ id: string; depends?: string | string[]; [key: string]: unknown }>;
+          handler_on: { exit: unknown }; [key: string]: unknown;
+        };
+        const start = source.steps.findIndex(step => step.id === checkpoint);
+        const steps = source.steps.map((step, index) => index >= start ? step : {
+          id: step.id, ...(index ? { depends: source.steps[index - 1]!.id } : {}),
+          run: step.id === "triage" ? 'echo POC=no >> "$DAGU_OUTPUT_FILE"'
+            : step.id === "checkpoint_push" ? 'echo INTEGRATED=no >> "$DAGU_OUTPUT_FILE"' : "true",
+          ...(step.id === "triage" ? { outputs: [{ name: "POC" }] }
+            : step.id === "checkpoint_push" ? { outputs: [{ name: "INTEGRATED" }] } : {}),
+        });
+        const env: NodeJS.ProcessEnv = { ...fixture.env, ...featureScriptEnv(repo), DAGU_HOME: home, DAGU_PORT: String(fixture.port) };
+        // Native Dagu, not the direct-shell helper, owns each step's output sink.
+        delete env.DAGU_OUTPUT_FILE;
+        const file = join(home, "dags", "feature.yaml");
+        writeFileSync(file, stringify({
+          name: "feature", type: "graph", shell: "bash", max_active_steps: 1,
+          params: [{ ISSUE: "189" }, { PR_NUMBER: "" }, { OMP_SESSION_ID: "integration-test-owner" }],
+          env: [...Object.entries({ ...featureScriptEnv(repo), DAGU_HOME: home })
+            .filter((entry): entry is [string, string] => entry[0] !== "DAGU_OUTPUT_FILE" && entry[1] !== undefined)
+            .map(([key, value]) => ({ [key]: value })),
+          { DAGU_RESOURCE_GUARD: source.env.find(entry => "DAGU_RESOURCE_GUARD" in entry)!.DAGU_RESOURCE_GUARD },
+          { VALIDATION: "operator validates the gated candidate" }, { DAGU_PORT: String(fixture.port) }],
+          steps, handler_on: { exit: source.handler_on.exit },
+        }, { defaultStringType: "QUOTE_DOUBLE", defaultKeyType: "PLAIN" }));
+        const result = spawnSync("dagu", ["start", "--run-id", run, file], { encoding: "utf8", env, timeout: 45_000 });
+        assert.equal(result.status, 0, result.stdout + result.stderr);
+        for (const step of ["pr", "code_scanning", "auto_merge", "await_ci", "await_merge", "close_gate"]) {
+          assert.match(result.stdout + result.stderr, new RegExp(`${step}\\s+.*skipped`));
+        }
+        const status = spawnSync("dagu", ["status", file, "--run-id", run], { encoding: "utf8", env });
+        assert.equal(status.status, 0, status.stdout + status.stderr);
+        assert.match(status.stdout, /Succeeded/);
+        const diagnostic = join(repo.state, "cleanup-diagnostic");
+        assert.equal(existsSync(repo.worktree), false,
+          `${existsSync(diagnostic) ? readFileSync(diagnostic, "utf8") : ""}\n${result.stdout}${result.stderr}`);
+        assert.equal(hasRef(repo.primary, `refs/heads/${repo.branch}`), false);
+        assert.equal(hasRef(join(repo.root, "remote.git"), `refs/heads/${repo.branch}`), false);
+        assert.equal(readFileSync(join(repo.state, "cleanup-phase"), "utf8"), "complete\n");
+      } finally { await fixture.close(); rmSync(repo.root, { recursive: true, force: true }); }
+    });
+  }
   test(`${name} corrections replace one candidate and require current SHA evidence for publication`, () => {
     const repo = repository();
     try {
@@ -1370,7 +1621,7 @@ for (const [name, definition] of definitions) {
   test(`${name} checkpoint leases preserve the PR head and push publishes only a fresh gated SHA`, () => {
     const repo = repository();
     try {
-      stubGh(repo, "", 1);
+      stubGh(repo, "[]\n", 0);
       const remote = join(repo.root, "remote.git");
       const ref = "refs/dagu/checkpoints/issue-189";
       git(repo.worktree, "push", "origin", `HEAD:refs/heads/${repo.branch}`);
@@ -1409,7 +1660,8 @@ for (const [name, definition] of definitions) {
   });
   for (const scenario of [
     { label: "CLEAN", mergeStateStatus: "CLEAN", merge: "immediate" },
-    { label: "auto-merge enabled", mergeStateStatus: "CLEAN", autoMergeRequest: { enabledAt: "2026-10-16" } },
+    { label: "auto-merge enabled CLEAN", mergeStateStatus: "CLEAN", autoMergeRequest: { enabledAt: "2026-10-16" }, merge: "immediate" },
+    { label: "auto-merge enabled BLOCKED", mergeStateStatus: "BLOCKED", autoMergeRequest: { enabledAt: "2026-10-16" }, merge: "auto" },
     ...["BEHIND", "BLOCKED", "UNSTABLE", "DIRTY", "UNKNOWN"].map((mergeStateStatus) => ({
       label: mergeStateStatus, mergeStateStatus, merge: "auto",
     })),
@@ -1448,6 +1700,7 @@ case "$*" in
     })}'`} ;;
   "pr view ${repo.branch} --json number --jq .number") printf '190\\n' ;;
   "pr view ${repo.branch} --json body --jq .body") printf 'Closes #189\\n' ;;
+  "pr merge ${repo.branch} --disable-auto") printf 'disarmed\\n' > "${argsFile}.disarmed" ;;
   "pr merge "*) printf '%s\\0' "$@" > "${argsFile}"; ${"mergeError" in scenario ? "exit 18" : ":"} ;;
   *) printf 'unexpected gh invocation: %s\\n' "$*" >&2; exit 1 ;;
 esac
@@ -1471,6 +1724,7 @@ esac
         "pr", "merge", repo.branch, ...(scenario.merge === "auto" ? ["--auto"] : []),
         "--squash", "--match-head-commit", sha, "--body", mergeBody, "",
       ]);
+      assert.equal(existsSync(`${argsFile}.disarmed`), "autoMergeRequest" in scenario);
       assert.ok(mergeBody.endsWith(trailers));
       const parsed = execFileSync("git", ["interpret-trailers", "--parse"], {
         input: mergeBody,
@@ -2163,6 +2417,8 @@ async function recoveryFixture(extraConfig = ""): Promise<RecoveryFixture> {
   // Fixture CLI retries are user requests; its scheduler supplies dispatch context.
   delete env.DAGU_QUEUE_DISPATCH_RETRY;
   delete env.DAG_PUSHBACK_ITERATION;
+  // Native steps must never inherit the enclosing role job's output file.
+  delete env.DAGU_OUTPUT_FILE;
   writeFileSync(join(home, "config.yaml"), `host: 127.0.0.1\nport: ${port}\nauth:\n  mode: none\ncoordinator:\n  enabled: false\nscheduler:\n  port: 0\n${extraConfig}`);
   let serviceLog = "";
   const service = spawn("dagu", ["start-all", "--host", "127.0.0.1", "--port", String(port)], {
@@ -3134,7 +3390,7 @@ for (const [dag, step, retry, action] of [
       mkdirSync(bin);
       writeFileSync(join(root, "conflict-action"), action);
       writeFileSync(join(root, "dependency-action"), action);
-      writeFileSync(join(bin, "dagu"), `#!/bin/bash
+      writeFileSync(join(bin, "dagu"), `#!/usr/bin/env bash
 if [[ "$1" == status ]]; then
   if [[ -f "$FIXTURE/rejected" ]]; then
     printf 'Failed - now\\n'
@@ -3147,7 +3403,7 @@ else
   exit 1
 fi
 `);
-      writeFileSync(join(bin, "curl"), '#!/bin/bash\nprintf \'%s\\n\' \'{"entries":[{"attemptId":"775836","type":"dag.run.failed","data":{"dag_run_status":{"error":"process terminated unexpectedly - stale local process detected"}}}]}\'\n');
+      writeFileSync(join(bin, "curl"), '#!/usr/bin/env bash\nprintf \'%s\\n\' \'{"entries":[{"attemptId":"775836","type":"dag.run.failed","data":{"dag_run_status":{"error":"process terminated unexpectedly - stale local process detected"}}}]}\'\n');
       chmodSync(join(bin, "dagu"), 0o755);
       chmodSync(join(bin, "curl"), 0o755);
       const definition = fileURLToPath(new URL(`../../skills/issue-execution/${dag}.yaml`, import.meta.url));
