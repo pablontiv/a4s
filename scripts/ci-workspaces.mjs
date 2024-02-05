@@ -73,7 +73,9 @@ function changedFiles() {
 }
 
 function selectedWorkspaces() {
-  const workspaces = JSON.parse(process.env.WORKSPACES ?? "");
+  const matrix = process.env.WORKSPACES;
+  if (!matrix?.trim()) throw new Error("WORKSPACES is empty; the changes job did not publish a workspace matrix");
+  const workspaces = JSON.parse(matrix);
   if (!Array.isArray(workspaces) || !workspaces.every(workspace => workspace
     && typeof workspace.name === "string" && workspace.name.length > 0
     && typeof workspace.test === "boolean" && typeof workspace.typecheck === "boolean")) {

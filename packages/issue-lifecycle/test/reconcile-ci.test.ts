@@ -9,6 +9,7 @@ import { observeCodeScanning } from "../src/code-scanning.ts";
 import { finishRun, inspectRun, type ReconcileRunDependencies } from "../src/reconcile-run.ts";
 import { Transitions, type CiDiagnostic, type RunDetails } from "../src/status/progress.ts";
 import { observeRequiredCheckPolicy, requiredCheckBinding } from "../src/required-check-policy.ts";
+import { observeRequiredChecks, type CheckResult } from "../src/required-check-results.ts";
 import { readCiDiagnostic, readEscalationDiagnostic } from "../src/status/repository.ts";
 
 const root = mkdtempSync(join(tmpdir(), "a4s-reconcile-unit-"));
@@ -332,4 +333,58 @@ test("owner diagnostics report pending publication as PENDING / WAIT without a b
   assert.match(text, /ci=PENDING action=WAIT/);
   assert.ok(text.includes(sha));
   assert.doesNotMatch(text, /BLOCKED|DAGU DECISION/);
+});
+
+test("a concurrency-cancelled workflow cannot override a newer successful run or escalate", () => {
+  const state = statePath("superseded776");
+  const path = join(state, "ci-observation.json");
+  const required = [{ name: "validate" }, { name: "validate" }];
+  const success: CheckResult = { name: "validate", sha, state: "SUCCESS", id: 100,
+    link: "https://github.com/example/repo/actions/runs/40871252064/job/100" };
+  const transitions = new Transitions("owner");
+  for (const conclusion of ["FAILURE", "CANCELLED", "SKIPPED"]) {
+    // The cancelled run can create its validate job after the superseding job.
+    const cancelled = { ...success, id: 200, state: conclusion,
+      link: "https://github.com/example/repo/actions/runs/40871249330/job/200",
+      text: "Unexpected end of JSON input" };
+    for (const checks of [[cancelled, success], [success, cancelled]]) {
+      const result = observeRequiredChecks(required, checks, sha);
+      assert.equal(result.class, "PASS");
+      assert.equal(result.check, null);
+      for (const tick of ["first", "second"]) {
+        writeFileSync(path, JSON.stringify(observation({ run: "superseded776", class: result.class,
+          cause: result.cause, check: "", log: "", action: "WAIT" })));
+        recordNoProgress(state, `${conclusion}-${checks[0]!.id}-${tick}`, "2", withoutLock);
+        const diagnostic = JSON.parse(readFileSync(path, "utf8"));
+        assert.equal(diagnostic.decisionRequest, undefined);
+        assert.doesNotMatch(JSON.stringify(transitions.observe(waiting("superseded776"), { ciDiagnostic: diagnostic })), /BLOCKED|DAGU DECISION/);
+      }
+    }
+  }
+});
+
+test("required-check results retain the newest outcome, app binding and current SHA", () => {
+  const required = [{ name: "validate", app_id: 42 }];
+  const old: CheckResult = { name: "validate", sha, app_id: 42, state: "SUCCESS", id: 200,
+    link: "https://github.com/example/repo/actions/runs/10/job/200" };
+  const latest = { ...old, id: 100, link: "https://github.com/example/repo/actions/runs/11/job/100" };
+  for (const [state, classification] of [["FAILURE", "BLOCKED"], ["CANCELLED", "BLOCKED"],
+    ["PENDING", "PENDING"], ["SKIPPED", "PASS"], ["NEUTRAL", "PASS"]]) {
+    const result = observeRequiredChecks(required, [old, { ...latest, state: state! }], sha);
+    assert.equal(result.class, classification);
+    if (classification !== "PASS") assert.equal(result.check?.id, latest.id);
+  }
+  assert.equal(observeRequiredChecks(required, [old, { ...latest, state: "FAILURE", app_id: 99 }], sha).class, "PASS");
+  assert.equal(observeRequiredChecks(required, [old, { ...latest, state: "FAILURE", sha: nextSha }], sha).class, "PASS");
+  assert.equal(observeRequiredChecks(required, [{ ...latest, sha: nextSha }], sha).class, "STALE_SHA");
+  assert.equal(observeRequiredChecks(required, [{ ...latest, app_id: 99 }], sha).class, "PENDING");
+  assert.equal(observeRequiredChecks(required, [], sha).class, "PENDING");
+  assert.equal(observeRequiredChecks([], [latest], sha).class, "PENDING");
+  assert.equal(observeRequiredChecks(required, [latest, { ...latest, id: 101, state: "FAILURE" }], sha).class, "BLOCKED");
+  const status = { name: "legacy", sha, state: "FAILURE", id: 1 };
+  assert.equal(observeRequiredChecks([{ name: "legacy" }], [status, { ...status, id: 2, state: "SUCCESS" }], sha).class, "PASS");
+  const failed = observeRequiredChecks([{ name: "pending" }, ...required],
+    [{ name: "pending", sha, state: "PENDING" }, { ...latest, state: "FAILURE" }], sha);
+  assert.equal(failed.class, "BLOCKED");
+  assert.equal(failed.check?.name, "validate");
 });

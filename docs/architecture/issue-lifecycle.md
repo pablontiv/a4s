@@ -121,6 +121,19 @@ the current head/approval iteration, preserves pending waits, returns code failu
 to implementation and BEHIND/DIRTY to rebase. `await_ci` and `await_merge` stay
 on child runs. Other waiting checkpoints are observed in the root tick.
 
+Required-check classification uses the latest workflow run for each check name
+on that head, preserving required GitHub App bindings. Workflow run IDs take
+precedence over check/job IDs: a concurrency-cancelled run can create its
+aggregate job after the superseding run has started. Superseded failures,
+cancellations and skips do not override the newer outcome or cause escalation;
+within one workflow run, the newest check ID handles job reruns. Legacy statuses
+and checks without Actions run links retain newest-ID selection.
+
+The repository CI aggregate `validate` job uses `${{ !cancelled() }}` so a
+concurrency-cancelled workflow does not start a failing aggregate. An invoked
+aggregate still rejects missing/blank `WORKSPACES` explicitly; a published `[]`
+matrix remains valid when the workspace test job is skipped.
+
 The gate has a PRIMARY-wide kernel advisory lock held across its Bash descendants.
 The release engine uses native flock; Python's `fcntl` is a Node/tsx development
 fallback only. Unrelated lifecycle steps can advance under their queue capacity.

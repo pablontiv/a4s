@@ -13,6 +13,7 @@ import { acquireLock, openLock } from "./file-lock.ts";
 import { recordNoProgress } from "./ci-no-progress.ts";
 import { classifyRuns } from "./reconcile-classify.ts";
 import { observeRequiredCheckPolicy } from "./required-check-policy.ts";
+import { observeRequiredChecks } from "./required-check-results.ts";
 
 export async function main(argv: string[]): Promise<void> {
   const [mode, ...args] = argv;
@@ -37,6 +38,10 @@ export async function main(argv: string[]): Promise<void> {
   if (mode === "finish" && args.length === 2) { const result = finishRun(JSON.parse(args[0]!), JSON.parse(args[1]!)); if (result) console.log(result); return; }
   if (mode === "step" && args.length === 1) { executeStep(args[0]!); return; }
   if (mode === "required-policy" && args.length === 3) { console.log(JSON.stringify(observeRequiredCheckPolicy(args[0]!, args[1]!, args[2]!))); return; }
+  if (mode === "required-results" && args.length === 3) {
+    console.log(JSON.stringify(observeRequiredChecks(JSON.parse(readFileSync(args[1]!, "utf8")), JSON.parse(readFileSync(args[2]!, "utf8")), args[0]!)));
+    return;
+  }
   if (mode === "now" && !args.length) { console.log(Date.now()); return; }
   if (mode === "sha256" && !args.length) { console.log(createHash("sha256").update(readFileSync(0)).digest("hex")); return; }
   if (mode === "bounded" && args.length >= 5) {
@@ -78,5 +83,5 @@ export async function main(argv: string[]): Promise<void> {
     } finally { for (const fd of descriptors) closeSync(fd); }
     return;
   }
-  throw new Error("Usage: a4s reconcile cache --release a4s@vX.Y.Z | render --artifact <version>@<commit>#<digest> | classify <outputs-file> | inspect <row> | finish <row> <issue> | step observe|transition | required-policy <repo> <pr> <sha> | now | bounded <phase> <budget-seconds> <started-ms> <cap-seconds> <command> [args...] | sha256 | ci-no-progress <state> <observation-id> <threshold> | lock <command> [args...]");
+  throw new Error("Usage: a4s reconcile cache --release a4s@vX.Y.Z | render --artifact <version>@<commit>#<digest> | classify <outputs-file> | inspect <row> | finish <row> <issue> | step observe|transition | required-policy <repo> <pr> <sha> | required-results <sha> <required-file> <checks-file> | now | bounded <phase> <budget-seconds> <started-ms> <cap-seconds> <command> [args...] | sha256 | ci-no-progress <state> <observation-id> <threshold> | lock <command> [args...]");
 }

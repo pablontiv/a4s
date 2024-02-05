@@ -2,6 +2,8 @@
 
 ## 0.7.8
 
+- Skip the CI aggregate job on workflow cancellation, diagnose empty workspace matrices explicitly, and classify each required check from its newest workflow run on the current SHA so superseded concurrency-cancelled jobs cannot trigger owner escalations (#776).
+- Disable automatic Git maintenance in the in-process admission fixture before its first commit so read-only filesystem snapshots cannot capture a background maintenance lock (#776).
 - Explain feature `start_gate`, `capture`, `push`, `pr` and `auto_merge` rejections on stderr with `rule`, `expected` and `observed`. Recovery and terminal failure notices use the failed node's REST stderr tail, preferring its first rule diagnostic over generic recovery prompts (#355).
 
 ## 0.7.7
