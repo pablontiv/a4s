@@ -15,6 +15,7 @@ import { cachePath } from "../../../launcher/src/artifact-cache.ts";
 import type { Receipt } from "../../src/admission.ts";
 import { USED_CONTRACTS } from "../../src/artifact-receipt.ts";
 import { gitBuildIdentity } from "../../../../scripts/release-identity.mjs";
+import { roleRuntimeFixture } from "../fixtures/role-runtime.ts";
 
 const root = fileURLToPath(new URL("../../../../", import.meta.url));
 const cli = fileURLToPath(new URL("../../src/cli.ts", import.meta.url));
@@ -37,7 +38,7 @@ test("the source entry rejects unknown commands with usage and exposes explicit 
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(JSON.parse(result.stdout), identity);
   assert.deepEqual(identity.support, support);
-  assert.deepEqual(Object.keys(identity).sort(), ["commit", "dispatch", "protocols", "registrationManifest", "registrationManifestHash", "requiredLauncherProtocol", "support", "version"]);
+  assert.deepEqual(Object.keys(identity).sort(), ["commit", "dispatch", "layout", "protocols", "registrationManifest", "registrationManifestHash", "requiredLauncherProtocol", "support", "version"]);
 });
 
 test("source self-spawn commands select the existing entry and preserve helper arguments", () => {
@@ -50,15 +51,15 @@ test("source self-spawn commands select the existing entry and preserve helper a
 });
 
 test("each source dispatch reaches its real command without ambient role-runtime fallback", () => {
-  const env = { ...process.env, RUN: "", DAGU_OMP_ROLE_RUNTIME: "" };
+  const env = { ...process.env, RUN: "" };
   for (const command of helpCommands) {
     const result = source([command, "--help"], env);
     assert.equal(result.status, command === "codeql" ? 0 : 1, `${command}: ${result.stderr}`);
     assert.doesNotMatch(result.stderr, /Unknown subcommand|ERR_MODULE_NOT_FOUND|Cannot find module/);
   }
-  const detect = source(["role-jobs", "detect"], env);
+  const detect = source(["role-jobs", "detect"], { ...env, PATH: "" });
   assert.equal(detect.status, 1, detect.stderr);
-  assert.match(detect.stderr, /DAGU_OMP_ROLE_RUNTIME/);
+  assert.match(detect.stderr, /no executable omp on PATH/);
 });
 
 test("release archives and the compiled engine work from an extracted root", {
@@ -78,9 +79,9 @@ test("release archives and the compiled engine work from an extracted root", {
       assert.equal(checksum, `${createHash("sha256").update(readFileSync(path)).digest("hex")}  ${archive}\n`);
       const names = execFileSync("tar", ["-tzf", path], { encoding: "utf8" }).trim().split("\n");
       assert.deepEqual(names, [...names].sort());
-      assert.deepEqual([...new Set(names.map(name => name.split("/")[0]))].sort(), ["a4s", "agents", "bin", "identity.json", "package.json", "skills", "src"]);
+      assert.deepEqual([...new Set(names.map(name => name.split("/")[0]))].sort(), ["a4s", "agents", "bin", "identity.json", "package.json", "role-runner.ts", "skills", "src"]);
       assert.deepEqual(names.filter(name => name.startsWith("bin/")), ["bin/", "bin/dagu-gate.cjs", "bin/gate-cache-run.cjs", "bin/gate-cache.cjs"]);
-      for (const file of ["agents/plan-reviewer.md", "agents/triage-reviewer.md", "src/status/reloadable.ts", "src/status/index.ts", "src/triage/reloadable.ts", "src/triage/native.ts",
+      for (const file of ["role-runner.ts", "agents/plan-reviewer.md", "agents/triage-reviewer.md", "src/status/reloadable.ts", "src/status/index.ts", "src/triage/reloadable.ts", "src/triage/native.ts",
         ...["feature", "poc", "discovery", "planning", "reconcile"].map(name => `skills/issue-execution/${name}.yaml`),
         ...["backlog-breakdown", "issue-execution", "refine", "repository-discovery", "sprint-planning", "sprint-retrospective", "sprint-review"].map(name => `skills/${name}/SKILL.md`),
         "skills/repository-discovery/CONTRACT.md", "skills/repository-discovery/METHOD.md"]) assert.ok(names.includes(file), `${archive}: missing ${file}`);
@@ -104,14 +105,15 @@ test("release archives and the compiled engine work from an extracted root", {
     const pythonCalled = join(temporary, "python-called");
     mkdirSync(noPython);
     writeFileSync(join(noPython, "python3"), '#!/bin/sh\nprintf invoked > "$A4S_PYTHON_SENTINEL"\nexit 97\n', { mode: 0o755 });
-    const env = { ...process.env, DAGU_HOME: home, DAGU_OMP_ROLE_RUNTIME: "", RUN: "", A4S_HEAVY_SLOT_HELD: "",
+    const env = { ...process.env, DAGU_HOME: home, RUN: "", A4S_HEAVY_SLOT_HELD: "",
       PATH: `${noPython}:${process.env.PATH}`, A4S_PYTHON_SENTINEL: pythonCalled };
-    const run = (args: string[], override = env) => spawnSync(executable, args, { cwd: extracted, env: override, encoding: "utf8" });
+    const run = (args: string[], override: NodeJS.ProcessEnv = env) => spawnSync(executable, args, { cwd: extracted, env: override, encoding: "utf8" });
     const version = run(["version"]);
     assert.equal(version.status, 0, version.stderr);
     assert.deepEqual(JSON.parse(version.stdout), { ...identity, version: build.version, commit: expectedCommit });
     for (const command of helpCommands) {
-      const expected = source([command, "--help"], env);
+      // Node's source-only flock fallback may use Python; only the released engine is under this sentinel.
+      const expected = source([command, "--help"], { ...env, PATH: process.env.PATH });
       const actual = run([command, "--help"]);
       assert.equal(actual.status, expected.status, `${command}: ${actual.stderr}`);
       assert.doesNotMatch(actual.stderr, /Unknown subcommand|Cannot find module|Module not found|python3/);
@@ -120,9 +122,15 @@ test("release archives and the compiled engine work from an extracted root", {
     writeFileSync(body, "Closes #712\n\n## Summary\n- Deliver one executable.\n\n## Verification\n- Compiled smoke.\n\n## Risk\nNone\n");
     const checked = run(["pr-body", "validate", body]);
     assert.equal(checked.status, 0, checked.stderr);
-    const blocked = run(["role-jobs", "detect"]);
+    const blocked = run(["role-jobs", "detect"], { ...env, PATH: "" });
     assert.equal(blocked.status, 1, blocked.stderr);
-    assert.match(blocked.stderr, /DAGU_OMP_ROLE_RUNTIME/);
+    assert.match(blocked.stderr, /no executable omp on PATH/);
+    roleRuntimeFixture(temporary);
+    const detected = run(["role-jobs", "detect"], { ...env, PRIMARY: extracted, PATH: `${join(temporary, "bin")}:${noPython}` });
+    assert.equal(detected.status, 0, detected.stderr);
+    assert.deepEqual(JSON.parse(detected.stdout).agents, [
+      { name: "triage-reviewer", source: join(extracted, "agents/triage-reviewer.md") }, { name: "task", source: `fixture:${extracted}` },
+    ]);
     const capacity = run(["role-jobs", "capacity", "3"]);
     assert.equal(capacity.status, 0, capacity.stderr);
     assert.ok(existsSync(join(home, "role-jobs.sqlite")));

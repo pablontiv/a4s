@@ -8,20 +8,18 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { roleAdmission } from "../role-job-fixtures.ts";
 import { parse } from "yaml";
-import { compiledArtifact } from "../fixtures/admission.ts";
+import { compiledA4sBin, compiledArtifact } from "../fixtures/admission.ts";
+import { roleRuntimeFixture } from "../fixtures/role-runtime.ts";
 
 const cli = fileURLToPath(new URL("../../bin/dagu-role-jobs.ts", import.meta.url));
 const readyAt = "2026-10-22T05:00:00.000Z";
 
+// Compile the release before the exit deadline starts; that deadline measures
+// role completion with open handles, not a machine-dependent release build.
+compiledA4sBin();
+
 function runtime(root: string): void {
-  const dir = join(root, "runtime");
-  mkdirSync(join(dir, "src/config"), { recursive: true });
-  mkdirSync(join(dir, "src/task"), { recursive: true });
-  writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "@oh-my-pi/pi-coding-agent", version: "0.0.0-test", type: "module" }));
-  writeFileSync(join(dir, "src/config/settings.ts"), `export const Settings = { async loadReadOnly() { return {}; } };\n`);
-  writeFileSync(join(dir, "src/task/discovery.ts"), `export async function discoverAgents() { return { agents: [{ name: "task", source: "fixture-agent", model: ["fixture-model"], systemPrompt: "fixture" }] }; }\n`);
-  writeFileSync(join(dir, "src/task/settings.ts"), `export const cfgTaskAgentModelOverrides = { get() { return { task: ["fixture-model"] }; } };\n`);
-  writeFileSync(join(dir, "src/config/model-resolver.ts"), `export function resolveAgentModelSelection() { return { patterns: ["fixture-model"], role: "implement" }; }\n`);
+  const dir = roleRuntimeFixture(root);
   writeFileSync(join(dir, "src/task/executor.ts"), `import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createServer } from "node:net";
@@ -30,7 +28,6 @@ import { join } from "node:path";
 // Check the in-process runtime boundary as well as its spawned agent command.
 assert.equal(Object.keys(process.env).some(name => name === "DAGU_OUTPUT_FILE" || name === "DAG_RUN_LOG_FILE" || name.startsWith("DAG_RUN_STEP_")), false);
 assert.ok(process.env.DAGU_HOME);
-assert.ok(process.env.DAGU_OMP_ROLE_RUNTIME);
 assert.match(process.env.RUN, /^role-exit-/);
 assert.equal(process.env.DAG_PUSHBACK_ITERATION, "0");
 const tcp = createServer();
@@ -102,7 +99,7 @@ async function stage(root: string, result: "blocked" | "completed"): Promise<{ c
       DAG_RUN_STEP_STDOUT_FILE: join(root, "step-stdout"),
       DAG_RUN_LOG_FILE: join(root, "step-log"),
       DAG_PUSHBACK_ITERATION: "0",
-      DAGU_OMP_ROLE_RUNTIME: join(root, "runtime"),
+      // omp is the fake executable on bin; no source runtime or Bun is selected.
       A4S_ROLE_RESULT: result === "blocked" ? "blocked" : "completed",
       A4S_ROLE_BRIDGE_SOCKET: join("/tmp", `a4s-bridge-${process.pid}-${result}.sock`),
       A4S_ROLE_BRIDGE_READY: join(root, `bridge-${result}`),

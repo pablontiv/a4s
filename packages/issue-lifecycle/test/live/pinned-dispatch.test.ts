@@ -1,28 +1,38 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { createServer } from "node:http";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { admissionFixture, compiledA4sBin, compiledArtifact } from "../fixtures/admission.ts";
 import { makeArchive } from "../fixtures/artifact.ts";
 import { roleAdmission } from "../role-job-fixtures.ts";
-import { artifactToken, type ArtifactTuple } from "../../../launcher/src/release.ts";
+import { artifactToken, parseArtifact, type ArtifactTuple } from "../../../launcher/src/release.ts";
 import { runMutationDecision } from "../../src/triage/run-guard.ts";
 import { receiptCompatibility, recordRunObservation } from "../../src/status/receipt.ts";
 import { renderWidget, type RunDetails } from "../../src/status/progress.ts";
 import { protectionPath, readProtection } from "../../src/integration-protection.ts";
 import { roleRuntimeFixture } from "../fixtures/role-runtime.ts";
 import { RunArtifactScope } from "../../src/run-artifact.ts";
+import { verifyJobResult } from "../../src/role-jobs.ts";
+import { verifyTriageResult } from "../../src/role-dispatch.ts";
+import { cachePath, inspectArtifact } from "../../../launcher/src/artifact-cache.ts";
 
 function save(f: ReturnType<typeof admissionFixture>, run: string, artifact: ArtifactTuple): void {
+  if (!existsSync(join(f.home, "cache/a4s/state.json"))) {
+    execFileSync(process.execPath, ["--import", import.meta.resolve("tsx"), fileURLToPath(new URL("../../../launcher/src/cli.ts", import.meta.url)), "station", "init", "--artifact", artifactToken(artifact)],
+      { cwd: f.packageDir, env: { ...process.env, DAGU_HOME: f.home }, stdio: "pipe" });
+  }
   const receipt = roleAdmission(f.packageDir, f.home, run, 'env: []\nsteps:\n  - run: \'"$A4S_BIN" role-jobs stage triage\'\n', artifact);
   mkdirSync(dirname(f.receipt(run)), { recursive: true });
   writeFileSync(f.receipt(run), JSON.stringify(receipt));
 }
 async function shell(command: string, cwd: string, env: NodeJS.ProcessEnv) {
   return await new Promise<{ status: number | null; stdout: string; stderr: string }>((resolve, reject) => {
-    const child = spawn("bash", ["-c", command], { cwd, env });
+    // Station shell startup files must not replace the fixture's controlled PATH.
+    const child = spawn("bash", ["--noprofile", "--norc", "-c", command], { cwd, env });
     let stdout = "", stderr = "";
     child.stdout.on("data", chunk => { stdout += chunk; });
     child.stderr.on("data", chunk => { stderr += chunk; });
@@ -31,40 +41,25 @@ async function shell(command: string, cwd: string, env: NodeJS.ProcessEnv) {
   });
 }
 
-test("render binds an exact verified artifact without installing station DAGs", { timeout: 120_000 }, () => {
+test("cached artifacts remain exact and verified without installing station DAGs", { timeout: 120_000 }, async () => {
   const f = admissionFixture();
   try {
     const tuple = compiledArtifact(f.home);
-    const executable = join(f.home, "cache/a4s", tuple.version, "a4s");
-    const render = (value: string) => spawnSync(executable, ["reconcile", "render", "--artifact", value], { env: { ...process.env, DAGU_HOME: f.home }, encoding: "utf8" });
+    const executable = join(cachePath(f.home, tuple), "a4s");
+    const inspect = async (value: string) => inspectArtifact(f.home, parseArtifact(value));
     const before = readdirSync(join(f.home, "dags"));
-    const result = render(artifactToken(tuple));
-    assert.equal(result.status, 0, result.stderr);
-    assert.equal(result.stderr, "");
-    assert.match(result.stdout, /schedule: "\* \* \* \* \*"/);
-    assert.equal(result.stdout.split(`A4S_BIN: ${JSON.stringify(executable)}`).length - 1, 2);
-    assert.equal(result.stdout.split(`A4S_ARTIFACT: ${JSON.stringify(artifactToken(tuple))}`).length - 1, 2);
-    assert.doesNotMatch(result.stdout, /__DAGU_FEATURE_VERSION__|__ESCALATION_CI_BLOCKED__/);
-    for (const moving of ["v0", "a4s@v0"]) {
-      const cached = spawnSync(executable, ["reconcile", "cache", "--release", moving], { env: { ...process.env, DAGU_HOME: f.home }, encoding: "utf8" });
-      assert.notEqual(cached.status, 0);
-      assert.match(cached.stderr, /exact release/);
-    }
+    assert.equal((await inspect(artifactToken(tuple))).executable, executable);
     assert.deepEqual(readdirSync(join(f.home, "dags")), before);
-    for (const moving of ["v0", "a4s@v0", `v0@${tuple.commit}#${tuple.digest}`]) assert.notEqual(render(moving).status, 0);
+    for (const moving of ["v0", "a4s@v0", `v0@${tuple.commit}#${tuple.digest}`]) await assert.rejects(inspect(moving));
     const metadata = join(dirname(executable), "artifact.json");
     const original = readFileSync(metadata, "utf8");
     writeFileSync(metadata, JSON.stringify({ ...tuple, verifiedAt: "unverified" }));
-    assert.notEqual(render(artifactToken(tuple)).status, 0);
+    await assert.rejects(inspect(artifactToken(tuple)), /Missing or malformed artifact metadata/);
     writeFileSync(metadata, JSON.stringify({ ...JSON.parse(original), commit: "f".repeat(40) }));
-    const conflict = render(artifactToken(tuple));
-    assert.notEqual(conflict.status, 0);
-    assert.match(conflict.stderr, /Conflicting artifact cache entry/);
+    await assert.rejects(inspect(artifactToken(tuple)), /Conflicting artifact cache entry/);
     writeFileSync(metadata, original);
     writeFileSync(join(dirname(executable), "identity.json"), "{}\n");
-    const modified = render(artifactToken(tuple));
-    assert.notEqual(modified.status, 0);
-    assert.match(modified.stderr, /Modified artifact payload/);
+    await assert.rejects(inspect(artifactToken(tuple)), /Modified artifact payload/);
     assert.deepEqual(readdirSync(join(f.home, "dags")), before);
   } finally { f.dispose(); }
 });
@@ -125,24 +120,52 @@ test("release-independent HUD and plugin mutations dispatch A while B is install
     const address = server.address(); assert.ok(address && typeof address !== "string");
     process.env.DAGU_URL = env.DAGU_URL = `http://127.0.0.1:${address.port}`;
     const runtime = roleRuntimeFixture(f.root);
-    writeFileSync(join(f.packageDir, "agents.json"), JSON.stringify(["triage-reviewer", "task"]));
     writeFileSync(join(runtime, "src/config/settings.ts"), "export const Settings={async loadReadOnly(){return {}}};\n");
     writeFileSync(join(runtime, "src/task/settings.ts"), "export const cfgTaskAgentModelOverrides={get(){return {}}};\n");
     writeFileSync(join(runtime, "src/config/model-resolver.ts"), "export function resolveAgentModelSelection(){return {patterns:['fixture-model'],role:'triage'}};\n");
-    writeFileSync(join(runtime, "src/task/executor.ts"), `import {mkdirSync,writeFileSync} from 'node:fs';import {join} from 'node:path';export async function runSubprocess(o){mkdirSync(o.artifactsDir,{recursive:true});writeFileSync(join(o.artifactsDir,o.id+'.jsonl'),[JSON.stringify({type:'session',id:'native-a'}),JSON.stringify({type:'message',id:'a-result',message:{role:'assistant',provider:'fixture',model:'fixture-model',stopReason:'stop'}})].join('\\n')+'\\n');return {exitCode:0,output:JSON.stringify({poc:'no',behavior:'demonstrated',question:'Already supported?',reason:'Version A reviewed the issue'})}};\n`);
-    Object.assign(env, { DAGU_OMP_ROLE_RUNTIME: runtime, DAGU_OUTPUT_FILE: join(f.root, "role-outputs"), DAG_PUSHBACK_ITERATION: "0" });
+    writeFileSync(join(runtime, "src/task/executor.ts"), `import {mkdirSync,writeFileSync} from 'node:fs';import {join} from 'node:path';
+export async function runSubprocess(o){
+const output={poc:'no',behavior:'demonstrated',question:'Already supported?',reason:'Version A reviewed the issue'};
+const rows=[{type:'session',id:'native-a'}, {type:'session_init',agent:'triage-reviewer',task:o.task},
+{type:'message',id:'a-result',message:{role:'assistant',provider:'fixture',model:'fixture-model',stopReason:'toolUse',content:[{type:'toolCall',name:'yield',id:'yield-a',arguments:{data:output}}]}},
+{type:'message',message:{role:'toolResult',toolName:'yield',toolCallId:'yield-a',details:{status:'success',data:output}}}];
+mkdirSync(o.artifactsDir,{recursive:true});writeFileSync(join(o.artifactsDir,o.id+'.jsonl'),rows.map(row=>JSON.stringify(row)).join('\\n')+'\\n');
+return {exitCode:0,output:JSON.stringify(output)}};
+`);
+    // Exercise the extracted release with only its real tool dependencies. In
+    // particular, neither an ambient Bun executable nor a source runtime can win.
+    for (const tool of ["bash", "git", "ps"]) {
+      symlinkSync(execFileSync("bash", ["--noprofile", "--norc", "-c", 'command -v "$1"', "fixture", tool], { encoding: "utf8" }).trim(), join(bin, tool));
+    }
+    Object.assign(env, { PATH: `${join(f.root, "bin")}:${bin}`, DAGU_OUTPUT_FILE: join(f.root, "role-outputs"), DAG_PUSHBACK_ITERATION: "0" });
+    assert.equal(spawnSync("bash", ["--noprofile", "--norc", "-c", "command -v bun"], { env }).status, 1);
+    const detected = await shell(`'${join(cachePath(f.home, a), "a4s")}' role-jobs detect`, f.packageDir, env);
+    assert.equal(detected.status, 0, detected.stderr);
+    assert.deepEqual(JSON.parse(detected.stdout), { root: join(f.root, "bin/omp"), agents: [
+      { name: "triage-reviewer", source: join(cachePath(f.home, a), "agents/triage-reviewer.md") },
+      { name: "task", source: `fixture:${f.packageDir}` },
+    ] });
     const role = await execute("a4s role-jobs stage triage");
     assert.equal(role.status, 0, role.stderr);
     assert.match(role.stderr, /artifact=0\.6\.1@.*command=role-jobs stage/);
     assert.match(readFileSync(env.DAGU_OUTPUT_FILE!, "utf8"), /POC=no/);
     assert.ok(existsSync(join(f.home, "role-jobs.sqlite")));
     assert.equal(JSON.parse(readFileSync(f.receipt("version-a"), "utf8")).runReceipt.observations.at(-1).kind, "role-job");
+    const roleOutput = readFileSync(env.DAGU_OUTPUT_FILE!, "utf8");
+    const review = /^REVIEW=(.+)$/m.exec(roleOutput)![1]!;
+    const verified = verifyTriageResult(f.packageDir, "version-a", review);
+    verifyJobResult(join(dirname(verified.native!.transcript), "result.json"));
+    const routing = verified.native!.routing as { runtime: { binary: string; version: string; digest: string }; agent: { source: string } };
+    assert.equal(routing.runtime.binary, join(f.root, "bin/omp"));
+    assert.equal(routing.runtime.version, "omp/fixture");
+    assert.equal(routing.runtime.digest, createHash("sha256").update(readFileSync(join(f.root, "bin/omp"))).digest("hex"));
+    assert.equal(routing.agent.source, join(cachePath(f.home, a), "agents/triage-reviewer.md"));
 
     const before = [readFileSync(effects, "utf8"), readFileSync(f.receipt("unsupported"), "utf8"), readFileSync(protectionPath(f.packageDir), "utf8")];
     for (const action of ["dagu human-task complete feature --run-id unsupported --step triage", "a4s protect release --decision denied", "a4s role-jobs stage triage"]) {
       const decision = await runMutationDecision({ toolName: "bash", toolCallId: "reject", input: { command: `PRIMARY='${f.packageDir}' RUN=unsupported ${action}` } }, f.packageDir);
       assert.ok(decision && "block" in decision);
-      assert.match(decision.reason, /A4S_RUN_UNSUPPORTED:.*contracts/);
+      assert.match(decision.reason, /A4S_RUN_UNSUPPORTED:.*contract/);
     }
     await assert.rejects(recordRunObservation(runs[2]!, f.packageDir), /Unsupported receipt/);
     assert.deepEqual([readFileSync(effects, "utf8"), readFileSync(f.receipt("unsupported"), "utf8"), readFileSync(protectionPath(f.packageDir), "utf8")], before);
@@ -160,9 +183,9 @@ test("release-independent HUD and plugin mutations dispatch A while B is install
     for (const patch of [
       { schemaVersion: 1 },
       { artifactSupport: undefined },
-      { artifactSupport: { ...valid.artifactSupport, dispatch: undefined }, contracts: { ...valid.contracts, dispatch: undefined } },
-      { artifactSupport: { ...valid.artifactSupport, dispatch: "a4s-run/2" } },
-      { contracts: { ...valid.contracts, config: 2 } },
+      { contracts: { ...valid.contracts, dispatch: undefined } },
+      { contracts: { ...valid.contracts, dispatch: "a4s-run/2" } },
+      { contracts: { ...valid.contracts, config: 999 } },
       { contracts: { ...valid.contracts, protocols: { ...valid.contracts.protocols, triage: "future/2" } } },
       { artifact: { ...a, version: "0.6.9" }, sourceVersion: { version: "0.6.9", commit: a.commit } },
     ]) {
@@ -194,7 +217,7 @@ test("native mutations reject a caller PATH without jq before invoking Dagu", { 
     for (const tool of ["bash", "git"]) {
       symlinkSync(execFileSync("bash", ["-c", 'command -v "$1"', "fixture", tool], { encoding: "utf8" }).trim(), join(bin, tool));
     }
-    for (const tool of ["gh", "curl", "node", "bun", "omp"]) {
+    for (const tool of ["gh", "curl", "node", "omp"]) {
       writeFileSync(join(bin, tool), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
     }
     writeFileSync(join(bin, "dagu"), `#!/bin/sh\nprintf '%s\\n' "$*" >> '${effects}'\nexit 42\n`, { mode: 0o755 });
@@ -217,9 +240,12 @@ test("native mutations reject a caller PATH without jq before invoking Dagu", { 
       assert.deepEqual(readdirSync(dirname(f.receipt("missing-tool"))), ["receipt.json"]);
     }
     writeFileSync(join(bin, "jq"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
-    const ready = run(actions[0]!);
-    assert.equal(ready.status, 42, ready.stderr);
-    assert.equal(readFileSync(effects, "utf8"), actions[0]!.join(" ") + "\n");
+    assert.equal(existsSync(join(bin, "bun")), false);
+    for (const args of actions) {
+      const ready = run(args);
+      assert.equal(ready.status, 42, ready.stderr);
+    }
+    assert.equal(readFileSync(effects, "utf8"), actions.map(args => args.join(" ")).join("\n") + "\n");
   } finally { f.dispose(); }
 });
 
@@ -236,7 +262,7 @@ test("tick verification shares artifact evidence but rechecks every receipt and 
     const receipt = JSON.parse(readFileSync(f.receipt("second"), "utf8"));
     receipt.contracts.roleJobStore = 999;
     writeFileSync(f.receipt("second"), JSON.stringify(receipt));
-    await assert.rejects(scope.verify(f.packageDir, "second"), /Unsupported receipt.*job-store/);
+    await assert.rejects(scope.verify(f.packageDir, "second"), /Unsupported receipt roleJobStore contract/);
     assert.equal(scope.artifactVerifications, 1);
     assert.equal((await scope.verify(f.packageDir, "first")).cached, first.cached);
     writeFileSync(join(first.cached.directory, "identity.json"), "{}\n");
@@ -268,7 +294,7 @@ console.log(JSON.stringify([{ number: 189, state: "open" }, { number: 190, state
       RUNS: JSON.stringify(["changed", "compatible"].map((run, index) => ({ RUN: run, PRIMARY: f.packageDir, ISSUE: String(189 + index), REPO: "example/repo" }))),
     } });
     assert.equal(result.status, 0, result.stderr);
-    assert.match(result.stderr, /reconcile-failure run=changed status=1 cause=.*Unsupported receipt.*job-store/);
+    assert.match(result.stderr, /reconcile-failure run=changed status=1 cause=.*Unsupported receipt roleJobStore contract/);
     assert.match(readFileSync(output, "utf8"), /failures=\[\{"run":"changed"/);
     assert.deepEqual(readdirSync(dirname(f.receipt("changed"))), ["receipt.json"]);
     assert.ok(existsSync(join(dirname(f.receipt("compatible")), "ci-observation.json")));

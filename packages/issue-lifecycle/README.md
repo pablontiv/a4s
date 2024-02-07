@@ -149,7 +149,7 @@ receipt-bound dispatch modes, not a second scheduler.
 | Inline reconcile CI-no-progress accounting | `a4s reconcile ci-no-progress <state-directory> <observation-id> <threshold>` |
 | Inline reconcile sorted transition locks | `a4s reconcile lock <command> [args...]` |
 
-`a4s version` prints JSON with `version`, `commit` and `support`.
+`a4s version` prints JSON with `version`, `commit`, `layout` and `support`.
 `src/identity.ts` exports that same identity and the explicit support declaration:
 config schemas `[1]`, receipt reads `[1, 2]` and writes `2`, role-job stores `[1]`,
 and protocols `triage=role-job/1`, `implement=role-job/1`,
@@ -157,6 +157,10 @@ and protocols `triage=role-job/1`, `implement=role-job/1`,
 marker `unbuilt`; it is not a release identity. The builder injects the package
 version and full `git rev-parse HEAD` commit using Bun `--define`. `identity.json`
 is the same declaration, without an archive digest.
+New releases declare `layout: "omp-role-runner/1"` and ship `role-runner.ts`
+at their root. Verification requires that runner only for this declared layout;
+immutable releases without the declaration retain the baseline inventory and
+remain inspectable/restorable without migration.
 
 All engine/sibling self-spawns go through `src/executable.ts`: a compiled engine
 runs `process.execPath <subcommand>`, a release OMP extension selects its adjacent
@@ -236,23 +240,25 @@ omp -e <absolute-package-directory>
 omp plugin link <absolute-package-directory>
 ```
 
-Headless Dagu role jobs also require Bun on the service PATH and
-`DAGU_OMP_ROLE_RUNTIME` in its environment, set to the absolute installed
-`@oh-my-pi/pi-coding-agent` package root, not a compiled `omp` executable.
-Dagu 2.24.0 preserves this `DAGU_*` variable but filters `OMP_ROLE_RUNTIME`;
-there is no PATH-based runtime fallback. Link this whole package for the Dagu
-service user so native discovery can find `triage-reviewer` alongside `task`.
-Bootstrap's `a4s role-jobs detect` checks that same root and both agents from
-PRIMARY before adoption, without launching a role. Service environment changes
-and activation remain separate operator actions. Load/link the extracted release
-root, not `src/status` alone; restart OMP when switching release packages.
+Headless Dagu role jobs resolve the station's `omp` from the service PATH.
+a4s launches the executing release's pinned `role-runner.ts` with
+`-p --no-session -e`, without Bun or an installed OMP source tree. The runner
+reads `triage-reviewer` from that release and discovers shared `task` from OMP.
+Bootstrap's `a4s role-jobs detect` checks the five required host modules and
+both agents, reporting the binary realpath as `root` and resolved sources.
+It starts a headless host without launching a role session or a model turn of
+its own. Routing records OMP binary realpath, version and SHA-256; a4s strips
+Dagu output/log/step variables before host startup. Service PATH selection and
+activation remain operator actions. Load/link the complete extracted release
+root for the coordinator plugin; restart OMP when switching release packages.
 
 Initial/model-changing cutover closes admission and establishes **zero nonterminal
 runs and zero open role jobs**. Install the stable launcher and single-step tick
-DAG, initialize verified cache state, link the release-root plugin and retain the
-role-runtime environment above. Ordinary payload changes select through state,
-not an exact station reconciler pin. Remove obsolete links/PATH entries only when
-unreferenced. a4s never writes station/service configuration or restarts Dagu. See
+DAG, initialize verified cache state, link the release-root plugin and select
+the intended compiled `omp` on the service PATH. Ordinary payload changes select
+through state, not an exact station reconciler pin. Remove obsolete links/PATH
+entries only when unreferenced. a4s never writes station/service configuration
+or restarts Dagu. See
 [operator cutover](../../docs/operations/deployment.md#identity-and-adoption).
 
 ## Workflow and command entry points

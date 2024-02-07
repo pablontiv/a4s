@@ -125,7 +125,7 @@ export function executeNative(args: string[]): void {
   // Retry/resume (and terminal handlers) can execute in this process's PATH,
   // not the scheduler's. Fail before invoking Dagu rather than partly running.
   const tools = spawnSync("bash", ["-c", 'missing=0; for tool in "$@"; do command -v "$tool" >/dev/null 2>&1 || { printf "a4s native: required command not found: %s (caller PATH; no Dagu mutation started)\\n" "$tool" >&2; missing=1; }; done; exit "$missing"',
-    "a4s-native", "bash", "git", "gh", "jq", "curl", "node", "bun", "omp", "dagu"], { encoding: "utf8" });
+    "a4s-native", "bash", "git", "gh", "jq", "curl", "node", "omp", "dagu"], { encoding: "utf8" });
   if (tools.error) throw new Error(`a4s native: required command unavailable: bash; no Dagu mutation started (${tools.error.message})`);
   if (tools.status !== 0) throw new Error(tools.stderr.trim() || "a4s native: toolchain preflight failed; no Dagu mutation started");
   const result = spawnSync("dagu", args, { stdio: "inherit" });

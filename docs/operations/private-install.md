@@ -17,11 +17,11 @@ instead come from a verified tagged release, never an installed source checkout.
   Bash and Node for the real gate preload. Install the separate stable launcher
   below and link/load a verified payload's complete extracted root.
   Python `fcntl` is required only by Node/tsx development tests, not the engine.
-- Semantic role jobs require Bun and the native OMP package root selected by
-  `DAGU_OMP_ROLE_RUNTIME` in service and bootstrap environments. Keep that variable
-  during cutover; `OMP_ROLE_RUNTIME` is filtered by Dagu. The service user's plugin
-  registration must discover `triage-reviewer` and `task`; `a4s role-jobs detect`
-  checks both without launching a role. See [cutover](deployment.md#identity-and-adoption).
+- Semantic role jobs use the station's `omp` from the service/bootstrap PATH,
+  not Bun or an installed OMP source tree. The executing release ships the pinned
+  runner and `triage-reviewer`; the host discovers shared `task`. Run
+  `a4s role-jobs detect` to check host modules and agent sources without a host
+  model turn. Service PATH and activation remain operator-owned. See [cutover](deployment.md#identity-and-adoption).
 - Orca installed/running and a bound coordinator pane for Orca integration's
   actual worker lifecycle proof. Configure managed-worktree setup to run the
   repository hook and wait for its installation before checking code.
@@ -119,11 +119,12 @@ omp plugin link <absolute-release-root>
 ```
 
 Initial/model-changing cutover closes admission and establishes zero nonterminal
-runs and zero open role jobs. Keep `DAGU_OMP_ROLE_RUNTIME`, provision queues, the
-stable launcher and single-step tick DAG, then remove obsolete links/PATH entries
-only after references clear. Restart OMP to load the release plugin; service
-activation remains exclusively the operator's. Ordinary payload promotion uses
-state, not per-consumer or scheduled exact-release pins. Follow the complete
+runs and zero open role jobs. Select the intended compiled `omp` on the service
+PATH, verify `a4s role-jobs detect`, and provision queues, the stable launcher
+and single-step tick DAG. Remove obsolete links/PATH entries only after
+references clear. Restart OMP to load the release plugin; service activation
+remains exclusively the operator's. Ordinary payload promotion uses state, not
+per-consumer or scheduled exact-release pins. Follow the complete
 [cutover procedure](deployment.md#identity-and-adoption) and
 [launcher/tick installation](deployment.md#install-the-stable-launcher-tick-dag-and-release-plugin).
 `omp plugin link` must replace the old lifecycle checkout registration: the

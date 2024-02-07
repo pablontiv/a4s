@@ -60,13 +60,16 @@ referenced by nonterminal/recoverable runs, open role jobs and live tick leases.
 Incomplete reference discovery prevents removal; age alone never authorizes it.
 Cache population is runtime state, not installation or station configuration.
 
-The native role runtime remains operator-supplied. Set
-`DAGU_OMP_ROLE_RUNTIME` to the absolute installed `@oh-my-pi/pi-coding-agent`
-package root for both service and bootstrap. Dagu filters `OMP_ROLE_RUNTIME`;
-a compiled `omp` executable is not a package root. Link the extracted release
-root for the service user so native discovery finds `triage-reviewer` and `task`.
-From PRIMARY with that environment, `a4s role-jobs detect` checks discovery
-without launching a role. Changing service environment is an operator action.
+The station operator supplies `omp` on the Dagu service and bootstrap PATH.
+a4s resolves its real binary path and launches the executing release's pinned
+`role-runner.ts` as a headless extension host (`-p --no-session -e`), with no
+host model turn. Neither Bun nor an OMP source package is a runtime requirement.
+The runner reads `triage-reviewer` from that release's `agents/` directory and
+discovers the shared `task` agent through OMP. From PRIMARY, `a4s role-jobs detect`
+checks all required host modules and both agents, reporting the binary realpath
+as `root` and resolved agent sources. Missing modules or agents fail closed with
+operator diagnostics. Service PATH selection and activation are operator actions;
+a4s never writes service configuration.
 
 For lane work, use the stable launcher on PATH, actual Dagu home and persistent
 owner; it selects current for a new root or the parent's tuple for a successor:
@@ -176,8 +179,8 @@ lease and restore probe access, never manually assume the process is dead.
    root at an operator-owned stable location. Put that release's `a4s` on PATH
    for initial admission and load/link its whole root as the OMP plugin. Do not
    install a checkout or point the service at a source interpreter.
-3. **Provision the station explicitly.** Keep `DAGU_OMP_ROLE_RUNTIME` and native
-   OMP role definitions. Configure Dagu's loopback API, coordinator and named
+3. **Provision the station explicitly.** Select the intended compiled `omp` on
+   the service PATH and verify `a4s role-jobs detect`. Configure Dagu's loopback API, coordinator and named
    queues with operator-chosen `max_concurrency`. Preserve the canonical home
    and PRIMARY binding. Any service activation/restart is performed by the
    operator under the station's drained policy, never by a4s.

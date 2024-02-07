@@ -57,6 +57,13 @@ agents/triage-reviewer.md
 skills/                      seven package skills and their retained assets
 ```
 
+Artifacts declaring `layout: "omp-role-runner/1"` in their identity MUST also
+include root-level `role-runner.ts`. Its five OMP task/config module imports
+remain external host modules, not a bundled second runtime. Inspection and
+restoration MUST require that file for the declared layout, while preserving
+the baseline inventory above for immutable historical artifacts without a
+layout declaration. Unknown layout declarations MUST fail closed.
+
 The artifact MUST include:
 
 - The five DAG templates at

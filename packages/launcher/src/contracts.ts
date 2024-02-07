@@ -12,6 +12,7 @@ export const ARTIFACT_PROTOCOLS = { triage: "role-job/1", implement: "role-job/1
 export const DISPATCH_PROTOCOL = "a4s-run/1";
 export interface ArtifactIdentity {
   version: string; commit: string; support: ArtifactSupport; requiredLauncherProtocol: number;
+  layout?: "omp-role-runner/1";
   dispatch: string; protocols: Record<string, string>;
   registrationManifest: { schema: number; loaderHelperApi: number; extensions: readonly string[]; commands: readonly unknown[]; tools: readonly unknown[] };
   registrationManifestHash: string;

@@ -19,6 +19,7 @@ export type ArtifactSupport = Record<SharedFormat, FormatSupport>;
 export const identity = {
   version: typeof A4S_BUILD_VERSION === "undefined" ? readPackageManifest().version : A4S_BUILD_VERSION,
   commit: typeof A4S_BUILD_COMMIT === "undefined" ? "unbuilt" : A4S_BUILD_COMMIT,
+  layout: "omp-role-runner/1",
   support: ARTIFACT_SUPPORT,
   dispatch: DISPATCH_PROTOCOL,
   protocols: ARTIFACT_PROTOCOLS,
@@ -26,4 +27,8 @@ export const identity = {
   registrationManifestHash: registrationHash(registrationManifest),
   requiredLauncherProtocol: 1,
 } as const;
-export type ArtifactIdentity = Omit<typeof identity, "support" | "requiredLauncherProtocol"> & { support: ArtifactSupport; requiredLauncherProtocol: number };
+export type ArtifactIdentity = Omit<typeof identity, "layout" | "support" | "requiredLauncherProtocol"> & {
+  layout?: typeof identity.layout;
+  support: ArtifactSupport;
+  requiredLauncherProtocol: number;
+};

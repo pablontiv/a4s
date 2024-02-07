@@ -67,6 +67,10 @@ for (const target of new Set(targets)) {
         `--define=A4S_BUILD_VERSION=${JSON.stringify(version)}`, `--define=A4S_BUILD_COMMIT=${JSON.stringify(commit)}`,
         join(source, "src", entry), "--outfile", destination], { cwd: root, stdio: "inherit" });
     }
+    // The runner belongs to this release; OMP's task/config modules remain external
+    // host modules, never a second bundled executor or source-runtime dependency.
+    execFileSync(bun, ["build", "--target=node", "--format=esm", "--external=@oh-my-pi/pi-coding-agent/*",
+      join(source, "src/role-runner.ts"), "--outfile", join(stage, "role-runner.ts")], { cwd: root, stdio: "inherit" });
     // Explicit modes, not umask or the source checkout's executable bits, own the
     // tar headers. GNU tar fixes ordering, timestamps and numeric ownership.
     async function modes(directory) {

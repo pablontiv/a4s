@@ -9,13 +9,13 @@ import { parse } from "yaml";
 import { roleRuntimeFixture } from "../fixtures/role-runtime.ts";
 const cli = fileURLToPath(new URL("../../bin/dagu-role-jobs.ts", import.meta.url));
 const bootstrap = fileURLToPath(new URL("../../skills/issue-execution/dagu-feature-bootstrap.yaml", import.meta.url));
-for (const absent of ["triage-reviewer", "task"]) {
-  test(`bootstrap detect fails early when ${absent} is not discoverable`, () => {
+for (const absent of ["task", "task/executor"]) {
+  test(`bootstrap detect fails early when ${absent} is unavailable`, () => {
     const root = mkdtempSync(join(tmpdir(), "a4s-role-bootstrap-"));
     try {
-      const runtime = roleRuntimeFixture(root, ["triage-reviewer", "task"].filter(name => name !== absent));
+      const runtime = roleRuntimeFixture(root, absent === "task" ? [] : ["task"]);
+      if (absent === "task/executor") rmSync(join(runtime, "src/task/executor.ts"));
       const bin = join(root, "bin");
-      mkdirSync(bin);
       for (const tool of ["git", "gh", "jq", "dagu"]) {
         writeFileSync(join(bin, tool), "#!/bin/sh\nexit 0\n");
         chmodSync(join(bin, tool), 0o755);
@@ -24,10 +24,13 @@ for (const absent of ["triage-reviewer", "task"]) {
       chmodSync(join(bin, "a4s"), 0o755);
       const spec = parse(readFileSync(bootstrap, "utf8")) as { steps: Array<{ id: string; run: string }> };
       const script = spec.steps.find(step => step.id === "detect")!.run;
-      const result = spawnSync("bash", ["-c", script], { encoding: "utf8", env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, A4S_BIN: join(bin, "a4s"), PRIMARY: root, DAGU_OMP_ROLE_RUNTIME: runtime } });
+      const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, A4S_BIN: join(bin, "a4s"), PRIMARY: root };
+      // Preserve the fake station PATH even on shells with system startup hooks.
+      const selected = spawnSync("bash", ["--noprofile", "--norc", "-c", "command -v omp"], { encoding: "utf8", env });
+      assert.equal(selected.stdout.trim(), join(bin, "omp"), selected.stderr);
+      const result = spawnSync("bash", ["--noprofile", "--norc", "-c", script], { encoding: "utf8", env });
       assert.notEqual(result.status, 0);
-      assert.ok(result.stderr.includes(`bootstrap detect: Registered OMP agent ${absent} is required but was not discoverable from ${root}`), result.stderr);
-      assert.match(result.stderr, /omp plugin link <package-directory>/);
+      assert.match(result.stderr, absent === "task" ? /Registered OMP agent task is required/ : /Required OMP host module @oh-my-pi\/pi-coding-agent\/task\/executor is unavailable/);
       assert.doesNotMatch(result.stderr, /SKILL_DIR: unbound variable/);
     } finally { rmSync(root, { recursive: true, force: true }); }
   });

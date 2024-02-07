@@ -15,7 +15,11 @@ function compiledRelease(): string {
   if (compiledDirectory) return compiledDirectory;
   if (process.env.A4S_RELEASE_DIR) return resolve(process.env.A4S_RELEASE_DIR);
   compiledDirectory = mkdtempSync(join(tmpdir(), "a4s-admission-build-"));
-  execFileSync(process.execPath, ["scripts/build-a4s.mjs", "--target", `bun-${nativePlatform()}`, "--outdir", compiledDirectory], { cwd: resolve(packageDirectory, "../.."), stdio: "pipe", timeout: 120000 });
+  // These admission fixtures model the manifest's historical release; production
+  // build IDs are exercised separately by the compiled-release smoke test.
+  const { version } = JSON.parse(readFileSync(join(packageDirectory, "package.json"), "utf8"));
+  execFileSync(process.execPath, ["scripts/build-a4s.mjs", "--target", `bun-${nativePlatform()}`, "--outdir", compiledDirectory,
+    "--test-version", version], { cwd: resolve(packageDirectory, "../.."), env: { ...process.env, A4S_LIVE_DAGU: "1" }, stdio: "pipe", timeout: 120000 });
   return compiledDirectory;
 }
 // Deadline/performance fixtures must run the release engine, not repeatedly pay

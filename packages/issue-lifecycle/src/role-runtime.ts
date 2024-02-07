@@ -1,54 +1,73 @@
+import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
-import { isAbsolute, join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { accessSync, constants, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { delimiter, join, resolve } from "node:path";
+import { fileDigest } from "../../launcher/src/artifact-cache.ts";
+import { compiled, packageRoot } from "./executable.ts";
 import { atomicJson, type Job, type JobBinding, type NativeEvidence } from "./role-jobs.ts";
 import { effectiveTranscriptIdentity, type TranscriptRow } from "./transcript-identity.ts";
 import { REVIEW_SCHEMA } from "./triage/schema.ts";
 
-interface Definition { name: string; source: string; model?: string[]; systemPrompt: string; tools?: string[] }
-interface Settings { [key: string]: unknown }
-interface Selection { patterns: string[]; role?: string }
-interface NativeResult { exitCode: number; output: string; error?: string; aborted?: boolean; [key: string]: unknown }
-/** Dagu preserves DAGU_* variables; never infer a package from an unrelated omp binary. */
-export function ompRuntimeRoot(): string {
-  const selected = process.env.DAGU_OMP_ROLE_RUNTIME;
-  const tried = selected ? `DAGU_OMP_ROLE_RUNTIME=${JSON.stringify(selected)}` : "DAGU_OMP_ROLE_RUNTIME is unset";
-  try {
-    if (!selected || !isAbsolute(selected)) throw new Error("an absolute package root is required");
-    const root = realpathSync(selected);
-    const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
-    if (manifest.name !== "@oh-my-pi/pi-coding-agent") throw new Error("package is not @oh-my-pi/pi-coding-agent");
-    for (const relative of ["config/settings.ts", "task/discovery.ts", "task/settings.ts", "config/model-resolver.ts", "task/executor.ts"]) {
-      if (!existsSync(join(root, "src", relative))) throw new Error(`missing src/${relative}`);
-    }
-    return root;
-  } catch (error) {
-    throw new Error(`Installed OMP task runtime not found; tried ${tried}: ${error instanceof Error ? error.message : String(error)}. Set DAGU_OMP_ROLE_RUNTIME to the installed @oh-my-pi/pi-coding-agent package root in the Dagu service environment; PATH/compiled omp binaries are not used.`);
+interface ProcessResult { code: number | null; signal?: string | null; stdout: string; stderr: string }
+export interface RoleProcessBoundary {
+  run(file: string, args: string[], options: { cwd: string; env: NodeJS.ProcessEnv }): Promise<ProcessResult>;
+}
+const processes: RoleProcessBoundary = {
+  run(file, args, options) {
+    const { promise, resolve, reject } = Promise.withResolvers<ProcessResult>();
+    const child = spawn(file, args, { ...options, stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "", stderr = "";
+    const terminate = () => child.kill("SIGTERM");
+    process.on("SIGTERM", terminate);
+    process.on("SIGINT", terminate);
+    const cleanup = () => { process.off("SIGTERM", terminate); process.off("SIGINT", terminate); };
+    child.stdout.on("data", chunk => { stdout += chunk; });
+    child.stderr.on("data", chunk => { stderr += chunk; });
+    child.once("error", error => { cleanup(); reject(error); });
+    child.once("close", (code, signal) => { cleanup(); resolve({ code, signal, stdout, stderr }); });
+    return promise;
+  },
+};
+/** Preserve ordinary tool/provider settings, but allow only explicit Dagu run context.
+ * In particular, host startup (not merely native tools) must never see step sinks. */
+export function roleEnvironment(environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return Object.fromEntries(Object.entries(environment).filter(([name, value]) => value !== undefined &&
+    (!/^(DAGU_|DAG_RUN_|DAG_)/.test(name) || name === "DAGU_HOME" || name === "DAG_PUSHBACK_ITERATION")));
+}
+function ompBinary(environment: NodeJS.ProcessEnv): string {
+  for (const directory of (environment.PATH ?? "").split(delimiter)) {
+    try {
+      const binary = resolve(directory || ".", "omp");
+      accessSync(binary, constants.X_OK);
+      return realpathSync(binary);
+    } catch { /* Try the next PATH entry, just as executable lookup does. */ }
+  }
+  throw new Error("OMP role host not found: no executable omp on PATH; ask the station operator to provision the Dagu service PATH (and the bootstrap shell PATH).");
+}
+async function launch(directory: string, cwd: string, input: Record<string, unknown>, boundary: RoleProcessBoundary): Promise<void> {
+  const env = roleEnvironment(process.env);
+  const binary = ompBinary(env);
+  const version = await boundary.run(binary, ["--version"], { cwd, env });
+  if (version.code !== 0) throw new Error(`OMP role host --version failed (${version.code ?? version.signal}): ${version.stderr.trim()}`);
+  const runtime = { binary, version: version.stdout.trim(), digest: await fileDigest(binary) };
+  atomicJson(join(directory, "runner-input.json"), { ...input, cwd, runtime, agentFile: join(packageRoot, "agents/triage-reviewer.md") });
+  const runner = join(packageRoot, compiled ? "role-runner.ts" : "src/role-runner.ts");
+  const result = await boundary.run(binary, ["-p", "--no-session", "-e", runner, directory], { cwd, env });
+  if (result.code !== 0) {
+    let detail = result.stderr.trim();
+    try { detail = JSON.parse(readFileSync(join(directory, "runner-error.json"), "utf8")).error; } catch { /* Host loader failures are on stderr. */ }
+    throw new Error(`OMP role runner exited ${result.code ?? result.signal}: ${detail || "no diagnostic; check the station omp host modules"}`);
   }
 }
-  // OMP is an operator-installed Bun plugin runtime, selected at launch; it is
-  // deliberately not a second npm dependency or a fixed build-time module path.
-async function nativeModule<T>(root: string, relative: string): Promise<T> {
-  return await import(pathToFileURL(join(root, "src", relative)).href) as T;
-}
-async function runtimeAgents(root: string, cwd: string): Promise<Definition[]> {
-  const { discoverAgents } = await nativeModule<{ discoverAgents(cwd: string): Promise<{ agents: Definition[] }> }>(root, "task/discovery.ts");
-  return (await discoverAgents(cwd)).agents;
-}
-function requiredAgent(agents: Definition[], name: string, cwd: string): Definition {
-  const definition = agents.find(agent => agent.name === name);
-  if (!definition) throw new Error(`Registered OMP agent ${name} is required but was not discoverable from ${cwd}; link @a4s/issue-lifecycle with omp plugin link <package-directory> for the Dagu service user and ensure the installed runtime provides task.`);
-  return definition;
-}
-/** Bootstrap uses the same runtime and native discovery as role execution, without launching a session. */
-export async function detectRoleRuntime(cwd: string): Promise<{ root: string; agents: Array<{ name: string; source: string }> }> {
-  const root = ompRuntimeRoot();
-  const agents = await runtimeAgents(root, cwd);
-  return { root, agents: ["triage-reviewer", "task"].map(name => {
-    const definition = requiredAgent(agents, name, cwd);
-    return { name, source: definition.source };
-  }) };
+/** The same headless extension host checks every required module and both definitions. */
+export async function detectRoleRuntime(cwd: string, boundary: RoleProcessBoundary = processes): Promise<{ root: string; agents: Array<{ name: string; source: string }> }> {
+  const directory = mkdtempSync(join(tmpdir(), "a4s-role-detect-"));
+  try {
+    await launch(directory, cwd, { mode: "detect" }, boundary);
+    try { return JSON.parse(readFileSync(join(directory, "detect.json"), "utf8")); }
+    catch (error) { throw new Error(`OMP role runner exited without a valid detect.json: ${String(error)}`); }
+  } finally { rmSync(directory, { recursive: true, force: true }); }
 }
 export function roleSchema(binding: JobBinding): Record<string, unknown> {
   if (binding.role === "triage") return REVIEW_SCHEMA;
@@ -65,47 +84,16 @@ export function nativeEvidence(transcript: string, routing: unknown): NativeEvid
     provider: identity.provider, model: identity.model, routing,
     attempts: identity.attempts, fallbacks: identity.fallbacks };
 }
-export async function executeNativeJob(job: Job, assignment: string): Promise<{ output: Record<string, unknown>; native: NativeEvidence }> {
-  // The native runtime and its tools can run in this process. Scrub before loading
-  // it, not just at a subprocess boundary; the stage retains its output sink privately.
-  for (const name of Object.keys(process.env)) {
-    if (name === "DAGU_OUTPUT_FILE" || name === "DAG_RUN_LOG_FILE" || name.startsWith("DAG_RUN_STEP_")) {
-      delete process.env[name];
-    }
-  }
-  const root = ompRuntimeRoot();
-  const [{ Settings: NativeSettings }, agents, { cfgTaskAgentModelOverrides }, { resolveAgentModelSelection }, { runSubprocess }] = await Promise.all([
-    nativeModule<{ Settings: { loadReadOnly(options: { cwd: string }): Promise<Settings> } }>(root, "config/settings.ts"),
-    runtimeAgents(root, job.binding.worktree),
-    nativeModule<{ cfgTaskAgentModelOverrides: { get(settings: Settings): Record<string, string[]> } }>(root, "task/settings.ts"),
-    nativeModule<{ resolveAgentModelSelection(options: unknown): Selection }>(root, "config/model-resolver.ts"),
-    nativeModule<{ runSubprocess(options: unknown): Promise<NativeResult> }>(root, "task/executor.ts"),
-  ]);
-  const settings = await NativeSettings.loadReadOnly({ cwd: job.binding.worktree });
-  const name = job.binding.role === "triage" ? "triage-reviewer" : "task";
-  const definition = requiredAgent(agents, name, job.binding.worktree);
-  const overrides = cfgTaskAgentModelOverrides.get(settings)[name];
-  const selection = resolveAgentModelSelection({ settingsOverride: overrides, agentModel: definition.model, settings });
-  if (!selection.patterns.length) throw new Error(`Registered role ${name} has no effective model routing`);
-  const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as { version: string };
-  const routing = { runtime: { root, version: manifest.version,
-    executorDigest: createHash("sha256").update(readFileSync(join(root, "src/task/executor.ts"))).digest("hex") },
-    agent: { name, source: definition.source, model: definition.model }, overrides, selection };
+export async function executeNativeJob(job: Job, assignment: string, boundary: RoleProcessBoundary = processes): Promise<{ output: Record<string, unknown>; native: NativeEvidence }> {
   mkdirSync(job.directory, { recursive: true, mode: 0o700 });
-  atomicJson(join(job.directory, "routing.json"), routing);
   atomicJson(join(job.directory, "assignment.json"), { binding: job.binding, assignment });
-  // runSubprocess owns registry identity, strict structured yield, complete configured
-  // arrays and subagent:<id> retry chains. No synthetic parent task lineage is supplied.
-  const result = await runSubprocess({ cwd: job.binding.worktree, agent: definition,
-    id: job.id, index: 0, task: assignment, description: `Dagu ${job.binding.role} ${job.binding.run}`,
-    settings, modelOverride: selection.patterns, modelRole: selection.role,
-    structured: true, outputSchema: roleSchema(job.binding), outputSchemaMode: "strict",
-    outputSchemaSource: "caller", outputSchemaOverridesAgent: true,
-    artifactsDir: job.directory, persistArtifacts: true,
-    keepAlive: false, enableIrc: false, enableMCP: false });
-  atomicJson(join(job.directory, "native-result.json"), result);
+  await launch(job.directory, job.binding.worktree, { mode: "run", job, assignment, outputSchema: roleSchema(job.binding) }, boundary);
+  let result: { exitCode: number; aborted?: boolean; error?: string; output: string };
+  try { result = JSON.parse(readFileSync(join(job.directory, "native-result.json"), "utf8")); }
+  catch (error) { throw new Error(`OMP role runner exited without a valid native-result.json: ${String(error)}`); }
   if (result.exitCode !== 0 || result.aborted) throw new Error(`Native role execution failed: ${result.error ?? result.output}`);
   const output = JSON.parse(result.output) as Record<string, unknown>;
   if (!output || typeof output !== "object" || Array.isArray(output)) throw new Error("Native role result must be a structured object");
+  const routing = JSON.parse(readFileSync(join(job.directory, "routing.json"), "utf8"));
   return { output, native: nativeEvidence(join(job.directory, `${job.id}.jsonl`), routing) };
 }

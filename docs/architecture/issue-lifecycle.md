@@ -341,18 +341,53 @@ the lightweight default test lane is not evidence of heavy-slot exclusion.
 
 ## Native semantic jobs and capacity
 
-`a4s role-jobs stage triage|implement` executes authorized obligations using
-native OMP definitions, prompts, role model arrays and fallback routing. It
-requires Bun and an explicit installed OMP package root in the Dagu service's
-`DAGU_OMP_ROLE_RUNTIME`. Dagu 2.24.0 preserves `DAGU_*` environment variables but
-filters the former `OMP_ROLE_RUNTIME`. Runtime resolution validates that exact
-package and its native source modules; it never walks PATH or falls back from an
-invalid selection, so a compiled `omp` cannot accidentally select another runtime.
-Bootstrap's `a4s role-jobs detect` shares native discovery with role execution
-and requires both `triage-reviewer` and `task` from PRIMARY. The lifecycle package
-must be linked for the service user, not only loaded in the coordinator session.
-Detection reports the root and agent sources without launching a session; errors
-name the attempted root or missing agent and the required environment/link action.
+### Role runtime on the station omp binary — D16
+
+`a4s role-jobs stage triage|implement` resolves `omp` from the Dagu service PATH
+and starts it with `-p --no-session -e <packageRoot>/role-runner.ts <job-directory>`.
+The runner ships in the executing release and therefore stays pinned to the run.
+No Bun or OMP source tree is used. Before spawn, a4s constructs the child
+environment: Dagu output/log/step variables are removed, while home, run,
+iteration and ordinary tool/provider context survive. Only a4s retains the
+stage's private output sink.
+
+The runner imports the host's external `task/discovery`, `task/executor`,
+`task/settings`, `config/settings` and `config/model-resolver` modules. It reads
+the pinned release's `triage-reviewer` definition directly; only shared `task`
+comes from native discovery. Settings, role model arrays, named routing roles
+and strict native structured execution retain their existing behavior.
+Bootstrap's `a4s role-jobs detect` uses the same runner and validates all five
+modules and both agents before adoption; each job repeats those checks.
+Detection reports `{root, agents}` with the binary realpath and agent sources.
+It starts a headless OMP host but neither a role session nor its own model turn.
+Missing binaries, host modules, agents and runner results fail closed with an
+operator diagnostic; cancellation terminates the OMP child.
+
+Routing evidence records `runtime: {binary, version, digest}`: the OMP realpath,
+`omp --version` and binary SHA-256, alongside pinned-agent provenance and model
+selection. Existing source-runtime evidence remains valid without migration.
+Factory-awaited execution followed by an immediate main `session_start` exit
+consumes the [PoC-3 PASS evidence](https://github.com/pablontiv/a4s/issues/789#issuecomment-6515111305).
+The factory owns the work once, including across subagent rebinds; the handler
+only exits after the loader restores its exit guard. Native work does not run
+inside the time-limited handler. PoC-3 retained both final native jobs beyond the
+ordinary 30-second handler limit with zero hosting-session provider requests.
+`--no-extensions` suppresses ambient discovery but not explicit `-e` entries;
+the production flags omit it so shared `task` discovery remains available.
+Parent SIGTERM/SIGINT is explicitly forwarded to the OMP child; OMP's normalized
+SIGTERM status 143 maps to a failed role job, not a completed result.
+
+The [retained final native artifacts and cancellation receipts](https://github.com/pablontiv/a4s/issues/789#issuecomment-6515111305)
+include transcripts, `native-result.json`, `routing.json` and assignments in
+`tern-factory-job/` and `system-factory-job/`, binary identities in
+`binary-metadata.json`, and verification in `observations.json`. Final
+`*.launcher-events.jsonl`, `*.ps-before.txt` and `*.ps-after.txt` preserve the
+forwarding and cancellation observations under
+`<git-dir>/poc/runs/poc-a4s-issue-789/computations/role-runner/`.
+These native job/cancellation artifacts, not import-only detection or the
+earlier timed-handler experiment, are the runtime basis. Station binary/PATH
+choice and service configuration remain operator-owned.
+
 Schema version 1 job/result/routing/assignment/native transcript artifacts
 bind canonical repo, worktree, lane, DAG, run, stage, semantic role, SHA, iteration
 and attempt. `candidate.json.implementation` binds the implementer's result to
