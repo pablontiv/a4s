@@ -90,13 +90,23 @@ and attempt. `candidate.json.implementation` binds the implementer's result to
 the candidate. Native triage verification binds the exact authorized job marker,
 receipt and structured schema, not an agent's display name.
 
-SQLite at `$DAGU_HOME/role-jobs.sqlite` serializes claims and recovery. The capacity
-is active sessions in this boundary per canonical Dagu home, initially fixed by
-`A4S_ROLE_JOB_CAPACITY` (default 4); subsequent claims must agree. Dagu queues,
-this store and OMP/provider semaphores are independent limits. Mutating roles
-exclude the affected worktree. Live duplicate jobs reuse execution/results;
-missing owners become `interrupted`, retaining evidence. Retry the same native
-step after inspecting effects; its new `startedAt` identifies a new attempt.
+SQLite at `$DAGU_HOME/role-jobs.sqlite` serializes claims and recovery. The persisted
+policy is the capacity authority for active sessions in this boundary per
+canonical Dagu home. `A4S_ROLE_JOB_CAPACITY` (default 4) seeds it only on first
+creation. Subsequent dispatches use the policy and diagnose conflicting environment
+values with `ROLE_JOB_CAPACITY`. With the service's actual `DAGU_HOME`, the operator
+runs `dagu-role-jobs capacity <positive-integer>` to change it. One SQLite
+transaction updates the policy and records previous capacity, new capacity and
+time in `capacity_changes`; JSON output exposes the same change. Every claim reads
+the current policy: increases admit waiting claims immediately, while decreases
+preserve active jobs and block new claims until active count falls below capacity.
+The operator restores the original value through the same command and retains
+both changes plus conflicting-environment dispatch evidence after deployment.
+Dagu queues, this store and OMP/provider semaphores are independent limits.
+Mutating roles exclude the affected worktree. Live duplicate jobs reuse
+execution/results; missing owners become `interrupted`, retaining evidence.
+Retry the same native step after inspecting effects; its new `startedAt`
+identifies a new attempt.
 
 ## Observation, notifications and boundaries
 

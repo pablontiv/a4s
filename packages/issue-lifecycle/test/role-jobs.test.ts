@@ -110,8 +110,98 @@ test("capacity is explicit, durable and shared by independent repositories", () 
     const unrelated = { ...f.binding, repo: otherRepo, worktree: otherRepo, run: "unrelated-ticket" };
     assert.equal(store.claim(unrelated, join(f.root, "unrelated"), readyAt, () => {}).kind, "claimed");
     assert.equal(store.claim({ ...unrelated, run: "third" }, join(f.root, "third"), readyAt, () => {}).kind, "capacity");
-    assert.throws(() => new RoleJobStore(f.home, 3), /persisted DAGU_HOME policy/);
-    assert.throws(() => new RoleJobStore(f.home, 0), /positive integer/);
+    const stale = new RoleJobStore(f.home, 3);
+    try {
+      assert.equal(stale.capacity, 2);
+      assert.equal(stale.claim({ ...unrelated, run: "fourth" }, join(f.root, "fourth"), readyAt, () => {}).kind, "capacity");
+    } finally { stale.close(); }
+  } finally { store.close(); f.cleanup(); }
+});
+
+test("raising the policy admits waiting claims on an already-open client and records atomic changes", () => {
+  const f = fixture(); const waiting = new RoleJobStore(f.home, 1); const operator = new RoleJobStore(f.home, 4);
+  const audit = new DatabaseSync(join(f.home, "role-jobs.sqlite"));
+  try {
+    assert.equal(waiting.claim(f.binding, f.directory, readyAt, () => {}).kind, "claimed");
+    const next = { ...f.binding, run: "waiting" };
+    assert.equal(waiting.claim(next, join(f.root, "waiting"), readyAt, () => {}).kind, "capacity");
+    const change = operator.changeCapacity(2);
+    assert.equal(change.previousCapacity, 1); assert.equal(change.capacity, 2);
+    assert.ok(Number.isFinite(Date.parse(change.changedAt)));
+    assert.deepEqual({ ...audit.prepare("SELECT previous_capacity,capacity,changed_at FROM capacity_changes").get() },
+      { previous_capacity: 1, capacity: 2, changed_at: change.changedAt });
+    assert.equal(waiting.claim(next, join(f.root, "waiting"), readyAt, () => {}).kind, "claimed");
+    audit.exec("CREATE TRIGGER reject_change BEFORE INSERT ON capacity_changes BEGIN SELECT RAISE(ABORT, 'audit unavailable'); END");
+    assert.throws(() => operator.changeCapacity(3), /audit unavailable/);
+    assert.equal(waiting.capacity, 2);
+  } finally { audit.close(); waiting.close(); operator.close(); f.cleanup(); }
+});
+
+test("lowering capacity preserves active jobs and waits until active count falls below the policy", () => {
+  const f = fixture(); const store = new RoleJobStore(f.home, 2); const operator = new RoleJobStore(f.home, 4);
+  try {
+    const first = store.claim(f.binding, f.directory, readyAt, () => {});
+    const secondBinding = { ...f.binding, run: "second" };
+    const secondDirectory = join(f.root, "second");
+    const second = store.claim(secondBinding, secondDirectory, readyAt, () => {});
+    assert.equal(first.kind, "claimed"); assert.equal(second.kind, "claimed");
+    if (first.kind !== "claimed" || second.kind !== "claimed") return;
+    assert.equal(operator.changeCapacity(1).previousCapacity, 2);
+    assert.equal(store.claim(f.binding, f.directory, readyAt, () => {}).kind, "active");
+    assert.equal(store.claim(secondBinding, secondDirectory, readyAt, () => {}).kind, "active");
+    const next = { ...f.binding, run: "third" }; const directory = join(f.root, "third");
+    assert.equal(store.claim(next, directory, readyAt, () => {}).kind, "capacity");
+    store.finish(first.job, completed(first.job));
+    assert.equal(store.claim(next, directory, readyAt, () => {}).kind, "capacity");
+    store.finish(second.job, completed(second.job));
+    assert.equal(store.claim(next, directory, readyAt, () => {}).kind, "claimed");
+  } finally { store.close(); operator.close(); f.cleanup(); }
+});
+
+test("capacity values are positive safe integers when seeding or changing policy", () => {
+  const f = fixture();
+  const invalid = [0, -1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1];
+  try {
+    for (const value of invalid) assert.throws(() => new RoleJobStore(f.home, value), /positive integer/);
+    const store = new RoleJobStore(f.home, 2);
+    try {
+      for (const value of invalid) {
+        assert.throws(() => store.changeCapacity(value), /positive integer/);
+        assert.equal(store.capacity, 2);
+        const stale = new RoleJobStore(f.home, value);
+        try { assert.equal(stale.capacity, 2); } finally { stale.close(); }
+      }
+    } finally { store.close(); }
+  } finally { f.cleanup(); }
+});
+
+test("the capacity command records changes and restores policy independently of the environment", () => {
+  const f = fixture(); const store = new RoleJobStore(f.home, 2);
+  const command = fileURLToPath(new URL("../bin/dagu-role-jobs.ts", import.meta.url));
+  const invoke = (...args: string[]) => spawnSync(process.execPath, ["--import", "tsx", command, "capacity", ...args],
+    { env: { ...process.env, DAGU_HOME: f.home, A4S_ROLE_JOB_CAPACITY: "9" }, encoding: "utf8" });
+  try {
+    for (const value of ["0", "-1", "1.5", "NaN", "Infinity", "9007199254740992", "2x", ""]) {
+      const result = invoke(value);
+      assert.equal(result.status, 1);
+      assert.equal(store.capacity, 2);
+    }
+    assert.equal(invoke("3", "extra").status, 1);
+    const raised = invoke("3"); assert.equal(raised.status, 0, raised.stderr);
+    const change = JSON.parse(raised.stdout);
+    assert.equal(change.home, realpathSync(f.home)); assert.equal(change.previousCapacity, 2); assert.equal(change.capacity, 3);
+    assert.ok(Number.isFinite(Date.parse(change.changedAt)));
+    assert.equal(store.capacity, 3);
+    const restored = invoke("2"); assert.equal(restored.status, 0, restored.stderr);
+    const restoration = JSON.parse(restored.stdout);
+    assert.equal(restoration.previousCapacity, 3); assert.equal(restoration.capacity, 2);
+    const audit = new DatabaseSync(join(f.home, "role-jobs.sqlite"));
+    try {
+      assert.deepEqual(audit.prepare("SELECT previous_capacity,capacity,changed_at FROM capacity_changes ORDER BY id").all().map(row => ({ ...row })), [
+        { previous_capacity: 2, capacity: 3, changed_at: change.changedAt },
+        { previous_capacity: 3, capacity: 2, changed_at: restoration.changedAt },
+      ]);
+    } finally { audit.close(); }
   } finally { store.close(); f.cleanup(); }
 });
 
@@ -240,7 +330,7 @@ for (const terminal of ["failed", "interrupted"] as const) {
   });
 }
 
-test("triage completes and redelivers the admitted identity while PRIMARY fast-forwards", async () => {
+test("triage seeds capacity from the environment and redelivers with a diagnosed stale value while PRIMARY fast-forwards", async t => {
   const f = fixture();
   const saved = { ...process.env }; const originalFetch = globalThis.fetch;
   try {
@@ -282,12 +372,26 @@ test("triage completes and redelivers the admitted identity while PRIMARY fast-f
     };
     await dispatchStage("triage", (key, value) => { emitted[key] = value; }, execute);
     assert.equal(emitted.POC, "no");
+    const policy = new RoleJobStore(f.home, 9);
+    try {
+      assert.equal(policy.capacity, 2);
+      policy.changeCapacity(1);
+    } finally { policy.close(); }
+    process.env.A4S_ROLE_JOB_CAPACITY = "3";
+    const diagnostics: string[] = [];
+    t.mock.method(console, "error", (message: string) => { diagnostics.push(message); });
     const result = verifyJobResult(join(state, "role-jobs", emitted.REVIEW!, "result.json"));
     assert.equal(result.state, "completed");
     assert.equal(result.binding.sha, admittedHead);
     const redelivered: Record<string, string> = {};
     await dispatchStage("triage", (key, value) => { redelivered[key] = value; }, execute);
     assert.deepEqual(redelivered, emitted);
+    assert.deepEqual(diagnostics, ['ROLE_JOB_CAPACITY {"environmentCapacity":"3","persistedCapacity":1,"authority":"persisted"}']);
+    assert.equal(executions, 1);
+    process.env.A4S_ROLE_JOB_CAPACITY = "stale-invalid";
+    diagnostics.length = 0;
+    await dispatchStage("triage", () => {}, execute);
+    assert.deepEqual(diagnostics, ['ROLE_JOB_CAPACITY {"environmentCapacity":"stale-invalid","persistedCapacity":1,"authority":"persisted"}']);
     assert.equal(executions, 1);
   } finally {
     globalThis.fetch = originalFetch;

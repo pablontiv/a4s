@@ -105,14 +105,31 @@ its `initial` identity remains immutable.
 
 Capacity is explicitly **active role sessions launched by this boundary per
 canonical DAGU_HOME**, across processes, runs and repositories. The SQLite
-`$DAGU_HOME/role-jobs.sqlite` transaction owns claims and capacity. The first
-dispatch fixes `A4S_ROLE_JOB_CAPACITY` (positive integer, default `4`); subsequent
-dispatches require the same value. Change it only in a drained disposable/new
-capacity domain or through an operator-managed migration. This is independent
-of Dagu queue slots and OMP's process-local task/provider request semaphores;
-it is not a claim about other OMP sessions or host-wide provider concurrency.
-Mutating roles exclude other jobs on their actual candidate worktree, while
-unrelated worktrees share available capacity.
+`$DAGU_HOME/role-jobs.sqlite` policy is the capacity authority. The first dispatch
+seeds it from `A4S_ROLE_JOB_CAPACITY` (positive integer, default `4`). Later
+dispatches read the persisted value, including while waiting for a claim; a
+conflicting environment value appears in `ROLE_JOB_CAPACITY` dispatch diagnostics.
+An operator changes the policy in the station's canonical home with:
+
+```sh
+DAGU_HOME="$HOME/.dagu" dagu-role-jobs capacity 6
+```
+
+Use the actual service's `DAGU_HOME` and the desired positive integer. The command
+prints JSON containing `home`, `previousCapacity`, `capacity` and `changedAt`;
+the same change is recorded in SQLite's `capacity_changes` table in the policy
+update transaction. Raising capacity immediately makes waiting claims eligible.
+Lowering it preserves active sessions and holds new claims until the active
+count falls below the new capacity. Restore the previous value through the same
+command. This is independent of Dagu queue slots and OMP's process-local
+task/provider request semaphores; it is not a claim about other OMP sessions or
+host-wide provider concurrency. Mutating roles exclude other jobs on their
+actual candidate worktree, while unrelated worktrees share available capacity.
+
+After deployment, operator acceptance changes and restores the station policy
+through this command and retains both JSON outputs plus dispatch diagnostics
+demonstrating a conflicting environment value using the persisted policy. This
+demonstrates capacity authority, not station saturation.
 
 Duplicate delivery observes the same live execution or persisted terminal result.
 Scheduler/launcher interruption preserves a living worker's ownership. Once its

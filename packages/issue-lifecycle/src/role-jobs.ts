@@ -60,19 +60,39 @@ export function atomicJson(path: string, value: unknown): void {
 /** One transactional capacity domain per canonical DAGU_HOME, across repositories/processes. */
 export class RoleJobStore {
   private readonly db: DatabaseSync;
-  constructor(home: string, readonly capacity: number,
+  constructor(home: string, capacity: number,
     private readonly alive: (owner: ExecutorIdentity) => boolean = executorAlive) {
-    if (!Number.isSafeInteger(capacity) || capacity < 1) throw new Error("Role-job capacity must be a positive integer");
     mkdirSync(home, { recursive: true, mode: 0o700 });
     this.db = new DatabaseSync(join(realpathSync(home), "role-jobs.sqlite"));
     // The default rollback journal lets concurrent first opens use busy_timeout;
     // switching a live database to WAL can return SQLITE_BUSY immediately.
-    this.db.exec("PRAGMA busy_timeout=30000; PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS policy (id INTEGER PRIMARY KEY, capacity INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, document TEXT NOT NULL, result TEXT);");
-    this.db.prepare("INSERT OR IGNORE INTO policy VALUES (1, ?)").run(capacity);
-    const policy = this.db.prepare("SELECT capacity FROM policy WHERE id=1").get();
-    if (policy?.capacity !== capacity) { this.db.close(); throw new Error("Role-job capacity differs from the persisted DAGU_HOME policy"); }
+    this.db.exec("PRAGMA busy_timeout=30000; PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS policy (id INTEGER PRIMARY KEY, capacity INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, document TEXT NOT NULL, result TEXT); CREATE TABLE IF NOT EXISTS capacity_changes (id INTEGER PRIMARY KEY, previous_capacity INTEGER NOT NULL, capacity INTEGER NOT NULL, changed_at TEXT NOT NULL);");
+    try {
+      this.transaction(() => {
+        if (!this.db.prepare("SELECT capacity FROM policy WHERE id=1").get()) {
+          this.validateCapacity(capacity);
+          this.db.prepare("INSERT INTO policy VALUES (1, ?)").run(capacity);
+        }
+      });
+    } catch (error) { this.db.close(); throw error; }
   }
   close(): void { this.db.close(); }
+  get capacity(): number {
+    return Number(this.db.prepare("SELECT capacity FROM policy WHERE id=1").get()!.capacity);
+  }
+  private validateCapacity(capacity: number): void {
+    if (!Number.isSafeInteger(capacity) || capacity < 1) throw new Error("Role-job capacity must be a positive integer");
+  }
+  changeCapacity(capacity: number): { previousCapacity: number; capacity: number; changedAt: string } {
+    this.validateCapacity(capacity);
+    return this.transaction(() => {
+      const previousCapacity = this.capacity;
+      const changedAt = new Date().toISOString();
+      this.db.prepare("UPDATE policy SET capacity=? WHERE id=1").run(capacity);
+      this.db.prepare("INSERT INTO capacity_changes (previous_capacity,capacity,changed_at) VALUES (?,?,?)").run(previousCapacity, capacity, changedAt);
+      return { previousCapacity, capacity, changedAt };
+    });
+  }
   private transaction<T>(action: () => T): T {
     this.db.exec("BEGIN IMMEDIATE");
     try { const result = action(); this.db.exec("COMMIT"); return result; }

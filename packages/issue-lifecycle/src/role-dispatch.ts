@@ -10,14 +10,18 @@ import { executeNativeJob, nativeEvidence } from "./role-runtime.ts";
 import { parseReview } from "./triage/schema.ts";
 
 export interface RoleRunOptions {
-  home: string; capacity: number; binding: JobBinding; directory: string; readyAt: string;
+  home: string; capacity: number | string; binding: JobBinding; directory: string; readyAt: string;
   assignment: string; authorize: () => Promise<void>;
   execute?: typeof executeNativeJob;
 }
 /** Redelivery observes the existing worker/result; it never starts a second session. */
 export async function runRoleJob(options: RoleRunOptions): Promise<JobResult> {
-  const store = new RoleJobStore(options.home, options.capacity);
+  const store = new RoleJobStore(options.home, Number(options.capacity));
   try {
+    const capacity = store.capacity;
+    if (Number(options.capacity) !== capacity) {
+      console.error(`ROLE_JOB_CAPACITY ${JSON.stringify({ environmentCapacity: String(options.capacity), persistedCapacity: capacity, authority: "persisted" })}`);
+    }
     for (;;) {
       await options.authorize();
       const claim = store.claim(options.binding, options.directory, options.readyAt, () => {});
@@ -134,7 +138,7 @@ export async function dispatchStage(stage: string, emit: (name: string, value: s
   const results = await Promise.all(roles.map(async role => {
     const binding: JobBinding = { repo: primary, worktree, lane: "feature", dag: "feature", run, stage, role, sha, iteration, attempt };
     const directory = join(state, "role-jobs", jobId(binding));
-    const result = await runRoleJob({ home, capacity: Number(process.env.A4S_ROLE_JOB_CAPACITY || "4"), binding, directory, ...(execute ? { execute } : {}),
+    const result = await runRoleJob({ home, capacity: process.env.A4S_ROLE_JOB_CAPACITY || "4", binding, directory, ...(execute ? { execute } : {}),
       readyAt: node.startedAt, assignment: roleAssignment(binding, issue, issueText, state), authorize: async () => {
         const current = await stageState(run);
         const currentNode = requireReadyStage(current, stage, dependencies[stage]!);
