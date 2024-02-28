@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { approvedPocScope, assessPocScope, decidePocScope, inconclusiveCause, requirePocScope, type PocScopeInput } from "../src/poc-scope.ts";
+import { approvedPocScope, assessPocScope, decidePocScope, inconclusiveCause, pocScopeRejection, PocScopeRejection, recordPocScopeRejection, requirePocScope, type PocScopeInput } from "../src/poc-scope.ts";
 import { exampleConfig, serializeConfig } from "../src/config.ts";
 import { preflightAdmission } from "../src/admission.ts";
 import { parseReview } from "../src/triage/schema.ts";
@@ -84,6 +84,40 @@ test("PoC access decisions grant the reviewed targets or defer admission with pr
     decidePocScope(fixture.primary, "41", deferred.id, "defer", input, "operator", "Keep deferred until Windows access exists");
     assert.throws(() => approvedPocScope(fixture.primary, "41", deferred.id), /POC_SCOPE_DEFERRED/);
     assert.throws(() => assessPocScope(fixture.primary, input, 0), /positive integer/);
+  } finally { fixture.cleanup(); }
+});
+
+test("scope decisions default reviewed access fields, ignore defer fields and retain bound rejection diagnostics", () => {
+  const fixture = pocFixture();
+  try {
+    const input: PocScopeInput = { issue: "41", question: "Can Linux and Windows run?", requiredTargets: ["linux", "windows"],
+      authorizedTargets: ["linux"], basis: "Only Linux is authorized" };
+    const request = assessPocScope(fixture.primary, input);
+    for (const question of [undefined, input.question]) {
+      assert.throws(() => decidePocScope(fixture.primary, "41", request.id, "narrow",
+        { question, requiredTargets: ["linux"], authorizedTargets: ["linux"] }, "operator", "Narrow the route"),
+      (error: unknown) => {
+        assert.ok(error instanceof PocScopeRejection);
+        assert.equal(error.rule, "narrow.question.changed");
+        recordPocScopeRejection(fixture.primary, "scope-test", "41", request.id, error);
+        const rejection = JSON.parse(pocScopeRejection(fixture.primary, "scope-test", "41", request.id));
+        assert.equal(rejection.rule, error.rule);
+        assert.deepEqual(rejection.expected, error.expected);
+        assert.deepEqual(rejection.observed, error.observed);
+        assert.equal(pocScopeRejection(fixture.primary, "other-run", "41", request.id), "");
+        assert.equal(pocScopeRejection(fixture.primary, "scope-test", "42", request.id), "");
+        assert.equal(pocScopeRejection(fixture.primary, "scope-test", "41", "a".repeat(64)), "");
+        return true;
+      });
+    }
+    const granted = decidePocScope(fixture.primary, "41", request.id, "provide-access",
+      { authorizedTargets: ["linux", "windows"] }, "operator", "Windows access granted");
+    assert.equal(granted.input.question, input.question);
+    assert.deepEqual(granted.input.requiredTargets, input.requiredTargets);
+    requirePocScope(fixture.primary, granted.input, request.id);
+    const deferred = assessPocScope(fixture.primary, { ...input, question: "Another question?" });
+    assert.equal(decidePocScope(fixture.primary, "41", deferred.id, "defer", {}, "operator", "Defer until access exists").action, "defer");
+    assert.throws(() => approvedPocScope(fixture.primary, "41", deferred.id), /POC_SCOPE_DEFERRED/);
   } finally { fixture.cleanup(); }
 });
 

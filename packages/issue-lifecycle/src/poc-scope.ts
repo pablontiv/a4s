@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, linkSync, mkdirSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 export interface PocScopeInput {
@@ -14,6 +14,40 @@ export interface PocScopeRequest {
 export interface PocScopeDecision {
   request: string; action: "narrow" | "provide-access" | "defer";
   input: PocScopeInput; actor: string; basis: string; decidedAt: string;
+}
+export type PocScopeDecisionInput = { [K in keyof PocScopeInput]?: PocScopeInput[K] | undefined };
+export class PocScopeRejection extends Error {
+  readonly rule: string;
+  readonly expected: unknown;
+  readonly observed: unknown;
+  constructor(rule: string, expected: unknown, observed: unknown) {
+    super(`${rule}: expected=${JSON.stringify(expected)}; observed=${JSON.stringify(observed)}`);
+    this.rule = rule;
+    this.expected = expected;
+    this.observed = observed;
+  }
+}
+interface ScopeRejection {
+  run: string; issue: string; request: string; rule: string; expected: unknown; observed: unknown; rejectedAt: string;
+}
+function rejectionPath(primary: string, run: string): string {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(run)) throw new Error("Invalid PoC scope run identity");
+  return join(commonDirectory(primary), "dagu-feature", "runs", run, "scope-rejection.json");
+}
+export function recordPocScopeRejection(primary: string, run: string, issue: string, request: string, error: PocScopeRejection): void {
+  const path = rejectionPath(primary, run);
+  mkdirSync(join(path, ".."), { recursive: true });
+  const value: ScopeRejection = { run, issue, request, rule: error.rule, expected: error.expected, observed: error.observed, rejectedAt: new Date().toISOString() };
+  const temporary = `${path}.${process.pid}.tmp`;
+  writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
+  renameSync(temporary, path);
+}
+export function pocScopeRejection(primary: string, run: string, issue: string, request: string): string {
+  const path = rejectionPath(primary, run);
+  if (!existsSync(path)) return "";
+  const value = JSON.parse(readFileSync(path, "utf8")) as ScopeRejection;
+  return value.run === run && value.issue === issue && value.request === request
+    ? JSON.stringify(value) : "";
 }
 const normalize = (value: string) => value.trim().replace(/\s+/g, " ").toLowerCase();
 const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -83,21 +117,40 @@ function readRequest(primary: string, issue: string, id: string): { directory: s
       JSON.stringify(historyFor(common, issue)) !== JSON.stringify(request.history)) throw new Error("PoC scope request/history changed; assess again before admission");
   return { directory, request };
 }
-export function decidePocScope(primary: string, issue: string, id: string, action: PocScopeDecision["action"], value: PocScopeInput, actor: string, basis: string): PocScopeDecision {
+export function pocScopeRequest(primary: string, issue: string, id: string): PocScopeRequest {
+  return readRequest(primary, issue, id).request;
+}
+export function decidePocScope(primary: string, issue: string, id: string, action: PocScopeDecision["action"], value: PocScopeDecisionInput, actor: string, basis: string): PocScopeDecision {
   const { directory, request } = readRequest(primary, issue, id);
-  if (!["narrow", "provide-access", "defer"].includes(action) || !actor.trim() || !basis.trim()) throw new Error("PoC scope decision requires an action, operator attribution and evidence basis");
-  const input = action === "defer" ? request.input : canonicalInput(value);
-  if (input.issue !== issue) throw new Error("PoC scope decision issue mismatch");
-  if (action !== "defer" && (!input.requiredTargets.length || input.requiredTargets.some(target => !input.authorizedTargets.includes(target)))) throw new Error("PoC scope decision requires reachable authorized targets");
-  if (action === "narrow" && (input.question === request.input.question || input.requiredTargets.some(target => !request.input.requiredTargets.includes(target)) ||
-      input.authorizedTargets.some(target => !request.input.authorizedTargets.includes(target)))) throw new Error("Narrow must revise the question within the existing authorized route");
-  if (action === "provide-access" && (input.question !== request.input.question || JSON.stringify(input.requiredTargets) !== JSON.stringify(request.input.requiredTargets))) throw new Error("Provide-access preserves the reviewed question and required targets");
+  const reject = (rule: string, expected: unknown, observed: unknown): never => { throw new PocScopeRejection(rule, expected, observed); };
+  if (!["narrow", "provide-access", "defer"].includes(action)) reject("action", ["narrow", "provide-access", "defer"], action);
+  if (!actor.trim()) reject("actor", "operator attribution", actor);
+  if (!basis.trim()) reject("basis", "evidence basis", basis);
+  const effective = action === "defer" ? request.input : {
+    issue: value.issue ?? issue,
+    question: value.question || (action === "provide-access" ? request.input.question : ""),
+    requiredTargets: value.requiredTargets ?? (action === "provide-access" ? request.input.requiredTargets : []),
+    authorizedTargets: value.authorizedTargets ?? [], basis: value.basis || basis,
+  };
+  if (effective.issue !== issue) reject("issue", issue, effective.issue);
+  if (!effective.question.trim()) reject("narrow.question.changed", "a revised question, different from the reviewed question", effective.question);
+  const input = canonicalInput(effective);
+  if (action !== "defer" && (!input.requiredTargets.length || input.requiredTargets.some(target => !input.authorizedTargets.includes(target))))
+    reject("reachable authorized targets", { requiredTargets: "nonempty", authorizedTargets: input.requiredTargets }, { requiredTargets: input.requiredTargets, authorizedTargets: input.authorizedTargets });
+  if (action === "narrow") {
+    if (input.question === request.input.question) reject("narrow.question.changed", { differentFrom: request.input.question }, input.question);
+    if (input.requiredTargets.some(target => !request.input.requiredTargets.includes(target)) || input.authorizedTargets.some(target => !request.input.authorizedTargets.includes(target)))
+      reject("narrow.authorized.route", { requiredTargets: request.input.requiredTargets, authorizedTargets: request.input.authorizedTargets }, input);
+  }
+  if (action === "provide-access" && (input.question !== request.input.question || JSON.stringify(input.requiredTargets) !== JSON.stringify(request.input.requiredTargets)))
+    reject("Provide-access preserves the reviewed question and required targets", { question: request.input.question, requiredTargets: request.input.requiredTargets }, { question: input.question, requiredTargets: input.requiredTargets });
   const decision: PocScopeDecision = { request: id, action, input, actor, basis, decidedAt: new Date().toISOString() };
   const path = join(directory, "decision.json");
   try { save(path, decision); return decision; }
   catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
   const previous = JSON.parse(readFileSync(path, "utf8")) as PocScopeDecision;
-  if (previous.action !== action || JSON.stringify(previous.input) !== JSON.stringify(input) || previous.actor !== actor || previous.basis !== basis) throw new Error("PoC scope request already has a different operator decision");
+  if (previous.action !== action || JSON.stringify(previous.input) !== JSON.stringify(input) || previous.actor !== actor || previous.basis !== basis)
+    reject("PoC scope request already has a different operator decision", { action: previous.action, input: previous.input, actor: previous.actor, basis: previous.basis }, { action, input, actor, basis });
   return previous;
 }
 export function approvedPocScope(primary: string, issue: string, id: string): PocScopeInput {

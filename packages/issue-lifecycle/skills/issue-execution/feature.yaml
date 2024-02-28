@@ -349,6 +349,7 @@ steps:
       - name: SCOPE_DECISION
       - name: SCOPE_REQUEST
       - name: SCOPE_REASON
+      - name: SCOPE_REJECTION
 
   - id: poc_scope_decision
     depends: poc_scope_prepare
@@ -358,7 +359,7 @@ steps:
         expected: "yes"
     action: human.task
     with:
-      prompt: "PoC scope/access requires one owner decision before admission: ${steps.poc_scope_prepare.outputs.SCOPE_REASON}. Narrow the question to reachable targets, provide authorized access, or defer. Supply the effective question, target arrays and authorization basis."
+      prompt: "PoC scope/access requires an owner decision before admission: ${steps.poc_scope_prepare.outputs.SCOPE_REASON}. Last rejection (run/request-bound): ${steps.poc_scope_prepare.outputs.SCOPE_REJECTION}. Required per action: defer = ACTION and BASIS only (question/targets ignored); provide-access = ACTION, BASIS, AUTHORIZED_TARGETS JSON array (QUESTION and REQUIRED_TARGETS default to the reviewed request; if supplied they must match it); narrow = ACTION, BASIS, a revised QUESTION, REQUIRED_TARGETS and AUTHORIZED_TARGETS JSON arrays within the existing authorized route. CANCEL=yes cancels without other fields."
       form:
         type: object
         properties:
@@ -378,14 +379,13 @@ steps:
     env:
       - CANCEL: ${steps.poc_scope_decision.outputs.CANCEL}
       - CHECKPOINT: poc_scope_decision
-      - REQUIRED_FIELDS: ACTION BASIS
-      - ACTION: ${steps.poc_scope_decision.outputs.ACTION}
-      - BASIS: ${steps.poc_scope_decision.outputs.BASIS}
     run: *cancellation_gate
 
   - id: poc_scope_resolve
     depends: poc_scope_decision_cancellation
-    continue_on: skipped
+    continue_on:
+      skipped: true
+      exit_code: [23]
     preconditions:
       - condition: "${steps.triage.outputs.POC}"
         expected: "yes"
@@ -403,11 +403,41 @@ steps:
       - name: POC_AUTHORIZED_TARGETS
       - name: POC_SCOPE_BASIS
 
-  - id: poc_admit
+  - id: recover_poc_scope
     depends: poc_scope_resolve
+    continue_on: skipped
+    preconditions:
+      - condition: "${poc_scope_resolve.exit_code}"
+        expected: "23"
+    action: human.task
+    with:
+      prompt: "Rejected PoC scope decision recorded for this run/request. Automatic push-back reopens poc_scope_decision with rule, expected and observed values."
+      push_back:
+        rewind_to: poc_scope_prepare
+      form:
+        type: object
+        properties:
+          CANCEL: {type: string, enum: ['yes', 'no']}
+
+  - id: recover_poc_scope_cancellation
+    depends: recover_poc_scope
+    continue_on: skipped
+    preconditions:
+      - condition: "${poc_scope_resolve.exit_code}"
+        expected: "23"
+    env:
+      - CANCEL: ${steps.recover_poc_scope.outputs.CANCEL}
+      - CHECKPOINT: recover_poc_scope
+    run: *cancellation_gate
+
+
+  - id: poc_admit
+    depends: recover_poc_scope_cancellation
     preconditions:
       - condition: "${steps.triage.outputs.POC}"
         expected: "yes"
+      - condition: "${poc_scope_resolve.exit_code}"
+        expected: "0"
     env:
       - QUESTION: ${steps.poc_scope_resolve.outputs.POC_QUESTION}
       - REQUIRED_TARGETS: ${steps.poc_scope_resolve.outputs.POC_REQUIRED_TARGETS}
@@ -1720,7 +1750,8 @@ handler_on:
       printf 'waiting_steps=%s issue=%s branch=%s worktree=%s\n' "$DAG_WAITING_STEPS" "$ISSUE" "$BRANCH" "$WORKTREE"
       for SPEC in \
         "dependency_review dependency-action dependency-transition.log" \
-        "conflict_review conflict-action conflict-transition.log"; do
+        "conflict_review conflict-action conflict-transition.log" \
+        "recover_poc_scope - scope-transition.log"; do
         read -r STEP ACTION LOG <<<"$SPEC"
         if [[ ",$DAG_WAITING_STEPS," == *,"$STEP",* ]]; then
           STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")
@@ -1733,7 +1764,7 @@ handler_on:
               if grep -q "^Waiting -" <<<"$STATUS"; then
                 ITERATION=$(sed -nE "s/.*push-back iteration: ([0-9]+).*/\1/p" <<<"$STATUS" | head -1)
                 transition=0
-                if [[ "$(cat "$STATE/$ACTION")" == rewind ]]; then
+                if [[ "$STEP" == recover_poc_scope ]] || [[ "$(cat "$STATE/$ACTION")" == rewind ]]; then
                   dagu human-task push-back feature --run-id "$RUN" --step "$STEP" --expected-iteration "${ITERATION:-0}" || transition=$?
                 else
                   dagu human-task complete feature --run-id "$RUN" --step "$STEP" || transition=$?
@@ -1745,6 +1776,7 @@ handler_on:
                     case "$STEP" in
                       dependency_review) RETRY=checkpoint_push ;;
                       conflict_review) RETRY=rebase ;;
+                      recover_poc_scope) RETRY=poc_scope_prepare ;;
                     esac
                     printf "stale-process repair: run=%s attempt=%s step=%s; recover: dagu retry --run-id %s --step %s --downstream feature\n" "$RUN" "${ATTEMPT:-unknown}" "$STEP" "$RUN" "$RETRY" >&2
                   fi

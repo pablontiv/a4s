@@ -2259,7 +2259,7 @@ for (const [name, definition] of definitions) {
               `env:\n  - A4S_BIN: ${JSON.stringify(mode === "poc" ? join(repo.root, "bin", "a4s-routing") : a4sBin)}\n  - PRIMARY: ${JSON.stringify(repo.primary)}\n  - BASE_BRANCH: main\n  - BRANCH: dagu/issue-\${ISSUE}\n  - GATE: "true"\n  - REQUIRED_CHECK: validate\n  - PATH: ${join(repo.root, "bin")}:${process.env.PATH}\n  - WORKTREE: ${repo.worktree}\n  - RUN: \${context.run.id}\n  - DAGU_FEATURE_BUNDLE: test\n`,
               source.slice(source.indexOf("  - DAGU_RESOURCE_GUARD: |"), source.indexOf("steps:\n")),
               "steps:\n", ...(mode === "poc" ? ["admission", "admit"].map(id => extractStep(source, id)) : []), triage, decision,
-              ...(mode === "poc" ? ["poc_scope_prepare", "poc_scope_decision", "poc_scope_resolve", "poc_admit"].map(id => extractStep(source, id)) : []),
+              ...(mode === "poc" ? ["poc_scope_prepare", "poc_scope_decision", "poc_scope_decision_cancellation", "poc_scope_resolve", "recover_poc_scope", "recover_poc_scope_cancellation", "poc_admit"].map(id => extractStep(source, id)) : []),
               ...["detect_start_primary", "start_primary_unavailable", "start_gate", ...(mode === "poc" ? ["recover_start_gate"] : [])].map(id => extractStep(source, id)),
               implementation,
               ...["detect_close_primary", "close_primary_unavailable", "close_gate"].map(id =>

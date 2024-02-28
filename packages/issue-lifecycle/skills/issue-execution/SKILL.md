@@ -1611,7 +1611,7 @@ the notification itself performs no transition.
 
 Before admitting a PoC, triage returns concrete required and authorized target
 arrays plus the actual operator authorization basis. Unknown access is explicit.
-A target outside the authorized route parks at `poc_scope_decision` once:
+A target outside the authorized route parks at `poc_scope_decision`:
 narrow the question to reachable targets, provide access, or defer. A decision
 binds the effective question, target arrays and authorization basis to an
 immutable scope request; both bundle admission and the native PoC admission
@@ -1620,6 +1620,23 @@ explicit `## Inconclusive cause` of `access` or `scope` requires the same decisi
 before another admission. Other inconclusive causes remain distinct; unavailable
 historical cause evidence fails closed for diagnosis. Deferral preserves its
 decision and terminates with native Failed/77 plus normal exit cleanup.
+
+`defer` needs only `ACTION` and `BASIS`; it ignores question and targets.
+`provide-access` needs `ACTION`, `BASIS` and `AUTHORIZED_TARGETS`; omitted
+`QUESTION` and `REQUIRED_TARGETS` use the reviewed request, and supplied values
+must preserve it. `narrow` additionally needs a changed `QUESTION` and both
+target arrays within the existing authorized route. Unresolved native
+`${steps…}` field bindings are absent, not operator answers.
+
+Correctable resolver rejections exit 23 and open `recover_poc_scope`, without
+terminating the run Failed. The existing detached wait dispatcher waits for
+persisted Waiting, then pushes that checkpoint back to `poc_scope_prepare`.
+Prepare reads `scope-rejection.json` under the feature run's durable Git state,
+checks its run/issue/request binding and emits `SCOPE_REJECTION`; the new prompt
+shows the rule, expected and observed values. Reset/historical human outputs are
+never reused as input. Admission requires resolver exit 0. Other resolver
+failures, cancellation and valid deferral do not trigger this correction loop;
+deferral still terminates Failed/77 with normal cleanup.
 
 ## Reconcile `await_merge`
 
