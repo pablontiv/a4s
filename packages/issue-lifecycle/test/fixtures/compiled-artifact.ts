@@ -37,10 +37,10 @@ export function artifactEntries(version = identity.version, commit = "a".repeat(
   return [
     { name: "a4s", content: declared }, // Identity-reader fake consumes this; never executable.
     { name: "identity.json", content: declared },
-    { name: "package.json", content: JSON.stringify({ name: "@a4s/issue-lifecycle", version, omp: { extensions: ["./src/status/reloadable.ts", "./src/triage/reloadable.ts"] } }) },
+    { name: "package.json", content: JSON.stringify({ name: "@a4s/issue-lifecycle", version, omp: { extensions: ["./src/status/reloadable.ts", "./src/triage/reloadable.ts", "./src/primary-guard/reloadable.ts"] } }) },
     ...["agents", "skills"].flatMap(name => tree(join(packageDirectory, name), name)),
     ...["dagu-gate.cjs", "gate-cache.cjs", "gate-cache-run.cjs"].map(name => ({ name: `bin/${name}`, content: readFileSync(join(packageDirectory, "bin", name)) })),
-    ...["status/reloadable.ts", "status/index.ts", "triage/reloadable.ts", "triage/native.ts"].map(name => ({ name: `src/${name}`, content: "export {};\n" })),
+    ...["status/reloadable.ts", "status/index.ts", "triage/reloadable.ts", "triage/native.ts", "primary-guard/reloadable.ts", "primary-guard/native.ts"].map(name => ({ name: `src/${name}`, content: "export {};\n" })),
     { name: "role-runner.ts", content: "export {};\n" },
   ];
 }

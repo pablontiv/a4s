@@ -61,10 +61,10 @@ for (const target of new Set(targets)) {
     });
     // Bundle both reloadable entries AND their reload targets. Their own closure
     // (including hot-reload and YAML) must not resolve through a source checkout.
-    for (const entry of ["status/reloadable.ts", "status/index.ts", "triage/reloadable.ts", "triage/native.ts"]) {
+    for (const entry of ["status/reloadable.ts", "status/index.ts", "triage/reloadable.ts", "triage/native.ts", "primary-guard/reloadable.ts", "primary-guard/native.ts"]) {
       const destination = join(stage, "src", entry);
       await mkdir(dirname(destination), { recursive: true });
-      execFileSync(bun, ["build", "--target=node", "--format=esm", "--define=A4S_COMPILED=false", "--define=A4S_RELEASE_EXTENSION=true",
+      execFileSync(bun, ["build", "--target=node", "--format=esm", "--external=@oh-my-pi/pi-coding-agent/*", "--external=@oh-my-pi/pi-utils/ar", "--define=A4S_COMPILED=false", "--define=A4S_RELEASE_EXTENSION=true",
         `--define=A4S_BUILD_VERSION=${JSON.stringify(version)}`, `--define=A4S_BUILD_COMMIT=${JSON.stringify(commit)}`,
         `--define=A4S_REGISTRATION_MANIFEST=${JSON.stringify(identity.registrationManifest)}`,
         join(source, "src", entry), "--outfile", destination], { cwd: root, stdio: "inherit" });

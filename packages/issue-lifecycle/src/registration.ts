@@ -38,7 +38,7 @@ export const registrationManifest: ArtifactIdentity["registrationManifest"] = ty
   ? A4S_REGISTRATION_MANIFEST : {
   schema: 1,
   loaderHelperApi: HELPER_API_VERSION,
-  extensions: ["./src/status/index.ts", "./src/triage/native.ts"],
+  extensions: ["./src/status/index.ts", "./src/triage/native.ts", "./src/primary-guard/native.ts"],
   commands: [WORKFLOWS_COMMAND],
   tools: [SESSION_ID_TOOL],
   resources: resourceDigests(),

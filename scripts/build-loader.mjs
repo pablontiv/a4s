@@ -7,6 +7,7 @@ if (process.argv.length !== 4 || process.argv[2] !== "--outdir") throw new Error
 const output = resolve(process.argv[3]);
 await mkdir(output, { recursive: true });
 execFileSync(join(root, "node_modules/.bin/bun"), ["build", "--target=node", "--format=esm",
+  "--external=@oh-my-pi/pi-coding-agent/*",
   join(root, "packages/loader/src/index.ts"), "--outfile", join(output, "loader.ts")], { cwd: root, stdio: "inherit" });
 await writeFile(join(output, "package.json"), JSON.stringify({
   name: "@a4s/loader", version: "0.1.0", private: true, type: "module",

@@ -10,6 +10,53 @@ The source CLI runs with Node's strip-only TypeScript support. The package
 `typecheck` script enables `erasableSyntaxOnly` to reject non-erasable syntax,
 including constructor parameter properties, enums, and runtime namespaces.
 
+## Primary checkout write guard
+
+The package includes the `primary-guard` extension. (This package was formerly
+`@a4s/omp-dagu`; its current name is `@a4s/issue-lifecycle`.) Before a covered
+tool executes, the guard checks **destinations**, not the session's checkout.
+It starts at the nearest existing ancestor, resolves symlinks with `realpath`,
+and compares the real `git rev-parse --absolute-git-dir` and `--git-common-dir`.
+Equal directories identify a primary checkout; different directories identify a
+linked worktree. Linked worktrees, including those nested beneath the primary's
+`.workspace/worktrees/`, and destinations outside Git are allowed. New files are
+classified through their existing ancestor; an unresolvable destination fails
+closed with an explanation.
+
+Covered calls:
+
+- `write`: its destination, including `[PATH#TAG]` wrappers, file-backed internal
+  URIs resolved by OMP with the calling session's context, and archive/SQLite
+  container paths.
+- `edit`: its path(s), hashline file headers, `MV` destinations, and
+  `edits[].rename` destinations.
+- `ast_edit`: real files selected by `paths[]`, including directories and globs.
+- `write xd://<tool>`: dispatch reaches the same guard on the inner tool's
+  `tool_call`; device JSON is not treated as a filesystem path.
+  File-free coordination/reply operations keep the host's non-filesystem policy.
+- Applied LSP `rename`, `rename_file`, and code actions with `apply`: the
+  **request's input file** is checked (and the requested `rename_file`
+  destination, when present). Preview-only and navigation requests pass.
+
+Blocks return
+`PRIMARY_WRITE_BLOCKED: <path>; implement in the issue worktree (.workspace/worktrees/issue-<N>) via feature`.
+Implement through the feature lane in the issue worktree, not in the primary.
+
+**Limits:** OMP's LSP `tool_call` exposes the request before the language server
+returns its `WorkspaceEdit`, not every resulting destination URI. Applied LSP
+edits remain **uncovered beyond the checked request paths**: a request in a
+worktree can still cause a server to edit another checkout. This guard does not
+claim complete WorkspaceEdit protection. `bash`, `eval`, and `debug` execute
+arbitrary code and are not covered; primary cleanliness against those routes
+still depends on `start_gate`/`close_gate`. The guard runs only in sessions that
+load this package. It is a pre-execution guard, not a filesystem sandbox or a
+replacement for the feature gates.
+
+Install the matching launcher/loader and restart OMP when upgrading to this
+registration set; an already-running generation cannot gain a new extension by
+hot switching. Historical pinned artifacts retain their original registrations
+and do not acquire this guard retroactively.
+
 ## PR-head readiness
 
 Fresh feature snapshots use `code_scanning -> pr_head_ready -> auto_merge`.

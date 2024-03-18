@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { registrationHash } from "../../launcher/src/contracts.ts";
 import { harness, selection } from "./fixtures.ts";
+import { assertManifest } from "../src/manifest.ts";
 
 for (const change of ["command", "helper", "loader", "launcher", "skills", "agents"] as const) {
   test(`${change} change prompts restart before leasing or importing`, async t => {
@@ -15,7 +16,7 @@ for (const change of ["command", "helper", "loader", "launcher", "skills", "agen
     if (change === "skills" || change === "agents") candidate.identity.registrationManifest.resources = { [`${change}/example`]: "changed" };
     candidate.identity.registrationManifestHash = registrationHash(candidate.identity.registrationManifest);
     h.setCandidate(candidate); await h.loader.check(h.context);
-    assert.deepEqual(h.counts(), { observers: 1, leases: 1, released: 0, imports: 2 });
+    assert.deepEqual(h.counts(), { observers: 1, leases: 1, released: 0, imports: 3 });
     assert.match(h.notices.join(), /restart OMP/);
   });
 }
@@ -36,4 +37,12 @@ test("constructed metadata must equal declared manifest before publication", asy
   assert.equal(h.host.commands.size, 0);
   assert.equal(h.counts().observers, 1);
   assert.match(h.notices.join(), /Constructed registrations/);
+});
+
+test("pre-guard artifacts remain loadable but changing their registration set requires restart", () => {
+  const legacy = selection(1).identity;
+  legacy.registrationManifest.extensions = ["./src/status/index.ts", "./src/triage/native.ts"];
+  legacy.registrationManifestHash = registrationHash(legacy.registrationManifest);
+  assert.doesNotThrow(() => assertManifest(legacy));
+  assert.throws(() => assertManifest(selection(2).identity, legacy), /restart OMP/);
 });

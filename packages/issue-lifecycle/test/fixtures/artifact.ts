@@ -19,11 +19,11 @@ export function makeArchive(directory: string, version = "0.6.0", commit = "a".r
     writeFileSync(join(stage, "a4s"), `#!/bin/sh\n[ "$1" = version ] || exit 91\nprintf '%s\\n' '${JSON.stringify(declared)}'\n`);
     chmodSync(join(stage, "a4s"), 0o755);
     writeFileSync(join(stage, "package.json"), JSON.stringify({ name: "@a4s/issue-lifecycle", version, repository: { type: "git", url: `git+https://github.com/${repository}.git` },
-      omp: { extensions: ["./src/status/reloadable.ts", "./src/triage/reloadable.ts"] } }));
+      omp: { extensions: ["./src/status/reloadable.ts", "./src/triage/reloadable.ts", "./src/primary-guard/reloadable.ts"] } }));
     for (const entry of ["agents", "skills"]) cpSync(join(packageDirectory, entry), join(stage, entry), { recursive: true });
     mkdirSync(join(stage, "bin"));
     for (const entry of ["gate-cache.cjs", "dagu-gate.cjs", "gate-cache-run.cjs"]) copyFileSync(join(packageDirectory, "bin", entry), join(stage, "bin", entry));
-    for (const entry of ["status/reloadable.ts", "status/index.ts", "triage/reloadable.ts", "triage/native.ts"]) {
+    for (const entry of ["status/reloadable.ts", "status/index.ts", "triage/reloadable.ts", "triage/native.ts", "primary-guard/reloadable.ts", "primary-guard/native.ts"]) {
       const path = join(stage, "src", entry);
       mkdirSync(dirname(path), { recursive: true });
       writeFileSync(path, "export {};\n");

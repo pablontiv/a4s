@@ -31,7 +31,7 @@ test("restore failure before the first import releases only that candidate lease
   await h.loader.initialize(); await h.host.emit("session_start", h.context);
   h.setCandidate(selection(2)); h.setRestoreFailure(true);
   await h.loader.check(h.context);
-  assert.deepEqual(h.counts(), { observers: 1, leases: 2, released: 1, imports: 2 });
+  assert.deepEqual(h.counts(), { observers: 1, leases: 2, released: 1, imports: 3 });
 });
 
 test("OMP process exit removes the retired-reader barrier for a new-format writer", async t => {
