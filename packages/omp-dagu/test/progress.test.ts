@@ -241,3 +241,13 @@ test("notices compare extension, bundle and main on each opening and request sta
     rmSync(primary, { recursive: true, force: true });
   }
 });
+
+test("rewound PoC notice includes the first scope failure diagnostic", () => {
+  const effects = new Transitions("owner").observe({
+    name: "poc", dagRunId: "scope-retry", statusLabel: "waiting",
+    params: "OMP_SESSION_ID=owner", labels,
+    scopeFailureCause: "## Pregunta differs from QUESTION (normalized)",
+    nodes: [{ step: { name: "run_poc", humanTask: {} }, statusLabel: "waiting", approvalIteration: 1 }],
+  });
+  assert.match(effects.wakeMessage!, /iteration=1 cause=## Pregunta differs from QUESTION \(normalized\)$/);
+});

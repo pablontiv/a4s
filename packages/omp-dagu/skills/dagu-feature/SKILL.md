@@ -572,6 +572,16 @@ required for PASS. An empty diff is valid. Tests by the rendered convention and
 all Markdown paths belong to cutover; the scope gate checks tracked changes,
 both rename paths and NUL-delimited untracked names against BASE_SHA.
 
+Each failed result condition prints one stderr diagnostic. A failed scope gate
+waits at `fix_result`; the bounded wait dispatcher pushes it back with the observed
+run-wide iteration to `run_poc`, retaining the worktree and BASE_SHA. Correct the
+result and complete `run_poc` again. The owner notice includes
+`cause=<first scope_gate stderr line>` after that rewind. The extension reads
+the durable `poc/runs/<RUN>/scope-errors` file in PRIMARY's git metadata because
+Dagu clears the scope step's REST log reference on rewind. If dispatch fails,
+inspect `poc/runs/<RUN>/scope-transition.log` in PRIMARY's git metadata and push
+back `fix_result` with the current observed iteration.
+
 ```sh
 dagu human-task complete poc --run-id <id> --step run_poc
 dagu human-task push-back poc --run-id <id> --step decide --expected-iteration 0

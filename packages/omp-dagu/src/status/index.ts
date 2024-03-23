@@ -1,4 +1,7 @@
 import { setTimeout as delay } from "node:timers/promises";
+import { execFile } from "node:child_process";
+import { readFile } from "node:fs/promises";
+import { promisify } from "node:util";
 import { activityTarget, readActivity } from "./activity.ts";
 import { ghIssueTitleResolver, IssueTitles } from "./issue-title.ts";
 import { isActive, issueNumber, renderOffline, renderWidget, runParam, TOGGLE_COMMAND, topicFor, Transitions } from "./progress.ts";
@@ -9,6 +12,7 @@ import type { SSEEvent } from "./sse.ts";
 import { EventLog } from "./event-log.ts";
 
 const REQUEST_TIMEOUT_MS = 15_000;
+const exec = promisify(execFile);
 
 // OMP's structural surface avoids a runtime dependency on a provider-specific host.
 interface Context {
@@ -93,7 +97,21 @@ async function runDetails(base: string, summary: RunDetails, signal: AbortSignal
   });
   if (!response.ok) throw new RunDetailsError(response.status);
   const payload = await response.json() as { dagRunDetails?: RunDetails };
-  return { ...summary, ...payload.dagRunDetails };
+  const details = { ...summary, ...payload.dagRunDetails };
+  const primary = runParam(details, "PRIMARY");
+  if (details.name === "poc" && primary && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(details.dagRunId)
+    && details.nodes?.some(node => node.step.name === "run_poc"
+      && node.statusLabel === "waiting" && (node.approvalIteration ?? 0) > 0)) {
+    try {
+      const { stdout } = await exec("git", ["-C", primary, "rev-parse", "--path-format=absolute",
+        "--git-path", `poc/runs/${details.dagRunId}/scope-errors`], { signal, timeout: 5000 });
+      const cause = (await readFile(stdout.trim(), "utf8")).split(/\r?\n/).find(line => line.trim());
+      if (cause) details.scopeFailureCause = cause;
+    } catch {
+      // A remote or missing local primary cannot supply the durable diagnostic.
+    }
+  }
+  return details;
 }
 
 async function streamTopics(base: string, topics: string[], signal: AbortSignal, emit: (event: SSEEvent) => void) {

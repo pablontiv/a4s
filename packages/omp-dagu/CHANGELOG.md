@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.60
+
+- Diagnose PoC result scope failures and rewind the same run to run_poc with the first diagnostic in its owner notice (#266).
+
 ## 0.3.58
 
 - Apply station defaults through coordinated admission, running/queued drain, TERM restart and next-enqueue concurrency verification; preserve admission closure and recovery barriers on failure (#255).
