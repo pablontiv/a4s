@@ -1119,9 +1119,13 @@ The executor returns structured `summary` and conventional `message`; Dagu emits
 `SUMMARY`, `MESSAGE` and the role-job id as `IMPLEMENTER` for `capture`.
 
 The role works only in its assigned worktree, resolves retained conflict paths,
-and runs the issue's targeted tests. Its summary retains the
-exact commands/results. Dagu owns staging, commits and publication, and runs the
-complete configured gate. Operator configuration stays operator-owned.
+and runs the issue's targeted tests. Its summary is published verbatim in the PR
+body and must not contain host absolute paths, including in commands. Retain
+commands/results using repository-relative paths or placeholders (`<primary>`,
+`<worktree>`, `~`, `$DAGU_HOME`), explicitly identifying substitutions. Keep raw
+commands/results containing host paths only in run artifacts. Dagu owns staging,
+commits and publication, and runs the complete configured gate. Operator
+configuration stays operator-owned.
 
 On a local gate return through `recover_gate` → `implement_budget`, the assignment
 includes failure evidence from `gate.json` only when its SHA matches the current

@@ -239,6 +239,10 @@ test("each required semantic stage has a registered role contract and Dagu consu
       if (role !== "triage") {
         assert.ok(assignment.includes("/state/ci-return.json"));
         assert.ok(assignment.includes("CodeQL findings (rule, severity, location and message)"));
+        assert.ok(assignment.includes("Your summary is published verbatim in the PR body: no host absolute paths."));
+        assert.ok(assignment.includes("repository-relative paths or placeholders (<primary>, <worktree>, ~, $DAGU_HOME)"));
+        assert.ok(assignment.includes("retain raw commands/results with host paths only in run artifacts"));
+        assert.ok(assignment.includes("identify any placeholder substitutions in the summary"));
       }
     }
     const dag = parse(readFileSync(new URL("../skills/issue-execution/feature.yaml", import.meta.url), "utf8"));

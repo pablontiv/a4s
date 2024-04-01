@@ -44,10 +44,40 @@ test("PR body accepts the filled template, refs, relative paths and public-safe 
   } finally { f.cleanup(); }
 });
 
+test("path checks accept nested and relative home components and do not consume prose whitespace", () => {
+  const f = fixture();
+  try {
+    for (const text of [
+      "Azure CLI: /nix/home/.azure/cliextensions",
+      "Use nix/home/example/config and docs/Users/example/config.",
+      "Preserved /home/shared and left keyboard maps undefined; see ci-return.json and packages/issue-lifecycle.",
+      "Preserved /home/shared and checked docs/config.",
+      'Preserved "/home/shared" and checked "docs/config".',
+      "Preserved `/home/shared` and checked `docs/config`.",
+      "See https://example.test/home/example/config.",
+    ]) {
+      const value = body.replace("Describe the behavior change.", text);
+      assert.equal(f.check(value).status, 0, text);
+      assert.equal(f.check(value, "check-paths").status, 0, text);
+      f.save("candidate.json", { sha: "candidate", summary: text });
+      f.save("gate.json", { sha: "candidate", gate: "npm test", result: "PASS" });
+      const rendered = run("render", f.root, "677");
+      assert.equal(rendered.status, 0, rendered.stderr);
+      assert.ok(rendered.stdout.includes(text));
+    }
+  } finally { f.cleanup(); }
+});
+
 test("PR body rejects host paths in prose, commands, code and comments", () => {
   const f = fixture();
   try {
-    for (const path of ["/Users/example/private/repo", "/home/example/worktree/file", "/Users/Example User/private/file"]) {
+    for (const path of [
+      "/Users/example/private/repo", "/home/example/worktree/file",
+      '"/Users/Example User/private/file"', "'/home/Example User/private/file'",
+      "`/Users/Example User/private/file`",
+      "HOME=/home/example/worktree", "(/Users/example/private/repo)",
+      "[artifact](/home/example/worktree/file)", "--output=/home/example/worktree/file",
+    ]) {
       for (const value of [body.replace("Describe the behavior change.", path), body + `\n\`\`\`\n${path}\n\`\`\`\n`, body + `\n<!-- ${path} -->`]) {
         const result = f.check(value);
         assert.equal(result.status, 1);

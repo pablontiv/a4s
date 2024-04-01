@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.4
+
+- Tell implementation and conflict-resolution roles that summaries become PR bodies: use repository-relative paths or explicit placeholders, with raw host-specific commands/results retained only in run artifacts. Bound host-path checks to path starts and unquoted username tokens (allow spaces inside quoted paths), so nested sandbox paths and `/home/shared` prose no longer block feature PRs or PoC publication (#677).
+- Register the TypeScript loader inside the station-home isolation test worker before importing source fixtures, preserving the regression check under Node's strip-only TypeScript support.
+
 ## 0.7.3
 
 - Bootstrap rejects missing or incorrect `auth.mode: none` / `coordinator.enabled: true` station config before adoption and probes its existing run-spec API through unauthenticated loopback access, the same route used by feature admission. Failures identify the operator-owned config merge and service restart; readiness never modifies station files (#673).
