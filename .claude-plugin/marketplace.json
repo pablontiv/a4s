@@ -4,7 +4,7 @@
     "name": "pablontiv"
   },
   "metadata": {
-    "description": "Marketplace de A4S: plugins de Claude para harnesses de agentes (mensajería synagent y compactación context-expert)."
+    "description": "A4S marketplace: Claude plugins for synagent messaging."
   },
   "plugins": [
     {
@@ -12,12 +12,6 @@
       "source": "./packages/synagent/core/adapters/claude",
       "description": "Adaptador de canal de Claude para synagent (bus MQTT): JALAR por push + ENVIAR con /mq-send.",
       "category": "messaging"
-    },
-    {
-      "name": "a4s-context-expert",
-      "source": "./packages/context-expert/adapters/claude",
-      "description": "Compactación determinista guiada por Jev (TypeSafe): reemplaza el resumen nativo por un transcript keep/truncate/drop y auto-compacta por umbral de contexto.",
-      "category": "context"
     }
   ]
 }
