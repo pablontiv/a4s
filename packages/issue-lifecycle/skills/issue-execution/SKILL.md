@@ -955,6 +955,9 @@ native start timestamp permits recovery from failed/interrupted role jobs.
 
 | DAG | Failed Waiting checkpoint | Retry step |
 |---|---|---|
+| feature | triage | admit |
+| feature | implement | start_gate |
+| feature | quality_review | quality_prepare |
 | feature | start_primary_unavailable | detect_start_primary |
 | feature | recover_start_gate | start_gate |
 | feature | dependency_review | checkpoint_push |
@@ -1024,14 +1027,18 @@ feature run when all of the following hold:
   `process terminated unexpectedly - stale local process detected`;
 - that event's `source_service` is `scheduler` and its `source_instance` differs
   from the previous status event for the same attempt;
-- the previous status event is `dag.run.waiting` or `dag.run.queued`.
+- the previous status event is `dag.run.waiting` or `dag.run.queued`, with valid
+  timestamps no more than five seconds apart. A later stale-process failure is
+  not identified as the immediate scheduler overwrite and remains Failed.
 
 A Waiting checkpoint uses the retry step in the table above. `await_ci` and
-`await_merge` both retry `auto_merge`. `triage` and `implement` retry themselves
-when they are the waiting step. A Queued resume retries the first feature step
-that is not succeeded or skipped; a pending human-task checkpoint still uses
-the table, because that checkpoint is not itself retryable. The command is
-`dagu retry --run-id <run> --step <step> --downstream feature`. The same line is
+`await_merge` both retry `auto_merge`. Immutable snapshots with human-task
+`triage`, `implement` or `quality_review` use their legacy table rows; today's
+command stages are not Waiting checkpoints. A Queued resume retries the first
+unfinished step in the event's original node order, not the installed template's
+step list, preserving completed decisions even across bundle changes. A pending
+human-task checkpoint still uses the table because it is not itself retryable.
+The command is `dagu retry --run-id <run> --step <step> --downstream feature`. The same line is
 written to stderr with the run, attempt, checkpoint, step and command, and
 appended to `$DAGU_HOME/stale-recovery.json`.
 

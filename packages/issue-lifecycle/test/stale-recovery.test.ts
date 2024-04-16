@@ -79,7 +79,7 @@ process.exit(91);
     chmodSync(join(bin, "dagu"), 0o755);
     const events = [
       ...pair("waiting-conflict", "aaa111", "dag.run.waiting", [node("conflict_review", 7)]),
-      ...pair("queued-gate", "bbb222", "dag.run.queued", queuedThrough("gate")),
+      ...pair("queued-gate", "bbb222", "dag.run.queued", [node("start_gate", 4), node("implement", 4), node("capture", 4), node("rebase", 4), node("conflict_review", 4), node("gate", 0)]),
       ...pair("await-ci", "ccc333", "dag.run.waiting", [node("await_ci", 7), node("await_merge", 7)]),
       ...pair("gate-failed", "ddd444", "dag.run.waiting", [node("recover_gate", 7)], "gate command failed"),
       ...pair("still-running", "eee555", "dag.run.waiting", [node("validation", 7)]),
@@ -106,6 +106,25 @@ process.exit(91);
     assert.match(second.stderr, /stale-process recovery budget: run=waiting-conflict attempt=aaa111 step=rebase command=dagu retry --run-id waiting-conflict --step rebase --downstream feature; not retried/);
     assert.match(second.stderr, /stale-process recovery budget: run=await-ci attempt=ccc333 step=auto_merge/);
     assert.equal(retryCommands(calls).length, 3);
+    // A second scheduler overwrite on the same attempt is still over budget,
+    // even if the checkpoint advanced since the first recovery.
+    const repeated = pair("waiting-conflict", "aaa111", "dag.run.waiting", [node("validation", 7)])
+      .map((entry, index) => ({ ...entry, occurred_at: `2026-10-22T06:08:${15 + index}.000Z` }));
+    const eventFile = join(home, "logs", "admin", "events", "20261022.jsonl");
+    writeFileSync(eventFile, [...events, ...repeated].map(entry => JSON.stringify(entry)).join("\n") + "\n");
+    const exhausted = recover(home, bin, calls);
+    assert.equal(exhausted.status, 0, exhausted.stderr);
+    assert.match(exhausted.stderr, /budget: run=waiting-conflict attempt=aaa111 step=gate .*not retried/);
+    assert.equal(retryCommands(calls).length, 3);
+
+    // Native retry creates a distinct attempt; its budget is independent.
+    const nextAttempt = pair("waiting-conflict", "new111", "dag.run.waiting", [node("conflict_review", 7)])
+      .map((entry, index) => ({ ...entry, occurred_at: `2026-10-22T06:08:${17 + index}.000Z` }));
+    writeFileSync(eventFile, [...events, ...repeated, ...nextAttempt].map(entry => JSON.stringify(entry)).join("\n") + "\n");
+    const next = recover(home, bin, calls);
+    assert.equal(next.status, 0, next.stderr);
+    assert.match(next.stderr, /recovery: run=waiting-conflict attempt=new111 checkpoint=conflict_review step=rebase/);
+    assert.equal(retryCommands(calls).length, 4);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -136,4 +155,63 @@ test("stale-process recovery follows the SKILL table and refuses non-stale or sa
   const resumed = decideStaleRecoveries(pair("after-capture", "444ddd", "dag.run.queued", queuedThrough("rebase")), emptyLedger())[0];
   assert.equal(resumed?.action, "retry");
   assert.equal(resumed?.action === "retry" ? resumed.step : "", "rebase");
+  for (const [checkpoint, step] of [["implement", "start_gate"], ["quality_review", "quality_prepare"]] as const) {
+    const legacy = decideStaleRecoveries(pair(`legacy-${checkpoint}`, "555eee", "dag.run.waiting", [node(checkpoint, 7)]), emptyLedger())[0];
+    assert.equal(legacy?.action === "retry" ? legacy.step : "", step);
+  }
+  const newerAttempt = [
+    ...pair("new-attempt", "old111", "dag.run.waiting", [node("conflict_review", 7)]),
+    event({ type: "dag.run.failed", at: "2026-10-22T06:08:15.000Z", service: "cli", instance: "station:112", run: "new-attempt", attempt: "new222", error: "gate failed" }),
+  ];
+  assert.deepEqual(decideStaleRecoveries(newerAttempt, emptyLedger()), []);
+});
+
+test("recovery requires the scheduler signature on the latest attempt and latest status", () => {
+  const original = pair("strict-signature", "111aaa", "dag.run.waiting", [node("conflict_review", 7)]);
+  for (const change of [
+    { source_service: "cli" },
+    { source_instance: "" },
+    { type: "dag.run.aborted" },
+    { data: { dag_run_status: { error: "CI verification failed" } } },
+  ]) {
+    assert.deepEqual(decideStaleRecoveries([original[0]!, { ...original[1]!, ...change }], emptyLedger()), []);
+  }
+  const resumed = event({
+    type: "dag.run.queued", at: "2026-10-22T06:08:15.000Z", service: "cli",
+    instance: "station:112", run: "strict-signature", attempt: "111aaa", nodes: queuedThrough("gate"),
+  });
+  assert.deepEqual(decideStaleRecoveries([...original, resumed], emptyLedger()), []);
+  // A status from a different attempt cannot supply the required predecessor.
+  assert.deepEqual(decideStaleRecoveries([
+    { ...original[0]!, attempt_id: "old111" }, original[1]!,
+  ], emptyLedger()), []);
+
+  for (const [checkpoint, step] of Object.entries(FEATURE_CHECKPOINT_RETRY)) {
+    const decision = decideStaleRecoveries(pair(`table-${checkpoint}`, "111aaa", "dag.run.waiting", [node(checkpoint, 7)]), emptyLedger())[0];
+    assert.equal(decision?.action === "retry" ? decision.step : undefined, step, checkpoint);
+  }
+});
+
+test("recovery requires an immediate scheduler overwrite with valid event timestamps", () => {
+  const original = pair("immediate-repair", "111aaa", "dag.run.waiting", [node("conflict_review", 7)]);
+  for (const at of ["2026-10-22T06:08:18.001Z", "", "invalid"]) {
+    const failed = { ...original[1]!, occurred_at: at, recorded_at: at };
+    assert.deepEqual(decideStaleRecoveries([original[0]!, failed], emptyLedger()), [], at);
+  }
+  const boundary = { ...original[1]!, occurred_at: "2026-10-22T06:08:18.000Z" };
+  assert.equal(decideStaleRecoveries([original[0]!, boundary], emptyLedger())[0]?.action, "retry");
+  const missingPreviousTime = { ...original[0]!, occurred_at: "", recorded_at: "" };
+  assert.deepEqual(decideStaleRecoveries([missingPreviousTime, original[1]!], emptyLedger()), []);
+});
+
+test("native RFC3339Nano timestamps order zero and fractional seconds across admin files", () => {
+  const events = pair("timestamp-order", "111aaa", "dag.run.waiting", [node("conflict_review", 7)]);
+  events[0] = { ...events[0]!, occurred_at: "2026-10-22T06:08:13Z" };
+  events[1] = { ...events[1]!, occurred_at: "2026-10-22T06:08:13.000000001Z" };
+  assert.equal(decideStaleRecoveries([...events].reverse(), emptyLedger())[0]?.action, "retry");
+  const newerFailure = event({
+    type: "dag.run.failed", at: "2026-10-22T06:08:13.000000002Z", service: "cli",
+    instance: "station:112", run: "timestamp-order", attempt: "new222", error: "verifier failed",
+  });
+  assert.deepEqual(decideStaleRecoveries([newerFailure, ...events].reverse(), emptyLedger()), []);
 });

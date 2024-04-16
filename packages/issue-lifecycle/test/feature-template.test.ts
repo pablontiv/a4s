@@ -20,6 +20,7 @@ import { roleAssignment, runRoleJob } from "../src/role-dispatch.ts";
 import { copyRepositorySeed, normalizedFixtureSnapshot, SEED_COMMIT_DATE, settleCopiedRepository } from "./fixtures/repository-seed.ts";
 import { testRunId } from "./fixtures/run-id.ts";
 import { renderedFeature, renderedPoc } from "./fixtures/rendered-feature.ts";
+import { readAdminEvents, STALE_PROCESS_ERROR } from "../src/stale-recovery.ts";
 
 const timingBin = mkdtempSync(join(tmpdir(), "a4s-gate-cli-"));
 symlinkSync(fileURLToPath(new URL("../bin/dagu-gate.cjs", import.meta.url)), join(timingBin, "dagu-gate"));
@@ -2999,19 +3000,24 @@ fi
   });
 }
 
-test("real Dagu retries a Failed feature predecessor to the same Waiting checkpoint", {
+test("real Dagu automatically recovers a stale Failed feature in one reconcile tick", {
   ...liveDagu,
   timeout: 120_000,
-}, async () => {
+}, async t => {
   assert.equal(liveDaguVersion, "2.20.1");
   const fixture = await recoveryFixture();
   try {
     const id = `stale-recovery-${fixture.suffix}`;
     const file = join(fixture.home, "dags", "feature.yaml");
-    writeFileSync(file, "name: feature\ntype: graph\nshell: bash\nsteps:\n  - id: start_gate\n    run: echo retained-predecessor\n  - id: implement\n    depends: start_gate\n    action: human.task\n    with:\n      prompt: Recover this checkpoint in the same run\n");
+    writeFileSync(file, "name: feature\ntype: graph\nshell: bash\nparams:\n  - RETAINED: original\nsteps:\n  - id: start_gate\n    run: echo retained-predecessor\n  - id: implement\n    depends: start_gate\n    action: human.task\n    with:\n      prompt: Recover this checkpoint in the same run\n");
     const started = spawnSync("dagu", ["start", "--run-id", id, file], { env: fixture.env, encoding: "utf8" });
     assert.equal(started.status, 0, started.stderr);
     await fixture.state(id, "waiting");
+    const eventsDirectory = join(fixture.home, "logs", "admin", "events");
+    const waitingEvent = await fixture.until("native Waiting admin event", async () =>
+      readAdminEvents(eventsDirectory).find(event => event.dag_run_id === id && event.type === "dag.run.waiting"));
+    assert.ok(waitingEvent.attempt_id);
+    assert.ok(waitingEvent.source_instance);
     // Inject the scheduler repair snapshot in this isolated store. The race
     // itself is external; retry and checkpoint restoration use real Dagu.
     const store = join(fixture.home, "data", "dag-runs", "feature");
@@ -3023,14 +3029,30 @@ test("real Dagu retries a Failed feature predecessor to the same Waiting checkpo
     snapshot.error = "process terminated unexpectedly - stale local process detected";
     for (const node of snapshot.nodes) if (node.status === 7 || node.status === 0) node.status = 2;
     appendFileSync(statusFile, JSON.stringify(snapshot) + "\n");
+    // Only the external scheduler overwrite is injected. Detection, budgeting,
+    // CLI retry and checkpoint restoration run through the real reconcile step.
+    const failedAt = new Date().toISOString();
+    appendFileSync(join(eventsDirectory, "stale-repair-fixture.jsonl"), JSON.stringify({
+      ...waitingEvent, type: "dag.run.failed", occurred_at: failedAt, recorded_at: failedAt,
+      source_service: "scheduler", source_instance: "isolated-scheduler:64722",
+      data: { dag_run_status: { ...snapshot, error: STALE_PROCESS_ERROR } },
+    }) + "\n");
     const status = spawnSync("dagu", ["status", "--run-id", id, "feature"], { env: fixture.env, encoding: "utf8" });
     assert.match(status.stdout, /^Failed -/);
     const response = await fetch(`http://127.0.0.1:${fixture.port}/api/v1/dag-runs/feature/${id}`);
     const before = (await response.json() as { dagRunDetails: LiveDetail }).dagRunDetails;
     assert.equal(before.statusLabel, "failed");
     assert.equal(before.dagRunId, id);
-    const retried = spawn("dagu", ["retry", "--run-id", id, "--step", "start_gate", "--downstream", "feature"], {
-      env: fixture.env, stdio: ["ignore", "pipe", "pipe"],
+    const bin = join(fixture.root, "bin");
+    mkdirSync(bin);
+    const cli = fileURLToPath(new URL("../bin/dagu-stale-recovery.ts", import.meta.url));
+    const loader = import.meta.resolve("tsx");
+    writeFileSync(join(bin, "dagu-stale-recovery"), `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} --import ${JSON.stringify(loader)} ${JSON.stringify(cli)} "$@"\n`, { mode: 0o755 });
+    const script = extractScript(fileURLToPath(new URL("../skills/issue-execution/reconcile.yaml", import.meta.url)), "  - id: recover_stale");
+    const tick = join(fixture.home, "dags", "recovery-tick.yaml");
+    writeFileSync(tick, `name: recovery-tick\nshell: bash\nsteps:\n  - id: recover_stale\n    run: |\n${script.split("\n").map(line => `      ${line}`).join("\n")}\n`);
+    const retried = spawn("dagu", ["start", "--run-id", `tick-${fixture.suffix}`, tick], {
+      env: { ...fixture.env, PATH: `${bin}:${fixture.env.PATH}` }, stdio: ["ignore", "pipe", "pipe"],
     });
     let retryLog = "";
     retried.stdout.on("data", chunk => { retryLog += chunk; });
@@ -3047,6 +3069,14 @@ test("real Dagu retries a Failed feature predecessor to the same Waiting checkpo
     assert.equal(waiting.dagRunId, id);
     assert.equal(waiting.nodes.find(node => node.step.name === "implement")?.statusLabel, "waiting");
     assert.equal(await exited, 0);
+    const ledger = JSON.parse(readFileSync(join(fixture.home, "stale-recovery.json"), "utf8"));
+    assert.equal(ledger.recoveries.length, 1);
+    assert.equal(ledger.recoveries[0].run, id);
+    assert.equal(ledger.recoveries[0].attempt, waitingEvent.attempt_id);
+    assert.equal(ledger.recoveries[0].step, "start_gate");
+    const after = JSON.parse(readFileSync(statusFile, "utf8").trim().split("\n").at(-1)!);
+    assert.deepEqual(after.params, snapshot.params);
+    t.diagnostic(`Dagu ${liveDaguVersion}; one native reconcile recovery step; injected scheduler overwrite only; same run=${id}; attempt=${waitingEvent.attempt_id}; step=start_gate; restored implement=waiting; parameters preserved; retries=1`);
   } finally { await fixture.close(); }
 });
 

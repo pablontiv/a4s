@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.23
+
+- Restore legacy feature human-task recovery targets and select Queued successors from the original attempt's node order, preserving completed decisions across bundle changes. Exercise automatic reconciliation on pinned Dagu 2.20.1, with per-attempt budget and non-stale failure coverage (#553).
+- Require valid admin-event timestamps within five seconds for automatic stale-process recovery, so a delayed stale-process failure is not mistaken for the immediate Waiting/Queued scheduler overwrite (#553).
+
 ## 0.5.22
 
 - Install station executors as independent exact-commit clones under `$DAGU_HOME/executors`, without development-clone worktree registrations or shared Git objects (#623).
