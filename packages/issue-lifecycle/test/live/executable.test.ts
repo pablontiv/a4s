@@ -278,7 +278,7 @@ test("release archives and the compiled engine work from an extracted root", {
     rmSync(join(home, "cache/a4s/leases", `${selected.lease.id}.json`));
     assert.equal(readFileSync(oldPath, "utf8"), receiptBytes);
     assert.equal(existsSync(pythonCalled), false, "the released engine must not invoke Python");
-    assert.equal(readdirSync(join(extracted, "src")).sort().join(","), "status,triage");
+    assert.equal(readdirSync(join(extracted, "src")).sort().join(","), "primary-guard,status,triage");
     assert.equal(basename(executable), "a4s");
   } finally { rmSync(temporary, { recursive: true, force: true }); }
 });

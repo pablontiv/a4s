@@ -43,7 +43,13 @@ test("every identity-bound lifecycle snapshot uses dynamic shell and tuple witho
     const rendered = materializeDag(root, name, exampleConfig(), { version: "fixture", source: "fixture", artifact, executable: "/old-cache/a4s" });
     for (const document of parseAllDocuments(rendered)) {
       const value = document.toJSON(), env = Object.assign({}, ...value.env);
-      assert.deepEqual(value.shell, ["a4s", "station-shell"]);
+      assert.equal(value.shell, "bash");
+      for (const step of value.steps ?? []) {
+        if (typeof step.run === "string") assert.ok(step.run.startsWith('if [[ ${1-} != --a4s-station-shell ]]; then\n'));
+      }
+      for (const handler of Object.values(value.handler_on ?? {}) as Array<{ run?: string }>) {
+        if (handler.run) assert.ok(handler.run.startsWith('if [[ ${1-} != --a4s-station-shell ]]; then\n'));
+      }
       assert.equal(env.A4S_ARTIFACT, artifact);
       for (const field of ["DAGU_URL", "DAGU_HOME", "PATH", "A4S_SERVICE_ENV", "A4S_BIN"]) assert.equal(env[field], undefined);
     }

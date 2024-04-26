@@ -26,6 +26,9 @@ import { testRunId } from "../fixtures/run-id.ts";
 import { renderedFeature, renderedPoc } from "../fixtures/rendered-feature.ts";
 import { readAdminEvents, STALE_PROCESS_ERROR } from "../../src/stale-recovery.ts";
 import { compiledA4sBin, compiledArtifact } from "../fixtures/admission.ts";
+import { exampleConfig } from "../../../launcher/src/config.ts";
+import { stationBinding } from "../../../launcher/src/station-binding.ts";
+import { artifactToken } from "../../../launcher/src/release.ts";
 
 const a4sBin = compiledA4sBin();
 
@@ -2535,7 +2538,7 @@ function declaredStation(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return { A4S_SERVICE_ENV: env.A4S_SERVICE_ENV, DAGU_HOME: env.DAGU_HOME, DAGU_URL: env.DAGU_URL };
 }
 
-async function recoveryFixture(extraConfig = ""): Promise<RecoveryFixture> {
+async function recoveryFixture(extraConfig = "", path = process.env.PATH, waitMs = 60_000): Promise<RecoveryFixture> {
   const suffix = testRunId("recovery");
   const root = realpathSync(mkdtempSync(join(tmpdir(), "omp-dagu-triage-close-")));
   const home = join(root, "dagu-home");
@@ -2546,7 +2549,7 @@ async function recoveryFixture(extraConfig = ""): Promise<RecoveryFixture> {
   assert.ok(address && typeof address !== "string");
   const port = address.port;
   await new Promise<void>((resolve, reject) => listener.close(error => error ? reject(error) : resolve()));
-  const env: NodeJS.ProcessEnv = stationEnvironment({ ...process.env, A4S_BIN: a4sBin, DAGU_PARAMS_JSON: "{}", DAGU_HOME: home, DAGU_PORT: String(port), DAGU_COORDINATOR_ENABLED: "false" });
+  const env: NodeJS.ProcessEnv = stationEnvironment({ ...process.env, PATH: path, A4S_BIN: a4sBin, DAGU_PARAMS_JSON: "{}", DAGU_HOME: home, DAGU_PORT: String(port), DAGU_COORDINATOR_ENABLED: "false" });
   // Fixture CLI retries are user requests; its scheduler supplies dispatch context.
   delete env.DAGU_QUEUE_DISPATCH_RETRY;
   delete env.DAG_PUSHBACK_ITERATION;
@@ -2561,7 +2564,7 @@ async function recoveryFixture(extraConfig = ""): Promise<RecoveryFixture> {
   service.stderr.on("data", data => { serviceLog += data; });
   const api = `http://127.0.0.1:${port}/api/v1`;
   async function until<T>(description: string, probe: () => Promise<T | undefined>): Promise<T> {
-    const deadline = Date.now() + 60_000;
+    const deadline = Date.now() + waitMs;
     while (Date.now() < deadline) {
       const value = await probe();
       if (value !== undefined) return value;
@@ -2603,6 +2606,95 @@ async function recoveryFixture(extraConfig = ""): Promise<RecoveryFixture> {
     throw error;
   }
 }
+
+// Release-sized native coverage: real Dagu, real station shell, real compiled
+// engine and local Git origin. Only GitHub responses are replaced.
+test("release minimal live feature preserves JSON, locks ownership, gates and authorizes the candidate", { timeout: 180_000 }, async () => {
+  assert.equal(liveDaguVersion, "2.24.0", "release acceptance requires pinned Dagu, never a skipped live test");
+  const run = testRunId("release-smoke");
+  const repo = repository(run);
+  const previous = process.env;
+  const bin = join(repo.root, "bin");
+  // Replace fixture links, never write through the shared source executable.
+  rmSync(join(bin, "a4s"));
+  rmSync(join(bin, "dagu"));
+  const launcher = fileURLToPath(new URL("../../../launcher/src/cli.ts", import.meta.url));
+  writeFileSync(join(bin, "a4s"), `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} --import ${JSON.stringify(import.meta.resolve("tsx"))} ${JSON.stringify(launcher)} "$@"\n`, { mode: 0o755 });
+  writeFileSync(join(bin, "omp"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  const fixture = await recoveryFixture("", `${bin}:${process.env.PATH}`, 120_000);
+  try {
+    const env = fixture.env;
+    process.env = env;
+    const artifact = compiledArtifact(fixture.home);
+    const rendered = parse(materializeDag(
+      fileURLToPath(new URL("../../", import.meta.url)), "feature.yaml",
+      exampleConfig({ lane: "release-fixture", gate: "true", codeScanning: "off" }),
+      { version: artifact.version, source: "release-fixture", artifact: artifactToken(artifact) },
+    ));
+    commit(repo, "release-smoke.txt", "Unmerged release acceptance candidate\n");
+    const sha = git(repo.worktree, "rev-parse", "HEAD");
+    writeFileSync(join(repo.state, "codeql-policy.json"), JSON.stringify({ sha, mode: "off" }));
+    writeFileSync(join(bin, "gh"), `#!/bin/sh
+case "$*" in
+  "repo view "*) printf 'fixture/repo\\n' ;;
+  "pr view "*"--json number,state,headRefOid,mergeCommit") printf '%s\\n' '{"number":1,"state":"OPEN","headRefOid":"${sha}","mergeCommit":null}' ;;
+  "pr view "*"--json headRefOid --jq .headRefOid") printf '%s\\n' '${sha}' ;;
+  "pr checks "*) printf '%s\\n' '[{"name":"validate","state":"SUCCESS"}]' ;;
+  "api --paginate --slurp "*) printf '%s\\n' '[{"check_runs":[{"name":"validate","head_sha":"${sha}","id":1,"status":"completed","conclusion":"success"}]}]' ;;
+  "api "*) printf '%s\\n' '{"sha":"${sha}","statuses":[]}' ;;
+  *) printf 'unexpected gh invocation: %s\\n' "$*" >&2; exit 1 ;;
+esac
+`, { mode: 0o755 });
+    const variables = {
+      ...Object.assign({}, ...rendered.env),
+      ...declaredStation(env), PRIMARY: repo.primary, WORKTREE: repo.worktree,
+      RUN: run, BRANCH: repo.branch, A4S_ARTIFACT: artifactToken(artifact),
+    };
+    // PRIMARY is a policy value, not an admitted parameter. Keep Dagu's typed
+    // parameter JSON intact so r499's pre-expansion fails here at admission.
+    const ids = ["admission", "admit", "gate", "authorize_ci"];
+    const steps = ids.map((id, index) => {
+      const step = rendered.steps.find((step: { id: string }) => step.id === id);
+      assert.ok(step, id);
+      return { ...step, depends: index ? [ids[index - 1]] : [] };
+    });
+    // Production snapshots JSON-quote PRIMARY for ownership-history decoding.
+    const snapshot = stringify({
+      name: "feature", type: "graph", shell: rendered.shell, max_active_steps: 1,
+      params: rendered.params, env: Object.entries(variables).map(([key, value]) => ({ [key]: value })),
+      steps, handler_on: { exit: rendered.handler_on.exit },
+    }).replace(/^  - PRIMARY:.*$/m, `  - PRIMARY: ${JSON.stringify(repo.primary)}`);
+    const receipt = roleAdmission(repo.primary, fixture.home, run, snapshot, artifact);
+    receipt.initial.runtimeAndModels.station = stationBinding();
+    writeFileSync(join(repo.state, "receipt.json"), JSON.stringify(receipt));
+    const dag = join(fixture.home, "dags", "feature.yaml");
+    writeFileSync(dag, snapshot);
+    execFileSync("dagu", ["enqueue", "--run-id", run, dag, "--", "ISSUE=189", "OMP_SESSION_ID=release-owner"], { env, stdio: "pipe" });
+    const result = await fixture.state(run, "succeeded");
+    for (const id of ids) assert.equal(result.nodes.find(node => node.step.name === id)?.statusLabel, "succeeded", id);
+    const authorization = result.nodes.find(node => node.step.name === "authorize_ci")!;
+    assert.match(readFileSync(authorization.stdout!, "utf8"), new RegExp(`authorized_sha=${sha}`));
+    await fixture.until("release onExit succeeded", async () => {
+      const response = await fetch(`${env.DAGU_URL}/api/v1/dag-runs/feature/${run}`);
+      const detail = (await response.json() as { dagRunDetails: LiveDetail }).dagRunDetails;
+      if (detail.onExit?.statusLabel === "failed") assert.fail(JSON.stringify(detail));
+      return detail.onExit?.statusLabel === "succeeded" ? true : undefined;
+    });
+    const gate = JSON.parse(readFileSync(join(repo.state, "gate.json"), "utf8"));
+    assert.equal(gate.sha, sha);
+    assert.equal(gate.result, "PASS");
+    assert.equal(readFileSync(join(repo.state, "tested-sha"), "utf8").trim(), sha);
+    const owner = JSON.parse(readFileSync(join(repo.state, "resource.json"), "utf8"));
+    assert.deepEqual(owner, { run, primary: repo.primary, branch: repo.branch, worktree: repo.worktree });
+    assert.equal(readFileSync(join(repo.primary, ".git/dagu-feature/owners/issue-189"), "utf8").trim(), `${run}\t${repo.branch}`);
+    assert.ok(existsSync(repo.worktree), "unmerged throwaway work is retained by onExit");
+    assert.match(readFileSync(join(repo.state, "cleanup-diagnostic"), "utf8"), /PR is not MERGED/);
+  } finally {
+    process.env = previous;
+    await fixture.close();
+    rmSync(repo.root, { recursive: true, force: true });
+  }
+});
 
 for (const [name, definition] of definitions) {
   test(`${name} real Dagu automatically returns failed gates to implement and stops at escalation`, {

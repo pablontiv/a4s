@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import type { LifecycleConfig } from "../../launcher/src/config.ts";
 import type { CoordinatingSession } from "./planning-transcript.ts";
+import { isScalar, parseAllDocuments, visit } from "yaml";
 
 export const LIFECYCLE_DAGS = ["feature.yaml", "poc.yaml", "discovery.yaml", "planning.yaml", "reconcile.yaml"] as const;
 export type LifecycleDag = (typeof LIFECYCLE_DAGS)[number];
@@ -52,6 +53,15 @@ function replacements(config: LifecycleConfig, identity: { version: string; sour
   };
 }
 
+/** Re-enter Dagu's script through the station boundary without interpolating it. */
+export function stationScript(script: string): string {
+  return `if [[ \${1-} != --a4s-station-shell ]]; then
+  exec a4s station-shell -e "$0" --a4s-station-shell "$@"
+fi
+shift
+${script}`;
+}
+
 /** Fill a verified release template. The result is immutable run state. */
 export function materializeDag(root: string, name: LifecycleDag, config: LifecycleConfig, identity: { version: string; source: string; executable?: string; artifact?: string; station?: ServiceEnvironment; coordinator?: CoordinatingSession }): string {
   const template = readFileSync(join(root, "skills", "issue-execution", name), "utf8");
@@ -61,11 +71,22 @@ export function materializeDag(root: string, name: LifecycleDag, config: Lifecyc
     result = result.split(token).join(tokens[token]!);
   }
   if (identity.artifact) {
-    // Only stable command/protocol identities belong in fresh snapshots.
-    // Dagu's shell boundary resolves declaration, cache and tools on every step.
-    result = result.replace(/^shell: bash$/gm, 'shell: ["a4s", "station-shell"]')
+    // Dagu must see Bash, not a custom shell: otherwise it expands $VAR in
+    // script text before execution. A script preamble enters the station shell
+    // once, forwarding Dagu's script file rather than its source text.
+    result = result
       .replace(/^  - (?:DAGU_URL|DAGU_HOME|PATH|A4S_SERVICE_ENV):.*\n/gm, "")
       .replace(/^env:\n/gm, `env:\n  - A4S_ARTIFACT: ${JSON.stringify(identity.artifact)}\n`);
+    result = parseAllDocuments(result).map(document => {
+      visit(document, {
+        Pair(_key, pair) {
+          if (isScalar(pair.key) && pair.key.value === "run" && isScalar(pair.value) && typeof pair.value.value === "string") {
+            pair.value.value = stationScript(pair.value.value);
+          }
+        },
+      });
+      return document.toString();
+    }).join("");
   } else if (identity.executable) result = result.replace(/^env:\n/gm, `env:\n  - A4S_BIN: ${JSON.stringify(identity.executable)}\n`);
   const leftover = result.match(/TEMPLATE_[A-Z0-9_]+|__[A-Z0-9_]+__/g);
   if (leftover) throw new Error(`${name} unresolved template placeholder ${[...new Set(leftover)].join(", ")}`);

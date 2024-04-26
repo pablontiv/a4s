@@ -57,7 +57,7 @@ test("release workflow consumes only same-repository validated main runs with fu
   const workflow = parse(readFileSync(new URL("../../../.github/workflows/release.yml", import.meta.url), "utf8"));
   assert.deepEqual(Object.keys(workflow.on), ["workflow_run"]);
   assert.deepEqual(workflow.on.workflow_run, { workflows: ["CI"], types: ["completed"], branches: ["main"] });
-  const job = workflow.jobs.release;
+  const job = workflow.jobs.build;
   for (const condition of ["conclusion == 'success'", "event == 'push'", "head_branch == 'main'", "head_repository.full_name == github.repository"]) assert.ok(job.if.includes(condition), condition);
   const checkout = job.steps.find((step: { uses?: string }) => step.uses?.startsWith("actions/checkout@"));
   assert.equal(checkout.with["fetch-depth"], 0);
