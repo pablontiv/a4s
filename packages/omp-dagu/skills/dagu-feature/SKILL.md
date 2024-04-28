@@ -681,6 +681,13 @@ Give `Implement<ISSUE>` the exact `WORKTREE` path and `BRANCH`, plus this contra
 Include `FEATURE_IMPLEMENT RUN=<run-id>` in the implementer's task assignment,
 and retain its allocated id as `IMPLEMENTER` in the completion form.
 
+Each correction after a quality push-back requires a newly allocated implementer
+subagent named `Implement<ISSUE>v<N>`, with a fresh name for each attempt, like
+QA/reviewer retries. A fresh subagent keeps one `session_init` in its transcript:
+reviving a parked subagent appends a second `session_init`, which the guard
+rejects as `ambiguous session identity`. Supply the new allocated id as
+`IMPLEMENTER` when completing the corrected delivery.
+
 - Leave real-`DAGU_HOME` `dagu human-task` transitions, pushes, PR creation and
   GitHub comments to the coordinator and DAG. Leave `omp plugin link` and
   `~/.omp` configuration to the operator.
@@ -747,11 +754,20 @@ The same sequence runs for the initial candidate, every correction and every reb
 capture iteration, current SHA, parent session, implementer id, implement cutoff
 and a fresh attempt timestamp (Unix seconds, including the fractional part). Read that file and the two exact role markers in
 the step log. Launch two named `task` subagents, `agent=qa` and `agent=reviewer`,
-each with its exact marker in its task assignment. Give QA the issue's targeted
-acceptance commands and require the exact commands/results in its findings;
-reviewer independently inspects the same candidate and acceptance. Both run
-`git -C "<worktree>" rev-parse HEAD` before inspecting it and keep the worktree clean.
-The extension supplies a structured output schema. Each returns:
+each with its exact marker in its task assignment. Each subagent name identifies
+exactly one attempted invocation; use a fresh `v<N>` suffix for an already-attempted
+name (for example `Review379v2`). Guard-blocked attempts count as invocations.
+Give QA the issue's targeted acceptance commands and require the exact commands/results
+in its findings; reviewer independently inspects the same candidate and acceptance.
+Both run `git -C "<worktree>" rev-parse HEAD` as a standalone bash command,
+with nothing chained and with `cwd` omitted, before inspecting the candidate and
+before the verdict, and keep the worktree clean.
+The extension supplies both a structured output schema and this contract in the
+assignment text, including the exact command and literal binding values.
+Each final message is ONLY one raw JSON object, with the literal `repo`, `run`,
+`sha`, `iteration`, `attempt` and `role` from the request/assignment. `repo` is the
+canonical primary path from `quality-request.json`; `iteration` is a number,
+`attempt` is a string, `verdict` is `PASS` or `FAIL`, and `findings` is a string array:
 
 ```json
 {"repo":"<canonical PRIMARY>","run":"<run-id>","iteration":0,"attempt":"<request timestamp>","sha":"<full SHA>","role":"qa","verdict":"PASS","findings":["<observed command/result or review finding>"]}
@@ -786,13 +802,22 @@ dispatch hook; the Dagu guard also filters model candidates at the `task` bounda
 
 `quality.json` persists two independent, fully bound verdicts and their runtime
 evidence. `quality_admit` checks request/candidate/gate bindings, both allocated
-ids, roles, families, transcript digests and effective response events, then seals
-the admitted receipt in `quality-admitted.sha256` before dispatching
-`quality_transition`. Two current PASS complete it; either FAIL
+ids, roles, families, transcript prefix seals and effective response events, then
+seals the admitted receipt in `quality-admitted.sha256` before dispatching
+`quality_transition`. Each verdict records `bytes`, the transcript size at
+inspection, and `digest`, the SHA-256 of exactly those inspected bytes.
+Admission requires a current size of at least `bytes` and an identical digest
+for that prefix. Appended rows, including OMP's `session_exit`, are admitted;
+changing or truncating inspected bytes fails with `transcript changed`.
+The event/provider/model provenance check remains required and reads that same
+sealed prefix, so appended rows cannot alter the inspected provenance.
+Two current PASS complete it; either FAIL
 pushes it back to `implement` in the same run using the observed run-wide
 `--expected-iteration`. Both sets of findings remain in `quality.json` and the
 transition log. A changed SHA or a fresh gate attempt requires new QA and review
 evidence. `push` and guarded `auto_merge` consume only that admitted SHA.
+Deliver each quality push-back correction through a new implementer subagent
+named `Implement<ISSUE>v<N>`, following the fresh-session contract in **Implement**.
 
 
 This division of responsibility is **advisory while the TUI has direct access

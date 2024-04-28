@@ -854,7 +854,8 @@ steps:
       STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")
       rest=$(curl -fsS "http://127.0.0.1:${DAGU_PORT:-8080}/api/v1/dag-runs/feature/$RUN")
       cutoff=$(jq -er '[.dagRunDetails.nodes[] | select(.step.id == "implement")] | select(length == 1) | .[0].startedAt | select(type == "string" and length > 0)' <<< "$rest")
-      jq -n --arg repo "$(cd "$PRIMARY" && pwd -P)" --arg worktree "$(cd "$WORKTREE" && pwd -P)" --arg run "$RUN" --arg session "$OMP_SESSION_ID" \
+      worktree=$(cd "$WORKTREE" && pwd -P)
+      jq -n --arg repo "$(cd "$PRIMARY" && pwd -P)" --arg worktree "$worktree" --arg run "$RUN" --arg session "$OMP_SESSION_ID" \
         --arg cutoff "$cutoff" --slurpfile candidate "$STATE/candidate.json" \
         '{repo:$repo,worktree:$worktree,run:$run,session:$session,sha:$candidate[0].sha,iteration:$candidate[0].iteration,
           implementer:$candidate[0].implementer,implementStartedAt:$cutoff,attempt:(now | tostring)}' > "$STATE/quality-request.json"
@@ -905,15 +906,20 @@ steps:
           .iteration == $e.iteration and .attempt == $e.attempt and .parentSession == $e.implementer.parentSession and
           (.invocation | type == "string" and length > 0) and (.childSession | type == "string" and length > 0) and
           (.model.family | type == "string" and length > 0) and .model.family != $e.implementer.family and
-          (.verdict == "PASS" or .verdict == "FAIL") and (.findings | type == "array")] | all) and
+          (.verdict == "PASS" or .verdict == "FAIL") and (.findings | type == "array") and
+          (.bytes | type == "number" and . > 0 and . == floor)] | all) and
         .action == (if ([.verdicts[].verdict] | all(. == "PASS")) then "complete" else "rewind" end)
         ' "$STATE/quality.json" >/dev/null || fail "missing, stale or malformed effective verdict evidence"
-      while IFS=$'\t' read -r transcript digest event provider model; do
-        actual=$(shasum -a 256 "$transcript")
+      while IFS=$'\t' read -r transcript bytes digest event provider model; do
+        test "$(wc -c < "$transcript")" -ge "$bytes" || fail "transcript changed: $transcript"
+        # Preserve trailing newlines while capturing the exact inspected bytes once.
+        prefix=$(dd if="$transcript" bs="$bytes" count=1 2>/dev/null && printf '.')
+        prefix=${prefix%.}
+        actual=$(printf '%s' "$prefix" | shasum -a 256)
         test "${actual%% *}" = "$digest" || fail "transcript changed: $transcript"
-        jq -se --arg event "$event" --arg provider "$provider" --arg model "$model" \
-          '[.[] | select(.id == $event and .message.role == "assistant" and .message.provider == $provider and .message.model == $model)] | length == 1' "$transcript" >/dev/null || fail "runtime model provenance mismatch"
-      done < <(jq -r '.verdicts[] | [.transcript,.digest,.event,.model.provider,.model.id] | @tsv' "$STATE/quality.json")
+        printf '%s' "$prefix" | jq -se --arg event "$event" --arg provider "$provider" --arg model "$model" \
+          '[.[] | select(.id == $event and .message.role == "assistant" and .message.provider == $provider and .message.model == $model)] | length == 1' >/dev/null || fail "runtime model provenance mismatch"
+      done < <(jq -r '.verdicts[] | [.transcript,.bytes,.digest,.event,.model.provider,.model.id] | @tsv' "$STATE/quality.json")
       shasum -a 256 "$STATE/quality.json" > "$STATE/quality-admitted.sha256"
       jq -r .action "$STATE/quality.json" > "$STATE/quality-action"
       jq '{sha,action,verdicts:[.verdicts[] | {role,verdict,findings,subagent,model,attempts,fallbacks}]}' "$STATE/quality.json"
