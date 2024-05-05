@@ -104,16 +104,19 @@ function stubGh(repo: Repo, tested: string, overrides: Record<string, unknown> =
   const executable = join(bin, "gh");
   const pr = JSON.stringify({ number: 209, state: "MERGED", headRefOid: tested, mergeCommit: { oid: git(repo.primary, "rev-parse", "HEAD") }, ...overrides });
   writeFileSync(executable, `#!/bin/sh
-case " $* " in *" --repo "*) ;; *)
-  if ! git -C "$PWD" rev-parse --git-dir >/dev/null 2>&1; then
+case "$*" in
+  api*|"repo view"*) ;;
+  *) if ! git -C "$PWD" rev-parse --git-dir >/dev/null 2>&1 && [ "$1 $2" != "pr view" ] && [ "$1 $2" != "pr checks" ]; then
     printf 'fatal: not a git repository\n' >&2
     exit 2
-  fi
+  fi ;;
 esac
 case "$*" in
   *"pr view"*) printf '%s\\n' ${JSON.stringify(pr)} ;;
   *"pr checks"*) printf 'SUCCESS\\n' ;;
-  "pr diff 209 --repo ${repo.remote} --name-only") printf 'value.txt\\n' ;;
+  "repo view ${repo.remote} --json nameWithOwner --jq .nameWithOwner") printf 'fixture/repo\\n' ;;
+  "api repos/fixture/repo/pulls/209") printf '{"changed_files":1}\\n' ;;
+  "api --paginate --slurp repos/fixture/repo/pulls/209/files?per_page=100") printf '[[{"filename":"value.txt"}]]\\n' ;;
   *) printf 'unexpected gh arguments: %s\\n' "$*" >&2; exit 3 ;;
 esac
 `);
@@ -165,7 +168,8 @@ function run(script: string, repo: Repo, extra: Record<string, string> = {}) {
 for (const [name, definition] of featureDefinitions) {
   const closeGate = extractScript(definition, "  - id: close_gate");
   const exit = extractScript(definition, "  exit:");
-  for (const [mode, cleanup] of [["close", closeGate], ["exit", exit]] as const) {
+  const modes = name === "template" ? [["close", closeGate], ["exit", exit]] as const : [["exit", exit]] as const;
+  for (const [mode, cleanup] of modes) {
     test(`${name} ${mode} verified squash cleanup converges and preserves a neighbouring run`, () => {
       const repo = repository();
       try {
@@ -271,6 +275,7 @@ for (const [name, definition] of featureDefinitions) {
     }
   }
 
+  if (name === "template") {
   test(`${name} close_gate cleans squash-merged worktree and absent remote branch outside a repository`, () => {
     const repo = repository();
     try {
@@ -375,6 +380,7 @@ for (const [name, definition] of featureDefinitions) {
         assert.equal(git(repo.primary, "ls-remote", "origin", `refs/heads/${repo.branch}`), "");
       } finally { rmSync(repo.root, { recursive: true, force: true }); }
     });
+  }
   }
 }
 

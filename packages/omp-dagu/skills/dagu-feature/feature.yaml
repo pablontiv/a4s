@@ -1366,9 +1366,39 @@ steps:
         fi
       fi
       if [[ "$MODE" == true && ! -f "$STATE/bootstrap-enqueued" ]]; then
-        merged_files=$(gh pr diff "$pr_number" --repo "$repo" --name-only) ||
-          diagnostic "PR #$pr_number changed-file lookup failed, expected merged diff"
-        if grep -Eq '^packages/omp-dagu/(skills/|CHANGELOG\.md$)' <<<"$merged_files"; then
+        api_repo=$(gh repo view "$repo" --json nameWithOwner --jq .nameWithOwner) ||
+          diagnostic "PR #$pr_number repository lookup failed"
+        metadata=$(gh api "repos/$api_repo/pulls/$pr_number") ||
+          diagnostic "PR #$pr_number changed-file metadata lookup failed"
+        count=$(jq -ers '
+          if length != 1 then error("expected one metadata document") else .[0] end |
+          if type != "object" then error("invalid PR metadata")
+          elif (.changed_files | type) != "number" then error("invalid changed_files")
+          elif .changed_files < 0 or .changed_files != (.changed_files | floor) then error("invalid changed_files")
+          elif .changed_files >= 3000 then error("changed_files reaches the 3000-file endpoint ceiling")
+          else .changed_files end
+        ' <<<"$metadata") || diagnostic "PR #$pr_number invalid changed-file metadata or endpoint ceiling"
+        pages=$(gh api --paginate --slurp "repos/$api_repo/pulls/$pr_number/files?per_page=100") ||
+          diagnostic "PR #$pr_number changed-file pages lookup failed"
+        bootstrap_needed=$(jq -ers --argjson count "$count" '
+          if length != 1 then error("expected one files document") else .[0] end |
+          if type != "array" then error("invalid files pages")
+          elif length == 0 then error("missing files pages")
+          elif any(.[]; type != "array") then error("invalid files page")
+          elif any(.[]; length > 100) then error("oversized files page")
+          elif any(.[0:-1][]; length != 100) then error("incomplete files page")
+          elif any(.[][]; type != "object") then error("invalid file record")
+          elif any(.[][]; (.filename | type) != "string") then error("invalid filename")
+          elif any(.[][]; .filename | length == 0) then error("empty filename")
+          else
+            [.[][] | .filename] as $files
+            | if ($files | length) != $count then error("changed-file count mismatch")
+              elif ($files | unique | length) != $count then error("duplicate filenames")
+              else any($files[]; test("^packages/omp-dagu/(skills/|CHANGELOG\\.md$)")) | tostring
+              end
+          end
+        ' <<<"$pages") || diagnostic "PR #$pr_number invalid or incomplete changed-file evidence"
+        if [[ "$bootstrap_needed" == true ]]; then
           skill_dir="$PRIMARY/packages/omp-dagu/skills/dagu-feature"
           version=$(jq -er '.version | select(type == "string" and length > 0)' "$PRIMARY/packages/omp-dagu/package.json")
           bootstrap_run="bootstrap-a4s-v${version//./-}"
