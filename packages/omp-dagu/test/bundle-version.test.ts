@@ -8,7 +8,7 @@ import test from "node:test";
 
 const bundle = "packages/omp-dagu";
 const skills = `${bundle}/skills`;
-const fixturePaths = [`${skills}/dagu-feature/feature.yaml`, `${skills}/discovery/SKILL.md`];
+const fixturePaths = [`${skills}/dagu-feature/feature.yaml`, `${skills}/discovery/SKILL.md`, `${skills}/dagu-feature/planning.yaml`];
 const git = (root: string, ...args: string[]): string => execFileSync("git", args, {
   cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
 }).trim();

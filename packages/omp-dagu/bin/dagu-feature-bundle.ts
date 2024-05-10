@@ -68,6 +68,7 @@ for (const argument of argumentsOrCwd) {
   ok = inspectStamp("feature.yaml", join(dags, "feature.yaml")) && ok;
   ok = inspectStamp("poc.yaml", join(dags, "poc.yaml")) && ok;
   ok = inspectStamp("discovery.yaml", join(dags, "discovery.yaml")) && ok;
+  ok = inspectStamp("planning.yaml", join(dags, "planning.yaml")) && ok;
 }
 
 const daguHome = process.env.DAGU_HOME || join(homedir(), ".dagu");

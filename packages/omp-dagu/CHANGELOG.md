@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.53
+
+- Add the new planning DAG: independently reviewed, operator-approved plans become idempotent issues and feature/PoC runs, with durable validation feedback, bootstrap adoption, and planning status notices. This wave uses the required patch release rather than a minor bump (#292).
+
 ## 0.3.49
 
 - Preserve candidates in leased checkpoint refs and publish the exact gated SHA only while the candidate remains clean and fresh (#275).

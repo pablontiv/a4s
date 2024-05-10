@@ -52,7 +52,7 @@ export function runLabel(run: RunDetails, slug?: string): string {
 }
 
 // The widget title names the domain; each line keeps a compact workflow type.
-const workflowTypes: Record<string, string> = { feature: "feat" };
+const workflowTypes: Record<string, string> = { feature: "feat", planning: "plan" };
 
 export function currentNode(run: RunDetails): RunNode | undefined {
   const nodes = run.nodes ?? [];
@@ -191,7 +191,7 @@ export class Transitions {
     const effects: TransitionEffects = {};
     const issue = issueNumber(run);
     const owned = this.sessionId !== undefined && runParam(run, "OMP_SESSION_ID") === this.sessionId;
-    const supported = ["feature", "poc", "discovery"].includes(run.name);
+    const supported = ["feature", "poc", "discovery", "planning"].includes(run.name);
     const bundle = runBundleState(run);
     const identity = issue ? ` issue=${issue}` : ` dag=${plain(run.name)}`;
     const bundleNotice = ` bundle=${plain(bundle.displayVersion)} extension=${bundle.extensionVersion} main=${plain(bundle.mainVersion)} compat=${bundle.compat}`;
@@ -224,7 +224,7 @@ export class Transitions {
       };
       const step = terminalStep ?? previous.step;
       if (run.statusLabel !== "succeeded" && step && owned
-        && ["feature", "discovery"].includes(run.name)) {
+        && ["feature", "discovery", "planning"].includes(run.name)) {
         notice(JSON.stringify([key, run.statusLabel]),
           `[DAGU STATE] run=${plain(run.dagRunId)} status=${run.statusLabel} step=${plain(step)}${identity}${bundleNotice}`);
       }

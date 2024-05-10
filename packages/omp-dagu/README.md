@@ -1,6 +1,6 @@
 # OMP Dagu
 
-Paquete OMP para operar el ciclo de issues de Dagu: distribuye el widget de progreso, el guard de triage, el agente `triage-reviewer` y el skill `dagu-feature` con sus plantillas. Requiere Node.js >=22.19.0 y Dagu 2.20.1 con autenticación local `none`.
+Paquete OMP para operar el ciclo de issues de Dagu: distribuye el widget de progreso, el guard de triage, los agentes `triage-reviewer` y `plan-reviewer`, y los skills `dagu-feature`, `dagu-planning` y `discovery` con sus plantillas. Requiere Node.js >=22.19.0 y Dagu 2.20.1 con autenticación local `none`.
 
 ## Instalación
 
@@ -17,7 +17,7 @@ Para usar un checkout sin cambiar la configuración global:
 DAGU_URL=http://127.0.0.1:8080 omp -e /ruta/a/a4s/packages/omp-dagu
 ```
 
-Usar el directorio completo permite que OMP descubra las dos extensiones, `agents/triage-reviewer.md` y `skills/dagu-feature/`. `DAGU_URL` es la raíz del servidor (por defecto `http://127.0.0.1:8080`).
+Usar el directorio completo permite que OMP descubra las dos extensiones, los agentes distribuidos en `agents/` y los skills de `skills/`. `DAGU_URL` es la raíz del servidor (por defecto `http://127.0.0.1:8080`).
 
 Tras el merge de un cambio que mueve o renombra un paquete OMP, los symlinks
 `~/.omp/plugins/node_modules/@a4s/*` siguen apuntando a las rutas del clon
@@ -103,7 +103,7 @@ de servicio al operador.
 
 La extensión observa los runs del repositorio mediante REST y SSE para el widget y un ledger durable de eventos para los avisos humanos y el éxito. Con UI muestra una línea por run en `aboveEditor` y conserva los toasts terminales. El despertar también funciona con `hasUI=false`. Resuelve el repositorio desde `origin`, incluso en linked worktrees, y descubre runs de las últimas 48 horas con `workspace=<repo>`, incluidos los que finalizaron entre barridos.
 
-La herramienta `dagu_session_id` devuelve el ID persistente únicamente a la sesión principal. El coordinador lo pasa como `OMP_SESSION_ID` al encolar. Todo nodo con metadatos `humanTask` en waiting de `feature`, `poc` y `discovery` despierta al propietario, incluso con status global running. El succeeded final también despierta; feature y discovery conservan failed/aborted. Los avisos incluyen la compatibilidad:
+La herramienta `dagu_session_id` devuelve el ID persistente únicamente a la sesión principal. El coordinador lo pasa como `OMP_SESSION_ID` al encolar. Todo nodo con metadatos `humanTask` en waiting de `feature`, `poc`, `discovery` y `planning` despierta al propietario, incluso con status global running. El succeeded final también despierta; feature, discovery y planning conservan failed/aborted. Los avisos incluyen la compatibilidad:
 
 ```text
 [DAGU STATE] run=<run-id> status=waiting step=<step> <issue=<issue>|dag=<dag>> bundle=<version|unstamped> extension=<version> main=<version|unknown> compat=<ok|stale|incompatible|unstamped> iteration=<approvalIteration>
@@ -304,6 +304,19 @@ ejecución calcula `nuevo`, `persistente`, `resuelto` o `regresion`.
 La extensión despierta `OMP_SESSION_ID` en las esperas `discover`, `validate`,
 `consolidate` y `approve` con
 `[DAGU STATE] run=<id> status=waiting step=<paso> dag=discovery bundle=<version|unstamped> extension=<version> compat=<ok|incompatible|unstamped> iteration=<n>`.
+
+## Planning
+
+El cuarto DAG de repositorio, `planning.yaml`, convierte el plan aprobado localmente en OMP en issues autocontenidos, tras revisión independiente y aprobación explícita del operador. El skill [dagu-planning](skills/dagu-planning/SKILL.md) documenta el flujo completo. Bootstrap detecta, sella, renderiza y valida los cuatro DAGs; el commit de adopción copia `feature.yaml`, `poc.yaml`, `discovery.yaml` y `planning.yaml` al repositorio.
+
+```sh
+dagu enqueue --run-id "<repo>-planning-<slug>" .workspace/dagu/dags/planning.yaml -- \
+  SOURCE="<solicitud>" PRIMARY="/ruta/al/clon-principal" OMP_SESSION_ID="<dagu_session_id>"
+```
+
+`init` conserva `source.md` en `$DAGU_HOME/data/planning/<owner>__<repo>/<run>/`. `plan` recibe `plan.md` y `units.jsonl`; los checks deterministas validan las unidades y la identidad/generación del transcript `plan-reviewer`, cuyo modelo selecciona `omp-cross-family-review`. `review` se completa con `REVIEW=<id asignado>`; un `revise` o un plan inválido devuelve el mismo run a `plan`, con hallazgos en `findings.md` e iteración incrementada. El widget muestra `plan` y los avisos cubren `plan`, `review` y `approve`.
+
+Solo el operador autoriza `APPROVED=all` o ids concretos en `approve`; el CLI de tareas humanas no autentica al operador. Después, `materialize` crea o reutiliza issues por `<!-- planning-unit: <run>/<id> -->` y registra `issues.jsonl`. `dispose` encola feature o PoC según la unidad, con run IDs estables y preservando `OMP_SESSION_ID`. Antes de cada push-back manual se consulta la iteración run-wide actual. Registrar el primer run post-merge y sus logs de validación, revisión, materialización y disposición en el issue de entrega.
 
 ### Versión, sello y compatibilidad
 
