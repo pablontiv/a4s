@@ -12,8 +12,9 @@ aliases y thinking. El gate examina los candidatos solicitados y los roles
 `@slow`, `@default`, `@task`; usa esa misma política estricta en el límite `task`.
 Fuera de ese gate, QA/reviewer comparan con el modelo padre y `@task`.
 `security-reviewer` conserva el orden preferente frente a padre y `@task`;
-`triage-reviewer` conserva el orden preferente frente al padre y los roles
-`@task`, `@slow`, `@default`.
+`triage-reviewer` y `plan-reviewer` conservan el orden preferente frente al padre
+y los roles `@task`, `@slow`, `@default`. Los agentes dedicados de triage y
+planificación se distribuyen con `@a4s/omp-dagu`.
 
 La selección es preventiva; la admisión exige los proveedores/modelos de los
 mensajes efectivos que emitieron los veredictos. El guard de `omp-dagu` valida

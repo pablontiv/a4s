@@ -165,7 +165,7 @@ test("startup baseline marks existing openings silently and subsequent iteration
 });
 
 test("succeeded wakes each owner once even when the terminal is the first durable snapshot", () => {
-  for (const name of ["feature", "poc", "discovery"]) {
+  for (const name of ["feature", "poc", "discovery", "planning"]) {
     const transitions = new Transitions("session-a");
     const terminal = { ...waitingAt(name, "done"), statusLabel: "succeeded", nodes: [] };
     assert.ok(transitions.observe(terminal).wakeMessage?.includes("status=succeeded"));
@@ -174,8 +174,8 @@ test("succeeded wakes each owner once even when the terminal is the first durabl
   }
 });
 
-test("terminal toasts and targeted feature/discovery failure notices remain deduplicated", () => {
-  for (const name of ["feature", "discovery"]) for (const statusLabel of ["succeeded", "failed", "aborted"]) {
+test("terminal toasts and targeted failure notices remain deduplicated", () => {
+  for (const name of ["feature", "discovery", "planning"]) for (const statusLabel of ["succeeded", "failed", "aborted"]) {
     const transitions = new Transitions("session-a");
     const candidate = waitingAt(name, "gate");
     transitions.observe({ ...candidate, statusLabel: "running", nodes: [] });
@@ -301,4 +301,14 @@ test("rewound PoC notice includes the first scope failure diagnostic", () => {
     nodes: [{ step: { name: "run_poc", humanTask: {} }, statusLabel: "waiting", approvalIteration: 1 }],
   });
   assert.match(effects.wakeMessage!, /iteration=1 cause=## Pregunta differs from QUESTION \(normalized\)$/);
+});
+
+test("planning renders plan workflow and wakes its owner at each human checkpoint", () => {
+  const transitions = new Transitions("session-a");
+  for (const step of ["plan", "review", "approve"]) {
+    const candidate = { ...waitingAt("planning", step), params: "OMP_SESSION_ID=session-a" };
+    assert.match(renderRun(candidate), new RegExp(`^plan .* ${step} waiting$`));
+    assert.match(transitions.observe(candidate).wakeMessage!, new RegExp(`step=${step} dag=planning`));
+    assert.deepEqual(transitions.observe(candidate), {});
+  }
 });

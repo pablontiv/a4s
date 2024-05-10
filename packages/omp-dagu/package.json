@@ -1,6 +1,6 @@
 {
   "name": "@a4s/omp-dagu",
-  "version": "0.3.81",
+  "version": "0.3.82",
   "private": true,
   "license": "UNLICENSED",
   "repository": {
@@ -29,7 +29,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@a4s/omp-cross-family-review": "0.1.0",
+    "@a4s/omp-cross-family-review": "0.1.1",
     "@a4s/omp-hot-reload": "0.1.0",
     "yaml": "2.9.0"
   },
