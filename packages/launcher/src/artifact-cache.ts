@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { createReadStream, closeSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync, writeSync, chmodSync } from "node:fs";
+import { createReadStream, closeSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeSync, chmodSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 import { createGunzip } from "node:zlib";
 import { isDeepStrictEqual } from "node:util";
@@ -10,6 +10,7 @@ import { type ArtifactIdentity } from "./contracts.ts";
 import { assertIdentityContracts } from "./artifact-support.ts";
 import { isRecord } from "./type-guard.ts";
 import { stationCacheRoot } from "./station-paths.ts";
+import { writeAtomicJson } from "./runtime.cjs";
 
 const EVIDENCE = "verified-archive.tar.gz";
 const RECORD = "artifact.json";
@@ -209,7 +210,7 @@ export async function ensureArtifact(home: string, release: ResolvedRelease, dep
       const { files, executableDigest } = await archiveFiles(join(stage, EVIDENCE), stage, true);
       const declared = layout(stage, files, release, dependencies);
       const record: ArtifactRecord = { version: release.version, commit: release.commit, digest: release.digest, verifiedAt: new Date().toISOString() };
-      writeFileSync(join(stage, RECORD), `${JSON.stringify(record, null, 2)}\n`, { flag: "wx", mode: 0o600 });
+      writeAtomicJson(join(stage, RECORD), record, { exclusive: true });
       renameSync(stage, directory);
       return { directory, executable: join(directory, "a4s"), executableDigest, identity: declared, record };
     } finally { rmSync(stage, { recursive: true, force: true }); }

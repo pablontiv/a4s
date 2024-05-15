@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { assertStationBinding, executableOnPath, executableDigest } from "./station-binding.ts";
@@ -8,7 +8,7 @@ import { readRecoveryEvidence, receiptBindingDigest, recoveryEvidencePath } from
 import { receiptTuple, restoreArtifact, runReceiptPath } from "./select.ts";
 import { isRecord } from "./type-guard.ts";
 import { withFileLockAsync } from "./file-lock.ts";
-import { writeJsonDurable } from "./station-state.ts";
+import { EXIT_CODES, writeAtomicJson } from "./runtime.cjs";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseAllDocuments } from "yaml";
 
@@ -79,7 +79,7 @@ export async function stationRecovery(args: string[], dependencies: RecoveryDepe
       const baseline: unknown = JSON.parse(readFileSync(manifest, "utf8"));
       if (!isRecord(baseline) || baseline.schemaVersion !== 1 || baseline.receiptDigest !== receiptBindingDigest(current.receipt) || typeof baseline.verifiedAt !== "string" || typeof baseline.provenance !== "string" || !baseline.provenance.trim()) throw new Error("Station recovery evidence must bind this original receipt and include verifiedAt, independently verified provenance and station identities; ask the operator to restore matching original evidence");
       assertStationBinding(baseline.station, current.station);
-      writeFileSync(recoveryEvidencePath(current.path), `${JSON.stringify(baseline, null, 2)}\n`, { flag: "wx", mode: 0o600 });
+      writeAtomicJson(recoveryEvidencePath(current.path), baseline, { exclusive: true });
       console.log(JSON.stringify(baseline));
       return;
     }
@@ -111,8 +111,8 @@ export async function stationRecovery(args: string[], dependencies: RecoveryDepe
     const cancellation = join(output, "cancellation.json");
     // Reverify immediately before the sole native mutation, not merely at pin/check.
     assertStationBinding(evidence.station, readServiceEnvironment());
-    writeJsonDurable(ledger, record);
-    if (!existsSync(cancellation)) writeFileSync(cancellation, `${JSON.stringify(record, null, 2)}\n`, { flag: "wx", mode: 0o600 });
+    writeAtomicJson(ledger, record);
+    if (!existsSync(cancellation)) writeAtomicJson(cancellation, record, { exclusive: true });
     const stopped = (dependencies.spawn ?? spawnSync)(dagu, ["human-task", "complete", current.dag, "--run-id", current.run, "--step", checkpoint, "--input", "CANCEL=yes"], { env: { ...process.env, ...current.station }, encoding: "utf8", timeout: 10000 });
     let terminal: Record<string, unknown> | undefined;
     let observationError: string | undefined;
@@ -126,10 +126,10 @@ export async function stationRecovery(args: string[], dependencies: RecoveryDepe
       } while (Date.now() < deadline);
     }
     const gate = terminal && Array.isArray(terminal.nodes) ? terminal.nodes.find(node => isRecord(node) && isRecord(node.step) && node.step.name === `${checkpoint}_cancellation`) : undefined;
-    const cancelled = isRecord(gate) && (terminal?.statusLabel === "failed" && gate.statusLabel === "failed" && gate.error === "exit status 77" || terminal?.statusLabel === "aborted" && gate.statusLabel === "aborted");
+    const cancelled = isRecord(gate) && (terminal?.statusLabel === "failed" && gate.statusLabel === "failed" && gate.error === `exit status ${EXIT_CODES.cancelled}` || terminal?.statusLabel === "aborted" && gate.statusLabel === "aborted");
     const result = { ...record, state: cancelled ? "completed" : "uncertain", terminal, evidenceLocation: output, observationError,
       native: { status: stopped.status, stdout: stopped.stdout?.toString(), stderr: stopped.stderr?.toString(), error: stopped.error?.message } };
-    writeJsonDurable(ledger, result);
+    writeAtomicJson(ledger, result);
     if (result.state !== "completed") throw new Error(`Station cancellation uncertain (native=${stopped.status}, observed=${String(terminal?.statusLabel)}, error=${JSON.stringify(observationError ?? stopped.error?.message ?? stopped.stderr?.toString())}); inspect ${ledger}; no automatic retry`);
     console.log(JSON.stringify(result));
   });

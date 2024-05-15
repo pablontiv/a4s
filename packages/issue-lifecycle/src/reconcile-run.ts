@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { parseAllDocuments } from "yaml";
 import { packageRoot } from "./executable.ts";
 import { executingRunArtifact, runArtifactState } from "./run-artifact.ts";
-import { writeAtomicJson } from "./atomic-json.ts";
+import { writeAtomicJson } from "@a4s/launcher/runtime";
 import { recordNoProgress } from "./ci-no-progress.ts";
 import { readCancellation } from "./cancellation.ts";
 

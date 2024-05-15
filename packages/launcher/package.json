@@ -16,6 +16,7 @@
     "./primary": "./src/primary.ts",
     "./process-identity": "./src/process-identity.ts",
     "./release": "./src/release.ts",
+    "./runtime": "./src/runtime.cjs",
     "./select": "./src/select.ts",
     "./service-environment": "./src/service-environment.ts",
     "./station": "./src/station.ts",

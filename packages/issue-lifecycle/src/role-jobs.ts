@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, realpathSync } from "node:fs";
 import { hostname } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { processMatches, processStart } from "@a4s/launcher/process-identity";
+import { canonicalJson, writeAtomicJson } from "@a4s/launcher/runtime";
 
 export type Role = "triage" | "implement" | "conflict-resolution";
 export interface JobBinding {
@@ -25,11 +26,6 @@ export interface Job {
   schemaVersion: 1; id: string; binding: JobBinding; executor: ExecutorIdentity;
   directory: string; state: "running" | JobResult["state"]; readyAt: string; startedAt: string;
 }
-function stable(value: unknown): string {
-  if (value === null || typeof value !== "object") return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${value.map(stable).join(",")}]`;
-  return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${stable((value as Record<string, unknown>)[key])}`).join(",")}}`;
-}
 export function jobId(binding: JobBinding): string {
   if (realpathSync(binding.repo) !== binding.repo || realpathSync(binding.worktree) !== binding.worktree ||
       !/^[a-f0-9]{40}$/.test(binding.sha) || !Number.isSafeInteger(binding.iteration) || binding.iteration < 0 ||
@@ -37,7 +33,7 @@ export function jobId(binding: JobBinding): string {
       [binding.lane, binding.dag, binding.run, binding.stage, binding.attempt].some(value => !value || /[\r\n\0]/.test(value))) {
     throw new Error("Invalid canonical role-job binding");
   }
-  return createHash("sha256").update(stable(binding)).digest("hex");
+  return createHash("sha256").update(canonicalJson(binding)).digest("hex");
 }
 export function executorIdentity(): ExecutorIdentity {
   const processStartedAt = processStart(process.pid);
@@ -48,12 +44,6 @@ export function executorAlive(owner: ExecutorIdentity): boolean {
   // A foreign host is uncertain, not permission to replace its owner.
   if (owner.host !== hostname()) return true;
   return processMatches(owner.pid, owner.processStartedAt);
-}
-export function atomicJson(path: string, value: unknown): void {
-  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  const temporary = `${path}.${process.pid}.tmp`;
-  writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
-  renameSync(temporary, path);
 }
 
 /** One transactional capacity domain per canonical DAGU_HOME, across repositories/processes. */
@@ -142,8 +132,8 @@ export class RoleJobStore {
     this.transaction(() => {
       const row = this.db.prepare("SELECT document,result FROM jobs WHERE id=?").get(job.id);
       const owner = row ? JSON.parse(String(row.document)) as Job : undefined;
-      if (!owner || row?.result || stable(owner.executor) !== stable(job.executor) ||
-          result.id !== job.id || stable(result.binding) !== stable(job.binding) || stable(result.executor) !== stable(job.executor)) {
+      if (!owner || row?.result || canonicalJson(owner.executor) !== canonicalJson(job.executor) ||
+          result.id !== job.id || canonicalJson(result.binding) !== canonicalJson(job.binding) || canonicalJson(result.executor) !== canonicalJson(job.executor)) {
         throw new Error("Role-job terminal result does not belong to the active execution");
       }
       this.db.prepare("UPDATE jobs SET document=?,result=? WHERE id=?").run(JSON.stringify({ ...job, state: result.state }), JSON.stringify(result), job.id);
@@ -152,9 +142,9 @@ export class RoleJobStore {
     this.materialize(job.directory, result);
   }
   materialize(directory: string, result: JobResult): void {
-    atomicJson(join(directory, "job.json"), { schemaVersion: 1, id: result.id, binding: result.binding,
+    writeAtomicJson(join(directory, "job.json"), { schemaVersion: 1, id: result.id, binding: result.binding,
       executor: result.executor, directory, readyAt: result.readyAt, startedAt: result.startedAt, state: result.state });
-    atomicJson(join(directory, "result.json"), result);
+    writeAtomicJson(join(directory, "result.json"), result);
   }
 }
 
@@ -177,6 +167,6 @@ export function verifyJobResult(path: string, expected: Partial<JobBinding> = {}
   const outcomes = yielded?.id ? rows.filter(row => row.message?.role === "toolResult" &&
     row.message.toolName === "yield" && row.message.toolCallId === yielded.id &&
     !row.message.isError && row.message.details?.status === "success") : [];
-  if (outcomes.length !== 1 || stable(outcomes[0].message.details.data) !== stable(result.output)) throw new Error("Role-job output differs from the native response");
+  if (outcomes.length !== 1 || canonicalJson(outcomes[0].message.details.data) !== canonicalJson(result.output)) throw new Error("Role-job output differs from the native response");
   return result;
 }

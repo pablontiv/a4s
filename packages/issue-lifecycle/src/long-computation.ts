@@ -3,7 +3,7 @@ import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readdirSync
 import { basename, dirname, join } from "node:path";
 import { clearInterval, setInterval } from "node:timers";
 import { setTimeout as delay } from "node:timers/promises";
-import { atomicJson } from "./role-jobs.ts";
+import { writeAtomicJson } from "@a4s/launcher/runtime";
 import { spawnEngine } from "./executable.ts";
 import { processMatches, processStart } from "@a4s/launcher/process-identity";
 
@@ -173,7 +173,7 @@ export function recordSample(directory: string, input: {
     recordedAt: iso(now),
   };
   mkdirSync(directory, { recursive: true, mode: 0o700 });
-  atomicJson(join(directory, "sample.json"), sample);
+  writeAtomicJson(join(directory, "sample.json"), sample);
   return sample;
 }
 
@@ -245,8 +245,8 @@ export function openComputation(directory: string, input: {
   if (basename(directory) !== manifest.id) throw new Error("Computation id must match its evidence directory name");
   assertPlan(manifest);
   mkdirSync(directory, { recursive: true, mode: 0o700 });
-  atomicJson(manifestPath, manifest);
-  atomicJson(join(directory, "state.json"), { schemaVersion: 1, state: "running" });
+  writeAtomicJson(manifestPath, manifest);
+  writeAtomicJson(join(directory, "state.json"), { schemaVersion: 1, state: "running" });
   return manifest;
 }
 
@@ -288,7 +288,7 @@ function writeCheckpoint(directory: string, checkpoint: ShardCheckpoint): void {
     }
     return;
   }
-  atomicJson(path, checkpoint);
+  writeAtomicJson(path, checkpoint);
 }
 export function progressOf(manifest: ComputationManifest, completed: ShardCheckpoint[]): ProgressRecord {
   const lastShard = completed.length ? completed[completed.length - 1] : undefined;
@@ -310,10 +310,10 @@ function readState(directory: string): ComputationState {
   return value;
 }
 function writeState(directory: string, state: "running" | "completed" | "stopped"): void {
-  atomicJson(join(directory, "state.json"), { schemaVersion: 1, state });
+  writeAtomicJson(join(directory, "state.json"), { schemaVersion: 1, state });
 }
 export function writeProgress(directory: string, progress: ProgressRecord): void {
-  atomicJson(join(directory, "progress.json"), progress);
+  writeAtomicJson(join(directory, "progress.json"), progress);
 }
 
 function parseDecision(value: unknown): OwnerDecision {
@@ -333,7 +333,7 @@ export function writeDecision(directory: string, input: { decision: OwnerDecisio
     if (input.stallMultiple === undefined) throw new Error("resize requires stallMultiple");
     record.stallMultiple = positiveNumber(input.stallMultiple, "Resized stall multiple");
   } else if (input.stallMultiple !== undefined) throw new Error("stallMultiple is only valid for resize");
-  atomicJson(path, record);
+  writeAtomicJson(path, record);
   return record;
 }
 function archive(directory: string, name: string, stamp: string): void {
@@ -390,7 +390,7 @@ function readStall(directory: string): StallNotice | undefined {
 function createStall(directory: string, notice: StallNotice): boolean {
   const path = join(directory, "stall.json");
   try {
-    writeFileSync(path, `${JSON.stringify(notice, null, 2)}\n`, { flag: "wx", mode: 0o600 });
+    writeAtomicJson(path, notice, { exclusive: true });
     return true;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
@@ -435,14 +435,14 @@ export async function superviseComputation(directory: string, options: Computati
       if (decision.decidedAt === appliedDecisionAt) throw new Error("Computation decision was already applied");
       if (decision.decision === "resize") {
         const resized = { ...manifest, stallMultiple: decision.stallMultiple! };
-        atomicJson(join(directory, "manifest.json"), resized);
+        writeAtomicJson(join(directory, "manifest.json"), resized);
       }
       if (decision.decision === "stop") {
         stopWorker(directory);
         writeState(directory, "stopped");
       }
       const anchor = decision.decision === "stop" ? readWatch(directory, latestAnchor(manifest, completed)).anchor : iso(options.now);
-      atomicJson(join(directory, "watch.json"), { schemaVersion: 1, anchor });
+      writeAtomicJson(join(directory, "watch.json"), { schemaVersion: 1, anchor });
       archive(directory, "stall.json", stall.notifiedAt);
       archive(directory, "decision.json", decision.decidedAt);
       appliedDecisionAt = decision.decidedAt;
@@ -452,7 +452,7 @@ export async function superviseComputation(directory: string, options: Computati
     const anchor = readWatch(directory, latestAnchor(manifest, completed)).anchor;
     const advanced = latestAnchor(manifest, completed);
     const effective = !stall && Date.parse(advanced) > Date.parse(anchor) ? advanced : anchor;
-    if (effective !== anchor) atomicJson(join(directory, "watch.json"), { schemaVersion: 1, anchor: effective });
+    if (effective !== anchor) writeAtomicJson(join(directory, "watch.json"), { schemaVersion: 1, anchor: effective });
     const deadlineMs = manifest.measuredShardMs * manifest.stallMultiple;
     if (!stall && clockNow(options.now) - Date.parse(effective) > deadlineMs) {
       const notice: StallNotice = {
@@ -550,7 +550,7 @@ function holdUntilAbort(signal: AbortSignal): Promise<never> {
 function writeWorker(directory: string): void {
   const processStartedAt = processStart(process.pid);
   if (!processStartedAt) throw new Error("Computation worker could not record its process start");
-  atomicJson(join(directory, "worker.json"), { schemaVersion: 1, pid: process.pid, processStartedAt });
+  writeAtomicJson(join(directory, "worker.json"), { schemaVersion: 1, pid: process.pid, processStartedAt });
 }
 
 export async function runShards(directory: string, runShard: (shard: PlannedShard, signal: AbortSignal) => Promise<string>, signal: AbortSignal): Promise<"completed" | "interrupted"> {
@@ -565,7 +565,7 @@ export async function runShards(directory: string, runShard: (shard: PlannedShar
       writeState(directory, "completed");
       return "completed";
     }
-    atomicJson(join(directory, "resume.json"), { schemaVersion: 1, index: next.index, recordedAt: new Date().toISOString() });
+    writeAtomicJson(join(directory, "resume.json"), { schemaVersion: 1, index: next.index, recordedAt: new Date().toISOString() });
     let output: string;
     try {
       output = await runShard(next, signal);
@@ -577,7 +577,7 @@ export async function runShards(directory: string, runShard: (shard: PlannedShar
         log: error instanceof ShardCommandError ? error.log : "worker.log",
         error: error instanceof Error ? error.message : String(error),
       };
-      atomicJson(join(directory, "state.json"), failure);
+      writeAtomicJson(join(directory, "state.json"), failure);
       throw error;
     }
     if (signal.aborted) return "interrupted";

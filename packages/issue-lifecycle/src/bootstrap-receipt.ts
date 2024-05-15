@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { join } from "node:path";
+import { writeAtomicJson } from "@a4s/launcher/runtime";
 import { isRecord } from "@a4s/launcher/type-guard";
 import { inspectArtifact } from "@a4s/launcher/artifact-cache";
 import { parseArtifact } from "@a4s/launcher/release";
@@ -37,6 +38,5 @@ export async function bindBootstrapReceipt(): Promise<void> {
       execution: { primary, dagSnapshot: payload.spec, parameters: [`PRIMARY=${primary}`, `OMP_SESSION_ID=${process.env.OMP_SESSION_ID || ""}`], ompSession: process.env.OMP_SESSION_ID || "" }, eventsAndExternalState: {} },
     runReceipt: { dag: "dagu-feature-bootstrap", run, attempt: 1, observations: [] } };
   assertArtifactReceipt(receipt, join(state, "receipt.json"));
-  mkdirSync(state, { recursive: true });
-  writeFileSync(join(state, "receipt.json"), `${JSON.stringify(receipt, null, 2)}\n`, { flag: "wx", mode: 0o600 });
+  writeAtomicJson(join(state, "receipt.json"), receipt, { exclusive: true });
 }

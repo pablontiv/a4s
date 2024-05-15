@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { parse } from "yaml";
@@ -8,6 +8,7 @@ import { executingRunArtifact, invokeRun, runArtifactContext } from "./run-artif
 import { isRecord } from "@a4s/launcher/type-guard";
 import { releaseProtection } from "./integration-protection.ts";
 import { cancellationReceipt } from "@a4s/launcher/select";
+import { writeAtomicJson } from "@a4s/launcher/runtime";
 
 export interface Cancellation {
   schemaVersion: 1; run: string; dag: string; checkpoint: string; iteration: number;
@@ -42,13 +43,7 @@ export function readCancellation(state: string): Cancellation | undefined {
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return; throw error; }
 }
 export function saveCancellation(state: string, record: Cancellation): void {
-  mkdirSync(state, { recursive: true });
-  const path = join(state, "cancellation.json"), temporary = `${path}.${process.pid}.tmp`;
-  const descriptor = openSync(temporary, "w", 0o600);
-  try { writeFileSync(descriptor, `${JSON.stringify(record, null, 2)}\n`); fsyncSync(descriptor); } finally { closeSync(descriptor); }
-  renameSync(temporary, path);
-  const directory = openSync(state, "r");
-  try { fsyncSync(directory); } finally { closeSync(directory); }
+  writeAtomicJson(join(state, "cancellation.json"), record);
 }
 export function assertNotCancelled(state: string): void {
   const record = readCancellation(state);
@@ -157,7 +152,7 @@ export async function main(args: string[]): Promise<void> {
       if (record?.outcome === "cancelled") finalizeCancellation(primary, state, record);
       else {
         const out = process.env.OUT_DIR, disposables = ownedSnapshots(primary, run, out);
-        if (out && disposables.length) writeFileSync(join(out, "snapshot-cleanup.json"), `${JSON.stringify(disposeSnapshots(primary, { run, retained: [{ location: out, owner: run, kind: "evidence" }], disposables }))}\n`);
+        if (out && disposables.length) writeAtomicJson(join(out, "snapshot-cleanup.json"), disposeSnapshots(primary, { run, retained: [{ location: out, owner: run, kind: "evidence" }], disposables }));
       }
       return;
     }
@@ -239,7 +234,7 @@ export async function main(args: string[]): Promise<void> {
     throw new Error("Cancellation is durably requested; native gate/onExit completion is still pending");
   }
   // Persist captured identity and cleanup inputs before native dequeue hides them.
-  writeFileSync(join(context.state, "cancellation-native.json"), `${JSON.stringify({ details, snapshot: spec.value.spec, receipt: context.receipt, cleanupInputs: { resource } })}\n`, { mode: 0o600 });
+  writeAtomicJson(join(context.state, "cancellation-native.json"), { details, snapshot: spec.value.spec, receipt: context.receipt, cleanupInputs: { resource } });
   saveCancellation(context.state, { ...record, outcome: "pending" });
   const result = spawnSync("dagu", ["dequeue", selected.queue!, "--dag-run", `${dag}:${run}`], { encoding: "utf8" });
   if (result.error || result.status !== 0) throw result.error || new Error(result.stderr || "Native dequeue failed");

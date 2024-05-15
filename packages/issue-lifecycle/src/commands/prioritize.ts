@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFi
 
 import { join, resolve } from "node:path";
 import { parse } from "yaml";
+import { writeAtomicJson } from "@a4s/launcher/runtime";
 import { receiptPath } from "../admission.ts";
 import { receiptArtifact } from "../artifact-receipt.ts";
 import { HOST_PRIMARY_REFERENCE, resolveHostPrimary, workspaceLabel } from "@a4s/launcher/primary";
@@ -169,7 +170,7 @@ return async function main(argv: string[]): Promise<void> {
     const args = ["enqueue", "--dagu-home", home, "--queue", queue, "--name", run.name, "--run-id", run.dagRunId, snapshot, ...params];
     return { run, spec, snapshot, args };
   });
-  writeFileSync(join(recovery, "recovery.json"), `${JSON.stringify({ queue, endpoint: base, home, target, order: before, entries: captured }, null, 2)}\n`, { mode: 0o600, flag: "wx", flush: true });
+  writeAtomicJson(join(recovery, "recovery.json"), { queue, endpoint: base, home, target, order: before, entries: captured }, { exclusive: true });
   reportError(`RECOVERY ${join(recovery, "recovery.json")}`);
   // Capture every queued snapshot before the first dequeue. Both sides of the
   // target move: leaving successors in place would rotate A,B,U,C to U,C,A,B.

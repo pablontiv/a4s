@@ -228,7 +228,7 @@ steps:
         mkdir -p "$STATE"
         "$A4S_BIN" cancellation record poc "$CHECKPOINT" failed
         printf 'Cancellation requested at %s; terminating before successors; evidence=%s\n' "$CHECKPOINT" "$STATE"
-        exit 77
+        exit "$("$A4S_BIN" exit-code cancelled)"
       fi
       for field in ${REQUIRED_FIELDS:-}; do
         value=${!field:-}

@@ -11,7 +11,8 @@ import { readGateFailure } from "./gate-failure.ts";
 import type { RunDetails } from "./status/progress.ts";
 import { runParam } from "./run-primary.ts";
 import { LONG_COMPUTATION_CONTRACT, superviseRunComputations, type StallNotice } from "./long-computation.ts";
-import { atomicJson, jobId, RoleJobStore, verifyJobResult, type JobBinding, type JobResult } from "./role-jobs.ts";
+import { jobId, RoleJobStore, verifyJobResult, type JobBinding, type JobResult } from "./role-jobs.ts";
+import { writeAtomicJson } from "@a4s/launcher/runtime";
 import { executeNativeJob, nativeEvidence } from "./role-runtime.ts";
 import { parseReview } from "./triage/schema.ts";
 import { requireOwnerSession } from "./owner-session.ts";
@@ -49,7 +50,7 @@ export async function runRoleJob(options: RoleRunOptions): Promise<JobResult> {
       }
       if (claim.kind !== "claimed") { await delay(250); continue; }
       const job = claim.job;
-      atomicJson(join(job.directory, "job.json"), job);
+      writeAtomicJson(join(job.directory, "job.json"), job);
       const abort = new AbortController();
       const supervision = options.evidenceDir ? superviseRunComputations({
         evidenceDir: options.evidenceDir, session: options.session!, signal: abort.signal,

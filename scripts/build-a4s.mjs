@@ -52,7 +52,11 @@ for (const target of new Set(targets)) {
     await writeFile(join(stage, "package.json"), `${JSON.stringify(releaseManifest, null, 2)}\n`);
     await writeFile(join(stage, "identity.json"), `${JSON.stringify(identity, null, 2)}\n`);
     await mkdir(join(stage, "bin"));
-    for (const name of ["dagu-gate.cjs", "gate-cache.cjs", "gate-cache-run.cjs"]) await copyFile(join(source, "bin", name), join(stage, "bin", name));
+    await copyFile(join(root, "packages", "launcher", "src", "runtime.cjs"), join(stage, "bin", "runtime.cjs"));
+    for (const name of ["dagu-gate.cjs", "gate-cache.cjs", "gate-cache-run.cjs"]) {
+      const helper = await readFile(join(source, "bin", name), "utf8");
+      await writeFile(join(stage, "bin", name), helper.replaceAll("@a4s/launcher/runtime", "./runtime.cjs"));
+    }
     await mkdir(join(stage, "agents"));
     for (const name of ["plan-reviewer.md", "triage-reviewer.md"]) await copyFile(join(source, "agents", name), join(stage, "agents", name));
     await cp(join(source, "skills"), join(stage, "skills"), {

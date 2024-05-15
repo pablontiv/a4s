@@ -1,10 +1,11 @@
 import { readServiceEnvironment } from "@a4s/launcher/service-environment";
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { appendObservation, enqueue, parseObservation, receiptPath, observeRunReceipt } from "../admission.ts";
-import { CONFIG_PATH, configFromEnvironment, readConfigFile, readCommittedConfig, serializeConfig } from "@a4s/launcher/config";
+import { CONFIG_PATH, configFromEnvironment, readConfigFile, readCommittedConfig } from "@a4s/launcher/config";
+import { writeAtomicJson } from "@a4s/launcher/runtime";
 import { validatePlanningUnitsCommand } from "../planning-validator.ts";
 import { planningReviewer, type TranscriptRow } from "../transcript-identity.ts";
 import { BUNDLE_VERSION, lifecycleProtocolToken } from "../bundle.ts";
@@ -125,8 +126,7 @@ export async function main(argv: string[]): Promise<void> {
         const dest = args[0];
         if (!dest) throw new Error("write-config requires the consumer config path");
         const config = configFromEnvironment(process.env);
-        mkdirSync(dirname(dest), { recursive: true });
-        writeFileSync(dest, serializeConfig(config));
+        writeAtomicJson(dest, config);
         console.log(`config=${dest} schema=${config.schemaVersion}`);
       } else {
         const file = args[0];

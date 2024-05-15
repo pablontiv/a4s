@@ -2,7 +2,8 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { TestContext } from "node:test";
 import { initializeStation, type StationDependencies } from "@a4s/launcher/station";
-import { stationRoot, writeJsonDurable } from "@a4s/launcher/station-state";
+import { stationRoot } from "@a4s/launcher/station-state";
+import { writeAtomicJson } from "@a4s/launcher/runtime";
 import type { ArtifactTuple } from "@a4s/launcher/release";
 import { stationFixture } from "./station.ts";
 
@@ -21,7 +22,7 @@ export async function gcFixture(t: TestContext) {
   function receipt(run: string, artifact: ArtifactTuple, age = 30, dag = "feature", incident = false): string {
     const path = join(directory, "runs", run, "receipt.json");
     mkdirSync(dirname(path), { recursive: true });
-    writeJsonDurable(path, { schemaVersion: 2, artifact, receiptCreatedAt: new Date(GC_NOW - age * DAY).toISOString(),
+    writeAtomicJson(path, { schemaVersion: 2, artifact, receiptCreatedAt: new Date(GC_NOW - age * DAY).toISOString(),
       initial: { admittedAt: new Date(GC_NOW - age * DAY).toISOString() },
       runReceipt: { dag, run, observations: incident ? [{ kind: "incident" }] : [] } });
     return path;

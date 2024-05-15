@@ -474,7 +474,7 @@ steps:
           sleep 30
           printf 'Native stop did not terminate the active cancellation gate\n' >&2
         fi
-        exit 77
+        exit "$("$A4S_BIN" exit-code cancelled)"
       fi
       for field in ${REQUIRED_FIELDS:-}; do
         value=${!field:-}
@@ -1186,7 +1186,7 @@ steps:
     retry_policy:
       limit: 3
       interval_sec: 5
-      exit_code: [75]
+      exit_code: [__RETRY_EXIT__]
     preconditions:
       - condition: "${steps.triage.outputs.POC}"
         expected: "no"
@@ -1218,7 +1218,7 @@ steps:
       if test "$rebase_status" -ne 0; then
         if test -e "$(git -C "$WORKTREE" rev-parse --git-path index.lock)"; then
           printf 'rebase: index.lock held in %s\n' "$WORKTREE" >&2
-          exit 75
+          exit "$("$A4S_BIN" exit-code retry)"
         fi
         if ! { test -d "$(git -C "$WORKTREE" rev-parse --git-path rebase-merge)" ||
                test -d "$(git -C "$WORKTREE" rev-parse --git-path rebase-apply)"; } ||
@@ -1321,7 +1321,7 @@ steps:
       exec "$A4S_BIN" heavy-slot --gate "$RUN" bash -euo pipefail -c "$(cat <<'GATE_BODY'
       admit_status=0
       "$A4S_BIN" protect admit --checkpoint gate || admit_status=$?
-      if [[ "$admit_status" -eq 86 ]]; then exit 86; fi
+      if [[ "$admit_status" -eq "$("$A4S_BIN" exit-code integrationHold)" ]]; then exit "$admit_status"; fi
       if [[ "$admit_status" -ne 0 ]]; then exit "$admit_status"; fi
       # Success is provisional until the pipeline and every post-check complete.
       gate_status=1
@@ -1484,7 +1484,7 @@ steps:
         integration_status=0
         "$A4S_BIN" protect admit --checkpoint push || integration_status=$?
         if [[ "$integration_status" -eq 0 ]]; then break; fi
-        if [[ "$integration_status" -ne 86 ]]; then exit "$integration_status"; fi
+        if [[ "$integration_status" -ne "$("$A4S_BIN" exit-code integrationHold)" ]]; then exit "$integration_status"; fi
         sleep "${A4S_INTEGRATION_POLL_SEC:-1}"
       done
       STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")
@@ -1624,7 +1624,7 @@ steps:
     retry_policy:
       limit: 12
       interval_sec: 5
-      exit_code: [75]
+      exit_code: [__RETRY_EXIT__]
     run: |
       set -euo pipefail
       reject() { printf 'rule=pr_head_ready.%s expected=%q observed=%q\n' "$1" "$2" "$3" >&2; exit 1; }
@@ -1649,7 +1649,7 @@ steps:
       [[ "$observed_sha" =~ ^[0-9a-f]{40}$ ]] || reject head_format commit_oid "$observed_sha"
       if [[ "$observed_sha" != "$sha" ]]; then
         printf 'rule=pr_head_ready.head_convergence expected=%s observed=%s\n' "$sha" "$observed_sha" >&2
-        exit 75
+        exit "$("$A4S_BIN" exit-code retry)"
       fi
 
   - id: auto_merge
@@ -1663,7 +1663,7 @@ steps:
         integration_status=0
         "$A4S_BIN" protect admit --checkpoint auto_merge || integration_status=$?
         if [[ "$integration_status" -eq 0 ]]; then break; fi
-        if [[ "$integration_status" -ne 86 ]]; then exit "$integration_status"; fi
+        if [[ "$integration_status" -ne "$("$A4S_BIN" exit-code integrationHold)" ]]; then exit "$integration_status"; fi
         sleep "${A4S_INTEGRATION_POLL_SEC:-1}"
       done
       cd "$WORKTREE"

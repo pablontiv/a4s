@@ -27,7 +27,7 @@ for (const kind of ["feature", "poc", "discovery"]) {
       } else {
         assert.deepEqual(gate.preconditions, checkpoint.preconditions, `${gate.id} preserves optional-branch conditions`);
       }
-      assert.match(gate.run!, /exit 77/);
+      assert.ok(gate.run!.includes('exit "$("$A4S_BIN" exit-code cancelled)"'));
       const successors = source.steps.filter(step => (Array.isArray(step.depends) ? step.depends : [step.depends]).includes(checkpoint.id));
       assert.deepEqual(successors.map(step => step.id), [gate.id], `${checkpoint.id} has one guarded outgoing edge`);
       const environment: NodeJS.ProcessEnv = { ...process.env, ...Object.assign({}, ...gate.env ?? []), CANCEL: "no" };

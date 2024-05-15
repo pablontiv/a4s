@@ -5,7 +5,8 @@ import { tmpdir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
 import { fileDigest } from "@a4s/launcher/artifact-cache";
 import { compiled, packageRoot } from "./executable.ts";
-import { atomicJson, type Job, type JobBinding, type NativeEvidence } from "./role-jobs.ts";
+import type { Job, JobBinding, NativeEvidence } from "./role-jobs.ts";
+import { writeAtomicJson } from "@a4s/launcher/runtime";
 import { effectiveTranscriptIdentity, type TranscriptRow } from "./transcript-identity.ts";
 import { REVIEW_SCHEMA } from "./triage/schema.ts";
 
@@ -51,7 +52,7 @@ async function launch(directory: string, cwd: string, input: Record<string, unkn
   const version = await boundary.run(binary, ["--version"], { cwd, env });
   if (version.code !== 0) throw new Error(`OMP role host --version failed (${version.code ?? version.signal}): ${version.stderr.trim()}`);
   const runtime = { binary, version: version.stdout.trim(), digest: await fileDigest(binary) };
-  atomicJson(join(directory, "runner-input.json"), { ...input, cwd, runtime, agentFile: join(packageRoot, "agents/triage-reviewer.md") });
+  writeAtomicJson(join(directory, "runner-input.json"), { ...input, cwd, runtime, agentFile: join(packageRoot, "agents/triage-reviewer.md") });
   const runner = join(packageRoot, compiled ? "role-runner.ts" : "src/role-runner.ts");
   const result = await boundary.run(binary, ["-p", "--no-session", "-e", runner, directory], { cwd, env });
   if (result.code !== 0) {
@@ -86,7 +87,7 @@ export function nativeEvidence(transcript: string, routing: unknown): NativeEvid
 }
 export async function executeNativeJob(job: Job, assignment: string, boundary: RoleProcessBoundary = processes): Promise<{ output: Record<string, unknown>; native: NativeEvidence }> {
   mkdirSync(job.directory, { recursive: true, mode: 0o700 });
-  atomicJson(join(job.directory, "assignment.json"), { binding: job.binding, assignment });
+  writeAtomicJson(join(job.directory, "assignment.json"), { binding: job.binding, assignment });
   await launch(job.directory, job.binding.worktree, { mode: "run", job, assignment, outputSchema: roleSchema(job.binding) }, boundary);
   let result: { exitCode: number; aborted?: boolean; error?: string; output: string };
   try { result = JSON.parse(readFileSync(join(job.directory, "native-result.json"), "utf8")); }

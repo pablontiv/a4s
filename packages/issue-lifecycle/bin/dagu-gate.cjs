@@ -4,6 +4,7 @@ const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { constants } = require('node:os');
 const gateCache = require('./gate-cache.cjs');
+const { writeAtomicJson } = require('@a4s/launcher/runtime');
 
 const journal = process.env.A4S_GATE_JOURNAL;
 function emit(event) {
@@ -56,7 +57,7 @@ if (require.main !== module && journal && npmCli) {
     }
     if (plan.action === 'split') {
       const planFile = path.join(require('node:os').tmpdir(), `a4s-gate-${randomUUID()}.json`);
-      fs.writeFileSync(planFile, `${JSON.stringify({ ...plan, journal })}\n`, { mode: 0o600 });
+      writeAtomicJson(planFile, { ...plan, journal });
       const childEnv = { ...options.env, npm_lifecycle_event: '', A4S_GATE_JOURNAL: journal };
       let child;
       try {
@@ -115,9 +116,7 @@ if (require.main !== module && journal && npmCli) {
     fs.writeFileSync(target, JSON.stringify({ id: 'lock_wait', name: 'lock_wait', startedAt }) + '\n');
     const attempt = { id, iteration: Number(process.env.DAG_PUSHBACK_ITERATION ?? 0), startedAt, endedAt: null, exitCode: null, result: 'RUNNING', phases: [{ name: 'lock_wait', startedAt, endedAt: null, exitCode: null }] };
     const attempts = [...(evidence?.attempts ?? []), attempt];
-    const temporary = file + '.' + id;
-    fs.writeFileSync(temporary, JSON.stringify({ schemaVersion: 1, sha, gate: process.env.GATE, result: 'RUNNING', attempts }) + '\n');
-    fs.renameSync(temporary, file);
+    writeAtomicJson(file, { schemaVersion: 1, sha, gate: process.env.GATE, result: 'RUNNING', attempts });
     console.log(target);
   } else if (command === 'start') {
     emit({ id: value, name: value, startedAt: Date.now() });
@@ -163,9 +162,7 @@ if (require.main !== module && journal && npmCli) {
     const exitCode = passed ? 0 : code || leaves.find(record => record.exitCode !== 0)?.exitCode || 1;
     Object.assign(attempt, { endedAt, exitCode, result: passed ? 'PASS' : 'FAIL', durationMs: endedAt - attempt.startedAt, phases });
     evidence.result = attempt.result;
-    const temporary = file + '.' + id;
-    fs.writeFileSync(temporary, JSON.stringify(evidence) + '\n');
-    fs.renameSync(temporary, file);
+    writeAtomicJson(file, evidence);
     process.exitCode = exitCode;
   } else {
     throw new Error('Expected path, begin, start, end or finish');

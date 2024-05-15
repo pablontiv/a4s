@@ -10,6 +10,17 @@ The source CLI runs with Node's strip-only TypeScript support. The package
 `typecheck` script enables `erasableSyntaxOnly` to reject non-erasable syntax,
 including constructor parameter properties, enums, and runtime namespaces.
 
+The launcher, lifecycle engine and standalone gate helpers share the launcher-owned
+`@a4s/launcher/runtime` API (`packages/launcher/src/runtime.cjs`, shipped as
+`bin/runtime.cjs`): one canonical JSON serializer for content hashes and health output, one durable
+JSON writer (private temporary file, file fsync, atomic rename, directory fsync),
+and the exit-code definitions. Immutable records use the same writer's exclusive
+publication mode, which never replaces an existing record. Lock-inode metadata
+and append-only journals retain their distinct write semantics.
+Bash reads codes with `a4s exit-code integrationHold|retry|cancelled`; materialized
+Dagu retry policies receive the retry code from that same source. Existing
+admitted snapshots and their artifact-bound execution remain unchanged.
+
 ## Primary checkout write guard
 
 The package includes the `primary-guard` extension. (This package was formerly

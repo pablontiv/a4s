@@ -9,7 +9,8 @@ import { ensureArtifact, inspectArtifact } from "@a4s/launcher/artifact-cache";
 import { identity, type ArtifactSupport } from "../../src/identity.ts";
 import { type ArtifactTuple, type ResolvedRelease } from "@a4s/launcher/release";
 import { type StationDependencies } from "@a4s/launcher/station";
-import { stationRoot, writeJsonDurable, type StationState } from "@a4s/launcher/station-state";
+import { stationRoot, type StationState } from "@a4s/launcher/station-state";
+import { writeAtomicJson } from "@a4s/launcher/runtime";
 
 export function stationFixture(t: TestContext) {
   const root = mkdtempSync(join(tmpdir(), "a4s-station-")), home = join(root, "dagu"), userHome = join(root, "user"), releases = join(root, "releases");
@@ -40,7 +41,7 @@ export function stationFixture(t: TestContext) {
   return { root, home, userHome, releases, dependencies, calls, release,
     state(): StationState { return JSON.parse(readFileSync(join(stationRoot(home), "state.json"), "utf8")); },
     stateBytes(): string { return readFileSync(join(stationRoot(home), "state.json"), "utf8"); },
-    setState(state: StationState): void { writeJsonDurable(join(stationRoot(home), "state.json"), state); },
+    setState(state: StationState): void { writeAtomicJson(join(stationRoot(home), "state.json"), state); },
     breakPayload(tuple: ArtifactTuple): void { writeFileSync(join(stationRoot(home), tuple.version, "a4s"), "broken"); },
   };
 }

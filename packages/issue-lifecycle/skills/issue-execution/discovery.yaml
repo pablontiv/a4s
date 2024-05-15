@@ -110,7 +110,7 @@ steps:
       if [[ "$CANCEL" == yes ]]; then
         "$A4S_BIN" cancellation record discovery "$CHECKPOINT" failed
         printf 'Cancellation requested at %s; terminating before successors; evidence=%s\n' "$CHECKPOINT" "$OUT_DIR"
-        exit 77
+        exit "$("$A4S_BIN" exit-code cancelled)"
       fi
 
   - id: check_findings

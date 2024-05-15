@@ -1,6 +1,7 @@
 import { readServiceEnvironment } from "./service-environment.ts";
 import { join } from "node:path";
-import { readJsonFile, realDirectory, stationRoot, tupleFromJson, writeJsonDurable } from "./station-state.ts";
+import { readJsonFile, realDirectory, stationRoot, tupleFromJson } from "./station-state.ts";
+import { writeAtomicJson } from "./runtime.cjs";
 import { isRecord } from "./type-guard.ts";
 import type { ArtifactTuple } from "./release.ts";
 
@@ -39,6 +40,6 @@ export async function bindTickLocked(home: string, dagRunId: string, current: Ar
   if (attempt !== "first") throw new Error(`Missing tick binding for ${dagRunId}; attempt=${attempt}; refusing to repin`);
   realDirectory(join(stationRoot(home), "ticks"));
   const binding = { dagRunId, tuple: current, createdAt: new Date().toISOString() };
-  writeJsonDurable(path, binding);
+  writeAtomicJson(path, binding);
   return binding;
 }

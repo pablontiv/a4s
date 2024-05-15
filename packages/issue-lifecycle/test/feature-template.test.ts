@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { renderedFeature } from "./fixtures/templates-rendered.ts";
+import { EXIT_CODES } from "@a4s/launcher/runtime";
 
 const definitions = [
   ["template", fileURLToPath(new URL("../skills/issue-execution/feature.yaml", import.meta.url))],
@@ -76,8 +77,8 @@ for (const [name, definition] of definitions) {
     const source = readFileSync(definition, "utf8");
     const ready = extractStep(source, "pr_head_ready");
     assert.match(ready, /timeout_sec: 30/);
-    assert.match(ready, /retry_policy:\n      limit: 12\n      interval_sec: 5\n      exit_code: \[75\]/);
-    assert.match(ready, /exit 75/);
+    assert.ok(ready.includes(`retry_policy:\n      limit: 12\n      interval_sec: 5\n      exit_code: [${name === "template" ? "__RETRY_EXIT__" : EXIT_CODES.retry}]`));
+    assert.ok(ready.includes('exit "$("$A4S_BIN" exit-code retry)"'));
     assert.doesNotMatch(ready, /gh pr merge|sleep|for \(\(/);
     const merge = extractStep(source, "auto_merge");
     assert.doesNotMatch(merge, /retry_policy|head_convergence/);

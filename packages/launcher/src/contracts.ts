@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { canonicalJson } from "./runtime.cjs";
 
 /** Launcher-owned wire formats, not the running payload's identity. */
 export const RELEASE_REPOSITORY = "pablontiv/a4s";
@@ -17,10 +18,5 @@ export interface ArtifactIdentity {
   dispatch: string; protocols: Record<string, string>;
   registrationManifest: { schema: number; loaderHelperApi: number; extensions: readonly string[]; commands: readonly unknown[]; tools: readonly unknown[]; resources?: Record<string, string> };
   registrationManifestHash: string;
-}
-export function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
-  if (value !== null && typeof value === "object") return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${canonicalJson((value as Record<string, unknown>)[key])}`).join(",")}}`;
-  return JSON.stringify(value);
 }
 export function registrationHash(manifest: unknown): string { return createHash("sha256").update(canonicalJson(manifest)).digest("hex"); }

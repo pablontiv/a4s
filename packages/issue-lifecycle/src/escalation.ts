@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { join, normalize } from "node:path";
-import { writeAtomicJson } from "./atomic-json.ts";
+import { EXIT_CODES, writeAtomicJson } from "@a4s/launcher/runtime";
 import { withFileLockAsync } from "@a4s/launcher/file-lock";
 import { receiptArtifact } from "./artifact-receipt.ts";
 import { isRecord } from "@a4s/launcher/type-guard";
@@ -52,7 +52,7 @@ export async function main(args: string[]): Promise<void> {
     };
     if (iteration < state.iteration) throw new Error("Native iteration moved backwards");
     state.iteration = iteration;
-    if (state.stopped) { process.exitCode = 77; return; }
+    if (state.stopped) { process.exitCode = EXIT_CODES.cancelled; return; }
     const candidate = join(root, "candidate.json");
     if (existsSync(candidate)) state.sha = JSON.parse(readFileSync(candidate, "utf8")).sha;
     else state.sha ??= "unavailable";
@@ -119,6 +119,6 @@ export async function main(args: string[]): Promise<void> {
     } else throw new Error("Unknown escalation action");
     writeAtomicJson(path, state);
     console.log(JSON.stringify(state));
-    if (state.stopped) process.exitCode = 77;
+    if (state.stopped) process.exitCode = EXIT_CODES.cancelled;
   });
 }

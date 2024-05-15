@@ -1,14 +1,13 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { isRecord } from "@a4s/launcher/type-guard";
 import { requireOwnerSession } from "./owner-session.ts";
 import { withFileLock } from "@a4s/launcher/file-lock";
+import { writeAtomicJson } from "@a4s/launcher/runtime";
 
 /** Visible checkpoint named in gate, push and auto-merge logs and [DAGU STATE]. */
 export const INTEGRATION_HOLD_CHECKPOINT = "integration_hold";
-/** Admission waits and retries; the candidate, run id and iteration stay put. */
-export const INTEGRATION_HOLD_EXIT = 86;
 
 export const CHECKPOINTS = ["gate", "push", "auto_merge"] as const;
 export type IntegrationCheckpoint = (typeof CHECKPOINTS)[number];
@@ -229,11 +228,7 @@ function readRecord(primary: string): IntegrationProtectionRecord | undefined {
 }
 
 function writeRecord(primary: string, record: IntegrationProtectionRecord): void {
-  const file = protectionPath(primary);
-  mkdirSync(dirname(file), { recursive: true });
-  const temporary = `${file}.${process.pid}.tmp`;
-  writeFileSync(temporary, `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
-  renameSync(temporary, file);
+  writeAtomicJson(protectionPath(primary), record);
 }
 
 

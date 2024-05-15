@@ -1,7 +1,8 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, linkSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import { writeAtomicJson } from "@a4s/launcher/runtime";
 
 export interface PocScopeInput {
   issue: string; question: string; requiredTargets: string[]; authorizedTargets: string[]; basis: string;
@@ -38,9 +39,7 @@ export function recordPocScopeRejection(primary: string, run: string, issue: str
   const path = rejectionPath(primary, run);
   mkdirSync(join(path, ".."), { recursive: true });
   const value: ScopeRejection = { run, issue, request, rule: error.rule, expected: error.expected, observed: error.observed, rejectedAt: new Date().toISOString() };
-  const temporary = `${path}.${process.pid}.tmp`;
-  writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
-  renameSync(temporary, path);
+  writeAtomicJson(path, value);
 }
 export function pocScopeRejection(primary: string, run: string, issue: string, request: string): string {
   const path = rejectionPath(primary, run);
@@ -52,9 +51,7 @@ export function pocScopeRejection(primary: string, run: string, issue: string, r
 const normalize = (value: string) => value.trim().replace(/\s+/g, " ").toLowerCase();
 const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 function save(path: string, value: unknown): void {
-  const temporary = `${path}.${process.pid}.tmp`;
-  writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
-  try { linkSync(temporary, path); } finally { unlinkSync(temporary); }
+  writeAtomicJson(path, value, { exclusive: true });
 }
 export function scopeTargets(value: unknown): string[] {
   if (!Array.isArray(value) || value.some(target => typeof target !== "string" || !target.trim())) throw new Error("PoC targets require a JSON string array");

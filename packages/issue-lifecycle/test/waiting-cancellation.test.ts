@@ -27,7 +27,7 @@ for (const kind of ["feature", "poc", "discovery"]) {
       } else {
         assert.deepEqual(gate.preconditions, checkpoint.preconditions, `${gate.id} preserves optional-branch conditions`);
       }
-      assert.match(gate.run!, /exit 77/);
+      assert.ok(gate.run!.includes('exit "$("$A4S_BIN" exit-code cancelled)"'));
       const successors = source.steps.filter(step => (Array.isArray(step.depends) ? step.depends : [step.depends]).includes(checkpoint.id));
       assert.deepEqual(successors.map(step => step.id), [gate.id], `${checkpoint.id} has one guarded outgoing edge`);
     }
@@ -48,7 +48,7 @@ test("planning approval guards cancellation and normal materialization as separa
   const gate = source.steps.find(step => step.id === "approve_cancellation")!;
   assert.equal(gate.depends, "approve");
   assert.equal(gate.continue_on, undefined, "cancellation failure must stop materialization");
-  assert.match(gate.run!, /if \[\[ "\$CANCEL" == yes \]\]; then[\s\S]*cancellation record planning approve aborted[\s\S]*exit 77/);
+  assert.match(gate.run!, /if \[\[ "\$CANCEL" == yes \]\]; then[\s\S]*cancellation record planning approve aborted[\s\S]*exit "\$\("\$A4S_BIN" exit-code cancelled\)"/);
   assert.match(gate.run!, /cancellation record planning approve aborted[\s\S]*dagu stop --run-id "\$RUN" planning/);
   assert.match(gate.run!, /Normal completion requires APPROVED/);
   assert.deepEqual(source.steps.filter(step => step.depends === "approve").map(step => step.id), ["approve_cancellation"]);
@@ -84,6 +84,6 @@ test("native feature role stages retain historical cancellation snapshot coverag
     const gate = historical.steps.find((step: Step) => step.id === `${id}_cancellation`);
     assert.equal(gate.depends, id);
     assert.ok(gate.env.some((entry: { REQUIRED_FIELDS?: string }) => entry.REQUIRED_FIELDS === fields.join(" ")));
-    assert.match(gate.run, /exit 77/);
+    assert.ok(gate.run.includes('exit "$("$A4S_BIN" exit-code cancelled)"'));
   }
 });
