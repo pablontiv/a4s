@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { readFileSync, readdirSync, realpathSync, writeFileSync, renameSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { bindQualityImplementer, orderReviewModels } from "@a4s/omp-cross-family-review";
+import { shellWords } from "../resources.ts";
 import { resolveRunPrimary, runParam } from "../status/progress.ts";
 import type { CallDecision, Event } from "./guard.ts";
 import type { SessionContext } from "./primary.ts";
@@ -95,6 +96,12 @@ function identity(row: TranscriptRow, models: Models) {
   requireValue(typeof family === "string" && family.length > 0, `indeterminate family ${provider}/${id}`);
   return { provider, id, family };
 }
+function assigned(task: string | undefined, marker: string): boolean {
+  if (task === undefined) return false;
+  const offset = task.indexOf(marker);
+  return offset >= 0 && (offset === 0 || /\s/.test(task[offset - 1]!)) &&
+    (offset + marker.length === task.length || /\s/.test(task[offset + marker.length]!));
+}
 function transcript(parent: string, id: string, marker: string, agent: string | undefined, cutoff: string) {
   requireValue(/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(id), "invalid subagent id");
   const path = join(parent.slice(0, -6), `${id}.jsonl`);
@@ -104,12 +111,12 @@ function transcript(parent: string, id: string, marker: string, agent: string | 
   const sessions = child.filter(row => row.type === "session");
   const inits = child.filter(row => row.type === "session_init");
   const init = inits[0];
-  requireValue(sessions.length === 1 && init &&
+  requireValue(sessions.length === 1 && init?.agent && init.task &&
     inits.every(row => row.agent === init.agent && row.task === init.task), "ambiguous session identity");
   const session = sessions[0]!;
   requireValue(session.parentSession === parent && session.id, "wrong parent session");
   requireValue(!agent || init.agent === agent, `wrong agent for ${agent}`);
-  requireValue(init.task?.includes(marker), "wrong run, iteration, SHA or role assignment");
+  requireValue(assigned(init.task, marker), "wrong run, iteration, SHA or role assignment");
   const cutoffTime = /^\d+(?:\.\d+)?$/.test(cutoff) ? Number(cutoff) * 1000 : Date.parse(cutoff);
   requireValue(init.timestamp && Date.parse(init.timestamp) > cutoffTime, "stale invocation");
   requireValue(child.some(row => row.type === "model_change" && row.role === `subagent:${id}`), "subagent id not attributed by runtime");
@@ -118,8 +125,8 @@ function transcript(parent: string, id: string, marker: string, agent: string | 
     if (row.message?.role !== "assistant" || !Array.isArray(content)) return [];
     return content.filter(part => part.type === "toolCall" && part.name === "task").flatMap(call => {
       const tasks = Array.isArray(call.arguments?.tasks) ? call.arguments.tasks : [call.arguments];
-      return tasks.map(object).filter(task => task.name === id && (!agent || task.agent === agent) &&
-        `${call.arguments?.context ?? ""}\n${task.task ?? ""}`.includes(marker)).map(() => ({ id: call.id, timestamp: row.timestamp }));
+      return tasks.map(object).filter(task => task.name === id && (task.agent === undefined ? "task" : task.agent) === init.agent &&
+        assigned(`${call.arguments?.context ?? ""}\n${task.task ?? ""}`, marker)).map(() => ({ id: call.id, timestamp: row.timestamp }));
     });
   });
   requireValue(invocations.length === 1 && invocations[0]!.id && invocations[0]!.timestamp, "missing or ambiguous parent task invocation");
@@ -204,7 +211,7 @@ export function verifyQuality(parent: string, request: QualityRequest, qa: strin
     `same-family effective ${verdict.role}: ${JSON.stringify({ implementer, model: verdict.model, attempts: verdict.attempts, fallbacks: verdict.fallbacks })}`);
   return { ...request, implementer, verdicts, action: verdicts.every(verdict => verdict.verdict === "PASS") ? "complete" : "rewind" };
 }
-async function load(run: string, ctx: QualityContext) {
+async function load(run: string, ctx: QualityContext, implementer?: string) {
   const base = (process.env.DAGU_URL || `http://127.0.0.1:${process.env.DAGU_PORT || "8080"}`).replace(/\/+$/, "");
   const response = await fetch(`${base}/api/v1/dag-runs/feature/${encodeURIComponent(run)}`, { signal: AbortSignal.timeout(5000) });
   requireValue(response.ok, `Dagu HTTP ${response.status}`);
@@ -220,15 +227,23 @@ async function load(run: string, ctx: QualityContext) {
   requireValue(resolvedPrimary, "Run PRIMARY is missing");
   const primary = realpathSync(resolvedPrimary);
   const state = execFileSync("git", ["-C", primary, "rev-parse", "--path-format=absolute", "--git-path", `dagu-feature/runs/${run}`], { encoding: "utf8" }).trim();
-  const raw = json(join(state, "quality-request.json"));
+  const raw: Record<string, unknown> = implementer === undefined ? json(join(state, "quality-request.json")) : {
+    repo: primary, worktree: join(primary, ".workspace", "worktrees", `issue-${parameter("ISSUE")}`),
+    run, sha: "", iteration: 0, attempt: "", implementer, session: parameter("OMP_SESSION_ID"),
+    implementStartedAt: implementation[0]!.startedAt,
+  };
   for (const key of ["repo", "worktree", "run", "sha", "attempt", "implementer", "session", "implementStartedAt"]) requireValue(typeof raw[key] === "string", `invalid quality request ${key}`);
   requireValue(typeof raw.iteration === "number" && Number.isInteger(raw.iteration), "invalid candidate iteration");
   // Every field consumed below has been checked at this persisted-state boundary.
   const request = raw as unknown as QualityRequest;
-  const candidate = json(join(state, "candidate.json"));
-  requireValue(request.repo === primary && request.worktree === join(primary, ".workspace", "worktrees", `issue-${parameter("ISSUE")}`) &&
-    request.run === run && request.sha === candidate.sha && request.iteration === candidate.iteration && request.implementer === candidate.implementer, "stale quality request");
-  requireValue(request.implementStartedAt === implementation[0]!.startedAt, "implement invocation cutoff mismatch");
+  if (implementer === undefined) {
+    const candidate = json(join(state, "candidate.json"));
+    requireValue(request.repo === primary && request.worktree === join(primary, ".workspace", "worktrees", `issue-${parameter("ISSUE")}`) &&
+      request.run === run && request.sha === candidate.sha && request.iteration === candidate.iteration && request.implementer === candidate.implementer, "stale quality request");
+    requireValue(request.implementStartedAt === implementation[0]!.startedAt, "implement invocation cutoff mismatch");
+  } else {
+    requireValue(details.statusLabel === "waiting" && implementation[0]!.statusLabel === "waiting", "implement checkpoint is not Waiting");
+  }
   requireValue(request.session === parameter("OMP_SESSION_ID"), "wrong coordinator session");
   const sessionDir = resolve(ctx.sessionManager.getSessionDir());
   const parents = readdirSync(sessionDir).filter(name => name.endsWith(`_${request.session}.jsonl`));
@@ -238,17 +253,136 @@ async function load(run: string, ctx: QualityContext) {
   requireValue(ctx.models, "canonical ctx.models API unavailable");
   return { request, parent, state, models: ctx.models };
 }
+interface ImplementCompletion {
+  dag: string | undefined;
+  run: string | undefined;
+  implementer: string | undefined;
+  syntax: string | undefined;
+}
+function literalImplementCompletion(text: string): ImplementCompletion | undefined {
+  let syntax: string | undefined;
+  const words = shellWords(text, value => { syntax ??= value; });
+  for (let i = 0; i < words.length; i++) {
+    if (words[i] !== "human-task" || words[i + 1] !== "complete") continue;
+    let dag: string | undefined, run: string | undefined, step: string | undefined, implementer: string | undefined;
+    let positional = false;
+    for (let j = i + 2; j < words.length && words[j] !== ";"; j++) {
+      const word = words[j]!;
+      if (word === "--") { positional = true; continue; }
+      if (positional || !word.startsWith("-")) { dag ??= word; continue; }
+      if (word.startsWith("-r") && word.length > 2) {
+        run = word.slice(word[2] === "=" ? 3 : 2);
+        continue;
+      }
+      const equals = word.indexOf("=");
+      const flag = equals < 0 ? word : word.slice(0, equals);
+      if (flag === "--quiet" || flag === "-q" || flag === "--cpu-profile" || flag === "--help" || flag === "-h") continue;
+      if (!["--run-id", "-r", "--step", "--input", "--inputs-json", "--config", "-c", "--dagu-home", "--context"].includes(flag)) continue;
+      // Quoted input values stay one word; only a positional argument names the DAG.
+      const value = equals < 0 ? (words[j + 1] === ";" ? undefined : words[++j]) : word.slice(equals + 1);
+      if (flag === "--run-id" || flag === "-r") run = value;
+      if (flag === "--step") step = value;
+      if (flag === "--input") implementer = /^IMPLEMENTER=([\w.-]+)$/.exec(value ?? "")?.[1] ?? implementer;
+    }
+    if (step === "implement") return { dag, run: run && /^[\w.-]+$/.test(run) ? run : undefined, implementer, syntax };
+  }
+  return undefined;
+}
+
+function visibleImplementCompletion(text: string): boolean {
+  const literal = text.replace(/\\\r?\n/g, "").replace(/["'`]/g, "");
+  return /\bhuman-task\b/.test(literal) && /\bcomplete\b/.test(literal) && /\bimplement\b/.test(literal);
+}
+
+function evalImplementCompletion(code: string): ImplementCompletion | undefined {
+  // Discover JS literals before shell parsing. In particular, # has no comment
+  // meaning in the wrapper, and backticks delimit JS templates, not shell expansion.
+  const literals: { value: string; template: boolean; escaped: boolean }[] = [];
+  let wrapper = "", syntax: string | undefined;
+  for (let i = 0; i < code.length;) {
+    const char = code[i++]!;
+    if (char === "/" && (code[i] === "/" || code[i] === "*")) {
+      const line = code[i++] === "/";
+      const end = line ? code.indexOf("\n", i) : code.indexOf("*/", i);
+      if (end < 0) { if (!line) syntax ??= "unfinished JS comment"; i = code.length; }
+      else i = end + (line ? 1 : 2);
+      wrapper += " ";
+      continue;
+    }
+    if (char !== "'" && char !== '"' && char !== "`") { wrapper += char; continue; }
+    let value = "", closed = false, escaped = false;
+    while (i < code.length) {
+      const next = code[i++]!;
+      if (next === char) { closed = true; break; }
+      if (char === "`" && next === "$" && code[i] === "{") syntax ??= "dynamic JS template";
+      if (next !== "\\") {
+        if (char !== "`" && /[\r\n]/.test(next)) syntax ??= "multiline JS string";
+        value += next;
+        continue;
+      }
+      escaped = true;
+      const escape = code[i++];
+      if (escape === "\n") continue;
+      if (escape === "\r") { if (code[i] === "\n") i++; continue; }
+      const escapes: Record<string, string> = { n: "\n", r: "\r", t: "\t", b: "\b", f: "\f", v: "\v", "\\": "\\", "'": "'", '"': '"', "`": "`", "$": "$" };
+      if (escape !== undefined && escapes[escape] !== undefined) value += escapes[escape];
+      else { syntax ??= "unsupported JS escape"; value += escape ?? ""; }
+    }
+    if (!closed) syntax ??= "unfinished JS literal";
+    literals.push({ value, template: char === "`", escaped });
+    wrapper += "@";
+  }
+  const candidates = literals.map(literal => literalImplementCompletion(literal.value)).filter(value => value !== undefined);
+  const visible = visibleImplementCompletion(code) || literals.some(literal => visibleImplementCompletion(literal.value));
+  if (!visible && candidates.length === 0) return undefined;
+  // Only one static call/tag is inspectable. Extra literals, branches, operators
+  // and statements cannot let an inert fresh decoy authorize a different command.
+  wrapper = wrapper.trim().replace(/;$/, "").trim();
+  wrapper = wrapper.replace(/^(?:const|let|var)\s+[\w$]+\s*=\s*/, "");
+  while (wrapper.startsWith("(") && wrapper.endsWith(")")) {
+    let depth = 0, encloses = true;
+    for (let i = 0; i < wrapper.length - 1; i++) {
+      if (wrapper[i] === "(") depth++;
+      if (wrapper[i] === ")" && --depth === 0) { encloses = false; break; }
+    }
+    if (!encloses) break;
+    wrapper = wrapper.slice(1, -1).trim();
+  }
+  const call = /^(?:await\s+)?[\w$]+(?:\.[\w$]+)*\s*\(\s*@\s*\)$/.test(wrapper);
+  const tag = /^(?:await\s+)?[\w$]+(?:\.[\w$]+)*\s*@$/.test(wrapper);
+  if (literals.length !== 1 || candidates.length !== 1) syntax ??= "one static JS command literal required";
+  if (!call && !(tag && literals[0]?.template && !literals[0].escaped)) syntax ??= "unsupported JS command wrapper";
+  const candidate = candidates[0];
+  return { dag: candidate?.dag, run: candidate?.run, implementer: candidate?.implementer,
+    syntax: syntax ?? candidate?.syntax ?? (candidate ? undefined : "uninspectable implement completion") };
+}
+
 export async function qualityDecision(event: Event, ctx: QualityContext): Promise<CallDecision> {
   const rawCommand: unknown = event.toolName === "bash" ? event.input.command : event.toolName === "eval" ? event.input.code : undefined;
-  const command = typeof rawCommand === "string" ? rawCommand.replace(/["']/g, "") : undefined;
+  const command = typeof rawCommand === "string" ? rawCommand.replace(/["'`]/g, "") : undefined;
+  let implementCompletion = typeof rawCommand === "string"
+    ? event.toolName === "eval" ? evalImplementCompletion(rawCommand) : literalImplementCompletion(rawCommand) : undefined;
+  if (implementCompletion?.dag && implementCompletion.dag !== "feature" && !implementCompletion.syntax) implementCompletion = undefined;
+  else if (!implementCompletion && typeof rawCommand === "string" && event.toolName === "bash" &&
+    visibleImplementCompletion(shellWords(rawCommand).join(" "))) {
+    implementCompletion = { dag: undefined, run: undefined, implementer: undefined, syntax: "uninspectable implement completion" };
+  }
   const completion = command !== undefined && /\bhuman-task\s+complete\b/.test(command) && /--step(?:\s+|=)quality_review\b/.test(command);
   const tasks = event.toolName === "task" ? (Array.isArray(event.input.tasks) ? event.input.tasks.map(object) : [object(event.input)]) : [];
   const assignments = tasks.map(task => `${event.input.context ?? ""}\n${task.task ?? ""}`);
-  if (!completion && !assignments.some(assignment => assignment.includes("FEATURE_QUALITY RUN="))) return undefined;
+  if (!completion && !implementCompletion && !assignments.some(assignment => assignment.includes("FEATURE_QUALITY RUN="))) return undefined;
   try {
-    const run = completion ? /--run-id(?:\s+|=)([\w.-]+)/.exec(command!)?.[1] : /FEATURE_QUALITY RUN=([\w.-]+)/.exec(assignments.join("\n"))?.[1];
+    requireValue(!implementCompletion || (!implementCompletion.syntax && implementCompletion.dag === "feature"),
+      `one literal implement completion command required: ${implementCompletion?.syntax ?? "literal feature DAG required"}`);
+    const run = implementCompletion ? implementCompletion.run : completion ? /--run-id(?:\s+|=)([\w.-]+)/.exec(command!)?.[1] : /FEATURE_QUALITY RUN=([\w.-]+)/.exec(assignments.join("\n"))?.[1];
     requireValue(run, "literal run id required");
-    const { request, parent, state, models } = await load(run, ctx);
+    const implementerId = implementCompletion?.implementer;
+    requireValue(!implementCompletion || implementerId, "complete with literal --input IMPLEMENTER=<id>");
+    const { request, parent, state, models } = await load(run, ctx, implementerId);
+    if (implementCompletion) {
+      inspectImplementer(parent, request, models);
+      return undefined;
+    }
     if (!completion) {
       const implementer = inspectImplementer(parent, request, models);
       const effectiveModel = models.resolve(`${implementer.provider}/${implementer.id}`);
@@ -285,6 +419,8 @@ export async function qualityDecision(event: Event, ctx: QualityContext): Promis
     renameSync(temporary, join(state, "quality.json"));
     return undefined;
   } catch (error) {
-    return { block: true, reason: `QUALITY_BLOCKED: ${error instanceof Error ? error.message : String(error)}; local candidate retained` };
+    return { block: true, reason: implementCompletion
+      ? `IMPLEMENT_BLOCKED: ${error instanceof Error ? error.message : String(error)}; launch a new Implement<issue>v<N> task with FEATURE_IMPLEMENT RUN=<run> after the current implement startedAt; keep Waiting implement`
+      : `QUALITY_BLOCKED: ${error instanceof Error ? error.message : String(error)}; local candidate retained` };
   }
 }

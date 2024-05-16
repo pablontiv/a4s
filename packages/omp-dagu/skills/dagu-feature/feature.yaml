@@ -901,6 +901,8 @@ steps:
     depends: quality_prepare
     action: human.task
     with:
+      push_back:
+        rewind_to: implement
       prompt: "Read quality_prepare's current request and markers. Launch task agent=qa and task agent=reviewer as two named subagents, distinct from IMPLEMENTER. Each assignment includes its exact FEATURE_QUALITY marker, repo/run/iteration/attempt/SHA, read-only worktree ${WORKTREE}, targeted QA commands and structured verdict contract from SKILL.md. Each reads git -C ${WORKTREE} rev-parse HEAD. Complete with QA and REVIEW allocated ids. The OMP extension verifies effective JSONL identities and provenance; fabricated reports, ineligible fallback and indeterminate identity block locally. QA/reviewer FAIL returns to implement with findings."
       form:
         type: object

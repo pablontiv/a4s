@@ -714,6 +714,26 @@ timestamp to verify invocation freshness. Each transcript must retain one
 agent/task identity. Supply the new allocated id as `IMPLEMENTER` when
 completing the corrected delivery.
 
+At implement completion the extension resolves the current checkpoint's exact
+`startedAt` and coordinator transcript. The allocated `IMPLEMENTER` must have a
+unique parent task invocation with the exact `FEATURE_IMPLEMENT RUN=<run-id>`
+marker and one agent/task identity. A parent allocation with the default agent
+omitted correlates to runtime `agent=task`; explicit agents match their runtime
+identity. Its first `session_init` must be strictly
+after that cutoff, preserving milliseconds; identical later reload rows retain
+the original cutoff comparison. The same provenance and effective-model
+validator runs again for quality review. A rejection names the failed invariant,
+keeps `Waiting implement`, and requires a newly launched `Implement<ISSUE>v<N>`
+after the current cutoff. At `quality_review`, native push-back with the observed
+run-wide iteration rewinds to `implement` for that fresh delivery.
+Literal completion recognition preserves quoted input values and flag order:
+feature-first or feature-last, spaced SUMMARY and MESSAGE, equals flags, short
+run/quiet flags and backslash-newline continuations. It binds the IMPLEMENTER
+from one literal simple command. An unquoted `#` at a word boundary starts a
+comment; quoted, escaped and embedded hashes remain argument text. Compound
+command boundaries, expansion, redirection and incomplete quoting produce an
+`IMPLEMENT_BLOCKED` diagnostic for recognized feature implement completions.
+
 - Leave real-`DAGU_HOME` `dagu human-task` transitions, pushes, PR creation and
   GitHub comments to the coordinator and DAG. Leave `omp plugin link` and
   `~/.omp` configuration to the operator.
