@@ -2,6 +2,7 @@
 
 ## 0.7.4
 
+- Accept native OMP's optional leading `Complete assignment thoroughly:` assignment prefix in planning review transcripts while preserving exact first-line generation binding after the prefix; document host behavior and cover misplaced, wrong-run and wrong-iteration markers (#747).
 - Tell implementation and conflict-resolution roles that summaries become PR bodies: use repository-relative paths or explicit placeholders, with raw host-specific commands/results retained only in run artifacts. Bound host-path checks to path starts and unquoted username tokens (allow spaces inside quoted paths), so nested sandbox paths and `/home/shared` prose no longer block feature PRs or PoC publication (#677).
 - Register the TypeScript loader inside the station-home isolation test worker before importing source fixtures, preserving the regression check under Node's strip-only TypeScript support.
 
