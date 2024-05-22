@@ -3,6 +3,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { existsSync, globSync, readFileSync } from "node:fs";
 import { availableParallelism } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 
 function discover() {
   const root = JSON.parse(readFileSync("package.json", "utf8"));
@@ -37,11 +38,10 @@ function pathsFromFiles(files) {
   });
 }
 
-function select(files) {
-  const workspaces = discover();
+export function select(files, workspaces, eventName) {
   const owners = [...workspaces].sort((a, b) => b.dir.length - a.dir.length);
   const selected = new Set();
-  let all = process.env.EVENT_NAME !== "pull_request";
+  let all = eventName !== "pull_request";
   for (const path of pathsFromFiles(files)) {
     const owner = owners.find(workspace => path === workspace.dir || path.startsWith(`${workspace.dir}/`));
     if (owner) selected.add(owner.name);
@@ -131,10 +131,10 @@ function aggregate() {
   }
 }
 
-try {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) try {
   switch (process.argv[2]) {
-    case "changes": console.log(JSON.stringify(select(changedFiles()))); break;
-    case "select": console.log(JSON.stringify(select(JSON.parse(readFileSync(0, "utf8"))))); break;
+    case "changes": console.log(JSON.stringify(select(changedFiles(), discover(), process.env.EVENT_NAME))); break;
+    case "select": console.log(JSON.stringify(select(JSON.parse(readFileSync(0, "utf8")), discover(), process.env.EVENT_NAME))); break;
     case "run": await run(); break;
     case "aggregate": aggregate(); break;
     default: throw new Error("Usage: node scripts/ci-workspaces.mjs changes|select|run|aggregate");
