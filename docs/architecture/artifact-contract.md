@@ -361,6 +361,57 @@ DAG or restart the service. Writing verified cache/run state and using the share
 job store do not grant station-configuration authority. Installing the OMP plugin
 from an explicit release is likewise an operator deployment action.
 
+### First-attempt confirmation for tick bindings (D9; U3)
+
+The [published #790 PASS](https://github.com/pablontiv/a4s/issues/790#issuecomment-6514998747)
+retains native Dagu **2.24.0** observations for a fresh enqueued run, a same-ID
+retry after binding removal, and unavailable API / pruned history. The positive
+discriminator for the exercised enqueue/retry path is
+`dagRunDetails.triggerType` from
+`GET /api/v1/dag-runs/<name>/<dagRunId>`, not an attempt-history count:
+
+| Case | Observed native detail | Binding-creation interpretation |
+| --- | --- | --- |
+| Fresh `dagu enqueue` | HTTP 200, `triggerType: "manual"` | Positively confirmed fresh execution for this path |
+| Same-ID `dagu retry` after deleting its successful binding | HTTP 200, `triggerType: "retry"` | Retry; missing binding MUST NOT select current anew |
+| Same-ID retry while the API was stopped | Controller and step both received `URLError: Connection refused`; recovered detail reported `"retry"` | Unknown while unavailable; fail closed |
+| History removed with native `dagu rm --history --force` | HTTP 404 `not_found`; native `status` and `retry` exited 1; history was `[]`, no step executed | Unknown/unavailable record, not a fresh execution |
+
+There is no native `first/retry/unknown` enum: a failed or unavailable detail read
+is the unknown input. Transport errors, failed lookups (including 404), invalid
+detail responses, and missing or unverified trigger values MUST remain unknown
+and fail closed. Absence of history MUST NOT be used to infer “first”; the pruned
+run's detail error was identical to the pre-enqueue not-found error.
+
+[U3 (#794)](https://github.com/pablontiv/a4s/issues/794) owns launcher enforcement;
+this PoC changes no runtime code. For a missing `ticks/<dagRunId>.json`, its
+launcher MUST allow a positively confirmed fresh tick to bind the selected tuple
+under the lock before exec, and MUST reject retry or unknown inputs rather than
+selecting current anew. A retry with an existing binding MUST run its recorded
+tuple, even if current changed or cannot start. The disposable probe wrote a
+binding on success; it did not demonstrate production launcher enforcement.
+
+Raw evidence remains at
+`<git-dir>/poc/runs/poc-a4s-issue-790/computations/first-attempt/`:
+`01-fresh-running.api.json`, `02-retry-running.api.json`,
+`02-retry.binding-loss.json`, `03-offline-running.api.json`,
+`03-offline-recovered-detail.api.json`, `04-pruned-detail.api.json`,
+`04-pruned-status.cli.json`, and `04-pruned-retry.cli.json`. The three complete
+step environments and step-side API results are retained in `observations/`;
+`execution-record.json` and `native-{before,after}-prune.tar.gz` retain command
+records and native storage. The published PASS records their provenance and
+archive hashes.
+
+This result does not establish a first-ever ordinal after deletion and
+recreation of the same run ID. A cron-scheduled trigger value was not exercised;
+duplicate-ID rejection was source-inspected, not live-tested. History removal
+was explicit, not an observation of age-based retention. Ordinary CLI status and
+step identity variables did not distinguish fresh from retry; `autoRetryCount`
+and node `retryCount` were zero in both. The attempted nested `/attempts` route
+returned 404 even for an existing run. Supported event logs lagged an active
+attempt and survived history removal, so absent events or list length MUST NOT
+be treated as proof of complete history or permission to create a binding.
+
 ## Failures and recovery
 
 - **Unresolvable/ambiguous ref, unavailable platform or failed download:** reject
