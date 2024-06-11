@@ -321,6 +321,16 @@ push back the exact availability checkpoint using its observed iteration (for
 example `start_primary_unavailable`, `close_primary_unavailable`, or PoC
 `base_primary_unavailable`). Cleaning alone does not resume a waiting task.
 
+A local gate failure at `recover_gate` is automatic: the wait handler reads the
+current run-wide push-back iteration and pushes that checkpoint back through
+`implement_budget` to implementation in the same worktree, with SHA-bound gate
+failure evidence. Repeated failures exhaust the configured cycle, fingerprint
+or elapsed-time budget and wait at `escalation` for an owner decision. This is
+the unattended repair loop's stop, not an unbounded retry. Infrastructure
+checkpoints `recover_start_gate` and `recover_push` remain manual: repair lock,
+network or other infrastructure causes, then push back the exact checkpoint
+with its observed iteration to retry its command, not implementation.
+
 Inspect `<git-dir>/dagu-feature/runs/<run>/` receipts, candidate, tested SHA,
 resource owner and cleanup proof before retry or transfer. Terminal recovery can
 reuse retained resources through a new suffixed run under the execution skill's

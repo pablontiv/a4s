@@ -23,7 +23,7 @@ flowchart LR
     R -->|conflict: push-back| B
     R -->|clean rebase| E[gate]
     E --> ER[recover_gate]
-    ER -->|code failure: push-back| B
+    ER -->|automatic push-back via implement_budget; escalation bounds retries| B
     ER -->|healthy: skipped| RV[validation<br/>optional human.task]
     RV -->|approve tested SHA or skip| F[push]
     RV -->|reason + observed iteration| B
@@ -669,27 +669,33 @@ inspects the recorded owner and process before recovering that lock.
 
 `start_gate`, `gate` and `push` retain failures in this run at
 `recover_start_gate`, `recover_gate` and `recover_push`. Healthy commands skip
-their checkpoint. Inspect the named command's logs before moving recovery.
-Read `dagu status --run-id <id> feature` immediately before every transition;
-use its run-wide `push-back iteration` (default `0` when absent):
+their checkpoint.
+
+When `recover_gate` waits, the wait handler automatically reads the run-wide
+push-back iteration (default `0` when absent) and pushes it back through
+`implement_budget` to the native `implement` role in the existing worktree.
+The returning role assignment receives eligible latest failed-gate evidence
+as described under [Implement](#implement). Repeated failures are bounded by
+the existing cycle, fingerprint and elapsed-time budgets: exhaustion waits at
+`escalation` for an owner decision rather than continuing unattended.
+Evidence handoff and automatic gate recovery do not authorize infrastructure
+or station changes.
+
+Infrastructure recovery stays operator-owned: after fixing the cause,
+`recover_start_gate` retries `start_gate` and `recover_push` retries `push`.
+Neither checkpoint is automatically rewound into implementation. Inspect the
+named command's logs and read `dagu status --run-id <id> feature` immediately
+before the manual transition, using its observed run-wide iteration:
 
 ```sh
 dagu human-task push-back feature --run-id <id> \
-  --step <recover_start_gate|recover_gate|recover_push> --expected-iteration <observed-iteration>
+  --step <recover_start_gate|recover_push> --expected-iteration <observed-iteration>
 ```
 
-An authorized `recover_gate` push-back increments the iteration and returns
-through `implement_budget` to the native `implement` role in the existing
-worktree. The operator owns that recovery decision; the returning role assignment
-automatically receives eligible latest failed-gate evidence as described under
-[Implement](#implement). Evidence handoff neither pushes back the task nor
-authorizes infrastructure or station changes.
-Infrastructure recovery stays operator-owned: after fixing the cause,
-`recover_start_gate` retries `start_gate` and `recover_push` retries `push`.
 Completing a recovery form bypasses its failed command; use push-back to rerun it.
 The coordinator receives notices with the checkpoint, run ID and diagnostic prompt.
-The wait handler's dependency/conflict dispatcher also reads the current iteration
-before each transition.
+The wait handler's dependency/conflict/PoC-scope dispatcher likewise reads the
+current iteration before each transition.
 
 Failures outside these checkpoints and aborted runs remain terminal.
 `handler_on.exit` retains unintegrated work, including a published branch, and

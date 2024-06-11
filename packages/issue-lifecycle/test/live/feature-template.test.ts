@@ -2408,6 +2408,51 @@ test("real Dagu retries rebase after a six-second index lock", {
   }
 });
 
+for (const [name, definition] of definitions) {
+  test(`${name} wait handler automatically rewinds recover_gate by observed iteration only`, async () => {
+    const repo = repository();
+    try {
+      const bin = join(repo.root, "bin");
+      const calls = join(repo.root, "transitions");
+      const done = join(repo.root, "transition-done");
+      writeFileSync(join(bin, "dagu"), `#!/bin/sh
+if [ "$1" = status ]; then
+  printf 'Waiting - feature\\n'
+  if [ -n "$OBSERVED_ITERATION" ]; then printf 'push-back iteration: %s\\n' "$OBSERVED_ITERATION"; fi
+else
+  printf '%s\\n' "$*" >> "$TRANSITIONS"
+  touch "$TRANSITION_DONE"
+fi
+`);
+      chmodSync(join(bin, "dagu"), 0o755);
+      const script = extractScript(definition, "  wait:");
+      const env = { ...featureScriptEnv(repo), PATH: `${bin}:${process.env.PATH}`,
+        TRANSITIONS: calls, TRANSITION_DONE: done };
+      for (const iteration of ["0", "7", ""]) {
+        rmSync(calls, { force: true });
+        rmSync(done, { force: true });
+        const result = spawnSync("bash", ["-c", script], { env: { ...env,
+          DAG_WAITING_STEPS: "recover_gate,recover_start_gate,recover_push,validation,escalation",
+          OBSERVED_ITERATION: iteration }, encoding: "utf8" });
+        assert.equal(result.status, 0, result.stderr);
+        const deadline = Date.now() + 5_000;
+        while (!existsSync(done) && Date.now() < deadline) await delay(20);
+        assert.ok(existsSync(done), `wait handler did not dispatch recover_gate: ${readFileSync(join(repo.state, "gate-transition.log"), "utf8")}`);
+        assert.equal(readFileSync(calls, "utf8"),
+          `human-task push-back feature --run-id test-run --step recover_gate --expected-iteration ${iteration || "0"}\n`);
+      }
+      rmSync(calls);
+      const result = spawnSync("bash", ["-c", script], { env: { ...env,
+        DAG_WAITING_STEPS: "recover_start_gate,recover_push,validation,escalation,not_recover_gate",
+        OBSERVED_ITERATION: "9" }, encoding: "utf8" });
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(existsSync(calls), false, "non-automated waits must not transition");
+    } finally {
+      rmSync(repo.root, { recursive: true, force: true });
+    }
+  });
+}
+
 type LiveDetail = Omit<RunDetails, "nodes"> & {
   nodes: Array<{ step: { name: string }; statusLabel: string; stdout?: string; stderr?: string }>;
   onExit?: { statusLabel: string };
@@ -2493,6 +2538,68 @@ async function recoveryFixture(extraConfig = ""): Promise<RecoveryFixture> {
   }
 }
 
+for (const [name, definition] of definitions) {
+  test(`${name} real Dagu automatically returns failed gates to implement and stops at escalation`, {
+    ...liveDagu, timeout: 120_000,
+  }, async () => {
+    const fixture = await recoveryFixture();
+    const id = testRunId("automatic-gate-budget");
+    const repo = repository(id);
+    try {
+      const source = parse(readFileSync(definition, "utf8"));
+      const ids = ["implement_budget", "escalation", "escalation_cancellation", "escalation_decision"];
+      const budgetSteps = ids.map(id => structuredClone(source.steps.find((step: { id: string }) => step.id === id)));
+      budgetSteps[0].depends = "triage";
+      const recoverGate = structuredClone(source.steps.find((step: { id: string }) => step.id === "recover_gate"));
+      const gateOutput = join(repo.root, "gate-output.log");
+      const implementations = join(repo.root, "implementations");
+      const dag = join(fixture.home, "dags", "feature.yaml");
+      writeFileSync(gateOutput, "FAIL persistent candidate defect\n");
+      const script = stringify({
+        name: "feature", type: "graph", shell: "bash", max_active_steps: 1,
+        env: { A4S_BIN: a4sBin, PRIMARY: repo.primary, WORKTREE: repo.worktree,
+          BRANCH: repo.branch, ISSUE: "189", RUN: "${context.run.id}", OMP_SESSION_ID: "recovery-owner",
+          DAGU_PORT: String(fixture.port), ESCALATION_PUSHBACKS: "2", ESCALATION_FINDINGS: "2", ESCALATION_SECONDS: "3600" },
+        steps: [
+          { id: "triage", run: 'echo POC=no >> "$DAGU_OUTPUT_FILE"', outputs: [{ name: "POC" }] },
+          ...budgetSteps,
+          { id: "implement", depends: "escalation_decision",
+            run: `printf '%s\\n' "\${DAG_PUSHBACK_ITERATION:-0}" >> ${JSON.stringify(implementations)}` },
+          { id: "gate", depends: "implement", continue_on: { failure: true },
+            run: `"$A4S_BIN" escalation finding gate ${JSON.stringify(gateOutput)}\nexit 1` },
+          recoverGate,
+        ],
+        handler_on: { wait: source.handler_on.wait },
+      });
+      writeFileSync(dag, script);
+      writeFileSync(join(repo.state, "receipt.json"), JSON.stringify(roleAdmission(repo.primary, fixture.home, id, script)));
+      execFileSync("dagu", ["enqueue", "--run-id", id, dag], { env: fixture.env, stdio: "pipe" });
+      const stopped = await fixture.until(`${id} escalation after automatic gate returns`, async () => {
+        const response = await fetch(`http://127.0.0.1:${fixture.port}/api/v1/dag-runs/feature/${id}`);
+        if (!response.ok) return undefined;
+        const run = (await response.json() as { dagRunDetails: LiveDetail }).dagRunDetails;
+        assert.ok(!["failed", "aborted"].includes(run.statusLabel), JSON.stringify(run));
+        return run.statusLabel === "waiting" && run.nodes.some(node =>
+          node.step.name === "escalation" && node.statusLabel === "waiting") ? run : undefined;
+      });
+      assert.deepEqual(readFileSync(implementations, "utf8").trim().split("\n"), ["0", "1"]);
+      const budget = JSON.parse(readFileSync(join(repo.state, "escalation.json"), "utf8"));
+      assert.equal(budget.iteration, 2);
+      assert.match(budget.trigger.reasons.join(" "), /push-back.*repeated finding fingerprint/);
+      assert.notEqual(stopped.nodes.find(node => node.step.name === "implement")?.statusLabel, "running");
+      assert.equal(existsSync(join(repo.state, "gate-transition.log")), true);
+      // The same production handler does nothing at the owner decision boundary.
+      const log = readFileSync(join(repo.state, "gate-transition.log"), "utf8");
+      await delay(250);
+      assert.equal(readFileSync(implementations, "utf8"), "0\n1\n");
+      assert.equal(readFileSync(join(repo.state, "gate-transition.log"), "utf8"), log);
+    } finally {
+      await fixture.close();
+      rmSync(repo.root, { recursive: true, force: true });
+    }
+  });
+}
+
 type RecoveryMode = "healthy" | "gate" | "start_gate" | "push";
 type RecoveryResult = {
   dag: string;
@@ -2523,6 +2630,7 @@ async function runRecovery(fixture: RecoveryFixture, definition: string, mode: R
     writeFileSync(join(bin, "gh"), `#!/bin/sh
 printf '%s\\n' "$*" >> '${repo.root}/gh.log'
 case "$*" in
+  "pr list "*) printf '[]\\n' ;;
   *"--jq .state"*) printf 'OPEN\\n' ;;
   *"--jq .headRefName"*) printf '%s\\n' '${repo.branch}' ;;
   *"--jq .headRefOid"*) git -C '${repo.worktree}' rev-parse HEAD ;;
@@ -2565,12 +2673,13 @@ esac
       stdio: ["ignore", "pipe", "pipe"],
     }).trim();
     const iteration = () => Number(dagu("status", "feature", "--run-id", id).match(/push-back iteration: (\d+)/)?.[1] ?? 0);
-    async function waiting(step: string): Promise<LiveDetail> {
+    async function waiting(step: string, expectedIteration?: number): Promise<LiveDetail> {
       const run = await until(`${id} waiting ${step}`, async () => {
         const run = await state(id, "waiting");
         if (step === "implement" && run.nodes.some(node => node.step.name === "recover_start_gate" && node.statusLabel === "waiting")) {
           throw new Error(run.nodes.filter(node => node.stderr).map(node => `${node.step.name}: ${readFileSync(node.stderr!, "utf8")}`).join("\n"));
         }
+        if (expectedIteration !== undefined && iteration() !== expectedIteration) return undefined;
         return run.nodes.some(node => node.step.name === step && node.statusLabel === "waiting") ? run : undefined;
       });
       checkpoints.push({ step, iteration: iteration() });
@@ -2601,14 +2710,11 @@ esac
     transition("implement");
     let previousCandidate: string | undefined;
     if (mode === "gate") {
-      const failed = await waiting("recover_gate");
-      assert.equal(failed.nodes.find(node => node.step.name === "gate")?.statusLabel, "failed");
-      const notice = new Transitions("recovery-owner").observe(failed).wakeMessage;
-      assert.ok(notice);
-      assert.ok(notice.includes("step=recover_gate") && !notice.includes("cause=gate failed"), notice);
+      // No operator transition: onWait must return the failed candidate itself.
+      await waiting("implement", before + 1);
       previousCandidate = candidate().sha;
-      transition("recover_gate", true);
-      await waiting("implement");
+      assert.equal(JSON.parse(readFileSync(join(repo.state, "gate.json"), "utf8")).sha, previousCandidate);
+      assert.match(readFileSync(join(repo.state, "gate-transition.log"), "utf8"), /./);
       assert.equal(iteration(), before + 1);
       assert.equal(git(repo.worktree, "rev-parse", "HEAD"), previousCandidate);
       writeFileSync(join(repo.worktree, "required.txt"), "fixed\n");
@@ -2826,8 +2932,7 @@ test("concurrent recovery fixtures keep distinct run identities", {
           ? [{ step: "recover_start_gate", iteration: 0 }, { step: "implement", iteration: 1 },
             { step: "await_merge", iteration: 1 }]
           : mode === "gate"
-            ? [{ step: "implement", iteration: 0 }, { step: "recover_gate", iteration: 0 },
-              { step: "implement", iteration: 1 },
+            ? [{ step: "implement", iteration: 0 }, { step: "implement", iteration: 1 },
               { step: "await_merge", iteration: 1 }]
             : [{ step: "implement", iteration: 0 },
               { step: "recover_push", iteration: 0 }, { step: "await_merge", iteration: 1 }];
@@ -3185,16 +3290,19 @@ await dispatchStage("implement",(name,value)=>appendFileSync(process.env.DAGU_OU
 `);
     writeFileSync(join(fixtureBin, "a4s"), `#!/bin/sh\nif [ "$1 $2 $3" = "role-jobs stage implement" ]; then exec ${JSON.stringify(process.execPath)} --import ${JSON.stringify(import.meta.resolve("tsx"))} ${JSON.stringify(executor)}; fi\nexec ${JSON.stringify(a4sBin)} "$@"\n`);
     chmodSync(join(fixtureBin, "a4s"), 0o755);
-    writeFileSync(join(fixtureBin, "gh"), '#!/bin/sh\nprintf \'{"title":"Fixture","body":"Acceptance","comments":[]}\\n\'\n');
+    writeFileSync(join(fixtureBin, "gh"), '#!/bin/sh\ncase "$*" in\n  "pr list "*) printf \'[]\\n\' ;;\n  *) printf \'{"title":"Fixture","body":"Acceptance","comments":[]}\\n\' ;;\nesac\n');
     chmodSync(join(fixtureBin, "gh"), 0o755);
-    const steps = ["implement_budget", "escalation", "escalation_decision", "implement", "capture", "rebase", "conflict_review", "gate", "recover_gate",
+    const steps = ["implement_budget", "escalation", "escalation_decision", "implement", "capture", "checkpoint_push", "rebase", "conflict_review", "gate", "recover_gate",
       "validation", "push"].map(step => extractStep(source, step)
         .replace(/    depends: recover_start_gate_cancellation\n/, "    depends: recover_start_gate\n")
-        .replace(/    depends: rebase_escalation_decision\n/, "    depends: capture\n")).join("\n");
+        .replace(/    depends: rebase_escalation_decision\n/, "    depends: checkpoint_push\n")).join("\n");
+    const resourceGuard = (parse(source).env as Array<Record<string, string>>)
+      .find(entry => "DAGU_RESOURCE_GUARD" in entry)!.DAGU_RESOURCE_GUARD;
     const dag = join(home, "dags", "feature.yaml");
     writeFileSync(dag, `name: feature\ntype: graph\nshell: bash\nmax_active_steps: 1\nparams:\n  - ISSUE: "189"\n  - OMP_SESSION_ID: parent-id\nenv:\n${Object.entries({
       ISSUE: "189", PRIMARY: repo.primary, WORKTREE: repo.worktree, BRANCH: repo.branch, PATH: env.PATH, A4S_BIN: env.A4S_BIN,
       BASE_BRANCH: "main", GATE: "test -f acceptance.txt", VALIDATION: "", OMP_SESSION_ID: "parent-id", RUN: "${context.run.id}", DAGU_PORT: String(port),
+      DAGU_RESOURCE_GUARD: resourceGuard,
     }).map(([key, value]) => `  - ${key}: ${JSON.stringify(value)}`).join("\n")}\nsteps:\n  - id: triage\n    run: echo POC=no >> "$DAGU_OUTPUT_FILE"\n    outputs:\n      - name: POC\n  - id: recover_start_gate\n    depends: triage\n    run: "true"\n${steps}\n  - id: after_push\n    depends: push\n    action: human.task\n    with:\n      prompt: "Observe published candidate or rebase in this same run."\n      push_back:\n        rewind_to: rebase\nhandler_on:\n  wait:\n    run: |\n${extractScript(definition, "  wait:").split("\n").map(line => `      ${line}`).join("\n")}\n`);
     writeFileSync(join(state, "receipt.json"), JSON.stringify(roleAdmission(repo.primary, home, run, readFileSync(dag, "utf8"))));
     let serviceLog = "";
@@ -3215,14 +3323,23 @@ await dispatchStage("implement",(name,value)=>appendFileSync(process.env.DAGU_OU
             assert.ok(!["failed", "aborted"].includes(detail.statusLabel), JSON.stringify(detail));
             const expected = commandImplementation && step === "implement" ? "running" : "waiting";
             if (detail.statusLabel === expected && detail.nodes.some(node => node.step.name === step && node.statusLabel === expected &&
-              (expected === "running" || iteration === undefined || (node.approvalIteration ?? 0) === iteration))) return detail;
+              (expected === "running" || iteration === undefined || (node.approvalIteration ?? 0) === iteration))) {
+              const observed = expected === "running"
+                ? JSON.parse(readFileSync(join(state, "escalation.json"), "utf8")).iteration
+                : Number(dagu("status", "feature", "--run-id", run).match(/push-back iteration: (\d+)/)?.[1] ?? 0);
+              if (iteration === undefined || observed === iteration) return detail;
+            }
           }
         } catch (error) {
           if (!(error instanceof TypeError)) throw error;
         }
         await delay(100);
       }
-      throw new Error(`Timed out at ${step}\n${serviceLog}`);
+      const response = await fetch(`http://127.0.0.1:${port}/api/v1/dag-runs/feature/${run}`);
+      const detail = await response.json() as { dagRunDetails: { nodes: Array<{ step: { name: string }; statusLabel: string; stderr?: string }> } };
+      const logs = detail.dagRunDetails.nodes.map(node => `${node.step.name}: ${node.statusLabel}\n${node.stderr && existsSync(node.stderr) ? readFileSync(node.stderr, "utf8") : ""}`).join("\n");
+      const transition = join(state, "gate-transition.log");
+      throw new Error(`Timed out at ${step}\n${logs}\n${existsSync(transition) ? readFileSync(transition, "utf8") : "No gate transition"}\n${serviceLog}`);
     }
     const completeImplementation = () => {
       if (commandImplementation) writeFileSync(implementationReady, "ready\n");
@@ -3240,14 +3357,13 @@ await dispatchStage("implement",(name,value)=>appendFileSync(process.env.DAGU_OU
       writeFileSync(join(repo.worktree, "README.txt"), "initial candidate\n");
       dagu("enqueue", "--run-id", run, dag);
       await untilStep("implement", 0);
-      completeImplementation();
-      await untilStep("recover_gate", 0);
       const refsBefore = git(repo.primary, "ls-remote", "--heads", "origin");
-      const failed = git(repo.worktree, "rev-parse", "HEAD");
-      dagu("human-task", "push-back", "feature", "--run-id", run, "--step", "recover_gate", "--expected-iteration", "0");
+      completeImplementation();
       await untilStep("implement", 1);
+      const failed = git(repo.worktree, "rev-parse", "HEAD");
+      assert.match(readFileSync(join(state, "gate-transition.log"), "utf8"), /./);
       assert.equal(git(repo.primary, "ls-remote", "--heads", "origin"), refsBefore);
-      assert.equal(git(repo.worktree, "rev-parse", "HEAD"), failed);
+      assert.equal(JSON.parse(readFileSync(join(state, "gate.json"), "utf8")).sha, failed);
       writeFileSync(join(repo.worktree, "acceptance.txt"), "accepted\n");
       writeFileSync(join(repo.worktree, "README.txt"), "fixed candidate\n");
       completeImplementation();
