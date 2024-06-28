@@ -1,7 +1,7 @@
-# dagu-feature-bundle: @a4s/omp-dagu@0.3.98 source=pablontiv/a4s@62844e5b3cfb1a4e8cd7454282e9e0e6b3a35841 bootstrap=bootstrap-a4s-v0-3-98 dagu=2.20.1
+# dagu-feature-bundle: @a4s/omp-dagu@0.3.101 source=pablontiv/a4s@04846df5940d65b8e230eafadff6621ae9186122 bootstrap=bootstrap-a4s-v0-3-101 dagu=2.20.1
 labels:
   - workspace=a4s
-  - dagu-feature-bundle=0.3.98
+  - dagu-feature-bundle=0.3.101
 queue: a4s
 type: graph
 dotenv: []
@@ -32,7 +32,7 @@ env:
   - PRIMARY: "/Users/Shared/harness/a4s"
   - RUN: ${context.run.id}
   - WORKTREE: ${PRIMARY}/.workspace/worktrees/poc-${RUN}
-  - DAGU_FEATURE_BUNDLE: "dagu-feature-bundle=0.3.98 source=pablontiv/a4s@62844e5b3cfb1a4e8cd7454282e9e0e6b3a35841 bootstrap=bootstrap-a4s-v0-3-98"
+  - DAGU_FEATURE_BUNDLE: "dagu-feature-bundle=0.3.101 source=pablontiv/a4s@04846df5940d65b8e230eafadff6621ae9186122 bootstrap=bootstrap-a4s-v0-3-101"
   - DAGU_RESOURCE_GUARD: |
       resource_lock() {
         local primary common expected actual attempt
