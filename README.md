@@ -79,4 +79,6 @@ npm test
 npm run typecheck
 ```
 
+CI typechecks `@a4s/omp-cross-family-review` when changes select that workspace, including package changes and CI-only changes.
+
 La historia completa anterior a esta reducción queda en la rama `legacy`.

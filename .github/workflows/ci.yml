@@ -48,7 +48,7 @@ jobs:
             names=$all
           fi
           # @a4s/pi-tool-row-presentation typechecks against @pablontiv/pion, which CI does not install.
-          workspaces=$(jq -cn --argjson names "$names" '$names | map({name: ("@a4s/" + .), typecheck: (. == "omp-hot-reload" or . == "context-expert" or . == "orca-omp-integration" or . == "omp-dagu" or . == "synagent" or . == "synagent-bus")})')
+          workspaces=$(jq -cn --argjson names "$names" '$names | map({name: ("@a4s/" + .), typecheck: (. == "omp-hot-reload" or . == "context-expert" or . == "orca-omp-integration" or . == "omp-dagu" or . == "synagent" or . == "synagent-bus" or . == "omp-cross-family-review")})')
           echo "workspaces=$workspaces" >> "$GITHUB_OUTPUT"
   test:
     needs: changes
