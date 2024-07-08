@@ -3,7 +3,7 @@ import { activityTarget, readActivity } from "./activity.ts";
 import { ghIssueTitleResolver, IssueTitles } from "./issue-title.ts";
 import { isActive, issueNumber, renderOffline, renderWidget, runParam, TOGGLE_COMMAND, topicFor, Transitions } from "./progress.ts";
 import type { RunDetails, WidgetTheme } from "./progress.ts";
-import { resolveRepository } from "./repository.ts";
+import { readCiDiagnostic, resolveRepository } from "./repository.ts";
 import { SSEParser } from "./sse.ts";
 import type { SSEEvent } from "./sse.ts";
 import { EventLog } from "./event-log.ts";
@@ -138,8 +138,10 @@ async function watchNotices(base: string, repo: string, ctx: Context, signal: Ab
         // final event has not reached the eventually consistent ledger yet.
         try {
           const run = await runDetails(base, summary, signal);
-          for (const snapshot of await ledger.read(base, run, signal)) {
-            const effects = transitions.observe(snapshot, { baseline });
+          const ciDiagnostic = await readCiDiagnostic(runParam(run, "PRIMARY"), run.dagRunId,
+            run.nodes?.some(node => node.statusLabel === "waiting" && (node.step.id ?? node.step.name) === "implement") ?? false, signal);
+          for (const snapshot of [...await ledger.read(base, run, signal), run]) {
+            const effects = transitions.observe(snapshot, { baseline, ...(ciDiagnostic ? { ciDiagnostic } : {}) });
             for (const message of effects.wakeMessages ?? (effects.wakeMessage ? [effects.wakeMessage] : [])) wake(message);
             if (effects.abortMessage) {
               ctx.ui.notify(effects.abortMessage, "error");

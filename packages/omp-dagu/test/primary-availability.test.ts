@@ -76,7 +76,7 @@ test("Dagu isolated primary checkpoints release the queue and rewind the same ru
       if (run?.statusLabel === "failed" || run?.statusLabel === "aborted") {
         const logs = run.nodes.filter(node => node.statusLabel === "failed")
           .map(node => `${node.step.name}: ${node.stderr ? readFileSync(node.stderr, "utf8") : "no stderr"}`).join("\n");
-        throw new Error(`${name}/${id} ${run.statusLabel}\n${logs}`);
+        throw new Error(`${name}/${id} ${run.statusLabel}\n${logs}\n${JSON.stringify(run)}`);
       }
       return run?.statusLabel === status ? run : undefined;
     });
@@ -123,9 +123,10 @@ test("Dagu isolated primary checkpoints release the queue and rewind the same ru
       const gate = phase === "base" ? "base" : `${phase}_gate`;
       const source = phase === "base" ? poc : feature;
       const predecessor = phase === "start" ? `  - id: triage\n    run: |\n      echo 'POC=no' >> "$DAGU_OUTPUT_FILE"\n    outputs:\n      - name: POC\n  - id: triage_decision\n    depends: triage\n    run: echo triage-stub\n` : `  - id: ${phase === "base" ? "record" : "await_merge"}\n    run: |\n      mkdir -p "$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path poc/runs/$RUN)"\n`;
+      const closeAuthorization = phase === "close" ? "  - id: authorize_ci\n    depends: await_merge\n    run: echo authorized-candidate\n" : "";
       const definition = join(home, "dags", `${name}.yaml`);
       const guard = source.slice(source.indexOf("  - DAGU_RESOURCE_GUARD: |"), source.indexOf("steps:\n"));
-      writeFileSync(definition, `labels: [workspace=primary228, dagu-feature-bundle=0.2.0]\nqueue: primary228\ntype: graph\nshell: bash\nparams:\n  - PRIMARY: ${primary}\n  - BASE_BRANCH: main\n  - ISSUE: "228"\n  - BRANCH: ${branch}\n  - PR_NUMBER: ""\n  - GATE: "true"\n  - REQUIRED_CHECK: validate\n  - OMP_SESSION_ID: primary228-owner\nenv:\n  - WORKTREE: ${worktree}\n  - RUN: \${context.run.id}\n  - DAGU_FEATURE_BUNDLE: test\n${guard}steps:\n${predecessor}${step(source, detector)}${step(source, checkpoint)}${step(source, gate)}${phase === "base" ? step(source, "worktree") : ""}  - id: after_gate\n    depends: ${phase === "base" ? "worktree" : gate}\n    run: echo SAME_RUN=\${context.run.id}\n`);
+      writeFileSync(definition, `labels: [workspace=primary228, dagu-feature-bundle=0.2.0]\nqueue: primary228\ntype: graph\nshell: bash\nparams:\n  - PRIMARY: ${primary}\n  - BASE_BRANCH: main\n  - ISSUE: "228"\n  - BRANCH: ${branch}\n  - PR_NUMBER: ""\n  - GATE: "true"\n  - REQUIRED_CHECK: validate\n  - OMP_SESSION_ID: primary228-owner\nenv:\n  - WORKTREE: ${worktree}\n  - RUN: \${context.run.id}\n  - DAGU_FEATURE_BUNDLE: test\n${guard}steps:\n${predecessor}${closeAuthorization}${step(source, detector)}${step(source, checkpoint)}${step(source, gate)}${phase === "base" ? step(source, "worktree") : ""}  - id: after_gate\n    depends: ${phase === "base" ? "worktree" : gate}\n    run: echo SAME_RUN=\${context.run.id}\n`);
       console.log(`$ DAGU_HOME=${home} dagu validate ${definition}\n${dagu("validate", definition)}`);
       console.log(`$ DAGU_HOME=${home} dagu enqueue --run-id ${id} ${definition}\n${dagu("enqueue", "--run-id", id, definition)}`);
       if (blocked === "clean") {

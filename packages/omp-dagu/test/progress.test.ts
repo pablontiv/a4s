@@ -112,7 +112,7 @@ const waitingAt = (name: string, step: string, iteration = 0): RunDetails => ({
 test("all human checkpoints wake the owner once per DAG, run, step and iteration", () => {
   const transitions = new Transitions("session-a");
   for (const [name, steps] of [
-    ["feature", ["triage", "implement", "dependency_review", "conflict_review", "await_merge", "start_primary_unavailable", "close_primary_unavailable", "recover_start_gate", "recover_gate", "recover_push"]],
+    ["feature", ["triage", "implement", "dependency_review", "conflict_review", "await_ci", "await_merge", "start_primary_unavailable", "close_primary_unavailable", "recover_start_gate", "recover_gate", "recover_push"]],
     ["poc", ["run_poc", "decide", "base_primary_unavailable"]],
     ["discovery", ["discover", "validate", "consolidate", "approve"]],
   ] as const) {
