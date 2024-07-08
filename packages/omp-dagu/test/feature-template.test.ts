@@ -1789,8 +1789,8 @@ for (const [name, definition] of definitions) {
             const decision = mode === "poc" ? extractStep(source, "triage_decision")
               : "  - id: triage_decision\n    depends: triage\n    run: echo reviewed-implementation\n";
             const implementation = mode === "poc"
-              ? extractStep(source, "implement") + "  - id: await_merge\n    depends: implement\n    run: echo merged\n"
-              : `  - id: implement\n    depends: start_gate\n    run: |\n      git -C "$WORKTREE" rev-parse HEAD > "$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")/tested-sha"\n      ${mode === "implementation-blocked" ? 'printf "operator changes\\n" > "$PRIMARY/README.txt"' : "echo implementation"}\n  - id: await_merge\n    depends: implement\n    run: echo merged\n`;
+              ? extractStep(source, "implement") + "  - id: await_merge\n    depends: implement\n    run: echo merged\n  - id: authorize_ci\n    depends: await_merge\n    run: echo authorized-candidate\n"
+              : `  - id: implement\n    depends: start_gate\n    run: |\n      git -C "$WORKTREE" rev-parse HEAD > "$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")/tested-sha"\n      ${mode === "implementation-blocked" ? 'printf "operator changes\\n" > "$PRIMARY/README.txt"' : "echo implementation"}\n  - id: await_merge\n    depends: implement\n    run: echo merged\n  - id: authorize_ci\n    depends: await_merge\n    run: echo authorized-candidate\n`;
             const script = [
               "type: graph\nshell: bash\nmax_active_steps: 1\n",
               `params:\n  - ISSUE: "189"\n  - PRIMARY: ${repo.primary}\n  - BRANCH: ${repo.branch}\n  - BASE_BRANCH: main\n  - PR_NUMBER: ""\n  - GATE: "true"\n  - REQUIRED_CHECK: validate\n  - OMP_SESSION_ID: close-owner\n`,

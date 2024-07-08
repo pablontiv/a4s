@@ -1119,16 +1119,50 @@ steps:
       pr_number=$(gh pr view "$pr_ref" --json number --jq .number)
       printf 'pr=%s\nhead_sha=%s\n' "$pr_number" "$sha"
 
+  - id: await_ci
+    depends: auto_merge
+    action: human.task
+    with:
+      prompt: "The scheduled reconciler owns this CI checkpoint. Evidence of CODE_FAIL for the published SHA returns this same run to implement; the SHA, check and log excerpt are in <git-dir>/dagu-feature/runs/${RUN}/ci-return.json and the coordinator notice."
+      push_back:
+        rewind_to: implement
+
   - id: await_merge
     depends: auto_merge
     action: human.task
     with:
-      prompt: "The scheduled reconcile DAG owns this checkpoint: complete on MERGED; push back with the expected iteration on BEHIND or DIRTY; keep OPEN with auto-merge waiting; report unreconciled states."
+      prompt: "The scheduled reconciler owns this merge checkpoint: BEHIND or DIRTY returns to rebase with the observed iteration. Both CI and merge checkpoints complete only after MERGED with successful checks for the published SHA."
       push_back:
         rewind_to: rebase
 
+  - id: authorize_ci
+    depends: [await_ci, await_merge]
+    run: |
+      set -euo pipefail
+      repo=$(gh repo view "$(git -C "$PRIMARY" remote get-url origin)" --json nameWithOwner --jq .nameWithOwner)
+      sha=$(git -C "$WORKTREE" rev-parse HEAD)
+      pr_ref=${PR_NUMBER:-$BRANCH}
+      current=$(gh pr view "$pr_ref" -R "$repo" --json headRefOid --jq .headRefOid)
+      [[ "$current" == "$sha" ]] || { echo "STALE_SHA published=$sha current=$current" >&2; exit 1; }
+      # complete is not iteration-atomic. Authorize only the candidate's own CI,
+      # never the result that caused an earlier asynchronous completion.
+      required=$(gh pr checks "$pr_ref" -R "$repo" --required --json name,state)
+      jq -e 'length > 0 and all(.[]; .state == "SUCCESS" or .state == "NEUTRAL" or .state == "SKIPPED")' <<<"$required"
+      checks=$(gh api --paginate --slurp "repos/$repo/commits/$sha/check-runs")
+      statuses=$(gh api "repos/$repo/commits/$sha/status")
+      jq -en --arg sha "$sha" --argjson required "$required" --argjson checks "$checks" --argjson statuses "$statuses" '
+        [($checks[] .check_runs[] | {name, sha:.head_sha, id, state:(if .status == "completed" then .conclusion | ascii_upcase else "PENDING" end)}),
+         ($statuses.statuses[] | {name:.context, sha:$statuses.sha, id, state:(.state | ascii_upcase)})] as $all
+        | all($required[]; .name as $name |
+            ([$all[] | select(.name == $name and .sha == $sha)] | sort_by(.id) | last) as $check |
+            $check != null and ($check.state == "SUCCESS" or $check.state == "NEUTRAL" or $check.state == "SKIPPED"))
+      ' || { echo "STALE_SHA or unsuccessful required checks for $sha" >&2; exit 1; }
+      [[ "$(gh pr view "$pr_ref" -R "$repo" --json headRefOid --jq .headRefOid)" == "$sha" ]] ||
+        { echo "STALE_SHA during CI authorization" >&2; exit 1; }
+      printf 'authorized_sha=%s\n' "$sha"
+
   - id: detect_close_primary
-    depends: await_merge
+    depends: authorize_ci
     run: |
       set -euo pipefail
       branch=$(git -C "$PRIMARY" branch --show-current)
