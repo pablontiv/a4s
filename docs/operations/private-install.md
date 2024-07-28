@@ -8,8 +8,14 @@ instead come from a verified tagged release, never an installed source checkout.
 
 ## Prerequisites and development
 
-- Node.js as pinned in root `package.json` `engines.node`, npm workspaces and
-  access to the lockfile's exact dependencies, including for standalone consumers.
+- Node.js satisfying root `package.json` `engines.node`, npm
+  workspaces and access to the lockfile's exact dependencies, including for
+  standalone consumers. This is a minimum, not an exact version pin. The station
+  gate host reported `node --version` as `v22.23.4` on 2026-10-30; the gate uses
+  the Node executable on the station service's PATH. Node 22/24 remain supported:
+  status repository cancellation guards missing child pids rather than relying
+  on the Node 26 process-kill fix. Record `node --version` from the gate's
+  environment when diagnosing a different station or toolchain change.
 - Native OMP for OMP integrations; review-routing's host compatibility and Bun
   requirement are in its manifest's `peerDependencies` and `engines.bun`.
   npm installs its `devDependencies.bun` pin for tests.

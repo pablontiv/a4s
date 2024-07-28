@@ -3978,6 +3978,79 @@ function assertTimedAttempt(attempt: GateAttempt, exitCode: number): void {
 }
 
 for (const [name, definition] of definitions) {
+  for (const [signal, status] of [["TERM", 143], ["INT", 130], ["HUP", 129]] as const) {
+    test(`${name} signalled gate shell records FAIL on ${signal}`, { timeout: 15_000 }, () => {
+      const repo = repository();
+      try {
+        rmSync(join(repo.state, "tested-sha"));
+        const result = spawnSync("bash", ["-c", extractScript(definition, "  - id: gate")], {
+          env: { ...featureScriptEnv(repo), GATE: `kill -${signal} "$PPID"` },
+          encoding: "utf8", timeout: 10_000,
+        });
+        assert.equal(result.status, status, result.stdout + result.stderr);
+        const evidence: GateEvidence = JSON.parse(readFileSync(join(repo.state, "gate.json"), "utf8"));
+        assert.equal(evidence.result, "FAIL");
+        assert.equal(evidence.attempts.at(-1)!.exitCode, status);
+        assert.ok(evidence.attempts.at(-1)!.phases.some(phase => phase.name === "command" && phase.exitCode !== 0));
+        assert.ok(!evidence.attempts.at(-1)!.phases.some(phase => phase.name === "post_checks"));
+        assert.equal(existsSync(join(repo.state, "tested-sha")), false);
+      } finally { rmSync(repo.root, { recursive: true, force: true }); }
+    });
+  }
+
+  test(`${name} SIGTERM-killed gate process group records FAIL`, { timeout: 20_000 }, async () => {
+    const repo = repository();
+    const ready = join(repo.root, "gate-ready");
+    rmSync(join(repo.state, "tested-sha"));
+    const child = spawn("bash", ["-c", extractScript(definition, "  - id: gate")], {
+      env: { ...featureScriptEnv(repo), GATE: `printf ready > ${JSON.stringify(ready)}; sleep 30` },
+      detached: true, stdio: ["ignore", "pipe", "pipe"],
+    });
+    let logs = "";
+    child.stdout.on("data", data => { logs += data; });
+    child.stderr.on("data", data => { logs += data; });
+    const { promise: exited, resolve: resolveExit } = Promise.withResolvers<void>();
+    child.once("close", () => resolveExit());
+    try {
+      const deadline = Date.now() + 10_000;
+      while (!existsSync(ready) && child.exitCode === null && child.signalCode === null && Date.now() < deadline) await delay(20);
+      assert.ok(existsSync(ready), logs);
+      process.kill(-child.pid!, "SIGTERM");
+      await exited;
+      const evidence: GateEvidence = JSON.parse(readFileSync(join(repo.state, "gate.json"), "utf8"));
+      assert.equal(evidence.result, "FAIL", logs);
+      assert.notEqual(evidence.attempts.at(-1)!.exitCode, 0);
+      assert.equal(existsSync(join(repo.state, "tested-sha")), false);
+    } finally {
+      try { process.kill(-child.pid!, "SIGKILL"); } catch { /* The isolated process group is already gone. */ }
+      await exited;
+      rmSync(repo.root, { recursive: true, force: true });
+    }
+  });
+
+  for (const proof of ["missing tested-sha", "stale tested-sha", "FAIL gate", "RUNNING gate", "missing gate result"] as const) {
+    test(`${name} push rejects ${proof} before publishing`, () => {
+      const repo = repository();
+      try {
+        runScript(extractScript(definition, "  - id: gate"), repo);
+        if (proof === "missing tested-sha") rmSync(join(repo.state, "tested-sha"));
+        else if (proof === "stale tested-sha") writeFileSync(join(repo.state, "tested-sha"), "b".repeat(40) + "\n");
+        else {
+          const evidence = JSON.parse(readFileSync(join(repo.state, "gate.json"), "utf8"));
+          if (proof === "missing gate result") delete evidence.result;
+          else evidence.result = proof === "FAIL gate" ? "FAIL" : "RUNNING";
+          writeFileSync(join(repo.state, "gate.json"), JSON.stringify(evidence));
+        }
+        const result = spawnSync("bash", ["-c", extractScript(definition, "  - id: push")], {
+          env: featureScriptEnv(repo), encoding: "utf8",
+        });
+        assert.equal(result.status, 1, result.stdout + result.stderr);
+        assert.match(result.stderr, /rule=push\.(tested_sha|gate_binding) /);
+        assert.equal(hasRef(join(repo.root, "remote.git"), `refs/heads/${repo.branch}`), false);
+      } finally { rmSync(repo.root, { recursive: true, force: true }); }
+    });
+  }
+
   test(`${name} gate records failed phases and preserves a second passing attempt`, { timeout: 30_000 }, () => {
     const repo = repository();
     try {
@@ -4009,6 +4082,63 @@ for (const [name, definition] of definitions) {
       assert.ok(attempt.phases.every(phase => phase.exitCode === 0));
     } finally { rmSync(repo.root, { recursive: true, force: true }); }
   });
+}
+
+for (const [name, definition] of definitions) {
+  for (const mode of ["trapped SIGTERM", "native empty exit code"] as const) {
+    test(`${name} real Dagu signalled gate routes ${mode} to recover_gate without push`, {
+      ...liveDagu, timeout: 45_000,
+    }, async () => {
+      const runtime = await recoveryFixture();
+      const id = testRunId("signalled-gate");
+      const repo = repository(id);
+      try {
+        rmSync(join(repo.state, "tested-sha"));
+        const source = parse(readFileSync(definition, "utf8"));
+        const gate = structuredClone(source.steps.find((step: { id: string }) => step.id === "gate"));
+        gate.depends = "implement";
+        delete gate.retry_policy;
+        if (mode === "native empty exit code") gate.run = "kill -TERM $$";
+        const recovery = structuredClone(source.steps.find((step: { id: string }) => step.id === "recover_gate"));
+        recovery.with.push_back.rewind_to = "implement";
+        const validation = structuredClone(source.steps.find((step: { id: string }) => step.id === "validation"));
+        validation.depends = "recover_gate";
+        validation.with.push_back.rewind_to = "implement";
+        const push = structuredClone(source.steps.find((step: { id: string }) => step.id === "push"));
+        push.depends = "validation";
+        const variables = { ...featureScriptEnv(repo), RUN: id, GATE: 'kill -TERM "$PPID"', VALIDATION: "" };
+        const dag = join(runtime.home, "dags", "feature.yaml");
+        writeFileSync(dag, stringify({
+          name: "feature", type: "graph", shell: "bash", max_active_steps: 1,
+          env: Object.fromEntries(Object.entries(variables).filter(([, value]) => value !== undefined)),
+          steps: [
+            { id: "triage", run: 'echo POC=no >> "$DAGU_OUTPUT_FILE"', outputs: [{ name: "POC" }] },
+            { id: "implement", depends: "triage", run: "true" },
+            gate, recovery, validation, push,
+          ],
+        }));
+        execFileSync("dagu", ["enqueue", "--run-id", id, dag], { env: runtime.env, stdio: "pipe" });
+        const waiting = await runtime.state(id, "waiting");
+        assert.equal(waiting.nodes.find(node => node.step.name === "recover_gate")?.statusLabel, "waiting");
+        for (const step of ["validation", "push"]) {
+          assert.equal(waiting.nodes.find(node => node.step.name === step)?.statusLabel, "not_started");
+        }
+        if (mode === "trapped SIGTERM") {
+          const evidence: GateEvidence = JSON.parse(readFileSync(join(repo.state, "gate.json"), "utf8"));
+          assert.equal(evidence.result, "FAIL");
+          assert.equal(evidence.attempts.at(-1)!.exitCode, 143);
+        } else {
+          const observed = waiting.nodes.find(node => node.step.name === "gate") as typeof waiting.nodes[number] & { exitCode?: number };
+          assert.equal(observed.exitCode, undefined, "exercise Dagu's missing native exit code, not an ordinary exit 143");
+        }
+        assert.equal(existsSync(join(repo.state, "tested-sha")), false);
+        assert.equal(hasRef(join(repo.root, "remote.git"), `refs/heads/${repo.branch}`), false);
+      } finally {
+        await runtime.close();
+        rmSync(repo.root, { recursive: true, force: true });
+      }
+    });
+  }
 }
 
 test("real Dagu gate timing retains failed automatic retry and every npm phase inside the step window", {

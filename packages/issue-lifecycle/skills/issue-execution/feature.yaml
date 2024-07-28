@@ -1288,7 +1288,12 @@ steps:
       "$A4S_BIN" protect admit --checkpoint gate || admit_status=$?
       if [[ "$admit_status" -eq 86 ]]; then exit 86; fi
       if [[ "$admit_status" -ne 0 ]]; then exit "$admit_status"; fi
-      trap 'status=$?; trap - EXIT; "$A4S_BIN" gate finish "$status" || { test "$status" != 0 || status=1; }; exit "$status"' EXIT
+      # Success is provisional until the pipeline and every post-check complete.
+      gate_status=1
+      trap 'status=$?; trap - EXIT; trap "" TERM INT HUP; if (( status == 0 )); then status=$gate_status; fi; "$A4S_BIN" gate finish "$status" || { test "$status" != 0 || status=1; }; exit "$status"' EXIT
+      trap 'gate_status=143; exit "$gate_status"' TERM
+      trap 'gate_status=130; exit "$gate_status"' INT
+      trap 'gate_status=129; exit "$gate_status"' HUP
       "$A4S_BIN" gate start pre_checks
       cd "$WORKTREE"
       STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")
@@ -1298,12 +1303,12 @@ steps:
       test -z "$(git status --porcelain)"
       "$A4S_BIN" gate end pre_checks 0
       "$A4S_BIN" gate start command
-      status=0
-      env -u GH_TOKEN -u GITHUB_TOKEN NODE_OPTIONS="${NODE_OPTIONS:-} --require \"$A4S_GATE_HELPER\"" bash -euo pipefail -c "$GATE" 2>&1 | tee "$STATE/gate-output.log" || status=$?
-      "$A4S_BIN" gate end command "$status"
-      if (( status != 0 )); then
+      command_status=0
+      env -u GH_TOKEN -u GITHUB_TOKEN NODE_OPTIONS="${NODE_OPTIONS:-} --require \"$A4S_GATE_HELPER\"" bash -euo pipefail -c "$GATE" 2>&1 | tee "$STATE/gate-output.log" || command_status=$?
+      "$A4S_BIN" gate end command "$command_status"
+      if (( command_status != 0 )); then
         "$A4S_BIN" escalation finding gate "$STATE/gate-output.log"
-        exit "$status"
+        exit "$command_status"
       fi
       "$A4S_BIN" gate start post_checks
       status=$(git status --porcelain)
@@ -1317,6 +1322,7 @@ steps:
       printf 'tested_sha=%s\n' "$sha" | tee -a "${DAGU_OUTPUT_FILE:-/dev/null}"
       git rev-parse HEAD > "$STATE/tested-sha"
       "$A4S_BIN" gate end post_checks 0
+      gate_status=0
       GATE_BODY
       )"
     outputs:
@@ -1327,7 +1333,7 @@ steps:
     continue_on: skipped
     preconditions:
       - condition: "${gate.exit_code}"
-        expected: "re:^[1-9][0-9]*$"
+        expected: "re:^(|[^0].*|0.+)$"
     action: human.task
     with:
       prompt: "gate failed. The wait handler automatically pushes back with the observed run-wide iteration through implement_budget to repair the candidate in the same worktree; exhausted budgets wait at escalation for an owner decision."
@@ -1455,8 +1461,10 @@ steps:
       equal branch "$BRANCH" "$(git -C "$WORKTREE" branch --show-current)"
       equal candidate_head "$sha" "$(git -C "$WORKTREE" rev-parse HEAD)"
       equal clean "" "$(git -C "$WORKTREE" status --porcelain)"
-      jq -e --arg sha "$sha" --arg gate "$GATE" '.sha == $sha and .gate == $gate' "$STATE/gate.json" >/dev/null ||
-        reject gate_binding "sha=$sha gate=$GATE" "$(cat "$STATE/gate.json")"
+      jq -e --arg sha "$sha" --arg gate "$GATE" '.sha == $sha and .gate == $gate and .result == "PASS"' "$STATE/gate.json" >/dev/null ||
+        reject gate_binding "sha=$sha gate=$GATE result=PASS" "$(cat "$STATE/gate.json")"
+      test -s "$STATE/tested-sha" || reject tested_sha "$sha" missing
+      equal tested_sha "$sha" "$(cat "$STATE/tested-sha")"
       if [[ -n "${VALIDATION:-}" ]]; then
         equal validation_approval yes "$APPROVED"
         if [[ "$TESTED_SHA" != "$sha" ]]; then
