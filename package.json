@@ -21,8 +21,8 @@
     "node": ">=22.19.0"
   },
   "scripts": {
-    "typecheck": "npm run typecheck --workspace @a4s/hot-reload && npm run typecheck --workspace @a4s/context-management && npm run typecheck --workspace @a4s/orca-omp-integration && npm run typecheck --workspace @a4s/omp-cross-family-review && npm run typecheck --workspace @a4s/omp-dagu && npm run typecheck --workspace @a4s/pi-tool-row-presentation && npm run typecheck --workspace @a4s/synagent && npm run typecheck --workspace @a4s/message-bus",
-    "test": "npm test --workspace @a4s/hot-reload && npm test --workspace @a4s/context-management && npm test --workspace @a4s/orca-omp-integration && npm test --workspace @a4s/omp-cross-family-review && npm test --workspace @a4s/omp-dagu && npm test --workspace @a4s/pi-tool-row-presentation && npm test --workspace @a4s/synagent && npm test --workspace @a4s/message-bus",
+    "typecheck": "npm run typecheck --workspace @a4s/hot-reload && npm run typecheck --workspace @a4s/context-management && npm run typecheck --workspace @a4s/orca-integration && npm run typecheck --workspace @a4s/omp-cross-family-review && npm run typecheck --workspace @a4s/omp-dagu && npm run typecheck --workspace @a4s/pi-tool-row-presentation && npm run typecheck --workspace @a4s/synagent && npm run typecheck --workspace @a4s/message-bus",
+    "test": "npm test --workspace @a4s/hot-reload && npm test --workspace @a4s/context-management && npm test --workspace @a4s/orca-integration && npm test --workspace @a4s/omp-cross-family-review && npm test --workspace @a4s/omp-dagu && npm test --workspace @a4s/pi-tool-row-presentation && npm test --workspace @a4s/synagent && npm test --workspace @a4s/message-bus",
     "bus": "npm run bus --workspace @a4s/message-bus --"
   },
   "devDependencies": {

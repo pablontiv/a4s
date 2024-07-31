@@ -7,7 +7,7 @@ Repository of private libraries, verified extensions, agents and skills distribu
 - [`packages/context-management/`](packages/context-management/): private, host-neutral transcript compaction, Jev request/client and adaptive trigger APIs.
 
 ## Extensiones
-- [`packages/orca-omp-integration/`](packages/orca-omp-integration/): contratos de lifecycle y routing explícito de modelos para coordinadores OMP que usan workers de Orca.
+- [`packages/orca-integration/`](packages/orca-integration/): worker lifecycle and explicit model-routing contracts for OMP coordinators using Orca workers.
 - [`packages/omp-cross-family-review/`](packages/omp-cross-family-review/): selección cross-family de modelos para subagentes revisores de OMP.
 - [`packages/omp-dagu/`](packages/omp-dagu/): widget, despertar dirigido de la sesión coordinadora y guard OMP para Dagu, agente `triage-reviewer` y skill `dagu-feature`.
 - [`packages/pi-tool-row-presentation/`](packages/pi-tool-row-presentation/): presentación configurable de tool rows para Pi/Pion.
