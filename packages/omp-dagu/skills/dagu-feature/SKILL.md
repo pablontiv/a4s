@@ -134,6 +134,7 @@ The bootstrap renders the repository DAG templates when a repository adopts the 
 | `TEMPLATE_REPO` | Repository name, used in `labels: [workspace=<repo>]` and `queue: <repo>` | `rootline` | `homeserver` |
 | `TEMPLATE_BASE_BRANCH` | Default of `BASE_BRANCH`, the default branch. The DAG uses `origin/$BASE_BRANCH` as the source ref. | `master` | `main` |
 | `__GATE__` | Default of `GATE`, the local gate command, run with `bash -euo pipefail -c` in the worktree | `just check && just test` | `make hook-validate` |
+| `__REBASE_RESOLVER__` | Default of `REBASE_RESOLVER`, repository conflict-resolution command; empty selects manual conflict recovery | `""` | `""` |
 | `__REQUIRED_CHECK__` | Default of `REQUIRED_CHECK`, the GitHub check that must be required on the default branch | `candidate` | `validate` |
 | `__PRIMARY__` | Default clone path in `poc.yaml` | repository clone | repository clone |
 | `__TEST_PATHS__` | Bash ERE for repository test paths; every `*.md` also belongs to cutover | `_test\.go$\|^tests/` | `(^\|/)tests/` |
@@ -162,7 +163,7 @@ The steps:
 | Step | Effect |
 |---|---|
 | `detect` | Checks `git`, `gh` (authenticated), `jq` and the exact required `dagu version`; reads package/version, source commit and source `origin`; fetches and requires that clean package commit on the remote default branch; reads repository settings and the installed DAG values and stamps. |
-| `answers` | `human.task` that shows the current stamp, `GATE`, `REQUIRED_CHECK`, and `TEST_PATHS`, then asks for those three values. Select the test-path ERE from the repository's actual conventions. |
+| `answers` | `human.task` that shows the current stamp, `GATE`, `REQUIRED_CHECK`, `TEST_PATHS` and `REBASE_RESOLVER`, then asks for those four values. Select the test-path ERE and resolver from the repository's actual conventions. |
 | `worktrees` | Makes git ignore `.workspace/worktrees/`. When nothing ignores it yet, appends `/.workspace/worktrees/` to the clone's `info/exclude`, so the primary stays clean without a commit. |
 | `render` | Writes stamped and validated `feature.yaml`, `poc.yaml`, `discovery.yaml`, and `reconcile.yaml` under `<git-dir>/dagu-feature/`, keeping PRIMARY clean. Discovery receives the coordinating workspace label and derives the diagnosed repository from its `PRIMARY`. |
 | `reconcile` | Idempotently installs the stamped staged `reconcile.yaml` to `$DAGU_HOME/dags/reconcile.yaml` (`DAGU_HOME` defaults to `~/.dagu`) and validates it. One user-level DAG serves every adopting repository. |
@@ -177,7 +178,7 @@ check plus tests. `REQUIRED_CHECK` is the aggregate CI job:
 dagu status --run-id "bootstrap-<repo>-v<version-with-hyphens>" dagu-feature-bootstrap
 dagu human-task complete --run-id "bootstrap-<repo>-v<version-with-hyphens>" --step answers \
   --input GATE='<current gate>' --input REQUIRED_CHECK='<current check>' \
-  --input TEST_PATHS='<current Bash ERE>' dagu-feature-bootstrap
+  --input TEST_PATHS='<current Bash ERE>' --input REBASE_RESOLVER='<current command or empty>' dagu-feature-bootstrap
 ```
 
 The bootstrap is done when the run is `Succeeded`. To adopt or upgrade, open a
@@ -644,6 +645,25 @@ when Git fails while the worktree index lock is held. Dagu retries that exit cod
 up to three times at five-second intervals, preserving `conflict-action`.
 Only an active rebase with unresolved files enters conflict recovery; other Git
 failures retain Git's stderr and fail the step.
+
+`REBASE_RESOLVER` is an explicit adoption command, executed with
+`bash -euo pipefail -c` in the candidate worktree only after Git reports an active
+conflicting rebase. Before invoking it, `rebase` verifies run/worktree ownership,
+candidate SHA/tree and its single parent. It exports `DAGU_REBASE_BASE`,
+`DAGU_REBASE_UPSTREAM` and `DAGU_REBASE_CANDIDATE` as verified commit SHAs.
+Exit `0` requires a fully resolved, staged index and permits `rebase --continue`;
+exit `2` means conflicts remain for `implement`; other exits fail the step.
+Git's original diagnostics remain in the step log. A successful normalization
+archives the prior SHA's evidence and refreshes base, candidate and patch before gate.
+
+a4s adopts `node packages/omp-dagu/bin/dagu-bundle-rebase.mjs`. This repository
+policy three-way merges manifest/workspace-lock metadata and the legacy identity
+literal, and prepends the candidate's release block to unchanged published
+CHANGELOG history. Colliding patch releases receive the next patch on the updated
+base. An explicit major/minor release retains its lane when upstream remains on
+the original lane, or advances its patch when both select the same lane.
+Incompatible lanes, changed history and ambiguous functional hunks retain
+conflicts with a diagnostic. Other paths remain owned by `implement`.
 
 ## Reconcile `await_merge`
 

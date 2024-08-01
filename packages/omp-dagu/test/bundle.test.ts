@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   BUNDLE_NAME,
@@ -11,7 +12,8 @@ import {
 
 test("package metadata is the bundle compatibility authority", () => {
   assert.equal(BUNDLE_NAME, "@a4s/omp-dagu");
-  assert.equal(BUNDLE_VERSION, "0.3.26");
+  const manifest = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+  assert.equal(BUNDLE_VERSION, manifest.version);
   assert.equal(REQUIRED_DAGU_VERSION, "2.20.1");
 });
 

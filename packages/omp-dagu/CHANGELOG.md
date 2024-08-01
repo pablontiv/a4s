@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.40
+
+- Reconcile concurrent a4s bundle releases during rebase through an explicit repository adoption resolver; preserve functional conflicts and renew candidate/gate evidence before publication (#339).
+
 ## 0.3.26
 
 - Version the station LaunchAgent, base defaults and owned server configuration; install or check them idempotently with Dagu 2.20.1 validation while preserving other repositories' queues and configuration (#251).

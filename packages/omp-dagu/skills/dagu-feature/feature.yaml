@@ -30,6 +30,9 @@ params:
   - name: GATE
     type: string
     default: __GATE__
+  - name: REBASE_RESOLVER
+    type: string
+    default: __REBASE_RESOLVER__
   - name: REQUIRED_CHECK
     type: string
     default: __REQUIRED_CHECK__
@@ -669,7 +672,46 @@ steps:
       STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")
       before=$(jq -r .sha "$STATE/candidate.json")
       test "$(git -C "$WORKTREE" rev-parse HEAD)" = "$before"
-      if git -C "$WORKTREE" rebase "origin/$BASE_BRANCH"; then
+      base=$(cat "$STATE/base")
+      test "$(jq -r .base "$STATE/candidate.json")" = "$base"
+      test "$(git -C "$WORKTREE" rev-parse 'HEAD^{tree}')" = "$(jq -r .tree "$STATE/candidate.json")"
+      test "$(git -C "$WORKTREE" rev-parse HEAD^)" = "$base"
+      identity=$(jq -nc --arg primary "$(cd "$PRIMARY" && pwd -P)" \
+        --arg worktree "$(cd "$WORKTREE" && pwd -P)" --arg branch "$BRANCH" \
+        --arg run "$RUN" --arg session "$OMP_SESSION_ID" \
+        '{primary:$primary,worktree:$worktree,branch:$branch,run:$run,session:$session}')
+      test "$(cat "$STATE/identity")" = "$identity"
+      test "$(cat "$(git -C "$WORKTREE" rev-parse --path-format=absolute --git-path dagu-feature-owner)")" = "$identity"
+      upstream=$(git -C "$WORKTREE" rev-parse "origin/$BASE_BRANCH")
+      rebase_status=0
+      git -C "$WORKTREE" rebase "$upstream" || rebase_status=$?
+      if test "$rebase_status" -ne 0; then
+        if test -e "$(git -C "$WORKTREE" rev-parse --git-path index.lock)"; then
+          printf 'rebase: index.lock held in %s\n' "$WORKTREE" >&2
+          exit 75
+        fi
+        if ! { test -d "$(git -C "$WORKTREE" rev-parse --git-path rebase-merge)" ||
+               test -d "$(git -C "$WORKTREE" rev-parse --git-path rebase-apply)"; } ||
+           test -z "$(git -C "$WORKTREE" diff --name-only --diff-filter=U)"; then
+          exit "$rebase_status"
+        fi
+        if test -n "${REBASE_RESOLVER:-}"; then
+          test "$(git -C "$WORKTREE" rev-parse REBASE_HEAD)" = "$before"
+          test "$(git -C "$WORKTREE" rev-parse HEAD)" = "$upstream"
+          resolver_status=0
+          (cd "$WORKTREE" && DAGU_REBASE_BASE="$base" DAGU_REBASE_CANDIDATE="$before" \
+            DAGU_REBASE_UPSTREAM="$upstream" bash -euo pipefail -c "$REBASE_RESOLVER") || resolver_status=$?
+          case "$resolver_status" in
+            0)
+              test -z "$(git -C "$WORKTREE" diff --name-only --diff-filter=U)"
+              GIT_EDITOR=true git -C "$WORKTREE" rebase --continue
+              rebase_status=0 ;;
+            2) test -n "$(git -C "$WORKTREE" diff --name-only --diff-filter=U)" ;;
+            *) exit "$resolver_status" ;;
+          esac
+        fi
+      fi
+      if test "$rebase_status" -eq 0; then
         printf 'complete\n' > "$STATE/conflict-action"
         test "$(git -C "$WORKTREE" rev-list --count "origin/$BASE_BRANCH..HEAD")" -eq 1
         after=$(git -C "$WORKTREE" rev-parse HEAD)
@@ -686,16 +728,6 @@ steps:
         fi
         printf 'rebased_sha=%s\n' "$after"
       else
-        rebase_status=$?
-        if test -e "$(git -C "$WORKTREE" rev-parse --git-path index.lock)"; then
-          printf 'rebase: index.lock held in %s\n' "$WORKTREE" >&2
-          exit 75
-        fi
-        if ! { test -d "$(git -C "$WORKTREE" rev-parse --git-path rebase-merge)" ||
-               test -d "$(git -C "$WORKTREE" rev-parse --git-path rebase-apply)"; } ||
-           test -z "$(git -C "$WORKTREE" diff --name-only --diff-filter=U)"; then
-          exit "$rebase_status"
-        fi
         git -C "$WORKTREE" diff --name-only --diff-filter=U > "$STATE/conflict-files"
         # Keep the resolved/nonconflicting delivery and conflict markers for implement.
         git -C "$WORKTREE" rebase --quit
