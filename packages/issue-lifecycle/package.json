@@ -1,0 +1,54 @@
+{
+  "name": "@a4s/issue-lifecycle",
+  "version": "0.4.0",
+  "private": true,
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pablontiv/a4s.git",
+    "directory": "packages/issue-lifecycle"
+  },
+  "homepage": "https://github.com/pablontiv/a4s/tree/integration/v1/packages/issue-lifecycle#readme",
+  "bugs": {
+    "url": "https://github.com/pablontiv/a4s/issues"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "daguFeature": {
+    "dagu": "2.20.1",
+    "integrationBase": "integration/v1"
+  },
+  "exports": {
+    "./status": "./src/status/index.ts",
+    "./triage": "./src/triage/native.ts"
+  },
+  "bin": {
+    "dagu-feature-bundle": "./bin/dagu-feature-bundle.ts",
+    "dagu-feature-prioritize": "./bin/dagu-feature-prioritize.ts",
+    "dagu-role-jobs": "./bin/dagu-role-jobs.ts",
+    "dagu-station-install": "./bin/dagu-station-install.ts"
+  },
+  "omp": {
+    "extensions": [
+      "./src/status/reloadable.ts",
+      "./src/triage/reloadable.ts"
+    ]
+  },
+  "scripts": {
+    "test": "A4S_LIVE_DAGU=0 tsx --test test/*.test.ts",
+    "test:live": "A4S_LIVE_DAGU=1 tsx --test test/live/*.test.ts test/bundle-cli.test.ts test/bundle-rebase.test.ts test/bundle-template.test.ts test/bundle.test.ts test/feature-template.test.ts test/planning-template.test.ts test/reconcile-ci.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@a4s/hot-reload": "0.1.0",
+    "yaml": "2.9.0"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "1.0.3",
+    "@types/node": "26.6.1",
+    "tsx": "4.23.13",
+    "typescript": "7.0.2"
+  }
+}

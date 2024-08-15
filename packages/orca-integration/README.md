@@ -89,7 +89,7 @@ reading the retained quality findings:
 | --- | --- |
 | `npm test --workspace @a4s/orca-integration` | 21 passed, 0 failed |
 | `npm run typecheck --workspace @a4s/orca-integration` | `tsc --noEmit`, exit 0 |
-| `node_modules/.bin/tsx --test --test-name-pattern '^CI ' packages/omp-dagu/test/bundle-template.test.ts` | 6 passed, 0 failed |
+| Lifecycle CI/template tests (now `packages/issue-lifecycle/test/bundle-template.test.ts`), with `--test-name-pattern '^CI '` | 6 passed, 0 failed |
 
 Dagu owns the full repository gate.
 

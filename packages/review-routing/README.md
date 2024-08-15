@@ -105,12 +105,12 @@ execution. Unresolved-parent behavior is covered by unit tests.
 
 The candidate ran `npm test --workspace @a4s/review-routing` (40 pass,
 0 fail, Bun 1.4.2) and `npm run typecheck --workspace @a4s/review-routing`
-(exit 0). Dagu consumer/CI-selection checks ran with
-`node_modules/.bin/tsx --test packages/omp-dagu/test/quality-guard.test.ts packages/omp-dagu/test/bundle-template.test.ts`
-(171 pass, 2 live-Dagu skips, 0 fail), followed by
-`npm run typecheck --workspace @a4s/omp-dagu` (exit 0). CI continues to
-discover the canonical manifest and declared consumers, including its existing
-typecheck script.
+(exit 0). Dagu consumer/CI-selection checks passed 171 tests, with two live-Dagu
+skips and zero failures, followed by the lifecycle workspace's typecheck (exit 0).
+The surviving template suite now lives at
+`packages/issue-lifecycle/test/bundle-template.test.ts`; its typecheck command is
+`npm run typecheck --workspace @a4s/issue-lifecycle`. CI continues to discover the
+canonical manifest and declared consumers, including its existing typecheck script.
 
 A fresh native OMP 18.12.6 SDK session loaded the candidate package roots with
 explicit-only extension discovery and temporary agent/config/session directories.
@@ -128,15 +128,16 @@ The retained evidence is
 The evidence JSON records the session's original temporary path; the adjacent
 JSONL is the retained transcript in this worktree.
 
-Native discovery selected candidate `packages/omp-dagu/agents/{qa,triage-reviewer,plan-reviewer}.md`
-with `agentSource=user` and canonical paths in the candidate checkout.
+Native discovery selected the lifecycle package's then-present `agents/qa.md`,
+`agents/triage-reviewer.md` and `agents/plan-reviewer.md` with `agentSource=user`
+and canonical paths in the candidate checkout.
 `reviewer` and `security-reviewer` resolved to `agentSource=bundled`,
 `embedded:reviewer.md` and `embedded:security-reviewer.md`; these sources do
 not satisfy the requested candidate-definition proof.
 
 **Operational acceptance remains blocked.** The isolated catalog had zero
 authenticated models. A separate native CLI attempt with
-`omp --no-extensions -e <candidate>/packages/review-routing -e <candidate>/packages/omp-dagu --session-dir <temporary-sessions> --no-title --no-lsp --no-tools -p --model openai/gpt-5.2 "Reply only ROUTING422"`
+`omp --no-extensions -e <candidate>/packages/review-routing -e <candidate>/packages/issue-lifecycle --session-dir <temporary-sessions> --no-title --no-lsp --no-tools -p --model openai/gpt-5.2 "Reply only ROUTING422"` (package path migrated here)
 and temporary `PI_CODING_AGENT_DIR`/`PI_CODING_AGENT_SESSION_DIR` exited 1:
 `No API key found for openai`. Effective authenticated child-model selection
 and runtime response-family exclusions remain unproven. Resume with

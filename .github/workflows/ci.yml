@@ -72,9 +72,9 @@ jobs:
           npm ci
           git checkout -- package-lock.json packages
       - name: Install pinned Dagu
-        if: matrix.workspace.name == '@a4s/omp-dagu'
+        if: matrix.workspace.name == '@a4s/issue-lifecycle'
         run: &install-pinned-dagu |
-          version=$(node -p "require('./packages/omp-dagu/package.json').daguFeature.dagu")
+          version=$(node -p "require('./packages/issue-lifecycle/package.json').daguFeature.dagu")
           asset="dagu_${version}_linux_amd64.tar.gz"
           url="https://github.com/dagu-org/dagu/releases/download/v${version}"
           mkdir -p "$RUNNER_TEMP/dagu-install" "$RUNNER_TEMP/dagu-bin"
@@ -89,9 +89,9 @@ jobs:
           install -m 0755 dagu "$RUNNER_TEMP/dagu-bin/dagu"
           echo "$RUNNER_TEMP/dagu-bin" >> "$GITHUB_PATH"
       - name: Check pinned Dagu
-        if: matrix.workspace.name == '@a4s/omp-dagu'
+        if: matrix.workspace.name == '@a4s/issue-lifecycle'
         run: &check-pinned-dagu |
-          version=$(node -p "require('./packages/omp-dagu/package.json').daguFeature.dagu")
+          version=$(node -p "require('./packages/issue-lifecycle/package.json').daguFeature.dagu")
           command -v dagu
           actual=$(dagu version)
           echo "$actual"
@@ -107,7 +107,7 @@ jobs:
         run: npm run typecheck --workspace "${{ matrix.workspace.name }}"
   live:
     needs: changes
-    if: contains(fromJSON(needs.changes.outputs.workspaces).*.name, '@a4s/omp-dagu')
+    if: contains(fromJSON(needs.changes.outputs.workspaces).*.name, '@a4s/issue-lifecycle')
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -126,7 +126,7 @@ jobs:
         run: *check-pinned-dagu
       - name: Live Dagu tests
         id: live-tests
-        working-directory: packages/omp-dagu
+        working-directory: packages/issue-lifecycle
         env:
           A4S_LIVE_DAGU: "1"
           A4S_DAGU_DIAGNOSTICS_DIR: ${{ runner.temp }}/dagu-poc-diagnostics
