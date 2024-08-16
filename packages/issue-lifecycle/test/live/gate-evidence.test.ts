@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -8,33 +8,59 @@ import test from "node:test";
 
 const helper = fileURLToPath(new URL("../../bin/dagu-gate.cjs", import.meta.url));
 
-for (const entrypoint of ["postinstall", "npm"] as const) {
-  test(`gate preload resolves ${entrypoint} like Node`, () => {
-    const state = mkdtempSync(join(tmpdir(), "a4s-gate-preload-"));
-    try {
-      const script = join(state, entrypoint === "npm" ? "npm-cli.js" : "postinstall.js");
-      writeFileSync(script, 'console.log("entrypoint completed");\n');
-      if (entrypoint === "npm") symlinkSync(script, join(state, "npm"));
-      const journal = join(state, "journal.jsonl");
-      const result = spawnSync(process.execPath, ["--require", helper, join(state, entrypoint), "ci"], {
-        env: { ...process.env, A4S_GATE_JOURNAL: journal }, encoding: "utf8",
-      });
-      assert.equal(result.status, 0, result.stdout + result.stderr);
-      assert.equal(result.stdout, "entrypoint completed\n");
-      if (entrypoint === "npm") {
-        const [started, ended] = readFileSync(journal, "utf8").trim().split("\n").map(line => JSON.parse(line));
-        assert.equal(started.name, "install");
-        assert.equal(started.command, "npm ci");
-        assert.equal(ended.id, started.id);
-        assert.equal(ended.exitCode, 0);
-      } else {
-        assert.equal(existsSync(journal), false, "dependency scripts must not be classified as npm");
+for (const entrypoint of ["absolute", "relative test", "postinstall", "npm", "eval"] as const) {
+  for (const code of [0, 17]) {
+    test(`gate preload preserves ${entrypoint} exit status ${code}`, () => {
+      const state = mkdtempSync(join(tmpdir(), "a4s-gate-preload-"));
+      try {
+        if (entrypoint === "relative test") mkdirSync(join(state, "test"));
+        const script = join(state, entrypoint === "npm" ? "npm-cli.js"
+          : entrypoint === "relative test" ? "test/entrypoint.test.cjs" : "postinstall.js");
+        const body = `console.log("entrypoint completed"); process.exitCode = ${code};\n`;
+        writeFileSync(script, body);
+        if (entrypoint === "npm") symlinkSync(script, join(state, "npm"));
+        const journal = join(state, "journal.jsonl");
+        const args = entrypoint === "eval" ? ["-e", body]
+          : entrypoint === "relative test" ? ["--test", "test/entrypoint.test.cjs"]
+          : [entrypoint === "npm" ? join(state, "npm") : entrypoint === "postinstall" ? join(state, "postinstall") : script, "ci"];
+        const env: NodeJS.ProcessEnv = { ...process.env, A4S_GATE_JOURNAL: journal };
+        // This is an independent runner, not a recursive run in this test worker.
+        delete env.NODE_TEST_CONTEXT;
+        const result = spawnSync(process.execPath, ["--require", helper, ...args], {
+          cwd: state, env, encoding: "utf8",
+        });
+        // The test runner translates a failing test-file process into status 1.
+        assert.equal(result.status, entrypoint === "relative test" && code !== 0 ? 1 : code, result.stdout + result.stderr);
+        assert.match(result.stdout, /entrypoint completed/);
+        if (entrypoint === "npm") {
+          const [started, ended] = readFileSync(journal, "utf8").trim().split("\n").map(line => JSON.parse(line));
+          assert.equal(started.name, "install");
+          assert.equal(started.command, "npm ci");
+          assert.equal(ended.id, started.id);
+          assert.equal(ended.exitCode, code);
+        } else {
+          assert.equal(existsSync(journal), false, "non-npm entrypoints must not be classified as npm");
+        }
+      } finally {
+        rmSync(state, { recursive: true, force: true });
       }
-    } finally {
-      rmSync(state, { recursive: true, force: true });
-    }
-  });
+    });
+  }
 }
+
+test("gate preload leaves unresolved entrypoints to Node", () => {
+  const state = mkdtempSync(join(tmpdir(), "a4s-gate-preload-"));
+  try {
+    const result = spawnSync(process.execPath, ["--require", helper, "missing-entrypoint"], {
+      cwd: state, env: { ...process.env, A4S_GATE_JOURNAL: join(state, "journal.jsonl") }, encoding: "utf8",
+    });
+    assert.equal(result.status, 1, result.stdout + result.stderr);
+    assert.match(result.stderr, /MODULE_NOT_FOUND/);
+    assert.doesNotMatch(result.stderr, /internal\/preload|dagu-gate\.cjs/);
+  } finally {
+    rmSync(state, { recursive: true, force: true });
+  }
+});
 
 for (const scenario of [
   { name: "complete success", expected: "PASS" },

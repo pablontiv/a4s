@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Resolve gate-preload entrypoints from the working directory and leave lookup
+  failures to Node, preserving relative `node --test` paths, extensionless scripts,
+  symlinked npm detection, and `node -e` exit statuses (#943).
 - Wait for explicit request/stream readiness in status timeout tests instead of
   counting event-loop turns. Isolate the fixture repository and keep receipt
   observation off the widget-only path under the default no-spawn preload
