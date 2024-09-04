@@ -233,7 +233,7 @@ export function readCommittedConfig(repo: string): CommittedConfig {
   } catch {
     fail(`missing committed config file ${CONFIG_PATH} at ${commit.slice(0, 12)}; commit consumer policy before admission`);
   }
-  const dirty = execFileSync("git", ["-C", repo, "status", "--porcelain", "--untracked-files=all", "--", CONFIG_PATH], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  const dirty = execFileSync("git", ["--no-optional-locks", "-C", repo, "status", "--porcelain", "--untracked-files=all", "--", CONFIG_PATH], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
   if (dirty) fail(`uncommitted config file ${CONFIG_PATH} (${dirty.split("\n")[0]}); commit it before admission so the admitted policy is the committed revision`);
   let value: unknown;
   try { value = JSON.parse(text); }

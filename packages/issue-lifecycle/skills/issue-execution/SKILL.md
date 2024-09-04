@@ -281,8 +281,20 @@ a4s enqueue --run-id <repo>-issue-<n> feature -- \
   ISSUE=<n> OMP_SESSION_ID=<session>
 ```
 
-Both CLI `admit` and `enqueue` persist receipts and enqueue the exact immutable
-snapshot bytes under the lifecycle name.
+Without `--check`, both CLI `admit` and `enqueue` persist receipts and enqueue
+the exact immutable snapshot bytes under the lifecycle name. For read-only
+admissibility (committed policy, `uses` resolution and the `a4s queue` station
+readiness boundary), run from the adopted checkout with its station environment:
+
+```sh
+a4s admit --check --run-id sprint-admission-check feature -- \
+  ISSUE=<n> OMP_SESSION_ID=<session>
+```
+
+This returns exit 0 / `admissible=yes` or exit 1 / `admissible=no` with reasons.
+It never publishes cache entries, hands off, creates receipts/runs/comments or
+changes refs/working-tree content. `--artifact` and `--parent` cannot bypass
+committed `uses` resolution in check mode.
 Durable receipts remain under
 `$(git rev-parse --path-format=absolute --git-path dagu-feature/runs/<run>)`.
 Use `a4s observe <run> '<JSON>'` for linked runtime observations.

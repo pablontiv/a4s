@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { inProcessAdmissionFixture as admissionFixture } from "./fixtures/compiled-admission.ts";
@@ -12,6 +12,45 @@ import { roleAdmission } from "./role-job-fixtures.ts";
 import { identity } from "../src/identity.ts";
 
 const inputs = { dag: "feature", run: "admission", params: ["ISSUE=277", "OMP_SESSION_ID=owner-session"] };
+function snapshot(root: string): Record<string, string> {
+  return Object.fromEntries(readdirSync(root, { withFileTypes: true }).flatMap(entry => {
+    const path = join(root, entry.name);
+    return entry.isDirectory() ? [[`${entry.name}/`, ""], ...Object.entries(snapshot(path)).map(([name, bytes]) => [`${entry.name}/${name}`, bytes])]
+      : [[entry.name, readFileSync(path).toString("hex")]];
+  }));
+}
+test("read-only admission flag preserves real admission arguments and rejects bypasses", () => {
+  const args = ["--run-id", "sprint-admission-check", "feature", "--", ...inputs.params];
+  assert.equal(enqueueArguments(args, "/consumer").check, undefined);
+  assert.equal(enqueueArguments(["--check", ...args], "/consumer").check, true);
+  assert.throws(() => enqueueArguments(["--check", "--check", ...args], "/consumer"), /Duplicate admission flag --check/);
+  assert.throws(() => enqueueArguments(["--check", "--parent", "receipt.json", ...args], "/consumer"), /--check resolves committed uses/);
+  const tuple = `0.6.0@${"a".repeat(40)}#${"b".repeat(64)}`;
+  assert.throws(() => enqueueArguments(["--check", "--artifact", tuple, ...args], "/consumer"), /--check resolves committed uses/);
+});
+test("read-only admission rejects missing owner and dirty or missing committed policy without writes", async () => {
+  const fixture = admissionFixture();
+  try {
+    const check = async (params: string[], reason: RegExp) => {
+      const before = snapshot(fixture.root);
+      const result = await runA4s(["admit", "--check", "--run-id", "sprint-admission-check", "feature", "--", ...params], { cwd: fixture.packageDir });
+      assert.equal(result.status, 1);
+      assert.match(result.stdout, /admissible=no/);
+      assert.match(result.stdout, reason);
+      assert.deepEqual(snapshot(fixture.root), before);
+    };
+    await check(["ISSUE=277"], /OMP_SESSION_ID/);
+    const config = readFileSync(fixture.configPath, "utf8");
+    writeFileSync(fixture.configPath, `${config}\n`);
+    await check(inputs.params, /uncommitted config file/);
+    writeFileSync(fixture.configPath, config);
+    for (const args of [["rm", "-q", CONFIG_PATH], ["commit", "-qm", "remove policy"]]) {
+      const result = spawnSync("git", ["-C", fixture.packageDir, ...args], { encoding: "utf8" });
+      assert.equal(result.status, 0, result.stderr);
+    }
+    await check(inputs.params, /missing committed config file/);
+  } finally { fixture.dispose(); }
+});
 test("admission validates the owner and committed policy before creating any engine state", async () => {
   const fixture = admissionFixture();
   try {
