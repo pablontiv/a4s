@@ -1,4 +1,5 @@
 import { readServiceEnvironment } from "../../launcher/src/service-environment.ts";
+import { isRecord } from "../../launcher/src/type-guard.ts";
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
@@ -156,8 +157,9 @@ export async function dispatchStage(stage: string, emit: (name: string, value: s
   const { receipt: verified } = await receiptArtifact(home, receiptPath);
   if (compiled) assertExecutingArtifact(verified.artifact);
   const receipt = verified as unknown as Receipt;
+  const station = receipt.initial.runtimeAndModels.station;
   if (receipt.runReceipt.dag !== "feature" || receipt.runReceipt.run !== run ||
-      receipt.initial.execution.primary !== primary || receipt.initial.runtimeAndModels.daguHome !== home ||
+      receipt.initial.execution.primary !== primary || ((!isRecord(station) || station.schemaVersion !== 1) && receipt.initial.runtimeAndModels.daguHome !== home) ||
       !receipt.initial.execution.dagSnapshot.includes(`"$A4S_BIN" role-jobs stage ${stage}`)) throw new Error("Role dispatch is not authorized by this admitted run snapshot");
   if (!Array.isArray(receipt.initial.execution.parameters) ||
       !receipt.initial.execution.parameters.includes(`ISSUE=${issue}`)) throw new Error("Role issue differs from the admitted snapshot");

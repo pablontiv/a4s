@@ -96,3 +96,32 @@ test("declaration discovery uses XDG, then user home, with an explicit absolute 
     assert.throws(() => readServiceEnvironment({ ...override, A4S_SERVICE_ENV: join(home, "missing override"), XDG_CONFIG_HOME: config }), /cannot read declaration/);
   } finally { rmSync(home, { recursive: true, force: true }); }
 });
+
+test("XDG station and cache defaults and explicit tool/cache overrides share the declaration", () => {
+  const home = mkdtempSync(join(tmpdir(), "a4s-path-config-"));
+  try {
+    const selection = declareService(home, "http://127.0.0.1:18765");
+    const literal = JSON.parse(readFileSync(selection.A4S_SERVICE_ENV!, "utf8"));
+    const state = join(home, "xdg-state"), cache = join(home, "xdg-cache");
+    mkdirSync(join(state, "a4s", "dagu"), { recursive: true });
+    const implicit = { ...literal }; delete implicit.DAGU_HOME;
+    writeFileSync(selection.A4S_SERVICE_ENV!, JSON.stringify(implicit));
+    const selected = readServiceEnvironment({ A4S_SERVICE_ENV: selection.A4S_SERVICE_ENV, HOME: home, XDG_STATE_HOME: state, XDG_CACHE_HOME: cache });
+    assert.equal(selected.DAGU_HOME, join(state, "a4s", "dagu"));
+    assert.equal(selected.A4S_CACHE_HOME, join(cache, "a4s"));
+    const custom = join(home, "custom-cache");
+    writeFileSync(selection.A4S_SERVICE_ENV!, JSON.stringify({ ...literal, A4S_CACHE_HOME: custom, tools: { omp: join(home, "bin", "omp") } }));
+    const overridden = readServiceEnvironment(selection);
+    assert.equal(overridden.A4S_CACHE_HOME, custom);
+    assert.equal(overridden.PATH.split(":")[0], join(home, "bin"));
+    for (const changes of [{ A4S_CACHE_HOME: "relative" }, { tools: { omp: "relative" } }, { tools: { typo: join(home, "bin", "omp") } }]) {
+      writeFileSync(selection.A4S_SERVICE_ENV!, JSON.stringify({ ...literal, ...changes }));
+      assert.throws(() => readServiceEnvironment(selection), /field=(?:A4S_CACHE_HOME|tools)/);
+    }
+    mkdirSync(join(home, ".local", "state", "a4s", "dagu"), { recursive: true });
+    writeFileSync(selection.A4S_SERVICE_ENV!, JSON.stringify(implicit));
+    const defaults = readServiceEnvironment({ A4S_SERVICE_ENV: selection.A4S_SERVICE_ENV, HOME: home });
+    assert.equal(defaults.DAGU_HOME, join(home, ".local", "state", "a4s", "dagu"));
+    assert.equal(defaults.A4S_CACHE_HOME, join(home, ".cache", "a4s"));
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});

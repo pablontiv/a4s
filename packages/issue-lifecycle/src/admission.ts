@@ -1,5 +1,6 @@
 import { assertNotCancelled } from "./cancellation.ts";
 import { readServiceEnvironment } from "../../launcher/src/service-environment.ts";
+import { stationBinding } from "../../launcher/src/station-binding.ts";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, writeFileSync } from "node:fs";
@@ -106,7 +107,7 @@ function consumerRoot(cwd: string, dag: string): string {
 export function preflightAdmission(options: AdmissionOptions): AdmissionContext {
   const name = dagName(options.dag);
   const rejected = options.params.map(param => param.split("=", 1)[0]!)
-    .filter(field => field.startsWith("ESCALATION_") || field.startsWith("CODEQL_") || ["DAGU_URL", "DAGU_HOME", "DAGU_PORT", "A4S_SERVICE_ENV", "PATH", "COORDINATING_SESSION"].includes(field) || (POLICY_PARAMETERS as readonly string[]).includes(field));
+    .filter(field => field.startsWith("ESCALATION_") || field.startsWith("CODEQL_") || ["DAGU_URL", "DAGU_HOME", "DAGU_PORT", "A4S_CACHE_HOME", "A4S_SERVICE_ENV", "A4S_ARTIFACT", "A4S_BIN", "HOME", "XDG_CONFIG_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME", "PATH", "COORDINATING_SESSION"].includes(field) || (POLICY_PARAMETERS as readonly string[]).includes(field));
   if (rejected.length) throw new Error(`admission rejected run parameter: ${rejected.join(", ")}; policy comes only from committed ${CONFIG_PATH}`);
   const owners = options.params.filter(param => param.startsWith("OMP_SESSION_ID="));
   const owner = requireOwnerSession(owners.length === 1 ? owners[0]!.slice(15) : undefined);
@@ -158,7 +159,7 @@ function createReceipt(options: AdmissionOptions, context: AdmissionContext, cac
   const coordinator = admittedCoordinator(owner, options.session, inherited ? {
     session: inherited.initial.execution.ompSession, transcriptRoot: inherited.initial.runtimeAndModels.transcriptRoot,
   } : undefined);
-  const generated = materializeDag(cached.directory, name, committed.config, { version, source: `${origin}@${commit}`, executable: cached.executable, station, ...(coordinator ? { coordinator } : {}) });
+  const generated = materializeDag(cached.directory, name, committed.config, { version, source: `${origin}@${commit}`, executable: cached.executable, artifact: artifactToken(cached.record), station, ...(coordinator ? { coordinator } : {}) });
   const snapshot = name === "reconcile.yaml" ? generated : bindSnapshotPrimary(generated, primary);
   const generatedDigest = sha256(snapshot);
   const daguVersion = execFileSync("dagu", ["version"], { encoding: "utf8", env: { ...process.env, ...station } }).trim();
@@ -179,7 +180,7 @@ function createReceipt(options: AdmissionOptions, context: AdmissionContext, cac
     initial: {
       admittedAt: receiptCreatedAt, deployment,
       runtimeAndModels: { ...fields("omp systemPromptDigest profile roles roleMapHash requestedRole resolvedModel fallback resolvedModelIsFallback crossFamilyDecision", "not exposed at admission; append linked runtime observations"),
-        node: { version: process.version, path: realpathSync(process.execPath) }, dagu: { version: daguVersion }, daguHome, station,
+        node: { version: process.version, path: realpathSync(process.execPath) }, dagu: { version: daguVersion }, daguHome, station: stationBinding(station),
         roleJobStore: join(daguHome, "role-jobs.sqlite"), admissionPid: process.pid, admissionPpid: process.ppid,
         transcriptRoot: coordinator?.transcriptRoot ?? pending("operator CLI has no OMP session context"), model: options.session?.model ?? pending("not exposed at admission") },
       execution: { ...fields("base owner refs step approvalIteration sourceSession destinationSession triageGeneration triageMarker", "not yet resolved at admission"), repo, primary,

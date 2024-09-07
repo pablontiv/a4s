@@ -6,6 +6,7 @@ import { SHARED_FORMATS, LAUNCHER_PROTOCOL, STATE_SCHEMAS, type ArtifactSupport,
 import { artifactToken, parseArtifact, type ArtifactTuple } from "./release.ts";
 import { isRecord } from "./type-guard.ts";
 import { reconcileResources } from "./station-resources.ts";
+import { stationCacheRoot } from "./station-paths.ts";
 export type PersistedFormats = Record<SharedFormat, number[]>;
 export interface StationState {
   schema: 1; generation: number; current: ArtifactTuple; previous: ArtifactTuple;
@@ -17,7 +18,7 @@ export interface StateDependencies {
   env?: NodeJS.ProcessEnv;
   reportResourceConflict?: (message: string) => void;
 }
-export function stationRoot(home: string): string { return join(resolve(home), "cache", "a4s"); }
+export function stationRoot(home: string): string { return stationCacheRoot(home); }
 export function realDirectory(path: string): void {
   try {
     if (!lstatSync(path).isDirectory() || realpathSync(path) !== path) throw new Error(`Station runtime directory must not contain symlinks: ${path}`);

@@ -1,4 +1,4 @@
-import { homedir } from "node:os";
+import { readServiceEnvironment } from "../../launcher/src/service-environment.ts";
 import { realpath } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import { Dispatcher, Generation, HELPER_API_VERSION, LIFECYCLE_TIMEOUT_MS, RELOAD_INPUT, switchGeneration,
@@ -114,7 +114,9 @@ export class HotLoader {
 }
 
 export default async function loader(api: object): Promise<void> {
-  const home = process.env.DAGU_HOME ?? `${homedir()}/.dagu`;
+  const service = readServiceEnvironment();
+  Object.assign(process.env, service);
+  const home = service.DAGU_HOME;
   const loader = new HotLoader(api, {
     select: () => stationSelection(home), lease: selection => leaseSelection(home, selection),
     importModule: url => import(url),

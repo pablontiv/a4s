@@ -6,6 +6,7 @@ import { createLeaseLocked } from "../../launcher/src/lease.ts";
 import { initializeStation, promote } from "../../launcher/src/station.ts";
 import { stationTransaction } from "../../launcher/src/station-state.ts";
 import { configSupport, stationFixture } from "../../issue-lifecycle/test/fixtures/station.ts";
+import { declareService } from "../../issue-lifecycle/test/fixtures/service-environment.ts";
 
 test("manifest mismatch leases nothing; retired and failed imported candidates retain leases", async t => {
   const h = harness(); t.after(() => h.loader.dispose());
@@ -35,6 +36,11 @@ test("restore failure before the first import releases only that candidate lease
 
 test("OMP process exit removes the retired-reader barrier for a new-format writer", async t => {
   const f = stationFixture(t);
+  // Cache resolution reads the selected station, not the developer's host config.
+  const previous = { ...process.env };
+  t.after(() => { process.env = previous; });
+  Object.assign(process.env, declareService(f.home, "http://127.0.0.1:18765"));
+  delete process.env.DAGU_PORT;
   const old = await f.release("r1", configSupport([1], 1));
   const bridge = await f.release("r2", configSupport([1, 2], 1));
   const writer = await f.release("r3", configSupport([1, 2], 2));

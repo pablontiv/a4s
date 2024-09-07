@@ -14,6 +14,8 @@ import type { Receipt } from "./admission.ts";
 import { restoreArtifact } from "../../launcher/src/select.ts";
 import { createLeaseLocked } from "../../launcher/src/lease.ts";
 import { stationRoot, stationTransaction } from "../../launcher/src/station-state.ts";
+import { assertReceiptStation } from "../../launcher/src/station-binding.ts";
+import { readRecoveryEvidence } from "../../launcher/src/station-recovery-evidence.ts";
 
 import * as cancellationGuards from "./cancellation.ts";
 const NATIVE_FLAGS: Record<string, "value" | "boolean"> = {
@@ -40,7 +42,8 @@ export async function verifiedRun(primary: string, run: string, inspect = restor
   const path = join(state, "receipt.json");
   const { receipt: value, cached } = await receiptArtifact(home, path, inspect);
   const receipt = value as unknown as Receipt;
-  if (receipt.runReceipt?.run !== run || receipt.initial.execution.primary !== primary || receipt.initial.runtimeAndModels.daguHome !== home) throw new Error(`Run receipt location/identity mismatch: ${path}`);
+  const station = receipt.initial.runtimeAndModels.station;
+  if (receipt.runReceipt?.run !== run || receipt.initial.execution.primary !== primary || (!isRecord(station) || station.schemaVersion !== 1) && receipt.initial.runtimeAndModels.daguHome !== home) throw new Error(`Run receipt location/identity mismatch: ${path}`);
   return { primary, home, state, path, receipt, cached };
 }
 
@@ -86,11 +89,9 @@ function environment(context: VerifiedRun): NodeJS.ProcessEnv {
   const snapshot: unknown = parseAllDocuments(context.receipt.initial.execution.dagSnapshot)[0]?.toJSON();
   if (isRecord(snapshot) && Array.isArray(snapshot.env)) for (const entry of snapshot.env) {
     if (isRecord(entry)) for (const [key, value] of Object.entries(entry)) {
-      if ((/^ESCALATION_/.test(key) || ["DAGU_URL", "DAGU_HOME", "PATH", "A4S_SERVICE_ENV"].includes(key)) && (typeof value === "string" || typeof value === "number")) env[key] = String(value);
+      if (/^ESCALATION_/.test(key) && (typeof value === "string" || typeof value === "number")) env[key] = String(value);
     }
   }
-  // A changed declaration cannot silently retarget a previously admitted run.
-  readServiceEnvironment(env);
   return env;
 }
 export async function invokeRun(primary: string, run: string, args: string[], options: { capture?: boolean; env?: NodeJS.ProcessEnv } = {}): Promise<{ status: number; stdout: string; stderr: string }> {
@@ -132,6 +133,7 @@ export function executeNative(args: string[]): void {
     }
   }
   if (runs.length !== 1 || runs[0] !== bound.receipt.runReceipt.run || positional.length !== 1 || positional[0] !== bound.receipt.runReceipt.dag) throw new Error("Native mutation differs from the receipt's DAG/run binding");
+  assertReceiptStation(bound.receipt.initial.runtimeAndModels.station, readRecoveryEvidence(bound.path, bound.receipt)?.station);
   // Retry/resume (and terminal handlers) can execute in this process's PATH,
   // not the scheduler's. Fail before invoking Dagu rather than partly running.
   const tools = spawnSync("bash", ["-c", 'missing=0; for tool in "$@"; do command -v "$tool" >/dev/null 2>&1 || { printf "a4s native: required command not found: %s (caller PATH; no Dagu mutation started)\\n" "$tool" >&2; missing=1; }; done; exit "$missing"',

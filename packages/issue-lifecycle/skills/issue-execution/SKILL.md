@@ -44,12 +44,13 @@ flowchart LR
 
 ## Requirements
 
-- The operator supplies `dagu` and a running scheduler, plus one station-local JSON service-environment declaration at `$XDG_CONFIG_HOME/a4s/service-environment.json` (default `~/.config/a4s/service-environment.json`). An absolute `A4S_SERVICE_ENV` is an explicit override for isolated/test stations, not a required host variable. Its required literal `DAGU_URL`, absolute `DAGU_HOME` and absolute-entry `PATH` are supplied identically to Dagu and a4s; readiness never discovers those values from a process or service manager. See [station contract and operator-owned manager examples](../../../../docs/operations/deployment.md#declare-the-station-service-environment).
+- The operator supplies `dagu` and a scheduler plus one JSON declaration at `$XDG_CONFIG_HOME/a4s/service-environment.json` (default `~/.config/a4s/service-environment.json`); absolute `A4S_SERVICE_ENV` overrides discovery. Required `DAGU_URL`/`PATH`, optional `DAGU_HOME`/`A4S_CACHE_HOME` with XDG defaults, and optional tool filename overrides are shared by Dagu/a4s. See the [complete path inventory](../../../../docs/operations/deployment.md#configurable-path-inventory); no port or caller-PATH inference.
 - `@a4s/issue-lifecycle` loaded in the coordinating OMP session; its `dagu_session_id` tool identifies the session and its status extension delivers targeted checkpoint notices.
 - The operator-installed stable `a4s-launch` is `a4s` on PATH for admission.
   Load/link the selected payload's complete extracted release root as the OMP
-  package. Snapshots bind the selected cached executable as absolute `A4S_BIN`;
-  engine calls use `"$A4S_BIN" <subcommand>`, never checkout code.
+  package. New snapshots bind an artifact tuple and invoke `a4s station-shell`;
+  it verifies station identities and resolves the cached `A4S_BIN` afresh.
+  Engine calls still use `"$A4S_BIN" <subcommand>`, never checkout code.
 - Install the launcher's one-step `reconcile.yaml` DAG (`a4s tick`) separately.
   First-attempt native Dagu evidence binds its run ID to current; retries retain
   that tuple. There is no exact reconciler pin. Only the
@@ -74,7 +75,7 @@ flowchart LR
   or provision repository-specific gate tools.
 - `CODE_SCANNING=required` needs enabled CodeQL analysis and permission to read
   code-scanning alerts and check runs; `off` does not call that API.
-- Use the same default config home or explicit `A4S_SERVICE_ENV` override as the service. Any explicit `DAGU_HOME`, `DAGU_URL` or `DAGU_PORT` in your shell must match the declaration; `a4s service-environment` reports the validated values or field-specific operator actions, including the expected default path when missing. CLI, OMP run guard and status widget share discovery. All clients and fresh DAG snapshots use this source; only the declaration filename has a home fallback, never the service values or port. Fresh snapshots pin the resolved absolute declaration filename. Existing snapshots, receipts, bindings and releases remain unchanged; run-bound helpers reject declaration changes rather than retargeting a run.
+- Use the service's declaration discovery (also in Dagu's step environment, via operator `base.yaml` env). Explicit `DAGU_HOME`, `DAGU_URL` or `DAGU_PORT` must agree; `a4s service-environment` reports validated values and actionable errors. New admissions pin tool SHA256 and target endpoint/directory identity, not PATH or executable locations. Byte-identical tool relocation and harmless PATH edits remain compatible. Changed/missing tool bytes or target fail before mutation. Historical receipts/snapshots are never rewritten; use [receipt-bound legacy recovery](../../../../docs/operations/deployment.md#receipt-bound-recovery-for-literal-path-admissions) to pin/check/cancel a quiescent legacy run, not ambient Dagu or a replacement admission.
 - `git`, `gh` authenticated with push and PR rights, `curl`, `jq`.
 - Node for the real filesystem gate preload. Kernel advisory locks are native
   in the compiled release. Node/tsx tools and Node-hosted loader leases require
@@ -196,12 +197,13 @@ relative `XDG_CONFIG_HOME` selects `~/.config/a4s/service-environment.json`;
 For an isolated/test station, set `A4S_SERVICE_ENV` to an absolute filename instead.
 An explicitly empty, relative, missing or invalid override fails closed without
 trying the default. Supply the same declaration to Dagu's service environment;
-it is not committed consumer workflow policy. Discovery never supplies missing
-JSON fields or expands their values. The declared scheduler PATH must resolve
+it is not committed consumer workflow policy. Only documented XDG directory defaults
+are supplied; values are never shell-expanded. The effective declared PATH must resolve
 `bash`, `git`, `gh`, `jq`, `curl`, `node`, `omp` and `dagu`.
 Node-hosted clients additionally check `python3` there for `fcntl` locks, while
 compiled Bun engines use libc without Python. This check uses the declaration's
-literal PATH, which admission freezes, not the invoking shell's PATH.
+effective PATH, not the invoking shell's PATH. Admission records verified core
+tool digests; Python is an additional Node-hosted readiness prerequisite.
 Templates hash through the release executable (`a4s planning sha256 --file <path>`, Node crypto), so `shasum`
 and `sha256sum` are not required; initial admission
 also needs `a4s`. An interactive shell's PATH neither repairs nor invalidates

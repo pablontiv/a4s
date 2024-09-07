@@ -1,4 +1,5 @@
-import { readServiceEnvironment } from "../../launcher/src/service-environment.ts";
+import { assertReceiptStation } from "../../launcher/src/station-binding.ts";
+import { readRecoveryEvidence } from "../../launcher/src/station-recovery-evidence.ts";
 import { readFileSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "../../launcher/src/type-guard.ts";
@@ -43,13 +44,7 @@ export function assertArtifactReceipt(value: unknown, path: string): asserts val
     typeof bootstrapSnapshot === "string" && bootstrap.snapshotDigest === createHash("sha256").update(bootstrapSnapshot).digest("hex");
   if (!bootstrapBound && (!isRecord(config) || !identity.support.config.read.some(version => version === config.schemaVersion) || typeof config.commit !== "string" || !/^[a-f0-9]{40}$/.test(config.commit) || typeof config.digest !== "string" || !/^[a-f0-9]{64}$/.test(config.digest))) throw new Error(`Receipt lacks committed config identity: ${path}`);
   const station = isRecord(initial) && isRecord(initial.runtimeAndModels) ? initial.runtimeAndModels.station : undefined;
-  if (station !== undefined) {
-    if (!isRecord(station)) throw new Error(`Receipt station contract is malformed: ${path}`);
-    const selected = readServiceEnvironment();
-    for (const field of ["DAGU_URL", "DAGU_HOME", "PATH"] as const) {
-      if (station[field] !== selected[field]) throw new Error(`Run station declaration differs from admitted ${field}; existing snapshots cannot be retargeted`);
-    }
-  }
+  assertReceiptStation(station, readRecoveryEvidence(path, value)?.station);
 }
 export function assertExecutingArtifact(tuple: ArtifactTuple): void {
   if (identity.version !== tuple.version || identity.commit !== tuple.commit) throw new Error(`Handoff identity mismatch: requested ${artifactToken(tuple)}, executable ${identity.version}@${identity.commit}`);
