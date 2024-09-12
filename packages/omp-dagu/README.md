@@ -651,6 +651,17 @@ El gate compartido consulta `dagu version` únicamente con esa variable activa
 y exige el pin `daguFeature.dagu` de `package.json`. El comando predeterminado
 fija la variable a `0`, incluso si el entorno del llamador la tenía activa.
 
+`test/reconcile-ci.test.ts` usa exclusivamente el reconciliador distribuido en
+`skills/dagu-feature/reconcile.yaml`. Conserva la validación nativa de plantillas
+materializadas en directorios temporales y comprueba el parser de checkpoints,
+la clasificación CI, las transiciones, rebase y reintentos. Se ejecuta desde
+este paquete con `A4S_LIVE_DAGU=0 npx tsx --test test/reconcile-ci.test.ts`
+(casos aislados sin runtime Dagu) o con `A4S_LIVE_DAGU=1 npx tsx --test
+test/reconcile-ci.test.ts` (incluye validación nativa y el escenario real de
+checkpoints emparejados, iteraciones y liberación de cola en un home temporal).
+Bootstrap instala el reconciliador operativo en el home de Dagu del usuario;
+los cuatro DAG de ciclo de vida adoptados permanecen en el repositorio.
+
 Las pruebas vivas usan el runtime fijado del `PATH`, un `DAGU_HOME` temporal y un
 puerto HTTP propio por fixture. Además, cada instancia genera un único
 `randomUUID()` y deriva los IDs `recovery-<healthy|gate|start_gate|push>-<uuid>`,

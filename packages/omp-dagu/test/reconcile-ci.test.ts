@@ -6,7 +6,6 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { Transitions } from "../src/status/progress.ts";
 import type { RunDetails } from "../src/status/progress.ts";
@@ -15,36 +14,25 @@ import { BUNDLE_VERSION } from "../src/bundle.ts";
 import { verifyQuality } from "../src/triage/quality.ts";
 import { qualityFixture } from "./quality-fixtures.ts";
 
-const definitions = [
-  ["template", "../skills/dagu-feature/"],
-  ["render", "../../../.workspace/dagu/dags/"],
-] as const;
+const feature = readFileSync(new URL("../skills/dagu-feature/feature.yaml", import.meta.url), "utf8");
+const reconcile = readFileSync(new URL("../skills/dagu-feature/reconcile.yaml", import.meta.url), "utf8");
 
-
-test("CI scripts preserve template/render parity and Dagu accepts materialized templates and renders", {
+test("Dagu accepts materialized lifecycle templates", {
   ...liveDagu,
 }, () => {
   const root = mkdtempSync(join(tmpdir(), "omp-ci226-validate-"));
   try {
     for (const file of ["feature.yaml", "reconcile.yaml"]) {
       const template = readFileSync(new URL(`../skills/dagu-feature/${file}`, import.meta.url), "utf8");
-      const render = readFileSync(new URL(`../../../.workspace/dagu/dags/${file}`, import.meta.url), "utf8");
-      for (const id of file === "feature.yaml" ? ["await_ci", "await_merge", "authorize_ci"] : ["observe", "transition"]) {
-        assert.equal(step(template, id), step(render, id), `${file}/${id}`);
-      }
       const materialized = join(root, file);
       writeFileSync(materialized, template.replaceAll("__DAGU_FEATURE_VERSION__", BUNDLE_VERSION));
-      for (const path of [materialized, fileURLToPath(new URL(`../../../.workspace/dagu/dags/${file}`, import.meta.url))]) {
-        execFileSync("dagu", ["validate", path], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
-      }
+      execFileSync("dagu", ["validate", materialized], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
     }
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
 test("waiting checkpoints parse both tree connectors in the bytewise service locale", () => {
-  for (const [, base] of definitions) {
-    const source = readFileSync(new URL(`${base}reconcile.yaml`, import.meta.url), "utf8");
-    const parser = script(source, "observe").split("\n").find(line => line.startsWith("STEP="));
+    const parser = script(reconcile, "observe").split("\n").find(line => line.startsWith("STEP="));
     assert.ok(parser);
     for (const connector of ["├─", "└─"]) {
       for (const checkpoint of ["await_ci", "await_merge"]) {
@@ -55,7 +43,6 @@ test("waiting checkpoints parse both tree connectors in the bytewise service loc
         assert.equal(output, checkpoint);
       }
     }
-  }
 });
 
 function step(source: string, id: string): string {
@@ -211,10 +198,7 @@ function publish(f: Fixture, feature: string, value: string): string {
   return git(f.worktree, "rev-parse", "HEAD");
 }
 
-for (const [name, base] of definitions) {
-  const feature = readFileSync(fileURLToPath(new URL(`${base}feature.yaml`, import.meta.url)), "utf8");
-  const reconcile = readFileSync(fileURLToPath(new URL(`${base}reconcile.yaml`, import.meta.url)), "utf8");
-  test(`${name}: A CODE_FAIL returns implement, B PASS uses the same PR and rejects late A`, async t => {
+  test("A CODE_FAIL returns implement, B PASS uses the same PR and rejects late A", async t => {
     const f = fixture();
     try {
       const a = publish(f, feature, "candidate A");
@@ -252,7 +236,7 @@ for (const [name, base] of definitions) {
     } finally { rmSync(f.root, { recursive: true, force: true }); }
   });
 
-  test(`${name}: all classes, rebase routes, retry backoff/exhaustion and stale iteration`, () => {
+  test("all classes, rebase routes, retry backoff/exhaustion and stale iteration", () => {
     const f = fixture();
     try {
       publish(f, feature, "candidate");
@@ -298,15 +282,12 @@ for (const [name, base] of definitions) {
       assert.equal(git(f.primary, "ls-remote", "origin", "refs/heads/main").split(/\s/)[0], f.base);
     } finally { rmSync(f.root, { recursive: true, force: true }); }
   });
-}
 
 test("Dagu 2.20.1: paired root waits return to implement/rebase and release the queue", {
   ...liveDagu,
   timeout: 120_000,
 }, async t => {
   const f = fixture();
-  const feature = readFileSync(fileURLToPath(new URL("../skills/dagu-feature/feature.yaml", import.meta.url)), "utf8");
-  const reconcile = readFileSync(fileURLToPath(new URL("../skills/dagu-feature/reconcile.yaml", import.meta.url)), "utf8");
   const home = join(f.root, "dagu-home");
   mkdirSync(join(home, "dags"), { recursive: true });
   rmSync(join(f.bin, "dagu"));
