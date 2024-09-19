@@ -766,6 +766,99 @@ allocated `REVIEW.jsonl` under that parent's stem. Parent uniqueness is required
 even if only one parent has the requested child. Diagnostics list consulted
 directories, parent paths and match counts before any state or publication effects.
 
+## Recover a checkpoint after native stale-process repair
+
+On official Dagu 2.20.1, a run can become `Failed` with
+`process terminated unexpectedly - stale local process detected` while its
+checkpoint was `Waiting` or its resume was `Queued`. Read `dagu status --run-id
+<run> <dag>` and correlate the admin events in
+`$DAGU_HOME/logs/admin/events/*.jsonl`: `dag.run.failed` from the scheduler
+(`start-all`) follows `dag.run.waiting` or `dag.run.queued` for the **same
+attempt_id**, DAG and run. Preserve those events as evidence.
+
+Recover the existing run, snapshot, parameters, branch and worktree:
+
+```sh
+dagu retry --run-id <run> --step <step> --downstream <dag>
+```
+
+A human-task checkpoint itself is natively not retryable. For a failure while
+Waiting, select its nearest preceding non-checkpoint step below, reviewing its
+side effects before retry. PoC `decide` requires the publication precautions
+below. Inspect current node states first: after a checkpoint already completed,
+retry its first pending non-checkpoint successor instead, preserving the
+completed decision and captured candidate. For example, after feature
+`implement` completed and `capture` succeeded, retry `rebase`, not `start_gate`
+or `capture`.
+
+| DAG | Failed Waiting checkpoint | Retry step |
+|---|---|---|
+| feature | triage | admit |
+| feature | start_primary_unavailable | detect_start_primary |
+| feature | recover_start_gate | start_gate |
+| feature | implement | start_gate |
+| feature | dependency_review | checkpoint_push |
+| feature | conflict_review | rebase |
+| feature | recover_gate | gate |
+| feature | quality_review | quality_prepare |
+| feature | quality_transition | quality_admit |
+| feature | validation | quality_admit (reopens quality_transition first) |
+| feature | recover_push | push |
+| feature | await_ci, await_merge | auto_merge |
+| feature | close_primary_unavailable | detect_close_primary |
+| poc | base_primary_unavailable | detect_base_primary |
+| poc | run_poc | worktree |
+| poc | fix_result | scope_gate |
+| poc | decide | publish (replays GitHub publication; see precautions below) |
+| discovery | discover | snapshot |
+| discovery | validate | temporal |
+| discovery | consolidate | check_verdicts |
+| planning | review | check_plan |
+| planning | approve | check_review |
+
+**PoC `decide`: publication replay requires operator review.**
+
+In [`poc.yaml`](poc.yaml), `decide` depends directly on `publish` and its
+push-back destination is `run_poc`. There is no non-publishing predecessor that
+can reopen `decide`: retrying `scope_gate` with `--downstream` also reaches
+`publish`, and retrying `dispose` would bypass the pending decision.
+
+`publish` is not idempotent. It clears `comment.url`, creates another verdict
+comment (or evidence chunks and an index comment for oversized evidence), and
+writes the new URL to `comment.url`. For `VERDICT=PASS` and `SCOPE=OK`, it also
+reads the current issue body and appends another `## Después del PASS` section.
+It neither reuses a matching verdict marker nor replaces an existing section.
+
+Before choosing `--step publish --downstream poc`, preserve
+`<git-dir>/poc/runs/<run>/comment.url`, `attempt`, `base.sha`, `result.md`,
+`scope` and the issue's current body/comments. Read the live issue with
+`gh issue view <issue> --repo <owner/repo> --json body,comments`; correlate the
+`<!-- poc-verdict:... run:<run> attempt:<attempt> base:<sha> -->` marker and any
+linked evidence chunks against those saved artifacts. A previous successful
+`publish` at a failed Waiting `decide` means these effects already occurred;
+the presence of `comment.url` alone is not a deduplication guard.
+
+Retry only with operator authorization for that publication replay and any
+needed GitHub reconciliation. Compare the saved issue body/comments with the
+post-retry issue before deciding; identify repeated verdicts by the same
+run/attempt/base and matching evidence, and repeated PASS sections by their
+content. Reconcile only the identified replay effects under that authorization,
+preserving unrelated edits and the current `comment.url` publication. If repeat
+publication is unacceptable, retain the failed run and request an idempotent
+publisher repair: the current DAG has no duplicate-free native retry route to
+Waiting `decide`. If `decide` already completed, use its pending successor
+`dispose` instead of replaying publication.
+
+Observed same-run recoveries: `a4s-issue-483-s01a161ff` returned to
+`implement` with `--step start_gate`, then recovered its completed implementation
+with `--step rebase`; `a4s-issue-524-s01a161ff` recovered with `--step admit`.
+After retry, observe the same run returning to the intended checkpoint in
+Waiting before completing or pushing it back. Automatic feature checkpoint and
+PoC `fix_result` dispatchers reread rejected transitions, retain the native error
+and emit a nonzero diagnostic with the run, attempt, checkpoint and retry command.
+The operator owns this retry; scheduled reconciliation keeps its existing
+CI/merge responsibility.
+
 `checkpoint_push` compares dependency relationships and package/app directories
 against the recorded candidate base, using the PoC-proven
 manifest extractor. A dependency relationship is the pair of its manifest path

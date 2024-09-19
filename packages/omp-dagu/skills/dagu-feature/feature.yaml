@@ -1431,10 +1431,24 @@ handler_on:
               STATUS=$(dagu status feature --run-id "$RUN")
               if grep -q "^Waiting -" <<<"$STATUS"; then
                 ITERATION=$(sed -nE "s/.*push-back iteration: ([0-9]+).*/\1/p" <<<"$STATUS" | head -1)
+                transition=0
                 if [[ "$(cat "$STATE/$ACTION")" == rewind ]]; then
-                  dagu human-task push-back feature --run-id "$RUN" --step "$STEP" --expected-iteration "${ITERATION:-0}"
+                  dagu human-task push-back feature --run-id "$RUN" --step "$STEP" --expected-iteration "${ITERATION:-0}" || transition=$?
                 else
-                  dagu human-task complete feature --run-id "$RUN" --step "$STEP"
+                  dagu human-task complete feature --run-id "$RUN" --step "$STEP" || transition=$?
+                fi
+                if (( transition != 0 )); then
+                  STATUS=$(dagu status feature --run-id "$RUN")
+                  if grep -q "^Failed -" <<<"$STATUS" &&
+                     ATTEMPT=$(curl -fsS --max-time 10 --get "http://127.0.0.1:${DAGU_PORT:-8080}/api/v1/event-logs" --data-urlencode "dagName=feature" --data-urlencode "dagRunId=$RUN" --data-urlencode "paginationMode=cursor" --data-urlencode "limit=1" | jq -er ".entries[0] | select(.type == \"dag.run.failed\" and .data.dag_run_status.error == \"process terminated unexpectedly - stale local process detected\") | .attemptId"); then
+                    case "$STEP" in
+                      dependency_review) RETRY=checkpoint_push ;;
+                      conflict_review) RETRY=rebase ;;
+                      quality_transition) RETRY=quality_admit ;;
+                    esac
+                    printf "stale-process repair: run=%s attempt=%s step=%s; recover: dagu retry --run-id %s --step %s --downstream feature\n" "$RUN" "${ATTEMPT:-unknown}" "$STEP" "$RUN" "$RETRY" >&2
+                  fi
+                  exit "$transition"
                 fi
                 exit 0
               fi

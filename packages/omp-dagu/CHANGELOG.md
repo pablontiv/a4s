@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.106
+
+- Diagnose rejected automatic checkpoint transitions after native stale-process repair and document same-run checkpoint recovery for feature, PoC, discovery and planning (#524).
+- Cover stale-process recovery at PoC `decide`, including repeat verdict comments, PASS body-section appends, and operator-reviewed publication replay precautions (#524).
+
 ## 0.3.105
 
 - Support native task batches containing QA/reviewer assignments for independent current quality requests, binding each assignment's verdict contract and model eligibility to its own run and effective implementer (#495).

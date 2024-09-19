@@ -2820,3 +2820,97 @@ test("adopted policy rejects run overrides before repository writes and admits o
     rmSync(repo.root, { recursive: true, force: true });
   }
 });
+
+for (const [dag, step, retry, action] of [
+  ["feature", "conflict_review", "rebase", "complete"],
+  ["feature", "conflict_review", "rebase", "rewind"],
+  ["feature", "dependency_review", "checkpoint_push", "complete"],
+  ["feature", "quality_transition", "quality_admit", "rewind"],
+  ["poc", "fix_result", "scope_gate", "rewind"],
+] as const) {
+  test(`${dag} ${step} ${action} diagnoses a rejected stale-process transition`, () => {
+    const root = mkdtempSync(join(tmpdir(), "omp-dagu-stale-dispatch-"));
+    try {
+      const bin = join(root, "bin");
+      mkdirSync(bin);
+      writeFileSync(join(root, "conflict-action"), action);
+      writeFileSync(join(root, "dependency-action"), action);
+      writeFileSync(join(root, "quality-action"), action);
+      writeFileSync(join(bin, "dagu"), `#!/bin/bash
+if [[ "$1" == status ]]; then
+  if [[ -f "$FIXTURE/rejected" ]]; then
+    printf 'Failed - now\\n'
+  else
+    printf 'Waiting - now\\n'
+  fi
+else
+  touch "$FIXTURE/rejected"
+  echo 'retry target is no longer the latest attempt' >&2
+  exit 1
+fi
+`);
+      writeFileSync(join(bin, "curl"), '#!/bin/bash\nprintf \'%s\\n\' \'{"entries":[{"attemptId":"775836","type":"dag.run.failed","data":{"dag_run_status":{"error":"process terminated unexpectedly - stale local process detected"}}}]}\'\n');
+      chmodSync(join(bin, "dagu"), 0o755);
+      chmodSync(join(bin, "curl"), 0o755);
+      const definition = fileURLToPath(new URL(`../skills/dagu-feature/${dag}.yaml`, import.meta.url));
+      const wait = extractScript(definition, "  wait:");
+      // Execute the exact detached dispatcher body synchronously to observe its exit.
+      const dispatcher = wait.split("nohup bash -c '\n")[1]!.split(/\n\s+' _/)[0]!;
+      const args = dag === "feature" ? [root, "stale-run", step, step.replace("_review", "").replace("_transition", "") + "-action"] : ["stale-run"];
+      const result = spawnSync("bash", ["-c", dispatcher, "_", ...args], {
+        encoding: "utf8", env: { ...process.env, FIXTURE: root, PATH: `${bin}:${process.env.PATH}` },
+      });
+      assert.equal(result.status, 1, result.stderr);
+      assert.match(result.stderr, /retry target is no longer the latest attempt/);
+      assert.match(result.stderr, new RegExp(`run=stale-run attempt=775836 step=${step}`));
+      assert.ok(result.stderr.includes(`dagu retry --run-id stale-run --step ${retry} --downstream ${dag}`));
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+}
+
+test("real Dagu retries a Failed feature predecessor to the same Waiting checkpoint", {
+  ...liveDagu,
+  timeout: 120_000,
+}, async () => {
+  assert.equal(liveDaguVersion, "2.20.1");
+  const fixture = await recoveryFixture();
+  try {
+    const id = `stale-recovery-${fixture.suffix}`;
+    const file = join(fixture.home, "dags", "feature.yaml");
+    writeFileSync(file, "name: feature\ntype: graph\nshell: bash\nsteps:\n  - id: start_gate\n    run: echo retained-predecessor\n  - id: implement\n    depends: start_gate\n    action: human.task\n    with:\n      prompt: Recover this checkpoint in the same run\n");
+    const started = spawnSync("dagu", ["start", "--run-id", id, file], { env: fixture.env, encoding: "utf8" });
+    assert.equal(started.status, 0, started.stderr);
+    await fixture.state(id, "waiting");
+    // Inject the scheduler repair snapshot in this isolated store. The race
+    // itself is external; retry and checkpoint restoration use real Dagu.
+    const store = join(fixture.home, "data", "dag-runs", "feature");
+    const statusPath = readdirSync(store, { recursive: true }).map(String).find(path => path.endsWith("/status.jsonl"));
+    assert.ok(statusPath);
+    const statusFile = join(store, statusPath);
+    const snapshot = JSON.parse(readFileSync(statusFile, "utf8").trim().split("\n").at(-1)!);
+    snapshot.status = 2;
+    snapshot.error = "process terminated unexpectedly - stale local process detected";
+    for (const node of snapshot.nodes) if (node.status === 7 || node.status === 0) node.status = 2;
+    appendFileSync(statusFile, JSON.stringify(snapshot) + "\n");
+    const status = spawnSync("dagu", ["status", "--run-id", id, "feature"], { env: fixture.env, encoding: "utf8" });
+    assert.match(status.stdout, /^Failed -/);
+    const response = await fetch(`http://127.0.0.1:${fixture.port}/api/v1/dag-runs/feature/${id}`);
+    const before = (await response.json() as { dagRunDetails: LiveDetail }).dagRunDetails;
+    assert.equal(before.statusLabel, "failed");
+    assert.equal(before.dagRunId, id);
+    const retried = spawn("dagu", ["retry", "--run-id", id, "--step", "start_gate", "--downstream", "feature"], {
+      env: fixture.env, stdio: "ignore",
+    });
+    const exited = new Promise<number | null>(resolve => {
+      retried.once("exit", resolve);
+    });
+    const waiting = await fixture.until("same run returns to Waiting", async () => {
+      const response = await fetch(`http://127.0.0.1:${fixture.port}/api/v1/dag-runs/feature/${id}`);
+      const run = (await response.json() as { dagRunDetails: LiveDetail }).dagRunDetails;
+      return run.statusLabel === "waiting" ? run : undefined;
+    });
+    assert.equal(waiting.dagRunId, id);
+    assert.equal(waiting.nodes.find(node => node.step.name === "implement")?.statusLabel, "waiting");
+    assert.equal(await exited, 0);
+  } finally { await fixture.close(); }
+});
