@@ -56,14 +56,14 @@ steps:
       for lens in "${lenses[@]}"; do
         history="$ROOT/lenses/$lens"
         if test -f "$history/findings.jsonl"; then
-          cp "$history/findings.jsonl" "$OUT_DIR/prior-$lens.jsonl"
+          cp "$history/findings.jsonl" "$OUT_DIR/prior-${lens}.jsonl"
         else
-          : > "$OUT_DIR/prior-$lens.jsonl"
+          : > "$OUT_DIR/prior-${lens}.jsonl"
         fi
         if test -f "$history/temporal.jsonl"; then
-          cp "$history/temporal.jsonl" "$OUT_DIR/prior-temporal-$lens.jsonl"
+          cp "$history/temporal.jsonl" "$OUT_DIR/prior-temporal-${lens}.jsonl"
         else
-          : > "$OUT_DIR/prior-temporal-$lens.jsonl"
+          : > "$OUT_DIR/prior-temporal-${lens}.jsonl"
         fi
       done
       printf 'out_dir=%s\nsha=%s\nsnapshot=%s\n' "$OUT_DIR" "$SHA" "$SNAPSHOT"
@@ -101,7 +101,7 @@ steps:
       set -euo pipefail
       IFS=',' read -r -a lenses <<<"$LENSES"
       for lens in "${lenses[@]}"; do
-        file="$OUT_DIR/findings-$lens.jsonl"
+        file="$OUT_DIR/findings-${lens}.jsonl"
         if test ! -f "$file"; then
           printf '%s:1: rule=required-file\n' "$file" >&2
           exit 1
@@ -141,10 +141,10 @@ steps:
       set -euo pipefail
       IFS=',' read -r -a lenses <<<"$LENSES"
       for lens in "${lenses[@]}"; do
-        current="$OUT_DIR/findings-$lens.jsonl"
-        prior="$OUT_DIR/prior-$lens.jsonl"
-        prior_temporal="$OUT_DIR/prior-temporal-$lens.jsonl"
-        destination="$OUT_DIR/temporal-$lens.jsonl"
+        current="$OUT_DIR/findings-${lens}.jsonl"
+        prior="$OUT_DIR/prior-${lens}.jsonl"
+        prior_temporal="$OUT_DIR/prior-temporal-${lens}.jsonl"
+        destination="$OUT_DIR/temporal-${lens}.jsonl"
         jq -nc --arg lens "$lens" \
           --slurpfile current "$current" \
           --slurpfile prior "$prior" \
@@ -201,7 +201,7 @@ steps:
       current="$OUT_DIR/current-findings.jsonl"
       : > "$current"
       IFS=',' read -r -a lenses <<<"$LENSES"
-      for lens in "${lenses[@]}"; do cat "$OUT_DIR/findings-$lens.jsonl" >> "$current"; done
+      for lens in "${lenses[@]}"; do cat "$OUT_DIR/findings-${lens}.jsonl" >> "$current"; done
       violation=$(jq -nr --slurpfile current "$current" --slurpfile verdicts "$file" '
         ($current | map(.id)) as $ids |
         first($verdicts | to_entries[] |
@@ -307,8 +307,8 @@ steps:
       for lens in "${lenses[@]}"; do
         history="$root/lenses/$lens"
         mkdir -p "$history"
-        install -m 0644 "$OUT_DIR/findings-$lens.jsonl" "$history/findings.jsonl"
-        install -m 0644 "$OUT_DIR/temporal-$lens.jsonl" "$history/temporal.jsonl"
+        install -m 0644 "$OUT_DIR/findings-${lens}.jsonl" "$history/findings.jsonl"
+        install -m 0644 "$OUT_DIR/temporal-${lens}.jsonl" "$history/temporal.jsonl"
       done
       printf '%s\n' "$backend_run_id" > "$OUT_DIR/breakdown-run-id"
       printf 'backend_run_id=%s\n' "$backend_run_id"

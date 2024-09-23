@@ -1,6 +1,6 @@
 {
   "name": "@a4s/omp-dagu",
-  "version": "0.3.102",
+  "version": "0.3.104",
   "private": true,
   "license": "UNLICENSED",
   "repository": {
@@ -36,7 +36,7 @@
   },
   "scripts": {
     "test": "A4S_LIVE_DAGU=0 tsx --test test/*.test.ts",
-    "test:live": "A4S_LIVE_DAGU=1 tsx --test test/live/*.test.ts test/bundle-cli.test.ts test/bundle-rebase.test.ts test/bundle-template.test.ts test/bundle.test.ts test/feature-template.test.ts test/planning-template.test.ts test/reconcile-ci.test.ts",
+    "test:live": "A4S_LIVE_DAGU=1 tsx --test test/live/*.test.ts test/bundle-cli.test.ts test/bundle-rebase.test.ts test/bundle-template.test.ts test/bundle.test.ts test/feature-template.test.ts test/planning-template.test.ts test/poc-template.test.ts test/reconcile-ci.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

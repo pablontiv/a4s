@@ -6,6 +6,38 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { withResourceGuard } from "./resource-fixtures.ts";
+import { liveDagu } from "./fixtures/live-dagu.ts";
+import { parseAllDocuments, stringify } from "yaml";
+
+for (const name of ["poc", "feature", "discovery", "planning", "dagu-feature-bootstrap", "reconcile"]) {
+  test(`${name} template loads in real Dagu with literal filename suffixes`, liveDagu, () => {
+    const home = mkdtempSync(join(tmpdir(), "omp-dagu-template-load-"));
+    try {
+      const file = join(home, `${name}.yaml`);
+      const source = readFileSync(new URL(`../skills/dagu-feature/${name}.yaml`, import.meta.url), "utf8")
+        .replaceAll("TEMPLATE_REPO", "template-load")
+        .replaceAll("TEMPLATE_BASE_BRANCH", "main")
+        .replaceAll("__PRIMARY__", home);
+      const definitions = parseAllDocuments(source.replaceAll("__DAGU_FEATURE_VERSION__", "0.3.104"));
+      // Loading interpolation is independent of each workflow's admission schema.
+      writeFileSync(file, definitions.map(document => {
+        const definition = document.toJSON();
+        definition.params = ["ISSUE=483", "RUN=filename-suffix"];
+        return stringify(definition);
+      }).join("\n---\n"));
+      const result = spawnSync("dagu", ["enqueue", "--run-id", `suffix-${name}`, file], {
+        encoding: "utf8",
+        timeout: 20_000,
+        env: { ...process.env, DAGU_HOME: home },
+      });
+      const output = `${result.stdout}\n${result.stderr}`;
+      assert.equal(result.status, 0, output);
+      assert.doesNotMatch(output, /Failed to parse JSON/, output);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+}
 
 for (const [name, definition] of [
   ["template", new URL("../skills/dagu-feature/poc.yaml", import.meta.url)],

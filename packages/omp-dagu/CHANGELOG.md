@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.104
+
+- Brace shell variables before filename suffixes in distributed lifecycle templates so Dagu 2.20.1 loads them without dotted-reference JSON warnings (#483).
+
 ## 0.3.102
 
 - Limit scheduled reconciliation to waiting feature discovery and PR/CI checkpoint transitions through `tick` and `reconcile-run`, preserving transition safety and lifecycle cleanup contracts.

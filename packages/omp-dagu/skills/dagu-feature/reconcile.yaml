@@ -222,7 +222,7 @@ steps:
         RETRY)
           check=$(jq -r .check "$file")
           retry_run=$(jq -r .retry_run "$file")
-          retry="$STATE/ci-retry-$sha.json"
+          retry="$STATE/ci-retry-${sha}.json"
           attempts=0 next_at=0
           if [[ -f "$retry" ]]; then
             attempts=$(jq -r .attempts "$retry")
@@ -232,8 +232,8 @@ steps:
           if (( now < next_at )); then
             printf 'TRANSIENT backoff: attempt=%s next_at=%s now=%s\n' "$attempts" "$next_at" "$now"
           elif (( attempts >= 2 )) || [[ -z "$retry_run" ]]; then
-            jq '.class="BLOCKED" | .action="WAIT" | .cause += "; deterministic retry exhausted or no rerunnable Actions run; operator must restore infrastructure"' "$file" >"$file.tmp"
-            mv "$file.tmp" "$file"
+            jq '.class="BLOCKED" | .action="WAIT" | .cause += "; deterministic retry exhausted or no rerunnable Actions run; operator must restore infrastructure"' "$file" >"${file}.tmp"
+            mv "${file}.tmp" "$file"
             cat "$file"
           else
             # Persist the budget before the external request, including a failed request.

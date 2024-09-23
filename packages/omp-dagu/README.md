@@ -646,7 +646,10 @@ npm run test:live --workspace @a4s/omp-dagu
 ```
 
 Este script activa `A4S_LIVE_DAGU=1` y ejecuta `test/live/*.test.ts` y los casos
-reales protegidos que comparten archivo con pruebas en proceso en `test/`.
+reales protegidos que comparten archivo con pruebas en proceso en `test/`:
+`bundle-cli.test.ts`, `bundle-rebase.test.ts`, `bundle-template.test.ts`,
+`bundle.test.ts`, `feature-template.test.ts`, `planning-template.test.ts`,
+`poc-template.test.ts` y `reconcile-ci.test.ts`.
 El gate compartido consulta `dagu version` únicamente con esa variable activa
 y exige el pin `daguFeature.dagu` de `package.json`. El comando predeterminado
 fija la variable a `0`, incluso si el entorno del llamador la tenía activa.
@@ -698,9 +701,11 @@ Five lanes partition `feature-template.test.ts` by native Node test-name pattern
 template PoC closure, rendered-DAG PoC closure, concurrent recovery, validation
 and admission, and the exhaustive complement of those groups. Patterns include
 descendants; the complement automatically includes new feature cases. The sixth
-lane runs `test/live/*.test.ts` and the shared test files listed by `test:live`.
-Keep that explicit shared-file list aligned with the local script when adding
-coverage. The local `npm test` and `npm run test:live` interfaces are unchanged.
+lane runs `test/live/*.test.ts` and the shared test files listed by `test:live`,
+including `test/poc-template.test.ts`; `feature-template.test.ts` is covered by
+the first five lanes. Keep that explicit shared-file list aligned with the local
+script when adding coverage. The local `npm test` and `npm run test:live`
+interfaces are unchanged.
 
 The required `validate` check waits for workspace selection and both matrices.
 Every selected matrix must succeed, including all its lanes; failures and

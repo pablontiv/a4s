@@ -51,7 +51,7 @@ env:
         if [[ -e "$WORKTREE" ]]; then actual=$(cd "$WORKTREE" && pwd -P); fi
         [[ "$actual" == "$expected" && "$actual" != "$primary" ]] ||
           { echo "dagu-feature: protected primary or unmanaged target $WORKTREE" >&2; exit 1; }
-        RESOURCE_LOCK="$common/poc/resource-$RUN.lock"
+        RESOURCE_LOCK="$common/poc/resource-${RUN}.lock"
         mkdir -p "$(dirname "$RESOURCE_LOCK")"
         attempt=0
         until mkdir "$RESOURCE_LOCK" 2>/dev/null; do
@@ -343,10 +343,10 @@ steps:
         printf '<details>\n<summary>Parche de la PoC</summary>\n\n```diff\n'
         cat "$STATE/full.patch"
         printf '\n```\n</details>\n'
-      } > "$STATE/comment-$ATTEMPT.txt"
-      if ! URL=$(gh issue comment "$ISSUE" --repo "$REPO" --body-file "$STATE/comment-$ATTEMPT.txt" 2> "$STATE/publish.err"); then
+      } > "$STATE/comment-${ATTEMPT}.txt"
+      if ! URL=$(gh issue comment "$ISSUE" --repo "$REPO" --body-file "$STATE/comment-${ATTEMPT}.txt" 2> "$STATE/publish.err"); then
         grep -Ei 'too long|maximum.*characters|body.*large' "$STATE/publish.err"
-        jq -cn --arg run "$RUN" --argjson attempt "$ATTEMPT" --rawfile evidence "$STATE/comment-$ATTEMPT.txt" '
+        jq -cn --arg run "$RUN" --argjson attempt "$ATTEMPT" --rawfile evidence "$STATE/comment-${ATTEMPT}.txt" '
           ($evidence|@base64) as $encoded |
           range(0; ($encoded|length); 60000) as $start |
           {kind:"poc-evidence-base64",run:$run,attempt:$attempt,index:($start/60000),data:$encoded[$start:$start+60000]}
