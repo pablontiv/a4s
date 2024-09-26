@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.17
+
+- Run the live index-lock retry test with real Dagu and safely await running service shutdown so startup failures retain their captured diagnostics (#336).
+
 ## 0.3.16
 
 - Keep start, gate and push failures in the same feature run with recovery checkpoints, iteration-protected push-back and coordinator notices (#260).
