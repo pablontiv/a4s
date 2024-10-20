@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.104
+
+- Align the distributed skill with the approved same-major-and-minor, patch-compatible admission contract for requested DAG and reconciler stamps, distinguishing exact package identity, source provenance, native-version checks and notice-only stale warnings while preserving immutable admission snapshots (#482).
+
 ## 0.3.103
 
 - Share effective agent-directory resolution between activity and the primary-session guard, including named profiles and existing configuration-directory precedence (#356).
