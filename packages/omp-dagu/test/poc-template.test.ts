@@ -114,6 +114,7 @@ jq -nc --args '$ARGS.positional' -- "$@" >> "$FAKE_ENQUEUES"
     WORKTREE: join(root, "worktree"), RUN: "existing-issue", ISSUE: "41",
     QUESTION: "", BASE_BRANCH: "main", OMP_SESSION_ID: "same-session",
     FAKE_GH_CALLS: calls, FAKE_ISSUE: issue, FAKE_PAGES: pages, FAKE_ENQUEUES: enqueues,
+    DAGU_OUTPUT_FILE: join(root, "outputs"),
     PATH: `${bin}:${process.env.PATH ?? ""}`,
   };
   return {
@@ -286,6 +287,29 @@ for (const outcome of ["PASS", "FAIL", "promote=no"]) {
       assert.equal(fixture.branchExists(), false);
       const repeated = fixture.exit();
       assert.equal(repeated.status, 0, repeated.stderr);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+}
+
+for (const mode of ["local", "pushed", "unreachable"] as const) {
+  test(`PoC scope gate checks the actual origin: ${mode}`, () => {
+    const fixture = cleanupFixture();
+    try {
+      const remote = join(fixture.root, "remote.git");
+      execFileSync("git", ["init", "--bare", "-q", remote]);
+      fixture.git("remote", "add", "origin", remote);
+      const resultPath = join(fixture.state, "input.md");
+      fixture.save("result.path", resultPath);
+      writeFileSync(resultPath, "VERDICT: PASS\n## Pregunta\nCan the real target run?\n## Proposición demostrada\nObserved target\n## Ruta ejercitada\nReal target release digest\n## Comandos y salida\ncommand: PASS\n## Después del PASS\nImplement verified route\n");
+      if (mode === "pushed") fixture.git("push", "origin", "poc/existing-issue");
+      if (mode === "unreachable") fixture.git("remote", "set-url", "origin", join(fixture.root, "missing.git"));
+      const result = fixture.run("scope_gate", { WORKTREE: fixture.worktree, TEST_PATHS: "^tests/" });
+      assert.equal(result.status, mode === "local" ? 0 : 1, result.stderr);
+      assert.equal(readFileSync(join(fixture.state, "scope"), "utf8").trim(), mode === "local" ? "OK" : "FAIL");
+      if (mode === "pushed") assert.equal(readFileSync(join(fixture.state, "scope-errors"), "utf8"), `rule=poc-branch-pushed branch=refs/heads/poc/existing-issue SHA=${fixture.git("rev-parse", "HEAD")}\n`);
+      if (mode === "unreachable") assert.equal(readFileSync(join(fixture.state, "scope-errors"), "utf8"), "rule=remote-unreachable branch=refs/heads/poc/existing-issue\n");
     } finally {
       fixture.cleanup();
     }

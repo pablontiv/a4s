@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.92
+
+- Resolve PoC questions (including issue-body fallback) and result paths into the experiment checkpoint, and make normalized question equality and Markdown/test cutover explicit.
+- Reject pushed PoC branches with their remote SHA and fail closed when origin is unreachable, preserving the existing correction loop.
+
 ## 0.3.91
 
 - Complete the parent feature run successfully after triage delegates to PoC, skipping implementation quality preparation on that route.

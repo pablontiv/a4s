@@ -604,6 +604,15 @@ no triage question. The issue body retains the implementation scope. A successfu
 PoC can continue into feature for the same issue; this is a lifecycle continuation,
 not new backlog selection.
 
+The experiment checkpoint displays the resolved question and absolute result path.
+Its `## Pregunta` must match the recorded `question.txt` after whitespace
+normalization. `## Ruta ejercitada` records minimal commands against the real
+target and references or digests of every executed release/image. Markdown
+(`*.md`) and paths matching adopted `TEST_PATHS` belong to implementation cutover.
+The scope gate queries origin for `refs/heads/poc/<RUN>`: a published branch
+fails with `rule=poc-branch-pushed`, branch and SHA; an inaccessible origin fails
+with `rule=remote-unreachable`. Both retain the existing result-correction loop.
+
 `base` requires clean PRIMARY on BASE_BRANCH, fetches and fast-forwards it, and
 records BASE_SHA. `worktree` creates `poc/<RUN>` at
 `.workspace/worktrees/poc-<RUN>` from that SHA. The experiment branch remains

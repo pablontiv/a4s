@@ -26,6 +26,8 @@ for (const definition of [
     git("-C", primary, "config", "user.name", "test");
     git("-C", primary, "config", "user.email", "test@example.invalid");
     git("-C", primary, "commit", "--allow-empty", "-m", "seed");
+    git("init", "--bare", "-b", "main", join(root, "remote.git"));
+    git("-C", primary, "remote", "add", "origin", join(root, "remote.git"));
     const state = join(primary, ".git", "poc", "runs", "scope-test");
     mkdirSync(state, { recursive: true });
     writeFileSync(join(state, "base.sha"), git("-C", primary, "rev-parse", "HEAD"));
@@ -61,7 +63,7 @@ for (const definition of [
     writeFileSync(join(home, "dags", "poc.yaml"), [
       "type: graph\nshell: bash\n",
       `env:\n  - PRIMARY: ${primary}\n  - WORKTREE: ${primary}\n  - RUN: scope-test\n  - TEST_PATHS: '^tests/'\n`,
-      "steps:\n", step("run_poc").replace("    depends: worktree\n", ""),
+      "steps:\n", step("run_poc").replace("    depends: worktree\n", "").replaceAll("${steps.record.outputs.question}", "exact question").replaceAll("${steps.worktree.outputs.resultpath}", resultPath),
       step("scope_gate"), step("fix_result"), step("publish"), "handler_on:\n", wait,
     ].join(""));
     let logs = "";
@@ -136,7 +138,7 @@ set -eu
 COMMENTS='${env.COMMENTS}'
 case "$1 $2" in
   "repo view") echo owner/repo ;;
-  "issue view") echo '{"body":"question"}' ;;
+  "issue view") echo '{"body":"## PoC\\nFallback question\\nwith a second line\\n\\n## Other\\nignored"}' ;;
   "issue comment")
     shift 2
     while [[ $# -gt 0 ]]; do
@@ -158,7 +160,7 @@ esac
   service.stdout.on("data", data => { logs += data; });
   service.stderr.on("data", data => { logs += data; });
   const api = `http://127.0.0.1:${port}/api/v1`;
-  type Detail = { statusLabel: string; nodes: Array<{ statusLabel: string; stderr?: string; step: { name: string } }> };
+  type Detail = { statusLabel: string; nodes: Array<{ statusLabel: string; stderr?: string; step: { name: string; humanTask?: { prompt?: string } } }> };
   async function until<T>(probe: () => Promise<T | undefined>): Promise<T> {
     const deadline = Date.now() + 60_000;
     while (Date.now() < deadline) {
@@ -194,19 +196,29 @@ esac
       .replaceAll("__DAGU_FEATURE_VERSION__", "0.3.11")
       .replaceAll("TEMPLATE_REPO", "decline263").replaceAll("TEMPLATE_BASE_BRANCH", "main")
       .replaceAll("__PRIMARY__", primary).replaceAll("__TEST_PATHS__", "_test$"));
-    for (const mode of ["decline", "pass"]) {
+    for (const mode of ["decline", "pass", "fallback"]) {
       writeFileSync(env.COMMENTS, "");
       const id = `test-${mode}-${randomUUID()}`;
-      dagu("enqueue", "--run-id", id, definition, "--", "ISSUE=263", "QUESTION=question");
-      await state(id, "run_poc");
+      const question = mode === "fallback" ? "Fallback question\nwith a second line" : "Explicit question\nwith a second line";
+      dagu("enqueue", "--run-id", id, definition, "--", "ISSUE=263", `QUESTION=${mode === "fallback" ? "" : question}`);
+      const waiting = await state(id, "run_poc");
+      const prompt = waiting.nodes.find(n => n.step.name === "run_poc")?.step.humanTask?.prompt;
+      const runState = join(primary, ".git", "poc", "runs", id);
+      const resolved = readFileSync(join(runState, "question.txt"), "utf8").trimEnd();
+      const resultPath = readFileSync(join(runState, "result.path"), "utf8").trim();
+      assert.equal(resolved, question);
+      assert.ok(prompt?.includes(resolved), JSON.stringify(waiting));
+      assert.ok(prompt?.includes(resultPath), JSON.stringify(waiting));
       const worktree = join(primary, ".workspace", "worktrees", `poc-${id}`);
       if (mode === "decline") {
         dagu("human-task", "complete", "poc", "--run-id", id, "--step", "run_poc", "--input", "decline=no longer needed");
       } else {
         const result = git("-C", worktree, "rev-parse", "--path-format=absolute", "--git-path", "poc/result.md");
-        writeFileSync(result, "VERDICT: PASS\n## Pregunta\nquestion\n## Proposición demostrada\nobserved\n## Ruta ejercitada\nreal isolated Dagu\n## Comandos y salida\ndagu version succeeded\n## Después del PASS\nmaintain behavior\n");
+        writeFileSync(result, `VERDICT: PASS\n## Pregunta\n${question}\n## Proposición demostrada\nobserved\n## Ruta ejercitada\nreal isolated Dagu\n## Comandos y salida\ndagu version succeeded\n## Después del PASS\nmaintain behavior\n`);
         dagu("human-task", "complete", "poc", "--run-id", id, "--step", "run_poc");
         await state(id, "decide");
+        assert.equal(readFileSync(join(runState, "attempt"), "utf8").trim(), "1");
+        assert.equal(readFileSync(join(runState, "scope"), "utf8").trim(), "OK");
         dagu("human-task", "complete", "poc", "--run-id", id, "--step", "decide", "--input", "promote=no");
       }
       const run = await state(id);
