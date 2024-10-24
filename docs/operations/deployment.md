@@ -332,9 +332,13 @@ a4s state
 
 # Review/validate the single `a4s tick` step and minute schedule before installing.
 dagu validate "$LAUNCHER_ROOT/reconcile.yaml"
-# Dagu forwards only DAGU_*/PATH-style variables to steps, not A4S_SERVICE_ENV:
-# carry the operator's declaration selection as the installed DAG's env.
-{ printf 'env:\n  - A4S_SERVICE_ENV: %s\n' "$(jq -n --arg v "$A4S_SERVICE_ENV" '$v')"
+# Pin the resolved declaration path: Dagu does not forward A4S_SERVICE_ENV or XDG_CONFIG_HOME.
+case "${XDG_CONFIG_HOME:-}" in
+  /*) CONFIG_HOME=$XDG_CONFIG_HOME ;;
+  *) CONFIG_HOME=$HOME/.config ;;
+esac
+SERVICE_ENV=${A4S_SERVICE_ENV-"$CONFIG_HOME/a4s/service-environment.json"}
+{ printf 'env:\n  - A4S_SERVICE_ENV: %s\n' "$(jq -n --arg v "$SERVICE_ENV" '$v')"
   cat "$LAUNCHER_ROOT/reconcile.yaml"; } > "$LAUNCHER_ROOT/reconcile.installed.yaml"
 dagu validate "$LAUNCHER_ROOT/reconcile.installed.yaml"
 install -m 0644 "$LAUNCHER_ROOT/reconcile.installed.yaml" "$DAGU_HOME/dags/reconcile.yaml"
@@ -399,9 +403,19 @@ restarts Dagu. No service installer, unit generator or activation hook is shippe
 
 ### Declare the station service environment
 
-The operator creates one station-local UTF-8 JSON object, selected explicitly by
-the **absolute** `A4S_SERVICE_ENV` filename in both the service and a4s environment.
-It is not consumer workflow policy and must not be committed in a consumer's
+The operator creates one station-local UTF-8 JSON object at
+`$XDG_CONFIG_HOME/a4s/service-environment.json`, or
+`~/.config/a4s/service-environment.json` when `XDG_CONFIG_HOME` is unset, empty
+or relative. The home fallback uses `HOME` (the OS user home if unavailable).
+All a4s clients, including the CLI, OMP run guard and `dagu-status` widget,
+discover this file without `A4S_SERVICE_ENV`; restarting a host without that
+variable does not lose the station selection.
+
+An explicitly set **absolute** `A4S_SERVICE_ENV` filename overrides discovery,
+for example for an isolated/test station. An empty, relative, unreadable or
+invalid override fails closed; it never falls back to the default file.
+Use the same user/config home or override for Dagu and a4s. This declaration is
+not consumer workflow policy and must not be committed in a consumer's
 `.workspace/dagu/config.json`. Example declaration (replace `/opt/station` with
 the station's actual absolute paths):
 
@@ -418,7 +432,7 @@ All three fields are required nonempty strings without NUL or line breaks.
 or `[::1]`), without credentials, path, query or fragment. `DAGU_HOME` must name
 an existing readable absolute directory. Every colon-separated PATH entry must
 be absolute; empty PATH entries are invalid.
-Values are literal: no shell expansion, user-home, port or caller-PATH fallback.
+Field values are literal: no shell expansion, inferred `DAGU_HOME`, port or caller-PATH fallback.
 The declared PATH must resolve executable files for `bash`, `git`, `gh`, `jq`,
 `curl`, `node`, `omp` and `dagu`; initial admission also needs `a4s`.
 If the invoking environment selects `DAGU_HOME` or `DAGU_URL`, it must agree with
@@ -432,16 +446,25 @@ Dagu executable locations):
 ```sh
 #!/bin/sh
 set -eu
-: "${A4S_SERVICE_ENV:?operator must select the declaration}"
-DAGU_URL=$(/opt/station/bin/jq -er '.DAGU_URL' "$A4S_SERVICE_ENV")
-DAGU_HOME=$(/opt/station/bin/jq -er '.DAGU_HOME' "$A4S_SERVICE_ENV")
-PATH=$(/opt/station/bin/jq -er '.PATH' "$A4S_SERVICE_ENV")
+case "${XDG_CONFIG_HOME:-}" in
+  /*) CONFIG_HOME=$XDG_CONFIG_HOME ;;
+  *) CONFIG_HOME=$HOME/.config ;;
+esac
+SERVICE_ENV=${A4S_SERVICE_ENV-"$CONFIG_HOME/a4s/service-environment.json"}
+case "$SERVICE_ENV" in
+  /*) ;;
+  *) echo "service declaration requires an absolute path" >&2; exit 1 ;;
+esac
+DAGU_URL=$(/opt/station/bin/jq -er '.DAGU_URL' "$SERVICE_ENV")
+DAGU_HOME=$(/opt/station/bin/jq -er '.DAGU_HOME' "$SERVICE_ENV")
+PATH=$(/opt/station/bin/jq -er '.PATH' "$SERVICE_ENV")
 export DAGU_URL DAGU_HOME PATH
 exec /opt/station/bin/dagu start-all
 ```
 
-Operator-owned systemd service example (the existing unit's other settings,
-including API bind/port settings matching `DAGU_URL`, remain operator policy):
+Operator-owned systemd service example with an explicit isolated-station override
+(omit `Environment` for the service user's default location; the existing unit's
+other settings, including API bind/port settings matching `DAGU_URL`, remain operator policy):
 
 ```ini
 [Service]
@@ -449,8 +472,8 @@ Environment=A4S_SERVICE_ENV=/opt/station/service-environment.json
 ExecStart=/opt/station/bin/run-dagu
 ```
 
-Operator-owned launchd configuration example, using the identical wrapper and
-declaration (not a generated or installed plist):
+Operator-owned launchd configuration example with the identical explicit override
+(omit `EnvironmentVariables` for the default location; not a generated or installed plist):
 
 ```xml
 <plist version="1.0"><dict>
@@ -474,7 +497,8 @@ launcher-layer reader is available through both the stable launcher and the
 release-bound executable; it only reads and validates, never repairs the file:
 
 ```sh
-export A4S_SERVICE_ENV=/opt/station/service-environment.json
+# Default: $XDG_CONFIG_HOME/a4s/service-environment.json or ~/.config/a4s/service-environment.json
+# Only for an explicit override: export A4S_SERVICE_ENV=/opt/station/service-environment.json
 a4s service-environment # validated JSON: DAGU_URL, DAGU_HOME, PATH
 a4s queue "$PRIMARY/.workspace/dagu/config.json"
 # Before initial adoption:
@@ -487,21 +511,22 @@ managers, creates a home/probe DAG, enqueues a run or changes station bytes.
 Bootstrap obtains its probe endpoint/home only through its release-bound
 `"$A4S_BIN" service-environment`; it does not parse the declaration itself.
 All launcher and lifecycle clients, native Dagu children, and freshly rendered
-DAGs use this same launcher-owned reader. Independent `DAGU_PORT` URLs and
-current-user-home defaults are not supported; explicit endpoint, port, or home
-values that conflict with the declaration fail before station access.
+DAGs use this same launcher-owned reader. Only the declaration filename has a
+user-home default; `DAGU_HOME` and `DAGU_URL` must still be declared. Independent
+`DAGU_PORT` URLs are not supported; explicit endpoint, port, or home values that
+conflict with the declaration fail before station access.
 
 This cutover applies only to fresh admissions from new immutable release
 artifacts. Their rendered snapshots retain the normalized endpoint, literal home
-(including spaces), scheduler PATH, and declaration selection. Run-bound helpers
-reject a changed declaration rather than retarget an admitted run. Existing
+(including spaces), scheduler PATH, and resolved absolute declaration filename.
+Run-bound helpers reject a changed declaration rather than retarget an admitted run. Existing
 releases, snapshots, receipts, run bindings, and installed Dagu/service files
 are never rewritten. Keep the declaration available and unchanged for its
 admitted runs; operator activation remains a separate decision.
 
-Exit 1 identifies missing/unreadable/malformed declarations, the invalid or
-inconsistent field, missing declared tools, config leaves/queues, API/auth errors
-or inactive schedulers, with an operator action. Recovery is operator-owned:
+Exit 1 identifies missing/unreadable/malformed declarations (including the expected
+default filename when absent), the invalid or inconsistent field, missing declared
+tools, config leaves/queues, API/auth errors or inactive schedulers, with an operator action. Recovery is operator-owned:
 correct the selected declaration, ensure the service receives the same values,
 merge missing station config leaves while preserving unrelated settings, and
 follow the station's safe activation policy before retrying diagnostics and

@@ -98,9 +98,15 @@ A4S_BIN or A4S_ARTIFACT is pinned in station configuration. See
 
 ### Operator-owned service environment
 
-All station clients and fresh DAG snapshots require one station-local UTF-8 JSON declaration selected
-explicitly by absolute `A4S_SERVICE_ENV`. Required fields are `DAGU_URL` (an
-unauthenticated HTTP loopback origin), absolute `DAGU_HOME`, and scheduler `PATH`
+All station clients discover one station-local UTF-8 JSON declaration at
+`$XDG_CONFIG_HOME/a4s/service-environment.json`, falling back to
+`~/.config/a4s/service-environment.json` when `XDG_CONFIG_HOME` is unset, empty or
+relative. `HOME` supplies the user home, or the OS user home when unavailable.
+An explicit absolute `A4S_SERVICE_ENV` overrides this location for isolated/test
+stations; an invalid override fails rather than falling back. CLI, OMP run guard
+and status widget share discovery. Fresh DAG snapshots pin the resolved absolute
+filename, independent of a child process's config home.
+Required fields are `DAGU_URL` (an unauthenticated HTTP loopback origin), absolute `DAGU_HOME`, and scheduler `PATH`
 (colon-separated absolute, nonempty entries). Values are literal; a4s never
 infers missing fields from a user home, default port, process table, service
 manager or caller PATH. The operator supplies the same values to Dagu and a4s.
@@ -121,7 +127,7 @@ file is rewritten. The OMP agent/profile directory remains independent of
 `DAGU_HOME`.
 
 Missing/unreadable/malformed/incomplete declarations or mismatched selections
-fail with field-specific diagnostics and operator actions. A healthy caller PATH
+fail with field-specific diagnostics, the expected default path when missing, and operator actions. A healthy caller PATH
 cannot conceal missing declared tools, and an unrelated caller PATH does not
 invalidate a complete declaration. Recovery belongs to the operator: correct the
 declaration/service inputs and missing station settings, preserve foreign queues
@@ -572,7 +578,7 @@ The compiled-smoke lane enables its release-specific assertions separately.
 Default scripts no longer acquire the heavy slot or force serial test-file
 execution: Node isolates files, and their fixtures do not use station state.
 Native live/compiled lanes retain `bin/heavy-slot.py`: before the test preload
-runs, this wrapper resolves `A4S_SERVICE_ENV` through the same launcher reader
+runs, this wrapper discovers the declaration (or uses the absolute `A4S_SERVICE_ENV` override) through the same launcher reader
 and acquires `$DAGU_HOME/a4s/heavy-slot.lock` in that declared station. Select the
 service's declaration so concurrent native runs share its canonical lock;
 do not substitute a temporary declaration around the npm command. This orchestration lock is

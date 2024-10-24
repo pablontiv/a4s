@@ -1,4 +1,5 @@
 import { accessSync, constants, readFileSync, statSync } from "node:fs";
+import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { isRecord } from "./type-guard.ts";
 
@@ -6,7 +7,7 @@ export interface ServiceEnvironment { DAGU_URL: string; DAGU_HOME: string; PATH:
 export const schedulerTools = ["bash", "git", "gh", "jq", "curl", "node", "omp", "dagu"];
 
 function failure(field: string, cause: string): never {
-  throw new Error(`service-environment ready=no field=${field} cause=${JSON.stringify(cause)} action=ask-station-operator: supply/correct the operator-owned JSON declaration selected by absolute A4S_SERVICE_ENV; supply the same DAGU_URL, DAGU_HOME and PATH to Dagu and a4s, then follow the station's safe activation policy`);
+  throw new Error(`service-environment ready=no field=${field} cause=${JSON.stringify(cause)} action=ask-station-operator: supply/correct the operator-owned JSON declaration at $XDG_CONFIG_HOME/a4s/service-environment.json (default ~/.config/a4s/service-environment.json), or select an absolute A4S_SERVICE_ENV override; supply the same DAGU_URL, DAGU_HOME and PATH to Dagu and a4s, then follow the station's safe activation policy`);
 }
 
 function requiredString(value: Record<string, unknown>, field: keyof ServiceEnvironment): string {
@@ -15,13 +16,25 @@ function requiredString(value: Record<string, unknown>, field: keyof ServiceEnvi
   return text;
 }
 
+/** Resolve only the declaration filename; service values always come from JSON. */
+export function serviceEnvironmentPath(env: NodeJS.ProcessEnv = process.env): string {
+  if (env.A4S_SERVICE_ENV !== undefined) {
+    if (!isAbsolute(env.A4S_SERVICE_ENV)) failure("A4S_SERVICE_ENV", "required absolute declaration file path");
+    return env.A4S_SERVICE_ENV;
+  }
+  const xdg = env.XDG_CONFIG_HOME;
+  if (xdg && isAbsolute(xdg)) return join(xdg, "a4s", "service-environment.json");
+  const home = env.HOME || homedir();
+  if (!isAbsolute(home)) failure("HOME", "required absolute user home for the default declaration path");
+  return join(home, ".config", "a4s", "service-environment.json");
+}
+
 /** Read-only station contract. Never source shell code or infer service values. */
 export function readServiceEnvironment(env: NodeJS.ProcessEnv = process.env): ServiceEnvironment {
-  const file = env.A4S_SERVICE_ENV;
-  if (!file || !isAbsolute(file)) failure("A4S_SERVICE_ENV", "required absolute declaration file path");
+  const file = serviceEnvironmentPath(env);
   let text: string;
   try { text = readFileSync(file, "utf8"); }
-  catch (error) { failure("A4S_SERVICE_ENV", `cannot read declaration: ${String(error)}`); }
+  catch (error) { failure("A4S_SERVICE_ENV", `cannot read declaration ${file}: ${String(error)}`); }
   let value: unknown;
   try { value = JSON.parse(text); }
   catch (error) { failure("A4S_SERVICE_ENV", `malformed JSON: ${String(error)}`); }

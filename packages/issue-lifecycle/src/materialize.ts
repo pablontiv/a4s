@@ -1,4 +1,4 @@
-import { readServiceEnvironment, type ServiceEnvironment } from "../../launcher/src/service-environment.ts";
+import { readServiceEnvironment, serviceEnvironmentPath, type ServiceEnvironment } from "../../launcher/src/service-environment.ts";
 import { readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import type { LifecycleConfig } from "../../launcher/src/config.ts";
@@ -26,7 +26,7 @@ function replacements(config: LifecycleConfig, identity: { version: string; sour
     __DAGU_URL__: JSON.stringify(station.DAGU_URL),
     __DAGU_HOME__: JSON.stringify(station.DAGU_HOME),
     __SERVICE_PATH__: JSON.stringify(station.PATH),
-    __A4S_SERVICE_ENV__: JSON.stringify(process.env.A4S_SERVICE_ENV),
+    __A4S_SERVICE_ENV__: JSON.stringify(serviceEnvironmentPath()),
     "__DAGU_FEATURE_VERSION__": identity.version,
     "__DAGU_FEATURE_IDENTITY__": `dagu-feature-bundle=${identity.version} source=${identity.source}`,
     TEMPLATE_DAGU_FEATURE_VERSION: identity.version,

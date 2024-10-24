@@ -11,7 +11,7 @@ import { confirmFirstAttempt } from "../../launcher/src/tick-binding.ts";
 import { listStationRuns } from "../../launcher/src/station-inventory.ts";
 import { LIFECYCLE_DAGS, materializeDag } from "../src/materialize.ts";
 import { readOwners } from "../src/resources.ts";
-import { useStation } from "./fixtures/service-environment.ts";
+import { useDefaultStation, useStation } from "./fixtures/service-environment.ts";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 test("every fresh lifecycle render freezes one normalized endpoint and space-containing home", t => {
@@ -62,7 +62,7 @@ test("missing and conflicting declarations fail before network or native state a
   let requests = 0, children = 0;
   t.mock.method(globalThis, "fetch", async () => { requests++; throw new Error("unintended station"); });
   try {
-    for (const patch of [{ A4S_SERVICE_ENV: undefined }, { DAGU_URL: "http://127.0.0.1:8080" }, { DAGU_HOME: join(tmpdir(), "unintended-station") }, { DAGU_PORT: "8080" }]) {
+    for (const patch of [{ A4S_SERVICE_ENV: join(tmpdir(), "missing-station-declaration.json") }, { DAGU_URL: "http://127.0.0.1:8080" }, { DAGU_HOME: join(tmpdir(), "unintended-station") }, { DAGU_PORT: "8080" }]) {
       process.env = { ...previous, ...patch };
       await assert.rejects(confirmFirstAttempt("run", process.env), /service-environment ready=no/);
       await assert.rejects(listStationRuns(), /service-environment ready=no/);
@@ -72,4 +72,19 @@ test("missing and conflicting declarations fail before network or native state a
   } finally { process.env = previous; }
   assert.equal(requests, 0);
   assert.equal(children, 0);
+});
+
+test("fresh snapshots pin the discovered declaration even when child config homes differ", t => {
+  const home = mkdtempSync(join(tmpdir(), "a4s-default-render-"));
+  const restore = useDefaultStation(home, "http://127.0.0.1:19643");
+  t.after(() => { restore(); rmSync(home, { recursive: true, force: true }); });
+  const service = readServiceEnvironment();
+  for (const name of LIFECYCLE_DAGS) {
+    const rendered = materializeDag(root, name, exampleConfig(), { version: "fixture", source: "fixture" });
+    for (const document of parseAllDocuments(rendered)) {
+      const env = Object.assign({}, ...document.toJSON().env);
+      assert.equal(env.A4S_SERVICE_ENV, join(home, "config", "a4s", "service-environment.json"));
+      assert.deepEqual(readServiceEnvironment({ ...env, HOME: "/unrelated", XDG_CONFIG_HOME: "/unrelated" }), service);
+    }
+  }
 });
