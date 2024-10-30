@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { once } from "node:events";
 import { createServer } from "node:http";
 import {
+  chmodSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -14,6 +15,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
 import { TriageGuard } from "../src/triage/guard.ts";
+import { parse } from "yaml";
 
 const runId = "fixture-run";
 const sessionId = "01a1400f-185a-7646-b9f6-6bee1f622f5f";
@@ -149,6 +151,8 @@ function environment(primary: string, review: string, ompSessionId = sessionId):
     REVIEW: review,
     RUN: runId,
     POC: "no",
+    POC_BASIS: "",
+    BASIS: "",
   };
 }
 
@@ -288,3 +292,220 @@ for (const [source, url] of yamlFiles) {
     });
   });
 }
+
+const passUrl = "https://github.com/owner/repo/issues/41#issuecomment-123";
+const passMarker = "<!-- poc-verdict:PASS scope:OK run:producer-run attempt:7 base:producer-base -->";
+
+type ProvenanceFixture = {
+  primary: string;
+  pages: (value: unknown) => void;
+  rawPages: (value: string) => void;
+  run: (overrides?: NodeJS.ProcessEnv) => Promise<Result>;
+  calls: () => string[][];
+  effects: () => { effect: string }[];
+  reviewed: () => string;
+  cleanup: () => void;
+};
+
+function provenanceFixture(): ProvenanceFixture {
+  const root = mkdtempSync(join(sandbox, "provenance-"));
+  const primary = join(root, "primary");
+  const bin = join(root, "bin");
+  mkdirSync(primary);
+  mkdirSync(bin);
+  execFileSync("git", ["init", "-q", primary]);
+  const state = join(primary, ".git", "dagu-feature", "runs", runId);
+  mkdirSync(state, { recursive: true });
+  writeFileSync(join(state, "dependencies"), "current-dependencies\n");
+  writeFileSync(join(state, "reviewed-dependencies"), "previous-reviewed-dependencies\n");
+  const pages = join(root, "pages.json");
+  const calls = join(root, "calls.jsonl");
+  const effects = join(root, "effects.jsonl");
+  writeFileSync(pages, JSON.stringify([[{ html_url: passUrl, body: passMarker }]]));
+  writeFileSync(calls, "");
+  writeFileSync(effects, "");
+  writeFileSync(join(bin, "gh"), `#!/bin/bash
+set -euo pipefail
+[[ "$PWD" == "$PRIMARY" ]] || { echo 'wrong repository cwd' >&2; exit 1; }
+jq -nc --args '$ARGS.positional' -- "$@" >> "$FAKE_GH_CALLS"
+case "$1 $2" in
+  "repo view") printf 'owner/repo\\n' ;;
+  "api --paginate")
+    if [[ "\${FAKE_API_STATUS:-0}" != 0 ]]; then echo 'fixture API unavailable' >&2; exit "$FAKE_API_STATUS"; fi
+    cat "$FAKE_PAGES" ;;
+  "issue comment")
+    jq -nc '{effect:"comment"}' >> "$FAKE_EFFECTS" ;;
+  *) printf 'unexpected gh call: %s\\n' "$*" >&2; exit 1 ;;
+esac
+`);
+  writeFileSync(join(bin, "dagu-feature-bundle"), `#!/bin/bash
+set -euo pipefail
+jq -nc '{effect:"enqueue"}' >> "$FAKE_EFFECTS"
+`);
+  chmodSync(join(bin, "gh"), 0o755);
+  chmodSync(join(bin, "dagu-feature-bundle"), 0o755);
+  const template = new URL("../skills/dagu-feature/feature.yaml", import.meta.url);
+  const script = parse(readFileSync(template, "utf8")).steps.find((step: { id: string }) => step.id === "triage_decision").run as string;
+  return {
+    primary,
+    pages(value: unknown) { writeFileSync(pages, JSON.stringify(value)); },
+    rawPages(value: string) { writeFileSync(pages, value); },
+    async run(overrides: NodeJS.ProcessEnv = {}) {
+      return runBash(script, {
+        ...environment(primary, "TriageReview188"), PATH: `${bin}:${process.env.PATH ?? ""}`,
+        ISSUE: "41", QUESTION: "Has this behavior been exercised?", BASE_BRANCH: "main",
+        POC: "yes", POC_BASIS: passUrl, BASIS: passUrl,
+        FAKE_PAGES: pages, FAKE_GH_CALLS: calls, FAKE_EFFECTS: effects,
+        ...overrides,
+      });
+    },
+    calls: () => readFileSync(calls, "utf8").trim().split("\n").filter(Boolean).map(line => JSON.parse(line)),
+    effects: () => readFileSync(effects, "utf8").trim().split("\n").filter(Boolean).map(line => JSON.parse(line)),
+    reviewed: () => readFileSync(join(state, "reviewed-dependencies"), "utf8"),
+    cleanup() { rmSync(root, { recursive: true, force: true }); },
+  };
+}
+
+function rejectedProvenance(fixture: ProvenanceFixture, result: Result, field: string): void {
+  fail(result, new RegExp(`field=${field.replaceAll(".", "\\.")} expected=.+ observed=.+`));
+  assert.deepEqual(fixture.effects(), []);
+  assert.equal(fixture.reviewed(), "previous-reviewed-dependencies\n");
+}
+
+test("feature triage validates promoted PoC provenance before comments or dependency approval", async (t) => {
+  await t.test("accepts a complete same-issue URL across pages without a latest/run/base constraint", async () => {
+    const fixture = provenanceFixture();
+    try {
+      fixture.pages([
+        [{ html_url: "https://github.com/owner/repo/issues/41#issuecomment-1", body: "unrelated comment" }],
+        [{ html_url: passUrl, body: `${passMarker}\r\nEvidence` }],
+        [{ html_url: "https://github.com/owner/repo/issues/41#issuecomment-999", body: passMarker.replace("PASS", "FAIL") }],
+      ]);
+      const result = await fixture.run({ BASIS: `Prior proof: ${passUrl} with an optional explanation.`, REVIEW: "" });
+      assert.equal(result.code, 0, `${result.stdout}\n${result.stderr}`);
+      assert.match(result.stdout, /POC_BASIS=PASS url=https:\/\/github\.com\/owner\/repo\/issues\/41#issuecomment-123 repo=owner\/repo issue=41/);
+      assert.equal(fixture.reviewed(), "current-dependencies\n");
+      assert.deepEqual(fixture.effects().map(effect => effect.effect), ["comment", "enqueue"]);
+    } finally { fixture.cleanup(); }
+  });
+
+  for (const BASIS of [passUrl, `[PASS](${passUrl})`, `<${passUrl}>`, `Proof: ${passUrl}. Explanation follows.`]) {
+    await t.test(`accepts a complete URL citation: ${BASIS}`, async () => {
+      const fixture = provenanceFixture();
+      try {
+        const result = await fixture.run({ BASIS });
+        assert.equal(result.code, 0, `${result.stdout}\n${result.stderr}`);
+        assert.deepEqual(fixture.effects().map(effect => effect.effect), ["comment", "enqueue"]);
+      } finally { fixture.cleanup(); }
+    });
+  }
+
+  for (const BASIS of [
+    passUrl.slice(0, -1), passUrl.replace("123", "456"), `prefix${passUrl}`,
+    `https://other.invalid/${passUrl}`, `${passUrl}suffix`, `${passUrl}4`,
+    `${passUrl}/extra`, `${passUrl}?extra=1`, `${passUrl}#extra`, `${passUrl}.evil`, `${passUrl}%20`,
+  ]) {
+    await t.test(`rejects a near URL in BASIS: ${BASIS}`, async () => {
+      const fixture = provenanceFixture();
+      try { rejectedProvenance(fixture, await fixture.run({ BASIS }), "BASIS"); }
+      finally { fixture.cleanup(); }
+    });
+  }
+
+  for (const POC_BASIS of [
+    passUrl.slice(0, -1), `${passUrl}4`, `${passUrl}?extra=1`, `${passUrl} `,
+    passUrl.replace("/41#", "/42#"), passUrl.replace("owner/repo", "other/repo"),
+    passUrl.replace("123", "456"),
+  ]) {
+    await t.test(`requires exact html_url equality on this repository issue: ${POC_BASIS}`, async () => {
+      const fixture = provenanceFixture();
+      try {
+        rejectedProvenance(fixture, await fixture.run({ POC_BASIS, BASIS: POC_BASIS }), "POC_BASIS");
+      } finally { fixture.cleanup(); }
+    });
+  }
+
+  for (const [body, field, observed] of [
+    [passMarker.replace("PASS", "FAIL"), "comment.verdict", "FAIL"],
+    [passMarker.replace("PASS", "INCONCLUSIVE"), "comment.verdict", "INCONCLUSIVE"],
+    [passMarker.replace("scope:OK", "scope:FAIL"), "comment.scope", "FAIL"],
+    [`Explanation\n${passMarker}`, "comment.first_line", "Explanation"],
+    [` ${passMarker}`, "comment.first_line", "poc-verdict"],
+    [`${passMarker} extra`, "comment.first_line", "extra"],
+    [passMarker.replace("attempt:7", "attempt:0"), "comment.first_line", "attempt:0"],
+    [passMarker.replace("attempt:7", "attempt:01"), "comment.first_line", "attempt:01"],
+    [passMarker.replace("run:producer-run", "run:two words"), "comment.first_line", "run:two words"],
+    [passMarker.replace(" base:producer-base", ""), "comment.first_line", "attempt:7"],
+  ] as const) {
+    await t.test(`requires the producer first-line PASS scope:OK grammar: ${body}`, async () => {
+      const fixture = provenanceFixture();
+      try {
+        fixture.pages([[{ html_url: passUrl, body }]]);
+        const result = await fixture.run();
+        rejectedProvenance(fixture, result, field);
+        assert.ok(result.stderr.includes(observed), result.stderr);
+      } finally { fixture.cleanup(); }
+    });
+  }
+
+  await t.test("rejects missing comments and API/JSON failures with useful diagnostics", async () => {
+    for (const [pages, overrides, field, observed] of [
+      ["[]", {}, "POC_BASIS", passUrl],
+      ["[[]]", {}, "POC_BASIS", passUrl],
+      ["[]", { FAKE_API_STATUS: "1" }, "comments", "API_error"],
+      ["not-json", {}, "comments", "invalid_JSON"],
+      ['[{"html_url":"not-a-page"}]', {}, "comments", "invalid_JSON"],
+      ['{"comments":[]}', {}, "comments", "invalid_JSON"],
+    ] as const) {
+      const fixture = provenanceFixture();
+      try {
+        fixture.rawPages(pages);
+        const result = await fixture.run(overrides);
+        rejectedProvenance(fixture, result, field);
+        assert.ok(result.stderr.includes(observed), result.stderr);
+      } finally { fixture.cleanup(); }
+    }
+  });
+
+  await t.test("a valid basis preserves POC=no review and comment semantics", async () => {
+    const fixture = provenanceFixture();
+    try {
+      clearTranscripts();
+      writeTranscript(fixture.primary, "TriageReview188", "generation-0.jsonl");
+      restBody = rest();
+      const result = await fixture.run({ POC: "no" });
+      pass(result);
+      assert.equal(fixture.reviewed(), "current-dependencies\n");
+      assert.deepEqual(fixture.effects().map(effect => effect.effect), ["comment"]);
+    } finally { fixture.cleanup(); }
+  });
+
+  await t.test("a valid basis still requires a current POC=no review", async () => {
+    const fixture = provenanceFixture();
+    try {
+      clearTranscripts();
+      restBody = rest();
+      const result = await fixture.run({ POC: "no", REVIEW: "MissingReview" });
+      fail(result, /check\.transcript_unique=FAIL/);
+      assert.deepEqual(fixture.effects(), []);
+      assert.equal(fixture.reviewed(), "previous-reviewed-dependencies\n");
+    } finally { fixture.cleanup(); }
+  });
+
+  for (const POC of ["yes", "no"]) {
+    await t.test(`empty POC_BASIS keeps ordinary POC=${POC} free of provenance lookups`, async () => {
+      const fixture = provenanceFixture();
+      try {
+        clearTranscripts();
+        writeTranscript(fixture.primary, "TriageReview188", "generation-0.jsonl");
+        restBody = rest();
+        fixture.rawPages("invalid JSON that must not be fetched");
+        const result = await fixture.run({ POC, POC_BASIS: "", BASIS: "Previously demonstrated behavior", FAKE_API_STATUS: "1" });
+        assert.equal(result.code, 0, `${result.stdout}\n${result.stderr}`);
+        assert.deepEqual(fixture.calls().map(args => args.slice(0, 2)), [["issue", "comment"]]);
+        assert.equal(fixture.reviewed(), "current-dependencies\n");
+        assert.deepEqual(fixture.effects().map(effect => effect.effect), POC === "yes" ? ["comment", "enqueue"] : ["comment"]);
+      } finally { fixture.cleanup(); }
+    });
+  }
+});

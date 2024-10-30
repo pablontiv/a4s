@@ -567,6 +567,32 @@ malformed or mismatched transcript fails the step closed. `POC=yes` publishes
 `<!-- poc-triage:yes run:<RUN> -->`, enqueues the absolute repository `poc.yaml`
 with ISSUE and QUESTION, and ends the feature run.
 
+### Promoted PoC provenance
+
+A promoted feature carries `POC_BASIS`, the exact complete `html_url` of its
+existing PoC comment on the same repository issue. When this parameter is
+nonempty, `BASIS` must cite that complete URL as a URL token; it may also explain
+the decision. `triage_decision` reads all issue-comment pages using GitHub's
+paginated API and requires the referenced comment's first line to match the
+producer grammar:
+
+```text
+<!-- poc-verdict:PASS scope:OK run:<non-whitespace> attempt:<positive-integer> base:<non-whitespace> -->
+```
+
+The first line supports the producer's CRLF handling. The cited comment may
+come from an earlier run or base and need not be the latest verdict. A missing
+comment, different URL, malformed marker, non-PASS verdict, failed scope, API
+error or invalid JSON produces a field/expected/observed diagnostic before
+publishing triage or recording reviewed dependencies.
+
+The coordinator still explicitly chooses `POC=yes` or `POC=no`; a valid basis
+supports either route, and `POC=no` still requires the current independent
+review. With an empty `POC_BASIS`, ordinary triage keeps its existing BASIS
+semantics and performs no comment lookup for provenance.
+
+### Dependency review
+
 `checkpoint_push` compares dependency relationships and package/app directories
 against the recorded candidate base, using the PoC-proven
 manifest extractor. A dependency relationship is the pair of its manifest path

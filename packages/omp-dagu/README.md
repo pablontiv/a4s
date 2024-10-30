@@ -257,6 +257,23 @@ transcript o campos inválidos hacen fallar el step sin efectos externos.
 
 Con `@a4s/omp-cross-family-review` cargado, `triage-reviewer` conserva la selección cross-family; `reviewer` sigue disponible para code review.
 
+### Promoted PoC provenance
+
+Feature promotion supplies `POC_BASIS` as the exact complete `html_url` of an
+existing comment on the same repository issue. For a nonempty `POC_BASIS`,
+triage `BASIS` must cite that complete URL as a URL token, optionally followed
+by an explanation. Before posting triage or recording reviewed dependencies,
+`triage_decision` fetches all GitHub issue-comment pages and checks the cited
+comment's first line against the PoC producer's verdict grammar, requiring
+`PASS` and `scope:OK`. CRLF first lines are supported; the comment may belong
+to an earlier run/base and need not be the latest verdict.
+
+Invalid citations, missing comments, malformed/non-PASS verdicts, failed scope,
+API errors and invalid JSON fail with field/expected/observed diagnostics before
+those effects. A valid basis preserves the explicit `POC=yes|no` decision and
+the current independent-review requirement for `POC=no`. Empty `POC_BASIS`
+preserves ordinary triage without fetching comments for provenance.
+
 ## Protección de recursos del ciclo
 
 El guard OMP intercepta llamadas de la herramienta `bash` con `git worktree

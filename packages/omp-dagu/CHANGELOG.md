@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.92
+
+- Validate promoted feature PoC provenance against the exact same-issue GitHub comment URL and the producer's first-line PASS scope:OK marker before triage publication or dependency approval (#357).
+- Require a complete URL token in promoted triage BASIS while preserving explicit PoC decisions, independent review and lookup-free ordinary triage.
+
 ## 0.3.91
 
 - Complete the parent feature run successfully after triage delegates to PoC, skipping implementation quality preparation on that route.
