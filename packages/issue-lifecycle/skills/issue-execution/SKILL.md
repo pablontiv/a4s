@@ -1183,6 +1183,13 @@ commands/results containing host paths only in run artifacts. Dagu owns staging,
 commits and publication, and runs the complete configured gate. Operator
 configuration stays operator-owned.
 
+Disposable evidence (including downloaded archives, temporary homes and nested
+repositories) belongs under `<git-dir>/dagu-feature/runs/<RUN>/computations/`
+or `$TMP`, never inside the worktree. This applies to initial implementation,
+conflict resolution and gate recovery. Before staging, `capture` rejects
+untracked `.workspace/` paths and nested `.git` entries, naming the offending
+path and the allowed scratch location.
+
 On a local gate return through `recover_gate` → `implement_budget`, the assignment
 includes failure evidence from `gate.json` only when its SHA matches the current
 candidate and its latest recorded attempt is completed `FAIL` with a nonzero exit
