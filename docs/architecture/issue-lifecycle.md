@@ -103,6 +103,169 @@ cutover requires zero nonterminal runs and zero open role jobs; see
 [deployment](../operations/deployment.md#identity-and-adoption). Source publication,
 release availability, plugin loading and station activation are separate facts.
 
+## D11 — Stable-loader hot-reload transaction
+
+**Status: native PoC PASS; production implementation belongs to
+[U4, issue #795](https://github.com/pablontiv/a4s/issues/795).**
+[Issue #787's PASS comment](https://github.com/pablontiv/a4s/issues/787#issuecomment-6515266902)
+is the retained decision basis, not a claim that production hot reload is
+installed. Issue #787 preserves the throwaway `poc/hot-loader/` harness and this
+architecture record; it does not change the production runtime.
+
+U4's stable `packages/loader` package (`@a4s/loader`) is to live outside the
+selected build root and be linked once at `~/.omp/plugins/node_modules`.
+Changing that loader requires an OMP restart. The experiment instead installed
+only `@a4s/poc-hot-loader` in an isolated plugin root. Native plugin discovery
+loaded it without `-e` or `--no-extensions`; native OMP PID 405996 executed both
+cached builds A → B → A without restarting or invoking `/reload-plugins`.
+
+### Transaction and ownership boundary
+
+The proven mechanism in [`poc/hot-loader/loader.ts`](../../poc/hot-loader/loader.ts)
+keeps the host-facing registration surface stable and delegates callbacks
+through **one combined active-generation pointer**, not two independently
+published status/triage registrations:
+
+1. Read the requested `state.json` generation at native `session_start`, or
+   after native `agent_end` using `setTimeout(..., 0)`. Only the deferred callback
+   checks `ctx.isIdle()`; checking inside the event handler is too early because
+   the host becomes idle after handlers return. The loader has a single-flight
+   transaction and each lifecycle attempt carries a generation token.
+2. Before acquiring a lease or importing code, read the candidate's
+   `identity.json` registration manifest (D12) and required loader/launcher
+   protocols (D17). A mismatch keeps the current generation and prompts
+   **“restart OMP”**, with no lease or import. The PoC captured canonical
+   host-facing command/tool metadata, schemas, descriptions, load modes,
+   completion surfaces and event names from source before compilation; the
+   instrumented build embedded and declared the same manifest. Functions were
+   represented by `"<function>"`, so this checks callback presence, not callback
+   implementation equivalence. Its protocols were `poc-d11/1` and
+   `poc-launcher/1`, not production protocol declarations.
+3. Acquire the candidate artifact lease, import `<build>/src/status/index.ts`
+   and `<build>/src/triage/native.ts`, and construct both real factories against
+   staging facades. Validate the constructed registrations against the manifest
+   before publishing any candidate behavior. Import or factory failure leaves
+   both current extensions active.
+4. Revoke the old token, abort its status observer controller and clear its
+   pending pump timer; merely changing dispatchers cannot stop detached status
+   work. Take its undelivered per-session notification queue, preserving the
+   queue's claim/hold state, and transfer ownership to the candidate. Switch the
+   single pointer for **both extensions**, then run the candidate's
+   `session_start`-equivalent lifecycle with a deadline. Startup notifications
+   are held in an outbox until commit.
+5. On lifecycle failure or timeout, revoke/abort candidate work, recover its
+   undelivered queue and startup outbox, switch both extensions back together,
+   and restart the old lifecycle with a fresh token. A late candidate
+   continuation retains its stale/aborted token and cannot publish. The PoC
+   deadline was 150 ms; its injected completion at 450 ms published nothing.
+
+Behavior ownership and artifact retention are separate. A lease is released
+immediately only when preparation fails **before the first candidate import
+starts** (for example, a lease/restore error). Once any import attempt starts,
+that candidate's lease stays until OMP process exit, even for import, factory or
+startup failure. Retiring generations also retain their leases: evaluated
+module code may still refer to build files and there is no module-eviction API.
+“Lease held” never means “behavior active.” U4 must expose those leases to cache
+GC; actual GC was not exercised here.
+
+### Retained native evidence and resources
+
+Let `E=<git-dir>/poc/runs/poc-a4s-issue-787/computations/hot-loader`, where
+`<git-dir>` denotes the repository's shared Git directory. These are retained
+run artifacts, not files shipped in the plugin or committed runtime state:
+
+- `E/observations.jsonl` is the primary evidence (285 rows).
+  `E/acceptance-evidence.json` is a compact extraction, not a substitute.
+  Commits at lines **17 / 47 / 84** show A/A → B/B → A/A, each with one
+  non-aborted observer controller on the same PID. Lines **24→26 / 61→63 /
+  98→100** show native `agent_end` followed by deferred `idle=true`; lines
+  **62 / 99** execute B and then A status code on native `agent_end`.
+  Sentinel probes at **21 / 50 / 87** execute the real status tool and triage
+  guard callbacks.
+- Manifest rejection at **104–105** warns “restart OMP” with
+  `importStarted=false`, `leaseAcquired=false`. Import failure (**128**),
+  second-factory failure (**155**), lifecycle rollback (**202**) and timeout
+  rollback (**250**) all leave A/A with one active observer controller.
+  Late completion at **252** has `stale=true`, `aborted=true`, `published=false`.
+- Queue probes **1–21** are conserved without missing, duplicate or outstanding
+  IDs, including recovery from both lifecycle faults. Seven imported/retiring
+  generation leases remain before clean exit; `E/checkpoints/99-process-exit.json`
+  records zero afterward.
+- `E/native-launch.json`, `E/isolated-plugin-list.json` and
+  `E/native-commands.jsonl` retain native discovery, invocation and measurement
+  provenance. `E/binary-paths.json` records the executed OMP realpath, version
+  **omp/18.14.0** and binary SHA-256. `E/builds/build-index.json` records archive
+  SHA-256 and build identities; `E/builds/commands.jsonl` retains build commands.
+
+The contemporaneous driver checkpoints used `ps -o rss=` and `du -sk`; per-case
+measurements are in `E/driver-observations.jsonl`,
+`E/acceptance-evidence.json` (`resourceMeasurements`) and `E/checkpoints/`:
+
+| Outcome | Status / triage | Active controllers | RSS (KiB) | Held leases |
+| --- | --- | ---: | ---: | ---: |
+| Initial A | A / A | 1 | 322,968 | 1 |
+| Promote B | B / B | 1 | 290,900 | 2 |
+| Return to A | A / A | 1 | 289,244 | 3 |
+| Manifest mismatch | A / A | 1 | 280,660 | 3 |
+| Import failure | A / A | 1 | 283,248 | 4 |
+| Second-factory failure | A / A | 1 | 284,432 | 5 |
+| Lifecycle failure | A / A | 1 | 289,676 | 6 |
+| Lifecycle timeout | A / A | 1 | 289,984 | 7 |
+
+Both builds were extracted in advance: each retained **81,680 KiB**, totaling
+**163,360 KiB** throughout the run. Final pre-exit RSS was **290,444 KiB**.
+These are resource observations, not a monotonic retained-module estimate or a
+proven long-running memory bound; old module memory is not evicted.
+
+### Source/adapter limits carried into U4
+
+Builds A (`87fdff7571f6cbbc9999843f341c52c2be968882`) and B
+(`abe25b8ac1be022304f461164b892a94e26bdf7e`) differ only in their status/triage
+sentinel constants on shared disposable-source instrumentation.
+`E/builds/sentinel-commits.bundle` preserves those source commits and
+`E/builds/instrumentation.patch` preserves the exact source/adapter boundary:
+the status observer loop and triage guard still ran from the compiled modules.
+The patch also changed lifecycle behavior, not just observability:
+
+- Status captured each observer's own `signal` in its notification callback,
+  rather than reading the mutable controller variable after a restart. It
+  tracked the deferred pump timer so `stop()` could clear it before handoff.
+- The status adapter exposed the actual private queue and supplied
+  `takeQueue`/`putQueue`, preserving per-session messages, claims and the
+  synthetic probe's hold flag. Queue batches were held before each switch,
+  including both lifecycle rollback faults, then explicitly released.
+- The triage wrapper reported sentinel use and forwarded `tool_call` to the
+  real guard; it also added a startup observation hook.
+
+These changes belong to the disposable builds, not the production status/triage
+sources. U4 must implement the lifecycle and queue ownership boundary in
+[`packages/issue-lifecycle/src/status/index.ts`](../../packages/issue-lifecycle/src/status/index.ts)
+alongside the stable loader; the PoC does not establish that production already
+has it.
+
+The notification proof uses **synthetic numbered inputs in the real status
+`Map` and claim/pump path**, with `pi.sendMessage` intercepted into a delivery
+ledger. It proves conservation for that instrumented handoff, not untouched
+production notification guarantees, real Dagu transitions, end-user delivery or
+extra model turns. The hold/transfer adapter closes a queue handoff race and is
+absent from production; U4 must implement that boundary rather than copy a
+dispatcher-only swap.
+
+Observer counts measure actual root `AbortController` state. Abort and source
+signal checks support cessation of old work **[INFERENCE]**; settlement of the
+detached `observe()` promise was not directly observed, nor cancellation of
+arbitrary third-party effects. Manifest mismatch was injected into the loader's
+declared-manifest view; factory failure followed the real status factory;
+lifecycle failure/timeout followed real status and triage startup.
+
+`E/independent-review.json` confirms the PASS with these limits. The observer
+used an unreachable loopback Dagu endpoint. Overlapping transitions, the
+single-flight join path, actual cache GC, manual `/reload-plugins` compatibility,
+abrupt-kill lease cleanup and a long-run memory bound were **not exercised**.
+Clean-exit lease release does not establish hard-kill cleanup; a hard kill may
+leave PID-checkable stale lease files. Manual reload compatibility remains a
+U4 requirement, not a result of this experiment.
+
 ## Candidate state and publication
 
 The feature path is `implement → gate → push → pr → auto_merge → await_ci → await_merge`,
