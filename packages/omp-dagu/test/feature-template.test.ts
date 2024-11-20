@@ -180,6 +180,34 @@ function runScript(script: string, repo: Repository, env: NodeJS.ProcessEnv = {}
   return `${result.stdout}${result.stderr}`;
 }
 
+test("rendered publication steps expose actual rejection values before external publication", () => {
+  const definition = definitions[0][1];
+  for (const step of ["start_gate", "capture", "push", "pr", "auto_merge"]) {
+    const repo = repository();
+    try {
+      const sha = git(repo.worktree, "rev-parse", "HEAD");
+      if (step === "start_gate") writeFileSync(join(repo.primary, "README.txt"), "operator changes\n");
+      else if (step === "capture") git(repo.worktree, "switch", "-c", "operator");
+      else if (step === "push") writeFileSync(join(repo.state, "gate.json"), JSON.stringify({ sha: "a".repeat(40), gate: "true" }));
+      else {
+        runScript(extractScript(definition, "  - id: gate"), repo);
+        if (step === "auto_merge") writeFileSync(join(repo.worktree, "README.txt"), "uncaptured delivery\n");
+      }
+      const result = spawnSync("bash", ["-c", extractScript(definition, `  - id: ${step}`)], {
+        encoding: "utf8", env: { ...featureScriptEnv(repo), DAGU_FEATURE_BUNDLE: "fixture" },
+      });
+      assert.equal(result.status, 1, result.stdout + result.stderr);
+      const rule = result.stderr.split("\n").find(line => line.startsWith("rule="));
+      const expected = step === "start_gate" ? "rule=start_gate.primary_clean expected=<empty> observed= M README.txt"
+        : step === "capture" ? `rule=capture.branch expected=${repo.branch} observed=operator`
+        : step === "push" ? `rule=push.gated_head expected=${"a".repeat(40)} observed=${sha}`
+        : step === "pr" ? `rule=pr.remote_head expected=${sha} observed=<empty>`
+        : "rule=auto_merge.worktree_clean expected=<empty> observed= M README.txt";
+      assert.equal(rule, expected, result.stderr);
+    } finally { rmSync(repo.root, { recursive: true, force: true }); }
+  }
+});
+
 
 function admitQuality(repo: Repository, definition: string, verdict: "PASS" | "FAIL" = "PASS") {
   const fixture = qualityFixture(repo, verdict);
@@ -818,7 +846,8 @@ for (const [name, definition] of definitions) {
       assert.equal(git(remote, "rev-parse", `refs/heads/${repo.branch}`), original);
       const push = extractScript(definition, "  - id: push");
       const attempt = () => spawnSync("bash", ["-c", push], { encoding: "utf8", env: featureScriptEnv(repo) });
-      assert.match(attempt().stderr, /no gated candidate/);
+      assert.equal(attempt().status, 1);
+      assert.equal(git(remote, "rev-parse", `refs/heads/${repo.branch}`), original);
       const gateScript = extractScript(definition, "  - id: gate");
       const gateOptions = { encoding: "utf8", env: { ...featureScriptEnv(repo), GATE: "true" } } as const;
       assert.equal(spawnSync("bash", ["-c", gateScript], gateOptions).status, 0);
@@ -1448,7 +1477,9 @@ for (const [name, definition] of definitions) {
       const failed = await state(first, "failed");
       const capture = failed.nodes.find(node => node.step.name === "capture")!;
       assert.equal(capture.statusLabel, "failed");
-      assert.match(readFileSync(capture.stderr!, "utf8"), /HEAD differs from Dagu candidate/);
+      assert.match(readFileSync(capture.stderr!, "utf8"), name === "template"
+        ? /rule=capture.candidate_head expected=\S+ observed=\S+/
+        : /HEAD differs from Dagu candidate/);
       const owner = git(repo.worktree, "rev-parse", "--path-format=absolute", "--git-path", "dagu-feature-owner");
       assert.equal(JSON.parse(readFileSync(owner, "utf8")).run, first);
       dagu("enqueue", "--run-id", second, file);
@@ -1472,7 +1503,9 @@ for (const [name, definition] of definitions) {
         env: { ...env, RUN: second, DAGU_FEATURE_BUNDLE: "test" }, encoding: "utf8",
       });
       assert.equal(mismatch.status, 1);
-      assert.match(mismatch.stderr, new RegExp(`ownership identity mismatch.*requesting_run=${second}.*observed=.*expected=`));
+      assert.match(mismatch.stderr, name === "template"
+        ? /rule=start_gate.ownership_identity expected=.* observed=/
+        : new RegExp(`ownership identity mismatch.*requesting_run=${second}.*observed=.*expected=`));
       writeFileSync(owner, valid);
       const active = spawnSync("bash", ["-c", extractScript(definition, "  - id: admit")], {
         env: { ...env, RUN: `${second}-other` }, encoding: "utf8",
@@ -1749,7 +1782,9 @@ esac
     if (mode === "start_gate") {
       const run = await waiting("recover_start_gate");
       assert.equal(run.nodes.find(node => node.step.name === "start_gate")?.statusLabel, "failed");
-      assert.match(new Transitions("recovery-owner").observe(run).wakeMessage ?? "", /step=recover_start_gate.*cause=start_gate failed/);
+      const notice = new Transitions("recovery-owner").observe(run).wakeMessage ?? "";
+      assert.match(notice, /step=recover_start_gate/);
+      assert.match(notice, name === "template" ? /cause=rule=start_gate.fetch_origin expected=exit_0 observed=exit_[1-9]/ : /cause=fatal:/);
       git(repo.primary, "remote", "set-url", "origin", remote);
       transition("recover_start_gate", true);
     }
@@ -1764,7 +1799,7 @@ esac
       const failed = await waiting("recover_gate");
       assert.equal(failed.nodes.find(node => node.step.name === "gate")?.statusLabel, "failed");
       const notice = new Transitions("recovery-owner").observe(failed).wakeMessage;
-      assert.match(notice ?? "", /step=recover_gate.*cause=gate failed/);
+      assert.match(notice ?? "", /step=recover_gate/);
       previousCandidate = candidate().sha;
       transition("recover_gate", true);
       await waiting("implement");
@@ -1781,7 +1816,9 @@ esac
     if (mode === "push") {
       const failed = await waiting("recover_push");
       assert.equal(failed.nodes.find(node => node.step.name === "push")?.statusLabel, "failed");
-      assert.match(new Transitions("recovery-owner").observe(failed).wakeMessage ?? "", /step=recover_push.*cause=push failed/);
+      const notice = new Transitions("recovery-owner").observe(failed).wakeMessage ?? "";
+      assert.match(notice, /step=recover_push/);
+      assert.match(notice, name === "template" ? /cause=rule=push.remote_push expected=head=/ : /cause=remote:/);
       previousCandidate = candidate().sha;
       writeFileSync(join(repo.root, "allow-push"), "");
       transition("recover_push", true);

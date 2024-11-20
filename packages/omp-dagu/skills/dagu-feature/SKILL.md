@@ -415,7 +415,15 @@ the implementation subagent repairs code/tests in the existing worktree.
 Infrastructure recovery stays operator-owned: after fixing the cause,
 `recover_start_gate` retries `start_gate` and `recover_push` retries `push`.
 Completing a recovery form bypasses its failed command; use push-back to rerun it.
-The coordinator receives notices with the checkpoint, run ID and diagnostic prompt.
+The coordinator receives notices with the checkpoint and run ID. Rejections in
+`start_gate`, `capture`, `push`, `pr` and `auto_merge` write
+`rule=<id> expected=<value> observed=<value>` to stderr with concrete values;
+command failures retain the command and exit status alongside native stderr.
+Recovery notices select the failed node named by their checkpoint. Terminal
+failure notices prioritize the failed node over cancelled siblings. Their
+`cause=` is the first complete `rule=` line in that node's REST `error`
+`recent stderr (tail):` section, or its first stderr line when no rule
+is present. Spaces inside diagnostic values are retained.
 The wait handler's dependency/conflict dispatcher also reads the current iteration
 before each transition.
 

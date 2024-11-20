@@ -24,6 +24,7 @@ export interface RunNode {
   step: { id?: string; name: string; humanTask?: { prompt?: string } };
   statusLabel: string;
   approvalIteration?: number;
+  error?: string;
 }
 
 export const isActive = (run: RunDetails): boolean =>
@@ -33,6 +34,19 @@ export const topicFor = (run: RunDetails): string => `dagrun:${run.name}/${run.d
 
 // Terminal control characters from Dagu data must remain plain widget text.
 const plain = (text: string): string => text.replace(/[\x00-\x1f\x7f-\x9f]/g, " ");
+
+/** Dagu 2.20.1 embeds the bounded stderr tail in the failed node's REST error. */
+function failureCause(node: RunNode | undefined): string | undefined {
+  if (node?.statusLabel !== "failed" || !node.error) return undefined;
+  const marker = /recent stderr \(tail\):\r?\n/.exec(node.error);
+  if (!marker) return undefined;
+  const tail = node.error.slice(marker.index + marker[0].length);
+  const rule = /^rule=[^\r\n]*/m.exec(tail);
+  if (rule) return rule[0];
+  const end = tail.indexOf("\n");
+  const line = end < 0 ? tail : tail.slice(0, end);
+  return line.endsWith("\r") ? line.slice(0, -1) : line;
+}
 
 export function runParam(run: RunDetails, name: string): string | undefined {
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -225,7 +239,6 @@ export class Transitions {
   observe(run: RunDetails, options: { baseline?: boolean; slug?: string; checkpoints?: boolean; ciDiagnostic?: CiDiagnostic } = {}): TransitionEffects {
     const key = topicFor(run);
     const previous = this.states.get(key);
-    const terminalStep = run.nodes?.find(node => node.statusLabel === run.statusLabel)?.step.name;
     this.states.set(key, { status: run.statusLabel, step: currentStep(run) });
     const effects: TransitionEffects = {};
     const issue = issueNumber(run);
@@ -250,9 +263,14 @@ export class Transitions {
         const diagnosed = ["await_ci", "await_merge"].includes(step) && ci?.class === "BLOCKED" && ci.iteration === iteration;
         const ciCause = returned || diagnosed
           ? ` ci=${plain(ci!.class)} sha=${plain(ci!.sha)} check=${plain(ci!.check)} cause=${plain(ci!.cause)} logs=${plain(ci!.log)}` : "";
-        const causeText = (step.endsWith("_primary_unavailable") || step.startsWith("recover_")) ? node.step.humanTask.prompt
+        const failed = step.startsWith("recover_")
+          ? run.nodes?.find(candidate => candidate.statusLabel === "failed"
+            && (candidate.step.id ?? candidate.step.name) === step.slice("recover_".length))
+          : undefined;
+        const causeText = step.startsWith("recover_") ? failureCause(failed)
+          : step.endsWith("_primary_unavailable") ? node.step.humanTask.prompt
           : run.name === "poc" && step === "run_poc" && iteration > 0 ? run.scopeFailureCause : undefined;
-        const cause = causeText ? ` cause=${plain(causeText)}` : ciCause;
+        const cause = causeText !== undefined ? ` cause=${plain(causeText)}` : ciCause;
         const validation = run.name === "feature" && step === "validation";
         const prompt = node.step.humanTask.prompt ?? "";
         const sha = prompt.match(/Tested SHA: ([a-f0-9]{40})\b/)?.[1];
@@ -273,15 +291,18 @@ export class Transitions {
     }
     if (previous && previous.status !== run.statusLabel
       && ["succeeded", "failed", "aborted"].includes(run.statusLabel)) {
+      const terminalNode = run.nodes?.find(node => node.statusLabel === "failed")
+        ?? run.nodes?.find(node => node.statusLabel === run.statusLabel);
       effects.notification = {
         message: `dagu · ${runLabel(run, options.slug)} ${run.statusLabel}`,
         type: run.statusLabel === "succeeded" ? "info" : run.statusLabel === "failed" ? "error" : "warning",
       };
-      const step = terminalStep ?? previous.step;
+      const step = terminalNode?.step.name ?? previous.step;
+      const cause = failureCause(terminalNode);
       if (run.statusLabel !== "succeeded" && step && owned
         && ["feature", "discovery", "planning"].includes(run.name)) {
         notice(JSON.stringify([key, run.statusLabel]),
-          `[DAGU STATE] run=${plain(run.dagRunId)} status=${run.statusLabel} step=${plain(step)}${identity}${bundleNotice}`);
+          `[DAGU STATE] run=${plain(run.dagRunId)} status=${run.statusLabel} step=${plain(step)}${identity}${bundleNotice}${cause !== undefined ? ` cause=${plain(cause)}` : ""}`);
       }
     }
     if (messages.length === 1) effects.wakeMessage = messages[0]!;

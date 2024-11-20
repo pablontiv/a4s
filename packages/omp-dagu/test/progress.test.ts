@@ -193,18 +193,61 @@ test("primary availability notices preserve the concrete sanitized cause", () =>
 });
 
 for (const step of ["start_gate", "gate", "push"]) {
-  test(`${step} recovery notice names the failed command and sanitized cause`, () => {
+  test(`${step} recovery selects its failed node's first complete rule line`, () => {
     const transitions = new Transitions("session-a");
     const candidate = waitingAt("feature", `recover_${step}`, 2);
     candidate.nodes![0]!.step.humanTask = { prompt: `${step} failed.\nInspect logs.` };
+    const diagnostic = "rule=publication.remote expected=one SHA observed=another SHA";
+    candidate.nodes!.unshift(
+      { step: { name: "unrelated" }, statusLabel: "failed", error: "exit status 1\nrecent stderr (tail):\nrule=unrelated expected=x observed=y\n" },
+      { step: { id: step, name: "command display name" }, statusLabel: "failed",
+        error: `exit status 1\r\nrecent stderr (tail):\r\ncommand: echo rule=informational\r\nnotrule=unrelated\r\n${diagnostic}\r\nrule=later expected=x observed=y\r\n` },
+    );
     const message = transitions.observe(candidate).wakeMessage!;
-    assert.ok(message.includes(`step=recover_${step} issue=176`), message);
-    assert.ok(message.endsWith(`iteration=2 cause=${step} failed. Inspect logs.`), message);
+    assert.ok(message.endsWith(`iteration=2 cause=${diagnostic}`), message);
     assert.deepEqual(transitions.observe(candidate), {});
     const repaired = waitingAt("feature", "implement", 3);
     assert.ok(transitions.observe(repaired).wakeMessage?.includes("step=implement"));
   });
 }
+
+for (const statusLabel of ["failed", "aborted"]) for (const rule of [true, false]) {
+  test(`terminal ${statusLabel} selects the failed node's ${rule ? "first rule" : "first tail line"}`, () => {
+    const transitions = new Transitions("session-a");
+    const candidate = waitingAt("feature", "capture");
+    transitions.observe({ ...candidate, statusLabel: "running" });
+    const cause = rule ? "rule=capture.branch expected=dagu/one branch observed=operator branch" : "fatal: permission denied";
+    const effects = transitions.observe({
+      ...candidate, statusLabel,
+      nodes: [
+        { step: { name: "earlier" }, statusLabel: "succeeded", error: "exit status 1\nrecent stderr (tail):\nrule=unrelated expected=x observed=y\n" },
+        { step: { name: "cancelled" }, statusLabel: "aborted", error: "exit status 1\nrecent stderr (tail):\nwrong aborted cause\n" },
+        { step: { name: "capture" }, statusLabel: "failed",
+          error: `exit status 1\nrecent stderr (tail):\n${rule ? "notrule=unrelated\ncommand: echo rule=informational\n" : ""}${cause}\n${rule ? "rule=later expected=x observed=y\n" : "more context\n"}` },
+      ],
+    });
+    assert.ok(effects.wakeMessage?.includes("step=capture"), effects.wakeMessage);
+    assert.ok(effects.wakeMessage?.endsWith(`cause=${cause}`), effects.wakeMessage);
+  });
+}
+
+test("recovery falls back to the first stderr-tail line only in its failed node", () => {
+  const candidate = waitingAt("feature", "recover_push");
+  candidate.nodes!.unshift(
+    { step: { name: "pr" }, statusLabel: "failed", error: "exit status 1\nrecent stderr (tail):\nrule=wrong expected=x observed=y\n" },
+    { step: { name: "push" }, statusLabel: "failed", error: "exit status 1\nrecent stderr (tail):\nremote: permission denied\nmore context\n" },
+  );
+  assert.ok(new Transitions("session-a").observe(candidate).wakeMessage?.endsWith("cause=remote: permission denied"));
+});
+
+test("stderr-tail fallback retains its first blank line and handles CRLF", () => {
+  for (const [tail, expected] of [["\r\nlater context\r\n", ""], ["first line\r\nsecond line\r\n", "first line"]]) {
+    const candidate = waitingAt("feature", "recover_push");
+    candidate.nodes!.unshift({ step: { name: "push" }, statusLabel: "failed",
+      error: `exit status 1\r\nrecent stderr (tail):\r\n${tail}` });
+    assert.ok(new Transitions("session-a").observe(candidate).wakeMessage?.endsWith(`cause=${expected}`));
+  }
+});
 
 test("bundle compatibility remains visible in targeted notices", () => {
   const candidate = { ...waitingAt("feature", "implement"), labels: ["dagu-feature-bundle=0.2.0"] };

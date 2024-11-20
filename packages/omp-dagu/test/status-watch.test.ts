@@ -20,7 +20,13 @@ for (const drift of [undefined, "main", "bundle", "invalid JSON", "unreadable ma
   let ready = false;
   const runs = Array.from({ length: 5 }, (_, n) => ({
     name: "feature", dagRunId: `burst-${n}`, statusLabel: "waiting", labels: ["workspace=a4s", `dagu-feature-bundle=${drift === "bundle" ? "0.3.8" : BUNDLE_VERSION}`],
-    params: "OMP_SESSION_ID=owner", nodes: [{ step: { id: "triage", name: "triage", humanTask: {} }, statusLabel: "waiting" }],
+    params: "OMP_SESSION_ID=owner", nodes: n < 2 ? [
+      { step: { id: "unrelated", name: "unrelated", humanTask: undefined }, statusLabel: "succeeded",
+        error: "exit status 1\nrecent stderr (tail):\nrule=unrelated expected=x observed=y\n" },
+      { step: { id: "push", name: "push", humanTask: undefined }, statusLabel: "failed",
+        error: `exit status 1\nrecent stderr (tail):\n${n === 0 ? "remote context\nrule=push.remote expected=one SHA observed=another SHA" : "remote: permission denied"}\n` },
+      { step: { id: "recover_push", name: "recover_push", humanTask: { prompt: "Inspect logs." } }, statusLabel: "waiting", error: undefined },
+    ] : [{ step: { id: "triage", name: "triage", humanTask: {} }, statusLabel: "waiting", error: undefined }],
   }));
   const requests: string[] = [];
   const server = createServer((request, response) => {
@@ -93,6 +99,8 @@ for (const drift of [undefined, "main", "bundle", "invalid JSON", "unreadable ma
     await delay(1200); // A second head sweep replays the same ledger IDs.
     assert.deepEqual(received.map(message => message.match(/run=(\S+)/)?.[1]), runs.map(run => run.dagRunId));
     assert.ok(requests.some(path => path.endsWith("/spec")));
+    assert.ok(received[0]!.endsWith("cause=rule=push.remote expected=one SHA observed=another SHA"), received[0]);
+    assert.ok(received[1]!.endsWith("cause=remote: permission denied"), received[1]);
     assert.equal(aborts, 0);
     assert.equal(instructions.length, stale ? 5 : 0);
     for (const message of received) {

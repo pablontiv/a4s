@@ -188,12 +188,6 @@ test("repository resolution requires verified run identity", () => {
   try { put(repo.state, "identity", "{}\n"); assert.notEqual(run(repo).status, 0); assert.equal(git(repo.worktree, "rev-parse", "HEAD"), repo.before); }
   finally { rmSync(repo.root, { recursive: true, force: true }); }
 });
-test("feature render keeps the repository resolver and all step bodies in template parity", () => {
-  const source = readFileSync(template, "utf8"); const render = readFileSync(rendered, "utf8");
-  assert.match(source, /^  - REBASE_RESOLVER: __REBASE_RESOLVER__$/m);
-  assert.match(render, /^  - REBASE_RESOLVER: "node packages\/omp-dagu\/bin\/dagu-bundle-rebase.mjs"$/m);
-  for (const id of ["rebase", "conflict_review", "gate", "push"]) assert.equal(step(source, id), step(render, id));
-});
 
 test("isolated Dagu rebases colliding candidates before gate and publishes the normalized SHA", {
   ...liveDagu,

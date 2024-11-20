@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.92
+
+- Diagnose every start, capture and publication rejection with a stable rule and concrete expected/observed values (#355).
+- Deliver recovery and terminal causes from the failed node's REST stderr tail, preserving the first complete rule line or falling back to its first stderr line (#355).
+
 ## 0.3.91
 
 - Complete the parent feature run successfully after triage delegates to PoC, skipping implementation quality preparation on that route.
