@@ -1,13 +1,14 @@
 import { resourceDecision } from "../resources.ts";
 import { primarySessionDecision } from "./primary.ts";
-import type { SessionContext } from "./primary.ts";
 import { TriageGuard } from "./guard.ts";
 import type { CallDecision, Event } from "./guard.ts";
+import { qualityDecision } from "./quality.ts";
+import type { QualityContext } from "./quality.ts";
 export { REVIEW_PROMPT } from "./guard.ts";
 
 // Structural API keeps this OMP-only package independent of provider imports.
 interface ExtensionAPI {
-  on(event: "tool_call", handler: (event: Event, ctx?: SessionContext) => CallDecision | Promise<CallDecision>): void;
+  on(event: "tool_call", handler: (event: Event, ctx?: QualityContext) => CallDecision | Promise<CallDecision>): void;
   on(event: "tool_result", handler: (event: Event) => void): void;
   on(event: "message_end", handler: (event: { message: Record<string, unknown> }) => void): void;
   on(event: "session_start" | "session_switch", handler: () => void): void;
@@ -19,6 +20,7 @@ export default function triageGuard(pi: ExtensionAPI): void {
   pi.on("session_switch", () => { guard = new TriageGuard(); });
   pi.on("tool_call", async (event, ctx) =>
     await resourceDecision(event, ctx?.cwd ?? process.cwd())
+    ?? (ctx ? await qualityDecision(event, ctx) : undefined)
     ?? (ctx ? await primarySessionDecision(event, ctx) : undefined)
     ?? guard.toolCall(event));
   pi.on("tool_result", event => guard.toolResult(event));

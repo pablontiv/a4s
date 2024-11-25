@@ -12,7 +12,7 @@ import {
 
 test("package metadata is the bundle compatibility authority", () => {
   assert.equal(BUNDLE_NAME, "@a4s/omp-dagu");
-  assert.equal(BUNDLE_VERSION, "0.3.58");
+  assert.equal(BUNDLE_VERSION, "0.3.68");
   assert.equal(REQUIRED_DAGU_VERSION, "2.20.1");
 });
 

@@ -12,6 +12,9 @@ import { Transitions } from "../src/status/progress.ts";
 import type { RunDetails } from "../src/status/progress.ts";
 import { BUNDLE_VERSION } from "../src/bundle.ts";
 import { stubHistory, withResourceGuard } from "./resource-fixtures.ts";
+import { qualityDecision, qualityMarker, verifyQuality } from "../src/triage/quality.ts";
+import type { QualityRequest, TranscriptRow } from "../src/triage/quality.ts";
+import { qualityFixture } from "./quality-fixtures.ts";
 
 const definitions = [
   ["template", fileURLToPath(new URL("../skills/dagu-feature/feature.yaml", import.meta.url))],
@@ -82,7 +85,7 @@ function recordCandidate(repo: Repository): void {
   const sha = git(repo.worktree, "rev-parse", "HEAD");
   writeFileSync(join(repo.state, "candidate.json"), JSON.stringify({
     sha, base: readFileSync(join(repo.state, "base"), "utf8").trim(),
-    tree: git(repo.worktree, "rev-parse", "HEAD^{tree}"), message: "base", iteration: -1,
+    tree: git(repo.worktree, "rev-parse", "HEAD^{tree}"), message: "base", iteration: -1, implementer: "ImplementTest",
   }) + "\n");
 }
 
@@ -144,6 +147,7 @@ function featureScriptEnv(repo: Repository): NodeJS.ProcessEnv {
     RUN: "test-run",
     SUMMARY: "Delivered files",
     MESSAGE: "feat: delivered change",
+    IMPLEMENTER: "ImplementTest",
   };
 }
 
@@ -163,6 +167,170 @@ function runScript(script: string, repo: Repository, env: NodeJS.ProcessEnv = {}
   assert.equal(result.status, 0, `script failed\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
   return `${result.stdout}${result.stderr}`;
 }
+
+
+function admitQuality(repo: Repository, definition: string, verdict: "PASS" | "FAIL" = "PASS") {
+  const fixture = qualityFixture(repo, verdict);
+  const evidence = verifyQuality(fixture.parent, fixture.request, "QATest", "ReviewTest", fixture.models);
+  writeFileSync(join(repo.state, "quality.json"), JSON.stringify(evidence));
+  runScript(extractScript(definition, "  - id: quality_admit"), repo, { QA: "QATest", REVIEW: "ReviewTest", OMP_SESSION_ID: "parent-id" });
+  return { ...fixture, evidence };
+}
+
+function changeTranscript(path: string, mutate: (rows: TranscriptRow[]) => void): void {
+  const rows: TranscriptRow[] = readFileSync(path, "utf8").trim().split("\n").map(line => JSON.parse(line));
+  mutate(rows);
+  writeFileSync(path, rows.map(row => JSON.stringify(row)).join("\n") + "\n");
+}
+
+test("effective quality accepts two independent PASS using canonical family tokens", () => {
+  const repo = repository();
+  try {
+    const fixture = qualityFixture(repo);
+    const evidence = verifyQuality(fixture.parent, fixture.request, "QATest", "ReviewTest", fixture.models);
+    assert.equal(evidence.action, "complete");
+    assert.equal(evidence.implementer.family, "canonical-openai");
+    assert.deepEqual(evidence.verdicts.map(verdict => [verdict.role, verdict.model.family]),
+      [["qa", "canonical-anthropic"], ["reviewer", "canonical-anthropic"]]);
+  } finally { rmSync(repo.root, { recursive: true, force: true }); }
+});
+
+test("template and installed render share the executable candidate publication contract", () => {
+  const contracts = definitions.map(([, path]) => {
+    const source = readFileSync(path, "utf8");
+    return source.slice(source.indexOf("  - id: implement\n"));
+  });
+  assert.equal(contracts[0], contracts[1]);
+});
+
+for (const scenario of ["fabricated report", "other SHA", "same subagent", "same-family fallback",
+  "indeterminate model", "wrong parent", "wrong invocation", "stale invocation", "wrong role",
+  "unattributed id", "uncorrelated SHA", "exhaustion", "effective implementer fallback",
+  "other run", "other iteration", "other attempt"] as const) {
+  test(`effective quality rejects ${scenario} with diagnostics and preserves local candidate`, () => {
+    const repo = repository();
+    try {
+      const fixture = qualityFixture(repo);
+      const before = git(repo.worktree, "rev-parse", "HEAD");
+      if (scenario === "wrong invocation") changeTranscript(fixture.parent, rows => { rows.splice(2, 1); });
+      else if (scenario !== "same subagent") changeTranscript(
+        fixture.paths[scenario === "effective implementer fallback" ? "implementer" : "qa"]!, rows => {
+          const final = rows.at(-1)!.message!;
+          if (scenario === "fabricated report") final.role = "user";
+          if (scenario === "other SHA" || scenario === "wrong role" || scenario === "other run" ||
+            scenario === "other iteration" || scenario === "other attempt") {
+            assert.ok(Array.isArray(final.content));
+            const report: Record<string, unknown> = JSON.parse(final.content[0]!.text!);
+            if (scenario === "other SHA") report.sha = "b".repeat(40);
+            if (scenario === "wrong role") report.role = "reviewer";
+            if (scenario === "other run") report.run = "other-run";
+            if (scenario === "other iteration") report.iteration = 999;
+            if (scenario === "other attempt") report.attempt = "older-attempt";
+            final.content[0]!.text = JSON.stringify(report);
+          }
+          if (scenario === "same-family fallback") {
+            rows.splice(3, 0, { type: "model_change", role: "fallback", model: "openai-codex/effective", resolvedModelIsFallback: true });
+            final.provider = "openai-codex"; final.model = "effective";
+          }
+          if (scenario === "effective implementer fallback") { final.provider = "anthropic"; final.model = "alternate"; }
+          if (scenario === "indeterminate model") delete final.model;
+          if (scenario === "wrong parent") rows[0]!.parentSession = "/other/parent.jsonl";
+          if (scenario === "stale invocation") rows[1]!.timestamp = fixture.request.attempt;
+          if (scenario === "unattributed id") rows[2]!.role = "subagent:Other";
+          if (scenario === "uncorrelated SHA") rows[4]!.message!.toolCallId = "invented";
+          if (scenario === "exhaustion") for (const row of rows) if (row.message?.role === "assistant") {
+            row.message.stopReason = "error"; row.message.errorMessage = "provider unavailable";
+          }
+        });
+      assert.throws(() => verifyQuality(fixture.parent, fixture.request, "QATest",
+        scenario === "same subagent" ? "QATest" : "ReviewTest", fixture.models), /mismatch|missing|distinct|same-family|indeterminate|parent|invocation|attributed|exhausted|invalid/);
+      assert.equal(git(repo.worktree, "rev-parse", "HEAD"), before);
+      assert.equal(git(repo.worktree, "status", "--porcelain"), "");
+    } finally { rmSync(repo.root, { recursive: true, force: true }); }
+  });
+}
+
+for (const role of ["qa", "reviewer"] as const) {
+  test(`a ${role} FAIL independently returns findings to implementation`, () => {
+    const repo = repository();
+    try {
+      const fixture = qualityFixture(repo);
+      changeTranscript(fixture.paths[role]!, rows => {
+        const message = rows.at(-1)!.message!;
+        assert.ok(Array.isArray(message.content));
+        const report: Record<string, unknown> = JSON.parse(message.content[0]!.text!);
+        report.verdict = "FAIL"; report.findings = [`${role} acceptance regression`];
+        message.content[0]!.text = JSON.stringify(report);
+      });
+      const evidence = verifyQuality(fixture.parent, fixture.request, "QATest", "ReviewTest", fixture.models);
+      assert.equal(evidence.action, "rewind");
+      assert.equal(evidence.verdicts.find(verdict => verdict.role === role)?.verdict, "FAIL");
+      assert.equal(evidence.verdicts.find(verdict => verdict.role !== role)?.verdict, "PASS");
+    } finally { rmSync(repo.root, { recursive: true, force: true }); }
+  });
+}
+
+test("effective quality records actual failed attempts and successful fallback", () => {
+  const repo = repository();
+  try {
+    const fixture = qualityFixture(repo);
+    changeTranscript(fixture.paths.qa!, rows => {
+      rows.splice(3, 0,
+        { type: "message", id: "failed-primary", message: { role: "assistant", provider: "openai-codex", model: "effective",
+          stopReason: "error", errorMessage: "stream interrupted", content: [] } },
+        { type: "model_change", id: "actual-fallback", role: "fallback", model: "anthropic/alternate", resolvedModelIsFallback: true });
+    });
+    const evidence = verifyQuality(fixture.parent, fixture.request, "QATest", "ReviewTest", fixture.models);
+    assert.equal(evidence.action, "complete");
+    assert.equal(evidence.verdicts[0]!.model.provider, "anthropic");
+    assert.ok(evidence.verdicts[0]!.attempts.some(attempt => attempt.event === "failed-primary" && attempt.error === "stream interrupted"));
+    assert.equal(evidence.verdicts[0]!.fallbacks[0]!.resolvedModelIsFallback, true);
+  } finally { rmSync(repo.root, { recursive: true, force: true }); }
+});
+
+test("effective quality attributes structured yield to its emitting message", () => {
+  const repo = repository();
+  try {
+    const fixture = qualityFixture(repo);
+    changeTranscript(fixture.paths.qa!, rows => {
+      const message = rows.at(-1)!.message!;
+      assert.ok(Array.isArray(message.content));
+      const report: Record<string, unknown> = JSON.parse(message.content[0]!.text!);
+      message.stopReason = "toolUse";
+      message.content = [{ type: "toolCall", name: "yield", id: "yield-qa", arguments: report }];
+      rows.push({ type: "message", message: { role: "toolResult", toolName: "yield", toolCallId: "yield-qa", content: [] } });
+    });
+    assert.equal(verifyQuality(fixture.parent, fixture.request, "QATest", "ReviewTest", fixture.models).action, "complete");
+  } finally { rmSync(repo.root, { recursive: true, force: true }); }
+});
+
+test("quality completion hook validates provenance and persists independent evidence", async t => {
+  const repo = repository();
+  try {
+    const fixture = qualityFixture(repo);
+    t.mock.method(globalThis, "fetch", async () => new Response(JSON.stringify({ dagRunDetails: {
+      params: `PRIMARY=${repo.primary} ISSUE=189 OMP_SESSION_ID=parent-id`,
+      nodes: [{ step: { id: "implement" }, startedAt: fixture.request.implementStartedAt }],
+    } })));
+    const ctx = { cwd: repo.primary, sessionManager: { getSessionDir: () => dirname(fixture.parent) }, models: fixture.models };
+    const routed = await qualityDecision({ toolName: "task", toolCallId: "quality-spawn", input: {
+      tasks: [{ name: "NewQA", agent: "qa", model: ["openai-codex/effective", "anthropic/alternate"],
+        task: qualityMarker(fixture.request, "qa") }],
+    } }, ctx);
+    assert.ok(routed && "input" in routed);
+    assert.deepEqual(routed.input.tasks[0].model, ["anthropic/alternate"]);
+    const event = { toolName: "bash", toolCallId: "complete-quality", input: {
+      command: "dagu human-task complete feature --run-id test-run --step quality_review --input QA=QATest --input REVIEW=ReviewTest",
+    } };
+    assert.equal(await qualityDecision(event, ctx), undefined);
+    const evidence = JSON.parse(readFileSync(join(repo.state, "quality.json"), "utf8"));
+    assert.equal(evidence.verdicts.length, 2);
+    assert.equal(evidence.action, "complete");
+    const blocked = await qualityDecision({ ...event, input: { command: event.input.command.replace("QA=QATest", "QA=Invented") } }, ctx);
+    assert.ok(blocked && "block" in blocked);
+    assert.match(blocked.reason, /QUALITY_BLOCKED.*candidate retained/);
+  } finally { rmSync(repo.root, { recursive: true, force: true }); }
+});
 
 for (const [name, definition] of definitions) {
   const exitScript = extractScript(definition, "  exit:");
@@ -208,6 +376,55 @@ for (const [name, definition] of definitions) {
       } finally { rmSync(repo.root, { recursive: true, force: true }); }
     });
   }
+  test(`${name} admits FAIL findings for same-run push-back and preserves the candidate`, () => {
+    const repo = repository();
+    try {
+      runScript(gateScript, repo);
+      const before = git(repo.worktree, "rev-parse", "HEAD");
+      const { evidence } = admitQuality(repo, definition, "FAIL");
+      assert.equal(evidence.action, "rewind");
+      assert.equal(readFileSync(join(repo.state, "quality-action"), "utf8"), "rewind\n");
+      assert.deepEqual(evidence.verdicts[0]!.findings, ["Fix acceptance regression"]);
+      const result = spawnSync("bash", ["-c", pushScript], { encoding: "utf8", env: featureScriptEnv(repo) });
+      assert.notEqual(result.status, 0);
+      assert.equal(git(repo.worktree, "rev-parse", "HEAD"), before);
+      const transition = extractStep(readFileSync(definition, "utf8"), "quality_transition");
+      assert.match(transition, /rewind_to: implement/);
+    } finally { rmSync(repo.root, { recursive: true, force: true }); }
+  });
+
+  test(`${name} publication requires admitted, unchanged transcript-backed verdicts`, () => {
+    const repo = repository();
+    try {
+      runScript(gateScript, repo);
+      const fixture = admitQuality(repo, definition);
+      changeTranscript(fixture.paths.qa!, rows => { rows.at(-1)!.message!.model = "tampered"; });
+      const result = spawnSync("bash", ["-c", extractScript(definition, "  - id: quality_admit")], {
+        encoding: "utf8", env: { ...featureScriptEnv(repo), QA: "QATest", REVIEW: "ReviewTest", OMP_SESSION_ID: "parent-id" },
+      });
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, /transcript changed/);
+      const evidence = { ...fixture.evidence, action: "rewind" };
+      writeFileSync(join(repo.state, "quality.json"), JSON.stringify(evidence));
+      const rejected = spawnSync("bash", ["-c", pushScript], { encoding: "utf8", env: featureScriptEnv(repo) });
+      assert.notEqual(rejected.status, 0);
+      assert.match(rejected.stderr, /checksum did NOT match/);
+    } finally { rmSync(repo.root, { recursive: true, force: true }); }
+  });
+
+  test(`${name} every candidate publication follows gate and effective QA/review admission`, () => {
+    const source = readFileSync(definition, "utf8");
+    for (const [step, dependency] of [
+      ["recover_gate", "gate"], ["quality_prepare", "recover_gate"], ["quality_review", "quality_prepare"],
+      ["quality_admit", "quality_review"], ["quality_transition", "quality_admit"],
+      ["push", "quality_transition"], ["auto_merge", "pr"],
+    ]) assert.match(extractStep(source, step!), new RegExp(`depends: ${dependency}`));
+    const publications = source.split("\n  - id:").filter(block => block.includes('push "--force-with-lease=$remote_ref:$expected" --set-upstream origin "$sha:$remote_ref"'));
+    assert.equal(publications.length, 1);
+    assert.match(publications[0]!, /^ push\n/);
+    assert.match(extractStep(source, "await_merge"), /rewind_to: rebase/);
+    assert.match(extractStep(source, "quality_transition"), /rewind_to: implement/);
+  });
 
   test(`${name} terminal cleanup retains an uncaptured delivery whose HEAD is on the base`, () => {
     const repo = repository();
@@ -261,6 +478,7 @@ for (const [name, definition] of definitions) {
       assert.equal(git(repo.worktree, "rev-list", "--count", "HEAD"), count);
       assert.equal(git(repo.worktree, "show", "-s", "--format=%at:%ct", sha), date);
       runScript(gateScript, repo);
+      admitQuality(repo, definition);
       runScript(pushScript, repo);
       assert.equal(git(repo.primary, "rev-parse", `origin/${repo.branch}`), sha);
     } finally { rmSync(repo.root, { recursive: true, force: true }); }
@@ -322,6 +540,7 @@ for (const [name, definition] of definitions) {
       assert.notEqual(refused.status, 0);
       assert.equal(hasRef(repo.primary, `refs/remotes/origin/${repo.branch}`), false);
       runScript(gateScript, repo);
+      admitQuality(repo, definition);
       runScript(pushScript, repo);
       assert.equal(git(repo.primary, "rev-parse", `origin/${repo.branch}`), second);
       const evidenceNow = readFileSync(join(repo.state, "gate.json"), "utf8");
@@ -362,6 +581,7 @@ for (const [name, definition] of definitions) {
         const result = spawnSync("bash", ["-c", pushScript], { encoding: "utf8", env: featureScriptEnv(repo) });
         assert.notEqual(result.status, 0);
         runScript(gateScript, repo);
+        admitQuality(repo, definition);
         runScript(pushScript, repo);
       } finally { rmSync(repo.root, { recursive: true, force: true }); }
     });
@@ -401,6 +621,7 @@ for (const [name, definition] of definitions) {
       git(remote, "update-ref", ref, candidate);
       runScript(checkpointScript, repo);
       assert.equal(spawnSync("bash", ["-c", gateScript], gateOptions).status, 0);
+      admitQuality(repo, definition);
       runScript(push, repo);
       assert.equal(git(remote, "rev-parse", `refs/heads/${repo.branch}`), git(repo.worktree, "rev-parse", "HEAD"));
     } finally {
@@ -529,6 +750,7 @@ for (const [name, definition] of definitions) {
       const sha = git(repo.worktree, "rev-parse", "HEAD");
       recordCandidate(repo);
       runScript(extractScript(definition, "  - id: gate"), repo);
+      admitQuality(repo, definition);
       const bin = join(repo.root, "bin");
       mkdirSync(bin, { recursive: true });
       const executable = join(bin, "gh");
@@ -588,6 +810,7 @@ esac
         const sha = git(repo.worktree, "rev-parse", "HEAD");
         recordCandidate(repo);
         runScript(extractScript(definition, "  - id: gate"), repo);
+        admitQuality(repo, definition);
         const oldSha = "b".repeat(40);
         const bin = join(repo.root, "bin");
         mkdirSync(bin, { recursive: true });
@@ -809,7 +1032,7 @@ esac
       rmSync(repo.root, { recursive: true, force: true });
     }
   });
-  for (const [step, downstream] of [["start_gate", "implement"], ["gate", "push"], ["push", "pr"]]) {
+  for (const [step, downstream] of [["start_gate", "implement"], ["gate", "quality_prepare"], ["push", "pr"]]) {
     test(`${name} ${step} routes failure through its recovery checkpoint`, () => {
       const source = readFileSync(definition, "utf8");
       assert.match(extractStep(source, step!), /continue_on:\n      failure: true/);
@@ -984,7 +1207,7 @@ for (const [name, definition] of definitions) {
         "handler_on:\n", source.slice(source.indexOf("  exit:\n")),
       ].join(""));
       dagu("validate", file);
-      const first = "retained-189", second = `${first}-v2`;
+      const first = `retained-189-${randomUUID()}`, second = `${first}-v2`;
       dagu("enqueue", "--run-id", first, file);
       await state(first, "waiting");
       writeFileSync(join(repo.worktree, "retained.txt"), "retained candidate\n");
@@ -992,7 +1215,7 @@ for (const [name, definition] of definitions) {
       git(repo.worktree, "commit", "-m", "precommitted candidate");
       const head = git(repo.worktree, "rev-parse", "HEAD");
       dagu("human-task", "complete", "feature", "--run-id", first, "--step", "implement",
-        "--input", "MESSAGE=fix: retained candidate", "--input", "SUMMARY=Retained candidate");
+        "--input", "MESSAGE=fix: retained candidate", "--input", "SUMMARY=Retained candidate", "--input", "IMPLEMENTER=ImplementTest");
       const failed = await state(first, "failed");
       const capture = failed.nodes.find(node => node.step.name === "capture")!;
       assert.equal(capture.statusLabel, "failed");
@@ -1020,13 +1243,13 @@ for (const [name, definition] of definitions) {
         env: { ...env, RUN: second, DAGU_FEATURE_BUNDLE: "test" }, encoding: "utf8",
       });
       assert.equal(mismatch.status, 1);
-      assert.match(mismatch.stderr, /ownership identity mismatch.*requesting_run=retained-189-v2.*observed=.*expected=/);
+      assert.match(mismatch.stderr, new RegExp(`ownership identity mismatch.*requesting_run=${second}.*observed=.*expected=`));
       writeFileSync(owner, valid);
       const active = spawnSync("bash", ["-c", extractScript(definition, "  - id: admit")], {
         env: { ...env, RUN: `${second}-other` }, encoding: "utf8",
       });
       assert.equal(active.status, 1);
-      assert.match(active.stderr, /belongs to active run retained-189-v2/);
+      assert.ok(active.stderr.includes(`belongs to active run ${second}`));
       assert.equal(git(repo.worktree, "rev-parse", "HEAD"), head);
       const evidence = [...failed.nodes, ...adopted.nodes].filter(node => ["admit", "start_gate", "capture"].includes(node.step.name))
         .map(node => ({ step: node.step.name, status: node.statusLabel,
@@ -1251,13 +1474,14 @@ esac
     const script = [
       "type: graph\nshell: bash\nmax_active_steps: 1\n",
       `params:\n  - ISSUE: "189"\n  - PRIMARY: ${repo.primary}\n  - BRANCH: ${repo.branch}\n  - BASE_BRANCH: main\n  - PR_NUMBER: ""\n  - GATE: test -f required.txt\n  - REQUIRED_CHECK: validate\n  - OMP_SESSION_ID: recovery-owner\n`,
-      `env:\n  - PATH: ${bin}:${process.env.PATH}\n  - WORKTREE: ${repo.worktree}\n  - RUN: \${context.run.id}\n  - DAGU_FEATURE_BUNDLE: test\n`,
+      `env:\n  - PATH: ${bin}:${process.env.PATH}\n  - WORKTREE: ${repo.worktree}\n  - RUN: \${context.run.id}\n  - DAGU_FEATURE_BUNDLE: test\n  - DAGU_PORT: "${fixture.port}"\n`,
       source.slice(source.indexOf("  - DAGU_RESOURCE_GUARD: |"), source.indexOf("steps:\n")),
       "steps:\n",
       `  - id: triage\n    run: |\n      mkdir -p "$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")"\n      echo POC=no >> "$DAGU_OUTPUT_FILE"\n    outputs:\n      - name: POC\n`,
       "  - id: triage_decision\n    depends: triage\n    run: echo reviewed\n",
       ...["detect_start_primary", "start_primary_unavailable", "start_gate", "recover_start_gate", "implement",
-        "capture", "checkpoint_push", "dependency_review", "rebase", "conflict_review", "gate", "recover_gate", "push", "recover_push", "pr"]
+        "capture", "checkpoint_push", "dependency_review", "rebase", "conflict_review", "gate", "recover_gate",
+        "quality_prepare", "quality_review", "quality_admit", "quality_transition", "push", "recover_push", "pr"]
         .map(step => extractStep(source, step)),
       "  - id: await_merge\n    depends: pr\n    action: human.task\n    with:\n      prompt: Isolated merge boundary\n",
       source.slice(source.indexOf("handler_on:\n"), source.indexOf("  exit:\n")),
@@ -1282,7 +1506,9 @@ esac
       const observed = iteration();
       dagu("human-task", pushBack ? "push-back" : "complete", "feature", "--run-id", id, "--step", step,
         ...(pushBack ? ["--expected-iteration", String(observed)] : []),
-        ...(!pushBack && step === "implement" ? ["--input", "SUMMARY=Recovery candidate", "--input", "MESSAGE=fix: recover candidate"] : []));
+        ...(!pushBack && step === "implement" ? ["--input", "SUMMARY=Recovery candidate", "--input", "MESSAGE=fix: recover candidate",
+          "--input", "IMPLEMENTER=ImplementTest"] : []),
+        ...(!pushBack && step === "quality_review" ? ["--input", "QA=QATest", "--input", "REVIEW=ReviewTest"] : []));
     }
     const candidate = () => JSON.parse(readFileSync(join(repo.state, "candidate.json"), "utf8")) as { sha: string };
     dagu("validate", dag);
@@ -1313,7 +1539,13 @@ esac
       assert.equal(git(repo.worktree, "rev-parse", "HEAD"), previousCandidate);
       writeFileSync(join(repo.worktree, "required.txt"), "fixed\n");
       transition("implement");
-    } else if (mode === "push") {
+    }
+    await waiting("quality_review");
+    const request: QualityRequest = JSON.parse(readFileSync(join(repo.state, "quality-request.json"), "utf8"));
+    const quality = qualityFixture(repo, "PASS", request);
+    writeFileSync(join(repo.state, "quality.json"), JSON.stringify(verifyQuality(quality.parent, request, "QATest", "ReviewTest", quality.models)));
+    transition("quality_review");
+    if (mode === "push") {
       const failed = await waiting("recover_push");
       assert.equal(failed.nodes.find(node => node.step.name === "push")?.statusLabel, "failed");
       assert.match(new Transitions("recovery-owner").observe(failed).wakeMessage ?? "", /step=recover_push.*cause=push failed/);
@@ -1509,14 +1741,16 @@ test("concurrent recovery fixtures keep distinct run identities", {
       assert.notEqual(left.socket, right.socket);
       assert.notEqual(left.candidateSHA, right.candidateSHA);
       const expected = mode === "healthy"
-        ? [{ step: "implement", iteration: 0 }, { step: "await_merge", iteration: 0 }]
+        ? [{ step: "implement", iteration: 0 }, { step: "quality_review", iteration: 0 }, { step: "await_merge", iteration: 0 }]
         : mode === "start_gate"
-          ? [{ step: "recover_start_gate", iteration: 0 }, { step: "implement", iteration: 1 }, { step: "await_merge", iteration: 1 }]
-          : [
-            { step: "implement", iteration: 0 }, { step: `recover_${mode}`, iteration: 0 },
-            ...(mode === "gate" ? [{ step: "implement", iteration: 1 }] : []),
-            { step: "await_merge", iteration: 1 },
-          ];
+          ? [{ step: "recover_start_gate", iteration: 0 }, { step: "implement", iteration: 1 },
+            { step: "quality_review", iteration: 1 }, { step: "await_merge", iteration: 1 }]
+          : mode === "gate"
+            ? [{ step: "implement", iteration: 0 }, { step: "recover_gate", iteration: 0 },
+              { step: "implement", iteration: 1 }, { step: "quality_review", iteration: 1 },
+              { step: "await_merge", iteration: 1 }]
+            : [{ step: "implement", iteration: 0 }, { step: "quality_review", iteration: 0 },
+              { step: "recover_push", iteration: 0 }, { step: "await_merge", iteration: 1 }];
       const outcomes: Array<[RecoveryFixture, RecoveryResult]> = [[first, left], [second, right]];
       for (const [fixture, result] of outcomes) {
         assert.equal(result.id, `recovery-${mode}-${fixture.suffix}`);
@@ -1703,5 +1937,124 @@ for (const [name, definition] of [
       assert.equal(readFileSync(join(state, "base.sha"), "utf8").trim(), git(repo.primary, "rev-parse", "origin/main"));
       assert.match(readFileSync(output, "utf8"), /BASE_SHA=[a-f0-9]{40}/);
     } finally { rmSync(repo.root, { recursive: true, force: true }); }
+  });
+}
+
+for (const [name, definition] of definitions) {
+  test(`${name} isolated Dagu rejects FAIL then gates corrections and rebases before PR-head updates`, {
+    skip: daguAvailable.status !== 0 || !/2\.20\.1/.test(daguAvailable.stdout) ? "Dagu 2.20.1 binary required" : false,
+    timeout: 180_000,
+  }, async () => {
+    const repo = repository();
+    const home = join(repo.root, "dagu-home");
+    mkdirSync(join(home, "dags"), { recursive: true });
+    const listener = createServer();
+    await new Promise<void>(resolve => listener.listen(0, "127.0.0.1", resolve));
+    const address = listener.address();
+    assert.ok(address && typeof address !== "string");
+    const port = address.port;
+    await new Promise<void>((resolve, reject) => listener.close(error => error ? reject(error) : resolve()));
+    const run = `quality-${randomUUID()}`;
+    const state = join(dirname(repo.state), run);
+    renameSync(repo.state, state);
+    repo.state = state;
+    const identity = JSON.stringify({ primary: repo.primary, worktree: repo.worktree, branch: repo.branch, run, session: "parent-id" }) + "\n";
+    writeFileSync(join(state, "identity"), identity);
+    writeFileSync(git(repo.worktree, "rev-parse", "--path-format=absolute", "--git-path", "dagu-feature-owner"), identity);
+    const env = { ...process.env, DAGU_HOME: home, DAGU_PORT: String(port), DAGU_COORDINATOR_ENABLED: "false" };
+    writeFileSync(join(home, "config.yaml"), `host: 127.0.0.1\nport: ${port}\nauth:\n  mode: none\ncoordinator:\n  enabled: false\n`);
+    const source = readFileSync(definition, "utf8");
+    const steps = ["implement", "capture", "rebase", "conflict_review", "gate", "recover_gate", "quality_prepare",
+      "quality_review", "quality_admit", "quality_transition", "push"].map(step =>
+      extractStep(source, step).replace("    depends: recover_start_gate\n", "    depends: triage\n").replace("    depends: dependency_review\n", "    depends: capture\n")).join("\n");
+    const dag = join(home, "dags", "feature.yaml");
+    writeFileSync(dag, `name: feature\ntype: graph\nshell: bash\nmax_active_steps: 1\nenv:\n${Object.entries({
+      ISSUE: "189", PRIMARY: repo.primary, WORKTREE: repo.worktree, BRANCH: repo.branch,
+      BASE_BRANCH: "main", GATE: "true", OMP_SESSION_ID: "parent-id", RUN: "${context.run.id}", DAGU_PORT: String(port),
+    }).map(([key, value]) => `  - ${key}: ${JSON.stringify(value)}`).join("\n")}\nsteps:\n  - id: triage\n    run: echo POC=no >> "$DAGU_OUTPUT_FILE"\n    outputs:\n      - name: POC\n${steps}\n  - id: after_push\n    depends: push\n    action: human.task\n    with:\n      prompt: "Observe published candidate or rebase in this same run."\n      push_back:\n        rewind_to: rebase\nhandler_on:\n  wait:\n    run: |\n${extractScript(definition, "  wait:").split("\n").map(line => `      ${line}`).join("\n")}\n`);
+    let serviceLog = "";
+    const service = spawn("dagu", ["start-all", "--host", "127.0.0.1", "--port", String(port)], {
+      cwd: repo.root, env, stdio: ["ignore", "pipe", "pipe"],
+    });
+    service.stdout.on("data", data => { serviceLog += data; });
+    service.stderr.on("data", data => { serviceLog += data; });
+    const dagu = (...args: string[]) => execFileSync("dagu", args, { cwd: repo.root, env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    type Detail = { statusLabel: string; nodes: Array<{ step: { name: string }; statusLabel: string; approvalIteration?: number }> };
+    async function untilStep(step: string, iteration?: number): Promise<Detail> {
+      const deadline = Date.now() + 60_000;
+      while (Date.now() < deadline) {
+        try {
+          const response = await fetch(`http://127.0.0.1:${port}/api/v1/dag-runs/feature/${run}`);
+          if (response.ok) {
+            const detail = (await response.json() as { dagRunDetails: Detail }).dagRunDetails;
+            assert.ok(!["failed", "aborted"].includes(detail.statusLabel), JSON.stringify(detail));
+            if (detail.statusLabel === "waiting" && detail.nodes.some(node => node.step.name === step && node.statusLabel === "waiting" &&
+              (iteration === undefined || (node.approvalIteration ?? 0) === iteration))) return detail;
+          }
+        } catch (error) {
+          if (!(error instanceof TypeError)) throw error;
+        }
+        await delay(100);
+      }
+      throw new Error(`Timed out at ${step}\n${serviceLog}`);
+    }
+    const completeImplementation = () => dagu("human-task", "complete", "feature", "--run-id", run,
+      "--step", "implement", "--input", "SUMMARY=Quality candidate", "--input", "MESSAGE=feat: quality candidate",
+      "--input", "IMPLEMENTER=ImplementTest");
+    const completeQuality = (verdict: "PASS" | "FAIL") => {
+      const request: QualityRequest = JSON.parse(readFileSync(join(state, "quality-request.json"), "utf8"));
+      const fixture = qualityFixture(repo, verdict, request);
+      writeFileSync(join(state, "quality.json"), JSON.stringify(verifyQuality(fixture.parent, request, "QATest", "ReviewTest", fixture.models)));
+      dagu("human-task", "complete", "feature", "--run-id", run, "--step", "quality_review",
+        "--input", "QA=QATest", "--input", "REVIEW=ReviewTest");
+      return request.sha;
+    };
+    try {
+      const deadline = Date.now() + 30_000;
+      while (true) {
+        try { if ((await fetch(`http://127.0.0.1:${port}/api/v1/dag-runs`)).ok) break; } catch { /* Service startup. */ }
+        assert.ok(Date.now() < deadline, serviceLog);
+        await delay(100);
+      }
+      writeFileSync(join(repo.worktree, "README.txt"), "initial candidate\n");
+      dagu("enqueue", "--run-id", run, dag);
+      await untilStep("implement", 0);
+      completeImplementation();
+      await untilStep("quality_review", 0);
+      const refsBefore = git(repo.primary, "ls-remote", "--heads", "origin");
+      const failed = completeQuality("FAIL");
+      await untilStep("implement", 1);
+      assert.equal(git(repo.primary, "ls-remote", "--heads", "origin"), refsBefore);
+      assert.equal(git(repo.worktree, "rev-parse", "HEAD"), failed);
+      assert.match(readFileSync(join(state, "quality.json"), "utf8"), /Fix acceptance regression/);
+      writeFileSync(join(repo.worktree, "README.txt"), "fixed candidate\n");
+      completeImplementation();
+      await untilStep("quality_review", 1);
+      assert.equal(git(repo.primary, "ls-remote", "--heads", "origin"), refsBefore);
+      const fixed = completeQuality("PASS");
+      await untilStep("after_push", 1);
+      assert.equal(git(repo.primary, "rev-parse", `origin/${repo.branch}`), fixed);
+      assert.notEqual(failed, fixed);
+      writeFileSync(join(repo.primary, "upstream"), "upstream after publication\n");
+      git(repo.primary, "add", "upstream");
+      git(repo.primary, "commit", "-m", "upstream change");
+      git(repo.primary, "push", "origin", "main");
+      dagu("human-task", "push-back", "feature", "--run-id", run, "--step", "after_push", "--expected-iteration", "1");
+      const rebasedWaiting = await untilStep("quality_review", 2);
+      assert.equal(rebasedWaiting.nodes.find(node => node.step.name === "gate")?.statusLabel, "succeeded");
+      assert.equal(git(repo.primary, "rev-parse", `origin/${repo.branch}`), fixed);
+      const rebased = completeQuality("PASS");
+      assert.notEqual(rebased, fixed);
+      await untilStep("after_push", 2);
+      assert.equal(git(repo.primary, "rev-parse", `origin/${repo.branch}`), rebased);
+      dagu("human-task", "complete", "feature", "--run-id", run, "--step", "after_push");
+    } finally {
+      service.kill("SIGTERM");
+      await new Promise<void>(resolve => {
+        if (service.exitCode !== null) resolve();
+        else service.once("exit", () => resolve());
+      });
+      rmSync(repo.root, { recursive: true, force: true });
+    }
   });
 }

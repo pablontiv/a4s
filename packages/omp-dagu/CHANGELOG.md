@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.68
+
+- Require independent effective cross-family QA and review on each local candidate before PR-branch publication. Correlate raw OMP transcripts with parent task invocations, SHA/run/iteration/role and canonical model families, preserve observed fallbacks, validate both verdicts, and push FAIL findings back to implementation in the same run. Bind publication and auto-merge to the admitted SHA; document the advisory Dagu-store boundary (#280).
+
 ## 0.3.58
 
 - Apply station defaults through coordinated admission, running/queued drain, TERM restart and next-enqueue concurrency verification; preserve admission closure and recovery barriers on failure (#255).
