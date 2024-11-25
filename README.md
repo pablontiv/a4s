@@ -47,6 +47,14 @@ dagu enqueue --run-id "a4s-issue-$n" .workspace/dagu/dags/feature.yaml -- \
 
 El checkpoint `implement`, la reconciliación de `await_merge` y la recuperación de fallos siguen [`packages/omp-dagu/skills/dagu-feature/SKILL.md`](packages/omp-dagu/skills/dagu-feature/SKILL.md).
 
+Antes de actualizar la rama del PR, el candidato local pasa `GATE` y recibe
+dos PASS independientes de QA y reviewer, distintos del implementador y de otra
+familia efectiva (verificada en JSONL con `ctx.models.family`). Los veredictos
+están ligados a SHA/run/iteración/intento; un FAIL vuelve a `implement` con
+hallazgos y cada corrección o rebase renueva ambas evidencias. `auto_merge`
+permanece ligado al SHA admitido. El control es **advisory mientras la TUI tenga
+acceso al store de Dagu**; el protocolo ejecutable está en el skill.
+
 ## Verificación
 
 ```sh
