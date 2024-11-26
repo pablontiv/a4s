@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
 
 import { main } from "../src/commands/pr-body.ts";
+import { redactRoots } from "../src/host-paths.ts";
 const template = readFileSync(new URL("../../../.github/pull_request_template.md", import.meta.url), "utf8");
 const body = template.replace("Closes #<N>\n", "Closes #571\n");
 function run(...args: string[]) {
@@ -66,6 +67,51 @@ test("path checks accept nested and relative home components and do not consume 
       assert.ok(rendered.stdout.includes(text));
     }
   } finally { f.cleanup(); }
+});
+test("root redaction shares gate evidence boundaries and preserves unrelated paths", () => {
+  const roots = [
+    ["/home/operator/repo", "<primary>"],
+    ["/home/operator/repo/.workspace/worktree", "<worktree>"],
+    ["/home/operator/.dagu", "$DAGU_HOME"],
+    ["/home/operator", "~"],
+  ] as const;
+  const text = [
+    '"/home/operator/repo/.workspace/worktree/probe"',
+    "/home/operator/repo: /home/operator/repo/file",
+    "/home/operator/.dagu/runs /home/operator/notes",
+    "/home/operator-other/private /Users/other/private",
+  ].join("\n");
+  assert.equal(redactRoots(text, roots), [
+    '"<worktree>/probe"',
+    "<primary>: <primary>/file",
+    "$DAGU_HOME/runs ~/notes",
+    "/home/operator-other/private /Users/other/private",
+  ].join("\n"));
+  assert.equal(redactRoots("/home/operator/notes", [["", "~"]]), "/home/operator/notes");
+  const f = fixture();
+  const previousHome = process.env.HOME;
+  const previousDaguHome = process.env.DAGU_HOME;
+  try {
+    process.env.HOME = "/home/operator";
+    process.env.DAGU_HOME = "/home/operator/.dagu";
+    const path = join(f.root, "raw.txt");
+    const raw = `${text}\n${process.env.HOME}/notes\n${process.env.DAGU_HOME}/runs\n`;
+    writeFileSync(path, raw);
+    const result = run("redact-paths", path, roots[0][0], roots[1][0]);
+    assert.equal(result.status, 0, result.stderr);
+    assert.ok(result.stdout.includes('"<worktree>/probe"'));
+    assert.ok(result.stdout.includes("~/notes"));
+    assert.ok(result.stdout.includes("$DAGU_HOME/runs"));
+    assert.equal(readFileSync(path, "utf8"), raw);
+    assert.equal(f.check(result.stdout, "check-paths").status, 1, "unknown host roots still fail closed");
+    assert.equal(run("redact-paths", path).status, 1);
+  } finally {
+    if (previousHome === undefined) delete process.env.HOME;
+    else process.env.HOME = previousHome;
+    if (previousDaguHome === undefined) delete process.env.DAGU_HOME;
+    else process.env.DAGU_HOME = previousDaguHome;
+    f.cleanup();
+  }
 });
 
 test("PR body rejects host paths in prose, commands, code and comments", () => {

@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { redactRoots } from "../host-paths.ts";
 
 function checkPaths(body: string): void {
   // Match a path start, not a /home component inside /nix/home or a relative path.
@@ -72,6 +73,14 @@ try {
   const [command, file, issue] = argv;
   switch (command) {
     case "render": io.write(render(file!, issue!)); break;
+    case "redact-paths": {
+      if (!file || !issue || !argv[3]) throw new Error("redact-paths requires <file> <primary> <worktree>.");
+      io.write(redactRoots(readFileSync(file, "utf8"), [
+        [argv[3], "<worktree>"], [issue, "<primary>"],
+        [process.env.DAGU_HOME ?? "", "$DAGU_HOME"], [process.env.HOME ?? "", "~"],
+      ]));
+      break;
+    }
     case "check-paths": checkPaths(readFileSync(file!, "utf8")); break;
     case "validate": validate(readFileSync(file!, "utf8")); break;
     case "event": {
@@ -80,7 +89,7 @@ try {
       io.log("PR body: PASS");
       break;
     }
-    default: throw new Error("Usage: dagu-pr-body render <state> <issue> | check-paths <file> | validate <file> | event [event.json]");
+    default: throw new Error("Usage: dagu-pr-body render <state> <issue> | redact-paths <file> <primary> <worktree> | check-paths <file> | validate <file> | event [event.json]");
   }
 } catch (error) {
   io.error(`PR body: ${error instanceof Error ? error.message : String(error)}`);
