@@ -1661,6 +1661,19 @@ run-wide push-back iteration (default `0`), PR head SHA and all published requir
 checks. Check-runs and legacy statuses are queried through the current commit
 endpoint; conclusions alone do not identify a failure's cause.
 
+The exact exit-1/stdout CLI response `no required checks reported on the '<branch>' branch`
+is not itself a lookup failure or proof of no protection. Reconciliation independently
+reads classic required-status-check protection and all effective branch-rule pages
+for the PR's base repository and exact `base.ref` (including encoded branch slashes).
+Only confirmed configured contexts plus a complete current-head check-run/status
+observation establish unpublished checks as `PENDING` / `WAIT`; a later published
+result uses the normal classification routes. Explicit app/integration constraints
+are retained. Unknown, malformed, authentication/permission or ambiguous 404 policy
+responses, and conclusive empty policy, remain actionable `BLOCKED`, never evidence
+of unpublished required checks. PR/base-repository identity, base ref/SHA and head
+SHA are reread after observation; a changed binding is discarded as `STALE_SHA`.
+Owner wait diagnostics include `ci=PENDING action=WAIT` for pending publication.
+
 ### CodeQL findings and merge enforcement
 
 `CODE_SCANNING` is adoption-fixed policy, rendered through `__CODE_SCANNING__`.

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.5
+
+- Classify GitHub CLI's exact exit-1/stdout no-required-check response as `PENDING` / `WAIT` only after independently confirming classic and effective ruleset policy on the PR's effective base and complete current-head publication evidence. Preserve app constraints, paginated statuses, changed PR/head/base binding rejection and actionable lookup failures; report pending publication accurately to the owner (#411).
+
 ## 0.7.4
 
 - Redact known PoC worktree, primary, home and Dagu-home roots to public-safe placeholders before checking or publishing normal/failure comments (including chunked evidence and PASS follow-through), while preserving raw run evidence and rejecting unrelated host paths. Tell `run_poc` executors the placeholder rule (#679).

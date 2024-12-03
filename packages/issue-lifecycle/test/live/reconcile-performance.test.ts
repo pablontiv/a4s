@@ -249,7 +249,7 @@ else if (args[0] === "issue" && args[1] === "view") {
 } else if (args[0] === "api") {
   const endpoint = args.at(-1);
   if (String(endpoint).includes("/check-runs")) console.log(JSON.stringify([{ check_runs: [{ id: 456, name: "validate", head_sha: head(), status: "completed", conclusion: "failure", details_url: "https://github.com/example/repo/actions/runs/123/job/456", output: { summary: "Runner lost communication with the server" } }] }]));
-  else if (String(endpoint).endsWith("/status")) console.log(JSON.stringify({ sha: head(), statuses: [] }));
+  else if (String(endpoint).endsWith("/status?per_page=100")) console.log(JSON.stringify([{ sha: head(), statuses: [] }]));
   else process.exit(91);
 } else if (args[0] === "run" && args[1] === "view") console.log("Runner lost communication with the server");
 else if (args[0] === "run" && args[1] === "rerun") {

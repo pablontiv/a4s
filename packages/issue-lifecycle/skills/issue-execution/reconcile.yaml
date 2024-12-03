@@ -275,23 +275,52 @@ steps:
           # gh exits 1 for failed checks and 8 for pending checks, with valid JSON.
           rc=0
           bounded gh pr checks "$PR" -R "$REPO" --required --json name,state,link >"$TMP/required" 2>"$TMP/error" || rc=$?
-          if [[ "$rc" != 0 && "$rc" != 1 && "$rc" != 8 ]] || ! jq -e 'type == "array"' "$TMP/required" >/dev/null; then
-            CLASS=BLOCKED CAUSE="Required-check lookup failed: $(cat "$TMP/error")"
+          unpublished=0
+          # gh's observed exit-1/stdout sentinel is not JSON. It proves neither
+          # protection configuration nor publication; independently establish both.
+          if [[ "$rc" == 1 && ! -s "$TMP/error" ]] &&
+             [[ "$(cat "$TMP/required")" =~ ^no\ required\ checks\ reported\ on\ the\ \'.+\'\ branch$ ]]; then
+            unpublished=1
+            if bounded "$A4S_BIN" reconcile required-policy "$REPO" "$PR" "$SHA" >"$TMP/policy" 2>"$TMP/error" &&
+               jq -e '.class == "PENDING"' "$TMP/policy" >/dev/null; then
+              jq '.required' "$TMP/policy" >"$TMP/required"
+              rc=0
+            elif jq -e '(.class == "BLOCKED" or .class == "STALE_SHA") and (.cause | type == "string")' "$TMP/policy" >/dev/null 2>&1; then
+              CLASS=$(jq -r .class "$TMP/policy")
+              CAUSE=$(jq -r .cause "$TMP/policy")
+            else
+              CLASS=BLOCKED CAUSE="Required-check policy unavailable; check authentication, permissions and protection: $(cat "$TMP/error")"
+            fi
+          fi
+          if [[ "$unpublished" == 1 && "$rc" != 0 ]]; then
+            :
+          elif [[ "$rc" != 0 && "$rc" != 1 && "$rc" != 8 ]] || ! jq -e 'type == "array"' "$TMP/required" >/dev/null 2>&1; then
+            CLASS=BLOCKED CAUSE="Required-check lookup failed (exit $rc); check authentication, permissions and protection: $(cat "$TMP/error" "$TMP/required")"
           elif ! bounded gh api --paginate --slurp "repos/$REPO/commits/$SHA/check-runs" >"$TMP/runs" 2>"$TMP/error" ||
-               ! bounded gh api "repos/$REPO/commits/$SHA/status" >"$TMP/statuses" 2>>"$TMP/error"; then
+               ! bounded gh api --paginate --slurp "repos/$REPO/commits/$SHA/status?per_page=100" >"$TMP/status-pages" 2>>"$TMP/error"; then
             CLASS=BLOCKED CAUSE="SHA-bound checks unavailable: $(cat "$TMP/error")"
+          elif ! jq -e 'type == "array" and length > 0 and all(.[]; (.check_runs | type == "array") and
+                 all(.check_runs[]; (.name | type == "string") and (.head_sha | type == "string") and
+                   (.status | type == "string") and (if .status == "completed" then (.conclusion | type == "string") else true end)))' "$TMP/runs" >/dev/null ||
+               ! jq -e 'type == "array" and length > 0 and all(.[]; (.sha | type == "string") and (.statuses | type == "array") and
+                 all(.statuses[]; (.context | type == "string") and (.state | type == "string")))' "$TMP/status-pages" >/dev/null; then
+            CLASS=BLOCKED CAUSE="Incomplete or unbound current-head check/status response; inspect GitHub API permissions and publication"
+          elif jq -e --arg sha "$SHA" 'any(.[]; .sha != $sha)' "$TMP/status-pages" >/dev/null; then
+            CLASS=STALE_SHA CAUSE="Discarded status response for another SHA; reobserve current head"
           else
+            jq '{sha: .[0].sha, statuses: [.[].statuses[]]}' "$TMP/status-pages" >"$TMP/statuses"
             jq -s --arg sha "$SHA" '
-              [ (.[0][] .check_runs[] | {name, sha: .head_sha, state: (if .status == "completed" then .conclusion | ascii_upcase else "PENDING" end), link: .details_url, id, text: ((.output.title // "") + "\n" + (.output.summary // "") + "\n" + (.output.text // ""))}),
+              [ (.[0][] .check_runs[] | {name, sha: .head_sha, app_id: .app.id, state: (if .status == "completed" then .conclusion | ascii_upcase else "PENDING" end), link: .details_url, id, text: ((.output.title // "") + "\n" + (.output.summary // "") + "\n" + (.output.text // ""))}),
                 (.[1] as $s | $s.statuses[] | {name: .context, sha: $s.sha, state: (.state | ascii_upcase), link: .target_url, id, text: .description}) ]
               | sort_by(.id) | reverse
             ' "$TMP/runs" "$TMP/statuses" >"$TMP/checks"
             CLASS=PASS CAUSE="All required checks passed for current head"
             while IFS= read -r required; do
               CHECK=$(jq -r .name <<<"$required")
-              check=$(jq -c --arg name "$CHECK" --arg sha "$SHA" '[.[] | select(.name == $name and .sha == $sha)][0] // empty' "$TMP/checks")
+              app_id=$(jq -r '.app_id // ""' <<<"$required")
+              check=$(jq -c --arg name "$CHECK" --arg sha "$SHA" --arg app "$app_id" '[.[] | select(.name == $name and .sha == $sha and ($app == "" or (.app_id | tostring) == $app))][0] // empty' "$TMP/checks")
               if [[ -z "$check" ]]; then
-                if jq -e --arg name "$CHECK" '.[] | select(.name == $name)' "$TMP/checks" >/dev/null; then
+                if jq -e --arg name "$CHECK" --arg sha "$SHA" --arg app "$app_id" '.[] | select(.name == $name and .sha != $sha and ($app == "" or (.app_id | tostring) == $app))' "$TMP/checks" >/dev/null; then
                   CLASS=STALE_SHA CAUSE="Discarded result for another SHA; reobserve current head"
                 else
                   CLASS=PENDING CAUSE="Required check $CHECK not published for $SHA"
@@ -344,7 +373,7 @@ steps:
           # Retained runs use their original checks-only contract until publication
           # explicitly supplies a candidate-bound CodeQL policy. mode=off keeps
           # that checks-only contract even after publication.
-          if [[ -f "$policy" ]]; then
+          if [[ -f "$policy" && ! ( "$unpublished" == 1 && ( "$CLASS" == BLOCKED || "$CLASS" == STALE_SHA ) ) ]]; then
             if [[ "$(jq -r .sha "$policy")" != "$SHA" ]]; then
               CLASS=STALE_SHA CHECK=CodeQL CAUSE="CodeQL policy belongs to another published candidate"
             elif [[ "$(jq -r '.mode // "required"' "$policy")" == off ]]; then
@@ -354,7 +383,7 @@ steps:
             else
               if bounded "$A4S_BIN" codeql "$REPO" "$PR" "$SHA" "$(jq -r .security "$policy")" "$(jq -r .alerts "$policy")" >"$STATE/codeql-observation.json"; then
                 codeql_class=$(jq -r .class "$STATE/codeql-observation.json")
-                if [[ "$codeql_class" != PASS ]]; then
+                if [[ "$codeql_class" != PASS && ! ( "$CLASS" == BLOCKED && "$codeql_class" == PENDING ) ]]; then
                   CLASS=$codeql_class CHECK=CodeQL RETRY_RUN=
                   CAUSE=$(jq -r .cause "$STATE/codeql-observation.json")
                   FINDINGS=$(jq -c .findings "$STATE/codeql-observation.json")
@@ -367,6 +396,19 @@ steps:
             fi
           fi
           current=""
+          if [[ "$unpublished" == 1 && -s "$TMP/policy" ]] && jq -e '.binding != null' "$TMP/policy" >/dev/null; then
+            if ! bounded gh api "repos/$REPO/pulls/$PR" >"$TMP/current-binding" 2>"$TMP/error"; then
+              CLASS=BLOCKED ACTION=WAIT CAUSE="PR/base binding could not be rechecked: $(cat "$TMP/error")"
+            elif ! jq -e '(.number | type == "number") and (.base.repo.id | type == "number") and
+              (.base.repo.full_name | type == "string") and (.base.ref | type == "string") and
+              (.base.sha | type == "string") and (.head.sha | type == "string")' "$TMP/current-binding" >/dev/null; then
+              CLASS=BLOCKED ACTION=WAIT CAUSE="Incomplete PR/base binding reread; inspect GitHub permissions and response"
+            elif ! jq -e --slurpfile policy "$TMP/policy" '
+              {pr:.number,repo:.base.repo.full_name,repositoryId:.base.repo.id,ref:.base.ref,base:.base.sha,head:.head.sha} == $policy[0].binding
+            ' "$TMP/current-binding" >/dev/null; then
+              CLASS=STALE_SHA CAUSE="PR/head/base binding moved during required-policy observation; discard this observation"
+            fi
+          fi
           if current=$(bounded gh pr view "$PR" -R "$REPO" --json headRefOid --jq .headRefOid); then
             :
           else
@@ -378,6 +420,8 @@ steps:
             :
           elif [[ "$current" != "$SHA" ]]; then
             CLASS=STALE_SHA CAUSE="Head moved from $SHA to $current; discard this observation"
+          elif [[ "$CLASS" == STALE_SHA ]]; then
+            :
           elif [[ "$pr_state" == OPEN && ( "$merge_state" == BEHIND || "$merge_state" == DIRTY ) ]]; then
             ACTION=REBASE STEP=await_merge
           elif [[ "$CLASS" == CODE_FAIL && "$pr_state" == OPEN ]]; then

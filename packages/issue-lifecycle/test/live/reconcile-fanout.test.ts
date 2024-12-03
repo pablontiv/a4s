@@ -129,7 +129,7 @@ else if (args[0] === "issue" && args[1] === "view") {
     emit([{ check_runs: [{ id: 456, name: "validate", head_sha: sha, status: pending ? "in_progress" : "completed", conclusion: pending ? null : failed ? "failure" : "success", details_url: "https://github.com/example/repo/actions/runs/123/job/456", output: { summary: failed ? "AssertionError: test failed" : "ok" } }] }]);
     return;
   }
-  if (endpoint.endsWith("/status")) { emit({ sha: "${HEAD}", statuses: [] }); return; }
+  if (endpoint.endsWith("/status?per_page=100")) { emit([{ sha: "${HEAD}", statuses: [] }]); return; }
   process.exit(91);
 } else if (args[0] === "pr" && args[1] === "view") {
   if (spec.mode === "github-down") process.exit(4);
