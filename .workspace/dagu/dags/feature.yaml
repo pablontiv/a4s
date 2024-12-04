@@ -1,7 +1,7 @@
-# dagu-feature-bundle: @a4s/omp-dagu@0.3.77 source=pablontiv/a4s@431b61e8e9c7ddcbb699462aff788f074c3e5cd0 bootstrap=bootstrap-a4s-v0-3-77 dagu=2.20.1
+# dagu-feature-bundle: @a4s/omp-dagu@0.3.91 source=pablontiv/a4s@dce8dfe52e2131b7dd7955e2dff0e67af7a487b4 bootstrap=bootstrap-a4s-v0-3-91 dagu=2.20.1
 labels:
   - workspace=a4s
-  - dagu-feature-bundle=0.3.77
+  - dagu-feature-bundle=0.3.91
 queue: a4s
 type: graph
 dotenv: []
@@ -41,7 +41,7 @@ env:
   - REQUIRED_CHECK: "validate"
   - WORKTREE: ${PRIMARY}/.workspace/worktrees/issue-${ISSUE}
   - RUN: ${context.run.id}
-  - DAGU_FEATURE_BUNDLE: "dagu-feature-bundle=0.3.77 source=pablontiv/a4s@431b61e8e9c7ddcbb699462aff788f074c3e5cd0 bootstrap=bootstrap-a4s-v0-3-77"
+  - DAGU_FEATURE_BUNDLE: "dagu-feature-bundle=0.3.91 source=pablontiv/a4s@dce8dfe52e2131b7dd7955e2dff0e67af7a487b4 bootstrap=bootstrap-a4s-v0-3-91"
   - DAGU_RESOURCE_GUARD: |
       resource_lock() {
         local operation=$1 primary root expected actual common key attempt owner run status candidate branch issue
@@ -879,6 +879,9 @@ steps:
 
   - id: quality_prepare
     depends: recover_gate
+    preconditions:
+      - condition: "${steps.triage.outputs.POC}"
+        expected: "no"
     run: |
       set -euo pipefail
       umask 0022
@@ -1061,6 +1064,9 @@ steps:
 
   - id: pr
     depends: recover_push
+    preconditions:
+      - condition: "${steps.triage.outputs.POC}"
+        expected: "no"
     run: |
       set -euo pipefail
       cd "$WORKTREE"
@@ -1414,3 +1420,4 @@ handler_on:
       done
   exit:
     run: *feature_cleanup
+
