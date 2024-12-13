@@ -105,20 +105,21 @@ function fixture(run = "ci226", ciBlocked = 2): Fixture {
   writeFileSync(control, JSON.stringify({ conclusion: "success", log: "", iteration: 0, statusStep: "both", mergeState: "BLOCKED", prState: "OPEN", prExists: false }));
   const common = `const fs=require('node:fs'), cp=require('node:child_process');
 const c=JSON.parse(fs.readFileSync(process.env.CI_CONTROL,'utf8')), a=process.argv.slice(2);
-const head=()=>cp.execFileSync('git',['--git-dir',process.env.CI_REMOTE,'rev-parse','refs/heads/'+process.env.BRANCH],{encoding:'utf8'}).trim();
+const head=()=>cp.execFileSync('git',['--git-dir',process.env.CI_REMOTE,'for-each-ref','--format=%(objectname)','refs/heads/'+process.env.BRANCH],{encoding:'utf8'}).trim();
 const save=()=>fs.writeFileSync(process.env.CI_CONTROL,JSON.stringify(c));
 const emit=x=>console.log(typeof x==='string'?x:JSON.stringify(x));
 fs.appendFileSync(process.env.CI_CALLS,JSON.stringify({tool:process.argv[1].split('/').pop(),args:a,run:process.env.RUN,worktree:process.env.WORKTREE,pr:77,sha:head()})+'\\n');
 `;
   writeFileSync(join(bin, "gh"), `#!/usr/bin/env node\n${common}
 if(a[0]==='repo'&&a[1]==='view') emit('example/repo');
+else if(a[0]==='pr'&&a[1]==='list') emit(c.prExists?[{number:77,state:c.prState,headRefName:process.env.BRANCH,headRefOid:head(),baseRefName:process.env.BASE_BRANCH,autoMergeRequest:c.auto===false?null:{},mergeCommit:c.mergeOid?{oid:c.mergeOid}:null}]:[]);
 else if(a[0]==='pr'&&a[1]==='create') { c.prExists=true; save(); emit('https://github.com/example/repo/pull/77'); }
 else if(a[0]==='pr'&&a[1]==='edit') { if(!c.prExists) process.exit(1); }
 else if(a[0]==='pr'&&a[1]==='view') {
  const fields=a[a.indexOf('--json')+1];
  if(fields==='number'&&!c.prExists) process.exit(1);
  if(a.includes('--jq')) emit(fields==='headRefOid'?head():fields==='number'?77:fields==='state'?c.prState:fields==='autoMergeRequest'?c.auto!==false:process.env.BRANCH);
- else emit({number:77,state:c.prState,mergeStateStatus:c.mergeState,autoMergeRequest:c.auto===false?null:{},headRefOid:head(),headRefName:process.env.BRANCH,statusCheckRollup:[],mergeCommit:c.mergeOid?{oid:c.mergeOid}:null});
+ else emit({number:77,state:c.prState,mergeStateStatus:c.mergeState,autoMergeRequest:c.auto===false?null:{},headRefOid:head(),headRefName:process.env.BRANCH,baseRefName:process.env.BASE_BRANCH,statusCheckRollup:[],mergeCommit:c.mergeOid?{oid:c.mergeOid}:null});
 } else if(a[0]==='pr'&&a[1]==='checks') {
  if(c.requiredText) { emit(c.requiredText); process.exit(1); }
  if(c.requiredError) { console.error(c.requiredError); process.exit(c.requiredExit??1); }
@@ -184,6 +185,7 @@ else if(a[0]==='human-task') {
   writeFileSync(git(worktree, "rev-parse", "--path-format=absolute", "--git-path", "dagu-feature-owner"), identity);
   writeFileSync(join(state, "base"), git(primary, "rev-parse", "HEAD") + "\n");
   const env: NodeJS.ProcessEnv = { ...process.env, A4S_BIN: a4sBin, DAGU_HOME: join(root, "dagu-home"), LC_ALL: "C", PATH: `${bin}:${process.env.PATH}`, PRIMARY: primary, WORKTREE: worktree, BRANCH: branch, ISSUE: "226", RUN: run, PR_NUMBER: "", BASE_BRANCH: "main", GATE: "true", OMP_SESSION_ID: "ci226-owner", CI_REMOTE: remote, CI_CONTROL: control, CI_CALLS: calls, DAGU_OUTPUT_FILE: join(root, "outputs") };
+  env.CODE_SCANNING = "off";
   env.CODEQL_SECURITY_THRESHOLD = "high_or_higher";
   env.CODEQL_ALERTS_THRESHOLD = "errors";
   env.IMPLEMENTER = "ImplementTest";
@@ -196,7 +198,12 @@ function update(f: Fixture, changes: Record<string, unknown>): void {
   writeFileSync(f.control, JSON.stringify({ ...JSON.parse(readFileSync(f.control, "utf8")), ...changes }));
 }
 function execute(f: Fixture, source: string, id: string) {
-  return spawnSync("bash", ["-c", script(source, id)], { env: f.env, cwd: f.root, encoding: "utf8" });
+  // Native Dagu supplies this inherited helper to feature steps.
+  const body = script(source, id);
+  const command = source === feature
+    ? withResourceGuard(body, fileURLToPath(new URL("../../skills/issue-execution/feature.yaml", import.meta.url)))
+    : body;
+  return spawnSync("bash", ["-c", command], { env: f.env, cwd: f.root, encoding: "utf8" });
 }
 function observe(f: Fixture, source: string) {
   f.env.CI_OBSERVATION_ID = String(Number(f.env.CI_OBSERVATION_ID ?? 0) + 1);
