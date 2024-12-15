@@ -10,7 +10,6 @@ import {
   configFromEnvironment,
   exampleConfig,
   parseConfig,
-  parseUses,
   readCommittedConfig,
   serializeConfig,
 } from "../../launcher/src/config.ts";
@@ -30,7 +29,7 @@ test("config schema rejects unknown fields, bad versions and non-integers", () =
   assert.deepEqual(parseConfig(JSON.parse(serializeConfig(valid))), valid);
 });
 
-test("schema 2 omits uses, schema 1 remains readable without using its release selection", () => {
+test("schema 2 is active policy while schema 1 is a decode-only historical format", () => {
   const current = exampleConfig();
   assert.equal(current.schemaVersion, 2);
   assert.equal(Object.hasOwn(current, "uses"), false);
@@ -39,14 +38,15 @@ test("schema 2 omits uses, schema 1 remains readable without using its release s
     const legacy = parseConfig({ ...current, schemaVersion: 1, uses });
     assert.equal(legacy.schemaVersion, 1);
     assert.equal(legacy.uses, uses);
-    assert.deepEqual(parseConfig(JSON.parse(serializeConfig(legacy))), legacy);
+    assert.deepEqual(parseConfig(JSON.parse(JSON.stringify(legacy))), legacy);
+    assert.throws(() => serializeConfig(legacy), /schema 1 is historical evidence only/);
   }
   assert.throws(() => parseConfig({ ...current, schemaVersion: 1 }), /missing uses/);
 });
 
-test("release references accept immutable IDs and qualified historical tags", () => {
-  for (const value of ["a4s@r10", "a4s@v0", "a4s@v123", "a4s@v0.6.0", "a4s@v10.20.30"]) assert.equal(parseUses(value), value);
-  for (const value of [undefined, "", "v0", "a4s@main", "a4s@v01", "a4s@v1.02.3", "a4s@v1.2.3-beta"]) assert.throws(() => parseUses(value), /uses.*invalid/);
+test("example policy cannot author legacy selection", () => {
+  assert.throws(() => exampleConfig({ uses: "a4s@v0" }), /unknown field uses/);
+  assert.throws(() => exampleConfig({ schemaVersion: 1, uses: "a4s@v0" }), /schema 1 is historical evidence only/);
 });
 
 test("bootstrap environment becomes the strict config document", () => {
@@ -99,5 +99,9 @@ test("committed config rejects a missing, dirty or invalid file", () => {
     assert.equal(loaded.digest.length, 64);
     writeFileSync(path, serializeConfig(exampleConfig({ lane: "other" })));
     assert.throws(() => readCommittedConfig(repo), /uncommitted config file/);
+    writeFileSync(path, JSON.stringify({ ...exampleConfig(), schemaVersion: 1, uses: "a4s@v0.7.8" }));
+    git("add", CONFIG_PATH);
+    git("commit", "-qm", "historical config");
+    assert.throws(() => readCommittedConfig(repo), /admission requires config schema 2/);
   } finally { rmSync(repo, { recursive: true, force: true }); }
 });

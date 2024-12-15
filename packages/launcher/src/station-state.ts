@@ -100,7 +100,12 @@ export function activatedFormats(formats: PersistedFormats, support: ArtifactSup
   return Object.fromEntries(SHARED_FORMATS.map(name => [name, [...new Set([...formats[name], support[name].write])].sort((a, b) => a - b)])) as PersistedFormats;
 }
 export function assertLauncher(identity: unknown): void {
-  if (!isRecord(identity) || !Number.isSafeInteger(identity.requiredLauncherProtocol) || Number(identity.requiredLauncherProtocol) < 1 || Number(identity.requiredLauncherProtocol) > LAUNCHER_PROTOCOL) throw new Error("launcher reinstall required; reinstall a4s-launch");
+  if (!isRecord(identity)) throw new Error("launcher reinstall required; reinstall a4s-launch");
+  // Pre-launcher SemVer receipts retain the original a4s-run/1 handoff contract.
+  const legacy = typeof identity.version === "string" && /^\d+\.\d+\.\d+$/.test(identity.version) &&
+    isRecord(identity.support) && "receiptSchemas" in identity.support;
+  const protocol = legacy && identity.requiredLauncherProtocol === undefined ? 1 : identity.requiredLauncherProtocol;
+  if (!Number.isSafeInteger(protocol) || Number(protocol) < 1 || Number(protocol) > LAUNCHER_PROTOCOL) throw new Error("launcher reinstall required; reinstall a4s-launch");
 }
 export function tupleFromJson(value: unknown): ArtifactTuple {
   if (!isRecord(value)) throw new Error("Missing station artifact tuple");

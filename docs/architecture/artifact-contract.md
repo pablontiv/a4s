@@ -26,8 +26,7 @@ The workflow publishes only changed shipped inputs: `packages/issue-lifecycle/**
 `scripts/build-a4s.mjs`, root `package.json` and `package-lock.json`, compared with
 the last published source SHA. It builds the Bun-compiled executable and plugin
 bundles for `bun-linux-x64` and `bun-darwin-arm64`, and creates tag `a4s-r<N>`
-and archives `a4s-r<N>-<os>-<arch>.tar.gz`. No human tag push, package SemVer bump
-or lockfile version bump is required. The head MUST be a first-parent descendant
+and archives `a4s-r<N>-<os>-<arch>.tar.gz`. The head MUST be a first-parent descendant
 of the last published SHA; an existing ID tag at another SHA MUST fail closed.
 Same-SHA reruns retain the ID and MUST match every published archive digest.
 Existing tags, assets and checksums MUST NOT be overwritten. Published releases
@@ -36,8 +35,7 @@ are immutable and a4s never deletes them.
 The exact tuple is `<id>@<sha40>#<digest64>`. Historical stable SemVer IDs such
 as `0.7.8`, `v0.7.8` release tags and their original archive names remain
 parseable, verifiable and exactly restorable; their declarations and receipts
-are not rewritten. The old tag-triggered publisher is removed and `v0` is frozen
-at its last SemVer release, not advanced by staged builds. Source delivery never
+are not rewritten. Source delivery never
 writes station/service configuration; only cache-directory runtime state is
 engine-owned.
 
@@ -156,16 +154,15 @@ At the repository root, `scripts/release-identity.mjs` computes full-history IDs
 and publication invariants; `scripts/publish-a4s.mjs` verifies CI/event/SHA,
 shipped-input changes, ancestry, tag ownership and rerun digests.
 `scripts/build-a4s.mjs` embeds the same source identity and registration manifest.
-`.github/workflows/release.yml` is the sole staged publisher. The former skill
-SemVer-bump guard and bundle-version rebase resolver are retired.
+`.github/workflows/release.yml` is the sole staged publisher.
 
 ## Committed consumer configuration
 
 The consumer MUST commit `.workspace/dagu/config.json`. Its payload-independent
-policy reader is `packages/launcher/src/config.ts`. New builds read schemas 1
-and 2 and write schema 2, which has no `uses`. A legacy schema-1 `uses` is read
-but ignored for build selection. Old builds that read only schema 1 cannot read
-a schema-2 consumer; promotion/rollback read coverage MUST account for that.
+policy reader is `packages/launcher/src/config.ts`. New admission and policy
+writing require schema 2. Schema 1, including its `uses` field, remains decode-only
+historical evidence and cannot admit new runs. Old builds that read only schema 1
+cannot read a schema-2 consumer; promotion/rollback read coverage MUST account for that.
 
 ```json
 {
@@ -191,9 +188,8 @@ a schema-2 consumer; promotion/rollback read coverage MUST account for that.
 }
 ```
 
-Build selection belongs to station state, not consumer policy. Promotion requires
-no consumer version bump or `uses` edit. Existing policy validation and strict
-unknown-field rejection remain: schema 2 rejects `uses`, and queue capacity is
+Build selection belongs to station state, not consumer policy. Existing policy
+validation and strict unknown-field rejection remain, and queue capacity is
 station configuration only. Committing schema 2 makes persisted `formats.config`
 include 2; rollback MUST refuse builds that cannot read it.
 
@@ -481,8 +477,8 @@ and 2 in `packages/issue-lifecycle/src/receipt-version.ts`; version 1 read suppo
 preserves historical reporting, not permission to continue legacy runs. This read
 compatibility neither waives I1 nor supplies missing artifact identity.
 
-The artifact contract uses dispatch protocol `a4s-run/1`, config schemas 1 and 2,
-receipt schema 2, role-job-store contract 1, and checkpoint protocols `triage=role-job/1`,
+The artifact contract uses dispatch protocol `a4s-run/1`, config schema 2 for
+new admissions (schema 1 for historical decoding), receipt schema 2, role-job-store contract 1, and checkpoint protocols `triage=role-job/1`,
 `implement=role-job/1`, `publication=pr-checkpoint/1`. A receipt lacking the full
 artifact tuple or required contract declarations MUST be rejected even if its
 numeric schema version is otherwise supported. Legacy receipts MUST NOT be

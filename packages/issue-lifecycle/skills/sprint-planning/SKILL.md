@@ -36,7 +36,7 @@ For Admission, run from each repository's checkout with the station's `DAGU_HOME
 and PRIMARY binding (`A4S_PRIMARY` or its existing station path file). Replace
 `<n>` with the issue number and `<session>` with the coordinator's persistent OMP
 session id. Use the installed release's `a4s` executable. `--check` validates
-committed config and resolves its `uses`, then runs the same lane, scheduler and
+committed schema-2 policy and reads station `state.current`, then runs the same lane, scheduler and
 service checks as `a4s queue .workspace/dagu/config.json`. It returns exit 1 and
 `admissible=no` with the reason on rejection; a schema-valid config alone is not
 enough. The run id only validates command shape: no run, receipt, cache, issue

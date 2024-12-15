@@ -41,8 +41,8 @@ The [artifact contract](../architecture/artifact-contract.md) is normative.
 Only immutable releases supply the engine. Each payload platform archive contains
 one compiled `a4s`, identity, gate preload files and complete OMP assets; the
 separate launcher archive contains the operator-installed stable selector.
-A consumer commits `.workspace/dagu/config.json` schema 2 without `uses`.
-New builds still read schema 1 but ignore its legacy release selection.
+A consumer commits `.workspace/dagu/config.json` schema 2 for new admission.
+Schema 1 remains decode-only historical evidence, not active admission policy.
 
 Root admission selects `state.current` under the launcher state lock, restores
 the exact immutable archive if missing, and verifies its SHA-256 and structure.
@@ -92,7 +92,7 @@ committed at HEAD; an identical-config unbound clone is not protected.
 Git versions source and configuration. That is content written through a pull
 request, or generated deterministically from a versioned revision and declared
 inputs so that regenerating it yields identical bytes. Changes to it land through
-a commit, such as a version bump or an adoption.
+a commit, such as a policy adoption.
 
 Runtime state is written by a running process and carries per-execution data:
 run identifiers, timestamps, process IDs, attempt counters, or observed external
@@ -130,10 +130,8 @@ plugin links, queue configuration, reconciler and repository settings.
 
 Publication now stages `a4s-r<N>` automatically after CI's `validate` succeeds for
 the same pushed `main` SHA, using a full-history checkout and first-parent commit
-count. Only changed shipped inputs publish. Operators do not bump package/lockfile
-versions or push release tags; the workflow owns tags, ancestry/ID conflicts and
-same-SHA digest checks. The old `v<semver>` trigger and moving-`v0` publisher are
-removed; historical `v0` remains frozen. Published assets are immutable and never
+count. Only changed shipped inputs publish. The workflow owns tags, ancestry/ID
+conflicts and same-SHA digest checks. Published assets are immutable and never
 deleted by a4s, so exact historical tuples remain restorable.
 
 **Milestone: staged, station not switched.** Publication does not activate the
@@ -214,11 +212,11 @@ operator-owned station/service configuration remain untouched.
    used to resolve feature admission snapshots. This needs no prior feature run.
    If the check fails, the station operator merges the required leaves while
    preserving unrelated config, then restarts Dagu and retries bootstrap.
-4. **Author and commit consumer policy.** Bootstrap writes schema 2 without
-   `uses`; station state selects the build. Review `.workspace/dagu/config.json`,
-   remove retired `queueConcurrency` and legacy `uses`, and commit changed policy
-   before feature admission. New readers accept schemas 1 and 2. Once schema 2
-   is committed, the coverage gate refuses rollback to schema-1-only readers.
+4. **Author and commit consumer policy.** Bootstrap writes schema 2; station
+   state selects the build. Review `.workspace/dagu/config.json`, remove retired
+   policy fields, and commit changed policy before feature admission. Schema 1
+   remains decode-only historical evidence. The coverage gate refuses rollback
+   to schema-1-only readers once schema 2 is committed.
 5. **Install stable selection and tick.** Follow [the launcher procedure below](#install-the-stable-launcher-tick-dag-and-release-plugin).
    Bootstrap and a4s never write `$DAGU_HOME/dags/`. The operator installs the
    one-step `a4s tick` DAG, with no exact payload pin.

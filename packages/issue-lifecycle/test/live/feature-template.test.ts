@@ -62,6 +62,8 @@ function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
 }
 
+const neutralResolver = 'test "$(git rev-parse REBASE_HEAD)" = "$DAGU_REBASE_CANDIDATE"; { git show "$DAGU_REBASE_UPSTREAM:policy.txt"; git show "$DAGU_REBASE_CANDIDATE:policy.txt"; } > policy.txt; git add policy.txt';
+
 function hasRef(cwd: string, ref: string): boolean {
   return spawnSync("git", ["-C", cwd, "show-ref", "--verify", "--quiet", ref]).status === 0;
 }
@@ -485,36 +487,26 @@ esac
 
 
 for (const live of [false, true]) {
-  test(`retained candidate merge-base capture and version-anchor rebase${live ? " installed Dagu smoke" : ""}`, live ? liveDagu : {}, () => {
+  test(`retained candidate merge-base capture and neutral-resolver rebase${live ? " installed Dagu smoke" : ""}`, live ? liveDagu : {}, () => {
     const repo = repository(live ? testRunId("retained-smoke") : "test-run");
     const definition = definitions[0][1];
-    const manifest = "packages/issue-lifecycle/package.json";
-    const changelog = "packages/issue-lifecycle/CHANGELOG.md";
-    const putRelease = (cwd: string, version: string, entry: string) => {
-      mkdirSync(dirname(join(cwd, manifest)), { recursive: true });
-      writeFileSync(join(cwd, manifest), JSON.stringify({ name: "@a4s/issue-lifecycle", version }) + "\n");
-      writeFileSync(join(cwd, "package-lock.json"), JSON.stringify({ lockfileVersion: 3, packages: { "packages/issue-lifecycle": { version } } }) + "\n");
-      mkdirSync(join(cwd, "packages/issue-lifecycle/test"), { recursive: true });
-      writeFileSync(join(cwd, "packages/issue-lifecycle/test/bundle.test.ts"), `assert.equal(BUNDLE_VERSION, "${version}");\n`);
-      writeFileSync(join(cwd, changelog), `# Changelog\n\n## ${version}\n\n- ${entry}\n\n${version === "0.1.1" ? "" : "## 0.1.1\n\n- Base\n\n"}## 0.1.0\n\n- Published\n`);
-    };
+    const putPolicy = (cwd: string, entry: string) => writeFileSync(join(cwd, "policy.txt"), `${entry}\n`);
     try {
-      putRelease(repo.primary, "0.1.1", "Base");
-      git(repo.primary, "add", "."); git(repo.primary, "commit", "-m", "release base");
+      putPolicy(repo.primary, "Base");
+      git(repo.primary, "add", "."); git(repo.primary, "commit", "-m", "policy base");
       git(repo.primary, "push", "origin", "main");
       git(repo.worktree, "reset", "--hard", "origin/main");
       const base = git(repo.worktree, "rev-parse", "HEAD");
-      putRelease(repo.worktree, "0.1.2", "Retained");
+      putPolicy(repo.worktree, "Retained");
       writeFileSync(join(repo.worktree, "retained.txt"), "operator content\n");
       git(repo.worktree, "add", "."); git(repo.worktree, "commit", "-m", "operator candidate");
       const retained = git(repo.worktree, "rev-parse", "HEAD");
-      putRelease(repo.primary, "0.1.2", "Upstream");
-      git(repo.primary, "add", "."); git(repo.primary, "commit", "-m", "upstream release");
+      putPolicy(repo.primary, "Upstream");
+      git(repo.primary, "add", "."); git(repo.primary, "commit", "-m", "upstream policy");
       git(repo.primary, "push", "origin", "main");
       rmSync(join(repo.state, "base")); rmSync(join(repo.state, "candidate.json"));
       writeFileSync(join(repo.worktree, "dirty.txt"), "uncaptured content\n");
-      const resolver = fileURLToPath(new URL("../../bin/dagu-bundle-rebase.mjs", import.meta.url));
-      const env: NodeJS.ProcessEnv = { ...featureScriptEnv(repo), DAGU_FEATURE_BUNDLE: "test", REBASE_RESOLVER: `test "$(git rev-parse REBASE_HEAD)" = "$DAGU_REBASE_CANDIDATE"; node ${JSON.stringify(resolver)}` };
+      const env: NodeJS.ProcessEnv = { ...featureScriptEnv(repo), DAGU_FEATURE_BUNDLE: "test", REBASE_RESOLVER: neutralResolver };
       const scripts = ["start_gate", "capture", "rebase", "gate"].map(id => {
         let script = extractScript(definition, `  - id: ${id}`);
         if (id === "start_gate") script += `\ntest "$(cat "$STATE/base")" = "${base}"\ntest "$(git -C "$WORKTREE" rev-parse HEAD)" = "${retained}"\n`;
@@ -535,8 +527,7 @@ for (const live of [false, true]) {
       assert.equal(git(repo.worktree, "rev-list", "--count", "origin/main..HEAD"), "1");
       assert.equal(readFileSync(join(repo.worktree, "retained.txt"), "utf8"), "operator content\n");
       assert.equal(readFileSync(join(repo.worktree, "dirty.txt"), "utf8"), "uncaptured content\n");
-      assert.equal(JSON.parse(readFileSync(join(repo.worktree, manifest), "utf8")).version, "0.1.3");
-      assert.match(readFileSync(join(repo.worktree, changelog), "utf8"), /Retained[\s\S]*Upstream/);
+      assert.equal(readFileSync(join(repo.worktree, "policy.txt"), "utf8"), "Upstream\nRetained\n");
       assert.equal(readFileSync(join(repo.state, "tested-sha"), "utf8").trim(), git(repo.worktree, "rev-parse", "HEAD"));
     } finally { rmSync(repo.root, { recursive: true, force: true }); }
   });
@@ -2169,19 +2160,10 @@ test("native terminal replacement captures retained and nonempty correction", {
   rmSync(join(repo.primary, ".git", "dagu-feature", "resources"), { recursive: true });
   rmSync(join(repo.root, "bin", "dagu"));
   stubGh(repo, "OPEN\n", 0);
-  const manifest = "packages/issue-lifecycle/package.json";
-  const changelog = "packages/issue-lifecycle/CHANGELOG.md";
-  const putRelease = (cwd: string, version: string, entry: string) => {
-    mkdirSync(dirname(join(cwd, manifest)), { recursive: true });
-    writeFileSync(join(cwd, manifest), JSON.stringify({ name: "@a4s/issue-lifecycle", version }) + "\n");
-    writeFileSync(join(cwd, "package-lock.json"), JSON.stringify({ lockfileVersion: 3, packages: { "packages/issue-lifecycle": { version } } }) + "\n");
-    mkdirSync(join(cwd, "packages/issue-lifecycle/test"), { recursive: true });
-    writeFileSync(join(cwd, "packages/issue-lifecycle/test/bundle.test.ts"), `assert.equal(BUNDLE_VERSION, "${version}");\n`);
-    writeFileSync(join(cwd, changelog), `# Changelog\n\n## ${version}\n\n- ${entry}\n\n${version === "0.1.1" ? "" : "## 0.1.1\n\n- Base\n\n"}## 0.1.0\n\n- Published\n`);
-  };
-  putRelease(repo.primary, "0.1.1", "Base");
+  const putPolicy = (cwd: string, entry: string) => writeFileSync(join(cwd, "policy.txt"), `${entry}\n`);
+  putPolicy(repo.primary, "Base");
   git(repo.primary, "add", ".");
-  git(repo.primary, "commit", "-m", "release base");
+  git(repo.primary, "commit", "-m", "policy base");
   git(repo.primary, "push", "origin", "main");
   const originalBase = git(repo.primary, "rev-parse", "HEAD");
   const home = join(repo.root, "dagu-home");
@@ -2231,9 +2213,8 @@ test("native terminal replacement captures retained and nonempty correction", {
       try { return (await fetch(`${api}/dag-runs`)).ok ? true : undefined; } catch { return undefined; }
     });
     const source = readFileSync(definition, "utf8");
-    const resolver = fileURLToPath(new URL("../../bin/dagu-bundle-rebase.mjs", import.meta.url));
     const evidence = join(repo.root, "resolver-refs");
-    const resolverCommand = `printf '%s\\n' "$DAGU_REBASE_BASE $DAGU_REBASE_CANDIDATE $DAGU_REBASE_UPSTREAM $(git rev-parse REBASE_HEAD)" > ${JSON.stringify(evidence)}; node ${JSON.stringify(resolver)}`;
+    const resolverCommand = `printf '%s\\n' "$DAGU_REBASE_BASE $DAGU_REBASE_CANDIDATE $DAGU_REBASE_UPSTREAM $(git rev-parse REBASE_HEAD)" > ${JSON.stringify(evidence)}; ${neutralResolver}`;
     // Synthetic triage/implement actors and deliberate post-capture failure isolate native handoff.
     const file = join(home, "dags", "feature.yaml");
     writeFileSync(file, [
@@ -2248,7 +2229,8 @@ test("native terminal replacement captures retained and nonempty correction", {
       "  - id: implement\n    depends: recover_start_gate\n    action: human.task\n    with:\n      prompt: Synthetic delivery actor for recovery/rebase acceptance.\n" + deliveryForm,
       extractStep(source, "capture"),
       "  - id: retain_candidate\n    depends: capture\n    run: test \"$RETAIN\" = no\n",
-      "  - id: dependency_review\n    depends: retain_candidate\n    action: human.task\n    with:\n      prompt: Synthetic dependency reviewer releases captured candidate for rebase.\n",
+      "  - id: checkpoint_push\n    depends: retain_candidate\n    run: echo INTEGRATED=no >> \"$DAGU_OUTPUT_FILE\"\n    outputs:\n      - name: INTEGRATED\n",
+      "  - id: dependency_review\n    depends: checkpoint_push\n    action: human.task\n    with:\n      prompt: Synthetic dependency reviewer releases captured candidate for rebase.\n",
       extractStep(source, "rebase").replace(/depends: (?:dependency_review(?:_cancellation)?|rebase_escalation_decision)/, "depends: dependency_review"),
       "handler_on:\n  exit:\n    run: |\n" + extractScript(definition, "  exit:").split("\n").map(line => "      " + line).join("\n") + "\n",
     ].join(""));
@@ -2256,7 +2238,7 @@ test("native terminal replacement captures retained and nonempty correction", {
     const first = testRunId("replacement-189"), second = `${first}-v2`;
     dagu("enqueue", "--run-id", first, file, "--", "RETAIN=yes");
     await state(first, "waiting", "implement");
-    putRelease(repo.worktree, "0.1.2", "Retained");
+    putPolicy(repo.worktree, "Retained");
     writeFileSync(join(repo.worktree, "README.txt"), '{"items":null}\n');
     writeFileSync(join(repo.worktree, "retained.txt"), "independent retained delivery\n");
     dagu("human-task", "complete", "feature", "--run-id", first, "--step", "implement",
@@ -2267,7 +2249,7 @@ test("native terminal replacement captures retained and nonempty correction", {
     const retained = git(repo.worktree, "rev-parse", "HEAD");
     const firstState = join(repo.primary, ".git", "dagu-feature", "runs", first);
     assert.equal(JSON.parse(readFileSync(join(firstState, "candidate.json"), "utf8")).sha, retained);
-    putRelease(repo.primary, "0.1.2", "Upstream");
+    putPolicy(repo.primary, "Upstream");
     writeFileSync(join(repo.primary, "upstream.txt"), "advanced upstream\n");
     git(repo.primary, "add", ".");
     git(repo.primary, "commit", "-m", "advance upstream");
@@ -2306,7 +2288,7 @@ test("native terminal replacement captures retained and nonempty correction", {
     assert.equal(git(repo.worktree, "show", "HEAD:README.txt"), '{"items":[]}');
     assert.equal(git(repo.worktree, "show", "HEAD:retained.txt"), "independent retained delivery");
     assert.equal(git(repo.worktree, "show", "HEAD:upstream.txt"), "advanced upstream");
-    assert.equal(JSON.parse(readFileSync(join(repo.worktree, manifest), "utf8")).version, "0.1.3");
+    assert.equal(readFileSync(join(repo.worktree, "policy.txt"), "utf8"), "Upstream\nRetained\n");
     assert.equal(readFileSync(join(stateDir, "base"), "utf8").trim(), upstream);
     assert.equal(readFileSync(join(stateDir, "diff.patch"), "utf8"), execFileSync("git", ["-C", repo.worktree, "diff", "--binary", "--full-index", upstream, final.sha], { encoding: "utf8" }));
     assert.equal(JSON.parse(readFileSync(join(stateDir, "historical", captured.sha, "candidate.json"), "utf8")).base, originalBase);
@@ -3061,7 +3043,7 @@ for (const [name, definition] of [definitions[0]]) {
           t.diagnostic(`${scenario}: ${result.id} ${result.status} ${result.stderr.trim()}`);
         } finally { rmSync(repo.root, { recursive: true, force: true }); }
       }
-      for (const changed of ["packages/issue-lifecycle/skills/issue-execution/feature.yaml", "packages/issue-lifecycle/CHANGELOG.md", "README.txt"]) {
+      for (const changed of ["packages/issue-lifecycle/skills/issue-execution/feature.yaml", "policy.txt", "README.txt"]) {
         const repo = repository(testRunId("freshness-close"));
         try {
           commit(repo, "packages/issue-lifecycle/package.json", JSON.stringify({ version: BUNDLE_VERSION }));

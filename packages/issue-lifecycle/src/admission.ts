@@ -155,7 +155,7 @@ function createReceipt(options: AdmissionOptions, context: AdmissionContext, cac
     sourceTemplate: { version, canonicalPath: templateFile, origin, digest: sha256(templateText) },
     installedDAG: { relationship: "materialized-from-cache", version, canonicalPath: templateFile, origin, digest: sha256(templateText),
       template: { path: `skills/issue-execution/${name}`, commit, digest: sha256(templateText) }, configDigest: committed.digest, generatedDigest, dagu: daguVersion, snapshot: generated },
-    config: { path: CONFIG_PATH, schemaVersion: committed.config.schemaVersion, uses: committed.config.uses, commit: committed.commit, digest: committed.digest },
+    config: { path: CONFIG_PATH, schemaVersion: committed.config.schemaVersion, commit: committed.commit, digest: committed.digest },
     generatedDagDigest: generatedDigest,
     relationships: { templateToArtifact: "verified-cache", protocols: USED_CONTRACTS.protocols },
   };

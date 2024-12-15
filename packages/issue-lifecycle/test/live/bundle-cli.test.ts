@@ -4,7 +4,7 @@ import { once } from "node:events";
 import { createServer } from "node:http";
 import { promisify } from "node:util";
 import { testRunId } from "../fixtures/run-id.ts";
-import { chmodSync, closeSync, existsSync, fstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, fstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -53,7 +53,7 @@ test("CLI reports committed config and the reconciler as compatible", () => {
       env: { ...process.env, DAGU_PARAMS_JSON: "{}", DAGU_HOME: daguHome, PATH: `${bin}:${process.env.PATH ?? ""}` },
     });
     assert.equal(result.status, 0, result.stdout + result.stderr);
-    assert.match(result.stdout, /config path=\.workspace\/dagu\/config\.json schema=1 .*lane=fixture .*queue=fixture source=config.yaml max_concurrency=6 ready=yes/);
+    assert.match(result.stdout, /config path=\.workspace\/dagu\/config\.json schema=2 .*lane=fixture .*queue=fixture source=config.yaml max_concurrency=6 ready=yes/);
     assert.match(result.stdout, /config policy gate="npm test" requiredCheck="validate"/);
     assert.match(result.stdout, /reconcile\.yaml path=.* installed=yes/);
     assert.match(result.stdout, /dagu version="2\.24\.0"/);
@@ -189,7 +189,7 @@ function snapshot(root: string): Record<string, string> {
   return Object.fromEntries(readdirSync(root, { withFileTypes: true }).flatMap(entry => {
     const path = join(root, entry.name);
     return entry.isDirectory() ? [[`${entry.name}/`, ""], ...Object.entries(snapshot(path)).map(([name, bytes]) => [`${entry.name}/${name}`, bytes])]
-      : [[entry.name, readFileSync(path).toString("hex")]];
+      : [[entry.name, entry.isSymbolicLink() ? `symlink:${readlinkSync(path)}` : readFileSync(path).toString("hex")]];
   }));
 }
 
@@ -218,7 +218,7 @@ test("installed admission check preserves history, receipts, refs and checkout i
         chmodSync(join(serviceBin, tool), 0o755);
       }
       writeReleaseDirectory(fixture.releases, {
-        repository, moving: { v0: "a".repeat(40) }, releases: [{ tag_name: "v0.6.0", commit: "a".repeat(40) }],
+        repository, moving: {}, releases: [{ tag_name: "v0.6.0", commit: "a".repeat(40) }],
       });
       writeFileSync(join(fixture.releases, `${archiveName("0.6.0")}.sha256`), `${"b".repeat(64)}  ${archiveName("0.6.0")}\n`);
       const stationConfig = (present: boolean) => writeFileSync(join(fixture.home, "config.yaml"),
@@ -261,7 +261,7 @@ test("installed admission check preserves history, receipts, refs and checkout i
         assert.deepEqual(snapshot(fixture.home), homeBefore);
         assert.deepEqual(snapshot(fixture.packageDir), repoBefore);
       };
-      await check(0, /artifact=0\.6\.0@/);
+      await check(0, /artifact=\S+@/);
       // Repeating a check with the same id still creates no receipt or run.
       await check(0, /service-environment ready=yes/);
       stationConfig(false);
@@ -272,8 +272,12 @@ test("installed admission check preserves history, receipts, refs and checkout i
       active = false;
       await check(1, /no active Dagu scheduler/);
       active = true;
-      fixture.writeConfig({ lane, uses: "a4s@v99.0.0" });
-      await check(1, /Missing exact release v99\.0\.0/);
+      writeFileSync(fixture.configPath, JSON.stringify({ ...exampleConfig({ lane }), schemaVersion: 1, uses: "a4s@v0.7.8" }));
+      for (const args of [["add", ".workspace/dagu/config.json"], ["commit", "-qm", "historical policy"]]) {
+        const result = spawnSync("git", ["-C", fixture.packageDir, ...args], { encoding: "utf8" });
+        assert.equal(result.status, 0, result.stderr);
+      }
+      await check(1, /admission requires config schema 2/);
       fixture.writeConfig({ lane });
       writeFileSync(fixture.configPath, `${readFileSync(fixture.configPath, "utf8")}\n`);
       await check(1, /uncommitted config file/);
@@ -285,9 +289,7 @@ test("installed admission check preserves history, receipts, refs and checkout i
       await check(1, /missing committed config file/);
       assert.ok(requests.length > 0);
       assert.ok(requests.every(request => request === "GET /api/v1/queues" || request === "GET /api/v1/services/scheduler"));
-      const calls = readFileSync(join(fixture.releases, "gh-calls.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line) as string[]);
-      assert.ok(calls.every(args => args[0] === "api" && !args.some(arg => ["POST", "PATCH", "PUT", "DELETE"].includes(arg)) && args.some(arg => /\/(?:git\/ref\/tags|releases)/.test(arg))
-        || args[0] === "release" && args[1] === "download" && args.includes("-") && args.some(arg => arg.endsWith(".sha256"))), "only release GETs/checksum reads; no issue comments or archive downloads");
+      assert.equal(existsSync(join(fixture.releases, "gh-calls.jsonl")), false, "station-current checks do not resolve release aliases or download assets");
     } finally {
       server.close();
       if (service) { service.kill(); await once(service, "exit"); }

@@ -1,5 +1,4 @@
 import { execFileSync } from "node:child_process";
-import { parseUses } from "./config.ts";
 import { RELEASE_REPOSITORY } from "./contracts.ts";
 import { isRecord } from "./type-guard.ts";
 
@@ -48,27 +47,14 @@ export function checksumDigest(text: string, archive: string): string {
   if (!fields || fields[2] !== archive) throw new Error(`Invalid checksum asset for ${archive}`);
   return fields[1]!;
 }
-/** Resolve the moving tag once; all subsequent downloads name the exact release. */
-export function resolveRelease(uses: string, options: { gh?: Github; repository?: string; platform?: string } = {}): ResolvedRelease {
-  const ref = parseUses(uses).slice(4);
+/** Resolve only an immutable build ID, including retained historical SemVer IDs. */
+export function resolveRelease(version: string, options: { gh?: Github; repository?: string; platform?: string } = {}): ResolvedRelease {
+  const tag = releaseTag(version);
   const gh = options.gh ?? github;
   const repository = options.repository ?? releaseRepository();
   const platform = options.platform ?? nativePlatform();
-  let tag = ref.startsWith("r") ? `a4s-${ref}` : ref;
-  let commit: string;
-  if (/^v\d+$/.test(ref)) {
-    commit = tagCommit(repository, ref, gh);
-    const pages: unknown = JSON.parse(gh(["api", "--paginate", "--slurp", `repos/${repository}/releases?per_page=100`]));
-    if (!Array.isArray(pages) || pages.some(page => !Array.isArray(page))) throw new Error("Invalid GitHub release listing");
-    const candidates = pages.flat().filter((release): release is Record<string, unknown> => isRecord(release) && release.draft === false && release.prerelease === false && typeof release.tag_name === "string" && release.tag_name.startsWith(`${ref}.`) && VERSION.test(release.tag_name.slice(1)));
-    const matches = candidates.filter(release => tagCommit(repository, release.tag_name as string, gh) === commit);
-    if (matches.length !== 1) throw new Error(`Ambiguous a4s ref ${ref}@${commit}: expected exactly one matching immutable release, found ${matches.length}`);
-    tag = matches[0]!.tag_name as string;
-  } else {
-    exactRelease(api(gh, `repos/${repository}/releases/tags/${tag}`), tag);
-    commit = tagCommit(repository, tag, gh);
-  }
-  const version = tag.startsWith("a4s-") ? tag.slice(4) : tag.slice(1);
+  exactRelease(api(gh, `repos/${repository}/releases/tags/${tag}`), tag);
+  const commit = tagCommit(repository, tag, gh);
   const archive = archiveName(version, platform);
   const digest = checksumDigest(gh(["release", "download", tag, "--repo", repository, "--pattern", `${archive}.sha256`, "--output", "-"]), archive);
   return { version, commit, digest, repository, archive };

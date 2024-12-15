@@ -16,9 +16,9 @@ The release engine is one Bun-compiled `a4s` executable. Repository tools and
 tests continue to use Node/tsx; deployed engine execution never uses a source
 checkout. A published release is verified into
 `$DAGU_HOME/cache/a4s/<version>/` before admission hands off to that executable.
-Committed `.workspace/dagu/config.json` schema 2 has no `uses`; schema 1 remains
-readable but its legacy selection is ignored. Build selection belongs to the
-stable launcher and `state.current`, not a consumer version bump.
+New admissions require committed `.workspace/dagu/config.json` schema 2.
+Schema 1 remains decode-only historical evidence, not admission policy.
+Build selection belongs to the stable launcher and `state.current`.
 
 The operator-installed `a4s-launch` is `a4s` on PATH. New admission selects current,
 parent admissions select the parent's receipt, and existing-run actions select
@@ -199,14 +199,13 @@ autoload, bundles the OMP extension dependency closure, sorts archive entries,
 fixes permissions/mtime/uid/gid, and uses deterministic gzip headers.
 The checksum line is `<64 lowercase hex>  <archive filename>`.
 The build ID is `r<N>`, with `N = git rev-list --count --first-parent <sha>`;
-builds fail on shallow checkouts. No package/lockfile SemVer bump or human tag
-push is required. The workflow checks out the exact validated `main` head with
+builds fail on shallow checkouts. The workflow checks out the exact validated `main` head with
 full history, verifies that CI's `validate` succeeded for that SHA, and publishes
 only when the explicit shipped-input set changed since the last published SHA.
 It creates `a4s-r<N>` itself, rejects non-first-parent ancestry and ID/SHA
 conflicts, and allows a same-SHA rerun only when rebuilt digests equal the
 published ones. Releases/assets are never overwritten or deleted by a4s.
-The old tag-triggered/`v0` publisher is removed. This milestone is **staged**:
+Publication is **staged**:
 publication does not activate the station, replace plugins, or write service
 configuration. Historical SemVer artifacts still verify and restore exactly.
 

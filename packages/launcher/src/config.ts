@@ -9,7 +9,6 @@ export const CONFIG_PATH = ".workspace/dagu/config.json";
 
 const LANE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const BRANCH = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
-const USES = /^a4s@(?:r(?:0|[1-9]\d*)|v(0|[1-9]\d*)(?:\.(0|[1-9]\d*)\.(0|[1-9]\d*))?)$/;
 const BLOCKER = ["ask", "auto"] as const;
 const SCANNING = ["required", "off"] as const;
 const SECURITY = ["none", "critical", "high_or_higher", "medium_or_higher", "all"] as const;
@@ -108,17 +107,13 @@ function choice<T extends string>(value: unknown, label: string, allowed: readon
   return value as T;
 }
 
-export function parseUses(value: unknown): string {
-  return text(value, "config uses (expected a4s@r<N>, a4s@v<major> or a4s@v<major>.<minor>.<patch>)", USES);
-}
-
 export function parseConfig(value: unknown): LifecycleConfig {
   const source = record(value, "config file");
   const schemaVersion = take(source, "schemaVersion", "config file");
   if (schemaVersion !== 1 && schemaVersion !== 2) {
     fail(`config schemaVersion=${JSON.stringify(schemaVersion)} expected 1 or 2; the config schema is independent of the package version`);
   }
-  // Legacy selection is intentionally ignored: the launcher owns build choice.
+  // Retained only to decode historical config evidence; never selects a build.
   const legacyUses = schemaVersion === 1 ? text(take(source, "uses", "config file"), "config uses") : undefined;
   const escalationSource = record(take(source, "escalation", "config file"), "config escalation");
   const config: LifecycleConfig = {
@@ -149,13 +144,15 @@ export function parseConfig(value: unknown): LifecycleConfig {
 }
 
 export function serializeConfig(config: LifecycleConfig): string {
+  if (config.schemaVersion !== CONFIG_SCHEMA_VERSION) fail("Writing consumer policy requires config schema 2; schema 1 is historical evidence only");
   return `${JSON.stringify(parseConfig(config), null, 2)}\n`;
 }
 
 export function exampleConfig(overrides: Partial<LifecycleConfig> = {}): LifecycleConfig {
+  if (overrides.schemaVersion !== undefined && overrides.schemaVersion !== CONFIG_SCHEMA_VERSION) fail("Example policy requires config schema 2; schema 1 is historical evidence only");
   return parseConfig({
-    schemaVersion: overrides.schemaVersion ?? (overrides.uses === undefined ? CONFIG_SCHEMA_VERSION : 1),
-    ...((overrides.schemaVersion === 1 || overrides.uses !== undefined) ? { uses: overrides.uses ?? "a4s@v0" } : {}),
+    schemaVersion: overrides.schemaVersion ?? CONFIG_SCHEMA_VERSION,
+    ...(overrides.uses === undefined ? {} : { uses: overrides.uses }),
     lane: overrides.lane ?? "fixture",
     baseBranch: overrides.baseBranch ?? "main",
     gate: overrides.gate ?? "true",
@@ -239,5 +236,7 @@ export function readCommittedConfig(repo: string): CommittedConfig {
   let value: unknown;
   try { value = JSON.parse(text); }
   catch (error) { fail(`invalid JSON in committed ${CONFIG_PATH}: ${error instanceof Error ? error.message : String(error)}`); }
-  return { config: parseConfig(value), text, commit, digest: digest(text) };
+  const config = parseConfig(value);
+  if (config.schemaVersion !== CONFIG_SCHEMA_VERSION) fail(`admission requires config schema 2; migrate committed ${CONFIG_PATH} and remove legacy uses; schema 1 is historical evidence only`);
+  return { config, text, commit, digest: digest(text) };
 }

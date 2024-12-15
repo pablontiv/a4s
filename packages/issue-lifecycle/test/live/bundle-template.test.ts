@@ -74,14 +74,14 @@ test("bootstrap writes optional validation as the sole adopted value", () => {
           A4S_BIN: bootstrapExecutable(root),
           STAGE: stage, REPO: "fixture", BASE_BRANCH: "main", PRIMARY: root,
           GATE: "true", REQUIRED_CHECK: "validate", TEST_PATHS: "^test/",
-          REBASE_RESOLVER: "node packages/issue-lifecycle/bin/dagu-bundle-rebase.mjs",
+          REBASE_RESOLVER: "node scripts/resolve-policy.mjs",
           VALIDATION: validation,
         },
       });
       assert.equal(result.status, 0, result.stdout + result.stderr);
       const config = JSON.parse(readFileSync(stage, "utf8")) as { validation: string; rebaseResolver: string; lane: string };
       assert.equal(config.validation, validation);
-      assert.equal(config.rebaseResolver, "node packages/issue-lifecycle/bin/dagu-bundle-rebase.mjs");
+      assert.equal(config.rebaseResolver, "node scripts/resolve-policy.mjs");
       assert.equal(config.lane, "fixture");
     }
   } finally { rmSync(root, { recursive: true, force: true }); }

@@ -126,7 +126,7 @@ renders can resolve `PRIMARY` without a machine path in the bundle. A
 per-checkout file `$DAGU_HOME/primaries/<workspace>` or the single-checkout
 file `$DAGU_HOME/a4s-primary` is the same binding when the variable is unset.
 Consumer policy comes only from committed `.workspace/dagu/config.json`, schema
-2 without `uses`; new builds read schema 1 but ignore its legacy selection.
+2. Schema 1 is decoded only as historical evidence, never admitted as active policy.
 New admissions use `state.current`; successors and actions use the target receipt
 tuple. The launcher restores and verifies missing exact immutable releases and
 execs their cached binary with a process lease through payload exit. Snapshots
