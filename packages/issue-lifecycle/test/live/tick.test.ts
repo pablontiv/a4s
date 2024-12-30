@@ -1,3 +1,4 @@
+import { stationEnvironment } from "../fixtures/service-environment.ts";
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -59,12 +60,12 @@ test("native scheduled tick A promotes B, dispatches B's receipt, and missing re
     const offline = join(root, "offline");
     writeFileSync(join(bin, "gh"), `#!/usr/bin/env node\nconst fs=require('node:fs'); const args=process.argv.slice(2), command=args.join(' ');\nif(fs.existsSync(${JSON.stringify(offline)})) process.exit(1);\nif(args[0]==='repo') console.log('fixture/repo');\nelse if(command.includes('/releases?')) console.log(JSON.stringify([[{tag_name:'a4s-r9002',draft:false,prerelease:false}]]));\nelse if(command.includes('/releases/tags/')) console.log(JSON.stringify({tag_name:'a4s-r9002',draft:false,prerelease:false}));\nelse if(command.includes('/git/ref/')) console.log(JSON.stringify({object:{sha:${JSON.stringify(b.commit)},type:'commit'}}));\nelse if(args[0]==='release') process.stdout.write(fs.readFileSync(${JSON.stringify(releases)}+'/'+args[args.indexOf('--pattern')+1]));\nelse if(command.includes('/issues?')) console.log(JSON.stringify([{number:189,state:'open'}]));\nelse { console.error(command); process.exit(2); }\n`, { mode: 0o755 });
     const httpPort = await port(), schedulerPort = await port(), url = `http://127.0.0.1:${httpPort}`;
-    const env: NodeJS.ProcessEnv = { ...process.env, DAGU_HOME: home, DAGU_URL: url, DAGU_PORT: String(httpPort), DAGU_COORDINATOR_ENABLED: "false", A4S_PRIMARY: primary, DAGU_PARAMS_JSON: "{}", PATH: `${bin}:${process.env.PATH}` };
+    const env: NodeJS.ProcessEnv = stationEnvironment({ ...process.env, DAGU_HOME: home, DAGU_URL: url, DAGU_PORT: String(httpPort), DAGU_COORDINATOR_ENABLED: "false", A4S_PRIMARY: primary, DAGU_PARAMS_JSON: "{}", PATH: `${bin}:${process.env.PATH}` });
     // Native scheduler/CLI requests own dispatch context and output independently of the enclosing role job.
     delete env.DAGU_QUEUE_DISPATCH_RETRY; delete env.DAG_PUSHBACK_ITERATION; delete env.DAGU_OUTPUT_FILE;
     writeFileSync(join(home, "config.yaml"), `host: 127.0.0.1\nport: ${httpPort}\nauth:\n  mode: none\ncoordinator:\n  enabled: false\nscheduler:\n  port: ${schedulerPort}\n`);
     writeFileSync(join(home, "a4s-primary"), `${primary}\n`);
-    process.env.DAGU_HOME = home; process.env.DAGU_URL = url;
+    Object.assign(process.env, { A4S_SERVICE_ENV: env.A4S_SERVICE_ENV, DAGU_HOME: home, DAGU_URL: url });
     await initializeStation(home, a, { listRuns: async () => [] });
     const snapshot = `type: graph\nlabels: [workspace=fixture]\nparams:\n  - ISSUE: 189\n  - PRIMARY: ${JSON.stringify(primary)}\nenv:\n  - PRIMARY: ${JSON.stringify(primary)}\nsteps:\n  - id: hold\n    action: human.task\n    with:\n      prompt: Hold this receipt-bound native run\n`;
     writeFileSync(join(home, "dags/feature.yaml"), snapshot);
@@ -90,7 +91,8 @@ test("native scheduled tick A promotes B, dispatches B's receipt, and missing re
     run("enqueue", "--run-id", "run-b", "feature");
     await until("foreign run waiting", async () => (await details("feature", "run-b"))?.statusLabel === "waiting" ? true : undefined);
     // Install only after the foreign receipt-bound run is visible to discovery.
-    writeFileSync(join(home, "dags/reconcile.yaml"), installed);
+    // Dagu does not forward A4S_* service variables to steps; the operator's installed copy carries the declaration selection.
+    writeFileSync(join(home, "dags/reconcile.yaml"), `env:\n  - A4S_SERVICE_ENV: ${JSON.stringify(env.A4S_SERVICE_ENV)}\n${installed}`);
     const tickId = await until("fresh scheduled tick success", async () => {
       const response = await fetch(`${url}/api/v1/dag-runs/reconcile?fromDate=0`); if (!response.ok) return undefined;
       const value: unknown = await response.json();

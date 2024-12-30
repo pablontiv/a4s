@@ -1,3 +1,4 @@
+import { declareService, stationEnvironment } from "../fixtures/service-environment.ts";
 import assert from "node:assert/strict";
 import { execFile, execFileSync, spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -52,16 +53,20 @@ test("source self-spawn commands select the existing entry and preserve helper a
   assert.deepEqual(engineCommand("queue", ["--lane", "example"]).args.slice(-3), ["readiness", "--lane", "example"]);
 });
 
-test("each source dispatch reaches its real command without ambient role-runtime fallback", () => {
+test("each source dispatch reaches its real command without ambient role-runtime fallback", t => {
   const env = { ...process.env, RUN: "" };
   for (const command of helpCommands) {
     const result = source([command, "--help"], env);
     assert.equal(result.status, command === "codeql" ? 0 : 1, `${command}: ${result.stderr}`);
     assert.doesNotMatch(result.stderr, /Unknown subcommand|ERR_MODULE_NOT_FOUND|Cannot find module/);
   }
-  const detect = source(["role-jobs", "detect"], { ...env, PATH: "" });
+  const home = mkdtempSync(join(tmpdir(), "a4s-without-omp-"));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const selection = declareService(home, process.env.DAGU_URL!);
+  rmSync(join(home, "bin/omp"));
+  const detect = source(["role-jobs", "detect"], { ...env, ...selection, PATH: "" });
   assert.equal(detect.status, 1, detect.stderr);
-  assert.match(detect.stderr, /no executable omp on PATH/);
+  assert.match(detect.stderr, /field=PATH.*omp/);
 });
 
 test("release archives and the compiled engine work from an extracted root", {
@@ -107,15 +112,16 @@ test("release archives and the compiled engine work from an extracted root", {
     const pythonCalled = join(temporary, "python-called");
     mkdirSync(noPython);
     writeFileSync(join(noPython, "python3"), '#!/bin/sh\nprintf invoked > "$A4S_PYTHON_SENTINEL"\nexit 97\n', { mode: 0o755 });
-    const env = { ...process.env, DAGU_HOME: home, RUN: "", A4S_HEAVY_SLOT_HELD: "",
-      PATH: `${noPython}:${process.env.PATH}`, A4S_PYTHON_SENTINEL: pythonCalled };
+    const env = stationEnvironment({ ...process.env, DAGU_HOME: home, RUN: "", A4S_HEAVY_SLOT_HELD: "",
+      PATH: `${noPython}:${process.env.PATH}`, A4S_PYTHON_SENTINEL: pythonCalled });
     const run = (args: string[], override: NodeJS.ProcessEnv = env) => spawnSync(executable, args, { cwd: extracted, env: override, encoding: "utf8" });
     const version = run(["version"]);
     assert.equal(version.status, 0, version.stderr);
     assert.deepEqual(JSON.parse(version.stdout), { ...identity, version: build.version, commit: expectedCommit });
+    // Node's source-only flock fallback may use Python; only the released engine is under this sentinel.
+    const sourceStation = stationEnvironment({ ...env, DAGU_HOME: join(temporary, "source-station"), PATH: process.env.PATH });
     for (const command of helpCommands) {
-      // Node's source-only flock fallback may use Python; only the released engine is under this sentinel.
-      const expected = source([command, "--help"], { ...env, PATH: process.env.PATH });
+      const expected = source([command, "--help"], sourceStation);
       const actual = run([command, "--help"]);
       assert.equal(actual.status, expected.status, `${command}: ${actual.stderr}`);
       assert.doesNotMatch(actual.stderr, /Unknown subcommand|Cannot find module|Module not found|python3/);
@@ -124,11 +130,16 @@ test("release archives and the compiled engine work from an extracted root", {
     writeFileSync(body, "Closes #712\n\n## Summary\n- Deliver one executable.\n\n## Verification\n- Compiled smoke.\n\n## Risk\nNone\n");
     const checked = run(["pr-body", "validate", body]);
     assert.equal(checked.status, 0, checked.stderr);
-    const blocked = run(["role-jobs", "detect"], { ...env, PATH: "" });
+    const missingHome = join(temporary, "without-omp");
+    mkdirSync(missingHome);
+    const missing = declareService(missingHome, process.env.DAGU_URL!);
+    rmSync(join(missingHome, "bin/omp"));
+    const blocked = run(["role-jobs", "detect"], { ...env, ...missing, PATH: "" });
     assert.equal(blocked.status, 1, blocked.stderr);
-    assert.match(blocked.stderr, /no executable omp on PATH/);
+    assert.match(blocked.stderr, /field=PATH.*omp/);
     roleRuntimeFixture(temporary);
-    const detected = run(["role-jobs", "detect"], { ...env, PRIMARY: extracted, PATH: `${join(temporary, "bin")}:${noPython}` });
+    Object.assign(env, stationEnvironment({ ...env, PATH: `${join(temporary, "bin")}:${noPython}:${process.env.PATH}` }));
+    const detected = run(["role-jobs", "detect"], { ...env, PRIMARY: extracted });
     assert.equal(detected.status, 0, detected.stderr);
     assert.deepEqual(JSON.parse(detected.stdout).agents, [
       { name: "triage-reviewer", source: join(extracted, "agents/triage-reviewer.md") }, { name: "task", source: `fixture:${extracted}` },

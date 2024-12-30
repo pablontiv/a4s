@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { stationEnv, useStation } from "./fixtures/service-environment.ts";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -53,16 +54,16 @@ test("host PRIMARY resolves workspace file, then A4S_PRIMARY, then the station f
   writeFileSync(join(workspace, "a4s"), "/home/box/src/a4s\n");
   writeFileSync(join(root, "a4s-primary"), "/station/shared\n");
   try {
-    const env = { DAGU_HOME: root, A4S_PRIMARY: "/station/env" };
+    const env = { ...stationEnv(root), A4S_PRIMARY: "/station/env" };
     assert.equal(resolveHostPrimary({ workspace: "a4s", env }), "/home/box/src/a4s");
     assert.equal(resolveHostPrimary({ workspace: "other", env }), "/station/env");
-    assert.equal(resolveHostPrimary({ env: { DAGU_HOME: root } }), "/station/shared");
+    assert.equal(resolveHostPrimary({ env: stationEnv(root) }), "/station/shared");
     assert.equal(resolvePrimaryBinding("/already/recorded", { env }), "/already/recorded");
     assert.equal(resolvePrimaryBinding(HOST_PRIMARY_REFERENCE, { env }), "/station/env");
-    assert.throws(() => resolveHostPrimary({ env: { DAGU_HOME: join(root, "missing") } }), /PRIMARY host binding is unset/);
+    assert.throws(() => resolveHostPrimary({ env: stationEnv(join(root, "missing")) }), /PRIMARY host binding is unset/);
     assert.throws(() => resolveHostPrimary({ env: { ...env, A4S_PRIMARY: "relative" } }), /A4S_PRIMARY must be an absolute/);
     writeFileSync(join(root, "a4s-primary"), "relative\n");
-    assert.throws(() => resolveHostPrimary({ env: { DAGU_HOME: root } }), /must contain one absolute path/);
+    assert.throws(() => resolveHostPrimary({ env: stationEnv(root) }), /must contain one absolute path/);
     assert.throws(() => resolvePrimaryBinding("${OTHER}", { env }), /PRIMARY binding must be an absolute path/);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
@@ -74,7 +75,7 @@ test("spec recovery keeps a recorded path and resolves the host reference", () =
     assert.equal(primaryFromSpec(`env:\n  - PRIMARY: ${JSON.stringify(recorded)}\n`), recorded);
     const spec = `labels:\n  - workspace=a4s\nenv:\n  - PRIMARY: "${HOST_PRIMARY_REFERENCE}"\n`;
     writeFileSync(join(root, "a4s-primary"), "/home/box/src/a4s\n");
-    assert.equal(primaryFromSpec(spec, { DAGU_HOME: root }), "/home/box/src/a4s");
+    assert.equal(primaryFromSpec(spec, stationEnv(root)), "/home/box/src/a4s");
     const bound = bindSnapshotPrimary(spec, "/home/box/src/a4s");
     assert.match(bound, /PRIMARY: "\/home\/box\/src\/a4s"/);
     assert.equal(bound.includes(HOST_PRIMARY_REFERENCE), false);
@@ -115,7 +116,7 @@ for (const source of ["workspace", "environment", "station"]) {
       }
       rmSync(root, { recursive: true, force: true });
     });
-    process.env.DAGU_HOME = root;
+    t.after(useStation(root));
     delete process.env.A4S_PRIMARY;
     for (const repo of [primary, unadopted]) {
       git(root, "init", "-q", "-b", "main", repo);

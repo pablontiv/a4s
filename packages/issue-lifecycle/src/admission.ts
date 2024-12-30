@@ -1,7 +1,8 @@
+import { readServiceEnvironment } from "../../launcher/src/service-environment.ts";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+
 import { dirname, join, resolve } from "node:path";
 import { CONFIG_PATH, POLICY_PARAMETERS, readCommittedConfig, type CommittedConfig } from "../../launcher/src/config.ts";
 import { dagName, materializeDag, type LifecycleDag } from "./materialize.ts";
@@ -102,7 +103,7 @@ function consumerRoot(cwd: string, dag: string): string {
 export function preflightAdmission(options: AdmissionOptions): AdmissionContext {
   const name = dagName(options.dag);
   const rejected = options.params.map(param => param.split("=", 1)[0]!)
-    .filter(field => field.startsWith("ESCALATION_") || field.startsWith("CODEQL_") || (POLICY_PARAMETERS as readonly string[]).includes(field));
+    .filter(field => field.startsWith("ESCALATION_") || field.startsWith("CODEQL_") || ["DAGU_URL", "DAGU_HOME", "DAGU_PORT", "A4S_SERVICE_ENV", "PATH"].includes(field) || (POLICY_PARAMETERS as readonly string[]).includes(field));
   if (rejected.length) throw new Error(`admission rejected run parameter: ${rejected.join(", ")}; policy comes only from committed ${CONFIG_PATH}`);
   const owners = options.params.filter(param => param.startsWith("OMP_SESSION_ID="));
   const owner = requireOwnerSession(owners.length === 1 ? owners[0]!.slice(15) : undefined);
@@ -143,13 +144,14 @@ function createReceipt(options: AdmissionOptions, context: AdmissionContext, cac
   const path = receiptPath(primary, options.run);
   const { version, commit } = cached.record;
   const origin = `https://github.com/${releaseRepository()}`;
-  const daguHome = realpathSync(process.env.DAGU_HOME || join(homedir(), ".dagu"));
+  const station = readServiceEnvironment();
+  const daguHome = realpathSync(station.DAGU_HOME);
   const templateFile = join(cached.directory, "skills", "issue-execution", name);
   const templateText = readFileSync(templateFile, "utf8");
-  const generated = materializeDag(cached.directory, name, committed.config, { version, source: `${origin}@${commit}`, executable: cached.executable });
+  const generated = materializeDag(cached.directory, name, committed.config, { version, source: `${origin}@${commit}`, executable: cached.executable, station });
   const snapshot = name === "reconcile.yaml" ? generated : bindSnapshotPrimary(generated, primary);
   const generatedDigest = sha256(snapshot);
-  const daguVersion = execFileSync("dagu", ["version"], { encoding: "utf8" }).trim();
+  const daguVersion = execFileSync("dagu", ["version"], { encoding: "utf8", env: { ...process.env, ...station } }).trim();
   const deployment = {
     artifact: cached.record,
     sourceTemplate: { version, canonicalPath: templateFile, origin, digest: sha256(templateText) },
@@ -167,7 +169,7 @@ function createReceipt(options: AdmissionOptions, context: AdmissionContext, cac
     initial: {
       admittedAt: receiptCreatedAt, deployment,
       runtimeAndModels: { ...fields("omp systemPromptDigest profile roles roleMapHash requestedRole resolvedModel fallback resolvedModelIsFallback crossFamilyDecision", "not exposed at admission; append linked runtime observations"),
-        node: { version: process.version, path: realpathSync(process.execPath) }, dagu: { version: daguVersion }, daguHome,
+        node: { version: process.version, path: realpathSync(process.execPath) }, dagu: { version: daguVersion }, daguHome, station,
         roleJobStore: join(daguHome, "role-jobs.sqlite"), admissionPid: process.pid, admissionPpid: process.ppid,
         transcriptRoot: options.session?.transcriptRoot ?? pending("operator CLI has no OMP session context"), model: options.session?.model ?? pending("not exposed at admission") },
       execution: { ...fields("base owner refs step approvalIteration sourceSession destinationSession triageGeneration triageMarker", "not yet resolved at admission"), repo, primary,
@@ -191,7 +193,7 @@ function createReceipt(options: AdmissionOptions, context: AdmissionContext, cac
 }
 async function selectedAdmission<T>(options: AdmissionOptions, persist: boolean, use: (admission: { path: string; receipt: Receipt }) => T | Promise<T>): Promise<T> {
   const context = preflightAdmission(options);
-  const home = realpathSync(process.env.DAGU_HOME || join(homedir(), ".dagu"));
+  const home = realpathSync(readServiceEnvironment().DAGU_HOME);
   const parent = await selectParent(options, context, home);
   const tuple = options.artifact ? parseArtifact(options.artifact) : parent?.artifact;
   if (!tuple) throw new Error("Admission requires a resolved --artifact handoff or --parent receipt");
@@ -271,18 +273,18 @@ export async function enqueue(args: string[], cwd: string): Promise<number> {
     // Planning checks stop before cache publication, handoff, locks, receipts or
     // Dagu CLI calls. Reuse queue's GET-only station readiness boundary.
     if (options.check) {
-      const state = await readStationState(process.env.DAGU_HOME || join(homedir(), ".dagu"));
+      const state = await readStationState(readServiceEnvironment().DAGU_HOME);
       const report = await stationReadiness(process.env.DAGU_HOME, context.committed.config.lane);
       console.log(report.checks.join("\n"));
       console.log(`admissible=${report.ready ? "yes" : "no"} artifact=${artifactToken(state.current)} lane=${context.committed.config.lane}`);
       return report.ready ? 0 : 1;
     }
-    if (!options.artifact) return await handoff(process.env.DAGU_HOME || join(homedir(), ".dagu"), ["admit", ...args]);
+    if (!options.artifact) return await handoff(readServiceEnvironment().DAGU_HOME, ["admit", ...args]);
     return await selectedAdmission(options, true, ({ path, receipt }) => {
       const snapshot = join(dirname(path), "snapshot", `${receipt.runReceipt.dag}.yaml`);
       mkdirSync(dirname(snapshot));
       writeFileSync(snapshot, receipt.initial.execution.dagSnapshot, { flag: "wx", mode: 0o600 });
-      const result = spawnSync("dagu", ["enqueue", "--run-id", options.run, snapshot, "--", ...options.params], { stdio: "inherit" });
+      const result = spawnSync("dagu", ["enqueue", "--run-id", options.run, snapshot, "--", ...options.params], { stdio: "inherit", env: { ...process.env, ...readServiceEnvironment() } });
       appendObservation(path, { dag: receipt.runReceipt.dag, run: options.run, attempt: 1, category: "eventsAndExternalState", kind: result.status === 0 ? "enqueued" : "incident", data: { exit: result.status, signal: result.signal, error: result.error?.message, originalDag: resolve(cwd, options.dag), snapshot, latency: Date.now() - Date.parse(receipt.initial.admittedAt) } });
       console.log(`receipt=${path} sourceVersion=${receipt.sourceVersion.version} deploymentFingerprint=${receipt.deploymentFingerprint}`);
       return result.status ?? 1;

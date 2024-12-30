@@ -1,3 +1,4 @@
+import { readServiceEnvironment } from "./service-environment.ts";
 import { execFileSync } from "node:child_process";
 import { lstatSync, realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -106,10 +107,11 @@ export async function selectPayload(home: string, args: string[], dependencies: 
   }, dependencies);
 }
 export async function handoff(home: string, args: string[]): Promise<never> {
+  const service = readServiceEnvironment({ ...process.env, DAGU_HOME: home });
   const selected = await selectPayload(home, args);
   const executable = selected.cached.executable;
   if (!process.execve) throw new Error("a4s-launch requires execve support");
   const env = Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined));
-  process.execve(executable, [executable, ...selected.args], { ...env, A4S_ARTIFACT: artifactToken(selected.lease.artifact), A4S_BIN: executable });
+  process.execve(executable, [executable, ...selected.args], { ...env, ...service, A4S_ARTIFACT: artifactToken(selected.lease.artifact), A4S_BIN: executable });
   throw new Error("a4s-launch did not replace the caller process");
 }

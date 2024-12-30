@@ -1,3 +1,4 @@
+import { stationEnvironment } from "../fixtures/service-environment.ts";
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
@@ -32,7 +33,7 @@ test("Dagu runs the checkpoint scenario in an isolated home", { ...liveDagu, tim
   const id = testRunId("computation");
   writeFileSync(join(home, "dags", "computation.yaml"), `name: computation\ntype: graph\nsteps:\n  - id: scenario\n    run: ${JSON.stringify(command)}\n`);
   writeFileSync(join(home, "config.yaml"), `host: 127.0.0.1\nport: ${port}\nauth:\n  mode: none\ncoordinator:\n  enabled: false\n`);
-  const env = { ...process.env, DAGU_HOME: home, DAGU_COORDINATOR_ENABLED: "false" };
+  const env = stationEnvironment({ ...process.env, DAGU_HOME: home, DAGU_PORT: String(port), DAGU_COORDINATOR_ENABLED: "false" });
   const diagnostics = new PocDiagnostics();
   const service = spawn("dagu", ["start-all", "--host", "127.0.0.1", "--port", String(port)], { env, stdio: ["ignore", "pipe", "pipe"] });
   diagnostics.capture(service);

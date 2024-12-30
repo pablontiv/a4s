@@ -1,3 +1,4 @@
+import { useStation } from "./service-environment.ts";
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -34,7 +35,7 @@ export async function liveWatcher(binary = "dagu"): Promise<string[]> {
   service.stderr.on("data", value => { log += value; });
   const base = `http://127.0.0.1:${httpPort}`;
   const previous = process.env.DAGU_URL;
-  process.env.DAGU_URL = base;
+  const restoreStation = useStation(home, base);
   const received: string[] = [];
   const ctx = {
     cwd: process.cwd(), hasUI: false, isIdle: () => false, agent: { kind: "main" as const },
@@ -93,7 +94,7 @@ export async function liveWatcher(binary = "dagu"): Promise<string[]> {
     return received;
   } finally {
     handlers.session_shutdown!(null, ctx);
-    if (previous === undefined) delete process.env.DAGU_URL; else process.env.DAGU_URL = previous;
+    restoreStation();
     service.kill("SIGTERM");
     await new Promise<void>(resolve => { if (service.exitCode !== null) resolve(); else service.once("exit", () => resolve()); });
     rmSync(root, { recursive: true, force: true });

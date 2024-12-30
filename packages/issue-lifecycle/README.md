@@ -98,7 +98,7 @@ A4S_BIN or A4S_ARTIFACT is pinned in station configuration. See
 
 ### Operator-owned service environment
 
-Readiness and bootstrap require one station-local UTF-8 JSON declaration selected
+All station clients and fresh DAG snapshots require one station-local UTF-8 JSON declaration selected
 explicitly by absolute `A4S_SERVICE_ENV`. Required fields are `DAGU_URL` (an
 unauthenticated HTTP loopback origin), absolute `DAGU_HOME`, and scheduler `PATH`
 (colon-separated absolute, nonempty entries). Values are literal; a4s never
@@ -111,8 +111,14 @@ Any explicitly selected home/endpoint must match. The declared PATH must resolve
 launcher-layer reader. `a4s queue --lane <lane>` checks it, station config leaves,
 lane capacity and the running API/scheduler using only reads and bounded GETs.
 Bootstrap calls the reader only through its release-bound `$A4S_BIN`; it has no
-declaration parser or endpoint/home fallback. Other clients/templates migrate
-in a separate endpoint/home cutover, so keep their explicit values consistent.
+declaration parser or endpoint/home fallback. Admission freezes the normalized
+endpoint, home, scheduler PATH and declaration selection in the existing render
+and immutable receipt. Native Dagu children receive those same resolved values.
+Run-bound helpers reject declaration changes instead of reinterpreting a run.
+Only freshly admitted snapshots from new immutable releases receive this
+cutover: no existing release, snapshot, receipt, binding, or installed service
+file is rewritten. The OMP agent/profile directory remains independent of
+`DAGU_HOME`.
 
 Missing/unreadable/malformed/incomplete declarations or mismatched selections
 fail with field-specific diagnostics and operator actions. A healthy caller PATH
@@ -543,9 +549,9 @@ A4S_GATE_JOURNAL= npm run test:compiled --workspace @a4s/issue-lifecycle
 All three lifecycle test lanes load `test/fixtures/dagu-home.mjs` before test
 modules. It replaces inherited `HOME` and `DAGU_HOME` with a fresh private
 temporary directory for each test process and removes that directory on exit.
-Fixtures and subprocesses use isolated homes rather than the ambient station's
-artifact cache, including children that omit `DAGU_HOME` and fall back to
-`~/.dagu`. Callers need not set temporary homes.
+Fixtures and subprocesses select isolated station declarations rather than the
+ambient station's artifact cache. Their endpoints, homes and tool paths are
+explicit; no child falls back to a current-user-home station.
 
 `npm test` (also the local feature gate and CI lane) selects only
 `test/*.test.ts`, never `test/live/`. It runs module/CLI logic in-process with
@@ -566,10 +572,10 @@ The compiled-smoke lane enables its release-specific assertions separately.
 Default scripts no longer acquire the heavy slot or force serial test-file
 execution: Node isolates files, and their fixtures do not use station state.
 Native live/compiled lanes retain `bin/heavy-slot.py`: before the test preload
-runs, this wrapper acquires the inherited station-wide
-`$DAGU_HOME/a4s/heavy-slot.lock` (default home `~/.dagu`). Keep the service's
-canonical home in the invoking shell so concurrent native runs share that lock;
-do not set a temporary home around the npm command. This orchestration lock is
+runs, this wrapper resolves `A4S_SERVICE_ENV` through the same launcher reader
+and acquires `$DAGU_HOME/a4s/heavy-slot.lock` in that declared station. Select the
+service's declaration so concurrent native runs share its canonical lock;
+do not substitute a temporary declaration around the npm command. This orchestration lock is
 the single explicit exception outside the isolated test process, not permission
 for tests, fixtures or subprocesses to access the station's artifact cache.
 

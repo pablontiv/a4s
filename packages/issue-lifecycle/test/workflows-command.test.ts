@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { useStation } from "./fixtures/service-environment.ts";
 import { execFileSync } from "node:child_process";
 import { once } from "node:events";
 import { mkdtempSync } from "node:fs";
@@ -57,7 +58,7 @@ test("/workflows folds, hides and shows the widget while the observer keeps rend
   const cwd = mkdtempSync(join(tmpdir(), "widget-"));
   execFileSync("git", ["init", "-q", cwd]);
   execFileSync("git", ["-C", cwd, "remote", "add", "origin", "https://example.com/acme/widget.git"]);
-  process.env.DAGU_URL = dagu.base;
+  const restoreStation = useStation(process.env.DAGU_HOME!, dagu.base);
   const widgets: Widget[] = [];
   const notices: string[] = [];
   let command: Handler | undefined;
@@ -112,6 +113,6 @@ test("/workflows folds, hides and shows the widget while the observer keeps rend
   } finally {
     stop!(undefined, ctx);
     dagu.close();
-    delete process.env.DAGU_URL;
+    restoreStation();
   }
 });

@@ -1,6 +1,7 @@
+import { readServiceEnvironment } from "../../../launcher/src/service-environment.ts";
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+
 import { basename, dirname, join, resolve } from "node:path";
 import { appendObservation, enqueue, parseObservation, receiptPath, observeRunReceipt } from "../admission.ts";
 import { CONFIG_PATH, configFromEnvironment, readConfigFile, readCommittedConfig, serializeConfig } from "../../../launcher/src/config.ts";
@@ -53,7 +54,7 @@ function inspectConfig(repo: string): boolean {
   const path = join(repo, CONFIG_PATH);
   try {
     const loaded = readCommittedConfig(repo);
-    const report = queueReadiness(process.env.DAGU_HOME || join(homedir(), ".dagu"), loaded.config.lane);
+    const report = queueReadiness(readServiceEnvironment().DAGU_HOME, loaded.config.lane);
     console.log(`config path=${CONFIG_PATH} schema=${loaded.config.schemaVersion} digest=${loaded.digest} lane=${loaded.config.lane} base=${loaded.config.baseBranch} ${report}`);
     console.log(`config policy gate=${JSON.stringify(loaded.config.gate)} requiredCheck=${JSON.stringify(loaded.config.requiredCheck)} testPaths=${JSON.stringify(loaded.config.testPaths)}`);
     return report.includes("ready=yes");
@@ -180,7 +181,7 @@ for (const argument of argumentsOrCwd) {
   ok = inspectConfig(path) && ok;
 }
 
-const daguHome = process.env.DAGU_HOME || join(homedir(), ".dagu");
+const daguHome = readServiceEnvironment().DAGU_HOME;
 const reconciler = join(daguHome, "dags", "reconcile.yaml");
 if (!existsSync(reconciler)) {
   console.log(`reconcile.yaml path=${reconciler} installed=absent`);
@@ -188,7 +189,7 @@ if (!existsSync(reconciler)) {
 } else {
   console.log(`reconcile.yaml path=${reconciler} installed=yes`);
 }
-const dagu = spawnSync("dagu", ["version"], { encoding: "utf8" });
+const dagu = spawnSync("dagu", ["version"], { encoding: "utf8", env: { ...process.env, ...readServiceEnvironment() } });
 const daguOk = dagu.status === 0;
 const observed = dagu.status === null ? "unavailable" : JSON.stringify(dagu.stdout.replace(/\n$/, ""));
 console.log(`dagu version=${observed}`);

@@ -1,3 +1,4 @@
+import { stationEnvironment } from "../fixtures/service-environment.ts";
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
@@ -68,7 +69,7 @@ for (const terminal of ["failed", "interrupted"] as const) {
       const run = "dispatcher-retry";
       const state = join(f.repo, ".git", "dagu-feature", "runs", run); mkdirSync(state, { recursive: true });
       writeFileSync(join(state, "receipt.json"), JSON.stringify({ ...roleAdmission(f.repo, f.home, run, "dagu-role-jobs stage triage"), schemaVersion: 2 }));
-      Object.assign(process.env, { PRIMARY: f.repo, DAGU_HOME: f.home, RUN: run, ISSUE: "189", PATH: `${bin}:${saved.PATH}`, A4S_ROLE_JOB_CAPACITY: "2", DAG_PUSHBACK_ITERATION: "0" });
+      Object.assign(process.env, stationEnvironment({ ...process.env, PRIMARY: f.repo, DAGU_HOME: f.home, RUN: run, ISSUE: "189", PATH: `${bin}:${saved.PATH}`, A4S_ROLE_JOB_CAPACITY: "2", DAG_PUSHBACK_ITERATION: "0" }));
       let startedAt = readyAt;
       const details = () => ({ dagRunDetails: { params: "ISSUE=189 OMP_SESSION_ID=parent-id", nodes: [
         { step: { id: "admit" }, statusLabel: "succeeded", startedAt: readyAt },
@@ -129,7 +130,7 @@ test("triage seeds capacity from the environment and redelivers with a diagnosed
     const run = "triage-moving-primary";
     const state = join(f.repo, ".git", "dagu-feature", "runs", run); mkdirSync(state, { recursive: true });
     writeFileSync(join(state, "receipt.json"), JSON.stringify(roleAdmission(f.repo, f.home, run, "dagu-role-jobs stage triage")));
-    Object.assign(process.env, { PRIMARY: f.repo, DAGU_HOME: f.home, RUN: run, ISSUE: "189", PATH: `${bin}:${saved.PATH}`, A4S_ROLE_JOB_CAPACITY: "2", DAG_PUSHBACK_ITERATION: "0" });
+    Object.assign(process.env, stationEnvironment({ ...process.env, PRIMARY: f.repo, DAGU_HOME: f.home, RUN: run, ISSUE: "189", PATH: `${bin}:${saved.PATH}`, A4S_ROLE_JOB_CAPACITY: "2", DAG_PUSHBACK_ITERATION: "0" }));
     globalThis.fetch = async () => new Response(JSON.stringify({ dagRunDetails: {
       params: "ISSUE=189 OMP_SESSION_ID=parent-id", nodes: [
         { step: { id: "admit" }, statusLabel: "succeeded", startedAt: readyAt },

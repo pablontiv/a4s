@@ -1,3 +1,4 @@
+import { stationEnvironment } from "../fixtures/service-environment.ts";
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -23,7 +24,7 @@ import { cachePath, inspectArtifact } from "../../../launcher/src/artifact-cache
 function save(f: ReturnType<typeof admissionFixture>, run: string, artifact: ArtifactTuple): void {
   if (!existsSync(join(f.home, "cache/a4s/state.json"))) {
     execFileSync(process.execPath, ["--import", import.meta.resolve("tsx"), fileURLToPath(new URL("../../../launcher/src/cli.ts", import.meta.url)), "station", "init", "--artifact", artifactToken(artifact)],
-      { cwd: f.packageDir, env: { ...process.env, DAGU_HOME: f.home }, stdio: "pipe" });
+      { cwd: f.packageDir, env: stationEnvironment({ ...process.env, DAGU_HOME: f.home }), stdio: "pipe" });
   }
   const receipt = roleAdmission(f.packageDir, f.home, run, 'env: []\nsteps:\n  - run: \'"$A4S_BIN" role-jobs stage triage\'\n', artifact);
   mkdirSync(dirname(f.receipt(run)), { recursive: true });
@@ -98,7 +99,7 @@ test("release-independent HUD and plugin mutations dispatch A while B is install
     const effects = join(f.root, "effects"); writeFileSync(effects, "");
     writeFileSync(join(bin, "dagu"), `#!/bin/sh\nprintf '%s\\n' "$*" >> '${effects}'\n`, { mode: 0o755 });
     writeFileSync(join(bin, "gh"), "#!/bin/sh\nprintf '%s\\n' '{}'\n", { mode: 0o755 });
-    const env: NodeJS.ProcessEnv = { ...process.env, DAGU_HOME: f.home, PRIMARY: f.packageDir, RUN: "version-a", ISSUE: "189", A4S_BIN: join(f.home, "cache/a4s", b.version, "a4s"), PATH: `${bin}:${process.env.PATH}` };
+    const env: NodeJS.ProcessEnv = stationEnvironment({ ...process.env, DAGU_HOME: f.home, PRIMARY: f.packageDir, RUN: "version-a", ISSUE: "189", A4S_BIN: join(f.home, "cache/a4s", b.version, "a4s"), PATH: `${bin}:${process.env.PATH}` });
     const execute = async (action: string, run = "version-a") => {
       const decision = await runMutationDecision({ toolName: "bash", toolCallId: "mutation", input: { command: `PRIMARY='${f.packageDir}' RUN=${run} ${action}` } }, f.packageDir);
       assert.ok(decision && "input" in decision, JSON.stringify(decision));
@@ -118,7 +119,8 @@ test("release-independent HUD and plugin mutations dispatch A while B is install
 
     await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
     const address = server.address(); assert.ok(address && typeof address !== "string");
-    process.env.DAGU_URL = env.DAGU_URL = `http://127.0.0.1:${address.port}`;
+    Object.assign(env, stationEnvironment({ ...env, DAGU_HOME: f.home, DAGU_URL: `http://127.0.0.1:${address.port}` }));
+    Object.assign(process.env, { A4S_SERVICE_ENV: env.A4S_SERVICE_ENV, DAGU_HOME: env.DAGU_HOME, DAGU_URL: env.DAGU_URL });
     const runtime = roleRuntimeFixture(f.root);
     writeFileSync(join(runtime, "src/config/settings.ts"), "export const Settings={async loadReadOnly(){return {}}};\n");
     writeFileSync(join(runtime, "src/task/settings.ts"), "export const cfgTaskAgentModelOverrides={get(){return {}}};\n");
@@ -134,10 +136,10 @@ return {exitCode:0,output:JSON.stringify(output)}};
 `);
     // Exercise the extracted release with only its real tool dependencies. In
     // particular, neither an ambient Bun executable nor a source runtime can win.
-    for (const tool of ["bash", "git", "ps"]) {
+    for (const tool of ["bash", "git", "ps", "jq", "curl", "node"]) {
       symlinkSync(execFileSync("bash", ["--noprofile", "--norc", "-c", 'command -v "$1"', "fixture", tool], { encoding: "utf8" }).trim(), join(bin, tool));
     }
-    Object.assign(env, { PATH: `${join(f.root, "bin")}:${bin}`, DAGU_OUTPUT_FILE: join(f.root, "role-outputs"), DAG_PUSHBACK_ITERATION: "0" });
+    Object.assign(env, stationEnvironment({ ...env, DAGU_HOME: f.home, PATH: `${join(f.root, "bin")}:${bin}`, DAGU_OUTPUT_FILE: join(f.root, "role-outputs"), DAG_PUSHBACK_ITERATION: "0" }));
     assert.equal(spawnSync("bash", ["--noprofile", "--norc", "-c", "command -v bun"], { env }).status, 1);
     const detected = await shell(`'${join(cachePath(f.home, a), "a4s")}' role-jobs detect`, f.packageDir, env);
     assert.equal(detected.status, 0, detected.stderr);
@@ -222,7 +224,7 @@ test("native mutations reject a caller PATH without jq before invoking Dagu", { 
     }
     writeFileSync(join(bin, "dagu"), `#!/bin/sh\nprintf '%s\\n' "$*" >> '${effects}'\nexit 42\n`, { mode: 0o755 });
     const run = (args: string[]) => spawnSync(executable, ["run", "--primary", f.packageDir, "--run", "missing-tool", "--", "native", ...args], {
-      env: { ...process.env, DAGU_HOME: f.home, PATH: bin }, encoding: "utf8",
+      env: stationEnvironment({ ...process.env, DAGU_HOME: f.home, PATH: bin }), encoding: "utf8",
     });
     const actions = [
       ["retry", "feature", "--run-id", "missing-tool", "--step", "capture", "--downstream"],
@@ -233,7 +235,7 @@ test("native mutations reject a caller PATH without jq before invoking Dagu", { 
     for (const args of actions) {
       const result = run(args);
       assert.equal(result.status, 1, result.stderr);
-      assert.match(result.stderr, /required command not found: jq.*no Dagu mutation started/);
+      assert.match(result.stderr, /declared scheduler PATH is missing jq/);
       assert.doesNotMatch(result.stderr, /malformed ownership history/);
       assert.equal(existsSync(effects), false, "Dagu must not run even once when jq is missing");
       assert.equal(readFileSync(f.receipt("missing-tool"), "utf8"), before);
@@ -288,11 +290,9 @@ fs.writeFileSync(process.env.CHANGED_RECEIPT, JSON.stringify(receipt));
 console.log(JSON.stringify([{ number: 189, state: "open" }, { number: 190, state: "open" }]));
 `, { mode: 0o755 });
     const output = join(f.root, "classify.output");
-    const result = spawnSync(executable, ["reconcile", "classify", output], { encoding: "utf8", env: { ...process.env,
-      PATH: `${bin}:${process.env.PATH}`, DAGU_HOME: f.home, A4S_ARTIFACT: artifactToken(tuple), RUN: "station-sentinel",
-      CHANGED_RECEIPT: f.receipt("changed"), CI_OBSERVATION_ID: "receipt-recheck",
-      RUNS: JSON.stringify(["changed", "compatible"].map((run, index) => ({ RUN: run, PRIMARY: f.packageDir, ISSUE: String(189 + index), REPO: "example/repo" }))),
-    } });
+    const result = spawnSync(executable, ["reconcile", "classify", output], { encoding: "utf8", env: stationEnvironment({ ...process.env, PATH: `${bin}:${process.env.PATH}`, DAGU_HOME: f.home, A4S_ARTIFACT: artifactToken(tuple), RUN: "station-sentinel",
+    CHANGED_RECEIPT: f.receipt("changed"), CI_OBSERVATION_ID: "receipt-recheck",
+    RUNS: JSON.stringify(["changed", "compatible"].map((run, index) => ({ RUN: run, PRIMARY: f.packageDir, ISSUE: String(189 + index), REPO: "example/repo" }))), }) });
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stderr, /reconcile-failure run=changed status=1 cause=.*Unsupported receipt roleJobStore contract/);
     assert.match(readFileSync(output, "utf8"), /failures=\[\{"run":"changed"/);
@@ -314,10 +314,8 @@ test("matching version and commit cannot authorize different executable bytes in
     copyFileSync(join(f.releases, release.archive), join(directory, "verified-archive.tar.gz"));
     writeFileSync(join(directory, "artifact.json"), JSON.stringify({ ...tuple, verifiedAt: new Date().toISOString() }));
     save(f, "different-bytes", tuple);
-    const result = spawnSync(executable, ["reconcile", "classify", join(f.root, "classify.output")], { encoding: "utf8", env: { ...process.env,
-      DAGU_HOME: f.home, A4S_ARTIFACT: artifactToken(tuple), CI_OBSERVATION_ID: "byte-identity",
-      RUNS: JSON.stringify([{ RUN: "different-bytes", PRIMARY: f.packageDir, ISSUE: "189", REPO: "example/repo" }]),
-    } });
+    const result = spawnSync(executable, ["reconcile", "classify", join(f.root, "classify.output")], { encoding: "utf8", env: stationEnvironment({ ...process.env, DAGU_HOME: f.home, A4S_ARTIFACT: artifactToken(tuple), CI_OBSERVATION_ID: "byte-identity",
+    RUNS: JSON.stringify([{ RUN: "different-bytes", PRIMARY: f.packageDir, ISSUE: "189", REPO: "example/repo" }]), }) });
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stderr, /reconcile-failure run=different-bytes status=1 cause=.*status 91/);
     assert.match(result.stderr, /"artifactVerifications":1,"inProcessActions":0/);

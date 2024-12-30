@@ -1,3 +1,4 @@
+import { readServiceEnvironment } from "../../../launcher/src/service-environment.ts";
 import { execFileSync } from "node:child_process";
 import { appendFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
@@ -53,7 +54,7 @@ async function run(argv: string[], io: RoleJobIO, deps: RoleJobDependencies): Pr
     if (!/^[1-9][0-9]*$/.test(stage)) throw new Error("Role-job capacity must be a positive integer");
     const capacity = Number(stage);
     if (!Number.isSafeInteger(capacity)) throw new Error("Role-job capacity must be a positive integer");
-    const home = realpathSync(process.env.DAGU_HOME || "");
+    const home = realpathSync(readServiceEnvironment().DAGU_HOME);
     const store = new RoleJobStore(home, Number(process.env.A4S_ROLE_JOB_CAPACITY || "4"));
     try { io.log(JSON.stringify({ home, ...store.changeCapacity(capacity) })); }
     finally { store.close(); }

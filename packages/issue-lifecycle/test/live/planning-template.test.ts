@@ -1,3 +1,4 @@
+import { stationEnvironment } from "../fixtures/service-environment.ts";
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
@@ -412,12 +413,13 @@ test("native planning push-back and cancellation preserve guarded materializatio
   };
   const httpPort = await port(), schedulerPort = await port();
   Object.assign(f.env, { DAGU_HOME: home, DAGU_CONFIG: join(home, "config.yaml"), DAGU_PORT: String(httpPort), DAGU_COORDINATOR_ENABLED: "false" });
+  Object.assign(f.env, stationEnvironment(f.env));
   writeFileSync(join(home, "config.yaml"), `host: 127.0.0.1\nport: ${httpPort}\nauth:\n  mode: none\ncoordinator:\n  enabled: false\nscheduler:\n  port: ${schedulerPort}\n`);
   jsonl(f.upstream, [{ ...unit("consumer"), relationships: [{ kind: "blocked_by", target: { unit: "contract" } }] }, unit("contract")]);
   const native = structuredClone(definition);
   native.labels = ["workspace=planning-regression"];
   delete native.queue;
-  native.env = Object.entries(f.env).filter(([key]) => ["A4S_BIN", "HOME", "TMPDIR", "PATH", "DAGU_HOME", "DAGU_PORT", "PRIMARY"].includes(key))
+  native.env = Object.entries(f.env).filter(([key]) => ["A4S_BIN", "HOME", "TMPDIR", "PATH", "A4S_SERVICE_ENV", "DAGU_URL", "DAGU_HOME", "DAGU_PORT", "PRIMARY"].includes(key))
     .map(([key, value]) => ({ [key]: value }));
   native.env.push({ RUN: "${context.run.id}" }, { FEEDBACK: "" });
   native.steps.find((step: { id: string }) => step.id === "init").run =

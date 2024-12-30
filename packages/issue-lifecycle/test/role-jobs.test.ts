@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { stationEnv } from "./fixtures/service-environment.ts";
 import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -142,7 +143,7 @@ test("capacity values are positive safe integers when seeding or changing policy
 test("the capacity command records changes and restores policy independently of the environment", async () => {
   const f = fixture(); const store = new RoleJobStore(f.home, 2);
   const invoke = (...args: string[]) => runRoleCommand(["capacity", ...args],
-    { ...process.env, DAGU_HOME: f.home, A4S_ROLE_JOB_CAPACITY: "9" });
+    { ...process.env, ...stationEnv(f.home), A4S_ROLE_JOB_CAPACITY: "9" });
   try {
     for (const value of ["0", "-1", "1.5", "NaN", "Infinity", "9007199254740992", "2x", ""]) {
       const result = await invoke(value);

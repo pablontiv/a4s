@@ -1,3 +1,4 @@
+import { stationEnvironment } from "../fixtures/service-environment.ts";
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -42,7 +43,7 @@ function queuedThrough(step: string): DagNodeSnapshot[] {
 async function recover(home: string, bin: string, calls: string, url: string) {
   return await new Promise<{ status: number | null; stderr: string }>((resolve, reject) => {
     const child = spawn(process.execPath, ["--import", import.meta.resolve("tsx"), cli, "recover-scheduled"], {
-      env: { ...process.env, DAGU_HOME: home, DAGU_URL: url, PATH: `${bin}:${process.env.PATH ?? ""}`, DAGU_CALLS: calls },
+      env: stationEnvironment({ ...process.env, DAGU_HOME: home, DAGU_URL: url, PATH: `${bin}:${process.env.PATH ?? ""}`, DAGU_CALLS: calls }),
     });
     let stderr = "";
     child.stderr.on("data", chunk => { stderr += chunk; });

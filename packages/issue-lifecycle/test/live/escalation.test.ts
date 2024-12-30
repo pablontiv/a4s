@@ -1,3 +1,4 @@
+import { stationEnvironment } from "../fixtures/service-environment.ts";
 import assert from "node:assert/strict";
 import { execFile, execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createServer } from "node:http";
@@ -53,8 +54,7 @@ test("durable budget uses native iterations and retry-safe finding occurrences, 
   await once(server, "listening");
   const address = server.address();
   assert.ok(address && typeof address === "object");
-  const env = { ...process.env, PRIMARY: primary, RUN: "budget558", OMP_SESSION_ID: "owner", DAGU_HOME: home,
-    DAGU_URL: `http://127.0.0.1:${address.port}`, DAGU_OUTPUT_FILE: join(root, "outputs"), ESCALATION_SECONDS: "3600", DAG_PUSHBACK_ITERATION: "0" };
+  const env = stationEnvironment({ ...process.env, PRIMARY: primary, RUN: "budget558", OMP_SESSION_ID: "owner", DAGU_HOME: home, DAGU_URL: `http://127.0.0.1:${address.port}`, DAGU_OUTPUT_FILE: join(root, "outputs"), ESCALATION_SECONDS: "3600", DAG_PUSHBACK_ITERATION: "0" });
   const run = (...args: string[]) => execute(process.execPath, [...helperArgs, ...args], { env });
   const budget = () => JSON.parse(readFileSync(join(state, "escalation.json"), "utf8"));
   const iteration = (value: number) => { env.DAG_PUSHBACK_ITERATION = String(value); };
@@ -126,7 +126,7 @@ test("escalation requires an artifact-bound receipt and rejects legacy or unsupp
   const receipt = join(state, "receipt.json");
   const home = join(root, "dagu-home");
   const admitted = roleAdmission(primary, home, "versions", feature);
-  const env = { ...process.env, PRIMARY: primary, RUN: "versions", OMP_SESSION_ID: "owner", DAGU_HOME: home, DAG_PUSHBACK_ITERATION: "0", DAGU_OUTPUT_FILE: join(root, "outputs") };
+  const env = stationEnvironment({ ...process.env, PRIMARY: primary, RUN: "versions", OMP_SESSION_ID: "owner", DAGU_HOME: home, DAG_PUSHBACK_ITERATION: "0", DAGU_OUTPUT_FILE: join(root, "outputs") });
   try {
     for (const schemaVersion of [2, 1, 3, "2", null]) {
       const bytes = JSON.stringify({ ...admitted, schemaVersion });
@@ -170,7 +170,7 @@ test(`Dagu ${liveDaguVersion} escalation persists through restart, rejects stale
   assert.notEqual(port, 8080);
   const id = testRunId("escalation558");
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("DAGU_")));
-  Object.assign(env, { A4S_BIN: a4sBin, DAGU_HOME: home, DAGU_COORDINATOR_ENABLED: "false", DAGU_URL: `http://127.0.0.1:${port}` });
+  Object.assign(env, stationEnvironment({ ...env, A4S_BIN: a4sBin, DAGU_HOME: home, DAGU_COORDINATOR_ENABLED: "false", DAGU_URL: `http://127.0.0.1:${port}` }));
   writeFileSync(join(home, "config.yaml"), `host: 127.0.0.1\nport: ${port}\nauth:\n  mode: none\ncoordinator:\n  enabled: false\nscheduler:\n  port: 0\n`);
   const original: FixtureDag = YAML.parse(feature);
   const selected = original.steps.filter(step => ["implement_budget", "escalation", "escalation_cancellation", "escalation_decision"].includes(step.id));
@@ -179,7 +179,7 @@ test(`Dagu ${liveDaguVersion} escalation persists through restart, rejects stale
   const evidence = join(root, "gate-output.log");
   const definition = {
     type: "graph", shell: "bash", max_active_steps: 1,
-    env: [{ A4S_BIN: a4sBin }, { PRIMARY: primary }, { RUN: "${context.run.id}" }, { DAGU_URL: env.DAGU_URL }, { PATH: process.env.PATH }, { OMP_SESSION_ID: "owner" },
+    env: [{ A4S_BIN: a4sBin }, { PRIMARY: primary }, { RUN: "${context.run.id}" }, { A4S_SERVICE_ENV: env.A4S_SERVICE_ENV }, { DAGU_HOME: home }, { DAGU_URL: env.DAGU_URL }, { PATH: env.PATH }, { OMP_SESSION_ID: "owner" },
       { ESCALATION_PUSHBACKS: "3" }, { ESCALATION_FINDINGS: "2" }, { ESCALATION_SECONDS: "3600" }],
     steps: [
       { id: "triage", run: `${helperShell} route` }, ...selected,

@@ -1,6 +1,7 @@
+import { readServiceEnvironment } from "../../launcher/src/service-environment.ts";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { realpathSync, rmSync } from "node:fs";
-import { homedir } from "node:os";
+import { readFileSync, realpathSync, rmSync } from "node:fs";
+
 import { join } from "node:path";
 import { parseAllDocuments } from "yaml";
 import { receiptArtifact, assertExecutingArtifact } from "./artifact-receipt.ts";
@@ -29,7 +30,7 @@ export interface VerifiedRun { primary: string; home: string; state: string; pat
 export async function verifiedRun(primary: string, run: string, inspect = restoreArtifact): Promise<VerifiedRun> {
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(run)) throw new Error("Run artifact requires an unambiguous run ID");
   primary = realpathSync(primary);
-  const home = realpathSync(process.env.DAGU_HOME || join(homedir(), ".dagu"));
+  const home = realpathSync(readServiceEnvironment().DAGU_HOME);
   const state = execFileSync("git", ["-C", primary, "rev-parse", "--path-format=absolute", "--git-path", `dagu-feature/runs/${run}`], { encoding: "utf8" }).trim();
   const path = join(state, "receipt.json");
   const { receipt: value, cached } = await receiptArtifact(home, path, inspect);
@@ -74,19 +75,21 @@ export class RunArtifactScope {
   }
 }
 function environment(context: VerifiedRun): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...process.env, PRIMARY: context.primary, RUN: context.receipt.runReceipt.run,
+  const env: NodeJS.ProcessEnv = { ...process.env, ...readServiceEnvironment(), PRIMARY: context.primary, RUN: context.receipt.runReceipt.run,
     A4S_BIN: context.cached.executable, A4S_ARTIFACT: artifactToken(context.cached.record) };
   // The run's admitted policy, not the station reconciler's policy, is authoritative.
   const snapshot: unknown = parseAllDocuments(context.receipt.initial.execution.dagSnapshot)[0]?.toJSON();
   if (isRecord(snapshot) && Array.isArray(snapshot.env)) for (const entry of snapshot.env) {
     if (isRecord(entry)) for (const [key, value] of Object.entries(entry)) {
-      if (/^ESCALATION_/.test(key) && (typeof value === "string" || typeof value === "number")) env[key] = String(value);
+      if ((/^ESCALATION_/.test(key) || ["DAGU_URL", "DAGU_HOME", "PATH", "A4S_SERVICE_ENV"].includes(key)) && (typeof value === "string" || typeof value === "number")) env[key] = String(value);
     }
   }
+  // A changed declaration cannot silently retarget a previously admitted run.
+  readServiceEnvironment(env);
   return env;
 }
 export async function invokeRun(primary: string, run: string, args: string[], options: { capture?: boolean; env?: NodeJS.ProcessEnv } = {}): Promise<{ status: number; stdout: string; stderr: string }> {
-  const home = realpathSync(process.env.DAGU_HOME || join(homedir(), ".dagu"));
+  const home = realpathSync(readServiceEnvironment().DAGU_HOME);
   const { context, lease } = await stationTransaction(home, async () => {
     const context = await verifiedRun(primary, run);
     return { context, lease: createLeaseLocked(home, context.cached.record, 0, "launcher", `run ${run}`) };
@@ -128,7 +131,7 @@ export function executeNative(args: string[]): void {
     "a4s-native", "bash", "git", "gh", "jq", "curl", "node", "omp", "dagu"], { encoding: "utf8" });
   if (tools.error) throw new Error(`a4s native: required command unavailable: bash; no Dagu mutation started (${tools.error.message})`);
   if (tools.status !== 0) throw new Error(tools.stderr.trim() || "a4s native: toolchain preflight failed; no Dagu mutation started");
-  const result = spawnSync("dagu", args, { stdio: "inherit" });
+  const result = spawnSync("dagu", args, { stdio: "inherit", env: { ...process.env, ...readServiceEnvironment() } });
   if (result.error) throw result.error;
   process.exitCode = result.status ?? 1;
 }

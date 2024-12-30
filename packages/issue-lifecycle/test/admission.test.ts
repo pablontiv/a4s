@@ -10,6 +10,7 @@ import { admit, appendObservation, enqueueArguments, preflightAdmission } from "
 import { assertArtifactReceipt, assertExecutingArtifact } from "../src/artifact-receipt.ts";
 import { roleAdmission } from "./role-job-fixtures.ts";
 import { identity } from "../src/identity.ts";
+import { readServiceEnvironment } from "../../launcher/src/service-environment.ts";
 
 const inputs = { dag: "feature", run: "admission", params: ["ISSUE=277", "OMP_SESSION_ID=owner-session"] };
 function snapshot(root: string): Record<string, string> {
@@ -54,7 +55,7 @@ test("read-only admission rejects missing owner and dirty or missing committed p
 test("admission validates the owner and committed policy before creating any engine state", async () => {
   const fixture = admissionFixture();
   try {
-    for (const field of POLICY_PARAMETERS) {
+    for (const field of [...POLICY_PARAMETERS, "DAGU_URL", "DAGU_HOME", "DAGU_PORT", "A4S_SERVICE_ENV", "PATH"]) {
       assert.throws(() => preflightAdmission({ cwd: fixture.packageDir, ...inputs, params: [...inputs.params, `${field}=override`] }), /admission rejected run parameter/);
     }
     for (const owner of [[], ["OMP_SESSION_ID="], ["OMP_SESSION_ID=one", "OMP_SESSION_ID=two"]]) {
@@ -120,6 +121,24 @@ test("hard cutover rejects missing tuples, declarations, and unsupported contrac
     assert.throws(() => assertArtifactReceipt(futureBoundary, "fixture"), /dispatch boundary: required a4s-run\/1.*a4s-run\/2/);
     const config = clone(); delete config.initial.deployment.config.digest;
     assert.throws(() => assertArtifactReceipt(config, "fixture"), /config/);
+  } finally { fixture.dispose(); }
+});
+test("fresh receipt station values cannot be reinterpreted and validation does not rewrite old receipts", () => {
+  const fixture = admissionFixture();
+  try {
+    const receipt = roleAdmission(fixture.packageDir, fixture.home, "station-bound", "", { version: identity.version, commit: "a".repeat(40), digest: "b".repeat(64) });
+    const old = JSON.stringify(receipt);
+    assertArtifactReceipt(receipt, "old");
+    assert.equal(JSON.stringify(receipt), old);
+    receipt.initial.runtimeAndModels.station = readServiceEnvironment();
+    assertArtifactReceipt(receipt, "fresh");
+    const before = snapshot(fixture.root);
+    for (const field of ["DAGU_URL", "DAGU_HOME", "PATH"]) {
+      const changed = structuredClone(receipt);
+      (changed.initial.runtimeAndModels.station as Record<string, string>)[field] = "different";
+      assert.throws(() => assertArtifactReceipt(changed, "fresh"), new RegExp(`differs from admitted ${field}`));
+    }
+    assert.deepEqual(snapshot(fixture.root), before);
   } finally { fixture.dispose(); }
 });
 test("read-only observations retain both legacy records and full immutable artifact fields", () => {

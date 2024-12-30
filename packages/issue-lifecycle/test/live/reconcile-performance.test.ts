@@ -1,3 +1,4 @@
+import { stationEnvironment } from "../fixtures/service-environment.ts";
 import { liveDagu, liveDaguVersion } from "../fixtures/live-dagu.ts";
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
@@ -496,7 +497,7 @@ test("Dagu validates the reconciler and isolated ticks stay inside the minute", 
   mkdirSync(bin);
   const artifact = compiledArtifact(home);
   const source = execFileSync(a4sBin, ["reconcile", "render", "--artifact", artifactToken(artifact)], {
-    env: { ...process.env, DAGU_HOME: home }, encoding: "utf8",
+    env: stationEnvironment({ ...process.env, DAGU_HOME: home }), encoding: "utf8",
   });
   const materialized = join(home, "dags", "reconcile.yaml");
   writeFileSync(materialized, source);
@@ -504,7 +505,7 @@ test("Dagu validates the reconciler and isolated ticks stay inside the minute", 
   const listener = createServer();
   const port = await listen(listener);
   await new Promise<void>((resolve, reject) => listener.close(error => error ? reject(error) : resolve()));
-  const env = { ...process.env, A4S_BIN: a4sBin, PATH: `${bin}:${process.env.PATH}`, DAGU_HOME: home, DAGU_PORT: String(port) };
+  const env = stationEnvironment({ ...process.env, A4S_BIN: a4sBin, PATH: `${bin}:${process.env.PATH}`, DAGU_HOME: home, DAGU_PORT: String(port) });
   let server: ReturnType<typeof spawn> | undefined;
   let scheduler: ReturnType<typeof spawn> | undefined;
   let logs = "";

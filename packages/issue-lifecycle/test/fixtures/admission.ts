@@ -11,6 +11,7 @@ import { checksumDigest, type ArtifactTuple } from "../../../launcher/src/releas
 import { commitStateLocked } from "../../../launcher/src/station-state.ts";
 import type { PersistedFormats } from "../../../launcher/src/station-state.ts";
 import { identity } from "../../src/identity.ts";
+import { declareService, useStation } from "./service-environment.ts";
 
 let compiledDirectory: string | undefined;
 let installedDirectory: string | undefined;
@@ -107,18 +108,21 @@ export function admissionFixture() {
     const commit = execFileSync("git", ["rev-parse", "HEAD"], { cwd: packageDirectory, encoding: "utf8" }).trim();
     writeReleaseDirectory(releases, { repository, moving: {}, releases: [{ tag_name: `v${version}`, commit }] });
     for (const file of [archive, `${archive}.sha256`]) cpSync(join(directory, file), join(releases, file));
+    const path = `${githubBin}:${env.PATH ?? process.env.PATH ?? ""}`;
+    const service = declareService(home, env.DAGU_URL ?? process.env.DAGU_URL!, path);
     return spawnSync(process.execPath, ["--import", import.meta.resolve("tsx"), cli, subcommand, "--run-id", run, dagArg, "--", "ISSUE=277", ...(params.some(param => param.startsWith("OMP_SESSION_ID=")) || !owner ? [] : [`OMP_SESSION_ID=${owner}`]), ...params], { cwd: packageDir,
-      env: { ...process.env, DAGU_HOME: home, A4S_PRIMARY: packageDir, ...env, PATH: `${githubBin}:${env.PATH ?? process.env.PATH ?? ""}`, A4S_FIXTURE_RELEASES: releases }, encoding: "utf8", timeout: 30000 });
+      env: { ...process.env, ...service, A4S_PRIMARY: packageDir, ...env, PATH: path, A4S_FIXTURE_RELEASES: releases }, encoding: "utf8", timeout: 30000 });
   };
   const receipt = (run: string): string => join(packageDir, ".git", "dagu-feature", "runs", run, "receipt.json");
   const observe = (run: string, observation: object) => spawnSync(process.execPath, ["--import", import.meta.resolve("tsx"), cli, "observe", run, JSON.stringify(observation)], { cwd: packageDir, env: { ...process.env, DAGU_HOME: home, A4S_PRIMARY: packageDir, PRIMARY: packageDir }, encoding: "utf8" });
   const previousDaguHome = process.env.DAGU_HOME;
   const previousPrimary = process.env.A4S_PRIMARY;
-  process.env.DAGU_HOME = home;
+  const restoreStation = useStation(home);
   process.env.A4S_PRIMARY = packageDir;
   writeFileSync(join(home, "config.yaml"), "coordinator:\n  enabled: false\n");
   writeFileSync(join(home, "a4s-primary"), `${packageDir}\n`);
   const dispose = (): void => {
+    restoreStation();
     if (previousDaguHome === undefined) delete process.env.DAGU_HOME; else process.env.DAGU_HOME = previousDaguHome;
     if (previousPrimary === undefined) delete process.env.A4S_PRIMARY; else process.env.A4S_PRIMARY = previousPrimary;
     rmSync(root, { recursive: true, force: true });

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { useStation } from "./fixtures/service-environment.ts";
 import { setTimeout as delay } from "node:timers/promises";
 import test, { type TestContext } from "node:test";
 import extension from "../src/status/index.ts";
@@ -27,8 +28,7 @@ async function watcher(t: TestContext, initial: RunDetails[], failure?: "event 5
   const details = new Map<string, number>();
   const ledgers = new Map<string, number>();
   const received: string[] = [];
-  const previous = process.env.DAGU_URL;
-  process.env.DAGU_URL = "http://status-fixture";
+  const restoreStation = useStation(process.env.DAGU_HOME!, "http://127.0.0.1:18765");
   const handlers: Record<string, (event: unknown, context: typeof ctx) => void> = {};
   const ctx = {
     cwd: statusRepository, hasUI: false, isIdle: () => false, agent: { kind: "main" as const },
@@ -67,7 +67,7 @@ async function watcher(t: TestContext, initial: RunDetails[], failure?: "event 5
   });
   t.after(() => {
     handlers.session_shutdown!(null, ctx);
-    if (previous === undefined) delete process.env.DAGU_URL; else process.env.DAGU_URL = previous;
+    restoreStation();
   });
   const until = async (probe: () => boolean) => {
     const deadline = Date.now() + 6000;

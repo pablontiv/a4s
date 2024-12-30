@@ -33,7 +33,7 @@ const processes: RoleProcessBoundary = {
  * In particular, host startup (not merely native tools) must never see step sinks. */
 export function roleEnvironment(environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return Object.fromEntries(Object.entries(environment).filter(([name, value]) => value !== undefined &&
-    (!/^(DAGU_|DAG_RUN_|DAG_)/.test(name) || name === "DAGU_HOME" || name === "DAG_PUSHBACK_ITERATION")));
+    (!/^(DAGU_|DAG_RUN_|DAG_)/.test(name) || ["DAGU_HOME", "DAGU_URL", "DAG_PUSHBACK_ITERATION"].includes(name))));
 }
 function ompBinary(environment: NodeJS.ProcessEnv): string {
   for (const directory of (environment.PATH ?? "").split(delimiter)) {

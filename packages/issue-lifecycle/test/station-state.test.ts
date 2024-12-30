@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { useStation } from "./fixtures/service-environment.ts";
 import { existsSync, mkdirSync, readFileSync, readdirSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -156,6 +157,7 @@ test("failed roots with pending resumes or automatic retries remain live readers
       { name: "other", dagRunId: "resume", statusLabel: "aborted", workspace: "team" },
     ] });
   });
+  t.after(useStation(f.home));
   const runs = await listStationRuns(f.home);
   assert.ok(runs.every(run => run.retryable && run.primary === primary));
   assert.equal(seen.filter(path => path.includes("/spec")).length, 2);

@@ -1,3 +1,4 @@
+import { readServiceEnvironment } from "../../launcher/src/service-environment.ts";
 import { execFile } from "node:child_process";
 import { realpath, stat } from "node:fs/promises";
 import { basename, dirname, join, resolve, sep } from "node:path";
@@ -8,7 +9,7 @@ import { resolveHostPrimary } from "../../launcher/src/primary.ts";
 import { resolveRunPrimary } from "./run-primary.ts";
 
 const exec = promisify(execFile);
-export type ResourceExecutor = (file: string, args: string[], options: { maxBuffer: number; timeout: number }) => Promise<{ stdout: string }>;
+export type ResourceExecutor = (file: string, args: string[], options: { maxBuffer: number; timeout: number; env?: NodeJS.ProcessEnv }) => Promise<{ stdout: string }>;
 const active: Record<string, true> = { queued: true, running: true, waiting: true };
 
 // Literal shell words, including quoted paths and command boundaries. Callers
@@ -94,9 +95,10 @@ async function adoptedPrimary(primary: string): Promise<boolean> {
 }
 interface Owner { kind: string; run: string; status: string; primary: string; branch: string; issue: string }
 export async function readOwners(execute: ResourceExecutor = exec): Promise<Owner[]> {
+  const service = readServiceEnvironment();
   const owners: Owner[] = [];
   for (const kind of ["feature", "poc"]) {
-    const { stdout } = await execute("dagu", ["history", kind, "--format", "json", "--from", "1970-01-01", "--status", "queued,running,waiting", "--limit", "1000"], { maxBuffer: 64 * 1024 * 1024, timeout: 10000 });
+    const { stdout } = await execute("dagu", ["history", kind, "--format", "json", "--from", "1970-01-01", "--status", "queued,running,waiting", "--limit", "1000"], { maxBuffer: 64 * 1024 * 1024, timeout: 10000, env: { ...process.env, ...service } });
     const rows: unknown = JSON.parse(stdout);
     if (!Array.isArray(rows)) throw new Error(`${kind} history is not an array`);
     if (rows.length >= 1000) throw new Error(`${kind} active history reached the 1000-row limit; ownership is incomplete`);
@@ -104,7 +106,7 @@ export async function readOwners(execute: ResourceExecutor = exec): Promise<Owne
       if (typeof row.params !== "string" || typeof row.dagRunId !== "string" || typeof row.status !== "string") throw new Error(`Malformed ${kind} history row`);
       const params = Object.fromEntries([...row.params.matchAll(/(?:^| )([A-Z_]+)=(.*?)(?= [A-Z_]+=|$)/g)].map(match => [match[1]!, match[2]!.replace(/^(['"])(.*)\1$/, "$2")]));
       const primary = await resolveRunPrimary(
-        (process.env.DAGU_URL || "http://127.0.0.1:8080").replace(/\/+$/, ""),
+        service.DAGU_URL,
         { name: kind, dagRunId: row.dagRunId, statusLabel: row.status, params: row.params },
         AbortSignal.timeout(10000),
       );

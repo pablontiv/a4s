@@ -1,3 +1,4 @@
+import { useStation } from "../fixtures/service-environment.ts";
 import { renderedPoc } from "../fixtures/rendered-feature.ts";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -19,15 +20,13 @@ function withConsumerConfig(primary: string, home: string, run: () => void): voi
   execFileSync("git", ["-C", primary, "-c", "user.name=PoC test", "-c", "user.email=poc@example.invalid", "commit", "-qm", "config"], { stdio: "pipe" });
   mkdirSync(home, { recursive: true });
   const previousPrimary = process.env.A4S_PRIMARY;
-  const previousHome = process.env.DAGU_HOME;
+  const restoreStation = useStation(home);
   process.env.A4S_PRIMARY = primary;
-  process.env.DAGU_HOME = home;
   try { run(); }
   finally {
     if (previousPrimary === undefined) delete process.env.A4S_PRIMARY;
     else process.env.A4S_PRIMARY = previousPrimary;
-    if (previousHome === undefined) delete process.env.DAGU_HOME;
-    else process.env.DAGU_HOME = previousHome;
+    restoreStation();
   }
 }
 

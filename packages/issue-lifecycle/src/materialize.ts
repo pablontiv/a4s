@@ -1,3 +1,4 @@
+import { readServiceEnvironment, type ServiceEnvironment } from "../../launcher/src/service-environment.ts";
 import { readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import type { LifecycleConfig } from "../../launcher/src/config.ts";
@@ -20,8 +21,12 @@ function quoted(value: string | number): string {
   return JSON.stringify(String(value));
 }
 
-function replacements(config: LifecycleConfig, identity: { version: string; source: string }): Record<string, string> {
+function replacements(config: LifecycleConfig, identity: { version: string; source: string }, station: ServiceEnvironment): Record<string, string> {
   return {
+    __DAGU_URL__: JSON.stringify(station.DAGU_URL),
+    __DAGU_HOME__: JSON.stringify(station.DAGU_HOME),
+    __SERVICE_PATH__: JSON.stringify(station.PATH),
+    __A4S_SERVICE_ENV__: JSON.stringify(process.env.A4S_SERVICE_ENV),
     "__DAGU_FEATURE_VERSION__": identity.version,
     "__DAGU_FEATURE_IDENTITY__": `dagu-feature-bundle=${identity.version} source=${identity.source}`,
     TEMPLATE_DAGU_FEATURE_VERSION: identity.version,
@@ -46,10 +51,10 @@ function replacements(config: LifecycleConfig, identity: { version: string; sour
 }
 
 /** Fill a verified release template. The result is immutable run state. */
-export function materializeDag(root: string, name: LifecycleDag, config: LifecycleConfig, identity: { version: string; source: string; executable?: string }): string {
+export function materializeDag(root: string, name: LifecycleDag, config: LifecycleConfig, identity: { version: string; source: string; executable?: string; station?: ServiceEnvironment }): string {
   const template = readFileSync(join(root, "skills", "issue-execution", name), "utf8");
   let result = template;
-  const tokens = replacements(config, identity);
+  const tokens = replacements(config, identity, identity.station ?? readServiceEnvironment());
   for (const token of Object.keys(tokens).sort((left, right) => right.length - left.length)) {
     result = result.split(token).join(tokens[token]!);
   }

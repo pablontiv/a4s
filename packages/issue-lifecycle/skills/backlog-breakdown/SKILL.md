@@ -56,7 +56,7 @@ dagu-feature-bundle enqueue --run-id "<repo>-breakdown-<slug>" planning -- \
   UNITS_FROM="<absolute-units.jsonl>" SOURCE=refine OMP_SESSION_ID="<session-id>"
 ```
 
-The installed filename and DAG name remain `planning.yaml` / `planning`. Its steps are `init → import_units → check_plan → review → check_review → approve → approve_cancellation → materialize`. `init` prints the bundle identity and `out_dir`: `${DAGU_HOME:-$HOME/.dagu}/data/planning/<owner>__<repo>/<run-id>/`. `import_units` makes a deterministic copy to `units.jsonl`. `check_plan` invokes the same package validator and records the complete structured diagnostics in `findings.md`. Inspect import/check errors at the waiting `review` checkpoint before requesting a reviewer.
+The installed filename and DAG name remain `planning.yaml` / `planning`. Its steps are `init → import_units → check_plan → review → check_review → approve → approve_cancellation → materialize`. `init` prints the bundle identity and `out_dir`: `$DAGU_HOME/data/planning/<owner>__<repo>/<run-id>/` under the explicitly declared station home. `import_units` makes a deterministic copy to `units.jsonl`. `check_plan` invokes the same package validator and records the complete structured diagnostics in `findings.md`. Inspect import/check errors at the waiting `review` checkpoint before requesting a reviewer.
 
 ## Independent review
 

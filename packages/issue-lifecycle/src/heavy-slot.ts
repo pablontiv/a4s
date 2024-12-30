@@ -1,5 +1,6 @@
+import { readServiceEnvironment } from "../../launcher/src/service-environment.ts";
 import { spawnSync } from "node:child_process";
-import { constants, homedir } from "node:os";
+import { constants } from "node:os";
 import { appendFileSync, closeSync, ftruncateSync, readSync, writeSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -22,7 +23,7 @@ export async function main(args: string[]): Promise<void> {
     process.exitCode = child.status ?? (128 + (constants.signals[child.signal!] ?? 0));
     return;
   }
-  const path = join(resolve(process.env.DAGU_HOME || join(homedir(), ".dagu")), "a4s", "heavy-slot.lock");
+  const path = join(resolve(readServiceEnvironment().DAGU_HOME), "a4s", "heavy-slot.lock");
   const fd = openLock(path);
   let buffer: Buffer | undefined;
   try {

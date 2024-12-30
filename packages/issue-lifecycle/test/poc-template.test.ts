@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { useStation } from "./fixtures/service-environment.ts";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -26,9 +27,10 @@ function withConsumerConfig(primary: string, home: string, run: () => void): voi
   const previousPrimary = process.env.A4S_PRIMARY;
   const previousHome = process.env.DAGU_HOME;
   process.env.A4S_PRIMARY = primary;
-  process.env.DAGU_HOME = home;
+  const restoreStation = useStation(home);
   try { run(); }
   finally {
+    restoreStation();
     if (previousPrimary === undefined) delete process.env.A4S_PRIMARY;
     else process.env.A4S_PRIMARY = previousPrimary;
     if (previousHome === undefined) delete process.env.DAGU_HOME;

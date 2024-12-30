@@ -180,16 +180,21 @@ test("bootstrap probe resolves its nondefault endpoint/home through release-boun
   try {
     const address = server.address();
     assert.ok(address && typeof address !== "string");
-    const selection = declareService(home, `http://127.0.0.1:${address.port}`);
+    const bin = join(home, "bin");
+    const primary = join(home, "primary");
+    mkdirSync(bin);
+    await exec("git", ["init", "-q", primary]);
+    writeFileSync(join(bin, "gh"), '#!/bin/sh\ncase "$*" in\n  "auth status") exit 0 ;;\n  *nameWithOwner*) printf "owner/fixture\\n" ;;\n  "repo view"*) printf "fixture\\n" ;;\n  *) exit 1 ;;\nesac\n', { mode: 0o755 });
+    const selection = declareService(home, `http://127.0.0.1:${address.port}`, `${bin}:${process.env.PATH}`);
     writeFileSync(join(home, "config.yaml"), "auth: {mode: none}\ncoordinator: {enabled: true}\nqueues:\n  config:\n    - {name: fixture, max_concurrency: 2}\n");
     const executable = join(home, "release-a4s");
     const release = fileURLToPath(new URL("../../src/cli.ts", import.meta.url));
-    writeFileSync(executable, `#!/bin/sh\nexec '${process.execPath}' --import '${import.meta.resolve("tsx")}' '${release}' \"$@\"\n`);
+    writeFileSync(executable, `#!/bin/sh\nif [ "$1 $2" = "role-jobs detect" ]; then exit 0; fi\nexec '${process.execPath}' --import '${import.meta.resolve("tsx")}' '${release}' "$@"\n`);
     chmodSync(executable, 0o755);
     const definition = parse(readFileSync(new URL("../../skills/issue-execution/dagu-feature-bootstrap.yaml", import.meta.url), "utf8"));
     const detect = definition.steps.find((step: { id: string }) => step.id === "detect").run as string;
     const probe = detect.slice(detect.indexOf("service_environment="), detect.indexOf("base=${BASE_BRANCH"));
-    const env = { ...process.env, ...selection, A4S_BIN: executable, DAGU_PORT: "1", DAG_RUN_ID: "fixture run" };
+    const env = { ...process.env, ...selection, PRIMARY: primary, A4S_BIN: executable, DAGU_PORT: String(address.port), DAG_RUN_ID: "fixture run" };
     const script = `set -euo pipefail\nrepo=fixture\n${probe}`;
     const before = snapshot(home);
     await exec("bash", ["-c", script], { env });
@@ -197,6 +202,9 @@ test("bootstrap probe resolves its nondefault endpoint/home through release-boun
     requests.length = 0;
     const failure = await exec("bash", ["-c", script], { env: { ...env, A4S_SERVICE_ENV: "" } }).then(() => assert.fail("missing declaration accepted"), error => String(error.stderr));
     assert.match(failure, /service-environment ready=no field=A4S_SERVICE_ENV/);
+    assert.deepEqual(requests, []);
+    const portFailure = await exec("bash", ["-c", script], { env: { ...env, DAGU_PORT: "1" } }).then(() => assert.fail("conflicting port accepted"), error => String(error.stderr));
+    assert.match(portFailure, /DAGU_PORT/);
     assert.deepEqual(requests, []);
     specOk = false;
     const specFailure = await exec("bash", ["-c", script], { env }).then(() => assert.fail("invalid spec accepted"), error => String(error.stderr));

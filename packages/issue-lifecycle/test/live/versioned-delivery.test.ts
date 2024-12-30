@@ -1,3 +1,4 @@
+import { stationEnvironment } from "../fixtures/service-environment.ts";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -21,7 +22,7 @@ test("clean-room station selection, atomic cache, handoff and all successor rout
   const realDagu = execFileSync("which", ["dagu"], { encoding: "utf8" }).trim();
   writeFileSync(join(bin, "dagu"), '#!/usr/bin/env bash\nif [[ "$1" == enqueue ]]; then printf "%s|%s\\n" "$3" "$4" >> "$A4S_ENQUEUE_LOG"; fi\nexec "$A4S_REAL_DAGU" "$@"\n');
   chmodSync(join(bin, "dagu"), 0o755);
-  const environment = { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}`, DAGU_HOME: home, A4S_FIXTURE_RELEASES: releases, A4S_REAL_DAGU: realDagu, A4S_ENQUEUE_LOG: calls };
+  const environment = stationEnvironment({ ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}`, DAGU_HOME: home, A4S_FIXTURE_RELEASES: releases, A4S_REAL_DAGU: realDagu, A4S_ENQUEUE_LOG: calls });
   const initializeHome = (path: string) => {
     mkdirSync(path, { recursive: true });
     writeFileSync(join(path, "config.yaml"), "coordinator:\n  enabled: false\nqueues:\n  enabled: true\n  config:\n    - name: consumer-a\n      max_concurrency: 1\n    - name: consumer-b\n      max_concurrency: 1\n");
@@ -71,7 +72,7 @@ test("clean-room station selection, atomic cache, handoff and all successor rout
     const first = consumer("consumer-a"), second = consumer("consumer-b");
     const invoke = (repo: typeof first, run: string, dag = "feature", options: { binary?: string; parent?: string; params?: string[]; home?: string; artifact?: string } = {}) => {
       const args = [options.binary ?? initialBinary, options.parent ? "enqueue" : "admit", ...(options.artifact ? ["--artifact", options.artifact] : []), ...(options.parent ? ["--parent", options.parent] : []), "--run-id", run, dag, "--", ...(dag === "feature" || dag === "poc" ? ["ISSUE=712"] : []), "OMP_SESSION_ID=cutover-owner", ...(options.params ?? [])];
-      return spawnSync(args[0]!, args.slice(1), { cwd: repo.directory, env: { ...environment, DAGU_HOME: options.home ?? home, A4S_PRIMARY: repo.directory }, encoding: "utf8", timeout: 30000 });
+      return spawnSync(args[0]!, args.slice(1), { cwd: repo.directory, env: stationEnvironment({ ...environment, DAGU_HOME: options.home ?? home, A4S_PRIMARY: repo.directory }), encoding: "utf8", timeout: 30000 });
     };
     const readReceipt = (repo: typeof first, run: string) => JSON.parse(readFileSync(repo.receipt(run), "utf8"));
     const success = (result: SpawnSyncReturns<string>) => assert.equal(result.status, 0, `${result.error?.message ?? ""}\n${result.stdout}\n${result.stderr}`);

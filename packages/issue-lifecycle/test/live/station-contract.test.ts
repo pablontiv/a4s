@@ -1,0 +1,47 @@
+import assert from "node:assert/strict";
+import { spawn, spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import test from "node:test";
+import { parse, stringify } from "yaml";
+import { exampleConfig } from "../../../launcher/src/config.ts";
+import { materializeDag } from "../../src/materialize.ts";
+import { a4sBin } from "../fixtures/a4s.ts";
+import { useStation } from "../fixtures/service-environment.ts";
+import { liveDagu } from "../fixtures/live-dagu.ts";
+
+const executable = a4sBin;
+test("native Dagu carries a fresh rendered station with spaces to shell and snapshot-bound helper", liveDagu, async t => {
+  const home = mkdtempSync(join(tmpdir(), "a4s native station spaces "));
+  const calls: string[] = [];
+  const server = createServer((request, response) => { calls.push(request.url!); response.end("declared station"); });
+  const listening = Promise.withResolvers<void>();
+  server.listen(0, "127.0.0.1", listening.resolve);
+  await listening.promise;
+  const address = server.address(); assert.ok(address && typeof address !== "string");
+  const endpoint = `http://127.0.0.1:${address.port}`;
+  const restore = useStation(home, `${endpoint}///`);
+  t.after(async () => { restore(); server.closeAllConnections(); const closed = Promise.withResolvers<void>(); server.close(() => closed.resolve()); await closed.promise; rmSync(home, { recursive: true, force: true }); });
+  const rendered = materializeDag(fileURLToPath(new URL("../../", import.meta.url)), "planning.yaml", exampleConfig(), { version: "fixture", source: "fixture", executable });
+  const env = parse(rendered).env;
+  const output = join(home, "native result.json");
+  const body = `set -eu\ncurl -fsS "$DAGU_URL/identity"\n"$A4S_BIN" service-environment > ${JSON.stringify(output)}\n`;
+  const dag = join(home, "propagation.yaml");
+  writeFileSync(dag, stringify({ type: "graph", shell: "bash", env, steps: [{ id: "station", run: body }] }));
+  // Keep the event loop free to serve the request from the native shell child.
+  const child = spawn("dagu", ["start", "--run-id", "station-propagation", dag], { env: { ...process.env, DAGU_COORDINATOR_ENABLED: "false" } });
+  let logs = ""; child.stdout.on("data", data => { logs += data; }); child.stderr.on("data", data => { logs += data; });
+  const closed = Promise.withResolvers<number | null>();
+  child.once("error", closed.reject); child.once("close", closed.resolve);
+  const exit = await closed.promise;
+  assert.equal(exit, 0, logs);
+  const observed = JSON.parse(readFileSync(output, "utf8"));
+  assert.equal(observed.DAGU_URL, endpoint); assert.equal(observed.DAGU_HOME, home);
+  assert.deepEqual(calls, ["/identity"]);
+  const conflict = spawnSync(executable, ["service-environment"], { env: { ...process.env, DAGU_PORT: "8080" }, encoding: "utf8" });
+  assert.equal(conflict.status, 1); assert.match(conflict.stderr, /DAGU_PORT/);
+  assert.deepEqual(calls, ["/identity"], "a conflicting ambient port must not reach a second station");
+});

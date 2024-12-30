@@ -11,7 +11,7 @@ que importa más la evidencia que el volumen.
 # Modo
 - Interactivo: hay un operador presente que lee el resumen.
 - Desatendido: ejecución del DAG `discovery`, sin operador; los resultados van
-  al out-dir `${DAGU_HOME:-$HOME/.dagu}/data/discovery/<owner>__<repo>/<DAG_RUN_ID>/`.
+  al out-dir `$DAGU_HOME/data/discovery/<owner>__<repo>/<DAG_RUN_ID>/`, con el home declarado explícitamente por `A4S_SERVICE_ENV`.
 Si no se indica, asume interactivo.
 
 # Definiciones

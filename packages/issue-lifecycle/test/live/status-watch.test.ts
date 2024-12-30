@@ -1,3 +1,4 @@
+import { useStation } from "../fixtures/service-environment.ts";
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import { createServer } from "node:http";
@@ -53,7 +54,7 @@ for (const drift of [undefined, "main", "bundle", "invalid JSON", "unreadable ma
   const address = server.address();
   assert.ok(address && typeof address !== "string");
   const previous = process.env.DAGU_URL;
-  process.env.DAGU_URL = `http://127.0.0.1:${address.port}`;
+  const restoreStation = useStation(process.env.DAGU_HOME!, `http://127.0.0.1:${address.port}`);
   const handlers: Record<string, (event: unknown, context: typeof ctx) => void> = {};
   let busy = !idle;
   let autonomous = 0;
@@ -108,7 +109,7 @@ for (const drift of [undefined, "main", "bundle", "invalid JSON", "unreadable ma
     }
   } finally {
     handlers.session_shutdown!(null, ctx);
-    if (previous === undefined) delete process.env.DAGU_URL; else process.env.DAGU_URL = previous;
+    restoreStation();
     server.closeAllConnections();
     await new Promise<void>(resolve => server.close(() => resolve()));
     rmSync(primary, { recursive: true, force: true });
@@ -145,7 +146,7 @@ for (const switchSession of [false, true]) test(`idle wake delivers later ticket
   const address = server.address();
   assert.ok(address && typeof address !== "string");
   const previous = process.env.DAGU_URL;
-  process.env.DAGU_URL = `http://127.0.0.1:${address.port}`;
+  const restoreStation = useStation(process.env.DAGU_HOME!, `http://127.0.0.1:${address.port}`);
   let busy = false;
   let autonomous = 0;
   const pending: string[] = [];
@@ -221,7 +222,7 @@ for (const switchSession of [false, true]) test(`idle wake delivers later ticket
     assert.deepEqual<string[]>(pending, []);
   } finally {
     handlers.session_shutdown!(null, ctx);
-    if (previous === undefined) delete process.env.DAGU_URL; else process.env.DAGU_URL = previous;
+    restoreStation();
     server.closeAllConnections();
     const closed = once(server, "close");
     server.close();
@@ -277,7 +278,7 @@ for (const scenario of [
   const address = server.address();
   assert.ok(address && typeof address !== "string");
   const previous = process.env.DAGU_URL;
-  process.env.DAGU_URL = `http://127.0.0.1:${address.port}/`;
+  const restoreStation = useStation(process.env.DAGU_HOME!, `http://127.0.0.1:${address.port}/`);
   const handlers: Record<string, (event: unknown, context: typeof ctx) => void> = {};
   const notifications: { message: string; type: string; round: number }[] = [];
   const received: { message: string; round: number }[] = [];
@@ -319,7 +320,7 @@ for (const scenario of [
     }
   } finally {
     handlers.session_shutdown!(null, ctx);
-    if (previous === undefined) delete process.env.DAGU_URL; else process.env.DAGU_URL = previous;
+    restoreStation();
     server.closeAllConnections();
     await new Promise<void>(resolve => server.close(() => resolve()));
   }

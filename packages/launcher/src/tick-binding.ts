@@ -1,3 +1,4 @@
+import { readServiceEnvironment } from "./service-environment.ts";
 import { join } from "node:path";
 import { readJsonFile, realDirectory, stationRoot, tupleFromJson, writeJsonDurable } from "./station-state.ts";
 import { isRecord } from "./type-guard.ts";
@@ -18,8 +19,9 @@ export function validateTickBinding(value: unknown, dagRunId: string): TickBindi
  * Missing history, 404, unreadable details and unknown triggers are not first attempts. */
 export async function confirmFirstAttempt(dagRunId: string, env = process.env): Promise<Attempt> {
   const dag = env.DAG_NAME || TICK_DAG;
+  const endpoint = readServiceEnvironment(env).DAGU_URL;
   try {
-    const response = await fetch(`${(env.DAGU_URL || "http://127.0.0.1:8080").replace(/\/+$/, "")}/api/v1/dag-runs/${encodeURIComponent(dag)}/${encodeURIComponent(dagRunId)}`, { signal: AbortSignal.timeout(15000) });
+    const response = await fetch(`${endpoint}/api/v1/dag-runs/${encodeURIComponent(dag)}/${encodeURIComponent(dagRunId)}`, { signal: AbortSignal.timeout(15000) });
     if (!response.ok) return "unknown";
     const value: unknown = await response.json();
     if (!isRecord(value) || !isRecord(value.dagRunDetails) || value.dagRunDetails.dagRunId !== dagRunId || value.dagRunDetails.name !== dag) return "unknown";

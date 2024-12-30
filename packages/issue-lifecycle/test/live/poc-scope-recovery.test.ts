@@ -1,3 +1,4 @@
+import { stationEnvironment } from "../fixtures/service-environment.ts";
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import { once } from "node:events";
@@ -33,7 +34,7 @@ test("PoC scope recovery re-asks invalid narrow decisions and preserves access/d
   const closed = once(listener, "close");
   listener.close();
   await closed;
-  const env: NodeJS.ProcessEnv = { ...process.env, DAGU_HOME: home, DAGU_PORT: String(port), DAGU_COORDINATOR_ENABLED: "false" };
+  const env: NodeJS.ProcessEnv = stationEnvironment({ ...process.env, DAGU_HOME: home, DAGU_PORT: String(port), DAGU_COORDINATOR_ENABLED: "false" });
   delete env.DAGU_QUEUE_DISPATCH_RETRY;
   delete env.DAG_PUSHBACK_ITERATION;
   writeFileSync(join(home, "config.yaml"), `host: 127.0.0.1\nport: ${port}\nauth:\n  mode: none\ncoordinator:\n  enabled: false\nscheduler:\n  port: 0\n`);

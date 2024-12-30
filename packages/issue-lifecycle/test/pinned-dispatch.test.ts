@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { stationEnv } from "./fixtures/service-environment.ts";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -77,7 +78,7 @@ test("non-mutating commands bypass verification and ambiguous shell mutations fa
 });
 
 test("tick scope shares artifact evidence but rereads every receipt and expires with the tick", async () => {
-  const previous = process.env; process.env = { ...previous, DAGU_HOME: home };
+  const previous = process.env; process.env = { ...previous, ...stationEnv(home) };
   const firstPath = save("first"), secondPath = save("second");
   const cached = cachedArtifact(home); let inspections = 0; let modified = false;
   const inspect = async (station: string, artifact: typeof tuple) => {
@@ -102,7 +103,7 @@ test("tick scope shares artifact evidence but rereads every receipt and expires 
 });
 
 test("verified dispatch binds receipt run, primary and station before accepting cached evidence", async () => {
-  const previous = process.env; process.env = { ...previous, DAGU_HOME: home };
+  const previous = process.env; process.env = { ...previous, ...stationEnv(home) };
   const path = save("identity-mismatch");
   try {
     for (const patch of [
