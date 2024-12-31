@@ -16,7 +16,7 @@ test("package exposes engine and stable launcher; bootstrap never installs stati
   assert.deepEqual(bins, { a4s: "./src/cli.ts", "a4s-launch": "./src/cli.ts" });
   assert.equal(JSON.parse(readFileSync(join(packageDir, "package.json"), "utf8")).bin, undefined);
   const spec = bootstrap();
-  assert.deepEqual(spec.steps.map(step => step.id), ["detect", "config", "worktrees", "write_config", "readiness", "github", "confirm"]);
+  assert.deepEqual(spec.steps.map(step => step.id), ["detect", "config", "config_cancellation", "worktrees", "write_config", "readiness", "github", "confirm"]);
   const detect = spec.steps.find(step => step.id === "detect")!.run!;
   assert.match(detect, /for tool in git gh jq curl dagu "\$A4S_BIN"; do/);
   assert.match(detect, /"\$A4S_BIN" planning sha256 --file \/dev\/null/);

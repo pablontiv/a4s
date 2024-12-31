@@ -641,3 +641,25 @@ substitute. The verifier binds the exact parent session path and generation and
 fails closed for missing or ambiguous evidence; `--no-session` cannot prove that
 provenance. `COORDINATING_SESSION` is admission-owned context, not an overridable
 run parameter. Run native scenarios only through the explicit `test:live` lane.
+
+## Changelog
+
+### 0.7.10
+
+- Add receipt-bound `a4s cancel --run <run>` for queued, waiting and running
+  lifecycle runs. Never-started queued runs are dequeued and finalized locally:
+  their domain/native pair is `cancelled/not_found`, not an invented native
+  terminal state. Running cancellation remains a durable pending request, with
+  no native mutation; safe-point execution belongs to issue #886.
+- Add cancellation gates for planning review and bootstrap configuration.
+  Historical snapshots without their declared cancellation interface are rejected
+  without mutation. Bootstrap binds its receipt to its immutable native snapshot
+  before consumer configuration exists.
+- Share cancellation exit cleanup between native handlers and queued dispatch.
+  Preserve candidate commits and staged, unstaged and untracked work, primary
+  state, remote refs and PR history. Remove only verified owned disposable
+  snapshots; retain candidate ownership and recovery locations in the canonical
+  Git-metadata cancellation record.
+- Keep cancelled runs out of application dispatch, reconciliation and active
+  status. Notifications retain the domain/native distinction and recovery paths,
+  including native history that disappears after dequeue.

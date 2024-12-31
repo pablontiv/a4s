@@ -15,6 +15,7 @@ import { restoreArtifact } from "../../launcher/src/select.ts";
 import { createLeaseLocked } from "../../launcher/src/lease.ts";
 import { stationRoot, stationTransaction } from "../../launcher/src/station-state.ts";
 
+import * as cancellationGuards from "./cancellation.ts";
 const NATIVE_FLAGS: Record<string, "value" | "boolean"> = {
   "--run-id": "value", "-r": "value", "--step": "value", "--sub-run-id": "value", "-s": "value",
   "--expected-iteration": "value", "--input": "value", "--feedback": "value",
@@ -22,6 +23,10 @@ const NATIVE_FLAGS: Record<string, "value" | "boolean"> = {
 };
 let bound: VerifiedRun | undefined;
 export function executingRunArtifact(): boolean { return bound !== undefined; }
+export function runArtifactContext(): VerifiedRun {
+  if (!bound) throw new Error("Cancellation requires a verified receipt-bound dispatch");
+  return bound;
+}
 export function runArtifactState(): string {
   if (!bound) throw new Error("Run state requires a verified receipt-bound dispatch");
   return bound.state;
@@ -111,6 +116,8 @@ export async function invokeRun(primary: string, run: string, args: string[], op
 /** Native transitions cannot change the receipt's DAG/run or station binding. */
 export function executeNative(args: string[]): void {
   if (!bound || !["human-task", "retry", "stop"].includes(args[0] || "")) throw new Error("Native mutation requires a receipt-bound action");
+  const { assertNotCancelled } = cancellationGuards;
+  assertNotCancelled(bound.state);
   const positional: string[] = [], runs: string[] = [];
   for (let index = args[0] === "human-task" ? 2 : 1; index < args.length; index++) {
     const argument = args[index]!, equal = argument.indexOf("=");
@@ -149,7 +156,8 @@ export async function main(args: string[], execute: (args: string[]) => Promise<
   if (!primary || !run) throw new Error("Run dispatch requires --primary and --run");
   const context = await verifiedRun(primary, run);
   const command = args.slice(separator + 1);
-  if (!["reconcile", "stale-recovery", "protect", "role-jobs", "observe", "escalation", "codeql", "poc-scope", "admit", "enqueue", "native"].includes(command[0]!)) throw new Error(`Unsupported run action ${command[0]}`);
+  if (!["cancel", "reconcile", "stale-recovery", "protect", "role-jobs", "observe", "escalation", "codeql", "poc-scope", "admit", "enqueue", "native"].includes(command[0]!)) throw new Error(`Unsupported run action ${command[0]}`);
+  if (["native", "role-jobs", "stale-recovery", "codeql", "poc-scope", "admit", "enqueue"].includes(command[0]!)) cancellationGuards.assertNotCancelled(context.state);
   const requested = values.get("--artifact");
   if (!requested) { process.exitCode = (await invokeRun(primary, run, command)).status; return; }
   if (!sameArtifact(parseArtifact(requested), context.cached.record)) throw new Error("Run handoff tuple differs from the receipt/cache");

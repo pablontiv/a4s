@@ -2,7 +2,7 @@ import { readServiceEnvironment } from "../../../launcher/src/service-environmen
 import { recordRunObservation, receiptCompatibility } from "./receipt.ts";
 import { setTimeout as delay } from "node:timers/promises";
 import { execFile } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { promisify } from "node:util";
 import { activityTarget, readActivity } from "./activity.ts";
 import { ghIssueTitleResolver, IssueTitles } from "./issue-title.ts";
@@ -19,6 +19,10 @@ import type { GenerationScope } from "@a4s/hot-reload";
 import type { TransitionStorage } from "./progress.ts";
 import { WorkflowsWidget } from "./widget.ts";
 import type { WidgetUI, WidgetView } from "./widget.ts";
+import { cancellationState, readCancellation } from "../cancellation.ts";
+import { join } from "node:path";
+import { isRecord } from "../../../launcher/src/type-guard.ts";
+import { cancellationReceipt } from "../../../launcher/src/select.ts";
 
 interface NoticeStorage {
   transitions: TransitionStorage;
@@ -99,6 +103,34 @@ async function discover(base: string, repo: string, signal: AbortSignal, history
   return runs;
 }
 
+/** Native dequeue removes history; durable application outcomes remain discoverable. */
+async function cancelledHistory(primary: string, signal: AbortSignal): Promise<RunDetails[]> {
+  try {
+    const { stdout } = await exec("git", ["-C", primary, "rev-parse", "--path-format=absolute", "--git-common-dir"], { signal, timeout: 5000 });
+    const root = join(stdout.trim(), "dagu-feature", "runs"), runs: RunDetails[] = [];
+    for (const entry of await readdir(root, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      try {
+        const state = join(root, entry.name), cancellation = readCancellation(state);
+        if (cancellation?.outcome !== "cancelled" || cancellation.nativeExpected !== "not_found") continue;
+        const receipt: unknown = JSON.parse(await readFile(join(state, "receipt.json"), "utf8"));
+        if (!isRecord(receipt) || !isRecord(receipt.initial) || !isRecord(receipt.initial.execution) || typeof receipt.initial.execution.primary !== "string") continue;
+        const owner = cancellationReceipt(primary, entry.name).primary;
+        const parameters = receipt.initial.execution.parameters;
+        if (!Array.isArray(parameters) || !parameters.every(value => typeof value === "string")) continue;
+        runs.push({ name: cancellation.dag, dagRunId: cancellation.run, statusLabel: "not_found", resolvedPrimary: owner, params: parameters.join(" "), cancellation });
+      } catch (error) {
+        if (signal.aborted) throw error;
+        // An unsupported historical record cannot hide other owned cancellations.
+      }
+    }
+    return runs;
+  } catch (error) {
+    if (signal.aborted) throw error;
+    return [];
+  }
+}
+
 class RunDetailsError extends Error {
   readonly status: number;
   constructor(status: number) {
@@ -113,12 +145,22 @@ async function runDetails(base: string, summary: RunDetails, signal: AbortSignal
   const response = await fetch(`${base}/api/v1/dag-runs/${dag}/${run}`, {
     signal: AbortSignal.any([signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)]),
   });
-  if (!response.ok) throw new RunDetailsError(response.status);
+  if (!response.ok) {
+    const primary = summary.resolvedPrimary || runParam(summary, "PRIMARY");
+    if (response.status === 404 && primary) {
+      const cancellation = readCancellation(cancellationState(primary, summary.dagRunId));
+      if (cancellation?.outcome === "cancelled" && cancellation.nativeExpected === "not_found")
+        return { ...summary, resolvedPrimary: primary, statusLabel: "not_found", cancellation };
+    }
+    throw new RunDetailsError(response.status);
+  }
   const payload = await response.json() as { dagRunDetails?: RunDetails };
   const details = { ...summary, ...payload.dagRunDetails };
   const primary = await resolveRunPrimary(base, details, signal);
   if (primary) details.resolvedPrimary = primary;
   if (primary) {
+    const cancellation = readCancellation(cancellationState(primary, details.dagRunId));
+    if (cancellation) details.cancellation = cancellation;
     const unsupported = receiptCompatibility(primary, details);
     if (unsupported) details.artifactError = unsupported;
   }
@@ -168,12 +210,14 @@ async function watchNotices(base: string, repo: string, ctx: Context, signal: Ab
   const { tracked, completed } = storage;
   while (!signal.aborted) {
     try {
-      for (const summary of await discover(base, repo, signal, true)) {
+      const discovered = await discover(base, repo, signal, true);
+      discovered.push(...await cancelledHistory(ctx.cwd, signal));
+      for (const summary of discovered) {
         if (signal.aborted) return;
         if (runParam(summary, "OMP_SESSION_ID") !== ctx.sessionManager.getSessionId()) continue;
         const topic = topicFor(summary);
         if (completed.has(topic)) continue;
-        if (storage.initialDiscovery && ["succeeded", "failed", "aborted"].includes(summary.statusLabel)) {
+        if (storage.initialDiscovery && (summary.cancellation?.outcome === "cancelled" || ["succeeded", "failed", "aborted"].includes(summary.statusLabel))) {
           completed.add(topic);
           continue;
         }
@@ -206,7 +250,7 @@ async function watchNotices(base: string, repo: string, ctx: Context, signal: Ab
           const stalls = await readStallNotices(primary, run.dagRunId, signal);
           if (signal.aborted) return;
           const integrationProtection = primary ? readActiveProtection(primary) : undefined;
-          const terminal = ["succeeded", "failed", "aborted"].includes(run.statusLabel);
+          const terminal = run.cancellation?.outcome === "cancelled" || ["succeeded", "failed", "aborted"].includes(run.statusLabel);
           let snapshots: RunDetails[] = [];
           let ledgerRead = false;
           if (!terminal) {
@@ -272,6 +316,7 @@ async function observe(ctx: Context, signal: AbortSignal, wake: (message: string
   const base = readServiceEnvironment().DAGU_URL;
   if (ctx.agent.kind === "main") void watchNotices(base, repo, ctx, signal, wake, storage).catch(() => {});
   const runs = new Map<string, RunDetails>();
+  const cancelled = new Map<string, RunDetails>();
   const transitions = new Transitions(ctx.agent.kind === "main" ? ctx.sessionManager.getSessionId() : undefined,
     undefined, undefined, storage.uiTransitions);
   const titles = new IssueTitles(ghIssueTitleResolver(ctx.cwd));
@@ -285,7 +330,7 @@ async function observe(ctx: Context, signal: AbortSignal, wake: (message: string
   const widget = new WorkflowsWidget();
   const render = (): void => {
     if (!ctx.hasUI || signal.aborted) return;
-    const entries = [...runs.values()].map(run => {
+    const entries = [...runs.values(), ...cancelled.values()].map(run => {
       const issue = issueNumber(run);
       const slug = issue ? titles.get(issue) : undefined;
       const activity = activities.get(topicFor(run));
@@ -333,6 +378,11 @@ async function observe(ctx: Context, signal: AbortSignal, wake: (message: string
   };
   const apply = (run: RunDetails, baseline = false): void => {
     if (signal.aborted) return;
+    const primary = run.resolvedPrimary || runParam(run, "PRIMARY");
+    if (primary) {
+      const cancellation = readCancellation(cancellationState(primary, run.dagRunId));
+      if (cancellation) run.cancellation = cancellation;
+    }
     const issue = issueNumber(run);
     const slug = issue ? titles.get(issue) : undefined;
     const effects = transitions.observe(run, slug ? { baseline, slug, checkpoints: false } : { baseline, checkpoints: false });
@@ -342,6 +392,8 @@ async function observe(ctx: Context, signal: AbortSignal, wake: (message: string
     if (effects.wakeMessage) wake(effects.wakeMessage);
     if (effects.warningMessage) ctx.ui.notify(effects.warningMessage, "warning");
     const key = topicFor(run);
+    if (run.cancellation?.outcome === "cancelled") cancelled.set(key, run);
+    else cancelled.delete(key);
     if (isActive(run)) {
       runs.set(key, run);
       syncActivity(run);
@@ -358,6 +410,7 @@ async function observe(ctx: Context, signal: AbortSignal, wake: (message: string
     let timer: NodeJS.Timeout | undefined;
     try {
       const discovered = await discover(base, repo, roundSignal);
+      discovered.push(...await cancelledHistory(ctx.cwd, roundSignal));
       offlineRetrySeconds = undefined;
       const snapshots = await Promise.all(discovered.map(summary => runDetails(base, summary, roundSignal)));
       const snapshotTopics = new Set<string>();
@@ -366,7 +419,7 @@ async function observe(ctx: Context, signal: AbortSignal, wake: (message: string
         if (snapshotTopics.has(topic)) continue;
         try {
           const run = await runDetails(base, previous, roundSignal);
-          if (["failed", "aborted", "succeeded"].includes(run.statusLabel)) apply(run);
+          if (run.cancellation?.outcome === "cancelled" || ["failed", "aborted", "succeeded"].includes(run.statusLabel)) apply(run);
         } catch (error) {
           if (error instanceof RunDetailsError && error.status === 404) {
             runs.delete(topic);

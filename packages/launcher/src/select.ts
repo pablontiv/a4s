@@ -33,6 +33,15 @@ export function runReceiptPath(primary: string, run: string): string {
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(run)) throw new Error("Invalid run ID");
   return join(execFileSync("git", ["-C", primary, "rev-parse", "--path-format=absolute", "--git-path", `dagu-feature/runs/${run}`], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim(), "receipt.json");
 }
+export function cancellationReceipt(primary: string, run: string): { path: string; primary: string } {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(run)) throw new Error("Invalid run ID");
+  const common = execFileSync("git", ["-C", primary, "rev-parse", "--path-format=absolute", "--git-common-dir"], { encoding: "utf8" }).trim();
+  const path = join(common, "dagu-feature", "runs", run, "receipt.json"), receipt = readJsonFile(path);
+  if (!isRecord(receipt) || !isRecord(receipt.initial) || !isRecord(receipt.initial.execution) || typeof receipt.initial.execution.primary !== "string") throw new Error("Cancellation receipt lacks primary identity");
+  const owner = realpathSync(receipt.initial.execution.primary);
+  if (execFileSync("git", ["-C", owner, "rev-parse", "--path-format=absolute", "--git-common-dir"], { encoding: "utf8" }).trim() !== common) throw new Error("Cancellation receipt belongs to a different repository");
+  return { path, primary: owner };
+}
 export function receiptTuple(path: string): ArtifactTuple {
   const value = readJsonFile(path);
   if (!isRecord(value) || value.schemaVersion !== 2 || !isRecord(value.sourceVersion) || !isRecord(value.contracts) || !isRecord(value.artifactSupport)) throw new Error(`Receipt lacks supported artifact declarations: ${path}`);
@@ -70,6 +79,10 @@ export async function selectPayload(home: string, args: string[], dependencies: 
       const run = isRecord(row) ? row[args[1] === "inspect" ? "RUN" : "run"] : undefined;
       if (typeof primary !== "string" || typeof run !== "string") throw new Error("Reconcile action requires primary and run");
       receiptPath = runReceiptPath(realpathSync(primary), run);
+    } else if (args[0] === "cancel") {
+      const run = flag(args, "--run");
+      if (!run) throw new Error("Cancel requires --run");
+      receiptPath = cancellationReceipt(realpathSync(env.PRIMARY || cwd), run).path;
     } else if (args[0] === "prioritize") {
       if (!args[2]) throw new Error("Prioritize requires an existing run");
       receiptPath = runReceiptPath(realpathSync(env.PRIMARY || cwd), args[2]);
@@ -78,6 +91,8 @@ export async function selectPayload(home: string, args: string[], dependencies: 
       const run = args[1] === "runtime" ? (isRecord(observation) && isRecord(observation.run) && typeof observation.run.dagRunId === "string" ? observation.run.dagRunId : undefined) : args[1];
       if (!run) throw new Error("Observation requires a run");
       receiptPath = runReceiptPath(realpathSync(env.PRIMARY || cwd), run);
+    } else if (args[0] === "cancellation" && env.PRIMARY && (env.RUN || env.DAG_RUN_ID)) {
+      receiptPath = cancellationReceipt(realpathSync(env.PRIMARY), (env.RUN || env.DAG_RUN_ID)!).path;
     } else if (!admission && args[0] !== "tick" && env.RUN && env.PRIMARY && ["reconcile", "stale-recovery", "protect", "role-jobs", "escalation", "codeql", "poc-scope", "native"].includes(args[0]!)) {
       receiptPath = runReceiptPath(realpathSync(env.PRIMARY), env.RUN);
     } else if (args[0] === "tick") {

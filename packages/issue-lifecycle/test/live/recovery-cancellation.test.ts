@@ -5,10 +5,17 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "node:test";
+import { after, test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { parse, stringify } from "yaml";
 import { liveDagu, liveDaguVersion } from "../fixtures/live-dagu.ts";
+import { compiledArtifact } from "../fixtures/admission.ts";
+import { stationEnvironment } from "../fixtures/service-environment.ts";
+import { inspectArtifact } from "../../../launcher/src/artifact-cache.ts";
+
+const engineHome = mkdtempSync(join(tmpdir(), "recovery-engine-"));
+const engine = liveDagu.skip ? undefined : await inspectArtifact(engineHome, compiledArtifact(engineHome));
+after(() => rmSync(engineHome, { recursive: true, force: true }));
 
 type Step = {
   id: string; depends?: string; continue_on?: unknown;
@@ -58,6 +65,8 @@ for (const [index, { pair: [kind, predecessor, checkpoint], mode }] of cases.ent
     await closed;
     const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("DAGU_")));
     Object.assign(env, { HOME: root, DAGU_HOME: home, DAGU_AUTH_MODE: "none", DAGU_COORDINATOR_ENABLED: "false" });
+    Object.assign(env, stationEnvironment({ ...env, DAGU_PORT: String(port) }));
+    env.A4S_BIN = engine!.executable;
     const commands: Array<{ args: string[]; stdout: string }> = [];
     const dagu = (...args: string[]) => {
       const stdout = execFileSync("dagu", args, { env, encoding: "utf8", timeout: 10_000 });
@@ -77,7 +86,7 @@ for (const [index, { pair: [kind, predecessor, checkpoint], mode }] of cases.ent
       }
       throw new Error(`Timed out: ${description}\n${logs}`);
     }
-    const name = `recovery-${index}`;
+    const name = kind;
     const run = "fixture";
     const details = async (): Promise<Details | undefined> => {
       const response = await fetch(`http://127.0.0.1:${port}/api/v1/dag-runs/${name}/${run}`);
@@ -108,7 +117,8 @@ for (const [index, { pair: [kind, predecessor, checkpoint], mode }] of cases.ent
       const code = mode === "unexpected-error" ? 24 : 23;
       const definition = {
         type: "graph", shell: "bash", max_active_steps: 1,
-        env: [{ PRIMARY: primary }, { WORKTREE: primary }, { RUN: run }, { FIXTURE_DECLINE: "" }],
+        env: [{ HOME: root }, { PATH: env.PATH }, { A4S_SERVICE_ENV: env.A4S_SERVICE_ENV }, { DAGU_URL: env.DAGU_URL }, { DAGU_HOME: home },
+          { PRIMARY: primary }, { WORKTREE: primary }, { RUN: run }, { FIXTURE_DECLINE: "" }, { A4S_BIN: engine!.executable }],
         steps: [
           { id: predecessor, continue_on: original.continue_on,
             run: `printf 'attempt\\n' >> "$HOME/attempts"\nif [[ -f "$HOME/repaired" ]]; then exit 0; fi\nexit ${mode === "healthy" ? 0 : code}` },
