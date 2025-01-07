@@ -315,6 +315,27 @@ for (const primarySource of ["adopted env literal", "resolvedPrimary", "historic
   });
 }
 
+test("project quality fallbacks admit both effective implementer families in policy order", async t => {
+  const f = mixedFixture(t);
+  const ctx = { ...f.ctx, models: f.first.models };
+  const policies = readQualityPolicies();
+  for (const role of ["qa", "reviewer"] as const) {
+    assert.deepEqual(policies[role], { fallbackRoles: ["@slow", "@default", "@task"], excludeTaskFamily: true });
+  }
+  const decision = await qualityDecision({
+    toolName: "task", toolCallId: "project-policy", input: { tasks: f.tasks },
+  }, ctx, readQualityPolicies);
+  assert.ok(decision && "input" in decision, JSON.stringify(decision));
+  let hook: ((event: { agent: string; patterns: string[]; spawnKey: string }, ctx: unknown) => { model?: string[] }) | undefined;
+  registerReviewHook({ on: (_event: string, handler: typeof hook) => { hook = handler; } } as never, readQualityPolicies);
+  for (const task of decision.input.tasks) {
+    const selected = hook!({ agent: task.agent, spawnKey: task.name, patterns: ["@slow"] }, ctx);
+    const anthropicImplementer = task.task.includes(qualityMarker(f.second.request, task.agent));
+    assert.deepEqual(selected.model, anthropicImplementer ? ["@task"] : ["@slow"]);
+    assert.equal(ctx.models.resolve(selected.model![0]!)?.provider, anthropicImplementer ? "openai-codex" : "anthropic");
+  }
+});
+
 for (const scenario of ["configured fallback", "exhausted", "missing policy", "malformed initial config", "native reader unavailable"]) {
   test(`quality preflight preserves independent safety with ${scenario}`, async t => {
     const f = fixture(t);

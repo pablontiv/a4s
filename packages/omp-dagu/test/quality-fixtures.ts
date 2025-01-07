@@ -6,8 +6,8 @@ import type { QualityRequest, TranscriptRow } from "../src/triage/quality.ts";
 
 export function readQualityPolicies() {
   return {
-    qa: { fallbackRoles: ["@slow", "@default"], excludeTaskFamily: true },
-    reviewer: { fallbackRoles: ["@slow", "@default"], excludeTaskFamily: true },
+    qa: { fallbackRoles: ["@slow", "@default", "@task"], excludeTaskFamily: true },
+    reviewer: { fallbackRoles: ["@slow", "@default", "@task"], excludeTaskFamily: true },
   };
 }
 
