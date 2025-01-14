@@ -312,3 +312,26 @@ test("planning renders plan workflow and wakes its owner at each human checkpoin
     assert.deepEqual(transitions.observe(candidate), {});
   }
 });
+
+test("validation notice carries the operator procedure, SHA and iteration-bound commands", () => {
+  const sha = "a".repeat(40);
+  const transitions = new Transitions("session-a");
+  const waiting: RunDetails = {
+    ...run, statusLabel: "waiting", dagRunId: "repo-validation",
+    params: "ISSUE=276 PRIMARY=/repo OMP_SESSION_ID=session-a",
+    nodes: [{
+      step: { id: "validation", name: "validation", humanTask: {
+        prompt: `Repository: /repo\nRun: repo-validation; step: validation\nTested SHA: ${sha}\nRepository procedure:\nRun isolated smoke`,
+      } },
+      statusLabel: "waiting", approvalIteration: 3,
+    }],
+  };
+  const notice = transitions.observe(waiting).wakeMessage!;
+  assert.match(notice, /run=repo-validation status=waiting step=validation/);
+  assert.match(notice, /repo=a4s/);
+  assert.ok(notice.includes(`Tested SHA: ${sha}`));
+  assert.match(notice, /Repository procedure:\nRun isolated smoke/);
+  assert.ok(notice.includes(`dagu human-task complete feature --run-id 'repo-validation' --step validation --input APPROVED=yes --input TESTED_SHA='${sha}'`));
+  assert.ok(notice.includes("--expected-iteration 3 --input REASON='<operator reason>'"));
+  assert.equal(transitions.observe(waiting).wakeMessage, undefined);
+});

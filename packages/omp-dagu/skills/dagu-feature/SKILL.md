@@ -29,7 +29,9 @@ flowchart LR
     QR --> V[quality_admit<br/>runtime provenance]
     V --> QT[quality_transition]
     QT -->|FAIL findings: push-back| B
-    QT -->|two current PASS| F[push]
+    QT -->|two current PASS| RV[validation<br/>optional human.task]
+    RV -->|approve tested SHA or skip| F[push]
+    RV -->|reason + observed iteration| B
     F --> FR[recover_push]
     FR -->|operator repair: push-back| F
     FR -->|healthy: skipped| G[pr]
@@ -216,6 +218,7 @@ The bootstrap renders the repository DAG templates when a repository adopts the 
 | `__GATE__` | Default of `GATE`, the local gate command, run with `bash -euo pipefail -c` in the worktree | `just check && just test` | `make hook-validate` |
 | `__REBASE_RESOLVER__` | Default of `REBASE_RESOLVER`, repository conflict-resolution command; empty selects manual conflict recovery | `""` | `""` |
 | `__REQUIRED_CHECK__` | Default of `REQUIRED_CHECK`, the GitHub check that must be required on the default branch | `candidate` | `validate` |
+| `__VALIDATION__` | Optional repository procedure after gate, fixed by adoption; empty skips the checkpoint | `""` | `""` |
 | `__PRIMARY__` | Default clone path in `poc.yaml` | repository clone | repository clone |
 | `__TEST_PATHS__` | Bash ERE for repository test paths; every `*.md` also belongs to cutover | `_test\.go$\|^tests/` | `(^\|/)tests/` |
 
@@ -245,7 +248,7 @@ The steps:
 | Step | Effect |
 |---|---|
 | `detect` | Checks `git`, `gh` (authenticated), `jq` and the exact required `dagu version`; reads package/version, source commit and source `origin`; fetches and requires that clean package commit on the remote default branch; reads repository settings and the installed DAG values and stamps. |
-| `answers` | `human.task` that shows the current stamp, `GATE`, `REQUIRED_CHECK`, `TEST_PATHS` and `REBASE_RESOLVER`, then asks for those four values. Select the test-path ERE and resolver from the repository's actual conventions. |
+| `answers` | `human.task` showing the current stamp, `GATE`, `REQUIRED_CHECK`, `TEST_PATHS`, `REBASE_RESOLVER` and optional `VALIDATION`. Choose the test-path ERE, resolver and validation procedure from repository conventions; validation defaults to empty. |
 | `worktrees` | Makes git ignore `.workspace/worktrees/`. When nothing ignores it yet, appends `/.workspace/worktrees/` to the clone's `info/exclude`, so the primary stays clean without a commit. |
 | `render` | Writes stamped and validated `feature.yaml`, `poc.yaml`, `discovery.yaml`, `planning.yaml`, and `reconcile.yaml` under `<git-dir>/dagu-feature/`, keeping PRIMARY clean. Discovery and planning receive the coordinating workspace label and resolve the target repository from `PRIMARY`. |
 | `reconcile` | Idempotently installs the stamped staged `reconcile.yaml` to `$DAGU_HOME/dags/reconcile.yaml` (`DAGU_HOME` defaults to `~/.dagu`) and validates it. One user-level DAG serves every adopting repository. |
@@ -260,7 +263,8 @@ check plus tests. `REQUIRED_CHECK` is the aggregate CI job:
 dagu status --run-id "bootstrap-<repo>-v<version-with-hyphens>" dagu-feature-bootstrap
 dagu human-task complete --run-id "bootstrap-<repo>-v<version-with-hyphens>" --step answers \
   --input GATE='<current gate>' --input REQUIRED_CHECK='<current check>' \
-  --input TEST_PATHS='<current Bash ERE>' --input REBASE_RESOLVER='<current command or empty>' dagu-feature-bootstrap
+  --input TEST_PATHS='<current Bash ERE>' --input REBASE_RESOLVER='<current command or empty>' \
+  --input VALIDATION='' dagu-feature-bootstrap
 ```
 
 The bootstrap is done when the run is `Succeeded`. To adopt or upgrade, open a
@@ -737,8 +741,8 @@ rejects as `ambiguous session identity`. Supply the new allocated id as
 
 The run resumes through the queue: `capture` → `checkpoint_push` →
 `dependency_review` → `rebase` → `conflict_review` → `gate` → `recover_gate` → `quality_prepare` →
-`quality_review` → `quality_admit` → `quality_transition` → `push` → `recover_push` →
-`pr` → `auto_merge`. Successful commands skip recovery. The
+`quality_review` → `quality_admit` → `quality_transition` → `validation` → `push` →
+`recover_push` → `pr` → `auto_merge`. Successful commands skip recovery. The
 dependency checkpoint automatically completes or returns to triage. A clean
 rebase makes the wait handler complete `conflict_review`; a conflicting rebase
 records the conflict paths, preserves the delivery with conflict markers, and
@@ -753,6 +757,90 @@ command from scratch. If that attempt fails, Dagu retries it once after five
 seconds. The retry therefore repeats setup such as `npm ci`; only after a
 successful gate does the step check that the worktree is clean and record the
 tested SHA.
+
+### Optional repository validation
+
+Bootstrap's optional `VALIDATION` answer is rendered as both the parameter default
+and its sole allowed value. Adoption versions that declaration. A feature enqueue
+with a different value fails parameter validation before a run or any effects.
+An empty declaration skips `validation` after a successful gate; a failed gate
+never reaches push, and the PoC route retains its `POC=no` publication guard.
+
+A declared procedure opens `validation` with the repository, run and gate's
+`tested_sha`. The extension displays that wait to the operator with the procedure
+and exact commands. Execute the procedure against that candidate, then approve:
+
+```sh
+dagu human-task complete feature --run-id '<run>' --step validation \
+  --input APPROVED=yes --input TESTED_SHA='<tested_sha>'
+```
+
+Push accepts the submitted SHA only when it matches current candidate and gate
+evidence, then records `validation.json` with SHA and procedure. Dagu 2.20.1
+forms are static: a well-formed different SHA completes the human task but fails
+the push step before publication, retaining the run at `recover_push` for inspection.
+A changed candidate requires a new gate and validation. On rejection, read
+`dagu status --run-id '<run>' feature` for the current
+push-back iteration (zero if absent) and retain the operator reason:
+
+```sh
+dagu human-task push-back feature --run-id '<run>' --step validation \
+  --expected-iteration <observed-iteration> --input REASON='<operator reason>'
+```
+
+Dagu stores the reason in push-back history and rewinds to `implement` in the same
+run. Corrections/rebases require a fresh gate and validation for the new SHA;
+an earlier SHA approval is rejected. A changed worktree cannot cross push using
+old evidence: return through implement, capture, rebase, gate and validation.
+
+**Authority:** `dagu human-task` has no authentication. Its OS attribution records
+an operator-attributed decision; it does not prove the operator's identity or that
+the procedure was actually executed. REST with `auth.mode: none` has the same
+authority limit. Access to Git and the Dagu store remains advisory, not a sandbox.
+
+#### Example: backscroll smoke, parallel installation
+
+This is an example procedure to declare at adoption, not an adoption of backscroll
+or a change to its CI. Use its tested worktree and a private temporary directory;
+the installed production binary and database stay in place. Read backscroll's
+[local install contract](https://github.com/pablontiv/backscroll/blob/master/docs/runbooks/local-install.md)
+for the candidate's build requirements. Record the commands/results with the SHA.
+
+```sh
+tested_sha='<tested_sha from validation>'
+worktree='<tested backscroll worktree>'
+live_db='<absolute path to the live database>'
+test "$(git -C "$worktree" rev-parse HEAD)" = "$tested_sha"
+test -z "$(git -C "$worktree" status --porcelain)"
+sandbox=$(mktemp -d)
+mkdir -p "$sandbox/bin" "$sandbox/home" "$sandbox/config" \
+  "$sandbox/data" "$sandbox/cache" "$sandbox/work"
+(cd "$worktree" && GOBIN="$sandbox/bin" CGO_ENABLED=0 go install ./cmd/backscroll)
+go version -m "$sandbox/bin/backscroll"
+# Require vcs.revision=$tested_sha and vcs.modified=false in the output.
+# SQLite backup includes a consistent snapshot, including committed WAL data.
+sqlite3 "$live_db" ".backup '$sandbox/copy.db'"
+(
+  cd "$sandbox/work"
+  env -i PATH="$PATH" HOME="$sandbox/home" XDG_CONFIG_HOME="$sandbox/config" \
+    XDG_DATA_HOME="$sandbox/data" XDG_CACHE_HOME="$sandbox/cache" \
+    BACKSCROLL_CONFIG_DIR="$sandbox/config" BACKSCROLL_DATABASE_PATH="$sandbox/copy.db" \
+    SMOKE_BIN="$sandbox/bin/backscroll" bash -euo pipefail <<'SMOKE'
+  "$SMOKE_BIN" presets install --config-home "$XDG_CONFIG_HOME"
+  "$SMOKE_BIN" config --json
+  "$SMOKE_BIN" status
+  "$SMOKE_BIN" validate --json
+  "$SMOKE_BIN" search --text "smoke" --all-projects --json
+SMOKE
+)
+```
+
+Keep source roots isolated under the temporary HOME; review the candidate's
+effective `config --json` if its configuration contract differs. The backup can
+contain private session data: retain it only as required for this validation and
+remove the temporary directory after recording the result. Only then approve the
+tested SHA, or push back with the observed iteration and concrete failure reason.
+
 
 Per-run state under `<git-dir>/dagu-feature/runs/<RUN>` records `identity`,
 `base`, `diff.patch` (full binary patch), `candidate.json` (SHA, tree, message,

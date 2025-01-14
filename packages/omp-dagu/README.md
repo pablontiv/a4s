@@ -512,6 +512,38 @@ git branch dagu/issue-N FETCH_HEAD
 
 El cierre tras merge retira también el checkpoint durable con lease.
 
+## Validación opcional del repositorio
+
+Bootstrap pregunta `VALIDATION` (opcional, vacía por defecto) y adopción fija
+el procedimiento en el default y enum del DAG. Cambiarlo exige una adopción;
+un override distinto al encolar se rechaza antes de crear el run. Para a4s el
+valor sigue vacío. El flujo es `gate → recover_gate → quality_prepare → quality_review → quality_admit → quality_transition → validation → push`:
+vacío omite la espera, gate fallido espera en recuperación y la rama PoC conserva `POC=no` en push.
+
+Con procedimiento declarado, el aviso visible de la extensión y la tarea en
+Dagu muestran repo, run, paso, SHA probado, procedimiento y comandos exactos.
+Tras ejecutar el procedimiento, completar con `APPROVED=yes` y
+`TESTED_SHA=<tested_sha>`. Push exige coincidencia con candidato y gate antes de
+publicar; `validation.json` conserva SHA y procedimiento. Los formularios de
+Dagu 2.20.1 son estáticos: otro SHA bien formado completa la tarea pero falla
+push sin publicar y conserva el run en `recover_push` para inspección.
+Un candidato modificado requiere repetir gate, QA/review y validación. Rechazar con `dagu human-task push-back feature --run-id
+<run> --step validation --expected-iteration <iteración observada> --input
+REASON='<motivo>'`: Dagu conserva el motivo y devuelve a implement. Leer la
+iteración actual en `dagu status`; corrección o rebase repite gate y validación.
+
+**Límite de autoridad:** `dagu human-task` carece de autenticación. Registra una
+decisión atribuida al operador mediante datos del sistema operativo; no demuestra
+su identidad ni la ejecución del smoke. REST con `auth.mode: none` tampoco
+autentica. El acceso directo a Git/store hace el contrato advisory.
+
+El [ejemplo backscroll del skill](skills/dagu-feature/SKILL.md#example-backscroll-smoke-parallel-installation)
+instala el binario del SHA probado en un `GOBIN` temporal paralelo, verifica
+`vcs.revision`/`vcs.modified` con `go version -m` y ejecuta el smoke sobre una copia
+consistente creada con `sqlite3 "$live_db" ".backup '$sandbox/copy.db'"`, con
+HOME, XDG y configuración/base backscroll aislados. La instalación y base de
+producción permanecen intactas. Es solo un ejemplo: este cambio mantiene la
+adopción y CI de backscroll bajo su propio control.
 
 ## Desarrollo
 
