@@ -376,7 +376,10 @@ export default function daguStatus(pi: ExtensionAPI): void {
       // Reserve the autonomous turn before sendMessage can start it.
       if (idle) queue.claimed = true;
       const message = queue.messages.shift()!;
-      pi.sendMessage({ customType: "dagu-state", content: message, display: false }, { deliverAs: "aside" });
+      pi.sendMessage({
+        customType: "dagu-state", content: message,
+        display: /^\[DAGU STATE\] .* status=waiting step=validation\b/.test(message),
+      }, { deliverAs: "aside" });
       if (idle) break;
     }
   };

@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
@@ -47,4 +50,49 @@ test("bootstrap detects source compatibility and renders and confirms all stamps
   assert.match(bootstrap, /REBASE_RESOLVER: \$\{steps.answers.outputs.REBASE_RESOLVER\}/);
   assert.match(bootstrap, /--arg resolver "\$REBASE_RESOLVER"/);
   assert.ok(bootstrap.includes('gsub(\\"__REBASE_RESOLVER__\\"; \\$resolver | tojson)'));
+});
+
+test("feature render preserves the adopted configuration and matches its template", () => {
+  const rendered = readFileSync(fileURLToPath(new URL("../../../.workspace/dagu/dags/feature.yaml", import.meta.url)), "utf8");
+  const replacements: Record<string, string> = {
+    __DAGU_FEATURE_STAMP__: rendered.split("\n")[0]!.slice("# dagu-feature-bundle: ".length),
+    __DAGU_FEATURE_VERSION__: rendered.match(/  - dagu-feature-bundle=(.+)/)![1]!,
+    __DAGU_FEATURE_IDENTITY__: rendered.match(/- DAGU_FEATURE_BUNDLE: "(.+)"/)![1]!,
+    TEMPLATE_REPO: "a4s", TEMPLATE_BASE_BRANCH: '"main"',
+    __GATE__: '"npm ci && npm test && npm run typecheck"',
+    __REBASE_RESOLVER__: '"node packages/omp-dagu/bin/dagu-bundle-rebase.mjs"',
+    __REQUIRED_CHECK__: '"validate"', __VALIDATION__: '""',
+  };
+  let expected = skill("feature.yaml");
+  for (const [placeholder, value] of Object.entries(replacements)) expected = expected.replaceAll(placeholder, value);
+  assert.equal(rendered, expected);
+});
+
+test("bootstrap renders optional validation as the sole adopted value", () => {
+  const bootstrap = skill("dagu-feature-bootstrap.yaml");
+  assert.match(bootstrap, /VALIDATION:\n            type: string\n            default: ""/);
+  const render = bootstrap.split("  - id: render\n")[1]!.split("\n  - id: reconcile")[0]!;
+  const script = render.split("    run: |\n")[1]!.split("\n").map(line => line.slice(6)).join("\n");
+  const root = mkdtempSync(join(tmpdir(), "omp-dagu-bootstrap-validation-"));
+  try {
+    for (const validation of ["", "Run smoke\nKeep 'quotes', $HOME and backslashes \\\\ literal"]) {
+      const stage = join(root, "feature.yaml");
+      const result = spawnSync("bash", ["-c", script], {
+        encoding: "utf8",
+        env: {
+          ...process.env, DAGU_HOME: join(root, "home"), DAG_RUN_ID: "bootstrap-test",
+          SKILL_DIR: fileURLToPath(new URL("../skills/dagu-feature", import.meta.url)),
+          STAGE: stage, REPO: "fixture", BASE_BRANCH: "main", PRIMARY: root,
+          GATE: "true", REQUIRED_CHECK: "validate", TEST_PATHS: "^test/",
+          REBASE_RESOLVER: "node packages/omp-dagu/bin/dagu-bundle-rebase.mjs",
+          VALIDATION: validation, BUNDLE_NAME: "@a4s/omp-dagu", BUNDLE_VERSION: "0.3.14",
+          DAGU_VERSION: "2.20.1", SOURCE_NWO: "owner/repo", SOURCE_SHA: "a".repeat(40),
+        },
+      });
+      assert.equal(result.status, 0, result.stdout + result.stderr);
+      const output = readFileSync(stage, "utf8");
+      assert.ok(output.includes(`default: ${JSON.stringify(validation)}\n    enum: [${JSON.stringify(validation)}]`));
+      assert.ok(output.includes('default: "node packages/omp-dagu/bin/dagu-bundle-rebase.mjs"'));
+    }
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
