@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.67
+
+- Add an adoption-fixed optional repository validation checkpoint between gate and push, with tested-SHA approval, reason-bearing iterative push-back, visible operator notices and isolated smoke guidance (#276).
+
 ## 0.3.58
 
 - Apply station defaults through coordinated admission, running/queued drain, TERM restart and next-enqueue concurrency verification; preserve admission closure and recovery barriers on failure (#255).
