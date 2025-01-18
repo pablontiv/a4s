@@ -1,6 +1,6 @@
 # OMP Dagu
 
-OMP package for the Dagu issue lifecycle: progress widget, triage guard, `triage-reviewer` and `plan-reviewer` agents, and the `dagu-feature`, `backlog-breakdown`, and `discovery` skills and templates. Requires Node.js >=22.19.0 and official Dagu `2.20.1` with local authentication `none`.
+OMP package for the Dagu issue lifecycle: progress widget, admission and quality guards, `triage-reviewer` and `plan-reviewer` agents, and the `dagu-feature`, `backlog-breakdown`, and `discovery` skills and templates. Requires Node.js >=22.19.0 and official Dagu `2.20.1` with local authentication `none`.
 
 ## Runtime distribution
 
@@ -248,7 +248,7 @@ El widget usa el mismo plegado que los HUD `TODO` y `Subagents` de OMP: título 
 
 ```text
 Workflows
- └─ feat #227 widget-plegable ▱▱▱▱▱▱ 0/1 implement waiting · eval Probe (2s)
+ └─ feat #227 widget-plegable ▱▱▱▱▱▱ 0/1 implement running · eval Probe (2s)
 ```
 
 Cada fila usa `<tipo> <identidad> <barra> <done>/<total> <paso> <estado>[ · <actividad>]`; la compatibilidad se informa solo en `[DAGU STATE]`.
@@ -256,7 +256,7 @@ Cada fila usa `<tipo> <identidad> <barra> <done>/<total> <paso> <estado>[ · <ac
 Si REST o las cabeceras SSE exceden su timeout, el widget conserva los runs conocidos y muestra `dagu · lento · reintentando en Ns`. Una conexión rechazada/reseteada o un HTTP 5xx muestra `dagu · sin conexión · reintentando en Ns`. Ambos estados usan el backoff existente (1–30 s); una ronda exitosa restaura la vista normal.
 
 - Un paso de comando `running` consulta cada dos segundos `GET /api/v1/dag-runs/{name}/{dagRunId}/steps/{step}/log?tail=3` y muestra su última línea no vacía.
-- Un `human.task` `triage`, `run_poc` o `implement` en `waiting` localiza la sesión coordinadora con `PRIMARY` y `OMP_SESSION_ID`, selecciona el transcript determinista `TriageReview<ISSUE>`, `Poc<ISSUE>` o `Implement<ISSUE>` y muestra `<herramienta> <intención> (<edad>s)`, sin nombre de tarea. La intención se toma de `i`, luego `title` y luego el argumento principal. Los reintentos `<Nombre>v<N>` son válidos y gana el archivo más reciente.
+- El `human.task` `run_poc` en `waiting` localiza la sesión coordinadora con `PRIMARY` y `OMP_SESSION_ID`, selecciona el transcript `Poc<ISSUE>` (incluidos reintentos `v<N>`) y muestra `<herramienta> <intención> (<edad>s)`. La intención se toma de `i`, luego `title` y luego el argumento principal; gana el archivo más reciente.
 - La lectura del transcript está acotada a sus últimos 256 KiB y descarta líneas parciales. Logs, herramientas e intenciones se sanean y truncan antes de renderizar. Sin log o transcript disponible, la línea conserva el estado sin actividad.
 
 SSE sigue aplicando inmediatamente las transiciones del run; el refresco periódico cubre actividad que SSE no emite por línea. Al cambiar de paso, terminar el run o recibir `session_shutdown`, se abortan la lectura y su temporizador. Las caídas de REST o SSE muestran una reconexión con backoff sin interrumpir la sesión.
@@ -264,7 +264,7 @@ SSE sigue aplicando inmediatamente las transiciones del run; el refresco periód
 ```text
 Workflows
  ├─ feat #182 actividad-real-del-step ▰▰▰▰▱▱ 4/6 gate running · > npm test
- ├─ feat #183 orden-del-widget ▰▱▱▱▱▱ 1/5 implement waiting · Implement183 · edit src/status/progress.ts (12s)
+ ├─ feat #183 orden-del-widget ▰▱▱▱▱▱ 1/5 implement running
  └─ feat #184 plegado-del-widget ▱▱▱▱▱▱ 0/5 triage running
  … 2 more — /workflows
 ```
@@ -293,75 +293,68 @@ cleared on success or failure; session shutdown aborts pending fake fetches and
 closes the simulated SSE stream. Isolated verification of either origin should
 complete all six scenarios within a 30-second external process bound.
 
-## Guard de triage y agente
+## Trabajos semánticos Dagu → OMP
 
-The package distributes `triage-reviewer` with `structured: true`, `tools: []`,
-`spawns: []` and model `@slow`. Its JSON Schema is checked against the single
-source in `src/triage/schema.ts`. The PoC criterion lives in the agent and skill:
-experiment when unexercised external/runtime behavior could change the
-implementation path; reproducing a bug is investigation.
+Los comandos `dagu-role-jobs stage triage|implement` arrancan obligaciones
+autorizadas sin un turno del coordinador. Reutilizan el registro nativo OMP,
+sus prompts, roles, arrays completos de modelos y fallback de sesión. Conflictos
+usa `task` con alcance sobre archivos retenidos; `validation` es decisión humana.
+`quality_review` conserva el join `human.task`: el coordinador lanza QA/reviewer,
+el guard escribe `quality.json` y `quality_admit` mantiene la admisión operativa.
+El executor también soporta QA/reviewer; #514 integrará sus recibos y migrará
+templates/hooks de calidad. El servicio requiere Bun y el runtime OMP instalado
+(`OMP_ROLE_RUNTIME` permite seleccionar su raíz).
 
-1. Attempt to complete `triage` with `POC=no`. The guard responds with
-   `TRIAGE_REVIEW_REQUIRED`, the JSON Schema and the marker
-   `TRIAGE_REVIEW DAG=<dag> RUN=<run> GENERATION=<n> REQUEST=<m>`.
-2. Launch a review `task` with the scope and exact marker in its assignment.
-   Any agent can perform the review; `triage-reviewer` already carries the PoC
-   criterion. The guard injects `outputSchema` and correlates the batch index,
-   allocated ID, generation and request across synchronous results, waits and
-   asynchronous completions.
-3. Repeat the completion with the allocated ID in `--input REVIEW=<id>` when
-   the decision is `poc: "no"`. A `yes` decision keeps triage waiting with its
-   proposed runtime question.
+El contrato estable **schemaVersion 1** conserva
+`<git-common>/dagu-feature/runs/<run>/role-jobs/<id>/{job,result}.json` y los
+artefactos nativos. El id es SHA-256 del JSON canónico con claves ordenadas:
 
-The decision contains exactly `poc` (`yes` or `no`), `behavior`, `question` and
-`reason`; the latter three contain nonempty text. For `no`, the question
-describes the resolved uncertainty and its evidence. Invalid output blocks
-completion with `TRIAGE_REVIEW_INVALID` and `field`, `expected`, `observed`.
-Approval belongs to a DAG, run, generation and request; a successful completion
-consumes it, while a failed completion preserves it. A new request replaces the
-previous request; only its bound result can authorize completion. A rejected
-completion emits a fresh request marker, so a pending older task's result
-cannot authorize that new request. Returning to triage
-requires another review. Submit each triage completion in its own tool call;
-`POC=yes` passes directly.
+```json
+{"repo":"<PRIMARY canónico>","worktree":"<worktree canónico>","lane":"feature","dag":"feature","run":"<run>","stage":"quality_review","role":"qa","sha":"<40 hex>","iteration":0,"attempt":"<intento actual>"}
+```
 
-The primary-session guard and activity reader share agent-directory resolution:
-defined `OMP_PROFILE` (including empty) takes precedence over `PI_PROFILE`.
-A named profile uses `<home>/<PI_CONFIG_DIR or .omp>/profiles/<profile>/agent`;
-without one, `PI_CODING_AGENT_DIR` takes precedence over the default agent directory.
-The guard retains the DAG's home, temporary-root and absolute PRIMARY encodings,
-and reports expected and observed primary paths and transcript directories on
-a mismatch. Runtime session-directory failures block completion with their cause.
+`result.json` contiene `schemaVersion`, `id`, `binding`, identidad de ejecutor
+`{host,pid,processStartedAt}`, estado `completed|failed|interrupted`,
+`readyAt`, `startedAt`, `finishedAt`, `readyToStartMs`, `output` o `error`, y
+`native` cuando existe: sesión/transcript, sello de prefijo `bytes`/`digest`,
+evento emisor, proveedor/modelo efectivos, intentos, fallbacks y routing completo.
+`routing.json`, `assignment.json`, `native-result.json` y `<id>.jsonl` retienen
+las evidencias, incluida la versión OMP y el hash de su ejecutor.
+`IMPLEMENTER` y el `REVIEW` de triage transportan ids de trabajo. La admisión
+actual enlaza el recibo nativo del implementer con el SHA/iteración del candidato
+mediante `candidate.json.implementation` (HEAD de entrada y digest del resultado).
+Conserva el modelo/familia efectivos; QA/reviewer siguen siendo subagentes del
+coordinador con proveniencia verificada. #514 integrará sus role-jobs y #517
+consume esta evidencia semántica. Un `verdict=FAIL` conserva ejecución completada,
+jamás aceptación de calidad. Las observaciones #277 mantienen el recibo inicial.
+[SKILL](skills/dagu-feature/SKILL.md#role-job-receipt-contract-schemaversion-1).
 
-The DAG applies the same authorization when the guard is not loaded. For
-`POC=no`, `REVIEW` is the simple subagent name `TriageReview<ISSUE>` (or
-`TriageReview<ISSUE>v<N>` for a retry), launched by the coordinator identified by
-`OMP_SESSION_ID`. The native `triage_decision` verifier searches for coordinator
-files ending in `_${OMP_SESSION_ID}.jsonl` in
-`$HOME/.omp/agent/sessions/<encoded>` and
-`$HOME/.omp/profiles/*/agent/sessions/<encoded>`. Exactly one parent is required,
-even when only one candidate contains the allocated `REVIEW` child. The verifier
-then reads that exact child's JSONL under the parent stem and checks its exact
-parent session, complete marker
-`TRIAGE_REVIEW DAG=feature RUN=<run> GENERATION=<n> REQUEST=<m>`, start strictly
-after the current `triage.startedAt`, and `poc=no` in the last yield.
-Rejections report consulted directories and match counts. Invalid REST,
-parameters, transcripts or fields fail before comments or state writes.
+El verificador de triage informa el PRIMARY canónico, el recibo exacto del
+role-job y su transcript nativo. Los rechazos conservan la causa y
+`VERIFIER=FAIL` antes de escribir estado o publicar el comentario de triage.
 
-With `@a4s/omp-cross-family-review` loaded, the project's `.omp/config.yml`
-declares exact-name `crossFamilyReview.policies` entries. a4s configures
-`triage-reviewer` and `plan-reviewer` with `fallbackRoles: ["@task", "@slow", "@default"]`
-and `excludeTaskFamily: false` (parent-relative); `reviewer`, `qa` and
-`security-reviewer` use `["@slow", "@default"]` and `true` (parent plus task).
-Every configured policy is strict. Native project/overlay settings are inherited
-by child sessions on both `task` and eval `agent()`; malformed initial effective
-settings block before dispatch. Custom agent policies use the same two-field
-schema; the cross-family package owns the algorithm, not adoption names.
-An unresolved parent identity/family or exhausted eligible candidate chain blocks
-dispatch with diagnostics. At the feature quality gate, the effective implementer
-binding supplies the excluded reference. The independent preflight uses the same
-effective configured fallback policy and uniformly strict four-argument
-`orderReviewModels` API; runtime quota fallback remains native OMP behavior.
+La revisión se vincula por el marcador exacto `Authorized Dagu role job <id>.`
+y el recibo sellado (repositorio, run, SHA, iteración e intento), no por el nombre
+del agente ni por el texto del criterio. `triage-reviewer` sigue siendo el agente
+registrado por defecto y conserva su criterio y routing OMP; el executor inyecta
+el esquema canónico de `src/triage/schema.ts`, idéntico al de su definición.
+El verificador valida todos sus campos y conserva diagnósticos
+`TRIAGE_REVIEW_INVALID: field=... expected=... observed=...`.
+El recibo de trabajo sustituye la correlación de tareas del coordinador:
+la revisión actual pertenece al paso nativo y a su intento autorizado.
+
+SQLite en `$DAGU_HOME/role-jobs.sqlite` serializa claims y recupera resultados
+entre procesos. Su capacidad es **sesiones activas de este boundary por
+DAGU_HOME canónico**, configurable con `A4S_ROLE_JOB_CAPACITY` (por defecto 4)
+y fijada en el primer claim; configuraciones posteriores deben coincidir.
+Es independiente de las colas Dagu y de los semáforos locales de OMP/proveedor,
+no un límite global de otras sesiones del host. Roles mutantes excluyen el
+worktree afectado; otras obligaciones avanzan dentro de su capacidad.
+La duplicación reutiliza la ejecución viva o el resultado durable. Reiniciar
+el scheduler conserva el trabajador vivo. Un propietario ausente se diagnostica
+`interrupted`, retiene evidencia y libera su plaza. Tras inspeccionar efectos,
+se reintenta el mismo paso con `dagu retry --run-id <run> --step triage|implement
+--downstream feature`: el nuevo `startedAt` nativo identifica el intento.
 
 ## Protección de recursos del ciclo
 
@@ -560,7 +553,7 @@ imprime `confirm`.
 
 `implement` entrega archivos dentro del worktree asignado (modificados, nuevos,
 borrados, renombrados y binarios), más `SUMMARY`, `MESSAGE` convencional e
-`IMPLEMENTER` (id asignado del subagente cuya tarea incluye `FEATURE_IMPLEMENT RUN=<run>`).
+`IMPLEMENTER` (id del trabajo nativo cuya asignación incluye `FEATURE_IMPLEMENT RUN=<run>`).
 Dagu valida PRIMARY/worktree canónicos, rama y propietario run/sesión,
 rechaza escapes externos por symlink conservando la entrega, y hace staging y
 commit con un índice privado. El acceso directo de la TUI a Git y al store de
@@ -594,27 +587,15 @@ BEHIND/DIRTY de `await_merge` a `rebase`. La capacidad declarada de la cola se
 conserva (`a4s=8`); pasos ajenos al gate siguen avanzando.
 
 Después, `quality_prepare` genera una solicitud SHA/run/iteración/intento y
-`quality_review` espera dos subagentes distintos del implementador: `qa` y
-`reviewer`. Cada tarea recibe su marcador exacto y el contrato estructurado de
-[SKILL.md](skills/dagu-feature/SKILL.md#effective-qa-and-review); el coordinador
-completa con sus ids `QA` y `REVIEW`. QA ejecuta los comandos de aceptación
-indicados; reviewer inspecciona independientemente el mismo SHA local.
-
-The guard correlates effective JSONL with the parent session and `task`
-invocation, allocated id/role, run, iteration, attempt, read SHA and verdict.
-It attributes provider/model to the actual verdict message and compares it to
-the effective implementer using `ctx.models.family`, retaining attempts, errors
-and `resolvedModelIsFallback`. Its independent strict preflight reads the same
-effective `crossFamilyReview.policies` as the native spawn hook, including the
-configured fallback order; a quality role requires an explicit policy. The
-preflight remains active even without the cross-family extension: the maintained
-triage runtime statically wires the public native settings reader into its
-Node-safe guard. Missing native reader or malformed effective settings block
-quality dispatch before spawning. The hook binds
-the transcript-derived implementer as the authoritative reference instead of the
-parent/`@task`, on both native dispatch routes. QA/reviewer may share a family.
-Indeterminate identities, exhausted candidates or an effective runtime fallback
-in the implementer's family block with diagnostics and retain the candidate.
+`quality_review` arranca `qa` y `reviewer` independientemente del coordinador.
+Cada obligación recibe el marcador SHA/run/iteración/intento exacto y el contrato
+estructurado de [SKILL.md](skills/dagu-feature/SKILL.md#effective-qa-and-review).
+QA ejecuta la aceptación indicada y reviewer inspecciona el mismo candidato;
+sus resultados retienen los comandos, hallazgos y modelos realmente usados.
+La admisión separada (#514) consume los recibos del boundary y valida familias,
+fallbacks efectivos y evidencia del candidato; el recibo de ejecución por sí
+solo no publica ni acepta calidad. Hasta integrar ese consumidor, la admisión
+actual falla cerrada ante evidencia admitida ausente.
 
 `quality.json` contiene dos veredictos independientes con procedencia y hashes
 de transcript; `quality_admit` los valida y `quality_transition` hace push-back
@@ -765,4 +746,4 @@ El gate completo del repositorio es:
 npm ci && npm test && npm run typecheck
 ```
 
-Las pruebas cubren el parser SSE, progreso y actividad viva de comandos y subagentes, identidad y títulos de issues, resolución de repositorios/worktrees, transiciones y avisos del widget, la correlación nativa y el contrato estructurado del guard de triage, y la verificación fail-closed del transcript real ejecutada desde ambos DAG `feature.yaml`.
+Las pruebas cubren SSE, progreso, identidad de repositorios/worktrees, transiciones, trabajos semánticos multiproceso, capacidad compartida, recuperación y verificación fail-closed de resultados/transcripts nativos.

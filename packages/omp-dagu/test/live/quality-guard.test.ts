@@ -53,7 +53,19 @@ test("real Dagu implement guard and quality push-back", {
   const dag = join(home, "dags", "feature.yaml");
   // The installed engine runs real human tasks; provider transcripts are explicit synthetic fixtures.
   const template = readFileSync(new URL("../../skills/dagu-feature/feature.yaml", import.meta.url), "utf8");
-  const implementForm = template.slice(template.indexOf("      form:\n", template.indexOf("  - id: implement\n")), template.indexOf("  - id: capture\n"));
+  // In-flight runs keep their admitted human-task snapshot (e.g. 0.3.108),
+  // even though newly admitted runs dispatch implement as a command stage.
+  const implementForm = `      form:
+        type: object
+        required: [SUMMARY, MESSAGE, IMPLEMENTER]
+        properties:
+          SUMMARY:
+            type: string
+          MESSAGE:
+            type: string
+          IMPLEMENTER:
+            type: string
+`;
   const quality = template.slice(template.indexOf("  - id: quality_review\n"), template.indexOf("  - id: quality_admit\n"))
     .replace("depends: quality_prepare", "depends: seal");
   const sealed = join(root, "sealed.txt");

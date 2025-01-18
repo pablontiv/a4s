@@ -1,3 +1,0 @@
-{"type":"session","parentSession":"__PARENT__"}
-{"type":"session_init","agent":"reviewer","task":"Review this issue scope and return a structured decision.","timestamp":"2026-10-15T12:00:01Z"}
-{"type":"message","message":{"role":"toolResult","toolName":"yield","details":{"data":{"poc":"no"}}}}
