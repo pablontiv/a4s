@@ -22,27 +22,6 @@ steps:
   - id: discover
     run: |
       set -euo pipefail
-      resolve_primary_binding() {
-        local value=$1 workspace=$2 home sentinel
-        sentinel='${A4S_'"PRIMARY}"
-        if [[ "$value" != "$sentinel" ]]; then
-          [[ "$value" == /* && "$value" != *'$'* && "$value" != *[[:space:]] && "$value" != [[:space:]]* ]] || return 1
-          printf '%s\n' "$value"
-          return 0
-        fi
-        home=${DAGU_HOME:?explicit station home required}
-        if [[ "$workspace" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ && -f "$home/primaries/$workspace" ]]; then
-          value=$(tr -d '\r\n' < "$home/primaries/$workspace")
-        elif [[ -n ${A4S_PRIMARY:-} ]]; then
-          value=$A4S_PRIMARY
-        elif [[ -f "$home/a4s-primary" ]]; then
-          value=$(tr -d '\r\n' < "$home/a4s-primary")
-        else
-          return 1
-        fi
-        [[ "$value" == /* && "$value" != *'$'* && "$value" != *[[:space:]] && "$value" != [[:space:]]* ]] || return 1
-        printf '%s\n' "$value"
-      }
       # Page the local API from the Unix epoch. A creation-time window or a single
       # response cap must not drop an active Waiting run. A repeated cursor fails
       # closed instead of emitting a partial selection.
@@ -108,7 +87,7 @@ steps:
             exit 1
           fi
           workspace=$(jq -r '[.spec | split("\n")[] | select(startswith("  - workspace=")) | ltrimstr("  - workspace=")] | first // ""' "$TMP/spec")
-          if ! primary=$(resolve_primary_binding "$primary" "$workspace"); then
+          if ! primary=$("$A4S_BIN" primary-binding "$primary" "$workspace"); then
             echo "discover: cannot resolve PRIMARY for $run" >&2
             exit 1
           fi
