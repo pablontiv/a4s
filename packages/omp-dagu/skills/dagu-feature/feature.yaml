@@ -407,16 +407,37 @@ steps:
       if test -f "$STATE/dependencies"; then
         cp "$STATE/dependencies" "$STATE/reviewed-dependencies"
       fi
+      if [[ "$POC" == yes ]]; then
+        target="poc-$RUN"
+        if dagu status --run-id "$target" poc > "$STATE/poc-status" 2>&1; then
+          printf 'Reusing PoC run %s\n' "$target"
+        else
+          lookup_status=$?
+          if ! [[ "$(cat "$STATE/poc-status")" == *"dag-run ID not found: $target" ]]; then
+            cat "$STATE/poc-status" >&2
+            exit "$lookup_status"
+          fi
+          dagu-feature-bundle enqueue --run-id "$target" "$PRIMARY/.workspace/dagu/dags/poc.yaml" -- \
+            ISSUE="$ISSUE" QUESTION="$QUESTION" BASE_BRANCH="$BASE_BRANCH" \
+            OMP_SESSION_ID="$OMP_SESSION_ID"
+        fi
+      fi
       {
         printf '<!-- poc-triage:%s run:%s -->\n\n' "$POC" "$RUN"
         printf '## Pregunta\n\n%s\n\n## BASIS\n\n%s\n\n## REVIEW\n\n%s\n' "$QUESTION" "$BASIS" "${REVIEW:-}"
       } > "$STATE/triage.md"
       cd "$PRIMARY"
-      gh issue comment "$ISSUE" --body-file "$STATE/triage.md"
       if [[ "$POC" == yes ]]; then
-        dagu-feature-bundle enqueue --run-id "poc-$RUN" "$PRIMARY/.workspace/dagu/dags/poc.yaml" -- \
-          ISSUE="$ISSUE" QUESTION="$QUESTION" BASE_BRANCH="$BASE_BRANCH" \
-          OMP_SESSION_ID="$OMP_SESSION_ID"
+        gh issue view "$ISSUE" --json comments > "$STATE/triage-comments.json"
+        published=$(jq -er --arg marker "<!-- poc-triage:yes run:$RUN -->" \
+          '[.comments[] | select(.body | split("\n")[0] == $marker)] | length' "$STATE/triage-comments.json")
+        if (( published > 0 )); then
+          printf 'Reusing triage comment for %s\n' "$RUN"
+        else
+          gh issue comment "$ISSUE" --body-file "$STATE/triage.md"
+        fi
+      else
+        gh issue comment "$ISSUE" --body-file "$STATE/triage.md"
       fi
 
   - id: detect_start_primary

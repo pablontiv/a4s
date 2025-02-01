@@ -755,9 +755,6 @@ parent, and one or more `session_init` rows sharing the `triage-reviewer` agent
 and identical feature/RUN task. Native fallback refreshes preserve the first
 init's strictly-after-cutoff freshness check and `poc=no` in the final yield.
 The transcript must satisfy every identity, generation and verdict binding.
-`POC=yes` publishes
-`<!-- poc-triage:yes run:<RUN> -->`, enqueues the absolute repository `poc.yaml`
-with ISSUE and QUESTION, and ends the feature run.
 The native verifier first finds exactly one coordinator file ending in
 `_${OMP_SESSION_ID}.jsonl` across `$HOME/.omp/agent/sessions/<encoded>` and
 `$HOME/.omp/profiles/*/agent/sessions/<encoded>`, using the existing home,
@@ -765,6 +762,17 @@ temporary-root and absolute PRIMARY encodings. It then reads only the exact
 allocated `REVIEW.jsonl` under that parent's stem. Parent uniqueness is required
 even if only one parent has the requested child. Diagnostics list consulted
 directories, parent paths and match counts before any state or publication effects.
+
+For `POC=yes`, `triage_decision` first resolves the deterministic target
+`poc-<RUN>` through `dagu status --run-id`. An existing target is reused
+regardless of its current status; an explicitly missing run is enqueued from
+the absolute repository `poc.yaml` with ISSUE and QUESTION. Other lookup errors
+and enqueue failures fail the step with their diagnostics before publishing a
+triage comment. After successful resolution, it publishes
+`<!-- poc-triage:yes run:<RUN> -->` only when that marker is missing from the
+issue's comments. Repeating the same generation reuses both the target and
+comment, then ends the feature run. Comment lookup or publication failures
+remain failures; retry resolves the same target before trying publication again.
 
 ## Recover a checkpoint after native stale-process repair
 

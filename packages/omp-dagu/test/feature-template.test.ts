@@ -519,10 +519,11 @@ test("template isolated PoC parent succeeds after exactly one child enqueue acro
     const home = join(repo.root, "dagu-home");
     mkdirSync(join(home, "dags"), { recursive: true });
     const bin = join(repo.root, "bin");
+    writeFileSync(join(bin, "dagu"), '#!/bin/sh\ncase "$1" in\nhistory) echo "[]" ;;\nstatus) echo "Error: dag-run ID not found: $3" >&2; exit 1 ;;\n*) echo "unexpected dagu $*" >&2; exit 1 ;;\nesac\n');
     const calls = join(repo.root, "external-calls");
     writeFileSync(calls, "");
     for (const command of ["gh", "dagu-feature-bundle"]) {
-      writeFileSync(join(bin, command), `#!/bin/bash\nprintf '%s\\n' ${JSON.stringify(command + " ")}"$*" >> ${JSON.stringify(calls)}\n`);
+      writeFileSync(join(bin, command), `#!/bin/bash\nprintf '%s\\n' ${JSON.stringify(command + " ")}"$*" >> ${JSON.stringify(calls)}\nif [[ "$1 $2" == "issue view" ]]; then echo '{"comments":[]}'; fi\n`);
       chmodSync(join(bin, command), 0o755);
     }
     const source = readFileSync(definitions[0][1], "utf8");
@@ -549,9 +550,110 @@ test("template isolated PoC parent succeeds after exactly one child enqueue acro
     assert.equal(status.status, 0, status.stdout + status.stderr);
     assert.match(status.stdout, /Succeeded/);
     assert.deepEqual(readFileSync(calls, "utf8").trim().split("\n"), [
-      `gh issue comment 189 --body-file ${join(repo.primary, ".git", "dagu-feature", "runs", "poc-parent", "triage.md")}`,
       `dagu-feature-bundle enqueue --run-id poc-poc-parent ${repo.primary}/.workspace/dagu/dags/poc.yaml -- ISSUE=189 QUESTION=runtime behavior BASE_BRANCH=main OMP_SESSION_ID=parent-id`,
+      "gh issue view 189 --json comments",
+      `gh issue comment 189 --body-file ${join(repo.primary, ".git", "dagu-feature", "runs", "poc-parent", "triage.md")}`,
     ]);
+  } finally { rmSync(repo.root, { recursive: true, force: true }); }
+});
+
+test("template repeated yes triage resolves its target before publishing and preserves lookup failures", () => {
+  const repo = repository();
+  try {
+    const bin = join(repo.root, "triage-stubs");
+    const calls = join(repo.root, "triage-calls");
+    const target = join(repo.root, "poc-target");
+    const comments = join(repo.root, "triage-comments.json");
+    mkdirSync(bin);
+    writeFileSync(comments, '{"comments":[]}');
+    writeFileSync(join(bin, "dagu"), `#!/bin/bash
+if [[ "\${LOOKUP_FAILURE:-}" == yes ]]; then echo 'store unavailable' >&2; exit 7; fi
+if test -f "$TARGET"; then exit 0; fi
+echo "Error: dag-run ID not found: $3" >&2
+exit 1
+`);
+    writeFileSync(join(bin, "dagu-feature-bundle"), `#!/bin/bash
+echo enqueue >> "$CALLS"
+if [[ "\${ENQUEUE_FAILURE:-}" == yes ]]; then exit 8; fi
+touch "$TARGET"
+`);
+    writeFileSync(join(bin, "gh"), `#!/bin/bash
+if [[ "$1 $2" == "issue view" ]]; then cat "$COMMENTS"; else
+  test -f "$TARGET" || exit 9
+  echo comment >> "$CALLS"
+  jq --rawfile body "$5" '.comments += [{body:$body}]' "$COMMENTS" > "$COMMENTS.tmp"
+  mv "$COMMENTS.tmp" "$COMMENTS"
+fi
+`);
+    for (const command of ["dagu", "dagu-feature-bundle", "gh"]) chmodSync(join(bin, command), 0o755);
+    const script = extractScript(definitions[0][1], "  - id: triage_decision");
+    const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, PRIMARY: repo.primary,
+      RUN: "repeat-triage", POC: "yes", QUESTION: "runtime", BASIS: "regression", REVIEW: "",
+      ISSUE: "189", BASE_BRANCH: "main", OMP_SESSION_ID: "stub-session",
+      TARGET: target, COMMENTS: comments, CALLS: calls };
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const result = spawnSync("bash", ["-c", script], { env, encoding: "utf8", timeout: 30_000 });
+      assert.equal(result.status, 0, result.stdout + result.stderr);
+    }
+    assert.deepEqual(readFileSync(calls, "utf8").trim().split("\n"), ["enqueue", "comment"]);
+    const lookupFailure = spawnSync("bash", ["-c", script], {
+      env: { ...env, LOOKUP_FAILURE: "yes" }, encoding: "utf8", timeout: 30_000,
+    });
+    assert.equal(lookupFailure.status, 7);
+    assert.match(lookupFailure.stderr, /store unavailable/);
+    rmSync(target);
+    const enqueueFailure = spawnSync("bash", ["-c", script], {
+      env: { ...env, ENQUEUE_FAILURE: "yes" }, encoding: "utf8", timeout: 30_000,
+    });
+    assert.equal(enqueueFailure.status, 8);
+    assert.equal(JSON.parse(readFileSync(comments, "utf8")).comments.length, 1);
+  } finally { rmSync(repo.root, { recursive: true, force: true }); }
+});
+
+test("template triage repeats reuse a real isolated PoC target; enqueue failure publishes no GitHub-stub comment", { ...liveDagu, timeout: 120_000 }, () => {
+  const repo = repository();
+  try {
+    const home = join(repo.root, "isolated-home");
+    const bin = join(repo.root, "triage-bin");
+    const comments = join(repo.root, "comments.json");
+    const calls = join(repo.root, "enqueue-calls");
+    mkdirSync(bin);
+    mkdirSync(join(repo.primary, ".workspace/dagu/dags"), { recursive: true });
+    writeFileSync(join(repo.primary, ".workspace/dagu/dags/poc.yaml"), "name: poc\nsteps:\n  - name: disposable\n    run: echo isolated\n");
+    writeFileSync(comments, '{"comments":[]}');
+    writeFileSync(join(bin, "gh"), `#!/bin/bash
+set -euo pipefail
+if [[ "$1 $2" == "issue view" ]]; then cat "$COMMENTS"; else
+  jq --rawfile body "$5" '.comments += [{body:$body}]' "$COMMENTS" > "$COMMENTS.tmp"
+  mv "$COMMENTS.tmp" "$COMMENTS"
+fi
+`);
+    // Admission and GitHub are stubs; run storage, status and enqueue use installed Dagu.
+    writeFileSync(join(bin, "dagu-feature-bundle"), `#!/bin/bash
+printf '%s\\n' "$*" >> "$CALLS"
+exec dagu "$@"
+`);
+    for (const command of ["gh", "dagu-feature-bundle"]) chmodSync(join(bin, command), 0o755);
+    const script = extractScript(definitions[0][1], "  - id: triage_decision");
+    const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, DAGU_HOME: home,
+      DAGU_COORDINATOR_ENABLED: "false", PRIMARY: repo.primary, RUN: "repeat-triage",
+      POC: "yes", QUESTION: "runtime", BASIS: "regression", REVIEW: "", ISSUE: "189",
+      BASE_BRANCH: "main", OMP_SESSION_ID: "stub-session", COMMENTS: comments, CALLS: calls };
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const result = spawnSync("bash", ["-c", script], { env, encoding: "utf8", timeout: 45_000 });
+      assert.equal(result.status, 0, result.stdout + result.stderr);
+    }
+    assert.equal(readFileSync(calls, "utf8").trim().split("\n").length, 1);
+    assert.equal(JSON.parse(readFileSync(comments, "utf8")).comments.length, 1);
+    const status = spawnSync("dagu", ["status", "--run-id", "poc-repeat-triage", "poc"], { env, encoding: "utf8" });
+    assert.equal(status.status, 0, status.stdout + status.stderr);
+    rmSync(join(repo.primary, ".workspace/dagu/dags/poc.yaml"));
+    env.RUN = "failed-triage";
+    const failed = spawnSync("bash", ["-c", script], { env, encoding: "utf8", timeout: 45_000 });
+    assert.notEqual(failed.status, 0);
+    assert.match(failed.stderr, /poc.yaml/);
+    assert.equal(JSON.parse(readFileSync(comments, "utf8")).comments.length, 1);
+    console.log("LIVE isolated installed Dagu: repeated poc-repeat-triage reused; actual missing-DAG enqueue failed; GitHub/admission are stubs.");
   } finally { rmSync(repo.root, { recursive: true, force: true }); }
 });
 
@@ -2101,7 +2203,7 @@ for (const [name, definition] of definitions) {
               // The only GitHub effect on this path is the triage comment.
               const gh = join(repo.root, "bin", "gh");
               mkdirSync(dirname(gh), { recursive: true });
-              writeFileSync(gh, '#!/bin/sh\ncase "$*" in\n  "issue comment 189 --body-file "*) exit 0 ;;\n  *) echo "unexpected gh $*" >&2; exit 1 ;;\nesac\n');
+              writeFileSync(gh, '#!/bin/sh\ncase "$*" in\n  "issue view 189 --json comments") echo \'{"comments":[]}\' ;;\n  "issue comment 189 --body-file "*) exit 0 ;;\n  *) echo "unexpected gh $*" >&2; exit 1 ;;\nesac\n');
               chmodSync(gh, 0o755);
               // Admission is exercised against real Dagu in bundle-cli.test.ts;
               // this fixture isolates the lifecycle's post-admission routing.

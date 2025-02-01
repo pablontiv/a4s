@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.107
+
+- Resolve or reuse the deterministic PoC run before publishing triage, preserve lookup/enqueue failures, and reuse the same generation's triage comment on retry (#295).
+- Exercise repeat triage and enqueue-failure ordering against installed Dagu in an isolated home with explicitly stubbed GitHub and admission boundaries.
+
 ## 0.3.106
 
 - Diagnose rejected automatic checkpoint transitions after native stale-process repair and document same-run checkpoint recovery for feature, PoC, discovery and planning (#524).
