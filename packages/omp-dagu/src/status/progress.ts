@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   BUNDLE_VERSION,
   bundleVersionFromLabels,
@@ -67,14 +69,27 @@ export function runBundleState(run: RunDetails): {
   version: string | undefined;
   displayVersion: string;
   extensionVersion: string;
+  mainVersion: string;
   compat: Compatibility;
 } {
   const version = bundleVersionFromLabels(run.labels);
+  const primary = runParam(run, "PRIMARY");
+  let mainVersion = "unknown";
+  if (primary) {
+    try {
+      const manifest: unknown = JSON.parse(readFileSync(join(primary, "packages/omp-dagu/package.json"), "utf8"));
+      if (manifest && typeof manifest === "object" && "version" in manifest && typeof manifest.version === "string") {
+        mainVersion = manifest.version;
+      }
+    } catch { /* An unreadable primary cannot establish exact version equality. */ }
+  }
+  const compatibility = classifyCompatibility(version, BUNDLE_VERSION);
   return {
     version,
     displayVersion: version ?? "unstamped",
     extensionVersion: BUNDLE_VERSION,
-    compat: classifyCompatibility(version, BUNDLE_VERSION),
+    mainVersion,
+    compat: primary && (version !== BUNDLE_VERSION || mainVersion !== BUNDLE_VERSION) ? "stale" : compatibility,
   };
 }
 
@@ -154,6 +169,7 @@ export interface TransitionEffects {
   notification?: Notification;
   wakeMessage?: string;
   wakeMessages?: string[];
+  abortMessage?: string;
 }
 
 interface State {
@@ -178,7 +194,7 @@ export class Transitions {
     const supported = ["feature", "poc", "discovery"].includes(run.name);
     const bundle = runBundleState(run);
     const identity = issue ? ` issue=${issue}` : ` dag=${plain(run.name)}`;
-    const bundleNotice = ` bundle=${plain(bundle.displayVersion)} extension=${bundle.extensionVersion} compat=${bundle.compat}`;
+    const bundleNotice = ` bundle=${plain(bundle.displayVersion)} extension=${bundle.extensionVersion} main=${plain(bundle.mainVersion)} compat=${bundle.compat}`;
     const messages: string[] = [];
     const notice = (id: string, text: string): void => {
       if (this.notices.has(id)) return;
@@ -215,6 +231,9 @@ export class Transitions {
     }
     if (messages.length === 1) effects.wakeMessage = messages[0]!;
     else if (messages.length) effects.wakeMessages = messages;
+    if (messages.length && bundle.compat === "stale") {
+      effects.abortMessage = "Restart the OMP session to load main, then run the bootstrap re-seal (dagu-feature-bootstrap.yaml) and adopt its stamped renders before resuming.";
+    }
     return effects;
   }
 }

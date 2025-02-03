@@ -1,14 +1,23 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { BUNDLE_VERSION } from "../src/bundle.ts";
 import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
 import extension from "../src/status/index.ts";
 
-for (const idle of [true, false]) test(`watcher delivers five owner notices exactly once with receiver idle=${idle}`, { timeout: 15_000 }, async () => {
+for (const stale of [undefined, "main", "bundle"] as const) for (const idle of [true, false]) test(`watcher delivers five owner notices exactly once with receiver idle=${idle}, stale=${stale}`, { timeout: 15_000 }, async () => {
+  const primary = mkdtempSync(join(tmpdir(), "omp-dagu-notice-"));
+  mkdirSync(join(primary, "packages/omp-dagu"), { recursive: true });
+  writeFileSync(join(primary, "packages/omp-dagu/package.json"), JSON.stringify({ version: stale === "main" ? "0.3.8" : BUNDLE_VERSION }));
+  let aborts = 0;
+  const instructions: string[] = [];
   let ready = false;
   const runs = Array.from({ length: 5 }, (_, n) => ({
-    name: "feature", dagRunId: `burst-${n}`, statusLabel: "waiting", labels: ["workspace=a4s"],
-    params: "OMP_SESSION_ID=owner", nodes: [{ step: { id: "triage", name: "triage", humanTask: {} }, statusLabel: "waiting" }],
+    name: "feature", dagRunId: `burst-${n}`, statusLabel: "waiting", labels: ["workspace=a4s", `dagu-feature-bundle=${stale === "bundle" ? "0.3.8" : BUNDLE_VERSION}`],
+    params: `OMP_SESSION_ID=owner PRIMARY=${primary}`, nodes: [{ step: { id: "triage", name: "triage", humanTask: {} }, statusLabel: "waiting" }],
   }));
   const requests: string[] = [];
   const server = createServer((request, response) => {
@@ -44,9 +53,10 @@ for (const idle of [true, false]) test(`watcher delivers five owner notices exac
   const received: string[] = [];
   const ctx = {
     cwd: process.cwd(), hasUI: false, isIdle: () => !busy, agent: { kind: "main" as const },
+    abort() { aborts++; },
     sessionManager: { getSessionId: () => "owner" }, ui: {
       theme: { fg: (_color: string, text: string) => text, bold: (text: string) => text, tree: { branch: "├─", last: "└─" } },
-      setWidget() {}, notify() {},
+      setWidget() {}, notify(message: string) { instructions.push(message); },
     },
   };
   extension({
@@ -78,11 +88,18 @@ for (const idle of [true, false]) test(`watcher delivers five owner notices exac
     } else await until(() => received.length === 5);
     await delay(1200); // A second head sweep replays the same ledger IDs.
     assert.deepEqual(received.map(message => message.match(/run=(\S+)/)?.[1]), runs.map(run => run.dagRunId));
+    assert.equal(aborts, stale ? 5 : 0);
+    assert.equal(instructions.length, stale ? 5 : 0);
+    for (const message of received) {
+      assert.ok(message.includes(`main=${stale === "main" ? "0.3.8" : BUNDLE_VERSION} compat=${stale ? "stale" : "ok"}`), message);
+    }
+    for (const instruction of instructions) assert.match(instruction, /Restart.*session.*bootstrap re-seal/);
   } finally {
     handlers.session_shutdown!(null, ctx);
     if (previous === undefined) delete process.env.DAGU_URL; else process.env.DAGU_URL = previous;
     server.closeAllConnections();
     await new Promise<void>(resolve => server.close(() => resolve()));
+    rmSync(primary, { recursive: true, force: true });
   }
 });
 
@@ -139,6 +156,7 @@ for (const scenario of [
   let widget: string[] | undefined;
   const ctx = {
     cwd: process.cwd(), hasUI: true, isIdle: () => false, agent: { kind: "main" as const },
+    abort() {},
     sessionManager: { getSessionId: () => "owner" }, ui: {
       theme: { fg: (_color: string, text: string) => text, bold: (text: string) => text, tree: { branch: "├─", last: "└─" } },
       setWidget(_key: string, lines: string[] | undefined) { widget = lines; },

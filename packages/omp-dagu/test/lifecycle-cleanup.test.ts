@@ -92,6 +92,7 @@ case "$*" in
   *"pr view"*"--json state"*) printf 'MERGED\\n' ;;
   *"pr view"*"--json headRefOid"*) printf '%s\\n' ${JSON.stringify(tested)} ;;
   *"pr checks"*) printf 'SUCCESS\\n' ;;
+  "pr diff 209 --repo ${repo.remote} --name-only") printf 'value.txt\\n' ;;
   *) printf 'unexpected gh arguments: %s\\n' "$*" >&2; exit 3 ;;
 esac
 `);

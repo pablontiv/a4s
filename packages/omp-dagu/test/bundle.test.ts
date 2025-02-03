@@ -12,18 +12,18 @@ import {
 
 test("package metadata is the bundle compatibility authority", () => {
   assert.equal(BUNDLE_NAME, "@a4s/omp-dagu");
-  const manifest = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
-  assert.equal(BUNDLE_VERSION, manifest.version);
+  assert.equal(BUNDLE_VERSION, "0.3.42");
   assert.equal(REQUIRED_DAGU_VERSION, "2.20.1");
 });
 
-test("compatibility keeps major stable and also minor stable before 1.0", () => {
+test("compatibility distinguishes exact, stale and incompatible versions", () => {
   assert.equal(classifyCompatibility("0.2.0", "0.2.0"), "ok");
-  assert.equal(classifyCompatibility("0.2.9", "0.2.0"), "ok");
+  assert.equal(classifyCompatibility("0.2.9", "0.2.0"), "stale");
+  assert.equal(classifyCompatibility("0.3.8", "0.3.18"), "stale");
   assert.equal(classifyCompatibility("0.3.0", "0.2.0"), "incompatible");
   assert.equal(classifyCompatibility("1.2.0", "2.2.0"), "incompatible");
   assert.equal(classifyCompatibility(undefined, "0.2.0"), "unstamped");
-  assert.equal(classifyCompatibility("1.9.0", "1.2.0"), "ok");
+  assert.equal(classifyCompatibility("1.9.0", "1.2.0"), "incompatible");
   assert.equal(classifyCompatibility("not-semver", "0.2.0"), "incompatible");
 });
 

@@ -15,6 +15,7 @@ interface Context {
   cwd: string;
   hasUI: boolean;
   isIdle(): boolean;
+  abort(): void;
   agent: { kind: "main" | "sub" };
   sessionManager: { getSessionId(): string; getSessionDir?(): string };
   ui: {
@@ -140,6 +141,10 @@ async function watchNotices(base: string, repo: string, ctx: Context, signal: Ab
           for (const snapshot of await ledger.read(base, run, signal)) {
             const effects = transitions.observe(snapshot, { baseline });
             for (const message of effects.wakeMessages ?? (effects.wakeMessage ? [effects.wakeMessage] : [])) wake(message);
+            if (effects.abortMessage) {
+              ctx.ui.notify(effects.abortMessage, "error");
+              ctx.abort();
+            }
             if (snapshot.statusLabel === "succeeded") {
               completed.add(topic);
               tracked.delete(topic);
@@ -232,6 +237,10 @@ async function observe(ctx: Context, signal: AbortSignal, wake: (message: string
       ctx.ui.notify(effects.notification.message, effects.notification.type);
     }
     if (effects.wakeMessage) wake(effects.wakeMessage);
+    if (effects.abortMessage) {
+      ctx.ui.notify(effects.abortMessage, "error");
+      ctx.abort();
+    }
     const key = topicFor(run);
     if (isActive(run)) {
       runs.set(key, run);

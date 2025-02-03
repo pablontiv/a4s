@@ -13,6 +13,7 @@ for (const failure of ["discover timeout", "details timeout", "headers timeout",
     const handlers: Record<string, (event: unknown, context: typeof ctx) => void> = {};
     const ctx = {
       cwd: process.cwd(), hasUI: true, isIdle: () => true, agent: { kind: "sub" as const },
+      abort() {},
       sessionManager: { getSessionId: () => "owner" },
       ui: {
         theme: { fg: (_color: string, text: string) => text, bold: (text: string) => text, tree: { branch: "├─", last: "└─" } },
