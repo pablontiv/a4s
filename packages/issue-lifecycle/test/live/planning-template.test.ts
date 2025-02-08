@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync, type SpawnSyncReturns } from "node:child_process";
-import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -46,8 +46,8 @@ function fixture(): Fixture {
   for (const dir of [bin, out, primary, join(root, "tmp")]) mkdirSync(dir);
   writeFileSync(join(root, "external-issues.json"), JSON.stringify([{ number: 442 }]));
   writeFileSync(join(root, "issues.json"), "[]\n");
-  executable(join(bin, "gh"), `#!/bin/bash\nexport PLANNING_GH_STATE=${JSON.stringify(root)}\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(fileURLToPath(new URL("../fixtures/planning-github-state.cjs", import.meta.url)))} "$@"\n`);
-  executable(join(bin, "curl"), `#!/bin/bash
+  executable(join(bin, "gh"), `#!/usr/bin/env bash\nexport PLANNING_GH_STATE=${JSON.stringify(root)}\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(fileURLToPath(new URL("../fixtures/planning-github-state.cjs", import.meta.url)))} "$@"\n`);
+  executable(join(bin, "curl"), `#!/usr/bin/env bash
 set -euo pipefail
 jq -nc --argjson iteration "\${FAKE_ITERATION:-0}" --argjson nodes "\${FAKE_REVIEW_NODES:-null}" '
   {dagRunDetails:{nodes:(if $nodes != null then $nodes else
@@ -56,7 +56,7 @@ jq -nc --argjson iteration "\${FAKE_ITERATION:-0}" --argjson nodes "\${FAKE_REVI
 '
 `);
   const env = { ...process.env, A4S_BIN: a4sBin, HOME: root, TMPDIR: join(root, "tmp"), PRIMARY: primary, OUT_DIR: out, UNITS_FROM: upstream, NWO: "owner/repo", RUN: testRunId("repo-breakdown-test"), SOURCE: "plan", OMP_SESSION_ID: "owner-session", DAGU_OUTPUT_FILE: join(root, "outputs"), PATH: `${bin}:${process.env.PATH}` };
-  const run = (id: string, extra: NodeJS.ProcessEnv = {}) => spawnSync("bash", ["-c", script(id)], { env: { ...env, ...extra }, encoding: "utf8" });
+  const run = (id: string, extra: NodeJS.ProcessEnv = {}) => spawnSync("bash", ["--noprofile", "--norc", "-c", script(id)], { env: { ...env, ...extra }, encoding: "utf8" });
   const importRows = (rows: unknown[]) => { jsonl(upstream, rows); return run("import_units"); };
   return { root, bin, out, upstream, env, run, importRows, close: () => rmSync(root, { recursive: true, force: true }) };
 }
@@ -80,6 +80,39 @@ function accepted(f: Fixture, rows: unknown[] = [unit()]): void {
   successful(f.importRows(rows)); successful(f.run("check_plan")); transcript(f);
   successful(f.run("check_review", { REVIEW: "PlanReviewTest" }));
 }
+
+test("planning approval cancellation stops writes and CANCEL=no preserves approved publication", () => {
+  for (const CANCEL of ["yes", "no"]) {
+    const f = fixture();
+    try {
+      accepted(f);
+      if (CANCEL === "yes") executable(join(f.bin, "dagu"), `#!/usr/bin/env bash
+[[ "$*" == "stop --run-id $RUN planning" ]] || exit 1
+printf '%s\\n' "$*" > "$OUT_DIR/stop-request"
+exit 77
+`);
+      const result = f.run("approve_cancellation", { CANCEL, APPROVED: "all" });
+      assert.equal(result.status, CANCEL === "yes" ? 77 : 0, result.stderr);
+      if (CANCEL === "yes") {
+        assert.deepEqual(JSON.parse(readFileSync(join(f.out, "cancellation.json"), "utf8")), {
+          run: f.env.RUN, checkpoint: "approve", outcome: "cancelled", nativeExpected: "aborted",
+        });
+        assert.equal(readFileSync(join(f.out, "stop-request"), "utf8"), `stop --run-id ${f.env.RUN} planning\n`);
+        assert.deepEqual(JSON.parse(readFileSync(join(f.root, "issues.json"), "utf8")), []);
+        assert.throws(() => readFileSync(join(f.root, "github.log")), { code: "ENOENT" });
+      } else {
+        successful(f.run("materialize", { APPROVED: "all" }));
+        assert.equal(JSON.parse(readFileSync(join(f.root, "issues.json"), "utf8")).length, 1);
+        assert.throws(() => readFileSync(join(f.out, "cancellation.json")), { code: "ENOENT" });
+        for (const APPROVED of ["", "${steps.approve.outputs.APPROVED}"]) {
+          const missing = f.run("approve_cancellation", { CANCEL, APPROVED });
+          assert.equal(missing.status, 1);
+          assert.match(missing.stderr, /Normal completion requires APPROVED/);
+        }
+      }
+    } finally { f.close(); }
+  }
+});
 
 test("import consumes only an explicit absolute upstream JSONL snapshot and reimports corrected units", () => {
   const f = fixture();
@@ -117,7 +150,7 @@ test("upstream package CLI and native check_plan emit identical complete diagnos
   const f = fixture();
   try {
     const cli = fileURLToPath(new URL("../../bin/dagu-feature-bundle.ts", import.meta.url));
-    const upstream = () => spawnSync(process.execPath, [cli, "validate-planning-units", "--input", f.upstream], { encoding: "utf8" });
+    const upstream = () => spawnSync(process.execPath, ["--import", "tsx", cli, "validate-planning-units", "--input", f.upstream], { encoding: "utf8" });
     writeFileSync(f.upstream, JSON.stringify({ ...unit(), id: "Bad ID", title: null, body: null, labels: [7] }) + '\n{invalid}\n' +
       JSON.stringify({ ...unit("second", "poc"), question: null, source: "other" }) + "\n");
     successful(f.run("import_units"));
@@ -361,7 +394,7 @@ test("discovery source identity reuses a persistent unit across distinct backend
   } finally { f.close(); }
 });
 
-test("native planning push-back uses structured iteration across mechanical consumers", {
+test("native planning push-back and cancellation preserve guarded materialization", {
   ...liveDagu,
   timeout: 120_000,
 }, async t => {
@@ -378,7 +411,7 @@ test("native planning push-back uses structured iteration across mechanical cons
     return address.port;
   };
   const httpPort = await port(), schedulerPort = await port();
-  Object.assign(f.env, { DAGU_HOME: home, DAGU_PORT: String(httpPort), DAGU_COORDINATOR_ENABLED: "false" });
+  Object.assign(f.env, { DAGU_HOME: home, DAGU_CONFIG: join(home, "config.yaml"), DAGU_PORT: String(httpPort), DAGU_COORDINATOR_ENABLED: "false" });
   writeFileSync(join(home, "config.yaml"), `host: 127.0.0.1\nport: ${httpPort}\nauth:\n  mode: none\ncoordinator:\n  enabled: false\nscheduler:\n  port: ${schedulerPort}\n`);
   jsonl(f.upstream, [{ ...unit("consumer"), relationships: [{ kind: "blocked_by", target: { unit: "contract" } }] }, unit("contract")]);
   const native = structuredClone(definition);
@@ -480,13 +513,46 @@ test("native planning push-back uses structured iteration across mechanical cons
     });
     assert.equal(readFileSync(join(f.out, "review-accepted"), "utf8").trim(), marker(1));
     assert.equal(readFileSync(join(f.out, "reviewed-units.jsonl"), "utf8"), readFileSync(f.upstream, "utf8"));
-    dagu("human-task", "complete", "planning", "--run-id", f.env.RUN!, "--step", "approve", "--input", "APPROVED=all");
+    dagu("human-task", "complete", "planning", "--run-id", f.env.RUN!, "--step", "approve", "--input", "CANCEL=no", "--input", "APPROVED=all");
     const publishing = await state("materialize", "running");
     mechanical(publishing, "materialize", 1);
     rmSync(join(f.root, "hold-materialize"));
     await state("materialize", "succeeded");
     assert.deepEqual(readFileSync(join(f.out, "issues.jsonl"), "utf8").trim().split("\n").map(row => JSON.parse(row).id), ["consumer", "contract"]);
     t.diagnostic(JSON.stringify({ version: liveDaguVersion, run: f.env.RUN, iteration: 1, consumers: holds, review: "review-1.json", sessionInits: 2, fixture: "real native runtime/push-back/approval/materialize; synthetic consistent fallback-refresh reviewer transcript and GitHub provider" }));
+    const published = readFileSync(join(f.root, "github.log"), "utf8");
+    for (const { approved, missingInput } of [
+      { approved: false, missingInput: false },
+      { approved: true, missingInput: false },
+      { approved: false, missingInput: true },
+    ]) {
+      f.env.RUN = testRunId(`repo-breakdown-cancel-${missingInput ? "import" : approved ? "approved" : "only"}`);
+      rmSync(join(f.out, "cancellation.json"), { force: true });
+      dagu("enqueue", "--run-id", f.env.RUN, path, "--", `UNITS_FROM=${missingInput ? join(f.root, "missing-units.jsonl") : f.upstream}`, "SOURCE=refine", `OMP_SESSION_ID=${f.env.OMP_SESSION_ID}`);
+      await state("review", "waiting");
+      dagu("human-task", "complete", "planning", "--run-id", f.env.RUN, "--step", "review", "--input", "REVIEW=UnknownReviewer");
+      await state("approve", "waiting");
+      assert.equal(existsSync(join(f.out, "review-accepted")), false, "rejected handoff cannot authorize publication");
+      dagu("human-task", "complete", "planning", "--run-id", f.env.RUN, "--step", "approve", "--input", "CANCEL=yes", ...(approved ? ["--input", "APPROVED=all"] : []));
+      let lastCancellationState: Run | undefined;
+      const cancelled = await until("native cancellation terminal state", async () => {
+        const response = await fetch(`${api}/dag-runs/planning/${f.env.RUN}`);
+        assert.ok(response.ok);
+        const run = (await response.json() as { dagRunDetails: Run }).dagRunDetails;
+        lastCancellationState = run;
+        return run.statusLabel === "aborted" ? run : undefined;
+      }).catch(error => {
+        t.diagnostic(JSON.stringify({ run: f.env.RUN, status: lastCancellationState?.statusLabel, nodes: lastCancellationState?.nodes.map(node => ({ id: node.step.id, status: node.statusLabel })) }));
+        throw error;
+      });
+      assert.equal(cancelled.nodes.find(node => node.step.id === "approve_cancellation")?.statusLabel, "aborted");
+      assert.equal(cancelled.nodes.find(node => node.step.id === "materialize")?.statusLabel, "not_started");
+      assert.equal(readFileSync(join(f.root, "github.log"), "utf8"), published, "cancellation performs no GitHub writes");
+      assert.deepEqual(JSON.parse(readFileSync(join(f.out, "cancellation.json"), "utf8")), {
+        run: f.env.RUN, checkpoint: "approve", outcome: "cancelled", nativeExpected: "aborted",
+      });
+      t.diagnostic(JSON.stringify({ version: liveDaguVersion, run: f.env.RUN, CANCEL: "yes", APPROVED: approved ? "all" : "omitted", missingInput, native: cancelled.statusLabel, materialize: "not_started", githubWrites: 0 }));
+    }
   } finally {
     for (const id of holds) rmSync(join(f.root, `hold-${id}`), { force: true });
     service.kill("SIGTERM");

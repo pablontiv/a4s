@@ -4,7 +4,7 @@ import { test } from "node:test";
 import { parse } from "yaml";
 import { waitingSnapshot } from "./fixtures/waiting-snapshot.ts";
 
-type Step = { id: string; action?: string; depends?: string | string[]; run?: string; env?: Record<string, string>[]; continue_on?: unknown; preconditions?: unknown; with?: { form: { properties: Record<string, unknown> } } };
+type Step = { id: string; action?: string; depends?: string | string[]; run?: string; env?: Record<string, string>[]; continue_on?: unknown; preconditions?: unknown; with?: { form: { properties: Record<string, unknown>; required?: string[] } } };
 for (const kind of ["feature", "poc", "discovery"]) {
   test(`${kind} declares cancellation-only input and gates every checkpoint successor`, () => {
     const source: { steps: Step[]; handler_on: { exit: { run: string }; failure?: { run: string } } } = parse(readFileSync(new URL(`../skills/issue-execution/${kind}.yaml`, import.meta.url), "utf8"));
@@ -25,6 +25,32 @@ for (const kind of ["feature", "poc", "discovery"]) {
     if (kind === "poc") assert.match(source.handler_on.failure!.run, /cancellation\.json/);
   });
 }
+
+test("planning approval guards cancellation and normal materialization as separate branches", () => {
+  const source: { steps: Step[] } = parse(readFileSync(new URL("../skills/issue-execution/planning.yaml", import.meta.url), "utf8"));
+  for (const id of ["import_units", "check_plan", "check_review"]) {
+    assert.deepEqual(source.steps.find(step => step.id === id)?.continue_on, { failure: true, mark_success: true },
+      `${id} must not rewind a completed cancellation checkpoint when resuming`);
+  }
+  const approve = source.steps.find(step => step.id === "approve")!;
+  assert.deepEqual(approve.with?.form.properties.CANCEL, { type: "string", enum: ["yes", "no"] });
+  assert.deepEqual(approve.with?.form.required, ["CANCEL"], "cancellation needs no APPROVED; publication requires an explicit choice");
+  const gate = source.steps.find(step => step.id === "approve_cancellation")!;
+  assert.equal(gate.depends, "approve");
+  assert.equal(gate.continue_on, undefined, "cancellation failure must stop materialization");
+  assert.match(gate.run!, /if \[\[ "\$CANCEL" == yes \]\]; then[\s\S]*outcome:"cancelled"[\s\S]*exit 77/);
+  assert.match(gate.run!, /nativeExpected:"aborted"[\s\S]*dagu stop --run-id "\$RUN" planning/);
+  assert.match(gate.run!, /Normal completion requires APPROVED/);
+  assert.deepEqual(source.steps.filter(step => step.depends === "approve").map(step => step.id), ["approve_cancellation"]);
+  const materialize = source.steps.find(step => step.id === "materialize")!;
+  assert.equal(materialize.depends, gate.id);
+  assert.deepEqual(materialize.preconditions, [{ condition: "${steps.approve.outputs.CANCEL}", expected: "no" }]);
+  const conditions = materialize.preconditions as { condition: string; expected: string }[];
+  for (const [CANCEL, allowed] of [["yes", false], ["no", true]] as const) {
+    assert.equal(conditions.every(condition => condition.expected === CANCEL), allowed, `CANCEL=${CANCEL} publication gate`);
+  }
+});
+
 test("feature and PoC suites leave cancellation scenarios registered once", () => {
   for (const file of ["feature-template.test.ts", "poc-template.test.ts"]) {
     const source = readFileSync(new URL(`./${file}`, import.meta.url), "utf8");
