@@ -335,6 +335,7 @@ steps:
     continue_on:
       failure: true
       skipped: true
+      mark_success: true
     preconditions:
       - condition: "${steps.run_poc.outputs.decline}"
         expected: "re:^$"
@@ -404,10 +405,8 @@ steps:
     depends: fix_result
     continue_on: skipped
     preconditions:
-      - condition: "${scope_gate.exit_code}"
-        expected: "re:^[1-9][0-9]*$"
-      - condition: "${steps.run_poc.outputs.decline}"
-        expected: "re:^$"
+      - condition: "${steps.fix_result.outputs.CANCEL}"
+        expected: "re:^(yes|no)$"
     env:
       - CANCEL: ${steps.fix_result.outputs.CANCEL}
       - CHECKPOINT: fix_result

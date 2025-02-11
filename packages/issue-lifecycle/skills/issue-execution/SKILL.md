@@ -1917,6 +1917,29 @@ any successor. Missing normal fields fail that gate with `Normal completion
 requires <field>`, rather than completing delivery. Conditional form schemas
 are not supported by this runtime.
 
+Recovery checkpoints (`recover_start_gate`, `recover_gate`, `recover_push`,
+`recover_poc_scope`, and PoC `fix_result`) need **both** resume protections:
+their recoverable predecessor declares `continue_on.mark_success: true`, and
+the immediate cancellation gate routes on the persisted human response
+`${steps.<checkpoint>.outputs.CANCEL}` (`yes|no`), not the predecessor's
+`${<step>.exit_code}`. Dagu 2.24.0 otherwise retries a failed predecessor on
+completion; marking success alone is unsafe because its old exit-code condition
+can skip cancellation and permit successors after resume. The command's error
+remains in its native node even though the node is marked Succeeded.
+
+The maintained isolated `test/live/recovery-cancellation.test.ts` exercises this
+combined shape: `CANCEL=yes` leaves predecessor attempts at one, fails the gate
+with exit 77, terminates native Failed, suppresses the successor and runs onExit.
+It retains the unsafe mark-success-only regression, healthy execution, completion
+with omitted/`no` CANCEL, and explicit repair/push-back. A normal recovery
+completion still bypasses the failed command; it is not a repair. Use the
+checkpoint's declared push-back destination and current observed iteration to
+rerun after repair. Automatic repair dispatchers keep their existing destinations.
+Discovery currently has no failure-recovery human tasks; its ordinary checkpoint
+gates are unchanged. No already-admitted snapshot is rewritten: older recovery
+snapshots with only a CANCEL field or only mark-success do not support this
+cancellation procedure.
+
 The immediate `<step>_cancellation` gate writes `cancellation.json` outside the
 editable worktree. Most gates exit 77, producing native **Failed**. Feature's
 parallel CI/merge cancellation gates instead request native stop from their

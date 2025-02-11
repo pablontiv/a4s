@@ -193,13 +193,14 @@ test("primary availability notices preserve the concrete sanitized cause", () =>
   assert.ok(new Transitions("session-a").observe(candidate).wakeMessage?.includes("cause=primary dirty: tracked.txt Restore clean main."));
 });
 
-for (const step of ["start_gate", "gate", "push"]) {
-  test(`${step} recovery notice names the failed command and sanitized cause`, () => {
+for (const [step, statusLabel] of ["start_gate", "gate", "push"].flatMap(step =>
+  ["failed", "succeeded"].map(statusLabel => [step, statusLabel] as const))) {
+  test(`${step} recovery notice preserves the cause when the predecessor is ${statusLabel}`, () => {
     const transitions = new Transitions("session-a");
     const candidate = waitingAt("feature", `recover_${step}`, 2);
     candidate.nodes![0]!.step.humanTask = { prompt: `${step} failed.\nInspect logs.` };
     candidate.nodes!.unshift({
-      step: { id: step, name: `${step} display name` }, statusLabel: "failed",
+      step: { id: step, name: `${step} display name` }, statusLabel,
       error: "exit status 1\nrecent stderr (tail):\ncontext before rule\nrule=head expected=abc observed=def\nrule=later expected=x observed=y",
     });
     const message = transitions.observe(candidate).wakeMessage!;

@@ -451,6 +451,7 @@ steps:
     continue_on:
       skipped: true
       exit_code: [23]
+      mark_success: true
     preconditions:
       - condition: "${steps.triage.outputs.POC}"
         expected: "yes"
@@ -488,8 +489,8 @@ steps:
     depends: recover_poc_scope
     continue_on: skipped
     preconditions:
-      - condition: "${poc_scope_resolve.exit_code}"
-        expected: "23"
+      - condition: "${steps.recover_poc_scope.outputs.CANCEL}"
+        expected: "re:^(yes|no)$"
     env:
       - CANCEL: ${steps.recover_poc_scope.outputs.CANCEL}
       - CHECKPOINT: recover_poc_scope
@@ -527,6 +528,7 @@ steps:
     depends: start_primary_unavailable_cancellation
     continue_on:
       failure: true
+      mark_success: true
     env:
       - POC: ${steps.triage.outputs.POC}
     preconditions:
@@ -714,8 +716,8 @@ steps:
     depends: recover_start_gate
     continue_on: skipped
     preconditions:
-      - condition: "${start_gate.exit_code}"
-        expected: "re:^[1-9][0-9]*$"
+      - condition: "${steps.recover_start_gate.outputs.CANCEL}"
+        expected: "re:^(yes|no)$"
     env:
       - CANCEL: ${steps.recover_start_gate.outputs.CANCEL}
       - CHECKPOINT: recover_start_gate
@@ -1216,6 +1218,7 @@ steps:
     depends: conflict_review_cancellation
     continue_on:
       failure: true
+      mark_success: true
     retry_policy:
       limit: 1
       interval_sec: 5
@@ -1290,8 +1293,8 @@ steps:
     depends: recover_gate
     continue_on: skipped
     preconditions:
-      - condition: "${gate.exit_code}"
-        expected: "re:^[1-9][0-9]*$"
+      - condition: "${steps.recover_gate.outputs.CANCEL}"
+        expected: "re:^(yes|no)$"
     env:
       - CANCEL: ${steps.recover_gate.outputs.CANCEL}
       - CHECKPOINT: recover_gate
@@ -1368,6 +1371,7 @@ steps:
     depends: validation_cancellation
     continue_on:
       failure: true
+      mark_success: true
     preconditions:
       - condition: "${steps.triage.outputs.POC}"
         expected: "no"
@@ -1453,8 +1457,8 @@ steps:
     depends: recover_push
     continue_on: skipped
     preconditions:
-      - condition: "${push.exit_code}"
-        expected: "re:^[1-9][0-9]*$"
+      - condition: "${steps.recover_push.outputs.CANCEL}"
+        expected: "re:^(yes|no)$"
     env:
       - CANCEL: ${steps.recover_push.outputs.CANCEL}
       - CHECKPOINT: recover_push

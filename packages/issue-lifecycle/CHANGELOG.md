@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Make recovery cancellation resume-safe with marked-success predecessors and persisted human-response routing in feature/PoC snapshots. Preserve normal completion and explicit repair/push-back, document historical snapshot limits, and retain isolated Dagu coverage of terminal Failed/77, one predecessor attempt, suppressed successors and onExit plus the unsafe mark-success-only regression (#810).
 - Verify triage role results against `DAG_PUSHBACK_ITERATION` (default `0`), matching the dispatcher after dependency, conflict or escalation rewinds without relying on `dagu status` text; retain stale-iteration rejection and cover rewound/default bindings (#803).
 - Add locked, atomic station state, inventory-seeded persisted-format sets, highest-compatible promotion, stable-launcher rollback/rejections, process-identity leases and fail-closed cache collection. Retiring plugin readers identify the OMP restart barrier; ambiguous process probes never free ownership (#793).
 - Stage immutable `r<N>` build identities from full-history first-parent counts after same-SHA CI validation; retire tag-triggered/`v0` publication and manual skill SemVer-bump/rebase automation. Preserve exact historical SemVer parsing and artifact restoration, declare uniform format support, canonical host-registration metadata and required launcher protocol without switching station configuration (#792).

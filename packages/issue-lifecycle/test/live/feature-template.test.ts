@@ -2697,7 +2697,7 @@ esac
     dagu("enqueue", "--run-id", id, dag);
     if (mode === "start_gate") {
       const run = await waiting("recover_start_gate");
-      assert.equal(run.nodes.find(node => node.step.name === "start_gate")?.statusLabel, "failed");
+      assert.equal(run.nodes.find(node => node.step.name === "start_gate")?.statusLabel, "succeeded");
       assert.match(new Transitions("recovery-owner").observe(run).wakeMessage ?? "", /step=recover_start_gate.*cause=rule=start_gate.fetch/);
       git(repo.primary, "remote", "set-url", "origin", remote);
       transition("recover_start_gate", true);
@@ -3167,7 +3167,7 @@ for (const [name, definition] of definitions) {
           command("human-task", "complete", "feature", "--run-id", id, "--step", "implement");
           if (mode === "gate-fail") {
             const blocked = await state(id, "waiting", "recover_gate");
-            assert.equal(blocked.nodes.find(node => node.step.id === "gate")?.statusLabel, "failed");
+            assert.equal(blocked.nodes.find(node => node.step.id === "gate")?.statusLabel, "succeeded");
             assert.equal(blocked.nodes.find(node => node.step.id === "validation")?.statusLabel, "not_started");
             assert.equal(blocked.nodes.find(node => node.step.id === "push")?.statusLabel, "not_started");
             assert.equal(hasRef(repo.primary, `refs/remotes/origin/${repo.branch}`), false);
@@ -3175,7 +3175,7 @@ for (const [name, definition] of definitions) {
             await state(id, "waiting", "validation");
             command("human-task", "complete", "feature", "--run-id", id, "--step", "validation", "--input", "APPROVED=yes", "--input", `TESTED_SHA=${"0".repeat(40)}`);
             const rejected = await state(id, "waiting", "recover_push");
-            assert.equal(rejected.nodes.find(node => node.step.id === "push")?.statusLabel, "failed");
+            assert.equal(rejected.nodes.find(node => node.step.id === "push")?.statusLabel, "succeeded");
             assert.equal(hasRef(repo.primary, `refs/remotes/origin/${repo.branch}`), false);
           } else if (mode === "declared") {
             const first = await state(id, "waiting", "validation");
