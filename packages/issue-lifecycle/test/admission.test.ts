@@ -55,7 +55,7 @@ test("read-only admission rejects missing owner and dirty or missing committed p
 test("admission validates the owner and committed policy before creating any engine state", async () => {
   const fixture = admissionFixture();
   try {
-    for (const field of [...POLICY_PARAMETERS, "DAGU_URL", "DAGU_HOME", "DAGU_PORT", "A4S_SERVICE_ENV", "PATH"]) {
+    for (const field of [...POLICY_PARAMETERS, "DAGU_URL", "DAGU_HOME", "DAGU_PORT", "A4S_SERVICE_ENV", "PATH", "COORDINATING_SESSION"]) {
       assert.throws(() => preflightAdmission({ cwd: fixture.packageDir, ...inputs, params: [...inputs.params, `${field}=override`] }), /admission rejected run parameter/);
     }
     for (const owner of [[], ["OMP_SESSION_ID="], ["OMP_SESSION_ID=one", "OMP_SESSION_ID=two"]]) {

@@ -601,7 +601,7 @@ steps:
           while IFS= read -r -d '' path; do
             (cd "$WORKTREE" && git diff --no-index --binary -- /dev/null "$path") >> "$out" || test "$?" -eq 1
           done < <(git -C "$WORKTREE" ls-files --others --exclude-standard -z)
-          digest=$(shasum -a 256 "$out" | awk '{print $1}')
+          digest=$("$A4S_BIN" planning sha256 --file "$out")
           rm -f "$out"
           printf '%s\n' "$digest"
         }
@@ -689,7 +689,7 @@ steps:
           reject poc_base_ancestry "ancestor of origin/$BASE_BRANCH" "$poc_carry_base"
         }
         poc_carry_digest=$(tr -d '[:space:]' < "$poc_state/full.patch.sha256")
-        poc_observed=$(shasum -a 256 "$poc_state/full.patch" | awk '{print $1}')
+        poc_observed=$("$A4S_BIN" planning sha256 --file "$poc_state/full.patch")
         [[ "$poc_carry_digest" =~ ^[a-f0-9]{64}$ && "$poc_observed" == "$poc_carry_digest" ]] || {
           reject poc_patch_digest "$poc_carry_digest" "$poc_observed"
         }
@@ -930,7 +930,7 @@ steps:
         while IFS= read -r -d '' path; do
           git diff --no-index --binary -- /dev/null "$path" >> "$scratch/basis.patch" || test "$?" -eq 1
         done < <(git ls-files --others --exclude-standard -z)
-        observed_basis=$(shasum -a 256 "$scratch/basis.patch" | awk '{print $1}')
+        observed_basis=$("$A4S_BIN" planning sha256 --file "$scratch/basis.patch")
         if [[ "$observed_basis" == "$basis_digest" ]]; then feature_delta=empty; else feature_delta=changed; fi
         jq --arg featureDelta "$feature_delta" '.featureDelta = $featureDelta' "$STATE/poc-basis.json" > "$scratch/poc-basis.json"
         mv "$scratch/poc-basis.json" "$STATE/poc-basis.json"
@@ -956,8 +956,8 @@ steps:
         # Dagu outputs are single-line; the verified receipt keeps the multi-line summary and commit message.
         SUMMARY=$(jq -r .output.summary "$result")
         MESSAGE=$(jq -r .output.message "$result")
-        digest=$(shasum -a 256 "$result")
-        implementation=$(jq -nc --arg inputSha "$head" --arg resultDigest "${digest%% *}" \
+        digest=$("$A4S_BIN" planning sha256 --file "$result")
+        implementation=$(jq -nc --arg inputSha "$head" --arg resultDigest "$digest" \
           '{inputSha:$inputSha,resultDigest:$resultDigest}')
       fi
       iteration=0

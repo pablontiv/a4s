@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { parse } from "yaml";
 import { admissionFixture, compiledA4sBin } from "../fixtures/admission.ts";
 import { installGithubFixture, writeReleaseDirectory, repository } from "../fixtures/artifact.ts";
 import { archiveName } from "../../../launcher/src/release.ts";
@@ -184,6 +185,39 @@ test("admission ignores station files, forged consumer templates, and notice-onl
     const stale = fixture.command("enqueue", staleRun, { DAGU_ADMISSION_SESSION: JSON.stringify({ extensionDigest: "old-loaded-digest", transcriptRoot: "/session" }) });
     assert.equal(stale.status, 0, stale.stderr);
     assert.deepEqual(JSON.parse(readFileSync(fixture.receipt(absentRun), "utf8")).artifact, JSON.parse(readFileSync(fixture.receipt(staleRun), "utf8")).artifact);
+  } finally { fixture.dispose(); }
+});
+
+test("fresh planning admission binds the coordinating root independently of the service profile", liveDagu, () => {
+  const fixture = admissionFixture();
+  try {
+    const run = testRunId("coordinating-root");
+    const transcriptRoot = join(fixture.root, "custom-root", "profiles", "coordinator", "agent", "sessions", "-consumer");
+    const admitted = fixture.command("admit", run, {
+      OMP_PROFILE: "scheduler", PI_PROFILE: "ignored", PI_CONFIG_DIR: ".service-root",
+      DAGU_ADMISSION_SESSION: JSON.stringify({ sessionId: "owner-session", transcriptRoot }),
+    }, ["UNITS_FROM=fixture"], "planning");
+    assert.equal(admitted.status, 0, admitted.stderr);
+    const bytes = readFileSync(fixture.receipt(run), "utf8");
+    const receipt = JSON.parse(bytes);
+    assert.equal(receipt.initial.execution.ompSession, "owner-session");
+    assert.equal(receipt.initial.runtimeAndModels.transcriptRoot, transcriptRoot);
+    const dag = parse(receipt.initial.execution.dagSnapshot);
+    const env = Object.assign({}, ...dag.env);
+    assert.deepEqual(JSON.parse(env.COORDINATING_SESSION), { session: "owner-session", transcriptRoot });
+    assert.doesNotMatch(receipt.initial.execution.dagSnapshot, /\.service-root|profiles\/scheduler/);
+    const foreignRun = testRunId("foreign-coordinator");
+    const foreign = fixture.command("admit", foreignRun, {
+      DAGU_ADMISSION_SESSION: JSON.stringify({ sessionId: "foreign-session", transcriptRoot }),
+    }, ["UNITS_FROM=fixture"], "planning");
+    assert.notEqual(foreign.status, 0);
+    assert.match(foreign.stderr, /differs from OMP_SESSION_ID/);
+    assert.equal(existsSync(fixture.receipt(foreignRun)), false);
+    const duplicate = fixture.command("admit", run, {
+      DAGU_ADMISSION_SESSION: JSON.stringify({ sessionId: "owner-session", transcriptRoot: join(fixture.root, "other") }),
+    }, ["UNITS_FROM=fixture"], "planning");
+    assert.notEqual(duplicate.status, 0);
+    assert.equal(readFileSync(fixture.receipt(run), "utf8"), bytes);
   } finally { fixture.dispose(); }
 });
 

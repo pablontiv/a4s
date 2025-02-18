@@ -111,7 +111,10 @@ Required fields are `DAGU_URL` (an unauthenticated HTTP loopback origin), absolu
 infers missing fields from a user home, default port, process table, service
 manager or caller PATH. The operator supplies the same values to Dagu and a4s.
 Any explicitly selected home/endpoint must match. The declared PATH must resolve
-`bash`, `git`, `gh`, `jq`, `curl`, `node`, `omp` and `dagu`.
+`bash`, `git`, `gh`, `jq`, `curl`, `node`, `omp` and `dagu`. Templates hash patches
+and results through the release-bound `$A4S_BIN planning sha256 --file <path>`
+(Node crypto, lowercase hex), so no `shasum`/`sha256sum` is required; bootstrap
+`detect` probes that capability under the declared environment.
 
 `a4s service-environment` emits the validated JSON through the shared
 launcher-layer reader. `a4s queue --lane <lane>` checks it, station config leaves,
@@ -124,7 +127,11 @@ Run-bound helpers reject declaration changes instead of reinterpreting a run.
 Only freshly admitted snapshots from new immutable releases receive this
 cutover: no existing release, snapshot, receipt, binding, or installed service
 file is rewritten. The OMP agent/profile directory remains independent of
-`DAGU_HOME`.
+`DAGU_HOME`: planning review resolves the reviewer transcript from the session id
+and actual transcript root admitted with the run (any `OMP_PROFILE`/`PI_PROFILE`,
+`PI_CONFIG_DIR`, `PI_CODING_AGENT_DIR` or session-directory selection), never from
+`~/.omp/agent/sessions`, the service's profile or another profile. Missing or
+ambiguous coordinating evidence fails closed.
 
 Missing/unreadable/malformed/incomplete declarations or mismatched selections
 fail with field-specific diagnostics, the expected default path when missing, and operator actions. A healthy caller PATH
@@ -608,8 +615,11 @@ existing repository resolver, canonical or issue-clone origin, and cancels pendi
 requests on session shutdown. A missing request reports phase/path/workspace/cwd
 and observed requests.
 
-For native breakdown review admission, preserve parent/child transcripts in the
-canonical encoded-PRIMARY sessions root under the same isolated HOME used by the
-controller. The verifier binds the exact parent session path and generation;
-`--no-session` cannot prove that provenance. See the planning backend and existing
-behavioral tests rather than adding prose/source-shape tests.
+For native breakdown review admission, retain the coordinating session id and
+the actual `sessionManager.getSessionDir()` root with its parent/child transcripts.
+Named profiles, custom configuration roots and service/coordinator profile
+mismatches use that admitted root; the service's own agent directory is not a
+substitute. The verifier binds the exact parent session path and generation and
+fails closed for missing or ambiguous evidence; `--no-session` cannot prove that
+provenance. `COORDINATING_SESSION` is admission-owned context, not an overridable
+run parameter. Run native scenarios only through the explicit `test:live` lane.

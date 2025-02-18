@@ -456,7 +456,7 @@ steps:
           (cd "$WORKTREE"; git diff --no-index --stat -- /dev/null "$path") >> "$STATE/diffstat" || test "$?" -eq 1
         done < <(git -C "$WORKTREE" ls-files --others --exclude-standard -z)
       fi
-      shasum -a 256 "$STATE/full.patch" | awk '{print $1}' > "$STATE/full.patch.sha256"
+      "$A4S_BIN" planning sha256 --file "$STATE/full.patch" > "$STATE/full.patch.sha256"
       {
         printf '<!-- poc-verdict:%s scope:%s run:%s attempt:%s base:%s -->\n\n' "$VERDICT" "$SCOPE" "$RUN" "$ATTEMPT" "$BASE_SHA"
         if [[ -f "$STATE/result.md" ]]; then cat "$STATE/result-public.md"; else printf 'Orchestration failure before a capacity verdict.\n'; fi
@@ -581,7 +581,7 @@ steps:
           then $last.comment.html_url else error("Latest verdict is not a current, complete PASS") end
         ' "$STATE/pages.json" > "$STATE/promotion.url"
         if [[ -f "$STATE/full.patch" && ! -s "$STATE/full.patch.sha256" ]]; then
-          shasum -a 256 "$STATE/full.patch" | awk '{print $1}' > "$STATE/full.patch.sha256"
+          "$A4S_BIN" planning sha256 --file "$STATE/full.patch" > "$STATE/full.patch.sha256"
         fi
         parent_receipt=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN/receipt.json")
         "$A4S_BIN" enqueue --parent "$parent_receipt" --run-id "feature-$RUN" "$PRIMARY/.workspace/dagu/dags/feature.yaml" -- \

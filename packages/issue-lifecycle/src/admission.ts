@@ -21,6 +21,7 @@ import { stationReadiness } from "./queue.ts";
 import { stationTransaction, readStationState, readStateLocked } from "../../launcher/src/station-state.ts";
 import { handoff } from "../../launcher/src/select.ts";
 import { createLeaseLocked } from "../../launcher/src/lease.ts";
+import { admittedCoordinator } from "./planning-transcript.ts";
 
 export function canonical(value: unknown): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
@@ -41,7 +42,7 @@ function tree(path: string): Record<string, string> {
 export const loadedExtensionDigest = deploymentFingerprint(tree(join(packageRoot, "src")));
 export interface AdmissionOptions {
   cwd: string; dag: string; run: string; params: string[]; artifact?: string; parent?: string; check?: boolean;
-  session?: { transcriptRoot?: string; model?: unknown; extensionDigest?: string };
+  session?: { sessionId?: string; transcriptRoot?: string; model?: unknown; extensionDigest?: string };
 }
 export interface Receipt {
   schemaVersion: 1 | 2;
@@ -103,10 +104,11 @@ function consumerRoot(cwd: string, dag: string): string {
 export function preflightAdmission(options: AdmissionOptions): AdmissionContext {
   const name = dagName(options.dag);
   const rejected = options.params.map(param => param.split("=", 1)[0]!)
-    .filter(field => field.startsWith("ESCALATION_") || field.startsWith("CODEQL_") || ["DAGU_URL", "DAGU_HOME", "DAGU_PORT", "A4S_SERVICE_ENV", "PATH"].includes(field) || (POLICY_PARAMETERS as readonly string[]).includes(field));
+    .filter(field => field.startsWith("ESCALATION_") || field.startsWith("CODEQL_") || ["DAGU_URL", "DAGU_HOME", "DAGU_PORT", "A4S_SERVICE_ENV", "PATH", "COORDINATING_SESSION"].includes(field) || (POLICY_PARAMETERS as readonly string[]).includes(field));
   if (rejected.length) throw new Error(`admission rejected run parameter: ${rejected.join(", ")}; policy comes only from committed ${CONFIG_PATH}`);
   const owners = options.params.filter(param => param.startsWith("OMP_SESSION_ID="));
   const owner = requireOwnerSession(owners.length === 1 ? owners[0]!.slice(15) : undefined);
+  admittedCoordinator(owner, options.session);
   const hintedRoot = realpathSync(consumerRoot(options.cwd, options.dag));
   let committed = readCommittedConfig(hintedRoot);
   const primary = realpathSync(resolvePrimaryBinding(HOST_PRIMARY_REFERENCE, { workspace: committed.config.lane }));
@@ -148,7 +150,11 @@ function createReceipt(options: AdmissionOptions, context: AdmissionContext, cac
   const daguHome = realpathSync(station.DAGU_HOME);
   const templateFile = join(cached.directory, "skills", "issue-execution", name);
   const templateText = readFileSync(templateFile, "utf8");
-  const generated = materializeDag(cached.directory, name, committed.config, { version, source: `${origin}@${commit}`, executable: cached.executable, station });
+  const inherited = parent ? readReceipt(parent.receipt) : undefined;
+  const coordinator = admittedCoordinator(owner, options.session, inherited ? {
+    session: inherited.initial.execution.ompSession, transcriptRoot: inherited.initial.runtimeAndModels.transcriptRoot,
+  } : undefined);
+  const generated = materializeDag(cached.directory, name, committed.config, { version, source: `${origin}@${commit}`, executable: cached.executable, station, ...(coordinator ? { coordinator } : {}) });
   const snapshot = name === "reconcile.yaml" ? generated : bindSnapshotPrimary(generated, primary);
   const generatedDigest = sha256(snapshot);
   const daguVersion = execFileSync("dagu", ["version"], { encoding: "utf8", env: { ...process.env, ...station } }).trim();
@@ -171,7 +177,7 @@ function createReceipt(options: AdmissionOptions, context: AdmissionContext, cac
       runtimeAndModels: { ...fields("omp systemPromptDigest profile roles roleMapHash requestedRole resolvedModel fallback resolvedModelIsFallback crossFamilyDecision", "not exposed at admission; append linked runtime observations"),
         node: { version: process.version, path: realpathSync(process.execPath) }, dagu: { version: daguVersion }, daguHome, station,
         roleJobStore: join(daguHome, "role-jobs.sqlite"), admissionPid: process.pid, admissionPpid: process.ppid,
-        transcriptRoot: options.session?.transcriptRoot ?? pending("operator CLI has no OMP session context"), model: options.session?.model ?? pending("not exposed at admission") },
+        transcriptRoot: coordinator?.transcriptRoot ?? pending("operator CLI has no OMP session context"), model: options.session?.model ?? pending("not exposed at admission") },
       execution: { ...fields("base owner refs step approvalIteration sourceSession destinationSession triageGeneration triageMarker", "not yet resolved at admission"), repo, primary,
         head: git(primary, "rev-parse", "HEAD"), branch: git(primary, "branch", "--show-current"), worktree: repo,
         dirty: git(primary, "status", "--porcelain", "--untracked-files=all"), diffDigest: sha256(diff), parameters: options.params, ompSession: owner, dagSnapshot: snapshot },
@@ -259,8 +265,8 @@ export function enqueueArguments(args: string[], cwd: string): AdmissionOptions 
   let session: AdmissionOptions["session"];
   if (process.env.DAGU_ADMISSION_SESSION) {
     const value: unknown = JSON.parse(process.env.DAGU_ADMISSION_SESSION);
-    if (!isRecord(value) || (value.transcriptRoot !== undefined && typeof value.transcriptRoot !== "string") || (value.extensionDigest !== undefined && typeof value.extensionDigest !== "string")) throw new Error("Indeterminate loaded session identity");
-    session = { ...(typeof value.transcriptRoot === "string" ? { transcriptRoot: value.transcriptRoot } : {}), ...(typeof value.extensionDigest === "string" ? { extensionDigest: value.extensionDigest } : {}), ...(value.model !== undefined ? { model: value.model } : {}) };
+    if (!isRecord(value) || (value.sessionId !== undefined && typeof value.sessionId !== "string") || (value.transcriptRoot !== undefined && typeof value.transcriptRoot !== "string") || (value.extensionDigest !== undefined && typeof value.extensionDigest !== "string")) throw new Error("Indeterminate loaded session identity");
+    session = { ...(typeof value.sessionId === "string" ? { sessionId: value.sessionId } : {}), ...(typeof value.transcriptRoot === "string" ? { transcriptRoot: value.transcriptRoot } : {}), ...(typeof value.extensionDigest === "string" ? { extensionDigest: value.extensionDigest } : {}), ...(value.model !== undefined ? { model: value.model } : {}) };
   }
   if (check && (artifact || parent)) throw new Error("--check reads station.current; --artifact and --parent are not supported");
   return { cwd, dag, run, params, ...(artifact ? { artifact } : {}), ...(parent ? { parent } : {}), ...(check ? { check } : {}), ...(session ? { session } : {}) };

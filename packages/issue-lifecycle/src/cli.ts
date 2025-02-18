@@ -51,8 +51,8 @@ export async function main(argv: string[]): Promise<void> {
     case "station": return (await import("./commands/station.ts")).main(args);
     case "heavy-slot": return (await import("./heavy-slot.ts")).main(args);
     case "planning":
-      if (args[0] !== "validate-planning-units" && args[0] !== "planning-reviewer-identity") {
-        throw new Error("Usage: a4s planning validate-planning-units [args...] | planning-reviewer-identity --transcript <file>");
+      if (!["validate-planning-units", "planning-reviewer-identity", "planning-reviewer-transcript", "sha256"].includes(args[0] ?? "")) {
+        throw new Error("Usage: a4s planning <validate-planning-units|planning-reviewer-identity|planning-reviewer-transcript|sha256> [args...]");
       }
       return (await import("./commands/bundle.ts")).main(args);
     default: throw new Error(`${command ? `Unknown subcommand: ${command}\n` : ""}${usage}`);

@@ -56,7 +56,7 @@ test("bootstrap detect rejects a protected run-spec route even if queue readines
       git: '#!/bin/sh\nprintf "%s\\n" "$PRIMARY"\n',
       gh: '#!/bin/sh\ncase "$*" in *nameWithOwner*) echo fixture/repo;; *"repo view"*) echo repo;; esac\n',
       dagu: "#!/bin/sh\nexit 0\n",
-      a4s: `#!/bin/sh\nif [ "$1" = service-environment ]; then exec '${process.execPath}' --import '${import.meta.resolve("tsx")}' '${join(packageDir, "src/cli.ts")}' "$@"; fi\nexit 0\n`,
+      a4s: `#!/bin/sh\nif [ "$1" = service-environment ] || [ "$1 $2" = "planning sha256" ]; then exec '${process.execPath}' --import '${import.meta.resolve("tsx")}' '${join(packageDir, "src/cli.ts")}' "$@"; fi\nexit 0\n`,
     };
     for (const [tool, script] of Object.entries(scripts)) {
       writeFileSync(join(bin, tool), script);

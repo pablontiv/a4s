@@ -95,12 +95,14 @@ test("fixture child environments cannot inherit real station write targets or bi
     DAGU_HOME: f.home, DAGU_CONFIG: join(f.home, "config.yaml"), DAGU_DAGS_DIR: join(f.home, "dags"),
     DAGU_OUTPUT_FILE: f.path, DAG_RUN_ID: "real-run", DAG_PUSHBACK_ITERATION: "9", RUN: "real-run", PRIMARY: f.home,
     A4S_BIN: "/real/a4s", A4S_ARTIFACT: "real", OMP_SESSION_ID: "real-owner", PI_TOOL_BRIDGE_PORT: "1234", KEEP: "yes",
+    OMP_PROFILE: "work", PI_PROFILE: "ignored", PI_CONFIG_DIR: ".custom-omp",
   }, 12345);
   assert.equal(env.DAGU_HOME, home);
   assert.equal(env.DAGU_URL, "http://127.0.0.1:12345");
   assert.equal(env.PATH, "/service/bin");
   assert.equal(env.PI_CODING_AGENT_DIR, "/service/agent");
   assert.equal(env.KEEP, "yes");
+  assert.deepEqual([env.OMP_PROFILE, env.PI_PROFILE, env.PI_CONFIG_DIR], ["work", "ignored", ".custom-omp"]);
   for (const key of ["DAGU_CONFIG", "DAGU_DAGS_DIR", "DAGU_OUTPUT_FILE", "DAG_RUN_ID", "DAG_PUSHBACK_ITERATION", "RUN", "PRIMARY", "A4S_BIN", "A4S_ARTIFACT", "OMP_SESSION_ID", "PI_TOOL_BRIDGE_PORT"]) assert.equal(env[key], undefined, key);
   assert.deepEqual(readFileSync(f.path), before);
 });
