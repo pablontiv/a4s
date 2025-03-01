@@ -1,12 +1,12 @@
 {
-  "name": "@a4s/omp-hot-reload",
+  "name": "@a4s/hot-reload",
   "version": "0.1.0",
   "private": true,
   "license": "UNLICENSED",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/pablontiv/a4s.git",
-    "directory": "packages/omp-hot-reload"
+    "directory": "packages/hot-reload"
   },
   "type": "module",
   "engines": { "node": ">=22.19.0" },

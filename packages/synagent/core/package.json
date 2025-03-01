@@ -41,7 +41,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@a4s/omp-hot-reload": "0.1.0",
+    "@a4s/hot-reload": "0.1.0",
     "mqtt": "5.16.0"
   },
   "peerDependencies": {
