@@ -1,6 +1,6 @@
-// Smoke test de los bridges v2 del adaptador Claude, ejecutándolos como
-// procesos igual que en runtime contra un broker Aedes efímero. El broker
-// instalable y sus pruebas viven en el workspace @a4s/synagent-bus.
+// Smoke-test the Claude adapter's v2 bridges as separate processes, matching
+// runtime behavior against an ephemeral Aedes broker. The installable broker
+// and its tests live in the @a4s/message-bus workspace.
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { cp, mkdtemp, rm } from 'node:fs/promises'

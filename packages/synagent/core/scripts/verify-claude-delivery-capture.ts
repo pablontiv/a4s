@@ -31,7 +31,7 @@ const BROKER_PORT = Number(process.env.SYNAGENT_CLAUDE_BROKER_PORT ?? 18_125)
 const coreRoot = fileURLToPath(new URL('../', import.meta.url))
 const repoRoot = resolve(coreRoot, '../../..')
 const pluginRoot = join(coreRoot, 'adapters', 'claude')
-const brokerPath = join(repoRoot, 'packages', 'synagent', 'bus', 'broker.cjs')
+const brokerPath = join(repoRoot, 'apps', 'message-bus', 'broker.cjs')
 const ptyDriver = join(coreRoot, 'scripts', 'support', 'claude-pty.py')
 const claudeBin = process.env.CLAUDE_BIN ?? join(homedir(), '.local', 'bin', 'claude')
 const model = process.env.SYNAGENT_CLAUDE_MODEL ?? 'haiku'
@@ -259,7 +259,7 @@ async function main(): Promise<void> {
   const version = execFileSync(claudeBin, ['--version'], { encoding: 'utf8' }).trim()
   const broker = spawn(process.execPath, [brokerPath], {
     cwd: repoRoot,
-    env: { ...process.env, SYNAGENT_DB: join(root, 'db'), SYNAGENT_PORT: String(BROKER_PORT) },
+    env: { ...process.env, A4S_MESSAGE_BUS_DB: join(root, 'db'), A4S_MESSAGE_BUS_PORT: String(BROKER_PORT) },
     stdio: ['pipe', 'pipe', 'pipe'],
   })
   const busMessages: JsonRecord[] = []

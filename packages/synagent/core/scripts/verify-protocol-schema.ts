@@ -47,7 +47,7 @@ const TIMEOUT_MS = 240_000
 const BROKER_PORT = 18_330
 const coreRoot = fileURLToPath(new URL('../', import.meta.url))
 const repoRoot = resolve(coreRoot, '../../..')
-const brokerPath = join(repoRoot, 'packages', 'synagent', 'bus', 'broker.cjs')
+const brokerPath = join(repoRoot, 'apps', 'message-bus', 'broker.cjs')
 const rootOverride = process.env.SYNAGENT_LIVE_ROOT?.trim()
 const root = rootOverride
   ? resolve(rootOverride)
@@ -447,7 +447,7 @@ async function main(): Promise<void> {
   chmodSync(root, 0o700)
   const broker = spawn(process.execPath, [brokerPath], {
     cwd: repoRoot,
-    env: { ...process.env, SYNAGENT_DB: dbPath, SYNAGENT_PORT: String(BROKER_PORT) },
+    env: { ...process.env, A4S_MESSAGE_BUS_DB: dbPath, A4S_MESSAGE_BUS_PORT: String(BROKER_PORT) },
     stdio: ['pipe', 'pipe', 'pipe'],
   })
   let observer: MqttClient | undefined

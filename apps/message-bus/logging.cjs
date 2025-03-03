@@ -7,7 +7,7 @@ const os = require('node:os')
 const path = require('node:path')
 
 const SCHEMA = 'a4s.otel.rca.log.v1'
-const SERVICE_NAME = '@a4s/synagent-bus'
+const SERVICE_NAME = '@a4s/message-bus'
 const LOG_FILE_NAME = 'operational.jsonl'
 const ERROR_PHASES = new Set([
   'arguments',
@@ -45,8 +45,8 @@ function hostIdHash(hostname = os.hostname()) {
 }
 
 function defaultLogRoot({ env = process.env, home = os.homedir() } = {}) {
-  return path.resolve(env.A4S_SYNAGENT_BUS_LOG_DIR ||
-    path.join(stateHome({ env, home }), 'a4s', 'log', 'synagent-bus'))
+  return path.resolve(env.A4S_MESSAGE_BUS_LOG_DIR ||
+    path.join(stateHome({ env, home }), 'a4s', 'log', 'message-bus'))
 }
 
 function isContained(root, candidate) {
@@ -127,7 +127,7 @@ function createLogger({
   env = process.env,
   home = os.homedir(),
   now = () => new Date(),
-  scopeName = 'a4s.synagent-bus',
+  scopeName = 'a4s.message-bus',
   harnessName = 'a4s',
   harnessKind = 'node-cli',
   harnessRole = 'worker',
@@ -218,7 +218,7 @@ function createLogger({
       'resource.a4s.harness.name': cleanString(harnessName, 'a4s'),
       'resource.a4s.harness.kind': cleanString(harnessKind, 'node-cli'),
       'resource.a4s.harness.role': cleanString(harnessRole, 'worker'),
-      'scope.name': cleanString(scopeName, 'a4s.synagent-bus'),
+      'scope.name': cleanString(scopeName, 'a4s.message-bus'),
       'attributes.a4s.correlation_id': safeIdentifier(correlation, operationId),
       'attributes.a4s.operation_id': safeIdentifier(operation, operationId),
       'a4s.logging.lossy': droppedCount > 0,

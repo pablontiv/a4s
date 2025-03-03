@@ -1,15 +1,15 @@
 {
-  "name": "@a4s/synagent-bus",
+  "name": "@a4s/message-bus",
   "version": "0.1.0",
   "private": true,
   "license": "UNLICENSED",
-  "description": "Standalone loopback MQTT broker for Synagent with durable LevelDB state.",
+  "description": "Standalone loopback MQTT message bus with durable LevelDB state.",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/pablontiv/a4s.git",
-    "directory": "packages/synagent/bus"
+    "directory": "apps/message-bus"
   },
-  "homepage": "https://github.com/pablontiv/a4s/tree/main/packages/synagent/bus#readme",
+  "homepage": "https://github.com/pablontiv/a4s/tree/integration/v1/apps/message-bus#readme",
   "bugs": {
     "url": "https://github.com/pablontiv/a4s/issues"
   },
@@ -17,7 +17,7 @@
     "node": ">=22.19.0"
   },
   "bin": {
-    "synagent-bus": "./broker.cjs"
+    "message-bus": "./broker.cjs"
   },
   "files": [
     "broker.cjs",
