@@ -1,7 +1,7 @@
-# dagu-feature-bundle: @a4s/omp-dagu@0.3.76 source=pablontiv/a4s@1f595070575d4881dc79f147f79b6ba2cb64a236 bootstrap=manual-a4s-v0-3-76 dagu=2.20.1
+# dagu-feature-bundle: @a4s/omp-dagu@0.3.77 source=pablontiv/a4s@431b61e8e9c7ddcbb699462aff788f074c3e5cd0 bootstrap=bootstrap-a4s-v0-3-77 dagu=2.20.1
 labels:
   - workspace=a4s
-  - dagu-feature-bundle=0.3.76
+  - dagu-feature-bundle=0.3.77
 queue: a4s
 type: graph
 dotenv: []
@@ -45,7 +45,7 @@ params:
 env:
   - WORKTREE: ${PRIMARY}/.workspace/worktrees/issue-${ISSUE}
   - RUN: ${context.run.id}
-  - DAGU_FEATURE_BUNDLE: "dagu-feature-bundle=0.3.76 source=pablontiv/a4s@1f595070575d4881dc79f147f79b6ba2cb64a236 bootstrap=manual-a4s-v0-3-76"
+  - DAGU_FEATURE_BUNDLE: "dagu-feature-bundle=0.3.77 source=pablontiv/a4s@431b61e8e9c7ddcbb699462aff788f074c3e5cd0 bootstrap=bootstrap-a4s-v0-3-77"
   - DAGU_RESOURCE_GUARD: |
       resource_lock() {
         local operation=$1 primary root expected actual common key attempt owner run status candidate branch issue
