@@ -265,6 +265,7 @@ function featureScriptEnv(repo: Repository): NodeJS.ProcessEnv {
     HOME: process.env.HOME,
     A4S_BIN: a4sBin,
     DAGU_HOME: join(repo.root, "dagu-home"),
+    DAGU_OUTPUT_FILE: join(repo.root, "step-output"),
     PATH: `${join(repo.root, "bin")}:${process.env.PATH ?? ""}`,
     DAGU_PARAMS_JSON: "{}",
     ISSUE: "189",
@@ -301,6 +302,26 @@ function runScript(script: string, repo: Repository, env: NodeJS.ProcessEnv = {}
   return `${result.stdout}${result.stderr}`;
 }
 
+test("feature script helpers isolate inherited Dagu step outputs", () => {
+  const repo = repository();
+  const inherited = join(repo.root, "implement-output");
+  const previous = process.env.DAGU_OUTPUT_FILE;
+  writeFileSync(inherited, "IMPLEMENTER=stage-owned\n");
+  process.env.DAGU_OUTPUT_FILE = inherited;
+  try {
+    const script = 'printf "X=1\\n" >> "${DAGU_OUTPUT_FILE:-/dev/null}"';
+    runScript(script, repo);
+    const result = runFailingCloseGate(script, repo);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(readFileSync(inherited, "utf8"), "IMPLEMENTER=stage-owned\n");
+    assert.equal(readFileSync(featureScriptEnv(repo).DAGU_OUTPUT_FILE!, "utf8"), "X=1\nX=1\n");
+  } finally {
+    if (previous === undefined) delete process.env.DAGU_OUTPUT_FILE;
+    else process.env.DAGU_OUTPUT_FILE = previous;
+    rmSync(repo.root, { recursive: true, force: true });
+  }
+});
+
 for (const [name, definition] of definitions) {
   for (const existing of [false, true]) {
     test(`${name} repeated yes-triage reuses ${existing ? "a pre-existing" : "a newly enqueued"} PoC before publication`, () => {
@@ -334,6 +355,7 @@ cp "$STATE/triage.md" "$PUBLISHED"`);
         const env = {
           ...process.env, PRIMARY: primary, STATE: state, RUN: "repeat-triage", ISSUE: "295",
           PATH: `${bin}:${process.env.PATH}`, A4S_BIN: join(bin, "a4s"), POC: "yes",
+          DAGU_OUTPUT_FILE: join(root, "step-output"),
           TEST_PATH: `${bin}:${process.env.PATH}`,
           QUESTION: "Can this runtime work?", BASIS: "Unexercised runtime", REVIEW: "review",
           OMP_SESSION_ID: "parent", REQUIRED_TARGETS: "[]", AUTHORIZED_TARGETS: "[]",
@@ -371,6 +393,7 @@ cp "$STATE/triage.md" "$PUBLISHED"`);
       const env = {
         ...process.env, PRIMARY: root, RUN: "failed-triage", ISSUE: "295",
         PATH: `${bin}:${process.env.PATH}`, A4S_BIN: join(bin, "a4s"), POC: "yes",
+        DAGU_OUTPUT_FILE: join(root, "step-output"),
         TEST_PATH: `${bin}:${process.env.PATH}`,
         QUESTION: "Runtime question", BASIS: "Unexercised runtime", REVIEW: "review",
         OMP_SESSION_ID: "parent", REQUIRED_TARGETS: "[]", AUTHORIZED_TARGETS: "[]",

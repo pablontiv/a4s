@@ -41,6 +41,8 @@ test("reconcile fixtures leave an inherited populated station home byte-identica
       version: identity.version, commit: "0".repeat(40), digest: "f".repeat(64), verifiedAt: "station-owned",
     }) + "\n");
   }
+  const stepOutput = join(station, "implement-output");
+  writeFileSync(stepOutput, "IMPLEMENTER=stage-owned\n");
   const before = snapshot(station);
 
   // File-backed worker with the same isolation/no-spawn preloads as the suite.
@@ -53,16 +55,19 @@ test("reconcile fixtures leave an inherited populated station home byte-identica
       "--import", new URL("./fixtures/dagu-home.mjs", import.meta.url).href,
       "--import", new URL("../../../scripts/test-no-spawn.mjs", import.meta.url).href,
     ],
-    env: { ...process.env, DAGU_HOME: station, HOME: station, A4S_RELEASE_DIR: releases },
+    env: { ...process.env, DAGU_HOME: station, HOME: station, DAGU_OUTPUT_FILE: stepOutput, A4S_RELEASE_DIR: releases },
     workerData: { primary },
   });
   const [messages, [code]] = await Promise.all([once(worker, "message"), once(worker, "exit")]);
   assert.equal(code, 0);
-  const result: { home: string; emptyHome: string; fallbackHome: string } = messages[0];
+  const result: { home: string; emptyHome: string; fallbackHome: string; stepOutput: string; stepOutputContent: string } = messages[0];
   assert.equal(snapshot(station), before, "fixture rewrote the inherited station home");
   assert.notEqual(result.home, station);
   assert.equal(result.emptyHome, result.home, "empty discovery must also inherit the isolated home");
   assert.equal(result.fallbackHome, join(result.home, ".dagu"), "HOME fallback must also be isolated");
+  assert.equal(result.stepOutput, join(result.home, "step-output"), "step scripts must inherit a temporary output sink");
+  assert.equal(result.stepOutputContent, "X=1\n");
+  assert.equal(readFileSync(stepOutput, "utf8"), "IMPLEMENTER=stage-owned\n");
   assert.equal(existsSync(result.home), false, "the worker's temporary home was not cleaned up");
   const receipt = JSON.parse(readFileSync(join(primary, ".git/dagu-feature/runs/isolation/receipt.json"), "utf8"));
   assert.equal(receipt.initial.runtimeAndModels.daguHome, result.home);

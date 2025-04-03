@@ -66,6 +66,13 @@ export function nativeEvidence(transcript: string, routing: unknown): NativeEvid
     attempts: identity.attempts, fallbacks: identity.fallbacks };
 }
 export async function executeNativeJob(job: Job, assignment: string): Promise<{ output: Record<string, unknown>; native: NativeEvidence }> {
+  // The native runtime and its tools can run in this process. Scrub before loading
+  // it, not just at a subprocess boundary; the stage retains its output sink privately.
+  for (const name of Object.keys(process.env)) {
+    if (name === "DAGU_OUTPUT_FILE" || name === "DAG_RUN_LOG_FILE" || name.startsWith("DAG_RUN_STEP_")) {
+      delete process.env[name];
+    }
+  }
   const root = ompRuntimeRoot();
   const [{ Settings: NativeSettings }, agents, { cfgTaskAgentModelOverrides }, { resolveAgentModelSelection }, { runSubprocess }] = await Promise.all([
     nativeModule<{ Settings: { loadReadOnly(options: { cwd: string }): Promise<Settings> } }>(root, "config/settings.ts"),
