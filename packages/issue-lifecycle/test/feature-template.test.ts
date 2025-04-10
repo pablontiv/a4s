@@ -17,6 +17,17 @@ function extractStep(source: string, id: string): string {
 }
 
 for (const [name, definition] of definitions) {
+  test(`${name} yes-triage publication follows deterministic PoC reuse or admission`, () => {
+    const source = readFileSync(definition, "utf8");
+    const decision = extractStep(source, "triage_decision");
+    assert.match(decision, /if \[\[ "\$POC" == no \]\]; then\n        cd "\$PRIMARY"\n        gh issue comment/);
+    const admission = extractStep(source, "poc_admit");
+    assert.match(admission, /if ! dagu status --run-id "poc-\$RUN" poc >\/dev\/null 2>&1; then/);
+    assert.match(admission, /--run-id "poc-\$RUN" "\$PRIMARY\/\.workspace\/dagu\/dags\/poc.yaml"/);
+    assert.ok(admission.indexOf("dagu status") < admission.indexOf('"$A4S_BIN" enqueue'));
+    assert.match(admission, /SCOPE_REQUEST="\$SCOPE_REQUEST"\n      fi\n[\s\S]*gh issue comment/);
+    assert.doesNotMatch(decision, /enqueue/);
+  });
   test(`${name} every candidate publication follows the gate and optional validation`, () => {
     const source = readFileSync(definition, "utf8");
     for (const [step, dependency] of [

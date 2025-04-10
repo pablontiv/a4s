@@ -812,9 +812,16 @@ the bound completed receipt, native session/model event, sealed transcript
 prefix and exact output. Verification reports the canonical primary, exact
 role-job receipt and native transcript paths; failures retain their cause and
 `VERIFIER=FAIL` before any state or publication effects.
-`POC=yes` publishes the question and enqueues the repository's `poc.yaml`.
-A dependency push-back changes the native iteration and authorizes a fresh
-attributable review.
+`POC=yes` prepares the question in `triage_decision`, then follows the scope/access
+decision gates before `poc_admit` checks `dagu status --run-id "poc-<RUN>" poc`.
+If that ID exists, it is reused regardless of status; the step neither enqueues
+another PoC nor restarts the existing one. Otherwise it enqueues the repository's
+`poc.yaml` with the same deterministic `poc-<RUN>` ID and the parent-bound artifact.
+Only after reuse or successful enqueue does `poc_admit` publish the prepared
+yes-triage comment. A scope/admission/enqueue failure therefore leaves no orphaned
+yes-triage comment. Repeating triage in the same run can publish the fresh review,
+but always targets the same PoC. A dependency push-back changes the native
+iteration and authorizes a fresh attributable review.
 
 The contract binds the exact `Authorized Dagu role job <id>.` assignment marker
 and sealed receipt, not the agent name or the PoC criterion's prose.
