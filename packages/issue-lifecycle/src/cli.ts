@@ -4,8 +4,9 @@ import { compiled, runGate } from "./executable.ts";
 import { identity } from "./identity.ts";
 import { executeNative, main as runArtifact } from "./run-artifact.ts";
 import { readServiceEnvironment, serviceEnvironmentCommand } from "@a4s/launcher/service-environment";
+import { resolvePrimaryBinding } from "@a4s/launcher/primary";
 
-const usage = "Usage: a4s <gate|pr-body|codeql|poc-scope|protect|role-jobs|admit|enqueue|queue|service-environment|observe|escalation|stale-recovery|prioritize|reconcile|station|run|cancel|tick|planning|heavy-slot|config|version> [args...]";
+const usage = "Usage: a4s <gate|pr-body|codeql|poc-scope|protect|role-jobs|admit|enqueue|queue|service-environment|primary-binding|observe|escalation|stale-recovery|prioritize|reconcile|station|run|cancel|tick|planning|heavy-slot|config|version> [args...]";
 // Command imports are an intentional loading boundary: admission reads the
 // package's filesystem closure and station imports SQLite at import time.
 // Static command imports would make `version` depend on those runtime assets.
@@ -26,6 +27,10 @@ export async function main(argv: string[]): Promise<void> {
   }
   switch (command) {
     case "service-environment": return serviceEnvironmentCommand(args);
+    case "primary-binding":
+      if (args.length < 1 || args.length > 2) throw new Error("Usage: a4s primary-binding <value> [workspace]");
+      console.log(resolvePrimaryBinding(args[0]!, { workspace: args[1] || undefined }));
+      return;
     case "version":
       if (args.length) throw new Error("Usage: a4s version");
       console.log(JSON.stringify(identity));

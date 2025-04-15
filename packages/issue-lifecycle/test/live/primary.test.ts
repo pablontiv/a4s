@@ -9,33 +9,13 @@ import { BUNDLE_VERSION } from "../../src/bundle.ts";
 import { HOST_PRIMARY_REFERENCE } from "@a4s/launcher/primary";
 import { admissionFixture } from "../fixtures/admission.ts";
 import { bootstrapRender } from "../fixtures/bootstrap-render.ts";
+import { stationEnv } from "../fixtures/service-environment.ts";
 
 const packageDir = fileURLToPath(new URL("../../", import.meta.url));
 const readRepo = (path: string): string => readFileSync(fileURLToPath(new URL(`../${path}`, import.meta.url)), "utf8");
 const feature = readRepo("../skills/issue-execution/feature.yaml");
 const reconcile = readRepo("../skills/issue-execution/reconcile.yaml");
 
-function extractFunction(source: string, name: string): string {
-  const start = source.indexOf(`${name}() {`);
-  assert.ok(start >= 0, name);
-  let depth = 0;
-  let quote = "";
-  for (let index = start; index < source.length; index++) {
-    const char = source[index]!;
-    if (quote) {
-      if (char === "\\" && quote !== "'") { index++; continue; }
-      if (char === quote) quote = "";
-      continue;
-    }
-    if (char === "'" || char === '"') { quote = char; continue; }
-    if (char === "{") depth++;
-    else if (char === "}") {
-      depth--;
-      if (depth === 0) return source.slice(start, index + 1);
-    }
-  }
-  throw new Error(`unclosed ${name}`);
-}
 function shellQuote(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;
 }
@@ -71,34 +51,51 @@ test("bootstrap renders the same host PRIMARY on a Mac path and a Linux path", (
     }
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
-test("feature and reconcile templates share the shell PRIMARY contract", () => {
-  const binding = extractFunction(feature, "resolve_primary_binding");
-  assert.equal(extractFunction(reconcile, "resolve_primary_binding"), binding);
+test("DAG shell PRIMARY lookup invokes the TypeScript CLI", () => {
+  for (const source of [feature, reconcile]) assert.doesNotMatch(source, /resolve_primary_binding/);
   const root = mkdtempSync(join(tmpdir(), "a4s-primary-shell-"));
   mkdirSync(join(root, "primaries"));
   writeFileSync(join(root, "primaries", "a4s"), "/home/box/src/a4s\n");
   writeFileSync(join(root, "a4s-primary"), "/station/shared\n");
-  const run = (value: string, workspace: string, env: NodeJS.ProcessEnv) => spawnSync("bash", ["-c", `${binding}\nresolve_primary_binding ${shellQuote(value)} ${shellQuote(workspace)}`], {
-    encoding: "utf8",
-    env: { PATH: process.env.PATH, HOME: root, ...env },
+  const bin = join(root, "a4s");
+  const cli = fileURLToPath(new URL("../../src/cli.ts", import.meta.url));
+  writeFileSync(bin, `#!/bin/sh\nexec ${shellQuote(process.execPath)} --import tsx ${shellQuote(cli)} "$@"\n`);
+  chmodSync(bin, 0o755);
+  const run = (value: string, workspace: string, env: NodeJS.ProcessEnv) => spawnSync("bash", [
+    "--noprofile", "--norc", "-c", 'exec "$A4S_BIN" primary-binding "$1" "$2"', "primary-binding", value, workspace,
+  ], {
+    cwd: packageDir, encoding: "utf8",
+    env: { ...process.env, HOME: root, A4S_PRIMARY: undefined, DAGU_PORT: undefined, ...env, A4S_BIN: bin },
   });
   try {
-    const specific = run(HOST_PRIMARY_REFERENCE, "a4s", { DAGU_HOME: root, A4S_PRIMARY: "/station/env" });
+    const env = { ...stationEnv(root), A4S_PRIMARY: "/station/env" };
+    const specific = run(HOST_PRIMARY_REFERENCE, "a4s", env);
     assert.equal(specific.status, 0, specific.stderr);
     assert.equal(specific.stdout, "/home/box/src/a4s\n");
-    const fromEnv = run(HOST_PRIMARY_REFERENCE, "", { DAGU_HOME: root, A4S_PRIMARY: "/station/env" });
+    const fromEnv = run(HOST_PRIMARY_REFERENCE, "", env);
     assert.equal(fromEnv.status, 0, fromEnv.stderr);
     assert.equal(fromEnv.stdout, "/station/env\n");
-    const shared = run(HOST_PRIMARY_REFERENCE, "missing", { DAGU_HOME: root });
+    const shared = run(HOST_PRIMARY_REFERENCE, "missing", stationEnv(root));
     assert.equal(shared.status, 0, shared.stderr);
     assert.equal(shared.stdout, "/station/shared\n");
     const recorded = run("/tmp/Repo con espacio/ñ", "", {});
     assert.equal(recorded.status, 0, recorded.stderr);
     assert.equal(recorded.stdout, "/tmp/Repo con espacio/ñ\n");
-    const missing = run(HOST_PRIMARY_REFERENCE, "", { DAGU_HOME: join(root, "absent") });
+    const missing = run(HOST_PRIMARY_REFERENCE, "", stationEnv(join(root, "absent")));
     assert.equal(missing.status, 1);
     const relative = run("relative/checkout", "", {});
     assert.equal(relative.status, 1);
+    const invalid = run(HOST_PRIMARY_REFERENCE, "../invalid", env);
+    assert.equal(invalid.status, 1);
+    assert.match(invalid.stderr, /workspace label is not a single path segment/);
+    writeFileSync(join(root, "a4s-primary"), "/station/shared\r\n");
+    const crlf = run(HOST_PRIMARY_REFERENCE, "", stationEnv(root));
+    assert.equal(crlf.status, 1);
+    assert.match(crlf.stderr, /must contain one absolute path/);
+    writeFileSync(join(root, "primaries", "a4s"), "/station/workspace\r\n");
+    const specificCrlf = run(HOST_PRIMARY_REFERENCE, "a4s", env);
+    assert.equal(specificCrlf.status, 1);
+    assert.match(specificCrlf.stderr, /must contain one absolute path/);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 test("feature admission rejects an A4S_PRIMARY run parameter", () => {

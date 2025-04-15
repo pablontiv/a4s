@@ -15,6 +15,7 @@ import {
   resolvePrimaryBinding,
 } from "@a4s/launcher/primary";
 import { resourceDecision as decideResources } from "../src/resources.ts";
+import { main } from "../src/cli.ts";
 
 const readRepo = (path: string): string => readFileSync(fileURLToPath(new URL(path, import.meta.url)), "utf8");
 const feature = readRepo("../skills/issue-execution/feature.yaml");
@@ -23,28 +24,6 @@ const reconcile = readRepo("../skills/issue-execution/reconcile.yaml");
 
 const resourceDecision: typeof decideResources = (event, cwd) =>
   decideResources(event, cwd, async () => ({ stdout: "[]" }));
-
-function extractFunction(source: string, name: string): string {
-  const start = source.indexOf(`${name}() {`);
-  assert.ok(start >= 0, name);
-  let depth = 0;
-  let quote = "";
-  for (let index = start; index < source.length; index++) {
-    const char = source[index]!;
-    if (quote) {
-      if (char === "\\" && quote !== "'") { index++; continue; }
-      if (char === quote) quote = "";
-      continue;
-    }
-    if (char === "'" || char === '"') { quote = char; continue; }
-    if (char === "{") depth++;
-    else if (char === "}") {
-      depth--;
-      if (depth === 0) return source.slice(start, index + 1);
-    }
-  }
-  throw new Error(`unclosed ${name}`);
-}
 
 
 test("host PRIMARY resolves workspace file, then A4S_PRIMARY, then the station file", () => {
@@ -68,6 +47,53 @@ test("host PRIMARY resolves workspace file, then A4S_PRIMARY, then the station f
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test("host PRIMARY rejects CRLF path files instead of normalizing them", () => {
+  const root = mkdtempSync(join(tmpdir(), "a4s-primary-crlf-"));
+  mkdirSync(join(root, "primaries"));
+  try {
+    const env = stationEnv(root);
+    writeFileSync(join(root, "a4s-primary"), "/station/shared\r\n");
+    assert.throws(() => resolvePrimaryBinding(HOST_PRIMARY_REFERENCE, { env }), /must contain one absolute path/);
+    writeFileSync(join(root, "primaries", "a4s"), "/station/workspace\r\n");
+    assert.throws(() => resolvePrimaryBinding(HOST_PRIMARY_REFERENCE, {
+      workspace: "a4s", env: { ...env, A4S_PRIMARY: "/station/env" },
+    }), /must contain one absolute path/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("host PRIMARY rejects invalid workspace labels even with an environment fallback", () => {
+  const root = mkdtempSync(join(tmpdir(), "a4s-primary-label-"));
+  try {
+    const env = { ...stationEnv(root), A4S_PRIMARY: "/station/env" };
+    for (const workspace of ["../foreign", "two/segments", "with space", ""]) {
+      assert.throws(() => resolvePrimaryBinding(HOST_PRIMARY_REFERENCE, { workspace, env }),
+        /workspace label is not a single path segment/);
+    }
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("primary-binding CLI delegates to the TypeScript resolver", async t => {
+  const root = mkdtempSync(join(tmpdir(), "a4s-primary-command-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  t.after(useStation(root));
+  const previous = process.env.A4S_PRIMARY;
+  process.env.A4S_PRIMARY = "/station/env";
+  t.after(() => {
+    if (previous === undefined) delete process.env.A4S_PRIMARY;
+    else process.env.A4S_PRIMARY = previous;
+  });
+  const log = t.mock.method(console, "log", () => {});
+  await main(["primary-binding", HOST_PRIMARY_REFERENCE, ""]);
+  await main(["primary-binding", "/recorded checkout"]);
+  assert.deepEqual(log.mock.calls.map(call => call.arguments), [["/station/env"], ["/recorded checkout"]]);
+  await assert.rejects(main(["primary-binding", HOST_PRIMARY_REFERENCE, "../invalid"]), /workspace label/);
+  writeFileSync(join(root, "a4s-primary"), "/station/shared\r\n");
+  delete process.env.A4S_PRIMARY;
+  await assert.rejects(main(["primary-binding", HOST_PRIMARY_REFERENCE]), /must contain one absolute path/);
+  await assert.rejects(main(["primary-binding"]), /Usage: a4s primary-binding/);
+  await assert.rejects(main(["primary-binding", "/recorded", "label", "extra"]), /Usage: a4s primary-binding/);
+});
+
 test("spec recovery keeps a recorded path and resolves the host reference", () => {
   const root = mkdtempSync(join(tmpdir(), "a4s-primary-spec-"));
   try {
@@ -85,8 +111,10 @@ test("spec recovery keeps a recorded path and resolves the host reference", () =
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test("feature and reconcile templates share the shell PRIMARY contract", () => {
-  assert.equal(extractFunction(reconcile, "resolve_primary_binding"), extractFunction(feature, "resolve_primary_binding"));
+test("feature and reconcile templates delegate PRIMARY resolution to a4s", () => {
+  for (const text of [feature, poc, reconcile]) assert.doesNotMatch(text, /resolve_primary_binding/);
+  assert.equal(feature.match(/"\$A4S_BIN" primary-binding "\$candidate" "\$workspace"/g)?.length, 2);
+  assert.match(reconcile, /"\$A4S_BIN" primary-binding "\$primary" "\$workspace"/);
 });
 
 test("feature and poc templates do not advertise a foreign absolute PRIMARY", () => {
