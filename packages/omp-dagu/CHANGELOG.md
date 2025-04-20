@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.26
+
+- Version the station LaunchAgent, base defaults and owned server configuration; install or check them idempotently with Dagu 2.20.1 validation while preserving other repositories' queues and configuration (#251).
+- Run live station installer coverage when Dagu 2.20.1 is available, and skip it on hosts without the required binary (#251).
+
 ## 0.3.21
 
 - Finish PoC-routed feature parents with implementation skipped so promoted runs can acquire the issue after terminal ownership handoff (#344).

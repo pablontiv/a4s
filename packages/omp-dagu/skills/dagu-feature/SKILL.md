@@ -43,7 +43,49 @@ flowchart LR
 - `git`, `gh` authenticated with push and PR rights, `curl`, `jq`.
 - The tools the repository's gate command needs.
 
-This skill does not install Dagu, and it carries no logic specific to any repository. Everything that varies between repositories is a DAG param.
+Install the Dagu binary separately at the version pinned in `../../package.json`.
+Everything that varies between repositories is a DAG param.
+
+## Global station installation
+
+a4s owns the macOS service template and shared defaults in `../../dagu/`.
+From a clean primary checkout after merge, the operator creates or updates the
+installation with Node.js >=22.19.0 and the expected `dagu` on `PATH`:
+
+```sh
+package="$PWD/packages/omp-dagu"
+export DAGU_HOME="$HOME/.dagu"
+node "$package/bin/dagu-station-install.ts" \
+  --launch-agent "$HOME/Library/LaunchAgents/local.dagu.server.plist" \
+  --log-dir "$HOME/Library/Logs/Dagu"
+```
+
+The installer checks `dagu version` against `daguFeature.dagu` (2.20.1), validates
+a minimal DAG inheriting the versioned base in an isolated temporary home, and
+checks the rendered plist with `plutil` on macOS before installing. `cmp` and
+`install -m 0644` make repeated installs byte- and mtime-stable. `base.yaml` and
+the rendered plist are fully owned; `config.yaml` merges only the leaves in the
+versioned `dagu/config.yaml` (`auth.mode`, `queues.enabled`, `host`, `port`,
+`coordinator.enabled`). Other leaves, comments and `queues.config`, including
+other repositories' concurrency limits, remain owned by their original writers.
+Foreign paths stay untouched during validation. The plist captures the
+operator's current `PATH` and resolved Dagu binary; use the same environment on
+updates. With a custom `DAGU_HOME`, the default plist destination is
+`$DAGU_HOME/LaunchAgent.plist`, so a temporary-home install stays isolated.
+
+Repeat the same command with `--check` to compare all three desired files:
+exit 0 means byte-identical, exit 1 reports drift or a validation/version error.
+`cmp "$package/dagu/base.yaml" "$DAGU_HOME/base.yaml"` also compares the base
+directly. Config is a merge and plist is a render, rather than raw template copies.
+
+Service activation is an operator action. For an already loaded service, at a
+safe point after reviewing active runs, use `launchctl bootout
+"gui/$(id -u)/local.dagu.server"`, then `launchctl bootstrap "gui/$(id -u)"
+"$HOME/Library/LaunchAgents/local.dagu.server.plist"` and `launchctl kickstart
+"gui/$(id -u)/local.dagu.server"`. A first installation starts with `bootstrap`.
+Observe `launchctl print "gui/$(id -u)/local.dagu.server"` (`state = running`),
+`curl -fsS http://127.0.0.1:8080/api/v1/health` (`healthy`) and the installer's
+`--check` before repository bootstrap.
 
 ## Global history retention
 

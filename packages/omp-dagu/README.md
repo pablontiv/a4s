@@ -32,6 +32,72 @@ operador los ejecuta.
 esta configuración global. Tras la limpieza de Dagu, los runs de más de siete
 días dejan de estar disponibles para `dagu history` y `dagu retry`; conserva
 fuera del historial la evidencia que necesites durante más tiempo.
+## Instalación global de la estación
+
+a4s versiona `dagu/LaunchAgent.plist`, `dagu/base.yaml` y las hojas propias de
+`dagu/config.yaml`. Tras el merge, desde el clon primario limpio, el operador
+instala o actualiza la configuración con el binario Dagu 2.20.1 en `PATH`:
+
+```sh
+package="$PWD/packages/omp-dagu"
+export DAGU_HOME="$HOME/.dagu"
+node "$package/bin/dagu-station-install.ts" \
+  --launch-agent "$HOME/Library/LaunchAgents/local.dagu.server.plist" \
+  --log-dir "$HOME/Library/Logs/Dagu"
+```
+
+El comando verifica la versión fijada en `package.json`, valida un DAG mínimo
+que hereda la base en un home temporal y comprueba el plist con `plutil` en
+macOS antes de escribir. Instala con `cmp`/`install -m 0644`: repetirlo con los
+mismos parámetros y `PATH` conserva bytes y mtimes. El plist usa el binario
+resuelto en `PATH`, `start-all`, `KeepAlive`, `ProcessType=Interactive` y el
+`DAGU_HOME` elegido. El instalador también crea el directorio de logs.
+
+La base y el plist renderizado son propios completos. En `config.yaml` solo
+se gestionan `auth.mode=none`, `queues.enabled=true`, `host=127.0.0.1`,
+`port=8080` y `coordinator.enabled=true`; el resto de claves y comentarios se
+conservan. Las entradas de `queues.config` pertenecen a sus repositorios:
+por ejemplo, `antojea-e2e: 4` y `antojea-e2e-device: 1` mantienen sus límites,
+igual que cualquier otro valor que tengan al instalar. La validación aislada
+comprueba los valores propios y mantiene intactas las rutas ajenas.
+
+Para un ensayo aislado, usar `DAGU_HOME=$(mktemp -d)` y omitir `--launch-agent`:
+el plist se escribe por defecto en `$DAGU_HOME/LaunchAgent.plist` y los logs
+en `$DAGU_HOME/logs/service`. `--dagu-home DIR` tiene prioridad sobre la variable.
+El instalador requiere Node.js >=22.19.0, las dependencias del paquete y
+`dagu`, `which`, `cmp` e `install` en `PATH`.
+
+Comprobación de deriva, con los mismos parámetros del comando de instalación:
+
+```sh
+node "$package/bin/dagu-station-install.ts" --check \
+  --launch-agent "$HOME/Library/LaunchAgents/local.dagu.server.plist" \
+  --log-dir "$HOME/Library/Logs/Dagu"
+cmp "$package/dagu/base.yaml" "$DAGU_HOME/base.yaml"
+```
+
+`--check` devuelve 0 si los tres archivos coinciden byte a byte con el resultado
+esperado y 1 si hay deriva, incompatibilidad de versión o error de validación.
+La comparación de config usa la fusión y la del plist su render, no la plantilla
+sin resolver.
+
+### Acciones de estación (operador)
+
+La activación se realiza en un punto seguro, tras revisar los runs activos.
+Para actualizar un servicio ya cargado:
+
+```sh
+launchctl bootout "gui/$(id -u)/local.dagu.server"
+launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/local.dagu.server.plist"
+launchctl kickstart "gui/$(id -u)/local.dagu.server"
+launchctl print "gui/$(id -u)/local.dagu.server"
+curl -fsS http://127.0.0.1:8080/api/v1/health
+```
+
+Una primera instalación empieza en `bootstrap`. La aceptación en estación es
+`state = running`, health `healthy`, el `cmp` de base sin diferencias y
+`--check` con los tres archivos `unchanged`. El instalador deja estas acciones
+de servicio al operador.
 
 ## Estado, progreso y despertar dirigido
 
@@ -75,7 +141,7 @@ Workflows
  … 2 more — /workflows
 ```
 
-El paquete usa `fetch` y un parser SSE propios, sin dependencias runtime externas. La extensión solo observa y despierta; las acciones humanas y la reconciliación pertenecen a Dagu y al operador. Si la sesión de destino no está ejecutándose, no recibe aviso. Si el mismo ID de sesión está abierto a la vez en dos procesos OMP, ambos coinciden y ambos despiertan.
+Las extensiones usan `fetch` y un parser SSE propios, sin dependencias runtime externas; el instalador de estación usa `yaml` para conservar la configuración compartida. La extensión solo observa y despierta; las acciones humanas y la reconciliación pertenecen a Dagu y al operador. Si la sesión de destino no está ejecutándose, no recibe aviso. Si el mismo ID de sesión está abierto a la vez en dos procesos OMP, ambos coinciden y ambos despiertan.
 
 ## Guard de triage y agente
 

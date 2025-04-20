@@ -1,6 +1,6 @@
 {
   "name": "@a4s/omp-dagu",
-  "version": "0.3.21",
+  "version": "0.3.26",
   "private": true,
   "license": "UNLICENSED",
   "repository": {
@@ -18,7 +18,8 @@
     "./triage": "./src/triage/index.ts"
   },
   "bin": {
-    "dagu-feature-bundle": "./bin/dagu-feature-bundle.ts"
+    "dagu-feature-bundle": "./bin/dagu-feature-bundle.ts",
+    "dagu-station-install": "./bin/dagu-station-install.ts"
   },
   "omp": {
     "extensions": ["./src/status/index.ts", "./src/triage/index.ts"]
@@ -26,6 +27,9 @@
   "scripts": {
     "test": "tsx --test test/*.test.ts",
     "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "yaml": "2.9.0"
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "1.0.3",
