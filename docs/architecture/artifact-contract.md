@@ -274,10 +274,14 @@ IDs, all process leases, all nonterminal/retryable/waiting tick bindings, every
 nonterminal run in **every DAG of every registered primary**, and every open role
 job resolved through its repository/run receipt. All Dagu history pages are
 required; repeated cursors, unknown status, unreadable sources or an unresolved
-job abort before any deletion. A receipt not yet listed by Dagu is a pending
-admission, even when enqueue recorded an incident/ambiguous outcome; its build is
-kept for seven days after receipt creation (legacy `initial.admittedAt`). Thereafter
-the exact tuple remains restorable. Tick binding files remain for every listed
+job abort before any deletion. An artifact-bound receipt not yet listed by Dagu
+is a pending admission, even when enqueue recorded an incident/ambiguous outcome;
+its build is kept for five minutes after `receiptCreatedAt` (legacy
+`initial.admittedAt`). At that bound an absent run no longer pins the build, but
+live leases, nonterminal/recoverable runs and open jobs remain readers regardless
+of receipt age. Artifact-less schema-1 receipts predate the launcher cache and
+are never pending cache readers. Receipts are unchanged and their exact tuples
+remain restorable after expiry. Tick binding files remain for every listed
 status and are deleted only after a definitive unknown response, never an API
 error. Run identity remains in receipts/bindings even after build pruning.
 

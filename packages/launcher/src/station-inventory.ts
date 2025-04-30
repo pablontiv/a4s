@@ -132,6 +132,9 @@ export function readTickBindings(home: string): Array<{ path: string; binding: T
   });
 }
 interface ReceiptEntry { value: Record<string, unknown>; primary: string; dag: string; run: string; artifact?: ArtifactTuple; created: number }
+// Covers receipt publication before enqueue becomes visible. Live admission
+// processes also hold leases; absent history alone must not pin builds for days.
+const PENDING_ADMISSION_WINDOW_MS = 5 * 60 * 1000;
 export interface StationInventory { formats: Partial<PersistedFormats>; references: BuildReference[]; expiredBindings: string[] }
 /** Read-only inventory; every error propagates before the caller can delete anything. */
 export async function inventoryStation(home: string, dependencies: InventoryDependencies = {}, includeRuns = true): Promise<StationInventory> {
@@ -194,7 +197,10 @@ export async function inventoryStation(home: string, dependencies: InventoryDepe
     }
     const now = (dependencies.now ?? Date.now)();
     for (const receipt of receipts) {
-      if (!runs.some(run => run.name === receipt.dag && run.dagRunId === receipt.run) && now - receipt.created < 7 * 86400000) {
+      if (!runs.some(run => run.name === receipt.dag && run.dagRunId === receipt.run) && now - receipt.created < PENDING_ADMISSION_WINDOW_MS) {
+        // Pre-launcher receipts cannot name a cache reader. Existing runs and
+        // open role jobs still require resolvable artifacts above and below.
+        if (receipt.value.schemaVersion === 1 && !receipt.artifact) continue;
         if (!receipt.artifact) throw new Error(`Unresolved pending admission ${receipt.run}`);
         references.push({ artifact: receipt.artifact, holder: `pending admission ${receipt.dag}/${receipt.run}` });
       }

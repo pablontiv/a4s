@@ -102,14 +102,14 @@ test("Dagu inventory covers all DAGs and pages, and repeated cursors fail closed
   await assert.rejects(listStationRuns(), /Repeated/);
 });
 
-test("pending receipts include incident enqueue, expire at seven days; open jobs and live runs resolve exact receipts", async t => {
+test("pending receipts include incident enqueue, expire at five minutes; open jobs and live runs resolve exact receipts", async t => {
   const f = stationFixture(t), artifact = await f.release("r1"), primary = join(f.root, "repo"), directory = join(primary, ".git", "dagu-feature");
-  const now = Date.parse("2026-10-29T00:00:00Z");
-  const create = (run: string, age: number, dag = "other-dag") => {
+  const now = Date.parse("2026-10-29T00:00:00Z"), fiveMinutes = 5 * 60 * 1000;
+  const create = (run: string, ageMs: number, dag = "other-dag") => {
     const path = join(directory, "runs", run); mkdirSync(path, { recursive: true });
-    writeFileSync(join(path, "receipt.json"), JSON.stringify({ schemaVersion: 2, artifact, initial: { admittedAt: new Date(now - age * 86400000).toISOString() }, runReceipt: { dag, run, observations: [{ kind: "incident" }] } }));
+    writeFileSync(join(path, "receipt.json"), JSON.stringify({ schemaVersion: 2, artifact, initial: { admittedAt: new Date(now - ageMs).toISOString() }, runReceipt: { dag, run, observations: [{ kind: "incident" }] } }));
   };
-  create("pending", 6); create("expired", 7); create("active", 30); create("job", 30);
+  create("pending", fiveMinutes - 1); create("expired", fiveMinutes); create("active", 30 * 86400000); create("job", 30 * 86400000);
   const db = new DatabaseSync(join(f.home, "role-jobs.sqlite"));
   db.exec("CREATE TABLE jobs(document TEXT, result TEXT)");
   db.prepare("INSERT INTO jobs VALUES (?,NULL)").run(JSON.stringify({ schemaVersion: 1, binding: { repo: primary, run: "job", dag: "other-dag" } })); db.close();
