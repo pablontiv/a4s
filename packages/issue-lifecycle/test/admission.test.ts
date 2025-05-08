@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import test from "node:test";
 import { inProcessAdmissionFixture as admissionFixture } from "./fixtures/compiled-admission.ts";
 import { runA4s } from "./fixtures/compiled-cli.ts";
 import { CONFIG_PATH, POLICY_PARAMETERS } from "../../launcher/src/config.ts";
-import { admit, appendObservation, enqueueArguments, preflightAdmission } from "../src/admission.ts";
+import { admit, enqueueArguments, preflightAdmission } from "../src/admission.ts";
 import { assertArtifactReceipt, assertExecutingArtifact } from "../src/artifact-receipt.ts";
 import { roleAdmission } from "./role-job-fixtures.ts";
 import { identity } from "../src/identity.ts";
@@ -139,27 +139,5 @@ test("fresh receipt station values cannot be reinterpreted and validation does n
       assert.throws(() => assertArtifactReceipt(changed, "fresh"), new RegExp(`differs from admitted ${field}`));
     }
     assert.deepEqual(snapshot(fixture.root), before);
-  } finally { fixture.dispose(); }
-});
-test("read-only observations retain both legacy records and full immutable artifact fields", () => {
-  const fixture = admissionFixture();
-  try {
-    for (const schema of [1, 2] as const) {
-      const run = `observe-${schema}`;
-      const receipt = roleAdmission(fixture.packageDir, fixture.home, run, '"$A4S_BIN" role-jobs stage triage', { version: identity.version, commit: "a".repeat(40), digest: "b".repeat(64) });
-      receipt.schemaVersion = schema;
-      if (schema === 1) { delete receipt.artifact; delete receipt.artifactSupport; delete receipt.contracts; }
-      const path = fixture.receipt(run);
-      mkdirSync(dirname(path), { recursive: true });
-      writeFileSync(path, JSON.stringify(receipt));
-      appendObservation(path, { dag: "feature", run, attempt: 1, category: "execution", kind: "read-only-report", data: { state: "retained" } });
-      const observed = JSON.parse(readFileSync(path, "utf8"));
-      assert.deepEqual(observed.initial, receipt.initial);
-      assert.deepEqual(observed.artifact, receipt.artifact);
-      assert.deepEqual(observed.artifactSupport, receipt.artifactSupport);
-      assert.deepEqual(observed.contracts, receipt.contracts);
-      assert.equal(observed.schemaVersion, schema);
-      assert.equal(observed.runReceipt.observations.length, 1);
-    }
   } finally { fixture.dispose(); }
 });

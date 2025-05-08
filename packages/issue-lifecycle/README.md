@@ -80,6 +80,19 @@ record top-level `artifact`, `artifactSupport` and actually used `contracts`;
 successors additionally record `parent` (`receipt`, `dag`, `run`, `artifact`).
 Consumer config identity is separate at `initial.deployment.config`.
 
+Observation appends serialize through the launcher's kernel `flock` helper and
+atomically replace the receipt. The persistent `receipt.json.flock` file is not
+an ownership marker: process exit (including a crash) releases the lock. Legacy
+`receipt.json.lock` directories do not block new writers.
+
+Once `dagu enqueue` succeeds, admission returns success (`admitted=yes`) even if
+its receipt observation fails. That failure is reported as
+`DAGU_ADMISSION_INCIDENT` and retained beside the receipt in
+`enqueue-incident.json`, including the run identity, admitted outcome, original
+enqueue observation and write error. If that incident file also cannot be
+written, stderr retains both errors; the queued run is still not rejected.
+Inspect the existing run instead of retrying admission with a new run ID.
+
 `a4s version` and the archive's `identity.json` agree exactly, including uniform
 `support` entries `{ read: [...], write: N }` for receipts, job SQL/JSON, config,
 run state and PR checkpoints; exact dispatch/checkpoint protocols; the canonical
