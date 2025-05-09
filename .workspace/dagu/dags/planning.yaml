@@ -293,8 +293,8 @@ steps:
         if dagu status --run-id "$run_id" "$dag" >/dev/null 2>&1; then
           printf 'exists=%s issue=%s\n' "$run_id" "$number"
         else
-          args=(ISSUE="$number" PRIMARY="$PRIMARY" OMP_SESSION_ID="$OMP_SESSION_ID")
-          if [[ "$dag" == feature ]]; then args+=(BRANCH="dagu/issue-$number" PR_NUMBER="")
+          args=(ISSUE="$number" OMP_SESSION_ID="$OMP_SESSION_ID")
+          if [[ "$dag" == feature ]]; then args+=(PR_NUMBER="")
           else args+=(QUESTION="$(jq -r .question <<<"$row")"); fi
           dagu-feature-bundle enqueue --run-id "$run_id" "$PRIMARY/.workspace/dagu/dags/$dag.yaml" -- "${args[@]}"
           printf 'enqueued=%s issue=%s\n' "$run_id" "$number"

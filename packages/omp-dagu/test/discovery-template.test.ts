@@ -37,7 +37,7 @@ function extractScript(definition: string, marker: string): string {
 }
 
 function run(script: string, env: NodeJS.ProcessEnv) {
-  return spawnSync("bash", ["-c", script], { encoding: "utf8", env: { ...process.env, ...env } });
+  return spawnSync("bash", ["-c", script], { encoding: "utf8", env: { ...process.env, DAGU_PARAMS_JSON: "{}", ...env } });
 }
 
 function finding(id: string, lens = "0") {
@@ -263,8 +263,7 @@ printf 'admission %s\\n' "$*" >> "$FAKE_DAGU_LOG"
     const invocation = readFileSync(log, "utf8");
     assert.match(invocation, /^admission enqueue /);
     assert.match(invocation, /--run-id repo-issue-42/);
-    assert.match(invocation, /ISSUE=42/);
-    assert.match(invocation, /BRANCH=dagu\/issue-42/);
+    assert.match(invocation, /-- ISSUE=42 PR_NUMBER= OMP_SESSION_ID=session\n$/);
     assert.equal(readFileSync(join(root, "lenses", "0", "findings.jsonl"), "utf8"), readFileSync(join(outDir, "findings-0.jsonl"), "utf8"));
   } finally {
     rmSync(root, { recursive: true, force: true });

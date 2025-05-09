@@ -20,7 +20,7 @@ for (const drift of [undefined, "main", "bundle", "invalid JSON", "unreadable ma
   let ready = false;
   const runs = Array.from({ length: 5 }, (_, n) => ({
     name: "feature", dagRunId: `burst-${n}`, statusLabel: "waiting", labels: ["workspace=a4s", `dagu-feature-bundle=${drift === "bundle" ? "0.3.8" : BUNDLE_VERSION}`],
-    params: `OMP_SESSION_ID=owner PRIMARY=${primary}`, nodes: [{ step: { id: "triage", name: "triage", humanTask: {} }, statusLabel: "waiting" }],
+    params: "OMP_SESSION_ID=owner", nodes: [{ step: { id: "triage", name: "triage", humanTask: {} }, statusLabel: "waiting" }],
   }));
   const requests: string[] = [];
   const server = createServer((request, response) => {
@@ -36,6 +36,7 @@ for (const drift of [undefined, "main", "bundle", "invalid JSON", "unreadable ma
       id: url.searchParams.get("dagRunId"), type: "dag.run.waiting", recordedAt: "2026-10-16T00:00:00Z",
       data: { dag_run_status: { nodes: [{ step_id: "triage", step_name: "triage", status: 7 }] } },
     }] }));
+    else if (url.pathname.endsWith("/spec")) response.end(JSON.stringify({ spec: `env:\n  - PRIMARY: ${JSON.stringify(primary)}\n` }));
     else if (url.pathname.startsWith("/api/v1/dag-runs/")) response.end(JSON.stringify({ dagRunDetails: runs.find(run => url.pathname.endsWith(run.dagRunId)) }));
     else {
       response.writeHead(200, { "content-type": "text/event-stream" });
@@ -91,6 +92,7 @@ for (const drift of [undefined, "main", "bundle", "invalid JSON", "unreadable ma
     } else await until(() => received.length === 5);
     await delay(1200); // A second head sweep replays the same ledger IDs.
     assert.deepEqual(received.map(message => message.match(/run=(\S+)/)?.[1]), runs.map(run => run.dagRunId));
+    assert.ok(requests.some(path => path.endsWith("/spec")));
     assert.equal(aborts, 0);
     assert.equal(instructions.length, stale ? 5 : 0);
     for (const message of received) {
@@ -146,6 +148,8 @@ for (const scenario of [
       response.end(JSON.stringify({ dagRunDetails: {
         ...run, statusLabel: status, nodes: [{ step: { name: "gate" }, statusLabel: status }],
       } }));
+    } else if (url.pathname === "/api/v1/dag-runs/feature/outage-run/spec") {
+      response.end(JSON.stringify({ spec: "env: []\n" }));
     } else {
       // A closed SSE connection starts the next discovery round.
       response.writeHead(200, { "content-type": "text/event-stream" });

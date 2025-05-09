@@ -73,7 +73,7 @@ test("feature render preserves the adopted configuration and matches its templat
     __DAGU_FEATURE_STAMP__: rendered.split("\n")[0]!.slice("# dagu-feature-bundle: ".length),
     __DAGU_FEATURE_VERSION__: rendered.match(/  - dagu-feature-bundle=(.+)/)![1]!,
     __DAGU_FEATURE_IDENTITY__: rendered.match(/- DAGU_FEATURE_BUNDLE: "(.+)"/)![1]!,
-    TEMPLATE_REPO: "a4s", TEMPLATE_BASE_BRANCH: '"main"',
+    TEMPLATE_REPO: "a4s", TEMPLATE_BASE_BRANCH: '"main"', __PRIMARY__: '"/Users/Shared/harness/a4s"',
     __GATE__: '"npm ci && npm test && npm run typecheck"',
     __REBASE_RESOLVER__: '"node packages/omp-dagu/bin/dagu-bundle-rebase.mjs"',
     __REQUIRED_CHECK__: '"validate"', __VALIDATION__: '""',
@@ -109,8 +109,16 @@ test("bootstrap renders optional validation as the sole adopted value", {
       });
       assert.equal(result.status, 0, result.stdout + result.stderr);
       const output = readFileSync(stage, "utf8");
-      assert.ok(output.includes(`default: ${JSON.stringify(validation)}\n    enum: [${JSON.stringify(validation)}]`));
-      assert.ok(output.includes('default: "node packages/omp-dagu/bin/dagu-bundle-rebase.mjs"'));
+      assert.ok(output.includes(`default: ${JSON.stringify(validation)}\n      enum: [${JSON.stringify(validation)}]`));
+      assert.ok(output.includes('- REBASE_RESOLVER: "node packages/omp-dagu/bin/dagu-bundle-rebase.mjs"'));
     }
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("bootstrap binds feature and PoC primary and feature policy at adoption", () => {
+  const bootstrap = skill("dagu-feature-bootstrap.yaml");
+  assert.match(bootstrap, /PRIMARY=\$\(cd "\$PRIMARY" && pwd -P\)/);
+  assert.equal((bootstrap.match(/gsub\(\\"__PRIMARY__\\"/g) ?? []).length, 2);
+  assert.match(skill("feature.yaml"), /env:\n  - PRIMARY: __PRIMARY__\n  - BRANCH: dagu\/issue-\$\{ISSUE\}\n  - GATE: __GATE__\n  - REBASE_RESOLVER: __REBASE_RESOLVER__\n  - REQUIRED_CHECK: __REQUIRED_CHECK__/);
+  assert.match(skill("poc.yaml"), /env:\n  - PRIMARY: __PRIMARY__/);
 });

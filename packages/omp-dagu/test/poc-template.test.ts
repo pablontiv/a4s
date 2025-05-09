@@ -52,7 +52,7 @@ for (const [name, definition] of [
       for (const id of ["base", "worktree"]) {
         const result = spawnSync("bash", ["-c", script(id)], {
           encoding: "utf8",
-          env: { ...process.env, PRIMARY: primary, WORKTREE: worktree, BASE_BRANCH: "main", RUN: "symlink-test", DAGU_FEATURE_BUNDLE: "test", DAGU_OUTPUT_FILE: join(root, "outputs") },
+          env: { ...process.env, DAGU_PARAMS_JSON: "{}", PRIMARY: primary, WORKTREE: worktree, BASE_BRANCH: "main", RUN: "symlink-test", DAGU_FEATURE_BUNDLE: "test", DAGU_OUTPUT_FILE: join(root, "outputs") },
         });
         assert.equal(result.status, 0, `${id}\n${result.stdout}\n${result.stderr}`);
       }
@@ -101,7 +101,7 @@ for (const definition of [
     assert.ok(address && typeof address !== "string");
     const port = address.port;
     await new Promise<void>(resolve => listener.close(() => resolve()));
-    const env = { ...process.env, DAGU_HOME: home, DAGU_COORDINATOR_ENABLED: "false", PATH: `${bin}:${process.env.PATH}` };
+    const env = { ...process.env, DAGU_PARAMS_JSON: "{}", DAGU_HOME: home, DAGU_COORDINATOR_ENABLED: "false", PATH: `${bin}:${process.env.PATH}` };
     writeFileSync(join(home, "config.yaml"), `host: 127.0.0.1\nport: ${port}\nauth:\n  mode: none\ncoordinator:\n  enabled: false\n`);
     const source = readFileSync(definition, "utf8");
     const step = (id: string) => {

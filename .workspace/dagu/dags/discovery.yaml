@@ -387,7 +387,7 @@ steps:
           printf 'exists=%s issue=%s\n' "$run_id" "$number"
         else
           dagu-feature-bundle enqueue --run-id "$run_id" "$PRIMARY/.workspace/dagu/dags/feature.yaml" -- \
-            ISSUE="$number" PRIMARY="$PRIMARY" BRANCH="dagu/issue-$number" PR_NUMBER="" \
+            ISSUE="$number" PR_NUMBER="" \
             OMP_SESSION_ID="$OMP_SESSION_ID"
           printf 'enqueued=%s issue=%s\n' "$run_id" "$number"
         fi
@@ -400,4 +400,3 @@ steps:
         install -m 0644 "$OUT_DIR/findings-$lens.jsonl" "$history/findings.jsonl"
         install -m 0644 "$OUT_DIR/temporal-$lens.jsonl" "$history/temporal.jsonl"
       done
-

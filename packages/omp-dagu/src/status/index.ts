@@ -5,7 +5,7 @@ import { readFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import { activityTarget, readActivity } from "./activity.ts";
 import { ghIssueTitleResolver, IssueTitles } from "./issue-title.ts";
-import { isActive, issueNumber, renderOffline, renderWidget, runParam, TOGGLE_COMMAND, topicFor, Transitions } from "./progress.ts";
+import { isActive, issueNumber, renderOffline, renderWidget, resolveRunPrimary, runParam, TOGGLE_COMMAND, topicFor, Transitions } from "./progress.ts";
 import type { RunDetails, WidgetTheme } from "./progress.ts";
 import { readCiDiagnostic, resolveRepository } from "./repository.ts";
 import { SSEParser } from "./sse.ts";
@@ -98,7 +98,8 @@ async function runDetails(base: string, summary: RunDetails, signal: AbortSignal
   if (!response.ok) throw new RunDetailsError(response.status);
   const payload = await response.json() as { dagRunDetails?: RunDetails };
   const details = { ...summary, ...payload.dagRunDetails };
-  const primary = runParam(details, "PRIMARY");
+  const primary = await resolveRunPrimary(base, details, signal);
+  if (primary) details.resolvedPrimary = primary;
   if (details.name === "poc" && primary && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(details.dagRunId)
     && details.nodes?.some(node => node.step.name === "run_poc"
       && node.statusLabel === "waiting" && (node.approvalIteration ?? 0) > 0)) {
@@ -156,11 +157,13 @@ async function watchNotices(base: string, repo: string, ctx: Context, signal: Ab
         // final event has not reached the eventually consistent ledger yet.
         try {
           const run = await runDetails(base, summary, signal);
-          observeRunReceipt(run, runParam(run, "PRIMARY") || ctx.cwd);
-          const ciDiagnostic = await readCiDiagnostic(runParam(run, "PRIMARY"), run.dagRunId,
+          const primary = run.resolvedPrimary ?? runParam(run, "PRIMARY");
+          if (primary) summary.resolvedPrimary = primary;
+          observeRunReceipt(run, primary || ctx.cwd);
+          const ciDiagnostic = await readCiDiagnostic(primary, run.dagRunId,
             run.nodes?.some(node => node.statusLabel === "waiting" && (node.step.id ?? node.step.name) === "implement") ?? false, signal);
           for (const snapshot of [...await ledger.read(base, run, signal), run]) {
-            if (snapshot !== run) observeRunReceipt(snapshot, runParam(snapshot, "PRIMARY") || ctx.cwd, "persisted-transition");
+            if (snapshot !== run) observeRunReceipt(snapshot, primary || ctx.cwd, "persisted-transition");
             const effects = transitions.observe(snapshot, { baseline, ...(ciDiagnostic ? { ciDiagnostic } : {}) });
             for (const message of effects.wakeMessages ?? (effects.wakeMessage ? [effects.wakeMessage] : [])) wake(message);
             if (effects.warningMessage) ctx.ui.notify(effects.warningMessage, "warning");
@@ -170,7 +173,7 @@ async function watchNotices(base: string, repo: string, ctx: Context, signal: Ab
             }
           }
         } catch (error) {
-          try { observeRunReceipt(summary, runParam(summary, "PRIMARY") || ctx.cwd, "observation-error", error instanceof Error ? error.message : String(error)); }
+          try { observeRunReceipt(summary, summary.resolvedPrimary ?? runParam(summary, "PRIMARY") ?? ctx.cwd, "observation-error", error instanceof Error ? error.message : String(error)); }
           catch (receiptError) { console.warn("DAGU_RECEIPT_OBSERVATION_FAILED", receiptError); }
         }
       }

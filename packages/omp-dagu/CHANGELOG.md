@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.85
+
+- Bind gate, required check, rebase resolver and canonical primary at adoption, derive feature branches, reject policy run overrides before repository writes, and resolve runtime consumers from the enqueued policy snapshot (#274).
+
 ## 0.3.84
 
 - Classify required CI for the current PR head as PENDING, PASS, CODE_FAIL, TRANSIENT, BLOCKED or STALE_SHA, retaining SHA/check/log diagnostics and bounded deterministic infrastructure retries (#226).

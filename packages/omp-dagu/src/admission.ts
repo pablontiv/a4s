@@ -106,7 +106,25 @@ function checkRender(path: string, name: string, sourceRoot: string, prefix: str
 
 export function admit(options: AdmissionOptions, persist = true): { path: string; receipt: Receipt } {
   try {
-    const primaryParam = options.params.find(param => param.startsWith("PRIMARY="))?.slice(8);
+    const dagPath = realpathSync(resolve(options.cwd, options.dag));
+    const name = basename(dagPath);
+    if (!["feature.yaml", "poc.yaml", "discovery.yaml", "reconcile.yaml"].includes(name)) throw new Error(`DAG=${name} expected a distributed lifecycle DAG`);
+    let primaryParam = options.params.find(param => param.startsWith("PRIMARY="))?.slice(8);
+    if (name === "feature.yaml" || name === "poc.yaml") {
+      const snapshot = readFileSync(dagPath, "utf8");
+      const policy: Record<string, unknown> = {};
+      for (const field of ["PRIMARY", "GATE", "REBASE_RESOLVER", "REQUIRED_CHECK"]) {
+        const literal = new RegExp(`^  - ${field}: (.+)$`, "m").exec(snapshot)?.[1];
+        if (literal) policy[field] = JSON.parse(literal);
+      }
+      const issue = options.params.find(param => param.startsWith("ISSUE="))?.slice(6);
+      policy.BRANCH = name === "feature.yaml" ? `dagu/issue-${issue}` : `poc/${options.run}`;
+      const rejected = options.params.map(param => param.slice(0, param.indexOf("=")))
+        .filter(field => ["PRIMARY", "BRANCH", "GATE", "REBASE_RESOLVER", "REQUIRED_CHECK"].includes(field));
+      if (rejected.length) throw new Error(`admission rejected run parameter: ${rejected.join(", ")}; adopted policy ${JSON.stringify(policy)}`);
+      if (typeof policy.PRIMARY !== "string" || !policy.PRIMARY) throw new Error(`${name} requires an adoption-fixed PRIMARY`);
+      primaryParam = policy.PRIMARY;
+    }
     const primary = realpathSync(resolve(options.cwd, primaryParam || "."));
     const repo = realpathSync(git(primary, "rev-parse", "--show-toplevel"));
     const path = receiptPath(primary, options.run);
@@ -114,9 +132,6 @@ export function admit(options: AdmissionOptions, persist = true): { path: string
     const prefix = git(packageRoot, "rev-parse", "--show-prefix");
     const commit = git(packageRoot, "rev-parse", "HEAD");
     const origin = git(packageRoot, "remote", "get-url", "origin");
-    const dagPath = realpathSync(resolve(options.cwd, options.dag));
-    const name = basename(dagPath);
-    if (!["feature.yaml", "poc.yaml", "discovery.yaml", "reconcile.yaml"].includes(name)) throw new Error(`DAG=${name} expected a distributed lifecycle DAG`);
     const daguHome = realpathSync(process.env.DAGU_HOME || join(homedir(), ".dagu"));
     const installedDAG = checkRender(dagPath, name, root, prefix);
     const reconciler = checkRender(join(daguHome, "dags", "reconcile.yaml"), "reconcile.yaml", root, prefix);

@@ -189,8 +189,8 @@ test("repository resolution requires verified run identity", () => {
 });
 test("feature render keeps the repository resolver and all step bodies in template parity", () => {
   const source = readFileSync(template, "utf8"); const render = readFileSync(rendered, "utf8");
-  assert.match(source, /name: REBASE_RESOLVER\n    type: string\n    default: __REBASE_RESOLVER__/);
-  assert.match(render, /default: "node packages\/omp-dagu\/bin\/dagu-bundle-rebase.mjs"/);
+  assert.match(source, /^  - REBASE_RESOLVER: __REBASE_RESOLVER__$/m);
+  assert.match(render, /^  - REBASE_RESOLVER: "node packages\/omp-dagu\/bin\/dagu-bundle-rebase.mjs"$/m);
   for (const id of ["rebase", "conflict_review", "gate", "push"]) assert.equal(step(source, id), step(render, id));
 });
 
@@ -240,7 +240,7 @@ test("isolated Dagu rebases colliding candidates before gate and publishes the n
   try {
     await until("Dagu ready", async () => { try { return (await fetch(`${api}/dag-runs`)).ok ? true : undefined; } catch { return undefined; } });
     execFileSync("bash", ["-c", script(join(dirname(template), "dagu-feature-bootstrap.yaml"), "render")], { cwd: repo.root, env: adoptionEnv });
-    assert.ok(text(dirname(staged), "feature.yaml").includes(`default: ${JSON.stringify(repo.env.REBASE_RESOLVER)}`));
+    assert.ok(text(dirname(staged), "feature.yaml").includes(`- REBASE_RESOLVER: ${JSON.stringify(repo.env.REBASE_RESOLVER)}`));
     command("validate", staged); command("validate", rendered); command("validate", file);
     command("enqueue", "--run-id", id, "feature");
     await until("normalized candidate awaiting independent verdicts", async () => {

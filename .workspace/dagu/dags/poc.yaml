@@ -9,25 +9,26 @@ shell: bash
 max_active_steps: 1
 max_clean_up_time_sec: 120
 params:
-  - name: ISSUE
-    type: string
-    default: ""
-  - name: QUESTION
-    type: string
-    default: ""
-  - name: PRIMARY
-    type: string
-    default: "/Users/Shared/harness/a4s"
-  - name: BASE_BRANCH
-    type: string
-    default: "main"
-  - name: OMP_SESSION_ID
-    type: string
-    default: ""
-  - name: TEST_PATHS
-    type: string
-    default: "(^|/)(test|tests)/|\\.test\\.(ts|cjs)$"
+  type: object
+  additionalProperties: true
+  properties:
+    ISSUE:
+      type: string
+      default: ""
+    QUESTION:
+      type: string
+      default: ""
+    BASE_BRANCH:
+      type: string
+      default: "main"
+    OMP_SESSION_ID:
+      type: string
+      default: ""
+    TEST_PATHS:
+      type: string
+      default: "(^|/)(test|tests)/|\\.test\\.(ts|cjs)$"
 env:
+  - PRIMARY: "/Users/Shared/harness/a4s"
   - RUN: ${context.run.id}
   - WORKTREE: ${PRIMARY}/.workspace/worktrees/poc-${RUN}
   - DAGU_FEATURE_BUNDLE: "dagu-feature-bundle=0.3.77 source=pablontiv/a4s@431b61e8e9c7ddcbb699462aff788f074c3e5cd0 bootstrap=bootstrap-a4s-v0-3-77"
@@ -67,7 +68,18 @@ env:
         PRIMARY=$primary WORKTREE=$expected
       }
 steps:
+  - id: admission
+    run: |
+      set -euo pipefail
+      rejected=$(jq -er 'keys[] | select(. == "GATE" or . == "REBASE_RESOLVER" or . == "REQUIRED_CHECK" or . == "PRIMARY" or . == "BRANCH")' <<<"$DAGU_PARAMS_JSON") || [[ $? == 4 ]]
+      if [[ -n "$rejected" ]]; then
+        printf 'admission rejected run parameter: %s\n' "$rejected" >&2
+        printf 'adopted policy PRIMARY=%q BRANCH=%q\n' "$PRIMARY" "poc/$RUN" >&2
+        exit 1
+      fi
+
   - id: record
+    depends: admission
     run: |
       set -euo pipefail
       [[ "$RUN" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]
@@ -300,6 +312,7 @@ steps:
         expected: "re:^$"
     run: &publish |
       set -euo pipefail
+      if jq -e 'has("GATE") or has("REBASE_RESOLVER") or has("REQUIRED_CHECK") or has("PRIMARY") or has("BRANCH")' <<<"${DAGU_PARAMS_JSON:-"{}"}" >/dev/null; then exit 0; fi
       STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "poc/runs/$RUN")
       test -f "$STATE/issue.number" || exit 0
       REPO=$(cat "$STATE/repo")
@@ -435,7 +448,7 @@ steps:
           then $last.comment.html_url else error("Latest verdict is not a current, complete PASS") end
         ' "$STATE/pages.json" > "$STATE/promotion.url"
         dagu-feature-bundle enqueue --run-id "feature-$RUN" "$PRIMARY/.workspace/dagu/dags/feature.yaml" -- \
-          ISSUE="$ISSUE" PRIMARY="$PRIMARY" BRANCH="dagu/issue-$ISSUE" \
+          ISSUE="$ISSUE" \
           BASE_BRANCH="$BASE_BRANCH" OMP_SESSION_ID="$OMP_SESSION_ID" \
           POC_BASIS="$(cat "$STATE/promotion.url")"
       elif [[ "$VERDICT" == FAIL && -f "$STATE/created" ]]; then
@@ -474,6 +487,7 @@ handler_on:
   exit:
     run: |
       set -euo pipefail
+      if jq -e 'has("GATE") or has("REBASE_RESOLVER") or has("REQUIRED_CHECK") or has("PRIMARY") or has("BRANCH")' <<<"${DAGU_PARAMS_JSON:-"{}"}" >/dev/null; then exit 0; fi
       eval "$DAGU_RESOURCE_GUARD"
       resource_lock
       [[ "$RUN" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]
@@ -500,4 +514,3 @@ handler_on:
         exit 1
       fi
       printf 'cleanup worktree=%s branch=%s\n' "$WT" "$BRANCH"
-
