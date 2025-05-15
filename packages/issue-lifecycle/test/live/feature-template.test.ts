@@ -451,14 +451,18 @@ cp "$STATE/triage.md" "$PUBLISHED"`);
 set -euo pipefail
 case "$1 $2" in
   "pr list")
-    printf '{"number":117,"state":"CLOSED","headRefName":"%s","baseRefName":"main"}\\n' "$BRANCH" | jq -s . ;;
+    if [[ "\${EXISTING_PR:-no}" == yes ]]; then
+      printf '{"number":571,"state":"OPEN","headRefName":"%s","baseRefName":"main","headRefOid":"${sha}"}\\n' "$BRANCH" | jq -s .
+    else
+      printf '{"number":117,"state":"CLOSED","headRefName":"%s","baseRefName":"main"}\\n' "$BRANCH" | jq -s .
+    fi ;;
   "pr view")
     case "$*" in
       *"--json state"*) echo OPEN ;;
       *"--json headRefName"*) echo "$BRANCH" ;;
       *"--json headRefOid"*) echo '${sha}' ;;
-      *"--json number") test "$EXISTING_PR" = yes ;;
-      *) echo '{"number":571}' ;;
+      *"--json number --jq .number") echo 571 ;;
+      *) printf '{"number":571,"state":"OPEN","headRefName":"%s","baseRefName":"main","headRefOid":"${sha}"}\\n' "$BRANCH" ;;
     esac ;;
   "pr create"|"pr edit")
     printf '%s\\n' "$*" >> '${calls}'
@@ -1436,9 +1440,72 @@ esac
     });
   }
 
+  for (const binding of ["discovery", "explicit", "retained"] as const) {
+    test(`${name} earlier MERGED PR with a different head publishes a fresh candidate (${binding})`, () => {
+      const repo = repository();
+      try {
+        const old = git(repo.worktree, "rev-parse", "HEAD");
+        git(repo.worktree, "push", "origin", repo.branch);
+        commit(repo, "README.txt", "reopened issue candidate\n");
+        const sha = git(repo.worktree, "rev-parse", "HEAD");
+        const candidate = JSON.parse(readFileSync(join(repo.state, "candidate.json"), "utf8"));
+        writeFileSync(join(repo.state, "candidate.json"), JSON.stringify({ ...candidate, summary: "Publish reopened issue candidate" }));
+        const prior = { number: 117, state: "MERGED", headRefName: repo.branch, baseRefName: "main",
+          headRefOid: old, autoMergeRequest: null, mergeCommit: { oid: old } };
+        const current = { ...prior, number: 571, state: "OPEN", headRefOid: sha, mergeCommit: null };
+        const created = join(repo.root, "created");
+        const calls = join(repo.root, "calls");
+        writeFileSync(calls, "");
+        writeFileSync(join(repo.root, "bin", "gh"), `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >> '${calls}'
+case "$*" in
+  "pr list "*)
+    if [[ -f '${created}' ]]; then printf '%s\\n' '${JSON.stringify([prior, current])}';
+    else printf '%s\\n' '${JSON.stringify([prior])}'; fi ;;
+  "pr view 117 --repo "*) printf '%s\\n' '${JSON.stringify(prior)}' ;;
+  "pr view 571 --repo "*) printf '%s\\n' '${JSON.stringify(current)}' ;;
+  "pr create "*) touch '${created}' ;;
+  "pr view ${repo.branch} --json number --jq .number") test -f '${created}'; echo 571 ;;
+  "pr view 571 --json headRefOid --jq .headRefOid") echo '${sha}' ;;
+  "pr view 571 --json state,mergeStateStatus,autoMergeRequest,mergeCommit,headRefOid")
+    printf '%s\\n' '${JSON.stringify({ ...current, mergeStateStatus: "CLEAN" })}' ;;
+  "pr merge 571 --squash --match-head-commit ${sha} --body "*) ;;
+  "pr view 571 --json number --jq .number") echo 571 ;;
+  "pr edit 571 --body-file "*|"pr view 571 --json number,url,headRefOid") ;;
+  *) echo "unexpected gh $*" >&2; exit 1 ;;
+esac
+`, { mode: 0o755 });
+        if (binding === "retained") writeFileSync(join(repo.state, "pr-number"), "117\n");
+        const env = { PR_NUMBER: binding === "explicit" ? "117" : "" };
+        assert.match(runScript(checkpointScript, repo, env), /ignoring MERGED PR #117.*fresh PR/);
+        assert.equal(readFileSync(join(repo.root, "step-output"), "utf8"), "INTEGRATED=no\n");
+        assert.equal(existsSync(join(repo.state, "integrated.json")), false);
+        assert.equal(existsSync(join(repo.state, "pr-number")), false);
+        assert.equal(git(repo.primary, "ls-remote", "origin", "refs/dagu/checkpoints/issue-189").split(/\s/)[0], sha);
+        runScript(gateScript, repo, env);
+        assert.match(runScript(pushScript, repo, env), /ignoring MERGED PR #117.*fresh PR/);
+        assert.equal(readFileSync(join(repo.state, "published-sha"), "utf8").trim(), sha);
+        runScript(extractScript(definition, "  - id: pr"), repo, env);
+        assert.equal(existsSync(created), true);
+        assert.equal(readFileSync(join(repo.state, "pr-number"), "utf8").trim(), "571");
+        assert.match(readFileSync(calls, "utf8"), /^pr create /m);
+        assert.doesNotMatch(readFileSync(calls, "utf8"), /^pr edit 117 /m);
+        runScript(extractScript(definition, "  - id: pr_head_ready"), repo, { ...env, CODE_SCANNING: "off" });
+        runScript(autoMergeScript, repo, { ...env, CODE_SCANNING: "off" });
+        assert.match(readFileSync(calls, "utf8"), /^pr merge 571 --squash --match-head-commit /m);
+        // A repeated publication must find the replacement, even with the old explicit parameter.
+        runScript(extractScript(definition, "  - id: pr"), repo, env);
+        const publishedCalls = readFileSync(calls, "utf8");
+        assert.equal(publishedCalls.split("\n").filter(call => call.startsWith("pr create ")).length, 1);
+        assert.match(publishedCalls, /^pr edit 571 /m);
+      } finally { rmSync(repo.root, { recursive: true, force: true }); }
+    });
+  }
+
   for (const checkpoint of ["checkpoint_push", "push"]) {
     for (const deleted of [false, true]) {
-      for (const retained of ["none", "dirty", "newer", "identity", "wrong-branch"]) {
+      for (const retained of ["none", "dirty", "identity", "wrong-branch"]) {
         test(`${name} already MERGED at ${checkpoint}, remote ${deleted ? "deleted" : "present"}, ${retained} local work follows integrated cleanup`, () => {
           const repo = repository();
           try {
@@ -1452,7 +1519,6 @@ esac
             git(repo.primary, "push", "origin", "main");
             if (deleted) git(repo.primary, "push", "origin", `:refs/heads/${repo.branch}`);
             if (retained === "dirty") writeFileSync(join(repo.worktree, "untracked"), "recover me\n");
-            if (retained === "newer") commit(repo, "newer", "recover this commit\n");
             if (retained === "identity") {
               const resource = JSON.parse(readFileSync(join(repo.state, "resource.json"), "utf8"));
               writeFileSync(join(repo.state, "resource.json"), JSON.stringify({ ...resource, run: "another-owner" }));
@@ -1501,7 +1567,7 @@ done
               assert.equal(existsSync(repo.worktree), true);
               assert.equal(git(repo.worktree, "rev-parse", "HEAD"), local);
               const diagnostic = readFileSync(join(repo.state, "cleanup-diagnostic"), "utf8");
-              const reason = retained === "dirty" ? /dirty worktree/ : retained === "newer" ? /PR head SHA differs/
+              const reason = retained === "dirty" ? /dirty worktree/
                 : retained === "identity" ? /resource owner or identity changed/ : /resource proof or cleanup operation failed/;
               assert.match(diagnostic, reason);
               assert.ok(diagnostic.includes(repo.worktree));

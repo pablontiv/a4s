@@ -253,26 +253,47 @@ env:
         PRIMARY=$primary WORKTREE=$expected
       }
       resolve_run_pr() {
-        local repo ref rows
+        local repo ref rows candidate
         repo=$(git -C "$PRIMARY" remote get-url origin)
+        candidate=$(jq -er .sha "$STATE/candidate.json")
         ref=${PR_NUMBER:-}
         if [[ -z "$ref" && -f "$STATE/pr-number" ]]; then ref=$(cat "$STATE/pr-number"); fi
         if [[ -n "$ref" ]]; then
           RUN_PR=$(gh pr view "$ref" --repo "$repo" --json number,state,headRefName,headRefOid,baseRefName,autoMergeRequest,mergeCommit)
-        else
-          rows=$(gh pr list --repo "$repo" --head "$BRANCH" --base "$BASE_BRANCH" --state all \
-            --json number,state,headRefName,headRefOid,baseRefName,autoMergeRequest,mergeCommit --limit 100)
-          jq -r '.[] | select(.state == "CLOSED") |
-            "resolve_run_pr: ignoring CLOSED PR #\(.number); publication will create a fresh PR if no OPEN or MERGED PR exists"' <<<"$rows" >&2
-          RUN_PR=$(jq -cr '
-            [.[] | select(.state == "OPEN" or .state == "MERGED")] |
-            [.[] | select(.state == "OPEN")] as $open |
-            if ($open | length) == 1 then $open[0]
-            elif ($open | length) > 1 then error("ambiguous open run PRs: " + ($open | map("#" + (.number | tostring)) | join(", ")))
-            elif length == 0 then null
-            elif length == 1 then .[0]
-            else error("ambiguous merged run PRs: " + (map("#" + (.number | tostring)) | join(", ")) + "; supply PR_NUMBER") end' <<<"$rows")
+          if ! jq -e --arg branch "$BRANCH" --arg base "$BASE_BRANCH" \
+            '.headRefName == $branch and .baseRefName == $base and (.number | type == "number") and
+             (.state == "OPEN" or .state == "MERGED")' <<<"$RUN_PR" >/dev/null; then
+            printf 'resolve_run_pr: refusing PR #%s (state=%s head=%s base=%s); select an OPEN or candidate-matching MERGED PR matching branch %s and base %s, or clear PR_NUMBER and retained pr-number to discover a fresh PR\n' \
+              "$(jq -r .number <<<"$RUN_PR")" "$(jq -r .state <<<"$RUN_PR")" \
+              "$(jq -r .headRefName <<<"$RUN_PR")" "$(jq -r .baseRefName <<<"$RUN_PR")" "$BRANCH" "$BASE_BRANCH" >&2
+            return 1
+          fi
+          if jq -e --arg candidate "$candidate" '.state == "MERGED" and .headRefOid != $candidate' <<<"$RUN_PR" >/dev/null; then
+            printf 'resolve_run_pr: ignoring MERGED PR #%s (head=%s candidate=%s); discovering a current PR or publishing a fresh PR\n' \
+              "$(jq -r .number <<<"$RUN_PR")" "$(jq -r .headRefOid <<<"$RUN_PR")" "$candidate" >&2
+            PR_NUMBER=
+            rm -f "$STATE/pr-number"
+          else
+            jq -r .number <<<"$RUN_PR" > "$STATE/pr-number"
+            return
+          fi
         fi
+        rows=$(gh pr list --repo "$repo" --head "$BRANCH" --base "$BASE_BRANCH" --state all \
+          --json number,state,headRefName,headRefOid,baseRefName,autoMergeRequest,mergeCommit --limit 100)
+        jq -r --arg candidate "$candidate" '.[] |
+          if .state == "CLOSED" then
+            "resolve_run_pr: ignoring CLOSED PR #\(.number); publication will create a fresh PR if no eligible PR exists"
+          elif .state == "MERGED" and .headRefOid != $candidate then
+            "resolve_run_pr: ignoring MERGED PR #\(.number) (head=\(.headRefOid) candidate=\($candidate)); publication will create a fresh PR if no eligible PR exists"
+          else empty end' <<<"$rows" >&2
+        RUN_PR=$(jq -cr --arg candidate "$candidate" '
+          [.[] | select(.state == "OPEN" or (.state == "MERGED" and .headRefOid == $candidate))] |
+          [.[] | select(.state == "OPEN")] as $open |
+          if ($open | length) == 1 then $open[0]
+          elif ($open | length) > 1 then error("ambiguous open run PRs: " + ($open | map("#" + (.number | tostring)) | join(", ")))
+          elif length == 0 then null
+          elif length == 1 then .[0]
+          else error("ambiguous merged run PRs: " + (map("#" + (.number | tostring)) | join(", ")) + "; supply PR_NUMBER") end' <<<"$rows")
         if [[ "$RUN_PR" == null ]]; then return; fi
         if ! jq -e --arg branch "$BRANCH" --arg base "$BASE_BRANCH" \
           '.headRefName == $branch and .baseRefName == $base and (.number | type == "number") and
@@ -285,8 +306,11 @@ env:
         jq -r .number <<<"$RUN_PR" > "$STATE/pr-number"
       }
       integrated_terminal() {
-        if [[ "$RUN_PR" != null && "$(jq -r .state <<<"$RUN_PR")" == MERGED ]]; then
-          jq --arg run "$RUN" --arg checkpoint "$1" --arg candidate "$(jq -r .sha "$STATE/candidate.json")" \
+        local candidate
+        candidate=$(jq -er .sha "$STATE/candidate.json")
+        if [[ "$RUN_PR" != null ]] && jq -e --arg candidate "$candidate" \
+          '.state == "MERGED" and .headRefOid == $candidate' <<<"$RUN_PR" >/dev/null; then
+          jq --arg run "$RUN" --arg checkpoint "$1" --arg candidate "$candidate" \
             '. + {run:$run,checkpoint:$checkpoint,candidate:$candidate}' <<<"$RUN_PR" > "$STATE/integrated.json"
           printf 'INTEGRATED=yes\n' >> "${DAGU_OUTPUT_FILE:-/dev/null}"
           printf 'integrated: PR #%s already MERGED at %s; no publication; cleanup will verify local resources\n' \
@@ -1547,7 +1571,6 @@ steps:
       equal() { [[ "$2" == "$3" ]] || reject "$@"; }
       cd "$WORKTREE"
       STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")
-      if [[ -z "$PR_NUMBER" && -f "$STATE/pr-number" ]]; then PR_NUMBER=$(cat "$STATE/pr-number"); fi
       sha=$(jq -r .sha "$STATE/candidate.json")
       equal branch "$BRANCH" "$(git branch --show-current)"
       equal candidate_head "$sha" "$(git rev-parse HEAD)"
@@ -1557,20 +1580,17 @@ steps:
       equal remote_head "$sha" "$(git ls-remote origin "refs/heads/$BRANCH" | cut -f1)"
       "$A4S_BIN" pr-body render "$STATE" "$ISSUE" > "$STATE/pr-body.md"
       "$A4S_BIN" pr-body validate "$STATE/pr-body.md"
-      if test -n "$PR_NUMBER"; then
-        equal state OPEN "$(gh pr view "$PR_NUMBER" --json state --jq .state)"
-        equal head_branch "$BRANCH" "$(gh pr view "$PR_NUMBER" --json headRefName --jq .headRefName)"
-        equal head_sha "$sha" "$(gh pr view "$PR_NUMBER" --json headRefOid --jq .headRefOid)"
-        gh pr edit "$PR_NUMBER" --body-file "$STATE/pr-body.md"
-        gh pr view "$PR_NUMBER" --json number,url,headRefOid
-      elif gh pr view "$BRANCH" --json number >/dev/null 2>&1; then
-        equal state OPEN "$(gh pr view "$BRANCH" --json state --jq .state)"
-        equal head_branch "$BRANCH" "$(gh pr view "$BRANCH" --json headRefName --jq .headRefName)"
-        equal head_sha "$sha" "$(gh pr view "$BRANCH" --json headRefOid --jq .headRefOid)"
-        gh pr edit "$BRANCH" --body-file "$STATE/pr-body.md"
-        gh pr view "$BRANCH" --json number,url,headRefOid
+      eval "$DAGU_RESOURCE_GUARD"
+      resolve_run_pr
+      if [[ "$RUN_PR" != null ]]; then
+        pr_ref=$(jq -r .number <<<"$RUN_PR")
+        equal state OPEN "$(jq -r .state <<<"$RUN_PR")"
+        equal head_sha "$sha" "$(jq -r .headRefOid <<<"$RUN_PR")"
+        gh pr edit "$pr_ref" --body-file "$STATE/pr-body.md"
+        gh pr view "$pr_ref" --json number,url,headRefOid
       else
         gh pr create --base "$BASE_BRANCH" --head "$BRANCH" --fill --body-file "$STATE/pr-body.md"
+        gh pr view "$BRANCH" --json number --jq .number > "$STATE/pr-number"
       fi
 
   - id: code_scanning
@@ -1587,7 +1607,9 @@ steps:
           ;;
         required)
           repo=$(gh repo view "$(git -C "$PRIMARY" remote get-url origin)" --json nameWithOwner --jq .nameWithOwner)
-          pr=$(gh pr view "${PR_NUMBER:-$BRANCH}" -R "$repo" --json number --jq .number)
+          pr_ref=${PR_NUMBER:-$BRANCH}
+          if [[ -f "$STATE/pr-number" ]]; then pr_ref=$(cat "$STATE/pr-number"); fi
+          pr=$(gh pr view "$pr_ref" -R "$repo" --json number --jq .number)
           jq -n --arg sha "$sha" --arg security "$CODEQL_SECURITY_THRESHOLD" --arg alerts "$CODEQL_ALERTS_THRESHOLD" \
             '{sha:$sha,mode:"required",security:$security,alerts:$alerts}' >"$STATE/codeql-policy.json"
           "$A4S_BIN" codeql "$repo" "$pr" "$sha" "$CODEQL_SECURITY_THRESHOLD" "$CODEQL_ALERTS_THRESHOLD" >"$STATE/codeql-observation.json"
@@ -1618,7 +1640,7 @@ steps:
       jq -e --arg sha "$sha" --arg gate "$GATE" '.sha == $sha and .gate == $gate' "$STATE/gate.json" >/dev/null ||
         reject gate_binding "sha=$sha gate=$GATE" "$(cat "$STATE/gate.json")"
       pr_ref=${PR_NUMBER:-$BRANCH}
-      if [[ -z "${PR_NUMBER:-}" && -f "$STATE/pr-number" ]]; then pr_ref=$(cat "$STATE/pr-number"); fi
+      if [[ -f "$STATE/pr-number" ]]; then pr_ref=$(cat "$STATE/pr-number"); fi
       read_status=0
       observed_sha=$(gh pr view "$pr_ref" --json headRefOid --jq .headRefOid) || read_status=$?
       if [[ "$read_status" -ne 0 ]]; then
@@ -1658,7 +1680,7 @@ steps:
       jq -e --arg sha "$sha" --arg gate "$GATE" '.sha == $sha and .gate == $gate' "$STATE/gate.json" >/dev/null ||
         reject gate_binding "sha=$sha gate=$GATE" "$(cat "$STATE/gate.json")"
       pr_ref=${PR_NUMBER:-$BRANCH}
-      if [[ -z "${PR_NUMBER:-}" && -f "$STATE/pr-number" ]]; then pr_ref=$(cat "$STATE/pr-number"); fi
+      if [[ -f "$STATE/pr-number" ]]; then pr_ref=$(cat "$STATE/pr-number"); fi
       observation=$(gh pr view "$pr_ref" --json state,mergeStateStatus,autoMergeRequest,mergeCommit,headRefOid)
       equal head_sha "$sha" "$(jq -r '.headRefOid' <<< "$observation")"
       merge_body=$(printf 'Closes #%s\n\n%s' "$ISSUE" "$(git log -1 --format=%b "$sha")")
@@ -1731,6 +1753,7 @@ steps:
       repo=$(gh repo view "$(git -C "$PRIMARY" remote get-url origin)" --json nameWithOwner --jq .nameWithOwner)
       sha=$(git -C "$WORKTREE" rev-parse HEAD)
       pr_ref=${PR_NUMBER:-$BRANCH}
+      if [[ -f "$STATE/pr-number" ]]; then pr_ref=$(cat "$STATE/pr-number"); fi
       current=$(gh pr view "$pr_ref" -R "$repo" --json headRefOid --jq .headRefOid)
       [[ "$current" == "$sha" ]] || { echo "STALE_SHA published=$sha current=$current" >&2; exit 1; }
       # complete is not iteration-atomic. Authorize only the candidate's own CI,
@@ -1837,7 +1860,7 @@ steps:
           "$STATE/integrated.json" >/dev/null
         TERMINAL_INTEGRATED=true
       fi
-      if [[ -z "${PR_NUMBER:-}" && -f "$STATE/pr-number" ]]; then PR_NUMBER=$(cat "$STATE/pr-number"); fi
+      if [[ -f "$STATE/pr-number" ]]; then PR_NUMBER=$(cat "$STATE/pr-number"); fi
       [[ "$MODE" != true ]] || printf 'true\n' > "$STATE/cleanup-close"
       [[ ! -f "$STATE/cleanup-close" ]] || MODE=true
       if [[ "$MODE" == true ]]; then
