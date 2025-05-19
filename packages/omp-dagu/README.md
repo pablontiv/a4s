@@ -260,6 +260,26 @@ npm test --workspace @a4s/omp-dagu
 npm run typecheck --workspace @a4s/omp-dagu
 ```
 
+Las pruebas vivas usan Dagu 2.20.1 del `PATH`, un `DAGU_HOME` temporal y un
+puerto HTTP propio por fixture. Además, cada instancia genera un único
+`randomUUID()` y deriva los IDs `recovery-<healthy|gate|start_gate|push>-<uuid>`,
+manteniendo el nombre de DAG `feature`. Enqueue, REST, status, completion,
+push-back y handlers comparten exactamente ese ID.
+
+En Unix, el socket de control de Dagu 2.20.1 pertenece al namespace global del
+host: [`sock.Addr`](https://github.com/dagu-org/dagu/blob/v2.20.1/internal/cmn/sock/addr.go)
+deriva `/tmp/@dagu_feature_<hash>.sock` de `(nombre del DAG, run-id)`, con los
+primeros seis caracteres de `md5(nombre + run-id)`. Los homes y puertos propios
+aíslan el store y HTTP; el sufijo por instancia separa las identidades de los
+sockets entre suites concurrentes.
+
+`concurrent recovery fixtures keep distinct run identities` ejecuta ambos
+fixtures simultáneamente para los cuatro modos, comprueba checkpoints,
+iteraciones y SHA propios, y registra homes, puertos, pares DAG/run y sockets.
+Cada fixture retira solo su servicio, home y repositorios temporales; tras
+cerrar uno, el otro completa normalmente su run. La cola operativa por
+repositorio conserva su concurrencia de uno.
+
 El gate completo del repositorio es:
 
 ```sh
