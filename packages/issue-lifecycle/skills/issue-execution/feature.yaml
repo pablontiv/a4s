@@ -45,6 +45,24 @@ env:
   - RUN: ${context.run.id}
   - DAGU_FEATURE_BUNDLE: "__DAGU_FEATURE_IDENTITY__"
   - DAGU_RESOURCE_GUARD: |
+      lifecycle_fetch() (
+        local repository=$1 attempt status stderr
+        shift
+        stderr=$(mktemp) || return
+        trap 'rm -f "$stderr"' EXIT
+        # Linked worktrees share remote refs; retry only their transient lock conflicts.
+        for attempt in 1 2 3; do
+          if LC_ALL=C git -C "$repository" fetch "$@" 2>"$stderr"; then
+            cat "$stderr" >&2
+            return 0
+          else
+            status=$?
+          fi
+          cat "$stderr" >&2
+          [[ "$attempt" -lt 3 ]] && grep -Fq 'cannot lock ref' "$stderr" || return "$status"
+          sleep 1 || return
+        done
+      )
       resolve_primary_binding() {
         local value=$1 workspace=$2 home sentinel
         sentinel='${A4S_'"PRIMARY}"
@@ -195,7 +213,8 @@ steps:
       if [[ -e "$WORKTREE" && "$(cd "$WORKTREE" && pwd -P)" == "$primary_path" ]]; then
         echo "dagu-feature: protected primary or unmanaged target $WORKTREE" >&2; exit 1
       fi
-      git -C "$PRIMARY" fetch origin
+      eval "$DAGU_RESOURCE_GUARD"
+      lifecycle_fetch "$PRIMARY" origin
       if [[ "$(git -C "$PRIMARY" branch --show-current)" == "$BASE_BRANCH" ]] &&
          [[ -z "$(git -C "$PRIMARY" status --porcelain --untracked-files=all)" ]]; then
         git -C "$PRIMARY" merge --ff-only "origin/$BASE_BRANCH" || true
@@ -221,7 +240,6 @@ steps:
           "$cause" "$observed_sha" "$expected_sha" "$observed_version" "$expected_version" >&2
         exit 1
       fi
-      eval "$DAGU_RESOURCE_GUARD"
       resource_lock claim
 
   - id: admission
@@ -551,7 +569,7 @@ steps:
       git -C "$PRIMARY" check-ignore -q "$WORKTREE"
       test "$(git -C "$PRIMARY" branch --show-current)" = "$BASE_BRANCH"
       test -z "$(git -C "$PRIMARY" status --porcelain)"
-      git -C "$PRIMARY" fetch origin || { printf 'start_gate: fetch origin failed; restore origin access and recover this run\n' >&2; exit 1; }
+      lifecycle_fetch "$PRIMARY" origin || { printf 'start_gate: fetch origin failed; restore origin access and recover this run\n' >&2; exit 1; }
       git -C "$PRIMARY" merge --ff-only "origin/$BASE_BRANCH" || { printf 'start_gate: ff-only failed; reconcile primary with origin/%s preserving commits, then recover this run\n' "$BASE_BRANCH" >&2; exit 1; }
       STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")
       OWNER=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/resources/$(printf '%s' "$BRANCH" | git hash-object --stdin).json")
@@ -1048,7 +1066,8 @@ steps:
       umask 0022
       test "$(git -C "$WORKTREE" branch --show-current)" = "$BRANCH"
       test -z "$(git -C "$WORKTREE" status --porcelain)"
-      git -C "$WORKTREE" fetch origin
+      eval "$DAGU_RESOURCE_GUARD"
+      lifecycle_fetch "$WORKTREE" origin
       STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")
       before=$(jq -r .sha "$STATE/candidate.json")
       test "$(git -C "$WORKTREE" rev-parse HEAD)" = "$before"
@@ -1676,7 +1695,7 @@ steps:
         diagnostic "no captured candidate for branch HEAD $candidate; files retained"
       fi
       repo=$(git -C "$PRIMARY" remote get-url origin) || diagnostic "origin lookup failed"
-      git -C "$PRIMARY" fetch --prune origin || diagnostic "remote base refresh failed"
+      lifecycle_fetch "$PRIMARY" --prune origin || diagnostic "remote base refresh failed"
       base_sha=$(git -C "$PRIMARY" rev-parse --verify "origin/$BASE_BRANCH^{commit}") || diagnostic "remote base unavailable"
       proof=ancestor
       squash_sha=
@@ -1760,7 +1779,7 @@ steps:
         remote_head=$(git -C "$PRIMARY" ls-remote --heads origin "refs/heads/$BRANCH") || diagnostic "final remote branch query failed"
         [[ -z "$remote_head" ]] ||
           diagnostic "close_gate: remote branch $BRANCH remains, expected removed"
-        git -C "$PRIMARY" fetch --prune origin || diagnostic "final remote refresh failed"
+        lifecycle_fetch "$PRIMARY" --prune origin || diagnostic "final remote refresh failed"
         [[ "$(git -C "$PRIMARY" branch --show-current)" == "$BASE_BRANCH" &&
            -z "$(git -C "$PRIMARY" status --porcelain)" &&
            "$(git -C "$PRIMARY" rev-parse HEAD)" == "$(git -C "$PRIMARY" rev-parse "origin/$BASE_BRANCH")" ]] ||

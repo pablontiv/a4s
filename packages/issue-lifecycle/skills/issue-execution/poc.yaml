@@ -42,6 +42,24 @@ env:
   - DAGU_FEATURE_BUNDLE: "__DAGU_FEATURE_IDENTITY__"
   - ESCALATION_POC_INCONCLUSIVE: __ESCALATION_POC_INCONCLUSIVE__
   - DAGU_RESOURCE_GUARD: |
+      lifecycle_fetch() (
+        local repository=$1 attempt status stderr
+        shift
+        stderr=$(mktemp) || return
+        trap 'rm -f "$stderr"' EXIT
+        # Linked worktrees share remote refs; retry only their transient lock conflicts.
+        for attempt in 1 2 3; do
+          if LC_ALL=C git -C "$repository" fetch "$@" 2>"$stderr"; then
+            cat "$stderr" >&2
+            return 0
+          else
+            status=$?
+          fi
+          cat "$stderr" >&2
+          [[ "$attempt" -lt 3 ]] && grep -Fq 'cannot lock ref' "$stderr" || return "$status"
+          sleep 1 || return
+        done
+      )
       resource_lock() {
         local primary common expected actual attempt
         primary=$(cd "$PRIMARY" && pwd -P)
@@ -202,7 +220,8 @@ steps:
       test "$(git -C "$PRIMARY" rev-parse --absolute-git-dir)" = "$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-common-dir)"
       test "$(git -C "$PRIMARY" symbolic-ref --short HEAD)" = "$BASE_BRANCH"
       primary_status=$(git -C "$PRIMARY" status --porcelain --untracked-files=all)
-      git -C "$PRIMARY" fetch origin || { printf 'base: fetch origin failed; restore origin access and recover this run\n' >&2; exit 1; }
+      eval "$DAGU_RESOURCE_GUARD"
+      lifecycle_fetch "$PRIMARY" origin || { printf 'base: fetch origin failed; restore origin access and recover this run\n' >&2; exit 1; }
       if [[ -z "$primary_status" ]]; then
         git -C "$PRIMARY" merge --ff-only "origin/$BASE_BRANCH" || true
       fi
