@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.112
+
+- Run the explicit QA/reviewer join as authorized native role jobs, independently of the coordinator, and admit their actual emitting sessions through sealed job receipts (#514).
+- Bind quality to the current repository/lane/candidate/capture iteration/attempt and registered role, retain effective models and fallback history, and enforce fresh distinct sessions and implementer-family exclusion before publication.
+- Preserve immutable admission identity with appended runtime observations and validate typed verdicts and transcript artifacts at the quality boundary.
+
 ## 0.3.110
 
 - Deliver later owner-session notices as asides at host step boundaries during a reserved autonomous turn, preserving FIFO order, one idle wake, session ownership and terminal delivery (#519).

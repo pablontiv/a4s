@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { qualityMarker } from "../src/triage/quality.ts";
 import type { QualityRequest, TranscriptRow } from "../src/triage/quality.ts";
+import { jobId, type JobBinding, type JobResult } from "../src/role-jobs.ts";
+import { nativeEvidence } from "../src/role-runtime.ts";
+import { roleAdmission } from "./role-job-fixtures.ts";
 
 export function readQualityPolicies() {
   return {
@@ -73,4 +77,58 @@ export function qualityFixture(repo: Repository, verdict: "PASS" | "FAIL" = "PAS
   };
   writeFileSync(join(repo.state, "quality-request.json"), JSON.stringify(request));
   return { parent, paths, request, models };
+}
+
+export function nativeQualityFixture(repo: Repository, verdict: "PASS" | "FAIL" = "PASS", current?: QualityRequest) {
+  const fixture = qualityFixture(repo, verdict, current);
+  const { request } = fixture;
+  const receipt = roleAdmission(repo.primary, repo.root, request.run,
+    "dagu-role-jobs stage implement\ndagu-role-jobs stage quality_review");
+  const ids: Record<string, string> = {};
+  const results: Record<string, JobResult> = {};
+  for (const role of ["implement", "qa", "reviewer"] as const) {
+    const binding: JobBinding = { repo: repo.primary, worktree: repo.worktree, lane: "feature", dag: "feature",
+      run: request.run, stage: role === "implement" ? "implement" : "quality_review", role,
+      sha: request.sha, iteration: request.iteration, attempt: role === "implement" ? "implementation" : request.attempt };
+    const id = jobId(binding);
+    const directory = join(repo.state, "role-jobs", id);
+    mkdirSync(directory, { recursive: true });
+    const provider = role === "implement" ? "openai-codex" : "anthropic";
+    const model = role === "implement" ? "effective" : "alternate";
+    const output = role === "implement" ? { summary: "Candidate", message: "feat: candidate" } :
+      { repo: request.repo, run: request.run, sha: request.sha, iteration: request.iteration,
+        attempt: request.attempt, role, verdict, findings: verdict === "FAIL" ? ["Fix acceptance regression"] : ["Acceptance checked"] };
+    const transcript = join(directory, `${id}.jsonl`);
+    const marker = role === "implement" ? `FEATURE_IMPLEMENT RUN=${request.run}` : qualityMarker(request, role);
+    const rows = [{ type: "session", id: `native-${id}` },
+      { type: "session_init", agent: role === "implement" ? "task" : role,
+        task: `Authorized Dagu role job ${id}.\n${marker}`, timestamp: "2026-10-16T02:00:00Z" },
+      { type: "message", id: "read", message: { role: "assistant", provider, model, stopReason: "toolUse",
+        content: [{ type: "toolCall", id: "sha", name: "bash", arguments: { command: `git -C "${repo.worktree}" rev-parse HEAD` } }] } },
+      { type: "message", message: { role: "toolResult", toolName: "bash", toolCallId: "sha", content: request.sha } },
+      { type: "message", id: "response", message: { role: "assistant", provider, model, stopReason: "toolUse",
+        content: [{ type: "toolCall", name: "yield", id: "verdict", arguments: { data: output } }] } },
+      { type: "message", message: { role: "toolResult", toolName: "yield", toolCallId: "verdict",
+        details: { status: "success", data: output } } }];
+    writeFileSync(transcript, rows.map(row => JSON.stringify(row)).join("\n") + "\n");
+    const result: JobResult = { schemaVersion: 1, id, binding, executor: { host: "fixture", pid: 1, processStartedAt: "fixture" },
+      state: "completed", readyAt: request.attempt, startedAt: "2026-10-16T02:00:00Z", finishedAt: "2026-10-16T02:00:01Z",
+      readyToStartMs: 1, output, native: nativeEvidence(transcript, { fixture: true }) };
+    const path = join(directory, "result.json");
+    writeFileSync(path, JSON.stringify(result));
+    writeFileSync(join(directory, "job.json"), JSON.stringify({ schemaVersion: 1, id, binding, directory,
+      executor: result.executor, readyAt: result.readyAt, startedAt: result.startedAt, state: "completed" }));
+    receipt.runReceipt.observations.push({ at: result.finishedAt, dag: "feature", run: request.run, attempt: 1, category: "runtimeAndModels",
+      kind: "role-job", data: { id, state: "completed", result: path, native: result.native } });
+    ids[role] = id;
+    results[role] = result;
+  }
+  request.implementer = ids.implement!;
+  writeFileSync(join(repo.state, "quality-request.json"), JSON.stringify(request));
+  const implementation = join(repo.state, "role-jobs", ids.implement!, "result.json");
+  writeFileSync(join(repo.state, "candidate.json"), JSON.stringify({ sha: request.sha, iteration: request.iteration,
+    implementer: request.implementer, implementation: { inputSha: request.sha,
+      resultDigest: createHash("sha256").update(readFileSync(implementation)).digest("hex") } }));
+  writeFileSync(join(repo.state, "receipt.json"), JSON.stringify(receipt));
+  return { ...fixture, ids, results };
 }

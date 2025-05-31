@@ -312,8 +312,8 @@ test("each required semantic stage has a registered role contract and Dagu consu
       assert.deepEqual(node.outputs.map((output: { name: string }) => output.name), outputs);
     }
     const quality = dag.steps.find((step: { id: string }) => step.id === "quality_review");
-    assert.equal(quality.action, "human.task");
-    assert.deepEqual(quality.with.form.required, ["QA", "REVIEW"]);
+    assert.equal(quality.run, "set -euo pipefail\ndagu-role-jobs stage quality_review\n");
+    assert.deepEqual(quality.outputs.map((output: { name: string }) => output.name), ["QA", "REVIEW"]);
     assert.equal(dag.steps.find((step: { id: string }) => step.id === "validation").action, "human.task");
     assert.equal(dag.steps.find((step: { id: string }) => step.id === "capture").env[2].IMPLEMENTER, "${steps.implement.outputs.IMPLEMENTER}");
     assert.equal(dag.steps.find((step: { id: string }) => step.id === "quality_admit").env[0].QA, "${steps.quality_review.outputs.QA}");

@@ -64,14 +64,13 @@ This skill does not install Dagu, and it carries no logic specific to any reposi
 
 ## Role-job receipt contract (schemaVersion 1)
 
-`dagu-role-jobs stage triage|implement` executes the template's command stages.
+`dagu-role-jobs stage triage|implement|quality_review` executes the template's command stages.
 It authorizes against the run's immutable admission receipt/snapshot, the current
 native running stage and ready dependencies, canonical worktree ownership,
 candidate SHA and iteration. `validation` remains an operator `human.task`.
-`quality_review` remains the coordinator-dispatched two-role `human.task` join:
-the existing quality guard writes `quality.json` and `quality_admit` admits it.
-The executor also supports QA/reviewer role jobs for #514 to wire together with
-their verdict consumer and quality templates/hooks.
+`quality_review` explicitly joins two authorized native jobs, QA and reviewer.
+`quality_admit` reconstructs `quality.json` from their authoritative receipts with
+`dagu-role-jobs admit-quality`, verifies the current evidence and seals it.
 The registry maps `triage` to `triage-reviewer`, implementation/conflict resolution
 to `task`, and quality roles to `qa` and `reviewer`. Native `discoverAgents`,
 `Settings.loadReadOnly`, `resolveAgentModelSelection` and `runSubprocess` preserve
@@ -104,9 +103,8 @@ registered agent source/models, current overrides, resolved full patterns/role).
 `routing.json`, `assignment.json`, `native-result.json` and the native
 `<id>.jsonl` remain alongside it. A structured QA `verdict=FAIL` is a completed
 execution, not accepted quality. Command `IMPLEMENTER` and triage `REVIEW` outputs
-carry these ids. The current quality join uses coordinator-allocated QA/reviewer
-ids; #514 owns switching those roles to native job receipts, and #517 consumes
-the same semantic evidence. Native jobs have their actual session provenance.
+carry these ids. The quality join emits QA and REVIEW job ids; admission verifies
+each job's actual session and emitting verdict. #517 consumes the same evidence.
 Linked `runtimeAndModels/role-job` observations extend the existing #277 receipt;
 its `initial` identity remains immutable.
 
@@ -767,7 +765,7 @@ The `@a4s/omp-dagu` status extension delivers hidden model context for every wai
 
 An owner-session FIFO reserves exactly one autonomous wake while idle. Once the owner is active, later notices drain in FIFO order through the host's `aside` delivery at supported step boundaries, including during the reserved autonomous turn. The reservation gates idle wakes only and is released at `agent_end`; each session retains its own queue and reservation across session switches. Terminal notices use the same delivery path. The initial sweep is a silent baseline. Notices start or continue coordinator turns without rendering in chat and report run state rather than user instructions.
 
-- `triage` and `implement` execute through the role-job boundary below; the coordinator dispatches QA/reviewer at `quality_review`.
+- `triage`, `implement` and the explicit QA/reviewer join at `quality_review` execute through the role-job boundary below, without coordinator task calls.
 - At `run_poc`, the coordinator launches the PoC subagent as `Poc<ISSUE>`.
 - Recovery notices retain the failed command's logs and resources. The owner
   inspects them and uses the iteration-protected checkpoint transition; operator
@@ -1198,38 +1196,27 @@ The same sequence runs for the initial candidate, every correction and every reb
 
 `quality_prepare` binds the canonical repo/worktree, run, candidate SHA,
 capture iteration, implementer and fresh quality attempt in `quality-request.json`.
-`quality_review` is the existing human-task join. Launch named `task agent=qa`
-and `task agent=reviewer` subagents with their exact markers and issue acceptance.
-The guard inspects the implementer's actual effective model, retaining family
-exclusion for both reviewers. For a native implementer it verifies the admitted
-role-job observation, sealed result/transcript and capture's explicit
-`candidate.json.implementation` input HEAD/result digest. That link survives rebase;
-the request still binds the current candidate SHA and capture iteration.
-The coordinator `task` guard supports independently bound quality assignments:
+`quality_review` runs the registered `qa` and `reviewer` roles as distinct fresh
+native sessions and emits their authorized job ids as QA and REVIEW. Each
+assignment has its own exact marker, job binding and issue acceptance. The same
+per-assignment checks apply independently across runs, candidate iterations and
+quality attempts; mixed-ticket evidence cannot satisfy another obligation.
 
-One native `task` invocation may contain QA/reviewer pairs for several independent
-current quality requests, in either order, alongside unmarked unrelated tasks.
-Each marked assignment carries exactly one complete role marker, including its
-own run, SHA, iteration and attempt; shared `context` remains common instructions.
-Each quality name is distinct within the batch and from its implementer. The
-guard loads and validates each assignment's own persisted request and effective
-implementer, then injects that request's worktree command and literal verdict
-bindings. Cross-family eligibility and dispatch authorization are per assignment,
-including when the runs have different effective implementer families.
-Every marked assignment must pass before the batch is admitted or any model
-binding is installed. Ambiguous markers, invalid roles and prose containing
-`FEATURE_QUALITY RUN=` remain guarded and fail closed; use unmarked text for
-unrelated work. Batching dispatch preserves each run's separate completion,
-freshness, parent-invocation provenance and sealed transcript admission.
+The executor uses the canonical OMP model catalog and configured quality
+fallbackRoles to exclude the implementer's effective family before launch.
+Admission checks every successful runtime response, including effective
+fallbacks, against that family. QA and reviewer may share a family with each
+other. Capture's explicit `candidate.json.implementation` input HEAD/result
+digest and admitted native observation identify the implementer across rebase.
+The current request still binds the current candidate SHA and capture iteration.
 
 Give QA the issue's targeted acceptance commands and require the exact commands/results
 in its findings; reviewer independently inspects the same candidate and acceptance.
 Both run `git -C "<worktree>" rev-parse HEAD` as a standalone bash command,
 with nothing chained and with `cwd` omitted, before inspecting the candidate and
 before the verdict, and keep the worktree clean.
-The extension supplies both a structured output schema and this contract in the
-assignment text, including the exact command and literal binding values.
-Each final message is ONLY one raw JSON object, with the literal `repo`, `run`,
+The executor supplies both a strict structured output schema and the literal
+binding contract in the assignment. Each role yields one object with `repo`, `run`,
 `sha`, `iteration`, `attempt` and `role` from the request/assignment. `repo` is the
 canonical primary path from `quality-request.json`; `iteration` is a number,
 `attempt` is a string, `verdict` is `PASS` or `FAIL`, and `findings` is a string array:
@@ -1238,16 +1225,12 @@ canonical primary path from `quality-request.json`; `iteration` is a number,
 {"repo":"<canonical PRIMARY>","run":"<run-id>","iteration":0,"attempt":"<request timestamp>","sha":"<full SHA>","role":"qa","verdict":"PASS","findings":["<observed commands/results>"]}
 ```
 
-Use `role=reviewer` for the other obligation. Complete the join after both finish:
-
-```sh
-dagu human-task complete feature --run-id <run> --step quality_review \
-  --input QA=<allocated QA id> --input REVIEW=<allocated reviewer id>
-```
-
-The existing guard writes the two independently verified verdicts to `quality.json`.
-QA/reviewer role-job receipt admission and its template/hook migration belong to
-#514; #517 consumes the published native receipt for semantic evidence.
+Use `role=reviewer` for the other obligation. Dagu joins both role jobs before
+`quality_admit` consumes their job ids. The native receipt, successful structured
+yield, canonical transcript artifact and inspected prefix must agree with the
+admitted runtime observation. Required artifacts are read and verified at this
+boundary. `quality.json` is written only after both independently bound reports
+and their effective identities pass; #517 consumes these published receipts.
 
 `quality.json` persists two independent, fully bound verdicts and their runtime
 evidence. `quality_admit` checks request/candidate/gate bindings, both allocated
