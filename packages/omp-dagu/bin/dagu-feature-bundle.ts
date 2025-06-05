@@ -11,6 +11,7 @@ import {
   parseBundleStamp,
   REQUIRED_DAGU_VERSION,
 } from "../src/bundle.ts";
+import { currentQueueConcurrency, queueCompatibility, reconcileQueue, stampedQueue } from "../src/queue.ts";
 
 function git(path: string, ...args: string[]): string {
   return execFileSync("git", ["-C", path, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
@@ -69,6 +70,26 @@ function main(): void {
     process.exitCode = validatePlanningUnitsCommand(args);
     return;
   }
+  if (command === "queue-default" || command === "queue-reconcile" || command === "queue-check") {
+    try {
+      if (command === "queue-default") console.log(currentQueueConcurrency(args));
+      else {
+        if (args.length !== 1) throw new Error(`${command} requires one rendered repository DAG`);
+        const queue = stampedQueue(readFileSync(args[0]!, "utf8"));
+        const home = process.env.DAGU_HOME || join(homedir(), ".dagu");
+        if (command === "queue-reconcile") console.log(reconcileQueue(home, queue));
+        else {
+          const report = queueCompatibility(existsSync(join(home, "config.yaml")) ? readFileSync(join(home, "config.yaml"), "utf8") : "", queue);
+          console.log(report);
+          if (!report.endsWith("compat=ok")) process.exitCode = 1;
+        }
+      }
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exitCode = 1;
+    }
+    return;
+  }
   if (command === "admit" || command === "enqueue") {
     try {
       if (command === "enqueue") process.exitCode = enqueue(args, process.cwd());
@@ -103,6 +124,19 @@ for (const argument of argumentsOrCwd) {
     continue;
   }
   console.log(`repo=${repositoryName(path)} path=${path} bundle=${BUNDLE_VERSION}`);
+  for (const name of ["feature.yaml", "poc.yaml", "discovery.yaml"]) {
+    const file = join(path, ".workspace", "dagu", "dags", name);
+    try {
+      const queue = stampedQueue(readFileSync(file, "utf8"));
+      const config = join(process.env.DAGU_HOME || join(homedir(), ".dagu"), "config.yaml");
+      const report = queueCompatibility(existsSync(config) ? readFileSync(config, "utf8") : "", queue);
+      console.log(`${name} ${report}`);
+      ok = report.endsWith("compat=ok") && ok;
+    } catch (error) {
+      console.log(`${name} queue compat=incompatible action=re-run-bootstrap cause=${JSON.stringify(String(error))}`);
+      ok = false;
+    }
+  }
   const dags = join(path, ".workspace", "dagu", "dags");
   ok = inspectStamp("feature.yaml", join(dags, "feature.yaml")) && ok;
   ok = inspectStamp("poc.yaml", join(dags, "poc.yaml")) && ok;

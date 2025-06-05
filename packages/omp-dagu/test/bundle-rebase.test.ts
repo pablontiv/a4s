@@ -215,6 +215,7 @@ test("isolated Dagu rebases colliding candidates before gate and publishes the n
     ...env, STAGE: staged, SKILL_DIR: dirname(template), REPO: "fixture", BASE_BRANCH: "main",
     GATE: repo.env.GATE, REQUIRED_CHECK: "validate", TEST_PATHS: "(^|/)test/",
     REBASE_RESOLVER: repo.env.REBASE_RESOLVER, BUNDLE_NAME: "@a4s/omp-dagu",
+    CURRENT_QUEUE_CONCURRENCY: "1", QUEUE_CONCURRENCY: "",
     BUNDLE_VERSION: "0.3.18", DAGU_VERSION: "2.20.1", SOURCE_NWO: "fixture/repository",
     SOURCE_SHA: repo.before, DAG_RUN_ID: "fixture-bootstrap",
   };

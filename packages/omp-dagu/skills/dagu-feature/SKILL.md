@@ -150,14 +150,9 @@ checks the rendered plist with `plutil` on macOS before installing. `cmp` and
 `install -m 0644` make repeated installs byte- and mtime-stable. `base.yaml` and
 the rendered plist are fully owned. `config.yaml` merges the leaves in the
 versioned `dagu/config.yaml` (`auth.mode`, `queues.enabled`, `host`, `port`,
-`coordinator.enabled`) and merges `queues.config` entries by queue name.
-For matching names, template-owned fields replace installed values; additional
-queue metadata is retained. Missing template queues are added, while foreign
-queues and their concurrency limits are preserved. In particular, applying the
-bundled `a4s.max_concurrency=2` replaces an installed same-name capacity of `8`.
-That capacity consequence was established from source inspection in issue #449;
-the original report did not execute the installer or observe a production overwrite.
-Other configuration leaves and comments remain owned by their original writers.
+`coordinator.enabled`). Each repository's bootstrap owns its named entry in
+`queues.config`, derived from its versioned render stamp; other keys and comments
+remain preserved.
 Foreign paths stay untouched during validation. The plist captures the
 operator's current `PATH` and resolved Dagu binary; use the same environment on
 updates. With a custom `DAGU_HOME`, the default plist destination is
@@ -201,6 +196,13 @@ git log --format='%h %(trailers:key=Dagu-Feature-Bundle,valueonly)' -- .workspac
 git log -G '^# dagu-feature-bundle:' -p -- .workspace/dagu/dags
 backscroll search dagu-feature-bundle --all-projects
 ```
+Repository renders also carry `dagu-feature-queue-concurrency=<n>` beside the
+bundle label. The repository owns this positive integer; `$DAGU_HOME/config.yaml`
+is derived by bootstrap, never hand-edited. `dagu-feature-bundle <repo>` compares
+each render's queue and stamped limit with the global entry; drift reports
+`compat=incompatible action=re-run-bootstrap`. Re-run bootstrap and adopt the
+matching renders to reconcile it.
+
 
 PRIMARY runs the default branch at exactly `origin/$BASE_BRANCH`. Feature
 `admit` fetches and fast-forwards a clean primary on that branch before claiming
@@ -404,6 +406,7 @@ The bootstrap renders the repository DAG templates when a repository adopts the 
 | Placeholder | Meaning | rootline | homeserver |
 |---|---|---|---|
 | `TEMPLATE_REPO` | Repository name, used in `labels: [workspace=<repo>]` and `queue: <repo>` | `rootline` | `homeserver` |
+| `TEMPLATE_QUEUE_CONCURRENCY` | Repository-owned queue limit, stamped as `dagu-feature-queue-concurrency=<n>`; bootstrap answer `QUEUE_CONCURRENCY` | `1` | `1` |
 | `TEMPLATE_BASE_BRANCH` | Default of `BASE_BRANCH`, the default branch. The DAG uses `origin/$BASE_BRANCH` as the source ref. | `master` | `main` |
 | `__GATE__` | Adoption-fixed `GATE`, the local gate command, run with `bash -euo pipefail -c` in the worktree | `just check && just test` | `make hook-validate` |
 | `__REBASE_RESOLVER__` | Adoption-fixed `REBASE_RESOLVER`, repository conflict-resolution command; empty selects manual conflict recovery | `""` | `""` |
@@ -439,12 +442,29 @@ The steps:
 | Step | Effect |
 |---|---|
 | `detect` | Checks `git`, `gh` (authenticated), `jq` and the exact required `dagu version`; reads package/version, source commit and source `origin`; fetches and requires that clean package commit on the remote default branch; reads repository settings and the installed DAG values and stamps. |
-| `answers` | `human.task` showing the current stamp, `GATE`, `REQUIRED_CHECK`, `TEST_PATHS`, `REBASE_RESOLVER` and optional `VALIDATION`. Choose the test-path ERE, resolver and validation procedure from repository conventions; validation defaults to empty. |
+| `answers` | `human.task` shows current stamps, `GATE`, `REQUIRED_CHECK`, `TEST_PATHS`, `REBASE_RESOLVER`, optional `VALIDATION` and `QUEUE_CONCURRENCY`. Choose the test-path ERE, resolver and validation procedure from repository conventions; validation defaults to empty. The integer queue limit must be at least 1; its default is the current render stamp, falling back to 1 on first adoption (a4s preserves its installed effective capacity of 8). |
 | `worktrees` | Makes git ignore `.workspace/worktrees/`. When nothing ignores it yet, appends `/.workspace/worktrees/` to the clone's `info/exclude`, so the primary stays clean without a commit. |
 | `render` | Writes stamped and validated `feature.yaml`, `poc.yaml`, `discovery.yaml`, `planning.yaml`, and `reconcile.yaml` under `<git-dir>/dagu-feature/`, keeping PRIMARY clean. Discovery and planning receive the coordinating workspace label and resolve the target repository from `PRIMARY`. |
-| `reconcile` | Idempotently installs the stamped staged `reconcile.yaml` to `$DAGU_HOME/dags/reconcile.yaml` (`DAGU_HOME` defaults to `~/.dagu`) and validates it. One user-level DAG serves every adopting repository. |
+| `reconcile` | Idempotently installs and validates the stamped reconciler in `$DAGU_HOME/dags/reconcile.yaml`, then derives the staged render's named queue entry into `$DAGU_HOME/config.yaml`, preserving `queues.enabled`, sibling keys, queue metadata and all other queues. Changed entries restart the identified scheduler; identical entries preserve bytes and skip restart. |
 | `github` | Enables auto-merge and squash merge, and adds `REQUIRED_CHECK` as a strict required status check on the default branch. It keeps the existing contexts and every other protection setting. When it has to recreate the protection, it reads the protection back and fails if any other setting changed. |
-| `confirm` | Reads settings back, validates the four staged repository DAGs, compares the installed reconciler with its stamped render, and prints the bundle identity plus the three adoption commit trailers. |
+| `confirm` | Reads settings back, validates the staged repository DAGs, compares the installed reconciler and derived queue, and prints `queue=<name> max_concurrency=<n> changed=yes\|no`, bundle identity and adoption trailers. |
+
+`QUEUE_CONCURRENCY` is entered as integer text. Dagu 2.20.1 has static form
+defaults, so this field uses `type: string`, `default: ""` and pattern
+`^([1-9][0-9]*)?$`. Empty input resolves to the current value shown in the
+prompt (or 1 without a stamp); a nonempty answer becomes an integer ≥ 1 in
+the rendered label and derived config. For a4s, enter `8` to preserve its installed effective capacity.
+
+The queue deploy identifies a running launchd `gui/$UID/local.dagu.server` with
+`launchctl print`, then reads its service plist with `plutil` to require
+`dagu start-all` and the same canonical `DAGU_HOME`. A changed entry uses the
+explicit `launchctl kickstart -k gui/$UID/local.dagu.server` mechanism proven in
+#383; waiting human tasks remain persisted. An unknown, stopped or mismatched
+service fails before queue writes with the instruction to install/load the
+matching service and re-run bootstrap. This automatic queue reload is distinct
+from the station installer's operator-provided drain/TERM hooks. Station
+`--apply --repo-dag <render>` verifies that render's already-derived queue limit
+and probes capacity with N running and one queued run.
 
 Answer the form after `detect` succeeds, reusing the current values shown in its
 prompt during an upgrade. Choose `GATE` from the repository's documented local
@@ -455,7 +475,7 @@ dagu status --run-id "bootstrap-<repo>-v<version-with-hyphens>" dagu-feature-boo
 dagu human-task complete --run-id "bootstrap-<repo>-v<version-with-hyphens>" --step answers \
   --input GATE='<current gate>' --input REQUIRED_CHECK='<current check>' \
   --input TEST_PATHS='<current Bash ERE>' --input REBASE_RESOLVER='<current command or empty>' \
-  --input VALIDATION='' dagu-feature-bootstrap
+  --input VALIDATION='' --input QUEUE_CONCURRENCY=8 dagu-feature-bootstrap
 ```
 
 The bootstrap is done when the run is `Succeeded`. To adopt or upgrade, open a

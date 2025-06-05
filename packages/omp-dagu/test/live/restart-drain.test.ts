@@ -11,6 +11,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { liveDagu } from "../fixtures/live-dagu.ts";
+import { deriveQueue } from "../../src/queue.ts";
 const installer = fileURLToPath(new URL("../../bin/dagu-station-install.ts", import.meta.url));
 async function freePort(): Promise<number> {
   const server = createServer();
@@ -37,7 +38,7 @@ async function until(probe: () => boolean | Promise<boolean>): Promise<void> {
   }
 }
 
-test("drain preserves existing runs; TERM restart stub activates capacity 2 on next enqueue", { ...liveDagu, timeout: 150_000 }, async () => {
+test("drain preserves existing runs; TERM restart activates the repo's stamped capacity", { ...liveDagu, timeout: 150_000 }, async () => {
   const home = mkdtempSync(join(tmpdir(), "dagu-restart-drain-"));
   const port = await freePort();
   // Preserve a private listener across reconciliation of the station's port defaults.
@@ -66,7 +67,7 @@ test("drain preserves existing runs; TERM restart stub activates capacity 2 on n
       assert.ok(existsSync(closed));
       assert.equal(rows().filter(row => ["running", "queued"].includes(row.status)).length, 0);
       assert.equal(rows().filter(row => row.dagRunId.startsWith(id) && row.status === "succeeded").length, 2);
-      assert.match(readFileSync(join(home, "config.yaml"), "utf8"), /max_concurrency: 2/);
+      assert.match(readFileSync(join(home, "config.yaml"), "utf8"), /max_concurrency: 3/);
       restarts++;
       service!.kill("SIGTERM");
       await exit(service!);
@@ -86,12 +87,16 @@ test("drain preserves existing runs; TERM restart stub activates capacity 2 on n
     await until(() => rows().some(row => row.dagRunId === `${id}-first` && row.status === "running"));
     const originalStartedAt = rows().find(row => row.dagRunId === `${id}-first`)!.startedAt;
     assert.ok(rows().some(row => row.dagRunId === `${id}-second` && row.status === "queued"));
+    // Bootstrap has derived the repo's value; the old scheduler still has capacity one.
+    const repoDag = join(home, "repo.yaml");
+    writeFileSync(repoDag, "queue: a4s\nlabels: [dagu-feature-queue-concurrency=3]\n");
+    writeFileSync(join(home, "config.yaml"), deriveQueue(readFileSync(join(home, "config.yaml"), "utf8"), { name: "a4s", max_concurrency: 3 }).content);
     const listening = once(restart, "listening");
     restart.listen(0, "127.0.0.1");
     await listening;
     const address = restart.address();
     assert.ok(address && typeof address !== "string");
-    const args = [installer, "--dagu-home", home, "--apply", "--admission-close", `touch '${closed}'`, "--admission-open", `touch '${opened}'`, "--restart-command", `test "$DAGU_RESTART_SIGNAL" = TERM; curl --fail --silent --max-time 60 http://127.0.0.1:${address.port}/restart`, "--timeout-seconds", "60"];
+    const args = [installer, "--dagu-home", home, "--apply", "--repo-dag", repoDag, "--admission-close", `touch '${closed}'`, "--admission-open", `touch '${opened}'`, "--restart-command", `test "$DAGU_RESTART_SIGNAL" = TERM; curl --fail --silent --max-time 60 http://127.0.0.1:${address.port}/restart`, "--timeout-seconds", "60"];
     applying = spawn(process.execPath, [...args.slice(0, -1), "1"], { env, stdio: ["ignore", "pipe", "pipe"] });
     let timeoutOutput = "";
     applying.stderr!.on("data", value => { timeoutOutput += value; });
@@ -116,7 +121,7 @@ test("drain preserves existing runs; TERM restart stub activates capacity 2 on n
     assert.equal(await exit(applying), 0, `${output}\n${logs}`);
     assert.equal(restarts, 1);
     assert.ok(existsSync(opened));
-    assert.match(output, /verified next enqueue queue=a4s max_concurrency=2 succeeded=3/);
+    assert.match(output, /verified next enqueue queue=a4s max_concurrency=3 succeeded=4/);
     assert.equal(rows().find(row => row.dagRunId === `${id}-first`)!.startedAt, originalStartedAt);
     assert.equal(rows().find(row => row.dagRunId === `${id}-first`)!.status, "succeeded");
     assert.doesNotMatch(logs, /signal: killed/);
@@ -133,8 +138,11 @@ test("drain preserves existing runs; TERM restart stub activates capacity 2 on n
 
 test("failed admission closure retains recovery state and keeps restart/open behind the drain", liveDagu, () => {
   const home = mkdtempSync(join(tmpdir(), "dagu-restart-closed-"));
+  const repoDag = join(home, "repo.yaml");
+  writeFileSync(repoDag, "queue: a4s\nlabels: [dagu-feature-queue-concurrency=3]\n");
+  writeFileSync(join(home, "config.yaml"), "queues:\n  enabled: true\n  config:\n    - name: a4s\n      max_concurrency: 3\n");
   try {
-    const result = execFileSync(process.execPath, [installer, "--dagu-home", home, "--apply", "--admission-close", "exit 17", "--admission-open", "echo reopened", "--restart-command", "echo restarted"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    const result = execFileSync(process.execPath, [installer, "--dagu-home", home, "--apply", "--repo-dag", repoDag, "--admission-close", "exit 17", "--admission-open", "echo reopened", "--restart-command", "echo restarted"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
     assert.fail(`expected admission closure failure: ${result}`);
   } catch (error) {
     assert.ok(error && typeof error === "object" && "stderr" in error && "stdout" in error);

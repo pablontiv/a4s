@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,6 +9,7 @@ export function admissionFixture() {
   const packageDir = join(root, "package");
   const home = join(root, "dagu-home");
   mkdirSync(packageDir);
+  symlinkSync(fileURLToPath(new URL("../../", import.meta.resolve("yaml"))), join(root, "node_modules"));
   mkdirSync(join(home, "dags"), { recursive: true });
   for (const entry of ["src", "bin", "skills", "agents", "package.json"]) cpSync(fileURLToPath(new URL(`../../${entry}`, import.meta.url)), join(packageDir, entry), { recursive: true });
   const manifest = JSON.parse(readFileSync(join(packageDir, "package.json"), "utf8"));
@@ -28,6 +29,7 @@ export function admissionFixture() {
     const stamp = `@a4s/omp-dagu@${version} source=example/fixture@${commit} bootstrap=bootstrap-fixture dagu=${manifest.daguFeature.dagu}`;
     const identity = `dagu-feature-bundle=${version} source=example/fixture@${commit} bootstrap=bootstrap-fixture`;
     const substitutions: Record<string, string> = { __DAGU_FEATURE_STAMP__: stamp, __DAGU_FEATURE_VERSION__: version, __DAGU_FEATURE_IDENTITY__: identity, TEMPLATE_DAGU_FEATURE_VERSION: version, TEMPLATE_REPO: "fixture", TEMPLATE_BASE_BRANCH: '"main"', __GATE__: '"true"', __REBASE_RESOLVER__: '""', __REQUIRED_CHECK__: '"gate"', __VALIDATION__: '""', __A4S_BLOCKER_REPORTING__: '"ask"', __PRIMARY__: JSON.stringify(packageDir), __TEST_PATHS__: '"test"' };
+    substitutions.TEMPLATE_QUEUE_CONCURRENCY = "1";
     const template = readFileSync(join(packageDir, "skills", "dagu-feature", name), "utf8");
     writeFileSync(destination, template.replace(/__[A-Z0-9_]+__|TEMPLATE_[A-Z_]+/g, key => substitutions[key] ?? key));
   };

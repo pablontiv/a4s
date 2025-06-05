@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.118
+
+- Version each repository's queue concurrency in feature/PoC/discovery renders, default the bootstrap's positive-integer `QUEUE_CONCURRENCY` answer to the current stamp (or 1), and derive only that repository's global queue entry while retaining all other configuration (#383).
+- Preserve a4s's installed effective capacity of 8 in its bootstrap answer; cover materialized queue deployment and compatibility drift in `bootstrap-queue-concurrency.test.ts` (#383).
+- Restart the matching launchd `local.dagu.server` with `launchctl kickstart -k` only when the derived entry changes; fail closed when the running service/home cannot be identified, print the applied queue result, and report global queue drift as incompatible with a bootstrap corrective action (#383).
+- Keep station defaults responsible for shared settings, including `queues.enabled`; repository bootstraps exclusively own named queue entries. Station `--apply --repo-dag` probes use the stamped and already-derived capacity rather than a station-owned limit (#383).
+- Exercise bootstrap rendering with the detected queue default and the production answer wiring; keep live queue-answer integration on an explicitly selected ephemeral HTTP port alongside a running station (#383).
+
 ## 0.3.115
 
 - Admit the owner session's literal inert-quality disposal completion only for a stored historical snapshot with no checkpoint cancellation route and a verified fail-closed QA/REVIEW binding; preserve normal structured verdict admission (#545).

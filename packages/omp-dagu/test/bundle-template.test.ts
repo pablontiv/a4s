@@ -1,12 +1,16 @@
 import { liveDagu } from "./fixtures/live-dagu.ts";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { createServer } from "node:net";
+import { setTimeout as delay } from "node:timers/promises";
+import { BUNDLE_VERSION } from "../src/bundle.ts";
+import { stampedQueue } from "../src/queue.ts";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { parse } from "yaml";
+import { parse, stringify } from "yaml";
 
 const skill = (name: string): string => readFileSync(
   fileURLToPath(new URL(`../skills/dagu-feature/${name}`, import.meta.url)),
@@ -20,6 +24,9 @@ test("all distributed DAG templates carry bundle stamp and label placeholders", 
     assert.match(contents, name === "discovery.yaml"
       ? /^  - dagu-feature-bundle=TEMPLATE_DAGU_FEATURE_VERSION$/m
       : /^  - dagu-feature-bundle=__DAGU_FEATURE_VERSION__$/m, name);
+  }
+  for (const name of ["feature.yaml", "poc.yaml", "discovery.yaml"]) {
+    assert.match(skill(name), /^  - dagu-feature-queue-concurrency=TEMPLATE_QUEUE_CONCURRENCY$/m);
   }
 });
 
@@ -57,6 +64,11 @@ test("bootstrap detects source compatibility and renders and confirms all stamps
   assert.match(bootstrap, /REBASE_RESOLVER: \$\{steps.answers.outputs.REBASE_RESOLVER\}/);
   assert.match(bootstrap, /--arg resolver "\$REBASE_RESOLVER"/);
   assert.ok(bootstrap.includes('gsub(\\"__REBASE_RESOLVER__\\"; \\$resolver | tojson)'));
+  assert.match(bootstrap, /CURRENT_QUEUE_CONCURRENCY/);
+  assert.match(bootstrap, /CURRENT_QUEUE_CONCURRENCY: \$\{steps.detect.outputs.CURRENT_QUEUE_CONCURRENCY\}/);
+  assert.match(bootstrap, /queue-reconcile "\$STAGE"/);
+  assert.match(bootstrap, /queue-check "\$STAGE"/);
+  assert.match(bootstrap, /QUEUE_STATUS: \$\{steps.reconcile.outputs.QUEUE_STATUS\}/);
 });
 
 test("bootstrap renders optional validation as the sole adopted value", {
@@ -77,6 +89,7 @@ test("bootstrap renders optional validation as the sole adopted value", {
           STAGE: stage, REPO: "fixture", BASE_BRANCH: "main", PRIMARY: root,
           GATE: "true", REQUIRED_CHECK: "validate", TEST_PATHS: "^test/",
           REBASE_RESOLVER: "node packages/omp-dagu/bin/dagu-bundle-rebase.mjs",
+          CURRENT_QUEUE_CONCURRENCY: "1",
           VALIDATION: validation, BUNDLE_NAME: "@a4s/omp-dagu", BUNDLE_VERSION: "0.3.14",
           DAGU_VERSION: "2.20.1", SOURCE_NWO: "owner/repo", SOURCE_SHA: "a".repeat(40),
         },
@@ -105,6 +118,7 @@ test("bootstrap preserves the installed blocker reporting choice and accepts exp
         SKILL_DIR: fileURLToPath(new URL("../skills/dagu-feature", import.meta.url)),
         STAGE: stage, PRIMARY: root, REPO: "fixture", BASE_BRANCH: "main",
         GATE: "true", REQUIRED_CHECK: "validate", TEST_PATHS: "^test/", REBASE_RESOLVER: "",
+        CURRENT_QUEUE_CONCURRENCY: "1",
         BUNDLE_NAME: "@a4s/omp-dagu", BUNDLE_VERSION: "0.3.98", DAGU_VERSION: "2.20.1",
         SOURCE_NWO: "owner/repo", SOURCE_SHA: "a".repeat(40),
         A4S_BLOCKER_REPORTING: answer, CURRENT_A4S_BLOCKER_REPORTING: installed,
@@ -329,5 +343,101 @@ test("CI validate executes the real aggregate and requires all selected job outc
   for (const matrix of ["", "null", "{}", "broken", '[{"name":"@a4s/omp-dagu"}]',
     '[{"name":"@a4s/omp-dagu","test":"true","typecheck":true}]']) {
     assert.equal(run(matrix, "success", "success", "success").status, 1, `matrix=${matrix}`);
+  }
+});
+
+const queue = { name: "example", max_concurrency: 6 };
+function fixture() {
+  const home = mkdtempSync(join(tmpdir(), "dagu-bootstrap-live-"));
+  return { home, dispose: () => rmSync(home, { recursive: true, force: true }) };
+}
+test("bootstrap validates and renders all repository queue stamps with real isolated Dagu", liveDagu, () => {
+  const f = fixture();
+  try {
+    const skill = fileURLToPath(new URL("../skills/dagu-feature/", import.meta.url));
+    const bootstrap = join(skill, "dagu-feature-bootstrap.yaml");
+    const dag = parse(readFileSync(bootstrap, "utf8"));
+    const answers = dag.steps.find((step: { id: string }) => step.id === "answers");
+    assert.match(answers.with.prompt, /current stamped value/);
+    assert.deepEqual(answers.with.form.properties.QUEUE_CONCURRENCY, { type: "string", default: "", pattern: "^([1-9][0-9]*)?$" });
+    const stage = join(f.home, "stage", "feature.yaml");
+    const env = { ...process.env, DAGU_HOME: f.home, PRIMARY: f.home, SKILL_DIR: skill, STAGE: stage,
+      DAG_RUN_ID: "bootstrap-test", REPO: "example", BASE_BRANCH: "main", GATE: "true", REQUIRED_CHECK: "validate", REBASE_RESOLVER: "", TEST_PATHS: "test/", QUEUE_CONCURRENCY: "6", CURRENT_QUEUE_CONCURRENCY: "6", BUNDLE_NAME: "@a4s/omp-dagu", BUNDLE_VERSION, DAGU_VERSION: "2.20.1", SOURCE_NWO: "example/package", SOURCE_SHA: "a".repeat(40) };
+    mkdirSync(join(f.home, "dags"));
+    const validate = spawnSync("dagu", ["validate", bootstrap], { env, encoding: "utf8" });
+    assert.equal(validate.status, 0, validate.stdout + validate.stderr);
+    const render = spawnSync("bash", ["-c", dag.steps.find((step: { id: string }) => step.id === "render").run], { env, encoding: "utf8" });
+    assert.equal(render.status, 0, render.stdout + render.stderr);
+    for (const name of ["feature", "poc", "discovery"]) assert.deepEqual(stampedQueue(readFileSync(join(f.home, "stage", `${name}.yaml`), "utf8")), queue);
+  } finally { f.dispose(); }
+});
+
+test("bootstrap integer-text answer overrides the stamp and omission keeps its default in real Dagu", { ...liveDagu, timeout: 90_000 }, async () => {
+  const f = fixture();
+  const listener = createServer();
+  await new Promise<void>(resolve => listener.listen(0, "127.0.0.1", resolve));
+  const address = listener.address();
+  assert.ok(address && typeof address !== "string");
+  const port = address.port;
+  await new Promise<void>(resolve => listener.close(() => resolve()));
+  const env = { ...process.env, DAGU_HOME: f.home, DAGU_HOST: "127.0.0.1", DAGU_PORT: String(port), DAGU_COORDINATOR_ENABLED: "false", QUEUE_CONCURRENCY: undefined };
+  mkdirSync(join(f.home, "dags"));
+  writeFileSync(join(f.home, "config.yaml"), `host: 127.0.0.1\nport: ${port}\nauth:\n  mode: none\ncoordinator:\n  enabled: false\nscheduler:\n  port: 0\n`);
+  const bootstrap = parse(readFileSync(new URL("../skills/dagu-feature/dagu-feature-bootstrap.yaml", import.meta.url), "utf8"));
+  const renderStep = bootstrap.steps.find((step: { id: string }) => step.id === "render");
+  const render = renderStep.run as string;
+  const resolveAnswer = render.slice(render.indexOf("# Empty integer-text"), render.indexOf('mkdir -p'));
+  const dag = join(f.home, "dags", "queue-answer.yaml");
+  writeFileSync(dag, stringify({
+    type: "graph", shell: "bash",
+    steps: [
+      { id: "detect", run: 'echo CURRENT_QUEUE_CONCURRENCY=6 >> "$DAGU_OUTPUT_FILE"', outputs: [{ name: "CURRENT_QUEUE_CONCURRENCY" }] },
+      { id: "answers", depends: "detect", action: "human.task", with: {
+        prompt: "Keep current stamp 6 by omitting the answer",
+        form: { type: "object", properties: { QUEUE_CONCURRENCY: bootstrap.steps.find((step: { id: string }) => step.id === "answers").with.form.properties.QUEUE_CONCURRENCY } },
+      } },
+      { id: "worktrees", depends: "answers", run: "true" },
+      { id: "render", depends: "worktrees", env: renderStep.env.filter((entry: Record<string, string>) =>
+        "CURRENT_QUEUE_CONCURRENCY" in entry || "QUEUE_CONCURRENCY" in entry),
+      run: `${resolveAnswer}\nprintf '%s' "$QUEUE_CONCURRENCY" > '${join(f.home, "answer")}'` },
+    ],
+  }));
+  const service = spawn("dagu", ["start-all", "--host", "127.0.0.1", "--port", String(port)], { env, stdio: ["ignore", "pipe", "pipe"] });
+  let log = "";
+  service.stdout.on("data", data => { log += data; });
+  service.stderr.on("data", data => { log += data; });
+  const dagu = (...args: string[]) => execFileSync("dagu", args, { env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  async function until(probe: () => Promise<boolean>) {
+    const deadline = Date.now() + 30_000;
+    while (Date.now() < deadline) {
+      if (await probe()) return;
+      await delay(100);
+    }
+    throw new Error(`Timed out waiting for queue answer\n${log}`);
+  }
+  async function state(id: string, wanted: string) {
+    await until(async () => {
+      const response = await fetch(`http://127.0.0.1:${port}/api/v1/dag-runs/queue-answer/${id}`);
+      if (!response.ok) return false;
+      const detail = (await response.json() as { dagRunDetails: { statusLabel: string } }).dagRunDetails;
+      assert.notEqual(detail.statusLabel, "failed", log);
+      return detail.statusLabel === wanted;
+    });
+  }
+  try {
+    await until(async () => { try { return (await fetch(`http://127.0.0.1:${port}/api/v1/dag-runs`)).ok; } catch { return false; } });
+    for (const [id, inputs, expected] of [["keep", [], "6"], ["override", ["--input", "QUEUE_CONCURRENCY=1"], "1"]] as const) {
+      dagu("enqueue", "--run-id", id, dag);
+      await state(id, "waiting");
+      const invalid = spawnSync("dagu", ["human-task", "complete", "queue-answer", "--run-id", id, "--step", "answers", "--input", "QUEUE_CONCURRENCY=0"], { env, encoding: "utf8" });
+      assert.notEqual(invalid.status, 0, "the form accepts positive integers or its empty default");
+      dagu("human-task", "complete", "queue-answer", "--run-id", id, "--step", "answers", ...inputs);
+      await state(id, "succeeded");
+      assert.equal(readFileSync(join(f.home, "answer"), "utf8"), expected);
+    }
+  } finally {
+    service.kill("SIGTERM");
+    await new Promise<void>(resolve => { if (service.exitCode !== null) resolve(); else service.once("exit", () => resolve()); });
+    f.dispose();
   }
 });

@@ -81,17 +81,13 @@ mismos parámetros y `PATH` conserva bytes y mtimes. El plist usa el binario
 resuelto en `PATH`, `start-all`, `KeepAlive`, `ProcessType=Interactive` y el
 `DAGU_HOME` elegido. El instalador también crea el directorio de logs.
 
-The base and rendered plist are fully owned. In `config.yaml`, the installer
-manages `auth.mode=none`, `queues.enabled=true`, `host=127.0.0.1`,
-`port=8080`, `coordinator.enabled=true`, and the `a4s` entry in `queues.config`
-with `max_concurrency=2`. Queues are merged by name: template-owned fields replace
-installed values for the same named queue, while additional keys are retained.
-Missing template queues are added. For example, applying the template can replace
-`a4s.max_concurrency=8` with `2`, while foreign queues `antojea-e2e: 4` and
-`antojea-e2e-device: 1` retain their limits. The original report in #449 established
-this consequence through source inspection; it did not execute the installer or
-observe a production overwrite. Other keys and comments are preserved. Isolated
-validation checks the owned values and leaves foreign paths untouched.
+La base y el plist renderizado son propios completos. En `config.yaml` solo
+se gestionan `auth.mode=none`, `queues.enabled=true`, `host=127.0.0.1`,
+`port=8080` y `coordinator.enabled=true`. Cada repositorio es dueño de su
+concurrencia: el bootstrap deriva su entrada `queues.config` desde la etiqueta
+`dagu-feature-queue-concurrency=<n>` versionada en sus renders. El instalador de
+estación conserva esas entradas, sus metadatos, el resto de claves y comentarios.
+La validación aislada mantiene intactas las rutas ajenas.
 
 Para un ensayo aislado, usar `DAGU_HOME=$(mktemp -d)` y omitir `--launch-agent`:
 el plist se escribe por defecto en `$DAGU_HOME/LaunchAgent.plist` y los logs
@@ -113,6 +109,30 @@ esperado y 1 si hay deriva, incompatibilidad de versión o error de validación.
 La comparación de config usa la fusión y la del plist su render, no la plantilla
 sin resolver.
 
+### Concurrencia propiedad del repositorio
+
+El formulario del bootstrap incluye `QUEUE_CONCURRENCY`, entero ≥ 1 introducido
+como texto. Por los defaults estáticos de Dagu 2.20.1, usa `type: string`,
+`default: ""` y patrón `^([1-9][0-9]*)?$`: vacío conserva el valor sellado
+mostrado en el prompt, o 1 sin sello. Para a4s se responde **8**, preservando la capacidad efectiva instalada.
+`feature.yaml`, `poc.yaml` y `discovery.yaml` versionan el mismo
+valor junto al sello del bundle. La entrada global se deriva exclusivamente de
+ese valor: `config.yaml` nunca se edita a mano.
+
+El paso `reconcile` fusiona solo la entrada de la cola del repo, conservando
+`queues.enabled`, otras claves y otras colas. Si cambia, identifica con
+`launchctl print` el servicio activo `gui/$UID/local.dagu.server`, comprueba en su
+plist `dagu start-all` y el mismo `DAGU_HOME`, y ejecuta
+`launchctl kickstart -k gui/$UID/local.dagu.server`. Si no puede determinar ese
+mecanismo falla antes de escribir y pide instalar/cargar el servicio correcto.
+Una entrada idéntica no reinicia. Los runs que esperan tareas humanas conservan
+su estado persistido. `confirm` imprime
+`queue=<repo> max_concurrency=<n> changed=yes|no`.
+
+`dagu-feature-bundle <repo>` compara cada sello con la entrada global y señala
+deriva como `compat=incompatible action=re-run-bootstrap`; se reconcilia
+repitiendo el bootstrap y adoptando sus renders.
+
 ### Acciones de estación (operador)
 
 Una primera instalación activa el plist con `launchctl bootstrap` y comprueba
@@ -125,16 +145,17 @@ parámetros `--launch-agent` y `--log-dir` de su instalación.
 
 El mismo instalador aplica los archivos versionados y por defecto **difiere el
 reinicio**, incluso si el historial parece inactivo. La aplicación con `--apply`
-mantiene la instalación idempotente del plist/base, la fusión por nombre de las
-colas y la comprobación aislada del runtime fijado. `--check` compara sin aplicar;
-`--check` y `--apply` son mutuamente excluyentes.
+mantiene la instalación idempotente del plist/base y la comprobación aislada de
+Dagu 2.20.1. `--repo-dag <render>` identifica la cola y capacidad versionadas que
+ya derivó el bootstrap; el instalador requiere que coincidan con config y usa ese
+valor para sus probes. `--check` compara sin aplicar y es excluyente con `--apply`.
 
 Escribir el archivo no recarga la concurrencia del scheduler activo. Después del
 merge, el operador aplica la configuración con hooks de estación explícitos:
 
 ```sh
 node /ruta/al/clon/primario/packages/omp-dagu/bin/dagu-station-install.ts \
-  --dagu-home "$DAGU_HOME" --apply \
+  --dagu-home "$DAGU_HOME" --apply --repo-dag .workspace/dagu/dags/feature.yaml \
   --admission-close "$CLOSE_ADMISSION" \
   --restart-command "$RESTART_SERVICE" \
   --admission-open "$OPEN_ADMISSION"
@@ -159,11 +180,11 @@ Su contrato es:
    de señal es `launchctl kill SIGTERM "gui/$(id -u)/local.dagu.server"`; el hook
    además debe esperar el nuevo PID y su readiness. La activación/instalación
    del LaunchAgent y estos hooks pertenecen al operador.
-4. Con admisión todavía cerrada, el instalador encola tres runs de prueba con
-   IDs únicos en `a4s`: verifica dos `running` retenidos en una barrera y uno
-   `queued`, libera la barrera y espera los tres `succeeded`. Imprime
-   `verified next enqueue queue=a4s max_concurrency=2 succeeded=3` antes de
-   ejecutar `OPEN_ADMISSION`. Las definiciones de prueba exitosas se retiran;
+4. Con admisión todavía cerrada, el instalador encola N+1 runs de prueba con IDs
+   únicos en la cola del render de `--repo-dag`: verifica N `running` retenidos
+   en una barrera y uno `queued`, libera la barrera y espera todos `succeeded`.
+   Imprime `verified next enqueue queue=<repo> max_concurrency=<n> succeeded=<n+1>`
+   antes de ejecutar `OPEN_ADMISSION`. Retira las definiciones de prueba exitosas;
    el historial de Dagu conserva la evidencia.
 
 `--timeout-seconds` (600 por defecto) acota cada espera/comando. Ante un fallo

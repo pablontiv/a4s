@@ -2888,6 +2888,7 @@ test("adopted policy rejects run overrides before repository writes and admits o
     ...process.env, DAGU_PARAMS_JSON: "{}", DAGU_HOME: home, DAGU_PORT: String(port), PRIMARY: repo.primary, SKILL_DIR: skillDir,
     GATE: "printf adopted-gate", REQUIRED_CHECK: "adopted-check", REPO: "fixture", BASE_BRANCH: "main",
     REBASE_RESOLVER: "printf adopted-resolver",
+    CURRENT_QUEUE_CONCURRENCY: "1",
     STAGE: stage, TEST_PATHS: "test/", BUNDLE_NAME: "@a4s/omp-dagu", BUNDLE_VERSION,
     DAGU_VERSION: "2.20.1", SOURCE_NWO: "fixture/repo", SOURCE_SHA: "1".repeat(40), DAG_RUN_ID: "bootstrap-fixture",
   };

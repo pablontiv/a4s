@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import { parse } from "yaml";
@@ -16,6 +16,7 @@ test("station installer creates versioned files using real Dagu and preserves by
     assert.equal(first.status, 0, first.stderr);
     assert.equal(readFileSync(join(f.home, "base.yaml"), "utf8"), readFileSync(new URL("base.yaml", templates), "utf8"));
     assert.equal(readFileSync(join(f.home, "config.yaml"), "utf8"), readFileSync(new URL("config.yaml", templates), "utf8"));
+    assert.deepEqual(parse(readFileSync(join(f.home, "config.yaml"), "utf8")).queues, { enabled: true });
     const plist = readFileSync(f.agent, "utf8");
     assert.match(plist, /<string>local\.dagu\.server<\/string>/);
     assert.match(plist, /<string>start-all<\/string>/);
@@ -51,7 +52,7 @@ test("station installer preserves foreign queues, comments and nested keys while
     assert.deepEqual(config.queues, { enabled: true, config: [
       { name: "antojea-e2e", max_concurrency: 4 },
       { name: "antojea-e2e-device", max_concurrency: 1 },
-      { name: "a4s", max_concurrency: 2 },
+
     ] });
     assert.deepEqual(config.auth, { mode: "none", basic: { username: "operator", password: "local-secret" } });
     assert.deepEqual(config.coordinator, { enabled: true, port: 50056 });
@@ -78,14 +79,34 @@ test("station installer check reports drift and preserves the installed bytes", 
     assert.equal(readFileSync(join(f.home, "base.yaml"), "utf8"), custom);
   } finally { f.dispose(); }
 });
-test("station installer reconciles existing managed capacity and preserves queue metadata", liveDagu, () => {
+
+test("station apply requires a stamped render and its matching bootstrap-derived entry before side effects", liveDagu, () => {
   const f = fixture();
   try {
-    writeFileSync(join(f.home, "config.yaml"), "queues:\n  config:\n    - name: a4s\n      max_concurrency: 1\n      scheduler: operator-value\n");
+    const hooks = ["--apply", "--admission-close", `touch '${join(f.root, "closed")}'`, "--admission-open", "true", "--restart-command", "true"];
+    const missing = f.run(hooks);
+    assert.equal(missing.status, 1);
+    assert.match(missing.stderr, /requires --repo-dag/);
+    const render = join(f.root, "feature.yaml");
+    writeFileSync(render, "queue: example\nlabels: [dagu-feature-queue-concurrency=6]\n");
+    const original = "queues:\n  enabled: true\n  config:\n    - name: example\n      max_concurrency: 3\n";
+    writeFileSync(join(f.home, "config.yaml"), original);
+    const drift = f.run([...hooks, "--repo-dag", render]);
+    assert.equal(drift.status, 1);
+    assert.match(drift.stderr, /queue=example max_concurrency=6 compat=incompatible action=re-run-bootstrap/);
+    assert.equal(readFileSync(join(f.home, "config.yaml"), "utf8"), original);
+    assert.equal(existsSync(join(f.root, "closed")), false);
+  } finally { f.dispose(); }
+});
+
+test("station installer preserves repo-derived capacity and queue metadata", liveDagu, () => {
+  const f = fixture();
+  try {
+    writeFileSync(join(f.home, "config.yaml"), "queues:\n  config:\n    - name: a4s\n      max_concurrency: 6\n      scheduler: repo-value\n");
     const result = f.run();
     assert.equal(result.status, 0, result.stderr);
     assert.deepEqual(parse(readFileSync(join(f.home, "config.yaml"), "utf8")).queues.config, [
-      { name: "a4s", max_concurrency: 2, scheduler: "operator-value" },
+      { name: "a4s", max_concurrency: 6, scheduler: "repo-value" },
     ]);
   } finally { f.dispose(); }
 });

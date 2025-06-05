@@ -13,7 +13,7 @@ steps:
   - id: detect
     run: |
       set -euo pipefail
-      for tool in git gh jq dagu python3; do command -v "$tool" >/dev/null; done
+      for tool in git gh jq dagu node python3; do command -v "$tool" >/dev/null; done
       python3 -c 'import fcntl'
       gh auth status >/dev/null
       test -f "$SKILL_DIR/feature.yaml"
@@ -98,6 +98,8 @@ steps:
       installed_poc="$PRIMARY/.workspace/dagu/dags/poc.yaml"
       installed_discovery="$PRIMARY/.workspace/dagu/dags/discovery.yaml"
       installed_planning="$PRIMARY/.workspace/dagu/dags/planning.yaml"
+      current_queue_concurrency=$(node "$package_dir/bin/dagu-feature-bundle.ts" queue-default \
+        "$installed_feature" "$installed_poc" "$installed_discovery")
       current_gate=not-configured
       current_check=not-configured
       current_tests=not-configured
@@ -139,6 +141,7 @@ steps:
         printf 'CURRENT_REBASE_RESOLVER=%s\n' "$current_resolver"
         printf 'CURRENT_VALIDATION=%s\n' "$(jq -nc --arg value "$current_validation" '$value')"
         printf 'CURRENT_A4S_BLOCKER_REPORTING=%s\n' "$current_blocker_reporting"
+        printf 'CURRENT_QUEUE_CONCURRENCY=%s\n' "$current_queue_concurrency"
         printf 'CURRENT_FEATURE_STAMP=%s\n' "$(read_stamp "$installed_feature")"
         printf 'CURRENT_POC_STAMP=%s\n' "$(read_stamp "$installed_poc")"
         printf 'CURRENT_DISCOVERY_STAMP=%s\n' "$(read_stamp "$installed_discovery")"
@@ -163,6 +166,7 @@ steps:
       - name: CURRENT_REBASE_RESOLVER
       - name: CURRENT_VALIDATION
       - name: CURRENT_A4S_BLOCKER_REPORTING
+      - name: CURRENT_QUEUE_CONCURRENCY
       - name: CURRENT_FEATURE_STAMP
       - name: CURRENT_POC_STAMP
       - name: CURRENT_DISCOVERY_STAMP
@@ -195,6 +199,9 @@ steps:
         A4S_BLOCKER_REPORTING: ask requires consent before publishing a blocker;
         auto explicitly authorizes scoped A4S blocker reporting to the identified native owner.
         Empty preserves the installed choice (current: ${steps.detect.outputs.CURRENT_A4S_BLOCKER_REPORTING}; initial: ask).
+        QUEUE_CONCURRENCY: positive integer limit shared by this repository's feature,
+        poc and discovery queue (current stamped value: ${steps.detect.outputs.CURRENT_QUEUE_CONCURRENCY};
+        default: current stamp, or 1 for first adoption; leave omitted to keep it; for a4s: 8, preserving installed effective capacity).
       form:
         type: object
         additionalProperties: false
@@ -217,6 +224,10 @@ steps:
             type: string
             enum: ["", ask, auto]
             default: ""
+          QUEUE_CONCURRENCY:
+            type: string
+            default: ""
+            pattern: '^([1-9][0-9]*)?$'
         required: [GATE, REQUIRED_CHECK, TEST_PATHS, REBASE_RESOLVER]
 
   - id: worktrees
@@ -242,6 +253,8 @@ steps:
       - VALIDATION: ${steps.answers.outputs.VALIDATION}
       - A4S_BLOCKER_REPORTING: ${steps.answers.outputs.A4S_BLOCKER_REPORTING}
       - CURRENT_A4S_BLOCKER_REPORTING: ${steps.detect.outputs.CURRENT_A4S_BLOCKER_REPORTING}
+      - CURRENT_QUEUE_CONCURRENCY: ${steps.detect.outputs.CURRENT_QUEUE_CONCURRENCY}
+      - QUEUE_CONCURRENCY: ${steps.answers.outputs.QUEUE_CONCURRENCY}
       - BUNDLE_NAME: ${steps.detect.outputs.BUNDLE_NAME}
       - BUNDLE_VERSION: ${steps.detect.outputs.BUNDLE_VERSION}
       - DAGU_VERSION: ${steps.detect.outputs.DAGU_VERSION}
@@ -254,6 +267,9 @@ steps:
       PRIMARY=$(cd "$PRIMARY" && pwd -P)
       A4S_BLOCKER_REPORTING=${A4S_BLOCKER_REPORTING:-${CURRENT_A4S_BLOCKER_REPORTING:-ask}}
       case "$A4S_BLOCKER_REPORTING" in ask|auto) ;; *) echo 'A4S_BLOCKER_REPORTING must be ask or auto' >&2; exit 1 ;; esac
+      # Empty integer-text input keeps the detected stamp (Dagu form defaults are static).
+      QUEUE_CONCURRENCY="${QUEUE_CONCURRENCY:-$CURRENT_QUEUE_CONCURRENCY}"
+      [[ "$QUEUE_CONCURRENCY" =~ ^[1-9][0-9]*$ ]] || { echo 'QUEUE_CONCURRENCY must be an integer >= 1' >&2; exit 1; }
       mkdir -p "$(dirname "$STAGE")"
       source="$SOURCE_NWO@$SOURCE_SHA"
       identity="dagu-feature-bundle=$BUNDLE_VERSION source=$source bootstrap=$DAG_RUN_ID"
@@ -261,13 +277,15 @@ steps:
       render_common='
         gsub("__DAGU_FEATURE_STAMP__"; $stamp)
         | gsub("__DAGU_FEATURE_VERSION__"; $version)
-        | gsub("__DAGU_FEATURE_IDENTITY__"; $identity)'
+        | gsub("__DAGU_FEATURE_IDENTITY__"; $identity)
+        | gsub("TEMPLATE_QUEUE_CONCURRENCY"; $concurrency)'
       jq -nr --rawfile template "$SKILL_DIR/feature.yaml" \
         --arg repo "$REPO" --arg base "$BASE_BRANCH" \
         --arg gate "$GATE" --arg check "$REQUIRED_CHECK" \
         --arg resolver "$REBASE_RESOLVER" --arg primary "$PRIMARY" \
         --arg validation "${VALIDATION:-}" \
         --arg blocker_reporting "$A4S_BLOCKER_REPORTING" \
+        --arg concurrency "$QUEUE_CONCURRENCY" \
         --arg stamp "$stamp" --arg version "$BUNDLE_VERSION" --arg identity "$identity" \
         "\$template
           | $render_common
@@ -282,6 +300,7 @@ steps:
       jq -nr --rawfile template "$SKILL_DIR/poc.yaml" \
         --arg repo "$REPO" --arg base "$BASE_BRANCH" \
         --arg primary "$PRIMARY" --arg tests "$TEST_PATHS" \
+        --arg concurrency "$QUEUE_CONCURRENCY" \
         --arg stamp "$stamp" --arg version "$BUNDLE_VERSION" --arg identity "$identity" \
         "\$template
           | $render_common
@@ -291,6 +310,7 @@ steps:
           | gsub(\"__TEST_PATHS__\"; \$tests | tojson)" > "$(dirname "$STAGE")/poc.yaml"
       jq -nr --rawfile template "$SKILL_DIR/discovery.yaml" \
         --arg repo "$REPO" \
+        --arg concurrency "$QUEUE_CONCURRENCY" \
         --arg stamp "$stamp" --arg version "$BUNDLE_VERSION" --arg identity "$identity" \
         "\$template
           | $render_common
@@ -298,10 +318,12 @@ steps:
           | gsub(\"TEMPLATE_REPO\"; \$repo)" > "$(dirname "$STAGE")/discovery.yaml"
       jq -nr --rawfile template "$SKILL_DIR/planning.yaml" \
         --arg repo "$REPO" \
+        --arg concurrency "$QUEUE_CONCURRENCY" \
         --arg stamp "$stamp" --arg version "$BUNDLE_VERSION" --arg identity "$identity" \
         "\$template | $render_common | gsub(\"TEMPLATE_REPO\"; \$repo)" > "$(dirname "$STAGE")/planning.yaml"
       jq -nr --rawfile template "$SKILL_DIR/reconcile.yaml" \
         --arg stamp "$stamp" --arg version "$BUNDLE_VERSION" --arg identity "$identity" \
+        --arg concurrency "$QUEUE_CONCURRENCY" \
         "\$template | $render_common" > "$(dirname "$STAGE")/reconcile.yaml"
       for rendered in "$STAGE" "$(dirname "$STAGE")/poc.yaml" \
         "$(dirname "$STAGE")/discovery.yaml" "$(dirname "$STAGE")/planning.yaml" "$(dirname "$STAGE")/reconcile.yaml"; do
@@ -325,6 +347,11 @@ steps:
       fi
       dagu validate "$destination"
       printf 'reconcile=%s\n' "$destination"
+      queue_status=$(node "$SKILL_DIR/../../bin/dagu-feature-bundle.ts" queue-reconcile "$STAGE")
+      printf 'QUEUE_STATUS=%s\n' "$queue_status" >> "$DAGU_OUTPUT_FILE"
+      printf '%s\n' "$queue_status"
+    outputs:
+      - name: QUEUE_STATUS
 
   - id: github
     depends: reconcile
@@ -397,6 +424,7 @@ steps:
       - DAGU_VERSION: ${steps.detect.outputs.DAGU_VERSION}
       - SOURCE_NWO: ${steps.detect.outputs.SOURCE_NWO}
       - SOURCE_SHA: ${steps.detect.outputs.SOURCE_SHA}
+      - QUEUE_STATUS: ${steps.reconcile.outputs.QUEUE_STATUS}
     run: |
       set -euo pipefail
       test "$(gh api "repos/$NWO" --jq '.allow_auto_merge and .allow_squash_merge')" = true
@@ -410,6 +438,8 @@ steps:
       destination="${DAGU_HOME:-$HOME/.dagu}/dags/reconcile.yaml"
       cmp "$(dirname "$STAGE")/reconcile.yaml" "$destination"
       dagu validate "$destination"
+      node "$SKILL_DIR/../../bin/dagu-feature-bundle.ts" queue-check "$STAGE"
+      printf '%s\n' "$QUEUE_STATUS"
       printf 'dagu-feature-bundle=%s source=%s@%s bootstrap=%s dagu=%s\n' \
         "$BUNDLE_VERSION" "$SOURCE_NWO" "$SOURCE_SHA" "$DAG_RUN_ID" "$DAGU_VERSION"
       printf 'Dagu-Feature-Bundle: %s\n' "$BUNDLE_VERSION"
