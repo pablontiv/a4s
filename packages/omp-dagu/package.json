@@ -1,6 +1,6 @@
 {
   "name": "@a4s/omp-dagu",
-  "version": "0.3.49",
+  "version": "0.3.54",
   "private": true,
   "license": "UNLICENSED",
   "repository": {
@@ -22,13 +22,14 @@
     "dagu-station-install": "./bin/dagu-station-install.ts"
   },
   "omp": {
-    "extensions": ["./src/status/index.ts", "./src/triage/index.ts"]
+    "extensions": ["./src/status/reloadable.ts", "./src/triage/reloadable.ts"]
   },
   "scripts": {
     "test": "tsx --test test/*.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@a4s/omp-hot-reload": "0.1.0",
     "yaml": "2.9.0"
   },
   "devDependencies": {

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.54
+
+- Reload the status and triage extension generations through `/reload-plugins`, preserving the builtin resource refresh with idle deferral, bounded lifecycle cleanup and rollback on import or factory failure (#297).
+
 ## 0.3.49
 
 - Preserve candidates in leased checkpoint refs and publish the exact gated SHA only while the candidate remains clean and fresh (#275).

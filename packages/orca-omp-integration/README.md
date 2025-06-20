@@ -49,7 +49,9 @@ extensions:
   - /absolute/path/to/a4s/packages/orca-omp-integration
 ```
 
-Every new OMP session then discovers the extension automatically. Existing sessions must be restarted: `/reload-plugins` refreshes skills, commands, agents, capabilities, and MCP, but does not reload extension modules or register their hooks. Loading it globally is safe: both modules remain inert unless the session runs in an Orca pane with a bound orchestration Run.
+Every new OMP session discovers the reloadable shim automatically. After editing an a4s extension implementation, `/reload-plugins` imports a fresh generation without restarting OMP and still runs the builtin refresh of skills, commands, agents, capabilities, and MCP. An idle session waits for the reload; during a turn it is deferred until the host becomes idle after `agent_end`. The old generation receives `session_shutdown` before the new generation receives `session_start`, with a 2000 ms limit per lifecycle handler. Import or factory failures report an error and retain the previous generation. Loading it globally is safe: both modules remain inert unless the session runs in an Orca pane with a bound orchestration Run.
+
+This applies to the a4s extensions that declare a reloadable shim, not third-party extensions. Restart OMP to reload the shim or `@a4s/omp-hot-reload` helper itself. Removed commands and tools remain registered: commands warn that a restart is needed, and removed tools throw on execution. Description/schema changes and autocomplete entries for new commands also require a restart. Local modules created after startup and imports using bare specifiers are not refreshed (for example, the `core/` code imported by Context Expert).
 
 For a one-off smoke run instead:
 

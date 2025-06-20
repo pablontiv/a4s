@@ -32,7 +32,7 @@ test("the active Pi adapter preserves the pi-context-expert runtime identity", (
     pi?: { extensions?: string[] };
   };
   assert.equal(packageManifest.name, "@a4s/context-expert");
-  assert.deepEqual(packageManifest.pi?.extensions, ["./adapters/pi/src/index.ts"]);
+  assert.deepEqual(packageManifest.pi?.extensions, ["./adapters/pi/src/reloadable.ts"]);
 
   const workspaceManifest = text(resolve(workspaceRoot, "package.json"));
   assert.doesNotMatch(workspaceManifest, /@a4s\/pi-rule-compiler/);

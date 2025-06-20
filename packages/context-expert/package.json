@@ -24,7 +24,7 @@
   },
   "pi": {
     "extensions": [
-      "./adapters/pi/src/index.ts"
+      "./adapters/pi/src/reloadable.ts"
     ]
   },
   "scripts": {
@@ -36,6 +36,9 @@
     "eval:evidence": "tsx adapters/pi/eval/evidence/run.ts",
     "e2e": "tsx adapters/pi/scripts/run-headless-e2e.ts",
     "rpc:compact-driver": "tsx adapters/pi/scripts/run-rpc-compact.ts"
+  },
+  "dependencies": {
+    "@a4s/omp-hot-reload": "0.1.0"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
