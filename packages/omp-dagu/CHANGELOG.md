@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.80
+
+- Reload the status and triage extension generations through `/reload-plugins`, preserving the builtin resource refresh with idle deferral, bounded lifecycle cleanup and rollback on import or factory failure (#297).
+
 ## 0.3.79
 
 - Report `main=n/a` for consumer repositories without the omp-dagu manifest and accept bundle/extension patch drift as `ok`; reserve `stale` for loaded-extension drift from applicable main or an unreadable/invalid main manifest (#380).

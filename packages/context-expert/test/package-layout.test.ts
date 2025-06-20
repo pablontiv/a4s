@@ -19,8 +19,8 @@ test("Context Expert exposes one canonical Pi adapter", () => {
 
   assert.equal(manifest.name, "@a4s/context-expert");
   assert.equal(manifest.exports?.["./pi"], "./adapters/pi/src/index.ts");
-  assert.deepEqual(manifest.pi?.extensions, ["./adapters/pi/src/index.ts"]);
-  assert.equal(existsSync(`${packageRoot}/adapters/pi/src/index.ts`), true);
+  assert.deepEqual(manifest.pi?.extensions, ["./adapters/pi/src/reloadable.ts"]);
+  assert.equal(existsSync(`${packageRoot}/adapters/pi/src/reloadable.ts`), true);
   assert.equal(existsSync(`${repositoryRoot}/packages/pi-context-expert`), false);
 });
 
