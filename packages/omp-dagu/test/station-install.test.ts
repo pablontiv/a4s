@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -74,6 +74,7 @@ test("station installer preserves foreign queues, comments and nested keys while
     assert.deepEqual(config.queues, { enabled: true, config: [
       { name: "antojea-e2e", max_concurrency: 4 },
       { name: "antojea-e2e-device", max_concurrency: 1 },
+      { name: "a4s", max_concurrency: 2 },
     ] });
     assert.deepEqual(config.auth, { mode: "none", basic: { username: "operator", password: "local-secret" } });
     assert.deepEqual(config.coordinator, { enabled: true, port: 50056 });
@@ -115,5 +116,39 @@ test("station installer check reports drift and preserves the installed bytes", 
     assert.equal(result.status, 1, result.stderr);
     assert.ok(result.stdout.includes(`drift ${join(f.home, "base.yaml")}`));
     assert.equal(readFileSync(join(f.home, "base.yaml"), "utf8"), custom);
+  } finally { f.dispose(); }
+});
+
+test("station apply requires explicit admission and restart hooks before writing", () => {
+  const f = fixture();
+  try {
+    const result = f.run(["--apply"]);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /requires admission-close, admission-open and restart-command/);
+    assert.equal(existsSync(join(f.home, "config.yaml")), false);
+  } finally { f.dispose(); }
+});
+
+test("station installer reconciles existing managed capacity and preserves queue metadata", isolatedDagu, () => {
+  const f = fixture();
+  try {
+    writeFileSync(join(f.home, "config.yaml"), "queues:\n  config:\n    - name: a4s\n      max_concurrency: 1\n      scheduler: operator-value\n");
+    const result = f.run();
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(parse(readFileSync(join(f.home, "config.yaml"), "utf8")).queues.config, [
+      { name: "a4s", max_concurrency: 2, scheduler: "operator-value" },
+    ]);
+  } finally { f.dispose(); }
+});
+
+test("station installer preserves malformed operator config for correction", isolatedDagu, () => {
+  const f = fixture();
+  try {
+    const original = "queues: [broken\n";
+    writeFileSync(join(f.home, "config.yaml"), original);
+    const result = f.run();
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /config.yaml:/);
+    assert.equal(readFileSync(join(f.home, "config.yaml"), "utf8"), original);
   } finally { f.dispose(); }
 });

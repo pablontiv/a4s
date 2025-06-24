@@ -55,11 +55,12 @@ resuelto en `PATH`, `start-all`, `KeepAlive`, `ProcessType=Interactive` y el
 
 La base y el plist renderizado son propios completos. En `config.yaml` solo
 se gestionan `auth.mode=none`, `queues.enabled=true`, `host=127.0.0.1`,
-`port=8080` y `coordinator.enabled=true`; el resto de claves y comentarios se
-conservan. Las entradas de `queues.config` pertenecen a sus repositorios:
-por ejemplo, `antojea-e2e: 4` y `antojea-e2e-device: 1` mantienen sus límites,
-igual que cualquier otro valor que tengan al instalar. La validación aislada
-comprueba los valores propios y mantiene intactas las rutas ajenas.
+`port=8080`, `coordinator.enabled=true` y `queues.config` para `a4s` con
+`max_concurrency=2`. Las colas se fusionan por nombre, conservando sus demás
+claves y las colas ajenas: por ejemplo, `antojea-e2e: 4` y
+`antojea-e2e-device: 1` mantienen sus límites. Las demás claves y comentarios
+se conservan. La validación aislada comprueba los valores propios y mantiene
+intactas las rutas ajenas.
 
 Para un ensayo aislado, usar `DAGU_HOME=$(mktemp -d)` y omitir `--launch-agent`:
 el plist se escribe por defecto en `$DAGU_HOME/LaunchAgent.plist` y los logs
@@ -83,21 +84,72 @@ sin resolver.
 
 ### Acciones de estación (operador)
 
-La activación se realiza en un punto seguro, tras revisar los runs activos.
-Para actualizar un servicio ya cargado:
+Una primera instalación activa el plist con `launchctl bootstrap` y comprueba
+`state = running`, health `healthy`, el `cmp` de base sin diferencias y
+`--check` con los tres archivos `unchanged`. Para actualizar una estación activa,
+el operador usa la aplicación drenada descrita a continuación, con los mismos
+parámetros `--launch-agent` y `--log-dir` de su instalación.
+
+## Configuración de estación y reinicio drenado
+
+El mismo instalador aplica los archivos versionados y por defecto **difiere el
+reinicio**, incluso si el historial parece inactivo. La aplicación con `--apply`
+mantiene la instalación idempotente del plist/base, la fusión por nombre de las
+colas y la comprobación aislada de Dagu 2.20.1. `--check` compara sin aplicar;
+`--check` y `--apply` son mutuamente excluyentes.
+
+Escribir el archivo no recarga la concurrencia del scheduler activo. Después del
+merge, el operador aplica la configuración con hooks de estación explícitos:
 
 ```sh
-launchctl bootout "gui/$(id -u)/local.dagu.server"
-launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/local.dagu.server.plist"
-launchctl kickstart "gui/$(id -u)/local.dagu.server"
-launchctl print "gui/$(id -u)/local.dagu.server"
-curl -fsS http://127.0.0.1:8080/api/v1/health
+node /ruta/al/clon/primario/packages/omp-dagu/bin/dagu-station-install.ts \
+  --dagu-home "$DAGU_HOME" --apply \
+  --admission-close "$CLOSE_ADMISSION" \
+  --restart-command "$RESTART_SERVICE" \
+  --admission-open "$OPEN_ADMISSION"
 ```
 
-Una primera instalación empieza en `bootstrap`. La aceptación en estación es
-`state = running`, health `healthy`, el `cmp` de base sin diferencias y
-`--check` con los tres archivos `unchanged`. El instalador deja estas acciones
-de servicio al operador.
+Los tres valores son comandos de shell aprovisionados por el operador para esa
+estación. Se ejecutan con el mismo `DAGU_HOME` y `DAGU_RESTART_SIGNAL=TERM`.
+Su contrato es:
+
+1. `CLOSE_ADMISSION` coordina y espera la detención de **todos** los productores:
+   sesiones OMP, CLI/API, automatizaciones y nuevos triggers programados, también
+   los del propio scheduler. Mantiene esa exclusión hasta `OPEN_ADMISSION`.
+   Un archivo de lock del instalador serializa instaladores, pero la coordinación
+   de productores es responsabilidad de este hook; un `true` solo es válido en
+   un entorno ya aislado sin productores ni schedules.
+2. El instalador espera `dagu history --status running --format json --limit 1`
+   y la consulta equivalente `--status queued`, ambas vacías. Los runs ya
+   encolados terminan con el scheduler anterior. Una lectura aislada `running=0`
+   con admisión abierta no establece seguridad.
+3. `RESTART_SERVICE` envía **TERM** al servicio `start-all` drenado y espera que
+   su reemplazo esté listo con el mismo home/config. En launchd, la operación
+   de señal es `launchctl kill SIGTERM "gui/$(id -u)/local.dagu.server"`; el hook
+   además debe esperar el nuevo PID y su readiness. La activación/instalación
+   del LaunchAgent y estos hooks pertenecen al operador.
+4. Con admisión todavía cerrada, el instalador encola tres runs de prueba con
+   IDs únicos en `a4s`: verifica dos `running` retenidos en una barrera y uno
+   `queued`, libera la barrera y espera los tres `succeeded`. Imprime
+   `verified next enqueue queue=a4s max_concurrency=2 succeeded=3` antes de
+   ejecutar `OPEN_ADMISSION`. Las definiciones de prueba exitosas se retiran;
+   el historial de Dagu conserva la evidencia.
+
+`--timeout-seconds` (600 por defecto) acota cada espera/comando. Ante un fallo
+después de empezar a cerrar admisión, esta queda cerrada: el operador inspecciona
+historial, servicio y salida del instalador antes de abrirla explícitamente.
+El directorio `<DAGU_HOME>/.station-install.lock` conserva las barreras liberadas;
+si quedaron probes encolados, conservarlo hasta que terminen.
+Después de recuperar la estación y completar sus probes, retirar ese directorio
+permite repetir la aplicación. Un segundo instalador falla mientras exista.
+
+La ruta mantenida es **drenaje + TERM de start-all**, demostrada con capacidad
+1→2 en la [PoC de #255](https://github.com/pablontiv/a4s/issues/255).
+La alternativa scheduler-only SIGKILL no está adoptada: la PoC preservó hijos
+al matar únicamente un PID, pero el operador aún debe demostrar que launchd
+preserva los ejecutores bajo su gestión de grupos. La evidencia se limita a
+runs locales de Dagu 2.20.1, no a workers distribuidos ni reinicios del host.
+Este cambio de paquete no aplica nada a la estación.
 
 ## Estado, progreso y despertar dirigido
 

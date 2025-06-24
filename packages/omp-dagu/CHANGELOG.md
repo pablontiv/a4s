@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.58
+
+- Apply station defaults through coordinated admission, running/queued drain, TERM restart and next-enqueue concurrency verification; preserve admission closure and recovery barriers on failure (#255).
+- Reconcile managed queue capacity by name while preserving foreign queues, LaunchAgent installation and drift checks (#255).
+
 ## 0.3.49
 
 - Preserve candidates in leased checkpoint refs and publish the exact gated SHA only while the candidate remains clean and fresh (#275).
