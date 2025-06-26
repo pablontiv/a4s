@@ -173,6 +173,41 @@ for (const [name, definition] of definitions) {
   const gateScript = extractScript(definition, "  - id: gate");
   const pushScript = extractScript(definition, "  - id: push");
 
+  for (const signing of [true, false]) {
+    test(`${name} capture signs delivery commits with configured SSH signing (${signing})`, () => {
+      const repo = repository();
+      try {
+        const home = join(repo.root, "home");
+        mkdirSync(home);
+        const key = join(home, "signing-key");
+        execFileSync("ssh-keygen", ["-q", "-t", "ed25519", "-N", "", "-f", key], { env: { ...process.env, HOME: home } });
+        const signers = join(home, "allowed-signers");
+        writeFileSync(signers, `feature-test@example.com ${readFileSync(`${key}.pub`, "utf8")}`);
+        git(repo.worktree, "config", "gpg.format", "ssh");
+        git(repo.worktree, "config", "user.signingkey", `${key}.pub`);
+        git(repo.worktree, "config", "gpg.ssh.allowedSignersFile", signers);
+        git(repo.worktree, "config", "commit.gpgsign", String(signing));
+        writeFileSync(join(repo.worktree, "README.txt"), "signed delivery\n");
+        runScript(captureScript, repo, { HOME: home });
+        assert.equal(git(repo.worktree, "log", "-1", "--format=%G?"), signing ? "G" : "N");
+        if (signing) git(repo.worktree, "verify-commit", "HEAD");
+        const candidate = JSON.parse(readFileSync(join(repo.state, "candidate.json"), "utf8"));
+        assert.equal(candidate.sha, git(repo.worktree, "rev-parse", "HEAD"));
+        runScript(gateScript, repo, { HOME: home });
+        assert.equal(JSON.parse(readFileSync(join(repo.state, "gate.json"), "utf8")).sha, candidate.sha);
+        const sha = git(repo.worktree, "rev-parse", "HEAD");
+        const dates = git(repo.worktree, "show", "-s", "--format=%at:%ct", sha);
+        const checksum = execFileSync("cksum", { input: "test-run:0", encoding: "utf8" }).split(" ")[0]!;
+        const epoch = 1700000000 + Number(checksum) % 100000000;
+        assert.equal(dates, `${epoch}:${epoch}`);
+        runScript(captureScript, repo, { HOME: home });
+        assert.equal(git(repo.worktree, "rev-parse", "HEAD"), sha);
+        assert.equal(git(repo.worktree, "show", "-s", "--format=%at:%ct"), dates);
+        assert.equal(git(repo.worktree, "rev-list", "--count", "origin/main..HEAD"), "1");
+      } finally { rmSync(repo.root, { recursive: true, force: true }); }
+    });
+  }
+
   test(`${name} terminal cleanup retains an uncaptured delivery whose HEAD is on the base`, () => {
     const repo = repository();
     try {
