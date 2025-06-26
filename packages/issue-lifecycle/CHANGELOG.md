@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Preserve literal issue/primary placeholders through Dagu's environment
+  expansion so deleted-owner recovery verifies admitted branch and worktree
+  bindings in live runs. Cover expanded guards and reject unprotected resource
+  placeholders in template contracts (#948).
 - Recover retained feature ownership after native Dagu history deletion only when
   the exact history query succeeds with zero rows, the owner is absent from the
   station's active feature inventory, and admitted receipt/snapshot identity

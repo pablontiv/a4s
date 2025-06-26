@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
+import { parse } from "yaml";
 import { shellWords } from "../../src/resources.ts";
 import { withResourceGuard } from "../resource-fixtures.ts";
 import { a4sBin } from "../fixtures/a4s.ts";
@@ -146,6 +147,31 @@ for (const definition of definitions) {
     const result = spawnSync("bash", ["-c", script(definition, "  - id: admit")], { env: { ...repo.env, RUN: "requesting-run" }, encoding: "utf8" });
     assert.equal(result.status, 1, result.stderr);
     assert.match(result.stderr, /belongs to active run adopted-owner \(waiting\)/);
+  });
+
+  test(`${definition} deleted-owner recovery survives Dagu defined-variable env expansion`, t => {
+    const repo = fixture(); t.after(() => rmSync(repo.root, { recursive: true, force: true }));
+    const key = join(repo.primary, ".git", "dagu-feature", "owners", "issue-215");
+    mkdirSync(join(repo.primary, ".git", "dagu-feature", "owners"), { recursive: true });
+    const rawGuard = (parse(readFileSync(definition, "utf8")).env as Array<Record<string, string>>)
+      .find(entry => "DAGU_RESOURCE_GUARD" in entry)!.DAGU_RESOURCE_GUARD!;
+    for (const primary of [repo.primary, "${A4S_PRIMARY}"]) {
+      durableOwner(repo, "owner", ["ISSUE=215"], { PRIMARY: primary });
+      writeFileSync(key, `owner\t${repo.branch}\n`);
+      // Dagu replaces defined braced variables before Bash evaluates the guard,
+      // even inside shell/jq quotes. Keep the admitted snapshot unexpanded.
+      const env: NodeJS.ProcessEnv = { ...repo.env, A4S_PRIMARY: "", RUN: "replacement" };
+      const guard = rawGuard.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g,
+        (literal, name: string) => env[name] ?? literal);
+      const result = spawnSync("bash", ["-c", 'set -euo pipefail\neval "$DAGU_RESOURCE_GUARD"\nresource_lock claim'], {
+        env: { ...env, DAGU_RESOURCE_GUARD: guard }, encoding: "utf8",
+      });
+      assert.equal(result.status, 0, `${primary}: ${result.stderr}`);
+      assert.match(result.stderr, /recorded owner owner history deleted; identity verified from lifecycle evidence/);
+      assert.equal(readFileSync(key, "utf8"), `replacement\t${repo.branch}\n`);
+      assert.equal(readFileSync(join(repo.primary, ".git/dagu-feature/runs/replacement/previous-owner"), "utf8"), "owner\n");
+      assert.equal(existsSync(`${key}.lock`), false);
+    }
   });
 
   test(`${definition} deleted-history admission requires durable identity and station-wide inactivity`, t => {
