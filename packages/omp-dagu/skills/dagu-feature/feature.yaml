@@ -341,8 +341,10 @@ steps:
               | $base + $fraction - $offset
             ) catch null end;
           . as $rows
-          | ($rows | map(select(.type == "session")) | first) as $session
-          | ($rows | map(select(.type == "session_init")) | first) as $init
+          | ($rows | map(select(.type == "session"))) as $sessions
+          | ($rows | map(select(.type == "session_init"))) as $inits
+          | ($sessions | first) as $session
+          | ($inits | first) as $init
           | ($rows | map(select(.type == "message" and .message.role == "toolResult" and .message.toolName == "yield")) | last) as $yield
           | ($init.timestamp | rfc3339_epoch) as $started
           | ($cutoff | rfc3339_epoch) as $cutoff_epoch
@@ -355,6 +357,8 @@ steps:
                 poc: $yield.message.details.data.poc
               },
               checks: {
+                session_identity: (($sessions | length) == 1 and ($inits | length) >= 1
+                  and ($inits | all(.agent == $init.agent and .task == $init.task))),
                 parentSession: ($session.parentSession == $expected_parent),
                 agent: ($init.agent == "triage-reviewer"),
                 task: (($init.task // "") | contains("TRIAGE_REVIEW AGENT=triage-reviewer DAG=feature RUN=\($run) ")),
@@ -369,6 +373,7 @@ steps:
             "session_init.timestamp=\(.fields.timestamp // "<missing>")",
             "last_yield.details.data.poc=\(.fields.poc // "<missing>")",
             "cutoff=\($cutoff)",
+            "check.session_identity=\(if .checks.session_identity then "PASS" else "FAIL" end)",
             "check.parentSession=\(if .checks.parentSession then "PASS" else "FAIL" end)",
             "check.agent=\(if .checks.agent then "PASS" else "FAIL" end)",
             "check.task_run_marker=\(if .checks.task then "PASS" else "FAIL" end)",

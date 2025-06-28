@@ -175,8 +175,9 @@ steps:
         [ .[] | select(.type == "session_init") ] as $inits |
         [ .[] | select(.type == "message" and .message.role == "toolResult" and .message.toolName == "yield") ] as $yields |
         $yields[-1].message.details.data as $data |
-        if ($sessions | length) != 1 or ($inits | length) != 1 then error("ambiguous transcript")
+        if ($sessions | length) != 1 or ($inits | length) < 1 then error("ambiguous transcript")
         elif $sessions[0].parentSession != $parent or $inits[0].agent != "plan-reviewer" then error("foreign transcript")
+        elif ($inits | all(.agent == $inits[0].agent and .task == $inits[0].task) | not) then error("mixed init identity")
         elif (($inits[0].task // "") | contains($marker) | not) then error("generation marker")
         elif ($inits[0].timestamp | epoch) <= ($cutoff | epoch) then error("stale transcript")
         elif ($data | type) != "object" then error("last yield")

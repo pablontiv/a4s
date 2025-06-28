@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.97
+
+- Admit consistent native fallback `session_init` refreshes in planning review and feature triage: require one expected-parent session and one or more identical agent/task initializations, retain first-init freshness, and preserve generation and final structured-yield validation (#466).
+- Exercise refreshed planning review through native Dagu push-back, approval and materialization, with consumer-boundary regressions for transcript identity and verdict checks (#466).
+
 ## 0.3.96
 
 - Align station-install skill and operating documentation with the existing queue-name merge contract: template-owned fields replace matching queue values (including `a4s.max_concurrency=8` to bundled `2`), while extra metadata and foreign queues retain their values. Classify the original report as source evidence, not an observed production overwrite (#449).

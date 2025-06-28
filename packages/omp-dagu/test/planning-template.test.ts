@@ -56,12 +56,14 @@ jq -nc --argjson iteration "\${FAKE_ITERATION:-0}" --argjson nodes "\${FAKE_REVI
   return { root, bin, out, upstream, env, run, importRows, close: () => rmSync(root, { recursive: true, force: true }) };
 }
 function successful(result: SpawnSyncReturns<string>): void { assert.equal(result.status, 0, result.stderr); }
-function transcript(f: Fixture, data: unknown = { verdict: "accept", findings: [] }, extra: { parent?: string; timestamp?: string; agent?: string; marker?: string; last?: unknown } = {}) {
+function transcript(f: Fixture, data: unknown = { verdict: "accept", findings: [] }, extra: { parent?: string; timestamp?: string; agent?: string; marker?: string; last?: unknown; sessions?: number; inits?: number; refresh?: { agent?: string; task?: string; timestamp?: string } } = {}) {
   const sessions = join(f.root, ".omp", "agent", "sessions", "-primary", "date_owner-session");
   mkdirSync(sessions, { recursive: true });
+  const init = { type: "session_init", agent: extra.agent ?? "plan-reviewer", task: extra.marker ?? readFileSync(join(f.out, "generation"), "utf8").trim(), timestamp: extra.timestamp ?? "2026-10-17T00:00:01.001Z" };
   jsonl(join(sessions, "PlanReviewTest.jsonl"), [
-    { type: "session", parentSession: extra.parent ?? `${sessions}.jsonl` },
-    { type: "session_init", agent: extra.agent ?? "plan-reviewer", task: extra.marker ?? readFileSync(join(f.out, "generation"), "utf8").trim(), timestamp: extra.timestamp ?? "2026-10-17T00:00:01.001Z" },
+    ...Array.from({ length: extra.sessions ?? 1 }, () => ({ type: "session", parentSession: extra.parent ?? `${sessions}.jsonl` })),
+    ...Array.from({ length: extra.inits ?? 1 }, () => init),
+    ...(extra.refresh ? [{ type: "model_change", resolvedModelIsFallback: true }, { ...init, ...extra.refresh }] : []),
     { type: "message", message: { role: "toolResult", toolName: "yield", details: { data } } },
     ...(extra.last === undefined ? [] : [{ type: "message", message: { role: "toolResult", toolName: "yield", details: { data: extra.last } } }]),
   ]);
@@ -188,13 +190,16 @@ test("review binds parent, generation, agent, cutoff and final structured verdic
     for (const extra of [
       { parent: "/foreign/session.jsonl" }, { timestamp: "2026-10-17T00:00:00Z" },
       { timestamp: "2026-10-17T00:00:01Z" }, { agent: "worker" }, { marker: "wrong-generation" },
+      { sessions: 0 }, { sessions: 2 }, { inits: 0 },
+      { refresh: { agent: "worker" } }, { refresh: { task: "foreign task" } },
+      { timestamp: "2026-10-17T00:00:00Z", refresh: { timestamp: "2026-10-17T00:00:02Z" } },
       { last: "not-json" }, { last: { verdict: "accept" } },
     ]) {
       transcript(f, undefined, extra);
       assert.notEqual(check().status, 0, JSON.stringify(extra));
       assert.notEqual(f.run("materialize", { APPROVED: "all" }).status, 0);
     }
-    transcript(f); successful(check());
+    transcript(f, undefined, { refresh: { timestamp: "2026-10-17T00:00:02Z" } }); successful(check());
     assert.deepEqual(JSON.parse(readFileSync(join(f.out, "review-0.json"), "utf8")), { verdict: "accept", findings: [] });
     assert.notEqual(f.run("check_review", { REVIEW: "PlanReviewTest", FAKE_ITERATION: "1" }).status, 0);
     const duplicate = join(f.root, ".omp", "agent", "sessions", "-primary", "other_owner-session");
@@ -374,7 +379,7 @@ test("native planning push-back uses structured iteration across mechanical cons
     assert.ok(reviewNode(current).step.humanTask?.prompt.includes(marker(1)));
     assert.equal(readFileSync(join(f.out, "validated-units.jsonl"), "utf8"), readFileSync(f.upstream, "utf8"));
     const cutoff = reviewNode(current).startedAt;
-    transcript(f, undefined, { timestamp: cutoff });
+    transcript(f, undefined, { timestamp: cutoff, refresh: { timestamp: new Date().toISOString() } });
     dagu("human-task", "complete", "planning", "--run-id", f.env.RUN!, "--step", "review", "--input", "REVIEW=PlanReviewTest");
     const verifying = await state("check_review", "running");
     mechanical(verifying, "check_review", 1);
@@ -383,7 +388,7 @@ test("native planning push-back uses structured iteration across mechanical cons
       transcript(f, undefined, { timestamp: new Date().toISOString(), ...extra });
       assert.notEqual(f.run("check_review", { REVIEW: "PlanReviewTest" }).status, 0, "native generation preserves actor and provenance binding");
     }
-    transcript(f, undefined, { timestamp: new Date().toISOString() });
+    transcript(f, undefined, { timestamp: new Date().toISOString(), refresh: { timestamp: new Date().toISOString() } });
     jsonl(join(f.out, "units.jsonl"), [unit("tampered")]);
     assert.notEqual(f.run("check_review", { REVIEW: "PlanReviewTest" }).status, 0, "native generation preserves snapshot binding");
     copyFileSync(f.upstream, join(f.out, "units.jsonl"));
@@ -398,7 +403,7 @@ test("native planning push-back uses structured iteration across mechanical cons
     rmSync(join(f.root, "hold-materialize"));
     await state("materialize", "succeeded");
     assert.deepEqual(readFileSync(join(f.out, "issues.jsonl"), "utf8").trim().split("\n").map(row => JSON.parse(row).id), ["consumer", "contract"]);
-    t.diagnostic(JSON.stringify({ version: liveDaguVersion, run: f.env.RUN, iteration: 1, consumers: holds, review: "review-1.json", fixture: "real native runtime/push-back; synthetic reviewer transcript and GitHub provider" }));
+    t.diagnostic(JSON.stringify({ version: liveDaguVersion, run: f.env.RUN, iteration: 1, consumers: holds, review: "review-1.json", sessionInits: 2, fixture: "real native runtime/push-back/approval/materialize; synthetic consistent fallback-refresh reviewer transcript and GitHub provider" }));
   } finally {
     for (const id of holds) rmSync(join(f.root, `hold-${id}`), { force: true });
     service.kill("SIGTERM");

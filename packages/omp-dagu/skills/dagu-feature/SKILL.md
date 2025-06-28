@@ -307,6 +307,12 @@ dagu-feature-bundle validate-planning-units --input "/absolute/path/to/units.jso
 
 Diagnostics collect all independent mechanical failures as deterministic JSONL (`line`, `field`, `rule`, `expected`, `observed`). A valid snapshot retains exact input bytes; completeness and judgment remain the independent reviewer's responsibility. See backlog-breakdown for the structured `relationships` and explicit `revision: {issue, fields}` contract.
 
+Planning review requires exactly one session with the expected coordinator parent
+and one or more `session_init` rows sharing the `plan-reviewer` agent and identical
+task. Native fallback refreshes retain that identity; freshness is measured from
+the first init, strictly after the review cutoff. The exact run/generation marker
+and the final structured yield bind the accepted review to publication.
+
 ```sh
 node packages/omp-dagu/bin/dagu-feature-bundle.ts enqueue \
   --run-id "<repo>-breakdown-<slug>" .workspace/dagu/dags/planning.yaml -- \
@@ -583,10 +589,12 @@ For `POC=yes`, supply QUESTION and BASIS; REVIEW is optional. For `POC=no`,
 `triage_decision` resolves `REVIEW` as the simple JSONL file name of that
 subagent under the `OMP_SESSION_ID` coordinator session. Before writing state or
 publishing the `poc-triage:no` comment, it reads the run through Dagu REST and
-requires exactly one `triage.startedAt`, then verifies the transcript's exact
-parent session, `triage-reviewer` agent, feature/RUN task marker, start strictly
-after that cutoff, and `poc=no` in the last yield. A missing, ambiguous, stale,
-malformed or mismatched transcript fails the step closed. `POC=yes` publishes
+requires exactly one `triage.startedAt`, exactly one session with the expected
+parent, and one or more `session_init` rows sharing the `triage-reviewer` agent
+and identical feature/RUN task. Native fallback refreshes preserve the first
+init's strictly-after-cutoff freshness check and `poc=no` in the final yield.
+The transcript must satisfy every identity, generation and verdict binding.
+`POC=yes` publishes
 `<!-- poc-triage:yes run:<RUN> -->`, enqueues the absolute repository `poc.yaml`
 with ISSUE and QUESTION, and ends the feature run.
 
