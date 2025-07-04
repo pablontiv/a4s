@@ -133,15 +133,37 @@ same-SHA digest checks. The old `v<semver>` trigger and moving-`v0` publisher ar
 removed; historical `v0` remains frozen. Published assets are immutable and never
 deleted by a4s, so exact historical tuples remain restorable.
 
-**Milestone: staged, station not switched.** No launcher, plugin link, reconciler
-pin, admission policy, model or service is activated by publication. a4s never
-writes station/service configuration; its runtime writes stay in the cache
-directory and already-owned run/job state. Later launcher adoption must reject
-unknown state schemas or unsupported payload protocols with “reinstall
-a4s-launch”. Compatibility promotion/rollback inventories persisted writer
-versions and every live reader; a retiring pre-bridge plugin generation blocks a
-new writer until that OMP process exits. The remedy is **restart OMP**, not an
-idle `/reload-plugins`; reports must name the lease holder PID/generation.
+**Milestone: staged, station not switched.** Publication does not activate the
+stable launcher, plugin link, reconciler pin, admission policy, model or service.
+The archive now includes the separately compiled `a4s-launch` and locked station
+state/promote/rollback/GC primitives. Their installation and tick/loader adoption
+remain operator-owned. a4s never writes station/service configuration; station
+runtime writes stay inside `$DAGU_HOME/cache/a4s`, alongside already-owned run/job
+state. At the authorized drained cutover, ensure the exact initial artifact then
+run `a4s station init --artifact '<id>@<sha>#<digest>'`. This inventories persisted
+receipts, shared SQLite/JSON jobs, run/checkpoint state and committed configs;
+it does not rewrite that history. Initial previous equals current.
+
+The stable launcher embeds protocol/state-schema support; unknown schema or
+unsupported payload protocol fails with **reinstall a4s-launch**. Promotion skips
+such releases with “launcher reinstall required”, rather than hiding a compatible
+bridge. Install a protocol-compatible launcher under the same operator authority,
+not by overwriting the selected payload.
+
+**R5 limited deployment assumption:** this policy is authorized for **one
+station and short runs**. Sprint Review MUST re-evaluate it before adding a station
+or long-lived work; it is not an assertion that distributed/multi-station rollout
+or indefinite readers have been validated.
+
+Keep-ten GC does **not** bound disk while leases, nonterminal runs or pending
+admissions hold builds (roughly 116 MB each). `a4s station gc` reports retained
+builds by holder. A retiring pre-bridge plugin generation keeps its lease until
+OMP exits; ordinary idle `/reload-plugins` does not drain it. Promotion names the
+blocking lease holder PID/generation and **restart OMP**. To cross that barrier,
+close admission, inspect/drain active and recoverable runs/open jobs, stop OMP
+under operator authority, verify its old identity is dead/reused, restart OMP on
+the bridge, then retry promotion and GC. A `ps` failure is unknown: preserve the
+lease and restore probe access, never manually assume the process is dead.
 
 1. **Close admission and drain.** Inventory all runs, including queued, waiting
    and recoverable runs, and role jobs. Cutover requires **zero nonterminal runs
@@ -411,14 +433,27 @@ dismissal; test-only location alone does not authorize dismissal.
 
 ### Rollback
 
-Obtain rollback authority for the same lanes and shared reconciler. Close
-admission and establish zero nonterminal runs and zero open role jobs before
-changing engines. Restore the approved release/plugin root, committed config,
-verified artifact cache tuple, pinned reconciler, Dagu binary/home/config and
-service environment as a coherent set. Never overwrite a conflicting cache entry
-or rewrite receipts to disguise an upgrade. Any necessary service activation
-belongs to the operator. Restart OMP, retain readiness and agreed admission/live
-evidence, then reopen. Restoring a directory or displayed version is not recovery.
+Obtain rollback authority for the same lanes and shared reconciler. For an adopted
+station use **`a4s-launch rollback`**, not the current payload: it still works if
+that payload cannot start. Under `.state.lock`, rollback verifies previous and
+requires it to read **every** persisted version plus its own writer; reading only
+the highest retained version is insufficient. This gate may refuse rollback even
+when no newer-writer runs remain. In that case deploy a new compatible release;
+do not shrink the persisted set or rewrite receipts to force an older decoder.
+
+The single atomic state commit sets current to previous, appends the bad build ID
+to `rejected`, and increments generation. Previous remains the rollback target,
+not the rejected payload. Subsequent promotion requires a higher ID than the
+rejected maximum; publish a revert merge with a new immutable ID. No tag, asset,
+cache entry or historical receipt is rewritten.
+
+Close admission and drain before any separately required config, model, service
+or plugin-generation change; rollback does not grant that authority or perform
+those operations. Restore approved committed config, reconciler and Dagu
+binary/home/environment coherently when such changes were part of the incident.
+The operator owns service activation and OMP restart. Preserve exact run tuples,
+readiness and agreed admission/live evidence, then reopen. For a pre-adoption
+station, use the authorized drained exact-release restoration procedure instead.
 
 ## Post-release proof and temporary-lane retirement
 

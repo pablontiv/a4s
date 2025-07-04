@@ -29,4 +29,4 @@ export const identity = {
   registrationManifestHash: registrationHash(registrationManifest),
   requiredLauncherProtocol: 1,
 } as const;
-export type ArtifactIdentity = Omit<typeof identity, "support"> & { support: ArtifactSupport };
+export type ArtifactIdentity = Omit<typeof identity, "support" | "requiredLauncherProtocol"> & { support: ArtifactSupport; requiredLauncherProtocol: number };

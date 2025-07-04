@@ -17,6 +17,7 @@ import { artifactLock, ensureArtifact, inspectArtifact, type CachedArtifact } fr
 import { assertArtifactReceipt, assertExecutingArtifact, receiptArtifact, USED_CONTRACTS, type ArtifactReceiptFields } from "./artifact-receipt.ts";
 import { withFileLockAsync } from "./file-lock.ts";
 import { stationReadiness } from "./queue.ts";
+import { stationTransaction } from "./station-state.ts";
 
 export function canonical(value: unknown): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
@@ -191,11 +192,11 @@ async function selectedAdmission<T>(options: AdmissionOptions, persist: boolean,
   const tuple = options.artifact ? parseArtifact(options.artifact) : parent?.artifact;
   if (!tuple) throw new Error("Admission requires a resolved --artifact handoff or --parent receipt");
   assertExecutingArtifact(tuple);
-  return withFileLockAsync(artifactLock(home, tuple), async () => {
+  return stationTransaction(home, () => withFileLockAsync(artifactLock(home, tuple), async () => {
     const cached = await inspectArtifact(home, tuple);
     if (realpathSync(process.execPath) !== cached.executable) throw new Error(`Admission must execute the cached artifact ${cached.executable}`);
     return use(createReceipt(options, context, cached, parent, persist));
-  });
+  }));
 }
 /** Internal explicit-artifact admission. Root CLI admission always hands off first. */
 export async function admit(options: AdmissionOptions, persist = true): Promise<{ path: string; receipt: Receipt }> {

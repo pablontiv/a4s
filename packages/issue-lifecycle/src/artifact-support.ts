@@ -40,12 +40,10 @@ export function assertReadCoverage(reader: ArtifactSupport, formats: Partial<Rec
   }
 }
 export function assertIdentityContracts(value: Record<string, unknown>, historical: boolean): void {
-  const support = formatSupport(value.support);
+  formatSupport(value.support);
   const legacy = isRecord(value.support) && "receiptSchemas" in value.support;
   if (legacy && !historical) throw new Error("Build identities require uniform format support");
   assertProtocols(legacy ? value.support : value);
-  // Verification is not promotion: a future bridge reader need not write our version.
-  assertReadCoverage(support, Object.fromEntries(SHARED_FORMATS.map(name => [name, [ARTIFACT_SUPPORT[name].write]])));
   if (!legacy) {
     if (!Number.isSafeInteger(value.requiredLauncherProtocol) || (value.requiredLauncherProtocol as number) < 1) throw new Error("Invalid required launcher protocol");
     const manifest = value.registrationManifest;

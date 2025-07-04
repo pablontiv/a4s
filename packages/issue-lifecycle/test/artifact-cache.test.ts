@@ -134,7 +134,7 @@ test("new identities reject missing manifest/protocol and malformed formats with
       if (mutation === "manifest") delete declared.registrationManifest;
       if (mutation === "hash") declared.registrationManifestHash = "a".repeat(64);
       if (mutation === "launcher") delete declared.requiredLauncherProtocol;
-      if (mutation === "formats") declared.support.config = { read: [2], write: 2 };
+      if (mutation === "formats") declared.support.config = { read: [2], write: 1 };
       if (mutation === "protocol") declared.dispatch = "a4s-run/2";
       if (mutation === "bridge") declared.support.receipt = { read: [1, 2, 3], write: 3 };
       for (const entry of entries) if (entry.name === "a4s" || entry.name === "identity.json") entry.content = JSON.stringify(declared);
