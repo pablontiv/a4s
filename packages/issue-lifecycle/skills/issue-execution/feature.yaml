@@ -1648,7 +1648,20 @@ steps:
       head=$(git -C "$PRIMARY" rev-parse --verify "refs/heads/$BRANCH" 2>/dev/null || true)
       if [[ -f "$STATE/cleanup-head" ]]; then
         candidate=$(cat "$STATE/cleanup-head")
-        [[ -z "$head" || "$head" == "$candidate" ]] || diagnostic "branch SHA changed: $head expected $candidate"
+        if [[ -n "$head" && "$head" != "$candidate" ]]; then
+          # A retry may capture or rebase a new candidate while the owned worktree
+          # is retained. Never reuse that earlier candidate's cleanup progress.
+          [[ -e "$worktree_real" &&
+             "$(git -C "$worktree_real" branch --show-current)" == "$BRANCH" &&
+             "$(git -C "$worktree_real" rev-parse HEAD)" == "$head" ]] ||
+            diagnostic "branch SHA changed: $head expected $candidate"
+          rm -f "$STATE/cleanup-proof.json" "$STATE/cleanup-close" "$STATE/cleanup-diagnostic"
+          record identify
+          MODE=${CLEANUP_CLOSE:-false}
+          [[ "$MODE" != true ]] || printf 'true\n' > "$STATE/cleanup-close"
+          candidate=$head
+          printf '%s\n' "$candidate" > "$STATE/cleanup-head"
+        fi
       elif [[ -n "$head" ]]; then
         candidate=$head
         printf '%s\n' "$candidate" > "$STATE/cleanup-head"
@@ -1656,6 +1669,12 @@ steps:
         diagnostic "candidate SHA unavailable"
       fi
       [[ "$candidate" =~ ^[0-9a-f]{40}$ ]] || diagnostic "invalid candidate SHA"
+      if [[ "${CLEANUP_CLOSE:-false}" != true ]] &&
+         ! jq -e --arg candidate "$candidate" '.sha == $candidate' "$STATE/candidate.json" >/dev/null 2>&1; then
+        rm -f "$STATE/cleanup-proof.json"
+        record identify
+        diagnostic "no captured candidate for branch HEAD $candidate; files retained"
+      fi
       repo=$(git -C "$PRIMARY" remote get-url origin) || diagnostic "origin lookup failed"
       git -C "$PRIMARY" fetch --prune origin || diagnostic "remote base refresh failed"
       base_sha=$(git -C "$PRIMARY" rev-parse --verify "origin/$BASE_BRANCH^{commit}") || diagnostic "remote base unavailable"

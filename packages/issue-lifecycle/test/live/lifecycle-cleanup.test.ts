@@ -109,6 +109,7 @@ function featureCommit(repo: Repo): string {
   writeFileSync(join(repo.worktree, "value.txt"), "feature\n");
   git(repo.worktree, "add", "value.txt");
   git(repo.worktree, "commit", "-m", "feature");
+  writeFileSync(join(state(repo), "candidate.json"), JSON.stringify({ sha: git(repo.worktree, "rev-parse", "HEAD") }) + "\n");
   writeFileSync(join(state(repo), "tested-sha"), git(repo.worktree, "rev-parse", "HEAD") + "\n");
   return git(repo.worktree, "rev-parse", "HEAD");
 }
@@ -195,6 +196,137 @@ function run(script: string, repo: Repo, extra: Record<string, string> = {}) {
 for (const [name, definition] of featureDefinitions) {
   const closeGate = extractScript(definition, "  - id: close_gate");
   const exit = extractScript(definition, "  exit:");
+  test(`${name} exit retains an uncaptured base head without integration proof`, () => {
+    for (const dirty of [false, true]) {
+      const repo = repository();
+      try {
+        if (dirty) writeFileSync(join(repo.worktree, "value.txt"), "uncaptured work\n");
+        const head = git(repo.worktree, "rev-parse", "HEAD");
+        const result = run(exit, repo);
+        assert.equal(result.status, 0, result.stderr);
+        assert.match(result.stderr, /no captured candidate/);
+        assert.equal(existsSync(repo.worktree), true);
+        assert.equal(git(repo.worktree, "rev-parse", "HEAD"), head);
+        assert.equal(readFileSync(join(repo.worktree, "value.txt"), "utf8"), dirty ? "uncaptured work\n" : "base\n");
+        assert.equal(readFileSync(join(state(repo), "cleanup-head"), "utf8"), head + "\n");
+        assert.equal(readFileSync(join(state(repo), "cleanup-phase"), "utf8"), "identify\n");
+        assert.equal(existsSync(join(state(repo), "cleanup-proof.json")), false);
+      } finally { rmSync(repo.root, { recursive: true, force: true }); }
+    }
+  });
+
+  test(`${name} close_gate succeeds after failed-attempt cleanup, capture, rebase and squash merge`, () => {
+    const repo = repository();
+    try {
+      const base = git(repo.worktree, "rev-parse", "HEAD");
+      const identity = JSON.stringify({
+        primary: repo.primary, worktree: repo.worktree, branch: repo.branch, run: "test-run", session: "",
+      }) + "\n";
+      writeFileSync(join(state(repo), "identity"), identity);
+      writeFileSync(git(repo.worktree, "rev-parse", "--path-format=absolute", "--git-path", "dagu-feature-owner"), identity);
+      writeFileSync(join(state(repo), "base"), base + "\n");
+      writeFileSync(join(state(repo), "initial-head"), base + "\n");
+      writeFileSync(join(repo.worktree, "value.txt"), "retried implementation\n");
+      const failedExit = run(exit, repo);
+      assert.equal(failedExit.status, 0, failedExit.stderr);
+      assert.match(failedExit.stderr, /no captured candidate/);
+      assert.equal(readFileSync(join(state(repo), "cleanup-phase"), "utf8"), "identify\n");
+      assert.equal(existsSync(join(state(repo), "cleanup-proof.json")), false);
+
+      const capture = run(extractScript(definition, "  - id: capture"), repo, {
+        SUMMARY: "Retried implementation", MESSAGE: "fix: retry implementation", IMPLEMENTER: "CleanupTest",
+      });
+      assert.equal(capture.status, 0, capture.stdout + capture.stderr);
+      const captured = git(repo.worktree, "rev-parse", "HEAD");
+      assert.notEqual(captured, base);
+      stubGh(repo, captured, { state: "OPEN" });
+      const capturedExit = run(exit, repo);
+      assert.equal(capturedExit.status, 0, capturedExit.stderr);
+      assert.match(capturedExit.stderr, /PR is not MERGED/);
+      assert.equal(readFileSync(join(state(repo), "cleanup-head"), "utf8"), captured + "\n");
+      assert.equal(existsSync(join(state(repo), "cleanup-proof.json")), false);
+
+      writeFileSync(join(repo.primary, "upstream.txt"), "base advanced\n");
+      git(repo.primary, "add", "upstream.txt");
+      git(repo.primary, "commit", "-m", "advance base");
+      git(repo.primary, "push", "origin", "main");
+      const rebase = run(extractScript(definition, "  - id: rebase"), repo);
+      assert.equal(rebase.status, 0, rebase.stdout + rebase.stderr);
+      const rebased = git(repo.worktree, "rev-parse", "HEAD");
+      assert.notEqual(rebased, captured);
+      writeFileSync(join(state(repo), "tested-sha"), rebased + "\n");
+      git(repo.worktree, "push", "origin", `HEAD:${repo.branch}`);
+      git(repo.primary, "merge", "--squash", repo.branch);
+      git(repo.primary, "commit", "-m", "squash retried implementation");
+      git(repo.primary, "push", "origin", "main");
+      const squash = git(repo.primary, "rev-parse", "HEAD");
+      assert.notEqual(squash, rebased);
+      stubGh(repo, rebased);
+
+      const closed = run(closeGate, repo);
+      assert.equal(closed.status, 0, closed.stdout + closed.stderr);
+      assert.match(closed.stdout, /proof=squash/);
+      assert.equal(readFileSync(join(state(repo), "cleanup-head"), "utf8"), rebased + "\n");
+      assert.equal(readFileSync(join(state(repo), "cleanup-phase"), "utf8"), "complete\n");
+      assert.deepEqual(JSON.parse(readFileSync(join(state(repo), "cleanup-proof.json"), "utf8")), {
+        candidate: rebased, base: squash, squash, proof: "squash",
+      });
+      assert.equal(existsSync(repo.worktree), false);
+      assert.equal(hasRef(repo.primary, `refs/heads/${repo.branch}`), false);
+      assert.equal(git(repo.primary, "ls-remote", "origin", `refs/heads/${repo.branch}`), "");
+      assert.equal(git(repo.primary, "rev-parse", "HEAD"), git(repo.primary, "rev-parse", "origin/main"));
+      assert.equal(existsSync(join(state(repo), "cleanup-diagnostic")), false);
+    } finally { rmSync(repo.root, { recursive: true, force: true }); }
+  });
+
+  test(`${name} exit invalidates legacy integration proof and close mode when the captured head advances`, () => {
+    const repo = repository();
+    try {
+      const oldHead = git(repo.worktree, "rev-parse", "HEAD");
+      const tested = squashMerge(repo, false);
+      writeFileSync(join(state(repo), "cleanup-head"), oldHead + "\n");
+      writeFileSync(join(state(repo), "cleanup-phase"), "integrated\n");
+      writeFileSync(join(state(repo), "cleanup-proof.json"), JSON.stringify({ candidate: oldHead, proof: "ancestor" }));
+      writeFileSync(join(state(repo), "cleanup-close"), "true\n");
+      stubGh(repo, tested, { state: "OPEN" });
+      const retained = run(exit, repo);
+      assert.equal(retained.status, 0, retained.stderr);
+      assert.match(retained.stderr, /PR is not MERGED/);
+      assert.equal(readFileSync(join(state(repo), "cleanup-head"), "utf8"), tested + "\n");
+      assert.equal(readFileSync(join(state(repo), "cleanup-phase"), "utf8"), "identify\n");
+      assert.equal(existsSync(join(state(repo), "cleanup-proof.json")), false);
+      assert.equal(existsSync(join(state(repo), "cleanup-close")), false);
+      assert.equal(existsSync(repo.worktree), true);
+      stubGh(repo, tested);
+      const closed = run(closeGate, repo);
+      assert.equal(closed.status, 0, closed.stdout + closed.stderr);
+      assert.match(closed.stdout, /proof=squash/);
+    } finally { rmSync(repo.root, { recursive: true, force: true }); }
+  });
+
+  test(`${name} exit discards stale integration proof after an uncaptured head change`, () => {
+    const repo = repository();
+    try {
+      const oldHead = git(repo.worktree, "rev-parse", "HEAD");
+      const head = featureCommit(repo);
+      rmSync(join(state(repo), "candidate.json"));
+      writeFileSync(join(repo.worktree, "value.txt"), "uncaptured correction\n");
+      writeFileSync(join(state(repo), "cleanup-head"), oldHead + "\n");
+      writeFileSync(join(state(repo), "cleanup-phase"), "integrated\n");
+      writeFileSync(join(state(repo), "cleanup-proof.json"), JSON.stringify({ candidate: oldHead, proof: "ancestor" }));
+      writeFileSync(join(state(repo), "cleanup-close"), "true\n");
+      const retained = run(exit, repo);
+      assert.equal(retained.status, 0, retained.stderr);
+      assert.match(retained.stderr, /no captured candidate/);
+      assert.equal(readFileSync(join(state(repo), "cleanup-head"), "utf8"), head + "\n");
+      assert.equal(readFileSync(join(state(repo), "cleanup-phase"), "utf8"), "identify\n");
+      assert.equal(existsSync(join(state(repo), "cleanup-proof.json")), false);
+      assert.equal(existsSync(join(state(repo), "cleanup-close")), false);
+      assert.equal(existsSync(repo.worktree), true);
+      assert.equal(readFileSync(join(repo.worktree, "value.txt"), "utf8"), "uncaptured correction\n");
+    } finally { rmSync(repo.root, { recursive: true, force: true }); }
+  });
+
   const modes = name === "template" ? [["close", closeGate], ["exit", exit]] as const : [["exit", exit]] as const;
   for (const [mode, cleanup] of modes) {
     test(`${name} ${mode} verified squash cleanup converges and preserves a neighbouring run`, () => {
