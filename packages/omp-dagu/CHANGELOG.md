@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.56
+
+- Install the manifest-pinned official Dagu release for the omp-dagu CI matrix entry, verify and log its SHA-256 digest, and require the effective version before running live integrations (#337).
+- Document the CI runtime preflight and local integration prerequisites (#337).
+
 ## 0.3.49
 
 - Preserve candidates in leased checkpoint refs and publish the exact gated SHA only while the candidate remains clean and fresh (#275).

@@ -399,6 +399,20 @@ Cada fixture retira solo su servicio, home y repositorios temporales; tras
 cerrar uno, el otro completa normalmente su run. La cola operativa por
 repositorio conserva su concurrencia de uno.
 
+Las integraciones reales requieren `dagu` en `PATH` con la versión indicada por
+`daguFeature.dagu` en `package.json`. Comprueba `command -v dagu` y `dagu version`
+antes de ejecutarlas localmente; los guards locales de disponibilidad omiten los
+casos protegidos cuando falta el runtime. Los fixtures usan homes temporales y
+puertos propios, independientes del servicio de la estación.
+
+La matriz de CI instala Dagu únicamente para `@a4s/omp-dagu`: descarga el tarball
+oficial Linux amd64 y `checksums.txt` de la release fijada, registra y verifica
+SHA-256, e instala el ejecutable en un directorio temporal publicado en
+`GITHUB_PATH`. Un paso posterior registra la ruta y exige que `dagu version`
+coincida exactamente con el pin antes de ejecutar el comando de tests habitual.
+Los fallos de descarga, checksum o versión detienen el job y se reflejan en
+`validate`; las integraciones vivas aplicables se ejecutan con ese runtime.
+
 El gate completo del repositorio es:
 
 ```sh
