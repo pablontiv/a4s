@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.39
+
+- Install the manifest-pinned official Dagu release for the omp-dagu CI matrix entry, verify and log its SHA-256 digest, and require the effective version before running live integrations (#337).
+- Document the CI runtime preflight and local integration prerequisites (#337).
+
 ## 0.3.26
 
 - Version the station LaunchAgent, base defaults and owned server configuration; install or check them idempotently with Dagu 2.20.1 validation while preserving other repositories' queues and configuration (#251).
