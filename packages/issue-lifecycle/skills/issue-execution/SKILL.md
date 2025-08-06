@@ -267,11 +267,14 @@ Queue capacity belongs only to station config, never consumer/run policy.
 
 The separately installed `a4s-launch` is `a4s` on PATH. Under its state lock it
 selects current for new admissions, the parent's receipt for successors, and the
-target run's receipt for actions (even inside a foreign tick). It restores the
-exact immutable tuple if missing, validates it, publishes a lease with PID/start
-time/boot identity, and execs the canonical cached payload. That lease covers
+target run's receipt for actions (even inside a foreign tick). It restores and
+validates the exact immutable tuple outside the state lock, then reacquires the
+lock to reject changed selection/cache metadata and publish a lease with PID/start
+time/boot identity before exec of the canonical cached payload. That lease covers
 receipt/snapshot writes and enqueue until payload exit. Unknown state schemas and
-unsupported payload protocols fail closed with `reinstall a4s-launch`.
+unsupported payload protocols fail closed with `reinstall a4s-launch`. GitHub calls
+and lock acquisition have deadlines; a timeout fails the command rather than
+holding up all future ticks.
 
 The caller hands off to that entry's executable:
 

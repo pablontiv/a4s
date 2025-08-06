@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { lstatSync, realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { cachePath, ensureArtifact, inspectArtifact, type CachedArtifact } from "./artifact-cache.ts";
+import { cachePath, ensureArtifact, inspectArtifact, assertCachedArtifactPresent, type CachedArtifact } from "./artifact-cache.ts";
 import { artifactToken, parseArtifact, resolveRelease, sameArtifact, type ArtifactTuple } from "./release.ts";
 import { assertLauncher, readJsonFile, readStateLocked, stationTransaction, tupleFromJson, type StateDependencies } from "./station-state.ts";
 import { createLeaseLocked, type BuildLease } from "./lease.ts";
@@ -53,7 +53,7 @@ export interface SelectedPayload { cached: CachedArtifact; lease: BuildLease; ar
 export async function selectPayload(home: string, args: string[], dependencies: SelectionDependencies = {}): Promise<SelectedPayload> {
   if (!args.length) throw new Error("Usage: a4s <command> [args...]");
   const env = dependencies.env ?? process.env, cwd = dependencies.cwd ?? process.cwd();
-  return stationTransaction(home, async () => {
+  const selection = await stationTransaction(home, async () => {
     // Validate the state envelope without loading any payload, including current.
     const state = readStateLocked(home, dependencies);
     let tuple = state.current, selectedArgs = [...args], receiptPath: string | undefined;
@@ -87,9 +87,18 @@ export async function selectPayload(home: string, args: string[], dependencies: 
     if (receiptPath) tuple = (dependencies.receipt ?? receiptTuple)(receiptPath);
     const explicit = flag(args, "--artifact");
     if (explicit && !sameArtifact(parseArtifact(explicit), tuple)) throw new Error("Requested artifact differs from selected receipt/state tuple");
-    const cached = await (dependencies.restore ?? restoreArtifact)(home, tuple);
-    assertLauncher(cached.identity);
-    if (!sameArtifact(cached.record, tuple)) throw new Error("Restored artifact differs from selected tuple");
+    return { state, tuple, selectedArgs, receiptPath, admission, explicit };
+  }, dependencies);
+  const { state, tuple, receiptPath, admission, explicit } = selection;
+  let { selectedArgs } = selection;
+  const cached = await (dependencies.restore ?? restoreArtifact)(home, tuple);
+  assertLauncher(cached.identity);
+  if (!sameArtifact(cached.record, tuple)) throw new Error("Restored artifact differs from selected tuple");
+  return stationTransaction(home, async () => {
+    const latest = readStateLocked(home, dependencies);
+    if (!isDeepStrictEqual(latest, state)) throw new Error("Station changed during payload preparation; retry");
+    assertCachedArtifactPresent(home, cached);
+    if (receiptPath && !sameArtifact((dependencies.receipt ?? receiptTuple)(receiptPath), tuple)) throw new Error("Receipt changed during payload preparation; retry");
     if (receiptPath && !dependencies.receipt) {
       const receipt = readJsonFile(receiptPath);
       if (!isRecord(receipt) || !sameArtifact(receiptTuple(receiptPath), tuple) || !isDeepStrictEqual(receipt.artifactSupport, cached.identity.support) || !isRecord(receipt.contracts)) throw new Error("Receipt/cache declarations differ");

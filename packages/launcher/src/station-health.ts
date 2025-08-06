@@ -1,10 +1,9 @@
-import { execFileSync } from "node:child_process";
 import { closeSync, fstatSync, openSync, readFileSync, readdirSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
 import { diagnostic, known, observeLocks, unknown, type Observation } from "./health-locks.ts";
 import { probeProcess } from "./process-identity.ts";
-import { releaseRepository } from "./release.ts";
+import { github, releaseRepository } from "./release.ts";
 import { isRecord } from "./type-guard.ts";
 
 export interface HealthOptions { home: string; url: string; now: string; from?: string; cpuMeasurement?: string }
@@ -120,9 +119,7 @@ function stateObservation(home: string) {
     } finally { closeSync(fd); }
   } catch (error) { return unknown<{ current: string; mtime: string }>(diagnostic(error)); }
 }
-const defaultGithub = (path: string): unknown => JSON.parse(execFileSync("gh", ["api", "--method", "GET", path], {
-  encoding: "utf8", timeout: 15000, maxBuffer: 16 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"],
-}));
+const defaultGithub = (path: string): unknown => JSON.parse(github(["api", "--method", "GET", path]));
 
 export async function stationHealth(options: HealthOptions, dependencies: HealthDependencies = {}) {
   const now = timestamp(options.now), from = timestamp(options.from ?? "1970-01-01T00:00:00Z");

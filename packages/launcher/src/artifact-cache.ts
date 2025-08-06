@@ -170,6 +170,13 @@ export async function inspectArtifact(home: string, tuple: ArtifactTuple, depend
   const declared = layout(directory, files, tuple, dependencies);
   return { directory, executable: join(directory, "a4s"), executableDigest, identity: declared, record: record as unknown as ArtifactRecord };
 }
+/** A short commit-time check closes the GC race after out-of-lock verification.
+ * GC shares the station lock with this check and state/lease publication. */
+export function assertCachedArtifactPresent(home: string, cached: CachedArtifact): void {
+  const directory = cachePath(home, cached.record);
+  if (cached.directory !== directory || !lstatSync(directory).isDirectory() || realpathSync(directory) !== directory ||
+      !isDeepStrictEqual(json(join(directory, RECORD)), cached.record)) throw new Error("Verified artifact changed before publication; retry");
+}
 export async function ensureArtifact(home: string, release: ResolvedRelease, dependencies: ArtifactDependencies = {}): Promise<CachedArtifact> {
   return (dependencies.withFileLock ?? withFileLockAsync)(artifactLock(home, release), async () => {
     const directory = cachePath(home, release);
@@ -184,7 +191,7 @@ export async function ensureArtifact(home: string, release: ResolvedRelease, dep
       const downloaded = join(stage, archive);
       const downloadArgs = ["release", "download", releaseTag(release.version), "--repo", release.repository, "--pattern", archive, "--output", downloaded];
       if (dependencies.download) dependencies.download(downloadArgs);
-      else execFileSync("gh", downloadArgs, { stdio: ["ignore", "pipe", "pipe"] });
+      else github(downloadArgs, 300000);
       regular(downloaded);
       if (await fileDigest(downloaded) !== release.digest) throw new Error(`Archive SHA-256 mismatch: ${archive}`);
       renameSync(downloaded, join(stage, EVIDENCE));

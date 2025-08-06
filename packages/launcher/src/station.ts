@@ -1,6 +1,7 @@
 import { existsSync, lstatSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { inspectArtifact, ensureArtifact, artifactLock, type CachedArtifact } from "./artifact-cache.ts";
+import { isDeepStrictEqual } from "node:util";
+import { inspectArtifact, ensureArtifact, assertCachedArtifactPresent, artifactLock, type CachedArtifact } from "./artifact-cache.ts";
 import { assertIdentityContracts, assertReadCoverage, formatSupport } from "./artifact-support.ts";
 import { artifactToken, github, releaseRepository, resolveRelease, sameArtifact, type ArtifactTuple, type ResolvedRelease } from "./release.ts";
 import { activatedFormats, assertLauncher, commitStateLocked, readJsonFile, readStateLocked, stationRoot, stationTransaction, tupleFromJson, type PersistedFormats, type StateDependencies, type StationState } from "./station-state.ts";
@@ -52,11 +53,13 @@ function liveReferences(home: string, inventory: StationInventory, dependencies:
     holder: `${lease.kind} lease holder pid=${lease.pid} generation=${lease.generation} ${lease.holder}${lease.kind === "plugin" ? "; restart OMP" : ""}` }))], dead: leases.dead };
 }
 export async function initializeStation(home: string, current: ArtifactTuple, dependencies: StationDependencies = {}): Promise<StationState> {
+  current = tupleFromJson(current);
+  const cached = await (dependencies.inspect ?? inspectArtifact)(home, current);
+  if (!sameArtifact(cached.record, current)) throw new Error("Initialization verification returned a different tuple");
+  assertLauncher(cached.identity);
   return stationTransaction(home, async () => {
-    current = tupleFromJson(current);
     if (existsSync(join(stationRoot(home), "state.json"))) throw new Error("Station already initialized; state is never reseeded");
-    const cached = await (dependencies.inspect ?? inspectArtifact)(home, current);
-    assertLauncher(cached.identity);
+    assertCachedArtifactPresent(home, cached);
     const inventory = await (dependencies.inventory ? dependencies.inventory(home) : inventoryStation(home, dependencies, false));
     const support = formatSupport(cached.identity.support);
     const formats = Object.fromEntries(SHARED_FORMATS.map(name => [name, [...new Set([...(inventory.formats[name] ?? []), support[name].write])].sort((a, b) => a - b)])) as PersistedFormats;
@@ -67,60 +70,74 @@ export async function initializeStation(home: string, current: ArtifactTuple, de
   }, dependencies);
 }
 export async function promote(home: string, dependencies: StationDependencies = {}): Promise<PromotionReport> {
-  return stationTransaction(home, async () => {
-    const state = readStateLocked(home, dependencies);
-    const inventory = await (dependencies.inventory ? dependencies.inventory(home) : inventoryStation(home, dependencies));
-    const { references } = liveReferences(home, inventory, dependencies);
-    // Post-promotion previous is old current, not the displaced previous.
-    references.push({ artifact: state.current, holder: "post-promotion previous" });
-    const readers = references.map(reference => ({ ...reference, support: readerSupport(home, reference.artifact) }));
-    const formats = mergeInventory(state, inventory);
-    let floor = releaseOrdinal(state.current.version);
-    for (const rejected of state.rejected) if (releaseOrdinal(rejected) > floor) floor = releaseOrdinal(rejected);
-    const releases = await (dependencies.releases ?? publishedReleases)();
-    const candidates = releases.filter(release => releaseOrdinal(release.version) > floor && !state.rejected.includes(release.version)).sort((a, b) => releaseOrdinal(a.version) > releaseOrdinal(b.version) ? -1 : releaseOrdinal(a.version) < releaseOrdinal(b.version) ? 1 : 0);
-    const ids = new Map<string, string>();
-    for (const candidate of candidates) if ("commit" in candidate && "digest" in candidate) {
-      const prior = ids.get(candidate.version);
-      const token = artifactToken(candidate as ResolvedRelease);
-      if (prior && prior !== token) throw new Error(`Conflicting release identity ${candidate.version}`);
-      ids.set(candidate.version, token);
+  const snapshot = await stationTransaction(home, async () => readStateLocked(home, dependencies), dependencies);
+  let floor = releaseOrdinal(snapshot.current.version);
+  for (const rejected of snapshot.rejected) if (releaseOrdinal(rejected) > floor) floor = releaseOrdinal(rejected);
+  const releases = await (dependencies.releases ?? publishedReleases)();
+  const candidates = releases.filter(release => releaseOrdinal(release.version) > floor && !snapshot.rejected.includes(release.version)).sort((a, b) => releaseOrdinal(a.version) > releaseOrdinal(b.version) ? -1 : releaseOrdinal(a.version) < releaseOrdinal(b.version) ? 1 : 0);
+  const ids = new Map<string, string>();
+  for (const candidate of candidates) if ("commit" in candidate && "digest" in candidate) {
+    const prior = ids.get(candidate.version);
+    const token = artifactToken(candidate as ResolvedRelease);
+    if (prior && prior !== token) throw new Error(`Conflicting release identity ${candidate.version}`);
+    ids.set(candidate.version, token);
+  }
+  const skipped: PromotionReport["skipped"] = [];
+  for (const candidate of candidates) {
+    let cached: CachedArtifact;
+    let release: ResolvedRelease;
+    try {
+      release = "commit" in candidate && "digest" in candidate ? candidate as ResolvedRelease : resolveRelease(candidate.version);
+      cached = await (dependencies.ensure ?? ensureArtifact)(home, release);
+      if (!sameArtifact(cached.record, release)) throw new Error("Candidate verification returned a different tuple");
+      assertLauncher(cached.identity);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ETIMEDOUT") throw error;
+      skipped.push({ version: candidate.version, reason: error instanceof Error ? error.message : String(error) });
+      continue;
     }
-    const skipped: PromotionReport["skipped"] = [];
-    for (const candidate of candidates) {
-      let cached: CachedArtifact;
-      let release: ResolvedRelease;
+    const result = await stationTransaction(home, async () => {
+      const state = readStateLocked(home, dependencies);
+      if (!isDeepStrictEqual(state, snapshot)) throw new Error("Station changed during promotion preparation; retry");
+      const inventory = await (dependencies.inventory ? dependencies.inventory(home) : inventoryStation(home, dependencies));
+      const { references } = liveReferences(home, inventory, dependencies);
+      references.push({ artifact: state.current, holder: "post-promotion previous" });
+      const readers = references.map(reference => ({ ...reference, support: readerSupport(home, reference.artifact) }));
+      const formats = mergeInventory(state, inventory);
+      const support = formatSupport(cached.identity.support);
       try {
-        release = "commit" in candidate && "digest" in candidate ? candidate as ResolvedRelease : resolveRelease(candidate.version);
-        cached = await (dependencies.ensure ?? ensureArtifact)(home, release);
-        if (!sameArtifact(cached.record, release)) throw new Error("Candidate verification returned a different tuple");
-        assertLauncher(cached.identity);
-        const support = formatSupport(cached.identity.support);
+        assertCachedArtifactPresent(home, cached);
         assertReadCoverage(support, formats);
         for (const reader of readers) {
           try { assertReadCoverage(reader.support, {}, support); }
           catch (error) { throw new Error(`Blocking reader ${reader.holder} build=${reader.artifact.version}: ${error instanceof Error ? error.message : String(error)}`); }
         }
-      } catch (error) {
-        skipped.push({ version: candidate.version, reason: error instanceof Error ? error.message : String(error) });
-        continue;
-      }
-      // No exception after this point may be mistaken for a skipped candidate.
+      } catch (error) { return error instanceof Error ? error.message : String(error); }
+      // Commit errors must not be mistaken for a skipped candidate.
       const next: StationState = { ...state, current: { version: release.version, commit: release.commit, digest: release.digest }, previous: state.current,
-        generation: state.generation + 1, formats: activatedFormats(formats, formatSupport(cached.identity.support)) };
+        generation: state.generation + 1, formats: activatedFormats(formats, support) };
       commitStateLocked(home, next, dependencies);
       return { current: next.current, promoted: true, skipped };
-    }
+    }, dependencies);
+    if (typeof result !== "string") return result;
+    skipped.push({ version: candidate.version, reason: result });
+  }
+  return stationTransaction(home, async () => {
+    const state = readStateLocked(home, dependencies);
     return { current: state.current, promoted: false, skipped };
   }, dependencies);
 }
 /** Stable-launcher-owned operation: never imports or executes the current payload. */
 export async function rollback(home: string, dependencies: StationDependencies = {}): Promise<StationState> {
+  const snapshot = await stationTransaction(home, async () => readStateLocked(home, dependencies), dependencies);
+  const target = snapshot.previous;
+  const cached = await (dependencies.inspect ?? restoreArtifact)(home, target);
+  assertLauncher(cached.identity);
   return stationTransaction(home, async () => {
     const state = readStateLocked(home, dependencies);
-    const target = state.previous;
-    const cached = await (dependencies.inspect ?? restoreArtifact)(home, target);
-    assertLauncher(cached.identity);
+    if (!isDeepStrictEqual(state, snapshot)) throw new Error("Station changed during rollback preparation; retry");
+    if (!sameArtifact(cached.record, target)) throw new Error("Rollback verification returned a different tuple");
+    assertCachedArtifactPresent(home, cached);
     const inventory = await (dependencies.inventory ? dependencies.inventory(home) : inventoryStation(home, dependencies, false));
     const formats = mergeInventory(state, inventory);
     assertReadCoverage(formatSupport(cached.identity.support), formats);
@@ -160,11 +177,17 @@ export async function gc(home: string, dependencies: StationDependencies = {}): 
     for (const entry of entries.slice(0, 10)) {
       const holders = keep.get(entry.version) ?? []; holders.push("keep-10 highest IDs"); keep.set(entry.version, holders);
     }
-    // All reads and probes finish before the first deletion. Admissions take the
-    // same state lock before their per-artifact lock, closing reference races.
+    // All reads and probes finish before deletion. Never wait for preparation's
+    // artifact lock while holding .state.lock: retain a busy entry until next GC.
     const removed: string[] = [];
     for (const entry of entries) if (!keep.has(entry.version)) {
-      await (dependencies.withFileLock ?? withFileLockAsync)(artifactLock(home, { version: entry.version, commit: "0".repeat(40), digest: "0".repeat(64) }), async () => { rmSync(entry.path, { recursive: true }); });
+      try {
+        await (dependencies.withFileLock ?? withFileLockAsync)(artifactLock(home, { version: entry.version, commit: "0".repeat(40), digest: "0".repeat(64) }), async () => { rmSync(entry.path, { recursive: true }); }, { timeoutMs: 0 });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ETIMEDOUT") throw error;
+        keep.set(entry.version, [`artifact lock busy: ${error instanceof Error ? error.message : String(error)}`]);
+        continue;
+      }
       removed.push(entry.version);
     }
     for (const path of [...dead, ...inventory.expiredBindings]) rmSync(path);

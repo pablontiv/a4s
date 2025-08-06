@@ -2,11 +2,12 @@ import { randomUUID } from "node:crypto";
 import { readdirSync, rmSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { leaseProcessStart, probeProcess, type ProcessProbe } from "./process-identity.ts";
 import { readJsonFile, readStateLocked, realDirectory, stationRoot, stationTransaction, tupleFromJson, writeJsonDurable, assertLauncher, type StateDependencies } from "./station-state.ts";
-import type { ArtifactTuple } from "./release.ts";
+import { sameArtifact, type ArtifactTuple } from "./release.ts";
 import { isRecord } from "./type-guard.ts";
-import { inspectArtifact, type CachedArtifact } from "./artifact-cache.ts";
+import { inspectArtifact, assertCachedArtifactPresent, type CachedArtifact } from "./artifact-cache.ts";
 
 export interface BuildLease {
   schema: 1; id: string; artifact: ArtifactTuple; host: string; pid: number; processStartedAt: string;
@@ -39,13 +40,17 @@ export function createLeaseLocked(home: string, artifact: ArtifactTuple, generat
   writeJsonDurable(join(directory, `${lease.id}.json`), lease);
   return lease;
 }
-/** Selection and lease publication are indivisible relative to promotion and GC.
- * A retiring plugin MUST keep this lease until its OMP process exits. */
+/** Verification is optimistic; generation/cache checks and lease publication are
+ * indivisible relative to promotion and GC. Retired plugin leases survive. */
 export async function selectStationBuild(home: string, kind: BuildLease["kind"], holder: string, dependencies: SelectionDependencies = {}): Promise<BuildLease> {
+  const snapshot = await stationTransaction(home, async () => readStateLocked(home, dependencies), dependencies);
+  const cached = await (dependencies.inspect ?? inspectArtifact)(home, snapshot.current);
+  assertLauncher(cached.identity);
+  if (!sameArtifact(cached.record, snapshot.current)) throw new Error("Lease verification returned a different tuple");
   return stationTransaction(home, async () => {
     const state = readStateLocked(home, dependencies);
-    const cached = await (dependencies.inspect ?? inspectArtifact)(home, state.current);
-    assertLauncher(cached.identity);
+    if (!isDeepStrictEqual(state, snapshot)) throw new Error("Station changed during lease preparation; retry");
+    assertCachedArtifactPresent(home, cached);
     return createLeaseLocked(home, state.current, state.generation, kind, holder);
   }, dependencies);
 }

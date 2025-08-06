@@ -15,45 +15,39 @@ function gate() {
   return { promise, open };
 }
 
-test("launcher selection publishes its lease before releasing the lock to promotion and GC", async t => {
+test("launcher verifies outside the station lock and refuses a selection pruned before lease commit", async t => {
   const f = await gcFixture(t), entered = gate(), resume = gate();
   f.setState({ ...f.state(), current: f.builds[0]! });
   const pending = selectPayload(f.home, ["status"], { ...f.dependencies, env: {}, restore: async (home, tuple) => {
-    entered.open(); await resume.promise; return f.dependencies.inspect!(home, tuple);
+    const cached = await f.dependencies.inspect!(home, tuple);
+    entered.open(); await resume.promise; return cached;
   } });
+  const rejected = assert.rejects(pending, /Station changed during payload preparation/);
   await entered.promise;
-  let inventoried = false;
-  const collecting = gc(f.home, { ...f.dependencies, inventory: async () => {
-    inventoried = true;
-    // Model two intervening promotions before handoff: r1 is neither current,
-    // previous nor highest-ten when GC acquires the same lock.
-    f.setState({ ...f.state(), current: f.builds[13]!, previous: f.builds[12]! });
-    return { formats: {}, references: [], expiredBindings: [] };
-  } });
-  await Promise.resolve(); assert.equal(inventoried, false);
-  resume.open();
-  const selected = await pending, report = await collecting;
-  assert.equal(selected.cached.record.version, "r1");
+  f.setState({ ...f.state(), generation: f.state().generation + 2, current: f.builds[13]!, previous: f.builds[12]! });
+  const report = await gc(f.home, f.dependencies);
+  assert.ok(report.removed.includes("r1"));
+  resume.open(); await rejected;
+  const selected = await selectPayload(f.home, ["status"], { ...f.dependencies, env: {}, restore: (home, tuple) => f.dependencies.inspect!(home, tuple) });
+  assert.equal(selected.cached.record.version, "r14");
   assert.ok(existsSync(selected.cached.executable));
-  assert.match(report.retained.find(row => row.version === "r1")!.holders.join(), /launcher lease/);
 });
 
-test("promotion and GC serialize candidate validation and state publication", async t => {
+test("GC runs during promotion download/verification; only verified state publication takes the lock", async t => {
   const f = await gcFixture(t), candidate = await f.release("r15"), entered = gate(), resume = gate();
   const promoting = promote(f.home, { ...f.dependencies, releases: async () => [candidate], ensure: async (home, tuple) => {
-    entered.open(); await resume.promise; return f.dependencies.ensure!(home, tuple);
+    const cached = await f.dependencies.ensure!(home, tuple);
+    entered.open(); await resume.promise; return cached;
   } });
   await entered.promise;
-  let inventoried = false;
-  const collecting = gc(f.home, { ...f.dependencies, inventory: async () => {
-    inventoried = true; assert.equal(f.state().current.version, "r15");
+  const report = await gc(f.home, { ...f.dependencies, inventory: async () => {
+    assert.equal(f.state().current.version, "r14");
     return { formats: {}, references: [], expiredBindings: [] };
   } });
-  await Promise.resolve(); assert.equal(inventoried, false);
+  assert.ok(report.retained.find(row => row.version === "r15")!.holders.includes("keep-10 highest IDs"));
   resume.open(); assert.equal((await promoting).promoted, true);
-  const report = await collecting;
-  assert.ok(report.retained.find(row => row.version === "r15")!.holders.includes("current"));
-  assert.ok(report.retained.find(row => row.version === "r14")!.holders.includes("previous"));
+  assert.equal(f.state().current.version, "r15");
+  assert.equal(f.state().previous.version, "r14");
 });
 
 test("a loader selection losing the promotion/GC race cannot acquire a lease or evaluate a pruned generation", async t => {
@@ -118,4 +112,18 @@ test("pruned terminal tick replay restores only its bound immutable tuple; a mis
   rmSync(join(stationRoot(f.home), "ticks", "tick.json"));
   await assert.rejects(selectPayload(f.home, ["tick"], { ...f.dependencies, env: { DAG_RUN_ID: "tick" }, confirm: async () => "retry",
     restore: async () => { throw new Error("must not restore or repin"); } }), /binding/);
+});
+
+test("GC never waits on an artifact being prepared while holding the station lock", async t => {
+  const f = await gcFixture(t);
+  const report = await gc(f.home, { ...f.dependencies, withFileLock: async (path, body, options) => {
+    if (path.endsWith("/r1.lock")) {
+      assert.equal(options?.timeoutMs, 0);
+      throw Object.assign(new Error("busy preparer pid=123"), { code: "ETIMEDOUT" });
+    }
+    return f.dependencies.withFileLock!(path, body);
+  } });
+  assert.ok(!report.removed.includes("r1"));
+  assert.match(report.retained.find(row => row.version === "r1")!.holders.join(), /artifact lock busy.*pid=123/);
+  assert.ok((await gc(f.home, f.dependencies)).removed.includes("r1"));
 });
