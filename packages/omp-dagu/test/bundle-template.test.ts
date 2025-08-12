@@ -118,6 +118,32 @@ test("bootstrap preserves the installed blocker reporting choice and accepts exp
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test("bootstrap rejects residual macros in rendered repository policy", liveDagu, () => {
+  const bootstrap = skill("dagu-feature-bootstrap.yaml");
+  const render = bootstrap.split("  - id: render\n")[1]!.split("\n  - id: reconcile")[0]!;
+  const script = render.split("    run: |\n")[1]!.split("\n").map(line => line.slice(6)).join("\n");
+  const root = mkdtempSync(join(tmpdir(), "omp-dagu-bootstrap-residual-"));
+  try {
+    for (const filename of ["feature.yaml", "poc.yaml", "discovery.yaml", "planning.yaml"]) {
+      writeFileSync(join(root, filename), skill(filename));
+    }
+    for (const residual of ["__REQUIRED_CHECK__", "__A4S_BLOCKER_REPORTING__", "TEMPLATE_REPO"]) {
+      writeFileSync(join(root, "reconcile.yaml"), `${skill("reconcile.yaml")}\n# ${residual}\n`);
+      const result = spawnSync("bash", ["-c", script], { encoding: "utf8", env: {
+        ...process.env, DAGU_HOME: join(root, "home"), DAG_RUN_ID: "bootstrap-residual",
+        SKILL_DIR: root,
+        STAGE: join(root, "stage", "feature.yaml"), PRIMARY: root, REPO: "fixture", BASE_BRANCH: "main",
+        GATE: "true", REQUIRED_CHECK: "validate", TEST_PATHS: "^test/", REBASE_RESOLVER: "",
+        VALIDATION: "", A4S_BLOCKER_REPORTING: "ask",
+        BUNDLE_NAME: "@a4s/omp-dagu", BUNDLE_VERSION: "0.3.104", DAGU_VERSION: "2.20.1",
+        SOURCE_NWO: "owner/repo", SOURCE_SHA: "a".repeat(40),
+      } });
+      assert.equal(result.status, 1, result.stdout + result.stderr);
+      assert.ok(result.stdout.includes(`# ${residual}`), result.stdout);
+    }
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test("adopted blocker reporting policy rejects run input before effects", () => {
   const admission = skill("feature.yaml").split("  - id: admission\n")[1]!.split("\n  - id: triage")[0]!;
   const script = admission.split("    run: |\n")[1]!.split("\n").map(line => line.slice(6)).join("\n");

@@ -304,7 +304,7 @@ steps:
         "\$template | $render_common" > "$(dirname "$STAGE")/reconcile.yaml"
       for rendered in "$STAGE" "$(dirname "$STAGE")/poc.yaml" \
         "$(dirname "$STAGE")/discovery.yaml" "$(dirname "$STAGE")/planning.yaml" "$(dirname "$STAGE")/reconcile.yaml"; do
-        if grep -En 'TEMPLATE_[A-Z_]+|__[A-Z_]*__' "$rendered"; then exit 1; fi
+        if grep -En 'TEMPLATE_[A-Z_]+|__[A-Z0-9_]*__' "$rendered"; then exit 1; fi
         dagu validate "$rendered"
       done
       printf 'stage=%s\n' "$STAGE"

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.104
+
+- Recognize digit-bearing residual bootstrap macros, including `__A4S_BLOCKER_REPORTING__`, before validating rendered repository DAGs (#479).
+
 ## 0.3.103
 
 - Share effective agent-directory resolution between activity and the primary-session guard, including named profiles and existing configuration-directory precedence (#356).
