@@ -18,9 +18,10 @@ import type { QualityRequest, TranscriptRow } from "../src/triage/quality.ts";
 import { nativeQualityFixture, qualityFixture, readQualityPolicies } from "./quality-fixtures.ts";
 import { liveDagu, liveDaguVersion } from "./fixtures/live-dagu.ts";
 import { roleAdmission, roleExecution } from "./role-job-fixtures.ts";
-import { jobId, type JobBinding } from "../src/role-jobs.ts";
+import { atomicJson, executorIdentity, jobId, type Job, type JobBinding, type Role } from "../src/role-jobs.ts";
 import { admitQuality as admitNativeQuality, roleAssignment, runRoleJob } from "../src/role-dispatch.ts";
 import "./waiting-cancellation.test.ts";
+import { IssueFeedback, type FeedbackComment, type FeedbackPolicy, type FeedbackTransport } from "../src/issue-feedback.ts";
 
 const definitions = [
   ["template", fileURLToPath(new URL("../skills/dagu-feature/feature.yaml", import.meta.url))],
@@ -1994,9 +1995,9 @@ type RecoveryFixture = {
   close: () => Promise<void>;
 };
 
-async function recoveryFixture(extraConfig = ""): Promise<RecoveryFixture> {
+async function recoveryFixture(extraConfig = "", rootDirectory = tmpdir()): Promise<RecoveryFixture> {
   const suffix = randomUUID();
-  const root = realpathSync(mkdtempSync(join(tmpdir(), "omp-dagu-triage-close-")));
+  const root = realpathSync(mkdtempSync(join(rootDirectory, "omp-dagu-triage-close-")));
   const home = join(root, "dagu-home");
   mkdirSync(join(home, "dags"), { recursive: true });
   const listener = createServer();
@@ -2057,6 +2058,111 @@ async function recoveryFixture(extraConfig = ""): Promise<RecoveryFixture> {
     throw error;
   }
 }
+
+test("issue feedback live push-back captures and rebases correction before current QA verification", {
+  ...liveDagu, timeout: 180_000,
+}, async t => {
+  const runtime = await recoveryFixture("", "/tmp");
+  const repo = repository();
+  const feedback = new IssueFeedback(repo.state);
+  const comments: FeedbackComment[] = [];
+  const transport: FeedbackTransport = {
+    authenticatedLogin: () => "fixture-publisher",
+    list: () => structuredClone(comments),
+    create: (_issue, body) => {
+      const comment = { id: comments.length + 1, url: `fixture://issue/189/${comments.length + 1}`, author: "fixture-publisher", body };
+      comments.push(comment); return structuredClone(comment);
+    },
+    update: (_issue, id, body) => { comments.find(comment => comment.id === id)!.body = body; },
+  };
+  const policy: FeedbackPolicy = { schemaVersion: 1, repo: repo.primary, worktree: repo.worktree,
+    issue: "example/repo#189", run: "test-run", owner: "fixture-owner", publisher: "fixture-publisher",
+    jobs: join(repo.state, "role-jobs"), candidate: { sha: git(repo.worktree, "rev-parse", "HEAD"), iteration: 0, attempt: "initial" } };
+  mkdirSync(policy.jobs);
+  const job = (role: Role, candidate: FeedbackPolicy["candidate"]) => {
+    const binding: JobBinding = { repo: policy.repo, worktree: policy.worktree, lane: "feature", dag: "feature",
+      run: policy.run, stage: role === "implement" ? "implement" : "quality_review", role, ...candidate };
+    const id = jobId(binding), directory = join(policy.jobs, id);
+    mkdirSync(directory);
+    const receipt: Job = { schemaVersion: 1, id, binding, directory, executor: executorIdentity(), state: "running",
+      readyAt: new Date().toISOString(), startedAt: new Date().toISOString() };
+    atomicJson(join(directory, "job.json"), receipt);
+    writeFileSync(join(directory, `${id}.jsonl`), [
+      { type: "session", id: `fixture-session-${id}` },
+      { type: "session_init", task: `Authorized Dagu role job ${id}. Synthetic lifecycle test actor.` },
+    ].map(row => JSON.stringify(row)).join("\n") + "\n");
+    return { id, directory, receipt };
+  };
+  try {
+    rmSync(join(repo.root, "bin", "dagu"));
+    const environment = { ...featureScriptEnv(repo), DAGU_PORT: String(runtime.port) };
+    const steps = ["capture", "rebase", "gate", "quality_prepare"].map((id, index, ids) =>
+      `  - id: ${id}\n    depends: ${index ? ids[index - 1] : "implement"}\n` +
+      (id === "capture" ? `    env:\n      SUMMARY: \${steps.implement.outputs.SUMMARY}\n      MESSAGE: \${steps.implement.outputs.MESSAGE}\n      IMPLEMENTER: \${steps.implement.outputs.IMPLEMENTER}\n` : "") +
+      "    run: |\n" + extractScript(definitions[0][1], `  - id: ${id}`).split("\n").map(line => `      ${line}\n`).join("") +
+      (id === "gate" ? "    outputs:\n      - name: tested_sha\n" : ""));
+    writeFileSync(join(runtime.home, "dags", "feature.yaml"), "name: feature\ntype: graph\nshell: bash\nenv:\n" +
+      Object.entries(environment).filter(([, value]) => value !== undefined).map(([key, value]) => `  ${key}: ${JSON.stringify(value)}\n`).join("") +
+      "steps:\n  - id: implement\n    action: human.task\n    with:\n      prompt: Synthetic implementation delivery\n" + deliveryForm +
+      steps.join("") + "  - id: quality_review\n    depends: quality_prepare\n    action: human.task\n    with:\n      prompt: Synthetic quality verdict\n      push_back:\n        rewind_to: implement\n        form:\n          type: object\n          properties:\n            REASON:\n              type: string\n          required: [REASON]\n");
+    const dagu = (...args: string[]) => execFileSync("dagu", args, { cwd: runtime.root, env: runtime.env, encoding: "utf8" }).trim();
+    const waiting = (step: string) => runtime.until(`feedback waiting ${step}`, async () => {
+      const detail = await runtime.state("test-run", "waiting");
+      return detail.nodes.some(node => node.step.name === step && node.statusLabel === "waiting") ? detail : undefined;
+    });
+    const complete = (implementer: string) => dagu("human-task", "complete", "feature", "--run-id", "test-run", "--step", "implement",
+      "--input", "SUMMARY=Fixture correction", "--input", "MESSAGE=fix: fixture correction", "--input", `IMPLEMENTER=${implementer}`);
+    dagu("enqueue", "--run-id", "test-run", join(runtime.home, "dags", "feature.yaml"));
+    await waiting("implement");
+    complete("InitialFixtureImplementer");
+    await waiting("quality_review");
+    const request = JSON.parse(readFileSync(join(repo.state, "quality-request.json"), "utf8"));
+    policy.candidate = { sha: request.sha, iteration: request.iteration, attempt: request.attempt };
+    feedback.configure(policy, policy.owner);
+    const finding = feedback.emit(job("reviewer", policy.candidate).directory, {
+      key: "finding", type: "finding", summary: "Synthetic fixture correction required" }).event;
+    feedback.publish(transport); feedback.poll(transport);
+    dagu("human-task", "push-back", "feature", "--run-id", "test-run", "--step", "quality_review",
+      "--expected-iteration", "0", "--input", "REASON=Fixture finding");
+    await waiting("implement");
+    assert.match(dagu("status", "feature", "--run-id", "test-run"), /push-back iteration: 1/);
+    const inputSha = git(repo.worktree, "rev-parse", "HEAD");
+    const implementation = { sha: inputSha, iteration: 1, attempt: "1:fixture-implement" };
+    feedback.configure({ ...policy, candidate: implementation }, policy.owner);
+    assert.equal(feedback.claim(`${finding.eventId}:correction`, policy.owner).state, "active");
+    const implementer = job("implement", implementation);
+    writeFileSync(join(repo.worktree, "correction.txt"), "corrected\n");
+    const correction = feedback.emit(implementer.directory, { key: "correction", type: "correction",
+      findingId: finding.eventId, summary: "Synthetic implementer corrected the tree before capture" }).event;
+    feedback.publish(transport); feedback.poll(transport);
+    atomicJson(join(implementer.directory, "result.json"), { ...implementer.receipt, state: "completed" });
+    writeFileSync(join(repo.primary, "upstream.txt"), "new base\n");
+    git(repo.primary, "add", "upstream.txt"); git(repo.primary, "commit", "-m", "upstream advance"); git(repo.primary, "push", "origin", "main");
+    complete(implementer.id);
+    const detail = await waiting("quality_review");
+    const candidate = JSON.parse(readFileSync(join(repo.state, "candidate.json"), "utf8"));
+    const captureLog = readFileSync(detail.nodes.find(node => node.step.name === "capture")!.stdout!, "utf8");
+    const capturedSha = /candidate_sha=([a-f0-9]{40})/.exec(captureLog)![1]!;
+    assert.notEqual(capturedSha, inputSha); assert.notEqual(candidate.sha, capturedSha);
+    assert.equal(candidate.implementation.inputSha, inputSha); assert.equal(candidate.implementer, implementer.id);
+    const quality = JSON.parse(readFileSync(join(repo.state, "quality-request.json"), "utf8"));
+    const corrected = { sha: quality.sha, iteration: quality.iteration, attempt: quality.attempt };
+    assert.equal(corrected.sha, candidate.sha);
+    feedback.configure({ ...policy, candidate: corrected }, policy.owner);
+    assert.equal(feedback.claim(`${correction.eventId}:verification`, policy.owner).sha, candidate.sha);
+    feedback.emit(job("qa", corrected).directory, { key: "verification", type: "verification", findingId: finding.eventId,
+      correctionId: correction.eventId, resolved: true, summary: "Independent fixture QA observed corrected committed candidate" });
+    feedback.publish(transport); feedback.poll(transport);
+    assert.equal(feedback.resolution(finding.eventId)?.resolved, true);
+    assert.equal(feedback.resolution(finding.eventId)?.binding.sha, candidate.sha);
+    t.diagnostic(JSON.stringify({ dagu: liveDaguVersion, actors: "synthetic native-receipt fixtures; real Dagu push-back/capture/rebase/gate/quality_prepare",
+      iteration: 1, inputSha, capturedSha, rebasedSha: candidate.sha, candidate, receipts: feedback.receipts(), work: feedback.work() }));
+    dagu("human-task", "complete", "feature", "--run-id", "test-run", "--step", "quality_review");
+    await runtime.state("test-run", "succeeded");
+  } finally {
+    feedback.close(); await runtime.close(); rmSync(repo.root, { recursive: true, force: true });
+  }
+});
 
 type RecoveryMode = "healthy" | "gate" | "start_gate" | "push";
 type RecoveryResult = {

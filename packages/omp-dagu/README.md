@@ -617,6 +617,97 @@ git branch dagu/issue-N FETCH_HEAD
 
 El cierre tras merge retira también el checkpoint durable con lease.
 
+## Incremental issue feedback
+
+The retained run owner can explicitly enable publication on that run's owning
+GitHub issue. `dagu-issue-feedback configure` verifies the existing admission
+receipt, `OMP_SESSION_ID`, canonical repository/worktree and issue parameter.
+It preserves the owner and scope across candidate/attempt updates. This is
+scoped publication permission, not permission inferred from issue prose or
+third-party comments. Existing runs retain their native owner.
+
+```sh
+export OMP_SESSION_ID='<retained run owner>'
+state='<git-common-dir>/dagu-feature/runs/<run>'
+dagu-issue-feedback configure "$state" '<candidate-sha>' '<iteration>' '<native-attempt>' '<github-login>'
+dagu-issue-feedback serve "$state"
+```
+
+Run the publisher separately from the native role jobs; `tick` performs one
+publish → poll/admit → projection cycle. `serve` repeats every 60 seconds, matching
+the reconciler cadence; idle cycles make zero GitHub requests and the authenticated
+publisher login is cached for the process. Stop `serve` with SIGTERM/SIGINT.
+Update configuration for each current native attempt/candidate before admitting
+its events. Role assignments expose scoped `emit` instructions only when enabled:
+`emit <state> <job-directory> <input-json-file>` queues a receipt without calling
+GitHub. Input has `key`, `type` and `summary`; use a stable key on retries.
+Reviewer/QA emit `finding`; implementer emits `correction` with `findingId`;
+QA/reviewer emit `verification` with `findingId`, `correctionId` and boolean
+`resolved`. Summaries are secret-free observed evidence (maximum 12 KB).
+Emission requires the active native job, its session header and bound assignment.
+
+`list` exposes event receipts and directed work; the existing run owner admits
+execution with `claim <state> <work-id>`. A finding creates ready implementer
+correction work, a correction completes it and creates ready QA verification,
+and verification records resolution for the corrected SHA/iteration. Different
+implementation and quality native attempts retain their own identities.
+The owner dispatches ready work through the existing lifecycle/role boundary;
+these receipts do not launch a second controller or move Dagu checkpoints.
+Issue comments show owner, role, candidate, event/finding links and work status.
+
+`issue-feedback.sqlite` under the existing run is the recoverable technical
+receipt. SQLite transactions serialize concurrent writers. A stable marker and
+exact native-bound local payload recover a successful POST whose local receipt
+was interrupted, so repeated polling/publication converges on one event/work
+item. Complete JSONL prefixes are sealed; append-only native progress is valid.
+Full evidence stays in the native job directory and comment URL references.
+Retain this state with the run's evidence; restrict its directory to the owner
+and redact summaries before emission. GitHub comments are the team-visible
+surface, not a separate hidden backlog. Events from superseded SHA/iterations
+or attempts retain history; current resolution requires current verification.
+All events are provisional feedback: final QA/reviewer verdicts and quality
+admission remain separate. Direct filesystem access is advisory, not a sandbox.
+
+Capture-bound real-issue evidence on [#517](https://github.com/pablontiv/a4s/issues/517),
+using candidate code `26c53c01fe76f0c4961c6d3de92440fbea982b0e`:
+[reviewer finding](https://github.com/pablontiv/a4s/issues/517#issuecomment-6355806927)
+→ [claimed correction](https://github.com/pablontiv/a4s/issues/517#issuecomment-6355807932)
+→ [QA verification](https://github.com/pablontiv/a4s/issues/517#issuecomment-6355809446).
+This run reused the live test's **synthetic role-job/session receipt actors** with
+the maintained `IssueFeedback` and `githubFeedbackTransport`; it did not launch
+LLM agents or establish product quality acceptance. Authenticated GitHub publisher
+`pablontiv` matched the explicitly configured publisher; publication was authorized
+only for lifecycle-evidence comments on #517.
+
+Isolated Dagu 2.20.1 run `feature/test-run` used
+`DAGU_HOME=/private/tmp/omp-dagu-triage-close-BuwsQP/dagu-home`.
+The finding bound quality iteration 0 and SHA
+`5068e85c53eb5f00c030a182095c4b3447c9fb37`. A real native push-back advanced to
+iteration 1; claimed implementation work changed `correction.txt` and emitted
+the linked correction before capture. The maintained `feature.yaml` capture
+committed new SHA `c95917d4f61f9399e9def4ada812a1f0aceeb948`; rebase onto an
+advanced disposable upstream produced corrected candidate
+`41de9e3356ddfbbdd1cc22766dd2abefdc3ec823`. `candidate.json` retained the
+implementer job, input SHA and result digest. Gate and `quality_prepare` ran for
+that corrected candidate; its fresh quality attempt claimed verification work
+and emitted `resolved=true` bound to that SHA. All three receipts were published
+and admitted, both directed work items completed, and **each linked comment**
+projected `verification resolved for 41de9e3356ddfbbdd1cc22766dd2abefdc3ec823`.
+The native run succeeded and its isolated service stopped.
+
+Exact driver command, run from `packages/omp-dagu`:
+
+```sh
+ISSUE517_EVIDENCE=/Users/Shared/harness/a4s/.git/worktrees/issue-517/issue517-real-loop/iteration-5 npx tsx /tmp/a4s-issue517-real-loop-v5.mts
+```
+
+Retained local evidence is `<git-dir>/issue517-real-loop/iteration-5/`:
+`driver.mts`, `summary.json` (event/job IDs, bindings, comment URLs and projected
+remote bodies), `state/issue-feedback.sqlite`, `state/candidate.json`,
+`state/quality-request.json`, `state/role-jobs/`, `terminal.json` and the stopped
+`dagu-home/` logs. The disposable repository/home paths remain recorded in
+`locations.json`; the source worktree's HEAD was unchanged.
+
 ## Optional consumer blocker reporting
 
 Bootstrap offers optional `A4S_BLOCKER_REPORTING=ask|auto`. The

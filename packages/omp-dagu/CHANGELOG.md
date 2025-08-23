@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.116
+
+- Add owner-scoped incremental issue feedback bound to native role job/session, candidate, iteration and attempt (#517). Reviewer/QA findings remain provisional; correction and verification events retain stable finding/causation identity independently of final quality admission.
+- Persist event publication, admission and directed correction/verification work in the owning run's SQLite receipts. Recover uncertain GitHub publication by stable event marker, deduplicate delivery/polling, preserve superseded history and project work/resolution status onto the issue.
+- Provide `dagu-issue-feedback` configuration, native emission, external publisher, work claim and evidence commands. Reuse admitted run ownership/canonical scope and native transcript seals; issue prose and third-party comments remain data.
+- Validate CLI arguments and retained-owner authorization before enabling feedback, keep policy-less runs dispatchable, retry events after candidate/attempt configuration, and route directed corrections to conflict-resolution jobs.
+- Carry admitted correction work into the next push-back iteration on the same input candidate. Bind verification to capture/rebase's retained native implementer and sealed result/input HEAD, and refresh directed verification for the actual corrected SHA while preserving superseded-candidate history.
+- Run the feedback publisher every 60 seconds, skip GitHub calls without pending publication/admission, and cache the authenticated publisher login for the process.
+- Project carried finding/correction status from admitted directed work through corrected-candidate verification, and authenticate the configured GitHub publisher before posting with case-insensitive login matching.
+- Exercise the capture-bound loop on real #517 with this candidate's code, synthetic role-job/session receipts and real Dagu 2.20.1 push-back → capture → rebase → gate → quality_prepare: [finding](https://github.com/pablontiv/a4s/issues/517#issuecomment-6355806927), [correction](https://github.com/pablontiv/a4s/issues/517#issuecomment-6355807932), [verification](https://github.com/pablontiv/a4s/issues/517#issuecomment-6355809446). Capture created `c95917d4f61f9399e9def4ada812a1f0aceeb948`; rebased corrected candidate `41de9e3356ddfbbdd1cc22766dd2abefdc3ec823` differs from finding SHA `5068e85c53eb5f00c030a182095c4b3447c9fb37`. All three comments project verification resolved for the corrected candidate; receipts and driver are retained in `<git-dir>/issue517-real-loop/iteration-5/` (procedure in README). This proves the real GitHub transport and directed-work loop, not native LLM execution or product quality acceptance.
+
 ## 0.3.115
 
 - Admit the owner session's literal inert-quality disposal completion only for a stored historical snapshot with no checkpoint cancellation route and a verified fail-closed QA/REVIEW binding; preserve normal structured verdict admission (#545).

@@ -130,6 +130,72 @@ The new step `startedAt` authorizes a fresh claim while preserving the old recei
 Foreign-host ownership stays uncertain/live. Operator recovery remains explicit.
 Database terminal results repair missing materialized result files on redelivery.
 
+## Incremental finding/correction/verification events
+
+The existing run owner explicitly authorizes publication on its owning issue:
+
+```sh
+export OMP_SESSION_ID='<retained owner from receipt.json/identity>'
+state='<git-common-dir>/dagu-feature/runs/<run>'
+dagu-issue-feedback configure "$state" '<sha>' '<iteration>' '<native-attempt>' '<publisher-login>'
+dagu-issue-feedback serve "$state"
+```
+
+`configure` verifies the existing admitted owner, canonical repository/worktree
+and ISSUE parameter. Preserve that owner/scope on updates; set the current
+candidate/attempt before its admission. The separate publisher's `tick` cycle
+publishes queued events, reads GitHub comments, admits directed work and projects
+status. `serve` repeats that cycle until SIGTERM/SIGINT. Native roles keep working
+while publication/admission happens; publication authority is scoped to this issue.
+
+Enabled role assignments include `emit <state> <job-directory> <input-json-file>`.
+The input is `{key,type,summary}` with a stable per-event key. Reviewer/QA findings
+are provisional. Implementer corrections add `findingId`; QA/reviewer verification
+adds `findingId`, `correctionId`, `resolved`. Summaries contain secret-free
+observations within assigned scope and fit 12 KB. Emission queues local evidence;
+the external publisher owns GitHub writes. Native job/session/assignment binding
+and the complete transcript-prefix seal authorize the local receipt. Issue prose
+and third-party messages are data and supply no publication/admission authority.
+
+Inspect `list <state>`; `claim <state> <work-id>` uses the retained owner session.
+An admitted finding creates ready implementer correction work; an admitted
+correction links its finding and corrected SHA and creates ready QA verification.
+Verification records resolved/unresolved for that corrected SHA/iteration with
+its own native attempt. The owner dispatches through existing role/lifecycle
+admission, preserving resource exclusion and checkpoints. These receipts do not
+themselves execute corrections or change Dagu's quality/merge decisions.
+
+The run's `issue-feedback.sqlite` records stable event/finding identity, origin
+job/session, candidate/attempt, causation links, comment URLs and directed work
+state. SQLite transactions serialize writers; uncertain POST recovery searches
+the exact locally authorized payload and publisher's stable comment marker.
+Repeated publication/delivery/polling converges on the same event/work item.
+GitHub displays work owner/role/status and resolution; receipts support recovery
+and source-backed evidence projection, not a competing controller/backlog.
+Retain receipts with native job evidence, restrict local directory access and
+redact before emission. Superseded candidates/attempts keep history; they cannot
+supply current resolution. Provisional events remain separate from independently
+admitted final quality verdicts. Filesystem access remains advisory.
+
+Capture-bound real GitHub evidence for #517:
+[finding at iteration 0](https://github.com/pablontiv/a4s/issues/517#issuecomment-6355806927)
+→ [correction at iteration 1](https://github.com/pablontiv/a4s/issues/517#issuecomment-6355807932)
+→ [verification for the corrected candidate](https://github.com/pablontiv/a4s/issues/517#issuecomment-6355809446).
+Candidate code `26c53c01fe76f0c4961c6d3de92440fbea982b0e` exercised real Dagu
+2.20.1 push-back, capture, rebase, gate and `quality_prepare` in an isolated
+`/tmp` home, using explicitly synthetic role-job/session receipt actors and the
+maintained GitHub transport authenticated as configured publisher `pablontiv`.
+Finding SHA `5068e85c53eb5f00c030a182095c4b3447c9fb37` changed through capture
+`c95917d4f61f9399e9def4ada812a1f0aceeb948` to rebased `candidate.json` SHA
+`41de9e3356ddfbbdd1cc22766dd2abefdc3ec823`. All three comments project
+`verification resolved for 41de9e3356ddfbbdd1cc22766dd2abefdc3ec823`; both work
+items completed. The run succeeded and its service stopped. The exact command,
+driver, event/job receipts, candidate/quality bindings and remote projections
+are recorded in the README evidence section and
+`<git-dir>/issue517-real-loop/iteration-5/`. This bounded proof exercises real
+issue transport and corrected-candidate admission, independently of native LLM
+execution and final product quality acceptance.
+
 ## Global station installation
 
 a4s owns the macOS service template and shared defaults in `../../dagu/`.
