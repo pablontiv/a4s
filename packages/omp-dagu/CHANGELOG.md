@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.98
+
+- Persist the optional consumer `A4S_BLOCKER_REPORTING=ask|auto` choice in adopted feature policy, preserving the installed choice on blank bootstrap upgrades and requiring explicit opt-in for automatic reports (#454).
+- Define the same-host native A4S owner handoff with scoped authorization, private evidence payloads, verified blocking issue receipts and consumer readback, preserving consumer ownership and unrelated lifecycle state (#454).
+- Render and verify digit-bearing placeholders such as `__A4S_BLOCKER_REPORTING__` in admission fixtures and installed DAG source provenance (#454).
+
 ## 0.3.97
 
 - Admit consistent native fallback `session_init` refreshes in planning review and feature triage: require one expected-parent session and one or more identical agent/task initializations, retain first-init freshness, and preserve generation and final structured-yield validation (#466).

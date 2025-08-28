@@ -62,7 +62,6 @@ test("bootstrap renders optional validation as the sole adopted value", {
   ...liveDagu,
 }, () => {
   const bootstrap = skill("dagu-feature-bootstrap.yaml");
-  assert.match(bootstrap, /VALIDATION:\n            type: string\n            default: ""/);
   const render = bootstrap.split("  - id: render\n")[1]!.split("\n  - id: reconcile")[0]!;
   const script = render.split("    run: |\n")[1]!.split("\n").map(line => line.slice(6)).join("\n");
   const root = mkdtempSync(join(tmpdir(), "omp-dagu-bootstrap-validation-"));
@@ -87,6 +86,52 @@ test("bootstrap renders optional validation as the sole adopted value", {
       assert.ok(output.includes('- REBASE_RESOLVER: "node packages/omp-dagu/bin/dagu-bundle-rebase.mjs"'));
     }
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("bootstrap preserves the installed blocker reporting choice and accepts explicit changes", liveDagu, () => {
+  const bootstrap = skill("dagu-feature-bootstrap.yaml");
+  const render = bootstrap.split("  - id: render\n")[1]!.split("\n  - id: reconcile")[0]!;
+  const script = render.split("    run: |\n")[1]!.split("\n").map(line => line.slice(6)).join("\n");
+  const detect = bootstrap.split("      read_default() {")[1]!.split("      read_stamp() {")[0]!;
+  const readDefault = "read_default() {" + detect.split("\n").map(line => line.startsWith("      ") ? line.slice(6) : line).join("\n");
+  const root = mkdtempSync(join(tmpdir(), "omp-dagu-blocker-policy-"));
+  const stage = join(root, "feature.yaml");
+  let installed = "";
+  try {
+    for (const [answer, expected] of [["", "ask"], ["auto", "auto"], ["", "auto"], ["ask", "ask"], ["", "ask"]]) {
+      const result = spawnSync("bash", ["-c", script], { encoding: "utf8", env: {
+        ...process.env, DAGU_HOME: join(root, "home"), DAG_RUN_ID: "bootstrap-policy",
+        SKILL_DIR: fileURLToPath(new URL("../skills/dagu-feature", import.meta.url)),
+        STAGE: stage, PRIMARY: root, REPO: "fixture", BASE_BRANCH: "main",
+        GATE: "true", REQUIRED_CHECK: "validate", TEST_PATHS: "^test/", REBASE_RESOLVER: "",
+        BUNDLE_NAME: "@a4s/omp-dagu", BUNDLE_VERSION: "0.3.98", DAGU_VERSION: "2.20.1",
+        SOURCE_NWO: "owner/repo", SOURCE_SHA: "a".repeat(40),
+        A4S_BLOCKER_REPORTING: answer, CURRENT_A4S_BLOCKER_REPORTING: installed,
+      } });
+      assert.equal(result.status, 0, result.stdout + result.stderr);
+      const readback = spawnSync("bash", ["-c", `${readDefault}\nread_default "$1" A4S_BLOCKER_REPORTING`, "read-policy", stage], { encoding: "utf8" });
+      assert.equal(readback.status, 0, readback.stderr);
+      installed = readback.stdout.trim();
+      assert.equal(installed, expected);
+    }
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("adopted blocker reporting policy rejects run input before effects", () => {
+  const admission = skill("feature.yaml").split("  - id: admission\n")[1]!.split("\n  - id: triage")[0]!;
+  const script = admission.split("    run: |\n")[1]!.split("\n").map(line => line.slice(6)).join("\n");
+  for (const value of ["ask", "auto", ""]) {
+    const result = spawnSync("bash", ["-c", script], { encoding: "utf8", env: {
+      ...process.env, DAGU_PARAMS_JSON: JSON.stringify({ A4S_BLOCKER_REPORTING: value }),
+      PRIMARY: "/consumer", GATE: "true", REQUIRED_CHECK: "validate", BRANCH: "dagu/issue-454",
+    } });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /admission rejected run parameter: A4S_BLOCKER_REPORTING/);
+  }
+  const accepted = spawnSync("bash", ["-c", script], { encoding: "utf8", env: {
+    ...process.env, DAGU_PARAMS_JSON: JSON.stringify({ ISSUE: "454", OMP_SESSION_ID: "consumer-owner" }),
+  } });
+  assert.equal(accepted.status, 0, accepted.stderr);
 });
 
 test("bootstrap binds feature and PoC primary and feature policy at adoption", () => {

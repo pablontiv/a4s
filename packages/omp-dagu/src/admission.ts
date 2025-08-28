@@ -96,7 +96,7 @@ function checkRender(path: string, name: string, sourceRoot: string, prefix: str
 }
 
 function isRender(contents: string, template: string): boolean {
-  const literals = template.trimEnd().split(/__[A-Z_]+__|TEMPLATE_[A-Z_]+/);
+  const literals = template.trimEnd().split(/__[A-Z0-9_]+__|TEMPLATE_[A-Z_]+/);
   let remaining = contents;
   if (!remaining.startsWith(literals[0]!)) return false;
   remaining = remaining.slice(literals[0]!.length);
@@ -119,14 +119,14 @@ export function admit(options: AdmissionOptions, persist = true): { path: string
     if (name === "feature.yaml" || name === "poc.yaml") {
       const snapshot = readFileSync(dagPath, "utf8");
       const policy: Record<string, unknown> = {};
-      for (const field of ["PRIMARY", "GATE", "REBASE_RESOLVER", "REQUIRED_CHECK"]) {
+      for (const field of ["PRIMARY", "GATE", "REBASE_RESOLVER", "REQUIRED_CHECK", "A4S_BLOCKER_REPORTING"]) {
         const literal = new RegExp(`^  - ${field}: (.+)$`, "m").exec(snapshot)?.[1];
         if (literal) policy[field] = JSON.parse(literal);
       }
       const issue = options.params.find(param => param.startsWith("ISSUE="))?.slice(6);
       policy.BRANCH = name === "feature.yaml" ? `dagu/issue-${issue}` : `poc/${options.run}`;
       const rejected = options.params.map(param => param.slice(0, param.indexOf("=")))
-        .filter(field => ["PRIMARY", "BRANCH", "GATE", "REBASE_RESOLVER", "REQUIRED_CHECK"].includes(field));
+        .filter(field => ["PRIMARY", "BRANCH", "GATE", "REBASE_RESOLVER", "REQUIRED_CHECK", "A4S_BLOCKER_REPORTING"].includes(field));
       if (rejected.length) throw new Error(`admission rejected run parameter: ${rejected.join(", ")}; adopted policy ${JSON.stringify(policy)}`);
       if (typeof policy.PRIMARY !== "string" || !policy.PRIMARY) throw new Error(`${name} requires an adoption-fixed PRIMARY`);
       primaryParam = policy.PRIMARY;
