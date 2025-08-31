@@ -449,3 +449,34 @@ for (const [name, definition] of [...featureDefinitions, ...pocDefinitions]) {
     } finally { rmSync(repo.root, { recursive: true, force: true }); }
   });
 }
+
+for (const kind of ["feature", "poc"]) {
+  test(`${kind} cancelled exit retains unpublished commits and staged, unstaged and untracked recovery`, () => {
+    const repo = kind === "feature" ? repository() : repository("poc/test-run", "poc-test-run");
+    const definition = fileURLToPath(new URL(`../skills/dagu-feature/${kind}.yaml`, import.meta.url));
+    try {
+      const evidence = kind === "feature" ? state(repo) : join(repo.primary, ".git", "poc", "runs", "test-run");
+      mkdirSync(evidence, { recursive: true });
+      writeFileSync(join(evidence, "base.sha"), git(repo.primary, "rev-parse", "HEAD"));
+      writeFileSync(join(evidence, "cancellation.json"), '{"outcome":"cancelled"}\n');
+      const candidate = featureCommit(repo);
+      const record = JSON.stringify({ sha: candidate, worktree: repo.worktree, branch: repo.branch, run: "test-run", outcome: "pending" }) + "\n";
+      writeFileSync(join(evidence, "candidate.json"), record);
+      writeFileSync(join(repo.worktree, "value.txt"), "staged\n");
+      git(repo.worktree, "add", "value.txt");
+      writeFileSync(join(repo.worktree, "value.txt"), "unstaged\n");
+      writeFileSync(join(repo.worktree, "private.bin"), Buffer.from([0, 255, 9]));
+      stubGh(repo, candidate, { state: "OPEN" });
+      const before = [git(repo.worktree, "diff", "--binary"), git(repo.worktree, "diff", "--cached", "--binary")];
+      const result = run(extractScript(definition, "  exit:"), repo);
+      assert.equal(result.status, 0, result.stderr);
+      assert.match(result.stderr, /preserved|retained/);
+      assert.equal(git(repo.worktree, "rev-parse", "HEAD"), candidate);
+      assert.deepEqual([git(repo.worktree, "diff", "--binary"), git(repo.worktree, "diff", "--cached", "--binary")], before);
+      assert.deepEqual(readFileSync(join(repo.worktree, "private.bin")), Buffer.from([0, 255, 9]));
+      assert.ok(hasRef(repo.primary, `refs/heads/${repo.branch}`));
+      assert.ok(existsSync(join(evidence, "cancellation.json")));
+      assert.equal(readFileSync(join(evidence, "candidate.json"), "utf8"), record);
+    } finally { rmSync(repo.root, { recursive: true, force: true }); }
+  });
+}

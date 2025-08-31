@@ -20,6 +20,7 @@ import { liveDagu, liveDaguVersion } from "./fixtures/live-dagu.ts";
 import { roleAdmission, roleExecution } from "./role-job-fixtures.ts";
 import { jobId, type JobBinding } from "../src/role-jobs.ts";
 import { admitQuality as admitNativeQuality, roleAssignment, runRoleJob } from "../src/role-dispatch.ts";
+import "./waiting-cancellation.test.ts";
 
 const definitions = [
   ["template", fileURLToPath(new URL("../skills/dagu-feature/feature.yaml", import.meta.url))],
@@ -694,7 +695,7 @@ for (const poc of ["yes", "no"] as const) {
         PRIMARY: repo.primary, WORKTREE: poc === "yes" ? join(repo.root, "missing-worktree") : repo.worktree,
         RUN: "test-run", OMP_SESSION_ID: "parent-id", PATH: `${bin}:${process.env.PATH}`,
       };
-      writeFileSync(dag, `name: feature\ntype: graph\nshell: bash\nenv:\n${Object.entries(variables).map(([key, value]) => `  - ${key}: ${JSON.stringify(value)}`).join("\n")}\nsteps:\n  - id: triage\n    run: "true"\n    outputs:\n      - name: POC\n  - id: recover_gate\n    run: "true"\n${extractStep(source, "quality_prepare")}`);
+      writeFileSync(dag, `name: feature\ntype: graph\nshell: bash\nenv:\n${Object.entries(variables).map(([key, value]) => `  - ${key}: ${JSON.stringify(value)}`).join("\n")}\nsteps:\n  - id: triage\n    run: "true"\n    outputs:\n      - name: POC\n  - id: recover_gate\n    run: "true"\n${extractStep(source, "quality_prepare").replace("depends: recover_gate_cancellation", "depends: recover_gate")}`);
       const result = spawnSync("dagu", ["start", "--only", "quality_prepare", "--output", `triage.POC=${poc}`, "--run-id", `quality-${poc}`, dag], {
         encoding: "utf8", timeout: 45_000,
         env: { ...process.env, DAGU_HOME: home, DAGU_COORDINATOR_ENABLED: "false" },
@@ -1121,7 +1122,7 @@ for (const [name, definition] of definitions) {
       assert.equal(result.status, 75, result.stderr);
       assert.ok(result.stderr.includes(`rebase: index.lock held in ${repo.worktree}`));
       assert.equal(readFileSync(join(repo.state, "conflict-action"), "utf8"), "preserved\n");
-      assert.match(readFileSync(definition, "utf8"), /- id: rebase\n    depends: dependency_review\n    retry_policy:\n      limit: 3\n      interval_sec: 5\n      exit_code: \[75\]/);
+      assert.match(readFileSync(definition, "utf8"), /- id: rebase\n    depends: dependency_review(?:_cancellation)?\n    retry_policy:\n      limit: 3\n      interval_sec: 5\n      exit_code: \[75\]/);
     } finally {
       rmSync(repo.root, { recursive: true, force: true });
     }
@@ -1591,7 +1592,15 @@ function extractStep(source: string, id: string): string {
   const start = source.indexOf(`  - id: ${id}\n`);
   assert.ok(start >= 0, `missing step ${id}`);
   const end = source.indexOf("\n  - id:", start + 1);
-  return source.slice(start, end < 0 ? source.length : end).split("\nhandler_on:")[0]! + "\n";
+  let result = source.slice(start, end < 0 ? source.length : end).split("\nhandler_on:")[0]! + "\n";
+  if (result.includes("    run: *cancellation_gate")) {
+    result = result.replace("    run: *cancellation_gate", source.match(/    run: &cancellation_gate \|[\s\S]*?(?=\n  - id:)/)![0]!.replace(" &cancellation_gate", ""));
+  }
+  result = result.replace("    run: &cancellation_gate", "    run:");
+  if (result.includes("    action: human.task") && source.includes(`  - id: ${id}_cancellation\n`)) {
+    result += extractStep(source, `${id}_cancellation`);
+  }
+  return result;
 }
 
 for (const [name, definition] of definitions) {
@@ -1811,7 +1820,7 @@ test("native terminal replacement captures retained and nonempty correction", {
       extractStep(source, "capture"),
       "  - id: retain_candidate\n    depends: capture\n    run: test \"$RETAIN\" = no\n",
       "  - id: dependency_review\n    depends: retain_candidate\n    action: human.task\n    with:\n      prompt: Synthetic dependency reviewer releases captured candidate for rebase.\n",
-      extractStep(source, "rebase"),
+      extractStep(source, "rebase").replace(/depends: dependency_review(?:_cancellation)?/, "depends: dependency_review"),
       "handler_on:\n  exit:\n    run: |\n" + extractScript(definition, "  exit:").split("\n").map(line => "      " + line).join("\n") + "\n",
     ].join(""));
     dagu("validate", file);
@@ -1924,7 +1933,7 @@ test("real Dagu retries rebase after a six-second index lock", {
     const lock = git(repo.worktree, "rev-parse", "--git-path", "index.lock");
     writeFileSync(lock, "");
     const source = readFileSync(definitions[0][1], "utf8");
-    const step = extractStep(source, "rebase").replace("    depends: dependency_review\n", "");
+    const step = extractStep(source, "rebase").replace(/    depends: dependency_review(?:_cancellation)?\n/, "");
     const file = join(home, "dags", "lock-retry.yaml");
     const dagEnv = Object.entries(featureScriptEnv(repo)).map(([key, value]) => `  ${key}: ${JSON.stringify(value ?? "")}`).join("\n");
     writeFileSync(file, `name: lock-retry\nenv:\n${dagEnv}\nsteps:\n${step}`);
@@ -2266,7 +2275,7 @@ for (const [name, definition] of definitions) {
               "steps:\n", ...(mode === "poc" ? ["admission", "admit"].map(id => extractStep(source, id)) : []), triage, decision,
               ...["detect_start_primary", "start_primary_unavailable", "start_gate", ...(mode === "poc" ? ["recover_start_gate"] : [])].map(id => extractStep(source, id)),
               implementation,
-              ...["detect_close_primary", "close_primary_unavailable", "close_gate"].map(id => extractStep(source, id)),
+              ...["detect_close_primary", "close_primary_unavailable", "close_gate"].map(id => extractStep(source, id).replace("await_merge_cancellation", "await_merge")),
               "handler_on:\n", source.slice(source.indexOf("  exit:\n")),
             ].join("");
             const dag = join(home, "dags", "feature.yaml");
@@ -2606,7 +2615,7 @@ for (const [name, definition] of definitions) {
             .replace(/      default: .+\n/, `      default: ${JSON.stringify(procedure)}\n`)
             .replace(/      enum: .+\n/, `      enum: [${JSON.stringify(procedure)}]\n`);
           const params = `params:\n  type: object\n  properties:\n${validationParam}`;
-          const gate = extractStep(source, "gate").replace("depends: conflict_review", "depends: implement")
+          const gate = extractStep(source, "gate").replace(/depends: conflict_review(?:_cancellation)?/, "depends: implement")
             .replace(/    retry_policy:\n      limit: 1\n      interval_sec: 5\n/, "")
             .replace("    run: |", "    preconditions:\n      - condition: '${steps.triage.outputs.POC}'\n        expected: 'no'\n    run: |");
           const vars = { ...featureScriptEnv(repo), RUN: id, OMP_SESSION_ID: "parent-id", DAGU_PORT: String(port), GATE: mode === "gate-fail" ? "exit 1" : `printf 'gate\\n' >> ${JSON.stringify(join(root, id + ".gates"))}` };
@@ -2764,7 +2773,9 @@ await dispatchStage("implement",(name,value)=>require("node:fs").appendFileSync(
     chmodSync(join(fixtureBin, "gh"), 0o755);
     const steps = ["implement", "capture", "rebase", "conflict_review", "gate", "recover_gate", "quality_prepare",
       "quality_review", "quality_admit", "quality_transition", "validation", "push"].map(step =>
-      (step === "quality_review" ? qualityActor : extractStep(source, step)).replace("    depends: dependency_review\n", "    depends: capture\n")).join("\n");
+      (step === "quality_review" ? qualityActor : extractStep(source, step))
+        .replace(/    depends: recover_start_gate(?:_cancellation)?\n/, "    depends: triage\n")
+        .replace(/    depends: dependency_review(?:_cancellation)?\n/, "    depends: capture\n")).join("\n");
     const dag = join(home, "dags", "feature.yaml");
     writeFileSync(dag, `name: feature\ntype: graph\nshell: bash\nmax_active_steps: 1\nparams:\n  - ISSUE: "189"\n  - OMP_SESSION_ID: parent-id\nenv:\n${Object.entries({
       ISSUE: "189", PRIMARY: repo.primary, WORKTREE: repo.worktree, BRANCH: repo.branch, PATH: env.PATH,
@@ -3234,7 +3245,7 @@ test("real Dagu gate exclusion covers completion, retry, native rewind, BEHIND a
           + Object.entries(vars).map(([key, value]) => `  - ${key}: ${JSON.stringify(value)}\n`).join("")
           + "steps:\n  - id: admission\n    action: human.task\n    with:\n      prompt: Admit disposable gate candidate\n"
           + "  - id: rebase\n    depends: admission\n    run: echo rebase\n  - id: conflict_review\n    depends: rebase\n    run: echo clean\n"
-          + extractStep(source, "gate")
+          + extractStep(source, "gate").replace(/depends: conflict_review(?:_cancellation)?/, "depends: conflict_review")
           + "  - id: rewind\n    depends: gate\n    preconditions:\n      - condition: '${CHECKPOINT}'\n        expected: rewind\n    action: human.task\n    with:\n      prompt: Disposable native rebase rewind\n      push_back:\n        rewind_to: rebase\n"
           + extractStep(source, "await_merge").replace("depends: auto_merge", "depends: gate")
             .replace("    action: human.task", "    preconditions:\n      - condition: '${CHECKPOINT}'\n        expected: merge\n    action: human.task"));
