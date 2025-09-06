@@ -205,6 +205,27 @@ requests TERM restart, verifies N running and one queued barrier run for stamped
 capacity N, then reopens admission.
 This skill does not install Dagu, and it carries no logic specific to any repository. Bootstrap renders repository policy; run parameters carry operational issue inputs.
 
+Station executor installation is a separate explicit operation:
+`dagu-station-install --executor-action install --source "$PRIMARY" --commit
+"<sha40>" --launcher-dir "$HOME/.local/bin" --evidence "<evidence>/install.json"`.
+It creates an independent detached clone under
+`$DAGU_HOME/executors/<package>-<version>-<sha40>` with its own Git objects.
+The station shim invokes Bun directly and selects each `RUN`'s immutable receipt
+bundle, or the active pin without `RUN`. Missing or unsupported historical pins
+fail closed; never replace a historical receipt's bundle with the active bundle.
+
+Use `--executor-action inventory` before migration, retaining its fresh JSON
+evidence outside versioned source. `migrate` and `prune` explicitly select one
+`--executor PATH` and require `--source`, `--admission-close`, `--admission-open`
+and `--evidence`. They require quiescence, preserve all non-terminal references
+(including historical waiting runs), and leave admission closed on failure.
+Migration requires unchanged bundle/entrypoint identity before changing the old
+registration. Pruning is reference-based, never age-only, and keeps active pins,
+uncertain references and development/foreign/dirty resources.
+See [deployment and retention](../../../../docs/operations/deployment.md#independent-station-executors-and-reference-based-retention)
+for exact commands, evidence fields and operator authority. Local role jobs do
+not authorize real station installation, migration, removal or validation.
+
 ## Global history retention
 
 The versioned global configuration in [`../../dagu/base.yaml`](../../dagu/base.yaml)

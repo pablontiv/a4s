@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.22
+
+- Install station executors as independent exact-commit clones under `$DAGU_HOME/executors`, without development-clone worktree registrations or shared Git objects (#623).
+- Route station role jobs through each run's immutable receipt; retain unsupported historical bundles without substituting the active pin.
+- Inventory non-terminal references and record bundle-resolution/worktree evidence around explicit migration and reference-based retention. Preserve host-bound PRIMARY resolution when reading enqueued specs. Require operator-owned admission hooks for migration/removal and preserve active, referenced, dirty, foreign and development checkouts.
+- Replace changed station launchers atomically without a separate existence check or writing through symlinks; byte-identical reinstalls preserve the launcher's mtime.
+
 ## 0.5.21
 
 - Reuse successful gate test and typecheck results across linked worktrees from a station-local content-addressed cache. Git-state checks, including `bundle-version.test.ts`, run on every gate and are not stored. A failing task is never reused as a pass. The declared `GATE` command and `tested_sha` publication stay unchanged, and CI still runs the full uncached suite (#632).
