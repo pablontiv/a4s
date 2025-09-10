@@ -32,11 +32,17 @@ function fixture() {
   return { root, primary, branch, worktree, git, history, row, env };
 }
 function script(definition: string, marker: string) {
-  const yaml = readFileSync(definition, "utf8");
-  const offset = yaml.indexOf(marker), start = yaml.indexOf("    run: |\n", offset) + 11;
-  const lines = yaml.slice(start).split("\n");
-  const end = lines.findIndex(line => line !== "" && !line.startsWith("      "));
-  return withResourceGuard(lines.slice(0, end < 0 ? undefined : end).map(line => line.slice(6)).join("\n"), definition);
+  const lines = readFileSync(definition, "utf8").split("\n");
+  const offset = lines.indexOf(marker);
+  assert.notEqual(offset, -1, `missing ${marker} in ${definition}`);
+  const anchor = lines.indexOf("    run: &feature_cleanup |");
+  const start = anchor >= 0 && (marker === "  exit:" || marker === "  - id: close_gate")
+    ? anchor : lines.indexOf("    run: |", offset);
+  assert.notEqual(start, -1, `missing run block after ${marker}`);
+  let end = start + 1;
+  while (end < lines.length && (lines[end]!.startsWith("      ") || lines[end] === "")) end++;
+  return withResourceGuard((marker === "  - id: close_gate" ? "CLEANUP_CLOSE=true\n" : "") +
+    lines.slice(start + 1, end).map(line => line.slice(6)).join("\n"), definition);
 }
 
 test("OMP bash resource guard protects feature and PoC owners in every active state and canonical alias", async t => {

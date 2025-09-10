@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -20,11 +20,14 @@ function extractScript(definition: string, marker: string, after = 0): string {
   const lines = readFileSync(definition, "utf8").split("\n");
   const markerIndex = lines.indexOf(marker, after);
   assert.notEqual(markerIndex, -1, `missing ${marker} in ${definition}`);
-  const runIndex = lines.indexOf("    run: |", markerIndex);
+  const anchor = lines.indexOf("    run: &feature_cleanup |");
+  const runIndex = anchor >= 0 && (marker === "  exit:" || marker === "  - id: close_gate")
+    ? anchor : lines.indexOf("    run: |", markerIndex);
   assert.notEqual(runIndex, -1, `missing run block after ${marker}`);
   let end = runIndex + 1;
   while (end < lines.length && (lines[end]!.startsWith("      ") || lines[end] === "")) end++;
-  return withResourceGuard(lines.slice(runIndex + 1, end).map((line) => line.slice(6)).join("\n"), definition);
+  return withResourceGuard((marker === "  - id: close_gate" ? "CLEANUP_CLOSE=true\n" : "") +
+    lines.slice(runIndex + 1, end).map((line) => line.slice(6)).join("\n"), definition);
 }
 
 function git(cwd: string, ...args: string[]): string {
@@ -36,7 +39,7 @@ function hasRef(cwd: string, ref: string): boolean {
 
 type Repo = { root: string; outside: string; primary: string; remote: string; worktree: string; branch: string };
 function repository(branch = "dagu/issue-209", worktreeName = "issue-209"): Repo {
-  const root = mkdtempSync(join(tmpdir(), "omp-dagu-cleanup-"));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "omp-dagu-cleanup-")));
   const outside = join(root, "dagu-run-root");
   const primary = join(root, "primary");
   const remote = join(root, "remote.git");
@@ -55,13 +58,32 @@ function repository(branch = "dagu/issue-209", worktreeName = "issue-209"): Repo
   mkdirSync(join(primary, ".workspace", "worktrees"), { recursive: true });
   git(primary, "worktree", "add", "-b", branch, worktree, "origin/main");
   stubHistory(root);
+  register({ root, outside, primary, remote, worktree, branch });
   return { root, outside, primary, remote, worktree, branch };
+}
+
+function state(repo: Repo): string {
+  return git(repo.primary, "rev-parse", "--path-format=absolute", "--git-path", "dagu-feature/runs/test-run");
+}
+
+function owner(repo: Repo): string {
+  const hash = execFileSync("git", ["hash-object", "--stdin"], { input: repo.branch, encoding: "utf8" }).trim();
+  return git(repo.primary, "rev-parse", "--path-format=absolute", "--git-path", `dagu-feature/resources/${hash}.json`);
+}
+
+function register(repo: Repo): void {
+  mkdirSync(state(repo), { recursive: true });
+  mkdirSync(join(owner(repo), ".."), { recursive: true });
+  const resource = JSON.stringify({ run: "test-run", primary: realpathSync(repo.primary), branch: repo.branch, worktree: realpathSync(repo.worktree) });
+  writeFileSync(join(state(repo), "resource.json"), resource);
+  writeFileSync(owner(repo), resource);
 }
 
 function featureCommit(repo: Repo): string {
   writeFileSync(join(repo.worktree, "value.txt"), "feature\n");
   git(repo.worktree, "add", "value.txt");
   git(repo.worktree, "commit", "-m", "feature");
+  writeFileSync(join(state(repo), "tested-sha"), git(repo.worktree, "rev-parse", "HEAD") + "\n");
   return git(repo.worktree, "rev-parse", "HEAD");
 }
 
@@ -76,10 +98,11 @@ function squashMerge(repo: Repo, deleteRemote: boolean): string {
   return tested;
 }
 
-function stubGh(repo: Repo, tested: string): void {
+function stubGh(repo: Repo, tested: string, overrides: Record<string, unknown> = {}): void {
   const bin = join(repo.root, "bin");
   mkdirSync(bin, { recursive: true });
   const executable = join(bin, "gh");
+  const pr = JSON.stringify({ number: 209, state: "MERGED", headRefOid: tested, mergeCommit: { oid: git(repo.primary, "rev-parse", "HEAD") }, ...overrides });
   writeFileSync(executable, `#!/bin/sh
 case " $* " in *" --repo "*) ;; *)
   if ! git -C "$PWD" rev-parse --git-dir >/dev/null 2>&1; then
@@ -88,9 +111,7 @@ case " $* " in *" --repo "*) ;; *)
   fi
 esac
 case "$*" in
-  *"pr view"*"--json number"*) printf '209\\n' ;;
-  *"pr view"*"--json state"*) printf 'MERGED\\n' ;;
-  *"pr view"*"--json headRefOid"*) printf '%s\\n' ${JSON.stringify(tested)} ;;
+  *"pr view"*) printf '%s\\n' ${JSON.stringify(pr)} ;;
   *"pr checks"*) printf 'SUCCESS\\n' ;;
   "pr diff 209 --repo ${repo.remote} --name-only") printf 'value.txt\\n' ;;
   *) printf 'unexpected gh arguments: %s\\n' "$*" >&2; exit 3 ;;
@@ -104,11 +125,11 @@ function stubGitNoop(repo: Repo, operation: "worktree" | "branch" | "remote"): v
   const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
   const registeredWorktree = git(repo.worktree, "rev-parse", "--show-toplevel");
   const cases = operation === "worktree"
-    ? `*"worktree remove"*|*"branch -D"*) exit 0 ;;
+    ? `*"worktree remove"*|*"update-ref -d"*) exit 0 ;;
   *"worktree list"*) ${JSON.stringify(realGit)} "$@"; printf 'worktree %s\\n' ${JSON.stringify(registeredWorktree)}; exit 0 ;;`
     : operation === "branch"
-      ? '*"branch -D"*) exit 0 ;;'
-      : '*"push origin --delete"*) exit 0 ;;';
+      ? '*"update-ref -d"*|*"branch -D"*) exit 0 ;;'
+      : '*"push --force-with-lease="*) exit 0 ;;';
   writeFileSync(executable, `#!/bin/sh
 case " $* " in
   ${cases}
@@ -143,6 +164,112 @@ function run(script: string, repo: Repo, extra: Record<string, string> = {}) {
 
 for (const [name, definition] of featureDefinitions) {
   const closeGate = extractScript(definition, "  - id: close_gate");
+  const exit = extractScript(definition, "  exit:");
+  for (const [mode, cleanup] of [["close", closeGate], ["exit", exit]] as const) {
+    test(`${name} ${mode} verified squash cleanup converges and preserves a neighbouring run`, () => {
+      const repo = repository();
+      try {
+        const tested = squashMerge(repo, false);
+        stubGh(repo, tested);
+        const neighbour = join(repo.primary, ".workspace", "worktrees", "issue-2090");
+        git(repo.primary, "worktree", "add", "-b", "dagu/issue-2090", neighbour, "origin/main");
+        writeFileSync(join(neighbour, "private.txt"), "neighbour changes\n");
+        const neighbourState = join(repo.primary, ".git", "dagu-feature", "runs", "test-run-neighbour");
+        mkdirSync(neighbourState, { recursive: true });
+        writeFileSync(join(neighbourState, "resource.json"), "neighbour metadata\n");
+        const neighbourHead = git(neighbour, "rev-parse", "HEAD");
+        for (let attempt = 0; attempt < 3; attempt++) {
+          const result = run(cleanup, repo);
+          assert.equal(result.status, 0, result.stderr);
+          assert.match(result.stdout, /proof=squash/);
+          assert.equal(existsSync(repo.worktree), false);
+          assert.equal(hasRef(repo.primary, `refs/heads/${repo.branch}`), false);
+          assert.equal(readFileSync(join(state(repo), "cleanup-phase"), "utf8"), "complete\n");
+          assert.deepEqual(JSON.parse(readFileSync(join(state(repo), "cleanup-proof.json"), "utf8")), {
+            candidate: tested, base: git(repo.primary, "rev-parse", "origin/main"),
+            squash: git(repo.primary, "rev-parse", "origin/main"), proof: "squash",
+          });
+          assert.equal(git(neighbour, "rev-parse", "HEAD"), neighbourHead);
+          assert.equal(readFileSync(join(neighbour, "private.txt"), "utf8"), "neighbour changes\n");
+          assert.equal(readFileSync(join(neighbourState, "resource.json"), "utf8"), "neighbour metadata\n");
+        }
+      } finally { rmSync(repo.root, { recursive: true, force: true }); }
+    });
+
+    for (const scenario of ["dirty", "published", "unintegrated", "head-mismatch", "squash-mismatch", "ambiguous", "owner", "candidate"] as const) {
+      test(`${name} ${mode} preserves ${scenario} resources with durable diagnostics`, () => {
+        const repo = repository();
+        try {
+          const tested = ["published", "unintegrated"].includes(scenario)
+            ? featureCommit(repo) : squashMerge(repo, false);
+          if (scenario === "published") git(repo.worktree, "push", "origin", `HEAD:${repo.branch}`);
+          if (scenario === "dirty") writeFileSync(join(repo.worktree, "private.txt"), "local edits\n");
+          if (scenario === "owner") writeFileSync(owner(repo), JSON.stringify({ run: "another-run" }));
+          if (scenario === "candidate") writeFileSync(join(state(repo), "tested-sha"), "f".repeat(40));
+          stubGh(repo, tested, scenario === "head-mismatch" ? { headRefOid: "e".repeat(40) }
+            : scenario === "squash-mismatch" ? { mergeCommit: { oid: tested } }
+            : scenario === "ambiguous" ? { mergeCommit: null }
+            : ["published", "unintegrated"].includes(scenario) ? { state: "OPEN" } : {});
+          const result = run(cleanup, repo);
+          assert.equal(result.status, mode === "close" ? 1 : 0, result.stderr);
+          assert.equal(existsSync(repo.worktree), true);
+          assert.equal(git(repo.worktree, "rev-parse", "HEAD"), tested);
+          assert.equal(hasRef(repo.primary, `refs/heads/${repo.branch}`), true);
+          const diagnostic = readFileSync(join(state(repo), "cleanup-diagnostic"), "utf8");
+          assert.match(diagnostic, {
+            dirty: /dirty worktree/, published: /publication alone/, unintegrated: /not MERGED/,
+            "head-mismatch": /PR head SHA differs/, "squash-mismatch": /not confirmed/,
+            ambiguous: /not confirmed/, owner: /owner or identity changed/, candidate: /tested candidate SHA differs/,
+          }[scenario]);
+          assert.match(result.stderr, /run=test-run.*preserved:/);
+          if (scenario === "dirty") assert.equal(readFileSync(join(repo.worktree, "private.txt"), "utf8"), "local edits\n");
+        } finally { rmSync(repo.root, { recursive: true, force: true }); }
+      });
+    }
+
+    test(`${name} ${mode} resumes after interruption between worktree and branch removal`, () => {
+      const repo = repository();
+      try {
+        const tested = squashMerge(repo, false);
+        stubGh(repo, tested);
+        const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+        const wrapper = join(repo.root, "bin", "git");
+        writeFileSync(wrapper, `#!/bin/sh\ncase " $* " in *"update-ref -d"*) exit 1 ;; esac\nexec ${JSON.stringify(realGit)} "$@"\n`);
+        chmodSync(wrapper, 0o755);
+        const interrupted = run(cleanup, repo);
+        assert.equal(interrupted.status, mode === "close" ? 1 : 0);
+        assert.match(interrupted.stderr, /local branch removal failed/);
+        assert.equal(existsSync(repo.worktree), false);
+        assert.equal(hasRef(repo.primary, `refs/heads/${repo.branch}`), true);
+        assert.equal(readFileSync(join(state(repo), "cleanup-phase"), "utf8"), "worktree-removed\n");
+        rmSync(wrapper);
+        const resumed = run(cleanup, repo);
+        assert.equal(resumed.status, 0, resumed.stderr);
+        assert.equal(hasRef(repo.primary, `refs/heads/${repo.branch}`), false);
+        assert.equal(readFileSync(join(state(repo), "cleanup-phase"), "utf8"), "complete\n");
+      } finally { rmSync(repo.root, { recursive: true, force: true }); }
+    });
+
+    for (const change of ["SHA", "owner"] as const) {
+    test(`${name} ${mode} preserves a branch whose ${change} changed after interrupted cleanup`, () => {
+      const repo = repository();
+      try {
+        const tested = squashMerge(repo, false);
+        stubGh(repo, tested);
+        writeFileSync(join(state(repo), "cleanup-head"), tested + "\n");
+        git(repo.primary, "worktree", "remove", repo.worktree);
+        writeFileSync(join(state(repo), "cleanup-phase"), "worktree-removed\n");
+        if (change === "SHA") git(repo.primary, "update-ref", `refs/heads/${repo.branch}`, git(repo.primary, "rev-parse", "main"));
+        else writeFileSync(owner(repo), JSON.stringify({ run: "neighbour-run" }));
+        const result = run(cleanup, repo);
+        assert.equal(result.status, mode === "close" ? 1 : 0, result.stderr);
+        assert.match(result.stderr, change === "SHA" ? /branch SHA changed/ : /owner or identity changed/);
+        assert.equal(hasRef(repo.primary, `refs/heads/${repo.branch}`), true);
+        assert.equal(readFileSync(join(state(repo), "cleanup-phase"), "utf8"), "worktree-removed\n");
+      } finally { rmSync(repo.root, { recursive: true, force: true }); }
+    });
+    }
+  }
 
   test(`${name} close_gate cleans squash-merged worktree and absent remote branch outside a repository`, () => {
     const repo = repository();
@@ -239,6 +366,13 @@ for (const [name, definition] of featureDefinitions) {
         const result = run(closeGate, repo);
         assert.notEqual(result.status, 0);
         assert.match(result.stderr, new RegExp(`close_gate: .*${operation === "branch" ? "local branch" : operation}.*remains, expected removed`));
+        assert.equal(readFileSync(join(state(repo), "cleanup-phase"), "utf8"),
+          { worktree: "removing-worktree\n", branch: "worktree-removed\n", remote: "branch-removed\n" }[operation]);
+        rmSync(join(repo.root, "bin", "git"));
+        const resumed = run(exit, repo);
+        assert.equal(resumed.status, 0, resumed.stderr);
+        assert.equal(readFileSync(join(state(repo), "cleanup-phase"), "utf8"), "complete\n");
+        assert.equal(git(repo.primary, "ls-remote", "origin", `refs/heads/${repo.branch}`), "");
       } finally { rmSync(repo.root, { recursive: true, force: true }); }
     });
   }

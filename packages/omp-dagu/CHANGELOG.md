@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.81
+
+- Share ownership-checked, integration-proven, idempotent feature cleanup across close and exit; retain dirty or uncertain resources with durable evidence and report interrupted cleanup phases in the reconciler (#281).
+
 ## 0.3.80
 
 - Reload the status and triage extension generations through `/reload-plugins`, preserving the builtin resource refresh with idle deferral, bounded lifecycle cleanup and rollback on import or factory failure (#297).
