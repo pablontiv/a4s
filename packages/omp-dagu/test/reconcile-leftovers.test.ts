@@ -126,6 +126,32 @@ for (const [name, definition] of definitions) {
     } finally { rmSync(repo.root, { recursive: true, force: true }); }
   });
 
+  test(`${name} reports interrupted cleanup with run, resource and last phase alongside an active neighbour`, () => {
+    const repo = repository();
+    try {
+      const worktree = addWorktree(repo, "issue-281", "dagu/issue-281");
+      const neighbour = addWorktree(repo, "issue-2810", "dagu/issue-2810");
+      writeFileSync(join(neighbour, "local.txt"), "active run\n");
+      git(repo.primary, "worktree", "remove", worktree);
+      const state = git(repo.primary, "rev-parse", "--path-format=absolute", "--git-path", "dagu-feature/runs/interrupted-281");
+      mkdirSync(state, { recursive: true });
+      writeFileSync(join(state, "resource.json"), JSON.stringify({ run: "interrupted-281", primary: repo.primary, worktree, branch: "dagu/issue-281" }));
+      writeFileSync(join(state, "cleanup-phase"), "worktree-removed\n");
+      const history: HistoryRun[] = [
+        { name: "feature", dagRunId: "interrupted-281", status: "failed", startedAt: "2026-10-15T17:00:00Z", params: params(repo.primary, { issue: "281", branch: "dagu/issue-281" }) },
+        { name: "feature", dagRunId: "active-2810", status: "waiting", startedAt: "2026-10-15T18:00:00Z", params: params(repo.primary, { issue: "2810", branch: "dagu/issue-2810" }) },
+      ];
+      const result = runScript(script, repo, history, []);
+      assert.equal(result.status, 1);
+      assert.ok(result.stderr.includes(`CLEANUP_RESIDUAL run=interrupted-281 worktree=${worktree} branch=dagu/issue-281 last_phase=worktree-removed evidence=${state}`), result.stderr);
+      assert.equal(readFileSync(join(neighbour, "local.txt"), "utf8"), "active run\n");
+      assert.equal(readFileSync(join(state, "cleanup-phase"), "utf8"), "worktree-removed\n");
+      git(repo.primary, "branch", "-D", "dagu/issue-281");
+      writeFileSync(join(state, "cleanup-phase"), "complete\n");
+      assert.equal(runScript(script, repo, history, []).status, 0);
+    } finally { rmSync(repo.root, { recursive: true, force: true }); }
+  });
+
   test(`${name} skips missing primaries and still reports a real leftover`, () => {
     const repo = repository();
     try {

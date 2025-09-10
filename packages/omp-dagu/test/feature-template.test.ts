@@ -22,11 +22,14 @@ function extractScript(definition: string, marker: string): string {
   const lines = readFileSync(definition, "utf8").split("\n");
   const markerIndex = lines.indexOf(marker);
   assert.notEqual(markerIndex, -1, `missing ${marker} in ${definition}`);
-  const runIndex = lines.indexOf("    run: |", markerIndex);
+  const anchor = lines.indexOf("    run: &feature_cleanup |");
+  const runIndex = anchor >= 0 && (marker === "  exit:" || marker === "  - id: close_gate")
+    ? anchor : lines.indexOf("    run: |", markerIndex);
   assert.notEqual(runIndex, -1, `missing run block after ${marker}`);
   let end = runIndex + 1;
   while (end < lines.length && (lines[end]!.startsWith("      ") || lines[end] === "")) end++;
-  return withResourceGuard(lines.slice(runIndex + 1, end).map((line) => line.slice(6)).join("\n"), definition);
+  return withResourceGuard((marker === "  - id: close_gate" ? "CLEANUP_CLOSE=true\n" : "") +
+    lines.slice(runIndex + 1, end).map((line) => line.slice(6)).join("\n"), definition);
 }
 
 function git(cwd: string, ...args: string[]): string {
@@ -75,6 +78,13 @@ function repository(): Repository {
   writeFileSync(git(worktree, "rev-parse", "--path-format=absolute", "--git-path", "dagu-feature-owner"), identity);
   writeFileSync(join(state, "base"), git(worktree, "rev-parse", "HEAD") + "\n");
   recordCandidate({ root, primary, worktree, branch, state });
+  const resource = JSON.stringify({ run: "test-run", primary, branch, worktree });
+  writeFileSync(join(state, "resource.json"), resource);
+  const hash = execFileSync("git", ["hash-object", "--stdin"], { input: branch, encoding: "utf8" }).trim();
+  const resources = join(primary, ".git", "dagu-feature", "resources");
+  mkdirSync(resources, { recursive: true });
+  writeFileSync(join(resources, `${hash}.json`), resource);
+  writeFileSync(join(state, "tested-sha"), git(worktree, "rev-parse", "HEAD") + "\n");
   return { root, primary, worktree, branch, state };
 }
 
@@ -93,6 +103,7 @@ function commit(repo: Repository, path: string, content: string): void {
   git(repo.worktree, "add", path);
   git(repo.worktree, "commit", "-m", "feature change");
   recordCandidate(repo);
+  writeFileSync(join(repo.state, "tested-sha"), git(repo.worktree, "rev-parse", "HEAD") + "\n");
 }
 
 function stubGh(repo: Repository, stdout: string, status: number, stderr = ""): void {
@@ -115,9 +126,7 @@ function stubSuccessfulCloseGateGh(repo: Repository, files = "README.txt"): void
     executable,
     `#!/bin/sh
 case "$*" in
-  "pr view ${repo.branch} --repo ${repo.root}/remote.git --json number --jq .number") printf '190\\n' ;;
-  "pr view 190 --repo ${repo.root}/remote.git --json state --jq .state") printf 'MERGED\\n' ;;
-  "pr view 190 --repo ${repo.root}/remote.git --json headRefOid --jq .headRefOid") printf '${head}\\n' ;;
+  "pr view ${repo.branch} --repo ${repo.root}/remote.git --json number,state,headRefOid,mergeCommit") printf '%s\\n' '${JSON.stringify({ number: 190, state: "MERGED", headRefOid: head, mergeCommit: { oid: head } })}' ;;
   "pr checks 190 --repo ${repo.root}/remote.git --required --json name,state --jq "*) printf 'SUCCESS\\n' ;;
   "pr diff 190 --repo ${repo.root}/remote.git --name-only") printf '%s\\n' ${JSON.stringify(files)} ;;
   *) printf 'unexpected gh invocation: %s\\n' "$*" >&2; exit 1 ;;
@@ -168,6 +177,13 @@ for (const [name, definition] of definitions) {
   const exitScript = extractScript(definition, "  exit:");
   const checkpointScript = extractScript(definition, "  - id: checkpoint_push");
   const closeGateScript = extractScript(definition, "  - id: close_gate");
+
+  test(`${name} close and exit resolve the same cleanup script with merged-close mode`, () => {
+    const source = readFileSync(definition, "utf8");
+    assert.match(source, /- id: close_gate\n[\s\S]*?- CLEANUP_CLOSE: "true"\n    run: &feature_cleanup \|/);
+    assert.match(source, /  exit:\n    run: \*feature_cleanup/);
+    assert.equal(closeGateScript.replace("CLEANUP_CLOSE=true\n", ""), exitScript);
+  });
   const autoMergeScript = extractScript(definition, "  - id: auto_merge");
 
   const captureScript = extractScript(definition, "  - id: capture");
@@ -217,7 +233,7 @@ for (const [name, definition] of definitions) {
       const before = git(repo.worktree, "rev-parse", "HEAD");
       const rejected = spawnSync("bash", ["-c", captureScript], { encoding: "utf8", env: featureScriptEnv(repo) });
       assert.notEqual(rejected.status, 0);
-      assert.match(runScript(exitScript, repo), /Unpublished work kept/);
+      assert.match(runScript(exitScript, repo), /dirty worktree; files retained/);
       assert.equal(git(repo.worktree, "rev-parse", "HEAD"), before);
       assert.equal(readFileSync(join(repo.worktree, "delivery"), "utf8"), "keep this\n");
       assert.equal(hasRef(repo.primary, `refs/heads/${repo.branch}`), true);
@@ -675,9 +691,7 @@ esac
       assert.equal(existsSync(repo.worktree), true);
       assert.match(output, new RegExp(`branch ${repo.branch.replace("/", "\\/")}`));
       assert.match(output, new RegExp(`worktree ${repo.worktree.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
-      assert.match(output, /Terminal failure outside recovery checkpoints/);
-      assert.match(output, /available for operator recovery/);
-      assert.match(output, /Recovery: fetch refs\/dagu\/checkpoints/);
+      assert.match(output, /Recovery: preserve/);
       assert.match(output, /suffixed run ID/);
     } finally {
       rmSync(repo.root, { recursive: true, force: true });
@@ -695,7 +709,7 @@ esac
       git(repo.primary, "commit", "-m", "squash feature change");
       git(repo.primary, "push", "origin", "main");
       git(repo.worktree, "push", "origin", "--delete", repo.branch);
-      stubGh(repo, `${JSON.stringify({ state: "MERGED", headRefOid: head })}\n`, 0);
+      stubGh(repo, `${JSON.stringify({ state: "MERGED", headRefOid: head, mergeCommit: { oid: git(repo.primary, "rev-parse", "HEAD") } })}\n`, 0);
       runScript(exitScript, repo);
       assert.equal(existsSync(repo.worktree), false);
       assert.equal(hasRef(repo.primary, `refs/heads/${repo.branch}`), false);
@@ -716,9 +730,8 @@ esac
       const output = runScript(exitScript, repo);
       assert.equal(hasRef(repo.primary, `refs/heads/${repo.branch}`), true);
       assert.equal(existsSync(repo.worktree), true);
-      assert.match(output, /Unpublished work kept/);
-      assert.match(output, /Terminal failure outside recovery checkpoints/);
-      assert.match(output, /Recovery: fetch refs\/dagu\/checkpoints/);
+      assert.match(output, /PR head SHA differs/);
+      assert.match(output, /Recovery: preserve/);
     } finally {
       rmSync(repo.root, { recursive: true, force: true });
     }
@@ -732,7 +745,7 @@ esac
       const output = runScript(exitScript, repo);
       assert.equal(hasRef(repo.primary, `refs/heads/${repo.branch}`), true);
       assert.equal(existsSync(repo.worktree), true);
-      assert.match(output, /Unpublished work kept/);
+      assert.match(output, /PR integration query failed/);
     } finally {
       rmSync(repo.root, { recursive: true, force: true });
     }
@@ -750,7 +763,8 @@ esac
       });
       assert.notEqual(failed.status, 0);
       runScript(exitScript, repo);
-      assert.equal(existsSync(repo.worktree), false);
+      assert.equal(existsSync(repo.worktree), true);
+      assert.equal(git(repo.worktree, "rev-parse", "HEAD"), head);
       const recovery = join(repo.root, "recovery");
       execFileSync("git", ["clone", join(repo.root, "remote.git"), recovery], { stdio: "pipe" });
       git(recovery, "fetch", "origin", "refs/dagu/checkpoints/issue-189");
@@ -759,14 +773,30 @@ esac
     } finally { rmSync(repo.root, { recursive: true, force: true }); }
   });
 
-  test(`${name} exit cleans a published head`, () => {
+  test(`${name} close_gate removes its recorded checkpoint after the integrated candidate advances`, () => {
+    const repo = repository();
+    try {
+      commit(repo, "README.txt", "checkpoint candidate\n");
+      runScript(checkpointScript, repo);
+      commit(repo, "README.txt", "integrated correction\n");
+      git(repo.primary, "merge", "--ff-only", repo.branch);
+      git(repo.primary, "push", "origin", "main");
+      stubSuccessfulCloseGateGh(repo);
+      runScript(closeGateScript, repo);
+      assert.equal(git(repo.primary, "ls-remote", "origin", "refs/dagu/checkpoints/issue-189"), "");
+    } finally { rmSync(repo.root, { recursive: true, force: true }); }
+  });
+
+  test(`${name} exit preserves a merely published head with integration diagnostics`, () => {
     const repo = repository();
     try {
       commit(repo, "README.txt", "published\n");
       git(repo.worktree, "push", "origin", `HEAD:${repo.branch}`);
-      runScript(exitScript, repo);
-      assert.equal(existsSync(repo.worktree), false);
-      assert.equal(hasRef(repo.primary, `refs/heads/${repo.branch}`), false);
+      stubGh(repo, JSON.stringify({ state: "OPEN" }), 0);
+      const output = runScript(exitScript, repo);
+      assert.equal(existsSync(repo.worktree), true);
+      assert.equal(hasRef(repo.primary, `refs/heads/${repo.branch}`), true);
+      assert.match(output, /publication alone is not integration/);
     } finally {
       rmSync(repo.root, { recursive: true, force: true });
     }
@@ -924,6 +954,7 @@ for (const [name, definition] of definitions) {
     const repo = repository();
     git(repo.primary, "worktree", "remove", repo.worktree);
     git(repo.primary, "branch", "-D", repo.branch);
+    rmSync(join(repo.primary, ".git", "dagu-feature", "resources"), { recursive: true });
     rmSync(join(repo.root, "bin", "dagu"));
     stubGh(repo, "OPEN\n", 0);
     const home = join(repo.root, "dagu-home");
@@ -981,7 +1012,7 @@ for (const [name, definition] of definitions) {
         "  - id: triage\n    depends: admit\n    run: echo POC=no >> \"$DAGU_OUTPUT_FILE\"\n    outputs:\n      - name: POC\n",
         "  - id: triage_decision\n    depends: triage\n    run: echo reviewed\n",
         ...["detect_start_primary", "start_primary_unavailable", "start_gate", "recover_start_gate", "implement", "capture"].map(id => extractStep(source, id)),
-        "handler_on:\n", source.slice(source.indexOf("  exit:\n")),
+        "handler_on:\n  exit:\n    run: |\n" + extractScript(definition, "  exit:").split("\n").map(line => "      " + line).join("\n") + "\n",
       ].join(""));
       dagu("validate", file);
       const first = "retained-189", second = `${first}-v2`;
@@ -1226,6 +1257,7 @@ async function runRecovery(fixture: RecoveryFixture, definition: string, mode: R
   try {
     git(repo.primary, "worktree", "remove", repo.worktree);
     git(repo.primary, "branch", "-D", repo.branch);
+    rmSync(join(repo.primary, ".git", "dagu-feature", "resources"), { recursive: true });
     repo.worktree = join(repo.primary, ".workspace", "worktrees", "issue-189");
     writeFileSync(join(repo.primary, ".git", "info", "exclude"), "/.workspace/\n");
     const remote = git(repo.primary, "remote", "get-url", "origin");
@@ -1273,6 +1305,9 @@ esac
     async function waiting(step: string): Promise<LiveDetail> {
       const run = await until(`${id} waiting ${step}`, async () => {
         const run = await state(id, "waiting");
+        if (step === "implement" && run.nodes.some(node => node.step.name === "recover_start_gate" && node.statusLabel === "waiting")) {
+          throw new Error(run.nodes.filter(node => node.stderr).map(node => `${node.step.name}: ${readFileSync(node.stderr!, "utf8")}`).join("\n"));
+        }
         return run.nodes.some(node => node.step.name === step && node.statusLabel === "waiting") ? run : undefined;
       });
       checkpoints.push({ step, iteration: iteration() });
@@ -1378,6 +1413,7 @@ for (const [name, definition] of definitions) {
             } else stubSuccessfulCloseGateGh(repo);
             git(repo.primary, "worktree", "remove", repo.worktree);
             git(repo.primary, "branch", "-D", repo.branch);
+            rmSync(join(repo.primary, ".git", "dagu-feature"), { recursive: true, force: true });
             repo.worktree = join(repo.primary, ".workspace", "worktrees", "issue-189");
             writeFileSync(join(repo.primary, ".git", "info", "exclude"), "/.workspace/\n");
             const pocDefinition = join(repo.primary, ".workspace", "dagu", "dags", "poc.yaml");
@@ -1391,7 +1427,7 @@ for (const [name, definition] of definitions) {
               : "  - id: triage_decision\n    depends: triage\n    run: echo reviewed-implementation\n";
             const implementation = mode === "poc"
               ? extractStep(source, "implement") + "  - id: await_merge\n    depends: implement\n    run: echo merged\n"
-              : `  - id: implement\n    depends: start_gate\n    run: ${mode === "implementation-blocked" ? 'printf "operator changes\\n" > "$PRIMARY/README.txt"' : "echo implementation"}\n  - id: await_merge\n    depends: implement\n    run: echo merged\n`;
+              : `  - id: implement\n    depends: start_gate\n    run: |\n      git -C "$WORKTREE" rev-parse HEAD > "$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")/tested-sha"\n      ${mode === "implementation-blocked" ? 'printf "operator changes\\n" > "$PRIMARY/README.txt"' : "echo implementation"}\n  - id: await_merge\n    depends: implement\n    run: echo merged\n`;
             const script = [
               "type: graph\nshell: bash\nmax_active_steps: 1\n",
               `params:\n  - ISSUE: "189"\n  - PRIMARY: ${repo.primary}\n  - BRANCH: ${repo.branch}\n  - BASE_BRANCH: main\n  - PR_NUMBER: ""\n  - GATE: "true"\n  - REQUIRED_CHECK: validate\n  - OMP_SESSION_ID: close-owner\n`,

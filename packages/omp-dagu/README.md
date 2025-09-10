@@ -177,6 +177,28 @@ recarga módulos de una sesión ya abierta.
 
 Los checkpoints de disponibilidad añaden `cause=<prompt resuelto>` con `primary dirty: <archivos>` o `primary on <rama>, expected <base>`. Conservan el mismo run en Waiting y liberan la cola. El operador restaura PRIMARY limpio en BASE_BRANCH respetando sus cambios, consulta `dagu status --run-id <id> feature` y ejecuta `dagu human-task push-back feature --run-id <id> --step start_primary_unavailable --expected-iteration <iteración observada>` (para cierre: `close_primary_unavailable`; para PoC: DAG `poc`, paso `base_primary_unavailable`). El detector comprueba otra vez; limpiar por sí solo mantiene Waiting. El DAG sigue creando y retirando worktrees.
 
+### Limpieza verificada y recuperación
+
+`close_gate` y `handler_on.exit` comparten el contrato de limpieza del run:
+PRIMARY y worktree canónicos, rama y propietario registrados por `start_gate`,
+head actual y candidato probado. Retiran un worktree limpio con
+`git worktree remove` cuando el candidato está contenido en la base remota
+recién actualizada, o cuando el PR está MERGED con ese mismo candidato probado
+y su commit efectivo de squash está confirmado en la base. Los archivos sucios,
+la mera publicación y las consultas ambiguas conservan recursos y diagnóstico.
+El borrado de refs exige el mismo propietario y SHA; el remoto usa un lease.
+El cierre mergeado verifica además PRIMARY limpio exactamente en la base remota.
+
+La evidencia vive en `<git-dir>/dagu-feature/runs/<RUN>/`: `resource.json`,
+`tested-sha`, `cleanup-head`, `cleanup-proof.json`, `cleanup-phase` y
+`cleanup-diagnostic`. Repetir el script de cleanup con los params originales
+reconoce recursos ya retirados y comprueba otra vez integración y propiedad
+antes de cada retirada pendiente. El reconciler expone
+`CLEANUP_RESIDUAL run=… worktree=… branch=… last_phase=… evidence=…` para
+interrupciones, incluso entre worktree y rama. El operador resuelve el
+diagnóstico conservando cambios y evidencia; la recuperación y transferencia
+explícita de propiedad se describen en `skills/dagu-feature/SKILL.md`.
+
 Los avisos se entregan ocultos con `customType: "dagu-state"`, `display: false` y `deliverAs: "aside"`. Solo el agente main con el `OMP_SESSION_ID` exacto recibe avisos; ISSUE es opcional. Se aceptan params CLI y JSON. Una FIFO por sesión reclama sincrónicamente un único turno autónomo cuando está idle y continúa tras `agent_end`; durante un turno activo entrega los avisos como asides en orden.
 
 El primer barrido establece una línea base silenciosa. Después, el lector consulta `/api/v1/event-logs` DEFAULT de Dagu 2.20.1, con `paginationMode=cursor`, agota las páginas y emite en orden persistido. Cada ronda vuelve a la cabecera para observar ingestión eventual, incluido el succeeded que aún no sea visible al finalizar el run. Un HTTP 400 con cursor reinicia el recorrido conservando deduplicación. Los IDs de eventos y las claves `(dagName, dagRunId, step_id, approval_iteration)` evitan duplicados; una iteración omitida es cero. El éxito se deduplica por run/status. SSE actualiza el widget; el ledger recupera las aperturas rápidas omitidas por snapshots. El estado de entrega dura durante esa observación de sesión; reiniciar o cambiar sesión establece una nueva línea base.
