@@ -1,46 +1,34 @@
 # OMP Dagu
 
-OMP package for the Dagu issue lifecycle: progress widget, triage guard, `triage-reviewer` and `plan-reviewer` agents, and the `dagu-feature`, `backlog-breakdown`, and `discovery` skills and templates. Requires Node.js >=22.19.0 and Dagu `2.20.1+a4s419.2` with local authentication `none`.
+OMP package for the Dagu issue lifecycle: progress widget, triage guard, `triage-reviewer` and `plan-reviewer` agents, and the `dagu-feature`, `backlog-breakdown`, and `discovery` skills and templates. Requires Node.js >=22.19.0 and official Dagu `2.20.1` with local authentication `none`.
 
 ## Runtime distribution
 
-`daguFeature.dagu` is the exact output required from `dagu version`, including
-the build metadata. `daguFeature.daguReleaseBaseUrl` selects the A4S prerelease
-`dagu-2.20.1-a4s419.2`. CI downloads the prebuilt Linux amd64 archive and verifies
-its entry in `checksums.txt` before extraction; the existing parallel live lanes
-use that same runtime. The release also supports Darwin arm64. Each archive
+`daguFeature.dagu` is the exact output required from `dagu version`: `2.20.1`.
+CI derives the version from the package manifest and downloads the official
+release from `https://github.com/dagu-org/dagu/releases/download/v${version}`.
+It verifies the selected `dagu_${version}_linux_amd64.tar.gz` archive against
+the upstream `checksums.txt` before extraction; the parallel live lanes use
+that same runtime. For a local Darwin arm64 runtime, select the official
+`dagu_2.20.1_darwin_arm64.tar.gz` archive from the same release. Each archive
 contains the executable `dagu` at its root.
 
-The native source commit is `6a8870ca3b7dc11ed59b2ff927e53ed5e43e5406`, based on
-upstream `225d4ee26017f32391ba8d8119c37c392b839614` (Dagu 2.20.1).
-The A4S release tag identifies the distribution integration commit, not the
-native source commit. Release assets `source.patch`, `source.git.tar.gz` and
-`provenance.json` retain the patch, self-contained native Git source and build
-provenance. `checksums.txt` covers both runtime archives and source assets.
-Verify the downloaded assets with `sha256sum --check checksums.txt` (or
-`shasum -a 256 --check checksums.txt` on macOS).
-
-For a source rebuild, use Go 1.27.2 and the commands recorded in
-`provenance.json`. For example, to build Linux amd64:
+After downloading the selected archive and upstream `checksums.txt` into the
+same directory, select only that archive's checksum (Darwin arm64 shown):
 
 ```sh
-tar -xzf source.git.tar.gz
-git clone source.git dagu-source
-cd dagu-source
-git checkout 6a8870ca3b7dc11ed59b2ff927e53ed5e43e5406
-env GOOS=linux GOARCH=amd64 CGO_ENABLED=0 GOMAXPROCS=2 \
-  go build -p 2 -ldflags '-X main.version=2.20.1+a4s419.2' -o dagu ./cmd
+asset="dagu_2.20.1_darwin_arm64.tar.gz"
+awk -v asset="$asset" '$2 == asset { print; found=1 } END { if (!found) { print "Missing checksum for " asset > "/dev/stderr"; exit 1 } }' checksums.txt > checksum.txt
 ```
 
-For Darwin arm64, build natively with `GOMAXPROCS=2 go build -p 1`
-and the same linker version flag (`CGO_ENABLED=1` in the release build).
-The resulting executable must report exactly `2.20.1+a4s419.2`.
+Then run `sha256sum --check --strict checksum.txt` on Linux or
+`shasum -a 256 --check checksum.txt` on macOS before extraction, and require
+the executable's `version` output to equal the manifest pin exactly.
 
-The initial #419 exception authorizes source-pin/CI distribution through a PR.
-Global installation, service restart and production queue resumption require
-separate operator authorization. Before switching a shared store to this runtime,
-quiesce every writer using that store, including workers and CLI processes;
-resume them together on the exact pinned version.
+This distribution restoration does not repair the known upstream Dagu 2.20.1
+state-repair race. Global installation, service activation and production queue
+resumption remain separate operator-authorized actions under the station
+procedure below.
 
 ## Instalación
 
@@ -76,7 +64,7 @@ fuera del historial la evidencia que necesites durante más tiempo.
 
 a4s versiona `dagu/LaunchAgent.plist`, `dagu/base.yaml` y las hojas propias de
 `dagu/config.yaml`. Tras el merge, desde el clon primario limpio, el operador
-instala o actualiza la configuración con el binario Dagu `2.20.1+a4s419.2` en `PATH`:
+instala o actualiza la configuración con el binario oficial Dagu `2.20.1` en `PATH`:
 
 ```sh
 package="$PWD/packages/omp-dagu"

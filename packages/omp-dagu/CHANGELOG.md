@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.93
+
+- Restore the official Dagu 2.20.1 runtime requirement and upstream release downloads, preserving manifest-derived fixtures, checksum verification and exact runtime/admission enforcement (#440).
+- Replace current custom-distribution and rebuild guidance with official-release installation guidance; station activation remains operator-owned. This restores distribution policy without repairing the upstream state-repair race.
+
 ## 0.3.92
 
 - Pin Dagu 2.20.1+a4s419.2 for native lifecycle state transitions and distribute checksummed prebuilt runtimes from the A4S prerelease (#419).
