@@ -113,6 +113,19 @@ function cachedKey(root: string, directory: string, task: "tests" | "typecheck",
   return result.key ?? null;
 }
 
+test("station-slot wrapper preserves cached and always-run test classification", () => {
+  const root = fixture();
+  try {
+    const result = describeTask({
+      worktree: root, cwd: join(root, "packages/lib"), task: "tests",
+      script: "python3 bin/heavy-slot.py env A4S_LIVE_DAGU=0 node --test test/*.test.js",
+    });
+    assert.equal(result.action, "split");
+    assert.ok(result.parts!.some(part => part.classification === "always" && part.key === null));
+    assert.ok(result.parts!.some(part => part.classification === "cached" && part.key));
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test("gate cache keys change only for the dependent input class", () => {
   const root = realpathSync(fixture());
   const copy = realpathSync(fixture());

@@ -1107,59 +1107,12 @@ steps:
       A4S_GATE_HELPER=$(dagu-gate path)
       A4S_GATE_JOURNAL=$(node "$A4S_GATE_HELPER" begin "$STATE")
       export A4S_GATE_HELPER A4S_GATE_JOURNAL
-      lock="$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-common-dir)/dagu-feature/gate.lock"
-      mkdir -p "${lock%/*}"
-      # exec keeps this process as the lock owner so exclusion and descendant
-      # inheritance stay on one pid. Exit 86 drops the lock and retries admission
-      # in that same process, leaving the run, candidate and iteration unchanged.
+      # The helper shares one host-path slot with shell-launched full suites.
+      # Exit 86 releases the slot while integration protection waits.
       export A4S_INTEGRATION_WAITER=$$
-      exec python3 -c '
-      import fcntl
-      import json
-      import os
-      import subprocess
-      import sys
-      import time
-
-      path, run = sys.argv[1:3]
-      body = sys.argv[3:]
-      fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
-      os.set_inheritable(fd, True)
-
-      def pause():
-          raw = os.environ.get("A4S_INTEGRATION_POLL_SEC", "1")
-          try:
-              value = float(raw)
-          except ValueError:
-              return 1.0
-          return value if value >= 0 else 1.0
-
-      while True:
-          previous = None
-          while True:
-              try:
-                  fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                  break
-              except BlockingIOError:
-                  holder = os.pread(fd, 4096, 0).decode("utf-8", errors="replace") or "unknown"
-                  if holder != previous:
-                      print(f"gate: waiting lock={path} run={run} pid={os.getpid()} holder={holder}", file=sys.stderr, flush=True)
-                      previous = holder
-                  time.sleep(0.1)
-          owner = json.dumps({"run": run, "pid": os.getpid()})
-          os.ftruncate(fd, 0)
-          os.pwrite(fd, owner.encode(), 0)
-          with open(os.environ["A4S_GATE_JOURNAL"], "a") as journal:
-              journal.write(json.dumps({"id": "lock_wait", "endedAt": time.time_ns() // 1000000, "exitCode": 0}) + "\n")
-          print(f"gate: acquired lock={path} holder={owner}", file=sys.stderr, flush=True)
-          status = subprocess.run(body, pass_fds=(fd,)).returncode
-          if status != 86:
-              raise SystemExit(status if status >= 0 else 128 - status)
-          fcntl.flock(fd, fcntl.LOCK_UN)
-          time.sleep(pause())
-      ' "$lock" "$RUN" bash -euo pipefail -c "$(cat <<'GATE_BODY'
+      exec python3 "$(dirname "$A4S_GATE_HELPER")/heavy-slot.py" --gate "$RUN" bash -euo pipefail -c "$(cat <<'GATE_BODY'
       admit_status=0
-      dagu-feature-protect admit --checkpoint gate --held-lock || admit_status=$?
+      dagu-feature-protect admit --checkpoint gate || admit_status=$?
       if [[ "$admit_status" -eq 86 ]]; then exit 86; fi
       if [[ "$admit_status" -ne 0 ]]; then exit "$admit_status"; fi
       trap 'status=$?; trap - EXIT; node "$A4S_GATE_HELPER" finish "$status" || { test "$status" != 0 || status=1; }; exit "$status"' EXIT

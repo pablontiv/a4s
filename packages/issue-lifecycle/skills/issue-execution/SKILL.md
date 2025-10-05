@@ -1307,23 +1307,33 @@ seconds. The retry therefore repeats setup such as `npm ci`; only after a
 successful gate does the step check that the worktree is clean and record the
 tested SHA.
 
-Before any candidate, branch or clean-state checks, `gate` acquires the per-primary
-kernel advisory lock at `<git-common-dir>/dagu-feature/gate.lock`. It holds an
-inheritable descriptor across `exec` into the complete Bash body, through GATE,
-post-checks and tested-SHA publication. Every entry path shares this boundary:
-human-task completion, conflict/recovery push-back, direct/ancestor/automatic
-retry and the reconciler's BEHIND/DIRTY rewind from `await_merge` to `rebase`.
-A waiter remains Running with its existing ticket and candidate. Its log prints
-`gate: waiting lock=... run=... pid=... holder={"run": "...", "pid": ...}`, then
-`gate: acquired` when admitted. The lock file's last holder JSON is diagnostic;
-kernel ownership determines entry. The stable lock inode stays in Git metadata.
+Before any candidate, branch or clean-state checks, `gate` acquires the station's
+single heavy-test slot at `$DAGU_HOME/a4s/heavy-slot.lock` (default home
+`~/.dagu`). Every clone, worktree, operator shell and agent session on a station
+must use the service's same canonical `DAGU_HOME`. This path is independent of
+Git metadata. The shared `bin/heavy-slot.py` fcntl helper holds an inheritable
+descriptor through the complete Bash body, GATE, post-checks and tested-SHA
+publication. Every gate entry path shares this boundary: completion,
+conflict/recovery push-back, retry and BEHIND/DIRTY rewind.
+A waiter stays Running with its existing ticket and candidate, logging
+`gate: waiting lock=... run=... pid=... holder=...`, then `gate: acquired`.
+Holder JSON is diagnostic; the kernel lock determines entry. Never unlink the
+stable lock file to release it.
 
-Success, failure, cancellation and process death close descriptors automatically;
-exclusion releases when the holder and all inheriting descendants have closed
-their copies. A surviving gate descendant therefore retains exclusion until it
-exits. Dagu retains its normal gate retry/recovery and cancellation semantics.
-Only gate bodies serialize: the repository queue keeps its declared capacity
-(`a4s=8`), and unrelated control, push and CI-wait steps proceed.
+Root `npm test` and `@a4s/issue-lifecycle`'s `npm test` and `npm run test:live`
+acquire the same slot, including runs outside Dagu. The holder exports
+`A4S_HEAVY_SLOT_HELD=1`; nested scripts re-enter without taking another lock,
+so a gate's own root/workspace tests do not deadlock. This inherited marker is
+cooperative: do not set it manually to bypass admission. A targeted single-file
+command such as `npx tsx --test test/<file>.test.ts` and light-workspace tests
+remain unslotted.
+
+Success, failure, cancellation and SIGKILL close descriptors automatically;
+the slot releases after the holder and all inheriting descendants close their
+copies. A surviving descendant retains exclusion until it exits. Integration
+protection releases the slot before polling a conflicting candidate again.
+Dagu retry/recovery semantics and queue capacities remain unchanged (`a4s=8`
+on main, with foreign queues preserved); unrelated lifecycle steps keep running.
 
 ### Integration protection
 
@@ -1343,10 +1353,11 @@ current candidate. A second active protection is refused until this one is
 released. The file is `<git-common-dir>/dagu-feature/integration-protection.json`,
 so it survives scheduler and OMP restarts.
 
-Gate admission consults the record inside the per-primary gate lock, then
-releases that lock while a conflicting run waits. `push` and `auto_merge`
-consult it under the same lock and release the lock before the remote
-mutation. A candidate whose changed paths intersect the protected paths waits
+Gate admission consults the record under the per-primary integration admission
+lock (`<git-common-dir>/dagu-feature/gate.lock`), separate from the heavy-test
+slot. A conflicting gate releases the station slot while it waits. `push` and
+`auto_merge` consult the record under that admission lock, then release it before
+remote mutation. A candidate whose changed paths intersect the protected paths waits
 at the visible checkpoint `integration_hold`, which names the protecting run
 and issue. A candidate with no path in common proceeds. The waiter keeps its
 run id, candidate and iteration; it does not open a new ticket or rewind.

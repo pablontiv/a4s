@@ -21,7 +21,7 @@
   },
   "scripts": {
     "typecheck": "npm run typecheck --workspace @a4s/hot-reload && npm run typecheck --workspace @a4s/context-management && npm run typecheck --workspace @a4s/orca-integration && npm run typecheck --workspace @a4s/review-routing && npm run typecheck --workspace @a4s/issue-lifecycle && npm run typecheck --workspace @a4s/agent-messaging && npm run typecheck --workspace @a4s/message-bus",
-    "test": "npm test --workspace @a4s/hot-reload && npm test --workspace @a4s/context-management && npm test --workspace @a4s/orca-integration && npm test --workspace @a4s/review-routing && npm test --workspace @a4s/issue-lifecycle && npm test --workspace @a4s/pi-tool-row-presentation && npm test --workspace @a4s/agent-messaging && npm test --workspace @a4s/message-bus",
+    "test": "python3 packages/issue-lifecycle/bin/heavy-slot.py bash -c 'npm test --workspace @a4s/hot-reload && npm test --workspace @a4s/context-management && npm test --workspace @a4s/orca-integration && npm test --workspace @a4s/review-routing && npm test --workspace @a4s/issue-lifecycle && npm test --workspace @a4s/pi-tool-row-presentation && npm test --workspace @a4s/agent-messaging && npm test --workspace @a4s/message-bus'",
     "bus": "npm run bus --workspace @a4s/message-bus --"
   },
   "devDependencies": {
