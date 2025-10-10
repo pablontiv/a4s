@@ -19,6 +19,7 @@ export interface RunDetails {
   dagRunId: string;
   statusLabel: string;
   labels?: string[];
+  startedAt?: string;
   params?: string;
   resolvedPrimary?: string;
   nodes?: RunNode[];

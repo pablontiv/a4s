@@ -555,7 +555,27 @@ asides. Restart establishes a new silent baseline. A stopped owner cannot receiv
 notifications; two processes with the same owner ID can both wake.
 
 `/workflows` toggles the widget; `expand`, `collapse`, `hide` and `show` set its
-process-local presentation. Expanded output is bounded by OMP's widget line cap.
+process-local presentation. In Tern, Workflows is a native collapsible card with
+an aggregate state/icon, a three-row collapsed preview, and per-run state,
+identity, step, activity and elapsed time (when Dagu provides a start time).
+Native head toggles and the command update the same fold state; `hide` clears
+the widget. Offline/slow retries use the card's status and tone.
+
+Terminal rendering delegates to the **actual host-created array container**,
+including its Text children and truncation template. The presenter seeds the
+current source array, captures its unique matching mounted container through
+the factory's TUI children, and remounts that seed whenever source bytes change.
+It never copies host padding, wrapping, ANSI-reset or line-cap constants.
+This capability was demonstrated on Tern's OMP **18.14.1** in
+[the #837 v5 PoC](https://github.com/pablontiv/a4s/issues/837#issuecomment-6543237988);
+mounted-container reachability is not a stable public constructor API. Other
+hosts are capability-checked: an absent or ambiguous container keeps the
+original string-array widget for the observer's lifetime, rather than claiming
+native support or approximating terminal layout. RPC does not invoke the factory
+synchronously; the single source-array seed is its `widgetLines` fallback.
+No host TUI/native internals are imported at runtime.
+
+Expanded terminal output remains bounded by OMP's widget line cap.
 REST/SSE failures retain known runs and back off from 1 to 30 seconds. Command
 activity comes from a bounded log tail; PoC human-task activity comes from a
 bounded owning transcript tail. Input is sanitized before display.

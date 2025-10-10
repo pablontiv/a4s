@@ -3,6 +3,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
 import extension from "../src/status/index.ts";
 import { statusRepository } from "./fixtures/status-repository.ts";
+import { WidgetHost } from "./fixtures/widget-host.ts";
 
 for (const failure of ["discover timeout", "details timeout", "headers timeout", "ECONNREFUSED", "ECONNRESET", "HTTP 503"]) {
   test(`widget retains known runs on ${failure} and recovers`, { timeout: 12_000 }, async () => {
@@ -10,6 +11,7 @@ for (const failure of ["discover timeout", "details timeout", "headers timeout",
     let stage = 0;
     let latest: string[] = [];
     const frames: string[][] = [];
+    const widgetHost = new WidgetHost(lines => { latest = lines ?? []; frames.push(latest); });
     const run = { name: "feature", dagRunId: "known-run", statusLabel: "queued", labels: ["workspace=a4s"] };
     const handlers: Record<string, (event: unknown, context: typeof ctx) => void> = {};
     const ctx = {
@@ -18,7 +20,7 @@ for (const failure of ["discover timeout", "details timeout", "headers timeout",
       sessionManager: { getSessionId: () => "owner" },
       ui: {
         theme: { fg: (_color: string, text: string) => text, bold: (text: string) => text, tree: { branch: "├─", last: "└─" } },
-        setWidget(_key: string, lines: string[] | undefined) { latest = lines ?? []; frames.push(latest); }, notify() {},
+        setWidget: widgetHost.setWidget, notify() {},
       },
     };
     globalThis.fetch = (async (input, options) => {

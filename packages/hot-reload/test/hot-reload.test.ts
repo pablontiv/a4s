@@ -5,6 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
 import { hotReload, LIFECYCLE_TIMEOUT_MS, RELOAD_INPUT } from "../src/index.ts";
+import { Generation } from "../src/generation.ts";
 
 type Event = { type?: string; text?: string; source?: string };
 type Handler = (event: Event, ctx: FakeContext) => unknown;
@@ -239,6 +240,46 @@ test("handlers receive host contexts whose ui is non-writable or getter-only", a
     assert.deepEqual(await host.emit("tool_call", {}, ctx), [true]);
   }
   assert.deepEqual(notices, ["allowed", "allowed"]);
+});
+
+test("setWidget preserves factory identity, seed ordering and synchronous invocation after commit", () => {
+  const generation = new Generation(new Map());
+  const tui = { children: [] as unknown[] };
+  const theme = {};
+  const lines = ["Workflows", "running"];
+  const options = { placement: "aboveEditor" };
+  const calls: unknown[][] = [];
+  let invoked = false;
+  const widgetFactory = (actualTui: unknown, actualTheme: unknown) => {
+    assert.strictEqual(actualTui, tui);
+    assert.strictEqual(actualTheme, theme);
+    assert.strictEqual(tui.children[0], lines);
+    invoked = true;
+    return { render: () => lines };
+  };
+  const original = { ui: {
+    setWidget(key: string, content: string[] | typeof widgetFactory, placement: typeof options) {
+      assert.strictEqual(this, original.ui);
+      calls.push([key, content, placement]);
+      if (Array.isArray(content)) tui.children = [content];
+      else content(tui, theme);
+    },
+  } };
+  const ctx = generation.context(original);
+  ctx.ui.setWidget("dagu-status", lines, options);
+  ctx.ui.setWidget("dagu-status", widgetFactory, options);
+  assert.equal(calls.length, 0, "uncommitted generations do not publish");
+  generation.commit();
+  assert.equal(invoked, true);
+  assert.strictEqual(calls[1]![1], widgetFactory);
+  assert.strictEqual(calls[1]![2], options);
+  invoked = false;
+  ctx.ui.setWidget("dagu-status", widgetFactory, options);
+  assert.equal(invoked, true, "active generations preserve synchronous host detection");
+  generation.abort();
+  const before = calls.length;
+  ctx.ui.setWidget("dagu-status", widgetFactory, options);
+  assert.equal(calls.length, before, "retired observers cannot remount widgets");
 });
 
 test("factories inherit the real API and can register late within the active generation", async () => {

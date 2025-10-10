@@ -3,6 +3,7 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import test from "node:test";
 import extension from "../src/status/index.ts";
 import { resolveRepository } from "../src/status/repository.ts";
+import { WidgetHost } from "./fixtures/widget-host.ts";
 
 // Capture real timers before Node's MockTimers replaces setTimeout.
 const realSetTimeout = globalThis.setTimeout;
@@ -28,6 +29,7 @@ for (const stage of ["discovery", "details", "headers"] as const) {
       let streamOpened = false;
       let discoveries = 0;
       const widgets: string[][] = [];
+      const widgetHost = new WidgetHost(lines => { if (lines) widgets.push(lines); });
       const requests: string[] = [];
       const run = { name: "feature", dagRunId: "slow-run", statusLabel: "running", labels: [`workspace=${workspace}`], nodes: [] };
       t.mock.method(globalThis, "fetch", async (input: string | URL, init: RequestInit) => {
@@ -70,7 +72,7 @@ for (const stage of ["discovery", "details", "headers"] as const) {
         sessionManager: { getSessionId: () => "timeout-test" },
         ui: {
           theme: { fg: (_: string, text: string) => text, bold: (text: string) => text, tree: { branch: "├─", last: "└─" } },
-          setWidget: (_: string, lines: string[] | undefined) => { if (lines) widgets.push(lines); }, notify() {},
+          setWidget: widgetHost.setWidget, notify() {},
         },
       };
       const settle = async (predicate: () => boolean) => {

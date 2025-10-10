@@ -1,3 +1,4 @@
+import { WidgetHost } from "../fixtures/widget-host.ts";
 import { useStation } from "../fixtures/service-environment.ts";
 import assert from "node:assert/strict";
 import { once } from "node:events";
@@ -283,12 +284,13 @@ for (const scenario of [
   const notifications: { message: string; type: string; round: number }[] = [];
   const received: { message: string; round: number }[] = [];
   let widget: string[] | undefined;
+  const widgetHost = new WidgetHost(lines => { widget = lines; });
   const ctx = {
     cwd: statusRepository, hasUI: true, isIdle: () => false, agent: { kind: "main" as const },
     abort() {},
     sessionManager: { getSessionId: () => "owner" }, ui: {
       theme: { fg: (_color: string, text: string) => text, bold: (text: string) => text, tree: { branch: "├─", last: "└─" } },
-      setWidget(_key: string, lines: string[] | undefined) { widget = lines; },
+      setWidget: widgetHost.setWidget,
       notify(message: string, type: "info" | "warning" | "error") { notifications.push({ message, type, round }); },
     },
   };
