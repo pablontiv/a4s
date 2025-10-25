@@ -230,6 +230,37 @@ operator-owned station/service configuration remain untouched.
    readiness, exact receipt/snapshot tuple and agreed live acceptance evidence
    before reopening admission. A source test is not proof of station cutover.
 
+   For the first r-build cutover (#797), the source commit must include the
+   opt-in native driver (#821). With admission still closed, run both phases
+   from that checkout, before and after removing Bun from the service PATH:
+
+   ```sh
+   A4S_NATIVE_OUT="<git-dir>/dagu-feature/cutover/r<D>/pre-bun" \
+     node packages/issue-lifecycle/test/native/station-acceptance.mjs \
+       --base "r<D>" --phase pre-bun
+   A4S_NATIVE_OUT="<git-dir>/dagu-feature/cutover/r<D>/post-bun" \
+     node packages/issue-lifecycle/test/native/station-acceptance.mjs \
+       --base "r<D>" --phase post-bun
+   ```
+
+   Replace `<git-dir>` with the absolute Git common directory and `r<D>` with
+   the selected deployed build. Each phase requires a fresh evidence directory,
+   the running station Dagu, service-selected OMP with working native model
+   routes, and source build prerequisites (including the repository's build-time
+   Bun, even when the **service** PATH is Bun-free). This command is deliberately
+   absent from `npm test`: it spawns schedulers and native model jobs.
+
+   Promotion, rollback, cancellation and cached-agent cases use a disposable
+   isolated station under the output directory, never the real cache or releases.
+   Fixture identities are scoped there, recorded with source/patch/archive hashes
+   in `fixtures.json`, and discarded after retained logs and receipts are copied.
+   The selected-binary probes execute on the real station scheduler but promote
+   nothing. `station-integrity.json` records before/after hashes of the real
+   state, rejected IDs and persisted-format history. Require **all four rows**
+   in each phase's `matrix.json` to pass and both processes to exit zero before
+   the operator considers reopening admission; unit tests are not live acceptance.
+
+
 The adoption DAG is a source/operator asset, not an installed engine checkout.
 Enqueue its reviewed file with the initial release executable explicitly selected:
 
