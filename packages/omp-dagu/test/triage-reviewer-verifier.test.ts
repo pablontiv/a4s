@@ -19,7 +19,6 @@ const runId = "fixture-run";
 const sessionId = "01a1400f-185a-7646-b9f6-6bee1f622f5f";
 const fixtureRoot = new URL("./fixtures/triage-reviewer/", import.meta.url);
 const yamlFiles = [
-  ["installed DAG", new URL("../../../.workspace/dagu/dags/feature.yaml", import.meta.url)],
   ["skill template", new URL("../skills/dagu-feature/feature.yaml", import.meta.url)],
 ] as const;
 
@@ -167,10 +166,10 @@ function fail(result: Result, check?: RegExp): void {
 }
 
 for (const [source, url] of yamlFiles) {
-  test(`${source} executes the fail-closed triage-reviewer verifier`, async (t) => {
+  test(`${source} executes the fail-closed triage verifier`, async (t) => {
     const script = verifierScript(url);
 
-    await t.test("accepts generation 0 and OMP external/home/tmp path encodings", async () => {
+    await t.test("accepts a generic task agent with generation 0 and OMP external/home/tmp path encodings", async () => {
       for (const primary of [external, homePrimary, tmpPrimary, home, tempRoot]) {
         clearTranscripts();
         writeTranscript(primary, "TriageReview188", "generation-0.jsonl");
@@ -199,11 +198,11 @@ for (const [source, url] of yamlFiles) {
       const bind = (id: string, poc: string) => {
         const request = guard.toolCall(completion(id));
         assert.ok(request && "reason" in request);
-        const launch = { toolName: "task", toolCallId: id, input: { agent: "triage-reviewer", task: request.reason } };
+        const launch = { toolName: "task", toolCallId: id, input: { agent: "task", task: request.reason } };
         const bound = guard.toolCall(launch);
         assert.ok(bound && "input" in bound);
         const decision = { poc, behavior: "already demonstrated", question: "Runtime behavior?", reason: "corrected scope" };
-        guard.toolResult({ ...launch, details: { results: [{ index: 0, id, agent: "triage-reviewer", exitCode: 0, output: JSON.stringify(decision) }] } });
+        guard.toolResult({ ...launch, details: { results: [{ index: 0, id, agent: "task", exitCode: 0, output: JSON.stringify(decision) }] } });
         const transcript = writeTranscript(external, id, "generation-0.jsonl");
         const rows = readFileSync(transcript, "utf8").trim().split("\n").map(line => JSON.parse(line));
         rows.find(row => row.type === "session_init").task = bound.input.task;
@@ -225,7 +224,7 @@ for (const [source, url] of yamlFiles) {
 
     for (const [name, fixtureName, check] of [
       ["rejects a parent from another session", "other-session-parent.jsonl", /check\.parentSession=FAIL/],
-      ["rejects another agent", "wrong-agent.jsonl", /check\.agent=FAIL/],
+      ["rejects a missing marker", "missing-marker.jsonl", /check\.task_run_marker=FAIL/],
       ["rejects another RUN marker", "other-run.jsonl", /check\.task_run_marker=FAIL/],
       ["rejects a last yield with poc=yes", "last-yield-poc-yes.jsonl", /check\.last_yield_poc_no=FAIL/],
       ["rejects invalid JSONL", "invalid.jsonl", /parse error/],
@@ -237,6 +236,45 @@ for (const [source, url] of yamlFiles) {
         fail(await runBash(script, environment(external, "TriageReview188")), check);
       });
     }
+
+    await t.test("requires the exact parent transcript within the coordinator session", async () => {
+      clearTranscripts();
+      const transcript = writeTranscript(external, "TriageReview188", "generation-0.jsonl");
+      writeFileSync(transcript, readFileSync(transcript, "utf8").replace(`${sessionId}.jsonl`, `other_${sessionId}.jsonl`));
+      restBody = rest();
+      fail(await runBash(script, environment(external, "TriageReview188")), /check\.parentSession=FAIL/);
+    });
+
+    await t.test("requires a single session and consistent initialization identity", async () => {
+      for (const type of ["session", "session_init"]) {
+        clearTranscripts();
+        const transcript = writeTranscript(external, "TriageReview188", "generation-0.jsonl");
+        const text = readFileSync(transcript, "utf8");
+        const row = text.split("\n").map(line => {
+          try { return JSON.parse(line); } catch { return undefined; }
+        }).find(row => row?.type === type);
+        assert.ok(row);
+        if (type === "session_init") row.agent = "reviewer";
+        writeFileSync(transcript, `${text.trimEnd()}\n${JSON.stringify(row)}\n`);
+        restBody = rest();
+        fail(await runBash(script, environment(external, "TriageReview188")), /check\.session_identity=FAIL/);
+      }
+    });
+
+    await t.test("requires complete marker fields and exact feature run identity", async () => {
+      for (const marker of [
+        "TRIAGE_REVIEW DAG=poc RUN=fixture-run GENERATION=0 REQUEST=1",
+        "TRIAGE_REVIEW DAG=feature RUN=fixture-run-other GENERATION=0 REQUEST=1",
+        "TRIAGE_REVIEW DAG=feature RUN=fixture-run GENERATION=0",
+        "TRIAGE_REVIEW DAG=feature RUN=fixture-run GENERATION=bad REQUEST=1",
+      ]) {
+        clearTranscripts();
+        const transcript = writeTranscript(external, "TriageReview188", "generation-0.jsonl");
+        writeFileSync(transcript, readFileSync(transcript, "utf8").replace("TRIAGE_REVIEW DAG=feature RUN=fixture-run GENERATION=0 REQUEST=1", marker));
+        restBody = rest();
+        fail(await runBash(script, environment(external, "TriageReview188")), /check\.task_run_marker=FAIL/);
+      }
+    });
 
     await t.test("uses the last of multiple yields", async () => {
       clearTranscripts();
@@ -354,7 +392,7 @@ for (const [source, url] of yamlFiles) {
 }
 
 test("skill template enforces one invocation identity across refreshed session_init rows", async (t) => {
-  const script = verifierScript(yamlFiles[1][1]);
+  const script = verifierScript(yamlFiles[0][1]);
   const fixtureRows = (name: string): readonly [string, string, string] => {
     const rows = fixture(name).trim().split("\n");
     const [session, init, yieldNo] = rows;
@@ -372,7 +410,7 @@ test("skill template enforces one invocation identity across refreshed session_i
   for (const [name, content, accepted, check] of [
     ["accepts consistent refreshed identity", [session, init, refresh, yieldNo].join("\n"), true, undefined],
     ["rejects a changed refresh agent", [session, init,
-      JSON.stringify({ ...JSON.parse(refresh), agent: "task" }), yieldNo].join("\n"), false, /check\.session_identity=FAIL/],
+      JSON.stringify({ ...JSON.parse(refresh), agent: "different-review-agent" }), yieldNo].join("\n"), false, /check\.session_identity=FAIL/],
     ["rejects a changed refresh task", [session, init,
       JSON.stringify({ ...JSON.parse(refresh), task: `${JSON.parse(init).task} Changed assignment.` }), yieldNo].join("\n"), false, /check\.session_identity=FAIL/],
     ["requires a session_init", [session, yieldNo].join("\n"), false, /check\.session_identity=FAIL/],

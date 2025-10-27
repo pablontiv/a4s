@@ -661,13 +661,12 @@ the new definition. Record that run and the affected step logs in the issue.
 
 ### Coordinator flow
 
-Each run is coordinated from an OMP session opened in its `PRIMARY` repository.
-From another repository, open `omp -p --cwd <primary>` or an Orca tab in that
-primary before enqueueing and coordinating its run. The `POC=no` guard compares
-canonical main-worktree identities and the session's actual transcript directory
-with `triage_decision`'s encoded `PRIMARY` namespace. A linked-worktree session
-matches only when its transcript directory belongs to that primary namespace.
-On mismatch the guard names the expected primary and keeps triage waiting.
+Each run is coordinated from a session whose canonical main worktree is the
+run's `PRIMARY` and whose actual transcript directory belongs to
+`triage_decision`'s encoded `PRIMARY` namespace. A linked-worktree session
+matches when its transcripts belong to that primary namespace. On mismatch or
+check failure, the `POC=no` guard reports expected/observed primary and
+transcript directories, plus the failure cause when available, and keeps triage waiting.
 The guard and activity reader share effective agent-directory resolution:
 defined `OMP_PROFILE` (including empty) precedes `PI_PROFILE`; a trimmed named
 profile uses `<home>/<PI_CONFIG_DIR or .omp>/profiles/<profile>/agent`.
@@ -696,13 +695,13 @@ blocks the entire command containing the completion.
 
 The `@a4s/omp-dagu` status extension delivers hidden model context for every waiting human task in `feature`, `poc`, `discovery` and `planning`, and for final `succeeded`. Waiting notices have the form `[DAGU STATE] run=<id> status=waiting step=<step> <issue=<issue>|dag=<dag>> bundle=<version|unstamped> extension=<version> main=<version|unknown|n/a> compat=<ok|stale|incompatible|unstamped> iteration=<approvalIteration>`. Success uses `status=succeeded` with run identity and bundle fields; feature/discovery/planning failures and aborts include their terminal step. The persisted Dagu event log recovers openings missed by SSE; deduplication uses DAG, run, step and approval iteration (omitted means zero), or run/status for success. An owner-session FIFO starts one autonomous turn at a time while idle and delivers asides during an active turn. The initial sweep is a silent baseline. Notices start or continue coordinator turns without rendering in chat and report run state rather than user instructions.
 
-- On a `triage` notice, the coordinator obtains the guard generation marker and launches `task agent=triage-reviewer` itself with that marker and the fixed prompt, naming the subagent `TriageReview<ISSUE>` (or `TriageReview<ISSUE>v<N>` for a retry). Several `triage-reviewer` tasks may share one batched `task` call; each task includes its own run's generation marker. The coordinator completes `triage` with that allocated reviewer ID. A `dependency_review` push-back produces a new `triage` notice and the coordinator repeats this flow for the new generation.
+- On a `triage` notice, the coordinator obtains the guard generation/request marker and launches a review `task` with that exact marker and the issue scope, naming the subagent `TriageReview<ISSUE>` (or `TriageReview<ISSUE>v<N>` for a retry). The distributed `triage-reviewer` supplies the PoC criterion; another agent may perform the review using the criterion in **Triage**. The guard injects the decision schema into any marker-bound task. Several reviews may share one batched `task` call; each assignment includes its own run's marker. The coordinator completes `triage` with the allocated reviewer ID. A `dependency_review` push-back produces a fresh triage generation.
 - At `run_poc`, the coordinator launches the PoC subagent as `Poc<ISSUE>`.
 - On an `implement` notice, the coordinator launches one level-1 implementation subagent named `Implement<ISSUE>` for that issue's worktree, with the contract in **Implement**. The result auto-delivers to the coordinator, which reviews the diff before completing `implement`.
 - On a recovery notice, inspect the failed command logs, then use the iteration-protected push-back above. Gate recovery returns to the implementation subagent; start/push infrastructure repair belongs to the operator. On a `failed` or `aborted` notice outside these checkpoints, inspect the terminal logs and preserved resources under the terminal contract above.
 - A retried subagent appends `v<N>` to its base name, for example `Implement182v2`.
 - For every issue in the fixed batch, keep one todo for the agent action at the `human.task` where its run is waiting: triage review, PoC execution, implementation, or recovery. Update that todo when the run moves to another human task. The package widget shows the active step plus live activity: the last non-empty Dagu log line for a running command, or `<tool> <intention> (<age>s)` from the newest `toolCall` in `TriageReview<ISSUE>`, `Poc<ISSUE>` or `Implement<ISSUE>` while its human task waits. Intention comes from `i`, then `title`, then the principal argument; the task name is omitted. It refreshes activity about every two seconds and leaves the line unchanged when no source is available. The `Workflows` HUD folds to three completion-ordered tree rows and expands to eight; `/workflows` toggles, `expand` and `collapse` set the fold, and `hide` and `show` control visibility across session switches.
-- Keep `task.maxRecursionDepth: 1`; every implementation and triage-reviewer subagent remains at level 1 and appears in the main view.
+- Keep `task.maxRecursionDepth: 1`; every implementation and triage review subagent remains at level 1 and appears in the main view.
 - A notice whose `compat` is `stale`, `incompatible` or `unstamped` goes under **Blockers and decisions**. A stale notice raises a `warning` notification while the coordinator keeps working; the operator restarts OMP to load main and completes the queued bootstrap plus adoption re-seal. Put the exact recovery enqueue command above under **Proposals** when bootstrap still needs enqueueing. Complete `answers` with the installed values and use the staged `feature.yaml` for the adoption issue. These notices are distinct from admission: provenance-verified requested DAG and installed reconciler stamps are independently compatible with the loaded package when valid semantic versions share major and minor, including patch drift; exact package identity, source provenance and native-version checks still apply.
 
 ## Turn status
@@ -727,23 +726,39 @@ proceeds directly. Bug reproduction is defect investigation.
 
 With OMP, load the `@a4s/omp-dagu` package directory so its distributed
 `triage-reviewer` agent and DAG progress widget are discovered. The coordinating
-session identified by the run's `OMP_SESSION_ID` attempts the `POC=no`
-completion, receives the generation marker and fixed review prompt, and runs
-`task agent=triage-reviewer` with the issue scope and that full prompt. Name the
-subagent `TriageReview<ISSUE>`; retries append `v<N>`. Its structured decision
-auto-delivers to the coordinator. A `no` authorizes the current generation with
-the allocated reviewer ID supplied by the guard as `REVIEW`; a `yes` keeps triage
-waiting with its question. Another rejected `POC=no` completion emits a fresh
-request marker in that same generation. Include that marker and the fixed prompt
-when launching the next reviewer with corrected scope or new evidence. The
-latest valid bound review decides, and its exact allocated ID is the `REVIEW`
-submitted to `triage_decision`; earlier reviewer IDs remain rejected.
+session identified by `OMP_SESSION_ID` attempts the `POC=no` completion and
+receives `TRIAGE_REVIEW_REQUIRED` with the decision JSON Schema and this marker:
+
+```text
+TRIAGE_REVIEW DAG=<dag> RUN=<run> GENERATION=<n> REQUEST=<m>
+```
+
+Launch a `task` with the exact marker and issue scope in its assignment.
+Any agent can be bound; `triage-reviewer` already carries the PoC criterion
+above. Name the subagent `TriageReview<ISSUE>`; retries append `v<N>`.
+The guard supplies `outputSchema` and correlates the allocated task ID, batch
+index, generation and request across task results, waits and async completions.
+The output contains exactly `poc` (`yes` or `no`), `behavior`, `question` and
+`reason`, with nonempty text in the latter three fields. For `no`, describe the
+resolved question and evidence. Invalid bound output blocks completion with
+`TRIAGE_REVIEW_INVALID`, identifying the field and expected/observed values.
+
+A `no` authorizes the current generation with that allocated ID as `REVIEW`;
+a `yes` keeps triage waiting with its concrete runtime question. Another rejected
+completion emits a fresh request marker in the same generation. Use it in the
+next review assignment with corrected scope or new evidence. Only a result bound
+to the current request can authorize completion or report invalid output.
+An older result stays retired even while the current task is pending.
+
+When the coordinator selects an agent covered by
+`@a4s/omp-cross-family-review`'s `REVIEW_POLICIES` (including `triage-reviewer`),
+that agent's cross-family selection policy still applies at dispatch.
 
 ```sh
 dagu human-task complete feature --run-id <id> --step triage \
   --input POC=no --input 'QUESTION=<behavior>' \
   --input 'BASIS=<prior PASS URL, merged PR URL, or reason>' \
-  --input 'REVIEW=<completed triage-reviewer id supplied by the guard>'
+  --input 'REVIEW=<completed review task id supplied by the guard>'
 ```
 
 For `POC=yes`, supply QUESTION and BASIS; REVIEW is optional. For `POC=no`,
@@ -751,11 +766,12 @@ For `POC=yes`, supply QUESTION and BASIS; REVIEW is optional. For `POC=no`,
 subagent under the `OMP_SESSION_ID` coordinator session. Before writing state or
 publishing the `poc-triage:no` comment, it reads the run through Dagu REST and
 requires exactly one `triage.startedAt`, exactly one session with the expected
-parent, and one or more `session_init` rows sharing the `triage-reviewer` agent
-and identical feature/RUN task. Native fallback refreshes preserve the first
-init's strictly-after-cutoff freshness check and `poc=no` in the final yield.
-The transcript must satisfy every identity, generation and verdict binding.
-`POC=yes` publishes
+parent, and one or more `session_init` rows sharing the same agent and identical
+task with the complete `TRIAGE_REVIEW DAG=feature RUN=<run> GENERATION=<n>
+REQUEST=<m>` marker. Native fallback refreshes preserve the first init's
+strictly-after-cutoff freshness check and `poc=no` in the final yield.
+A missing, ambiguous, stale, malformed or mismatched transcript fails the step
+closed. `POC=yes` publishes
 `<!-- poc-triage:yes run:<RUN> -->`, enqueues the absolute repository `poc.yaml`
 with ISSUE and QUESTION, and ends the feature run.
 The native verifier first finds exactly one coordinator file ending in

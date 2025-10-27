@@ -1,5 +1,6 @@
 import { fileURLToPath } from "node:url";
 import { admit, enqueueArguments, loadedExtensionDigest } from "../admission.ts";
+import { parseReview, REVIEW_SCHEMA } from "./schema.ts";
 
 // Rewrite before shell evaluation so loops and quoted variable expansions are
 // checked using their effective arguments immediately before Dagu creates a run.
@@ -25,12 +26,6 @@ export function admissionDecision(event: Event, session?: { transcriptRoot: stri
   return { input: { ...event.input, command } };
 }
 
-export const REVIEW_PROMPT = `Review the triage scope supplied by the parent. A PoC is required when implementation depends on an unexercised external or runtime behavior that could change the implementation path. Reusing behavior already demonstrated proceeds directly. Reproducing a bug is not a PoC. Return the structured triage decision with poc ("yes" or "no"), behavior, question, and reason.`;
-const REVIEW_SCHEMA = {
-  type: "object",
-  properties: { poc: { type: "string", enum: ["yes", "no"] }, behavior: { type: "string" }, question: { type: "string" }, reason: { type: "string" } },
-  required: ["poc", "behavior", "question", "reason"], additionalProperties: false,
-};
 type RecordValue = Record<string, any>;
 export interface Event {
   toolName: string;
@@ -43,7 +38,7 @@ export interface Event {
 export type CallDecision = { block: true; reason: string } | { input: RecordValue } | undefined;
 interface Target { key: string; dag: string; run: string; poc: string; reviewer?: string }
 interface Review { id: string; output: string; poc: string; question: string; request: number }
-interface Generation { target: Target; number: number; request: number; requested: boolean; review?: Review }
+interface Generation { target: Target; number: number; request: number; requested: boolean; review?: Review; invalid?: { request: number; reason: string } }
 interface Binding { generation: Generation; number: number; request: number }
 interface Pending { bindings: Map<number, Binding> }
 interface Job { binding: Binding; agentId: string }
@@ -62,16 +57,8 @@ export function target(text: string): Target | undefined {
   const reviewer = /\bREVIEW\s*=\s*([\w.-]+)/.exec(literal)?.[1];
   return { key: JSON.stringify([dag, run]), dag, run, poc, ...(reviewer ? { reviewer } : {}) };
 }
-function parseReview(id: string, output: unknown, request: number): Review | undefined {
-  if (typeof output !== "string") return undefined;
-  for (const line of [output, ...output.split("\n")]) {
-    try {
-      const value = JSON.parse(line.trim());
-      if ((value.poc === "yes" || value.poc === "no") && [value.behavior, value.question, value.reason].every(v => typeof v === "string")) return { id, output, poc: value.poc, question: value.question, request };
-    } catch { /* Accept a JSON line surrounded by reviewer prose. */ }
-  }
-  return undefined;
-}
+
+const MARKER_WHITESPACE = /\s/;
 
 export class TriageGuard {
   private generations = new Map<string, Generation>();
@@ -85,11 +72,19 @@ export class TriageGuard {
       const bound = new Map<number, Generation>();
       const claimed = new Set<Generation>();
       for (const [index, task] of tasks.entries()) {
-        if (task.agent !== "triage-reviewer") continue;
         const assignment = `${event.input.context ?? ""}\n${task.task ?? ""}`;
         for (const generation of this.generations.values()) {
-          const marker = `TRIAGE_REVIEW AGENT=triage-reviewer DAG=${generation.target.dag} RUN=${generation.target.run} GENERATION=${generation.number} REQUEST=${generation.request}\n`;
-          if (generation.requested && !claimed.has(generation) && assignment.includes(marker) && assignment.includes(REVIEW_PROMPT)) {
+          if (!generation.requested || claimed.has(generation)) continue;
+          const marker = `TRIAGE_REVIEW DAG=${generation.target.dag} RUN=${generation.target.run} GENERATION=${generation.number} REQUEST=${generation.request}`;
+          let matched = false;
+          for (let start = assignment.indexOf(marker); start >= 0; start = assignment.indexOf(marker, start + marker.length)) {
+            const end = start + marker.length;
+            if ((start > 0 && !MARKER_WHITESPACE.test(assignment[start - 1]!))
+              || (end < assignment.length && !MARKER_WHITESPACE.test(assignment[end]!))) continue;
+            matched = true;
+            break;
+          }
+          if (matched) {
             bound.set(index, generation);
             claimed.add(generation);
             break;
@@ -121,11 +116,11 @@ export class TriageGuard {
     }
     if (completion.poc === "no") {
       const review = generation.review;
-      if (!review || review.poc === "yes") {
+      if (generation.invalid || !review || review.poc === "yes") {
         generation.requested = true;
         generation.request++;
-        const reason = review ? `TRIAGE_POC_REQUIRED: ${review.question}\n` : "";
-        return { block: true, reason: `${reason}TRIAGE_REVIEW_REQUIRED: Run task agent=triage-reviewer for this triage, including this marker and fixed prompt in its assignment:\nTRIAGE_REVIEW AGENT=triage-reviewer DAG=${completion.dag} RUN=${completion.run} GENERATION=${generation.number} REQUEST=${generation.request}\n${REVIEW_PROMPT}` };
+        const reason = generation.invalid ? `${generation.invalid.reason}\n` : review ? `TRIAGE_POC_REQUIRED: ${review.question}\n` : "";
+        return { block: true, reason: `${reason}TRIAGE_REVIEW_REQUIRED: Run a task for this triage with this marker in its assignment. Its output must satisfy this JSON Schema:\nTRIAGE_REVIEW DAG=${completion.dag} RUN=${completion.run} GENERATION=${generation.number} REQUEST=${generation.request}\n${JSON.stringify(REVIEW_SCHEMA)}` };
       }
       if (completion.reviewer !== review.id) return { block: true, reason: `TRIAGE_REVIEW_REQUIRED: Retry this completion with --input REVIEW=${review.id}; this is the completed reviewer for the current triage generation.` };
     }
@@ -141,6 +136,7 @@ export class TriageGuard {
         completion.generation.number++;
         completion.generation.requested = false;
         delete completion.generation.review;
+        delete completion.generation.invalid;
       }
       return;
     }
@@ -159,7 +155,6 @@ export class TriageGuard {
     if (!pending) return;
     this.calls.delete(event.toolCallId);
     for (const result of event.details?.results ?? []) {
-      if (result.agent !== "triage-reviewer") continue;
       const binding = pending.bindings.get(result.index);
       if (!binding) continue;
       if (binding.number === binding.generation.number && binding.request === binding.generation.request) binding.generation.requested = false;
@@ -170,7 +165,6 @@ export class TriageGuard {
     const feedback = (event.content ?? []).filter(item => item.type === "text").map(item => item.text ?? "").join("\n");
     const reviewers = new Map<string, Binding>();
     for (const item of event.details?.progress ?? []) {
-      if (item.agent !== "triage-reviewer") continue;
       const binding = pending.bindings.get(item.index);
       if (binding) reviewers.set(item.id, binding);
     }
@@ -187,16 +181,22 @@ export class TriageGuard {
     for (const job of message.details?.jobs ?? []) this.finish(job.jobId, job.agentId, job.status, job.type, message.content);
   }
   private record(binding: Binding, id: string, output: unknown): void {
-    if (binding.number !== binding.generation.number) return;
-    const review = parseReview(id, output, binding.request);
-    if (review && binding.request >= (binding.generation.review?.request ?? 0)) binding.generation.review = review;
+    const generation = binding.generation;
+    if (binding.number !== generation.number || binding.request !== generation.request) return;
+    try {
+      const review = parseReview(output);
+      generation.review = { id, output: output as string, poc: review.poc, question: review.question, request: binding.request };
+      delete generation.invalid;
+    } catch (error) {
+      generation.invalid = { request: binding.request, reason: error instanceof Error ? error.message : String(error) };
+    }
   }
   private finish(jobId: string, agentId: string, status: string, type: string, text: unknown): void {
     const job = this.jobs.get(jobId);
     if (!job || job.agentId !== agentId || status !== "completed" || type !== "task" || typeof text !== "string") return;
     for (const match of text.matchAll(/<task-result\b([^>]*)>([\s\S]*?)<\/task-result>/g)) {
       const attrs = Object.fromEntries(Array.from(match[1]!.matchAll(/([\w-]+)="([^"]*)"/g), m => [m[1], m[2]]));
-      if (attrs.id !== agentId || attrs.agent !== "triage-reviewer" || attrs.status !== "completed") continue;
+      if (attrs.id !== agentId || attrs.status !== "completed") continue;
       this.record(job.binding, agentId, /<output>([\s\S]*?)<\/output>/.exec(match[2]!)?.[1]);
       this.jobs.delete(jobId);
     }
