@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Wait for explicit request/stream readiness in status timeout tests instead of
+  counting event-loop turns. Isolate the fixture repository and keep receipt
+  observation off the widget-only path under the default no-spawn preload
+  (#912).
+- Resolve Node entrypoints before detecting npm in the gate preload, so
+  extensionless dependency lifecycle scripts (including protobufjs postinstall)
+  do not fail installation before Node can load their `.js` files (#912).
 - Exclude receipt-bound retired runs from scheduled stale recovery, reconcile
   discovery and tick dispatch before legacy PATH/cache verification. Reject
   malformed or mismatched retirement evidence instead of recovering the run

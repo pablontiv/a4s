@@ -17,7 +17,8 @@ function start(name, details = {}) {
 function end(id, code, signal) {
   emit({ id, endedAt: Date.now(), exitCode: code ?? 128 + (constants.signals[signal] ?? 0) });
 }
-const npmCli = process.argv[1] && /npm(?:-cli)?\.js$/.test(fs.realpathSync(process.argv[1]));
+// Match Node's entrypoint resolution: lifecycle scripts can omit the .js suffix.
+const npmCli = process.argv[1] && /npm(?:-cli)?\.js$/.test(require.resolve(process.argv[1]));
 
 // npm's lifecycle shell is the workspace boundary, independent of its log format.
 // A cache hit replaces that shell with a successful no-op. Misses and always-run
