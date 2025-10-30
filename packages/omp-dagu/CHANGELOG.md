@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.79
+
+- Report `main=n/a` for consumer repositories without the omp-dagu manifest and accept bundle/extension patch drift as `ok`; reserve `stale` for loaded-extension drift from applicable main or an unreadable/invalid main manifest (#380).
+- Raise a `warning` notification for stale notices while the coordinator continues its turn, preserving exact-version admission (#380).
+
 ## 0.3.78
 
 - Install the manifest-pinned official Dagu release for the omp-dagu CI matrix entry, verify and log its SHA-256 digest, and require the effective version before running live integrations (#337).

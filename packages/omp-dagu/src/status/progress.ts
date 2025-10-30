@@ -1,9 +1,10 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import {
   BUNDLE_VERSION,
   bundleVersionFromLabels,
   classifyCompatibility,
+  parseVersion,
 } from "../bundle.ts";
 import type { Compatibility } from "../bundle.ts";
 
@@ -77,13 +78,26 @@ export function runBundleState(run: RunDetails): {
   const version = bundleVersionFromLabels(run.labels);
   const primary = runParam(run, "PRIMARY");
   let mainVersion = "unknown";
+  let mainApplicable = true;
   if (primary) {
+    const manifestPath = join(primary, "packages/omp-dagu/package.json");
     try {
-      const manifest: unknown = JSON.parse(readFileSync(join(primary, "packages/omp-dagu/package.json"), "utf8"));
-      if (manifest && typeof manifest === "object" && "version" in manifest && typeof manifest.version === "string") {
-        mainVersion = manifest.version;
+      statSync(manifestPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        mainApplicable = false;
+        mainVersion = "n/a";
       }
-    } catch { /* An unreadable primary cannot establish exact version equality. */ }
+    }
+    if (mainApplicable) {
+      try {
+        const manifest: unknown = JSON.parse(readFileSync(manifestPath, "utf8"));
+        if (manifest && typeof manifest === "object" && "version" in manifest
+          && typeof manifest.version === "string" && parseVersion(manifest.version)) {
+          mainVersion = manifest.version;
+        }
+      } catch { /* An unreadable primary manifest cannot establish exact version equality. */ }
+    }
   }
   const compatibility = classifyCompatibility(version, BUNDLE_VERSION);
   return {
@@ -91,7 +105,7 @@ export function runBundleState(run: RunDetails): {
     displayVersion: version ?? "unstamped",
     extensionVersion: BUNDLE_VERSION,
     mainVersion,
-    compat: primary && (version !== BUNDLE_VERSION || mainVersion !== BUNDLE_VERSION) ? "stale" : compatibility,
+    compat: primary && mainApplicable && mainVersion !== BUNDLE_VERSION ? "stale" : compatibility,
   };
 }
 
@@ -171,7 +185,7 @@ export interface TransitionEffects {
   notification?: Notification;
   wakeMessage?: string;
   wakeMessages?: string[];
-  abortMessage?: string;
+  warningMessage?: string;
 }
 
 interface State {
@@ -235,7 +249,7 @@ export class Transitions {
     if (messages.length === 1) effects.wakeMessage = messages[0]!;
     else if (messages.length) effects.wakeMessages = messages;
     if (messages.length && bundle.compat === "stale") {
-      effects.abortMessage = "Restart the OMP session to load main, then run the bootstrap re-seal (dagu-feature-bootstrap.yaml) and adopt its stamped renders before resuming.";
+      effects.warningMessage = "Restart the OMP session to load main, then run the bootstrap re-seal (dagu-feature-bootstrap.yaml) and adopt its stamped renders.";
     }
     return effects;
   }

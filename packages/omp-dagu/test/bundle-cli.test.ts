@@ -88,6 +88,18 @@ test("admission rejects package 0.3.1 / DAG 0.2.0 before Dagu creates a run", is
   } finally { fixture.dispose(); }
 });
 
+test("admission requires exact bundle versions across patch releases", isolatedDagu, () => {
+  const fixture = admissionFixture();
+  try {
+    for (const version of ["0.3.0", "0.3.2"]) {
+      fixture.render("feature.yaml", fixture.dag, version);
+      const result = fixture.command("admit", `patch-${version.replaceAll(".", "-")}`);
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, new RegExp(`DAGU_ADMISSION_REJECTED.*feature.yaml observed=${version.replaceAll(".", "\\.")}.*package=0\\.3\\.1`));
+    }
+  } finally { fixture.dispose(); }
+});
+
 test("compatible admission enqueues exact bytes and keeps historical receipt across redeployment", isolatedDagu, () => {
   const fixture = admissionFixture();
   const run = `compatible-${randomUUID()}`;

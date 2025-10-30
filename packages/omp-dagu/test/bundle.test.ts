@@ -15,14 +15,14 @@ import {
 
 test("package metadata is the bundle compatibility authority", () => {
   assert.equal(BUNDLE_NAME, "@a4s/omp-dagu");
-  assert.equal(BUNDLE_VERSION, "0.3.78");
+  assert.equal(BUNDLE_VERSION, "0.3.79");
   assert.equal(REQUIRED_DAGU_VERSION, "2.20.1");
 });
 
-test("compatibility distinguishes exact, stale and incompatible versions", () => {
+test("compatibility accepts patch drift and distinguishes incompatible and unstamped versions", () => {
   assert.equal(classifyCompatibility("0.2.0", "0.2.0"), "ok");
-  assert.equal(classifyCompatibility("0.2.9", "0.2.0"), "stale");
-  assert.equal(classifyCompatibility("0.3.8", "0.3.18"), "stale");
+  assert.equal(classifyCompatibility("0.2.9", "0.2.0"), "ok");
+  assert.equal(classifyCompatibility("0.3.8", "0.3.18"), "ok");
   assert.equal(classifyCompatibility("0.3.0", "0.2.0"), "incompatible");
   assert.equal(classifyCompatibility("1.2.0", "2.2.0"), "incompatible");
   assert.equal(classifyCompatibility(undefined, "0.2.0"), "unstamped");
