@@ -12,9 +12,8 @@ import { Transitions } from "../src/status/progress.ts";
 import type { RunDetails } from "../src/status/progress.ts";
 import { readCiDiagnostic } from "../src/status/repository.ts";
 import { BUNDLE_VERSION } from "../src/bundle.ts";
-import { verifyQuality } from "../src/triage/quality.ts";
-import { qualityFixture } from "./quality-fixtures.ts";
 import { testRunId } from "./fixtures/run-id.ts";
+import { renderedFeature } from "./fixtures/rendered-feature.ts";
 
 const definitions = [
   ["template", "../skills/dagu-feature/"],
@@ -189,8 +188,6 @@ if(a[0]==='status') {
   writeFileSync(join(state, "base"), git(primary, "rev-parse", "HEAD") + "\n");
   const env: NodeJS.ProcessEnv = { ...process.env, LC_ALL: "C", PATH: `${bin}:${process.env.PATH}`, PRIMARY: primary, WORKTREE: worktree, BRANCH: branch, ISSUE: "226", RUN: run, PR_NUMBER: "", BASE_BRANCH: "main", GATE: "true", OMP_SESSION_ID: "ci226-owner", CI_REMOTE: remote, CI_CONTROL: control, CI_CALLS: calls, DAGU_OUTPUT_FILE: join(root, "outputs") };
   env.IMPLEMENTER = "ImplementTest";
-  env.QA = "QATest";
-  env.REVIEW = "ReviewTest";
   delete env.DAGU_PARAMS_JSON;
   return { root, primary, remote, worktree, bin, branch, control, calls, state, env, base: git(primary, "rev-parse", "HEAD") };
 }
@@ -218,16 +215,7 @@ function publish(f: Fixture, feature: string, value: string): string {
     const result = execute(f, feature, id);
     assert.equal(result.status, 0, result.stdout + result.stderr);
   }
-  const candidate = JSON.parse(readFileSync(join(f.state, "candidate.json"), "utf8"));
-  const quality = qualityFixture(f, "PASS", {
-    repo: f.primary, worktree: f.worktree, run: f.env.RUN!, sha: candidate.sha,
-    iteration: candidate.iteration, attempt: "2026-10-16T01:00:00Z",
-    implementer: f.env.IMPLEMENTER!, session: f.env.OMP_SESSION_ID!,
-    implementStartedAt: "2026-10-16T00:00:00Z",
-  });
-  const evidence = verifyQuality(quality.parent, quality.request, f.env.QA!, f.env.REVIEW!, quality.models);
-  writeFileSync(join(f.state, "quality.json"), JSON.stringify(evidence));
-  for (const id of ["quality_admit", "push", "pr"]) {
+  for (const id of ["push", "pr"]) {
     const result = execute(f, feature, id);
     assert.equal(result.status, 0, result.stdout + result.stderr);
   }
@@ -235,7 +223,8 @@ function publish(f: Fixture, feature: string, value: string): string {
 }
 
 for (const [name, base] of definitions) {
-  const feature = readFileSync(fileURLToPath(new URL(`${base}feature.yaml`, import.meta.url)), "utf8");
+  const feature = readFileSync(name === "template"
+    ? fileURLToPath(new URL(`${base}feature.yaml`, import.meta.url)) : renderedFeature, "utf8");
   const reconcile = readFileSync(fileURLToPath(new URL(`${base}reconcile.yaml`, import.meta.url)), "utf8");
   test(`${name}: A CODE_FAIL returns implement, B PASS uses the same PR and rejects late A`, async t => {
     const f = fixture();

@@ -1,6 +1,6 @@
 # OMP Dagu
 
-OMP package for the Dagu issue lifecycle: progress widget, admission and quality guards, `triage-reviewer` and `plan-reviewer` agents, and the `dagu-feature`, `backlog-breakdown`, and `discovery` skills and templates. Requires Node.js >=22.19.0 and official Dagu `2.20.1` with local authentication `none`.
+OMP package for the Dagu issue lifecycle: progress widget, admission and resource guards, `triage-reviewer` and `plan-reviewer` agents, and the `dagu-feature`, `backlog-breakdown`, and `discovery` skills and templates. Requires Node.js >=22.19.0 and official Dagu `2.20.1` with local authentication `none`.
 
 ## Runtime distribution
 
@@ -295,22 +295,19 @@ complete all six scenarios within a 30-second external process bound.
 
 ## Trabajos semánticos Dagu → OMP
 
-Los comandos `dagu-role-jobs stage triage|implement|quality_review` arrancan obligaciones
-autorizadas sin un turno del coordinador. Reutilizan el registro nativo OMP,
-sus prompts, roles, arrays completos de modelos y fallback de sesión. Conflictos
-usa `task` con alcance sobre archivos retenidos; `validation` es decisión humana.
-`quality_review` une explícitamente dos role-jobs nativos QA/reviewer.
-`quality_admit` consume sus recibos autoritativos con `dagu-role-jobs admit-quality`,
-escribe `quality.json` verificado y sella la admisión antes de la transición.
-El servicio requiere Bun y el runtime OMP instalado
-(`OMP_ROLE_RUNTIME` permite seleccionar su raíz).
+The commands `dagu-role-jobs stage triage|implement` launch authorized obligations
+without a coordinator turn. They reuse native OMP agent definitions, prompts,
+roles, complete model arrays and session fallback routing. Conflict resolution
+uses `task` over the retained conflict paths; `validation` is an operator decision.
+The service requires Bun and the installed OMP runtime
+(`OMP_ROLE_RUNTIME` can select its root).
 
 El contrato estable **schemaVersion 1** conserva
 `<git-common>/dagu-feature/runs/<run>/role-jobs/<id>/{job,result}.json` y los
 artefactos nativos. El id es SHA-256 del JSON canónico con claves ordenadas:
 
 ```json
-{"repo":"<PRIMARY canónico>","worktree":"<worktree canónico>","lane":"feature","dag":"feature","run":"<run>","stage":"quality_review","role":"qa","sha":"<40 hex>","iteration":0,"attempt":"<intento actual>"}
+{"repo":"<canonical PRIMARY>","worktree":"<canonical worktree>","lane":"feature","dag":"feature","run":"<run>","stage":"implement","role":"implement","sha":"<40 hex>","iteration":0,"attempt":"<iteration>:<step startedAt>"}
 ```
 
 `result.json` contiene `schemaVersion`, `id`, `binding`, identidad de ejecutor
@@ -323,10 +320,8 @@ las evidencias, incluida la versión OMP y el hash de su ejecutor.
 `IMPLEMENTER` y el `REVIEW` de triage transportan ids de trabajo. La admisión
 actual enlaza el recibo nativo del implementer con el SHA/iteración del candidato
 mediante `candidate.json.implementation` (HEAD de entrada y digest del resultado).
-Conserva el modelo/familia efectivos; QA/reviewer tienen sesiones frescas distintas,
-enlazadas al trabajo autorizado y su evento emisor. #517 consume esta evidencia
-semántica. Un `verdict=FAIL` conserva ejecución completada,
-jamás aceptación de calidad. Las observaciones #277 mantienen el recibo inicial.
+Native receipts preserve the effective model, session, emitting event and
+structured output. Linked runtime observations preserve the initial admission receipt.
 [SKILL](skills/dagu-feature/SKILL.md#role-job-receipt-contract-schemaversion-1).
 
 El verificador de triage informa el PRIMARY canónico, el recibo exacto del
@@ -586,29 +581,19 @@ El mismo límite cubre completar human tasks, push-back, retries y el retorno
 BEHIND/DIRTY de `await_merge` a `rebase`. La capacidad declarada de la cola se
 conserva (`a4s=8`); pasos ajenos al gate siguen avanzando.
 
-Después, `quality_prepare` genera una solicitud SHA/run/iteración/intento y
-`quality_review` arranca `qa` y `reviewer` independientemente del coordinador.
-Cada obligación recibe el marcador SHA/run/iteración/intento exacto y el contrato
-estructurado de [SKILL.md](skills/dagu-feature/SKILL.md#effective-qa-and-review).
-QA ejecuta la aceptación indicada y reviewer inspecciona el mismo candidato;
-sus resultados retienen los comandos, hallazgos y modelos realmente usados.
-La admisión consume los recibos del boundary y valida familias, fallbacks
-efectivos y evidencia del candidato. Exige bytes/digest del artefacto nativo,
-salida estructurada y bindings actuales por obligación; QA y reviewer pueden
-compartir familia entre sí, pero no con el implementer. Dos PASS avanzan el join;
-cualquier FAIL devuelve sus hallazgos al mismo ticket.
-
-`quality.json` contiene dos veredictos independientes con procedencia y hashes
-de transcript; `quality_admit` los valida y `quality_transition` hace push-back
-a `implement` con la iteración observada y hallazgos ante FAIL. Dos PASS vigentes
-permiten publicar. La secuencia gate → QA/review → admisión precede a cada
-actualización de la rama del PR, también tras correcciones y rebases; se renuevan
-ambas evidencias para el nuevo candidato/intento. `auto_merge` comprueba ese SHA.
-Este control es **advisory mientras la TUI tenga acceso al store de Dagu**.
-`push` publica el SHA validado explícito con lease de la rama y worktree limpio.
-`pr` reutiliza el PR abierto y verifica rama y SHA; `auto_merge` comprueba el
-mismo SHA antes de solicitar su fusión. La salida reconoce el checkpoint exacto
-antes de retirar recursos locales limpios. Para recuperar en una copia limpia:
+After a gate PASS, the feature lifecycle follows `push → pr → auto_merge`,
+with an optional adopted operator `validation` procedure before `push`.
+The same publication path runs for every correction and rebase, each with fresh
+gate evidence for the current candidate. `push` publishes the explicit tested SHA
+with a branch lease and clean worktree. `pr` creates or reuses the open PR and
+verifies its branch and SHA; guarded `auto_merge` verifies that same SHA before
+enabling merge. The run then waits at `await_ci` and `await_merge`; the reconciler
+observes required CI and merge, returning code failures to `implement` and
+BEHIND/DIRTY candidates to `rebase`. GitHub merges after required CI succeeds.
+Triage review and its configured cross-family reviewer retain their existing contract.
+These checks are advisory while the TUI has direct Git and Dagu-store access.
+Exit cleanup verifies integration before removing clean local resources.
+To recover in a clean checkout:
 
 ```sh
 git fetch origin refs/dagu/checkpoints/issue-N
@@ -631,11 +616,11 @@ scoped authorization, and a URL receipt verified and read by the consumer.
 
 ## Validación opcional del repositorio
 
-Bootstrap pregunta `VALIDATION` (opcional, vacía por defecto) y adopción fija
-el procedimiento en el default y enum del DAG. Cambiarlo exige una adopción;
-un override distinto al encolar se rechaza antes de crear el run. Para a4s el
-valor sigue vacío. El flujo es `gate → recover_gate → quality_prepare → quality_review → quality_admit → quality_transition → validation → push`:
-vacío omite la espera, gate fallido espera en recuperación y la rama PoC conserva `POC=no` en push.
+Bootstrap asks for `VALIDATION` (optional, empty by default); adoption fixes the
+procedure in the DAG's default and enum. Changing it requires a new adoption;
+admission rejects an enqueue-time override.
+The a4s value remains empty. The path is `gate → recover_gate → validation → push`:
+an empty procedure skips validation, a failed gate waits for recovery, and publication requires `POC=no`.
 
 Con procedimiento declarado, el aviso visible de la extensión y la tarea en
 Dagu muestran repo, run, paso, SHA probado, procedimiento y comandos exactos.
@@ -644,7 +629,7 @@ Tras ejecutar el procedimiento, completar con `APPROVED=yes` y
 publicar; `validation.json` conserva SHA y procedimiento. Los formularios de
 Dagu 2.20.1 son estáticos: otro SHA bien formado completa la tarea pero falla
 push sin publicar y conserva el run en `recover_push` para inspección.
-Un candidato modificado requiere repetir gate, QA/review y validación. Rechazar con `dagu human-task push-back feature --run-id
+Un candidato modificado requiere repetir el gate y cualquier validación opcional adoptada por el operador. Rechazar con `dagu human-task push-back feature --run-id
 <run> --step validation --expected-iteration <iteración observada> --input
 REASON='<motivo>'`: Dagu conserva el motivo y devuelve a implement. Leer la
 iteración actual en `dagu status`; corrección o rebase repite gate y validación.

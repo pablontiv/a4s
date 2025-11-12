@@ -9,7 +9,6 @@ import { setTimeout as delay } from "node:timers/promises";
 import { parse, stringify } from "yaml";
 import { liveDagu } from "../fixtures/live-dagu.ts";
 import { PocDiagnostics } from "../fixtures/poc-diagnostics.ts";
-import { qualityDecision } from "../../src/triage/quality.ts";
 import { waitingSnapshot } from "../fixtures/waiting-snapshot.ts";
 import { testRunId } from "../fixtures/run-id.ts";
 
@@ -73,7 +72,7 @@ test("distributed waiting checkpoints cancel before recovery, publication and pr
       const template = readFileSync(new URL(`../../skills/dagu-feature/${kind}.yaml`, import.meta.url), "utf8");
       const source: Template = parse(variant === "historical-feature" ? waitingSnapshot(template) : template);
       const checkpoints = source.steps.filter(step => step.action === "human.task" &&
-        (variant !== "historical-feature" || ["triage", "implement", "quality_review"].includes(step.id)));
+        (variant !== "historical-feature" || ["triage", "implement"].includes(step.id)));
       for (const checkpoint of checkpoints) {
         for (const retained of checkpoint.id === "implement" ? [false, true] : [false]) {
           const run = testRunId(`${variant}-${checkpoint.id}-${retained ? "keep" : "drop"}`);
@@ -141,17 +140,6 @@ test("distributed waiting checkpoints cancel before recovery, publication and pr
           await until(async () => { const runState = await details(kind, run); return runState?.statusLabel === "waiting" && runState.nodes.some(node => node.step.name === checkpoint.id && node.statusLabel === "waiting") ? runState : undefined; });
           const rejected = spawnSync("dagu", ["human-task", "complete", kind, "--run-id", run, "--step", checkpoint.id, "--input", "CANCEL=invalid"], { env, encoding: "utf8" });
           assert.notEqual(rejected.status, 0, `${run}: form enum validation stays active`);
-          if (kind === "feature" && ["implement", "quality_review"].includes(checkpoint.id)) {
-            const previous = process.env.DAGU_URL;
-            process.env.DAGU_URL = `http://127.0.0.1:${port}`;
-            try {
-              assert.equal(await qualityDecision({ toolName: "bash", toolCallId: "cancel", input: {
-                command: `dagu human-task complete feature --run-id ${run} --step ${checkpoint.id} --input CANCEL=yes`,
-              } }, { cwd: primary, sessionManager: { getSessionDir: () => root } }), undefined);
-            } finally {
-              if (previous === undefined) delete process.env.DAGU_URL; else process.env.DAGU_URL = previous;
-            }
-          }
           dagu("human-task", "complete", kind, "--run-id", run, "--step", checkpoint.id, "--input", "CANCEL=yes");
           const terminal = kind === "feature" && ["await_ci", "await_merge"].includes(checkpoint.id) ? "aborted" : "failed";
           const result = await until(async () => { const runState = await details(kind, run); return runState?.statusLabel === terminal && runState.onExit?.statusLabel === "succeeded" ? runState : undefined; });

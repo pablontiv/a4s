@@ -14,12 +14,12 @@ import { roleAdmission, roleExecution } from "./role-job-fixtures.ts";
 function fixture() {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "a4s-role-jobs-")));
   const repo = join(root, "repo"); mkdirSync(repo);
-  const binding: JobBinding = { repo, worktree: repo, lane: "feature", dag: "feature", run: "feature-513", stage: "quality_review",
-    role: "qa", sha: "a".repeat(40), iteration: 0, attempt: "123.1" };
+  const binding: JobBinding = { repo, worktree: repo, lane: "feature", dag: "feature", run: "feature-513", stage: "triage",
+    role: "triage", sha: "a".repeat(40), iteration: 0, attempt: "123.1" };
   return { root, repo, binding, home: join(root, "dagu"), directory: join(root, "results"),
     cleanup: () => rmSync(root, { recursive: true, force: true }) };
 }
-function completed(job: Job, output: Record<string, unknown> = { verdict: "FAIL" }): JobResult {
+function completed(job: Job, output: Record<string, unknown> = { poc: "no" }): JobResult {
   return { schemaVersion: 1, id: job.id, binding: job.binding, executor: job.executor, state: "completed",
     readyAt: job.readyAt, startedAt: job.startedAt, finishedAt: new Date().toISOString(), readyToStartMs: 0, output };
 }
@@ -35,7 +35,7 @@ test("duplicate delivery across database clients has one owner and one terminal 
     first.finish(claim.job, completed(claim.job));
     const retained = second.claim(f.binding, f.directory, readyAt, () => {});
     assert.equal(retained.kind, "terminal");
-    if (retained.kind === "terminal") assert.equal(retained.result.output?.verdict, "FAIL");
+    if (retained.kind === "terminal") assert.equal(retained.result.output?.poc, "no");
     assert.equal(JSON.parse(readFileSync(join(f.directory, "job.json"), "utf8")).state, "completed");
     assert.throws(() => second.claim(f.binding, join(f.root, "moved"), readyAt, () => {}), /retained artifact directory/);
     assert.throws(() => second.finish(claim.job, completed(claim.job)), /active execution/);
@@ -69,7 +69,7 @@ test("capacity is explicit, durable and shared by independent repositories", () 
   try {
     assert.equal(store.claim(f.binding, f.directory, readyAt, () => {}).kind, "claimed");
     const otherRepo = join(f.root, "independent-repo"); mkdirSync(otherRepo);
-    const unrelated = { ...f.binding, repo: otherRepo, worktree: otherRepo, run: "unrelated-ticket", role: "reviewer" as const };
+    const unrelated = { ...f.binding, repo: otherRepo, worktree: otherRepo, run: "unrelated-ticket" };
     assert.equal(store.claim(unrelated, join(f.root, "unrelated"), readyAt, () => {}).kind, "claimed");
     assert.equal(store.claim({ ...unrelated, run: "third" }, join(f.root, "third"), readyAt, () => {}).kind, "capacity");
     assert.throws(() => new RoleJobStore(f.home, 3), /persisted DAGU_HOME policy/);
@@ -82,7 +82,7 @@ test("candidate mutation is exclusive to its actual worktree while unrelated wor
   try {
     const implement = { ...f.binding, role: "implement" as const, stage: "implement" };
     assert.equal(store.claim(implement, f.directory, readyAt, () => {}).kind, "claimed");
-    assert.equal(store.claim(f.binding, join(f.root, "qa"), readyAt, () => {}).kind, "capacity");
+    assert.equal(store.claim(f.binding, join(f.root, "triage"), readyAt, () => {}).kind, "capacity");
     assert.equal(store.claim({ ...implement, attempt: "next" }, join(f.root, "next"), readyAt, () => {}).kind, "capacity");
     const other = join(f.root, "other"); mkdirSync(other);
     assert.equal(store.claim({ ...implement, worktree: other, run: "other" }, join(f.root, "other-result"), readyAt, () => {}).kind, "claimed");
@@ -97,18 +97,18 @@ test("readiness and current identity authorize claims before any execution", () 
     assert.throws(() => jobId({ ...f.binding, iteration: -1 }), /binding/);
     assert.notEqual(jobId(f.binding), jobId({ ...f.binding, sha: "b".repeat(40) }));
     const state = { iteration: 2, params: "", nodes: [
-      { step: { id: "quality_prepare" }, statusLabel: "succeeded", startedAt: readyAt },
-      { step: { id: "quality_review" }, statusLabel: "running", startedAt: readyAt },
+      { step: { id: "admit" }, statusLabel: "succeeded", startedAt: readyAt },
+      { step: { id: "triage" }, statusLabel: "running", startedAt: readyAt },
     ] };
-    assert.equal(requireReadyStage(state, "quality_review", ["quality_prepare"]).startedAt, readyAt);
+    assert.equal(requireReadyStage(state, "triage", ["admit"]).startedAt, readyAt);
     assert.throws(() => requireReadyStage(state, "implement", []), /current running/);
-    assert.throws(() => requireReadyStage(state, "quality_review", ["gate"]), /not ready/);
+    assert.throws(() => requireReadyStage(state, "triage", ["gate"]), /not ready/);
     state.nodes[0]!.statusLabel = "failed";
-    assert.throws(() => requireReadyStage(state, "quality_review", ["quality_prepare"]), /not ready/);
+    assert.throws(() => requireReadyStage(state, "triage", ["admit"]), /not ready/);
   } finally { store.close(); f.cleanup(); }
 });
 
-test("native session/model/fallback evidence is sealed and bound, including FAIL outputs", () => {
+test("native session/model/fallback evidence is sealed and bound to triage output", () => {
   const f = fixture(); const store = new RoleJobStore(f.home, 1);
   try {
     const claim = store.claim(f.binding, f.directory, readyAt, () => {}); assert.equal(claim.kind, "claimed");
@@ -117,8 +117,8 @@ test("native session/model/fallback evidence is sealed and bound, including FAIL
     const transcript = join(f.directory, `${claim.job.id}.jsonl`);
     const rows = [ { type: "session", id: "native-session-1" },
       { type: "model_change", id: "fallback", model: "provider/actual", resolvedModelIsFallback: true },
-      { type: "message", id: "response", message: { role: "assistant", provider: "provider", model: "actual", stopReason: "toolUse", content: [{ type: "toolCall", id: "yield-1", name: "yield", arguments: { data: JSON.stringify({ verdict: "FAIL" }) } }] } },
-      { type: "message", id: "yield-result", message: { role: "toolResult", toolName: "yield", toolCallId: "yield-1", details: { status: "success", data: { verdict: "FAIL" } } } } ];
+      { type: "message", id: "response", message: { role: "assistant", provider: "provider", model: "actual", stopReason: "toolUse", content: [{ type: "toolCall", id: "yield-1", name: "yield", arguments: { data: JSON.stringify({ poc: "no" }) } }] } },
+      { type: "message", id: "yield-result", message: { role: "toolResult", toolName: "yield", toolCallId: "yield-1", details: { status: "success", data: { poc: "no" } } } } ];
     writeFileSync(transcript, rows.map(row => JSON.stringify(row)).join("\n") + "\n");
     const result = { ...completed(claim.job), native: nativeEvidence(transcript, { patterns: ["@slow", "other/model"], role: "slow" }) };
     store.finish(claim.job, result);
@@ -127,7 +127,7 @@ test("native session/model/fallback evidence is sealed and bound, including FAIL
     assert.equal(result.native.model, "actual"); assert.equal(result.native.fallbacks.length, 1);
     assert.throws(() => verifyJobResult(path, { attempt: "stale" }), /attempt mismatch/);
     writeFileSync(transcript, readFileSync(transcript, "utf8") + JSON.stringify({ type: "session_exit" }) + "\n");
-    assert.equal(verifyJobResult(path).output?.verdict, "FAIL");
+    assert.equal(verifyJobResult(path).output?.poc, "no");
     writeFileSync(transcript, "changed prefix\n");
     assert.throws(() => verifyJobResult(path), /transcript changed/);
   } finally { store.close(); f.cleanup(); }
@@ -139,7 +139,7 @@ test("stage progression retains one execution on concurrent delivery and reports
   const delivered = new Promise<void>(resolve => { resolveDelivered = resolve; });
   try {
     const options = { home: f.home, capacity: 2, binding: f.binding, directory: f.directory, readyAt,
-      assignment: "bounded QA", authorize: async () => { if (++authorizations >= 2) resolveDelivered(); }, execute: async () => {
+      assignment: "bounded triage", authorize: async () => { if (++authorizations >= 2) resolveDelivered(); }, execute: async () => {
         executions++; await delivered;
         throw new Error("provider exhausted");
       } };
@@ -298,7 +298,7 @@ test("independent OS processes share the same transactional claim", async () => 
 test("each required semantic stage has a registered role contract and Dagu consumes its outputs", () => {
   const f = fixture();
   try {
-    for (const role of ["triage", "implement", "conflict-resolution", "qa", "reviewer"] as const) {
+    for (const role of ["triage", "implement", "conflict-resolution"] as const) {
       const binding = { ...f.binding, role };
       const schema = roleSchema(binding);
       assert.equal(schema.type, "object");
@@ -311,17 +311,9 @@ test("each required semantic stage has a registered role contract and Dagu consu
       assert.equal(node.run, `dagu-role-jobs stage ${stage}`);
       assert.deepEqual(node.outputs.map((output: { name: string }) => output.name), outputs);
     }
-    const quality = dag.steps.find((step: { id: string }) => step.id === "quality_review");
-    assert.equal(quality.run, "set -euo pipefail\ndagu-role-jobs stage quality_review\n");
-    assert.deepEqual(quality.outputs.map((output: { name: string }) => output.name), ["QA", "REVIEW"]);
-    const transition = dag.steps.find((step: { id: string }) => step.id === "quality_transition");
-    assert.equal(transition.action, "human.task");
-    assert.deepEqual(transition.with.form.properties.CANCEL, { type: "string", enum: ["yes", "no"] });
-    const cancellation = dag.steps.find((step: { id: string }) => step.id === "quality_transition_cancellation");
-    assert.equal(cancellation.depends, "quality_transition");
-    assert.equal(dag.steps.find((step: { id: string }) => step.id === "quality_admit").depends, "quality_review");
+    assert.equal(dag.steps.find((step: { id: string }) => step.id === "validation").depends, "recover_gate_cancellation");
+    assert.equal(dag.steps.find((step: { id: string }) => step.id === "push").depends, "validation_cancellation");
     assert.equal(dag.steps.find((step: { id: string }) => step.id === "validation").action, "human.task");
     assert.equal(dag.steps.find((step: { id: string }) => step.id === "capture").env[2].IMPLEMENTER, "${steps.implement.outputs.IMPLEMENTER}");
-    assert.equal(dag.steps.find((step: { id: string }) => step.id === "quality_admit").env[0].QA, "${steps.quality_review.outputs.QA}");
   } finally { f.cleanup(); }
 });
