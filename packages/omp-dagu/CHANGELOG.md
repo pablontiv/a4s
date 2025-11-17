@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.105
+
+- Support native task batches containing QA/reviewer assignments for independent current quality requests, binding each assignment's verdict contract and model eligibility to its own run and effective implementer (#495).
+- Validate every marked assignment before installing dispatch bindings; preserve exact markers, distinct names, request/candidate freshness and independent transcript-backed verdict admission. Unmarked tasks and shared batch context retain their native behavior.
+
 ## 0.3.104
 
 - Align the distributed skill with the approved same-major-and-minor, patch-compatible admission contract for requested DAG and reconciler stamps, distinguishing exact package identity, source provenance, native-version checks and notice-only stale warnings while preserving immutable admission snapshots (#482).

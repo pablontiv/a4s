@@ -1086,6 +1086,22 @@ the step log. Launch two named `task` subagents, `agent=qa` and `agent=reviewer`
 each with its exact marker in its task assignment. Each subagent name identifies
 exactly one attempted invocation; use a fresh `v<N>` suffix for an already-attempted
 name (for example `Review379v2`). Guard-blocked attempts count as invocations.
+
+One native `task` invocation may contain QA/reviewer pairs for several independent
+current quality requests, in either order, alongside unmarked unrelated tasks.
+Each marked assignment carries exactly one complete role marker, including its
+own run, SHA, iteration and attempt; shared `context` remains common instructions.
+Each quality name is distinct within the batch and from its implementer. The
+guard loads and validates each assignment's own persisted request and effective
+implementer, then injects that request's worktree command and literal verdict
+bindings. Cross-family eligibility and dispatch authorization are per assignment,
+including when the runs have different effective implementer families.
+Every marked assignment must pass before the batch is admitted or any model
+binding is installed. Ambiguous markers, invalid roles and prose containing
+`FEATURE_QUALITY RUN=` remain guarded and fail closed; use unmarked text for
+unrelated work. Batching dispatch preserves each run's separate completion,
+freshness, parent-invocation provenance and sealed transcript admission.
+
 Give QA the issue's targeted acceptance commands and require the exact commands/results
 in its findings; reviewer independently inspects the same candidate and acceptance.
 Both run `git -C "<worktree>" rev-parse HEAD` as a standalone bash command,
