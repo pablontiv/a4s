@@ -587,6 +587,15 @@ Dagu clears the scope step's REST log reference on rewind. If dispatch fails,
 inspect `poc/runs/<RUN>/scope-transition.log` in PRIMARY's git metadata and push
 back `fix_result` with the current observed iteration.
 
+To decline before executing the experiment, complete `run_poc` with a nonempty
+reason. This posts exactly one `PoC declined by operator: <reason>` issue comment,
+skips verdict publication and `decide`/promotion, and ends successfully. The exit
+handler removes the PoC worktree and branch; no result file is required.
+
+```sh
+dagu human-task complete poc --run-id <id> --step run_poc --input decline='no longer needed'
+```
+
 ```sh
 dagu human-task complete poc --run-id <id> --step run_poc
 dagu human-task push-back poc --run-id <id> --step decide --expected-iteration 0
