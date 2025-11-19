@@ -572,6 +572,15 @@ required for PASS. An empty diff is valid. Tests by the rendered convention and
 all Markdown paths belong to cutover; the scope gate checks tracked changes,
 both rename paths and NUL-delimited untracked names against BASE_SHA.
 
+To decline before executing the experiment, complete `run_poc` with a nonempty
+reason. This posts exactly one `PoC declined by operator: <reason>` issue comment,
+skips verdict publication and `decide`/promotion, and ends successfully. The exit
+handler removes the PoC worktree and branch; no result file is required.
+
+```sh
+dagu human-task complete poc --run-id <id> --step run_poc --input decline='no longer needed'
+```
+
 ```sh
 dagu human-task complete poc --run-id <id> --step run_poc
 dagu human-task push-back poc --run-id <id> --step decide --expected-iteration 0

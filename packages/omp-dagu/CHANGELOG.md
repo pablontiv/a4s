@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.59
+
+- Allow operators to decline a PoC at run_poc with a reason, recording one issue comment and cleaning up without a verdict or feature promotion (#263).
+
 ## 0.3.49
 
 - Preserve candidates in leased checkpoint refs and publish the exact gated SHA only while the candidate remains clean and fresh (#275).
