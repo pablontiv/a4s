@@ -153,7 +153,7 @@ set -eu
 COMMENTS='${env.COMMENTS}'
 case "$1 $2" in
   "repo view") echo owner/repo ;;
-  "issue view") echo '{"body":"## PoC\\nFallback question\\nwith a second line\\n\\n## Other\\nignored"}' ;;
+  "issue view") echo '{"body":"## PoC\\nExplicit question\\nwith a second line\\n\\n## Después del PASS\\nMaintain the demonstrated behavior."}' ;;
   "issue comment")
     shift 2
     while [[ $# -gt 0 ]]; do
@@ -165,6 +165,8 @@ case "$1 $2" in
     done
     echo https://example.invalid/comment/1 ;;
   "issue edit") ;;
+  "api --paginate")
+    jq -Rs '[[{body:.,html_url:"https://example.invalid/comment/1"}]]' "$COMMENTS" ;;
   *) echo "unexpected gh: $*" >&2; exit 1 ;;
 esac
 `);
@@ -250,7 +252,7 @@ esac
       const comments = readFileSync(env.COMMENTS, "utf8");
       if (mode === "decline") {
         assert.equal(comments, "PoC declined by operator: no longer needed\n");
-        for (const name of ["scope_gate", "fix_result", "publish", "decide", "dispose"]) {
+        for (const name of ["scope_gate", "fix_result", "publish", "validate_promotion", "decide", "dispose"]) {
           assert.equal(run.nodes.find(n => n.step.name === name)?.statusLabel, "skipped", name);
         }
       } else {

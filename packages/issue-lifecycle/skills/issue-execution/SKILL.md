@@ -1015,45 +1015,36 @@ native start timestamp permits recovery from failed/interrupted role jobs.
 | poc | base_primary_unavailable | detect_base_primary |
 | poc | run_poc | worktree |
 | poc | fix_result | scope_gate |
-| poc | decide | publish (replays GitHub publication; see precautions below) |
+| poc | decide | validate_promotion (no publication replay in current snapshots) |
 | discovery | discover | snapshot |
 | discovery | validate | temporal |
 | discovery | consolidate | check_verdicts |
 | planning | review | check_plan |
 | planning | approve | check_review |
 
-**PoC `decide`: publication replay requires operator review.**
+**PoC `decide` and `dispose` recovery.**
 
-In [`poc.yaml`](poc.yaml), `decide` depends directly on `publish` and its
-push-back destination is `run_poc`. There is no non-publishing predecessor that
-can reopen `decide`: retrying `scope_gate` with `--downstream` also reaches
-`publish`, and retrying `dispose` would bypass the pending decision.
+Current [`poc.yaml`](poc.yaml) snapshots validate the published PASS and current
+issue preconditions in `validate_promotion` before opening `decide`. Its
+push-back destination remains `run_poc`. If an issue precondition fails, correct
+the issue and retry `validate_promotion` with `--downstream poc` to reach the
+decision without republishing evidence. The same route reopens a failed Waiting
+`decide` after inspecting its retained effects.
 
-`publish` is not idempotent. It clears `comment.url`, creates another verdict
-comment (or evidence chunks and an index comment for oversized evidence), and
-writes the new URL to `comment.url`. For `VERDICT=PASS` and `SCOPE=OK`, it also
-reads the current issue body and appends another `## Después del PASS` section.
-It neither reuses a matching verdict marker nor replaces an existing section.
+If `decide` already completed with `promote=yes` and `dispose` fails, correct
+the precondition and run
+`dagu retry --run-id '<run>' --step dispose poc`. This rechecks the issue and
+published evidence without requiring verdict comment deletion. The failure
+handler does not republish a pending PASS, and exit cleanup retains its worktree,
+branch and patch until promotion succeeds or the operator declines/cancels.
 
-Before choosing `--step publish --downstream poc`, preserve
-`<git-dir>/poc/runs/<run>/comment.url`, `attempt`, `base.sha`, `result.md`,
-`scope` and the issue's current body/comments. Read the live issue with
-`gh issue view <issue> --repo <owner/repo> --json body,comments`; correlate the
-`<!-- poc-verdict:... run:<run> attempt:<attempt> base:<sha> -->` marker and any
-linked evidence chunks against those saved artifacts. A previous successful
-`publish` at a failed Waiting `decide` means these effects already occurred;
-the presence of `comment.url` alone is not a deduplication guard.
-
-Retry only with operator authorization for that publication replay and any
-needed GitHub reconciliation. Compare the saved issue body/comments with the
-post-retry issue before deciding; identify repeated verdicts by the same
-run/attempt/base and matching evidence, and repeated PASS sections by their
-content. Reconcile only the identified replay effects under that authorization,
-preserving unrelated edits and the current `comment.url` publication. If repeat
-publication is unacceptable, retain the failed run and request an idempotent
-publisher repair: the current DAG has no duplicate-free native retry route to
-Waiting `decide`. If `decide` already completed, use its pending successor
-`dispose` instead of replaying publication.
+Stored snapshots are immutable. Older snapshots with `decide` depending directly
+on `publish` still require operator-authorized publication replay to reopen that
+checkpoint. `publish` is not idempotent: it creates another verdict comment (or
+chunks/index) and appends another `## Después del PASS` section for PASS/scope:OK.
+Before retrying `publish`, preserve the run's `comment.url`, `attempt`, `base.sha`,
+`result.md`, `scope` and current issue body/comments. Reconcile only identified
+duplicate effects under operator authorization, preserving unrelated edits.
 
 Observed same-run recoveries: `a4s-issue-483-s01a161ff` returned to
 `implement` with `--step start_gate`, then recovered its completed implementation
@@ -1203,12 +1194,13 @@ diffstat and patch, with a marker-bearing preview bounded to 48,000 characters.
 PASS copies Después del PASS into the issue body. Publication records
 `full.patch.sha256`, the SHA-256 of the `full.patch` bytes, including an empty patch.
 
-PASS with promote=yes reads all paginated comments and requires the latest valid
-first-line marker to be PASS/scope:OK with a normalized question matching the
-latest triage question (or the question body for an issue created by record)
-and nonempty required sections outside fences.
-It verifies Después del PASS in the body and enqueues the absolute feature
-DAG with ISSUE and POC_BASIS pointing to the PASS;
+Before `decide`, `validate_promotion` reads all paginated comments and requires
+the latest scope:OK first-line marker for this run, attempt and BASE_SHA to be
+PASS, with a normalized question matching the latest triage question (or the
+issue's `## PoC` section) and nonempty required sections outside fences.
+It also requires a nonempty `## Después del PASS` in the issue body.
+PASS with promote=yes repeats these checks in `dispose` and enqueues the
+absolute feature DAG with ISSUE and POC_BASIS pointing to that PASS;
 the PoC run and promoted `feature-<RUN>` run retain the original run's
 `OMP_SESSION_ID`, so the same coordinating OMP session receives the promoted run's
 notices. Its triage role job reads that PASS URL as review input and produces the
@@ -1230,18 +1222,22 @@ matches that digest, including when the PoC patch and any further feature edit
 are both empty, and stores the same fact on `candidate.json` as `pocBasis`.
 Any other edit records `feature_delta=changed`. The later rebase carries the
 candidate onto the current origin base. The implement assignment reads
-`poc-basis.json` and preserves the applied changes. Exit cleanup still removes
-the PoC worktree and local branch after publication; the patch kept in git
-metadata is what the feature run applies.
+`poc-basis.json` and preserves the applied changes. After successful promotion
+or an explicit negative decision, exit cleanup removes the PoC worktree and local
+branch; the patch kept in git metadata is what the feature run applies.
 
 PASS with promote=no does not enqueue a feature run and does not carry a
 candidate. FAIL closes only an issue created by record as
 `not planned`; preexisting issues stay open. For INCONCLUSIVE, the operator
 chooses iteration or completion with promote=no, subject to the mandate exception below.
 
-On failure the handler attempts publication from per-RUN files before exit
-cleanup. After validating the canonical managed worktree, branch and run
-ownership, cleanup removes a clean worktree normally. A dirty worktree is
+On failure the handler attempts publication from per-RUN files unless a published
+PASS is pending disposition. That pending PASS keeps its original patch,
+checksum, comment URL, worktree and branch through correctable promotion failures.
+When the worktree is absent, publication preserves saved patch/diffstat bytes
+instead of truncating them. A new scope-gate attempt resets pending disposition.
+After validating canonical managed worktree, branch and run ownership, ordinary
+cleanup removes a clean worktree normally. A dirty worktree is
 force-removed only when the current full binary patch (tracked changes against
 the recorded BASE_SHA plus nonignored untracked files) exactly matches the
 published `full.patch` and the publication marker `comment.url` is nonempty.
