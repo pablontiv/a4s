@@ -6,10 +6,10 @@ import { atomicJson, jobId, type JobBinding, type JobResult } from "../../src/ro
 import { nativeEvidence } from "../../src/role-runtime.ts";
 
 export { fixture };
-function fixture() {
+function fixture(iteration = 0) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "omp-dagu-triage-role-")));
   execFileSync("git", ["init", "--quiet", root]);
-  const binding: JobBinding = { repo: root, worktree: root, lane: "feature", dag: "feature", run: "fixture-run", stage: "triage", role: "triage", sha: "a".repeat(40), iteration: 0, attempt: "0" };
+  const binding: JobBinding = { repo: root, worktree: root, lane: "feature", dag: "feature", run: "fixture-run", stage: "triage", role: "triage", sha: "a".repeat(40), iteration, attempt: "0" };
   const id = jobId(binding);
   const directory = join(root, ".git", "dagu-feature", "runs", binding.run, "role-jobs", id);
   mkdirSync(directory, { recursive: true });

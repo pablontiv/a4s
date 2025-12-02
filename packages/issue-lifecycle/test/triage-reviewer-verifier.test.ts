@@ -93,14 +93,19 @@ test("bound triage output retains field expected observed diagnostics", () => {
   }
 });
 
-test("triage command retains receipt diagnostics and rejects stale native iterations", async () => {
-  const f = fixture();
+for (const iteration of [0, 1, 2]) {
+test(`triage command verifies environment iteration ${iteration} without status-text iteration and rejects stale results`, async () => {
+  const f = fixture(iteration);
   try {
     const env = { PRIMARY: f.root, RUN: "fixture-run", REVIEW: f.id, POC: "no",
-      QUESTION: String(f.result.output!.question), BASIS: String(f.result.output!.reason) };
-    const verify = async (iteration = 0) => {
+      QUESTION: String(f.result.output!.question), BASIS: String(f.result.output!.reason),
+      DAG_PUSHBACK_ITERATION: String(iteration) };
+    let statusCalls = 0;
+    const verify = async (nativeIteration: string | undefined) => {
       const saved = Object.fromEntries(Object.keys(env).map(key => [key, process.env[key]]));
       Object.assign(process.env, env);
+      if (nativeIteration === undefined) delete process.env.DAG_PUSHBACK_ITERATION;
+      else process.env.DAG_PUSHBACK_ITERATION = nativeIteration;
       let stdout = "", stderr = "", status: number | undefined;
       try {
         await roleJobs(["verify-triage"], {
@@ -111,8 +116,8 @@ test("triage command retains receipt diagnostics and rejects stale native iterat
           dispatchStage,
           execFileSync: ((file: string, args: string[], options: object) => {
             if (file === "dagu") {
-              assert.deepEqual(args, ["status", "feature", "--run-id", "fixture-run"]);
-              return `push-back iteration: ${iteration}\n`;
+              statusCalls++;
+              return "Status: Running\n";
             }
             assert.equal(file, "git");
             return execFileSync(file, args, options);
@@ -126,21 +131,27 @@ test("triage command retains receipt diagnostics and rejects stale native iterat
         }
       }
     };
-    const success = await verify();
+    const success = await verify(String(iteration));
     assert.equal(success.status, 0, success.stderr);
     assert.ok(success.stdout.includes(`primary.canonical=${f.root}\n`));
     assert.ok(success.stdout.includes(`result.path=${f.path}\n`));
     assert.ok(success.stdout.includes(`transcript.path=${f.transcript}\n`));
     assert.match(success.stdout, /VERIFIER=PASS role_job=/);
-    const stale = await verify(1);
+    if (iteration === 0) {
+      const defaultIteration = await verify(undefined);
+      assert.equal(defaultIteration.status, 0, defaultIteration.stderr);
+    }
+    const stale = await verify(String(iteration + 1));
     assert.equal(stale.status, 1);
-    assert.match(stale.stderr, /another native iteration[\s\S]*VERIFIER=FAIL/);
+    assert.equal(stale.stderr, "DAGU_ROLE_JOB_BLOCKED: Triage result belongs to another native iteration\nVERIFIER=FAIL\n");
     assert.ok(stale.stdout.includes(`result.path=${f.path}\n`));
     rmSync(f.path);
-    const missing = await verify();
+    const missing = await verify(String(iteration));
     assert.equal(missing.status, 1);
     assert.ok(missing.stdout.includes(`result.path=${f.path}\n`));
     assert.match(missing.stderr, /ENOENT[\s\S]*VERIFIER=FAIL/);
+    assert.equal(statusCalls, 0, "native iteration must not depend on dagu status");
   } finally { f.cleanup(); }
 });
+}
 
