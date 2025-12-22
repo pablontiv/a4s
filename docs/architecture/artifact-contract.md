@@ -272,6 +272,93 @@ The ambient successor calls being replaced are
 Tests MUST cover each transition after the tag moves, a changed child policy and
 missing parent cache content, with nothing enqueued on failure.
 
+## Pinned planning-reviewer selection and rediscovery policy (U4)
+
+This section records the verified PoC-2 result for
+[#788](https://github.com/pablontiv/a4s/issues/788) and the selection adopted for
+[U4 / #795](https://github.com/pablontiv/a4s/issues/795). The
+[published PASS and retained-evidence inventory](https://github.com/pablontiv/a4s/issues/788#issuecomment-6515034373)
+are the evidence authority. Evidence root `E` is
+`<git-dir>/poc/runs/poc-a4s-issue-788/computations/pinned-agents/`, where
+`<git-dir>` is the primary repository's common Git directory, not a worktree's
+`.git` pointer. `E/summary.json` records both native review results and the
+rediscovery matrix; `E/identities.json` records the exercised binary identities.
+These are retained local evidence, not release assets.
+
+### Selected native cached-build mechanism
+
+U4 selects native OMP startup loading with **`-e <run-cached-build>`**, pointing
+at the run's complete cached package root before invoking native `task` with
+`agent: "plan-reviewer"`. With compiled OMP **18.14.0**, the fixture parent
+loaded cached build A this way while the isolated plugin registry linked newer
+build B. Native discovery reported source `user`; the unchanged agent name
+returned schema-valid `SENTINEL=A`, and its child `session_init` contained A's
+instruction, not B's. A project `.omp/agents` symlink to A's agents directory
+independently passed with source `project`; it is an observed alternative, not
+the selected production mechanism. Native `task` exposed name-based selection;
+no definition-file selector was established, and `taskFile` is assignment input,
+not agent-definition loading.
+
+Both a4s-shipped agent definitions MUST be pinned to the run's cached artifact.
+For interactive planning review, U4 MUST establish that run-scoped native
+discovery context before the name-based launch, rather than resolving the
+reviewer from the currently linked registry. This does not establish that `-e`
+can be injected into an already-running session. Role-job definition loading is
+the separate PoC-3/D16 boundary. The native OMP builtin `task`, station OMP
+binary, settings and model routing remain shared, not run-pinned.
+
+The `plan-reviewer` declaration **`model: "@slow"`**, its structured schema and
+read-only tools MUST be preserved, with station overrides and routing enabled.
+Neither fixture task call supplied `model`. Copied station settings contained no
+`plan-reviewer` model override and resolved `@slow` to
+`anthropic/claude-fable-5-1`; unmodified `@a4s/review-routing` 0.3.1 remained
+enabled. Both completed children and their actual assistant messages recorded
+that Anthropic provider/model, distinct from the parent's
+`openai-codex/gpt-6.1-sol`. Native progress recorded `modelRole: slow`,
+`resolvedModelIsFallback: false` and route
+`strict cross-family eligibility; effective transcript identity must pass the publication gate`.
+Pending resolution had thinking `:high`; native automatic classification
+completed at `:low`. Acceptance MUST check the actual child transcript
+provider/model against native resolved task metadata and record the effective
+routing/override resolution, not compare the literal alias `@slow` with a model
+ID. The sources are `E/project-pinned.rpc.jsonl`,
+`E/extension-pinned.rpc.jsonl`, their children under `E/native-sessions/`, and
+`E/observer.jsonl` plus `E/routing-config.txt`.
+
+### Version-qualified rediscovery policy
+
+Interactive skills follow `state.current`, but changing the linked/current
+build is **not immediate rediscovery**. In the exercised OMP 18.14.0 session:
+
+| Change | Immediately after relinking | After `/reload-plugins` | After restart |
+| --- | --- | --- | --- |
+| B → C, skills-only | Old skill list | New skill list | New skill list |
+| C → D, agents-only | Old agent catalog | Old agent catalog | New agent catalog |
+
+The immediate and reload observations retained the same PID and session; fresh
+processes inspected C and D independently. `E/summary.json` and the
+`E/retry-*.state.json`, `E/retry-*.commands.json` and
+`E/retry-rediscovery*.rpc.jsonl` files retain the full lists and identities.
+This measures advertised catalogs, not whether an unadvertised agent name could
+already execute. Reload-only agent refresh is **not established**.
+
+U4 MUST record skill and agent manifest digests to detect changes rather than
+treat relinking as a refresh acknowledgment. An agent digest change requires a
+restart prompt: the conservative manifest-digest-plus-restart policy is justified
+by this evidence. A skills-only change can refresh through `/reload-plugins` on
+the exercised binary; it MUST NOT be described as automatic hot rediscovery or
+assumed for unexercised OMP versions.
+
+### Proof boundary and production ownership
+
+The PASS proves fixture-level native discovery, provider execution, routing and
+catalog refresh behavior. `poc-planning-a` had an A-bound fixture manifest; no
+real Dagu admission, enqueue, human task, cancellation or lifecycle completion
+was exercised. It does not prove production run-to-cache admission or integration
+with an existing interactive coordinator. **#788 changes architecture
+documentation only. U4 / #795 owns lifecycle integration, production cutover and
+its end-to-end acceptance**, using the mechanism and policy recorded here.
+
 ## Compatibility and a shared station (I6)
 
 Artifact SemVer, dispatch protocol, config schema, receipt schema, checkpoint
