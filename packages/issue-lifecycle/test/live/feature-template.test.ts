@@ -327,6 +327,24 @@ test("feature script helpers isolate inherited Dagu step outputs", () => {
 });
 
 for (const [name, definition] of definitions) {
+  for (const step of ["start_gate", "capture", "push", "pr", "auto_merge"]) {
+    test(`${name} ${step} rejection writes rule expected observed to stderr`, () => {
+      const repo = repository();
+      try {
+        runScript(extractScript(definition, "  - id: gate"), repo);
+        if (["push", "pr", "auto_merge"].includes(step)) {
+          const candidate = JSON.parse(readFileSync(join(repo.state, "candidate.json"), "utf8"));
+          writeFileSync(join(repo.state, "candidate.json"), JSON.stringify({ ...candidate, sha: "b".repeat(40) }));
+        }
+        const result = spawnSync("bash", ["-c", extractScript(definition, `  - id: ${step}`)], {
+          encoding: "utf8", env: { ...featureScriptEnv(repo), DAGU_FEATURE_BUNDLE: "test", CODE_SCANNING: "off",
+            ...(step === "start_gate" ? { GATE: "" } : step === "capture" ? { MESSAGE: "" } : {}) },
+        });
+        assert.equal(result.status, 1, result.stdout + result.stderr);
+        assert.match(result.stderr, new RegExp(`^rule=${step}\\.\\S+ expected=.+ observed=.+$`, "m"));
+      } finally { rmSync(repo.root, { recursive: true, force: true }); }
+    });
+  }
   for (const existing of [false, true]) {
     test(`${name} repeated yes-triage reuses ${existing ? "a pre-existing" : "a newly enqueued"} PoC before publication`, () => {
       const root = mkdtempSync(join(tmpdir(), "triage-reuse-"));
@@ -693,9 +711,9 @@ for (const [name, definition] of definitions) {
         const beforeIndex = git(repo.worktree, "ls-files", "--stage");
         const result = spawnSync("bash", ["-c", captureScript], { encoding: "utf8", env: featureScriptEnv(repo) });
         assert.notEqual(result.status, 0);
-        assert.ok(result.stderr.includes(path), result.stderr);
+        assert.ok(result.stderr.includes(path.replaceAll(" ", "\\ ")), result.stderr);
         assert.ok(result.stderr.includes(`${repo.state}/computations/`), result.stderr);
-        assert.match(result.stderr, /\$TMP, never inside the worktree/);
+        assert.match(result.stderr, /rule=capture.(untracked_workspace|nested_git) expected=.+ observed=.+/);
         assert.equal(git(repo.worktree, "rev-parse", "HEAD"), beforeHead);
         assert.equal(git(repo.worktree, "ls-files", "--stage"), beforeIndex);
       } finally { rmSync(repo.root, { recursive: true, force: true }); }
@@ -1031,7 +1049,7 @@ for (const [name, definition] of definitions) {
       const env = { POC_BASIS: "https://example.test/comments/9", DAGU_FEATURE_BUNDLE: "test" };
       const rejected = spawnSync("bash", ["-c", script], { encoding: "utf8", env: { ...featureScriptEnv(mismatch), ...env } });
       assert.notEqual(rejected.status, 0, rejected.stdout);
-      assert.match(rejected.stderr, /full.patch digest mismatch for mismatch/);
+      assert.match(rejected.stderr, /rule=start_gate.poc_patch_digest expected=\S+ observed=\S+/);
       assert.equal(existsSync(mismatch.worktree), false);
     } finally {
       rmSync(mismatch.root, { recursive: true, force: true });
@@ -1058,7 +1076,7 @@ for (const [name, definition] of definitions) {
         env: { ...featureScriptEnv(diverged), POC_BASIS: "https://example.test/comments/9", DAGU_FEATURE_BUNDLE: "test" },
       });
       assert.notEqual(rejected.status, 0, rejected.stdout);
-      assert.match(rejected.stderr, new RegExp(`PoC base ${side} is not an ancestor of origin/main`));
+      assert.match(rejected.stderr, new RegExp(`rule=start_gate.poc_base_ancestry .* observed=${side}`));
       assert.equal(existsSync(diverged.worktree), false);
     } finally {
       rmSync(diverged.root, { recursive: true, force: true });
@@ -1089,7 +1107,7 @@ for (const [name, definition] of definitions) {
         env: { ...featureScriptEnv(preserved), POC_BASIS: "https://example.test/comments/9", DAGU_FEATURE_BUNDLE: "test" },
       });
       assert.notEqual(rejected.status, 0, rejected.stdout);
-      assert.match(rejected.stderr, /published PoC patch does not apply/);
+      assert.match(rejected.stderr, /rule=start_gate.poc_patch_applicable expected=.+ observed=.+/);
       assert.equal(readFileSync(join(preserved.worktree, "README.txt"), "utf8"), "base\n");
       assert.equal(git(preserved.worktree, "status", "--porcelain", "--untracked-files=all"), "");
       assert.equal(existsSync(join(preserved.state, "poc-basis.json")), false);
@@ -1101,7 +1119,7 @@ for (const [name, definition] of definitions) {
         env: { ...featureScriptEnv(preserved), POC_BASIS: "https://example.test/comments/9", DAGU_FEATURE_BUNDLE: "test" },
       });
       assert.notEqual(dirty.status, 0, dirty.stdout);
-      assert.match(dirty.stderr, /worktree changes are not the published PoC basis; preserved/);
+      assert.match(dirty.stderr, /rule=start_gate.existing_poc_basis expected=.+ observed=.+/);
       assert.equal(readFileSync(join(preserved.worktree, "README.txt"), "utf8"), "local edit\n");
     } finally {
       rmSync(preserved.root, { recursive: true, force: true });
@@ -1634,14 +1652,14 @@ esac
       assert.equal(git(remote, "rev-parse", `refs/heads/${repo.branch}`), original);
       const push = extractScript(definition, "  - id: push");
       const attempt = () => spawnSync("bash", ["-c", push], { encoding: "utf8", env: featureScriptEnv(repo) });
-      assert.match(attempt().stderr, /no gated candidate/);
+      assert.match(attempt().stderr, /rule=push.gated_candidate expected=gate.json observed=missing/);
       const gateScript = extractScript(definition, "  - id: gate");
       const gateOptions = { encoding: "utf8", env: { ...featureScriptEnv(repo), GATE: "true" } } as const;
       assert.equal(spawnSync("bash", ["-c", gateScript], gateOptions).status, 0);
       commit(repo, "README.txt", "changed after gate\n");
       const stale = attempt();
       assert.equal(stale.status, 1);
-      assert.match(stale.stderr, /stale candidate.*revalidation required/);
+      assert.match(stale.stderr, /rule=push.gated_head expected=\S+ observed=\S+/);
       assert.equal(git(remote, "rev-parse", `refs/heads/${repo.branch}`), original);
       git(remote, "update-ref", ref, original);
       const rejected = spawnSync("bash", ["-c", checkpointScript], { encoding: "utf8", env: featureScriptEnv(repo) });
@@ -1780,7 +1798,7 @@ esac
           assert.match(readFileSync(merged, "utf8"), new RegExp(`--auto --squash --match-head-commit ${sha}`));
         } else {
           assert.notEqual(result.status, 0);
-          assert.match(result.stderr, new RegExp(`auto_merge: PR head did not converge after 60s: expected ${sha}, last observed ${oldSha}`));
+          assert.match(result.stderr, new RegExp(`rule=auto_merge.head_convergence expected=${sha} observed=${oldSha}`));
         }
       } finally {
         rmSync(repo.root, { recursive: true, force: true });
@@ -1864,9 +1882,13 @@ for (const [name, definition] of [
           env: { ...featureScriptEnv(repo), WORKTREE: managed, DAGU_FEATURE_BUNDLE: "test" },
         });
         assert.equal(result.status, 1);
-        const diagnostic = gate === "base" && failure === "ff-only" ? "cause=primary_ahead" : `${gate}: ${failure}`;
-        assert.ok(result.stderr.includes(diagnostic), result.stderr);
-        assert.match(result.stderr, /restore origin access|reconcile primary/);
+        if (gate === "start_gate") {
+          assert.match(result.stderr, new RegExp(`rule=start_gate.${failure === "ff-only" ? "fast_forward" : "fetch"} expected=.+ observed=.+`));
+        } else {
+          const diagnostic = gate === "base" && failure === "ff-only" ? "cause=primary_ahead" : `${gate}: ${failure}`;
+          assert.ok(result.stderr.includes(diagnostic), result.stderr);
+          assert.match(result.stderr, /restore origin access|reconcile primary/);
+        }
         assert.equal(git(repo.primary, "rev-parse", "HEAD"), head);
       } finally {
         rmSync(repo.root, { recursive: true, force: true });
@@ -2093,7 +2115,7 @@ for (const [name, definition] of definitions) {
       const failed = await state(first, "failed");
       const capture = failed.nodes.find(node => node.step.name === "capture")!;
       assert.equal(capture.statusLabel, "failed");
-      assert.match(readFileSync(capture.stderr!, "utf8"), /HEAD differs from Dagu candidate/);
+      assert.match(readFileSync(capture.stderr!, "utf8"), /rule=capture.candidate_head expected=.+ observed=.+/);
       const owner = git(repo.worktree, "rev-parse", "--path-format=absolute", "--git-path", "dagu-feature-owner");
       assert.equal(JSON.parse(readFileSync(owner, "utf8")).run, first);
       dagu("enqueue", "--run-id", second, file);
@@ -2117,7 +2139,7 @@ for (const [name, definition] of definitions) {
         env: { ...env, RUN: second, DAGU_FEATURE_BUNDLE: "test" }, encoding: "utf8",
       });
       assert.equal(mismatch.status, 1);
-      assert.match(mismatch.stderr, new RegExp(`ownership identity mismatch.*requesting_run=${second}.*observed=.*expected=`));
+      assert.match(mismatch.stderr, /rule=start_gate.ownership expected=.+ observed=.+/);
       writeFileSync(owner, valid);
       const active = spawnSync("bash", ["-c", extractScript(definition, "  - id: admit")], {
         env: { ...env, RUN: `${second}-other` }, encoding: "utf8",
@@ -2567,7 +2589,7 @@ esac
     if (mode === "start_gate") {
       const run = await waiting("recover_start_gate");
       assert.equal(run.nodes.find(node => node.step.name === "start_gate")?.statusLabel, "failed");
-      assert.match(new Transitions("recovery-owner").observe(run).wakeMessage ?? "", /step=recover_start_gate.*cause=start_gate failed/);
+      assert.match(new Transitions("recovery-owner").observe(run).wakeMessage ?? "", /step=recover_start_gate.*cause=rule=start_gate.fetch/);
       git(repo.primary, "remote", "set-url", "origin", remote);
       transition("recover_start_gate", true);
     }
@@ -2582,7 +2604,8 @@ esac
       const failed = await waiting("recover_gate");
       assert.equal(failed.nodes.find(node => node.step.name === "gate")?.statusLabel, "failed");
       const notice = new Transitions("recovery-owner").observe(failed).wakeMessage;
-      assert.match(notice ?? "", /step=recover_gate.*cause=gate failed/);
+      assert.ok(notice);
+      assert.ok(notice.includes("step=recover_gate") && !notice.includes("cause=gate failed"), notice);
       previousCandidate = candidate().sha;
       transition("recover_gate", true);
       await waiting("implement");
@@ -2594,7 +2617,7 @@ esac
     if (mode === "push") {
       const failed = await waiting("recover_push");
       assert.equal(failed.nodes.find(node => node.step.name === "push")?.statusLabel, "failed");
-      assert.match(new Transitions("recovery-owner").observe(failed).wakeMessage ?? "", /step=recover_push.*cause=push failed/);
+      assert.match(new Transitions("recovery-owner").observe(failed).wakeMessage ?? "", /step=recover_push.*cause=rule=push.remote_lease/);
       previousCandidate = candidate().sha;
       writeFileSync(join(repo.root, "allow-push"), "");
       transition("recover_push", true);
@@ -3066,7 +3089,7 @@ for (const [name, definition] of definitions) {
               encoding: "utf8", env: { ...vars, VALIDATION: procedure, APPROVED: "yes", TESTED_SHA: sha },
             });
             assert.notEqual(stale.status, 0, stale.stdout + stale.stderr);
-            assert.match(stale.stderr, /approval SHA .* differs from tested candidate/);
+            assert.match(stale.stderr, /rule=push.validation_sha expected=\S+ observed=\S+/);
             command("human-task", "complete", "feature", "--run-id", id, "--step", "validation", "--input", "APPROVED=yes", "--input", `TESTED_SHA=${corrected}`);
             await state(id, "succeeded");
             assert.equal(git(repo.primary, "rev-parse", `origin/${repo.branch}`), corrected);
@@ -4164,6 +4187,52 @@ test("gate cache reuses passes across linked worktrees and invalidates each inpu
     assert.equal(task(leaves(repo.state), "packages/app", "tests").cache, "hit");
     assert.equal(task(leaves(repo.state), "packages/lib", "tests", "always").cache, "executed");
   } finally {
+    rmSync(repo.root, { recursive: true, force: true });
+  }
+});
+
+test("applied render real push lease rejection reaches stderr and the owner notice", { ...liveDagu, timeout: 60_000 }, async () => {
+  const fixture = await recoveryFixture();
+  const repo = repository(testRunId("diagnostic-push"));
+  try {
+    const original = git(repo.worktree, "rev-parse", "HEAD");
+    git(repo.worktree, "push", "origin", `HEAD:refs/heads/${repo.branch}`);
+    commit(repo, "README.txt", "candidate for rejected lease\n");
+    recordCandidate(repo);
+    const concurrent = git(repo.worktree, "commit-tree", "HEAD^{tree}", "-p", original, "-m", "concurrent remote update");
+    git(repo.worktree, "push", "origin", `${concurrent}:refs/dagu/race`);
+    runScript(extractScript(renderedFeature, "  - id: gate"), repo);
+    const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+    writeFileSync(join(repo.root, "bin", "git"), `#!/bin/sh\ncase " $* " in *" push "*refs/heads/*)\n"${realGit}" -C ${JSON.stringify(join(repo.root, "remote.git"))} update-ref refs/heads/${repo.branch} ${concurrent} || exit\n;; esac\nexec "${realGit}" "$@"\n`, { mode: 0o755 });
+    const file = join(fixture.home, "dags", "feature.yaml");
+    const id = repo.state.split("/").at(-1)!;
+    const spec = {
+      name: "feature", type: "graph", shell: "bash",
+      params: [{ ISSUE: "189" }, { OMP_SESSION_ID: "diagnostic-owner" }],
+      env: { ...featureScriptEnv(repo), OMP_SESSION_ID: "diagnostic-owner", DAGU_PORT: String(fixture.port) },
+      steps: [
+        { id: "push", continue_on: { failure: true }, run: extractScript(renderedFeature, "  - id: push") },
+        { id: "recover_push", depends: "push", preconditions: [{ condition: "${push.exit_code}", expected: "re:^[1-9][0-9]*$" }],
+          action: "human.task", with: { prompt: "Static prompt must not be the cause." } },
+      ],
+    };
+    // Apply only to an isolated fixture; production adoption remains operator-owned.
+    writeFileSync(file, stringify(spec));
+    execFileSync("dagu", ["enqueue", "--run-id", id, file], { env: fixture.env, stdio: "pipe" });
+    const failed = await fixture.state(id, "waiting");
+    const node = failed.nodes.find(node => node.step.name === "push")!;
+    const stderr = readFileSync(node.stderr!, "utf8");
+    const rule = `rule=push.remote_lease expected=${original} observed=${concurrent}`;
+    assert.ok(stderr.includes(rule), stderr);
+    const notice = new Transitions("diagnostic-owner").observe(failed).wakeMessage!;
+    assert.ok(notice.includes(`cause=${rule}`), JSON.stringify(failed) + notice);
+    if (process.env.A4S_DIAGNOSTIC_EVIDENCE) {
+      writeFileSync(join(process.env.A4S_DIAGNOSTIC_EVIDENCE, "push.err"), stderr);
+      writeFileSync(join(process.env.A4S_DIAGNOSTIC_EVIDENCE, "push-rest.json"), JSON.stringify(failed, null, 2));
+      writeFileSync(join(process.env.A4S_DIAGNOSTIC_EVIDENCE, "push-notice.txt"), notice);
+    }
+  } finally {
+    await fixture.close();
     rmSync(repo.root, { recursive: true, force: true });
   }
 });

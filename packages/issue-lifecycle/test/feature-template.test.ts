@@ -60,7 +60,7 @@ for (const [name, definition] of definitions) {
     assert.ok(push.indexOf('resolve_run_pr') < publish);
     assert.ok(push.indexOf('gh pr merge "$pr_number" --repo "$repo" --disable-auto') < publish);
     assert.match(push, /jq -e '\.state == "OPEN" and \.autoMergeRequest == null'/);
-    assert.match(push, /test "\$candidate" = "\$gated"/);
+    assert.match(push, /equal gated_head "\$gated" "\$candidate"/);
     assert.match(push, /if \[\[ "\$TESTED_SHA" != "\$sha" \]\]; then/);
     assert.match(extractStep(source, "pr"), /STATE\/pr-number/);
     const merge = extractStep(source, "auto_merge");
@@ -109,6 +109,13 @@ for (const [name, definition] of definitions) {
       for (let index = 1; index < path.length; index++) {
         assert.match(extractStep(source, path[index]!), new RegExp(`^    depends: ${path[index - 1]}$`, "m"));
       }
+    });
+  }
+  for (const step of ["start_gate", "capture", "push", "pr", "auto_merge"]) {
+    test(`${name} ${step} rejects with a single-line rule, expected and observed diagnostic`, () => {
+      const source = extractStep(readFileSync(definition, "utf8"), step);
+      assert.ok(source.includes(`printf 'rule=${step}.%s expected=%q observed=%q\\n' "$1" "$2" "$3" >&2; exit 1;`));
+      assert.match(source, /equal\(\) \{ \[\[ "\$2" == "\$3" \]\] \|\| (reject|fail) "\$@"; \}/);
     });
   }
 }
