@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.120
+
+- Declare a separate adopted queue in every feature, PoC, discovery and planning render, validate it at bootstrap/admission, and reject admission CLI queue overrides (#335).
+- Gate each lifecycle's first ordinary step on the pinned Dagu local store's actual executing queue, bound to the exact DAG/run/attempt; uncertain identity or queue mismatch fails before lifecycle effects.
+
 ## 0.3.115
 
 - Admit the owner session's literal inert-quality disposal completion only for a stored historical snapshot with no checkpoint cancellation route and a verified fail-closed QA/REVIEW binding; preserve normal structured verdict admission (#545).

@@ -53,6 +53,29 @@ primario y pueden quedar colgando. Volver a enlazarlos es configuración del
 operador: el coordinador propone los comandos de instalación anteriores y el
 operador los ejecuta.
 
+## Adopted lifecycle queue
+
+Feature, PoC, discovery and planning renders each declare exactly one adopted
+queue, separately from workspace labels. Today's main lane uses `a4s`.
+Bootstrap render/confirm and admission validate that declaration against the
+sealed first-step `queue_gate`; the admission CLI rejects `--queue` overrides.
+Direct Dagu starts, enqueues and REST admission still execute the gate before
+ordinary steps, human tasks, resource claims, Git/GitHub effects or promotions.
+
+On pinned Dagu 2.20.1 with its local data/log layout, the gate derives the UTC
+run directory from `DAG_RUN_LOG_FILE`, the exact attempt from the shared
+stdout/stderr parent, and reads the single matching persisted `dag.json` and
+`status.jsonl`. It verifies DAG/run/attempt and corroborating `procGroup`,
+then compares the actual queue with the immutable command's declared queue.
+Mismatch or unavailable/ambiguous evidence fails closed with `QUEUE_REJECTED`;
+failure/exit cleanup is eligible only after queue verification. Use the adopted
+queue, or repeat bootstrap/adoption to change policy; run parameters and shell
+environment do not select the expected queue. Existing snapshots remain immutable.
+
+The independent v1 lane's mapping/PRIMARY/origin/base binding awaits #415.
+Queue concurrency derivation and deployment remain #383/operator work; this
+guard neither configures capacity nor activates a service.
+
 ## Retención del historial global
 
 [`dagu/base.yaml`](dagu/base.yaml) versiona `hist_retention_days: 7` para

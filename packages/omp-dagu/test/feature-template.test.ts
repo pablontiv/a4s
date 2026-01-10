@@ -776,7 +776,7 @@ for (const [name, definition] of definitions) {
   test(`${name} close and exit resolve the same cleanup script with merged-close mode`, () => {
     const source = readFileSync(definition, "utf8");
     assert.match(source, /- id: close_gate\n[\s\S]*?- CLEANUP_CLOSE: "true"\n    run: &feature_cleanup \|/);
-    assert.match(source, /  exit:\n    run: \*feature_cleanup/);
+    assert.match(source, /  exit:\n(?:    preconditions:\n      - condition: "\$\{steps\.queue_gate\.outputs\.QUEUE_VERIFIED\}"\n        expected: "yes"\n)?    run: \*feature_cleanup/);
     assert.equal(closeGateScript.replace("CLEANUP_CLOSE=true\n", ""), exitScript);
   });
   const autoMergeScript = extractScript(definition, "  - id: auto_merge");
@@ -1665,7 +1665,7 @@ for (const [name, definition] of definitions) {
         `params:\n  - ISSUE: "189"\n  - BASE_BRANCH: main\n  - PR_NUMBER: ""\n  - OMP_SESSION_ID: retained-owner\n`,
         `env:\n  - PRIMARY: ${JSON.stringify(repo.primary)}\n  - BRANCH: dagu/issue-\${ISSUE}\n  - GATE: "true"\n  - REQUIRED_CHECK: validate\n  - PATH: ${env.PATH}\n  - WORKTREE: ${repo.worktree}\n  - RUN: \${context.run.id}\n  - DAGU_FEATURE_BUNDLE: test\n`,
         source.slice(source.indexOf("  - DAGU_RESOURCE_GUARD: |"), source.indexOf("steps:\n")),
-        "steps:\n", extractStep(source, "admission"), extractStep(source, "admit"),
+        "steps:\n", extractStep(source, "admission").replace("    depends: queue_gate\n", ""), extractStep(source, "admit"),
         "  - id: triage\n    depends: admit\n    run: echo POC=no >> \"$DAGU_OUTPUT_FILE\"\n    outputs:\n      - name: POC\n",
         "  - id: triage_decision\n    depends: triage\n    run: echo reviewed\n",
         ...["detect_start_primary", "start_primary_unavailable", "start_gate", "recover_start_gate"].map(id => extractStep(source, id)),
@@ -1812,7 +1812,7 @@ test("native terminal replacement captures retained and nonempty correction", {
       `params:\n  - ISSUE: "189"\n  - BASE_BRANCH: main\n  - PR_NUMBER: ""\n  - OMP_SESSION_ID: retained-owner\n  - RETAIN: "no"\n`,
       `env:\n  - PRIMARY: ${JSON.stringify(repo.primary)}\n  - BRANCH: dagu/issue-\${ISSUE}\n  - GATE: "true"\n  - REQUIRED_CHECK: validate\n  - PATH: ${env.PATH}\n  - WORKTREE: ${repo.worktree}\n  - RUN: \${context.run.id}\n  - DAGU_FEATURE_BUNDLE: test\n  - REBASE_RESOLVER: ${JSON.stringify(resolverCommand)}\n`,
       source.slice(source.indexOf("  - DAGU_RESOURCE_GUARD: |"), source.indexOf("steps:\n")),
-      "steps:\n", extractStep(source, "admission"), extractStep(source, "admit"),
+      "steps:\n", extractStep(source, "admission").replace("    depends: queue_gate\n", ""), extractStep(source, "admit"),
       "  - id: triage\n    depends: admit\n    run: echo POC=no >> \"$DAGU_OUTPUT_FILE\"\n    outputs:\n      - name: POC\n",
       "  - id: triage_decision\n    depends: triage\n    run: echo reviewed\n",
       ...["detect_start_primary", "start_primary_unavailable", "start_gate", "recover_start_gate"].map(id => extractStep(source, id)),
@@ -2272,11 +2272,11 @@ for (const [name, definition] of definitions) {
               `params:\n  - ISSUE: "189"\n  - BASE_BRANCH: main\n  - PR_NUMBER: ""\n  - OMP_SESSION_ID: close-owner\n`,
               `env:\n  - PRIMARY: ${JSON.stringify(repo.primary)}\n  - BRANCH: dagu/issue-\${ISSUE}\n  - GATE: "true"\n  - REQUIRED_CHECK: validate\n  - PATH: ${join(repo.root, "bin")}:${process.env.PATH}\n  - WORKTREE: ${repo.worktree}\n  - RUN: \${context.run.id}\n  - DAGU_FEATURE_BUNDLE: test\n`,
               source.slice(source.indexOf("  - DAGU_RESOURCE_GUARD: |"), source.indexOf("steps:\n")),
-              "steps:\n", ...(mode === "poc" ? ["admission", "admit"].map(id => extractStep(source, id)) : []), triage, decision,
+              "steps:\n", ...(mode === "poc" ? ["admission", "admit"].map(id => extractStep(source, id).replace("    depends: queue_gate\n", "")) : []), triage, decision,
               ...["detect_start_primary", "start_primary_unavailable", "start_gate", ...(mode === "poc" ? ["recover_start_gate"] : [])].map(id => extractStep(source, id)),
               implementation,
               ...["detect_close_primary", "close_primary_unavailable", "close_gate"].map(id => extractStep(source, id).replace("await_merge_cancellation", "await_merge")),
-              "handler_on:\n", source.slice(source.indexOf("  exit:\n")),
+              "handler_on:\n  exit:\n    run: |\n" + extractScript(definition, "  exit:").split("\n").map(line => "      " + line).join("\n") + "\n",
             ].join("");
             const dag = join(home, "dags", "feature.yaml");
             writeFileSync(dag, script);
@@ -2884,10 +2884,14 @@ test("adopted policy rejects run overrides before repository writes and admits o
   assert.ok(address && typeof address !== "string");
   const port = address.port;
   await new Promise<void>(resolve => listener.close(() => resolve()));
+  const bundleBin = join(repo.root, "bundle-bin");
+  mkdirSync(bundleBin);
+  writeFileSync(join(bundleBin, "dagu-feature-bundle"), `#!/bin/bash\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(fileURLToPath(new URL("../bin/dagu-feature-bundle.ts", import.meta.url)))} "$@"\n`, { mode: 0o755 });
   const env = {
     ...process.env, DAGU_PARAMS_JSON: "{}", DAGU_HOME: home, DAGU_PORT: String(port), PRIMARY: repo.primary, SKILL_DIR: skillDir,
     GATE: "printf adopted-gate", REQUIRED_CHECK: "adopted-check", REPO: "fixture", BASE_BRANCH: "main",
     REBASE_RESOLVER: "printf adopted-resolver",
+    PATH: `${bundleBin}:${process.env.PATH}`,
     STAGE: stage, TEST_PATHS: "test/", BUNDLE_NAME: "@a4s/omp-dagu", BUNDLE_VERSION,
     DAGU_VERSION: "2.20.1", SOURCE_NWO: "fixture/repo", SOURCE_SHA: "1".repeat(40), DAG_RUN_ID: "bootstrap-fixture",
   };
@@ -2930,7 +2934,7 @@ test("adopted policy rejects run overrides before repository writes and admits o
       const definition = join(repo.root, "staged", `${name}.yaml`);
       for (const [parameter, value] of [["GATE", "true"], ["REBASE_RESOLVER", "true"], ["REQUIRED_CHECK", "arbitrary"], ["PRIMARY", "/foreign/clone"], ["BRANCH", "off-pattern"], ["GATE", ""], ["PRIMARY", repo.primary]] as const) {
         const before = snapshot();
-        const result = spawnSync("dagu", ["start", "--run-id", `${name}-${parameter.toLowerCase()}-${value.length}`, definition, "--", "ISSUE=189", `${parameter}=${value}`], { encoding: "utf8", env, timeout: 30_000 });
+        const result = spawnSync("dagu", ["start", "--only", "admission", "--run-id", `${name}-${parameter.toLowerCase()}-${value.length}`, definition, "--", "ISSUE=189", `${parameter}=${value}`], { encoding: "utf8", env, timeout: 30_000 });
         assert.notEqual(result.status, 0, result.stdout);
         assert.match(result.stdout + result.stderr, new RegExp(`admission rejected run parameter: ${parameter}`));
         assert.match(result.stdout + result.stderr, /adopted policy PRIMARY=/);

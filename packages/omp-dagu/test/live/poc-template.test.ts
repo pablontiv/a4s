@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
 import { liveDagu } from "../fixtures/live-dagu.ts";
 import { PocDiagnostics } from "../fixtures/poc-diagnostics.ts";
 
@@ -129,6 +130,7 @@ test("real Dagu completes declined PoCs and preserves PASS publication", { ...li
   const bin = join(root, "bin");
   mkdirSync(join(home, "dags"), { recursive: true });
   mkdirSync(bin);
+  writeFileSync(join(bin, "dagu-feature-bundle"), `#!/bin/bash\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(fileURLToPath(new URL("../../bin/dagu-feature-bundle.ts", import.meta.url)))} "$@"\n`, { mode: 0o755 });
   const socket = createServer();
   await new Promise<void>(resolve => socket.listen(0, "127.0.0.1", resolve));
   const address = socket.address();
@@ -201,6 +203,7 @@ esac
     writeFileSync(definition, readFileSync(new URL("../../skills/dagu-feature/poc.yaml", import.meta.url), "utf8")
       .replaceAll("__DAGU_FEATURE_VERSION__", "0.3.11")
       .replaceAll("TEMPLATE_REPO", "decline263").replaceAll("TEMPLATE_BASE_BRANCH", "main")
+      .replaceAll("__QUEUE__", '"decline263"')
       .replaceAll("__PRIMARY__", primary).replaceAll("__TEST_PATHS__", "_test$"));
     for (const mode of ["decline", "pass"]) {
       writeFileSync(env.COMMENTS, "");

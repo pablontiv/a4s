@@ -252,6 +252,7 @@ steps:
       umask 0022
       test -n "${DAG_RUN_ID:-}"
       PRIMARY=$(cd "$PRIMARY" && pwd -P)
+      queue=$(node "$SKILL_DIR/../../bin/dagu-feature-bundle.ts" queue-default "$REPO")
       A4S_BLOCKER_REPORTING=${A4S_BLOCKER_REPORTING:-${CURRENT_A4S_BLOCKER_REPORTING:-ask}}
       case "$A4S_BLOCKER_REPORTING" in ask|auto) ;; *) echo 'A4S_BLOCKER_REPORTING must be ask or auto' >&2; exit 1 ;; esac
       mkdir -p "$(dirname "$STAGE")"
@@ -261,7 +262,8 @@ steps:
       render_common='
         gsub("__DAGU_FEATURE_STAMP__"; $stamp)
         | gsub("__DAGU_FEATURE_VERSION__"; $version)
-        | gsub("__DAGU_FEATURE_IDENTITY__"; $identity)'
+        | gsub("__DAGU_FEATURE_IDENTITY__"; $identity)
+        | gsub("__QUEUE__"; $queue | tojson)'
       jq -nr --rawfile template "$SKILL_DIR/feature.yaml" \
         --arg repo "$REPO" --arg base "$BASE_BRANCH" \
         --arg gate "$GATE" --arg check "$REQUIRED_CHECK" \
@@ -269,6 +271,7 @@ steps:
         --arg validation "${VALIDATION:-}" \
         --arg blocker_reporting "$A4S_BLOCKER_REPORTING" \
         --arg stamp "$stamp" --arg version "$BUNDLE_VERSION" --arg identity "$identity" \
+        --arg queue "$queue" \
         "\$template
           | $render_common
           | gsub(\"TEMPLATE_REPO\"; \$repo)
@@ -283,6 +286,7 @@ steps:
         --arg repo "$REPO" --arg base "$BASE_BRANCH" \
         --arg primary "$PRIMARY" --arg tests "$TEST_PATHS" \
         --arg stamp "$stamp" --arg version "$BUNDLE_VERSION" --arg identity "$identity" \
+        --arg queue "$queue" \
         "\$template
           | $render_common
           | gsub(\"TEMPLATE_REPO\"; \$repo)
@@ -292,6 +296,7 @@ steps:
       jq -nr --rawfile template "$SKILL_DIR/discovery.yaml" \
         --arg repo "$REPO" \
         --arg stamp "$stamp" --arg version "$BUNDLE_VERSION" --arg identity "$identity" \
+        --arg queue "$queue" \
         "\$template
           | $render_common
           | gsub(\"TEMPLATE_DAGU_FEATURE_VERSION\"; \$version)
@@ -299,13 +304,18 @@ steps:
       jq -nr --rawfile template "$SKILL_DIR/planning.yaml" \
         --arg repo "$REPO" \
         --arg stamp "$stamp" --arg version "$BUNDLE_VERSION" --arg identity "$identity" \
+        --arg queue "$queue" \
         "\$template | $render_common | gsub(\"TEMPLATE_REPO\"; \$repo)" > "$(dirname "$STAGE")/planning.yaml"
       jq -nr --rawfile template "$SKILL_DIR/reconcile.yaml" \
         --arg stamp "$stamp" --arg version "$BUNDLE_VERSION" --arg identity "$identity" \
+        --arg queue "$queue" \
         "\$template | $render_common" > "$(dirname "$STAGE")/reconcile.yaml"
       for rendered in "$STAGE" "$(dirname "$STAGE")/poc.yaml" \
         "$(dirname "$STAGE")/discovery.yaml" "$(dirname "$STAGE")/planning.yaml" "$(dirname "$STAGE")/reconcile.yaml"; do
         if grep -En 'TEMPLATE_[A-Z_]+|__[A-Z_]*__' "$rendered"; then exit 1; fi
+        if test "$(basename "$rendered")" != reconcile.yaml; then
+          node "$SKILL_DIR/../../bin/dagu-feature-bundle.ts" queue-validate "$rendered" "$queue"
+        fi
         dagu validate "$rendered"
       done
       printf 'stage=%s\n' "$STAGE"
@@ -397,12 +407,17 @@ steps:
       - DAGU_VERSION: ${steps.detect.outputs.DAGU_VERSION}
       - SOURCE_NWO: ${steps.detect.outputs.SOURCE_NWO}
       - SOURCE_SHA: ${steps.detect.outputs.SOURCE_SHA}
+      - REPO: ${steps.detect.outputs.REPO}
     run: |
       set -euo pipefail
       test "$(gh api "repos/$NWO" --jq '.allow_auto_merge and .allow_squash_merge')" = true
       test "$(gh api "repos/$NWO/branches/$BASE_BRANCH/protection/required_status_checks" \
         --jq '.strict and (.contexts | index(env.REQUIRED_CHECK) != null)')" = true
       git -C "$PRIMARY" check-ignore -q "$PRIMARY/.workspace/worktrees/issue-1"
+      queue=$(node "$SKILL_DIR/../../bin/dagu-feature-bundle.ts" queue-default "$REPO")
+      for lifecycle in feature poc discovery planning; do
+        node "$SKILL_DIR/../../bin/dagu-feature-bundle.ts" queue-validate "$(dirname "$STAGE")/$lifecycle.yaml" "$queue"
+      done
       dagu validate "$STAGE"
       dagu validate "$(dirname "$STAGE")/poc.yaml"
       dagu validate "$(dirname "$STAGE")/discovery.yaml"

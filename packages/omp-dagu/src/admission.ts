@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { BUNDLE_VERSION, classifyCompatibility, parseBundleStamp, REQUIRED_DAGU_VERSION } from "./bundle.ts";
 import type { RunDetails } from "./status/progress.ts";
 import { isRecord } from "./type-guard.ts";
+import { adoptionQueue, declaredQueue } from "./queue.ts";
 
 const packageRoot = fileURLToPath(new URL("../", import.meta.url));
 const correction = "Apply bootstrap from a clean compatible @a4s/omp-dagu checkout, adopt its stamped DAGs, install its reconciler and reload both OMP extensions; retry with a new run ID.";
@@ -115,6 +116,11 @@ export function admit(options: AdmissionOptions, persist = true): { path: string
     const dagPath = realpathSync(resolve(options.cwd, options.dag));
     const name = basename(dagPath);
     if (!["feature.yaml", "poc.yaml", "discovery.yaml", "planning.yaml", "reconcile.yaml"].includes(name)) throw new Error(`DAG=${name} expected a distributed lifecycle DAG`);
+    if (name !== "reconcile.yaml") {
+      declaredQueue(readFileSync(dagPath, "utf8"));
+      const replacements = options.params.map(param => param.slice(0, param.indexOf("="))).filter(key => ["QUEUE", "ADOPTED_QUEUE", "LANE", "LANE_MAPPING"].includes(key));
+      if (replacements.length) throw new Error(`QUEUE_REJECTED adopted queue replacement via parameters: ${replacements.join(", ")}; repeat bootstrap/adoption`);
+    }
     let primaryParam = options.params.find(param => param.startsWith("PRIMARY="))?.slice(8);
     if (name === "feature.yaml" || name === "poc.yaml") {
       const snapshot = readFileSync(dagPath, "utf8");
@@ -133,6 +139,12 @@ export function admit(options: AdmissionOptions, persist = true): { path: string
     }
     const primary = realpathSync(resolve(options.cwd, primaryParam || "."));
     const repo = realpathSync(git(primary, "rev-parse", "--show-toplevel"));
+    if (name !== "reconcile.yaml") {
+      const observed = declaredQueue(readFileSync(dagPath, "utf8"));
+      const originRepository = git(primary, "remote", "get-url", "origin").replace(/\/+$/, "").replace(/\.git$/, "").split(/[/:]/).at(-1)!;
+      const expected = adoptionQueue(originRepository);
+      if (observed !== expected) throw new Error(`QUEUE_REJECTED queue=${observed} expected=${expected} primary=${primary}; repeat bootstrap/adoption`);
+    }
     const path = receiptPath(primary, options.run);
     const root = git(packageRoot, "rev-parse", "--show-toplevel");
     const prefix = git(packageRoot, "rev-parse", "--show-prefix");
@@ -218,6 +230,7 @@ export function enqueueArguments(args: string[], cwd: string): AdmissionOptions 
     const arg = flags[index]!;
     if (arg === "--run-id") run = flags[++index] || "";
     else if (arg.startsWith("--run-id=")) run = arg.slice(9);
+    else if (arg === "--queue" || arg.startsWith("--queue=")) throw new Error(`QUEUE_REJECTED unsupported --queue override ${arg === "--queue" ? flags[index + 1] ?? "" : arg.slice(8)}; use the adopted queue declared in the lifecycle DAG; repeat bootstrap/adoption to change policy`);
     else if (arg.startsWith("-")) throw new Error(`Unsupported admission flag ${arg}; use --run-id <id> <DAG> -- PARAM=value`);
     else if (dag) throw new Error("Ambiguous DAG identity; provide exactly one DAG path");
     else dag = arg;

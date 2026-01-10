@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { parse } from "yaml";
 import { withResourceGuard } from "./resource-fixtures.ts";
 import "./waiting-cancellation.test.ts";
 
@@ -270,10 +271,8 @@ test("PoC cancelled failure handler preserves evidence without publishing a verd
 });
 
 function pocExitScript(): string {
-  const lines = readFileSync(template, "utf8").split("\n");
-  const start = lines.indexOf("  exit:");
-  assert.ok(start >= 0);
-  return withResourceGuard(lines.slice(start + 2).map(line => line.slice(6)).join("\n"), fileURLToPath(template));
+  const definition = parse(readFileSync(template, "utf8"));
+  return withResourceGuard(definition.handler_on.exit.run, fileURLToPath(template));
 }
 
 function cleanupFixture() {

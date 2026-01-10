@@ -403,7 +403,8 @@ The bootstrap renders the repository DAG templates when a repository adopts the 
 
 | Placeholder | Meaning | rootline | homeserver |
 |---|---|---|---|
-| `TEMPLATE_REPO` | Repository name, used in `labels: [workspace=<repo>]` and `queue: <repo>` | `rootline` | `homeserver` |
+| `TEMPLATE_REPO` | Repository name, used in `labels: [workspace=<repo>]` independently of queue policy | `rootline` | `homeserver` |
+| `__QUEUE__` | One adopted queue, sealed into the declaration and first-step gate | `rootline` | `homeserver` |
 | `TEMPLATE_BASE_BRANCH` | Default of `BASE_BRANCH`, the default branch. The DAG uses `origin/$BASE_BRANCH` as the source ref. | `master` | `main` |
 | `__GATE__` | Adoption-fixed `GATE`, the local gate command, run with `bash -euo pipefail -c` in the worktree | `just check && just test` | `make hook-validate` |
 | `__REBASE_RESOLVER__` | Adoption-fixed `REBASE_RESOLVER`, repository conflict-resolution command; empty selects manual conflict recovery | `""` | `""` |
@@ -416,6 +417,31 @@ The bootstrap renders the repository DAG templates when a repository adopts the 
 The DAG's fixed invariants: `PRIMARY` is the repository clone, its main working tree, on `BASE_BRANCH` and clean; the run's worktree is always `$PRIMARY/.workspace/worktrees/issue-<n>`, ignored by git; the gate runs with `umask 0022` and without `GH_TOKEN`/`GITHUB_TOKEN`; auto-merge is bound to the tested SHA with `--match-head-commit`; and gate bodies serialize per primary within the repository's declared queue capacity. `start_gate` registers the canonical PRIMARY, worktree, branch and owning run in Git metadata. Both cleanup entry points share the same script. They refresh the remote base and require either candidate ancestry in that base or a MERGED PR whose head equals the recorded tested candidate and whose effective merge SHA is an ancestor of the refreshed base. `cleanup-proof.json` records candidate, base, squash SHA and proof. Ordinary `git worktree remove` protects local files; a dirty worktree is retained. Local branch deletion compares the candidate atomically; remote deletion at merged close uses an exact-SHA lease.
 
 `push` publishes the feature branch for PR delivery after current-candidate verification. Uncaptured files and conflict resolutions remain in their worktree for recovery even when HEAD is on the base.
+
+## Adopted queue enforcement
+
+Each feature/PoC/discovery/planning render declares exactly one queue and begins
+with `queue_gate`, ahead of its ordinary first step and every human task,
+resource claim, Git/GitHub effect or child enqueue. Bootstrap render/confirm and
+admission validate the queue declaration and sealed gate literal independently
+of workspace labels. The supported admission CLI rejects `--queue` overrides
+before enqueue. Internal promotions use each destination's adopted render.
+
+The gate compares the actual persisted executing queue, not CLI/REST intent or
+an environment-selected expectation. On pinned Dagu 2.20.1's local file store,
+`DAG_RUN_LOG_FILE` supplies the run directory and UTC date; stdout/stderr's shared
+attempt-log parent supplies the exact attempt ID. Exactly one matching
+`a_*_<attempt>` under that run is required. Its `dag.json` and `status.jsonl`
+must agree on DAG/run/attempt and queue/`procGroup`. Missing, ambiguous or
+mismatched evidence exits nonzero with `QUEUE_REJECTED`, actual/expected queue
+and a corrective adoption diagnostic. Failure/exit handlers require successful
+queue verification, so rejection cannot claim resources or publish a verdict.
+Run parameters and shell environment cannot replace the sealed expectation.
+
+Today's single main lane uses `a4s`; immutable lane/PRIMARY/origin/base mapping
+integration is owned by #415. Queue-capacity derivation is owned by #383.
+This guard changes neither scheduler capacity nor service activation, and
+previously admitted snapshots retain their original declarations.
 
 ## Adopt in a repository
 

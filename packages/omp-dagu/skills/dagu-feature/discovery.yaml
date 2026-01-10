@@ -2,7 +2,7 @@
 labels:
   - workspace=TEMPLATE_REPO
   - dagu-feature-bundle=TEMPLATE_DAGU_FEATURE_VERSION
-queue: TEMPLATE_REPO
+queue: __QUEUE__
 type: graph
 dotenv: []
 shell: bash
@@ -27,7 +27,13 @@ env:
   - RUN: ${context.run.id}
   - DAGU_FEATURE_BUNDLE: "__DAGU_FEATURE_IDENTITY__"
 steps:
+  - id: queue_gate
+    run: dagu-feature-bundle queue-gate __QUEUE__
+    outputs:
+      - name: QUEUE_VERIFIED
+
   - id: snapshot
+    depends: queue_gate
     run: |
       set -euo pipefail
       printf '%s\n' "$DAGU_FEATURE_BUNDLE"
@@ -361,6 +367,9 @@ steps:
 
 handler_on:
   exit:
+    preconditions:
+      - condition: "${steps.queue_gate.outputs.QUEUE_VERIFIED}"
+        expected: "yes"
     env:
       - OUT_DIR: ${steps.snapshot.outputs.OUT_DIR}
       - SNAPSHOT: ${steps.snapshot.outputs.SNAPSHOT}

@@ -303,7 +303,9 @@ test("native planning push-back uses structured iteration across mechanical cons
   jsonl(f.upstream, [{ ...unit("consumer"), relationships: [{ kind: "blocked_by", target: { unit: "contract" } }] }, unit("contract")]);
   const native = structuredClone(definition);
   native.labels = ["workspace=planning-regression"];
-  delete native.queue;
+  native.queue = "planning-regression";
+  native.steps.find((step: { id: string }) => step.id === "queue_gate").run =
+    'dagu-feature-bundle queue-gate "planning-regression"';
   native.env = Object.entries(f.env).filter(([key]) => ["HOME", "TMPDIR", "PATH", "DAGU_HOME", "DAGU_PORT"].includes(key))
     .map(([key, value]) => ({ [key]: value }));
   native.env.push({ RUN: "${context.run.id}" }, { FEEDBACK: "" });

@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { parse } from "yaml";
 
+import "./live/queue-gate.ts";
 const skill = (name: string): string => readFileSync(
   fileURLToPath(new URL(`../skills/dagu-feature/${name}`, import.meta.url)),
   "utf8",

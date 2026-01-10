@@ -2,7 +2,7 @@
 labels:
   - workspace=TEMPLATE_REPO
   - dagu-feature-bundle=__DAGU_FEATURE_VERSION__
-queue: TEMPLATE_REPO
+queue: __QUEUE__
 type: graph
 dotenv: []
 shell: bash
@@ -69,7 +69,13 @@ env:
         PRIMARY=$primary WORKTREE=$expected
       }
 steps:
+  - id: queue_gate
+    run: dagu-feature-bundle queue-gate __QUEUE__
+    outputs:
+      - name: QUEUE_VERIFIED
+
   - id: admission
+    depends: queue_gate
     run: |
       set -euo pipefail
       rejected=$(jq -er 'keys[] | select(. == "GATE" or . == "REBASE_RESOLVER" or . == "REQUIRED_CHECK" or . == "PRIMARY" or . == "BRANCH")' <<<"$DAGU_PARAMS_JSON") || [[ $? == 4 ]]
@@ -548,10 +554,16 @@ handler_on:
         ' _ "$RUN" </dev/null > "$STATE/scope-transition.log" 2>&1 &
       fi
   failure:
+    preconditions:
+      - condition: "${steps.queue_gate.outputs.QUEUE_VERIFIED}"
+        expected: "yes"
     env:
       - PUBLICATION_FAILURE: "yes"
     run: *publish
   exit:
+    preconditions:
+      - condition: "${steps.queue_gate.outputs.QUEUE_VERIFIED}"
+        expected: "yes"
     run: |
       set -euo pipefail
       if jq -e 'has("GATE") or has("REBASE_RESOLVER") or has("REQUIRED_CHECK") or has("PRIMARY") or has("BRANCH")' <<<"${DAGU_PARAMS_JSON:-"{}"}" >/dev/null; then exit 0; fi

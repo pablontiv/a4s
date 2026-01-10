@@ -2,7 +2,7 @@
 labels:
   - workspace=TEMPLATE_REPO
   - dagu-feature-bundle=__DAGU_FEATURE_VERSION__
-queue: TEMPLATE_REPO
+queue: __QUEUE__
 type: graph
 dotenv: []
 shell: bash
@@ -144,6 +144,11 @@ env:
         PRIMARY=$primary WORKTREE=$expected
       }
 steps:
+  - id: queue_gate
+    run: dagu-feature-bundle queue-gate __QUEUE__
+    outputs:
+      - name: QUEUE_VERIFIED
+
   - id: admit
     depends: admission
     run: |
@@ -185,6 +190,7 @@ steps:
       resource_lock claim
 
   - id: admission
+    depends: queue_gate
     run: |
       set -euo pipefail
       rejected=$(jq -er 'keys[] | select(. == "GATE" or . == "REBASE_RESOLVER" or . == "REQUIRED_CHECK" or . == "PRIMARY" or . == "BRANCH" or . == "A4S_BLOCKER_REPORTING")' <<<"$DAGU_PARAMS_JSON") || [[ $? == 4 ]]
@@ -1487,4 +1493,7 @@ handler_on:
         fi
       done
   exit:
+    preconditions:
+      - condition: "${steps.queue_gate.outputs.QUEUE_VERIFIED}"
+        expected: "yes"
     run: *feature_cleanup

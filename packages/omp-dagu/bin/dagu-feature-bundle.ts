@@ -5,6 +5,7 @@ import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { admit, appendObservation, enqueue, enqueueArguments, parseObservation, receiptPath } from "../src/admission.ts";
 import { validatePlanningUnitsCommand } from "../src/planning-validator.ts";
+import { adoptionQueue, declaredQueue, queueGate } from "../src/queue.ts";
 import {
   BUNDLE_VERSION,
   classifyCompatibility,
@@ -65,6 +66,26 @@ function resolveRepository(argument: string): string | undefined {
 
 function main(): void {
   const [command, ...args] = process.argv.slice(2);
+  if (command === "queue-gate" || command === "queue-default" || command === "queue-validate") {
+    try {
+      if (command === "queue-gate") {
+        if (args.length !== 1) throw new Error("QUEUE_REJECTED expected=one sealed queue argument");
+        queueGate(args[0]!);
+      } else if (command === "queue-default") {
+        if (args.length !== 1) throw new Error("Queue adoption requires one repository identity");
+        console.log(adoptionQueue(args[0]!));
+      } else {
+        if (args.length !== 2) throw new Error("Queue validation requires a render and expected queue");
+        const queue = declaredQueue(readFileSync(args[0]!, "utf8"));
+        if (queue !== args[1]) throw new Error(`QUEUE_REJECTED queue=${queue} expected=${args[1]}; repeat bootstrap/adoption`);
+        console.log(`QUEUE_DECLARED queue=${queue} expected=${args[1]}`);
+      }
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exitCode = 1;
+    }
+    return;
+  }
   if (command === "validate-planning-units") {
     process.exitCode = validatePlanningUnitsCommand(args);
     return;
