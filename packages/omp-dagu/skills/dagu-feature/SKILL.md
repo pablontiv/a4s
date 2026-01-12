@@ -653,6 +653,11 @@ canonical main-worktree identities and the session's actual transcript directory
 with `triage_decision`'s encoded `PRIMARY` namespace. A linked-worktree session
 matches only when its transcript directory belongs to that primary namespace.
 On mismatch the guard names the expected primary and keeps triage waiting.
+The guard and activity reader share effective agent-directory resolution:
+defined `OMP_PROFILE` (including empty) precedes `PI_PROFILE`; a trimmed named
+profile uses `<home>/<PI_CONFIG_DIR or .omp>/profiles/<profile>/agent`.
+Without a named profile, `PI_CODING_AGENT_DIR` overrides the default agent
+directory. Runtime session-directory errors fail closed with their actual cause.
 
 The coordinator only drives Dagu checkpoints; subagents perform triage review,
 PoCs and implementation, rather than the coordinator implementing inline.
@@ -738,6 +743,13 @@ The transcript must satisfy every identity, generation and verdict binding.
 `POC=yes` publishes
 `<!-- poc-triage:yes run:<RUN> -->`, enqueues the absolute repository `poc.yaml`
 with ISSUE and QUESTION, and ends the feature run.
+The native verifier first finds exactly one coordinator file ending in
+`_${OMP_SESSION_ID}.jsonl` across `$HOME/.omp/agent/sessions/<encoded>` and
+`$HOME/.omp/profiles/*/agent/sessions/<encoded>`, using the existing home,
+temporary-root and absolute PRIMARY encodings. It then reads only the exact
+allocated `REVIEW.jsonl` under that parent's stem. Parent uniqueness is required
+even if only one parent has the requested child. Diagnostics list consulted
+directories, parent paths and match counts before any state or publication effects.
 
 `checkpoint_push` compares dependency relationships and package/app directories
 against the recorded candidate base, using the PoC-proven

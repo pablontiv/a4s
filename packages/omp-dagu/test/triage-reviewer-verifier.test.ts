@@ -86,7 +86,7 @@ function sessionsRoot(): string {
 }
 
 function clearTranscripts(): void {
-  rmSync(sessionsRoot(), { recursive: true, force: true });
+  rmSync(join(home, ".omp"), { recursive: true, force: true });
 }
 
 function writeTranscript(
@@ -95,11 +95,14 @@ function writeTranscript(
   fixtureName: string,
   directoryStamp = "2026-10-15T12-00-00-000Z",
   timestamp?: string,
+  profile?: string,
 ): string {
-  const directory = join(sessionsRoot(), encodePrimary(primary), `${directoryStamp}_${sessionId}`);
+  const root = profile ? join(home, ".omp", "profiles", profile, "agent", "sessions") : sessionsRoot();
+  const directory = join(root, encodePrimary(primary), `${directoryStamp}_${sessionId}`);
   mkdirSync(directory, { recursive: true });
   const transcript = join(directory, `${review}.jsonl`);
   const parent = `${directory}.jsonl`;
+  writeFileSync(parent, JSON.stringify({ type: "session", id: sessionId }) + "\n");
   writeFileSync(transcript, fixture(fixtureName, timestamp).replaceAll("__PARENT__", parent));
   return transcript;
 }
@@ -168,7 +171,7 @@ for (const [source, url] of yamlFiles) {
     const script = verifierScript(url);
 
     await t.test("accepts generation 0 and OMP external/home/tmp path encodings", async () => {
-      for (const primary of [external, homePrimary, tmpPrimary]) {
+      for (const primary of [external, homePrimary, tmpPrimary, home, tempRoot]) {
         clearTranscripts();
         writeTranscript(primary, "TriageReview188", "generation-0.jsonl");
         restBody = rest();
@@ -245,11 +248,72 @@ for (const [source, url] of yamlFiles) {
     await t.test("rejects missing and duplicate transcripts", async () => {
       clearTranscripts();
       restBody = rest();
-      fail(await runBash(script, environment(external, "TriageReview188")), /transcript\.match_count=0/);
+      fail(await runBash(script, environment(external, "TriageReview188")), /(?:parent|transcript)\.match_count=0/);
       writeTranscript(external, "TriageReview188", "generation-0.jsonl", "first");
       writeTranscript(external, "TriageReview188", "generation-0.jsonl", "second");
-      fail(await runBash(script, environment(external, "TriageReview188")), /transcript\.match_count=2/);
+      fail(await runBash(script, environment(external, "TriageReview188")), /(?:parent|transcript)\.match_count=2/);
     });
+
+    if (source === "skill template") {
+      await t.test("reports zero coordinator parents under nounset across empty profile roots", async () => {
+        clearTranscripts();
+        restBody = rest();
+        const roots = [
+          join(sessionsRoot(), encodePrimary(external)),
+          join(home, ".omp", "profiles", "work [profile]*", "agent", "sessions", encodePrimary(external)),
+        ];
+        for (const root of roots) mkdirSync(root, { recursive: true });
+        const result = await runBash(script, environment(external, "TriageReview188"));
+        assert.equal(result.code, 1, `${result.stdout}\n${result.stderr}`);
+        assert.match(result.stdout, /parent\.match_count=0\ncheck\.parent_unique=FAIL\nVERIFIER=FAIL\n/);
+        for (const root of roots) assert.ok(result.stdout.includes(`sessions.dir=${root}\n`), result.stdout);
+      });
+
+      await t.test("finds a named-profile coordinator with literal spaces and glob characters", async () => {
+        clearTranscripts();
+        restBody = rest();
+        const transcript = writeTranscript(external, "TriageReview188", "generation-0.jsonl", "stamp", undefined, "work [profile]*");
+        const result = await runBash(script, environment(external, "TriageReview188"));
+        pass(result);
+        assert.ok(result.stdout.includes(`transcript.path=${transcript}\n`));
+        assert.match(result.stdout, /parent\.match_count=1/);
+      });
+
+      await t.test("rejects two actual parents even when only one has the allocated child", async () => {
+        clearTranscripts();
+        restBody = rest();
+        const transcript = writeTranscript(external, "TriageReview188", "generation-0.jsonl", "stamp", undefined, "work");
+        const defaultDir = join(sessionsRoot(), encodePrimary(external));
+        mkdirSync(defaultDir, { recursive: true });
+        const otherParent = join(defaultDir, `other_${sessionId}.jsonl`);
+        writeFileSync(otherParent, "{}\n");
+        const result = await runBash(script, environment(external, "TriageReview188"));
+        assert.equal(result.code, 1, `${result.stdout}\n${result.stderr}`);
+        assert.match(result.stdout, /parent\.match_count=2\n/);
+        assert.match(result.stdout, /check\.parent_unique=FAIL\nVERIFIER=FAIL\n/);
+        for (const path of [defaultDir, transcript.slice(0, transcript.lastIndexOf("/")), otherParent]) assert.ok(result.stdout.includes(path), result.stdout);
+      });
+
+      await t.test("requires the exact child under the unique parent", async () => {
+        clearTranscripts();
+        restBody = rest();
+        writeTranscript(external, "OtherReview", "generation-0.jsonl", "stamp", undefined, "work");
+        const result = await runBash(script, environment(external, "TriageReview188"));
+        fail(result, /transcript\.match_count=0/);
+        assert.match(result.stdout, /parent\.match_count=1/);
+      });
+
+      await t.test("rejects an orphan child directory without a coordinator parent file", async () => {
+        clearTranscripts();
+        restBody = rest();
+        const transcript = writeTranscript(external, "TriageReview188", "generation-0.jsonl", "stamp", undefined, "work");
+        rmSync(`${transcript.slice(0, transcript.lastIndexOf("/"))}.jsonl`);
+        const result = await runBash(script, environment(external, "TriageReview188"));
+        fail(result, /parent\.match_count=0/);
+        assert.match(result.stdout, /check\.parent_unique=FAIL\nVERIFIER=FAIL\n/);
+        assert.ok(result.stdout.includes(join(home, ".omp", "profiles", "work", "agent", "sessions", encodePrimary(external))));
+      });
+    }
 
     await t.test("requires OMP_SESSION_ID and a simple REVIEW file name", async () => {
       clearTranscripts();
@@ -260,10 +324,10 @@ for (const [source, url] of yamlFiles) {
 
     await t.test("compares RFC3339 timestamps strictly across fractions and offsets", async () => {
       clearTranscripts();
-      writeTranscript(external, "After", "generation-0.jsonl", "after", "2026-10-15T12:00:00.001Z");
-      writeTranscript(external, "Equal", "generation-0.jsonl", "equal", "2026-10-15T12:00:00Z");
-      writeTranscript(external, "Before", "generation-0.jsonl", "before", "2026-10-15T07:59:59.999-04:00");
-      writeTranscript(external, "OffsetAfter", "generation-0.jsonl", "offset", "2026-10-15T14:00:00.001+02:00");
+      writeTranscript(external, "After", "generation-0.jsonl", "timestamps", "2026-10-15T12:00:00.001Z");
+      writeTranscript(external, "Equal", "generation-0.jsonl", "timestamps", "2026-10-15T12:00:00Z");
+      writeTranscript(external, "Before", "generation-0.jsonl", "timestamps", "2026-10-15T07:59:59.999-04:00");
+      writeTranscript(external, "OffsetAfter", "generation-0.jsonl", "timestamps", "2026-10-15T14:00:00.001+02:00");
       restBody = rest();
       pass(await runBash(script, environment(external, "After")));
       fail(await runBash(script, environment(external, "Equal")), /check\.timestamp_after_cutoff=FAIL/);

@@ -1,6 +1,7 @@
 import { open, readdir, realpath, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { agentDirectory } from "../agent-directory.ts";
 import { currentNode, issueNumber, resolveRunPrimary, runParam, topicFor } from "./progress.ts";
 import type { RunDetails } from "./progress.ts";
 
@@ -71,12 +72,6 @@ async function commandActivity(
   return undefined;
 }
 
-function profileName(): string | undefined {
-  const raw = process.env.OMP_PROFILE !== undefined ? process.env.OMP_PROFILE : process.env.PI_PROFILE;
-  const value = raw?.trim();
-  return !value || value === "default" ? undefined : value;
-}
-
 async function encodedCwd(cwd: string): Promise<string> {
   const resolved = await realpath(path.resolve(cwd)).catch(() => path.resolve(cwd));
   const home = await realpath(os.homedir()).catch(() => path.resolve(os.homedir()));
@@ -88,12 +83,7 @@ async function encodedCwd(cwd: string): Promise<string> {
 }
 
 async function defaultSessionDir(primary: string): Promise<string> {
-  const profile = profileName();
-  if (!profile && process.env.PI_CODING_AGENT_DIR) {
-    return path.join(path.resolve(process.env.PI_CODING_AGENT_DIR), "sessions", await encodedCwd(primary));
-  }
-  const root = path.join(os.homedir(), process.env.PI_CONFIG_DIR || ".omp");
-  return path.join(root, ...(profile ? ["profiles", profile] : []), "agent", "sessions", await encodedCwd(primary));
+  return path.join(agentDirectory(), "sessions", await encodedCwd(primary));
 }
 
 async function newestFile(directory: string, names: string[], accepts: (name: string) => boolean): Promise<string | undefined> {

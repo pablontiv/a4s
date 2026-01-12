@@ -63,6 +63,54 @@ test("primary guard rejects foreign repositories and transcript namespaces, pres
   assert.equal(await primarySessionDecision({ ...event, input: { command: event.input.command.replace("POC=no", "POC=yes") } }, { cwd: foreign, sessionManager: { getSessionDir: () => session(foreign) } }), undefined);
 });
 
+test("primary guard accepts effective profile/config namespaces and fails closed on runtime path errors", async t => {
+  const keys = ["HOME", "OMP_PROFILE", "PI_PROFILE", "PI_CONFIG_DIR", "PI_CODING_AGENT_DIR"] as const;
+  const saved = Object.fromEntries(keys.map(key => [key, process.env[key]]));
+  t.after(() => {
+    for (const key of keys) {
+      if (saved[key] === undefined) delete process.env[key];
+      else process.env[key] = saved[key];
+    }
+  });
+  const root = await realpath(await mkdtemp(join(tmpdir(), "guard-profile-")));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const primary = join(root, "primary");
+  const home = join(root, "home");
+  await mkdir(home);
+  await mkdir(primary);
+  execFileSync("git", ["init", "-q", primary]);
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({ dagRunDetails: { params: `PRIMARY=${primary}` } }));
+  t.after(() => { globalThis.fetch = originalFetch; });
+  const tmp = await realpath(process.env.TMPDIR || "/tmp");
+  const encoded = encodePrimary(primary, home, tmp);
+  const coding = join(root, "coding dir");
+  for (const [env, agent] of [
+    [{ OMP_PROFILE: "work" }, join(home, ".omp", "profiles", "work", "agent")],
+    [{ PI_PROFILE: "work" }, join(home, ".omp", "profiles", "work", "agent")],
+    [{ OMP_PROFILE: "", PI_PROFILE: "work" }, join(home, ".omp", "agent")],
+    [{ OMP_PROFILE: "default", PI_PROFILE: "work" }, join(home, ".omp", "agent")],
+    [{ OMP_PROFILE: " work ", PI_PROFILE: "other", PI_CODING_AGENT_DIR: coding }, join(home, ".omp", "profiles", "work", "agent")],
+    [{ OMP_PROFILE: "work", PI_CONFIG_DIR: ".custom", PI_CODING_AGENT_DIR: coding }, join(home, ".custom", "profiles", "work", "agent")],
+    [{ PI_CONFIG_DIR: ".custom" }, join(home, ".custom", "agent")],
+    [{ OMP_PROFILE: "", PI_PROFILE: "work", PI_CONFIG_DIR: ".custom", PI_CODING_AGENT_DIR: coding }, coding],
+  ] as const) {
+    for (const key of keys) delete process.env[key];
+    Object.assign(process.env, { HOME: home }, env);
+    const sessionDir = join(agent, "sessions", encoded);
+    assert.equal(await primarySessionDecision(event, { cwd: primary, sessionManager: { getSessionDir: () => sessionDir } }), undefined, JSON.stringify(env));
+    const mismatch = await primarySessionDecision(event, { cwd: primary, sessionManager: { getSessionDir: () => `${sessionDir}-other` } });
+    assert.ok(mismatch && "block" in mismatch);
+    assert.ok(mismatch.reason.includes(sessionDir));
+  }
+  const failure = await primarySessionDecision(event, {
+    cwd: primary,
+    sessionManager: { getSessionDir() { throw new Error("runtime transcript path unavailable"); } },
+  });
+  assert.ok(failure && "block" in failure);
+  assert.match(failure.reason, /TRIAGE_PRIMARY_CHECK_FAILED.*runtime transcript path unavailable/);
+});
+
 test("PRIMARY encoding follows the DAG home, temporary, and absolute namespaces", () => {
   assert.equal(encodePrimary("/home/me", "/home/me", "/tmp"), "-");
   assert.equal(encodePrimary("/home/me/repo", "/home/me", "/tmp"), "-repo");

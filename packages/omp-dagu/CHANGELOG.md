@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.103
+
+- Share effective agent-directory resolution between activity and the primary-session guard, including named profiles and existing configuration-directory precedence (#356).
+- Resolve exactly one coordinator parent across default and named-profile session roots before verifying its allocated triage-reviewer child; report consulted paths and match counts on rejection.
+- Emit actionable parent-uniqueness failure markers for empty coordinator searches under Bash 3.2 nounset, while preserving named-profile verification and duplicate-parent rejection.
+
 ## 0.3.102
 
 - Limit scheduled reconciliation to waiting feature discovery and PR/CI checkpoint transitions through `tick` and `reconcile-run`, preserving transition safety and lifecycle cleanup contracts.
