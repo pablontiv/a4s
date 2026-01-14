@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.78
+
+- Install the manifest-pinned official Dagu release for the omp-dagu CI matrix entry, verify and log its SHA-256 digest, and require the effective version before running live integrations (#337).
+- Document the CI runtime preflight and local integration prerequisites (#337).
+- Isolate DAGU_HOME for in-process calls in live admission tests so they pass on runners without ~/.dagu (#337).
+
 ## 0.3.77
 
 - Supply QA/reviewer assignments with literal raw-JSON verdict bindings and the standalone candidate-SHA command, and document fresh names for every attempted invocation (#379).
