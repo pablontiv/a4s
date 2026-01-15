@@ -8,6 +8,8 @@ See [private installation](../operations/private-install.md),
 [deployment and recovery](../operations/deployment.md) and the
 [dated walkthrough](../operations/v1-walkthrough.md).
 
+Delivered operations documents include [`docs/operations/loop-acceptance.md`](../operations/loop-acceptance.md).
+
 The [versioned artifact contract](artifact-contract.md) defines release → verified
 `$DAGU_HOME/cache/a4s/<version>/` → explicit tuple handoff to the compiled `a4s`.
 Committed `.workspace/dagu/config.json` supplies schema-2 consumer policy;

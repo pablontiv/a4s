@@ -839,6 +839,8 @@ never station/service configuration, plugin-manager links or service activation.
 
 ### Run recovery
 
+A station change is accepted only after the [loop test](loop-acceptance.md) passes.
+
 Read exact DAG/run status and approval iteration before any human-task action.
 The designated reconciler owns CI/merge observation and `await_ci`/`await_merge`
 transitions. Those two checkpoints remain child runs. Other waiting checkpoints
