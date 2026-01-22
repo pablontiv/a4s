@@ -308,7 +308,7 @@ sesión padre, agente, marcador `DAG=feature RUN=<run>`, inicio posterior al
 `triage.startedAt` actual y `poc=no` en el último yield. REST, parámetros,
 transcript o campos inválidos hacen fallar el step sin efectos externos.
 
-Con `@a4s/omp-cross-family-review` cargado, `triage-reviewer` conserva la selección cross-family; `reviewer` sigue disponible para code review.
+With `@a4s/omp-cross-family-review` loaded, every configured review agent requires strict cross-family eligibility. `triage-reviewer` and `plan-reviewer` exclude the parent family; `reviewer`, `qa` and `security-reviewer` also exclude the resolved `@task` family. An unresolved parent identity/family or exhausted eligible candidate chain blocks dispatch with a reason. At the feature quality gate, the effective implementer binding supplies the excluded reference instead. The integration uses the uniformly strict four-argument `orderReviewModels` API; runtime quota fallback remains native OMP behavior.
 
 ## Protección de recursos del ciclo
 
