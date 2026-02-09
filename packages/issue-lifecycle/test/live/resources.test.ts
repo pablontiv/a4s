@@ -23,7 +23,24 @@ function fixture() {
   git(primary, "remote", "add", "origin", remote); git(primary, "push", "-qu", "origin", "main");
   writeFileSync(join(primary, ".git", "info", "exclude"), "/.workspace/\n");
   const bin = join(root, "bin"); mkdirSync(bin);
-  writeFileSync(join(bin, "dagu"), `#!/bin/sh\nif [ -f '${root}/fail' ]; then echo 'history unavailable' >&2; exit 2; fi\ncat '${root}/'"$2"'.json'\n`);
+  writeFileSync(join(bin, "dagu"), `#!/bin/sh
+if [ -f '${root}/fail' ]; then echo 'history unavailable' >&2; exit 2; fi
+kind=$2
+shift 2
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --run-id)
+      if [ -f '${root}/fail-'"$2" ]; then echo 'history unavailable' >&2; exit 2; fi
+      if [ -f '${root}/history-'"$2"'.json' ]; then cat '${root}/history-'"$2"'.json'; exit; fi
+      shift ;;
+    --status)
+      if [ -f '${root}/active.json' ]; then cat '${root}/active.json'; exit; fi
+      shift ;;
+  esac
+  shift
+done
+cat '${root}/'"$kind"'.json'
+`);
   chmodSync(join(bin, "dagu"), 0o755);
   const history = (kind: string, rows: unknown[]) => writeFileSync(join(root, `${kind}.json`), JSON.stringify(rows));
   history("feature", []); history("poc", []);
@@ -45,6 +62,21 @@ function script(definition: string, marker: string) {
   while (end < lines.length && (lines[end]!.startsWith("      ") || lines[end] === "")) end++;
   return withResourceGuard((marker === "  - id: close_gate" ? "CLEANUP_CLOSE=true\n" : "") +
     lines.slice(start + 1, end).map(line => line.slice(6)).join("\n"), definition);
+}
+
+function durableOwner(repo: { primary: string }, run: string, parameters = ["ISSUE=215"], bindings: Record<string, string> = {}) {
+  const evidence = join(repo.primary, ".git", "dagu-feature", "runs", run);
+  mkdirSync(join(evidence, "snapshot"), { recursive: true });
+  const snapshot = "env:\n" + Object.entries({
+    PRIMARY: repo.primary, BRANCH: "dagu/issue-${ISSUE}", WORKTREE: "${PRIMARY}/.workspace/worktrees/issue-${ISSUE}", ...bindings,
+  }).map(([key, value]) => `  - ${key}: ${JSON.stringify(value)}\n`).join("");
+  const receipt = {
+    schemaVersion: 2, runReceipt: { dag: "feature", run, attempt: 1, observations: [] },
+    initial: { execution: { primary: repo.primary, parameters, dagSnapshot: snapshot } },
+  };
+  writeFileSync(join(evidence, "snapshot", "feature.yaml"), snapshot);
+  writeFileSync(join(evidence, "receipt.json"), JSON.stringify(receipt));
+  return { evidence, receipt };
 }
 
 test("shared shell words preserve Bash literal hashes, quoting and continuations", () => {
@@ -116,6 +148,68 @@ for (const definition of definitions) {
     assert.match(result.stderr, /belongs to active run adopted-owner \(waiting\)/);
   });
 
+  test(`${definition} deleted-history admission requires durable identity and station-wide inactivity`, t => {
+    const repo = fixture(); t.after(() => rmSync(repo.root, { recursive: true, force: true }));
+    const key = join(repo.primary, ".git", "dagu-feature", "owners", "issue-215");
+    mkdirSync(join(repo.primary, ".git", "dagu-feature", "owners"), { recursive: true });
+    const exact = join(repo.root, "history-owner.json");
+    const active = join(repo.root, "active.json");
+    const admit = (primary = repo.primary) => spawnSync("bash", ["-c", script(definition, "  - id: admit")], {
+      env: { ...repo.env, PRIMARY: primary, RUN: "replacement" }, encoding: "utf8",
+    });
+    const cases: Array<[string, () => void]> = [
+      ["history read failure", () => writeFileSync(join(repo.root, "fail-owner"), "")],
+      ["ambiguous history", () => writeFileSync(exact, JSON.stringify([repo.row("owner", "failed"), repo.row("owner", "aborted")]))],
+      ["malformed history", () => writeFileSync(exact, "not json\n")],
+      ["non-array history", () => writeFileSync(exact, "{}\n")],
+      ["multiple history documents", () => writeFileSync(exact, "[]\n[]\n")],
+      ["invalid native status", () => writeFileSync(exact, JSON.stringify([repo.row("owner", "history_deleted")]))],
+      ["missing receipt", () => rmSync(join(repo.primary, ".git/dagu-feature/runs/owner/receipt.json"))],
+      ["missing snapshot", () => rmSync(join(repo.primary, ".git/dagu-feature/runs/owner/snapshot/feature.yaml"))],
+      ["mismatched primary", () => durableOwner(repo, "owner", ["ISSUE=215"], { PRIMARY: repo.root })],
+      ["mismatched receipt primary", () => {
+        const { evidence, receipt } = durableOwner(repo, "owner");
+        receipt.initial.execution.primary = repo.root;
+        writeFileSync(join(evidence, "receipt.json"), JSON.stringify(receipt));
+      }],
+      ["mismatched issue", () => durableOwner(repo, "owner", ["ISSUE=216"])],
+      ["mismatched branch", () => durableOwner(repo, "owner", ["ISSUE=215"], { BRANCH: "dagu/unrelated" })],
+      ["mismatched worktree", () => durableOwner(repo, "owner", ["ISSUE=215", `WORKTREE=${repo.root}`])],
+      ["snapshot disagrees with receipt", () => writeFileSync(join(repo.primary, ".git/dagu-feature/runs/owner/snapshot/feature.yaml"), "env: []\n")],
+      ["mismatched resource record", () => writeFileSync(join(repo.primary, ".git/dagu-feature/runs/owner/resource.json"), JSON.stringify({ run: "unrelated" }))],
+      ["active history read failure", () => writeFileSync(join(repo.root, "fail"), "")],
+      ["malformed active history", () => writeFileSync(active, "{}\n")],
+      ["incomplete active history", () => writeFileSync(active, JSON.stringify(Array.from({ length: 1000 }, (_, i) => repo.row(`other-${i}`, "running"))))],
+      ...["queued", "running", "waiting"].map(status => [
+        `active elsewhere (${status})`,
+        () => writeFileSync(active, JSON.stringify([{ ...repo.row("owner", status), params: `PRIMARY=${repo.root} ISSUE=999 BRANCH=dagu/elsewhere` }])),
+      ] as [string, () => void]),
+    ];
+    for (const [name, arrange] of cases) {
+      rmSync(join(repo.primary, ".git/dagu-feature/runs/owner"), { recursive: true, force: true });
+      rmSync(join(repo.root, "fail"), { force: true }); rmSync(join(repo.root, "fail-owner"), { force: true });
+      durableOwner(repo, "owner");
+      writeFileSync(key, `owner\t${repo.branch}\n`); writeFileSync(exact, "[]\n"); writeFileSync(active, "[]\n");
+      arrange();
+      const result = admit();
+      assert.equal(result.status, 1, `${name}: ${result.stdout}\n${result.stderr}`);
+      assert.equal(readFileSync(key, "utf8"), `owner\t${repo.branch}\n`, name);
+      assert.equal(existsSync(`${key}.lock`), false, name);
+      assert.equal(existsSync(repo.worktree), false, name);
+    }
+    rmSync(join(repo.root, "fail"), { force: true }); rmSync(join(repo.root, "fail-owner"), { force: true });
+    durableOwner(repo, "owner"); writeFileSync(exact, "[]\n"); writeFileSync(active, "[]\n");
+    const alias = join(repo.root, "primary-alias"); symlinkSync(repo.primary, alias, "dir");
+    for (const primary of [repo.primary, alias]) {
+      writeFileSync(key, `owner\t${repo.branch}\n`);
+      const result = admit(primary);
+      assert.equal(result.status, 0, result.stderr);
+      assert.match(result.stderr, /recorded owner owner history deleted; identity verified from lifecycle evidence/);
+      assert.equal(readFileSync(key, "utf8"), `replacement\t${repo.branch}\n`);
+      assert.equal(readFileSync(join(repo.primary, ".git/dagu-feature/runs/replacement/previous-owner"), "utf8"), "owner\n");
+    }
+  });
+
   test(`${definition} admission/creation retries preserve candidate data, serialize claimants and transfer terminal ownership`, async t => {
     const repo = fixture(); t.after(() => rmSync(repo.root, { recursive: true, force: true }));
     const create = script(definition, "  - id: start_gate");
@@ -149,7 +243,8 @@ for (const definition of definitions) {
     assert.equal(repo.git(repo.primary, "worktree", "list", "--porcelain").match(/worktree /g)?.length, 2);
   });
 
-  test(`${definition} multi-hop replacement adopts a candidate after an interrupted transfer`, t => {
+  for (const deleted of [false, true]) {
+  test(`${definition} multi-hop replacement adopts a candidate after an interrupted transfer${deleted ? " with deleted predecessor history" : ""}`, t => {
     const repo = fixture(); t.after(() => rmSync(repo.root, { recursive: true, force: true }));
     const create = script(definition, "  - id: start_gate");
     const run = (run: string, extra = {}) => spawnSync("bash", ["-c", create], { env: { ...repo.env, RUN: run, ...extra }, encoding: "utf8" });
@@ -181,7 +276,15 @@ for (const definition of definitions) {
       { ...repo.row("replacement-b", "aborted"), params: "ISSUE=215 OMP_SESSION_ID=resource-test-session" },
       repo.row("replacement-c", "running"),
     ]);
+    if (deleted) {
+      for (const predecessor of ["owner", "replacement-b"]) durableOwner(repo, predecessor);
+      repo.history("feature", [repo.row("replacement-c", "running")]);
+    }
     result = run("replacement-c"); assert.equal(result.status, 0, result.stderr);
+    if (deleted) {
+      assert.match(result.stderr, /recorded owner replacement-b history deleted; identity verified from lifecycle evidence/);
+      assert.match(result.stderr, /predecessor owner history deleted; identity verified from lifecycle evidence/);
+    }
     const state = join(common, "runs", "replacement-c");
     assert.equal(readFileSync(join(state, "previous-owner"), "utf8"), "replacement-b\n");
     assert.equal(readFileSync(join(common, "owners", "issue-215"), "utf8"), `replacement-c\t${repo.branch}\n`);
@@ -200,6 +303,7 @@ for (const definition of definitions) {
     assert.equal(repo.git(repo.worktree, "rev-parse", "HEAD"), head);
     assert.equal(repo.git(repo.worktree, "status", "--porcelain"), status);
   });
+  }
 
   test(`${definition} multi-hop replacement rejects unverified predecessor chains with resource_identity`, t => {
     const repo = fixture(); t.after(() => rmSync(repo.root, { recursive: true, force: true }));
@@ -242,9 +346,32 @@ for (const definition of definitions) {
         `PRIMARY=${repo.primary} ISSUE=215 BRANCH=dagu/unrelated`,
         `PRIMARY=${repo.primary} ISSUE=215 BRANCH=${repo.branch} WORKTREE=${repo.root}`,
       ].map(params => [`predecessor identity ${params}`, () => repo.history("feature", rows().map(row => row.dagRunId === "replacement-b" ? { ...row, params } : row))] as [string, () => void]),
+      ["deleted predecessor read failure", () => {
+        durableOwner(repo, "owner");
+        writeFileSync(join(repo.root, "fail-owner"), "");
+      }],
+      ["deleted predecessor mismatched primary", () => {
+        durableOwner(repo, "owner", ["ISSUE=215"], { PRIMARY: repo.root });
+        writeFileSync(join(repo.root, "history-owner.json"), "[]\n");
+      }],
+      ["deleted predecessor mismatched issue", () => {
+        durableOwner(repo, "owner", ["ISSUE=216"]);
+        writeFileSync(join(repo.root, "history-owner.json"), "[]\n");
+      }],
+      ["deleted predecessor mismatched branch", () => {
+        durableOwner(repo, "owner", ["ISSUE=215"], { BRANCH: "dagu/unrelated" });
+        writeFileSync(join(repo.root, "history-owner.json"), "[]\n");
+      }],
+      ...["queued", "running", "waiting"].map(status => [`deleted predecessor active elsewhere (${status})`, () => {
+        durableOwner(repo, "owner");
+        writeFileSync(join(repo.root, "history-owner.json"), "[]\n");
+        writeFileSync(join(repo.root, "active.json"), JSON.stringify([{ ...repo.row("owner", status), params: `PRIMARY=${repo.root} ISSUE=999` }]));
+      }] as [string, () => void]),
     ];
     for (const [name, arrange] of cases) {
       writeFileSync(resource, retainedResource); writeFileSync(previous, "owner\n"); repo.history("feature", rows());
+      for (const name of ["fail-owner", "history-owner.json", "active.json"]) rmSync(join(repo.root, name), { force: true });
+      writeFileSync(join(repo.root, "active.json"), JSON.stringify([repo.row("replacement-c", "running")]));
       arrange();
       const before = readFileSync(resource, "utf8");
       result = run("replacement-c");
