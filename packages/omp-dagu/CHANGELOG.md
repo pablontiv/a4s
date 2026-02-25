@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.117
+
+- Allocate real Dagu test run identities through one shared per-execution fixture helper, including child runs and lifecycle lookups, so concurrent suites keep host-global control sockets separate (#542).
+
 ## 0.3.115
 
 - Admit the owner session's literal inert-quality disposal completion only for a stored historical snapshot with no checkpoint cancellation route and a verified fail-closed QA/REVIEW binding; preserve normal structured verdict admission (#545).

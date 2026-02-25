@@ -11,6 +11,7 @@ import { liveDagu } from "../fixtures/live-dagu.ts";
 import { PocDiagnostics } from "../fixtures/poc-diagnostics.ts";
 import { qualityDecision } from "../../src/triage/quality.ts";
 import { waitingSnapshot } from "../fixtures/waiting-snapshot.ts";
+import { testRunId } from "../fixtures/run-id.ts";
 
 type Step = {
   id: string;
@@ -75,7 +76,7 @@ test("distributed waiting checkpoints cancel before recovery, publication and pr
         (variant !== "historical-feature" || ["triage", "implement", "quality_review"].includes(step.id)));
       for (const checkpoint of checkpoints) {
         for (const retained of checkpoint.id === "implement" ? [false, true] : [false]) {
-          const run = `${variant}-${checkpoint.id}-${retained ? "retained" : "disposable"}`;
+          const run = testRunId(`${variant}-${checkpoint.id}-${retained ? "keep" : "drop"}`);
           const primary = join(root, run);
           const remote = `${primary}.git`;
           git("init", "--bare", "-b", "main", remote);

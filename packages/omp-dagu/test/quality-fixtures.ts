@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { qualityMarker } from "../src/triage/quality.ts";
 import type { QualityRequest, TranscriptRow } from "../src/triage/quality.ts";
 import { jobId, type JobBinding, type JobResult } from "../src/role-jobs.ts";
@@ -19,7 +19,7 @@ type Repository = { root: string; primary: string; worktree: string; state: stri
 export function qualityFixture(repo: Repository, verdict: "PASS" | "FAIL" = "PASS", current?: QualityRequest) {
   const candidate = JSON.parse(readFileSync(join(repo.state, "candidate.json"), "utf8"));
   const request: QualityRequest = current ?? {
-    repo: repo.primary, worktree: repo.worktree, run: "test-run", sha: candidate.sha, iteration: candidate.iteration,
+    repo: repo.primary, worktree: repo.worktree, run: basename(repo.state), sha: candidate.sha, iteration: candidate.iteration,
     attempt: "2026-10-16T01:00:00Z", implementer: "ImplementTest", session: "parent-id",
     implementStartedAt: "2026-10-16T00:00:00Z",
   };

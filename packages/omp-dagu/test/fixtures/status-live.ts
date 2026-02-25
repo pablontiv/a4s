@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import extension from "../../src/status/index.ts";
+import { testRunId } from "./run-id.ts";
 
 async function port(): Promise<number> {
   const server = createServer();
@@ -18,7 +19,7 @@ async function port(): Promise<number> {
 
 export async function liveWatcher(binary = "dagu"): Promise<string[]> {
   const root = mkdtempSync(join(tmpdir(), "omp-dagu-notices-"));
-  const runId = `fast-push-back-${root.slice(root.lastIndexOf("-") + 1)}`;
+  const runId = testRunId("fast-push-back");
   const home = join(root, "dagu");
   mkdirSync(join(home, "dags"), { recursive: true });
   const httpPort = await port();

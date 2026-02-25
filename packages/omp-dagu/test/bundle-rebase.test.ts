@@ -1,7 +1,7 @@
 import { liveDagu, liveDaguVersion } from "./fixtures/live-dagu.ts";
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { testRunId } from "./fixtures/run-id.ts";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -96,16 +96,17 @@ function fixture(upstream = "0.3.18", proposed = "0.3.18", mode = "clean", legac
     put(primary, "package-lock.json", JSON.stringify(lock, null, 2) + "\n");
   }
   git(primary, "add", "."); git(primary, "commit", "-m", "feat: candidate A"); git(primary, "push", "origin", "main");
-  const state = join(primary, ".git/dagu-feature/runs/bundle-test");
+  const id = testRunId("bundle-rebase");
+  const state = join(primary, ".git/dagu-feature/runs", id);
   mkdirSync(state, { recursive: true });
-  const identity = JSON.stringify({ primary, worktree, branch, run: "bundle-test", session: "" });
+  const identity = JSON.stringify({ primary, worktree, branch, run: id, session: "" });
   put(state, "identity", identity + "\n");
   writeFileSync(git(worktree, "rev-parse", "--path-format=absolute", "--git-path", "dagu-feature-owner"), identity + "\n");
   put(state, "base", base + "\n");
   put(state, "candidate.json", JSON.stringify({ sha: before, base, tree: git(worktree, "rev-parse", "HEAD^{tree}"), iteration: 0, message: "feat: candidate B", summary: "Candidate B", implementer: "ImplementTest" }) + "\n");
   put(state, "diff.patch", git(worktree, "diff", "--binary", base, before) + "\n");
   put(state, "gate.json", JSON.stringify({ sha: before, gate: "old gate" }) + "\n");
-  const env = { HOME: process.env.HOME, PATH: process.env.PATH, PRIMARY: primary, WORKTREE: worktree, BRANCH: branch, BASE_BRANCH: "main", RUN: "bundle-test", OMP_SESSION_ID: "", REBASE_RESOLVER: `node ${JSON.stringify(resolver)}`, GATE: "true" };
+  const env = { HOME: process.env.HOME, PATH: process.env.PATH, PRIMARY: primary, WORKTREE: worktree, BRANCH: branch, BASE_BRANCH: "main", RUN: id, OMP_SESSION_ID: "", REBASE_RESOLVER: `node ${JSON.stringify(resolver)}`, GATE: "true" };
   return { root, primary, worktree, branch, state, before, env };
 }
 function run(repo: Fixture, file = template, id = "rebase") {
@@ -231,7 +232,7 @@ test("isolated Dagu rebases colliding candidates before gate and publishes the n
   const service = spawn("dagu", ["start-all", "--host", "127.0.0.1", "--port", String(port)], { cwd: repo.root, env, stdio: ["ignore", "pipe", "pipe"] });
   service.stdout.on("data", data => { serviceLog += data; }); service.stderr.on("data", data => { serviceLog += data; });
   const command = (...args: string[]) => execFileSync("dagu", args, { cwd: repo.root, env, encoding: "utf8" });
-  const id = `bundle-rebase-${randomUUID()}`; const api = `http://127.0.0.1:${port}/api/v1`;
+  const id = repo.env.RUN!; const api = `http://127.0.0.1:${port}/api/v1`;
   async function until<T>(description: string, probe: () => Promise<T | undefined>): Promise<T> {
     const deadline = Date.now() + 60_000;
     while (Date.now() < deadline) { const value = await probe(); if (value !== undefined) return value; await delay(150); }
@@ -252,7 +253,7 @@ test("isolated Dagu rebases colliding candidates before gate and publishes the n
     });
     const candidate = json(repo.state, "candidate.json");
     const evidence = qualityFixture(repo, "PASS", {
-      repo: repo.primary, worktree: repo.worktree, run: "bundle-test", sha: candidate.sha, iteration: candidate.iteration,
+      repo: repo.primary, worktree: repo.worktree, run: id, sha: candidate.sha, iteration: candidate.iteration,
       implementer: "ImplementTest", session: "", attempt: new Date().toISOString(), implementStartedAt: "2026-10-16T00:00:00Z",
     });
     writeFileSync(join(repo.state, "quality.json"), JSON.stringify(verifyQuality(evidence.parent, evidence.request, "QATest", "ReviewTest", evidence.models)));

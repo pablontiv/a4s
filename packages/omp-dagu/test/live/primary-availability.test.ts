@@ -10,6 +10,7 @@ import { Transitions } from "../../src/status/progress.ts";
 import type { RunDetails } from "../../src/status/progress.ts";
 
 import { liveDagu, liveDaguVersion } from "../fixtures/live-dagu.ts";
+import { testRunId } from "../fixtures/run-id.ts";
 const feature = readFileSync(new URL("../../../../.workspace/dagu/dags/feature.yaml", import.meta.url), "utf8");
 const poc = readFileSync(new URL("../../../../.workspace/dagu/dags/poc.yaml", import.meta.url), "utf8");
 function step(source: string, id: string): string {
@@ -101,7 +102,7 @@ test("Dagu isolated primary checkpoints release the queue and rewind the same ru
       git(primary, "add", ".");
       git(primary, "commit", "-m", "seed");
       git(primary, "push", "origin", "main");
-      const id = `${phase}-${blocked}-${root.slice(root.lastIndexOf("-") + 1)}`;
+      const id = testRunId(`${phase}-${blocked}`);
       const worktree = join(primary, ".workspace", "worktrees", phase === "base" ? `poc-${id}` : "issue-228");
       const branch = phase === "base" ? `poc/${id}` : "dagu/issue-228";
       const sha = git(primary, "rev-parse", "HEAD");

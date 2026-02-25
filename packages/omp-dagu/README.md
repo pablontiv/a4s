@@ -669,9 +669,9 @@ npm test --workspace @a4s/omp-dagu
 npm run typecheck --workspace @a4s/omp-dagu
 ```
 
-`npm test` (también desde la raíz) ejecuta las pruebas en proceso, sin invocar
-el binario Dagu ni arrancar sus servicios. Los casos reales usan exclusivamente
-el comando explícito:
+`npm test` (también desde la raíz) ejecuta las pruebas unitarias y fixtures
+aislados, incluidos algunos `dagu start` reales de templates. Las integraciones
+con servicios Dagu se activan con el comando explícito:
 
 ```sh
 npm run test:live --workspace @a4s/omp-dagu
@@ -683,11 +683,16 @@ El gate compartido consulta `dagu version` únicamente con esa variable activa
 y exige el pin `daguFeature.dagu` de `package.json`. El comando predeterminado
 fija la variable a `0`, incluso si el entorno del llamador la tenía activa.
 
-Las pruebas vivas usan el runtime fijado del `PATH`, un `DAGU_HOME` temporal y un
-puerto HTTP propio por fixture. Además, cada instancia genera un único
-`randomUUID()` y deriva los IDs `recovery-<healthy|gate|start_gate|push>-<uuid>`,
-manteniendo el nombre de DAG `feature`. Enqueue, REST, status, completion,
-push-back y handlers comparten exactamente ese ID.
+Las pruebas que ejecutan Dagu usan el runtime fijado del `PATH`, un `DAGU_HOME`
+temporal y, cuando arrancan un servicio, un puerto HTTP propio por fixture.
+Cada run real obtiene su identidad exclusivamente de
+`test/fixtures/run-id.ts`: asignar `const run = testRunId("case-name")` una vez
+y reutilizarlo en start/enqueue, REST, status, retry, completion, push-back,
+paths y assertions. Los runs hijos derivan su ID de ese valor (`poc-${run}`,
+`feature-${run}`). El helper combina un sufijo aleatorio compacto de 64 bits por
+ejecución del módulo con un contador por asignación, separando procesos y casos
+repetidos del mismo proceso y dejando espacio para prefijos en el límite de
+63 caracteres de Dagu.
 
 When `test/live/poc-template.test.ts` fails, its fixture stops the server before
 preserving the original error, last HTTP URL/status/body, stdout/stderr, and only
@@ -704,6 +709,13 @@ deriva `/tmp/@dagu_feature_<hash>.sock` de `(nombre del DAG, run-id)`, con los
 primeros seis caracteres de `md5(nombre + run-id)`. Los homes y puertos propios
 aíslan el store y HTTP; el sufijo por instancia separa las identidades de los
 sockets entre suites concurrentes.
+
+La regresión se comprueba mediante identidades únicas entre procesos y suites
+reales concurrentes. Dagu acepta IDs literales válidos: distinguir un literal de
+una variable con el mismo valor requeriría inspeccionar el código fuente, no
+un comportamiento observable por el consumidor. Por eso el helper es la única
+ruta de construcción de IDs reales en los fixtures; su contrato se prueba por
+comportamiento en `test/run-id.test.ts`.
 
 `concurrent recovery fixtures keep distinct run identities` ejecuta ambos
 fixtures simultáneamente para los cuatro modos, comprueba checkpoints,

@@ -11,11 +11,13 @@ import { qualityDecision } from "../../src/triage/quality.ts";
 import type { TranscriptRow } from "../../src/triage/quality.ts";
 import { liveDagu } from "../fixtures/live-dagu.ts";
 import { qualityFixture } from "../quality-fixtures.ts";
+import { testRunId } from "../fixtures/run-id.ts";
 
 test("real Dagu implement guard and quality push-back", {
   ...liveDagu, timeout: 90_000,
 }, async t => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "omp-quality-guard-live-")));
+  const id = testRunId("quality-guard");
   let service: ChildProcess | undefined;
   t.after(async () => {
     if (service && service.exitCode === null && service.signalCode === null) {
@@ -28,7 +30,7 @@ test("real Dagu implement guard and quality push-back", {
   });
   const primary = join(root, "primary space");
   const worktree = join(primary, ".workspace", "worktrees", "issue-189");
-  const state = join(primary, ".git", "dagu-feature", "runs", "test-run");
+  const state = join(primary, ".git", "dagu-feature", "runs", id);
   execFileSync("git", ["init", "--quiet", primary]);
   mkdirSync(worktree, { recursive: true });
   mkdirSync(state, { recursive: true });
@@ -94,9 +96,9 @@ test("real Dagu implement guard and quality push-back", {
   await until(async () => {
     try { return (await fetch(`${process.env.DAGU_URL}/api/v1/dag-runs`)).ok ? true : undefined; } catch { return undefined; }
   });
-  cli("enqueue", "--run-id", "test-run", dag);
+  cli("enqueue", "--run-id", id, dag);
   const waiting = (step: string) => until(async () => {
-    const response = await fetch(`${process.env.DAGU_URL}/api/v1/dag-runs/feature/test-run`);
+    const response = await fetch(`${process.env.DAGU_URL}/api/v1/dag-runs/feature/${id}`);
     if (!response.ok) return undefined;
     const run = (await response.json() as { dagRunDetails: { statusLabel: string; pushBackIteration?: number; nodes: Array<{ step: { id: string }; statusLabel: string; startedAt: string }> } }).dagRunDetails;
     return run.statusLabel === "waiting" && run.nodes.some(node => node.step.id === step && node.statusLabel === "waiting") ? run : undefined;
@@ -109,7 +111,7 @@ test("real Dagu implement guard and quality push-back", {
   writeFileSync(f.parent, parent.map(row => JSON.stringify(row)).join("\n") + "\n");
   const ctx = { cwd: f.primary, sessionManager: { getSessionDir: () => dirname(f.parent) }, models: f.models };
   const event = { toolName: "bash", toolCallId: "live-complete", input: {
-    command: "dagu human-task complete --run-id test-run --step implement \\\n  --input SUMMARY='change summary' --input MESSAGE='fix(dagu): reject stale implementers before implement completion' \\\n  --input IMPLEMENTER='ImplementTest' feature",
+    command: `dagu human-task complete --run-id ${id} --step implement \\\n  --input SUMMARY='change summary' --input MESSAGE='fix(dagu): reject stale implementers before implement completion' \\\n  --input IMPLEMENTER='ImplementTest' feature`,
   } };
   child[1]!.timestamp = new Date(Date.parse(cutoff) - 695).toISOString();
   writeFileSync(f.paths.implementer!, child.map(row => JSON.stringify(row)).join("\n") + "\n");
@@ -126,14 +128,14 @@ test("real Dagu implement guard and quality push-back", {
   writeFileSync(f.paths.implementer!, child.map(row => JSON.stringify(row)).join("\n") + "\n");
   assert.equal(await qualityDecision(event, ctx), undefined);
   const staleComment = {
-    ...event, input: { command: "dagu human-task complete feature --run-id test-run --step implement --input SUMMARY=s --input MESSAGE=m --input IMPLEMENTER=StaleId # --input IMPLEMENTER=ImplementTest" },
+    ...event, input: { command: `dagu human-task complete feature --run-id ${id} --step implement --input SUMMARY=s --input MESSAGE=m --input IMPLEMENTER=StaleId # --input IMPLEMENTER=ImplementTest` },
   };
   const staleCommentDecision = await qualityDecision(staleComment, ctx);
   assert.ok(staleCommentDecision && "block" in staleCommentDecision && staleCommentDecision.block);
   assert.match(staleCommentDecision.reason!, /IMPLEMENT_BLOCKED: stale invocation/);
   assert.equal((await waiting("implement")).nodes.find(node => node.step.id === "implement")!.startedAt, cutoff);
   const attachedStale = { ...event, input: {
-    command: "dagu human-task complete feature -rtest-run --step implement --input SUMMARY=s --input MESSAGE=m --input IMPLEMENTER=StaleId",
+    command: `dagu human-task complete feature -r${id} --step implement --input SUMMARY=s --input MESSAGE=m --input IMPLEMENTER=StaleId`,
   } };
   const attachedStaleDecision = await qualityDecision(attachedStale, ctx);
   assert.ok(attachedStaleDecision && "block" in attachedStaleDecision && attachedStaleDecision.block);
@@ -155,7 +157,7 @@ test("real Dagu implement guard and quality push-back", {
   }
   for (const boundary of ["\n", "; ", " && "]) {
     const decision = await qualityDecision({ ...event, input: { command:
-      `dagu human-task complete feature --run-id test-run --step implement --input SUMMARY=s --input MESSAGE=m --input IMPLEMENTER=StaleId${boundary}--input IMPLEMENTER=ImplementTest`,
+      `dagu human-task complete feature --run-id ${id} --step implement --input SUMMARY=s --input MESSAGE=m --input IMPLEMENTER=StaleId${boundary}--input IMPLEMENTER=ImplementTest`,
     } }, ctx);
     assert.ok(decision && "block" in decision && decision.block);
     assert.match(decision.reason!, /one literal implement completion command required: command boundary/);
@@ -172,12 +174,12 @@ test("real Dagu implement guard and quality push-back", {
     await execute(async (command: string) => execFileSync("bash", ["-euo", "pipefail", "-c", command], { env, encoding: "utf8" }));
     await waiting("quality_review");
   }
-  const guardedRun = (await (await fetch(`${process.env.DAGU_URL}/api/v1/dag-runs/feature/test-run`)).json()).dagRunDetails;
+  const guardedRun = (await (await fetch(`${process.env.DAGU_URL}/api/v1/dag-runs/feature/${id}`)).json()).dagRunDetails;
   assert.equal(guardedRun.nodes.find((node: { step: { id: string } }) => node.step.id === "implement").statusLabel, "waiting",
     "ambiguous Eval must preserve native Waiting implement instead of sealing a stale delivery");
   assert.ok(ambiguous && "block" in ambiguous && ambiguous.block);
   for (const form of ["two calls", "fresh decoy", "parenthesized fresh decoy"]) {
-    const fresh = "dagu human-task complete feature --run-id test-run --step implement --input SUMMARY=s --input MESSAGE=m --input IMPLEMENTER=ImplementTest";
+    const fresh = `dagu human-task complete feature --run-id ${id} --step implement --input SUMMARY=s --input MESSAGE=m --input IMPLEMENTER=ImplementTest`;
     const stale = fresh.replace("ImplementTest", "StaleId");
     const code = form === "two calls" ? `await bash(${JSON.stringify(fresh)}); await bash(${JSON.stringify(stale)})`
       : form === "fresh decoy" ? `if (false) await bash(${JSON.stringify(fresh)}); await bash(${JSON.stringify(stale)})`
@@ -197,17 +199,17 @@ test("real Dagu implement guard and quality push-back", {
   assert.equal(readFileSync(sealed, "utf8"), "SEALED=ImplementTest\nSUMMARY=change summary\n");
   writeFileSync(join(f.state, "quality-request.json"), JSON.stringify(request));
   assert.equal(await qualityDecision({ toolName: "bash", toolCallId: "quality", input: {
-    command: "dagu human-task complete feature --run-id test-run --step quality_review --input QA=QATest --input REVIEW=ReviewTest",
+    command: `dagu human-task complete feature --run-id ${id} --step quality_review --input QA=QATest --input REVIEW=ReviewTest`,
   } }, ctx), undefined);
   assert.equal(JSON.parse(readFileSync(join(f.state, "quality.json"), "utf8")).action, "complete");
-  cli("human-task", "push-back", "feature", "--run-id", "test-run", "--step", "quality_review", "--expected-iteration", "0");
+  cli("human-task", "push-back", "feature", "--run-id", id, "--step", "quality_review", "--expected-iteration", "0");
   const rewound = await waiting("implement");
   const freshCutoff = rewound.nodes.find(node => node.step.id === "implement")!.startedAt;
-  assert.match(cli("status", "feature", "--run-id", "test-run"), /push-back iteration: 1/);
+  assert.match(cli("status", "feature", "--run-id", id), /push-back iteration: 1/);
   child[1]!.timestamp = new Date(Date.parse(freshCutoff) + 1).toISOString();
   writeFileSync(f.paths.implementer!, child.map(row => JSON.stringify(row)).join("\n") + "\n");
   const freshComment = { ...event, input: {
-    command: "dagu human-task complete feature -rtest-run --step implement --input SUMMARY='quoted # text'\\#foo#bar --input MESSAGE='fix(dagu): bind literal shell completion' --input IMPLEMENTER=ImplementTest # --input IMPLEMENTER=StaleId",
+    command: `dagu human-task complete feature -r${id} --step implement --input SUMMARY='quoted # text'\\#foo#bar --input MESSAGE='fix(dagu): bind literal shell completion' --input IMPLEMENTER=ImplementTest # --input IMPLEMENTER=StaleId`,
   } };
   assert.equal(await qualityDecision(freshComment, ctx), undefined);
   execFileSync("bash", ["-euo", "pipefail", "-c", freshComment.input.command], { env, encoding: "utf8" });
@@ -221,7 +223,7 @@ test("real Dagu implement guard and quality push-back", {
     executions++;
     execFileSync("bash", ["-euo", "pipefail", "-c", typeof input === "string" ? input : input[0]!], { env, encoding: "utf8" });
   };
-  const freshLiteral = "dagu human-task complete feature --run-id test-run --step implement --input SUMMARY='template # summary' --input MESSAGE=m --input IMPLEMENTER=ImplementTest";
+  const freshLiteral = `dagu human-task complete feature --run-id ${id} --step implement --input SUMMARY='template # summary' --input MESSAGE=m --input IMPLEMENTER=ImplementTest`;
   const wrappers = [
     `await bash(\`${freshLiteral}\`)`,
     `await Bun.$\`${freshLiteral}\``,
@@ -229,7 +231,7 @@ test("real Dagu implement guard and quality push-back", {
     `/* # */ await bash(${JSON.stringify(freshLiteral)})`,
   ];
   for (const [index, code] of wrappers.entries()) {
-    cli("human-task", "push-back", "feature", "--run-id", "test-run", "--step", "quality_review", "--expected-iteration", String(index + 1));
+    cli("human-task", "push-back", "feature", "--run-id", id, "--step", "quality_review", "--expected-iteration", String(index + 1));
     const next = await waiting("implement");
     const nextCutoff = next.nodes.find(node => node.step.id === "implement")!.startedAt;
     child[1]!.timestamp = new Date(Date.parse(nextCutoff) + 1).toISOString();
