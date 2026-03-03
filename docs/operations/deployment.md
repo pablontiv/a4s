@@ -243,7 +243,7 @@ already admitted runs and their successors stay on their original artifact.
 These steps are the separately authorized operator cutover (#714), **not** a4s
 side effects. Use the drained station policy above, its canonical `DAGU_HOME`,
 the selected platform's verified extracted release root, and an exact published
-`VERSION` (for example `0.7.0` only after that release has actually been published).
+`VERSION` (for example `r462`, or `0.7.8` for a historical release).
 Never use `v0`, a checkout path or PATH as the scheduled executable selection.
 
 The minimum dispatchable release is v0.7.0, which ships #713. Its capability is
@@ -256,10 +256,10 @@ dispatch declaration is reported as unsupported, never repaired or substituted.
 ```sh
 export DAGU_HOME="<canonical-station-home>"
 RELEASE_ROOT="<absolute-verified-extracted-release-root>"
-VERSION="<exact-published-X.Y.Z>"
+VERSION="<exact-published-rN>"
 
 # Cache only: verifies the tagged platform archive and embedded identity.
-ARTIFACT="$("$RELEASE_ROOT/a4s" reconcile cache --release "a4s@v$VERSION")"
+ARTIFACT="$("$RELEASE_ROOT/a4s" reconcile cache --release "a4s@$VERSION")"
 "$DAGU_HOME/cache/a4s/$VERSION/a4s" version
 
 # Read-only rendering: output goes to an operator-owned staging file.
@@ -274,6 +274,9 @@ rm "$STAGED"
 # Link the entire verified release, not packages/issue-lifecycle in PRIMARY.
 omp plugin link "$RELEASE_ROOT"
 ```
+
+Historical SemVer releases use `VERSION="X.Y.Z"` and `--release "a4s@v$VERSION"`;
+build-ID releases use `VERSION="r<N>"` and `--release "a4s@$VERSION"`.
 
 Before installing, preserve/resolve an existing operator DAG under station
 policy. `reconcile cache` writes only the artifact cache, refuses nonexact refs,

@@ -51,7 +51,8 @@ flowchart LR
   cached executable as absolute `A4S_BIN`; engine calls use
   `"$A4S_BIN" <subcommand>`, never ambient legacy commands or checkout code.
 - The scheduled reconciler is separately pinned to an exact verified release.
-  The operator obtains its tuple with `a4s reconcile cache --release a4s@vX.Y.Z`
+  The operator obtains its tuple with `a4s reconcile cache --release a4s@r<N>`
+  (or `a4s@vX.Y.Z` for a historical release)
   and prints its DAG with `a4s reconcile render --artifact '<version>@<commit>#<digest>'`.
   These commands never install station DAGs or restart Dagu. Only the operator
   installs the printed DAG and enables scheduling; see
