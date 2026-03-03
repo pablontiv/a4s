@@ -1,7 +1,7 @@
-# dagu-feature-bundle: @a4s/omp-dagu@0.3.97 source=pablontiv/a4s@cc1292aee13703ed6484ec903187b9c02a21cef0 bootstrap=bootstrap-a4s-v0-3-97 dagu=2.20.1
+# dagu-feature-bundle: @a4s/omp-dagu@0.3.98 source=pablontiv/a4s@62844e5b3cfb1a4e8cd7454282e9e0e6b3a35841 bootstrap=bootstrap-a4s-v0-3-98 dagu=2.20.1
 labels:
   - workspace=a4s
-  - dagu-feature-bundle=0.3.97
+  - dagu-feature-bundle=0.3.98
 queue: a4s
 type: graph
 dotenv: []
@@ -39,9 +39,10 @@ env:
   - GATE: "npm ci && npm test && npm run typecheck"
   - REBASE_RESOLVER: "node packages/omp-dagu/bin/dagu-bundle-rebase.mjs"
   - REQUIRED_CHECK: "validate"
+  - A4S_BLOCKER_REPORTING: "ask"
   - WORKTREE: ${PRIMARY}/.workspace/worktrees/issue-${ISSUE}
   - RUN: ${context.run.id}
-  - DAGU_FEATURE_BUNDLE: "dagu-feature-bundle=0.3.97 source=pablontiv/a4s@cc1292aee13703ed6484ec903187b9c02a21cef0 bootstrap=bootstrap-a4s-v0-3-97"
+  - DAGU_FEATURE_BUNDLE: "dagu-feature-bundle=0.3.98 source=pablontiv/a4s@62844e5b3cfb1a4e8cd7454282e9e0e6b3a35841 bootstrap=bootstrap-a4s-v0-3-98"
   - DAGU_RESOURCE_GUARD: |
       resource_lock() {
         local operation=$1 primary root expected actual common key attempt owner run status candidate branch issue
@@ -186,7 +187,7 @@ steps:
   - id: admission
     run: |
       set -euo pipefail
-      rejected=$(jq -er 'keys[] | select(. == "GATE" or . == "REBASE_RESOLVER" or . == "REQUIRED_CHECK" or . == "PRIMARY" or . == "BRANCH")' <<<"$DAGU_PARAMS_JSON") || [[ $? == 4 ]]
+      rejected=$(jq -er 'keys[] | select(. == "GATE" or . == "REBASE_RESOLVER" or . == "REQUIRED_CHECK" or . == "PRIMARY" or . == "BRANCH" or . == "A4S_BLOCKER_REPORTING")' <<<"$DAGU_PARAMS_JSON") || [[ $? == 4 ]]
       if [[ -n "$rejected" ]]; then
         printf 'admission rejected run parameter: %s\n' "$rejected" >&2
         printf 'adopted policy PRIMARY=%q GATE=%q REBASE_RESOLVER=%q REQUIRED_CHECK=%q BRANCH=%q\n' "$PRIMARY" "$GATE" "${REBASE_RESOLVER:-}" "$REQUIRED_CHECK" "$BRANCH" >&2
