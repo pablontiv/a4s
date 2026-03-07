@@ -335,6 +335,7 @@ The bootstrap renders the repository DAG templates when a repository adopts the 
 | `__GATE__` | Adoption-fixed `GATE`, the local gate command, run with `bash -euo pipefail -c` in the worktree | `just check && just test` | `make hook-validate` |
 | `__REBASE_RESOLVER__` | Adoption-fixed `REBASE_RESOLVER`, repository conflict-resolution command; empty selects manual conflict recovery | `""` | `""` |
 | `__REQUIRED_CHECK__` | Adoption-fixed `REQUIRED_CHECK`, the GitHub check required on the default branch | `candidate` | `validate` |
+| `__REQUIRED_CHECK_STRICT__` | Adoption-fixed `REQUIRED_CHECK_STRICT=true|false`, the repository's up-to-date-branch protection policy | repository choice | repository choice |
 | `__VALIDATION__` | Optional repository procedure after gate, fixed by adoption; empty skips the checkpoint | `""` | `""` |
 | `__A4S_BLOCKER_REPORTING__` | Optional adopted `A4S_BLOCKER_REPORTING`: `ask` (initial default) or explicit opt-in `auto`; blank bootstrap answer preserves installed choice | `ask` | `ask` |
 | `__PRIMARY__` | Canonical main-clone path fixed in feature and PoC renders | repository clone | repository clone |
@@ -366,21 +367,35 @@ The steps:
 | Step | Effect |
 |---|---|
 | `detect` | Checks `git`, `gh` (authenticated), `jq` and the exact required `dagu version`; reads package/version, source commit and source `origin`; fetches and requires that clean package commit on the remote default branch; reads repository settings and the installed DAG values and stamps. |
-| `answers` | `human.task` showing the current stamp, `GATE`, `REQUIRED_CHECK`, `TEST_PATHS`, `REBASE_RESOLVER` and optional `VALIDATION`. Choose the test-path ERE, resolver and validation procedure from repository conventions; validation defaults to empty. |
+| `answers` | `human.task` showing the current stamp, `GATE`, `REQUIRED_CHECK`, `REQUIRED_CHECK_STRICT`, `TEST_PATHS`, `REBASE_RESOLVER` and optional `VALIDATION`. Choose the strict policy, test-path ERE, resolver and validation procedure from repository conventions; validation defaults to empty. |
 | `worktrees` | Makes git ignore `.workspace/worktrees/`. When nothing ignores it yet, appends `/.workspace/worktrees/` to the clone's `info/exclude`, so the primary stays clean without a commit. |
 | `render` | Writes stamped and validated `feature.yaml`, `poc.yaml`, `discovery.yaml`, `planning.yaml`, and `reconcile.yaml` under `<git-dir>/dagu-feature/`, keeping PRIMARY clean. Discovery and planning receive the coordinating workspace label and resolve the target repository from `PRIMARY`. |
 | `reconcile` | Idempotently installs the stamped staged `reconcile.yaml` to `$DAGU_HOME/dags/reconcile.yaml` (`DAGU_HOME` defaults to `~/.dagu`) and validates it. One user-level DAG serves every adopting repository. |
-| `github` | Enables auto-merge and squash merge, and adds `REQUIRED_CHECK` as a strict required status check on the default branch. It keeps the existing contexts and every other protection setting. When it has to recreate the protection, it reads the protection back and fails if any other setting changed. |
-| `confirm` | Reads settings back, validates the four staged repository DAGs, compares the installed reconciler with its stamped render, and prints the bundle identity plus the three adoption commit trailers. |
+| `github` | Enables auto-merge and squash merge, and unions `REQUIRED_CHECK` with existing required contexts, using the declared `REQUIRED_CHECK_STRICT` value. Existing admins, reviews, restrictions and protection flags are preserved. When it recreates protection, it reads back and compares every other setting. |
+| `confirm` | Reads settings back, compares observed `strict` and required context with the declaration, prints declared/observed strict values, validates the four staged repository DAGs, compares the installed reconciler with its stamped render, and prints the bundle identity plus the three adoption commit trailers. |
 
 Answer the form after `detect` succeeds, reusing the current values shown in its
 prompt during an upgrade. Choose `GATE` from the repository's documented local
-check plus tests. `REQUIRED_CHECK` is the aggregate CI job:
+check plus tests. `REQUIRED_CHECK` is the aggregate CI job.
+
+`REQUIRED_CHECK_STRICT` is a required explicit `true` or `false` answer. Bootstrap
+stores it in staged `feature.yaml` and shows that installed declaration on upgrades.
+Choose the existing value to preserve the repository's policy; a4s declares
+`REQUIRED_CHECK=validate` and `REQUIRED_CHECK_STRICT=true`. The full protection PUT
+includes GitHub's mandatory admins/reviews/restrictions keys with preserved values
+(or explicit null on initial creation); their presence is an API format requirement.
+The fixture tests exercise creation, updates and adding checks twice for each strict
+value, including preservation of admins, reviews, restrictions and flags. They prove
+the script's request/readback contract against the stub API, not live GitHub acceptance.
+Operational acceptance requires an authorized test repository: record before/after
+protection reads and `github`/`confirm` logs for two applications with each strict value,
+then apply a4s's declared `validate`/`true` policy through bootstrap after merge and
+record its readback.
 
 ```sh
 dagu status --run-id "bootstrap-<repo>-v<version-with-hyphens>" dagu-feature-bootstrap
 dagu human-task complete --run-id "bootstrap-<repo>-v<version-with-hyphens>" --step answers \
-  --input GATE='<current gate>' --input REQUIRED_CHECK='<current check>' \
+  --input GATE='<current gate>' --input REQUIRED_CHECK='<current check>' --input REQUIRED_CHECK_STRICT='<true or false>' \
   --input TEST_PATHS='<current Bash ERE>' --input REBASE_RESOLVER='<current command or empty>' \
   --input VALIDATION='' dagu-feature-bootstrap
 ```
@@ -517,7 +532,7 @@ moving entries. Scheduler consumption or concurrent enqueue can produce an
 for operator inspection. The command preserves the queue's concurrency settings
 and running runs.
 
-Set `PR_NUMBER` only to adopt an existing open PR whose head is `dagu/issue-<ISSUE>`. `OMP_SESSION_ID` targets the persistent main OMP session that enqueued the run. `BASE_BRANCH` defaults to the versioned file. Bootstrap fixes `GATE`, `REBASE_RESOLVER`, `REQUIRED_CHECK` and canonical `PRIMARY` at adoption; the DAG derives `BRANCH=dagu/issue-$ISSUE`. Admission rejects each of those five names as run parameters, naming it before repository state changes. Change adoption policy through bootstrap and version the resulting renders.
+Set `PR_NUMBER` only to adopt an existing open PR whose head is `dagu/issue-<ISSUE>`. `OMP_SESSION_ID` targets the persistent main OMP session that enqueued the run. `BASE_BRANCH` defaults to the versioned file. Bootstrap fixes `GATE`, `REBASE_RESOLVER`, `REQUIRED_CHECK`, `REQUIRED_CHECK_STRICT` and canonical `PRIMARY` at adoption; the DAG derives `BRANCH=dagu/issue-$ISSUE`. Admission rejects each of those six names as run parameters, naming it before repository state changes. Change adoption policy through bootstrap and version the resulting renders.
 
 Before `start_gate` and `close_gate`, the DAG detects whether PRIMARY is clean and on
 `BASE_BRANCH`. An unavailable primary pauses the same run at

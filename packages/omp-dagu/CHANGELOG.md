@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.107
+
+- Declare the repository-owned `REQUIRED_CHECK_STRICT=true|false` policy during bootstrap, retain it in adopted feature policy, and apply and confirm the declared value while preserving existing protection options and required checks (#358).
+
 ## 0.3.106
 
 - Diagnose rejected automatic checkpoint transitions after native stale-process repair and document same-run checkpoint recovery for feature, PoC, discovery and planning (#524).

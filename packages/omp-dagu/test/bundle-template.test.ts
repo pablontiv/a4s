@@ -1,12 +1,13 @@
 import { liveDagu } from "./fixtures/live-dagu.ts";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { parse } from "yaml";
+import { admissionFixture } from "./fixtures/admission.ts";
 
 const skill = (name: string): string => readFileSync(
   fileURLToPath(new URL(`../skills/dagu-feature/${name}`, import.meta.url)),
@@ -75,7 +76,7 @@ test("bootstrap renders optional validation as the sole adopted value", {
           ...process.env, DAGU_HOME: join(root, "home"), DAG_RUN_ID: "bootstrap-test",
           SKILL_DIR: fileURLToPath(new URL("../skills/dagu-feature", import.meta.url)),
           STAGE: stage, REPO: "fixture", BASE_BRANCH: "main", PRIMARY: root,
-          GATE: "true", REQUIRED_CHECK: "validate", TEST_PATHS: "^test/",
+          GATE: "true", REQUIRED_CHECK: "validate", REQUIRED_CHECK_STRICT: "true", TEST_PATHS: "^test/",
           REBASE_RESOLVER: "node packages/omp-dagu/bin/dagu-bundle-rebase.mjs",
           VALIDATION: validation, BUNDLE_NAME: "@a4s/omp-dagu", BUNDLE_VERSION: "0.3.14",
           DAGU_VERSION: "2.20.1", SOURCE_NWO: "owner/repo", SOURCE_SHA: "a".repeat(40),
@@ -104,7 +105,7 @@ test("bootstrap preserves the installed blocker reporting choice and accepts exp
         ...process.env, DAGU_HOME: join(root, "home"), DAG_RUN_ID: "bootstrap-policy",
         SKILL_DIR: fileURLToPath(new URL("../skills/dagu-feature", import.meta.url)),
         STAGE: stage, PRIMARY: root, REPO: "fixture", BASE_BRANCH: "main",
-        GATE: "true", REQUIRED_CHECK: "validate", TEST_PATHS: "^test/", REBASE_RESOLVER: "",
+        GATE: "true", REQUIRED_CHECK: "validate", REQUIRED_CHECK_STRICT: "true", TEST_PATHS: "^test/", REBASE_RESOLVER: "",
         BUNDLE_NAME: "@a4s/omp-dagu", BUNDLE_VERSION: "0.3.98", DAGU_VERSION: "2.20.1",
         SOURCE_NWO: "owner/repo", SOURCE_SHA: "a".repeat(40),
         A4S_BLOCKER_REPORTING: answer, CURRENT_A4S_BLOCKER_REPORTING: installed,
@@ -330,4 +331,195 @@ test("CI validate executes the real aggregate and requires all selected job outc
     '[{"name":"@a4s/omp-dagu","test":"true","typecheck":true}]']) {
     assert.equal(run(matrix, "success", "success", "success").status, 1, `matrix=${matrix}`);
   }
+});
+
+const bootstrap = parse(skill("dagu-feature-bootstrap.yaml"));
+const bootstrapScript = (id: string): string => bootstrap.steps.find((step: { id: string }) => step.id === id).run;
+const protectionFlags = [
+  "required_linear_history", "allow_force_pushes", "allow_deletions", "block_creations",
+  "required_conversation_resolution", "lock_branch", "allow_fork_syncing",
+];
+
+// The API fixture reconstructs a full PUT response from its writable fields,
+// rather than merging the old response, so omitted policy is observable.
+const githubFixture = `#!/usr/bin/env node
+const fs = require("node:fs");
+const { spawnSync } = require("node:child_process");
+const args = process.argv.slice(2);
+if (args.shift() !== "api") throw new Error("expected API command");
+let method = "GET";
+const methodIndex = args.indexOf("-X");
+if (methodIndex >= 0) method = args.splice(methodIndex, 2)[1];
+const endpoint = args.shift();
+const state = JSON.parse(fs.readFileSync(process.env.API_STATE, "utf8"));
+const repo = "repos/fixture/repo";
+const protection = repo + "/branches/main/protection";
+const checks = protection + "/required_status_checks";
+let result;
+const actors = value => value == null ? null : {
+  users: (value.users ?? []).map(login => ({ login })),
+  teams: (value.teams ?? []).map(slug => ({ slug })),
+  apps: (value.apps ?? []).map(slug => ({ slug }))
+};
+if (method !== "GET") {
+  const payload = JSON.parse(fs.readFileSync(0, "utf8"));
+  state.requests.push({ method, endpoint, payload });
+  if (method === "PATCH" && endpoint === checks) {
+    state.protection.required_status_checks = payload;
+  } else if (method === "PUT" && endpoint === protection) {
+    for (const field of ["enforce_admins", "required_pull_request_reviews", "restrictions"]) {
+      if (!(field in payload)) throw new Error("missing mandatory PUT field: " + field);
+    }
+    const reviews = payload.required_pull_request_reviews;
+    if (reviews) {
+      for (const field of ["dismissal_restrictions", "bypass_pull_request_allowances"]) {
+        if (field in reviews) reviews[field] = actors(reviews[field]);
+      }
+    }
+    state.protection = {
+      required_status_checks: payload.required_status_checks,
+      enforce_admins: { enabled: payload.enforce_admins ?? false },
+      required_pull_request_reviews: reviews,
+      restrictions: actors(payload.restrictions),
+      ...Object.fromEntries(${JSON.stringify(protectionFlags)}.map(field => [field, { enabled: payload[field] ?? false }]))
+    };
+  } else throw new Error("unexpected mutation " + method + " " + endpoint);
+  fs.writeFileSync(process.env.API_STATE, JSON.stringify(state));
+  result = state.protection;
+} else if (endpoint === repo) {
+  result = { allow_auto_merge: true, allow_squash_merge: true };
+} else if (endpoint === protection || endpoint === checks) {
+  if (!state.protection) {
+    console.error("Branch not protected");
+    process.exit(1);
+  }
+  result = endpoint === checks ? state.protection.required_status_checks : state.protection;
+} else throw new Error("unexpected endpoint " + endpoint);
+const query = args.indexOf("--jq");
+if (query >= 0) {
+  const output = spawnSync("jq", ["-r", args[query + 1]], { input: JSON.stringify(result), encoding: "utf8" });
+  process.stdout.write(output.stdout);
+  process.stderr.write(output.stderr);
+  process.exit(output.status ?? 1);
+}
+console.log(JSON.stringify(result));
+`;
+
+function bootstrapFixture() {
+  const root = mkdtempSync(join(tmpdir(), "omp-dagu-bootstrap-strict-"));
+  const bin = join(root, "bin");
+  const stage = join(root, "stage", "feature.yaml");
+  const home = join(root, "home");
+  mkdirSync(bin);
+  mkdirSync(join(root, "stage"));
+  mkdirSync(join(home, "dags"), { recursive: true });
+  for (const [name, contents] of [
+    ["gh", githubFixture],
+    ["git", "#!/bin/sh\nexit 0\n"],
+    ["dagu", "#!/bin/sh\nexit 0\n"],
+  ]) {
+    writeFileSync(join(bin, name!), contents!);
+    chmodSync(join(bin, name!), 0o755);
+  }
+  writeFileSync(join(root, "stage", "reconcile.yaml"), "fixture\n");
+  writeFileSync(join(home, "dags", "reconcile.yaml"), "fixture\n");
+  const env = {
+    ...process.env, PATH: `${bin}:${process.env.PATH}`, PRIMARY: root, STAGE: stage,
+    DAGU_HOME: home, DAG_RUN_ID: "bootstrap-strict", NWO: "fixture/repo", BASE_BRANCH: "main",
+    REQUIRED_CHECK: "validate", API_STATE: join(root, "api.json"),
+    SKILL_DIR: fileURLToPath(new URL("../skills/dagu-feature", import.meta.url)),
+    REPO: "fixture", GATE: "true", TEST_PATHS: "^test/", REBASE_RESOLVER: "",
+    BUNDLE_NAME: "@a4s/omp-dagu", BUNDLE_VERSION: "0.3.104", DAGU_VERSION: "2.20.1",
+    SOURCE_NWO: "owner/repo", SOURCE_SHA: "a".repeat(40),
+  };
+  const run = (id: string, strict: string) => spawnSync("bash", ["-c", bootstrapScript(id)], {
+    encoding: "utf8", env: { ...env, REQUIRED_CHECK_STRICT: strict },
+  });
+  return { root, stage, env, run };
+}
+
+for (const strict of [false, true]) {
+  test(`bootstrap stores and reads back the repository strict=${strict} declaration`, () => {
+    const fixture = bootstrapFixture();
+    try {
+      const form = bootstrap.steps.find((step: { id: string }) => step.id === "answers").with.form;
+      assert.ok(form.required.includes("REQUIRED_CHECK_STRICT"));
+      assert.ok(form.properties.REQUIRED_CHECK_STRICT.enum.includes(String(strict)));
+      const rendered = fixture.run("render", String(strict));
+      assert.equal(rendered.status, 0, rendered.stdout + rendered.stderr);
+      const policy = parse(readFileSync(fixture.stage, "utf8")).env;
+      assert.equal(policy.find((entry: Record<string, string>) => "REQUIRED_CHECK_STRICT" in entry).REQUIRED_CHECK_STRICT, String(strict));
+      const readDefault = bootstrapScript("detect").split("read_default() {")[1]!.split("read_stamp() {")[0]!;
+      const readback = spawnSync("bash", ["-c", `read_default() {${readDefault}\nread_default "$1" REQUIRED_CHECK_STRICT`, "read-policy", fixture.stage], { encoding: "utf8" });
+      assert.equal(readback.status, 0, readback.stderr);
+      assert.equal(readback.stdout.trim(), String(strict));
+    } finally { rmSync(fixture.root, { recursive: true, force: true }); }
+  });
+
+  for (const existing of ["unprotected", "with-checks", "without-checks"]) {
+    test(`bootstrap applies and confirms strict=${strict} twice on ${existing} protection`, () => {
+      const fixture = bootstrapFixture();
+      try {
+        const actors = { users: [{ login: "maintainer" }], teams: [{ slug: "owners" }], apps: [{ slug: "bot" }] };
+        const before = existing === "unprotected" ? null : {
+          required_status_checks: existing === "with-checks" ? { strict: !strict, contexts: ["lint", "build"] } : null,
+          enforce_admins: { enabled: true },
+          required_pull_request_reviews: {
+            dismiss_stale_reviews: true, require_code_owner_reviews: true,
+            required_approving_review_count: 2, require_last_push_approval: true,
+            dismissal_restrictions: actors, bypass_pull_request_allowances: actors,
+          },
+          restrictions: actors,
+          ...Object.fromEntries(protectionFlags.map((field, index) => [field, { enabled: index % 2 === 0 }])),
+        };
+        writeFileSync(fixture.env.API_STATE, JSON.stringify({ protection: before, requests: [] }));
+        let first;
+        for (let application = 0; application < 2; application++) {
+          const applied = fixture.run("github", String(strict));
+          assert.equal(applied.status, 0, applied.stdout + applied.stderr);
+          const state = JSON.parse(readFileSync(fixture.env.API_STATE, "utf8"));
+          assert.equal(state.protection.required_status_checks.strict, strict);
+          assert.deepEqual(state.protection.required_status_checks.contexts.toSorted(),
+            existing === "with-checks" ? ["build", "lint", "validate"] : ["validate"]);
+          if (before) {
+            const { required_status_checks: _, ...originalPolicy } = before;
+            const { required_status_checks: __, ...observedPolicy } = state.protection;
+            assert.deepEqual(observedPolicy, originalPolicy);
+          }
+          if (application === 0) first = state.protection;
+          else assert.deepEqual(state.protection, first);
+          assert.equal(state.requests.at(-1).payload.strict ?? state.requests.at(-1).payload.required_status_checks.strict, strict);
+          const confirmed = fixture.run("confirm", String(strict));
+          assert.equal(confirmed.status, 0, confirmed.stdout + confirmed.stderr);
+          assert.ok(confirmed.stdout.includes(`required_check_strict_declared=${strict}\nrequired_check_strict_observed=${strict}\n`));
+          const mismatched = fixture.run("confirm", String(!strict));
+          assert.notEqual(mismatched.status, 0, "confirm must compare observed policy with declaration");
+        }
+      } finally { rmSync(fixture.root, { recursive: true, force: true }); }
+    });
+  }
+}
+
+test("adopted strict policy rejects feature run overrides before effects", () => {
+  const admission = skill("feature.yaml").split("  - id: admission\n")[1]!.split("\n  - id: triage")[0]!;
+  const script = admission.split("    run: |\n")[1]!.split("\n").map(line => line.slice(6)).join("\n");
+  for (const strict of ["true", "false"]) {
+    const result = spawnSync("bash", ["-c", script], { encoding: "utf8", env: {
+      ...process.env, DAGU_PARAMS_JSON: JSON.stringify({ REQUIRED_CHECK_STRICT: strict }),
+      PRIMARY: "/consumer", GATE: "true", REQUIRED_CHECK: "validate", BRANCH: "dagu/issue-358",
+    } });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /admission rejected run parameter: REQUIRED_CHECK_STRICT/);
+  }
+});
+
+test("CLI admission enforces the repository strict declaration before publication", () => {
+  const fixture = admissionFixture();
+  try {
+    for (const strict of ["true", "false"]) {
+      const result = fixture.command("enqueue", `strict-override-${strict}`, {}, [`REQUIRED_CHECK_STRICT=${strict}`]);
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /admission rejected run parameter: REQUIRED_CHECK_STRICT/);
+    }
+  } finally { fixture.dispose(); }
 });

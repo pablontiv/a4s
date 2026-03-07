@@ -99,6 +99,7 @@ steps:
       installed_planning="$PRIMARY/.workspace/dagu/dags/planning.yaml"
       current_gate=not-configured
       current_check=not-configured
+      current_strict=not-configured
       current_tests=not-configured
       current_resolver=""
       current_validation=""
@@ -106,6 +107,7 @@ steps:
       if test -f "$installed_feature"; then
         current_gate=$(read_default "$installed_feature" GATE)
         current_check=$(read_default "$installed_feature" REQUIRED_CHECK)
+        current_strict=$(read_default "$installed_feature" REQUIRED_CHECK_STRICT)
         current_resolver=$(read_default "$installed_feature" REBASE_RESOLVER)
         current_validation=$(read_default "$installed_feature" VALIDATION)
         current_blocker_reporting=$(read_default "$installed_feature" A4S_BLOCKER_REPORTING)
@@ -134,6 +136,7 @@ steps:
         printf 'SOURCE_SHA=%s\n' "$source_sha"
         printf 'CURRENT_GATE=%s\n' "${current_gate:-not-configured}"
         printf 'CURRENT_REQUIRED_CHECK=%s\n' "${current_check:-not-configured}"
+        printf 'CURRENT_REQUIRED_CHECK_STRICT=%s\n' "${current_strict:-not-configured}"
         printf 'CURRENT_TEST_PATHS=%s\n' "${current_tests:-not-configured}"
         printf 'CURRENT_REBASE_RESOLVER=%s\n' "$current_resolver"
         printf 'CURRENT_VALIDATION=%s\n' "$(jq -nc --arg value "$current_validation" '$value')"
@@ -158,6 +161,7 @@ steps:
       - name: SOURCE_SHA
       - name: CURRENT_GATE
       - name: CURRENT_REQUIRED_CHECK
+      - name: CURRENT_REQUIRED_CHECK_STRICT
       - name: CURRENT_TEST_PATHS
       - name: CURRENT_REBASE_RESOLVER
       - name: CURRENT_VALIDATION
@@ -180,8 +184,10 @@ steps:
         Current planning stamp: ${steps.detect.outputs.CURRENT_PLANNING_STAMP}.
         GATE: local gate command run in the issue worktree with bash -euo pipefail -c
         (current: ${steps.detect.outputs.CURRENT_GATE}).
-        REQUIRED_CHECK: GitHub check the default branch will require (strict)
+        REQUIRED_CHECK: GitHub check the default branch will require
         (current: ${steps.detect.outputs.CURRENT_REQUIRED_CHECK}).
+        REQUIRED_CHECK_STRICT: repository-owned true/false policy requiring an up-to-date branch
+        (current declaration: ${steps.detect.outputs.CURRENT_REQUIRED_CHECK_STRICT}; for a4s: true).
         Required now: ${steps.detect.outputs.REQUIRED_NOW}.
         Checks on the last merged PR: ${steps.detect.outputs.RECENT_CHECKS}.
         TEST_PATHS: Bash ERE matching this repository's test paths
@@ -204,6 +210,9 @@ steps:
           REQUIRED_CHECK:
             type: string
             minLength: 1
+          REQUIRED_CHECK_STRICT:
+            type: string
+            enum: ["true", "false"]
           TEST_PATHS:
             type: string
             minLength: 1
@@ -216,7 +225,7 @@ steps:
             type: string
             enum: ["", ask, auto]
             default: ""
-        required: [GATE, REQUIRED_CHECK, TEST_PATHS, REBASE_RESOLVER]
+        required: [GATE, REQUIRED_CHECK, REQUIRED_CHECK_STRICT, TEST_PATHS, REBASE_RESOLVER]
 
   - id: worktrees
     depends: answers
@@ -233,6 +242,7 @@ steps:
     env:
       - GATE: ${steps.answers.outputs.GATE}
       - REQUIRED_CHECK: ${steps.answers.outputs.REQUIRED_CHECK}
+      - REQUIRED_CHECK_STRICT: ${steps.answers.outputs.REQUIRED_CHECK_STRICT}
       - REPO: ${steps.detect.outputs.REPO}
       - BASE_BRANCH: ${steps.detect.outputs.BASE_BRANCH}
       - STAGE: ${steps.detect.outputs.STAGE}
@@ -248,6 +258,7 @@ steps:
       - SOURCE_SHA: ${steps.detect.outputs.SOURCE_SHA}
     run: |
       set -euo pipefail
+      case "$REQUIRED_CHECK_STRICT" in true|false) ;; *) echo 'REQUIRED_CHECK_STRICT must be true or false' >&2; exit 1 ;; esac
       umask 0022
       test -n "${DAG_RUN_ID:-}"
       PRIMARY=$(cd "$PRIMARY" && pwd -P)
@@ -264,6 +275,7 @@ steps:
       jq -nr --rawfile template "$SKILL_DIR/feature.yaml" \
         --arg repo "$REPO" --arg base "$BASE_BRANCH" \
         --arg gate "$GATE" --arg check "$REQUIRED_CHECK" \
+        --arg strict "$REQUIRED_CHECK_STRICT" \
         --arg resolver "$REBASE_RESOLVER" --arg primary "$PRIMARY" \
         --arg validation "${VALIDATION:-}" \
         --arg blocker_reporting "$A4S_BLOCKER_REPORTING" \
@@ -276,6 +288,7 @@ steps:
           | gsub(\"__GATE__\"; \$gate | tojson)
           | gsub(\"__REBASE_RESOLVER__\"; \$resolver | tojson)
           | gsub(\"__REQUIRED_CHECK__\"; \$check | tojson)
+          | gsub(\"__REQUIRED_CHECK_STRICT__\"; \$strict | tojson)
           | gsub(\"__VALIDATION__\"; \$validation | tojson)
           | gsub(\"__A4S_BLOCKER_REPORTING__\"; \$blocker_reporting | tojson)" > "$STAGE"
       jq -nr --rawfile template "$SKILL_DIR/poc.yaml" \
@@ -329,10 +342,12 @@ steps:
     depends: reconcile
     env:
       - REQUIRED_CHECK: ${steps.answers.outputs.REQUIRED_CHECK}
+      - REQUIRED_CHECK_STRICT: ${steps.answers.outputs.REQUIRED_CHECK_STRICT}
       - NWO: ${steps.detect.outputs.NWO}
       - BASE_BRANCH: ${steps.detect.outputs.BASE_BRANCH}
     run: |
       set -euo pipefail
+      case "$REQUIRED_CHECK_STRICT" in true|false) ;; *) echo 'REQUIRED_CHECK_STRICT must be true or false' >&2; exit 1 ;; esac
       settings=$(gh api "repos/$NWO" --jq '[.allow_auto_merge, .allow_squash_merge] | map(tostring) | join(" ")')
       if test "$settings" != "true true"; then
         gh api -X PATCH "repos/$NWO" -F allow_auto_merge=true -F allow_squash_merge=true >/dev/null
@@ -341,36 +356,37 @@ steps:
       protection_url="repos/$NWO/branches/$BASE_BRANCH/protection"
       if ! before=$(gh api "$protection_url" 2>&1); then
         grep -q 'Branch not protected' <<<"$before"
-        jq -n --arg c "$REQUIRED_CHECK" '{
-            required_status_checks: {strict: true, contexts: [$c]},
+        jq -n --arg c "$REQUIRED_CHECK" --argjson strict "$REQUIRED_CHECK_STRICT" '{
+            required_status_checks: {strict: $strict, contexts: [$c]},
             enforce_admins: null,
             required_pull_request_reviews: null,
             restrictions: null
           }' | gh api -X PUT "$protection_url" --input - >/dev/null
         printf 'protection=created\n'
       elif jq -e '.required_status_checks != null' <<<"$before" >/dev/null; then
-        jq --arg c "$REQUIRED_CHECK" '{
-            strict: true,
+        jq --arg c "$REQUIRED_CHECK" --argjson strict "$REQUIRED_CHECK_STRICT" '{
+            strict: $strict,
             contexts: ((.required_status_checks.contexts + [$c]) | unique)
           }' <<<"$before" \
           | gh api -X PATCH "$protection_url/required_status_checks" --input - >/dev/null
         printf 'required_status_checks=updated\n'
       else
-        jq -e '(.required_pull_request_reviews.dismissal_restrictions // null) == null
-          and (.required_pull_request_reviews.bypass_pull_request_allowances // null) == null' \
-          <<<"$before" >/dev/null
-        jq --arg c "$REQUIRED_CHECK" '{
-            required_status_checks: {strict: true, contexts: [$c]},
+        jq --arg c "$REQUIRED_CHECK" --argjson strict "$REQUIRED_CHECK_STRICT" '
+          def actors: {users: [.users[].login], teams: [.teams[].slug], apps: [.apps[].slug]};
+          {
+            required_status_checks: {strict: $strict, contexts: [$c]},
             enforce_admins: (.enforce_admins.enabled // false),
             required_pull_request_reviews: (.required_pull_request_reviews
               | if . == null then null else {
                   dismiss_stale_reviews, require_code_owner_reviews,
                   required_approving_review_count, require_last_push_approval
-                } end),
+                } + (if .dismissal_restrictions == null then {} else {
+                  dismissal_restrictions: (.dismissal_restrictions | actors)
+                } end) + (if .bypass_pull_request_allowances == null then {} else {
+                  bypass_pull_request_allowances: (.bypass_pull_request_allowances | actors)
+                } end) end),
             restrictions: (.restrictions
-              | if . == null then null else {
-                  users: [.users[].login], teams: [.teams[].slug], apps: [.apps[].slug]
-                } end),
+              | if . == null then null else actors end),
             required_linear_history: (.required_linear_history.enabled // false),
             allow_force_pushes: (.allow_force_pushes.enabled // false),
             allow_deletions: (.allow_deletions.enabled // false),
@@ -384,11 +400,13 @@ steps:
         test "$(jq -S "$normalize" <<<"$before")" = "$(jq -S "$normalize" <<<"$after")"
         printf 'protection=required_status_checks_added\n'
       fi
+      printf 'required_check_strict_declared=%s\n' "$REQUIRED_CHECK_STRICT"
 
   - id: confirm
     depends: github
     env:
       - REQUIRED_CHECK: ${steps.answers.outputs.REQUIRED_CHECK}
+      - REQUIRED_CHECK_STRICT: ${steps.answers.outputs.REQUIRED_CHECK_STRICT}
       - NWO: ${steps.detect.outputs.NWO}
       - BASE_BRANCH: ${steps.detect.outputs.BASE_BRANCH}
       - STAGE: ${steps.detect.outputs.STAGE}
@@ -399,8 +417,12 @@ steps:
     run: |
       set -euo pipefail
       test "$(gh api "repos/$NWO" --jq '.allow_auto_merge and .allow_squash_merge')" = true
-      test "$(gh api "repos/$NWO/branches/$BASE_BRANCH/protection/required_status_checks" \
-        --jq '.strict and (.contexts | index(env.REQUIRED_CHECK) != null)')" = true
+      case "$REQUIRED_CHECK_STRICT" in true|false) ;; *) echo 'REQUIRED_CHECK_STRICT must be true or false' >&2; exit 1 ;; esac
+      observed=$(gh api "repos/$NWO/branches/$BASE_BRANCH/protection/required_status_checks")
+      printf 'required_check_strict_declared=%s\nrequired_check_strict_observed=%s\n' \
+        "$REQUIRED_CHECK_STRICT" "$(jq -r '.strict' <<<"$observed")"
+      jq -e --argjson strict "$REQUIRED_CHECK_STRICT" --arg check "$REQUIRED_CHECK" \
+        '.strict == $strict and (.contexts | index($check) != null)' <<<"$observed" >/dev/null
       git -C "$PRIMARY" check-ignore -q "$PRIMARY/.workspace/worktrees/issue-1"
       dagu validate "$STAGE"
       dagu validate "$(dirname "$STAGE")/poc.yaml"

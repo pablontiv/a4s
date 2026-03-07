@@ -2719,7 +2719,7 @@ test("adopted policy rejects run overrides before repository writes and admits o
   await new Promise<void>(resolve => listener.close(() => resolve()));
   const env = {
     ...process.env, DAGU_PARAMS_JSON: "{}", DAGU_HOME: home, DAGU_PORT: String(port), PRIMARY: repo.primary, SKILL_DIR: skillDir,
-    GATE: "printf adopted-gate", REQUIRED_CHECK: "adopted-check", REPO: "fixture", BASE_BRANCH: "main",
+    GATE: "printf adopted-gate", REQUIRED_CHECK: "adopted-check", REQUIRED_CHECK_STRICT: "true", REPO: "fixture", BASE_BRANCH: "main",
     REBASE_RESOLVER: "printf adopted-resolver",
     STAGE: stage, TEST_PATHS: "test/", BUNDLE_NAME: "@a4s/omp-dagu", BUNDLE_VERSION,
     DAGU_VERSION: "2.20.1", SOURCE_NWO: "fixture/repo", SOURCE_SHA: "1".repeat(40), DAG_RUN_ID: "bootstrap-fixture",
@@ -2779,6 +2779,7 @@ test("adopted policy rejects run overrides before repository writes and admits o
     assert.match(adopted, /- GATE: "printf adopted-gate"/);
     assert.match(adopted, /- REBASE_RESOLVER: "printf adopted-resolver"/);
     assert.match(adopted, /- REQUIRED_CHECK: "adopted-check"/);
+    assert.match(adopted, /- REQUIRED_CHECK_STRICT: "true"/);
     assert.ok(adopted.includes(`- PRIMARY: ${JSON.stringify(repo.primary)}`));
     assert.match(adopted, /- BRANCH: dagu\/issue-\$\{ISSUE\}/);
     const promotion = extractScript(join(skillDir, "poc.yaml"), "  - id: dispose");
