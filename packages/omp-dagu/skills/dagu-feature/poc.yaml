@@ -400,6 +400,7 @@ steps:
         cat "$STATE/full.patch"
         printf '\n```\n</details>\n'
       } > "$STATE/comment-$ATTEMPT.txt"
+      dagu-pr-body check-paths "$STATE/comment-$ATTEMPT.txt"
       if ! URL=$(gh issue comment "$ISSUE" --repo "$REPO" --body-file "$STATE/comment-$ATTEMPT.txt" 2> "$STATE/publish.err"); then
         grep -Ei 'too long|maximum.*characters|body.*large' "$STATE/publish.err"
         jq -cn --arg run "$RUN" --argjson attempt "$ATTEMPT" --rawfile evidence "$STATE/comment-$ATTEMPT.txt" '

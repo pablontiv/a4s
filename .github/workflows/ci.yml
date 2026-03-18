@@ -5,6 +5,7 @@ on:
     branches: [main, integration/v1]
   pull_request:
     branches: [main, integration/v1]
+    types: [opened, synchronize, reopened, edited, ready_for_review]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -14,6 +15,16 @@ permissions:
   contents: read
 
 jobs:
+  pr-body:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: Validate PR body
+        run: node packages/omp-dagu/bin/dagu-pr-body.mjs event
   changes:
     runs-on: ubuntu-latest
     permissions:
@@ -172,7 +183,7 @@ jobs:
           if-no-files-found: error
           retention-days: 7
   validate:
-    needs: [changes, test, live]
+    needs: [changes, test, live, pr-body]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -180,6 +191,11 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
+      - name: Require valid PR body
+        if: github.event_name == 'pull_request'
+        env:
+          PR_BODY_RESULT: ${{ needs.pr-body.result }}
+        run: test "$PR_BODY_RESULT" = success
       - env:
           CHANGES_RESULT: ${{ needs.changes.result }}
           TEST_RESULT: ${{ needs.test.result }}

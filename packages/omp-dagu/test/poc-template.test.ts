@@ -75,6 +75,7 @@ function pocFixture() {
   const bin = join(root, "bin");
   mkdirSync(primary);
   mkdirSync(bin);
+  symlinkSync(fileURLToPath(new URL("../bin/dagu-pr-body.mjs", import.meta.url)), join(bin, "dagu-pr-body"));
   execFileSync("git", ["init", "-q", primary]);
   const state = join(primary, ".git", "poc", "runs", "existing-issue");
   const issue = join(root, "issue.json");
@@ -316,6 +317,25 @@ function cleanupFixture() {
     },
   };
 }
+
+test("PoC publication checks both result prose and patch content before any GitHub mutation", () => {
+  const fixture = cleanupFixture();
+  try {
+    const before = readFileSync(fixture.calls, "utf8");
+    for (const [result, patch] of [
+      ["VERDICT: FAIL\nEvidence: /Users/example/private/repo\n", "Safe probe\n"],
+      ["VERDICT: FAIL\nSafe evidence\n", "Config: /home/example/private/repo\n"],
+    ]) {
+      fixture.save("result.md", result!);
+      writeFileSync(join(fixture.worktree, "probe.txt"), patch!);
+      const rejected = fixture.run("publish", { WORKTREE: fixture.worktree });
+      assert.equal(rejected.status, 1, rejected.stderr);
+      assert.match(rejected.stderr, /host absolute path/);
+      assert.equal(readFileSync(fixture.calls, "utf8"), before);
+      assert.ok(existsSync(join(fixture.state, "comment-1.txt")));
+    }
+  } finally { fixture.cleanup(); }
+});
 
 for (const outcome of ["PASS", "FAIL", "promote=no"]) {
   test(`PoC cleanup removes published tracked and untracked binary probes after ${outcome}`, () => {

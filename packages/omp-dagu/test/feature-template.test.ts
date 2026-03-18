@@ -197,6 +197,61 @@ function runScript(script: string, repo: Repository, env: NodeJS.ProcessEnv = {}
   return `${result.stdout}${result.stderr}`;
 }
 
+for (const [name, definition] of definitions) {
+  test(`${name} PR publication creates and refreshes concise run-populated bodies`, () => {
+    const repo = repository();
+    try {
+      const sha = git(repo.worktree, "rev-parse", "HEAD");
+      git(repo.worktree, "push", "origin", repo.branch);
+      const candidate = JSON.parse(readFileSync(join(repo.state, "candidate.json"), "utf8"));
+      writeFileSync(join(repo.state, "candidate.json"), JSON.stringify({ ...candidate, summary: "Change PR publication\nPreserve candidate identity" }));
+      writeFileSync(join(repo.state, "gate.json"), JSON.stringify({ sha, gate: "true", result: "PASS" }));
+      writeFileSync(join(repo.state, "validation.json"), JSON.stringify({ sha, approved: "yes", procedure: "Run smoke in <worktree>" }));
+      const calls = join(repo.root, "publication-calls");
+      const published = join(repo.root, "published.md");
+      const gh = join(repo.root, "bin", "gh");
+      writeFileSync(gh, `#!/bin/bash
+set -euo pipefail
+case "$1 $2" in
+  "pr view")
+    case "$*" in
+      *"--json state"*) echo OPEN ;;
+      *"--json headRefName"*) echo "$BRANCH" ;;
+      *"--json headRefOid"*) echo '${sha}' ;;
+      *"--json number") test "$EXISTING_PR" = yes ;;
+      *) echo '{"number":571}' ;;
+    esac ;;
+  "pr create"|"pr edit")
+    printf '%s\\n' "$*" >> '${calls}'
+    while (($#)); do
+      if [[ "$1" == --body-file ]]; then cp "$2" '${published}'; exit 0; fi
+      shift
+    done
+    exit 1 ;;
+  *) exit 1 ;;
+esac
+`, { mode: 0o755 });
+      const script = extractScript(definition, "  - id: pr");
+      for (const [EXISTING_PR, PR_NUMBER, command] of [["no", "", "pr create"], ["yes", "", "pr edit"], ["yes", "571", "pr edit"]]) {
+        runScript(script, repo, { EXISTING_PR, PR_NUMBER });
+        assert.match(readFileSync(calls, "utf8").trim().split("\n").at(-1)!, new RegExp(`^${command} `));
+        const body = readFileSync(published, "utf8");
+        assert.equal(body, "Closes #189\n\n## Summary\n- Change PR publication\n- Preserve candidate identity\n\n## Verification\n- true — PASS\n- Operator validation: Run smoke in <worktree> — approved\n\n## Risk\nNone\n");
+      }
+      const before = readFileSync(calls, "utf8");
+      for (const PR_NUMBER of ["", "571"]) {
+        writeFileSync(join(repo.state, "candidate.json"), JSON.stringify({ ...candidate, summary: "Exposes /Users/example/private/repository" }));
+        const rejected = spawnSync("bash", ["-c", script], {
+          encoding: "utf8", env: { ...featureScriptEnv(repo), EXISTING_PR: "yes", PR_NUMBER },
+        });
+        assert.equal(rejected.status, 1, rejected.stderr);
+        assert.match(rejected.stderr, /host absolute path/);
+        assert.equal(readFileSync(calls, "utf8"), before);
+      }
+    } finally { rmSync(repo.root, { recursive: true, force: true }); }
+  });
+}
+
 
 for (const live of [false, true]) {
   test(`retained candidate merge-base capture and version-anchor rebase${live ? " installed Dagu smoke" : ""}`, live ? liveDagu : {}, () => {
