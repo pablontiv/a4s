@@ -1014,7 +1014,7 @@ steps:
         exit 1
       fi
       test "$(git rev-parse HEAD)" = "$sha"
-      jq -nc --arg sha "$sha" --arg gate "$GATE" '{sha:$sha,gate:$gate}' > "$STATE/gate.json"
+      jq -nc --arg sha "$sha" --arg gate "$GATE" '{sha:$sha,gate:$gate,result:"PASS"}' > "$STATE/gate.json"
       printf 'tested_sha=%s\n' "$sha" | tee -a "${DAGU_OUTPUT_FILE:-/dev/null}"
       git rev-parse HEAD > "$STATE/tested-sha"
       GATE_BODY
@@ -1190,18 +1190,22 @@ steps:
       test -z "$(git status --porcelain)"
       jq -e --arg sha "$sha" --arg gate "$GATE" '.sha == $sha and .gate == $gate' "$STATE/gate.json" >/dev/null
       test "$(git ls-remote origin "refs/heads/$BRANCH" | cut -f1)" = "$sha"
+      dagu-pr-body render "$STATE" "$ISSUE" > "$STATE/pr-body.md"
+      dagu-pr-body validate "$STATE/pr-body.md"
       if test -n "$PR_NUMBER"; then
         test "$(gh pr view "$PR_NUMBER" --json state --jq .state)" = OPEN
         test "$(gh pr view "$PR_NUMBER" --json headRefName --jq .headRefName)" = "$BRANCH"
         test "$(gh pr view "$PR_NUMBER" --json headRefOid --jq .headRefOid)" = "$sha"
+        gh pr edit "$PR_NUMBER" --body-file "$STATE/pr-body.md"
         gh pr view "$PR_NUMBER" --json number,url,headRefOid
       elif gh pr view "$BRANCH" --json number >/dev/null 2>&1; then
         test "$(gh pr view "$BRANCH" --json state --jq .state)" = OPEN
         test "$(gh pr view "$BRANCH" --json headRefName --jq .headRefName)" = "$BRANCH"
         test "$(gh pr view "$BRANCH" --json headRefOid --jq .headRefOid)" = "$sha"
+        gh pr edit "$BRANCH" --body-file "$STATE/pr-body.md"
         gh pr view "$BRANCH" --json number,url,headRefOid
       else
-        gh pr create --base "$BASE_BRANCH" --head "$BRANCH" --fill --body "Closes #${ISSUE}"
+        gh pr create --base "$BASE_BRANCH" --head "$BRANCH" --fill --body-file "$STATE/pr-body.md"
       fi
 
   - id: auto_merge
