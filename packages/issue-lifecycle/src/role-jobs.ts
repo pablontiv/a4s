@@ -1,9 +1,9 @@
-import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { processMatches, processStart } from "./process-identity.ts";
 
 export type Role = "triage" | "implement" | "conflict-resolution";
 export interface JobBinding {
@@ -40,15 +40,14 @@ export function jobId(binding: JobBinding): string {
   return createHash("sha256").update(stable(binding)).digest("hex");
 }
 export function executorIdentity(): ExecutorIdentity {
-  return { host: hostname(), pid: process.pid,
-    processStartedAt: execFileSync("ps", ["-p", String(process.pid), "-o", "lstart="], { encoding: "utf8" }).trim() };
+  const processStartedAt = processStart(process.pid);
+  if (!processStartedAt) throw new Error("Role-job executor could not record its process start");
+  return { host: hostname(), pid: process.pid, processStartedAt };
 }
 export function executorAlive(owner: ExecutorIdentity): boolean {
   // A foreign host is uncertain, not permission to replace its owner.
   if (owner.host !== hostname()) return true;
-  try {
-    return execFileSync("ps", ["-p", String(owner.pid), "-o", "lstart="], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim() === owner.processStartedAt;
-  } catch { return false; }
+  return processMatches(owner.pid, owner.processStartedAt);
 }
 export function atomicJson(path: string, value: unknown): void {
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });

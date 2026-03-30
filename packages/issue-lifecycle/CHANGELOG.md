@@ -3,6 +3,7 @@
 ## 0.7.6
 
 - Keep role agents and their tools from inheriting `DAGU_OUTPUT_FILE`, `DAG_RUN_STEP_*` and `DAG_RUN_LOG_FILE`; retain the stage's output sink privately so only its declared outputs are emitted. Give test processes and feature-script helpers temporary step-output files (#769).
+- Record role-job executor and long-computation worker start identities through one fixed-C-locale helper. Recovery and worker control also compare legacy localized receipts against installed host locales without rewriting active ownership, preventing cross-locale recovery from interrupting live jobs while retaining dead/reused-PID detection (#771).
 - Add explicit planning approval cancellation: `CANCEL=yes` records cancellation and terminates before materialization or GitHub writes; completed validation handoffs prevent native resume from rewinding the cancellation input. `CANCEL=no` retains reviewed, operator-approved publication. Document the command and cover both branches (#760).
 - Brace the PoC resource-lock run variable at the `.lock` boundary so Dagu does not interpret the shell filename as a dotted JSON reference; preserve per-run ownership, collision handling and cleanup (#483).
 - Keep implementer and gate-recovery disposable evidence outside the worktree, under the run's `computations/` directory or `$TMP`. Reject untracked `.workspace/` paths and nested `.git` entries before capture staging, with the offending path and allowed scratch location (#758).
