@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Transition from confirmation to settlement deadlines synchronously on `message_start`, before awaiting `task.delivered` publication, so a delayed MQTT acknowledgement cannot dead-letter a confirmed delivery or rearm its timer after settlement. Cover the race with controlled timers and a held broker acknowledgement; select DLQ test records by payload and cause without wall-clock expiry assumptions.
 - Use root Node and shared development-tool requirements, workspace-local hot-reload identity and the broker workspace's Aedes dependency for tests; retain the messaging runtime and protocol contracts.
 - Move the private canonical package to `@a4s/agent-messaging` at `packages/agent-messaging`, retaining OMP reloadable loading, protocol, MQTT, shared session delivery/recovery/settings/arbitration, observer and canonical diagnostics.
 - Publish the clean public surface `agent_messaging_send`, `/agent-messaging`, `/agent-messaging-settings`, `createAgentMessagingOmp`, `createAgentMessagingAdapter`, `AgentMessaging*` types and `AGENT_MESSAGING_*` constants; retain the functional `/mq-send` debug command.

@@ -1428,10 +1428,12 @@ function agentMessagingAdapter(
       timeoutMs: deliveryStartTimeoutMs,
       ...messageDiagnostic(active.id),
     })
+    // Transition deadlines before publishing: its acknowledgement can race both
+    // the old confirmation timeout and terminal settlement.
+    armDeliveryStartTimeout(active.token, active.id, ctx, host.settleEventName)
     if (isTaskRequestKind(active.message.kind)) {
       await publishTaskEvent(active.message, 'task.delivered', '', ctx)
     }
-    armDeliveryStartTimeout(active.token, active.id, ctx, host.settleEventName)
   }
 
   function armDeliveryStartTimeout(

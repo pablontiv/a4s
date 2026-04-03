@@ -63,6 +63,8 @@ Session recovery preserves the persisted entry identities `synagent-delivered`, 
 
 Busy requests with deadlines remain in the adapter queue until terminal `agent_end`; intermediate events with `willContinue: true` or `isTerminal: false` preserve the ordering barrier. A terminal notification releases the next request even when OMP's owning prompt has not yet unwound and `ctx.isIdle()` is still false; delivery then uses native `followUp`. Delivery confirmation, completion capture, DLQ and arbitration all use the shared session engine. A repeated persisted message ID opens one recipient turn.
 
+The `message_start` delivery marker cancels the confirmation deadline and starts the terminal-settlement deadline before publishing `task.delivered`. MQTT acknowledgement latency cannot leave the old confirmation deadline active or rearm a settled delivery. A missing confirmation or missing terminal `agent_end` can still produce `DELIVERY_TIMEOUT`; either timeout preserves the FIFO barrier until the expected lifecycle event arrives or `/agent-messaging resume` explicitly releases it.
+
 Diagnostics identify the service as `@a4s/agent-messaging`, with `a4s.agent-messaging.*` scope/event names. Private bounded JSONL files are under `$A4S_STATE_ROOT/log/agent-messaging/omp`, or `$XDG_STATE_HOME/a4s/log/agent-messaging/omp` (default `~/.local/state/a4s/...`). Diagnostic records exclude message bodies, broker URLs and raw session identifiers.
 
 ## Observer

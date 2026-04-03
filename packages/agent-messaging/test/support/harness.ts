@@ -161,6 +161,7 @@ export function createHarness(
   const tools = new Map<string, Tool>()
   const notifications: Notification[] = []
   const received: Received[] = []
+  const deliveryWaiters: Array<{ index: number; resolve: (delivery: Received) => void }> = []
   const entries = initialEntries.map(entry => ({ ...entry, data: { ...entry.data } }))
   const branch: unknown[] = [...entries]
   const appendFailures = new Set<string>()
@@ -225,6 +226,13 @@ export function createHarness(
     sendUserMessage(text: string, options?: Received['options']) {
       if (failDelivery) throw new Error('simulated delivery failure with private detail')
       received.push({ text, ...(options ? { options } : {}) })
+      for (let index = deliveryWaiters.length - 1; index >= 0; index--) {
+        const waiter = deliveryWaiters[index]!
+        const delivery = received[waiter.index]
+        if (!delivery) continue
+        deliveryWaiters.splice(index, 1)
+        waiter.resolve(delivery)
+      }
     },
   }
   const adapter = adapterFactory({
@@ -283,6 +291,13 @@ export function createHarness(
     async startSession(nextSessionId: string) {
       currentSessionId = nextSessionId
       await withAgentDir(() => emit('session_start', { type: 'session_start' }))
+    },
+    waitForDelivery(index = received.length): Promise<Received> {
+      const delivery = received[index]
+      if (delivery) return Promise.resolve(delivery)
+      const { promise, resolve } = Promise.withResolvers<Received>()
+      deliveryWaiters.push({ index, resolve })
+      return promise
     },
     async messageStart(text: string) {
       await emit('message_start', {
