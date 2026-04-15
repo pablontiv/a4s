@@ -81,14 +81,17 @@ mismos parámetros y `PATH` conserva bytes y mtimes. El plist usa el binario
 resuelto en `PATH`, `start-all`, `KeepAlive`, `ProcessType=Interactive` y el
 `DAGU_HOME` elegido. El instalador también crea el directorio de logs.
 
-La base y el plist renderizado son propios completos. En `config.yaml` solo
-se gestionan `auth.mode=none`, `queues.enabled=true`, `host=127.0.0.1`,
-`port=8080`, `coordinator.enabled=true` y `queues.config` para `a4s` con
-`max_concurrency=2`. Las colas se fusionan por nombre, conservando sus demás
-claves y las colas ajenas: por ejemplo, `antojea-e2e: 4` y
-`antojea-e2e-device: 1` mantienen sus límites. Las demás claves y comentarios
-se conservan. La validación aislada comprueba los valores propios y mantiene
-intactas las rutas ajenas.
+The base and rendered plist are fully owned. In `config.yaml`, the installer
+manages `auth.mode=none`, `queues.enabled=true`, `host=127.0.0.1`,
+`port=8080`, `coordinator.enabled=true`, and the `a4s` entry in `queues.config`
+with `max_concurrency=2`. Queues are merged by name: template-owned fields replace
+installed values for the same named queue, while additional keys are retained.
+Missing template queues are added. For example, applying the template can replace
+`a4s.max_concurrency=8` with `2`, while foreign queues `antojea-e2e: 4` and
+`antojea-e2e-device: 1` retain their limits. The original report in #449 established
+this consequence through source inspection; it did not execute the installer or
+observe a production overwrite. Other keys and comments are preserved. Isolated
+validation checks the owned values and leaves foreign paths untouched.
 
 Para un ensayo aislado, usar `DAGU_HOME=$(mktemp -d)` y omitir `--launch-agent`:
 el plist se escribe por defecto en `$DAGU_HOME/LaunchAgent.plist` y los logs

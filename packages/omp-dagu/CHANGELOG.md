@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.96
+
+- Align station-install skill and operating documentation with the existing queue-name merge contract: template-owned fields replace matching queue values (including `a4s.max_concurrency=8` to bundled `2`), while extra metadata and foreign queues retain their values. Classify the original report as source evidence, not an observed production overwrite (#449).
+
 ## 0.3.95
 
 - Share the canonical planning unit schema and complete deterministic JSONL diagnostics between upstream preparation and native `check_plan` through `dagu-feature-bundle validate-planning-units`, preserving exact validated input bytes and independent semantic review (#443).
