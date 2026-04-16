@@ -23,6 +23,11 @@ Los agentes para Pi, Claude y Superpowers están en [`agents/`](agents/).
 - Skill: [`skills/refine/SKILL.md`](skills/refine/SKILL.md)
 - Configuración: [`.workspace/config/refine.json`](.workspace/config/refine.json)
 
+## Skills de coste
+
+- Auditoría de cuota: [`skills/gpt-quota-audit/SKILL.md`](skills/gpt-quota-audit/SKILL.md).
+- Análisis de coste y resultados: [`skills/cost-analyzer/SKILL.md`](skills/cost-analyzer/SKILL.md).
+
 ## Dagu feature
 
 - Skill: [`packages/omp-dagu/skills/dagu-feature/SKILL.md`](packages/omp-dagu/skills/dagu-feature/SKILL.md): ciclo de issue con un DAG de Dagu propiedad del repo, con un solo run por issue.
