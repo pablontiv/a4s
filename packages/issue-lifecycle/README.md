@@ -16,25 +16,25 @@ The release engine is one Bun-compiled `a4s` executable. Repository tools and
 tests continue to use Node/tsx; deployed engine execution never uses a source
 checkout. A published release is verified into
 `$DAGU_HOME/cache/a4s/<version>/` before admission hands off to that executable.
-Committed `.workspace/dagu/config.json` requires `uses`: `a4s@r123` pins a staged
-build, and `a4s@v0.7.8` pins a historical SemVer release (examples only).
-Historical `a4s@v0` stays parseable but its channel is frozen at the last SemVer
-release. Branches, paths, URLs and version ranges are not selections.
+Committed `.workspace/dagu/config.json` schema 2 has no `uses`; schema 1 remains
+readable but its legacy selection is ignored. Build selection belongs to the
+stable launcher and `state.current`, not a consumer version bump.
 
-Root admission resolves once to `(version, commit, archive SHA-256)` and executes
-the cached engine with `admit --artifact '<version>@<commit>#<digest>'`.
-The selected engine verifies that tuple without resolving again, materializes
-its own five templates, and binds every engine call to the absolute `A4S_BIN`.
-Feature → PoC, PoC → feature and discovery → planning inherit and verify the
-parent receipt's tuple even if committed `uses` changes. Missing or corrupt
-parent artifacts fail closed; they never select a replacement release.
+The operator-installed `a4s-launch` is `a4s` on PATH. New admission selects current,
+parent admissions select the parent's receipt, and existing-run actions select
+the target run's receipt regardless of a caller tick binding. The launcher
+restores the exact tuple if missing, verifies it and acquires a process lease
+under the state lock before exec. Receipt/snapshot writes and enqueue remain
+inside that lease. Snapshots bind every engine call to absolute cached `A4S_BIN`.
+Missing immutable releases and corrupt entries fail closed, never select a
+replacement. New schema-2 consumers prevent rollback to schema-1-only readers.
 
 Each cache entry retains `verified-archive.tar.gz`. Every reuse rehashes that
 archive and streams its tar entries to compare every extracted payload file;
 changed cache metadata cannot bless changed contents. `artifact.json` contains
 only `version`, `commit`, `digest` and `verifiedAt`. Cache publication is atomic,
 and corrupt/conflicting final entries fail closed. Retain referenced artifacts
-for nonterminal/recoverable runs, open role jobs and the pinned reconciler;
+for nonterminal/recoverable runs, open role jobs and live tick leases;
 uncertain reference discovery prevents pruning.
 
 Both CLI `admit` and `enqueue` submit the exact admitted snapshot bytes. Receipts
@@ -49,22 +49,25 @@ registration manifest/hash; and the required launcher protocol. Historical
 declarations and receipt bytes remain untouched. Compatibility is read coverage,
 not build-number distance; `r<N>` status differences are notice-only.
 
-### Pinned reconciler and release plugin
+### Stable launcher, scheduled tick and release plugin
 
-Station reconciliation has its own **exact** release pin, independent of consumer
-`uses`. The operator first runs
-`<absolute-release-root>/a4s reconcile cache --release a4s@vX.Y.Z`, which verifies
-and caches that exact release and prints `<version>@<commit>#<digest>`. Then
-`<absolute-release-root>/a4s reconcile render --artifact '<version>@<commit>#<digest>'`
-reverifies the retained archive, extracted assets, metadata and embedded identity,
-and prints the selected release's `reconcile.yaml`. Both DAG documents bind
-absolute cached `A4S_BIN` and exact `A4S_ARTIFACT`. Rendering never creates or
-changes station DAGs or configuration. Moving refs such as `v0`, unverified and
-conflicting entries are rejected. Installation and scheduling are separate,
-authorized operator steps; see [deployment](../../docs/operations/deployment.md#pin-the-station-reconciler-and-release-plugin).
+Install the separate `a4s-launch-<platform>.tar.gz` once, verify its checksum,
+make its compiled binary `a4s` on the service PATH, and initialize cache state
+with `a4s station init --artifact '<version>@<commit>#<digest>'`. The operator
+installs its `reconcile.yaml`, whose single step is `a4s tick`. No version,
+A4S_BIN or A4S_ARTIFACT is pinned in station configuration. See
+[deployment](../../docs/operations/deployment.md#install-the-stable-launcher-tick-dag-and-release-plugin).
 
-The pinned release lists runs and schedules the tick. Every per-run action crosses
-the receipt-bound dispatch boundary. Foreign artifacts are invoked with
+Only a confirmed fresh Dagu attempt may create `ticks/<dagRunId>.json` with
+`{dagRunId,tuple,createdAt}` before handoff. Retries use that tuple; a missing
+binding or unreadable history fails closed, never repins. Tick A remains A after
+its promote commits B; the next fresh tick runs B. Binding identity outlives
+cache retention, and replay restores only its exact immutable release.
+Unknown state schemas and unsupported launcher protocols report
+`reinstall a4s-launch` without executing current to interpret the state.
+
+The tick lists runs and dispatches every per-run action through the receipt.
+Foreign artifacts are invoked with
 `a4s run --primary <canonical-primary> --run <id> -- <command> [args...]`.
 The boundary reads the immutable receipt, requires declared dispatch protocol
 `a4s-run/1`, checks config/receipt, checkpoint protocols and role-job-store
@@ -74,11 +77,11 @@ accounting, stale recovery, transitions, escalation, protection, successors and
 role jobs therefore do not borrow the reconciler's release. CI/merge shell
 implementations also come from the run artifact's shipped template.
 
-Root classification runs in the pinned executable, not a per-row shell/jq loop.
-Within one tick, cache/archive verification is shared by exact tuple, while each
-receipt is re-read before every action. Only package-independent inspect/finish
-actions whose tuple equals the reconciler's exact pin **and whose executable
-bytes match** may execute in-process under that run's receipt-bound environment.
+Root classification runs in the selected tick executable, not a per-row shell/jq
+loop. Within one tick cache/archive verification is shared by exact tuple, while
+each receipt is re-read before every action. Only package-independent
+inspect/finish actions matching the tick's exact tuple **and executable bytes**
+may execute in-process under that run's receipt-bound environment.
 That binding is restored after each action; no verification survives the tick.
 Different tuples or bytes still invoke their own cached process. The classify
 metric reports `artifactVerifications` and `inProcessActions` to expose this cost
@@ -162,7 +165,7 @@ The gate command is different by contract: it launches real `node` with the
 adjacent real filesystem `bin/dagu-gate.cjs`, whose two CJS siblings also ship in
 the archive. Bun's virtual filesystem is not a Node preload location.
 
-`src/file-lock.ts` uses libc `flock` through `bun:ffi` on Linux and macOS:
+`packages/launcher/src/file-lock.ts` uses libc `flock` through `bun:ffi` on Linux and macOS:
 blocking exclusive locks, nonblocking exclusive attempts, explicit unlock, and
 descriptor-close release all use the original lock files. Node/tsx development
 and live tests use Python's standard-library `fcntl.flock` on an inherited
@@ -244,13 +247,12 @@ PRIMARY before adoption, without launching a role. Service environment changes
 and activation remain separate operator actions. Load/link the extracted release
 root, not `src/status` alone; restart OMP when switching release packages.
 
-Before cutover, the operator closes admission and establishes **zero nonterminal
-runs and zero open role jobs**. Install a verified release `a4s` for initial
-admission and its release-root OMP plugin, retain `DAGU_OMP_ROLE_RUNTIME`, configure
-queue capacity in Dagu, and explicitly pin the station reconciler to a verified
-cache entry. Remove obsolete installed source checkouts, legacy launchers and
-service PATH entries only after references are cleared. a4s never writes station
-configuration/service units or restarts Dagu. See the
+Initial/model-changing cutover closes admission and establishes **zero nonterminal
+runs and zero open role jobs**. Install the stable launcher and single-step tick
+DAG, initialize verified cache state, link the release-root plugin and retain the
+role-runtime environment above. Ordinary payload changes select through state,
+not an exact station reconciler pin. Remove obsolete links/PATH entries only when
+unreferenced. a4s never writes station/service configuration or restarts Dagu. See
 [operator cutover](../../docs/operations/deployment.md#identity-and-adoption).
 
 ## Workflow and command entry points

@@ -6,7 +6,7 @@ import { createGunzip } from "node:zlib";
 import { isDeepStrictEqual } from "node:util";
 import { withFileLockAsync } from "./file-lock.ts";
 import { artifactToken, archiveName, releaseTag, checksumDigest, github, parseArtifact, sameArtifact, type ArtifactTuple, type ResolvedRelease } from "./release.ts";
-import { type ArtifactIdentity } from "./identity.ts";
+import { type ArtifactIdentity } from "./contracts.ts";
 import { assertIdentityContracts } from "./artifact-support.ts";
 import { isRecord } from "./type-guard.ts";
 

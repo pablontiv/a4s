@@ -6,7 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { BUNDLE_VERSION } from "../../src/bundle.ts";
-import { HOST_PRIMARY_REFERENCE } from "../../src/primary.ts";
+import { HOST_PRIMARY_REFERENCE } from "../../../launcher/src/primary.ts";
 import { admissionFixture } from "../fixtures/admission.ts";
 import { bootstrapRender } from "../fixtures/bootstrap-render.ts";
 

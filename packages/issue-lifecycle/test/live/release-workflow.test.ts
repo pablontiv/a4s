@@ -9,7 +9,7 @@ import test from "node:test";
 import { gitBuildIdentity } from "../../../../scripts/release-identity.mjs";
 import { planPublication, publishArchives } from "../../../../scripts/publish-a4s.mjs";
 const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
-const inputs = ["packages/issue-lifecycle/**", "packages/hot-reload/**", "packages/loader/**", "packages/launcher/**", "scripts/build-a4s.mjs", "package.json", "package-lock.json"];
+const inputs = ["packages/issue-lifecycle/**", "packages/hot-reload/**", "packages/loader/**", "packages/launcher/**", "scripts/build-a4s.mjs", "scripts/build-launcher.mjs", "package.json", "package-lock.json"];
 const live = { skip: process.env.A4S_LIVE_DAGU !== "1" };
 
 test("fresh full-history checkouts produce increasing IDs; unchanged SHA keeps its ID; shallow history fails", live, () => {
@@ -53,8 +53,8 @@ test("publisher binds successful validate, shipped diff, immutable reruns, tag c
     const rerun = plan(); assert.equal(rerun.publish, true); assert.equal(rerun.existing, true);
     const archives = join(root, "archives"); mkdirSync(archives);
     const checksums = new Map<string, string>();
-    for (const platform of ["linux-x64", "darwin-arm64"]) {
-      const name = `a4s-r1-${platform}.tar.gz`, bytes = Buffer.from(platform);
+    for (const name of ["linux-x64", "darwin-arm64"].flatMap(platform => [`a4s-r1-${platform}.tar.gz`, `a4s-launch-${platform}.tar.gz`])) {
+      const bytes = Buffer.from(name);
       const checksum = `${createHash("sha256").update(bytes).digest("hex")}  ${name}\n`;
       writeFileSync(join(archives, name), bytes); writeFileSync(join(archives, `${name}.sha256`), checksum);
       checksums.set(`${name}.sha256`, checksum);

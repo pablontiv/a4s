@@ -3,8 +3,8 @@ import { realpath, stat } from "node:fs/promises";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import type { CallDecision, Event } from "./triage/guard.ts";
-import { readCommittedConfig } from "./config.ts";
-import { resolveHostPrimary } from "./primary.ts";
+import { readCommittedConfig } from "../../launcher/src/config.ts";
+import { resolveHostPrimary } from "../../launcher/src/primary.ts";
 import { resolveRunPrimary } from "./run-primary.ts";
 
 const exec = promisify(execFile);

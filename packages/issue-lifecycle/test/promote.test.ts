@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createLeaseLocked } from "../src/lease.ts";
-import { initializeStation, promote, rollback } from "../src/station.ts";
-import { stationTransaction } from "../src/station-state.ts";
+import { createLeaseLocked } from "../../launcher/src/lease.ts";
+import { initializeStation, promote, rollback } from "../../launcher/src/station.ts";
+import { stationTransaction } from "../../launcher/src/station-state.ts";
 import { configSupport, stationFixture } from "./fixtures/station.ts";
 
 test("highest eligible ID wins independently of completion order, never late lower IDs", async t => {
@@ -20,7 +20,7 @@ test("highest eligible ID wins independently of completion order, never late low
 });
 
 test("newest incompatible writer falls through to bridge, then writer activates without a third bridge", async t => {
-  const f = stationFixture(t), old = await f.release("r1"), bridge = await f.release("r2", configSupport([1, 2], 1)), writer = await f.release("r3", configSupport([1, 2], 2));
+  const f = stationFixture(t), old = await f.release("r1", configSupport([1], 1)), bridge = await f.release("r2", configSupport([1, 2], 1)), writer = await f.release("r3", configSupport([1, 2], 2));
   await initializeStation(f.home, old, f.dependencies);
   const dependencies = { ...f.dependencies, releases: async () => [writer, bridge] };
   const first = await promote(f.home, dependencies);
@@ -34,7 +34,7 @@ test("newest incompatible writer falls through to bridge, then writer activates 
 });
 
 test("live and retiring pre-bridge plugin readers block a new writer and name restart remedy", async t => {
-  const f = stationFixture(t), old = await f.release("r1"), bridge = await f.release("r2", configSupport([1, 2], 1)), writer = await f.release("r3", configSupport([1, 2], 2));
+  const f = stationFixture(t), old = await f.release("r1", configSupport([1], 1)), bridge = await f.release("r2", configSupport([1, 2], 1)), writer = await f.release("r3", configSupport([1, 2], 2));
   await initializeStation(f.home, old, f.dependencies);
   await stationTransaction(f.home, async () => { createLeaseLocked(f.home, old, 0, "plugin", "retiring status generation"); }, f.dependencies);
   const dependencies = { ...f.dependencies, releases: async () => [writer, bridge] };
@@ -47,7 +47,7 @@ test("live and retiring pre-bridge plugin readers block a new writer and name re
 });
 
 test("nonterminal bindings, pending admissions and open jobs remain live readers", async t => {
-  const f = stationFixture(t), old = await f.release("r1"), bridge = await f.release("r2", configSupport([1, 2], 1)), writer = await f.release("r3", configSupport([1, 2], 2));
+  const f = stationFixture(t), old = await f.release("r1", configSupport([1], 1)), bridge = await f.release("r2", configSupport([1, 2], 1)), writer = await f.release("r3", configSupport([1, 2], 2));
   await initializeStation(f.home, bridge, f.dependencies);
   for (const holder of ["tick feature/tick-1", "pending admission feature/pending-1", "open role job feature/job-1", "run other/running-1 running"]) {
     const report = await promote(f.home, { ...f.dependencies, releases: async () => [writer], inventory: async () => ({ formats: {}, references: [{ artifact: old, holder }], expiredBindings: [] }) });

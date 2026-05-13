@@ -5,7 +5,7 @@ description: Adopt and operate the repo-owned Dagu issue lifecycle DAG (worktree
 
 # Dagu feature lifecycle
 
-Carry one GitHub issue from feasibility triage to a merged PR through durable Dagu runs. The repository commits `.workspace/dagu/config.json` with `uses`. Admission materializes `feature` and `poc` from the selected verified release; a user-level Dagu service runs them in the repository queue.
+Carry one GitHub issue from feasibility triage to a merged PR through durable Dagu runs. The repository commits `.workspace/dagu/config.json` schema 2 without `uses`. The stable launcher selects admission from station state or a parent receipt; a user-level Dagu service runs the admitted immutable snapshot in the repository queue.
 
 ```mermaid
 flowchart LR
@@ -46,17 +46,15 @@ flowchart LR
 
 - `dagu` on `PATH`, and a user-level service running `dagu start-all`. Check with `dagu version` and `launchctl list | grep -i dagu` (macOS) or `systemctl --user status` (Linux).
 - `@a4s/issue-lifecycle` loaded in the coordinating OMP session; its `dagu_session_id` tool identifies the session and its status extension delivers targeted checkpoint notices.
-- A verified release `a4s` on PATH for initial admission, and its whole extracted
-  release root loaded/linked as the OMP package. Snapshots bind the selected
-  cached executable as absolute `A4S_BIN`; engine calls use
-  `"$A4S_BIN" <subcommand>`, never ambient legacy commands or checkout code.
-- The scheduled reconciler is separately pinned to an exact verified release.
-  The operator obtains its tuple with `a4s reconcile cache --release a4s@r<N>`
-  (or `a4s@vX.Y.Z` for a historical release)
-  and prints its DAG with `a4s reconcile render --artifact '<version>@<commit>#<digest>'`.
-  These commands never install station DAGs or restart Dagu. Only the operator
-  installs the printed DAG and enables scheduling; see
-  [pinning and plugin cutover](../../../../docs/operations/deployment.md#pin-the-station-reconciler-and-release-plugin).
+- The operator-installed stable `a4s-launch` is `a4s` on PATH for admission.
+  Load/link the selected payload's complete extracted release root as the OMP
+  package. Snapshots bind the selected cached executable as absolute `A4S_BIN`;
+  engine calls use `"$A4S_BIN" <subcommand>`, never checkout code.
+- Install the launcher's one-step `reconcile.yaml` DAG (`a4s tick`) separately.
+  First-attempt native Dagu evidence binds its run ID to current; retries retain
+  that tuple. There is no exact reconciler pin or consumer `uses` bump. Only the
+  operator installs/replaces the launcher and station DAG or restarts services;
+  see [launcher and plugin cutover](../../../../docs/operations/deployment.md#install-the-stable-launcher-tick-dag-and-release-plugin).
 - For an existing run, use `a4s run --primary <canonical-primary> --run <id> -- <command>`.
   It requires declared dispatch protocol `a4s-run/1`, verifies schema/protocol/store
   contracts and the exact cached tuple, then invokes that run's executable, irrespective of the plugin
@@ -65,7 +63,7 @@ flowchart LR
   be displayed but cannot be mutated. Never substitute the plugin's engine or
   change receipt declarations to make an action pass. A tick logs
   `reconcile-failure run=<id> status=1 cause=<diagnostic>` and continues other
-  compatible runs. Restore a missing exact artifact under operator authority.
+  compatible runs. Missing exact tuples are restored from immutable releases.
   Native `retry`, `human-task` and `stop` mutations preflight the invoking
   process's PATH for `bash`, `git`, `gh`, `jq`, `curl`, `node`, `bun`, `omp` and
   `dagu` before calling Dagu: synchronous retries and terminal handlers do not
@@ -228,30 +226,31 @@ than thirty days are no longer queryable through `dagu history` or available
 for `dagu retry`. Preserve evidence needed for longer outside the run
 history; recovering that work requires a new run.
 
-The reconcile root in [`reconcile.yaml`](reconcile.yaml) sets
+The operator-installed [`reconcile.yaml`](../../../launcher/reconcile.yaml) sets
 `hist_retention_runs: 1440`: about one day at one scheduled tick per minute.
 That count is the retention mode for the reconcile DAG. Dagu applies it after
 each new reconcile root is created and removes older terminal roots together
 with their `sub/` children, logs and artifacts. Active runs, non-final runs
 and a newer attempt that has no status yet stay. The operator provisions the
-pinned reconciler; bootstrap does not install it. Its first tick applies the
+launcher tick DAG; bootstrap does not install it. Its first tick applies the
 count. Protected roots stay; reaching the count leaves them in place.
 
 ## Release identity and compatibility
 
 The [artifact contract](../../../../docs/architecture/artifact-contract.md) is
-normative. Committed `.workspace/dagu/config.json` schema 1 requires `uses`:
-`a4s@r<N>` pins an exact staged build; `a4s@v0.7.8` pins a historical SemVer
-release. `a4s@v0` is the frozen historical major channel. Paths, URLs, branches
-and ranges are rejected. Queue capacity belongs only to station config, not
-consumer policy or run parameters.
+normative. Committed `.workspace/dagu/config.json` schema 2 has no `uses`.
+New builds also read schema 1, ignoring its legacy release selection. No `uses`
+bump or consumer commit is needed for payload promotion. Once schema 2 is
+committed, read coverage refuses rollback to builds that only read schema 1.
+Queue capacity belongs only to station config, never consumer/run policy.
 
-Root admission reads config bytes from consumer HEAD and validates exactly one
-persistent owner session before cache writes, receipts, enqueue or role-store
-mutation. It resolves `uses` once to `(version, commit, archive SHA-256)`, verifies
-the archive before extraction, validates identity/assets and atomically publishes
-`$DAGU_HOME/cache/a4s/<version>/`. Existing entries must pass integrity checks;
-conflicts or corrupt contents are never overwritten or silently repaired.
+The separately installed `a4s-launch` is `a4s` on PATH. Under its state lock it
+selects current for new admissions, the parent's receipt for successors, and the
+target run's receipt for actions (even inside a foreign tick). It restores the
+exact immutable tuple if missing, validates it, publishes a lease with PID/start
+time/boot identity, and execs the canonical cached payload. That lease covers
+receipt/snapshot writes and enqueue until payload exit. Unknown state schemas and
+unsupported payload protocols fail closed with `reinstall a4s-launch`.
 
 The caller hands off to that entry's executable:
 
@@ -261,13 +260,12 @@ exec "$DAGU_HOME/cache/a4s/<version>/a4s" admit \
 ```
 
 The selected engine compares the tuple with its embedded identity and verified
-cache metadata, without resolving `uses` again or handing off a second time.
+cache metadata, without resolving a default again or handing off a second time.
 It materializes only its own templates and binds every engine call to absolute
 `A4S_BIN` in the immutable DAG snapshot. The enqueue path submits exactly those
-admitted bytes. Feature → PoC, PoC → feature and discovery → planning verify and
-inherit the parent's receipt-bound tuple even when the child's committed `uses`
-selects another release. Each child independently validates committed policy;
-missing or invalid parent artifacts fail closed, never selecting a replacement.
+admitted bytes. Successors verify and inherit their parent's receipt tuple,
+independently validate freshly committed child policy, and fail closed when the
+exact artifact cannot be restored or is invalid.
 
 Identity carries uniform `support`: `{ "<format>": { "read": [versions],
 "write": version } }` for receipt, role-job SQL/payload, config, run state and PR
@@ -281,8 +279,9 @@ Receipts record the resolved tuple, supported and actually used contracts,
 consumer config commit/digest, exact template/snapshot identity, owner and
 observed Dagu runtime as distinct facts. Unknown dynamic facts remain pending.
 Linked observations do not rewrite initial identity. Cache entries stay retained
-while nonterminal/recoverable runs, open role jobs or the pinned station
-reconciler reference them; incomplete reference discovery prevents pruning.
+while nonterminal/recoverable runs, open role jobs or live process leases need
+them; incomplete reference discovery prevents pruning. Tick bindings persist
+while Dagu can replay their IDs and restore their exact tuple after pruning.
 
 Version-distance status labels are display only, not admission authority.
 Report incompatibility with the actual receipt/cache identity and ask the
@@ -416,6 +415,11 @@ resources and owner, and continue its existing checkpoint recovery protocol.
 ## Template parameters
 
 The selected cached release materializes repository policy into templates at admission:
+
+Consumer config schema 2 contains policy only, without a `uses` placeholder or
+release bump. Scheduled station reconciliation is the operator-installed
+single-step `a4s tick` DAG; a confirmed first attempt binds its tuple and retries
+never repin. Tick A's actions on run B always dispatch B's receipt artifact.
 
 | Placeholder | Meaning | rootline | homeserver |
 |---|---|---|---|

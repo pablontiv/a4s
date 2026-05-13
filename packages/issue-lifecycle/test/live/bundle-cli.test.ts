@@ -11,10 +11,10 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { admissionFixture, compiledA4sBin } from "../fixtures/admission.ts";
 import { installGithubFixture, writeReleaseDirectory, repository } from "../fixtures/artifact.ts";
-import { archiveName } from "../../src/release.ts";
+import { archiveName } from "../../../launcher/src/release.ts";
 import { liveDagu } from "../fixtures/live-dagu.ts";
 
-import { exampleConfig, serializeConfig } from "../../src/config.ts";
+import { exampleConfig, serializeConfig } from "../../../launcher/src/config.ts";
 import { BUNDLE_VERSION } from "../../src/bundle.ts";
 const cli = fileURLToPath(new URL("../../bin/dagu-feature-bundle.ts", import.meta.url));
 

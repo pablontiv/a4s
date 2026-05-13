@@ -12,11 +12,9 @@ function bootstrap(): { steps: Array<{ id: string; run?: string }> } {
 }
 
 test("package exposes engine and stable launcher; bootstrap never installs station assets", () => {
-  const bins = JSON.parse(readFileSync(join(packageDir, "package.json"), "utf8")).bin;
-  assert.deepEqual(bins, {
-    a4s: "./src/cli.ts",
-    "a4s-launch": "./src/launcher.ts",
-  });
+  const bins = JSON.parse(readFileSync(join(packageDir, "../launcher/package.json"), "utf8")).bin;
+  assert.deepEqual(bins, { a4s: "./src/cli.ts", "a4s-launch": "./src/cli.ts" });
+  assert.equal(JSON.parse(readFileSync(join(packageDir, "package.json"), "utf8")).bin, undefined);
   const spec = bootstrap();
   assert.deepEqual(spec.steps.map(step => step.id), ["detect", "config", "worktrees", "write_config", "readiness", "github", "confirm"]);
   const detect = spec.steps.find(step => step.id === "detect")!.run!;

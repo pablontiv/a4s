@@ -1,9 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
-import { ARTIFACT_SUPPORT, ARTIFACT_PROTOCOLS, DISPATCH_PROTOCOL, type ArtifactSupport, type SharedFormat } from "./identity.ts";
+import { ARTIFACT_PROTOCOLS, DISPATCH_PROTOCOL, SHARED_FORMATS, registrationHash, type ArtifactSupport, type SharedFormat } from "./contracts.ts";
 import { isRecord } from "./type-guard.ts";
-import { registrationHash } from "./registration.ts";
-
-export const SHARED_FORMATS = Object.keys(ARTIFACT_SUPPORT) as SharedFormat[];
 /** Historical semver declarations are decoded, never rewritten in archives or receipts. */
 export function formatSupport(value: unknown): ArtifactSupport {
   if (!isRecord(value)) throw new Error("Missing artifact format support");

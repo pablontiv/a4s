@@ -5,11 +5,11 @@ import type { TestContext } from "node:test";
 import childProcess from "node:child_process";
 import { syncBuiltinESMExports } from "node:module";
 import { artifactDependencies, artifactEntries, writeInProcessArchive } from "./compiled-artifact.ts";
-import { ensureArtifact, inspectArtifact } from "../../src/artifact-cache.ts";
+import { ensureArtifact, inspectArtifact } from "../../../launcher/src/artifact-cache.ts";
 import { identity, type ArtifactSupport } from "../../src/identity.ts";
-import { type ArtifactTuple, type ResolvedRelease } from "../../src/release.ts";
-import { type StationDependencies } from "../../src/station.ts";
-import { stationRoot, writeJsonDurable, type StationState } from "../../src/station-state.ts";
+import { type ArtifactTuple, type ResolvedRelease } from "../../../launcher/src/release.ts";
+import { type StationDependencies } from "../../../launcher/src/station.ts";
+import { stationRoot, writeJsonDurable, type StationState } from "../../../launcher/src/station-state.ts";
 
 export function stationFixture(t: TestContext) {
   const root = mkdtempSync(join(tmpdir(), "a4s-station-")), home = join(root, "dagu"), releases = join(root, "releases");

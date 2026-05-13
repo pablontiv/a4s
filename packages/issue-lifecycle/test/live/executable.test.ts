@@ -11,7 +11,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { engineCommand } from "../../src/executable.ts";
 import { identity } from "../../src/identity.ts";
-import { cachePath } from "../../src/artifact-cache.ts";
+import { cachePath } from "../../../launcher/src/artifact-cache.ts";
 import type { Receipt } from "../../src/admission.ts";
 import { USED_CONTRACTS } from "../../src/artifact-receipt.ts";
 import { gitBuildIdentity } from "../../../../scripts/release-identity.mjs";

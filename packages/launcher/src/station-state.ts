@@ -2,13 +2,9 @@ import { randomUUID } from "node:crypto";
 import { closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { withFileLockAsync } from "./file-lock.ts";
-import { SHARED_FORMATS } from "./artifact-support.ts";
+import { SHARED_FORMATS, LAUNCHER_PROTOCOL, STATE_SCHEMAS, type ArtifactSupport, type SharedFormat } from "./contracts.ts";
 import { artifactToken, parseArtifact, type ArtifactTuple } from "./release.ts";
 import { isRecord } from "./type-guard.ts";
-import type { ArtifactSupport, SharedFormat } from "./identity.ts";
-
-export const LAUNCHER_PROTOCOL = 1;
-export const STATE_SCHEMAS: readonly number[] = [1];
 export type PersistedFormats = Record<SharedFormat, number[]>;
 export interface StationState {
   schema: 1; generation: number; current: ArtifactTuple; previous: ArtifactTuple;

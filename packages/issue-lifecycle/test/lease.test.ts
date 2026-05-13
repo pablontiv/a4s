@@ -2,9 +2,9 @@ import assert from "node:assert/strict";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { collectDeadLeases, selectStationBuild } from "../src/lease.ts";
-import { initializeStation, gc, promote } from "../src/station.ts";
-import { stationRoot } from "../src/station-state.ts";
+import { collectDeadLeases, selectStationBuild } from "../../launcher/src/lease.ts";
+import { initializeStation, gc, promote } from "../../launcher/src/station.ts";
+import { stationRoot } from "../../launcher/src/station-state.ts";
 import { stationFixture } from "./fixtures/station.ts";
 
 test("selection leases the exact generation and artifact while holding the state lock", async t => {
@@ -12,7 +12,7 @@ test("selection leases the exact generation and artifact while holding the state
   await initializeStation(f.home, artifact, f.dependencies);
   const lease = await selectStationBuild(f.home, "plugin", "status generation", f.dependencies);
   assert.equal(lease.generation, 0); assert.equal(lease.artifact.version, "r1");
-  assert.equal(lease.pid, process.pid); assert.match(lease.processStartedAt, /^ps-c:/);
+  assert.equal(lease.pid, process.pid); assert.match(lease.processStartedAt, process.platform === "linux" ? /^linux:[a-f0-9-]{36}:\d+$/ : /^ps-c:/);
   const path = join(stationRoot(f.home), "leases", `${lease.id}.json`);
   assert.deepEqual(JSON.parse(readFileSync(path, "utf8")), lease);
   assert.equal(await collectDeadLeases(f.home, { ...f.dependencies, probe: () => "alive" }), 0);

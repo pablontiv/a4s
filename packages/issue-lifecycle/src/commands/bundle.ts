@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { appendObservation, enqueue, parseObservation, receiptPath, observeRunReceipt } from "../admission.ts";
-import { CONFIG_PATH, configFromEnvironment, readConfigFile, readCommittedConfig, serializeConfig } from "../config.ts";
+import { CONFIG_PATH, configFromEnvironment, readConfigFile, readCommittedConfig, serializeConfig } from "../../../launcher/src/config.ts";
 import { validatePlanningUnitsCommand } from "../planning-validator.ts";
 import { planningReviewer, type TranscriptRow } from "../transcript-identity.ts";
 import { BUNDLE_VERSION, lifecycleProtocolToken } from "../bundle.ts";
@@ -11,7 +11,7 @@ import { queueReadiness, stationReadiness } from "../queue.ts";
 import { main as escalation } from "../escalation.ts";
 import { executingRunArtifact, invokeRun } from "../run-artifact.ts";
 import type { RunDetails } from "../status/progress.ts";
-import { isRecord } from "../type-guard.ts";
+import { isRecord } from "../../../launcher/src/type-guard.ts";
 
 interface RuntimeObservation {
   run: RunDetails;

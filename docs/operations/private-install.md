@@ -13,9 +13,9 @@ instead come from a verified tagged release, never an installed source checkout.
 - Native OMP for OMP integrations; review-routing's host compatibility and Bun
   requirement are in its manifest's `peerDependencies` and `engines.bun`.
   npm installs its `devDependencies.bun` pin for tests.
-- Official Dagu 2.23.0 or newer for lifecycle runtime; Git, authenticated `gh`,
-  `jq`, Bash and Node for the real gate preload. Install a verified platform
-  release `a4s` for initial admission and link/load its complete extracted root.
+- Dagu 2.24.0 for native first-attempt evidence, Git, authenticated `gh`, `jq`,
+  Bash and Node for the real gate preload. Install the separate stable launcher
+  below and link/load a verified payload's complete extracted root.
   Python `fcntl` is required only by Node/tsx development tests, not the engine.
 - Semantic role jobs require Bun and the native OMP package root selected by
   `DAGU_OMP_ROLE_RUNTIME` in service and bootstrap environments. Keep that variable
@@ -37,7 +37,7 @@ npm test
 npm run typecheck
 ```
 
-The root and CI gates run all eight workspace test suites and the seven declared
+The root and CI gates run all nine workspace test suites and eight declared
 typechecks. The tool-row workspace runs transpiled behavioral tests; its optional
 Pion host supplies the renderer types for host-side development. Default tests
 select only top-level test files and preload `scripts/test-no-spawn.mjs`, which
@@ -56,6 +56,25 @@ message-bus also expose explicit `test:live` scripts for their real CLI scenario
 CI discovers current workspace manifests and transitive consumers, handles both
 sides of renames, and aggregates workspace checks and PR-body validation into
 `validate` for `main`.
+
+## Stable launcher installation
+
+Choose a reviewed immutable release, download `a4s-launch-<platform>.tar.gz` and
+its `.sha256`, verify the SHA-256 before extraction, and use an operator-owned
+staging directory outside the source checkout. This independent compiled binary
+contains the release repository and launcher protocol, not a payload identity.
+Install `a4s-launch` on the service user's PATH and make `a4s` select it, initialize
+with a trusted exact payload tuple, then validate/review/install the archive's
+`reconcile.yaml` (single step `a4s tick`). The launcher writes only runtime cache
+state; it never writes station/service configuration, installs the DAG, or
+restarts Dagu. Follow the
+[exact operator commands](deployment.md#install-the-stable-launcher-tick-dag-and-release-plugin).
+
+Launcher changes require operator reinstall. `a4s launcher-version` reports its
+protocol/readable schemas; unsupported state schemas and payload protocols report
+`reinstall a4s-launch`. `a4s state` and `a4s rollback` are launcher-owned even if
+current cannot start. Ticks require readable native Dagu first-attempt evidence:
+missing retry bindings fail closed and are never repinned.
 
 ## Whole-package OMP loading
 
@@ -80,13 +99,12 @@ environment sets `A4S_PRIMARY` to that station's main checkout so lifecycle
 renders can resolve `PRIMARY` without a machine path in the bundle. A
 per-checkout file `$DAGU_HOME/primaries/<workspace>` or the single-checkout
 file `$DAGU_HOME/a4s-primary` is the same binding when the variable is unset.
-Consumer policy comes only from committed `.workspace/dagu/config.json`,
-including required `uses: a4s@v<major>` or exact `a4s@v<x.y.z>` (default `a4s@v0`).
-Initial admission resolves once, verifies and caches the exact release at
-`$DAGU_HOME/cache/a4s/<version>/`, then hands off with
-`admit --artifact '<version>@<commit>#<digest>'`. Snapshots bind absolute
-`A4S_BIN`; successors verify the parent receipt's tuple even if `uses` changes.
-Missing/corrupt artifacts fail closed, never falling back to source.
+Consumer policy comes only from committed `.workspace/dagu/config.json`, schema
+2 without `uses`; new builds read schema 1 but ignore its legacy selection.
+New admissions use `state.current`; successors and actions use the target receipt
+tuple. The launcher restores and verifies missing exact immutable releases and
+execs their cached binary with a process lease through payload exit. Snapshots
+bind absolute `A4S_BIN`; corrupt entries and unavailable releases fail closed.
 
 The operator owns queue capacity in Dagu config, service environment and
 activation. a4s never writes station configuration/service units or restarts
@@ -100,15 +118,14 @@ For an authorized persistent lifecycle installation:
 omp plugin link <absolute-release-root>
 ```
 
-Before cutover, close admission and establish zero nonterminal runs and zero
-open role jobs. Keep `DAGU_OMP_ROLE_RUNTIME`, provision named Dagu queues and a
-reconciler pinned to a verified cache entry, then remove obsolete installed source
-checkouts, launchers/plugin links and service PATH entries once unreferenced.
-Restart OMP to load the release plugin; service activation belongs exclusively
-to the operator. Follow the complete [cutover procedure](deployment.md#identity-and-adoption).
-For exact commands, including cache population, stdout-only DAG rendering and
-operator installation/scheduling, use
-[pinned reconciliation and release plugin cutover](deployment.md#pin-the-station-reconciler-and-release-plugin).
+Initial/model-changing cutover closes admission and establishes zero nonterminal
+runs and zero open role jobs. Keep `DAGU_OMP_ROLE_RUNTIME`, provision queues, the
+stable launcher and single-step tick DAG, then remove obsolete links/PATH entries
+only after references clear. Restart OMP to load the release plugin; service
+activation remains exclusively the operator's. Ordinary payload promotion uses
+state, not per-consumer or scheduled exact-release pins. Follow the complete
+[cutover procedure](deployment.md#identity-and-adoption) and
+[launcher/tick installation](deployment.md#install-the-stable-launcher-tick-dag-and-release-plugin).
 `omp plugin link` must replace the old lifecycle checkout registration: the
 service user's `~/.omp/plugins/node_modules/@a4s/issue-lifecycle` must resolve to
 the verified extracted release root, and its managed `omp-plugins.lock.json`

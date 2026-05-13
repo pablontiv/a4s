@@ -3,21 +3,22 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { CONFIG_PATH, POLICY_PARAMETERS, readCommittedConfig, type CommittedConfig } from "./config.ts";
+import { CONFIG_PATH, POLICY_PARAMETERS, readCommittedConfig, type CommittedConfig } from "../../launcher/src/config.ts";
 import { dagName, materializeDag, type LifecycleDag } from "./materialize.ts";
 import type { RunDetails } from "./status/progress.ts";
-import { isRecord } from "./type-guard.ts";
+import { isRecord } from "../../launcher/src/type-guard.ts";
 import { requirePocScope, scopeTargets } from "./poc-scope.ts";
-import { HOST_PRIMARY_REFERENCE, bindSnapshotPrimary, resolvePrimaryBinding } from "./primary.ts";
+import { HOST_PRIMARY_REFERENCE, bindSnapshotPrimary, resolvePrimaryBinding } from "../../launcher/src/primary.ts";
 import { assertReceiptVersion } from "./receipt-version.ts";
 import { requireOwnerSession } from "./owner-session.ts";
 import { packageRoot } from "./executable.ts";
-import { artifactToken, parseArtifact, releaseRepository, resolveRelease, sameArtifact } from "./release.ts";
-import { artifactLock, ensureArtifact, inspectArtifact, type CachedArtifact } from "./artifact-cache.ts";
+import { artifactToken, parseArtifact, releaseRepository, sameArtifact } from "../../launcher/src/release.ts";
+import { artifactLock, inspectArtifact, type CachedArtifact } from "../../launcher/src/artifact-cache.ts";
 import { assertArtifactReceipt, assertExecutingArtifact, receiptArtifact, USED_CONTRACTS, type ArtifactReceiptFields } from "./artifact-receipt.ts";
-import { withFileLockAsync } from "./file-lock.ts";
+import { withFileLockAsync } from "../../launcher/src/file-lock.ts";
 import { stationReadiness } from "./queue.ts";
-import { stationTransaction } from "./station-state.ts";
+import { stationTransaction, readStationState } from "../../launcher/src/station-state.ts";
+import { handoff } from "../../launcher/src/select.ts";
 
 export function canonical(value: unknown): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
@@ -250,11 +251,10 @@ export function enqueueArguments(args: string[], cwd: string): AdmissionOptions 
     if (!isRecord(value) || (value.transcriptRoot !== undefined && typeof value.transcriptRoot !== "string") || (value.extensionDigest !== undefined && typeof value.extensionDigest !== "string")) throw new Error("Indeterminate loaded session identity");
     session = { ...(typeof value.transcriptRoot === "string" ? { transcriptRoot: value.transcriptRoot } : {}), ...(typeof value.extensionDigest === "string" ? { extensionDigest: value.extensionDigest } : {}), ...(value.model !== undefined ? { model: value.model } : {}) };
   }
-  if (check && (artifact || parent)) throw new Error("--check resolves committed uses; --artifact and --parent are not supported");
+  if (check && (artifact || parent)) throw new Error("--check reads station.current; --artifact and --parent are not supported");
   return { cwd, dag, run, params, ...(artifact ? { artifact } : {}), ...(parent ? { parent } : {}), ...(check ? { check } : {}), ...(session ? { session } : {}) };
 }
-/** Root CLI: resolve once, publish/check cache, then replace this process. Child
- * CLI: inherit from the parent receipt, never resolve or download anything. */
+/** Root CLI hands off through the stable selector; successors inherit their parent's tuple. */
 export async function enqueue(args: string[], cwd: string): Promise<number> {
   try {
     const options = enqueueArguments(args, cwd);
@@ -262,21 +262,13 @@ export async function enqueue(args: string[], cwd: string): Promise<number> {
     // Planning checks stop before cache publication, handoff, locks, receipts or
     // Dagu CLI calls. Reuse queue's GET-only station readiness boundary.
     if (options.check) {
-      const release = resolveRelease(context.committed.config.uses);
+      const state = await readStationState(process.env.DAGU_HOME || join(homedir(), ".dagu"));
       const report = await stationReadiness(process.env.DAGU_HOME || join(homedir(), ".dagu"), context.committed.config.lane);
       console.log(report.checks.join("\n"));
-      console.log(`admissible=${report.ready ? "yes" : "no"} uses=${context.committed.config.uses} artifact=${artifactToken(release)} lane=${context.committed.config.lane}`);
+      console.log(`admissible=${report.ready ? "yes" : "no"} artifact=${artifactToken(state.current)} lane=${context.committed.config.lane}`);
       return report.ready ? 0 : 1;
     }
-    if (!options.artifact && !options.parent) {
-      const home = realpathSync(process.env.DAGU_HOME || join(homedir(), ".dagu"));
-      const release = resolveRelease(context.committed.config.uses);
-      const cached = await ensureArtifact(home, release);
-      const env = Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined));
-      if (!process.execve) throw new Error("a4s admission requires a runtime with execve support");
-      process.execve(cached.executable, [cached.executable, "admit", "--artifact", artifactToken(release), ...args], env);
-      throw new Error("a4s handoff did not replace the caller process");
-    }
+    if (!options.artifact) return await handoff(process.env.DAGU_HOME || join(homedir(), ".dagu"), ["admit", ...args]);
     return await selectedAdmission(options, true, ({ path, receipt }) => {
       const snapshot = join(dirname(path), "snapshot", `${receipt.runReceipt.dag}.yaml`);
       mkdirSync(dirname(snapshot));

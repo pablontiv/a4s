@@ -5,14 +5,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { CONFIG_PATH, exampleConfig, serializeConfig } from "../src/config.ts";
+import { CONFIG_PATH, exampleConfig, serializeConfig } from "../../launcher/src/config.ts";
 import {
   HOST_PRIMARY_REFERENCE,
   bindSnapshotPrimary,
   primaryFromSpec,
   resolveHostPrimary,
   resolvePrimaryBinding,
-} from "../src/primary.ts";
+} from "../../launcher/src/primary.ts";
 import { resourceDecision as decideResources } from "../src/resources.ts";
 
 const readRepo = (path: string): string => readFileSync(fileURLToPath(new URL(path, import.meta.url)), "utf8");

@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { inspectRun, finishRun, type Routed } from "./reconcile-run.ts";
 import { invokeRun, RunArtifactScope, type VerifiedRun } from "./run-artifact.ts";
-import { isRecord } from "./type-guard.ts";
+import { isRecord } from "../../launcher/src/type-guard.ts";
 
 type Issue = { number: number; state: string; closed_at?: string | null };
 
@@ -38,7 +38,7 @@ export async function classifyRuns(outputsFile: string, dependencies: ClassifyDe
   async function action<T>(context: VerifiedRun, phase: "inspect" | "finish", args: () => string[], execute: () => T): Promise<T | string> {
     const local = await scope.locally(context, phase, execute);
     if (local.local) { inProcessActions++; return local.value; }
-    const result = await invoke(context.primary, context.receipt.runReceipt.run, ["reconcile", phase, ...args()], { context, capture: true });
+    const result = await invoke(context.primary, context.receipt.runReceipt.run, ["reconcile", phase, ...args()], { capture: true });
     process.stderr.write(result.stderr);
     if (result.status !== 0) throw new Error(`Run artifact exited with status ${result.status}`);
     return result.stdout.trimEnd();

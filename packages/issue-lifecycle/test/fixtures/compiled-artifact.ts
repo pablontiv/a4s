@@ -3,8 +3,8 @@ import { copyFileSync, mkdirSync, readFileSync, readdirSync, writeFileSync } fro
 import { dirname, join } from "node:path";
 import { gzipSync } from "node:zlib";
 import { identity } from "../../src/identity.ts";
-import { cachePath, type ArtifactDependencies } from "../../src/artifact-cache.ts";
-import { archiveName, type ArtifactTuple, type ResolvedRelease } from "../../src/release.ts";
+import { cachePath, type ArtifactDependencies } from "../../../launcher/src/artifact-cache.ts";
+import { archiveName, type ArtifactTuple, type ResolvedRelease } from "../../../launcher/src/release.ts";
 import { packageDirectory, repository } from "./artifact.ts";
 
 export interface ArchiveEntry { name: string; content: string | Buffer; type?: string }

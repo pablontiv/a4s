@@ -31,7 +31,7 @@ npm ci && npm test && npm run typecheck
 
 Use the Node.js requirement in root `package.json` `engines.node` and the shared
 tools in its `devDependencies`; access to locked registry dependencies is required. Root
-and CI gates run all workspace tests and the seven declared workspace typechecks.
+and CI gates run all workspace tests and the eight declared workspace typechecks.
 The optional-host tool-row workspace is test-only; its renderer types come from
 the consumer's Pion host. Orca managed-worktree setup should run by default
 (`--setup run` when explicitly required). Its setup terminal can remain active

@@ -7,10 +7,10 @@ import type { Job } from "../src/role-jobs.ts";
 import { fixtureArtifact } from "./fixtures/artifact.ts";
 import { identity } from "../src/identity.ts";
 import { USED_CONTRACTS } from "../src/artifact-receipt.ts";
-import { artifactToken, type ArtifactTuple } from "../src/release.ts";
+import { artifactToken, type ArtifactTuple } from "../../launcher/src/release.ts";
 import { compiledArtifact } from "./fixtures/admission.ts";
 import { packageDirectory } from "./fixtures/artifact.ts";
-import { exampleConfig } from "../src/config.ts";
+import { exampleConfig } from "../../launcher/src/config.ts";
 import { materializeDag } from "../src/materialize.ts";
 
 export function reconcileSnapshot(artifact: ArtifactTuple, ciBlocked = 2): string {

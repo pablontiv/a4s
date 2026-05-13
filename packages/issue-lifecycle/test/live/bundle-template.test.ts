@@ -22,21 +22,19 @@ function bootstrapExecutable(root: string): string {
   return launcher;
 }
 
-test("bootstrap defaults, preserves and explicitly selects release uses without authoring DAGs", () => {
-  const root = mkdtempSync(join(tmpdir(), "a4s-bootstrap-uses-"));
+test("bootstrap writes schema 2 without release selection or authoring DAGs", () => {
+  const root = mkdtempSync(join(tmpdir(), "a4s-bootstrap-config-"));
   try {
     const stage = join(root, ".workspace/dagu/config.json");
-    for (const [answer, installed, expected] of [
-      ["", "", "a4s@v0"], ["", "a4s@v1.2.3", "a4s@v1.2.3"],
-      ["a4s@v2", "a4s@v1.2.3", "a4s@v2"], ["a4s@v2.3.4", "", "a4s@v2.3.4"],
-    ]) {
+    for (const installed of ["", "a4s@v1.2.3"]) {
       const result = spawnSync("bash", ["-c", bootstrapStep("write_config")], { encoding: "utf8", env: {
-        ...process.env, PRIMARY: root, STAGE: stage, A4S_BIN: bootstrapExecutable(root), DAG_RUN_ID: "bootstrap-uses",
+        ...process.env, PRIMARY: root, STAGE: stage, A4S_BIN: bootstrapExecutable(root), DAG_RUN_ID: "bootstrap-config",
         REPO: "fixture", BASE_BRANCH: "main", GATE: "true", REQUIRED_CHECK: "validate",
-        TEST_PATHS: "^test/", REBASE_RESOLVER: "", USES: answer, CURRENT_USES: installed,
+        TEST_PATHS: "^test/", REBASE_RESOLVER: "", USES: "a4s@v2", CURRENT_USES: installed,
       } });
       assert.equal(result.status, 0, result.stderr);
-      assert.equal(JSON.parse(readFileSync(stage, "utf8")).uses, expected);
+      const config = JSON.parse(readFileSync(stage, "utf8"));
+      assert.equal(config.schemaVersion, 2); assert.equal("uses" in config, false);
     }
     const tree = spawnSync("find", [join(root, ".workspace"), "-type", "f"], { encoding: "utf8" });
     assert.equal(tree.status, 0, tree.stderr);
@@ -203,7 +201,8 @@ const ciJobs = (...names: string[]) => names.sort().map(name => ({ name, test: t
 const mainWorkspaces: CiWorkspace[] = [
   { dir: "packages/context-expert", name: "@a4s/context-expert" },
   { dir: "packages/review-routing", name: "@a4s/review-routing" },
-  { dir: "packages/issue-lifecycle", name: "@a4s/issue-lifecycle" },
+  { dir: "packages/issue-lifecycle", name: "@a4s/issue-lifecycle", dependencies: { "@a4s/launcher": "*" } },
+  { dir: "packages/launcher", name: "@a4s/launcher" },
   { dir: "packages/hot-reload", name: "@a4s/hot-reload" },
   { dir: "packages/orca-integration", name: "@a4s/orca-integration" },
   { dir: "packages/pi-tool-row-presentation", name: "@a4s/pi-tool-row-presentation",
@@ -251,6 +250,7 @@ test("CI selects checked-out main manifests, nested owners and declared routing 
   try {
     const cases: [unknown[], string[]][] = [
       [["packages/context-expert/src/index.ts"], ["@a4s/context-expert"]],
+      [["packages/launcher/src/select.ts"], ["@a4s/launcher", "@a4s/issue-lifecycle"]],
       [["packages/review-routing/src/settings.ts"], ["@a4s/review-routing"]],
       [["packages/agent-messaging/src/index.ts"], ["@a4s/agent-messaging"]],
       [[{ filename: "apps/message-bus/src/deleted.ts", status: "removed" }], ["@a4s/message-bus"]],

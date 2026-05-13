@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { stripVTControlCharacters } from "node:util";
 import type { JobBinding } from "./role-jobs.ts";
-import { isRecord } from "./type-guard.ts";
+import { isRecord } from "../../launcher/src/type-guard.ts";
 import { redactRoots } from "./host-paths.ts";
 
 export interface GateFailureEvidence {

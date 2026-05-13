@@ -5,7 +5,7 @@ import { clearInterval, setInterval } from "node:timers";
 import { setTimeout as delay } from "node:timers/promises";
 import { atomicJson } from "./role-jobs.ts";
 import { spawnEngine } from "./executable.ts";
-import { processMatches, processStart } from "./process-identity.ts";
+import { processMatches, processStart } from "../../launcher/src/process-identity.ts";
 
 export const LONG_COMPUTATION_CONTRACT = [
   "Long computation contract: before a long computation, run a bounded representative sample and record measured throughput and the projected duration.",

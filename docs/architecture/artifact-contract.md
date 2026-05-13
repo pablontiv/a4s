@@ -153,16 +153,15 @@ SemVer-bump guard and bundle-version rebase resolver are retired.
 
 ## Committed consumer configuration
 
-The consumer MUST commit `.workspace/dagu/config.json`. Its policy reader is
-`packages/issue-lifecycle/src/config.ts`; there is no legacy file/module alias.
-Configuration `schemaVersion: 1` is independent of the artifact's version and of
-the receipt schema. `uses` is a required top-level sibling of the existing policy
-fields, not a replacement for them and not a nested policy object:
+The consumer MUST commit `.workspace/dagu/config.json`. Its payload-independent
+policy reader is `packages/launcher/src/config.ts`. New builds read schemas 1
+and 2 and write schema 2, which has no `uses`. A legacy schema-1 `uses` is read
+but ignored for build selection. Old builds that read only schema 1 cannot read
+a schema-2 consumer; promotion/rollback read coverage MUST account for that.
 
 ```json
 {
-  "schemaVersion": 1,
-  "uses": "a4s@v0",
+  "schemaVersion": 2,
   "lane": "example",
   "baseBranch": "main",
   "gate": "npm test",
@@ -184,30 +183,21 @@ fields, not a replacement for them and not a nested policy object:
 }
 ```
 
-`uses: "a4s@r123"` selects an exact staged build; historical
-`uses: "a4s@v0.7.8"` remains an exact SemVer selection. `a4s@v0` resolves only
-the frozen historical major channel. Arbitrary branches, paths, URLs,
-unqualified versions and range syntax MUST be rejected. A schema-1 reader
-predating this addition rejects `uses` as an
-unknown field; keeping schema version 1 does not make that reader compatible.
-Migration MUST update the reader and committed config together.
-
-Existing policy fields and their validation remain, except that
-`queueConcurrency` MUST be removed: queue capacity is station configuration only
-(D5). There is no consumer override or implicit queue-repair operation. The
-baseline schema and strict unknown-field rejection are at
-`packages/issue-lifecycle/src/config.ts:30` and
-`packages/issue-lifecycle/src/config.ts:109`.
+Build selection belongs to station state, not consumer policy. Promotion requires
+no consumer version bump or `uses` edit. Existing policy validation and strict
+unknown-field rejection remain: schema 2 rejects `uses`, and queue capacity is
+station configuration only. Committing schema 2 makes persisted `formats.config`
+include 2; rollback MUST refuse builds that cannot read it.
 
 Admission MUST read the config bytes from consumer HEAD, record their commit and
-digest, and reject uncommitted policy. It MUST validate the owning session before
-cache writes, receipt creation, enqueue or role-job-store mutation (I2). Dagu
-parameters MUST contain only runtime inputs such as issue, authorized scope and
+digest, and reject uncommitted policy. The selected payload MUST validate the
+owning session before receipt creation, enqueue or role-job-store mutation (I2).
+Launcher-only cache restoration and its process lease precede payload execution;
+they do not authorize admission. Dagu parameters MUST contain only runtime inputs
+such as issue, authorized scope and
 owner session; policy including base branch, gate, validation and queue capacity
 MUST NOT be caller overrides. Release selection MUST NOT change consumer HEAD.
-The committed-policy precedent is
-`packages/issue-lifecycle/src/config.ts:219`; the baseline policy-parameter
-filter being replaced is `packages/issue-lifecycle/src/admission.ts:165`.
+Consumer policy and release identity remain distinct facts in every new receipt.
 
 ## Station cache
 
@@ -261,7 +251,7 @@ Unknown state schemas and unsupported payload protocols fail closed with
 `reinstall a4s-launch`. Installing/replacing that stable binary is an operator
 action, not promotion. `a4s station init --artifact <tuple>` performs the one-time,
 inventory-seeded cutover; `state`, `promote` and `gc` expose the locked operations.
-The later tick/loader adoption wires these primitives into station execution.
+The operator-installed tick uses this selector without a release pin.
 
 `promote` lists immutable release IDs above current and above every rejected ID,
 walks them descending, and commits the highest that downloads, structurally
@@ -285,30 +275,37 @@ status and are deleted only after a definitive unknown response, never an API
 error. Run identity remains in receipts/bindings even after build pruning.
 
 Leases record build, PID, host, process start identity, generation and holder.
-Loaded **and retiring** plugin generations keep their leases until OMP exits.
-Process probes are `alive`, `dead-or-reused`, or `unknown`: only definite absence
-or a different start identity frees a lease. `ps` failure, permission failure,
-foreign-host identity or ambiguous output is unknown and aborts GC, not “dead”.
+On Linux the start identity contains `/proc` start ticks and boot ID, preventing
+PID reuse or a reboot from keeping a false live reference. Loaded **and retiring**
+plugin generations keep leases until OMP exits. Probes are `alive`,
+`dead-or-reused`, or `unknown`: only definite absence or a changed identity frees
+a lease. Unreadable probes and foreign hosts are unknown and abort GC.
 Reports name retained builds and holders. Keep-ten is a cache policy, **not a disk
 bound** while processes/runs hold builds (about 116 MB each).
 
 ## One-time resolution and engine handoff
 
-For a new root run, the caller MUST resolve committed `uses` once to the tuple
-`(version, commit, digest)`, ensure that exact cache entry, then replace itself
-with the selected executable:
+`a4s` on PATH is the separately compiled, operator-installed `a4s-launch`.
+Its acquisition, verification, lease and state dependency graph imports no payload
+identity. Release repository and supported launcher protocol are compiled into
+the launcher; an expected build identity comes only from state or a receipt/binding.
+Under `.state.lock`, argv determines selection:
 
-```sh
-exec "$DAGU_HOME/cache/a4s/<version>/a4s" admit \
-  --artifact '<version>@<commit>#<digest>' ...
-```
+- `tick` uses `$DAG_RUN_ID`'s durable binding, or creates one only after confirmed
+  first-attempt native Dagu evidence (see D9 below).
+- An existing-run command, including an action issued by tick A for run B, uses
+  B's receipt tuple and ignores A's tick binding.
+- A parent admission uses its parent's receipt tuple; a new admission uses
+  `state.current`.
+- Read-only `state` and `rollback` are launcher operations and never load current.
 
-`...` denotes the admission's runtime inputs, not extra policy. The tuple is an
-explicit trusted handoff input, not a Dagu policy parameter. The selected
-executable MUST compare version and commit with its embedded identity and digest
-with verified cache metadata. Any disagreement MUST fail before receipt/store
-mutation or enqueue. In this explicit-artifact mode it MUST NOT resolve `uses`,
-follow `v0`, consult a source checkout or hand off again.
+Unknown state schema fails closed before current is loaded. An unsupported
+payload launcher protocol fails closed with `reinstall a4s-launch`.
+The launcher restores a missing exact immutable tuple or fails closed, verifies
+its structure/digest/protocol, publishes a process lease under the same lock,
+then `execve`s the canonical cached binary. The lease remains live through
+receipt/snapshot writes, `dagu enqueue`, and all other payload work until exit.
+The payload rechecks its explicit tuple; it never resolves a default again.
 
 The selected executable MUST materialize templates only from its cache entry and
 set `A4S_BIN` to that entry's absolute executable path in the immutable DAG
@@ -319,25 +316,17 @@ snapshot bytes. The receipt MUST record the resolved tuple, the artifact's
 supported contract versions, the actual dispatch/receipt/protocol/job-store versions used,
 and consumer config commit/digest as distinct identity facts.
 
-This replaces checkout identity and installed-template materialization at
-`packages/issue-lifecycle/src/materialize.ts:41` and
-`packages/issue-lifecycle/src/materialize.ts:81`, and installed-package equality
-at `packages/issue-lifecycle/src/admission.ts:205`. Exact snapshot enqueue at
-`packages/issue-lifecycle/src/admission.ts:312` remains a required property.
-
-**Test obligation:** move `v0` from release A to B after resolution but before
-handoff. The executable, templates, receipt and all spawned engine work MUST
-remain A, with exactly one ref resolution and no second handoff. A conflicting
-cache entry MUST reject the same admission rather than switch it to B.
+Tests MUST cover selection changing after handoff without changing the executing
+tuple, target-run dispatch from a foreign tick, replay of a pruned exact tuple,
+and rejection of a conflicting cache entry without substitution.
 
 ## Successor binding (I3)
 
 Feature → PoC, PoC → feature and discovery → planning MUST pass the parent's
-receipt-bound tuple and use the parent's cached executable. The child MUST
-verify the tuple against the parent receipt and the cache; an unchecked caller
-value is not inheritance. It MUST NOT resolve a ref, select the current default,
-or substitute another artifact if the parent artifact is missing or invalid.
-This applies even if the child's committed `uses` now names another release.
+receipt-bound tuple and use the parent's cached executable. The launcher verifies
+the parent receipt and cache, restores a missing exact immutable artifact, and
+fails closed if unavailable or invalid. It MUST NOT substitute `state.current`,
+even when current changed or the child's policy was newly committed.
 
 The child MUST independently read and validate its policy from consumer HEAD,
 validate its owner and record its own config commit/digest plus parent lineage.
@@ -346,12 +335,8 @@ policy is freshly committed input, recorded separately. A parent artifact that
 cannot understand the child's committed config MUST reject the child, not
 upgrade itself to interpret it.
 
-The ambient successor calls being replaced are
-`packages/issue-lifecycle/skills/issue-execution/feature.yaml:423`,
-`packages/issue-lifecycle/skills/issue-execution/poc.yaml:561` and
-`packages/issue-lifecycle/skills/issue-execution/discovery.yaml:342`.
-Tests MUST cover each transition after the tag moves, a changed child policy and
-missing parent cache content, with nothing enqueued on failure.
+Tests cover parent inheritance independently of current, freshly committed child
+policy, and exact restoration or failure with no enqueue on unverifiable content.
 
 ## Pinned planning-reviewer selection and rediscovery policy (U4)
 
@@ -472,8 +457,8 @@ and 2 in `packages/issue-lifecycle/src/receipt-version.ts`; version 1 read suppo
 preserves historical reporting, not permission to continue legacy runs. This read
 compatibility neither waives I1 nor supplies missing artifact identity.
 
-The artifact contract uses dispatch protocol `a4s-run/1`, config schema 1, receipt
-schema 2, role-job-store contract 1, and checkpoint protocols `triage=role-job/1`,
+The artifact contract uses dispatch protocol `a4s-run/1`, config schemas 1 and 2,
+receipt schema 2, role-job-store contract 1, and checkpoint protocols `triage=role-job/1`,
 `implement=role-job/1`, `publication=pr-checkpoint/1`. A receipt lacking the full
 artifact tuple or required contract declarations MUST be rejected even if its
 numeric schema version is otherwise supported. Legacy receipts MUST NOT be
@@ -518,17 +503,24 @@ artifact. The legacy stamp parser/inference paths MUST be removed at cutover.
 
 ## Pinned station reconciliation (I4)
 
-The station's scheduled reconciler MUST be operator-pinned to an explicit exact
-release and tuple, not `v0`, `latest`, a mutable checkout or an ambient command.
-Its tick MUST read each run's receipt and dispatch every per-run action through
-that run's own cached `a4s` with its recorded tuple. Its own release MUST NOT
-replace the run's artifact. Missing artifacts or unsupported receipts MUST leave
-the affected run untouched and report the failure; other compatible runs MAY
-still be dispatched. The baseline scheduled ambient recovery call is
-`packages/issue-lifecycle/skills/issue-execution/reconcile.yaml:14`.
+The operator installs `packages/launcher/reconcile.yaml`: one scheduled step,
+`a4s tick`, with no A4S_BIN/A4S_ARTIFACT/version literal. The launcher selects
+`state.current` for a fresh tick only after native Dagu confirms its first
+attempt, and durably writes `ticks/<dagRunId>.json` =
+`{dagRunId, tuple, createdAt}` under the state lock before exec. Retry reads that
+binding, including after promotion or cache pruning; a missing retry binding or
+unreadable attempt history fails closed, never repins. A tick selected as A stays
+A through its own promote to B; the next fresh tick selects B.
+
+The payload tick promotes, reconciles, then collects cache entries. Every per-run
+action uses that run's receipt tuple, not the tick's tuple. Missing exact releases
+and unsupported receipts leave that run untouched and report a failure; other
+compatible runs can proceed. Tick bindings outlive cache retention while native
+Dagu can replay the run. Pruned tuples are restored from the immutable release
+or fail closed if unreachable.
 
 The boundary MAY execute package-independent inspect/finish actions in-process
-only when the run's exact tuple equals the reconciler's operator pin, the
+only when the run's exact tuple equals the executing tick's binding, the
 embedded identity matches, and the executing binary is the verified cached
 executable or has identical verified executable bytes. Version/commit equality
 alone MUST NOT authorize this optimization. Foreign tuples or different bytes
@@ -599,9 +591,9 @@ be treated as proof of complete history or permission to create a binding.
 
 ## Failures and recovery
 
-- **Unresolvable/ambiguous ref, unavailable platform or failed download:** reject
-  admission before enqueue. Restore release access or commit a valid `uses`, then
-  begin a new root admission; do not infer an artifact from an installed package.
+- **Unavailable exact release/platform or failed download:** fail closed before
+  payload execution. Restore release access and retry the same tuple; never infer
+  an artifact from an installed package or repin a retry.
 - **Checksum mismatch or incomplete archive:** do not extract/publish unverified
   data. Discard the admission's staging data; recover only by obtaining the exact
   immutable archive with the expected digest.
@@ -612,10 +604,10 @@ be treated as proof of complete history or permission to create a binding.
 - **Handoff identity mismatch:** fail without re-resolution or another handoff.
   Correct the release/cache selection externally; a different artifact requires
   a new root admission, not a rewritten receipt.
-- **Missing parent/run artifact:** fail closed for child admission, recovery and
-  reconciliation. The operator MAY restore the exact parent archive by its
-  recorded tuple and verified checksum, then retry the original action. Neither
-  a moved tag nor the station reconciler's release is a substitute.
+- **Missing parent/run artifact:** restore the exact immutable release tuple
+  before child admission, recovery or reconciliation. If the release cannot be
+  reached or verified, fail closed. A moved tag, current or the tick's release
+  is never a substitute for the recorded tuple.
 - **Invalid/uncommitted policy, invalid owner or unsupported contracts:** reject
   before runtime mutations. Commit compatible policy, restore the rightful owner
   or deploy a compatible artifact through the authorized cutover; do not weaken

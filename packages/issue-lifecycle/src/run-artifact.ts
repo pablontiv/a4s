@@ -1,15 +1,18 @@
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { realpathSync } from "node:fs";
+import { realpathSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { parseAllDocuments } from "yaml";
 import { receiptArtifact, assertExecutingArtifact } from "./artifact-receipt.ts";
-import { artifactToken, parseArtifact, sameArtifact } from "./release.ts";
+import { artifactToken, parseArtifact, sameArtifact } from "../../launcher/src/release.ts";
 import { compiled } from "./executable.ts";
-import { isRecord } from "./type-guard.ts";
-import { fileDigest, inspectArtifact, type CachedArtifact } from "./artifact-cache.ts";
+import { isRecord } from "../../launcher/src/type-guard.ts";
+import { fileDigest, inspectArtifact, type CachedArtifact } from "../../launcher/src/artifact-cache.ts";
 import { identity } from "./identity.ts";
 import type { Receipt } from "./admission.ts";
+import { restoreArtifact } from "../../launcher/src/select.ts";
+import { createLeaseLocked } from "../../launcher/src/lease.ts";
+import { stationRoot, stationTransaction } from "../../launcher/src/station-state.ts";
 
 const NATIVE_FLAGS: Record<string, "value" | "boolean"> = {
   "--run-id": "value", "-r": "value", "--step": "value", "--sub-run-id": "value", "-s": "value",
@@ -23,7 +26,7 @@ export function runArtifactState(): string {
   return bound.state;
 }
 export interface VerifiedRun { primary: string; home: string; state: string; path: string; receipt: Receipt; cached: CachedArtifact }
-export async function verifiedRun(primary: string, run: string, inspect = inspectArtifact): Promise<VerifiedRun> {
+export async function verifiedRun(primary: string, run: string, inspect = restoreArtifact): Promise<VerifiedRun> {
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(run)) throw new Error("Run artifact requires an unambiguous run ID");
   primary = realpathSync(primary);
   const home = realpathSync(process.env.DAGU_HOME || join(homedir(), ".dagu"));
@@ -40,7 +43,7 @@ export class RunArtifactScope {
   readonly #artifacts = new Map<string, Promise<CachedArtifact>>();
   #executableDigest: Promise<string> | undefined;
   private readonly inspect: typeof inspectArtifact;
-  constructor(inspect = inspectArtifact) { this.inspect = inspect; }
+  constructor(inspect = restoreArtifact) { this.inspect = inspect; }
   get artifactVerifications(): number { return this.#artifacts.size; }
   verify(primary: string, run: string): Promise<VerifiedRun> {
     return verifiedRun(primary, run, (home, tuple) => {
@@ -82,12 +85,17 @@ function environment(context: VerifiedRun): NodeJS.ProcessEnv {
   }
   return env;
 }
-export async function invokeRun(primary: string, run: string, args: string[], options: { capture?: boolean; context?: VerifiedRun } = {}): Promise<{ status: number; stdout: string; stderr: string }> {
-  const context = options.context ?? await verifiedRun(primary, run);
+export async function invokeRun(primary: string, run: string, args: string[], options: { capture?: boolean; env?: NodeJS.ProcessEnv } = {}): Promise<{ status: number; stdout: string; stderr: string }> {
+  const home = realpathSync(process.env.DAGU_HOME || join(homedir(), ".dagu"));
+  const { context, lease } = await stationTransaction(home, async () => {
+    const context = await verifiedRun(primary, run);
+    return { context, lease: createLeaseLocked(home, context.cached.record, 0, "launcher", `run ${run}`) };
+  });
   const token = artifactToken(context.cached.record);
+  try {
   return await new Promise((resolve, reject) => {
     const child = spawn(context.cached.executable, ["run", "--primary", context.primary, "--run", run, "--artifact", token, "--", ...args], {
-      cwd: context.primary, env: environment(context), stdio: options.capture ? ["ignore", "pipe", "pipe"] : "inherit",
+      cwd: context.primary, env: { ...environment(context), ...Object.fromEntries(Object.entries(options.env ?? {}).filter(([key]) => ["ISSUE", "BRANCH", "PR_NUMBER", "REPO", "DAGU_OUTPUT_FILE"].includes(key))) }, stdio: options.capture ? ["ignore", "pipe", "pipe"] : "inherit",
     });
     let stdout = "", stderr = "";
     child.stdout?.on("data", chunk => { stdout += chunk; });
@@ -95,6 +103,7 @@ export async function invokeRun(primary: string, run: string, args: string[], op
     child.once("error", reject);
     child.once("close", code => resolve({ status: code ?? 1, stdout, stderr }));
   });
+  } finally { rmSync(join(stationRoot(context.home), "leases", `${lease.id}.json`), { force: true }); }
 }
 /** Native transitions cannot change the receipt's DAG/run or station binding. */
 export function executeNative(args: string[]): void {
@@ -139,7 +148,7 @@ export async function main(args: string[], execute: (args: string[]) => Promise<
   const command = args.slice(separator + 1);
   if (!["reconcile", "stale-recovery", "protect", "role-jobs", "observe", "escalation", "codeql", "poc-scope", "admit", "enqueue", "native"].includes(command[0]!)) throw new Error(`Unsupported run action ${command[0]}`);
   const requested = values.get("--artifact");
-  if (!requested) { process.exitCode = (await invokeRun(primary, run, command, { context })).status; return; }
+  if (!requested) { process.exitCode = (await invokeRun(primary, run, command)).status; return; }
   if (!sameArtifact(parseArtifact(requested), context.cached.record)) throw new Error("Run handoff tuple differs from the receipt/cache");
   assertExecutingArtifact(context.cached.record);
   if (!compiled || realpathSync(process.execPath) !== context.cached.executable) throw new Error("Run actions require the receipt's cached executable");

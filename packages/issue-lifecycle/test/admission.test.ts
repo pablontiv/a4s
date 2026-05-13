@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 import { inProcessAdmissionFixture as admissionFixture } from "./fixtures/compiled-admission.ts";
 import { runA4s } from "./fixtures/compiled-cli.ts";
-import { CONFIG_PATH, POLICY_PARAMETERS } from "../src/config.ts";
+import { CONFIG_PATH, POLICY_PARAMETERS } from "../../launcher/src/config.ts";
 import { admit, appendObservation, enqueueArguments, preflightAdmission } from "../src/admission.ts";
 import { assertArtifactReceipt, assertExecutingArtifact } from "../src/artifact-receipt.ts";
 import { roleAdmission } from "./role-job-fixtures.ts";
@@ -24,9 +24,9 @@ test("read-only admission flag preserves real admission arguments and rejects by
   assert.equal(enqueueArguments(args, "/consumer").check, undefined);
   assert.equal(enqueueArguments(["--check", ...args], "/consumer").check, true);
   assert.throws(() => enqueueArguments(["--check", "--check", ...args], "/consumer"), /Duplicate admission flag --check/);
-  assert.throws(() => enqueueArguments(["--check", "--parent", "receipt.json", ...args], "/consumer"), /--check resolves committed uses/);
+  assert.throws(() => enqueueArguments(["--check", "--parent", "receipt.json", ...args], "/consumer"), /--check reads station.current/);
   const tuple = `0.6.0@${"a".repeat(40)}#${"b".repeat(64)}`;
-  assert.throws(() => enqueueArguments(["--check", "--artifact", tuple, ...args], "/consumer"), /--check resolves committed uses/);
+  assert.throws(() => enqueueArguments(["--check", "--artifact", tuple, ...args], "/consumer"), /--check reads station.current/);
 });
 test("read-only admission rejects missing owner and dirty or missing committed policy without writes", async () => {
   const fixture = admissionFixture();

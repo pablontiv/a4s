@@ -36,6 +36,7 @@ const identity = JSON.parse(execFileSync(process.execPath, ["--import", "tsx", j
 identity.commit = commit;
 identity.version = version;
 await mkdir(outdir, { recursive: true });
+execFileSync(process.execPath, [join(root, "scripts", "build-launcher.mjs"), "--outdir", outdir, ...targets.flatMap(target => ["--target", target])], { cwd: root, stdio: "inherit" });
 
 for (const target of new Set(targets)) {
   const stage = await mkdtemp(join(outdir, ".a4s-build-"));
@@ -46,12 +47,6 @@ for (const target of new Set(targets)) {
       `--define=A4S_BUILD_VERSION=${JSON.stringify(version)}`, `--define=A4S_BUILD_COMMIT=${JSON.stringify(commit)}`,
       join(source, "src", "cli.ts"), "--outfile", output], { cwd: root, stdio: "inherit" });
     await chmod(output, 0o755);
-    const launcher = join(stage, "a4s-launch");
-    execFileSync(bun, ["build", "--compile", "--compile-autoload-package-json", "--no-compile-autoload-dotenv", "--no-compile-autoload-bunfig",
-      `--target=${target}`, "--define=A4S_COMPILED=true", "--define=A4S_RELEASE_EXTENSION=false",
-      `--define=A4S_BUILD_VERSION=${JSON.stringify(version)}`, `--define=A4S_BUILD_COMMIT=${JSON.stringify(commit)}`,
-      join(source, "src", "launcher.ts"), "--outfile", launcher], { cwd: root, stdio: "inherit" });
-    await chmod(launcher, 0o755);
     const releaseManifest = { name: manifest.name, version, repository: manifest.repository, private: true, type: "module", exports: manifest.exports, omp: manifest.omp };
     await writeFile(join(stage, "package.json"), `${JSON.stringify(releaseManifest, null, 2)}\n`);
     await writeFile(join(stage, "identity.json"), `${JSON.stringify(identity, null, 2)}\n`);
@@ -79,7 +74,7 @@ for (const target of new Set(targets)) {
       for (const entry of await readdir(directory, { withFileTypes: true })) {
         const path = join(directory, entry.name);
         if (entry.isDirectory()) await modes(path);
-        else await chmod(path, path === output || path === launcher ? 0o755 : 0o644);
+        else await chmod(path, path === output ? 0o755 : 0o644);
       }
     }
     await modes(stage);

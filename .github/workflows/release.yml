@@ -18,7 +18,7 @@ concurrency:
 env:
   # This is the shipped-input contract, deliberately independent of workspace CI selection.
   A4S_SHIPPED_INPUTS: >-
-    ["packages/issue-lifecycle/**","packages/hot-reload/**","packages/loader/**","packages/launcher/**","scripts/build-a4s.mjs","package.json","package-lock.json"]
+    ["packages/issue-lifecycle/**","packages/hot-reload/**","packages/loader/**","packages/launcher/**","scripts/build-a4s.mjs","scripts/build-launcher.mjs","package.json","package-lock.json"]
   GH_TOKEN: ${{ github.token }}
 
 jobs:

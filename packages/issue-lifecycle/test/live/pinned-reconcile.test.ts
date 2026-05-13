@@ -10,7 +10,7 @@ import { stringify } from "yaml";
 import { compiledArtifact } from "../fixtures/admission.ts";
 import { roleAdmission } from "../role-job-fixtures.ts";
 import { liveDagu } from "../fixtures/live-dagu.ts";
-import { artifactToken } from "../../src/release.ts";
+import { artifactToken } from "../../../launcher/src/release.ts";
 
 async function execute(file: string, args: string[], env: NodeJS.ProcessEnv) {
   return await new Promise<{ status: number | null; stdout: string; stderr: string }>((resolve, reject) => {

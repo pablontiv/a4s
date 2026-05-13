@@ -3,17 +3,17 @@ import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync } from "
 import { isAbsolute, join } from "node:path";
 import { homedir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
-import { SHARED_FORMATS } from "./artifact-support.ts";
 import { readCommittedConfig } from "./config.ts";
 import { isRecord } from "./type-guard.ts";
 import { tupleFromJson, readJsonFile, stationRoot, type PersistedFormats } from "./station-state.ts";
 import type { ArtifactTuple } from "./release.ts";
 import { primaryFromSpec } from "./primary.ts";
-import type { SharedFormat } from "./identity.ts";
+import { SHARED_FORMATS, type SharedFormat } from "./contracts.ts";
+import { TICK_DAG, validateTickBinding, type TickBinding } from "./tick-binding.ts";
 
 export interface StationRun { name: string; dagRunId: string; statusLabel: string; primary?: string; retryable?: boolean }
 export interface BuildReference { artifact: ArtifactTuple; holder: string }
-export interface TickBinding { schema: 1; dag: string; dagRunId: string; artifact: ArtifactTuple; generation: number }
+export type { TickBinding } from "./tick-binding.ts";
 export interface InventoryDependencies {
   primaries?: (home: string) => string[];
   gitPath?: (primary: string) => string;
@@ -100,20 +100,19 @@ export async function listStationRuns(home = process.env.DAGU_HOME || join(homed
   return runs;
 }
 async function bindingKnown(binding: TickBinding): Promise<boolean> {
-  const response = await api(`dag-runs/${encodeURIComponent(binding.dag)}/${encodeURIComponent(binding.dagRunId)}`);
+  const response = await api(`dag-runs/${TICK_DAG}/${encodeURIComponent(binding.dagRunId)}`);
   if (response.ok) return true;
   const value: unknown = await response.json();
   if (response.status === 404 && isRecord(value) && (value.code === "not_found" || (isRecord(value.error) && value.error.code === "not_found"))) return false;
   throw new Error(`Cannot establish tick binding history: HTTP ${response.status}`);
 }
 export function readTickBindings(home: string): Array<{ path: string; binding: TickBinding }> {
-  const directory = join(stationRoot(home), "tick-bindings");
+  const directory = join(stationRoot(home), "ticks");
   return names(directory).map(name => {
     if (!name.endsWith(".json")) throw new Error(`Unknown tick binding file ${name}`);
     const path = join(directory, name), value = readJsonFile(path);
-    if (!isRecord(value) || value.schema !== 1 || typeof value.dag !== "string" || !value.dag || typeof value.dagRunId !== "string" || !value.dagRunId || !Number.isSafeInteger(value.generation) || Number(value.generation) < 0) throw new Error(`Invalid tick binding ${name}`);
-    tupleFromJson(value.artifact);
-    return { path, binding: value as unknown as TickBinding };
+    const binding = validateTickBinding(value, name.slice(0, -5));
+    return { path, binding };
   });
 }
 interface ReceiptEntry { value: Record<string, unknown>; primary: string; dag: string; run: string; artifact?: ArtifactTuple; created: number }
@@ -191,11 +190,10 @@ export async function inventoryStation(home: string, dependencies: InventoryDepe
     }
     const expiredBindings: string[] = [];
     for (const { path, binding } of readTickBindings(home)) {
-      const listed = runs.filter(run => run.name === binding.dag && run.dagRunId === binding.dagRunId);
-      if (listed.some(nonterminal)) references.push({ artifact: binding.artifact, holder: `tick ${binding.dag}/${binding.dagRunId}` });
+      const listed = runs.filter(run => run.name === TICK_DAG && run.dagRunId === binding.dagRunId);
+      if (listed.some(nonterminal)) references.push({ artifact: binding.tuple, holder: `tick ${TICK_DAG}/${binding.dagRunId}` });
       else if (!listed.length) {
-        if (await (dependencies.bindingKnown ?? bindingKnown)(binding)) references.push({ artifact: binding.artifact, holder: `tick ${binding.dag}/${binding.dagRunId} status unknown` });
-        else expiredBindings.push(path);
+        if (!await (dependencies.bindingKnown ?? bindingKnown)(binding)) expiredBindings.push(path);
       }
     }
     return { formats: Object.fromEntries(SHARED_FORMATS.map(name => [name, [...versions[name]]])) as Partial<PersistedFormats>, references, expiredBindings };

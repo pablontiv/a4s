@@ -1,14 +1,15 @@
 import { existsSync, lstatSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { inspectArtifact, ensureArtifact, artifactLock, type CachedArtifact } from "./artifact-cache.ts";
-import { assertIdentityContracts, assertReadCoverage, formatSupport, SHARED_FORMATS } from "./artifact-support.ts";
+import { assertIdentityContracts, assertReadCoverage, formatSupport } from "./artifact-support.ts";
 import { artifactToken, github, releaseRepository, resolveRelease, sameArtifact, type ArtifactTuple, type ResolvedRelease } from "./release.ts";
 import { activatedFormats, assertLauncher, commitStateLocked, readJsonFile, readStateLocked, stationRoot, stationTransaction, tupleFromJson, type PersistedFormats, type StateDependencies, type StationState } from "./station-state.ts";
 import { readLeasesLocked, type LeaseDependencies } from "./lease.ts";
 import { inventoryStation, type BuildReference, type InventoryDependencies, type StationInventory } from "./station-inventory.ts";
 import { withFileLockAsync } from "./file-lock.ts";
 import { isRecord } from "./type-guard.ts";
-import type { ArtifactSupport } from "./identity.ts";
+import { SHARED_FORMATS, type ArtifactSupport } from "./contracts.ts";
+import { restoreArtifact } from "./select.ts";
 
 export interface ReleaseCandidate { version: string }
 export interface StationDependencies extends StateDependencies, LeaseDependencies, InventoryDependencies {
@@ -118,7 +119,7 @@ export async function rollback(home: string, dependencies: StationDependencies =
   return stationTransaction(home, async () => {
     const state = readStateLocked(home);
     const target = state.previous;
-    const cached = await (dependencies.inspect ?? inspectArtifact)(home, target);
+    const cached = await (dependencies.inspect ?? restoreArtifact)(home, target);
     assertLauncher(cached.identity);
     const inventory = await (dependencies.inventory ? dependencies.inventory(home) : inventoryStation(home, dependencies, false));
     const formats = mergeInventory(state, inventory);

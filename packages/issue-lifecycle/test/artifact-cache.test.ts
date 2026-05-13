@@ -3,10 +3,10 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { cachePath, ensureArtifact, inspectArtifact } from "../src/artifact-cache.ts";
+import { cachePath, ensureArtifact, inspectArtifact } from "../../launcher/src/artifact-cache.ts";
 import { artifactDependencies, artifactEntries, makeInProcessArchive, writeInProcessArchive } from "./fixtures/compiled-artifact.ts";
 import { identity } from "../src/identity.ts";
-import { registrationHash } from "../src/registration.ts";
+import { registrationHash } from "../../launcher/src/contracts.ts";
 
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), "a4s-cache-unit-"));
