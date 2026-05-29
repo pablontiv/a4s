@@ -140,6 +140,14 @@ plugin links, queue configuration, reconciler and repository settings.
    queues with operator-chosen `max_concurrency`. Preserve the canonical home
    and PRIMARY binding. Any service activation/restart is performed by the
    operator under the station's drained policy, never by a4s.
+   `$DAGU_HOME/config.yaml` must explicitly contain `auth.mode: none` and
+   `coordinator.enabled: true`; environment overrides alone do not satisfy the
+   station contract. Bootstrap `detect` checks these leaves through `a4s queue`
+   and makes an unauthenticated loopback GET to its own existing run-spec
+   endpoint (`/api/v1/dag-runs/dagu-feature-bootstrap/<run>/spec`), the same route
+   used to resolve feature admission snapshots. This needs no prior feature run.
+   If the check fails, the station operator merges the required leaves while
+   preserving unrelated config, then restarts Dagu and retries bootstrap.
 4. **Author and commit consumer policy.** Bootstrap defaults `uses` to `a4s@v0`,
    preserves an existing selection on blank input, and accepts an exact release.
    Review `.workspace/dagu/config.json`, remove retired `queueConcurrency`, and

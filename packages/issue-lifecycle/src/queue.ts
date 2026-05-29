@@ -7,6 +7,24 @@ import { isRecord } from "./type-guard.ts";
 
 export interface ReadinessReport { ready: boolean; checks: string[] }
 
+function stationConfigReadiness(home: string): string {
+  const file = join(home, "config.yaml");
+  const action = `action=ask-station-operator: merge auth.mode: none and coordinator.enabled: true into ${file}, preserving unrelated settings, then restart the Dagu service`;
+  try {
+    const doc = parseDocument(readFileSync(file, "utf8"));
+    if (doc.errors.length) throw new Error(doc.errors.map(String).join("; "));
+    const config: unknown = doc.toJS();
+    if (!isRecord(config)) throw new Error("expected a YAML mapping");
+    const missing: string[] = [];
+    if (!isRecord(config.auth) || config.auth.mode !== "none") missing.push("auth.mode: none");
+    if (!isRecord(config.coordinator) || config.coordinator.enabled !== true) missing.push("coordinator.enabled: true");
+    if (missing.length) throw new Error(`missing or incorrect required leaves: ${missing.join(", ")}`);
+    return "station-config source=config.yaml auth.mode=none coordinator.enabled=true ready=yes";
+  } catch (error) {
+    return `station-config source=config.yaml ready=no cause=${JSON.stringify(String(error))} ${action}`;
+  }
+}
+
 /** Inspect station-owned capacity without deriving or changing its value. */
 export function queueReadiness(home: string, lane: string): string {
   try {
@@ -71,12 +89,12 @@ export function serviceEnvironmentReadiness(home: string): string {
 
 /** GET-only diagnostics: never run Dagu CLI initialization, install files or restart a service. */
 export async function stationReadiness(home: string, lane: string): Promise<ReadinessReport> {
-  const checks = [queueReadiness(home, lane), serviceEnvironmentReadiness(home)];
+  const checks = [stationConfigReadiness(home), queueReadiness(home, lane), serviceEnvironmentReadiness(home)];
   const endpoint = (process.env.DAGU_URL || `http://127.0.0.1:${process.env.DAGU_PORT || "8080"}`).replace(/\/+$/, "");
   for (const resource of ["queues", "services/scheduler"]) {
     try {
       const response = await fetch(`${endpoint}/api/v1/${resource}`, { signal: AbortSignal.timeout(5000), redirect: "error" });
-      if (!response.ok) throw new Error(`HTTP ${response.status}${[401, 403].includes(response.status) ? "; endpoint/auth problem: a4s requires an unauthenticated loopback Dagu API" : ""}`);
+      if (!response.ok) throw new Error(`HTTP ${response.status}${[401, 403].includes(response.status) ? "; endpoint/auth problem: a4s requires an unauthenticated loopback Dagu API; ask the station operator to check auth.mode: none and coordinator.enabled: true in config.yaml and restart the Dagu service" : ""}`);
       const value: unknown = await response.json();
       if (resource === "queues") {
         if (!isRecord(value) || !Array.isArray(value.queues)) throw new Error("unexpected queues response");

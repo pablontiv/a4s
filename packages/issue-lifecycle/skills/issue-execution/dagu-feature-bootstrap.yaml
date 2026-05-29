@@ -16,7 +16,7 @@ steps:
   - id: detect
     run: |
       set -euo pipefail
-      for tool in git gh jq dagu "$A4S_BIN"; do
+      for tool in git gh jq curl dagu "$A4S_BIN"; do
         command -v "$tool" >/dev/null || { printf 'bootstrap detect: required command not found: %s\n' "$tool" >&2; exit 1; }
       done
       "$A4S_BIN" role-jobs detect
@@ -27,6 +27,13 @@ steps:
       repo=$(gh repo view --json name --jq .name)
       nwo=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
       "$A4S_BIN" queue --lane "$repo"
+      # Probe the same authenticated route as feature admit, using this bootstrap's
+      # existing snapshot so a station with no feature history can be checked.
+      spec_url="http://127.0.0.1:${DAGU_PORT:-8080}/api/v1/dag-runs/dagu-feature-bootstrap/$(jq -nr --arg run "$DAG_RUN_ID" '$run|@uri')/spec"
+      if ! curl -fsS --connect-timeout 5 --max-time 5 "$spec_url" | jq -e '.spec | type == "string"' >/dev/null; then
+        printf 'bootstrap detect: unauthenticated loopback Dagu run-spec API is not reachable at %s; ask the station operator to merge auth.mode: none and coordinator.enabled: true into %s/config.yaml, preserving unrelated settings, then restart the Dagu service and retry bootstrap.\n' "$spec_url" "${DAGU_HOME:-$HOME/.dagu}" >&2
+        exit 1
+      fi
       base=${BASE_BRANCH:-$(gh repo view --json defaultBranchRef --jq .defaultBranchRef.name)}
       git check-ref-format "refs/heads/$base"
       gh api "repos/$nwo/branches/$base" >/dev/null
