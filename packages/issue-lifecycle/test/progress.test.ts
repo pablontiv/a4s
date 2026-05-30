@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { BUNDLE_VERSION } from "../src/bundle.ts";
-import { currentStep, renderOffline, renderRun, renderWidget, runLabel, Transitions } from "../src/status/progress.ts";
+import { currentStep, renderOffline, renderRun, renderWidget, runBundleState, runLabel, Transitions } from "../src/status/progress.ts";
 import { resolveRunPrimary } from "../src/run-primary.ts";
 import type { RunDetails } from "../src/status/progress.ts";
 
@@ -236,42 +236,69 @@ test("bundle compatibility remains visible in targeted notices", () => {
   assert.ok(new Transitions("session-a").observe(candidate).wakeMessage?.includes("compat=incompatible"));
 });
 
-test("notices refresh main on each opening and warn once per stale notice batch", () => {
+test("notices distinguish release pending from restart pending and refresh the installed plugin link", () => {
   const primary = mkdtempSync(join(tmpdir(), "omp-dagu-main-"));
   const manifest = join(primary, "packages/issue-lifecycle/package.json");
+  const plugin = join(homedir(), ".omp/plugins/node_modules/@a4s/issue-lifecycle");
+  // The test preload gives each test-file process its own HOME.
+  assert.equal(homedir(), process.env.DAGU_HOME);
   mkdirSync(join(primary, "packages/issue-lifecycle"), { recursive: true });
-  const transitions = new Transitions("session-a");
+  mkdirSync(join(plugin, ".."), { recursive: true });
+  const transitions = new Transitions("session-a", "0.7.4");
   const candidate = {
     ...waitingAt("feature", "implement"),
     params: "ISSUE=176 OMP_SESSION_ID=session-a",
     resolvedPrimary: primary,
-    labels: [`dagu-feature-bundle=${BUNDLE_VERSION}`],
+    labels: ["dagu-feature-bundle=0.7.4"],
+  };
+  const install = (version: string): void => {
+    const release = join(primary, version);
+    mkdirSync(release, { recursive: true });
+    writeFileSync(join(release, "package.json"), JSON.stringify({ name: "@a4s/issue-lifecycle", version }));
+    rmSync(plugin, { force: true });
+    symlinkSync(release, plugin, "dir");
   };
   try {
-    writeFileSync(manifest, JSON.stringify({ version: BUNDLE_VERSION }));
-    const equal = transitions.observe(candidate);
-    assert.ok(equal.wakeMessage?.includes(`bundle=${BUNDLE_VERSION} extension=${BUNDLE_VERSION} main=${BUNDLE_VERSION} compat=ok`));
-    assert.deepEqual(Object.keys(equal), ["wakeMessage"]);
-    writeFileSync(manifest, JSON.stringify({ version: "0.3.8" }));
-    candidate.nodes![0]!.approvalIteration = 1;
-    const staleMain = transitions.observe(candidate);
-    assert.ok(staleMain.wakeMessage?.includes(`extension=${BUNDLE_VERSION} main=0.3.8 compat=stale`));
-    assert.ok(staleMain.warningMessage);
+    writeFileSync(manifest, JSON.stringify({ version: "0.7.7" }));
+    install("0.7.4");
+    const releasePending = transitions.observe(candidate);
+    assert.match(releasePending.wakeMessage!, /extension=0\.7\.4 main=0\.7\.7 compat=ok installed=0\.7\.4/);
+    assert.equal(releasePending.warningMessage, undefined);
+    assert.equal(runBundleState(candidate, "0.7.4").restartPending, false);
     assert.deepEqual(transitions.observe(candidate), {});
-    writeFileSync(manifest, JSON.stringify({ version: BUNDLE_VERSION }));
-    const compatibleVersion = BUNDLE_VERSION.replace(/\d+$/, patch => String(Number(patch) + 1));
-    candidate.labels = [`dagu-feature-bundle=${compatibleVersion}`];
-    candidate.nodes![0]!.approvalIteration = 2;
-    const compatibleBundle = transitions.observe(candidate);
-    assert.ok(compatibleBundle.wakeMessage?.includes(`bundle=${compatibleVersion} extension=${BUNDLE_VERSION} main=${BUNDLE_VERSION} compat=ok`));
-    assert.equal(compatibleBundle.warningMessage, undefined);
-    writeFileSync(manifest, JSON.stringify({ version: "0.3.8" }));
-    candidate.nodes = [...waitingAt("feature", "triage").nodes!, ...waitingAt("feature", "implement", 3).nodes!];
+
+    install("0.7.7");
+    candidate.nodes![0]!.approvalIteration = 1;
+    const restartPending = transitions.observe(candidate);
+    assert.match(restartPending.wakeMessage!, /extension=0\.7\.4 main=0\.7\.7 compat=stale installed=0\.7\.7/);
+    assert.match(restartPending.warningMessage!, /^Restart OMP/);
+    assert.equal(runBundleState(candidate, "0.7.4").restartPending, true);
+    assert.deepEqual(transitions.observe(candidate), {});
+
+    // One warning per new notice batch, regardless of the primary's version.
+    writeFileSync(manifest, JSON.stringify({ version: "0.7.4" }));
+    candidate.nodes = [...waitingAt("feature", "triage").nodes!, ...waitingAt("feature", "implement", 2).nodes!];
     const batch = transitions.observe(candidate);
     assert.equal(batch.wakeMessages?.length, 2);
-    assert.ok(batch.warningMessage);
+    assert.match(batch.warningMessage!, /^Restart OMP/);
     assert.deepEqual(transitions.observe(candidate), {});
+
+    rmSync(manifest);
+    candidate.nodes = waitingAt("feature", "implement", 3).nodes!;
+    const consumer = transitions.observe(candidate);
+    assert.match(consumer.wakeMessage!, /main=n\/a compat=stale installed=0\.7\.7/);
+    assert.match(consumer.warningMessage!, /^Restart OMP/);
+
+    install("0.7.3");
+    candidate.nodes = waitingAt("feature", "implement", 4).nodes!;
+    assert.equal(transitions.observe(candidate).warningMessage, undefined, "an older installed release cannot fix the loaded version");
+    writeFileSync(join(plugin, "package.json"), "{");
+    candidate.nodes![0]!.approvalIteration = 5;
+    const unknown = transitions.observe(candidate);
+    assert.match(unknown.wakeMessage!, /installed=unknown/);
+    assert.equal(unknown.warningMessage, undefined, "an unreadable installed version is not evidence a restart helps");
   } finally {
+    rmSync(plugin, { force: true });
     rmSync(primary, { recursive: true, force: true });
   }
 });
@@ -281,7 +308,7 @@ for (const scenario of [
   "all equal", "primary patch", "primary minor", "primary unstamped", "main mismatch",
   "invalid JSON", "unreadable manifest", "invalid version", "missing version",
 ] as const) {
-  test(`notices classify ${scenario} and warn for stale main`, () => {
+  test(`notices classify ${scenario} without treating main drift as restart pending`, () => {
     const primary = mkdtempSync(join(tmpdir(), "omp-dagu-compat-"));
     const manifest = join(primary, "packages/issue-lifecycle/package.json");
     const consumer = scenario.startsWith("consumer");
@@ -293,7 +320,7 @@ for (const scenario of [
       : scenario.endsWith("unstamped") ? undefined : BUNDLE_VERSION;
     const mainVersion = consumer ? "n/a" : scenario === "main mismatch" ? "0.3.8"
       : stale ? "unknown" : BUNDLE_VERSION;
-    const compat = stale ? "stale" : version === undefined ? "unstamped"
+    const compat = version === undefined ? "unstamped"
       : scenario.endsWith("minor") || scenario.endsWith("major") ? "incompatible" : "ok";
     try {
       if (!consumer) {
@@ -311,8 +338,7 @@ for (const scenario of [
       const transitions = new Transitions("session-a");
       const effects = transitions.observe(candidate);
       assert.ok(effects.wakeMessage?.includes(`bundle=${version ?? "unstamped"} extension=${BUNDLE_VERSION} main=${mainVersion} compat=${compat}`), effects.wakeMessage ?? "Expected a waiting notice");
-      if (stale) assert.ok(effects.warningMessage);
-      else assert.equal(effects.warningMessage, undefined);
+      assert.equal(effects.warningMessage, undefined);
       assert.deepEqual(transitions.observe(candidate), {});
     } finally {
       rmSync(primary, { recursive: true, force: true });

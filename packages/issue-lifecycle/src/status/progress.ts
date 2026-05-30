@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import {
   BUNDLE_VERSION,
@@ -7,6 +8,7 @@ import {
   parseVersion,
 } from "../bundle.ts";
 import type { Compatibility } from "../bundle.ts";
+import { readPackageManifest } from "../executable.ts";
 import type { StallNotice } from "../long-computation.ts";
 import { runParam } from "../run-primary.ts";
 
@@ -73,17 +75,45 @@ export function currentNode(run: RunDetails): RunNode | undefined {
 export function currentStep(run: RunDetails): string | undefined {
   return currentNode(run)?.step.name;
 }
-export function runBundleState(run: RunDetails): {
+// Re-read the managed plugin link, not the loaded module's (possibly old) release root.
+function installedBundleVersion(): string {
+  try {
+    let manifest: { version?: unknown };
+    try {
+      manifest = JSON.parse(readFileSync(join(homedir(), ".omp/plugins/node_modules/@a4s/issue-lifecycle/package.json"), "utf8"));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      // One-off package loading has no persistent plugin registration.
+      manifest = readPackageManifest();
+    }
+    return typeof manifest?.version === "string" && parseVersion(manifest.version) ? manifest.version : "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
+function newerVersion(installed: string, loaded: string): boolean {
+  const next = parseVersion(installed);
+  const current = parseVersion(loaded);
+  if (!next || !current) return false;
+  for (let part = 0; part < next.length; part++) {
+    if (next[part] !== current[part]) return next[part]! > current[part]!;
+  }
+  return false;
+}
+
+export function runBundleState(run: RunDetails, extensionVersion = BUNDLE_VERSION): {
   version: string | undefined;
   displayVersion: string;
   extensionVersion: string;
+  installedVersion: string;
+  restartPending: boolean;
   mainVersion: string;
   compat: Compatibility;
 } {
   const version = bundleVersionFromLabels(run.labels);
   const primary = run.resolvedPrimary ?? runParam(run, "PRIMARY");
   let mainVersion = "unknown";
-  let mainApplicable = true;
   if (primary) {
     try {
       const manifest: unknown = JSON.parse(readFileSync(join(primary, "packages/issue-lifecycle/package.json"), "utf8"));
@@ -92,20 +122,23 @@ export function runBundleState(run: RunDetails): {
         mainVersion = manifest.version;
       }
     } catch (error) {
-      // An absent manifest marks a consumer repository; any other failure cannot establish exact version equality.
+      // An absent manifest marks a consumer repository; other failures leave the source version unknown.
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        mainApplicable = false;
         mainVersion = "n/a";
       }
     }
   }
-  const compatibility = classifyCompatibility(version, BUNDLE_VERSION);
+  const compatibility = classifyCompatibility(version, extensionVersion);
+  const installedVersion = installedBundleVersion();
+  const restartPending = newerVersion(installedVersion, extensionVersion);
   return {
     version,
     displayVersion: version ?? "unstamped",
-    extensionVersion: BUNDLE_VERSION,
+    extensionVersion,
+    installedVersion,
+    restartPending,
     mainVersion,
-    compat: primary && mainApplicable && mainVersion !== BUNDLE_VERSION ? "stale" : compatibility,
+    compat: restartPending ? "stale" : compatibility,
   };
 }
 
@@ -209,7 +242,11 @@ export class Transitions {
   private notices = new Set<string>();
 
   private readonly sessionId: string | undefined;
-  constructor(sessionId?: string) { this.sessionId = sessionId; }
+  private readonly extensionVersion: string;
+  constructor(sessionId?: string, extensionVersion = BUNDLE_VERSION) {
+    this.sessionId = sessionId;
+    this.extensionVersion = extensionVersion;
+  }
 
   observe(run: RunDetails, options: {
     baseline?: boolean; slug?: string; checkpoints?: boolean; ciDiagnostic?: CiDiagnostic; escalationDiagnostic?: string;
@@ -225,9 +262,9 @@ export class Transitions {
     const issue = issueNumber(run);
     const owned = this.sessionId !== undefined && runParam(run, "OMP_SESSION_ID") === this.sessionId;
     const supported = ["feature", "poc", "discovery", "planning"].includes(run.name);
-    const bundle = runBundleState(run);
+    const bundle = runBundleState(run, this.extensionVersion);
     const identity = issue ? ` issue=${issue}` : ` dag=${plain(run.name)}`;
-    const bundleNotice = ` bundle=${plain(bundle.displayVersion)} extension=${bundle.extensionVersion} main=${plain(bundle.mainVersion)} compat=${bundle.compat}`;
+    const bundleNotice = ` bundle=${plain(bundle.displayVersion)} extension=${bundle.extensionVersion} main=${plain(bundle.mainVersion)} compat=${bundle.compat} installed=${plain(bundle.installedVersion)}`;
     const messages: string[] = [];
     const notice = (id: string, text: string, durable = false): void => {
       if (this.notices.has(id)) return;
@@ -305,7 +342,7 @@ export class Transitions {
     }
     if (messages.length === 1) effects.wakeMessage = messages[0]!;
     else if (messages.length) effects.wakeMessages = messages;
-    if (messages.length && bundle.compat === "stale") {
+    if (messages.length && bundle.restartPending) {
       effects.warningMessage = "Restart OMP to load the installed @a4s/issue-lifecycle modules. In-flight runs keep their admitted snapshots; new runs materialize from the installed templates and the committed config file.";
     }
     return effects;
