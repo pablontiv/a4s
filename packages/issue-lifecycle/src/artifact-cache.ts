@@ -5,8 +5,9 @@ import { dirname, join, resolve, sep } from "node:path";
 import { createGunzip } from "node:zlib";
 import { isDeepStrictEqual } from "node:util";
 import { withFileLockAsync } from "./file-lock.ts";
-import { artifactToken, archiveName, checksumDigest, github, parseArtifact, sameArtifact, type ArtifactTuple, type ResolvedRelease } from "./release.ts";
-import { identity, type ArtifactIdentity } from "./identity.ts";
+import { artifactToken, archiveName, releaseTag, checksumDigest, github, parseArtifact, sameArtifact, type ArtifactTuple, type ResolvedRelease } from "./release.ts";
+import { type ArtifactIdentity } from "./identity.ts";
+import { assertIdentityContracts } from "./artifact-support.ts";
 import { isRecord } from "./type-guard.ts";
 
 const EVIDENCE = "verified-archive.tar.gz";
@@ -139,9 +140,7 @@ function layout(directory: string, files: Set<string>, tuple: ArtifactTuple, dep
   if (!isRecord(manifest.omp) || !Array.isArray(manifest.omp.extensions) ||
       !isDeepStrictEqual(manifest.omp.extensions, ["./src/status/reloadable.ts", "./src/triage/reloadable.ts"]) ||
       manifest.omp.extensions.some(path => typeof path !== "string" || !files.has(path.slice(2)))) throw new Error("Artifact OMP extension metadata does not name the shipped extension entries");
-  const support = declared.support;
-  if (support.dispatch !== identity.support.dispatch) throw new Error(`Unsupported artifact dispatch boundary: required ${identity.support.dispatch}; declared=${JSON.stringify(support.dispatch) ?? "missing"}`);
-  if (!Array.isArray(support.configSchemas) || !support.configSchemas.includes(1) || !isRecord(support.receiptSchemas) || !Array.isArray(support.receiptSchemas.read) || !support.receiptSchemas.read.includes(2) || support.receiptSchemas.write !== 2 || !Array.isArray(support.roleJobStores) || !support.roleJobStores.includes(1) || !isDeepStrictEqual(support.protocols, identity.support.protocols)) throw new Error("Artifact declares unsupported config/receipt/protocol/job-store contracts");
+  assertIdentityContracts(declared, !tuple.version.startsWith("r"));
   return declared as unknown as ArtifactIdentity;
 }
 function entryFiles(directory: string, prefix = ""): string[] {
@@ -178,10 +177,10 @@ export async function ensureArtifact(home: string, release: ResolvedRelease, dep
     try {
       const archive = archiveName(release.version);
       if (release.archive !== archive) throw new Error("Resolved archive does not match the native platform");
-      const checksum = (dependencies.github ?? github)(["release", "download", `v${release.version}`, "--repo", release.repository, "--pattern", `${archive}.sha256`, "--output", "-"]);
+      const checksum = (dependencies.github ?? github)(["release", "download", releaseTag(release.version), "--repo", release.repository, "--pattern", `${archive}.sha256`, "--output", "-"]);
       if (checksumDigest(checksum, archive) !== release.digest) throw new Error("Exact release checksum changed after resolution");
       const downloaded = join(stage, archive);
-      const downloadArgs = ["release", "download", `v${release.version}`, "--repo", release.repository, "--pattern", archive, "--output", downloaded];
+      const downloadArgs = ["release", "download", releaseTag(release.version), "--repo", release.repository, "--pattern", archive, "--output", downloaded];
       if (dependencies.download) dependencies.download(downloadArgs);
       else execFileSync("gh", downloadArgs, { stdio: ["ignore", "pipe", "pipe"] });
       regular(downloaded);

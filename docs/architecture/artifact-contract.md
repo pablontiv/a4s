@@ -13,18 +13,33 @@ rewritten into this contract.
 
 ## Release and identity
 
-Only the repository's tag workflow, running on `v<semver>`, MAY produce a release.
-It MUST build one `a4s` executable with `bun build --compile` for each advertised
-OS/architecture pair and publish an immutable archive named
-`a4s-v<semver>-<os>-<arch>.tar.gz`. A version is the complete SemVer without the
-leading `v`; a commit is the full source commit ID. Examples such as `v0.6.1`
-illustrate names, not release availability.
+Publication is **staged**, not station activation. Only the release workflow,
+after CI's `validate` succeeds for the same pushed `main` SHA, MAY publish.
+It checks out that SHA with full history (`fetch-depth: 0`) and computes
+`r<N>`, where `N = git rev-list --count --first-parent <sha>` and the ID grammar
+is `^r(0|[1-9]\d*)$`. Main MUST never be rewritten. OT1's authenticated protection
+inventory records force pushes/deletions disabled, admins enforced and linear
+history required; changes to that precondition require operator review.
 
-The workflow MAY advance the moving major tag `v0` to a published `v0.x.y`
-release. That alias selects an immutable release; it MUST NOT identify mutable
-archive contents or become the version recorded in a receipt. An existing exact
-tag, release archive or checksum MUST NOT be rewritten, including by a workflow
-rerun. An ambiguous alias-to-release mapping MUST be rejected.
+The workflow publishes only changed shipped inputs: `packages/issue-lifecycle/**`,
+`packages/hot-reload/**`, `packages/loader/**`, `packages/launcher/**`,
+`scripts/build-a4s.mjs`, root `package.json` and `package-lock.json`, compared with
+the last published source SHA. It builds the Bun-compiled executable and plugin
+bundles for `bun-linux-x64` and `bun-darwin-arm64`, and creates tag `a4s-r<N>`
+and archives `a4s-r<N>-<os>-<arch>.tar.gz`. No human tag push, package SemVer bump
+or lockfile version bump is required. The head MUST be a first-parent descendant
+of the last published SHA; an existing ID tag at another SHA MUST fail closed.
+Same-SHA reruns retain the ID and MUST match every published archive digest.
+Existing tags, assets and checksums MUST NOT be overwritten. Published releases
+are immutable and a4s never deletes them.
+
+The exact tuple is `<id>@<sha40>#<digest64>`. Historical stable SemVer IDs such
+as `0.7.8`, `v0.7.8` release tags and their original archive names remain
+parseable, verifiable and exactly restorable; their declarations and receipts
+are not rewritten. The old tag-triggered publisher is removed and `v0` is frozen
+at its last SemVer release, not advanced by staged builds. Source delivery never
+writes station/service configuration; only cache-directory runtime state is
+engine-owned.
 
 Every platform archive MUST extract directly to this root, without a checkout or
 an additional version directory:
@@ -68,12 +83,27 @@ Python helpers. Legacy CLI aliases, station installation/executor code, service
 configuration templates and automatic checkout bootstrap/re-seal MUST NOT be
 release execution paths. Packaged skills MUST describe the new boundary.
 
-`a4s` MUST embed its version, commit and explicit supported dispatch,
-receipt-schema, checkpoint-protocol and role-job-store versions. `identity.json` MUST declare the
-same identity and support information for inspection without executing the
-binary. Support MUST be explicit versions/protocol IDs, not a SemVer-distance
-heuristic. Both identity declarations MUST NOT contain the archive digest: that
-would make the archive depend on its own checksum.
+`a4s version` and `identity.json` MUST contain equal embedded/declared identities,
+including ID, commit, `support`, exact `dispatch`/checkpoint `protocols`, canonical
+`registrationManifest`, its SHA-256 `registrationManifestHash`, and
+`requiredLauncherProtocol`. The registration manifest is computed from shared
+source metadata before compilation: command/tool names, descriptions, schemas,
+load modes, completion surfaces, extension entries and loader/helper API version.
+Equal registration hashes permit the later loader transaction; a different hash
+requires keeping the old generation and reporting “restart OMP”, never partial
+activation. Bundles embed the build ID/commit, so each published build reloads.
+
+`support` is uniform: each of `receipt`, `roleJobStore` (SQL schema),
+`roleJobPayload` (JSON), `config`, `runState` (`.git/dagu-feature`) and `prCheckpoint`
+has `{ "read": [versions], "write": version }`. Exact protocol authorization is
+separate from format support, never inferred from build distance. Historical
+SemVer declarations retain their original decoder. Neither identity contains
+the archive digest, which would make the archive depend on its own checksum.
+
+The launcher/state adoption contract is separate from this staged publication:
+state carries `schema`; a launcher embeds its protocol and readable state schemas.
+It MUST refuse unknown state schemas or a payload requiring a newer launcher
+protocol with “reinstall a4s-launch”; promotion MUST skip such candidates.
 
 After the final archive bytes exist, the workflow MUST publish their SHA-256 as a
 release asset named `<archive>.sha256`, identifying that archive and its full
@@ -85,15 +115,15 @@ archive, not to the tag text, executable alone or extracted directory.
 All paths in this inventory are relative to `packages/issue-lifecycle/`. Source
 tooling is not an instruction to ship development wrappers in the release.
 
-- `bin/`: `dagu-bundle-rebase.mjs`, `dagu-codeql.ts`, `dagu-feature-bundle.ts`,
+- `bin/`: `dagu-codeql.ts`, `dagu-feature-bundle.ts`,
   `dagu-feature-prioritize.ts`, `dagu-feature-protect.ts`, `dagu-gate.cjs`,
   `dagu-poc-scope.ts`, `dagu-pr-body.mjs`, `dagu-role-jobs.ts`,
   `dagu-stale-recovery.ts`, `gate-cache.cjs`, `gate-cache-run.cjs`, `heavy-slot.py`.
 - `src/` top-level: `admission.ts`, `agent-directory.ts`, `artifact-cache.ts`,
-  `artifact-receipt.ts`, `bundle.ts`, `cli.ts`, `code-scanning.ts`, `config.ts`,
+  `artifact-receipt.ts`, `artifact-support.ts`, `bundle.ts`, `cli.ts`, `code-scanning.ts`, `config.ts`,
   `executable.ts`, `file-lock.ts`, `identity.ts`, `integration-protection.ts`, `long-computation.ts`,
   `materialize.ts`, `planning-validator.ts`, `poc-scope.ts`, `primary.ts`,
-  `queue.ts`, `receipt-version.ts`, `release.ts`, `resources.ts`, `role-dispatch.ts`, `role-jobs.ts`, `role-runtime.ts`,
+  `queue.ts`, `receipt-version.ts`, `registration.ts`, `release.ts`, `resources.ts`, `role-dispatch.ts`, `role-jobs.ts`, `role-runtime.ts`,
   `reconcile-run.ts`, `run-artifact.ts`, `run-primary.ts`, `stale-recovery.ts`, `transcript-identity.ts`, `type-guard.ts`.
 - `src/status/`: `activity.ts`, `event-log.ts`, `index.ts`, `issue-title.ts`,
   `progress.ts`, `receipt.ts`, `reloadable.ts`, `repository.ts`, `sse.ts`.
@@ -113,6 +143,13 @@ tooling is not an instruction to ship development wrappers in the release.
 The gate preload and its two CommonJS dependencies remain real Node files.
 Python heavy-slot is retained only for opt-in npm live/compiled testing, not the
 guarded default lane; release templates invoke `"$A4S_BIN" heavy-slot`.
+
+At the repository root, `scripts/release-identity.mjs` computes full-history IDs
+and publication invariants; `scripts/publish-a4s.mjs` verifies CI/event/SHA,
+shipped-input changes, ancestry, tag ownership and rerun digests.
+`scripts/build-a4s.mjs` embeds the same source identity and registration manifest.
+`.github/workflows/release.yml` is the sole staged publisher. The former skill
+SemVer-bump guard and bundle-version rebase resolver are retired.
 
 ## Committed consumer configuration
 
@@ -147,9 +184,11 @@ fields, not a replacement for them and not a nested policy object:
 }
 ```
 
-`uses: "a4s@v0"` selects the moving major; `uses: "a4s@v0.6.1"` selects an exact
-release. Arbitrary branches, paths, URLs, unqualified versions and range syntax
-MUST be rejected. A schema-1 reader predating this addition rejects `uses` as an
+`uses: "a4s@r123"` selects an exact staged build; historical
+`uses: "a4s@v0.7.8"` remains an exact SemVer selection. `a4s@v0` resolves only
+the frozen historical major channel. Arbitrary branches, paths, URLs,
+unqualified versions and range syntax MUST be rejected. A schema-1 reader
+predating this addition rejects `uses` as an
 unknown field; keeping schema version 1 does not make that reader compatible.
 Migration MUST update the reader and committed config together.
 
@@ -361,13 +400,23 @@ its end-to-end acceptance**, using the mechanism and policy recorded here.
 
 ## Compatibility and a shared station (I6)
 
-Artifact SemVer, dispatch protocol, config schema, receipt schema, checkpoint
-protocols and job-store contract are separate version axes. Every artifact MUST
-explicitly declare its dispatch boundary, which receipt schemas it reads and
-writes, which protocol IDs it serves at each checkpoint, and which role-job-store
-versions it supports. Receipts MUST preserve
-that declaration as well as the selected versions; unknown or missing declarations
-are not compatibility.
+Build identity, dispatch protocol and shared data formats are separate axes.
+Uniform read/write declarations replace fixed format-version assertions; exact
+protocol IDs stay mandatory. Receipts preserve the declaration and actually
+used contracts; unknown or missing declarations are not compatibility.
+
+At activation cutover, inventory persisted receipts, role-jobs.sqlite, run state
+and committed configs to seed `state.formats`. For each format it contains every
+version written by any activated build, and never shrinks. A candidate or rollback
+target MUST read that entire set plus its own writer. Every live reader MUST read
+the candidate writer: leases, nonterminal tick bindings/runs, pending runs/open
+jobs, loaded and retiring plugin generations, and the post-promotion previous
+(old current) all count. A displaced previous counts only when otherwise live.
+Dropping persisted read support requires a migration (out of scope).
+A format change therefore requires a bridge build reading old+new while writing
+old, then a build writing new. Completed jobs/history are not silently migrated.
+Promotion, leases and activation-state machinery belong to the later adoption
+units; U1 only stages payloads and declares their contracts.
 
 Current admissions write receipt `schemaVersion: 2` in
 `packages/issue-lifecycle/src/admission.ts`. Observation readers accept versions 1
@@ -388,9 +437,10 @@ job-store version or artifact/receipt identity mismatch. Read-only observation
 MAY report an unsupported record, but MUST NOT interpret it as permission for a
 state-changing action. Unsupported data MUST NOT trigger an implicit migration.
 
-Dispatch support is declared as `support.dispatch` in `a4s version` and
-`identity.json`, preserved in `artifactSupport.dispatch`, and selected in
-`contracts.dispatch` in each receipt. The minimum dispatchable artifact is
+Dispatch support is declared as top-level `dispatch` in new `a4s version` and
+`identity.json`, and selected in `contracts.dispatch` in each receipt. The
+historical decoder accepts `support.dispatch`/`artifactSupport.dispatch` unchanged.
+The minimum historical dispatchable artifact is
 v0.7.0, shipping #713's receipt-bound `run` boundary. Earlier artifacts, including
 v0.6.0, do not declare `a4s-run/1` and are unsupported even when their other
 contracts match. Reject them before invocation with the missing boundary named;

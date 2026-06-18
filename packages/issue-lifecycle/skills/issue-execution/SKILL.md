@@ -240,9 +240,10 @@ count. Protected roots stay; reaching the count leaves them in place.
 
 The [artifact contract](../../../../docs/architecture/artifact-contract.md) is
 normative. Committed `.workspace/dagu/config.json` schema 1 requires `uses`:
-`a4s@v0` follows a published moving major; `a4s@v0.6.1` pins an exact example
-release. Paths, URLs, branches and ranges are rejected. Queue capacity belongs
-only to station config, not consumer policy or run parameters.
+`a4s@r<N>` pins an exact staged build; `a4s@v0.7.8` pins a historical SemVer
+release. `a4s@v0` is the frozen historical major channel. Paths, URLs, branches
+and ranges are rejected. Queue capacity belongs only to station config, not
+consumer policy or run parameters.
 
 Root admission reads config bytes from consumer HEAD and validates exactly one
 persistent owner session before cache writes, receipts, enqueue or role-store
@@ -267,14 +268,20 @@ inherit the parent's receipt-bound tuple even when the child's committed `uses`
 selects another release. Each child independently validates committed policy;
 missing or invalid parent artifacts fail closed, never selecting a replacement.
 
-Supported receipt schemas, checkpoint protocols and role-job-store versions are
-explicit identity declarations, not SemVer-distance guesses. Receipts record the
-resolved artifact tuple, supported and actually used contracts, consumer config
-commit/digest, exact template/snapshot identity, owner and observed Dagu runtime
-as distinct facts. Unknown dynamic facts remain pending. Linked observations do
-not rewrite initial identity. Cache entries stay retained while nonterminal or
-recoverable runs, open role jobs or the pinned station reconciler reference them;
-incomplete reference discovery prevents pruning.
+Identity carries uniform `support`: `{ "<format>": { "read": [versions],
+"write": version } }` for receipt, role-job SQL/payload, config, run state and PR
+checkpoint formats. Dispatch/checkpoint protocol IDs remain exact. Embedded
+`a4s version` and `identity.json` must also agree on the canonical registration
+manifest/hash and required launcher protocol. Historical SemVer declarations
+remain decodable without rewriting evidence. Compatibility is explicit read
+coverage, never build-number or SemVer distance.
+
+Receipts record the resolved tuple, supported and actually used contracts,
+consumer config commit/digest, exact template/snapshot identity, owner and
+observed Dagu runtime as distinct facts. Unknown dynamic facts remain pending.
+Linked observations do not rewrite initial identity. Cache entries stay retained
+while nonterminal/recoverable runs, open role jobs or the pinned station
+reconciler reference them; incomplete reference discovery prevents pruning.
 
 Version-distance status labels are display only, not admission authority.
 Report incompatibility with the actual receipt/cache identity and ask the
@@ -306,9 +313,13 @@ committed `uses` resolution in check mode.
 Durable receipts remain under
 `$(git rev-parse --path-format=absolute --git-path dagu-feature/runs/<run>)`.
 Use `a4s observe <run> '<JSON>'` for linked runtime observations.
-Release publication never automatically queues bootstrap or changes station
-configuration. A moving-major release with unchanged config needs no consumer
-commit; config changes are explicitly adopted and committed.
+Publication is staged: after CI `validate` succeeds for the same pushed `main`
+SHA, full-history first-parent count gives `r<N>` and the workflow creates the
+immutable `a4s-r<N>` release/tag. Do not push manual release tags or bump package
+and lockfile versions for skill changes. Old `v0` publication is removed/frozen.
+Publication never automatically queues bootstrap, activates plugins, or writes
+station/service configuration. Consumer policy changes remain explicitly
+adopted and committed; this milestone does not switch the station.
 
 ## Optional consumer blocker reporting
 

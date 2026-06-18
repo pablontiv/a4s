@@ -16,9 +16,10 @@ The release engine is one Bun-compiled `a4s` executable. Repository tools and
 tests continue to use Node/tsx; deployed engine execution never uses a source
 checkout. A published release is verified into
 `$DAGU_HOME/cache/a4s/<version>/` before admission hands off to that executable.
-Committed `.workspace/dagu/config.json` requires `uses`: `a4s@v0` follows the
-published major alias and `a4s@v0.6.1` pins an exact release (example only).
-Branches, paths, URLs and version ranges are not selections.
+Committed `.workspace/dagu/config.json` requires `uses`: `a4s@r123` pins a staged
+build, and `a4s@v0.7.8` pins a historical SemVer release (examples only).
+Historical `a4s@v0` stays parseable but its channel is frozen at the last SemVer
+release. Branches, paths, URLs and version ranges are not selections.
 
 Root admission resolves once to `(version, commit, archive SHA-256)` and executes
 the cached engine with `admit --artifact '<version>@<commit>#<digest>'`.
@@ -40,6 +41,13 @@ Both CLI `admit` and `enqueue` submit the exact admitted snapshot bytes. Receipt
 record top-level `artifact`, `artifactSupport` and actually used `contracts`;
 successors additionally record `parent` (`receipt`, `dag`, `run`, `artifact`).
 Consumer config identity is separate at `initial.deployment.config`.
+
+`a4s version` and the archive's `identity.json` agree exactly, including uniform
+`support` entries `{ read: [...], write: N }` for receipts, job SQL/JSON, config,
+run state and PR checkpoints; exact dispatch/checkpoint protocols; the canonical
+registration manifest/hash; and the required launcher protocol. Historical
+declarations and receipt bytes remain untouched. Compatibility is read coverage,
+not build-number distance; `r<N>` status differences are notice-only.
 
 ### Pinned reconciler and release plugin
 
@@ -178,14 +186,22 @@ npm run build:a4s -- --target bun-linux-x64 --outdir dist
 ```
 
 The default build cross-compiles `bun-linux-x64` and `bun-darwin-arm64` and writes
-`dist/a4s-v<version>-<os>-<arch>.tar.gz` plus `.tar.gz.sha256`.
+`dist/a4s-r<N>-<os>-<arch>.tar.gz` plus `.tar.gz.sha256`.
 It uses `--compile --compile-autoload-package-json`, disables dotenv/bunfig
 autoload, bundles the OMP extension dependency closure, sorts archive entries,
 fixes permissions/mtime/uid/gid, and uses deterministic gzip headers.
 The checksum line is `<64 lowercase hex>  <archive filename>`.
-The release workflow accepts only version-tag pushes matching the package
-version, refuses an existing GitHub release/assets, publishes both archives and
-checksums, then moves the corresponding major tag.
+The build ID is `r<N>`, with `N = git rev-list --count --first-parent <sha>`;
+builds fail on shallow checkouts. No package/lockfile SemVer bump or human tag
+push is required. The workflow checks out the exact validated `main` head with
+full history, verifies that CI's `validate` succeeded for that SHA, and publishes
+only when the explicit shipped-input set changed since the last published SHA.
+It creates `a4s-r<N>` itself, rejects non-first-parent ancestry and ID/SHA
+conflicts, and allows a same-SHA rerun only when rebuilt digests equal the
+published ones. Releases/assets are never overwritten or deleted by a4s.
+The old tag-triggered/`v0` publisher is removed. This milestone is **staged**:
+publication does not activate the station, replace plugins, or write service
+configuration. Historical SemVer artifacts still verify and restore exactly.
 
 The opt-in `npm run test:compiled --workspace @a4s/issue-lifecycle` builds both
 targets, checks archive contents and reproducibility, and exercises the extracted

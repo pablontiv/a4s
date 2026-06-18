@@ -5,6 +5,8 @@ import { join } from "node:path";
 import test from "node:test";
 import { cachePath, ensureArtifact, inspectArtifact } from "../src/artifact-cache.ts";
 import { artifactDependencies, artifactEntries, makeInProcessArchive, writeInProcessArchive } from "./fixtures/compiled-artifact.ts";
+import { identity } from "../src/identity.ts";
+import { registrationHash } from "../src/registration.ts";
 
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), "a4s-cache-unit-"));
@@ -90,4 +92,55 @@ test("publication rejects executable and declared identity disagreement before s
     await assert.rejects(ensureArtifact(f.home, release, f.dependencies), /embedded identity mismatch/);
     assert.equal(existsSync(cachePath(f.home, release)), false);
   } finally { f.dispose(); }
+});
+test("r<N> entries declare uniform formats, canonical registration and launcher protocol", async () => {
+  const f = fixture();
+  try {
+    const release = makeInProcessArchive(f.releases, "r792");
+    const cached = await ensureArtifact(f.home, release, f.dependencies);
+    assert.equal(cached.directory, join(f.home, "cache/a4s/r792"));
+    assert.deepEqual(cached.identity.support, identity.support);
+    assert.equal(cached.identity.registrationManifestHash, registrationHash(cached.identity.registrationManifest));
+    assert.equal(cached.identity.requiredLauncherProtocol, 1);
+    assert.equal(f.calls.filter(args => args[0] === "release").every(args => args[2] === "a4s-r792"), true);
+  } finally { f.dispose(); }
+});
+test("historical semver archives keep their original declarations and restore exactly", async () => {
+  const f = fixture();
+  try {
+    const legacy = { version: "0.7.8", commit: f.release.commit, support: {
+      dispatch: "a4s-run/1", configSchemas: [1], receiptSchemas: { read: [1, 2], write: 2 }, roleJobStores: [1],
+      protocols: identity.protocols,
+    } };
+    const entries = artifactEntries(legacy.version, legacy.commit);
+    for (const entry of entries) if (entry.name === "a4s" || entry.name === "identity.json") entry.content = JSON.stringify(legacy);
+    const release = writeInProcessArchive(f.releases, entries, legacy.version, legacy.commit);
+    const first = await ensureArtifact(f.home, release, f.dependencies);
+    assert.deepEqual(first.identity, legacy);
+    await inspectArtifact(f.home, release, f.dependencies);
+    rmSync(first.directory, { recursive: true });
+    const restored = await ensureArtifact(f.home, release, f.dependencies);
+    assert.equal(restored.record.digest, release.digest);
+    assert.deepEqual(restored.identity, legacy);
+    assert.equal(f.calls.filter(args => args[0] === "release").every(args => args[2] === "v0.7.8"), true);
+  } finally { f.dispose(); }
+});
+test("new identities reject missing manifest/protocol and malformed formats without fixed writer assertions", async () => {
+  for (const mutation of ["manifest", "hash", "launcher", "formats", "protocol", "bridge"] as const) {
+    const f = fixture();
+    try {
+      const entries = artifactEntries("r792", f.release.commit);
+      const declared = structuredClone({ ...identity, version: "r792", commit: f.release.commit }) as Record<string, any>;
+      if (mutation === "manifest") delete declared.registrationManifest;
+      if (mutation === "hash") declared.registrationManifestHash = "a".repeat(64);
+      if (mutation === "launcher") delete declared.requiredLauncherProtocol;
+      if (mutation === "formats") declared.support.config = { read: [2], write: 2 };
+      if (mutation === "protocol") declared.dispatch = "a4s-run/2";
+      if (mutation === "bridge") declared.support.receipt = { read: [1, 2, 3], write: 3 };
+      for (const entry of entries) if (entry.name === "a4s" || entry.name === "identity.json") entry.content = JSON.stringify(declared);
+      const release = writeInProcessArchive(f.releases, entries, "r792", f.release.commit);
+      if (mutation === "bridge") assert.equal((await ensureArtifact(f.home, release, f.dependencies)).identity.support.receipt.write, 3);
+      else await assert.rejects(ensureArtifact(f.home, release, f.dependencies));
+    } finally { f.dispose(); }
+  }
 });

@@ -6,7 +6,7 @@ function githubFixture(releases: { tag_name: string; commit: string; draft?: boo
   const calls: string[][] = [];
   const gh: Github = args => {
     calls.push(args);
-    if (args[0] === "release") return `${digest}  ${archiveName(args[2]!.slice(1), "linux-x64")}\n`;
+    if (args[0] === "release") return `${digest}  ${archiveName(args[2]!.replace(/^(?:a4s-|v)/, ""), "linux-x64")}\n`;
     const route = args.find(arg => arg.startsWith("repos/"))!;
     if (route.includes("releases?")) return JSON.stringify([releases.map(release => ({ ...release, draft: release.draft ?? false, prerelease: false }))]);
     if (route.includes("releases/tags/")) return JSON.stringify({ tag_name: route.split("/").at(-1), draft: false, prerelease: false });
@@ -42,4 +42,11 @@ test("exact releases do not read a moving ref and checksums bind the exact asset
   assert.equal(calls.some(args => args.some(value => value.endsWith("/v0"))), false);
   for (const value of [`${digest}  other.tar.gz\n`, `${digest.toUpperCase()}  archive\n`, `${digest} archive\n`, `${digest}  archive\nextra`]) assert.throws(() => checksumDigest(value, "archive"), /Invalid checksum asset/);
   assert.throws(() => parseArtifact(`v0.6.0@${commitA}#${digest}`), /Invalid artifact tuple/);
+});
+test("r<N> releases and historical semver tuples use immutable exact names", () => {
+  for (const version of ["r0", "r1", "r792", "0.7.8"]) assert.deepEqual(parseArtifact(`${version}@${commitA}#${digest}`), { version, commit: commitA, digest });
+  for (const version of ["r01", "r-1", "r1.0", "a4s-r1", "R1"]) assert.throws(() => parseArtifact(`${version}@${commitA}#${digest}`));
+  const { gh, calls } = githubFixture([{ tag_name: "a4s-r792", commit: commitA }]);
+  assert.deepEqual(resolveRelease("a4s@r792", { gh, repository: "a4s/a4s", platform: "linux-x64" }), { version: "r792", commit: commitA, digest, repository: "a4s/a4s", archive: "a4s-r792-linux-x64.tar.gz" });
+  assert.equal(calls.find(args => args[0] === "release")![2], "a4s-r792");
 });

@@ -5,10 +5,11 @@ import {
   BUNDLE_VERSION,
   bundleVersionFromLabels,
   classifyCompatibility,
-  parseVersion,
+  isReleaseVersion,
 } from "../bundle.ts";
 import type { Compatibility } from "../bundle.ts";
 import { packageRoot } from "../executable.ts";
+import { WORKFLOWS_COMMAND } from "../registration.ts";
 import type { StallNotice } from "../long-computation.ts";
 import { runParam } from "../run-primary.ts";
 
@@ -84,7 +85,7 @@ function readReleaseIdentity(root: string): ReleaseIdentity | undefined {
   try {
     const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
     const identity = JSON.parse(readFileSync(join(root, "identity.json"), "utf8"));
-    if (typeof manifest?.version !== "string" || !parseVersion(manifest.version)
+    if (typeof manifest?.version !== "string" || !isReleaseVersion(manifest.version)
       || identity?.version !== manifest.version
       || typeof identity?.commit !== "string" || !/^[a-f0-9]{40}$/.test(identity.commit)) return undefined;
     return { version: manifest.version, commit: identity.commit };
@@ -123,7 +124,7 @@ export function runBundleState(run: RunDetails, extensionVersion = BUNDLE_VERSIO
     try {
       const manifest: unknown = JSON.parse(readFileSync(join(primary, "packages/issue-lifecycle/package.json"), "utf8"));
       if (manifest && typeof manifest === "object" && "version" in manifest
-        && typeof manifest.version === "string" && parseVersion(manifest.version)) {
+        && typeof manifest.version === "string" && isReleaseVersion(manifest.version)) {
         mainVersion = manifest.version;
       }
     } catch (error) {
@@ -184,7 +185,7 @@ export interface WidgetTheme {
   tree: { branch: string; last: string };
 }
 
-export const TOGGLE_COMMAND = "workflows";
+export const TOGGLE_COMMAND = WORKFLOWS_COMMAND.name;
 // Same fold as OMP's Subagents HUD: a few rows collapsed, an expander row to unfold.
 const COLLAPSED_ROWS = 3;
 // OMP paints at most 10 lines per extension widget: title, rows and expander.

@@ -29,10 +29,10 @@ if (args[0] === "api") {
 } else if (args[0] === "release" && args[1] === "download") {
   const tag = args[2];
   const release = state.releases.find(value => value.tag_name === tag);
-  if (!release || !/^v\d+\.\d+\.\d+$/.test(tag)) throw new Error(`Only exact published release downloads are permitted: ${tag}`);
+  if (!release || !/^(?:v\d+\.\d+\.\d+|a4s-r(?:0|[1-9]\d*))$/.test(tag)) throw new Error(`Only exact published release downloads are permitted: ${tag}`);
   const asset = args[args.indexOf("--pattern") + 1];
   const output = args[args.indexOf("--output") + 1];
-  if (!asset.startsWith(`a4s-${tag}-`) || asset.includes("/")) throw new Error(`Unexpected asset ${asset}`);
+  if (!asset.startsWith(`${tag.startsWith("a4s-") ? tag : `a4s-${tag}`}-`) || asset.includes("/")) throw new Error(`Unexpected asset ${asset}`);
   const source = join(directory, asset);
   if (output === "-") process.stdout.write(readFileSync(source));
   else copyFileSync(source, output);

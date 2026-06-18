@@ -5,9 +5,10 @@ import { identity, type ArtifactIdentity } from "./identity.ts";
 import { artifactToken, parseArtifact, sameArtifact, type ArtifactTuple } from "./release.ts";
 import { assertReceiptVersion } from "./receipt-version.ts";
 import { inspectArtifact, type CachedArtifact } from "./artifact-cache.ts";
+import { formatSupport, assertProtocols, SHARED_FORMATS } from "./artifact-support.ts";
 
-export interface UsedContracts { dispatch: ArtifactIdentity["support"]["dispatch"]; config: 1; receipt: 2; roleJobStore: 1; protocols: ArtifactIdentity["support"]["protocols"] }
-export const USED_CONTRACTS: UsedContracts = { dispatch: identity.support.dispatch, config: 1, receipt: 2, roleJobStore: 1, protocols: identity.support.protocols };
+export interface UsedContracts { dispatch: string; config: number; receipt: number; roleJobStore: number; roleJobPayload?: number; runState?: number; prCheckpoint?: number; protocols: typeof identity.protocols }
+export const USED_CONTRACTS: UsedContracts = { dispatch: identity.dispatch, config: identity.support.config.write, receipt: identity.support.receipt.write, roleJobStore: identity.support.roleJobStore.write, roleJobPayload: identity.support.roleJobPayload.write, runState: identity.support.runState.write, prCheckpoint: identity.support.prCheckpoint.write, protocols: identity.protocols };
 export interface ArtifactReceiptFields {
   artifact: ArtifactTuple;
   artifactSupport: ArtifactIdentity["support"];
@@ -21,13 +22,18 @@ export function assertArtifactReceipt(value: unknown, path: string): asserts val
   const artifact = parseArtifact(`${value.artifact.version}@${value.artifact.commit}#${value.artifact.digest}`);
   const support = value.artifactSupport;
   const used = value.contracts;
-  if (support.dispatch !== identity.support.dispatch || used.dispatch !== identity.support.dispatch) throw new Error(`Unsupported receipt dispatch boundary: required ${identity.support.dispatch}; declared=${JSON.stringify(support.dispatch) ?? "missing"}, selected=${JSON.stringify(used.dispatch) ?? "missing"}: ${path}`);
-  if (used.config !== 1 || used.receipt !== 2 || used.roleJobStore !== 1 || !isDeepStrictEqual(used.protocols, identity.support.protocols) ||
-      !Array.isArray(support.configSchemas) || !support.configSchemas.includes(1) || !isRecord(support.receiptSchemas) || !Array.isArray(support.receiptSchemas.read) || !support.receiptSchemas.read.includes(2) || support.receiptSchemas.write !== 2 || !Array.isArray(support.roleJobStores) || !support.roleJobStores.includes(1) || !isDeepStrictEqual(support.protocols, used.protocols)) throw new Error(`Unsupported receipt config/receipt/protocol/job-store contracts: ${path}`);
+  assertProtocols(used);
+  const legacy = "receiptSchemas" in support;
+  if (legacy) assertProtocols(support);
+  const declared = formatSupport(support);
+  for (const name of SHARED_FORMATS) {
+    const version = used[name] ?? (legacy && ["roleJobPayload", "runState", "prCheckpoint"].includes(name) ? 1 : undefined);
+    if (typeof version !== "number" || !identity.support[name].read.some(supported => supported === version) || !declared[name].read.includes(version) || declared[name].write !== version) throw new Error(`Unsupported receipt ${name} contract: ${path}`);
+  }
   if (!isRecord(value.sourceVersion) || value.sourceVersion.version !== artifact.version || value.sourceVersion.commit !== artifact.commit) throw new Error(`Receipt artifact/source identity mismatch: ${path}`);
   const initial = value.initial;
   const config = isRecord(initial) && isRecord(initial.deployment) ? initial.deployment.config : undefined;
-  if (!isRecord(config) || config.schemaVersion !== 1 || typeof config.commit !== "string" || !/^[a-f0-9]{40}$/.test(config.commit) || typeof config.digest !== "string" || !/^[a-f0-9]{64}$/.test(config.digest)) throw new Error(`Receipt lacks committed config identity: ${path}`);
+  if (!isRecord(config) || !identity.support.config.read.some(version => version === config.schemaVersion) || typeof config.commit !== "string" || !/^[a-f0-9]{40}$/.test(config.commit) || typeof config.digest !== "string" || !/^[a-f0-9]{64}$/.test(config.digest)) throw new Error(`Receipt lacks committed config identity: ${path}`);
 }
 export function assertExecutingArtifact(tuple: ArtifactTuple): void {
   if (identity.version !== tuple.version || identity.commit !== tuple.commit) throw new Error(`Handoff identity mismatch: requested ${artifactToken(tuple)}, executable ${identity.version}@${identity.commit}`);

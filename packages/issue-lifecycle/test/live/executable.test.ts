@@ -13,15 +13,15 @@ import { engineCommand } from "../../src/executable.ts";
 import { identity } from "../../src/identity.ts";
 import { cachePath } from "../../src/artifact-cache.ts";
 import type { Receipt } from "../../src/admission.ts";
+import { USED_CONTRACTS } from "../../src/artifact-receipt.ts";
+import { gitBuildIdentity } from "../../../../scripts/release-identity.mjs";
 
 const root = fileURLToPath(new URL("../../../../", import.meta.url));
 const cli = fileURLToPath(new URL("../../src/cli.ts", import.meta.url));
-const manifest = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8"));
 const execute = promisify(execFile);
 const sourceArgs = ["--import", "tsx", cli];
 const helpCommands = ["gate", "pr-body", "codeql", "poc-scope", "protect", "role-jobs", "admit", "enqueue", "queue", "observe", "escalation", "stale-recovery", "prioritize", "reconcile", "planning"];
-const support = { dispatch: "a4s-run/1", configSchemas: [1], receiptSchemas: { read: [1, 2], write: 2 }, roleJobStores: [1],
-  protocols: { triage: "role-job/1", implement: "role-job/1", publication: "pr-checkpoint/1" } } as const;
+const support = identity.support;
 
 function source(args: string[], env = process.env) {
   return spawnSync(process.execPath, [...sourceArgs, ...args], { cwd: root, env, encoding: "utf8" });
@@ -35,9 +35,9 @@ test("the source entry rejects unknown commands with usage and exposes explicit 
   }
   const result = source(["version"]);
   assert.equal(result.status, 0, result.stderr);
-  assert.deepEqual(JSON.parse(result.stdout), { version: manifest.version, commit: "unbuilt", support });
+  assert.deepEqual(JSON.parse(result.stdout), identity);
   assert.deepEqual(identity.support, support);
-  assert.deepEqual(Object.keys(identity).sort(), ["commit", "support", "version"]);
+  assert.deepEqual(Object.keys(identity).sort(), ["commit", "dispatch", "protocols", "registrationManifest", "registrationManifestHash", "requiredLauncherProtocol", "support", "version"]);
 });
 
 test("source self-spawn commands select the existing entry and preserve helper arguments", () => {
@@ -68,8 +68,9 @@ test("release archives and the compiled engine work from an extracted root", {
   try {
     const releases = process.env.A4S_RELEASE_DIR || join(temporary, "release");
     if (!process.env.A4S_RELEASE_DIR) execFileSync(process.execPath, [join(root, "scripts/build-a4s.mjs"), "--outdir", releases], { cwd: root, stdio: "inherit" });
-    const archives = ["linux-x64", "darwin-arm64"].map(platform => `a4s-v${manifest.version}-${platform}.tar.gz`);
-    const expectedCommit = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+    const build = gitBuildIdentity(root);
+    const archives = ["linux-x64", "darwin-arm64"].map(platform => `a4s-${build.version}-${platform}.tar.gz`);
+    const expectedCommit = build.commit;
     for (const archive of archives) {
       const path = join(releases, archive);
       const checksum = readFileSync(`${path}.sha256`, "utf8");
@@ -89,7 +90,7 @@ test("release archives and the compiled engine work from an extracted root", {
       mkdirSync(directory);
       execFileSync("tar", ["-xzf", path, "-C", directory]);
       const artifactIdentity = JSON.parse(readFileSync(join(directory, "identity.json"), "utf8"));
-      assert.deepEqual(artifactIdentity, { version: manifest.version, commit: expectedCommit, support });
+      assert.deepEqual(artifactIdentity, { ...identity, version: build.version, commit: expectedCommit });
       assert.ok(!("digest" in artifactIdentity));
     }
     const repeated = join(temporary, "repeated");
@@ -108,7 +109,7 @@ test("release archives and the compiled engine work from an extracted root", {
     const run = (args: string[], override = env) => spawnSync(executable, args, { cwd: extracted, env: override, encoding: "utf8" });
     const version = run(["version"]);
     assert.equal(version.status, 0, version.stderr);
-    assert.deepEqual(JSON.parse(version.stdout), { version: manifest.version, commit: expectedCommit, support });
+    assert.deepEqual(JSON.parse(version.stdout), { ...identity, version: build.version, commit: expectedCommit });
     for (const command of helpCommands) {
       const expected = source([command, "--help"], env);
       const actual = run([command, "--help"]);
@@ -170,14 +171,14 @@ test("release archives and the compiled engine work from an extracted root", {
     const state = join(primary, ".git/dagu-feature/runs/compiled712");
     mkdirSync(state, { recursive: true });
     const archive = join(releases, archives[0]!);
-    const artifact = { version: manifest.version as string, commit: expectedCommit, digest: createHash("sha256").update(readFileSync(archive)).digest("hex") };
+    const artifact = { version: build.version, commit: expectedCommit, digest: createHash("sha256").update(readFileSync(archive)).digest("hex") };
     const cached = cachePath(home, artifact);
     mkdirSync(cached, { recursive: true });
     execFileSync("tar", ["-xzf", archive, "-C", cached]);
     copyFileSync(archive, join(cached, "verified-archive.tar.gz"));
     writeFileSync(join(cached, "artifact.json"), JSON.stringify({ ...artifact, verifiedAt: new Date().toISOString() }));
     const receipt: Receipt = { schemaVersion: 2, artifact, artifactSupport: support,
-      contracts: { dispatch: support.dispatch, config: 1, receipt: 2, roleJobStore: 1, protocols: support.protocols },
+      contracts: USED_CONTRACTS,
       sourceVersion: { version: artifact.version, commit: artifact.commit, origin: "fixture/repo" }, deploymentFingerprint: "compiled-smoke",
       initial: { admittedAt: new Date().toISOString(), deployment: { config: { schemaVersion: 1, commit: expectedCommit, digest: "c".repeat(64) } },
         runtimeAndModels: { daguHome: home }, execution: { primary,

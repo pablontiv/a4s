@@ -6,7 +6,7 @@
   "gate": "npm test && npm run typecheck",
   "requiredCheck": "validate",
   "testPaths": "(^|/)(test|tests)/|\\.test\\.(ts|cjs)$",
-  "rebaseResolver": "node packages/issue-lifecycle/bin/dagu-bundle-rebase.mjs",
+  "rebaseResolver": "",
   "validation": "",
   "blockerReporting": "ask",
   "codeScanning": "off",

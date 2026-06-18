@@ -1,5 +1,8 @@
 import { realpath } from "node:fs/promises";
 
+/** Host-facing helper contract, included in each payload's registration manifest. */
+export const HELPER_API_VERSION = 1;
+
 export const RELOAD_INPUT = /^\s*\/reload-plugins(?:\s|$)/;
 export const LIFECYCLE_TIMEOUT_MS = 2000;
 

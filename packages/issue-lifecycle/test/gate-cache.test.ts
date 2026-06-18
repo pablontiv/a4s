@@ -31,11 +31,11 @@ const {
 };
 spawnMock.mock.restore();
 
-const bundleVersion = readFileSync(new URL("./live/bundle-version.test.ts", import.meta.url), "utf8");
+const gitStateSource = readFileSync(new URL("./fixtures/gate-cache-git-state.js", import.meta.url), "utf8");
 const featureTemplate = readFileSync(new URL("./live/feature-template.test.ts", import.meta.url), "utf8");
 
 test("gate cache classifies git-state checks as always executed", () => {
-  const gitState = classifyTestSource(bundleVersion);
+  const gitState = classifyTestSource(gitStateSource);
   assert.equal(gitState.classification, "always");
   assert.match(gitState.reason, /git-state/);
   assert.match(gitState.reason, /merge-base/);
