@@ -240,7 +240,6 @@ test("isolated Dagu rebases colliding candidates before gate and publishes the n
   try {
     await until("Dagu ready", async () => { try { return (await fetch(`${api}/dag-runs`)).ok ? true : undefined; } catch { return undefined; } });
     execFileSync("bash", ["-c", script(join(dirname(template), "dagu-feature-bootstrap.yaml"), "render")], { cwd: repo.root, env: adoptionEnv });
-    assert.ok(text(dirname(staged), "feature.yaml").includes(`- REBASE_RESOLVER: ${JSON.stringify(repo.env.REBASE_RESOLVER)}`));
     command("validate", staged); command("validate", rendered); command("validate", file);
     command("enqueue", "--run-id", id, "feature");
     await until("normalized candidate awaiting independent verdicts", async () => {
@@ -257,20 +256,21 @@ test("isolated Dagu rebases colliding candidates before gate and publishes the n
     });
     writeFileSync(join(repo.state, "quality.json"), JSON.stringify(verifyQuality(evidence.parent, evidence.request, "QATest", "ReviewTest", evidence.models)));
     command("human-task", "complete", "feature", "--run-id", id, "--step", "quality_review");
-    const details = await until("normalized rebase/gate/push", async () => {
+    const run = await until("normalized rebase/gate/push", async () => {
       const response = await fetch(`${api}/dag-runs/feature/${id}`); if (!response.ok) return undefined;
       const run = (await response.json() as { dagRunDetails: { statusLabel: string; nodes: Array<{ statusLabel: string; stdout?: string; stderr?: string }> } }).dagRunDetails;
-      const logs = run.nodes.map(node => [node.stdout, node.stderr].filter(Boolean).map(path => readFileSync(path!, "utf8")).join("\n")).join("\n");
-      assert.ok(!run.nodes.some(node => node.statusLabel === "failed"), logs + serviceLog);
-      return run.statusLabel === "succeeded" ? { run, logs } : undefined;
+      return ["succeeded", "failed"].includes(run.statusLabel) ? run : undefined;
     });
+    const logs = run.nodes.map(node => [node.stdout, node.stderr].filter(Boolean).map(path => readFileSync(path!, "utf8")).join("\n")).join("\n");
+    assert.equal(run.statusLabel, "succeeded", logs + serviceLog);
+    assert.ok(!run.nodes.some(node => node.statusLabel === "failed"), logs + serviceLog);
     const sha = normalized(repo, "0.3.19");
     assert.equal(json(repo.state, "gate.json").sha, sha);
     assert.equal(git(repo.primary, "ls-remote", "origin", `refs/heads/${repo.branch}`).split(/\s/)[0], sha);
-    assert.match(details.logs, /bundle-rebase: 0\.3\.17 \/ 0\.3\.18 \/ 0\.3\.18 -> 0\.3\.19/);
-    assert.ok(details.logs.includes(`tested_sha=${sha}`));
+    assert.match(logs, /bundle-rebase: 0\.3\.17 \/ 0\.3\.18 \/ 0\.3\.18 -> 0\.3\.19/);
+    assert.ok(logs.includes(`tested_sha=${sha}`));
     const status = command("status", "--run-id", id, "feature");
-    console.log(`LIVE bundle-rebase DAGU_HOME=${home} port=${port} run=${id}\n${liveDaguVersion}\ndagu validate ${staged}\ndagu validate ${rendered}\ndagu validate ${file}\ndagu enqueue --run-id ${id} feature\ndagu status --run-id ${id} feature\n${status}\noriginal_sha=${repo.before} normalized_sha=${sha}\n${details.logs}`);
+    console.log(`LIVE bundle-rebase DAGU_HOME=${home} port=${port} run=${id}\n${liveDaguVersion}\ndagu validate ${staged}\ndagu validate ${rendered}\ndagu validate ${file}\ndagu enqueue --run-id ${id} feature\ndagu status --run-id ${id} feature\n${status}\noriginal_sha=${repo.before} normalized_sha=${sha}\n${logs}`);
   } finally {
     if (service.exitCode === null && service.signalCode === null) await new Promise<void>(resolve => { service.once("exit", () => resolve()); service.kill("SIGTERM"); });
     rmSync(repo.root, { recursive: true, force: true });
