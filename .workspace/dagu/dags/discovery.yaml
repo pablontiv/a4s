@@ -386,7 +386,7 @@ steps:
         if dagu status --run-id "$run_id" feature >/dev/null 2>&1; then
           printf 'exists=%s issue=%s\n' "$run_id" "$number"
         else
-          dagu enqueue --run-id "$run_id" "$PRIMARY/.workspace/dagu/dags/feature.yaml" -- \
+          dagu-feature-bundle enqueue --run-id "$run_id" "$PRIMARY/.workspace/dagu/dags/feature.yaml" -- \
             ISSUE="$number" PRIMARY="$PRIMARY" BRANCH="dagu/issue-$number" PR_NUMBER="" \
             OMP_SESSION_ID="$OMP_SESSION_ID"
           printf 'enqueued=%s issue=%s\n' "$run_id" "$number"

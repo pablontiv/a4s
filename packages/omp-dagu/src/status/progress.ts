@@ -15,6 +15,7 @@ export interface RunDetails {
   params?: string;
   nodes?: RunNode[];
   scopeFailureCause?: string;
+  receiptEvent?: { id: string; type: string; source: string; cursorReset: boolean };
 }
 
 export interface RunNode {

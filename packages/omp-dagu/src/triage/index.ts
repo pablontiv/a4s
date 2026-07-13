@@ -1,6 +1,6 @@
 import { resourceDecision } from "../resources.ts";
 import { primarySessionDecision } from "./primary.ts";
-import { TriageGuard } from "./guard.ts";
+import { admissionDecision, TriageGuard } from "./guard.ts";
 import type { CallDecision, Event } from "./guard.ts";
 import { qualityDecision } from "./quality.ts";
 import type { QualityContext } from "./quality.ts";
@@ -18,11 +18,15 @@ export default function triageGuard(pi: ExtensionAPI): void {
   let guard = new TriageGuard();
   pi.on("session_start", () => { guard = new TriageGuard(); });
   pi.on("session_switch", () => { guard = new TriageGuard(); });
-  pi.on("tool_call", async (event, ctx) =>
-    await resourceDecision(event, ctx?.cwd ?? process.cwd())
-    ?? (ctx ? await qualityDecision(event, ctx) : undefined)
-    ?? (ctx ? await primarySessionDecision(event, ctx) : undefined)
-    ?? guard.toolCall(event));
+  pi.on("tool_call", async (event, ctx) => {
+    const transcriptRoot = ctx?.sessionManager?.getSessionDir();
+    const admission = admissionDecision(event, transcriptRoot ? { transcriptRoot } : undefined, ctx?.cwd);
+    if (admission) return admission;
+    return await resourceDecision(event, ctx?.cwd ?? process.cwd())
+      ?? (ctx ? await qualityDecision(event, ctx) : undefined)
+      ?? (ctx ? await primarySessionDecision(event, ctx) : undefined)
+      ?? guard.toolCall(event);
+  });
   pi.on("tool_result", event => guard.toolResult(event));
   pi.on("message_end", event => guard.messageEnd(event.message));
 }

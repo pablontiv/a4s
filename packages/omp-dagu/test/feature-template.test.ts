@@ -1607,6 +1607,11 @@ for (const [name, definition] of definitions) {
               mkdirSync(dirname(gh), { recursive: true });
               writeFileSync(gh, '#!/bin/sh\ncase "$*" in\n  "issue comment 189 --body-file "*) exit 0 ;;\n  *) echo "unexpected gh $*" >&2; exit 1 ;;\nesac\n');
               chmodSync(gh, 0o755);
+              // Admission is exercised against real Dagu in bundle-cli.test.ts;
+              // this fixture isolates the lifecycle's post-admission routing.
+              const admission = join(repo.root, "bin", "dagu-feature-bundle");
+              writeFileSync(admission, '#!/bin/sh\ntest "$1" = enqueue || exit 1\nexec dagu "$@"\n');
+              chmodSync(admission, 0o755);
             } else stubSuccessfulCloseGateGh(repo);
             git(repo.primary, "worktree", "remove", repo.worktree);
             git(repo.primary, "branch", "-D", repo.branch);
