@@ -39,6 +39,7 @@ test("DEFAULT cursor replay recovers SSE omissions, both iterations and eventual
   const signal = new AbortController().signal;
   const snapshots = await reader.read("http://fake", run, signal);
   assert.equal(restarted, true);
+  assert.deepEqual(snapshots[0]?.receiptEvent, { id: "event-1", type: "dag.run.waiting", source: "dagu-persisted-event-log", cursorReset: true });
   const messages = snapshots.flatMap(snapshot => {
     const effect = transitions.observe(snapshot);
     return effect.wakeMessages ?? (effect.wakeMessage ? [effect.wakeMessage] : []);

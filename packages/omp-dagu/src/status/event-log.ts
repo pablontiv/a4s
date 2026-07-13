@@ -42,14 +42,14 @@ export class EventLog {
       if (this.seen.has(entry.id)) continue;
       const nodes = entry.data?.dag_run_status?.nodes ?? [];
       if (entry.type === "dag.run.waiting") {
-        snapshots.push({ ...run, statusLabel: "waiting", nodes: nodes.filter(node => node.status === 7).flatMap(node => {
+        snapshots.push({ ...run, receiptEvent: { id: entry.id, type: entry.type, source: "dagu-persisted-event-log", cursorReset: restarted }, statusLabel: "waiting", nodes: nodes.filter(node => node.status === 7).flatMap(node => {
           const metadata = run.nodes?.find(candidate => (candidate.step.id ?? candidate.step.name) === (node.step_id ?? node.step_name));
           return metadata?.step.humanTask ? [{
             step: metadata.step, statusLabel: "waiting", approvalIteration: node.approval_iteration ?? 0,
           }] : [];
         }) });
       } else if (entry.type === "dag.run.succeeded") {
-        snapshots.push({ ...run, statusLabel: "succeeded", nodes: [] });
+        snapshots.push({ ...run, receiptEvent: { id: entry.id, type: entry.type, source: "dagu-persisted-event-log", cursorReset: restarted }, statusLabel: "succeeded", nodes: [] });
       }
       this.seen.add(entry.id);
     }

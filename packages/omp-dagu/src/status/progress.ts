@@ -14,6 +14,7 @@ export interface RunDetails {
   labels?: string[];
   params?: string;
   nodes?: RunNode[];
+  receiptEvent?: { id: string; type: string; source: string; cursorReset: boolean };
 }
 
 export interface RunNode {

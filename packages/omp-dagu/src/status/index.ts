@@ -1,3 +1,4 @@
+import { observeRunReceipt } from "../admission.ts";
 import { setTimeout as delay } from "node:timers/promises";
 import { activityTarget, readActivity } from "./activity.ts";
 import { ghIssueTitleResolver, IssueTitles } from "./issue-title.ts";
@@ -138,7 +139,9 @@ async function watchNotices(base: string, repo: string, ctx: Context, signal: Ab
         // final event has not reached the eventually consistent ledger yet.
         try {
           const run = await runDetails(base, summary, signal);
+          observeRunReceipt(run, runParam(run, "PRIMARY") || ctx.cwd);
           for (const snapshot of await ledger.read(base, run, signal)) {
+            observeRunReceipt(snapshot, runParam(snapshot, "PRIMARY") || ctx.cwd, "persisted-transition");
             const effects = transitions.observe(snapshot, { baseline });
             for (const message of effects.wakeMessages ?? (effects.wakeMessage ? [effects.wakeMessage] : [])) wake(message);
             if (effects.abortMessage) {
@@ -150,7 +153,10 @@ async function watchNotices(base: string, repo: string, ctx: Context, signal: Ab
               tracked.delete(topic);
             }
           }
-        } catch { /* Retry this run on the next head sweep. */ }
+        } catch (error) {
+          try { observeRunReceipt(summary, runParam(summary, "PRIMARY") || ctx.cwd, "observation-error", error instanceof Error ? error.message : String(error)); }
+          catch (receiptError) { console.warn("DAGU_RECEIPT_OBSERVATION_FAILED", receiptError); }
+        }
       }
       baseline = false;
     } catch { /* Discovery and ingestion recover independently of SSE. */ }

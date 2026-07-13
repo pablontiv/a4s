@@ -1,0 +1,52 @@
+import assert from "node:assert/strict";
+import { execFileSync, spawnSync } from "node:child_process";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const daguAvailable = spawnSync("dagu", ["version"], { encoding: "utf8" });
+export const isolatedDagu = {
+  skip: daguAvailable.status !== 0 || !/^2\.20\.1\s*$/.test(daguAvailable.stdout)
+    ? "Dagu 2.20.1 binary required for live integration"
+    : false,
+};
+
+export function admissionFixture() {
+  const root = mkdtempSync(join(tmpdir(), "dagu-admission-"));
+  const packageDir = join(root, "package");
+  const home = join(root, "dagu-home");
+  mkdirSync(packageDir);
+  mkdirSync(join(home, "dags"), { recursive: true });
+  for (const entry of ["src", "bin", "skills", "agents", "package.json"]) cpSync(fileURLToPath(new URL(`../../${entry}`, import.meta.url)), join(packageDir, entry), { recursive: true });
+  const manifest = JSON.parse(readFileSync(join(packageDir, "package.json"), "utf8"));
+  manifest.version = "0.3.1";
+  writeFileSync(join(packageDir, "package.json"), JSON.stringify(manifest));
+  const git = (...args: string[]): string => execFileSync("git", ["-C", packageDir, ...args], { encoding: "utf8" }).trim();
+  git("init", "-b", "main");
+  git("config", "user.name", "Admission Test");
+  git("config", "user.email", "admission@example.test");
+  git("remote", "add", "origin", "https://github.com/example/fixture.git");
+  git("add", ".");
+  git("commit", "-qm", "fixture package 0.3.1");
+  const commit = git("rev-parse", "HEAD");
+  const dag = join(packageDir, ".workspace", "dagu", "dags", "feature.yaml");
+  mkdirSync(join(packageDir, ".workspace", "dagu", "dags"), { recursive: true });
+  const render = (name: string, destination: string, version = "0.3.1"): void => {
+    const stamp = `@a4s/omp-dagu@${version} source=example/fixture@${commit} bootstrap=bootstrap-fixture dagu=2.20.1`;
+    const identity = `dagu-feature-bundle=${version} source=example/fixture@${commit} bootstrap=bootstrap-fixture`;
+    const substitutions: Record<string, string> = { __DAGU_FEATURE_STAMP__: stamp, __DAGU_FEATURE_VERSION__: version, __DAGU_FEATURE_IDENTITY__: identity, TEMPLATE_DAGU_FEATURE_VERSION: version, TEMPLATE_REPO: "fixture", TEMPLATE_BASE_BRANCH: '"main"', __GATE__: '"true"', __REQUIRED_CHECK__: '"gate"', __PRIMARY__: JSON.stringify(packageDir), __TEST_PATHS__: '"test"' };
+    const template = readFileSync(join(packageDir, "skills", "dagu-feature", name), "utf8");
+    writeFileSync(destination, template.replace(/__[A-Z_]+__|TEMPLATE_[A-Z_]+/g, key => substitutions[key] ?? key));
+  };
+  render("feature.yaml", dag);
+  render("reconcile.yaml", join(home, "dags", "reconcile.yaml"));
+  writeFileSync(join(home, "config.yaml"), "coordinator:\n  enabled: false\n");
+  const cli = join(packageDir, "bin", "dagu-feature-bundle.ts");
+  const command = (subcommand: string, run: string, env: NodeJS.ProcessEnv = {}) => spawnSync(process.execPath, [cli, subcommand, "--run-id", run, dag, "--", `PRIMARY=${packageDir}`, "ISSUE=277", "BRANCH=dagu/issue-277"], { cwd: packageDir, env: { ...process.env, DAGU_HOME: home, ...env }, encoding: "utf8", timeout: 30000 });
+  const receipt = (run: string): string => join(packageDir, ".git", "dagu-feature", "runs", run, "receipt.json");
+  const observe = (run: string, observation: object) => spawnSync(process.execPath, [cli, "observe", run, JSON.stringify(observation)], { cwd: packageDir, env: { ...process.env, DAGU_HOME: home }, encoding: "utf8" });
+  const dispose = (): void => rmSync(root, { recursive: true, force: true });
+  assert.match(execFileSync("dagu", ["version"], { encoding: "utf8" }), /^2\.20\.1\n$/);
+  return { root, packageDir, home, dag, cli, command, receipt, observe, render, dispose };
+}

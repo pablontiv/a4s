@@ -39,6 +39,7 @@ flowchart LR
 
 - `dagu` on `PATH`, and a user-level service running `dagu start-all`. Check with `dagu version` and `launchctl list | grep -i dagu` (macOS) or `systemctl --user status` (Linux).
 - `@a4s/omp-dagu` loaded in the coordinating OMP session; its `dagu_session_id` tool identifies the session and its status extension delivers targeted checkpoint notices.
+- `dagu-feature-bundle` from this package on the Dagu service's `PATH`, so internal feature/PoC/discovery promotions pass the same admission boundary as the coordinator.
 - `DAGU_HOME` in your shell must point to the same home as that service. Read it from the service definition (macOS: `EnvironmentVariables.DAGU_HOME` in the LaunchAgent plist). If they differ, enqueue and complete commands land in a store the scheduler never reads, and the run stays `Queued`.
 - `git`, `gh` authenticated with push and PR rights, `curl`, `jq`.
 - The tools the repository's gate command needs.
@@ -127,6 +128,47 @@ and `unstamped` for a missing label. A notice with differing primary, extension
 or bundle versions is stale and aborts the current OMP turn. Restart the OMP
 session to load the primary's merged package, then finish the bootstrap re-seal
 and adopt its stamped renders before resuming coordination.
+
+Admission requires matching major versions and, for major `0`, matching minor
+versions across the package, rendered DAG, installed reconciler and loaded
+extensions. The coordinating extension rewrites literal `dagu enqueue` bash
+calls to the package's admission CLI, preserving shell argument expansion;
+internal promotions invoke `dagu-feature-bundle enqueue` directly. Bootstrap is
+the deployment procedure and remains available to repair an installation.
+
+Before Dagu creates a run, admission verifies the unique header/label, required
+Dagu version, readable realpaths and SHA-256 identities, source commit/package
+version and source-to-render provenance. Incompatible or indeterminate identities
+exit nonzero with `DAGU_ADMISSION_REJECTED`, observed/expected components and the
+bootstrap/adopt/reload corrective action. Reload OMP after redeploying extensions.
+
+For an operator outside OMP, use the same boundary explicitly:
+
+```sh
+node /real/checkout/packages/omp-dagu/bin/dagu-feature-bundle.ts enqueue \
+  --run-id <repo>-issue-<n> .workspace/dagu/dags/feature.yaml -- ISSUE=<n> PRIMARY=<primary>
+```
+
+`admit` accepts the same arguments, reserves the run ID and emits its receipt
+without calling Dagu (use a dedicated verification run ID). `enqueue` admits,
+persists and enqueues the exact snapshot bytes under their original DAG name.
+The receipt is `$(git rev-parse --path-format=absolute --git-path
+dagu-feature/runs/<run>)/receipt.json`, mode 0600. Its unified schema links
+`sourceVersion`, canonical `deploymentFingerprint` and `runReceipt`.
+`initial` contains deployment, runtime/models, execution and external-state
+categories; unknown dynamic values carry explicit state/cause. Fingerprints hash
+sorted-key canonical JSON of effective identities, paths, origins, component
+digests and verified relationships, independent of run IDs or timestamps.
+
+The initial snapshot/fingerprint stays immutable through redeployment. The
+status extension appends REST/persisted-transition observations and incident
+snapshots on failures/timeouts; each observation names DAG, run and attempt.
+Runtime owners append newly resolved model/config/event facts with
+`dagu-feature-bundle observe <run> '<JSON>'`, supplying `dag`, `run`, `attempt`,
+`category` (`deployment`, `runtimeAndModels`, `execution`,
+`eventsAndExternalState`), `kind` and `data`. Pending fields are resolved by those
+linked observations, never by rewriting admission history. A new deployment
+applies only to new run IDs.
 
 Changing any distributed template (`feature.yaml`, `poc.yaml`, `discovery.yaml`,
 `reconcile.yaml`, or `dagu-feature-bootstrap.yaml`) or this `SKILL.md` requires

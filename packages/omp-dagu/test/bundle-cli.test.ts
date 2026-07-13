@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { admissionFixture, isolatedDagu } from "./fixtures/admission.ts";
 
 import { BUNDLE_VERSION } from "../src/bundle.ts";
 const cli = fileURLToPath(new URL("../bin/dagu-feature-bundle.ts", import.meta.url));
@@ -70,4 +72,82 @@ test("CLI exits nonzero for unstamped repository DAGs", () => {
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("admission rejects package 0.3.1 / DAG 0.2.0 before Dagu creates a run", isolatedDagu, () => {
+  const fixture = admissionFixture();
+  try {
+    fixture.render("feature.yaml", fixture.dag, "0.2.0");
+    const result = fixture.command("enqueue", "incompatible");
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /DAGU_ADMISSION_REJECTED.*feature.yaml observed=0.2.0.*package=0.3.1/);
+    assert.match(result.stderr, /bootstrap.*adopt.*reload/);
+    assert.equal(existsSync(fixture.receipt("incompatible")), false);
+    const history = spawnSync("dagu", ["history", "feature", "--format", "json"], { env: { ...process.env, DAGU_HOME: fixture.home }, encoding: "utf8" });
+    assert.doesNotMatch(history.stdout, /incompatible/);
+  } finally { fixture.dispose(); }
+});
+
+test("compatible admission enqueues exact bytes and keeps historical receipt across redeployment", isolatedDagu, () => {
+  const fixture = admissionFixture();
+  const run = `compatible-${randomUUID()}`;
+  const redeployedRun = `after-redeploy-${randomUUID()}`;
+  try {
+    const result = fixture.command("enqueue", run);
+    assert.equal(result.status, 0, result.stderr);
+    const path = fixture.receipt(run);
+    const initialReceipt = JSON.parse(readFileSync(path, "utf8"));
+    assert.equal(initialReceipt.sourceVersion.version, "0.3.1");
+    assert.match(initialReceipt.deploymentFingerprint, /^[a-f0-9]{64}$/);
+    assert.deepEqual(Object.keys(initialReceipt.initial).sort(), ["admittedAt", "deployment", "eventsAndExternalState", "execution", "runtimeAndModels"]);
+    assert.equal(initialReceipt.initial.runtimeAndModels.resolvedModel.state, "pending");
+    assert.equal(statSync(path).mode & 0o777, 0o600);
+    assert.equal(initialReceipt.runReceipt.observations[0].kind, "enqueued");
+    const history = spawnSync("dagu", ["history", "feature", "--format", "json"], { env: { ...process.env, DAGU_HOME: fixture.home }, encoding: "utf8" });
+    assert.equal(history.status, 0, history.stderr);
+    assert.ok(history.stdout.includes(run));
+    assert.equal(readFileSync(join(path, "..", "snapshot", "feature.yaml"), "utf8"), initialReceipt.initial.execution.dagSnapshot);
+    const event = { dag: "feature", run, attempt: 1, category: "runtimeAndModels", kind: "model-resolved", data: { resolvedModel: "test/model", resolvedModelIsFallback: false, crossFamilyDecision: { allowed: true, reason: "same family" } } };
+    const observed = fixture.observe(run, event);
+    assert.equal(observed.status, 0, observed.stderr);
+    const afterEvent = JSON.parse(readFileSync(path, "utf8"));
+    assert.deepEqual(afterEvent.initial, initialReceipt.initial);
+    assert.deepEqual(afterEvent.runReceipt.observations.at(-1).data, event.data);
+    const invalid = fixture.observe(run, { ...event, run: "other-run" });
+    assert.notEqual(invalid.status, 0);
+    const oldBytes = readFileSync(path, "utf8");
+    writeFileSync(join(fixture.packageDir, "agents", "triage-reviewer.md"), "Changed effective agent instructions\n");
+    const next = fixture.command("enqueue", redeployedRun);
+    assert.equal(next.status, 0, next.stderr);
+    const nextReceipt = JSON.parse(readFileSync(fixture.receipt(redeployedRun), "utf8"));
+    assert.notEqual(nextReceipt.deploymentFingerprint, initialReceipt.deploymentFingerprint);
+    assert.equal(readFileSync(path, "utf8"), oldBytes);
+    const duplicate = fixture.command("enqueue", run);
+    assert.notEqual(duplicate.status, 0);
+    assert.equal(readFileSync(path, "utf8"), oldBytes);
+  } finally { fixture.dispose(); }
+});
+
+test("admission rejects unreadable, ambiguous, forged render and stale loaded identities", isolatedDagu, () => {
+  const fixture = admissionFixture();
+  try {
+    rmSync(join(fixture.home, "dags", "reconcile.yaml"));
+    const unreadable = fixture.command("enqueue", "unreadable");
+    assert.notEqual(unreadable.status, 0);
+    assert.match(unreadable.stderr, /DAGU_ADMISSION_REJECTED.*reconcile.yaml/);
+    fixture.render("reconcile.yaml", join(fixture.home, "dags", "reconcile.yaml"));
+    const original = readFileSync(fixture.dag, "utf8");
+    writeFileSync(fixture.dag, `${original}\n  - dagu-feature-bundle=0.3.1\n`);
+    const ambiguous = fixture.command("enqueue", "ambiguous");
+    assert.notEqual(ambiguous.status, 0);
+    assert.match(ambiguous.stderr, /ambiguous/);
+    writeFileSync(fixture.dag, `${original}\n# injected code\n`);
+    const forged = fixture.command("enqueue", "forged");
+    assert.notEqual(forged.status, 0);
+    assert.match(forged.stderr, /expected a render/);
+    writeFileSync(fixture.dag, original);
+    const stale = fixture.command("enqueue", "stale", { DAGU_ADMISSION_SESSION: JSON.stringify({ extensionDigest: "old-loaded-digest", transcriptRoot: "/session" }) });
+    assert.notEqual(stale.status, 0);
+    assert.match(stale.stderr, /loaded extension digest=old-loaded-digest.*restart OMP/);
+  } finally { fixture.dispose(); }
 });

@@ -3,6 +3,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
+import { admit, appendObservation, enqueue, enqueueArguments, parseObservation, receiptPath } from "../src/admission.ts";
 import {
   BUNDLE_VERSION,
   classifyCompatibility,
@@ -55,6 +56,33 @@ function resolveRepository(argument: string): string | undefined {
   }
 }
 
+function main(): void {
+  const [command, ...args] = process.argv.slice(2);
+  if (command === "admit" || command === "enqueue") {
+    try {
+      if (command === "enqueue") process.exitCode = enqueue(args, process.cwd());
+      else {
+        const result = admit(enqueueArguments(args, process.cwd()));
+        console.log(JSON.stringify(result));
+      }
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exitCode = 1;
+    }
+    return;
+  }
+  if (command === "observe") {
+    try {
+      const [run, input] = args;
+      if (!run || !input) throw new Error("Usage: observe <run> '<JSON observation with dag/run/attempt/category/kind/data>'");
+      const observation = parseObservation(JSON.parse(input));
+      appendObservation(receiptPath(process.cwd(), run), observation);
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exitCode = 1;
+    }
+    return;
+  }
 const argumentsOrCwd = process.argv.length > 2 ? process.argv.slice(2) : [process.cwd()];
 let ok = true;
 for (const argument of argumentsOrCwd) {
@@ -80,3 +108,5 @@ const observed = dagu.status === null ? "unavailable" : JSON.stringify(dagu.stdo
 console.log(`dagu version=${observed} required=${REQUIRED_DAGU_VERSION} compat=${daguOk ? "ok" : "incompatible"}`);
 ok = daguOk && ok;
 process.exitCode = ok ? 0 : 1;
+}
+main();
