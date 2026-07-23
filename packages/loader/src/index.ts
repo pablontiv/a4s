@@ -26,7 +26,11 @@ export class HotLoader {
   private timer: NodeJS.Timeout | undefined;
   private poll: NodeJS.Timeout | undefined;
   private stopped = false;
-  constructor(private api: object, private dependencies: LoaderDependencies) {
+  private api: object;
+  private dependencies: LoaderDependencies;
+  constructor(api: object, dependencies: LoaderDependencies) {
+    this.api = api;
+    this.dependencies = dependencies;
     this.dispatcher = new Dispatcher(api as Host);
   }
   private async prepare(selection: Selection): Promise<Generation> {

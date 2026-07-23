@@ -19,7 +19,7 @@ export interface InventoryDependencies {
   gitPath?: (primary: string) => string;
   configVersion?: (primary: string) => number;
   listRuns?: () => Promise<StationRun[]>;
-  bindingKnown?: (binding: TickBinding) => Promise<boolean>;
+  bindingRun?: (binding: TickBinding) => Promise<StationRun | undefined>;
   now?: () => number;
 }
 function missing(error: unknown): boolean { return (error as NodeJS.ErrnoException).code === "ENOENT"; }
@@ -55,12 +55,15 @@ async function api(path: string): Promise<Response> {
   return fetch(`${(process.env.DAGU_URL || "http://127.0.0.1:8080").replace(/\/+$/, "")}/api/v1/${path}`, { signal: AbortSignal.timeout(15000) });
 }
 /** All DAGs, all history pages: page size is never a retention limit. */
-export async function listStationRuns(home = process.env.DAGU_HOME || join(homedir(), ".dagu")): Promise<StationRun[]> {
+export async function listStationRuns(home = process.env.DAGU_HOME || join(homedir(), ".dagu"), limit = 100): Promise<StationRun[]> {
   const runs: StationRun[] = [];
   const seen = new Set<string>();
+  // Cursor filters stay fixed. Dagu's second-resolution upper bound must cover
+  // the whole current second, including native subsecond creation timestamps.
+  const toDate = String(Math.floor(Date.now() / 1000) + 1);
   let cursor = "";
   for (;;) {
-    const params = new URLSearchParams({ fromDate: "0", limit: "100" });
+    const params = new URLSearchParams({ fromDate: "0", toDate, limit: String(limit) });
     if (cursor) params.set("cursor", cursor);
     const response = await api(`dag-runs?${params}`);
     if (!response.ok) throw new Error(`Dagu inventory HTTP ${response.status}`);
@@ -93,17 +96,30 @@ export async function listStationRuns(home = process.env.DAGU_HOME || join(homed
       }
       runs.push(run);
     }
-    if (page.nextCursor === undefined || page.nextCursor === "") break;
-    if (typeof page.nextCursor !== "string" || seen.has(page.nextCursor)) throw new Error("Repeated or invalid Dagu inventory cursor; refusing partial inventory");
+    if (page.nextCursor === undefined) break;
+    if (typeof page.nextCursor !== "string" || !page.nextCursor || seen.has(page.nextCursor)) throw new Error("Repeated or invalid Dagu inventory cursor; refusing partial inventory");
     seen.add(page.nextCursor); cursor = page.nextCursor;
   }
   return runs;
 }
-async function bindingKnown(binding: TickBinding): Promise<boolean> {
+/** Only the exact native run-detail unknown result authorizes binding deletion. */
+export async function bindingRun(binding: TickBinding): Promise<StationRun | undefined> {
   const response = await api(`dag-runs/${TICK_DAG}/${encodeURIComponent(binding.dagRunId)}`);
-  if (response.ok) return true;
+  if (!response.headers.get("content-type")?.split(";")[0]?.trim().match(/^application\/json$/i)) throw new Error(`Cannot establish tick binding history: non-JSON HTTP ${response.status}`);
   const value: unknown = await response.json();
-  if (response.status === 404 && isRecord(value) && (value.code === "not_found" || (isRecord(value.error) && value.error.code === "not_found"))) return false;
+  if (response.ok && isRecord(value) && isRecord(value.dagRunDetails)) {
+    const detail = value.dagRunDetails;
+    if (detail.name === TICK_DAG && detail.dagRunId === binding.dagRunId && typeof detail.statusLabel === "string") {
+      const run = { name: TICK_DAG, dagRunId: binding.dagRunId, statusLabel: detail.statusLabel,
+        retryable: detail.humanTaskResumePending === true || detail.approvalResumePending === true ||
+          detail.statusLabel === "failed" && typeof detail.autoRetryLimit === "number" &&
+          (typeof detail.autoRetryCount !== "number" || detail.autoRetryCount < detail.autoRetryLimit) };
+      nonterminal(run);
+      return run;
+    }
+  }
+  if (response.status === 404 && isRecord(value) && value.code === "not_found" &&
+      value.message === `dag-run ID ${binding.dagRunId} not found for DAG ${TICK_DAG}`) return undefined;
   throw new Error(`Cannot establish tick binding history: HTTP ${response.status}`);
 }
 export function readTickBindings(home: string): Array<{ path: string; binding: TickBinding }> {
@@ -190,11 +206,10 @@ export async function inventoryStation(home: string, dependencies: InventoryDepe
     }
     const expiredBindings: string[] = [];
     for (const { path, binding } of readTickBindings(home)) {
-      const listed = runs.filter(run => run.name === TICK_DAG && run.dagRunId === binding.dagRunId);
-      if (listed.some(nonterminal)) references.push({ artifact: binding.tuple, holder: `tick ${TICK_DAG}/${binding.dagRunId}` });
-      else if (!listed.length) {
-        if (!await (dependencies.bindingKnown ?? bindingKnown)(binding)) expiredBindings.push(path);
-      }
+      const listed = runs.find(run => run.name === TICK_DAG && run.dagRunId === binding.dagRunId);
+      const run = listed ?? await (dependencies.bindingRun ?? bindingRun)(binding);
+      if (!run) expiredBindings.push(path);
+      else if (nonterminal(run)) references.push({ artifact: binding.tuple, holder: `tick ${TICK_DAG}/${binding.dagRunId}` });
     }
     return { formats: Object.fromEntries(SHARED_FORMATS.map(name => [name, [...versions[name]]])) as Partial<PersistedFormats>, references, expiredBindings };
   }

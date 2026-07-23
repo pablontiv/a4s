@@ -168,6 +168,28 @@ under operator authority, verify its old identity is dead/reused, restart OMP on
 the bridge, then retry promotion and GC. A `ps` failure is unknown: preserve the
 lease and restore probe access, never manually assume the process is dead.
 
+GC runs at the end of each tick under the station state lock. It inventories
+every registered primary and every DAG using Dagu's aggregate opaque cursors,
+`fromDate=0` and one fixed upper date bound; a short/full page is not an
+end-of-history signal. Malformed pages, repeated cursors, unavailable receipts,
+role-job databases or process probes abort collection before any deletion.
+An admission holds a process lease across receipt publication and enqueue until
+payload exit; GC frees it only after the process is dead or its PID is reused.
+Unlisted receipts, including an ambiguous `incident` enqueue, retain their
+build for seven days from `receiptCreatedAt` (historical receipts use
+`initial.admittedAt`). After that cache-policy boundary, the unchanged receipt
+still restores its exact immutable release; it never repins to current.
+
+Tick bindings are durable run identity, not cache entries. Terminal history
+retains its binding even when its payload is pruned. A binding is removed only
+when the exact Dagu run-detail route reports JSON `404` with `code=not_found`
+for that DAG/run; API errors, transport failures and unrelated 404s preserve
+it. Dagu's native history retention therefore bounds binding growth and the
+period in which native replay remains available. Keep immutable releases for
+receipt-bound restoration beyond local cache retention. Collection changes
+only cache-directory runtime state: historical receipts/evidence and
+operator-owned station/service configuration remain untouched.
+
 1. **Close admission and drain.** Inventory all runs, including queued, waiting
    and recoverable runs, and role jobs. Cutover requires **zero nonterminal runs
    and zero open role jobs**. Never rewrite legacy receipts/snapshots or silently

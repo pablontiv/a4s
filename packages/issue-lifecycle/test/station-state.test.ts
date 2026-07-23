@@ -131,11 +131,11 @@ test("tick binding files survive every listed status and API errors, only defini
   writeFileSync(path, JSON.stringify({ dagRunId: "tick", tuple: artifact, createdAt: new Date().toISOString() }));
   const { inventory: _, ...dependencies } = f.dependencies;
   const base = { ...dependencies, primaries: () => [], listRuns: async () => [{ name: "reconcile", dagRunId: "tick", statusLabel: "succeeded" }] };
-  await gc(f.home, { ...base, bindingKnown: async () => { throw new Error("should not query listed binding"); } });
+  await gc(f.home, { ...base, bindingRun: async () => { throw new Error("should not query listed binding"); } });
   assert.ok(existsSync(path));
-  await assert.rejects(gc(f.home, { ...base, listRuns: async () => [], bindingKnown: async () => { throw new Error("API down"); } }), /API down/);
+  await assert.rejects(gc(f.home, { ...base, listRuns: async () => [], bindingRun: async () => { throw new Error("API down"); } }), /API down/);
   assert.ok(existsSync(path));
-  await gc(f.home, { ...base, listRuns: async () => [], bindingKnown: async () => false });
+  await gc(f.home, { ...base, listRuns: async () => [], bindingRun: async () => undefined });
   assert.equal(existsSync(path), false);
 });
 
