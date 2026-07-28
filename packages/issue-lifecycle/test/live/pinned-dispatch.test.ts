@@ -136,7 +136,7 @@ return {exitCode:0,output:JSON.stringify(output)}};
 `);
     // Exercise the extracted release with only its real tool dependencies. In
     // particular, neither an ambient Bun executable nor a source runtime can win.
-    for (const tool of ["bash", "git", "ps", "jq", "curl", "node"]) {
+    for (const tool of ["bash", "git", "ps", "jq", "curl", "node", "python3"]) {
       symlinkSync(execFileSync("bash", ["--noprofile", "--norc", "-c", 'command -v "$1"', "fixture", tool], { encoding: "utf8" }).trim(), join(bin, tool));
     }
     Object.assign(env, stationEnvironment({ ...env, DAGU_HOME: f.home, PATH: `${join(f.root, "bin")}:${bin}`, DAGU_OUTPUT_FILE: join(f.root, "role-outputs"), DAG_PUSHBACK_ITERATION: "0" }));

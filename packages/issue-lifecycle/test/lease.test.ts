@@ -3,9 +3,10 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { collectDeadLeases, selectStationBuild } from "../../launcher/src/lease.ts";
+import { probeProcess } from "../../launcher/src/process-identity.ts";
 import { initializeStation, gc, promote } from "../../launcher/src/station.ts";
 import { stationRoot } from "../../launcher/src/station-state.ts";
-import { stationFixture } from "./fixtures/station.ts";
+import { configSupport, stationFixture } from "./fixtures/station.ts";
 
 test("selection leases the exact generation and artifact while holding the state lock", async t => {
   const f = stationFixture(t), artifact = await f.release("r1");
@@ -35,14 +36,36 @@ test("unknown probe aborts all cleanup, including a previously observed dead lea
   assert.equal(f.stateBytes(), before);
 });
 
-test("foreign process hosts and malformed lease stores fail closed", async t => {
-  const f = stationFixture(t), artifact = await f.release("r1");
+test("hostname changes preserve live readers without blocking compatible promotion or dead-lease collection", async t => {
+  const f = stationFixture(t), old = await f.release("r1", configSupport([1], 1));
+  const bridge = await f.release("r2", configSupport([1, 2], 1)), writer = await f.release("r3", configSupport([1, 2], 2));
+  await initializeStation(f.home, old, f.dependencies);
+  const lease = await selectStationBuild(f.home, "plugin", "retiring", f.dependencies);
+  const path = join(stationRoot(f.home), "leases", `${lease.id}.json`);
+  writeFileSync(path, JSON.stringify({ ...lease, host: "hostname-before-rename" }));
+  const dependencies = { ...f.dependencies, probe: probeProcess, releases: async () => [writer, bridge] };
+  assert.equal(await collectDeadLeases(f.home, dependencies), 0);
+  assert.equal((await promote(f.home, dependencies)).current.version, "r2");
+  assert.equal((await promote(f.home, dependencies)).promoted, false, "rename cannot release a live incompatible reader");
+  writeFileSync(path, JSON.stringify({ ...lease, host: "hostname-before-rename", processStartedAt: `${lease.processStartedAt}-reused` }));
+  assert.equal((await promote(f.home, dependencies)).current.version, "r3");
+  assert.equal(await collectDeadLeases(f.home, dependencies), 1);
+  assert.equal(existsSync(path), false);
+});
+
+test("renamed hosts with unreadable process identities and malformed leases still fail closed", async t => {
+  const f = stationFixture(t), artifact = await f.release("r1"), next = await f.release("r2");
   await initializeStation(f.home, artifact, f.dependencies);
   const lease = await selectStationBuild(f.home, "plugin", "retiring", f.dependencies);
   const path = join(stationRoot(f.home), "leases", `${lease.id}.json`);
-  writeFileSync(path, JSON.stringify({ ...lease, host: "different-station" }));
-  await assert.rejects(gc(f.home, { ...f.dependencies, probe: () => "dead-or-reused" }), /unknown/i);
+  writeFileSync(path, JSON.stringify({ ...lease, host: "hostname-before-rename" }));
+  const before = f.stateBytes();
+  const dependencies = { ...f.dependencies, probe: () => "unknown" as const };
+  await assert.rejects(gc(f.home, dependencies), /unknown/i);
+  await assert.rejects(promote(f.home, { ...dependencies, releases: async () => [next] }), /unknown/i);
+  assert.equal(f.stateBytes(), before);
   assert.ok(existsSync(path));
+  assert.equal(await collectDeadLeases(f.home, { ...f.dependencies, probe: () => "dead-or-reused" }), 1);
   writeFileSync(path, "{}");
   await assert.rejects(gc(f.home, f.dependencies), /lease/i);
 });

@@ -8,7 +8,7 @@ import { join } from 'node:path'
 const home = realpathSync(mkdtempSync(join(tmpdir(), 'a4s-test-dagu-')))
 const bin = join(home, 'bin')
 mkdirSync(bin)
-for (const tool of ['bash', 'git', 'gh', 'jq', 'curl', 'node', 'omp', 'dagu']) {
+for (const tool of ['bash', 'git', 'gh', 'jq', 'curl', 'node', 'omp', 'dagu', ...(!process.versions.bun ? ['python3'] : [])]) {
   const file = join(bin, tool)
   writeFileSync(file, '#!/bin/sh\nexit 0\n')
   chmodSync(file, 0o755)

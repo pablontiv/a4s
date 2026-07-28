@@ -22,7 +22,10 @@ instead come from a verified tagged release, never an installed source checkout.
 - Dagu 2.24.0 for native first-attempt evidence, Git, authenticated `gh`, `jq`,
   Bash and Node for the real gate preload. Install the separate stable launcher
   and stable loader below; payloads remain complete verified extracted roots.
-  Python `fcntl` is required only by Node/tsx development tests, not the engine.
+  Node/tsx tools and Node-hosted loader leases require `python3` with its
+  standard-library `fcntl`; their service-environment check requires it on the
+  declared literal PATH before admission. Compiled Bun engines use native locks
+  without Python.
 - Semantic role jobs use the station's `omp` from the service/bootstrap PATH,
   not Bun or an installed OMP source tree. The executing release ships the pinned
   runner and `triage-reviewer`; the host discovers shared `task`. Run

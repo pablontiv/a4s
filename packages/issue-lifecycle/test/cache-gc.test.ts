@@ -25,15 +25,18 @@ for (const source of ["current", "previous", "keep-10"] as const) {
   });
 }
 
-test("GC retains a live process lease and frees only a dead or reused identity", async t => {
+test("GC resolves renamed-host leases by process identity, retaining live and freeing reused owners", async t => {
   const f = await gcFixture(t);
   f.setState({ ...f.state(), current: f.builds[0]! });
   const lease = await selectStationBuild(f.home, "plugin", "retiring generation", f.dependencies);
+  const path = join(stationRoot(f.home), "leases", `${lease.id}.json`);
+  writeFileSync(path, JSON.stringify({ ...lease, host: "hostname-before-rename" }));
   f.setState({ ...f.state(), current: f.builds[13]! });
-  const report = await gc(f.home, f.dependencies);
+  const report = await gc(f.home, { ...f.dependencies, probe: probeProcess });
   assert.match(report.retained.find(entry => entry.version === "r1")!.holders.join(), /plugin lease holder.*restart OMP/);
   assert.ok(existsSync(join(stationRoot(f.home), "r1", "a4s")));
-  const result = await gc(f.home, { ...f.dependencies, probe: () => "dead-or-reused" });
+  writeFileSync(path, JSON.stringify({ ...lease, host: "hostname-before-rename", processStartedAt: `${lease.processStartedAt}-reused` }));
+  const result = await gc(f.home, { ...f.dependencies, probe: probeProcess });
   assert.ok(result.removed.includes("r1"));
   assert.equal(existsSync(join(stationRoot(f.home), "leases", `${lease.id}.json`)), false);
 });

@@ -6,6 +6,24 @@ import test from "node:test";
 import { readServiceEnvironment, serviceEnvironmentPath } from "../src/service-environment.ts";
 import { declareService } from "../../issue-lifecycle/test/fixtures/service-environment.ts";
 
+test("Node flock requires python3 on the declared literal PATH, never the caller PATH", t => {
+  const home = mkdtempSync(join(tmpdir(), "a4s-python-contract-"));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const env = declareService(home, "http://127.0.0.1:18765");
+  const expected = readServiceEnvironment(env);
+  const python = join(home, "bin", "python3");
+  if (process.versions.bun) {
+    assert.equal(readServiceEnvironment({ ...env, PATH: "/unrelated" }).PATH, expected.PATH);
+    return;
+  }
+  rmSync(python);
+  const before = readFileSync(env.A4S_SERVICE_ENV!, "utf8");
+  assert.throws(() => readServiceEnvironment({ ...env, PATH: process.env.PATH }), /field=PATH.*missing python3/);
+  writeFileSync(python, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  assert.deepEqual(readServiceEnvironment({ ...env, PATH: "/unrelated" }), expected);
+  assert.equal(readFileSync(env.A4S_SERVICE_ENV!, "utf8"), before, "readiness does not rewrite the admission PATH");
+});
+
 test("service declaration is explicitly selected, literal and independent of caller PATH", () => {
   const home = mkdtempSync(join(tmpdir(), "a4s-service-contract-"));
   try {

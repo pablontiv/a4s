@@ -165,6 +165,10 @@ close admission, inspect/drain active and recoverable runs/open jobs, stop OMP
 under operator authority, verify its old identity is dead/reused, restart OMP on
 the bridge, then retry promotion and GC. A `ps` failure is unknown: preserve the
 lease and restore probe access, never manually assume the process is dead.
+The station lease store is local to one machine, not a cross-host shared store.
+Its recorded hostname is diagnostic: a host rename does not prevent PID/start
+identity checks. Live owners still retain their builds; dead/reused identities
+(including Linux boot-ID changes) release leases normally after a rename.
 
 GC runs at the end of each tick under the station state lock. It inventories
 every registered primary and every DAG using Dagu's aggregate opaque cursors,
@@ -470,8 +474,14 @@ an existing readable absolute directory. Every colon-separated PATH entry must
 be absolute; empty PATH entries are invalid.
 Field values are literal: no shell expansion, inferred `DAGU_HOME`, port or caller-PATH fallback.
 The declared PATH must resolve executable files for `bash`, `git`, `gh`, `jq`,
-`curl`, `node`, `omp` and `dagu`; initial admission also needs `a4s`. Hashing is
-done by the release executable (`a4s planning sha256 --file`), so no `shasum` or
+`curl`, `node`, `omp` and `dagu`; initial admission also needs `a4s`.
+Node-hosted launcher/loader code additionally requires `python3` for its
+standard-library `fcntl` lock helper, and the same reader checks it on the
+declared PATH, never the caller's PATH. Compiled Bun engines use native locks and
+do not require Python. Admission freezes the literal PATH, so Node-hosted users
+must validate this prerequisite before admission rather than rely on a later
+interactive PATH change.
+Hashing is done by the release executable (`a4s planning sha256 --file`), so no `shasum` or
 `sha256sum` is needed; bootstrap `detect` fails if that probe fails under the
 declared environment. Planning review resolves coordinating transcripts from the
 session id and transcript root recorded at admission, not from the service's

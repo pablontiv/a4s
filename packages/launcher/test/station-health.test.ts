@@ -13,7 +13,7 @@ function fixture() {
   paths.forEach(path => writeFileSync(path, "stale contents are not ownership"));
   const state = join(home, "cache", "a4s", "state.json");
   writeFileSync(state, JSON.stringify({ schema: 1, current: { version: "r2" } })); utimesSync(state, new Date("2026-01-01T00:05:00Z"), new Date("2026-01-01T00:05:00Z"));
-  for (const [name, host, pid] of [["dead", hostname(), 2147483647], ["remote", "another-host", 42]] as const) {
+  for (const [name, host, pid] of [["dead", hostname(), 2147483647], ["renamed", "hostname-before-rename", 42]] as const) {
     writeFileSync(join(home, "cache", "a4s", "leases", `${name}.json`), JSON.stringify({ host, pid, processStartedAt: "linux:boot:1", holder: "fixture" }));
   }
   const info = statSync(paths[0]!, { bigint: true }), identity = deviceIdentity(info.dev, info.ino);
@@ -63,7 +63,8 @@ test("read-only health groups waiting/failed steps, infers skips, preserves unce
   const f = fixture(); t.after(() => rmSync(f.root, { recursive: true, force: true }));
   const before = fingerprint(f.home);
   const options = { home: f.home, url: "http://127.0.0.1:8080", now };
-  const dependencies = { fetch: api(), github, locks: (paths: string[]) => observeLocks(paths, f.proc, () => 0xef53) };
+  const dependencies = { fetch: api(), github, probe: (pid: number) => pid === 42 ? "alive" as const : "dead-or-reused" as const,
+    locks: (paths: string[]) => observeLocks(paths, f.proc, () => 0xef53) };
   const one = await stationHealth(options, dependencies);
   const two = await stationHealth(options, { ...dependencies, fetch: api(true) });
   assert.equal(healthJson(one), healthJson(two)); assert.deepEqual(fingerprint(f.home), before, "no file created, rewritten or truncated under station home");
@@ -71,7 +72,7 @@ test("read-only health groups waiting/failed steps, infers skips, preserves unce
   const waiting = one.runs.value?.find(group => group.status === "waiting");
   assert.equal(waiting?.count, 2); assert.deepEqual(waiting?.ageMs.value, { oldest: 3600000, median: 3000000 });
   assert.equal(one.runs.value?.find(group => group.status === "failed")?.step.value, "gate");
-  assert.equal(one.leases.value?.[0]?.liveness.value, "dead-or-reused"); assert.equal(one.leases.value?.[1]?.liveness.value, "unknown");
+  assert.equal(one.leases.value?.[0]?.liveness.value, "dead-or-reused"); assert.equal(one.leases.value?.[1]?.liveness.value, "alive");
   assert.equal(one.locks[0]?.held.value, true); assert.equal(one.locks[0]?.holders.value?.[0]?.alive.value, true);
   assert.equal(one.locks[0]?.holders.value?.[0]?.cmdline.value, "omp --restore fixture");
   assert.equal(one.locks[0]?.holders.value?.[0]?.matchingFds.value?.[0]?.fd, "7"); assert.equal(one.locks[1]?.held.value, false);

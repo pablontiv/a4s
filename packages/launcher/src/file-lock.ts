@@ -33,6 +33,8 @@ function bunLibc(): Libc {
 /** Node tooling uses standard-library fcntl on an inherited duplicate of fd.
  * The parent's descriptor retains the same kernel lock after that child exits.
  * Released Bun engines use libc directly and never execute this Python branch.
+ * Node-hosted users require python3 on the declared service PATH, checked by
+ * service-environment.ts before admission; that literal PATH stays frozen.
  */
 function flock(fd: number, operation: number): boolean {
   if (process.versions.bun) {

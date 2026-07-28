@@ -308,11 +308,15 @@ status and are deleted only after a definitive unknown response, never an API
 error. Run identity remains in receipts/bindings even after build pruning.
 
 Leases record build, PID, host, process start identity, generation and holder.
+The lease store belongs to one local station and MUST NOT be shared across
+machines. The recorded hostname is diagnostic, not identity authority: hostname
+renames MUST still resolve existing leases by PID and process start identity.
 On Linux the start identity contains `/proc` start ticks and boot ID, preventing
 PID reuse or a reboot from keeping a false live reference. Loaded **and retiring**
 plugin generations keep leases until OMP exits. Probes are `alive`,
 `dead-or-reused`, or `unknown`: only definite absence or a changed identity frees
-a lease. Unreadable probes and foreign hosts are unknown and abort GC.
+a lease. Unreadable probes remain unknown and abort GC and promotion without
+deleting leases, regardless of the recorded hostname.
 Reports name retained builds and holders. Keep-ten is a cache policy, **not a disk
 bound** while processes/runs hold builds (about 116 MB each).
 
