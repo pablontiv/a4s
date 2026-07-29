@@ -30,7 +30,8 @@ export class IssueTitles {
   private readonly cached = new Map<string, string | undefined>();
   private readonly inFlight = new Map<string, Promise<boolean>>();
 
-  constructor(private readonly resolver: IssueTitleResolver) {}
+  private readonly resolver: IssueTitleResolver;
+  constructor(resolver: IssueTitleResolver) { this.resolver = resolver; }
 
   has(issue: string): boolean {
     return this.cached.has(issue);

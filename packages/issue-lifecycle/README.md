@@ -6,6 +6,10 @@ the runtime requires official Dagu 2.23.0 or newer, with local
 `auth.mode=none`. Standalone consumers use the same root Node pin. The package owns status observation/wakeup, admission/resource
 guards, `triage-reviewer`, `plan-reviewer` and all seven lifecycle workflow skills.
 
+The source CLI runs with Node's strip-only TypeScript support. The package
+`typecheck` script enables `erasableSyntaxOnly` to reject non-erasable syntax,
+including constructor parameter properties, enums, and runtime namespaces.
+
 ## Versioned executable and release builds
 
 The release engine is one Bun-compiled `a4s` executable. Repository tools and

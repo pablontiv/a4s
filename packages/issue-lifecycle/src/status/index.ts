@@ -88,7 +88,11 @@ async function discover(base: string, repo: string, signal: AbortSignal, history
 }
 
 class RunDetailsError extends Error {
-  constructor(readonly status: number) { super(`HTTP ${status}`); }
+  readonly status: number;
+  constructor(status: number) {
+    super(`HTTP ${status}`);
+    this.status = status;
+  }
 }
 
 async function runDetails(base: string, summary: RunDetails, signal: AbortSignal): Promise<RunDetails> {
