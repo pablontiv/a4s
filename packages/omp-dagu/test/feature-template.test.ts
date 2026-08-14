@@ -648,10 +648,19 @@ test("template isolated PoC parent succeeds after exactly one child enqueue acro
     const bin = join(repo.root, "bin");
     const calls = join(repo.root, "external-calls");
     writeFileSync(calls, "");
-    for (const command of ["gh", "dagu-feature-bundle"]) {
-      writeFileSync(join(bin, command), `#!/bin/bash\nprintf '%s\\n' ${JSON.stringify(command + " ")}"$*" >> ${JSON.stringify(calls)}\n`);
-      chmodSync(join(bin, command), 0o755);
-    }
+    writeFileSync(join(bin, "gh"), `#!/bin/bash\nprintf '%s\\n' "gh $*" >> ${JSON.stringify(calls)}\n`);
+    writeFileSync(join(bin, "dagu-poc-scope"), `#!/bin/bash\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(fileURLToPath(new URL("../bin/dagu-poc-scope.ts", import.meta.url)))} "$@"\n`);
+    writeFileSync(join(bin, "dagu-feature-bundle"), `#!/bin/bash
+set -euo pipefail
+arguments="$*"
+while [[ $# -gt 0 && "$1" != -- ]]; do shift; done
+[[ "$1" == -- ]]
+shift
+for parameter in "$@"; do export "$parameter"; done
+dagu-poc-scope require
+printf '%s\\n' "dagu-feature-bundle $arguments" >> ${JSON.stringify(calls)}
+`);
+    for (const command of ["gh", "dagu-poc-scope", "dagu-feature-bundle"]) chmodSync(join(bin, command), 0o755);
     const source = readFileSync(definitions[0][1], "utf8");
     const dag = join(home, "dags", "feature.yaml");
     const variables = {
@@ -659,10 +668,11 @@ test("template isolated PoC parent succeeds after exactly one child enqueue acro
       RUN: run, ISSUE: "189", BASE_BRANCH: "main", PR_NUMBER: "", VALIDATION: "",
       OMP_SESSION_ID: "parent-id", PATH: `${bin}:${process.env.PATH}`, GATE: "true",
       REQUIRED_CHECK: "validate", DAGU_FEATURE_BUNDLE: "test",
+      ESCALATION_POC_INCONCLUSIVE: "2",
     };
     writeFileSync(dag, `name: feature\ntype: graph\nshell: bash\nmax_active_steps: 1\nenv:\n${Object.entries(variables).map(([key, value]) => `  - ${key}: ${JSON.stringify(value)}`).join("\n")}\n`
       + source.slice(source.indexOf("  - DAGU_RESOURCE_GUARD: |"), source.indexOf("steps:\n"))
-      + `steps:\n  - id: triage\n    run: |\n      printf 'POC=yes\\nQUESTION=runtime behavior\\nBASIS=regression test\\nREVIEW=\\n' >> "$DAGU_OUTPUT_FILE"\n    outputs:\n      - name: POC\n      - name: QUESTION\n      - name: BASIS\n      - name: REVIEW\n`
+      + `steps:\n  - id: triage\n    run: |\n      printf '%s\\n' 'POC=yes' 'QUESTION=runtime behavior' 'BASIS=regression test' 'REVIEW=' 'REQUIRED_TARGETS=["linux-arm64"]' 'AUTHORIZED_TARGETS=["linux-arm64"]' 'SCOPE_BASIS=regression test authorized linux-arm64' >> "$DAGU_OUTPUT_FILE"\n    outputs:\n      - name: POC\n      - name: QUESTION\n      - name: BASIS\n      - name: REVIEW\n      - name: REQUIRED_TARGETS\n      - name: AUTHORIZED_TARGETS\n      - name: SCOPE_BASIS\n`
       + source.slice(source.indexOf("  - id: triage_decision\n")));
     const env = { ...process.env, DAGU_HOME: home, DAGU_COORDINATOR_ENABLED: "false" };
     const result = spawnSync("dagu", ["start", "--run-id", run, dag], {
@@ -675,9 +685,16 @@ test("template isolated PoC parent succeeds after exactly one child enqueue acro
     const status = spawnSync("dagu", ["status", dag, "--run-id", run], { encoding: "utf8", env });
     assert.equal(status.status, 0, status.stdout + status.stderr);
     assert.match(status.stdout, /Succeeded/);
+    const scope = join(repo.primary, ".git", "poc", "scope", "189");
+    const requests = readdirSync(scope);
+    assert.equal(requests.length, 1);
+    const request = JSON.parse(readFileSync(join(scope, requests[0]!, "request.json"), "utf8"));
+    assert.equal(request.decisionRequired, false);
+    assert.deepEqual(request.input, { issue: "189", question: "runtime behavior", requiredTargets: ["linux-arm64"],
+      authorizedTargets: ["linux-arm64"], basis: "regression test authorized linux-arm64" });
     assert.deepEqual(readFileSync(calls, "utf8").trim().split("\n"), [
       `gh issue comment 189 --body-file ${join(repo.primary, ".git", "dagu-feature", "runs", run, "triage.md")}`,
-      `dagu-feature-bundle enqueue --run-id poc-${run} ${repo.primary}/.workspace/dagu/dags/poc.yaml -- ISSUE=189 QUESTION=runtime behavior BASE_BRANCH=main OMP_SESSION_ID=parent-id`,
+      `dagu-feature-bundle enqueue --run-id poc-${run} ${repo.primary}/.workspace/dagu/dags/poc.yaml -- ISSUE=189 QUESTION=runtime behavior BASE_BRANCH=main OMP_SESSION_ID=parent-id REQUIRED_TARGETS=["linux-arm64"] AUTHORIZED_TARGETS=["linux-arm64"] SCOPE_BASIS=regression test authorized linux-arm64 SCOPE_REQUEST=${request.id}`,
     ]);
   } finally { rmSync(repo.root, { recursive: true, force: true }); }
 });
@@ -1125,7 +1142,18 @@ for (const [name, definition] of definitions) {
       assert.equal(result.status, 75, result.stderr);
       assert.ok(result.stderr.includes(`rebase: index.lock held in ${repo.worktree}`));
       assert.equal(readFileSync(join(repo.state, "conflict-action"), "utf8"), "preserved\n");
-      assert.match(readFileSync(definition, "utf8"), /- id: rebase\n    depends: dependency_review(?:_cancellation)?\n    retry_policy:\n      limit: 3\n      interval_sec: 5\n      exit_code: \[75\]/);
+      const source = readFileSync(definition, "utf8");
+      const dependency = name === "template" ? "rebase_escalation_decision" : "dependency_review_cancellation";
+      assert.match(extractStep(source, "rebase"), new RegExp(`^    depends: ${dependency}$`, "m"));
+      assert.match(extractStep(source, "rebase"), /    retry_policy:\n      limit: 3\n      interval_sec: 5\n      exit_code: \[75\]/);
+      assert.match(extractStep(source, "dependency_review_cancellation"), /^    depends: dependency_review$/m);
+      if (name === "template") {
+        const path = ["dependency_review_cancellation", "rebase_budget", "rebase_escalation",
+          "rebase_escalation_cancellation", "rebase_escalation_decision"];
+        for (let index = 1; index < path.length; index++) {
+          assert.match(extractStep(source, path[index]!), new RegExp(`^    depends: ${path[index - 1]}$`, "m"));
+        }
+      }
     } finally {
       rmSync(repo.root, { recursive: true, force: true });
     }
@@ -1498,9 +1526,16 @@ esac
       assert.match(extractStep(source, step!), /continue_on:\n      failure: true/);
       const recovery = extractStep(source, `recover_${step}`);
       assert.ok(recovery.includes(`condition: "\${${step}.exit_code}"`));
-      assert.ok(recovery.includes(`rewind_to: ${step === "gate" ? "implement" : step}`));
+      const rewind = step === "gate" ? name === "template" ? "implement_budget" : "implement" : step;
+      assert.match(recovery, new RegExp(`^        rewind_to: ${rewind}$`, "m"));
       assert.match(recovery, /continue_on: skipped/);
-      assert.ok(extractStep(source, downstream!).includes(`depends: recover_${step}`));
+      const path = name === "template" && step === "start_gate"
+        ? ["recover_start_gate", "recover_start_gate_cancellation", "implement_budget", "escalation",
+          "escalation_cancellation", "escalation_decision", downstream]
+        : [`recover_${step}`, `recover_${step}_cancellation`, downstream];
+      for (let index = 1; index < path.length; index++) {
+        assert.match(extractStep(source, path[index]!), new RegExp(`^    depends: ${path[index - 1]}$`, "m"));
+      }
     });
   }
 }

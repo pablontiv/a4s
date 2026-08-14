@@ -1306,6 +1306,74 @@ the original lane, or advances its patch when both select the same lane.
 Incompatible lanes, changed history and ambiguous functional hunks retain
 conflicts with a diagnostic. Other paths remain owned by `implement`.
 
+## Run-wide escalation and owner decisions
+
+Bootstrap fixes positive-integer repository policy in the rendered DAGs:
+`ESCALATION_PUSHBACKS=3`, `ESCALATION_FINDINGS=2`,
+`ESCALATION_SECONDS=3600`, `ESCALATION_CI_BLOCKED=2` and
+`ESCALATION_POC_INCONCLUSIVE=2`. Blank bootstrap answers preserve installed
+values; first adoption uses these defaults. The issue specifies the count
+defaults; the initial elapsed window is one hour. Run parameters cannot override
+these adopted values.
+
+`implement_budget` checks before implementation, and `rebase_budget` checks the
+direct merge-conflict return before rebasing. Recovery checkpoints rewind through
+these boundaries. The durable file
+`<git-common>/dagu-feature/runs/<RUN>/escalation.json` binds admission time,
+native run-wide iteration, candidate SHA, budget window, normalized finding
+occurrences, active request and decisions. A kernel advisory lock excludes
+concurrent writers; fsynced temporary files and atomic replacement preserve
+completed updates. Native `DAG_PUSHBACK_ITERATION` from the running command
+(absent initially, then the run-wide rewind number) supplies the iteration to
+budget accounting and role dispatch. Native iteration differences count
+push-backs, rather than command visits. A gate/conflict/finding command retried
+in the same iteration
+records one occurrence; a later iteration can establish the repeated fingerprint.
+Gate output, sorted conflict paths and normalized finding text retain their
+evidence independently of candidate archives.
+
+The configured push-back count, repeated fingerprint or elapsed window parks at
+`escalation` (or `rebase_escalation` on the direct rebase path), before another
+dispatch. The owning `OMP_SESSION_ID` receives the request with run, iteration,
+SHA, reasons, latest findings, elapsed seconds and spend. When no authoritative
+run-wide cost receipt exists, spend is explicitly `unknown` with its cause,
+rather than an estimated or fabricated amount. The candidate, branch, PR,
+worktree and prior evidence remain in place.
+
+Complete the actual waiting decision task with `ACTION=continue`,
+`REASON=<decision basis>` and `DECIDED_BY=<operator attribution>` to renew the
+window at the current native iteration. Complete with `ACTION=stop` and the same
+provenance fields to persist a domain stop, deliberately fail the effect-free
+decision gate with exit 77 and execute `onExit`. Its native status is **Failed**;
+unpublished work is retained under the ordinary cleanup ownership rules.
+To change scope or delivery route, push back the decision task to its declared
+`triage` ancestor with `--expected-iteration <observed iteration>`, `REASON` and
+`DECIDED_BY`; the returning triage records the observed native rewind and renews
+the budget before reassessing the issue. The change-route record names that
+mechanism, run, iteration and owner session; native OS attribution is advisory,
+not authenticated identity. Native task audit history retains the supplied
+push-back inputs. Completion has no `--expected-iteration` flag on Dagu 2.20.1;
+push-back retains its atomic stale-iteration rejection.
+
+For CI no-progress, the second consecutive identical BLOCKED
+`(run, sha, check, cause)` observation creates one durable owner decision request
+with failing-job evidence. Duplicate delivery of a tick does not increment the
+streak. A changed SHA or cause starts a new fingerprint, and a non-BLOCKED
+observation resets the consecutive streak. The wait stays owned by the reconciler;
+the notification itself performs no transition.
+
+Before admitting a PoC, triage returns concrete required and authorized target
+arrays plus the actual operator authorization basis. Unknown access is explicit.
+A target outside the authorized route parks at `poc_scope_decision` once:
+narrow the question to reachable targets, provide access, or defer. A decision
+binds the effective question, target arrays and authorization basis to an
+immutable scope request; both bundle admission and the native PoC admission
+check it. A second distinct PoC for that issue ending INCONCLUSIVE with an
+explicit `## Inconclusive cause` of `access` or `scope` requires the same decision
+before another admission. Other inconclusive causes remain distinct; unavailable
+historical cause evidence fails closed for diagnosis. Deferral preserves its
+decision and terminates with native Failed/77 plus normal exit cleanup.
+
 ## Reconcile `await_merge`
 
 Remote observation belongs to the scheduled [`reconcile`](reconcile.yaml) DAG, a separate process from the implementing agent, which does not wait on hosted CI. The reconciler holds no repository queue slot: it uses its own local queue with concurrency one. It runs every minute with `overlap_policy: skip` and an empty `catchup_window`.

@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { Transitions } from "../src/status/progress.ts";
 import type { RunDetails } from "../src/status/progress.ts";
-import { readCiDiagnostic } from "../src/status/repository.ts";
+import { readCiDiagnostic, readEscalationDiagnostic } from "../src/status/repository.ts";
 import { BUNDLE_VERSION } from "../src/bundle.ts";
 import { verifyQuality } from "../src/triage/quality.ts";
 import { qualityFixture } from "./quality-fixtures.ts";
@@ -201,6 +201,7 @@ function execute(f: Fixture, source: string, id: string) {
   return spawnSync("bash", ["-c", script(source, id)], { env: f.env, cwd: f.root, encoding: "utf8" });
 }
 function observe(f: Fixture, source: string) {
+  f.env.CI_OBSERVATION_ID = String(Number(f.env.CI_OBSERVATION_ID ?? 0) + 1);
   const result = execute(f, source, "observe");
   assert.equal(result.status, 0, result.stdout + result.stderr);
   return JSON.parse(readFileSync(join(f.state, "ci-observation.json"), "utf8"));
@@ -322,6 +323,113 @@ for (const [name, base] of definitions) {
     } finally { rmSync(f.root, { recursive: true, force: true }); }
   });
 }
+
+test("template: consecutive BLOCKED ticks request one owner decision per fingerprint", async () => {
+  const reconcile = readFileSync(new URL("../skills/dagu-feature/reconcile.yaml", import.meta.url), "utf8");
+  const f = fixture("no-progress558");
+  try {
+    git(f.worktree, "push", "-u", "origin", f.branch);
+    update(f, { conclusion: "cancelled", log: "Approval required by environment owner" });
+    const waiting: RunDetails = {
+      name: "feature", dagRunId: f.env.RUN!, statusLabel: "waiting", params: "ISSUE=226 OMP_SESSION_ID=owner",
+      nodes: ["await_ci", "await_merge"].map(name => ({ step: { name, humanTask: {} }, statusLabel: "waiting", approvalIteration: 0 })),
+    };
+    const transitions = new Transitions("owner");
+    const first = observe(f, reconcile);
+    assert.equal(first.class, "BLOCKED");
+    assert.equal(first.decisionRequest, undefined);
+    transitions.observe(waiting, { ciDiagnostic: first });
+    const repeatedTick = execute(f, reconcile, "observe");
+    assert.equal(repeatedTick.status, 0, repeatedTick.stderr);
+    assert.equal(JSON.parse(readFileSync(join(f.state, "ci-no-progress.json"), "utf8")).observations, 1);
+    const second = observe(f, reconcile);
+    assert.equal(second.decisionRequest.observations, 2);
+    const signal = new AbortController().signal;
+    const diagnostic = await readCiDiagnostic(f.primary, f.env.RUN!, false, signal);
+    assert.deepEqual(diagnostic?.decisionRequest, second.decisionRequest);
+    const request = transitions.observe(waiting, { ciDiagnostic: diagnostic! });
+    assert.match(request.wakeMessage!, /\[DAGU DECISION\].*ci=BLOCKED.*check=validate.*Approval required/);
+    assert.match(request.wakeMessage!, /continue with a renewed budget; change scope or delivery route; stop/);
+    assert.equal(request.wakeMessages, undefined);
+    for (let tick = 0; tick < 2; tick++) {
+      const repeated = observe(f, reconcile);
+      assert.deepEqual(repeated.decisionRequest, second.decisionRequest);
+      assert.deepEqual(transitions.observe(waiting, { ciDiagnostic: repeated }), {});
+    }
+    assert.deepEqual(new Transitions("another-owner").observe(waiting, { ciDiagnostic: second }), {});
+    update(f, { auto: false });
+    assert.equal(observe(f, reconcile).decisionRequest, undefined);
+    const changedCause = observe(f, reconcile);
+    assert.notEqual(changedCause.decisionRequest.id, second.decisionRequest.id);
+    assert.match(JSON.stringify(transitions.observe(waiting, { ciDiagnostic: changedCause })), /DAGU DECISION/);
+    writeFileSync(join(f.worktree, "candidate"), "new head\n");
+    git(f.worktree, "add", "candidate");
+    git(f.worktree, "commit", "-m", "new head");
+    git(f.worktree, "push", "origin", f.branch);
+    assert.equal(observe(f, reconcile).decisionRequest, undefined);
+    const changedSha = observe(f, reconcile);
+    assert.notEqual(changedSha.decisionRequest.id, changedCause.decisionRequest.id);
+    assert.match(JSON.stringify(transitions.observe(waiting, { ciDiagnostic: changedSha })), /DAGU DECISION/);
+    assert.equal(Object.keys(JSON.parse(readFileSync(join(f.state, "ci-no-progress.json"), "utf8")).requests).length, 3);
+    update(f, { auto: true, conclusion: "success", log: "" });
+    assert.equal(observe(f, reconcile).class, "PASS");
+    update(f, { conclusion: "cancelled" });
+    assert.equal(observe(f, reconcile).decisionRequest, undefined);
+    transition(f, reconcile);
+    assert.equal(JSON.parse(readFileSync(f.control, "utf8")).iteration, 0);
+  } finally { rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test("template: no-progress threshold is repository policy and non-BLOCKED ticks reset the streak", () => {
+  const reconcile = readFileSync(new URL("../skills/dagu-feature/reconcile.yaml", import.meta.url), "utf8");
+  const f = fixture("policy558");
+  try {
+    git(f.worktree, "push", "-u", "origin", f.branch);
+    f.env.ESCALATION_CI_BLOCKED = "3";
+    update(f, { conclusion: "cancelled", log: "Approval required" });
+    assert.equal(observe(f, reconcile).decisionRequest, undefined);
+    update(f, { pending: true });
+    assert.equal(observe(f, reconcile).class, "PENDING");
+    update(f, { pending: false });
+    assert.equal(observe(f, reconcile).decisionRequest, undefined);
+    assert.equal(observe(f, reconcile).decisionRequest, undefined);
+    assert.equal(observe(f, reconcile).decisionRequest.observations, 3);
+    update(f, { conclusion: "timed_out", log: "Runner lost communication with the server" });
+    observe(f, reconcile);
+    const retryPath = join(f.state, `ci-retry-${git(f.worktree, "rev-parse", "HEAD")}.json`);
+    writeFileSync(retryPath, JSON.stringify({ attempts: 2, next_at: 0 }));
+    assert.equal(observe(f, reconcile).class, "BLOCKED");
+    assert.equal(observe(f, reconcile).decisionRequest, undefined);
+    assert.equal(observe(f, reconcile).decisionRequest.observations, 3);
+    update(f, { auto: false, conclusion: "cancelled", log: "Approval required" });
+    f.env.ESCALATION_CI_BLOCKED = "1";
+    assert.equal(observe(f, reconcile).decisionRequest.observations, 1);
+  } finally { rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test("escalation diagnostics target the owner with budget evidence and decision options", async () => {
+  const f = fixture("escalation558");
+  try {
+    writeFileSync(join(f.state, "escalation.json"), JSON.stringify({
+      schemaVersion: 1, run: f.env.RUN, findings: [], trigger: {
+        id: "budget558", reasons: ["repeated finding"], iteration: 3, sha: f.base,
+        latestFindings: [{ text: "Repeated documentation finding", fingerprint: "finding558", iteration: 3 }], elapsedSeconds: 7200,
+        spend: { state: "unknown", cause: "session attribution unavailable" },
+      },
+    }));
+    const diagnostic = await readEscalationDiagnostic(f.worktree, f.env.RUN!, new AbortController().signal);
+    assert.match(diagnostic!, /findings=Repeated documentation finding elapsedSeconds=7200 spend=unknown \(session attribution unavailable\)/);
+    for (const step of ["escalation", "rebase_escalation"]) {
+      const run: RunDetails = { name: "feature", dagRunId: f.env.RUN!, statusLabel: "waiting",
+        params: "OMP_SESSION_ID=owner", nodes: [{ step: { name: step, humanTask: {} }, statusLabel: "waiting", approvalIteration: 3 }] };
+      const transitions = new Transitions("owner");
+      const notice = transitions.observe(run, { escalationDiagnostic: diagnostic! }).wakeMessage!;
+      assert.match(notice, /escalation=budget558.*iteration=3.*repeated finding.*continue with a renewed budget/);
+      assert.deepEqual(transitions.observe(run, { escalationDiagnostic: diagnostic! }), {});
+      assert.deepEqual(new Transitions("other").observe(run, { escalationDiagnostic: diagnostic! }), {});
+    }
+  } finally { rmSync(f.root, { recursive: true, force: true }); }
+});
 
 test("Dagu 2.20.1: paired root waits return to implement/rebase and release the queue", {
   ...liveDagu,

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.118
+
+- Persist run-wide lifecycle escalation budgets across native retries, resumes and push-backs, with owner-targeted decision evidence, renewed windows, route changes and retained stop/onExit evidence (#558).
+- Fingerprint consecutive CI BLOCKED observations and send one owner decision request per fingerprint while reconciliation retains transition ownership.
+- Require a bound PoC target/access assessment before admission and an owner decision for unreachable targets or repeated access/scope INCONCLUSIVE results; render configurable escalation thresholds through bootstrap.
+
 ## 0.3.117
 
 - Allocate real Dagu test run identities through one shared per-execution fixture helper, including child runs and lifecycle lookups, so concurrent suites keep host-global control sockets separate (#542).

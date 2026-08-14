@@ -6,6 +6,9 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { withResourceGuard } from "./resource-fixtures.ts";
+import { approvedPocScope, assessPocScope, decidePocScope, inconclusiveCause, requirePocScope, type PocScopeInput } from "../src/poc-scope.ts";
+import { admit } from "../src/admission.ts";
+import { parseReview } from "../src/triage/schema.ts";
 import "./waiting-cancellation.test.ts";
 
 for (const [name, definition] of [
@@ -382,4 +385,164 @@ test("PoC clean cleanup requires no publication and is idempotent", () => {
   } finally {
     fixture.cleanup();
   }
+});
+
+test("triage compares concrete required targets with the operator-authorized route", () => {
+  const review = parseReview(JSON.stringify({ poc: "yes", behavior: "native OS behavior", question: "Can all native OS targets run?",
+    reason: "Runtime uncertainty", requiredTargets: ["linux-arm64", "windows-x64"], authorizedTargets: ["linux-arm64"],
+    scopeBasis: "Operator authorized local Docker Linux arm64 only" }));
+  const fixture = pocFixture();
+  try {
+    const input: PocScopeInput = { issue: "41", question: review.question, requiredTargets: review.requiredTargets!,
+      authorizedTargets: review.authorizedTargets!, basis: review.scopeBasis! };
+    const first = assessPocScope(fixture.primary, input);
+    const replay = assessPocScope(fixture.primary, input);
+    assert.deepEqual(replay, first, "duplicate assessment retains one durable decision request");
+    assert.equal(first.decisionRequired, true);
+    assert.match(first.reason, /windows-x64/);
+    assert.throws(() => requirePocScope(fixture.primary, input, first.id), /POC_SCOPE_DECISION_REQUIRED/);
+    const dag = join(fixture.root, "poc.yaml");
+    writeFileSync(dag, `env:\n  - PRIMARY: ${JSON.stringify(fixture.primary)}\n  - ESCALATION_POC_INCONCLUSIVE: "2"\n`);
+    assert.throws(() => admit({ cwd: fixture.primary, dag, run: "scope-blocked", params: [
+      "ISSUE=41", `QUESTION=${input.question}`, `REQUIRED_TARGETS=${JSON.stringify(input.requiredTargets)}`,
+      `AUTHORIZED_TARGETS=${JSON.stringify(input.authorizedTargets)}`, `SCOPE_BASIS=${input.basis}`,
+    ] }), /POC_SCOPE_DECISION_REQUIRED/, "direct bundle admission enforces the same boundary before enqueue");
+    const narrowed = { ...input, question: "Can native Linux arm64 run?", requiredTargets: ["linux-arm64"] };
+    const decision = decidePocScope(fixture.primary, "41", first.id, "narrow", narrowed, "operator:fixture", "Narrowed to the authorized target");
+    assert.equal(decision.actor, "operator:fixture");
+    assert.equal(decision.action, "narrow");
+    assert.equal(decidePocScope(fixture.primary, "41", first.id, "narrow", narrowed, "operator:fixture", decision.basis).decidedAt, decision.decidedAt);
+    assert.deepEqual(approvedPocScope(fixture.primary, "41", first.id), narrowed);
+    requirePocScope(fixture.primary, narrowed, first.id);
+    assert.throws(() => requirePocScope(fixture.primary, input, first.id), /differs from its reviewed scope/);
+    assert.throws(() => decidePocScope(fixture.primary, "41", first.id, "provide-access",
+      { ...input, authorizedTargets: input.requiredTargets }, "operator:fixture", "New access"), /already has a different/);
+  } finally { fixture.cleanup(); }
+});
+
+test("PoC access decisions grant the reviewed targets or defer admission with provenance", () => {
+  const fixture = pocFixture();
+  try {
+    const input: PocScopeInput = { issue: "41", question: "Can Windows execute the real target?", requiredTargets: ["windows-x64"],
+      authorizedTargets: [], basis: "No Windows access authorized" };
+    const request = assessPocScope(fixture.primary, input);
+    assert.throws(() => decidePocScope(fixture.primary, "41", request.id, "provide-access", input, "operator", "Access unchanged"), /reachable authorized targets/);
+    const authorized = { ...input, authorizedTargets: ["windows-x64"], basis: "Operator granted Windows host access" };
+    decidePocScope(fixture.primary, "41", request.id, "provide-access", authorized, "operator", "Windows host provided");
+    requirePocScope(fixture.primary, authorized, request.id);
+    const deferred = assessPocScope(fixture.primary, { ...input, question: "Can Windows execute another target?" });
+    decidePocScope(fixture.primary, "41", deferred.id, "defer", input, "operator", "Keep deferred until Windows access exists");
+    assert.throws(() => approvedPocScope(fixture.primary, "41", deferred.id), /POC_SCOPE_DEFERRED/);
+    assert.throws(() => assessPocScope(fixture.primary, input, 0), /positive integer/);
+  } finally { fixture.cleanup(); }
+});
+
+test("the second scope/access INCONCLUSIVE PoC requires one decision before a fresh admission", () => {
+  const fixture = pocFixture();
+  try {
+    const input: PocScopeInput = { issue: "41", question: "Can Linux execute the real target?", requiredTargets: ["linux-arm64"],
+      authorizedTargets: ["linux-arm64"], basis: "Operator authorized Docker Linux arm64" };
+    const history = (run: string, issue: string, cause: string) => {
+      const directory = join(fixture.primary, ".git", "poc", "runs", run);
+      mkdirSync(directory, { recursive: true });
+      writeFileSync(join(directory, "issue.number"), issue);
+      writeFileSync(join(directory, "verdict"), "INCONCLUSIVE\n");
+      writeFileSync(join(directory, "result.md"), `VERDICT: INCONCLUSIVE\n## Inconclusive cause\n${cause}\n`);
+    };
+    history("first", "41", "access");
+    history("unrelated-issue", "42", "scope");
+    history("other-cause", "41", "other");
+    assert.equal(assessPocScope(fixture.primary, input).decisionRequired, false);
+    requirePocScope(fixture.primary, input);
+    history("second", "41", "scope");
+    const request = assessPocScope(fixture.primary, input);
+    assert.equal(request.decisionRequired, true);
+    assert.match(request.reason, /2 scope\/access INCONCLUSIVE/);
+    assert.deepEqual(request.history.map(row => row.run), ["first", "second"]);
+    assert.equal(assessPocScope(fixture.primary, input).id, request.id);
+    assert.throws(() => requirePocScope(fixture.primary, input), /POC_SCOPE_DECISION_REQUIRED/);
+    decidePocScope(fixture.primary, "41", request.id, "provide-access", input, "operator", "Authorization reconfirmed after two unreachable experiments");
+    requirePocScope(fixture.primary, input, request.id);
+    history("third", "41", "access");
+    assert.throws(() => requirePocScope(fixture.primary, input, request.id), /history changed/);
+    assert.notEqual(assessPocScope(fixture.primary, input).id, request.id);
+    assert.equal(inconclusiveCause("VERDICT: INCONCLUSIVE\n## Inconclusive cause\naccess\n"), "access");
+    assert.throws(() => inconclusiveCause("VERDICT: INCONCLUSIVE\nUnclassified"), /requires ## Inconclusive cause/);
+  } finally { fixture.cleanup(); }
+});
+
+test("scope CLI passes an assessed reachable route and defers an unreachable route", () => {
+  const fixture = pocFixture();
+  try {
+    const script = fileURLToPath(new URL("../bin/dagu-poc-scope.ts", import.meta.url));
+    const output = join(fixture.root, "scope-outputs");
+    const env: NodeJS.ProcessEnv = { ...process.env, PRIMARY: fixture.primary, ISSUE: "41", QUESTION: "Can Linux run?",
+      REQUIRED_TARGETS: '["linux-arm64"]', AUTHORIZED_TARGETS: '["linux-arm64"]', SCOPE_BASIS: "Operator authorized local Linux",
+      DAGU_OUTPUT_FILE: output, ESCALATION_POC_INCONCLUSIVE: "2" };
+    const run = (action: string, overrides: NodeJS.ProcessEnv = {}) => spawnSync(process.execPath, [script, action],
+      { env: { ...env, ...overrides }, encoding: "utf8" });
+    const assessed = run("assess");
+    assert.equal(assessed.status, 0, assessed.stderr);
+    assert.match(assessed.stdout, /SCOPE_DECISION=no/);
+    const id = /SCOPE_REQUEST=([a-f0-9]{64})/.exec(assessed.stdout)![1]!;
+    const resolved = run("decide", { SCOPE_REQUEST: id });
+    assert.equal(resolved.status, 0, resolved.stderr);
+    assert.match(resolved.stdout, /POC_QUESTION=Can Linux run\?/);
+    const skippedDecision = {
+      POC_SCOPE_ACTION: "${steps.poc_scope_decision.outputs.ACTION}", POC_QUESTION: "${steps.poc_scope_decision.outputs.QUESTION}",
+      POC_REQUIRED_TARGETS: "${steps.poc_scope_decision.outputs.REQUIRED_TARGETS}",
+      POC_AUTHORIZED_TARGETS: "${steps.poc_scope_decision.outputs.AUTHORIZED_TARGETS}", POC_SCOPE_BASIS: "${steps.poc_scope_decision.outputs.BASIS}",
+    };
+    const skipped = run("decide", { ...skippedDecision, SCOPE_REQUEST: id });
+    assert.equal(skipped.status, 0, skipped.stderr);
+    assert.equal(skipped.stdout, resolved.stdout, "native skipped decision retains the exact assessed question and route");
+    assert.equal(run("require", { SCOPE_REQUEST: id }).status, 0);
+    const blocked = run("assess", { AUTHORIZED_TARGETS: "[]" });
+    const blockedId = /SCOPE_REQUEST=([a-f0-9]{64})/.exec(blocked.stdout)![1]!;
+    assert.match(blocked.stdout, /SCOPE_DECISION=yes/);
+    const unresolved = run("decide", { ...skippedDecision, SCOPE_REQUEST: blockedId });
+    assert.equal(unresolved.status, 1);
+    assert.match(unresolved.stderr, /POC_SCOPE_DECISION_REQUIRED/);
+    const deferred = run("decide", { SCOPE_REQUEST: blockedId, POC_SCOPE_ACTION: "defer", POC_SCOPE_BASIS: "Operator deferred inaccessible target" });
+    assert.equal(deferred.status, 77, deferred.stderr);
+    const rejected = run("require", { SCOPE_REQUEST: blockedId, AUTHORIZED_TARGETS: "[]" });
+    assert.equal(rejected.status, 1);
+    assert.match(rejected.stderr, /POC_SCOPE_DEFERRED/);
+  } finally { fixture.cleanup(); }
+});
+
+test("INCONCLUSIVE result validation records the explicit scope/access/other cause", () => {
+  const fixture = pocFixture();
+  try {
+    fixture.body("## PoC\nCan Linux run?\n");
+    assert.equal(fixture.run("record").status, 0);
+    execFileSync("git", ["-C", fixture.primary, "-c", "user.name=PoC test", "-c", "user.email=poc@example.invalid", "commit", "--allow-empty", "-qm", "seed"]);
+    fixture.save("base.sha", execFileSync("git", ["-C", fixture.primary, "rev-parse", "HEAD"], { encoding: "utf8" }));
+    const resultPath = join(fixture.root, "result.md");
+    fixture.save("result.path", resultPath);
+    const result = "VERDICT: INCONCLUSIVE\n## Pregunta\nCan Linux run?\n## Proposición demostrada\nTarget unreachable.\n## Ruta ejercitada\nLinux arm64\n## Comandos y salida\nssh: access denied\n";
+    for (const cause of ["scope", "access", "other"]) {
+      writeFileSync(resultPath, `${result}## Inconclusive cause\n${cause}\n`);
+      const checked = fixture.run("scope_gate", { WORKTREE: fixture.primary, TEST_PATHS: "^test/" });
+      assert.equal(checked.status, 0, checked.stderr);
+      assert.equal(readFileSync(join(fixture.state, "scope"), "utf8").trim(), "OK");
+    }
+    writeFileSync(resultPath, result);
+    const missing = fixture.run("scope_gate", { WORKTREE: fixture.primary, TEST_PATHS: "^test/" });
+    assert.equal(missing.status, 1);
+    assert.match(missing.stderr, /INCONCLUSIVE requires ## Inconclusive cause/);
+  } finally { fixture.cleanup(); }
+});
+
+test("adoption escalation thresholds are immutable in PoC admission", () => {
+  const fixture = pocFixture();
+  try {
+    const result = fixture.run("admission", { DAGU_PARAMS_JSON: '{"ESCALATION_POC_INCONCLUSIVE":"200"}' });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /admission rejected run parameter: ESCALATION_POC_INCONCLUSIVE/);
+    const dag = join(fixture.root, "poc.yaml");
+    writeFileSync(dag, `env:\n  - PRIMARY: ${JSON.stringify(fixture.primary)}\n`);
+    assert.throws(() => admit({ cwd: fixture.primary, dag, run: "scope-overridden",
+      params: ["ISSUE=41", "ESCALATION_SECONDS=999999"] }), /admission rejected run parameter: ESCALATION_SECONDS/);
+  } finally { fixture.cleanup(); }
 });
