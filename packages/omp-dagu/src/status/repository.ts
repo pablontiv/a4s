@@ -37,7 +37,40 @@ export async function readCiDiagnostic(primary: string | undefined, run: string,
     const data = value as Record<string, unknown>;
     if (data.run !== run || !Number.isSafeInteger(data.iteration)
       || !["sha", "class", "check", "log", "cause"].every(key => typeof data[key] === "string")) return undefined;
+    if (data.decisionRequest !== undefined) {
+      const request = data.decisionRequest as Record<string, unknown> | null;
+      if (!request || typeof request.id !== "string" || !Number.isSafeInteger(request.observations)
+        || Number(request.observations) < 1) return undefined;
+    }
     return data as unknown as CiDiagnostic;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Active budget evidence is prepared before the native escalation checkpoint opens. */
+export async function readEscalationDiagnostic(primary: string | undefined, run: string, signal: AbortSignal): Promise<string | undefined> {
+  if (!primary || !/^[A-Za-z0-9_-]+$/.test(run)) return undefined;
+  try {
+    const { stdout } = await exec("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+      { cwd: primary, signal, timeout: 5000 });
+    const value = JSON.parse(await readFile(`${stdout.trim()}/dagu-feature/runs/${run}/escalation.json`, "utf8"));
+    if (value?.schemaVersion !== 1 || value.run !== run || !value.trigger
+      || typeof value.trigger.id !== "string" || !Array.isArray(value.trigger.reasons)
+      || !value.trigger.reasons.every((reason: unknown) => typeof reason === "string")
+      || !Number.isSafeInteger(value.trigger.iteration) || typeof value.trigger.sha !== "string"
+      || !Number.isFinite(value.trigger.elapsedSeconds)) return undefined;
+    const latest = value.trigger.latestFindings ?? value.findings;
+    const findings = Array.isArray(latest) ? latest.flatMap((finding: unknown) => {
+      if (typeof finding === "string") return [finding];
+      if (finding && typeof finding === "object" && "text" in finding && typeof finding.text === "string") return [finding.text];
+      return [];
+    }).slice(-5).join("; ") : "";
+    const spend = value.trigger.spend;
+    return `escalation=${value.trigger.id} iteration=${value.trigger.iteration} sha=${value.trigger.sha}`
+      + ` reasons=${value.trigger.reasons.join("; ")} findings=${findings} elapsedSeconds=${value.trigger.elapsedSeconds}`
+      + ` spend=${spend?.state === "unknown" ? `unknown (${typeof spend.cause === "string" ? spend.cause : "attribution unavailable"})` : JSON.stringify(spend ?? { state: "unknown" })}`
+      + " options=continue with a renewed budget; change scope or delivery route; stop. Record the decision and its provenance at this checkpoint.";
   } catch {
     return undefined;
   }

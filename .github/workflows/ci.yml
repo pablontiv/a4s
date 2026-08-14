@@ -135,9 +135,9 @@ jobs:
           # Match complete top-level names and their descendants. Skipping the
           # named groups retains new feature cases automatically in the remainder.
           poc_template='template real Dagu closes implementation runs and succeeds after enqueuing a PoC'
-          poc_rendered='rendered DAG real Dagu closes implementation runs and succeeds after enqueuing a PoC'
+          poc_rendered='rendered fixture real Dagu closes implementation runs and succeeds after enqueuing a PoC'
           recovery='concurrent recovery fixtures keep distinct run identities'
-          validation_admission='(?:template|rendered DAG) (?:optional validation uses native skip, SHA approval and iterative rejection|real Dagu checks primary freshness before admission and enqueues bootstrap after merge)'
+          validation_admission='(?:template|rendered fixture) (?:optional validation uses native skip, SHA approval and iterative rejection|real Dagu checks primary freshness before admission and enqueues bootstrap after merge)'
           feature_groups="(?:${poc_template}|${poc_rendered}|${recovery}|${validation_admission})"
           case "$LANE" in
             poc-template) pattern="^${poc_template}(?:$| )" ;;
@@ -151,7 +151,7 @@ jobs:
               exit
               ;;
             other-live)
-              npx tsx --test test/live/*.test.ts test/bundle-cli.test.ts test/bundle-rebase.test.ts test/bundle-template.test.ts test/bundle.test.ts test/planning-template.test.ts test/reconcile-ci.test.ts
+              npx tsx --test test/live/*.test.ts test/bundle-cli.test.ts test/bundle-rebase.test.ts test/bundle-template.test.ts test/bundle.test.ts test/escalation.test.ts test/planning-template.test.ts test/reconcile-ci.test.ts
               exit
               ;;
           esac

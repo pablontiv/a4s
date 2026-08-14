@@ -3,6 +3,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { admit, appendObservation, enqueue, enqueueArguments, parseObservation, receiptPath } from "../src/admission.ts";
 import { validatePlanningUnitsCommand } from "../src/planning-validator.ts";
 import {
@@ -65,6 +66,11 @@ function resolveRepository(argument: string): string | undefined {
 
 function main(): void {
   const [command, ...args] = process.argv.slice(2);
+  if (command === "escalation") {
+    const result = spawnSync("python3", [fileURLToPath(new URL("../skills/dagu-feature/escalation.py", import.meta.url)), ...args], { stdio: "inherit" });
+    process.exitCode = result.status ?? 1;
+    return;
+  }
   if (command === "validate-planning-units") {
     process.exitCode = validatePlanningUnitsCommand(args);
     return;
