@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { readFileSync, readdirSync, realpathSync, writeFileSync, renameSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { bindQualityImplementer, orderReviewModels } from "@a4s/omp-cross-family-review";
+import type { ReviewPolicies } from "@a4s/omp-cross-family-review";
 import { shellWords } from "../resources.ts";
 import { resolveRunPrimary, runParam } from "../status/progress.ts";
 import type { CallDecision, Event } from "./guard.ts";
@@ -357,7 +358,11 @@ function evalImplementCompletion(code: string): ImplementCompletion | undefined 
     syntax: syntax ?? candidate?.syntax ?? (candidate ? undefined : "uninspectable implement completion") };
 }
 
-export async function qualityDecision(event: Event, ctx: QualityContext): Promise<CallDecision> {
+export async function qualityDecision(
+  event: Event,
+  ctx: QualityContext,
+  readPolicies?: (cwd: string) => ReviewPolicies | Promise<ReviewPolicies>,
+): Promise<CallDecision> {
   const rawCommand: unknown = event.toolName === "bash" ? event.input.command : event.toolName === "eval" ? event.input.code : undefined;
   const command = typeof rawCommand === "string" ? rawCommand.replace(/["'`]/g, "") : undefined;
   let implementCompletion = typeof rawCommand === "string"
@@ -393,11 +398,15 @@ export async function qualityDecision(event: Event, ctx: QualityContext): Promis
         const role = task.agent === "qa" ? "qa" : task.agent === "reviewer" ? "reviewer" : "invalid";
         requireValue(role !== "invalid" && assignments[index]!.includes(qualityMarker(request, role)), "stale quality assignment or invalid role");
         requireValue(typeof task.name === "string", "explicit quality subagent name required");
-        // OMP accepts `model` only on seance tasks; the cross-family spawn hook
-        // selects the child model from this binding, keyed by the task name.
-        const eligible = orderReviewModels(["@slow"], ["@slow", "@default", "@task"], models,
+        requireValue(readPolicies, "native cross-family settings reader required for quality dispatch");
+        const policies = await readPolicies(ctx.cwd);
+        const policy = Object.hasOwn(policies, role) ? policies[role] : undefined;
+        requireValue(policy, `quality agent ${role} requires a configured crossFamilyReview.policies entry`);
+        // Keep the independent strict preflight even without the extension.
+        // The spawn hook applies these same fallbacks to actual native candidates.
+        const eligible = orderReviewModels(["@slow"], policy.fallbackRoles, models,
           [{ label: "effective implementer", model: effectiveModel }]);
-        requireValue(eligible?.model?.length, eligible?.reason ?? "no eligible quality model");
+        requireValue(eligible.model?.length, eligible.reason ?? "no eligible quality model");
         bindQualityImplementer(task.name, effectiveModel);
         const contract = [
           "Quality verdict contract: Before inspecting the candidate and before your verdict, run this standalone bash command, with nothing chained and with cwd omitted:",

@@ -1,0 +1,17 @@
+crossFamilyReview:
+  policies:
+    reviewer:
+      fallbackRoles: ["@slow", "@default"]
+      excludeTaskFamily: true
+    qa:
+      fallbackRoles: ["@slow", "@default"]
+      excludeTaskFamily: true
+    security-reviewer:
+      fallbackRoles: ["@slow", "@default"]
+      excludeTaskFamily: true
+    triage-reviewer:
+      fallbackRoles: ["@task", "@slow", "@default"]
+      excludeTaskFamily: false
+    plan-reviewer:
+      fallbackRoles: ["@task", "@slow", "@default"]
+      excludeTaskFamily: false

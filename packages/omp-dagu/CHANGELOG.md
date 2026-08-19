@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.101
+
+- Read effective native `crossFamilyReview.policies` for the independent quality preflight and bound implementer dispatch instead of maintaining a second fixed fallback list; preserve transcript provenance, family admission and publication guards (#359).
+- Document repository-owned adoption for code, QA, security, triage and planning review with cross-family 0.3.0.
+
 ## 0.3.100
 
 - Add `dagu-feature-prioritize <feature|poc> <run-id>` to move a queued lifecycle run to the front of its concurrency-one repository queue while preserving all other relative order, original IDs, parameters and retained native definitions (#334).
