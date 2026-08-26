@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Keep the no-spawn preload after Bun's `test` subcommand so the shared hot-reload consumer gate executes tests rather than recursively invoking the package script (#795).
 - Use root Node and shared TypeScript tooling, retaining this package's native host/Bun contracts; document their manifest fields rather than copying version numbers.
 
 ## 0.3.1

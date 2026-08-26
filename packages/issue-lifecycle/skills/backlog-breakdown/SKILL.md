@@ -60,6 +60,21 @@ The installed filename and DAG name remain `planning.yaml` / `planning`. Its ste
 
 ## Independent review
 
+The two shipped agent definitions are pinned per run. Read `REVIEW_BUILD` in the
+`check_plan` output: it is the cached package that owns that run's `A4S_BIN`, not
+`state.current`. Use native explicit package discovery: open the planning parent
+session with `omp --no-extensions -e <REVIEW_BUILD>`; for an already-open run,
+resume **that same parent session file** with
+`omp --no-extensions -e <REVIEW_BUILD> --session <parent-session-file>` before
+calling the by-name `plan-reviewer`. This is the PoC-2(a) PASS mechanism: the native
+task tool has an agent name, not a definition-file parameter (`taskFile` is an
+assignment file). Do not discover the reviewer from the current loader resources
+or create/update project/station configuration. Keep the cached build leased by
+the run; do not delete it while resuming a planning session. The builtin `task`
+agent, station OMP binary, settings, enabled overrides and model routing remain
+shared. `@slow` is a routing declaration: record the actual final native provider
+and model, not literal equality to `@slow`.
+
 At `review`, gather current open issues and active workspace runs. Launch `task agent=plan-reviewer`, named `PlanReview<RUN>` (retry `PlanReview<RUN>v<N>`). Put the exact `PLAN_REVIEW` generation marker from the prompt/output file `generation` on the first line of that assignment's `task` field. Native OMP prepends `Complete assignment thoroughly:` and a blank line to `session_init.task`; `check_review` strips that optional leading prefix and surrounding whitespace, then compares the first line exactly. Markers on later body lines or only in the shared `context` field do not count. Pass `source.md`, `units.jsonl`, optional `plan.md`, and that evidence in the same assignment. Preserve the reviewer's `@slow` declaration, existing independent model routing and enabled overrides, regardless of preparation effort. The accepted `review-<iteration>.json` keeps `verdict` and `findings` and records `reviewer`: the agent name, the session id, the provider and model of the transcript's final assistant message, and the ordered `model_change` entries with `resolvedModelIsFallback`. That object uses the same transcript derivation as native role evidence. `session_init.resolvedModel` does not select the model. Wait for the structured result, then complete:
 
 ```sh

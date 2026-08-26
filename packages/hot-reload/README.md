@@ -16,19 +16,41 @@ export default function reloadable(pi: Parameters<typeof extension>[0]): Promise
 
 ## Runtime contract
 
-Restart native OMP when changing the helper, shim, or package binding. The A4S
-wrapper intercepts user `/reload-plugins` input and imports the wrapped
-implementation through its canonical raw filesystem path with a fresh query.
-It retains stable host dispatchers, shuts down the preceding generation, and
-starts the replacement. Import/factory failures retain the preceding generation.
-Lifecycle handlers have a 2000 ms timeout. The implementation defers a busy
-request until idle after `agent_end`.
+Helper API **2** exports `Generation`, `Dispatcher`, `switchGeneration` and
+`GenerationScope` in addition to the source-linked `hotReload` wrapper. A factory
+may take `(pi, scope)`. Start background work in `session_start`, not factory
+construction. `scope.signal` owns that activation's work: capture it when work
+starts and register synchronous `scope.onAbort` cleanup for controllers/timers
+on every activation, including the old generation's restart after rollback.
+`scope.state` is switch-owned plain data (not tasks or module instances), retained
+across success and rollback. `scope.ready` / `onCommit` hold notification delivery
+until startup commits. Status uses these to hand off its queue, transition dedup
+maps and event-log acknowledgement cursor without losing or duplicating notices.
 
-Native OMP's builtin `/reload-plugins` separately refreshes resource discovery;
-the wrapper leaves that builtin intact. Resource rediscovery is independent of
-implementation reload. Bare-specifier dependencies, newly introduced local
-modules, registered metadata/schema changes, and removed registrations require
-a restart as described by the [Orca consumer](../orca-integration/README.md).
+Construction captures both extensions before publication. One dispatcher pointer
+selects all their event/command/tool callbacks. A switch synchronously aborts the
+old generation, runs bounded shutdown, and bounds candidate startup at 2000 ms.
+Startup rejection/timeout aborts the candidate and restores/restarts the old
+generation; a stale lifecycle's buffered messages/widgets cannot publish.
+Factories must keep background work abortable; importing arbitrary module code
+cannot sandbox top-level side effects. Constructed registrations are sealed by
+the stable loader after comparison with its canonical manifest.
+
+Review-routing, agent-messaging, Orca and tool-row shims keep the same
+`hotReload(pi, factory, URL)` call; their implementation dispatch now uses this
+shared cancellation/rollback API. The source wrapper still allows late/new
+dispatcher slots and leaves native `/reload-plugins` resource discovery intact.
+Restart when changing a source shim, helper, binding, metadata or dependencies.
+Busy requests use the post-`agent_end` timer, never an idle check in that callback.
+
+The stable [`@a4s/loader`](../loader/) instead follows station generation and
+imports the complete immutable status/triage bundles. It gates manifest, skills,
+agents and loader/helper/launcher protocols before leasing or importing; unequal
+metadata/resources prompt **restart OMP**. Equal metadata with a new build ID,
+including an engine-only build, switches automatically and on session/idle events.
+Imported and retiring builds keep leases until process exit, independently of
+which generation has active behavior. Native `/reload-plugins` alone is not a
+replacement for that restart/resource gate.
 
 ## Verification recorded for issue #421
 

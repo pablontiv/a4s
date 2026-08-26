@@ -1,12 +1,22 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { BUNDLE_VERSION } from "../src/bundle.ts";
 import { currentStep, renderOffline, renderRun, renderWidget, runBundleState, runLabel, Transitions } from "../src/status/progress.ts";
 import { resolveRunPrimary } from "../src/run-primary.ts";
 import type { RunDetails } from "../src/status/progress.ts";
+import { SHARED_FORMATS } from "../../launcher/src/contracts.ts";
+
+function selectBuild(root: string, version: string, commit: string): void {
+  mkdirSync(root, { recursive: true });
+  const tuple = { version, commit, digest: "b".repeat(64) };
+  writeFileSync(join(root, "state.json"), JSON.stringify({
+    schema: 1, generation: 1, current: tuple, previous: tuple, rejected: [],
+    formats: Object.fromEntries(SHARED_FORMATS.map(name => [name, [1]])),
+  }));
+}
 
 const labels = ["workspace=a4s", `dagu-feature-bundle=${BUNDLE_VERSION}`];
 const run: RunDetails = {
@@ -244,17 +254,16 @@ test("build IDs remain visible and distance is only a stale notice", () => {
   }
 });
 
-test("notices distinguish release pending from restart pending and refresh the installed plugin link", () => {
+test("notices distinguish release pending from a deferred switch and refresh station state", () => {
   const primary = mkdtempSync(join(tmpdir(), "omp-dagu-main-"));
   const manifest = join(primary, "packages/issue-lifecycle/package.json");
-  const plugin = join(homedir(), ".omp/plugins/node_modules/@a4s/issue-lifecycle");
+  const root = join(homedir(), "cache/a4s");
   // The test preload gives each test-file process its own HOME.
   assert.equal(homedir(), process.env.DAGU_HOME);
   mkdirSync(join(primary, "packages/issue-lifecycle"), { recursive: true });
-  mkdirSync(join(plugin, ".."), { recursive: true });
   const loadedCommit = "a".repeat(40);
   const transitions = new Transitions("session-a", "0.7.4", loadedCommit);
-  const warning = "Restart OMP to load the selected @a4s/issue-lifecycle release. /reload-plugins does not switch an already-loaded package binding. In-flight runs keep their admitted snapshots.";
+  const warning = "The selected a4s build differs from this extension generation. If the loader reports a registration/resource or protocol change, restart OMP; otherwise it switches after the current turn. In-flight runs keep their admitted snapshots.";
   const candidate = {
     ...waitingAt("feature", "implement"),
     params: "ISSUE=176 OMP_SESSION_ID=session-a",
@@ -262,12 +271,11 @@ test("notices distinguish release pending from restart pending and refresh the i
     labels: ["dagu-feature-bundle=0.7.4"],
   };
   const install = (version: string, commit = loadedCommit): void => {
-    const release = join(primary, `${version}-${commit}`);
+    const release = join(root, version);
     mkdirSync(release, { recursive: true });
     writeFileSync(join(release, "package.json"), JSON.stringify({ name: "@a4s/issue-lifecycle", version }));
     writeFileSync(join(release, "identity.json"), JSON.stringify({ version, commit }));
-    rmSync(plugin, { force: true });
-    symlinkSync(release, plugin, "dir");
+    selectBuild(root, version, commit);
   };
   try {
     writeFileSync(manifest, JSON.stringify({ version: "0.7.7" }));
@@ -311,7 +319,7 @@ test("notices distinguish release pending from restart pending and refresh the i
     candidate.nodes![0]!.approvalIteration = 5;
     const sameVersion = transitions.observe(candidate);
     assert.match(sameVersion.wakeMessage!, /extension=0\.7\.4 main=n\/a compat=stale installed=0\.7\.4/);
-    assert.equal(sameVersion.warningMessage, warning, "same-version relinks compare commits, not ordering");
+    assert.equal(sameVersion.warningMessage, warning, "same-version selections compare commits, not ordering");
     assert.deepEqual(transitions.observe(candidate), {});
 
     // A newly loaded generation matches the selected identity and clears the warning.
@@ -325,30 +333,28 @@ test("notices distinguish release pending from restart pending and refresh the i
     candidate.nodes![0]!.approvalIteration = 6;
     assert.equal(transitions.observe(candidate).warningMessage, undefined);
   } finally {
-    rmSync(plugin, { force: true });
+    rmSync(root, { recursive: true, force: true });
     rmSync(primary, { recursive: true, force: true });
   }
 });
 
 for (const scenario of [
-  "absent registration", "dangling registration", "missing manifest", "invalid manifest JSON", "invalid manifest version",
+  "absent state", "missing build", "missing manifest", "invalid manifest JSON", "invalid manifest version",
   "missing identity", "invalid identity JSON", "disagreeing versions", "invalid identity version",
   "missing commit", "invalid commit", "non-string commit", "unknown loaded identity",
 ] as const) {
   test(`notices do not recommend restart for ${scenario}`, () => {
-    const release = mkdtempSync(join(tmpdir(), "omp-dagu-identity-"));
-    const plugin = join(homedir(), ".omp/plugins/node_modules/@a4s/issue-lifecycle");
+    const root = join(homedir(), "cache/a4s");
+    const release = join(root, "0.7.4");
     assert.equal(homedir(), process.env.DAGU_HOME);
-    mkdirSync(join(plugin, ".."), { recursive: true });
+    mkdirSync(release, { recursive: true });
     const manifest = join(release, "package.json");
     const identity = join(release, "identity.json");
     const commit = "a".repeat(40);
     try {
       writeFileSync(manifest, JSON.stringify({ version: "0.7.4" }));
       writeFileSync(identity, JSON.stringify({ version: "0.7.4", commit }));
-      if (scenario !== "absent registration") symlinkSync(
-        scenario === "dangling registration" ? join(release, "absent") : release, plugin, "dir",
-      );
+      if (scenario !== "absent state") selectBuild(root, scenario === "missing build" ? "0.7.5" : "0.7.4", commit);
       if (scenario === "missing manifest") rmSync(manifest);
       if (scenario === "invalid manifest JSON") writeFileSync(manifest, "{");
       if (scenario === "invalid manifest version") writeFileSync(manifest, '{"version":"unknown"}');
@@ -365,7 +371,7 @@ for (const scenario of [
           ...waitingAt("feature", "implement"),
           labels: version ? [`dagu-feature-bundle=${version}`] : [],
         };
-        // Source-loaded extensions have no release commit; never infer it from the selected link.
+        // Source-loaded extensions have no release commit; never infer it from the selected state.
         const transitions = scenario === "unknown loaded identity"
           ? new Transitions("session-a")
           : new Transitions("session-a", "0.7.4", commit);
@@ -376,8 +382,7 @@ for (const scenario of [
         assert.equal(effects.warningMessage, undefined);
       }
     } finally {
-      rmSync(plugin, { force: true });
-      rmSync(release, { recursive: true, force: true });
+      rmSync(root, { recursive: true, force: true });
     }
   });
 }

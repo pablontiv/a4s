@@ -103,7 +103,8 @@ test("idle reload dispatches only B and orders lifecycle handlers with the trigg
   assert.deepEqual(await reload(host, ctx, "  /reload-plugins extra"), [undefined]);
   assert.deepEqual(await host.emit("tool_call", {}, ctx), ["B"]);
   assert.deepEqual(log, ["A:session_shutdown", "B:session_start"]);
-  assert.deepEqual(contexts, [ctx, ctx]);
+  assert.equal(contexts.length, 2);
+  assert.ok(contexts.every(context => context.isIdle === ctx.isIdle));
   assert.equal(host.handlers.get("tool_call")?.length, 1);
 });
 
@@ -270,7 +271,7 @@ test("concurrent requests are single-flight and subsequent imports use increasin
   assert.ok(Number(tags[1]) > Number(tags[0]));
 });
 
-test("each lifecycle handler is bounded; timeout and rejection still allow the new generation", async () => {
+test("shutdown is bounded and rejected startup rolls both dispatchers back", async () => {
   const host = new FakeHost();
   const { ctx, notices } = context();
   const log: string[] = [];
@@ -285,9 +286,9 @@ test("each lifecycle handler is bounded; timeout and rejection still allow the n
   });
   assert.equal(LIFECYCLE_TIMEOUT_MS, 2000);
   await reload(host, ctx);
-  assert.deepEqual(log, ["second shutdown", "B:session_start"]);
-  assert.deepEqual(await host.emit("tool_call", {}, ctx), ["B"]);
-  assert.equal(notices.length, 3);
+  assert.deepEqual(log, ["B:session_start", "B:session_shutdown"]);
+  assert.deepEqual(await host.emit("tool_call", {}, ctx), []);
+  assert.equal(notices.length, 2);
   assert.equal(notices.every(notice => notice.level === "error"), true);
   assert.match(notices[0]?.message ?? "", /2000 ms/);
 });

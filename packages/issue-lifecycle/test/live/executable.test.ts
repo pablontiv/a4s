@@ -38,7 +38,7 @@ test("the source entry rejects unknown commands with usage and exposes explicit 
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(JSON.parse(result.stdout), identity);
   assert.deepEqual(identity.support, support);
-  assert.deepEqual(Object.keys(identity).sort(), ["commit", "dispatch", "layout", "protocols", "registrationManifest", "registrationManifestHash", "requiredLauncherProtocol", "support", "version"]);
+  assert.deepEqual(Object.keys(identity).sort(), ["commit", "dispatch", "layout", "protocols", "registrationManifest", "registrationManifestHash", "requiredLauncherProtocol", "requiredLoaderProtocol", "support", "version"]);
 });
 
 test("source self-spawn commands select the existing entry and preserve helper arguments", () => {

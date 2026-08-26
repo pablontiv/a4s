@@ -92,11 +92,12 @@ release execution paths. Packaged skills MUST describe the new boundary.
 
 `a4s version` and `identity.json` MUST contain equal embedded/declared identities,
 including ID, commit, `support`, exact `dispatch`/checkpoint `protocols`, canonical
-`registrationManifest`, its SHA-256 `registrationManifestHash`, and
-`requiredLauncherProtocol`. The registration manifest is computed from shared
-source metadata before compilation: command/tool names, descriptions, schemas,
-load modes, completion surfaces, extension entries and loader/helper API version.
-Equal registration hashes permit the later loader transaction; a different hash
+`registrationManifest`, its SHA-256 `registrationManifestHash`,
+`requiredLauncherProtocol` and `requiredLoaderProtocol`. The registration manifest
+is computed from shared source metadata before compilation: command/tool names,
+descriptions, schemas, load modes, completion surfaces, extension entries,
+loader/helper API version and digests of all seven skill trees and both agents.
+Equal registration hashes permit the loader transaction; a different hash
 requires keeping the old generation and reporting “restart OMP”, never partial
 activation. Bundles embed the build ID/commit, so each published build reloads.
 
@@ -243,12 +244,15 @@ entry or fall back to an installed checkout.
 only. Schema 1 is `{schema:1, generation, current, previous, rejected:[], formats}`,
 where both selections are complete immutable tuples and each of the six format
 keys maps to a nonempty set of persisted positive versions. Initial `previous`
-equals `current`. There are no selector symlinks. The launcher, plugin loader,
-promotion, rollback, admission handoff and GC share `.state.lock`; selection and
-lease publication occur in the same transaction. State replacement writes a
-unique temporary regular file, fsyncs it, renames it to `state.json`, then fsyncs
-the containing directory. **Rename is the only commit point**: interruption
-before it leaves old state, after it leaves new state. A downloaded, verified but
+equals `current`. There are no execution selector symlinks. The cache-local
+`current` resource symlink is derived from this state for native skills/agents
+discovery by the once-installed stable loader package; it is repaired under the
+same lock on state reads and never selects execution or authorizes a lease.
+The launcher, plugin loader, promotion, rollback, admission handoff and GC share
+`.state.lock`; selection and lease publication occur in the same transaction.
+State replacement writes a unique temporary regular file, fsyncs it, renames it
+to `state.json`, then fsyncs the containing directory. **Rename is the only commit point**:
+interruption before it leaves old state, after it leaves new state. A downloaded, verified but
 unselected directory is inert. Neither state nor leases write station/service
 configuration, DAG definitions or historical receipts.
 
@@ -431,6 +435,19 @@ was exercised. It does not prove production run-to-cache admission or integratio
 with an existing interactive coordinator. **#788 changes architecture
 documentation only. U4 / #795 owns lifecycle integration, production cutover and
 its end-to-end acceptance**, using the mechanism and policy recorded here.
+
+The U4 source integration passes the cached build root from the planning DAG's
+`check_plan` output into review instructions. An already-running coordinator
+resumes the same parent session with `omp --no-extensions -e <run-cached-build>
+--session <parent-session-file>` before the name-based review; it never
+substitutes a `taskFile` for the definition or edits station routing. D16 role
+jobs continue passing the cached triage-reviewer definition directly to the
+native runner. `packages/loader` gates skill **and** agent digests conservatively:
+either change keeps behavior on the old generation and requests OMP restart.
+The cache-only resource pointer follows `state.current`; native catalog refresh
+is acknowledged at restart, not inferred from relinking. The historical PoC
+claims above remain limited to their retained receipts.
+
 
 ## Compatibility and a shared station (I6)
 

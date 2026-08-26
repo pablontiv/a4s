@@ -11,9 +11,15 @@ interface Entry {
 // A cursor traverses older entries, never tails new ones. Each sweep starts at
 // the head and consumes every page before emitting in persistence order.
 export class EventLog {
-  private seen = new Set<string>();
+  private seen: Set<string>;
+  constructor(seen = new Set<string>()) { this.seen = seen; }
+  private pending = new Set<string>();
+  commit(): void {
+    for (const id of this.pending) this.seen.add(id);
+    this.pending.clear();
+  }
 
-  async read(base: string, run: RunDetails, signal: AbortSignal): Promise<RunDetails[]> {
+  async read(base: string, run: RunDetails, signal: AbortSignal, acknowledge = true): Promise<RunDetails[]> {
     const url = new URL(`${base}/api/v1/event-logs`);
     url.searchParams.set("dagName", run.name);
     url.searchParams.set("dagRunId", run.dagRunId);
@@ -53,8 +59,9 @@ export class EventLog {
       } else if (entry.type === "dag.run.succeeded" && run.statusLabel === "succeeded") {
         snapshots.push({ ...run, receiptEvent: { id: entry.id, type: entry.type, source: "dagu-persisted-event-log", cursorReset: restarted }, statusLabel: "succeeded", nodes: [] });
       }
-      this.seen.add(entry.id);
+      this.pending.add(entry.id);
     }
+    if (acknowledge) this.commit();
     return snapshots;
   }
 }

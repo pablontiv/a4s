@@ -49,8 +49,8 @@ jobs:
         run: |
           workspaces=$(node scripts/ci-workspaces.mjs changes)
           echo "workspaces=$workspaces" >> "$GITHUB_OUTPUT"
-  # One job installs dependencies once, then runs every selected workspace's test
-  # and typecheck concurrently; output is grouped per command.
+  # Discover packages/* (including @a4s/loader), install once, then run each
+  # selected workspace's test and typecheck; output is grouped per command.
   test:
     needs: changes
     if: needs.changes.outputs.workspaces != '[]'

@@ -1,4 +1,4 @@
-import { readFileSync, realpathSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import {
@@ -12,6 +12,7 @@ import { packageRoot } from "../executable.ts";
 import { WORKFLOWS_COMMAND } from "../registration.ts";
 import type { StallNotice } from "../long-computation.ts";
 import { runParam } from "../run-primary.ts";
+import { stationRoot, validateState } from "../../../launcher/src/station-state.ts";
 
 export interface RunDetails {
   name: string;
@@ -98,14 +99,14 @@ function readReleaseIdentity(root: string): ReleaseIdentity | undefined {
 const loadedIdentity = readReleaseIdentity(packageRoot);
 const loadedCommit = loadedIdentity?.version === BUNDLE_VERSION ? loadedIdentity.commit : undefined;
 
-// Re-read the selected registration at notice time, resolving both manifests from one root.
+// state.json is atomically replaced; notices never execute through a resource link.
 function installedBundleIdentity(): ReleaseIdentity | undefined {
   try {
-    return readReleaseIdentity(realpathSync(join(homedir(), ".omp/plugins/node_modules/@a4s/issue-lifecycle")));
-  } catch {
-    // One-off package loading or an invalid registration has no known selected identity.
-    return undefined;
-  }
+    const root = stationRoot(process.env.DAGU_HOME ?? join(homedir(), ".dagu"));
+    const state = validateState(JSON.parse(readFileSync(join(root, "state.json"), "utf8")));
+    const identity = readReleaseIdentity(join(root, state.current.version));
+    return identity?.version === state.current.version && identity.commit === state.current.commit ? identity : undefined;
+  } catch { return undefined; }
 }
 
 export function runBundleState(run: RunDetails, extensionVersion = BUNDLE_VERSION, extensionCommit = loadedCommit): {
@@ -244,15 +245,19 @@ interface State {
   status: string;
   step: string | undefined;
 }
+export interface TransitionStorage { states: Map<string, State>; notices: Set<string> }
 
 export class Transitions {
-  private states = new Map<string, State>();
-  private notices = new Set<string>();
+  private states: Map<string, State>;
+  private notices: Set<string>;
 
   private readonly sessionId: string | undefined;
   private readonly extensionVersion: string;
   private readonly extensionCommit: string | undefined;
-  constructor(sessionId?: string, extensionVersion = BUNDLE_VERSION, extensionCommit = loadedCommit) {
+  constructor(sessionId?: string, extensionVersion = BUNDLE_VERSION, extensionCommit = loadedCommit,
+    storage: TransitionStorage = { states: new Map(), notices: new Set() }) {
+    this.states = storage.states;
+    this.notices = storage.notices;
     this.sessionId = sessionId;
     this.extensionVersion = extensionVersion;
     this.extensionCommit = extensionCommit;
@@ -354,7 +359,7 @@ export class Transitions {
     if (messages.length === 1) effects.wakeMessage = messages[0]!;
     else if (messages.length) effects.wakeMessages = messages;
     if (messages.length && bundle.restartPending) {
-      effects.warningMessage = "Restart OMP to load the selected @a4s/issue-lifecycle release. /reload-plugins does not switch an already-loaded package binding. In-flight runs keep their admitted snapshots.";
+      effects.warningMessage = "The selected a4s build differs from this extension generation. If the loader reports a registration/resource or protocol change, restart OMP; otherwise it switches after the current turn. In-flight runs keep their admitted snapshots.";
     }
     return effects;
   }
