@@ -270,10 +270,11 @@ function requireNonEmptyString(value: unknown, label: string): string {
 }
 
 function requireBindingRevision(value: unknown): 1 {
-  if (value !== 1) {
-    throw new ProtocolError("INVALID_ENVELOPE", "binding_revision must be 1");
+  if (value === 1) return 1;
+  if (typeof value === "number" && Number.isInteger(value) && value > 0) {
+    throw new ProtocolError("STALE_BINDING", "binding_revision is stale");
   }
-  return 1;
+  throw new ProtocolError("INVALID_ENVELOPE", "binding_revision must be a positive integer");
 }
 
 function requireErrorCode(value: unknown): ErrorCode {

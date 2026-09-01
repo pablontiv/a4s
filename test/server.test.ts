@@ -1,9 +1,22 @@
 import assert from "node:assert/strict";
+import { execFile, spawnSync } from "node:child_process";
+import { mkdtemp, rm, stat, unlink } from "node:fs/promises";
+import { Server } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
+import { promisify } from "node:util";
+import { createRunEndpoint } from "../src/daemon/endpoint.ts";
 import { E0Server } from "../src/daemon/server.ts";
 import { encodeFrame, MAX_FRAME_BYTES } from "../src/protocol/framing.ts";
 import { createAck } from "../src/protocol/messages.ts";
 import { createAttach, createServerHarness } from "./support/server-harness.ts";
+
+const unixSocketIdentitySkip = process.platform === "win32"
+  ? "Windows named pipes do not use filesystem cleanup"
+  : spawnSync("python3", ["--version"], { stdio: "ignore" }).status === 0
+    ? false
+    : "python3 is required to create a stale AF_UNIX socket fixture";
 
 test("server requires attach as the first message", async () => {
   const harness = await createServerHarness();
@@ -51,11 +64,23 @@ test("server rejects attach from the wrong owner", async () => {
   }
 });
 
-test("server rejects stale binding revisions", async () => {
-  const harness = await createServerHarness({ expectedBindingRevision: 2 as 1 });
+test("server rejects stale binding revisions sent over the wire", async () => {
+  const harness = await createServerHarness();
   try {
     const socket = await harness.connectRaw();
-    socket.write(encodeFrame(createAttach("W1", "M-stale")));
+    socket.write(rawJsonFrame({
+      protocol_version: 1,
+      message_id: "M-stale",
+      type: "attach",
+      payload: {
+        owner_id: "W1",
+        binding_revision: 2,
+        native_ref: {
+          session_id: "session-1",
+          session_file: "/tmp/a4s-e0-session.jsonl",
+        },
+      },
+    }));
     const reply = await harness.readOne(socket);
     assert.equal(reply.type, "error");
     assert.equal(reply.payload.in_reply_to, "M-stale");
@@ -234,6 +259,59 @@ test("server refuses an already-active endpoint", async () => {
     await harness.close();
   }
 });
+
+test("server cleanup preserves a replaced endpoint identity", { skip: unixSocketIdentitySkip }, async () => {
+  const harness = await createServerHarness();
+  try {
+    await unlink(harness.endpoint);
+    await createStaleUnixSocket(harness.endpoint);
+
+    await harness.server.stop();
+
+    await assert.doesNotReject(() => stat(harness.endpoint));
+  } finally {
+    await harness.close();
+  }
+});
+
+test("failed startup does not clean an unowned Unix endpoint", { skip: unixSocketIdentitySkip }, async () => {
+  const root = await mkdtemp(join(tmpdir(), "a4s-e0-start-fail-"));
+  const endpoint = createRunEndpoint("run-1", root, process.platform);
+  const server = new E0Server({
+    endpoint,
+    expectedOwnerId: "W1",
+    expectedBindingRevision: 1,
+    onEvent() {},
+  });
+  const originalListen = Server.prototype.listen;
+  const patchedListen = function patchedListen(this: Server): Server {
+    void createStaleUnixSocket(endpoint).then(
+      () => this.emit("error", Object.assign(new Error("synthetic listen failure"), { code: "EADDRINUSE" })),
+      (error: unknown) => this.emit("error", error),
+    );
+    return this;
+  };
+  Server.prototype.listen = patchedListen as typeof Server.prototype.listen;
+
+  try {
+    await assert.rejects(() => server.start(), /synthetic listen failure|EADDRINUSE/);
+    await assert.doesNotReject(() => stat(endpoint));
+  } finally {
+    Server.prototype.listen = originalListen;
+    await server.stop();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+const execFileAsync = promisify(execFile);
+
+async function createStaleUnixSocket(endpoint: string): Promise<void> {
+  await execFileAsync("python3", [
+    "-c",
+    "import socket, sys; s = socket.socket(socket.AF_UNIX); s.bind(sys.argv[1]); s.close()",
+    endpoint,
+  ]);
+}
 
 function rawJsonFrame(value: unknown): Buffer {
   return rawPayloadFrame(Buffer.from(JSON.stringify(value), "utf8"));

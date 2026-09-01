@@ -1,6 +1,12 @@
 import { createServer, type Server, type Socket } from "node:net";
 import { DeliveryStore } from "./state.ts";
-import { cleanupUnixEndpoint, prepareUnixEndpoint } from "./endpoint.ts";
+import {
+  captureUnixEndpointIdentity,
+  cleanupUnixEndpoint,
+  prepareUnixEndpoint,
+  preserveUnixEndpointForClose,
+  type UnixEndpointIdentity,
+} from "./endpoint.ts";
 import { encodeFrame, FrameDecoder, FramingError } from "../protocol/framing.ts";
 import {
   createAttached,
@@ -45,7 +51,7 @@ export class E0Server {
   private readonly store = new DeliveryStore();
   private readonly clients = new Map<Socket, ClientState>();
   private server: Server | undefined;
-  private ownsEndpoint = false;
+  private ownedEndpointIdentity: UnixEndpointIdentity | undefined;
   private duplicateNextDeliveryFault = false;
   private dropNextAckAndDisconnectFault = false;
 
@@ -74,12 +80,22 @@ export class E0Server {
         server.once("error", reject);
         server.listen(this.options.endpoint, resolve);
       });
-      this.ownsEndpoint = true;
+      if (!isWindowsPipe(this.options.endpoint)) {
+        this.ownedEndpointIdentity = await captureUnixEndpointIdentity(this.options.endpoint);
+      }
       this.emit({ event: "listening", detail: this.options.endpoint });
     } catch (error) {
       this.server = undefined;
-      if (!isWindowsPipe(this.options.endpoint)) {
-        await cleanupUnixEndpoint(this.options.endpoint);
+      if (server.listening) {
+        let restoreEndpoint = async () => {};
+        if (!isWindowsPipe(this.options.endpoint)) {
+          restoreEndpoint = await preserveUnixEndpointForClose(this.options.endpoint);
+        }
+        try {
+          await closeServer(server);
+        } finally {
+          await restoreEndpoint();
+        }
       }
       throw error;
     }
@@ -91,16 +107,25 @@ export class E0Server {
     }
 
     const server = this.server;
+    const shouldManageUnixEndpoint = !isWindowsPipe(this.options.endpoint);
+    const ownedEndpointIdentity = this.ownedEndpointIdentity;
     this.server = undefined;
+    this.ownedEndpointIdentity = undefined;
+
+    let restoreEndpoint = async () => {};
     if (server?.listening) {
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
+      if (shouldManageUnixEndpoint) {
+        restoreEndpoint = await preserveUnixEndpointForClose(this.options.endpoint);
+      }
+      try {
+        await closeServer(server);
+      } finally {
+        await restoreEndpoint();
+      }
     }
 
-    if (this.ownsEndpoint && !isWindowsPipe(this.options.endpoint)) {
-      this.ownsEndpoint = false;
-      await cleanupUnixEndpoint(this.options.endpoint);
+    if (ownedEndpointIdentity && shouldManageUnixEndpoint) {
+      await cleanupUnixEndpoint(this.options.endpoint, ownedEndpointIdentity);
     }
   }
 
@@ -299,6 +324,12 @@ export class E0Server {
   private emit(event: Omit<ServerEvent, "component">): void {
     this.options.onEvent({ component: "a4sd", ...event });
   }
+}
+
+function closeServer(server: Server): Promise<void> {
+  return new Promise((resolve, reject) => {
+    server.close((error) => (error ? reject(error) : resolve()));
+  });
 }
 
 function messageIdFromRaw(value: unknown): string | undefined {

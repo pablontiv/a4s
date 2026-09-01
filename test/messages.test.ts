@@ -76,11 +76,20 @@ test("parseMessage rejects unsupported protocol versions", () => {
   );
 });
 
-test("parseMessage rejects invalid attach payloads", () => {
+test("parseMessage classifies positive integer stale attach revisions", () => {
   assert.throws(
-    () => parseMessage({ ...attach, payload: { ...attach.payload, binding_revision: 0 } }),
-    /INVALID_ENVELOPE/,
+    () => parseMessage({ ...attach, payload: { ...attach.payload, binding_revision: 2 } }),
+    /STALE_BINDING/,
   );
+});
+
+test("parseMessage rejects syntactically invalid attach binding revisions", () => {
+  for (const bindingRevision of [0, 1.5, "1"]) {
+    assert.throws(
+      () => parseMessage({ ...attach, payload: { ...attach.payload, binding_revision: bindingRevision } }),
+      /INVALID_ENVELOPE/,
+    );
+  }
 });
 
 test("parseMessage accepts a delivery ACK", () => {
