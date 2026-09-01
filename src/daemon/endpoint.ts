@@ -1,13 +1,19 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, rename, stat, unlink } from "node:fs/promises";
+import { lstat, mkdir, readlink, symlink, unlink } from "node:fs/promises";
 import { createConnection } from "node:net";
 import { basename, dirname, join } from "node:path";
 
 const SAFE_RUN_ID = /^[a-zA-Z0-9_-]{1,80}$/;
+const PRIVATE_SOCKET_PREFIX = ".a4-";
 
-export interface UnixEndpointIdentity {
+interface UnixFilesystemIdentity {
   dev: number;
   ino: number;
+}
+
+export interface UnixEndpointBinding {
+  canonicalEndpoint: string;
+  listenEndpoint: string;
 }
 
 export function createRunEndpoint(
@@ -23,66 +29,82 @@ export function createRunEndpoint(
 export async function prepareUnixEndpoint(endpoint: string): Promise<void> {
   await mkdir(dirname(endpoint), { recursive: true, mode: 0o700 });
 
+  let existing;
   try {
-    await stat(endpoint);
+    existing = await lstat(endpoint);
   } catch (error) {
     if (isNodeError(error) && error.code === "ENOENT") return;
     throw error;
+  }
+
+  if (!existing.isSocket() && !existing.isSymbolicLink()) {
+    throw new Error(`endpoint path is not a Unix socket: ${endpoint}`);
   }
 
   try {
     await probeEndpoint(endpoint);
     throw new Error(`endpoint already active: ${endpoint}`);
   } catch (error) {
-    if (isNodeError(error) && error.code === "ECONNREFUSED") {
-      await unlink(endpoint);
-      return;
-    }
-    throw error;
-  }
-}
-
-export async function captureUnixEndpointIdentity(endpoint: string): Promise<UnixEndpointIdentity> {
-  const stats = await stat(endpoint);
-  return { dev: stats.dev, ino: stats.ino };
-}
-
-export async function preserveUnixEndpointForClose(endpoint: string): Promise<() => Promise<void>> {
-  const preservedEndpoint = join(
-    dirname(endpoint),
-    `${basename(endpoint)}.preserved-${process.pid}-${randomUUID()}`,
-  );
-
-  try {
-    await rename(endpoint, preservedEndpoint);
-  } catch (error) {
-    if (isNodeError(error) && error.code === "ENOENT") return async () => {};
-    throw error;
-  }
-
-  let restored = false;
-  return async () => {
-    if (restored) return;
-    restored = true;
-    try {
-      await rename(preservedEndpoint, endpoint);
-    } catch (error) {
-      if (isNodeError(error) && error.code === "ENOENT") return;
+    if (!isNodeError(error) || (error.code !== "ECONNREFUSED" && error.code !== "ENOENT")) {
       throw error;
     }
+
+    if (existing.isSymbolicLink() && !(await isOwnPrivateSocketSymlink(endpoint))) {
+      throw new Error(`endpoint symlink is not owned by a4sd: ${endpoint}`);
+    }
+
+    await unlinkIfSameEntry(endpoint, { dev: existing.dev, ino: existing.ino });
+  }
+}
+
+export async function createUnixEndpointBinding(endpoint: string): Promise<UnixEndpointBinding> {
+  await prepareUnixEndpoint(endpoint);
+  return {
+    canonicalEndpoint: endpoint,
+    listenEndpoint: join(dirname(endpoint), `${PRIVATE_SOCKET_PREFIX}${randomUUID().replaceAll("-", "").slice(0, 5)}`),
   };
 }
 
-export async function cleanupUnixEndpoint(endpoint: string, ownedIdentity: UnixEndpointIdentity): Promise<void> {
-  let currentIdentity: UnixEndpointIdentity;
+export async function advertiseUnixEndpointBinding(binding: UnixEndpointBinding): Promise<void> {
   try {
-    currentIdentity = await captureUnixEndpointIdentity(endpoint);
+    await symlink(basename(binding.listenEndpoint), binding.canonicalEndpoint);
+  } catch (error) {
+    if (isNodeError(error) && error.code === "EEXIST") {
+      throw new Error(`endpoint already active: ${binding.canonicalEndpoint}`);
+    }
+    throw error;
+  }
+}
+
+export async function cleanupUnixEndpointBinding(binding: UnixEndpointBinding): Promise<void> {
+  try {
+    await unlink(binding.listenEndpoint);
+  } catch (error) {
+    if (isNodeError(error) && error.code === "ENOENT") return;
+    throw error;
+  }
+}
+
+async function isOwnPrivateSocketSymlink(endpoint: string): Promise<boolean> {
+  try {
+    const target = await readlink(endpoint);
+    return basename(target).startsWith(PRIVATE_SOCKET_PREFIX);
+  } catch (error) {
+    if (isNodeError(error) && error.code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+async function unlinkIfSameEntry(endpoint: string, expected: UnixFilesystemIdentity): Promise<void> {
+  let current;
+  try {
+    current = await lstat(endpoint);
   } catch (error) {
     if (isNodeError(error) && error.code === "ENOENT") return;
     throw error;
   }
 
-  if (!sameUnixEndpointIdentity(currentIdentity, ownedIdentity)) return;
+  if (current.dev !== expected.dev || current.ino !== expected.ino) return;
 
   try {
     await unlink(endpoint);
@@ -90,10 +112,6 @@ export async function cleanupUnixEndpoint(endpoint: string, ownedIdentity: UnixE
     if (isNodeError(error) && error.code === "ENOENT") return;
     throw error;
   }
-}
-
-function sameUnixEndpointIdentity(left: UnixEndpointIdentity, right: UnixEndpointIdentity): boolean {
-  return left.dev === right.dev && left.ino === right.ino;
 }
 
 function probeEndpoint(endpoint: string): Promise<void> {

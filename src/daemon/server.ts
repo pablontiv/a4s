@@ -1,11 +1,10 @@
 import { createServer, type Server, type Socket } from "node:net";
 import { DeliveryStore } from "./state.ts";
 import {
-  captureUnixEndpointIdentity,
-  cleanupUnixEndpoint,
-  prepareUnixEndpoint,
-  preserveUnixEndpointForClose,
-  type UnixEndpointIdentity,
+  advertiseUnixEndpointBinding,
+  cleanupUnixEndpointBinding,
+  createUnixEndpointBinding,
+  type UnixEndpointBinding,
 } from "./endpoint.ts";
 import { encodeFrame, FrameDecoder, FramingError } from "../protocol/framing.ts";
 import {
@@ -51,7 +50,7 @@ export class E0Server {
   private readonly store = new DeliveryStore();
   private readonly clients = new Map<Socket, ClientState>();
   private server: Server | undefined;
-  private ownedEndpointIdentity: UnixEndpointIdentity | undefined;
+  private unixEndpointBinding: UnixEndpointBinding | undefined;
   private duplicateNextDeliveryFault = false;
   private dropNextAckAndDisconnectFault = false;
 
@@ -68,9 +67,10 @@ export class E0Server {
 
   async start(): Promise<void> {
     if (this.server) throw new Error("server already started");
-    if (!isWindowsPipe(this.options.endpoint)) {
-      await prepareUnixEndpoint(this.options.endpoint);
-    }
+    const unixEndpointBinding = isWindowsPipe(this.options.endpoint)
+      ? undefined
+      : await createUnixEndpointBinding(this.options.endpoint);
+    const listenEndpoint = unixEndpointBinding?.listenEndpoint ?? this.options.endpoint;
 
     const server = createServer((socket) => this.handleConnection(socket));
     this.server = server;
@@ -78,24 +78,21 @@ export class E0Server {
     try {
       await new Promise<void>((resolve, reject) => {
         server.once("error", reject);
-        server.listen(this.options.endpoint, resolve);
+        server.listen(listenEndpoint, resolve);
       });
-      if (!isWindowsPipe(this.options.endpoint)) {
-        this.ownedEndpointIdentity = await captureUnixEndpointIdentity(this.options.endpoint);
+      if (unixEndpointBinding) {
+        await advertiseUnixEndpointBinding(unixEndpointBinding);
+        this.unixEndpointBinding = unixEndpointBinding;
       }
       this.emit({ event: "listening", detail: this.options.endpoint });
     } catch (error) {
       this.server = undefined;
+      this.unixEndpointBinding = undefined;
       if (server.listening) {
-        let restoreEndpoint = async () => {};
-        if (!isWindowsPipe(this.options.endpoint)) {
-          restoreEndpoint = await preserveUnixEndpointForClose(this.options.endpoint);
-        }
-        try {
-          await closeServer(server);
-        } finally {
-          await restoreEndpoint();
-        }
+        await closeServer(server);
+      }
+      if (unixEndpointBinding) {
+        await cleanupUnixEndpointBinding(unixEndpointBinding);
       }
       throw error;
     }
@@ -107,25 +104,16 @@ export class E0Server {
     }
 
     const server = this.server;
-    const shouldManageUnixEndpoint = !isWindowsPipe(this.options.endpoint);
-    const ownedEndpointIdentity = this.ownedEndpointIdentity;
+    const unixEndpointBinding = this.unixEndpointBinding;
     this.server = undefined;
-    this.ownedEndpointIdentity = undefined;
+    this.unixEndpointBinding = undefined;
 
-    let restoreEndpoint = async () => {};
     if (server?.listening) {
-      if (shouldManageUnixEndpoint) {
-        restoreEndpoint = await preserveUnixEndpointForClose(this.options.endpoint);
-      }
-      try {
-        await closeServer(server);
-      } finally {
-        await restoreEndpoint();
-      }
+      await closeServer(server);
     }
 
-    if (ownedEndpointIdentity && shouldManageUnixEndpoint) {
-      await cleanupUnixEndpoint(this.options.endpoint, ownedEndpointIdentity);
+    if (unixEndpointBinding) {
+      await cleanupUnixEndpointBinding(unixEndpointBinding);
     }
   }
 

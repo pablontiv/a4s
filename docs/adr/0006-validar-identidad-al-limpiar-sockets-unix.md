@@ -2,30 +2,44 @@
 tipo: adr
 estado: accepted
 fecha: "2026-09-01"
-contexto: "El servidor IPC E0 usa sockets Unix con rutas de filesystem. Node puede desvincular la ruta del socket durante el cierre del listener, incluso si otro proceso o una carrera reemplazó esa ruta por un endpoint diferente. Además, una falla de arranque antes de establecer propiedad no debe limpiar una ruta que el servidor no llegó a poseer."
-decision: "La propiedad de un socket Unix se establece solamente después de escuchar correctamente y capturar su identidad de filesystem. Durante el cierre, el endpoint actual se preserva temporalmente para evitar desvinculación implícita por ruta, se cierra el listener y luego se restaura el endpoint para que la limpieza explícita desvincule únicamente si la identidad actual coincide con la identidad capturada."
-alternativas: "Mantener limpieza por ruta; depender de server.close(); validar solo existencia de ruta."
-consecuencias: "La limpieza de sockets Unix queda protegida contra reemplazos de identidad y las fallas previas a la propiedad no eliminan endpoints ajenos. La implementación agrega una operación rename/restore durante el cierre Unix y mantiene a Windows fuera de esta ruta porque las named pipes no usan limpieza de filesystem."
+contexto: "Node desvincula automáticamente la ruta física de un socket Unix creado por net.Server.close() y no expone una opción pública cleanup:false. Si esa ruta física también es el endpoint canónico anunciado, el cierre puede eliminar o sobrescribir endpoints ajenos bajo concurrencia."
+decision: "Separar el endpoint canónico anunciado de la ruta física que posee Node: el servidor escucha en un socket privado dentro del directorio mode 0700 de la ejecución y publica el endpoint canónico como symlink a esa ruta privada. El cierre solo deja que Node limpie la ruta privada y no mueve, restaura ni sobrescribe el endpoint canónico."
+alternativas: "Renombrar/restaurar el endpoint canónico durante close(); usar limpieza por identidad dev/ino sobre la ruta canónica; depender de APIs internas de Node; usar herramientas externas para fixtures de socket."
+consecuencias: "Node solo puede autolimpiar la ruta privada que creó. El endpoint canónico puede quedar como symlink obsoleto tras una detención limpia y se retira en el siguiente arranque únicamente si apunta al patrón privado de a4sd y no acepta conexiones. Las pruebas de sockets Unix usan únicamente APIs incorporadas de Node."
 ---
 
 ## Contexto
 
-El transporte IPC de E0 expone un endpoint local por ejecución. En Unix, ese endpoint es una ruta de socket. La revisión de Task 4 detectó que una falla de arranque podía ejecutar limpieza antes de establecer propiedad, y que la limpieza por ruta podía eliminar un endpoint que ya no pertenecía al servidor.
+El transporte IPC de E0 expone un endpoint local por ejecución. En Unix, ese endpoint es una ruta de filesystem. La revisión de Task 4 confirmó un hecho de plataforma: Node v26 no expone una API pública para desactivar la limpieza automática de rutas de sockets Unix durante `server.close()`. Por lo tanto, si Node escucha directamente en la ruta canónica anunciada, el cierre puede desvincular esa ruta por nombre sin que la aplicación pueda protegerla de reemplazos concurrentes.
+
+La corrección previa intentó preservar la ruta con `rename()` antes del cierre y restaurarla después. Ese mecanismo era inseguro porque movía una ruta sin demostrar propiedad, dejaba libre la ruta canónica durante el cierre y podía sobrescribir un endpoint creado concurrentemente al restaurar.
 
 ## Decisión
 
-Capturar la identidad del socket Unix después de `listen()` exitoso y usarla como autoridad para la limpieza. Durante `stop()` o un cierre por error posterior a `listen()`, mover temporalmente cualquier entrada presente en la ruta del endpoint antes de cerrar el listener, restaurarla después del cierre y ejecutar limpieza explícita solo cuando `dev` e `ino` coincidan con la identidad capturada.
+El servidor ya no escucha directamente en el endpoint canónico Unix. En su lugar:
 
-Windows named pipes quedan excluidas de esta lógica porque no dependen de una ruta de filesystem que deba desvincularse.
+1. crea el directorio de ejecución con modo `0700`;
+2. prepara el endpoint canónico rechazando endpoints activos;
+3. escucha en una ruta física privada y corta dentro del mismo directorio;
+4. publica el endpoint canónico como symlink relativo hacia esa ruta privada;
+5. durante `stop()`, cierra el `net.Server` y permite que Node elimine solo la ruta privada;
+6. no renombra, restaura, sobrescribe ni desvincula el endpoint canónico en el borde de apagado.
+
+La limpieza del endpoint canónico queda limitada al arranque: si existe una ruta obsoleta, solo se retira cuando es observablemente inactiva. Para symlinks, además debe apuntar al patrón privado de `a4sd`; un symlink ajeno inactivo se rechaza en lugar de modificarse. Los sockets Unix obsoletos creados por procesos terminados anormalmente se prueban con conexión local y se eliminan solo si no aceptan conexiones.
+
+Windows named pipes quedan excluidas porque no usan una ruta de filesystem que Node desvincule con esta semántica.
 
 ## Alternativas descartadas
 
-- **Limpieza por ruta**: descartada porque una ruta puede ser reemplazada por otro endpoint entre `listen()` y `close()`.
-- **Confiar en `server.close()`**: descartada porque se verificó que puede desvincular la ruta por nombre antes de que la aplicación pueda comparar identidad.
-- **No limpiar sockets Unix**: descartada porque dejaría endpoints propios obsoletos y rompería arranques posteriores.
+- **Renombrar/restaurar la ruta canónica durante `close()`**: descartada porque crea una ventana en la que otro proceso puede crear un endpoint y luego ser sobrescrito por la restauración.
+- **Limpieza por identidad `dev`/`ino` sobre el endpoint canónico durante apagado**: descartada porque sigue dependiendo de una comprobación previa a una mutación posterior sobre una ruta compartida.
+- **Usar opciones internas o no documentadas de Node**: descartada porque Node v26 no ofrece `cleanup:false` público para este caso y depender de internals rompería compatibilidad.
+- **Usar Python o herramientas de shell para fixtures de sockets Unix**: descartada porque la cobertura debe ser Node-only y no puede saltarse silenciosamente en plataformas Unix soportadas.
 
 ## Consecuencias
 
-- La propiedad se vuelve explícita y verificable por identidad de filesystem.
-- La limpieza posterior a fallas antes de establecer propiedad queda deshabilitada.
-- El cierre Unix requiere una preservación temporal con `rename()`, pero solo en el borde de apagado y sin impacto en el flujo de mensajes.
+- Node queda como propietario exclusivo de una ruta física privada, por lo que su autolimpieza no puede eliminar directamente el endpoint canónico anunciado.
+- El endpoint canónico permanece presente durante el cierre del listener y no se sobrescribe si otro endpoint aparece concurrentemente.
+- Un apagado limpio puede dejar un symlink canónico obsoleto hasta que se elimine el directorio de ejecución o hasta el siguiente arranque, donde se limpia bajo condiciones observables.
+- La implementación agrega una indirection por symlink en Unix, sin impacto en Windows.
+- Las regresiones de propiedad y sockets obsoletos se prueban con procesos Node hijos terminados con `SIGKILL`, sin dependencias externas ni saltos silenciosos en Unix.

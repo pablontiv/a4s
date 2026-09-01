@@ -1,22 +1,20 @@
 import assert from "node:assert/strict";
-import { execFile, spawnSync } from "node:child_process";
-import { mkdtemp, rm, stat, unlink } from "node:fs/promises";
-import { Server } from "node:net";
+import { spawn } from "node:child_process";
+import { lstatSync } from "node:fs";
+import { mkdir, mkdtemp, rm, stat, unlink } from "node:fs/promises";
+import { Server, createConnection, createServer, type Server as NetServer } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
-import { promisify } from "node:util";
 import { createRunEndpoint } from "../src/daemon/endpoint.ts";
 import { E0Server } from "../src/daemon/server.ts";
 import { encodeFrame, MAX_FRAME_BYTES } from "../src/protocol/framing.ts";
 import { createAck } from "../src/protocol/messages.ts";
 import { createAttach, createServerHarness } from "./support/server-harness.ts";
 
-const unixSocketIdentitySkip = process.platform === "win32"
+const unixFilesystemEndpointSkip = process.platform === "win32"
   ? "Windows named pipes do not use filesystem cleanup"
-  : spawnSync("python3", ["--version"], { stdio: "ignore" }).status === 0
-    ? false
-    : "python3 is required to create a stale AF_UNIX socket fixture";
+  : false;
 
 test("server requires attach as the first message", async () => {
   const harness = await createServerHarness();
@@ -260,7 +258,59 @@ test("server refuses an already-active endpoint", async () => {
   }
 });
 
-test("server cleanup preserves a replaced endpoint identity", { skip: unixSocketIdentitySkip }, async () => {
+test("server stop keeps the canonical Unix endpoint present while closing the listener", { skip: unixFilesystemEndpointSkip }, async () => {
+  const harness = await createServerHarness();
+  const originalClose = Server.prototype.close;
+  let canonicalEntryPresentAtClose = false;
+  Server.prototype.close = function patchedClose(this: Server, ...args: Parameters<Server["close"]>): Server {
+    canonicalEntryPresentAtClose = pathEntryExists(harness.endpoint);
+    return originalClose.apply(this, args);
+  } as typeof Server.prototype.close;
+
+  try {
+    await harness.server.stop();
+    assert.equal(canonicalEntryPresentAtClose, true);
+  } finally {
+    Server.prototype.close = originalClose;
+    await harness.close();
+  }
+});
+
+test("server stop does not overwrite a concurrently-created canonical Unix endpoint", { skip: unixFilesystemEndpointSkip }, async () => {
+  const harness = await createServerHarness();
+  const originalClose = Server.prototype.close;
+  let foreignServer: NetServer | undefined;
+  let foreignCreated = false;
+
+  Server.prototype.close = function patchedClose(this: Server, callback?: (err?: Error) => void): Server {
+    return originalClose.call(this, (error?: Error) => {
+      if (error || pathEntryExists(harness.endpoint)) {
+        callback?.(error);
+        return;
+      }
+
+      foreignServer = createServer((socket) => socket.end("foreign"));
+      foreignServer.once("error", (listenError) => callback?.(listenError));
+      foreignServer.listen(harness.endpoint, () => {
+        foreignCreated = true;
+        callback?.();
+      });
+    });
+  } as typeof Server.prototype.close;
+
+  try {
+    await harness.server.stop();
+    if (foreignCreated) {
+      assert.equal(await readFromEndpoint(harness.endpoint), "foreign");
+    }
+  } finally {
+    Server.prototype.close = originalClose;
+    await closeOptionalServer(foreignServer);
+    await harness.close();
+  }
+});
+
+test("server cleanup preserves a replaced endpoint identity", { skip: unixFilesystemEndpointSkip }, async () => {
   const harness = await createServerHarness();
   try {
     await unlink(harness.endpoint);
@@ -274,7 +324,26 @@ test("server cleanup preserves a replaced endpoint identity", { skip: unixSocket
   }
 });
 
-test("failed startup does not clean an unowned Unix endpoint", { skip: unixSocketIdentitySkip }, async () => {
+test("server starts after removing a stale Unix socket from an abnormally terminated Node child", { skip: unixFilesystemEndpointSkip }, async () => {
+  const root = await mkdtemp(join(tmpdir(), "a4s-e0-stale-node-"));
+  const endpoint = createRunEndpoint("run-1", root, process.platform);
+  const server = new E0Server({
+    endpoint,
+    expectedOwnerId: "W1",
+    expectedBindingRevision: 1,
+    onEvent() {},
+  });
+
+  try {
+    await createStaleUnixSocket(endpoint);
+    await assert.doesNotReject(() => server.start());
+  } finally {
+    await server.stop();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("failed startup does not clean an unowned Unix endpoint", { skip: unixFilesystemEndpointSkip }, async () => {
   const root = await mkdtemp(join(tmpdir(), "a4s-e0-start-fail-"));
   const endpoint = createRunEndpoint("run-1", root, process.platform);
   const server = new E0Server({
@@ -303,14 +372,68 @@ test("failed startup does not clean an unowned Unix endpoint", { skip: unixSocke
   }
 });
 
-const execFileAsync = promisify(execFile);
-
 async function createStaleUnixSocket(endpoint: string): Promise<void> {
-  await execFileAsync("python3", [
-    "-c",
-    "import socket, sys; s = socket.socket(socket.AF_UNIX); s.bind(sys.argv[1]); s.close()",
+  await mkdir(dirname(endpoint), { recursive: true, mode: 0o700 });
+  const child = spawn(process.execPath, [
+    "-e",
+    "const net = require('node:net'); const server = net.createServer(); server.listen(process.argv[1], () => process.send?.('listening')); setInterval(() => {}, 1000);",
     endpoint,
-  ]);
+  ], { stdio: ["ignore", "ignore", "ignore", "ipc"] });
+
+  await withChildStartup(child);
+  child.kill("SIGKILL");
+  await new Promise<void>((resolve, reject) => {
+    child.once("exit", () => resolve());
+    child.once("error", reject);
+  });
+}
+
+function pathEntryExists(path: string): boolean {
+  try {
+    lstatSync(path);
+    return true;
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+function readFromEndpoint(endpoint: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const socket = createConnection(endpoint);
+    let data = "";
+    socket.setEncoding("utf8");
+    socket.once("error", reject);
+    socket.on("data", (chunk: string) => {
+      data += chunk;
+    });
+    socket.once("end", () => resolve(data));
+  });
+}
+
+function closeOptionalServer(server: NetServer | undefined): Promise<void> {
+  if (!server?.listening) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    server.close((error) => (error ? reject(error) : resolve()));
+  });
+}
+
+function withChildStartup(child: ReturnType<typeof spawn>): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error("timed out waiting for child socket listener")), 2_000);
+    child.once("message", () => {
+      clearTimeout(timeout);
+      resolve();
+    });
+    child.once("error", (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+    child.once("exit", (code, signal) => {
+      clearTimeout(timeout);
+      reject(new Error(`child exited before listening: code=${code ?? "none"} signal=${signal ?? "none"}`));
+    });
+  });
 }
 
 function rawJsonFrame(value: unknown): Buffer {
