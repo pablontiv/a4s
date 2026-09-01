@@ -48,6 +48,7 @@ test("get returns a cloned record view", () => {
   store.enqueue(delivery);
   const record = store.get("D1");
   assert.ok(record);
-  (record as { status: string }).status = "ACKNOWLEDGED";
-  assert.equal(store.get("D1")?.status, "PENDING");
+  if (!record) return;
+  record.message.payload.body.nonce = "tampered";
+  assert.equal(store.get("D1")?.message.payload.body.nonce, "nonce-1");
 });

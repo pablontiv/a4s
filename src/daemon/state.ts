@@ -68,7 +68,7 @@ export class DeliveryStore {
       return undefined;
     }
     return {
-      message: record.message,
+      message: cloneDeliveryMessage(record.message),
       status: record.status,
       sendCount: record.sendCount,
     };
@@ -86,4 +86,21 @@ export class DeliveryStore {
     }
     return { pending, acknowledged };
   }
+}
+
+function cloneDeliveryMessage(message: DeliveryMessage): DeliveryMessage {
+  return {
+    protocol_version: message.protocol_version,
+    message_id: message.message_id,
+    type: message.type,
+    payload: {
+      delivery_id: message.payload.delivery_id,
+      owner_id: message.payload.owner_id,
+      binding_revision: message.payload.binding_revision,
+      kind: message.payload.kind,
+      body: {
+        nonce: message.payload.body.nonce,
+      },
+    },
+  };
 }
