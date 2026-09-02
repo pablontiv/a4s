@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -10,6 +10,7 @@ import {
   type RunSummary,
   type ScenarioSummary,
 } from "../src/e0/evidence.ts";
+import { renderE0Report, writeE0Report } from "../src/e0/report.ts";
 
 function environmentFixture(runId: string): EnvironmentRecord {
   return {
@@ -260,5 +261,49 @@ test("unexecuted platforms remain NOT RUN in verdict summary", async () => {
 
   assert.equal(summary.verdict, "PASS-linux");
   assert.deepEqual(summary.platforms, { macOS: "NOT RUN", linux: "PASS", windows: "NOT RUN" });
+});
+
+test("renderE0Report includes commit, hashes, platform verdicts, and anomalies", () => {
+  const markdown = renderE0Report({
+    testedCommit: "abc123",
+    environment: environmentFixture("run-1"),
+    summary: passingSummaryFixture(),
+    hashes: {
+      "environment.json": "a".repeat(64),
+      "events.jsonl": "b".repeat(64),
+      "summary.json": "c".repeat(64),
+    },
+    anomalies: [],
+    failedRuns: [],
+  });
+  assert.match(markdown, /abc123/);
+  assert.match(markdown, /PASS-macOS/);
+  assert.match(markdown, /Windows: NOT RUN/);
+  assert.match(markdown, /events\.jsonl/);
+});
+
+test("writeE0Report rejects mismatched run IDs", async () => {
+  const root = await mkdtemp(join(tmpdir(), "a4s-report-mismatch-"));
+  await writeFile(join(root, "environment.json"), JSON.stringify(environmentFixture("run-a")), "utf8");
+  await writeFile(join(root, "events.jsonl"), "{}\n", "utf8");
+  await writeFile(join(root, "summary.json"), JSON.stringify({ ...passingSummaryFixture(), run_id: "run-b" }), "utf8");
+
+  await assert.rejects(writeE0Report(root, join(root, "report.md")), /run ID mismatch/);
+});
+
+test("writeE0Report scans failed sibling runs", async () => {
+  const parent = await mkdtemp(join(tmpdir(), "a4s-report-siblings-"));
+  const current = join(parent, "run-current");
+  const failed = join(parent, "run-failed");
+  await mkdir(current, { recursive: true });
+  await mkdir(failed, { recursive: true });
+  await writeFile(join(current, "environment.json"), JSON.stringify(environmentFixture("run-current")), "utf8");
+  await writeFile(join(current, "events.jsonl"), "{}\n", "utf8");
+  await writeFile(join(current, "summary.json"), JSON.stringify({ ...passingSummaryFixture(), run_id: "run-current" }), "utf8");
+  await writeFile(join(failed, "summary.json"), JSON.stringify({ ...passingSummaryFixture(), run_id: "run-failed", verdict: "FAIL-macOS" }), "utf8");
+
+  await writeE0Report(current, join(current, "report.md"));
+  const markdown = await readFile(join(current, "report.md"), "utf8");
+  assert.match(markdown, /run-failed/);
 });
 
