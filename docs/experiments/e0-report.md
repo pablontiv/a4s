@@ -4,19 +4,21 @@
 - PASS-macOS
 
 ## Tested revision and environment
-- Tested commit: 404975831102da8c6a3730bcd2b6170351bf410c
-- Run ID: 20260902T015339Z-f048
-- Started at: 2026-09-02T01:53:39.641Z
+- Tested commit: f72633eeb69586cdb543fdfc59aecf5524fe2267
+- Run ID: 20260902T035117Z-661e
+- Started at: 2026-09-02T03:51:17.048Z
 - OS: darwin 25.6.0
 - Architecture: arm64
 - Node: v26.8.1
 - Pi: 0.84.4
 - Transport: unix_socket
-- Endpoint pattern: /tmp/a4s-e0/20260902T015339Z-f048-{scenario}-{trial}-{suffix}/a4sd.sock
+- Endpoint pattern: /tmp/a4s-e0/20260902T035117Z-661e-{scenario}-{trial}-{suffix}/a4sd.sock
 - Trials per scenario: 20
 
 ## Procedure
+- Reproduction command: `npm run e0 -- --trials 20`.
 - Recorded environment, events, and summary artifacts for the selected run.
+- Raw artifacts remain local and ignored by design; the hashes below bind this report to the retained files.
 - Verified scenario verdicts and platform coverage from the generated summary.
 
 ## Results by scenario
@@ -37,15 +39,16 @@
 - No protocol errors were observed in the recorded run artifacts.
 
 ## Artifacts and SHA-256 hashes
-- environment.json: 21390def3ffb75f9b54db6c061d46ac622fd42f5d465fc8ec9c336c70c2e380e
-- events.jsonl: 66f030e7fc531a55f2f7c3b86d3b2bfd70d054e15651398f02882d0cda0deee2
-- summary.json: 8607f38176f54e4793f9f77e81d07c0f81e083b058a4f08a761f239fb922572d
+- environment.json: 6366e6219ef74345ee904c9ee571daab0cdd9f62ab44a6473024a61cbe65f446
+- events.jsonl: 4a77975db54ec58adf5cea77f30fc774887b1a3fe576f722336be1259acf78f8
+- summary.json: abd3c6a50f7c59ce324e79c02b77bcf7c1698a2aeff36b4ea3330615678c6896
 
 ## Anomalies and failed prior runs
 - Anomalies:
   - 20260902T011357Z-696d discarded: OS version was recorded as darwin node.
   - 20260902T012719Z-071e discarded: repeated ACKs produced protocol errors contrary to the E0 specification.
   - 20260902T014920Z-a99e discarded: report generator emitted a duplicate trailing terminator.
+  - 20260902T015339Z-f048 discarded: post-PR review found missing receive-boundary address and strict UTF-8 validation.
 - Failed prior runs: none
 
 ## Platform coverage
@@ -54,4 +57,4 @@
 - Windows: NOT RUN
 
 ## Decision
-- PASS
+- PASS-macOS
