@@ -4,15 +4,15 @@
 - PASS-macOS
 
 ## Tested revision and environment
-- Tested commit: dc357429382b64f6e417873f64b73decd4a476d3
-- Run ID: 20260902T012719Z-071e
-- Started at: 2026-09-02T01:27:19.435Z
+- Tested commit: 404975831102da8c6a3730bcd2b6170351bf410c
+- Run ID: 20260902T015339Z-f048
+- Started at: 2026-09-02T01:53:39.641Z
 - OS: darwin 25.6.0
 - Architecture: arm64
 - Node: v26.8.1
 - Pi: 0.84.4
 - Transport: unix_socket
-- Endpoint pattern: /tmp/a4s-e0/20260902T012719Z-071e-{scenario}-{trial}-{suffix}/a4sd.sock
+- Endpoint pattern: /tmp/a4s-e0/20260902T015339Z-f048-{scenario}-{trial}-{suffix}/a4sd.sock
 - Trials per scenario: 20
 
 ## Procedure
@@ -37,12 +37,15 @@
 - No protocol errors were observed in the recorded run artifacts.
 
 ## Artifacts and SHA-256 hashes
-- environment.json: 9250120836f80cb821c6670279758594663c18a1e0f7898fd6093c56ee3acb44
-- events.jsonl: 259711fda16ac0e03e84bd303fde2a11ea7edac38be8e60bf256c5da00fe1107
-- summary.json: 4b625319b97fc528a4483d97565b131d670cd9b53b3a9505e3e780f9186ddbe4
+- environment.json: 21390def3ffb75f9b54db6c061d46ac622fd42f5d465fc8ec9c336c70c2e380e
+- events.jsonl: 66f030e7fc531a55f2f7c3b86d3b2bfd70d054e15651398f02882d0cda0deee2
+- summary.json: 8607f38176f54e4793f9f77e81d07c0f81e083b058a4f08a761f239fb922572d
 
 ## Anomalies and failed prior runs
-- Anomalies: none
+- Anomalies:
+  - 20260902T011357Z-696d discarded: OS version was recorded as darwin node.
+  - 20260902T012719Z-071e discarded: repeated ACKs produced protocol errors contrary to the E0 specification.
+  - 20260902T014920Z-a99e discarded: report generator emitted a duplicate trailing terminator.
 - Failed prior runs: none
 
 ## Platform coverage
