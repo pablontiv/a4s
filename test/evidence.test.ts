@@ -306,4 +306,3 @@ test("writeE0Report scans failed sibling runs", async () => {
   const markdown = await readFile(join(current, "report.md"), "utf8");
   assert.match(markdown, /run-failed/);
 });
-
