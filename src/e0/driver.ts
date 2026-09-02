@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, unlink } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { release, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { E0Server } from "../daemon/server.ts";
@@ -529,7 +529,7 @@ async function createEnvironmentRecord(options: {
   return {
     run_id: options.runId,
     started_at: options.startedAt,
-    os_version: `${process.platform} ${process.release.name}`,
+    os_version: `${process.platform} ${release()}`,
     architecture: process.arch,
     node_version: process.version,
     pi_version: await readPiVersion(),

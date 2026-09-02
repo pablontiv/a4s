@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { access, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { release, tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { runExperiment, runManualSmoke } from "../src/e0/driver.ts";
@@ -48,8 +48,12 @@ test("runExperiment executes each selected scenario for every trial", async () =
     launcher,
     artifactRoot: await createTempArtifactRoot(),
   });
+  const environment = JSON.parse(await readFile(join(result.runDir, "environment.json"), "utf8")) as {
+    os_version: string;
+  };
   assert.equal(launcher.starts, 10);
   assert.equal(result.summary.verdict.startsWith("PASS-"), true);
+  assert.equal(environment.os_version, `${process.platform} ${release()}`);
 });
 
 test("runExperiment records FAIL when the Pi boundary fails", async () => {
