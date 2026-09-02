@@ -33,7 +33,9 @@ export function renderE0Report(input: ReportInput): string {
     `- Trials per scenario: ${input.environment.trials_per_scenario}`,
     "",
     "## Procedure",
+    `- Reproduction command: \`npm run e0 -- --trials ${input.environment.trials_per_scenario}\`.`,
     "- Recorded environment, events, and summary artifacts for the selected run.",
+    "- Raw artifacts remain local and ignored by design; the hashes below bind this report to the retained files.",
     "- Verified scenario verdicts and platform coverage from the generated summary.",
     "",
     "## Results by scenario",
@@ -60,7 +62,7 @@ export function renderE0Report(input: ReportInput): string {
     `- Windows: ${input.summary.platforms.windows}`,
     "",
     "## Decision",
-    `- ${input.summary.verdict === "PASS-macOS" ? "PASS" : "FAIL"}`,
+    `- ${input.summary.verdict}`,
     "",
   ];
   return `${lines.join("\n")}`;

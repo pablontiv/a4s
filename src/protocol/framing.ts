@@ -41,8 +41,16 @@ export class FrameDecoder {
         const payload = this.buffer.subarray(4, 4 + length);
         this.buffer = this.buffer.subarray(4 + length);
 
+        let text: string;
         try {
-          values.push(JSON.parse(payload.toString("utf8")));
+          text = new TextDecoder("utf-8", { fatal: true }).decode(payload);
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : String(error);
+          throw new FramingError(`invalid UTF-8: ${reason}`);
+        }
+
+        try {
+          values.push(JSON.parse(text));
         } catch (error) {
           const reason = error instanceof Error ? error.message : String(error);
           throw new FramingError(`invalid JSON: ${reason}`);

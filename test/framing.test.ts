@@ -44,6 +44,15 @@ test("FrameDecoder rejects invalid JSON and remains failed", () => {
   assert.throws(() => decoder.push(encodeFrame(ack)), /decoder is failed/);
 });
 
+test("FrameDecoder rejects malformed UTF-8 before JSON parsing", () => {
+  const payload = Buffer.from([0x22, 0xff, 0x22]);
+  const header = Buffer.alloc(4);
+  header.writeUInt32BE(payload.length);
+  const decoder = new FrameDecoder();
+  assert.throws(() => decoder.push(Buffer.concat([header, payload])), /invalid UTF-8/);
+  assert.throws(() => decoder.push(encodeFrame(ack)), /decoder is failed/);
+});
+
 test("FrameDecoder decodes a zero-length payload as invalid", () => {
   const header = Buffer.alloc(4);
   header.writeUInt32BE(0);

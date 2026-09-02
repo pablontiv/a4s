@@ -6,8 +6,8 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 import type { ExtensionContext, ExtensionHandler, SessionShutdownEvent, SessionStartEvent } from "@earendil-works/pi-coding-agent";
 import { createRunEndpoint } from "../src/daemon/endpoint.ts";
-import { encodeFrame } from "../src/protocol/framing.ts";
-import { createAttached } from "../src/protocol/messages.ts";
+import { encodeFrame, FrameDecoder } from "../src/protocol/framing.ts";
+import { createAttached, createDelivery, parseMessage } from "../src/protocol/messages.ts";
 import a4sE0Extension from "../src/pi-extension/index.ts";
 import { E0PiClient } from "../src/pi-extension/client.ts";
 import { createClientHarness } from "./support/client-harness.ts";
@@ -85,6 +85,89 @@ test("client does not reconnect after stop during backoff", async () => {
     assert.equal(harness.clientEvents.filter((event) => event.event === "connected").length, connectedAtStop);
   } finally {
     await harness.close();
+  }
+});
+
+test("client rejects an attached response with the wrong correlation", async () => {
+  const root = await mkdtemp(join(tmpdir(), "a4s-e0-wrong-attached-"));
+  const endpoint = createRunEndpoint("run-1", root, process.platform);
+  const sockets = new Set<Socket>();
+  const server = createServer((socket) => {
+    sockets.add(socket);
+    socket.once("close", () => sockets.delete(socket));
+    socket.once("data", () => socket.write(encodeFrame(createAttached("wrong-message", "W1"))));
+  });
+  await mkdir(dirname(endpoint), { recursive: true, mode: 0o700 });
+  await listen(server, endpoint);
+  const events: { event: string; detail?: string }[] = [];
+  const client = new E0PiClient({
+    endpoint,
+    attach: {
+      owner_id: "W1",
+      binding_revision: 1,
+      native_ref: { session_id: "session-1", session_file: join(root, "session.jsonl") },
+    },
+    reconnectDelaysMs: [50],
+    onEvent: (event) => events.push(event),
+  });
+
+  try {
+    await assert.rejects(() => client.start(), /attached response does not match attach request/);
+    assert.equal(events.some((event) => event.event === "attached"), false);
+  } finally {
+    await client.stop();
+    for (const socket of sockets) socket.destroy();
+    await closeServer(server);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("client rejects a Delivery addressed to another owner without processing or ACKing", async () => {
+  const root = await mkdtemp(join(tmpdir(), "a4s-e0-wrong-owner-"));
+  const endpoint = createRunEndpoint("run-1", root, process.platform);
+  const sockets = new Set<Socket>();
+  let ackReceived = false;
+  const server = createServer((socket) => {
+    sockets.add(socket);
+    socket.once("close", () => sockets.delete(socket));
+    const decoder = new FrameDecoder();
+    socket.on("data", (chunk: Buffer) => {
+      for (const value of decoder.push(chunk)) {
+        const message = parseMessage(value);
+        if (message.type === "attach") {
+          socket.write(encodeFrame(createAttached(message.message_id, "W1")));
+          socket.write(encodeFrame(createDelivery("D-wrong", "W2", "nonce")));
+        } else if (message.type === "delivery_ack") {
+          ackReceived = true;
+        }
+      }
+    });
+  });
+  await mkdir(dirname(endpoint), { recursive: true, mode: 0o700 });
+  await listen(server, endpoint);
+  const events: { event: string; detail?: string }[] = [];
+  const client = new E0PiClient({
+    endpoint,
+    attach: {
+      owner_id: "W1",
+      binding_revision: 1,
+      native_ref: { session_id: "session-1", session_file: join(root, "session.jsonl") },
+    },
+    reconnectDelaysMs: [50],
+    onEvent: (event) => events.push(event),
+  });
+
+  try {
+    await client.start();
+    await sleep(25);
+    assert.equal(events.some((event) => event.event === "delivery_processed"), false);
+    assert.equal(events.some((event) => event.event === "error" && /owner_id/.test(event.detail ?? "")), true);
+    assert.equal(ackReceived, false);
+  } finally {
+    await client.stop();
+    for (const socket of sockets) socket.destroy();
+    await closeServer(server);
+    await rm(root, { recursive: true, force: true });
   }
 });
 

@@ -297,6 +297,8 @@ test("renderE0Report includes commit, hashes, platform verdicts, and anomalies",
   assert.match(markdown, /PASS-macOS/);
   assert.match(markdown, /Windows: NOT RUN/);
   assert.match(markdown, /events\.jsonl/);
+  assert.match(markdown, /npm run e0 -- --trials 1/);
+  assert.match(markdown, /## Decision\n- PASS-macOS/);
 });
 
 test("writeE0Report derives protocol-error results from events", async () => {

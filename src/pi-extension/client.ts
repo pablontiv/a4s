@@ -31,6 +31,7 @@ interface ActiveConnection {
   socket: Socket;
   decoder: FrameDecoder;
   attached: boolean;
+  attachMessageId?: string;
   reconnectScheduled: boolean;
 }
 
@@ -126,6 +127,7 @@ export class E0PiClient {
       type: "attach",
       payload: this.options.attach,
     };
+    connection.attachMessageId = message.message_id;
     connection.socket.write(encodeFrame(message));
     this.emit({ event: "attach_sent", message_id: message.message_id });
   }
@@ -159,6 +161,14 @@ export class E0PiClient {
 
     if (!connection.attached) {
       if (message.type === "attached") {
+        if (
+          message.payload.in_reply_to !== connection.attachMessageId
+          || message.payload.owner_id !== this.options.attach.owner_id
+          || message.payload.binding_revision !== this.options.attach.binding_revision
+        ) {
+          this.failBeforeAttach(new Error("attached response does not match attach request"), connection);
+          return;
+        }
         connection.attached = true;
         this.reconnectAttempt = 0;
         this.emit({ event: "attached", message_id: message.message_id });
@@ -188,6 +198,15 @@ export class E0PiClient {
   }
 
   private handleDelivery(connection: ActiveConnection, message: DeliveryMessage): void {
+    if (message.payload.owner_id !== this.options.attach.owner_id) {
+      this.handleInvalidServerFrame(connection, new Error("delivery owner_id does not match attach owner_id"));
+      return;
+    }
+    if (message.payload.binding_revision !== this.options.attach.binding_revision) {
+      this.handleInvalidServerFrame(connection, new Error("delivery binding_revision does not match attach binding_revision"));
+      return;
+    }
+
     const deliveryId = message.payload.delivery_id;
     if (this.seenDeliveryIds.has(deliveryId)) {
       this.emit({ event: "delivery_duplicate", message_id: message.message_id, delivery_id: deliveryId });
