@@ -66,7 +66,7 @@ export function renderE0Report(input: ReportInput): string {
   return `${lines.join("\n")}`;
 }
 
-export async function writeE0Report(runDir: string, outputPath: string): Promise<void> {
+export async function writeE0Report(runDir: string, outputPath: string, anomalies: string[] = []): Promise<void> {
   const environmentPath = join(runDir, "environment.json");
   const eventsPath = join(runDir, "events.jsonl");
   const summaryPath = join(runDir, "summary.json");
@@ -92,7 +92,7 @@ export async function writeE0Report(runDir: string, outputPath: string): Promise
       "events.jsonl": sha256(eventsRaw),
       "summary.json": sha256(summaryRaw),
     },
-    anomalies: [],
+    anomalies,
     failedRuns,
     protocolErrors: parseProtocolErrors(eventsRaw),
   });
@@ -157,10 +157,10 @@ function listLines(label: string, values: string[]): string[] {
 }
 
 if (import.meta.main) {
-  const [runDir, outputPath] = process.argv.slice(2);
+  const [runDir, outputPath, ...anomalies] = process.argv.slice(2);
   if (!runDir || !outputPath) {
     process.exitCode = 2;
   } else {
-    await writeE0Report(runDir, outputPath);
+    await writeE0Report(runDir, outputPath, anomalies);
   }
 }

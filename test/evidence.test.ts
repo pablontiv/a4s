@@ -311,10 +311,11 @@ test("writeE0Report derives protocol-error results from events", async () => {
   );
   await writeFile(join(root, "summary.json"), JSON.stringify({ ...passingSummaryFixture(), run_id: "run-errors" }), "utf8");
 
-  await writeE0Report(root, join(root, "report.md"));
+  await writeE0Report(root, join(root, "report.md"), ["discarded rehearsal run"]);
   const markdown = await readFile(join(root, "report.md"), "utf8");
   assert.match(markdown, /Observed protocol errors: 1/);
   assert.match(markdown, /INVALID_ENVELOPE/);
+  assert.match(markdown, /discarded rehearsal run/);
 });
 
 test("writeE0Report rejects mismatched run IDs", async () => {
