@@ -1,2 +1,6 @@
 .pi/
 .pi-lens/
+.worktrees/
+node_modules/
+dist/
+artifacts/e0/

@@ -1,0 +1,21 @@
+{
+  "name": "a4s",
+  "version": "0.0.0-e0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test test/*.test.ts",
+    "e0": "tsx src/e0/driver.ts",
+    "e0:report": "tsx src/e0/report.ts"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "0.84.4",
+    "@types/node": "26.4.1",
+    "tsx": "4.23.13",
+    "typescript": "7.0.2"
+  }
+}
