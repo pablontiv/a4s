@@ -32,6 +32,7 @@ export interface ExperimentOptions {
 
 interface TrialResources {
   endpoint: string;
+  endpointDirectory: string;
   ownerId: string;
   deliveryId: string;
   sessionDir: string;
@@ -194,6 +195,7 @@ async function runTrial(options: {
     }
     try {
       await removeEndpointPath(resources.endpoint);
+      await rm(resources.endpointDirectory, { recursive: true, force: true });
     } catch (error) {
       cleanupErrors.push(`endpoint_cleanup: ${errorDetail(error)}`);
     }
@@ -499,8 +501,10 @@ async function createTrialResources(runDir: string, runId: string, scenario: Sce
   const trialId = `${runId}-${scenario}-${trial}-${randomUUID().replaceAll("-", "").slice(0, 8)}`;
   const sessionDir = join(runDir, "sessions", scenario, String(trial));
   await mkdir(sessionDir, { recursive: true });
+  const endpoint = createRunEndpoint(trialId, endpointTempRoot(), process.platform);
   return {
-    endpoint: createRunEndpoint(trialId, endpointTempRoot(), process.platform),
+    endpoint,
+    endpointDirectory: dirname(endpoint),
     ownerId: `${DEFAULT_OWNER_ID}-${scenario}-${trial}`,
     deliveryId: `D-${scenario}-${trial}-${randomUUID().replaceAll("-", "").slice(0, 8)}`,
     sessionDir,
@@ -693,8 +697,6 @@ async function removeEndpointPath(endpoint: string): Promise<void> {
     if (isNodeError(error) && error.code === "ENOENT") return;
     throw error;
   }
-
-  await rm(dirname(endpoint), { recursive: true, force: true });
 }
 
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {
