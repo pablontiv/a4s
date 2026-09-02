@@ -189,6 +189,7 @@ export class EvidenceRecorder {
       if (summary.executed !== this.options.trialsPerScenario) return false;
       if (summary.failed !== 0) return false;
       if (summary.unhandledErrors !== 0) return false;
+      if (state.deliveryIds.size !== summary.executed) return false;
 
       for (const deliveryId of state.deliveryIds) {
         if ((state.processCounts.get(deliveryId) ?? 0) !== 1) return false;

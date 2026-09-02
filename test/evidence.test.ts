@@ -162,6 +162,18 @@ test("a lost Delivery fails the verdict", async () => {
   assert.equal(summary.scenarios.S1.logicalProcesses, 0);
 });
 
+test("a passed trial with no Delivery evidence fails the verdict", async () => {
+  const root = await mkdtemp(join(tmpdir(), "a4s-evidence-nodelivery-"));
+  const recorder = await createRecorder(root, { runId: "run-nodelivery", environment: environmentFixture("run-nodelivery") });
+
+  recorder.beginTrial("S1", 1);
+  recorder.passTrial();
+  const summary = await recorder.finish();
+
+  assert.equal(summary.verdict, "FAIL-macOS");
+  assert.equal(summary.scenarios.S1.deliveriesCreated, 0);
+});
+
 test("an unacknowledged Delivery fails the verdict", async () => {
   const root = await mkdtemp(join(tmpdir(), "a4s-evidence-unack-"));
   const recorder = await createRecorder(root, { runId: "run-unack", environment: environmentFixture("run-unack") });
