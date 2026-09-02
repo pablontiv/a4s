@@ -3,7 +3,7 @@ import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { release, tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { runExperiment, runManualSmoke } from "../src/e0/driver.ts";
+import { formatManualCommand, runExperiment, runManualSmoke } from "../src/e0/driver.ts";
 import type { PiLaunchContext, PiLauncher, PiProcessHandle } from "../src/e0/pi-process.ts";
 import { E0PiClient } from "../src/pi-extension/client.ts";
 
@@ -54,6 +54,18 @@ test("runExperiment executes each selected scenario for every trial", async () =
   assert.equal(launcher.starts, 10);
   assert.equal(result.summary.verdict.startsWith("PASS-"), true);
   assert.equal(environment.os_version, `${process.platform} ${release()}`);
+});
+
+test("formatManualCommand prints a direct interactive Pi command", () => {
+  const command = formatManualCommand({
+    endpoint: "/tmp/a4s.sock",
+    ownerId: "W1",
+    sessionDir: "/tmp/a4s-session",
+    extensionPath: "/tmp/extension.ts",
+    piBin: "pi",
+  });
+  assert.match(command, /pi --approve/);
+  assert.doesNotMatch(command, /--mode rpc/);
 });
 
 test("runExperiment records FAIL when the Pi boundary fails", async () => {

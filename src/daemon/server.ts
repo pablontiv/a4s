@@ -250,15 +250,9 @@ export class E0Server {
       this.emit({ event: "acknowledged", message_id: message.message_id, delivery_id: message.payload.delivery_id });
       return;
     }
+    if (result === "already_acknowledged") return;
 
-    this.writeError(
-      socket,
-      message.message_id,
-      "UNEXPECTED_MESSAGE",
-      result === "unknown" ? "unknown delivery ACK" : "delivery already acknowledged",
-      false,
-      state,
-    );
+    this.writeError(socket, message.message_id, "UNEXPECTED_MESSAGE", "unknown delivery ACK", false, state);
   }
 
   private sendPendingDeliveries(socket: Socket): void {

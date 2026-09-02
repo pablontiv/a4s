@@ -148,6 +148,22 @@ test("duplicate physical sends with one logical process preserve PASS verdict", 
   assert.equal(summary.scenarios.S1.duplicateFrames, 1);
 });
 
+test("double logical processing fails and reports both processing events", async () => {
+  const root = await mkdtemp(join(tmpdir(), "a4s-evidence-double-process-"));
+  const recorder = await createRecorder(root, { runId: "run-double-process", environment: environmentFixture("run-double-process") });
+
+  recorder.beginTrial("S1", 1);
+  recorder.record({ component: "a4sd", event: "delivery_sent", delivery_id: "D1" });
+  recorder.record({ component: "pi-extension", event: "delivery_processed", delivery_id: "D1" });
+  recorder.record({ component: "pi-extension", event: "delivery_processed", delivery_id: "D1" });
+  recorder.record({ component: "a4sd", event: "acknowledged", delivery_id: "D1" });
+  recorder.passTrial();
+  const summary = await recorder.finish();
+
+  assert.equal(summary.verdict, "FAIL-macOS");
+  assert.equal(summary.scenarios.S1.logicalProcesses, 2);
+});
+
 test("a lost Delivery fails the verdict", async () => {
   const root = await mkdtemp(join(tmpdir(), "a4s-evidence-lost-"));
   const recorder = await createRecorder(root, { runId: "run-lost", environment: environmentFixture("run-lost") });
@@ -275,11 +291,30 @@ test("renderE0Report includes commit, hashes, platform verdicts, and anomalies",
     },
     anomalies: [],
     failedRuns: [],
+    protocolErrors: [],
   });
   assert.match(markdown, /abc123/);
   assert.match(markdown, /PASS-macOS/);
   assert.match(markdown, /Windows: NOT RUN/);
   assert.match(markdown, /events\.jsonl/);
+});
+
+test("writeE0Report derives protocol-error results from events", async () => {
+  const parent = await mkdtemp(join(tmpdir(), "a4s-report-errors-"));
+  const root = join(parent, "run-errors");
+  await mkdir(root, { recursive: true });
+  await writeFile(join(root, "environment.json"), JSON.stringify(environmentFixture("run-errors")), "utf8");
+  await writeFile(
+    join(root, "events.jsonl"),
+    `${JSON.stringify({ component: "a4sd", event: "protocol_error", detail: "INVALID_ENVELOPE" })}\n`,
+    "utf8",
+  );
+  await writeFile(join(root, "summary.json"), JSON.stringify({ ...passingSummaryFixture(), run_id: "run-errors" }), "utf8");
+
+  await writeE0Report(root, join(root, "report.md"));
+  const markdown = await readFile(join(root, "report.md"), "utf8");
+  assert.match(markdown, /Observed protocol errors: 1/);
+  assert.match(markdown, /INVALID_ENVELOPE/);
 });
 
 test("writeE0Report rejects mismatched run IDs", async () => {

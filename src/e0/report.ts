@@ -10,6 +10,7 @@ export interface ReportInput {
   hashes: Record<"environment.json" | "events.jsonl" | "summary.json", string>;
   anomalies: string[];
   failedRuns: string[];
+  protocolErrors: string[];
 }
 
 export function renderE0Report(input: ReportInput): string {
@@ -42,7 +43,7 @@ export function renderE0Report(input: ReportInput): string {
     ...invariantLines(input.summary),
     "",
     "## Protocol-error results",
-    "- No protocol errors were observed in the recorded run artifacts.",
+    ...protocolErrorLines(input.protocolErrors),
     "",
     "## Artifacts and SHA-256 hashes",
     `- environment.json: ${input.hashes["environment.json"]}`,
@@ -93,6 +94,7 @@ export async function writeE0Report(runDir: string, outputPath: string): Promise
     },
     anomalies: [],
     failedRuns,
+    protocolErrors: parseProtocolErrors(eventsRaw),
   });
   await writeFile(outputPath, `${markdown}\n`, "utf8");
 }
@@ -112,6 +114,25 @@ async function scanFailedSiblingRuns(runDir: string, currentRunId: string): Prom
     }
   }
   return failed.sort();
+}
+
+function parseProtocolErrors(eventsRaw: string): string[] {
+  return eventsRaw
+    .split("\n")
+    .filter((line) => line.length > 0)
+    .map((line) => JSON.parse(line) as Record<string, unknown>)
+    .filter((event) => event.event === "protocol_error")
+    .map((event) => typeof event.detail === "string" ? event.detail : `${String(event.component)} protocol_error`);
+}
+
+function protocolErrorLines(errors: string[]): string[] {
+  if (errors.length === 0) return ["- No protocol errors were observed in the recorded run artifacts."];
+  const counts = new Map<string, number>();
+  for (const error of errors) counts.set(error, (counts.get(error) ?? 0) + 1);
+  return [
+    `- Observed protocol errors: ${errors.length}`,
+    ...[...counts].map(([error, count]) => `  - ${error}: ${count}`),
+  ];
 }
 
 function sha256(content: string): string {

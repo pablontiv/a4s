@@ -660,7 +660,7 @@ function parseCli(argv: readonly string[]): CliResult {
   };
 }
 
-function formatManualCommand(options: {
+export function formatManualCommand(options: {
   endpoint: string;
   ownerId: string;
   sessionDir: string;
@@ -676,7 +676,6 @@ function formatManualCommand(options: {
   return [
     ...env.map(([key, value]) => `${key}=${shellQuote(value)}`),
     shellQuote(options.piBin),
-    "--mode", "rpc",
     "--approve",
     "--session-dir", shellQuote(options.sessionDir),
     "--no-builtin-tools",

@@ -124,7 +124,7 @@ test("server reports unknown ACKs without acknowledging", async () => {
   }
 });
 
-test("server reports repeated ACKs without a second transition", async () => {
+test("server accepts repeated ACKs idempotently without a protocol error", async () => {
   const harness = await createServerHarness();
   try {
     harness.server.enqueueProbe("D1", "nonce-1");
@@ -134,12 +134,9 @@ test("server reports repeated ACKs without a second transition", async () => {
     socket.write(encodeFrame(createAck("D1")));
     await waitFor(() => harness.server.counts().acknowledged === 1);
 
-    const repeated = createAck("D1");
-    socket.write(encodeFrame(repeated));
-    const reply = await harness.readOne(socket);
-    assert.equal(reply.type, "error");
-    assert.equal(reply.payload.in_reply_to, repeated.message_id);
-    assert.equal(reply.payload.code, "UNEXPECTED_MESSAGE");
+    socket.write(encodeFrame(createAck("D1")));
+    await waitFor(() => harness.events.filter((event) => event.event === "ack_received").length === 2);
+    assert.equal(harness.events.some((event) => event.event === "protocol_error"), false);
     assert.deepEqual(harness.server.counts(), { pending: 0, acknowledged: 1 });
   } finally {
     await harness.close();

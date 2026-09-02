@@ -296,7 +296,7 @@ function summarizeScenario(state: ScenarioState): ScenarioSummary {
     physicalSends: state.physicalSends,
     redeliveries,
     acknowledged: state.acknowledgedIds.size,
-    logicalProcesses: [...state.processCounts.values()].filter((count) => count > 0).length,
+    logicalProcesses: [...state.processCounts.values()].reduce((sum, count) => sum + count, 0),
     duplicateFrames: Math.max(redeliveries, state.duplicateDeliveryEvents),
     minDurationMs: durations[0] ?? 0,
     medianDurationMs: median(durations),
