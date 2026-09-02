@@ -316,6 +316,7 @@ test("writeE0Report derives protocol-error results from events", async () => {
   assert.match(markdown, /Observed protocol errors: 1/);
   assert.match(markdown, /INVALID_ENVELOPE/);
   assert.match(markdown, /discarded rehearsal run/);
+  assert.equal(markdown.endsWith("\n\n"), false);
 });
 
 test("writeE0Report rejects mismatched run IDs", async () => {

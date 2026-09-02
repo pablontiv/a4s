@@ -96,7 +96,7 @@ export async function writeE0Report(runDir: string, outputPath: string, anomalie
     failedRuns,
     protocolErrors: parseProtocolErrors(eventsRaw),
   });
-  await writeFile(outputPath, `${markdown}\n`, "utf8");
+  await writeFile(outputPath, markdown, "utf8");
 }
 
 async function scanFailedSiblingRuns(runDir: string, currentRunId: string): Promise<string[]> {
