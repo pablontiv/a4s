@@ -118,7 +118,9 @@ export class E0Server {
   }
 
   enqueueProbe(deliveryId: string, nonce: string): void {
-    this.store.enqueue(createDelivery(deliveryId, this.options.expectedOwnerId, nonce));
+    const delivery = createDelivery(deliveryId, this.options.expectedOwnerId, nonce);
+    this.store.enqueue(delivery);
+    this.sendToAttachedClients(delivery);
   }
 
   disconnectClient(): void {
@@ -261,6 +263,13 @@ export class E0Server {
 
   private sendPendingDeliveries(socket: Socket): void {
     for (const delivery of this.store.pendingFor(this.options.expectedOwnerId, this.options.expectedBindingRevision)) {
+      this.writeDelivery(socket, delivery);
+    }
+  }
+
+  private sendToAttachedClients(delivery: DeliveryMessage): void {
+    for (const [socket, state] of this.clients) {
+      if (!state.attached || state.closing) continue;
       this.writeDelivery(socket, delivery);
     }
   }

@@ -18,6 +18,7 @@ export interface ExperimentEvent {
   delivery_id?: string;
   direction?: "inbound" | "outbound";
   detail?: string;
+  endpoint?: string;
 }
 
 export interface ScenarioSummary {

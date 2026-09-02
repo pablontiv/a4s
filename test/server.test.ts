@@ -47,6 +47,24 @@ test("server attaches and sends pending Deliveries", async () => {
   }
 });
 
+test("server immediately sends a Delivery enqueued after attach", async () => {
+  const harness = await createServerHarness();
+  try {
+    const socket = await harness.connectAndAttach();
+    const attached = await harness.readOne(socket);
+    assert.equal(attached.type, "attached");
+
+    harness.server.enqueueProbe("D-after-attach", "nonce-after-attach");
+    const delivery = await harness.readOne(socket);
+    assert.equal(delivery.type, "delivery");
+    assert.equal(delivery.payload.delivery_id, "D-after-attach");
+    assert.deepEqual(harness.server.counts(), { pending: 1, acknowledged: 0 });
+    assert.deepEqual(sentDetails(harness, "D-after-attach"), ["send_count=1"]);
+  } finally {
+    await harness.close();
+  }
+});
+
 test("server rejects attach from the wrong owner", async () => {
   const harness = await createServerHarness();
   try {
