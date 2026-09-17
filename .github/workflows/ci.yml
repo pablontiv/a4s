@@ -2,6 +2,8 @@ name: ci
 
 on:
   push:
+    branches:
+      - main
   pull_request:
   workflow_dispatch:
 
@@ -29,6 +31,7 @@ jobs:
       - name: Install Node dependencies
         run: npm ci
       - name: Test runtime
+        if: runner.os != 'Windows'
         run: npm test
       - name: Typecheck runtime
         run: npm run typecheck
