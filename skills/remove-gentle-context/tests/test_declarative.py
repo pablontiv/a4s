@@ -1,0 +1,1231 @@
+from __future__ import annotations
+
+import base64
+import hashlib
+import json
+import tempfile
+import unittest
+from pathlib import Path
+from unittest import mock
+from typing import Any
+
+from helper.adapter import AdapterRegistry
+from helper.declarative import load_declarative_adapter
+from helper.engine import build_inventory, build_plan
+from helper.models import OperationKind, Ownership, PlatformProfile, ReceiptStatus, RuntimeContext
+from helper.ownership import canonical_tree_sha256
+from helper.transaction import execute_plan
+from helper.verifier import verify_receipt
+
+
+SKILL_ROOT = Path(__file__).resolve().parents[1]
+TEST_SOURCE_COMMIT = "0123456789abcdef0123456789abcdef01234567"
+WRONG_SOURCE_COMMIT = "fedcba9876543210fedcba9876543210fedcba98"
+SOURCE_REPOSITORY = "https://github.com/pablontiv/skills"
+UPSTREAM = {
+    "upstream-author": "Alan-TheGentleman",
+    "upstream-repository": "https://github.com/Gentleman-Programming/gentle-ai",
+    "upstream-commit": "d1e1777faafc91a34656ba94bd712972dbe427a1",
+}
+
+
+CURRENT_GEMINI_SKILL_PATHS = (
+    "skills/_shared/SKILL.md",
+    "skills/_shared/engram-convention.md",
+    "skills/_shared/openspec-convention.md",
+    "skills/_shared/persistence-contract.md",
+    "skills/_shared/review-ledger-contract.md",
+    "skills/_shared/sdd-phase-common.md",
+    "skills/_shared/sdd-status-contract.md",
+    "skills/_shared/skill-resolver.md",
+    "skills/comment-writer/SKILL.md",
+    "skills/judgment-day/SKILL.md",
+    "skills/judgment-day/references/prompts-and-formats.md",
+    "skills/sdd-apply/SKILL.md",
+    "skills/sdd-apply/strict-tdd.md",
+    "skills/sdd-archive/SKILL.md",
+    "skills/sdd-design/SKILL.md",
+    "skills/sdd-design/references/threat-matrix.md",
+    "skills/sdd-explore/SKILL.md",
+    "skills/sdd-init/SKILL.md",
+    "skills/sdd-init/references/init-details.md",
+    "skills/sdd-onboard/SKILL.md",
+    "skills/sdd-propose/SKILL.md",
+    "skills/sdd-spec/SKILL.md",
+    "skills/sdd-tasks/SKILL.md",
+    "skills/sdd-verify/SKILL.md",
+    "skills/sdd-verify/references/report-format.md",
+    "skills/sdd-verify/strict-tdd-verify.md",
+    "skills/work-unit-commits/SKILL.md",
+)
+CURRENT_GEMINI_EXACT_PATHS = ("GEMINI.md", "system.md", *CURRENT_GEMINI_SKILL_PATHS)
+
+CURRENT_KIMI_YAML_AGENT_PATHS = (
+    "agents/gentleman.yaml",
+    "agents/review-readability.yaml",
+    "agents/review-refuter.yaml",
+    "agents/review-reliability.yaml",
+    "agents/review-resilience.yaml",
+    "agents/review-risk.yaml",
+    "agents/sdd-apply.yaml",
+    "agents/sdd-archive.yaml",
+    "agents/sdd-design.yaml",
+    "agents/sdd-explore.yaml",
+    "agents/sdd-init.yaml",
+    "agents/sdd-onboard.yaml",
+    "agents/sdd-propose.yaml",
+    "agents/sdd-spec.yaml",
+    "agents/sdd-tasks.yaml",
+    "agents/sdd-verify.yaml",
+)
+CURRENT_KIMI_ROOT_CONTEXT_PATHS = (
+    "KIMI.md",
+    "agent-routing.md",
+    "engram-protocol.md",
+    "output-style.md",
+    "persona.md",
+    "sdd-orchestrator.md",
+)
+CURRENT_KIMI_EXACT_PATHS = (*CURRENT_KIMI_YAML_AGENT_PATHS, *CURRENT_KIMI_ROOT_CONTEXT_PATHS, "config.toml")
+
+CURRENT_HERMES_SKILL_PATHS = tuple(path.replace("skills/", "", 1) for path in CURRENT_GEMINI_SKILL_PATHS)
+CURRENT_HERMES_EXACT_PATHS = ("SOUL.md", "config.yaml", *(f"skills/{path}" for path in CURRENT_HERMES_SKILL_PATHS))
+CURRENT_SHARED_EXACT_PATHS = CURRENT_GEMINI_SKILL_PATHS
+
+CURRENT_EXPECTED_EXACT_PATHS = {
+    "gemini": CURRENT_GEMINI_EXACT_PATHS,
+    "kimi": CURRENT_KIMI_EXACT_PATHS,
+    "hermes": CURRENT_HERMES_EXACT_PATHS,
+    "shared-agents": CURRENT_SHARED_EXACT_PATHS,
+}
+
+
+class DeclarativeAdapterTests(unittest.TestCase):
+    def test_adapter_registry_rejects_duplicate_and_unknown_clients(self):
+        class StubAdapter:
+            client = "gemini"
+
+            def inventory(self, context):
+                return ()
+
+            def compile(self, candidate, context):
+                return ()
+
+            def verify(self, receipt, context):
+                return ()
+
+        registry = AdapterRegistry()
+        adapter = StubAdapter()
+        registry.register(adapter)
+        self.assertIs(registry.for_client("gemini"), adapter)
+        with self.assertRaisesRegex(ValueError, "adapter_duplicate_client"):
+            registry.register(StubAdapter())
+        with self.assertRaisesRegex(ValueError, "adapter_unknown_client"):
+            registry.for_client("unknown")
+
+    def _context(self, home: Path, **env: str) -> RuntimeContext:
+        return RuntimeContext(PlatformProfile("linux", home, dict(env)))
+
+    def _write_exact_file_adapter(self, path: Path) -> None:
+        path.write_text(json.dumps({
+            "schema": "remove-gentle-context.adapter/v1",
+            "client": "gemini",
+            "roots": {"config": {"kind": "home_relative", "path": ".gemini"}},
+            "rules": [{"id": "adapted", "kind": "exact_file", "root": "config", "path": "agents/systemic-issue-triage.md"}],
+        }))
+
+    def _personal_content(
+        self,
+        *,
+        author: str = "pablontiv",
+        include_adapted_metadata: bool = True,
+    ) -> str:
+        adapted = ""
+        if include_adapted_metadata:
+            adapted = """  upstream-author: "Alan-TheGentleman"
+  upstream-repository: "https://github.com/Gentleman-Programming/gentle-ai"
+  upstream-commit: "d1e1777faafc91a34656ba94bd712972dbe427a1"
+  ownership: "personal"
+"""
+        return f"""---
+name: systemic-issue-triage
+metadata:
+  author: "{author}"
+  created: "2026-08-19"
+  updated: "2026-08-19"
+  version: "0.1.0"
+{adapted}---
+# Personal adaptation
+"""
+
+    def _catalog(
+        self,
+        *,
+        source_commit: str,
+        canonical_tree_sha256: str,
+        include_release: bool = True,
+        include_adapted_provenance: bool = True,
+    ) -> dict[str, Any]:
+        catalog: dict[str, Any] = {
+            "schema": "remove-gentle-context.ownership-catalog/v1",
+            "agent_names": [],
+            "marker_prefix": "gentle-ai:",
+            "generated_registry_signature": "Auto-generated by gentle-pi extensions/skill-registry.ts",
+            "ownership_authority": {
+                "issue": "https://github.com/pablontiv/skills/issues/1",
+                "adr_path": "docs/adr/0001-portable-skill-ownership-and-provenance.md",
+                "authority_commit": "913bcde",
+            },
+            "canonical_metadata": {
+                "required_string_fields": ["author", "created", "updated", "version"],
+                "author": "pablontiv",
+                "adapted_required_string_fields": ["upstream-author", "upstream-repository", "upstream-commit", "ownership"],
+                "adapted_ownership": "personal",
+            },
+            "personal_skill_releases": {},
+        }
+        if include_adapted_provenance:
+            catalog["adapted_skill_provenance"] = {"systemic-issue-triage": dict(UPSTREAM, license="Apache-2.0")}
+        if include_release:
+            catalog["personal_skill_releases"] = {
+                "systemic-issue-triage": {
+                    "source_repository": SOURCE_REPOSITORY,
+                    "personal_source_commit": source_commit,
+                    "canonical_tree_sha256": canonical_tree_sha256,
+                }
+            }
+        return catalog
+
+    def _receipt(
+        self,
+        *,
+        target: Path,
+        content_sha256: str,
+        canonical_tree_sha256: str,
+        source_commit: str = TEST_SOURCE_COMMIT,
+    ) -> dict[str, str]:
+        return {
+            "skill_name": "systemic-issue-triage",
+            "skill_version": "0.1.0",
+            "personal_source_repository": SOURCE_REPOSITORY,
+            "personal_source_commit": source_commit,
+            "installed_path": str(target),
+            "installed_content_sha256": content_sha256,
+            "installation_timestamp": "2026-08-19T00:00:00Z",
+            "canonical_tree_sha256": canonical_tree_sha256,
+        }
+
+    def test_loads_exact_file_and_json_array_rules(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "adapter.json"
+            path.write_text(json.dumps({
+                "schema": "remove-gentle-context.adapter/v1",
+                "client": "gemini",
+                "roots": {"config": {"kind": "home_relative", "path": ".gemini"}},
+                "rules": [
+                    {"id": "agent", "kind": "exact_file", "root": "config", "path": "agents/sdd-init.md"},
+                    {"id": "hook", "kind": "json_array_value", "root": "config", "path": "settings.json", "pointer": "/hooks", "value": "gentle-hook"},
+                ],
+            }))
+            adapter = load_declarative_adapter(path)
+            self.assertEqual(adapter.client, "gemini")
+            self.assertEqual(len(adapter.rules), 2)
+
+    def test_fixture_files_cover_valid_and_forbidden_declarative_examples(self):
+        fixture_root = SKILL_ROOT / "tests" / "fixtures" / "declarative"
+        self.assertEqual(load_declarative_adapter(fixture_root / "valid.json").client, "gemini")
+        with self.assertRaisesRegex(ValueError, "adapter_forbidden_capability"):
+            load_declarative_adapter(fixture_root / "forbidden-toml.json")
+
+    def test_rejects_toml_sqlite_runtime_and_arbitrary_text_rules(self):
+        forbidden = ["toml_edit", "sqlite_update", "runtime_state", "regex_replace"]
+        for kind in forbidden:
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as td:
+                path = Path(td) / "adapter.json"
+                path.write_text(json.dumps({
+                    "schema": "remove-gentle-context.adapter/v1",
+                    "client": "bad",
+                    "roots": {"config": {"kind": "home_relative", "path": ".bad"}},
+                    "rules": [{"id": "bad", "kind": kind, "root": "config", "path": "state"}],
+                }))
+                with self.assertRaisesRegex(ValueError, "adapter_forbidden_capability"):
+                    load_declarative_adapter(path)
+
+    def test_shipped_catalog_records_adr_authority_but_no_personal_release(self):
+        catalog = json.loads((SKILL_ROOT / "references" / "ownership-catalog-v1.json").read_text())
+        self.assertEqual(catalog["ownership_authority"]["authority_commit"], "913bcde")
+        self.assertEqual(catalog["ownership_authority"]["adr_path"], "docs/adr/0001-portable-skill-ownership-and-provenance.md")
+        self.assertEqual(catalog["ownership_authority"]["issue"], "https://github.com/pablontiv/skills/issues/1")
+        self.assertEqual(catalog["personal_skill_releases"], {})
+        self.assertNotIn("personal_source_commit", catalog)
+        self.assertNotIn("canonical_tree_sha256", catalog)
+        self.assertNotIn("personal_source_commit=913bcde", catalog["preserved_requires"])
+
+    def test_loads_every_shipped_adapter_with_unique_clients_and_rule_ids(self):
+        forbidden = ("toml_edit", "sqlite_update", "runtime_state", "regex_replace")
+        seen_clients: set[str] = set()
+        for path in sorted((SKILL_ROOT / "adapters").glob("*.json")):
+            with self.subTest(adapter=path.name):
+                serialized = path.read_text()
+                for token in forbidden:
+                    self.assertNotIn(token, serialized)
+                adapter = load_declarative_adapter(path)
+                self.assertNotIn(adapter.client, seen_clients)
+                seen_clients.add(adapter.client)
+                rule_ids = [rule.id for rule in adapter.rules]
+                self.assertEqual(len(rule_ids), len(set(rule_ids)))
+        self.assertEqual(seen_clients, {"gemini", "kimi", "hermes", "shared-agents", "vscode-copilot"})
+
+    def test_current_installer_adapter_rules_are_explicit_signed_and_path_clean(self):
+        forbidden_path_tokens = ("/private/tmp/", "/Users/", "gentle-real-e2e-canonical")
+        for path in sorted((SKILL_ROOT / "adapters").glob("*.json")):
+            serialized = path.read_text()
+            for token in forbidden_path_tokens:
+                self.assertNotIn(token, serialized)
+
+        for client, expected_paths in CURRENT_EXPECTED_EXACT_PATHS.items():
+            adapter = load_declarative_adapter(SKILL_ROOT / "adapters" / f"{client}.json")
+            exact_by_path = {rule.path: rule for rule in adapter.rules if rule.kind == "exact_file"}
+            with self.subTest(client=client):
+                self.assertEqual(set(expected_paths) - set(exact_by_path), set())
+                for rule_path in expected_paths:
+                    rule = exact_by_path[rule_path]
+                    signatures = rule.data.get("content_signatures")
+                    self.assertIsInstance(signatures, list, rule.id)
+                    self.assertGreater(len(signatures), 0, rule.id)
+                    for signature in signatures:
+                        self.assertEqual(signature["algorithm"], "sha256")
+                        self.assertRegex(signature["value"], r"^sha256:[0-9a-f]{64}$")
+                        label = signature.get("label", "")
+                        self.assertTrue(label.startswith("current-installer/"), label)
+                        for token in forbidden_path_tokens:
+                            self.assertNotIn(token, label)
+
+        gemini = load_declarative_adapter(SKILL_ROOT / "adapters" / "gemini.json")
+        self.assertTrue(any(rule.kind == "json_key" and rule.path == "settings.json" and rule.data["pointer"] == "" and rule.data["key"] == "theme" for rule in gemini.rules))
+        kimi = load_declarative_adapter(SKILL_ROOT / "adapters" / "kimi.json")
+        self.assertFalse(any(rule.kind == "exact_file" and rule.path == "mcp.json" for rule in kimi.rules))
+        hermes = load_declarative_adapter(SKILL_ROOT / "adapters" / "hermes.json")
+        historical = {rule.path: rule for rule in hermes.rules if rule.data.get("artifact_class") == "historical"}
+        self.assertEqual(historical["state.db"].data.get("proposed_action"), "report_only")
+
+    def test_gentle_prefix_substrings_are_report_only_without_structural_corroboration(self):
+        cases = {
+            "prose": "A prose note mentions gentle-ai:sdd-init but is not managed metadata.\n",
+            "url": "See https://example.invalid/search?q=gentle-ai:sdd-init for an example.\n",
+            "quoted_example": "Use `gentle-ai:sdd-init` as a sample setting in docs.\n",
+            "arbitrary_comment": "<!-- docs mention gentle-ai:sdd-init, not a managed marker -->\n",
+        }
+        for case, content in cases.items():
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as td:
+                home = Path(td) / "home"
+                target = home / ".gemini" / "agents" / "sdd-init.md"
+                target.parent.mkdir(parents=True)
+                target.write_text(content)
+                adapter_path = Path(td) / "adapter.json"
+                adapter_path.write_text(json.dumps({
+                    "schema": "remove-gentle-context.adapter/v1",
+                    "client": "gemini",
+                    "roots": {"config": {"kind": "home_relative", "path": ".gemini"}},
+                    "rules": [{"id": "sdd-init", "kind": "exact_file", "root": "config", "path": "agents/sdd-init.md"}],
+                }))
+                (candidate,) = load_declarative_adapter(adapter_path).inventory(self._context(home))
+                self.assertEqual(candidate.ownership, Ownership.AMBIGUOUS)
+                self.assertEqual(candidate.proposed_action, "report_only")
+
+    def test_complete_gentle_html_marker_corroborates_exact_file(self):
+        content = b"<!-- gentle-ai:sdd-init -->\n# Gentle upstream asset\n"
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td) / "home"
+            target = home / ".gemini" / "agents" / "sdd-init.md"
+            target.parent.mkdir(parents=True)
+            target.write_bytes(content)
+            adapter_path = Path(td) / "adapter.json"
+            adapter_path.write_text(json.dumps({
+                "schema": "remove-gentle-context.adapter/v1",
+                "client": "gemini",
+                "roots": {"config": {"kind": "home_relative", "path": ".gemini"}},
+                "rules": [{"id": "sdd-init", "kind": "exact_file", "root": "config", "path": "agents/sdd-init.md"}],
+            }))
+            (candidate,) = load_declarative_adapter(adapter_path).inventory(self._context(home))
+            self.assertEqual(candidate.ownership, Ownership.PROVEN)
+            self.assertIn("marker", {item["kind"] for item in candidate.evidence})
+
+    def test_byte_identical_gentle_asset_is_not_preserved(self):
+        content = b"---\nname: sdd-init\n---\n# Gentle upstream asset\n"
+        digest = "sha256:" + hashlib.sha256(content).hexdigest()
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td) / "home"
+            target = home / ".gemini" / "agents" / "sdd-init.md"
+            target.parent.mkdir(parents=True)
+            target.write_bytes(content)
+            adapter_path = Path(td) / "adapter.json"
+            adapter_path.write_text(json.dumps({
+                "schema": "remove-gentle-context.adapter/v1",
+                "client": "gemini",
+                "roots": {"config": {"kind": "home_relative", "path": ".gemini"}},
+                "rules": [{
+                    "id": "sdd-init",
+                    "kind": "exact_file",
+                    "root": "config",
+                    "path": "agents/sdd-init.md",
+                    "content_signatures": [{"algorithm": "sha256", "value": digest, "label": "gentle-byte-identical"}],
+                }],
+            }))
+            (candidate,) = load_declarative_adapter(adapter_path).inventory(self._context(home))
+            self.assertEqual(candidate.ownership, Ownership.PROVEN)
+            self.assertEqual(candidate.proposed_action, "delete_file")
+            self.assertNotEqual(candidate.ownership, Ownership.PRESERVED)
+
+    def test_author_only_personal_adaptation_is_ambiguous_and_vetoes_delete(self):
+        content = b"""---
+name: systemic-issue-triage
+metadata:
+  author: "pablontiv"
+  created: "2026-08-19"
+  updated: "2026-08-19"
+  version: "0.1.0"
+---
+# Adapted skill without receipt
+"""
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td) / "home"
+            target = home / ".gemini" / "agents" / "systemic-issue-triage.md"
+            target.parent.mkdir(parents=True)
+            target.write_bytes(content)
+            adapter_path = Path(td) / "adapter.json"
+            self._write_exact_file_adapter(adapter_path)
+            (candidate,) = load_declarative_adapter(adapter_path).inventory(self._context(home))
+            self.assertEqual(candidate.ownership, Ownership.AMBIGUOUS)
+            self.assertEqual(candidate.proposed_action, "report_only")
+            self.assertTrue(candidate.details["auto_deletion_veto"])
+
+    def test_temp_catalog_release_receipt_and_installed_tree_preserve_personal_adaptation(self):
+        content = self._personal_content().encode("utf-8")
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td) / "home"
+            receipts = Path(td) / "receipts"
+            receipts.mkdir()
+            target = home / ".gemini" / "agents" / "systemic-issue-triage.md"
+            target.parent.mkdir(parents=True)
+            target.write_bytes(content)
+            content_digest = "sha256:" + hashlib.sha256(content).hexdigest()
+            tree_digest = canonical_tree_sha256(target)
+            (receipts / "systemic-issue-triage.json").write_text(json.dumps(self._receipt(
+                target=target,
+                content_sha256=content_digest,
+                canonical_tree_sha256=tree_digest,
+            )))
+            catalog_path = Path(td) / "ownership-catalog-v1.json"
+            catalog_path.write_text(json.dumps(self._catalog(
+                source_commit=TEST_SOURCE_COMMIT,
+                canonical_tree_sha256=tree_digest,
+            )))
+            adapter_path = Path(td) / "adapter.json"
+            self._write_exact_file_adapter(adapter_path)
+            (candidate,) = load_declarative_adapter(adapter_path, catalog_path=catalog_path).inventory(
+                self._context(home, PABLONTIV_SKILLS_RECEIPTS_DIR=str(receipts))
+            )
+            self.assertEqual(candidate.ownership, Ownership.PRESERVED)
+            self.assertEqual(candidate.proposed_action, "report_only")
+            self.assertEqual(candidate.details["verified_receipt"]["personal_source_commit"], TEST_SOURCE_COMMIT)
+            self.assertEqual(candidate.details["verified_receipt"]["canonical_tree_sha256"], tree_digest)
+            self.assertNotEqual(candidate.details["verified_receipt"]["personal_source_commit"], "913bcde")
+
+    def test_preserved_requires_every_personal_release_conjunct(self):
+        cases = (
+            "missing_release",
+            "missing_adapted_provenance",
+            "adr_authority_commit_in_receipt",
+            "wrong_full_source_commit_in_receipt",
+            "wrong_receipt_tree_sha256",
+            "wrong_release_tree_sha256",
+            "wrong_receipt_content_sha256",
+            "actual_installed_content_drift",
+            "author_not_pablontiv",
+            "missing_adapted_metadata",
+        )
+        for case in cases:
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as td:
+                home = Path(td) / "home"
+                receipts = Path(td) / "receipts"
+                receipts.mkdir()
+                target = home / ".gemini" / "agents" / "systemic-issue-triage.md"
+                target.parent.mkdir(parents=True)
+                content = self._personal_content(
+                    author="someone-else" if case == "author_not_pablontiv" else "pablontiv",
+                    include_adapted_metadata=case != "missing_adapted_metadata",
+                ).encode("utf-8")
+                target.write_bytes(content)
+                content_digest = "sha256:" + hashlib.sha256(content).hexdigest()
+                tree_digest = canonical_tree_sha256(target)
+                catalog_tree = "sha256:" + "1" * 64 if case == "wrong_release_tree_sha256" else tree_digest
+                receipt_tree = "sha256:" + "2" * 64 if case == "wrong_receipt_tree_sha256" else tree_digest
+                receipt_content = "sha256:" + "3" * 64 if case == "wrong_receipt_content_sha256" else content_digest
+                receipt_commit = {
+                    "adr_authority_commit_in_receipt": "913bcde",
+                    "wrong_full_source_commit_in_receipt": WRONG_SOURCE_COMMIT,
+                }.get(case, TEST_SOURCE_COMMIT)
+                catalog = self._catalog(
+                    source_commit=TEST_SOURCE_COMMIT,
+                    canonical_tree_sha256=catalog_tree,
+                    include_release=case != "missing_release",
+                    include_adapted_provenance=case != "missing_adapted_provenance",
+                )
+                catalog_path = Path(td) / "ownership-catalog-v1.json"
+                catalog_path.write_text(json.dumps(catalog))
+                (receipts / "systemic-issue-triage.json").write_text(json.dumps(self._receipt(
+                    target=target,
+                    content_sha256=receipt_content,
+                    canonical_tree_sha256=receipt_tree,
+                    source_commit=receipt_commit,
+                )))
+                if case == "actual_installed_content_drift":
+                    target.write_bytes(content + b"\nchanged after receipt\n")
+                adapter_path = Path(td) / "adapter.json"
+                self._write_exact_file_adapter(adapter_path)
+                (candidate,) = load_declarative_adapter(adapter_path, catalog_path=catalog_path).inventory(
+                    self._context(home, PABLONTIV_SKILLS_RECEIPTS_DIR=str(receipts))
+                )
+                self.assertEqual(candidate.ownership, Ownership.AMBIGUOUS)
+                self.assertEqual(candidate.proposed_action, "report_only")
+                if case != "author_not_pablontiv":
+                    self.assertTrue(candidate.details["auto_deletion_veto"])
+
+
+class NoopLifecycle:
+    def preflight(self, actions, context):
+        return ()
+
+
+class DeclarativeCompilerTests(unittest.TestCase):
+    def _context(self, home: Path, **env: str) -> RuntimeContext:
+        return RuntimeContext(PlatformProfile("linux", home, dict(env)))
+
+    def _write_adapter(self, path: Path, *, client: str, root_path: str, rules: list[dict[str, Any]]) -> None:
+        path.write_text(json.dumps({
+            "schema": "remove-gentle-context.adapter/v1",
+            "client": client,
+            "roots": {"config": {"kind": "home_relative", "path": root_path}},
+            "rules": rules,
+        }))
+
+    def _build_plan(self, adapter_path: Path, home: Path):
+        adapter = load_declarative_adapter(adapter_path)
+        context = self._context(home)
+        inventory = build_inventory(context, (adapter,))
+        plan = build_plan(inventory, context, (adapter,))
+        return adapter, context, inventory, plan
+
+    def _execute(self, adapter_path: Path, home: Path):
+        adapter, context, inventory, plan = self._build_plan(adapter_path, home)
+        receipt = execute_plan(plan, plan.digest or "", context, NoopLifecycle(), inventory=inventory)
+        self.assertEqual(receipt.status, ReceiptStatus.COMPLETED)
+        return adapter, context, inventory, plan, receipt
+
+    def _assert_second_plan_is_empty(self, adapter, context: RuntimeContext) -> None:
+        second_inventory = build_inventory(context, (adapter,))
+        second_plan = build_plan(second_inventory, context, (adapter,))
+        self.assertEqual(second_plan.operations, ())
+
+    def _decoded_postimage(self, operation) -> bytes:
+        self.assertIsNotNone(operation.postimage_base64)
+        decoded = base64.b64decode(operation.postimage_base64 or "")
+        self.assertEqual(operation.postimage_sha256, "sha256:" + hashlib.sha256(decoded).hexdigest())
+        return decoded
+
+
+    def _fixture_bytes(self, name: str) -> bytes:
+        return (SKILL_ROOT / "tests" / "fixtures" / "declarative" / name).read_bytes()
+
+    def _span(self, content: bytes, needle: bytes, *, occurrence: int = 1) -> tuple[int, int]:
+        start = -1
+        search_from = 0
+        for _ in range(occurrence):
+            start = content.find(needle, search_from)
+            self.assertNotEqual(start, -1, f"missing span fixture needle: {needle!r}")
+            search_from = start + 1
+        return start, start + len(needle)
+
+    def _without_spans(self, content: bytes, spans: list[tuple[int, int]]) -> bytes:
+        ordered = sorted(spans)
+        previous_end = -1
+        chunks: list[bytes] = []
+        cursor = 0
+        for start, end in ordered:
+            self.assertGreaterEqual(start, previous_end)
+            chunks.append(content[cursor:start])
+            cursor = end
+            previous_end = end
+        chunks.append(content[cursor:])
+        return b"".join(chunks)
+
+    def _assert_json_splice_postimage(self, *, original: bytes, postimage: bytes, removed_spans: list[tuple[int, int]]) -> None:
+        expected = self._without_spans(original, removed_spans)
+        self.assertEqual(postimage, expected)
+        json.loads(postimage.decode("utf-8"))
+
+    def test_exact_file_plan_apply_deletes_only_exact_owned_file(self):
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td) / "home"
+            target = home / ".custom" / "agents" / "owned.md"
+            sibling = home / ".custom" / "agents" / "owned.md.bak"
+            target.parent.mkdir(parents=True)
+            target.write_text("<!-- gentle-ai:sdd-init -->\n# owned\n")
+            sibling.write_text("<!-- gentle-ai:sdd-init -->\n# not governed by exact path\n")
+            adapter_path = Path(td) / "adapter.json"
+            self._write_adapter(adapter_path, client="custom", root_path=".custom", rules=[
+                {"id": "owned", "kind": "exact_file", "root": "config", "path": "agents/owned.md"},
+            ])
+
+            adapter, context, _inventory, plan, _receipt = self._execute(adapter_path, home)
+
+            self.assertEqual(len(plan.operations), 1)
+            self.assertEqual(plan.operations[0].kind, OperationKind.DELETE_FILE)
+            self.assertEqual(plan.operations[0].path, str(target))
+            self.assertFalse(target.exists())
+            self.assertEqual(sibling.read_text(), "<!-- gentle-ai:sdd-init -->\n# not governed by exact path\n")
+            self._assert_second_plan_is_empty(adapter, context)
+
+    def test_empty_directory_plan_apply_removes_only_empty_directory(self):
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td) / "home"
+            empty_dir = home / ".custom" / "cache" / "empty"
+            nonempty_dir = home / ".custom" / "cache" / "nonempty"
+            empty_dir.mkdir(parents=True)
+            nonempty_dir.mkdir(parents=True)
+            (nonempty_dir / "keep.txt").write_text("personal cache\n")
+            adapter_path = Path(td) / "adapter.json"
+            self._write_adapter(adapter_path, client="custom", root_path=".custom", rules=[
+                {"id": "empty", "kind": "empty_directory", "root": "config", "path": "cache/empty"},
+                {"id": "nonempty", "kind": "empty_directory", "root": "config", "path": "cache/nonempty"},
+            ])
+
+            adapter, context, _inventory, plan, _receipt = self._execute(adapter_path, home)
+
+            self.assertEqual(len(plan.operations), 1)
+            self.assertEqual(plan.operations[0].kind, OperationKind.REMOVE_EMPTY_DIRECTORY)
+            self.assertEqual(plan.operations[0].path, str(empty_dir))
+            self.assertFalse(empty_dir.exists())
+            self.assertEqual((nonempty_dir / "keep.txt").read_text(), "personal cache\n")
+            self._assert_second_plan_is_empty(adapter, context)
+
+    def test_report_only_candidate_emits_no_operation_and_preserves_file(self):
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td) / "home"
+            target = home / ".custom" / "historical.md"
+            target.parent.mkdir(parents=True)
+            target.write_text("<!-- gentle-ai:sdd-init -->\nhistorical\n")
+            adapter_path = Path(td) / "adapter.json"
+            self._write_adapter(adapter_path, client="custom", root_path=".custom", rules=[
+                {"id": "historical", "kind": "exact_file", "root": "config", "path": "historical.md", "proposed_action": "report_only"},
+            ])
+
+            adapter, context, inventory, plan = self._build_plan(adapter_path, home)
+            receipt = execute_plan(plan, plan.digest or "", context, NoopLifecycle(), inventory=inventory)
+
+            self.assertEqual(len(inventory.candidates), 1)
+            self.assertEqual(inventory.candidates[0].proposed_action, "report_only")
+            self.assertEqual(plan.operations, ())
+            self.assertEqual(receipt.status, ReceiptStatus.COMPLETED)
+            self.assertEqual(target.read_text(), "<!-- gentle-ai:sdd-init -->\nhistorical\n")
+            self._assert_second_plan_is_empty(adapter, context)
+
+    def test_gemini_selective_rules_plan_apply_preserves_unrelated_text_json_and_mcp(self):
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td) / "home"
+            config = home / ".gemini"
+            config.mkdir(parents=True)
+            settings = config / "settings.json"
+            settings.write_text(json.dumps({
+                "hooks": ["third-party", "gentle-ai:sdd-init", "other", "gentle-ai:sdd-init"],
+                "mcp": {"servers": {"personal": {"command": "keep"}}},
+                "unrelated": {"enabled": True},
+            }))
+            instructions = config / "GEMINI.md"
+            instructions.write_bytes(b"before\n<!-- gentle-ai:begin -->\nmanaged\n<!-- gentle-ai:end -->\nafter\n")
+
+            adapter, context, _inventory, plan, _receipt = self._execute(SKILL_ROOT / "adapters" / "gemini.json", home)
+
+            self.assertEqual({operation.kind for operation in plan.operations}, {OperationKind.WRITE_FILE})
+            decoded_by_path = {operation.path: self._decoded_postimage(operation) for operation in plan.operations}
+            self.assertEqual(decoded_by_path[str(instructions)], b"before\nafter\n")
+            self.assertEqual(instructions.read_bytes(), b"before\nafter\n")
+            updated = json.loads(settings.read_text())
+            self.assertEqual(updated["hooks"], ["third-party", "other"])
+            self.assertEqual(updated["mcp"], {"servers": {"personal": {"command": "keep"}}})
+            self.assertEqual(updated["unrelated"], {"enabled": True})
+            self._assert_second_plan_is_empty(adapter, context)
+
+    def test_kimi_selective_rules_plan_apply_preserves_unrelated_text_json_and_mcp(self):
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td) / "home"
+            config = home / ".kimi"
+            config.mkdir(parents=True)
+            registry = config / "agents.json"
+            registry.write_text(json.dumps({
+                "agents": {"sdd-init": {"source": "gentle"}, "personal": {"source": "mine"}},
+                "mcp": {"servers": {"personal": {"command": "keep"}}},
+            }))
+            instructions = config / "KIMI.md"
+            instructions.write_bytes(b"alpha\n<!-- gentle-ai:begin -->\nmanaged\n<!-- gentle-ai:end -->\nomega\n")
+
+            adapter, context, _inventory, plan, _receipt = self._execute(SKILL_ROOT / "adapters" / "kimi.json", home)
+
+            self.assertEqual({operation.kind for operation in plan.operations}, {OperationKind.WRITE_FILE})
+            decoded_by_path = {operation.path: self._decoded_postimage(operation) for operation in plan.operations}
+            self.assertEqual(decoded_by_path[str(instructions)], b"alpha\nomega\n")
+            updated = json.loads(registry.read_text())
+            self.assertEqual(updated["agents"], {"personal": {"source": "mine"}})
+            self.assertEqual(updated["mcp"], {"servers": {"personal": {"command": "keep"}}})
+            self._assert_second_plan_is_empty(adapter, context)
+
+    def test_current_gemini_settings_theme_removal_preserves_mcp_servers(self):
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td) / "home"
+            config = home / ".gemini"
+            (config / "skills" / "sdd-init").mkdir(parents=True)
+            (config / "settings.json").write_bytes((SKILL_ROOT / "tests" / "fixtures" / "current-installer" / "gemini" / "settings.json").read_bytes())
+            (config / "GEMINI.md").write_bytes((SKILL_ROOT / "tests" / "fixtures" / "current-installer" / "gemini" / "GEMINI.md").read_bytes())
+            (config / "system.md").write_bytes((SKILL_ROOT / "tests" / "fixtures" / "current-installer" / "gemini" / "system.md").read_bytes())
+            (config / "skills" / "sdd-init" / "SKILL.md").write_bytes((SKILL_ROOT / "tests" / "fixtures" / "current-installer" / "gemini" / "skills" / "sdd-init" / "SKILL.md").read_bytes())
+
+            adapter, context, inventory, plan, _receipt = self._execute(SKILL_ROOT / "adapters" / "gemini.json", home)
+
+            self.assertEqual(inventory.findings, ())
+            self.assertEqual({candidate.ownership for candidate in inventory.candidates}, {Ownership.PROVEN})
+            self.assertEqual({operation.kind for operation in plan.operations}, {OperationKind.WRITE_FILE, OperationKind.DELETE_FILE})
+            settings_after = json.loads((config / "settings.json").read_text())
+            self.assertNotIn("theme", settings_after)
+            self.assertEqual(settings_after["mcpServers"], {"engram": {"args": ["mcp", "--tools=agent"], "command": "/opt/homebrew/bin/engram"}})
+            self.assertFalse((config / "GEMINI.md").exists())
+            self.assertFalse((config / "system.md").exists())
+            self.assertFalse((config / "skills" / "sdd-init" / "SKILL.md").exists())
+            self._assert_second_plan_is_empty(adapter, context)
+
+    def test_current_kimi_representative_signed_assets_delete_but_mcp_json_is_preserved(self):
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td) / "home"
+            config = home / ".kimi"
+            (config / "agents").mkdir(parents=True)
+            fixture = SKILL_ROOT / "tests" / "fixtures" / "current-installer" / "kimi"
+            for rel in ("KIMI.md", "config.toml", "agents/sdd-init.yaml"):
+                target = config / rel
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes((fixture / rel).read_bytes())
+            (config / "mcp.json").write_text('{"mcpServers":{"personal":{"command":"keep"}}}\n')
+
+            adapter, context, inventory, _plan, _receipt = self._execute(SKILL_ROOT / "adapters" / "kimi.json", home)
+
+            self.assertEqual(inventory.findings, ())
+            self.assertEqual(len(inventory.candidates), 3)
+            self.assertEqual({candidate.ownership for candidate in inventory.candidates}, {Ownership.PROVEN})
+            self.assertFalse((config / "KIMI.md").exists())
+            self.assertFalse((config / "config.toml").exists())
+            self.assertFalse((config / "agents" / "sdd-init.yaml").exists())
+            self.assertEqual((config / "mcp.json").read_text(), '{"mcpServers":{"personal":{"command":"keep"}}}\n')
+            self._assert_second_plan_is_empty(adapter, context)
+
+    def test_current_hermes_and_shared_representative_signed_assets_delete_without_state_mutation(self):
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td) / "home"
+            hermes = home / ".hermes"
+            shared = home / ".config" / "agents"
+            (hermes / "skills" / "sdd-init").mkdir(parents=True)
+            (shared / "skills" / "sdd-init").mkdir(parents=True)
+            hermes_fixture = SKILL_ROOT / "tests" / "fixtures" / "current-installer" / "hermes"
+            shared_fixture = SKILL_ROOT / "tests" / "fixtures" / "current-installer" / "shared"
+            for rel in ("SOUL.md", "config.yaml", "skills/sdd-init/SKILL.md"):
+                target = hermes / rel
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes((hermes_fixture / rel).read_bytes())
+            (hermes / "state.db").write_text("historical state must remain\n")
+            (shared / "skills" / "sdd-init" / "SKILL.md").write_bytes((shared_fixture / "skills" / "sdd-init" / "SKILL.md").read_bytes())
+
+            hermes_adapter, hermes_context, hermes_inventory, _hermes_plan, _hermes_receipt = self._execute(SKILL_ROOT / "adapters" / "hermes.json", home)
+            shared_adapter, shared_context, shared_inventory, _shared_plan, _shared_receipt = self._execute(SKILL_ROOT / "adapters" / "shared-agents.json", home)
+
+            self.assertEqual(hermes_inventory.findings, ())
+            self.assertTrue(all(candidate.ownership in {Ownership.PROVEN, Ownership.AMBIGUOUS} for candidate in hermes_inventory.candidates))
+            self.assertFalse((hermes / "SOUL.md").exists())
+            self.assertFalse((hermes / "config.yaml").exists())
+            self.assertFalse((hermes / "skills" / "sdd-init" / "SKILL.md").exists())
+            self.assertEqual((hermes / "state.db").read_text(), "historical state must remain\n")
+            self.assertEqual(shared_inventory.findings, ())
+            self.assertEqual({candidate.ownership for candidate in shared_inventory.candidates}, {Ownership.PROVEN})
+            self.assertFalse((shared / "skills" / "sdd-init" / "SKILL.md").exists())
+            self._assert_second_plan_is_empty(hermes_adapter, hermes_context)
+            self._assert_second_plan_is_empty(shared_adapter, shared_context)
+
+    def test_current_signed_exact_file_byte_drift_and_personal_author_veto_report_only(self):
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td) / "home"
+            config = home / ".gemini"
+            skill = config / "skills" / "sdd-init" / "SKILL.md"
+            skill.parent.mkdir(parents=True)
+            original = (SKILL_ROOT / "tests" / "fixtures" / "current-installer" / "gemini" / "skills" / "sdd-init" / "SKILL.md").read_bytes()
+            skill.write_bytes(original + b"\nlocal edit\n")
+            adapter = load_declarative_adapter(SKILL_ROOT / "adapters" / "gemini.json")
+            context = self._context(home)
+            inventory = build_inventory(context, (adapter,))
+            plan = build_plan(inventory, context, (adapter,))
+            self.assertEqual(len(inventory.candidates), 1)
+            self.assertEqual(inventory.candidates[0].ownership, Ownership.AMBIGUOUS)
+            self.assertEqual(inventory.candidates[0].proposed_action, "report_only")
+            self.assertEqual(plan.operations, ())
+
+            skill.write_text("---\nname: sdd-init\nmetadata:\n  author: pablontiv\n---\n# Personal skill\n")
+            inventory = build_inventory(context, (adapter,))
+            self.assertEqual(len(inventory.candidates), 1)
+            self.assertEqual(inventory.candidates[0].ownership, Ownership.AMBIGUOUS)
+            self.assertEqual(inventory.candidates[0].proposed_action, "report_only")
+
+    def test_vscode_copilot_selective_rules_plan_apply_preserves_unrelated_text_json_and_mcp(self):
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td) / "home"
+            config = home / ".vscode"
+            config.mkdir(parents=True)
+            settings = config / "settings.json"
+            settings.write_text(json.dumps({
+                "github.copilot.chat.codeGeneration.instructions": [
+                    {"text": "keep first"},
+                    {"text": "gentle-ai:sdd-init"},
+                    {"file": "personal.md"},
+                    {"text": "gentle-ai:sdd-init"},
+                ],
+                "mcp": {"servers": {"personal": {"command": "keep"}}},
+            }))
+            instructions = config / "copilot-instructions.md"
+            instructions.write_bytes(b"top\n<!-- gentle-ai:begin -->\nmanaged\n<!-- gentle-ai:end -->\nbottom\n")
+
+            adapter, context, _inventory, plan, _receipt = self._execute(SKILL_ROOT / "adapters" / "vscode-copilot.json", home)
+
+            self.assertEqual({operation.kind for operation in plan.operations}, {OperationKind.WRITE_FILE})
+            decoded_by_path = {operation.path: self._decoded_postimage(operation) for operation in plan.operations}
+            self.assertEqual(decoded_by_path[str(instructions)], b"top\nbottom\n")
+            updated = json.loads(settings.read_text())
+            self.assertEqual(updated["github.copilot.chat.codeGeneration.instructions"], [
+                {"text": "keep first"},
+                {"file": "personal.md"},
+            ])
+            self.assertEqual(updated["mcp"], {"servers": {"personal": {"command": "keep"}}})
+            self._assert_second_plan_is_empty(adapter, context)
+
+    def test_shipped_signed_rule_reports_drifted_file_without_markers_as_ambiguous(self):
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td) / "home"
+            config = home / ".gemini"
+            config.mkdir(parents=True)
+            instructions = config / "GEMINI.md"
+            instructions.write_text("personal heading\nno managed marker block here\n")
+            adapter = load_declarative_adapter(SKILL_ROOT / "adapters" / "gemini.json")
+            context = self._context(home)
+
+            inventory = build_inventory(context, (adapter,))
+            plan = build_plan(inventory, context, (adapter,))
+
+            self.assertEqual(len(inventory.candidates), 1)
+            self.assertEqual(inventory.candidates[0].ownership, Ownership.AMBIGUOUS)
+            self.assertEqual(inventory.candidates[0].proposed_action, "report_only")
+            self.assertEqual(inventory.findings, ())
+            self.assertEqual(plan.operations, ())
+
+    def test_marker_inventory_blocks_malformed_structures_stably(self):
+        cases = {
+            "missing_open": "before\nmanaged\n<!-- gentle-ai:end -->\nafter\n",
+            "missing_close": "before\n<!-- gentle-ai:begin -->\nmanaged\nafter\n",
+            "duplicate_open": "before\n<!-- gentle-ai:begin -->\nmanaged\n<!-- gentle-ai:begin -->\n<!-- gentle-ai:end -->\nafter\n",
+            "duplicate_close": "before\n<!-- gentle-ai:begin -->\nmanaged\n<!-- gentle-ai:end -->\n<!-- gentle-ai:end -->\nafter\n",
+            "reversed": "before\n<!-- gentle-ai:end -->\nmanaged\n<!-- gentle-ai:begin -->\nafter\n",
+            "overlap": "before\nabcde\nafter\n",
+            "nested_like": "before\n<!-- gentle-ai:begin -->\nouter\n<!-- gentle-ai:begin -->\ninner\n<!-- gentle-ai:end -->\n<!-- gentle-ai:end -->\nafter\n",
+        }
+        for case, content in cases.items():
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as td:
+                home = Path(td) / "home"
+                target = home / ".custom" / "README.md"
+                target.parent.mkdir(parents=True)
+                target.write_text(content)
+                adapter_path = Path(td) / "adapter.json"
+                if case == "overlap":
+                    open_marker = "abcde"
+                    close_marker = "cde"
+                else:
+                    open_marker = "<!-- gentle-ai:begin -->"
+                    close_marker = "<!-- gentle-ai:end -->"
+                self._write_adapter(adapter_path, client="custom", root_path=".custom", rules=[
+                    {"id": "marker", "kind": "balanced_marker_block", "root": "config", "path": "README.md", "open_marker": open_marker, "close_marker": close_marker},
+                ])
+                adapter = load_declarative_adapter(adapter_path)
+                context = self._context(home)
+
+                inventory = build_inventory(context, (adapter,))
+                plan = build_plan(inventory, context, (adapter,))
+
+                self.assertEqual(inventory.candidates, ())
+                self.assertEqual(len(inventory.findings), 1)
+                self.assertEqual(inventory.findings[0].client, "custom")
+                self.assertEqual(inventory.findings[0].code, "inventory_io_or_layout")
+                self.assertEqual(inventory.findings[0].message, "declarative_marker_malformed")
+                self.assertNotIn(str(home), inventory.findings[0].message)
+                self.assertEqual(plan.operations, ())
+                self.assertEqual(plan.blocked_candidate_ids, ())
+
+    def test_marker_inventory_blocks_unreadable_existing_file(self):
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td) / "home"
+            target = home / ".custom" / "README.md"
+            target.parent.mkdir(parents=True)
+            target.write_text("before\n<!-- gentle-ai:begin -->\nmanaged\n<!-- gentle-ai:end -->\nafter\n")
+            adapter_path = Path(td) / "adapter.json"
+            self._write_adapter(adapter_path, client="custom", root_path=".custom", rules=[
+                {"id": "marker", "kind": "balanced_marker_block", "root": "config", "path": "README.md", "open_marker": "<!-- gentle-ai:begin -->", "close_marker": "<!-- gentle-ai:end -->"},
+            ])
+            adapter = load_declarative_adapter(adapter_path)
+            context = self._context(home)
+            original_read_bytes = Path.read_bytes
+
+            def read_bytes_or_permission_error(path: Path) -> bytes:
+                if path == target:
+                    raise PermissionError("permission denied")
+                return original_read_bytes(path)
+
+            with mock.patch.object(Path, "read_bytes", read_bytes_or_permission_error):
+                inventory = build_inventory(context, (adapter,))
+                plan = build_plan(inventory, context, (adapter,))
+                receipt = execute_plan(plan, plan.digest or "", context, NoopLifecycle(), inventory=inventory)
+                result = verify_receipt(receipt, context, (adapter,))
+
+            self.assertEqual(inventory.candidates, ())
+            self.assertEqual(len(inventory.findings), 1)
+            self.assertEqual(inventory.findings[0].message, "declarative_marker_unreadable")
+            self.assertNotIn(str(home), inventory.findings[0].message)
+            self.assertEqual(plan.operations, ())
+            self.assertEqual(result.status, "failed")
+            failed = [check for check in result.checks if check.status == "failed"]
+            self.assertEqual(len(failed), 1)
+            self.assertEqual(failed[0].code, "verify_structured_parse")
+            self.assertEqual(failed[0].evidence["error"], "declarative_marker_unreadable")
+            self.assertNotIn(str(home), str(failed[0].evidence))
+
+    def test_verify_fails_when_live_reinventory_sees_governed_malformed_marker(self):
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td) / "home"
+            target = home / ".custom" / "README.md"
+            target.parent.mkdir(parents=True)
+            target.write_text("before\n<!-- gentle-ai:begin -->\nunbalanced\nafter\n")
+            adapter_path = Path(td) / "adapter.json"
+            self._write_adapter(adapter_path, client="custom", root_path=".custom", rules=[
+                {"id": "marker", "kind": "balanced_marker_block", "root": "config", "path": "README.md", "open_marker": "<!-- gentle-ai:begin -->", "close_marker": "<!-- gentle-ai:end -->"},
+            ])
+            adapter = load_declarative_adapter(adapter_path)
+            context = self._context(home)
+            inventory = build_inventory(context, (adapter,))
+            plan = build_plan(inventory, context, (adapter,))
+            receipt = execute_plan(plan, plan.digest or "", context, NoopLifecycle(), inventory=inventory)
+
+            result = verify_receipt(receipt, context, (adapter,))
+
+            self.assertEqual(receipt.status, ReceiptStatus.COMPLETED)
+            self.assertEqual(plan.operations, ())
+            self.assertEqual(result.status, "failed")
+            failed = [check for check in result.checks if check.status == "failed"]
+            self.assertEqual(len(failed), 1)
+            self.assertEqual(failed[0].code, "verify_structured_parse")
+            self.assertEqual(failed[0].evidence["error"], "declarative_marker_malformed")
+            self.assertNotIn(str(home), str(failed[0].evidence))
+
+    def test_json_grouped_postimage_splices_only_configured_member_and_item_bytes(self):
+        original = self._fixture_bytes("json-surgery-formatting.json")
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td) / "home"
+            target = home / ".custom" / "settings.json"
+            target.parent.mkdir(parents=True)
+            target.write_bytes(original)
+            adapter_path = Path(td) / "adapter.json"
+            self._write_adapter(adapter_path, client="custom", root_path=".custom", rules=[
+                {"id": "object-first", "kind": "json_key", "root": "config", "path": "settings.json", "pointer": "/objects/first", "key": "remove"},
+                {"id": "object-middle", "kind": "json_key", "root": "config", "path": "settings.json", "pointer": "/objects/middle", "key": "remove"},
+                {"id": "object-last", "kind": "json_key", "root": "config", "path": "settings.json", "pointer": "/objects/last", "key": "remove"},
+                {"id": "object-only", "kind": "json_key", "root": "config", "path": "settings.json", "pointer": "/objects/only", "key": "remove"},
+                {"id": "escaped-nested-object", "kind": "json_key", "root": "config", "path": "settings.json", "pointer": "/nested/1/escaped~0key~1segment", "key": "remove/key"},
+                {"id": "array-first", "kind": "json_array_value", "root": "config", "path": "settings.json", "pointer": "/arrays/first", "value": {"owned": "gentle", "meta": [1, {"x": True}]}},
+                {"id": "array-middle", "kind": "json_array_value", "root": "config", "path": "settings.json", "pointer": "/arrays/middle", "value": "gentle-ai:sdd-init"},
+                {"id": "array-last", "kind": "json_array_value", "root": "config", "path": "settings.json", "pointer": "/arrays/last", "value": "gentle-ai:sdd-init"},
+                {"id": "array-only", "kind": "json_array_value", "root": "config", "path": "settings.json", "pointer": "/arrays/only", "value": "gentle-ai:sdd-init"},
+                {"id": "array-duplicates", "kind": "json_array_value", "root": "config", "path": "settings.json", "pointer": "/arrays/duplicates", "value": {"text": "gentle-ai:sdd-init"}},
+            ])
+
+            _adapter, _context, inventory, plan = self._build_plan(adapter_path, home)
+
+            self.assertEqual(len(inventory.candidates), 10)
+            self.assertEqual(len(plan.operations), 1)
+            postimage = self._decoded_postimage(plan.operations[0])
+            removed_spans = [
+                self._span(original, b'"remove" : { "owned": true },\n      '),
+                self._span(original, b'"remove" : { "owned": true },\n      ', occurrence=2),
+                self._span(original, b',\n      "remove" : { "owned": true }', occurrence=2),
+                self._span(original, b'"remove" : { "owned": true }', occurrence=4),
+                self._span(original, b', "remove/key" : {"nested" : [true, false]}'),
+                self._span(original, b'{"owned": "gentle", "meta": [1, {"x": true}]},\n      '),
+                self._span(original, b'"gentle-ai:sdd-init",\n      '),
+                self._span(original, b',\n      "gentle-ai:sdd-init"', occurrence=2),
+                self._span(original, b'"gentle-ai:sdd-init"', occurrence=3),
+                self._span(original, b'{"text": "gentle-ai:sdd-init"},\n      '),
+                self._span(original, b',\n      {"text": "gentle-ai:sdd-init"},\n      {"text": "gentle-ai:sdd-init"}'),
+            ]
+            self._assert_json_splice_postimage(original=original, postimage=postimage, removed_spans=removed_spans)
+            mcp_bytes = b'"mcp" : {"servers":{"personal":{"command":"keep", "args":["--flag", "value"]}}}'
+            self.assertIn(mcp_bytes, postimage)
+            updated = json.loads(postimage.decode("utf-8"))
+            self.assertEqual(list(updated), ["zeta", "objects", "nested", "arrays", "mcp", "alpha"])
+            self.assertEqual(updated["arrays"]["duplicates"], [{"text": "keep"}])
+
+    def test_json_grouped_postimage_preserves_crlf_tabs_and_final_newline(self):
+        original = self._fixture_bytes("json-surgery-crlf.json")
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td) / "home"
+            target = home / ".custom" / "settings.json"
+            target.parent.mkdir(parents=True)
+            target.write_bytes(original)
+            adapter_path = Path(td) / "adapter.json"
+            self._write_adapter(adapter_path, client="custom", root_path=".custom", rules=[
+                {"id": "setting", "kind": "json_key", "root": "config", "path": "settings.json", "pointer": "/settings", "key": "remove"},
+                {"id": "hook", "kind": "json_array_value", "root": "config", "path": "settings.json", "pointer": "/hooks", "value": "gentle-ai:sdd-init"},
+            ])
+
+            _adapter, _context, _inventory, plan = self._build_plan(adapter_path, home)
+
+            self.assertEqual(len(plan.operations), 1)
+            postimage = self._decoded_postimage(plan.operations[0])
+            removed_spans = [
+                self._span(original, b',\r\n\t\t"remove" : "owned"'),
+                self._span(original, b'"gentle-ai:sdd-init",\r\n\t\t'),
+            ]
+            self._assert_json_splice_postimage(original=original, postimage=postimage, removed_spans=removed_spans)
+            self.assertTrue(postimage.endswith(b"\r\n"))
+            self.assertNotIn(b"\n\t", postimage.replace(b"\r\n\t", b""))
+
+    def test_json_inventory_blocks_governed_invalid_existing_json(self):
+        cases = {
+            "malformed": (b'{"hooks": [', [
+                {"id": "hook", "kind": "json_array_value", "root": "config", "path": "settings.json", "pointer": "/hooks", "value": "gentle-ai:sdd-init"},
+            ], "declarative_json_malformed"),
+            "duplicate_key": (b'{"parent": {"remove": 1, "remove": 2}, "keep": true}', [
+                {"id": "duplicate", "kind": "json_key", "root": "config", "path": "settings.json", "pointer": "/parent", "key": "remove"},
+            ], "declarative_json_malformed_duplicate_key"),
+            "undecodable": (b'\xff\xfe', [
+                {"id": "hook", "kind": "json_array_value", "root": "config", "path": "settings.json", "pointer": "/hooks", "value": "gentle-ai:sdd-init"},
+            ], "declarative_json_malformed"),
+            "wrong_pointer_target_type": (json.dumps({"hooks": {"0": "gentle-ai:sdd-init"}}).encode("utf-8"), [
+                {"id": "hook", "kind": "json_array_value", "root": "config", "path": "settings.json", "pointer": "/hooks", "value": "gentle-ai:sdd-init"},
+            ], "declarative_json_invalid_layout"),
+        }
+        for case, (content, rules, expected_message) in cases.items():
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as td:
+                home = Path(td) / "home"
+                target = home / ".custom" / "settings.json"
+                target.parent.mkdir(parents=True)
+                target.write_bytes(content)
+                adapter_path = Path(td) / "adapter.json"
+                self._write_adapter(adapter_path, client="custom", root_path=".custom", rules=rules)
+                adapter = load_declarative_adapter(adapter_path)
+                context = self._context(home)
+
+                inventory = build_inventory(context, (adapter,))
+                plan = build_plan(inventory, context, (adapter,))
+
+                self.assertEqual(inventory.candidates, ())
+                self.assertEqual(len(inventory.findings), 1)
+                self.assertEqual(inventory.findings[0].client, "custom")
+                self.assertEqual(inventory.findings[0].code, "inventory_io_or_layout")
+                self.assertEqual(inventory.findings[0].message, expected_message)
+                self.assertNotIn(str(home), inventory.findings[0].message)
+                self.assertEqual(plan.operations, ())
+                self.assertEqual(plan.blocked_candidate_ids, ())
+
+    def test_json_inventory_blocks_unreadable_governed_json(self):
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td) / "home"
+            target = home / ".custom" / "settings.json"
+            target.parent.mkdir(parents=True)
+            target.write_text(json.dumps({"hooks": ["gentle-ai:sdd-init"]}))
+            adapter_path = Path(td) / "adapter.json"
+            self._write_adapter(adapter_path, client="custom", root_path=".custom", rules=[
+                {"id": "hook", "kind": "json_array_value", "root": "config", "path": "settings.json", "pointer": "/hooks", "value": "gentle-ai:sdd-init"},
+            ])
+            adapter = load_declarative_adapter(adapter_path)
+            context = self._context(home)
+            original_read_bytes = Path.read_bytes
+
+            def read_bytes_or_permission_error(path: Path) -> bytes:
+                if path == target:
+                    raise PermissionError("permission denied")
+                return original_read_bytes(path)
+
+            with mock.patch.object(Path, "read_bytes", read_bytes_or_permission_error):
+                inventory = build_inventory(context, (adapter,))
+                plan = build_plan(inventory, context, (adapter,))
+
+            self.assertEqual(inventory.candidates, ())
+            self.assertEqual(len(inventory.findings), 1)
+            self.assertEqual(inventory.findings[0].message, "declarative_json_unreadable")
+            self.assertNotIn(str(home), inventory.findings[0].message)
+            self.assertEqual(plan.operations, ())
+
+    def test_valid_json_with_absent_selector_remains_absent_not_blocked(self):
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td) / "home"
+            target = home / ".custom" / "settings.json"
+            target.parent.mkdir(parents=True)
+            target.write_text(json.dumps({"agents": {"personal": {}}, "hooks": ["personal"]}))
+            adapter_path = Path(td) / "adapter.json"
+            self._write_adapter(adapter_path, client="custom", root_path=".custom", rules=[
+                {"id": "missing-agent", "kind": "json_key", "root": "config", "path": "settings.json", "pointer": "/agents", "key": "sdd-init"},
+                {"id": "missing-hook", "kind": "json_array_value", "root": "config", "path": "settings.json", "pointer": "/hooks", "value": "gentle-ai:sdd-init"},
+            ])
+            adapter = load_declarative_adapter(adapter_path)
+            context = self._context(home)
+
+            inventory = build_inventory(context, (adapter,))
+            plan = build_plan(inventory, context, (adapter,))
+
+            self.assertEqual(inventory.candidates, ())
+            self.assertEqual(inventory.findings, ())
+            self.assertEqual(plan.operations, ())
+
+    def test_json_inventory_treats_missing_pointer_target_as_absent_not_invalid(self):
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td) / "home"
+            target = home / ".custom" / "settings.json"
+            target.parent.mkdir(parents=True)
+            target.write_text(json.dumps({"mcpServers": {"personal": {"command": "keep"}}, "theme": "gentleman"}))
+            adapter_path = Path(td) / "adapter.json"
+            self._write_adapter(adapter_path, client="custom", root_path=".custom", rules=[
+                {"id": "missing-array", "kind": "json_array_value", "root": "config", "path": "settings.json", "pointer": "/hooks", "value": "gentle-ai:sdd-init"},
+                {"id": "missing-object", "kind": "json_key", "root": "config", "path": "settings.json", "pointer": "/agents", "key": "sdd-init"},
+            ])
+            adapter = load_declarative_adapter(adapter_path)
+            context = self._context(home)
+
+            inventory = build_inventory(context, (adapter,))
+            plan = build_plan(inventory, context, (adapter,))
+
+            self.assertEqual(inventory.candidates, ())
+            self.assertEqual(inventory.findings, ())
+            self.assertEqual(plan.operations, ())
+
+    def test_verify_fails_when_live_reinventory_sees_governed_malformed_json(self):
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td) / "home"
+            target = home / ".custom" / "settings.json"
+            target.parent.mkdir(parents=True)
+            target.write_text('{"hooks": [')
+            adapter_path = Path(td) / "adapter.json"
+            self._write_adapter(adapter_path, client="custom", root_path=".custom", rules=[
+                {"id": "hook", "kind": "json_array_value", "root": "config", "path": "settings.json", "pointer": "/hooks", "value": "gentle-ai:sdd-init"},
+            ])
+            adapter = load_declarative_adapter(adapter_path)
+            context = self._context(home)
+            inventory = build_inventory(context, (adapter,))
+            plan = build_plan(inventory, context, (adapter,))
+            receipt = execute_plan(plan, plan.digest or "", context, NoopLifecycle(), inventory=inventory)
+
+            result = verify_receipt(receipt, context, (adapter,))
+
+            self.assertEqual(receipt.status, ReceiptStatus.COMPLETED)
+            self.assertEqual(plan.operations, ())
+            self.assertEqual(result.status, "failed")
+            failed = [check for check in result.checks if check.status == "failed"]
+            self.assertEqual(len(failed), 1)
+            self.assertEqual(failed[0].code, "verify_structured_parse")
+            self.assertEqual(failed[0].evidence["error"], "declarative_json_malformed")
+            self.assertNotIn(str(home), str(failed[0].evidence))
+
+    def test_json_compile_fails_closed_on_duplicate_object_keys(self):
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td) / "home"
+            target = home / ".custom" / "settings.json"
+            target.parent.mkdir(parents=True)
+            target.write_text('{"parent": {"remove": 1}, "keep": true}')
+            adapter_path = Path(td) / "adapter.json"
+            self._write_adapter(adapter_path, client="custom", root_path=".custom", rules=[
+                {"id": "duplicate", "kind": "json_key", "root": "config", "path": "settings.json", "pointer": "/parent", "key": "remove"},
+            ])
+            adapter = load_declarative_adapter(adapter_path)
+            context = self._context(home)
+            inventory = build_inventory(context, (adapter,))
+            self.assertEqual(len(inventory.candidates), 1)
+            target.write_text('{"parent": {"remove": 1, "remove": 2}, "keep": true}')
+
+            with self.assertRaisesRegex(ValueError, "declarative_evidence_drift"):
+                build_plan(inventory, context, (adapter,))
+
+    def test_multi_rule_same_target_json_composes_one_deterministic_write(self):
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td) / "home"
+            target = home / ".custom" / "settings.json"
+            target.parent.mkdir(parents=True)
+            target.write_text(json.dumps({
+                "agents": {"sdd-init": {"source": "gentle"}, "personal": {"source": "mine"}},
+                "hooks": ["gentle-ai:sdd-init", "personal", "gentle-ai:sdd-init"],
+                "mcp": {"servers": {"personal": {"command": "keep"}}},
+            }))
+            adapter_path = Path(td) / "adapter.json"
+            self._write_adapter(adapter_path, client="custom", root_path=".custom", rules=[
+                {"id": "remove-agent", "kind": "json_key", "root": "config", "path": "settings.json", "pointer": "/agents", "key": "sdd-init"},
+                {"id": "remove-hook", "kind": "json_array_value", "root": "config", "path": "settings.json", "pointer": "/hooks", "value": "gentle-ai:sdd-init"},
+            ])
+
+            adapter, context, inventory, plan, _receipt = self._execute(adapter_path, home)
+
+            self.assertEqual(len(inventory.candidates), 2)
+            self.assertEqual(len(plan.operations), 1)
+            self.assertEqual(plan.operations[0].kind, OperationKind.WRITE_FILE)
+            updated = json.loads(target.read_text())
+            self.assertEqual(updated["agents"], {"personal": {"source": "mine"}})
+            self.assertEqual(updated["hooks"], ["personal"])
+            self.assertEqual(updated["mcp"], {"servers": {"personal": {"command": "keep"}}})
+            self._assert_second_plan_is_empty(adapter, context)
+
+    def test_compile_fails_closed_when_marker_evidence_drifts_after_inventory(self):
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td) / "home"
+            target = home / ".custom" / "README.md"
+            target.parent.mkdir(parents=True)
+            target.write_text("before\n<!-- gentle-ai:begin -->\nmanaged\n<!-- gentle-ai:end -->\nafter\n")
+            adapter_path = Path(td) / "adapter.json"
+            self._write_adapter(adapter_path, client="custom", root_path=".custom", rules=[
+                {"id": "marker", "kind": "balanced_marker_block", "root": "config", "path": "README.md", "open_marker": "<!-- gentle-ai:begin -->", "close_marker": "<!-- gentle-ai:end -->"},
+            ])
+            adapter = load_declarative_adapter(adapter_path)
+            context = self._context(home)
+            inventory = build_inventory(context, (adapter,))
+            self.assertEqual(len(inventory.candidates), 1)
+            target.write_text("before\n<!-- gentle-ai:begin -->\nunbalanced\nafter\n")
+
+            with self.assertRaisesRegex(ValueError, "declarative_evidence_drift"):
+                build_plan(inventory, context, (adapter,))
+
+    def test_compile_fails_closed_when_json_evidence_becomes_malformed_after_inventory(self):
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td) / "home"
+            target = home / ".custom" / "settings.json"
+            target.parent.mkdir(parents=True)
+            target.write_text(json.dumps({"hooks": ["gentle-ai:sdd-init"], "mcp": {"servers": {}}}))
+            adapter_path = Path(td) / "adapter.json"
+            self._write_adapter(adapter_path, client="custom", root_path=".custom", rules=[
+                {"id": "hook", "kind": "json_array_value", "root": "config", "path": "settings.json", "pointer": "/hooks", "value": "gentle-ai:sdd-init"},
+            ])
+            adapter = load_declarative_adapter(adapter_path)
+            context = self._context(home)
+            inventory = build_inventory(context, (adapter,))
+            self.assertEqual(len(inventory.candidates), 1)
+            target.write_text('{"hooks": [')
+
+            with self.assertRaisesRegex(ValueError, "declarative_evidence_drift"):
+                build_plan(inventory, context, (adapter,))
+
+
+if __name__ == "__main__":
+    unittest.main()

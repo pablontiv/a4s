@@ -1,0 +1,72 @@
+schema_version: workspace-control/v1
+
+profile:
+  id: pablontiv/a4s
+  version: 2
+  based_on:
+    name: engineering-handbook
+    version: "1.4"
+    digest: f5455e3eced13690358b02823053a1e00a6c7c06de5f17d9716805bf0a0cff26
+
+workspace:
+  context_sources:
+    - |
+      Backscroll es obligatorio cuando la historia pueda afectar el trabajo:
+      buscar primero por proyecto, ampliar una vez si no hay resultados y
+      conservar unknown si la fuente requerida no está disponible.
+  workflow:
+    base_branch: main
+    sync_strategy: |
+      Antes de trabajo mutante, comparar por lectura origin/main con la revisión
+      base sin ejecutar pull implícito. Si no coincide o no puede verificarse,
+      conservar unknown y detener la fase afectada.
+    isolation_strategy: dedicated-worktree
+    development_workflow: |
+      Aplicar diseño proporcional e implementar directamente; usar un probe
+      sólo cuando un unknown material requiera evidencia.
+    commit_policy: |
+      Usar conventional commits y ejecutar los checks aplicables antes del commit.
+    delivery_mode: pull-request
+    delivery_gate: |
+      Requerir revisión y autorización humana antes de integrar.
+  pre_checks:
+    - Revisar el ADR aceptado que gobierna el cambio.
+    - Confirmar Rootline antes de escribir conocimiento gobernado.
+    - Consultar Backscroll cuando la historia pueda cambiar la decisión.
+  acceptance_checks:
+    - Mapear cada criterio de la spec aprobada a evidencia verificable.
+  review_checks:
+    - Obtener al menos una revisión antes de integrar.
+  post_checks:
+    - Confirmar que la revisión aprobada quedó realmente integrada.
+  monitoring: |
+    No aplica a cambios puramente documentales; el comportamiento operativo
+    debe definir monitoreo antes de mutar sistemas externos.
+  external_effects: |
+    Operar read-only hasta obtener autorización explícita y ligada al payload.
+  credential_policy: |
+    Usar únicamente mecanismos declarados y no persistir secretos.
+  knowledge_policy: |
+    Rootline gobierna ADRs, specs, planes e historia bajo .workspace/docs/.
+    No existe fallback activo a docs/.
+  cleanup_policy: |
+    Ofrecer cleanup y no eliminar automáticamente.
+  custom_rules:
+    - Las herramientas oficiales del perfil no admiten sustituciones implícitas.
+    - La versión 2 declara compatibilidad únicamente con Pi.
+
+groups:
+  a4s:
+    workflow:
+      delivery_mode: pull-request
+
+repositories:
+  pablontiv/a4s:
+    repo:
+      id: pablontiv/a4s
+      path: unknown
+      group: a4s
+      managed: true
+      verified_revision: unknown
+    context_sources:
+      - AGENTS.md
