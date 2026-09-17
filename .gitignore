@@ -1,6 +1,15 @@
 .pi/
 .pi-lens/
+.orca/
+.claude/
+.ruff_cache/
+.superpowers/
 .worktrees/
+.workspace/worktrees/
 node_modules/
 dist/
 artifacts/e0/
+
+# Python bytecode
+__pycache__/
+*.py[cod]
