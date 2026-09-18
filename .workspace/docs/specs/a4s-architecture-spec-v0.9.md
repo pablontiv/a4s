@@ -4,8 +4,9 @@
 
 **Estado:** diseño normativo aprobado para validación experimental
 **Fecha:** 2026-09-17
+**Actualizada:** 2026-09-18
 **Sustituye:** `a4s-architecture-spec-v0.7.md` como diseño vigente
-**Decisiones rectoras:** ADR 0001, ADR 0009 y ADR 0010
+**Decisiones rectoras:** ADR 0001, ADR 0009, ADR 0010, ADR 0014–0016, ADR 0018 y ADR 0019
 
 ---
 
@@ -202,7 +203,9 @@ Mission
   ├── primary Worktree
   ├── lead Worker binding
   ├── HarnessSession actual
-  ├── subagents especializados
+  ├── Beads reclamados por unidad
+  ├── peer tabs especializados
+  ├── reportes acotados por artifact-path
   ├── Escalations
   ├── WorkResults
   └── Verifications
@@ -281,6 +284,8 @@ binding_revision: 3
 
 Su contexto operativo se asocia al proyecto y default branch, pero ownership semántico no implica permiso para escribir directamente en default branch.
 
+El proceso activo del Project Orchestrator se mantiene delgado: crea o reclama el Bead de cada unidad antes de cualquier mutación Herdr, despacha, conserva decisiones y punteros a evidencia, y agrega veredictos acotados. No reinyecta transcripts ni outputs completos de Workers. Después del dispatch no bloquea ni sondea: queda idle hasta recibir un callback push `WORK_RESULT SUBMITTED` o `ATTENTION REQUIRED` con `bead_id`, `verdict` y `artifact-path`, y entonces lee el artefacto. No usa `herdr agent wait`, timeouts de completion ni polling.
+
 Cambios de producto entran mediante Missions y resultados verificados.
 
 ### 7.4. Mission ownership
@@ -296,11 +301,17 @@ La Execution Cell recibe autoridad delegada sobre:
 - acceptance criteria;
 - presupuesto y límites declarados.
 
-### 7.5. Worker y subagentes
+### 7.5. Worker y tabs peer
 
 Una Mission tiene como máximo un lead Worker binding actual.
 
-Los subagentes pueden investigar, implementar, testear o revisar dentro de autoridad delegada. No adquieren ownership global ni project-level por existir.
+Cada unidad delegada requiere un Bead creado o reclamado antes de crear workspace/tab o iniciar el agente; sin Bead no hay dispatch. La unidad se ejecuta en un tab peer de Herdr con exactamente un agente. Esta topología se aplica sin excepción a los dos kinds autorizados, Claude y Pi: ninguno abre o delega a subagentes in-session, y el routing interno de proveedor/modelo de Pi no altera esa prohibición. Un fan-out de N unidades crea N Beads hijos y N tabs peer, cada par con scope y criterio de término propios.
+
+Al terminar con evidencia autorizada, el agente escribe un reporte acotado, cierra su propio Bead con `bd close <bead-id> --actor <agent-name> --reason <evidence>`, y envía una única notificación `WORK_RESULT SUBMITTED verdict=<...> artifact_path=<...> bead_id=<...>` al Project Orchestrator mediante `herdr agent prompt <orchestrator-pane|name> ...` sin `--wait` ni timeout. Una ruta `ATTENTION REQUIRED` conserva evidencia y mantiene el Bead y los lifecycles abiertos. El callback transporta el puntero y `bead_id`, no el transcript; cerrar el Bead nunca auto-cierra WorkResult, Mission ni otro recurso autoritativo.
+
+Cada dispatch clasifica la altitud de la tarea sin ampliar la superficie de Herdr: los únicos kinds autorizados son `claude` y `pi`. Revisión acotada, validación mecánica y extracción usan Pi con un preset o routing interno económico —por ejemplo hacia Kimi o MiniMax— o Claude Sonnet. Orquestación, síntesis ambigua y razonamiento de alto impacto usan Claude Opus o una ruta fuerte dentro de Pi sólo con justificación registrada. Los tiers Claude son argumentos nativos posteriores a `--`; los proveedores y modelos Pi pertenecen a su preset/router interno, no a `--kind`.
+
+El contexto agentic se compacta aproximadamente entre 150K y 200K tokens sólo después de integrar la autoridad semántica de Jev definida por ADR 0013. Jev decide `keep`, `truncate` o `drop`; si no está disponible, la compaction falla cerrado y no usa fallback generativo lossy.
 
 ### 7.6. Verifier
 
@@ -517,6 +528,7 @@ Propuesta estructurada e inmutable del Worker:
 ```yaml
 id: WR-M42-2
 mission_id: M42
+bead_id: a4s-example
 binding_revision: 2
 revision: abc123
 submitted_at: ...
@@ -653,7 +665,7 @@ Muestra:
 - working/waiting/blocked/settled como observación;
 - último evento y freshness;
 - tool actual cuando el harness lo reporta;
-- subagentes;
+- tabs peer, `bead_id` y bindings efectivos de kind/modelo;
 - worktree;
 - pregunta interactiva pendiente.
 
@@ -727,15 +739,17 @@ Project Orchestrator A
   ↓ semantic decomposition and authorization
 Mission M42 + Execution Cell
   ↓
+distinct Bead created/claimed for each delegated unit
+  ↓
 primary Worktree ensured
   ↓
 lead Worker bound
   ↓
 work.kickoff Delivery
   ↓
-Worker executes with local planning/subagents
-  ↓
-WorkResult
+Worker executes; delegated units fan out to peer tabs
+  ↓ evidence + agent-owned Bead close + pointer callback
+WorkResult(bead_id) SUBMITTED
   ↓
 Verification PASS
   ↓ READY_FOR_INTEGRATION
@@ -1040,7 +1054,7 @@ Reglas:
 7. Cada Mission posee exactamente una Execution Cell primaria.
 8. Cada Execution Cell posee exactamente un primary Worktree.
 9. Cada Mission tiene como máximo un lead Worker binding actual.
-10. Subagentes no adquieren ownership global implícito.
+10. Los subagentes in-session están prohibidos para Claude y Pi; cada unidad delegada usa un tab peer con un agente.
 11. Human Operator entra por Mission Control para decisiones de portfolio.
 12. Worker escala primero a su Project Orchestrator.
 13. Sólo necesidades humanas se convierten en AttentionTicket.
@@ -1063,6 +1077,16 @@ Reglas:
 30. Capacidades de runtimes externos se reutilizan conforme a ADR 0009.
 31. Cross-project mutation nunca ocurre por inferencia o conversación libre.
 32. Mission COMPLETED significa outcome integrado o policy explícita `no_integration_required`, nunca sólo proposal verification.
+33. Fan-out de N unidades significa N tabs peer, no N subagentes.
+34. Completion se notifica por callback push `WORK_RESULT SUBMITTED` con `bead_id`, veredicto y artifact-path; waits, timeouts y polling están prohibidos.
+35. El Orchestrator agrega punteros y evidencia acotada, nunca transcripts completos.
+36. El umbral de compaction baja a 150K–200K sólo junto con Jev fail-closed conforme a ADR 0013 y ADR 0016.
+37. Cada dispatch registra altitud, kind autorizado (`claude|pi`), ruta efectiva dentro de Claude o Pi y justificación de cualquier ruta premium.
+38. Sin Bead creado o reclamado no se crea workspace/tab, no se inicia agente y no hay dispatch.
+39. Cada tab peer y cada rama de fan-out posee un Bead distinto; las relaciones padre/hijo expresan composición.
+40. Tras evidencia terminal autorizada, el agente ejecutor cierra su propio Bead con actor y reason explícitos.
+41. `ATTENTION REQUIRED` y bloqueos son evidencia-only, mantienen el Bead abierto y no auto-cierran ningún lifecycle.
+42. Cerrar un Bead completa la unidad delegada; nunca equivale a WorkResult aceptado, Verification PASS ni Mission cerrada.
 
 ---
 
@@ -1146,6 +1170,9 @@ ADR 0009 menciona una v0.8 que nunca se materializó como spec; v0.9 hereda ínt
 - Mission/WorkUnit y Execution Cell;
 - one primary Worktree y one current lead Worker binding;
 - HarnessSession con native ref exacta en el perfil Pi/Herdr;
+- Bead creado o reclamado antes de cualquier workspace/tab/agent dispatch;
+- un Bead y un agente por tab peer, con prohibición de subagentes in-session;
+- handoff acotado por WorkResult/Attention, bead_id, artifact-path y callback push;
 - Mailbox/Delivery con ACK fenceado por binding;
 - Escalation local y AttentionTicket único por source version;
 - operator response/steering correlacionado;
@@ -1187,6 +1214,10 @@ ADR 0009 menciona una v0.8 que nunca se materializó como spec; v0.9 hereda ínt
 | single authority | profile maps every HARD resource to exactly one authoritative store |
 | exact binding | stale binding cannot mutate, ACK or resolve current resources |
 | durable Delivery | restart at each attempt/ACK boundary preserves one logical input |
+| Bead dispatch gate | no workspace/tab/agent mutation occurs without a claimed Bead; N delegated units map to N distinct linked Beads |
+| peer dispatch | Claude and Pi both map N delegated units to N peer tabs and never to in-session subagents |
+| thin orchestration | callback carries WorkResult/Attention, bead_id, verdict and artifact-path but no transcript; waits, timeouts and polling are absent |
+| lifecycle separation | blocked Attention leaves the Bead open; Bead close cannot close WorkResult, Verification or Mission |
 | AttentionTicket | duplicate source/version/type yields the same active Ticket |
 | source resolution | repeated resolve applies one source decision and one response Delivery |
 | Verification | WorkResult/idle/ACK cannot close Mission |
@@ -1204,6 +1235,8 @@ v0.9 no pretende:
 - convertir Mission Control en otro chat global;
 - reemplazar Project Orchestrators;
 - mantener un contexto LLM con todos los repositorios;
+- crear jerarquías de subagentes in-session o reinyectar sus transcripts;
+- construir polling, scheduler o cola propia donde Herdr y el ACR ya cubran el contrato;
 - reconstruir capacidades ya satisfechas por un runtime seleccionado;
 - ser un issue tracker general o un observability product solamente;
 - automatizar decisiones humanas irreversibles;
