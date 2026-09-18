@@ -25,25 +25,33 @@ Vocabulary: **space = `workspace`** (1:1 per repo, labeled by repo). **tab = one
 
 1. **Resolve the space by repo:** `herdr workspace list` — is there a space whose `label` is this repo's basename?
 2. **No space for this repo → create it:**
+
    ```bash
    herdr workspace create --cwd <repo-root> --label <repo-basename> --no-focus
    ```
+
    Read `.result.workspace` (space id) and `.result.root_pane` (the session location). The new space already has a root tab + root pane.
 3. **New unit of work (space is new or already exists) → give it its own tab:**
+
    ```bash
    herdr tab create --workspace <space-id> --cwd <repo-root> --label <session-name> --no-focus
    ```
+
    Read `.result.tab` and `.result.root_pane`. One agent per tab; do not pile multiple jobs into one tab.
 4. **Start the agent in that tab's root pane** (the root pane is an available shell at its prompt):
+
    ```bash
    herdr agent start <name> --kind claude|pi --pane <root-pane-id>
    ```
-   **Authorized CLIs are Claude and Pi only** (owner policy). Never start `--kind devin` (Devin is a model provider, not a CLI) or any other kind. Name matches `[a-z][a-z0-9_-]{0,31}` and is unique among live agents. Pass native agent args after `--`. If a task seems to need another CLI, report the block instead of substituting one.
+
+   The only authorized CLIs are `claude` and `pi`; do not start any other `--kind`. Name matches `[a-z][a-z0-9_-]{0,31}` and is unique among live agents. Pass native agent args after `--`.
 5. **Dispatch the work** — send the task to that agent and confirm it started:
+
    ```bash
    herdr agent prompt <name> "<the full task for this session>" --wait --timeout 120000
    herdr agent read <name> --source recent-unwrapped --lines 120
    ```
+
    `--wait` waits for the first settled `idle`/`done`/`blocked`. Only now is the setup complete; report the tab/space ids and the agent's state.
 6. **Never** use `pane split` or `pane move` to place a repo or a new session, and **never** leave a created space/tab empty.
 
@@ -104,7 +112,7 @@ Build a precise layout by splitting a specific returned pane id with an explicit
 
 ## Safety
 
-- **Authorized CLIs are Claude and Pi only** (owner policy). Never launch or use the Devin CLI — Devin is a model provider only. Every model enabled or used in Claude must also be enabled and used in Pi; do not create Claude-only routes. If provider/config prevents compliance, report the block; do not substitute another CLI.
+- The only authorized CLIs are `claude` and `pi`.
 - `--no-focus` for background work; do not steal the user's focus.
 - Target with `--current`, an explicit id, or a unique agent name — never another client's focused pane.
 - Parse ids from JSON, not from sidebar order.
