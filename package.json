@@ -3,12 +3,17 @@
   "version": "0.0.0-e0",
   "private": true,
   "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
   "engines": {
     "node": ">=22.19.0"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit",
-    "test": "tsx --test test/*.test.ts",
+    "typecheck": "npm run typecheck:e0 && npm run typecheck --workspace @a4s/pi-rule-compiler",
+    "typecheck:e0": "tsc --noEmit",
+    "test": "npm run test:e0 && npm test --workspace @a4s/pi-rule-compiler",
+    "test:e0": "tsx --test test/*.test.ts",
     "e0": "tsx src/e0/driver.ts",
     "e0:report": "tsx src/e0/report.ts"
   },

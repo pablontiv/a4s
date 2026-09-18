@@ -12,7 +12,8 @@ El repositorio reúne en un solo producto la configuración de orquestación, lo
 - [`skills/`](skills/) distribuye workflows portátiles y sus herramientas deterministas.
 - [`agents/`](agents/) conserva roles portátiles con provenance explícita.
 - [`output-styles/`](output-styles/) define contratos de interacción.
-- [`src/`](src/) implementa el runtime y los adapters de A4S.
+- [`src/`](src/) implementa el runtime E0 y sus adapters sin mover su layout histórico.
+- [`packages/`](packages/) aloja providers autocontenidos como el compilador de reglas para Pi.
 - [`test/`](test/) verifica runtime y contratos del repositorio.
 
 ## Modelo

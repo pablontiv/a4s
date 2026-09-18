@@ -1,0 +1,613 @@
+import type {
+  ExtensionAPI,
+  ExtensionContext,
+  SessionBeforeCompactEvent,
+} from "@earendil-works/pi-coding-agent";
+import type { AuthResult } from "@earendil-works/pi-ai";
+import { createProvider } from "@earendil-works/pi-ai";
+import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
+import {
+  buildJevCompactionResult,
+  CompactionBuildError,
+  recoverRuleSignalBatchesFromDetails,
+  type BuildJevCompactionOptions,
+} from "./compaction.ts";
+import { DeadlineExceededError, OperationAbortedError, runWithDeadline } from "./deadline.ts";
+import { stableDigest } from "./digest.ts";
+import { HttpJevClient, JevApiError, JevUnavailableError, JevValidationError } from "./jev.ts";
+import {
+  observePreparedCompactionRules,
+  prepareRuleObservationsWithMessages,
+  type RuleObservationOptions,
+} from "./observer.ts";
+import { ObservationPlanError } from "./questions.ts";
+import {
+  ScheduledJevClient,
+  type JevRequestSchedulerOptions,
+} from "./scheduler.ts";
+import {
+  createRetroProposal,
+  RetroValidationError,
+  type CurrentModelGateway,
+  type RetroOptions,
+} from "./retro.ts";
+import { StateFitError } from "./state.ts";
+import {
+  collectRetroPendingMarkers,
+  collectRuleProposalReceipts,
+  collectRuleSignalBatches,
+  reconstructObservedSourceDigests,
+  RETRO_PENDING_ENTRY_TYPE,
+  RULE_PROPOSAL_ENTRY_TYPE,
+  RULE_SIGNAL_ENTRY_TYPE,
+} from "./storage.ts";
+import type {
+  JevClient,
+  JevCompactionResult,
+  RetroPendingMarker,
+  RuleSignalBatch,
+} from "./types.ts";
+import { TYPESAFE_API_KEY_ENV, TYPESAFE_PROVIDER_ID } from "./types.ts";
+
+export interface PiRuleCompilerOptions {
+  jevClient?: JevClient;
+  env?: Readonly<Record<string, string | undefined>>;
+  hookTimeoutMs?: number;
+  retroTimeoutMs?: number;
+  observation?: RuleObservationOptions;
+  scheduling?: JevRequestSchedulerOptions;
+  compaction?: BuildJevCompactionOptions;
+  retro?: RetroOptions;
+  now?: () => Date;
+}
+
+type DiagnosticCode =
+  | "missing_key"
+  | "timeout"
+  | "malformed_response"
+  | "oversized_state"
+  | "api_failure"
+  | "aborted"
+  | "model_unavailable"
+  | "no_signals"
+  | "no_pending_retro"
+  | "storage_failure"
+  | "internal_failure";
+
+interface PendingCompaction {
+  result: JevCompactionResult;
+}
+
+interface PendingRetroWork {
+  marker: RetroPendingMarker;
+  batches: RuleSignalBatch[];
+}
+
+class CurrentModelCallError extends Error {}
+
+export function createTypesafeAuthResolver(
+  options: Pick<PiRuleCompilerOptions, "env">,
+): (ctx: ExtensionContext) => Promise<string | undefined> {
+  let cached: AuthResult | undefined;
+  return async (ctx: ExtensionContext): Promise<string | undefined> => {
+    const envKey = (options.env ?? process.env)[TYPESAFE_API_KEY_ENV];
+    if (envKey) return envKey;
+    if (!cached) {
+      cached = await ctx.modelRegistry.getProviderAuth(TYPESAFE_PROVIDER_ID);
+    }
+    return cached?.auth.apiKey;
+  };
+}
+
+function createTypesafeProvider() {
+  return createProvider({
+    id: TYPESAFE_PROVIDER_ID,
+    name: "TypeSafe (Jev)",
+    auth: {
+      apiKey: {
+        name: "TypeSafe API key",
+        async login(interaction) {
+          return {
+            type: "api_key" as const,
+            key: await interaction.prompt({ type: "secret", message: "TypeSafe API key" }),
+          };
+        },
+        async resolve({ credential }) {
+          return credential?.key
+            ? { auth: { apiKey: credential.key }, source: "stored API key" }
+            : undefined;
+        },
+      },
+    },
+    models: [],
+    api: openAICompletionsApi(),
+  });
+}
+
+export function registerPiRuleCompiler(pi: ExtensionAPI, options: PiRuleCompilerOptions = {}): void {
+  const pendingByAttempt = new Map<string, PendingCompaction>();
+  const retroInFlight = new Set<string>();
+  const now = options.now ?? (() => new Date());
+  const hookTimeoutMs = options.hookTimeoutMs ?? 180_000;
+  const retroTimeoutMs = options.retroTimeoutMs ?? 120_000;
+
+  pi.registerProvider(createTypesafeProvider());
+
+  const resolveTypesafeApiKey = createTypesafeAuthResolver(options);
+  const createJevClient = async (ctx: ExtensionContext): Promise<JevClient> => {
+    if (options.jevClient) return options.jevClient;
+    return new HttpJevClient({ apiKey: (await resolveTypesafeApiKey(ctx)) ?? "" });
+  };
+
+  pi.on("session_start", (_event, ctx) => {
+    pendingByAttempt.clear();
+    retroInFlight.clear();
+    reconcileCompactionArtifacts(pi, ctx, ctx.sessionManager.getBranch());
+  });
+
+  pi.on("session_before_compact", async (event, ctx) => {
+    try {
+      return await handleCompaction(
+        event,
+        ctx,
+        createJevClient,
+        pendingByAttempt,
+        hookTimeoutMs,
+        now,
+        options.observation,
+        options.scheduling,
+        options.compaction,
+      );
+    } catch {
+      safeNotify(ctx, "compaction", "internal_failure");
+      return { cancel: true };
+    }
+  });
+
+  pi.on("session_compact", async (event, ctx) => {
+    const recovered = recoverRuleSignalBatchesFromDetails(event.compactionEntry.details);
+    if (!recovered) return;
+    pendingByAttempt.delete(recovered.attemptId);
+    if (!persistSignalBatches(pi, ctx, recovered.batches)) return;
+
+    const signalCount = recovered.batches.reduce((total, batch) => total + batch.signals.length, 0);
+    const marker = retroMarkerForBatches(
+      recovered.attemptId,
+      recovered.batches,
+      event.reason,
+      event.willRetry,
+    );
+    const pendingStored = signalCount === 0 || ensureRetroPendingMarker(pi, ctx, marker, recovered.batches);
+    safeNotifyText(
+      ctx,
+      `Jev compaction succeeded; stored ${signalCount} RuleSignal(s) from ${recovered.batches.length} window(s).`,
+      "info",
+    );
+    if (!pendingStored || signalCount === 0 || event.willRetry) return;
+
+    await drainPendingRetro(
+      pi,
+      ctx,
+      createJevClient,
+      retroTimeoutMs,
+      now,
+      options.retro,
+      options.scheduling,
+      retroInFlight,
+      recovered.attemptId,
+    );
+  });
+
+  pi.on("session_compact_failed", () => {
+    pendingByAttempt.clear();
+  });
+
+  pi.on("agent_settled", async (_event, ctx) => {
+    await drainPendingRetro(
+      pi,
+      ctx,
+      createJevClient,
+      retroTimeoutMs,
+      now,
+      options.retro,
+      options.scheduling,
+      retroInFlight,
+    );
+  });
+
+  pi.on("session_shutdown", () => {
+    pendingByAttempt.clear();
+    retroInFlight.clear();
+  });
+
+  pi.registerCommand("retro-rules", {
+    description: "Retry pending review-only rule proposal synthesis",
+    handler: async (_args, ctx) => {
+      await ctx.waitForIdle();
+      const result = await drainPendingRetro(
+        pi,
+        ctx,
+        createJevClient,
+        retroTimeoutMs,
+        now,
+        options.retro,
+        options.scheduling,
+        retroInFlight,
+      );
+      if (result.eligible === 0) safeNotify(ctx, "retro", "no_pending_retro");
+    },
+  });
+}
+
+async function handleCompaction(
+  event: SessionBeforeCompactEvent,
+  ctx: ExtensionContext,
+  createJevClient: (ctx: ExtensionContext) => Promise<JevClient>,
+  pendingByAttempt: Map<string, PendingCompaction>,
+  timeoutMs: number,
+  now: () => Date,
+  observationOptions: RuleObservationOptions | undefined,
+  schedulingOptions: JevRequestSchedulerOptions | undefined,
+  compactionOptions: BuildJevCompactionOptions | undefined,
+): Promise<{ cancel: true } | { compaction: JevCompactionResult }> {
+  try {
+    const preparation = {
+      ...(event.preparation.previousSummary === undefined
+        ? {}
+        : { previousSummary: event.preparation.previousSummary }),
+      messagesToSummarize: event.preparation.messagesToSummarize,
+      turnPrefixMessages: event.preparation.turnPrefixMessages,
+    };
+    const prepared = prepareRuleObservationsWithMessages(preparation, observationOptions);
+    const attemptId = stableDigest({
+      schema: "a4s.jev-compaction-attempt/v1",
+      sourceDigest: prepared.sourceDigest,
+      firstKeptEntryId: event.preparation.firstKeptEntryId,
+      tokensBefore: event.preparation.tokensBefore,
+    });
+    const existing = pendingByAttempt.get(attemptId);
+    if (existing) return { compaction: existing.result };
+
+    const observedAt = now().toISOString();
+    const jevClient = new ScheduledJevClient(await createJevClient(ctx), schedulingOptions);
+    const batches = await runWithDeadline(
+      (signal) =>
+        Promise.all(
+          prepared.plans.map((plan, windowIndex) =>
+            observePreparedCompactionRules(
+              plan,
+              {
+                attemptId,
+                reason: event.reason,
+                willRetry: event.willRetry,
+                observedAt,
+                windowIndex,
+                windowCount: prepared.plans.length,
+                pins: prepared.pins,
+              },
+              jevClient,
+              signal,
+              observationOptions,
+            ),
+          ),
+        ),
+      timeoutMs,
+      event.signal,
+    );
+    const result = buildJevCompactionResult(
+      {
+        attemptId,
+        sourceDigest: prepared.sourceDigest,
+        createdAt: observedAt,
+        firstKeptEntryId: event.preparation.firstKeptEntryId,
+        tokensBefore: event.preparation.tokensBefore,
+        messageCount: prepared.messages.length,
+        scheduler: jevClient.getStats(),
+        ruleSignalBatches: batches,
+      },
+      compactionOptions,
+    );
+    pendingByAttempt.set(attemptId, { result });
+    return { compaction: result };
+  } catch (error) {
+    safeNotify(ctx, "compaction", classifyCompactionError(error));
+    return { cancel: true };
+  }
+}
+
+function reconcileCompactionArtifacts(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  entries: readonly unknown[],
+): void {
+  for (const entry of entries) {
+    if (!entry || typeof entry !== "object" || (entry as { type?: unknown }).type !== "compaction") continue;
+    const recovered = recoverRuleSignalBatchesFromDetails((entry as { details?: unknown }).details);
+    if (!recovered || !persistSignalBatches(pi, ctx, recovered.batches)) continue;
+    const signalCount = recovered.batches.reduce((total, batch) => total + batch.signals.length, 0);
+    if (signalCount === 0) continue;
+    const first = recovered.batches[0];
+    if (!first) continue;
+    ensureRetroPendingMarker(
+      pi,
+      ctx,
+      retroMarkerForBatches(
+        recovered.attemptId,
+        recovered.batches,
+        first.provenance.compactionReason,
+        first.provenance.willRetry,
+      ),
+      recovered.batches,
+    );
+  }
+}
+
+function persistSignalBatches(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  batches: readonly RuleSignalBatch[],
+): boolean {
+  const existing = reconstructObservedSourceDigests(ctx.sessionManager.getBranch());
+  for (const batch of batches) {
+    if (existing.has(batch.sourceDigest)) continue;
+    try {
+      pi.appendEntry(RULE_SIGNAL_ENTRY_TYPE, batch);
+      existing.add(batch.sourceDigest);
+    } catch {
+      safeNotify(ctx, "signals", "storage_failure");
+      return false;
+    }
+  }
+  return true;
+}
+
+function retroMarkerForBatches(
+  attemptId: string,
+  batches: readonly RuleSignalBatch[],
+  reason: "manual" | "threshold" | "overflow",
+  willRetry: boolean,
+): RetroPendingMarker {
+  const sourceDigests = [...new Set(batches.map((batch) => batch.sourceDigest))];
+  const createdAt = batches[0]?.observedAt;
+  if (!createdAt || sourceDigests.length === 0) throw new Error("retro marker requires observed batches");
+  return {
+    schema: "a4s.retro-pending/v1",
+    attemptId,
+    createdAt,
+    sourceDigests,
+    compactionReason: reason,
+    deferredUntilAgentSettled: willRetry,
+  };
+}
+
+function ensureRetroPendingMarker(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  marker: RetroPendingMarker,
+  batches: readonly RuleSignalBatch[],
+): boolean {
+  const entries = ctx.sessionManager.getBranch();
+  const coveredBatchDigests = new Set(
+    collectRuleProposalReceipts(entries).flatMap((receipt) => receipt.sourceBatchDigests),
+  );
+  if (batches.every((batch) => coveredBatchDigests.has(stableDigest(batch)))) return true;
+  if (collectRetroPendingMarkers(entries).some((existing) => existing.attemptId === marker.attemptId)) return true;
+  try {
+    pi.appendEntry(RETRO_PENDING_ENTRY_TYPE, marker);
+    return true;
+  } catch {
+    safeNotify(ctx, "retro", "storage_failure");
+    return false;
+  }
+}
+
+function collectPendingRetroWork(
+  entries: readonly unknown[],
+  onlyAttemptId?: string,
+): PendingRetroWork[] {
+  const batches = collectRuleSignalBatches(entries);
+  const batchesBySource = new Map(batches.map((batch) => [batch.sourceDigest, batch]));
+  const coveredBatchDigests = new Set(
+    collectRuleProposalReceipts(entries).flatMap((receipt) => receipt.sourceBatchDigests),
+  );
+  const markers = collectRetroPendingMarkers(entries);
+  const markedAttempts = new Set(markers.map((marker) => marker.attemptId));
+
+  for (const batch of batches) {
+    const attemptId = batch.provenance.compactionAttemptId;
+    if (markedAttempts.has(attemptId)) continue;
+    const siblings = batches.filter((candidate) => candidate.provenance.compactionAttemptId === attemptId);
+    markers.push(
+      retroMarkerForBatches(
+        attemptId,
+        siblings,
+        batch.provenance.compactionReason,
+        batch.provenance.willRetry,
+      ),
+    );
+    markedAttempts.add(attemptId);
+  }
+
+  const work: PendingRetroWork[] = [];
+  for (const marker of markers) {
+    if (onlyAttemptId && marker.attemptId !== onlyAttemptId) continue;
+    const resolved = marker.sourceDigests.map((digest) => batchesBySource.get(digest));
+    if (resolved.some((batch) => !batch)) continue;
+    const pendingBatches = (resolved as RuleSignalBatch[]).filter(
+      (batch) => !coveredBatchDigests.has(stableDigest(batch)),
+    );
+    if (pendingBatches.reduce((total, batch) => total + batch.signals.length, 0) === 0) continue;
+    work.push({ marker, batches: pendingBatches });
+  }
+  return work;
+}
+
+async function drainPendingRetro(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  createJevClient: (ctx: ExtensionContext) => Promise<JevClient>,
+  timeoutMs: number,
+  now: () => Date,
+  retroOptions: RetroOptions | undefined,
+  schedulingOptions: JevRequestSchedulerOptions | undefined,
+  inFlight: Set<string>,
+  onlyAttemptId?: string,
+): Promise<{ eligible: number; completed: number }> {
+  const work = collectPendingRetroWork(ctx.sessionManager.getBranch(), onlyAttemptId).filter(
+    (item) => !inFlight.has(item.marker.attemptId),
+  );
+  if (work.length === 0) return { eligible: 0, completed: 0 };
+
+  const model = ctx.model;
+  if (!model || !ctx.modelRegistry.hasConfiguredAuth(model)) {
+    safeNotify(ctx, "retro", "model_unavailable");
+    return { eligible: work.length, completed: 0 };
+  }
+  const currentModel = createCurrentModelGateway(ctx, model, now);
+  let completed = 0;
+
+  for (const item of work) {
+    const coveredNow = new Set(
+      collectRuleProposalReceipts(ctx.sessionManager.getBranch()).flatMap(
+        (receipt) => receipt.sourceBatchDigests,
+      ),
+    );
+    if (item.batches.every((batch) => coveredNow.has(stableDigest(batch)))) continue;
+
+    inFlight.add(item.marker.attemptId);
+    try {
+      const jevClient = new ScheduledJevClient(await createJevClient(ctx), schedulingOptions);
+      const proposal = await runWithDeadline(
+        (signal) =>
+          createRetroProposal(
+            item.batches,
+            {
+              model: { provider: model.provider, id: model.id },
+              createdAt: now().toISOString(),
+              sourceCompactionAttemptIds: [item.marker.attemptId],
+            },
+            currentModel,
+            jevClient,
+            signal,
+            retroOptions,
+          ),
+        timeoutMs,
+        ctx.signal,
+      );
+
+      const alreadyStored = collectRuleProposalReceipts(ctx.sessionManager.getBranch()).some(
+        (receipt) => receipt.idempotencyKey === proposal.idempotencyKey,
+      );
+      if (!alreadyStored) pi.appendEntry(RULE_PROPOSAL_ENTRY_TYPE, proposal);
+      completed += 1;
+      const proposed = proposal.candidates.filter(
+        (candidate) => candidate.evaluation.disposition === "propose",
+      ).length;
+      safeNotifyText(
+        ctx,
+        `Retro rules stored ${proposal.candidates.length} review-only proposal(s): ${proposed} supported, ${proposal.candidates.length - proposed} held. Nothing was activated.`,
+        "info",
+      );
+    } catch (error) {
+      safeNotify(ctx, "retro", classifyRetroError(error));
+    } finally {
+      inFlight.delete(item.marker.attemptId);
+    }
+  }
+  return { eligible: work.length, completed };
+}
+
+function createCurrentModelGateway(
+  ctx: ExtensionContext,
+  model: NonNullable<ExtensionContext["model"]>,
+  now: () => Date,
+): CurrentModelGateway {
+  return {
+    async complete(prompt, signal): Promise<unknown> {
+      try {
+        return await ctx.modelRegistry.complete(
+          model,
+          {
+            systemPrompt: prompt.systemPrompt,
+            messages: [
+              {
+                role: "user" as const,
+                content: [{ type: "text" as const, text: prompt.userPrompt }],
+                timestamp: now().getTime(),
+              },
+            ],
+          },
+          { signal, maxTokens: prompt.maxTokens, cacheRetention: "none" },
+        );
+      } catch {
+        throw new CurrentModelCallError();
+      }
+    },
+  };
+}
+
+function classifyCompactionError(error: unknown): DiagnosticCode {
+  if (error instanceof JevUnavailableError) return "missing_key";
+  if (error instanceof DeadlineExceededError) return "timeout";
+  if (error instanceof OperationAbortedError) return "aborted";
+  if (error instanceof JevValidationError) return "malformed_response";
+  if (error instanceof StateFitError || error instanceof ObservationPlanError || error instanceof CompactionBuildError) {
+    return "oversized_state";
+  }
+  if (error instanceof JevApiError) return "api_failure";
+  return "internal_failure";
+}
+
+function classifyRetroError(error: unknown): DiagnosticCode {
+  if (error instanceof JevUnavailableError) return "missing_key";
+  if (error instanceof DeadlineExceededError) return "timeout";
+  if (error instanceof OperationAbortedError) return "aborted";
+  if (error instanceof CurrentModelCallError) return "model_unavailable";
+  if (error instanceof JevValidationError) return "malformed_response";
+  if (error instanceof JevApiError) return "api_failure";
+  if (error instanceof RetroValidationError) {
+    if (error.code === "no_signals") return "no_signals";
+    if (error.code === "oversized_state") return "oversized_state";
+    if (error.code === "model_failure" || error.code === "malformed_model_json") return "malformed_response";
+  }
+  return "internal_failure";
+}
+
+function safeNotify(ctx: ExtensionContext, phase: "compaction" | "signals" | "retro", code: DiagnosticCode): void {
+  const descriptions: Record<DiagnosticCode, string> = {
+    missing_key: "Jev is unavailable (missing TYPESAFE_API_KEY)",
+    timeout: "the bounded analysis timed out",
+    malformed_response: "a model response failed strict validation",
+    oversized_state: "the sanitized state or summary exceeded configured bounds",
+    api_failure: "the Jev request failed",
+    aborted: "the analysis was aborted",
+    model_unavailable: "the current Pi model is unavailable",
+    no_signals: "no persisted RuleSignals are available",
+    no_pending_retro: "no pending RuleSignal batch needs retro processing",
+    storage_failure: "the proposal or signal entry could not be stored",
+    internal_failure: "an internal bounded failure occurred",
+  };
+  const suffix =
+    phase === "compaction"
+      ? "Compaction was cancelled; native fallback is disabled."
+      : phase === "signals"
+        ? "Signals remain recoverable from the successful compaction entry."
+        : "Persisted signals were preserved.";
+  safeNotifyText(
+    ctx,
+    `Rule compiler ${phase} skipped: ${descriptions[code]}. ${suffix}`,
+    code === "no_signals" ? "info" : "warning",
+  );
+}
+
+function safeNotifyText(
+  ctx: ExtensionContext,
+  text: string,
+  level: "info" | "warning" | "error",
+): void {
+  try {
+    ctx.ui.notify(text.slice(0, 240), level);
+  } catch {
+    // Diagnostics must not change compaction or command failure semantics.
+  }
+}
