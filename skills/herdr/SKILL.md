@@ -1,6 +1,8 @@
 ---
 name: herdr
 description: "Control Herdr, the terminal multiplexer for coding agents, over the `herdr` CLI: inspect/control workspaces (spaces), tabs, panes, and agents. Use only when the user mentions Herdr or asks to use it to lay out or run sessions/agents on repos. Requires HERDR_ENV=1. Core method: one space per repo; each unit of work is its own tab running its own agent; you dispatch the task to that agent — creating an empty space/tab is NOT the deliverable; never use panes to separate repos or sessions."
+metadata:
+  author: pablontiv
 ---
 
 # Herdr

@@ -157,6 +157,7 @@ La pertenencia al catálogo no activa una herramienta rutinariamente. Pi enruta 
 - `docs-northstar`: se activa al definir, recuperar o auditar la dirección narrativa de un repositorio y contrastarla con comportamiento verificado.
 - `rule-audit`: se activa para auditar, puntuar o reforzar archivos de reglas e instrucciones de agentes y sus backstops.
 - `gh-communication-style`: se activa para redactar issues, pull requests, respuestas de review o comentarios destinados a GitHub.
+- `herdr`: se activa cuando se solicita usar Herdr para ejecutar, delegar o distribuir trabajo en repositorios; usa un space por repo, un tab por unidad de trabajo y sólo completa el despacho cuando el agente recibió su tarea.
 - `markitdown`: se activa para convertir documentos o medios a Markdown mediante la CLI MarkItDown.
 
 `remove-gentle-context` se activa únicamente para retirar contexto activo de Gentle AI o investigar registros generados stale; no se ejecuta rutinariamente y no desinstala paquetes, binarios, source ni instalaciones del framework.
