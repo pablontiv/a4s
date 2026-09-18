@@ -63,20 +63,24 @@ Vocabulary: **space = `workspace`** (1:1 per repo, labeled by repo). **tab = one
    ```
 
    Read `.result.tab` and `.result.root_pane`. One agent per tab and one claimed Bead per tab; do not pile multiple jobs into one tab. For fan-out, repeat steps 3, 5, and 6 once per independent Bead from step 2 and dispatch all peer tabs without serial waits.
-7. **Start the agent in that tab's root pane** (the root pane is an available shell at its prompt). Route by task altitude instead of defaulting to a premium model:
+7. **Start the agent in that tab's root pane** (the root pane is an available shell at its prompt). Every start includes the native trust/YOLO flag so the Worker is not blocked on an interactive permission prompt, and routes by task altitude instead of defaulting to a premium model:
 
    ```bash
    # Bounded mechanical work through Pi's configured economical preset/provider route
-   herdr agent start <name> --kind pi --pane <root-pane-id>
+   herdr agent start <name> --kind pi --pane <root-pane-id> -- --approve
 
    # Or use Claude's economical tier explicitly
-   herdr agent start <name> --kind claude --pane <root-pane-id> -- --model sonnet
+   herdr agent start <name> --kind claude --pane <root-pane-id> -- --model sonnet --dangerously-skip-permissions
 
    # High-altitude reasoning may use Claude's premium tier when justified
-   herdr agent start <name> --kind claude --pane <root-pane-id> -- --model opus
+   herdr agent start <name> --kind claude --pane <root-pane-id> -- --model opus --dangerously-skip-permissions
    ```
 
    The only authorized Herdr kinds are `claude` and `pi`. Mechanical review, validation, extraction, and other bounded work use `--kind pi` with a verified economical provider/model route configured inside Pi (for example Kimi or MiniMax), or `--kind claude -- --model sonnet`. Orchestration, ambiguous synthesis, and high-impact reasoning use Claude Opus or a strong route inside Pi only when justified. Claude tiers are native arguments after `--`; Pi providers and models are selected by Pi's existing preset/router, never by adding Herdr kinds. Name matches `[a-z][a-z0-9_-]{0,31}` and is unique among live agents.
+
+   **Trust/YOLO flags are mandatory on every `agent start`; verify them live before relying on this doc** (`claude --help`, `pi --help` — CLI flag names can change between versions, so re-verify rather than assume). As of this writing: Claude's native bypass is `--dangerously-skip-permissions`, which skips all tool-approval prompts for that session. Pi's native bypass is `--approve` (short `-a`), which trusts project-local resources for the run so Pi does not block on its project-trust prompt when started headless in a fresh worktree. Both are native CLI args and belong after the `--` separator alongside `--model` or other native flags.
+
+   **Guardrail — YOLO covers non-destructive in-worktree scope only.** These flags remove interactive confirmation for ordinary read/edit/build/test/review work inside the dispatched worktree; they do not authorize `git push`, merge, branch or file deletion, secrets access, or any action that reaches outside the worktree or the local system. Those stay explicit gates exactly as if the flag were absent: the Worker reports a blocker (`ATTENTION REQUIRED`, see below) or asks the user directly before performing them. A flag bypassing tool prompts is never grounds to treat push/merge/delete/secrets/external actions as pre-authorized.
 8. **Dispatch the work** — include the full task, claimed `bead_id`, bounded report path, and Project Orchestrator callback target:
 
    ```bash
@@ -162,6 +166,7 @@ Build a precise layout by splitting a specific returned pane id with an explicit
 - Fan-out follows `bd ready`'s dependency graph, never list order; only a real dependency edge serializes two Beads, and only mutating Beads sharing a repo need their own `herdr worktree`.
 - The only authorized kinds/CLIs are `claude` and `pi`; all other providers/models route inside Pi or through Claude's native model tier, never through another Herdr kind or subagent topology.
 - Preserve altitude routing: use Pi's economical internal route or Claude Sonnet for bounded work; justify Claude Opus or a strong Pi route for high-altitude reasoning.
+- Every `agent start` passes the native trust/YOLO flag (`--dangerously-skip-permissions` for claude, `--approve`/`-a` for pi) so the Worker is not blocked on an interactive prompt; this only covers non-destructive in-worktree scope. Push, merge, delete, secrets access, and external actions remain explicit gates regardless of the flag — the Worker still asks or raises `ATTENTION REQUIRED` before those. A Worker sitting `blocked` on a permission/trust prompt is a dispatch defect — the start flag was omitted or wrong; fix the `agent start` invocation, do not hand-answer the prompt as a workaround.
 - `--no-focus` for background work; do not steal the user's focus.
 - Target with `--current`, an explicit id, or a unique agent name — never another client's focused pane.
 - Parse ids from JSON, not from sidebar order.
