@@ -1,6 +1,8 @@
 ---
 name: herdr
 description: "Control Herdr, the terminal multiplexer for coding agents, over the `herdr` CLI: inspect/control workspaces (spaces), tabs, panes, and agents. Use only when the user mentions Herdr or asks to use it to lay out or run sessions/agents on repos. Requires HERDR_ENV=1. Core method: one space per repo; each unit of work is its own tab running its own agent; you dispatch the task to that agent — creating an empty space/tab is NOT the deliverable; never use panes to separate repos or sessions."
+metadata:
+  author: pablontiv
 ---
 
 # Herdr
@@ -34,9 +36,9 @@ Vocabulary: **space = `workspace`** (1:1 per repo, labeled by repo). **tab = one
    Read `.result.tab` and `.result.root_pane`. One agent per tab; do not pile multiple jobs into one tab.
 4. **Start the agent in that tab's root pane** (the root pane is an available shell at its prompt):
    ```bash
-   herdr agent start <name> --kind <kind> --pane <root-pane-id>
+   herdr agent start <name> --kind claude|pi --pane <root-pane-id>
    ```
-   Use the kind the user asked for; run `herdr agent` for the installed kinds. Name matches `[a-z][a-z0-9_-]{0,31}` and is unique among live agents. Pass native agent args after `--`.
+   **Authorized CLIs are Claude and Pi only** (owner policy). Never start `--kind devin` (Devin is a model provider, not a CLI) or any other kind. Name matches `[a-z][a-z0-9_-]{0,31}` and is unique among live agents. Pass native agent args after `--`. If a task seems to need another CLI, report the block instead of substituting one.
 5. **Dispatch the work** — send the task to that agent and confirm it started:
    ```bash
    herdr agent prompt <name> "<the full task for this session>" --wait --timeout 120000
@@ -102,6 +104,7 @@ Build a precise layout by splitting a specific returned pane id with an explicit
 
 ## Safety
 
+- **Authorized CLIs are Claude and Pi only** (owner policy). Never launch or use the Devin CLI — Devin is a model provider only. Every model enabled or used in Claude must also be enabled and used in Pi; do not create Claude-only routes. If provider/config prevents compliance, report the block; do not substitute another CLI.
 - `--no-focus` for background work; do not steal the user's focus.
 - Target with `--current`, an explicit id, or a unique agent name — never another client's focused pane.
 - Parse ids from JSON, not from sidebar order.
