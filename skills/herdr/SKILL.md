@@ -1,6 +1,6 @@
 ---
 name: herdr
-description: "Control Herdr, the terminal multiplexer for coding agents, over the `herdr` CLI: inspect/control workspaces (spaces), tabs, panes, and agents. Use only when the user mentions Herdr or asks to use it to lay out or run sessions/agents on repos. Requires HERDR_ENV=1. Core method: a claimed Bead precedes every work unit; one space per repo; each unit is one peer tab running one agent; in-session subagents are prohibited; creating an empty space/tab is NOT the deliverable; never use panes to separate repos or sessions."
+description: "Control Herdr, the terminal multiplexer for coding agents, over the `herdr` CLI: inspect/control workspaces (spaces), tabs, panes, and agents. Use only when the user mentions Herdr or asks to use it to lay out or run sessions/agents on repos. Requires HERDR_ENV=1. Core method: a claimed Bead precedes every work unit; one space per repo; 1 Project Orchestrator = 1 repo; 1 Worker = 1 feature; each unit is one peer tab running one agent; vendor PRs only against the pablontiv fork; self-check model before quota actions; in-session subagents are prohibited; creating an empty space/tab is NOT the deliverable; never use panes to separate repos or sessions."
 metadata:
   author: pablontiv
 ---
@@ -26,6 +26,20 @@ Vocabulary: **space = `workspace`** (1:1 per repo, labeled by repo). **tab = one
 **Invariant: “one agent per tab” means that the agent in a tab never opens in-session subagents.** This applies identically to both authorized kinds, `--kind claude` and `--kind pi`; native Claude features and Pi provider/model routing do not create an exception. Delegation and parallelism create another peer tab. The subagent extension is decommissioned and subagent delegation is prohibited. A workflow with N independent child-runs therefore fans out to N peer tabs, not N subagents.
 
 **Roles** (canonical; do not reintroduce *mensajero*, *supervisor*, *minion*, or *coordinador* as role labels): **Human Operator** — the owner. **Mission Control** — the relay session between the Human Operator and Project Orchestrators (e.g. `w4R:p1`). **Project Orchestrator** — the session that drives this skill for one repo; it dispatches and stays thin. **Worker** — the agent executing one work unit in one peer tab. **Verifier** — an independent review agent, itself run as its own peer tab, not a synchronous check inside the Worker's tab. **Mission** — the Bead that owns the durable work unit.
+
+**Ownership iron: 1 Project Orchestrator = 1 repo; 1 Worker = 1 feature.** A Project Orchestrator coordinates only its own repo: it does not implement, review-as-worker, or land work in a foreign repo. Work for another repo goes to that repo's Project Orchestrator (via Mission Control), not to a tab opened here. A Worker owns one feature or single responsibility (one feat branch, one Verifier review, one PoC); more scope means more Workers, i.e. N Beads / N peer tabs. The Project Orchestrator never absorbs Worker work as its own hands-on implementation.
+
+**Vendor iron: PRs only against the `pablontiv` fork, never upstream.** Every repo under `[REDACTED:shared-root]/vendor/` is a fork owned by `pablontiv`. No PR and no merge may target upstream; the PR base is always `pablontiv/<repo>` (its default branch). Before any `gh pr create` or merge, the Project Orchestrator or Worker verifies remotes and base, and passes them explicitly:
+
+```bash
+git remote -v
+gh repo view pablontiv/<repo>
+gh pr create --repo pablontiv/<repo> --base <fork-default-branch> ...
+```
+
+If the base or remote resolves to upstream, stop and raise `ATTENTION REQUIRED`; this is not a push authorization (see the YOLO guardrail).
+
+**Model self-check iron: verify your own model/route before any quota or budget action.** An agent cannot assume its current model or provider. Before any model-conditional action (`BUDGET_EXCEEDED`, quota switch, provider failover), determine the actual route from live surfaces: `PI_MODEL` / `PI_PROVIDER` in the environment, Pi session metadata, and `herdr agent get <self-pane-or-name>` (own pane: `$HERDR_PANE_ID`). Gate the action on that result. A fleet or Mission Control quota broadcast is conditional ("if you are on a `<provider>` route..."): if your verified route does not match, do nothing and do not report `BUDGET_EXCEEDED`. If the route cannot be determined, report that as evidence in a blocker; never invent a budget verdict.
 
 1. **Resolve the space by repo:** `herdr workspace list` — is there a space whose `label` is this repo's basename?
 2. **Discover ready work before claiming anything:** `bd ready` (and `bd list` for the full graph) identify which Beads are independent — no unresolved dependency edges — versus which are blocked behind another Bead. Fan-out follows this dependency graph, never list order: every Bead `bd ready` returns is dispatched to its own peer tab in the same pass; only an explicit dependency edge serializes two Beads.
@@ -162,6 +176,9 @@ Build a precise layout by splitting a specific returned pane id with an explicit
 ## Safety
 
 - No claimed Bead means no workspace/tab creation, agent start, or dispatch; there are no exceptions.
+- 1 Project Orchestrator = 1 repo; 1 Worker = 1 feature. Never work or land changes in a foreign repo from this session.
+- Vendor repos are `pablontiv` forks: PRs and merges target `pablontiv/<repo>` only, never upstream; verify remotes and base before `gh pr create`/merge.
+- Self-check model/route (`PI_MODEL`/`PI_PROVIDER`, Pi metadata, `herdr agent get`) before any quota/budget action; never emit `BUDGET_EXCEEDED` for a route you are not on.
 - One agent and one distinct Bead per tab; neither Claude nor Pi may launch or delegate to in-session subagents.
 - Fan-out follows `bd ready`'s dependency graph, never list order; only a real dependency edge serializes two Beads, and only mutating Beads sharing a repo need their own `herdr worktree`.
 - The only authorized kinds/CLIs are `claude` and `pi`; all other providers/models route inside Pi or through Claude's native model tier, never through another Herdr kind or subagent topology.
