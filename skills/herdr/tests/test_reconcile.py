@@ -47,7 +47,9 @@ elif "--label-any" in a:
 elif "--label" in a:
     out = fx.get("mc_beads", [])
 elif a[a.index("--status") + 1] == "in_progress":
-    out = fx.get("in_progress", [])
+    # like real bd: the in_progress list also carries the MC ownership Bead(s)
+    out = fx.get("in_progress", []) + [b for b in fx.get("mc_beads", [])
+                                       if b["id"] not in {x["id"] for x in fx.get("in_progress", [])}]
 elif a[a.index("--status") + 1] == "blocked":
     out = fx.get("blocked", [])
 elif a[a.index("--status") + 1] == "closed":
@@ -473,6 +475,93 @@ class ReconcileTest(unittest.TestCase):
             mod.mutate(ctx, allowed[0])  # closed gate refuses every mutation, even benign ones
         with self.assertRaises(mod.GuardViolation):
             mod.mutate(ctx, ["update", "b-1"], tool="bd")
+
+    # ---------------------------------------------------------------- MC ownership Bead is never mutated (F1)
+    def assert_mc_untouched(self, p, log, bead_id="mc-1"):
+        self.assertEqual(self.mutations(log), [], p.stdout)
+        self.assertNotRegex(log, r"(?m)^bd (close|update) %s\b" % bead_id)
+        self.assertNotIn("herdr tab create", log)
+        self.assertFalse((self.t / "state" / "harvest").exists(), "no harvest artifact for the MC Bead")
+        self.assertNotIn("HARVEST", p.stdout)
+        self.assertNotIn("REDISPATCH", p.stdout)
+
+    def test_mc_owner_bead_with_done_worker_is_never_harvest_closed(self):
+        # reviewer P1: MC owner Bead links a worker whose herdr status is `done` -> was harvested + `bd close`d
+        fx = self.fx(mc_beads=[mc_bead(worker="mc")],
+                     agents={"mc": agent("mc", "done", pane="wM:p1", tab="wM:t1")}, assignees={"mc-1": "mc-session"})
+        for apply in (True, False):
+            with self.subTest(apply=apply):
+                p, log = self.tick(fx, apply=apply)
+                self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+                self.assertIn("MC ownership Bead", p.stdout)
+                self.assert_mc_untouched(p, log)
+                self.assertNotIn("would run", p.stdout)
+
+    def test_mc_owner_bead_with_missing_worker_is_never_redispatched(self):
+        # reviewer P3: MC owner Bead links a worker that herdr no longer lists -> NOT_FOUND -> re-dispatch + re-stamp
+        fx = self.fx(mc_beads=[mc_bead(worker="mc-gone", tab="wM:t1")], assignees={"mc-1": "mc-session"})
+        for apply in (True, False):
+            with self.subTest(apply=apply):
+                p, log = self.tick(fx, apply=apply)
+                self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+                self.assertIn("MC ownership Bead", p.stdout)
+                self.assert_mc_untouched(p, log)
+        self.assertEqual(self.tickets("mc-1--*.md"), [])
+
+    def test_mc_owner_bead_unlinked_stale_is_never_redispatched(self):
+        # invariant: gate open inside --mc-grace + tiny --stale-after + opt-in label + assignee==actor must still leave the MC Bead alone
+        b = mc_bead(lease=-30)
+        b.update(assignee=ACTOR, labels=["mission-control", "auto-dispatch"])
+        p, log = self.tick(self.fx(mc_beads=[b], assignees={"mc-1": ACTOR}), "--stale-after", "1", apply=True)
+        self.assertIn("OPEN owner=mc-1", p.stdout)
+        self.assert_mc_untouched(p, log)
+
+    def test_mc_labelled_ready_bead_is_never_dispatched(self):
+        ready = [bead("mc-2", status="open", labels=["mission-control", "auto-dispatch"])]
+        p, log = self.tick(self.fx(ready=ready), apply=True)
+        self.assertEqual(self.mutations(log), [], p.stdout)
+        self.assertNotIn("mc-2", "".join(l for l in log.splitlines() if not l.startswith("bd-read")))
+
+    def test_closed_mc_bead_tab_is_never_reaped(self):
+        old = "2026-01-01T00:00:00Z"
+        closed = [bead("mc-old", status="closed", closed_at=old, labels=["mission-control"],
+                       metadata={"worker": "mc-old", "tab": "wT:t7"})]
+        p, log = self.tick(self.fx(closed=closed, tabs=[{"tab_id": "wT:t7", "pane_count": 1}]), apply=True)
+        self.assertEqual(self.mutations(log), [], p.stdout)
+
+    def test_unlabelled_bead_bound_to_mc_pane_or_agent_is_never_mutated(self):
+        # no label, but the Bead is wired to the live MC pane/agent: current MC owner by identity, not by label
+        for name, meta in {"worker": {"worker": "mc"}, "pane": {"worker": "w9", "pane": "wM:p1"},
+                           "tab": {"worker": "w9", "tab": "wM:t1"}}.items():
+            with self.subTest(name):
+                fx = self.fx(in_progress=[bead("x-1", assignee=ACTOR, metadata=meta)], assignees={"x-1": ACTOR},
+                             agents={"mc": agent("mc", "done", pane="wM:p1", tab="wM:t1"),
+                                     "w9": agent("w9", "done", pane="wM:p1", tab="wM:t1")})
+                p, log = self.tick(fx, apply=True)
+                self.assert_mc_untouched(p, log, "x-1")
+
+    def test_mutate_refuses_bd_writes_to_mc_beads_unit(self):
+        mod = load_module()
+        args = type("A", (), dict(apply=False, repo=str(self.t / "repo"), state_dir=str(self.t / "s"), callback="x",
+                                  dispatch_label="", settle=60, reap_grace=120, max_redispatch=2, max_dispatch=3,
+                                  default_kind="claude", default_model="sonnet", stale_after=1800, mc_grace=60,
+                                  plan_ignoring_mc_gate=False))()
+        ctx = mod.Ctx(args)
+        ctx.workspaces = {"wM": {"workspace_id": "wM", "label": "mission-control"}}
+        ctx.tabs = {"wM:t1": MC_TAB}
+        ctx.panes = {"wM:p1": MC_PANE}
+        ctx.agents = {"mc": agent("mc", "idle", pane="wM:p1", tab="wM:t1")}
+        ctx.mc_beads = [mc_bead()]
+        self.assertTrue(mod.evaluate_gate(ctx))
+        other = bead("o-1", metadata={"worker": "w1"})
+        ctx.bead_index = {b["id"]: b for b in ctx.mc_beads + [other, bead("mc-9", labels=["mission-control"])]}
+        for bid in ("mc-1", "mc-9"):
+            for argv in (["close", bid, "--reason", "x"], ["update", bid, "--set-metadata", "worker=r-x"],
+                         ["update", bid, "--claim"]):
+                with self.subTest(argv=argv), self.assertRaises(mod.GuardViolation):
+                    mod.mutate(ctx, argv, tool="bd")
+        with contextlib.redirect_stdout(io.StringIO()):
+            mod.mutate(ctx, ["close", "o-1", "--reason", "x"], tool="bd")  # ordinary Beads still pass
 
     # ---------------------------------------------------------------- in_progress without metadata.worker
     def stale_bead(self, id_="u-1", **kw):

@@ -30,6 +30,11 @@ Safety:
     mc-labelled or MC-owned pane, tab, workspace or agent, and its herdr
     mutation vocabulary is an allowlist (tab create|close, agent start|prompt).
     It never creates, moves or relabels an mc pane.
+  * MC OWNERSHIP BEAD IS UNTOUCHABLE. The current MC owner Bead, any Bead labelled
+    `mission-control`, and any Bead wired to an MC-owned pane/tab/workspace/agent are
+    never harvest-closed, re-dispatched, re-stamped, claimed or reaped: they are
+    filtered out of actions 1-3 and `mutate()` refuses every bd write aimed at them.
+    Only Mission Control / the Operator may change it.
   * Fail closed: unknown worker status, identity mismatch, shared tab, missing
     workspace/callback -> no lifecycle mutation, only a report (AttentionTicket
     where evidence is worth keeping).
@@ -106,6 +111,7 @@ class Ctx:
         self.panes = {}
         self.workspaces = {}
         self.mc_beads = []
+        self.bead_index = {}
         self.gate = {"verdict": "UNEVALUATED", "reasons": ["gate not evaluated"], "owner": None}
         self.protected = {"workspaces": set(), "tabs": set(), "panes": set(), "agents": set()}
         self.dispatched = 0
@@ -191,6 +197,21 @@ def guard_herdr(ctx, argv):
             raise GuardViolation("agent prompt targets protected agent/pane %s" % tgt)
 
 
+def guard_bd(ctx, argv):
+    """Refuse any bd write (update/close/...) aimed at the MC ownership Bead or a Bead wired to MC."""
+    if len(argv) > 1:
+        b = ctx.bead_index.get(argv[1]) or {"id": argv[1]}
+        why = mc_owned(ctx, b)
+        if why:
+            raise GuardViolation("bd %s %s refused: MC ownership Bead (%s)" % (argv[0], argv[1], why))
+
+
+def refuse_mc_bead(ctx, b):
+    why = mc_owned(ctx, b)
+    if why:
+        raise GuardViolation("Bead %s is an MC ownership Bead (%s): the reconciler never mutates it" % (b["id"], why))
+
+
 def guard_workspace(ctx, ws):
     if ws in ctx.protected["workspaces"]:
         raise GuardViolation("workspace %s is the Mission Control workspace (protected)" % ws)
@@ -221,6 +242,8 @@ def mutate(ctx, argv, tool="herdr", actor=None):
         raise GuardViolation("MC gate is %s; mutations are disabled" % ctx.gate["verdict"])
     if tool == "herdr":
         guard_herdr(ctx, argv)
+    elif tool == "bd":
+        guard_bd(ctx, argv)
     if not ctx.apply:
         print("      would run: %s%s" % ("BEADS_ACTOR=%s " % shell_quote(actor) if actor else "",
                                          " ".join(shell_quote(clip(x)) for x in [tool] + argv)))
@@ -337,6 +360,9 @@ def snapshot(ctx):
     for b in live:
         for t in tab_ids(b):
             ctx.busy_tabs.setdefault(t, set()).add(b["id"])
+    for group in (ctx.mc_beads, live, ctx.closed, ctx.attn, ctx.ready, ctx.in_progress):
+        for b in group:
+            ctx.bead_index[b["id"]] = b
 
 
 # --------------------------------------------------------------------------
@@ -434,6 +460,29 @@ def compute_protected(ctx, owner):
                      "panes": {p for p in panes if p}, "agents": agents}
 
 
+def mc_owned(ctx, b):
+    """Why Bead `b` is (or is wired to) Mission Control's ownership, else None. Identity, not just the label:
+    the current owner Bead(s), anything labelled mission-control (incl. non-in_progress ones), and any Bead whose
+    worker/pane/tab/workspace metadata points at an mc-labelled or MC-owned target. Fail closed: over-matching
+    only suppresses reconciler action, never causes it."""
+    m, pr = meta(b), ctx.protected
+    if b.get("id") in {x.get("id") for x in ctx.mc_beads}:
+        return "current MC owner"
+    if MC_LABEL in labels(b):
+        return "labelled %s" % MC_LABEL
+    workers = ([str(m["worker"])] if m.get("worker") else []) + [x for x in str(m.get("prev_workers", "")).split(",") if x]
+    for w in workers:
+        if w in pr["agents"] or MC_NAME_RE.match(w):
+            return "metadata.worker=%s is an MC agent" % w
+    for key, protected in (("pane", pr["panes"]), ("workspace", pr["workspaces"])):
+        if m.get(key) and str(m[key]) in protected:
+            return "metadata.%s=%s is MC-owned" % (key, m[key])
+    for t in tab_ids(b):
+        if t in pr["tabs"]:
+            return "metadata tab %s is MC-owned" % t
+    return None
+
+
 def gate_ticket(ctx):
     facts = {"verdict": ctx.gate["verdict"], "reasons": ctx.gate["reasons"]}
     attention(ctx, {"id": "mission-control", "title": "Mission Control ownership gate"},
@@ -488,6 +537,10 @@ def reconcile_in_progress(ctx):
     for b in ctx.in_progress:
         bead, m = b["id"], meta(b)
         if b.get("issue_type") == "epic":
+            continue
+        why = mc_owned(ctx, b)
+        if why:
+            emit(ctx, "LEAVE", bead, "MC ownership Bead (%s): never harvested, re-dispatched, re-stamped or closed" % why)
             continue
         worker = m.get("worker")
         if not worker:
@@ -647,6 +700,7 @@ def handle_status(ctx, b, worker, agent, settling):
 
 def harvest_close(ctx, b, worker):
     bead = b["id"]
+    refuse_mc_bead(ctx, b)
     if not recheck_gate(ctx):
         return
     art = os.path.join(ctx.state, "harvest", "%s-%s.txt" % (bead, worker))
@@ -665,6 +719,7 @@ def harvest_close(ctx, b, worker):
 
 def ghost(ctx, b, worker):
     bead, m = b["id"], meta(b)
+    refuse_mc_bead(ctx, b)
     n = int(m.get("redispatch", 0) or 0)
     if n >= ctx.max_redispatch:
         attention(ctx, b, "REDISPATCH_EXHAUSTED", {"worker": worker, "redispatch": n},
@@ -689,6 +744,10 @@ def reap(ctx):
                 emit(ctx, "SKIP", bead, "tab %s is mc/MC-owned or in the MC workspace: never touched" % tab)
                 attention(ctx, b, "MC_PROTECTED", {"tab": tab, "detail": "closed Bead metadata points at a protected tab"},
                           lambda: "Bead %s metadata.tab=%s is mc/MC-owned; reaper refused (Operator must fix the link)" % (bead, tab))
+                continue
+            owned = mc_owned(ctx, b)
+            if owned:
+                emit(ctx, "SKIP", bead, "MC ownership Bead (%s): its tab %s is never reaped" % (owned, tab))
                 continue
             why = reap_blocker(ctx, b, tab)
             if why:
@@ -804,6 +863,7 @@ def extract(v, key):
 
 def dispatch(ctx, b, redispatch=0, prev_worker=None, unlinked=False):
     bead, m = b["id"], meta(b)
+    refuse_mc_bead(ctx, b)  # before the first tab/agent mutation, which precedes any bd write
     if not recheck_gate(ctx):
         return
     kind = str(m.get("kind") or ctx.default_kind)
@@ -875,6 +935,10 @@ def dispatch_ready(ctx):
     for b in ctx.ready:
         bead, m = b["id"], meta(b)
         if b.get("issue_type") not in DISPATCH_TYPES:
+            continue
+        why = mc_owned(ctx, b)
+        if why:
+            emit(ctx, "SKIP", bead, "ready but MC ownership Bead (%s): never dispatched or claimed" % why)
             continue
         if ctx.dispatch_label and ctx.dispatch_label not in labels(b):
             continue
