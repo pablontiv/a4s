@@ -101,7 +101,7 @@ jobs:
           -t skills/mission-control-health
           -p "test_*.py"
           -v
-      - name: Test herdr heartbeat H2
+      - name: Test Herdr heartbeat H2 and reconciler
         run: >-
           python -m unittest discover
           -s skills/herdr/tests
