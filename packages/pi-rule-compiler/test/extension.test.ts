@@ -51,9 +51,10 @@ function createFakePi(initialEntries: StoredEntry[] = []) {
   return { pi: api as unknown as ExtensionAPI, handlers, commands, entries, registeredProviders };
 }
 
-function createContext(entries: StoredEntry[]) {
+function createContext(entries: StoredEntry[], options: { mode?: "tui" | "rpc" } = {}) {
   const notifications: Array<{ message: string; type: string | undefined }> = [];
   const context = {
+    mode: options.mode ?? "tui",
     ui: {
       notify(message: string, type?: string) {
         notifications.push({ message, type });
@@ -70,6 +71,23 @@ function createContext(entries: StoredEntry[]) {
     },
   };
   return { context, notifications };
+}
+
+function captureStderr(): { restore: () => string[] } {
+  const original = process.stderr.write;
+  const chunks: string[] = [];
+  const spy = (chunk: string | Uint8Array): boolean => {
+    chunks.push(typeof chunk === "string" ? chunk : chunk.toString());
+    return true;
+  };
+  // SAFETY: only ever assigned/restored within a single synchronous test body.
+  process.stderr.write = spy as unknown as typeof process.stderr.write;
+  return {
+    restore() {
+      process.stderr.write = original;
+      return chunks;
+    },
+  };
 }
 
 function createRetroCapableContext(entries: StoredEntry[], options: { failModel?: boolean } = {}) {
@@ -363,6 +381,61 @@ test("an aborted compaction cancels without native fallback", async () => {
   assert.deepEqual(result, { cancel: true });
   assert.match(notifications.at(-1)?.message ?? "", /aborted/);
   assert.match(notifications.at(-1)?.message ?? "", /native fallback is disabled/);
+});
+
+test("an aborted compaction under RPC mode also emits a best-effort stderr diagnostic", async () => {
+  const controller = new AbortController();
+  controller.abort();
+  const event = compactionEvent();
+  event.signal = controller.signal;
+  const fake = createFakePi();
+  registerPiRuleCompiler(fake.pi, { jevClient: new ValidFakeJev() });
+  const { context, notifications } = createContext(fake.entries, { mode: "rpc" });
+  const stderr = captureStderr();
+  let result: unknown;
+  let stderrChunks: string[];
+  try {
+    result = await fake.handlers.get("session_before_compact")?.(event, context);
+  } finally {
+    stderrChunks = stderr.restore();
+  }
+  assert.deepEqual(result, { cancel: true });
+  assert.match(notifications.at(-1)?.message ?? "", /aborted/);
+  assert.equal(stderrChunks.length, 1);
+  assert.match(stderrChunks[0] ?? "", /\[a4s-pi-rule-compiler:rpc-stdin-guard]/);
+  assert.match(stderrChunks[0] ?? "", /compaction aborted under RPC mode/);
+});
+
+test("an aborted compaction outside RPC mode never writes the stderr diagnostic", async () => {
+  const controller = new AbortController();
+  controller.abort();
+  const event = compactionEvent();
+  event.signal = controller.signal;
+  const fake = createFakePi();
+  registerPiRuleCompiler(fake.pi, { jevClient: new ValidFakeJev() });
+  const { context } = createContext(fake.entries, { mode: "tui" });
+  const stderr = captureStderr();
+  let stderrChunks: string[];
+  try {
+    await fake.handlers.get("session_before_compact")?.(event, context);
+  } finally {
+    stderrChunks = stderr.restore();
+  }
+  assert.deepEqual(stderrChunks, []);
+});
+
+test("a non-aborted cancel under RPC mode never writes the stderr diagnostic", async () => {
+  const fake = createFakePi();
+  registerPiRuleCompiler(fake.pi, { env: {}, hookTimeoutMs: 30 });
+  const { context } = createContext(fake.entries, { mode: "rpc" });
+  const stderr = captureStderr();
+  let stderrChunks: string[];
+  try {
+    await fake.handlers.get("session_before_compact")?.(compactionEvent(), context);
+  } finally {
+    stderrChunks = stderr.restore();
+  }
+  assert.deepEqual(stderrChunks, []);
 });
 
 test("failed compaction clears pending work and never publishes signals", async () => {

@@ -16,7 +16,8 @@
   },
   "scripts": {
     "test": "tsx --test test/*.test.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "rpc:compact-driver": "tsx scripts/run-rpc-compact.ts"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "0.84.4"

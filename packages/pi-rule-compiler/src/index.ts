@@ -51,6 +51,14 @@ export {
 } from "./questions.ts";
 export { redactPrivateData, redactStrings, type RedactionResult } from "./redaction.ts";
 export {
+  createJsonlLineReader,
+  RpcResponseTimeoutError,
+  sendCommandAndAwaitResponse,
+  type JsonlTransport,
+  type RpcCommand,
+  type RpcResponse,
+} from "./rpc-stdin-guard.ts";
+export {
   createRetroProposal,
   ENFORCEABILITY_LEVELS,
   EVIDENCE_RELATION_CRITERIA,

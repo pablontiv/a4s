@@ -573,7 +573,40 @@ function classifyRetroError(error: unknown): DiagnosticCode {
   return "internal_failure";
 }
 
+const ABORTED_TRANSPORT_DIAGNOSTIC_PREFIX = "[a4s-pi-rule-compiler:rpc-stdin-guard]";
+
+/**
+ * Best-effort side channel for the "aborted" diagnostic code specifically.
+ * Under RPC mode, an RPC caller that closes stdin before a slow command's
+ * response arrives makes pi's vendored RPC transport tear the session down
+ * immediately (rpc-mode.js's stdin "end" handler unsubscribes the event
+ * forwarder and disposes the runtime without waiting for in-flight work).
+ * That race is what typically produces this "aborted" classification, and
+ * it can also detach the forwarder ctx.ui.notify() depends on, so the
+ * ordinary notify below may never reach the RPC client. Writing to stderr
+ * is outside the RPC JSONL stdout protocol, so it cannot corrupt framing,
+ * and every step here is wrapped so it can never change compaction/command
+ * failure semantics. See README.md's "RPC callers must hold stdin open
+ * through compact" section.
+ */
+function emitAbortedTransportDiagnostic(
+  ctx: ExtensionContext,
+  phase: "compaction" | "signals" | "retro",
+): void {
+  if (ctx.mode !== "rpc") return;
+  try {
+    process.stderr.write(
+      `${ABORTED_TRANSPORT_DIAGNOSTIC_PREFIX} ${phase} aborted under RPC mode. If a driver closed ` +
+        "stdin before this command's response arrived, that is the likely cause (see README.md's " +
+        '"RPC callers must hold stdin open through compact" section).\n',
+    );
+  } catch {
+    // Diagnostics must not change compaction or command failure semantics.
+  }
+}
+
 function safeNotify(ctx: ExtensionContext, phase: "compaction" | "signals" | "retro", code: DiagnosticCode): void {
+  if (code === "aborted") emitAbortedTransportDiagnostic(ctx, phase);
   const descriptions: Record<DiagnosticCode, string> = {
     missing_key: "Jev is unavailable (missing TYPESAFE_API_KEY)",
     timeout: "the bounded analysis timed out",
