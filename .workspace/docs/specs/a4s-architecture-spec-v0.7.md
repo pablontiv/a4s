@@ -1,14 +1,15 @@
 # A4S — Agent Workload Control Plane
-## Especificación Arquitectónica v0.7
+## Especificación Arquitectónica v0.7 (SUSTITUIDO)
 
-**Estado:** Borrador de diseño  
+**Estado:** Sustituido — baseline histórico, ya no es el diseño vigente  
+**Sustituido por:** `a4s-architecture-spec-v0.9.md` (diseño vigente)  
 **Fecha:** 2026-08-31  
 **Nombre del sistema:** **A4S** (`agents`)  
 **CLI:** `a4sctl`  
 **Daemon/control plane local:** `a4sd`  
 **Alcance:** Arquitectura local-first para coordinar trabajo de desarrollo operado por agentes CLI mediante sesiones terminales e integración estructurada.
 
-**Documento actual:** v0.7.
+**Documento actual:** v0.9. Este documento (v0.7) se conserva como baseline histórico.
 
 ---
 
