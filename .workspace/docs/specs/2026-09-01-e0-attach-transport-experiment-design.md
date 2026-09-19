@@ -4,7 +4,7 @@
 
 **Estado:** Aprobado para planificación
 
-**Baseline:** `docs/specs/a4s-architecture-spec-v0.7.md`, §§44–46
+**Baseline:** `.workspace/docs/specs/a4s-architecture-spec-v0.7.md`, §§44–46
 
 ## 1. Propósito
 
@@ -543,7 +543,7 @@ El reporte distingue:
 Después de ejecutar E0 se crea:
 
 ```text
-docs/experiments/e0-report.md
+.workspace/docs/experiments/e0-report.md
 ```
 
 El reporte contiene:
@@ -570,7 +570,7 @@ Los artifacts completos no necesitan versionarse; sus hashes y el resumen sí.
 7. Ejecutar S1–S5 dentro de una sesión Pi real, 20 veces cada uno.
 8. Generar artifacts y veredicto automático.
 9. Ejecutar un smoke manual observable en Pi directo; la aceptación posterior en Herdr queda fuera de E0.
-10. Redactar `docs/experiments/e0-report.md`.
+10. Redactar `.workspace/docs/experiments/e0-report.md`.
 11. Revisar la evidencia antes de diseñar E1.
 
 ## 20. Retención del código

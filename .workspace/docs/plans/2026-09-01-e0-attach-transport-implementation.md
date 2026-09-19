@@ -8,7 +8,7 @@
 
 **Tech Stack:** Node.js >=22.19.0, TypeScript 7.0.2, `tsx` 4.23.13, `@types/node` 26.4.1, Pi 0.84.4, `node:test`, `node:net`.
 
-**Spec:** `docs/superpowers/specs/2026-09-01-e0-attach-transport-experiment-design.md`
+**Spec:** `.workspace/docs/specs/2026-09-01-e0-attach-transport-experiment-design.md`
 
 ## Global Constraints
 
@@ -56,7 +56,7 @@
 | `test/support/client-harness.ts` | Real-server client fixture and condition-based event waiters |
 | `test/evidence.test.ts` | Artifact and verdict calculations |
 | `test/driver.test.ts` | Deterministic scenario orchestration with a fake Pi launcher |
-| `docs/experiments/e0-report.md` | Empirical result generated only after the final run |
+| `.workspace/docs/experiments/e0-report.md` | Empirical result generated only after the final run |
 
 ---
 
@@ -1593,7 +1593,7 @@ If no code changed, do not create an empty commit. If code changed, use the focu
 **Files:**
 
 - Create: `src/e0/report.ts`
-- Create: `docs/experiments/e0-report.md`
+- Create: `.workspace/docs/experiments/e0-report.md`
 - Test: add report rendering cases to `test/evidence.test.ts`
 - Generate locally: `artifacts/e0/$RUN_ID/environment.json`
 - Generate locally: `artifacts/e0/$RUN_ID/events.jsonl`
@@ -1744,8 +1744,8 @@ Expected: `jq` exits 0.
 
 ```bash
 RUN_DIR=$(awk -F= '/^run_dir=/{print $2}' /tmp/a4s-e0-authoritative.out | tail -1)
-npm run e0:report -- "$RUN_DIR" docs/experiments/e0-report.md
-rg -n 'PASS-macOS|Windows: NOT RUN|S1|S2|S3|S4|S5|SHA-256' docs/experiments/e0-report.md
+npm run e0:report -- "$RUN_DIR" .workspace/docs/experiments/e0-report.md
+rg -n 'PASS-macOS|Windows: NOT RUN|S1|S2|S3|S4|S5|SHA-256' .workspace/docs/experiments/e0-report.md
 ```
 
 Expected: every required result and hash appears. Do not change a generated verdict manually.
@@ -1759,12 +1759,12 @@ git diff --check
 git status --short
 ```
 
-Expected: typecheck exits 0, every test passes, diff check is clean, and only `docs/experiments/e0-report.md` is uncommitted. Raw `artifacts/e0/` remain ignored.
+Expected: typecheck exits 0, every test passes, diff check is clean, and only `.workspace/docs/experiments/e0-report.md` is uncommitted. Raw `artifacts/e0/` remain ignored.
 
 - [ ] **Step 10: Commit the empirical result**
 
 ```bash
-git add docs/experiments/e0-report.md
+git add .workspace/docs/experiments/e0-report.md
 git commit -m "test: record E0 transport evidence"
 ```
 
@@ -1791,7 +1791,7 @@ E0 implementation is complete only when all of the following are true:
 - zero logical duplicate processings occur;
 - every pending Delivery becomes acknowledged;
 - no unhandled errors are present;
-- `docs/experiments/e0-report.md` records hashes and `PASS-macOS`;
+- `.workspace/docs/experiments/e0-report.md` records hashes and `PASS-macOS`;
 - Windows is stated as `NOT RUN`, not implied to pass;
 - the working tree is clean.
 
