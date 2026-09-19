@@ -127,9 +127,9 @@ A launchd wake that exits 0 proves only that Herdr accepted the prompt (H1): in 
 | --- | --- |
 | `PASS_HARVEST` | a `WORK_RESULT`/`ATTENTION` callback reached the PO session record and an assistant turn followed |
 | `PASS_PROGRESS` | a non-epic Bead was claimed or closed since the previous tick |
-| `PASS_STALE` | concrete `STALE_WORK` / `ATTENTION type=QUESTION` with `pane_id` + `bead_id` was emitted |
+| `PASS_STALE` | concrete `STALE_WORK` / `ATTENTION type=QUESTION` with `pane_id` + `bead_id` was emitted — the helper's own observation (stall made visible), not proof the PO responded; a stale Bead repeats it every tick |
 | `NOOP`, `WORKING`, `BASELINE` | nothing to do, live workers in flight, or first tick — reported, never counted as PASS |
-| `FAIL` | none of the above, an undelivered wake, or unobservable state — logged, exit 2, visible notification |
+| `FAIL` | none of the above, an undelivered wake, or unobservable state (Beads/Herdr unreadable, or a malformed `state.json` — inspect or delete it) — exit 2, visible notification |
 
 ```bash
 python skills/herdr/helper/heartbeat_h2.py --po-pane <po-pane> --repo <repo-root>          # read-only, prints one verdict

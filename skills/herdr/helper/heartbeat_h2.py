@@ -51,6 +51,10 @@ class ObserveError(RuntimeError):
     pass
 
 
+class StateError(RuntimeError):
+    pass
+
+
 def parse_ts(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
@@ -150,7 +154,7 @@ def observe(po_pane: str, repo: str | None, since: str | None, run: Runner | Non
             {"id": b["id"], "updated_at": b["updated_at"], "issue_type": b.get("issue_type")}
             for b in in_progress
         ],
-        "closed": [b["id"] for b in closed],
+        "closed": [{"id": b["id"], "issue_type": b.get("issue_type")} for b in closed],
         "panes": panes,
     }
 
@@ -179,7 +183,7 @@ def evaluate(prev: dict | None, obs: dict, stale_seconds: int = 1800) -> dict:
     ready = [b for b in obs["ready"] if b["issue_type"] != "epic"]
     prev_ip = (prev or {}).get("in_progress", {})
     claims = sorted(b["id"] for b in work if prev and b["id"] not in prev_ip)
-    closes = sorted(obs["closed"])
+    closes = sorted(b["id"] for b in obs["closed"] if b["issue_type"] != "epic")
     responded = bool(prev) and po["state_change_seq"] != prev["po"]["state_change_seq"]
     callbacks = obs.get("callbacks", {"seen": None, "answered": None})
     events: list[dict] = []
@@ -262,11 +266,43 @@ def write_state(state_dir: Path, state: dict, tick: dict) -> None:
         handle.write(json.dumps(tick, sort_keys=True) + "\n")
 
 
-def load_state(state_dir: Path) -> dict | None:
+def check_state(state: Any) -> dict:
+    """Return state if it has the shape `evaluate` reads, else raise StateError."""
+    notified = state.get("notified", {}) if isinstance(state, dict) else None
+    offset = state.get("session_offset") if isinstance(state, dict) else None
+    ok = (
+        isinstance(state, dict)
+        and isinstance(state.get("po"), dict)
+        and "state_change_seq" in state["po"]
+        and isinstance(state.get("in_progress"), dict)
+        and isinstance(notified, dict)
+        and (offset is None or (isinstance(offset, int) and not isinstance(offset, bool)))
+    )
     try:
-        return json.loads((state_dir / "state.json").read_text())
-    except (OSError, json.JSONDecodeError):
+        if ok:
+            parse_ts(state["at"])
+            for stamp in notified.values():
+                parse_ts(stamp)
+    except (TypeError, ValueError, AttributeError, KeyError):
+        ok = False
+    if not ok:
+        raise StateError("unexpected shape")
+    return state
+
+
+def load_state(state_dir: Path) -> dict | None:
+    """A missing state file is the first tick; an unreadable or malformed one is an error."""
+    path = state_dir / "state.json"
+    try:
+        raw = path.read_text()
+    except FileNotFoundError:
         return None
+    except (OSError, UnicodeDecodeError) as exc:
+        raise StateError(f"{path}: {exc}") from exc
+    try:
+        return check_state(json.loads(raw))
+    except (json.JSONDecodeError, StateError) as exc:
+        raise StateError(f"{path}: {exc}") from exc
 
 
 def notification_keys(result: dict) -> list[str]:
@@ -285,15 +321,21 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     record = args.record or args.live
 
-    prev = load_state(args.state_dir) if record else None
+    def fail(reason: str) -> int:
+        result = {"verdict": "FAIL", "reason": reason, "facts": {}, "events": []}
+        print(json.dumps(result, sort_keys=True))
+        if args.live:
+            subprocess.run(["herdr", "notification", "show", "A4S heartbeat H2 FAIL", "--body", reason], check=False)
+        return 2
+
+    try:
+        prev = load_state(args.state_dir) if record else None
+    except StateError as exc:
+        return fail(f"state_error: {exc}")
     try:
         obs = observe(args.po_pane, args.repo, prev["at"] if prev else None)
     except (ObserveError, KeyError, TypeError) as exc:
-        result = {"verdict": "FAIL", "reason": f"observe_error: {exc}", "facts": {}, "events": []}
-        print(json.dumps(result, sort_keys=True))
-        if args.live:
-            subprocess.run(["herdr", "notification", "show", "A4S heartbeat H2 FAIL", "--body", result["reason"]], check=False)
-        return 2
+        return fail(f"observe_error: {exc}")
 
     offset, obs["callbacks"] = scan_callbacks(obs["po"]["session_path"], prev.get("session_offset") if prev else None)
     result = evaluate(prev, obs, args.stale_minutes * 60)

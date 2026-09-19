@@ -32,7 +32,7 @@ def obs(*, ready=(), in_progress=(), closed=(), panes=(), po_status="idle", seq=
         "po": {"pane_id": PO, "agent_status": po_status, "state_change_seq": seq, "session_path": None},
         "ready": [{"id": i, "issue_type": "task"} for i in ready],
         "in_progress": [{"id": i, "updated_at": u, "issue_type": t} for i, u, t in in_progress],
-        "closed": list(closed),
+        "closed": [{"id": i, "issue_type": "task"} if isinstance(i, str) else {"id": i[0], "issue_type": i[1]} for i in closed],
         "panes": list(panes),
         "callbacks": callbacks or {"seen": 0, "answered": 0},
     }
@@ -78,6 +78,15 @@ class EvaluateTests(unittest.TestCase):
 
     def test_closed_bead_is_progress(self):
         result = h2.evaluate(prev_state(in_progress={"a4s-3": OLD}), obs(closed=["a4s-3"]))
+        self.assertEqual((result["verdict"], result["facts"]["closes"]), ("PASS_PROGRESS", ["a4s-3"]))
+
+    def test_closed_epic_is_not_progress(self):
+        result = h2.evaluate(prev_state(in_progress={"epic-1": OLD}), obs(closed=[("epic-1", "epic")]))
+        self.assertNotEqual(result["verdict"], "PASS_PROGRESS")
+        self.assertEqual(result["facts"]["closes"], [])
+
+    def test_closed_epic_alongside_task_counts_only_the_task(self):
+        result = h2.evaluate(prev_state(), obs(closed=[("epic-1", "epic"), ("a4s-3", "task")]))
         self.assertEqual((result["verdict"], result["facts"]["closes"]), ("PASS_PROGRESS", ["a4s-3"]))
 
     def test_answered_callback_is_harvest_and_wins_over_progress(self):
@@ -181,7 +190,7 @@ class ObserveTests(unittest.TestCase):
             calls.append(argv)
             key = tuple(argv[:3])
             if argv[:5] == ["bd", "list", "--status", "closed", "--closed-after"]:
-                return [{"id": "a4s-0"}]
+                return [{"id": "a4s-0", "issue_type": "task"}, {"id": "a4s-e", "issue_type": "epic"}]
             return answers[key]
         return run
 
@@ -196,7 +205,7 @@ class ObserveTests(unittest.TestCase):
 
     def test_observe_queries_closed_since_previous_tick(self):
         result = h2.observe(PO, None, NOW, run=self.runner([]))
-        self.assertEqual(result["closed"], ["a4s-0"])
+        self.assertEqual(result["closed"], [{"id": "a4s-0", "issue_type": "task"}, {"id": "a4s-e", "issue_type": "epic"}])
 
 
 class MainTests(unittest.TestCase):
@@ -250,6 +259,53 @@ class MainTests(unittest.TestCase):
             code = h2.main(["--po-pane", PO])
         self.assertEqual(code, 2)
         self.assertEqual(json.loads(out.getvalue())["reason"], "observe_error: bd: exit 1")
+
+
+class StateFileTests(unittest.TestCase):
+    def run_with_state(self, content):
+        out = io.StringIO()
+        with tempfile.TemporaryDirectory() as d:
+            if content is not None:
+                (Path(d) / "state.json").write_text(content)
+            with mock.patch.object(h2, "observe") as observe, mock.patch.object(h2.subprocess, "run") as run, contextlib.redirect_stdout(out):
+                code = h2.main(["--po-pane", PO, "--state-dir", d, "--record"])
+            self.assertFalse(observe.called)
+            self.assertFalse(run.called)
+            self.assertFalse((Path(d) / "ticks.jsonl").exists())
+            return code, json.loads(out.getvalue())
+
+    def test_malformed_state_is_clean_fail_not_traceback(self):
+        cases = {
+            "legacy_at_only": json.dumps({"at": NOW}),
+            "not_json": "{oops",
+            "not_object": "[]",
+            "bad_timestamp": json.dumps({"at": "yesterday", "po": {"state_change_seq": 1}, "in_progress": {}}),
+            "in_progress_list": json.dumps({"at": NOW, "po": {"state_change_seq": 1}, "in_progress": []}),
+            "notified_bad_stamp": json.dumps({"at": NOW, "po": {"state_change_seq": 1}, "in_progress": {}, "notified": {"k": 5}}),
+            "offset_string": json.dumps({"at": NOW, "po": {"state_change_seq": 1}, "in_progress": {}, "session_offset": "7"}),
+        }
+        for name, content in cases.items():
+            with self.subTest(name):
+                code, report = self.run_with_state(content)
+                self.assertEqual((code, report["verdict"]), (2, "FAIL"))
+                self.assertTrue(report["reason"].startswith("state_error:"), report["reason"])
+
+    def test_missing_state_is_first_tick_not_error(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertIsNone(h2.load_state(Path(d)))
+
+    def test_state_written_by_next_state_round_trips(self):
+        with tempfile.TemporaryDirectory() as d:
+            h2.write_state(Path(d), h2.next_state(obs(in_progress=[("a4s-3", OLD, "task")]), True, {"FAIL": NOW}, 12), {"at": NOW})
+            self.assertEqual(h2.load_state(Path(d))["session_offset"], 12)
+
+    def test_malformed_state_notifies_on_live(self):
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "state.json").write_text(json.dumps({"at": NOW}))
+            with mock.patch.object(h2.subprocess, "run") as run, contextlib.redirect_stdout(io.StringIO()):
+                code = h2.main(["--po-pane", PO, "--state-dir", d, "--live"])
+            self.assertEqual(code, 2)
+            self.assertEqual(run.call_args[0][0][:3], ["herdr", "notification", "show"])
 
 
 class ContractTests(unittest.TestCase):
