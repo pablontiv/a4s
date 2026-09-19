@@ -73,10 +73,10 @@ If the base or remote resolves to upstream, stop and raise `ATTENTION REQUIRED`;
 6. **New unit of work (space is new or already exists) → give it its own tab:**
 
    ```bash
-   herdr tab create --workspace <space-id> --cwd <repo-root-or-worktree-path> --label <session-name> --no-focus
+   herdr tab create --workspace <space-id> --cwd <repo-root-or-worktree-path> --label <bead-id> --no-focus
    ```
 
-   Read `.result.tab` and `.result.root_pane`. One agent per tab and one claimed Bead per tab; do not pile multiple jobs into one tab. For fan-out, repeat steps 3, 5, and 6 once per independent Bead from step 2 and dispatch all peer tabs without serial waits.
+   Read `.result.tab` and `.result.root_pane`. Label the tab with its `bead-id`: the H2 reconciler binds a Bead to its Worker pane only by that label (or a cwd containing it). One agent per tab and one claimed Bead per tab; do not pile multiple jobs into one tab. For fan-out, repeat steps 3, 5, and 6 once per independent Bead from step 2 and dispatch all peer tabs without serial waits.
 7. **Start the agent in that tab's root pane** (the root pane is an available shell at its prompt). Every start includes the native trust/YOLO flag so the Worker is not blocked on an interactive permission prompt, and routes by task altitude instead of defaulting to a premium model:
 
    ```bash
@@ -118,6 +118,25 @@ Target either the Project Orchestrator's explicit pane id or unique agent name. 
 A blocked or attention path is evidence-only: write the blocker report and push `ATTENTION REQUIRED verdict=blocked artifact_path=<path> bead_id=<bead-id>` without closing the Bead, WorkResult, Mission, or any other lifecycle. If prompt delivery is rejected because the target is blocked or unavailable, preserve that failure in the report and do not resend blindly. Bead closure records completion of the delegated work unit only; it never auto-closes the authoritative A4S lifecycle.
 
 The Project Orchestrator remains thin: dispatch units, track state by Bead, verdict, and artifact pointer, integrate only bounded evidence, and compact its own context aggressively. Never accumulate child transcripts or duplicate their working context. Reconciliation across a fanned-out DAG stays on the same two signals — each Worker's WORK_RESULT/ATTENTION callback for completion, and Herdr's per-agent liveness (`herdr agent get`/`agent list`, and the separate heartbeat effort tracked under the Herdr heartbeat/reconciliation epic) only to flag a tab that has gone silent. Heartbeat proves recent liveness, not semantic progress; it never triggers a retry, a poll loop, or a substitute completion signal, and it never grows into a scheduler or control plane of its own.
+
+### Heartbeat H2 — a wake only counts with evidence
+
+A launchd wake that exits 0 proves only that Herdr accepted the prompt (H1): in the recorded w4J session 73 of 73 wakes got an assistant turn, yet 57 issued no `bd` write or `herdr` dispatch command. `helper/heartbeat_h2.py` runs once per tick (launchd stays the transport), diffs Beads/Herdr against the previous tick, and classifies it from observable state instead of the model's willingness to speak:
+
+| Verdict | Evidence |
+| --- | --- |
+| `PASS_HARVEST` | a `WORK_RESULT`/`ATTENTION` callback reached the PO session record and an assistant turn followed |
+| `PASS_PROGRESS` | a non-epic Bead was claimed or closed since the previous tick |
+| `PASS_STALE` | concrete `STALE_WORK` / `ATTENTION type=QUESTION` with `pane_id` + `bead_id` was emitted |
+| `NOOP`, `WORKING`, `BASELINE` | nothing to do, live workers in flight, or first tick — reported, never counted as PASS |
+| `FAIL` | none of the above, an undelivered wake, or unobservable state — logged, exit 2, visible notification |
+
+```bash
+python skills/herdr/helper/heartbeat_h2.py --po-pane <po-pane> --repo <repo-root>          # read-only, prints one verdict
+python skills/herdr/helper/heartbeat_h2.py --po-pane <po-pane> --repo <repo-root> --live   # + one wake prompt, one notification, state + ticks.jsonl
+```
+
+`--live` prompts the PO once per tick with the H1 text plus `H2 verdict=… ; STALE_WORK pane_id=… bead_id=…` pointers and notifies through `herdr notification show`, so a stalled PO cannot hide its own stall. The measurement crosses ticks (tick N+1 judges the wake sent at tick N): there is no wait, timeout, retry, or poll loop, and it never claims, closes, or mutates a Bead. `helper/com.pablontiv.a4s.orchestrator-heartbeat-h2.plist.example` is the reversible LaunchAgent template; retire it when the A4S tick lands. Run the tests with `python -m unittest discover -s skills/herdr/tests -t skills/herdr -p "test_*.py"`.
 
 Create panes only when the user explicitly asks for a split view inside one session. Pass `--no-focus` for background setup so you do not steal the user's focus.
 

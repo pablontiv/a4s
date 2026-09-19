@@ -101,6 +101,13 @@ jobs:
           -t skills/mission-control-health
           -p "test_*.py"
           -v
+      - name: Test herdr heartbeat H2
+        run: >-
+          python -m unittest discover
+          -s skills/herdr/tests
+          -t skills/herdr
+          -p "test_*.py"
+          -v
       - name: Test sweep assets
         if: runner.os != 'Windows'
         run: sh skills/sweep/assets/test-assets.sh

@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- H2 reconciler as the launchd transport. Replaces (does not stack with)
+     com.pablontiv.a4s.orchestrator-heartbeat.w4Jp3: unload H1 first.
+     Adjust the pane id and repo path; no secrets, no waits, no timeouts.
+     Install:  launchctl bootstrap gui/$(id -u) <this file without .example>
+     Retire:   launchctl bootout gui/$(id -u)/com.pablontiv.a4s.orchestrator-heartbeat-h2 -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.pablontiv.a4s.orchestrator-heartbeat-h2</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/bin/python3</string>
+    <string>[REDACTED:shared-root]/harness/a4s/skills/herdr/helper/heartbeat_h2.py</string>
+    <string>--po-pane</string>
+    <string>w4J:p3</string>
+    <string>--repo</string>
+    <string>[REDACTED:shared-root]/harness/a4s</string>
+    <string>--live</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/bin:/bin</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StartInterval</key>
+  <integer>300</integer>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>StandardOutPath</key>
+  <string>[REDACTED:home]/Library/Logs/a4s/a4s-heartbeat-h2.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>[REDACTED:home]/Library/Logs/a4s/a4s-heartbeat-h2.err.log</string>
+</dict>
+</plist>
