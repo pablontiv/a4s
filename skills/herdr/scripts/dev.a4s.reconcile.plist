@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  TEMPLATE ONLY — not installed by this repo. See README.md in this directory.
+  Replace every __PLACEHOLDER__ before copying to ~/Library/LaunchAgents/.
+    __REPO__      absolute path of the main checkout that owns .beads (e.g. [REDACTED:shared-root]/harness/a4s)
+    __HOME__      the user's home directory
+    __CALLBACK__  Project Orchestrator pane id or unique agent name for worker callbacks
+  --apply makes the tick mutating. Drop it (or use --dry-run) for a read-only agent.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>dev.a4s.reconcile</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/python3</string>
+    <string>__REPO__/skills/herdr/scripts/a4s-reconcile</string>
+    <string>--apply</string>
+    <string>--repo</string>
+    <string>__REPO__</string>
+    <string>--callback</string>
+    <string>__CALLBACK__</string>
+  </array>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>HOME</key>
+    <string>__HOME__</string>
+  </dict>
+
+  <!-- One tick every 45s; launchd never overlaps a still-running instance and the script also holds a lock. -->
+  <key>StartInterval</key>
+  <integer>45</integer>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+
+  <key>StandardOutPath</key>
+  <string>__HOME__/.local/state/a4s/reconcile/launchd.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>__HOME__/.local/state/a4s/reconcile/launchd.err.log</string>
+</dict>
+</plist>

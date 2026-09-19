@@ -1,0 +1,1044 @@
+#!/usr/bin/env python3
+"""a4s-reconcile — deterministic Bead/Herdr reconciler (no LLM, no messages).
+
+Reads durable state from Beads (`bd`) and liveness from Herdr (`herdr`) and
+converges them once per tick. Intended executor: launchd/cron, never an agent.
+
+Actions per tick (see skills/herdr/SKILL.md):
+  0. MC safety gate      -> discover the canonical Mission Control by owner
+                            lease + session identity (never by label alone);
+                            absent/duplicated/stale/ambiguous => ATTENTION and
+                            NO mutation this tick (actions 1-3 are skipped).
+  1. bd ready            -> dispatch the Bead's content to a new peer tab
+  2. bd in_progress      -> `herdr agent get <metadata.worker>`
+                            working=leave, done=harvest+close,
+                            NOT_FOUND=re-dispatch, blocked=AttentionTicket
+                            no metadata.worker: live lease / live agent =>
+                            leave; stale lease + no live agent + opt-in label
+                            + assignee==actor => re-dispatch in a new tab;
+                            otherwise AttentionTicket
+  3. bd closed + live tab -> `herdr tab close` (reaper)
+  4. blocked / needs-decision / ambiguous -> AttentionTicket (evidence file only)
+  5. idempotent: a second tick over unchanged state plans and does nothing.
+
+Safety:
+  * DRY-RUN IS THE DEFAULT. Nothing mutates unless --apply is given; in dry-run
+    every bd call also runs with --readonly.
+  * Herdr server not running -> no-op (exit 0).
+  * MC GATE (fail closed) re-checked before every dispatch/close/reap. The
+    reconciler NEVER issues a pane/tab/workspace/agent mutation that targets an
+    mc-labelled or MC-owned pane, tab, workspace or agent, and its herdr
+    mutation vocabulary is an allowlist (tab create|close, agent start|prompt).
+    It never creates, moves or relabels an mc pane.
+  * MC OWNERSHIP BEAD IS UNTOUCHABLE. The current MC owner Bead, any Bead labelled
+    `mission-control`, and any Bead wired to an MC-owned pane/tab/workspace/agent are
+    never harvest-closed, re-dispatched, re-stamped, claimed or reaped: they are
+    filtered out of actions 1-3 and `mutate()` refuses every bd write aimed at them.
+    Only Mission Control / the Operator may change it.
+  * Fail closed: unknown worker status, identity mismatch, shared tab, missing
+    workspace/callback -> no lifecycle mutation, only a report (AttentionTicket
+    where evidence is worth keeping).
+  * Only touches tabs recorded in a Bead's own metadata. Only claude|pi kinds.
+  * Dispatch is opt-in per Bead (label --dispatch-label, default auto-dispatch).
+  * bd writes on a claimed Bead run with BEADS_ACTOR=<assignee> (the assignee
+    guard refuses any other actor); the true actor is kept in audit.jsonl.
+
+Only external commands: `bd`, `herdr` (and `git` to locate the repo root).
+"""
+import argparse
+import fcntl
+import hashlib
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+
+STATE_DIR_DEFAULT = os.path.join(
+    os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"),
+    "a4s",
+    "reconcile",
+)
+DISPATCH_TYPES = {"task", "bug", "feature", "chore", "spike"}
+ALLOWED_KINDS = {"claude", "pi"}
+ACTOR = "a4s-reconcile"
+MC_LABEL = "mission-control"  # lookup index for the MC ownership Bead; NOT authority by itself
+MC_NAME_RE = re.compile(r"^(mc|mission[-_ ]?control)([-_ .:].*)?$", re.I)
+# The only herdr mutations the reconciler may ever issue. Everything else
+# (pane split/move/close, workspace *, tab rename/move, ...) is refused.
+ALLOWED_HERDR_MUTATIONS = {("tab", "create"), ("tab", "close"), ("agent", "start"), ("agent", "prompt")}
+VERDICT_ORDER = ["ABSENT", "DUPLICATED", "AMBIGUOUS", "STALE"]
+
+
+class Abort(Exception):
+    """Snapshot could not be trusted; abort the tick without mutating."""
+
+
+class StepError(Exception):
+    """One Bead's action failed; other Beads continue."""
+
+
+class GuardViolation(StepError):
+    """A mutation was refused by the MC gate / protected-target guard."""
+
+
+class Ctx:
+    def __init__(self, args):
+        self.apply = args.apply
+        self.repo = args.repo
+        self.state = args.state_dir
+        self.callback = args.callback
+        self.dispatch_label = args.dispatch_label
+        self.settle = args.settle
+        self.reap_grace = args.reap_grace
+        self.max_redispatch = args.max_redispatch
+        self.max_dispatch = args.max_dispatch
+        self.default_kind = args.default_kind
+        self.default_model = args.default_model
+        self.stale_after = args.stale_after
+        self.mc_grace = args.mc_grace
+        self.plan_ungated = args.plan_ignoring_mc_gate
+        self.bd_bin = os.environ.get("A4S_BD", "bd")
+        self.herdr_bin = os.environ.get("A4S_HERDR", "herdr")
+        self.self_tab = os.environ.get("HERDR_TAB_ID", "")
+        self.actions = []
+        self.errors = 0
+        self.agents = {}
+        self.tabs = {}
+        self.busy_tabs = {}
+        self.new_names = set()
+        self.panes = {}
+        self.workspaces = {}
+        self.mc_beads = []
+        self.bead_index = {}
+        self.gate = {"verdict": "UNEVALUATED", "reasons": ["gate not evaluated"], "owner": None}
+        self.protected = {"workspaces": set(), "tabs": set(), "panes": set(), "agents": set()}
+        self.dispatched = 0
+        self._actor = None
+
+
+def run(argv, cwd=None, timeout=120, env=None):
+    try:
+        p = subprocess.run(argv, cwd=cwd, capture_output=True, text=True, timeout=timeout, env=env)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return 127, "", str(e)
+    return p.returncode, p.stdout, p.stderr
+
+
+def parse_json(text):
+    try:
+        return json.loads(text)
+    except ValueError:
+        return None
+
+
+def bd(ctx, *a, timeout=120):
+    argv = [ctx.bd_bin]
+    if not ctx.apply:
+        argv.append("--readonly")
+    return run(argv + list(a), cwd=ctx.repo, timeout=timeout)
+
+
+def bd_json(ctx, *a):
+    rc, out, err = bd(ctx, *a, "--json")
+    data = parse_json(out) if rc == 0 else None
+    if data is None:
+        raise Abort("bd %s failed rc=%s: %s" % (" ".join(a), rc, err.strip()[:200]))
+    return data
+
+
+def herdr(ctx, *a, timeout=120):
+    return run([ctx.herdr_bin] + list(a), timeout=timeout)
+
+
+def herdr_result(ctx, *a):
+    rc, out, err = herdr(ctx, *a)
+    data = parse_json(out) or parse_json(err) or {}
+    return rc, data
+
+
+def emit(ctx, kind, bead, msg, mutating=False):
+    tag = "APPLY" if (ctx.apply and mutating) else ("PLAN " if mutating else "INFO ")
+    line = "%s %-10s %-12s %s" % (tag, kind, bead or "-", msg)
+    print(line)
+    ctx.actions.append({"kind": kind, "bead": bead, "msg": msg, "mutating": mutating,
+                        "applied": bool(ctx.apply and mutating)})
+
+
+def opt(argv, flag):
+    return argv[argv.index(flag) + 1] if flag in argv and argv.index(flag) + 1 < len(argv) else None
+
+
+def guard_herdr(ctx, argv):
+    """Refuse any herdr mutation outside the allowlist or aimed at a protected (mc/MC-owned) target."""
+    verb = tuple(argv[:2])
+    if verb not in ALLOWED_HERDR_MUTATIONS:
+        raise GuardViolation("herdr %s is not an allowed reconciler mutation (allowlist: %s)" % (
+            " ".join(argv[:2]), ", ".join(" ".join(v) for v in sorted(ALLOWED_HERDR_MUTATIONS))))
+    pr = ctx.protected
+    if verb == ("tab", "create"):
+        guard_workspace(ctx, opt(argv, "--workspace"))
+        if MC_NAME_RE.match(opt(argv, "--label") or ""):
+            raise GuardViolation("refusing to create an mc-labelled tab")
+    elif verb == ("tab", "close"):
+        if len(argv) < 3 or argv[2] in pr["tabs"]:
+            raise GuardViolation("tab %s is mc/MC-owned or a protected workspace's tab" % (argv[2:3] or ["?"])[0])
+    elif verb == ("agent", "start"):
+        pane = opt(argv, "--pane")
+        if (pane in pr["panes"] or ctx.panes.get(pane, {}).get("tab_id") in pr["tabs"]
+                or (len(argv) > 2 and argv[2] in pr["agents"])):
+            raise GuardViolation("agent start targets protected pane %s / agent %s" % (pane, argv[2:3]))
+    elif verb == ("agent", "prompt"):
+        tgt = argv[2] if len(argv) > 2 else None
+        a = ctx.agents.get(tgt) or {}
+        if (tgt in pr["agents"] or tgt in pr["panes"] or a.get("pane_id") in pr["panes"]
+                or a.get("tab_id") in pr["tabs"]):
+            raise GuardViolation("agent prompt targets protected agent/pane %s" % tgt)
+
+
+def guard_bd(ctx, argv):
+    """Refuse any bd write (update/close/...) aimed at the MC ownership Bead or a Bead wired to MC."""
+    if len(argv) > 1:
+        b = ctx.bead_index.get(argv[1]) or {"id": argv[1]}
+        why = mc_owned(ctx, b)
+        if why:
+            raise GuardViolation("bd %s %s refused: MC ownership Bead (%s)" % (argv[0], argv[1], why))
+
+
+def refuse_mc_bead(ctx, b):
+    why = mc_owned(ctx, b)
+    if why:
+        raise GuardViolation("Bead %s is an MC ownership Bead (%s): the reconciler never mutates it" % (b["id"], why))
+
+
+def guard_workspace(ctx, ws):
+    if ws in ctx.protected["workspaces"]:
+        raise GuardViolation("workspace %s is the Mission Control workspace (protected)" % ws)
+
+
+def audit(ctx, tool, argv, actor, rc):
+    if not ctx.apply:
+        return
+    os.makedirs(ctx.state, exist_ok=True)
+    rec = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "actor": ACTOR, "bd_actor_env": actor,
+           "tool": tool, "argv": [clip(x, 200) for x in argv], "rc": rc}
+    with open(os.path.join(ctx.state, "audit.jsonl"), "a") as f:
+        f.write(json.dumps(rec, sort_keys=True) + "\n")
+
+
+def bd_actor(ctx, b):
+    """bd's assignee guard refuses writes by any actor but the assignee: act as the assignee (audit tradeoff:
+    bd records the assignee; the reconciler's own identity lives in the close reason + audit.jsonl)."""
+    if ctx._actor is None:
+        ctx._actor = os.environ.get("BEADS_ACTOR") or run(["git", "config", "user.name"], cwd=ctx.repo)[1].strip()
+    return (b or {}).get("assignee") or ctx._actor
+
+
+def mutate(ctx, argv, tool="herdr", actor=None):
+    """Run a mutating command, or print it in dry-run. Returns (rc, stdout, stderr).
+    Every mutation passes the MC gate + protected-target guard first, in dry-run too."""
+    if ctx.gate["verdict"] != "OK" and not ctx.plan_ungated:
+        raise GuardViolation("MC gate is %s; mutations are disabled" % ctx.gate["verdict"])
+    if tool == "herdr":
+        guard_herdr(ctx, argv)
+    elif tool == "bd":
+        guard_bd(ctx, argv)
+    if not ctx.apply:
+        print("      would run: %s%s" % ("BEADS_ACTOR=%s " % shell_quote(actor) if actor else "",
+                                         " ".join(shell_quote(clip(x)) for x in [tool] + argv)))
+        return 0, "", ""
+    if tool == "bd":
+        env = dict(os.environ, BEADS_ACTOR=actor) if actor else None
+        rc, out, err = run([ctx.bd_bin] + argv, cwd=ctx.repo, env=env)
+    else:
+        rc, out, err = run([ctx.herdr_bin] + argv)
+    audit(ctx, tool, argv, actor, rc)
+    if rc != 0:
+        raise StepError("%s %s failed rc=%s: %s" % (tool, " ".join(argv[:3]), rc, (err or out).strip()[:300]))
+    return rc, out, err
+
+
+def clip(s, n=160):
+    s = str(s)
+    return s if len(s) <= n else "%s...[%d chars]" % (s[:n].replace("\n", " "), len(s))
+
+
+def shell_quote(s):
+    s = str(s)
+    return s if re.fullmatch(r"[A-Za-z0-9_@%+=:,./-]+", s) else "'" + s.replace("'", "'\\''") + "'"
+
+
+def meta(b):
+    m = b.get("metadata")
+    return m if isinstance(m, dict) else {}
+
+
+def labels(b):
+    return set(b.get("labels") or [])
+
+
+# --------------------------------------------------------------------------
+# AttentionTicket: evidence-only file, never mutates Bead/Herdr lifecycle.
+# --------------------------------------------------------------------------
+def attention(ctx, b, kind, facts, evidence_fn=None):
+    bead = b["id"]
+    digest = hashlib.sha256(json.dumps([bead, kind, facts], sort_keys=True).encode()).hexdigest()[:8]
+    path = os.path.join(ctx.state, "attention", "%s--%s--%s.md" % (bead, kind, digest))
+    if os.path.exists(path):
+        emit(ctx, "ATTENTION", bead, "%s already ticketed %s" % (kind, path))
+        return
+    emit(ctx, "ATTENTION", bead, "%s evidence-only ticket -> %s" % (kind, path), mutating=True)
+    if not ctx.apply:
+        return
+    evidence = ""
+    if evidence_fn:
+        try:
+            evidence = evidence_fn()
+        except StepError as e:
+            evidence = "(evidence unavailable: %s)" % e
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    body = ["---", "bead_id: %s" % bead, "kind: %s" % kind,
+            "detected_at: %s" % time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            "facts: %s" % json.dumps(facts, sort_keys=True), "lifecycle_mutation: none", "---", "",
+            "# AttentionTicket %s %s" % (bead, kind), "", "Title: %s" % b.get("title", ""), "",
+            "Evidence-only. The reconciler changed no Bead, tab, or agent state.", "",
+            "## Evidence", "", "```", evidence.rstrip(), "```", ""]
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        f.write("\n".join(body))
+    os.replace(tmp, path)
+
+
+def read_agent(ctx, worker, source="recent-unwrapped", lines=60):
+    rc, out, err = herdr(ctx, "agent", "read", worker, "--source", source, "--lines", str(lines))
+    if rc != 0:
+        raise StepError("agent read %s failed: %s" % (worker, (err or out).strip()[:200]))
+    return out
+
+
+# --------------------------------------------------------------------------
+# Snapshot
+# --------------------------------------------------------------------------
+def herdr_running(ctx):
+    rc, out, err = herdr(ctx, "status", "server", timeout=15)
+    return rc == 0 and re.search(r"^status:\s*running\s*$", out, re.M) is not None
+
+
+def read_herdr_state(ctx):
+    """Fresh read-only herdr view (agents, tabs, panes, workspaces) + MC ownership Beads."""
+    rc, data = herdr_result(ctx, "agent", "list")
+    if rc != 0 or "result" not in data:
+        raise Abort("herdr agent list failed")
+    agents = {a["name"]: a for a in data["result"].get("agents", []) if a.get("name")}
+    rc, data = herdr_result(ctx, "tab", "list")
+    if rc != 0 or "result" not in data:
+        raise Abort("herdr tab list failed")
+    tabs = {t["tab_id"]: t for t in data["result"].get("tabs", [])}
+    rc, data = herdr_result(ctx, "pane", "list")
+    if rc != 0 or "result" not in data:
+        raise Abort("herdr pane list failed")
+    panes = {p["pane_id"]: p for p in data["result"].get("panes", [])}
+    rc, data = herdr_result(ctx, "workspace", "list")
+    if rc != 0 or "result" not in data:
+        raise Abort("herdr workspace list failed")
+    workspaces = {w["workspace_id"]: w for w in data["result"].get("workspaces", [])}
+    mc_beads = bd_json(ctx, "list", "--label", MC_LABEL, "--status", "in_progress", "--limit", "0")
+    ctx.agents, ctx.tabs, ctx.panes, ctx.workspaces, ctx.mc_beads = agents, tabs, panes, workspaces, mc_beads
+
+
+def snapshot(ctx):
+    read_herdr_state(ctx)
+    evaluate_gate(ctx)
+    ctx.in_progress = bd_json(ctx, "list", "--status", "in_progress", "--limit", "0")
+    ctx.ready = bd_json(ctx, "ready", "--limit", "0")
+    ctx.attn = bd_json(ctx, "list", "--status", "blocked", "--limit", "0")
+    ctx.attn += bd_json(ctx, "list", "--label-any", "needs-decision", "--status",
+                        "open,in_progress,blocked", "--limit", "0")
+    ctx.closed = bd_json(ctx, "list", "--status", "closed", "--has-metadata-key", "tab", "--limit", "0")
+    live = bd_json(ctx, "list", "--status", "open,in_progress,blocked", "--has-metadata-key", "tab", "--limit", "0")
+    for b in live:
+        for t in tab_ids(b):
+            ctx.busy_tabs.setdefault(t, set()).add(b["id"])
+    for group in (ctx.mc_beads, live, ctx.closed, ctx.attn, ctx.ready, ctx.in_progress):
+        for b in group:
+            ctx.bead_index[b["id"]] = b
+
+
+# --------------------------------------------------------------------------
+# Action 0: Mission Control safety gate (bead a4s-t9p).
+#
+# Canonical MC = the ONE in_progress Bead labelled `mission-control` (the label
+# is only a lookup index) whose lease is live AND whose recorded session
+# identity (metadata.terminal_id and/or metadata.session, plus pane/tab/
+# workspace) matches the live herdr pane. A pane/tab/workspace merely LABELLED
+# mc / mission-control is a claimant, never an owner. Any other outcome closes
+# the gate: ATTENTION, zero mutations, no auto-resolution.
+# --------------------------------------------------------------------------
+def ts(s):
+    if not s:
+        return None
+    try:
+        return iso_epoch(str(s))
+    except (ValueError, TypeError):
+        return None
+
+
+def pane_session(p):
+    return ((p or {}).get("agent_session") or {}).get("value")
+
+
+def evaluate_gate(ctx):
+    issues = []  # (verdict, reason)
+    ws_claims = sorted(w["workspace_id"] for w in ctx.workspaces.values() if MC_NAME_RE.match(w.get("label") or ""))
+    tab_claims = sorted(t["tab_id"] for t in ctx.tabs.values() if MC_NAME_RE.match(t.get("label") or ""))
+    owner = None
+    if not ctx.mc_beads:
+        issues.append(("ABSENT", "no in_progress Bead labelled %s holds the MC lease; label-only claimants "
+                                 "(workspaces=%s tabs=%s) are not ownership" % (MC_LABEL, ws_claims, tab_claims)))
+    elif len(ctx.mc_beads) > 1:
+        issues.append(("DUPLICATED", "%d in_progress MC ownership Beads: %s" % (
+            len(ctx.mc_beads), ",".join(sorted(b["id"] for b in ctx.mc_beads)))))
+    else:
+        b = ctx.mc_beads[0]
+        m = meta(b)
+        owner = {"bead": b["id"], "pane": m.get("pane"), "tab": m.get("tab"), "workspace": m.get("workspace"),
+                 "terminal_id": m.get("terminal_id"), "session": m.get("session")}
+        missing = [k for k in ("pane", "tab", "workspace") if not m.get(k)]
+        if not (m.get("terminal_id") or m.get("session")):
+            missing.append("terminal_id|session")
+        if missing:
+            issues.append(("AMBIGUOUS", "MC Bead %s lacks identity metadata: %s" % (b["id"], ",".join(missing))))
+        exp = ts(b.get("lease_expires_at"))
+        if exp is None:
+            issues.append(("STALE", "MC Bead %s has no parseable lease_expires_at" % b["id"]))
+        elif time.time() > exp + ctx.mc_grace:
+            issues.append(("STALE", "MC Bead %s lease expired beyond %ss grace (lease_expires_at=%s)" % (
+                b["id"], ctx.mc_grace, b.get("lease_expires_at"))))
+        pane = ctx.panes.get(m.get("pane"))
+        if not missing:
+            if pane is None or not pane.get("agent"):
+                issues.append(("STALE", "MC owner pane %s is not a live agent pane" % m.get("pane")))
+            else:
+                bad = []
+                if pane.get("tab_id") != m.get("tab"):
+                    bad.append("tab %s != recorded %s" % (pane.get("tab_id"), m.get("tab")))
+                if pane.get("workspace_id") != m.get("workspace"):
+                    bad.append("workspace %s != recorded %s" % (pane.get("workspace_id"), m.get("workspace")))
+                if m.get("terminal_id") and pane.get("terminal_id") != m.get("terminal_id"):
+                    bad.append("terminal_id %s != recorded %s" % (pane.get("terminal_id"), m.get("terminal_id")))
+                if m.get("session") and pane_session(pane) != m.get("session"):
+                    bad.append("session identity differs from recorded")
+                if bad:
+                    issues.append(("AMBIGUOUS", "MC owner pane %s identity mismatch: %s" % (m.get("pane"), "; ".join(bad))))
+            others_t = [t for t in tab_claims if t != m.get("tab")]
+            others_w = [w for w in ws_claims if w != m.get("workspace")]
+            if others_t or others_w:
+                issues.append(("DUPLICATED", "label-only MC claimants besides the owner: tabs=%s workspaces=%s" % (
+                    others_t, others_w)))
+    verdict = "OK"
+    if issues:
+        verdict = sorted((v for v, _ in issues), key=VERDICT_ORDER.index)[0]
+    ctx.gate = {"verdict": verdict, "reasons": sorted(r for v, r in issues), "owner": owner if verdict == "OK" else None}
+    compute_protected(ctx, owner)
+    return verdict == "OK"
+
+
+def compute_protected(ctx, owner):
+    """Everything the reconciler must never mutate: mc-labelled/MC-owned panes, tabs, workspaces, agents."""
+    ws = {w["workspace_id"] for w in ctx.workspaces.values() if MC_NAME_RE.match(w.get("label") or "")}
+    tabs = {t["tab_id"] for t in ctx.tabs.values()
+            if MC_NAME_RE.match(t.get("label") or "") or t.get("workspace_id") in ws}
+    if owner:
+        ws.add(owner.get("workspace"))
+        tabs.add(owner.get("tab"))
+    panes = {pid for pid, p in ctx.panes.items() if p.get("tab_id") in tabs or p.get("workspace_id") in ws}
+    if owner:
+        panes.add(owner.get("pane"))
+    agents = {n for n, a in ctx.agents.items() if a.get("pane_id") in panes or a.get("tab_id") in tabs}
+    ctx.protected = {"workspaces": {w for w in ws if w}, "tabs": {t for t in tabs if t},
+                     "panes": {p for p in panes if p}, "agents": agents}
+
+
+def mc_owned(ctx, b):
+    """Why Bead `b` is (or is wired to) Mission Control's ownership, else None. Identity, not just the label:
+    the current owner Bead(s), anything labelled mission-control (incl. non-in_progress ones), and any Bead whose
+    worker/pane/tab/workspace metadata points at an mc-labelled or MC-owned target. Fail closed: over-matching
+    only suppresses reconciler action, never causes it."""
+    m, pr = meta(b), ctx.protected
+    if b.get("id") in {x.get("id") for x in ctx.mc_beads}:
+        return "current MC owner"
+    if MC_LABEL in labels(b):
+        return "labelled %s" % MC_LABEL
+    workers = ([str(m["worker"])] if m.get("worker") else []) + [x for x in str(m.get("prev_workers", "")).split(",") if x]
+    for w in workers:
+        if w in pr["agents"] or MC_NAME_RE.match(w):
+            return "metadata.worker=%s is an MC agent" % w
+    for key, protected in (("pane", pr["panes"]), ("workspace", pr["workspaces"])):
+        if m.get(key) and str(m[key]) in protected:
+            return "metadata.%s=%s is MC-owned" % (key, m[key])
+    for t in tab_ids(b):
+        if t in pr["tabs"]:
+            return "metadata tab %s is MC-owned" % t
+    return None
+
+
+def gate_ticket(ctx):
+    facts = {"verdict": ctx.gate["verdict"], "reasons": ctx.gate["reasons"]}
+    attention(ctx, {"id": "mission-control", "title": "Mission Control ownership gate"},
+              "MC_GATE_%s" % ctx.gate["verdict"], facts,
+              lambda: "\n".join(["verdict=%s" % ctx.gate["verdict"]] + ctx.gate["reasons"] + [
+                  "protected panes=%s tabs=%s workspaces=%s" % tuple(
+                      sorted(ctx.protected[k]) for k in ("panes", "tabs", "workspaces")),
+                  "No dispatch/recovery/close/reap ran. Operator/MC must resolve ownership; the reconciler never does."]))
+
+
+def recheck_gate(ctx):
+    """Fresh re-evaluation right before a mutation batch (TOCTOU). True = gate open."""
+    if ctx.plan_ungated:
+        return True
+    try:
+        read_herdr_state(ctx)
+    except Abort as e:
+        ctx.gate = {"verdict": "AMBIGUOUS", "reasons": ["MC re-check failed: %s" % e], "owner": None}
+    else:
+        evaluate_gate(ctx)
+    if ctx.gate["verdict"] == "OK":
+        return True
+    emit(ctx, "MC-GATE", None, "CLOSED (%s) at re-check; aborting mutations this tick" % ctx.gate["verdict"])
+    gate_ticket(ctx)
+    return False
+
+
+def tab_ids(b):
+    m = meta(b)
+    out = []
+    if m.get("tab"):
+        out.append(str(m["tab"]))
+    out += [t for t in str(m.get("prev_tabs", "")).split(",") if t]
+    return out
+
+
+# --------------------------------------------------------------------------
+# Action 2: in_progress
+# --------------------------------------------------------------------------
+def get_worker(ctx, name):
+    """-> ('found', agent) | ('not_found', None) | ('error', msg)"""
+    rc, data = herdr_result(ctx, "agent", "get", name)
+    if rc == 0 and "result" in data:
+        return "found", data["result"].get("agent") or {}
+    code = (data.get("error") or {}).get("code")
+    if code == "agent_not_found":
+        return "not_found", None
+    return "error", "agent get %s rc=%s %s" % (name, rc, json.dumps(data)[:200])
+
+
+def reconcile_in_progress(ctx):
+    for b in ctx.in_progress:
+        bead, m = b["id"], meta(b)
+        if b.get("issue_type") == "epic":
+            continue
+        why = mc_owned(ctx, b)
+        if why:
+            emit(ctx, "LEAVE", bead, "MC ownership Bead (%s): never harvested, re-dispatched, re-stamped or closed" % why)
+            continue
+        worker = m.get("worker")
+        if not worker:
+            try:
+                unlinked(ctx, b)
+            except StepError as e:
+                ctx.errors += 1
+                emit(ctx, "ERROR", bead, str(e))
+            continue
+        try:
+            state, info = get_worker(ctx, str(worker))
+            settling = ctx_settling(ctx, m)
+            if state == "error":
+                emit(ctx, "SKIP", bead, "ambiguous: %s" % info)
+            elif state == "not_found":
+                if settling:
+                    emit(ctx, "LEAVE", bead, "worker %s not found but dispatched <%ss ago (settling)" % (worker, ctx.settle))
+                else:
+                    ghost(ctx, b, worker)
+            else:
+                handle_status(ctx, b, worker, info, settling)
+        except StepError as e:
+            ctx.errors += 1
+            emit(ctx, "ERROR", bead, str(e))
+
+
+def id_token(text, ident):
+    """ident appears in text delimited by non-alphanumerics (conservative: a parent id also matches its
+    children's names, which can only suppress action, never cause it)."""
+    return re.search(r"(?<![a-z0-9])%s(?![a-z0-9])" % re.escape(ident.lower()), (text or "").lower()) is not None
+
+
+def associated_agents(ctx, b):
+    """Live agents tied to this Bead without metadata.worker: by name/tab-label token, recorded pane/tab,
+    or cwd == the Bead's own worktree. Any status counts as live."""
+    bead, m = b["id"], meta(b)
+    slug = re.sub(r"[^a-z0-9_-]", "-", bead.lower())
+    own = [str(m[k]) for k in ("worktree", "cwd") if m.get(k) and str(m[k]).rstrip("/") != ctx.repo.rstrip("/")]
+    found = {}
+    for name, a in ctx.agents.items():
+        tab_label = (ctx.tabs.get(a.get("tab_id")) or {}).get("label", "")
+        why = None
+        if id_token(name, slug) or id_token(name, bead):
+            why = "name"
+        elif id_token(tab_label, bead) or id_token(tab_label, slug):
+            why = "tab-label"
+        elif m.get("pane") and a.get("pane_id") == m.get("pane"):
+            why = "recorded-pane"
+        elif m.get("tab") and a.get("tab_id") == m.get("tab"):
+            why = "recorded-tab"
+        elif any((a.get("cwd") or "").rstrip("/") == o.rstrip("/") for o in own):
+            why = "worktree-cwd"
+        if why:
+            found[name] = (why, a.get("agent_status"))
+    return found
+
+
+def unlinked(ctx, b):
+    """in_progress with no metadata.worker. Deterministic rule, no judgement:
+      live agent associated  -> working: leave; blocked: ticket; other status: ticket iff stale, else leave
+      live lease             -> leave (someone is heartbeating it)
+      recent activity        -> leave (< --stale-after since lease expiry/heartbeat/update)
+      stale + no live agent  -> re-dispatch iff opt-in label + assignee==actor + budget + redispatch < max;
+                                otherwise STALE_UNLINKED ticket (evidence only)."""
+    bead, m = b["id"], meta(b)
+    now = time.time()
+    lease = ts(b.get("lease_expires_at"))
+    acts = [t for t in (lease, ts(b.get("heartbeat_at")), ts(b.get("updated_at")), ts(b.get("started_at"))) if t]
+    stale = bool(acts) and now - max(acts) > ctx.stale_after  # lease expiry is one of acts, so a live lease is never stale
+    assoc = associated_agents(ctx, b)
+    if assoc:
+        desc = ",".join("%s(%s,%s)" % (n, w, st) for n, (w, st) in sorted(assoc.items()))
+        statuses = {st for _, st in assoc.values()}
+        if "blocked" in statuses:
+            attention(ctx, b, "WORKER_BLOCKED", {"agents": sorted(assoc), "linked_by": "association"},
+                      lambda: "unlinked Bead, associated agents: %s" % desc)
+        elif "working" in statuses or not stale:
+            emit(ctx, "LEAVE", bead, "unlinked but live agent associated: %s" % desc)
+        else:
+            attention(ctx, b, "UNLINKED_WORKER_IDLE", {"agents": sorted(assoc), "statuses": sorted(map(str, statuses))},
+                      lambda: "stale unlinked Bead with non-working agents: %s" % desc)
+        return
+    if lease is not None and lease > now:
+        emit(ctx, "LEAVE", bead, "unlinked, lease live until %s" % b.get("lease_expires_at"))
+        return
+    if not acts:
+        attention(ctx, b, "STALE_UNLINKED", {"why": "no lease/heartbeat/updated_at timestamps"},
+                  lambda: "cannot judge staleness: no parseable timestamps")
+        return
+    if not stale:
+        emit(ctx, "LEAVE", bead, "unlinked, last activity <%ss ago (not stale)" % ctx.stale_after)
+        return
+    n = int(m.get("redispatch", 0) or 0)
+    blockers = []
+    if b.get("issue_type") not in DISPATCH_TYPES:
+        blockers.append("issue_type %s not dispatchable" % b.get("issue_type"))
+    if ctx.dispatch_label and ctx.dispatch_label not in labels(b):
+        blockers.append("no opt-in label %s" % ctx.dispatch_label)
+    if not ctx.callback:
+        blockers.append("no --callback target")
+    if b.get("assignee") != bd_actor(ctx, None):
+        blockers.append("assignee %s is not actor %s" % (b.get("assignee"), bd_actor(ctx, None)))
+    if n >= ctx.max_redispatch:
+        blockers.append("redispatch budget exhausted (%d)" % n)
+    if blockers:
+        attention(ctx, b, "STALE_UNLINKED", {"blockers": blockers},
+                  lambda: "claimed, no worker link, no live agent, stale > %ss; not auto-recoverable: %s\n"
+                          "lease_expires_at=%s heartbeat_at=%s updated_at=%s assignee=%s labels=%s" % (
+                              ctx.stale_after, "; ".join(blockers), b.get("lease_expires_at"),
+                              b.get("heartbeat_at"), b.get("updated_at"), b.get("assignee"),
+                              ",".join(sorted(labels(b)))))
+        return
+    if not take_budget(ctx, bead):
+        return
+    emit(ctx, "REDISPATCH", bead, "stale unlinked claim, no live agent -> re-dispatch #%d in a new tab" % (n + 1),
+         mutating=True)
+    dispatch(ctx, b, redispatch=n + 1, prev_worker=None, unlinked=True)
+
+
+def take_budget(ctx, bead):
+    if ctx.dispatched >= ctx.max_dispatch:
+        emit(ctx, "DEFER", bead, "over --max-dispatch=%d this tick" % ctx.max_dispatch)
+        return False
+    ctx.dispatched += 1
+    return True
+
+
+def ctx_settling(ctx, m):
+    try:
+        return time.time() - float(m.get("dispatched_at", 0)) < ctx.settle
+    except ValueError:
+        return False
+
+
+def handle_status(ctx, b, worker, agent, settling):
+    bead, m = b["id"], meta(b)
+    status = agent.get("agent_status")
+    if m.get("pane") and agent.get("pane_id") != m.get("pane"):
+        attention(ctx, b, "WORKER_MISMATCH",
+                  {"worker": worker, "recorded_pane": m.get("pane"), "live_pane": agent.get("pane_id")},
+                  lambda: "agent %s live pane=%s tab=%s; Bead recorded pane=%s tab=%s" % (
+                      worker, agent.get("pane_id"), agent.get("tab_id"), m.get("pane"), m.get("tab")))
+        return
+    if status == "working":
+        emit(ctx, "LEAVE", bead, "worker %s working" % worker)
+    elif status == "blocked":
+        attention(ctx, b, "WORKER_BLOCKED", {"worker": worker, "status": status},
+                  lambda: read_agent(ctx, worker, "visible", 60))
+    elif settling:
+        emit(ctx, "LEAVE", bead, "worker %s %s but dispatched <%ss ago (settling)" % (worker, status, ctx.settle))
+    elif status == "done":
+        harvest_close(ctx, b, worker)
+    else:
+        attention(ctx, b, "WORKER_%s" % str(status).upper(), {"worker": worker, "status": status},
+                  lambda: read_agent(ctx, worker, "recent-unwrapped", 60))
+
+
+def harvest_close(ctx, b, worker):
+    bead = b["id"]
+    refuse_mc_bead(ctx, b)
+    if not recheck_gate(ctx):
+        return
+    art = os.path.join(ctx.state, "harvest", "%s-%s.txt" % (bead, worker))
+    emit(ctx, "HARVEST", bead, "worker %s done, bead still in_progress -> save tail %s, then bd close" % (worker, art),
+         mutating=True)
+    if ctx.apply:
+        text = read_agent(ctx, worker, "recent-unwrapped", 200)
+        os.makedirs(os.path.dirname(art), exist_ok=True)
+        with open(art, "w") as f:
+            f.write(text)
+    mutate(ctx, ["close", bead, "--reason",
+                 "reconciler-harvest closed_by=%s worker=%s herdr_status=done verdict=unverified artifact_path=%s" % (
+                     ACTOR, worker, art)],
+           tool="bd", actor=bd_actor(ctx, b))
+
+
+def ghost(ctx, b, worker):
+    bead, m = b["id"], meta(b)
+    refuse_mc_bead(ctx, b)
+    n = int(m.get("redispatch", 0) or 0)
+    if n >= ctx.max_redispatch:
+        attention(ctx, b, "REDISPATCH_EXHAUSTED", {"worker": worker, "redispatch": n},
+                  lambda: "worker %s NOT_FOUND after %d re-dispatches" % (worker, n))
+        return
+    if not take_budget(ctx, bead):
+        return
+    emit(ctx, "REDISPATCH", bead, "worker %s NOT_FOUND -> re-dispatch #%d" % (worker, n + 1), mutating=True)
+    dispatch(ctx, b, redispatch=n + 1, prev_worker=worker)
+
+
+# --------------------------------------------------------------------------
+# Action 3: reaper
+# --------------------------------------------------------------------------
+def reap(ctx):
+    for b in ctx.closed:
+        bead, m = b["id"], meta(b)
+        for tab in tab_ids(b):
+            if tab not in ctx.tabs:
+                continue
+            if tab in ctx.protected["tabs"]:
+                emit(ctx, "SKIP", bead, "tab %s is mc/MC-owned or in the MC workspace: never touched" % tab)
+                attention(ctx, b, "MC_PROTECTED", {"tab": tab, "detail": "closed Bead metadata points at a protected tab"},
+                          lambda: "Bead %s metadata.tab=%s is mc/MC-owned; reaper refused (Operator must fix the link)" % (bead, tab))
+                continue
+            owned = mc_owned(ctx, b)
+            if owned:
+                emit(ctx, "SKIP", bead, "MC ownership Bead (%s): its tab %s is never reaped" % (owned, tab))
+                continue
+            why = reap_blocker(ctx, b, tab)
+            if why:
+                emit(ctx, "SKIP", bead, "tab %s live but not reaped: %s" % (tab, why))
+                continue
+            if not recheck_gate(ctx):
+                return
+            emit(ctx, "REAP", bead, "closed Bead, tab %s live -> herdr tab close" % tab, mutating=True)
+            try:
+                mutate(ctx, ["tab", "close", tab])
+            except StepError as e:
+                ctx.errors += 1
+                emit(ctx, "ERROR", bead, str(e))
+                if isinstance(e, GuardViolation):
+                    attention(ctx, b, "MC_PROTECTED", {"tab": tab, "detail": str(e)}, lambda: str(e))
+
+
+def reap_blocker(ctx, b, tab):
+    m = meta(b)
+    if tab == ctx.self_tab:
+        return "it is the reconciler's own tab"
+    try:
+        age = time.time() - iso_epoch(b.get("closed_at"))
+    except (ValueError, TypeError):
+        return "closed_at unparseable (fail closed)"
+    if age < ctx.reap_grace:
+        return "closed <%ss ago (grace for final callback)" % ctx.reap_grace
+    others = ctx.busy_tabs.get(tab, set()) - {b["id"]}
+    if others:
+        return "tab also recorded by open Bead(s) %s" % ",".join(sorted(others))
+    if ctx.tabs[tab].get("pane_count", 1) != 1:
+        return "tab has %s panes (not a single-agent tab)" % ctx.tabs[tab].get("pane_count")
+    for a in ctx.agents.values():
+        if a.get("tab_id") == tab:
+            if a.get("agent_status") == "working":
+                return "agent %s still working (final callback pending)" % a.get("name")
+            if a.get("name") != m.get("worker") and a.get("name") not in str(m.get("prev_workers", "")).split(","):
+                return "tab hosts agent %s which is not this Bead's worker" % a.get("name")
+    return None
+
+
+def iso_epoch(s):
+    import calendar
+    return calendar.timegm(time.strptime(s[:19], "%Y-%m-%dT%H:%M:%S"))
+
+
+# --------------------------------------------------------------------------
+# Action 4: blocked / needs-decision
+# --------------------------------------------------------------------------
+def attention_beads(ctx):
+    seen = set()
+    for b in ctx.attn:
+        if b["id"] in seen:
+            continue
+        seen.add(b["id"])
+        kind = "BEAD_BLOCKED" if b.get("status") == "blocked" else "NEEDS_DECISION"
+        attention(ctx, b, kind, {"status": b.get("status"), "labels": sorted(labels(b))},
+                  lambda b=b: "status=%s assignee=%s labels=%s\nnotes:\n%s" % (
+                      b.get("status"), b.get("assignee"), ",".join(sorted(labels(b))), (b.get("notes") or "")[-2000:]))
+
+
+# --------------------------------------------------------------------------
+# Action 1: dispatch (also used by re-dispatch)
+# --------------------------------------------------------------------------
+def resolve_workspace(ctx):
+    rc, data = herdr_result(ctx, "workspace", "list")
+    if rc != 0:
+        raise StepError("workspace list failed")
+    label = os.path.basename(ctx.repo.rstrip("/"))
+    found = [w for w in data.get("result", {}).get("workspaces", []) if w.get("label") == label]
+    if len(found) != 1:
+        raise StepError("workspace label %r matches %d spaces (need exactly 1)" % (label, len(found)))
+    return found[0]["workspace_id"]
+
+
+def worker_name(ctx, bead, n):
+    base = "r-" + re.sub(r"[^a-z0-9_-]", "-", bead.lower())
+    name = (base[:28] + ("-%d" % n if n else ""))[:32]
+    if name in ctx.agents or name in ctx.new_names:
+        raise StepError("worker name %s already live (fail closed)" % name)
+    ctx.new_names.add(name)
+    return name
+
+
+def task_text(ctx, b, name, prev_worker=None, unlinked=False):
+    bead = b["id"]
+    report = "/tmp/%s-report.md" % bead
+    parts = ["You are the Worker for bead_id=%s (dispatched by a4s-reconcile). Work only in your cwd. "
+             "No in-session subagents, no polling." % bead,
+             "TITLE: %s" % b.get("title", "")]
+    for key in ("description", "design", "acceptance_criteria", "notes"):
+        if b.get(key):
+            parts.append("%s:\n%s" % (key.upper(), b[key]))
+    if prev_worker:
+        parts.append("NOTE: previous worker %s vanished before closing this Bead; inspect repo state and any "
+                     "existing report before repeating work." % prev_worker)
+    elif unlinked:
+        parts.append("NOTE: this Bead was claimed but its claimant left no worker link and no live agent; inspect "
+                     "repo state, any worktree and any existing report before repeating work.")
+    parts.append("DELIVER: bounded report at %s (verdict, evidence, bead_id). Then: BEADS_ACTOR=\"%s\" bd close %s "
+                 "--reason \"worker=%s verdict=<pass|fail> artifact_path=%s\" (bd's assignee guard refuses any other "
+                 "actor; never use --force) and, as your final action, herdr agent prompt %s "
+                 "\"WORK_RESULT SUBMITTED verdict=<pass|fail> artifact_path=%s bead_id=%s\". If blocked: write the "
+                 "blocker report, do NOT close the Bead, push \"ATTENTION REQUIRED verdict=blocked artifact_path=<path> "
+                 "bead_id=%s\" to %s. Never create, move, relabel or prompt-drive an mc pane." % (
+                     report, bd_actor(ctx, b), bead, name, report, ctx.callback, report, bead, bead, ctx.callback))
+    return "\n\n".join(parts)
+
+
+def extract(v, key):
+    return v.get(key) if isinstance(v, dict) else v
+
+
+def dispatch(ctx, b, redispatch=0, prev_worker=None, unlinked=False):
+    bead, m = b["id"], meta(b)
+    refuse_mc_bead(ctx, b)  # before the first tab/agent mutation, which precedes any bd write
+    if not recheck_gate(ctx):
+        return
+    kind = str(m.get("kind") or ctx.default_kind)
+    if kind not in ALLOWED_KINDS:
+        raise StepError("metadata.kind=%r not in %s (fail closed)" % (kind, sorted(ALLOWED_KINDS)))
+    model = m.get("model") or (ctx.default_model if kind == "claude" else None)
+    cwd = str(m.get("cwd") or m.get("worktree") or ctx.repo)
+    if not os.path.isabs(cwd) or not os.path.isdir(cwd):
+        raise StepError("cwd %r is not an existing absolute dir (fail closed)" % cwd)
+    if not ctx.callback:
+        raise StepError("no --callback target configured (fail closed)")
+    ws = resolve_workspace(ctx)
+    try:
+        guard_workspace(ctx, ws)
+    except GuardViolation as e:
+        ctx.errors += 1
+        emit(ctx, "ERROR", bead, "dispatch refused: %s" % e)
+        attention(ctx, b, "MC_PROTECTED", {"workspace": ws, "detail": str(e)}, lambda: str(e))
+        return
+    name = worker_name(ctx, bead, redispatch)
+    step = "claim"
+    try:
+        if not redispatch:
+            mutate(ctx, ["update", bead, "--claim"], tool="bd")
+        step = "tab create"
+        if ctx.apply:
+            _, out, _ = mutate(ctx, ["tab", "create", "--workspace", ws, "--cwd", cwd, "--label", bead, "--no-focus"])
+            res = (parse_json(out) or {}).get("result", {})
+            tab = extract(res.get("tab"), "tab_id")
+            pane = extract(res.get("root_pane"), "pane_id")
+            if not tab or not pane:
+                raise StepError("tab create returned no tab/root_pane: %s" % out[:200])
+        else:
+            mutate(ctx, ["tab", "create", "--workspace", ws, "--cwd", cwd, "--label", bead, "--no-focus"])
+            tab, pane = "<tab-id>", "<pane-id>"
+        step = "worker-link"
+        stamp = ["update", bead, "--set-metadata", "worker=%s" % name, "--set-metadata", "pane=%s" % pane,
+                 "--set-metadata", "tab=%s" % tab, "--set-metadata", "dispatched_at=%d" % int(time.time()),
+                 "--set-metadata", "redispatch=%d" % redispatch]
+        if redispatch:
+            olds = [x for x in [str(m.get("tab", "")), str(m.get("prev_tabs", ""))] if x]
+            stamp += ["--set-metadata", "prev_tabs=%s" % ",".join(olds),
+                      "--set-metadata", "prev_workers=%s" % ",".join(
+                          x for x in [str(m.get("worker", "")), str(m.get("prev_workers", ""))] if x)]
+        mutate(ctx, stamp, tool="bd", actor=bd_actor(ctx, b))
+        step = "agent start"
+        start = ["agent", "start", name, "--kind", kind, "--pane", pane]
+        if model:
+            start += ["--", "--model", str(model)]
+        mutate(ctx, start)
+        step = "prompt"
+        mutate(ctx, ["agent", "prompt", name, task_text(ctx, b, name, prev_worker, unlinked)])
+    except StepError as e:
+        ctx.errors += 1
+        emit(ctx, "ERROR", bead, "dispatch failed at %s: %s" % (step, e))
+        attention(ctx, b, "MC_PROTECTED" if isinstance(e, GuardViolation) else "DISPATCH_FAILED",
+                  {"step": step, "worker": name},
+                  lambda: "dispatch failed at step %s: %s\nBead may be claimed/stamped without a live worker; "
+                          "the next tick re-dispatches (bounded) via NOT_FOUND." % (step, e))
+
+
+def dispatch_ready(ctx):
+    if not ctx.ready:
+        return
+    if not ctx.callback:
+        emit(ctx, "SKIP", None, "%d ready Bead(s) but no --callback target; dispatch disabled (fail closed)" % len(ctx.ready))
+        return
+    actor = bd_actor(ctx, None)
+    for b in ctx.ready:
+        bead, m = b["id"], meta(b)
+        if b.get("issue_type") not in DISPATCH_TYPES:
+            continue
+        why = mc_owned(ctx, b)
+        if why:
+            emit(ctx, "SKIP", bead, "ready but MC ownership Bead (%s): never dispatched or claimed" % why)
+            continue
+        if ctx.dispatch_label and ctx.dispatch_label not in labels(b):
+            continue
+        if m.get("worker"):
+            emit(ctx, "SKIP", bead, "ready but carries worker link %s (ambiguous; fail closed)" % m.get("worker"))
+            continue
+        if b.get("assignee") and b["assignee"] != actor:
+            emit(ctx, "SKIP", bead, "ready but assigned to %s (not %s)" % (b["assignee"], actor))
+            continue
+        if not take_budget(ctx, bead):
+            continue
+        emit(ctx, "DISPATCH", bead, "ready -> claim, tab, link worker, start agent, prompt bead content", mutating=True)
+        try:
+            dispatch(ctx, b)
+        except StepError as e:
+            ctx.errors += 1
+            emit(ctx, "ERROR", bead, str(e))
+
+
+# --------------------------------------------------------------------------
+def default_repo():
+    rc, out, _ = run(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"])
+    if rc == 0 and out.strip():
+        return os.path.dirname(out.strip().rstrip("/"))
+    return os.getcwd()
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description="Deterministic Bead/Herdr reconciler (dry-run by default).")
+    mode = ap.add_mutually_exclusive_group()
+    mode.add_argument("--dry-run", action="store_true", help="print planned actions, mutate nothing (default)")
+    mode.add_argument("--apply", action="store_true", help="execute planned actions")
+    ap.add_argument("--repo", default=None, help="repo root owning .beads (default: git common dir parent)")
+    ap.add_argument("--state-dir", default=os.environ.get("A4S_RECONCILE_STATE", STATE_DIR_DEFAULT))
+    ap.add_argument("--callback", default=os.environ.get("A4S_RECONCILE_CALLBACK", ""),
+                    help="Project Orchestrator pane/name for worker callbacks (required to dispatch)")
+    ap.add_argument("--dispatch-label", default="auto-dispatch",
+                    help="only ready Beads with this label are dispatched ('' = all ready work Beads)")
+    ap.add_argument("--settle", type=int, default=60, help="seconds after dispatch before a worker is judged")
+    ap.add_argument("--reap-grace", type=int, default=120, help="seconds after bd close before reaping its tab")
+    ap.add_argument("--max-redispatch", type=int, default=2)
+    ap.add_argument("--stale-after", type=int, default=1800,
+                    help="seconds without lease/heartbeat/update before an unlinked in_progress Bead is stale")
+    ap.add_argument("--mc-grace", type=int, default=60, help="seconds past MC lease expiry before the MC is stale")
+    ap.add_argument("--plan-ignoring-mc-gate", action="store_true",
+                    help="DRY-RUN ONLY: print the plan as if the MC gate were open (read-only; refused with --apply)")
+    ap.add_argument("--max-dispatch", type=int, default=3, help="new dispatches per tick")
+    ap.add_argument("--default-kind", default="claude", choices=sorted(ALLOWED_KINDS))
+    ap.add_argument("--default-model", default="sonnet", help="claude model tier when kind=claude")
+    ap.add_argument("--json", action="store_true", help="also print the action list as JSON")
+    args = ap.parse_args(argv)
+    if args.plan_ignoring_mc_gate and args.apply:
+        ap.error("--plan-ignoring-mc-gate is dry-run only; it can never be combined with --apply")
+    args.repo = os.path.abspath(args.repo or default_repo())
+    ctx = Ctx(args)
+
+    print("a4s-reconcile mode=%s repo=%s" % ("APPLY" if ctx.apply else "DRY-RUN", ctx.repo))
+    if not herdr_running(ctx):
+        print("herdr server not running -> no-op")
+        return 0
+    lock = None
+    if ctx.apply:
+        os.makedirs(ctx.state, exist_ok=True)
+        lock = open(os.path.join(ctx.state, "tick.lock"), "w")
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            print("another tick holds the lock -> no-op")
+            return 0
+    try:
+        snapshot(ctx)
+    except (Abort, KeyError) as e:
+        print("snapshot failed, aborting without mutation: %s" % e, file=sys.stderr)
+        return 3
+    print("snapshot: in_progress=%d ready=%d attention-candidates=%d closed-with-tab=%d agents=%d tabs=%d" % (
+        len(ctx.in_progress), len(ctx.ready), len({b['id'] for b in ctx.attn}), len(ctx.closed),
+        len(ctx.agents), len(ctx.tabs)))
+    if ctx.gate["verdict"] == "OK":
+        emit(ctx, "MC-GATE", None, "OPEN owner=%s pane=%s" % (ctx.gate["owner"]["bead"], ctx.gate["owner"]["pane"]))
+    else:
+        emit(ctx, "MC-GATE", None, "CLOSED (%s): %s" % (ctx.gate["verdict"], " | ".join(ctx.gate["reasons"])))
+        gate_ticket(ctx)
+    if ctx.gate["verdict"] == "OK" or ctx.plan_ungated:
+        if ctx.gate["verdict"] != "OK":
+            print("      !! --plan-ignoring-mc-gate: plan below is what WOULD run if the gate were open (read-only)")
+        reconcile_in_progress(ctx)
+        reap(ctx)
+        attention_beads(ctx)
+        dispatch_ready(ctx)
+    else:
+        print("      all bd/herdr mutations disabled this tick; only evidence-only tickets are written")
+        attention_beads(ctx)
+    planned = sum(1 for a in ctx.actions if a["mutating"] and a["kind"] != "ATTENTION")
+    tickets = sum(1 for a in ctx.actions if a["kind"] == "ATTENTION" and a["mutating"])
+    print("summary: %s=%d tickets=%d errors=%d" % ("applied" if ctx.apply else "planned", planned, tickets, ctx.errors))
+    if args.json:
+        print(json.dumps({"gate": {k: ctx.gate[k] for k in ("verdict", "reasons", "owner")},
+                          "actions": ctx.actions}, indent=1))
+    return 1 if ctx.errors else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

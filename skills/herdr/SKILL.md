@@ -95,29 +95,38 @@ If the base or remote resolves to upstream, stop and raise `ATTENTION REQUIRED`;
    **Trust/YOLO flags are mandatory on every `agent start`; verify them live before relying on this doc** (`claude --help`, `pi --help` — CLI flag names can change between versions, so re-verify rather than assume). As of this writing: Claude's native bypass is `--dangerously-skip-permissions`, which skips all tool-approval prompts for that session. Pi's native bypass is `--approve` (short `-a`), which trusts project-local resources for the run so Pi does not block on its project-trust prompt when started headless in a fresh worktree. Both are native CLI args and belong after the `--` separator alongside `--model` or other native flags.
 
    **Guardrail — YOLO covers non-destructive in-worktree scope only.** These flags remove interactive confirmation for ordinary read/edit/build/test/review work inside the dispatched worktree; they do not authorize `git push`, merge, branch or file deletion, secrets access, or any action that reaches outside the worktree or the local system. Those stay explicit gates exactly as if the flag were absent: the Worker reports a blocker (`ATTENTION REQUIRED`, see below) or asks the user directly before performing them. A flag bypassing tool prompts is never grounds to treat push/merge/delete/secrets/external actions as pre-authorized.
-8. **Dispatch the work** — include the full task, claimed `bead_id`, bounded report path, and Project Orchestrator callback target:
+8. **Link the worker to the Bead** — right after the agent starts and before dispatch, stamp who executes the unit so liveness can be resolved from the Bead alone:
+
+   ```bash
+   bd update "$bead_id" --metadata '{"worker":"<name>","pane":"<pane-id>","tab":"<tab-id>"}'
+   ```
+
+   `assignee` ≠ `worker`. The assignee (set by `--claim` in step 3) is the accountable human/Project Orchestrator; the worker is the executing agent and lives only in `metadata`. `--metadata` replaces the object; use `--set-metadata worker=<name>` to merge a single key. `bd close` by the Worker stays the authoritative completion signal; `metadata.worker` only lets `herdr agent get <worker>` resolve liveness while the Bead is still open. Fan-out: each peer tab stamps its own worker on its own Bead — never one worker on several Beads.
+9. **Dispatch the work** — include the full task, claimed `bead_id`, bounded report path, and Project Orchestrator callback target:
 
    ```bash
    herdr agent prompt <name> "<task; bead_id=<bead-id>; final report path; callback target>"
    ```
 
    The accepted prompt response is dispatch evidence. Do not add `--wait`, a timeout, or completion polling. The Project Orchestrator returns to its own work or becomes idle until the callback arrives. Only now is setup complete; report the Bead, tab, space, and agent identifiers.
-9. **Never** use `pane split` or `pane move` to place a repo or a new session, and **never** leave a created space/tab empty.
+10. **Never** use `pane split` or `pane move` to place a repo or a new session, and **never** leave a created space/tab empty.
 
 ## Completion handoff — artifact + callback
 
 A peer tab finishes by writing a bounded report containing its verdict, evidence, and `bead_id`. After collecting the authorized terminal evidence, the Worker closes its own Bead, then pushes one completion notification whose payload is only the WorkResult state, verdict, artifact path, and Bead reference:
 
 ```bash
-bd close <bead-id> --actor <agent-name> --reason "verdict=pass artifact_path=/tmp/review-report.md"
+BEADS_ACTOR="<assignee>" bd close <bead-id> --reason "worker=<agent-name> verdict=pass artifact_path=/tmp/review-report.md"
 herdr agent prompt <project-orchestrator-pane|name> "WORK_RESULT SUBMITTED verdict=pass artifact_path=/tmp/review-report.md bead_id=<bead-id>"
 ```
 
 Target either the Project Orchestrator's explicit pane id or unique agent name. Do not add `--wait` or a timeout: the Worker pushes once as its final action and exits its flow. The Project Orchestrator stays idle until this callback arrives, then reads the artifact directly. It never re-ingests the Worker's transcript or a full result inside the callback.
 
+`bd`'s assignee guard refuses a close (or any write) by an actor other than the Bead's assignee, and `--actor <agent-name>` overrides `BEADS_ACTOR`, so a Worker that is not the claimant closes as the assignee via `BEADS_ACTOR="<assignee>"` (read it from `bd show`) and never uses `--force`. Audit tradeoff: `bd` records the assignee as the closer; the real closer is recorded in the `--reason` (`worker=<agent-name>`) and, for the reconciler, in its local `audit.jsonl`. This is an Operator/Jev decision, revisit if `bd` gains a delegated-actor field.
+
 A blocked or attention path is evidence-only: write the blocker report and push `ATTENTION REQUIRED verdict=blocked artifact_path=<path> bead_id=<bead-id>` without closing the Bead, WorkResult, Mission, or any other lifecycle. If prompt delivery is rejected because the target is blocked or unavailable, preserve that failure in the report and do not resend blindly. Bead closure records completion of the delegated work unit only; it never auto-closes the authoritative A4S lifecycle.
 
-The Project Orchestrator remains thin: dispatch units, track state by Bead, verdict, and artifact pointer, integrate only bounded evidence, and compact its own context aggressively. Never accumulate child transcripts or duplicate their working context. Reconciliation across a fanned-out DAG stays on the same two signals — each Worker's WORK_RESULT/ATTENTION callback for completion, and Herdr's per-agent liveness (`herdr agent get`/`agent list`, and the separate heartbeat effort tracked under the Herdr heartbeat/reconciliation epic) only to flag a tab that has gone silent. Heartbeat proves recent liveness, not semantic progress; it never triggers a retry, a poll loop, or a substitute completion signal, and it never grows into a scheduler or control plane of its own.
+The Project Orchestrator remains thin: dispatch units, track state by Bead, verdict, and artifact pointer, integrate only bounded evidence, and compact its own context aggressively. Never accumulate child transcripts or duplicate their working context. Reconciliation across a fanned-out DAG is not this session's job and not a prompt: a deterministic reconciler (`skills/herdr/scripts/a4s-reconcile`, run by launchd/cron, no LLM) reads durable state from Beads and liveness from Herdr via `metadata.worker` — `bd ready` → dispatch, `in_progress` → `herdr agent get <worker>` (working: leave; done: harvest and close; not found: re-dispatch; blocked: evidence-only AttentionTicket), `in_progress` with no `metadata.worker` → leave while the lease is live, a live agent is tied to it, or activity is recent; stale lease + no live agent + opt-in label + assignee == actor → re-dispatch in a new tab; anything else → AttentionTicket, closed Bead with a live tab → close the tab. Before any of it the reconciler runs the **Mission Control safety gate**: the canonical MC is the one `in_progress` Bead labelled `mission-control` whose lease is live and whose recorded session identity (`terminal_id`/`session`, `pane`, `tab`, `workspace`) matches the live herdr pane — a label alone never counts. If MC ownership is absent, duplicated, stale or ambiguous it emits an AttentionTicket and performs no mutation; it never creates, moves, relabels, closes or prompts an mc pane, and never harvest-closes, re-dispatches, re-stamps, claims or reaps the MC ownership Bead or any Bead wired to an MC-owned target (allowlist: `tab create|close`, `agent start|prompt`, never aimed at an mc/MC-owned target). The Worker's `bd close` and WORK_RESULT/ATTENTION callback remain the authoritative completion signals; liveness proves a process exists, not semantic progress, and never grows into a scheduler or control plane inside the session. `herdr agent prompt` to a running agent is an optional nudge, never the mechanism that keeps the loop alive.
 
 ### Heartbeat H2 — a wake only counts with evidence
 
@@ -170,7 +179,7 @@ herdr agent read <name> --source recent-unwrapped --lines 120
 herdr agent send-keys <name> esc                          # ctrl+c, enter, ...
 ```
 
-Normal completion is callback-driven. Do not poll with repeated `agent get` or `agent read`, and do not call `agent wait` or add completion timeouts. `blocked` means Herdr saw an approval/question UI — inspect once with `agent get`/`agent read`, preserve the evidence against the Bead, and ask the user before answering. A missing callback does not prove the prompt was never delivered; do not blindly resend.
+Normal completion is callback-driven, and stalled or ghost workers are the reconciler's job. Do not poll with repeated `agent get` or `agent read`, and do not call `agent wait` or add completion timeouts; a single `agent get <worker>` (resolved from `metadata.worker`) is a one-shot inspection, not a loop. `blocked` means Herdr saw an approval/question UI — inspect once with `agent get`/`agent read`, preserve the evidence against the Bead, and ask the user before answering. A missing callback does not prove the prompt was never delivered; do not blindly resend.
 
 Read sources: `visible`, `recent`, `recent-unwrapped` (prefer for logs/transcripts), `detection`. Use `--format ansi` when color is evidence. If a completed agent response will not grow with more `--lines`, it is on the terminal's alternate screen: ask the agent to write its full answer to a temp file and read that file directly.
 
@@ -199,6 +208,8 @@ Build a precise layout by splitting a specific returned pane id with an explicit
 - Vendor repos are `pablontiv` forks: PRs and merges target `pablontiv/<repo>` only, never upstream; verify remotes and base before `gh pr create`/merge.
 - Self-check model/route (`PI_MODEL`/`PI_PROVIDER`, Pi metadata, `herdr agent get`) before any quota/budget action; never emit `BUDGET_EXCEEDED` for a route you are not on.
 - One agent and one distinct Bead per tab; neither Claude nor Pi may launch or delegate to in-session subagents.
+- Never create, move, relabel or close an mc pane/tab/workspace from a Worker or the reconciler; MC creation/promotion needs an incumbent-MC handshake, and any relocation carries a handover artifact and preserves the incumbent MC.
+- Stamp `metadata.worker`/`pane`/`tab` on the Bead before dispatch; `assignee` is the accountable human/orchestrator, never the worker. Fan-out: one worker per Bead, stamped by its own tab.
 - Fan-out follows `bd ready`'s dependency graph, never list order; only a real dependency edge serializes two Beads, and only mutating Beads sharing a repo need their own `herdr worktree`.
 - The only authorized kinds/CLIs are `claude` and `pi`; all other providers/models route inside Pi or through Claude's native model tier, never through another Herdr kind or subagent topology.
 - Preserve altitude routing: use Pi's economical internal route or Claude Sonnet for bounded work; justify Claude Opus or a strong Pi route for high-altitude reasoning.
