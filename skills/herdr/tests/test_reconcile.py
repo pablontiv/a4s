@@ -204,8 +204,7 @@ class ReconcileTest(unittest.TestCase):
         self.assertNotIn("bd-read", log)
 
     def test_dry_run_default_mutates_nothing_even_when_actions_planned(self):
-        fx = self.fx(in_progress=[bead("b-1", metadata={"worker": "w1", "pane": "wT:p1"})],
-                     agents={"w1": agent("w1", "done")})
+        fx = self.fx(in_progress=[self.done_bead("b-1")], agents={"w1": agent("w1", "done", pane="wT:p9", tab="wT:t9")})
         p, log = self.tick(fx)
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertIn("PLAN  HARVEST", p.stdout)
@@ -219,8 +218,8 @@ class ReconcileTest(unittest.TestCase):
         self.assertEqual(self.mutations(log), [])
 
     def test_done_harvests_then_closes_as_assignee(self):
-        fx = self.fx(in_progress=[bead("b-1", assignee=ACTOR, metadata={"worker": "w1"})],
-                     agents={"w1": agent("w1", "done")}, assignees={"b-1": ACTOR})
+        fx = self.fx(in_progress=[self.done_bead("b-1")], agents={"w1": agent("w1", "done", pane="wT:p9", tab="wT:t9")},
+                     assignees={"b-1": ACTOR})
         p, log = self.tick(fx, apply=True)
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         closes = [l for l in log.splitlines() if l.startswith("bd close b-1")]
@@ -228,7 +227,8 @@ class ReconcileTest(unittest.TestCase):
         self.assertNotIn("--actor", closes[0])  # the flag would override BEADS_ACTOR and trip the assignee guard
         self.assertIn("##BEADS_ACTOR=" + ACTOR, closes[0])
         self.assertIn("closed_by=a4s-reconcile", closes[0])  # true identity survives in the reason
-        self.assertTrue((self.t / "state" / "harvest" / "b-1-w1.txt").exists())
+        self.assertNotIn("herdr agent read", log)  # the verdict comes from the Bead record, never a terminal
+        self.assertFalse((self.t / "state" / "harvest").exists())
         audit = [json.loads(l) for l in (self.t / "state" / "audit.jsonl").read_text().splitlines()]
         self.assertEqual([(r["actor"], r["bd_actor_env"], r["tool"]) for r in audit], [("a4s-reconcile", ACTOR, "bd")])
 
@@ -350,9 +350,9 @@ class ReconcileTest(unittest.TestCase):
         old = "2026-01-01T00:00:00Z"
         d = dict(ready=[bead("r-1", status="open", labels=["auto-dispatch"])],
                  in_progress=[bead("g-1", metadata={"worker": "gone"}),
-                              bead("d-1", metadata={"worker": "w1"}, assignee=ACTOR)],
+                              self.done_bead("d-1")],
                  closed=[bead("c-1", status="closed", closed_at=old, metadata={"worker": "w9", "tab": "wT:t7"})],
-                 tabs=[{"tab_id": "wT:t7", "pane_count": 1}], agents={"w1": agent("w1", "done")},
+                 tabs=[{"tab_id": "wT:t7", "pane_count": 1}], agents={"w1": agent("w1", "done", pane="wT:p9", tab="wT:t9")},
                  assignees={"d-1": ACTOR})
         d.update(kw)
         return d
@@ -686,7 +686,7 @@ class ReconcileTest(unittest.TestCase):
                     self.assertNotIn(key, l)
 
     def test_redispatch_gets_a_new_correlation_and_clears_the_previous_ack_and_start(self):
-        old = dict(self.ACKED, **self.STARTED)
+        old = dict(self.ACKED, **self.STARTED, **self.result_meta("g-1", corr="corr.g-1.1.0"))
         b = bead("g-1", assignee=ACTOR, metadata=dict(old, worker="gone", pane="wT:p5", tab="wT:t5",
                                                   correlation_id="corr.g-1.1.0"))
         p, log = self.tick(self.fx(in_progress=[b], assignees={"g-1": ACTOR}), apply=True)
@@ -694,7 +694,9 @@ class ReconcileTest(unittest.TestCase):
         stamp = [l for l in log.splitlines() if l.startswith("bd update g-1 --set-metadata worker=")][0]
         self.assertRegex(stamp, r"correlation_id=corr\.g-1\.\d+\.1 ")
         self.assertNotIn("correlation_id=corr.g-1.1.0", stamp)
-        for key in ("receipt_id", "received_at", "acknowledged_at", "acknowledged_by", "start_id", "started_at"):
+        for key in ("receipt_id", "received_at", "acknowledged_at", "acknowledged_by", "start_id", "started_at",
+                    "result_id", "result_at", "result_by", "result_verdict", "result_artifact_path",
+                    "result_correlation_id"):
             self.assertIn("--unset-metadata %s" % key, stamp)
         self.assertNotIn("--unset-metadata worker", stamp)
 
@@ -872,6 +874,167 @@ class ReconcileTest(unittest.TestCase):
     def test_healthy_route_raises_no_escalation_ticket(self):
         p, log = self.proto_tick(self.proto_bead(age=60, **self.ACKED))
         self.assertEqual(self.tickets(), [], p.stdout)
+
+
+    # ---------------------------------------------------------------- TASK_RESULT harvest gate (bead a4s-ya4.11)
+    def result_meta(self, id_="p-1", worker="w1", verdict="pass", corr=None, **over):
+        """A well-formed result record as helper/task_result.py would have persisted it (artifact is a real file)."""
+        art = self.t / ("%s-report.md" % id_)
+        art.write_text("# report\n")
+        m = {"result_id": "res.%s" % (corr or "corr.%s.1.0" % id_), "result_at": "2026-09-20T03:00:00Z",
+             "result_by": worker, "result_verdict": verdict, "result_artifact_path": str(art),
+             "result_correlation_id": corr or "corr.%s.1.0" % id_}
+        m.update(over)
+        return m
+
+    def done_bead(self, id_="p-1", result=True, **over):
+        """A Bead dispatched under the protocol whose worker is acked, started and (by default) recorded a result."""
+        meta_ = dict(self.ACKED, **self.STARTED)
+        if result:
+            meta_.update(self.result_meta(id_))
+        meta_.update(over)
+        return self.proto_bead(id_, 6000, **meta_)
+
+    def gate_ticket(self, kind):
+        found = list((self.t / "state" / "attention").glob("p-1--%s--*.md" % kind)) if (self.t / "state").exists() else []
+        return found
+
+    def assert_left_open(self, p, log, kind, code=None):
+        self.assertEqual(self.mutations(log), [], p.stdout)  # no bd close, no herdr mutation
+        self.assertNotIn("herdr agent read", log)  # never a terminal transcript
+        self.assertNotIn("HARVEST", p.stdout)
+        tickets = self.gate_ticket(kind)
+        self.assertEqual(len(tickets), 1, p.stdout)
+        text = tickets[0].read_text()
+        self.assertIn("lifecycle_mutation: none", text)
+        self.assertIn("the Bead stays open", text)
+        if code:
+            self.assertIn(code, text)
+        return text
+
+    def test_done_without_a_result_record_is_never_closed(self):
+        p, log = self.proto_tick(self.done_bead(result=False), status="done")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        text = self.assert_left_open(p, log, "WORK_RESULT_MISSING")
+        self.assertIn("no TASK_RESULT is recorded", text)
+        self.assertEqual(self.gate_ticket("WORK_RESULT_INVALID"), [])
+        p2, log2 = self.proto_tick(self.done_bead(result=False), status="done")
+        self.assertIn("already ticketed", p2.stdout)  # idempotent across ticks
+        self.assertEqual(len(self.gate_ticket("WORK_RESULT_MISSING")), 1)
+        self.assertEqual(self.mutations(log2), [])
+
+    def test_legacy_done_worker_without_protocol_keys_is_not_closed_either(self):
+        legacy = bead("p-1", assignee=ACTOR, metadata={"worker": "w1", "pane": "wT:p9", "tab": "wT:t9",
+                                                         "dispatched_at": str(int(time.time()) - 6000)})
+        p, log = self.proto_tick(legacy, status="done")
+        self.assert_left_open(p, log, "WORK_RESULT_MISSING")
+
+    def test_valid_result_closes_with_the_exact_verdict_and_artifact(self):
+        for verdict in ("pass", "fail"):
+            with self.subTest(verdict):
+                shutil.rmtree(self.t / "state", ignore_errors=True)
+                b = self.done_bead()
+                b["metadata"].update(self.result_meta(verdict=verdict))
+                p, log = self.proto_tick(b, status="done")
+                self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+                closes = [l for l in log.splitlines() if l.startswith("bd close p-1")]
+                self.assertEqual(len(closes), 1, log)
+                art = str(self.t / "p-1-report.md")
+                self.assertIn("verdict=%s " % verdict, closes[0])
+                self.assertIn("artifact_path=%s " % art, closes[0])
+                self.assertIn("result_id=res.corr.p-1.1.0", closes[0])
+                self.assertIn("correlation_id=corr.p-1.1.0", closes[0])
+                self.assertNotIn("unverified", closes[0])
+                self.assertIn("##BEADS_ACTOR=" + ACTOR, closes[0])
+                self.assertNotIn("herdr agent read", log)
+                self.assertEqual(self.tickets(), [])
+
+    def test_invalid_result_records_never_close(self):
+        art = str(self.t / "p-1-report.md")
+        cases = {
+            "CORRELATION_MISMATCH": {"result_correlation_id": "corr.p-1.0.0"},  # outlived its dispatch
+            "INVALID_VERDICT": {"result_verdict": "unverified"},
+            "UNSAFE_ARTIFACT": {"result_artifact_path": "/tmp/../etc/passwd"},
+            "ARTIFACT_MISSING": {"result_artifact_path": str(self.t / "gone.md")},
+            "IDENTITY_MISMATCH": {"result_by": "w9"},
+            "RESULT_INCOMPLETE": {"result_at": None},
+            "MALFORMED": {"result_id": "-bad"},
+            "RESULT_WITHOUT_ACK": {"receipt_id": None, "received_at": None, "acknowledged_at": None,
+                                   "acknowledged_by": None, "start_id": None, "started_at": None},
+        }
+        for code, over in cases.items():
+            with self.subTest(code):
+                shutil.rmtree(self.t / "state", ignore_errors=True)
+                b = self.done_bead()
+                b["metadata"].update(self.result_meta())
+                b["metadata"].update(over)
+                b["metadata"] = {k: v for k, v in b["metadata"].items() if v is not None}
+                p, log = self.proto_tick(b, status="done")
+                self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+                self.assert_left_open(p, log, "WORK_RESULT_INVALID", code)
+                self.assertEqual(self.gate_ticket("WORK_RESULT_MISSING"), [])
+        self.assertTrue(Path(art).exists())
+
+    def test_result_from_a_previous_dispatch_cannot_close_the_new_one(self):
+        # re-dispatch stamped a new correlation but a stale result (old correlation) is still on the Bead
+        b = self.done_bead(correlation_id="corr.p-1.2.1", result_correlation_id="corr.p-1.1.0")
+        p, log = self.proto_tick(b, status="done")
+        self.assert_left_open(p, log, "WORK_RESULT_INVALID", "CORRELATION_MISMATCH")
+
+    def test_result_recorded_by_another_agent_cannot_close_this_workers_bead(self):
+        p, log = self.proto_tick(self.done_bead(result_by="intruder"), status="done")
+        self.assert_left_open(p, log, "WORK_RESULT_INVALID", "IDENTITY_MISMATCH")
+
+    def test_a_result_never_turns_a_non_done_worker_into_a_harvest(self):
+        for status in ("working", "idle", "blocked"):
+            with self.subTest(status):
+                shutil.rmtree(self.t / "state", ignore_errors=True)
+                p, log = self.proto_tick(self.done_bead(), status=status)
+                self.assertEqual([l for l in self.mutations(log) if l.startswith("bd close")], [], p.stdout)
+                self.assertNotIn("HARVEST", p.stdout)
+
+    def test_gate_is_evidence_only_and_read_only_in_dry_run(self):
+        agents = {"w1": agent("w1", "done", pane="wT:p9", tab="wT:t9")}
+        p, log = self.tick(self.fx(in_progress=[self.done_bead(result=False)], agents=agents))
+        self.assertIn("PLAN  ATTENTION", p.stdout)
+        self.assertNotIn("HARVEST", p.stdout)
+        self.assertEqual(self.mutations(log), [])
+        self.assertFalse((self.t / "state").exists())
+
+    def test_ack_protocol_anomalies_still_block_a_bead_that_has_a_valid_result(self):
+        b = self.done_bead(receipt_id=None, received_at=None, acknowledged_at=None, acknowledged_by=None,
+                           start_id="start.1", started_at="2026-09-20T01:00:30Z")
+        p, log = self.proto_tick(b, status="done")
+        self.assertEqual(self.mutations(log), [], p.stdout)
+        self.assertEqual(len(self.tickets("p-1--START_WITHOUT_ACK--*.md")), 1)
+        self.assertEqual(self.gate_ticket("WORK_RESULT_INVALID") + self.gate_ticket("WORK_RESULT_MISSING"), [])
+
+    def test_acked_but_not_started_worker_with_a_valid_result_closes(self):
+        b = self.proto_bead("p-1", 6000, **dict(self.ACKED, **self.result_meta()))
+        p, log = self.proto_tick(b, status="done")
+        self.assertEqual(len([l for l in log.splitlines() if l.startswith("bd close p-1")]), 1, p.stdout)
+
+    def test_dispatcher_never_writes_a_result_and_prompt_orders_record_before_close_and_callback(self):
+        ready = [bead("r-1", status="open", labels=["auto-dispatch"])]
+        p, log = self.tick(self.fx(ready=ready), apply=True)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        for l in log.splitlines():
+            if l.startswith("bd update"):
+                self.assertNotIn("result_", l)  # the Worker's helper is the only writer of the record
+        prompt = log[log.index("herdr agent prompt r-r-1"):]
+        corr = re.search(r"--correlation-id (corr\.r-1\.\d+\.0)", prompt).group(1)
+        self.assertIn("task_result.py", prompt)
+        self.assertIn("--result-id res.%s" % corr, prompt)
+        self.assertIn("--result-by r-r-1", prompt)
+        self.assertRegex(prompt, r"--verdict <pass\|fail>")
+        self.assertIn("--artifact-path /tmp/r-1-report.md", prompt)
+        self.assertLess(prompt.index("RESULT (record it before any close or callback)"), prompt.index("DELIVER:"))
+        deliver = prompt[prompt.index("DELIVER:"):]
+        self.assertLess(deliver.index("Then record it"), deliver.index("bd close"))
+        self.assertLess(deliver.index("bd close"), deliver.index("callback_envelope"))
+        self.assertIn("as your final action", deliver)
+        self.assertIn("A finished terminal is not a result", prompt)
+        self.assertNotIn("WORK_RESULT SUBMITTED verdict=<pass|fail>", prompt)  # no hand-written callback line
 
 
 if __name__ == "__main__":

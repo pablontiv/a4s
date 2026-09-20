@@ -11,7 +11,9 @@ Actions per tick (see skills/herdr/SKILL.md):
                             NO mutation this tick (actions 1-3 are skipped).
   1. bd ready            -> dispatch the Bead's content to a new peer tab
   2. bd in_progress      -> `herdr agent get <metadata.worker>`
-                            working=leave, done=harvest+close,
+                            working=leave, done=close ONLY on a valid
+                            TASK_RESULT record (else WORK_RESULT_MISSING /
+                            WORK_RESULT_INVALID ticket, Bead stays open),
                             NOT_FOUND=re-dispatch, blocked=AttentionTicket
                             no metadata.worker: live lease / live agent =>
                             leave; stale lease + no live agent + opt-in label
@@ -27,6 +29,13 @@ Actions per tick (see skills/herdr/SKILL.md):
                             valid metadata.orchestrator_target, a Human/MC target,
                             or escalation_delivery=failed|refused evidence left by
                             helper/escalation.py => AttentionTicket.
+  2e. harvest gate: `done` proves a process stopped, not a verdict. The Worker records
+                            result_id/result_at/result_by/result_verdict/result_artifact_path/
+                            result_correlation_id via helper/task_result.py before its final
+                            callback. Harvest validates that record (correlation to the current
+                            dispatch, closed verdict set, safe artifact path, identity, ack) and
+                            closes with the record's exact verdict/artifact. It never parses a
+                            terminal transcript and never infers a result from liveness.
   3. bd closed + live tab -> `herdr tab close` (reaper)
   4. blocked / needs-decision / ambiguous -> AttentionTicket (evidence file only)
   5. idempotent: a second tick over unchanged state plans and does nothing.
@@ -75,8 +84,10 @@ HELPER_DIR = os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir
 sys.path.insert(0, os.path.normpath(HELPER_DIR))
 import escalation  # noqa: E402  (orchestrator_target rules shared with the Worker-side router)
 import task_ack  # noqa: E402  (envelope grammar + field names shared with the Worker-side recorder)
+import task_result  # noqa: E402  (result record + the harvest gate's rule set, shared with the Worker-side recorder)
 
 TASK_ACK_HELPER = os.path.join(os.path.normpath(HELPER_DIR), "task_ack.py")
+TASK_RESULT_HELPER = os.path.join(os.path.normpath(HELPER_DIR), "task_result.py")
 ESCALATION_HELPER = os.path.join(os.path.normpath(HELPER_DIR), "escalation.py")
 STATE_DIR_DEFAULT = os.path.join(
     os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"),
@@ -812,22 +823,43 @@ def handle_status(ctx, b, worker, agent, settling):
 
 
 def harvest_close(ctx, b, worker):
-    bead = b["id"]
+    """Worker status `done` proves a process stopped, never a verdict. Close only on a valid TASK_RESULT record read
+    back from the Bead (helper/task_result.py is its only writer); otherwise evidence only and the Bead stays open.
+    No terminal transcript is read or parsed, and nothing is inferred from liveness."""
+    bead, m = b["id"], meta(b)
     refuse_mc_bead(ctx, b)
+    state, info = task_result.verify_record(m, worker)
+    if state != "valid":
+        result_gate_ticket(ctx, b, worker, state, info)
+        return
     if not recheck_gate(ctx):
         return
-    art = os.path.join(ctx.state, "harvest", "%s-%s.txt" % (bead, worker))
-    emit(ctx, "HARVEST", bead, "worker %s done, bead still in_progress -> save tail %s, then bd close" % (worker, art),
-         mutating=True)
-    if ctx.apply:
-        text = read_agent(ctx, worker, "recent-unwrapped", 200)
-        os.makedirs(os.path.dirname(art), exist_ok=True)
-        with open(art, "w") as f:
-            f.write(text)
+    emit(ctx, "HARVEST", bead, "worker %s done, valid TASK_RESULT %s verdict=%s artifact_path=%s -> bd close" % (
+        worker, info["result_id"], info["result_verdict"], info["result_artifact_path"]), mutating=True)
     mutate(ctx, ["close", bead, "--reason",
-                 "reconciler-harvest closed_by=%s worker=%s herdr_status=done verdict=unverified artifact_path=%s" % (
-                     ACTOR, worker, art)],
+                 "reconciler-harvest closed_by=%s worker=%s herdr_status=done result_id=%s verdict=%s artifact_path=%s "
+                 "correlation_id=%s" % (ACTOR, worker, info["result_id"], info["result_verdict"],
+                                        info["result_artifact_path"], info["result_correlation_id"])],
            tool="bd", actor=bd_actor(ctx, b))
+
+
+def result_gate_ticket(ctx, b, worker, state, info):
+    """done + no/invalid result record: evidence-only WORK_RESULT_MISSING / WORK_RESULT_INVALID, Bead left open."""
+    m = meta(b)
+    corr = m.get("correlation_id")
+    common = ("The reconciler closed nothing, inferred no verdict and read no terminal; the Bead stays open. "
+              "correlation_id=%s worker=%s recorded=%s\n" % (
+                  corr, worker, json.dumps(task_result.record_of(m), sort_keys=True)))
+    if state == "missing":
+        attention(ctx, b, "WORK_RESULT_MISSING", {"worker": worker, "correlation_id": corr},
+                  lambda: "worker %s reports herdr status done but no TASK_RESULT is recorded on the Bead.\n%sThe Worker "
+                          "must run helper/task_result.py before its final callback, or the Operator must decide." % (
+                              worker, common))
+        return
+    attention(ctx, b, "WORK_RESULT_INVALID", {"worker": worker, "correlation_id": corr, "code": info["code"]},
+              lambda: "worker %s reports herdr status done but the recorded TASK_RESULT is invalid: %s: %s\n%s"
+                      "Only helper/task_result.py may write the record; do not hand-edit it." % (
+                          worker, info["code"], info["detail"], common))
 
 
 def ghost(ctx, b, worker):
@@ -978,6 +1010,17 @@ def escalation_instructions(ctx, bead, correlation):
             % (ctx.callback, base, bead, correlation))
 
 
+def result_instructions(ctx, bead, name, correlation, report):
+    """The Worker records its result on the Bead BEFORE closing or calling back; the record is what harvest trusts."""
+    base = "python3 %s --repo %s" % (shell_quote(TASK_RESULT_HELPER), shell_quote(ctx.repo))
+    return ("RESULT (record it before any close or callback). Once the report exists: `%s --bead-id %s --correlation-id "
+            "%s --result-id res.%s --result-by %s --verdict <pass|fail> --artifact-path %s`. It prints one JSON object; "
+            "repeating it is safe (status DUPLICATE). On exit 0 its `callback_envelope` field is your final callback, "
+            "pushed verbatim. On exit 3 push its `envelope` (ATTENTION REQUIRED ...) to %s only and STOP: no Bead close, "
+            "no WORK_RESULT callback, do not hand-write result metadata. A finished terminal is not a result; only this "
+            "record is." % (base, bead, correlation, correlation, name, report, ctx.callback))
+
+
 def task_text(ctx, b, name, correlation, prev_worker=None, unlinked=False):
     bead = b["id"]
     report = "/tmp/%s-report.md" % bead
@@ -985,6 +1028,7 @@ def task_text(ctx, b, name, correlation, prev_worker=None, unlinked=False):
              "No in-session subagents, no polling." % bead,
              ack_instructions(ctx, bead, name, correlation),
              escalation_instructions(ctx, bead, correlation),
+             result_instructions(ctx, bead, name, correlation, report),
              "TITLE: %s" % b.get("title", "")]
     for key in ("description", "design", "acceptance_criteria", "notes"):
         if b.get(key):
@@ -995,13 +1039,12 @@ def task_text(ctx, b, name, correlation, prev_worker=None, unlinked=False):
     elif unlinked:
         parts.append("NOTE: this Bead was claimed but its claimant left no worker link and no live agent; inspect "
                      "repo state, any worktree and any existing report before repeating work.")
-    parts.append("DELIVER: bounded report at %s (verdict, evidence, bead_id). Then: BEADS_ACTOR=\"%s\" bd close %s "
-                 "--reason \"worker=%s verdict=<pass|fail> artifact_path=%s\" (bd's assignee guard refuses any other "
-                 "actor; never use --force) and, as your final action, herdr agent prompt %s "
-                 "\"WORK_RESULT SUBMITTED verdict=<pass|fail> artifact_path=%s bead_id=%s\". If blocked or in doubt: "
-                 "do NOT close the Bead and escalate ONLY as described under ESCALATION (never to Human/MC). Never "
-                 "create, move, relabel or prompt-drive an mc pane." % (
-                     report, bd_actor(ctx, b), bead, name, report, ctx.callback, report, bead))
+    parts.append("DELIVER: bounded report at %s (verdict, evidence, bead_id). Then record it (see RESULT). Only after "
+                 "that exits 0: BEADS_ACTOR=\"%s\" bd close %s --reason \"worker=%s verdict=<pass|fail> artifact_path=%s\" "
+                 "(bd's assignee guard refuses any other actor; never use --force) and, as your final action, herdr agent "
+                 "prompt %s with the `callback_envelope` RESULT printed. If blocked or in doubt: do NOT close the Bead "
+                 "and escalate ONLY as described under ESCALATION (never to Human/MC). Never create, move, relabel or "
+                 "prompt-drive an mc pane." % (report, bd_actor(ctx, b), bead, name, report, ctx.callback))
     return "\n\n".join(parts)
 
 
@@ -1059,8 +1102,8 @@ def dispatch(ctx, b, redispatch=0, prev_worker=None, unlinked=False):
                  "--set-metadata", "redispatch=%d" % redispatch, "--set-metadata", "correlation_id=%s" % correlation,
                  "--set-metadata", "orchestrator_target=%s" % ctx.callback]
         if redispatch:
-            # a new dispatch is a new correlation: acks/starts of the previous worker prove nothing about this one
-            for key in task_ack.RESET_FIELDS:
+            # a new dispatch is a new correlation: acks/starts/results of the previous worker prove nothing about this one
+            for key in task_ack.RESET_FIELDS + task_result.RESULT_FIELDS:
                 if m.get(key):
                     stamp += ["--unset-metadata", key]
             olds = [x for x in [str(m.get("tab", "")), str(m.get("prev_tabs", ""))] if x]
