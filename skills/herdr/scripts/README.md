@@ -8,7 +8,7 @@ Deterministic reconciler for the Herdr/Beads loop: **only `bd` + `herdr`, zero L
 |---|---|---|
 | 0 | Mission Control ownership (see below) | gate: absent/duplicated/stale/ambiguous → AttentionTicket, **no mutation this tick**; re-checked before every dispatch/close/reap |
 | 1 | `bd ready` (opt-in label, work-type Beads) | claim → `herdr tab create` → stamp worker → `agent start` → `agent prompt` with the Bead's content |
-| 2 | `bd in_progress` + `herdr agent get <metadata.worker>` | `working` leave · `done` harvest tail + `bd close` · `NOT_FOUND` re-dispatch (max 2) · `blocked` AttentionTicket · `idle`/unknown/pane mismatch AttentionTicket |
+| 2 | `bd in_progress` + `herdr agent get <metadata.worker>` | `working` leave · `done` `bd close` **only** on a valid `TASK_RESULT` record (else `WORK_RESULT_MISSING`/`WORK_RESULT_INVALID` ticket, Bead stays open) · `NOT_FOUND` re-dispatch (max 2) · `blocked` AttentionTicket · `idle`/unknown/pane mismatch AttentionTicket |
 | 2b | `bd in_progress` **without** `metadata.worker` | see "Unlinked in_progress rule" |
 | 2c | `bd in_progress` with `metadata.correlation_id` (dispatched under the ack contract) | read-only TASK_ACK/TASK_STARTED audit → `ACK_MISSING` (no `receipt_id` within `--ack-after`, default 300s) · `START_WITHOUT_ACK` · `ACK_UNCORRELATED` · `ACK_INCOMPLETE` — evidence-only tickets; the last three also skip lifecycle actions on that Bead. See "Task acknowledgement" |
 | 2d | dispatched Bead's escalation route (read-only) | `ESCALATION_TARGET_MISSING` / `ESCALATION_TARGET_FORBIDDEN` (no valid `orchestrator_target`, or Human/MC) · `ESCALATION_DELIVERY_FAILED` (`escalation_delivery=failed\|refused` left by `helper/escalation.py`) — evidence-only tickets. See "Worker escalation" |
@@ -36,6 +36,10 @@ Deterministic, evaluated in order: (1) an agent tied to the Bead without the lin
 ## Task acknowledgement (TASK_ACK / TASK_STARTED)
 
 `herdr agent prompt` succeeding is transport acceptance, not acknowledgement. Dispatch stamps `metadata.correlation_id` (`corr.<bead>.<epoch>.<redispatch>`) and `metadata.orchestrator_target` before the prompt, and the prompt tells the Worker to run `helper/task_ack.py ack` first and `start` once it begins, with literal `rcpt.<corr>` / `start.<corr>` ids. The helper is the only writer of `receipt_id`, `received_at`, `acknowledged_at`, `acknowledged_by`, `start_id`, `started_at`, `worker`, `pane`, `tab`; the reconciler never writes them and never infers them. A re-dispatch stamps a new correlation and `--unset-metadata`s the previous receipt/start record. Grammar, idempotency and fail-closed rules: `skills/herdr/SKILL.md` § "Task acknowledgement".
+
+## Task result (TASK_RESULT harvest gate)
+
+`done` from `herdr agent get` proves a process stopped, not a verdict. The Worker records `result_id`, `result_at`, `result_by`, `result_verdict` (`pass|fail`), `result_artifact_path`, `result_correlation_id` with `helper/task_result.py` before its close and final callback (literal `res.<corr>` id in the prompt). Harvest re-validates the record read back from the Bead — correlation to the current dispatch, closed verdict set, safe existing artifact file, `result_by` == `worker` == acker, a recorded ack — and closes with the record's exact verdict/artifact; otherwise an evidence-only `WORK_RESULT_MISSING`/`WORK_RESULT_INVALID` ticket and the Bead stays open. No terminal transcript is read (harvest no longer saves an agent tail) and nothing is inferred from liveness. A re-dispatch `--unset-metadata`s the whole record. Details: `skills/herdr/SKILL.md` § "Task result".
 
 ## Worker escalation (orchestrator_target only)
 
@@ -77,4 +81,4 @@ Run a dry-run by hand first. Cron alternative: `* * * * * /usr/bin/python3 <repo
 
 ## Tests
 
-`python3 -m unittest discover -s skills/herdr/tests -t skills/herdr` — offline, fake `bd`/`herdr` via `A4S_BD`/`A4S_HERDR` (MC gate verdicts, unlinked rule, mc-pane-never-mutated, idempotency; `test_task_ack.py` covers receipt, start, duplicate, missing/mismatched correlation and no-start-without-ack).
+`python3 -m unittest discover -s skills/herdr/tests -t skills/herdr` — offline, fake `bd`/`herdr` via `A4S_BD`/`A4S_HERDR` (MC gate verdicts, unlinked rule, mc-pane-never-mutated, idempotency; `test_task_ack.py` covers receipt, start, duplicate, missing/mismatched correlation and no-start-without-ack; `test_task_result.py` covers the result record, closed verdicts, safe artifacts, identity, duplicate/conflict, ack compatibility and re-dispatch reset).
