@@ -340,5 +340,120 @@ class TaskAckTest(unittest.TestCase):
             self.assertIn(key, md)
 
 
+    # ------------------------------------------------------------- ticket path containment (verifier F1)
+    def outside_files(self):
+        """Every file under the temp root that is not inside <state>/attention."""
+        root, att = Path(self.tmp.name), Path(self.state) / "attention"
+        return sorted(str(p.relative_to(root)) for p in root.rglob("*")
+                      if p.is_file() and att not in p.parents)
+
+    def assert_contained(self, res):
+        att = (Path(self.state) / "attention").resolve()
+        art = Path(res["artifact_path"])
+        self.assertEqual(art.resolve().parent, att)  # a direct child of the attention dir, no subdirectories
+        self.assertTrue(art.is_file())
+        self.assertEqual(self.outside_files(), [])
+
+    TRAVERSAL_IDS = {
+        "verifier payload": "a/../../../../pwned",
+        "deep traversal": "x/../../../../../../../../../../tmp/pwned",
+        "nested subdir": "a/b/c",
+        "dotdot inside": "a..b/../../c",
+        "colon and plus": "a:b/../../c+d",
+    }
+
+    def test_traversal_bead_id_in_envelope_stays_inside_attention_dir(self):
+        for name, evil in self.TRAVERSAL_IDS.items():
+            with self.subTest(name):
+                self.assertRegex(evil, ta.VALUE_RE)  # passes the envelope grammar: the tickets are what must hold
+                fake = FakeBd()  # unknown Bead -> BEAD_UNREADABLE with bead_id=<evil> in the facts
+                code, res = self.run_kind(fake, "ack", ack_env(bead_id=evil))
+                self.assertEqual((code, res["status"], res["code"]), (3, "ATTENTION", "BEAD_UNREADABLE"))
+                self.assert_contained(res)
+                self.assertEqual(res["envelope"], ta.attention_envelope(res["artifact_path"], res["bead_id"]))
+                ticket = Path(res["artifact_path"]).read_text()
+                self.assertIn("lifecycle_mutation: none", ticket)
+                self.assertIn("raw_bead_id: %s" % json.dumps(evil), ticket)  # the evidence keeps the raw value
+                self.assertEqual(fake.writes, [])
+
+    def test_traversal_bead_id_in_a_malformed_envelope_stays_inside_attention_dir(self):
+        # grammar failure: bead_id is recovered from the raw text, the path must still be safe
+        envelope = "TASK_ACK RECEIVED bead_id=a/../../../../pwned bogus=1"
+        code, res = self.run_kind(FakeBd(), "ack", envelope)
+        self.assertEqual((code, res["code"]), (3, "MALFORMED"))
+        self.assertEqual(res["bead_id"], "a/../../../../pwned")
+        self.assert_contained(res)
+
+    def test_write_ticket_directly_rejects_or_normalises_hostile_keys(self):
+        err = ta.ClosedError("MALFORMED", "x")
+        hostile = ["../../evil", "/abs/evil", "a/../../evil", "..", ".", "", "a\x00b", "a\nb: c", "a b",
+                   "..\\..\\evil", "x" * 500, "é/../..", "a/./b"]
+        for evil in hostile + list(self.TRAVERSAL_IDS.values()):
+            with self.subTest(repr(evil)[:40]):
+                path = Path(ta.write_ticket(self.state, evil, err, "env"))
+                self.assertEqual(path.resolve().parent, (Path(self.state) / "attention").resolve())
+                self.assertTrue(path.is_file())
+                self.assertEqual(self.outside_files(), [])
+                front = path.read_text().split("\n---\n", 1)[0].splitlines()
+                self.assertEqual([ln.split(":")[0] for ln in front if ln.startswith(("bead_id:", "kind:"))],
+                                 ["bead_id", "kind"])  # a hostile id cannot inject front-matter keys
+
+    def test_distinct_hostile_ids_never_collide_and_well_formed_ids_are_unchanged(self):
+        self.assertEqual(ta.ticket_key(BEAD), BEAD)  # same name as the reconciler layout
+        self.assertEqual(ta.ticket_key("a4s-ya4.10.3"), "a4s-ya4.10.3")
+        keys = {ta.ticket_key(x) for x in ("a/b", "a_b", "a\\b", "a/../b", "a b")}
+        self.assertEqual(len(keys), 5)
+        for key in keys:
+            self.assertRegex(key, r"^[A-Za-z0-9_.-]+$")
+            self.assertNotIn("..", key)
+        self.assertEqual(ta.ticket_key("a/b"), ta.ticket_key("a/b"))  # deterministic: repeated violations share a ticket
+
+    def test_traversal_ticket_is_idempotent_and_never_creates_parent_dirs(self):
+        evil = self.TRAVERSAL_IDS["verifier payload"]
+        first = self.run_kind(FakeBd(), "ack", ack_env(bead_id=evil))[1]["artifact_path"]
+        second = self.run_kind(FakeBd(), "ack", ack_env(bead_id=evil))[1]["artifact_path"]
+        self.assertEqual(first, second)
+        self.assertEqual(len(self.tickets()), 1)
+        self.assertEqual(sorted(p.name for p in Path(self.tmp.name).iterdir()), ["state"])  # nothing beside state/
+        self.assertEqual([p.name for p in Path(self.state).iterdir()], ["attention"])
+        self.assertEqual([p for p in (Path(self.state) / "attention").iterdir() if p.is_dir()], [])
+
+    def test_planted_tmp_symlink_is_not_written_through(self):
+        victim = Path(self.tmp.name) / "victim.txt"
+        victim.write_text("keep")
+        err = ta.ClosedError("MALFORMED", "x")
+        path = Path(ta.write_ticket(self.state, BEAD, err, "env"))
+        path.unlink()
+        path.with_suffix(".tmp").symlink_to(victim)
+        ta.write_ticket(self.state, BEAD, err, "env")
+        self.assertEqual(victim.read_text(), "keep")
+        self.assertTrue(path.is_file() and not path.is_symlink())
+
+    def test_unproven_path_fails_closed_with_a_safe_artifact_path(self):
+        real = ta.ticket_path
+
+        def escaping(state_dir, key, kind, digest):
+            raise ta.TicketPathError("simulated escape")
+
+        ta.ticket_path = escaping
+        try:
+            code, res = self.run_kind(FakeBd(), "ack", ack_env())
+        finally:
+            ta.ticket_path = real
+        self.assertEqual((code, res["status"]), (3, "ATTENTION"))
+        self.assertTrue(res["artifact_path"].startswith("(ticket unwritable:"))
+        self.assertEqual(self.outside_files(), [])
+
+    def test_cli_traversal_bead_id_stays_inside_state_dir(self):
+        t = Path(self.tmp.name)
+        cli = [sys.executable, str(HELPER), "--repo", str(t), "--state-dir", self.state]
+        p = subprocess.run(cli + ["ack", "--bead-id", "a/../../../../pwned", "--correlation-id", CORR,
+                                  "--receipt-id", "r1", "--acknowledged-by", "w1"],
+                           capture_output=True, text=True, env=dict(os.environ, A4S_BD=str(t / "no-such-bd")))
+        res = json.loads(p.stdout)
+        self.assertEqual((p.returncode, res["status"]), (3, "ATTENTION"))
+        self.assert_contained(res)
+
+
 if __name__ == "__main__":
     unittest.main()

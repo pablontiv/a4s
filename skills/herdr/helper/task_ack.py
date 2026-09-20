@@ -224,21 +224,56 @@ def record_start(beads: Beads, fields: dict[str, str], now: str | None = None) -
 # --------------------------------------------------------------------------
 # Evidence-only ticket (same layout/keying as a4s-reconcile's AttentionTicket)
 # --------------------------------------------------------------------------
+SAFE_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+
+
+class TicketPathError(OSError):
+    """A ticket path could not be proven to lie directly inside <state_dir>/attention (handled like any unwritable ticket)."""
+
+
+def ticket_key(raw: str) -> str:
+    """Filename-safe key for a ticket name component.
+
+    Well-formed ids (alphanumeric start, then [A-Za-z0-9_.-], no `..`) pass through unchanged so ticket names keep the
+    a4s-reconcile layout. Anything else (path separators, `..`, NUL, spaces, empty, over-long) is flattened to
+    [A-Za-z0-9_-] and suffixed with a digest of the raw value, so hostile ids are neutralised and never collide."""
+    raw = str(raw)
+    if SAFE_KEY_RE.match(raw) and ".." not in raw:
+        return raw
+    flat = re.sub(r"[^A-Za-z0-9_-]+", "_", raw).strip("_")[:48] or "id"
+    return "unsafe_%s_%s" % (flat, hashlib.sha256(raw.encode("utf-8", "backslashreplace")).hexdigest()[:8])
+
+
+def ticket_path(state_dir: str, key: str, kind: str, digest: str) -> Path:
+    """<state_dir>/attention/<key>--<kind>--<digest>.md; key and kind are already ticket_key()-safe (no separators)."""
+    base = Path(state_dir) / "attention"
+    name = "%s--%s--%s.md" % (key, kind, digest)
+    path = base / name
+    if path.parent != base or path.name != name:
+        raise TicketPathError("ticket path %s is not directly inside %s" % (path, base))
+    return path
+
+
 def write_ticket(state_dir: str, bead_id: str, err: ClosedError, envelope: str) -> str:
-    kind = "TASK_ACK_%s" % err.code
+    kind = ticket_key("TASK_ACK_%s" % err.code)
     facts = {k: v for k, v in dict(err.facts, code=err.code).items() if v is not None}
     digest = hashlib.sha256(json.dumps([bead_id, kind, facts], sort_keys=True).encode()).hexdigest()[:8]
-    path = Path(state_dir) / "attention" / ("%s--%s--%s.md" % (bead_id, kind, digest))
+    key = ticket_key(bead_id)
+    raw = [] if key == bead_id else ["raw_bead_id: %s" % json.dumps(bead_id)]
+    path = ticket_path(state_dir, key, kind, digest)
     if not path.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
-        body = ["---", "bead_id: %s" % bead_id, "kind: %s" % kind, "detected_at: %s" % now_iso(),
-                "facts: %s" % json.dumps(facts, sort_keys=True), "lifecycle_mutation: none", "---", "",
-                "# AttentionTicket %s %s" % (bead_id, kind), "",
+        body = ["---", "bead_id: %s" % key, "kind: %s" % kind, "detected_at: %s" % now_iso(),
+                "facts: %s" % json.dumps(facts, sort_keys=True), "lifecycle_mutation: none", *raw, "---", "",
+                "# AttentionTicket %s %s" % (key, kind), "",
                 "Evidence-only. No Bead metadata was written and no state was inferred.", "",
                 "## Evidence", "", "```", "code=%s" % err.code, "detail=%s" % err.detail,
                 "envelope=%s" % envelope, "```", ""]
         tmp = path.with_suffix(".tmp")
-        tmp.write_text("\n".join(body))
+        tmp.unlink(missing_ok=True)  # never write through a planted symlink
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o644)
+        with os.fdopen(fd, "w") as fh:
+            fh.write("\n".join(body))
         os.replace(tmp, path)
     return str(path)
 
