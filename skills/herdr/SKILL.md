@@ -98,18 +98,45 @@ If the base or remote resolves to upstream, stop and raise `ATTENTION REQUIRED`;
 8. **Link the worker to the Bead** — right after the agent starts and before dispatch, stamp who executes the unit so liveness can be resolved from the Bead alone:
 
    ```bash
-   bd update "$bead_id" --metadata '{"worker":"<name>","pane":"<pane-id>","tab":"<tab-id>"}'
+   bd update "$bead_id" --metadata '{"worker":"<name>","pane":"<pane-id>","tab":"<tab-id>","correlation_id":"corr.<bead-id>.<epoch>.<redispatch-count>"}'
    ```
+
+   `correlation_id` identifies this one dispatch: the dispatcher mints it here, before the prompt, and the Worker must echo it in every `TASK_ACK`/`TASK_STARTED` (see “Task acknowledgement” below). A re-dispatch mints a new one and clears the previous `receipt_id`/`start_id` record.
 
    `assignee` ≠ `worker`. The assignee (set by `--claim` in step 3) is the accountable human/Project Orchestrator; the worker is the executing agent and lives only in `metadata`. `--metadata` replaces the object; use `--set-metadata worker=<name>` to merge a single key. `bd close` by the Worker stays the authoritative completion signal; `metadata.worker` only lets `herdr agent get <worker>` resolve liveness while the Bead is still open. Fan-out: each peer tab stamps its own worker on its own Bead — never one worker on several Beads.
 9. **Dispatch the work** — include the full task, claimed `bead_id`, bounded report path, and Project Orchestrator callback target:
 
    ```bash
-   herdr agent prompt <name> "<task; bead_id=<bead-id>; final report path; callback target>"
+   herdr agent prompt <name> "<task; bead_id=<bead-id>; correlation_id=<correlation-id>; ack instructions; final report path; callback target>"
    ```
 
-   The accepted prompt response is dispatch evidence. Do not add `--wait`, a timeout, or completion polling. The Project Orchestrator returns to its own work or becomes idle until the callback arrives. Only now is setup complete; report the Bead, tab, space, and agent identifiers.
+   The accepted prompt response is dispatch evidence (transport acceptance), never an acknowledgement: the Worker's `TASK_ACK RECEIVED` Bead write is. Do not add `--wait`, a timeout, or completion polling. The Project Orchestrator returns to its own work or becomes idle until the callback arrives. Only now is setup complete; report the Bead, tab, space, and agent identifiers.
 10. **Never** use `pane split` or `pane move` to place a repo or a new session, and **never** leave a created space/tab empty.
+
+## Task acknowledgement — TASK_ACK / TASK_STARTED
+
+Between dispatch and completion the contract has two more Worker-owned events. **Herdr accepting a prompt is transport acceptance, not acknowledgement**: only a Bead write by the Worker proves the task was received, and only a second one proves work began. Both are correlated to the dispatch by the `correlation_id` stamped on the Bead in step 8, and both are recorded by `helper/task_ack.py` — the single writer — so no one parses free text and no one hand-writes these keys.
+
+| Event | Envelope (fixed grammar, `key=value` tokens, closed key set) | Bead metadata persisted |
+| --- | --- | --- |
+| Receipt | `TASK_ACK RECEIVED receipt_id=<id> correlation_id=<id> bead_id=<id> acknowledged_by=<agent>` | `receipt_id`, `received_at`, `acknowledged_at`, `acknowledged_by` |
+| Start | `TASK_STARTED start_id=<id> correlation_id=<id> bead_id=<id> worker=<agent> pane=<pane-id> tab=<tab-id>` | `start_id`, `started_at`, `worker`, `pane`, `tab` |
+
+```bash
+python3 skills/herdr/helper/task_ack.py --repo <repo-root> ack   --bead-id <bead-id> --correlation-id <corr> --receipt-id rcpt.<corr> --acknowledged-by <agent>
+python3 skills/herdr/helper/task_ack.py --repo <repo-root> start --bead-id <bead-id> --correlation-id <corr> --start-id start.<corr> --worker <agent> --pane "$HERDR_PANE_ID" --tab "$HERDR_TAB_ID"
+```
+
+The Worker's first action is `ack`, its second (once it begins real work) is `start`. Each command validates, writes one `bd update` as the assignee, and prints one JSON object. On exit 0 the Worker pushes the printed `envelope` verbatim to the Project Orchestrator with `herdr agent prompt` (no `--wait`); the Bead write, not that push, is the acknowledgement. `a4s-reconcile` bakes these exact commands, with literal ids (`rcpt.<corr>`, `start.<corr>`), into every prompt it dispatches.
+
+Invariants (each is enforced by the helper and covered by an offline test; failures are exit 3):
+
+- **Idempotent:** repeating the same `receipt_id` / `start_id` is `DUPLICATE` — no write, original timestamps and logical state preserved. A *different* id for an already-recorded ack/start is `ACK_CONFLICT` / `START_CONFLICT`, never an overwrite.
+- **Correlated or nothing:** an envelope with no `correlation_id` (`MISSING_CORRELATION`), a different one (`CORRELATION_MISMATCH`), or a Bead that was never stamped with one (`BEAD_UNCORRELATED`) writes nothing and infers nothing.
+- **No start without ack:** `TASK_STARTED` before a recorded receipt is `START_WITHOUT_ACK`; the ack is never fabricated to make it valid. `worker`/`pane`/`tab` must equal any dispatcher-stamped value (`IDENTITY_MISMATCH`).
+- **Fail closed with evidence:** every rejection (also malformed envelopes, unreadable or non-`in_progress` Beads, failed writes) writes an evidence-only ticket under `$XDG_STATE_HOME/a4s/reconcile/attention/` and prints `ATTENTION REQUIRED verdict=blocked artifact_path=<ticket> bead_id=<bead-id>`. The Worker pushes that line to the Project Orchestrator and stops: it does no work, does not close the Bead, and does not guess or hand-write receipt/start metadata.
+
+`a4s-reconcile` only audits this record, read-only: no `receipt_id` within `--ack-after` seconds (default 300) of `dispatched_at` → `ACK_MISSING`; `start_id` without `receipt_id` → `START_WITHOUT_ACK`; ack/start metadata without `correlation_id` → `ACK_UNCORRELATED`; a partial record → `ACK_INCOMPLETE`. All are evidence-only AttentionTickets; the last three also suppress any lifecycle action on that Bead this tick. A missing ack never proves the prompt was lost (do not resend blindly) and never proves the Worker is dead (liveness stays `herdr agent get`). Beads with no protocol keys (dispatched before this contract) are not judged. `WORK_RESULT`/`ATTENTION` completion, and `bd close` as the authoritative completion signal, are unchanged.
 
 ## Completion handoff — artifact + callback
 
@@ -126,7 +153,7 @@ Target either the Project Orchestrator's explicit pane id or unique agent name. 
 
 A blocked or attention path is evidence-only: write the blocker report and push `ATTENTION REQUIRED verdict=blocked artifact_path=<path> bead_id=<bead-id>` without closing the Bead, WorkResult, Mission, or any other lifecycle. If prompt delivery is rejected because the target is blocked or unavailable, preserve that failure in the report and do not resend blindly. Bead closure records completion of the delegated work unit only; it never auto-closes the authoritative A4S lifecycle.
 
-The Project Orchestrator remains thin: dispatch units, track state by Bead, verdict, and artifact pointer, integrate only bounded evidence, and compact its own context aggressively. Never accumulate child transcripts or duplicate their working context. Reconciliation across a fanned-out DAG is not this session's job and not a prompt: a deterministic reconciler (`skills/herdr/scripts/a4s-reconcile`, run by launchd/cron, no LLM) reads durable state from Beads and liveness from Herdr via `metadata.worker` — `bd ready` → dispatch, `in_progress` → `herdr agent get <worker>` (working: leave; done: harvest and close; not found: re-dispatch; blocked: evidence-only AttentionTicket), `in_progress` with no `metadata.worker` → leave while the lease is live, a live agent is tied to it, or activity is recent; stale lease + no live agent + opt-in label + assignee == actor → re-dispatch in a new tab; anything else → AttentionTicket, closed Bead with a live tab → close the tab. Before any of it the reconciler runs the **Mission Control safety gate**: the canonical MC is the one `in_progress` Bead labelled `mission-control` whose lease is live and whose recorded session identity (`terminal_id`/`session`, `pane`, `tab`, `workspace`) matches the live herdr pane — a label alone never counts. If MC ownership is absent, duplicated, stale or ambiguous it emits an AttentionTicket and performs no mutation; it never creates, moves, relabels, closes or prompts an mc pane, and never harvest-closes, re-dispatches, re-stamps, claims or reaps the MC ownership Bead or any Bead wired to an MC-owned target (allowlist: `tab create|close`, `agent start|prompt`, never aimed at an mc/MC-owned target). The Worker's `bd close` and WORK_RESULT/ATTENTION callback remain the authoritative completion signals; liveness proves a process exists, not semantic progress, and never grows into a scheduler or control plane inside the session. `herdr agent prompt` to a running agent is an optional nudge, never the mechanism that keeps the loop alive.
+The Project Orchestrator remains thin: dispatch units, track state by Bead, verdict, and artifact pointer, integrate only bounded evidence, and compact its own context aggressively. Never accumulate child transcripts or duplicate their working context. Reconciliation across a fanned-out DAG is not this session's job and not a prompt: a deterministic reconciler (`skills/herdr/scripts/a4s-reconcile`, run by launchd/cron, no LLM) reads durable state from Beads and liveness from Herdr via `metadata.worker` — `bd ready` → dispatch, `in_progress` → `herdr agent get <worker>` (working: leave; done: harvest and close; not found: re-dispatch; blocked: evidence-only AttentionTicket; a Bead dispatched with a `correlation_id` also gets the read-only TASK_ACK/TASK_STARTED audit above), `in_progress` with no `metadata.worker` → leave while the lease is live, a live agent is tied to it, or activity is recent; stale lease + no live agent + opt-in label + assignee == actor → re-dispatch in a new tab; anything else → AttentionTicket, closed Bead with a live tab → close the tab. Before any of it the reconciler runs the **Mission Control safety gate**: the canonical MC is the one `in_progress` Bead labelled `mission-control` whose lease is live and whose recorded session identity (`terminal_id`/`session`, `pane`, `tab`, `workspace`) matches the live herdr pane — a label alone never counts. If MC ownership is absent, duplicated, stale or ambiguous it emits an AttentionTicket and performs no mutation; it never creates, moves, relabels, closes or prompts an mc pane, and never harvest-closes, re-dispatches, re-stamps, claims or reaps the MC ownership Bead or any Bead wired to an MC-owned target (allowlist: `tab create|close`, `agent start|prompt`, never aimed at an mc/MC-owned target). The Worker's `bd close` and WORK_RESULT/ATTENTION callback remain the authoritative completion signals; liveness proves a process exists, not semantic progress, and never grows into a scheduler or control plane inside the session. `herdr agent prompt` to a running agent is an optional nudge, never the mechanism that keeps the loop alive.
 
 ### Heartbeat H2 — a wake only counts with evidence
 
@@ -209,6 +236,7 @@ Build a precise layout by splitting a specific returned pane id with an explicit
 - Self-check model/route (`PI_MODEL`/`PI_PROVIDER`, Pi metadata, `herdr agent get`) before any quota/budget action; never emit `BUDGET_EXCEEDED` for a route you are not on.
 - One agent and one distinct Bead per tab; neither Claude nor Pi may launch or delegate to in-session subagents.
 - Never create, move, relabel or close an mc pane/tab/workspace from a Worker or the reconciler; MC creation/promotion needs an incumbent-MC handshake, and any relocation carries a handover artifact and preserves the incumbent MC.
+- Herdr accepting a prompt is not an acknowledgement: stamp `metadata.correlation_id` before dispatch, and the Worker records `TASK_ACK RECEIVED` then `TASK_STARTED` through `helper/task_ack.py` only; a start never precedes an ack, ids are idempotent, and a missing or mismatched correlation fails closed with an `ATTENTION REQUIRED` ticket, never inferred state.
 - Stamp `metadata.worker`/`pane`/`tab` on the Bead before dispatch; `assignee` is the accountable human/orchestrator, never the worker. Fan-out: one worker per Bead, stamped by its own tab.
 - Fan-out follows `bd ready`'s dependency graph, never list order; only a real dependency edge serializes two Beads, and only mutating Beads sharing a repo need their own `herdr worktree`.
 - The only authorized kinds/CLIs are `claude` and `pi`; all other providers/models route inside Pi or through Claude's native model tier, never through another Herdr kind or subagent topology.

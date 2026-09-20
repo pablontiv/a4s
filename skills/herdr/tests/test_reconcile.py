@@ -12,6 +12,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -442,7 +443,7 @@ class ReconcileTest(unittest.TestCase):
         mod = load_module()
         args = type("A", (), dict(apply=False, repo=str(self.t / "repo"), state_dir=str(self.t / "s"), callback="x",
                                   dispatch_label="", settle=60, reap_grace=120, max_redispatch=2, max_dispatch=3,
-                                  default_kind="claude", default_model="sonnet", stale_after=1800, mc_grace=60,
+                                  default_kind="claude", default_model="sonnet", stale_after=1800, ack_after=300, mc_grace=60,
                                   plan_ignoring_mc_gate=False))()
         ctx = mod.Ctx(args)
         ctx.workspaces = {"wM": {"workspace_id": "wM", "label": "mission-control"}, "wT": {"workspace_id": "wT", "label": "repo"}}
@@ -544,7 +545,7 @@ class ReconcileTest(unittest.TestCase):
         mod = load_module()
         args = type("A", (), dict(apply=False, repo=str(self.t / "repo"), state_dir=str(self.t / "s"), callback="x",
                                   dispatch_label="", settle=60, reap_grace=120, max_redispatch=2, max_dispatch=3,
-                                  default_kind="claude", default_model="sonnet", stale_after=1800, mc_grace=60,
+                                  default_kind="claude", default_model="sonnet", stale_after=1800, ack_after=300, mc_grace=60,
                                   plan_ignoring_mc_gate=False))()
         ctx = mod.Ctx(args)
         ctx.workspaces = {"wM": {"workspace_id": "wM", "label": "mission-control"}}
@@ -646,6 +647,127 @@ class ReconcileTest(unittest.TestCase):
         p, log = self.tick(fx, "--max-dispatch", "1", apply=True)
         self.assertEqual(len([l for l in log.splitlines() if l.startswith("herdr tab create")]), 1, p.stdout)
         self.assertEqual(p.stdout.count("DEFER"), 2)
+
+
+    # ---------------------------------------------------------------- TASK_ACK / TASK_STARTED (bead a4s-ya4.10)
+    ACKED = {"receipt_id": "rcpt.1", "received_at": "2026-09-20T01:00:00Z", "acknowledged_at": "2026-09-20T01:00:01Z",
+             "acknowledged_by": "w1"}
+    STARTED = {"start_id": "start.1", "started_at": "2026-09-20T01:00:30Z"}
+
+    def proto_bead(self, id_="p-1", age=600, **meta_over):
+        m = {"worker": "w1", "pane": "wT:p9", "tab": "wT:t9", "correlation_id": "corr.%s.1.0" % id_,
+             "dispatched_at": str(int(time.time()) - age)}
+        m.update(meta_over)
+        return bead(id_, assignee=ACTOR, metadata={k: v for k, v in m.items() if v is not None})
+
+    def proto_tick(self, b, status="working", *args):
+        fx = self.fx(in_progress=[b], agents={"w1": agent("w1", status, pane="wT:p9", tab="wT:t9")},
+                     assignees={b["id"]: ACTOR})
+        return self.tick(fx, *args, apply=True)
+
+    def test_dispatch_stamps_correlation_and_prompt_carries_the_ack_contract(self):
+        ready = [bead("r-1", status="open", labels=["auto-dispatch"])]
+        p, log = self.tick(self.fx(ready=ready), apply=True)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        stamp = [l for l in log.splitlines() if l.startswith("bd update r-1 --set-metadata worker=")]
+        self.assertEqual(len(stamp), 1, log)
+        corr = re.search(r"correlation_id=(corr\.r-1\.\d+\.0)", stamp[0]).group(1)
+        prompt = log[log.index("herdr agent prompt r-r-1"):]
+        self.assertIn("--correlation-id %s" % corr, prompt)
+        self.assertIn("--receipt-id rcpt.%s" % corr, prompt)
+        self.assertIn("--start-id start.%s" % corr, prompt)
+        self.assertIn("task_ack.py", prompt)
+        self.assertIn("NOT an acknowledgement", prompt)  # transport acceptance != ack, told to the Worker
+        self.assertIn("ATTENTION REQUIRED", prompt)
+        # the dispatcher never writes the Worker's half of the record
+        for l in log.splitlines():
+            if l.startswith("bd update"):
+                for key in ("receipt_id=", "received_at=", "acknowledged_", "start_id=", "started_at="):
+                    self.assertNotIn(key, l)
+
+    def test_redispatch_gets_a_new_correlation_and_clears_the_previous_ack_and_start(self):
+        old = dict(self.ACKED, **self.STARTED)
+        b = bead("g-1", assignee=ACTOR, metadata=dict(old, worker="gone", pane="wT:p5", tab="wT:t5",
+                                                  correlation_id="corr.g-1.1.0"))
+        p, log = self.tick(self.fx(in_progress=[b], assignees={"g-1": ACTOR}), apply=True)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        stamp = [l for l in log.splitlines() if l.startswith("bd update g-1 --set-metadata worker=")][0]
+        self.assertRegex(stamp, r"correlation_id=corr\.g-1\.\d+\.1 ")
+        self.assertNotIn("correlation_id=corr.g-1.1.0", stamp)
+        for key in ("receipt_id", "received_at", "acknowledged_at", "acknowledged_by", "start_id", "started_at"):
+            self.assertIn("--unset-metadata %s" % key, stamp)
+        self.assertNotIn("--unset-metadata worker", stamp)
+
+    def test_transport_acceptance_is_not_ack(self):
+        # prompt accepted, agent visibly working, but no receipt_id recorded past --ack-after: ticket, not inference
+        p, log = self.proto_tick(self.proto_bead(age=600))
+        self.assertEqual(self.mutations(log), [])
+        self.assertEqual(len(self.tickets("p-1--ACK_MISSING--*.md")), 1, p.stdout)
+        ticket = next((self.t / "state" / "attention").glob("p-1--ACK_MISSING--*.md")).read_text()
+        self.assertIn("lifecycle_mutation: none", ticket)
+        self.assertIn("transport acceptance", ticket)
+        p2, log2 = self.proto_tick(self.proto_bead(age=600))
+        self.assertIn("already ticketed", p2.stdout)
+        self.assertEqual(len(self.tickets("p-1--ACK_MISSING--*.md")), 1)
+        self.assertEqual(self.mutations(log2), [])
+
+    def test_ack_deadline_is_respected_and_configurable(self):
+        p, _ = self.proto_tick(self.proto_bead(age=100))
+        self.assertEqual(self.tickets("p-1--ACK_MISSING--*.md"), [])
+        p, _ = self.proto_tick(self.proto_bead(age=100), "working", "--ack-after", "50")
+        self.assertEqual(len(self.tickets("p-1--ACK_MISSING--*.md")), 1)
+
+    def test_no_deadline_is_invented_without_dispatch_time(self):
+        p, log = self.proto_tick(self.proto_bead(dispatched_at=None))
+        self.assertEqual(self.tickets(), [])
+        self.assertEqual(self.mutations(log), [])
+
+    def test_acked_and_started_bead_is_left_alone_without_tickets(self):
+        p, log = self.proto_tick(self.proto_bead(age=6000, **dict(self.ACKED, **self.STARTED)))
+        self.assertIn("LEAVE", p.stdout)
+        self.assertEqual(self.tickets(), [])
+        self.assertEqual(self.mutations(log), [])
+
+    def test_acked_but_not_started_is_not_an_anomaly_yet(self):
+        p, log = self.proto_tick(self.proto_bead(age=6000, **self.ACKED))
+        self.assertEqual(self.tickets(), [])
+
+    def test_start_without_ack_is_ticketed_and_blocks_lifecycle_action(self):
+        b = self.proto_bead(start_id="start.1", started_at="2026-09-20T01:00:30Z")
+        p, log = self.proto_tick(b, status="done")  # a done worker would normally be harvest-closed
+        self.assertEqual(self.mutations(log), [], p.stdout)
+        self.assertNotIn("HARVEST", p.stdout)
+        self.assertEqual(len(self.tickets("p-1--START_WITHOUT_ACK--*.md")), 1)
+
+    def test_ack_or_start_without_correlation_is_ticketed_not_inferred(self):
+        b = self.proto_bead(correlation_id=None, **self.ACKED)
+        p, log = self.proto_tick(b, status="done")
+        self.assertEqual(self.mutations(log), [], p.stdout)
+        self.assertEqual(len(self.tickets("p-1--ACK_UNCORRELATED--*.md")), 1)
+
+    def test_partial_ack_or_start_records_are_ticketed(self):
+        p, log = self.proto_tick(self.proto_bead(receipt_id="rcpt.1"))
+        self.assertEqual(len(self.tickets("p-1--ACK_INCOMPLETE--*.md")), 1)
+        self.assertEqual(self.mutations(log), [])
+        shutil.rmtree(self.t / "state")
+        p, log = self.proto_tick(self.proto_bead(**dict(self.ACKED, start_id="start.1")))
+        ticket = next((self.t / "state" / "attention").glob("p-1--ACK_INCOMPLETE--*.md")).read_text()
+        self.assertIn("started_at", ticket)
+        self.assertEqual(self.mutations(log), [])
+
+    def test_legacy_dispatch_without_protocol_keys_is_not_judged(self):
+        legacy = bead("l-1", assignee=ACTOR, metadata={"worker": "w1", "pane": "wT:p9", "tab": "wT:t9",
+                                                         "dispatched_at": str(int(time.time()) - 6000)})
+        p, log = self.proto_tick(legacy)
+        self.assertEqual(self.tickets(), [])
+        self.assertEqual(self.mutations(log), [])
+
+    def test_protocol_audit_is_read_only_in_dry_run(self):
+        p, log = self.tick(self.fx(in_progress=[self.proto_bead(age=600)],
+                                   agents={"w1": agent("w1", "working", pane="wT:p9", tab="wT:t9")}))
+        self.assertIn("PLAN  ATTENTION", p.stdout)
+        self.assertEqual(self.mutations(log), [])
+        self.assertFalse((self.t / "state").exists())
 
 
 if __name__ == "__main__":

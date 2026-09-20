@@ -17,6 +17,12 @@ Actions per tick (see skills/herdr/SKILL.md):
                             leave; stale lease + no live agent + opt-in label
                             + assignee==actor => re-dispatch in a new tab;
                             otherwise AttentionTicket
+  2c. dispatched Bead carrying metadata.correlation_id: read-only TASK_ACK/
+                            TASK_STARTED audit (helper/task_ack.py writes the
+                            metadata, never this script). No receipt_id after
+                            --ack-after => ACK_MISSING; start without ack,
+                            ack/start without correlation, or partial fields =>
+                            AttentionTicket. Transport acceptance is not an ack.
   3. bd closed + live tab -> `herdr tab close` (reaper)
   4. blocked / needs-decision / ambiguous -> AttentionTicket (evidence file only)
   5. idempotent: a second tick over unchanged state plans and does nothing.
@@ -55,6 +61,11 @@ import subprocess
 import sys
 import time
 
+HELPER_DIR = os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir, "helper")
+sys.path.insert(0, os.path.normpath(HELPER_DIR))
+import task_ack  # noqa: E402  (envelope grammar + field names shared with the Worker-side recorder)
+
+TASK_ACK_HELPER = os.path.join(os.path.normpath(HELPER_DIR), "task_ack.py")
 STATE_DIR_DEFAULT = os.path.join(
     os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"),
     "a4s",
@@ -97,6 +108,7 @@ class Ctx:
         self.default_kind = args.default_kind
         self.default_model = args.default_model
         self.stale_after = args.stale_after
+        self.ack_after = args.ack_after
         self.mc_grace = args.mc_grace
         self.plan_ungated = args.plan_ignoring_mc_gate
         self.bd_bin = os.environ.get("A4S_BD", "bd")
@@ -542,6 +554,8 @@ def reconcile_in_progress(ctx):
         if why:
             emit(ctx, "LEAVE", bead, "MC ownership Bead (%s): never harvested, re-dispatched, re-stamped or closed" % why)
             continue
+        if not check_ack_protocol(ctx, b):
+            continue
         worker = m.get("worker")
         if not worker:
             try:
@@ -565,6 +579,49 @@ def reconcile_in_progress(ctx):
         except StepError as e:
             ctx.errors += 1
             emit(ctx, "ERROR", bead, str(e))
+
+
+def check_ack_protocol(ctx, b):
+    """Read-only TASK_ACK / TASK_STARTED audit of a Bead dispatched under the protocol (metadata.correlation_id).
+    Never writes and never infers an ack: the Worker's helper (task_ack.py) is the only writer of receipt/start
+    metadata; here every anomaly is an evidence-only ticket. Returns False when the Bead's protocol state is
+    invalid, so no lifecycle action is taken on it this tick. Beads with none of the protocol keys (legacy
+    dispatches) are not judged."""
+    bead, m = b["id"], meta(b)
+    corr = m.get("correlation_id")
+    if not any(m.get(k) for k in ("correlation_id", "receipt_id", "start_id")):
+        return True
+    ack = {k: m.get(k) for k in task_ack.ACK_FIELDS}
+    start = {k: m.get(k) for k in task_ack.START_FIELDS}
+    facts = None
+    if not corr:
+        facts = ("ACK_UNCORRELATED", {"receipt_id": m.get("receipt_id"), "start_id": m.get("start_id")})
+    elif m.get("start_id") and not m.get("receipt_id"):
+        facts = ("START_WITHOUT_ACK", {"correlation_id": corr, "start_id": m["start_id"]})
+    elif m.get("receipt_id") and [k for k, v in ack.items() if not v]:
+        facts = ("ACK_INCOMPLETE", {"correlation_id": corr, "missing": [k for k, v in ack.items() if not v]})
+    elif m.get("start_id") and [k for k, v in start.items() if not v]:
+        facts = ("ACK_INCOMPLETE", {"correlation_id": corr, "missing": [k for k, v in start.items() if not v]})
+    if facts:
+        kind, f = facts
+        f = {k: v for k, v in f.items() if v}
+        attention(ctx, b, kind, f, lambda: "invalid TASK_ACK/TASK_STARTED metadata on %s: %s\n"
+                  "The reconciler infers nothing and changes nothing; the Worker must re-run helper/task_ack.py or "
+                  "the Operator must fix the record.\ncorrelation_id=%s ack=%s start=%s" % (
+                      bead, json.dumps(f, sort_keys=True), corr, json.dumps(ack, sort_keys=True),
+                      json.dumps(start, sort_keys=True)))
+        return False
+    if not m.get("receipt_id"):
+        try:
+            age = time.time() - float(m.get("dispatched_at"))
+        except (TypeError, ValueError):
+            return True  # no dispatch time => cannot judge a deadline; never invent one
+        if age >= ctx.ack_after:
+            attention(ctx, b, "ACK_MISSING", {"correlation_id": corr, "ack_after": ctx.ack_after},
+                      lambda: "no TASK_ACK RECEIVED (receipt_id) recorded within %ss of dispatch; herdr accepting the "
+                              "prompt is transport acceptance, not acknowledgement. correlation_id=%s worker=%s pane=%s"
+                              % (ctx.ack_after, corr, m.get("worker"), m.get("pane")))
+    return True
 
 
 def id_token(text, ident):
@@ -832,11 +889,31 @@ def worker_name(ctx, bead, n):
     return name
 
 
-def task_text(ctx, b, name, prev_worker=None, unlinked=False):
+def correlation_id(bead, dispatched_at, redispatch):
+    """One id per dispatch, stamped on the Bead before the prompt; every ack/start must echo it back."""
+    return "corr.%s.%d.%d" % (bead, dispatched_at, redispatch)
+
+
+def ack_instructions(ctx, bead, name, correlation):
+    """FIRST-ACTION contract text: fixed grammar, literal ids (deterministic per dispatch, so a retry is a duplicate)."""
+    base = "python3 %s --repo %s" % (shell_quote(TASK_ACK_HELPER), shell_quote(ctx.repo))
+    return ("ACK FIRST (before any work). Herdr accepting this prompt is NOT an acknowledgement; only the Bead write "
+            "is. correlation_id=%s. (1) `%s ack --bead-id %s --correlation-id %s --receipt-id rcpt.%s "
+            "--acknowledged-by %s`. (2) then, once you begin, `%s start --bead-id %s --correlation-id %s --start-id "
+            "start.%s --worker %s --pane \"$HERDR_PANE_ID\" --tab \"$HERDR_TAB_ID\"`. Each prints one JSON object: "
+            "on exit 0 push its `envelope` field verbatim to %s with herdr agent prompt (no --wait); repeating a "
+            "command is safe (status DUPLICATE). On exit 3 push its `envelope` (ATTENTION REQUIRED ...) to %s and "
+            "STOP: do no work, do not close the Bead, do not guess or hand-write receipt/start metadata."
+            % (correlation, base, bead, correlation, correlation, name, base, bead, correlation, correlation, name,
+               ctx.callback, ctx.callback))
+
+
+def task_text(ctx, b, name, correlation, prev_worker=None, unlinked=False):
     bead = b["id"]
     report = "/tmp/%s-report.md" % bead
     parts = ["You are the Worker for bead_id=%s (dispatched by a4s-reconcile). Work only in your cwd. "
              "No in-session subagents, no polling." % bead,
+             ack_instructions(ctx, bead, name, correlation),
              "TITLE: %s" % b.get("title", "")]
     for key in ("description", "design", "acceptance_criteria", "notes"):
         if b.get(key):
@@ -900,10 +977,16 @@ def dispatch(ctx, b, redispatch=0, prev_worker=None, unlinked=False):
             mutate(ctx, ["tab", "create", "--workspace", ws, "--cwd", cwd, "--label", bead, "--no-focus"])
             tab, pane = "<tab-id>", "<pane-id>"
         step = "worker-link"
+        dispatched_at = int(time.time())
+        correlation = correlation_id(bead, dispatched_at, redispatch)
         stamp = ["update", bead, "--set-metadata", "worker=%s" % name, "--set-metadata", "pane=%s" % pane,
-                 "--set-metadata", "tab=%s" % tab, "--set-metadata", "dispatched_at=%d" % int(time.time()),
-                 "--set-metadata", "redispatch=%d" % redispatch]
+                 "--set-metadata", "tab=%s" % tab, "--set-metadata", "dispatched_at=%d" % dispatched_at,
+                 "--set-metadata", "redispatch=%d" % redispatch, "--set-metadata", "correlation_id=%s" % correlation]
         if redispatch:
+            # a new dispatch is a new correlation: acks/starts of the previous worker prove nothing about this one
+            for key in task_ack.RESET_FIELDS:
+                if m.get(key):
+                    stamp += ["--unset-metadata", key]
             olds = [x for x in [str(m.get("tab", "")), str(m.get("prev_tabs", ""))] if x]
             stamp += ["--set-metadata", "prev_tabs=%s" % ",".join(olds),
                       "--set-metadata", "prev_workers=%s" % ",".join(
@@ -915,7 +998,7 @@ def dispatch(ctx, b, redispatch=0, prev_worker=None, unlinked=False):
             start += ["--", "--model", str(model)]
         mutate(ctx, start)
         step = "prompt"
-        mutate(ctx, ["agent", "prompt", name, task_text(ctx, b, name, prev_worker, unlinked)])
+        mutate(ctx, ["agent", "prompt", name, task_text(ctx, b, name, correlation, prev_worker, unlinked)])
     except StepError as e:
         ctx.errors += 1
         emit(ctx, "ERROR", bead, "dispatch failed at %s: %s" % (step, e))
@@ -982,6 +1065,8 @@ def main(argv=None):
     ap.add_argument("--max-redispatch", type=int, default=2)
     ap.add_argument("--stale-after", type=int, default=1800,
                     help="seconds without lease/heartbeat/update before an unlinked in_progress Bead is stale")
+    ap.add_argument("--ack-after", type=int, default=300,
+                    help="seconds after dispatch without a recorded TASK_ACK before an ACK_MISSING ticket")
     ap.add_argument("--mc-grace", type=int, default=60, help="seconds past MC lease expiry before the MC is stale")
     ap.add_argument("--plan-ignoring-mc-gate", action="store_true",
                     help="DRY-RUN ONLY: print the plan as if the MC gate were open (read-only; refused with --apply)")

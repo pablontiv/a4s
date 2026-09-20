@@ -10,6 +10,7 @@ Deterministic reconciler for the Herdr/Beads loop: **only `bd` + `herdr`, zero L
 | 1 | `bd ready` (opt-in label, work-type Beads) | claim → `herdr tab create` → stamp worker → `agent start` → `agent prompt` with the Bead's content |
 | 2 | `bd in_progress` + `herdr agent get <metadata.worker>` | `working` leave · `done` harvest tail + `bd close` · `NOT_FOUND` re-dispatch (max 2) · `blocked` AttentionTicket · `idle`/unknown/pane mismatch AttentionTicket |
 | 2b | `bd in_progress` **without** `metadata.worker` | see "Unlinked in_progress rule" |
+| 2c | `bd in_progress` with `metadata.correlation_id` (dispatched under the ack contract) | read-only TASK_ACK/TASK_STARTED audit → `ACK_MISSING` (no `receipt_id` within `--ack-after`, default 300s) · `START_WITHOUT_ACK` · `ACK_UNCORRELATED` · `ACK_INCOMPLETE` — evidence-only tickets; the last three also skip lifecycle actions on that Bead. See "Task acknowledgement" |
 | 3 | `bd closed` with `metadata.tab` + live tab | `herdr tab close` (skipped if <120s old, agent still working, foreign agent, shared/multi-pane tab, or own tab) |
 | 4 | status `blocked` or label `needs-decision` | AttentionTicket file under `$XDG_STATE_HOME/a4s/reconcile/attention/` — evidence only, no lifecycle mutation |
 | 5 | re-run over unchanged state | plans nothing (tickets are keyed by bead+kind+facts digest) |
@@ -30,6 +31,10 @@ Before any dispatch/recovery/close/reap the canonical MC is discovered by **owne
 ## Unlinked in_progress rule (no `metadata.worker`)
 
 Deterministic, evaluated in order: (1) an agent tied to the Bead without the link — name or tab label contains the Bead id, `metadata.pane`/`tab`, or cwd == the Bead's own `metadata.worktree|cwd` — `working` → leave, `blocked` → `WORKER_BLOCKED` ticket, other → leave unless stale, then `UNLINKED_WORKER_IDLE` ticket; (2) live lease → leave; (3) last activity (max of lease expiry, heartbeat, updated, started) newer than `--stale-after` (1800s) → leave; (4) stale, no live agent → **re-dispatch in a new tab** (no re-claim, `redispatch` counter, reuses `metadata.worktree` as cwd) iff opt-in label, `assignee == actor`, work-type Bead, `--callback` set and `redispatch < --max-redispatch`; otherwise a `STALE_UNLINKED` ticket with the blockers. Parent ids also match children's names/labels — conservative: that can only suppress action. Re-dispatch and ready dispatch share one `--max-dispatch` budget per tick.
+
+## Task acknowledgement (TASK_ACK / TASK_STARTED)
+
+`herdr agent prompt` succeeding is transport acceptance, not acknowledgement. Dispatch stamps `metadata.correlation_id` (`corr.<bead>.<epoch>.<redispatch>`) before the prompt, and the prompt tells the Worker to run `helper/task_ack.py ack` first and `start` once it begins, with literal `rcpt.<corr>` / `start.<corr>` ids. The helper is the only writer of `receipt_id`, `received_at`, `acknowledged_at`, `acknowledged_by`, `start_id`, `started_at`, `worker`, `pane`, `tab`; the reconciler never writes them and never infers them. A re-dispatch stamps a new correlation and `--unset-metadata`s the previous receipt/start record. Grammar, idempotency and fail-closed rules: `skills/herdr/SKILL.md` § "Task acknowledgement".
 
 ## Closing actor (bd assignee guard)
 
@@ -67,4 +72,4 @@ Run a dry-run by hand first. Cron alternative: `* * * * * /usr/bin/python3 <repo
 
 ## Tests
 
-`python3 -m unittest discover -s skills/herdr/tests -t skills/herdr` — offline, fake `bd`/`herdr` via `A4S_BD`/`A4S_HERDR` (MC gate verdicts, unlinked rule, mc-pane-never-mutated, idempotency).
+`python3 -m unittest discover -s skills/herdr/tests -t skills/herdr` — offline, fake `bd`/`herdr` via `A4S_BD`/`A4S_HERDR` (MC gate verdicts, unlinked rule, mc-pane-never-mutated, idempotency; `test_task_ack.py` covers receipt, start, duplicate, missing/mismatched correlation and no-start-without-ack).
