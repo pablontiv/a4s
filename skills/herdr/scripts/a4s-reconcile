@@ -23,6 +23,10 @@ Actions per tick (see skills/herdr/SKILL.md):
                             --ack-after => ACK_MISSING; start without ack,
                             ack/start without correlation, or partial fields =>
                             AttentionTicket. Transport acceptance is not an ack.
+  2d. dispatched Bead's escalation route (read-only): correlation_id without a
+                            valid metadata.orchestrator_target, a Human/MC target,
+                            or escalation_delivery=failed|refused evidence left by
+                            helper/escalation.py => AttentionTicket.
   3. bd closed + live tab -> `herdr tab close` (reaper)
   4. blocked / needs-decision / ambiguous -> AttentionTicket (evidence file only)
   5. idempotent: a second tick over unchanged state plans and does nothing.
@@ -41,6 +45,12 @@ Safety:
     never harvest-closed, re-dispatched, re-stamped, claimed or reaped: they are
     filtered out of actions 1-3 and `mutate()` refuses every bd write aimed at them.
     Only Mission Control / the Operator may change it.
+  * WORKER ESCALATION GOES TO THE PO ONLY. Dispatch stamps metadata.orchestrator_target
+    (the --callback pane/name) and correlation_id in one bd update before the agent
+    starts or is prompted, and fails closed (no claim, no tab, no agent) unless the
+    target is a live agent that is not the Worker, Human/Operator, or mc/MC-owned.
+    The Worker's prompt forbids asking the Human Operator or Mission Control and
+    routes every blocker/question through helper/escalation.py to that target.
   * Fail closed: unknown worker status, identity mismatch, shared tab, missing
     workspace/callback -> no lifecycle mutation, only a report (AttentionTicket
     where evidence is worth keeping).
@@ -63,9 +73,11 @@ import time
 
 HELPER_DIR = os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir, "helper")
 sys.path.insert(0, os.path.normpath(HELPER_DIR))
+import escalation  # noqa: E402  (orchestrator_target rules shared with the Worker-side router)
 import task_ack  # noqa: E402  (envelope grammar + field names shared with the Worker-side recorder)
 
 TASK_ACK_HELPER = os.path.join(os.path.normpath(HELPER_DIR), "task_ack.py")
+ESCALATION_HELPER = os.path.join(os.path.normpath(HELPER_DIR), "escalation.py")
 STATE_DIR_DEFAULT = os.path.join(
     os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"),
     "a4s",
@@ -554,6 +566,7 @@ def reconcile_in_progress(ctx):
         if why:
             emit(ctx, "LEAVE", bead, "MC ownership Bead (%s): never harvested, re-dispatched, re-stamped or closed" % why)
             continue
+        audit_escalation(ctx, b)
         if not check_ack_protocol(ctx, b):
             continue
         worker = m.get("worker")
@@ -579,6 +592,49 @@ def reconcile_in_progress(ctx):
         except StepError as e:
             ctx.errors += 1
             emit(ctx, "ERROR", bead, str(e))
+
+
+def mc_identities(ctx):
+    """Every pane/tab/agent name the escalation route must never point at."""
+    pr = ctx.protected
+    ids = set(pr["panes"]) | set(pr["tabs"]) | set(pr["agents"])
+    for b in ctx.mc_beads:
+        ids |= {str(meta(b)[k]) for k in ("pane", "tab", "worker", "terminal_id") if meta(b).get(k)}
+    return ids
+
+
+def orchestrator_target_problem(ctx, target, worker=None):
+    """-> (code, detail) when `target` may not receive Worker escalations, else None. Dispatch-time rule: the static
+    rules shared with the Worker's router, then live resolution to exactly the agent the PO runs as."""
+    problem = escalation.check_target(target, mc_identities(ctx), {worker} if worker else ())
+    if problem:
+        return problem
+    agent = ctx.agents.get(target) or next((a for a in ctx.agents.values() if a.get("pane_id") == target), None)
+    if agent is None:
+        return "TARGET_NOT_LIVE", "orchestrator_target %r is not a live agent name or pane id" % target
+    pr = ctx.protected
+    if agent.get("name") in pr["agents"] or agent.get("pane_id") in pr["panes"] or agent.get("tab_id") in pr["tabs"]:
+        return "TARGET_FORBIDDEN", "orchestrator_target %r resolves to a Mission Control-owned agent" % target
+    return None
+
+
+def audit_escalation(ctx, b):
+    """Read-only audit of a dispatched Bead's escalation route. Evidence-only tickets; never writes, never re-routes."""
+    bead, m = b["id"], meta(b)
+    corr, target = m.get("correlation_id"), m.get("orchestrator_target")
+    if m.get("escalation_delivery") in ("failed", "refused"):
+        attention(ctx, b, "ESCALATION_DELIVERY_FAILED",
+                  {"correlation_id": corr, "target": m.get("escalation_target"), "delivery": m["escalation_delivery"]},
+                  lambda: "Worker escalation not delivered to its orchestrator_target (%s). The Worker stopped; it never "
+                          "falls back to Human/MC. artifact_path=%s error=%s" % (
+                              m.get("escalation_target"), m.get("escalation_artifact_path"), m.get("escalation_error")))
+    if not corr:
+        return
+    problem = escalation.check_target(target, mc_identities(ctx), {str(m[k]) for k in ("worker", "pane", "tab") if m.get(k)})
+    if problem:
+        attention(ctx, b, "ESCALATION_%s" % problem[0], {"correlation_id": corr, "target": target},
+                  lambda: "%s\nA Worker with no valid orchestrator_target has no legitimate escalation path; it must "
+                          "not ask Human/MC. The reconciler infers and changes nothing." % problem[1])
 
 
 def check_ack_protocol(ctx, b):
@@ -901,11 +957,25 @@ def ack_instructions(ctx, bead, name, correlation):
             "is. correlation_id=%s. (1) `%s ack --bead-id %s --correlation-id %s --receipt-id rcpt.%s "
             "--acknowledged-by %s`. (2) then, once you begin, `%s start --bead-id %s --correlation-id %s --start-id "
             "start.%s --worker %s --pane \"$HERDR_PANE_ID\" --tab \"$HERDR_TAB_ID\"`. Each prints one JSON object: "
-            "on exit 0 push its `envelope` field verbatim to %s with herdr agent prompt (no --wait); repeating a "
-            "command is safe (status DUPLICATE). On exit 3 push its `envelope` (ATTENTION REQUIRED ...) to %s and "
-            "STOP: do no work, do not close the Bead, do not guess or hand-write receipt/start metadata."
+            "on exit 0 push its `envelope` field verbatim to your orchestrator_target %s with herdr agent prompt "
+            "(no --wait); repeating a command is safe (status DUPLICATE). On exit 3 push its `envelope` (ATTENTION "
+            "REQUIRED ...) to %s only and STOP: do no work, do not close the Bead, do not guess or hand-write "
+            "receipt/start metadata."
             % (correlation, base, bead, correlation, correlation, name, base, bead, correlation, correlation, name,
                ctx.callback, ctx.callback))
+
+
+def escalation_instructions(ctx, bead, correlation):
+    """The Worker's only channel for blockers/questions: the stamped orchestrator_target, via helper/escalation.py."""
+    base = "python3 %s --repo %s" % (shell_quote(ESCALATION_HELPER), shell_quote(ctx.repo))
+    return ("ESCALATION (the only path). Your orchestrator_target is %s (stamped on the Bead). Every blocker, question, "
+            "approval request or decision need goes ONLY to it, as a correlated ATTENTION REQUIRED: write the report, "
+            "then `%s --bead-id %s --correlation-id %s --type <BLOCKER|QUESTION> --artifact-path <report>`. NEVER ask "
+            "the Human Operator or Mission Control (mc) directly: no interactive/ask-user question, no prompt to an mc "
+            "or human-facing pane, no other target, no fallback. If it exits non-zero the delivery failed or was "
+            "refused; the evidence is already on the Bead (and a DELIVERY_FAILED notice went to the same target if "
+            "possible): STOP - no work, no Bead close, no retry elsewhere."
+            % (ctx.callback, base, bead, correlation))
 
 
 def task_text(ctx, b, name, correlation, prev_worker=None, unlinked=False):
@@ -914,6 +984,7 @@ def task_text(ctx, b, name, correlation, prev_worker=None, unlinked=False):
     parts = ["You are the Worker for bead_id=%s (dispatched by a4s-reconcile). Work only in your cwd. "
              "No in-session subagents, no polling." % bead,
              ack_instructions(ctx, bead, name, correlation),
+             escalation_instructions(ctx, bead, correlation),
              "TITLE: %s" % b.get("title", "")]
     for key in ("description", "design", "acceptance_criteria", "notes"):
         if b.get(key):
@@ -927,10 +998,10 @@ def task_text(ctx, b, name, correlation, prev_worker=None, unlinked=False):
     parts.append("DELIVER: bounded report at %s (verdict, evidence, bead_id). Then: BEADS_ACTOR=\"%s\" bd close %s "
                  "--reason \"worker=%s verdict=<pass|fail> artifact_path=%s\" (bd's assignee guard refuses any other "
                  "actor; never use --force) and, as your final action, herdr agent prompt %s "
-                 "\"WORK_RESULT SUBMITTED verdict=<pass|fail> artifact_path=%s bead_id=%s\". If blocked: write the "
-                 "blocker report, do NOT close the Bead, push \"ATTENTION REQUIRED verdict=blocked artifact_path=<path> "
-                 "bead_id=%s\" to %s. Never create, move, relabel or prompt-drive an mc pane." % (
-                     report, bd_actor(ctx, b), bead, name, report, ctx.callback, report, bead, bead, ctx.callback))
+                 "\"WORK_RESULT SUBMITTED verdict=<pass|fail> artifact_path=%s bead_id=%s\". If blocked or in doubt: "
+                 "do NOT close the Bead and escalate ONLY as described under ESCALATION (never to Human/MC). Never "
+                 "create, move, relabel or prompt-drive an mc pane." % (
+                     report, bd_actor(ctx, b), bead, name, report, ctx.callback, report, bead))
     return "\n\n".join(parts)
 
 
@@ -961,6 +1032,10 @@ def dispatch(ctx, b, redispatch=0, prev_worker=None, unlinked=False):
         attention(ctx, b, "MC_PROTECTED", {"workspace": ws, "detail": str(e)}, lambda: str(e))
         return
     name = worker_name(ctx, bead, redispatch)
+    problem = orchestrator_target_problem(ctx, ctx.callback, worker=name)
+    if problem:  # before the claim: no PO target => no dispatch, and never a fallback to Human/MC
+        attention(ctx, b, "ORCHESTRATOR_%s" % problem[0], {"target": ctx.callback}, lambda: problem[1])
+        raise StepError("%s: %s (fail closed; Human/MC is never a target)" % problem)
     step = "claim"
     try:
         if not redispatch:
@@ -981,7 +1056,8 @@ def dispatch(ctx, b, redispatch=0, prev_worker=None, unlinked=False):
         correlation = correlation_id(bead, dispatched_at, redispatch)
         stamp = ["update", bead, "--set-metadata", "worker=%s" % name, "--set-metadata", "pane=%s" % pane,
                  "--set-metadata", "tab=%s" % tab, "--set-metadata", "dispatched_at=%d" % dispatched_at,
-                 "--set-metadata", "redispatch=%d" % redispatch, "--set-metadata", "correlation_id=%s" % correlation]
+                 "--set-metadata", "redispatch=%d" % redispatch, "--set-metadata", "correlation_id=%s" % correlation,
+                 "--set-metadata", "orchestrator_target=%s" % ctx.callback]
         if redispatch:
             # a new dispatch is a new correlation: acks/starts of the previous worker prove nothing about this one
             for key in task_ack.RESET_FIELDS:
@@ -1056,8 +1132,10 @@ def main(argv=None):
     mode.add_argument("--apply", action="store_true", help="execute planned actions")
     ap.add_argument("--repo", default=None, help="repo root owning .beads (default: git common dir parent)")
     ap.add_argument("--state-dir", default=os.environ.get("A4S_RECONCILE_STATE", STATE_DIR_DEFAULT))
-    ap.add_argument("--callback", default=os.environ.get("A4S_RECONCILE_CALLBACK", ""),
-                    help="Project Orchestrator pane/name for worker callbacks (required to dispatch)")
+    ap.add_argument("--callback", "--orchestrator-target", dest="callback",
+                    default=os.environ.get("A4S_RECONCILE_CALLBACK", ""),
+                    help="Project Orchestrator pane/name: stamped as metadata.orchestrator_target, the ONLY target of "
+                         "Worker escalations and callbacks (required to dispatch; never Human/MC)")
     ap.add_argument("--dispatch-label", default="auto-dispatch",
                     help="only ready Beads with this label are dispatched ('' = all ready work Beads)")
     ap.add_argument("--settle", type=int, default=60, help="seconds after dispatch before a worker is judged")

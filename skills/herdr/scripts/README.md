@@ -11,6 +11,7 @@ Deterministic reconciler for the Herdr/Beads loop: **only `bd` + `herdr`, zero L
 | 2 | `bd in_progress` + `herdr agent get <metadata.worker>` | `working` leave · `done` harvest tail + `bd close` · `NOT_FOUND` re-dispatch (max 2) · `blocked` AttentionTicket · `idle`/unknown/pane mismatch AttentionTicket |
 | 2b | `bd in_progress` **without** `metadata.worker` | see "Unlinked in_progress rule" |
 | 2c | `bd in_progress` with `metadata.correlation_id` (dispatched under the ack contract) | read-only TASK_ACK/TASK_STARTED audit → `ACK_MISSING` (no `receipt_id` within `--ack-after`, default 300s) · `START_WITHOUT_ACK` · `ACK_UNCORRELATED` · `ACK_INCOMPLETE` — evidence-only tickets; the last three also skip lifecycle actions on that Bead. See "Task acknowledgement" |
+| 2d | dispatched Bead's escalation route (read-only) | `ESCALATION_TARGET_MISSING` / `ESCALATION_TARGET_FORBIDDEN` (no valid `orchestrator_target`, or Human/MC) · `ESCALATION_DELIVERY_FAILED` (`escalation_delivery=failed\|refused` left by `helper/escalation.py`) — evidence-only tickets. See "Worker escalation" |
 | 3 | `bd closed` with `metadata.tab` + live tab | `herdr tab close` (skipped if <120s old, agent still working, foreign agent, shared/multi-pane tab, or own tab) |
 | 4 | status `blocked` or label `needs-decision` | AttentionTicket file under `$XDG_STATE_HOME/a4s/reconcile/attention/` — evidence only, no lifecycle mutation |
 | 5 | re-run over unchanged state | plans nothing (tickets are keyed by bead+kind+facts digest) |
@@ -34,7 +35,11 @@ Deterministic, evaluated in order: (1) an agent tied to the Bead without the lin
 
 ## Task acknowledgement (TASK_ACK / TASK_STARTED)
 
-`herdr agent prompt` succeeding is transport acceptance, not acknowledgement. Dispatch stamps `metadata.correlation_id` (`corr.<bead>.<epoch>.<redispatch>`) before the prompt, and the prompt tells the Worker to run `helper/task_ack.py ack` first and `start` once it begins, with literal `rcpt.<corr>` / `start.<corr>` ids. The helper is the only writer of `receipt_id`, `received_at`, `acknowledged_at`, `acknowledged_by`, `start_id`, `started_at`, `worker`, `pane`, `tab`; the reconciler never writes them and never infers them. A re-dispatch stamps a new correlation and `--unset-metadata`s the previous receipt/start record. Grammar, idempotency and fail-closed rules: `skills/herdr/SKILL.md` § "Task acknowledgement".
+`herdr agent prompt` succeeding is transport acceptance, not acknowledgement. Dispatch stamps `metadata.correlation_id` (`corr.<bead>.<epoch>.<redispatch>`) and `metadata.orchestrator_target` before the prompt, and the prompt tells the Worker to run `helper/task_ack.py ack` first and `start` once it begins, with literal `rcpt.<corr>` / `start.<corr>` ids. The helper is the only writer of `receipt_id`, `received_at`, `acknowledged_at`, `acknowledged_by`, `start_id`, `started_at`, `worker`, `pane`, `tab`; the reconciler never writes them and never infers them. A re-dispatch stamps a new correlation and `--unset-metadata`s the previous receipt/start record. Grammar, idempotency and fail-closed rules: `skills/herdr/SKILL.md` § "Task acknowledgement".
+
+## Worker escalation (orchestrator_target only)
+
+`--callback <pane-or-name>` (alias `--orchestrator-target`) is the Project Orchestrator. Dispatch stamps it as `metadata.orchestrator_target`, in the same `bd update` as `correlation_id`, before `agent start` and `agent prompt`, and **fails closed** (no claim, no tab, no agent; an `ORCHESTRATOR_TARGET_*` ticket) unless it names a live agent that is not the new Worker, not a Human/operator/user identity and not `mc`/Mission Control-owned. The prompt tells the Worker it never asks the Human Operator or Mission Control, and that every blocker/question goes through `helper/escalation.py` to that target as a correlated `ATTENTION REQUIRED`; a failed delivery leaves `escalation_*` evidence on the Bead, sends `ATTENTION DELIVERY_FAILED` to the same target if possible and stops, never falling back to Human/MC. The reconciler only audits this (2d); it never re-routes. Contract and codes: `skills/herdr/SKILL.md` § "Worker escalation".
 
 ## Closing actor (bd assignee guard)
 
@@ -53,7 +58,7 @@ skills/herdr/scripts/a4s-reconcile --callback <orchestrator-pane> --plan-ignorin
 skills/herdr/scripts/a4s-reconcile --apply --callback <orchestrator-pane>
 ```
 
-Dispatch is **opt-in**: only ready Beads labelled `auto-dispatch` (`--dispatch-label ''` widens it to every ready task/bug/feature/chore/spike; epics never). Optional per-Bead `metadata`: `kind` (`claude`|`pi`, default `claude -- --model sonnet`), `model`, `cwd` (absolute dir; give concurrent mutating Beads their own worktree). The reconciler stamps `worker`, `pane`, `tab`, `dispatched_at`, `redispatch` (and `prev_tabs`/`prev_workers` on re-dispatch) before starting the agent, so a crash mid-dispatch self-heals through `NOT_FOUND`.
+Dispatch is **opt-in**: only ready Beads labelled `auto-dispatch` (`--dispatch-label ''` widens it to every ready task/bug/feature/chore/spike; epics never). Optional per-Bead `metadata`: `kind` (`claude`|`pi`, default `claude -- --model sonnet`), `model`, `cwd` (absolute dir; give concurrent mutating Beads their own worktree). The reconciler stamps `worker`, `pane`, `tab`, `dispatched_at`, `redispatch`, `correlation_id`, `orchestrator_target` (and `prev_tabs`/`prev_workers` on re-dispatch) before starting the agent, so a crash mid-dispatch self-heals through `NOT_FOUND`.
 
 ## launchd (documented, not installed)
 

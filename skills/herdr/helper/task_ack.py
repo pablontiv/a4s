@@ -173,7 +173,7 @@ def meta(bead: dict) -> dict:
 # --------------------------------------------------------------------------
 # Recording (pure given a Beads-like object)
 # --------------------------------------------------------------------------
-def _check_bead(beads: Beads, fields: dict[str, str]) -> dict:
+def check_bead(beads: Beads, fields: dict[str, str]) -> dict:
     bead = beads.show(fields["bead_id"])
     m = meta(bead)
     if bead.get("status") != "in_progress":
@@ -188,7 +188,7 @@ def _check_bead(beads: Beads, fields: dict[str, str]) -> dict:
 
 
 def record_ack(beads: Beads, fields: dict[str, str], received_at: str | None = None, now: str | None = None) -> dict:
-    bead = _check_bead(beads, fields)
+    bead = check_bead(beads, fields)
     m = meta(bead)
     if m.get("receipt_id"):
         if m["receipt_id"] == fields["receipt_id"]:
@@ -202,7 +202,7 @@ def record_ack(beads: Beads, fields: dict[str, str], received_at: str | None = N
 
 
 def record_start(beads: Beads, fields: dict[str, str], now: str | None = None) -> dict:
-    bead = _check_bead(beads, fields)
+    bead = check_bead(beads, fields)
     m = meta(bead)
     if not m.get("receipt_id"):
         raise ClosedError("START_WITHOUT_ACK", "TASK_STARTED before any recorded TASK_ACK; not inferring an ack",
@@ -254,8 +254,9 @@ def ticket_path(state_dir: str, key: str, kind: str, digest: str) -> Path:
     return path
 
 
-def write_ticket(state_dir: str, bead_id: str, err: ClosedError, envelope: str) -> str:
-    kind = ticket_key("TASK_ACK_%s" % err.code)
+def write_ticket(state_dir: str, bead_id: str, err: ClosedError, envelope: str, prefix: str = "TASK_ACK",
+                 note: str = "Evidence-only. No Bead metadata was written and no state was inferred.") -> str:
+    kind = ticket_key("%s_%s" % (prefix, err.code))
     facts = {k: v for k, v in dict(err.facts, code=err.code).items() if v is not None}
     digest = hashlib.sha256(json.dumps([bead_id, kind, facts], sort_keys=True).encode()).hexdigest()[:8]
     key = ticket_key(bead_id)
@@ -266,7 +267,7 @@ def write_ticket(state_dir: str, bead_id: str, err: ClosedError, envelope: str) 
         body = ["---", "bead_id: %s" % key, "kind: %s" % kind, "detected_at: %s" % now_iso(),
                 "facts: %s" % json.dumps(facts, sort_keys=True), "lifecycle_mutation: none", *raw, "---", "",
                 "# AttentionTicket %s %s" % (key, kind), "",
-                "Evidence-only. No Bead metadata was written and no state was inferred.", "",
+                note, "",
                 "## Evidence", "", "```", "code=%s" % err.code, "detail=%s" % err.detail,
                 "envelope=%s" % envelope, "```", ""]
         tmp = path.with_suffix(".tmp")

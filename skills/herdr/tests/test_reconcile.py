@@ -99,11 +99,9 @@ else:
 
 HERDR_READS = {("agent", "list"), ("agent", "get"), ("agent", "read"), ("tab", "list"), ("pane", "list"),
                ("workspace", "list"), ("status", "server")}
-NOW = time.time()
-
 
 def iso(offset):
-    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(NOW + offset))
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + offset))
 
 
 def bead(id_, **kw):
@@ -123,6 +121,7 @@ MC_PANE = {"pane_id": "wM:p1", "tab_id": "wM:t1", "workspace_id": "wM", "termina
 MC_TAB = {"tab_id": "wM:t1", "label": "mc", "workspace_id": "wM", "pane_count": 1}
 OTHER_MC_TAB = {"tab_id": "wZ:t1", "label": "mc", "workspace_id": "wZ", "pane_count": 1}
 ACTOR = "Pablo Ontiveros"
+PO_PANE = "wO:p1"  # the live Project Orchestrator: every tick below runs with --callback wO:p1
 
 
 def mc_bead(id_="mc-1", lease=+600, **meta_over):
@@ -159,7 +158,8 @@ class ReconcileTest(unittest.TestCase):
         """Fixture with a healthy canonical MC (owner Bead + live pane + mc tab) unless overridden."""
         d = {"workspaces": [{"workspace_id": "wT", "label": "repo"}, {"workspace_id": "wM", "label": "mission-control"}],
              "tabs": [MC_TAB], "panes": [MC_PANE], "mc_beads": [mc_bead()],
-             "agents": {"mc": agent("mc", "idle", pane="wM:p1", tab="wM:t1")}}
+             "agents": {"mc": agent("mc", "idle", pane="wM:p1", tab="wM:t1"),
+                        "po": agent("po", "idle", pane=PO_PANE, tab="wO:t1")}}
         d["tabs"] = d["tabs"] + kw.pop("tabs", [])
         d["panes"] = d["panes"] + kw.pop("panes", [])
         d["agents"] = dict(d["agents"], **kw.pop("agents", {}))
@@ -177,7 +177,7 @@ class ReconcileTest(unittest.TestCase):
                    A4S_FIXTURE=str(self.t / "fx.json"), A4S_LOG=str(self.log), HERDR_TAB_ID="wS:t0",
                    BEADS_ACTOR=ACTOR)
         cmd = [sys.executable, str(SCRIPT), "--repo", str(self.t / repo), "--state-dir", str(self.t / "state"),
-               "--callback", "wO:p1"] + list(args) + (["--apply"] if apply else ["--dry-run"])
+               "--callback", PO_PANE] + list(args) + (["--apply"] if apply else ["--dry-run"])
         p = subprocess.run(cmd, capture_output=True, text=True, env=env)
         return p, self.log.read_text()
 
@@ -656,7 +656,7 @@ class ReconcileTest(unittest.TestCase):
 
     def proto_bead(self, id_="p-1", age=600, **meta_over):
         m = {"worker": "w1", "pane": "wT:p9", "tab": "wT:t9", "correlation_id": "corr.%s.1.0" % id_,
-             "dispatched_at": str(int(time.time()) - age)}
+             "orchestrator_target": PO_PANE, "dispatched_at": str(int(time.time()) - age)}
         m.update(meta_over)
         return bead(id_, assignee=ACTOR, metadata={k: v for k, v in m.items() if v is not None})
 
@@ -768,6 +768,110 @@ class ReconcileTest(unittest.TestCase):
         self.assertIn("PLAN  ATTENTION", p.stdout)
         self.assertEqual(self.mutations(log), [])
         self.assertFalse((self.t / "state").exists())
+
+    # ---------------------------------------------------------------- Worker escalation routing (bead a4s-ya4.10.2)
+    def dispatch_log(self, *args, **kw):
+        ready = [bead("r-1", status="open", labels=["auto-dispatch"])]
+        p, log = self.tick(self.fx(ready=ready, **kw), *args, apply=True)
+        return p, log
+
+    def test_dispatch_stamps_orchestrator_target_and_correlation_before_start_and_prompt(self):
+        p, log = self.dispatch_log()
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        stamp = [l for l in log.splitlines() if l.startswith("bd update r-1 --set-metadata worker=")]
+        self.assertEqual(len(stamp), 1, log)
+        self.assertIn("--set-metadata orchestrator_target=%s" % PO_PANE, stamp[0])
+        self.assertRegex(stamp[0], r"--set-metadata correlation_id=corr\.r-1\.\d+\.0")
+        # one write carries both keys, and it precedes the agent start and the prompt
+        self.assertLess(log.index(stamp[0]), log.index("herdr agent start"))
+        self.assertLess(log.index("herdr agent start"), log.index("herdr agent prompt"))
+
+    def test_target_may_be_a_live_agent_name(self):
+        p, log = self.dispatch_log("--callback", "po")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("--set-metadata orchestrator_target=po", log)
+        self.assertIn("--orchestrator-target", subprocess.run([sys.executable, str(SCRIPT), "--help"],
+                                                              capture_output=True, text=True).stdout)
+
+    def test_redispatch_restamps_the_target_with_the_new_correlation(self):
+        b = bead("g-1", assignee=ACTOR, metadata={"worker": "gone", "pane": "wT:p5", "tab": "wT:t5",
+                                                  "correlation_id": "corr.g-1.1.0", "orchestrator_target": "wZ:p7"})
+        p, log = self.tick(self.fx(in_progress=[b], assignees={"g-1": ACTOR}), apply=True)
+        stamp = [l for l in log.splitlines() if l.startswith("bd update g-1 --set-metadata worker=")][0]
+        self.assertIn("--set-metadata orchestrator_target=%s" % PO_PANE, stamp)
+        self.assertRegex(stamp, r"correlation_id=corr\.g-1\.\d+\.1 ")
+
+    def test_dispatch_fails_closed_without_a_valid_po_target(self):
+        cases = {
+            "not a live agent or pane": ("wO:p99", "TARGET_NOT_LIVE"),
+            "malformed": ("bad target", "TARGET_INVALID"),
+            "the worker itself": ("r-r-1", "TARGET_IS_WORKER"),
+        }
+        for name, (target, code) in cases.items():
+            with self.subTest(name):
+                shutil.rmtree(self.t / "state", ignore_errors=True)
+                p, log = self.dispatch_log("--callback", target)
+                self.assertEqual(self.mutations(log), [], p.stdout)  # no claim, no tab, no stamp, no agent, no prompt
+                self.assertIn("fail closed", p.stdout)
+                self.assertEqual(p.returncode, 1)
+                self.assertEqual(len(self.tickets("r-1--ORCHESTRATOR_%s--*.md" % code)), 1, p.stdout)
+
+    def test_dispatch_without_any_target_is_disabled(self):
+        p, log = self.dispatch_log("--callback", "")
+        self.assertEqual(self.mutations(log), [], p.stdout)
+        self.assertIn("no --callback target", p.stdout)
+
+    def test_human_and_mc_targets_are_prohibited_at_dispatch(self):
+        for target in ("mc", "MC", "mission-control", "human", "operator", "user", "wM:p1", "wM:t1"):
+            with self.subTest(target):
+                shutil.rmtree(self.t / "state", ignore_errors=True)
+                p, log = self.dispatch_log("--callback", target)
+                self.assertEqual(self.mutations(log), [], p.stdout)
+                self.assertNotIn("herdr agent prompt", log)
+                self.assertEqual(len(self.tickets("r-1--ORCHESTRATOR_TARGET_FORBIDDEN--*.md")), 1, p.stdout)
+
+    def test_prompt_routes_escalations_to_the_target_only_and_forbids_human_and_mc(self):
+        p, log = self.dispatch_log()
+        prompt = log[log.index("herdr agent prompt r-r-1"):]
+        self.assertIn("orchestrator_target is %s" % PO_PANE, prompt)
+        self.assertIn("escalation.py", prompt)
+        self.assertRegex(prompt, r"--type <BLOCKER\|QUESTION>")
+        self.assertIn("NEVER ask the Human Operator or Mission Control", prompt)
+        self.assertIn("no fallback", prompt)
+        self.assertIn("STOP", prompt)
+        self.assertNotIn("--target", prompt)  # the Worker is never told it can pick a target
+        for legacy in ("ask the user", "asks the user", "ask user", "user directly"):
+            self.assertNotIn(legacy, prompt.lower())
+        # the only pane id the Worker is ever told to write to is the orchestrator_target
+        self.assertEqual(set(re.findall(r"\bw[A-Za-z0-9]+:p[A-Za-z0-9]+\b", prompt)), {PO_PANE}, prompt)
+        # a blocked Worker no longer gets a free-form 'push ATTENTION REQUIRED to <callback>' instruction
+        self.assertNotIn("push \"ATTENTION REQUIRED verdict=blocked artifact_path=<path>", prompt)
+
+    def test_audit_flags_a_dispatched_bead_without_a_valid_target(self):
+        cases = {"ESCALATION_TARGET_MISSING": None, "ESCALATION_TARGET_FORBIDDEN": "wM:p1",
+                 "ESCALATION_TARGET_INVALID": "bad target"}
+        for kind, target in cases.items():
+            with self.subTest(kind):
+                shutil.rmtree(self.t / "state", ignore_errors=True)
+                p, log = self.proto_tick(self.proto_bead(orchestrator_target=target, **self.ACKED))
+                self.assertEqual(len(self.tickets("p-1--%s--*.md" % kind)), 1, p.stdout)
+                self.assertEqual(self.mutations(log), [])  # read-only: never re-routes or rewrites the target
+
+    def test_audit_surfaces_failed_escalation_delivery_as_evidence(self):
+        for delivery in ("failed", "refused"):
+            with self.subTest(delivery):
+                shutil.rmtree(self.t / "state", ignore_errors=True)
+                b = self.proto_bead(escalation_delivery=delivery, escalation_target=PO_PANE,
+                                    escalation_artifact_path="/tmp/t.md", escalation_error="rc=1", **self.ACKED)
+                p, log = self.proto_tick(b)
+                self.assertEqual(len(self.tickets("p-1--ESCALATION_DELIVERY_FAILED--*.md")), 1, p.stdout)
+                ticket = next((self.t / "state" / "attention").glob("p-1--ESCALATION_DELIVERY_FAILED--*.md")).read_text()
+                self.assertIn("never falls back to Human/MC", ticket)
+                self.assertEqual(self.mutations(log), [])
+
+    def test_healthy_route_raises_no_escalation_ticket(self):
+        p, log = self.proto_tick(self.proto_bead(age=60, **self.ACKED))
+        self.assertEqual(self.tickets(), [], p.stdout)
 
 
 if __name__ == "__main__":
