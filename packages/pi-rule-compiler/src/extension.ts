@@ -20,7 +20,7 @@ import {
   prepareRuleObservationsWithMessages,
   type RuleObservationOptions,
 } from "./observer.ts";
-import { ObservationPlanError } from "./questions.ts";
+import { canProvideRuleAuthority, ObservationPlanError } from "./questions.ts";
 import {
   ScheduledJevClient,
   type JevRequestSchedulerOptions,
@@ -339,9 +339,48 @@ function isAccepted(entries: readonly unknown[], proposalIdempotencyKey: string,
   );
 }
 
+interface LatestRuleObservation {
+  candidateCount: number;
+  signalCount: number;
+}
+
+function latestRuleObservation(
+  batches: readonly RuleSignalBatch[],
+): LatestRuleObservation | undefined {
+  const latest = batches.at(-1);
+  if (!latest) return undefined;
+
+  const latestAttemptId = latest.provenance.compactionAttemptId;
+  const attemptBatches = batches.filter(
+    (batch) => batch.provenance.compactionAttemptId === latestAttemptId,
+  );
+  const candidateCount = attemptBatches.reduce(
+    (total, batch) => total + batch.provenance.sanitizedExcerpts.filter(
+      (message) => message.excerpt.trim().length > 0 && canProvideRuleAuthority(message.role),
+    ).length,
+    0,
+  );
+  const signalCount = attemptBatches.reduce((total, batch) => total + batch.signals.length, 0);
+  return { candidateCount, signalCount };
+}
+
+function renderNoProposalState(entries: readonly unknown[]): string {
+  const observation = latestRuleObservation(collectRuleSignalBatches(entries));
+  if (!observation) {
+    return "No stored rule proposals or rule observations. Run a successful compaction.";
+  }
+  if (observation.candidateCount === 0) {
+    return "Latest compaction: no non-empty user or custom messages were eligible as rule sources.";
+  }
+  if (observation.signalCount === 0) {
+    return `Latest compaction: evaluated ${observation.candidateCount} rule candidate(s); none passed the conservative filter.`;
+  }
+  return `Latest compaction: recorded ${observation.signalCount} RuleSignal(s), but no rule proposal is stored. Run /retro-rules to retry retro processing.`;
+}
+
 function renderProposalList(entries: readonly unknown[]): string {
   const proposals = collectRuleProposalBatches(entries);
-  if (proposals.length === 0) return "No stored rule proposals. Run compaction or /retro-rules first.";
+  if (proposals.length === 0) return renderNoProposalState(entries);
   const accepted = new Set(
     collectRuleAcceptanceReceipts(entries).map((receipt) => `${receipt.proposalIdempotencyKey}:${receipt.candidateId}`),
   );
