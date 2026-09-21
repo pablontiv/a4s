@@ -6,17 +6,36 @@ import type {
   CompactionWindowObservation,
   MessageCompactionDecision,
   RetroPendingMarker,
+  RuleAcceptanceReceipt,
   RuleAuthority,
+  RuleClass,
   RuleProposalReceipt,
+  RuleScopeKind,
   RuleSignal,
   RuleSignalBatch,
   RuleSignalThresholds,
+  StoredRuleProposal,
+  StoredRuleProposalCandidate,
 } from "./types.ts";
 import { DEFAULT_JEV_MODEL } from "./types.ts";
 
 export const RULE_SIGNAL_ENTRY_TYPE = "a4s.pi-rule-compiler.rule-signals.v2" as const;
 export const RETRO_PENDING_ENTRY_TYPE = "a4s.pi-rule-compiler.retro-pending.v1" as const;
 export const RULE_PROPOSAL_ENTRY_TYPE = "a4s.pi-rule-compiler.rule-proposals.v1" as const;
+export const RULE_ACCEPTANCE_ENTRY_TYPE = "a4s.pi-rule-compiler.rule-acceptance.v1" as const;
+
+const RULE_SCOPE_KINDS: readonly RuleScopeKind[] = ["global", "project", "path", "task"];
+const RULE_CLASSES: readonly RuleClass[] = [
+  "safety",
+  "privacy",
+  "security",
+  "workflow",
+  "testing",
+  "code_quality",
+  "documentation",
+  "architecture",
+  "other",
+];
 
 const AUTHORITIES: readonly RuleAuthority[] = [
   "explicit_user",
@@ -167,6 +186,94 @@ export function parseRuleProposalReceipt(value: unknown): RuleProposalReceipt {
     idempotencyKey: requireDigest(record.idempotencyKey, `${path}.idempotencyKey`),
     sourceCompactionAttemptIds,
     sourceBatchDigests,
+  };
+}
+
+export function collectRuleProposalBatches(entries: readonly unknown[]): StoredRuleProposal[] {
+  const proposals: StoredRuleProposal[] = [];
+  const seen = new Set<string>();
+  for (const entry of entries) {
+    const record = optionalRecord(entry);
+    if (record?.type !== "custom" || record.customType !== RULE_PROPOSAL_ENTRY_TYPE) continue;
+    try {
+      const proposal = parseStoredRuleProposal(record.data);
+      if (!seen.has(proposal.idempotencyKey)) {
+        proposals.push(proposal);
+        seen.add(proposal.idempotencyKey);
+      }
+    } catch (error) {
+      if (!(error instanceof StoredEntryValidationError)) throw error;
+    }
+  }
+  return proposals;
+}
+
+export function parseStoredRuleProposal(value: unknown): StoredRuleProposal {
+  const receipt = parseRuleProposalReceipt(value);
+  const record = value as Record<string, unknown>;
+  const candidates = (record.candidates as unknown[]).map((candidate, index) =>
+    parseStoredProposalCandidate(candidate, index),
+  );
+  if (new Set(candidates.map((candidate) => candidate.id)).size !== candidates.length) {
+    fail("$ruleProposal.candidates");
+  }
+  return { idempotencyKey: receipt.idempotencyKey, createdAt: requireTimestamp(record.createdAt, "$ruleProposal.createdAt"), candidates };
+}
+
+function parseStoredProposalCandidate(value: unknown, index: number): StoredRuleProposalCandidate {
+  const path = `$ruleProposal.candidates[${index}]`;
+  const record = requireRecord(value, path);
+  const scope = requireRecord(record.scope, `${path}.scope`);
+  const scopeKind = scope.kind;
+  if (typeof scopeKind !== "string" || !RULE_SCOPE_KINDS.includes(scopeKind as RuleScopeKind)) fail(`${path}.scope.kind`);
+  const scopeTarget = scope.target === null ? null : requireBoundedString(scope.target, 1, 240, `${path}.scope.target`);
+  const evaluation = requireRecord(record.evaluation, `${path}.evaluation`);
+  if (evaluation.disposition !== "propose" && evaluation.disposition !== "hold") fail(`${path}.evaluation.disposition`);
+  const ruleClass = evaluation.ruleClass;
+  if (typeof ruleClass !== "string" || !RULE_CLASSES.includes(ruleClass as RuleClass)) fail(`${path}.evaluation.ruleClass`);
+  if (!Array.isArray(record.exceptions) || !Array.isArray(record.sourceRefs)) fail(path);
+  return {
+    id: requireDigest(record.id, `${path}.id`),
+    scope: { kind: scopeKind as RuleScopeKind, target: scopeTarget },
+    trigger: requireBoundedString(record.trigger, 1, 500, `${path}.trigger`),
+    obligation: requireBoundedString(record.obligation, 1, 1_000, `${path}.obligation`),
+    exceptions: record.exceptions.map((item, itemIndex) => requireBoundedString(item, 1, 500, `${path}.exceptions[${itemIndex}]`)),
+    sourceRefs: record.sourceRefs.map((item, itemIndex) => requireDigest(item, `${path}.sourceRefs[${itemIndex}]`)),
+    ruleClass: ruleClass as RuleClass,
+    disposition: evaluation.disposition,
+  };
+}
+
+export function collectRuleAcceptanceReceipts(entries: readonly unknown[]): RuleAcceptanceReceipt[] {
+  const receipts: RuleAcceptanceReceipt[] = [];
+  const seen = new Set<string>();
+  for (const entry of entries) {
+    const record = optionalRecord(entry);
+    if (record?.type !== "custom" || record.customType !== RULE_ACCEPTANCE_ENTRY_TYPE) continue;
+    try {
+      const receipt = parseRuleAcceptanceReceipt(record.data);
+      const key = `${receipt.proposalIdempotencyKey}:${receipt.candidateId}`;
+      if (!seen.has(key)) {
+        receipts.push(receipt);
+        seen.add(key);
+      }
+    } catch (error) {
+      if (!(error instanceof StoredEntryValidationError)) throw error;
+    }
+  }
+  return receipts;
+}
+
+export function parseRuleAcceptanceReceipt(value: unknown): RuleAcceptanceReceipt {
+  const path = "$ruleAcceptance";
+  const record = requireRecord(value, path);
+  requireExactKeys(record, ["schema", "proposalIdempotencyKey", "candidateId", "acceptedAt"], path);
+  if (record.schema !== "a4s.rule-acceptance/v1") fail(`${path}.schema`);
+  return {
+    schema: "a4s.rule-acceptance/v1",
+    proposalIdempotencyKey: requireDigest(record.proposalIdempotencyKey, `${path}.proposalIdempotencyKey`),
+    candidateId: requireDigest(record.candidateId, `${path}.candidateId`),
+    acceptedAt: requireTimestamp(record.acceptedAt, `${path}.acceptedAt`),
   };
 }
 

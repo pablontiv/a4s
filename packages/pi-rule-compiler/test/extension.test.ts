@@ -12,7 +12,9 @@ import {
   RULE_PROPOSAL_ENTRY_TYPE,
   RULE_SIGNAL_ENTRY_TYPE,
   TYPESAFE_PROVIDER_ID,
+  stableDigest,
   type JevClient,
+  type RuleSignalBatch,
   type JevCompactionResult,
   type JevRequest,
 } from "../src/index.ts";
@@ -177,6 +179,67 @@ function appendSuccessfulCompaction(fake: ReturnType<typeof createFakePi>, resul
   const entry = { type: "compaction", details: result.details };
   fake.entries.push(entry);
   return entry;
+}
+
+class NoRuleSignalJev extends ValidFakeJev {
+  override async evaluate(request: JevRequest): Promise<unknown> {
+    this.calls += 1;
+    this.requests.push(request);
+    return validJevResponse(request, (id, question) =>
+      id.startsWith("rule_candidate_") && question.type === "noul"
+        ? { type: "noul", noul: 0 }
+        : undefined,
+    );
+  }
+}
+
+async function batchFor(
+  messages: unknown[],
+  jev: JevClient,
+  attempt: string,
+): Promise<RuleSignalBatch> {
+  return observeCompactionRules(
+    { messagesToSummarize: messages, turnPrefixMessages: [] },
+    {
+      reason: "manual",
+      willRetry: false,
+      observedAt: "2026-09-22T12:00:00.000Z",
+      attemptId: stableDigest({ attempt }),
+    },
+    jev,
+    new AbortController().signal,
+  );
+}
+
+function asSignalEntry(batch: RuleSignalBatch): StoredEntry {
+  return { type: "custom", customType: RULE_SIGNAL_ENTRY_TYPE, data: batch };
+}
+
+async function runRulesReview(entries: StoredEntry[]): Promise<string> {
+  const fake = createFakePi(entries);
+  registerPiRuleCompiler(fake.pi, { jevClient: new ValidFakeJev() });
+  const { context, notifications } = createContext(fake.entries);
+  await fake.commands.get("rules-review")?.("", context);
+  return notifications.at(-1)?.message ?? "";
+}
+
+function storedProposalEntry(): StoredEntry {
+  const digest = stableDigest({ proposal: "existing" });
+  return {
+    type: "custom",
+    customType: RULE_PROPOSAL_ENTRY_TYPE,
+    data: {
+      schema: "a4s.rule-proposal-batch/v1",
+      idempotencyKey: digest,
+      createdAt: "2026-09-22T12:00:00.000Z",
+      sourceCompactionAttemptIds: [digest],
+      sourceBatchDigests: [digest],
+      sourceSignalIds: [digest],
+      synthesisModel: { provider: "fake", id: "model" },
+      jevModel: "jev-1.13.0",
+      candidates: [],
+    },
+  };
 }
 
 test("before hook always returns Jev custom compaction and signals persist only after success", async () => {
@@ -696,6 +759,63 @@ test("createTypesafeAuthResolver caches a resolved getProviderAuth result and pr
   const envResolve = createTypesafeAuthResolver({ env: { TYPESAFE_API_KEY: "from-env" } });
   assert.equal(await envResolve(ctx), "from-env");
   assert.equal(calls, 1, "an explicit env override must short-circuit getProviderAuth entirely");
+});
+
+test("/rules-review explains that no rule observation exists", async () => {
+  const message = await runRulesReview([]);
+  assert.equal(message, "No stored rule proposals or rule observations. Run a successful compaction.");
+});
+
+test("/rules-review distinguishes filtered candidates from absent authority sources", async () => {
+  const toolOnly = await batchFor(
+    [
+      { role: "toolResult", content: "SECRET_TOOL_SENTINEL" },
+      { role: "bashExecution", content: "SECRET_BASH_SENTINEL" },
+    ],
+    new ValidFakeJev(),
+    "latest",
+  );
+  assert.match(await runRulesReview([asSignalEntry(toolOnly)]), /no non-empty user or custom messages/i);
+
+  const filtered = await batchFor(
+    [{ role: "user", content: "Transient question only" }],
+    new NoRuleSignalJev(),
+    "latest",
+  );
+  const filteredMessage = await runRulesReview([asSignalEntry(filtered)]);
+  assert.match(filteredMessage, /evaluated 1 rule candidate/i);
+  assert.match(filteredMessage, /none passed the conservative filter/i);
+  assert.doesNotMatch(filteredMessage, /Transient question|SECRET_TOOL_SENTINEL|SECRET_BASH_SENTINEL/);
+  assert.doesNotMatch(filteredMessage, new RegExp(filtered.sourceDigest));
+});
+
+test("/rules-review aggregates every window of the latest attempt", async () => {
+  const older = await batchFor([{ role: "user", content: "Older candidate" }], new ValidFakeJev(), "older");
+  const latestFirst = await batchFor([{ role: "user", content: "Latest one" }], new NoRuleSignalJev(), "latest");
+  const latestSecond = await batchFor([{ role: "custom", content: "Latest two" }], new NoRuleSignalJev(), "latest");
+  const message = await runRulesReview([
+    asSignalEntry(older),
+    asSignalEntry(latestFirst),
+    asSignalEntry(latestSecond),
+  ]);
+  assert.match(message, /evaluated 2 rule candidate/i);
+  assert.match(message, /none passed the conservative filter/i);
+});
+
+test("/rules-review guides retry when signals exist but proposals do not", async () => {
+  const batch = await batchFor(
+    [{ role: "user", content: "Always run tests." }],
+    new ValidFakeJev(),
+    "latest",
+  );
+  const message = await runRulesReview([asSignalEntry(batch)]);
+  assert.match(message, /recorded 1 RuleSignal/i);
+  assert.match(message, /\/retro-rules/);
+});
+
+test("/rules-review preserves the existing proposal-list output", async () => {
+  const message = await runRulesReview([storedProposalEntry()]);
+  assert.equal(message, "0 candidate(s), 0 proposable. Use /rules-show <id> then /rules-accept <id>.\n");
 });
 
 test("createTypesafeAuthResolver retries getProviderAuth until a credential is stored", async () => {

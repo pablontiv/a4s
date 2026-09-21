@@ -153,7 +153,12 @@ export function buildRuleObservationPlan(
 }
 
 export function canProvideRuleAuthority(role: string): boolean {
-  return role === "user" || role === "toolResult" || role === "bashExecution" || role === "custom";
+  // A rule originates from user intent or an explicit decision, not from a tool
+  // output. `toolResult`/`bashExecution` still receive compaction-retention
+  // questions, but they never enter the rule-candidate pool: their content
+  // (skill dumps, PR reports, mem_save JSON, bash output) is evidence, not
+  // authority, and over-captured the pool as noise.
+  return role === "user" || role === "custom";
 }
 
 function requestTokens(state: FittedSessionState["state"], questions: Record<string, JevQuestion>): number {
