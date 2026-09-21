@@ -93,13 +93,18 @@ export {
 } from "./state.ts";
 export {
   collectRetroPendingMarkers,
+  collectRuleAcceptanceReceipts,
+  collectRuleProposalBatches,
   collectRuleProposalReceipts,
   collectRuleSignalBatches,
   parseRetroPendingMarker,
+  parseRuleAcceptanceReceipt,
   parseRuleProposalReceipt,
   parseRuleSignalBatch,
+  parseStoredRuleProposal,
   reconstructObservedSourceDigests,
   RETRO_PENDING_ENTRY_TYPE,
+  RULE_ACCEPTANCE_ENTRY_TYPE,
   RULE_PROPOSAL_ENTRY_TYPE,
   RULE_SIGNAL_ENTRY_TYPE,
   StoredEntryValidationError,

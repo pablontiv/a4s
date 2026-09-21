@@ -7,7 +7,7 @@ Private Pi extension that uses Jev as the semantic authority for compaction whil
 - `session_before_compact` returns a deterministic custom compaction assembled from Jev `keep`, `truncate`, and `drop` decisions.
 - There is no native or generative summary fallback. Missing credentials, timeout, malformed response, oversized state/summary, abort, or API failure returns `{ cancel: true }`.
 - The newest and true preparation-boundary messages are pinned. A selected durable rule candidate is always retained even when its immediate-continuity score is low.
-- Large inputs are split into chronological windows; every compacted message receives one retention judgment. Rule questions are added only for roles that can carry direct authority (`user`, `toolResult`, `bashExecution`, `custom`), while generated assistant/summary roles still receive retention judgments.
+- Large inputs are split into chronological windows; every compacted message receives one retention judgment. Rule-candidate questions are added only for roles that can originate authority from intent or an explicit decision (`user`, `custom`). `toolResult` and `bashExecution` still receive retention judgments but never enter the rule-candidate pool: their content is evidence, not authority. Generated assistant/summary roles likewise receive only retention judgments.
 - Every window shares one global scheduler: default concurrency is 1, `429`/`529` retries are bounded, `Retry-After` is honored up to 30 seconds, and the whole compaction remains abortable under a 180-second deadline.
 - Requests are packed up to 120 questions only while verified below Jev 1.13's guarded budgets: 60k estimated tokens per request and 30k for state plus the longest question.
 - RuleSignal batches are embedded in sanitized compaction details, then published as namespaced custom entries only after `session_compact` succeeds. Reload reconciliation recovers a batch if the process stopped after Pi persisted compaction but before publication.
@@ -15,6 +15,7 @@ Private Pi extension that uses Jev as the semantic authority for compaction whil
 - Proposal receipts make duplicate success, reload, `agent_settled`, and `/retro-rules` replay idempotent. Retro stage 2 uses the same bounded scheduler. Retro failure never rolls back compaction and leaves signals plus pending state available for retry.
 - Jev uses the pinned model `jev-1.13.0`. The extension registers a credential-only `typesafe` provider so `/login typesafe` stores an API key via Pi's own auth storage; the resolved credential is cached for the session. `TYPESAFE_API_KEY` in the environment takes precedence when set and bypasses stored-credential resolution entirely.
 - Automatic retro and `/retro-rules` store proposals only. They never write Rootline documents or activate rules; `/retro-rules` exists solely for manual retry/recovery.
+- Review is store-only. `/rules-review` lists stored proposals with their acceptance state, `/rules-show <id>` shows one candidate, and `/rules-accept <id>` records a manual acceptance receipt for a `propose` candidate. Acceptance still writes nothing to Rootline or AGENTS.md; the durable apply of an accepted rule is deferred to the decision in ADR 0020.
 - The extension does not read, write, or replace gentle-engram entries.
 
 ## Use

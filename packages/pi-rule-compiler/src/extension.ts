@@ -34,10 +34,13 @@ import {
 import { StateFitError } from "./state.ts";
 import {
   collectRetroPendingMarkers,
+  collectRuleAcceptanceReceipts,
+  collectRuleProposalBatches,
   collectRuleProposalReceipts,
   collectRuleSignalBatches,
   reconstructObservedSourceDigests,
   RETRO_PENDING_ENTRY_TYPE,
+  RULE_ACCEPTANCE_ENTRY_TYPE,
   RULE_PROPOSAL_ENTRY_TYPE,
   RULE_SIGNAL_ENTRY_TYPE,
 } from "./storage.ts";
@@ -45,7 +48,10 @@ import type {
   JevClient,
   JevCompactionResult,
   RetroPendingMarker,
+  RuleAcceptanceReceipt,
   RuleSignalBatch,
+  StoredRuleProposal,
+  StoredRuleProposalCandidate,
 } from "./types.ts";
 import { TYPESAFE_API_KEY_ENV, TYPESAFE_PROVIDER_ID } from "./types.ts";
 
@@ -237,6 +243,154 @@ export function registerPiRuleCompiler(pi: ExtensionAPI, options: PiRuleCompiler
       if (result.eligible === 0) safeNotify(ctx, "retro", "no_pending_retro");
     },
   });
+
+  pi.registerCommand("rules-review", {
+    description: "List stored review-only rule proposals and their acceptance state",
+    handler: async (_args, ctx) => {
+      safeNotifyText(ctx, renderProposalList(ctx.sessionManager.getBranch()), "info");
+    },
+  });
+
+  pi.registerCommand("rules-show", {
+    description: "Show one proposed rule candidate by id (or unique id prefix)",
+    handler: async (args, ctx) => {
+      const entries = ctx.sessionManager.getBranch();
+      const match = resolveCandidate(entries, args.trim());
+      if (match.status !== "ok") {
+        safeNotifyText(ctx, renderResolutionError(match), "warning");
+        return;
+      }
+      const accepted = isAccepted(entries, match.proposal.idempotencyKey, match.candidate.id);
+      safeNotifyText(ctx, renderCandidateDetail(match.candidate, accepted), "info");
+    },
+  });
+
+  pi.registerCommand("rules-accept", {
+    description: "Record manual acceptance of a proposed rule (store-only; no Rootline/AGENTS.md write)",
+    handler: async (args, ctx) => {
+      const entries = ctx.sessionManager.getBranch();
+      const match = resolveCandidate(entries, args.trim());
+      if (match.status !== "ok") {
+        safeNotifyText(ctx, renderResolutionError(match), "warning");
+        return;
+      }
+      if (match.candidate.disposition !== "propose") {
+        safeNotifyText(
+          ctx,
+          `Rule ${shortId(match.candidate.id)} is held, not proposed, and cannot be accepted. Only 'propose' candidates are acceptable.`,
+          "warning",
+        );
+        return;
+      }
+      if (isAccepted(entries, match.proposal.idempotencyKey, match.candidate.id)) {
+        safeNotifyText(ctx, `Rule ${shortId(match.candidate.id)} was already accepted; no change.`, "info");
+        return;
+      }
+      const receipt: RuleAcceptanceReceipt = {
+        schema: "a4s.rule-acceptance/v1",
+        proposalIdempotencyKey: match.proposal.idempotencyKey,
+        candidateId: match.candidate.id,
+        acceptedAt: now().toISOString(),
+      };
+      try {
+        pi.appendEntry(RULE_ACCEPTANCE_ENTRY_TYPE, receipt);
+      } catch {
+        safeNotify(ctx, "retro", "storage_failure");
+        return;
+      }
+      safeNotifyText(
+        ctx,
+        `Accepted rule ${shortId(match.candidate.id)} (store-only). Nothing was written to Rootline or AGENTS.md; the durable apply is deferred to ADR 0020.`,
+        "info",
+      );
+    },
+  });
+}
+
+type CandidateResolution =
+  | { status: "ok"; proposal: StoredRuleProposal; candidate: StoredRuleProposalCandidate }
+  | { status: "empty" }
+  | { status: "missing_arg" }
+  | { status: "not_found"; query: string }
+  | { status: "ambiguous"; query: string; matches: string[] };
+
+function resolveCandidate(entries: readonly unknown[], query: string): CandidateResolution {
+  const proposals = collectRuleProposalBatches(entries);
+  if (proposals.length === 0) return { status: "empty" };
+  if (query.length === 0) return { status: "missing_arg" };
+  const matches: Array<{ proposal: StoredRuleProposal; candidate: StoredRuleProposalCandidate }> = [];
+  for (const proposal of proposals) {
+    for (const candidate of proposal.candidates) {
+      if (candidate.id === query || candidate.id.startsWith(query)) matches.push({ proposal, candidate });
+    }
+  }
+  if (matches.length === 0) return { status: "not_found", query };
+  const exact = matches.filter((match) => match.candidate.id === query);
+  if (exact.length === 1) return { status: "ok", ...exact[0]! };
+  if (matches.length > 1) {
+    return { status: "ambiguous", query, matches: matches.map((match) => shortId(match.candidate.id)) };
+  }
+  return { status: "ok", ...matches[0]! };
+}
+
+function isAccepted(entries: readonly unknown[], proposalIdempotencyKey: string, candidateId: string): boolean {
+  return collectRuleAcceptanceReceipts(entries).some(
+    (receipt) => receipt.proposalIdempotencyKey === proposalIdempotencyKey && receipt.candidateId === candidateId,
+  );
+}
+
+function renderProposalList(entries: readonly unknown[]): string {
+  const proposals = collectRuleProposalBatches(entries);
+  if (proposals.length === 0) return "No stored rule proposals. Run compaction or /retro-rules first.";
+  const accepted = new Set(
+    collectRuleAcceptanceReceipts(entries).map((receipt) => `${receipt.proposalIdempotencyKey}:${receipt.candidateId}`),
+  );
+  const lines: string[] = [];
+  let proposeCount = 0;
+  for (const proposal of proposals) {
+    for (const candidate of proposal.candidates) {
+      const state =
+        candidate.disposition === "hold"
+          ? "held"
+          : accepted.has(`${proposal.idempotencyKey}:${candidate.id}`)
+            ? "accepted"
+            : "proposed";
+      if (candidate.disposition === "propose") proposeCount += 1;
+      lines.push(`${shortId(candidate.id)} [${state}] (${candidate.ruleClass}) ${candidate.obligation}`);
+    }
+  }
+  return `${lines.length} candidate(s), ${proposeCount} proposable. Use /rules-show <id> then /rules-accept <id>.\n${lines.join("\n")}`;
+}
+
+function renderCandidateDetail(candidate: StoredRuleProposalCandidate, accepted: boolean): string {
+  const state = candidate.disposition === "hold" ? "held" : accepted ? "accepted" : "proposed";
+  const target = candidate.scope.target ? `:${candidate.scope.target}` : "";
+  return [
+    `Rule ${shortId(candidate.id)} [${state}]`,
+    `scope: ${candidate.scope.kind}${target} · class: ${candidate.ruleClass}`,
+    `when: ${candidate.trigger}`,
+    `must: ${candidate.obligation}`,
+    candidate.exceptions.length > 0 ? `except: ${candidate.exceptions.join("; ")}` : "except: (none)",
+  ].join("\n");
+}
+
+function renderResolutionError(resolution: CandidateResolution): string {
+  switch (resolution.status) {
+    case "empty":
+      return "No stored rule proposals. Run compaction or /retro-rules first.";
+    case "missing_arg":
+      return "Usage: /rules-show <id> or /rules-accept <id>. Run /rules-review to list ids.";
+    case "not_found":
+      return `No proposed rule matches '${resolution.query}'. Run /rules-review to list ids.`;
+    case "ambiguous":
+      return `'${resolution.query}' matches multiple rules: ${resolution.matches.join(", ")}. Use a longer id.`;
+    default:
+      return "Unable to resolve rule.";
+  }
+}
+
+function shortId(id: string): string {
+  return id.slice(0, 12);
 }
 
 async function handleCompaction(

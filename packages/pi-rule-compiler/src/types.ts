@@ -350,3 +350,41 @@ export interface RuleProposalBatch {
   jevModel: typeof DEFAULT_JEV_MODEL;
   candidates: EvaluatedRuleCandidate[];
 }
+
+/**
+ * Bounded projection of a stored proposal candidate for the review surface.
+ * Reconstructed defensively from persisted entries — enough to list, inspect,
+ * and accept a candidate without rehydrating the full evaluation payload.
+ */
+export interface StoredRuleProposalCandidate {
+  id: string;
+  scope: {
+    kind: RuleScopeKind;
+    target: string | null;
+  };
+  trigger: string;
+  obligation: string;
+  exceptions: string[];
+  sourceRefs: string[];
+  ruleClass: RuleClass;
+  disposition: "propose" | "hold";
+}
+
+export interface StoredRuleProposal {
+  idempotencyKey: string;
+  createdAt: string;
+  candidates: StoredRuleProposalCandidate[];
+}
+
+/**
+ * A manual, human-gated acceptance of a single proposed candidate. Storing an
+ * acceptance is the terminal step of the review->accept path today: it is
+ * store-only and never writes Rootline/AGENTS.md. The durable write of an
+ * accepted rule is deferred to the decision recorded in ADR 0020.
+ */
+export interface RuleAcceptanceReceipt {
+  schema: "a4s.rule-acceptance/v1";
+  proposalIdempotencyKey: string;
+  candidateId: string;
+  acceptedAt: string;
+}
