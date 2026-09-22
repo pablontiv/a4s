@@ -88,6 +88,34 @@ When subagents parallelize evaluations:
 5. A worker that refuses or blocks the command is a harness failure for that
    candidate; re-dispatch with a compatible worker, identical payload.
 
+## Fallback chains and effort sensitivity
+
+A route decision is incomplete without its failure story.
+
+**Failure mode determines the fallback.** A model-level failure (quota,
+deprecation, model-specific outage) is solved inside the same provider
+(e.g. Terra → Sol). A provider-level failure (auth, network, full outage)
+requires crossing providers (→ an external route). A fallback chain that
+does not distinguish these modes is fragile: verify the failure behavior
+directly (a bogus-model probe is a valid L0 variant — a hard failure with
+no fallback is a finding, not an error).
+
+**Every healthy challenger is a manual-fallback candidate.** When the
+decision is `NO_CHANGE`, the strongest challenger is not discarded: record
+it as the documented manual fallback for that route, with the effort at
+which it was validated.
+
+**Virtual/router routes are not models.** A routing-layer route (e.g.
+auto-router virtuals) buys cross-provider resilience at the cost of exact
+model pinning. Mark it as a routing layer in the proposal; never present
+its internal fallback as equivalent to an evaluated exact route.
+
+**Effort is an evaluated variable.** Before recommending a thinking-level
+change, measure sensitivity: run the same battery at both efforts and
+compare verdicts. If no verdict changes, the lower effort wins on cost.
+One battery pair is a hypothesis; claim savings only after repeated or
+real-world confirmation.
+
 ## Fixture quality bar per tier
 
 - L1 fixtures: one clear success criterion, deterministic expected answer,
@@ -97,3 +125,6 @@ When subagents parallelize evaluations:
 - L3 modules: strict compile settings, injected clock/time dependencies,
   assertions cover the required cases plus the regression the fixture
   names. Temp workspace only; never write into the repository.
+- Fallback chains: document the manual fallback per route with its
+  validated effort, distinguishing model-level from provider-level
+  failure modes.
