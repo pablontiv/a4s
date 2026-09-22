@@ -7,7 +7,7 @@ decision: 'Cada Bead ejecutará un E2E headless de su propio producto; para pi-r
 alternativas: 'Usar npm run e0 para todos los Beads: descartado porque valida únicamente el producto E0. Usar fixtures JSONL pregrabados: descartado porque no prueba el flujo real de sesión y compaction.'
 consecuencias: 'El gate requiere disponibilidad de un modelo Pi y credenciales Jev, consume cuota y debe producir evidencia de la extensión bajo prueba; un entorno sin esos proveedores bloquea el cierre en vez de sustituirse por E0.'
 ---
-# 0024. Exigir e2e por producto
+# 0028. Exigir e2e por producto
 
 Reemplaza a 0023-exigir-e2e-por-bead.
 

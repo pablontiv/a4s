@@ -7,7 +7,7 @@ decision: 'Extender la estrategia de compaction a un visibility ladder de cuatro
 alternativas: 'Mantener solo keep/truncate/drop: descartado por seguir descartando informacion recuperable y degradar RuleSignals; acoplar el ladder a un nuevo trigger automatico: descartado porque mezcla dos ejes ortogonales, cuando frente a como, y amplia el alcance; aplicar el ladder per-turn como meta-attention: descartado por poner a Jev en el hot path de cada turno con costo y fail-closed por turno; resumen generativo libre: descartado por ADR 0013 al ser lossy y ciego a la query.'
 consecuencias: 'La estrategia ladder es opt-in y el default preserva el comportamiento actual; conserva el contrato fail-closed de ADR 0013, Jev caido bloquea compaction, sin semantica de fallo nueva; RuleSignals siguen en la misma pasada y mejoran; el eje trigger, incluido auto-detectar el momento ideal, queda fuera de este ADR para decidirse por separado.'
 pendientes: ""
-superseded_by: 0025-reemplazar-ladder-por-retrieval-query
+superseded_by: 0029-reemplazar-ladder-por-retrieval-query
 ---
 # 0022. Extender compaction a visibility ladder de cuatro niveles
 

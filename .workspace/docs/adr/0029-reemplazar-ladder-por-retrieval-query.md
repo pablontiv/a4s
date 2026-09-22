@@ -7,7 +7,7 @@ decision: 'Reemplazar la visibilidad anticipada de compaction por Ladder opt-in 
 alternativas: 'Mantener ADR 0022: descartado porque contradice la spec y hace la visibilidad dependiente de una query inexistente durante compaction. Bajar el estado de ADR 0022 sin sucesor: descartado porque deja Task 5 sin contrato aceptado.'
 consecuencias: 'Ladder falla abierto al contexto Pi normal; la proyección no muta corpus y consume cuota Jev por query. Task 5 queda bloqueado hasta aceptación del sucesor.'
 ---
-# 0025. Reemplazar ladder por retrieval query
+# 0029. Reemplazar ladder por retrieval query
 
 Reemplaza a 0022-extender-compaction-a-visibility-ladder-de-cuatro-niveles.
 
