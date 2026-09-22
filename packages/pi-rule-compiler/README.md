@@ -58,9 +58,10 @@ requires the persisted acknowledgement written by
 the existing `session_before_compact` handler. Trigger persistence contains
 only the acknowledgement timestamp and hint/compact cooldown metadata.
 
-Pi 0.87 does not expose an unsent editor buffer to extensions. Therefore the
-production Trigger fails closed unless an embedding supplies the
-`trigger.editorHasText` runtime gate; it never assumes the editor is empty.
+Pi 0.87 exposes the editor text in TUI mode. The production Trigger uses that
+value unless an embedding supplies the `trigger.editorHasText` runtime gate;
+an editor-read failure or a non-TUI mode is treated as non-empty, so the
+trigger fails closed.
 
 ## Use
 

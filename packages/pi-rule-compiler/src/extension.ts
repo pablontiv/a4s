@@ -174,6 +174,14 @@ export function registerPiRuleCompiler(pi: ExtensionAPI, options: PiRuleCompiler
   );
   const triggerMinimumContextTokens = options.trigger?.minimumContextTokens ?? 16_000;
   const triggerCooldownMs = options.trigger?.cooldownMs ?? 300_000;
+  const editorHasText = options.trigger?.editorHasText ?? ((ctx: ExtensionContext): boolean => {
+    if (ctx.mode !== "tui") return true;
+    try {
+      return ctx.ui.getEditorText().trim().length > 0;
+    } catch {
+      return true;
+    }
+  });
 
   pi.registerProvider(createTypesafeProvider());
 
@@ -253,9 +261,7 @@ export function registerPiRuleCompiler(pi: ExtensionAPI, options: PiRuleCompiler
       minimumContextTokens: triggerMinimumContextTokens,
       hasPendingWork: ctx.hasPendingMessages(),
       cooldownActive: hasTriggerCooldown(ctx.sessionManager.getBranch(), now(), triggerCooldownMs),
-      // Pi 0.87 does not expose the unsent editor buffer. Failing closed keeps
-      // auto inert unless an embedding supplies this session-local gate.
-      editorHasText: options.trigger?.editorHasText?.(ctx) ?? true,
+      editorHasText: editorHasText(ctx),
       autoAcknowledged: hasTriggerAcknowledgement(ctx.sessionManager.getBranch()),
     };
     if (!localTriggerGatesPass({ ...baseInput, credentialAvailable: true })) return;

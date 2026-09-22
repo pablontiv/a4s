@@ -59,11 +59,18 @@ function createFakePi(initialEntries: StoredEntry[] = []) {
   return { pi: api as unknown as ExtensionAPI, handlers, commands, entries, registeredProviders };
 }
 
-function createContext(entries: StoredEntry[], options: { mode?: "tui" | "rpc" } = {}) {
+function createContext(
+  entries: StoredEntry[],
+  options: { mode?: "tui" | "rpc"; editorText?: string; editorReadFails?: boolean } = {},
+) {
   const notifications: Array<{ message: string; type: string | undefined }> = [];
   const context = {
     mode: options.mode ?? "tui",
     ui: {
+      getEditorText: () => {
+        if (options.editorReadFails) throw new Error("editor unavailable");
+        return options.editorText ?? "";
+      },
       notify(message: string, type?: string) {
         notifications.push({ message, type });
       },
@@ -171,6 +178,23 @@ class ValidFakeJev implements JevClient {
     this.calls += 1;
     this.requests.push(request);
     return validJevResponse(request);
+  }
+}
+
+class CompactTriggerJev extends ValidFakeJev {
+  override async evaluate(request: JevRequest): Promise<unknown> {
+    this.calls += 1;
+    this.requests.push(request);
+    return validJevResponse(request, (_id, question) =>
+      question.type === "choice" && Object.hasOwn(question.criteria, "compact")
+        ? {
+          type: "choice",
+          choice: "compact",
+          probabilities: { compact: 1, wait: 0 },
+          confidence: 1,
+        }
+        : undefined,
+    );
   }
 }
 
@@ -1041,6 +1065,37 @@ test("createTypesafeAuthResolver retries getProviderAuth until a credential is s
   assert.equal(await resolve(ctx), "logged-in-key");
   assert.equal(await resolve(ctx), "logged-in-key");
   assert.equal(calls, 3, "the successful resolution is cached going forward");
+});
+
+test("agent_settled displays a hint only for an empty TUI editor", async () => {
+  for (const scenario of [
+    { mode: "tui" as const, editorText: "", expectedNotifications: 1 },
+    { mode: "tui" as const, editorText: "Continue editing this request", expectedNotifications: 0 },
+    { mode: "rpc" as const, editorText: "", expectedNotifications: 0 },
+    { mode: "tui" as const, editorReadFails: true, expectedNotifications: 0 },
+  ]) {
+    const jev = new CompactTriggerJev();
+    const fake = createFakePi();
+    registerPiRuleCompiler(fake.pi, {
+      jevClient: jev,
+      config: { "trigger.mode": "hint" },
+      now: () => new Date("2026-09-22T12:00:00.000Z"),
+    });
+    const { context, notifications } = createContext(fake.entries, scenario);
+    const triggerContext = {
+      ...context,
+      hasUI: true,
+      isIdle: () => true,
+      hasPendingMessages: () => false,
+      getContextUsage: () => ({ tokens: 32_000, contextWindow: 128_000, percent: 25 }),
+      signal: undefined,
+    };
+
+    await fake.handlers.get("agent_settled")?.({ type: "agent_settled" }, triggerContext);
+
+    assert.equal(notifications.length, scenario.expectedNotifications);
+    assert.equal(jev.calls, scenario.expectedNotifications);
+  }
 });
 
 test("agent_settled auto trigger requires persisted acknowledgement and enters session_before_compact", async () => {
