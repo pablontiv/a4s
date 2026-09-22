@@ -1,6 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { registerPiRuleCompiler } from "./extension.ts";
 
+export { BASIC_COMPACTION_CONFIG, resolveCompactionConfig } from "./config.ts";
 export {
   assertCompleteCoverage,
   buildBasicCompactionResult,
@@ -81,6 +82,12 @@ export {
   ScheduledJevClient,
   type JevRequestSchedulerOptions,
 } from "./scheduler.ts";
+export {
+  applyTriggerDecision,
+  evaluateTrigger,
+  localTriggerGatesPass,
+  type TriggerInput,
+} from "./trigger.ts";
 export {
   DEFAULT_COMPACTION_RETENTION_THRESHOLDS,
   DEFAULT_RULE_SIGNAL_THRESHOLDS,

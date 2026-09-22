@@ -8,6 +8,7 @@ import type { AuthResult } from "@earendil-works/pi-ai";
 import { createProvider } from "@earendil-works/pi-ai";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
 import { buildBasicCompactionResult } from "./compaction-core.ts";
+import { BASIC_COMPACTION_CONFIG, resolveCompactionConfig } from "./config.ts";
 import {
   CompactionBuildError,
   type BuildJevCompactionOptions,
@@ -32,6 +33,12 @@ import {
   type CurrentModelGateway,
   type RetroOptions,
 } from "./retro.ts";
+import {
+  applyTriggerDecision,
+  evaluateTrigger,
+  localTriggerGatesPass,
+  type TriggerInput,
+} from "./trigger.ts";
 import { StateFitError } from "./state.ts";
 import {
   collectRetroPendingMarkers,
@@ -64,6 +71,14 @@ export interface PiRuleCompilerOptions {
   compaction?: BuildJevCompactionOptions;
   evidence?: EvidenceOptions;
   retro?: RetroOptions;
+  /** Flat extension configuration; invalid values retain the basic safe default. */
+  config?: Readonly<Record<string, unknown>>;
+  /** Runtime-only gates that Pi's public context cannot otherwise observe. */
+  trigger?: {
+    minimumContextTokens?: number;
+    cooldownMs?: number;
+    editorHasText?: (ctx: ExtensionContext) => boolean;
+  };
   now?: () => Date;
 }
 
@@ -136,6 +151,9 @@ export function registerPiRuleCompiler(pi: ExtensionAPI, options: PiRuleCompiler
   const now = options.now ?? (() => new Date());
   const hookTimeoutMs = options.hookTimeoutMs ?? 180_000;
   const retroTimeoutMs = options.retroTimeoutMs ?? 120_000;
+  const config = resolveCompactionConfig(options.config, BASIC_COMPACTION_CONFIG);
+  const triggerMinimumContextTokens = options.trigger?.minimumContextTokens ?? 16_000;
+  const triggerCooldownMs = options.trigger?.cooldownMs ?? 300_000;
 
   pi.registerProvider(createTypesafeProvider());
 
@@ -148,6 +166,46 @@ export function registerPiRuleCompiler(pi: ExtensionAPI, options: PiRuleCompiler
   pi.on("session_start", () => {
     pendingByAttempt.clear();
     retroInFlight.clear();
+  });
+
+  pi.on("agent_settled", async (_event, ctx) => {
+    if (config.trigger.mode === "off") return;
+    const usage = ctx.getContextUsage();
+    const baseInput = {
+      mode: config.trigger.mode,
+      interactive: ctx.hasUI,
+      idle: ctx.isIdle(),
+      contextTokens: usage?.tokens ?? 0,
+      minimumContextTokens: triggerMinimumContextTokens,
+      hasPendingWork: ctx.hasPendingMessages(),
+      cooldownActive: hasTriggerCooldown(ctx.sessionManager.getBranch(), now(), triggerCooldownMs),
+      // Pi 0.87 does not expose the unsent editor buffer. Failing closed keeps
+      // auto inert unless an embedding supplies this session-local gate.
+      editorHasText: options.trigger?.editorHasText?.(ctx) ?? true,
+      autoAcknowledged: hasTriggerAcknowledgement(ctx.sessionManager.getBranch()),
+    };
+    if (!localTriggerGatesPass({ ...baseInput, credentialAvailable: true })) return;
+
+    const credentialAvailable = options.jevClient !== undefined || Boolean(await resolveTypesafeApiKey(ctx));
+    if (!credentialAvailable) return;
+    const input: TriggerInput = {
+      ...baseInput,
+      credentialAvailable,
+      jevClient: await createJevClient(ctx),
+      signal: ctx.signal ?? new AbortController().signal,
+    };
+    const decision = await evaluateTrigger(input);
+    if (decision.action === "none") return;
+    try {
+      pi.appendEntry(TRIGGER_COOLDOWN_ENTRY_TYPE, {
+        schema: "a4s.compaction-trigger-cooldown/v1",
+        action: decision.action,
+        triggeredAt: now().toISOString(),
+      });
+    } catch {
+      return;
+    }
+    await applyTriggerDecision(decision, ctx);
   });
 
   pi.on("session_before_compact", async (event, ctx) => {
@@ -190,6 +248,16 @@ export function registerPiRuleCompiler(pi: ExtensionAPI, options: PiRuleCompiler
   pi.on("session_shutdown", () => {
     pendingByAttempt.clear();
     retroInFlight.clear();
+  });
+
+  pi.registerCommand("compaction-trigger-acknowledge", {
+    description: "Persist acknowledgement required before automatic compaction can run",
+    handler: async (_args, _ctx) => {
+      pi.appendEntry(TRIGGER_ACKNOWLEDGEMENT_ENTRY_TYPE, {
+        schema: "a4s.compaction-trigger-acknowledgement/v1",
+        acknowledgedAt: now().toISOString(),
+      });
+    },
   });
 
   pi.registerCommand("retro-rules", {
@@ -270,6 +338,39 @@ export function registerPiRuleCompiler(pi: ExtensionAPI, options: PiRuleCompiler
         "info",
       );
     },
+  });
+}
+
+const TRIGGER_ACKNOWLEDGEMENT_ENTRY_TYPE = "a4s.pi-rule-compiler.compaction-trigger-acknowledgement.v1";
+const TRIGGER_COOLDOWN_ENTRY_TYPE = "a4s.pi-rule-compiler.compaction-trigger-cooldown.v1";
+
+function customEntryData(entry: unknown, customType: string): Record<string, unknown> | undefined {
+  if (entry === null || typeof entry !== "object" || Array.isArray(entry)) return undefined;
+  const candidate = entry as { type?: unknown; customType?: unknown; data?: unknown };
+  if (candidate.type !== "custom" || candidate.customType !== customType) return undefined;
+  if (candidate.data === null || typeof candidate.data !== "object" || Array.isArray(candidate.data)) return undefined;
+  return candidate.data as Record<string, unknown>;
+}
+
+function hasTriggerAcknowledgement(entries: readonly unknown[]): boolean {
+  return entries.some((entry) => {
+    const data = customEntryData(entry, TRIGGER_ACKNOWLEDGEMENT_ENTRY_TYPE);
+    return data?.schema === "a4s.compaction-trigger-acknowledgement/v1" && typeof data.acknowledgedAt === "string";
+  });
+}
+
+function hasTriggerCooldown(entries: readonly unknown[], current: Date, cooldownMs: number): boolean {
+  if (!Number.isFinite(cooldownMs) || cooldownMs <= 0) return false;
+  const currentMs = current.getTime();
+  return entries.some((entry) => {
+    const data = customEntryData(entry, TRIGGER_COOLDOWN_ENTRY_TYPE);
+    if (
+      data?.schema !== "a4s.compaction-trigger-cooldown/v1" ||
+      (data.action !== "hint" && data.action !== "compact") ||
+      typeof data.triggeredAt !== "string"
+    ) return false;
+    const triggeredAt = Date.parse(data.triggeredAt);
+    return Number.isFinite(triggeredAt) && triggeredAt <= currentMs && currentMs - triggeredAt < cooldownMs;
   });
 }
 

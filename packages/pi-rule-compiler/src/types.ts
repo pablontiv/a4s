@@ -10,6 +10,19 @@ export interface EvidenceOptions {
   strategy: "off" | "ladder";
 }
 
+export type TriggerMode = "off" | "hint" | "auto";
+
+export interface CompactionConfig {
+  compaction: { strategy: "basic" | "ladder" };
+  trigger: { mode: TriggerMode };
+  evidence: EvidenceOptions;
+}
+
+export type TriggerDecision =
+  | { action: "none" }
+  | { action: "hint"; reason: string }
+  | { action: "compact" };
+
 export interface NormalizedSessionMessage {
   index: number;
   role: string;

@@ -1,6 +1,6 @@
 # A4S Pi Rule Compiler
 
-Private Pi extension that uses Jev as the semantic authority for compaction while extracting reviewable `RuleSignal` evidence in the same pass. Successful compaction automatically turns those signals into review-only rule proposals; `/retro-rules` is an idempotent retry/recovery command.
+Private Pi extension that uses Jev as the semantic authority for `basic` compaction. Evidence is disabled by default and its future ladder lifecycle remains inert.
 
 ## Runtime contract
 
@@ -17,6 +17,27 @@ Private Pi extension that uses Jev as the semantic authority for compaction whil
 - Automatic retro and `/retro-rules` store proposals only. They never write Rootline documents or activate rules; `/retro-rules` exists solely for manual retry/recovery.
 - Review is store-only. `/rules-review` lists stored proposals with their acceptance state, `/rules-show <id>` shows one candidate, and `/rules-accept <id>` records a manual acceptance receipt for a `propose` candidate. When no proposal is stored, `/rules-review` reports whether the latest session-local compaction had no eligible `user`/`custom` sources, filtered all eligible candidates, or retained signals awaiting retro; it never displays message content. Acceptance still writes nothing to Rootline or AGENTS.md; the durable apply of an accepted rule is deferred to the decision in ADR 0020.
 - The extension does not read, write, or replace gentle-engram entries.
+
+## Opt-in Trigger
+
+The default configuration remains `compaction.strategy=basic`,
+`trigger.mode=off`, and `evidence.strategy=off`. The extension API accepts
+flat `config` values for `compaction.strategy` (`basic|ladder`),
+`trigger.mode` (`off|hint|auto`), and `evidence.strategy` (`off|ladder`);
+invalid combinations preserve the prior safe configuration.
+
+On `agent_settled`, an enabled Trigger first requires interactive UI, idle
+state, enough context, no pending messages, no cooldown, an empty editor, and
+an available credential. Only then does it send Jev a text-free request with
+context-token counts. `hint` displays a notification. `auto` additionally
+requires the persisted acknowledgement written by
+`/compaction-trigger-acknowledge` and calls only `ctx.compact()`, which enters
+the existing `session_before_compact` handler. Trigger persistence contains
+only the acknowledgement timestamp and hint/compact cooldown metadata.
+
+Pi 0.87 does not expose an unsent editor buffer to extensions. Therefore the
+production Trigger fails closed unless an embedding supplies the
+`trigger.editorHasText` runtime gate; it never assumes the editor is empty.
 
 ## Use
 

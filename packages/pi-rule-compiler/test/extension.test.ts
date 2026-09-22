@@ -774,3 +774,43 @@ test("createTypesafeAuthResolver retries getProviderAuth until a credential is s
   assert.equal(await resolve(ctx), "logged-in-key");
   assert.equal(calls, 3, "the successful resolution is cached going forward");
 });
+
+test("agent_settled auto trigger requires persisted acknowledgement and enters session_before_compact", async () => {
+  const jev = new ValidFakeJev();
+  const fake = createFakePi();
+  registerPiRuleCompiler(fake.pi, {
+    jevClient: jev,
+    config: { "trigger.mode": "auto" },
+    trigger: { editorHasText: () => false, minimumContextTokens: 16_000 },
+    now: () => new Date("2026-09-22T12:00:00.000Z"),
+  });
+  let compactCalls = 0;
+  let beforeCompactCalls = 0;
+  const { context, notifications } = createContext(fake.entries);
+  const triggerContext = {
+    ...context,
+    hasUI: true,
+    isIdle: () => true,
+    hasPendingMessages: () => false,
+    getContextUsage: () => ({ tokens: 32_000, contextWindow: 128_000, percent: 25 }),
+    signal: undefined,
+    compact: async () => {
+      compactCalls += 1;
+      beforeCompactCalls += 1;
+      await fake.handlers.get("session_before_compact")?.(compactionEvent(), triggerContext);
+    },
+  };
+
+  await fake.handlers.get("agent_settled")?.({ type: "agent_settled" }, triggerContext);
+  assert.equal(compactCalls, 0);
+  assert.equal(jev.calls, 0, "unacknowledged auto must not query Jev");
+
+  await fake.commands.get("compaction-trigger-acknowledge")?.("", triggerContext);
+  await fake.handlers.get("agent_settled")?.({ type: "agent_settled" }, triggerContext);
+  assert.equal(compactCalls, 1);
+  assert.equal(beforeCompactCalls, 1, "auto uses ctx.compact and the existing compaction hook");
+  assert.equal(notifications.length, 0);
+  assert.equal(fake.entries.some((entry) => entry.customType?.includes("acknowledgement")), true);
+  assert.equal(fake.entries.some((entry) => entry.customType?.includes("cooldown")), true);
+  assert.doesNotMatch(JSON.stringify(jev.requests), /credential|secret|chunk text/i);
+});
