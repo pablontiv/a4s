@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { VERSION } from "@earendil-works/pi-coding-agent";
+import {
+  VERSION,
+  type AgentSettledEvent,
+  type ContextEditEntry,
+  type ContextEventResult,
+  type ContextWithSystemEvent,
+} from "@earendil-works/pi-coding-agent";
 import { createPi087Fake } from "./fixtures.ts";
 
 test("agent_settled defers ctx.compact and enters the existing compact hook once", async () => {
@@ -22,6 +28,29 @@ test("agent_settled defers ctx.compact and enters the existing compact hook once
   assert.equal(runtime.nativeFallbackCalls, 0, "a cancelled custom compaction must not fall back to native compaction");
 });
 
+test("the fake derives Pi 0.87 lifecycle payloads, results, and context", async () => {
+  const runtime = createPi087Fake();
+  runtime.pi.on("agent_settled", (event, ctx) => {
+    const settled: AgentSettledEvent = event;
+    assert.equal(settled.type, "agent_settled");
+    ctx.compact({ onComplete: () => {} });
+  });
+
+  const contextEdit: ContextEditEntry = {
+    type: "context_edit",
+    id: "edit-1",
+    parentId: null,
+    timestamp: "2026-09-22T00:00:00.000Z",
+    targetId: "message-1",
+    replacement: null,
+  };
+  assert.equal(contextEdit.id, "edit-1");
+
+  const supplied: ContextWithSystemEvent["messages"] = [{ role: "system", content: "normal", timestamp: 0 }];
+  const projected: ContextEventResult = await runtime.emit("context_with_system", { messages: supplied });
+  assert.deepEqual(projected, { messages: supplied });
+});
+
 test("a failed context projection leaves Pi's supplied system context unchanged", async () => {
   assert.equal(VERSION, "0.87.0", "context_with_system is a Pi 0.87.0 lifecycle hook");
   const runtime = createPi087Fake();
@@ -29,9 +58,9 @@ test("a failed context projection leaves Pi's supplied system context unchanged"
     throw new Error("projection failed");
   });
 
-  const supplied = [{ role: "system", content: "normal" }];
-  const projected = await runtime.emit("context_with_system", { messages: supplied });
+  const supplied: ContextWithSystemEvent["messages"] = [{ role: "system", content: "normal", timestamp: 0 }];
+  const projected: ContextEventResult = await runtime.emit("context_with_system", { messages: supplied });
 
   assert.deepEqual(projected, { messages: supplied });
-  assert.deepEqual(supplied, [{ role: "system", content: "normal" }]);
+  assert.deepEqual(supplied, [{ role: "system", content: "normal", timestamp: 0 }]);
 });

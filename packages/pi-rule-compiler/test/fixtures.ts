@@ -1,37 +1,58 @@
 import type {
-  ContextEditEntry,
-  ExtensionAPI,
+  AgentSettledEvent,
+  ContextEventResult,
+  ContextWithSystemEvent,
+  ExtensionContext,
+  ExtensionHandler,
+  SessionBeforeCompactEvent,
+  SessionBeforeCompactResult,
 } from "@earendil-works/pi-coding-agent";
 import type { JevAnswer, JevQuestion, JevRequest } from "../src/types.ts";
 
-export type Pi087ContextEdit = Pick<ContextEditEntry, "type" | "targetId" | "replacement">;
+type Pi087Context = Pick<ExtensionContext, "compact">;
+type Pi087Handler<Event, Result = undefined> = (
+  event: Parameters<ExtensionHandler<Event, Result>>[0],
+  ctx: Pi087Context,
+) => ReturnType<ExtensionHandler<Event, Result>>;
+type Pi087OnArgs =
+  | [event: "agent_settled", handler: Pi087Handler<AgentSettledEvent>]
+  | [
+    event: "session_before_compact",
+    handler: Pi087Handler<SessionBeforeCompactEvent, SessionBeforeCompactResult>,
+  ]
+  | [
+    event: "context_with_system",
+    handler: Pi087Handler<ContextWithSystemEvent, ContextEventResult>,
+  ];
+type Pi087EmitArgs =
+  | [event: "agent_settled"]
+  | [event: "session_before_compact"]
+  | [event: "context_with_system", payload: Pick<ContextWithSystemEvent, "messages">];
 
-type Pi087Event =
-  | { type: "agent_settled" }
-  | { type: "session_before_compact"; signal: AbortSignal }
-  | { type: "context_with_system"; messages: unknown[] };
-
-type Pi087Handler = (event: Pi087Event, ctx: Pi087Context) => unknown | Promise<unknown>;
-
-interface Pi087Context {
-  compact(options?: { customInstructions?: string }): void;
+interface Pi087FakeAPI {
+  on(event: "agent_settled", handler: Pi087Handler<AgentSettledEvent>): () => void;
+  on(
+    event: "session_before_compact",
+    handler: Pi087Handler<SessionBeforeCompactEvent, SessionBeforeCompactResult>,
+  ): () => void;
+  on(
+    event: "context_with_system",
+    handler: Pi087Handler<ContextWithSystemEvent, ContextEventResult>,
+  ): () => void;
 }
 
 export interface Pi087Fake {
-  readonly pi: Pick<ExtensionAPI, "on">;
+  readonly pi: Pi087FakeAPI;
   beforeCompactCalls: number;
   compactCalls: number;
   compactCallsWhileSettling: number;
   nativeFallbackCalls: number;
   emit(event: "agent_settled"): Promise<void>;
-  emit(
-    event: "session_before_compact",
-    payload?: Omit<Extract<Pi087Event, { type: "session_before_compact" }>, "type">,
-  ): Promise<unknown>;
+  emit(event: "session_before_compact"): Promise<SessionBeforeCompactResult | undefined>;
   emit(
     event: "context_with_system",
-    payload: Omit<Extract<Pi087Event, { type: "context_with_system" }>, "type">,
-  ): Promise<{ messages: unknown[] }>;
+    payload: Pick<ContextWithSystemEvent, "messages">,
+  ): Promise<ContextEventResult>;
 }
 
 /**
@@ -40,7 +61,9 @@ export interface Pi087Fake {
  * every settled hook has returned, then it traverses `session_before_compact`.
  */
 export function createPi087Fake(): Pi087Fake {
-  const handlers = new Map<Pi087Event["type"], Pi087Handler[]>();
+  const settledHandlers: Pi087Handler<AgentSettledEvent>[] = [];
+  const beforeCompactHandlers: Pi087Handler<SessionBeforeCompactEvent, SessionBeforeCompactResult>[] = [];
+  const contextWithSystemHandlers: Pi087Handler<ContextWithSystemEvent, ContextEventResult>[] = [];
   const runtime = {
     beforeCompactCalls: 0,
     compactCalls: 0,
@@ -50,53 +73,66 @@ export function createPi087Fake(): Pi087Fake {
   let settling = false;
   const queuedCompactions: Array<() => Promise<void>> = [];
 
+  function on(...args: Pi087OnArgs): () => void {
+    const [event, handler] = args;
+    switch (event) {
+      case "agent_settled":
+        settledHandlers.push(handler);
+        return removeHandler(settledHandlers, handler);
+      case "session_before_compact":
+        beforeCompactHandlers.push(handler);
+        return removeHandler(beforeCompactHandlers, handler);
+      case "context_with_system":
+        contextWithSystemHandlers.push(handler);
+        return removeHandler(contextWithSystemHandlers, handler);
+    }
+  }
+  const pi: Pi087FakeAPI = { on };
+
   async function emit(event: "agent_settled"): Promise<void>;
-  async function emit(
-    event: "session_before_compact",
-    payload?: Omit<Extract<Pi087Event, { type: "session_before_compact" }>, "type">,
-  ): Promise<unknown>;
+  async function emit(event: "session_before_compact"): Promise<SessionBeforeCompactResult | undefined>;
   async function emit(
     event: "context_with_system",
-    payload: Omit<Extract<Pi087Event, { type: "context_with_system" }>, "type">,
-  ): Promise<{ messages: unknown[] }>;
-  async function emit(event: Pi087Event["type"], payload?: object): Promise<unknown> {
-    const registered = handlers.get(event) ?? [];
-    if (event === "agent_settled") {
-      settling = true;
-      try {
-        for (const handler of registered) await handler({ type: event }, context);
-      } finally {
-        settling = false;
-      }
-      while (queuedCompactions.length > 0) await queuedCompactions.shift()?.();
-      return;
-    }
-    if (event === "context_with_system") {
-      const supplied = payload as Omit<Extract<Pi087Event, { type: "context_with_system" }>, "type">;
-      const emitted: Extract<Pi087Event, { type: "context_with_system" }> = { type: event, ...supplied };
-      for (const handler of registered) {
+    payload: Pick<ContextWithSystemEvent, "messages">,
+  ): Promise<ContextEventResult>;
+  async function emit(...args: Pi087EmitArgs): Promise<void | SessionBeforeCompactResult | undefined | ContextEventResult> {
+    const [event] = args;
+    switch (event) {
+      case "agent_settled":
+        settling = true;
         try {
-          const result = await handler(emitted, context);
-          if (result && typeof result === "object" && "messages" in result) {
-            return result as { messages: unknown[] };
-          }
-        } catch {
-          // Pi preserves the supplied context when an optional projection fails.
-          return { messages: emitted.messages };
+          for (const handler of settledHandlers) await handler({ type: "agent_settled" }, context);
+        } finally {
+          settling = false;
         }
+        while (queuedCompactions.length > 0) {
+          const next = queuedCompactions.shift();
+          if (next) await next();
+        }
+        return;
+      case "session_before_compact": {
+        const emitted = createSessionBeforeCompactEvent();
+        for (const handler of beforeCompactHandlers) {
+          const result = await handler(emitted, context);
+          if (result !== undefined) return result;
+        }
+        return undefined;
       }
-      return { messages: emitted.messages };
+      case "context_with_system": {
+        const [, payload] = args;
+        const emitted: ContextWithSystemEvent = { type: "context_with_system", messages: payload.messages };
+        for (const handler of contextWithSystemHandlers) {
+          try {
+            const result = await handler(emitted, context);
+            if (result !== undefined) return result;
+          } catch {
+            // Pi preserves the supplied context when an optional projection fails.
+            return { messages: emitted.messages };
+          }
+        }
+        return { messages: emitted.messages };
+      }
     }
-    const supplied = payload as Omit<Extract<Pi087Event, { type: "session_before_compact" }>, "type"> | undefined;
-    const emitted: Extract<Pi087Event, { type: "session_before_compact" }> = {
-      type: event,
-      signal: supplied?.signal ?? new AbortController().signal,
-    };
-    for (const handler of registered) {
-      const result = await handler(emitted, context);
-      if (result !== undefined) return result;
-    }
-    return undefined;
   }
 
   const runCompaction = async (): Promise<void> => {
@@ -114,18 +150,33 @@ export function createPi087Fake(): Pi087Fake {
       void runCompaction();
     },
   };
-  const pi = {
-    on(event: Pi087Event["type"], handler: Pi087Handler) {
-      const registered = handlers.get(event) ?? [];
-      registered.push(handler);
-      handlers.set(event, registered);
-      return () => {
-        const index = registered.indexOf(handler);
-        if (index >= 0) registered.splice(index, 1);
-      };
-    },
-  } as unknown as Pick<ExtensionAPI, "on">;
   return Object.assign(runtime, { pi, emit });
+}
+
+function createSessionBeforeCompactEvent(): SessionBeforeCompactEvent {
+  return {
+    type: "session_before_compact",
+    preparation: {
+      firstKeptEntryId: "entry-1",
+      messagesToSummarize: [],
+      turnPrefixMessages: [],
+      isSplitTurn: false,
+      tokensBefore: 0,
+      fileOps: { read: new Set(), written: new Set(), edited: new Set() },
+      settings: { enabled: true, reserveTokens: 0, keepRecentTokens: 0 },
+    },
+    branchEntries: [],
+    reason: "manual",
+    willRetry: false,
+    signal: new AbortController().signal,
+  };
+}
+
+function removeHandler<Handler>(handlers: Handler[], handler: Handler): () => void {
+  return () => {
+    const index = handlers.indexOf(handler);
+    if (index >= 0) handlers.splice(index, 1);
+  };
 }
 
 export function validJevResponse(
