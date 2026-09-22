@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
+  collectCorpus,
+  CORPUS_ENTRY_TYPE,
   createTypesafeAuthResolver,
   JevApiError,
   observeCompactionRules,
@@ -180,6 +182,14 @@ function appendSuccessfulCompaction(fake: ReturnType<typeof createFakePi>, resul
   return entry;
 }
 
+function hasRuleArtifact(entries: readonly StoredEntry[]): boolean {
+  return entries.some((entry) =>
+    entry.customType === RULE_SIGNAL_ENTRY_TYPE ||
+    entry.customType === RULE_PROPOSAL_ENTRY_TYPE ||
+    entry.customType === RETRO_PENDING_ENTRY_TYPE,
+  );
+}
+
 class NoRuleSignalJev extends ValidFakeJev {
   override async evaluate(request: JevRequest): Promise<unknown> {
     this.calls += 1;
@@ -282,14 +292,45 @@ test("basic does not publish rule artifacts when Evidence is off", async () => {
     { type: "session_compact", compactionEntry, fromExtension: true, reason: "threshold", willRetry: false },
     context,
   );
-  assert.equal(fake.entries.some((entry) => entry.customType?.includes("rule")), false);
+  assert.equal(hasRuleArtifact(fake.entries), false);
   assert.equal(notifications.some((notification) => /compaction succeeded/.test(notification.message)), false);
 
   await fake.handlers.get("session_compact")?.(
     { type: "session_compact", compactionEntry, fromExtension: true, reason: "threshold", willRetry: false },
     context,
   );
-  assert.equal(fake.entries.some((entry) => entry.customType?.includes("rule")), false);
+  assert.equal(hasRuleArtifact(fake.entries), false);
+});
+
+test("a cancelled compaction publishes no corpus while a successful one is reloadable", async () => {
+  const fake = createFakePi();
+  registerPiRuleCompiler(fake.pi, { jevClient: new ValidFakeJev() });
+  const { context } = createContext(fake.entries);
+  const event = compactionEvent([{ role: "user", content: "password=canary-secret" }]);
+
+  assert.ok(requireCompactionResult(await fake.handlers.get("session_before_compact")?.(event, context)));
+  await fake.handlers.get("session_compact_failed")?.(
+    { type: "session_compact_failed", reason: "threshold", aborted: true, willRetry: false, fromExtension: true },
+    context,
+  );
+  assert.deepEqual(fake.entries.filter((entry) => entry.customType === CORPUS_ENTRY_TYPE), []);
+
+  const result = requireCompactionResult(await fake.handlers.get("session_before_compact")?.(event, context));
+  const compactionEntry = appendSuccessfulCompaction(fake, result);
+  await fake.handlers.get("session_compact")?.(
+    { type: "session_compact", compactionEntry, fromExtension: true, reason: "threshold", willRetry: false },
+    context,
+  );
+  assert.equal(fake.entries.filter((entry) => entry.customType === CORPUS_ENTRY_TYPE).length, 2);
+  assert.equal(JSON.stringify(fake.entries).includes("canary-secret"), false);
+
+  const reloaded = createFakePi(fake.entries);
+  registerPiRuleCompiler(reloaded.pi, { jevClient: new ValidFakeJev() });
+  const reloadedContext = createContext(reloaded.entries).context;
+  await reloaded.handlers.get("session_start")?.({ type: "session_start", reason: "reload" }, reloadedContext);
+  assert.equal(collectCorpus(reloaded.entries).length, 1);
+  await reloaded.handlers.get("session_start")?.({ type: "session_start", reason: "reload" }, reloadedContext);
+  assert.equal(reloaded.entries.filter((entry) => entry.customType === CORPUS_ENTRY_TYPE).length, 2);
 });
 
 test("Evidence ladder is an explicit inert pre-Task-6 lifecycle branch", async () => {
@@ -310,7 +351,7 @@ test("Evidence ladder is an explicit inert pre-Task-6 lifecycle branch", async (
     context,
   );
 
-  assert.equal(fake.entries.some((entry) => entry.customType?.includes("rule")), false);
+  assert.equal(hasRuleArtifact(fake.entries), false);
 });
 
 test("basic success never publishes RuleSignals or starts retro", async (t) => {
@@ -336,7 +377,7 @@ test("basic success never publishes RuleSignals or starts retro", async (t) => {
         },
         runtime.context,
       );
-      assert.equal(fake.entries.some((entry) => entry.customType?.includes("rule")), false);
+      assert.equal(hasRuleArtifact(fake.entries), false);
       assert.equal(runtime.modelCalls(), 0);
     });
   }

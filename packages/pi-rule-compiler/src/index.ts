@@ -3,6 +3,14 @@ import { registerPiRuleCompiler } from "./extension.ts";
 
 export { BASIC_COMPACTION_CONFIG, resolveCompactionConfig } from "./config.ts";
 export {
+  collectCorpus,
+  CORPUS_ENTRY_TYPE,
+  publishCorpusAfterCompaction,
+  stageCorpus,
+  type CorpusEntryAppender,
+  type CorpusStageOptions,
+} from "./corpus.ts";
+export {
   assertCompleteCoverage,
   buildBasicCompactionResult,
   type BasicCompactionInput,
@@ -56,7 +64,13 @@ export {
   RULE_AUTHORITY_CRITERIA,
   type ObservationPlanOptions,
 } from "./questions.ts";
-export { redactPrivateData, redactStrings, type RedactionResult } from "./redaction.ts";
+export {
+  MAX_CORPUS_TEXT_CHARS,
+  redactAndLimitCorpusText,
+  redactPrivateData,
+  redactStrings,
+  type RedactionResult,
+} from "./redaction.ts";
 export {
   createJsonlLineReader,
   RpcResponseTimeoutError,
@@ -105,11 +119,14 @@ export {
   type StateFitOptions,
 } from "./state.ts";
 export {
+  collectCorpusReceipts,
   collectRetroPendingMarkers,
   collectRuleAcceptanceReceipts,
   collectRuleProposalBatches,
   collectRuleProposalReceipts,
   collectRuleSignalBatches,
+  parseCorpusChunk,
+  parseCorpusReceipt,
   parseRetroPendingMarker,
   parseRuleAcceptanceReceipt,
   parseRuleProposalReceipt,

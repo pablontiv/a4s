@@ -8,6 +8,7 @@ import type { AuthResult } from "@earendil-works/pi-ai";
 import { createProvider } from "@earendil-works/pi-ai";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
 import { buildBasicCompactionResult } from "./compaction-core.ts";
+import { collectCorpus, publishCorpusAfterCompaction, stageCorpus } from "./corpus.ts";
 import { BASIC_COMPACTION_CONFIG, resolveCompactionConfig } from "./config.ts";
 import {
   CompactionBuildError,
@@ -16,6 +17,7 @@ import {
 import { disabledEvidencePipeline } from "./evidence-pipeline.ts";
 import { DeadlineExceededError, OperationAbortedError, runWithDeadline } from "./deadline.ts";
 import { isStableDigest, stableDigest } from "./digest.ts";
+import { redactAndLimitCorpusText } from "./redaction.ts";
 import { HttpJevClient, JevApiError, JevUnavailableError, JevValidationError } from "./jev.ts";
 import {
   observePreparedCompactionRules,
@@ -50,6 +52,7 @@ import {
   RULE_PROPOSAL_ENTRY_TYPE,
 } from "./storage.ts";
 import type {
+  CorpusChunk,
   JevClient,
   JevCompactionResult,
   EvidenceOptions,
@@ -97,6 +100,7 @@ type DiagnosticCode =
 
 interface PendingCompaction {
   result: JevCompactionResult;
+  corpus: CorpusChunk[];
 }
 
 interface PendingRetroWork {
@@ -148,6 +152,7 @@ function createTypesafeProvider() {
 export function registerPiRuleCompiler(pi: ExtensionAPI, options: PiRuleCompilerOptions = {}): void {
   const pendingByAttempt = new Map<string, PendingCompaction>();
   const retroInFlight = new Set<string>();
+  let recoveredCorpus: CorpusChunk[] = [];
   const now = options.now ?? (() => new Date());
   const hookTimeoutMs = options.hookTimeoutMs ?? 180_000;
   const retroTimeoutMs = options.retroTimeoutMs ?? 120_000;
@@ -163,9 +168,11 @@ export function registerPiRuleCompiler(pi: ExtensionAPI, options: PiRuleCompiler
     return new HttpJevClient({ apiKey: (await resolveTypesafeApiKey(ctx)) ?? "" });
   };
 
-  pi.on("session_start", () => {
+  pi.on("session_start", (_event, ctx) => {
     pendingByAttempt.clear();
     retroInFlight.clear();
+    // getBranch is Pi's branch-local view, so reload cannot blend sibling branches.
+    recoveredCorpus = collectCorpus(ctx.sessionManager.getBranch());
   });
 
   pi.on("agent_settled", async (_event, ctx) => {
@@ -230,6 +237,15 @@ export function registerPiRuleCompiler(pi: ExtensionAPI, options: PiRuleCompiler
   pi.on("session_compact", async (event, ctx) => {
     const attemptId = readCompactionAttemptId(event.compactionEntry.details);
     const pending = attemptId ? pendingByAttempt.get(attemptId) : undefined;
+    if (pending) {
+      try {
+        publishCorpusAfterCompaction(pending.corpus, ctx.sessionManager.getBranch(), pi);
+        recoveredCorpus = collectCorpus(ctx.sessionManager.getBranch());
+      } catch {
+        // Corpus persistence is best-effort after Pi has already committed compaction.
+        // Never surface raw corpus through diagnostics or alter basic compaction output.
+      }
+    }
     if (attemptId) pendingByAttempt.delete(attemptId);
     const evidenceStrategy = options.evidence?.strategy ?? "off";
     switch (evidenceStrategy) {
@@ -566,12 +582,30 @@ async function handleCompaction(
       },
       compactionOptions,
     );
-    pendingByAttempt.set(attemptId, { result });
+    pendingByAttempt.set(attemptId, {
+      result,
+      corpus: stageCorpus(prepared.messages, {
+        branchId: corpusBranchId(ctx),
+        compactionAttemptId: attemptId,
+      }),
+    });
     return { compaction: result };
   } catch (error) {
     safeNotify(ctx, "compaction", classifyCompactionError(error));
     return { cancel: true };
   }
+}
+
+function corpusBranchId(ctx: ExtensionContext): string {
+  const manager = ctx.sessionManager as ExtensionContext["sessionManager"] & {
+    getLeafId?: () => unknown;
+  };
+  const leafId = manager.getLeafId?.();
+  const rawAnchor = typeof leafId === "string" ? leafId : "root";
+  // Treat session-provided identifiers as source data: redact and bound them
+  // before they can participate in durable corpus provenance.
+  const anchor = redactAndLimitCorpusText(rawAnchor, 200).text || "root";
+  return stableDigest({ schema: "a4s.corpus-branch/v1", anchor });
 }
 
 function readCompactionAttemptId(value: unknown): string | undefined {

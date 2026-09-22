@@ -3,6 +3,17 @@ export interface RedactionResult {
   redactionCount: number;
 }
 
+/** Corpus text is deliberately bounded only after redaction has completed. */
+export const MAX_CORPUS_TEXT_CHARS = 2_400;
+
+export function redactAndLimitCorpusText(input: string, maximum = MAX_CORPUS_TEXT_CHARS): RedactionResult {
+  if (!Number.isSafeInteger(maximum) || maximum <= 0) {
+    throw new RangeError("maximum corpus text length must be a positive integer");
+  }
+  const redacted = redactPrivateData(input);
+  return { text: redacted.text.slice(0, maximum), redactionCount: redacted.redactionCount };
+}
+
 interface RedactionPattern {
   expression: RegExp;
   replace(match: string, ...groups: string[]): string;

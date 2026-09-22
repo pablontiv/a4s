@@ -31,6 +31,30 @@ export interface NormalizedSessionMessage {
   redactionCount: number;
 }
 
+/** A redacted, bounded source fragment retained only after Pi confirms compaction. */
+export interface CorpusChunk {
+  schema: "a4s.corpus-chunk/v1";
+  id: string;
+  digest: string;
+  role: string;
+  position: number;
+  text: string;
+  provenance: {
+    branchId: string;
+    compactionAttemptId: string;
+    sourceDigest: string;
+  };
+}
+
+/** Idempotency marker for one successful compaction corpus publication. */
+export interface CorpusReceipt {
+  schema: "a4s.corpus-receipt/v1";
+  idempotencyKey: string;
+  branchId: string;
+  compactionAttemptId: string;
+  chunkIds: string[];
+}
+
 export interface FittedStateMessage {
   index: number;
   role: string;

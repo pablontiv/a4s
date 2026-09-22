@@ -1,7 +1,10 @@
-import { isStableDigest } from "./digest.ts";
+import { isStableDigest, stableDigest } from "./digest.ts";
+import { MAX_CORPUS_TEXT_CHARS, redactAndLimitCorpusText } from "./redaction.ts";
 import type {
   CompactionForcedReason,
   CompactionRetentionAction,
+  CorpusChunk,
+  CorpusReceipt,
   CompactionRetentionThresholds,
   CompactionWindowObservation,
   MessageCompactionDecision,
@@ -23,6 +26,7 @@ export const RULE_SIGNAL_ENTRY_TYPE = "a4s.pi-rule-compiler.rule-signals.v2" as 
 export const RETRO_PENDING_ENTRY_TYPE = "a4s.pi-rule-compiler.retro-pending.v1" as const;
 export const RULE_PROPOSAL_ENTRY_TYPE = "a4s.pi-rule-compiler.rule-proposals.v1" as const;
 export const RULE_ACCEPTANCE_ENTRY_TYPE = "a4s.pi-rule-compiler.rule-acceptance.v1" as const;
+export const CORPUS_ENTRY_TYPE = "a4s.pi-rule-compiler.corpus.v1" as const;
 
 const RULE_SCOPE_KINDS: readonly RuleScopeKind[] = ["global", "project", "path", "task"];
 const RULE_CLASSES: readonly RuleClass[] = [
@@ -52,6 +56,98 @@ export class StoredEntryValidationError extends Error {
     super(`invalid stored rule compiler entry at ${path}`);
     this.name = "StoredEntryValidationError";
   }
+}
+
+export function collectCorpus(entries: readonly unknown[]): CorpusChunk[] {
+  const chunks: CorpusChunk[] = [];
+  const seen = new Set<string>();
+  for (const entry of entries) {
+    const record = optionalRecord(entry);
+    if (record?.type !== "custom" || record.customType !== CORPUS_ENTRY_TYPE) continue;
+    try {
+      const chunk = parseCorpusChunk(record.data);
+      if (!seen.has(chunk.id)) {
+        chunks.push(chunk);
+        seen.add(chunk.id);
+      }
+    } catch (error) {
+      if (!(error instanceof StoredEntryValidationError)) throw error;
+    }
+  }
+  return chunks;
+}
+
+export function collectCorpusReceipts(entries: readonly unknown[]): CorpusReceipt[] {
+  const receipts: CorpusReceipt[] = [];
+  const seen = new Set<string>();
+  for (const entry of entries) {
+    const record = optionalRecord(entry);
+    if (record?.type !== "custom" || record.customType !== CORPUS_ENTRY_TYPE) continue;
+    try {
+      const receipt = parseCorpusReceipt(record.data);
+      if (!seen.has(receipt.idempotencyKey)) {
+        receipts.push(receipt);
+        seen.add(receipt.idempotencyKey);
+      }
+    } catch (error) {
+      if (!(error instanceof StoredEntryValidationError)) throw error;
+    }
+  }
+  return receipts;
+}
+
+export function parseCorpusChunk(value: unknown): CorpusChunk {
+  const path = "$corpusChunk";
+  const record = requireRecord(value, path);
+  requireExactKeys(record, ["schema", "id", "digest", "role", "position", "text", "provenance"], path);
+  if (record.schema !== "a4s.corpus-chunk/v1") fail(`${path}.schema`);
+  const role = requireBoundedString(record.role, 1, 80, `${path}.role`);
+  if (redactAndLimitCorpusText(role, 80).text.replaceAll(/[\r\n\t]/g, " ").trim() !== role) fail(`${path}.role`);
+  const position = requireNonNegativeInteger(record.position, `${path}.position`);
+  const text = requireBoundedString(record.text, 1, MAX_CORPUS_TEXT_CHARS, `${path}.text`);
+  if (redactAndLimitCorpusText(text).text !== text) fail(`${path}.text`);
+  const provenance = requireRecord(record.provenance, `${path}.provenance`);
+  requireExactKeys(provenance, ["branchId", "compactionAttemptId", "sourceDigest"], `${path}.provenance`);
+  const branchId = requireBoundedString(provenance.branchId, 1, 200, `${path}.provenance.branchId`);
+  if (redactAndLimitCorpusText(branchId, 200).text !== branchId) fail(`${path}.provenance.branchId`);
+  const compactionAttemptId = requireDigest(provenance.compactionAttemptId, `${path}.provenance.compactionAttemptId`);
+  const sourceDigest = requireDigest(provenance.sourceDigest, `${path}.provenance.sourceDigest`);
+  const digest = requireDigest(record.digest, `${path}.digest`);
+  const expectedDigest = stableDigest({
+    schema: "a4s.corpus-chunk/v1",
+    role,
+    position,
+    text,
+    provenance: { branchId, compactionAttemptId, sourceDigest },
+  });
+  if (digest !== expectedDigest) fail(`${path}.digest`);
+  const id = requireDigest(record.id, `${path}.id`);
+  if (id !== stableDigest({ schema: "a4s.corpus-chunk-id/v1", digest })) fail(`${path}.id`);
+  return {
+    schema: "a4s.corpus-chunk/v1",
+    id,
+    digest,
+    role,
+    position,
+    text,
+    provenance: { branchId, compactionAttemptId, sourceDigest },
+  };
+}
+
+export function parseCorpusReceipt(value: unknown): CorpusReceipt {
+  const path = "$corpusReceipt";
+  const record = requireRecord(value, path);
+  requireExactKeys(record, ["schema", "idempotencyKey", "branchId", "compactionAttemptId", "chunkIds"], path);
+  if (record.schema !== "a4s.corpus-receipt/v1" || !Array.isArray(record.chunkIds)) fail(path);
+  const branchId = requireBoundedString(record.branchId, 1, 200, `${path}.branchId`);
+  if (redactAndLimitCorpusText(branchId, 200).text !== branchId) fail(`${path}.branchId`);
+  const compactionAttemptId = requireDigest(record.compactionAttemptId, `${path}.compactionAttemptId`);
+  const chunkIds = requireUniqueDigests(record.chunkIds, `${path}.chunkIds`);
+  const idempotencyKey = requireDigest(record.idempotencyKey, `${path}.idempotencyKey`);
+  if (idempotencyKey !== stableDigest({ schema: "a4s.corpus-receipt/v1", branchId, compactionAttemptId, chunkIds })) {
+    fail(`${path}.idempotencyKey`);
+  }
+  return { schema: "a4s.corpus-receipt/v1", idempotencyKey, branchId, compactionAttemptId, chunkIds };
 }
 
 export function collectRuleSignalBatches(entries: readonly unknown[]): RuleSignalBatch[] {
