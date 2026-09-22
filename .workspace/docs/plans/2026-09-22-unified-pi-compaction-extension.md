@@ -266,6 +266,9 @@ git commit -m "feat: add opt-in compaction trigger"
 - Modify: `packages/pi-rule-compiler/src/index.ts`
 - Test: `packages/pi-rule-compiler/test/corpus.test.ts`
 - Test: `packages/pi-rule-compiler/test/extension.test.ts`
+- Create: `packages/pi-rule-compiler/scripts/run-headless-e2e.ts`
+- Modify: `packages/pi-rule-compiler/package.json`
+- Modify: `packages/pi-rule-compiler/README.md`
 
 **Interfaces:**
 - Consumes: mensajes normalizados, resultado de compaction exitoso, rama actual de `sessionManager` y `pi.appendEntry`.
@@ -319,10 +322,22 @@ Run: `npm test --workspace @a4s/pi-rule-compiler -- --test-name-pattern "corpus|
 
 Expected: PASS; reintentos y reload no duplican ids ni muestran secretos.
 
-- [ ] **Step 5: Ejecutar gates completos y commit**
+- [ ] **Step 5: Ejecutar el E2E inexistente para verificar el fallo inicial**
+
+Run: `npm run e2e --workspace @a4s/pi-rule-compiler`
+
+Expected: FAIL porque todavía no existe el script `e2e`; E0 no es un sustituto válido.
+
+- [ ] **Step 6: Implementar el runner Pi RPC real**
+
+Crea `scripts/run-headless-e2e.ts` y registra `"e2e": "tsx scripts/run-headless-e2e.ts"`. El runner crea un directorio bajo `artifacts/pi-rule-compiler-e2e/<timestamp>/`, inicia `pi --mode rpc --approve --no-extensions --no-builtin-tools --session-dir <run-dir>/sessions -e <absolute packages/pi-rule-compiler/src/index.ts>`, y mantiene stdin abierto hasta recibir cada respuesta correlacionada. Primero exige que `get_state` devuelva un modelo configurado; luego envía dos prompts breves sin secretos, espera `agent_settled` después de cada uno, ejecuta `compact`, y exige una respuesta exitosa. Con `get_entries`, exige al menos un CustomEntry `a4s.pi-rule-compiler.corpus.v1` cuyo `data.schema` sea `a4s.corpus-chunk/v1` y otro cuyo `data.schema` sea `a4s.corpus-receipt/v1`; no imprime texto, claves ni transcript. Reinicia Pi con `--session <sessionFile>` y la misma extensión, vuelve a leer las entradas y exige los mismos ids de chunks y receipt sin duplicados. Si falta un modelo, una credencial Jev, un evento, respuesta o artefacto, termina non-zero y deja el directorio de evidencia intacto.
+
+Documenta el comando, el coste de proveedores reales y la conservación intencional del directorio de evidencia. No uses `--fork`, JSONL pregrabado, fakes, E0 ni un modelo hardcodeado.
+
+- [ ] **Step 7: Ejecutar gates completos y commit**
 
 ```bash
-npm test && npm run typecheck && git diff --check
+npm test && npm run typecheck && npm run e2e --workspace @a4s/pi-rule-compiler && git diff --check
 git add packages/pi-rule-compiler
 git commit -m "feat: persist sanitized compaction corpus"
 ```
