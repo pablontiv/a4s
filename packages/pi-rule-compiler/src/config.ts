@@ -1,25 +1,15 @@
+import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import type { CompactionConfig } from "./types.ts";
 
-export const A4S_PI_RULE_COMPILER_COMPACTION_STRATEGY = "A4S_PI_RULE_COMPILER_COMPACTION_STRATEGY";
-export const A4S_PI_RULE_COMPILER_TRIGGER_MODE = "A4S_PI_RULE_COMPILER_TRIGGER_MODE";
-export const A4S_PI_RULE_COMPILER_EVIDENCE_STRATEGY = "A4S_PI_RULE_COMPILER_EVIDENCE_STRATEGY";
+export const PI_RULE_COMPILER_GLOBAL_CONFIG_PATH = "~/.pi/agent/pi-rule-compiler.json";
 
-/**
- * Projects the installed entrypoint's three non-secret process settings onto
- * the same flat configuration surface used by programmatic embeddings.
- */
-export function configurationFromEnvironment(
-  env: Readonly<Record<string, string | undefined>>,
-): Readonly<Record<string, unknown>> {
-  const config: Record<string, unknown> = {};
-  const compactionStrategy = env[A4S_PI_RULE_COMPILER_COMPACTION_STRATEGY];
-  const triggerMode = env[A4S_PI_RULE_COMPILER_TRIGGER_MODE];
-  const evidenceStrategy = env[A4S_PI_RULE_COMPILER_EVIDENCE_STRATEGY];
-  if (compactionStrategy !== undefined) config["compaction.strategy"] = compactionStrategy;
-  if (triggerMode !== undefined) config["trigger.mode"] = triggerMode;
-  if (evidenceStrategy !== undefined) config["evidence.strategy"] = evidenceStrategy;
-  return config;
-}
+const FLAT_CONFIG_KEYS = new Set([
+  "compaction.strategy",
+  "trigger.mode",
+  "evidence.strategy",
+]);
 
 /** The safe, backwards-compatible configuration used when no valid opt-in is supplied. */
 export const BASIC_COMPACTION_CONFIG: CompactionConfig = {
@@ -61,6 +51,48 @@ export function resolveCompactionConfig(
     trigger: { mode: triggerMode },
     evidence: { strategy: evidenceStrategy },
   };
+}
+
+/** Parses the persisted global file without accepting any additional fields. */
+export function configurationFromGlobalFile(
+  contents: string | undefined,
+): Readonly<Record<string, unknown>> {
+  if (contents === undefined) return flatConfiguration(BASIC_COMPACTION_CONFIG);
+
+  try {
+    const parsed: unknown = JSON.parse(contents);
+    if (!isRecord(parsed) || Object.keys(parsed).some((key) => !FLAT_CONFIG_KEYS.has(key))) {
+      return flatConfiguration(BASIC_COMPACTION_CONFIG);
+    }
+    return flatConfiguration(resolveCompactionConfig(parsed, BASIC_COMPACTION_CONFIG));
+  } catch {
+    return flatConfiguration(BASIC_COMPACTION_CONFIG);
+  }
+}
+
+/** Reads the sole installed configuration location. Any read failure is basic. */
+export function loadGlobalCompactionConfiguration(): Readonly<Record<string, unknown>> {
+  try {
+    return configurationFromGlobalFile(readFileSync(globalCompactionConfigPath(), "utf8"));
+  } catch {
+    return configurationFromGlobalFile(undefined);
+  }
+}
+
+export function globalCompactionConfigPath(): string {
+  return join(homedir(), ".pi", "agent", "pi-rule-compiler.json");
+}
+
+function flatConfiguration(config: CompactionConfig): Readonly<Record<string, unknown>> {
+  return {
+    "compaction.strategy": config.compaction.strategy,
+    "trigger.mode": config.trigger.mode,
+    "evidence.strategy": config.evidence.strategy,
+  };
+}
+
+function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 function isCompactionStrategy(value: unknown): value is CompactionConfig["compaction"]["strategy"] {

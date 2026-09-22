@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import piRuleCompilerExtension, {
-  A4S_PI_RULE_COMPILER_COMPACTION_STRATEGY,
-  A4S_PI_RULE_COMPILER_EVIDENCE_STRATEGY,
-  A4S_PI_RULE_COMPILER_TRIGGER_MODE,
   collectCorpus,
   CORPUS_ENTRY_TYPE,
   createTypesafeAuthResolver,
@@ -364,29 +364,36 @@ test("basic does not register or consume Ladder context projection", () => {
   assert.equal(fake.handlers.has("context_with_system"), false);
 });
 
-test("installed entrypoint projects process environment before registration", () => {
-  const names = [
-    A4S_PI_RULE_COMPILER_COMPACTION_STRATEGY,
-    A4S_PI_RULE_COMPILER_TRIGGER_MODE,
-    A4S_PI_RULE_COMPILER_EVIDENCE_STRATEGY,
-  ] as const;
-  const prior = Object.fromEntries(names.map((name) => [name, process.env[name]]));
-  try {
-    process.env[A4S_PI_RULE_COMPILER_COMPACTION_STRATEGY] = "ladder";
-    process.env[A4S_PI_RULE_COMPILER_TRIGGER_MODE] = "off";
-    process.env[A4S_PI_RULE_COMPILER_EVIDENCE_STRATEGY] = "off";
-    const fake = createFakePi();
+test("installed entrypoint reads only the fixed global configuration path at startup", (t) => {
+  const home = mkdtempSync(join(tmpdir(), "a4s-rule-compiler-home-"));
+  const priorHome = process.env.HOME;
+  const rejectedEnvironmentName = "A4S_PI_RULE_COMPILER_COMPACTION_STRATEGY";
+  const priorRejectedEnvironment = process.env[rejectedEnvironmentName];
+  t.after(() => {
+    if (priorHome === undefined) delete process.env.HOME;
+    else process.env.HOME = priorHome;
+    if (priorRejectedEnvironment === undefined) delete process.env[rejectedEnvironmentName];
+    else process.env[rejectedEnvironmentName] = priorRejectedEnvironment;
+    rmSync(home, { recursive: true, force: true });
+  });
+  process.env.HOME = home;
+  process.env[rejectedEnvironmentName] = "ladder";
 
-    piRuleCompilerExtension(fake.pi);
+  const missing = createFakePi();
+  piRuleCompilerExtension(missing.pi);
+  assert.equal(missing.handlers.has("context_with_system"), false);
 
-    assert.equal(fake.handlers.has("context_with_system"), true);
-  } finally {
-    for (const name of names) {
-      const value = prior[name];
-      if (value === undefined) delete process.env[name];
-      else process.env[name] = value;
-    }
-  }
+  const configDirectory = join(home, ".pi", "agent");
+  mkdirSync(configDirectory, { recursive: true });
+  writeFileSync(join(configDirectory, "pi-rule-compiler.json"), JSON.stringify({
+    "compaction.strategy": "ladder",
+    "trigger.mode": "off",
+    "evidence.strategy": "off",
+  }));
+
+  const configured = createFakePi();
+  piRuleCompilerExtension(configured.pi);
+  assert.equal(configured.handlers.has("context_with_system"), true);
 });
 
 test("Ladder projects branch corpus through context_with_system and falls back unchanged on failure", async () => {

@@ -27,16 +27,25 @@ flat `config` values for `compaction.strategy` (`basic|ladder`),
 `trigger.mode` (`off|hint|auto`), and `evidence.strategy` (`off|ladder`);
 invalid combinations preserve the prior safe configuration.
 
-The installed `pi -e` entrypoint maps only these namespaced, non-secret process
-variables onto that same flat configuration before registering hooks:
+The installed `pi -e` entrypoint reads the persisted global file
+`~/.pi/agent/pi-rule-compiler.json` once at startup. The file may contain only
+the same three flat, non-secret mode keys:
 
-- `A4S_PI_RULE_COMPILER_COMPACTION_STRATEGY=basic|ladder`
-- `A4S_PI_RULE_COMPILER_TRIGGER_MODE=off|hint|auto`
-- `A4S_PI_RULE_COMPILER_EVIDENCE_STRATEGY=off|ladder`
+```json
+{
+  "compaction.strategy": "ladder",
+  "trigger.mode": "off",
+  "evidence.strategy": "off"
+}
+```
 
-Unset values retain their defaults. Any invalid value or invalid combination
-fails closed to the complete basic safe configuration. Provider credentials
-remain separate and are never projected into extension configuration.
+Create or edit that fixed file, then restart Pi so new sessions load the
+change. A missing file, malformed JSON, a non-object value, any unknown field,
+an invalid mode, or an invalid combination fails closed to the complete basic
+safe configuration (`basic`, `hint`, `off`). The extension does not use custom
+Pi `settings.json` keys, session text, credentials, environment variables, or
+a user-selected path as mode configuration. Provider credentials remain
+separate.
 
 On `agent_settled`, an enabled Trigger first requires interactive UI, idle
 state, enough context, no pending messages, no cooldown, an empty editor, and
@@ -141,13 +150,16 @@ their receipt across a Pi restart. It can therefore incur real provider cost
 and requires both providers to be configured. It neither prints RPC/session
 content nor supplies a model, credential, fake, replay, or fork input.
 
-The runner defaults to `basic`, but every child process explicitly receives the
-selected compaction strategy plus `trigger=off` and `evidence=off`, overriding
-any inherited rule-compiler environment. In `ladder` mode, after real
-Pi/Jev compaction and reload, it sends a subsequent real provider request and
-requires the content-free rendered-projection receipt produced only after a
-successful `context_with_system` Ladder evaluation. Session artifacts retain
-the evidence without printing prompts or provider bodies.
+The runner defaults to expecting `basic`. `--mode` is an assertion, not a
+configuration override: before starting Pi, the runner reads the same fixed
+global file and refuses to continue unless its resolved compaction strategy
+matches the requested mode. For a deterministic Ladder run, save the example
+configuration above before running the command; each child process reads that
+persisted file at startup. In `ladder` mode, after real Pi/Jev compaction
+and reload, the runner sends a subsequent real provider request and requires
+the content-free rendered-projection receipt produced only after a successful
+`context_with_system` Ladder evaluation. Session artifacts retain the evidence
+without printing prompts or provider bodies.
 
 Every run intentionally preserves its evidence directory under
 `artifacts/pi-rule-compiler-e2e/<timestamp>/`, including Pi's session artifact,

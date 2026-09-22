@@ -1,14 +1,14 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { configurationFromEnvironment } from "./config.ts";
+import { loadGlobalCompactionConfiguration } from "./config.ts";
 import { registerPiRuleCompiler } from "./extension.ts";
 
 export {
-  A4S_PI_RULE_COMPILER_COMPACTION_STRATEGY,
-  A4S_PI_RULE_COMPILER_EVIDENCE_STRATEGY,
-  A4S_PI_RULE_COMPILER_TRIGGER_MODE,
   BASIC_COMPACTION_CONFIG,
-  configurationFromEnvironment,
+  configurationFromGlobalFile,
+  globalCompactionConfigPath,
   isLadderCompaction,
+  loadGlobalCompactionConfiguration,
+  PI_RULE_COMPILER_GLOBAL_CONFIG_PATH,
   resolveCompactionConfig,
 } from "./config.ts";
 export {
@@ -165,5 +165,5 @@ export {
 export * from "./types.ts";
 
 export default function piRuleCompilerExtension(pi: ExtensionAPI): void {
-  registerPiRuleCompiler(pi, { config: configurationFromEnvironment(process.env) });
+  registerPiRuleCompiler(pi, { config: loadGlobalCompactionConfiguration() });
 }

@@ -12,9 +12,9 @@ import { mkdir } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  A4S_PI_RULE_COMPILER_COMPACTION_STRATEGY,
-  A4S_PI_RULE_COMPILER_EVIDENCE_STRATEGY,
-  A4S_PI_RULE_COMPILER_TRIGGER_MODE,
+  loadGlobalCompactionConfiguration,
+  PI_RULE_COMPILER_GLOBAL_CONFIG_PATH,
+  resolveCompactionConfig,
 } from "../src/config.ts";
 import { LADDER_PROJECTION_RECEIPT_TYPE } from "../src/extension.ts";
 import { createJsonlLineReader } from "../src/rpc-stdin-guard.ts";
@@ -39,16 +39,16 @@ export function parseE2eMode(args: readonly string[]): E2eMode {
   return args[1];
 }
 
-export function createE2eChildEnvironment(
+export function assertE2eGlobalConfiguration(
   mode: E2eMode,
-  inherited: Readonly<NodeJS.ProcessEnv> = process.env,
-): NodeJS.ProcessEnv {
-  return {
-    ...inherited,
-    [A4S_PI_RULE_COMPILER_COMPACTION_STRATEGY]: mode,
-    [A4S_PI_RULE_COMPILER_TRIGGER_MODE]: "off",
-    [A4S_PI_RULE_COMPILER_EVIDENCE_STRATEGY]: "off",
-  };
+  raw: Readonly<Record<string, unknown>>,
+): void {
+  const configured = resolveCompactionConfig(raw);
+  if (configured.compaction.strategy !== mode) {
+    throw new Error(
+      `${PI_RULE_COMPILER_GLOBAL_CONFIG_PATH} must set compaction.strategy=${mode} before starting the E2E`,
+    );
+  }
 }
 
 interface RpcResponse {
@@ -84,8 +84,8 @@ class HeadlessPi {
   readonly #closed: Promise<number | null>;
   #compactionDiagnostic: SafeCompactionDiagnosticCategory | undefined;
 
-  constructor(args: readonly string[], env: NodeJS.ProcessEnv) {
-    this.#child = spawn("pi", args, { env, stdio: ["pipe", "pipe", "pipe"] });
+  constructor(args: readonly string[]) {
+    this.#child = spawn("pi", args, { stdio: ["pipe", "pipe", "pipe"] });
     // Keep stderr drained without exposing provider diagnostics or credentials.
     this.#child.stderr.on("data", () => undefined);
     const reader = createJsonlLineReader((line) => this.#receiveLine(line));
@@ -299,9 +299,8 @@ async function runFirstSession(
   extensionPath: string,
   sessionDir: string,
   runId: string,
-  env: NodeJS.ProcessEnv,
 ): Promise<{ sessionFile: string; ids: CorpusEntryIds }> {
-  const pi = new HeadlessPi(piArgs(extensionPath, sessionDir), env);
+  const pi = new HeadlessPi(piArgs(extensionPath, sessionDir));
   try {
     const stateResponse = await pi.request("get_state");
     requireSuccessfulResponse(stateResponse, "get_state");
@@ -330,9 +329,8 @@ async function runReloadedSession(
   sessionFile: string,
   mode: E2eMode,
   runId: string,
-  env: NodeJS.ProcessEnv,
 ): Promise<CorpusEntryIds> {
-  const pi = new HeadlessPi(piArgs(extensionPath, sessionDir, sessionFile), env);
+  const pi = new HeadlessPi(piArgs(extensionPath, sessionDir, sessionFile));
   try {
     const entriesResponse = await pi.request("get_entries");
     requireSuccessfulResponse(entriesResponse, "get_entries");
@@ -356,7 +354,7 @@ async function runReloadedSession(
 
 async function main(args: readonly string[] = process.argv.slice(2)): Promise<void> {
   const mode = parseE2eMode(args);
-  const childEnvironment = createE2eChildEnvironment(mode);
+  assertE2eGlobalConfiguration(mode, loadGlobalCompactionConfiguration());
   const scriptDir = dirname(fileURLToPath(import.meta.url));
   const packageDir = resolve(scriptDir, "..");
   const repositoryDir = resolve(packageDir, "..", "..");
@@ -372,14 +370,13 @@ async function main(args: readonly string[] = process.argv.slice(2)): Promise<vo
 
   try {
     const extensionPath = resolve(packageDir, "src", "index.ts");
-    const first = await runFirstSession(extensionPath, sessionDir, runId, childEnvironment);
+    const first = await runFirstSession(extensionPath, sessionDir, runId);
     const reloaded = await runReloadedSession(
       extensionPath,
       sessionDir,
       first.sessionFile,
       mode,
       runId,
-      childEnvironment,
     );
     if (!sameIds(first.ids.chunkIds, reloaded.chunkIds) || !sameIds(first.ids.receiptIds, reloaded.receiptIds)) {
       throw new Error("Pi reload did not preserve the corpus entry ids");

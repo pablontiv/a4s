@@ -1,13 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  A4S_PI_RULE_COMPILER_COMPACTION_STRATEGY,
-  A4S_PI_RULE_COMPILER_EVIDENCE_STRATEGY,
-  A4S_PI_RULE_COMPILER_TRIGGER_MODE,
   BASIC_COMPACTION_CONFIG,
-  configurationFromEnvironment,
+  configurationFromGlobalFile,
   resolveCompactionConfig,
 } from "../src/config.ts";
+
+const BASIC_FLAT_CONFIG = {
+  "compaction.strategy": "basic",
+  "trigger.mode": "hint",
+  "evidence.strategy": "off",
+};
 
 test("default configuration offers a compaction hint", () => {
   assert.deepEqual(resolveCompactionConfig(undefined), {
@@ -35,15 +38,13 @@ test("valid opt-in trigger config preserves basic compaction and disabled Eviden
   );
 });
 
-test("projects only the three namespaced non-secret environment settings into flat config", () => {
+test("global file accepts only the three flat non-secret mode keys", () => {
   assert.deepEqual(
-    configurationFromEnvironment({
-      [A4S_PI_RULE_COMPILER_COMPACTION_STRATEGY]: "ladder",
-      [A4S_PI_RULE_COMPILER_TRIGGER_MODE]: "off",
-      [A4S_PI_RULE_COMPILER_EVIDENCE_STRATEGY]: "ladder",
-      TYPESAFE_API_KEY: "must-not-be-projected",
-      UNRELATED: "must-not-be-projected",
-    }),
+    configurationFromGlobalFile(JSON.stringify({
+      "compaction.strategy": "ladder",
+      "trigger.mode": "off",
+      "evidence.strategy": "ladder",
+    })),
     {
       "compaction.strategy": "ladder",
       "trigger.mode": "off",
@@ -52,20 +53,41 @@ test("projects only the three namespaced non-secret environment settings into fl
   );
 });
 
-test("missing environment settings preserve the basic safe defaults", () => {
-  assert.deepEqual(configurationFromEnvironment({}), {});
+test("missing, malformed, and non-object global files fail closed to basic", () => {
+  assert.deepEqual(configurationFromGlobalFile(undefined), BASIC_FLAT_CONFIG);
+  assert.deepEqual(configurationFromGlobalFile("{"), BASIC_FLAT_CONFIG);
+  assert.deepEqual(configurationFromGlobalFile("null"), BASIC_FLAT_CONFIG);
+  assert.deepEqual(configurationFromGlobalFile("[]"), BASIC_FLAT_CONFIG);
+  assert.deepEqual(configurationFromGlobalFile('"ladder"'), BASIC_FLAT_CONFIG);
+});
+
+test("unknown global fields fail closed instead of projecting selected keys", () => {
   assert.deepEqual(
-    resolveCompactionConfig(configurationFromEnvironment({})),
-    BASIC_COMPACTION_CONFIG,
+    configurationFromGlobalFile(JSON.stringify({
+      "compaction.strategy": "ladder",
+      "trigger.mode": "off",
+      "evidence.strategy": "off",
+      TYPESAFE_API_KEY: "must-not-be-read-as-configuration",
+    })),
+    BASIC_FLAT_CONFIG,
   );
 });
 
-test("an invalid installed environment setting fails closed to the complete basic config", () => {
-  const projected = configurationFromEnvironment({
-    [A4S_PI_RULE_COMPILER_COMPACTION_STRATEGY]: "ladder",
-    [A4S_PI_RULE_COMPILER_TRIGGER_MODE]: "surprise",
-    [A4S_PI_RULE_COMPILER_EVIDENCE_STRATEGY]: "off",
-  });
-
-  assert.deepEqual(resolveCompactionConfig(projected), BASIC_COMPACTION_CONFIG);
+test("invalid global values and combinations fail closed to the complete basic config", () => {
+  assert.deepEqual(
+    configurationFromGlobalFile(JSON.stringify({
+      "compaction.strategy": "ladder",
+      "trigger.mode": "surprise",
+      "evidence.strategy": "off",
+    })),
+    BASIC_FLAT_CONFIG,
+  );
+  assert.deepEqual(
+    configurationFromGlobalFile(JSON.stringify({
+      "compaction.strategy": "basic",
+      "trigger.mode": "off",
+      "evidence.strategy": "ladder",
+    })),
+    BASIC_FLAT_CONFIG,
+  );
 });
