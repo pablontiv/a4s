@@ -1,11 +1,11 @@
 # @a4s/typesafe
 
-Canonical TypeSafe/Jev surface for A4S Pi extensions. Implements the frozen
-surface decided in **ADR 0020** so the three consumers (pi-rule-compiler,
-rpiv-mono, pi-auto-router) stop diverging on client, credential, model and
-failure semantics.
+Proposed shared TypeSafe/Jev surface for A4S Pi extensions. It implements the
+candidate contract in **ADR 0020**, which remains proposed; consumers must not
+treat this package as the required canonical surface until that decision is
+accepted.
 
-## What it freezes
+## Candidate contract
 
 1. **SDK** — `@typesafe-ai/sdk` pinned to exactly `0.6.0`.
 2. **Factory** — `createTypesafeClient({ apiKey, model?, baseURL?, fetch? })` builds

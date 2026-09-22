@@ -1,10 +1,12 @@
 # A4S
 
-A4S convierte la coordinación frágil de agentes en trabajo durable, estructurado y verificable.
+A4S convierte trabajo multi-repo recurrente en capacidades incrementales para outer harnesses.
 
-El repositorio reúne en un solo producto la configuración de orquestación, los métodos de trabajo, los artefactos portátiles y el runtime que los materializa.
+Las piezas sólo entran en la narrativa cuando son usables; las integraciones no definen la categoría de A4S.
 
-## Componentes
+El monorepo reúne capacidades que pueden evolucionar a ritmos distintos. Cada una documenta su alcance y sus requisitos sin prometer una suite completa, cobertura universal ni autonomía.
+
+## Capacidades
 
 - [`.workspace/`](.workspace/) contiene la configuración efectiva y el conocimiento gobernado de este workspace.
 - [`profiles/`](profiles/) publica perfiles reutilizables de configuración.
@@ -12,9 +14,14 @@ El repositorio reúne en un solo producto la configuración de orquestación, lo
 - [`skills/`](skills/) distribuye workflows portátiles y sus herramientas deterministas.
 - [`agents/`](agents/) conserva roles portátiles con provenance explícita.
 - [`output-styles/`](output-styles/) define contratos de interacción.
-- [`src/`](src/) implementa el runtime E0 y sus adapters sin mover su layout histórico.
-- [`packages/`](packages/) aloja providers autocontenidos como el compilador de reglas para Pi.
+- [`src/`](src/) contiene el runtime experimental E0 y sus adapters.
+- [`packages/pi-rule-compiler/`](packages/pi-rule-compiler/) contiene una extensión Pi para compaction y propuestas de reglas review-only.
+- [`packages/typesafe/`](packages/typesafe/) contiene una superficie TypeSafe/Jev en evaluación; su autoridad depende de ADR 0020.
 - [`test/`](test/) verifica runtime y contratos del repositorio.
+
+## Integraciones
+
+Pi, Herdr, TypeSafe, Jev, Rootline y Backscroll se integran mediante contratos explícitos. Una capacidad puede requerir una integración concreta; esas dependencias no definen la categoría de A4S ni convierten el monorepo en un runtime propio.
 
 ## Modelo
 
@@ -25,14 +32,14 @@ profiles/pablontiv/PROFILE.md
         → instancia efectiva
 .workspace/config.yaml
         → materialización
-A4S runtime + providers externos
+capacidades A4S + integraciones externas
 ```
 
-La configuración y el runtime pertenecen al mismo producto, pero siguen siendo capas distintas. Los providers externos —Pi, Herdr, Firstmate, Rootline, Backscroll y otros— conservan su propia autoridad y se integran mediante contratos explícitos.
+La configuración, los artefactos portátiles, los paquetes y el runtime experimental conservan límites explícitos. Los providers externos conservan su propia autoridad; A4S no los reemplaza ni se define por ellos.
 
 ## Dirección vigente
 
-- [North Star](.workspace/docs/adr/0001-a4s-north-star.md)
+- [North Star](.workspace/docs/adr/0021-adoptar-monorepo-incremental-para-outer-harnesses.md)
 - [Gate runtime-first](.workspace/docs/adr/0009-evaluar-runtime-externo-antes-de-construir-control-plane.md)
 - [Arquitectura v0.9](.workspace/docs/specs/a4s-architecture-spec-v0.9.md)
 - [Referencias a proyectos relacionados](.workspace/docs/references/related-projects.md)

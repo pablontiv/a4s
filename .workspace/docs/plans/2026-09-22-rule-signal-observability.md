@@ -8,7 +8,7 @@
 
 **Tech Stack:** TypeScript, Pi Extension API, Node.js built-in test runner, `tsx`.
 
-**Spec:** `docs/superpowers/specs/2026-09-22-rule-signal-observability-design.md`
+**Spec:** `.workspace/docs/specs/2026-09-22-rule-signal-observability-design.md`
 
 ## Global Constraints
 
@@ -273,7 +273,7 @@
 
 ## Execution Handoff
 
-Plan complete and saved to `docs/superpowers/plans/2026-09-22-rule-signal-observability.md`. Please review the plan. Which execution approach would you prefer?
+Plan complete and saved to `.workspace/docs/plans/2026-09-22-rule-signal-observability.md`. Please review the plan. Which execution approach would you prefer?
 
 - **Subagent-driven** — A fresh subagent implements the task and a fresh reviewer checks it before completion. Most thorough; costs a fresh context and review.
 - **Native** — I implement the task in this session, then obtain one whole-branch review. Fastest and least context overhead.
