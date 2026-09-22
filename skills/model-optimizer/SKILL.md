@@ -17,12 +17,12 @@ Run one logical optimize flow. Catalog is not a live response: only exact runtim
 4. **derive requirements** and priorities: archetype, tools, context/output, vision, structured output, reasoning/effort, latency, cost, reliability, cache, and adversarial-family independence.
 5. **live-check incumbent** routes and plausible challengers. The shortlist is at most four complete routes per agent, including the incumbent when present.
 6. Reconcile **bounded benchmark sources** only for affected roles. Preserve identity classes exactly: `EXACT`, `MODEL_EQUIVALENT`, `FAMILY_PROXY`, `ABSENT`, `UNKNOWN`, and `SOURCE_UNAVAILABLE`; search failure is `SOURCE_UNAVAILABLE`, not absence.
-7. Run runtime-exact, **tool-confined role evaluation** adaptively for finalists. Do not expose ambient extensions, unrestricted host tools, credentials, arbitrary project paths, raw prompts, raw responses, tool arguments, source code, transcripts, or config paths.
+7. Run runtime-exact, **tool-confined role evaluation** through the gated tier ladder in `references/evaluation-tiers.md`: L0 health probe, L1 single role fixture, L2 identical comparative suite across candidates, L3 executable compile+runtime verification. Do not spend a higher tier's quota on a route that failed the tier below. Do not expose ambient extensions, unrestricted host tools, credentials, arbitrary project paths, raw prompts, raw responses, tool arguments, source code, transcripts, or config paths.
 8. Render a **concise proposal**, `NEEDS_MORE_EVIDENCE`, no-op, or `ABSTAIN`. A challenger must materially improve; ties or unresolved evidence retain the incumbent.
 9. Stop for **explicit approval**. Requests to hurry, optimize, apply, certify, or explain are not approval to mutate configuration.
 10. After approval: **backup, apply minimally, validate, reload**, verify affected agent paths, and on any write/validation/reload/path failure restore the backup, validate again, reload again, and verify restored agent paths before reporting rollback success.
 
-Detailed rules live in `references/optimization-flow.md`, `references/benchmark-sources.md`, and `references/contracts.md`.
+Detailed rules live in `references/optimization-flow.md`, `references/evaluation-tiers.md`, `references/benchmark-sources.md`, and `references/contracts.md`.
 
 ## Read-only helper examples
 
@@ -40,6 +40,13 @@ The helper never mutates configuration. Do not invent or call helper mutation su
 ## Decision and approval surface
 
 Return exactly one decision per affected route: `CHANGE`, `NO_CHANGE`, `NEEDS_MORE_EVIDENCE`, or `ABSTAIN`. The public proposal may show only agent, current/recommended model and effort, concise reason, important uncertainty/exclusion, and operational trade-off. Keep exact config targets, source paths, cache keys, and artifact plumbing internal to the approval payload.
+
+## Evaluation hard rules
+
+- The model under test belongs to the headless `pi --model <id>` process; subagents only parallelize launches. Never rotate or edit runtime config (e.g. `subagents.json`) to change which model a worker runs as.
+- Harness failure is not model failure: classify startup/compile/runtime/semantic failures separately, and retry only after a reproduced harness fix plus renewed authorization.
+- Provider-extension routes keep extensions enabled in headless probes; `--no-extensions` is for native providers only.
+- Output discipline is graded: Markdown fences around a demanded pure module or JSON-only answer is a failure, not a formatting nit.
 
 ## Red flags
 
