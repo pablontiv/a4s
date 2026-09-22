@@ -149,6 +149,7 @@ It reports precision, recall, selected-boundary coverage, and false negatives fo
 ```sh
 npm run e2e --workspace @a4s/pi-rule-compiler -- --mode basic
 npm run e2e --workspace @a4s/pi-rule-compiler -- --mode ladder
+npm run e2e --workspace @a4s/pi-rule-compiler -- --mode evidence
 ```
 
 This is a headless product test, not an E0 or fixture run. It starts the
@@ -168,8 +169,16 @@ configuration above before running the command; each child process reads that
 persisted file at startup. In `ladder` mode, after real Pi/Jev compaction
 and reload, the runner sends a subsequent real provider request and requires
 the content-free rendered-projection receipt produced only after a successful
-`context_with_system` Ladder evaluation. Session artifacts retain the evidence
-without printing prompts or provider bodies.
+`context_with_system` Ladder evaluation.
+
+`--mode evidence` requires the persisted file to set both
+`compaction.strategy=ladder` and `evidence.strategy=ladder`, with Trigger set to
+`off` or the headless-inert `hint`. It creates a real compactable session with
+an explicit benign durable policy, then requires a valid signal batch,
+review-only proposal, retro-pending marker, and Evidence receipt. After
+restarting Pi against that session, it requires the same artifact ids and also
+exercises the Ladder projection path. The runner stores session artifacts but
+never prints prompts, proposal content, provider bodies, or credentials.
 
 Every run intentionally preserves its evidence directory under
 `artifacts/pi-rule-compiler-e2e/<timestamp>/`, including Pi's session artifact,

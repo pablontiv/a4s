@@ -433,7 +433,11 @@ git commit -m "feat: add query-aware context ladder"
 - Modify: `packages/pi-rule-compiler/src/types.ts`
 - Modify: `packages/pi-rule-compiler/src/index.ts`
 - Modify: `packages/pi-rule-compiler/eval/trigger/README.md`
+- Modify: `packages/pi-rule-compiler/scripts/e2e-prompts.ts`
+- Modify: `packages/pi-rule-compiler/scripts/run-headless-e2e.ts`
 - Modify: `packages/pi-rule-compiler/README.md`
+- Test: `packages/pi-rule-compiler/test/e2e-prompts.test.ts`
+- Test: `packages/pi-rule-compiler/test/e2e-runner.test.ts`
 - Test: `packages/pi-rule-compiler/test/evidence.test.ts`
 - Test: `packages/pi-rule-compiler/test/retro.test.ts`
 - Test: `packages/pi-rule-compiler/test/storage.test.ts`
@@ -494,13 +498,21 @@ fixtures/evidence/uncertain-candidate.json
 
 Haz que el eval local informe precisión, recall, cobertura de boundaries y falsos negativos de Evidence; las entradas de sesión, corpus y resultados locales permanecen ignorados.
 
-- [ ] **Step 5: Ejecutar la suite completa y gates de documentación**
+- [ ] **Step 5: Extender y ejecutar el E2E propio de Evidence**
+
+Añade `--mode evidence` sin alterar `basic|ladder`. El modo exige que el archivo global persistido resuelva simultáneamente `compaction.strategy=ladder` y `evidence.strategy=ladder`, con Trigger `off|hint`; no inyecta configuración por entorno. Crea y compacta una sesión Pi RPC real con una política durable sintética y no secreta, exige signal batch, proposal review-only, pending marker y Evidence receipt, recarga la sesión y verifica los mismos ids sin imprimir contenido sensible.
+
+Run: `npm run e2e --workspace @a4s/pi-rule-compiler -- --mode evidence`
+
+Expected: PASS con proveedores reales ya configurados; no se aceptan E0, fixtures ni el E2E Ladder como sustitutos.
+
+- [ ] **Step 6: Ejecutar la suite completa y gates de documentación**
 
 Run: `npm test && npm run typecheck && rootline validate .workspace/docs/specs/2026-09-22-unified-pi-compaction-extension-design.md -o json && git diff --check`
 
 Expected: PASS; Evidence por defecto es `off`, no filtra contenido y todos los artefactos siguen siendo recuperables tras un fallo.
 
-- [ ] **Step 6: Commit final de la iniciativa**
+- [ ] **Step 7: Commit final de la iniciativa**
 
 ```bash
 git add packages/pi-rule-compiler .workspace/docs

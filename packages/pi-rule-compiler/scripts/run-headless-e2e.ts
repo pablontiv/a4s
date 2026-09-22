@@ -16,25 +16,38 @@ import {
   PI_RULE_COMPILER_GLOBAL_CONFIG_PATH,
   resolveCompactionConfig,
 } from "../src/config.ts";
+import { stableDigest } from "../src/digest.ts";
 import { LADDER_PROJECTION_RECEIPT_TYPE } from "../src/extension.ts";
 import { createJsonlLineReader } from "../src/rpc-stdin-guard.ts";
+import {
+  collectEvidenceReceipts,
+  collectRetroPendingMarkers,
+  collectRuleProposalBatches,
+  collectRuleSignalBatches,
+} from "../src/storage.ts";
 import {
   classifySafeCompactionNotification,
   type SafeCompactionDiagnosticCategory,
 } from "./compaction-diagnostic.ts";
-import { createCompactionE2ePrompts } from "./e2e-prompts.ts";
+import {
+  createCompactionE2ePrompts,
+  createEvidenceE2ePrompts,
+} from "./e2e-prompts.ts";
 
 const COMMAND_TIMEOUT_MS = 300_000;
 const SHUTDOWN_TIMEOUT_MS = 10_000;
 const CORPUS_ENTRY_TYPE = "a4s.pi-rule-compiler.corpus.v1";
 
-type E2eMode = "basic" | "ladder";
+type E2eMode = "basic" | "ladder" | "evidence";
 
 export function parseE2eMode(args: readonly string[]): E2eMode {
   if (args.length === 0) return "basic";
   if (args[0] !== "--mode") throw new Error(`unknown E2E argument: ${args[0] ?? ""}`);
-  if (args.length !== 2 || (args[1] !== "basic" && args[1] !== "ladder")) {
-    throw new Error("--mode requires basic or ladder");
+  if (
+    args.length !== 2 ||
+    (args[1] !== "basic" && args[1] !== "ladder" && args[1] !== "evidence")
+  ) {
+    throw new Error("--mode requires basic, ladder, or evidence");
   }
   return args[1];
 }
@@ -44,9 +57,21 @@ export function assertE2eGlobalConfiguration(
   raw: Readonly<Record<string, unknown>>,
 ): void {
   const configured = resolveCompactionConfig(raw);
-  if (configured.compaction.strategy !== mode) {
+  const requiredCompaction = mode === "basic" ? "basic" : "ladder";
+  if (configured.compaction.strategy !== requiredCompaction) {
     throw new Error(
-      `${PI_RULE_COMPILER_GLOBAL_CONFIG_PATH} must set compaction.strategy=${mode} before starting the E2E`,
+      `${PI_RULE_COMPILER_GLOBAL_CONFIG_PATH} must set compaction.strategy=${requiredCompaction} before starting the E2E`,
+    );
+  }
+  if (mode !== "evidence") return;
+  if (configured.evidence.strategy !== "ladder") {
+    throw new Error(
+      `${PI_RULE_COMPILER_GLOBAL_CONFIG_PATH} must set evidence.strategy=ladder before starting the Evidence E2E`,
+    );
+  }
+  if (configured.trigger.mode === "auto") {
+    throw new Error(
+      `${PI_RULE_COMPILER_GLOBAL_CONFIG_PATH} must set trigger.mode=off or hint before starting the Evidence E2E`,
     );
   }
 }
@@ -62,6 +87,18 @@ interface RpcResponse {
 interface CorpusEntryIds {
   chunkIds: Set<string>;
   receiptIds: Set<string>;
+}
+
+export interface EvidenceArtifactIds {
+  signalBatchIds: Set<string>;
+  proposalIds: Set<string>;
+  markerIds: Set<string>;
+  receiptIds: Set<string>;
+}
+
+interface SessionArtifactIds {
+  corpus: CorpusEntryIds;
+  evidence?: EvidenceArtifactIds;
 }
 
 interface ResponseWaiter {
@@ -264,6 +301,34 @@ function collectCorpusEntryIds(data: unknown): CorpusEntryIds {
   return { chunkIds, receiptIds };
 }
 
+function collectEvidenceArtifactIds(data: unknown): EvidenceArtifactIds {
+  if (!isRecord(data) || !Array.isArray(data.entries)) {
+    throw new Error("Pi did not return session entries");
+  }
+  const signalBatchIds = new Set(
+    collectRuleSignalBatches(data.entries).map((batch) => stableDigest(batch)),
+  );
+  const proposalIds = new Set(
+    collectRuleProposalBatches(data.entries).map((proposal) => proposal.idempotencyKey),
+  );
+  const markerIds = new Set(
+    collectRetroPendingMarkers(data.entries).map((marker) => marker.attemptId),
+  );
+  const receiptIds = new Set(
+    collectEvidenceReceipts(data.entries).map((receipt) => receipt.idempotencyKey),
+  );
+  const required: ReadonlyArray<[label: string, ids: ReadonlySet<string>]> = [
+    ["signal batch", signalBatchIds],
+    ["proposal", proposalIds],
+    ["marker", markerIds],
+    ["receipt", receiptIds],
+  ];
+  for (const [label, ids] of required) {
+    if (ids.size === 0) throw new Error(`Pi did not persist Evidence ${label} artifacts`);
+  }
+  return { signalBatchIds, proposalIds, markerIds, receiptIds };
+}
+
 function requireRenderedLadderReceipt(data: unknown): void {
   if (!isRecord(data) || !Array.isArray(data.entries)) {
     throw new Error("Pi did not return session entries");
@@ -283,6 +348,27 @@ function sameIds(left: ReadonlySet<string>, right: ReadonlySet<string>): boolean
   return left.size === right.size && [...left].every((id) => right.has(id));
 }
 
+export function assertReloadedEvidenceArtifacts(
+  first: EvidenceArtifactIds,
+  reloaded: EvidenceArtifactIds,
+): void {
+  const artifacts: ReadonlyArray<[
+    label: string,
+    firstIds: ReadonlySet<string>,
+    reloadedIds: ReadonlySet<string>,
+  ]> = [
+    ["signal batch", first.signalBatchIds, reloaded.signalBatchIds],
+    ["proposal", first.proposalIds, reloaded.proposalIds],
+    ["marker", first.markerIds, reloaded.markerIds],
+    ["receipt", first.receiptIds, reloaded.receiptIds],
+  ];
+  for (const [label, firstIds, reloadedIds] of artifacts) {
+    if (!sameIds(firstIds, reloadedIds)) {
+      throw new Error(`Pi reload did not preserve Evidence ${label} artifacts`);
+    }
+  }
+}
+
 function piArgs(extensionPath: string, sessionDir: string, sessionFile?: string): string[] {
   return [
     "--mode", "rpc",
@@ -298,14 +384,18 @@ function piArgs(extensionPath: string, sessionDir: string, sessionFile?: string)
 async function runFirstSession(
   extensionPath: string,
   sessionDir: string,
+  mode: E2eMode,
   runId: string,
-): Promise<{ sessionFile: string; ids: CorpusEntryIds }> {
+): Promise<{ sessionFile: string; ids: SessionArtifactIds }> {
   const pi = new HeadlessPi(piArgs(extensionPath, sessionDir));
   try {
     const stateResponse = await pi.request("get_state");
     requireSuccessfulResponse(stateResponse, "get_state");
     const sessionFile = requireConfiguredModel(stateResponse.data);
-    for (const message of createCompactionE2ePrompts(runId)) {
+    const prompts = mode === "evidence"
+      ? createEvidenceE2ePrompts(runId)
+      : createCompactionE2ePrompts(runId);
+    for (const message of prompts) {
       const settled = pi.waitForEvent("agent_settled");
       const promptResponse = await pi.request("prompt", { message });
       requireSuccessfulResponse(promptResponse, "prompt");
@@ -316,8 +406,17 @@ async function runFirstSession(
     requireSuccessfulResponse(compactResponse, "compact", pi.compactionDiagnostic);
     const entriesResponse = await pi.request("get_entries");
     requireSuccessfulResponse(entriesResponse, "get_entries");
-    const ids = collectCorpusEntryIds(entriesResponse.data);
-    return { sessionFile, ids };
+    const corpus = collectCorpusEntryIds(entriesResponse.data);
+    const evidence = mode === "evidence"
+      ? collectEvidenceArtifactIds(entriesResponse.data)
+      : undefined;
+    return {
+      sessionFile,
+      ids: {
+        corpus,
+        ...(evidence === undefined ? {} : { evidence }),
+      },
+    };
   } finally {
     await pi.close();
   }
@@ -329,13 +428,16 @@ async function runReloadedSession(
   sessionFile: string,
   mode: E2eMode,
   runId: string,
-): Promise<CorpusEntryIds> {
+): Promise<SessionArtifactIds> {
   const pi = new HeadlessPi(piArgs(extensionPath, sessionDir, sessionFile));
   try {
     const entriesResponse = await pi.request("get_entries");
     requireSuccessfulResponse(entriesResponse, "get_entries");
-    const ids = collectCorpusEntryIds(entriesResponse.data);
-    if (mode === "ladder") {
+    const corpus = collectCorpusEntryIds(entriesResponse.data);
+    const evidence = mode === "evidence"
+      ? collectEvidenceArtifactIds(entriesResponse.data)
+      : undefined;
+    if (mode !== "basic") {
       const settled = pi.waitForEvent("agent_settled");
       const promptResponse = await pi.request("prompt", {
         message: `Retrieve the prior benign synthetic compaction input for E2E run ${runId} and reply only with acknowledged.`,
@@ -346,7 +448,10 @@ async function runReloadedSession(
       requireSuccessfulResponse(projectedEntriesResponse, "get_entries");
       requireRenderedLadderReceipt(projectedEntriesResponse.data);
     }
-    return ids;
+    return {
+      corpus,
+      ...(evidence === undefined ? {} : { evidence }),
+    };
   } finally {
     await pi.close();
   }
@@ -370,7 +475,7 @@ async function main(args: readonly string[] = process.argv.slice(2)): Promise<vo
 
   try {
     const extensionPath = resolve(packageDir, "src", "index.ts");
-    const first = await runFirstSession(extensionPath, sessionDir, runId);
+    const first = await runFirstSession(extensionPath, sessionDir, mode, runId);
     const reloaded = await runReloadedSession(
       extensionPath,
       sessionDir,
@@ -378,8 +483,17 @@ async function main(args: readonly string[] = process.argv.slice(2)): Promise<vo
       mode,
       runId,
     );
-    if (!sameIds(first.ids.chunkIds, reloaded.chunkIds) || !sameIds(first.ids.receiptIds, reloaded.receiptIds)) {
+    if (
+      !sameIds(first.ids.corpus.chunkIds, reloaded.corpus.chunkIds) ||
+      !sameIds(first.ids.corpus.receiptIds, reloaded.corpus.receiptIds)
+    ) {
       throw new Error("Pi reload did not preserve the corpus entry ids");
+    }
+    if (mode === "evidence") {
+      if (!first.ids.evidence || !reloaded.evidence) {
+        throw new Error("Pi did not return Evidence artifacts for reload verification");
+      }
+      assertReloadedEvidenceArtifacts(first.ids.evidence, reloaded.evidence);
     }
     process.stdout.write(`Pi Rule Compiler E2E passed (${mode}). Evidence: ${runDir}\n`);
   } catch (error) {
