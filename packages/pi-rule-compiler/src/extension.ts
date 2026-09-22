@@ -316,7 +316,7 @@ type CandidateResolution =
 
 function resolveCandidate(entries: readonly unknown[], query: string): CandidateResolution {
   const proposals = collectRuleProposalBatches(entries);
-  if (proposals.length === 0) return { status: "empty" };
+  if (!hasReviewCandidates(proposals)) return { status: "empty" };
   if (query.length === 0) return { status: "missing_arg" };
   const matches: Array<{ proposal: StoredRuleProposal; candidate: StoredRuleProposalCandidate }> = [];
   for (const proposal of proposals) {
@@ -337,6 +337,10 @@ function isAccepted(entries: readonly unknown[], proposalIdempotencyKey: string,
   return collectRuleAcceptanceReceipts(entries).some(
     (receipt) => receipt.proposalIdempotencyKey === proposalIdempotencyKey && receipt.candidateId === candidateId,
   );
+}
+
+function hasReviewCandidates(proposals: readonly StoredRuleProposal[]): boolean {
+  return proposals.some((proposal) => proposal.candidates.length > 0);
 }
 
 interface LatestRuleObservation {
@@ -381,6 +385,12 @@ function renderNoProposalState(entries: readonly unknown[]): string {
 function renderProposalList(entries: readonly unknown[]): string {
   const proposals = collectRuleProposalBatches(entries);
   if (proposals.length === 0) return renderNoProposalState(entries);
+  if (!hasReviewCandidates(proposals)) {
+    const observation = latestRuleObservation(collectRuleSignalBatches(entries));
+    return observation
+      ? `Latest retro completed: evaluated ${observation.candidateCount} rule candidate(s), synthesized no review-only candidates.`
+      : "Latest retro completed: synthesized no review-only candidates.";
+  }
   const accepted = new Set(
     collectRuleAcceptanceReceipts(entries).map((receipt) => `${receipt.proposalIdempotencyKey}:${receipt.candidateId}`),
   );

@@ -216,10 +216,14 @@ function asSignalEntry(batch: RuleSignalBatch): StoredEntry {
 }
 
 async function runRulesReview(entries: StoredEntry[]): Promise<string> {
+  return runRuleCommand(entries, "rules-review", "");
+}
+
+async function runRuleCommand(entries: StoredEntry[], command: string, args: string): Promise<string> {
   const fake = createFakePi(entries);
   registerPiRuleCompiler(fake.pi, { jevClient: new ValidFakeJev() });
   const { context, notifications } = createContext(fake.entries);
-  await fake.commands.get("rules-review")?.("", context);
+  await fake.commands.get(command)?.(args, context);
   return notifications.at(-1)?.message ?? "";
 }
 
@@ -813,9 +817,23 @@ test("/rules-review guides retry when signals exist but proposals do not", async
   assert.match(message, /\/retro-rules/);
 });
 
-test("/rules-review preserves the existing proposal-list output", async () => {
-  const message = await runRulesReview([storedProposalEntry()]);
-  assert.equal(message, "0 candidate(s), 0 proposable. Use /rules-show <id> then /rules-accept <id>.\n");
+test("/rules-review identifies a completed retro batch with no candidates", async () => {
+  const batch = await batchFor(
+    [{ role: "user", content: "Always run deterministic tests." }],
+    new ValidFakeJev(),
+    "latest",
+  );
+  const message = await runRulesReview([asSignalEntry(batch), storedProposalEntry()]);
+  assert.equal(
+    message,
+    "Latest retro completed: evaluated 1 rule candidate(s), synthesized no review-only candidates.",
+  );
+  assert.doesNotMatch(message, /\/rules-show|\/rules-accept/);
+});
+
+test("/rules-show treats an empty completed retro batch as having no proposals", async () => {
+  const message = await runRuleCommand([storedProposalEntry()], "rules-show", "any-id");
+  assert.equal(message, "No stored rule proposals. Run compaction or /retro-rules first.");
 });
 
 test("createTypesafeAuthResolver retries getProviderAuth until a credential is stored", async () => {
