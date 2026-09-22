@@ -73,7 +73,7 @@ def _is_doctor_success(payload: object) -> bool:
         return False
     if payload.get("status") == "ok":
         return True
-    return isinstance(payload.get("checks"), list) and isinstance(payload.get("overall_ok"), bool)
+    return isinstance(payload.get("checks"), list) and payload.get("overall_ok") is True
 
 
 def _doctor_requires_conventions(result: subprocess.CompletedProcess[str]) -> bool:
@@ -243,13 +243,13 @@ def _evidence_reference(root: Path, cwd: Path, evidence: Path) -> str | None:
             except ValueError:
                 candidate = lexical_evidence
         else:
-            candidate = resolved_cwd / evidence
+            candidate = root / evidence
         lexical_candidate = Path(os.path.abspath(candidate))
-        relative_candidate = lexical_candidate.relative_to(resolved_cwd)
+        relative_candidate = lexical_candidate.relative_to(root)
     except (OSError, ValueError):
         return None
 
-    current = resolved_cwd
+    current = root
     for part in relative_candidate.parts:
         current /= part
         if current.is_symlink():
@@ -257,7 +257,6 @@ def _evidence_reference(root: Path, cwd: Path, evidence: Path) -> str | None:
 
     try:
         resolved_evidence = lexical_candidate.resolve(strict=True)
-        resolved_evidence.relative_to(resolved_cwd)
         relative_evidence = resolved_evidence.relative_to(root)
     except (OSError, ValueError):
         return None

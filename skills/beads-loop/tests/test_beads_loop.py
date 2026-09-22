@@ -433,6 +433,53 @@ class BeadsLoopTests(unittest.TestCase):
         self.assertEqual(result.kind, "doctor_failed")
         self.assertEqual([args for _, args in fake.calls], [("doctor", "--agent", "--json")])
 
+    def test_prime_rejects_generic_doctor_with_overall_ok_false(self) -> None:
+        adapter = load_adapter()
+        fake = FakeBd()
+        fake.reply(
+            ["doctor", "--agent", "--json"],
+            **stdout_json({"checks": [], "overall_ok": False}),
+        )
+        fake.reply(["prime", "--no-memories"], stdout="must not run")
+        fake.reply(["ready", "--sort", "priority", "--json"], **stdout_json([]))
+
+        with tempfile.TemporaryDirectory() as td:
+            repo = self.make_repo(Path(td))
+            with patch.object(adapter, "run_bd", side_effect=fake):
+                result = adapter.prime(repo)
+
+        self.assertEqual(result.kind, "doctor_failed")
+        self.assertEqual([args for _, args in fake.calls], [("doctor", "--agent", "--json")])
+
+    def test_prime_rejects_conventions_doctor_with_overall_ok_false(self) -> None:
+        adapter = load_adapter()
+        fake = FakeBd()
+        fake.reply(
+            ["doctor", "--agent", "--json"],
+            returncode=1,
+            **stderr_json({"code": "embedded_unsupported"}),
+        )
+        fake.reply(
+            ["doctor", "--check", "conventions", "--agent", "--json"],
+            **stdout_json({"checks": [], "overall_ok": False}),
+        )
+        fake.reply(["prime", "--no-memories"], stdout="must not run")
+        fake.reply(["ready", "--sort", "priority", "--json"], **stdout_json([]))
+
+        with tempfile.TemporaryDirectory() as td:
+            repo = self.make_repo(Path(td))
+            with patch.object(adapter, "run_bd", side_effect=fake):
+                result = adapter.prime(repo)
+
+        self.assertEqual(result.kind, "doctor_failed")
+        self.assertEqual(
+            [args for _, args in fake.calls],
+            [
+                ("doctor", "--agent", "--json"),
+                ("doctor", "--check", "conventions", "--agent", "--json"),
+            ],
+        )
+
     def test_prime_discards_text_containing_bd_remember(self) -> None:
         adapter = load_adapter()
         fake = FakeBd()
@@ -661,6 +708,31 @@ class BeadsLoopTests(unittest.TestCase):
         self.assertEqual(result.details["issue"], {"id": "b-1", "status": "closed"})
         fake.assert_drained()
 
+    def test_finalize_resolves_repository_relative_evidence_from_nested_cwd(self) -> None:
+        adapter = load_adapter()
+        fake = FakeBd()
+        fake.reply(["close", "b-1", "--reason", "evidence=reports/evidence.md"])
+        fake.reply(
+            ["show", "b-1", "--json"],
+            **stdout_json([{"id": "b-1", "status": "closed"}]),
+        )
+
+        with tempfile.TemporaryDirectory() as td:
+            repo = self.make_repo(Path(td))
+            nested = repo / "nested"
+            nested.mkdir()
+            evidence = repo / "reports" / "evidence.md"
+            evidence.parent.mkdir()
+            evidence.write_text("proof", encoding="utf-8")
+            with patch.object(adapter, "run_bd", side_effect=fake):
+                result = adapter.finalize(
+                    nested, "b-1", "pass", Path("reports/evidence.md")
+                )
+
+        self.assertEqual(result.kind, "finalized")
+        self.assertEqual(result.details["evidence"], "reports/evidence.md")
+        fake.assert_drained()
+
     def test_finalize_fail_blocks_exact_id_and_appends_evidence(self) -> None:
         adapter = load_adapter()
         fake = FakeBd()
@@ -729,7 +801,12 @@ class BeadsLoopTests(unittest.TestCase):
     def test_two_process_claim_race_has_one_winner(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             repo = self.make_real_repo(Path(td))
-            expected_id = self.create_real_bead(repo, "only ready work")
+            expected_id = self.create_real_bead(
+                repo,
+                "only ready work",
+                description="Complete the concurrency fixture work.",
+                acceptance="Exactly one worker claims this Bead.",
+            )
             environment = os.environ.copy()
             environment["BEADS_ACTOR"] = "race-worker"
             command = [sys.executable, str(SCRIPT), "claim"]
@@ -761,7 +838,12 @@ class BeadsLoopTests(unittest.TestCase):
             reports = repo / "reports"
             reports.mkdir()
 
-            pass_id = self.create_real_bead(repo, "passing work")
+            pass_id = self.create_real_bead(
+                repo,
+                "passing work",
+                description="Complete the passing finalization fixture.",
+                acceptance="The Bead closes with an evidence reference.",
+            )
             claimed_pass = self.run_real_adapter(repo, ["claim"])
             self.assertEqual(claimed_pass["details"]["issue"]["id"], pass_id)
             (reports / "pass.txt").write_text("all checks passed", encoding="utf-8")
@@ -789,7 +871,12 @@ class BeadsLoopTests(unittest.TestCase):
                 ).stdout
             )[0]
 
-            fail_id = self.create_real_bead(repo, "failing work")
+            fail_id = self.create_real_bead(
+                repo,
+                "failing work",
+                description="Complete the failing finalization fixture.",
+                acceptance="A failed verdict blocks the Bead with evidence.",
+            )
             claimed_fail = self.run_real_adapter(repo, ["claim"])
             self.assertEqual(claimed_fail["details"]["issue"]["id"], fail_id)
             (reports / "fail.txt").write_text("validation failed", encoding="utf-8")
