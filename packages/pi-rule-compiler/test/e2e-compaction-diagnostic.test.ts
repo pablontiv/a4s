@@ -25,6 +25,21 @@ test("classifies only safeNotify's bounded compaction cancellation categories", 
   assert.equal(classifySafeCompactionNotification(notification("an internal bounded failure occurred")), "internal_failure");
 });
 
+test("rejects inherited object property names as diagnostic messages", () => {
+  for (const message of ["constructor", "toString", "__proto__"]) {
+    assert.equal(
+      classifySafeCompactionNotification({
+        type: "extension_ui_request",
+        id: "e2e-safe-diagnostic",
+        method: "notify",
+        notifyType: "warning",
+        message,
+      }),
+      undefined,
+    );
+  }
+});
+
 test("rejects arbitrary UI request payloads and message text", () => {
   const exactMessage = `${PREFIX}the Jev request failed${SUFFIX}`;
   const rejected: unknown[] = [

@@ -16,15 +16,15 @@ export const SAFE_COMPACTION_DIAGNOSTIC_CATEGORIES = [
 export type SafeCompactionDiagnosticCategory =
   (typeof SAFE_COMPACTION_DIAGNOSTIC_CATEGORIES)[number];
 
-const SAFE_NOTIFICATION_MESSAGES: Readonly<Record<string, SafeCompactionDiagnosticCategory>> = {
-  "Rule compiler compaction skipped: Jev is unavailable (missing TYPESAFE_API_KEY). Compaction was cancelled; native fallback is disabled.": "missing_key",
-  "Rule compiler compaction skipped: the bounded analysis timed out. Compaction was cancelled; native fallback is disabled.": "timeout",
-  "Rule compiler compaction skipped: a model response failed strict validation. Compaction was cancelled; native fallback is disabled.": "validation",
-  "Rule compiler compaction skipped: the sanitized state or summary exceeded configured bounds. Compaction was cancelled; native fallback is disabled.": "oversized_state",
-  "Rule compiler compaction skipped: the Jev request failed. Compaction was cancelled; native fallback is disabled.": "api_failure",
-  "Rule compiler compaction skipped: the analysis was aborted. Compaction was cancelled; native fallback is disabled.": "aborted",
-  "Rule compiler compaction skipped: an internal bounded failure occurred. Compaction was cancelled; native fallback is disabled.": "internal_failure",
-};
+const SAFE_NOTIFICATION_MESSAGES = new Map<string, SafeCompactionDiagnosticCategory>([
+  ["Rule compiler compaction skipped: Jev is unavailable (missing TYPESAFE_API_KEY). Compaction was cancelled; native fallback is disabled.", "missing_key"],
+  ["Rule compiler compaction skipped: the bounded analysis timed out. Compaction was cancelled; native fallback is disabled.", "timeout"],
+  ["Rule compiler compaction skipped: a model response failed strict validation. Compaction was cancelled; native fallback is disabled.", "validation"],
+  ["Rule compiler compaction skipped: the sanitized state or summary exceeded configured bounds. Compaction was cancelled; native fallback is disabled.", "oversized_state"],
+  ["Rule compiler compaction skipped: the Jev request failed. Compaction was cancelled; native fallback is disabled.", "api_failure"],
+  ["Rule compiler compaction skipped: the analysis was aborted. Compaction was cancelled; native fallback is disabled.", "aborted"],
+  ["Rule compiler compaction skipped: an internal bounded failure occurred. Compaction was cancelled; native fallback is disabled.", "internal_failure"],
+]);
 
 /**
  * Parses the sole safe notification grammar accepted by the E2E diagnostic
@@ -33,7 +33,7 @@ const SAFE_NOTIFICATION_MESSAGES: Readonly<Record<string, SafeCompactionDiagnost
  */
 export function classifySafeCompactionNotification(value: unknown): SafeCompactionDiagnosticCategory | undefined {
   if (!isExactNotifyRequest(value)) return undefined;
-  return SAFE_NOTIFICATION_MESSAGES[value.message];
+  return SAFE_NOTIFICATION_MESSAGES.get(value.message);
 }
 
 function isExactNotifyRequest(value: unknown): value is {
