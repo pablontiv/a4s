@@ -5,9 +5,9 @@ export const DEFAULT_JEV_MODEL = "jev-1.13.0" as const;
 export const TYPESAFE_API_KEY_ENV = "TYPESAFE_API_KEY" as const;
 export const TYPESAFE_PROVIDER_ID = "typesafe" as const;
 
-/** Evidence is disabled in the basic compaction path. */
+/** Evidence lifecycle strategy; ladder remains inert until its later implementation. */
 export interface EvidenceOptions {
-  strategy: "off";
+  strategy: "off" | "ladder";
 }
 
 export interface NormalizedSessionMessage {

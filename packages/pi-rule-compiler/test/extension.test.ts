@@ -15,6 +15,7 @@ import {
   type RuleSignalBatch,
   type JevCompactionResult,
   type JevRequest,
+  type PiRuleCompilerOptions,
 } from "../src/index.ts";
 import { validJevResponse } from "./fixtures.ts";
 
@@ -288,6 +289,27 @@ test("basic does not publish rule artifacts when Evidence is off", async () => {
     { type: "session_compact", compactionEntry, fromExtension: true, reason: "threshold", willRetry: false },
     context,
   );
+  assert.equal(fake.entries.some((entry) => entry.customType?.includes("rule")), false);
+});
+
+test("Evidence ladder is an explicit inert pre-Task-6 lifecycle branch", async () => {
+  const options: PiRuleCompilerOptions = {
+    jevClient: new ValidFakeJev(),
+    evidence: { strategy: "ladder" },
+  };
+  const fake = createFakePi();
+  registerPiRuleCompiler(fake.pi, options);
+  const { context } = createContext(fake.entries);
+  const compaction = requireCompactionResult(
+    await fake.handlers.get("session_before_compact")?.(compactionEvent(), context),
+  );
+  const compactionEntry = appendSuccessfulCompaction(fake, compaction);
+
+  await fake.handlers.get("session_compact")?.(
+    { type: "session_compact", compactionEntry, fromExtension: true, reason: "threshold", willRetry: false },
+    context,
+  );
+
   assert.equal(fake.entries.some((entry) => entry.customType?.includes("rule")), false);
 });
 

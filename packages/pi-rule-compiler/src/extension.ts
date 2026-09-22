@@ -173,8 +173,12 @@ export function registerPiRuleCompiler(pi: ExtensionAPI, options: PiRuleCompiler
     const pending = attemptId ? pendingByAttempt.get(attemptId) : undefined;
     if (attemptId) pendingByAttempt.delete(attemptId);
     const evidenceStrategy = options.evidence?.strategy ?? "off";
-    if (evidenceStrategy === "off" && pending) {
-      await disabledEvidencePipeline.afterCompaction(pending.result, ctx);
+    switch (evidenceStrategy) {
+      case "off":
+        if (pending) await disabledEvidencePipeline.afterCompaction(pending.result, ctx);
+        break;
+      case "ladder":
+        break;
     }
   });
 
