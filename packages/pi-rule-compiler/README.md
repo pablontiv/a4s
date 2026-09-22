@@ -121,10 +121,12 @@ npm run e2e --workspace @a4s/pi-rule-compiler
 
 This is a headless product test, not an E0 or fixture run. It starts the
 configured `pi` binary in RPC mode with this extension, uses the configured Pi
-model and real TypeSafe/Jev provider, sends two short non-secret prompts,
-compacts, and verifies persisted corpus chunks plus their receipt across a Pi
-restart. It can therefore incur real provider cost and requires both providers
-to be configured. It neither prints RPC/session content nor supplies a model,
+model and real TypeSafe/Jev provider, sends four distinct benign non-secret
+prompts generated for that run whose total exceeds Pi's production 20k
+retained-token threshold, compacts, and verifies persisted corpus chunks plus
+their receipt across a Pi restart. It can therefore incur real provider cost
+and requires both providers to be configured. It neither prints RPC/session
+content nor supplies a model,
 credential, fake, replay, or fork input.
 
 Every run intentionally preserves its evidence directory under
