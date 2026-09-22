@@ -224,17 +224,18 @@ class BeadsLoopTests(unittest.TestCase):
             self.assertEqual(finalized["details"]["issue"]["id"], bead_id)
             self.assertEqual(finalized["details"]["issue"]["status"], "closed")
 
-    def test_skill_documents_self_contained_current_repository_loop(self) -> None:
+    def test_skill_documents_absolute_adapter_current_repository_loop(self) -> None:
         text = SKILL.read_text(encoding="utf-8")
         required_in_order = (
             "current Git repository",
-            "python3 scripts/beads_loop.py prime",
-            "python3 scripts/beads_loop.py claim",
+            "absolute path",
+            'python3 "$BEADS_LOOP_ADAPTER" prime',
+            'python3 "$BEADS_LOOP_ADAPTER" claim',
             "description and acceptance criteria",
             "in-repository evidence report",
             "applicable validation",
-            'python3 scripts/beads_loop.py finalize --bead "$BEAD_ID" --verdict pass --evidence "$EVIDENCE_PATH"',
-            'python3 scripts/beads_loop.py finalize --bead "$BEAD_ID" --verdict fail --evidence "$EVIDENCE_PATH"',
+            'python3 "$BEADS_LOOP_ADAPTER" finalize --bead "$BEAD_ID" --verdict pass --evidence "$EVIDENCE_PATH"',
+            'python3 "$BEADS_LOOP_ADAPTER" finalize --bead "$BEAD_ID" --verdict fail --evidence "$EVIDENCE_PATH"',
             "Repeat from `prime`",
         )
         position = -1
@@ -242,6 +243,8 @@ class BeadsLoopTests(unittest.TestCase):
             found = text.find(phrase)
             self.assertGreater(found, position, phrase)
             position = found
+        self.assertNotIn("python3 scripts/beads_loop.py", text)
+        self.assertEqual(text.count('python3 "$BEADS_LOOP_ADAPTER"'), 4)
         for terminal in (
             "no_ready",
             "not_beads_repo",
@@ -251,6 +254,26 @@ class BeadsLoopTests(unittest.TestCase):
             "invalid_evidence",
         ):
             self.assertIn(f"`{terminal}`", text)
+
+    def test_documented_absolute_adapter_command_runs_from_target_repo(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo = self.make_real_repo(Path(td))
+            environment = os.environ.copy()
+            environment["BEADS_ACTOR"] = "race-worker"
+            environment["BEADS_LOOP_ADAPTER"] = str(SCRIPT.resolve(strict=True))
+            result = subprocess.run(
+                ["/bin/sh", "-c", 'python3 "$BEADS_LOOP_ADAPTER" prime'],
+                cwd=repo,
+                env=environment,
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=120,
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stderr, "")
+        self.assertEqual(json.loads(result.stdout)["kind"], "no_ready")
 
     def test_skill_never_documents_bd_memories_or_global_selection(self) -> None:
         text = SKILL.read_text(encoding="utf-8")
@@ -687,35 +710,64 @@ class BeadsLoopTests(unittest.TestCase):
         self.assertEqual(result.kind, "invalid_evidence")
         self.assertEqual(fake.calls, [])
 
-    def test_finalize_pass_closes_exact_id_with_repository_relative_evidence(self) -> None:
+    def test_finalize_pass_conditionally_closes_owned_id_with_evidence(self) -> None:
         adapter = load_adapter()
         fake = FakeBd()
-        fake.reply(["close", "b-1", "--reason", "evidence=reports/pass.txt"])
+        owned = {"id": "b-1", "status": "in_progress", "assignee": "worker"}
+        closed = {"id": "b-1", "status": "closed", "assignee": "worker"}
+        fake.reply(["show", "b-1", "--json"], **stdout_json([owned]))
         fake.reply(
-            ["show", "b-1", "--json"],
-            **stdout_json([{"id": "b-1", "status": "closed"}]),
+            [
+                "update",
+                "b-1",
+                "--status",
+                "closed",
+                "--if-assignee",
+                "worker",
+                "--if-status",
+                "in_progress",
+                "--append-notes",
+                "PASS evidence=reports/pass.txt",
+            ]
         )
+        fake.reply(["show", "b-1", "--json"], **stdout_json([closed]))
 
         with tempfile.TemporaryDirectory() as td:
             repo = self.make_repo(Path(td))
             evidence = repo / "reports" / "pass.txt"
             evidence.parent.mkdir()
             evidence.write_text("proof", encoding="utf-8")
-            with patch.object(adapter, "run_bd", side_effect=fake):
+            with (
+                patch.object(adapter, "run_bd", side_effect=fake),
+                patch.dict(os.environ, {"BEADS_ACTOR": "worker"}),
+            ):
                 result = adapter.finalize(repo, "b-1", "pass", evidence)
 
         self.assertEqual(result.kind, "finalized")
-        self.assertEqual(result.details["issue"], {"id": "b-1", "status": "closed"})
+        self.assertEqual(result.details["issue"], closed)
         fake.assert_drained()
 
     def test_finalize_resolves_repository_relative_evidence_from_nested_cwd(self) -> None:
         adapter = load_adapter()
         fake = FakeBd()
-        fake.reply(["close", "b-1", "--reason", "evidence=reports/evidence.md"])
+        owned = {"id": "b-1", "status": "in_progress", "assignee": "worker"}
+        closed = {"id": "b-1", "status": "closed", "assignee": "worker"}
+        fake.reply(["show", "b-1", "--json"], **stdout_json([owned]))
         fake.reply(
-            ["show", "b-1", "--json"],
-            **stdout_json([{"id": "b-1", "status": "closed"}]),
+            [
+                "update",
+                "b-1",
+                "--status",
+                "closed",
+                "--if-assignee",
+                "worker",
+                "--if-status",
+                "in_progress",
+                "--append-notes",
+                "PASS evidence=reports/evidence.md",
+            ]
         )
+        fake.reply(["show", "b-1", "--json"], **stdout_json([closed]))
 
         with tempfile.TemporaryDirectory() as td:
             repo = self.make_repo(Path(td))
@@ -724,7 +776,10 @@ class BeadsLoopTests(unittest.TestCase):
             evidence = repo / "reports" / "evidence.md"
             evidence.parent.mkdir()
             evidence.write_text("proof", encoding="utf-8")
-            with patch.object(adapter, "run_bd", side_effect=fake):
+            with (
+                patch.object(adapter, "run_bd", side_effect=fake),
+                patch.dict(os.environ, {"BEADS_ACTOR": "worker"}),
+            ):
                 result = adapter.finalize(
                     nested, "b-1", "pass", Path("reports/evidence.md")
                 )
@@ -733,34 +788,146 @@ class BeadsLoopTests(unittest.TestCase):
         self.assertEqual(result.details["evidence"], "reports/evidence.md")
         fake.assert_drained()
 
-    def test_finalize_fail_blocks_exact_id_and_appends_evidence(self) -> None:
+    def test_finalize_fail_conditionally_blocks_owned_id_and_appends_evidence(self) -> None:
         adapter = load_adapter()
         fake = FakeBd()
+        owned = {"id": "b-2", "status": "in_progress", "assignee": "worker"}
+        blocked = {"id": "b-2", "status": "blocked", "assignee": "worker"}
+        fake.reply(["show", "b-2", "--json"], **stdout_json([owned]))
         fake.reply(
             [
                 "update",
                 "b-2",
                 "--status",
                 "blocked",
+                "--if-assignee",
+                "worker",
+                "--if-status",
+                "in_progress",
                 "--append-notes",
                 "FAIL evidence=reports/fail.txt",
             ]
         )
-        fake.reply(
-            ["show", "b-2", "--json"],
-            **stdout_json([{"id": "b-2", "status": "blocked"}]),
-        )
+        fake.reply(["show", "b-2", "--json"], **stdout_json([blocked]))
 
         with tempfile.TemporaryDirectory() as td:
             repo = self.make_repo(Path(td))
             evidence = repo / "reports" / "fail.txt"
             evidence.parent.mkdir()
             evidence.write_text("failure", encoding="utf-8")
-            with patch.object(adapter, "run_bd", side_effect=fake):
+            with (
+                patch.object(adapter, "run_bd", side_effect=fake),
+                patch.dict(os.environ, {"BEADS_ACTOR": "worker"}),
+            ):
                 result = adapter.finalize(repo, "b-2", "fail", evidence)
 
         self.assertEqual(result.kind, "finalized")
-        self.assertEqual(result.details["issue"], {"id": "b-2", "status": "blocked"})
+        self.assertEqual(result.details["issue"], blocked)
+        fake.assert_drained()
+
+    def test_finalize_refuses_unresolved_actor_without_mutation(self) -> None:
+        adapter = load_adapter()
+        fake = FakeBd()
+
+        with tempfile.TemporaryDirectory() as td:
+            repo = self.make_repo(Path(td))
+            evidence = repo / "proof.txt"
+            evidence.write_text("proof", encoding="utf-8")
+            with (
+                patch.object(adapter, "run_bd", side_effect=fake),
+                patch.object(adapter, "_resolved_actor", return_value=None),
+            ):
+                result = adapter.finalize(repo, "b-1", "pass", evidence)
+
+        self.assertEqual(result.kind, "claim_lost")
+        self.assertEqual(result.details, {"reason": "actor_unresolved"})
+        self.assertEqual(fake.calls, [])
+
+    def test_finalize_refuses_assignee_mismatch_without_mutation(self) -> None:
+        adapter = load_adapter()
+        fake = FakeBd()
+        fake.reply(
+            ["show", "b-1", "--json"],
+            **stdout_json(
+                [{"id": "b-1", "status": "in_progress", "assignee": "other"}]
+            ),
+        )
+
+        with tempfile.TemporaryDirectory() as td:
+            repo = self.make_repo(Path(td))
+            evidence = repo / "proof.txt"
+            evidence.write_text("proof", encoding="utf-8")
+            with (
+                patch.object(adapter, "run_bd", side_effect=fake),
+                patch.dict(os.environ, {"BEADS_ACTOR": "worker"}),
+            ):
+                result = adapter.finalize(repo, "b-1", "pass", evidence)
+
+        self.assertEqual(result.kind, "claim_lost")
+        self.assertEqual(result.details, {"reason": "ownership_mismatch"})
+        self.assertEqual([args for _, args in fake.calls], [("show", "b-1", "--json")])
+        fake.assert_drained()
+
+    def test_finalize_refuses_status_mismatch_without_mutation(self) -> None:
+        adapter = load_adapter()
+        fake = FakeBd()
+        fake.reply(
+            ["show", "b-1", "--json"],
+            **stdout_json([{"id": "b-1", "status": "open", "assignee": "worker"}]),
+        )
+
+        with tempfile.TemporaryDirectory() as td:
+            repo = self.make_repo(Path(td))
+            evidence = repo / "proof.txt"
+            evidence.write_text("proof", encoding="utf-8")
+            with (
+                patch.object(adapter, "run_bd", side_effect=fake),
+                patch.dict(os.environ, {"BEADS_ACTOR": "worker"}),
+            ):
+                result = adapter.finalize(repo, "b-1", "fail", evidence)
+
+        self.assertEqual(result.kind, "claim_lost")
+        self.assertEqual(result.details, {"reason": "ownership_mismatch"})
+        self.assertEqual([args for _, args in fake.calls], [("show", "b-1", "--json")])
+        fake.assert_drained()
+
+    def test_finalize_maps_conditional_guard_loss_without_read_back(self) -> None:
+        adapter = load_adapter()
+        fake = FakeBd()
+        owned = {"id": "b-1", "status": "in_progress", "assignee": "worker"}
+        fake.reply(["show", "b-1", "--json"], **stdout_json([owned]))
+        fake.reply(
+            [
+                "update",
+                "b-1",
+                "--status",
+                "closed",
+                "--if-assignee",
+                "worker",
+                "--if-status",
+                "in_progress",
+                "--append-notes",
+                "PASS evidence=proof.txt",
+            ],
+            returncode=13,
+            stderr="stale guard",
+        )
+
+        with tempfile.TemporaryDirectory() as td:
+            repo = self.make_repo(Path(td))
+            evidence = repo / "proof.txt"
+            evidence.write_text("proof", encoding="utf-8")
+            with (
+                patch.object(adapter, "run_bd", side_effect=fake),
+                patch.dict(os.environ, {"BEADS_ACTOR": "worker"}),
+            ):
+                result = adapter.finalize(repo, "b-1", "pass", evidence)
+
+        self.assertEqual(result.kind, "claim_lost")
+        self.assertEqual(
+            result.details, {"reason": "conditional_guard_failed", "exit_code": 13}
+        )
+        self.assertEqual(len(fake.calls), 2)
         fake.assert_drained()
 
     def test_finalize_rejects_empty_bead_id_before_mutation(self) -> None:
@@ -778,20 +945,40 @@ class BeadsLoopTests(unittest.TestCase):
         self.assertEqual(result.details, {"reason": "invalid_bead_id"})
         self.assertEqual(fake.calls, [])
 
-    def test_finalize_blocks_when_read_back_status_does_not_match_verdict(self) -> None:
+    def test_finalize_blocks_when_read_back_state_does_not_match_verdict(self) -> None:
         adapter = load_adapter()
         fake = FakeBd()
-        fake.reply(["close", "b-1", "--reason", "evidence=proof.txt"])
+        owned = {"id": "b-1", "status": "in_progress", "assignee": "worker"}
+        fake.reply(["show", "b-1", "--json"], **stdout_json([owned]))
+        fake.reply(
+            [
+                "update",
+                "b-1",
+                "--status",
+                "closed",
+                "--if-assignee",
+                "worker",
+                "--if-status",
+                "in_progress",
+                "--append-notes",
+                "PASS evidence=proof.txt",
+            ]
+        )
         fake.reply(
             ["show", "b-1", "--json"],
-            **stdout_json([{"id": "b-1", "status": "in_progress"}]),
+            **stdout_json(
+                [{"id": "b-1", "status": "closed", "assignee": "other"}]
+            ),
         )
 
         with tempfile.TemporaryDirectory() as td:
             repo = self.make_repo(Path(td))
             evidence = repo / "proof.txt"
             evidence.write_text("proof", encoding="utf-8")
-            with patch.object(adapter, "run_bd", side_effect=fake):
+            with (
+                patch.object(adapter, "run_bd", side_effect=fake),
+                patch.dict(os.environ, {"BEADS_ACTOR": "worker"}),
+            ):
                 result = adapter.finalize(repo, "b-1", "pass", evidence)
 
         self.assertEqual(result.kind, "blocked")
@@ -915,8 +1102,10 @@ class BeadsLoopTests(unittest.TestCase):
             )
 
         self.assertEqual(shown_pass["status"], "closed")
-        self.assertEqual(shown_pass["close_reason"], "evidence=reports/pass.txt")
+        self.assertEqual(shown_pass["assignee"], "race-worker")
+        self.assertIn("PASS evidence=reports/pass.txt", shown_pass["notes"])
         self.assertEqual(shown_fail["status"], "blocked")
+        self.assertEqual(shown_fail["assignee"], "race-worker")
         self.assertIn("FAIL evidence=reports/fail.txt", shown_fail["notes"])
         self.assertEqual(ready_after, [])
 

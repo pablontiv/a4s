@@ -283,24 +283,45 @@ def finalize(
     if evidence_reference is None:
         return Envelope("invalid_evidence", {})
 
-    if verdict == "pass":
-        command = ["close", bead_id, "--reason", f"evidence={evidence_reference}"]
-        expected_status = "closed"
-    else:
-        command = [
-            "update",
-            bead_id,
-            "--status",
-            "blocked",
-            "--append-notes",
-            f"FAIL evidence={evidence_reference}",
-        ]
-        expected_status = "blocked"
+    actor = _resolved_actor(root)
+    if actor is None:
+        return Envelope("claim_lost", {"reason": "actor_unresolved"})
+    try:
+        shown_result = run_bd(root, ["show", bead_id, "--json"])
+        shown = _single_issue(parse_json_output(shown_result), bead_id)
+    except (OSError, ValueError):
+        shown = None
+    if (
+        shown is None
+        or shown.get("status") != "in_progress"
+        or shown.get("assignee") != actor
+    ):
+        return Envelope("claim_lost", {"reason": "ownership_mismatch"})
+
+    expected_status = "closed" if verdict == "pass" else "blocked"
+    evidence_label = "PASS" if verdict == "pass" else "FAIL"
+    command = [
+        "update",
+        bead_id,
+        "--status",
+        expected_status,
+        "--if-assignee",
+        actor,
+        "--if-status",
+        "in_progress",
+        "--append-notes",
+        f"{evidence_label} evidence={evidence_reference}",
+    ]
 
     try:
         mutation = run_bd(root, command)
     except OSError:
         return Envelope("blocked", {"reason": "finalize_failed"})
+    if mutation.returncode == 13:
+        return Envelope(
+            "claim_lost",
+            {"reason": "conditional_guard_failed", "exit_code": mutation.returncode},
+        )
     if mutation.returncode != 0:
         return Envelope(
             "blocked", {"reason": "finalize_failed", "exit_code": mutation.returncode}
@@ -311,7 +332,11 @@ def finalize(
         shown = _single_issue(parse_json_output(shown_result), bead_id)
     except (OSError, ValueError):
         shown = None
-    if shown is None or shown.get("status") != expected_status:
+    if (
+        shown is None
+        or shown.get("status") != expected_status
+        or shown.get("assignee") != actor
+    ):
         return Envelope("blocked", {"reason": "final_state_mismatch"})
     return Envelope("finalized", {"issue": shown, "evidence": evidence_reference})
 

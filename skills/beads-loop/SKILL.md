@@ -12,7 +12,7 @@ Run the canonical ready work in the current Git repository until the adapter ret
 
 ## Adapter invocation
 
-Resolve `scripts/beads_loop.py` relative to this skill directory, convert that reference to an absolute path, and keep the process working directory at the repository where the skill was invoked. The command forms below show the script path relative to this `SKILL.md`; invoke no backlog command directly.
+Resolve `scripts/beads_loop.py` relative to this skill directory to an absolute path and assign that path to `BEADS_LOOP_ADAPTER`. Keep the process working directory at the current Git repository where the skill was invoked; do not change into the skill directory. Every command below uses the resolved absolute path through `BEADS_LOOP_ADAPTER`. Invoke no backlog command directly.
 
 Every adapter command emits exactly one JSON envelope with `schema_version`, `kind`, and `details`. Preserve the complete returned envelope as operational evidence.
 
@@ -23,7 +23,7 @@ Follow these steps in order for one Bead at a time.
 1. From the current Git repository, run:
 
    ```sh
-   python3 scripts/beads_loop.py prime
+   python3 "$BEADS_LOOP_ADAPTER" prime
    ```
 
    Continue only when `kind` is `ready`.
@@ -31,7 +31,7 @@ Follow these steps in order for one Bead at a time.
 2. Run one atomic claim:
 
    ```sh
-   python3 scripts/beads_loop.py claim
+   python3 "$BEADS_LOOP_ADAPTER" claim
    ```
 
    Continue only when `kind` is `claimed`. Take `details.issue.id` as `BEAD_ID`; never substitute an advisory ID or choose an item yourself.
@@ -45,13 +45,13 @@ Follow these steps in order for one Bead at a time.
 6. If validation passes, close the claimed item with its evidence:
 
    ```sh
-   python3 scripts/beads_loop.py finalize --bead "$BEAD_ID" --verdict pass --evidence "$EVIDENCE_PATH"
+   python3 "$BEADS_LOOP_ADAPTER" finalize --bead "$BEAD_ID" --verdict pass --evidence "$EVIDENCE_PATH"
    ```
 
    If validation fails, record the failure evidence and block the claimed item:
 
    ```sh
-   python3 scripts/beads_loop.py finalize --bead "$BEAD_ID" --verdict fail --evidence "$EVIDENCE_PATH"
+   python3 "$BEADS_LOOP_ADAPTER" finalize --bead "$BEAD_ID" --verdict fail --evidence "$EVIDENCE_PATH"
    ```
 
    Continue only when `kind` is `finalized`, after checking that the returned issue ID and observed final status match the claimed item and verdict. A pass must return `closed`; a fail must return `blocked`.
@@ -65,7 +65,7 @@ Stop only when an adapter command returns one of these terminal kinds, and repor
 - `no_ready`: successful completion; no canonical ready work remains.
 - `not_beads_repo`: the current-repository guard failed.
 - `doctor_failed`: repository health could not be established.
-- `claim_lost`: the atomic claim or its read-back could not be verified.
+- `claim_lost`: claim ownership, its read-back, or a conditional finalization guard could not be verified.
 - `blocked`: the requested adapter operation failed closed.
 - `invalid_evidence`: the evidence file did not satisfy the in-repository file contract.
 
