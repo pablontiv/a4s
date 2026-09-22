@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { BASIC_COMPACTION_CONFIG, resolveCompactionConfig } from "../src/config.ts";
+import {
+  A4S_PI_RULE_COMPILER_COMPACTION_STRATEGY,
+  A4S_PI_RULE_COMPILER_EVIDENCE_STRATEGY,
+  A4S_PI_RULE_COMPILER_TRIGGER_MODE,
+  BASIC_COMPACTION_CONFIG,
+  configurationFromEnvironment,
+  resolveCompactionConfig,
+} from "../src/config.ts";
 
 test("default configuration offers a compaction hint", () => {
   assert.deepEqual(resolveCompactionConfig(undefined), {
@@ -26,4 +33,39 @@ test("valid opt-in trigger config preserves basic compaction and disabled Eviden
       evidence: { strategy: "off" },
     },
   );
+});
+
+test("projects only the three namespaced non-secret environment settings into flat config", () => {
+  assert.deepEqual(
+    configurationFromEnvironment({
+      [A4S_PI_RULE_COMPILER_COMPACTION_STRATEGY]: "ladder",
+      [A4S_PI_RULE_COMPILER_TRIGGER_MODE]: "off",
+      [A4S_PI_RULE_COMPILER_EVIDENCE_STRATEGY]: "ladder",
+      TYPESAFE_API_KEY: "must-not-be-projected",
+      UNRELATED: "must-not-be-projected",
+    }),
+    {
+      "compaction.strategy": "ladder",
+      "trigger.mode": "off",
+      "evidence.strategy": "ladder",
+    },
+  );
+});
+
+test("missing environment settings preserve the basic safe defaults", () => {
+  assert.deepEqual(configurationFromEnvironment({}), {});
+  assert.deepEqual(
+    resolveCompactionConfig(configurationFromEnvironment({})),
+    BASIC_COMPACTION_CONFIG,
+  );
+});
+
+test("an invalid installed environment setting fails closed to the complete basic config", () => {
+  const projected = configurationFromEnvironment({
+    [A4S_PI_RULE_COMPILER_COMPACTION_STRATEGY]: "ladder",
+    [A4S_PI_RULE_COMPILER_TRIGGER_MODE]: "surprise",
+    [A4S_PI_RULE_COMPILER_EVIDENCE_STRATEGY]: "off",
+  });
+
+  assert.deepEqual(resolveCompactionConfig(projected), BASIC_COMPACTION_CONFIG);
 });

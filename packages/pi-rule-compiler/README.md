@@ -17,7 +17,7 @@ Private Pi extension that uses Jev as the semantic authority for `basic` compact
 - Automatic retro and `/retro-rules` store proposals only. They never write Rootline documents or activate rules; `/retro-rules` exists solely for manual retry/recovery.
 - Review is store-only. `/rules-review` lists stored proposals with their acceptance state, `/rules-show <id>` shows one candidate, and `/rules-accept <id>` records a manual acceptance receipt for a `propose` candidate. When no proposal is stored, `/rules-review` reports whether the latest session-local compaction had no eligible `user`/`custom` sources, filtered all eligible candidates, or retained signals awaiting retro; it never displays message content. Acceptance still writes nothing to Rootline or AGENTS.md; the durable apply of an accepted rule is deferred to the decision in ADR 0020.
 - The extension does not read, write, or replace gentle-engram entries.
-- With `compaction.strategy=ladder`, `context_with_system` derives a concrete sanitized user query from the pending request and makes one Jev visibility query over only the current branch's sanitized corpus. It validates complete chunk coverage, ids, spans, and corpus digest before rendering chronological `hide|short|long|full` source views. `short` and `long` excerpts are deterministically bounded; corpus entries are never changed. Any missing query, Jev failure, invalid response/span, timeout, or context contract mismatch returns Pi's original context without additional omission. `basic` does not register this hook or spend Ladder quota.
+- With `compaction.strategy=ladder`, `context_with_system` derives a concrete sanitized user query from the pending request and makes one Jev visibility query over only the current branch's sanitized corpus. It validates complete chunk coverage, ids, spans, and corpus digest before rendering chronological `hide|short|long|full` source views. `short` and `long` excerpts are deterministically bounded; corpus entries are never changed. A successful non-empty-corpus evaluation appends a content-free projection receipt (`selectedChunks` and `rendered`) for safe lifecycle observability. Any missing query, Jev failure, invalid response/span, timeout, or context contract mismatch returns Pi's original context without additional omission. `basic` does not register this hook or spend Ladder quota.
 
 ## Opt-in Trigger
 
@@ -26,6 +26,17 @@ The default configuration remains `compaction.strategy=basic`,
 flat `config` values for `compaction.strategy` (`basic|ladder`),
 `trigger.mode` (`off|hint|auto`), and `evidence.strategy` (`off|ladder`);
 invalid combinations preserve the prior safe configuration.
+
+The installed `pi -e` entrypoint maps only these namespaced, non-secret process
+variables onto that same flat configuration before registering hooks:
+
+- `A4S_PI_RULE_COMPILER_COMPACTION_STRATEGY=basic|ladder`
+- `A4S_PI_RULE_COMPILER_TRIGGER_MODE=off|hint|auto`
+- `A4S_PI_RULE_COMPILER_EVIDENCE_STRATEGY=off|ladder`
+
+Unset values retain their defaults. Any invalid value or invalid combination
+fails closed to the complete basic safe configuration. Provider credentials
+remain separate and are never projected into extension configuration.
 
 On `agent_settled`, an enabled Trigger first requires interactive UI, idle
 state, enough context, no pending messages, no cooldown, an empty editor, and
@@ -117,7 +128,8 @@ Tests use fake Jev and model gateways; they make no live TypeSafe calls.
 ### Product E2E
 
 ```sh
-npm run e2e --workspace @a4s/pi-rule-compiler
+npm run e2e --workspace @a4s/pi-rule-compiler -- --mode basic
+npm run e2e --workspace @a4s/pi-rule-compiler -- --mode ladder
 ```
 
 This is a headless product test, not an E0 or fixture run. It starts the
@@ -127,15 +139,15 @@ prompts generated for that run whose total exceeds Pi's production 20k
 retained-token threshold, compacts, and verifies persisted corpus chunks plus
 their receipt across a Pi restart. It can therefore incur real provider cost
 and requires both providers to be configured. It neither prints RPC/session
-content nor supplies a model,
-credential, fake, replay, or fork input.
+content nor supplies a model, credential, fake, replay, or fork input.
 
-This runner currently proves only `basic` compaction and corpus publication. It
-cannot opt into Ladder: the production extension entrypoint calls
-`registerPiRuleCompiler(pi)` with no configuration source, while the flat
-`PiRuleCompilerOptions.config` exists only for programmatic embedding. Do not
-interpret a successful run as Ladder E2E evidence or add an uncontracted
-environment/CLI configuration channel merely to do so.
+The runner defaults to `basic`, but every child process explicitly receives the
+selected compaction strategy plus `trigger=off` and `evidence=off`, overriding
+any inherited rule-compiler environment. In `ladder` mode, after real
+Pi/Jev compaction and reload, it sends a subsequent real provider request and
+requires the content-free rendered-projection receipt produced only after a
+successful `context_with_system` Ladder evaluation. Session artifacts retain
+the evidence without printing prompts or provider bodies.
 
 Every run intentionally preserves its evidence directory under
 `artifacts/pi-rule-compiler-e2e/<timestamp>/`, including Pi's session artifact,

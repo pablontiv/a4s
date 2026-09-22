@@ -1,11 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import {
+import piRuleCompilerExtension, {
+  A4S_PI_RULE_COMPILER_COMPACTION_STRATEGY,
+  A4S_PI_RULE_COMPILER_EVIDENCE_STRATEGY,
+  A4S_PI_RULE_COMPILER_TRIGGER_MODE,
   collectCorpus,
   CORPUS_ENTRY_TYPE,
   createTypesafeAuthResolver,
   JevApiError,
+  LADDER_PROJECTION_RECEIPT_TYPE,
   observeCompactionRules,
   registerPiRuleCompiler,
   RETRO_PENDING_ENTRY_TYPE,
@@ -360,6 +364,31 @@ test("basic does not register or consume Ladder context projection", () => {
   assert.equal(fake.handlers.has("context_with_system"), false);
 });
 
+test("installed entrypoint projects process environment before registration", () => {
+  const names = [
+    A4S_PI_RULE_COMPILER_COMPACTION_STRATEGY,
+    A4S_PI_RULE_COMPILER_TRIGGER_MODE,
+    A4S_PI_RULE_COMPILER_EVIDENCE_STRATEGY,
+  ] as const;
+  const prior = Object.fromEntries(names.map((name) => [name, process.env[name]]));
+  try {
+    process.env[A4S_PI_RULE_COMPILER_COMPACTION_STRATEGY] = "ladder";
+    process.env[A4S_PI_RULE_COMPILER_TRIGGER_MODE] = "off";
+    process.env[A4S_PI_RULE_COMPILER_EVIDENCE_STRATEGY] = "off";
+    const fake = createFakePi();
+
+    piRuleCompilerExtension(fake.pi);
+
+    assert.equal(fake.handlers.has("context_with_system"), true);
+  } finally {
+    for (const name of names) {
+      const value = prior[name];
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
+});
+
 test("Ladder projects branch corpus through context_with_system and falls back unchanged on failure", async () => {
   const chunk = stageCorpus([
     { index: 2, role: "user", text: "durable ladder corpus material", sourceDigest: stableDigest({ source: "ladder" }), redactionCount: 0 },
@@ -392,6 +421,12 @@ test("Ladder projects branch corpus through context_with_system and falls back u
     { role: "system", content: "Pi normal", timestamp: 0 },
     { role: "user", content: "retrieve ladder corpus", timestamp: 1 },
   ]);
+  const receipt = selected.entries.find((entry) => entry.customType === LADDER_PROJECTION_RECEIPT_TYPE);
+  assert.ok(receipt && receipt.data && typeof receipt.data === "object");
+  assert.equal((receipt.data as { schema?: unknown }).schema, "a4s.ladder-projection-receipt/v1");
+  assert.equal((receipt.data as { selectedChunks?: unknown }).selectedChunks, 1);
+  assert.equal((receipt.data as { rendered?: unknown }).rendered, true);
+  assert.doesNotMatch(JSON.stringify(receipt.data), /durable ladder corpus material|retrieve ladder corpus/);
 
   const failing = createFakePi(entries);
   registerPiRuleCompiler(failing.pi, {
@@ -403,6 +438,10 @@ test("Ladder projects branch corpus through context_with_system and falls back u
     createContext(failing.entries).context,
   );
   assert.deepEqual(failedResult, { messages: supplied });
+  assert.equal(
+    failing.entries.some((entry) => entry.customType === LADDER_PROJECTION_RECEIPT_TYPE),
+    false,
+  );
 });
 
 test("Evidence ladder is an explicit inert pre-Task-6 lifecycle branch", async () => {

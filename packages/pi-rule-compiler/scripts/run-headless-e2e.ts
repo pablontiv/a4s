@@ -11,6 +11,12 @@ import { randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  A4S_PI_RULE_COMPILER_COMPACTION_STRATEGY,
+  A4S_PI_RULE_COMPILER_EVIDENCE_STRATEGY,
+  A4S_PI_RULE_COMPILER_TRIGGER_MODE,
+} from "../src/config.ts";
+import { LADDER_PROJECTION_RECEIPT_TYPE } from "../src/extension.ts";
 import { createJsonlLineReader } from "../src/rpc-stdin-guard.ts";
 import {
   classifySafeCompactionNotification,
@@ -21,6 +27,29 @@ import { createCompactionE2ePrompts } from "./e2e-prompts.ts";
 const COMMAND_TIMEOUT_MS = 300_000;
 const SHUTDOWN_TIMEOUT_MS = 10_000;
 const CORPUS_ENTRY_TYPE = "a4s.pi-rule-compiler.corpus.v1";
+
+type E2eMode = "basic" | "ladder";
+
+export function parseE2eMode(args: readonly string[]): E2eMode {
+  if (args.length === 0) return "basic";
+  if (args[0] !== "--mode") throw new Error(`unknown E2E argument: ${args[0] ?? ""}`);
+  if (args.length !== 2 || (args[1] !== "basic" && args[1] !== "ladder")) {
+    throw new Error("--mode requires basic or ladder");
+  }
+  return args[1];
+}
+
+export function createE2eChildEnvironment(
+  mode: E2eMode,
+  inherited: Readonly<NodeJS.ProcessEnv> = process.env,
+): NodeJS.ProcessEnv {
+  return {
+    ...inherited,
+    [A4S_PI_RULE_COMPILER_COMPACTION_STRATEGY]: mode,
+    [A4S_PI_RULE_COMPILER_TRIGGER_MODE]: "off",
+    [A4S_PI_RULE_COMPILER_EVIDENCE_STRATEGY]: "off",
+  };
+}
 
 interface RpcResponse {
   readonly type: "response";
@@ -55,8 +84,8 @@ class HeadlessPi {
   readonly #closed: Promise<number | null>;
   #compactionDiagnostic: SafeCompactionDiagnosticCategory | undefined;
 
-  constructor(args: readonly string[]) {
-    this.#child = spawn("pi", args, { stdio: ["pipe", "pipe", "pipe"] });
+  constructor(args: readonly string[], env: NodeJS.ProcessEnv) {
+    this.#child = spawn("pi", args, { env, stdio: ["pipe", "pipe", "pipe"] });
     // Keep stderr drained without exposing provider diagnostics or credentials.
     this.#child.stderr.on("data", () => undefined);
     const reader = createJsonlLineReader((line) => this.#receiveLine(line));
@@ -235,6 +264,21 @@ function collectCorpusEntryIds(data: unknown): CorpusEntryIds {
   return { chunkIds, receiptIds };
 }
 
+function requireRenderedLadderReceipt(data: unknown): void {
+  if (!isRecord(data) || !Array.isArray(data.entries)) {
+    throw new Error("Pi did not return session entries");
+  }
+  const observed = data.entries.some((entry) => {
+    if (!isRecord(entry) || entry.type !== "custom" || entry.customType !== LADDER_PROJECTION_RECEIPT_TYPE) return false;
+    if (!isRecord(entry.data)) return false;
+    return entry.data.schema === "a4s.ladder-projection-receipt/v1" &&
+      entry.data.rendered === true &&
+      typeof entry.data.selectedChunks === "number" &&
+      entry.data.selectedChunks > 0;
+  });
+  if (!observed) throw new Error("Pi did not retain a rendered Ladder projection receipt");
+}
+
 function sameIds(left: ReadonlySet<string>, right: ReadonlySet<string>): boolean {
   return left.size === right.size && [...left].every((id) => right.has(id));
 }
@@ -251,8 +295,13 @@ function piArgs(extensionPath: string, sessionDir: string, sessionFile?: string)
   ];
 }
 
-async function runFirstSession(extensionPath: string, sessionDir: string, runId: string): Promise<{ sessionFile: string; ids: CorpusEntryIds }> {
-  const pi = new HeadlessPi(piArgs(extensionPath, sessionDir));
+async function runFirstSession(
+  extensionPath: string,
+  sessionDir: string,
+  runId: string,
+  env: NodeJS.ProcessEnv,
+): Promise<{ sessionFile: string; ids: CorpusEntryIds }> {
+  const pi = new HeadlessPi(piArgs(extensionPath, sessionDir), env);
   try {
     const stateResponse = await pi.request("get_state");
     requireSuccessfulResponse(stateResponse, "get_state");
@@ -275,18 +324,39 @@ async function runFirstSession(extensionPath: string, sessionDir: string, runId:
   }
 }
 
-async function runReloadedSession(extensionPath: string, sessionDir: string, sessionFile: string): Promise<CorpusEntryIds> {
-  const pi = new HeadlessPi(piArgs(extensionPath, sessionDir, sessionFile));
+async function runReloadedSession(
+  extensionPath: string,
+  sessionDir: string,
+  sessionFile: string,
+  mode: E2eMode,
+  runId: string,
+  env: NodeJS.ProcessEnv,
+): Promise<CorpusEntryIds> {
+  const pi = new HeadlessPi(piArgs(extensionPath, sessionDir, sessionFile), env);
   try {
     const entriesResponse = await pi.request("get_entries");
     requireSuccessfulResponse(entriesResponse, "get_entries");
-    return collectCorpusEntryIds(entriesResponse.data);
+    const ids = collectCorpusEntryIds(entriesResponse.data);
+    if (mode === "ladder") {
+      const settled = pi.waitForEvent("agent_settled");
+      const promptResponse = await pi.request("prompt", {
+        message: `Retrieve the prior benign synthetic compaction input for E2E run ${runId} and reply only with acknowledged.`,
+      });
+      requireSuccessfulResponse(promptResponse, "prompt");
+      await settled;
+      const projectedEntriesResponse = await pi.request("get_entries");
+      requireSuccessfulResponse(projectedEntriesResponse, "get_entries");
+      requireRenderedLadderReceipt(projectedEntriesResponse.data);
+    }
+    return ids;
   } finally {
     await pi.close();
   }
 }
 
-async function main(): Promise<void> {
+async function main(args: readonly string[] = process.argv.slice(2)): Promise<void> {
+  const mode = parseE2eMode(args);
+  const childEnvironment = createE2eChildEnvironment(mode);
   const scriptDir = dirname(fileURLToPath(import.meta.url));
   const packageDir = resolve(scriptDir, "..");
   const repositoryDir = resolve(packageDir, "..", "..");
@@ -302,12 +372,19 @@ async function main(): Promise<void> {
 
   try {
     const extensionPath = resolve(packageDir, "src", "index.ts");
-    const first = await runFirstSession(extensionPath, sessionDir, runId);
-    const reloaded = await runReloadedSession(extensionPath, sessionDir, first.sessionFile);
+    const first = await runFirstSession(extensionPath, sessionDir, runId, childEnvironment);
+    const reloaded = await runReloadedSession(
+      extensionPath,
+      sessionDir,
+      first.sessionFile,
+      mode,
+      runId,
+      childEnvironment,
+    );
     if (!sameIds(first.ids.chunkIds, reloaded.chunkIds) || !sameIds(first.ids.receiptIds, reloaded.receiptIds)) {
       throw new Error("Pi reload did not preserve the corpus entry ids");
     }
-    process.stdout.write(`Pi Rule Compiler E2E passed. Evidence: ${runDir}\n`);
+    process.stdout.write(`Pi Rule Compiler E2E passed (${mode}). Evidence: ${runDir}\n`);
   } catch (error) {
     const reason = error instanceof Error ? error.message : "unexpected E2E failure";
     process.stderr.write(`Pi Rule Compiler E2E failed: ${reason}. Evidence preserved: ${runDir}\n`);

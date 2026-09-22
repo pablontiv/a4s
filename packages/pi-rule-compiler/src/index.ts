@@ -1,7 +1,16 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { configurationFromEnvironment } from "./config.ts";
 import { registerPiRuleCompiler } from "./extension.ts";
 
-export { BASIC_COMPACTION_CONFIG, isLadderCompaction, resolveCompactionConfig } from "./config.ts";
+export {
+  A4S_PI_RULE_COMPILER_COMPACTION_STRATEGY,
+  A4S_PI_RULE_COMPILER_EVIDENCE_STRATEGY,
+  A4S_PI_RULE_COMPILER_TRIGGER_MODE,
+  BASIC_COMPACTION_CONFIG,
+  configurationFromEnvironment,
+  isLadderCompaction,
+  resolveCompactionConfig,
+} from "./config.ts";
 export {
   collectCorpus,
   CORPUS_ENTRY_TYPE,
@@ -37,6 +46,7 @@ export {
 export { applyContextProjection } from "./projection.ts";
 export {
   createTypesafeAuthResolver,
+  LADDER_PROJECTION_RECEIPT_TYPE,
   registerPiRuleCompiler,
   type PiRuleCompilerOptions,
 } from "./extension.ts";
@@ -155,5 +165,5 @@ export {
 export * from "./types.ts";
 
 export default function piRuleCompilerExtension(pi: ExtensionAPI): void {
-  registerPiRuleCompiler(pi);
+  registerPiRuleCompiler(pi, { config: configurationFromEnvironment(process.env) });
 }

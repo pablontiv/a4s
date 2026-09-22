@@ -111,6 +111,8 @@ interface PendingRetroWork {
   batches: RuleSignalBatch[];
 }
 
+export const LADDER_PROJECTION_RECEIPT_TYPE = "a4s.pi-rule-compiler.ladder-projection-receipt.v1";
+
 class CurrentModelCallError extends Error {}
 
 export function createTypesafeAuthResolver(
@@ -194,6 +196,17 @@ export function registerPiRuleCompiler(pi: ExtensionAPI, options: PiRuleCompiler
         // never become a partial omission in Pi's request context.
         if (projection.corpusDigest !== corpusDigest(corpus)) throw new Error("Ladder corpus changed during projection");
         const rendered = renderProjection(projection, corpus);
+        if (corpus.length > 0) {
+          try {
+            pi.appendEntry(LADDER_PROJECTION_RECEIPT_TYPE, {
+              schema: "a4s.ladder-projection-receipt/v1",
+              selectedChunks: projection.selections.filter((selection) => selection.level !== "hide").length,
+              rendered: rendered.length > 0,
+            });
+          } catch {
+            // Observability is best-effort and must not change a valid projection.
+          }
+        }
         if (rendered.length === 0) return normal;
         return { messages: appendLadderContext(event.messages, rendered) };
       });
