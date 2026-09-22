@@ -1,4 +1,5 @@
 import type {
+  ContextWithSystemEvent,
   ExtensionAPI,
   ExtensionContext,
   SessionBeforeCompactEvent,
@@ -9,7 +10,7 @@ import { createProvider } from "@earendil-works/pi-ai";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
 import { buildBasicCompactionResult } from "./compaction-core.ts";
 import { collectCorpus, publishCorpusAfterCompaction, stageCorpus } from "./corpus.ts";
-import { BASIC_COMPACTION_CONFIG, resolveCompactionConfig } from "./config.ts";
+import { BASIC_COMPACTION_CONFIG, isLadderCompaction, resolveCompactionConfig } from "./config.ts";
 import {
   CompactionBuildError,
   type BuildJevCompactionOptions,
@@ -17,6 +18,8 @@ import {
 import { disabledEvidencePipeline } from "./evidence-pipeline.ts";
 import { DeadlineExceededError, OperationAbortedError, runWithDeadline } from "./deadline.ts";
 import { isStableDigest, stableDigest } from "./digest.ts";
+import { corpusDigest, renderProjection, selectLadderProjection } from "./ladder.ts";
+import { applyContextProjection } from "./projection.ts";
 import { redactAndLimitCorpusText } from "./redaction.ts";
 import { HttpJevClient, JevApiError, JevUnavailableError, JevValidationError } from "./jev.ts";
 import {
@@ -167,6 +170,35 @@ export function registerPiRuleCompiler(pi: ExtensionAPI, options: PiRuleCompiler
     if (options.jevClient) return options.jevClient;
     return new HttpJevClient({ apiKey: (await resolveTypesafeApiKey(ctx)) ?? "" });
   };
+
+  // Retrieval is opt-in and request-time only. Basic never registers this hook,
+  // so it cannot spend Jev quota or alter Pi's normal context.
+  if (isLadderCompaction(config)) {
+    pi.on("context_with_system", async (event, ctx) => {
+      const normal = { messages: event.messages };
+      return applyContextProjection(normal, async () => {
+        const query = ladderQuery(event.messages);
+        const corpus = collectCorpus(ctx.sessionManager.getBranch());
+        const projection = await runWithDeadline(
+          async (signal) => selectLadderProjection(
+            corpus,
+            query,
+            new ScheduledJevClient(await createJevClient(ctx), options.scheduling),
+            signal,
+          ),
+          hookTimeoutMs,
+          ctx.signal,
+        );
+        // Recheck the branch-bound digest immediately before rendering. This is
+        // redundant with selectLadderProjection by design: an invalid view must
+        // never become a partial omission in Pi's request context.
+        if (projection.corpusDigest !== corpusDigest(corpus)) throw new Error("Ladder corpus changed during projection");
+        const rendered = renderProjection(projection, corpus);
+        if (rendered.length === 0) return normal;
+        return { messages: appendLadderContext(event.messages, rendered) };
+      });
+    });
+  }
 
   pi.on("session_start", (_event, ctx) => {
     pendingByAttempt.clear();
@@ -594,6 +626,40 @@ async function handleCompaction(
     safeNotify(ctx, "compaction", classifyCompactionError(error));
     return { cancel: true };
   }
+}
+
+function ladderQuery(messages: ContextWithSystemEvent["messages"]): string {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (!message || message.role !== "user") continue;
+    const text = messageText(message.content);
+    const sanitized = redactAndLimitCorpusText(text).text.trim();
+    if (sanitized.length > 0) return sanitized;
+  }
+  throw new Error("Ladder requires a concrete user query");
+}
+
+function messageText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content.flatMap((part) => {
+    if (part === null || typeof part !== "object" || Array.isArray(part)) return [];
+    const text = (part as { type?: unknown; text?: unknown }).type === "text"
+      ? (part as { text?: unknown }).text
+      : undefined;
+    return typeof text === "string" ? [text] : [];
+  }).join("\n");
+}
+
+function appendLadderContext(
+  messages: ContextWithSystemEvent["messages"],
+  rendered: string,
+): ContextWithSystemEvent["messages"] {
+  // Pi documents a leading system message at this hook. If that contract is not
+  // present, do not attempt to reconstruct it: fail open to the caller instead.
+  if (messages[0]?.role !== "system") throw new Error("Pi normal system context is unavailable");
+  const projection = { role: "system" as const, content: rendered, timestamp: Date.now() };
+  return [messages[0], projection, ...messages.slice(1)];
 }
 
 function corpusBranchId(ctx: ExtensionContext): string {

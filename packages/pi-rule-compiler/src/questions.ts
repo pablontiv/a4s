@@ -3,6 +3,7 @@ import { estimateJevTokens } from "./state.ts";
 import type {
   ChoiceQuestion,
   CompactionMessageQuestionRef,
+  CorpusChunk,
   FittedSessionState,
   JevQuestion,
   JevRequest,
@@ -38,6 +39,20 @@ export const RULE_AUTHORITY_CRITERIA = {
   agent_inference: "A rule inferred or proposed by an assistant rather than authorized by a source.",
   incidental: "A one-off fact, implementation detail, example, or observation without rule authority.",
 } as const;
+
+export const LADDER_VISIBILITY_CRITERIA = {
+  hide: "The chunk is not useful for answering the concrete query.",
+  short: "Only a bounded source excerpt is useful for answering the concrete query.",
+  long: "A longer bounded source excerpt is useful for answering the concrete query.",
+  full: "The full sanitized chunk is necessary for answering the concrete query.",
+} as const;
+
+export interface LadderQuestionRef {
+  questionId: string;
+  corpusIndex: number;
+  chunkId: string;
+  query: string;
+}
 
 export interface ObservationPlanOptions {
   maxQuestionsPerRequest?: number;
@@ -150,6 +165,25 @@ export function buildRuleObservationPlan(
   }));
 
   return { state: fitted, candidates, compactionMessages, requests };
+}
+
+/** Creates one query-bound visibility decision for every chronological corpus chunk. */
+export function buildLadderQuestions(
+  corpus: readonly CorpusChunk[],
+  query: string,
+): { questions: Record<string, ChoiceQuestion>; refs: readonly LadderQuestionRef[] } {
+  const refs = corpus.map((chunk, corpusIndex) => ({
+    questionId: `ladder_visibility_${String(corpusIndex).padStart(6, "0")}`,
+    corpusIndex,
+    chunkId: chunk.id,
+    query,
+  }));
+  const questions = Object.fromEntries(refs.map((ref) => [ref.questionId, {
+    type: "choice" as const,
+    instructions: `How much of corpus chunk ${ref.corpusIndex} should be visible to answer the concrete query in the shared state?`,
+    criteria: { ...LADDER_VISIBILITY_CRITERIA },
+  } satisfies ChoiceQuestion]));
+  return { questions, refs };
 }
 
 export function canProvideRuleAuthority(role: string): boolean {

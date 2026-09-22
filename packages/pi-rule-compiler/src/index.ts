@@ -1,7 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { registerPiRuleCompiler } from "./extension.ts";
 
-export { BASIC_COMPACTION_CONFIG, resolveCompactionConfig } from "./config.ts";
+export { BASIC_COMPACTION_CONFIG, isLadderCompaction, resolveCompactionConfig } from "./config.ts";
 export {
   collectCorpus,
   CORPUS_ENTRY_TYPE,
@@ -25,6 +25,16 @@ export {
 export { disabledEvidencePipeline, type EvidencePipeline } from "./evidence-pipeline.ts";
 export { runWithDeadline, DeadlineExceededError, OperationAbortedError } from "./deadline.ts";
 export { stableDigest, stableJson, isStableDigest } from "./digest.ts";
+export {
+  corpusDigest,
+  LadderProjectionError,
+  LONG_SPAN_CHAR_LIMIT,
+  renderProjection,
+  selectLadderProjection,
+  SHORT_SPAN_CHAR_LIMIT,
+  validateProjection,
+} from "./ladder.ts";
+export { applyContextProjection } from "./projection.ts";
 export {
   createTypesafeAuthResolver,
   registerPiRuleCompiler,
@@ -56,12 +66,15 @@ export {
 } from "./observer.ts";
 export {
   buildRuleObservationPlan,
+  buildLadderQuestions,
   COMPACTION_ACTION_CRITERIA,
   COMPACTION_CONTINUITY_LEVELS,
   GENERALITY_LEVELS,
+  LADDER_VISIBILITY_CRITERIA,
   canProvideRuleAuthority,
   ObservationPlanError,
   RULE_AUTHORITY_CRITERIA,
+  type LadderQuestionRef,
   type ObservationPlanOptions,
 } from "./questions.ts";
 export {

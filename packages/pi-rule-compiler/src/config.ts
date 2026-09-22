@@ -7,6 +7,11 @@ export const BASIC_COMPACTION_CONFIG: CompactionConfig = {
   evidence: { strategy: "off" },
 };
 
+/** True only for the explicit request-time retrieval opt-in. */
+export function isLadderCompaction(config: CompactionConfig): boolean {
+  return config.compaction.strategy === "ladder";
+}
+
 /**
  * Resolves the deliberately small public configuration surface. Invalid or
  * incomplete updates never partially enable an opt-in feature: the complete

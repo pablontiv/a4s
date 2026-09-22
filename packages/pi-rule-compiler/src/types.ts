@@ -55,6 +55,27 @@ export interface CorpusReceipt {
   chunkIds: string[];
 }
 
+/** Request-time visibility selected for one sanitized corpus chunk. */
+export type VisibilityLevel = "hide" | "short" | "long" | "full";
+
+/** Half-open source offsets into the immutable CorpusChunk.text value. */
+export interface SourceSpan {
+  chunkId: string;
+  start: number;
+  end: number;
+}
+
+/** A recalculable query/corpus-bound view; it never mutates durable corpus entries. */
+export interface VisibilityProjection {
+  queryDigest: string;
+  corpusDigest: string;
+  selections: readonly {
+    chunkId: string;
+    level: VisibilityLevel;
+    spans: readonly SourceSpan[];
+  }[];
+}
+
 export interface FittedStateMessage {
   index: number;
   role: string;

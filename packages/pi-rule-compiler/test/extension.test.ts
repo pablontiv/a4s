@@ -13,6 +13,7 @@ import {
   RULE_SIGNAL_ENTRY_TYPE,
   TYPESAFE_PROVIDER_ID,
   stableDigest,
+  stageCorpus,
   type JevClient,
   type RuleSignalBatch,
   type JevCompactionResult,
@@ -190,6 +191,25 @@ function hasRuleArtifact(entries: readonly StoredEntry[]): boolean {
   );
 }
 
+class LadderFullJev extends ValidFakeJev {
+  override async evaluate(request: JevRequest): Promise<unknown> {
+    this.calls += 1;
+    this.requests.push(request);
+    return validJevResponse(request, (_id, question) =>
+      question.type === "choice" && Object.hasOwn(question.criteria, "full")
+        ? {
+          type: "choice",
+          choice: "full",
+          probabilities: Object.fromEntries(
+            Object.keys(question.criteria).map((level) => [level, level === "full" ? 1 : 0]),
+          ),
+          confidence: 1,
+        }
+        : undefined,
+    );
+  }
+}
+
 class NoRuleSignalJev extends ValidFakeJev {
   override async evaluate(request: JevRequest): Promise<unknown> {
     this.calls += 1;
@@ -331,6 +351,58 @@ test("a cancelled compaction publishes no corpus while a successful one is reloa
   assert.equal(collectCorpus(reloaded.entries).length, 1);
   await reloaded.handlers.get("session_start")?.({ type: "session_start", reason: "reload" }, reloadedContext);
   assert.equal(reloaded.entries.filter((entry) => entry.customType === CORPUS_ENTRY_TYPE).length, 2);
+});
+
+test("basic does not register or consume Ladder context projection", () => {
+  const fake = createFakePi();
+  registerPiRuleCompiler(fake.pi, { jevClient: new ValidFakeJev() });
+
+  assert.equal(fake.handlers.has("context_with_system"), false);
+});
+
+test("Ladder projects branch corpus through context_with_system and falls back unchanged on failure", async () => {
+  const chunk = stageCorpus([
+    { index: 2, role: "user", text: "durable ladder corpus material", sourceDigest: stableDigest({ source: "ladder" }), redactionCount: 0 },
+  ])[0];
+  assert.ok(chunk);
+  const entries: StoredEntry[] = [{ type: "custom", customType: CORPUS_ENTRY_TYPE, data: chunk }];
+  const selected = createFakePi(entries);
+  const selectedJev = new LadderFullJev();
+  registerPiRuleCompiler(selected.pi, {
+    jevClient: selectedJev,
+    config: { "compaction.strategy": "ladder" },
+  });
+  const selectedContext = createContext(selected.entries).context;
+  const supplied = [
+    { role: "system", content: "Pi normal", timestamp: 0 },
+    { role: "user", content: "retrieve ladder corpus", timestamp: 1 },
+  ];
+  const selectedResult = await selected.handlers.get("context_with_system")?.(
+    { type: "context_with_system", messages: supplied },
+    selectedContext,
+  );
+
+  assert.equal(selectedJev.calls, 1);
+  assert.ok(selectedResult && typeof selectedResult === "object" && "messages" in selectedResult);
+  const projected = (selectedResult as { messages: Array<{ role: string; content: string }> }).messages;
+  assert.equal(projected.length, 3);
+  assert.equal(projected[0]?.content, "Pi normal");
+  assert.match(projected[1]?.content ?? "", /^\[a4s ladder context\]/);
+  assert.deepEqual(supplied, [
+    { role: "system", content: "Pi normal", timestamp: 0 },
+    { role: "user", content: "retrieve ladder corpus", timestamp: 1 },
+  ]);
+
+  const failing = createFakePi(entries);
+  registerPiRuleCompiler(failing.pi, {
+    jevClient: { evaluate: async () => { throw new Error("Jev failed"); } },
+    config: { "compaction.strategy": "ladder" },
+  });
+  const failedResult = await failing.handlers.get("context_with_system")?.(
+    { type: "context_with_system", messages: supplied },
+    createContext(failing.entries).context,
+  );
+  assert.deepEqual(failedResult, { messages: supplied });
 });
 
 test("Evidence ladder is an explicit inert pre-Task-6 lifecycle branch", async () => {
