@@ -7,6 +7,7 @@
  * Pi's session files remain in the evidence directory for inspection.
  */
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,6 +16,7 @@ import {
   classifySafeCompactionNotification,
   type SafeCompactionDiagnosticCategory,
 } from "./compaction-diagnostic.ts";
+import { createCompactionE2ePrompts } from "./e2e-prompts.ts";
 
 const COMMAND_TIMEOUT_MS = 300_000;
 const SHUTDOWN_TIMEOUT_MS = 10_000;
@@ -249,13 +251,13 @@ function piArgs(extensionPath: string, sessionDir: string, sessionFile?: string)
   ];
 }
 
-async function runFirstSession(extensionPath: string, sessionDir: string): Promise<{ sessionFile: string; ids: CorpusEntryIds }> {
+async function runFirstSession(extensionPath: string, sessionDir: string, runId: string): Promise<{ sessionFile: string; ids: CorpusEntryIds }> {
   const pi = new HeadlessPi(piArgs(extensionPath, sessionDir));
   try {
     const stateResponse = await pi.request("get_state");
     requireSuccessfulResponse(stateResponse, "get_state");
     const sessionFile = requireConfiguredModel(stateResponse.data);
-    for (const message of ["Reply with the single word ready.", "Reply with the single word acknowledged."]) {
+    for (const message of createCompactionE2ePrompts(runId)) {
       const settled = pi.waitForEvent("agent_settled");
       const promptResponse = await pi.request("prompt", { message });
       requireSuccessfulResponse(promptResponse, "prompt");
@@ -295,11 +297,12 @@ async function main(): Promise<void> {
     `${new Date().toISOString().replaceAll(/[:.]/g, "-")}-${process.pid}`,
   );
   const sessionDir = resolve(runDir, "sessions");
+  const runId = randomUUID();
   await mkdir(sessionDir, { recursive: true });
 
   try {
     const extensionPath = resolve(packageDir, "src", "index.ts");
-    const first = await runFirstSession(extensionPath, sessionDir);
+    const first = await runFirstSession(extensionPath, sessionDir, runId);
     const reloaded = await runReloadedSession(extensionPath, sessionDir, first.sessionFile);
     if (!sameIds(first.ids.chunkIds, reloaded.chunkIds) || !sameIds(first.ids.receiptIds, reloaded.receiptIds)) {
       throw new Error("Pi reload did not preserve the corpus entry ids");
