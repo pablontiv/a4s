@@ -1,6 +1,30 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { loadGlobalCompactionConfiguration } from "./config.ts";
 import { registerPiRuleCompiler } from "./extension.ts";
 
+export {
+  BASIC_COMPACTION_CONFIG,
+  configurationFromGlobalFile,
+  globalCompactionConfigPath,
+  isLadderCompaction,
+  isLadderEvidence,
+  loadGlobalCompactionConfiguration,
+  PI_RULE_COMPILER_GLOBAL_CONFIG_PATH,
+  resolveCompactionConfig,
+} from "./config.ts";
+export {
+  collectCorpus,
+  CORPUS_ENTRY_TYPE,
+  publishCorpusAfterCompaction,
+  stageCorpus,
+  type CorpusEntryAppender,
+  type CorpusStageOptions,
+} from "./corpus.ts";
+export {
+  assertCompleteCoverage,
+  buildBasicCompactionResult,
+  type BasicCompactionInput,
+} from "./compaction-core.ts";
 export {
   buildJevCompactionResult,
   CompactionBuildError,
@@ -8,10 +32,38 @@ export {
   type BuildJevCompactionInput,
   type BuildJevCompactionOptions,
 } from "./compaction.ts";
+export {
+  disabledEvidencePipeline,
+  runEvidence,
+  type EvidenceEntryAppender,
+  type EvidencePipeline,
+  type RunEvidenceInput,
+  type RunEvidenceResult,
+} from "./evidence-pipeline.ts";
+export {
+  EVIDENCE_LADDER_QUERY,
+  extractRuleSignals,
+  selectEvidenceContext,
+  type EvidenceSource,
+  type ExtractedRuleSignals,
+  type ExtractRuleSignalsInput,
+} from "./evidence.ts";
 export { runWithDeadline, DeadlineExceededError, OperationAbortedError } from "./deadline.ts";
 export { stableDigest, stableJson, isStableDigest } from "./digest.ts";
 export {
+  corpusDigest,
+  LadderProjectionError,
+  LONG_SPAN_CHAR_LIMIT,
+  renderProjection,
+  selectLadderProjection,
+  SHORT_SPAN_CHAR_LIMIT,
+  validateProjection,
+  type LadderProfile,
+} from "./ladder.ts";
+export { applyContextProjection } from "./projection.ts";
+export {
   createTypesafeAuthResolver,
+  LADDER_PROJECTION_RECEIPT_TYPE,
   registerPiRuleCompiler,
   type PiRuleCompilerOptions,
 } from "./extension.ts";
@@ -41,15 +93,24 @@ export {
 } from "./observer.ts";
 export {
   buildRuleObservationPlan,
+  buildLadderQuestions,
   COMPACTION_ACTION_CRITERIA,
   COMPACTION_CONTINUITY_LEVELS,
   GENERALITY_LEVELS,
+  LADDER_VISIBILITY_CRITERIA,
   canProvideRuleAuthority,
   ObservationPlanError,
   RULE_AUTHORITY_CRITERIA,
+  type LadderQuestionRef,
   type ObservationPlanOptions,
 } from "./questions.ts";
-export { redactPrivateData, redactStrings, type RedactionResult } from "./redaction.ts";
+export {
+  MAX_CORPUS_TEXT_CHARS,
+  redactAndLimitCorpusText,
+  redactPrivateData,
+  redactStrings,
+  type RedactionResult,
+} from "./redaction.ts";
 export {
   createJsonlLineReader,
   RpcResponseTimeoutError,
@@ -76,6 +137,12 @@ export {
   type JevRequestSchedulerOptions,
 } from "./scheduler.ts";
 export {
+  applyTriggerDecision,
+  evaluateTrigger,
+  localTriggerGatesPass,
+  type TriggerInput,
+} from "./trigger.ts";
+export {
   DEFAULT_COMPACTION_RETENTION_THRESHOLDS,
   DEFAULT_RULE_SIGNAL_THRESHOLDS,
   normalizeScore,
@@ -92,17 +159,23 @@ export {
   type StateFitOptions,
 } from "./state.ts";
 export {
+  collectCorpusReceipts,
+  collectEvidenceReceipts,
   collectRetroPendingMarkers,
   collectRuleAcceptanceReceipts,
   collectRuleProposalBatches,
   collectRuleProposalReceipts,
   collectRuleSignalBatches,
+  parseCorpusChunk,
+  parseCorpusReceipt,
+  parseEvidenceReceipt,
   parseRetroPendingMarker,
   parseRuleAcceptanceReceipt,
   parseRuleProposalReceipt,
   parseRuleSignalBatch,
   parseStoredRuleProposal,
   reconstructObservedSourceDigests,
+  EVIDENCE_RECEIPT_ENTRY_TYPE,
   RETRO_PENDING_ENTRY_TYPE,
   RULE_ACCEPTANCE_ENTRY_TYPE,
   RULE_PROPOSAL_ENTRY_TYPE,
@@ -112,5 +185,5 @@ export {
 export * from "./types.ts";
 
 export default function piRuleCompilerExtension(pi: ExtensionAPI): void {
-  registerPiRuleCompiler(pi);
+  registerPiRuleCompiler(pi, { config: loadGlobalCompactionConfiguration() });
 }

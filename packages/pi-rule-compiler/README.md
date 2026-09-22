@@ -1,6 +1,6 @@
 # A4S Pi Rule Compiler
 
-Private Pi extension that uses Jev as the semantic authority for compaction while extracting reviewable `RuleSignal` evidence in the same pass. Successful compaction automatically turns those signals into review-only rule proposals; `/retro-rules` is an idempotent retry/recovery command.
+Private Pi extension that uses Jev as the semantic authority for deterministic compaction. Evidence is disabled by default; Ladder retrieval and Ladder-backed Evidence are explicit opt-ins.
 
 ## Runtime contract
 
@@ -10,13 +10,57 @@ Private Pi extension that uses Jev as the semantic authority for compaction whil
 - Large inputs are split into chronological windows; every compacted message receives one retention judgment. Rule-candidate questions are added only for roles that can originate authority from intent or an explicit decision (`user`, `custom`). `toolResult` and `bashExecution` still receive retention judgments but never enter the rule-candidate pool: their content is evidence, not authority. Generated assistant/summary roles likewise receive only retention judgments.
 - Every window shares one global scheduler: default concurrency is 1, `429`/`529` retries are bounded, `Retry-After` is honored up to 30 seconds, and the whole compaction remains abortable under a 180-second deadline.
 - Requests are packed up to 120 questions only while verified below Jev 1.13's guarded budgets: 60k estimated tokens per request and 30k for state plus the longest question.
-- RuleSignal batches are embedded in sanitized compaction details, then published as namespaced custom entries only after `session_compact` succeeds. Reload reconciliation recovers a batch if the process stopped after Pi persisted compaction but before publication.
-- Successful compaction also appends a durable retro-pending marker. Manual/threshold compaction runs current-model synthesis plus Jev stage 2 directly from `session_compact`; overflow recovery with `willRetry=true` defers that work until `agent_settled` so Pi's retry is not delayed.
-- Proposal receipts make duplicate success, reload, `agent_settled`, and `/retro-rules` replay idempotent. Retro stage 2 uses the same bounded scheduler. Retro failure never rolls back compaction and leaves signals plus pending state available for retry.
+- Compaction details never contain RuleSignals. With Evidence off, successful compaction publishes only the sanitized corpus and its receipt; `basic` does not extract, publish, or synthesize rules.
+- Evidence runs only when both `compaction.strategy=ladder` and `evidence.strategy=ladder`. After Pi confirms compaction and corpus publication, it issues its own fixed conservative Ladder query over the current branch corpus. It never consumes the projection made for an ordinary user query.
+- Only full chunks or validated `short`/`long` source spans selected by that Evidence query enter extraction. The existing candidate-probability, generality, authority-probability, authority-confidence, and allowed-authority gates remain unchanged.
+- Validated signal batches, retro-pending markers, and an Evidence receipt are appended only after selection and extraction both succeed. Batch digests, attempt markers, proposal receipts, and the final Evidence receipt make replay idempotent. Any selection/extraction failure publishes no Evidence artifact and never removes corpus.
+- Manual/threshold Evidence success may run current-model synthesis plus Jev stage 2 from `session_compact`; overflow recovery with `willRetry=true` defers that review-only work until `agent_settled`. Retro failure never rolls back compaction and leaves signals plus pending state available for `/retro-rules` retry.
 - Jev uses the pinned model `jev-1.13.0`. The extension registers a credential-only `typesafe` provider so `/login typesafe` stores an API key via Pi's own auth storage; the resolved credential is cached for the session. `TYPESAFE_API_KEY` in the environment takes precedence when set and bypasses stored-credential resolution entirely.
 - Automatic retro and `/retro-rules` store proposals only. They never write Rootline documents or activate rules; `/retro-rules` exists solely for manual retry/recovery.
 - Review is store-only. `/rules-review` lists stored proposals with their acceptance state, `/rules-show <id>` shows one candidate, and `/rules-accept <id>` records a manual acceptance receipt for a `propose` candidate. When no proposal is stored, `/rules-review` reports whether the latest session-local compaction had no eligible `user`/`custom` sources, filtered all eligible candidates, or retained signals awaiting retro; it never displays message content. Acceptance still writes nothing to Rootline or AGENTS.md; the durable apply of an accepted rule is deferred to the decision in ADR 0020.
 - The extension does not read, write, or replace gentle-engram entries.
+- With `compaction.strategy=ladder`, `context_with_system` derives a concrete sanitized user query from the pending request and makes one Jev visibility query over only the current branch's sanitized corpus. It validates complete chunk coverage, ids, spans, and corpus digest before rendering chronological `hide|short|long|full` source views. `short` and `long` excerpts are deterministically bounded; corpus entries are never changed. A successful non-empty-corpus evaluation appends a content-free projection receipt (`selectedChunks` and `rendered`) for safe lifecycle observability. Any missing query, Jev failure, invalid response/span, timeout, or context contract mismatch returns Pi's original context without additional omission. `basic` does not register this hook or spend Ladder quota.
+
+## Opt-in Trigger
+
+The default configuration remains `compaction.strategy=basic`,
+`trigger.mode=hint`, and `evidence.strategy=off`. The extension API accepts
+flat `config` values for `compaction.strategy` (`basic|ladder`),
+`trigger.mode` (`off|hint|auto`), and `evidence.strategy` (`off|ladder`);
+invalid combinations preserve the prior safe configuration.
+
+The installed `pi -e` entrypoint reads the persisted global file
+`~/.pi/agent/pi-rule-compiler.json` once at startup. The file may contain only
+the same three flat, non-secret mode keys:
+
+```json
+{
+  "compaction.strategy": "ladder",
+  "trigger.mode": "off",
+  "evidence.strategy": "off"
+}
+```
+
+Create or edit that fixed file, then restart Pi so new sessions load the
+change. A missing file, malformed JSON, a non-object value, any unknown field,
+an invalid mode, or an invalid combination fails closed to the complete basic
+safe configuration (`basic`, `hint`, `off`). The extension does not use custom
+Pi `settings.json` keys, session text, credentials, environment variables, or
+a user-selected path as mode configuration. Provider credentials remain
+separate.
+
+On `agent_settled`, an enabled Trigger first requires interactive UI, idle
+state, enough context, no pending messages, no cooldown, an empty editor, and
+an available credential. Only then does it send Jev a text-free request with
+context-token counts. `hint` displays a notification. `auto` additionally
+requires the persisted acknowledgement written by
+`/compaction-trigger-acknowledge` and calls only `ctx.compact()`, which enters
+the existing `session_before_compact` handler. Trigger persistence contains
+only the acknowledgement timestamp and hint/compact cooldown metadata.
+
+Pi 0.87 does not expose an unsent editor buffer to extensions. Therefore the
+production Trigger fails closed unless an embedding supplies the
+`trigger.editorHasText` runtime gate; it never assumes the editor is empty.
 
 ## Use
 
@@ -31,7 +75,7 @@ pi -e packages/pi-rule-compiler/src/index.ts
 
 Alternatively, set `TYPESAFE_API_KEY` in the environment before starting Pi to skip `/login`.
 
-If Jev is unavailable, Pi compaction is deliberately cancelled and can be retried after restoring the dependency. Retro runs automatically after success; use `/retro-rules` only to retry preserved pending work after a model, Jev, or storage failure.
+If Jev is unavailable, Pi compaction is deliberately cancelled and can be retried after restoring the dependency. With both Ladder flags enabled, retro may run after successful Evidence extraction; use `/retro-rules` only to retry preserved pending work after a model, Jev, or storage failure.
 
 ## RPC callers must hold stdin open through `compact`
 
@@ -91,6 +135,55 @@ npm run typecheck --workspace @a4s/pi-rule-compiler
 ```
 
 Tests use fake Jev and model gateways; they make no live TypeSafe calls.
+
+The fixture-only Evidence eval is also offline:
+
+```sh
+npm run eval:evidence --workspace @a4s/pi-rule-compiler
+```
+
+It reports precision, recall, selected-boundary coverage, and false negatives for the checked-in true-rule, non-rule, and uncertain-candidate fixtures. Local session/corpus/result captures stay in ignored eval paths.
+
+### Product E2E
+
+```sh
+npm run e2e --workspace @a4s/pi-rule-compiler -- --mode basic
+npm run e2e --workspace @a4s/pi-rule-compiler -- --mode ladder
+npm run e2e --workspace @a4s/pi-rule-compiler -- --mode evidence
+```
+
+This is a headless product test, not an E0 or fixture run. It starts the
+configured `pi` binary in RPC mode with this extension, uses the configured Pi
+model and real TypeSafe/Jev provider, sends four distinct benign non-secret
+prompts generated for that run whose total exceeds Pi's production 20k
+retained-token threshold, compacts, and verifies persisted corpus chunks plus
+their receipt across a Pi restart. It can therefore incur real provider cost
+and requires both providers to be configured. It neither prints RPC/session
+content nor supplies a model, credential, fake, replay, or fork input.
+
+The runner defaults to expecting `basic`. `--mode` is an assertion, not a
+configuration override: before starting Pi, the runner reads the same fixed
+global file and refuses to continue unless its resolved compaction strategy
+matches the requested mode. For a deterministic Ladder run, save the example
+configuration above before running the command; each child process reads that
+persisted file at startup. In `ladder` mode, after real Pi/Jev compaction
+and reload, the runner sends a subsequent real provider request and requires
+the content-free rendered-projection receipt produced only after a successful
+`context_with_system` Ladder evaluation.
+
+`--mode evidence` requires the persisted file to set both
+`compaction.strategy=ladder` and `evidence.strategy=ladder`, with Trigger set to
+`off` or the headless-inert `hint`. It creates a real compactable session with
+an explicit benign durable policy, then requires a valid signal batch,
+review-only proposal, retro-pending marker, and Evidence receipt. After
+restarting Pi against that session, it requires the same artifact ids and also
+exercises the Ladder projection path. The runner stores session artifacts but
+never prints prompts, proposal content, provider bodies, or credentials.
+
+Every run intentionally preserves its evidence directory under
+`artifacts/pi-rule-compiler-e2e/<timestamp>/`, including Pi's session artifact,
+on both success and failure. Inspect or remove that directory manually only
+when its retention is no longer needed.
 
 ## Design provenance
 

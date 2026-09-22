@@ -1,18 +1,24 @@
 import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import {
+import piRuleCompilerExtension, {
+  collectCorpus,
+  CORPUS_ENTRY_TYPE,
   createTypesafeAuthResolver,
+  EVIDENCE_RECEIPT_ENTRY_TYPE,
   JevApiError,
+  LADDER_PROJECTION_RECEIPT_TYPE,
   observeCompactionRules,
-  parseRetroPendingMarker,
-  parseRuleProposalReceipt,
   registerPiRuleCompiler,
   RETRO_PENDING_ENTRY_TYPE,
   RULE_PROPOSAL_ENTRY_TYPE,
   RULE_SIGNAL_ENTRY_TYPE,
   TYPESAFE_PROVIDER_ID,
   stableDigest,
+  stageCorpus,
   type JevClient,
   type RuleSignalBatch,
   type JevCompactionResult,
@@ -181,6 +187,33 @@ function appendSuccessfulCompaction(fake: ReturnType<typeof createFakePi>, resul
   return entry;
 }
 
+function hasRuleArtifact(entries: readonly StoredEntry[]): boolean {
+  return entries.some((entry) =>
+    entry.customType === RULE_SIGNAL_ENTRY_TYPE ||
+    entry.customType === RULE_PROPOSAL_ENTRY_TYPE ||
+    entry.customType === RETRO_PENDING_ENTRY_TYPE,
+  );
+}
+
+class LadderFullJev extends ValidFakeJev {
+  override async evaluate(request: JevRequest): Promise<unknown> {
+    this.calls += 1;
+    this.requests.push(request);
+    return validJevResponse(request, (_id, question) =>
+      question.type === "choice" && Object.hasOwn(question.criteria, "full")
+        ? {
+          type: "choice",
+          choice: "full",
+          probabilities: Object.fromEntries(
+            Object.keys(question.criteria).map((level) => [level, level === "full" ? 1 : 0]),
+          ),
+          confidence: 1,
+        }
+        : undefined,
+    );
+  }
+}
+
 class NoRuleSignalJev extends ValidFakeJev {
   override async evaluate(request: JevRequest): Promise<unknown> {
     this.calls += 1;
@@ -246,11 +279,12 @@ function storedProposalEntry(): StoredEntry {
   };
 }
 
-test("before hook always returns Jev custom compaction and signals persist only after success", async () => {
+test("basic does not publish rule artifacts when Evidence is off", async () => {
   const jev = new ValidFakeJev();
   const fake = createFakePi();
   registerPiRuleCompiler(fake.pi, {
     jevClient: jev,
+    evidence: { strategy: "off" },
     now: () => new Date("2026-09-18T12:00:00.000Z"),
   });
   const { context, notifications } = createContext(fake.entries);
@@ -286,94 +320,280 @@ test("before hook always returns Jev custom compaction and signals persist only 
     { type: "session_compact", compactionEntry, fromExtension: true, reason: "threshold", willRetry: false },
     context,
   );
-  assert.equal(fake.entries.filter((entry) => entry.customType === RULE_SIGNAL_ENTRY_TYPE).length, 1);
-  assert.ok(notifications.some((notification) => /compaction succeeded/.test(notification.message)));
+  assert.equal(hasRuleArtifact(fake.entries), false);
+  assert.equal(notifications.some((notification) => /compaction succeeded/.test(notification.message)), false);
 
   await fake.handlers.get("session_compact")?.(
     { type: "session_compact", compactionEntry, fromExtension: true, reason: "threshold", willRetry: false },
     context,
   );
-  assert.equal(fake.entries.filter((entry) => entry.customType === RULE_SIGNAL_ENTRY_TYPE).length, 1);
+  assert.equal(hasRuleArtifact(fake.entries), false);
 });
 
-test("manual and threshold success run retro automatically and replay is idempotent", async (t) => {
-  for (const reason of ["manual", "threshold"] as const) {
-    await t.test(reason, async () => {
-      const jev = new ValidFakeJev();
-      const fake = createFakePi();
-      registerPiRuleCompiler(fake.pi, {
-        jevClient: jev,
-        now: () => new Date("2026-09-18T12:05:00.000Z"),
-      });
-      const runtime = createRetroCapableContext(fake.entries);
-      const event = compactionEvent(undefined, { reason });
-      const result = requireCompactionResult(
-        await fake.handlers.get("session_before_compact")?.(event, runtime.context),
-      );
-      const compactionEntry = appendSuccessfulCompaction(fake, result);
-      const successEvent = {
-        type: "session_compact",
-        compactionEntry,
-        fromExtension: true,
-        reason,
-        willRetry: false,
-      };
-
-      await fake.handlers.get("session_compact")?.(successEvent, runtime.context);
-      assert.equal(fake.entries.filter((entry) => entry.customType === RULE_SIGNAL_ENTRY_TYPE).length, 1);
-      assert.equal(fake.entries.filter((entry) => entry.customType === RETRO_PENDING_ENTRY_TYPE).length, 1);
-      assert.equal(fake.entries.filter((entry) => entry.customType === RULE_PROPOSAL_ENTRY_TYPE).length, 1);
-      assert.equal(runtime.modelCalls(), 1);
-      const marker = parseRetroPendingMarker(
-        fake.entries.find((entry) => entry.customType === RETRO_PENDING_ENTRY_TYPE)?.data,
-      );
-      assert.equal(marker.compactionReason, reason);
-      assert.equal(marker.deferredUntilAgentSettled, false);
-      const receipt = parseRuleProposalReceipt(
-        fake.entries.find((entry) => entry.customType === RULE_PROPOSAL_ENTRY_TYPE)?.data,
-      );
-      assert.deepEqual(receipt.sourceCompactionAttemptIds, [result.details.attemptId]);
-
-      await fake.handlers.get("session_compact")?.(successEvent, runtime.context);
-      assert.equal(fake.entries.filter((entry) => entry.customType === RULE_SIGNAL_ENTRY_TYPE).length, 1);
-      assert.equal(fake.entries.filter((entry) => entry.customType === RETRO_PENDING_ENTRY_TYPE).length, 1);
-      assert.equal(fake.entries.filter((entry) => entry.customType === RULE_PROPOSAL_ENTRY_TYPE).length, 1);
-      assert.equal(runtime.modelCalls(), 1);
-    });
-  }
-});
-
-test("overflow success defers retro until agent_settled", async () => {
+test("a cancelled compaction publishes no corpus while a successful one is reloadable", async () => {
   const fake = createFakePi();
-  registerPiRuleCompiler(fake.pi, {
+  registerPiRuleCompiler(fake.pi, { jevClient: new ValidFakeJev() });
+  const { context } = createContext(fake.entries);
+  const event = compactionEvent([{ role: "user", content: "password=canary-secret" }]);
+
+  assert.ok(requireCompactionResult(await fake.handlers.get("session_before_compact")?.(event, context)));
+  await fake.handlers.get("session_compact_failed")?.(
+    { type: "session_compact_failed", reason: "threshold", aborted: true, willRetry: false, fromExtension: true },
+    context,
+  );
+  assert.deepEqual(fake.entries.filter((entry) => entry.customType === CORPUS_ENTRY_TYPE), []);
+
+  const result = requireCompactionResult(await fake.handlers.get("session_before_compact")?.(event, context));
+  const compactionEntry = appendSuccessfulCompaction(fake, result);
+  await fake.handlers.get("session_compact")?.(
+    { type: "session_compact", compactionEntry, fromExtension: true, reason: "threshold", willRetry: false },
+    context,
+  );
+  assert.equal(fake.entries.filter((entry) => entry.customType === CORPUS_ENTRY_TYPE).length, 2);
+  assert.equal(JSON.stringify(fake.entries).includes("canary-secret"), false);
+
+  const reloaded = createFakePi(fake.entries);
+  registerPiRuleCompiler(reloaded.pi, { jevClient: new ValidFakeJev() });
+  const reloadedContext = createContext(reloaded.entries).context;
+  await reloaded.handlers.get("session_start")?.({ type: "session_start", reason: "reload" }, reloadedContext);
+  assert.equal(collectCorpus(reloaded.entries).length, 1);
+  await reloaded.handlers.get("session_start")?.({ type: "session_start", reason: "reload" }, reloadedContext);
+  assert.equal(reloaded.entries.filter((entry) => entry.customType === CORPUS_ENTRY_TYPE).length, 2);
+});
+
+test("basic does not register or consume Ladder context projection", () => {
+  const fake = createFakePi();
+  registerPiRuleCompiler(fake.pi, { jevClient: new ValidFakeJev() });
+
+  assert.equal(fake.handlers.has("context_with_system"), false);
+});
+
+test("installed entrypoint reads only the fixed global configuration path at startup", (t) => {
+  const home = mkdtempSync(join(tmpdir(), "a4s-rule-compiler-home-"));
+  const priorHome = process.env.HOME;
+  const rejectedEnvironmentName = "A4S_PI_RULE_COMPILER_COMPACTION_STRATEGY";
+  const priorRejectedEnvironment = process.env[rejectedEnvironmentName];
+  t.after(() => {
+    if (priorHome === undefined) delete process.env.HOME;
+    else process.env.HOME = priorHome;
+    if (priorRejectedEnvironment === undefined) delete process.env[rejectedEnvironmentName];
+    else process.env[rejectedEnvironmentName] = priorRejectedEnvironment;
+    rmSync(home, { recursive: true, force: true });
+  });
+  process.env.HOME = home;
+  process.env[rejectedEnvironmentName] = "ladder";
+
+  const missing = createFakePi();
+  piRuleCompilerExtension(missing.pi);
+  assert.equal(missing.handlers.has("context_with_system"), false);
+
+  const configDirectory = join(home, ".pi", "agent");
+  mkdirSync(configDirectory, { recursive: true });
+  writeFileSync(join(configDirectory, "pi-rule-compiler.json"), JSON.stringify({
+    "compaction.strategy": "ladder",
+    "trigger.mode": "off",
+    "evidence.strategy": "off",
+  }));
+
+  const configured = createFakePi();
+  piRuleCompilerExtension(configured.pi);
+  assert.equal(configured.handlers.has("context_with_system"), true);
+});
+
+test("Ladder projects branch corpus through context_with_system and falls back unchanged on failure", async () => {
+  const chunk = stageCorpus([
+    { index: 2, role: "user", text: "durable ladder corpus material", sourceDigest: stableDigest({ source: "ladder" }), redactionCount: 0 },
+  ])[0];
+  assert.ok(chunk);
+  const entries: StoredEntry[] = [{ type: "custom", customType: CORPUS_ENTRY_TYPE, data: chunk }];
+  const selected = createFakePi(entries);
+  const selectedJev = new LadderFullJev();
+  registerPiRuleCompiler(selected.pi, {
+    jevClient: selectedJev,
+    config: { "compaction.strategy": "ladder" },
+  });
+  const selectedContext = createContext(selected.entries).context;
+  const supplied = [
+    { role: "system", content: "Pi normal", timestamp: 0 },
+    { role: "user", content: "retrieve ladder corpus", timestamp: 1 },
+  ];
+  const selectedResult = await selected.handlers.get("context_with_system")?.(
+    { type: "context_with_system", messages: supplied },
+    selectedContext,
+  );
+
+  assert.equal(selectedJev.calls, 1);
+  assert.ok(selectedResult && typeof selectedResult === "object" && "messages" in selectedResult);
+  const projected = (selectedResult as { messages: Array<{ role: string; content: string }> }).messages;
+  assert.equal(projected.length, 3);
+  assert.equal(projected[0]?.content, "Pi normal");
+  assert.match(projected[1]?.content ?? "", /^\[a4s ladder context\]/);
+  assert.deepEqual(supplied, [
+    { role: "system", content: "Pi normal", timestamp: 0 },
+    { role: "user", content: "retrieve ladder corpus", timestamp: 1 },
+  ]);
+  const receipt = selected.entries.find((entry) => entry.customType === LADDER_PROJECTION_RECEIPT_TYPE);
+  assert.ok(receipt && receipt.data && typeof receipt.data === "object");
+  assert.equal((receipt.data as { schema?: unknown }).schema, "a4s.ladder-projection-receipt/v1");
+  assert.equal((receipt.data as { selectedChunks?: unknown }).selectedChunks, 1);
+  assert.equal((receipt.data as { rendered?: unknown }).rendered, true);
+  assert.doesNotMatch(JSON.stringify(receipt.data), /durable ladder corpus material|retrieve ladder corpus/);
+
+  const failing = createFakePi(entries);
+  registerPiRuleCompiler(failing.pi, {
+    jevClient: { evaluate: async () => { throw new Error("Jev failed"); } },
+    config: { "compaction.strategy": "ladder" },
+  });
+  const failedResult = await failing.handlers.get("context_with_system")?.(
+    { type: "context_with_system", messages: supplied },
+    createContext(failing.entries).context,
+  );
+  assert.deepEqual(failedResult, { messages: supplied });
+  assert.equal(
+    failing.entries.some((entry) => entry.customType === LADDER_PROJECTION_RECEIPT_TYPE),
+    false,
+  );
+});
+
+test("Evidence ladder requires both flags and publishes only after successful compaction", async () => {
+  const singlyEnabled = createFakePi();
+  registerPiRuleCompiler(singlyEnabled.pi, {
     jevClient: new ValidFakeJev(),
-    now: () => new Date("2026-09-18T12:10:00.000Z"),
+    evidence: { strategy: "ladder" },
+  });
+  const singleContext = createContext(singlyEnabled.entries).context;
+  const singleCompaction = requireCompactionResult(
+    await singlyEnabled.handlers.get("session_before_compact")?.(compactionEvent(), singleContext),
+  );
+  const singleEntry = appendSuccessfulCompaction(singlyEnabled, singleCompaction);
+  await singlyEnabled.handlers.get("session_compact")?.(
+    { type: "session_compact", compactionEntry: singleEntry, fromExtension: true, reason: "threshold", willRetry: false },
+    singleContext,
+  );
+  assert.equal(hasRuleArtifact(singlyEnabled.entries), false);
+
+  const enabled = createFakePi();
+  const jev = new LadderFullJev();
+  registerPiRuleCompiler(enabled.pi, {
+    jevClient: jev,
+    config: {
+      "compaction.strategy": "ladder",
+      "trigger.mode": "off",
+      "evidence.strategy": "ladder",
+    },
+  });
+  const enabledContext = createContext(enabled.entries).context;
+  const compaction = requireCompactionResult(
+    await enabled.handlers.get("session_before_compact")?.(compactionEvent(), enabledContext),
+  );
+  assert.equal(hasRuleArtifact(enabled.entries), false);
+  const compactionEntry = appendSuccessfulCompaction(enabled, compaction);
+  await enabled.handlers.get("session_compact")?.(
+    { type: "session_compact", compactionEntry, fromExtension: true, reason: "threshold", willRetry: false },
+    enabledContext,
+  );
+
+  assert.equal(enabled.entries.filter((entry) => entry.customType === RULE_SIGNAL_ENTRY_TYPE).length, 1);
+  assert.equal(enabled.entries.filter((entry) => entry.customType === RETRO_PENDING_ENTRY_TYPE).length, 1);
+  assert.equal(enabled.entries.filter((entry) => entry.customType === EVIDENCE_RECEIPT_ENTRY_TYPE).length, 1);
+  assert.equal(enabled.entries.filter((entry) => entry.customType === CORPUS_ENTRY_TYPE).length, 2);
+  assert.equal(jev.requests.filter((request) => (request.state as { profile?: unknown }).profile === "conservative-evidence").length, 1);
+
+  await enabled.handlers.get("session_compact")?.(
+    { type: "session_compact", compactionEntry, fromExtension: true, reason: "threshold", willRetry: false },
+    enabledContext,
+  );
+  assert.equal(enabled.entries.filter((entry) => entry.customType === RULE_SIGNAL_ENTRY_TYPE).length, 1);
+  assert.equal(enabled.entries.filter((entry) => entry.customType === EVIDENCE_RECEIPT_ENTRY_TYPE).length, 1);
+});
+
+test("Evidence success stores a review-only proposal idempotently", async () => {
+  const fake = createFakePi();
+  const jev = new LadderFullJev();
+  registerPiRuleCompiler(fake.pi, {
+    jevClient: jev,
+    config: {
+      "compaction.strategy": "ladder",
+      "trigger.mode": "off",
+      "evidence.strategy": "ladder",
+    },
+    now: () => new Date("2026-09-22T12:00:00.000Z"),
   });
   const runtime = createRetroCapableContext(fake.entries);
-  const event = compactionEvent(undefined, { reason: "overflow", willRetry: true });
-  const result = requireCompactionResult(
-    await fake.handlers.get("session_before_compact")?.(event, runtime.context),
+  const compaction = requireCompactionResult(
+    await fake.handlers.get("session_before_compact")?.(compactionEvent(), runtime.context),
   );
-  const compactionEntry = appendSuccessfulCompaction(fake, result);
+  const compactionEntry = appendSuccessfulCompaction(fake, compaction);
+  await fake.handlers.get("session_compact")?.(
+    { type: "session_compact", compactionEntry, fromExtension: true, reason: "manual", willRetry: false },
+    runtime.context,
+  );
 
+  assert.equal(fake.entries.filter((entry) => entry.customType === RULE_PROPOSAL_ENTRY_TYPE).length, 1);
+  assert.equal(runtime.modelCalls(), 1);
+  assert.match(runtime.notifications.at(-1)?.message ?? "", /Nothing was activated/);
+  await fake.commands.get("retro-rules")?.("", runtime.context);
+  assert.equal(fake.entries.filter((entry) => entry.customType === RULE_PROPOSAL_ENTRY_TYPE).length, 1);
+  assert.equal(runtime.modelCalls(), 1);
+});
+
+test("overflow Evidence defers review-only proposal synthesis until agent_settled", async () => {
+  const fake = createFakePi();
+  registerPiRuleCompiler(fake.pi, {
+    jevClient: new LadderFullJev(),
+    config: {
+      "compaction.strategy": "ladder",
+      "trigger.mode": "off",
+      "evidence.strategy": "ladder",
+    },
+  });
+  const runtime = createRetroCapableContext(fake.entries);
+  const compaction = requireCompactionResult(
+    await fake.handlers.get("session_before_compact")?.(
+      compactionEvent(undefined, { reason: "overflow", willRetry: true }),
+      runtime.context,
+    ),
+  );
+  const compactionEntry = appendSuccessfulCompaction(fake, compaction);
   await fake.handlers.get("session_compact")?.(
     { type: "session_compact", compactionEntry, fromExtension: true, reason: "overflow", willRetry: true },
     runtime.context,
   );
-  assert.equal(runtime.modelCalls(), 0);
-  assert.equal(fake.entries.filter((entry) => entry.customType === RETRO_PENDING_ENTRY_TYPE).length, 1);
   assert.equal(fake.entries.filter((entry) => entry.customType === RULE_PROPOSAL_ENTRY_TYPE).length, 0);
-  const marker = parseRetroPendingMarker(
-    fake.entries.find((entry) => entry.customType === RETRO_PENDING_ENTRY_TYPE)?.data,
-  );
-  assert.equal(marker.compactionReason, "overflow");
-  assert.equal(marker.deferredUntilAgentSettled, true);
+  assert.equal(runtime.modelCalls(), 0);
 
   await fake.handlers.get("agent_settled")?.({ type: "agent_settled" }, runtime.context);
-  assert.equal(runtime.modelCalls(), 1);
   assert.equal(fake.entries.filter((entry) => entry.customType === RULE_PROPOSAL_ENTRY_TYPE).length, 1);
-  await fake.handlers.get("agent_settled")?.({ type: "agent_settled" }, runtime.context);
   assert.equal(runtime.modelCalls(), 1);
+});
+
+test("basic success never publishes RuleSignals or starts retro", async (t) => {
+  for (const reason of ["manual", "threshold", "overflow"] as const) {
+    await t.test(reason, async () => {
+      const fake = createFakePi();
+      registerPiRuleCompiler(fake.pi, { jevClient: new ValidFakeJev() });
+      const runtime = createRetroCapableContext(fake.entries);
+      const result = requireCompactionResult(
+        await fake.handlers.get("session_before_compact")?.(
+          compactionEvent(undefined, { reason, willRetry: reason === "overflow" }),
+          runtime.context,
+        ),
+      );
+      const compactionEntry = appendSuccessfulCompaction(fake, result);
+      await fake.handlers.get("session_compact")?.(
+        {
+          type: "session_compact",
+          compactionEntry,
+          fromExtension: true,
+          reason,
+          willRetry: reason === "overflow",
+        },
+        runtime.context,
+      );
+      assert.equal(hasRuleArtifact(fake.entries), false);
+      assert.equal(runtime.modelCalls(), 0);
+    });
+  }
 });
 
 test("missing key, timeout, malformed response, API failure, and unfittable state cancel without native fallback", async (t) => {
@@ -522,7 +742,7 @@ test("failed compaction clears pending work and never publishes signals", async 
   assert.ok(jev.calls > callsBeforeFailure, "cleared pending work must be re-evaluated on retry");
 });
 
-test("large sessions evaluate every message once, cache pending work, and recover signals idempotently", async () => {
+test("large basic sessions evaluate every message once, cache pending work, and retain no RuleSignals", async () => {
   const jev = new ValidFakeJev();
   const fake = createFakePi();
   registerPiRuleCompiler(fake.pi, {
@@ -542,7 +762,7 @@ test("large sessions evaluate every message once, cache pending work, and recove
   );
   assert.equal(actionQuestionIds.length, 70);
   assert.equal(new Set(actionQuestionIds).size, 70);
-  assert.equal(first.details.ruleSignalBatches.length, 3);
+  assert.equal(first.details.ruleSignalBatches.length, 0);
   assert.equal(first.details.decisions.length, 70);
   const calls = jev.calls;
 
@@ -555,36 +775,32 @@ test("large sessions evaluate every message once, cache pending work, and recove
     { type: "session_compact", compactionEntry, fromExtension: true, reason: "threshold", willRetry: false },
     context,
   );
-  assert.equal(fake.entries.filter((entry) => entry.customType === RULE_SIGNAL_ENTRY_TYPE).length, 3);
+  assert.equal(fake.entries.filter((entry) => entry.customType === RULE_SIGNAL_ENTRY_TYPE).length, 0);
 
   const reloaded = createFakePi([compactionEntry]);
   registerPiRuleCompiler(reloaded.pi, { jevClient: new ValidFakeJev() });
   const reloadedContext = createContext(reloaded.entries).context;
   await reloaded.handlers.get("session_start")?.({ type: "session_start", reason: "reload" }, reloadedContext);
-  assert.equal(reloaded.entries.filter((entry) => entry.customType === RULE_SIGNAL_ENTRY_TYPE).length, 3);
+  assert.equal(reloaded.entries.filter((entry) => entry.customType === RULE_SIGNAL_ENTRY_TYPE).length, 0);
   await reloaded.handlers.get("session_start")?.({ type: "session_start", reason: "reload" }, reloadedContext);
-  assert.equal(reloaded.entries.filter((entry) => entry.customType === RULE_SIGNAL_ENTRY_TYPE).length, 3);
+  assert.equal(reloaded.entries.filter((entry) => entry.customType === RULE_SIGNAL_ENTRY_TYPE).length, 0);
 });
 
-test("retro failure preserves pending work and /retro-rules retries idempotently", async () => {
-  const fake = createFakePi();
+test("/retro-rules preserves manually stored evidence after failure and retries idempotently", async () => {
+  const batch = await batchFor(
+    [{ role: "user", content: "Always preserve deterministic validation evidence." }],
+    new ValidFakeJev(),
+    "retry",
+  );
+  const fake = createFakePi([asSignalEntry(batch)]);
   registerPiRuleCompiler(fake.pi, {
     jevClient: new ValidFakeJev(),
     now: () => new Date("2026-09-18T13:30:00.000Z"),
   });
-  const failing = createRetroCapableContext(fake.entries, { failModel: true });
-  const event = compactionEvent();
-  const result = requireCompactionResult(
-    await fake.handlers.get("session_before_compact")?.(event, failing.context),
-  );
-  const compactionEntry = appendSuccessfulCompaction(fake, result);
-  await fake.handlers.get("session_compact")?.(
-    { type: "session_compact", compactionEntry, fromExtension: true, reason: "threshold", willRetry: false },
-    failing.context,
-  );
 
+  const failing = createRetroCapableContext(fake.entries, { failModel: true });
+  await fake.commands.get("retro-rules")?.("", failing.context);
   assert.equal(fake.entries.filter((entry) => entry.customType === RULE_SIGNAL_ENTRY_TYPE).length, 1);
-  assert.equal(fake.entries.filter((entry) => entry.customType === RETRO_PENDING_ENTRY_TYPE).length, 1);
   assert.equal(fake.entries.filter((entry) => entry.customType === RULE_PROPOSAL_ENTRY_TYPE).length, 0);
 
   const recovered = createRetroCapableContext(fake.entries);
@@ -594,38 +810,6 @@ test("retro failure preserves pending work and /retro-rules retries idempotently
   await fake.commands.get("retro-rules")?.("", recovered.context);
   assert.equal(fake.entries.filter((entry) => entry.customType === RULE_PROPOSAL_ENTRY_TYPE).length, 1);
   assert.equal(recovered.modelCalls(), 1);
-});
-
-test("reload recovers signals and pending retro without duplicate proposals", async () => {
-  const source = createFakePi();
-  registerPiRuleCompiler(source.pi, {
-    jevClient: new ValidFakeJev(),
-    now: () => new Date("2026-09-18T13:40:00.000Z"),
-  });
-  const sourceContext = createContext(source.entries).context;
-  const result = requireCompactionResult(
-    await source.handlers.get("session_before_compact")?.(compactionEvent(), sourceContext),
-  );
-  const compactionEntry = { type: "compaction", details: result.details };
-
-  const reloaded = createFakePi([compactionEntry]);
-  registerPiRuleCompiler(reloaded.pi, {
-    jevClient: new ValidFakeJev(),
-    now: () => new Date("2026-09-18T13:41:00.000Z"),
-  });
-  const runtime = createRetroCapableContext(reloaded.entries);
-  await reloaded.handlers.get("session_start")?.({ type: "session_start", reason: "reload" }, runtime.context);
-  assert.equal(reloaded.entries.filter((entry) => entry.customType === RULE_SIGNAL_ENTRY_TYPE).length, 1);
-  assert.equal(reloaded.entries.filter((entry) => entry.customType === RETRO_PENDING_ENTRY_TYPE).length, 1);
-  await reloaded.handlers.get("agent_settled")?.({ type: "agent_settled" }, runtime.context);
-  assert.equal(reloaded.entries.filter((entry) => entry.customType === RULE_PROPOSAL_ENTRY_TYPE).length, 1);
-
-  await reloaded.handlers.get("session_start")?.({ type: "session_start", reason: "reload" }, runtime.context);
-  await reloaded.handlers.get("agent_settled")?.({ type: "agent_settled" }, runtime.context);
-  assert.equal(reloaded.entries.filter((entry) => entry.customType === RULE_SIGNAL_ENTRY_TYPE).length, 1);
-  assert.equal(reloaded.entries.filter((entry) => entry.customType === RETRO_PENDING_ENTRY_TYPE).length, 1);
-  assert.equal(reloaded.entries.filter((entry) => entry.customType === RULE_PROPOSAL_ENTRY_TYPE).length, 1);
-  assert.equal(runtime.modelCalls(), 1);
 });
 
 test("/retro-rules remains current-model synthesis plus Jev stage 2 and review-only", async () => {
@@ -857,4 +1041,44 @@ test("createTypesafeAuthResolver retries getProviderAuth until a credential is s
   assert.equal(await resolve(ctx), "logged-in-key");
   assert.equal(await resolve(ctx), "logged-in-key");
   assert.equal(calls, 3, "the successful resolution is cached going forward");
+});
+
+test("agent_settled auto trigger requires persisted acknowledgement and enters session_before_compact", async () => {
+  const jev = new ValidFakeJev();
+  const fake = createFakePi();
+  registerPiRuleCompiler(fake.pi, {
+    jevClient: jev,
+    config: { "trigger.mode": "auto" },
+    trigger: { editorHasText: () => false, minimumContextTokens: 16_000 },
+    now: () => new Date("2026-09-22T12:00:00.000Z"),
+  });
+  let compactCalls = 0;
+  let beforeCompactCalls = 0;
+  const { context, notifications } = createContext(fake.entries);
+  const triggerContext = {
+    ...context,
+    hasUI: true,
+    isIdle: () => true,
+    hasPendingMessages: () => false,
+    getContextUsage: () => ({ tokens: 32_000, contextWindow: 128_000, percent: 25 }),
+    signal: undefined,
+    compact: async () => {
+      compactCalls += 1;
+      beforeCompactCalls += 1;
+      await fake.handlers.get("session_before_compact")?.(compactionEvent(), triggerContext);
+    },
+  };
+
+  await fake.handlers.get("agent_settled")?.({ type: "agent_settled" }, triggerContext);
+  assert.equal(compactCalls, 0);
+  assert.equal(jev.calls, 0, "unacknowledged auto must not query Jev");
+
+  await fake.commands.get("compaction-trigger-acknowledge")?.("", triggerContext);
+  await fake.handlers.get("agent_settled")?.({ type: "agent_settled" }, triggerContext);
+  assert.equal(compactCalls, 1);
+  assert.equal(beforeCompactCalls, 1, "auto uses ctx.compact and the existing compaction hook");
+  assert.equal(notifications.length, 0);
+  assert.equal(fake.entries.some((entry) => entry.customType?.includes("acknowledgement")), true);
+  assert.equal(fake.entries.some((entry) => entry.customType?.includes("cooldown")), true);
+  assert.doesNotMatch(JSON.stringify(jev.requests), /credential|secret|chunk text/i);
 });

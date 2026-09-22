@@ -1,19 +1,31 @@
 import type {
+  ContextWithSystemEvent,
   ExtensionAPI,
   ExtensionContext,
   SessionBeforeCompactEvent,
+  SessionBeforeCompactResult,
 } from "@earendil-works/pi-coding-agent";
 import type { AuthResult } from "@earendil-works/pi-ai";
 import { createProvider } from "@earendil-works/pi-ai";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
+import { buildBasicCompactionResult } from "./compaction-core.ts";
+import { collectCorpus, publishCorpusAfterCompaction, stageCorpus } from "./corpus.ts";
 import {
-  buildJevCompactionResult,
+  BASIC_COMPACTION_CONFIG,
+  isLadderCompaction,
+  isLadderEvidence,
+  resolveCompactionConfig,
+} from "./config.ts";
+import {
   CompactionBuildError,
-  recoverRuleSignalBatchesFromDetails,
   type BuildJevCompactionOptions,
 } from "./compaction.ts";
+import { disabledEvidencePipeline, runEvidence } from "./evidence-pipeline.ts";
 import { DeadlineExceededError, OperationAbortedError, runWithDeadline } from "./deadline.ts";
-import { stableDigest } from "./digest.ts";
+import { isStableDigest, stableDigest } from "./digest.ts";
+import { corpusDigest, renderProjection, selectLadderProjection } from "./ladder.ts";
+import { applyContextProjection } from "./projection.ts";
+import { redactAndLimitCorpusText } from "./redaction.ts";
 import { HttpJevClient, JevApiError, JevUnavailableError, JevValidationError } from "./jev.ts";
 import {
   observePreparedCompactionRules,
@@ -31,6 +43,12 @@ import {
   type CurrentModelGateway,
   type RetroOptions,
 } from "./retro.ts";
+import {
+  applyTriggerDecision,
+  evaluateTrigger,
+  localTriggerGatesPass,
+  type TriggerInput,
+} from "./trigger.ts";
 import { StateFitError } from "./state.ts";
 import {
   collectRetroPendingMarkers,
@@ -38,15 +56,14 @@ import {
   collectRuleProposalBatches,
   collectRuleProposalReceipts,
   collectRuleSignalBatches,
-  reconstructObservedSourceDigests,
-  RETRO_PENDING_ENTRY_TYPE,
   RULE_ACCEPTANCE_ENTRY_TYPE,
   RULE_PROPOSAL_ENTRY_TYPE,
-  RULE_SIGNAL_ENTRY_TYPE,
 } from "./storage.ts";
 import type {
+  CorpusChunk,
   JevClient,
   JevCompactionResult,
+  EvidenceOptions,
   RetroPendingMarker,
   RuleAcceptanceReceipt,
   RuleSignalBatch,
@@ -63,7 +80,16 @@ export interface PiRuleCompilerOptions {
   observation?: RuleObservationOptions;
   scheduling?: JevRequestSchedulerOptions;
   compaction?: BuildJevCompactionOptions;
+  evidence?: EvidenceOptions;
   retro?: RetroOptions;
+  /** Flat extension configuration; invalid values retain the basic safe default. */
+  config?: Readonly<Record<string, unknown>>;
+  /** Runtime-only gates that Pi's public context cannot otherwise observe. */
+  trigger?: {
+    minimumContextTokens?: number;
+    cooldownMs?: number;
+    editorHasText?: (ctx: ExtensionContext) => boolean;
+  };
   now?: () => Date;
 }
 
@@ -82,12 +108,15 @@ type DiagnosticCode =
 
 interface PendingCompaction {
   result: JevCompactionResult;
+  corpus: CorpusChunk[];
 }
 
 interface PendingRetroWork {
   marker: RetroPendingMarker;
   batches: RuleSignalBatch[];
 }
+
+export const LADDER_PROJECTION_RECEIPT_TYPE = "a4s.pi-rule-compiler.ladder-projection-receipt.v1";
 
 class CurrentModelCallError extends Error {}
 
@@ -133,9 +162,18 @@ function createTypesafeProvider() {
 export function registerPiRuleCompiler(pi: ExtensionAPI, options: PiRuleCompilerOptions = {}): void {
   const pendingByAttempt = new Map<string, PendingCompaction>();
   const retroInFlight = new Set<string>();
+  let recoveredCorpus: CorpusChunk[] = [];
   const now = options.now ?? (() => new Date());
   const hookTimeoutMs = options.hookTimeoutMs ?? 180_000;
   const retroTimeoutMs = options.retroTimeoutMs ?? 120_000;
+  const config = resolveCompactionConfig(
+    options.evidence
+      ? { ...options.config, "evidence.strategy": options.evidence.strategy }
+      : options.config,
+    BASIC_COMPACTION_CONFIG,
+  );
+  const triggerMinimumContextTokens = options.trigger?.minimumContextTokens ?? 16_000;
+  const triggerCooldownMs = options.trigger?.cooldownMs ?? 300_000;
 
   pi.registerProvider(createTypesafeProvider());
 
@@ -145,10 +183,103 @@ export function registerPiRuleCompiler(pi: ExtensionAPI, options: PiRuleCompiler
     return new HttpJevClient({ apiKey: (await resolveTypesafeApiKey(ctx)) ?? "" });
   };
 
+  // Retrieval is opt-in and request-time only. Basic never registers this hook,
+  // so it cannot spend Jev quota or alter Pi's normal context.
+  if (isLadderCompaction(config)) {
+    pi.on("context_with_system", async (event, ctx) => {
+      const normal = { messages: event.messages };
+      return applyContextProjection(normal, async () => {
+        const query = ladderQuery(event.messages);
+        const corpus = collectCorpus(ctx.sessionManager.getBranch());
+        const projection = await runWithDeadline(
+          async (signal) => selectLadderProjection(
+            corpus,
+            query,
+            new ScheduledJevClient(await createJevClient(ctx), options.scheduling),
+            signal,
+          ),
+          hookTimeoutMs,
+          ctx.signal,
+        );
+        // Recheck the branch-bound digest immediately before rendering. This is
+        // redundant with selectLadderProjection by design: an invalid view must
+        // never become a partial omission in Pi's request context.
+        if (projection.corpusDigest !== corpusDigest(corpus)) throw new Error("Ladder corpus changed during projection");
+        const rendered = renderProjection(projection, corpus);
+        if (corpus.length > 0) {
+          try {
+            pi.appendEntry(LADDER_PROJECTION_RECEIPT_TYPE, {
+              schema: "a4s.ladder-projection-receipt/v1",
+              selectedChunks: projection.selections.filter((selection) => selection.level !== "hide").length,
+              rendered: rendered.length > 0,
+            });
+          } catch {
+            // Observability is best-effort and must not change a valid projection.
+          }
+        }
+        if (rendered.length === 0) return normal;
+        return { messages: appendLadderContext(event.messages, rendered) };
+      });
+    });
+  }
+
   pi.on("session_start", (_event, ctx) => {
     pendingByAttempt.clear();
     retroInFlight.clear();
-    reconcileCompactionArtifacts(pi, ctx, ctx.sessionManager.getBranch());
+    // getBranch is Pi's branch-local view, so reload cannot blend sibling branches.
+    recoveredCorpus = collectCorpus(ctx.sessionManager.getBranch());
+  });
+
+  pi.on("agent_settled", async (_event, ctx) => {
+    if (isLadderEvidence(config)) {
+      await drainPendingRetro(
+        pi,
+        ctx,
+        createJevClient,
+        retroTimeoutMs,
+        now,
+        options.retro,
+        options.scheduling,
+        retroInFlight,
+      );
+    }
+    if (config.trigger.mode === "off") return;
+    const usage = ctx.getContextUsage();
+    const baseInput = {
+      mode: config.trigger.mode,
+      interactive: ctx.hasUI,
+      idle: ctx.isIdle(),
+      contextTokens: usage?.tokens ?? 0,
+      minimumContextTokens: triggerMinimumContextTokens,
+      hasPendingWork: ctx.hasPendingMessages(),
+      cooldownActive: hasTriggerCooldown(ctx.sessionManager.getBranch(), now(), triggerCooldownMs),
+      // Pi 0.87 does not expose the unsent editor buffer. Failing closed keeps
+      // auto inert unless an embedding supplies this session-local gate.
+      editorHasText: options.trigger?.editorHasText?.(ctx) ?? true,
+      autoAcknowledged: hasTriggerAcknowledgement(ctx.sessionManager.getBranch()),
+    };
+    if (!localTriggerGatesPass({ ...baseInput, credentialAvailable: true })) return;
+
+    const credentialAvailable = options.jevClient !== undefined || Boolean(await resolveTypesafeApiKey(ctx));
+    if (!credentialAvailable) return;
+    const input: TriggerInput = {
+      ...baseInput,
+      credentialAvailable,
+      jevClient: await createJevClient(ctx),
+      signal: ctx.signal ?? new AbortController().signal,
+    };
+    const decision = await evaluateTrigger(input);
+    if (decision.action === "none") return;
+    try {
+      pi.appendEntry(TRIGGER_COOLDOWN_ENTRY_TYPE, {
+        schema: "a4s.compaction-trigger-cooldown/v1",
+        action: decision.action,
+        triggeredAt: now().toISOString(),
+      });
+    } catch {
+      return;
+    }
+    await applyTriggerDecision(decision, ctx);
   });
 
   pi.on("session_before_compact", async (event, ctx) => {
@@ -171,59 +302,84 @@ export function registerPiRuleCompiler(pi: ExtensionAPI, options: PiRuleCompiler
   });
 
   pi.on("session_compact", async (event, ctx) => {
-    const recovered = recoverRuleSignalBatchesFromDetails(event.compactionEntry.details);
-    if (!recovered) return;
-    pendingByAttempt.delete(recovered.attemptId);
-    if (!persistSignalBatches(pi, ctx, recovered.batches)) return;
+    const attemptId = readCompactionAttemptId(event.compactionEntry.details);
+    const pending = attemptId ? pendingByAttempt.get(attemptId) : undefined;
+    let corpusPublished = pending === undefined;
+    if (pending) {
+      try {
+        publishCorpusAfterCompaction(pending.corpus, ctx.sessionManager.getBranch(), pi);
+        recoveredCorpus = collectCorpus(ctx.sessionManager.getBranch());
+        const recoveredIds = new Set(recoveredCorpus.map((chunk) => chunk.id));
+        corpusPublished = pending.corpus.every((chunk) => recoveredIds.has(chunk.id));
+      } catch {
+        // Corpus persistence is best-effort after Pi has already committed compaction.
+        // Never surface raw corpus through diagnostics or alter basic compaction output.
+        corpusPublished = false;
+      }
+    }
 
-    const signalCount = recovered.batches.reduce((total, batch) => total + batch.signals.length, 0);
-    const marker = retroMarkerForBatches(
-      recovered.attemptId,
-      recovered.batches,
-      event.reason,
-      event.willRetry,
-    );
-    const pendingStored = signalCount === 0 || ensureRetroPendingMarker(pi, ctx, marker, recovered.batches);
-    safeNotifyText(
-      ctx,
-      `Jev compaction succeeded; stored ${signalCount} RuleSignal(s) from ${recovered.batches.length} window(s).`,
-      "info",
-    );
-    if (!pendingStored || signalCount === 0 || event.willRetry) return;
-
-    await drainPendingRetro(
-      pi,
-      ctx,
-      createJevClient,
-      retroTimeoutMs,
-      now,
-      options.retro,
-      options.scheduling,
-      retroInFlight,
-      recovered.attemptId,
-    );
+    if (pending && isLadderEvidence(config) && corpusPublished) {
+      try {
+        const jevClient = new ScheduledJevClient(await createJevClient(ctx), options.scheduling);
+        const evidence = await runWithDeadline(
+          (signal) => runEvidence({
+            config,
+            result: pending.result,
+            reason: event.reason,
+            willRetry: event.willRetry,
+            corpus: collectCorpus(ctx.sessionManager.getBranch()),
+            getBranch: () => ctx.sessionManager.getBranch(),
+            appender: pi,
+            jev: jevClient,
+            signal,
+            ...(options.observation === undefined ? {} : { observation: options.observation }),
+          }),
+          hookTimeoutMs,
+          ctx.signal,
+        );
+        if (
+          !event.willRetry &&
+          evidence.receipt &&
+          evidence.receipt.signalIds.length > 0
+        ) {
+          await drainPendingRetro(
+            pi,
+            ctx,
+            createJevClient,
+            retroTimeoutMs,
+            now,
+            options.retro,
+            options.scheduling,
+            retroInFlight,
+            attemptId,
+          );
+        }
+      } catch (error) {
+        safeNotify(ctx, "signals", classifyRetroError(error));
+      }
+    } else if (pending) {
+      await disabledEvidencePipeline.afterCompaction(pending.result, ctx);
+    }
+    if (attemptId) pendingByAttempt.delete(attemptId);
   });
 
   pi.on("session_compact_failed", () => {
     pendingByAttempt.clear();
   });
 
-  pi.on("agent_settled", async (_event, ctx) => {
-    await drainPendingRetro(
-      pi,
-      ctx,
-      createJevClient,
-      retroTimeoutMs,
-      now,
-      options.retro,
-      options.scheduling,
-      retroInFlight,
-    );
-  });
-
   pi.on("session_shutdown", () => {
     pendingByAttempt.clear();
     retroInFlight.clear();
+  });
+
+  pi.registerCommand("compaction-trigger-acknowledge", {
+    description: "Persist acknowledgement required before automatic compaction can run",
+    handler: async (_args, _ctx) => {
+      pi.appendEntry(TRIGGER_ACKNOWLEDGEMENT_ENTRY_TYPE, {
+        schema: "a4s.compaction-trigger-acknowledgement/v1",
+        acknowledgedAt: now().toISOString(),
+      });
+    },
   });
 
   pi.registerCommand("retro-rules", {
@@ -304,6 +460,39 @@ export function registerPiRuleCompiler(pi: ExtensionAPI, options: PiRuleCompiler
         "info",
       );
     },
+  });
+}
+
+const TRIGGER_ACKNOWLEDGEMENT_ENTRY_TYPE = "a4s.pi-rule-compiler.compaction-trigger-acknowledgement.v1";
+const TRIGGER_COOLDOWN_ENTRY_TYPE = "a4s.pi-rule-compiler.compaction-trigger-cooldown.v1";
+
+function customEntryData(entry: unknown, customType: string): Record<string, unknown> | undefined {
+  if (entry === null || typeof entry !== "object" || Array.isArray(entry)) return undefined;
+  const candidate = entry as { type?: unknown; customType?: unknown; data?: unknown };
+  if (candidate.type !== "custom" || candidate.customType !== customType) return undefined;
+  if (candidate.data === null || typeof candidate.data !== "object" || Array.isArray(candidate.data)) return undefined;
+  return candidate.data as Record<string, unknown>;
+}
+
+function hasTriggerAcknowledgement(entries: readonly unknown[]): boolean {
+  return entries.some((entry) => {
+    const data = customEntryData(entry, TRIGGER_ACKNOWLEDGEMENT_ENTRY_TYPE);
+    return data?.schema === "a4s.compaction-trigger-acknowledgement/v1" && typeof data.acknowledgedAt === "string";
+  });
+}
+
+function hasTriggerCooldown(entries: readonly unknown[], current: Date, cooldownMs: number): boolean {
+  if (!Number.isFinite(cooldownMs) || cooldownMs <= 0) return false;
+  const currentMs = current.getTime();
+  return entries.some((entry) => {
+    const data = customEntryData(entry, TRIGGER_COOLDOWN_ENTRY_TYPE);
+    if (
+      data?.schema !== "a4s.compaction-trigger-cooldown/v1" ||
+      (data.action !== "hint" && data.action !== "compact") ||
+      typeof data.triggeredAt !== "string"
+    ) return false;
+    const triggeredAt = Date.parse(data.triggeredAt);
+    return Number.isFinite(triggeredAt) && triggeredAt <= currentMs && currentMs - triggeredAt < cooldownMs;
   });
 }
 
@@ -452,7 +641,7 @@ async function handleCompaction(
   observationOptions: RuleObservationOptions | undefined,
   schedulingOptions: JevRequestSchedulerOptions | undefined,
   compactionOptions: BuildJevCompactionOptions | undefined,
-): Promise<{ cancel: true } | { compaction: JevCompactionResult }> {
+): Promise<SessionBeforeCompactResult> {
   try {
     const preparation = {
       ...(event.preparation.previousSummary === undefined
@@ -497,20 +686,25 @@ async function handleCompaction(
       timeoutMs,
       event.signal,
     );
-    const result = buildJevCompactionResult(
+    const result = buildBasicCompactionResult(
       {
         attemptId,
         sourceDigest: prepared.sourceDigest,
         createdAt: observedAt,
         firstKeptEntryId: event.preparation.firstKeptEntryId,
         tokensBefore: event.preparation.tokensBefore,
-        messageCount: prepared.messages.length,
+        decisions: batches.flatMap((batch) => batch.compaction.decisions),
         scheduler: jevClient.getStats(),
-        ruleSignalBatches: batches,
       },
       compactionOptions,
     );
-    pendingByAttempt.set(attemptId, { result });
+    pendingByAttempt.set(attemptId, {
+      result,
+      corpus: stageCorpus(prepared.messages, {
+        branchId: corpusBranchId(ctx),
+        compactionAttemptId: attemptId,
+      }),
+    });
     return { compaction: result };
   } catch (error) {
     safeNotify(ctx, "compaction", classifyCompactionError(error));
@@ -518,50 +712,56 @@ async function handleCompaction(
   }
 }
 
-function reconcileCompactionArtifacts(
-  pi: ExtensionAPI,
-  ctx: ExtensionContext,
-  entries: readonly unknown[],
-): void {
-  for (const entry of entries) {
-    if (!entry || typeof entry !== "object" || (entry as { type?: unknown }).type !== "compaction") continue;
-    const recovered = recoverRuleSignalBatchesFromDetails((entry as { details?: unknown }).details);
-    if (!recovered || !persistSignalBatches(pi, ctx, recovered.batches)) continue;
-    const signalCount = recovered.batches.reduce((total, batch) => total + batch.signals.length, 0);
-    if (signalCount === 0) continue;
-    const first = recovered.batches[0];
-    if (!first) continue;
-    ensureRetroPendingMarker(
-      pi,
-      ctx,
-      retroMarkerForBatches(
-        recovered.attemptId,
-        recovered.batches,
-        first.provenance.compactionReason,
-        first.provenance.willRetry,
-      ),
-      recovered.batches,
-    );
+function ladderQuery(messages: ContextWithSystemEvent["messages"]): string {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (!message || message.role !== "user") continue;
+    const text = messageText(message.content);
+    const sanitized = redactAndLimitCorpusText(text).text.trim();
+    if (sanitized.length > 0) return sanitized;
   }
+  throw new Error("Ladder requires a concrete user query");
 }
 
-function persistSignalBatches(
-  pi: ExtensionAPI,
-  ctx: ExtensionContext,
-  batches: readonly RuleSignalBatch[],
-): boolean {
-  const existing = reconstructObservedSourceDigests(ctx.sessionManager.getBranch());
-  for (const batch of batches) {
-    if (existing.has(batch.sourceDigest)) continue;
-    try {
-      pi.appendEntry(RULE_SIGNAL_ENTRY_TYPE, batch);
-      existing.add(batch.sourceDigest);
-    } catch {
-      safeNotify(ctx, "signals", "storage_failure");
-      return false;
-    }
-  }
-  return true;
+function messageText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content.flatMap((part) => {
+    if (part === null || typeof part !== "object" || Array.isArray(part)) return [];
+    const text = (part as { type?: unknown; text?: unknown }).type === "text"
+      ? (part as { text?: unknown }).text
+      : undefined;
+    return typeof text === "string" ? [text] : [];
+  }).join("\n");
+}
+
+function appendLadderContext(
+  messages: ContextWithSystemEvent["messages"],
+  rendered: string,
+): ContextWithSystemEvent["messages"] {
+  // Pi documents a leading system message at this hook. If that contract is not
+  // present, do not attempt to reconstruct it: fail open to the caller instead.
+  if (messages[0]?.role !== "system") throw new Error("Pi normal system context is unavailable");
+  const projection = { role: "system" as const, content: rendered, timestamp: Date.now() };
+  return [messages[0], projection, ...messages.slice(1)];
+}
+
+function corpusBranchId(ctx: ExtensionContext): string {
+  const manager = ctx.sessionManager as ExtensionContext["sessionManager"] & {
+    getLeafId?: () => unknown;
+  };
+  const leafId = manager.getLeafId?.();
+  const rawAnchor = typeof leafId === "string" ? leafId : "root";
+  // Treat session-provided identifiers as source data: redact and bound them
+  // before they can participate in durable corpus provenance.
+  const anchor = redactAndLimitCorpusText(rawAnchor, 200).text || "root";
+  return stableDigest({ schema: "a4s.corpus-branch/v1", anchor });
+}
+
+function readCompactionAttemptId(value: unknown): string | undefined {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const attemptId = (value as { attemptId?: unknown }).attemptId;
+  return typeof attemptId === "string" && isStableDigest(attemptId) ? attemptId : undefined;
 }
 
 function retroMarkerForBatches(
@@ -581,27 +781,6 @@ function retroMarkerForBatches(
     compactionReason: reason,
     deferredUntilAgentSettled: willRetry,
   };
-}
-
-function ensureRetroPendingMarker(
-  pi: ExtensionAPI,
-  ctx: ExtensionContext,
-  marker: RetroPendingMarker,
-  batches: readonly RuleSignalBatch[],
-): boolean {
-  const entries = ctx.sessionManager.getBranch();
-  const coveredBatchDigests = new Set(
-    collectRuleProposalReceipts(entries).flatMap((receipt) => receipt.sourceBatchDigests),
-  );
-  if (batches.every((batch) => coveredBatchDigests.has(stableDigest(batch)))) return true;
-  if (collectRetroPendingMarkers(entries).some((existing) => existing.attemptId === marker.attemptId)) return true;
-  try {
-    pi.appendEntry(RETRO_PENDING_ENTRY_TYPE, marker);
-    return true;
-  } catch {
-    safeNotify(ctx, "retro", "storage_failure");
-    return false;
-  }
 }
 
 function collectPendingRetroWork(

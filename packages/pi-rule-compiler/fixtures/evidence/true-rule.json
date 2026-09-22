@@ -1,0 +1,10 @@
+{
+  "id": "true-rule",
+  "text": "Always run the applicable repository checks before declaring work complete.",
+  "expectedRule": true,
+  "expectedBoundary": { "start": 0, "end": 75 },
+  "visibility": { "choice": "full", "confidence": 1 },
+  "candidateProbability": 0.96,
+  "generalityLevel": 3,
+  "authority": "explicit_user"
+}

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  buildBasicCompactionResult,
   buildJevCompactionResult,
   CompactionBuildError,
   observePreparedCompactionRules,
@@ -10,7 +11,7 @@ import {
 } from "../src/index.ts";
 import { choiceAnswer, scoreAnswer, validJevResponse } from "./fixtures.ts";
 
-test("structured compaction is chronological, bounded, deterministic, and auditable", async () => {
+test("basic preserves the established deterministic compaction fixture", async () => {
   const plan = prepareRuleObservation({
     messagesToSummarize: [
       { role: "user", content: `MARKER-0 ${"alpha ".repeat(120)}` },
@@ -71,9 +72,33 @@ test("structured compaction is chronological, bounded, deterministic, and audita
     },
     ruleSignalBatches: [batch],
   };
-  const first = buildJevCompactionResult(input, { maxSummaryChars: 900, minimumSummaryExcerptChars: 24 });
-  const second = buildJevCompactionResult(input, { maxSummaryChars: 900, minimumSummaryExcerptChars: 24 });
+  const before = buildJevCompactionResult(input, { maxSummaryChars: 900, minimumSummaryExcerptChars: 24 });
+  const first = buildBasicCompactionResult(
+    {
+      attemptId: input.attemptId,
+      sourceDigest: input.sourceDigest,
+      createdAt: input.createdAt,
+      firstKeptEntryId: input.firstKeptEntryId,
+      tokensBefore: input.tokensBefore,
+      decisions: input.ruleSignalBatches.flatMap((ruleSignalBatch) => ruleSignalBatch.compaction.decisions),
+      scheduler: input.scheduler,
+    },
+    { maxSummaryChars: 900, minimumSummaryExcerptChars: 24 },
+  );
+  const second = buildBasicCompactionResult(
+    {
+      attemptId: input.attemptId,
+      sourceDigest: input.sourceDigest,
+      createdAt: input.createdAt,
+      firstKeptEntryId: input.firstKeptEntryId,
+      tokensBefore: input.tokensBefore,
+      decisions: input.ruleSignalBatches.flatMap((ruleSignalBatch) => ruleSignalBatch.compaction.decisions),
+      scheduler: input.scheduler,
+    },
+    { maxSummaryChars: 900, minimumSummaryExcerptChars: 24 },
+  );
 
+  assert.deepEqual(first, before, "basic preserves the established deterministic compaction fixture");
   assert.equal(first.summary, second.summary);
   assert.equal(first.details.summary.digest, second.details.summary.digest);
   assert.equal(first.firstKeptEntryId, "entry-kept");
@@ -87,7 +112,7 @@ test("structured compaction is chronological, bounded, deterministic, and audita
   assert.deepEqual(first.details.decisions.map((decision) => decision.sourceMessageIndex), [0, 1, 2, 3, 4]);
   assert.ok(first.details.summary.budgetTruncatedMessages > 0);
   assert.match(first.summary, /…\[truncated\]…/);
-  assert.equal(first.details.ruleSignalBatches.length, 1);
+  assert.equal(first.details.ruleSignalBatches.length, 0);
 
   assert.throws(
     () => buildJevCompactionResult(input, { maxSummaryChars: 50, minimumSummaryExcerptChars: 24 }),

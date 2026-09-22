@@ -5,12 +5,87 @@ export const DEFAULT_JEV_MODEL = "jev-1.13.0" as const;
 export const TYPESAFE_API_KEY_ENV = "TYPESAFE_API_KEY" as const;
 export const TYPESAFE_PROVIDER_ID = "typesafe" as const;
 
+/** Evidence lifecycle strategy; it remains inactive unless both Ladder flags are enabled. */
+export interface EvidenceOptions {
+  strategy: "off" | "ladder";
+}
+
+export type TriggerMode = "off" | "hint" | "auto";
+
+export interface CompactionConfig {
+  compaction: { strategy: "basic" | "ladder" };
+  trigger: { mode: TriggerMode };
+  evidence: EvidenceOptions;
+}
+
+export type TriggerDecision =
+  | { action: "none" }
+  | { action: "hint"; reason: string }
+  | { action: "compact" };
+
 export interface NormalizedSessionMessage {
   index: number;
   role: string;
   text: string;
   sourceDigest: string;
   redactionCount: number;
+}
+
+/** A redacted, bounded source fragment retained only after Pi confirms compaction. */
+export interface CorpusChunk {
+  schema: "a4s.corpus-chunk/v1";
+  id: string;
+  digest: string;
+  role: string;
+  position: number;
+  text: string;
+  provenance: {
+    branchId: string;
+    compactionAttemptId: string;
+    sourceDigest: string;
+  };
+}
+
+/** Idempotency marker for one successful compaction corpus publication. */
+export interface CorpusReceipt {
+  schema: "a4s.corpus-receipt/v1";
+  idempotencyKey: string;
+  branchId: string;
+  compactionAttemptId: string;
+  chunkIds: string[];
+}
+
+/** Success marker binding one Evidence run to its validated corpus projection. */
+export interface EvidenceReceipt {
+  schema: "a4s.evidence-receipt/v1";
+  idempotencyKey: string;
+  compactionAttemptId: string;
+  queryDigest: string;
+  corpusDigest: string;
+  sourceSpans: Array<SourceSpan & { sourceMessageIndex: number; sourceDigest: string }>;
+  batchDigests: string[];
+  signalIds: string[];
+}
+
+/** Request-time visibility selected for one sanitized corpus chunk. */
+export type VisibilityLevel = "hide" | "short" | "long" | "full";
+
+/** Half-open source offsets into the immutable CorpusChunk.text value. */
+export interface SourceSpan {
+  chunkId: string;
+  start: number;
+  end: number;
+}
+
+/** A recalculable query/corpus-bound view; it never mutates durable corpus entries. */
+export interface VisibilityProjection {
+  queryDigest: string;
+  corpusDigest: string;
+  selections: readonly {
+    chunkId: string;
+    level: VisibilityLevel;
+    spans: readonly SourceSpan[];
+  }[];
 }
 
 export interface FittedStateMessage {

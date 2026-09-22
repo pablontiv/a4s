@@ -3,9 +3,13 @@ import test from "node:test";
 import {
   createRetroProposal,
   extractCurrentModelJson,
+  extractRuleSignals,
   observeCompactionRules,
   parseRuleCandidatesJson,
   RetroValidationError,
+  selectEvidenceContext,
+  stableDigest,
+  stageCorpus,
   type CurrentModelGateway,
   type JevClient,
   type JevQuestion,
@@ -19,6 +23,9 @@ class ValidJev implements JevClient {
   async evaluate(request: JevRequest): Promise<unknown> {
     this.requests.push(request);
     return validJevResponse(request, (id: string, question: JevQuestion) => {
+      if (id.startsWith("ladder_visibility_") && question.type === "choice") {
+        return choiceAnswer(Object.keys(question.criteria), "full");
+      }
       if (id.startsWith("retro_evidence_relation_") && question.type === "choice") {
         return choiceAnswer(Object.keys(question.criteria), "direct");
       }
@@ -176,6 +183,62 @@ test("retro synthesis uses the supplied current model then one stage-2 Jev evalu
   assert.equal(proposal.candidates[0]?.evaluation.authority, "repository_policy");
   assert.equal(proposal.candidates[0]?.evaluation.ruleClass, "workflow");
   assert.equal(proposal.candidates[0]?.evaluation.disposition, "propose");
+});
+
+test("retro consumes Evidence-selected signals as review-only proposal input", async () => {
+  const chunks = stageCorpus([{
+    index: 0,
+    role: "user",
+    text: "Always preserve deterministic validation evidence.",
+    sourceDigest: stableDigest({ source: "evidence-retro" }),
+    redactionCount: 0,
+  }]);
+  const jev = new ValidJev();
+  const projection = await selectEvidenceContext(chunks, jev);
+  const extracted = await extractRuleSignals({
+    projection,
+    corpus: chunks,
+    jev,
+    compactionAttemptId: stableDigest({ attempt: "evidence-retro" }),
+    observedAt: "2026-09-22T13:15:00.000Z",
+    reason: "manual",
+    willRetry: false,
+  });
+  const sourceRef = extracted.signals[0]?.id;
+  assert.ok(sourceRef);
+  const proposal = await createRetroProposal(
+    extracted.batches,
+    {
+      model: { provider: "fake-provider", id: "current-model" },
+      createdAt: "2026-09-22T13:16:00.000Z",
+    },
+    {
+      async complete(): Promise<unknown> {
+        return {
+          stopReason: "stop",
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              candidates: [{
+                scope: { kind: "project", target: null },
+                trigger: "before completion",
+                obligation: "Preserve deterministic validation evidence.",
+                exceptions: [],
+                source_refs: [sourceRef],
+                proposed_check: { kind: "manual", description: "Review the evidence.", command: null },
+              }],
+            }),
+          }],
+        };
+      },
+    },
+    jev,
+    new AbortController().signal,
+  );
+
+  assert.equal(proposal.schema, "a4s.rule-proposal-batch/v1");
+  assert.equal(proposal.candidates[0]?.evaluation.disposition, "propose");
+  assert.equal("active" in proposal, false);
 });
 
 test("retro rejects an oversized stage-2 state before calling Jev", async () => {

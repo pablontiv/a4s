@@ -1,4 +1,183 @@
+import type {
+  AgentSettledEvent,
+  ContextEventResult,
+  ContextWithSystemEvent,
+  ExtensionContext,
+  ExtensionHandler,
+  SessionBeforeCompactEvent,
+  SessionBeforeCompactResult,
+} from "@earendil-works/pi-coding-agent";
 import type { JevAnswer, JevQuestion, JevRequest } from "../src/types.ts";
+
+type Pi087Context = Pick<ExtensionContext, "compact">;
+type Pi087Handler<Event, Result = undefined> = (
+  event: Parameters<ExtensionHandler<Event, Result>>[0],
+  ctx: Pi087Context,
+) => ReturnType<ExtensionHandler<Event, Result>>;
+type Pi087OnArgs =
+  | [event: "agent_settled", handler: Pi087Handler<AgentSettledEvent>]
+  | [
+    event: "session_before_compact",
+    handler: Pi087Handler<SessionBeforeCompactEvent, SessionBeforeCompactResult>,
+  ]
+  | [
+    event: "context_with_system",
+    handler: Pi087Handler<ContextWithSystemEvent, ContextEventResult>,
+  ];
+type Pi087EmitArgs =
+  | [event: "agent_settled"]
+  | [event: "session_before_compact"]
+  | [event: "context_with_system", payload: Pick<ContextWithSystemEvent, "messages">];
+
+interface Pi087FakeAPI {
+  on(event: "agent_settled", handler: Pi087Handler<AgentSettledEvent>): () => void;
+  on(
+    event: "session_before_compact",
+    handler: Pi087Handler<SessionBeforeCompactEvent, SessionBeforeCompactResult>,
+  ): () => void;
+  on(
+    event: "context_with_system",
+    handler: Pi087Handler<ContextWithSystemEvent, ContextEventResult>,
+  ): () => void;
+}
+
+export interface Pi087Fake {
+  readonly pi: Pi087FakeAPI;
+  beforeCompactCalls: number;
+  compactCalls: number;
+  compactCallsWhileSettling: number;
+  nativeFallbackCalls: number;
+  emit(event: "agent_settled"): Promise<void>;
+  emit(event: "session_before_compact"): Promise<SessionBeforeCompactResult | undefined>;
+  emit(
+    event: "context_with_system",
+    payload: Pick<ContextWithSystemEvent, "messages">,
+  ): Promise<ContextEventResult>;
+}
+
+/**
+ * Minimal executable model of the Pi 0.87 lifecycle boundary used by the
+ * contract tests. `ctx.compact()` called from `agent_settled` is queued until
+ * every settled hook has returned, then it traverses `session_before_compact`.
+ */
+export function createPi087Fake(): Pi087Fake {
+  const settledHandlers: Pi087Handler<AgentSettledEvent>[] = [];
+  const beforeCompactHandlers: Pi087Handler<SessionBeforeCompactEvent, SessionBeforeCompactResult>[] = [];
+  const contextWithSystemHandlers: Pi087Handler<ContextWithSystemEvent, ContextEventResult>[] = [];
+  const runtime = {
+    beforeCompactCalls: 0,
+    compactCalls: 0,
+    compactCallsWhileSettling: 0,
+    nativeFallbackCalls: 0,
+  };
+  let settling = false;
+  const queuedCompactions: Array<() => Promise<void>> = [];
+
+  function on(...args: Pi087OnArgs): () => void {
+    const [event, handler] = args;
+    switch (event) {
+      case "agent_settled":
+        settledHandlers.push(handler);
+        return removeHandler(settledHandlers, handler);
+      case "session_before_compact":
+        beforeCompactHandlers.push(handler);
+        return removeHandler(beforeCompactHandlers, handler);
+      case "context_with_system":
+        contextWithSystemHandlers.push(handler);
+        return removeHandler(contextWithSystemHandlers, handler);
+    }
+  }
+  const pi: Pi087FakeAPI = { on };
+
+  async function emit(event: "agent_settled"): Promise<void>;
+  async function emit(event: "session_before_compact"): Promise<SessionBeforeCompactResult | undefined>;
+  async function emit(
+    event: "context_with_system",
+    payload: Pick<ContextWithSystemEvent, "messages">,
+  ): Promise<ContextEventResult>;
+  async function emit(...args: Pi087EmitArgs): Promise<void | SessionBeforeCompactResult | undefined | ContextEventResult> {
+    const [event] = args;
+    switch (event) {
+      case "agent_settled":
+        settling = true;
+        try {
+          for (const handler of settledHandlers) await handler({ type: "agent_settled" }, context);
+        } finally {
+          settling = false;
+        }
+        while (queuedCompactions.length > 0) {
+          const next = queuedCompactions.shift();
+          if (next) await next();
+        }
+        return;
+      case "session_before_compact": {
+        const emitted = createSessionBeforeCompactEvent();
+        for (const handler of beforeCompactHandlers) {
+          const result = await handler(emitted, context);
+          if (result !== undefined) return result;
+        }
+        return undefined;
+      }
+      case "context_with_system": {
+        const [, payload] = args;
+        const emitted: ContextWithSystemEvent = { type: "context_with_system", messages: payload.messages };
+        for (const handler of contextWithSystemHandlers) {
+          try {
+            const result = await handler(emitted, context);
+            if (result !== undefined) return result;
+          } catch {
+            // Pi preserves the supplied context when an optional projection fails.
+            return { messages: emitted.messages };
+          }
+        }
+        return { messages: emitted.messages };
+      }
+    }
+  }
+
+  const runCompaction = async (): Promise<void> => {
+    runtime.compactCalls += 1;
+    const result = await emit("session_before_compact");
+    if (result === undefined) runtime.nativeFallbackCalls += 1;
+  };
+  const context: Pi087Context = {
+    compact() {
+      if (settling) {
+        queuedCompactions.push(runCompaction);
+        return;
+      }
+      runtime.compactCallsWhileSettling += 1;
+      void runCompaction();
+    },
+  };
+  return Object.assign(runtime, { pi, emit });
+}
+
+function createSessionBeforeCompactEvent(): SessionBeforeCompactEvent {
+  return {
+    type: "session_before_compact",
+    preparation: {
+      firstKeptEntryId: "entry-1",
+      messagesToSummarize: [],
+      turnPrefixMessages: [],
+      isSplitTurn: false,
+      tokensBefore: 0,
+      fileOps: { read: new Set(), written: new Set(), edited: new Set() },
+      settings: { enabled: true, reserveTokens: 0, keepRecentTokens: 0 },
+    },
+    branchEntries: [],
+    reason: "manual",
+    willRetry: false,
+    signal: new AbortController().signal,
+  };
+}
+
+function removeHandler<Handler>(handlers: Handler[], handler: Handler): () => void {
+  return () => {
+    const index = handlers.indexOf(handler);
+    if (index >= 0) handlers.splice(index, 1);
+  };
+}
 
 export function validJevResponse(
   request: JevRequest,
