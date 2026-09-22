@@ -2,12 +2,18 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { registerPiRuleCompiler } from "./extension.ts";
 
 export {
+  assertCompleteCoverage,
+  buildBasicCompactionResult,
+  type BasicCompactionInput,
+} from "./compaction-core.ts";
+export {
   buildJevCompactionResult,
   CompactionBuildError,
   recoverRuleSignalBatchesFromDetails,
   type BuildJevCompactionInput,
   type BuildJevCompactionOptions,
 } from "./compaction.ts";
+export { disabledEvidencePipeline, type EvidencePipeline } from "./evidence-pipeline.ts";
 export { runWithDeadline, DeadlineExceededError, OperationAbortedError } from "./deadline.ts";
 export { stableDigest, stableJson, isStableDigest } from "./digest.ts";
 export {

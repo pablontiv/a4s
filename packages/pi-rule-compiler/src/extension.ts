@@ -6,14 +6,14 @@ import type {
 import type { AuthResult } from "@earendil-works/pi-ai";
 import { createProvider } from "@earendil-works/pi-ai";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
+import { buildBasicCompactionResult } from "./compaction-core.ts";
 import {
-  buildJevCompactionResult,
   CompactionBuildError,
-  recoverRuleSignalBatchesFromDetails,
   type BuildJevCompactionOptions,
 } from "./compaction.ts";
+import { disabledEvidencePipeline } from "./evidence-pipeline.ts";
 import { DeadlineExceededError, OperationAbortedError, runWithDeadline } from "./deadline.ts";
-import { stableDigest } from "./digest.ts";
+import { isStableDigest, stableDigest } from "./digest.ts";
 import { HttpJevClient, JevApiError, JevUnavailableError, JevValidationError } from "./jev.ts";
 import {
   observePreparedCompactionRules,
@@ -38,15 +38,13 @@ import {
   collectRuleProposalBatches,
   collectRuleProposalReceipts,
   collectRuleSignalBatches,
-  reconstructObservedSourceDigests,
-  RETRO_PENDING_ENTRY_TYPE,
   RULE_ACCEPTANCE_ENTRY_TYPE,
   RULE_PROPOSAL_ENTRY_TYPE,
-  RULE_SIGNAL_ENTRY_TYPE,
 } from "./storage.ts";
 import type {
   JevClient,
   JevCompactionResult,
+  EvidenceOptions,
   RetroPendingMarker,
   RuleAcceptanceReceipt,
   RuleSignalBatch,
@@ -63,6 +61,7 @@ export interface PiRuleCompilerOptions {
   observation?: RuleObservationOptions;
   scheduling?: JevRequestSchedulerOptions;
   compaction?: BuildJevCompactionOptions;
+  evidence?: EvidenceOptions;
   retro?: RetroOptions;
   now?: () => Date;
 }
@@ -145,10 +144,9 @@ export function registerPiRuleCompiler(pi: ExtensionAPI, options: PiRuleCompiler
     return new HttpJevClient({ apiKey: (await resolveTypesafeApiKey(ctx)) ?? "" });
   };
 
-  pi.on("session_start", (_event, ctx) => {
+  pi.on("session_start", () => {
     pendingByAttempt.clear();
     retroInFlight.clear();
-    reconcileCompactionArtifacts(pi, ctx, ctx.sessionManager.getBranch());
   });
 
   pi.on("session_before_compact", async (event, ctx) => {
@@ -171,54 +169,17 @@ export function registerPiRuleCompiler(pi: ExtensionAPI, options: PiRuleCompiler
   });
 
   pi.on("session_compact", async (event, ctx) => {
-    const recovered = recoverRuleSignalBatchesFromDetails(event.compactionEntry.details);
-    if (!recovered) return;
-    pendingByAttempt.delete(recovered.attemptId);
-    if (!persistSignalBatches(pi, ctx, recovered.batches)) return;
-
-    const signalCount = recovered.batches.reduce((total, batch) => total + batch.signals.length, 0);
-    const marker = retroMarkerForBatches(
-      recovered.attemptId,
-      recovered.batches,
-      event.reason,
-      event.willRetry,
-    );
-    const pendingStored = signalCount === 0 || ensureRetroPendingMarker(pi, ctx, marker, recovered.batches);
-    safeNotifyText(
-      ctx,
-      `Jev compaction succeeded; stored ${signalCount} RuleSignal(s) from ${recovered.batches.length} window(s).`,
-      "info",
-    );
-    if (!pendingStored || signalCount === 0 || event.willRetry) return;
-
-    await drainPendingRetro(
-      pi,
-      ctx,
-      createJevClient,
-      retroTimeoutMs,
-      now,
-      options.retro,
-      options.scheduling,
-      retroInFlight,
-      recovered.attemptId,
-    );
+    const attemptId = readCompactionAttemptId(event.compactionEntry.details);
+    const pending = attemptId ? pendingByAttempt.get(attemptId) : undefined;
+    if (attemptId) pendingByAttempt.delete(attemptId);
+    const evidenceStrategy = options.evidence?.strategy ?? "off";
+    if (evidenceStrategy === "off" && pending) {
+      await disabledEvidencePipeline.afterCompaction(pending.result, ctx);
+    }
   });
 
   pi.on("session_compact_failed", () => {
     pendingByAttempt.clear();
-  });
-
-  pi.on("agent_settled", async (_event, ctx) => {
-    await drainPendingRetro(
-      pi,
-      ctx,
-      createJevClient,
-      retroTimeoutMs,
-      now,
-      options.retro,
-      options.scheduling,
-      retroInFlight,
-    );
   });
 
   pi.on("session_shutdown", () => {
@@ -487,16 +448,15 @@ async function handleCompaction(
       timeoutMs,
       event.signal,
     );
-    const result = buildJevCompactionResult(
+    const result = buildBasicCompactionResult(
       {
         attemptId,
         sourceDigest: prepared.sourceDigest,
         createdAt: observedAt,
         firstKeptEntryId: event.preparation.firstKeptEntryId,
         tokensBefore: event.preparation.tokensBefore,
-        messageCount: prepared.messages.length,
+        decisions: batches.flatMap((batch) => batch.compaction.decisions),
         scheduler: jevClient.getStats(),
-        ruleSignalBatches: batches,
       },
       compactionOptions,
     );
@@ -508,50 +468,10 @@ async function handleCompaction(
   }
 }
 
-function reconcileCompactionArtifacts(
-  pi: ExtensionAPI,
-  ctx: ExtensionContext,
-  entries: readonly unknown[],
-): void {
-  for (const entry of entries) {
-    if (!entry || typeof entry !== "object" || (entry as { type?: unknown }).type !== "compaction") continue;
-    const recovered = recoverRuleSignalBatchesFromDetails((entry as { details?: unknown }).details);
-    if (!recovered || !persistSignalBatches(pi, ctx, recovered.batches)) continue;
-    const signalCount = recovered.batches.reduce((total, batch) => total + batch.signals.length, 0);
-    if (signalCount === 0) continue;
-    const first = recovered.batches[0];
-    if (!first) continue;
-    ensureRetroPendingMarker(
-      pi,
-      ctx,
-      retroMarkerForBatches(
-        recovered.attemptId,
-        recovered.batches,
-        first.provenance.compactionReason,
-        first.provenance.willRetry,
-      ),
-      recovered.batches,
-    );
-  }
-}
-
-function persistSignalBatches(
-  pi: ExtensionAPI,
-  ctx: ExtensionContext,
-  batches: readonly RuleSignalBatch[],
-): boolean {
-  const existing = reconstructObservedSourceDigests(ctx.sessionManager.getBranch());
-  for (const batch of batches) {
-    if (existing.has(batch.sourceDigest)) continue;
-    try {
-      pi.appendEntry(RULE_SIGNAL_ENTRY_TYPE, batch);
-      existing.add(batch.sourceDigest);
-    } catch {
-      safeNotify(ctx, "signals", "storage_failure");
-      return false;
-    }
-  }
-  return true;
+function readCompactionAttemptId(value: unknown): string | undefined {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const attemptId = (value as { attemptId?: unknown }).attemptId;
+  return typeof attemptId === "string" && isStableDigest(attemptId) ? attemptId : undefined;
 }
 
 function retroMarkerForBatches(
@@ -571,27 +491,6 @@ function retroMarkerForBatches(
     compactionReason: reason,
     deferredUntilAgentSettled: willRetry,
   };
-}
-
-function ensureRetroPendingMarker(
-  pi: ExtensionAPI,
-  ctx: ExtensionContext,
-  marker: RetroPendingMarker,
-  batches: readonly RuleSignalBatch[],
-): boolean {
-  const entries = ctx.sessionManager.getBranch();
-  const coveredBatchDigests = new Set(
-    collectRuleProposalReceipts(entries).flatMap((receipt) => receipt.sourceBatchDigests),
-  );
-  if (batches.every((batch) => coveredBatchDigests.has(stableDigest(batch)))) return true;
-  if (collectRetroPendingMarkers(entries).some((existing) => existing.attemptId === marker.attemptId)) return true;
-  try {
-    pi.appendEntry(RETRO_PENDING_ENTRY_TYPE, marker);
-    return true;
-  } catch {
-    safeNotify(ctx, "retro", "storage_failure");
-    return false;
-  }
 }
 
 function collectPendingRetroWork(

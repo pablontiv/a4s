@@ -5,8 +5,6 @@ import {
   createTypesafeAuthResolver,
   JevApiError,
   observeCompactionRules,
-  parseRetroPendingMarker,
-  parseRuleProposalReceipt,
   registerPiRuleCompiler,
   RETRO_PENDING_ENTRY_TYPE,
   RULE_PROPOSAL_ENTRY_TYPE,
@@ -242,11 +240,12 @@ function storedProposalEntry(): StoredEntry {
   };
 }
 
-test("before hook always returns Jev custom compaction and signals persist only after success", async () => {
+test("basic does not publish rule artifacts when Evidence is off", async () => {
   const jev = new ValidFakeJev();
   const fake = createFakePi();
   registerPiRuleCompiler(fake.pi, {
     jevClient: jev,
+    evidence: { strategy: "off" },
     now: () => new Date("2026-09-18T12:00:00.000Z"),
   });
   const { context, notifications } = createContext(fake.entries);
@@ -282,94 +281,43 @@ test("before hook always returns Jev custom compaction and signals persist only 
     { type: "session_compact", compactionEntry, fromExtension: true, reason: "threshold", willRetry: false },
     context,
   );
-  assert.equal(fake.entries.filter((entry) => entry.customType === RULE_SIGNAL_ENTRY_TYPE).length, 1);
-  assert.ok(notifications.some((notification) => /compaction succeeded/.test(notification.message)));
+  assert.equal(fake.entries.some((entry) => entry.customType?.includes("rule")), false);
+  assert.equal(notifications.some((notification) => /compaction succeeded/.test(notification.message)), false);
 
   await fake.handlers.get("session_compact")?.(
     { type: "session_compact", compactionEntry, fromExtension: true, reason: "threshold", willRetry: false },
     context,
   );
-  assert.equal(fake.entries.filter((entry) => entry.customType === RULE_SIGNAL_ENTRY_TYPE).length, 1);
+  assert.equal(fake.entries.some((entry) => entry.customType?.includes("rule")), false);
 });
 
-test("manual and threshold success run retro automatically and replay is idempotent", async (t) => {
-  for (const reason of ["manual", "threshold"] as const) {
+test("basic success never publishes RuleSignals or starts retro", async (t) => {
+  for (const reason of ["manual", "threshold", "overflow"] as const) {
     await t.test(reason, async () => {
-      const jev = new ValidFakeJev();
       const fake = createFakePi();
-      registerPiRuleCompiler(fake.pi, {
-        jevClient: jev,
-        now: () => new Date("2026-09-18T12:05:00.000Z"),
-      });
+      registerPiRuleCompiler(fake.pi, { jevClient: new ValidFakeJev() });
       const runtime = createRetroCapableContext(fake.entries);
-      const event = compactionEvent(undefined, { reason });
       const result = requireCompactionResult(
-        await fake.handlers.get("session_before_compact")?.(event, runtime.context),
+        await fake.handlers.get("session_before_compact")?.(
+          compactionEvent(undefined, { reason, willRetry: reason === "overflow" }),
+          runtime.context,
+        ),
       );
       const compactionEntry = appendSuccessfulCompaction(fake, result);
-      const successEvent = {
-        type: "session_compact",
-        compactionEntry,
-        fromExtension: true,
-        reason,
-        willRetry: false,
-      };
-
-      await fake.handlers.get("session_compact")?.(successEvent, runtime.context);
-      assert.equal(fake.entries.filter((entry) => entry.customType === RULE_SIGNAL_ENTRY_TYPE).length, 1);
-      assert.equal(fake.entries.filter((entry) => entry.customType === RETRO_PENDING_ENTRY_TYPE).length, 1);
-      assert.equal(fake.entries.filter((entry) => entry.customType === RULE_PROPOSAL_ENTRY_TYPE).length, 1);
-      assert.equal(runtime.modelCalls(), 1);
-      const marker = parseRetroPendingMarker(
-        fake.entries.find((entry) => entry.customType === RETRO_PENDING_ENTRY_TYPE)?.data,
+      await fake.handlers.get("session_compact")?.(
+        {
+          type: "session_compact",
+          compactionEntry,
+          fromExtension: true,
+          reason,
+          willRetry: reason === "overflow",
+        },
+        runtime.context,
       );
-      assert.equal(marker.compactionReason, reason);
-      assert.equal(marker.deferredUntilAgentSettled, false);
-      const receipt = parseRuleProposalReceipt(
-        fake.entries.find((entry) => entry.customType === RULE_PROPOSAL_ENTRY_TYPE)?.data,
-      );
-      assert.deepEqual(receipt.sourceCompactionAttemptIds, [result.details.attemptId]);
-
-      await fake.handlers.get("session_compact")?.(successEvent, runtime.context);
-      assert.equal(fake.entries.filter((entry) => entry.customType === RULE_SIGNAL_ENTRY_TYPE).length, 1);
-      assert.equal(fake.entries.filter((entry) => entry.customType === RETRO_PENDING_ENTRY_TYPE).length, 1);
-      assert.equal(fake.entries.filter((entry) => entry.customType === RULE_PROPOSAL_ENTRY_TYPE).length, 1);
-      assert.equal(runtime.modelCalls(), 1);
+      assert.equal(fake.entries.some((entry) => entry.customType?.includes("rule")), false);
+      assert.equal(runtime.modelCalls(), 0);
     });
   }
-});
-
-test("overflow success defers retro until agent_settled", async () => {
-  const fake = createFakePi();
-  registerPiRuleCompiler(fake.pi, {
-    jevClient: new ValidFakeJev(),
-    now: () => new Date("2026-09-18T12:10:00.000Z"),
-  });
-  const runtime = createRetroCapableContext(fake.entries);
-  const event = compactionEvent(undefined, { reason: "overflow", willRetry: true });
-  const result = requireCompactionResult(
-    await fake.handlers.get("session_before_compact")?.(event, runtime.context),
-  );
-  const compactionEntry = appendSuccessfulCompaction(fake, result);
-
-  await fake.handlers.get("session_compact")?.(
-    { type: "session_compact", compactionEntry, fromExtension: true, reason: "overflow", willRetry: true },
-    runtime.context,
-  );
-  assert.equal(runtime.modelCalls(), 0);
-  assert.equal(fake.entries.filter((entry) => entry.customType === RETRO_PENDING_ENTRY_TYPE).length, 1);
-  assert.equal(fake.entries.filter((entry) => entry.customType === RULE_PROPOSAL_ENTRY_TYPE).length, 0);
-  const marker = parseRetroPendingMarker(
-    fake.entries.find((entry) => entry.customType === RETRO_PENDING_ENTRY_TYPE)?.data,
-  );
-  assert.equal(marker.compactionReason, "overflow");
-  assert.equal(marker.deferredUntilAgentSettled, true);
-
-  await fake.handlers.get("agent_settled")?.({ type: "agent_settled" }, runtime.context);
-  assert.equal(runtime.modelCalls(), 1);
-  assert.equal(fake.entries.filter((entry) => entry.customType === RULE_PROPOSAL_ENTRY_TYPE).length, 1);
-  await fake.handlers.get("agent_settled")?.({ type: "agent_settled" }, runtime.context);
-  assert.equal(runtime.modelCalls(), 1);
 });
 
 test("missing key, timeout, malformed response, API failure, and unfittable state cancel without native fallback", async (t) => {
@@ -518,7 +466,7 @@ test("failed compaction clears pending work and never publishes signals", async 
   assert.ok(jev.calls > callsBeforeFailure, "cleared pending work must be re-evaluated on retry");
 });
 
-test("large sessions evaluate every message once, cache pending work, and recover signals idempotently", async () => {
+test("large basic sessions evaluate every message once, cache pending work, and retain no RuleSignals", async () => {
   const jev = new ValidFakeJev();
   const fake = createFakePi();
   registerPiRuleCompiler(fake.pi, {
@@ -538,7 +486,7 @@ test("large sessions evaluate every message once, cache pending work, and recove
   );
   assert.equal(actionQuestionIds.length, 70);
   assert.equal(new Set(actionQuestionIds).size, 70);
-  assert.equal(first.details.ruleSignalBatches.length, 3);
+  assert.equal(first.details.ruleSignalBatches.length, 0);
   assert.equal(first.details.decisions.length, 70);
   const calls = jev.calls;
 
@@ -551,36 +499,32 @@ test("large sessions evaluate every message once, cache pending work, and recove
     { type: "session_compact", compactionEntry, fromExtension: true, reason: "threshold", willRetry: false },
     context,
   );
-  assert.equal(fake.entries.filter((entry) => entry.customType === RULE_SIGNAL_ENTRY_TYPE).length, 3);
+  assert.equal(fake.entries.filter((entry) => entry.customType === RULE_SIGNAL_ENTRY_TYPE).length, 0);
 
   const reloaded = createFakePi([compactionEntry]);
   registerPiRuleCompiler(reloaded.pi, { jevClient: new ValidFakeJev() });
   const reloadedContext = createContext(reloaded.entries).context;
   await reloaded.handlers.get("session_start")?.({ type: "session_start", reason: "reload" }, reloadedContext);
-  assert.equal(reloaded.entries.filter((entry) => entry.customType === RULE_SIGNAL_ENTRY_TYPE).length, 3);
+  assert.equal(reloaded.entries.filter((entry) => entry.customType === RULE_SIGNAL_ENTRY_TYPE).length, 0);
   await reloaded.handlers.get("session_start")?.({ type: "session_start", reason: "reload" }, reloadedContext);
-  assert.equal(reloaded.entries.filter((entry) => entry.customType === RULE_SIGNAL_ENTRY_TYPE).length, 3);
+  assert.equal(reloaded.entries.filter((entry) => entry.customType === RULE_SIGNAL_ENTRY_TYPE).length, 0);
 });
 
-test("retro failure preserves pending work and /retro-rules retries idempotently", async () => {
-  const fake = createFakePi();
+test("/retro-rules preserves manually stored evidence after failure and retries idempotently", async () => {
+  const batch = await batchFor(
+    [{ role: "user", content: "Always preserve deterministic validation evidence." }],
+    new ValidFakeJev(),
+    "retry",
+  );
+  const fake = createFakePi([asSignalEntry(batch)]);
   registerPiRuleCompiler(fake.pi, {
     jevClient: new ValidFakeJev(),
     now: () => new Date("2026-09-18T13:30:00.000Z"),
   });
-  const failing = createRetroCapableContext(fake.entries, { failModel: true });
-  const event = compactionEvent();
-  const result = requireCompactionResult(
-    await fake.handlers.get("session_before_compact")?.(event, failing.context),
-  );
-  const compactionEntry = appendSuccessfulCompaction(fake, result);
-  await fake.handlers.get("session_compact")?.(
-    { type: "session_compact", compactionEntry, fromExtension: true, reason: "threshold", willRetry: false },
-    failing.context,
-  );
 
+  const failing = createRetroCapableContext(fake.entries, { failModel: true });
+  await fake.commands.get("retro-rules")?.("", failing.context);
   assert.equal(fake.entries.filter((entry) => entry.customType === RULE_SIGNAL_ENTRY_TYPE).length, 1);
-  assert.equal(fake.entries.filter((entry) => entry.customType === RETRO_PENDING_ENTRY_TYPE).length, 1);
   assert.equal(fake.entries.filter((entry) => entry.customType === RULE_PROPOSAL_ENTRY_TYPE).length, 0);
 
   const recovered = createRetroCapableContext(fake.entries);
@@ -590,38 +534,6 @@ test("retro failure preserves pending work and /retro-rules retries idempotently
   await fake.commands.get("retro-rules")?.("", recovered.context);
   assert.equal(fake.entries.filter((entry) => entry.customType === RULE_PROPOSAL_ENTRY_TYPE).length, 1);
   assert.equal(recovered.modelCalls(), 1);
-});
-
-test("reload recovers signals and pending retro without duplicate proposals", async () => {
-  const source = createFakePi();
-  registerPiRuleCompiler(source.pi, {
-    jevClient: new ValidFakeJev(),
-    now: () => new Date("2026-09-18T13:40:00.000Z"),
-  });
-  const sourceContext = createContext(source.entries).context;
-  const result = requireCompactionResult(
-    await source.handlers.get("session_before_compact")?.(compactionEvent(), sourceContext),
-  );
-  const compactionEntry = { type: "compaction", details: result.details };
-
-  const reloaded = createFakePi([compactionEntry]);
-  registerPiRuleCompiler(reloaded.pi, {
-    jevClient: new ValidFakeJev(),
-    now: () => new Date("2026-09-18T13:41:00.000Z"),
-  });
-  const runtime = createRetroCapableContext(reloaded.entries);
-  await reloaded.handlers.get("session_start")?.({ type: "session_start", reason: "reload" }, runtime.context);
-  assert.equal(reloaded.entries.filter((entry) => entry.customType === RULE_SIGNAL_ENTRY_TYPE).length, 1);
-  assert.equal(reloaded.entries.filter((entry) => entry.customType === RETRO_PENDING_ENTRY_TYPE).length, 1);
-  await reloaded.handlers.get("agent_settled")?.({ type: "agent_settled" }, runtime.context);
-  assert.equal(reloaded.entries.filter((entry) => entry.customType === RULE_PROPOSAL_ENTRY_TYPE).length, 1);
-
-  await reloaded.handlers.get("session_start")?.({ type: "session_start", reason: "reload" }, runtime.context);
-  await reloaded.handlers.get("agent_settled")?.({ type: "agent_settled" }, runtime.context);
-  assert.equal(reloaded.entries.filter((entry) => entry.customType === RULE_SIGNAL_ENTRY_TYPE).length, 1);
-  assert.equal(reloaded.entries.filter((entry) => entry.customType === RETRO_PENDING_ENTRY_TYPE).length, 1);
-  assert.equal(reloaded.entries.filter((entry) => entry.customType === RULE_PROPOSAL_ENTRY_TYPE).length, 1);
-  assert.equal(runtime.modelCalls(), 1);
 });
 
 test("/retro-rules remains current-model synthesis plus Jev stage 2 and review-only", async () => {
