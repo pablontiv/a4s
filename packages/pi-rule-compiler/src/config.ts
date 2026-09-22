@@ -3,7 +3,7 @@ import type { CompactionConfig } from "./types.ts";
 /** The safe, backwards-compatible configuration used when no valid opt-in is supplied. */
 export const BASIC_COMPACTION_CONFIG: CompactionConfig = {
   compaction: { strategy: "basic" },
-  trigger: { mode: "off" },
+  trigger: { mode: "hint" },
   evidence: { strategy: "off" },
 };
 

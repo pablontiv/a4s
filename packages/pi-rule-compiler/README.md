@@ -21,7 +21,7 @@ Private Pi extension that uses Jev as the semantic authority for `basic` compact
 ## Opt-in Trigger
 
 The default configuration remains `compaction.strategy=basic`,
-`trigger.mode=off`, and `evidence.strategy=off`. The extension API accepts
+`trigger.mode=hint`, and `evidence.strategy=off`. The extension API accepts
 flat `config` values for `compaction.strategy` (`basic|ladder`),
 `trigger.mode` (`off|hint|auto`), and `evidence.strategy` (`off|ladder`);
 invalid combinations preserve the prior safe configuration.
