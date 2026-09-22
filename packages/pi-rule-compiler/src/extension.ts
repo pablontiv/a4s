@@ -2,6 +2,7 @@ import type {
   ExtensionAPI,
   ExtensionContext,
   SessionBeforeCompactEvent,
+  SessionBeforeCompactResult,
 } from "@earendil-works/pi-coding-agent";
 import type { AuthResult } from "@earendil-works/pi-ai";
 import { createProvider } from "@earendil-works/pi-ai";
@@ -407,7 +408,7 @@ async function handleCompaction(
   observationOptions: RuleObservationOptions | undefined,
   schedulingOptions: JevRequestSchedulerOptions | undefined,
   compactionOptions: BuildJevCompactionOptions | undefined,
-): Promise<{ cancel: true } | { compaction: JevCompactionResult }> {
+): Promise<SessionBeforeCompactResult> {
   try {
     const preparation = {
       ...(event.preparation.previousSummary === undefined
