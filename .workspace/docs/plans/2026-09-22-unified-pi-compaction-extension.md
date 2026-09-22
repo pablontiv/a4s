@@ -342,7 +342,7 @@ git add packages/pi-rule-compiler
 git commit -m "feat: persist sanitized compaction corpus"
 ```
 
-ADR 0022 ya está `accepted` y gobierna esta entrega: Ladder es una estrategia opt-in de cuatro niveles, el trigger permanece como eje separado y `basic` conserva el contrato de ADR 0013. El ADR forma parte de la base documental de esta rama; no requiere una entrega ni una aprobación adicional.
+ADR 0025 ya está `accepted` y gobierna las entregas posteriores: Ladder será retrieval opt-in por query sobre el corpus sanitizado, el trigger permanece como eje separado y `basic` conserva el contrato de ADR 0013. Task 4 produce únicamente ese corpus recuperable; no activa Ladder ni Evidence.
 
 ### Task 5: Implementar Ladder por query con fallback seguro
 

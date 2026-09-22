@@ -1,6 +1,6 @@
 ---
 tipo: adr
-estado: proposed
+estado: accepted
 fecha: '2026-09-21'
 contexto: 'ADR 0023 confundió el runner E0 con la extensión de compaction: E0 lanza Pi real pero carga src/pi-extension/index.ts y no ejercita packages/pi-rule-compiler.'
 decision: 'Cada Bead ejecutará un E2E headless de su propio producto; para pi-rule-compiler será Pi RPC cargando packages/pi-rule-compiler/src/index.ts, con una sesión creada durante la prueba y proveedores reales configurados, sin JSONL prefabricado.'
