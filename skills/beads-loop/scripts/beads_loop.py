@@ -2,11 +2,12 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
+from typing import Literal, Sequence
 
 
 @dataclass(frozen=True)
@@ -154,12 +155,169 @@ def prime(cwd: Path) -> Envelope:
     return Envelope("ready", {"issues": ready})
 
 
-def main(argv: Sequence[str]) -> int:
-    if list(argv) != ["prime"]:
-        print("usage: beads_loop.py prime", file=sys.stderr)
-        return 2
+def _single_issue(payload: object, bead_id: str | None = None) -> dict[str, object] | None:
+    if not isinstance(payload, list) or len(payload) != 1 or not isinstance(payload[0], dict):
+        return None
+    issue = payload[0]
+    issue_id = issue.get("id")
+    if not isinstance(issue_id, str) or not issue_id:
+        return None
+    if bead_id is not None and issue_id != bead_id:
+        return None
+    return issue
 
-    envelope = prime(Path.cwd())
+
+def _resolved_actor(root: Path) -> str | None:
+    actor = os.environ.get("BEADS_ACTOR", "")
+    if actor:
+        return actor
+
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(root), "config", "--get", "user.name"],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+    except OSError:
+        result = None
+    if (
+        result is not None
+        and result.returncode == 0
+        and not result.stderr.strip()
+        and result.stdout.strip()
+    ):
+        return result.stdout.strip()
+
+    actor = os.environ.get("USER", "")
+    return actor or None
+
+
+def claim(cwd: Path) -> Envelope:
+    gate = prime(cwd)
+    if gate.kind != "ready":
+        return gate
+
+    root = repository_root(cwd)
+    if root is None:
+        return Envelope("claim_lost", {"reason": "repository_changed"})
+
+    try:
+        result = run_bd(root, ["ready", "--sort", "priority", "--claim", "--json"])
+        payload = parse_json_output(result)
+    except (OSError, ValueError):
+        return Envelope("claim_lost", {"reason": "claim_failed"})
+    if payload == []:
+        return Envelope("no_ready", {"issues": []})
+
+    claimed = _single_issue(payload)
+    if claimed is None:
+        return Envelope("claim_lost", {"reason": "unexpected_claim_output"})
+    bead_id = claimed["id"]
+
+    actor = _resolved_actor(root)
+    if actor is None:
+        return Envelope("claim_lost", {"reason": "actor_unresolved"})
+    try:
+        shown_result = run_bd(root, ["show", bead_id, "--json"])
+        shown = _single_issue(parse_json_output(shown_result), bead_id)
+    except (OSError, ValueError):
+        shown = None
+    if (
+        shown is None
+        or shown.get("status") != "in_progress"
+        or shown.get("assignee") != actor
+    ):
+        return Envelope("claim_lost", {"reason": "post_claim_mismatch"})
+    return Envelope("claimed", {"issue": shown})
+
+
+def _evidence_reference(root: Path, cwd: Path, evidence: Path) -> str | None:
+    try:
+        resolved_cwd = cwd.resolve(strict=True)
+        lexical_cwd = Path(os.path.abspath(cwd))
+        if evidence.is_absolute():
+            lexical_evidence = Path(os.path.abspath(evidence))
+            try:
+                candidate = resolved_cwd / lexical_evidence.relative_to(lexical_cwd)
+            except ValueError:
+                candidate = lexical_evidence
+        else:
+            candidate = resolved_cwd / evidence
+        lexical_candidate = Path(os.path.abspath(candidate))
+        relative_candidate = lexical_candidate.relative_to(resolved_cwd)
+    except (OSError, ValueError):
+        return None
+
+    current = resolved_cwd
+    for part in relative_candidate.parts:
+        current /= part
+        if current.is_symlink():
+            return None
+
+    try:
+        resolved_evidence = lexical_candidate.resolve(strict=True)
+        resolved_evidence.relative_to(resolved_cwd)
+        relative_evidence = resolved_evidence.relative_to(root)
+    except (OSError, ValueError):
+        return None
+    if not resolved_evidence.is_file():
+        return None
+    return relative_evidence.as_posix()
+
+
+def finalize(
+    cwd: Path,
+    bead_id: str,
+    verdict: Literal["pass", "fail"],
+    evidence: Path,
+) -> Envelope:
+    if not bead_id or bead_id != bead_id.strip() or bead_id.startswith("-"):
+        return Envelope("blocked", {"reason": "invalid_bead_id"})
+    if verdict not in ("pass", "fail"):
+        return Envelope("blocked", {"reason": "invalid_verdict"})
+
+    root = repository_root(cwd)
+    if root is None:
+        return Envelope("not_beads_repo", {})
+    evidence_reference = _evidence_reference(root, cwd, evidence)
+    if evidence_reference is None:
+        return Envelope("invalid_evidence", {})
+
+    if verdict == "pass":
+        command = ["close", bead_id, "--reason", f"evidence={evidence_reference}"]
+        expected_status = "closed"
+    else:
+        command = [
+            "update",
+            bead_id,
+            "--status",
+            "blocked",
+            "--append-notes",
+            f"FAIL evidence={evidence_reference}",
+        ]
+        expected_status = "blocked"
+
+    try:
+        mutation = run_bd(root, command)
+    except OSError:
+        return Envelope("blocked", {"reason": "finalize_failed"})
+    if mutation.returncode != 0:
+        return Envelope(
+            "blocked", {"reason": "finalize_failed", "exit_code": mutation.returncode}
+        )
+
+    try:
+        shown_result = run_bd(root, ["show", bead_id, "--json"])
+        shown = _single_issue(parse_json_output(shown_result), bead_id)
+    except (OSError, ValueError):
+        shown = None
+    if shown is None or shown.get("status") != expected_status:
+        return Envelope("blocked", {"reason": "final_state_mismatch"})
+    return Envelope("finalized", {"issue": shown, "evidence": evidence_reference})
+
+
+def _print_envelope(envelope: Envelope) -> None:
     print(
         json.dumps(
             {
@@ -171,6 +329,32 @@ def main(argv: Sequence[str]) -> int:
             sort_keys=True,
         )
     )
+
+
+def main(argv: Sequence[str]) -> int:
+    args = list(argv)
+    if args == ["prime"]:
+        envelope = prime(Path.cwd())
+    elif args == ["claim"]:
+        envelope = claim(Path.cwd())
+    elif (
+        len(args) == 7
+        and args[0] == "finalize"
+        and args[1] == "--bead"
+        and args[3] == "--verdict"
+        and args[4] in ("pass", "fail")
+        and args[5] == "--evidence"
+    ):
+        envelope = finalize(Path.cwd(), args[2], args[4], Path(args[6]))
+    else:
+        print(
+            "usage: beads_loop.py prime | claim | "
+            "finalize --bead ID --verdict pass|fail --evidence PATH",
+            file=sys.stderr,
+        )
+        return 2
+
+    _print_envelope(envelope)
     return 0
 
 
