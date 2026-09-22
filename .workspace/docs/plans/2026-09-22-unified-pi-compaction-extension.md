@@ -355,7 +355,9 @@ ADR 0025 ya está `accepted` y gobierna las entregas posteriores: Ladder será r
 - Modify: `packages/pi-rule-compiler/src/types.ts`
 - Modify: `packages/pi-rule-compiler/src/index.ts`
 - Modify: `packages/pi-rule-compiler/README.md`
+- Modify: `packages/pi-rule-compiler/scripts/run-headless-e2e.ts`
 - Test: `packages/pi-rule-compiler/test/ladder.test.ts`
+- Test: `packages/pi-rule-compiler/test/config.test.ts`
 - Test: `packages/pi-rule-compiler/test/extension.test.ts`
 
 **Interfaces:**
@@ -406,10 +408,14 @@ Run: `npm test --workspace @a4s/pi-rule-compiler -- --test-name-pattern "Ladder|
 
 Expected: PASS; `basic` no registra ni consume Ladder y los casos inválidos conservan el contexto normal.
 
-- [ ] **Step 5: Ejecutar gates completos y commit**
+- [ ] **Step 5: Exponer la configuración instalada y el E2E Ladder**
+
+Implementa ADR 0026 en el entrypoint mediante `A4S_PI_RULE_COMPILER_COMPACTION_STRATEGY`, `A4S_PI_RULE_COMPILER_TRIGGER_MODE` y `A4S_PI_RULE_COMPILER_EVIDENCE_STRATEGY`; proyecta sólo sus valores no secretos al config flat y deja valores ausentes o inválidos en `basic`. El runner E2E fija explícitamente `basic` o `ladder` por hijo, y el modo Ladder crea corpus, dispara una llamada posterior que atraviesa `context_with_system` y verifica un efecto Ladder observable sin imprimir contenido de sesión ni proveedores.
+
+- [ ] **Step 6: Ejecutar gates completos y commit**
 
 ```bash
-npm test && npm run typecheck && git diff --check
+npm test && npm run typecheck && npm run e2e --workspace @a4s/pi-rule-compiler -- --mode ladder && git diff --check
 git add packages/pi-rule-compiler
 git commit -m "feat: add query-aware context ladder"
 ```
