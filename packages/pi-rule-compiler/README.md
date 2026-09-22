@@ -113,6 +113,25 @@ npm run typecheck --workspace @a4s/pi-rule-compiler
 
 Tests use fake Jev and model gateways; they make no live TypeSafe calls.
 
+### Product E2E
+
+```sh
+npm run e2e --workspace @a4s/pi-rule-compiler
+```
+
+This is a headless product test, not an E0 or fixture run. It starts the
+configured `pi` binary in RPC mode with this extension, uses the configured Pi
+model and real TypeSafe/Jev provider, sends two short non-secret prompts,
+compacts, and verifies persisted corpus chunks plus their receipt across a Pi
+restart. It can therefore incur real provider cost and requires both providers
+to be configured. It neither prints RPC/session content nor supplies a model,
+credential, fake, replay, or fork input.
+
+Every run intentionally preserves its evidence directory under
+`artifacts/pi-rule-compiler-e2e/<timestamp>/`, including Pi's session artifact,
+on both success and failure. Inspect or remove that directory manually only
+when its retention is no longer needed.
+
 ## Design provenance
 
 Whole-session fitting, repeated-state batching, and the conservative token estimator follow demonstrated patterns from [`fast-jev-compaction`](https://github.com/tamaratran/fast-jev-compaction) (MIT). This package implements its own Pi-specific schemas, deterministic summary assembler, privacy boundary, success-gated signal lifecycle, and recovery contract.
