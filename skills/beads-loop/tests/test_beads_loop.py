@@ -16,6 +16,8 @@ from unittest.mock import patch
 
 SKILL_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = SKILL_ROOT / "scripts" / "beads_loop.py"
+SKILL = SKILL_ROOT / "SKILL.md"
+README = SKILL_ROOT.parents[1] / "README.md"
 
 
 def load_adapter() -> ModuleType:
@@ -107,9 +109,22 @@ class BeadsLoopTests(unittest.TestCase):
         )
         return root
 
-    def create_real_bead(self, repo: Path, title: str) -> str:
+    def create_real_bead(
+        self,
+        repo: Path,
+        title: str,
+        *,
+        priority: int = 1,
+        description: str | None = None,
+        acceptance: str | None = None,
+    ) -> str:
+        command = ["bd", "create", title, "--priority", str(priority), "--silent"]
+        if description is not None:
+            command.extend(["--description", description])
+        if acceptance is not None:
+            command.extend(["--acceptance", acceptance])
         result = subprocess.run(
-            ["bd", "create", title, "--priority", "1", "--silent"],
+            command,
             cwd=repo,
             text=True,
             capture_output=True,
@@ -117,6 +132,17 @@ class BeadsLoopTests(unittest.TestCase):
             timeout=60,
         )
         return result.stdout.strip()
+
+    def run_real_bd_json(self, repo: Path, args: list[str]) -> object:
+        result = subprocess.run(
+            ["bd", *args],
+            cwd=repo,
+            text=True,
+            capture_output=True,
+            check=True,
+            timeout=60,
+        )
+        return json.loads(result.stdout)
 
     def run_real_adapter(self, repo: Path, args: list[str]) -> dict[str, object]:
         environment = os.environ.copy()
@@ -133,6 +159,185 @@ class BeadsLoopTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stderr, "")
         return json.loads(result.stdout)
+
+    def run_scripted_loop(self, repo: Path) -> dict[str, object]:
+        claimed_ids: list[str] = []
+        observed_acceptance: list[str] = []
+        reports = repo / "reports" / "beads-loop"
+        reports.mkdir(parents=True)
+
+        while True:
+            gate = self.run_real_adapter(repo, ["prime"])
+            if gate["kind"] != "ready":
+                return {
+                    "terminal": gate["kind"],
+                    "terminal_envelope": gate,
+                    "claimed_ids": claimed_ids,
+                    "acceptance": observed_acceptance,
+                }
+
+            claimed = self.run_real_adapter(repo, ["claim"])
+            self.assertEqual(claimed["kind"], "claimed", claimed)
+            issue = claimed["details"]["issue"]
+            self.assertIsInstance(issue["description"], str)
+            self.assertIsInstance(issue["acceptance_criteria"], str)
+            bead_id = issue["id"]
+            claimed_ids.append(bead_id)
+            observed_acceptance.append(issue["acceptance_criteria"])
+
+            evidence = reports / f"iteration-{len(claimed_ids)}.md"
+            evidence.write_text(
+                "\n".join(
+                    (
+                        f"# Evidence for {bead_id}",
+                        "",
+                        f"Acceptance: {issue['acceptance_criteria']}",
+                        "Validation: git diff --check passed.",
+                        "",
+                    )
+                ),
+                encoding="utf-8",
+            )
+            validation = subprocess.run(
+                ["git", "diff", "--check"],
+                cwd=repo,
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=60,
+            )
+            self.assertEqual(validation.returncode, 0, validation.stderr)
+
+            finalized = self.run_real_adapter(
+                repo,
+                [
+                    "finalize",
+                    "--bead",
+                    bead_id,
+                    "--verdict",
+                    "pass",
+                    "--evidence",
+                    evidence.relative_to(repo).as_posix(),
+                ],
+            )
+            self.assertEqual(finalized["kind"], "finalized", finalized)
+            self.assertEqual(finalized["details"]["issue"]["id"], bead_id)
+            self.assertEqual(finalized["details"]["issue"]["status"], "closed")
+
+    def test_skill_documents_self_contained_current_repository_loop(self) -> None:
+        text = SKILL.read_text(encoding="utf-8")
+        required_in_order = (
+            "current Git repository",
+            "python3 scripts/beads_loop.py prime",
+            "python3 scripts/beads_loop.py claim",
+            "description and acceptance criteria",
+            "in-repository evidence report",
+            "applicable validation",
+            'python3 scripts/beads_loop.py finalize --bead "$BEAD_ID" --verdict pass --evidence "$EVIDENCE_PATH"',
+            'python3 scripts/beads_loop.py finalize --bead "$BEAD_ID" --verdict fail --evidence "$EVIDENCE_PATH"',
+            "Repeat from `prime`",
+        )
+        position = -1
+        for phrase in required_in_order:
+            found = text.find(phrase)
+            self.assertGreater(found, position, phrase)
+            position = found
+        for terminal in (
+            "no_ready",
+            "not_beads_repo",
+            "doctor_failed",
+            "claim_lost",
+            "blocked",
+            "invalid_evidence",
+        ):
+            self.assertIn(f"`{terminal}`", text)
+
+    def test_skill_never_documents_bd_memories_or_global_selection(self) -> None:
+        text = SKILL.read_text(encoding="utf-8")
+        self.assertNotIn("bd remember", text)
+        self.assertNotIn("bd memories", text)
+        self.assertNotIn("--global", text)
+        self.assertNotIn("--claim-next", text)
+        self.assertNotIn("--continue", text)
+        self.assertNotIn("--repo", text)
+
+    def test_skill_has_no_direct_provider_sibling_or_deployment_commands(self) -> None:
+        text = SKILL.read_text(encoding="utf-8")
+        self.assertNotRegex(text, r"(?m)^\s*bd(?:\s|$)")
+        for forbidden in (
+            "Rootline",
+            "Herdr",
+            "../",
+            "ln -s",
+            "install",
+            "deploy",
+            "queue",
+            "daemon",
+            "scheduler",
+            "state store",
+        ):
+            self.assertNotIn(forbidden, text)
+        self.assertIn("accepts no arguments", text)
+        self.assertIn("Resolve `scripts/beads_loop.py` relative to this skill directory", text)
+
+    def test_readme_publishes_beads_loop(self) -> None:
+        text = README.read_text(encoding="utf-8")
+        self.assertIn("[Beads autonomous loop](skills/beads-loop/)", text)
+
+    def test_headless_loop_fixture_ends_after_no_ready(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo = self.make_real_repo(Path(td))
+            ready_later = self.create_real_bead(
+                repo,
+                "lower-priority ready work",
+                priority=2,
+                description="Complete the lower-priority fixture work.",
+                acceptance="The lower-priority fixture check passes.",
+            )
+            ready_first = self.create_real_bead(
+                repo,
+                "highest-priority ready work",
+                priority=0,
+                description="Complete the highest-priority fixture work.",
+                acceptance="The highest-priority fixture check passes.",
+            )
+            blocked_id = self.create_real_bead(repo, "already blocked work")
+            subprocess.run(
+                ["bd", "update", blocked_id, "--status", "blocked"],
+                cwd=repo,
+                text=True,
+                capture_output=True,
+                check=True,
+                timeout=60,
+            )
+            closed_id = self.create_real_bead(repo, "already closed work")
+            subprocess.run(
+                ["bd", "close", closed_id, "--reason", "fixture setup"],
+                cwd=repo,
+                text=True,
+                capture_output=True,
+                check=True,
+                timeout=60,
+            )
+
+            ready_before = self.run_real_bd_json(repo, ["ready", "--sort", "priority", "--json"])
+            expected_cli_order = [issue["id"] for issue in ready_before]
+            result = self.run_scripted_loop(repo)
+            blocked_after = self.run_real_bd_json(repo, ["show", blocked_id, "--json"])[0]
+            closed_after = self.run_real_bd_json(repo, ["show", closed_id, "--json"])[0]
+
+        self.assertEqual(expected_cli_order, [ready_first, ready_later])
+        self.assertEqual(result["terminal"], "no_ready")
+        self.assertEqual(result["claimed_ids"], expected_cli_order)
+        self.assertEqual(
+            result["acceptance"],
+            [
+                "The highest-priority fixture check passes.",
+                "The lower-priority fixture check passes.",
+            ],
+        )
+        self.assertEqual(blocked_after["status"], "blocked")
+        self.assertEqual(closed_after["status"], "closed")
 
     def test_prime_rejects_non_beads_directory_without_bd_subprocess(self) -> None:
         adapter = load_adapter()
