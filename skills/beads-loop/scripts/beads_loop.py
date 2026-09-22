@@ -34,12 +34,15 @@ def repository_root(cwd: Path) -> Path | None:
     if not resolved_cwd.is_dir():
         return None
 
-    result = subprocess.run(
-        ["git", "-C", str(resolved_cwd), "rev-parse", "--show-toplevel"],
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(resolved_cwd), "rev-parse", "--show-toplevel"],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+    except OSError:
+        return None
     if result.returncode != 0 or result.stderr.strip() or not result.stdout.strip():
         return None
 

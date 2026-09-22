@@ -370,6 +370,32 @@ class BeadsLoopTests(unittest.TestCase):
         self.assertEqual(result.kind, "not_beads_repo")
         self.assertEqual(fake.calls, [])
 
+    def test_prime_cli_emits_one_not_beads_repo_envelope_when_git_is_unavailable(self) -> None:
+        adapter = load_adapter()
+        bd_calls: list[tuple[object, ...]] = []
+
+        def unavailable_git(argv: object, *args: object, **kwargs: object) -> object:
+            if isinstance(argv, (list, tuple)) and argv and argv[0] == "git":
+                raise OSError("git unavailable")
+            bd_calls.append(tuple(argv) if isinstance(argv, (list, tuple)) else (argv,))
+            raise AssertionError(f"unexpected subprocess invocation: {argv!r}")
+
+        output = io.StringIO()
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            with (
+                patch.object(adapter.Path, "cwd", return_value=repo),
+                patch.object(adapter.subprocess, "run", side_effect=unavailable_git),
+                redirect_stdout(output),
+            ):
+                exit_code = adapter.main(["prime"])
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(output.getvalue().splitlines(), [
+            '{"details":{},"kind":"not_beads_repo","schema_version":1}'
+        ])
+        self.assertEqual(bd_calls, [])
+
     def test_prime_uses_conventions_for_embedded_unsupported(self) -> None:
         adapter = load_adapter()
         fake = FakeBd()
