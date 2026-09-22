@@ -11,17 +11,21 @@ import { mkdir } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createJsonlLineReader } from "../src/rpc-stdin-guard.ts";
+import {
+  classifySafeCompactionNotification,
+  type SafeCompactionDiagnosticCategory,
+} from "./compaction-diagnostic.ts";
 
 const COMMAND_TIMEOUT_MS = 300_000;
 const SHUTDOWN_TIMEOUT_MS = 10_000;
 const CORPUS_ENTRY_TYPE = "a4s.pi-rule-compiler.corpus.v1";
 
 interface RpcResponse {
-  type: "response";
-  command: string;
-  success: boolean;
-  id?: string;
-  data?: unknown;
+  readonly type: "response";
+  readonly command: string;
+  readonly success: boolean;
+  readonly id?: string;
+  readonly data?: unknown;
 }
 
 interface CorpusEntryIds {
@@ -47,6 +51,7 @@ class HeadlessPi {
   readonly #responseWaiters = new Map<string, ResponseWaiter>();
   readonly #eventWaiters = new Set<EventWaiter>();
   readonly #closed: Promise<number | null>;
+  #compactionDiagnostic: SafeCompactionDiagnosticCategory | undefined;
 
   constructor(args: readonly string[]) {
     this.#child = spawn("pi", args, { stdio: ["pipe", "pipe", "pipe"] });
@@ -105,6 +110,14 @@ class HeadlessPi {
     });
   }
 
+  get compactionDiagnostic(): SafeCompactionDiagnosticCategory | undefined {
+    return this.#compactionDiagnostic;
+  }
+
+  clearCompactionDiagnostic(): void {
+    this.#compactionDiagnostic = undefined;
+  }
+
   waitForEvent(eventType: string): Promise<void> {
     return new Promise<void>((resolve, reject) => {
       const waiter: EventWaiter = {
@@ -142,6 +155,12 @@ class HeadlessPi {
       return;
     }
     if (!isRecord(value)) return;
+    const compactionDiagnostic = classifySafeCompactionNotification(value);
+    if (compactionDiagnostic !== undefined) {
+      // Retain only the approved category, never the UI request or message.
+      this.#compactionDiagnostic = compactionDiagnostic;
+      return;
+    }
     if (value.type === "response" && typeof value.id === "string" && typeof value.command === "string" && typeof value.success === "boolean") {
       const waiter = this.#responseWaiters.get(value.id);
       if (!waiter) return;
@@ -170,11 +189,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function requireSuccess(response: RpcResponse, command: string): unknown {
-  if (!response.success || response.command !== command) {
-    throw new Error(`${command} was not successful`);
-  }
-  return response.data;
+function requireSuccessfulResponse(
+  response: RpcResponse,
+  command: string,
+  diagnostic?: SafeCompactionDiagnosticCategory,
+): void {
+  if (response.success && response.command === command) return;
+  const safeDiagnostic = diagnostic === undefined ? "" : ` (compaction diagnostic: ${diagnostic})`;
+  throw new Error(`${command} was not successful${safeDiagnostic}`);
 }
 
 function requireConfiguredModel(data: unknown): string {
@@ -230,15 +252,21 @@ function piArgs(extensionPath: string, sessionDir: string, sessionFile?: string)
 async function runFirstSession(extensionPath: string, sessionDir: string): Promise<{ sessionFile: string; ids: CorpusEntryIds }> {
   const pi = new HeadlessPi(piArgs(extensionPath, sessionDir));
   try {
-    const state = requireSuccess(await pi.request("get_state"), "get_state");
-    const sessionFile = requireConfiguredModel(state);
+    const stateResponse = await pi.request("get_state");
+    requireSuccessfulResponse(stateResponse, "get_state");
+    const sessionFile = requireConfiguredModel(stateResponse.data);
     for (const message of ["Reply with the single word ready.", "Reply with the single word acknowledged."]) {
       const settled = pi.waitForEvent("agent_settled");
-      requireSuccess(await pi.request("prompt", { message }), "prompt");
+      const promptResponse = await pi.request("prompt", { message });
+      requireSuccessfulResponse(promptResponse, "prompt");
       await settled;
     }
-    requireSuccess(await pi.request("compact"), "compact");
-    const ids = collectCorpusEntryIds(requireSuccess(await pi.request("get_entries"), "get_entries"));
+    pi.clearCompactionDiagnostic();
+    const compactResponse = await pi.request("compact");
+    requireSuccessfulResponse(compactResponse, "compact", pi.compactionDiagnostic);
+    const entriesResponse = await pi.request("get_entries");
+    requireSuccessfulResponse(entriesResponse, "get_entries");
+    const ids = collectCorpusEntryIds(entriesResponse.data);
     return { sessionFile, ids };
   } finally {
     await pi.close();
@@ -248,7 +276,9 @@ async function runFirstSession(extensionPath: string, sessionDir: string): Promi
 async function runReloadedSession(extensionPath: string, sessionDir: string, sessionFile: string): Promise<CorpusEntryIds> {
   const pi = new HeadlessPi(piArgs(extensionPath, sessionDir, sessionFile));
   try {
-    return collectCorpusEntryIds(requireSuccess(await pi.request("get_entries"), "get_entries"));
+    const entriesResponse = await pi.request("get_entries");
+    requireSuccessfulResponse(entriesResponse, "get_entries");
+    return collectCorpusEntryIds(entriesResponse.data);
   } finally {
     await pi.close();
   }
