@@ -21,7 +21,7 @@
 - Ladder fallido en `context_with_system` no omite contexto: Pi recibe su contexto normal.
 - Los artefactos de compact-adviser conservan licencia MIT, URL, SHA completo y alcance; no se sincroniza upstream.
 - No crear base de datos, daemon ni control plane externos. Rootline gobierna documentación durable bajo `.workspace/docs/`.
-- Cada entrega ejecuta `npm test`, `npm run typecheck`, `npm run e0`, `rootline validate <artefacto> -o json` para documentación afectada y `git diff --check`. El Bead no se cierra si el E2E falla.
+- Cada entrega ejecuta `npm test`, `npm run typecheck`, el E2E headless de su propio producto, `rootline validate <artefacto> -o json` para documentación afectada y `git diff --check`. Para `@a4s/pi-rule-compiler`, el E2E usa Pi RPC cargando `packages/pi-rule-compiler/src/index.ts`, crea la sesión durante la prueba y usa proveedores reales configurados; no reutiliza JSONL prefabricado ni el runner E0. El Bead no se cierra si ese E2E falla.
 
 ## Review Focus
 
