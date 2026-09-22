@@ -12,6 +12,7 @@ import { DEFAULT_JEV_MODEL } from "./types.ts";
 
 export const SHORT_SPAN_CHAR_LIMIT = 240;
 export const LONG_SPAN_CHAR_LIMIT = 1_200;
+export type LadderProfile = "ordinary" | "conservative-evidence";
 
 export class LadderProjectionError extends Error {
   constructor(message: string) {
@@ -87,6 +88,7 @@ export async function selectLadderProjection(
   query: string,
   jevClient: JevClient,
   signal: AbortSignal,
+  profile: LadderProfile = "ordinary",
 ): Promise<VisibilityProjection> {
   if (query.trim().length === 0) throw new LadderProjectionError("a concrete non-empty query is required");
   const ordered = orderedCorpus(corpus);
@@ -99,6 +101,7 @@ export async function selectLadderProjection(
     state: {
       schema: "a4s.ladder-query/v1",
       query,
+      profile,
       corpus: ordered.map((chunk) => ({ id: chunk.id, position: chunk.position, role: chunk.role, text: chunk.text })),
     },
     model: DEFAULT_JEV_MODEL,
@@ -108,7 +111,7 @@ export async function selectLadderProjection(
   const selections = refs.map((ref) => {
     const answer = response.answers[ref.questionId];
     if (!answer || answer.type !== "choice") throw new LadderProjectionError("Jev returned an invalid Ladder answer");
-    return selectionFromAnswer(ref, ordered, answer.choice);
+    return selectionFromAnswer(ref, ordered, conservativeLevel(answer, profile));
   });
   const projection: VisibilityProjection = {
     queryDigest: stableDigest(query),
@@ -117,6 +120,22 @@ export async function selectLadderProjection(
   };
   validateProjection(projection, corpus);
   return projection;
+}
+
+function conservativeLevel(
+  answer: { choice: string; probabilities: Record<string, number>; confidence: number },
+  profile: LadderProfile,
+): string {
+  if (profile !== "conservative-evidence") return answer.choice;
+  const selectedProbability = answer.probabilities[answer.choice];
+  if (
+    selectedProbability === undefined ||
+    answer.confidence < 0.8 ||
+    selectedProbability < 0.8
+  ) {
+    return "full";
+  }
+  return answer.choice;
 }
 
 function selectionFromAnswer(

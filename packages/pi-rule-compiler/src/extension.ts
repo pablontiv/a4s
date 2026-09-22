@@ -10,12 +10,17 @@ import { createProvider } from "@earendil-works/pi-ai";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
 import { buildBasicCompactionResult } from "./compaction-core.ts";
 import { collectCorpus, publishCorpusAfterCompaction, stageCorpus } from "./corpus.ts";
-import { BASIC_COMPACTION_CONFIG, isLadderCompaction, resolveCompactionConfig } from "./config.ts";
+import {
+  BASIC_COMPACTION_CONFIG,
+  isLadderCompaction,
+  isLadderEvidence,
+  resolveCompactionConfig,
+} from "./config.ts";
 import {
   CompactionBuildError,
   type BuildJevCompactionOptions,
 } from "./compaction.ts";
-import { disabledEvidencePipeline } from "./evidence-pipeline.ts";
+import { disabledEvidencePipeline, runEvidence } from "./evidence-pipeline.ts";
 import { DeadlineExceededError, OperationAbortedError, runWithDeadline } from "./deadline.ts";
 import { isStableDigest, stableDigest } from "./digest.ts";
 import { corpusDigest, renderProjection, selectLadderProjection } from "./ladder.ts";
@@ -161,7 +166,12 @@ export function registerPiRuleCompiler(pi: ExtensionAPI, options: PiRuleCompiler
   const now = options.now ?? (() => new Date());
   const hookTimeoutMs = options.hookTimeoutMs ?? 180_000;
   const retroTimeoutMs = options.retroTimeoutMs ?? 120_000;
-  const config = resolveCompactionConfig(options.config, BASIC_COMPACTION_CONFIG);
+  const config = resolveCompactionConfig(
+    options.evidence
+      ? { ...options.config, "evidence.strategy": options.evidence.strategy }
+      : options.config,
+    BASIC_COMPACTION_CONFIG,
+  );
   const triggerMinimumContextTokens = options.trigger?.minimumContextTokens ?? 16_000;
   const triggerCooldownMs = options.trigger?.cooldownMs ?? 300_000;
 
@@ -221,6 +231,18 @@ export function registerPiRuleCompiler(pi: ExtensionAPI, options: PiRuleCompiler
   });
 
   pi.on("agent_settled", async (_event, ctx) => {
+    if (isLadderEvidence(config)) {
+      await drainPendingRetro(
+        pi,
+        ctx,
+        createJevClient,
+        retroTimeoutMs,
+        now,
+        options.retro,
+        options.scheduling,
+        retroInFlight,
+      );
+    }
     if (config.trigger.mode === "off") return;
     const usage = ctx.getContextUsage();
     const baseInput = {
@@ -282,24 +304,63 @@ export function registerPiRuleCompiler(pi: ExtensionAPI, options: PiRuleCompiler
   pi.on("session_compact", async (event, ctx) => {
     const attemptId = readCompactionAttemptId(event.compactionEntry.details);
     const pending = attemptId ? pendingByAttempt.get(attemptId) : undefined;
+    let corpusPublished = pending === undefined;
     if (pending) {
       try {
         publishCorpusAfterCompaction(pending.corpus, ctx.sessionManager.getBranch(), pi);
         recoveredCorpus = collectCorpus(ctx.sessionManager.getBranch());
+        const recoveredIds = new Set(recoveredCorpus.map((chunk) => chunk.id));
+        corpusPublished = pending.corpus.every((chunk) => recoveredIds.has(chunk.id));
       } catch {
         // Corpus persistence is best-effort after Pi has already committed compaction.
         // Never surface raw corpus through diagnostics or alter basic compaction output.
+        corpusPublished = false;
       }
     }
-    if (attemptId) pendingByAttempt.delete(attemptId);
-    const evidenceStrategy = options.evidence?.strategy ?? "off";
-    switch (evidenceStrategy) {
-      case "off":
-        if (pending) await disabledEvidencePipeline.afterCompaction(pending.result, ctx);
-        break;
-      case "ladder":
-        break;
+
+    if (pending && isLadderEvidence(config) && corpusPublished) {
+      try {
+        const jevClient = new ScheduledJevClient(await createJevClient(ctx), options.scheduling);
+        const evidence = await runWithDeadline(
+          (signal) => runEvidence({
+            config,
+            result: pending.result,
+            reason: event.reason,
+            willRetry: event.willRetry,
+            corpus: collectCorpus(ctx.sessionManager.getBranch()),
+            getBranch: () => ctx.sessionManager.getBranch(),
+            appender: pi,
+            jev: jevClient,
+            signal,
+            ...(options.observation === undefined ? {} : { observation: options.observation }),
+          }),
+          hookTimeoutMs,
+          ctx.signal,
+        );
+        if (
+          !event.willRetry &&
+          evidence.receipt &&
+          evidence.receipt.signalIds.length > 0
+        ) {
+          await drainPendingRetro(
+            pi,
+            ctx,
+            createJevClient,
+            retroTimeoutMs,
+            now,
+            options.retro,
+            options.scheduling,
+            retroInFlight,
+            attemptId,
+          );
+        }
+      } catch (error) {
+        safeNotify(ctx, "signals", classifyRetroError(error));
+      }
+    } else if (pending) {
+      await disabledEvidencePipeline.afterCompaction(pending.result, ctx);
     }
+    if (attemptId) pendingByAttempt.delete(attemptId);
   });
 
   pi.on("session_compact_failed", () => {

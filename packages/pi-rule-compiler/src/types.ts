@@ -5,7 +5,7 @@ export const DEFAULT_JEV_MODEL = "jev-1.13.0" as const;
 export const TYPESAFE_API_KEY_ENV = "TYPESAFE_API_KEY" as const;
 export const TYPESAFE_PROVIDER_ID = "typesafe" as const;
 
-/** Evidence lifecycle strategy; ladder remains inert until its later implementation. */
+/** Evidence lifecycle strategy; it remains inactive unless both Ladder flags are enabled. */
 export interface EvidenceOptions {
   strategy: "off" | "ladder";
 }
@@ -53,6 +53,18 @@ export interface CorpusReceipt {
   branchId: string;
   compactionAttemptId: string;
   chunkIds: string[];
+}
+
+/** Success marker binding one Evidence run to its validated corpus projection. */
+export interface EvidenceReceipt {
+  schema: "a4s.evidence-receipt/v1";
+  idempotencyKey: string;
+  compactionAttemptId: string;
+  queryDigest: string;
+  corpusDigest: string;
+  sourceSpans: Array<SourceSpan & { sourceMessageIndex: number; sourceDigest: string }>;
+  batchDigests: string[];
+  signalIds: string[];
 }
 
 /** Request-time visibility selected for one sanitized corpus chunk. */

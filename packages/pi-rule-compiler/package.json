@@ -17,6 +17,7 @@
   "scripts": {
     "test": "tsx --test test/*.test.ts",
     "typecheck": "tsc --noEmit",
+    "eval:evidence": "tsx eval/evidence/run.ts",
     "e2e": "tsx scripts/run-headless-e2e.ts",
     "rpc:compact-driver": "tsx scripts/run-rpc-compact.ts"
   },

@@ -23,6 +23,11 @@ export function isLadderCompaction(config: CompactionConfig): boolean {
   return config.compaction.strategy === "ladder";
 }
 
+/** Evidence has a double opt-in: it cannot run without Ladder compaction. */
+export function isLadderEvidence(config: CompactionConfig): boolean {
+  return config.compaction.strategy === "ladder" && config.evidence.strategy === "ladder";
+}
+
 /**
  * Resolves the deliberately small public configuration surface. Invalid or
  * incomplete updates never partially enable an opt-in feature: the complete

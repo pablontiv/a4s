@@ -8,6 +8,7 @@ import piRuleCompilerExtension, {
   collectCorpus,
   CORPUS_ENTRY_TYPE,
   createTypesafeAuthResolver,
+  EVIDENCE_RECEIPT_ENTRY_TYPE,
   JevApiError,
   LADDER_PROJECTION_RECEIPT_TYPE,
   observeCompactionRules,
@@ -22,7 +23,6 @@ import piRuleCompilerExtension, {
   type RuleSignalBatch,
   type JevCompactionResult,
   type JevRequest,
-  type PiRuleCompilerOptions,
 } from "../src/index.ts";
 import { validJevResponse } from "./fixtures.ts";
 
@@ -451,25 +451,116 @@ test("Ladder projects branch corpus through context_with_system and falls back u
   );
 });
 
-test("Evidence ladder is an explicit inert pre-Task-6 lifecycle branch", async () => {
-  const options: PiRuleCompilerOptions = {
+test("Evidence ladder requires both flags and publishes only after successful compaction", async () => {
+  const singlyEnabled = createFakePi();
+  registerPiRuleCompiler(singlyEnabled.pi, {
     jevClient: new ValidFakeJev(),
     evidence: { strategy: "ladder" },
-  };
-  const fake = createFakePi();
-  registerPiRuleCompiler(fake.pi, options);
-  const { context } = createContext(fake.entries);
+  });
+  const singleContext = createContext(singlyEnabled.entries).context;
+  const singleCompaction = requireCompactionResult(
+    await singlyEnabled.handlers.get("session_before_compact")?.(compactionEvent(), singleContext),
+  );
+  const singleEntry = appendSuccessfulCompaction(singlyEnabled, singleCompaction);
+  await singlyEnabled.handlers.get("session_compact")?.(
+    { type: "session_compact", compactionEntry: singleEntry, fromExtension: true, reason: "threshold", willRetry: false },
+    singleContext,
+  );
+  assert.equal(hasRuleArtifact(singlyEnabled.entries), false);
+
+  const enabled = createFakePi();
+  const jev = new LadderFullJev();
+  registerPiRuleCompiler(enabled.pi, {
+    jevClient: jev,
+    config: {
+      "compaction.strategy": "ladder",
+      "trigger.mode": "off",
+      "evidence.strategy": "ladder",
+    },
+  });
+  const enabledContext = createContext(enabled.entries).context;
   const compaction = requireCompactionResult(
-    await fake.handlers.get("session_before_compact")?.(compactionEvent(), context),
+    await enabled.handlers.get("session_before_compact")?.(compactionEvent(), enabledContext),
+  );
+  assert.equal(hasRuleArtifact(enabled.entries), false);
+  const compactionEntry = appendSuccessfulCompaction(enabled, compaction);
+  await enabled.handlers.get("session_compact")?.(
+    { type: "session_compact", compactionEntry, fromExtension: true, reason: "threshold", willRetry: false },
+    enabledContext,
+  );
+
+  assert.equal(enabled.entries.filter((entry) => entry.customType === RULE_SIGNAL_ENTRY_TYPE).length, 1);
+  assert.equal(enabled.entries.filter((entry) => entry.customType === RETRO_PENDING_ENTRY_TYPE).length, 1);
+  assert.equal(enabled.entries.filter((entry) => entry.customType === EVIDENCE_RECEIPT_ENTRY_TYPE).length, 1);
+  assert.equal(enabled.entries.filter((entry) => entry.customType === CORPUS_ENTRY_TYPE).length, 2);
+  assert.equal(jev.requests.filter((request) => (request.state as { profile?: unknown }).profile === "conservative-evidence").length, 1);
+
+  await enabled.handlers.get("session_compact")?.(
+    { type: "session_compact", compactionEntry, fromExtension: true, reason: "threshold", willRetry: false },
+    enabledContext,
+  );
+  assert.equal(enabled.entries.filter((entry) => entry.customType === RULE_SIGNAL_ENTRY_TYPE).length, 1);
+  assert.equal(enabled.entries.filter((entry) => entry.customType === EVIDENCE_RECEIPT_ENTRY_TYPE).length, 1);
+});
+
+test("Evidence success stores a review-only proposal idempotently", async () => {
+  const fake = createFakePi();
+  const jev = new LadderFullJev();
+  registerPiRuleCompiler(fake.pi, {
+    jevClient: jev,
+    config: {
+      "compaction.strategy": "ladder",
+      "trigger.mode": "off",
+      "evidence.strategy": "ladder",
+    },
+    now: () => new Date("2026-09-22T12:00:00.000Z"),
+  });
+  const runtime = createRetroCapableContext(fake.entries);
+  const compaction = requireCompactionResult(
+    await fake.handlers.get("session_before_compact")?.(compactionEvent(), runtime.context),
   );
   const compactionEntry = appendSuccessfulCompaction(fake, compaction);
-
   await fake.handlers.get("session_compact")?.(
-    { type: "session_compact", compactionEntry, fromExtension: true, reason: "threshold", willRetry: false },
-    context,
+    { type: "session_compact", compactionEntry, fromExtension: true, reason: "manual", willRetry: false },
+    runtime.context,
   );
 
-  assert.equal(hasRuleArtifact(fake.entries), false);
+  assert.equal(fake.entries.filter((entry) => entry.customType === RULE_PROPOSAL_ENTRY_TYPE).length, 1);
+  assert.equal(runtime.modelCalls(), 1);
+  assert.match(runtime.notifications.at(-1)?.message ?? "", /Nothing was activated/);
+  await fake.commands.get("retro-rules")?.("", runtime.context);
+  assert.equal(fake.entries.filter((entry) => entry.customType === RULE_PROPOSAL_ENTRY_TYPE).length, 1);
+  assert.equal(runtime.modelCalls(), 1);
+});
+
+test("overflow Evidence defers review-only proposal synthesis until agent_settled", async () => {
+  const fake = createFakePi();
+  registerPiRuleCompiler(fake.pi, {
+    jevClient: new LadderFullJev(),
+    config: {
+      "compaction.strategy": "ladder",
+      "trigger.mode": "off",
+      "evidence.strategy": "ladder",
+    },
+  });
+  const runtime = createRetroCapableContext(fake.entries);
+  const compaction = requireCompactionResult(
+    await fake.handlers.get("session_before_compact")?.(
+      compactionEvent(undefined, { reason: "overflow", willRetry: true }),
+      runtime.context,
+    ),
+  );
+  const compactionEntry = appendSuccessfulCompaction(fake, compaction);
+  await fake.handlers.get("session_compact")?.(
+    { type: "session_compact", compactionEntry, fromExtension: true, reason: "overflow", willRetry: true },
+    runtime.context,
+  );
+  assert.equal(fake.entries.filter((entry) => entry.customType === RULE_PROPOSAL_ENTRY_TYPE).length, 0);
+  assert.equal(runtime.modelCalls(), 0);
+
+  await fake.handlers.get("agent_settled")?.({ type: "agent_settled" }, runtime.context);
+  assert.equal(fake.entries.filter((entry) => entry.customType === RULE_PROPOSAL_ENTRY_TYPE).length, 1);
+  assert.equal(runtime.modelCalls(), 1);
 });
 
 test("basic success never publishes RuleSignals or starts retro", async (t) => {

@@ -7,6 +7,7 @@ export {
   configurationFromGlobalFile,
   globalCompactionConfigPath,
   isLadderCompaction,
+  isLadderEvidence,
   loadGlobalCompactionConfiguration,
   PI_RULE_COMPILER_GLOBAL_CONFIG_PATH,
   resolveCompactionConfig,
@@ -31,7 +32,22 @@ export {
   type BuildJevCompactionInput,
   type BuildJevCompactionOptions,
 } from "./compaction.ts";
-export { disabledEvidencePipeline, type EvidencePipeline } from "./evidence-pipeline.ts";
+export {
+  disabledEvidencePipeline,
+  runEvidence,
+  type EvidenceEntryAppender,
+  type EvidencePipeline,
+  type RunEvidenceInput,
+  type RunEvidenceResult,
+} from "./evidence-pipeline.ts";
+export {
+  EVIDENCE_LADDER_QUERY,
+  extractRuleSignals,
+  selectEvidenceContext,
+  type EvidenceSource,
+  type ExtractedRuleSignals,
+  type ExtractRuleSignalsInput,
+} from "./evidence.ts";
 export { runWithDeadline, DeadlineExceededError, OperationAbortedError } from "./deadline.ts";
 export { stableDigest, stableJson, isStableDigest } from "./digest.ts";
 export {
@@ -42,6 +58,7 @@ export {
   selectLadderProjection,
   SHORT_SPAN_CHAR_LIMIT,
   validateProjection,
+  type LadderProfile,
 } from "./ladder.ts";
 export { applyContextProjection } from "./projection.ts";
 export {
@@ -143,6 +160,7 @@ export {
 } from "./state.ts";
 export {
   collectCorpusReceipts,
+  collectEvidenceReceipts,
   collectRetroPendingMarkers,
   collectRuleAcceptanceReceipts,
   collectRuleProposalBatches,
@@ -150,12 +168,14 @@ export {
   collectRuleSignalBatches,
   parseCorpusChunk,
   parseCorpusReceipt,
+  parseEvidenceReceipt,
   parseRetroPendingMarker,
   parseRuleAcceptanceReceipt,
   parseRuleProposalReceipt,
   parseRuleSignalBatch,
   parseStoredRuleProposal,
   reconstructObservedSourceDigests,
+  EVIDENCE_RECEIPT_ENTRY_TYPE,
   RETRO_PENDING_ENTRY_TYPE,
   RULE_ACCEPTANCE_ENTRY_TYPE,
   RULE_PROPOSAL_ENTRY_TYPE,
