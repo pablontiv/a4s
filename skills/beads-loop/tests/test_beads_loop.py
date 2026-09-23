@@ -18,6 +18,7 @@ SKILL_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = SKILL_ROOT / "scripts" / "beads_loop.py"
 SMOKE_SCRIPT = SKILL_ROOT / "tests" / "smoke_pi_dispatch.py"
 SKILL = SKILL_ROOT / "SKILL.md"
+SKILL_README = SKILL_ROOT / "README.md"
 README = SKILL_ROOT.parents[1] / "README.md"
 
 
@@ -334,6 +335,12 @@ class BeadsLoopTests(unittest.TestCase):
     def test_readme_publishes_beads_loop(self) -> None:
         text = README.read_text(encoding="utf-8")
         self.assertIn("[Beads autonomous loop](skills/beads-loop/)", text)
+
+    def test_readme_keeps_operator_on_skill_interface(self) -> None:
+        text = SKILL_README.read_text(encoding="utf-8")
+        self.assertIn("/skill:beads-loop", text)
+        self.assertNotIn("BEADS_LOOP_ADAPTER", text)
+        self.assertNotIn("beads_loop.py", text)
 
     def test_print_probe_runs_pi_in_disposable_plain_git_repo(self) -> None:
         smoke = load_smoke_probe()
