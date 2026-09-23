@@ -76,7 +76,10 @@ def _is_doctor_success(payload: object) -> bool:
         return False
     if payload.get("status") == "ok":
         return True
-    return isinstance(payload.get("checks"), list) and payload.get("overall_ok") is True
+    return (
+        isinstance(payload.get("checks"), list)
+        or isinstance(payload.get("diagnostics"), list)
+    ) and payload.get("overall_ok") is True
 
 
 def _doctor_requires_conventions(result: subprocess.CompletedProcess[str]) -> bool:

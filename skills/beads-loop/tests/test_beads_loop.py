@@ -482,6 +482,32 @@ class BeadsLoopTests(unittest.TestCase):
         self.assertEqual(result.kind, "doctor_failed")
         self.assertEqual([args for _, args in fake.calls], [("doctor", "--agent", "--json")])
 
+    def test_prime_accepts_generic_doctor_with_diagnostics_and_overall_ok_true(self) -> None:
+        adapter = load_adapter()
+        fake = FakeBd()
+        fake.reply(
+            ["doctor", "--agent", "--json"],
+            **stdout_json({"diagnostics": [], "overall_ok": True, "schema_version": 1}),
+        )
+        fake.reply(["prime", "--no-memories"], stdout="discard me")
+        fake.reply(["ready", "--sort", "priority", "--json"], **stdout_json([]))
+
+        with tempfile.TemporaryDirectory() as td:
+            repo = self.make_repo(Path(td))
+            with patch.object(adapter, "run_bd", side_effect=fake):
+                result = adapter.prime(repo)
+
+        self.assertEqual(result.kind, "no_ready")
+        self.assertEqual(
+            [args for _, args in fake.calls],
+            [
+                ("doctor", "--agent", "--json"),
+                ("prime", "--no-memories"),
+                ("ready", "--sort", "priority", "--json"),
+            ],
+        )
+        fake.assert_drained()
+
     def test_prime_rejects_generic_doctor_with_overall_ok_false(self) -> None:
         adapter = load_adapter()
         fake = FakeBd()
