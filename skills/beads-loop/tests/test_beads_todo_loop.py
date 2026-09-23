@@ -112,6 +112,47 @@ class BeadsTodoLoopTests(unittest.TestCase):
             wrapper.write_text("#!/bin/sh\n", encoding="utf-8")
             self.assertEqual(adapter.resolve_provider(root), (str(wrapper),))
 
+    def test_detail_returns_full_text_only_for_selected_bead(self) -> None:
+        adapter = load_adapter()
+        with tempfile.TemporaryDirectory() as temporary:
+            repo = self.make_repo(Path(temporary))
+            provider = FakeProvider([[
+                {"id": "a", "title": "Implement A", "description": "full selected description", "acceptance_criteria": "full selected acceptance", "status": "open", "priority": 1, "dependencies": []}
+            ]])
+            with patch.object(adapter, "run_provider", provider):
+                result = adapter.detail(repo, "a")
+
+        self.assertEqual(result.kind, "detail")
+        self.assertEqual(result.details, {"id": "a", "title": "Implement A", "description": "full selected description", "acceptance_criteria": "full selected acceptance", "status": "open"})
+        self.assertEqual(provider.calls[0][1], ("show", "a", "--json"))
+
+    def test_finalize_pass_uses_nonleasing_update_and_rereads_status(self) -> None:
+        adapter = load_adapter()
+        with tempfile.TemporaryDirectory() as temporary:
+            repo = self.make_repo(Path(temporary))
+            evidence = repo / "reports" / "a.md"
+            evidence.parent.mkdir()
+            evidence.write_text("evidence", encoding="utf-8")
+            provider = FakeProvider([{}, [{"id": "a", "title": "Implement A", "status": "closed", "priority": 1, "dependencies": []}]])
+            with patch.object(adapter, "run_provider", provider):
+                result = adapter.finalize(repo, "a", "pass", evidence)
+
+        self.assertEqual(result.kind, "finalized")
+        self.assertEqual(provider.calls[0][1], ("update", "a", "--status", "closed", "--append-notes", "PASS evidence=reports/a.md", "--json"))
+        self.assertNotIn("--claim", provider.calls[0][1])
+        self.assertEqual(provider.calls[1][1], ("show", "a", "--json"))
+
+    def test_finalize_rejects_outside_or_symlinked_evidence(self) -> None:
+        adapter = load_adapter()
+        with tempfile.TemporaryDirectory() as temporary, tempfile.TemporaryDirectory() as outside_temporary:
+            repo = self.make_repo(Path(temporary))
+            outside = Path(outside_temporary) / "evidence.md"
+            outside.write_text("evidence", encoding="utf-8")
+            link = repo / "link.md"
+            link.symlink_to(outside)
+            self.assertEqual(adapter.finalize(repo, "a", "pass", outside).kind, "invalid_evidence")
+            self.assertEqual(adapter.finalize(repo, "a", "pass", link).kind, "invalid_evidence")
+
 
 if __name__ == "__main__":
     unittest.main()

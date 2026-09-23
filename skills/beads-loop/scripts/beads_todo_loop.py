@@ -138,6 +138,82 @@ def snapshot(cwd: Path) -> Envelope:
         return Envelope("malformed_provider_output", {})
 
 
+def valid_bead_id(bead_id: str) -> bool:
+    return bool(bead_id) and bead_id == bead_id.strip() and not bead_id.startswith("-")
+
+
+def exactly_one_issue(payload: object, bead_id: str) -> dict[str, object]:
+    if not isinstance(payload, list) or len(payload) != 1:
+        raise ValueError("expected one issue")
+    row = _issue(payload[0])
+    if row["id"] != bead_id:
+        raise ValueError("wrong issue")
+    return row
+
+
+def detail(cwd: Path, bead_id: str) -> Envelope:
+    if not valid_bead_id(bead_id):
+        return Envelope("invalid_bead", {})
+    root = repository_root(cwd)
+    if root is None:
+        return Envelope("not_beads_repo", {})
+    try:
+        row = exactly_one_issue(provider_json(root, ("show", bead_id, "--json")), bead_id)
+        description = row.get("description", "")
+        acceptance = row.get("acceptance_criteria", "")
+        if not isinstance(description, str) or not isinstance(acceptance, str):
+            raise ValueError("detail text is invalid")
+        return Envelope("detail", {"id": row["id"], "title": row["title"], "description": description, "acceptance_criteria": acceptance, "status": row["status"]})
+    except ProviderFailure:
+        return Envelope("provider_failed", {})
+    except ValueError:
+        return Envelope("malformed_provider_output", {})
+
+
+def evidence_reference(root: Path, evidence: Path) -> str | None:
+    candidate = evidence if evidence.is_absolute() else root / evidence
+    try:
+        if candidate.is_symlink():
+            return None
+        resolved_root = root.resolve(strict=True)
+        resolved = candidate.resolve(strict=True)
+        relative = resolved.relative_to(resolved_root)
+    except (OSError, ValueError):
+        return None
+    current = resolved_root
+    for part in relative.parts:
+        current /= part
+        if current.is_symlink():
+            return None
+    return relative.as_posix() if resolved.is_file() else None
+
+
+def finalize(cwd: Path, bead_id: str, verdict: str, evidence: Path) -> Envelope:
+    if not valid_bead_id(bead_id):
+        return Envelope("invalid_bead", {})
+    if verdict not in ("pass", "fail"):
+        return Envelope("invalid_bead", {})
+    root = repository_root(cwd)
+    if root is None:
+        return Envelope("not_beads_repo", {})
+    reference = evidence_reference(root, evidence)
+    if reference is None:
+        return Envelope("invalid_evidence", {})
+    status, label = ("closed", "PASS") if verdict == "pass" else ("blocked", "FAIL")
+    update = run_provider(root, ("update", bead_id, "--status", status, "--append-notes", f"{label} evidence={reference}", "--json"))
+    if update.returncode != 0:
+        return Envelope("provider_failed", {})
+    try:
+        observed = exactly_one_issue(provider_json(root, ("show", bead_id, "--json")), bead_id)
+        if observed["status"] != status:
+            return Envelope("provider_failed", {})
+        return Envelope("finalized", {"issue": observed, "evidence": reference})
+    except ProviderFailure:
+        return Envelope("provider_failed", {})
+    except ValueError:
+        return Envelope("malformed_provider_output", {})
+
+
 def main(argv: Sequence[str]) -> int:
     if list(argv) != ["snapshot"]:
         print("usage: beads_todo_loop.py snapshot", file=sys.stderr)
