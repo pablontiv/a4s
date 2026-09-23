@@ -85,6 +85,44 @@ For each repaired record, the complete replacement was written to a temporary re
 
 `a4s-3nf` remained exactly unchanged at revision `-5952035839008759337`. `a4s-5ib` was the next new source gap; per the binding stop rule, no record after it was mutated.
 
+### Fix round 2: domain evidence and completed mutations
+
+The second fix round broadened evidence discovery to each Bead's actual code, tests, documentation, ADR and operational domain. That research closed all seven prior gaps. It also applied the five source-complete descriptions that fix round 1 had left unchanged after its serial stop, so all 12 remaining lint targets were repaired.
+
+Every criterion inserted in this round maps to the following exact evidence:
+
+| ID | Pre-mutation revision | Criterion source(s) | Outcome |
+| --- | --- | --- | --- |
+| `a4s-3nf` | `-5952035839008759337` | `skills/herdr/scripts/README.md` §§ `Tick`, `Mission Control safety gate`, `Usage`, and `Tests`, plus `skills/herdr/SKILL.md` § `Heartbeat H2`, at reachable commit `e344c3ec550d2b016b27ad0aa922d51ada7fd3ad`, define the current deterministic reconciler, its MC gate, opt-in dispatch, in-progress/redispatch/result harvest, protected reaper, AttentionTickets, dry-run default, and external launchd/cron executor. The complete `skills.herdr.tests.test_reconcile` suite passed 70 tests in this round. | Repaired; revision `2745290661909174667`. |
+| `a4s-5ib` | `-6380434537460906507` | Responsiveness criterion: canonical `.workspace/docs/history/handbook/superpowers/specs/2026-09-09-firstmate-factory-recipe.md` § `3. Native execution and parallelism` says to keep the user-facing session responsive and not let blocked work block unrelated work. Response-content criterion: approved `.workspace/docs/history/handbook/superpowers/specs/2026-09-08-mission-control-attention-panel-design.md` §§ `Panel content` and `Update rules` require project, owner, last confirmed state, evidence, next event, and prohibit treating `SENT` as completion. Both are reachable at commit `352cf858b99b9f5d39f42822edafcd5382df6086`; accepted ADR 0010 assigns responses to Mission Control. | Repaired; revision `-313190083871522988`. |
+| `a4s-9s2` | `5464860455960945591` | Priority/responsiveness criterion: the same canonical Firstmate recipe § `3. Native execution and parallelism`, reachable at `352cf858b99b9f5d39f42822edafcd5382df6086`. Status representation and `SENT` boundary: the same approved Mission Control attention-panel design §§ `Panel content` and `Update rules` at that commit. | Repaired; revision `5697938358105022875`. |
+| `a4s-tvz` | `-9142887585499206718` | Global-status shape: approved Mission Control attention-panel design §§ `Panel content` and `Update rules`, commit `352cf858b99b9f5d39f42822edafcd5382df6086`, requires one entry per followed work item or pending decision, the five named fields, and no Factory backlog mirror. Observed-state criterion: target `notes` record the stale-MC diagnosis; this round's read-only `python3 skills/herdr/scripts/a4s-reconcile --dry-run --repo [REDACTED:shared-root]/harness/a4s --callback ''` snapshot reported `in_progress=18 ready=38 ... closed-with-tab=6`, `MC-GATE ... CLOSED (STALE)` because lease `a4s-t9p.1` expired and pane `w4R:p1` was absent, then `planned=0 tickets=0 errors=0`. | Repaired; revision `7559428759774017701`. |
+| `a4s-28t` | `-4846720740054081192` | Reaper selection/guard criterion: `skills/herdr/scripts/a4s-reconcile` functions `reap` and `reap_blocker` and `skills/herdr/scripts/README.md` tick action 3 at reachable commit `e344c3ec550d2b016b27ad0aa922d51ada7fd3ad`. Exact regression tests `test_reaper_closes_finished_tab_but_respects_guards` and `test_reaper_never_closes_mc_tab` passed, as did all 70 tests in that module. Snapshot criterion: the same read-only probe observed six `closed-with-tab` candidates and a stale MC gate with zero planned mutations. | Repaired; revision `-6989615357330725953`. |
+| `a4s-r25` | `-6803447774151017375` | Plugin/timer boundary criterion preserves target `notes` exactly: event-driven plugin capabilities do not replace stale timer, Beads-change, sandbox, or durable MC-owner heartbeat concerns. Current-boundary criterion: `skills/herdr/scripts/README.md` opening and `Usage` at reachable commit `e344c3ec550d2b016b27ad0aa922d51ada7fd3ad` specify launchd/cron and never an agent; `skills/herdr/scripts/dev.a4s.reconcile.plist` at reachable commit `7a0810cbd725f0249c277cbfbc35e8ef3df3eedf` is explicitly a template with `StartInterval=45` and passed `plutil -lint`. Read-only `herdr --help` exposed built-in `integration` commands but no top-level plugin command. | Repaired; revision `-1796055027803981982`. |
+| `a4s-pgm` | `4137852468358179466` | Default-policy and no-op `--once` criteria come from the target `description`; the defect is independently visible in ref-reachable branch commit `2a3fd4d` at `skills/herdr/scripts/dispatch-reconcile` lines 43–55, 214–233, and 290–309. Workspace criterion is stated in the target and implemented by the current `skills/herdr/scripts/a4s-reconcile::resolve_workspace` at reachable commit `e344c3ec550d2b016b27ad0aa922d51ada7fd3ad`: it calls `herdr workspace list`, matches repo basename, and requires exactly one result. Current `--help` exposes no `--once` no-op. | Repaired; revision `-3564390277153843801`. |
+| `a4s-3ix` | `-7250169819373921645` | Target `notes` state `worker → orquestador, nunca worker → Human Operator`; `skills/herdr/SKILL.md` § `Worker escalation — orchestrator_target only` and `skills/herdr/tests/test_reconcile.py::test_prompt_routes_escalations_to_the_target_only_and_forbids_human_and_mc` at reachable commit `e344c3ec550d2b016b27ad0aa922d51ada7fd3ad` define and test the exact no-fallback route. | Repaired; revision `-6594344256378060278`. |
+| `a4s-9uw` | `-7612795570920970542` | Target `notes` require receipt time and start time. `skills/herdr/SKILL.md` § `Task acknowledgement — TASK_ACK / TASK_STARTED`, `skills/herdr/helper/task_ack.py`, and `skills/herdr/tests/test_task_ack.py` at reachable commit `e344c3ec550d2b016b27ad0aa922d51ada7fd3ad` define the exact receipt/start fields, ordering, correlation, and idempotency; all 29 `test_task_ack` tests passed in this round. | Repaired; revision `8904298162167867389`. |
+| `a4s-w2c` | `-8237609982204144402` | Target `description` supplies both the trigger (`list(target_model)` sends punctuation as key tokens) and the bounded alternatives (named-key mapping or paste/literal entry). Ref-reachable commit `2a3fd4d`, `skills/herdr/scripts/dispatch-reconcile::send_model_switch`, independently shows the character-list implementation. | Repaired; revision `3532945868074470212`. |
+| `a4s-1to` | `-454677210295099523` | Target `description` `## Design` supplies event teardown after callback/verdict and an OS-scheduled fail-closed dry-run orphan reaper; `## Constraints` keeps worktree/branch/PR lifecycle in `sweep`. Current `a4s-reconcile::reap` and its passing reaper tests at reachable commit `e344c3ec550d2b016b27ad0aa922d51ada7fd3ad` independently implement the tab-side boundary. | Repaired; revision `9023941305896097436`. |
+| `a4s-q2y` | `-1299548843390035892` | Target `description` supplies the absolute-path join trigger/result and explicitly requires a repo label/basename. Current `a4s-reconcile::resolve_workspace` at reachable commit `e344c3ec550d2b016b27ad0aa922d51ada7fd3ad` independently uses `os.path.basename(ctx.repo.rstrip('/'))`. | Repaired; revision `-1621823523259785249`. |
+
+For each update, all 12 remaining targets were re-read first (144 pre-update reads). Each full body came from a temporary regular file and was applied only with `bd update "$ID" --body-file "$DESCRIPTION_FILE" --json`; immediate read-back proved the only changed fields were `description`, Beads-managed `revision`, and `updated_at`.
+
+| ID | Revision before → after | Body SHA-256 |
+| --- | --- | --- |
+| `a4s-3nf` | `-5952035839008759337` → `2745290661909174667` | `278b4a0d12bc4f0dd29255738660701527ca2f04beb466d999c40a3a189f0f21` |
+| `a4s-5ib` | `-6380434537460906507` → `-313190083871522988` | `0ae5f1a5ab864c3c93ac898d8a8818903832dfab96d7604881f07ccdffd14a27` |
+| `a4s-9s2` | `5464860455960945591` → `5697938358105022875` | `efdadbc3d30c892fb937bea6bd1290f5f63f7fe02a1aa47b090d32e23e23a436` |
+| `a4s-tvz` | `-9142887585499206718` → `7559428759774017701` | `f6495a8e2c679d5f627658aec8370843f2d4c0a6c19e364a867a17018b2074cf` |
+| `a4s-28t` | `-4846720740054081192` → `-6989615357330725953` | `4988e1e0adf0e6eb859917b4bb40aae14061d968f413de3952383a7cf807e9e6` |
+| `a4s-r25` | `-6803447774151017375` → `-1796055027803981982` | `5c5de2bad195323c3fdcb578b9bb22c355e349310f5853af3b656d42b71e9b60` |
+| `a4s-pgm` | `4137852468358179466` → `-3564390277153843801` | `9316fae4ab6ea4f566a5d85658a012c228d905b0f4d7e1dc32285447b9cdbf4f` |
+| `a4s-3ix` | `-7250169819373921645` → `-6594344256378060278` | `65e6a53cbaed90488f1e1483ec3c7c47e387f33b34bf3decbe98ad854b52b693` |
+| `a4s-9uw` | `-7612795570920970542` → `8904298162167867389` | `11f66fa22d3a54ddaa24abdf0f36a218911d17e9a9833cd4a1f9e996fca65bee` |
+| `a4s-w2c` | `-8237609982204144402` → `3532945868074470212` | `0bc964193ce2143250fd5ba5a552d5ed00c24e1c47edb9a989c06ff1a2590c0f` |
+| `a4s-1to` | `-454677210295099523` → `9023941305896097436` | `a1216353a1772f4d14bf7471811fafc068734377edb189cad9d96953fb6fdf41` |
+| `a4s-q2y` | `-1299548843390035892` → `-1621823523259785249` | `94fed8ee4eba75559e570e8a1392065f6ee7b42869501dec0e336e22e67336b4` |
+
 ## Orphan evidence
 
 No orphan inspection was performed; it is outside Task 1 scope.
@@ -106,14 +144,15 @@ Added deterministic contract tests for malformed doctor JSON, failed `prime`, un
 - Additional Task 1 boundary tests: 3 passed.
 - Complete adapter suite: `python3 -m unittest skills/beads-loop/tests/test_beads_loop.py -v` — 52 passed, 0 failed.
 - `python3 -m py_compile skills/beads-loop/tests/smoke_pi_dispatch.py skills/beads-loop/tests/test_beads_loop.py` passed.
-- Task 3 fix round: 11 description updates; 11 immediate read-backs; 253 pre-mutation target/revision reads. Every direct target diff was limited to `description`, `revision`, and `updated_at`.
-- Final `bd lint`: exit `1`, reduced from 23 issues / 31 warnings to 12 issues / 15 warnings. The embedded lint gate is explicitly not claimed repaired.
-- Final state proof: `a4s-3nf` and all records from `a4s-5ib` onward exactly match their fix-round pre-mutation snapshots.
+- Task 3 fix round 1: 11 description updates; 11 immediate read-backs; 253 pre-mutation target/revision reads. Every direct target diff was limited to `description`, `revision`, and `updated_at`; lint fell to 12 issues / 15 warnings.
+- Task 3 fix round 2: 12 description updates; 12 immediate read-backs; 144 pre-update target/revision reads. Every direct target diff was limited to `description`, `revision`, and `updated_at`.
+- Domain tests: `python3 -m unittest skills.herdr.tests.test_reconcile -v` — 70 passed; `python3 -m unittest skills.herdr.tests.test_task_ack -v` — 29 passed.
+- Read-only runtime evidence: `a4s-reconcile --dry-run` observed the stale MC gate and planned zero mutations; `plutil -lint skills/herdr/scripts/dev.a4s.reconcile.plist` returned `OK`.
+- Final `bd lint`: exit `0`, `✓ No template warnings found (47 issues checked)`.
+- Final read-back: all 12 round-2 records have descriptions at the revisions listed above.
 - `git diff --check` passed.
 
 ## Exceptions
 
-- **Approved exception:** `a4s-3nf` remains unchanged at revision `-5952035839008759337` by operator decision. Its title-only record still lacks an allowed acceptance source; no synthetic prose was added.
-- **New blocking source gap:** `a4s-5ib` remains unchanged at revision `-6380434537460906507`. It is title-only, and neither accepted ADR 0010 nor reachable committed artifacts define status-query priority or a completion contract. This triggered the required stop; no later Bead was mutated.
-- Read-only completion of the all-ID inventory found additional acceptance gaps in `a4s-9s2`, `a4s-tvz`, `a4s-28t`, `a4s-r25`, and `a4s-pgm`. Later records `a4s-3ix`, `a4s-9uw`, `a4s-w2c`, `a4s-1to`, and `a4s-q2y` have complete sources but were intentionally left unchanged because they occur after the `a4s-5ib` stop condition.
+- No description evidence gap remains for the 23-record inventory. The earlier `a4s-3nf`, `a4s-5ib`, `a4s-9s2`, `a4s-tvz`, `a4s-28t`, `a4s-r25`, and `a4s-pgm` exceptions were superseded by fix-round-2 domain research; no criterion was derived from a title alone.
 - The initial repository-change test setup consumed only one patched `repository_root` observation because `prime` was mocked. The test was corrected to model the gate's first repository observation and the claim's second observation; `skills/beads-loop/scripts/beads_loop.py` remained unchanged. No retries, provider diagnostics, global selection, second fake provider, or live Bead mutation were introduced.
