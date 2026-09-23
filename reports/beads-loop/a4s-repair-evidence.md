@@ -125,7 +125,42 @@ For each update, all 12 remaining targets were re-read first (144 pre-update rea
 
 ## Orphan evidence
 
-No orphan inspection was performed; it is outside Task 1 scope.
+### a4s-ya4.11
+
+Closure evidence targets implementation commit `e344c3ec550d2b016b27ad0aa922d51ada7fd3ad` (`e344c3e`) and the repository-relative evidence path `reports/beads-loop/a4s-repair-evidence.md`.
+
+Changed artifacts in the implementation commit:
+
+- `skills/herdr/SKILL.md`
+- `skills/herdr/helper/task_result.py`
+- `skills/herdr/scripts/README.md`
+- `skills/herdr/scripts/a4s-reconcile`
+- `skills/herdr/tests/test_reconcile.py`
+- `skills/herdr/tests/test_task_result.py`
+
+Historical implementation verification at worktree revision `8e4f2296b14191f6c70aae2ba714909e8d753a2c`:
+
+- `git merge-base --is-ancestor e344c3e HEAD` — exit `0`.
+- `git show --stat --oneline e344c3e` — exit `0`; identified commit `e344c3e feat(herdr): TASK_RESULT record gates reconciler harvest-close (a4s-ya4.11)` and the six changed artifacts listed above (`923 insertions`, `34 deletions`).
+- `python3 -m unittest skills/beads-loop/tests/test_beads_loop.py -v` — exit `0`; `Ran 52 tests in 38.001s`, `OK`.
+
+Live state operation:
+
+- `bd show a4s-ya4.11 --json` — exit `0`; the single returned issue was exactly `a4s-ya4.11`, with precondition `status: "in_progress"`, `assignee: "Pablo"`, and revision `-740097444547002792`.
+- The authorized guarded command was executed once:
+
+  ```sh
+  bd update a4s-ya4.11 \
+    --status closed \
+    --if-assignee Pablo \
+    --if-status in_progress \
+    --append-notes "PASS evidence=reports/beads-loop/a4s-repair-evidence.md commit=e344c3e" \
+    --json
+  ```
+
+  It exited `0` and returned `status: "closed"`, `assignee: "Pablo"`, and the exact note `PASS evidence=reports/beads-loop/a4s-repair-evidence.md commit=e344c3e`.
+- Immediate read-back with `bd show a4s-ya4.11 --json` — exit `0`; it independently returned `status: "closed"`, `assignee: "Pablo"`, the exact evidence note above, revision `-931522777481773440`, and `closed_at: "2026-09-23T19:44:53Z"`.
+- No `bd close`, force flag, retry, or mutation of another Bead was used.
 
 ## Adapter matrix
 
