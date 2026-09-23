@@ -130,8 +130,21 @@ def snapshot(cwd: Path) -> Envelope:
         return Envelope("not_beads_repo", {})
     try:
         issues = provider_json(root, ("list", "--status", "open,in_progress,blocked", "--brief", "--limit", "0", "--json"))
+        if not isinstance(issues, list):
+            raise ValueError("provider list is not an array")
+        issue_ids = [row.get("id") for row in issues if isinstance(row, dict) and isinstance(row.get("id"), str)]
+        dependencies = provider_json(root, ("dep", "list", *issue_ids, "--json")) if issue_ids else []
+        if not isinstance(dependencies, list):
+            raise ValueError("provider dependencies are not an array")
+        by_issue: dict[str, list[object]] = {issue_id: [] for issue_id in issue_ids}
+        for dependency in dependencies:
+            if not isinstance(dependency, dict) or not isinstance(dependency.get("issue_id"), str):
+                raise ValueError("dependency is invalid")
+            if dependency["issue_id"] in by_issue:
+                by_issue[dependency["issue_id"]].append(dependency)
+        enriched = [dict(row, dependencies=by_issue.get(row["id"], [])) for row in issues if isinstance(row, dict)]
         ready = provider_json(root, ("list", "--ready", "--brief", "--sort", "priority", "--limit", "0", "--json"))
-        return project_snapshot(issues, ready)
+        return project_snapshot(enriched, ready)
     except ProviderFailure:
         return Envelope("provider_failed", {})
     except ValueError:
@@ -215,10 +228,16 @@ def finalize(cwd: Path, bead_id: str, verdict: str, evidence: Path) -> Envelope:
 
 
 def main(argv: Sequence[str]) -> int:
-    if list(argv) != ["snapshot"]:
-        print("usage: beads_todo_loop.py snapshot", file=sys.stderr)
+    args = list(argv)
+    if args == ["snapshot"]:
+        envelope = snapshot(Path.cwd())
+    elif len(args) == 3 and args[0] == "detail" and args[1] == "--bead":
+        envelope = detail(Path.cwd(), args[2])
+    elif len(args) == 7 and args[0] == "finalize" and args[1] == "--bead" and args[3] == "--verdict" and args[5] == "--evidence":
+        envelope = finalize(Path.cwd(), args[2], args[4], Path(args[6]))
+    else:
+        print("usage: beads_todo_loop.py snapshot | detail --bead ID | finalize --bead ID --verdict pass|fail --evidence PATH", file=sys.stderr)
         return 2
-    envelope = snapshot(Path.cwd())
     print(json.dumps({"schema_version": 2, "kind": envelope.kind, "details": envelope.details}, separators=(",", ":"), sort_keys=True))
     return 0
 

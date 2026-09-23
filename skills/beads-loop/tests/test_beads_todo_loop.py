@@ -56,6 +56,7 @@ class BeadsTodoLoopTests(unittest.TestCase):
                     {"id": "a", "title": "Implement A", "priority": 1, "status": "open", "dependencies": []},
                     {"id": "b", "title": "Implement B", "priority": 1, "status": "open", "dependencies": [{"type": "blocks", "depends_on_id": "a"}], "acceptance_criteria": "secret acceptance text"},
                 ],
+                [{"issue_id": "b", "depends_on_id": "a", "type": "blocks"}],
                 [{"id": "a"}],
             ])
             with patch.object(adapter, "run_provider", provider):
@@ -79,6 +80,7 @@ class BeadsTodoLoopTests(unittest.TestCase):
                     {"id": "blocked", "title": "Needs input", "priority": 1, "status": "blocked", "dependencies": []},
                 ],
                 [],
+                [],
             ])
             with patch.object(adapter, "run_provider", provider):
                 result = adapter.snapshot(repo)
@@ -94,7 +96,8 @@ class BeadsTodoLoopTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             repo = self.make_repo(Path(temporary))
             provider = FakeProvider([
-                [{"id": "child", "title": "Child", "priority": 2, "status": "open", "dependencies": [{"type": "parent-child", "depends_on_id": "parent"}]}],
+                [{"id": "child", "title": "Child", "priority": 2, "status": "open", "dependencies": []}],
+                [{"issue_id": "child", "depends_on_id": "parent", "type": "parent-child"}],
                 [],
             ])
             with patch.object(adapter, "run_provider", provider):

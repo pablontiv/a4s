@@ -26,8 +26,8 @@ The prior flow invoked `bd ready --claim`. Its Homeserver claim envelope for `hs
 
 ### `snapshot`
 
-1. Run the canonical command's read-only `list --status open,in_progress,blocked --brief --limit 0 --json` and `list --ready --brief --sort priority --limit 0 --json` operations.
-2. Normalize the complete non-closed graph without fetching or sending descriptions, acceptance criteria, notes, or provider internals to the LLM.
+1. Run the canonical command's read-only `list --status open,in_progress,blocked --brief --limit 0 --json`, one batched `dep list <open-ids> --json`, and `list --ready --brief --sort priority --limit 0 --json` operations.
+2. Normalize the complete non-closed graph without fetching Bead prose from the list operations or sending descriptions, acceptance criteria, notes, or provider internals to the LLM.
 3. Emit:
 
 ```json
