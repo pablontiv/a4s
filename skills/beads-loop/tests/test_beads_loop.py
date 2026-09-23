@@ -42,6 +42,25 @@ def completed(
     return subprocess.CompletedProcess(["bd", *args], returncode, stdout, stderr)
 
 
+def doctor_fixture(name: str) -> dict[str, object]:
+    path = SKILL_ROOT / "tests" / "fixtures" / "doctor" / f"{name}.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise AssertionError(f"fixture is not an object: {path}")
+    return payload
+
+
+def fixture_result(payload: dict[str, object]) -> subprocess.CompletedProcess[str]:
+    stdout = payload.get("stdout")
+    stderr = payload.get("stderr")
+    return completed(
+        (),
+        returncode=payload["returncode"],
+        stdout="" if stdout is None else json.dumps(stdout),
+        stderr="" if stderr is None else json.dumps(stderr),
+    )
+
+
 def stdout_json(payload: object) -> dict[str, object]:
     return {"stdout": json.dumps(payload)}
 
@@ -395,6 +414,34 @@ class BeadsLoopTests(unittest.TestCase):
             '{"details":{},"kind":"not_beads_repo","schema_version":1}'
         ])
         self.assertEqual(bd_calls, [])
+
+    def test_embedded_doctor_snapshot_requires_conventions(self) -> None:
+        adapter = load_adapter()
+        result = fixture_result(doctor_fixture("a4s-embedded"))
+
+        self.assertTrue(adapter._doctor_requires_conventions(result))
+
+    def test_generic_doctor_snapshot_is_successful(self) -> None:
+        adapter = load_adapter()
+        fixture = doctor_fixture("homeserver-generic")
+        result = fixture_result(fixture)
+
+        self.assertFalse(adapter._doctor_requires_conventions(result))
+        self.assertTrue(adapter._is_doctor_success(fixture["stdout"]))
+
+    def test_generic_doctor_snapshot_requires_literal_overall_ok_true(self) -> None:
+        adapter = load_adapter()
+        fixture = doctor_fixture("homeserver-generic")
+        original = fixture["stdout"]
+        self.assertIsInstance(original, dict)
+
+        for replacement in (False, "true"):
+            payload = dict(original)
+            payload["overall_ok"] = replacement
+            self.assertIs(adapter._is_doctor_success(payload), False)
+        payload = dict(original)
+        payload.pop("overall_ok")
+        self.assertIs(adapter._is_doctor_success(payload), False)
 
     def test_prime_uses_conventions_for_embedded_unsupported(self) -> None:
         adapter = load_adapter()

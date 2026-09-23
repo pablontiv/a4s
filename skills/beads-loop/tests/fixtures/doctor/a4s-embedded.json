@@ -1,0 +1,10 @@
+{
+  "returncode": 0,
+  "stdout": null,
+  "stderr": {
+    "code": "embedded_unsupported",
+    "mode": "embedded",
+    "unsupported": true,
+    "schema_version": 1
+  }
+}

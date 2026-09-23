@@ -1,0 +1,17 @@
+{
+  "returncode": 0,
+  "stdout": {
+    "schema_version": 1,
+    "overall_ok": true,
+    "diagnostics": [
+      {
+        "category": "Git Integration",
+        "name": "Git Hooks",
+        "severity": "degraded",
+        "status": "warning"
+      }
+    ],
+    "summary": "All 79 checks passed. No issues found."
+  },
+  "stderr": null
+}

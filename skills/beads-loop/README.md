@@ -2,6 +2,17 @@
 
 `SKILL.md` is the operational agent workflow. This document is a human-run verification procedure for a disposable repository; provider commands below are fixture setup and inspection only.
 
+## Read-only Pi dispatch smoke probe
+
+From the A4S repository root, run either explicit mode:
+
+```sh
+python3 skills/beads-loop/tests/smoke_pi_dispatch.py --print
+python3 skills/beads-loop/tests/smoke_pi_dispatch.py --headed
+```
+
+`--print` starts an offline, sessionless Pi process with only this skill loaded, asks it to execute the adapter's read-only `prime` command, and succeeds only when the last non-empty stdout line is a versioned terminal JSON envelope. `--headed` starts the same isolated Pi configuration in a PTY, dispatches `/skill:beads-loop`, waits only for the `Beads Autonomous Loop` heading, and then interrupts Pi before the workflow runs. Neither mode selects or claims work, finalizes a Bead, or changes provider state. Captured stdout, stderr, and PTY transcript data exist only below a `tempfile.TemporaryDirectory()` for the duration of the probe.
+
 ## Disposable two-terminal procedure
 
 Start in this A4S checkout and prepare an absolute adapter path plus a temporary target repository:
