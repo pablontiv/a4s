@@ -11,7 +11,7 @@ python3 skills/beads-loop/tests/smoke_pi_dispatch.py --print
 python3 skills/beads-loop/tests/smoke_pi_dispatch.py --headed
 ```
 
-`--print` starts an offline, sessionless Pi process with only this skill loaded, asks it to execute the adapter's read-only `prime` command, and succeeds only when the last non-empty stdout line is a versioned terminal JSON envelope. `--headed` starts the same isolated Pi configuration in a PTY, dispatches `/skill:beads-loop`, waits only for the `Beads Autonomous Loop` heading, and then interrupts Pi before the workflow runs. Neither mode selects or claims work, finalizes a Bead, or changes provider state. Captured stdout, stderr, and PTY transcript data exist only below a `tempfile.TemporaryDirectory()` for the duration of the probe.
+`--print` creates a disposable regular Git repository without `.beads`, starts an offline, sessionless Pi process there with the A4S skill loaded by explicit absolute path, asks it to execute the adapter's read-only `prime` command, and succeeds only when the last non-empty stdout line is a versioned terminal JSON envelope. This target guarantees the adapter returns terminal `not_beads_repo` instead of exposing healthy A4S work to selection. `--headed` starts the same isolated Pi configuration in a PTY, dispatches `/skill:beads-loop`, waits only for the `Beads Autonomous Loop` heading, and then interrupts Pi before the workflow runs. Neither mode selects or claims work, finalizes a Bead, or changes provider state. Captured stdout, stderr, and PTY transcript data exist only below a `tempfile.TemporaryDirectory()` for the duration of the probe.
 
 ## Disposable two-terminal procedure
 

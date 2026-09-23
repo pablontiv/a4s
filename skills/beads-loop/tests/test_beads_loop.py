@@ -16,20 +16,29 @@ from unittest.mock import patch
 
 SKILL_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = SKILL_ROOT / "scripts" / "beads_loop.py"
+SMOKE_SCRIPT = SKILL_ROOT / "tests" / "smoke_pi_dispatch.py"
 SKILL = SKILL_ROOT / "SKILL.md"
 README = SKILL_ROOT.parents[1] / "README.md"
 
 
-def load_adapter() -> ModuleType:
-    if not SCRIPT.is_file():
-        raise AssertionError(f"adapter does not exist: {SCRIPT}")
-    spec = importlib.util.spec_from_file_location("beads_loop", SCRIPT)
+def load_module(name: str, path: Path) -> ModuleType:
+    if not path.is_file():
+        raise AssertionError(f"module does not exist: {path}")
+    spec = importlib.util.spec_from_file_location(name, path)
     if spec is None or spec.loader is None:
-        raise AssertionError(f"cannot load adapter: {SCRIPT}")
+        raise AssertionError(f"cannot load module: {path}")
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def load_adapter() -> ModuleType:
+    return load_module("beads_loop", SCRIPT)
+
+
+def load_smoke_probe() -> ModuleType:
+    return load_module("smoke_pi_dispatch", SMOKE_SCRIPT)
 
 
 def completed(
@@ -325,6 +334,80 @@ class BeadsLoopTests(unittest.TestCase):
     def test_readme_publishes_beads_loop(self) -> None:
         text = README.read_text(encoding="utf-8")
         self.assertIn("[Beads autonomous loop](skills/beads-loop/)", text)
+
+    def test_print_probe_runs_pi_in_disposable_plain_git_repo(self) -> None:
+        smoke = load_smoke_probe()
+        real_run = subprocess.run
+        observed_target: Path | None = None
+
+        def run_probe(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+            nonlocal observed_target
+            if command[0] == "git":
+                return real_run(command, **kwargs)
+
+            self.assertEqual(command, smoke.PRINT_COMMAND)
+            target = Path(kwargs["cwd"])
+            observed_target = target
+            self.assertNotEqual(target, smoke.ROOT)
+            self.assertTrue(target.is_dir())
+            self.assertFalse((target / ".beads").exists())
+            repository = real_run(
+                ["git", "rev-parse", "--show-toplevel"],
+                cwd=target,
+                text=True,
+                capture_output=True,
+                check=True,
+            )
+            self.assertEqual(Path(repository.stdout.strip()), target.resolve())
+            skill_index = command.index("--skill")
+            self.assertEqual(Path(command[skill_index + 1]), smoke.SKILL)
+            self.assertIn(
+                "no Markdown, backticks, code fences, or commentary",
+                command[-1],
+            )
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                '{"schema_version":1,"kind":"not_beads_repo","details":{}}\n',
+                "",
+            )
+
+        stdout = io.StringIO()
+        with patch.object(smoke.subprocess, "run", side_effect=run_probe), redirect_stdout(stdout):
+            code = smoke.run_print()
+
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            json.loads(stdout.getvalue()),
+            {"schema_version": 1, "kind": "not_beads_repo", "details": {}},
+        )
+        self.assertIsNotNone(observed_target)
+        self.assertFalse(observed_target.exists())
+
+    def test_print_probe_rejects_missing_or_invalid_terminal_envelope(self) -> None:
+        smoke = load_smoke_probe()
+        real_run = subprocess.run
+        cases = (
+            ("", "returned no stdout envelope"),
+            ("not-json\n", "final stdout line is not JSON"),
+            ('{"schema_version":1,"kind":"ready","details":{}}\n', "did not return a terminal adapter envelope"),
+            ('{"schema_version":true,"kind":"not_beads_repo","details":{}}\n', "did not return a terminal adapter envelope"),
+            ('{"schema_version":1,"kind":"not_beads_repo","details":[]}\n', "did not return a terminal adapter envelope"),
+        )
+
+        for pi_stdout, diagnostic in cases:
+            with self.subTest(pi_stdout=pi_stdout):
+                def run_probe(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+                    if command[0] == "git":
+                        return real_run(command, **kwargs)
+                    return subprocess.CompletedProcess(command, 0, pi_stdout, "")
+
+                stderr = io.StringIO()
+                with patch.object(smoke.subprocess, "run", side_effect=run_probe), redirect_stderr(stderr):
+                    code = smoke.run_print()
+
+                self.assertEqual(code, 1)
+                self.assertIn(diagnostic, stderr.getvalue())
 
     def test_headless_loop_fixture_ends_after_no_ready(self) -> None:
         with tempfile.TemporaryDirectory() as td:

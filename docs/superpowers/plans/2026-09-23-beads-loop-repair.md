@@ -363,7 +363,7 @@
 
 - [ ] **Step 2: Record exact results and apply the final verdict rule.**
 
-  Record each command, exit code, bounded output, and the `a4s-ya4.11` read-back in `## Validation`. Report success only when lint is clean, `bd orphans --json` is `[]`, conventions `overall_ok` is boolean `true`, all tests and both Pi smoke modes exit 0, Rootline is valid, and `git diff --check` is silent. Otherwise report the first failed check as the blocker without changing scope.
+  Record each command, exit code, bounded output, and the `a4s-ya4.11` read-back in `## Validation`. Report success only when lint is clean, `bd orphans --json` exits 0 and parses as either `null` or `[]` (this provider emits literal `null` when no orphan records exist), conventions `overall_ok` is boolean `true`, all tests and both Pi smoke modes exit 0, Rootline is valid, and `git diff --check` is silent. Cite the observed no-orphan provider shape in the final evidence report. Otherwise report the first failed check as the blocker without changing scope.
 
 - [ ] **Step 3: Commit the final evidence update.**
 

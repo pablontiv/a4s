@@ -291,3 +291,31 @@ Fresh read-back: `bd show a4s-ya4.11 --json` — exit `0`. Bounded fields from t
 
 - No description evidence gap remains for the 23-record inventory. The earlier `a4s-3nf`, `a4s-5ib`, `a4s-9s2`, `a4s-tvz`, `a4s-28t`, `a4s-r25`, and `a4s-pgm` exceptions were superseded by fix-round-2 domain research; no criterion was derived from a title alone.
 - The initial repository-change test setup consumed only one patched `repository_root` observation because `prime` was mocked. The test was corrected to model the gate's first repository observation and the claim's second observation; `skills/beads-loop/scripts/beads_loop.py` remained unchanged. No retries, provider diagnostics, global selection, second fake provider, or live Bead mutation were introduced.
+
+## Task 5 blocker correction
+
+This section supersedes only the failed acceptance verdict recorded in commit `80886a4`; that commit and the historical command evidence above remain unchanged.
+
+### Verified root causes and corrections
+
+- `bd orphans --json` exits `0` and emits literal JSON `null` when this provider has no orphan records. The old exact-`[]` predicate rejected a valid empty result. Task 5 now accepts only exit `0` plus parsed `null` or `[]`; all other acceptance predicates remain unchanged.
+- The print smoke previously ran Pi with the healthy A4S worktree as CWD. Adapter `prime` correctly returned nonterminal `ready`, and Pi correctly refused to claim under the read-only instruction, leaving explanatory prose for the strict parser to reject. The probe now creates a temporary regular Git repository without `.beads`, runs Pi there, and still loads the A4S skill through its explicit absolute path.
+- The first target-CWD smoke exposed one further strict-output issue: Pi rendered the terminal `not_beads_repo` object inside inline Markdown backticks. Parsing was not relaxed. The prompt now requires the exact envelope as a raw final stdout line without Markdown or commentary.
+
+### TDD evidence
+
+1. RED: `python3 skills/beads-loop/tests/test_beads_loop.py -v BeadsLoopTests.test_print_probe_runs_pi_in_disposable_plain_git_repo` exited `1`; the assertion showed Pi CWD equal to `[REDACTED:shared-root]/harness/a4s/.worktrees/beads-loop-repair`.
+2. GREEN: after temporary `git init -q` setup and the CWD switch, the focused CWD and malformed-envelope tests both passed (`Ran 2 tests`, `OK`). The malformed cases cover missing stdout, non-JSON, nonterminal `ready`, boolean schema version, and non-object details.
+3. RED: after observing inline-backtick output from real Pi, the focused command-contract test exited `1` because the raw-output requirement was absent.
+4. GREEN: after adding the raw-output requirement, the same two focused tests passed (`Ran 2 tests`, `OK`). Strict terminal-envelope validation remains unchanged.
+
+### Corrective validation
+
+- `bd orphans --json` — exit `0`; exact output `null`. Under the corrected provider-shape predicate this is a verified no-orphan result.
+- `python3 -m unittest skills/beads-loop/tests/test_beads_loop.py -v` — exit `0`; `Ran 54 tests in 39.667s`, `OK`.
+- `python3 skills/beads-loop/tests/smoke_pi_dispatch.py --print` on the final implementation — exit `0`; `{"details":{},"kind":"not_beads_repo","schema_version":1}`.
+- `python3 skills/beads-loop/tests/smoke_pi_dispatch.py --headed` — exit `0`; `observed='Beads Autonomous Loop' transcript_bytes=4241 exit=-9`.
+- `rootline validate .workspace/docs/specs/2026-09-23-beads-loop-repair.md -o json` — exit `0`; one document valid, with zero errors and warnings.
+- No claim, update, finalize, close, or other live provider-state mutation was executed by this correction.
+
+**Corrected blocker verdict: PASSED.** The no-orphan provider shape is accepted without weakening any unrelated predicate, and the print smoke now obtains and strictly validates a terminal envelope from a disposable non-Beads Git target.

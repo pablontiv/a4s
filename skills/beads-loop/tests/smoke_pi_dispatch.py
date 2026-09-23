@@ -39,7 +39,8 @@ PRINT_COMMAND = [
     (
         "Use the beads-loop skill now. Execute its adapter prime command in the "
         "current repository, preserve the exact envelope, and stop on a terminal "
-        "envelope. Do not make changes."
+        "envelope. Print that exact envelope as the final stdout line with no "
+        "Markdown, backticks, code fences, or commentary. Do not make changes."
     ),
 ]
 HEADED_COMMAND = [
@@ -70,17 +71,27 @@ def _valid_terminal_envelope(payload: object) -> bool:
 def run_print() -> int:
     with tempfile.TemporaryDirectory(prefix="beads-loop-pi-print-") as temporary:
         log_root = Path(temporary)
+        target = log_root / "target"
+        target.mkdir()
         try:
+            subprocess.run(
+                ["git", "init", "-q"],
+                cwd=target,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=True,
+                timeout=TIMEOUT_SECONDS,
+            )
             result = subprocess.run(
                 PRINT_COMMAND,
-                cwd=ROOT,
+                cwd=target,
                 env=_environment(),
                 text=True,
                 capture_output=True,
                 check=False,
                 timeout=TIMEOUT_SECONDS,
             )
-        except (OSError, subprocess.TimeoutExpired) as exc:
+        except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
             print(f"Pi print probe could not complete: {type(exc).__name__}", file=sys.stderr)
             return 2
 
