@@ -3,7 +3,7 @@
 **Status:** proposed
 **Date:** 2026-09-22
 **Bead:** `a4s-b32`
-**ADR:** [0032](../adr/0032-beads-loop-adapter.md)
+**ADR:** [0033](../adr/0033-cierre-condicional-beads-loop.md)
 
 ## Intent
 
@@ -54,12 +54,12 @@ It then reads the returned ID with `bd show <id> --json`, requiring `in_progress
 
 ### `finalize`
 
-`beads_loop.py finalize --bead ID --verdict pass|fail --evidence PATH` requires an existing regular evidence file within the current repository.
+`beads_loop.py finalize --bead ID --verdict pass|fail --evidence PATH` requires an existing regular evidence file within the current repository. Before either mutation, it reads the exact Bead and requires `in_progress` plus assignment to the current actor; a mismatch returns `claim_lost` without mutating.
 
-- `pass`: `bd close ID --reason "evidence=PATH"`.
-- `fail`: `bd update ID --status blocked --append-notes "FAIL evidence=PATH"`.
+- `pass`: `bd update ID --status closed --if-assignee ACTOR --if-status in_progress --append-notes "PASS evidence=PATH"`.
+- `fail`: `bd update ID --status blocked --if-assignee ACTOR --if-status in_progress --append-notes "FAIL evidence=PATH"`.
 
-There is no synthetic `failed` Beads status. Both paths re-read the Bead and emit its final observed state. No automatic next claim is permitted.
+There is no synthetic `failed` Beads status. Both mutations remain bound to the actor, `in_progress` guard, and evidence note; if a conditional guard is lost, no mutation occurs and finalization ends fail-closed as `claim_lost`. After a successful mutation, both paths re-read the Bead and emit its final observed state. No automatic next claim is permitted.
 
 ## Skill flow
 
