@@ -145,6 +145,18 @@ class BeadsTodoLoopTests(unittest.TestCase):
         self.assertNotIn("--claim", provider.calls[0][1])
         self.assertEqual(provider.calls[1][1], ("show", "a", "--json"))
 
+    def test_no_shipped_beads_loop_contract_contains_claim_or_lease(self) -> None:
+        shipped = (
+            SKILL_ROOT / "SKILL.md",
+            SKILL_ROOT / "README.md",
+            SKILL_ROOT / "scripts" / "beads_todo_loop.py",
+            SKILL_ROOT / "tests" / "smoke_pi_dispatch.py",
+        )
+        self.assertFalse((SKILL_ROOT / "scripts" / "beads_loop.py").exists())
+        text = "\n".join(path.read_text(encoding="utf-8") for path in shipped)
+        for forbidden in ("beads_loop.py", "--claim", "claim_lost", "lease_expires_at", "heartbeat_at", "--if-assignee"):
+            self.assertNotIn(forbidden, text)
+
     def test_finalize_rejects_outside_or_symlinked_evidence(self) -> None:
         adapter = load_adapter()
         with tempfile.TemporaryDirectory() as temporary, tempfile.TemporaryDirectory() as outside_temporary:
