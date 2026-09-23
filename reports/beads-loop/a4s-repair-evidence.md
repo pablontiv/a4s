@@ -175,6 +175,8 @@ Added deterministic contract tests for malformed doctor JSON, failed `prime`, un
 
 ## Validation
 
+### Historical validation retained from repair tasks
+
 - Focused contract tests: 5 passed.
 - Additional Task 1 boundary tests: 3 passed.
 - Complete adapter suite: `python3 -m unittest skills/beads-loop/tests/test_beads_loop.py -v` — 52 passed, 0 failed.
@@ -183,9 +185,107 @@ Added deterministic contract tests for malformed doctor JSON, failed `prime`, un
 - Task 3 fix round 2: 12 description updates; 12 immediate read-backs; 144 pre-update target/revision reads. Every direct target diff was limited to `description`, `revision`, and `updated_at`.
 - Domain tests: `python3 -m unittest skills.herdr.tests.test_reconcile -v` — 70 passed; `python3 -m unittest skills.herdr.tests.test_task_ack -v` — 29 passed.
 - Read-only runtime evidence: `a4s-reconcile --dry-run` observed the stale MC gate and planned zero mutations; `plutil -lint skills/herdr/scripts/dev.a4s.reconcile.plist` returned `OK`.
-- Final `bd lint`: exit `0`, `✓ No template warnings found (47 issues checked)`.
-- Final read-back: all 12 round-2 records have descriptions at the revisions listed above.
-- `git diff --check` passed.
+- Final repair-task `bd lint`: exit `0`, `✓ No template warnings found (47 issues checked)`.
+- Final repair-task read-back: all 12 round-2 records have descriptions at the revisions listed above.
+- Repair-task `git diff --check` passed.
+
+### Task 5 fresh acceptance run
+
+The commands below were executed once, in the specified order, from worktree revision `7576108f2b28196e71bb6b4f5a83a3329c2f5ff4`. Output is bounded to the complete result for short commands and the unittest summary for the verbose suite.
+
+1. `bd lint` — exit `0`.
+
+   ```text
+   ✓ No template warnings found (47 issues checked)
+   ```
+
+2. `bd orphans --json` — exit `0`.
+
+   ```json
+   null
+   ```
+
+   This does not meet the required exact output predicate `[]`.
+
+3. `bd doctor --check conventions --agent --json` — exit `0`.
+
+   ```json
+   {
+     "checks": [
+       {
+         "category": "Conventions",
+         "message": "all 47 open issues pass template checks",
+         "name": "conventions.lint",
+         "status": "ok"
+       },
+       {
+         "category": "Conventions",
+         "message": "no issues inactive for 14+ days",
+         "name": "conventions.stale",
+         "status": "ok"
+       },
+       {
+         "category": "Conventions",
+         "message": "no orphaned issues found",
+         "name": "conventions.orphans",
+         "status": "ok"
+       }
+     ],
+     "overall_ok": true,
+     "path": "[REDACTED:shared-root]/harness/a4s",
+     "schema_version": 1
+   }
+   ```
+
+   `overall_ok` is the JSON boolean `true`.
+
+4. `python3 -m unittest skills/beads-loop/tests/test_beads_loop.py -v` — exit `0`.
+
+   ```text
+   ----------------------------------------------------------------------
+   Ran 52 tests in 38.005s
+
+   OK
+   ```
+
+5. `python3 skills/beads-loop/tests/smoke_pi_dispatch.py --print` — exit `1`.
+
+   ```text
+   Pi print probe final stdout line is not JSON.
+   ```
+
+   The strict final-line JSON gate was preserved. This failed smoke was not rerun.
+
+6. `python3 skills/beads-loop/tests/smoke_pi_dispatch.py --headed` — exit `0`.
+
+   ```text
+   observed='Beads Autonomous Loop' transcript_bytes=5711 exit=-9
+   ```
+
+7. `rootline validate .workspace/docs/specs/2026-09-23-beads-loop-repair.md -o json` — exit `0`.
+
+   ```json
+   {"version":2,"kind":"rootline/validate-batch","results":[{"version":1,"kind":"rootline/validate","path":".workspace/docs/specs/2026-09-23-beads-loop-repair.md","valid":true,"errors":[],"warnings":[]}],"structural":[],"stem_health":[],"drift_warnings":[],"notices":[],"summary":{"total":1,"valid":1,"invalid":0,"errors_count":0,"warnings_count":0,"drift_warnings_count":0,"structural_errors_count":0,"structural_warnings_count":0,"stem_health_errors_count":0,"stem_health_warnings_count":0,"stem_health_info_count":0}}
+   ```
+
+8. `git diff --check` — exit `0`; output was silent.
+
+After this report update, `git diff --check` was run again as a pre-commit check; it also exited `0` with silent output.
+
+Fresh read-back: `bd show a4s-ya4.11 --json` — exit `0`. Bounded fields from the single returned record:
+
+```json
+{
+  "id": "a4s-ya4.11",
+  "notes": "PASS evidence=reports/beads-loop/a4s-repair-evidence.md commit=e344c3e",
+  "status": "closed",
+  "assignee": "Pablo",
+  "closed_at": "2026-09-23T19:44:53Z",
+  "revision": "-931522777481773440"
+}
+```
+
+**Acceptance verdict: FAILED.** The first failed predicate is command 2: `bd orphans --json` returned `null`, not the required `[]`, despite exiting `0`. Command 5 is an additional failure because the strict Pi print smoke exited `1`. No Bead was mutated and neither failed gate was relaxed or retried.
 
 ## Exceptions
 
