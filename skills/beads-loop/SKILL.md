@@ -1,72 +1,46 @@
 ---
 name: beads-loop
-description: Use when autonomously executing all canonical ready Beads in the current Git repository, one atomic claim at a time, with validation evidence recorded before finalization.
+description: Use when executing the current repository's complete Beads backlog sequentially through Pi todos.
 metadata:
   author: pablontiv
 user-invocable: true
 ---
 
-# Beads Autonomous Loop
+# Beads Todo Loop
 
-Run the canonical ready work in the current Git repository until the adapter returns a terminal envelope. This workflow is self-contained for Pi and Claude. The skill accepts no arguments: do not accept a repository path or a Bead selector from the invocation.
+Run the repository-local Beads backlog as one sequential Pi session. Beads is the durable backlog; Pi `todo` is this session's scheduler. Accept no arguments and stay in the current repository.
 
-## Adapter invocation
+## Script
 
-Resolve `scripts/beads_loop.py` relative to this skill directory to an absolute path and assign that path to `BEADS_LOOP_ADAPTER`. Keep the process working directory at the current Git repository where the skill was invoked; do not change into the skill directory. Every command below uses the resolved absolute path through `BEADS_LOOP_ADAPTER`. Invoke no backlog command directly.
+Resolve `scripts/beads_todo_loop.py` relative to this skill into `BEADS_TODO_LOOP`; do not change the working directory. The script emits one compact JSON envelope per command.
 
-Every adapter command emits exactly one JSON envelope with `schema_version`, `kind`, and `details`. Preserve the complete returned envelope as operational evidence.
+1. Run `beads_todo_loop.py snapshot` as `python3 "$BEADS_TODO_LOOP" snapshot`.
+2. On `snapshot`, create one `todo` for every `details.todos` record. Store `bead_id`, `key`, `priority`, and `rank` as metadata.
+3. In a second deterministic pass, resolve every script `blocked_by` key to its created todo ID and add it with `blockedBy`.
+4. Report `details.withheld`; do not schedule it automatically.
 
-## Loop
+## Per-Bead loop
 
-Follow these steps in order for one Bead at a time.
+Select the unblocked todo with the lowest script `rank`, mark it `in_progress`, and run:
 
-1. From the current Git repository, run:
+```sh
+python3 "$BEADS_TODO_LOOP" detail --bead "$BEAD_ID"
+```
 
-   ```sh
-   python3 "$BEADS_LOOP_ADAPTER" prime
-   ```
+Read its description and acceptance criteria. Use only the relevant discipline:
 
-   Continue only when `kind` is `ready`.
+- `backscroll` when prior work can change the result;
+- `systematic-debugging` for unexpected failure;
+- `test-driven-development` before production-code changes;
+- `executing-plans` when the Bead names an approved plan;
+- `verification-before-completion` before the verdict.
 
-2. Run one atomic claim:
+Perform only the selected Bead, preserve unrelated changes, write bounded in-repository evidence, and run its validation. Then run:
 
-   ```sh
-   python3 "$BEADS_LOOP_ADAPTER" claim
-   ```
+```sh
+python3 "$BEADS_TODO_LOOP" finalize --bead "$BEAD_ID" --verdict pass|fail --evidence "$EVIDENCE_PATH"
+```
 
-   Continue only when `kind` is `claimed`. Take `details.issue.id` as `BEAD_ID`; never substitute an advisory ID or choose an item yourself.
+On `finalized`, mark the todo `completed` with `metadata.outcome=pass|fail` and the evidence path. A fail records processed work; continue independent todos.
 
-3. Read the claimed issue's description and acceptance criteria from `details.issue`. Perform exactly that work in the current repository. Do not broaden the scope or begin another item.
-
-4. Write a bounded in-repository evidence report to a regular file. Set its repository-relative path as `EVIDENCE_PATH`. Include the Bead ID, implementation summary, changed files, applicable validation commands, exit results, and a concise bounded excerpt needed to support the verdict.
-
-5. Run all applicable validation for the claimed work. Record the commands and results in the evidence report.
-
-6. If validation passes, close the claimed item with its evidence:
-
-   ```sh
-   python3 "$BEADS_LOOP_ADAPTER" finalize --bead "$BEAD_ID" --verdict pass --evidence "$EVIDENCE_PATH"
-   ```
-
-   If validation fails, record the failure evidence and block the claimed item:
-
-   ```sh
-   python3 "$BEADS_LOOP_ADAPTER" finalize --bead "$BEAD_ID" --verdict fail --evidence "$EVIDENCE_PATH"
-   ```
-
-   Continue only when `kind` is `finalized`, after checking that the returned issue ID and observed final status match the claimed item and verdict. A pass must return `closed`; a fail must return `blocked`.
-
-7. Repeat from `prime`. Never combine finalization with another claim.
-
-## Terminal envelopes
-
-Stop only when an adapter command returns one of these terminal kinds, and report the complete returned envelope plus any evidence report already written:
-
-- `no_ready`: successful completion; no canonical ready work remains.
-- `not_beads_repo`: the current-repository guard failed.
-- `doctor_failed`: repository health could not be established.
-- `claim_lost`: claim ownership, its read-back, or a conditional finalization guard could not be verified.
-- `blocked`: the requested adapter operation failed closed.
-- `invalid_evidence`: the evidence file did not satisfy the in-repository file contract.
-
-Do not retry a terminal result by guessing different work or changing scope. A failed validation must use `finalize fail`; if that returns `finalized`, report the blocked Bead and continue the loop from `prime`.
+After every session todo is completed, run one final `snapshot`. Materialize only newly seen open Beads; if none remain, report completion and withheld entries. Stop and report the full envelope on any other result.

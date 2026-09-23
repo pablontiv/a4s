@@ -20,11 +20,10 @@ LOAD_MARKER = "Beads Autonomous Loop"
 MAX_TRANSCRIPT_BYTES = 64 * 1024
 TIMEOUT_SECONDS = 120
 TERMINAL_KINDS = {
-    "no_ready",
+    "no_open",
     "not_beads_repo",
-    "doctor_failed",
-    "claim_lost",
-    "blocked",
+    "provider_failed",
+    "malformed_provider_output",
     "invalid_evidence",
 }
 PRINT_COMMAND = [
@@ -37,7 +36,7 @@ PRINT_COMMAND = [
     "--skill",
     str(SKILL),
     (
-        "Use the beads-loop skill now. Execute its adapter prime command in the "
+        "Use the beads-loop skill now. Execute its snapshot command in the "
         "current repository, preserve the exact envelope, and stop on a terminal "
         "envelope. Print that exact envelope as the final stdout line with no "
         "Markdown, backticks, code fences, or commentary. Do not make changes."
