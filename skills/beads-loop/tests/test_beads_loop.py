@@ -8,7 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from types import ModuleType
 from unittest.mock import patch
@@ -1160,6 +1160,164 @@ class BeadsLoopTests(unittest.TestCase):
         self.assertEqual(shown_fail["assignee"], "race-worker")
         self.assertIn("FAIL evidence=reports/fail.txt", shown_fail["notes"])
         self.assertEqual(ready_after, [])
+
+    def test_prime_rejects_malformed_doctor_json_without_fallback(self) -> None:
+        adapter = load_adapter()
+        fake = FakeBd()
+        fake.reply(["doctor", "--agent", "--json"], stdout="{not-json secret")
+        with tempfile.TemporaryDirectory() as td:
+            repo = self.make_repo(Path(td))
+            with patch.object(adapter, "run_bd", side_effect=fake):
+                result = adapter.prime(repo)
+        self.assertEqual(result.kind, "doctor_failed")
+        self.assertEqual([args for _, args in fake.calls], [("doctor", "--agent", "--json")])
+        self.assertNotIn("secret", json.dumps(result.details))
+
+    def test_prime_blocks_when_prime_command_fails(self) -> None:
+        adapter = load_adapter()
+        fake = FakeBd()
+        fake.reply(["doctor", "--agent", "--json"], **stdout_json({"status": "ok"}))
+        fake.reply(["prime", "--no-memories"], returncode=7)
+        with tempfile.TemporaryDirectory() as td:
+            repo = self.make_repo(Path(td))
+            with patch.object(adapter, "run_bd", side_effect=fake):
+                result = adapter.prime(repo)
+        self.assertEqual(result.kind, "blocked")
+        self.assertEqual(result.details, {"reason": "prime_failed", "exit_code": 7})
+        self.assertEqual(
+            [args for _, args in fake.calls],
+            [("doctor", "--agent", "--json"), ("prime", "--no-memories")],
+        )
+        fake.assert_drained()
+
+    def test_prime_blocks_when_ready_command_is_unavailable(self) -> None:
+        adapter = load_adapter()
+        fake = FakeBd()
+        fake.reply(["doctor", "--agent", "--json"], **stdout_json({"status": "ok"}))
+        fake.reply(["prime", "--no-memories"])
+        ready_args = ("ready", "--sort", "priority", "--json")
+
+        def unavailable_ready(cwd: Path, args: list[str] | tuple[str, ...]) -> subprocess.CompletedProcess[str]:
+            if tuple(args) == ready_args:
+                fake.calls.append((cwd, ready_args))
+                raise FileNotFoundError("bd")
+            return fake(cwd, args)
+
+        with tempfile.TemporaryDirectory() as td:
+            repo = self.make_repo(Path(td))
+            with patch.object(adapter, "run_bd", side_effect=unavailable_ready):
+                result = adapter.prime(repo)
+        self.assertEqual(result.kind, "blocked")
+        self.assertEqual(result.details, {"reason": "ready_failed"})
+        self.assertEqual(
+            [args for _, args in fake.calls],
+            [
+                ("doctor", "--agent", "--json"),
+                ("prime", "--no-memories"),
+                ready_args,
+            ],
+        )
+        fake.assert_drained()
+
+    def test_claim_reports_repository_changed_after_ready_gate(self) -> None:
+        adapter = load_adapter()
+        fake = FakeBd()
+        with tempfile.TemporaryDirectory() as td:
+            repo = self.make_repo(Path(td))
+            gate = adapter.Envelope("ready", {"issues": [{"id": "b-1"}]})
+
+            def ready_gate(cwd: Path) -> adapter.Envelope:
+                adapter.repository_root(cwd)
+                return gate
+
+            with (
+                patch.object(adapter, "prime", side_effect=ready_gate),
+                patch.object(adapter, "repository_root", side_effect=[repo, None]),
+                patch.object(adapter, "run_bd", side_effect=fake),
+            ):
+                result = adapter.claim(repo)
+        self.assertEqual(result.kind, "claim_lost")
+        self.assertEqual(result.details, {"reason": "repository_changed"})
+        self.assertEqual(fake.calls, [])
+
+    def test_claim_rejects_non_list_claim_output(self) -> None:
+        adapter = load_adapter()
+        fake = FakeBd()
+        fake.reply(
+            ["ready", "--sort", "priority", "--claim", "--json"],
+            **stdout_json({"id": "b-1"}),
+        )
+        gate = adapter.Envelope("ready", {"issues": [{"id": "b-1"}]})
+        with tempfile.TemporaryDirectory() as td:
+            repo = self.make_repo(Path(td))
+            with (
+                patch.object(adapter, "prime", return_value=gate),
+                patch.object(adapter, "run_bd", side_effect=fake),
+            ):
+                result = adapter.claim(repo)
+        self.assertEqual(result.kind, "claim_lost")
+        self.assertEqual(result.details, {"reason": "unexpected_claim_output"})
+        self.assertEqual(
+            [args for _, args in fake.calls],
+            [("ready", "--sort", "priority", "--claim", "--json")],
+        )
+        fake.assert_drained()
+
+    def test_claim_refuses_unresolved_actor_without_show(self) -> None:
+        adapter = load_adapter()
+        fake = FakeBd()
+        fake.reply(
+            ["ready", "--sort", "priority", "--claim", "--json"],
+            **stdout_json([{"id": "b-1"}]),
+        )
+        gate = adapter.Envelope("ready", {"issues": [{"id": "b-1"}]})
+        with tempfile.TemporaryDirectory() as td:
+            repo = self.make_repo(Path(td))
+            with (
+                patch.object(adapter, "prime", return_value=gate),
+                patch.object(adapter, "run_bd", side_effect=fake),
+                patch.object(adapter, "_resolved_actor", return_value=None),
+            ):
+                result = adapter.claim(repo)
+        self.assertEqual(result.kind, "claim_lost")
+        self.assertEqual(result.details, {"reason": "actor_unresolved"})
+        self.assertEqual(
+            [args for _, args in fake.calls],
+            [("ready", "--sort", "priority", "--claim", "--json")],
+        )
+        fake.assert_drained()
+
+    def test_finalize_rejects_invalid_verdict_before_provider_call(self) -> None:
+        adapter = load_adapter()
+        fake = FakeBd()
+        with tempfile.TemporaryDirectory() as td:
+            repo = self.make_repo(Path(td))
+            evidence = repo / "proof.txt"
+            evidence.write_text("proof", encoding="utf-8")
+            with patch.object(adapter, "run_bd", side_effect=fake):
+                result = adapter.finalize(repo, "b-1", "retry", evidence)
+        self.assertEqual(result.kind, "blocked")
+        self.assertEqual(result.details, {"reason": "invalid_verdict"})
+        self.assertEqual(fake.calls, [])
+
+    def test_main_serializes_one_envelope_for_claim_lost(self) -> None:
+        adapter = load_adapter()
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        envelope = adapter.Envelope("claim_lost", {"reason": "claim_failed"})
+        with (
+            patch.object(adapter, "claim", return_value=envelope),
+            redirect_stdout(stdout),
+            redirect_stderr(stderr),
+        ):
+            code = adapter.main(["claim"])
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            stdout.getvalue(),
+            '{"details":{"reason":"claim_failed"},"kind":"claim_lost","schema_version":1}\n',
+        )
+        self.assertEqual(len(stdout.getvalue().splitlines()), 1)
+        self.assertEqual(stderr.getvalue(), "")
 
     def test_main_dispatches_claim_and_serializes_envelope(self) -> None:
         adapter = load_adapter()
