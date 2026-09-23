@@ -37,29 +37,53 @@ a4s-w2c, a4s-1to, a4s-pgm, a4s-q2y
 
 ## Description evidence
 
-All targets were snapshotted with `bd show <id> --json` before any mutation. The following records, in inventory order, had eligible source material for every missing heading encountered before the stop condition:
+Fix round 1 started at reachable revision `e26651b49bb9c6e51e971a66910f5bbbdf15cafb`. Every target was re-read before evidence classification. The table is complete for all 23 targets; “gap” means the required heading cannot be populated from the permitted source classes without inventing a completion contract.
 
-| ID | Target revision | Missing heading | Exact eligible source |
-| --- | --- | --- | --- |
-| `a4s-cxk.3` | `410949277455370890` | `## Goal` | Target `description`, beginning `Materializar la superficie canónica decidida...`. |
-| `a4s-cxk.3` | `410949277455370890` | `## Findings` | Target `notes`, beginning `PRECONDICION: ADR 0020 NO esta en main...`; these are observations rather than projected acceptance. |
-| `a4s-uy7.2` | `-7049661242752543763` | `## Acceptance Criteria` | Target `description`, existing `## Criterios de aceptación` block. |
-| `a4s-uy7.1` | `-9116626699638527550` | `## Goal` | Target `description`, existing `## Objetivo` block. |
-| `a4s-uy7.1` | `-9116626699638527550` | `## Findings` | Accepted ADR 0025, `.workspace/docs/adr/0025-usar-worktrees-sparse-bajo-workspace.md`, `## Decisión` and `## Consecuencias`, reachable commit `68ca0672520d40a4e44e0e7651ffb3e122d7b65e`. This avoids relabeling the target's prospective criteria as completed findings. |
-| `a4s-uy7` | `-4396956084376332440` | `## Success Criteria` | Target `description`, existing `## Criterios de aceptación` block. |
-| `a4s-fm9.1` | `-9199166730729342713` | `## Acceptance Criteria` | Target `description` defines the approved role boundary; parent `a4s-fm9` revision `-5373831160250543823`, `description` scope and final `Acceptance:` sentence, supplies the documentation outcome. |
-| `a4s-qvh` | `-2927835661368094243` | `## Steps to Reproduce` | Target `description`: the trigger is an `in_progress` Bead with a declared worker but no live agent; Pattern 3 at lines 265–281 writes an AttentionTicket and escalates. |
-| `a4s-qvh` | `-2927835661368094243` | `## Acceptance Criteria` | Target `description`, exact bounded outcome choice beginning `Decide: implement auto re-dispatch... or update docs...`. |
-| `a4s-fm9` | `-5373831160250543823` | `## Acceptance Criteria` | Target `description`, final `Acceptance:` sentence. |
-| `a4s-j11` | `-2813359493568754434` | `## Acceptance Criteria` | Target `design`, exact PoC requirement beginning `PoC: forzar/simular limite...` and the following failover condition. |
-| `a4s-6ak.10` | `-5722702302783650683` | `## Acceptance Criteria` | Target `design`, exact `Deliverables:` list `(a)` through `(c)`. |
-| `a4s-ya4.3` | `5752151494722383298` | `## Decision` | Parent `a4s-ya4` revision `6426898938080748453`, `description` section `## Decision and sequence`, especially item 3; target `description` `## Scope` bounds the proposed ADR/spec change. |
-| `a4s-ya4.3` | `5752151494722383298` | `## Rationale` | Target `description` `## Context`; parent `a4s-ya4` revision `6426898938080748453`, `description` section `## Evidence`. |
-| `a4s-ya4.3` | `5752151494722383298` | `## Alternatives Considered` | Accepted ADR 0015, `.workspace/docs/adr/0015-mantener-orquestador-delgado-con-handoffs-por-puntero.md`, `## Alternativas descartadas`, reachable commit `040de9de9b9c4069b70e9f8b0a1c0db69ccc1d19`; its queue alternative cites accepted ADR 0009 at reachable commit `352cf858b99b9f5d39f42822edafcd5382df6086`. |
-| `a4s-uy7.3` | `2549885241521080191` | `## Acceptance Criteria` | Target `description`, existing `## Criterios de aceptación` block. |
-| `a4s-3nf` | `-5952035839008759337` | `## Acceptance Criteria` | **Evidence gap:** the target has a title only—no `description`, `design`, `notes`, `parent`, or linked records. `git log HEAD -S'a4s-3nf'` finds only commit `35787bb6bdebd2849734ee72d513dc8f47a63f81`, where the ID appears in this repair plan's lint inventory; it contains no acceptance contract. |
+| ID | Pre-mutation revision | Required heading(s) | Exact eligible source or bounded gap | Outcome |
+| --- | --- | --- | --- | --- |
+| `a4s-cxk.3` | `410949277455370890` | `## Goal`; `## Findings` | Goal: target `description`, beginning `Materializar la superficie canónica decidida...`. Findings: target `notes`, beginning `PRECONDICION: ADR 0020 NO esta en main...`. | Repaired; revision `-3601070862089382564`. |
+| `a4s-uy7.2` | `-7049661242752543763` | `## Acceptance Criteria` | Target `description`, exact existing `## Criterios de aceptación` block. | Repaired; revision `-1008961154052703481`. |
+| `a4s-uy7.1` | `-9116626699638527550` | `## Goal`; `## Findings` | Goal: target `description`, exact `## Objetivo` block. Findings: accepted ADR 0025, `.workspace/docs/adr/0025-usar-worktrees-sparse-bajo-workspace.md`, exact `## Decisión` and `## Consecuencias` prose, reachable commit `68ca0672520d40a4e44e0e7651ffb3e122d7b65e`. | Repaired; revision `5990236745384002121`. |
+| `a4s-uy7` | `-4396956084376332440` | `## Success Criteria` | Target `description`, exact existing `## Criterios de aceptación` block. | Repaired; revision `-7444700761361004514`. |
+| `a4s-fm9.1` | `-9199166730729342713` | `## Acceptance Criteria` | Target `description` supplies the role boundary; parent `a4s-fm9` revision `-5373831160250543823` supplies the exact final `Acceptance:` sentence. | Repaired; revision `-8361949971115684424`. |
+| `a4s-qvh` | `-2927835661368094243` | `## Steps to Reproduce`; `## Acceptance Criteria` | Target `description`: the first two sentences state the `in_progress`/declared-worker/no-live-agent trigger and Pattern 3 escalation; the `Decide: implement auto re-dispatch... or update docs...` sentence states the bounded accepted outcome. | Repaired; revision `-2160322062475418047`. |
+| `a4s-fm9` | `-5373831160250543823` | `## Acceptance Criteria` | Target `description`, exact final `Acceptance:` sentence. | Repaired; revision `7415121194463033748`. |
+| `a4s-j11` | `-2813359493568754434` | `## Acceptance Criteria` | Target `design`, including the exact PoC requirement beginning `PoC: forzar/simular limite...` and its failover condition. | Repaired; revision `4035088494396636149`. |
+| `a4s-6ak.10` | `-5722702302783650683` | `## Acceptance Criteria` | Target `design`, exact `Deliverables:` list `(a)` through `(c)`. | Repaired; revision `7111154719858939858`. |
+| `a4s-ya4.3` | `5752151494722383298` | `## Decision`; `## Rationale`; `## Alternatives Considered` | Decision: parent `a4s-ya4` revision `6426898938080748453`, exact item 3 under `## Decision and sequence`. Rationale: the same parent’s exact `## Evidence` paragraph. Alternatives: accepted ADR 0015 exact `## Alternativas descartadas` paragraph at `.workspace/docs/adr/0015-mantener-orquestador-delgado-con-handoffs-por-puntero.md`, reachable commit `040de9de9b9c4069b70e9f8b0a1c0db69ccc1d19`. | Repaired; revision `1059362296646021972`. |
+| `a4s-uy7.3` | `2549885241521080191` | `## Acceptance Criteria` | Target `description`, exact existing `## Criterios de aceptación` block. | Repaired; revision `-123422069437267389`. |
+| `a4s-3nf` | `-5952035839008759337` | `## Acceptance Criteria` | **Operator-approved exception:** title only; no `description`, `design`, `notes`, parent, linked record, accepted ADR, or reachable committed acceptance contract. | Unchanged by explicit operator choice. |
+| `a4s-5ib` | `-6380434537460906507` | `## Acceptance Criteria` | **New evidence gap and stop condition:** title only; no `description`, `design`, `notes`, parent, or linked record. Accepted ADR 0010 assigns responses/steering to Mission Control but does not define status-query priority or this task’s completion contract. Reachable ID history contains only the repair plan/inventory reports. | Unchanged; stopped all later mutations. |
+| `a4s-9s2` | `5464860455960945591` | `## Acceptance Criteria` | **Evidence gap:** title only; no target fields, parent, linked record, accepted ADR, or reachable committed artifact defines the completion contract. Reachable ID history contains only the repair plan/inventory reports. | Read-only evaluation after stop; unchanged. |
+| `a4s-3ix` | `-7250169819373921645` | `## Acceptance Criteria` | Target `notes`, exact requirement: `El protocolo debe ser claro: worker → orquestador, nunca worker → Human Operator.` Reachable `skills/herdr/SKILL.md` § `Worker escalation` independently states the same route at commit `e344c3ec550d2b016b27ad0aa922d51ada7fd3ad`. | Source complete, but after stop; unchanged. |
+| `a4s-9uw` | `-7612795570920970542` | `## Acceptance Criteria` | Target `notes`, exact requirements that the receiver acknowledge receipt and the Bead record `(1) cuándo se conoció la tarea (recibido), (2) cuándo se inició`; reachable `skills/herdr/SKILL.md` § `Task acknowledgement` specifies those durable events at commit `e344c3ec550d2b016b27ad0aa922d51ada7fd3ad`. | Source complete, but after stop; unchanged. |
+| `a4s-tvz` | `-9142887585499206718` | `## Acceptance Criteria` | **Evidence gap:** target `notes` record the operator’s question and one historical MC answer, but no required status contents or completion contract; no parent or linked record exists, and reachable ID history contains only repair inventory. | Read-only evaluation after stop; unchanged. |
+| `a4s-28t` | `-4846720740054081192` | `## Acceptance Criteria` | **Evidence gap:** target `notes` only record the question `estado del reaper en a4s`; no required answer/evidence or completion contract, parent, linked record, accepted ADR, or reachable committed artifact was found. | Read-only evaluation after stop; unchanged. |
+| `a4s-r25` | `-6803447774151017375` | `## Acceptance Criteria` | **Evidence gap:** target `notes` contain an investigation idea and a result/boundary summary, but do not state the criterion by which this still-open task is accepted; no parent or linked record exists and reachable ID history contains only repair inventory. | Read-only evaluation after stop; unchanged. |
+| `a4s-w2c` | `-8237609982204144402` | `## Steps to Reproduce`; `## Acceptance Criteria` | Target `description`: `send_model_switch does list(target_model)...` plus the non-letter target example states the trigger/result; `Map special chars... or type the string via a paste/literal mechanism` states the bounded repair. | Source complete, but after stop; unchanged. |
+| `a4s-1to` | `-454677210295099523` | `## Success Criteria` | Target `description` `## Design`: event teardown closes the tab after callback/verdict; the orphan reaper is OS-scheduled, fail-closed, and dry-run, while `## Constraints` preserves the `sweep` boundary. | Source complete, but after stop; unchanged. |
+| `a4s-pgm` | `4137852468358179466` | `## Steps to Reproduce`; `## Acceptance Criteria` | Steps: target `description` exactly states that `blocked_name_patterns` reads `model_switches.default` while policy exposes top-level `default_switch_target`, so the operator value is ignored. **Acceptance gap:** the same record also bundles unused `--once` and hard-coded workspace IDs but states no bounded accepted outcome for the combined bug. | Read-only evaluation after stop; unchanged. |
+| `a4s-q2y` | `-1299548843390035892` | `## Steps to Reproduce`; `## Acceptance Criteria` | Target `description`: joining `Path(state_dir)/'tickets'/repo` with an absolute repo states the trigger/result; `Use a repo label/basename (like a4s-reconcile) instead of the raw abs path` states the bounded repair. | Source complete, but after stop; unchanged. |
 
-**Zero Bead mutations occurred.** No Bead description was mutated. The first missing source in inventory order was `a4s-3nf` / `## Acceptance Criteria`; the fail-closed stop condition therefore prevented all `bd update` calls. Records after `a4s-3nf` were not evaluated for mutation.
+### Fix-round mutation proof
+
+For each repaired record, the complete replacement was written to a temporary regular file, applied only with `bd update "$ID" --body-file "$DESCRIPTION_FILE" --json`, and immediately re-read. Before each of the 11 updates, all 23 targets and revisions were freshly re-read (253 pre-mutation reads total). Every direct target comparison changed only `description` plus Beads-managed `revision` and `updated_at`; expanded dependency snapshots changed only where a referenced repaired record changed.
+
+| ID | Revision before → after | Body SHA-256 |
+| --- | --- | --- |
+| `a4s-cxk.3` | `410949277455370890` → `-3601070862089382564` | `7d2636564b36ace1c61a11d6ef2752129511ac1a35a1143229835f0a08737a17` |
+| `a4s-uy7.2` | `-7049661242752543763` → `-1008961154052703481` | `15697a880735c99ac351b9bb53e955c5dd6016f4a965e3572493f2d5678d259b` |
+| `a4s-uy7.1` | `-9116626699638527550` → `5990236745384002121` | `00d380ef32beb9d4774f5180b7a6eed3ae020dff6348d88b291f255df3a53555` |
+| `a4s-uy7` | `-4396956084376332440` → `-7444700761361004514` | `d88fb4f5b2e6ec3c98ea6f5632c7fa546ba1da27bbc6f733cce1d901300d3327` |
+| `a4s-fm9.1` | `-9199166730729342713` → `-8361949971115684424` | `0acd972b294d5eaa9fa57bd0fbac4cb2af0a646f2b97bbdec42f78062e969304` |
+| `a4s-qvh` | `-2927835661368094243` → `-2160322062475418047` | `f1fc9d087c2ef2fb7b9cb4822763ae075c1b3ee6dccc3b2c2d414f8a785713bf` |
+| `a4s-fm9` | `-5373831160250543823` → `7415121194463033748` | `d19d753e99938be4576c6bfcc4bf899690c0ada43325ad08fcf55f8d2816616f` |
+| `a4s-j11` | `-2813359493568754434` → `4035088494396636149` | `3d7f1fd9a8ef91fd89ba16420adb0db65bbdb9ef6c8ed6d866faa87993c5d843` |
+| `a4s-6ak.10` | `-5722702302783650683` → `7111154719858939858` | `8945e675202e2912be6f2386cc7ea150f422d50519b33997a220610f264177f5` |
+| `a4s-ya4.3` | `5752151494722383298` → `1059362296646021972` | `4b4bbc3a0223b0e3e3f854bf81f3b2c61586f9a2e041ca3a9dca3883262f373d` |
+| `a4s-uy7.3` | `2549885241521080191` → `-123422069437267389` | `6030719b5f3654bb5a8effeeaaddac354b30fad1500b8a3d59aee40ca3cdee9d` |
+
+`a4s-3nf` remained exactly unchanged at revision `-5952035839008759337`. `a4s-5ib` was the next new source gap; per the binding stop rule, no record after it was mutated.
 
 ## Orphan evidence
 
@@ -82,9 +106,14 @@ Added deterministic contract tests for malformed doctor JSON, failed `prime`, un
 - Additional Task 1 boundary tests: 3 passed.
 - Complete adapter suite: `python3 -m unittest skills/beads-loop/tests/test_beads_loop.py -v` — 52 passed, 0 failed.
 - `python3 -m py_compile skills/beads-loop/tests/smoke_pi_dispatch.py skills/beads-loop/tests/test_beads_loop.py` passed.
+- Task 3 fix round: 11 description updates; 11 immediate read-backs; 253 pre-mutation target/revision reads. Every direct target diff was limited to `description`, `revision`, and `updated_at`.
+- Final `bd lint`: exit `1`, reduced from 23 issues / 31 warnings to 12 issues / 15 warnings. The embedded lint gate is explicitly not claimed repaired.
+- Final state proof: `a4s-3nf` and all records from `a4s-5ib` onward exactly match their fix-round pre-mutation snapshots.
 - `git diff --check` passed.
 
 ## Exceptions
 
-- **Task 3 bounded content decision:** `a4s-3nf` requires `## Acceptance Criteria`, but revision `-5952035839008759337` contains only the title `Status: versión y capacidades del reconciler actual`. It has no description, design, notes, parent, or linked record. The only reachable commit containing the ID is `35787bb6bdebd2849734ee72d513dc8f47a63f81`, which merely inventories the lint warning. Required operator input: provide or identify the acceptance contract for this status task. No synthetic prose was added, no `bd update` was run, and the embedded lint gate remains unrepaired.
+- **Approved exception:** `a4s-3nf` remains unchanged at revision `-5952035839008759337` by operator decision. Its title-only record still lacks an allowed acceptance source; no synthetic prose was added.
+- **New blocking source gap:** `a4s-5ib` remains unchanged at revision `-6380434537460906507`. It is title-only, and neither accepted ADR 0010 nor reachable committed artifacts define status-query priority or a completion contract. This triggered the required stop; no later Bead was mutated.
+- Read-only completion of the all-ID inventory found additional acceptance gaps in `a4s-9s2`, `a4s-tvz`, `a4s-28t`, `a4s-r25`, and `a4s-pgm`. Later records `a4s-3ix`, `a4s-9uw`, `a4s-w2c`, `a4s-1to`, and `a4s-q2y` have complete sources but were intentionally left unchanged because they occur after the `a4s-5ib` stop condition.
 - The initial repository-change test setup consumed only one patched `repository_root` observation because `prime` was mocked. The test was corrected to model the gate's first repository observation and the claim's second observation; `skills/beads-loop/scripts/beads_loop.py` remained unchanged. No retries, provider diagnostics, global selection, second fake provider, or live Bead mutation were introduced.
