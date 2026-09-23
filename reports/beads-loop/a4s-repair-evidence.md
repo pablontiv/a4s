@@ -319,3 +319,65 @@ This section supersedes only the failed acceptance verdict recorded in commit `8
 - No claim, update, finalize, close, or other live provider-state mutation was executed by this correction.
 
 **Corrected blocker verdict: PASSED.** The no-orphan provider shape is accepted without weakening any unrelated predicate, and the print smoke now obtains and strictly validates a terminal envelope from a disposable non-Beads Git target.
+
+### Authoritative final acceptance after reviewed fix
+
+This fresh run is the authoritative Task 5 acceptance after reviewed fix `a6c488c243d3bf01ddd357f2bdb9ebffae558054`. The complete sequence was executed exactly once, in plan order, with no retry and no Beads mutation. Historical failed-run and correction evidence above remains intact.
+
+1. `bd lint` — exit `0`.
+
+   ```text
+   ✓ No template warnings found (47 issues checked)
+   ```
+
+2. `bd orphans --json` — exit `0`; exact stdout was literal JSON `null` (including only its trailing newline). Parsing produced the null value, so the observed provider shape was **`null`**, not `[]`, and passed the plan's explicit `null`-or-empty-array predicate.
+
+   ```json
+   null
+   ```
+
+3. `bd doctor --check conventions --agent --json` — exit `0`; `overall_ok` parsed as the JSON boolean `true`. All three returned checks (`conventions.lint`, `conventions.stale`, and `conventions.orphans`) had `status: "ok"`; the provider reported `all 47 open issues pass template checks`, `no issues inactive for 14+ days`, and `no orphaned issues found`.
+
+4. `python3 -m unittest skills/beads-loop/tests/test_beads_loop.py -v` — exit `0`.
+
+   ```text
+   ----------------------------------------------------------------------
+   Ran 54 tests in 37.976s
+
+   OK
+   ```
+
+5. `python3 skills/beads-loop/tests/smoke_pi_dispatch.py --print` — exit `0`. The final and only non-empty stdout line was this raw versioned terminal envelope, without Markdown or commentary:
+
+   ```json
+   {"details":{},"kind":"not_beads_repo","schema_version":1}
+   ```
+
+   Independent parsing confirmed an object with integer `schema_version`, string terminal `kind`, and object `details`.
+
+6. `python3 skills/beads-loop/tests/smoke_pi_dispatch.py --headed` — exit `0` after observing the skill.
+
+   ```text
+   observed='Beads Autonomous Loop' transcript_bytes=4241 exit=-9
+   ```
+
+   The required `Beads Autonomous Loop` heading was observed before bounded child cleanup.
+
+7. `rootline validate .workspace/docs/specs/2026-09-23-beads-loop-repair.md -o json` — exit `0`. The single result had `valid: true`; summary counts were one valid document, zero invalid documents, zero errors, and zero warnings.
+
+8. `git diff --check` — exit `0`; stdout and stderr were silent.
+
+Read-only invariant check: `bd show a4s-ya4.11 --json` exited `0` and returned exactly one issue. Its bounded invariant fields remained:
+
+```json
+{
+  "id": "a4s-ya4.11",
+  "notes": "PASS evidence=reports/beads-loop/a4s-repair-evidence.md commit=e344c3e",
+  "status": "closed",
+  "assignee": "Pablo",
+  "closed_at": "2026-09-23T19:44:53Z",
+  "revision": "-931522777481773440"
+}
+```
+
+**Authoritative final verdict: PASSED.** Every Task 5 predicate passed: lint was clean; the no-orphan command exited zero and parsed as the accepted observed `null` shape; conventions returned boolean `overall_ok: true`; all 54 tests passed; strict print mode ended in a raw versioned terminal envelope; headed mode exited zero after observing the skill; Rootline validated the spec; and the ordered `git diff --check` was silent. No blocker remains, no predicate was relaxed, no acceptance command was retried, and no Bead was mutated.
