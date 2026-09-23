@@ -26,12 +26,15 @@ def repository_root(cwd: Path) -> Path | None:
         return None
     if not current.is_dir():
         return None
-    result = subprocess.run(
-        ["git", "-C", str(current), "rev-parse", "--show-toplevel"],
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(current), "rev-parse", "--show-toplevel"],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+    except OSError:
+        return None
     if result.returncode != 0 or result.stderr.strip() or not result.stdout.strip():
         return None
     try:
@@ -49,13 +52,16 @@ def resolve_provider(root: Path) -> tuple[str, ...]:
 
 
 def run_provider(root: Path, command: tuple[str, ...]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [*resolve_provider(root), *command],
-        cwd=root,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+    try:
+        return subprocess.run(
+            [*resolve_provider(root), *command],
+            cwd=root,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+    except OSError as error:
+        raise ProviderFailure(command) from error
 
 
 def provider_json(root: Path, command: tuple[str, ...]) -> object:

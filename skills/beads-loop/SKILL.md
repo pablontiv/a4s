@@ -41,6 +41,6 @@ Perform only the selected Bead, preserve unrelated changes, write bounded in-rep
 python3 "$BEADS_TODO_LOOP" finalize --bead "$BEAD_ID" --verdict pass|fail --evidence "$EVIDENCE_PATH"
 ```
 
-On `finalized`, mark the todo `completed` with `metadata.outcome=pass|fail` and the evidence path. A fail records processed work; continue independent todos.
+On `finalized pass`, mark the todo `completed` with `metadata.outcome=pass` and the evidence path. On `finalized fail`, first create one pending failure-gate todo for that Bead and add its ID to `blockedBy` on every session todo whose script `blocked_by` contains that Bead key; then mark the failed work todo `completed` with `metadata.outcome=fail` and the evidence path. The pending gate preserves every dependent block while independent todos continue.
 
 After every session todo is completed, run one final `snapshot`. Materialize only newly seen open Beads; if none remain, report completion and withheld entries. Stop and report the full envelope on any other result.

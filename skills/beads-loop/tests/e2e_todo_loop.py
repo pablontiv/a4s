@@ -42,6 +42,15 @@ class A4STodoLoopE2ETests(unittest.TestCase):
             self.assertEqual(run_script(repo, "finalize", "--bead", a, "--verdict", "pass", "--evidence", "reports/beads-loop/a.md")["kind"], "finalized")
             final = run_script(repo, "snapshot")
             self.assertEqual([item["id"] for item in final["details"]["todos"]], [b, c])
+            c_evidence = reports / "c.md"
+            c_evidence.write_text("evidence", encoding="utf-8")
+            self.assertEqual(run_script(repo, "finalize", "--bead", c, "--verdict", "fail", "--evidence", "reports/beads-loop/c.md")["kind"], "finalized")
+            after_failure = run_script(repo, "snapshot")
+            self.assertEqual([item["id"] for item in after_failure["details"]["todos"]], [b])
+            b_evidence = reports / "b.md"
+            b_evidence.write_text("evidence", encoding="utf-8")
+            self.assertEqual(run_script(repo, "finalize", "--bead", b, "--verdict", "pass", "--evidence", "reports/beads-loop/b.md")["kind"], "finalized")
+            self.assertEqual(run_script(repo, "snapshot")["kind"], "no_open")
 
 
 if __name__ == "__main__":
