@@ -28,7 +28,7 @@ workspace:
       Usar conventional commits y ejecutar los checks aplicables antes del commit.
     delivery_mode: pull-request
     delivery_gate: |
-      Requerir revisión y autorización humana antes de integrar.
+      Merge autónomo por squash con --match-head-commit permitido cuando, para el SHA de cabeza del PR, se cumplen CADA UNO DE LOS: test/ci-local.sh en verde; aprobación de un reviewer subagente fresco sobre ese SHA; sin hallazgos de seguridad HIGH; marca 'Delivery-Override: ci-billing' mientras CI siga bloqueado; evidencia que registra el SHA y el resultado de cada gate (ADR 0047). Se mantiene gate humano (autorización explícita del operador) para: cambios a la política de delivery o autonomía (incluido este eje y delivery_overrides); efectos externos fuera del repositorio; operaciones destructivas; sustituir un ADR aceptado. Revocable volviendo este texto a gate humano.
     delivery_overrides:
       ci-billing:
         status: active
@@ -42,7 +42,7 @@ workspace:
         compensating_controls:
           - test/ci-local.sh debe ejecutarse en verde sobre el SHA candidato, con salida resumida en la evidencia.
           - Revisión del diff completo antes del merge.
-          - Autorización del operador ligada al SHA; un cambio posterior la invalida.
+          - Autorización del operador ligada al SHA o, en modo autónomo, los gates autónomos de delivery_gate registrados contra ese SHA (un cambio posterior invalida ambas).
           - Marca 'Delivery-Override: ci-billing' en el commit o cuerpo del PR.
         fallback: |
           Push directo a main sólo si un PR es imposible, con autorización explícita
