@@ -29,6 +29,28 @@ workspace:
     delivery_mode: pull-request
     delivery_gate: |
       Requerir revisión y autorización humana antes de integrar.
+    delivery_overrides:
+      ci-billing:
+        status: active
+        adr: 0046-permitir-merge-de-pr-sin-ci-mientras-actions-este-bloqueado
+        tracking_bead: a4s-1cy
+        since: "2026-09-19"
+        scope: |
+          Sólo el gate de CI. La entrega sigue siendo pull-request; se permite
+          mergear con checks en rojo únicamente si los jobs muestran la anotación
+          de billing o spending limit con 0 steps.
+        compensating_controls:
+          - Checks locales aplicables en verde, con comandos y resultado en la evidencia.
+          - Revisión del diff completo antes del merge.
+          - Autorización del operador ligada al SHA; un cambio posterior la invalida.
+          - Marca 'Delivery-Override: ci-billing' en el commit o cuerpo del PR.
+        fallback: |
+          Push directo a main sólo si un PR es imposible, con autorización explícita
+          por caso y marca 'Delivery-Override: direct-push'.
+        expires_when: |
+          Un job de CI vuelve a iniciar (steps mayor que 0). Entonces ejecutar el
+          workflow sobre la cabeza de main, abrir Bead de regresión ante fallo y
+          retirar esta excepción.
   pre_checks:
     - Revisar el ADR aceptado que gobierna el cambio.
     - Confirmar Rootline antes de escribir conocimiento gobernado.
