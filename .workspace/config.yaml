@@ -40,7 +40,7 @@ workspace:
           mergear con checks en rojo únicamente si los jobs muestran la anotación
           de billing o spending limit con 0 steps.
         compensating_controls:
-          - Checks locales aplicables en verde, con comandos y resultado en la evidencia.
+          - test/ci-local.sh debe ejecutarse en verde sobre el SHA candidato, con salida resumida en la evidencia.
           - Revisión del diff completo antes del merge.
           - Autorización del operador ligada al SHA; un cambio posterior la invalida.
           - Marca 'Delivery-Override: ci-billing' en el commit o cuerpo del PR.
