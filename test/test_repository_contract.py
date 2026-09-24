@@ -14,6 +14,7 @@ AGENTS_PATH = ROOT / "AGENTS.md"
 WORKFLOW_PATH = ROOT / ".github" / "workflows" / "ci.yml"
 DEPENDABOT_PATH = ROOT / ".github" / "dependabot.yml"
 TEST_REQUIREMENTS_PATH = ROOT / "requirements-test.txt"
+GLOBAL_STEERING_PATH = ROOT / "output-styles" / "mentor-telemetria.assets" / "append-system.md"
 LINK_PATTERN = re.compile(r"(?<!!)\[[^]]+\]\(([^)]+)\)")
 REQUIRED_AGENT_CLAUSES = (
     "configuración de orquestación",
@@ -26,6 +27,11 @@ REQUIRED_AGENT_CLAUSES = (
     "no conviertas reorganizaciones ordinarias en experimentos",
     "Exige autorización explícita y acotada antes de efectos externos destructivos",
     "Usa conventional commits y pull requests",
+)
+REQUIRED_GLOBAL_STEERING_CLAUSES = (
+    "A correction to an instruction is not automatically a durable preference.",
+    'Writing "here" or "directly" authorizes a content change, not replacement or retargeting of a symlink.',
+    "Run the smallest verification set required by the changed surface and the active repository contract.",
 )
 
 
@@ -48,6 +54,7 @@ class RepositoryContractTests(unittest.TestCase):
         cls.workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
         cls.dependabot = yaml.safe_load(DEPENDABOT_PATH.read_text(encoding="utf-8"))
         cls.test_requirements = TEST_REQUIREMENTS_PATH.read_text(encoding="utf-8")
+        cls.global_steering = GLOBAL_STEERING_PATH.read_text(encoding="utf-8")
 
     def test_readme_uses_a4s_identity(self) -> None:
         self.assertTrue(self.readme.startswith("# A4S\n"))
@@ -97,6 +104,12 @@ class RepositoryContractTests(unittest.TestCase):
         for clause in REQUIRED_AGENT_CLAUSES:
             with self.subTest(clause=clause):
                 self.assertIn(clause, self.agents)
+
+    def test_global_steering_preserves_behavioral_guards(self) -> None:
+        normalized_steering = " ".join(self.global_steering.split())
+        for clause in REQUIRED_GLOBAL_STEERING_CLAUSES:
+            with self.subTest(clause=clause):
+                self.assertIn(clause, normalized_steering)
 
     def test_github_actions_are_pinned_and_do_not_persist_credentials(self) -> None:
         for workflow_path in sorted((ROOT / ".github" / "workflows").glob("*.yml")):
