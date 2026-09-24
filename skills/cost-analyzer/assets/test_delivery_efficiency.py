@@ -1,11 +1,12 @@
 import os
 import subprocess
 import unittest
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import delivery_efficiency
+from dataset import SessionRecord
 
 
 TODAY = date(2026, 9, 24)
@@ -107,6 +108,53 @@ class DeliveryEvidenceTests(unittest.TestCase):
             delivery_efficiency.inspect_commit(self.repo, sha, TODAY).durability,
             "not-on-default",
         )
+
+
+class DeliveryAttributionTests(DeliveryEvidenceTests):
+    def setUp(self):
+        super().setUp()
+        self.sha = self.commit("src/app.py", "VALUE = 1\n", "first")
+        self.other_sha = self.commit("src/other.py", "VALUE = 2\n", "second")
+
+    def record(self, scenario, cost, shas):
+        return SessionRecord(
+            id=f"{scenario}-{cost}", harness="pi", source_path="fixture", schema_version="x",
+            started_at=datetime(2026, 9, 10, 11, tzinfo=timezone.utc),
+            ended_at=datetime(2026, 9, 10, 13, tzinfo=timezone.utc),
+            cwd=str(self.repo), model="test", provider="test", cost_native_usd=cost,
+            commits=frozenset(shas), observed_topology=scenario,
+        )
+
+    def cohort(self, rows, name):
+        return next(row for row in rows if row.cohort == name)
+
+    def test_shared_sha_is_mixed_and_absent_from_scenario_denominators(self):
+        rows = delivery_efficiency.analyze_delivery_efficiency([
+            self.record("S1", 10.0, {self.sha}),
+            self.record("S4", 20.0, {self.sha}),
+        ], TODAY)
+
+        self.assertEqual(self.cohort(rows, "mixed").durable_shas, frozenset({self.sha}))
+        self.assertFalse(any(row.cohort in {"S1", "S4"} and self.sha in row.durable_shas for row in rows))
+
+    def test_session_cost_is_split_across_its_durable_changes(self):
+        rows = delivery_efficiency.analyze_delivery_efficiency([
+            self.record("S3", 30.0, {self.sha, self.other_sha}),
+        ], TODAY)
+
+        row = self.cohort(rows, "S3")
+        self.assertEqual(row.attributable_cost, 30.0)
+        self.assertEqual(row.cdpc, 15.0)
+
+    def test_unattributable_session_lowers_coverage(self):
+        rows = delivery_efficiency.analyze_delivery_efficiency([
+            self.record("S3", 100.0, {self.sha}),
+            self.record("S3", 100.0, set()),
+        ], TODAY)
+
+        row = self.cohort(rows, "S3")
+        self.assertEqual(row.coverage, 0.5)
+        self.assertEqual(row.status, "insufficient-coverage")
 
 
 if __name__ == "__main__":

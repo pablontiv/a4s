@@ -2,10 +2,14 @@
 from __future__ import annotations
 
 import datetime as dt
+import statistics
 import subprocess
+from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Iterable
 
+from dataset import SessionRecord
 from outcomes import categorize_path
 
 
@@ -88,6 +92,25 @@ def _commit_details(repo: Path, sha: str) -> tuple[dt.datetime | None, frozenset
     return committed_at, frozenset(categorize_path(path) for path in paths)
 
 
+@dataclass(frozen=True)
+class DeliveryCohort:
+    repository: str
+    cohort: str
+    session_cost: float
+    attributable_cost: float
+    durable_shas: frozenset[str]
+    immature_count: int
+    reverted_count: int
+    unknown_count: int
+    coverage: float
+    median_lead_seconds: float | None
+    status: str
+
+    @property
+    def cdpc(self) -> float | None:
+        return self.attributable_cost / len(self.durable_shas) if self.durable_shas else None
+
+
 def inspect_commit(repo: Path, sha: str, evaluation_date: dt.date) -> CommitEvidence:
     """Classify a commit without changing repository state or refs."""
     details = _commit_details(repo, sha)
@@ -126,3 +149,101 @@ def inspect_commit(repo: Path, sha: str, evaluation_date: dt.date) -> CommitEvid
         "mature",
         "reverted" if reverted else "durable",
     )
+
+
+def _repository_for(cwd: str | None) -> Path | None:
+    if not cwd:
+        return None
+    root = run_git(Path(cwd), "rev-parse", "--show-toplevel")
+    return Path(root.strip()) if root and root.strip() else None
+
+
+def analyze_delivery_efficiency(
+    records: Iterable[SessionRecord], evaluation_date: dt.date,
+) -> list[DeliveryCohort]:
+    """Allocate durable production changes to homogeneous topology cohorts."""
+    pi_records = [record for record in records if record.harness == "pi"]
+    evidence_cache: dict[tuple[Path, str], CommitEvidence] = {}
+    observations: dict[tuple[Path, str], list[SessionRecord]] = defaultdict(list)
+    evidence_by_record: dict[int, list[CommitEvidence]] = defaultdict(list)
+    total_cost: dict[tuple[Path, str], float] = defaultdict(float)
+
+    for index, record in enumerate(pi_records):
+        repo = _repository_for(record.cwd)
+        if repo is None:
+            continue
+        total_cost[(repo, record.observed_topology)] += record.cost_native_usd or 0.0
+        for sha in record.commits:
+            key = (repo, sha)
+            evidence = evidence_cache.setdefault(key, inspect_commit(repo, sha, evaluation_date))
+            observations[key].append(record)
+            evidence_by_record[index].append(evidence)
+
+    cohort_for_sha: dict[tuple[Path, str], str] = {}
+    durable_by_cohort: dict[tuple[Path, str], set[str]] = defaultdict(set)
+    earliest_start: dict[tuple[Path, str], dt.datetime] = {}
+    immature: dict[tuple[Path, str], int] = defaultdict(int)
+    reverted: dict[tuple[Path, str], int] = defaultdict(int)
+    unknown: dict[tuple[Path, str], int] = defaultdict(int)
+
+    for key, observers in observations.items():
+        evidence = evidence_cache[key]
+        scenarios = {record.observed_topology for record in observers}
+        cohort = next(iter(scenarios)) if len(scenarios) == 1 else "mixed"
+        cohort_for_sha[key] = cohort
+        target = (key[0], cohort)
+        if evidence.durability == "durable":
+            durable_by_cohort[target].add(key[1])
+            starts = [record.started_at for record in observers if record.started_at]
+            if starts:
+                earliest_start[key] = min(starts)
+        elif evidence.maturity == "immature":
+            immature[target] += 1
+        elif evidence.durability == "reverted":
+            reverted[target] += 1
+        elif evidence.durability in {"unknown-history", "not-on-default", "unknown"}:
+            unknown[target] += 1
+
+    attributable: dict[tuple[Path, str], float] = defaultdict(float)
+    for index, record in enumerate(pi_records):
+        repo = _repository_for(record.cwd)
+        if repo is None:
+            continue
+        durable = [
+            evidence for evidence in evidence_by_record[index]
+            if evidence.durability == "durable"
+        ]
+        if not durable:
+            continue
+        share = (record.cost_native_usd or 0.0) / len(durable)
+        for evidence in durable:
+            attributable[(repo, cohort_for_sha[(repo, evidence.sha)])] += share
+
+    all_keys = set(total_cost) | set(durable_by_cohort) | set(immature) | set(reverted) | set(unknown)
+    rows: list[DeliveryCohort] = []
+    for repo, cohort in sorted(all_keys, key=lambda item: (str(item[0]), item[1])):
+        shas = frozenset(durable_by_cohort[(repo, cohort)])
+        cost = total_cost.get((repo, cohort), 0.0)
+        attributed = attributable.get((repo, cohort), 0.0)
+        coverage = attributed / cost if cost else 0.0
+        leads = [
+            (evidence_cache[(repo, sha)].committed_at - earliest_start[(repo, sha)]).total_seconds()
+            for sha in shas
+            if evidence_cache[(repo, sha)].committed_at and (repo, sha) in earliest_start
+        ]
+        if cohort == "mixed":
+            status = "mixed"
+        elif unknown[(repo, cohort)]:
+            status = "unknown-history"
+        elif not shas:
+            status = "no-durable-changes"
+        elif coverage < 0.80:
+            status = "insufficient-coverage"
+        else:
+            status = "ranked"
+        rows.append(DeliveryCohort(
+            str(repo), cohort, cost, attributed, shas, immature[(repo, cohort)],
+            reverted[(repo, cohort)], unknown[(repo, cohort)], coverage,
+            statistics.median(leads) if leads else None, status,
+        ))
+    return rows
