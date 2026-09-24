@@ -107,21 +107,19 @@ git log --oneline -1 2>/dev/null || echo "no commits"
 git status --porcelain 2>/dev/null
 ```
 
-Additionally, capture rootline project state (if rootline-managed directories exist):
+Additionally, capture project state from its governing stores (if present):
 
 ```bash
-# Discover state: active lines, theories, backlog
+# Rootline state: active lines and theories
 rootline query lines/ --where 'tipo == "question"' --output table 2>/dev/null
 rootline query theories/ --output table 2>/dev/null
-rootline query backlog/ --count 2>/dev/null
 
-# Roadmap state: pending items
-if [ -f .claude/roadmap.local.md ]; then
-  ROADMAP_ROOT=$(grep 'roadmap-root:' .claude/roadmap.local.md | awk '{print $2}')
-  rootline stats "$ROADMAP_ROOT" --output json 2>/dev/null
+# Beads state: Roadmap/backlog
+if [ -d .beads ]; then
+  bd list --status open,in_progress,blocked,deferred --brief --limit 0 --json
 fi
 
-# Hypothesize state: active investigations
+# Rootline state: active hypotheses
 rootline query . --where 'metodo == "hypothesize"' --output table 2>/dev/null
 ```
 
@@ -176,7 +174,7 @@ estado: saved
 
 ## Project State
 
-<Active discover lines, theories, roadmap progress, hypothesize investigations — from rootline queries. Omit section if no rootline-managed directories exist.>
+<Active lines, theories, and hypotheses from Rootline queries; Roadmap/backlog state from the Beads read. Omit entries when their source has no results; omit the section if no state is captured.>
 
 ## Next Steps
 
