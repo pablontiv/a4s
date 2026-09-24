@@ -9,6 +9,8 @@ parent-child → hierarchy only
 blocks → execution order
 ```
 
+Beads stores every edge as "`issue_id` depends on `depends_on_id`". For `blocks`, `depends_on_id` is the prerequisite and `issue_id` is the dependent it unblocks. For `parent-child`, `depends_on_id` is the parent. Other edge types, such as `related` or `relates-to`, never order work.
+
 Roadmap creates only core Beads types `epic` and `task`. A task may be at repository root or the direct child of one epic. New nested epics are invalid. An independently deliverable set of outcomes is an epic with separate tasks, not a checklist hidden in one task.
 
 ## Epic contract

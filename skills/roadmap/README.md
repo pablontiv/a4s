@@ -8,7 +8,7 @@ Invoke the skill in the repository whose backlog you intend to inspect or change
 
 ```text
 /skill:roadmap plan <requirements>  propose a complete graph, ask approval, then create it
-/skill:roadmap                      inspect and explain the pending tree read-only
+/skill:roadmap                      render the pending decision tree read-only
 /skill:roadmap doctor               diagnose alignment; preview and approval-gate corrections
 /skill:roadmap loop                 claim and implement one ready task at a time
 ```
