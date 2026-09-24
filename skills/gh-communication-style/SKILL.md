@@ -4,6 +4,7 @@ description: "Trigger: creating or drafting GitHub issues, PRs, PR bodies, revie
 license: Apache-2.0
 metadata:
   author: "pablontiv"
+  updated: "2026-09-05"
   version: "1.0"
 ---
 

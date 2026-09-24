@@ -10,6 +10,7 @@ Antes de trabajar, resuelve la política operativa desde `.workspace/config.yaml
 
 - Mantén configuración y runtime como capas del mismo producto, no como productos o decision logs paralelos.
 - Mantén cada skill autocontenido bajo `skills/<name>/`; no introduzcas dependencias entre skills hermanos.
+- Cada `skills/<name>/SKILL.md` declara `metadata.author: pablontiv` y `metadata.updated: "YYYY-MM-DD"`. Actualiza `updated` en el mismo commit que cambia el comportamiento o contenido del skill; los cambios sólo de metadata no la mueven.
 - Trata runtimes y herramientas externas como providers integrados, no como código propio de A4S.
 - Añade familias top-level sólo cuando exista contenido real.
 - Preserva ADRs, specs y planes históricos; sustituye decisiones en lugar de reescribirlas.

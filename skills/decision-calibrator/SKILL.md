@@ -2,6 +2,7 @@
 name: decision-calibrator
 metadata:
   author: pablontiv
+  updated: "2026-09-05"
 description: 'Use after a concrete trigger, not by default: (1) a user correction that contradicts a prior assumption, (2) a re-asked question or "ya te dije" signal, (3) resumed work after compaction, handover, or context loss, (4) a third research round on the same decision with no new decision-changing unknown, (5) choosing between tools or architectures with ongoing operating cost. Not for routine edits or single-step tasks.'
 ---
 

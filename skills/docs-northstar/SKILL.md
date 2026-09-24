@@ -4,6 +4,7 @@ description: "Trigger: north star, northstar, reposition repo, vender el product
 license: Apache-2.0
 metadata:
   author: "pablontiv"
+  updated: "2026-09-17"
   version: "3.3"
 ---
 

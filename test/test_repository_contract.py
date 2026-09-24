@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import subprocess
 import unittest
+from datetime import date
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
@@ -75,6 +76,20 @@ class RepositoryContractTests(unittest.TestCase):
                 self.assertIsInstance(metadata, dict, path.relative_to(ROOT))
                 if isinstance(metadata, dict):
                     self.assertEqual(metadata.get("author"), "pablontiv")
+
+    def test_every_published_skill_declares_last_update_date(self) -> None:
+        skill_paths = sorted((ROOT / "skills").glob("*/SKILL.md"))
+        self.assertTrue(skill_paths)
+        for path in skill_paths:
+            with self.subTest(skill=path.parent.name):
+                metadata = load_skill_frontmatter(path).get("metadata")
+                self.assertIsInstance(metadata, dict, path.relative_to(ROOT))
+                if isinstance(metadata, dict):
+                    updated = metadata.get("updated")
+                    self.assertIsInstance(updated, str, "metadata.updated must be a quoted YYYY-MM-DD string")
+                    parsed = date.fromisoformat(updated)
+                    self.assertEqual(parsed.isoformat(), updated)
+                    self.assertLessEqual(parsed, date.today())
 
     def test_artifact_families_are_linked(self) -> None:
         for target in (

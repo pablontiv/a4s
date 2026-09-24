@@ -4,6 +4,7 @@ description: "Trigger: convert to markdown, convertir a markdown, markitdown, ex
 license: Apache-2.0
 metadata:
   author: "pablontiv"
+  updated: "2026-09-17"
   version: "1.0"
   upstream-repository: "https://github.com/microsoft/markitdown"
   adaptation-status: "unofficial"

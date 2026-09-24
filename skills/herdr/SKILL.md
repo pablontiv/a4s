@@ -3,6 +3,7 @@ name: herdr
 description: "Control Herdr, the terminal multiplexer for coding agents, over the `herdr` CLI: inspect/control workspaces (spaces), tabs, panes, and agents. Use only when the user mentions Herdr or asks to use it to lay out or run sessions/agents on repos. Requires HERDR_ENV=1. Core method: a claimed Bead precedes every work unit; one space per repo; 1 Project Orchestrator = 1 repo; 1 Worker = 1 feature; each unit is one peer tab running one agent; vendor PRs only against the pablontiv fork; self-check model before quota actions; ordinary peer workers do not recursively delegate; a bounded Roadmap controller may dispatch subagents under ADR 0043; creating an empty space/tab is NOT the deliverable; never use panes to separate repos or sessions."
 metadata:
   author: pablontiv
+  updated: "2026-09-24"
 ---
 
 # Herdr

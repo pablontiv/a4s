@@ -3,6 +3,9 @@ name: roadmap
 description: Use when planning work into Beads, inspecting pending backlog topology, aligning existing Beads with the Roadmap contract, or implementing the repository backlog sequentially.
 argument-hint: "[plan|doctor|loop] [requirements]"
 user-invocable: true
+metadata:
+  author: pablontiv
+  updated: "2026-09-24"
 ---
 
 # Roadmap

@@ -2,6 +2,7 @@
 name: cost-analyzer
 metadata:
   author: pablontiv
+  updated: "2026-09-23"
 description: Analiza un ledger canónico de sesiones Pi, Claude Code y Codex; Pi se clasifica además en S1-S4 y j0k3r/pi-subagents. Use when the user asks about costo/tokens/outcomes por harness, extensión Pi, topología de agentes o subagentes. Requiere `git`, opcionalmente `gh` y `bd`.
 ---
 
