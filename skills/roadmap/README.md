@@ -44,6 +44,7 @@ Repository merge and global activation are separate operations. Only after the c
 Activation is a separate, operator-gated action after merge. Never run this runbook against the implementation worktree; run it only after the change is merged and an operator has explicitly authorized activation.
 
 ```bash
+set -euo pipefail
 test "$(git -C [REDACTED:shared-root]/harness/a4s branch --show-current)" = main
 test -f [REDACTED:shared-root]/harness/a4s/skills/roadmap/SKILL.md
 test ! -e "$HOME/.agents/skills/roadmap"
@@ -51,6 +52,8 @@ test ! -e "$HOME/.agents/skills/roadmap.new"
 test "$(readlink "$HOME/.agents/skills/beads-loop")" = [REDACTED:shared-root]/harness/a4s/skills/beads-loop
 ln -s [REDACTED:shared-root]/harness/a4s/skills/roadmap "$HOME/.agents/skills/roadmap.new"
 mv "$HOME/.agents/skills/roadmap.new" "$HOME/.agents/skills/roadmap"
+test "$(readlink "$HOME/.agents/skills/roadmap")" = [REDACTED:shared-root]/harness/a4s/skills/roadmap
 unlink "$HOME/.agents/skills/beads-loop"
+test ! -e "$HOME/.agents/skills/beads-loop"
 test "$(readlink "$HOME/.agents/skills/roadmap")" = [REDACTED:shared-root]/harness/a4s/skills/roadmap
 ```
