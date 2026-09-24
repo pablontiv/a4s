@@ -5,45 +5,74 @@ tipo: spec
 
 ## Goal
 
-Replace the separate `beads-loop` execution interface with one global `roadmap`
-skill that owns the complete planning lifecycle while keeping Beads as the
-durable backlog and dependency graph.
+Restore Roadmap as a Markdown-only global skill and replace its former Rootline
+backlog operations with direct Beads CLI operations.
 
-The interface is intentionally small:
+Roadmap owns the planning process. Beads owns durable work records, hierarchy,
+dependencies, status, priority and claims. Rootline remains responsible only
+for governed Markdown such as ADRs, specs and implementation plans.
+
+The public interface is:
 
 ```text
-roadmap plan    propose epic/task work, obtain approval, materialize in Beads
-roadmap         show and explain the pending decision tree
+roadmap plan    propose epic/task work, ask approval, then materialize in Beads
+roadmap         show and explain the pending tree
 roadmap doctor  diagnose and approval-gate alignment of existing Beads
 roadmap loop    implement one topologically ready task at a time
 ```
 
+## Artifact boundary
+
+Roadmap consists only of Markdown:
+
+```text
+skills/roadmap/
+├── SKILL.md
+├── README.md
+└── references/
+    ├── contracts.md
+    ├── plan.md
+    ├── tree.md
+    ├── doctor.md
+    └── loop.md
+```
+
+This change does not create Python, JavaScript or shell helpers; custom parsers;
+JSON-envelope protocols; daemons; extensions; runtime dependencies; or new unit
+and integration test suites.
+
+Roadmap calls the installed `bd` CLI directly. Temporary files required by a
+specific Beads command may be written below the repository's ignored
+`.superpowers/roadmap/` directory and are never a second durable store.
+
+Skill verification follows the `writing-skills` contract: pressure scenarios
+are run before and after the Markdown change. Existing repository validation
+continues to run, but Roadmap introduces no test framework of its own.
+
 ## Governing decisions
 
-- ADR 0043 replaces the Herdr-only topology with bounded in-session
-  Superpowers subagents as the general A4S topology.
-- ADR 0044 replaces the non-leasing `beads-loop` projection with this unified
-  Roadmap interface.
-- ADR 0033 remains the closure race guard: final state transitions are
-  conditional on the exact task still being owned and `in_progress`.
-- ADR 0015 and ADR 0019 apply only when a workflow explicitly invokes Herdr.
+- ADR 0043 allows the Roadmap controller to use bounded Superpowers subagents.
+- ADR 0044 replaces the public `beads-loop` interface with Roadmap.
+- ADR 0033 remains the finalization race guard: close only when the exact task
+  is still assigned to the current actor and `in_progress`.
+- ADR 0015 and ADR 0019 continue to govern workflows that explicitly use Herdr.
 
 ## Authority boundaries
 
 | Concern | Authority |
 | --- | --- |
-| Planning process and task-quality rules | `roadmap` skill |
-| Backlog records, hierarchy, status, priority, ownership and dependencies | Beads |
-| Repository workflow and Definition of Done | Effective `.workspace/config.yaml` |
-| Governed ADRs, specs and plans | Rootline under `.workspace/docs/` |
-| Code, commits and delivery artifacts | Git and the configured delivery provider |
-| Session-only progress projection | Pi `todo` and Superpowers workspace ledgers |
-| Reusable and episodic memory | Engram and Backscroll respectively |
+| Planning process and task-quality rules | Roadmap Markdown skill |
+| Backlog records and graph | Beads |
+| Repository Definition of Done and delivery policy | Effective `.workspace/config.yaml` |
+| ADRs, specs and plans | Rootline-governed Markdown |
+| Code and delivery artifacts | Git and configured delivery provider |
+| Session-only execution coordination | Pi todo and Superpowers subagents |
+| Reusable and episodic memory | Engram and Backscroll |
 
-Roadmap never creates another durable queue or mirrors Beads state into Markdown.
-Rootline does not store Roadmap backlog items.
+Roadmap never mirrors Beads state into Markdown records. Rootline never stores
+Roadmap epics or tasks.
 
-## Canonical data model
+## Canonical Beads model
 
 Roadmap creates and executes only the core Beads types `epic` and `task`.
 
@@ -54,30 +83,22 @@ epic          optional non-executable aggregate
 task          may also exist directly at repository root
 ```
 
-New Roadmap materialization forbids nested epics. Existing nested epics are a
-Doctor finding and are normalized only after the proposed reparenting is
-approved.
+New Roadmap plans do not create nested epics. Existing nested epics are Doctor
+findings and are changed only through an approved correction proposal.
 
-`parent-child` expresses hierarchy only. `blocks` is the only relationship
-that controls execution order.
+`parent-child` expresses hierarchy only. `blocks` is the only execution-order
+relationship.
 
 ### Epic contract
 
-An epic declares:
-
-- an observable objective;
-- verifiable success criteria;
-- shared invariants;
-- explicit in-scope and out-of-scope boundaries;
-- child tasks.
-
-An epic is never claimed or implemented. It closes only after all child tasks
-are closed and its own success criteria and invariants have fresh evidence.
+An epic declares an observable objective, success criteria, shared invariants,
+explicit scope and child tasks. It is never claimed or implemented directly.
+It closes only after every child task and the epic's own success criteria have
+fresh evidence.
 
 ### Task contract
 
-A task must be executable in one session and contain enough information for a
-fresh agent to act without conversational history:
+A task must fit one session and contain:
 
 - actionable title;
 - context and expected result;
@@ -87,334 +108,242 @@ fresh agent to act without conversational history:
 - invariants to preserve;
 - source-of-truth paths or interfaces;
 - `blocks` dependencies when applicable;
-- required evidence for closure.
+- evidence required for closure.
 
-Roadmap treats an incomplete task as `contract_incomplete`; it does not claim,
-implement or silently enrich it. Missing requirements are returned to
-`roadmap plan` or `roadmap doctor` for an approval-gated correction.
+A contract-incomplete task is shown but not claimed. Roadmap never invents the
+missing content; Plan or Doctor must present a correction for approval.
 
-A task that contains multiple independently deliverable outcomes is not valid.
-It must be replaced by an epic and separate tasks.
+A task containing independently deliverable outcomes must be decomposed into an
+epic and separate tasks.
 
-## Workspace Definition of Done
+## Repository Definition of Done
 
-Task-specific correctness belongs to the Bead. Repository-wide completion
-belongs to the effective `.workspace/config.yaml` resolved through workspace,
-group and repository precedence.
+The Bead defines task-specific correctness. The effective
+`.workspace/config.yaml` defines repository-wide completion: context, sync,
+isolation, development workflow, commits, acceptance checks, review, delivery,
+post-checks, monitoring and cleanup.
 
-The effective Definition of Done includes the applicable values of:
+Roadmap reads and applies the prose-first workspace contract directly. It does
+not implement a merge engine or automatic control executor. It identifies the
+workspace, group and repository layers, follows their declared precedence and
+records bounded evidence for every applicable control.
 
-- context sources;
-- sync strategy;
-- isolation strategy;
-- development workflow;
-- commit policy;
-- pre-checks;
-- acceptance checks;
-- review checks;
-- delivery mode and delivery gate;
-- post-checks;
-- monitoring and cleanup policy when applicable.
+A missing, inaccessible or ambiguous required workspace control remains
+`unknown`. Required `failed` or `unknown` controls prevent delivery and Bead
+closure. There is no inferred fallback to README, AGENTS, package scripts or a
+standalone Definition-of-Done document.
 
-A repository without a resolvable `.workspace/config.yaml` has an `unknown`
-Definition of Done. `roadmap plan` and read-only tree inspection may continue,
-but `roadmap loop` fails before mutating work and `roadmap doctor` reports the
-missing adoption contract. There is no implicit fallback to README, AGENTS,
-package scripts or a standalone Definition-of-Done document.
+Closure evidence is a repository-contained Markdown report linking the Bead,
+candidate SHA, acceptance results, review verdicts, configured delivery and
+post-checks.
 
-A prose-only workspace control cannot be reported as automatically executed.
-Every closure receipt records each required control as `passed`, `failed`,
-`unknown`, `skipped` or `not_applicable`. A required `failed` or `unknown`
-control prevents closure.
+## `roadmap plan`
 
-Deterministic controls require a stable identifier, executor kind, condition,
-working directory, postcondition, failure behavior and bounded evidence. Until
-a control has that shape, the controller may evaluate it procedurally but must
-retain `unknown` when the postcondition cannot be verified.
+Plan consumes the current conversation and bounded repository context, then
+proposes a complete `epic/task` tree with task contracts and `blocks` edges.
 
-## Command behavior
+It presents the full proposal and asks the user to authorize materialization.
+No `bd` mutation occurs before approval.
 
-### `roadmap plan`
+After approval Roadmap:
 
-`roadmap plan` consumes the current conversation and optional plan arguments,
-reads bounded repository context and related open Beads, and proposes a complete
-`epic/task` graph.
+1. writes a temporary Beads graph input below `.superpowers/roadmap/`;
+2. runs `bd create --graph ... --dry-run --json`;
+3. stops on warning, unknown field, invalid hierarchy or cycle;
+4. runs `bd create --graph ... --json` only for the unchanged approved graph;
+5. reads back the new records and dependency edges;
+6. reports exact IDs and any mismatch.
 
-The proposal includes:
+Every proposed task becomes one Bead. A list of tasks embedded in one Bead is
+not valid materialization.
 
-- every epic and task title;
-- each task contract;
-- hierarchy;
-- `blocks` edges;
-- acceptance criteria and preserved invariants;
-- the expected initial topological frontier.
+## Bare `roadmap`
 
-Roadmap presents the full proposal and asks the user to authorize
-materialization. Before approval it performs no Beads mutation.
+Bare Roadmap is read-only. It obtains the complete non-closed graph with direct
+`bd list`, `bd dep list`, `bd show` when detail is needed, and `bd ready`.
 
-After approval it:
-
-1. creates exactly one Bead per proposed epic or task;
-2. creates `parent-child` hierarchy and `blocks` edges;
-3. validates task contracts and rejects a partial materialization;
-4. checks dependency cycles;
-5. verifies that every active graph component has at least one executable root
-   or one explicit external gate;
-6. commits and pushes the coherent Beads mutation according to the repository's
-   Beads storage contract.
-
-A list of tasks embedded in one Bead is never valid materialization.
-
-### `roadmap`
-
-Bare `roadmap` is read-only. It renders the pending decision tree from the full
-non-closed graph, not only from `bd ready`.
-
-Every non-closed record is classified as one of:
+It renders epics, tasks, `blocks` relationships and one deterministic next
+candidate. Every non-closed record receives a reason:
 
 - executable now;
 - blocked by named tasks;
-- externally gated with a canonical reason;
-- actively owned by another session;
-- deferred until a declared condition or time;
+- externally gated;
+- owned by another session;
+- deferred to a declared time or condition;
 - contract-incomplete;
 - invalid hierarchy or type;
 - stale operational state;
 - aggregate epic.
 
-The view shows the next deterministic candidate, reverse dependency impact and
-why every other task is not executable. It never reports “no ready work” unless
-it can provide one canonical reason for every non-closed task.
+Roadmap never treats an empty `bd ready` result as proof the backlog is done. It
+reports “no executable task” only after explaining every non-closed record.
 
-### `roadmap doctor`
+## `roadmap doctor`
 
-Doctor is read-only by default. It audits existing Beads against this spec and
-reports:
+Doctor is read-only first. Using direct `bd` inspection, it detects:
 
 - types other than `epic` or `task`;
 - nested epics;
-- aggregate records mis-typed as tasks;
-- executable records mis-typed as epics;
-- incomplete task or epic contracts;
-- `blocked` or `deferred` status used instead of `blocks` edges;
-- broken dependencies and cycles;
+- aggregate records typed as tasks;
+- executable records typed as epics;
+- incomplete contracts;
+- `blocked` or `deferred` used instead of known `blocks` edges;
+- broken dependencies or cycles;
 - executable epics;
 - stale assignees, claims or leases;
 - graph components with no executable root and no explicit external gate;
-- disagreement between the computed topological frontier and `bd ready`;
-- missing or unresolved `.workspace` Definition of Done.
+- disagreement between the topology and `bd ready`;
+- missing or ambiguous `.workspace` DoD.
 
-Doctor divides findings into:
+Doctor classifies findings as deterministic corrections, decisions requiring
+user input or unresolvable gaps. It presents the exact `bd` commands it proposes
+and asks authorization before applying any of them.
 
-1. deterministic corrections whose result is fully established;
-2. decisions requiring user input;
-3. unresolvable findings where evidence is insufficient.
+Doctor preserves IDs, history, notes, evidence and external references. It
+never fabricates missing requirements, infers ambiguous dependencies or uses
+`bd reclaim --any-replica`.
 
-It presents the complete correction plan and asks for authorization before any
-mutation. It preserves Bead IDs, history, notes, evidence and external
-references; it never fabricates missing requirements. After approval it applies
-only the accepted corrections, validates cycles and contracts, recomputes the
-frontier and compares it with `bd ready`.
+After authorized corrections it re-reads the affected Beads, runs
+`bd dep cycles`, recalculates the pending tree and reports residual findings.
 
-`roadmap loop` may invoke Doctor diagnostics, but it never applies Doctor fixes
+`roadmap loop` may invoke Doctor diagnosis but never applies Doctor corrections
 implicitly.
 
-### `roadmap loop`
+## `roadmap loop`
 
-Loop executes tasks sequentially. “Sequential” means one claimed Beads task is
-active in Roadmap at a time; fresh Superpowers implementer and reviewer agents
-operate inside that task boundary.
+Loop executes exactly one task at a time.
 
-#### Preflight
+### Selection
 
-Before selecting work, Roadmap:
+Before selecting, Roadmap:
 
-1. resolves the repository root and Beads provider;
-2. resolves effective `.workspace` configuration;
-3. reads all non-closed `epic/task` records and all `blocks` edges;
-4. checks cycles and contract completeness;
-5. computes the expected topological frontier;
-6. reads `bd ready` and compares both frontiers;
-7. stops with `readiness_drift` when they disagree;
-8. reports Doctor classifications when no executable task exists.
+1. resolves `.workspace/config.yaml` and required context;
+2. lists all non-closed epics/tasks and `blocks` edges;
+3. rejects cycles and contract-incomplete candidates;
+4. identifies tasks whose blockers are closed;
+5. compares that topological frontier with `bd ready`;
+6. stops for Doctor when the sets disagree.
 
-The computed frontier contains open tasks whose `blocks` predecessors are all
-closed, whose contract is complete and whose external gates are satisfied.
-Roadmap selects only from the intersection of the computed frontier and
-provider-ready work.
+It selects only a task present in both sets. Ordering is current owned task,
+Beads priority, reverse dependency impact and ID.
 
-Within that intersection, ordering is deterministic: resume the current
-session's owned task first, then Beads priority, reverse dependency impact and
-ID as the final tie-break.
+### Ownership
 
-#### Ownership
+Roadmap runs `bd update <id> --claim --json` for the selected task. A failed
+claim is a race loss; Roadmap refreshes the tree instead of overwriting another
+owner.
 
-Roadmap claims exactly one selected task through Beads. A failed atomic claim is
-a race loss and causes a fresh frontier calculation; Roadmap never overwrites an
-active owner.
+Roadmap runs `bd heartbeat <id>` before and after each bounded implementation,
+review and delivery stage. Heartbeat failure, changed assignee or changed
+status stops further mutation. Only Doctor may propose reclaiming a verified
+expired lease.
 
-The controller renews the native lease while implementation, review or delivery
-is active. Heartbeat loss, changed assignee or changed status stops the task
-before another mutation. Only an expired lease may be reclaimed, using the
-provider's explicit reclaim operation.
+### Superpowers execution
 
-#### Superpowers execution envelope
+Inside the claimed task, the controller uses relevant Superpowers skills and
+fresh implementer/reviewer subagents. The controller alone delegates; workers
+do not create subagents. Reports are bounded and returned by artifact path or
+concise final result rather than accumulated transcripts.
 
-For each claimed task, the controller:
+The task flow is:
 
-1. creates one outer Pi todo bound to the Bead ID;
-2. reads the full task contract;
-3. activates the concrete Superpowers disciplines required by the task;
-4. dispatches a fresh implementer subagent;
-5. receives a bounded report by file;
-6. dispatches an independent task reviewer for specification and quality;
-7. resumes or replaces the implementer through the bounded fix/re-review loop;
-8. dispatches final branch review when the delivery boundary requires it;
-9. runs verification-before-completion.
+```text
+read full Bead contract
+→ implementer
+→ task reviewer
+→ fix/re-review when required
+→ repository validation
+→ configured delivery and post-checks
+→ conditional Bead finalization
+```
 
-Subagents never dispatch subagents. The controller alone owns sequencing,
-ownership and review routing. Exact requirements live in bounded files rather
-than accumulated prompt history.
-
-Roadmap asks for confirmation before moving to the next topologically ready
+Roadmap asks for confirmation before selecting the next topologically ready
 task.
 
-#### Closure
+### Closure
 
-A task may close only when all of the following are true:
+A task closes only when:
 
 ```text
 Bead acceptance criteria passed
-AND Bead invariants preserved
-AND required Superpowers reviews accepted
-AND effective workspace pre/acceptance/review checks passed
-AND configured delivery completed and verified
-AND required workspace post-checks passed or are not applicable
-AND ownership and in_progress state still match
+AND invariants preserved
+AND required reviews accepted
+AND effective workspace checks passed
+AND configured delivery verified
+AND required post-checks passed or are not applicable
+AND ownership still matches
 ```
 
-The evidence receipt contains:
-
-- Bead ID and revision;
-- effective workspace configuration digest;
-- candidate commit SHA and base revision;
-- acceptance-criterion results;
-- invariant results;
-- review producer and verdict bindings;
-- delivery receipt appropriate to the configured mode;
-- post-check results;
-- bounded paths to retained evidence.
-
-The final Beads update uses compare-and-set guards for assignee and
-`in_progress`, appends the receipt path and changes status to `closed`. A stale
-guard returns `claim_lost` without retry.
-
-A failed task appends bounded failure evidence and enters the contract-required
-non-closed state. An ambiguous external effect, ownership loss or required
-`unknown` workspace control stops the loop without selecting another task.
-After successful closure, Roadmap recomputes the complete graph before offering
-the next task.
-
-## Readiness reconciliation
-
-`bd ready` remains required provider evidence, but it is not accepted as an
-unexplained terminal verdict.
-
-Roadmap independently derives the expected frontier from the full graph and
-compares IDs with the provider frontier:
+Roadmap writes the Markdown evidence report, then performs one conditional
+update:
 
 ```text
-expected == provider  → select from the common frontier
-expected != provider  → readiness_drift; diagnose before execution
-both empty             → explain every non-closed record or report graph defect
+bd update <id> --status closed \
+  --if-assignee <actor> --if-status in_progress \
+  --append-notes "PASS evidence=<repo-relative-path>" --json
 ```
 
-Status parking is not dependency modeling. Functional prerequisites use
-`blocks`. `blocked` is reserved for an observed failed or external condition;
-`deferred` requires an explicit wake condition or date. Closing a blocker causes
-a fresh graph calculation rather than a precomputed static queue.
+A stale conditional guard is `claim_lost` and is never retried. Failed or
+ambiguous effects preserve evidence and use the contract-required non-closed
+state. After successful closure Roadmap re-reads the graph before offering the
+next task.
 
-## Packaging and migration
+When all child tasks close, Roadmap verifies the epic's success criteria and
+evidence before conditionally closing the epic.
 
-A4S is the source of the global skill under `skills/roadmap/`. The skill is
-self-contained and does not depend on a sibling skill.
+## Readiness discipline
 
-Implementation migrates the useful deterministic provider adapter and tests
-from `skills/beads-loop/` into Roadmap-owned paths, then removes
-`skills/beads-loop/`. No compatibility alias or second public entry point is
-kept.
+The sequential topology is not the source of historical no-progress incidents.
+Those incidents arose from manual status parking, stale ownership, aggregate
+records exposed as executable work and missing `blocks` edges.
 
-Global installation points to the stable A4S checkout only after the Roadmap
-skill passes its complete contract and end-to-end suite. Historical ADRs,
-specs and plans remain versioned; they are not rewritten.
+Roadmap therefore treats `bd ready` as necessary provider evidence but not as an
+unexplained terminal verdict. A topology/provider disagreement is a Doctor
+finding. Functional prerequisites use `blocks`; `blocked` is reserved for an
+observed failed or external condition; `deferred` requires an explicit wake
+condition or date.
 
-Existing repository backlogs are never bulk-mutated during installation.
-Operators run `roadmap doctor` per repository and approve each correction plan.
+## Migration and distribution
 
-## Failure handling
+A4S is the canonical source under `skills/roadmap/`. Implementation adapts the
+historical Roadmap Markdown bundle and the useful operational rules from
+`skills/beads-loop/SKILL.md`; it does not migrate the Beads-loop Python adapter
+or tests.
 
-| Condition | Result |
-| --- | --- |
-| Missing Beads repository/provider | Stop before mutation |
-| Missing effective workspace DoD | Doctor finding; loop stops before implementation |
-| Incomplete task contract | Withhold and route to Plan or Doctor |
-| Dependency cycle | Stop and report cycle |
-| Computed/provider frontier mismatch | `readiness_drift`; Doctor diagnostics |
-| Claim race | Recompute once from fresh provider state |
-| Heartbeat or ownership loss | Stop task; no further mutation |
-| Test or acceptance failure | Preserve evidence; task does not close |
-| Review finding | Enter bounded fix/re-review loop |
-| Required workspace check `failed` or `unknown` | Do not deliver or close |
-| Delivery or post-check ambiguous | Stop; do not retry mutating effects |
-| Conditional finalization race | `claim_lost`; no retry |
+The active `skills/beads-loop/` directory is removed after Roadmap pressure
+scenarios pass. Historical ADRs, specs, plans and reports remain unchanged.
+There is no alias.
 
-## Test strategy
+Current Markdown consumers such as A4S README, the Pablontiv profile and
+context-save are updated from `beads-loop` or Rootline-roadmap assumptions to
+the new Roadmap/Beads contract.
 
-Skill changes follow the writing-skills RED-GREEN-REFACTOR contract. Pressure
-scenarios are run before the new skill exists to capture baseline failures.
+Global installation changes only after merge and explicit authorization. A
+runtime symlink must target the stable A4S checkout, never a worktree.
 
-Deterministic unit and contract coverage includes:
+## Verification
 
-- command routing for `plan`, bare tree, `doctor` and `loop`;
-- strict `epic/task` hierarchy and task contracts;
-- materialization approval and no-write-before-approval;
-- graph cycle and root validation;
-- topological frontier calculation;
-- provider-ready parity and `readiness_drift`;
-- complete no-ready explanations;
-- Doctor classification, dry-run, approval and preservation rules;
-- atomic claim races, heartbeat renewal, expiry and reclaim;
-- one active task at a time;
-- subagent role routing and recursive-delegation rejection;
-- workspace configuration resolution and missing-config failure;
-- task AC plus workspace DoD closure receipts;
-- conditional finalization and claim loss;
-- complete removal of the public `beads-loop` interface.
+Verification is documentation-focused:
 
-Disposable end-to-end repositories prove:
+1. Run pressure scenarios without Roadmap and preserve observed failures.
+2. Write the Markdown skill and references.
+3. Run the same scenarios with explicit Roadmap loading.
+4. Amend only guidance implicated by an observed failure.
+5. Confirm all pressure scenarios pass.
+6. Run existing A4S validation, Rootline validation and `git diff --check`.
+7. Verify no active global path points to a worktree.
 
-1. Plan creates an approved `epic/task` graph with correct `blocks` edges.
-2. Bare Roadmap explains the entire pending graph.
-3. Doctor diagnoses and approval-gates a legacy mixed-type/status-parking graph.
-4. Two competing loop processes cannot own the same task.
-5. Closing task A makes blocked task B enter the next computed frontier.
-6. A repository without `.workspace/config.yaml` cannot start mutating loop work.
-7. A workspace-configured repository produces a closure receipt and closes only
-   after its configured delivery boundary.
-8. No live repository backlog, remote or external system is mutated by tests.
+No new Roadmap unit, integration or E2E test suite is introduced.
 
 ## Success criteria
 
-- `roadmap` is the only public planning/execution skill.
-- Plan, tree, Doctor and loop operate on Beads without a second durable store.
-- New Roadmap records use only `epic` and `task` with no nested epics.
-- No task starts with an incomplete contract or unresolved workspace DoD.
-- No-ready results explain every non-closed record.
-- Provider readiness and computed topology must agree before selection.
-- Exactly one task is claimed and heartbeated at a time.
-- Superpowers implementer/reviewer routing is bounded and non-recursive.
-- Closure requires task acceptance plus repository-configured delivery and
-  postconditions.
-- Existing backlogs migrate only through approval-gated Doctor plans.
-- The `beads-loop` skill, alias and global installation are removed after
-  Roadmap verification succeeds.
+- Roadmap is a Markdown-only skill bundle.
+- Beads replaces Rootline only as backlog storage and graph provider.
+- `roadmap plan`, bare Roadmap, Doctor and loop match the approved interface.
+- New materialization uses only `epic/task` and `blocks`.
+- Empty readiness is always explained from the complete graph.
+- Loop executes one claimed task at a time and uses direct heartbeat commands.
+- Closure combines Bead acceptance with `.workspace` DoD.
+- Existing backlogs change only through an approved Doctor recipe.
+- Pressure scenarios pass without a custom runtime or new unit tests.
+- `beads-loop` is removed without a compatibility alias.
