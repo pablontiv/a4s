@@ -225,6 +225,8 @@ def analyze_delivery_efficiency(
         shas = frozenset(durable_by_cohort[(repo, cohort)])
         cost = total_cost.get((repo, cohort), 0.0)
         attributed = attributable.get((repo, cohort), 0.0)
+        if not (cost or shas or immature[(repo, cohort)] or reverted[(repo, cohort)] or unknown[(repo, cohort)]):
+            continue
         coverage = attributed / cost if cost else 0.0
         leads = [
             (evidence_cache[(repo, sha)].committed_at - earliest_start[(repo, sha)]).total_seconds()
@@ -247,3 +249,27 @@ def analyze_delivery_efficiency(
             statistics.median(leads) if leads else None, status,
         ))
     return rows
+
+
+def render_delivery_efficiency(
+    rows: Iterable[DeliveryCohort], since: dt.date, until: dt.date | None,
+    evaluation_date: dt.date,
+) -> str:
+    """Render read-only per-repository delivery-efficiency evidence."""
+    range_label = f"mtime {since.isoformat()}" + (f" a {until.isoformat()}" if until else "")
+    out = [
+        f"=== COSTE POR CAMBIO DURABLE === {range_label}; evaluación {evaluation_date.isoformat()}",
+        "Solo filas ranked del mismo repositorio/value stream son comparables.",
+        "",
+        "Repository | Cohort | Native cost attributed | Durable changes | CDPC | Reverts | Median time | Coverage | Status",
+        "---|---|---:|---:|---:|---:|---:|---:|---",
+    ]
+    for row in rows:
+        cdpc = f"${row.cdpc:.2f}" if row.cdpc is not None else "—"
+        median = f"{row.median_lead_seconds:.0f}s" if row.median_lead_seconds is not None else "—"
+        out.append(
+            f"{row.repository} | {row.cohort} | ${row.attributable_cost:.2f} | "
+            f"{len(row.durable_shas)} | {cdpc} | {row.reverted_count} | {median} | "
+            f"{row.coverage:.0%} | {row.status}"
+        )
+    return "\n".join(out)

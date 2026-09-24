@@ -13,6 +13,14 @@ class SkillContractTests(unittest.TestCase):
         self.assertIn('assets/quad.py', text)
         self.assertNotIn('/private/tmp/', text)
 
+    def test_skill_documents_delivery_efficiency_guardrails(self):
+        text = (Path(__file__).parents[1] / 'SKILL.md').read_text()
+        self.assertIn('delivery-efficiency', text)
+        self.assertIn('Cost per Durable Production Change', text)
+        self.assertIn('mtime', text)
+        self.assertIn('mixed', text)
+        self.assertIn('seven-day', text)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -28,6 +28,7 @@ import attribution
 from dataset import load_ledger
 from views import aggregate_harness, aggregate_topology, render_harness_overview, render_topology_overview
 from enrich import enrich_records
+from delivery_efficiency import analyze_delivery_efficiency, render_delivery_efficiency
 
 
 def scan_by_day(since: str, until: str = None):
@@ -111,7 +112,8 @@ def main():
     ap.add_argument('--no-prs', action='store_true')
     ap.add_argument('--no-beads', action='store_true')
     ap.add_argument('--out', default=None, help='Escribir a archivo en vez de stdout')
-    ap.add_argument('--view', choices=('topology', 'harness'), default='topology', help='Vista: topology (Pi S1-S4) o harness (Pi/Claude/Codex)')
+    ap.add_argument('--view', choices=('topology', 'harness', 'delivery-efficiency'), default='topology', help='Vista: topology (Pi S1-S4), harness (Pi/Claude/Codex) o delivery-efficiency')
+    ap.add_argument('--evaluation-date', default=None, help='Fecha ISO para madurez de commits (default: hoy UTC)')
     ap.add_argument('--with-commits', action='store_true', help='En harness, consulta git log por sesión para poblar SHAs únicos (lento).')
     args = ap.parse_args()
 
@@ -120,6 +122,21 @@ def main():
         if args.with_commits:
             records = enrich_records(records)
         text = render_harness_overview(aggregate_harness(records)) if args.view == 'harness' else render_topology_overview(aggregate_topology(records))
+        if args.out:
+            with open(args.out, 'w') as f:
+                f.write(text)
+            print(f'Reporte escrito a {args.out}', file=sys.stderr)
+        else:
+            print(text)
+        return
+
+    if args.view == 'delivery-efficiency':
+        since = datetime.date.fromisoformat(args.since)
+        until = datetime.date.fromisoformat(args.until) if args.until else None
+        evaluation_date = datetime.date.fromisoformat(args.evaluation_date) if args.evaluation_date else datetime.datetime.now(datetime.UTC).date()
+        records = enrich_records(load_ledger(since, until, roots={'pi': quad.Path(quad.BASE)}))
+        rows = analyze_delivery_efficiency(records, evaluation_date)
+        text = render_delivery_efficiency(rows, since, until, evaluation_date)
         if args.out:
             with open(args.out, 'w') as f:
                 f.write(text)
