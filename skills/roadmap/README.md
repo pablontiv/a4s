@@ -39,9 +39,15 @@ Also confirm the bundle contains only Markdown, the public router stays concise,
 
 Repository merge and global activation are separate operations. Only after the change is merged, and only with explicit operator authorization, install a global `roadmap` symlink that targets the stable A4S checkout. Never point a global skill symlink at an implementation worktree. Remove the retired global predecessor only after the new stable target has been verified. The implementation workflow must not alter global runtime symlinks.
 
-### Post-merge activation runbook (operator-gated)
+### Post-merge activation runbook (executed 2026-09-24)
 
-Activation is a separate, operator-gated action after merge. Never run this runbook against the implementation worktree; run it only after the change is merged and an operator has explicitly authorized activation.
+**Status: Activation completed and verified.**
+
+Executed 2026-09-24 with verified state:
+- `~/.agents/skills/roadmap` → `[REDACTED:shared-root]/harness/a4s/skills/roadmap` ✓
+- `~/.agents/skills/beads-loop` absent ✓
+
+Historical record (operator reference):
 
 ```bash
 set -euo pipefail
