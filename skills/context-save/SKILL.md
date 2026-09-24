@@ -115,10 +115,9 @@ rootline query lines/ --where 'tipo == "question"' --output table 2>/dev/null
 rootline query theories/ --output table 2>/dev/null
 rootline query backlog/ --count 2>/dev/null
 
-# Roadmap state: pending items
-if [ -f .claude/roadmap.local.md ]; then
-  ROADMAP_ROOT=$(grep 'roadmap-root:' .claude/roadmap.local.md | awk '{print $2}')
-  rootline stats "$ROADMAP_ROOT" --output json 2>/dev/null
+# Beads state: pending items
+if [ -d .beads ]; then
+  bd list --status open,in_progress,blocked,deferred --brief --limit 0 --json
 fi
 
 # Hypothesize state: active investigations
