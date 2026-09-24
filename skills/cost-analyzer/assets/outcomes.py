@@ -130,7 +130,7 @@ def categorize_path(path: str) -> str:
     p = path.lower()
     if '/docs/' in p or '/.workspace/docs' in p or p.endswith(('.md', '.mdx', '.rst', '.txt')):
         return 'doc'
-    if '.test.' in p or '__tests__' in p or '/tests/' in p or '/test/' in p or p.endswith('.spec.ts') or p.endswith('_test.py') or '/spec/' in p:
+    if '.test.' in p or '__tests__' in p or '/tests/' in p or '/test/' in p or p.startswith(('tests/', 'test/', '__tests__/', 'spec/')) or p.endswith('.spec.ts') or p.endswith('_test.py') or '/spec/' in p:
         return 'test'
     if p.endswith(('.json', '.yaml', '.yml', '.toml')) or 'package.json' in p or 'tsconfig' in p or p.endswith('.lock'):
         return 'config'

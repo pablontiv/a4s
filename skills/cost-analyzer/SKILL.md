@@ -65,6 +65,17 @@ python3 assets/report.py --since 2026-08-01 --until 2026-09-30 --view harness --
 
 Las vistas muestran tokens, SHAs únicos, `tokens/SHA` y cobertura Git. `--view topology` cruza Pi, Claude y Codex con S1–S4/unknown. `--with-commits` consulta `git log` por sesión y añade SHAs únicos; es lento. Menor `tokens/SHA` es más eficiente en unidad de trabajo, no prueba valor final. Claude/Codex no se declaran ganadores en dólares porque sus logs no exponen costo nativo.
 
+### Eficiencia de entrega (opt-in)
+
+```bash
+python3 assets/report.py --since 2026-09-01 --until 2026-09-16 \
+  --view delivery-efficiency --evaluation-date 2026-09-24
+```
+
+Esta vista calcula **Cost per Durable Production Change (CDPC)**: coste nativo atribuible dividido por commits de código de producción que tienen al menos una ventana **seven-day** de madurez, siguen alcanzables desde la rama principal y no presentan un revert explícito. Mantiene la selección de sesiones exclusivamente por `mtime`; la fecha de evaluación solo clasifica los outcomes Git de esas sesiones ya seleccionadas.
+
+No mezcla SHAs observados por varias topologías: los informa como cohorte `mixed` y los excluye de los denominadores S1–S4. Solo filas del mismo repositorio/value stream con cobertura atribuible ≥80% y estado `ranked` son comparables. La vista muestra reverts, tiempo mediano hasta el commit durable, candidatos inmaduros/desconocidos y cobertura. Es lectura local de Git; no modifica refs, ramas ni remotos.
+
 ### Solo clasificador (rápido)
 
 ```bash
@@ -106,12 +117,12 @@ Divide por el cutover verificado `2026-09-04T04:43:09Z`: sesiones antes = `pi-su
 
 | Patrón en los datos | Lo que significa |
 |---|---|
-| S4 = >50% del gasto | El skill `herdr` "un agente por tab" no está deteniendo S4 en la práctica. |
+| S4 = >50% del gasto | Presión presupuestaria alta; no prueba por sí sola una topología ineficiente. |
 | S2 reaparece después de prohibirse | Algún flujo todavía genera S2 (posiblemente migración o skill no aplicado). |
-| S4 con 0 commits pero >$100/sess | El orquestador está quemando contexto sin entregar. Problema crítico. |
-| S3 con cacheRead >95% | El orquestador delgado está funcionando bien. |
-| S1 con commits/sess <0.5 | El ejecutor está siendo ineficiente — quizá tareas demasiado pequeñas o demasiado grandes. |
-| **Ratio $orch / $S1_spawned > 5** | El orquestador cuesta 5× más de lo que entrega via S1 spawneadas. Es un agujero de presupuesto. |
+| S4 con 0 commits pero >$100/sess | Señal de investigación; comprobar `delivery-efficiency` antes de concluir falta de entrega. |
+| S3 con cacheRead >95% | Describe volumen de caché, no eficiencia ni precio relativo. |
+| S1 con commits/sess <0.5 | Actividad baja; no concluye ineficiencia sin CDPC, cobertura y calidad. |
+| **Ratio $orch / $S1_spawned > 5** | Señal de coste de orquestación; contrastar con cambios durables antes de tomar una decisión. |
 | `j0k3r` vs `pi-subagents` | Comparación observacional por cohortes temporales; no atribuir causalidad sin controlar tareas/repos. |
 
 ### ADVERTENCIA: commits ≠ valor
