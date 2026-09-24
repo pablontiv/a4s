@@ -65,10 +65,25 @@ class BeadsTodoLoopTests(unittest.TestCase):
         self.assertEqual(result.kind, "snapshot")
         self.assertEqual(result.details["todos"], [
             {"key": "bead:a", "id": "a", "title": "Implement A", "priority": 1, "rank": 0, "blocked_by": [], "ready": True},
-            {"key": "bead:b", "id": "b", "title": "Implement B", "priority": 1, "rank": 1, "blocked_by": ["bead:a"], "ready": False},
         ])
+        self.assertIn({"id": "b", "title": "Implement B", "status": "not-ready"}, result.details["withheld"])
         self.assertNotIn("secret acceptance text", json.dumps(result.details))
         self.assertTrue(all("--claim" not in command for _, command in provider.calls))
+
+    def test_snapshot_schedules_only_claimable_ready_non_epics(self) -> None:
+        adapter = load_adapter()
+        result = adapter.project_snapshot(
+            [
+                {"id": "epic", "title": "Aggregate", "priority": 0, "status": "open", "issue_type": "epic", "dependencies": []},
+                {"id": "assigned", "title": "Held", "priority": 1, "status": "open", "issue_type": "task", "assignee": "other-agent", "dependencies": []},
+                {"id": "claimable", "title": "Work", "priority": 1, "status": "open", "issue_type": "task", "dependencies": []},
+            ],
+            [{"id": "epic"}, {"id": "assigned"}, {"id": "claimable"}],
+        )
+
+        self.assertEqual([todo["id"] for todo in result.details["todos"]], ["claimable"])
+        self.assertIn({"id": "epic", "title": "Aggregate", "status": "epic"}, result.details["withheld"])
+        self.assertIn({"id": "assigned", "title": "Held", "status": "assigned"}, result.details["withheld"])
 
     def test_snapshot_withholds_legacy_in_progress_and_blocked_work(self) -> None:
         adapter = load_adapter()
@@ -98,22 +113,21 @@ class BeadsTodoLoopTests(unittest.TestCase):
             provider = FakeProvider([
                 [{"id": "child", "title": "Child", "priority": 2, "status": "open", "dependencies": []}],
                 [{"issue_id": "child", "depends_on_id": "parent", "type": "parent-child"}],
-                [],
+                [{"id": "child"}],
             ])
             with patch.object(adapter, "run_provider", provider):
                 result = adapter.snapshot(repo)
 
         self.assertEqual(result.details["todos"][0]["blocked_by"], [])
 
-    def test_resolve_provider_uses_wrapper_only_when_regular_file(self) -> None:
+    def test_resolve_provider_uses_bd_directly(self) -> None:
         adapter = load_adapter()
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            self.assertEqual(adapter.resolve_provider(root), ("bd",))
             wrapper = root / "tooling" / "beads" / "bd.sh"
             wrapper.parent.mkdir(parents=True)
             wrapper.write_text("#!/bin/sh\n", encoding="utf-8")
-            self.assertEqual(adapter.resolve_provider(root), (str(wrapper),))
+            self.assertEqual(adapter.resolve_provider(root), ("bd",))
 
     def test_detail_returns_full_text_only_for_selected_bead(self) -> None:
         adapter = load_adapter()
@@ -145,16 +159,15 @@ class BeadsTodoLoopTests(unittest.TestCase):
         self.assertNotIn("--claim", provider.calls[0][1])
         self.assertEqual(provider.calls[1][1], ("show", "a", "--json"))
 
-    def test_no_shipped_beads_loop_contract_contains_claim_or_lease(self) -> None:
+    def test_legacy_adapter_contains_no_lease_protocol(self) -> None:
         shipped = (
-            SKILL_ROOT / "SKILL.md",
             SKILL_ROOT / "README.md",
             SKILL_ROOT / "scripts" / "beads_todo_loop.py",
             SKILL_ROOT / "tests" / "smoke_pi_dispatch.py",
         )
         self.assertFalse((SKILL_ROOT / "scripts" / "beads_loop.py").exists())
         text = "\n".join(path.read_text(encoding="utf-8") for path in shipped)
-        for forbidden in ("beads_loop.py", "--claim", "claim_lost", "lease_expires_at", "heartbeat_at", "--if-assignee"):
+        for forbidden in ("beads_loop.py", "claim_lost", "lease_expires_at", "heartbeat_at", "--if-assignee"):
             self.assertNotIn(forbidden, text)
 
     def test_finalize_rejects_outside_or_symlinked_evidence(self) -> None:

@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import unittest
 from pathlib import Path
 
@@ -9,27 +7,28 @@ SKILL = SKILL_ROOT / "SKILL.md"
 
 
 class BeadsLoopTests(unittest.TestCase):
-    def test_skill_materializes_snapshot_into_todos_without_claims(self) -> None:
+    def test_skill_uses_beads_cli_without_a_python_runner(self) -> None:
         text = SKILL.read_text(encoding="utf-8")
         required_in_order = (
-            "beads_todo_loop.py snapshot",
-            "one `todo` for every",
-            "second deterministic pass",
-            "detail --bead",
-            "`backscroll`",
-            "`systematic-debugging`",
-            "`test-driven-development`",
-            "`executing-plans`",
-            "`verification-before-completion`",
-            "finalize --bead",
-            "final `snapshot`",
+            "`bd list --ready --brief --sort priority --limit 0 --json`",
+            "`bd show <bead-id> --json`",
+            "`bd dep list <bead-id> --json`",
+            "Materialize only eligible work into Pi todos",
+            "parallel wave",
+            "all eligible ready Beads",
+            "`bd update <bead-id> --claim`",
+            "`bead:<bead-id> — <title>`",
+            "`source=beads-loop`",
+            "`bead_id=<bead-id>`",
+            "stale Beads-loop todos",
+            "recalculate `ready`",
         )
         previous = -1
         for phrase in required_in_order:
             found = text.find(phrase)
             self.assertGreater(found, previous, phrase)
             previous = found
-        for forbidden in ("--claim", "lease", "heartbeat", "timer", "roadmapctl", "brainstorming"):
+        for forbidden in ("python3", "scripts/", "beads_todo_loop.py", "one sequential Pi session"):
             self.assertNotIn(forbidden, text)
 
 

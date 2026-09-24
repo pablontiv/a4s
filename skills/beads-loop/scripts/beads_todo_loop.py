@@ -47,8 +47,8 @@ def repository_root(cwd: Path) -> Path | None:
 
 
 def resolve_provider(root: Path) -> tuple[str, ...]:
-    wrapper = root / "tooling" / "beads" / "bd.sh"
-    return (str(wrapper),) if wrapper.is_file() and not wrapper.is_symlink() else ("bd",)
+    del root
+    return ("bd",)
 
 
 def run_provider(root: Path, command: tuple[str, ...]) -> subprocess.CompletedProcess[str]:
@@ -80,6 +80,10 @@ def _issue(row: object) -> dict[str, object]:
     required = ("id", "title", "priority", "status")
     if any(not isinstance(row.get(field), str if field != "priority" else int) for field in required):
         raise ValueError("issue has invalid fields")
+    issue_type = row.get("issue_type", "task")
+    assignee = row.get("assignee")
+    if not isinstance(issue_type, str) or (assignee is not None and not isinstance(assignee, str)):
+        raise ValueError("issue has invalid ownership fields")
     dependencies = row.get("dependencies", [])
     if not isinstance(dependencies, list):
         raise ValueError("issue has invalid dependencies")
@@ -104,6 +108,15 @@ def project_snapshot(issues: object, ready: object) -> Envelope:
         title = row["title"]
         status = row["status"]
         if status == "open":
+            if issue_id not in ready_rank:
+                withheld.append({"id": issue_id, "title": title, "status": "not-ready"})
+                continue
+            if row.get("issue_type", "task") == "epic":
+                withheld.append({"id": issue_id, "title": title, "status": "epic"})
+                continue
+            if row.get("assignee"):
+                withheld.append({"id": issue_id, "title": title, "status": "assigned"})
+                continue
             blocks: list[str] = []
             for dependency in row["dependencies"]:
                 if not isinstance(dependency, dict):
