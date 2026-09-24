@@ -150,6 +150,7 @@ La pertenencia al catálogo no activa una herramienta rutinariamente. Pi enruta 
 - `adr`: se activa después de una decisión significativa nueva o revocada, ante una corrección que invalida una decisión, o cuando se solicita registrar o recuperar un ADR.
 - `beads-loop`: se activa cuando se solicita ejecutar autónomamente todo el trabajo Beads canónico listo del repositorio actual, un claim atómico por vez y con finalización ligada a evidencia.
 - `context-save`: se activa para guardar, restaurar o listar estado estructurado entre sesiones; para conversaciones históricas se usa Backscroll.
+- `cost-analyzer`: se activa cuando el usuario pregunta por costo, tokens, outcomes por harness, extensión Pi, topología de agentes o subagentes.
 - `decision-calibrator`: se activa tras una corrección contradictoria, una pregunta repetida, recuperación de contexto, una tercera ronda sin nuevos unknowns decisivos o una elección de herramienta o arquitectura con costo operativo sostenido.
 - `empirical-capability-development`: se activa únicamente cuando el repositorio opta por el método y un `UNKNOWN` material bloquea una decisión con un probe disposable seguro disponible; fuera de ese caso no aplica.
 - `mission-control-health`: se activa para informar por separado la ejecución del schedule, la entrega de recibos y el procesamiento o acuse de Mission Control a partir de registros de solo lectura y emitir una alerta visible independiente del modelo; nunca reintenta, sondea, pausa, reinicia ni cambia proveedores o modelos.
