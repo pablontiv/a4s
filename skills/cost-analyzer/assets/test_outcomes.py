@@ -9,6 +9,9 @@ from enrich import enrich_records  # pyright: ignore[reportMissingImports]
 
 
 class OutcomeContractTests(unittest.TestCase):
+    def test_categorize_path_recognizes_root_relative_test_files(self):
+        self.assertEqual(outcomes.categorize_path('tests/test_app.py'), 'test')
+
     def test_canonical_records_aggregate_without_reopening_jsonl(self):
         records = [SessionRecord(id='x', harness='pi', source_path='/not-read.jsonl', schema_version='x', started_at=None, ended_at=None, cwd=None, model=None, provider=None, commits=frozenset({'abc'}))]
         summary = outcomes.aggregate_record_outcomes(records)['pi']
