@@ -17,9 +17,9 @@ workspace:
   workflow:
     base_branch: main
     sync_strategy: |
-      Antes de trabajo mutante, comparar por lectura origin/main con la revisión
-      base sin ejecutar pull implícito. Si no coincide o no puede verificarse,
-      conservar unknown y detener la fase afectada.
+      Antes de trabajo mutante, ejecutar pull explícito de origin/main sobre la
+      rama base local. Si el pull falla, genera conflictos no resueltos o no
+      puede verificarse, conservar unknown y detener la fase afectada.
     isolation_strategy: dedicated-worktree
     development_workflow: |
       Aplicar diseño proporcional e implementar directamente; usar un probe
@@ -39,6 +39,9 @@ workspace:
     - Obtener al menos una revisión antes de integrar.
   post_checks:
     - Confirmar que la revisión aprobada quedó realmente integrada.
+    - Cierre obligatorio - pull y push. Hacer pull de origin/main y push de todo
+      commit local de la entrega; verificar que main local y origin/main apuntan
+      al mismo commit y que el working tree queda limpio. Sin esto no hay cierre.
   monitoring: |
     No aplica a cambios puramente documentales; el comportamiento operativo
     debe definir monitoreo antes de mutar sistemas externos.
