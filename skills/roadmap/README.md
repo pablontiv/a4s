@@ -38,3 +38,19 @@ Also confirm the bundle contains only Markdown, the public router stays concise,
 ## Activation boundary
 
 Repository merge and global activation are separate operations. Only after the change is merged, and only with explicit operator authorization, install a global `roadmap` symlink that targets the stable A4S checkout. Never point a global skill symlink at an implementation worktree. Remove the retired global predecessor only after the new stable target has been verified. The implementation workflow must not alter global runtime symlinks.
+
+### Post-merge activation runbook (operator-gated)
+
+Activation is a separate, operator-gated action after merge. Never run this runbook against the implementation worktree; run it only after the change is merged and an operator has explicitly authorized activation.
+
+```bash
+test "$(git -C [REDACTED:shared-root]/harness/a4s branch --show-current)" = main
+test -f [REDACTED:shared-root]/harness/a4s/skills/roadmap/SKILL.md
+test ! -e "$HOME/.agents/skills/roadmap"
+test ! -e "$HOME/.agents/skills/roadmap.new"
+test "$(readlink "$HOME/.agents/skills/beads-loop")" = [REDACTED:shared-root]/harness/a4s/skills/beads-loop
+ln -s [REDACTED:shared-root]/harness/a4s/skills/roadmap "$HOME/.agents/skills/roadmap.new"
+mv "$HOME/.agents/skills/roadmap.new" "$HOME/.agents/skills/roadmap"
+unlink "$HOME/.agents/skills/beads-loop"
+test "$(readlink "$HOME/.agents/skills/roadmap")" = [REDACTED:shared-root]/harness/a4s/skills/roadmap
+```
