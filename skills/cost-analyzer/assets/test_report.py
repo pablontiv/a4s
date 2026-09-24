@@ -14,7 +14,7 @@ class ReportViewTests(unittest.TestCase):
         row = DeliveryCohort(
             repository="/repo", cohort="S3", session_cost=100.0, attributable_cost=50.0,
             durable_shas=frozenset({"abc"}), immature_count=1, reverted_count=0,
-            unknown_count=0, coverage=0.5, median_lead_seconds=60.0,
+            unknown_count=0, excluded_count=0, coverage=0.5, median_lead_seconds=60.0,
             status="insufficient-coverage",
         )
         stdout = io.StringIO()
@@ -28,6 +28,7 @@ class ReportViewTests(unittest.TestCase):
             report.main()
         self.assertIn('COSTE POR CAMBIO DURABLE', stdout.getvalue())
         self.assertIn('insufficient-coverage', stdout.getvalue())
+        self.assertIn('Candidates: durable=1', stdout.getvalue())
 
     def test_topology_view_uses_canonical_cross_harness_records(self):
         records = [

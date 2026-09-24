@@ -102,6 +102,7 @@ class DeliveryCohort:
     immature_count: int
     reverted_count: int
     unknown_count: int
+    excluded_count: int
     coverage: float
     median_lead_seconds: float | None
     status: str
@@ -185,6 +186,7 @@ def analyze_delivery_efficiency(
     immature: dict[tuple[Path, str], int] = defaultdict(int)
     reverted: dict[tuple[Path, str], int] = defaultdict(int)
     unknown: dict[tuple[Path, str], int] = defaultdict(int)
+    excluded: dict[tuple[Path, str], int] = defaultdict(int)
 
     for key, observers in observations.items():
         evidence = evidence_cache[key]
@@ -192,7 +194,9 @@ def analyze_delivery_efficiency(
         cohort = next(iter(scenarios)) if len(scenarios) == 1 else "mixed"
         cohort_for_sha[key] = cohort
         target = (key[0], cohort)
-        if evidence.durability == "durable":
+        if evidence.eligibility == "excluded-noncode":
+            excluded[target] += 1
+        elif evidence.durability == "durable":
             durable_by_cohort[target].add(key[1])
             starts = [record.started_at for record in observers if record.started_at]
             if starts:
@@ -219,13 +223,13 @@ def analyze_delivery_efficiency(
         for evidence in durable:
             attributable[(repo, cohort_for_sha[(repo, evidence.sha)])] += share
 
-    all_keys = set(total_cost) | set(durable_by_cohort) | set(immature) | set(reverted) | set(unknown)
+    all_keys = set(total_cost) | set(durable_by_cohort) | set(immature) | set(reverted) | set(unknown) | set(excluded)
     rows: list[DeliveryCohort] = []
     for repo, cohort in sorted(all_keys, key=lambda item: (str(item[0]), item[1])):
         shas = frozenset(durable_by_cohort[(repo, cohort)])
         cost = total_cost.get((repo, cohort), 0.0)
         attributed = attributable.get((repo, cohort), 0.0)
-        if not (cost or shas or immature[(repo, cohort)] or reverted[(repo, cohort)] or unknown[(repo, cohort)]):
+        if not (cost or shas or immature[(repo, cohort)] or reverted[(repo, cohort)] or unknown[(repo, cohort)] or excluded[(repo, cohort)]):
             continue
         coverage = attributed / cost if cost else 0.0
         leads = [
@@ -245,7 +249,7 @@ def analyze_delivery_efficiency(
             status = "ranked"
         rows.append(DeliveryCohort(
             str(repo), cohort, cost, attributed, shas, immature[(repo, cohort)],
-            reverted[(repo, cohort)], unknown[(repo, cohort)], coverage,
+            reverted[(repo, cohort)], unknown[(repo, cohort)], excluded[(repo, cohort)], coverage,
             statistics.median(leads) if leads else None, status,
         ))
     return rows
@@ -271,5 +275,10 @@ def render_delivery_efficiency(
             f"{row.repository} | {row.cohort} | ${row.attributable_cost:.2f} | "
             f"{len(row.durable_shas)} | {cdpc} | {row.reverted_count} | {median} | "
             f"{row.coverage:.0%} | {row.status}"
+        )
+        out.append(
+            f"Candidates: durable={len(row.durable_shas)} immature={row.immature_count} "
+            f"reverted={row.reverted_count} excluded-noncode={row.excluded_count} "
+            f"unknown={row.unknown_count}"
         )
     return "\n".join(out)
