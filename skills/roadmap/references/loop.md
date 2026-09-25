@@ -39,7 +39,7 @@ Loop stops and prints a final SUMMARY when any of the following is true:
 2. **Doctor required**: a fresh tree read detects a cycle, invalid graph, incomplete candidate, or readiness drift.
 3. **Unknown or failed control**: a required workspace control (sync, isolation, development workflow, delivery, post-checks, etc.) is missing, inaccessible, or ambiguous.
 4. **Claim or lease lost**: the claim failed (race loss), lease expired between stages, or heartbeat failed; ownership no longer matches or status changed from `in_progress`.
-5. **Gate failure**: a required check, review, or delivery gate failed for the current task or PR.
+5. **Gate failure**: a required check, review, or delivery gate failed for the current task or PR. This includes HIGH-severity security findings from a triggered security review (§3.1).
 6. **Human gate applies**: the effective `.workspace/config.yaml` declares a human gate requirement that is met:
    - delivery-policy changes (delivery_mode, delivery_gate, delivery_overrides modified);
    - external effects outside the repository;
@@ -69,10 +69,26 @@ Execute:
 read full Bead contract
 → bounded implementation
 → task review and bounded fix/re-review when required
+→ selective security review (if triggered)
 → repository validation
 → configured delivery and post-checks
 → conditional finalization
 ```
+
+### 3.1. Selective security review trigger
+
+After implementation and task review pass, check the candidate diff for sensitive paths. Run `git diff --name-only <base>...HEAD` and evaluate each changed file:
+
+- **Trigger if any path contains** (case-insensitive match of literal string): `secret`, `credentials`, `.env`, `auth`, or `crypto`.
+- **Or trigger if** the task contract explicitly requests a security review.
+
+If trigger applies:
+1. Dispatch a fresh `superpowers-task-reviewer` on the PR head SHA with a security-focused brief (secrets exposure, credential handling, authentication and authorization logic, cryptography use), separate from the general task review.
+2. Record the security review verdict and any findings in the evidence report (§4).
+3. A HIGH-severity finding blocks task closure and autonomous merge (gate failure, stopping condition 5).
+
+If trigger does not apply:
+- Log in evidence: `security review: not triggered` followed by the comma-separated list of changed file paths evaluated.
 
 Run this exact heartbeat command immediately before and after each bounded implementation, review, and delivery stage:
 
@@ -86,9 +102,14 @@ Preserve unrelated work and remain inside the selected contract. Passing unit te
 
 ## 4. Record evidence and close conditionally
 
-Write a repository-contained Markdown evidence report and set `$EVIDENCE_REF` to its repository-relative path. It must identify the Bead and candidate SHA and record acceptance results, preserved invariants, reviews, workspace controls, delivery, and post-checks.
+Write a repository-contained Markdown evidence report and set `$EVIDENCE_REF` to its repository-relative path. It must identify the Bead and candidate SHA and record acceptance results, preserved invariants, reviews, workspace controls, delivery, post-checks, and security review results (if applicable).
 
-Close only when every required result is passed (or explicitly not applicable where the workspace contract permits), ownership still matches, and the Bead remains `in_progress`:
+The evidence report must record:
+- **Security review trigger**: whether the trigger applied (yes/no).
+- **If not triggered**: the list of changed file paths evaluated.
+- **If triggered**: the security review verdict (passed/failed), any findings, and their severity levels. A HIGH-severity finding must be explicitly noted as a gate failure that blocks closure and merge.
+
+Close only when every required result is passed (or explicitly not applicable where the workspace contract permits), including any triggered security review, ownership still matches, and the Bead remains `in_progress`:
 
 ```bash
 bd update "$BEAD_ID" --status closed \
