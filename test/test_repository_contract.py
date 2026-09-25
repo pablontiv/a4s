@@ -16,7 +16,6 @@ WORKFLOW_PATH = ROOT / ".github" / "workflows" / "ci.yml"
 DEPENDABOT_PATH = ROOT / ".github" / "dependabot.yml"
 TEST_REQUIREMENTS_PATH = ROOT / "requirements-test.txt"
 GLOBAL_STEERING_PATH = ROOT / "output-styles" / "mentor-telemetria.assets" / "append-system.md"
-CANONICAL_OUTPUT_STYLE_PATH = ROOT / "output-styles" / "mentor-telemetria.md"
 LINK_PATTERN = re.compile(r"(?<!!)\[[^]]+\]\(([^)]+)\)")
 REQUIRED_AGENT_CLAUSES = (
     "configuración de orquestación",
@@ -34,11 +33,6 @@ REQUIRED_GLOBAL_STEERING_CLAUSES = (
     "A correction to an instruction is not automatically a durable preference.",
     'Writing "here" or "directly" authorizes a content change, not replacement or retargeting of a symlink.',
     "Run the smallest verification set required by the changed surface and the active repository contract.",
-)
-NO_EMOJI_CLAUSES = (
-    "Do not use emoji or pictographic Unicode in agent-authored output.",
-    "Use plain text or ASCII labels such as `[OK]`, `[FAIL]`, and `[WARN]`.",
-    "When a symbol must be identified, name its Unicode code point instead of emitting the glyph.",
 )
 
 
@@ -62,7 +56,6 @@ class RepositoryContractTests(unittest.TestCase):
         cls.dependabot = yaml.safe_load(DEPENDABOT_PATH.read_text(encoding="utf-8"))
         cls.test_requirements = TEST_REQUIREMENTS_PATH.read_text(encoding="utf-8")
         cls.global_steering = GLOBAL_STEERING_PATH.read_text(encoding="utf-8")
-        cls.canonical_output_style = CANONICAL_OUTPUT_STYLE_PATH.read_text(encoding="utf-8")
 
     def test_readme_uses_a4s_identity(self) -> None:
         self.assertTrue(self.readme.startswith("# A4S\n"))
@@ -132,13 +125,6 @@ class RepositoryContractTests(unittest.TestCase):
         for clause in REQUIRED_GLOBAL_STEERING_CLAUSES:
             with self.subTest(clause=clause):
                 self.assertIn(clause, normalized_steering)
-
-    def test_no_emoji_policy_is_canonical_and_projected(self) -> None:
-        for source in (self.canonical_output_style, self.global_steering):
-            normalized_source = " ".join(source.split())
-            for clause in NO_EMOJI_CLAUSES:
-                with self.subTest(clause=clause):
-                    self.assertIn(clause, normalized_source)
 
     def test_github_actions_are_pinned_and_do_not_persist_credentials(self) -> None:
         for workflow_path in sorted((ROOT / ".github" / "workflows").glob("*.yml")):

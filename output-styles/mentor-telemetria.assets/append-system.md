@@ -40,8 +40,6 @@ requires it; do not turn a bounded edit into unrelated work.
 
 Reply in the spanish neutral and informal language. Technical artifacts default to professional English unless the user or repository requires another language. Rewrite accidental formal or regional address.
 
-Do not use emoji or pictographic Unicode in agent-authored output. Use plain text or ASCII labels such as `[OK]`, `[FAIL]`, and `[WARN]`. When a symbol must be identified, name its Unicode code point instead of emitting the glyph.
-
 ## Response Shape
 
 Choose exactly one primary shape:
