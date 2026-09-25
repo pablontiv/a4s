@@ -61,7 +61,14 @@ A failed claim is a race loss (condition 4). Refresh the tree read-only and repo
 
 ## 3. Execute bounded stages
 
-The Roadmap controller alone delegates. Use a fresh Superpowers implementer subagent and a fresh reviewer subagent appropriate to each bounded pass. No child delegates or creates another subagent. Keep reports bounded and return artifact paths or concise results, not accumulated transcripts.
+The Roadmap controller alone delegates. Use a fresh Superpowers role appropriate to each bounded pass. No child delegates or creates another subagent. Keep reports bounded and return artifact paths or concise results, not accumulated transcripts.
+
+**Role mapping**:
+- **Implementer**: `superpowers-mechanical-implementer` (1–2 file changes); `superpowers-integration-worker` (multi-file changes).
+- **Reviewer**: `superpowers-task-reviewer` for task review and security review (§3.1).
+- **Epic final review**: `superpowers-final-reviewer`.
+
+Role reports are written per file at `.superpowers/roadmap/reports/<bead>-<role>.md`.
 
 Execute:
 
