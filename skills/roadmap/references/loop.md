@@ -216,14 +216,32 @@ After a successful close, immediately re-read the Bead and the complete graph. C
 
 An epic is never claimed or implemented. Close an epic only after every child task is closed, an `epic-final-reviewer` handoff comment passes, fresh Bead evidence proves the epic's own success criteria, and any required conditional safeguards hold. Append an epic `ROADMAP_RESULT v1` notes entry; create no execution report file.
 
-## 5. Final summary
+## 5. Final summary and emergency continuation
 
-When the loop stops (any stopping condition), print a final SUMMARY before exiting:
+When the loop stops, re-read the complete graph before printing the final summary. If one or more non-epic Beads remain non-closed and no task can continue now, this is a **`BACKLOG EMERGENCY`**. It is not backlog hygiene, even when the blocker is configuration, contract completeness, an external gate, or ownership.
+
+A `BACKLOG EMERGENCY` response must:
+
+1. show the literal count of pending non-epic Beads in scope;
+2. name the deterministic next candidate that is stranded, when one exists;
+3. name the literal blocker and authoritative field, edge, gate, or finding;
+4. provide exactly one concrete policy-valid `CONTINUE` action that addresses that blocker; and
+5. keep secondary findings outside the continuation gate.
+
+Generic advice such as "fix config", "run Doctor", or "retry when available" is not a continuation action. For a Doctor finding, continue Doctor on the exact highest-ranked affected group. For an unknown workspace control, identify the owning `.workspace` field and show the exact authority proposal or ask for the one missing material input. If Loop cannot perform the action itself, name the owning workflow and its exact input without implying that Loop applied it. Deferred or intentionally parked tasks still count as pending; their concrete continuation is to satisfy the declared defer condition or explicitly close or re-scope the record, never to silently downgrade the emergency.
+
+Print this bounded shape before exiting. The first four rows after the header are present only for `BACKLOG EMERGENCY`; omit them from a clean `LOOP SUMMARY` with zero pending tasks:
 
 ```
 ╔════════════════════════════════════════════════════════════════╗
-║                      LOOP SUMMARY                              ║
+║              <LOOP SUMMARY | BACKLOG EMERGENCY>                ║
 ╠════════════════════════════════════════════════════════════════╣
+║ Pending tasks: <count>                                         ║
+║ Stranded next candidate: <BEAD_ID + title | none>              ║
+║ Blocking condition:                                            ║
+║   <literal field, edge, gate, ownership loss, or finding>      ║
+║ CONTINUE:                                                      ║
+║   <one concrete policy-valid action>                           ║
 ║ Closed tasks:                                                  ║
 ║   <BEAD_ID>: <title> (PR: <url>, merge SHA: <sha>)             ║
 ║   result: ROADMAP_RESULT v1; provenance: <refs>                ║
@@ -235,18 +253,19 @@ When the loop stops (any stopping condition), print a final SUMMARY before exiti
 ║   ...                                                           ║
 ║ Stopping condition:                                            ║
 ║   <number>. <description>                                      ║
-║ Next steps:                                                    ║
-║   <recommendation based on stopping condition>                 ║
 ║ Cleanup offered (cleanup_policy):                              ║
 ║   worktree: <path>                                             ║
 ║   branch: <branch-name>                                        ║
 ╚════════════════════════════════════════════════════════════════╝
 ```
 
-The summary must record:
+Use `LOOP SUMMARY` only when no pending non-epic Beads remain. The summary must record:
+- **Pending tasks**: literal in-scope non-closed non-epic count.
+- **Stranded next candidate**: the candidate selected before the blocking control by §2 ordering (current ownership, Beads priority, reverse-dependency impact, then ID), or `none` with the reason no candidate exists.
+- **Blocking condition**: the exact authority or graph fact preventing execution.
+- **CONTINUE**: one concrete action, including its owning workflow when Loop cannot execute it.
 - **Closed tasks**: each task ID, title, PR URL (if applicable), merge SHA (if merged), final `ROADMAP_RESULT v1` verdict, and recorded provenance references.
 - **Reviews and findings**: concise summary of reviewer feedback and any HIGH-security findings or regressions.
 - **Delivery gates applied**: each gate name and its result (passed, failed, or not applicable).
 - **Stopping condition**: reference one of the 7 stopping conditions (section 2) by number and description.
-- **Next steps**: a specific recommendation based on the stopping reason (e.g., "open Doctor for cycle detection", "authorize delivery-policy change", "retry after control becomes available").
 - **Cleanup offered**: list worktree paths and branch names available for cleanup (never auto-delete; the operator chooses).

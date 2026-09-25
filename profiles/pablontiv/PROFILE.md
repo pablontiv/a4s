@@ -54,7 +54,7 @@ profiles/pablontiv/PROFILE.md
 
 La raíz `.workspace/docs/` es la autoridad final del conocimiento durable del workspace. `.workspace/worktrees/` es la raíz de aislamiento administrado solamente cuando la estrategia efectiva lo requiere.
 
-Cada repositorio administrado DEBE tener una identidad estable, una ruta física canónica y una entrada efectiva. Aliases, symlinks y worktrees derivados no crean identidades nuevas. Un repositorio no clasificado puede inspeccionarse en modo de solo lectura, pero no puede recibir mutaciones ni entregas.
+Cada repositorio administrado DEBE tener una identidad estable, un locator canónico del repositorio de origen y una entrada efectiva. `repo.path` guarda ese locator relocatable, nunca la ruta física de un checkout local. Pi descubre el checkout en runtime y verifica con `git remote get-url origin` que corresponde al origen configurado. Aliases, symlinks y worktrees derivados no crean identidades nuevas. Un repositorio no clasificado puede inspeccionarse en modo de solo lectura, pero no puede recibir mutaciones ni entregas.
 
 Un grupo comparte controles o defaults sin implicar equipo, ownership ni estructura organizacional. Las excepciones se declaran centralmente por identidad de repositorio.
 
@@ -79,7 +79,7 @@ La capa más específica prevalece únicamente en los campos que declara.
 
 Antes del trabajo mutante, Pi DEBE mostrar la vista efectiva con valores, origen `workspace`, `group` o `repository`, revisión de configuración, revisión observada del repositorio, warnings, conflictos y campos `unknown`. Una vista derivada nunca se convierte en autoridad editable.
 
-Un binding queda stale cuando cambian identidad, ruta, branch, proveedor, comando, precondición, revisión o vigencia. Si Pi no puede verificar identidad, `cwd`, interfaz, precondiciones y revisión aplicable, conserva `unknown` y no infiere un sustituto.
+Un binding queda stale cuando cambian identidad, locator de origen, branch, proveedor, comando, precondición o vigencia de forma que invalida el control. `verified_revision` registra la revisión del origen sobre la que se verificó el binding; no es una ruta local ni exige que todo HEAD posterior sea idéntico. Si Pi no puede descubrir el checkout, hacer coincidir su `origin`, verificar `cwd`, interfaz, precondiciones y revisión aplicable, conserva `unknown` y no infiere un sustituto.
 
 ## 5. Contrato de los controles
 
@@ -257,7 +257,7 @@ Cada consumidor DEBE incluir una entrada central aunque herede todos sus control
 schema_version: workspace-control/v1
 repo:
   id: group/repository
-  path: /absolute/canonical/path
+  path: https://forge.example/group/repository.git
   group: group
   managed: true
   verified_revision: unknown
@@ -301,7 +301,7 @@ repositories:
   example/service:
     repo:
       id: example/service
-      path: /workspace/example/service
+      path: https://forge.example/example/service.git
       group: example
       managed: true
       verified_revision: abc123
@@ -365,7 +365,7 @@ El wizard operativo se encuentra en `bootstrap.md`. No existe CLI de bootstrap n
 
 Una adopción de este perfil es aceptable cuando demuestra que:
 
-1. inventaría cada repositorio físico una sola vez;
+1. inventaría cada repositorio de origen una sola vez y verifica cada checkout local contra su locator canónico;
 2. resuelve `workspace → group → repository` conservando el origen de cada valor;
 3. muestra revisión, warnings, conflictos y `unknown`;
 4. determina controles sin depender de navegar configuración autoritativa en repositorios hijos;

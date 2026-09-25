@@ -383,6 +383,13 @@ class ProfileContractTests(unittest.TestCase):
         self.assertIn("unknown", self.bootstrap)
         self.assertIn("bloquea", self.bootstrap)
 
+    def test_repository_identity_uses_relocatable_origin_locator(self) -> None:
+        for document in (self.profile, self.bootstrap, self.template):
+            with self.subTest(document=document[:40]):
+                self.assertIn("repositorio de origen", document)
+                self.assertIn("git remote get-url origin", document)
+        self.assertNotIn("ruta física canónica", self.profile)
+
 
 class DogfoodConfigTests(unittest.TestCase):
     @classmethod
@@ -493,6 +500,14 @@ class DogfoodConfigTests(unittest.TestCase):
         self.assertIn("unknown", self.config)
         self.assertNotIn("{" * 2, self.config)
         self.assertNotIn("TO" + "DO", self.config)
+
+    def test_repository_binding_is_public_and_source_canonical(self) -> None:
+        repo = self.repository.get("repo")
+        self.assertIsInstance(repo, dict)
+        assert isinstance(repo, dict)
+        self.assertEqual(repo.get("path"), "https://github.com/pablontiv/a4s.git")
+        self.assertRegex(str(repo.get("verified_revision")), r"^[0-9a-f]{40}$")
+        self.assertNotIn("/Users/", self.config)
 
 
 if __name__ == "__main__":

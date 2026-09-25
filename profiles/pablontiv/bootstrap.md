@@ -15,9 +15,9 @@ Este documento guía a Pi para preparar una instancia prose-first de `pablontiv/
 
 ### 1. Identificar identidad y autoridad
 
-1. Resolver por lectura la raíz física canónica del workspace y la raíz Git del repositorio consumidor.
-2. Proponer un `repo.id` estable, la ruta canónica, el grupo si aplica y la revisión observada.
-3. Detectar aliases, symlinks o worktrees. No tratarlos como nuevas identidades.
+1. Resolver por lectura la raíz Git del checkout y el repositorio de origen mediante `git remote get-url origin`.
+2. Proponer un `repo.id` estable, el locator canónico y relocatable del origen, el grupo si aplica y la revisión observada; no persistir la ruta física local.
+3. Detectar aliases, symlinks o worktrees y verificar que resuelven al mismo repositorio de origen. No tratarlos como nuevas identidades.
 4. Si la identidad no puede resolverse inequívocamente, conservar `unknown` y detener cualquier preparación mutante.
 5. Leer `PROFILE.md` y verificar que declara `pablontiv/a4s`, Engineering Handbook 1.4 y el digest `f5455e3eced13690358b02823053a1e00a6c7c06de5f17d9716805bf0a0cff26`.
 6. Verificar la procedencia contra `references/engineering-handbook-v1.4.md`. Una discrepancia bloquea la adopción.
@@ -56,7 +56,7 @@ Este documento guía a Pi para preparar una instancia prose-first de `pablontiv/
 
 1. Partir de `config.template.yaml` y preparar en memoria una configuración candidata para `.workspace/config.yaml`.
 2. Mantener `workspace`, `groups` y `repositories` aunque alguna capa quede vacía.
-3. Incluir identidad estable, locator relocatable o ruta explícitamente no resuelta, revisión observada y `AGENTS.md` como steering local cuando exista.
+3. Incluir identidad estable, locator relocatable del repositorio de origen o locator explícitamente no resuelto, revisión observada y `AGENTS.md` como steering local cuando exista; nunca serializar la ruta del checkout local.
 4. Expresar controles en prosa, listas de prosa y `unknown`; no inventar executors, schemas ni evidencia pasada.
 5. Presentar un resumen por eje con valor efectivo, origen, conflicto, evidencia y blocker.
 6. Mostrar el diff completo de bytes propuestos. La propuesta todavía no está activa y no autoriza ningún efecto externo.
@@ -84,7 +84,7 @@ Este documento guía a Pi para preparar una instancia prose-first de `pablontiv/
 
 1. Releer `.workspace/config.yaml` desde disco y comparar sus bytes con la versión aprobada.
 2. Verificar que las capas `workspace`, `groups` y `repositories` permanecen presentes.
-3. Volver a calcular la vista efectiva y mostrar valor y origen por eje sin convertirla en autoridad.
+3. Volver a calcular la vista efectiva, descubrir el checkout local y verificar su `origin` contra el locator configurado, y mostrar valor y origen por eje sin convertir esa observación en autoridad.
 4. Verificar que cada conflicto y `unknown` continúa visible y que bloquea la fase obligatoria correspondiente.
 5. Confirmar que Rootline validó todo Markdown gobernado escrito.
 6. Si se creó `.workspace/worktrees/`, verificar por Git que la entrada local exacta existe una sola vez y que el `.gitignore` versionado no fue alterado por el wizard.

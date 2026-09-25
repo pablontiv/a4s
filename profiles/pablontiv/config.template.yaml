@@ -38,4 +38,6 @@ workspace:
   custom_rules: []
 
 groups: {}
+# Cada repo.path es el locator del repositorio de origen, nunca una ruta local.
+# El bootstrap descubre el checkout y lo verifica con `git remote get-url origin`.
 repositories: {}

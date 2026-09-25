@@ -66,6 +66,19 @@ A stale satisfied-prerequisite edge is always a finding, but its replacement is 
 
 Do not fabricate missing requirements or infer ambiguous dependencies. Never flatten a nested epic implicitly. Never infer a conversion between status parking and a `blocks` edge from prose. A preview is not approval.
 
+## Emergency continuation
+
+When pending non-epic Beads exist but Loop cannot execute a task, Doctor treats the state as a **`BACKLOG EMERGENCY`**, not as backlog quality. Before presenting secondary findings, report the pending task count, the stranded next candidate when one exists, and its literal blocker.
+
+Doctor then keeps the recovery path active by presenting exactly one highest-leverage `CONTINUE` action:
+
+- for an incomplete candidate, perform Contract backfill on its exact highest-ranked group;
+- for a deterministic graph or lifecycle correction, present the exact guarded Beads command set for approval;
+- for missing or ambiguous `.workspace` authority, render the exact authoritative field proposal from verified evidence, or ask one concrete question for the single missing material value; and
+- when the required action belongs to another governed workflow, name that workflow and its exact input instead of pretending Doctor can apply it.
+
+Do not bundle unrelated repair choices into the continuation gate. A declined questionnaire is not resolution: preserve the emergency, reduce the next interaction to the one blocking decision, and leave secondary findings visible but non-blocking.
+
 ## Contract backfill
 
 An incomplete epic or task contract is not a terminal finding. Doctor completes it by running Plan's elicitation internally; do not end the session by recommending the user run `/roadmap plan` or leave `⚠contrato` in place.

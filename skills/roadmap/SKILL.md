@@ -31,5 +31,6 @@ Reject any other input, including `loop` with more than one argument or any non-
 - Roadmap creates and executes only `epic` and `task` records. An epic is an optional, non-executable aggregate.
 - `parent-child` expresses hierarchy only. Only `blocks` orders execution.
 - No mode silently broadens scope, invents requirements, or converts an ambiguity into a mutation.
+- Pending non-executable work is a `BACKLOG EMERGENCY`, not backlog hygiene: show its magnitude, literal blocker, stranded next candidate when one exists, and one concrete policy-valid continuation.
 
 Follow approval gates literally. A request to hurry, infer intent, parallelize tasks, or skip an unknown control does not override them.

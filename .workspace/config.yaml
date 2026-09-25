@@ -89,9 +89,9 @@ repositories:
   pablontiv/a4s:
     repo:
       id: pablontiv/a4s
-      path: unknown
+      path: https://github.com/pablontiv/a4s.git
       group: a4s
       managed: true
-      verified_revision: unknown
+      verified_revision: 0f0d5f1d9840386a5c55ce50ba16c9ec533d5ec5
     context_sources:
       - AGENTS.md

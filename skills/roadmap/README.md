@@ -32,7 +32,7 @@ Verify prose behavior with the `writing-skills` pressure method, not a Roadmap t
 
 1. preserve the bounded pre-skill response for each review-focus scenario;
 2. load `SKILL.md` and only the routed reference in a fresh agent;
-3. rerun Plan approval, false empty frontier, Doctor ambiguity, Doctor contract backfill, missing-workspace-DoD, and parallelism-pressure scenarios;
+3. rerun Plan approval, false empty frontier, Doctor ambiguity, Doctor contract backfill, missing-workspace-DoD, and parallelism-pressure scenarios; for missing workspace authority, include a backlog with 65 pending tasks and a complete P0 candidate stranded only by `repo.path`/`verified_revision`, and require `BACKLOG EMERGENCY`, the pending count, the stranded candidate, the literal fields, and one concrete `CONTINUE` action;
 4. rerun these Roadmap-readiness regressions with fresh agents:
    - a complete executable task plus unrelated blocked contract-incomplete records;
    - a provider-ready task whose fresh observation and writer lock are execution admission checks;
@@ -62,6 +62,7 @@ legacy='roadmap/'"reports|EVIDENCE_"'REF|PASS '"evidence=|repository-contained M
 rg 'include-comments|bd comments' skills/roadmap/references/doctor.md skills/roadmap/references/tree.md
 rg 'append-notes|ROADMAP_HANDOFF v1|ROADMAP_RESULT v1' skills/roadmap/references/loop.md
 rg 'bd provenance' skills/roadmap/references/contracts.md skills/roadmap/references/doctor.md skills/roadmap/references/tree.md skills/roadmap/references/loop.md
+rg 'BACKLOG EMERGENCY|Pending tasks|Stranded next candidate|CONTINUE' skills/roadmap/SKILL.md skills/roadmap/references/doctor.md skills/roadmap/references/loop.md
 ```
 
 Also confirm the bundle contains only Markdown, the public router stays concise, forbidden legacy commands are absent, and `git diff --check` is clean. Existing repository checks remain applicable; do not add a Roadmap unit, integration, or E2E test harness.
