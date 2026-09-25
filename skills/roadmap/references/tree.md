@@ -11,9 +11,12 @@ bd list --status open,in_progress,blocked,deferred --brief --limit 0 --json
 bd dep list bd-a bd-b --json
 bd list --ready --brief --sort priority --limit 0 --json
 bd count --status closed --json
+git log -5 --format='%s%n%b'
 ```
 
-The dependency command is illustrative. Collect every literal non-closed ID returned by the first JSON response and pass each as its own `bd dep list` argument. Never copy `bd-a` or `bd-b` unless those strings are real returned IDs. If needed to validate a contract or explain state, use `bd show <id> --json` for that literal ID.
+Collect Bead IDs for the git log output: every ID appearing in commit subjects or bodies (exact literal match, delimited—not as prefix, e.g., `a4s-knt` does not match `a4s-knt.1`).
+
+The dependency command is illustrative. Collect every literal non-closed ID returned by the first JSON response and pass each as its own `bd dep list` argument. Never copy `bd-a` or `bd-b` unless those strings are real returned IDs. For each epic and each non-epic root record with children, run `bd list --parent <id> --all --json --limit 0` and count how many have `status == closed` (closed count) versus total. If needed to validate a contract or explain state, use `bd show <id> --json` for that literal ID.
 
 Read edge direction as `contracts.md` defines it. Edge types other than `parent-child` and `blocks` are not rendered.
 
@@ -49,7 +52,7 @@ A **root record** has no `parent-child` parent. It is unrelated to a chain root.
 
 Each non-closed record has exactly one home. `BLOQUEADAS` is an additional index, not a home.
 
-1. **Branch `├─► <id> <title> — N pendientes`**: every epic with non-closed children, and every non-epic record with non-closed children, which gets `⚠jerarquía` on its header. Its children are its members. An epic with exactly one non-closed child, where that child has no `blocks` edge to or from another open record, is not a branch; that child goes to `QUICK WINS`.
+1. **Branch `├─► <id> <title> — <closed>/<total> completadas, N pendientes`**: every epic with non-closed children, and every non-epic record with non-closed children, which gets `⚠jerarquía` on its header. Its children are its members. An epic with exactly one non-closed child, where that child has no `blocks` edge to or from another open record, is not a branch; that child goes to `QUICK WINS`.
 2. **`TASK DIRECTA`**: root records without children that have at least one `blocks` edge to or from another open record.
 3. **`QUICK WINS`**: root records without children and without `blocks` edges to or from another open record, plus the single child from rule 1.
 4. **`BLOQUEADAS`**: every record that is not topology-ready, listed again as `<id> [blocked_by: <ids and/or gate>]`. A gated record without `blocks` edges lives only here.
@@ -78,7 +81,8 @@ A topology-ready node without a marker that is also provider-ready is executable
 Sort branches by score, descending, then by the best Beads priority among members, then by pending count ascending, then by ID. Always put `TASK DIRECTA` after the branches and `QUICK WINS` last:
 
 ```text
-score = + 10 × total dependents across the members' outgoing blocks edges
+score = + 50 if a member's ID appears in the subject, body, or trailers of the last 5 commits
+        + 10 × total dependents across the members' outgoing blocks edges
         + 5  if any member is in_progress
         - 3  × non-closed members
         - 100 if no member is topology-ready
@@ -93,7 +97,7 @@ ROADMAP DECISION TREE — <closed>/<closed + non-closed> completados
 
 Qué objetivo priorizar?
 │
-├─► <epic-id> <title> — N pendientes
+├─► <epic-id> <title> — <closed>/<total> completadas, N pendientes
 │   <id> <title> [open] ⚠tipo
 │      ↓ desbloquea
 │   <id> <title> [open]
