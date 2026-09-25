@@ -113,6 +113,8 @@ class SuperpowersClaudeCodeAgentsTest(unittest.TestCase):
             adapter_meta = load_frontmatter(adapter_path)
 
             canonical_tools_str = canonical_meta.get("tools", "")
+            if not isinstance(canonical_tools_str, str):
+                self.fail(f"Canonical tools for {name} must be a string, got {type(canonical_tools_str).__name__}")
             expected_adapter_tools = ", ".join(map_tools(canonical_tools_str))
             actual_adapter_tools = adapter_meta.get("tools", "")
 
