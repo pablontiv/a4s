@@ -4,9 +4,17 @@ This family preserves portable agent role definitions owned by A4S. Agent runtim
 
 ## Current contents
 
-[`superpowers/`](superpowers/) preserves recovered owner-authored role definitions with file-level provenance in [`provenance.json`](superpowers/provenance.json).
+[`superpowers/`](superpowers/) contains:
+- **Canonical role definitions** (`superpowers-*.md`): owner-authored role definitions with file-level provenance in [`provenance.json`](superpowers/provenance.json). Tool lists use Pi-oriented names (read, grep, find, edit, write, bash, mem_save).
+- **Claude Code adapters** (`claude-code/superpowers-*.md`): adapted versions of canonical definitions with Claude Code tool names (Read, Grep, Glob, Edit, Write, Bash, mcp__plugin_engram_engram__mem_save). Body and frontmatter name/description are byte-identical to canonical; only the tools field is mapped.
 
-These files are inactive reference artifacts. A4S does not automatically install, register, link, adapt, or activate them. Their tool lists use Pi-oriented names, and `mem_save` requires a compatible memory integration. Runtime adaptation or activation requires a separate approved decision and verification against the target runtime.
+## Installation and activation
+
+Claude Code adapters are activated via [ADR 0049](../.workspace/docs/adr/0049-superpowers-claude-code-adapters.md):
+
+**Installation contract**: Symlinks from `~/.claude/agents/<role-name>.md` to `agents/superpowers/claude-code/<role-name>.md` in the main branch checkout. Fails closed if a target exists (no overwrites). Symlinks are reversible (removal disables the role in that installation).
+
+The Pi installation remains in its own control plane; this installation enables Claude Code to use Superpowers roles as orchestrator subagents.
 
 ## Ownership and license
 
