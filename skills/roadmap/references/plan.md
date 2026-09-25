@@ -23,7 +23,7 @@ Use this recipe when `$ARGUMENTS` starts with `plan`. The remaining text is the 
    ```
 
 9. **Read back provider state.** From the create response, collect every literal created ID. Re-read each record with `bd show <id> --json`; pass each created ID as its own argument to `bd dep list <id>... --json`. Verify IDs, types, titles, descriptions, designs, `acceptance_criteria`, priorities, parent links, and all `blocks` edges against the approved graph.
-10. **Report, do not improvise.** Report exact IDs and verification results. If apply or readback is ambiguous or mismatched, preserve the outputs and report the mismatch. Do not invent a rollback, retry, duplicate creation, or corrective mutation; route alignment work to an explicitly approved Doctor session.
+10. **Report and stop on mismatch.** Report exact IDs and verification results. If apply or readback is ambiguous or mismatched, preserve the original outputs and emit one bounded `MISMATCH` block per field with `record`, `field`, `approved`, `observed`, and `provider_output`, followed by the exact Doctor input payload needed to reconcile it. Perform no rollback, retry, duplicate creation, or corrective mutation from Plan; Doctor owns any subsequently approved alignment.
 
 ## Sizing and vocabulary
 

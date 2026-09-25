@@ -31,7 +31,7 @@ Read edge direction as `contracts.md` defines it. Edge types other than `parent-
 
 An edge is broken only when `bd show <target> --json` fails. Run it for every edge target absent from the non-closed list; never infer a broken edge from that list alone. A `blocks` edge to an ordinarily completed closed record is a satisfied prerequisite. It is instead a consistency finding when the target was closed as a duplicate, superseded record, or normalized container while its notes or closure evidence disavow outcome completion or identify open successor work. **Provider-ready** means the literal ID appears in the `bd list --ready` response.
 
-Do not mutate status, dependencies, ownership, or content in this mode.
+Return only the decision tree, candidate result, per-record reasons, and findings in this mode. Route any proposed status, dependency, ownership, or content change through Doctor or Plan; Tree performs no mutation.
 
 ## Derive readiness
 
@@ -41,7 +41,7 @@ Do not mutate status, dependencies, ownership, or content in this mode.
 4. Reject cycles, invalid or broken edges, and stale satisfied-prerequisite edges as findings rather than guessing an order.
 5. Derive topology-ready tasks whose effective `blocks` prerequisites from `contracts.md` are closed and whose pre-claim external gates are satisfied. Status alone must not replace a known edge. Execution admission checks do not remove a task from this set.
 6. Apply type, hierarchy, ownership, deferred-status, and pre-claim-external-gate filters equally to topology and provider results. A provider-ready task excluded solely by a declared pre-claim external gate is **externally gated**, not readiness drift; record the provider blind spot explicitly.
-7. Compare the remaining literal topology-ready task IDs with the remaining literal provider-ready IDs. An unexplained difference is **readiness drift**. Do not select through it; route the diagnosis to Doctor.
+7. Compare the remaining literal topology-ready task IDs with the remaining literal provider-ready IDs. On an unexplained difference, emit a **readiness drift** block containing `topology_ready`, `provider_ready`, `topology_only`, and `provider_only`, followed by one classification line for every differing literal ID. Produce no candidate from either set or their intersection; emit a Doctor finding over those IDs and stop selection.
 8. Apply the contract-completeness filter to the intersection. The remaining complete tasks are executable. An incomplete task in the pre-contract intersection is an **incomplete candidate** only when it would outrank every complete executable task under step 9. Blocked, externally gated, deferred, invalid, or lower-ranked incomplete records remain visible findings but do not stop selection.
 9. When more than one task is executable, render one deterministic next candidate using: a currently owned valid task first, then Beads priority, then greatest reverse-dependency impact, then ID. This is an explanation, not a claim.
 
@@ -153,4 +153,4 @@ A record's home, status, and marker must give it one primary reason, naming the 
 - stale operational state; or
 - aggregate epic, which is the branch header.
 
-Also report cycles, broken edges, stale satisfied-prerequisite edges, and readiness drift as findings. An empty provider-ready response alone never means complete. Report **no executable task** only after the full non-closed graph has been inspected and every record has one reason. Report backlog completion only when the complete non-closed list itself is empty.
+Also report cycles, broken edges, stale satisfied-prerequisite edges, and readiness drift as findings. When provider-ready is empty but non-closed records exist, print a bounded reason table with one row per non-closed task (`id`, literal status, primary reason, named blocker or gate) before **no executable task**. Report **no executable task** only after the full non-closed graph has been inspected and every record has one reason. Report backlog completion only when the complete non-closed list itself is empty.

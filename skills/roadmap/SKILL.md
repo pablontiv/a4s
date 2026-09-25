@@ -10,7 +10,7 @@ metadata:
 
 # Roadmap
 
-Roadmap is a Markdown workflow over the current repository and its Beads backlog. Interpret `$ARGUMENTS` without changing the working directory, then load exactly one mode recipe:
+Roadmap is a Markdown workflow over the current repository and its Beads backlog. Interpret `$ARGUMENTS` without changing the working directory, then load exactly one entry-mode recipe:
 
 | Input | Reference |
 | --- | --- |
@@ -20,7 +20,9 @@ Roadmap is a Markdown workflow over the current repository and its Beads backlog
 | `loop` (no argument) | `references/loop.md` |
 | `loop <id>` (exactly one Bead ID) | `references/loop.md`, scoped to that ID |
 
-Reject any other input, including `loop` with more than one argument or any non-ID filter, and show the five supported forms. Read `references/contracts.md` before applying the selected recipe.
+Reject any other public input, including `loop` with more than one argument or any non-ID filter, and show the five supported forms. Read `references/contracts.md` before applying the selected recipe.
+
+An entry recipe may follow only the internal transitions it declares. Loop condition 2 transitions internally to Doctor read-only recovery on the exact affected scope derived by `loop.md` §2.1. Doctor runs Plan steps 1–4 for contract elicitation and, only after exact payload approval when Contract backfill step 6 requires new records, Plan steps 5–10 to materialize and verify those records. These transitions stay in the current Roadmap invocation and are not commands for the operator to retype.
 
 ## Common invariants
 
@@ -30,7 +32,8 @@ Reject any other input, including `loop` with more than one argument or any non-
 - Rootline governs project documentation; it is not backlog storage.
 - Roadmap creates and executes only `epic` and `task` records. An epic is an optional, non-executable aggregate.
 - `parent-child` expresses hierarchy only. Only `blocks` orders execution.
-- No mode silently broadens scope, invents requirements, or converts an ambiguity into a mutation.
+- When scope, requirement, or authority is ambiguous, preserve the literal known scope, mark the exact element `unknown`, and ask for the single material value needed to resolve it before mutation. No mode silently broadens scope, invents requirements, or converts an ambiguity into a mutation.
+- An approval gate authorizes the exact mutation payload displayed by the owning mode, not invocation of that mode. When a complete proposal exists, show it and ask the operator to approve exactly, request adjustments, or reject it.
 - Pending non-executable work is a `BACKLOG EMERGENCY`, not backlog hygiene: show its magnitude, literal blocker, stranded next candidate when one exists, and one concrete policy-valid continuation.
 
 Follow approval gates literally. A request to hurry, infer intent, parallelize tasks, or skip an unknown control does not override them.

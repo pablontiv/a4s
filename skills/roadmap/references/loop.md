@@ -6,7 +6,15 @@ Loop chains tasks automatically, executing exactly one topologically ready task 
 
 Before any mutation, locate and read the effective `.workspace/config.yaml`, including the workspace, group, and repository layers it identifies and their declared precedence. Resolve required context, sync, isolation, development workflow, commits, acceptance checks, review, delivery, post-checks, monitoring, and cleanup controls.
 
-A missing, inaccessible, or ambiguous required control is `unknown`. Required `unknown` or `failed` controls stop mutation and prevent delivery and closure. Do not infer a fallback from README, AGENTS, package scripts, or a standalone Definition-of-Done document.
+When a required control is missing, inaccessible, or ambiguous, classify it as `unknown` and immediately retain this controller state:
+
+```text
+control=<control name>
+authority_field=<exact .workspace field>
+missing_input=<single material value needed to resolve it>
+```
+
+Required `unknown` or `failed` controls stop mutation and prevent delivery and closure. Use the retained values in the final `CONTINUE` row; do not reconstruct them from README, AGENTS, package scripts, or a standalone Definition-of-Done document.
 
 ## 1.1. Scope parameter (optional)
 
@@ -33,7 +41,7 @@ Loop is autonomous by default: chain tasks without asking until an explicit stop
 
 ### Stopping conditions (enumerated)
 
-Loop stops and prints a final SUMMARY when any of the following is true:
+Loop pauses task execution when any of the following is true. Conditions 1 and 3–7 stop the invocation and produce the final SUMMARY. Condition 2 enters §2.1; it produces a final SUMMARY only when recovery is rejected or remains unresolved, and otherwise returns to autonomous selection after verified repair:
 
 1. **No executable tasks remain**: the frontier is empty; all non-epic Beads are closed or blocked on external dependencies.
 2. **Doctor required**: a fresh tree read detects a cycle, invalid graph, broken or stale satisfied-prerequisite edge, incomplete candidate as defined by `tree.md`, or unexplained readiness drift. Contract-incomplete records that are blocked, externally gated, deferred, invalid, or lower-ranked than a complete executable task remain findings but do not stop the loop.
@@ -47,9 +55,27 @@ Loop stops and prints a final SUMMARY when any of the following is true:
    - ADR substitution required (replacing an accepted decision).
 7. **Implementation error**: an implementation stage encounters an unrecoverable error outside task scope or violating contract invariants.
 
+### 2.1. Doctor recovery transition
+
+When condition 2 fires, task execution stops but the current Roadmap invocation continues through this state machine:
+
+1. Retain `origin=loop`, the literal finding and one deterministic `recovery_scope`, then apply the boundary from §1.1:
+   - incomplete candidate: its direct parent epic and that epic's direct incomplete records, or the root task when it has no epic;
+   - cycle: every literal record ID and edge in that cycle;
+   - invalid graph or broken edge: every literal record and edge named by the finding, including an absent target ID as evidence rather than an invented record;
+   - stale satisfied-prerequisite edge: both edge endpoints and every successor candidate already stated by current authority; and
+   - readiness drift: the union of `topology_only` and `provider_only` IDs from `tree.md` step 7.
+2. Load `doctor.md` and run its diagnosis and proposal work read-only on only `recovery_scope`. Loop does not apply a Doctor correction.
+3. If one material authority value is missing, show the verified evidence, ask one concrete question for that value, and remain in Doctor recovery.
+4. When a complete proposal exists, show the complete final field values or guarded command set, its expected effects, and preserved data. End the turn with exactly these choices: **approve exactly**, **request adjustments**, or **reject**. Remain in Doctor recovery until one is chosen; workflow invocation is not an approval response.
+5. On **request adjustments**, revise the proposal read-only and present the complete replacement gate. On **reject**, preserve the graph unchanged and stop with condition 2, naming the rejected repair as the blocker.
+6. On **approve exactly**, Doctor applies only the displayed payload and runs its complete verification. After verified success, return control to Loop, rerun the complete tree recipe, and resume autonomous selection unless another stopping condition applies.
+
+The operator is never asked to invoke `doctor`, `plan`, or `loop` to advance this transition.
+
 ### Selecting and claiming a task
 
-Run the complete tree recipe, limited to the scope boundary if a scope ID was provided. Stop for Doctor only on the condition-2 findings named above; do not stop for unrelated or lower-ranked incomplete records. In a scoped loop apply the boundary in §1.1 item 4. Select exactly one complete task in the executable intersection within the scope boundary, ordered by current ownership, Beads priority, reverse-dependency impact, then ID. Exclude epics. If a scope ID was an epic, consider only its direct task children for selection.
+Run the complete tree recipe, limited to the scope boundary if a scope ID was provided. When a condition-2 finding named above applies, complete §2.1 before any selection; unrelated or lower-ranked incomplete records do not stop selection. In a scoped loop apply the boundary in §1.1 item 4. Select exactly one complete task in the executable intersection within the scope boundary, ordered by current ownership, Beads priority, reverse-dependency impact, then ID. Exclude epics. If a scope ID was an epic, consider only its direct task children for selection.
 
 Read the selected task's full contract. Claim only it:
 
@@ -81,13 +107,14 @@ Findings:
 - <finding or none>
 ```
 
-Write it from an owned temporary file outside durable repository paths:
+Write it from an owned temporary file outside durable repository paths. Immediately before the write, capture the current comment IDs in controller state; if that read fails, stop before the write:
 
 ```bash
+bd comments "$BEAD_ID" --json > "$TEMP_COMMENT_BASELINE"
 bd comments add "$BEAD_ID" --file "$TEMP_HANDOFF" --json
 ```
 
-Remove the temporary file only after a confirmed write and retain the returned comment ID in current controller state. Beads 1.3.0 comments have no idempotency key: never retry a failed or ambiguous response. An unconfirmed handoff is implementation error stopping condition 7.
+On a confirmed response, retain the returned comment ID. On a failed or ambiguous response, perform exactly one read-only `bd comments "$BEAD_ID" --json` confirmation. Continue only when it proves exactly one new comment ID, absent from `$TEMP_COMMENT_BASELINE`, whose body equals `$TEMP_HANDOFF`; retain that ID. Any absent, duplicate, mismatched, or unreadable result is an unconfirmed handoff and implementation error stopping condition 7. Beads 1.3.0 comments have no idempotency key: never issue a second comment write after a failed or ambiguous response. Remove the temporary files only after a confirmed write or after preserving the evidence needed for the stop report.
 
 Execute:
 
@@ -228,7 +255,15 @@ A `BACKLOG EMERGENCY` response must:
 4. provide exactly one concrete policy-valid `CONTINUE` action that addresses that blocker; and
 5. keep secondary findings outside the continuation gate.
 
-Generic advice such as "fix config", "run Doctor", or "retry when available" is not a continuation action. For a Doctor finding, continue Doctor on the exact highest-ranked affected group. For an unknown workspace control, identify the owning `.workspace` field and show the exact authority proposal or ask for the one missing material input. If Loop cannot perform the action itself, name the owning workflow and its exact input without implying that Loop applied it. Deferred or intentionally parked tasks still count as pending; their concrete continuation is to satisfy the declared defer condition or explicitly close or re-scope the record, never to silently downgrade the emergency.
+Derive `CONTINUE` from the retained stopping state and render the next operator decision, not a workflow invocation:
+
+- after §2.1 produced a complete Doctor proposal: `Approve exactly, request adjustments, or reject the displayed proposal for <recovery_scope>`;
+- while §2.1 lacks one authority value: repeat the one concrete question for that value;
+- for an unknown workspace control: use the retained `authority_field` and `missing_input` from §1 to show the exact authority proposal or ask for that one value;
+- for a declared external or defer condition: name the literal condition and the action that satisfies it; and
+- when another governed workflow owns the action, show its exact input payload in the current response rather than asking the operator to invoke it.
+
+Advice such as "fix config", "run Doctor", or "retry when available" is not a continuation. Deferred or intentionally parked tasks still count as pending; satisfy the declared condition or explicitly close or re-scope the record instead of silently downgrading the emergency.
 
 Print this bounded shape before exiting. The first four rows after the header are present only for `BACKLOG EMERGENCY`; omit them from a clean `LOOP SUMMARY` with zero pending tasks:
 
@@ -268,4 +303,4 @@ Use `LOOP SUMMARY` only when no pending non-epic Beads remain. The summary must 
 - **Reviews and findings**: concise summary of reviewer feedback and any HIGH-security findings or regressions.
 - **Delivery gates applied**: each gate name and its result (passed, failed, or not applicable).
 - **Stopping condition**: reference one of the 7 stopping conditions (section 2) by number and description.
-- **Cleanup offered**: list worktree paths and branch names available for cleanup (never auto-delete; the operator chooses).
+- **Cleanup offered**: list worktree paths and branch names available for cleanup, then wait for the operator to select the exact cleanup target; deletion is never inferred from the offer.

@@ -1,6 +1,6 @@
 # Doctor mode
 
-Doctor aligns existing Beads with the Roadmap contract. Diagnosis is read-only first. It never turns a plausible interpretation into an authorized change.
+Doctor aligns existing Beads with the Roadmap contract. Begin read-only: classify each plausible interpretation as a decision, show its verified evidence and exact proposed payload, and wait for explicit payload approval before mutation. A plausible interpretation alone never authorizes a change.
 
 ## Diagnose
 
@@ -62,9 +62,9 @@ Separate findings into:
 2. **Decisions requiring user input** — requirements, intended type, reparenting, dependency direction, status meaning, external-gate meaning, or another semantic choice is ambiguous.
 3. **Unresolvable gaps** — required authority is missing or inaccessible, or no safe direct Beads operation can preserve the contract.
 
-A stale satisfied-prerequisite edge is always a finding, but its replacement is deterministic only when one exact successor dependency is already stated by current authority. Otherwise show the closed target, its disavowal evidence, every open successor candidate, and ask the user to choose; never silently retarget the edge.
+A stale satisfied-prerequisite edge is always a finding, but its replacement is deterministic only when one exact successor dependency is already stated by current authority. Otherwise preserve the current edge, show the closed target, its disavowal evidence and every open successor candidate, then ask the user to choose one before proposing mutation.
 
-Do not fabricate missing requirements or infer ambiguous dependencies. Never flatten a nested epic implicitly. Never infer a conversion between status parking and a `blocks` edge from prose. A preview is not approval.
+When a requirement, dependency, hierarchy change, or status meaning is ambiguous, preserve the current graph, classify the missing value as a decision, show the qualifying evidence and ask one concrete question. Derive requirements only from the sources allowed by Contract backfill step 4; apply hierarchy or status conversion only through the exact approved proposal. Do not fabricate missing requirements, flatten a nested epic implicitly, or infer a `blocks` edge from parking prose. A preview is evidence for the gate, not approval.
 
 ## Emergency continuation
 
@@ -89,13 +89,13 @@ An incomplete epic or task contract is not a terminal finding. Doctor completes 
 4. **Cite or ask.** Propose text for an element only when a specific source states it: a repository `path:line`, an ADR or spec with its line, a named Bead field or note, a commit SHA, or a Backscroll or Engram hit ID. Moving or quoting text that the Bead already states counts; summarizing a whole record, synthesizing from sibling or child Beads, or extrapolating an ADR number, path, or dependency does not. Before citing, confirm the path, line, ID, or commit exists in the base branch or provider, and that newer Bead notes do not contradict it. When no source qualifies, ask the user a concrete question; never fill the element with a plausible guess.
 5. **Show final values.** For each Bead, show the complete resulting `description`, `design`, and `acceptance_criteria`, keeping existing text and integrating the new elements into the field that `contracts.md` assigns them. Include the exact commands using only flags listed by `bd update --help`, for example `bd update "$ID" --body-file <file> --design-file <file> --acceptance "<text>" --json`.
 6. **Structural outcomes.** If Plan's validation finds a task that does not fit one session, a missing task, or a missing `blocks` edge, include it in the same proposal. After approval, Doctor itself creates only those new records by running `plan.md` steps 5–10; it never creates a record for an existing Bead. An existing record that is replaced keeps its history and is linked with `bd supersede` only after its successor exists.
-7. **Approve and apply.** Ask for explicit approval of the exact group proposal. Apply only the approved commands. A record stays `⚠contrato` only when the user declines its proposal or leaves a question unanswered; report it with that reason.
+7. **Approve and apply.** After showing the complete final fields and commands, end the turn with exactly three choices: **approve exactly** (authorizes only the displayed payload), **request adjustments** (keeps the graph unchanged and requests the field to revise), or **reject** (keeps the graph unchanged and records the proposal as the blocker). Remain in this gate until one is chosen. Apply only an **approve exactly** response to the unchanged payload. A record stays `⚠contrato` when the proposal is rejected or a material question remains unanswered; report that literal reason.
 
 The commands in this section are subject to "Approval and apply" and "Verify" below. Verification also compares every applied field with the approved final value and re-checks each record against `contracts.md`.
 
 ## Approval and apply
 
-For deterministic corrections and resolved decisions, display every exact proposed command, grouped by finding and in execution order. Explain expected effects, preserved data, and any commands that cannot be safely proposed. Then ask for explicit approval of that exact command set. Any changed command set requires fresh approval.
+For deterministic corrections and resolved decisions, display every exact proposed command, grouped by finding and in execution order. Explain expected effects, preserved data, and any commands that cannot be safely proposed. End the turn with **approve exactly**, **request adjustments**, and **reject** for that complete command set. A changed command set replaces the prior gate and requires a fresh choice; invoking Doctor again is not an approval response.
 
 Before approval, run no mutation. After approval, run only the unchanged commands. Permitted direct operations include narrowly scoped forms of:
 
@@ -131,4 +131,4 @@ After authorized application:
 
 A correction is not verified merely because provider and topology agree while its new prerequisite is still open. The post-closure transition in step 6 must also be coherent, so Doctor does not certify a repair that predictably requires another Doctor pass.
 
-Doctor does not implement tasks. Loop may request a Doctor diagnosis, but it must never apply Doctor corrections implicitly.
+Doctor owns diagnosis, proposal, approval, application, and verification of backlog corrections; Loop owns task selection and implementation. When Doctor was entered through Loop condition 2, preserve `origin=loop` and the exact `recovery_scope` derived by `loop.md` §2.1 throughout recovery; never collapse a multi-record cycle, edge, or drift finding to one convenient epic. After a verified approved correction, return control to Loop for a fresh tree read and autonomous continuation. Without approval, return no mutation and leave Loop stopped on the literal unresolved decision.
