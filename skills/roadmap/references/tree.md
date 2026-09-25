@@ -16,7 +16,16 @@ git log -5 --format='%s%n%b'
 
 Collect Bead IDs for the git log output: every ID appearing in the subject, body, or trailers of any of those commits (exact literal match, delimited—not as prefix, e.g., `a4s-knt` does not match `a4s-knt.1`).
 
-The dependency command is illustrative. Collect every literal non-closed ID returned by the first JSON response and pass each as its own `bd dep list` argument. Never copy `bd-a` or `bd-b` unless those strings are real returned IDs. For each epic and each non-epic root record with children, run `bd list --parent <id> --all --json --limit 0` and count how many have `status == closed` (closed count) versus total. If needed to validate a contract or explain state, use `bd show <id> --json` for that literal ID.
+The dependency command is illustrative. Collect every literal non-closed ID returned by the first JSON response and pass each as its own `bd dep list` argument. Never copy `bd-a` or `bd-b` unless those strings are real returned IDs. For each epic and each non-epic root record with children, run `bd list --parent <id> --all --json --limit 0` and count how many have `status == closed` (closed count) versus total. If needed to validate a contract or explain ordinary state, use `bd show <id> --json` for that literal ID.
+
+Keep ordinary tree rendering cheap: do not load every historical comment or provenance row. Read canonical execution evidence explicitly only when needed to explain candidate completeness, stale operational state, a failed gate, closure inconsistency, a stale satisfied prerequisite, or a Doctor finding:
+
+```bash
+bd show "$ID" --include-comments --json
+bd provenance log "$ID" --json
+```
+
+Use `bd comments "$ID" --json` when only the thread is required. Bound every read to the literal affected ID and report which comment, notes result, or provenance row supports the explanation.
 
 Read edge direction as `contracts.md` defines it. Edge types other than `parent-child` and `blocks` are not rendered.
 

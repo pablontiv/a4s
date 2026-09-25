@@ -4,7 +4,14 @@ Doctor aligns existing Beads with the Roadmap contract. Diagnosis is read-only f
 
 ## Diagnose
 
-Read the complete pending graph using the tree recipe, inspect affected records with `bd show`, and run `bd dep cycles --json`. Resolve the effective `.workspace/config.yaml` and its declared precedence without substituting unrelated repository prose.
+Read the complete pending graph using the tree recipe and run `bd dep cycles --json`. For every affected record, load the canonical execution surfaces explicitly:
+
+```bash
+bd show "$ID" --include-comments --json
+bd provenance log "$ID" --json
+```
+
+Use `bd comments "$ID" --json` when only the comment thread is required. Treat issue fields and notes, comments, provenance rows, Git commits, and provider-owned logs or transcripts as distinct evidence surfaces; one never implies another. Resolve the effective `.workspace/config.yaml` and its declared precedence without substituting unrelated repository prose.
 
 Detect and report these finding classes exactly:
 
@@ -19,8 +26,15 @@ Detect and report these finding classes exactly:
 - executable epics;
 - stale assignees, claims, or leases (`started_at` alone is lifecycle history, not claim evidence);
 - graph components with no executable root and no explicit pre-claim external gate;
-- unexplained disagreement between normalized topology and `bd ready` (**readiness drift**); and
+- unexplained disagreement between normalized topology and `bd ready` (**readiness drift**);
+- missing required role handoff in Bead comments;
+- a failed review comment with no guarded blocked/failure `ROADMAP_RESULT v1` in notes;
+- a passing `ROADMAP_RESULT v1` with missing required typed provenance;
+- disagreement among comments, provenance and the lifecycle result in notes;
+- a task completed after ADR 0051 that cites a newly created execution report file instead of canonical Bead evidence; and
 - missing or ambiguous `.workspace` DoD.
+
+Preserve historical report references for tasks completed before ADR 0051. They are historical evidence, not a reason to create, migrate, rewrite or delete reports.
 
 Then check backlog consistency against the repository and runtime, not only the graph:
 
@@ -34,7 +48,7 @@ Then check backlog consistency against the repository and runtime, not only the 
 - **questions filed as work**: status queries or requests for information recorded as tasks;
 - **hidden dependencies**: prose such as "blocked by", "depends on", "después de", or a mentioned Bead ID that is not a linked dependency; confirm that each mentioned ID exists before reporting it, because hyphenated words match the ID pattern;
 - **contract artifacts outside base**: a spec, plan, or ADR the contract requires exists only on a local branch, a worktree, or an unpushed ref; and
-- **ephemeral evidence**: notes cite evidence under `/tmp` or another non-repository path that no longer exists.
+- **ephemeral evidence**: notes cite an external reference that has neither a live owning provider nor a typed provenance row, or a temporary path that no longer exists.
 
 For every finding, cite literal IDs and observed fields. Preserve IDs, history, notes, evidence, and external references.
 
@@ -94,7 +108,7 @@ Stop and report any command failure or effect that differs from the approved pro
 
 After authorized application:
 
-1. re-read every affected Bead with `bd show`;
+1. re-read every affected Bead with `bd show "$ID" --include-comments --json` and its external bindings with `bd provenance log "$ID" --json`;
 2. re-read affected dependencies with `bd dep list`;
 3. run `bd dep cycles --json`;
 4. rerun the complete read-only tree recipe;

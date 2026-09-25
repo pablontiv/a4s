@@ -41,11 +41,28 @@ Verify prose behavior with the `writing-skills` pressure method, not a Roadmap t
    - a Doctor-added prerequisite both before and after its hypothetical closure;
    - an incoming `blocks` edge to a closed superseded container whose outcome is explicitly incomplete; and
    - an open record with `started_at` but no assignee, claim, lease, or live session metadata;
-5. require all fresh agents to agree on stop/continue, gate classification, effective prerequisites, transition result, and Doctor finding; disagreement is a failed pressure scenario;
-6. record pass/fail and the exact rationalization;
-7. if one fails, change only the implicated Markdown and rerun that scenario with another fresh agent.
+5. rerun the canonical-evidence scenarios with fresh agents:
+   - **normal close**: use comments, typed provenance and atomic structured notes; create no execution report file;
+   - **claim loss**: do not close, write PASS, retry or force; report `claim_lost`;
+   - **blocking review**: retain the failed comment and append a guarded blocked result; write no PASS;
+   - **reconstruction**: read comments and provenance explicitly;
+   - **external evidence**: bind SHA, branch, PR, CI and transcript references by type without copying logs; and
+   - **file pressure**: refuse role/final report documents and use Beads;
+6. require all fresh agents to agree on stop/continue, gate classification, effective prerequisites, transition result, Doctor finding, storage surface, lifecycle result, retry behavior, and created files; disagreement is a failed pressure scenario;
+7. record pass/fail and the exact rationalization;
+8. if one fails, change only the implicated Markdown and rerun that scenario with another fresh agent.
 
-Also confirm the bundle contains only Markdown, the public router stays concise, forbidden legacy commands are absent, and `git diff --check` is clean. Existing repository checks remain applicable; do not add Roadmap unit, integration, or E2E tests.
+Supplement, but never replace, those pressure scenarios with:
+
+```bash
+legacy='roadmap/'"reports|EVIDENCE_"'REF|PASS '"evidence=|repository-contained Markdown (evidence )?"'report'
+! rg "$legacy" skills/roadmap
+rg 'include-comments|bd comments' skills/roadmap/references/doctor.md skills/roadmap/references/tree.md
+rg 'append-notes|ROADMAP_HANDOFF v1|ROADMAP_RESULT v1' skills/roadmap/references/loop.md
+rg 'bd provenance' skills/roadmap/references/contracts.md skills/roadmap/references/doctor.md skills/roadmap/references/tree.md skills/roadmap/references/loop.md
+```
+
+Also confirm the bundle contains only Markdown, the public router stays concise, forbidden legacy commands are absent, and `git diff --check` is clean. Existing repository checks remain applicable; do not add a Roadmap unit, integration, or E2E test harness.
 
 ## Activation boundary
 

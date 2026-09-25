@@ -61,14 +61,33 @@ A failed claim is a race loss (condition 4). Refresh the tree read-only and repo
 
 ## 3. Execute bounded stages
 
-The Roadmap controller alone delegates. Use a fresh Superpowers role appropriate to each bounded pass. No child delegates or creates another subagent. Keep reports bounded and return artifact paths or concise results, not accumulated transcripts.
+The Roadmap controller alone delegates. Use a fresh Superpowers role appropriate to each bounded pass. No child delegates or creates another subagent. Keep handoffs bounded and return concise results, not accumulated transcripts.
 
 **Role mapping**:
 - **Implementer**: `superpowers-mechanical-implementer` (1–2 file changes); `superpowers-integration-worker` (multi-file changes).
 - **Reviewer**: `superpowers-task-reviewer` for task review and security review (§3.1).
 - **Epic final review**: `superpowers-final-reviewer`.
 
-Role reports are written per file at `.superpowers/roadmap/reports/<bead>-<role>.md`.
+Every completed bounded role pass appends exactly one Bead comment with this shape:
+
+```text
+ROADMAP_HANDOFF v1
+role=<implementer|task-reviewer|security-reviewer|epic-final-reviewer>
+verdict=<pass|fail|blocked>
+candidate_sha=<sha|none>
+
+Summary: <bounded result>
+Findings:
+- <finding or none>
+```
+
+Write it from an owned temporary file outside durable repository paths:
+
+```bash
+bd comments add "$BEAD_ID" --file "$TEMP_HANDOFF" --json
+```
+
+Remove the temporary file only after a confirmed write and retain the returned comment ID in current controller state. Beads 1.3.0 comments have no idempotency key: never retry a failed or ambiguous response. An unconfirmed handoff is implementation error stopping condition 7.
 
 Execute:
 
@@ -90,13 +109,15 @@ After implementation and task review pass, check the candidate diff for sensitiv
 - **Trigger if any path contains** (case-insensitive match of literal string): `secret`, `credentials`, `.env`, `auth`, or `crypto`.
 - **Or trigger if** the task contract explicitly requests a security review.
 
+Set `$SECURITY_PATHS` to the comma-separated changed-path list evaluated by this trigger before either branch.
+
 If trigger applies:
 1. Dispatch a fresh `superpowers-task-reviewer` on the PR head SHA with a security-focused brief (secrets exposure, credential handling, authentication and authorization logic, cryptography use), separate from the general task review.
-2. Record the security review verdict and any findings in the evidence report (§4).
+2. Record the security review verdict and findings as a `ROADMAP_HANDOFF v1` comment with `role=security-reviewer`.
 3. A HIGH-severity finding blocks task closure and autonomous merge (gate failure, stopping condition 5).
+4. After a passing security review, set `SECURITY_RESULT=pass`.
 
-If trigger does not apply:
-- Log in evidence: `security review: not triggered` followed by the comma-separated list of changed file paths evaluated.
+If trigger does not apply, set `SECURITY_RESULT=not-triggered`. The final `ROADMAP_RESULT v1` records that result and `$SECURITY_PATHS` separately.
 
 Run this exact heartbeat command immediately before and after each bounded implementation, review, and delivery stage:
 
@@ -110,24 +131,68 @@ Run task-declared fresh observation, lock acquisition, isolated-worktree cleanli
 
 Preserve unrelated work and remain inside the selected contract. Passing unit tests is not sufficient: prove task acceptance, invariants, required reviews, every applicable effective-workspace control, configured delivery, and post-checks.
 
-## 4. Record evidence and close conditionally
+## 4. Record canonical evidence and finalize conditionally
 
-Write a repository-contained Markdown evidence report and set `$EVIDENCE_REF` to its repository-relative path. It must identify the Bead and candidate SHA and record acceptance results, preserved invariants, reviews, workspace controls, delivery, post-checks, and security review results (if applicable).
-
-The evidence report must record:
-- **Security review trigger**: whether the trigger applied (yes/no).
-- **If not triggered**: the list of changed file paths evaluated.
-- **If triggered**: the security review verdict (passed/failed), any findings, and their severity levels. A HIGH-severity finding must be explicitly noted as a gate failure that blocks closure and merge.
-
-Close only when every required result is passed (or explicitly not applicable where the workspace contract permits), including any triggered security review, ownership still matches, and the Bead remains `in_progress`:
+Before finalization, verify that every required bounded role outcome is stored as a Bead comment. Record each available external binding after it becomes known:
 
 ```bash
-bd update "$BEAD_ID" --status closed \
-  --if-assignee "$ACTOR" --if-status in_progress \
-  --append-notes "PASS evidence=$EVIDENCE_REF" --json
+bd provenance record --issue "$BEAD_ID" --kind commit --source roadmap \
+  --ref "$CANDIDATE_SHA" --ref-kind git-sha --json
+bd provenance record --issue "$BEAD_ID" --kind handoff --source roadmap \
+  --ref "$BRANCH" --ref-kind branch --json
+bd provenance record --issue "$BEAD_ID" --kind handoff --source roadmap \
+  --ref "$PR_URL" --ref-kind pr --json
+bd provenance record --issue "$BEAD_ID" --kind used --source roadmap \
+  --ref "$CI_RUN_ID" --ref-kind work-id --json
+bd provenance record --issue "$BEAD_ID" --kind used --source roadmap \
+  --ref "$TRANSCRIPT_REF" --ref-kind transcript --json
 ```
 
-Never retry exit 13, a stale conditional guard, or any ownership loss. Preserve the evidence, stop mutation, and report `claim_lost`. Failed or ambiguous effects retain the contract-required non-closed state.
+`$CANDIDATE_SHA` is always required. Branch, PR, CI and transcript bindings are required exactly when the selected delivery flow or task produced those values; an artifact the effective workflow does not produce is not applicable. Every applicable binding must be confirmed before finalization. The records are idempotent; a failed or ambiguous required provenance write blocks finalization. The `Bead: <BEAD_ID>` Git trailer remains a backlink, not a substitute for Beads-side provenance.
+
+Close only when every required result is passed (or explicitly not applicable where the workspace contract permits), including any triggered security review, ownership still matches, and the Bead remains `in_progress`. Build one bounded notes entry:
+
+```bash
+ROADMAP_RESULT=$(cat <<EOF
+ROADMAP_RESULT v1
+verdict=pass
+candidate_sha=$CANDIDATE_SHA
+acceptance=pass
+invariants=pass
+review=pass
+security=$SECURITY_RESULT
+security_paths=$SECURITY_PATHS
+workspace_checks=pass
+delivery=$DELIVERY_RESULT
+post_checks=$POST_CHECKS_RESULT
+EOF
+)
+
+bd update "$BEAD_ID" --status closed \
+  --if-assignee "$ACTOR" --if-status in_progress \
+  --append-notes "$ROADMAP_RESULT" --json
+```
+
+Never retry exit 13, a stale conditional guard, or any ownership loss. Write no fallback PASS, stop mutation, report `claim_lost`, and retain the contract-required non-closed state.
+
+When a required review remains blocking after its bounded fix/re-review, first store its failed handoff comment and capture `$COMMENT_ID`, then run:
+
+```bash
+ROADMAP_RESULT=$(cat <<EOF
+ROADMAP_RESULT v1
+verdict=fail
+gate=review
+comment_id=$COMMENT_ID
+candidate_sha=$CANDIDATE_SHA
+EOF
+)
+
+bd update "$BEAD_ID" --status blocked \
+  --if-assignee "$ACTOR" --if-status in_progress \
+  --append-notes "$ROADMAP_RESULT" --json
+```
+
+A stale failure-path guard preserves the truthful comment, writes no PASS, reports `claim_lost`, and stops.
 
 ### Commit trailers and delivery
 
@@ -149,7 +214,7 @@ The loop applies the delivery rule from the effective config literally. Read `de
 
 After a successful close, immediately re-read the Bead and the complete graph. Check for any stopping condition. If none applies, select the next topologically ready task in deterministic order and continue. Repeat until a stopping condition is met.
 
-An epic is never claimed or implemented. Close an epic only after every child task is closed and fresh evidence proves the epic's own success criteria; append the repository-relative evidence path and preserve any required conditional safeguards.
+An epic is never claimed or implemented. Close an epic only after every child task is closed, an `epic-final-reviewer` handoff comment passes, fresh Bead evidence proves the epic's own success criteria, and any required conditional safeguards hold. Append an epic `ROADMAP_RESULT v1` notes entry; create no execution report file.
 
 ## 5. Final summary
 
@@ -161,7 +226,7 @@ When the loop stops (any stopping condition), print a final SUMMARY before exiti
 ╠════════════════════════════════════════════════════════════════╣
 ║ Closed tasks:                                                  ║
 ║   <BEAD_ID>: <title> (PR: <url>, merge SHA: <sha>)             ║
-║   evidence: <repository-relative-path>                         ║
+║   result: ROADMAP_RESULT v1; provenance: <refs>                ║
 ║   ...                                                           ║
 ║ Reviews and findings:                                          ║
 ║   <brief summary of review results or issues>                  ║
@@ -179,7 +244,7 @@ When the loop stops (any stopping condition), print a final SUMMARY before exiti
 ```
 
 The summary must record:
-- **Closed tasks**: each task ID, title, PR URL (if applicable), merge SHA (if merged), and repository-relative evidence path.
+- **Closed tasks**: each task ID, title, PR URL (if applicable), merge SHA (if merged), final `ROADMAP_RESULT v1` verdict, and recorded provenance references.
 - **Reviews and findings**: concise summary of reviewer feedback and any HIGH-security findings or regressions.
 - **Delivery gates applied**: each gate name and its result (passed, failed, or not applicable).
 - **Stopping condition**: reference one of the 7 stopping conditions (section 2) by number and description.

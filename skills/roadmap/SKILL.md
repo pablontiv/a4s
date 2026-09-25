@@ -25,6 +25,7 @@ Reject any other input, including `loop` with more than one argument or any non-
 ## Common invariants
 
 - Beads is the durable state for backlog records, hierarchy, dependencies, status, priority, claims, and execution notes.
+- Each Bead is the canonical operational record: bounded role handoffs are comments, lifecycle results are guarded notes updates, and external references are provenance; Roadmap creates no execution report documents.
 - The effective `.workspace/config.yaml` is the authority for repository Definition of Done (DoD) and delivery policy.
 - Rootline governs project documentation; it is not backlog storage.
 - Roadmap creates and executes only `epic` and `task` records. An epic is an optional, non-executable aggregate.
