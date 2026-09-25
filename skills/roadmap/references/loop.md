@@ -148,7 +148,7 @@ bd provenance record --issue "$BEAD_ID" --kind used --source roadmap \
   --ref "$TRANSCRIPT_REF" --ref-kind transcript --json
 ```
 
-`$CANDIDATE_SHA` is always required. Branch, PR, CI and transcript bindings are required exactly when the selected delivery flow or task produced those values; an artifact the effective workflow does not produce is not applicable. Every applicable binding must be confirmed before finalization. The records are idempotent; a failed or ambiguous required provenance write blocks finalization. The `Bead: <BEAD_ID>` Git trailer remains a backlink, not a substitute for Beads-side provenance.
+`$CANDIDATE_SHA` is always required. Branch, PR, CI and transcript bindings are required exactly when the selected delivery flow or task produced those values; an artifact the effective workflow does not produce is not applicable. Every applicable binding must be confirmed before finalization. Provenance records are idempotent. A rejection that meets every confirmed no-effect mechanical-correction condition in `contracts.md` receives exactly one corrected attempt and readback; until that succeeds, finalization stays blocked. Any failed or ambiguous provenance write outside that exception blocks finalization. The `Bead: <BEAD_ID>` Git trailer remains a backlink, not a substitute for Beads-side provenance.
 
 Close only when every required result is passed (or explicitly not applicable where the workspace contract permits), including any triggered security review, ownership still matches, and the Bead remains `in_progress`. Build one bounded notes entry:
 

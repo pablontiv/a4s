@@ -102,7 +102,7 @@ Use `bd duplicate`, `bd supersede`, and `bd close` only for the consistency find
 
 Use the installed CLI's documented arguments and preview their fully expanded literal values; do not guess a flag. Reclaim only one specifically verified expired lease by ID. Never use `bd reclaim --any-replica`.
 
-Stop and report any command failure or effect that differs from the approved proposal. Do not improvise a retry, rollback, requirement, reparenting, status conversion, or additional correction.
+Stop and report any command failure or effect that differs from the approved proposal, except for the single confirmed no-effect mechanical correction defined in `contracts.md`. When that exception applies, the corrected attempt is required, stays inside the approved proposal, and receives normal readback. Do not improvise any other retry, rollback, requirement, reparenting, status conversion, or additional correction.
 
 ## Verify
 

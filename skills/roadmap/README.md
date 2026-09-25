@@ -48,6 +48,8 @@ Verify prose behavior with the `writing-skills` pressure method, not a Roadmap t
    - **reconstruction**: read comments and provenance explicitly;
    - **external evidence**: bind SHA, branch, PR, CI and transcript references by type without copying logs; and
    - **file pressure**: refuse role/final report documents and use Beads;
+   - **mechanical rejection**: after a provider-confirmed no-write schema rejection of an idempotent provenance command, deterministically expand an abbreviated SHA, make exactly one corrected attempt, and verify readback;
+   - **ambiguous rejection control**: stop without retry when insertion status, idempotency, authority, target, payload, or authorization is unknown;
 6. require all fresh agents to agree on stop/continue, gate classification, effective prerequisites, transition result, Doctor finding, storage surface, lifecycle result, retry behavior, and created files; disagreement is a failed pressure scenario;
 7. record pass/fail and the exact rationalization;
 8. if one fails, change only the implicated Markdown and rerun that scenario with another fresh agent.

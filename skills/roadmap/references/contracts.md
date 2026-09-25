@@ -17,6 +17,20 @@ A **pre-claim external gate** is a condition outside the task's authorized steps
 
 Roadmap creates only core Beads types `epic` and `task`. A task may be at repository root or the direct child of one epic. New nested epics are invalid. An independently deliverable set of outcomes is an epic with separate tasks, not a checklist hidden in one task.
 
+## Confirmed no-effect mechanical correction
+
+A rejected command is not an ambiguous effect. Make exactly one corrected attempt when every condition below is verified:
+
+1. the provider explicitly confirms that no write or external effect occurred;
+2. the rejection is local usage, schema, format, or precondition validation;
+3. the corrected value is derived deterministically from current authority, such as resolving an abbreviated commit to its full SHA;
+4. target, operation, semantic payload, scope, and authorization remain unchanged; and
+5. the operation is documented as idempotent.
+
+Before the corrected attempt, retain the original error, the corrected command, and the evidence for all five conditions in controller state. After success, perform the normal readback. If the corrected attempt fails or its effect is ambiguous, stop without another attempt.
+
+This exception never applies to exit 13, stale conditional guards, claims, leases, ownership, lifecycle or status transitions, dependency mutations, close/duplicate/supersede operations, non-idempotent comments, destructive commands, external effects, or human gates. A changed target, content, scope, decision, or authorization is not a mechanical correction.
+
 ## Epic contract
 
 A complete epic declares all of the following:
