@@ -1,17 +1,16 @@
 # @a4s/typesafe
 
-Proposed shared TypeSafe/Jev surface for A4S Pi extensions. It implements the
-candidate contract in **ADR 0020**, which remains proposed; consumers must not
-treat this package as the required canonical surface until that decision is
-accepted.
+Shared TypeSafe/Jev surface for A4S Pi extensions. It implements the canonical
+contract accepted in **ADR 0020**.
 
-## Candidate contract
+## Canonical contract
 
 1. **SDK** — `@typesafe-ai/sdk` pinned to exactly `0.6.0`.
-2. **Factory** — `createTypesafeClient({ apiKey, model?, baseURL?, fetch? })` builds
-   a `TypeSafeClient` with `apiKey`, `baseURL` and `defaultModel` **always
-   explicit**. The SDK never resolves `TYPESAFE_API_KEY`, `TYPESAFE_BASE_URL` or
-   its `jev-latest` default from the environment.
+2. **Factory** — `createTypesafeClient({ apiKey, timeoutMs, model?, baseURL?, fetch? })`
+   builds a `TypeSafeClient` with `apiKey`, `baseURL`, `defaultModel`, the
+   consumer-owned per-attempt timeout, and a safe non-debug log level **always
+   explicit**. The SDK never resolves key, URL, model, or log-level behavior from
+   the environment.
 3. **Provider** — `createTypesafeProvider()` / `registerTypesafeProvider(pi)`: a
    credential-only Pi provider (`id: "typesafe"`, no models, no oauth) that stores
    and resolves the key via Pi's `auth.json` (0600).
@@ -37,7 +36,10 @@ import {
 registerTypesafeProvider(pi); // once, at extension registration
 
 const resolveKey = createTypesafeAuthResolver();
-const client = createTypesafeClient({ apiKey: await resolveKey(ctx) });
+const client = createTypesafeClient({
+  apiKey: await resolveKey(ctx),
+  timeoutMs: configuredOperationBudgetMs,
+});
 // client.defaultModel === "jev-1.13.0"; missing key throws MissingTypesafeKeyError
 ```
 
@@ -48,12 +50,6 @@ npm test --workspace @a4s/typesafe
 ```
 
 Covers fail-closed before network, the pinned model and base URL, mobile-alias
-rejection, no SDK env fallback, credential-only provider shape, and auth.json-first
-resolver precedence with no env scraping.
-
-## Pending (from ADR 0020)
-
-- Distribution to vendor forks (private npm/tarball vs. optional peer dependency).
-- `pi.registerProvider` behavior when several extensions register `typesafe`.
-- SDK response compatibility with rule-compiler's strict `validateJevResponse`.
-- PoC ran Pi 0.85.1; the workspace pins 0.84.4.
+rejection, explicit timeout behavior, safe logging despite SDK env configuration,
+credential-only provider shape, and auth.json-first resolver precedence with no
+env scraping.

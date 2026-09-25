@@ -53,11 +53,25 @@ test("env is the headless fallback only when auth.json has nothing", async () =>
   assert.deepEqual(reads, ["TYPESAFE_API_KEY"]);
 });
 
-test("empty auth.json key falls through to env", async () => {
-  const { ctx } = fakeCtx({ auth: { apiKey: "   " } });
+test("whitespace auth.json key falls through to env without becoming sticky", async () => {
+  let auth: AuthResult | undefined = { auth: { apiKey: "   " } };
+  let calls = 0;
+  const ctx = {
+    modelRegistry: {
+      async getProviderAuth(): Promise<AuthResult | undefined> {
+        calls += 1;
+        return auth;
+      },
+    },
+  } as unknown as ExtensionContext;
   const { env } = spyEnv({ TYPESAFE_API_KEY: "sk-headless" });
   const resolve = createTypesafeAuthResolver({ env });
+
   assert.equal(await resolve(ctx), "sk-headless");
+  auth = { auth: { apiKey: "sk-from-later-login" }, source: "stored API key" };
+  assert.equal(await resolve(ctx), "sk-from-later-login");
+  assert.equal(await resolve(ctx), "sk-from-later-login");
+  assert.equal(calls, 2, "an unusable stored result is retried, then a usable login is cached");
 });
 
 test("returns undefined when neither source has a key (fail closed upstream)", async () => {

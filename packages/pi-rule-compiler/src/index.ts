@@ -61,18 +61,18 @@ export {
   type LadderProfile,
 } from "./ladder.ts";
 export { applyContextProjection } from "./projection.ts";
+export { createTypesafeAuthResolver } from "@a4s/typesafe";
 export {
-  createTypesafeAuthResolver,
   LADDER_PROJECTION_RECEIPT_TYPE,
   registerPiRuleCompiler,
   type PiRuleCompilerOptions,
 } from "./extension.ts";
 export {
-  HttpJevClient,
   JevApiError,
   JevUnavailableError,
   JevValidationError,
   parseScoreAnswer,
+  TypesafeJevClient,
   validateJevResponse,
 } from "./jev.ts";
 export {

@@ -951,7 +951,7 @@ test("registers a credential-only typesafe provider wired into /login", async ()
   });
 });
 
-test("createTypesafeAuthResolver caches a resolved getProviderAuth result and prefers an explicit env override", async () => {
+test("canonical TypeSafe auth resolver caches auth.json and gives it precedence over env", async () => {
   let calls = 0;
   const ctx = {
     modelRegistry: {
@@ -963,14 +963,16 @@ test("createTypesafeAuthResolver caches a resolved getProviderAuth result and pr
     },
   } as unknown as Parameters<ReturnType<typeof createTypesafeAuthResolver>>[0];
 
-  const resolve = createTypesafeAuthResolver({ env: {} });
+  const resolve = createTypesafeAuthResolver({ env: { TYPESAFE_API_KEY: "from-env" } });
   assert.equal(await resolve(ctx), "from-login");
   assert.equal(await resolve(ctx), "from-login");
   assert.equal(calls, 1, "getProviderAuth must be cached after the first successful resolution");
 
+  const headlessContext = {
+    modelRegistry: { async getProviderAuth() { return undefined; } },
+  } as unknown as Parameters<ReturnType<typeof createTypesafeAuthResolver>>[0];
   const envResolve = createTypesafeAuthResolver({ env: { TYPESAFE_API_KEY: "from-env" } });
-  assert.equal(await envResolve(ctx), "from-env");
-  assert.equal(calls, 1, "an explicit env override must short-circuit getProviderAuth entirely");
+  assert.equal(await envResolve(headlessContext), "from-env");
 });
 
 test("/rules-review explains that no rule observation exists", async () => {

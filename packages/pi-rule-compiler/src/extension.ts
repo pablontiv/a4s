@@ -1,3 +1,7 @@
+import {
+  createTypesafeAuthResolver,
+  registerTypesafeProvider,
+} from "@a4s/typesafe";
 import type {
   ContextWithSystemEvent,
   ExtensionAPI,
@@ -5,9 +9,6 @@ import type {
   SessionBeforeCompactEvent,
   SessionBeforeCompactResult,
 } from "@earendil-works/pi-coding-agent";
-import type { AuthResult } from "@earendil-works/pi-ai";
-import { createProvider } from "@earendil-works/pi-ai";
-import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
 import { buildBasicCompactionResult } from "./compaction-core.ts";
 import { collectCorpus, publishCorpusAfterCompaction, stageCorpus } from "./corpus.ts";
 import {
@@ -26,7 +27,7 @@ import { isStableDigest, stableDigest } from "./digest.ts";
 import { corpusDigest, renderProjection, selectLadderProjection } from "./ladder.ts";
 import { applyContextProjection } from "./projection.ts";
 import { redactAndLimitCorpusText } from "./redaction.ts";
-import { HttpJevClient, JevApiError, JevUnavailableError, JevValidationError } from "./jev.ts";
+import { JevApiError, JevUnavailableError, JevValidationError, TypesafeJevClient } from "./jev.ts";
 import {
   observePreparedCompactionRules,
   prepareRuleObservationsWithMessages,
@@ -70,7 +71,6 @@ import type {
   StoredRuleProposal,
   StoredRuleProposalCandidate,
 } from "./types.ts";
-import { TYPESAFE_API_KEY_ENV, TYPESAFE_PROVIDER_ID } from "./types.ts";
 
 export interface PiRuleCompilerOptions {
   jevClient?: JevClient;
@@ -120,45 +120,6 @@ export const LADDER_PROJECTION_RECEIPT_TYPE = "a4s.pi-rule-compiler.ladder-proje
 
 class CurrentModelCallError extends Error {}
 
-export function createTypesafeAuthResolver(
-  options: Pick<PiRuleCompilerOptions, "env">,
-): (ctx: ExtensionContext) => Promise<string | undefined> {
-  let cached: AuthResult | undefined;
-  return async (ctx: ExtensionContext): Promise<string | undefined> => {
-    const envKey = (options.env ?? process.env)[TYPESAFE_API_KEY_ENV];
-    if (envKey) return envKey;
-    if (!cached) {
-      cached = await ctx.modelRegistry.getProviderAuth(TYPESAFE_PROVIDER_ID);
-    }
-    return cached?.auth.apiKey;
-  };
-}
-
-function createTypesafeProvider() {
-  return createProvider({
-    id: TYPESAFE_PROVIDER_ID,
-    name: "TypeSafe (Jev)",
-    auth: {
-      apiKey: {
-        name: "TypeSafe API key",
-        async login(interaction) {
-          return {
-            type: "api_key" as const,
-            key: await interaction.prompt({ type: "secret", message: "TypeSafe API key" }),
-          };
-        },
-        async resolve({ credential }) {
-          return credential?.key
-            ? { auth: { apiKey: credential.key }, source: "stored API key" }
-            : undefined;
-        },
-      },
-    },
-    models: [],
-    api: openAICompletionsApi(),
-  });
-}
-
 export function registerPiRuleCompiler(pi: ExtensionAPI, options: PiRuleCompilerOptions = {}): void {
   const pendingByAttempt = new Map<string, PendingCompaction>();
   const retroInFlight = new Set<string>();
@@ -183,12 +144,14 @@ export function registerPiRuleCompiler(pi: ExtensionAPI, options: PiRuleCompiler
     }
   });
 
-  pi.registerProvider(createTypesafeProvider());
+  registerTypesafeProvider(pi);
 
-  const resolveTypesafeApiKey = createTypesafeAuthResolver(options);
-  const createJevClient = async (ctx: ExtensionContext): Promise<JevClient> => {
+  const resolveTypesafeApiKey = createTypesafeAuthResolver(
+    options.env === undefined ? {} : { env: options.env },
+  );
+  const createJevClient = async (ctx: ExtensionContext, timeoutMs: number): Promise<JevClient> => {
     if (options.jevClient) return options.jevClient;
-    return new HttpJevClient({ apiKey: (await resolveTypesafeApiKey(ctx)) ?? "" });
+    return new TypesafeJevClient({ apiKey: await resolveTypesafeApiKey(ctx), timeoutMs });
   };
 
   // Retrieval is opt-in and request-time only. Basic never registers this hook,
@@ -203,7 +166,7 @@ export function registerPiRuleCompiler(pi: ExtensionAPI, options: PiRuleCompiler
           async (signal) => selectLadderProjection(
             corpus,
             query,
-            new ScheduledJevClient(await createJevClient(ctx), options.scheduling),
+            new ScheduledJevClient(await createJevClient(ctx, hookTimeoutMs), options.scheduling),
             signal,
           ),
           hookTimeoutMs,
@@ -271,7 +234,7 @@ export function registerPiRuleCompiler(pi: ExtensionAPI, options: PiRuleCompiler
     const input: TriggerInput = {
       ...baseInput,
       credentialAvailable,
-      jevClient: await createJevClient(ctx),
+      jevClient: await createJevClient(ctx, hookTimeoutMs),
       signal: ctx.signal ?? new AbortController().signal,
     };
     const decision = await evaluateTrigger(input);
@@ -326,7 +289,7 @@ export function registerPiRuleCompiler(pi: ExtensionAPI, options: PiRuleCompiler
 
     if (pending && isLadderEvidence(config) && corpusPublished) {
       try {
-        const jevClient = new ScheduledJevClient(await createJevClient(ctx), options.scheduling);
+        const jevClient = new ScheduledJevClient(await createJevClient(ctx, hookTimeoutMs), options.scheduling);
         const evidence = await runWithDeadline(
           (signal) => runEvidence({
             config,
@@ -640,7 +603,7 @@ function shortId(id: string): string {
 async function handleCompaction(
   event: SessionBeforeCompactEvent,
   ctx: ExtensionContext,
-  createJevClient: (ctx: ExtensionContext) => Promise<JevClient>,
+  createJevClient: (ctx: ExtensionContext, timeoutMs: number) => Promise<JevClient>,
   pendingByAttempt: Map<string, PendingCompaction>,
   timeoutMs: number,
   now: () => Date,
@@ -667,7 +630,7 @@ async function handleCompaction(
     if (existing) return { compaction: existing.result };
 
     const observedAt = now().toISOString();
-    const jevClient = new ScheduledJevClient(await createJevClient(ctx), schedulingOptions);
+    const jevClient = new ScheduledJevClient(await createJevClient(ctx, timeoutMs), schedulingOptions);
     const batches = await runWithDeadline(
       (signal) =>
         Promise.all(
@@ -833,7 +796,7 @@ function collectPendingRetroWork(
 async function drainPendingRetro(
   pi: ExtensionAPI,
   ctx: ExtensionContext,
-  createJevClient: (ctx: ExtensionContext) => Promise<JevClient>,
+  createJevClient: (ctx: ExtensionContext, timeoutMs: number) => Promise<JevClient>,
   timeoutMs: number,
   now: () => Date,
   retroOptions: RetroOptions | undefined,
@@ -864,7 +827,7 @@ async function drainPendingRetro(
 
     inFlight.add(item.marker.attemptId);
     try {
-      const jevClient = new ScheduledJevClient(await createJevClient(ctx), schedulingOptions);
+      const jevClient = new ScheduledJevClient(await createJevClient(ctx, timeoutMs), schedulingOptions);
       const proposal = await runWithDeadline(
         (signal) =>
           createRetroProposal(

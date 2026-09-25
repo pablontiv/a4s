@@ -10,6 +10,8 @@ export interface CreateTypesafeClientOptions {
   model?: string;
   /** API root override. Defaults to {@link TYPESAFE_BASE_URL}. */
   baseURL?: string;
+  /** Per-attempt timeout supplied by the consumer's deadline authority. */
+  timeoutMs: number;
   /** Custom fetch for transport configuration or tests. */
   fetch?: TypeSafeClientConfig["fetch"];
 }
@@ -34,6 +36,9 @@ export function createTypesafeClient(options: CreateTypesafeClientOptions): Type
     apiKey,
     baseURL: options.baseURL ?? TYPESAFE_BASE_URL,
     defaultModel: model,
+    timeout: options.timeoutMs,
+    // SDK debug logs include unredacted request bodies. Never inherit this from env.
+    logLevel: "off",
     ...(options.fetch ? { fetch: options.fetch } : {}),
   });
 }

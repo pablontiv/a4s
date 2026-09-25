@@ -17,7 +17,7 @@ El monorepo reúne capacidades que pueden evolucionar a ritmos distintos. Cada u
 - [`output-styles/`](output-styles/) define contratos de interacción.
 - [`src/`](src/) contiene el runtime experimental E0 y sus adapters.
 - [`packages/pi-rule-compiler/`](packages/pi-rule-compiler/) contiene una extensión Pi para compaction y propuestas de reglas review-only.
-- [`packages/typesafe/`](packages/typesafe/) contiene una superficie TypeSafe/Jev en evaluación; su autoridad depende de ADR 0020.
+- [`packages/typesafe/`](packages/typesafe/) contiene la superficie TypeSafe/Jev canónica gobernada por ADR 0020.
 - [`test/`](test/) verifica runtime y contratos del repositorio.
 
 ## Integraciones

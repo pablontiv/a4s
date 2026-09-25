@@ -15,7 +15,7 @@ Private Pi extension that uses Jev as the semantic authority for deterministic c
 - Only full chunks or validated `short`/`long` source spans selected by that Evidence query enter extraction. The existing candidate-probability, generality, authority-probability, authority-confidence, and allowed-authority gates remain unchanged.
 - Validated signal batches, retro-pending markers, and an Evidence receipt are appended only after selection and extraction both succeed. Batch digests, attempt markers, proposal receipts, and the final Evidence receipt make replay idempotent. Any selection/extraction failure publishes no Evidence artifact and never removes corpus.
 - Manual/threshold Evidence success may run current-model synthesis plus Jev stage 2 from `session_compact`; overflow recovery with `willRetry=true` defers that review-only work until `agent_settled`. Retro failure never rolls back compaction and leaves signals plus pending state available for `/retro-rules` retry.
-- Jev uses the pinned model `jev-1.13.0`. The extension registers a credential-only `typesafe` provider so `/login typesafe` stores an API key via Pi's own auth storage; the resolved credential is cached for the session. `TYPESAFE_API_KEY` in the environment takes precedence when set and bypasses stored-credential resolution entirely.
+- Jev uses the canonical `@a4s/typesafe` SDK client with the pinned model `jev-1.13.0`. The package registers the credential-only `typesafe` provider so `/login typesafe` stores an API key via Pi's own auth storage; the resolved credential is cached for the session. Stored `auth.json` credentials take precedence, with `TYPESAFE_API_KEY` used only as the headless fallback.
 - Automatic retro and `/retro-rules` store proposals only. They never write Rootline documents or activate rules; `/retro-rules` exists solely for manual retry/recovery.
 - Review is store-only. `/rules-review` lists stored proposals with their acceptance state, `/rules-show <id>` shows one candidate, and `/rules-accept <id>` records a manual acceptance receipt for a `propose` candidate. When no proposal is stored, `/rules-review` reports whether the latest session-local compaction had no eligible `user`/`custom` sources, filtered all eligible candidates, or retained signals awaiting retro; it never displays message content. Acceptance still writes nothing to Rootline or AGENTS.md; the durable apply of an accepted rule is deferred to the decision in ADR 0020.
 - The extension does not read, write, or replace gentle-engram entries.
@@ -74,7 +74,7 @@ pi -e packages/pi-rule-compiler/src/index.ts
 /login typesafe
 ```
 
-Alternatively, set `TYPESAFE_API_KEY` in the environment before starting Pi to skip `/login`.
+Alternatively, when no stored `typesafe` credential exists, set `TYPESAFE_API_KEY` in the environment before starting Pi for headless use.
 
 If Jev is unavailable, Pi compaction is deliberately cancelled and can be retried after restoring the dependency. With both Ladder flags enabled, retro may run after successful Evidence extraction; use `/retro-rules` only to retry preserved pending work after a model, Jev, or storage failure.
 

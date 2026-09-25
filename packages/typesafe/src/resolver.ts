@@ -22,9 +22,15 @@ export function createTypesafeAuthResolver(
 ): TypesafeAuthResolver {
   let cached: AuthResult | undefined;
   return async (ctx: ExtensionContext): Promise<string | undefined> => {
-    if (!cached) cached = await ctx.modelRegistry.getProviderAuth(TYPESAFE_PROVIDER_ID);
-    const stored = cached?.auth.apiKey?.trim();
-    if (stored) return stored;
+    const cachedKey = cached?.auth.apiKey?.trim();
+    if (cachedKey) return cachedKey;
+
+    const resolved = await ctx.modelRegistry.getProviderAuth(TYPESAFE_PROVIDER_ID);
+    const stored = resolved?.auth.apiKey?.trim();
+    if (stored) {
+      cached = resolved;
+      return stored;
+    }
     const envKey = (options.env ?? process.env)[TYPESAFE_API_KEY_ENV]?.trim();
     return envKey ? envKey : undefined;
   };

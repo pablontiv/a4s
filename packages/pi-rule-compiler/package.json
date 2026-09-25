@@ -25,7 +25,7 @@
     "@earendil-works/pi-coding-agent": "0.87.0"
   },
   "dependencies": {
-    "@earendil-works/pi-ai": "0.87.0"
+    "@a4s/typesafe": "0.1.0"
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "0.87.0",

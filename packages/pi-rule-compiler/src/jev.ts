@@ -1,3 +1,8 @@
+import {
+  createTypesafeClient,
+  MissingTypesafeKeyError,
+  type CreateTypesafeClientOptions,
+} from "@a4s/typesafe";
 import type {
   ChoiceAnswer,
   JevAnswer,
@@ -43,51 +48,62 @@ export class JevValidationError extends Error {
   }
 }
 
-export interface HttpJevClientOptions {
-  apiKey?: string;
-  endpoint?: string;
-  fetchImpl?: typeof fetch;
+export interface TypesafeJevClientOptions {
+  apiKey: string | undefined;
+  /** Per-attempt SDK timeout derived from the owning hook/operation budget. */
+  timeoutMs: number;
+  fetch?: CreateTypesafeClientOptions["fetch"];
 }
 
-export class HttpJevClient implements JevClient {
-  private readonly apiKey: string | undefined;
-  private readonly endpoint: string;
-  private readonly fetchImpl: typeof fetch;
+/** Adapts the canonical SDK client to rule-compiler's existing JevClient seam. */
+export class TypesafeJevClient implements JevClient {
+  private readonly client: ReturnType<typeof createTypesafeClient>;
 
-  constructor(options: HttpJevClientOptions = {}) {
-    this.apiKey = options.apiKey ?? process.env[TYPESAFE_API_KEY_ENV];
-    this.endpoint = options.endpoint ?? "https://api.typesafe.ai/v1/systemone";
-    this.fetchImpl = options.fetchImpl ?? fetch;
+  constructor(options: TypesafeJevClientOptions) {
+    try {
+      this.client = createTypesafeClient({
+        apiKey: options.apiKey,
+        model: DEFAULT_JEV_MODEL,
+        timeoutMs: options.timeoutMs,
+        ...(options.fetch ? { fetch: options.fetch } : {}),
+      });
+    } catch (error) {
+      if (error instanceof MissingTypesafeKeyError) throw new JevUnavailableError();
+      throw error;
+    }
   }
 
   async evaluate(request: JevRequest, options: { signal: AbortSignal }): Promise<unknown> {
-    const apiKey = this.apiKey?.trim();
-    if (!apiKey) throw new JevUnavailableError();
     if (request.model !== DEFAULT_JEV_MODEL) throw new TypeError(`Jev model must be ${DEFAULT_JEV_MODEL}`);
 
-    let response: Response;
     try {
-      response = await this.fetchImpl(this.endpoint, {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${apiKey}`,
-          "content-type": "application/json",
-        },
-        body: JSON.stringify(request),
-        signal: options.signal,
-      });
+      // Retry remains owned by ScheduledJevClient so its bounded stats and
+      // compaction policy do not change when transport moves to the SDK.
+      return await this.client.systemOne(
+        request as Parameters<typeof this.client.systemOne>[0],
+        { signal: options.signal, retry: { maxRetries: 0 } },
+      );
     } catch (error) {
       if (options.signal.aborted) throw error;
-      throw new JevApiError();
-    }
-
-    if (!response.ok) throw new JevApiError(response.status, parseRetryAfterMs(response.headers));
-    try {
-      return await response.json();
-    } catch {
-      throw new JevValidationError("$");
+      const metadata = apiErrorMetadata(error);
+      throw new JevApiError(metadata.status, metadata.retryAfterMs);
     }
   }
+}
+
+function apiErrorMetadata(error: unknown): { status?: number; retryAfterMs?: number } {
+  if (error === null || typeof error !== "object") return {};
+  const candidate = error as { status?: unknown; retryAfterMs?: unknown; headers?: unknown };
+  const status = typeof candidate.status === "number" ? candidate.status : undefined;
+  const explicitRetryAfter = typeof candidate.retryAfterMs === "number" ? candidate.retryAfterMs : undefined;
+  const headerRetryAfter = candidate.headers instanceof Headers
+    ? parseRetryAfterMs(candidate.headers)
+    : undefined;
+  const retryAfterMs = explicitRetryAfter ?? headerRetryAfter;
+  return {
+    ...(status === undefined ? {} : { status }),
+    ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
+  };
 }
 
 export function validateJevResponse(
