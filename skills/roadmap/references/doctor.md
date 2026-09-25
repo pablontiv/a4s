@@ -31,10 +31,10 @@ Detect and report these finding classes exactly:
 - a failed review comment with no guarded blocked/failure `ROADMAP_RESULT v1` in notes;
 - a passing `ROADMAP_RESULT v1` with missing required typed provenance;
 - disagreement among comments, provenance and the lifecycle result in notes;
-- a task completed after ADR 0051 that cites a newly created execution report file instead of canonical Bead evidence; and
+- a task completed after ADR 0050 that cites a newly created execution report file instead of canonical Bead evidence; and
 - missing or ambiguous `.workspace` DoD.
 
-Preserve historical report references for tasks completed before ADR 0051. They are historical evidence, not a reason to create, migrate, rewrite or delete reports.
+Preserve historical report references for tasks completed before ADR 0050. They are historical evidence, not a reason to create, migrate, rewrite or delete reports.
 
 Then check backlog consistency against the repository and runtime, not only the graph:
 

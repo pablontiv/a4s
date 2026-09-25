@@ -8,7 +8,7 @@ alternativas: 'Conservar reportes por archivo se descarta por duplicar autoridad
 consecuencias: 'Roadmap y Doctor deben escribir y leer comments explícitamente, cerrar o bloquear con un ROADMAP_RESULT acotado y guards de ownership, registrar SHA PR CI y transcript mediante provenance, preservar reportes históricos sin migrarlos y verificar la conducta con escenarios RED-GREEN de agentes frescos más checks mecánicos.'
 pendientes: ""
 ---
-# 0051. Hacer del bead el registro canonico de evidencia roadmap
+# 0050. Hacer del bead el registro canonico de evidencia roadmap
 
 ## Contexto
 Roadmap declara Beads como registro durable pero duplica cada tarea en reportes por rol ignorados y reportes finales versionados; la auditoría de Beads 1.3.0 y seis escenarios frescos demostraron que comments, notes condicionadas y provenance cubren el expediente sin documentos paralelos.

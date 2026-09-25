@@ -16,7 +16,7 @@ tipo: plan
 ## Global constraints
 
 - Bead `a4s-vb0` owns this delivery.
-- ADR 0051 is the accepted authority for new Roadmap evidence.
+- ADR 0050 is the accepted authority for new Roadmap evidence.
 - Preserve ADR 0033's `--if-assignee`, `--if-status in_progress`, exit-13, and `claim_lost` semantics.
 - Preserve ADR 0043's bounded fresh roles, controller-only delegation, and no recursive delegation.
 - Preserve ADR 0044's Beads authority and ADR 0048's Markdown-only skill and pressure-test verification.
@@ -263,9 +263,9 @@ Allow `bd comments "$ID" --json` when only the thread is required. Name comments
 - failed review with no blocked/failure result;
 - pass result with missing required provenance;
 - comment/provenance disagreement with notes; and
-- new execution report files cited by a post-ADR-0051 task.
+- new execution report files cited by a post-ADR-0050 task.
 
-Preserve historical report references for tasks completed before ADR 0051.
+Preserve historical report references for tasks completed before ADR 0050.
 
 - [ ] **Step 3: Bound tree's comment/provenance reads**
 
@@ -311,7 +311,7 @@ If the date already matches, leave the value unchanged; the substantive same-day
 Run:
 
 ```bash
-rg -n 'include-comments|bd comments|bd provenance|missing required role handoff|ADR 0051' \
+rg -n 'include-comments|bd comments|bd provenance|missing required role handoff|ADR 0050' \
   skills/roadmap/references/doctor.md skills/roadmap/references/tree.md
 rg -n 'normal close|claim loss|blocking review|reconstruction|external evidence|file pressure' \
   skills/roadmap/README.md
@@ -330,13 +330,13 @@ git commit -m "docs(roadmap): verify canonical Bead evidence" -m "Bead: a4s-vb0"
 ### Task 3: Synchronize governance and prove semantic GREEN
 
 **Files:**
-- Reference without editing: `.workspace/docs/adr/0051-hacer-del-bead-el-registro-canonico-de-evidencia-roadmap.md`
+- Reference without editing: `.workspace/docs/adr/0050-hacer-del-bead-el-registro-canonico-de-evidencia-roadmap.md`
 - Reference without editing: `.workspace/docs/specs/2026-09-25-roadmap-canonical-bead-evidence-design.md`
 - Modify only for corrections found during plan review: `.workspace/docs/plans/2026-09-25-roadmap-canonical-bead-evidence.md`
 - No new report or test files
 
 **Interfaces:**
-- Consumes: accepted ADR 0051, approved spec, Tasks 1–2 candidate SHA.
+- Consumes: accepted ADR 0050, approved spec, Tasks 1–2 candidate SHA.
 - Produces: six GREEN pressure verdicts stored as Bead comments and a review-ready branch.
 
 - [ ] **Step 1: Verify governance before pressure runs**
@@ -344,7 +344,7 @@ git commit -m "docs(roadmap): verify canonical Bead evidence" -m "Bead: a4s-vb0"
 Run:
 
 ```bash
-rootline validate .workspace/docs/adr/0051-hacer-del-bead-el-registro-canonico-de-evidencia-roadmap.md -o json
+rootline validate .workspace/docs/adr/0050-hacer-del-bead-el-registro-canonico-de-evidencia-roadmap.md -o json
 rootline validate .workspace/docs/specs/2026-09-25-roadmap-canonical-bead-evidence-design.md -o json
 rootline validate .workspace/docs/plans/2026-09-25-roadmap-canonical-bead-evidence.md -o json
 ```
@@ -397,7 +397,7 @@ Expected: CI 19/19, Rootline valid, no obsolete report contract, all canonical B
 Dispatch a fresh `superpowers-final-reviewer` with:
 
 ```text
-Review merge-base..HEAD against ADR 0051, the approved spec, and this plan. Focus on atomic claim-loss behavior, ambiguous comment writes, failed-review blocking, bounded comment reads, provenance completeness, historical-report preservation, and accidental readiness changes.
+Review merge-base..HEAD against ADR 0050, the approved spec, and this plan. Focus on atomic claim-loss behavior, ambiguous comment writes, failed-review blocking, bounded comment reads, provenance completeness, historical-report preservation, and accidental readiness changes.
 ```
 
 Fix every valid finding with Markdown-only edits, rerun affected pressure scenarios, and request one scoped re-review on the new SHA.
