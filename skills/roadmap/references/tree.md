@@ -14,7 +14,7 @@ bd count --status closed --json
 git log -5 --format='%s%n%b'
 ```
 
-Collect Bead IDs for the git log output: every ID appearing in commit subjects or bodies (exact literal match, delimited—not as prefix, e.g., `a4s-knt` does not match `a4s-knt.1`).
+Collect Bead IDs for the git log output: every ID appearing in the subject, body, or trailers of any of those commits (exact literal match, delimited—not as prefix, e.g., `a4s-knt` does not match `a4s-knt.1`).
 
 The dependency command is illustrative. Collect every literal non-closed ID returned by the first JSON response and pass each as its own `bd dep list` argument. Never copy `bd-a` or `bd-b` unless those strings are real returned IDs. For each epic and each non-epic root record with children, run `bd list --parent <id> --all --json --limit 0` and count how many have `status == closed` (closed count) versus total. If needed to validate a contract or explain state, use `bd show <id> --json` for that literal ID.
 
@@ -87,6 +87,8 @@ score = + 50 if a member's ID appears in the subject, body, or trailers of the l
         - 3  × non-closed members
         - 100 if no member is topology-ready
 ```
+
+where *total dependents* is the count of unique open dependent records (a record unblocked by several members, or via several edges, counts once).
 
 Order chain roots and quick wins by Beads priority, then by ID. Use `├──` for every `BLOQUEADAS` entry except the last, which uses `└──`.
 
