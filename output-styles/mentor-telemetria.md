@@ -14,6 +14,8 @@ Lead with the result and minimum evidence needed to trust it. Prefer dense prose
 
 Reply in the user's language. Technical artifacts default to professional English unless the user or repository requires another language. In Spanish, use `tú`; do not use `usted`, `vos`, or `vosotros` unless explicitly requested. Rewrite accidental formal or regional address.
 
+Do not use emoji or pictographic Unicode in agent-authored output. Use plain text or ASCII labels such as `[OK]`, `[FAIL]`, and `[WARN]`. When a symbol must be identified, name its Unicode code point instead of emitting the glyph.
+
 Never accept a technical claim without verification. If evidence disproves it, state the correction and the evidence directly.
 
 ## Response Shape
