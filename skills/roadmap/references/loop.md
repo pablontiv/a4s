@@ -1,6 +1,6 @@
-# Sequential loop mode
+# Autonomous loop mode
 
-Loop implements exactly one topologically ready task at a time. Never execute multiple Beads concurrently, even when several tasks have no dependencies.
+Loop chains tasks automatically, executing exactly one topologically ready task at a time. Never execute multiple Beads concurrently, even when several tasks have no dependencies. Loop continues until an explicit stopping condition is met.
 
 ## 1. Resolve completion authority
 
@@ -8,9 +8,29 @@ Before any mutation, locate and read the effective `.workspace/config.yaml`, inc
 
 A missing, inaccessible, or ambiguous required control is `unknown`. Required `unknown` or `failed` controls stop mutation and prevent delivery and closure. Do not infer a fallback from README, AGENTS, package scripts, or a standalone Definition-of-Done document.
 
-## 2. Select one task
+## 2. Autonomous loop with stopping conditions
 
-Run the complete tree recipe. Stop for Doctor on a cycle, invalid graph, incomplete candidate, or readiness drift. Select exactly one complete task in the intersection of the topology frontier and provider-ready IDs, ordered by current ownership, Beads priority, reverse-dependency impact, then ID. Exclude epics.
+Loop is autonomous by default: chain tasks without asking until an explicit stopping condition applies.
+
+### Stopping conditions (enumerated)
+
+Loop stops and prints a final SUMMARY when any of the following is true:
+
+1. **No executable tasks remain**: the frontier is empty; all non-epic Beads are closed or blocked on external dependencies.
+2. **Doctor required**: a fresh tree read detects a cycle, invalid graph, incomplete candidate, or readiness drift.
+3. **Unknown or failed control**: a required workspace control (sync, isolation, development workflow, delivery, post-checks, etc.) is missing, inaccessible, or ambiguous.
+4. **Claim or lease lost**: the claim failed (race loss), lease expired between stages, or heartbeat failed; ownership no longer matches or status changed from `in_progress`.
+5. **Gate failure**: a required check, review, or delivery gate failed for the current task or PR.
+6. **Human gate applies**: the effective `.workspace/config.yaml` declares a human gate requirement that is met:
+   - delivery-policy changes (delivery_mode, delivery_gate, delivery_overrides modified);
+   - external effects outside the repository;
+   - destructive operations (force-push, branch deletion, etc.);
+   - ADR substitution required (replacing an accepted decision).
+7. **Implementation error**: an implementation stage encounters an unrecoverable error outside task scope or violating contract invariants.
+
+### Selecting and claiming a task
+
+Run the complete tree recipe. Stop for Doctor on a cycle, invalid graph, incomplete candidate, or readiness drift (condition 2). Select exactly one complete task in the intersection of the topology frontier and provider-ready IDs, ordered by current ownership, Beads priority, reverse-dependency impact, then ID. Exclude epics.
 
 Read the selected task's full contract. Claim only it:
 
@@ -18,7 +38,7 @@ Read the selected task's full contract. Claim only it:
 bd update "$BEAD_ID" --claim --json
 ```
 
-A failed claim is a race loss. Refresh the tree read-only and report; do not overwrite an owner or immediately select another task. Re-read the Bead with `bd show "$BEAD_ID" --json` and verify both the exact expected assignee `$ACTOR` and `in_progress` status before implementation.
+A failed claim is a race loss (condition 4). Refresh the tree read-only and report; do not overwrite an owner or immediately select another task. Re-read the Bead with `bd show "$BEAD_ID" --json` and verify both the exact expected assignee `$ACTOR` and `in_progress` status before implementation.
 
 ## 3. Execute bounded stages
 
@@ -59,6 +79,59 @@ bd update "$BEAD_ID" --status closed \
 
 Never retry exit 13, a stale conditional guard, or any ownership loss. Preserve the evidence, stop mutation, and report `claim_lost`. Failed or ambiguous effects retain the contract-required non-closed state.
 
-After a successful close, re-read the Bead and the complete graph. Ask before selecting the next topologically ready task; approval to run loop is not standing approval for another task.
+### Commit trailers and delivery
+
+Every commit produced by loop must carry the following trailer in its body:
+
+```
+Bead: <BEAD_ID>
+```
+
+When the effective `.workspace/config.yaml` declares autonomous delivery with overrides (e.g., `delivery_overrides.ci-billing`), also include:
+
+```
+Delivery-Override: <override-key>
+```
+
+The loop applies the delivery rule from the effective config literally. Read `delivery_gate` to determine whether the PR requires autonomous merge (when all gates pass) or human authorization. A human delivery gate requirement is a stopping condition (condition 6).
+
+### Autonomous chaining
+
+After a successful close, immediately re-read the Bead and the complete graph. Check for any stopping condition. If none applies, select the next topologically ready task in deterministic order and continue. Repeat until a stopping condition is met.
 
 An epic is never claimed or implemented. Close an epic only after every child task is closed and fresh evidence proves the epic's own success criteria; append the repository-relative evidence path and preserve any required conditional safeguards.
+
+## 5. Final summary
+
+When the loop stops (any stopping condition), print a final SUMMARY before exiting:
+
+```
+╔════════════════════════════════════════════════════════════════╗
+║                      LOOP SUMMARY                              ║
+╠════════════════════════════════════════════════════════════════╣
+║ Closed tasks:                                                  ║
+║   <BEAD_ID>: <title> (PR: <url>, merge SHA: <sha>)             ║
+║   evidence: <repository-relative-path>                         ║
+║   ...                                                           ║
+║ Reviews and findings:                                          ║
+║   <brief summary of review results or issues>                  ║
+║ Delivery gates applied:                                        ║
+║   <gate-name>: <passed|failed|not-applicable>                  ║
+║   ...                                                           ║
+║ Stopping condition:                                            ║
+║   <number>. <description>                                      ║
+║ Next steps:                                                    ║
+║   <recommendation based on stopping condition>                 ║
+║ Cleanup offered (cleanup_policy):                              ║
+║   worktree: <path>                                             ║
+║   branch: <branch-name>                                        ║
+╚════════════════════════════════════════════════════════════════╝
+```
+
+The summary must record:
+- **Closed tasks**: each task ID, title, PR URL (if applicable), merge SHA (if merged), and repository-relative evidence path.
+- **Reviews and findings**: concise summary of reviewer feedback and any HIGH-security findings or regressions.
+- **Delivery gates applied**: each gate name and its result (passed, failed, or not applicable).
+- **Stopping condition**: reference one of the 7 stopping conditions (section 2) by number and description.
+- **Next steps**: a specific recommendation based on the stopping reason (e.g., "open Doctor for cycle detection", "authorize delivery-policy change", "retry after control becomes available").
+- **Cleanup offered**: list worktree paths and branch names available for cleanup (never auto-delete; the operator chooses).

@@ -10,10 +10,10 @@ Invoke the skill in the repository whose backlog you intend to inspect or change
 /skill:roadmap plan <requirements>  propose a complete graph, ask approval, then create it
 /skill:roadmap                      render the pending decision tree read-only
 /skill:roadmap doctor               diagnose alignment; preview and approval-gate corrections
-/skill:roadmap loop                 claim and implement one ready task at a time
+/skill:roadmap loop                 autonomous loop: chain ready tasks one at a time until stopping condition
 ```
 
-Plan and Doctor do not mutate before explicit approval. Bare Roadmap never mutates. Loop is sequential and combines each Bead's acceptance contract with the effective repository Definition of Done.
+Plan and Doctor do not mutate before explicit approval. Bare Roadmap never mutates. Loop is autonomous by default: chains ready tasks one at a time until an explicit stopping condition is met, publishes a final SUMMARY, and combines each Bead's acceptance contract with the effective repository Definition of Done. Loop follows all approval gates literally; human gates are stopping conditions.
 
 ## Direct dependencies
 
