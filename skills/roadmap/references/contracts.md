@@ -11,6 +11,10 @@ blocks → execution order
 
 Beads stores every edge as "`issue_id` depends on `depends_on_id`". For `blocks`, `depends_on_id` is the prerequisite and `issue_id` is the dependent it unblocks. For `parent-child`, `depends_on_id` is the parent. Other edge types, such as `related` or `relates-to`, never order work.
 
+A task's **effective `blocks` prerequisites** are its own `blocks` prerequisites plus the `blocks` prerequisites of its direct parent epic. The `parent-child` edge itself still expresses hierarchy only: ordering comes from the explicit `blocks` edge on the aggregate and applies to its direct task children. Do not duplicate an inherited epic prerequisite onto every child.
+
+A **pre-claim external gate** is a condition outside the task's authorized steps that can be evaluated without claiming or executing the task, such as a required human, billing, or third-party decision. A check or action that the task contract explicitly requires after claim is an **execution admission check**, not an external gate. Fresh observation, lock acquisition, isolated-worktree cleanliness, validation, and equivalent just-in-time checks remain task stages when the contract assigns them to the task; their failure stops that stage.
+
 Roadmap creates only core Beads types `epic` and `task`. A task may be at repository root or the direct child of one epic. New nested epics are invalid. An independently deliverable set of outcomes is an epic with separate tasks, not a checklist hidden in one task.
 
 ## Epic contract

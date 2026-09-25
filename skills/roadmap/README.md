@@ -16,7 +16,7 @@ Invoke the skill in the repository whose backlog you intend to inspect or change
 
 Plan and Doctor do not mutate before explicit approval. Bare Roadmap never mutates. Loop is autonomous by default: chains ready tasks one at a time until an explicit stopping condition is met, publishes a final SUMMARY, and combines each Bead's acceptance contract with the effective repository Definition of Done. Loop follows all approval gates literally; human gates are stopping conditions.
 
-When invoked as `loop <id>`, the loop limits its scope to a single epic or task: if `<id>` is an epic, loop chains only its direct task children; if `<id>` is a task, loop operates only on that task. Stop condition 1 (no executable tasks) is evaluated within the scope; Doctor findings, including readiness drift, stop the loop only when they involve a scoped task or a `blocks` prerequisite of a scoped task (fail closed). Invalid or non-existent IDs are rejected without mutation.
+When invoked as `loop <id>`, the loop limits its scope to a single epic or task: if `<id>` is an epic, loop chains only its direct task children; if `<id>` is a task, loop operates only on that task. Stop condition 1 (no executable tasks) is evaluated within the scope; Doctor findings, including readiness drift, stop the loop only when they involve a scoped task or an effective `blocks` prerequisite of a scoped task (fail closed). Invalid or non-existent IDs are rejected without mutation.
 
 ## Direct dependencies
 
@@ -33,8 +33,17 @@ Verify prose behavior with the `writing-skills` pressure method, not a Roadmap t
 1. preserve the bounded pre-skill response for each review-focus scenario;
 2. load `SKILL.md` and only the routed reference in a fresh agent;
 3. rerun Plan approval, false empty frontier, Doctor ambiguity, Doctor contract backfill, missing-workspace-DoD, and parallelism-pressure scenarios;
-4. record pass/fail and the exact rationalization;
-5. if one fails, change only the implicated Markdown and rerun that scenario with another fresh agent.
+4. rerun these Roadmap-readiness regressions with fresh agents:
+   - a complete executable task plus unrelated blocked contract-incomplete records;
+   - a provider-ready task whose fresh observation and writer lock are execution admission checks;
+   - a provider-ready task excluded solely by a genuine pre-claim external gate;
+   - a child task whose parent epic has an open `blocks` prerequisite;
+   - a Doctor-added prerequisite both before and after its hypothetical closure;
+   - an incoming `blocks` edge to a closed superseded container whose outcome is explicitly incomplete; and
+   - an open record with `started_at` but no assignee, claim, lease, or live session metadata;
+5. require all fresh agents to agree on stop/continue, gate classification, effective prerequisites, transition result, and Doctor finding; disagreement is a failed pressure scenario;
+6. record pass/fail and the exact rationalization;
+7. if one fails, change only the implicated Markdown and rerun that scenario with another fresh agent.
 
 Also confirm the bundle contains only Markdown, the public router stays concise, forbidden legacy commands are absent, and `git diff --check` is clean. Existing repository checks remain applicable; do not add Roadmap unit, integration, or E2E tests.
 

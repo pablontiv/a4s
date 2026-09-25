@@ -23,7 +23,7 @@ If a scope ID is provided (invoked as `loop <id>`):
    - Stop condition 2 (Doctor required, including readiness drift): apply the scope boundary in item 4.
    - All other stopping conditions apply globally regardless of scope.
 
-4. **Scope boundary for Doctor findings**: a cycle, invalid or broken edge, incomplete candidate (contract gap), or readiness drift triggers stop condition 2 in a scoped loop only when it involves a scoped task or a `blocks` prerequisite of a scoped task (fail closed). Findings elsewhere in the backlog do not stop a scoped loop.
+4. **Scope boundary for Doctor findings**: a cycle, invalid or broken edge, stale satisfied-prerequisite edge, incomplete candidate as defined by `tree.md`, or unexplained readiness drift triggers stop condition 2 in a scoped loop only when it involves a scoped task or an effective `blocks` prerequisite of a scoped task (fail closed). Findings elsewhere in the backlog do not stop a scoped loop.
 
 If no scope ID is provided, the loop operates over the entire backlog as usual.
 
@@ -36,7 +36,7 @@ Loop is autonomous by default: chain tasks without asking until an explicit stop
 Loop stops and prints a final SUMMARY when any of the following is true:
 
 1. **No executable tasks remain**: the frontier is empty; all non-epic Beads are closed or blocked on external dependencies.
-2. **Doctor required**: a fresh tree read detects a cycle, invalid graph, incomplete candidate, or readiness drift.
+2. **Doctor required**: a fresh tree read detects a cycle, invalid graph, broken or stale satisfied-prerequisite edge, incomplete candidate as defined by `tree.md`, or unexplained readiness drift. Contract-incomplete records that are blocked, externally gated, deferred, invalid, or lower-ranked than a complete executable task remain findings but do not stop the loop.
 3. **Unknown or failed control**: a required workspace control (sync, isolation, development workflow, delivery, post-checks, etc.) is missing, inaccessible, or ambiguous.
 4. **Claim or lease lost**: the claim failed (race loss), lease expired between stages, or heartbeat failed; ownership no longer matches or status changed from `in_progress`.
 5. **Gate failure**: a required check, review, or delivery gate failed for the current task or PR. This includes HIGH-severity security findings from a triggered security review (§3.1).
@@ -49,7 +49,7 @@ Loop stops and prints a final SUMMARY when any of the following is true:
 
 ### Selecting and claiming a task
 
-Run the complete tree recipe, limited to the scope boundary if a scope ID was provided. Stop for Doctor on a cycle, invalid graph, incomplete candidate, or readiness drift (condition 2); in a scoped loop apply the boundary in §1.1 item 4. Select exactly one complete task in the intersection of the topology frontier and provider-ready IDs within the scope boundary, ordered by current ownership, Beads priority, reverse-dependency impact, then ID. Exclude epics. If a scope ID was an epic, consider only its direct task children for selection.
+Run the complete tree recipe, limited to the scope boundary if a scope ID was provided. Stop for Doctor only on the condition-2 findings named above; do not stop for unrelated or lower-ranked incomplete records. In a scoped loop apply the boundary in §1.1 item 4. Select exactly one complete task in the executable intersection within the scope boundary, ordered by current ownership, Beads priority, reverse-dependency impact, then ID. Exclude epics. If a scope ID was an epic, consider only its direct task children for selection.
 
 Read the selected task's full contract. Claim only it:
 
@@ -74,6 +74,7 @@ Execute:
 
 ```text
 read full Bead contract
+→ execution admission checks required by that contract
 → bounded implementation
 → task review and bounded fix/re-review when required
 → selective security review (if triggered)
@@ -104,6 +105,8 @@ bd heartbeat "$BEAD_ID"
 ```
 
 After every heartbeat and stage, re-read the Bead and verify assignee and `in_progress` still match. Heartbeat failure, changed assignee, changed status, or lease loss stops further mutation. Only an explicit Doctor proposal may reclaim a verified expired lease.
+
+Run task-declared fresh observation, lock acquisition, isolated-worktree cleanliness, validation, and equivalent execution admission checks only after claim and before the stage they guard. A failed or unknown admission check is a gate failure (condition 5); do not reclassify it retroactively as a pre-claim external gate or continue to effects.
 
 Preserve unrelated work and remain inside the selected contract. Passing unit tests is not sufficient: prove task acceptance, invariants, required reviews, every applicable effective-workspace control, configured delivery, and post-checks.
 

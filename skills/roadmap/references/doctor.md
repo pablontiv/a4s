@@ -15,10 +15,11 @@ Detect and report these finding classes exactly:
 - incomplete epic or task contracts;
 - `blocked` or `deferred` used instead of known `blocks` edges;
 - broken dependencies or cycles;
+- stale satisfied-prerequisite edges: `blocks` targets closed as duplicate, superseded, or normalized containers whose notes or closure evidence disavow outcome completion or identify open successor work;
 - executable epics;
-- stale assignees, claims, or leases;
-- graph components with no executable root and no explicit external gate;
-- disagreement between topology and `bd ready` (**readiness drift**); and
+- stale assignees, claims, or leases (`started_at` alone is lifecycle history, not claim evidence);
+- graph components with no executable root and no explicit pre-claim external gate;
+- unexplained disagreement between normalized topology and `bd ready` (**readiness drift**); and
 - missing or ambiguous `.workspace` DoD.
 
 Then check backlog consistency against the repository and runtime, not only the graph:
@@ -46,6 +47,8 @@ Separate findings into:
 1. **Deterministic corrections** — one fact-preserving command follows from unambiguous provider state and the existing written contract.
 2. **Decisions requiring user input** — requirements, intended type, reparenting, dependency direction, status meaning, external-gate meaning, or another semantic choice is ambiguous.
 3. **Unresolvable gaps** — required authority is missing or inaccessible, or no safe direct Beads operation can preserve the contract.
+
+A stale satisfied-prerequisite edge is always a finding, but its replacement is deterministic only when one exact successor dependency is already stated by current authority. Otherwise show the closed target, its disavowal evidence, every open successor candidate, and ask the user to choose; never silently retarget the edge.
 
 Do not fabricate missing requirements or infer ambiguous dependencies. Never flatten a nested epic implicitly. Never infer a conversion between status parking and a `blocks` edge from prose. A preview is not approval.
 
@@ -95,7 +98,10 @@ After authorized application:
 2. re-read affected dependencies with `bd dep list`;
 3. run `bd dep cycles --json`;
 4. rerun the complete read-only tree recipe;
-5. rerun the backlog consistency checks for the affected Beads; and
-6. report applied corrections, mismatches, and every residual finding.
+5. rerun the backlog consistency checks for the affected Beads;
+6. for every added, removed, or retargeted `blocks` edge, evaluate the dependent's next transition after the changed prerequisite closes: recompute effective prerequisites, distinguish pre-claim external gates from execution admission checks, and prove that the transition creates neither a dead end nor readiness drift; if that future classification is ambiguous, keep the correction unresolved and ask the user; and
+7. report applied corrections, transition results, mismatches, and every residual finding.
+
+A correction is not verified merely because provider and topology agree while its new prerequisite is still open. The post-closure transition in step 6 must also be coherent, so Doctor does not certify a repair that predictably requires another Doctor pass.
 
 Doctor does not implement tasks. Loop may request a Doctor diagnosis, but it must never apply Doctor corrections implicitly.
