@@ -50,9 +50,17 @@ a user-selected path as mode configuration. Provider credentials remain
 separate.
 
 On `agent_settled`, an enabled Trigger first requires interactive UI, idle
-state, enough context, no pending messages, no cooldown, an empty editor, and
-an available credential. Only then does it send Jev a text-free request with
-context-token counts. `hint` displays a notification. `auto` additionally
+state, at least 20% use of the active model's context window, no pending
+messages, no cooldown, and an empty editor. It then resolves Pi's effective
+`keepRecentTokens` for the active model and inspects the current projected
+session. The Trigger fails closed unless retaining that recent tail still
+leaves at least one complete older turn for compaction. This conservative gate
+is recalculated after model changes and may omit a valid hint rather than show
+one that `/compact` cannot execute.
+
+Only after those deterministic gates pass does Trigger resolve a credential and
+send Jev a text-free request with token count, context window, ratio, and
+compactable-history state. `hint` displays a notification. `auto` additionally
 requires the persisted acknowledgement written by
 `/compaction-trigger-acknowledge` and calls only `ctx.compact()`, which enters
 the existing `session_before_compact` handler. Trigger persistence contains

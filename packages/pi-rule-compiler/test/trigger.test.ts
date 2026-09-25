@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   applyTriggerDecision,
   evaluateTrigger,
+  hasConservativeCompactableHistory,
   type TriggerInput,
 } from "../src/trigger.ts";
 import type { JevClient, JevRequest } from "../src/types.ts";
@@ -33,8 +34,10 @@ function readyInput(jevClient: JevClient): TriggerInput {
     mode: "hint",
     interactive: true,
     idle: true,
-    contextTokens: 32_000,
-    minimumContextTokens: 16_000,
+    contextTokens: 200_000,
+    contextWindow: 872_000,
+    minimumContextRatio: 0.2,
+    compactableHistory: true,
     hasPendingWork: false,
     cooldownActive: false,
     editorHasText: false,
@@ -54,12 +57,13 @@ test("trigger only compacts after all local gates and persisted acknowledgement"
   assert.equal(decision.action, "compact");
 });
 
-test("auto without acknowledgement, with pending work, cooldown, or editor text is inert", async () => {
+test("auto without acknowledgement, with pending work, cooldown, editor text, or compactable history is inert", async () => {
   const blockedInputs = [
     { mode: "auto" as const, autoAcknowledged: false },
     { mode: "auto" as const, autoAcknowledged: true, hasPendingWork: true },
     { mode: "auto" as const, autoAcknowledged: true, cooldownActive: true },
     { mode: "auto" as const, autoAcknowledged: true, editorHasText: true },
+    { mode: "auto" as const, autoAcknowledged: true, compactableHistory: false },
   ];
   for (const blocked of blockedInputs) {
     const jev = new SuggestingJev();
@@ -67,6 +71,56 @@ test("auto without acknowledgement, with pending work, cooldown, or editor text 
     assert.equal(decision.action, "none");
     assert.equal(jev.calls, 0, "local gates must run before Jev");
   }
+});
+
+test("trigger recomputes the percentage gate from the active model context window", async () => {
+  const largeWindowJev = new SuggestingJev();
+  assert.deepEqual(
+    await evaluateTrigger({
+      ...readyInput(largeWindowJev),
+      contextTokens: 40_000,
+      contextWindow: 872_000,
+    }),
+    { action: "none" },
+  );
+  assert.equal(largeWindowJev.calls, 0);
+
+  const smallWindowJev = new SuggestingJev();
+  assert.deepEqual(
+    await evaluateTrigger({
+      ...readyInput(smallWindowJev),
+      contextTokens: 40_000,
+      contextWindow: 128_000,
+    }),
+    { action: "hint", reason: "Jev recommends compaction" },
+  );
+  assert.equal(smallWindowJev.calls, 1);
+});
+
+test("conservative readiness requires an older turn beyond Pi's retained tail", () => {
+  const oldTurn = {
+    sourceType: "message",
+    messages: [{ role: "user" as const, content: "old request", timestamp: 0 }],
+  };
+  const recentLargeTurn = {
+    sourceType: "message",
+    messages: [{ role: "user" as const, content: "x".repeat(80_000), timestamp: 0 }],
+  };
+
+  assert.equal(
+    hasConservativeCompactableHistory([oldTurn, recentLargeTurn], 20_000, false),
+    true,
+  );
+  assert.equal(
+    hasConservativeCompactableHistory([recentLargeTurn], 20_000, false),
+    false,
+    "one large user turn is not enough for Pi to summarize history",
+  );
+  assert.equal(
+    hasConservativeCompactableHistory([oldTurn, recentLargeTurn], 20_000, true),
+    false,
+    "a compaction at the branch tip is already compacted",
+  );
 });
 
 test("off never queries Jev and the request contains no chunk text or credentials", async () => {
@@ -86,6 +140,9 @@ test("off never queries Jev and the request contains no chunk text or credential
   const serialized = JSON.stringify(jev.requests[0]);
   assert.doesNotMatch(serialized, /chunk-secret|credential-secret|password/i);
   assert.doesNotMatch(serialized, /Bearer|TYPESAFE_API_KEY/);
+  assert.match(serialized, /contextWindow/);
+  assert.match(serialized, /contextRatio/);
+  assert.doesNotMatch(serialized, /minimumContextTokens/);
 });
 
 test("applyTriggerDecision delegates compaction only through ctx.compact", async () => {

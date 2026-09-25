@@ -4,9 +4,9 @@
 
 **Estado:** diseño normativo aprobado para validación experimental
 **Fecha:** 2026-09-17
-**Actualizada:** 2026-09-18
+**Actualizada:** 2026-09-25
 **Sustituye:** `a4s-architecture-spec-v0.7.md` como diseño vigente
-**Decisiones rectoras:** ADR 0001, ADR 0009, ADR 0010, ADR 0014–0016, ADR 0018 y ADR 0019
+**Decisiones rectoras:** ADR 0001, ADR 0009, ADR 0010, ADR 0014, ADR 0015, ADR 0018, ADR 0019 y ADR 0055
 
 ---
 
@@ -311,7 +311,7 @@ Al terminar con evidencia autorizada, el agente escribe un reporte acotado, cier
 
 Cada dispatch clasifica la altitud de la tarea sin ampliar la superficie de Herdr: los únicos kinds autorizados son `claude` y `pi`. Revisión acotada, validación mecánica y extracción usan Pi con un preset o routing interno económico —por ejemplo hacia Kimi o MiniMax— o Claude Sonnet. Orquestación, síntesis ambigua y razonamiento de alto impacto usan Claude Opus o una ruta fuerte dentro de Pi sólo con justificación registrada. Los tiers Claude son argumentos nativos posteriores a `--`; los proveedores y modelos Pi pertenecen a su preset/router interno, no a `--kind`.
 
-El contexto agentic se compacta aproximadamente entre 150K y 200K tokens sólo después de integrar la autoridad semántica de Jev definida por ADR 0013. Jev decide `keep`, `truncate` o `drop`; si no está disponible, la compaction falla cerrado y no usa fallback generativo lossy.
+El Trigger de compaction se habilita a partir del 20% de la ventana del modelo activo y sólo cuando una prueba conservadora confirma historia resumible más allá del tail retenido por Pi. Jev decide `keep`, `truncate` o `drop`; si no está disponible, la compaction falla cerrado y no usa fallback generativo lossy.
 
 ### 7.6. Verifier
 
@@ -1080,7 +1080,7 @@ Reglas:
 33. Fan-out de N unidades significa N tabs peer, no N subagentes.
 34. Completion se notifica por callback push `WORK_RESULT SUBMITTED` con `bead_id`, veredicto y artifact-path; waits, timeouts y polling están prohibidos.
 35. El Orchestrator agrega punteros y evidencia acotada, nunca transcripts completos.
-36. El umbral de compaction baja a 150K–200K sólo junto con Jev fail-closed conforme a ADR 0013 y ADR 0016.
+36. El Trigger de compaction exige 20% de la ventana activa y readiness conservadora antes de consultar Jev, conforme a ADR 0013 y ADR 0055.
 37. Cada dispatch registra altitud, kind autorizado (`claude|pi`), ruta efectiva dentro de Claude o Pi y justificación de cualquier ruta premium.
 38. Sin Bead creado o reclamado no se crea workspace/tab, no se inicia agente y no hay dispatch.
 39. Cada tab peer y cada rama de fan-out posee un Bead distinto; las relaciones padre/hijo expresan composición.

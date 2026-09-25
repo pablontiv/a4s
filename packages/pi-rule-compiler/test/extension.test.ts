@@ -61,7 +61,12 @@ function createFakePi(initialEntries: StoredEntry[] = []) {
 
 function createContext(
   entries: StoredEntry[],
-  options: { mode?: "tui" | "rpc"; editorText?: string; editorReadFails?: boolean } = {},
+  options: {
+    mode?: "tui" | "rpc";
+    editorText?: string;
+    editorReadFails?: boolean;
+    projectionEntries?: Array<{ sourceEntry: { type: string }; messages: unknown[] }>;
+  } = {},
 ) {
   const notifications: Array<{ message: string; type: string | undefined }> = [];
   const context = {
@@ -78,6 +83,10 @@ function createContext(
     sessionManager: {
       getEntries: () => entries,
       getBranch: () => entries,
+      buildSessionProjection: () => ({
+        entries: options.projectionEntries ?? [],
+        messages: (options.projectionEntries ?? []).flatMap((entry) => entry.messages),
+      }),
     },
     modelRegistry: {
       async getProviderAuth(_provider: string) {
@@ -1069,18 +1078,76 @@ test("createTypesafeAuthResolver retries getProviderAuth until a credential is s
   assert.equal(calls, 3, "the successful resolution is cached going forward");
 });
 
-test("agent_settled displays a hint only for an empty TUI editor", async () => {
+function compactableTriggerProjection() {
+  return [
+    {
+      sourceEntry: { type: "message" },
+      messages: [{ role: "user", content: "old request" }],
+    },
+    {
+      sourceEntry: { type: "message" },
+      messages: [{ role: "user", content: "x".repeat(80_000) }],
+    },
+  ];
+}
+
+test("agent_settled hints only after percentage and compactable-history gates pass", async () => {
   for (const scenario of [
-    { mode: "tui" as const, editorText: "", expectedNotifications: 1 },
-    { mode: "tui" as const, editorText: "Continue editing this request", expectedNotifications: 0 },
-    { mode: "rpc" as const, editorText: "", expectedNotifications: 0 },
-    { mode: "tui" as const, editorReadFails: true, expectedNotifications: 0 },
+    {
+      mode: "tui" as const,
+      editorText: "",
+      tokens: 174_400,
+      contextWindow: 872_000,
+      projectionEntries: compactableTriggerProjection(),
+      expectedNotifications: 1,
+    },
+    {
+      mode: "tui" as const,
+      editorText: "",
+      tokens: 87_200,
+      contextWindow: 872_000,
+      projectionEntries: compactableTriggerProjection(),
+      expectedNotifications: 0,
+    },
+    {
+      mode: "tui" as const,
+      editorText: "",
+      tokens: 174_400,
+      contextWindow: 872_000,
+      projectionEntries: [],
+      expectedNotifications: 0,
+    },
+    {
+      mode: "tui" as const,
+      editorText: "Continue editing this request",
+      tokens: 174_400,
+      contextWindow: 872_000,
+      projectionEntries: compactableTriggerProjection(),
+      expectedNotifications: 0,
+    },
+    {
+      mode: "rpc" as const,
+      editorText: "",
+      tokens: 174_400,
+      contextWindow: 872_000,
+      projectionEntries: compactableTriggerProjection(),
+      expectedNotifications: 0,
+    },
+    {
+      mode: "tui" as const,
+      editorReadFails: true,
+      tokens: 174_400,
+      contextWindow: 872_000,
+      projectionEntries: compactableTriggerProjection(),
+      expectedNotifications: 0,
+    },
   ]) {
     const jev = new CompactTriggerJev();
     const fake = createFakePi();
     registerPiRuleCompiler(fake.pi, {
       jevClient: jev,
       config: { "trigger.mode": "hint" },
+      trigger: { resolveCompactionSettings: () => ({ keepRecentTokens: 20_000 }) },
       now: () => new Date("2026-09-22T12:00:00.000Z"),
     });
     const { context, notifications } = createContext(fake.entries, scenario);
@@ -1089,7 +1156,11 @@ test("agent_settled displays a hint only for an empty TUI editor", async () => {
       hasUI: true,
       isIdle: () => true,
       hasPendingMessages: () => false,
-      getContextUsage: () => ({ tokens: 32_000, contextWindow: 128_000, percent: 25 }),
+      getContextUsage: () => ({
+        tokens: scenario.tokens,
+        contextWindow: scenario.contextWindow,
+        percent: scenario.tokens / scenario.contextWindow * 100,
+      }),
       signal: undefined,
     };
 
@@ -1100,24 +1171,106 @@ test("agent_settled displays a hint only for an empty TUI editor", async () => {
   }
 });
 
+test("agent_settled recalculates the trigger ratio after a model window change", async () => {
+  const jev = new CompactTriggerJev();
+  const fake = createFakePi();
+  registerPiRuleCompiler(fake.pi, {
+    jevClient: jev,
+    config: { "trigger.mode": "hint" },
+    trigger: { resolveCompactionSettings: () => ({ keepRecentTokens: 20_000 }) },
+    now: () => new Date("2026-09-22T12:00:00.000Z"),
+  });
+  const { context, notifications } = createContext(fake.entries, {
+    projectionEntries: compactableTriggerProjection(),
+  });
+  let contextWindow = 872_000;
+  const triggerContext = {
+    ...context,
+    hasUI: true,
+    isIdle: () => true,
+    hasPendingMessages: () => false,
+    getContextUsage: () => ({ tokens: 40_000, contextWindow, percent: 40_000 / contextWindow * 100 }),
+    signal: undefined,
+  };
+
+  await fake.handlers.get("agent_settled")?.({ type: "agent_settled" }, triggerContext);
+  assert.equal(jev.calls, 0);
+
+  contextWindow = 128_000;
+  await fake.handlers.get("agent_settled")?.({ type: "agent_settled" }, triggerContext);
+  assert.equal(jev.calls, 1);
+  assert.equal(notifications.length, 1);
+});
+
+test("agent_settled resolves active-model keepRecentTokens from Pi project settings", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "a4s-trigger-settings-"));
+  try {
+    mkdirSync(join(cwd, ".pi"), { recursive: true });
+    writeFileSync(join(cwd, ".pi", "settings.json"), JSON.stringify({
+      compaction: {
+        modelOverrides: {
+          "fake-provider/fake-model": { keepRecentTokens: 0 },
+        },
+      },
+    }));
+
+    const jev = new CompactTriggerJev();
+    const fake = createFakePi();
+    registerPiRuleCompiler(fake.pi, {
+      jevClient: jev,
+      config: { "trigger.mode": "hint" },
+      now: () => new Date("2026-09-22T12:00:00.000Z"),
+    });
+    const { context } = createContext(fake.entries, {
+      projectionEntries: [
+        { sourceEntry: { type: "message" }, messages: [{ role: "user", content: "old" }] },
+        { sourceEntry: { type: "message" }, messages: [{ role: "user", content: "recent" }] },
+      ],
+    });
+    const triggerContext = {
+      ...context,
+      cwd,
+      model: { provider: "fake-provider", id: "fake-model" },
+      isProjectTrusted: () => true,
+      hasUI: true,
+      isIdle: () => true,
+      hasPendingMessages: () => false,
+      getContextUsage: () => ({ tokens: 40_000, contextWindow: 128_000, percent: 31.25 }),
+      signal: undefined,
+    };
+
+    await fake.handlers.get("agent_settled")?.({ type: "agent_settled" }, triggerContext);
+
+    assert.equal(jev.calls, 1);
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
 test("agent_settled auto trigger requires persisted acknowledgement and enters session_before_compact", async () => {
   const jev = new ValidFakeJev();
   const fake = createFakePi();
   registerPiRuleCompiler(fake.pi, {
     jevClient: jev,
     config: { "trigger.mode": "auto" },
-    trigger: { editorHasText: () => false, minimumContextTokens: 16_000 },
+    trigger: {
+      editorHasText: () => false,
+      minimumContextRatio: 0.2,
+      resolveCompactionSettings: () => ({ keepRecentTokens: 20_000 }),
+    },
     now: () => new Date("2026-09-22T12:00:00.000Z"),
   });
   let compactCalls = 0;
   let beforeCompactCalls = 0;
-  const { context, notifications } = createContext(fake.entries);
+  const { context, notifications } = createContext(fake.entries, {
+    projectionEntries: compactableTriggerProjection(),
+  });
   const triggerContext = {
     ...context,
     hasUI: true,
     isIdle: () => true,
     hasPendingMessages: () => false,
-    getContextUsage: () => ({ tokens: 32_000, contextWindow: 128_000, percent: 25 }),
+    getContextUsage: () => ({ tokens: 40_000, contextWindow: 128_000, percent: 31.25 }),
     signal: undefined,
     compact: async () => {
       compactCalls += 1;

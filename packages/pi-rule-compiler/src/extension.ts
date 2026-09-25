@@ -2,12 +2,13 @@ import {
   createTypesafeAuthResolver,
   registerTypesafeProvider,
 } from "@a4s/typesafe";
-import type {
-  ContextWithSystemEvent,
-  ExtensionAPI,
-  ExtensionContext,
-  SessionBeforeCompactEvent,
-  SessionBeforeCompactResult,
+import {
+  SettingsManager,
+  type ContextWithSystemEvent,
+  type ExtensionAPI,
+  type ExtensionContext,
+  type SessionBeforeCompactEvent,
+  type SessionBeforeCompactResult,
 } from "@earendil-works/pi-coding-agent";
 import { buildBasicCompactionResult } from "./compaction-core.ts";
 import { collectCorpus, publishCorpusAfterCompaction, stageCorpus } from "./corpus.ts";
@@ -47,6 +48,7 @@ import {
 import {
   applyTriggerDecision,
   evaluateTrigger,
+  hasConservativeCompactableHistory,
   localTriggerGatesPass,
   type TriggerInput,
 } from "./trigger.ts";
@@ -86,9 +88,10 @@ export interface PiRuleCompilerOptions {
   config?: Readonly<Record<string, unknown>>;
   /** Runtime-only gates that Pi's public context cannot otherwise observe. */
   trigger?: {
-    minimumContextTokens?: number;
+    minimumContextRatio?: number;
     cooldownMs?: number;
     editorHasText?: (ctx: ExtensionContext) => boolean;
+    resolveCompactionSettings?: (ctx: ExtensionContext) => { keepRecentTokens: number };
   };
   now?: () => Date;
 }
@@ -133,8 +136,11 @@ export function registerPiRuleCompiler(pi: ExtensionAPI, options: PiRuleCompiler
       : options.config,
     BASIC_COMPACTION_CONFIG,
   );
-  const triggerMinimumContextTokens = options.trigger?.minimumContextTokens ?? 16_000;
+  const triggerMinimumContextRatio = options.trigger?.minimumContextRatio ?? 0.2;
   const triggerCooldownMs = options.trigger?.cooldownMs ?? 300_000;
+  const resolveTriggerCompactionSettings = options.trigger?.resolveCompactionSettings ?? ((ctx: ExtensionContext) =>
+    SettingsManager.create(ctx.cwd, undefined, { projectTrusted: ctx.isProjectTrusted() })
+      .getCompactionSettings(ctx.model));
   const editorHasText = options.trigger?.editorHasText ?? ((ctx: ExtensionContext): boolean => {
     if (ctx.mode !== "tui") return true;
     try {
@@ -216,23 +222,44 @@ export function registerPiRuleCompiler(pi: ExtensionAPI, options: PiRuleCompiler
     }
     if (config.trigger.mode === "off") return;
     const usage = ctx.getContextUsage();
+    const branch = ctx.sessionManager.getBranch();
     const baseInput = {
       mode: config.trigger.mode,
       interactive: ctx.hasUI,
       idle: ctx.isIdle(),
       contextTokens: usage?.tokens ?? 0,
-      minimumContextTokens: triggerMinimumContextTokens,
+      contextWindow: usage?.contextWindow ?? 0,
+      minimumContextRatio: triggerMinimumContextRatio,
+      compactableHistory: true,
       hasPendingWork: ctx.hasPendingMessages(),
-      cooldownActive: hasTriggerCooldown(ctx.sessionManager.getBranch(), now(), triggerCooldownMs),
+      cooldownActive: hasTriggerCooldown(branch, now(), triggerCooldownMs),
       editorHasText: editorHasText(ctx),
-      autoAcknowledged: hasTriggerAcknowledgement(ctx.sessionManager.getBranch()),
+      autoAcknowledged: hasTriggerAcknowledgement(branch),
     };
     if (!localTriggerGatesPass({ ...baseInput, credentialAvailable: true })) return;
+
+    let compactableHistory = false;
+    try {
+      const settings = resolveTriggerCompactionSettings(ctx);
+      const projection = ctx.sessionManager.buildSessionProjection();
+      compactableHistory = hasConservativeCompactableHistory(
+        projection.entries.map((entry) => ({
+          sourceType: entry.sourceEntry.type,
+          messages: entry.messages,
+        })),
+        settings.keepRecentTokens,
+        branch.at(-1)?.type === "compaction",
+      );
+    } catch {
+      return;
+    }
+    if (!compactableHistory) return;
 
     const credentialAvailable = options.jevClient !== undefined || Boolean(await resolveTypesafeApiKey(ctx));
     if (!credentialAvailable) return;
     const input: TriggerInput = {
       ...baseInput,
+      compactableHistory,
       credentialAvailable,
       jevClient: await createJevClient(ctx, hookTimeoutMs),
       signal: ctx.signal ?? new AbortController().signal,

@@ -139,8 +139,10 @@ export {
 export {
   applyTriggerDecision,
   evaluateTrigger,
+  hasConservativeCompactableHistory,
   localTriggerGatesPass,
   type TriggerInput,
+  type TriggerProjectionEntry,
 } from "./trigger.ts";
 export {
   DEFAULT_COMPACTION_RETENTION_THRESHOLDS,
