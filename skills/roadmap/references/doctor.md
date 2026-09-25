@@ -49,6 +49,20 @@ Separate findings into:
 
 Do not fabricate missing requirements or infer ambiguous dependencies. Never flatten a nested epic implicitly. Never infer a conversion between status parking and a `blocks` edge from prose. A preview is not approval.
 
+## Contract backfill
+
+An incomplete epic or task contract is not a terminal finding. Doctor completes it by running Plan's elicitation internally; do not end the session by recommending the user run `/roadmap plan` or leave `⚠contrato` in place.
+
+1. **Scope.** Group incomplete records by their epic, or by root task when they have no epic. Handle one group at a time, highest tree score first, unless the user named a scope.
+2. **Elicit with Plan.** Apply `plan.md` steps 1–4 to that group, with these differences: the existing records are the graph; existing IDs, titles, hierarchy, and edges are preserved; and the output is a field proposal, not a new graph.
+3. **Check every element.** For each Bead, render one row per element of its `contracts.md` list (epic or task), marked present, proposed, or question. An element is present only when the Bead states it by content; initial state and out-of-scope boundaries are separate elements and are never implied by other text.
+4. **Cite or ask.** Propose text for an element only when a specific source states it: a repository `path:line`, an ADR or spec with its line, a named Bead field or note, a commit SHA, or a Backscroll or Engram hit ID. Moving or quoting text that the Bead already states counts; summarizing a whole record, synthesizing from sibling or child Beads, or extrapolating an ADR number, path, or dependency does not. Before citing, confirm the path, line, ID, or commit exists in the base branch or provider, and that newer Bead notes do not contradict it. When no source qualifies, ask the user a concrete question; never fill the element with a plausible guess.
+5. **Show final values.** For each Bead, show the complete resulting `description`, `design`, and `acceptance_criteria`, keeping existing text and integrating the new elements into the field that `contracts.md` assigns them. Include the exact commands using only flags listed by `bd update --help`, for example `bd update "$ID" --body-file <file> --design-file <file> --acceptance "<text>" --json`.
+6. **Structural outcomes.** If Plan's validation finds a task that does not fit one session, a missing task, or a missing `blocks` edge, include it in the same proposal. After approval, Doctor itself creates only those new records by running `plan.md` steps 5–10; it never creates a record for an existing Bead. An existing record that is replaced keeps its history and is linked with `bd supersede` only after its successor exists.
+7. **Approve and apply.** Ask for explicit approval of the exact group proposal. Apply only the approved commands. A record stays `⚠contrato` only when the user declines its proposal or leaves a question unanswered; report it with that reason.
+
+The commands in this section are subject to "Approval and apply" and "Verify" below. Verification also compares every applied field with the approved final value and re-checks each record against `contracts.md`.
+
 ## Approval and apply
 
 For deterministic corrections and resolved decisions, display every exact proposed command, grouped by finding and in execution order. Explain expected effects, preserved data, and any commands that cannot be safely proposed. Then ask for explicit approval of that exact command set. Any changed command set requires fresh approval.
@@ -64,6 +78,7 @@ bd reclaim --id "$ID" --json
 bd duplicate "$ID" --of "$CANONICAL_ID"
 bd supersede "$ID" --with "$SUCCESSOR_ID"
 bd close "$ID" --reason "$EVIDENCE"
+bd create --graph .superpowers/roadmap/approved-plan.json [--dry-run] --json  # only new records from "Contract backfill" step 6
 ```
 
 Use `bd duplicate`, `bd supersede`, and `bd close` only for the consistency findings above, never to complete implementation work. A closure reason must carry the evidence that justified it. Close a **resolved in base** Bead only when every acceptance criterion maps to base-branch evidence; otherwise it is a decision requiring user input. Record the evidence in the Bead notes before a `duplicate` or `supersede` link, because those commands close without a custom reason. If an existing `related` link blocks a `supersede` link, propose removing it explicitly.

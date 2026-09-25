@@ -9,7 +9,7 @@ Invoke the skill in the repository whose backlog you intend to inspect or change
 ```text
 /skill:roadmap plan <requirements>  propose a complete graph, ask approval, then create it
 /skill:roadmap                      render the pending decision tree read-only
-/skill:roadmap doctor               diagnose alignment; preview and approval-gate corrections
+/skill:roadmap doctor               diagnose alignment; backfill incomplete contracts via Plan elicitation; preview and approval-gate corrections
 /skill:roadmap loop                 autonomous loop: chain ready tasks one at a time until stopping condition
 /skill:roadmap loop <id>            autonomous loop limited to epic or task <id>
 ```
@@ -32,7 +32,7 @@ Verify prose behavior with the `writing-skills` pressure method, not a Roadmap t
 
 1. preserve the bounded pre-skill response for each review-focus scenario;
 2. load `SKILL.md` and only the routed reference in a fresh agent;
-3. rerun Plan approval, false empty frontier, Doctor ambiguity, missing-workspace-DoD, and parallelism-pressure scenarios;
+3. rerun Plan approval, false empty frontier, Doctor ambiguity, Doctor contract backfill, missing-workspace-DoD, and parallelism-pressure scenarios;
 4. record pass/fail and the exact rationalization;
 5. if one fails, change only the implicated Markdown and rerun that scenario with another fresh agent.
 

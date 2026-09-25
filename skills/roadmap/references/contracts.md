@@ -43,6 +43,6 @@ The task must fit one implementation session. Put requirements in the Beads desc
 
 ## Completeness and evidence
 
-A contract-incomplete record remains visible in tree and Doctor output but is non-executable. Do not infer or invent missing content. Plan or an approval-gated Doctor correction must supply it.
+A contract-incomplete record remains visible in tree and Doctor output but is non-executable. Do not infer or invent missing content. Plan supplies it for new Beads. Doctor supplies it for existing Beads by running Plan's elicitation under its own approval gate (`doctor.md`, "Contract backfill").
 
 Execution evidence is a repository-contained Markdown report. Append its repository-relative path to the Bead notes; do not paste a transcript or store evidence only outside the repository. The report must identify the Bead and candidate SHA and cover acceptance, preserved invariants, reviews, effective workspace checks, configured delivery, and post-checks.
