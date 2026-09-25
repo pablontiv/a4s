@@ -11,9 +11,12 @@ Invoke the skill in the repository whose backlog you intend to inspect or change
 /skill:roadmap                      render the pending decision tree read-only
 /skill:roadmap doctor               diagnose alignment; preview and approval-gate corrections
 /skill:roadmap loop                 autonomous loop: chain ready tasks one at a time until stopping condition
+/skill:roadmap loop <id>            autonomous loop limited to epic or task <id>
 ```
 
 Plan and Doctor do not mutate before explicit approval. Bare Roadmap never mutates. Loop is autonomous by default: chains ready tasks one at a time until an explicit stopping condition is met, publishes a final SUMMARY, and combines each Bead's acceptance contract with the effective repository Definition of Done. Loop follows all approval gates literally; human gates are stopping conditions.
+
+When invoked as `loop <id>`, the loop limits its scope to a single epic or task: if `<id>` is an epic, loop chains only its direct task children; if `<id>` is a task, loop operates only on that task. Stop condition 1 (no executable tasks) is evaluated within the scope; Doctor findings, including readiness drift, stop the loop only when they involve a scoped task or a `blocks` prerequisite of a scoped task (fail closed). Invalid or non-existent IDs are rejected without mutation.
 
 ## Direct dependencies
 

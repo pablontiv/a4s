@@ -17,9 +17,10 @@ Roadmap is a Markdown workflow over the current repository and its Beads backlog
 | starts with `plan` | `references/plan.md` |
 | empty | `references/tree.md` |
 | starts with `doctor` | `references/doctor.md` |
-| starts with `loop` | `references/loop.md` |
+| `loop` (no argument) | `references/loop.md` |
+| `loop <id>` (exactly one Bead ID) | `references/loop.md`, scoped to that ID |
 
-Reject any other input and show the four supported forms. Read `references/contracts.md` before applying the selected recipe.
+Reject any other input, including `loop` with more than one argument or any non-ID filter, and show the five supported forms. Read `references/contracts.md` before applying the selected recipe.
 
 ## Common invariants
 

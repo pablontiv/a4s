@@ -8,6 +8,25 @@ Before any mutation, locate and read the effective `.workspace/config.yaml`, inc
 
 A missing, inaccessible, or ambiguous required control is `unknown`. Required `unknown` or `failed` controls stop mutation and prevent delivery and closure. Do not infer a fallback from README, AGENTS, package scripts, or a standalone Definition-of-Done document.
 
+## 1.1. Scope parameter (optional)
+
+If a scope ID is provided (invoked as `loop <id>`):
+
+1. **Validate the ID**: Run `bd show "<id>" --json`. If the ID does not exist, reject without mutation. If the ID exists but is not type `epic` or `task`, reject without mutation.
+
+2. **Determine scope boundary**:
+   - If `<id>` is an **epic**: the scope includes only the direct children of that epic (its immediate tasks). Root tasks and other epics are excluded.
+   - If `<id>` is a **task**: the scope includes only that single task.
+
+3. **Evaluate drift and stopping conditions within scope only**:
+   - Stop condition 1 (no executable tasks remain): evaluated against executable tasks within the scope only.
+   - Stop condition 2 (Doctor required, including readiness drift): apply the scope boundary in item 4.
+   - All other stopping conditions apply globally regardless of scope.
+
+4. **Scope boundary for Doctor findings**: a cycle, invalid or broken edge, incomplete candidate (contract gap), or readiness drift triggers stop condition 2 in a scoped loop only when it involves a scoped task or a `blocks` prerequisite of a scoped task (fail closed). Findings elsewhere in the backlog do not stop a scoped loop.
+
+If no scope ID is provided, the loop operates over the entire backlog as usual.
+
 ## 2. Autonomous loop with stopping conditions
 
 Loop is autonomous by default: chain tasks without asking until an explicit stopping condition applies.
@@ -30,7 +49,7 @@ Loop stops and prints a final SUMMARY when any of the following is true:
 
 ### Selecting and claiming a task
 
-Run the complete tree recipe. Stop for Doctor on a cycle, invalid graph, incomplete candidate, or readiness drift (condition 2). Select exactly one complete task in the intersection of the topology frontier and provider-ready IDs, ordered by current ownership, Beads priority, reverse-dependency impact, then ID. Exclude epics.
+Run the complete tree recipe, limited to the scope boundary if a scope ID was provided. Stop for Doctor on a cycle, invalid graph, incomplete candidate, or readiness drift (condition 2); in a scoped loop apply the boundary in §1.1 item 4. Select exactly one complete task in the intersection of the topology frontier and provider-ready IDs within the scope boundary, ordered by current ownership, Beads priority, reverse-dependency impact, then ID. Exclude epics. If a scope ID was an epic, consider only its direct task children for selection.
 
 Read the selected task's full contract. Claim only it:
 
