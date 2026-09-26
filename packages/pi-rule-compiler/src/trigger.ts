@@ -14,7 +14,6 @@ export interface TriggerInput {
   cooldownActive: boolean;
   editorHasText: boolean;
   credentialAvailable: boolean;
-  autoAcknowledged: boolean;
   jevClient: JevClient;
   signal: AbortSignal;
 }
@@ -125,8 +124,7 @@ export function localTriggerGatesPass(input: Omit<TriggerInput, "jevClient" | "s
     !input.hasPendingWork &&
     !input.cooldownActive &&
     !input.editorHasText &&
-    input.credentialAvailable &&
-    (input.mode !== "auto" || input.autoAcknowledged)
+    input.credentialAvailable
   );
 }
 

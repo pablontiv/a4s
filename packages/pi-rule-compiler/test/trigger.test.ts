@@ -42,28 +42,25 @@ function readyInput(jevClient: JevClient): TriggerInput {
     cooldownActive: false,
     editorHasText: false,
     credentialAvailable: true,
-    autoAcknowledged: false,
     jevClient,
     signal: new AbortController().signal,
   };
 }
 
-test("trigger only compacts after all local gates and persisted acknowledgement", async () => {
+test("persisted auto mode compacts after all local gates pass", async () => {
   const decision = await evaluateTrigger({
     ...readyInput(new SuggestingJev()),
     mode: "auto",
-    autoAcknowledged: true,
   });
   assert.equal(decision.action, "compact");
 });
 
-test("auto without acknowledgement, with pending work, cooldown, editor text, or compactable history is inert", async () => {
+test("auto with pending work, cooldown, editor text, or non-compactable history is inert", async () => {
   const blockedInputs = [
-    { mode: "auto" as const, autoAcknowledged: false },
-    { mode: "auto" as const, autoAcknowledged: true, hasPendingWork: true },
-    { mode: "auto" as const, autoAcknowledged: true, cooldownActive: true },
-    { mode: "auto" as const, autoAcknowledged: true, editorHasText: true },
-    { mode: "auto" as const, autoAcknowledged: true, compactableHistory: false },
+    { mode: "auto" as const, hasPendingWork: true },
+    { mode: "auto" as const, cooldownActive: true },
+    { mode: "auto" as const, editorHasText: true },
+    { mode: "auto" as const, compactableHistory: false },
   ];
   for (const blocked of blockedInputs) {
     const jev = new SuggestingJev();

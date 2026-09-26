@@ -234,7 +234,6 @@ export function registerPiRuleCompiler(pi: ExtensionAPI, options: PiRuleCompiler
       hasPendingWork: ctx.hasPendingMessages(),
       cooldownActive: hasTriggerCooldown(branch, now(), triggerCooldownMs),
       editorHasText: editorHasText(ctx),
-      autoAcknowledged: hasTriggerAcknowledgement(branch),
     };
     if (!localTriggerGatesPass({ ...baseInput, credentialAvailable: true })) return;
 
@@ -368,16 +367,6 @@ export function registerPiRuleCompiler(pi: ExtensionAPI, options: PiRuleCompiler
     retroInFlight.clear();
   });
 
-  pi.registerCommand("compaction-trigger-acknowledge", {
-    description: "Persist acknowledgement required before automatic compaction can run",
-    handler: async (_args, _ctx) => {
-      pi.appendEntry(TRIGGER_ACKNOWLEDGEMENT_ENTRY_TYPE, {
-        schema: "a4s.compaction-trigger-acknowledgement/v1",
-        acknowledgedAt: now().toISOString(),
-      });
-    },
-  });
-
   pi.registerCommand("retro-rules", {
     description: "Retry pending review-only rule proposal synthesis",
     handler: async (_args, ctx) => {
@@ -459,7 +448,6 @@ export function registerPiRuleCompiler(pi: ExtensionAPI, options: PiRuleCompiler
   });
 }
 
-const TRIGGER_ACKNOWLEDGEMENT_ENTRY_TYPE = "a4s.pi-rule-compiler.compaction-trigger-acknowledgement.v1";
 const TRIGGER_COOLDOWN_ENTRY_TYPE = "a4s.pi-rule-compiler.compaction-trigger-cooldown.v1";
 
 function customEntryData(entry: unknown, customType: string): Record<string, unknown> | undefined {
@@ -468,13 +456,6 @@ function customEntryData(entry: unknown, customType: string): Record<string, unk
   if (candidate.type !== "custom" || candidate.customType !== customType) return undefined;
   if (candidate.data === null || typeof candidate.data !== "object" || Array.isArray(candidate.data)) return undefined;
   return candidate.data as Record<string, unknown>;
-}
-
-function hasTriggerAcknowledgement(entries: readonly unknown[]): boolean {
-  return entries.some((entry) => {
-    const data = customEntryData(entry, TRIGGER_ACKNOWLEDGEMENT_ENTRY_TYPE);
-    return data?.schema === "a4s.compaction-trigger-acknowledgement/v1" && typeof data.acknowledgedAt === "string";
-  });
 }
 
 function hasTriggerCooldown(entries: readonly unknown[], current: Date, cooldownMs: number): boolean {

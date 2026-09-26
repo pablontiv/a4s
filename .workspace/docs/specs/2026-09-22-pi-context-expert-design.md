@@ -2,7 +2,7 @@
 
 **Fecha:** 2026-09-22
 **Estado:** aprobado para revisión de spec
-**Decisión rectora:** [ADR 0045](../adr/0045-adoptar-pi-context-expert.md)
+**Decisiones rectoras:** [ADR 0045](../adr/0045-adoptar-pi-context-expert.md) y [ADR 0056](../adr/0056-tratar-auto-persistido-como-consentimiento-durable.md)
 **Sustituye:** la identidad y configuración de `pi-rule-compiler` de ADR 0031
 
 ## 1. Propósito
@@ -60,7 +60,7 @@ Los únicos comandos públicos del paquete son:
 /ce-rules [list|show <id>|accept <id>|retry]
 ```
 
-`/retro-rules`, `/rules-review`, `/rules-show`, `/rules-accept` y `/compaction-trigger-acknowledge` se retiran. El acknowledgement requerido para trigger `auto` se confirma dentro de `/ce-settings`, donde su consecuencia es visible antes de persistirla.
+`/retro-rules`, `/rules-review`, `/rules-show`, `/rules-accept` y `/compaction-trigger-acknowledge` se retiran. Seleccionar `trigger.mode=auto` en `/ce-settings` y persistirlo correctamente constituye el consentimiento durable; las sesiones posteriores no exigen confirmación, comando ni entrada de acknowledgement adicionales.
 
 Se usa el prefijo `ce-`, no `ce:`, porque Pi utiliza el sufijo con dos puntos para desambiguar comandos duplicados entre extensiones.
 
@@ -82,7 +82,11 @@ Añade lectura, validación, serialización y escritura atómica del archivo glo
 
 Un `ContextRuntime` contiene la configuración válida activa. Cada hook consulta ese objeto en el momento de ejecución. El hook `context_with_system` se registra siempre, pero retorna el contexto original sin evaluación cuando la estrategia viva no es `ladder`. Esta forma permite activar o desactivar Ladder sin reiniciar ni registrar handlers dinámicamente.
 
-`/ce-settings` muestra los tres modos mediante `SettingsList`, valida una selección completa, escribe el archivo de forma atómica y sólo después reemplaza la configuración del runtime. Un fallo de persistencia deja intactas tanto la sesión como la configuración en memoria y muestra un aviso acotado.
+`/ce-settings` usa la superficie pública que Pi recomienda para extensiones: `ctx.ui.custom()` con `Container`, `DynamicBorder`, `SettingsList` y `getSettingsListTheme()`, siguiendo el patrón del selector `/tools`. No copia ni instancia `SettingsSelectorComponent`, que pertenece al `/settings` completo de Pi.
+
+La lista contiene tres filas con descripción y valores cíclicos: `Compaction strategy` (`basic|ladder`), `Trigger mode` (`off|hint|auto`) y `Evidence strategy` (`off|ladder`). Enter o Espacio cambia el valor, Esc cierra y todo input se delega a `SettingsList` antes de solicitar render. Seleccionar `auto` es por sí mismo el consentimiento explícito; no abre un segundo diálogo.
+
+Cada cambio parte del snapshot completo vigente, construye una configuración candidata y valida también dependencias entre campos. Sólo una candidata válida se escribe atómicamente; después del éxito se reemplaza `ContextRuntime.config` y se actualiza el valor mostrado. Si validación o persistencia fallan, `SettingsList.updateValue()` restaura el valor anterior, disco y runtime permanecen intactos y se muestra un aviso acotado. Fuera de TUI, `/ce-settings` no muta estado y notifica que requiere modo TUI.
 
 ### 4.2 Recap
 
@@ -108,12 +112,14 @@ El trigger mantiene sus gates locales antes de llamar a Jev. Añade una verifica
 
 ```text
 /ce-settings
-  -> seleccionar valor
+  -> abrir ctx.ui.custom con SettingsList y tema de Pi
+  -> seleccionar valor; elegir auto constituye consentimiento durable
   -> validar combinación completa
   -> escritura atómica de pi-context-expert.json
   -> reemplazar ContextRuntime.config
-  -> notificación de aplicación inmediata
+  -> actualizar la fila y notificar aplicación inmediata
   -> siguiente hook usa la configuración nueva
+  -> ante fallo, restaurar la fila y conservar disco/runtime previos
 ```
 
 La persistencia precede al cambio runtime para que una sesión no anuncie una configuración que se perderá al reiniciar.
@@ -137,7 +143,7 @@ agent_settled
   -> gates: UI, idle, editor vacío, sin cola, cooldown, credencial,
             umbral y contenido compactable
   -> Jev sólo recibe contadores text-free
-  -> hint o ctx.compact según trigger.mode y acknowledgement
+  -> hint o ctx.compact según trigger.mode persistido
 ```
 
 ## 6. Privacidad y fallos
@@ -151,7 +157,7 @@ Los fallos de compaction siguen cancelando compaction sin fallback nativo, como 
 1. El workspace expone únicamente `@a4s/pi-context-expert`; las rutas, scripts y README no conservan el nombre anterior.
 2. La extensión lee y escribe sólo `~/.pi/agent/pi-context-expert.json`; la ruta antigua no participa en ninguna resolución.
 3. Configuración inválida falla cerrada a `basic / hint / off` y una escritura fallida no cambia el runtime.
-4. `/ce-settings` usa una UI de lista de settings equivalente a la interacción de Pi y aplica una selección válida a la siguiente evaluación sin reinicio.
+4. `/ce-settings` usa `SettingsList` con el tema y las teclas de Pi, revierte visualmente cualquier escritura fallida y aplica una selección válida a la siguiente evaluación sin reinicio; `auto` persistido no requiere acknowledgement por sesión.
 5. Sólo `/ce-recap`, `/ce-settings` y `/ce-rules` son comandos públicos propios; los comandos anteriores dejan de registrarse.
 6. `/ce-rules` mantiene las operaciones `list`, `show`, `accept` y `retry`, con mensajes de uso y completado de argumentos.
 7. `/ce-recap` envía a Jev sólo una vista saneada y acotada, valida su respuesta y renderiza objetivo, completado y pendiente de forma determinista.

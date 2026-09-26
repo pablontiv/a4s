@@ -60,11 +60,11 @@ one that `/compact` cannot execute.
 
 Only after those deterministic gates pass does Trigger resolve a credential and
 send Jev a text-free request with token count, context window, ratio, and
-compactable-history state. `hint` displays a notification. `auto` additionally
-requires the persisted acknowledgement written by
-`/compaction-trigger-acknowledge` and calls only `ctx.compact()`, which enters
-the existing `session_before_compact` handler. Trigger persistence contains
-only the acknowledgement timestamp and hint/compact cooldown metadata.
+compactable-history state. `hint` displays a notification. Persisting
+`trigger.mode=auto` is the operator's durable consent for automatic compaction;
+no per-session acknowledgement or additional command is required. `auto` calls
+only `ctx.compact()`, which enters the existing `session_before_compact`
+handler. Trigger persistence contains only hint/compact cooldown metadata.
 
 Pi 0.87 exposes the editor text in TUI mode. The production Trigger uses that
 value unless an embedding supplies the `trigger.editorHasText` runtime gate;

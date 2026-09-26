@@ -1247,7 +1247,7 @@ test("agent_settled resolves active-model keepRecentTokens from Pi project setti
   }
 });
 
-test("agent_settled auto trigger requires persisted acknowledgement and enters session_before_compact", async () => {
+test("agent_settled auto trigger treats persisted config as consent and enters session_before_compact", async () => {
   const jev = new ValidFakeJev();
   const fake = createFakePi();
   registerPiRuleCompiler(fake.pi, {
@@ -1279,16 +1279,17 @@ test("agent_settled auto trigger requires persisted acknowledgement and enters s
     },
   };
 
-  await fake.handlers.get("agent_settled")?.({ type: "agent_settled" }, triggerContext);
-  assert.equal(compactCalls, 0);
-  assert.equal(jev.calls, 0, "unacknowledged auto must not query Jev");
+  assert.equal(fake.commands.has("compaction-trigger-acknowledge"), false);
 
-  await fake.commands.get("compaction-trigger-acknowledge")?.("", triggerContext);
   await fake.handlers.get("agent_settled")?.({ type: "agent_settled" }, triggerContext);
   assert.equal(compactCalls, 1);
   assert.equal(beforeCompactCalls, 1, "auto uses ctx.compact and the existing compaction hook");
+  assert.equal(
+    jev.requests.filter((request) => Object.hasOwn(request.questions, "compact_now")).length,
+    1,
+  );
   assert.equal(notifications.length, 0);
-  assert.equal(fake.entries.some((entry) => entry.customType?.includes("acknowledgement")), true);
+  assert.equal(fake.entries.some((entry) => entry.customType?.includes("acknowledgement")), false);
   assert.equal(fake.entries.some((entry) => entry.customType?.includes("cooldown")), true);
   assert.doesNotMatch(JSON.stringify(jev.requests), /credential|secret|chunk text/i);
 });
