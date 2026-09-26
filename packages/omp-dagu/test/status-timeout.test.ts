@@ -2,10 +2,18 @@ import assert from "node:assert/strict";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import test from "node:test";
 import extension from "../src/status/index.ts";
+import { resolveRepository } from "../src/status/repository.ts";
+
+// Capture real timers before Node's MockTimers replaces setTimeout.
+const realSetTimeout = globalThis.setTimeout;
+const realClearTimeout = globalThis.clearTimeout;
 
 for (const stage of ["discovery", "details", "headers"] as const) {
   for (const latency of [8_000, 15_001]) {
     test(`${stage}: ${latency} ms response ${latency < 15_000 ? "succeeds" : "is aborted"}`, async t => {
+      const cwd = process.cwd();
+      const workspace = await resolveRepository(cwd, new AbortController().signal);
+      assert.ok(workspace, `fixture repository identity could not be resolved for cwd=${cwd}`);
       t.mock.timers.enable({ apis: ["setTimeout"] });
       // Native AbortSignal.timeout uses internal timers, so route it through the fake clock.
       t.mock.method(AbortSignal, "timeout", (ms: number) => {
@@ -20,9 +28,11 @@ for (const stage of ["discovery", "details", "headers"] as const) {
       let streamOpened = false;
       let discoveries = 0;
       const widgets: string[][] = [];
-      const run = { name: "feature", dagRunId: "slow-run", statusLabel: "running", labels: ["workspace=a4s"], nodes: [] };
+      const requests: string[] = [];
+      const run = { name: "feature", dagRunId: "slow-run", statusLabel: "running", labels: [`workspace=${workspace}`], nodes: [] };
       t.mock.method(globalThis, "fetch", async (input: string | URL, init: RequestInit) => {
         const path = new URL(input).pathname;
+        requests.push(String(input));
         if (path.endsWith("/spec")) return Response.json({ spec: "env: []\n" });
         const kind = path.endsWith("/dag-runs") ? "discovery" : path.includes("/dag-runs/") ? "details" : "headers";
         if (kind === "discovery") discoveries++;
@@ -40,6 +50,7 @@ for (const stage of ["discovery", "details", "headers"] as const) {
               resolve();
             }, latency);
             init.signal!.addEventListener("abort", onAbort, { once: true });
+            if (init.signal!.aborted) onAbort();
           });
         }
         if (kind === "discovery") return Response.json({ dagRuns: [run] });
@@ -54,7 +65,7 @@ for (const stage of ["discovery", "details", "headers"] as const) {
       const handlers: Record<string, (event: unknown, ctx: never) => void> = {};
       extension({ registerTool() {}, registerCommand() {}, sendMessage() {}, on(event, handler) { handlers[event] = handler; } });
       const ctx = {
-        cwd: process.cwd(), hasUI: true, agent: { kind: "sub" }, isIdle: () => true,
+        cwd, hasUI: true, agent: { kind: "sub" }, isIdle: () => true,
         abort() {},
         sessionManager: { getSessionId: () => "timeout-test" },
         ui: {
@@ -64,11 +75,22 @@ for (const stage of ["discovery", "details", "headers"] as const) {
       };
       const settle = async (predicate: () => boolean) => {
         for (let i = 0; i < 200 && !predicate(); i++) await nextTurn();
-        assert.ok(predicate(), "observer reached expected phase");
+        assert.ok(predicate(), `observer reached expected phase=${stage}, workspace=${workspace}; requests=${JSON.stringify(requests)}`);
       };
       try {
         handlers.session_start!(undefined, ctx as never);
-        await requested;
+        const expectedRequest = stage === "discovery" ? "/api/v1/dag-runs"
+          : stage === "details" ? "/api/v1/dag-runs/feature/slow-run" : "/api/v1/events/stream";
+        let rejectReadiness!: (reason: Error) => void;
+        const readinessExpired = new Promise<never>((_, reject) => { rejectReadiness = reject; });
+        const readinessTimer = realSetTimeout(() => rejectReadiness(new Error(
+          `Request readiness timed out after 10000 ms: phase=${stage}, request=${expectedRequest}, workspace=${workspace}, cwd=${cwd}; observed requests=${JSON.stringify(requests)}`,
+        )), 10_000);
+        try {
+          await Promise.race([requested, readinessExpired]);
+        } finally {
+          realClearTimeout(readinessTimer);
+        }
         t.mock.timers.tick(latency < 15_000 ? latency : 15_000);
         if (latency < 15_000) {
           await settle(() => streamOpened);
