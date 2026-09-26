@@ -15,6 +15,7 @@ AGENTS_PATH = ROOT / "AGENTS.md"
 WORKFLOW_PATH = ROOT / ".github" / "workflows" / "ci.yml"
 DEPENDABOT_PATH = ROOT / ".github" / "dependabot.yml"
 TEST_REQUIREMENTS_PATH = ROOT / "requirements-test.txt"
+WORKSPACE_CONFIG_PATH = ROOT / ".workspace" / "config.yaml"
 GLOBAL_STEERING_PATH = ROOT / "output-styles" / "mentor-telemetria.assets" / "append-system.md"
 LINK_PATTERN = re.compile(r"(?<!!)\[[^]]+\]\(([^)]+)\)")
 REQUIRED_AGENT_CLAUSES = (
@@ -55,6 +56,7 @@ class RepositoryContractTests(unittest.TestCase):
         cls.workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
         cls.dependabot = yaml.safe_load(DEPENDABOT_PATH.read_text(encoding="utf-8"))
         cls.test_requirements = TEST_REQUIREMENTS_PATH.read_text(encoding="utf-8")
+        cls.workspace_config = yaml.safe_load(WORKSPACE_CONFIG_PATH.read_text(encoding="utf-8"))
         cls.global_steering = GLOBAL_STEERING_PATH.read_text(encoding="utf-8")
 
     def test_readme_uses_a4s_identity(self) -> None:
@@ -177,6 +179,24 @@ class RepositoryContractTests(unittest.TestCase):
         for target in (".workspace/docs", "profiles/pablontiv"):
             with self.subTest(target=target):
                 self.assertIn(f"rootline validate --all {target}", self.workflow)
+
+    def test_workspace_sync_and_closure_refresh_main_explicitly(self) -> None:
+        workspace = self.workspace_config["workspace"]
+        sync_strategy = workspace["workflow"]["sync_strategy"]
+        closure = next(
+            item for item in workspace["post_checks"] if "Cierre obligatorio" in item
+        )
+
+        for command in ("git fetch origin main", "git pull --ff-only origin main"):
+            with self.subTest(surface="sync_strategy", command=command):
+                self.assertIn(command, sync_strategy)
+            with self.subTest(surface="post_checks", command=command):
+                self.assertIn(command, closure)
+
+        self.assertGreaterEqual(closure.count("git fetch origin main"), 2)
+        self.assertIn("git rev-parse main", closure)
+        self.assertIn("git rev-parse origin/main", closure)
+        self.assertIn("git status --porcelain", closure)
 
     def test_no_legacy_document_authority_remains(self) -> None:
         self.assertFalse((ROOT / "docs").exists())

@@ -468,7 +468,11 @@ class DogfoodConfigTests(unittest.TestCase):
         assert isinstance(sync_strategy, str)
         normalized = " ".join(sync_strategy.split())
         self.assertNotEqual(sync_strategy.strip(), "unknown")
-        for required in ("pull explícito", "origin/main", "unknown"):
+        for required in (
+            "git fetch origin main",
+            "git pull --ff-only origin main",
+            "unknown",
+        ):
             with self.subTest(required=required):
                 self.assertIn(required, normalized)
 

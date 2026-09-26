@@ -17,9 +17,11 @@ workspace:
   workflow:
     base_branch: main
     sync_strategy: |
-      Antes de trabajo mutante, ejecutar pull explícito de origin/main sobre la
-      rama base local. Si el pull falla, genera conflictos no resueltos o no
-      puede verificarse, conservar unknown y detener la fase afectada.
+      Antes de trabajo mutante, operar desde el checkout estable de main y
+      ejecutar `git fetch origin main` seguido de
+      `git pull --ff-only origin main`. Si cualquier comando falla, la rama no
+      es main, el working tree no está limpio, aparece una divergencia o no puede
+      verificarse el resultado, conservar unknown y detener la fase afectada.
     isolation_strategy: dedicated-worktree
     development_workflow: |
       Aplicar diseño proporcional e implementar directamente; usar un probe
@@ -61,9 +63,15 @@ workspace:
     - Obtener al menos una revisión antes de integrar.
   post_checks:
     - Confirmar que la revisión aprobada quedó realmente integrada.
-    - Cierre obligatorio - pull y push. Hacer pull de origin/main y push de todo
-      commit local de la entrega; verificar que main local y origin/main apuntan
-      al mismo commit y que el working tree queda limpio. Sin esto no hay cierre.
+    - |
+      Cierre obligatorio - fetch, pull y push. En el checkout estable de main,
+      ejecutar `git fetch origin main` y luego `git pull --ff-only origin main`;
+      publicar todo commit local de la entrega; ejecutar nuevamente
+      `git fetch origin main`; y verificar que `git rev-parse main` y
+      `git rev-parse origin/main` devuelven el mismo SHA y que
+      `git status --porcelain` está vacío. Cualquier fallo, conflicto, rama
+      incorrecta, divergencia o working tree sucio detiene el cierre. Sin esta
+      secuencia completa no hay cierre.
   monitoring: |
     No aplica a cambios puramente documentales; el comportamiento operativo
     debe definir monitoreo antes de mutar sistemas externos.
