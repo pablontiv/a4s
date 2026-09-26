@@ -1,115 +1,58 @@
 # Roadmap contracts
 
-These contracts govern every Roadmap mode:
+## Graph
 
 ```text
-epic → optional non-executable aggregate
-task → one-session executable unit, direct or one epic child
+epic         → optional non-executable aggregate
+task         → one-session executable unit, at root or direct child of one epic
 parent-child → hierarchy only
-blocks → execution order
+blocks       → execution order
 ```
 
-Beads stores every edge as "`issue_id` depends on `depends_on_id`". For `blocks`, `depends_on_id` is the prerequisite and `issue_id` is the dependent it unblocks. For `parent-child`, `depends_on_id` is the parent. Other edge types, such as `related` or `relates-to`, never order work.
+Beads stores every edge as "`issue_id` depends on `depends_on_id`". For `blocks`, `depends_on_id` is the prerequisite. For `parent-child`, it is the parent. Other edge types never order work. A task's **effective prerequisites** are its own `blocks` prerequisites plus those of its parent epic.
 
-A task's **effective `blocks` prerequisites** are its own `blocks` prerequisites plus the `blocks` prerequisites of its direct parent epic. The `parent-child` edge itself still expresses hierarchy only: ordering comes from the explicit `blocks` edge on the aggregate and applies to its direct task children. Do not duplicate an inherited epic prerequisite onto every child.
+A **pre-start external gate** is a condition outside the task's steps (human, billing, third-party decision) declared in the task's fields or notes; never infer one from a title. A check the task itself performs after acquisition (fresh observation, lock, clean worktree, validation) is part of the task, not a gate.
 
-A **pre-start external gate** is a condition outside the task's authorized steps that can be evaluated before acquiring a Roadmap controller, such as a required human, billing, or third-party decision. A check or action that the task contract explicitly requires after controller acquisition is an **execution admission check**, not an external gate. Fresh observation, lock acquisition, isolated-worktree cleanliness, validation, and equivalent just-in-time checks remain task stages when the contract assigns them to the task; their failure stops that stage.
+Roadmap creates only `epic` and `task`. Spikes, bugs, chores and decisions are tasks with fitting titles and acceptance criteria. Nested epics are invalid.
 
-Roadmap creates only core Beads types `epic` and `task`. A task may be at repository root or the direct child of one epic. New nested epics are invalid. An independently deliverable set of outcomes is an epic with separate tasks, not a checklist hidden in one task.
+## Configuration axes
 
-## Confirmed no-effect mechanical correction
+Loop and Doctor read these axes from the effective `.workspace/config.yaml`. The value there wins; the default applies only when the axis is absent.
 
-A rejected command is not an ambiguous effect. Make exactly one corrected attempt when every condition below is verified:
+| Axis | Used for | Default |
+| --- | --- | --- |
+| `definition_of_ready` | whether a task is executable | the task contract below; label `legacy`: description and acceptance criteria |
+| `incomplete_task_policy` | task that fails `definition_of_ready` | `skip` |
+| `failed_task_policy` | task whose gate or implementation fails | `skip` |
+| `controller_identity` | loop controller identity (`env:<VAR>` or literal) | `unknown`: Loop acquires nothing |
+| `development_workflow` | how a task is designed and implemented | — |
+| `pre_checks`, `acceptance_checks`, `review_checks`, `post_checks` | checks per task | — |
+| `sync_strategy`, `isolation_strategy`, `commit_policy` | how work is prepared and committed | — |
+| `delivery_mode`, `delivery_gate`, `delivery_overrides` | how a candidate is delivered and which human gates apply | — |
+| `cleanup_policy` | what is offered for cleanup | offer, never delete |
 
-1. the provider explicitly confirms that no write or external effect occurred;
-2. the rejection is local usage, schema, format, or precondition validation;
-3. the corrected value is derived deterministically from current authority, such as resolving an abbreviated commit to its full SHA;
-4. target, operation, semantic payload, scope, and authorization remain unchanged; and
-5. the operation is documented as idempotent.
+An axis the config declares but that cannot be resolved (command fails, value ambiguous) is `unknown`. A repository-wide `unknown` stops Loop; one scoped to a single task follows `failed_task_policy`.
 
-Before the corrected attempt, retain the original error, the corrected command, and the evidence for all five conditions in controller state. After success, perform the normal readback. If the corrected attempt fails or its effect is ambiguous, stop without another attempt.
+## Task and epic contract
 
-This exception never applies to exit 13, stale conditional guards, controller acquisition or takeover, ownership, lifecycle or status transitions, dependency mutations, close/duplicate/supersede operations, non-idempotent comments, destructive commands, external effects, or human gates. A changed target, content, scope, decision, or authorization is not a mechanical correction.
+The default `definition_of_ready` for a task: an actionable title; context and expected result; in-scope and out-of-scope boundaries; observable initial state; binary acceptance criteria; invariants; source-of-truth paths or interfaces; required closure evidence. Description holds context, result, scope and initial state; design holds invariants, sources and constraints; acceptance criteria hold checks and evidence. A task fits one session.
 
-## Epic contract
+An epic declares an observable objective, binary success criteria, shared invariants and scope boundaries; its children are `parent-child` links. It closes only after all children are closed and its own criteria are verified.
 
-A complete epic declares all of the following:
+## Controller
 
-- an observable objective;
-- binary success criteria;
-- shared invariants;
-- explicit in-scope and out-of-scope boundaries; and
-- its child tasks.
+Resolve `controller_identity` to `$SESSION` and use `CONTROLLER=roadmap:$SESSION` as assignee. Lifecycle changes are compare-and-set updates guarded by the observed status and assignee (`--if-status`, `--if-assignee`). A failed guard (exit 13) means another controller owns the task: stop working on it, never retry.
 
-The title identifies the aggregate. Put objective, context, and scope in the Beads description; implementation-wide constraints and source-of-truth guidance in design; and success criteria in acceptance criteria. Represent children with `parent-child` links, never prose alone. An epic is never a selection, controller-acquisition, or implementation candidate. Close it only after all children are closed and fresh evidence proves its own success criteria.
+Execution state lives in Bead metadata: `roadmap_controller_session`, `roadmap_stage`, `roadmap_branch`, `roadmap_worktree`, `roadmap_base_sha`, `roadmap_candidate_sha`. It is enough to resume from the first incomplete stage.
 
-## Task contract
+## Evidence
 
-A complete task contains:
+The Bead is the complete record; Roadmap writes no report files.
 
-- an actionable title;
-- context and an expected result;
-- explicit in-scope and out-of-scope boundaries;
-- an observable expected initial state;
-- binary acceptance criteria;
-- invariants to preserve;
-- source-of-truth repository paths or interfaces;
-- `blocks` dependencies when applicable; and
-- evidence required for closure.
+- Each bounded role pass appends one comment starting `ROADMAP_HANDOFF v2` with `controller_session`, `role`, `verdict` (pass|fail|blocked), `candidate_sha`, a summary and findings.
+- The final outcome is appended to notes in the same guarded update that changes status, starting `ROADMAP_RESULT v2` with `controller_session`, `verdict`, `candidate_sha` and one line per applied check.
+- Commit, branch, PR and CI references use `bd provenance record`. Commits carry a `Bead: <id>` trailer.
 
-The task must fit one implementation session. Put requirements in the Beads description, design, and acceptance-criteria fields rather than a parallel Markdown backlog. Use description for context, result, scope, and initial state; design for invariants, sources of truth, interfaces, and implementation constraints; and acceptance criteria for binary checks and required evidence. Dependencies remain Beads edges.
+Only evidence from the current controller for the current candidate SHA satisfies a check; older entries are history.
 
-## Controller and checkpoint contract
-
-Every Loop invocation requires `PI_SESSION_ID` and derives the lifecycle authority:
-
-```text
-CONTROLLER=roadmap:<PI_SESSION_ID>
-```
-
-The Beads audit actor remains the human or configured service identity. The assignee is the current Roadmap controller. Roadmap stores execution state in these flat Bead metadata keys:
-
-```text
-roadmap_controller_session
-roadmap_stage
-roadmap_branch
-roadmap_worktree
-roadmap_base_sha
-roadmap_candidate_sha
-```
-
-Controller acquisition, takeover, checkpoints, and lifecycle changes are compare-and-set transitions guarded by the observed status and assignee. After a takeover, the former session loses lifecycle authority at its next conditional write.
-
-A bounded role handoff uses this shape:
-
-```text
-ROADMAP_HANDOFF v2
-controller_session=<PI_SESSION_ID>
-role=<implementer|task-reviewer|security-reviewer|epic-final-reviewer>
-verdict=<pass|fail|blocked>
-candidate_sha=<sha|none>
-
-Summary: <bounded result>
-Findings:
-- <finding or none>
-```
-
-A final pass or failure uses this prefix:
-
-```text
-ROADMAP_RESULT v2
-controller_session=<PI_SESSION_ID>
-verdict=<pass|fail>
-candidate_sha=<sha|none>
-...
-```
-
-For a task, only a handoff or result whose `controller_session` matches the session encoded by the current `roadmap:<PI_SESSION_ID>` assignee and whose `candidate_sha` matches the active checkpoint can satisfy a review, security, delivery, or closure gate. Older or mismatched payloads remain history only.
-
-Epic finalization is the sole evidence exception. An epic never receives a task controller or checkpoint: its current `epic-final-reviewer` handoff and `ROADMAP_RESULT v2` must use the finalizing Loop invocation's `PI_SESSION_ID` with `candidate_sha=none`, and its close must be one compare-and-set transition guarded by the exact observed epic status and assignee. An epic payload from another session or from a losing finalization race remains history only.
-
-## Completeness and evidence
-
-A contract-incomplete record remains visible in tree and Doctor output but is non-executable. Do not infer or invent missing content. Plan supplies it for new Beads. Doctor supplies it for existing Beads by running Plan's elicitation under its own approval gate (`doctor.md`, "Contract backfill").
-
-The Bead is the complete canonical operational record. Checkpoint metadata records controller progress without becoming a second backlog or report. Role handoffs and review findings are bounded comments; any mode reconstructing execution history reads them explicitly with `bd show "$ID" --include-comments --json` or `bd comments "$ID" --json`. Final pass/fail and gate outcomes are appended to notes by the guarded lifecycle update. External Git, branch, PR, CI work and transcript references use `bd provenance`; logs and transcript bodies remain with their owning provider. Roadmap creates no execution report files and never deletes, prunes or purges canonical execution Beads.
+Beads comments have no idempotency key: after a failed or ambiguous comment write, confirm once by reading comments and never write a second time.

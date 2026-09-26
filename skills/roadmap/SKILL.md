@@ -1,7 +1,7 @@
 ---
 name: roadmap
 description: Use when planning work into Beads, inspecting pending backlog topology, aligning existing Beads with the Roadmap contract, or implementing the repository backlog sequentially.
-argument-hint: "[plan|doctor|loop] [requirements]"
+argument-hint: "[plan|doctor|loop] [requirements|id]"
 user-invocable: true
 metadata:
   author: pablontiv
@@ -10,30 +10,34 @@ metadata:
 
 # Roadmap
 
-Roadmap is a Markdown workflow over the current repository and its Beads backlog. Interpret `$ARGUMENTS` without changing the working directory, then load exactly one entry-mode recipe:
+Roadmap is a mechanism over the current repository's Beads backlog: plan it, show it, align it, and execute it one task at a time. How a repository works — method, review, readiness, failure handling, delivery — is not defined here; it is read from the effective `.workspace/config.yaml`.
 
-| Input | Reference |
+Interpret `$ARGUMENTS` without changing the working directory and load one recipe. Read `references/contracts.md` first.
+
+| Input | Recipe |
 | --- | --- |
-| starts with `plan` | `references/plan.md` |
-| empty | `references/tree.md` |
-| starts with `doctor` | `references/doctor.md` |
-| `loop` (no argument) | `references/loop.md` |
-| `loop <id>` (exactly one Bead ID) | `references/loop.md`, scoped to that ID |
+| empty | `references/tree.md` (read-only) |
+| `plan <outcome>` | `references/plan.md` |
+| `doctor [id]` | `references/doctor.md` |
+| `loop [id]`, or a bare Bead ID | `references/loop.md` |
 
-Reject any other public input, including `loop` with more than one argument or any non-ID filter, and show the five supported forms. Read `references/contracts.md` before applying the selected recipe.
+For other wording, pick the mode the operator clearly means ("go", "sigue", "loop autónomo" mean `loop`). Ask one question only when two modes remain plausible.
 
-An entry recipe may follow only the internal transitions it declares. Loop condition 2 transitions internally to Doctor read-only recovery on the exact affected scope derived by `loop.md` §2.1. Doctor runs Plan steps 1–4 for contract elicitation and, only after exact payload approval when Contract backfill step 6 requires new records, Plan steps 5–10 to materialize and verify those records. These transitions stay in the current Roadmap invocation and are not commands for the operator to retype.
+## Authority
 
-## Common invariants
+1. The operator's latest instruction in this session.
+2. The effective `.workspace/config.yaml` (workspace, group and repository layers).
+3. This skill.
 
-- Beads is the durable state for backlog records, hierarchy, dependencies, status, priority, session-controller ownership, checkpoint metadata, and execution notes.
-- Each Bead is the canonical operational record: bounded role handoffs are comments, lifecycle results are guarded notes updates, and external references are provenance; Roadmap creates no execution report documents.
-- The effective `.workspace/config.yaml` is the authority for repository Definition of Done (DoD) and delivery policy.
-- Rootline governs project documentation; it is not backlog storage.
-- Roadmap creates and executes only `epic` and `task` records. An epic is an optional, non-executable aggregate.
-- `parent-child` expresses hierarchy only. Only `blocks` orders execution.
-- When scope, requirement, or authority is ambiguous, preserve the literal known scope, mark the exact element `unknown`, and ask for the single material value needed to resolve it before mutation. No mode silently broadens scope, invents requirements, or converts an ambiguity into a mutation.
-- An approval gate authorizes the exact mutation payload displayed by the owning mode, not invocation of that mode. When a complete proposal exists, show it and ask the operator to approve exactly, request adjustments, or reject it.
-- Pending non-executable work is a `BACKLOG EMERGENCY`, not backlog hygiene: show its magnitude, literal blocker, stranded next candidate when one exists, and one concrete policy-valid continuation.
+Roadmap adds no gate, review, or stop the config does not declare, with one exception: Plan and Doctor show the exact Beads payload and wait for approval before mutating Beads.
 
-Follow approval gates literally. A request to hurry, infer intent, parallelize tasks, or skip an unknown control does not override them.
+The config axes Roadmap reads are listed in `contracts.md`. A missing axis takes its profile default; a missing config lets Tree, Plan and Doctor run but Loop acquires nothing.
+
+## Invariants
+
+- Beads is the only durable backlog state; the Bead is the task's record.
+- Types are `epic` (optional, non-executable aggregate) and `task` (one-session unit, at root or under one epic).
+- `parent-child` is hierarchy only; only `blocks` orders execution.
+- A controller executes one task at a time and changes lifecycle only through guarded transitions.
+- Never invent requirements; unknown material values are asked, not guessed.
+- Never edit the Roadmap skill during a Roadmap invocation.
