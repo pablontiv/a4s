@@ -100,11 +100,13 @@ A final pass or failure uses this prefix:
 ROADMAP_RESULT v2
 controller_session=<PI_SESSION_ID>
 verdict=<pass|fail>
-candidate_sha=<sha>
+candidate_sha=<sha|none>
 ...
 ```
 
-Only a handoff or result whose `controller_session` matches the session encoded by the current `roadmap:<PI_SESSION_ID>` assignee and whose `candidate_sha` matches the active checkpoint can satisfy a review, security, delivery, or closure gate. Older or mismatched payloads remain history only.
+For a task, only a handoff or result whose `controller_session` matches the session encoded by the current `roadmap:<PI_SESSION_ID>` assignee and whose `candidate_sha` matches the active checkpoint can satisfy a review, security, delivery, or closure gate. Older or mismatched payloads remain history only.
+
+Epic finalization is the sole evidence exception. An epic never receives a task controller or checkpoint: its current `epic-final-reviewer` handoff and `ROADMAP_RESULT v2` must use the finalizing Loop invocation's `PI_SESSION_ID` with `candidate_sha=none`, and its close must be one compare-and-set transition guarded by the exact observed epic status and assignee. An epic payload from another session or from a losing finalization race remains history only.
 
 ## Completeness and evidence
 

@@ -42,9 +42,9 @@ Return only the decision tree, candidate result, per-record reasons, and finding
 3. Validate every task against `contracts.md`. Keep an incomplete task visible, but exclude it from execution.
 4. Reject cycles, invalid or broken edges, and stale satisfied-prerequisite edges as findings rather than guessing an order.
 5. Before open-task readiness, classify every `in_progress` task inside the active scope from its literal status, assignee, `roadmap_controller_session`, checkpoint metadata, comments, notes, provenance, and Git state. Do not infer whether a session or process is live.
-   - Exactly one coherent `in_progress` task is **resumable**. A controller-owned task and a legacy human-assigned task without controller metadata use the same classification. Lease and `started_at` values are non-authoritative.
+   - When exactly one in-scope `in_progress` task exists and its evidence is coherent, it is **resumable**. A controller-owned task and a legacy human-assigned task without controller metadata use the same classification. Lease and `started_at` values are non-authoritative.
    - More than one in-scope `in_progress` task is one **ownership ambiguity** finding containing every literal in-scope ID. Produce no candidate and route that complete set to Doctor.
-   - An `in_progress` task whose owner or checkpoint evidence is contradictory is not resumable; emit the exact contradiction as a Doctor finding.
+   - When exactly one in-scope `in_progress` task exists and its owner or checkpoint evidence is missing or contradictory, it is not resumable; emit the exact missing authority or contradiction as a Doctor finding, produce no candidate, and stop selection.
    - Controller or checkpoint metadata on a task whose status is not `in_progress` is **stale operational state**. Keep the record's literal status and readiness classification, cite the mismatched fields, and propose no mutation from their presence alone.
 6. If exactly one resumable task exists, render it as the next candidate before considering open tasks. This is an explanation of immediate takeover, not a liveness claim or mutation.
 7. For tasks whose literal status is `open`, derive topology-ready tasks whose effective `blocks` prerequisites from `contracts.md` are closed and whose pre-start external gates are satisfied. Status alone must not replace a known edge. Execution admission checks do not remove a task from this set.
@@ -158,6 +158,7 @@ A record's home, status, and marker must give it one primary reason, naming the 
 - externally gated;
 - resumable by guarded takeover, naming the observed controller or legacy owner;
 - ownership ambiguity, naming every literal in-scope `in_progress` ID;
+- unreconstructable `in_progress` execution, naming the exact missing authority or contradiction;
 - deferred to a declared time or condition;
 - contract-incomplete;
 - invalid hierarchy or type;

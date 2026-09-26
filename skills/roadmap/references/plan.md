@@ -38,7 +38,7 @@ Beads roadmap supports two types: `epic` (optional, non-executable aggregate) an
 - **Multiple independent objectives**: Create separate epics.
 - **Outcome exceeds ~20 tasks**: Split by observable objective, not by artificial layers.
 
-An epic is never a selection, claim, or implementation candidate. It exists only to group related tasks and declare shared invariants, success criteria, and scope boundaries.
+An epic is never a selection, controller-acquisition, or implementation candidate. It exists only to group related tasks and declare shared invariants, success criteria, and scope boundaries.
 
 ### Task sizing
 

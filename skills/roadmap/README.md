@@ -30,51 +30,68 @@ Rootline may govern ADRs, specs, and plans, but it is not a Roadmap backlog depe
 
 Verify prose behavior with the `writing-skills` pressure method, not a Roadmap test harness:
 
-1. run at least five fresh-context baseline samples without Roadmap guidance for every behavior-shaping wording change; accept a sample as RED only when it exhibits the targeted failure, and if the baseline already performs the desired behavior, strengthen the pressure or replace the scenario before editing; preserve each bounded failing response and its exact rationalization;
-2. load `SKILL.md` and only the entry recipe plus an internal reference that the recipe explicitly transitions to in a fresh agent;
-3. rerun Plan approval, false empty frontier, Doctor ambiguity, Doctor contract backfill, missing-workspace-DoD, and parallelism-pressure scenarios; for missing workspace authority, include a backlog with 65 pending tasks and a complete P0 candidate stranded only by `repo.path`/`verified_revision`, and require `BACKLOG EMERGENCY`, the pending count, the stranded candidate, the retained `authority_field` and `missing_input`, and one concrete `CONTINUE` decision;
-4. rerun these positive transition and output-shape regressions with fresh agents:
-   - **Doctor proposal ready**: render the complete final fields and commands, then end with `approve exactly`, `request adjustments`, or `reject`; never ask for a workflow invocation;
-   - **Loop→Doctor→Loop**: derive and preserve the exact `recovery_scope`, run Doctor recovery in the same invocation, and return to a fresh Loop tree read only after an approved repair verifies; cover an incomplete child, a cross-epic cycle, a cross-epic stale edge and multi-group readiness drift;
-   - **ambiguous scope**: preserve the literal known scope, mark the unknown, ask one material question, and perform no mutation;
-   - **readiness drift**: print both ready sets, both differences and per-ID classifications; produce no candidate, including from the intersection;
-   - **Plan mismatch**: print `record`, `field`, `approved`, `observed`, `provider_output` and the exact Doctor input; perform no corrective mutation;
-   - **false empty frontier**: print one primary-reason row per non-closed task before `no executable task`; and
-   - **ambiguous comment response**: use the pre-write comment IDs and exactly one read-only confirmation; proceed only with one proven new exact-body comment and never issue a second write;
-5. rerun these Roadmap-readiness regressions with fresh agents:
+1. For every behavior-shaping wording change, run at least five fresh-context baseline samples before editing. Accept RED only when the sample exhibits the targeted failure. If a baseline already behaves correctly, strengthen or replace the scenario. Preserve bounded transcript references and exact rationalizations outside repository report files.
+2. Give each fresh agent only `SKILL.md`, `contracts.md`, and the entry reference routed by the scenario. Every sample must report exact commands, status/assignee/metadata transitions, evidence accepted or rejected, stopping condition, whether any timer or retry occurred, and created files. Disagreement on any field is failure.
+3. Run these session-controller scenarios:
+   - **concurrent guarded start**: two sessions start one open task; exactly one guarded transition wins and the loser stops;
+   - **automatic takeover**: one interrupted session-owned task transfers immediately to the new `PI_SESSION_ID`;
+   - **old-controller finalization**: the former controller cannot checkpoint, block, or close after takeover;
+   - **checkpoint reconstruction**: a new controller verifies branch, worktree, base SHA, candidate SHA, comments, and provenance, then resumes the first incomplete stage;
+   - **candidate SHA invalidation**: changing the candidate SHA invalidates review and all later results from the old SHA;
+   - **stale-session handoff**: a late passing handoff from the former controller remains history and satisfies no gate;
+   - **single legacy leased task**: one human-assigned legacy `in_progress` task is resumable without waiting or reclaim;
+   - **multiple in-progress ambiguity**: two in-scope `in_progress` tasks produce one Doctor finding containing both literal IDs and no candidate; cover both two coherent tasks and one coherent plus one contradictory task;
+   - **single contradictory execution**: one in-scope `in_progress` task whose checkpoint, owner, or Git evidence cannot be reconstructed enters Doctor with its literal ID and exact contradiction before any open-task selection;
+   - **scoped takeover isolation**: an out-of-scope `in_progress` task remains visible but cannot contaminate scoped ambiguity or selection;
+   - **epic finalization race**: an epic gets no task controller or checkpoint; two finalizing sessions bind `candidate_sha=none` and exactly one observed-status/assignee CAS close wins; and
+   - **missing PI_SESSION_ID**: Loop retains the unknown control and stops before mutation.
+4. Rerun every existing non-lease regression:
+   - Plan approval and Plan mismatch;
+   - false empty frontier;
+   - Doctor ambiguity and Doctor contract backfill;
+   - missing workspace authority, including 65 pending tasks and a complete P0 candidate stranded only by `repo.path`/`verified_revision`;
+   - Loop-to-Doctor-to-Loop recovery for an incomplete child, cross-epic cycle, cross-epic stale edge, and multi-group readiness drift;
+   - readiness drift with both ready sets, both differences, and per-ID classifications;
+   - ambiguous comment response with one read-only confirmation and no second write;
+   - canonical evidence across comments, guarded notes, typed provenance, and provider-owned logs; and
+   - confirmed no-effect mechanical retry plus ambiguous-rejection control.
+5. Preserve these readiness and output-shape checks:
    - a complete executable task plus unrelated blocked contract-incomplete records;
-   - a provider-ready task whose fresh observation and writer lock are execution admission checks;
-   - a provider-ready task excluded solely by a genuine pre-claim external gate;
-   - a child task whose parent epic has an open `blocks` prerequisite;
-   - a Doctor-added prerequisite both before and after its hypothetical closure;
-   - an incoming `blocks` edge to a closed superseded container whose outcome is explicitly incomplete; and
-   - an open record with `started_at` but no assignee, claim, lease, or live session metadata;
-6. rerun the canonical-evidence scenarios with fresh agents:
-   - **normal close**: store handoffs in comments, external bindings in typed provenance and lifecycle results in atomic structured notes;
-   - **claim loss**: retain the required non-closed state and report `claim_lost`, with no later mutation;
-   - **blocking review**: retain the failed comment and append a guarded blocked result;
-   - **reconstruction**: read comments and provenance explicitly;
-   - **external evidence**: bind SHA, branch, PR, CI and transcript references by type while logs remain with their provider;
-   - **file pressure**: store the required evidence in Beads;
-   - **mechanical rejection**: after a provider-confirmed no-write schema rejection of an idempotent provenance command, deterministically expand an abbreviated SHA, make exactly one corrected attempt, and verify readback; and
-   - **ambiguous rejection control**: preserve the response, classify the exact unknown and stop without a second write;
-7. require all fresh agents to agree on stop/continue, gate classification, effective prerequisites, transition result, Doctor finding, output shape, storage surface, lifecycle result, retry behavior, and created files; disagreement is a failed pressure scenario;
-8. record pass/fail and the exact rationalization;
-9. if one fails, change only the implicated Markdown and rerun that scenario with another fresh agent.
+   - a provider-ready open task whose fresh observation and writer lock are execution admission checks;
+   - a provider-ready open task excluded solely by a genuine pre-start external gate;
+   - a child whose parent epic has an open `blocks` prerequisite;
+   - a Doctor-added prerequisite before and after hypothetical closure;
+   - a satisfied edge to a closed superseded container whose outcome is incomplete;
+   - an open record with `started_at` but no controller or checkpoint evidence;
+   - a complete Doctor proposal ending with `approve exactly`, `request adjustments`, or `reject`;
+   - ambiguous scope preserving the literal known scope and asking one material question; and
+   - `BACKLOG EMERGENCY` with pending count, stranded candidate, literal blocker, retained authority fields, and one concrete `CONTINUE` decision.
+6. Run each failed scenario again with a fresh agent after changing only the implicated Markdown. Record pass/fail and exact rationalization.
 
-Supplement, but never replace, those pressure scenarios with:
+Supplement, but never replace, those pressure scenarios with this mechanical suite:
 
 ```bash
 legacy='roadmap/'"reports|EVIDENCE_"'REF|PASS '"evidence=|repository-contained Markdown (evidence )?"'report'
 ! rg "$legacy" skills/roadmap
+
+legacy_commands='--'"claim|bd heart"'beat|bd re'"claim"
+! rg -n -- "$legacy_commands" skills/roadmap/references/loop.md
+
+legacy_ownership='claim_'"lost|pre-"'claim'
+! rg -n "$legacy_ownership" skills/roadmap
+
 rg 'include-comments|bd comments' skills/roadmap/references/doctor.md skills/roadmap/references/tree.md
-rg 'append-notes|ROADMAP_HANDOFF v1|ROADMAP_RESULT v1' skills/roadmap/references/loop.md
 rg 'bd provenance' skills/roadmap/references/contracts.md skills/roadmap/references/doctor.md skills/roadmap/references/tree.md skills/roadmap/references/loop.md
+rg 'PI_SESSION_ID|roadmap_controller_session|roadmap_stage|roadmap_branch|roadmap_worktree|roadmap_base_sha|roadmap_candidate_sha' skills/roadmap/references/contracts.md skills/roadmap/references/loop.md
+rg 'append-notes|ROADMAP_HANDOFF v2|ROADMAP_RESULT v2|controller_lost' skills/roadmap/references/contracts.md skills/roadmap/references/loop.md
+rg 'resumable|ownership ambiguity|pre-start external gate' skills/roadmap/references/tree.md skills/roadmap/references/doctor.md
 rg 'BACKLOG EMERGENCY|Pending tasks|Stranded next candidate|CONTINUE' skills/roadmap/SKILL.md skills/roadmap/references/doctor.md skills/roadmap/references/loop.md
 rg 'approve exactly|request adjustments|reject|origin=loop|topology_only|provider_only|MISMATCH|TEMP_COMMENT_BASELINE' skills/roadmap
+test -z "$(find skills/roadmap -type f ! -name '*.md' -print)"
+git diff --check
 ```
 
-Also confirm the bundle contains only Markdown, the public router stays concise, forbidden legacy commands are absent, and `git diff --check` is clean. Existing repository checks remain applicable; do not add a Roadmap unit, integration, or E2E test harness.
+The provider CAS smoke in the approved implementation plan remains required when controller-transition commands change. Existing repository checks remain applicable. Roadmap adds no unit, integration, or E2E test harness.
 
 ## Activation boundary
 
