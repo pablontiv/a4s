@@ -4,7 +4,9 @@ Doctor aligns existing Beads with the Roadmap contract. Begin read-only: classif
 
 ## Diagnose
 
-Read the complete pending graph using the tree recipe and run `bd dep cycles --json`. For every affected record, load the canonical execution surfaces explicitly:
+Read the complete pending graph using the tree recipe and run `bd dep cycles --json`. When Doctor was entered from a scoped Loop, retain that exact scope for ownership classification: only the named task or the direct task children of the named epic can participate. Out-of-scope `in_progress` records remain visible but cannot create a scoped ownership ambiguity or correction target.
+
+For every affected record, load the canonical execution surfaces explicitly:
 
 ```bash
 bd show "$ID" --include-comments --json
@@ -24,13 +26,18 @@ Detect and report these finding classes exactly:
 - broken dependencies or cycles;
 - stale satisfied-prerequisite edges: `blocks` targets closed as duplicate, superseded, or normalized containers whose notes or closure evidence disavow outcome completion or identify open successor work;
 - executable epics;
-- stale assignees, claims, or leases (`started_at` alone is lifecycle history, not claim evidence);
-- graph components with no executable root and no explicit pre-claim external gate;
-- unexplained disagreement between normalized topology and `bd ready` (**readiness drift**);
-- missing required role handoff in Bead comments;
-- a failed review comment with no guarded blocked/failure `ROADMAP_RESULT v1` in notes;
-- a passing `ROADMAP_RESULT v1` with missing required typed provenance;
-- disagreement among comments, provenance and the lifecycle result in notes;
+- more than one `in_progress` task inside one sequential active scope, reported as one **ownership ambiguity** containing every literal in-scope ID;
+- `in_progress` without `roadmap_controller_session` and without one coherent legacy human owner;
+- `roadmap_controller_session` or checkpoint metadata on a record whose status is not `in_progress`, reported as stale operational state without inferring a correction;
+- disagreement between `roadmap_controller_session`, `roadmap_stage`, `roadmap_branch`, `roadmap_worktree`, `roadmap_base_sha`, or `roadmap_candidate_sha` and Git, comments, notes, or provenance;
+- a `ROADMAP_HANDOFF v2` or `ROADMAP_RESULT v2` whose `controller_session` does not match the current controller session;
+- a `ROADMAP_HANDOFF v2` or `ROADMAP_RESULT v2` whose `candidate_sha` does not match the active checkpoint;
+- graph components with no executable root and no explicit pre-start external gate;
+- unexplained disagreement between normalized topology and provider-ready open tasks (**readiness drift**);
+- missing required current-session role handoff in Bead comments;
+- a failed review comment with no guarded blocked/failure `ROADMAP_RESULT v2` in notes;
+- a passing `ROADMAP_RESULT v2` with missing required typed provenance;
+- disagreement among comments, provenance, checkpoint metadata, and the lifecycle result in notes;
 - a task completed after ADR 0050 that cites a newly created execution report file instead of canonical Bead evidence; and
 - missing or ambiguous `.workspace` DoD.
 
@@ -39,8 +46,8 @@ Preserve historical report references for tasks completed before ADR 0050. They 
 Then check backlog consistency against the repository and runtime, not only the graph:
 
 - **structural dead ends**: an open epic with no open children; an open child under a closed parent; a blocking chain whose root is stale, parked, or waiting on an unlinked external condition; a record that must stay open permanently parented under an epic, which can then never close;
-- **status contradictions**: `in_progress` while blocked by open dependencies; `in_progress` with no evidence of active work, meaning no live session or pane recorded in metadata and no branch, commit, or artifact since the claim;
-- **status used as a record**: a Bead whose status encodes ownership, a lease, or other durable state instead of work progress;
+- **status contradictions**: `in_progress` while blocked by open dependencies; `in_progress` whose assignee, controller metadata, checkpoint, Git state, comments, notes, or provenance disagree; controller or checkpoint metadata on a non-`in_progress` task;
+- **status used as a record**: a Bead whose status encodes ownership or other durable state instead of work progress;
 - **resolved in base**: every acceptance criterion already maps to evidence on the base branch (commit SHA, file, or merged PR);
 - **obsolete target**: the contract names code, paths, or functions absent from the base branch, for example code that exists only on a closed or unmerged branch;
 - **superseded authority**: the contract implements an ADR or spec whose `estado` is `superseded`, or whose successor was already delivered;
@@ -53,6 +60,10 @@ Then check backlog consistency against the repository and runtime, not only the 
 For every finding, cite literal IDs and observed fields. Preserve IDs, history, notes, evidence, and external references.
 
 Every finding needs verifiable evidence: a command and its literal output, a commit SHA, a file and line, or a Bead field. Words such as "probably" or "possibly" are not findings. Verify the claim against code, history, runtime state, and linked Beads, or classify it as a decision requiring user input.
+
+One coherent legacy `in_progress` task with a human assignee and no `roadmap_controller_session` is Loop-resumable. `lease_expires_at` and `started_at` are non-authoritative; Doctor neither waits nor proposes a correction for that state. One coherent session-owned `in_progress` task is likewise resumable immediately. Neither case needs Doctor approval. Doctor acts only when a separate contradiction remains.
+
+For a non-`in_progress` task that still carries controller or checkpoint metadata, report stale operational state and preserve the fields. Their presence alone does not establish the intended status or authorize cleanup. If correction requires choosing whether the execution should resume, reset, or remain open, classify that choice as a decision rather than guessing.
 
 ## Classify the proposal
 
@@ -104,7 +115,6 @@ bd update "$ID" ... --json
 bd dep add "$ISSUE_ID" "$DEPENDS_ON_ID" --type blocks --json
 bd dep remove "$ISSUE_ID" "$DEPENDS_ON_ID" --json
 bd dep cycles --json
-bd reclaim --id "$ID" --json
 bd duplicate "$ID" --of "$CANONICAL_ID"
 bd supersede "$ID" --with "$SUCCESSOR_ID"
 bd close "$ID" --reason "$EVIDENCE"
@@ -113,7 +123,18 @@ bd create --graph .superpowers/roadmap/approved-plan.json [--dry-run] --json  # 
 
 Use `bd duplicate`, `bd supersede`, and `bd close` only for the consistency findings above, never to complete implementation work. A closure reason must carry the evidence that justified it. Close a **resolved in base** Bead only when every acceptance criterion maps to base-branch evidence; otherwise it is a decision requiring user input. Record the evidence in the Bead notes before a `duplicate` or `supersede` link, because those commands close without a custom reason. If an existing `related` link blocks a `supersede` link, propose removing it explicitly.
 
-Use the installed CLI's documented arguments and preview their fully expanded literal values; do not guess a flag. Reclaim only one specifically verified expired lease by ID. Never use `bd reclaim --any-replica`.
+Use the installed CLI's documented arguments and preview their fully expanded literal values; do not guess a flag. A guarded status or assignee correction is permitted only when a separate verified inconsistency makes one target state unambiguous. Its proposal must retain the exact observed values and use both guards:
+
+```bash
+bd update "$ID" \
+  --status "$TARGET_STATUS" \
+  --assignee "$TARGET_ASSIGNEE" \
+  --if-status "$OBSERVED_STATUS" \
+  --if-assignee "$OBSERVED_ASSIGNEE" \
+  --json
+```
+
+Do not use time, session-liveness inference, a lease field, or stale metadata alone to choose the target state or assignee.
 
 Stop and report any command failure or effect that differs from the approved proposal, except for the single confirmed no-effect mechanical correction defined in `contracts.md`. When that exception applies, the corrected attempt is required, stays inside the approved proposal, and receives normal readback. Do not improvise any other retry, rollback, requirement, reparenting, status conversion, or additional correction.
 
@@ -126,9 +147,9 @@ After authorized application:
 3. run `bd dep cycles --json`;
 4. rerun the complete read-only tree recipe;
 5. rerun the backlog consistency checks for the affected Beads;
-6. for every added, removed, or retargeted `blocks` edge, evaluate the dependent's next transition after the changed prerequisite closes: recompute effective prerequisites, distinguish pre-claim external gates from execution admission checks, and prove that the transition creates neither a dead end nor readiness drift; if that future classification is ambiguous, keep the correction unresolved and ask the user; and
+6. for every added, removed, or retargeted `blocks` edge, evaluate the dependent's next transition after the changed prerequisite closes: recompute effective prerequisites, distinguish pre-start external gates from execution admission checks, and prove that the transition creates neither a dead end nor readiness drift; if that future classification is ambiguous, keep the correction unresolved and ask the user; and
 7. report applied corrections, transition results, mismatches, and every residual finding.
 
 A correction is not verified merely because provider and topology agree while its new prerequisite is still open. The post-closure transition in step 6 must also be coherent, so Doctor does not certify a repair that predictably requires another Doctor pass.
 
-Doctor owns diagnosis, proposal, approval, application, and verification of backlog corrections; Loop owns task selection and implementation. When Doctor was entered through Loop condition 2, preserve `origin=loop` and the exact `recovery_scope` derived by `loop.md` §2.1 throughout recovery; never collapse a multi-record cycle, edge, or drift finding to one convenient epic. After a verified approved correction, return control to Loop for a fresh tree read and autonomous continuation. Without approval, return no mutation and leave Loop stopped on the literal unresolved decision.
+Doctor owns diagnosis, proposal, approval, application, and verification of backlog corrections; Loop owns task selection and implementation. When Doctor was entered through Loop condition 2, preserve `origin=loop` and the exact `recovery_scope` derived by `loop.md` §2.1 throughout recovery; never collapse a multi-record ownership ambiguity, cycle, edge, or drift finding to one convenient epic. After a verified approved correction, return control to Loop for a fresh tree read and autonomous continuation. Without approval, return no mutation and leave Loop stopped on the literal unresolved decision.

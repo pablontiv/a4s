@@ -72,7 +72,7 @@ When condition 2 fires, task execution stops but the current Roadmap invocation 
    - cycle: every literal record ID and edge in that cycle;
    - invalid graph or broken edge: every literal record and edge named by the finding, including an absent target ID as evidence rather than an invented record;
    - stale satisfied-prerequisite edge: both edge endpoints and every successor candidate already stated by current authority; and
-   - readiness drift: the union of `topology_only` and `provider_only` IDs from `tree.md` step 7.
+   - readiness drift: the union of `topology_only` and `provider_only` IDs from `tree.md` step 9.
 2. Load `doctor.md` and run its diagnosis and proposal work read-only on only `recovery_scope`. Loop does not apply a Doctor correction.
 3. If one material authority value is missing, show the verified evidence, ask one concrete question for that value, and remain in Doctor recovery.
 4. When a complete proposal exists, show the complete final field values or guarded command set, its expected effects, and preserved data. End the turn with exactly these choices: **approve exactly**, **request adjustments**, or **reject**. Remain in Doctor recovery until one is chosen; workflow invocation is not an approval response.
