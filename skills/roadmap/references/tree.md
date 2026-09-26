@@ -14,7 +14,9 @@ bd count --status closed --json
 git log -5 --format='%s%n%b'
 ```
 
-Collect Bead IDs for the git log output: every ID appearing in the subject, body, or trailers of any of those commits (exact literal match, delimited—not as prefix, e.g., `a4s-knt` does not match `a4s-knt.1`).
+Resolve the active scope before classification. Bare Roadmap uses the complete pending graph. A scoped Loop uses only the named task or the direct task children of the named epic for ownership classification and candidate selection. Keep out-of-scope records visible when rendering the complete graph, but never let their `in_progress` state create a scoped ownership ambiguity or candidate.
+
+Collect Bead IDs for the git log output: every ID appearing in the subject, body, or trailers of any of those commits (exact literal match, delimited, not as prefix; for example, `a4s-knt` does not match `a4s-knt.1`).
 
 The dependency command is illustrative. Collect every literal non-closed ID returned by the first JSON response and pass each as its own `bd dep list` argument. Never copy `bd-a` or `bd-b` unless those strings are real returned IDs. For each epic and each non-epic root record with children, run `bd list --parent <id> --all --json --limit 0` and count how many have `status == closed` (closed count) versus total. If needed to validate a contract or explain ordinary state, use `bd show <id> --json` for that literal ID.
 
@@ -33,17 +35,23 @@ An edge is broken only when `bd show <target> --json` fails. Run it for every ed
 
 Return only the decision tree, candidate result, per-record reasons, and findings in this mode. Route any proposed status, dependency, ownership, or content change through Doctor or Plan; Tree performs no mutation.
 
-## Derive readiness
+## Derive ownership and readiness
 
 1. Account for every non-closed record and all of its dependency edges.
 2. Validate type and hierarchy. Exclude epics from execution; they are aggregates even if the provider reports them ready.
 3. Validate every task against `contracts.md`. Keep an incomplete task visible, but exclude it from execution.
 4. Reject cycles, invalid or broken edges, and stale satisfied-prerequisite edges as findings rather than guessing an order.
-5. Derive topology-ready tasks whose effective `blocks` prerequisites from `contracts.md` are closed and whose pre-claim external gates are satisfied. Status alone must not replace a known edge. Execution admission checks do not remove a task from this set.
-6. Apply type, hierarchy, ownership, deferred-status, and pre-claim-external-gate filters equally to topology and provider results. A provider-ready task excluded solely by a declared pre-claim external gate is **externally gated**, not readiness drift; record the provider blind spot explicitly.
-7. Compare the remaining literal topology-ready task IDs with the remaining literal provider-ready IDs. On an unexplained difference, emit a **readiness drift** block containing `topology_ready`, `provider_ready`, `topology_only`, and `provider_only`, followed by one classification line for every differing literal ID. Produce no candidate from either set or their intersection; emit a Doctor finding over those IDs and stop selection.
-8. Apply the contract-completeness filter to the intersection. The remaining complete tasks are executable. An incomplete task in the pre-contract intersection is an **incomplete candidate** only when it would outrank every complete executable task under step 9. Blocked, externally gated, deferred, invalid, or lower-ranked incomplete records remain visible findings but do not stop selection.
-9. When more than one task is executable, render one deterministic next candidate using: a currently owned valid task first, then Beads priority, then greatest reverse-dependency impact, then ID. This is an explanation, not a claim.
+5. Before open-task readiness, classify every `in_progress` task inside the active scope from its literal status, assignee, `roadmap_controller_session`, checkpoint metadata, comments, notes, provenance, and Git state. Do not infer whether a session or process is live.
+   - When exactly one in-scope `in_progress` task exists and its evidence is coherent, it is **resumable**. A controller-owned task and a legacy human-assigned task without controller metadata use the same classification. Lease and `started_at` values are non-authoritative.
+   - More than one in-scope `in_progress` task is one **ownership ambiguity** finding containing every literal in-scope ID. Produce no candidate and route that complete set to Doctor.
+   - When exactly one in-scope `in_progress` task exists and its owner or checkpoint evidence is missing or contradictory, it is not resumable; emit the exact missing authority or contradiction as a Doctor finding, produce no candidate, and stop selection.
+   - Controller or checkpoint metadata on a task whose status is not `in_progress` is **stale operational state**. Keep the record's literal status and readiness classification, cite the mismatched fields, and propose no mutation from their presence alone.
+6. If exactly one resumable task exists, render it as the next candidate before considering open tasks. This is an explanation of immediate takeover, not a liveness claim or mutation.
+7. For tasks whose literal status is `open`, derive topology-ready tasks whose effective `blocks` prerequisites from `contracts.md` are closed and whose pre-start external gates are satisfied. Status alone must not replace a known edge. Execution admission checks do not remove a task from this set.
+8. Apply type, hierarchy, deferred-status, and pre-start-external-gate filters equally to topology-ready open tasks and provider-ready open tasks. A provider-ready task excluded solely by a declared pre-start external gate is **externally gated**, not readiness drift; record the provider blind spot explicitly. Never mix an `in_progress` task into this comparison.
+9. Compare the remaining literal topology-ready open task IDs with the remaining literal provider-ready open task IDs. On an unexplained difference, emit a **readiness drift** block containing `topology_ready`, `provider_ready`, `topology_only`, and `provider_only`, followed by one classification line for every differing literal ID. Produce no candidate from either set or their intersection; emit a Doctor finding over those IDs and stop selection.
+10. Apply the contract-completeness filter to the open-task intersection. The remaining complete open tasks are executable. An incomplete task in the pre-contract intersection is an **incomplete candidate** only when it would outrank every complete executable open task under step 11. Blocked, externally gated, deferred, invalid, or lower-ranked incomplete records remain visible findings but do not stop selection.
+11. When more than one open task is executable, render one deterministic next candidate using Beads priority, then greatest reverse-dependency impact, then ID. A resumable task from step 6 always precedes this ordering.
 
 ## Render the decision tree
 
@@ -51,10 +59,12 @@ Render the historical Rootline Roadmap decision tree over Beads: an epic is the 
 
 ### Terms
 
-- **Topology-ready**: every effective `blocks` prerequisite is closed and every pre-claim external gate is satisfied. Contract, type, hierarchy, and ownership checks do not affect it; they appear as markers.
-- **Pre-claim external gate**: a condition the record declares outside its authorized task steps and that can be evaluated without claiming or executing it, for example a human, billing, or third-party decision. Read description, design, acceptance criteria, and current notes; name the condition; never infer one from a title. A fresh observation, lock, clean task worktree, validation, or similar check explicitly assigned to the task is an execution admission check instead.
-- **Incomplete candidate**: a contract-incomplete task that is otherwise valid, topology-ready, provider-ready, and higher-ranked than every complete executable task. Other incomplete records remain findings but are not candidates.
-- **Stale claim**: any of assignee, claim, or session metadata on a record whose status is not `in_progress`; or a claim whose session no longer exists. `started_at` alone is lifecycle history, not claim or session metadata.
+- **Topology-ready**: an open task whose effective `blocks` prerequisites are closed and whose pre-start external gates are satisfied. Contract, type, hierarchy, and deferred-state checks do not affect this graph fact; they appear as markers.
+- **Pre-start external gate**: a condition the record declares outside its authorized task steps and that can be evaluated before guarded controller acquisition, for example a human, billing, or third-party decision. Read description, design, acceptance criteria, and current notes; name the condition; never infer one from a title. A fresh observation, lock, clean task worktree, validation, or similar check explicitly assigned to the task is an execution admission check instead.
+- **Resumable**: the only coherent `in_progress` task inside the active scope. Its current controller or legacy human assignee is observed state for guarded takeover, not evidence of liveness.
+- **Ownership ambiguity**: more than one `in_progress` task inside one sequential active scope. The finding contains every literal in-scope ID and prevents selection.
+- **Stale operational state**: `roadmap_controller_session` or checkpoint metadata whose record status is not `in_progress`, or execution evidence that contradicts the current owner or checkpoint. Preserve it as evidence; its presence alone authorizes no cleanup or lifecycle change.
+- **Incomplete candidate**: a contract-incomplete open task that is otherwise valid, topology-ready, provider-ready, and higher-ranked than every complete executable open task. Other incomplete records remain findings but are not candidates.
 - **Contract-complete**: the content of every element of the task list in `contracts.md` is explicitly stated in the Bead. Check each element by content, such as out-of-scope boundaries, initial state, invariants, and sources of truth. Non-empty description or acceptance fields alone are not enough.
 
 ### Placement
@@ -77,15 +87,15 @@ Never list a dependent again at branch level. A branch whose members share an op
 
 ### Node format
 
-Every node is `<id> <title> [<status>]`, where status is the literal Beads status, followed by `[stale?]` for a stale claim, or for a `blocked` status whose prerequisites are all closed, and at most one marker. When several rules apply, show only the first applicable one:
+Every node is `<id> <title> [<status>]`, where status is the literal Beads status. Follow it with `[resumable]`, `[ownership ambiguity]`, or `[stale?]` when that operational classification applies. A `blocked` status whose prerequisites are all closed also receives `[stale?]`. Then show at most one marker. When several marker rules apply, show only the first applicable one:
 
 1. `⚠tipo`: type other than `epic` or `task`.
 2. `⚠jerarquía`: parent is not an epic, or the record is a non-epic with children.
-3. `⚠owned`: claimed by another live session.
+3. `controller:<session|legacy-owner>`: the literal controller session or legacy owner observed on an `in_progress` task; it never asserts liveness.
 4. `⚠deferred`: deferred to a declared time or condition.
 5. `⚠contrato`: task that is not contract-complete.
 
-A topology-ready node without a marker that is also provider-ready is executable now. A task may claim first and then perform its contract's execution admission checks; a failed check stops the task stage without retroactively turning the task into externally gated work.
+One coherent `[resumable]` task is executable by guarded takeover before open work. An open topology-ready node without an exclusion marker that is also provider-ready is executable now. A task acquires its controller before performing contract execution admission checks; a failed check stops the task stage without retroactively turning the task into externally gated work.
 
 ### Ordering
 
@@ -131,13 +141,13 @@ BLOQUEADAS
 └── <id> [blocked_by: gate <declared condition>]
 
 CRITERIOS
-├─ Hay trabajo in_progress? → cerrarlo primero
+├─ Hay exactamente una task resumable en scope? → tomarla primero
 ├─ Hay task que desbloquea muchas otras? → priorizarla
 ├─ Quiero progreso rápido? → quick win
 └─ Si no → siguiente candidato determinista
 ```
 
-Resolve each `CRITERIOS` line with literal IDs from this backlog. After the tree, give the next executable candidate from step 9 or **no executable task**, then findings.
+Resolve each `CRITERIOS` line with literal IDs from this backlog. After the tree, give the resumable candidate from step 6, otherwise the open-task candidate from step 11, or **no executable task**, then findings.
 
 ### Reasons and findings
 
@@ -146,7 +156,9 @@ A record's home, status, and marker must give it one primary reason, naming the 
 - executable now;
 - blocked by named tasks;
 - externally gated;
-- owned by another session;
+- resumable by guarded takeover, naming the observed controller or legacy owner;
+- ownership ambiguity, naming every literal in-scope `in_progress` ID;
+- unreconstructable `in_progress` execution, naming the exact missing authority or contradiction;
 - deferred to a declared time or condition;
 - contract-incomplete;
 - invalid hierarchy or type;

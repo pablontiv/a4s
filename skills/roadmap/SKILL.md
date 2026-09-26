@@ -26,7 +26,7 @@ An entry recipe may follow only the internal transitions it declares. Loop condi
 
 ## Common invariants
 
-- Beads is the durable state for backlog records, hierarchy, dependencies, status, priority, claims, and execution notes.
+- Beads is the durable state for backlog records, hierarchy, dependencies, status, priority, session-controller ownership, checkpoint metadata, and execution notes.
 - Each Bead is the canonical operational record: bounded role handoffs are comments, lifecycle results are guarded notes updates, and external references are provenance; Roadmap creates no execution report documents.
 - The effective `.workspace/config.yaml` is the authority for repository Definition of Done (DoD) and delivery policy.
 - Rootline governs project documentation; it is not backlog storage.

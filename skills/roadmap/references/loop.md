@@ -6,6 +6,14 @@ Loop chains tasks automatically, executing exactly one topologically ready task 
 
 Before any mutation, locate and read the effective `.workspace/config.yaml`, including the workspace, group, and repository layers it identifies and their declared precedence. Resolve required context, sync, isolation, development workflow, commits, acceptance checks, review, delivery, post-checks, monitoring, and cleanup controls.
 
+Resolve `PI_SESSION_ID` and retain the execution identity:
+
+```text
+CONTROLLER=roadmap:<PI_SESSION_ID>
+```
+
+`PI_SESSION_ID` is required. When it is absent, classify it as an unknown required control and stop before mutation.
+
 When a required control is missing, inaccessible, or ambiguous, classify it as `unknown` and immediately retain this controller state:
 
 ```text
@@ -31,7 +39,7 @@ If a scope ID is provided (invoked as `loop <id>`):
    - Stop condition 2 (Doctor required, including readiness drift): apply the scope boundary in item 4.
    - All other stopping conditions apply globally regardless of scope.
 
-4. **Scope boundary for Doctor findings**: a cycle, invalid or broken edge, stale satisfied-prerequisite edge, incomplete candidate as defined by `tree.md`, or unexplained readiness drift triggers stop condition 2 in a scoped loop only when it involves a scoped task or an effective `blocks` prerequisite of a scoped task (fail closed). Findings elsewhere in the backlog do not stop a scoped loop.
+4. **Scope boundary for Doctor findings**: a cycle, invalid or broken edge, stale satisfied-prerequisite edge, incomplete candidate as defined by `tree.md`, ownership ambiguity, contradictory `in_progress` execution, or unexplained readiness drift triggers stop condition 2 in a scoped loop only when it involves a scoped task or an effective `blocks` prerequisite of a scoped task (fail closed). Findings elsewhere in the backlog do not stop a scoped loop.
 
 If no scope ID is provided, the loop operates over the entire backlog as usual.
 
@@ -44,9 +52,9 @@ Loop is autonomous by default: chain tasks without asking until an explicit stop
 Loop pauses task execution when any of the following is true. Conditions 1 and 3–7 stop the invocation and produce the final SUMMARY. Condition 2 enters §2.1; it produces a final SUMMARY only when recovery is rejected or remains unresolved, and otherwise returns to autonomous selection after verified repair:
 
 1. **No executable tasks remain**: the frontier is empty; all non-epic Beads are closed or blocked on external dependencies.
-2. **Doctor required**: a fresh tree read detects a cycle, invalid graph, broken or stale satisfied-prerequisite edge, incomplete candidate as defined by `tree.md`, or unexplained readiness drift. Contract-incomplete records that are blocked, externally gated, deferred, invalid, or lower-ranked than a complete executable task remain findings but do not stop the loop.
+2. **Doctor required**: a fresh tree read detects a cycle, invalid graph, broken or stale satisfied-prerequisite edge, incomplete candidate as defined by `tree.md`, ownership ambiguity, contradictory `in_progress` execution, or unexplained readiness drift. Contract-incomplete records that are blocked, externally gated, deferred, invalid, or lower-ranked than a complete executable task remain findings but do not stop the loop.
 3. **Unknown or failed control**: a required workspace control (sync, isolation, development workflow, delivery, post-checks, etc.) is missing, inaccessible, or ambiguous.
-4. **Claim or lease lost**: the claim failed (race loss), lease expired between stages, or heartbeat failed; ownership no longer matches or status changed from `in_progress`.
+4. **Controller transition or ownership lost**: a guarded start or takeover lost its race; the current assignee or `roadmap_controller_session` no longer matches this session; task status changed from `in_progress`; or epic finalization observed a changed `open` status or assignee, or lost its guarded close.
 5. **Gate failure**: a required check, review, or delivery gate failed for the current task or PR. This includes HIGH-severity security findings from a triggered security review (§3.1).
 6. **Human gate applies**: the effective `.workspace/config.yaml` declares a human gate requirement that is met:
    - delivery-policy changes (delivery_mode, delivery_gate, delivery_overrides modified);
@@ -63,8 +71,10 @@ When condition 2 fires, task execution stops but the current Roadmap invocation 
    - incomplete candidate: its direct parent epic and that epic's direct incomplete records, or the root task when it has no epic;
    - cycle: every literal record ID and edge in that cycle;
    - invalid graph or broken edge: every literal record and edge named by the finding, including an absent target ID as evidence rather than an invented record;
-   - stale satisfied-prerequisite edge: both edge endpoints and every successor candidate already stated by current authority; and
-   - readiness drift: the union of `topology_only` and `provider_only` IDs from `tree.md` step 7.
+   - stale satisfied-prerequisite edge: both edge endpoints and every successor candidate already stated by current authority;
+   - ownership ambiguity: every literal in-scope `in_progress` task ID retained during classification, without adding out-of-scope `in_progress` or open tasks;
+   - contradictory `in_progress` execution: the literal task ID and every exact owner, checkpoint, comment, note, provenance, or Git field participating in the contradiction; and
+   - readiness drift: the union of `topology_only` and `provider_only` IDs from `tree.md` step 9.
 2. Load `doctor.md` and run its diagnosis and proposal work read-only on only `recovery_scope`. Loop does not apply a Doctor correction.
 3. If one material authority value is missing, show the verified evidence, ask one concrete question for that value, and remain in Doctor recovery.
 4. When a complete proposal exists, show the complete final field values or guarded command set, its expected effects, and preserved data. End the turn with exactly these choices: **approve exactly**, **request adjustments**, or **reject**. Remain in Doctor recovery until one is chosen; workflow invocation is not an approval response.
@@ -73,17 +83,47 @@ When condition 2 fires, task execution stops but the current Roadmap invocation 
 
 The operator is never asked to invoke `doctor`, `plan`, or `loop` to advance this transition.
 
-### Selecting and claiming a task
+### Selecting and acquiring one task
 
-Run the complete tree recipe, limited to the scope boundary if a scope ID was provided. When a condition-2 finding named above applies, complete §2.1 before any selection; unrelated or lower-ranked incomplete records do not stop selection. In a scoped loop apply the boundary in §1.1 item 4. Select exactly one complete task in the executable intersection within the scope boundary, ordered by current ownership, Beads priority, reverse-dependency impact, then ID. Exclude epics. If a scope ID was an epic, consider only its direct task children for selection.
+Run the complete tree recipe, limited to the scope boundary if a scope ID was provided. When a condition-2 finding named above applies, complete §2.1 before any selection; unrelated or lower-ranked incomplete records do not stop selection. In a scoped loop apply the boundary in §1.1 item 4. Exclude epics. If a scope ID was an epic, consider only its direct task children.
 
-Read the selected task's full contract. Claim only it:
+Before selecting a new task, inspect every in-scope `in_progress` task. A task is resumable when its status, assignee, checkpoint metadata, comments, provenance, and Git state identify one interrupted execution that can be reconstructed. A legacy task assigned to a human actor with no `roadmap_controller_session` is also resumable when its remaining evidence is consistent. Ignore `lease_expires_at` and `started_at` as authority.
+
+- If more than one in-scope `in_progress` task exists, retain every literal ID as one ownership ambiguity and enter §2.1 Doctor recovery without taking any of them, whether each task is coherent or contradictory.
+- If exactly one in-scope `in_progress` task exists but its execution cannot be reconstructed coherently, retain its literal ID and exact contradiction or missing authority, then enter §2.1 Doctor recovery without selecting open work.
+- If exactly one resumable task exists, it has priority over every open task. Read its full contract, retain its exact assignee as `$OBSERVED_CONTROLLER`, and attempt one takeover:
 
 ```bash
-bd update "$BEAD_ID" --claim --json
+bd update "$BEAD_ID" \
+  --assignee "$CONTROLLER" \
+  --if-status in_progress \
+  --if-assignee "$OBSERVED_CONTROLLER" \
+  --set-metadata "roadmap_controller_session=$PI_SESSION_ID" \
+  --json
 ```
 
-A failed claim is a race loss (condition 4). Refresh the tree read-only and report; do not overwrite an owner or immediately select another task. Re-read the Bead with `bd show "$BEAD_ID" --json` and verify both the exact expected assignee `$ACTOR` and `in_progress` status before implementation.
+- If no in-scope task is `in_progress`, select exactly one complete open task in the executable intersection, ordered by Beads priority, reverse-dependency impact, then ID. Read its full contract, retain its exact assignee as `$OBSERVED_ASSIGNEE` (empty when unassigned), and attempt one guarded start:
+
+```bash
+bd update "$BEAD_ID" \
+  --status in_progress \
+  --assignee "$CONTROLLER" \
+  --if-status open \
+  --if-assignee "$OBSERVED_ASSIGNEE" \
+  --set-metadata "roadmap_controller_session=$PI_SESSION_ID" \
+  --set-metadata "roadmap_stage=admission" \
+  --json
+```
+
+Exit 13 receives one read-only state refresh. After a takeover, continue only when readback already shows this controller; otherwise report `controller_lost` and stop. After a lost start, refresh the tree and stop without executing that candidate or selecting another task. Never retry either transition.
+
+After a successful start or takeover, re-read the Bead and require all three values before implementation:
+
+```text
+status=in_progress
+assignee=roadmap:<PI_SESSION_ID>
+roadmap_controller_session=<PI_SESSION_ID>
+```
 
 ## 3. Execute bounded stages
 
@@ -94,10 +134,11 @@ The Roadmap controller alone delegates. Use a fresh Superpowers role appropriate
 - **Reviewer**: `superpowers-task-reviewer` for task review and security review (§3.1).
 - **Epic final review**: `superpowers-final-reviewer`.
 
-Every completed bounded role pass appends exactly one Bead comment with this shape:
+Every completed bounded role pass appends exactly one Bead comment with this shape. Task-stage handoffs use the controller guard below; `epic-final-reviewer` uses the epic-only finalization protocol in §4:
 
 ```text
-ROADMAP_HANDOFF v1
+ROADMAP_HANDOFF v2
+controller_session=<PI_SESSION_ID>
 role=<implementer|task-reviewer|security-reviewer|epic-final-reviewer>
 verdict=<pass|fail|blocked>
 candidate_sha=<sha|none>
@@ -107,14 +148,18 @@ Findings:
 - <finding or none>
 ```
 
-Write it from an owned temporary file outside durable repository paths. Immediately before the write, capture the current comment IDs in controller state; if that read fails, stop before the write:
+Only a handoff whose `controller_session` matches the session encoded by the current assignee and whose `candidate_sha` matches `roadmap_candidate_sha` can satisfy a current gate. A stale-session or stale-SHA payload remains historical evidence only.
+
+Write it from an owned temporary file outside durable repository paths. Immediately before the write, capture the current comment IDs and read the Bead; require `status=in_progress`, `assignee=$CONTROLLER`, and `roadmap_controller_session=$PI_SESSION_ID`. If either read fails or ownership differs, stop before the write:
 
 ```bash
 bd comments "$BEAD_ID" --json > "$TEMP_COMMENT_BASELINE"
 bd comments add "$BEAD_ID" --file "$TEMP_HANDOFF" --json
 ```
 
-On a confirmed response, retain the returned comment ID. On a failed or ambiguous response, perform exactly one read-only `bd comments "$BEAD_ID" --json` confirmation. Continue only when it proves exactly one new comment ID, absent from `$TEMP_COMMENT_BASELINE`, whose body equals `$TEMP_HANDOFF`; retain that ID. Any absent, duplicate, mismatched, or unreadable result is an unconfirmed handoff and implementation error stopping condition 7. Beads 1.3.0 comments have no idempotency key: never issue a second comment write after a failed or ambiguous response. Remove the temporary files only after a confirmed write or after preserving the evidence needed for the stop report.
+On a confirmed response, retain the returned comment ID. On a failed or ambiguous response, perform exactly one read-only `bd comments "$BEAD_ID" --json` confirmation. Continue only when it proves exactly one new comment ID, absent from `$TEMP_COMMENT_BASELINE`, whose body equals `$TEMP_HANDOFF`; retain that ID. Any absent, duplicate, mismatched, or unreadable result is an unconfirmed handoff and implementation error stopping condition 7. Beads 1.3.0 comments have no idempotency key: never issue a second comment write after a failed or ambiguous response.
+
+After the append, re-read ownership. If it no longer matches, preserve the comment as stale-session history, exclude it from every current gate, report `controller_lost`, and stop mutation. Remove the temporary files only after a confirmed write or after preserving the evidence needed for the stop report.
 
 Execute:
 
@@ -140,27 +185,40 @@ Set `$SECURITY_PATHS` to the comma-separated changed-path list evaluated by this
 
 If trigger applies:
 1. Dispatch a fresh `superpowers-task-reviewer` on the PR head SHA with a security-focused brief (secrets exposure, credential handling, authentication and authorization logic, cryptography use), separate from the general task review.
-2. Record the security review verdict and findings as a `ROADMAP_HANDOFF v1` comment with `role=security-reviewer`.
+2. Record the security review verdict and findings as a `ROADMAP_HANDOFF v2` comment with `role=security-reviewer` and the current `controller_session`.
 3. A HIGH-severity finding blocks task closure and autonomous merge (gate failure, stopping condition 5).
 4. After a passing security review, set `SECURITY_RESULT=pass`.
 
-If trigger does not apply, set `SECURITY_RESULT=not-triggered`. The final `ROADMAP_RESULT v1` records that result and `$SECURITY_PATHS` separately.
+If trigger does not apply, set `SECURITY_RESULT=not-triggered`. The final `ROADMAP_RESULT v2` records that result and `$SECURITY_PATHS` separately.
 
-Run this exact heartbeat command immediately before and after each bounded implementation, review, and delivery stage:
+Immediately before and after every bounded admission, implementation, review, validation, and delivery stage, re-read the Bead and require `status=in_progress`, `assignee=$CONTROLLER`, and `roadmap_controller_session=$PI_SESSION_ID`. Any mismatch stops further mutation as `controller_lost`.
+
+After admission and after each completed bounded stage, write one guarded checkpoint. Set `$ROADMAP_STAGE` to `admission`, `implementation`, `review`, `validation`, or `delivery`, and update all known fields together:
 
 ```bash
-bd heartbeat "$BEAD_ID"
+bd update "$BEAD_ID" \
+  --if-status in_progress \
+  --if-assignee "$CONTROLLER" \
+  --set-metadata "roadmap_controller_session=$PI_SESSION_ID" \
+  --set-metadata "roadmap_stage=$ROADMAP_STAGE" \
+  --set-metadata "roadmap_branch=$BRANCH" \
+  --set-metadata "roadmap_worktree=$WORKTREE" \
+  --set-metadata "roadmap_base_sha=$BASE_SHA" \
+  --set-metadata "roadmap_candidate_sha=$CANDIDATE_SHA" \
+  --json
 ```
 
-After every heartbeat and stage, re-read the Bead and verify assignee and `in_progress` still match. Heartbeat failure, changed assignee, changed status, or lease loss stops further mutation. Only an explicit Doctor proposal may reclaim a verified expired lease.
+Exit 13 or a mismatched readback reports `controller_lost` and stops without retry. When the candidate SHA changes, invalidate every review, validation, delivery, handoff, and result recorded for a later stage or another SHA.
 
-Run task-declared fresh observation, lock acquisition, isolated-worktree cleanliness, validation, and equivalent execution admission checks only after claim and before the stage they guard. A failed or unknown admission check is a gate failure (condition 5); do not reclassify it retroactively as a pre-claim external gate or continue to effects.
+After takeover, read the full task with comments and read its provenance log. Verify the recorded branch, worktree, base SHA, and candidate SHA against Git. Matching-SHA results from the prior session are reconstruction inputs, not current gate evidence. Before advancing beyond a stage completed by the prior controller, re-attest it under the current session: dispatch the fresh mapped role for each required bounded role and append its current-session handoff; rerun or independently verify non-role checks and external delivery state without repeating an effect, then preserve the verified readback or provenance. The first incomplete stage is the earliest stage lacking either verified checkpoint/Git state or required current-session re-attestation. A takeover after implementation therefore performs bounded implementer re-attestation before review; a takeover after review also obtains a fresh task-reviewer handoff. If the worktree is absent but the branch and a durable SHA exist, recreate it under the effective workspace isolation policy. If both the worktree and every durable reference to uncommitted work are absent, report the lost state and stop. On any mismatch or candidate SHA change, resume from the earliest invalidated stage and reuse no later-stage result.
+
+Run task-declared fresh observation, lock acquisition, isolated-worktree cleanliness, validation, and equivalent execution admission checks only after controller acquisition and before the stage they guard. A failed or unknown admission check is a gate failure (condition 5); do not reclassify it retroactively as a pre-start external gate or continue to effects.
 
 Preserve unrelated work and remain inside the selected contract. Passing unit tests is not sufficient: prove task acceptance, invariants, required reviews, every applicable effective-workspace control, configured delivery, and post-checks.
 
 ## 4. Record canonical evidence and finalize conditionally
 
-Before finalization, verify that every required bounded role outcome is stored as a Bead comment. Record each available external binding after it becomes known:
+Before finalization, verify that every required bounded role outcome is stored as a current-session `ROADMAP_HANDOFF v2` comment for the active checkpoint SHA. Record each available external binding after it becomes known:
 
 ```bash
 bd provenance record --issue "$BEAD_ID" --kind commit --source roadmap \
@@ -175,13 +233,14 @@ bd provenance record --issue "$BEAD_ID" --kind used --source roadmap \
   --ref "$TRANSCRIPT_REF" --ref-kind transcript --json
 ```
 
-`$CANDIDATE_SHA` is always required. Branch, PR, CI and transcript bindings are required exactly when the selected delivery flow or task produced those values; an artifact the effective workflow does not produce is not applicable. Every applicable binding must be confirmed before finalization. Provenance records are idempotent. A rejection that meets every confirmed no-effect mechanical-correction condition in `contracts.md` receives exactly one corrected attempt and readback; until that succeeds, finalization stays blocked. Any failed or ambiguous provenance write outside that exception blocks finalization. The `Bead: <BEAD_ID>` Git trailer remains a backlink, not a substitute for Beads-side provenance.
+`$CANDIDATE_SHA` is always required. Branch, PR, CI and transcript bindings are required exactly when the selected delivery flow or task produced those values; an artifact the effective workflow does not produce is not applicable. Immediately before and after each append-only provenance write, read the Bead and require the current controller, session metadata, status, and active candidate SHA. A binding written after ownership changes remains history and cannot satisfy finalization. Every applicable binding must be confirmed before finalization. Provenance records are idempotent. A rejection that meets every confirmed no-effect mechanical-correction condition in `contracts.md` receives exactly one corrected attempt and readback; until that succeeds, finalization stays blocked. Any failed or ambiguous provenance write outside that exception blocks finalization. The `Bead: <BEAD_ID>` Git trailer remains a backlink, not a substitute for Beads-side provenance.
 
 Close only when every required result is passed (or explicitly not applicable where the workspace contract permits), including any triggered security review, ownership still matches, and the Bead remains `in_progress`. Build one bounded notes entry:
 
 ```bash
 ROADMAP_RESULT=$(cat <<EOF
-ROADMAP_RESULT v1
+ROADMAP_RESULT v2
+controller_session=$PI_SESSION_ID
 verdict=pass
 candidate_sha=$CANDIDATE_SHA
 acceptance=pass
@@ -196,17 +255,18 @@ EOF
 )
 
 bd update "$BEAD_ID" --status closed \
-  --if-assignee "$ACTOR" --if-status in_progress \
+  --if-assignee "$CONTROLLER" --if-status in_progress \
   --append-notes "$ROADMAP_RESULT" --json
 ```
 
-Never retry exit 13, a stale conditional guard, or any ownership loss. Write no fallback PASS, stop mutation, report `claim_lost`, and retain the contract-required non-closed state.
+Never retry exit 13, a stale conditional guard, or any ownership loss. Write no fallback PASS, stop mutation, report `controller_lost`, and retain the contract-required non-closed state.
 
 When a required review remains blocking after its bounded fix/re-review, first store its failed handoff comment and capture `$COMMENT_ID`, then run:
 
 ```bash
 ROADMAP_RESULT=$(cat <<EOF
-ROADMAP_RESULT v1
+ROADMAP_RESULT v2
+controller_session=$PI_SESSION_ID
 verdict=fail
 gate=review
 comment_id=$COMMENT_ID
@@ -215,11 +275,11 @@ EOF
 )
 
 bd update "$BEAD_ID" --status blocked \
-  --if-assignee "$ACTOR" --if-status in_progress \
+  --if-assignee "$CONTROLLER" --if-status in_progress \
   --append-notes "$ROADMAP_RESULT" --json
 ```
 
-A stale failure-path guard preserves the truthful comment, writes no PASS, reports `claim_lost`, and stops.
+A stale failure-path guard preserves the truthful comment, writes no PASS, reports `controller_lost`, and stops.
 
 ### Commit trailers and delivery
 
@@ -242,18 +302,28 @@ The loop applies the delivery rule from the effective config literally. Read `de
 While Loop remains active, apply this ordered gate after each stage or successful close, before autonomous chaining, and before any operator-facing response that could end the turn:
 
 1. Refresh controller state and determine whether one of the seven enumerated stopping conditions or a currently required human decision gate applies. A side status or progress question is not a stopping condition and does not suspend Loop.
-2. If a literal stop or human decision gate applies, retain its exact evidence and present it. Real cancellation, completion, configured human gates, Doctor approval questions, claim or lease loss, gate failure, and implementation error remain valid turn-ending paths; this gate does not alter their semantics.
+2. If a literal stop or human decision gate applies, retain its exact evidence and present it. Real cancellation, completion, configured human gates, Doctor approval questions, controller transition or ownership loss, gate failure, and implementation error remain valid turn-ending paths; this gate does not alter their semantics.
 3. Otherwise establish continuation before composing the response:
    - A bounded worker is the fresh role pass dispatched by the controller under §3. If one is already active, verify and retain that state. A status answer may report it without launching duplicate work.
-   - If no bounded worker is active, start the next executable action. When that action begins the next Bead's bounded work, claim the Bead, verify its assignee and `in_progress` status, heartbeat it, dispatch the fresh §3 role pass in background, and verify that worker is active.
-4. Record the resulting controller state as exactly one of: the next executable action has started; the next Bead is claimed, verified, heartbeated, and its background worker is active; or the literal stopping condition or human decision gate is retained for presentation. An action merely named or promised has not started. If a foreground action finishes before the response, apply this gate again to the resulting state.
+   - If no bounded worker is active, start the next executable action. When that action begins the next Bead's bounded work, run §2's single guarded start or takeover, verify the ownership triple and current checkpoint, dispatch the fresh §3 role pass in background, and verify that worker is active.
+4. Record the resulting controller state as exactly one of: the next executable action has started; the next Bead is controller-owned, verified, checkpointed, and its background worker is active; or the literal stopping condition or human decision gate is retained for presentation. An action merely named or promised has not started. If a foreground action finishes before the response, apply this gate again to the resulting state.
 5. Only then send the operator-facing response. If starting or dispatching the action fails, retain and report the actual applicable stopping condition and failure evidence instead of stating or implying that work is active.
 
 ### Autonomous chaining
 
 After a successful close, immediately re-read the Bead and the complete graph. Check for any stopping condition. If none applies, select the next topologically ready task in deterministic order and continue. Repeat until a stopping condition is met.
 
-An epic is never claimed or implemented. Close an epic only after every child task is closed, an `epic-final-reviewer` handoff comment passes, fresh Bead evidence proves the epic's own success criteria, and any required conditional safeguards hold. Append an epic `ROADMAP_RESULT v1` notes entry; create no execution report file.
+An epic never receives a task controller or checkpoint and is never implemented. After every child task is closed, re-read the epic and require `status=open`; retain its exact assignee as `$OBSERVED_EPIC_ASSIGNEE` (empty when unassigned). Dispatch a fresh `epic-final-reviewer` and append one `ROADMAP_HANDOFF v2` with `controller_session=$PI_SESSION_ID` and `candidate_sha=none`, using the same baseline, single-write, and read-only-confirmation rules as task comments. For this epic-only write, replace the task ownership triple with an immediate before/after read requiring `status=open` and the exact observed assignee. A changed status or assignee makes the handoff losing-race history and stops condition 4.
+
+Close the epic only when that current-invocation handoff passes, fresh Bead evidence proves the epic's own success criteria, and every required conditional safeguard holds. Append `ROADMAP_RESULT v2` with `controller_session=$PI_SESSION_ID`, `candidate_sha=none`, and the verified outcomes in the same atomic transition:
+
+```bash
+bd update "$EPIC_ID" --status closed \
+  --if-status open --if-assignee "$OBSERVED_EPIC_ASSIGNEE" \
+  --append-notes "$EPIC_RESULT" --json
+```
+
+Never retry exit 13 or a stale epic guard. Re-read the epic; the winning close is authoritative, while a losing session's handoff remains history only. Report `controller_lost` and stop under condition 4. Create no execution report file.
 
 ## 5. Final summary and emergency continuation
 
@@ -291,7 +361,7 @@ Print this bounded shape before exiting. The first four rows after the header ar
 ║   <one concrete policy-valid action>                           ║
 ║ Closed tasks:                                                  ║
 ║   <BEAD_ID>: <title> (PR: <url>, merge SHA: <sha>)             ║
-║   result: ROADMAP_RESULT v1; provenance: <refs>                ║
+║   result: ROADMAP_RESULT v2; provenance: <refs>                ║
 ║   ...                                                           ║
 ║ Reviews and findings:                                          ║
 ║   <brief summary of review results or issues>                  ║
@@ -308,10 +378,10 @@ Print this bounded shape before exiting. The first four rows after the header ar
 
 Use `LOOP SUMMARY` only when no pending non-epic Beads remain. The summary must record:
 - **Pending tasks**: literal in-scope non-closed non-epic count.
-- **Stranded next candidate**: the candidate selected before the blocking control by §2 ordering (current ownership, Beads priority, reverse-dependency impact, then ID), or `none` with the reason no candidate exists.
+- **Stranded next candidate**: the candidate selected before the blocking control by §2 ordering (one resumable task first; otherwise Beads priority, reverse-dependency impact, then ID), or `none` with the reason no candidate exists.
 - **Blocking condition**: the exact authority or graph fact preventing execution.
 - **CONTINUE**: one concrete action, including its owning workflow when Loop cannot execute it.
-- **Closed tasks**: each task ID, title, PR URL (if applicable), merge SHA (if merged), final `ROADMAP_RESULT v1` verdict, and recorded provenance references.
+- **Closed tasks**: each task ID, title, PR URL (if applicable), merge SHA (if merged), final `ROADMAP_RESULT v2` verdict, and recorded provenance references.
 - **Reviews and findings**: concise summary of reviewer feedback and any HIGH-security findings or regressions.
 - **Delivery gates applied**: each gate name and its result (passed, failed, or not applicable).
 - **Stopping condition**: reference one of the 7 stopping conditions (section 2) by number and description.
