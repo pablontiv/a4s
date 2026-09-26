@@ -96,9 +96,29 @@ The provider CAS smoke in the approved implementation plan remains required when
 
 ## Activation boundary
 
-Repository merge and global activation are separate operations. Only after the change is merged, and only with explicit operator authorization, install a global `roadmap` symlink that targets the stable A4S checkout. Never point a global skill symlink at an implementation worktree. Remove the retired global predecessor only after the new stable target has been verified. The implementation workflow must not alter global runtime symlinks.
+Repository merge and global activation are separate operations. Sessions run a released copy of the skill, never the working checkout: a merge changes nothing that running or new sessions load until a `roadmap-vN` tag is installed. A Roadmap loop never edits `skills/roadmap`; skill changes go through their own PR, then a new tag and an explicit reinstall with operator authorization. Never install from an implementation worktree.
 
-### Post-merge activation runbook (executed 2026-09-24)
+### Release activation runbook
+
+```bash
+set -euo pipefail
+repo=[REDACTED:shared-root]/harness/a4s
+tag=roadmap-v1                      # replace with the merged tag to install
+dest="$HOME/.agents/skills/roadmap"
+git -C "$repo" fetch -q origin --tags
+git -C "$repo" merge-base --is-ancestor "$tag" origin/main
+tmp="$(mktemp -d)"
+git -C "$repo" archive "$tag" skills/roadmap | tar -x -C "$tmp"
+printf '%s %s\n' "$tag" "$(git -C "$repo" rev-parse "$tag^{commit}")" > "$tmp/skills/roadmap/.installed-from"
+if [ -e "$dest" ] || [ -L "$dest" ]; then mv "$dest" "$tmp/previous"; fi
+mkdir -p "$(dirname "$dest")"
+mv "$tmp/skills/roadmap" "$dest"
+test ! -L "$dest" && cat "$dest/.installed-from"   # a copy, never a symlink to the checkout
+```
+
+Rollback: reinstall the previous tag with the same runbook.
+
+### Post-merge activation runbook (executed 2026-09-24, superseded by release activation)
 
 **Status: Activation completed and verified.**
 
