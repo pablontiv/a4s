@@ -129,6 +129,10 @@ Cada repositorio recibe valores efectivos para todos estos ejes:
 | `pre_checks` | Controles previos a acceptance y entrega. |
 | `acceptance_checks` | Verificación trazable del spec aprobado. |
 | `review_checks` | Revisión humana, automática o independiente. |
+| `definition_of_ready` | Qué debe declarar una task para que un loop de backlog la ejecute. |
+| `incomplete_task_policy` | Qué hace un loop ante una task que no cumple `definition_of_ready`: `skip`, `stop` o `backfill`. |
+| `failed_task_policy` | Qué hace un loop cuando una task falla un gate o su implementación: `skip` o `stop`. |
+| `controller_identity` | Fuente de la identidad de sesión del controlador de un loop de backlog. |
 | `post_checks` | Postcondiciones después de integrar, publicar o desplegar. |
 | `monitoring` | Señales y periodo de observación. |
 | `external_effects` | Precondiciones, autorización y postcondiciones externas. |
@@ -185,6 +189,10 @@ Los defaults priorizan seguridad:
 - `pre_checks`: `[]`; ausencia visible, no equivalente a validación.
 - `acceptance_checks`: obligatorios cuando existe un spec con criterios.
 - `review_checks`: al menos una revisión antes de entrega mutante.
+- `definition_of_ready`: el contrato de task del workflow de backlog activo; una task con label `legacy` requiere sólo descripción y criterios de aceptación.
+- `incomplete_task_policy`: `skip`; la task queda visible como hallazgo y el loop continúa con la siguiente ejecutable.
+- `failed_task_policy`: `skip`; el fallo queda registrado en la task, que se bloquea, y el loop continúa con la siguiente ejecutable.
+- `controller_identity`: `unknown`, por lo que un loop no adquiere tasks.
 - `post_checks`: `[]`; ausencia visible y conscientemente aceptada.
 - `monitoring`: deshabilitado o no aplicable hasta declaración.
 - `external_effects`: solo lectura hasta autorización explícita.
@@ -273,6 +281,11 @@ workflow:
   delivery_mode: unknown
   delivery_gate: |
     Describir aprobación y evidencia.
+  definition_of_ready: |
+    Describir qué debe declarar una task para ser ejecutable.
+  incomplete_task_policy: skip
+  failed_task_policy: skip
+  controller_identity: unknown
 pre_checks: []
 acceptance_checks: []
 review_checks: []

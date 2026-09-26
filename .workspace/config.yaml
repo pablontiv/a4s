@@ -53,6 +53,12 @@ workspace:
           Un job de CI vuelve a iniciar (steps mayor que 0). Entonces ejecutar el
           workflow sobre la cabeza de main, abrir Bead de regresión ante fallo y
           retirar esta excepción.
+    definition_of_ready: |
+      El contrato de task de Roadmap. Una task con label `legacy` requiere sólo
+      descripción y criterios de aceptación.
+    incomplete_task_policy: skip
+    failed_task_policy: skip
+    controller_identity: env:PI_SESSION_ID
   pre_checks:
     - Revisar el ADR aceptado que gobierna el cambio.
     - Confirmar Rootline antes de escribir conocimiento gobernado.

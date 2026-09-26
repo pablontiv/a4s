@@ -21,6 +21,11 @@ workspace:
     delivery_mode: unknown
     delivery_gate: |
       Describir la aprobación y evidencia requeridas.
+    definition_of_ready: |
+      Describir qué debe declarar una task para ser ejecutable.
+    incomplete_task_policy: skip
+    failed_task_policy: skip
+    controller_identity: unknown
   pre_checks: []
   acceptance_checks: []
   review_checks: []
