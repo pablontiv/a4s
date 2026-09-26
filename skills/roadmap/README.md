@@ -39,8 +39,9 @@ Verify prose behavior with the `writing-skills` pressure method, not a Roadmap t
    - **ambiguous scope**: preserve the literal known scope, mark the unknown, ask one material question, and perform no mutation;
    - **readiness drift**: print both ready sets, both differences and per-ID classifications; produce no candidate, including from the intersection;
    - **Plan mismatch**: print `record`, `field`, `approved`, `observed`, `provider_output` and the exact Doctor input; perform no corrective mutation;
-   - **false empty frontier**: print one primary-reason row per non-closed task before `no executable task`; and
-   - **ambiguous comment response**: use the pre-write comment IDs and exactly one read-only confirmation; proceed only with one proven new exact-body comment and never issue a second write;
+   - **false empty frontier**: print one primary-reason row per non-closed task before `no executable task`;
+   - **ambiguous comment response**: use the pre-write comment IDs and exactly one read-only confirmation; proceed only with one proven new exact-body comment and never issue a second write; and
+   - **successful close + next complete task + operator status question**: after a successful close, leave a complete executable next task and interject with a side status or progress question; GREEN requires the next action to have started or the next claimed, verified, heartbeated Bead's fresh §3 role pass to be active before the response. Real cancellation, completion, configured human gates, Doctor approval questions, claim or lease loss, gate failure, implementation error, and failed start or dispatch remain valid turn-ending paths;
 5. rerun these Roadmap-readiness regressions with fresh agents:
    - a complete executable task plus unrelated blocked contract-incomplete records;
    - a provider-ready task whose fresh observation and writer lock are execution admission checks;
