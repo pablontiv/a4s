@@ -53,6 +53,7 @@ Verify prose behavior with the `writing-skills` pressure method, not a Roadmap t
    - Loop-to-Doctor-to-Loop recovery for an incomplete child, cross-epic cycle, cross-epic stale edge, and multi-group readiness drift;
    - readiness drift with both ready sets, both differences, and per-ID classifications;
    - ambiguous comment response with one read-only confirmation and no second write;
+   - successful close plus a complete next task plus an operator status question: before responding, start the next executable action or complete its §2 guarded start or takeover, verify the ownership triple and checkpoint, dispatch the fresh §3 role pass, and verify that worker is active; real cancellation, completion, configured human gates, Doctor approval questions, `controller_lost`, gate failure, implementation error, and failed start, takeover, or dispatch remain valid turn-ending paths;
    - canonical evidence across comments, guarded notes, typed provenance, and provider-owned logs; and
    - confirmed no-effect mechanical retry plus ambiguous-rejection control.
 5. Preserve these readiness and output-shape checks:

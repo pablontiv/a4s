@@ -297,6 +297,18 @@ Delivery-Override: <override-key>
 
 The loop applies the delivery rule from the effective config literally. Read `delivery_gate` to determine whether the PR requires autonomous merge (when all gates pass) or human authorization. A human delivery gate requirement is a stopping condition (condition 6).
 
+### Turn-exit gate
+
+While Loop remains active, apply this ordered gate after each stage or successful close, before autonomous chaining, and before any operator-facing response that could end the turn:
+
+1. Refresh controller state and determine whether one of the seven enumerated stopping conditions or a currently required human decision gate applies. A side status or progress question is not a stopping condition and does not suspend Loop.
+2. If a literal stop or human decision gate applies, retain its exact evidence and present it. Real cancellation, completion, configured human gates, Doctor approval questions, controller transition or ownership loss, gate failure, and implementation error remain valid turn-ending paths; this gate does not alter their semantics.
+3. Otherwise establish continuation before composing the response:
+   - A bounded worker is the fresh role pass dispatched by the controller under §3. If one is already active, verify and retain that state. A status answer may report it without launching duplicate work.
+   - If no bounded worker is active, start the next executable action. When that action begins the next Bead's bounded work, run §2's single guarded start or takeover, verify the ownership triple and current checkpoint, dispatch the fresh §3 role pass in background, and verify that worker is active.
+4. Record the resulting controller state as exactly one of: the next executable action has started; the next Bead is controller-owned, verified, checkpointed, and its background worker is active; or the literal stopping condition or human decision gate is retained for presentation. An action merely named or promised has not started. If a foreground action finishes before the response, apply this gate again to the resulting state.
+5. Only then send the operator-facing response. If starting or dispatching the action fails, retain and report the actual applicable stopping condition and failure evidence instead of stating or implying that work is active.
+
 ### Autonomous chaining
 
 After a successful close, immediately re-read the Bead and the complete graph. Check for any stopping condition. If none applies, select the next topologically ready task in deterministic order and continue. Repeat until a stopping condition is met.
