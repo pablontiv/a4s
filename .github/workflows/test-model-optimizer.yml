@@ -16,14 +16,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - {os: ubuntu-latest, python: "3.11"}
-          - {os: ubuntu-latest, python: "3.14"}
-          - {os: macos-latest, python: "3.11"}
-          - {os: macos-latest, python: "3.14"}
-          - {os: windows-latest, python: "3.11"}
-          - {os: windows-latest, python: "3.14"}
-    runs-on: ${{ matrix.os }}
+        include: ${{ github.event_name == 'workflow_dispatch' && fromJSON('[{"os":"ubuntu-latest","python":"3.11"},{"os":"ubuntu-latest","python":"3.14"},{"os":"macos-latest","python":"3.11"},{"os":"macos-latest","python":"3.14"},{"os":"windows-latest","python":"3.11"},{"os":"windows-latest","python":"3.14"}]') || fromJSON('[{"os":"ubuntu-latest","python":"3.11"},{"os":"ubuntu-latest","python":"3.14"}]') }}
+    # Linux uses the isolated Docker pilot on push and pull_request.
+    # GitHub-hosted macOS/Windows stay on workflow_dispatch only until
+    # hosted quota exists; do not consume hosted minutes from automatic events.
+    runs-on: ${{ matrix.os == 'ubuntu-latest' && 'edge-linux' || matrix.os }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1

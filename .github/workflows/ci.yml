@@ -19,12 +19,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os:
-          - ubuntu-latest
-          - macos-latest
-          - windows-latest
-    # Route the Linux leg to the isolated Docker pilot; macOS and Windows
-    # remain on GitHub-hosted runners.
+        os: ${{ github.event_name == 'workflow_dispatch' && fromJSON('["ubuntu-latest","macos-latest","windows-latest"]') || fromJSON('["ubuntu-latest"]') }}
+    # Linux uses the isolated Docker pilot on push and pull_request.
+    # GitHub-hosted macOS/Windows stay on workflow_dispatch only until
+    # hosted quota exists; do not consume hosted minutes from automatic events.
     runs-on: ${{ matrix.os == 'ubuntu-latest' && 'edge-linux' || matrix.os }}
     timeout-minutes: 45
     steps:
