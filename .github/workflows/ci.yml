@@ -23,7 +23,9 @@ jobs:
           - ubuntu-latest
           - macos-latest
           - windows-latest
-    runs-on: ${{ matrix.os }}
+    # Route the Linux leg to the isolated Docker pilot; macOS and Windows
+    # remain on GitHub-hosted runners.
+    runs-on: ${{ matrix.os == 'ubuntu-latest' && 'edge-linux' || matrix.os }}
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
