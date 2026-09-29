@@ -78,6 +78,13 @@ jobs:
         run: |
           rootline validate --all .workspace/docs -o json
           rootline validate --all profiles/pablontiv -o json
+      - name: Test agent behavior doctor
+        run: >-
+          python -m unittest discover
+          -s skills/agent-behavior-doctor/tests
+          -t skills/agent-behavior-doctor
+          -p "test_*.py"
+          -v
       - name: Test systemic issue triage
         run: >-
           python -m unittest discover
