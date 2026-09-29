@@ -16,14 +16,8 @@ concurrency:
 
 jobs:
   test:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: ${{ github.event_name == 'workflow_dispatch' && fromJSON('["ubuntu-latest","macos-latest","windows-latest"]') || fromJSON('["ubuntu-latest"]') }}
-    # Linux uses the isolated Docker pilot on push and pull_request.
-    # GitHub-hosted macOS/Windows stay on workflow_dispatch only until
-    # hosted quota exists; do not consume hosted minutes from automatic events.
-    runs-on: ${{ matrix.os == 'ubuntu-latest' && 'edge-linux' || matrix.os }}
+    name: test (ubuntu-latest)
+    runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -36,7 +30,6 @@ jobs:
       - name: Install Node dependencies
         run: npm ci
       - name: Test runtime
-        if: runner.os != 'Windows'
         run: npm test
       - name: Typecheck runtime
         run: npm run typecheck
@@ -121,7 +114,6 @@ jobs:
           -p "test_*.py"
           -v
       - name: Test sweep assets
-        if: runner.os != 'Windows'
         run: sh skills/sweep/assets/test-assets.sh
       - name: Test context cleanup
         working-directory: skills/remove-gentle-context

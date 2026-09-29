@@ -475,11 +475,13 @@ class CliTests(unittest.TestCase):
         self.assertIn("python3", text)
         self.assertNotIn("ls skills/remove-gentle-context", text)
 
-    def test_workflow_matrix_uses_three_operating_systems_and_portable_commands(self) -> None:
+    def test_workflow_uses_one_linux_job_and_portable_commands(self) -> None:
         text = WORKFLOW.read_text(encoding="utf-8")
-        self.assertIn("ubuntu-latest", text)
-        self.assertIn("macos-latest", text)
-        self.assertIn("windows-latest", text)
+        self.assertIn("runs-on: ubuntu-latest", text)
+        self.assertNotIn("macos-latest", text)
+        self.assertNotIn("windows-latest", text)
+        self.assertNotIn("matrix:", text)
+        self.assertFalse((WORKFLOW.parent / "test-model-optimizer.yml").exists())
         self.assertEqual(text.count('python-version: "3.11"'), 1)
         self.assertIn("working-directory: skills/remove-gentle-context", text)
         self.assertIn("python -m unittest discover -s tests -t . -v", text)
