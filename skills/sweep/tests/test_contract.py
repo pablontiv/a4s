@@ -7,7 +7,10 @@ SKILL = ROOT / "SKILL.md"
 ASSETS = ROOT / "assets"
 ASSET_TEST = ASSETS / "test-assets.sh"
 
-REJECTED_PATH_SNIPPETS = ("[REDACTED:shared-root]", "[REDACTED:home]", "[REDACTED:home]")
+REJECTED_PATH_SNIPPETS = tuple(
+    "/".join(("", *parts))
+    for parts in (("Users", "Shared"), ("Users", "pones"), ("home", "pones"))
+)
 REQUIRED_AGENTS = {"sweep-scout.md", "sweep-triage.md", "pr-investigator.md"}
 REQUIRED_CLAUDE = REQUIRED_AGENTS
 REQUIRED_PI = REQUIRED_AGENTS
@@ -51,9 +54,8 @@ class SweepContractTests(unittest.TestCase):
             self.assertNotIn("color", text)
             self.assertNotRegex(text, r"(?i)hard[- ]coded model")
             self.assertIn("final response directly", text)
-            self.assertNotIn("[REDACTED:shared-root]", text)
-            self.assertNotIn("[REDACTED:home]", text)
-            self.assertNotIn("[REDACTED:home]", text)
+            for snippet in REJECTED_PATH_SNIPPETS:
+                self.assertNotIn(snippet, text)
 
         self.assertIn(".worktrees", asset_test)
         self.assertNotIn(".orca/worktrees", asset_test)

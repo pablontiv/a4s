@@ -20,10 +20,13 @@ licenses continue to apply to their own artifacts.
 
 1. Start from a clean checkout whose `main` equals `origin/main`.
 2. Review all Git refs and GitHub surfaces for secrets, private paths, personal
-   metadata, internal topology, and operational evidence. Approve the exact
-   digest of `cleanup-plan.json` before any destructive operation, execute it,
-   and verify every postcondition. GitHub-managed pull-request refs require a
-   separate purge or explicit disclosure decision.
+   metadata, internal topology, and operational evidence. Review
+   `cleanup-plan.json`, then generate a separate execution envelope that pins
+   the current source SHA, ref listings, replacement payload, expected rewritten
+   refs, and this plan's digest. Approve the execution-envelope digest before
+   any destructive operation and verify every postcondition afterward.
+   GitHub-managed pull-request refs require a separate purge or explicit
+   disclosure decision.
 3. Run `test/ci-local.sh` on the exact candidate commit and obtain an independent
    review of that same SHA. While Actions is blocked by billing or quota, retain
    evidence that affected jobs started with zero steps; never describe those

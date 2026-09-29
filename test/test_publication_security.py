@@ -13,6 +13,8 @@ ROOT = Path(__file__).resolve().parents[1]
 PUBLICATION_ROOT = ROOT / ".github" / "publication"
 MANIFEST_PATH = PUBLICATION_ROOT / "desired-state.json"
 DIGEST_PATH = PUBLICATION_ROOT / "desired-state.json.sha256"
+CLEANUP_PLAN_PATH = PUBLICATION_ROOT / "cleanup-plan.json"
+CLEANUP_DIGEST_PATH = PUBLICATION_ROOT / "cleanup-plan.json.sha256"
 WORKFLOW_ROOT = ROOT / ".github" / "workflows"
 
 
@@ -21,6 +23,8 @@ class PublicationSecurityTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.manifest_bytes = MANIFEST_PATH.read_bytes()
         cls.manifest = json.loads(cls.manifest_bytes)
+        cls.cleanup_bytes = CLEANUP_PLAN_PATH.read_bytes()
+        cls.cleanup = json.loads(cls.cleanup_bytes)
 
     def test_sensitive_local_files_are_ignored(self) -> None:
         ignored = (
@@ -193,6 +197,36 @@ class PublicationSecurityTests(unittest.TestCase):
         expected = hashlib.sha256(self.manifest_bytes).hexdigest()
         digest_line = DIGEST_PATH.read_text(encoding="ascii").strip()
         self.assertEqual(digest_line, f"{expected}  desired-state.json")
+
+    def test_cleanup_plan_is_exact_bounded_and_prepare_only(self) -> None:
+        self.assertEqual(self.cleanup["schema"], "a4s.github-history-cleanup/v1")
+        self.assertEqual(self.cleanup["repository"], "pablontiv/a4s")
+        self.assertEqual(self.cleanup["mode"], "prepare-only")
+        self.assertEqual(
+            self.cleanup["retain_and_rewrite"],
+            ["refs/heads/main", "refs/tags/roadmap-v1", "refs/tags/roadmap-v2"],
+        )
+
+        delete = self.cleanup["delete"]
+        self.assertEqual(len(delete), 40)
+        self.assertEqual(len(delete), len(set(delete)))
+        self.assertEqual(sum(ref.startswith("refs/heads/") for ref in delete), 39)
+        self.assertIn("refs/dolt/data", delete)
+        self.assertNotIn("refs/heads/main", delete)
+
+        disposition = self.cleanup["pull_request_disposition"]
+        self.assertEqual(disposition["closed_during_preparation"], [6, 26, 29, 30])
+        self.assertIs(disposition["github_managed_refs_are_not_pushable"], True)
+        self.assertIn("GitHub Support", disposition["publication_gate"])
+
+        controls = self.cleanup["execution_controls"]
+        self.assertTrue(any("explicit operator approval" in control for control in controls))
+        self.assertTrue(any("do not retry" in control for control in controls))
+        self.assertIn("unknown", self.cleanup["surface_audit"]["projects_v2"])
+
+        expected = hashlib.sha256(self.cleanup_bytes).hexdigest()
+        digest_line = CLEANUP_DIGEST_PATH.read_text(encoding="ascii").strip()
+        self.assertEqual(digest_line, f"{expected}  cleanup-plan.json")
 
     def test_publication_policies_are_present(self) -> None:
         security = (ROOT / ".github" / "SECURITY.md").read_text(encoding="utf-8")
