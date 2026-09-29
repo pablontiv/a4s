@@ -71,7 +71,7 @@ test("canonical TypeSafe bridge preserves scheduler-visible rate-limit metadata 
       return true;
     },
   );
-  assert.equal(calls, 1, "the existing rule-compiler scheduler owns retry policy");
+  assert.equal(calls, 1, "the existing context-expert scheduler owns retry policy");
 });
 
 test(`canonical TypeSafe bridge fails before fetch when ${TYPESAFE_API_KEY_ENV} is absent`, () => {

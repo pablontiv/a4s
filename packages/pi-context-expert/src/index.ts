@@ -1,6 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { loadGlobalCompactionConfiguration } from "./config.ts";
-import { registerPiRuleCompiler } from "./extension.ts";
+import { registerPiContextExpert } from "./extension.ts";
 
 export {
   BASIC_COMPACTION_CONFIG,
@@ -9,7 +9,7 @@ export {
   isLadderCompaction,
   isLadderEvidence,
   loadGlobalCompactionConfiguration,
-  PI_RULE_COMPILER_GLOBAL_CONFIG_PATH,
+  PI_CONTEXT_EXPERT_GLOBAL_CONFIG_PATH,
   resolveCompactionConfig,
 } from "./config.ts";
 export {
@@ -72,8 +72,8 @@ export { createTypesafeAuthResolver } from "@a4s/typesafe";
 export {
   LADDER_PROJECTION_FAILURE_TYPE,
   LADDER_PROJECTION_RECEIPT_TYPE,
-  registerPiRuleCompiler,
-  type PiRuleCompilerOptions,
+  registerPiContextExpert,
+  type PiContextExpertOptions,
 } from "./extension.ts";
 export {
   JevApiError,
@@ -194,6 +194,6 @@ export {
 } from "./storage.ts";
 export * from "./types.ts";
 
-export default function piRuleCompilerExtension(pi: ExtensionAPI): void {
-  registerPiRuleCompiler(pi, { config: loadGlobalCompactionConfiguration() });
+export default function piContextExpertExtension(pi: ExtensionAPI): void {
+  registerPiContextExpert(pi, { config: loadGlobalCompactionConfiguration() });
 }

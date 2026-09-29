@@ -22,7 +22,7 @@ test("E2E mode verifies the persisted global file instead of constructing child 
   assert.doesNotThrow(() => assertE2eGlobalConfiguration("basic", basic));
   assert.throws(
     () => assertE2eGlobalConfiguration("ladder", basic),
-    /~\/.pi\/agent\/pi-rule-compiler\.json.*ladder/,
+    /~\/.pi\/agent\/pi-context-expert\.json.*ladder/,
   );
 
   const ladder = configurationFromGlobalFile(JSON.stringify({
@@ -33,7 +33,7 @@ test("E2E mode verifies the persisted global file instead of constructing child 
   assert.doesNotThrow(() => assertE2eGlobalConfiguration("ladder", ladder));
   assert.throws(
     () => assertE2eGlobalConfiguration("basic", ladder),
-    /~\/.pi\/agent\/pi-rule-compiler\.json.*basic/,
+    /~\/.pi\/agent\/pi-context-expert\.json.*basic/,
   );
 });
 

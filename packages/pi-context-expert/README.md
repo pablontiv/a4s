@@ -1,4 +1,4 @@
-# A4S Pi Rule Compiler
+# A4S Pi Context Expert
 
 Private Pi extension that uses Jev as the semantic authority for deterministic compaction. Evidence is disabled by default; Ladder retrieval and Ladder-backed Evidence are explicit opt-ins.
 
@@ -30,7 +30,7 @@ flat `config` values for `compaction.strategy` (`basic|ladder`),
 invalid combinations preserve the prior safe configuration.
 
 The installed `pi -e` entrypoint reads the persisted global file
-`~/.pi/agent/pi-rule-compiler.json` once at startup. The file may contain only
+`~/.pi/agent/pi-context-expert.json` once at startup. The file may contain only
 the same three flat, non-secret mode keys:
 
 ```json
@@ -77,7 +77,7 @@ From the repository root:
 
 ```sh
 npm install
-pi -e packages/pi-rule-compiler/src/index.ts
+pi -e packages/pi-context-expert/src/index.ts
 # then, inside Pi:
 /login typesafe
 ```
@@ -126,11 +126,11 @@ real HTTP round trip (15-50+ seconds) can finish.
   awaits the correlated response (via `src/rpc-stdin-guard.ts`) before
   ending the child's stdin — the correct pattern to copy into your own RPC
   client. Run it with `npm run rpc:compact-driver --workspace
-  @a4s/pi-rule-compiler -- --pi <path-to-pi> [-- <extra pi args>]`.
+  @a4s/pi-context-expert -- --pi <path-to-pi> [-- <extra pi args>]`.
 - **Best-effort extension diagnostic**: when this extension classifies a
   compaction or retro failure as `"aborted"` while `ctx.mode === "rpc"`, it
   writes a single line to stderr prefixed
-  `[a4s-pi-rule-compiler:rpc-stdin-guard]` (stderr is outside the RPC JSONL
+  `[a4s-pi-context-expert:rpc-stdin-guard]` (stderr is outside the RPC JSONL
   stdout protocol, so it can't corrupt framing, and it never changes
   cancel/notify semantics). Grep an RPC caller's captured stderr for that
   prefix to confirm this failure mode even when the client-facing response
@@ -139,8 +139,8 @@ real HTTP round trip (15-50+ seconds) can finish.
 ## Development
 
 ```sh
-npm test --workspace @a4s/pi-rule-compiler
-npm run typecheck --workspace @a4s/pi-rule-compiler
+npm test --workspace @a4s/pi-context-expert
+npm run typecheck --workspace @a4s/pi-context-expert
 ```
 
 Tests use fake Jev and model gateways; they make no live TypeSafe calls.
@@ -148,7 +148,7 @@ Tests use fake Jev and model gateways; they make no live TypeSafe calls.
 The fixture-only Evidence eval is also offline:
 
 ```sh
-npm run eval:evidence --workspace @a4s/pi-rule-compiler
+npm run eval:evidence --workspace @a4s/pi-context-expert
 ```
 
 It reports precision, recall, selected-boundary coverage, and false negatives for the checked-in true-rule, non-rule, and uncertain-candidate fixtures. Local session/corpus/result captures stay in ignored eval paths.
@@ -156,9 +156,9 @@ It reports precision, recall, selected-boundary coverage, and false negatives fo
 ### Product E2E
 
 ```sh
-npm run e2e --workspace @a4s/pi-rule-compiler -- --mode basic
-npm run e2e --workspace @a4s/pi-rule-compiler -- --mode ladder
-npm run e2e --workspace @a4s/pi-rule-compiler -- --mode evidence
+npm run e2e --workspace @a4s/pi-context-expert -- --mode basic
+npm run e2e --workspace @a4s/pi-context-expert -- --mode ladder
+npm run e2e --workspace @a4s/pi-context-expert -- --mode evidence
 ```
 
 This is a headless product test, not an E0 or fixture run. It starts the
@@ -190,7 +190,7 @@ exercises the Ladder projection path. The runner stores session artifacts but
 never prints prompts, proposal content, provider bodies, or credentials.
 
 Every run intentionally preserves its evidence directory under
-`artifacts/pi-rule-compiler-e2e/<timestamp>/`, including Pi's session artifact,
+`artifacts/pi-context-expert-e2e/<timestamp>/`, including Pi's session artifact,
 on both success and failure. Inspect or remove that directory manually only
 when its retention is no longer needed.
 

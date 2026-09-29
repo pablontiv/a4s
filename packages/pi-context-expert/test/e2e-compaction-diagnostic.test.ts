@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { classifySafeCompactionNotification } from "../scripts/compaction-diagnostic.ts";
 
-const PREFIX = "Rule compiler compaction skipped: ";
+const PREFIX = "Context expert compaction skipped: ";
 const SUFFIX = ". Compaction was cancelled; native fallback is disabled.";
 
 function notification(description: string): unknown {

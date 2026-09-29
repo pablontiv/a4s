@@ -9,6 +9,7 @@
 node_modules/
 dist/
 artifacts/e0/
+artifacts/pi-context-expert-e2e/
 
 # Local environment and package-manager credentials
 .env

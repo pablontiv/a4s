@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { CompactionConfig } from "./types.ts";
 
-export const PI_RULE_COMPILER_GLOBAL_CONFIG_PATH = "~/.pi/agent/pi-rule-compiler.json";
+export const PI_CONTEXT_EXPERT_GLOBAL_CONFIG_PATH = "~/.pi/agent/pi-context-expert.json";
 
 const FLAT_CONFIG_KEYS = new Set([
   "compaction.strategy",
@@ -85,7 +85,7 @@ export function loadGlobalCompactionConfiguration(): Readonly<Record<string, unk
 }
 
 export function globalCompactionConfigPath(): string {
-  return join(homedir(), ".pi", "agent", "pi-rule-compiler.json");
+  return join(homedir(), ".pi", "agent", "pi-context-expert.json");
 }
 
 function flatConfiguration(config: CompactionConfig): Readonly<Record<string, unknown>> {

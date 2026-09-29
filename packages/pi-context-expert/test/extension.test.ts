@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { convertToLlm, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import piRuleCompilerExtension, {
+import piContextExpertExtension, {
   collectCorpus,
   corpusDigest,
   CORPUS_ENTRY_TYPE,
@@ -15,7 +15,7 @@ import piRuleCompilerExtension, {
   LADDER_PROJECTION_FAILURE_TYPE,
   LADDER_PROJECTION_RECEIPT_TYPE,
   observeCompactionRules,
-  registerPiRuleCompiler,
+  registerPiContextExpert,
   RETRO_PENDING_ENTRY_TYPE,
   RULE_PROPOSAL_ENTRY_TYPE,
   RULE_SIGNAL_ENTRY_TYPE,
@@ -58,7 +58,7 @@ function createFakePi(initialEntries: StoredEntry[] = []) {
       registeredProviders.push(provider);
     },
   };
-  // SAFETY: this test double implements every ExtensionAPI member exercised by registerPiRuleCompiler.
+  // SAFETY: this test double implements every ExtensionAPI member exercised by registerPiContextExpert.
   return { pi: api as unknown as ExtensionAPI, handlers, commands, entries, registeredProviders };
 }
 
@@ -290,7 +290,7 @@ async function runRulesReview(entries: StoredEntry[]): Promise<string> {
 
 async function runRuleCommand(entries: StoredEntry[], command: string, args: string): Promise<string> {
   const fake = createFakePi(entries);
-  registerPiRuleCompiler(fake.pi, { jevClient: new ValidFakeJev() });
+  registerPiContextExpert(fake.pi, { jevClient: new ValidFakeJev() });
   const { context, notifications } = createContext(fake.entries);
   await fake.commands.get(command)?.(args, context);
   return notifications.at(-1)?.message ?? "";
@@ -318,7 +318,7 @@ function storedProposalEntry(): StoredEntry {
 test("basic does not publish rule artifacts when Evidence is off", async () => {
   const jev = new ValidFakeJev();
   const fake = createFakePi();
-  registerPiRuleCompiler(fake.pi, {
+  registerPiContextExpert(fake.pi, {
     jevClient: jev,
     evidence: { strategy: "off" },
     now: () => new Date("2026-09-18T12:00:00.000Z"),
@@ -368,7 +368,7 @@ test("basic does not publish rule artifacts when Evidence is off", async () => {
 
 test("a cancelled compaction publishes no corpus while a successful one is reloadable", async () => {
   const fake = createFakePi();
-  registerPiRuleCompiler(fake.pi, { jevClient: new ValidFakeJev() });
+  registerPiContextExpert(fake.pi, { jevClient: new ValidFakeJev() });
   const { context } = createContext(fake.entries);
   const event = compactionEvent([{ role: "user", content: "password=canary-secret" }]);
 
@@ -389,7 +389,7 @@ test("a cancelled compaction publishes no corpus while a successful one is reloa
   assert.equal(JSON.stringify(fake.entries).includes("canary-secret"), false);
 
   const reloaded = createFakePi(fake.entries);
-  registerPiRuleCompiler(reloaded.pi, { jevClient: new ValidFakeJev() });
+  registerPiContextExpert(reloaded.pi, { jevClient: new ValidFakeJev() });
   const reloadedContext = createContext(reloaded.entries).context;
   await reloaded.handlers.get("session_start")?.({ type: "session_start", reason: "reload" }, reloadedContext);
   assert.equal(collectCorpus(reloaded.entries).length, 1);
@@ -399,13 +399,13 @@ test("a cancelled compaction publishes no corpus while a successful one is reloa
 
 test("basic does not register or consume Ladder context projection", () => {
   const fake = createFakePi();
-  registerPiRuleCompiler(fake.pi, { jevClient: new ValidFakeJev() });
+  registerPiContextExpert(fake.pi, { jevClient: new ValidFakeJev() });
 
   assert.equal(fake.handlers.has("context_with_system"), false);
 });
 
 test("installed entrypoint reads only the fixed global configuration path at startup", (t) => {
-  const home = mkdtempSync(join(tmpdir(), "a4s-rule-compiler-home-"));
+  const home = mkdtempSync(join(tmpdir(), "a4s-context-expert-home-"));
   const priorHome = process.env.HOME;
   const rejectedEnvironmentName = "A4S_PI_RULE_COMPILER_COMPACTION_STRATEGY";
   const priorRejectedEnvironment = process.env[rejectedEnvironmentName];
@@ -420,19 +420,25 @@ test("installed entrypoint reads only the fixed global configuration path at sta
   process.env[rejectedEnvironmentName] = "ladder";
 
   const missing = createFakePi();
-  piRuleCompilerExtension(missing.pi);
+  piContextExpertExtension(missing.pi);
   assert.equal(missing.handlers.has("context_with_system"), false);
 
   const configDirectory = join(home, ".pi", "agent");
   mkdirSync(configDirectory, { recursive: true });
-  writeFileSync(join(configDirectory, "pi-rule-compiler.json"), JSON.stringify({
+  const ladderConfig = JSON.stringify({
     "compaction.strategy": "ladder",
     "trigger.mode": "off",
     "evidence.strategy": "off",
-  }));
+  });
+  writeFileSync(join(configDirectory, "pi-rule-compiler.json"), ladderConfig);
 
+  const legacyOnly = createFakePi();
+  piContextExpertExtension(legacyOnly.pi);
+  assert.equal(legacyOnly.handlers.has("context_with_system"), false);
+
+  writeFileSync(join(configDirectory, "pi-context-expert.json"), ladderConfig);
   const configured = createFakePi();
-  piRuleCompilerExtension(configured.pi);
+  piContextExpertExtension(configured.pi);
   assert.equal(configured.handlers.has("context_with_system"), true);
 });
 
@@ -444,7 +450,7 @@ test("Ladder projects branch corpus through context_with_system and falls back u
   const entries: StoredEntry[] = [{ type: "custom", customType: CORPUS_ENTRY_TYPE, data: chunk }];
   const selected = createFakePi(entries);
   const selectedJev = new LadderFullJev();
-  registerPiRuleCompiler(selected.pi, {
+  registerPiContextExpert(selected.pi, {
     jevClient: selectedJev,
     config: { "compaction.strategy": "ladder" },
   });
@@ -532,7 +538,7 @@ test("Ladder projects branch corpus through context_with_system and falls back u
 
   const failing = createFakePi(entries);
   let failingCalls = 0;
-  registerPiRuleCompiler(failing.pi, {
+  registerPiContextExpert(failing.pi, {
     jevClient: {
       evaluate: async () => {
         failingCalls += 1;
@@ -589,7 +595,7 @@ test("Ladder bounds a live-scale corpus before Jev evaluation", async () => {
   }));
   const fake = createFakePi(entries);
   const jev = new LadderFullJev();
-  registerPiRuleCompiler(fake.pi, {
+  registerPiContextExpert(fake.pi, {
     jevClient: jev,
     config: { "compaction.strategy": "ladder" },
   });
@@ -634,7 +640,7 @@ test("Ladder reports an unfittable shortlist without calling Jev", async () => {
   assert.ok(chunk);
   const fake = createFakePi([{ type: "custom", customType: CORPUS_ENTRY_TYPE, data: chunk }]);
   const jev = new LadderFullJev();
-  registerPiRuleCompiler(fake.pi, {
+  registerPiContextExpert(fake.pi, {
     jevClient: jev,
     config: { "compaction.strategy": "ladder" },
     ladder: { maxStateTokens: 1 },
@@ -674,7 +680,7 @@ test("Ladder projection cache invalidates on query, corpus, and session changes"
   const entries: StoredEntry[] = [{ type: "custom", customType: CORPUS_ENTRY_TYPE, data: firstChunk }];
   const fake = createFakePi(entries);
   const jev = new LadderFullJev();
-  registerPiRuleCompiler(fake.pi, {
+  registerPiContextExpert(fake.pi, {
     jevClient: jev,
     config: { "compaction.strategy": "ladder" },
   });
@@ -727,7 +733,7 @@ test("Ladder projection cache invalidates on query, corpus, and session changes"
 
 test("Evidence ladder requires both flags and publishes only after successful compaction", async () => {
   const singlyEnabled = createFakePi();
-  registerPiRuleCompiler(singlyEnabled.pi, {
+  registerPiContextExpert(singlyEnabled.pi, {
     jevClient: new ValidFakeJev(),
     evidence: { strategy: "ladder" },
   });
@@ -744,7 +750,7 @@ test("Evidence ladder requires both flags and publishes only after successful co
 
   const enabled = createFakePi();
   const jev = new LadderFullJev();
-  registerPiRuleCompiler(enabled.pi, {
+  registerPiContextExpert(enabled.pi, {
     jevClient: jev,
     config: {
       "compaction.strategy": "ladder",
@@ -780,7 +786,7 @@ test("Evidence ladder requires both flags and publishes only after successful co
 test("Evidence success stores a review-only proposal idempotently", async () => {
   const fake = createFakePi();
   const jev = new LadderFullJev();
-  registerPiRuleCompiler(fake.pi, {
+  registerPiContextExpert(fake.pi, {
     jevClient: jev,
     config: {
       "compaction.strategy": "ladder",
@@ -809,7 +815,7 @@ test("Evidence success stores a review-only proposal idempotently", async () => 
 
 test("overflow Evidence defers review-only proposal synthesis until agent_settled", async () => {
   const fake = createFakePi();
-  registerPiRuleCompiler(fake.pi, {
+  registerPiContextExpert(fake.pi, {
     jevClient: new LadderFullJev(),
     config: {
       "compaction.strategy": "ladder",
@@ -841,7 +847,7 @@ test("basic success never publishes RuleSignals or starts retro", async (t) => {
   for (const reason of ["manual", "threshold", "overflow"] as const) {
     await t.test(reason, async () => {
       const fake = createFakePi();
-      registerPiRuleCompiler(fake.pi, { jevClient: new ValidFakeJev() });
+      registerPiContextExpert(fake.pi, { jevClient: new ValidFakeJev() });
       const runtime = createRetroCapableContext(fake.entries);
       const result = requireCompactionResult(
         await fake.handlers.get("session_before_compact")?.(
@@ -869,7 +875,7 @@ test("basic success never publishes RuleSignals or starts retro", async (t) => {
 test("missing key, timeout, malformed response, API failure, and unfittable state cancel without native fallback", async (t) => {
   const cases: Array<{
     name: string;
-    options: Parameters<typeof registerPiRuleCompiler>[1];
+    options: Parameters<typeof registerPiContextExpert>[1];
     expectedDiagnostic: RegExp;
   }> = [
     { name: "missing key", options: { env: {}, hookTimeoutMs: 30 }, expectedDiagnostic: /missing TYPESAFE_API_KEY/ },
@@ -915,7 +921,7 @@ test("missing key, timeout, malformed response, API failure, and unfittable stat
   for (const scenario of cases) {
     await t.test(scenario.name, async () => {
       const fake = createFakePi();
-      registerPiRuleCompiler(fake.pi, scenario.options);
+      registerPiContextExpert(fake.pi, scenario.options);
       const { context, notifications } = createContext(fake.entries);
       const result = await fake.handlers.get("session_before_compact")?.(compactionEvent(), context);
       assert.deepEqual(result, { cancel: true });
@@ -932,7 +938,7 @@ test("an aborted compaction cancels without native fallback", async () => {
   const event = compactionEvent();
   event.signal = controller.signal;
   const fake = createFakePi();
-  registerPiRuleCompiler(fake.pi, { jevClient: new ValidFakeJev() });
+  registerPiContextExpert(fake.pi, { jevClient: new ValidFakeJev() });
   const { context, notifications } = createContext(fake.entries);
   const result = await fake.handlers.get("session_before_compact")?.(event, context);
   assert.deepEqual(result, { cancel: true });
@@ -946,7 +952,7 @@ test("an aborted compaction under RPC mode also emits a best-effort stderr diagn
   const event = compactionEvent();
   event.signal = controller.signal;
   const fake = createFakePi();
-  registerPiRuleCompiler(fake.pi, { jevClient: new ValidFakeJev() });
+  registerPiContextExpert(fake.pi, { jevClient: new ValidFakeJev() });
   const { context, notifications } = createContext(fake.entries, { mode: "rpc" });
   const stderr = captureStderr();
   let result: unknown;
@@ -959,7 +965,7 @@ test("an aborted compaction under RPC mode also emits a best-effort stderr diagn
   assert.deepEqual(result, { cancel: true });
   assert.match(notifications.at(-1)?.message ?? "", /aborted/);
   assert.equal(stderrChunks.length, 1);
-  assert.match(stderrChunks[0] ?? "", /\[a4s-pi-rule-compiler:rpc-stdin-guard]/);
+  assert.match(stderrChunks[0] ?? "", /\[a4s-pi-context-expert:rpc-stdin-guard]/);
   assert.match(stderrChunks[0] ?? "", /compaction aborted under RPC mode/);
 });
 
@@ -969,7 +975,7 @@ test("an aborted compaction outside RPC mode never writes the stderr diagnostic"
   const event = compactionEvent();
   event.signal = controller.signal;
   const fake = createFakePi();
-  registerPiRuleCompiler(fake.pi, { jevClient: new ValidFakeJev() });
+  registerPiContextExpert(fake.pi, { jevClient: new ValidFakeJev() });
   const { context } = createContext(fake.entries, { mode: "tui" });
   const stderr = captureStderr();
   let stderrChunks: string[];
@@ -983,7 +989,7 @@ test("an aborted compaction outside RPC mode never writes the stderr diagnostic"
 
 test("a non-aborted cancel under RPC mode never writes the stderr diagnostic", async () => {
   const fake = createFakePi();
-  registerPiRuleCompiler(fake.pi, { env: {}, hookTimeoutMs: 30 });
+  registerPiContextExpert(fake.pi, { env: {}, hookTimeoutMs: 30 });
   const { context } = createContext(fake.entries, { mode: "rpc" });
   const stderr = captureStderr();
   let stderrChunks: string[];
@@ -998,7 +1004,7 @@ test("a non-aborted cancel under RPC mode never writes the stderr diagnostic", a
 test("failed compaction clears pending work and never publishes signals", async () => {
   const jev = new ValidFakeJev();
   const fake = createFakePi();
-  registerPiRuleCompiler(fake.pi, { jevClient: jev });
+  registerPiContextExpert(fake.pi, { jevClient: jev });
   const { context } = createContext(fake.entries);
   const event = compactionEvent();
   assert.ok(requireCompactionResult(await fake.handlers.get("session_before_compact")?.(event, context)));
@@ -1015,7 +1021,7 @@ test("failed compaction clears pending work and never publishes signals", async 
 test("large basic sessions evaluate every message once, cache pending work, and retain no RuleSignals", async () => {
   const jev = new ValidFakeJev();
   const fake = createFakePi();
-  registerPiRuleCompiler(fake.pi, {
+  registerPiContextExpert(fake.pi, {
     jevClient: jev,
     observation: { maxMessagesPerWindow: 32, maxQuestionsPerRequest: 10 },
     now: () => new Date("2026-09-18T12:30:00.000Z"),
@@ -1048,7 +1054,7 @@ test("large basic sessions evaluate every message once, cache pending work, and 
   assert.equal(fake.entries.filter((entry) => entry.customType === RULE_SIGNAL_ENTRY_TYPE).length, 0);
 
   const reloaded = createFakePi([compactionEntry]);
-  registerPiRuleCompiler(reloaded.pi, { jevClient: new ValidFakeJev() });
+  registerPiContextExpert(reloaded.pi, { jevClient: new ValidFakeJev() });
   const reloadedContext = createContext(reloaded.entries).context;
   await reloaded.handlers.get("session_start")?.({ type: "session_start", reason: "reload" }, reloadedContext);
   assert.equal(reloaded.entries.filter((entry) => entry.customType === RULE_SIGNAL_ENTRY_TYPE).length, 0);
@@ -1063,7 +1069,7 @@ test("/retro-rules preserves manually stored evidence after failure and retries 
     "retry",
   );
   const fake = createFakePi([asSignalEntry(batch)]);
-  registerPiRuleCompiler(fake.pi, {
+  registerPiContextExpert(fake.pi, {
     jevClient: new ValidFakeJev(),
     now: () => new Date("2026-09-18T13:30:00.000Z"),
   });
@@ -1096,7 +1102,7 @@ test("/retro-rules remains current-model synthesis plus Jev stage 2 and review-o
   assert.ok(signal);
   const fake = createFakePi([{ type: "custom", customType: RULE_SIGNAL_ENTRY_TYPE, data: batch }]);
   const stageTwoJev = new ValidFakeJev();
-  registerPiRuleCompiler(fake.pi, { jevClient: stageTwoJev });
+  registerPiContextExpert(fake.pi, { jevClient: stageTwoJev });
   const order: string[] = [];
   const notifications: string[] = [];
   const currentModel = { provider: "fake-provider", id: "current-model" };
@@ -1145,7 +1151,7 @@ test("/retro-rules fails closed when the current model is unavailable", async ()
     new AbortController().signal,
   );
   const fake = createFakePi([{ type: "custom", customType: RULE_SIGNAL_ENTRY_TYPE, data: batch }]);
-  registerPiRuleCompiler(fake.pi, { jevClient: new ValidFakeJev() });
+  registerPiContextExpert(fake.pi, { jevClient: new ValidFakeJev() });
   const notifications: string[] = [];
   await fake.commands.get("retro-rules")?.("", {
     waitForIdle: async () => undefined,
@@ -1160,7 +1166,7 @@ test("/retro-rules fails closed when the current model is unavailable", async ()
 
 test("registers a credential-only typesafe provider wired into /login", async () => {
   const fake = createFakePi();
-  registerPiRuleCompiler(fake.pi, { jevClient: new ValidFakeJev() });
+  registerPiContextExpert(fake.pi, { jevClient: new ValidFakeJev() });
   assert.equal(fake.registeredProviders.length, 1);
 
   const provider = fake.registeredProviders[0] as {
@@ -1381,7 +1387,7 @@ test("agent_settled hints only after percentage and compactable-history gates pa
   ]) {
     const jev = new CompactTriggerJev();
     const fake = createFakePi();
-    registerPiRuleCompiler(fake.pi, {
+    registerPiContextExpert(fake.pi, {
       jevClient: jev,
       config: { "trigger.mode": "hint" },
       trigger: { resolveCompactionSettings: () => ({ keepRecentTokens: 20_000 }) },
@@ -1411,7 +1417,7 @@ test("agent_settled hints only after percentage and compactable-history gates pa
 test("agent_settled recalculates the trigger ratio after a model window change", async () => {
   const jev = new CompactTriggerJev();
   const fake = createFakePi();
-  registerPiRuleCompiler(fake.pi, {
+  registerPiContextExpert(fake.pi, {
     jevClient: jev,
     config: { "trigger.mode": "hint" },
     trigger: { resolveCompactionSettings: () => ({ keepRecentTokens: 20_000 }) },
@@ -1453,7 +1459,7 @@ test("agent_settled resolves active-model keepRecentTokens from Pi project setti
 
     const jev = new CompactTriggerJev();
     const fake = createFakePi();
-    registerPiRuleCompiler(fake.pi, {
+    registerPiContextExpert(fake.pi, {
       jevClient: jev,
       config: { "trigger.mode": "hint" },
       now: () => new Date("2026-09-22T12:00:00.000Z"),
@@ -1487,7 +1493,7 @@ test("agent_settled resolves active-model keepRecentTokens from Pi project setti
 test("agent_settled auto trigger treats persisted config as consent and enters session_before_compact", async () => {
   const jev = new ValidFakeJev();
   const fake = createFakePi();
-  registerPiRuleCompiler(fake.pi, {
+  registerPiContextExpert(fake.pi, {
     jevClient: jev,
     config: { "trigger.mode": "auto" },
     trigger: {

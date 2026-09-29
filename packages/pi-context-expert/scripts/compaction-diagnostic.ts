@@ -17,13 +17,13 @@ export type SafeCompactionDiagnosticCategory =
   (typeof SAFE_COMPACTION_DIAGNOSTIC_CATEGORIES)[number];
 
 const SAFE_NOTIFICATION_MESSAGES = new Map<string, SafeCompactionDiagnosticCategory>([
-  ["Rule compiler compaction skipped: Jev is unavailable (missing TYPESAFE_API_KEY). Compaction was cancelled; native fallback is disabled.", "missing_key"],
-  ["Rule compiler compaction skipped: the bounded analysis timed out. Compaction was cancelled; native fallback is disabled.", "timeout"],
-  ["Rule compiler compaction skipped: a model response failed strict validation. Compaction was cancelled; native fallback is disabled.", "validation"],
-  ["Rule compiler compaction skipped: the sanitized state or summary exceeded configured bounds. Compaction was cancelled; native fallback is disabled.", "oversized_state"],
-  ["Rule compiler compaction skipped: the Jev request failed. Compaction was cancelled; native fallback is disabled.", "api_failure"],
-  ["Rule compiler compaction skipped: the analysis was aborted. Compaction was cancelled; native fallback is disabled.", "aborted"],
-  ["Rule compiler compaction skipped: an internal bounded failure occurred. Compaction was cancelled; native fallback is disabled.", "internal_failure"],
+  ["Context expert compaction skipped: Jev is unavailable (missing TYPESAFE_API_KEY). Compaction was cancelled; native fallback is disabled.", "missing_key"],
+  ["Context expert compaction skipped: the bounded analysis timed out. Compaction was cancelled; native fallback is disabled.", "timeout"],
+  ["Context expert compaction skipped: a model response failed strict validation. Compaction was cancelled; native fallback is disabled.", "validation"],
+  ["Context expert compaction skipped: the sanitized state or summary exceeded configured bounds. Compaction was cancelled; native fallback is disabled.", "oversized_state"],
+  ["Context expert compaction skipped: the Jev request failed. Compaction was cancelled; native fallback is disabled.", "api_failure"],
+  ["Context expert compaction skipped: the analysis was aborted. Compaction was cancelled; native fallback is disabled.", "aborted"],
+  ["Context expert compaction skipped: an internal bounded failure occurred. Compaction was cancelled; native fallback is disabled.", "internal_failure"],
 ]);
 
 /**

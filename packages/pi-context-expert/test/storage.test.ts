@@ -43,6 +43,15 @@ test("Evidence receipts validate their idempotency binding and deduplicate stora
   );
 });
 
+test("legacy pi-rule-compiler custom entries are not read under the new namespace", () => {
+  const valid = receipt();
+  assert.deepEqual(collectEvidenceReceipts([{
+    type: "custom",
+    customType: "a4s.pi-rule-compiler.evidence-receipt.v1",
+    data: valid,
+  }]), []);
+});
+
 test("Evidence receipt collection ignores malformed source boundaries", () => {
   const valid = receipt();
   const malformed = {

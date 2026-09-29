@@ -55,7 +55,7 @@ export interface TypesafeJevClientOptions {
   fetch?: CreateTypesafeClientOptions["fetch"];
 }
 
-/** Adapts the canonical SDK client to rule-compiler's existing JevClient seam. */
+/** Adapts the canonical SDK client to pi-context-expert's existing JevClient seam. */
 export class TypesafeJevClient implements JevClient {
   private readonly client: ReturnType<typeof createTypesafeClient>;
 

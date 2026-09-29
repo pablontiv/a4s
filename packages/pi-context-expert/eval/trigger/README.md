@@ -13,7 +13,7 @@ Report gate coverage, hint precision, auto precision, and false auto actions. Th
 Run the deterministic offline Evidence eval from the repository root:
 
 ```sh
-npm run eval:evidence --workspace @a4s/pi-rule-compiler
+npm run eval:evidence --workspace @a4s/pi-context-expert
 ```
 
 It executes the real conservative Evidence selection and RuleSignal gates with a fixture-only Jev client. The checked-in cases are:

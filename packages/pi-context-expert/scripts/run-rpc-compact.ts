@@ -24,7 +24,7 @@
  *   npx tsx scripts/run-rpc-compact.ts \
  *     --pi node_modules/.bin/pi \
  *     --fork /tmp/some-snapshot.jsonl \
- *     -- --no-extensions --extension packages/pi-rule-compiler/src/index.ts
+ *     -- --no-extensions --extension packages/pi-context-expert/src/index.ts
  */
 import { spawn } from "node:child_process";
 import {

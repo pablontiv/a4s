@@ -1,6 +1,6 @@
 #!/usr/bin/env -S npx tsx
 /**
- * Product E2E for the Pi Rule Compiler extension.
+ * Product E2E for the Pi Context Expert extension.
  *
  * This intentionally uses the locally configured Pi model and TypeSafe/Jev
  * credential. It neither supplies a model nor writes RPC output/transcripts;
@@ -13,7 +13,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   loadGlobalCompactionConfiguration,
-  PI_RULE_COMPILER_GLOBAL_CONFIG_PATH,
+  PI_CONTEXT_EXPERT_GLOBAL_CONFIG_PATH,
   resolveCompactionConfig,
 } from "../src/config.ts";
 import { stableDigest } from "../src/digest.ts";
@@ -36,7 +36,7 @@ import {
 
 const COMMAND_TIMEOUT_MS = 300_000;
 const SHUTDOWN_TIMEOUT_MS = 10_000;
-const CORPUS_ENTRY_TYPE = "a4s.pi-rule-compiler.corpus.v1";
+const CORPUS_ENTRY_TYPE = "a4s.pi-context-expert.corpus.v1";
 
 type E2eMode = "basic" | "ladder" | "evidence";
 
@@ -60,18 +60,18 @@ export function assertE2eGlobalConfiguration(
   const requiredCompaction = mode === "basic" ? "basic" : "ladder";
   if (configured.compaction.strategy !== requiredCompaction) {
     throw new Error(
-      `${PI_RULE_COMPILER_GLOBAL_CONFIG_PATH} must set compaction.strategy=${requiredCompaction} before starting the E2E`,
+      `${PI_CONTEXT_EXPERT_GLOBAL_CONFIG_PATH} must set compaction.strategy=${requiredCompaction} before starting the E2E`,
     );
   }
   if (mode !== "evidence") return;
   if (configured.evidence.strategy !== "ladder") {
     throw new Error(
-      `${PI_RULE_COMPILER_GLOBAL_CONFIG_PATH} must set evidence.strategy=ladder before starting the Evidence E2E`,
+      `${PI_CONTEXT_EXPERT_GLOBAL_CONFIG_PATH} must set evidence.strategy=ladder before starting the Evidence E2E`,
     );
   }
   if (configured.trigger.mode === "auto") {
     throw new Error(
-      `${PI_RULE_COMPILER_GLOBAL_CONFIG_PATH} must set trigger.mode=off or hint before starting the Evidence E2E`,
+      `${PI_CONTEXT_EXPERT_GLOBAL_CONFIG_PATH} must set trigger.mode=off or hint before starting the Evidence E2E`,
     );
   }
 }
@@ -466,7 +466,7 @@ async function main(args: readonly string[] = process.argv.slice(2)): Promise<vo
   const runDir = resolve(
     repositoryDir,
     "artifacts",
-    "pi-rule-compiler-e2e",
+    "pi-context-expert-e2e",
     `${new Date().toISOString().replaceAll(/[:.]/g, "-")}-${process.pid}`,
   );
   const sessionDir = resolve(runDir, "sessions");
@@ -495,10 +495,10 @@ async function main(args: readonly string[] = process.argv.slice(2)): Promise<vo
       }
       assertReloadedEvidenceArtifacts(first.ids.evidence, reloaded.evidence);
     }
-    process.stdout.write(`Pi Rule Compiler E2E passed (${mode}). Evidence: ${runDir}\n`);
+    process.stdout.write(`Pi Context Expert E2E passed (${mode}). Evidence: ${runDir}\n`);
   } catch (error) {
     const reason = error instanceof Error ? error.message : "unexpected E2E failure";
-    process.stderr.write(`Pi Rule Compiler E2E failed: ${reason}. Evidence preserved: ${runDir}\n`);
+    process.stderr.write(`Pi Context Expert E2E failed: ${reason}. Evidence preserved: ${runDir}\n`);
     process.exitCode = 1;
   }
 }

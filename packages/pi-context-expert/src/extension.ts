@@ -82,7 +82,7 @@ import type {
   StoredRuleProposalCandidate,
 } from "./types.ts";
 
-export interface PiRuleCompilerOptions {
+export interface PiContextExpertOptions {
   jevClient?: JevClient;
   env?: Readonly<Record<string, string | undefined>>;
   hookTimeoutMs?: number;
@@ -128,8 +128,8 @@ interface PendingRetroWork {
   batches: RuleSignalBatch[];
 }
 
-export const LADDER_PROJECTION_RECEIPT_TYPE = "a4s.pi-rule-compiler.ladder-projection-receipt.v1";
-export const LADDER_PROJECTION_FAILURE_TYPE = "a4s.pi-rule-compiler.ladder-projection-failure.v1";
+export const LADDER_PROJECTION_RECEIPT_TYPE = "a4s.pi-context-expert.ladder-projection-receipt.v1";
+export const LADDER_PROJECTION_FAILURE_TYPE = "a4s.pi-context-expert.ladder-projection-failure.v1";
 
 const MAX_LADDER_PROJECTION_CACHE_ENTRIES = 16;
 
@@ -158,7 +158,7 @@ interface CachedLadderProjectionFailure {
 
 class CurrentModelCallError extends Error {}
 
-export function registerPiRuleCompiler(pi: ExtensionAPI, options: PiRuleCompilerOptions = {}): void {
+export function registerPiContextExpert(pi: ExtensionAPI, options: PiContextExpertOptions = {}): void {
   const pendingByAttempt = new Map<string, PendingCompaction>();
   const retroInFlight = new Set<string>();
   const ladderProjectionCache = new Map<string, CachedLadderProjection>();
@@ -559,7 +559,7 @@ export function registerPiRuleCompiler(pi: ExtensionAPI, options: PiRuleCompiler
   });
 }
 
-const TRIGGER_COOLDOWN_ENTRY_TYPE = "a4s.pi-rule-compiler.compaction-trigger-cooldown.v1";
+const TRIGGER_COOLDOWN_ENTRY_TYPE = "a4s.pi-context-expert.compaction-trigger-cooldown.v1";
 
 function customEntryData(entry: unknown, customType: string): Record<string, unknown> | undefined {
   if (entry === null || typeof entry !== "object" || Array.isArray(entry)) return undefined;
@@ -1129,7 +1129,7 @@ function classifyRetroError(error: unknown): DiagnosticCode {
   return "internal_failure";
 }
 
-const ABORTED_TRANSPORT_DIAGNOSTIC_PREFIX = "[a4s-pi-rule-compiler:rpc-stdin-guard]";
+const ABORTED_TRANSPORT_DIAGNOSTIC_PREFIX = "[a4s-pi-context-expert:rpc-stdin-guard]";
 
 /**
  * Best-effort side channel for the "aborted" diagnostic code specifically.
@@ -1184,7 +1184,7 @@ function safeNotify(ctx: ExtensionContext, phase: "compaction" | "signals" | "re
         : "Persisted signals were preserved.";
   safeNotifyText(
     ctx,
-    `Rule compiler ${phase} skipped: ${descriptions[code]}. ${suffix}`,
+    `Context expert ${phase} skipped: ${descriptions[code]}. ${suffix}`,
     code === "no_signals" ? "info" : "warning",
   );
 }

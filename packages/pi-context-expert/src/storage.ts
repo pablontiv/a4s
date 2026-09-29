@@ -23,12 +23,12 @@ import type {
 } from "./types.ts";
 import { DEFAULT_JEV_MODEL } from "./types.ts";
 
-export const RULE_SIGNAL_ENTRY_TYPE = "a4s.pi-rule-compiler.rule-signals.v2" as const;
-export const RETRO_PENDING_ENTRY_TYPE = "a4s.pi-rule-compiler.retro-pending.v1" as const;
-export const RULE_PROPOSAL_ENTRY_TYPE = "a4s.pi-rule-compiler.rule-proposals.v1" as const;
-export const RULE_ACCEPTANCE_ENTRY_TYPE = "a4s.pi-rule-compiler.rule-acceptance.v1" as const;
-export const CORPUS_ENTRY_TYPE = "a4s.pi-rule-compiler.corpus.v1" as const;
-export const EVIDENCE_RECEIPT_ENTRY_TYPE = "a4s.pi-rule-compiler.evidence-receipt.v1" as const;
+export const RULE_SIGNAL_ENTRY_TYPE = "a4s.pi-context-expert.rule-signals.v2" as const;
+export const RETRO_PENDING_ENTRY_TYPE = "a4s.pi-context-expert.retro-pending.v1" as const;
+export const RULE_PROPOSAL_ENTRY_TYPE = "a4s.pi-context-expert.rule-proposals.v1" as const;
+export const RULE_ACCEPTANCE_ENTRY_TYPE = "a4s.pi-context-expert.rule-acceptance.v1" as const;
+export const CORPUS_ENTRY_TYPE = "a4s.pi-context-expert.corpus.v1" as const;
+export const EVIDENCE_RECEIPT_ENTRY_TYPE = "a4s.pi-context-expert.evidence-receipt.v1" as const;
 
 const RULE_SCOPE_KINDS: readonly RuleScopeKind[] = ["global", "project", "path", "task"];
 const RULE_CLASSES: readonly RuleClass[] = [
@@ -55,7 +55,7 @@ const FORCED_REASONS: readonly CompactionForcedReason[] = ["boundary", "newest",
 
 export class StoredEntryValidationError extends Error {
   constructor(readonly path: string) {
-    super(`invalid stored rule compiler entry at ${path}`);
+    super(`invalid stored context expert entry at ${path}`);
     this.name = "StoredEntryValidationError";
   }
 }

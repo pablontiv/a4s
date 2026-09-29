@@ -1,14 +1,14 @@
 {
-  "name": "@a4s/pi-rule-compiler",
+  "name": "@a4s/pi-context-expert",
   "version": "0.1.0",
   "private": true,
   "license": "UNLICENSED",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/pablontiv/a4s.git",
-    "directory": "packages/pi-rule-compiler"
+    "directory": "packages/pi-context-expert"
   },
-  "homepage": "https://github.com/pablontiv/a4s/tree/main/packages/pi-rule-compiler#readme",
+  "homepage": "https://github.com/pablontiv/a4s/tree/main/packages/pi-context-expert#readme",
   "bugs": {
     "url": "https://github.com/pablontiv/a4s/issues"
   },
