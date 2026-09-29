@@ -1,111 +1,369 @@
-schema_version: workspace-control/v1
-
-profile:
-  id: pablontiv/a4s
-  version: 2
-  based_on:
-    name: engineering-handbook
-    version: "1.4"
-    digest: f5455e3eced13690358b02823053a1e00a6c7c06de5f17d9716805bf0a0cff26
-
+---
 workspace:
-  context_sources:
-    - |
-      Backscroll es obligatorio cuando la historia pueda afectar el trabajo:
-      buscar primero por proyecto, ampliar una vez si no hay resultados y
-      conservar unknown si la fuente requerida no está disponible.
-  workflow:
-    base_branch: main
-    sync_strategy: |
-      Antes de trabajo mutante, operar desde el checkout estable de main y
-      ejecutar `git fetch origin main` seguido de
-      `git pull --ff-only origin main`. Si cualquier comando falla, la rama no
-      es main, el working tree no está limpio, aparece una divergencia o no puede
-      verificarse el resultado, conservar unknown y detener la fase afectada.
-    isolation_strategy: dedicated-worktree
-    development_workflow: |
-      Aplicar diseño proporcional e implementar directamente; usar un probe
-      sólo cuando un unknown material requiera evidencia.
-    commit_policy: |
-      Usar conventional commits y ejecutar los checks aplicables antes del commit.
-    delivery_mode: pull-request
-    delivery_gate: |
-      Merge autónomo por squash con --match-head-commit permitido cuando, para el SHA de cabeza del PR, se cumplen CADA UNO DE LOS: test/ci-local.sh en verde; aprobación de un reviewer subagente fresco sobre ese SHA; sin hallazgos de seguridad HIGH; marca 'Delivery-Override: ci-billing' mientras CI siga bloqueado; evidencia que registra el SHA y el resultado de cada gate (ADR 0047). Se mantiene gate humano (autorización explícita del operador) para: cambios a la política de delivery o autonomía (incluido este eje y delivery_overrides); efectos externos fuera del repositorio; operaciones destructivas; sustituir un ADR aceptado. Revocable volviendo este texto a gate humano.
-    delivery_overrides:
-      ci-billing:
-        status: active
-        adr: 0046-permitir-merge-de-pr-sin-ci-mientras-actions-este-bloqueado
-        tracking_bead: a4s-1cy
-        since: "2026-09-19"
-        scope: |
-          Sólo el gate de CI. La entrega sigue siendo pull-request; se permite
-          mergear con checks en rojo únicamente si los jobs muestran la anotación
-          de billing o spending limit con 0 steps.
-        compensating_controls:
-          - test/ci-local.sh debe ejecutarse en verde sobre el SHA candidato, con salida resumida en la evidencia.
-          - Revisión del diff completo antes del merge.
-          - Autorización del operador ligada al SHA o, en modo autónomo, los gates autónomos de delivery_gate registrados contra ese SHA (un cambio posterior invalida ambas).
-          - Marca 'Delivery-Override: ci-billing' en el commit o cuerpo del PR.
-        fallback: |
-          Push directo a main sólo si un PR es imposible, con autorización explícita
-          por caso y marca 'Delivery-Override: direct-push'.
-        expires_when: |
-          Un job de CI vuelve a iniciar (steps mayor que 0). Entonces ejecutar el
-          workflow sobre la cabeza de main, abrir Bead de regresión ante fallo y
-          retirar esta excepción.
-    definition_of_ready: |
-      El contrato de task de Roadmap. Una task con label `legacy` requiere sólo
-      descripción y criterios de aceptación.
-    incomplete_task_policy: skip
-    failed_task_policy: skip
+  purpose:
+    outcome: >-
+      A4S turns recurring multi-repository work into incremental capabilities
+      for outer harnesses. Describe a capability as available only after its
+      usable behavior has been delivered and verified.
+    approach: >-
+      Work adaptively because investigation and implementation reveal facts
+      that an initial plan cannot settle. Agree on the result first, deliver
+      verifiable increments, and revise the means when evidence changes.
+  authority:
+    source: >-
+      This file, as integrated on the main branch, is the only normative
+      source of this repository's way of working. A rule absent from it is
+      not in force. A copy in a worktree or branch is a candidate until its
+      PR is integrated.
+    records: >-
+      ADRs, specifications, plans, and reports record what was decided, when,
+      and why; they do not govern. Records are append-only: an existing
+      record is never edited, and a supersession is declared only in the new
+      record that supersedes it.
+    derived: >-
+      The profile, AGENTS.md, README, and contract tests derive from this file.
+      On conflict this file prevails and the derived artifact is corrected.
+    mechanism: >-
+      Skills and methods provide technique and read their policy from this
+      file; they add no rule of their own.
+    deviation: >-
+      When an operator instruction contradicts this file, the executor names
+      the rule it contradicts and proceeds only after the operator explicitly
+      approves that deviation for that case. A deviation creates no norm;
+      making it one requires the normative change process in
+      improve_work.change.
+  roles:
+    operator: >-
+      States the need, chooses the result from investigated options, authorizes
+      reserved actions, and approves normative changes to this way of working.
+    executor: >-
+      Investigates, proposes options and work units, coordinates the agreed
+      scope, reports evidence and blockers, and returns changed decisions to
+      the operator.
+    implementer: >-
+      Produces the assigned task result. The executor and implementer may be
+      the same person or agent.
+    reviewer: >-
+      Checks the candidate against its acceptance criteria and applicable
+      controls, independently of the implementer as accept_work.review
+      requires.
+  choose_work:
+    intake: >-
+      The operator presents a need. The executor investigates the repository,
+      relevant records and documentation, and pertinent history. Proposals
+      explain the available results, acceptance criteria, and their fit with
+      purpose.outcome. The operator chooses the result.
+    priority: >-
+      Present dependencies, expected value for A4S, and material risks when
+      proposing what to do next. The operator chooses the objective; the
+      executor orders authorized tasks within its dependencies and scope.
+    changed_decision: >-
+      Adapt techniques and task sequence within the agreed result. When
+      evidence changes the result, acceptance, scope, or authority, present
+      updated options and obtain the operator's choice before proceeding.
+  define_work:
+    units:
+      epic: >-
+        A non-executable objective grouping related tasks. State its result,
+        boundaries, dependencies, and acceptance criteria of its own. It closes
+        only after its tasks and those criteria have been verified.
+      task: >-
+        An executable unit with one accepted result, one primary kind, and a
+        proportional Git-versioned artifact delivered by PR. An independent
+        task needs no epic. Size the task for one execution session.
+    classification: >-
+      Classify a task by the result being accepted, not by the tools used or
+      the format of its artifact. Split independently acceptable results of
+      different kinds into separate tasks.
+    kinds:
+      research: >-
+        Answer a question using identified sources and a stated comparison
+        method. Deliver evidence, options, and a supported conclusion or
+        decision. A written comparison of integration choices is research
+        even though its artifact is Markdown.
+      experiment: >-
+        Test a question through an observable action. Agree on the expected
+        observations and verdict conditions before running it; record the
+        procedure, actual observations, verdict, provenance, and cleanup.
+        A disposable run proving an integration path is an experiment even
+        when it contains code.
+      documentation: >-
+        Deliver content for an identified audience and use in an agreed
+        destination. Check it against authoritative sources and the validation
+        required for its document class. A component usage guide is
+        documentation.
+      implementation: >-
+        Change the system and verify the agreed behavior or preserved
+        invariants. Features, bugfixes, and refactors are implementation:
+        a bugfix starts from an observed symptom and investigates its cause
+        during the task; a refactor checks that required behavior is preserved.
+    beads: >-
+      Beads represents objectives as epic and executable units as task. Each
+      task carries exactly one label: kind-research, kind-experiment,
+      kind-documentation, or kind-implementation. An epic has no kind label.
+  prepare_work:
+    shared_readiness: >-
+      Before starting a task, agree on its result and acceptance criteria
+      through the proposal-and-choice cycle. Record the initial state, scope
+      and exclusions, applicable authority and invariants, dependencies,
+      versioned artifact, and evidence required for each criterion. An epic
+      also records its own observable criteria and child dependencies.
+    by_kind:
+      research: >-
+        State the question, sources, comparison method, and what makes the
+        answer sufficient for the pending decision.
+      experiment: >-
+        State the question, minimum procedure, environment, expected
+        observations, verdict conditions, containment, and cleanup.
+      documentation: >-
+        State the audience, intended use, document class, sources,
+        destination, required content, and validation.
+      implementation: >-
+        State the baseline, intended behavior or correction, constraints,
+        applicable checks, and the end-to-end check from
+        accept_work.end_to_end. An observed bug symptom is sufficient to
+        begin diagnosis; its cause need not be assumed in advance.
+    design: >-
+      Implement a bounded task from its agreed result and criteria. Design
+      and obtain approval for shared architecture, interfaces, or constraints
+      before implementing tasks that depend on those decisions. Prefer direct,
+      reversible operation over frameworks, migrations, or anticipated
+      taxonomies, and apply DRY and KISS before adding a new layer.
+    new_capability: >-
+      A new independently usable result requires a separate experiment task
+      that demonstrates its minimum working path, including when it is added
+      inside an existing component. Evaluate the PoC evidence first. The
+      executor then proposes adoption, adaptation, or rejection; the operator
+      chooses before implementation of the operational capability is defined.
+  do_work:
+    starting_point: >-
+      Before repository mutation, use the stable main checkout. Require the
+      main branch and a clean working tree; run `git fetch origin main` and
+      `git pull --ff-only origin main`, then verify the result. Work in a
+      dedicated worktree under .workspace/worktrees/.
+    safety: >-
+      Inventory, planning, and other inspection never mutate. Stop any
+      mutation whose precondition is ambiguous or cannot be verified,
+      including unclear ownership, an unexpected path, a symlink, or an
+      unsupported structure. A name or text match never authorizes deletion.
+    modes:
+      assignment: >-
+        Execute the task or epic chosen by the operator within its agreed
+        boundaries.
+      autonomous: >-
+        Select work across an epic or the A4S backlog only after an explicit
+        operator request defining that scope. Report a blocked task and
+        continue with independent executable tasks in scope. Stop when the
+        scope has no executable work, a human decision is required, a
+        finding is escalated under improve_work.review, a general control
+        fails or remains unknown, or the operator cancels. A status question
+        from the operator does not stop the loop.
+      common_rule: >-
+        Both modes use the same readiness, acceptance, review, delivery,
+        security, and external-effect controls. Permission to select work
+        does not by itself authorize a merge; only deliver_work.merge and
+        reserved_authority do.
+    investigation: >-
+      Use a disposable probe only when a material unknown blocks a decision
+      and a safe probe exists. State one question, run the smallest probe
+      against no shared or production target, read its effect independently,
+      classify the result as demonstrated, refuted, or inconclusive, and
+      record the finding and verified cleanup. Never promote probe code into
+      the product; an inconclusive result blocks only the dependent path.
+      A probe does not replace the separate PoC task required for a new
+      capability.
+    external_effects: >-
+      Inspect the real system read-only and establish its contract and
+      variability. Derive local tests from sanitized observations, validate
+      locally, and obtain operator authorization for the intended payload
+      before a live mutation. Define signals, observation period, exit
+      conditions, and recovery before the action; verify postconditions
+      afterward. After a failed live attempt, establish its cause, reproduce
+      it with a failing test, correct it, obtain independent review and
+      renewed authorization before retrying.
+    credentials: >-
+      TypeSafe resolves credentials only through Pi's native provider.
+      Store other services' credentials as SOPS ciphertext under
+      .workspace/secrets/ and version public age recipient rules in
+      .sops.yaml. Keep the private age identity in user configuration outside
+      the repository. Decrypt only for an authorized operation; keep
+      plaintext out of Git, logs, task evidence, and durable temporary files.
+      Stop the credential-dependent action if its encrypted source or
+      decryption identity cannot be established.
+    knowledge: >-
+      Keep decision records, specifications, plans, and durable research or
+      experiment findings under .workspace/docs/, and use Rootline when
+      consulting, writing, or validating Markdown there. Every document there
+      requires operator approval under deliver_work.merge. Deliver a record in
+      the same PR as the change it records. Component usage guides may live
+      beside the component and must agree with this file. Keep execution
+      evidence in the task record with links to versioned artifacts.
+      AGENTS.md is a one-line entry that points to this file.
+    decision_records: >-
+      Record an ADR for every change to this file, and for every
+      architectural change that other components, users, or future tasks
+      depend on or that is costly to reverse: a contract between components,
+      an external dependency or runtime, where state or data lives, or a
+      security or credential boundary. A refactor that keeps its interface,
+      a bugfix, tests, and internal renames need no ADR.
+    communication: >-
+      Show the operator the full text of an issue or of a comment on an issue
+      or PR, and obtain approval before publishing it. Pull requests and
+      their descriptions need no prior approval. Publish generated text as
+      the operator's own voice, without an AI disclosure on that ground alone.
+    history: >-
+      When prior work can affect the decision, run the official Backscroll
+      preflight, search this project first, and widen once if empty. Search
+      tool history for commands or errors when relevant. An unavailable
+      required source remains unknown; current sources and this file govern
+      over episodic history.
+  accept_work:
+    evidence: >-
+      Map each agreed criterion to its check or observation and recorded
+      result. Report passed, failed, unknown, or not applicable as
+      appropriate. Accept a task only when its criteria and applicable
+      controls have passed; accept an epic after its child results and its
+      own criteria have been verified.
+    kind_checks: >-
+      Review research against its sources and conclusion. Check an
+      experiment's independent observations, verdict, containment, and
+      cleanup; a successful PoC authorizes a decision about operational
+      work, not use of the PoC as a production capability. Validate and
+      review documents against their sources and authority. Test changed
+      software behavior and preserved invariants; a documentation-only
+      task does not need newly written software tests.
+    end_to_end: >-
+      Accept an implementation task only after an end-to-end check that
+      exercises the changed product through its real entry point in a real
+      environment. A package or extension is loaded in its real runtime,
+      such as Pi RPC, with a session created during the check and real
+      providers, without prefabricated fixtures. A skill is invoked by a
+      fresh agent in a real harness with a representative scenario, and its
+      bundled scripts or helpers are also run as real commands. A script or
+      CLI runs against a real non-production environment. An agent
+      definition or output style is invoked in the harness that consumes it
+      with a representative task. When no exercisable entry point exists,
+      the criterion remains unknown and is escalated to the operator. Other
+      kinds need no end-to-end check.
+    public_api: >-
+      When an implementation changes a public API, updating its documentation
+      is an acceptance criterion. A public API is a package's exports, a
+      command or CLI, a skill's invocation and arguments, or a key of this
+      file.
+    review: >-
+      Every PR, including documentation, configuration, and bot PRs, needs
+      approval from a fresh reviewer of the complete candidate. The reviewer
+      uses a model family different from the implementer's and, when one is
+      available, a different provider. When the executor amends a PR, the
+      executor's model counts as the implementer; when no model authored the
+      candidate, any fresh reviewer qualifies.
+  deliver_work:
+    mechanism: >-
+      Deliver every task's proportional, Git-versioned artifact through a
+      pull request. Use conventional commits with a `Bead: <id>` trailer, and
+      run applicable checks before committing. Bot-authored PRs are exempt
+      from the trailer. A task may be integrated
+      before its epic is complete; report that distinction. If PR delivery
+      is unavailable, preserve the candidate and stop delivery; never push
+      directly to main.
+    cadence: >-
+      Integrate each task as soon as it is accepted. Skills in this
+      repository activate separately, by installing a released version tag.
+    merge: >-
+      For the exact PR head SHA, require passing test/ci-local.sh, approval
+      under accept_work.review, no unresolved HIGH security findings, and
+      recorded results for each control. Require applicable remote CI to
+      pass when its jobs execute. A PR that adds or changes a document under
+      .workspace/docs/ also requires operator approval, including in
+      autonomous mode. Any other passing candidate may be squash-merged
+      autonomously with --match-head-commit. A changed head SHA requires
+      fresh evidence.
+    external_prs: >-
+      A bot-authored PR, or any other PR the operator did not originate,
+      passes the same merge controls as any other PR. Process it when the
+      operator requests it or within an autonomous scope that includes it.
+      Merge it when the controls pass. If a control fails, fix the cause in
+      the same PR. If remote CI cannot run for quota or billing, rely on the
+      local checks and apply billing_exception when its condition holds.
+      Leave the PR pending, and report why, only when none of this is
+      possible.
+    billing_exception:
+      tracking_bead: a4s-1cy
+      since: "2026-09-19"
+      condition: >-
+        While GitHub Actions is blocked by billing, waive only the remote
+        CI result for a PR whose jobs carry a billing or spending-limit
+        annotation and execute zero steps. Keep all other merge controls.
+      evidence: >-
+        Record the candidate SHA, passing local test summary, fresh review,
+        applicable autonomous gates or explicit operator authorization,
+        and Delivery-Override: ci-billing in the PR or merge commit.
+      expiry: >-
+        When a CI job executes at least one step, run the workflow against
+        the current main head, open a regression task for a failure, retire
+        this exception, and require passing remote CI for subsequent PRs.
+    close: >-
+      Confirm the reviewed PR was integrated. In the stable main checkout,
+      run `git fetch origin main` and `git pull --ff-only origin main`.
+      Close only when main equals origin/main and `git status --porcelain`
+      is empty.
+      A failed command, conflict, divergence, wrong branch, or dirty tree
+      blocks closure.
+    reserved_authority: >-
+      Obtain explicit operator authorization for every change to this file,
+      a live external effect, destructive cleanup, and merging a PR that adds
+      or changes a document under .workspace/docs/. Authorization identifies
+      the proposed action and does not waive other controls.
+  track_work:
+    progress: >-
+      Report accepted criteria and their evidence, pending criteria,
+      dependencies, and blockers. A count of closed tasks is context,
+      not the measure of an epic's completion.
+    blockers: >-
+      Record why a task is unready or failed and inform the operator.
+      An autonomous loop skips that task and may continue independent
+      authorized tasks; it never marks the blocked objective complete.
     controller_identity: env:PI_SESSION_ID
-  pre_checks:
-    - Revisar el ADR aceptado que gobierna el cambio.
-    - Confirmar Rootline antes de escribir conocimiento gobernado.
-    - Consultar Backscroll cuando la historia pueda cambiar la decisión.
-  acceptance_checks:
-    - Mapear cada criterio de la spec aprobada a evidencia verificable.
-  review_checks:
-    - Obtener al menos una revisión antes de integrar.
-  post_checks:
-    - Confirmar que la revisión aprobada quedó realmente integrada.
-    - |
-      Cierre obligatorio - fetch, pull y push. En el checkout estable de main,
-      ejecutar `git fetch origin main` y luego `git pull --ff-only origin main`;
-      publicar todo commit local de la entrega; ejecutar nuevamente
-      `git fetch origin main`; y verificar que `git rev-parse main` y
-      `git rev-parse origin/main` devuelven el mismo SHA y que
-      `git status --porcelain` está vacío. Cualquier fallo, conflicto, rama
-      incorrecta, divergencia o working tree sucio detiene el cierre. Sin esta
-      secuencia completa no hay cierre.
-  monitoring: |
-    No aplica a cambios puramente documentales; el comportamiento operativo
-    debe definir monitoreo antes de mutar sistemas externos.
-  external_effects: |
-    Operar read-only hasta obtener autorización explícita y ligada al payload.
-  credential_policy: |
-    Usar únicamente mecanismos declarados y no persistir secretos.
-  knowledge_policy: |
-    Rootline gobierna ADRs, specs, planes e historia bajo .workspace/docs/.
-    No existe fallback activo a docs/.
-  cleanup_policy: |
-    Ofrecer cleanup y no eliminar automáticamente.
-  custom_rules:
-    - Las herramientas oficiales del perfil no admiten sustituciones implícitas.
-    - La versión 2 declara compatibilidad únicamente con Pi.
-
-groups:
-  a4s:
-    workflow:
-      delivery_mode: pull-request
-
-repositories:
-  pablontiv/a4s:
-    repo:
-      id: pablontiv/a4s
-      path: https://github.com/pablontiv/a4s.git
-      group: a4s
-      managed: true
-      verified_revision: 0f0d5f1d9840386a5c55ce50ba16c9ec533d5ec5
-    context_sources:
-      - AGENTS.md
+  improve_work:
+    review: >-
+      After every task, review this way of working against the task's
+      evidence. Escalate each finding, such as an inconsistency, a gap, or
+      delay or rework caused by the process, to the operator, who decides
+      whether it adjusts the current scope, becomes a new Bead, or needs no
+      action; record that decision in the task's Bead. At each epic closure,
+      review the whole process against its results, delays, controls, and
+      rework, and record the finding in the epic's Bead even when no change
+      is proposed.
+    early_review: >-
+      Review sooner after contradictory authority, an ineffective gate,
+      an incident that passed a control, or recurring blockage or rework
+      attributable to the process. The operator may request a review at
+      any time.
+    change: >-
+      Propose each normative change with its reason and expected effect.
+      Apply it only after operator approval, recorded in an ADR delivered in
+      the same PR. Preserve historical records.
+    cleanup: >-
+      Offer cleanup with the affected resources identified. Perform
+      destructive cleanup after operator authorization.
+  product:
+    skills: >-
+      Each skill is self-contained under skills/<name>/ with no dependency on
+      sibling skills. Its SKILL.md declares metadata.author: pablontiv and
+      metadata.updated: "YYYY-MM-DD"; update the date in the same commit that
+      changes the skill's behavior or content, not for metadata-only changes.
+      A Roadmap loop never edits skills/roadmap; changes to it go through
+      their own PR and activate by installing a roadmap-vN tag.
+    structure: >-
+      Configuration and runtime are layers of the same product, not parallel
+      products or decision logs. Add a top-level family only when it has real
+      content.
+    providers: >-
+      Treat external runtimes and tools as integrated providers, not as A4S
+      code. Projects listed in .workspace/docs/references/related-projects.md
+      are references, not implicit migration candidates.
+repository:
+  id: pablontiv/a4s
+  url: https://github.com/pablontiv/a4s.git
+  base_branch: main
+  entry_point: AGENTS.md
