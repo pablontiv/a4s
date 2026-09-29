@@ -3,13 +3,16 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { convertToLlm, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import piRuleCompilerExtension, {
   collectCorpus,
+  corpusDigest,
   CORPUS_ENTRY_TYPE,
   createTypesafeAuthResolver,
   EVIDENCE_RECEIPT_ENTRY_TYPE,
+  estimateJevTokens,
   JevApiError,
+  LADDER_PROJECTION_FAILURE_TYPE,
   LADDER_PROJECTION_RECEIPT_TYPE,
   observeCompactionRules,
   registerPiRuleCompiler,
@@ -446,46 +449,280 @@ test("Ladder projects branch corpus through context_with_system and falls back u
     config: { "compaction.strategy": "ladder" },
   });
   const selectedContext = createContext(selected.entries).context;
+  const emptyUsage = {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 0,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+  };
   const supplied = [
     { role: "system", content: "Pi normal", timestamp: 0 },
     { role: "user", content: "retrieve ladder corpus", timestamp: 1 },
+    {
+      role: "assistant",
+      content: [{ type: "text", text: "checking" }],
+      api: "test",
+      provider: "test",
+      model: "test",
+      usage: emptyUsage,
+      stopReason: "toolUse",
+      timestamp: 2,
+    },
+    {
+      role: "toolResult",
+      toolCallId: "call-1",
+      toolName: "read",
+      content: [{ type: "text", text: "result" }],
+      isError: false,
+      timestamp: 3,
+    },
   ];
+  const initialSupplied = supplied.slice(0, 2);
   const selectedResult = await selected.handlers.get("context_with_system")?.(
-    { type: "context_with_system", messages: supplied },
+    { type: "context_with_system", messages: initialSupplied },
     selectedContext,
   );
 
   assert.equal(selectedJev.calls, 1);
   assert.ok(selectedResult && typeof selectedResult === "object" && "messages" in selectedResult);
-  const projected = (selectedResult as { messages: Array<{ role: string; content: string }> }).messages;
-  assert.equal(projected.length, 3);
-  assert.equal(projected[0]?.content, "Pi normal");
-  assert.match(projected[1]?.content ?? "", /^\[a4s ladder context\]/);
-  assert.deepEqual(supplied, [
-    { role: "system", content: "Pi normal", timestamp: 0 },
-    { role: "user", content: "retrieve ladder corpus", timestamp: 1 },
-  ]);
-  const receipt = selected.entries.find((entry) => entry.customType === LADDER_PROJECTION_RECEIPT_TYPE);
-  assert.ok(receipt && receipt.data && typeof receipt.data === "object");
-  assert.equal((receipt.data as { schema?: unknown }).schema, "a4s.ladder-projection-receipt/v1");
-  assert.equal((receipt.data as { selectedChunks?: unknown }).selectedChunks, 1);
-  assert.equal((receipt.data as { rendered?: unknown }).rendered, true);
-  assert.doesNotMatch(JSON.stringify(receipt.data), /durable ladder corpus material|retrieve ladder corpus/);
+  const initialProjected = (selectedResult as {
+    messages: Array<{ role: string; content: string; customType?: string }>;
+  }).messages;
+  assert.equal(initialProjected.length, 3);
+  assert.deepEqual(initialProjected.slice(0, 2), initialSupplied);
+  assert.equal(initialProjected[2]?.role, "custom");
+  assert.equal(initialProjected[2]?.customType, "a4s.ladder-context/v1");
+  assert.match(initialProjected[2]?.content ?? "", /^\[a4s ladder context\]/);
+
+  const continuedResult = await selected.handlers.get("context_with_system")?.(
+    { type: "context_with_system", messages: supplied },
+    selectedContext,
+  );
+  assert.equal(selectedJev.calls, 1);
+  const projected = (continuedResult as {
+    messages: Array<{ role: string; content: string; customType?: string }>;
+  }).messages;
+  assert.equal(projected.length, 5);
+  assert.deepEqual(projected.slice(0, 3), initialProjected);
+  assert.deepEqual(projected.slice(3), supplied.slice(2));
+  assert.deepEqual(supplied[0], { role: "system", content: "Pi normal", timestamp: 0 });
+
+  const converted = convertToLlm(projected as Parameters<typeof convertToLlm>[0]);
+  assert.deepEqual(converted.map((message) => message.role), ["system", "user", "user", "assistant", "toolResult"]);
+  assert.equal(converted[0]?.content, "Pi normal");
+
+  const receipts = selected.entries.filter((entry) => entry.customType === LADDER_PROJECTION_RECEIPT_TYPE);
+  assert.equal(receipts.length, 2);
+  const firstReceipt = receipts[0]?.data as Record<string, unknown>;
+  const cachedReceipt = receipts[1]?.data as Record<string, unknown>;
+  assert.equal(firstReceipt.schema, "a4s.ladder-projection-receipt/v1");
+  assert.equal(firstReceipt.cacheHit, false);
+  assert.equal(cachedReceipt.cacheHit, true);
+  assert.equal(firstReceipt.selectedChunks, 1);
+  assert.equal(firstReceipt.sourceChunks, 1);
+  assert.equal(firstReceipt.candidateChunks, 1);
+  assert.equal(firstReceipt.shortlistStrategy, "full");
+  assert.equal(firstReceipt.rendered, true);
+  assert.equal(cachedReceipt.projectionDigest, firstReceipt.projectionDigest);
+  assert.equal(cachedReceipt.queryDigest, firstReceipt.queryDigest);
+  assert.equal(cachedReceipt.corpusDigest, firstReceipt.corpusDigest);
+  assert.doesNotMatch(JSON.stringify(receipts), /durable ladder corpus material|retrieve ladder corpus/);
 
   const failing = createFakePi(entries);
+  let failingCalls = 0;
   registerPiRuleCompiler(failing.pi, {
-    jevClient: { evaluate: async () => { throw new Error("Jev failed"); } },
+    jevClient: {
+      evaluate: async () => {
+        failingCalls += 1;
+        throw new Error("Jev failed with private details");
+      },
+    },
     config: { "compaction.strategy": "ladder" },
   });
+  const failingContext = createContext(failing.entries).context;
   const failedResult = await failing.handlers.get("context_with_system")?.(
     { type: "context_with_system", messages: supplied },
-    createContext(failing.entries).context,
+    failingContext,
+  );
+  const repeatedFailure = await failing.handlers.get("context_with_system")?.(
+    { type: "context_with_system", messages: supplied },
+    failingContext,
   );
   assert.deepEqual(failedResult, { messages: supplied });
+  assert.deepEqual(repeatedFailure, { messages: supplied });
+  assert.equal(failingCalls, 1);
   assert.equal(
     failing.entries.some((entry) => entry.customType === LADDER_PROJECTION_RECEIPT_TYPE),
     false,
   );
+  const failures = failing.entries.filter((entry) => entry.customType === LADDER_PROJECTION_FAILURE_TYPE);
+  assert.equal(failures.length, 1);
+  assert.deepEqual(failures[0]?.data, {
+    schema: "a4s.ladder-projection-failure/v1",
+    candidateChunks: 1,
+    code: "internal_failure",
+    corpusDigest: corpusDigest([chunk]),
+    queryDigest: stableDigest("retrieve ladder corpus"),
+    sourceChunks: 1,
+    stage: "evaluate",
+  });
+  assert.doesNotMatch(JSON.stringify(failures), /private details|durable ladder corpus material|retrieve ladder corpus/);
+});
+
+test("Ladder bounds a live-scale corpus before Jev evaluation", async () => {
+  const chunks = stageCorpus(Array.from({ length: 180 }, (_, index) => ({
+    index,
+    role: index % 2 === 0 ? "user" : "assistant",
+    text: index === 7
+      ? `rare migration needle ${"a".repeat(1_200)}`
+      : `routine historical material ${index} ${"b".repeat(1_200)}`,
+    sourceDigest: stableDigest({ source: `large-${index}` }),
+    redactionCount: 0,
+  })));
+  assert.equal(chunks.length, 180);
+  const entries: StoredEntry[] = chunks.map((item) => ({
+    type: "custom",
+    customType: CORPUS_ENTRY_TYPE,
+    data: item,
+  }));
+  const fake = createFakePi(entries);
+  const jev = new LadderFullJev();
+  registerPiRuleCompiler(fake.pi, {
+    jevClient: jev,
+    config: { "compaction.strategy": "ladder" },
+  });
+  const messages = [
+    { role: "system", content: "Pi normal", timestamp: 0 },
+    { role: "user", content: "rare migration needle", timestamp: 1 },
+  ];
+
+  const result = await fake.handlers.get("context_with_system")?.(
+    { type: "context_with_system", messages },
+    createContext(fake.entries).context,
+  );
+
+  assert.equal(jev.calls, 1);
+  const request = jev.requests[0];
+  assert.ok(request);
+  const requestCorpus = (request.state as { corpus?: Array<{ id: string; text: string }> }).corpus ?? [];
+  assert.ok(requestCorpus.length > 0 && requestCorpus.length <= 48);
+  assert.equal(Object.keys(request.questions).length, requestCorpus.length);
+  assert.ok(estimateJevTokens(JSON.stringify(request)) <= 30_000);
+  assert.ok(requestCorpus.some((item) => item.text.includes("rare migration needle")));
+  assert.ok(result && typeof result === "object" && "messages" in result);
+  const receipt = fake.entries.find((entry) => entry.customType === LADDER_PROJECTION_RECEIPT_TYPE)?.data as
+    | Record<string, unknown>
+    | undefined;
+  assert.ok(receipt);
+  assert.equal(receipt.sourceChunks, 180);
+  assert.equal(receipt.candidateChunks, requestCorpus.length);
+  assert.equal(receipt.shortlistStrategy, "lexical-recency");
+  assert.equal(typeof receipt.estimatedStateTokens, "number");
+  assert.ok((receipt.estimatedStateTokens as number) <= 20_000);
+});
+
+test("Ladder reports an unfittable shortlist without calling Jev", async () => {
+  const chunk = stageCorpus([{
+    index: 1,
+    role: "user",
+    text: "durable oversized shortlist material",
+    sourceDigest: stableDigest({ source: "oversized-shortlist" }),
+    redactionCount: 0,
+  }])[0];
+  assert.ok(chunk);
+  const fake = createFakePi([{ type: "custom", customType: CORPUS_ENTRY_TYPE, data: chunk }]);
+  const jev = new LadderFullJev();
+  registerPiRuleCompiler(fake.pi, {
+    jevClient: jev,
+    config: { "compaction.strategy": "ladder" },
+    ladder: { maxStateTokens: 1 },
+  });
+  const messages = [
+    { role: "system", content: "Pi normal", timestamp: 0 },
+    { role: "user", content: "retrieve material", timestamp: 1 },
+  ];
+
+  const result = await fake.handlers.get("context_with_system")?.(
+    { type: "context_with_system", messages },
+    createContext(fake.entries).context,
+  );
+
+  assert.deepEqual(result, { messages });
+  assert.equal(jev.calls, 0);
+  const failure = fake.entries.find((entry) => entry.customType === LADDER_PROJECTION_FAILURE_TYPE)?.data as
+    | Record<string, unknown>
+    | undefined;
+  assert.ok(failure);
+  assert.equal(failure.code, "oversized_state");
+  assert.equal(failure.stage, "shortlist");
+  assert.equal(failure.sourceChunks, 1);
+});
+
+test("Ladder projection cache invalidates on query, corpus, and session changes", async () => {
+  const firstChunk = stageCorpus([
+    {
+      index: 1,
+      role: "user",
+      text: "first durable fact",
+      sourceDigest: stableDigest({ source: "first" }),
+      redactionCount: 0,
+    },
+  ])[0];
+  assert.ok(firstChunk);
+  const entries: StoredEntry[] = [{ type: "custom", customType: CORPUS_ENTRY_TYPE, data: firstChunk }];
+  const fake = createFakePi(entries);
+  const jev = new LadderFullJev();
+  registerPiRuleCompiler(fake.pi, {
+    jevClient: jev,
+    config: { "compaction.strategy": "ladder" },
+  });
+  const context = createContext(fake.entries).context;
+  const project = async (query: string) => fake.handlers.get("context_with_system")?.(
+    {
+      type: "context_with_system",
+      messages: [
+        { role: "system", content: "Pi normal", timestamp: 0 },
+        { role: "user", content: query, timestamp: 1 },
+      ],
+    },
+    context,
+  );
+
+  await project("query one");
+  await project("query one");
+  assert.equal(jev.calls, 1);
+
+  await project("query two");
+  assert.equal(jev.calls, 2);
+
+  const secondChunk = stageCorpus([
+    {
+      index: 2,
+      role: "assistant",
+      text: "second durable fact",
+      sourceDigest: stableDigest({ source: "second" }),
+      redactionCount: 0,
+    },
+  ])[0];
+  assert.ok(secondChunk);
+  fake.entries.push({ type: "custom", customType: CORPUS_ENTRY_TYPE, data: secondChunk });
+  await project("query two");
+  assert.equal(jev.calls, 3);
+
+  fake.handlers.get("session_start")?.({ type: "session_start" }, context);
+  await project("query two");
+  assert.equal(jev.calls, 4);
+
+  const receipts = fake.entries
+    .filter((entry) => entry.customType === LADDER_PROJECTION_RECEIPT_TYPE)
+    .map((entry) => entry.data as Record<string, unknown>);
+  assert.deepEqual(receipts.map((receipt) => receipt.cacheHit), [false, true, false, false, false]);
+  assert.equal(receipts[0]?.queryDigest, receipts[1]?.queryDigest);
+  assert.notEqual(receipts[1]?.queryDigest, receipts[2]?.queryDigest);
+  assert.notEqual(receipts[2]?.corpusDigest, receipts[3]?.corpusDigest);
+  assert.equal(receipts[3]?.projectionDigest, receipts[4]?.projectionDigest);
 });
 
 test("Evidence ladder requires both flags and publishes only after successful compaction", async () => {

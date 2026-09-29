@@ -1,6 +1,7 @@
 import { stableDigest } from "./digest.ts";
 import { validateJevResponse } from "./jev.ts";
 import { buildLadderQuestions, type LadderQuestionRef } from "./questions.ts";
+import { estimateJevTokens } from "./state.ts";
 import type {
   CorpusChunk,
   JevClient,
@@ -12,12 +13,37 @@ import { DEFAULT_JEV_MODEL } from "./types.ts";
 
 export const SHORT_SPAN_CHAR_LIMIT = 240;
 export const LONG_SPAN_CHAR_LIMIT = 1_200;
+export const DEFAULT_LADDER_MAX_CANDIDATE_CHUNKS = 48;
+export const DEFAULT_LADDER_RECENT_CHUNKS = 8;
+export const DEFAULT_LADDER_MAX_STATE_TOKENS = 20_000;
 export type LadderProfile = "ordinary" | "conservative-evidence";
+
+export interface LadderShortlistOptions {
+  maxCandidateChunks?: number;
+  recentChunks?: number;
+  maxStateTokens?: number;
+}
+
+export interface LadderShortlist {
+  corpus: readonly CorpusChunk[];
+  estimatedStateTokens: number;
+  sourceChunks: number;
+  strategy: "full" | "lexical-recency";
+}
 
 export class LadderProjectionError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "LadderProjectionError";
+  }
+}
+
+export class LadderShortlistError extends Error {
+  readonly code = "oversized_state" as const;
+
+  constructor() {
+    super("Ladder shortlist cannot fit one corpus chunk within the configured state budget");
+    this.name = "LadderShortlistError";
   }
 }
 
@@ -79,6 +105,79 @@ export function renderProjection(
 }
 
 /**
+ * Bounds a large branch corpus before semantic ranking. Exact query matches and
+ * recent continuity are retained deterministically; Jev remains authoritative
+ * over the visibility level of every shortlisted chunk.
+ */
+export function shortlistLadderCorpus(
+  corpus: readonly CorpusChunk[],
+  query: string,
+  profile: LadderProfile = "ordinary",
+  options: LadderShortlistOptions = {},
+): LadderShortlist {
+  const maxCandidateChunks = positiveInteger(
+    options.maxCandidateChunks ?? DEFAULT_LADDER_MAX_CANDIDATE_CHUNKS,
+    "maxCandidateChunks",
+  );
+  const recentChunks = nonNegativeInteger(
+    options.recentChunks ?? DEFAULT_LADDER_RECENT_CHUNKS,
+    "recentChunks",
+  );
+  const maxStateTokens = positiveInteger(
+    options.maxStateTokens ?? DEFAULT_LADDER_MAX_STATE_TOKENS,
+    "maxStateTokens",
+  );
+  const ordered = orderedCorpus(corpus);
+  const fullTokens = ladderStateTokens(ordered, query, profile);
+  if (ordered.length <= maxCandidateChunks && fullTokens <= maxStateTokens) {
+    return {
+      corpus: ordered,
+      estimatedStateTokens: fullTokens,
+      sourceChunks: ordered.length,
+      strategy: "full",
+    };
+  }
+
+  const terms = queryTerms(query);
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+  const ranked = ordered
+    .map((chunk) => ({ chunk, score: lexicalScore(chunk.text, normalizedQuery, terms) }))
+    .filter((candidate) => candidate.score > 0)
+    .sort((left, right) =>
+      right.score - left.score ||
+      right.chunk.position - left.chunk.position ||
+      left.chunk.id.localeCompare(right.chunk.id)
+    );
+  const newest = [...ordered].sort((left, right) =>
+    right.position - left.position || left.id.localeCompare(right.id)
+  );
+  const selected = new Map<string, CorpusChunk>();
+  let selectedTokens = ladderStateTokens([], query, profile);
+  if (ordered.length > 0 && selectedTokens > maxStateTokens) throw new LadderShortlistError();
+
+  const tryAdd = (chunk: CorpusChunk): void => {
+    if (selected.size >= maxCandidateChunks || selected.has(chunk.id)) return;
+    const candidate = [...selected.values(), chunk].sort(compareChunks);
+    const candidateTokens = ladderStateTokens(candidate, query, profile);
+    if (candidateTokens > maxStateTokens) return;
+    selected.set(chunk.id, chunk);
+    selectedTokens = candidateTokens;
+  };
+
+  for (const chunk of newest.slice(0, Math.min(recentChunks, maxCandidateChunks))) tryAdd(chunk);
+  for (const candidate of ranked) tryAdd(candidate.chunk);
+  for (const chunk of newest) tryAdd(chunk);
+  if (ordered.length > 0 && selected.size === 0) throw new LadderShortlistError();
+
+  return {
+    corpus: [...selected.values()].sort(compareChunks),
+    estimatedStateTokens: selectedTokens,
+    sourceChunks: ordered.length,
+    strategy: "lexical-recency",
+  };
+}
+
+/**
  * Performs one Jev retrieval query against a branch-scoped sanitized corpus.
  * Jev determines visibility; source ranges are then bounded deterministically
  * from the concrete query so the projection is always renderable and auditable.
@@ -98,12 +197,7 @@ export async function selectLadderProjection(
 
   const { questions, refs } = buildLadderQuestions(ordered, query);
   const request = {
-    state: {
-      schema: "a4s.ladder-query/v1",
-      query,
-      profile,
-      corpus: ordered.map((chunk) => ({ id: chunk.id, position: chunk.position, role: chunk.role, text: chunk.text })),
-    },
+    state: ladderState(ordered, query, profile),
     model: DEFAULT_JEV_MODEL,
     questions,
   } as const;
@@ -191,6 +285,44 @@ function spansFor(level: VisibilityLevel, chunkId: string, text: string, query: 
 
 function queryTerms(query: string): string[] {
   return [...new Set(query.toLocaleLowerCase().match(/[\p{L}\p{N}_-]{3,}/gu) ?? [])];
+}
+
+function lexicalScore(text: string, normalizedQuery: string, terms: readonly string[]): number {
+  const normalized = text.toLocaleLowerCase();
+  let score = normalizedQuery.length >= 3 && normalized.includes(normalizedQuery) ? 10_000 : 0;
+  for (const term of terms) {
+    if (!normalized.includes(term)) continue;
+    score += 100 + Math.min(10, normalized.split(term).length - 1);
+  }
+  return score;
+}
+
+function ladderState(corpus: readonly CorpusChunk[], query: string, profile: LadderProfile) {
+  return {
+    schema: "a4s.ladder-query/v1" as const,
+    query,
+    profile,
+    corpus: corpus.map((chunk) => ({
+      id: chunk.id,
+      position: chunk.position,
+      role: chunk.role,
+      text: chunk.text,
+    })),
+  };
+}
+
+function ladderStateTokens(corpus: readonly CorpusChunk[], query: string, profile: LadderProfile): number {
+  return estimateJevTokens(JSON.stringify(ladderState(corpus, query, profile)));
+}
+
+function positiveInteger(value: number, name: string): number {
+  if (!Number.isSafeInteger(value) || value <= 0) throw new RangeError(`${name} must be a positive integer`);
+  return value;
+}
+
+function nonNegativeInteger(value: number, name: string): number {
+  if (!Number.isSafeInteger(value) || value < 0) throw new RangeError(`${name} must be a non-negative integer`);
+  return value;
 }
 
 function orderedCorpus(corpus: readonly CorpusChunk[]): CorpusChunk[] {

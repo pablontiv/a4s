@@ -3,8 +3,10 @@ import test from "node:test";
 import {
   applyContextProjection,
   corpusDigest,
+  LadderShortlistError,
   renderProjection,
   selectLadderProjection,
+  shortlistLadderCorpus,
   validateProjection,
   type VisibilityProjection,
 } from "../src/index.ts";
@@ -110,6 +112,42 @@ test("Ladder selection sends a concrete query and returns a validated projection
     { chunkId: "chunk-late", level: "short", spans: [{ chunkId: "chunk-late", start: 2, end: 10 }] },
   ]);
   validateProjection(projection, [corpus[0]!]);
+});
+
+test("Ladder shortlist deterministically bounds large corpora while retaining lexical and recent candidates", () => {
+  const largeCorpus = Array.from({ length: 160 }, (_, index) => chunk(
+    `chunk-${String(index).padStart(3, "0")}`,
+    index,
+    index === 5
+      ? `rare migration needle ${"a".repeat(1_000)}`
+      : `routine historical material ${index} ${"b".repeat(1_000)}`,
+  ));
+
+  const first = shortlistLadderCorpus(largeCorpus, "rare migration needle", "ordinary", {
+    maxCandidateChunks: 16,
+    recentChunks: 4,
+    maxStateTokens: 5_000,
+  });
+  const second = shortlistLadderCorpus(largeCorpus, "rare migration needle", "ordinary", {
+    maxCandidateChunks: 16,
+    recentChunks: 4,
+    maxStateTokens: 5_000,
+  });
+  const selectedIds = first.corpus.map((item) => item.id);
+
+  assert.equal(first.strategy, "lexical-recency");
+  assert.equal(first.sourceChunks, 160);
+  assert.ok(first.corpus.length <= 16);
+  assert.ok(first.estimatedStateTokens <= 5_000);
+  assert.ok(selectedIds.includes("chunk-005"));
+  assert.ok(selectedIds.includes("chunk-159"));
+  assert.deepEqual(second, first);
+  assert.throws(
+    () => shortlistLadderCorpus([largeCorpus[0]!], "rare migration needle", "ordinary", {
+      maxStateTokens: 1,
+    }),
+    LadderShortlistError,
+  );
 });
 
 test("failed Ladder leaves context_with_system unchanged", async () => {

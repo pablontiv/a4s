@@ -25,7 +25,15 @@ import {
 import { disabledEvidencePipeline, runEvidence } from "./evidence-pipeline.ts";
 import { DeadlineExceededError, OperationAbortedError, runWithDeadline } from "./deadline.ts";
 import { isStableDigest, stableDigest } from "./digest.ts";
-import { corpusDigest, renderProjection, selectLadderProjection } from "./ladder.ts";
+import {
+  corpusDigest,
+  LadderProjectionError,
+  LadderShortlistError,
+  renderProjection,
+  selectLadderProjection,
+  shortlistLadderCorpus,
+  type LadderShortlistOptions,
+} from "./ladder.ts";
 import { applyContextProjection } from "./projection.ts";
 import { redactAndLimitCorpusText } from "./redaction.ts";
 import { JevApiError, JevUnavailableError, JevValidationError, TypesafeJevClient } from "./jev.ts";
@@ -84,6 +92,7 @@ export interface PiRuleCompilerOptions {
   compaction?: BuildJevCompactionOptions;
   evidence?: EvidenceOptions;
   retro?: RetroOptions;
+  ladder?: LadderShortlistOptions;
   /** Flat extension configuration; invalid values retain the basic safe default. */
   config?: Readonly<Record<string, unknown>>;
   /** Runtime-only gates that Pi's public context cannot otherwise observe. */
@@ -120,12 +129,40 @@ interface PendingRetroWork {
 }
 
 export const LADDER_PROJECTION_RECEIPT_TYPE = "a4s.pi-rule-compiler.ladder-projection-receipt.v1";
+export const LADDER_PROJECTION_FAILURE_TYPE = "a4s.pi-rule-compiler.ladder-projection-failure.v1";
+
+const MAX_LADDER_PROJECTION_CACHE_ENTRIES = 16;
+
+type LadderProjectionStage = "shortlist" | "evaluate" | "consistency" | "render" | "inject";
+
+interface CachedLadderProjection {
+  candidateChunks: number;
+  corpusDigest: string;
+  estimatedStateTokens: number;
+  projectionDigest: string;
+  queryDigest: string;
+  rendered: string;
+  selectedChunks: number;
+  shortlistStrategy: "full" | "lexical-recency";
+  sourceChunks: number;
+}
+
+interface CachedLadderProjectionFailure {
+  candidateChunks: number;
+  code: DiagnosticCode;
+  corpusDigest: string;
+  queryDigest: string;
+  sourceChunks: number;
+  stage: LadderProjectionStage;
+}
 
 class CurrentModelCallError extends Error {}
 
 export function registerPiRuleCompiler(pi: ExtensionAPI, options: PiRuleCompilerOptions = {}): void {
   const pendingByAttempt = new Map<string, PendingCompaction>();
   const retroInFlight = new Set<string>();
+  const ladderProjectionCache = new Map<string, CachedLadderProjection>();
+  const ladderProjectionFailureCache = new Map<string, CachedLadderProjectionFailure>();
   let recoveredCorpus: CorpusChunk[] = [];
   const now = options.now ?? (() => new Date());
   const hookTimeoutMs = options.hookTimeoutMs ?? 180_000;
@@ -167,35 +204,105 @@ export function registerPiRuleCompiler(pi: ExtensionAPI, options: PiRuleCompiler
       const normal = { messages: event.messages };
       return applyContextProjection(normal, async () => {
         const query = ladderQuery(event.messages);
+        const queryDigest = stableDigest(query);
         const corpus = collectCorpus(ctx.sessionManager.getBranch());
-        const projection = await runWithDeadline(
-          async (signal) => selectLadderProjection(
-            corpus,
-            query,
-            new ScheduledJevClient(await createJevClient(ctx, hookTimeoutMs), options.scheduling),
-            signal,
-          ),
-          hookTimeoutMs,
-          ctx.signal,
-        );
-        // Recheck the branch-bound digest immediately before rendering. This is
-        // redundant with selectLadderProjection by design: an invalid view must
-        // never become a partial omission in Pi's request context.
-        if (projection.corpusDigest !== corpusDigest(corpus)) throw new Error("Ladder corpus changed during projection");
-        const rendered = renderProjection(projection, corpus);
-        if (corpus.length > 0) {
-          try {
-            pi.appendEntry(LADDER_PROJECTION_RECEIPT_TYPE, {
-              schema: "a4s.ladder-projection-receipt/v1",
+        const currentCorpusDigest = corpusDigest(corpus);
+        const cacheKey = ladderProjectionCacheKey(currentCorpusDigest, queryDigest);
+        let cached = readCachedLadderProjection(ladderProjectionCache, cacheKey);
+        const cacheHit = cached !== undefined;
+        if (readCachedLadderProjectionFailure(ladderProjectionFailureCache, cacheKey)) return normal;
+
+        let candidateChunks = corpus.length;
+        let stage: LadderProjectionStage = "shortlist";
+        try {
+          if (!cached) {
+            const shortlist = shortlistLadderCorpus(corpus, query, "ordinary", options.ladder);
+            candidateChunks = shortlist.corpus.length;
+            stage = "evaluate";
+            const projection = await runWithDeadline(
+              async (signal) => selectLadderProjection(
+                shortlist.corpus,
+                query,
+                new ScheduledJevClient(await createJevClient(ctx, hookTimeoutMs), options.scheduling),
+                signal,
+              ),
+              hookTimeoutMs,
+              ctx.signal,
+            );
+            // A branch change while Jev is evaluating must never render a stale
+            // projection against a newer corpus. Jev covers the complete bounded
+            // candidate set, while the cache identity remains the full corpus.
+            stage = "consistency";
+            const latestCorpus = collectCorpus(ctx.sessionManager.getBranch());
+            if (
+              projection.corpusDigest !== corpusDigest(shortlist.corpus) ||
+              corpusDigest(latestCorpus) !== currentCorpusDigest
+            ) {
+              throw new Error("Ladder corpus changed during projection");
+            }
+            stage = "render";
+            const rendered = renderProjection(projection, shortlist.corpus);
+            cached = {
+              candidateChunks: shortlist.corpus.length,
+              corpusDigest: currentCorpusDigest,
+              estimatedStateTokens: shortlist.estimatedStateTokens,
+              projectionDigest: stableDigest(rendered),
+              queryDigest,
+              rendered,
               selectedChunks: projection.selections.filter((selection) => selection.level !== "hide").length,
-              rendered: rendered.length > 0,
-            });
-          } catch {
-            // Observability is best-effort and must not change a valid projection.
+              shortlistStrategy: shortlist.strategy,
+              sourceChunks: shortlist.sourceChunks,
+            };
+            writeCachedLadderProjection(ladderProjectionCache, cacheKey, cached);
           }
+
+          let projected = normal;
+          if (cached.rendered.length > 0) {
+            stage = "inject";
+            projected = { messages: appendLadderContext(event.messages, cached.rendered) };
+          }
+          if (corpus.length > 0) {
+            try {
+              pi.appendEntry(LADDER_PROJECTION_RECEIPT_TYPE, {
+                schema: "a4s.ladder-projection-receipt/v1",
+                cacheHit,
+                candidateChunks: cached.candidateChunks,
+                corpusDigest: cached.corpusDigest,
+                estimatedStateTokens: cached.estimatedStateTokens,
+                projectionDigest: cached.projectionDigest,
+                queryDigest: cached.queryDigest,
+                selectedChunks: cached.selectedChunks,
+                shortlistStrategy: cached.shortlistStrategy,
+                sourceChunks: cached.sourceChunks,
+                rendered: cached.rendered.length > 0,
+              });
+            } catch {
+              // Observability is best-effort and must not change a valid projection.
+            }
+          }
+          return projected;
+        } catch (error) {
+          const failure: CachedLadderProjectionFailure = {
+            candidateChunks,
+            code: classifyLadderProjectionError(error),
+            corpusDigest: currentCorpusDigest,
+            queryDigest,
+            sourceChunks: corpus.length,
+            stage,
+          };
+          writeCachedLadderProjectionFailure(ladderProjectionFailureCache, cacheKey, failure);
+          if (corpus.length > 0) {
+            try {
+              pi.appendEntry(LADDER_PROJECTION_FAILURE_TYPE, {
+                schema: "a4s.ladder-projection-failure/v1",
+                ...failure,
+              });
+            } catch {
+              // Failure observability is best-effort and never replaces fail-open behavior.
+            }
+          }
+          return normal;
         }
-        if (rendered.length === 0) return normal;
-        return { messages: appendLadderContext(event.messages, rendered) };
       });
     });
   }
@@ -203,6 +310,8 @@ export function registerPiRuleCompiler(pi: ExtensionAPI, options: PiRuleCompiler
   pi.on("session_start", (_event, ctx) => {
     pendingByAttempt.clear();
     retroInFlight.clear();
+    ladderProjectionCache.clear();
+    ladderProjectionFailureCache.clear();
     // getBranch is Pi's branch-local view, so reload cannot blend sibling branches.
     recoveredCorpus = collectCorpus(ctx.sessionManager.getBranch());
   });
@@ -365,6 +474,8 @@ export function registerPiRuleCompiler(pi: ExtensionAPI, options: PiRuleCompiler
   pi.on("session_shutdown", () => {
     pendingByAttempt.clear();
     retroInFlight.clear();
+    ladderProjectionCache.clear();
+    ladderProjectionFailureCache.clear();
   });
 
   pi.registerCommand("retro-rules", {
@@ -719,8 +830,84 @@ function appendLadderContext(
   // Pi documents a leading system message at this hook. If that contract is not
   // present, do not attempt to reconstruct it: fail open to the caller instead.
   if (messages[0]?.role !== "system") throw new Error("Pi normal system context is unavailable");
-  const projection = { role: "system" as const, content: rendered, timestamp: Date.now() };
-  return [messages[0], projection, ...messages.slice(1)];
+  let latestUserIndex = -1;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index]?.role === "user") {
+      latestUserIndex = index;
+      break;
+    }
+  }
+  if (latestUserIndex < 0) throw new Error("Ladder requires a user message insertion point");
+  const source = messages[latestUserIndex];
+  if (!source) throw new Error("Ladder user message disappeared");
+  const projection = {
+    role: "custom" as const,
+    customType: "a4s.ladder-context/v1",
+    content: rendered,
+    display: false,
+    timestamp: source.timestamp,
+  };
+  return [
+    ...messages.slice(0, latestUserIndex + 1),
+    projection,
+    ...messages.slice(latestUserIndex + 1),
+  ];
+}
+
+function ladderProjectionCacheKey(currentCorpusDigest: string, queryDigest: string): string {
+  return stableDigest({
+    schema: "a4s.ladder-projection-cache-key/v1",
+    corpusDigest: currentCorpusDigest,
+    queryDigest,
+  });
+}
+
+function readCachedLadderProjection(
+  cache: Map<string, CachedLadderProjection>,
+  key: string,
+): CachedLadderProjection | undefined {
+  const cached = cache.get(key);
+  if (!cached) return undefined;
+  cache.delete(key);
+  cache.set(key, cached);
+  return cached;
+}
+
+function writeCachedLadderProjection(
+  cache: Map<string, CachedLadderProjection>,
+  key: string,
+  projection: CachedLadderProjection,
+): void {
+  writeBoundedLru(cache, key, projection);
+}
+
+function readCachedLadderProjectionFailure(
+  cache: Map<string, CachedLadderProjectionFailure>,
+  key: string,
+): CachedLadderProjectionFailure | undefined {
+  const cached = cache.get(key);
+  if (!cached) return undefined;
+  cache.delete(key);
+  cache.set(key, cached);
+  return cached;
+}
+
+function writeCachedLadderProjectionFailure(
+  cache: Map<string, CachedLadderProjectionFailure>,
+  key: string,
+  failure: CachedLadderProjectionFailure,
+): void {
+  writeBoundedLru(cache, key, failure);
+}
+
+function writeBoundedLru<T>(cache: Map<string, T>, key: string, value: T): void {
+  cache.delete(key);
+  cache.set(key, value);
+  while (cache.size > MAX_LADDER_PROJECTION_CACHE_ENTRIES) {
+    const oldest = cache.keys().next().value as string | undefined;
+    if (!oldest) break;
+    cache.delete(oldest);
+  }
 }
 
 function corpusBranchId(ctx: ExtensionContext): string {
@@ -903,6 +1090,16 @@ function createCurrentModelGateway(
       }
     },
   };
+}
+
+function classifyLadderProjectionError(error: unknown): DiagnosticCode {
+  if (error instanceof LadderShortlistError) return "oversized_state";
+  if (error instanceof LadderProjectionError || error instanceof JevValidationError) return "malformed_response";
+  if (error instanceof JevUnavailableError) return "missing_key";
+  if (error instanceof DeadlineExceededError) return "timeout";
+  if (error instanceof OperationAbortedError) return "aborted";
+  if (error instanceof JevApiError) return "api_failure";
+  return "internal_failure";
 }
 
 function classifyCompactionError(error: unknown): DiagnosticCode {

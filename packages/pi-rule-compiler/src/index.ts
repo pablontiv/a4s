@@ -52,17 +52,25 @@ export { runWithDeadline, DeadlineExceededError, OperationAbortedError } from ".
 export { stableDigest, stableJson, isStableDigest } from "./digest.ts";
 export {
   corpusDigest,
+  DEFAULT_LADDER_MAX_CANDIDATE_CHUNKS,
+  DEFAULT_LADDER_MAX_STATE_TOKENS,
+  DEFAULT_LADDER_RECENT_CHUNKS,
   LadderProjectionError,
+  LadderShortlistError,
   LONG_SPAN_CHAR_LIMIT,
   renderProjection,
   selectLadderProjection,
+  shortlistLadderCorpus,
   SHORT_SPAN_CHAR_LIMIT,
   validateProjection,
   type LadderProfile,
+  type LadderShortlist,
+  type LadderShortlistOptions,
 } from "./ladder.ts";
 export { applyContextProjection } from "./projection.ts";
 export { createTypesafeAuthResolver } from "@a4s/typesafe";
 export {
+  LADDER_PROJECTION_FAILURE_TYPE,
   LADDER_PROJECTION_RECEIPT_TYPE,
   registerPiRuleCompiler,
   type PiRuleCompilerOptions,
