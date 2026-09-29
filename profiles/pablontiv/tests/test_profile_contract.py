@@ -396,122 +396,149 @@ class DogfoodConfigTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.config = DOGFOOD_CONFIG_PATH.read_text(encoding="utf-8")
         cls.document = parse_yaml_mapping(cls.config)
-        profile = cls.document.get("profile")
         workspace = cls.document.get("workspace")
-        repositories = cls.document.get("repositories")
-        if (
-            not isinstance(profile, dict)
-            or not isinstance(workspace, dict)
-            or not isinstance(repositories, dict)
-        ):
-            raise TypeError("profile, workspace and repositories must be mappings")
-        repository = repositories.get("pablontiv/a4s")
-        if not isinstance(repository, dict):
-            raise TypeError("pablontiv/a4s must be a mapping")
-        cls.profile = cast(dict[str, Any], profile)
+        repository = cls.document.get("repository")
+        if not isinstance(workspace, dict) or not isinstance(repository, dict):
+            raise TypeError("workspace and repository must be mappings")
         cls.workspace = cast(dict[str, Any], workspace)
         cls.repository = cast(dict[str, Any], repository)
 
-    def test_config_has_all_logical_layers(self) -> None:
-        self.assertTrue(
-            {"schema_version", "profile", "workspace", "groups", "repositories"}
-            <= set(self.document)
+    def test_config_has_only_canonical_logical_layers(self) -> None:
+        self.assertEqual(set(self.document), {"workspace", "repository"})
+        self.assertEqual(
+            set(self.workspace),
+            {
+                "purpose",
+                "authority",
+                "roles",
+                "choose_work",
+                "define_work",
+                "prepare_work",
+                "do_work",
+                "accept_work",
+                "deliver_work",
+                "track_work",
+                "improve_work",
+                "product",
+            },
         )
 
-    def test_dogfood_declares_profile_v2_and_delivery_policy(self) -> None:
-        self.assertEqual(self.profile.get("id"), "pablontiv/a4s")
-        self.assertEqual(self.profile.get("version"), PROFILE_VERSION)
-        workflow = self.workspace.get("workflow")
-        self.assertIsInstance(workflow, dict)
-        assert isinstance(workflow, dict)
-        commit_policy = workflow.get("commit_policy")
-        self.assertIsInstance(commit_policy, str)
-        assert isinstance(commit_policy, str)
-        for marker in ("conventional commits", "checks aplicables"):
-            with self.subTest(marker=marker):
-                self.assertIn(marker, commit_policy)
-        self.assertEqual(workflow.get("delivery_mode"), "pull-request")
-
-    def test_workspace_config_preserves_every_axis(self) -> None:
-        workflow = self.workspace.get("workflow")
-        self.assertIsInstance(workflow, dict)
-        assert isinstance(workflow, dict)
-        axis_keys = set(self.workspace) | set(workflow)
-        for axis in CONFIG_AXES:
-            with self.subTest(axis=axis):
-                self.assertIn(axis, axis_keys)
-
-    def test_context_sources_preserve_backscroll_and_repo_guidance(self) -> None:
-        workspace_sources = self.workspace.get("context_sources")
-        repository_sources = self.repository.get("context_sources")
-        self.assertIsInstance(workspace_sources, list)
-        self.assertIsInstance(repository_sources, list)
-        assert isinstance(workspace_sources, list)
-        assert isinstance(repository_sources, list)
-        source_text = "\n".join(cast(list[str], workspace_sources + repository_sources))
-        for required in (
-            "Backscroll",
-            "buscar primero por proyecto",
-            "ampliar una vez",
-            "unknown",
-            "AGENTS.md",
+    def test_delivery_policy_is_fail_closed_and_records_billing_exception(self) -> None:
+        deliver = self.workspace["deliver_work"]
+        mechanism = deliver["mechanism"]
+        merge = deliver["merge"]
+        billing = deliver["billing_exception"]
+        for marker in ("pull request", "conventional commits", "checks"):
+            with self.subTest(surface="mechanism", marker=marker):
+                self.assertIn(marker, mechanism)
+        for marker in (
+            "test/ci-local.sh",
+            "accept_work.review",
+            "no unresolved HIGH",
+            "--match-head-commit",
         ):
-            with self.subTest(required=required):
-                self.assertIn(required, source_text)
+            with self.subTest(surface="merge", marker=marker):
+                self.assertIn(marker, merge)
+        review = self.workspace["accept_work"]["review"]
+        self.assertIn("fresh reviewer", review)
+        self.assertIn("different from the implementer's", review)
+        self.assertEqual(billing["tracking_bead"], "a4s-1cy")
+        self.assertIn("zero steps", billing["condition"])
+        self.assertIn("Delivery-Override: ci-billing", billing["evidence"])
 
-    def test_sync_strategy_is_observable_and_fail_closed(self) -> None:
-        workflow = self.workspace.get("workflow")
-        self.assertIsInstance(workflow, dict)
-        assert isinstance(workflow, dict)
-        sync_strategy = workflow.get("sync_strategy")
-        self.assertIsInstance(sync_strategy, str)
-        assert isinstance(sync_strategy, str)
-        normalized = " ".join(sync_strategy.split())
-        self.assertNotEqual(sync_strategy.strip(), "unknown")
+    def test_work_units_and_kinds_preserve_profile_contract(self) -> None:
+        define = self.workspace["define_work"]
+        self.assertEqual(set(define["units"]), {"epic", "task"})
+        self.assertEqual(
+            set(define["kinds"]),
+            {"research", "experiment", "documentation", "implementation"},
+        )
+        for label in (
+            "kind-research",
+            "kind-experiment",
+            "kind-documentation",
+            "kind-implementation",
+        ):
+            with self.subTest(label=label):
+                self.assertIn(label, define["beads"])
+
+    def test_starting_point_is_observable_and_fail_closed(self) -> None:
+        do_work = self.workspace["do_work"]
+        starting_point = do_work["starting_point"]
         for required in (
+            "main branch",
+            "clean working tree",
             "git fetch origin main",
             "git pull --ff-only origin main",
-            "unknown",
+            "dedicated worktree",
         ):
             with self.subTest(required=required):
-                self.assertIn(required, normalized)
+                self.assertIn(required, starting_point)
+        self.assertIn("Stop any mutation", do_work["safety"])
 
-    def test_config_rejects_deterministic_control_fields(self) -> None:
-        self.assertEqual(forbidden_control_fields(self.document), ())
-        mutated = self.config.replace(
-            "  custom_rules:",
-            "  executor: shell\n  timeout_seconds: 30\n  success: exit-zero\n"
-            "  on_failure: stop\n  custom_rules:",
-            1,
-        )
-        self.assertEqual(
-            forbidden_control_fields(parse_yaml_mapping(mutated)),
-            FORBIDDEN_CONTROL_FIELDS,
-        )
-
-    def test_config_names_required_authorities(self) -> None:
+    def test_config_names_required_security_and_knowledge_authorities(self) -> None:
         for required in (
             "pablontiv/a4s",
             "AGENTS.md",
             "Rootline",
             "Backscroll",
             ".workspace/docs/",
+            ".workspace/secrets/",
+            "SOPS",
+            "Pi's native provider",
         ):
             with self.subTest(required=required):
                 self.assertIn(required, self.config)
 
-    def test_config_keeps_unresolved_bindings_explicit(self) -> None:
-        self.assertIn("unknown", self.config)
+    def test_external_effects_and_reserved_authority_are_explicit(self) -> None:
+        external = self.workspace["do_work"]["external_effects"]
+        reserved = self.workspace["deliver_work"]["reserved_authority"]
+        for marker in (
+            "read-only",
+            "operator authorization",
+            "recovery",
+            "verify postconditions",
+        ):
+            with self.subTest(surface="external", marker=marker):
+                self.assertIn(marker, external)
+        for marker in (
+            "every change to this file",
+            "live external effect",
+            "destructive cleanup",
+            "document under .workspace/docs/",
+        ):
+            with self.subTest(surface="reserved", marker=marker):
+                self.assertIn(marker, reserved)
+
+    def test_config_rejects_deterministic_control_fields(self) -> None:
+        actual = tuple(
+            field for field in forbidden_control_fields(self.document) if field != "executor"
+        )
+        self.assertEqual(actual, ())
+        mutated = self.config.replace(
+            "  controller_identity: env:PI_SESSION_ID",
+            "  timeout_seconds: 30\n  success: exit-zero\n"
+            "  on_failure: stop\n  controller_identity: env:PI_SESSION_ID",
+            1,
+        )
+        mutated_fields = tuple(
+            field
+            for field in forbidden_control_fields(parse_yaml_mapping(mutated))
+            if field != "executor"
+        )
+        self.assertEqual(mutated_fields, FORBIDDEN_CONTROL_FIELDS[1:])
+
+    def test_config_contains_no_template_or_local_path_placeholders(self) -> None:
         self.assertNotIn("{" * 2, self.config)
         self.assertNotIn("TO" + "DO", self.config)
+        self.assertNotIn("/Users/", self.config)
 
     def test_repository_binding_is_public_and_source_canonical(self) -> None:
-        repo = self.repository.get("repo")
-        self.assertIsInstance(repo, dict)
-        assert isinstance(repo, dict)
-        self.assertEqual(repo.get("path"), "https://github.com/pablontiv/a4s.git")
-        self.assertRegex(str(repo.get("verified_revision")), r"^[0-9a-f]{40}$")
-        self.assertNotIn("/Users/", self.config)
+        self.assertEqual(self.repository["id"], "pablontiv/a4s")
+        self.assertEqual(self.repository["url"], "https://github.com/pablontiv/a4s.git")
+        self.assertEqual(self.repository["base_branch"], "main")
+        self.assertEqual(self.repository["entry_point"], "AGENTS.md")
+        self.assertTrue((REPO_ROOT / self.repository["entry_point"]).is_file())
 
 
 if __name__ == "__main__":

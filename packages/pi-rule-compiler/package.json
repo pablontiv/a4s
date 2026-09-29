@@ -2,6 +2,16 @@
   "name": "@a4s/pi-rule-compiler",
   "version": "0.1.0",
   "private": true,
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pablontiv/a4s.git",
+    "directory": "packages/pi-rule-compiler"
+  },
+  "homepage": "https://github.com/pablontiv/a4s/tree/main/packages/pi-rule-compiler#readme",
+  "bugs": {
+    "url": "https://github.com/pablontiv/a4s/issues"
+  },
   "type": "module",
   "engines": {
     "node": ">=22.19.0"
@@ -29,7 +39,7 @@
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "0.87.0",
-    "@types/node": "26.4.1",
+    "@types/node": "26.6.1",
     "tsx": "4.23.13",
     "typescript": "7.0.2"
   }

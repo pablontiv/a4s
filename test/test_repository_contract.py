@@ -18,17 +18,9 @@ TEST_REQUIREMENTS_PATH = ROOT / "requirements-test.txt"
 WORKSPACE_CONFIG_PATH = ROOT / ".workspace" / "config.yaml"
 GLOBAL_STEERING_PATH = ROOT / "output-styles" / "mentor-telemetria.assets" / "append-system.md"
 LINK_PATTERN = re.compile(r"(?<!!)\[[^]]+\]\(([^)]+)\)")
-REQUIRED_AGENT_CLAUSES = (
-    "configuración de orquestación",
-    "Mantén configuración y runtime como capas del mismo producto",
-    "Mantén cada skill autocontenido bajo `skills/<name>/`",
-    "Trata runtimes y herramientas externas como providers integrados",
-    "Preserva ADRs, specs y planes históricos",
-    "Rootline gobierna Markdown durable bajo `.workspace/docs/`",
-    "Aplica DRY y KISS",
-    "no conviertas reorganizaciones ordinarias en experimentos",
-    "Exige autorización explícita y acotada antes de efectos externos destructivos",
-    "Usa conventional commits y pull requests",
+EXPECTED_AGENT_POINTER = (
+    "La forma de trabajo de este repositorio la define `.workspace/config.yaml`; "
+    "ningún otro documento la sustituye."
 )
 REQUIRED_GLOBAL_STEERING_CLAUSES = (
     "A correction to an instruction is not automatically a durable preference.",
@@ -89,6 +81,7 @@ class RepositoryContractTests(unittest.TestCase):
                 if isinstance(metadata, dict):
                     updated = metadata.get("updated")
                     self.assertIsInstance(updated, str, "metadata.updated must be a quoted YYYY-MM-DD string")
+                    assert isinstance(updated, str)
                     parsed = date.fromisoformat(updated)
                     self.assertEqual(parsed.isoformat(), updated)
                     self.assertLessEqual(parsed, date.today())
@@ -117,10 +110,8 @@ class RepositoryContractTests(unittest.TestCase):
             with self.subTest(target=target):
                 self.assertTrue((ROOT / relative).exists(), target)
 
-    def test_agent_contract_matches_consolidated_product(self) -> None:
-        for clause in REQUIRED_AGENT_CLAUSES:
-            with self.subTest(clause=clause):
-                self.assertIn(clause, self.agents)
+    def test_agent_contract_points_only_to_canonical_workspace_config(self) -> None:
+        self.assertEqual(self.agents.strip(), EXPECTED_AGENT_POINTER)
 
     def test_global_steering_preserves_behavioral_guards(self) -> None:
         normalized_steering = " ".join(self.global_steering.split())
@@ -182,20 +173,16 @@ class RepositoryContractTests(unittest.TestCase):
 
     def test_workspace_sync_and_closure_refresh_main_explicitly(self) -> None:
         workspace = self.workspace_config["workspace"]
-        sync_strategy = workspace["workflow"]["sync_strategy"]
-        closure = next(
-            item for item in workspace["post_checks"] if "Cierre obligatorio" in item
-        )
+        starting_point = workspace["do_work"]["starting_point"]
+        closure = workspace["deliver_work"]["close"]
 
         for command in ("git fetch origin main", "git pull --ff-only origin main"):
-            with self.subTest(surface="sync_strategy", command=command):
-                self.assertIn(command, sync_strategy)
-            with self.subTest(surface="post_checks", command=command):
+            with self.subTest(surface="starting_point", command=command):
+                self.assertIn(command, starting_point)
+            with self.subTest(surface="close", command=command):
                 self.assertIn(command, closure)
 
-        self.assertGreaterEqual(closure.count("git fetch origin main"), 2)
-        self.assertIn("git rev-parse main", closure)
-        self.assertIn("git rev-parse origin/main", closure)
+        self.assertIn("main equals origin/main", closure)
         self.assertIn("git status --porcelain", closure)
 
     def test_no_legacy_document_authority_remains(self) -> None:

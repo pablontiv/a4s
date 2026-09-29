@@ -2,6 +2,15 @@
   "name": "a4s",
   "version": "0.0.0-e0",
   "private": true,
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pablontiv/a4s.git"
+  },
+  "homepage": "https://github.com/pablontiv/a4s#readme",
+  "bugs": {
+    "url": "https://github.com/pablontiv/a4s/issues"
+  },
   "type": "module",
   "workspaces": [
     "packages/*"
@@ -19,7 +28,7 @@
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "0.87.0",
-    "@types/node": "26.4.1",
+    "@types/node": "26.6.1",
     "tsx": "4.23.13",
     "typescript": "7.0.2"
   }

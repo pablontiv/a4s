@@ -23,6 +23,7 @@ import glob
 import datetime
 import collections
 import argparse
+from typing import Any
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -35,7 +36,11 @@ def _session_window_and_cwd(jsonl_path: str):
     ts_first = ts_last = cwd = None
     cost = 0.0
     tok = 0
-    with open(jsonl_path, 'rb') as f:
+    try:
+        source = open(jsonl_path, 'rb')
+    except OSError:
+        return (None, None, None, cost, tok)
+    with source as f:
         for line in f:
             try:
                 o = json.loads(line.decode('utf-8', errors='ignore').strip())
@@ -68,76 +73,66 @@ def _session_window_and_cwd(jsonl_path: str):
     return (t1, t2, cwd, cost, tok)
 
 
+def _path_parts(cwd: str) -> list[str]:
+    """Return portable path components for POSIX or Windows session paths."""
+    return [part for part in cwd.replace('\\', '/').split('/') if part and part != '.']
+
+
+def _worktree_identity(cwd: str) -> tuple[str, str] | None:
+    """Return ``(repository, worktree)`` without assuming a local home prefix."""
+    parts = _path_parts(cwd)
+    for index, part in enumerate(parts):
+        if part.endswith('-worktrees') and index + 1 < len(parts):
+            return part.removesuffix('-worktrees'), parts[index + 1]
+        if part == 'worktrees' and index + 1 < len(parts):
+            if index == 0:
+                return '', parts[index + 1]
+            repository_index = index - 1
+            if parts[repository_index] == '.workspace' and repository_index > 0:
+                repository_index -= 1
+            return parts[repository_index], parts[index + 1]
+    return None
+
+
+def _repository_key(cwd: str) -> str:
+    worktree = _worktree_identity(cwd)
+    if worktree:
+        return worktree[0]
+    parts = _path_parts(cwd)
+    return parts[-1] if parts else ''
+
+
 def _worktree_key(cwd: str) -> str:
-    """Extrae un 'worktree key' del cwd: el segmento `worktrees/<nombre>` si existe, sino el repo top-level.
-
-    Ejemplos:
-      [REDACTED:shared-root]/vendor/pi-auto-router-worktrees/par-6li -> vendor/pi-auto-router-worktrees/par-6li
-      [REDACTED:shared-root]/vendor/pi-auto-router                    -> vendor/pi-auto-router
-      [REDACTED:shared-root]/infra/homeserver-worktrees/bead-hs-xyz   -> infra/homeserver-worktrees/bead-hs-xyz
-      [REDACTED:shared-root]/harness/a4s                              -> harness/a4s
-    """
-    if not cwd:
-        return ''
-    # Normalizar: quitar [REDACTED:shared-root]/ o [REDACTED:home]/
-    norm = cwd.replace('[REDACTED:shared-root]/', '').replace('[REDACTED:home]/', '').rstrip('/')
-    parts = norm.split('/')
-    if len(parts) < 2:
-        return norm
-
-    # Buscar segmento worktrees/<name>
-    if 'worktrees' in parts:
-        i = parts.index('worktrees')
-        if i + 1 < len(parts):
-            # worktree path: <repo>-worktrees/<name>
-            wt_name = parts[i + 1]
-            # subir un nivel para incluir el repo padre
-            if i > 0:
-                repo = parts[i - 1]
-                return f"{repo}/worktrees/{wt_name}"
-            return f"worktrees/{wt_name}"
-
-    # Sino, repo top-level (primer segmento después del prefijo)
-    return '/'.join(parts[:2])
+    """Return a root-independent key for a repository or named worktree."""
+    worktree = _worktree_identity(cwd)
+    if worktree:
+        repository, name = worktree
+        return f"{repository}/worktrees/{name}" if repository else f"worktrees/{name}"
+    return _repository_key(cwd)
 
 
-def _cwds_related(cwd_a: str, cwd_b: str) -> bool:
-    """Determina si dos cwds probablemente pertenecen al mismo 'ámbito de orquestación'."""
+def _cwds_related(cwd_a: str | None, cwd_b: str | None) -> bool:
+    """Determine whether two cwd values belong to the same orchestration scope."""
     if not cwd_a or not cwd_b:
         return False
-    a = cwd_a.rstrip('/')
-    b = cwd_b.rstrip('/')
+    a = cwd_a.rstrip('/\\')
+    b = cwd_b.rstrip('/\\')
     if a == b:
         return True
-    # Mismo worktree
-    ka = _worktree_key(a)
-    kb = _worktree_key(b)
-    if ka and ka == kb:
+
+    a_worktree = _worktree_identity(a)
+    b_worktree = _worktree_identity(b)
+    if a_worktree and a_worktree == b_worktree:
         return True
-    # Si A es worktree y B es repo principal (o viceversa), y comparten repo parent
-    a_norm = a.replace('[REDACTED:shared-root]/', '').replace('[REDACTED:home]/', '')
-    b_norm = b.replace('[REDACTED:shared-root]/', '').replace('[REDACTED:home]/', '')
-    a_parts = a_norm.split('/')
-    b_parts = b_norm.split('/')
-    if len(a_parts) >= 1 and len(b_parts) >= 1:
-        # Si uno tiene "worktrees" en path y el otro no, ver si comparten el repo base
-        if 'worktrees' in a_norm and 'worktrees' not in b_norm:
-            # a = repo-worktrees/name, b = repo
-            a_repo = a_parts[0].replace('-worktrees', '') if a_parts[0].endswith('-worktrees') else a_parts[0]
-            b_repo = b_parts[0]
-            if a_repo == b_repo:
-                return True
-        if 'worktrees' in b_norm and 'worktrees' not in a_norm:
-            b_repo = b_parts[0].replace('-worktrees', '') if b_parts[0].endswith('-worktrees') else b_parts[0]
-            a_repo = a_parts[0]
-            if a_repo == b_repo:
-                return True
+
+    if bool(a_worktree) != bool(b_worktree):
+        return _repository_key(a) == _repository_key(b)
     return False
 
 
-def build_attribution_from_records(records, buffer_minutes: int = 60):
+def build_attribution_from_records(records: list[Any], buffer_minutes: int = 60) -> dict[str, dict[str, Any]]:
     """Atribuye S1 a S3/S4 sin reabrir JSONL; consume SessionRecord canónicos."""
-    sessions = [dict(
+    sessions: list[dict[str, Any]] = [dict(
         scenario=record.observed_topology, path=record.source_path,
         t_start=record.started_at, t_end=record.ended_at, cwd=record.cwd,
         cost=record.cost_native_usd or 0.0,
@@ -145,7 +140,7 @@ def build_attribution_from_records(records, buffer_minutes: int = 60):
     ) for record in records]
     orchestrators = [session for session in sessions if session['scenario'] in ('S3', 'S4') and session['t_start']]
     workers = [session for session in sessions if session['scenario'] == 'S1' and session['t_start']]
-    result = {}
+    result: dict[str, dict[str, Any]] = {}
     for orchestrator in orchestrators:
         key = orchestrator['path']
         entry = dict(orchestrator=orchestrator, scenario=orchestrator['scenario'], t_start=orchestrator['t_start'], t_end=orchestrator['t_end'], cost_orch=orchestrator['cost'], tok_orch=orchestrator['tok'], spawned_s1=[], spawned_paths=set(), n_spawned=0, cost_s1_spawned=0.0, tok_s1_spawned=0)
@@ -164,13 +159,13 @@ def build_attribution_from_records(records, buffer_minutes: int = 60):
     return result
 
 
-def build_attribution(cells: dict, buffer_minutes: int = 60):
+def build_attribution(cells: dict[str, dict[str, Any]], buffer_minutes: int = 60) -> dict[str, dict[str, Any]]:
     """Devuelve dict {orchestrator_path: {spawned_s1: [paths], n_spawned: int, cost_orch, cost_s1, ...}}.
 
     Solo cuenta S1 que se inician dentro de la ventana del S3/S4 + buffer.
     """
     # Cargar todas las sesiones con metadata
-    sessions = []
+    sessions: list[dict[str, Any]] = []
     for scenario, cell in cells.items():
         for f in cell.get('files', []):
             t1, t2, cwd, cost, tok = _session_window_and_cwd(f)
@@ -183,7 +178,7 @@ def build_attribution(cells: dict, buffer_minutes: int = 60):
     orchestrators = [s for s in sessions if s['scenario'] in ('S3', 'S4') and s['t_start']]
     workers_s1 = [s for s in sessions if s['scenario'] == 'S1' and s['t_start']]
 
-    attribution = collections.defaultdict(lambda: dict(
+    attribution: collections.defaultdict[str, dict[str, Any]] = collections.defaultdict(lambda: dict(
         orchestrator=None, scenario=None, t_start=None, t_end=None,
         cost_orch=0.0, tok_orch=0,
         spawned_s1=[], spawned_paths=set(), n_spawned=0,

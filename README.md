@@ -69,4 +69,4 @@ Cada skill conserva sus dependencias, helpers, fixtures y tests dentro de su pro
 
 ## Licencias
 
-El código original de A4S conserva su situación previa. Los artefactos trasladados desde `pablontiv/handbook` conservan su licencia MIT en [`LICENSES/handbook-MIT.txt`](LICENSES/handbook-MIT.txt), además de las licencias específicas incluidas por algunos artefactos.
+El código original de A4S no se distribuye bajo una licencia de reutilización (`UNLICENSED`); su lectura pública no concede permiso para copiarlo, modificarlo ni redistribuirlo. El alcance se aclara en [`NOTICE`](NOTICE). Los artefactos trasladados desde `pablontiv/handbook` conservan su licencia MIT en [`LICENSES/handbook-MIT.txt`](LICENSES/handbook-MIT.txt), y algunos subárboles incluyen licencias propias que prevalecen para esos artefactos.

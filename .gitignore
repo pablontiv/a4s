@@ -10,6 +10,39 @@ node_modules/
 dist/
 artifacts/e0/
 
+# Local environment and package-manager credentials
+.env
+.env.*
+!.env.example
+!.env.*.example
+.npmrc
+.pypirc
+.netrc
+.authinfo
+
+# Private keys and decrypted secret material
+*.agekey
+*.dec.*
+*.decrypted.*
+*.plaintext.*
+id_rsa
+id_rsa.*
+id_ed25519
+id_ed25519.*
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+credentials.json
+credentials.*.json
+service-account*.json
+
+# Operating-system metadata
+.DS_Store
+Thumbs.db
+
 # Python bytecode
 __pycache__/
 *.py[cod]
