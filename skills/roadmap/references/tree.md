@@ -41,6 +41,7 @@ An epic is a branch; a `blocks` edge renders as `↓ desbloquea`. Each non-close
 Inside a branch or `TASK DIRECTA`, write each topology-ready prerequisite, then its dependents indented under `↓ desbloquea`, recursively; a dependent appears once, under its first prerequisite by ID, with `(+ also waits on <ids>)` when needed. Then list members without edges.
 
 Node: `<id> <title> [<status>]`, then `[resumable]` when it applies, then at most one marker in this order: `⚠tipo`, `⚠jerarquía`, `controller:<session>`, `⚠deferred`, `⚠contrato` (fails `definition_of_ready`), `⚠drift`.
+For `controller:<session>`, render the concrete resolved session value rather than the placeholder.
 
 Order branches by score (descending), then best priority, then fewer pending, then ID; `TASK DIRECTA` and `QUICK WINS` go last.
 
@@ -51,6 +52,8 @@ score = + 50 if a member's ID appears in the last 5 commits
         - 3  × non-closed members
         - 100 if no member is topology-ready
 ```
+
+Before rendering the topology skeleton, present every existing Bead in it with the primary human Description, literal Bead ID, observable Result, and Scope together. Read those values from the record; display an absent value as missing or unknown without inference, readiness impact, mutation, or backfill. Roadmap may add UI details such as Difference. The skeleton omits these adjacent presentation details only to keep topology visible.
 
 ```text
 ROADMAP DECISION TREE — <closed>/<closed + non-closed> completados

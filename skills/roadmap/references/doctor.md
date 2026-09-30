@@ -12,6 +12,8 @@ Run the tree recipe and `bd dep cycles --json`. Read comments (`bd show "$ID" --
 - **readiness**: tasks failing `definition_of_ready`; readiness drift;
 - **relevance**: tasks already resolved on the base branch, targeting code absent from it, implementing a superseded ADR, duplicated by another Bead, or filed questions rather than work.
 
+Whenever an existing Bead is shown in the diagnosis or proposal, keep its primary human Description, literal Bead ID, observable Result, and Scope together. Read those values from the record and show an absent value as missing or unknown without inference, readiness impact, mutation, or backfill.
+
 A suspicion without evidence is not a finding.
 
 ## 2. Propose (one pass)
@@ -22,12 +24,12 @@ Build one proposal for all findings in scope:
 - **Backfill** for tasks failing `definition_of_ready`: the complete resulting `description`, `design` and `acceptance_criteria` per task. Propose text only from a citable source (repository `path:line`, ADR or spec line, Bead field or note, commit SHA, Backscroll or Engram hit); keep existing text.
 - **Questions**: every missing value that has no source, all together, each with the evidence and one concrete question.
 
-Show the proposal once and end with: **approve exactly**, **request adjustments**, or **reject**. Answers to the questions are part of the approval; revise the proposal once with them and apply.
+Show the exact Beads payload once and end with: **approve exactly**, **request adjustments**, or **reject**. The answers included with approval are explicit operator choices: incorporate them only into the corresponding missing values once and make no other payload revision. If that incorporation causes no other material change to Result, acceptance, Scope, or authority, apply without another choice. Otherwise follow `choose_work.changed_decision`: show the updated payload and obtain a new operator choice before mutating.
 
 ## 3. Apply and verify
 
 Apply only the approved commands, using flags from `bd update --help` (for example `--body-file`, `--design-file`, `--acceptance`), `bd dep add|remove`, `bd duplicate`, `bd supersede` and `bd close --reason "<evidence>"`. Status or assignee corrections use `--if-status` and `--if-assignee` with the observed values. Stop on any failure or effect that differs from the proposal; do not improvise.
 
-Then re-read the affected Beads and dependencies, run `bd dep cycles --json`, rerun the tree, and report: applied fixes, remaining findings, and the next executable candidate.
+Then re-read the affected Beads and dependencies, run `bd dep cycles --json`, rerun the tree, and report: applied fixes, remaining findings, and the next executable candidate. Present each existing Bead in that report with Description, Bead ID, Result, and Scope together, preserving missing or unknown values without inference, readiness impact, mutation, or backfill.
 
 When Loop calls Doctor for backfill (`incomplete_task_policy: backfill`), the scope is that one task and Loop resumes after verification.

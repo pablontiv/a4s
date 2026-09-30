@@ -15,6 +15,19 @@ A **pre-start external gate** is a condition outside the task's steps (human, bi
 
 Roadmap creates only `epic` and `task`. Spikes, bugs, chores and decisions are tasks with fitting titles and acceptance criteria. Nested epics are invalid.
 
+## Existing Bead presentation
+
+The effective `workspace.choose_work.backlog_decisions` value is the policy authority. Roadmap may specialize UI, layouts, auxiliary fields, headings, markers, summaries, payloads, and autonomous-loop handling, but those mechanics add no normative gate, permission, readiness, lifecycle, acceptance, or external effect.
+
+Whenever Roadmap presents an existing Bead to the operator, it keeps these values together without changing the record:
+
+- `Description`: the primary human description already present in the Bead;
+- `Bead ID`: the literal provider ID, never a substitute for Description;
+- `Result`: the observable result stated in the existing Bead;
+- `Scope`: the boundaries stated in the existing Bead.
+
+If a value is absent, display it as missing or unknown; never infer it, change readiness, mutate, or backfill for presentation. Prospective Plan nodes are proposals, not Beads, so this config projection does not apply before creation. Roadmap may give them richer UI or label an ID as unassigned as presentation specialization. Once created, Plan reports each new Bead with the four values from the resulting provider record.
+
 ## Configuration axes
 
 Loop and Doctor read these axes from the effective `.workspace/config.yaml`. The value there wins; the default applies only when the axis is absent.

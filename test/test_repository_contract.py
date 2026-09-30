@@ -17,7 +17,17 @@ DEPENDABOT_PATH = ROOT / ".github" / "dependabot.yml"
 TEST_REQUIREMENTS_PATH = ROOT / "requirements-test.txt"
 WORKSPACE_CONFIG_PATH = ROOT / ".workspace" / "config.yaml"
 GLOBAL_STEERING_PATH = ROOT / "output-styles" / "mentor-telemetria.assets" / "append-system.md"
+ROADMAP_SKILL_PATH = ROOT / "skills" / "roadmap" / "SKILL.md"
+ROADMAP_TREE_PATH = ROOT / "skills" / "roadmap" / "references" / "tree.md"
+ROADMAP_PLAN_PATH = ROOT / "skills" / "roadmap" / "references" / "plan.md"
+ROADMAP_DOCTOR_PATH = ROOT / "skills" / "roadmap" / "references" / "doctor.md"
 LINK_PATTERN = re.compile(r"(?<!!)\[[^]]+\]\(([^)]+)\)")
+BACKLOG_DECISIONS_POLICY = (
+    "When presenting an existing Bead to the operator, the executor shows its human Description, Bead ID, "
+    "observable Result, and Scope together. The human Description is primary; the Bead ID never substitutes for "
+    "it. This presentation does not infer a value, affect readiness, mutate, or backfill the Bead; an absent field "
+    "is shown as missing or unknown."
+)
 EXPECTED_AGENT_POINTER = (
     "La forma de trabajo de este repositorio la define `.workspace/config.yaml`; "
     "ningún otro documento la sustituye."
@@ -184,6 +194,91 @@ class RepositoryContractTests(unittest.TestCase):
 
         self.assertIn("main equals origin/main", closure)
         self.assertIn("git status --porcelain", closure)
+
+    def test_workspace_config_existing_bead_presentation_policy_is_exact(self) -> None:
+        choose_work = self.workspace_config["workspace"]["choose_work"]
+        self.assertEqual(choose_work["backlog_decisions"], BACKLOG_DECISIONS_POLICY)
+
+    def test_roadmap_ui_specializes_existing_bead_presentation_without_state_change(self) -> None:
+        for path in (ROADMAP_TREE_PATH, ROADMAP_PLAN_PATH, ROADMAP_DOCTOR_PATH):
+            with self.subTest(surface=path.name):
+                paragraphs = re.split(r"\n\s*\n", path.read_text(encoding="utf-8"))
+                matching = [
+                    paragraph
+                    for paragraph in paragraphs
+                    if "existing Bead" in paragraph
+                    and all(field in paragraph for field in ("Description", "Bead ID", "Result", "Scope"))
+                ]
+                self.assertTrue(matching)
+                presentation = " ".join(matching)
+                normalized = presentation.lower()
+                self.assertRegex(normalized, r"missing|unknown")
+                for invariant in ("inference", "readiness", "mutat", "backfill"):
+                    self.assertIn(invariant, normalized)
+
+    def test_roadmap_plan_ui_distinguishes_proposals_from_existing_beads(self) -> None:
+        plan = ROADMAP_PLAN_PATH.read_text(encoding="utf-8")
+        self.assertIn("prospective nodes are not existing Beads", plan)
+        self.assertIn("label their ID as unassigned", plan)
+        self.assertIn("never invents a literal provider ID", plan)
+        self.assertIn("Report each created Bead", plan)
+        for field in ("Description", "real Bead ID", "Result", "Scope"):
+            self.assertIn(field, plan)
+
+    def test_roadmap_preserves_base_authority_and_payload_flow(self) -> None:
+        skill = ROADMAP_SKILL_PATH.read_text(encoding="utf-8")
+        self.assertIn("derive their proposal-and-choice behavior", skill)
+        self.assertIn("`choose_work.intake` and `choose_work.changed_decision`", skill)
+        self.assertIn("show the exact Beads payload", skill)
+        self.assertNotIn("with one exception", skill)
+
+        plan = ROADMAP_PLAN_PATH.read_text(encoding="utf-8")
+        self.assertIn("This is the exact proposed Beads payload", plan)
+        self.assertIn("A revision needs a new approval.", plan)
+
+        doctor = ROADMAP_DOCTOR_PATH.read_text(encoding="utf-8")
+        self.assertIn("Report, with literal IDs", doctor)
+        self.assertIn("Show the exact Beads payload once", doctor)
+        self.assertIn("answers included with approval are explicit operator choices", doctor)
+        self.assertIn("corresponding missing values once", doctor)
+        self.assertIn("make no other payload revision", doctor)
+        self.assertIn("no other material change", doctor)
+        self.assertIn("apply without another choice", doctor)
+        for dimension in ("Result", "acceptance", "Scope", "authority"):
+            self.assertIn(dimension, doctor)
+        self.assertIn("`choose_work.changed_decision`", doctor)
+        self.assertRegex(
+            " ".join(doctor.split()),
+            r"show the updated payload.*obtain a new operator choice before mutating",
+        )
+
+    def test_roadmap_preserves_tree_and_doctor_diagnostic_semantics(self) -> None:
+        tree = ROADMAP_TREE_PATH.read_text(encoding="utf-8")
+        for phrase in (
+            "<closed>/<closed + non-closed> completados",
+            "<closed>/<total> completadas, N pendientes",
+            "Findings never hide other executable work.",
+            "`BLOQUEADAS`",
+            "blocked_by: <ids or gate>",
+            "(+ also waits on <ids>)",
+            "concrete resolved session value rather than the placeholder",
+            "Order branches by score",
+        ):
+            with self.subTest(surface="tree", phrase=phrase):
+                self.assertIn(phrase, tree)
+
+        node_line = next(line for line in tree.splitlines() if line.startswith("Node: "))
+        marker_order = ("tipo", "jerarquía", "controller:<session>", "deferred", "contrato", "drift")
+        self.assertEqual(sorted(marker_order, key=node_line.index), list(marker_order))
+
+        doctor = ROADMAP_DOCTOR_PATH.read_text(encoding="utf-8")
+        for phrase in (
+            "mentioned IDs that exist but are not linked",
+            "`in_progress` whose owner or checkpoint contradicts Git, comments or notes",
+            "checkpoint metadata on a task that is not `in_progress`",
+        ):
+            with self.subTest(surface="doctor", phrase=phrase):
+                self.assertIn(phrase, doctor)
 
     def test_no_legacy_document_authority_remains(self) -> None:
         self.assertFalse((ROOT / "docs").exists())

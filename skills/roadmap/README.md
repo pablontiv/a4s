@@ -1,6 +1,6 @@
 # Roadmap
 
-Roadmap is a Markdown mechanism over a repository's Beads backlog: plan, tree, Doctor and a sequential autonomous loop. Each repository's way of working (method, checks, readiness, failure handling, delivery, controller identity) lives in its `.workspace/config.yaml`, not in the skill (ADR 0059).
+Roadmap is a Markdown mechanism over a repository's Beads backlog: plan, tree, Doctor and a sequential autonomous loop. Each repository's way of working (method, checks, readiness, failure handling, delivery, controller identity) lives in its `.workspace/config.yaml`, not in the skill (ADR 0059). When Roadmap presents an existing Bead, it keeps the primary human Description together with Bead ID, observable Result, and Scope; missing values remain missing or unknown without inference, readiness impact, mutation, or backfill.
 
 ## Commands
 
