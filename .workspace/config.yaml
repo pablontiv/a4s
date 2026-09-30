@@ -106,8 +106,11 @@ workspace:
       Before starting a task, agree on its result and acceptance criteria
       through the proposal-and-choice cycle. Record the initial state, scope
       and exclusions, applicable authority and invariants, dependencies,
-      versioned artifact, and evidence required for each criterion. An epic
-      also records its own observable criteria and child dependencies.
+      versioned artifact, and evidence required for each criterion. Classify
+      each expected output as durable evidence, reproducible-disposable, or
+      retained local evidence, and identify the exact resources its cleanup
+      may remove. An epic also records its own observable criteria and child
+      dependencies.
     by_kind:
       research: >-
         State the question, sources, comparison method, and what makes the
@@ -220,10 +223,14 @@ workspace:
   accept_work:
     evidence: >-
       Map each agreed criterion to its check or observation and recorded
-      result. Report passed, failed, unknown, or not applicable as
-      appropriate. Accept a task only when its criteria and applicable
-      controls have passed; accept an epic after its child results and its
-      own criteria have been verified.
+      result. Keep the durable evidence as a sanitized result in the task
+      record with links to versioned artifacts. Raw session or provider
+      output and other reproducible artifacts are disposable, not durable
+      evidence, unless an acceptance criterion explicitly requires retention.
+      Report passed, failed, unknown, or not applicable as appropriate.
+      Accept a task only when its criteria and applicable controls have
+      passed; accept an epic after its child results and its own criteria have
+      been verified.
     kind_checks: >-
       Review research against its sources and conclusion. Check an
       experiment's independent observations, verdict, containment, and
@@ -305,15 +312,23 @@ workspace:
     close: >-
       Confirm the reviewed PR was integrated. In the stable main checkout,
       run `git fetch origin main` and `git pull --ff-only origin main`.
-      Close only when main equals origin/main and `git status --porcelain`
-      is empty.
-      A failed command, conflict, divergence, wrong branch, or dirty tree
-      blocks closure.
+      Verify that the task record contains its durable evidence and exact
+      cleanup set, that the PR head, task branch and dedicated worktree
+      identities agree, and that no unintegrated change or retained output
+      would be removed. Then delete reproducible-disposable outputs, remove
+      the dedicated task worktree and local branch, and delete the remote
+      branch when it still names the integrated PR head. Close only when main
+      equals origin/main, `git status --porcelain` is empty, and those task
+      resources are absent. A failed command, conflict, divergence, wrong
+      branch, dirty tree, identity ambiguity or retained evidence blocks
+      cleanup and closure.
     reserved_authority: >-
       Obtain explicit operator authorization for every change to this file,
-      a live external effect, destructive cleanup, and merging a PR that adds
-      or changes a document under .workspace/docs/. Authorization identifies
-      the proposed action and does not waive other controls.
+      merging a PR that adds or changes a document under .workspace/docs/,
+      and every live external effect or destructive cleanup that is not part
+      of the bounded post-merge cleanup authorized by improve_work.cleanup.
+      Authorization identifies the proposed action and does not waive other
+      controls.
   track_work:
     progress: >-
       Report accepted criteria and their evidence, pending criteria,
@@ -344,8 +359,15 @@ workspace:
       Apply it only after operator approval, recorded in an ADR delivered in
       the same PR. Preserve historical records.
     cleanup: >-
-      Offer cleanup with the affected resources identified. Perform
-      destructive cleanup after operator authorization.
+      After verified integration, cleanup is mandatory and preauthorized only
+      for the exact task worktree, its local branch, a remote branch that still
+      names the integrated PR head, and outputs classified in readiness as
+      reproducible-disposable. First verify synchronized main, the merged PR
+      and head identities, durable evidence in the task record, no
+      unintegrated changes, and no retained output. If any identity,
+      classification or postcondition is failed or unknown, delete nothing
+      and block closure. Every other destructive cleanup requires explicit
+      operator authorization.
   product:
     skills: >-
       Each skill is self-contained under skills/<name>/ with no dependency on

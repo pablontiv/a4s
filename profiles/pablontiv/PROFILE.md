@@ -199,7 +199,7 @@ Los defaults priorizan seguridad:
 - `external_effects`: solo lectura hasta autorización explícita.
 - `credential_policy`: mecanismo autorizado sin persistir secretos.
 - `knowledge_policy`: Rootline gobierna ADRs, specs y planes bajo `.workspace/docs/`; ninguna clase se escribe en un repositorio hijo sin autorización explícita.
-- `cleanup_policy`: ofrecer cleanup, nunca eliminar automáticamente por decisión del agente.
+- `cleanup_policy`: después de integración verificada, eliminar obligatoriamente el worktree y las branches exactas de la task junto con outputs clasificados como reproducibles y desechables, sólo tras registrar evidencia durable y verificar identidad, ausencia de cambios no integrados y ausencia de retención; cualquier otro cleanup destructivo requiere autorización explícita.
 - `custom_rules`: `[]` salvo reglas adicionales aprobadas.
 
 Estos defaults no autorizan inferir comandos por la mera presencia de archivos.
@@ -253,7 +253,7 @@ Extraer decisiones, errores, fricciones y patrones; asignar una clase canónica 
 7. **INV-07 — Acceptance trazable:** criterios, pre-checks y review checks obligatorios se vinculan a resultados verificables antes de entregar.
 8. **INV-08 — Entrega autorizada:** ninguna entrega o mutación externa ocurre fuera del gate, modo y alcance declarados.
 9. **INV-09 — Conocimiento aprobado:** la aprobación durable se aplica por clase y no se amplía por inferencia.
-10. **INV-10 — Cleanup gobernado:** toda eliminación destructiva sigue política y autorización; nunca es automática por decisión del agente.
+10. **INV-10 — Cleanup gobernado:** el cleanup post-merge exacto y verificado de una task es obligatorio; toda otra eliminación destructiva sigue política y autorización explícita.
 11. **INV-11 — Fallo cerrado:** un control obligatorio `failed` o `unknown` no se trata como éxito.
 12. **INV-12 — Postcondición verificada:** finalizar un proceso no equivale a entrega verificada.
 13. **INV-13 — Secretos protegidos:** configuración, comandos, logs y evidencia no exponen ni persisten credenciales fuera del mecanismo autorizado.
@@ -300,7 +300,7 @@ credential_policy: |
 knowledge_policy: |
   Rootline gobierna el conocimiento bajo .workspace/docs/.
 cleanup_policy: |
-  Ofrecer; nunca eliminar automáticamente.
+  Tras integración verificada, eliminar los recursos exactos y desechables de la task bajo guardas fail-closed; cualquier otro cleanup requiere autorización explícita.
 custom_rules: []
 ```
 
