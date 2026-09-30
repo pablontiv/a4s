@@ -43,7 +43,7 @@ Pi es el único runtime compatible en la versión 2. Rootline gobierna el Markdo
 La especialización usa este modelo conceptual:
 
 ```text
-engineering-handbook-v1.4.md
+.workspace/docs/references/engineering-handbook-v1.4.md
             → especialización
 profiles/pablontiv/PROFILE.md
             → adopción guiada

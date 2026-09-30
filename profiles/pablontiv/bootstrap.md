@@ -20,7 +20,7 @@ Este documento guía a Pi para preparar una instancia prose-first de `pablontiv/
 3. Detectar aliases, symlinks o worktrees y verificar que resuelven al mismo repositorio de origen. No tratarlos como nuevas identidades.
 4. Si la identidad no puede resolverse inequívocamente, conservar `unknown` y detener cualquier preparación mutante.
 5. Leer `PROFILE.md` y verificar que declara `pablontiv/a4s`, Engineering Handbook 1.4 y el digest `f5455e3eced13690358b02823053a1e00a6c7c06de5f17d9716805bf0a0cff26`.
-6. Verificar la procedencia contra `references/engineering-handbook-v1.4.md`. Una discrepancia bloquea la adopción.
+6. Verificar la procedencia contra `.workspace/docs/references/engineering-handbook-v1.4.md` en el repositorio A4S. Una discrepancia bloquea la adopción.
 
 ### 2. Realizar inspección de solo lectura
 
