@@ -2,6 +2,8 @@
 
 Private Pi extension that uses Jev as the semantic authority for deterministic compaction. Evidence is disabled by default; Ladder retrieval and Ladder-backed Evidence are explicit opt-ins.
 
+The extension supports Pi `>=0.99.1`. Pi-provided runtime packages remain wildcard peers so the active host supplies one shared runtime; the repository's development ranges and compatibility contract enforce the minimum without pinning an exact Pi release.
+
 ## Runtime contract
 
 - `session_before_compact` returns a deterministic custom compaction assembled from Jev `keep`, `truncate`, and `drop` decisions.
@@ -66,7 +68,7 @@ no per-session acknowledgement or additional command is required. `auto` calls
 only `ctx.compact()`, which enters the existing `session_before_compact`
 handler. Trigger persistence contains only hint/compact cooldown metadata.
 
-Pi 0.87 exposes the editor text in TUI mode. The production Trigger uses that
+Supported Pi versions expose the editor text in TUI mode. The production Trigger uses that
 value unless an embedding supplies the `trigger.editorHasText` runtime gate;
 an editor-read failure or a non-TUI mode is treated as non-empty, so the
 trigger fails closed.

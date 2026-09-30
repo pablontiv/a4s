@@ -1,5 +1,5 @@
 /**
- * Pi 0.87's production compaction estimator counts text as ceil(chars / 4).
+ * Pi's production compaction estimator counts text as ceil(chars / 4).
  * Four 30k-plus-character prompts leave more than 22.5k estimated tokens in
  * the newest three prompts, while retaining an older prompt for compaction to summarize.
  */

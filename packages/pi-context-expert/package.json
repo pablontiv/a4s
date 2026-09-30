@@ -32,13 +32,13 @@
     "rpc:compact-driver": "tsx scripts/run-rpc-compact.ts"
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "0.87.0"
+    "@earendil-works/pi-coding-agent": "*"
   },
   "dependencies": {
     "@a4s/typesafe": "0.1.0"
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "0.87.0",
+    "@earendil-works/pi-coding-agent": ">=0.99.1",
     "@types/node": "26.6.1",
     "tsx": "4.23.13",
     "typescript": "7.0.2"

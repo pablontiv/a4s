@@ -11,6 +11,17 @@ function text(path: string): string {
   return readFileSync(path, "utf8");
 }
 
+interface PackageManifest {
+  name?: string;
+  dependencies?: Record<string, string>;
+  peerDependencies?: Record<string, string>;
+  devDependencies?: Record<string, string>;
+}
+
+function manifest(path: string): PackageManifest {
+  return JSON.parse(text(path)) as PackageManifest;
+}
+
 test("the active extension exposes only the pi-context-expert identity", () => {
   assert.equal(basename(packageRoot), "pi-context-expert");
 
@@ -37,4 +48,25 @@ test("the active extension exposes only the pi-context-expert identity", () => {
   const gitignore = text(resolve(workspaceRoot, ".gitignore"));
   assert.match(gitignore, /^artifacts\/pi-context-expert-e2e\/$/m);
   assert.doesNotMatch(gitignore, /^artifacts\/pi-rule-compiler-e2e\/$/m);
+});
+
+test("Pi host packages stay wildcard peers while development declares the minimum", () => {
+  const minimum = ">=0.99.1";
+  const workspace = manifest(resolve(workspaceRoot, "package.json"));
+  const contextExpert = manifest(resolve(packageRoot, "package.json"));
+  const typesafe = manifest(resolve(workspaceRoot, "packages/typesafe/package.json"));
+
+  assert.equal(workspace.devDependencies?.["@earendil-works/pi-coding-agent"], minimum);
+  assert.equal(contextExpert.peerDependencies?.["@earendil-works/pi-coding-agent"], "*");
+  assert.equal(contextExpert.devDependencies?.["@earendil-works/pi-coding-agent"], minimum);
+  assert.equal(typesafe.peerDependencies?.["@earendil-works/pi-coding-agent"], "*");
+  assert.equal(typesafe.peerDependencies?.["@earendil-works/pi-ai"], "*");
+  assert.equal(typesafe.devDependencies?.["@earendil-works/pi-coding-agent"], minimum);
+  assert.equal(typesafe.devDependencies?.["@earendil-works/pi-ai"], minimum);
+
+  for (const packageManifest of [contextExpert, typesafe]) {
+    for (const hostPackage of ["@earendil-works/pi-coding-agent", "@earendil-works/pi-ai"]) {
+      assert.equal(packageManifest.dependencies?.[hostPackage], undefined);
+    }
+  }
 });

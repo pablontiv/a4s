@@ -47,13 +47,16 @@ test("runExperiment executes each selected scenario for every trial", async () =
     scenarios: ["S1", "S2", "S3", "S4", "S5"],
     launcher,
     artifactRoot: await createTempArtifactRoot(),
+    piVersion: "0.99.1",
   });
   const environment = JSON.parse(await readFile(join(result.runDir, "environment.json"), "utf8")) as {
     os_version: string;
+    pi_version: string;
   };
   assert.equal(launcher.starts, 10);
   assert.equal(result.summary.verdict.startsWith("PASS-"), true);
   assert.equal(environment.os_version, `${process.platform} ${release()}`);
+  assert.equal(environment.pi_version, "0.99.1");
 });
 
 test("formatManualCommand prints a direct interactive Pi command", () => {
