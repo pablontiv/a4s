@@ -39,7 +39,7 @@ workspace:
   knowledge_policy: |
     Rootline gobierna ADRs, specs y planes bajo .workspace/docs/.
   cleanup_policy: |
-    Ofrecer cleanup; nunca eliminar automáticamente.
+    Tras integración verificada, eliminar obligatoriamente los recursos exactos y reproducibles-desechables de la task bajo guardas fail-closed; cualquier otro cleanup requiere autorización explícita.
   custom_rules: []
 
 groups: {}

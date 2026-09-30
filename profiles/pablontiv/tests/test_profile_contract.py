@@ -510,6 +510,49 @@ class DogfoodConfigTests(unittest.TestCase):
             with self.subTest(surface="reserved", marker=marker):
                 self.assertIn(marker, reserved)
 
+    def test_post_merge_cleanup_is_mandatory_bounded_and_fail_closed(self) -> None:
+        readiness = self.workspace["prepare_work"]["shared_readiness"]
+        evidence = self.workspace["accept_work"]["evidence"]
+        close = self.workspace["deliver_work"]["close"]
+        reserved = self.workspace["deliver_work"]["reserved_authority"]
+        cleanup = self.workspace["improve_work"]["cleanup"]
+
+        for marker in ("durable evidence", "reproducible-disposable", "retained local evidence"):
+            with self.subTest(surface="readiness", marker=marker):
+                self.assertIn(marker, readiness)
+        for marker in ("sanitized result", "Raw session or provider output", "disposable"):
+            with self.subTest(surface="evidence", marker=marker):
+                self.assertIn(marker, evidence)
+        for marker in (
+            "PR head",
+            "dedicated worktree",
+            "local branch",
+            "remote branch",
+            "unintegrated change",
+            "retained output",
+            "resources are absent",
+        ):
+            with self.subTest(surface="close", marker=marker):
+                self.assertIn(marker, close)
+        for marker in (
+            "mandatory and preauthorized",
+            "exact task worktree",
+            "integrated PR head",
+            "delete nothing",
+            "block closure",
+            "Every other destructive cleanup",
+        ):
+            with self.subTest(surface="cleanup", marker=marker):
+                self.assertIn(marker, cleanup)
+        self.assertIn("bounded post-merge cleanup", reserved)
+
+        for path in (PROFILE_PATH, TEMPLATE_PATH):
+            document = path.read_text(encoding="utf-8")
+            with self.subTest(path=path.name):
+                self.assertIn("integración verificada", document)
+                self.assertIn("guardas fail-closed", document)
+                self.assertNotIn("nunca eliminar automáticamente", document)
+
     def test_config_rejects_deterministic_control_fields(self) -> None:
         actual = tuple(
             field for field in forbidden_control_fields(self.document) if field != "executor"
