@@ -7,11 +7,36 @@ import {
   type ContextEventResult,
   type ContextWithSystemEvent,
 } from "@earendil-works/pi-coding-agent";
-import { createPi087Fake } from "./fixtures.ts";
+import { createCompatiblePiFake } from "./fixtures.ts";
+
+const MINIMUM_PI_VERSION = "0.99.1";
+const MINIMUM_PI_RELEASE = [0, 99, 1] as const;
+
+function supportsPiVersion(version: string): boolean {
+  const match = /^(\d+)\.(\d+)\.(\d+)(?:\+.*)?$/.exec(version);
+  if (!match) return false;
+  const release = [Number(match[1]!), Number(match[2]!), Number(match[3]!)] as const;
+  return (
+    release[0] > MINIMUM_PI_RELEASE[0] ||
+    (release[0] === MINIMUM_PI_RELEASE[0] && release[1] > MINIMUM_PI_RELEASE[1]) ||
+    (release[0] === MINIMUM_PI_RELEASE[0] &&
+      release[1] === MINIMUM_PI_RELEASE[1] &&
+      release[2] >= MINIMUM_PI_RELEASE[2])
+  );
+}
+
+test("the runtime contract declares an inclusive minimum instead of an exact Pi version", () => {
+  for (const supported of [MINIMUM_PI_VERSION, "0.99.2", "0.100.0", "1.0.0", "0.99.1+build.1"]) {
+    assert.equal(supportsPiVersion(supported), true, `${supported} should be supported`);
+  }
+  for (const unsupported of ["0.99.0", "0.98.99", "0.99.1-beta.1", "invalid"]) {
+    assert.equal(supportsPiVersion(unsupported), false, `${unsupported} should not be supported`);
+  }
+  assert.equal(supportsPiVersion(VERSION), true, `installed Pi ${VERSION} must be >= ${MINIMUM_PI_VERSION}`);
+});
 
 test("agent_settled defers ctx.compact and enters the existing compact hook once", async () => {
-  assert.equal(VERSION, "0.87.0", "the lifecycle contract requires Pi 0.87.0");
-  const runtime = createPi087Fake();
+  const runtime = createCompatiblePiFake();
   runtime.pi.on("session_before_compact", () => {
     runtime.beforeCompactCalls += 1;
     return { cancel: true };
@@ -28,8 +53,8 @@ test("agent_settled defers ctx.compact and enters the existing compact hook once
   assert.equal(runtime.nativeFallbackCalls, 0, "a cancelled custom compaction must not fall back to native compaction");
 });
 
-test("the fake derives Pi 0.87 lifecycle payloads, results, and context", async () => {
-  const runtime = createPi087Fake();
+test("the compatibility fake derives lifecycle payloads, results, and context", async () => {
+  const runtime = createCompatiblePiFake();
   runtime.pi.on("agent_settled", (event, ctx) => {
     const settled: AgentSettledEvent = event;
     assert.equal(settled.type, "agent_settled");
@@ -52,8 +77,7 @@ test("the fake derives Pi 0.87 lifecycle payloads, results, and context", async 
 });
 
 test("a failed context projection leaves Pi's supplied system context unchanged", async () => {
-  assert.equal(VERSION, "0.87.0", "context_with_system is a Pi 0.87.0 lifecycle hook");
-  const runtime = createPi087Fake();
+  const runtime = createCompatiblePiFake();
   runtime.pi.on("context_with_system", () => {
     throw new Error("projection failed");
   });

@@ -9,40 +9,40 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import type { JevAnswer, JevQuestion, JevRequest } from "../src/types.ts";
 
-type Pi087Context = Pick<ExtensionContext, "compact">;
-type Pi087Handler<Event, Result = undefined> = (
+type CompatiblePiContext = Pick<ExtensionContext, "compact">;
+type CompatiblePiHandler<Event, Result = undefined> = (
   event: Parameters<ExtensionHandler<Event, Result>>[0],
-  ctx: Pi087Context,
+  ctx: CompatiblePiContext,
 ) => ReturnType<ExtensionHandler<Event, Result>>;
-type Pi087OnArgs =
-  | [event: "agent_settled", handler: Pi087Handler<AgentSettledEvent>]
+type CompatiblePiOnArgs =
+  | [event: "agent_settled", handler: CompatiblePiHandler<AgentSettledEvent>]
   | [
     event: "session_before_compact",
-    handler: Pi087Handler<SessionBeforeCompactEvent, SessionBeforeCompactResult>,
+    handler: CompatiblePiHandler<SessionBeforeCompactEvent, SessionBeforeCompactResult>,
   ]
   | [
     event: "context_with_system",
-    handler: Pi087Handler<ContextWithSystemEvent, ContextEventResult>,
+    handler: CompatiblePiHandler<ContextWithSystemEvent, ContextEventResult>,
   ];
-type Pi087EmitArgs =
+type CompatiblePiEmitArgs =
   | [event: "agent_settled"]
   | [event: "session_before_compact"]
   | [event: "context_with_system", payload: Pick<ContextWithSystemEvent, "messages">];
 
-interface Pi087FakeAPI {
-  on(event: "agent_settled", handler: Pi087Handler<AgentSettledEvent>): () => void;
+interface CompatiblePiFakeAPI {
+  on(event: "agent_settled", handler: CompatiblePiHandler<AgentSettledEvent>): () => void;
   on(
     event: "session_before_compact",
-    handler: Pi087Handler<SessionBeforeCompactEvent, SessionBeforeCompactResult>,
+    handler: CompatiblePiHandler<SessionBeforeCompactEvent, SessionBeforeCompactResult>,
   ): () => void;
   on(
     event: "context_with_system",
-    handler: Pi087Handler<ContextWithSystemEvent, ContextEventResult>,
+    handler: CompatiblePiHandler<ContextWithSystemEvent, ContextEventResult>,
   ): () => void;
 }
 
-export interface Pi087Fake {
-  readonly pi: Pi087FakeAPI;
+export interface CompatiblePiFake {
+  readonly pi: CompatiblePiFakeAPI;
   beforeCompactCalls: number;
   compactCalls: number;
   compactCallsWhileSettling: number;
@@ -56,14 +56,15 @@ export interface Pi087Fake {
 }
 
 /**
- * Minimal executable model of the Pi 0.87 lifecycle boundary used by the
- * contract tests. `ctx.compact()` called from `agent_settled` is queued until
- * every settled hook has returned, then it traverses `session_before_compact`.
+ * Minimal executable model of the supported Pi lifecycle boundary used by the
+ * compatibility contract tests. `ctx.compact()` called from `agent_settled` is
+ * queued until every settled hook has returned, then it traverses
+ * `session_before_compact`.
  */
-export function createPi087Fake(): Pi087Fake {
-  const settledHandlers: Pi087Handler<AgentSettledEvent>[] = [];
-  const beforeCompactHandlers: Pi087Handler<SessionBeforeCompactEvent, SessionBeforeCompactResult>[] = [];
-  const contextWithSystemHandlers: Pi087Handler<ContextWithSystemEvent, ContextEventResult>[] = [];
+export function createCompatiblePiFake(): CompatiblePiFake {
+  const settledHandlers: CompatiblePiHandler<AgentSettledEvent>[] = [];
+  const beforeCompactHandlers: CompatiblePiHandler<SessionBeforeCompactEvent, SessionBeforeCompactResult>[] = [];
+  const contextWithSystemHandlers: CompatiblePiHandler<ContextWithSystemEvent, ContextEventResult>[] = [];
   const runtime = {
     beforeCompactCalls: 0,
     compactCalls: 0,
@@ -73,7 +74,7 @@ export function createPi087Fake(): Pi087Fake {
   let settling = false;
   const queuedCompactions: Array<() => Promise<void>> = [];
 
-  function on(...args: Pi087OnArgs): () => void {
+  function on(...args: CompatiblePiOnArgs): () => void {
     const [event, handler] = args;
     switch (event) {
       case "agent_settled":
@@ -87,7 +88,7 @@ export function createPi087Fake(): Pi087Fake {
         return removeHandler(contextWithSystemHandlers, handler);
     }
   }
-  const pi: Pi087FakeAPI = { on };
+  const pi: CompatiblePiFakeAPI = { on };
 
   async function emit(event: "agent_settled"): Promise<void>;
   async function emit(event: "session_before_compact"): Promise<SessionBeforeCompactResult | undefined>;
@@ -95,7 +96,7 @@ export function createPi087Fake(): Pi087Fake {
     event: "context_with_system",
     payload: Pick<ContextWithSystemEvent, "messages">,
   ): Promise<ContextEventResult>;
-  async function emit(...args: Pi087EmitArgs): Promise<void | SessionBeforeCompactResult | undefined | ContextEventResult> {
+  async function emit(...args: CompatiblePiEmitArgs): Promise<void | SessionBeforeCompactResult | undefined | ContextEventResult> {
     const [event] = args;
     switch (event) {
       case "agent_settled":
@@ -140,7 +141,7 @@ export function createPi087Fake(): Pi087Fake {
     const result = await emit("session_before_compact");
     if (result === undefined) runtime.nativeFallbackCalls += 1;
   };
-  const context: Pi087Context = {
+  const context: CompatiblePiContext = {
     compact() {
       if (settling) {
         queuedCompactions.push(runCompaction);

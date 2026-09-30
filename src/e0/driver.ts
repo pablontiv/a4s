@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, unlink } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, unlink } from "node:fs/promises";
 import { release, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -28,6 +28,7 @@ export interface ExperimentOptions {
   scenarios: ScenarioId[];
   launcher: PiLauncher;
   artifactRoot: string;
+  piVersion?: string;
 }
 
 interface TrialResources {
@@ -61,6 +62,7 @@ export async function runExperiment(options: ExperimentOptions): Promise<{
     startedAt: new Date().toISOString(),
     endpointPattern,
     trials: options.trials,
+    piVersion: options.piVersion ?? "unknown",
   });
   const recorder = await EvidenceRecorder.create({
     artifactRoot: runDir,
@@ -525,6 +527,7 @@ async function createEnvironmentRecord(options: {
   startedAt: string;
   endpointPattern: string;
   trials: number;
+  piVersion: string;
 }): Promise<EnvironmentRecord> {
   return {
     run_id: options.runId,
@@ -532,7 +535,7 @@ async function createEnvironmentRecord(options: {
     os_version: `${process.platform} ${release()}`,
     architecture: process.arch,
     node_version: process.version,
-    pi_version: await readPiVersion(),
+    pi_version: options.piVersion,
     a4s_commit: await readGitCommit(),
     endpoint_pattern: options.endpointPattern,
     transport: process.platform === "win32" ? "named_pipe" : "unix_socket",
@@ -549,10 +552,10 @@ async function readGitCommit(): Promise<string> {
   }
 }
 
-async function readPiVersion(): Promise<string> {
+async function readPiVersion(piBin: string): Promise<string> {
   try {
-    const packageJson = JSON.parse(await readFile(resolve("package.json"), "utf8")) as { devDependencies?: Record<string, string> };
-    return packageJson.devDependencies?.["@earendil-works/pi-coding-agent"] ?? "unknown";
+    const { stdout } = await execFilePromise(piBin, ["--version"]);
+    return stdout.trim() || "unknown";
   } catch {
     return "unknown";
   }
@@ -720,6 +723,7 @@ async function main(): Promise<number> {
       scenarios: parsed.scenarios,
       launcher: new RealPiLauncher(parsed.piBin),
       artifactRoot: parsed.artifactRoot,
+      piVersion: await readPiVersion(parsed.piBin),
     });
     console.log(`run_dir=${result.runDir}`);
     console.log(`verdict=${result.summary.verdict}`);
