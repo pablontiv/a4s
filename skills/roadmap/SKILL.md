@@ -5,7 +5,7 @@ argument-hint: "[plan|doctor|loop] [requirements|id]"
 user-invocable: true
 metadata:
   author: pablontiv
-  updated: "2026-09-26"
+  updated: "2026-09-29"
 ---
 
 # Roadmap
@@ -29,7 +29,9 @@ For other wording, pick the mode the operator clearly means ("go", "sigue", "loo
 2. The effective `.workspace/config.yaml` (workspace, group and repository layers).
 3. This skill.
 
-Roadmap adds no gate, review, or stop the config does not declare, with one exception: Plan and Doctor show the exact Beads payload and wait for approval before mutating Beads.
+Roadmap adds no gate, review, or stop the config does not declare. Plan and Doctor derive their proposal-and-choice behavior from `choose_work.intake` and `choose_work.changed_decision`: they show the exact Beads payload and wait for the operator's choice before mutating Beads.
+
+Roadmap specializes presentation and autonomous-loop mechanics without adding normative authority, permissions, readiness, lifecycle, acceptance, or external effects. Whenever it shows an existing Bead to the operator, it keeps the primary human Description together with Bead ID, observable Result, and Scope. Missing values are shown as missing or unknown without inference, readiness impact, mutation, or backfill. Prospective Plan nodes follow Plan's existing proposal contract until Beads creates them.
 
 The config axes Roadmap reads are listed in `contracts.md`. A missing axis takes its profile default; a missing config lets Tree, Plan and Doctor run but Loop acquires nothing.
 

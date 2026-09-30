@@ -61,6 +61,8 @@ workspace:
       Adapt techniques and task sequence within the agreed result. When
       evidence changes the result, acceptance, scope, or authority, present
       updated options and obtain the operator's choice before proceeding.
+    backlog_decisions: >-
+      When presenting an existing Bead to the operator, the executor shows its human Description, Bead ID, observable Result, and Scope together. The human Description is primary; the Bead ID never substitutes for it. This presentation does not infer a value, affect readiness, mutate, or backfill the Bead; an absent field is shown as missing or unknown.
   define_work:
     units:
       epic: >-
