@@ -24,7 +24,7 @@ class ValidJev implements JevClient {
     this.requests.push(request);
     return validJevResponse(request, (id: string, question: JevQuestion) => {
       if (id.startsWith("ladder_visibility_") && question.type === "choice") {
-        return choiceAnswer(Object.keys(question.criteria), "full");
+        return choiceAnswer(Object.keys(question.criteria), "current");
       }
       if (id.startsWith("retro_evidence_relation_") && question.type === "choice") {
         return choiceAnswer(Object.keys(question.criteria), "direct");

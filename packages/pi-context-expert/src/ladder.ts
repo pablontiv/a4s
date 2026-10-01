@@ -16,6 +16,7 @@ export const LONG_SPAN_CHAR_LIMIT = 1_200;
 export const DEFAULT_LADDER_MAX_CANDIDATE_CHUNKS = 48;
 export const DEFAULT_LADDER_RECENT_CHUNKS = 8;
 export const DEFAULT_LADDER_MAX_STATE_TOKENS = 20_000;
+const MIN_LADDER_INCLUSION_CONFIDENCE = 0.5;
 export type LadderProfile = "ordinary" | "conservative-evidence";
 
 export interface LadderShortlistOptions {
@@ -50,7 +51,7 @@ export class LadderShortlistError extends Error {
 /** Stable corpus identity for one canonical durable append chronology. */
 export function corpusDigest(corpus: readonly CorpusChunk[]): string {
   return stableDigest({
-    schema: "a4s.ladder-corpus/v1",
+    schema: "a4s.ladder-corpus/v2",
     chunks: orderedCorpus(corpus).map((chunk) => ({ id: chunk.id, digest: chunk.digest })),
   });
 }
@@ -216,7 +217,7 @@ export async function selectLadderProjection(
   const selections = refs.map((ref) => {
     const answer = response.answers[ref.questionId];
     if (!answer || answer.type !== "choice") throw new LadderProjectionError("Jev returned an invalid Ladder answer");
-    return selectionFromAnswer(ref, ordered, conservativeLevel(answer, profile));
+    return selectionFromAnswer(ref, ordered, visibilityFromStatus(answer, profile));
   });
   const projection: VisibilityProjection = {
     queryDigest: stableDigest(query),
@@ -227,20 +228,21 @@ export async function selectLadderProjection(
   return projection;
 }
 
-function conservativeLevel(
+function visibilityFromStatus(
   answer: { choice: string; probabilities: Record<string, number>; confidence: number },
   profile: LadderProfile,
-): string {
-  if (profile !== "conservative-evidence") return answer.choice;
-  const selectedProbability = answer.probabilities[answer.choice];
-  if (
-    selectedProbability === undefined ||
-    answer.confidence < 0.8 ||
-    selectedProbability < 0.8
-  ) {
-    return "full";
+): VisibilityLevel {
+  if (answer.choice === "superseded" || answer.choice === "irrelevant") return "hide";
+  if (answer.choice !== "current" && answer.choice !== "historical") {
+    throw new LadderProjectionError("Jev returned an invalid Ladder status");
   }
-  return answer.choice;
+  const selectedProbability = answer.probabilities[answer.choice];
+  if (selectedProbability === undefined) throw new LadderProjectionError("Jev omitted the selected Ladder probability");
+  if (
+    profile === "ordinary" &&
+    (answer.confidence < MIN_LADDER_INCLUSION_CONFIDENCE || selectedProbability < MIN_LADDER_INCLUSION_CONFIDENCE)
+  ) return "hide";
+  return "full";
 }
 
 function selectionFromAnswer(
@@ -310,7 +312,7 @@ function lexicalScore(text: string, normalizedQuery: string, terms: readonly str
 
 function ladderState(corpus: readonly CorpusChunk[], query: string, profile: LadderProfile) {
   return {
-    schema: "a4s.ladder-query/v1" as const,
+    schema: "a4s.ladder-query/v2" as const,
     query,
     profile,
     chronology: {
@@ -320,9 +322,16 @@ function ladderState(corpus: readonly CorpusChunk[], query: string, profile: Lad
     corpus: corpus.map((chunk, timelineIndex) => ({
       id: chunk.id,
       timelineIndex,
-      position: chunk.position,
+      attemptLocalPosition: chunk.position,
       role: chunk.role,
       text: chunk.text,
+    })),
+    comparisons: corpus.map((_chunk, candidateIndex) => ({
+      candidateIndex,
+      laterSourceIndexes: Array.from(
+        { length: corpus.length - candidateIndex - 1 },
+        (_value, offset) => candidateIndex + offset + 1,
+      ),
     })),
   };
 }
@@ -347,10 +356,18 @@ function nonNegativeInteger(value: number, name: string): number {
  */
 function orderedCorpus(corpus: readonly CorpusChunk[]): CorpusChunk[] {
   const attemptOrder = new Map<string, number>();
+  const closedAttempts = new Set<string>();
+  let activeAttempt: string | undefined;
   for (const chunk of corpus) {
-    if (!attemptOrder.has(chunk.provenance.compactionAttemptId)) {
-      attemptOrder.set(chunk.provenance.compactionAttemptId, attemptOrder.size);
+    const attemptId = chunk.provenance.compactionAttemptId;
+    if (attemptId !== activeAttempt) {
+      if (closedAttempts.has(attemptId)) {
+        throw new LadderProjectionError("corpus entries for each contiguous compaction attempt must remain contiguous");
+      }
+      if (activeAttempt !== undefined) closedAttempts.add(activeAttempt);
+      activeAttempt = attemptId;
     }
+    if (!attemptOrder.has(attemptId)) attemptOrder.set(attemptId, attemptOrder.size);
   }
   return [...corpus].sort((left, right) =>
     requireAttemptOrder(attemptOrder, left.provenance.compactionAttemptId) -

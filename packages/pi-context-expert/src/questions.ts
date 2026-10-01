@@ -41,10 +41,10 @@ export const RULE_AUTHORITY_CRITERIA = {
 } as const;
 
 export const LADDER_VISIBILITY_CRITERIA = {
-  hide: "The chunk is irrelevant, or its claim is superseded or contradicted by a later source and the query does not ask for history.",
-  short: "A bounded excerpt is useful and is not superseded by a later source, or the query explicitly asks for this historical evidence.",
-  long: "A longer bounded excerpt is useful and is not superseded by a later source, or the query explicitly asks for this historical evidence.",
-  full: "The complete chunk is necessary and is not superseded by a later source, or the query explicitly asks for this historical evidence.",
+  current: "The candidate directly helps answer the query and none of its listed later sources contradicts or replaces its relevant claim.",
+  superseded: "A listed later source contradicts or replaces the candidate's relevant claim.",
+  historical: "The candidate is not current, but the query explicitly asks about history or change over time.",
+  irrelevant: "The candidate does not help answer the query.",
 } as const;
 
 export interface LadderQuestionRef {
@@ -180,7 +180,7 @@ export function buildLadderQuestions(
   }));
   const questions = Object.fromEntries(refs.map((ref) => [ref.questionId, {
     type: "choice" as const,
-    instructions: `Considering the complete oldest-to-newest corpus and its conflict policy, how much of corpus chunk ${ref.corpusIndex} should be visible to answer the concrete query?`,
+    instructions: `What is the status of corpus[${ref.corpusIndex}] for answering the query after checking only corpus entries listed by comparisons[${ref.corpusIndex}].laterSourceIndexes for supersession? An empty laterSourceIndexes means no later source can supersede the candidate.`,
     criteria: { ...LADDER_VISIBILITY_CRITERIA },
   } satisfies ChoiceQuestion]));
   return { questions, refs };
