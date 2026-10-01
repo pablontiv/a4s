@@ -193,8 +193,14 @@ never prints prompts, proposal content, provider bodies, or credentials.
 
 Every run intentionally preserves its evidence directory under
 `artifacts/pi-context-expert-e2e/<timestamp>/`, including Pi's session artifact,
-on both success and failure. Inspect or remove that directory manually only
-when its retention is no longer needed.
+on both success and failure; the runner never deletes it automatically. Before
+any cleanup, the task that invokes the run must record the exact run directory
+and classify it as `retained local evidence` or `reproducible-disposable`. The
+raw session is not durable task evidence; durable evidence is a sanitized result
+recorded in the task. Retained local evidence remains preserved.
+Reproducible-disposable output may be removed only after verified integration,
+after confirming the exact recorded resource and all cleanup preconditions. A
+matching artifacts pathname alone never authorizes deletion.
 
 ## Design provenance
 
