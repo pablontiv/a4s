@@ -17,7 +17,8 @@ contract accepted in **ADR 0020**.
 4. **Resolver** — `createTypesafeAuthResolver({ env? })` resolves the key with
    **auth.json first** (`ctx.modelRegistry.getProviderAuth("typesafe")`), with
    `TYPESAFE_API_KEY` as a headless override only when auth.json has nothing. This
-   inverts the legacy rule-compiler precedence (env over auth.json).
+   inverts the legacy rule-compiler precedence (env over auth.json). Consumers use
+   this canonical resolver instead of inspecting credential sources directly.
 5. **Model** — `JEV_MODEL = "jev-1.13.0"`. A per-consumer override must be an exact
    id; mobile aliases (`jev-latest`) are rejected.
 6. **Fail closed** — an absent or empty key throws a typed `MissingTypesafeKeyError`
@@ -51,5 +52,5 @@ npm test --workspace @a4s/typesafe
 
 Covers fail-closed before network, the pinned model and base URL, mobile-alias
 rejection, explicit timeout behavior, safe logging despite SDK env configuration,
-credential-only provider shape, and auth.json-first resolver precedence with no
-env scraping.
+credential-only provider shape, and canonical credential resolution without
+consumer-side credential-source inspection.
