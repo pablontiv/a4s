@@ -5,7 +5,7 @@ argument-hint: "[plan|doctor|loop] [requirements|id]"
 user-invocable: true
 metadata:
   author: pablontiv
-  updated: "2026-09-29"
+  updated: "2026-09-30"
 ---
 
 # Roadmap

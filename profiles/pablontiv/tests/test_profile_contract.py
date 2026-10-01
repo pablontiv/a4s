@@ -423,28 +423,27 @@ class DogfoodConfigTests(unittest.TestCase):
             },
         )
 
-    def test_delivery_policy_is_fail_closed_and_records_billing_exception(self) -> None:
+    def test_delivery_policy_is_risk_based_and_requires_remote_ci(self) -> None:
         deliver = self.workspace["deliver_work"]
         mechanism = deliver["mechanism"]
         merge = deliver["merge"]
-        billing = deliver["billing_exception"]
         for marker in ("pull request", "conventional commits", "checks"):
             with self.subTest(surface="mechanism", marker=marker):
                 self.assertIn(marker, mechanism)
         for marker in (
-            "test/ci-local.sh",
+            "applicable local checks",
             "accept_work.review",
             "no unresolved HIGH",
+            "remote CI",
+            "history-only rebase",
             "--match-head-commit",
         ):
             with self.subTest(surface="merge", marker=marker):
                 self.assertIn(marker, merge)
         review = self.workspace["accept_work"]["review"]
-        self.assertIn("fresh reviewer", review)
-        self.assertIn("different from the implementer's", review)
-        self.assertEqual(billing["tracking_bead"], "a4s-1cy")
-        self.assertIn("zero steps", billing["condition"])
-        self.assertIn("Delivery-Override: ci-billing", billing["evidence"])
+        self.assertIn("one fresh independent review", review)
+        self.assertIn("different model family or provider", review)
+        self.assertNotIn("billing_exception", deliver)
 
     def test_work_units_and_kinds_preserve_profile_contract(self) -> None:
         define = self.workspace["define_work"]
@@ -505,7 +504,7 @@ class DogfoodConfigTests(unittest.TestCase):
             "every change to this file",
             "live external effect",
             "destructive cleanup",
-            "document under .workspace/docs/",
+            "bounded deviation",
         ):
             with self.subTest(surface="reserved", marker=marker):
                 self.assertIn(marker, reserved)

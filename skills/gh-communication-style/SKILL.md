@@ -16,7 +16,7 @@ Load before drafting ANY text destined for GitHub: issues, PR titles/bodies, rev
 
 - Read the applicable integrated `.workspace/config.yaml` before publishing. Its communication and external-effect gates are the only authority for whether text must be shown or approved; this skill adds no gate and grants no authorization.
 - Never treat a standing instruction as authorization beyond what config permits. It cannot replace a presentation or approval that config requires, and this skill cannot infer, cache, or expand publication authority.
-- Under the current A4S config, show the operator the complete exact text of an issue or any issue/PR comment and wait for explicit approval before publishing it. Approval of one action does not approve another.
+- Under the current A4S config, obtain explicit approval before publishing a new issue or a substantive issue/PR comment that changes commitments, scope, authority, or an external party's expected action. Show the complete exact text when requesting that approval. Routine factual status, evidence, and closure updates inside an authorized task need no separate approval.
 - Under the current A4S config, pull requests, including their titles and descriptions, need no prior approval. Do not add a presentation or approval gate to them.
 
 ## Style and Evidence Rules
@@ -47,7 +47,7 @@ Load before drafting ANY text destined for GitHub: issues, PR titles/bodies, rev
 2. Search existing issues/PRs for duplicates and related work; record dispositions.
 3. Draft with the evidence-dense structure: problem with verified refs → proposed solution with exact paths → alternatives considered/deliberate exclusions with rationale → additional context (cross-links, out-of-scope table). For defect reports the proposed-solution step moves out of the body into its own comment; the body stops at the symptom.
 4. Measure blast radius before proposing a remedy that changes accepted behavior: count the call sites, fixtures, or invocations it would break, and post the number. "This breaks N of M" reframes the decision from which option is cleaner to what the cleaner option costs.
-5. Apply the publication gate from the applicable integrated `.workspace/config.yaml`. Under the current A4S config, present the complete exact draft and wait for explicit approval for an issue or issue/PR comment; do not add that gate for a pull request, its title, or its description. A standing instruction never replaces an approval required by config.
+5. Apply the publication gate from the applicable integrated `.workspace/config.yaml`. Under the current A4S config, present the complete exact draft and wait for explicit approval for a new issue or a substantive issue/PR comment that changes commitments, scope, authority, or expected external action. Routine factual status, evidence, and closure updates inside an authorized task need no separate approval. Do not add that gate for a pull request, its title, or its description. A standing instruction never replaces an approval required by config.
 6. When the applicable config permits posting, post; verify linkage (`Closes #N` registered) and report the URL.
 
 ## Output Contract

@@ -38,51 +38,6 @@ test "$(cat skills/roadmap/SKILL.md skills/roadmap/references/*.md | wc -w)" -lt
 git diff --check
 ```
 
-## Activation boundary
+## Loading boundary
 
-Repository merge and global activation are separate operations. Sessions run a released copy of the skill, never the working checkout: a merge changes nothing that running or new sessions load until a `roadmap-vN` tag is installed. A Roadmap loop never edits `skills/roadmap`; skill changes go through their own PR, then a new tag and an explicit reinstall with operator authorization. Never install from an implementation worktree.
-
-### Release activation runbook
-
-```bash
-set -euo pipefail
-repo=[REDACTED:shared-root]/harness/a4s
-tag=roadmap-v1                      # replace with the merged tag to install
-dest="$HOME/.agents/skills/roadmap"
-git -C "$repo" fetch -q origin --tags
-git -C "$repo" merge-base --is-ancestor "$tag" origin/main
-tmp="$(mktemp -d)"
-git -C "$repo" archive "$tag" skills/roadmap | tar -x -C "$tmp"
-printf '%s %s\n' "$tag" "$(git -C "$repo" rev-parse "$tag^{commit}")" > "$tmp/skills/roadmap/.installed-from"
-if [ -e "$dest" ] || [ -L "$dest" ]; then mv "$dest" "$tmp/previous"; fi
-mkdir -p "$(dirname "$dest")"
-mv "$tmp/skills/roadmap" "$dest"
-test ! -L "$dest" && cat "$dest/.installed-from"   # a copy, never a symlink to the checkout
-```
-
-Rollback: reinstall the previous tag with the same runbook.
-
-### Post-merge activation runbook (executed 2026-09-24, superseded by release activation)
-
-**Status: Activation completed and verified.**
-
-Executed 2026-09-24 with verified state:
-- `~/.agents/skills/roadmap` → `[REDACTED:shared-root]/harness/a4s/skills/roadmap` ✓
-- `~/.agents/skills/beads-loop` absent ✓
-
-Historical record (operator reference):
-
-```bash
-set -euo pipefail
-test "$(git -C [REDACTED:shared-root]/harness/a4s branch --show-current)" = main
-test -f [REDACTED:shared-root]/harness/a4s/skills/roadmap/SKILL.md
-test ! -e "$HOME/.agents/skills/roadmap"
-test ! -e "$HOME/.agents/skills/roadmap.new"
-test "$(readlink "$HOME/.agents/skills/beads-loop")" = [REDACTED:shared-root]/harness/a4s/skills/beads-loop
-ln -s [REDACTED:shared-root]/harness/a4s/skills/roadmap "$HOME/.agents/skills/roadmap.new"
-mv "$HOME/.agents/skills/roadmap.new" "$HOME/.agents/skills/roadmap"
-test "$(readlink "$HOME/.agents/skills/roadmap")" = [REDACTED:shared-root]/harness/a4s/skills/roadmap
-unlink "$HOME/.agents/skills/beads-loop"
-test ! -e "$HOME/.agents/skills/beads-loop"
-test "$(readlink "$HOME/.agents/skills/roadmap")" = [REDACTED:shared-root]/harness/a4s/skills/roadmap
-```
+The repository copy under `skills/roadmap/` is the maintained source. A4S does not install Roadmap, Sweep, or Herdr into user-global skill directories. Harnesses that consume this repository select the repository skill explicitly and must not treat a user-global copy as authority. A Roadmap run never edits `skills/roadmap`; changes use a separate bounded change and the risk-based controls in `.workspace/config.yaml`.
