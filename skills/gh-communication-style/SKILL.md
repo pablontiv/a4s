@@ -1,20 +1,26 @@
 ---
 name: gh-communication-style
-description: "Trigger: creating or drafting GitHub issues, PRs, PR bodies, review replies, cross-link comments, or any gh post. Applies an evidence-first posting style and explicit authorization protocol."
+description: "Trigger: creating or drafting GitHub issues, PRs, PR bodies, review replies, cross-link comments, or any gh post. Applies an evidence-first posting style and follows publication gates from workspace config."
 license: Apache-2.0
 metadata:
   author: "pablontiv"
-  updated: "2026-09-05"
+  updated: "2026-09-30"
   version: "1.0"
 ---
 
 ## Activation Contract
 
-Load before drafting ANY text destined for GitHub: issues, PR titles/bodies, review-thread replies, and cross-reference comments. This skill governs tone, structure, evidence, and posting protocol.
+Load before drafting ANY text destined for GitHub: issues, PR titles/bodies, review-thread replies, and cross-reference comments. This skill supplies tone, structure, evidence, and posting technique. It does not define publication authority.
 
-## Hard Rules
+## Publication Authority
 
-- Show the full text to the user BEFORE posting; one authorization per action, and approval for an issue does not cover the PR or comments. Exception: an explicit standing instruction pre-authorizes exactly the action types it names — anything outside them still requires per-action approval.
+- Read the applicable integrated `.workspace/config.yaml` before publishing. Its communication and external-effect gates are the only authority for whether text must be shown or approved; this skill adds no gate and grants no authorization.
+- Never treat a standing instruction as authorization beyond what config permits. It cannot replace a presentation or approval that config requires, and this skill cannot infer, cache, or expand publication authority.
+- Under the current A4S config, show the operator the complete exact text of an issue or any issue/PR comment and wait for explicit approval before publishing it. Approval of one action does not approve another.
+- Under the current A4S config, pull requests, including their titles and descriptions, need no prior approval. Do not add a presentation or approval gate to them.
+
+## Style and Evidence Rules
+
 - GitHub artifacts default to English, neutral professional register. For replies inside an existing non-English thread, match the thread's language.
 - Read the TARGET repo's real `.github/ISSUE_TEMPLATE/*`, `PULL_REQUEST_TEMPLATE.md`, and `CONTRIBUTING.md` before drafting. Never assume a generic format; field names, labels, and CI gates differ per repo.
 - Every claim verified before posting: cite `file:line`, commit SHAs, or checkable commands. No unverified assertions.
@@ -41,8 +47,8 @@ Load before drafting ANY text destined for GitHub: issues, PR titles/bodies, rev
 2. Search existing issues/PRs for duplicates and related work; record dispositions.
 3. Draft with the evidence-dense structure: problem with verified refs → proposed solution with exact paths → alternatives considered/deliberate exclusions with rationale → additional context (cross-links, out-of-scope table). For defect reports the proposed-solution step moves out of the body into its own comment; the body stops at the symptom.
 4. Measure blast radius before proposing a remedy that changes accepted behavior: count the call sites, fixtures, or invocations it would break, and post the number. "This breaks N of M" reframes the decision from which option is cleaner to what the cleaner option costs.
-5. Present the complete draft to the user; wait for explicit approval.
-6. Post; verify linkage (`Closes #N` registered) and report the URL.
+5. Apply the publication gate from the applicable integrated `.workspace/config.yaml`. Under the current A4S config, present the complete exact draft and wait for explicit approval for an issue or issue/PR comment; do not add that gate for a pull request, its title, or its description. A standing instruction never replaces an approval required by config.
+6. When the applicable config permits posting, post; verify linkage (`Closes #N` registered) and report the URL.
 
 ## Output Contract
 

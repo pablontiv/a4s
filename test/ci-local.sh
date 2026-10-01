@@ -110,51 +110,55 @@ run_step "Test profile contract" \
 run_step "Test ADR workspace" \
     python3 -m unittest discover -s skills/adr/tests -t skills/adr -p "test_*.py" -v
 
-# Step 9: Validate governed knowledge
+# Step 9: Test GitHub communication style
+run_step "Test GitHub communication style" \
+    python3 -m unittest discover -s skills/gh-communication-style/tests -t skills/gh-communication-style -p "test_*.py" -v
+
+# Step 10: Validate governed knowledge
 run_step "Validate governed knowledge" \
     sh -c 'rootline validate --all .workspace/docs -o json && rootline validate --all profiles/pablontiv -o json'
 
-# Step 10: Test agent behavior doctor
+# Step 11: Test agent behavior doctor
 run_step "Test agent behavior doctor" \
     python3 -m unittest discover -s skills/agent-behavior-doctor/tests -t skills/agent-behavior-doctor -p "test_*.py" -v
 
-# Step 11: Test systemic issue triage
+# Step 12: Test systemic issue triage
 run_step "Test systemic issue triage" \
     python3 -m unittest discover -s skills/systemic-issue-triage/tests -t skills/systemic-issue-triage -p "test_*.py" -v
 
-# Step 12: Test context-save
+# Step 13: Test context-save
 run_step "Test context-save" \
     python3 -m unittest discover -s skills/context-save/tests -t skills/context-save -p "test_*.py" -v
 
-# Step 13: Test sweep
+# Step 14: Test sweep
 run_step "Test sweep" \
     python3 -m unittest discover -s skills/sweep/tests -t skills/sweep -p "test_*.py" -v
 
-# Step 14: Test Mission Control health
+# Step 15: Test Mission Control health
 run_step "Test Mission Control health" \
     python3 -m unittest discover -s skills/mission-control-health/tests -t skills/mission-control-health -p "test_*.py" -v
 
-# Step 15: Test Herdr heartbeat H2 and reconciler
+# Step 16: Test Herdr heartbeat H2 and reconciler
 run_step "Test Herdr heartbeat H2 and reconciler" \
     python3 -m unittest discover -s skills/herdr/tests -t skills/herdr -p "test_*.py" -v
 
-# Step 16: Test sweep assets
+# Step 17: Test sweep assets
 run_step "Test sweep assets" \
     sh skills/sweep/assets/test-assets.sh
 
-# Step 17: Test context cleanup
+# Step 18: Test context cleanup
 run_step "Test context cleanup" \
     sh -c 'cd skills/remove-gentle-context && python3 -m unittest discover -s tests -t . -v'
 
-# Step 18: Compile context cleanup CLI
+# Step 19: Compile context cleanup CLI
 run_step "Compile context cleanup CLI" \
     sh -c 'cd skills/remove-gentle-context && python3 -m py_compile scripts/cleanup.py'
 
-# Step 19: Check context cleanup CLI
+# Step 20: Check context cleanup CLI
 run_step "Check context cleanup CLI" \
     sh -c 'cd skills/remove-gentle-context && python3 scripts/cleanup.py --help'
 
-# Step 20: Test model-optimizer (from test-model-optimizer.yml)
+# Step 21: Test model-optimizer (from test-model-optimizer.yml)
 run_step "Test model-optimizer" \
     python3 -m unittest discover -s skills/model-optimizer/tests -t skills/model-optimizer -p "test_*.py" -v
 

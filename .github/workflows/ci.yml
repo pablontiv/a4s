@@ -67,6 +67,13 @@ jobs:
           -t skills/adr
           -p "test_*.py"
           -v
+      - name: Test GitHub communication style
+        run: >-
+          python -m unittest discover
+          -s skills/gh-communication-style/tests
+          -t skills/gh-communication-style
+          -p "test_*.py"
+          -v
       - name: Validate governed knowledge
         run: |
           rootline validate --all .workspace/docs -o json
