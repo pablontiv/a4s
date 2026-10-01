@@ -6,6 +6,7 @@ import {
   collectRetroPendingMarkers,
   collectRuleSignalBatches,
   CORPUS_ENTRY_TYPE,
+  DEFAULT_JEV_MODEL,
   EVIDENCE_RECEIPT_ENTRY_TYPE,
   extractRuleSignals,
   isLadderEvidence,
@@ -139,7 +140,7 @@ test("Evidence stores a review-only signal from selected spans", async () => {
         schema: "a4s.jev-compaction-details/v1",
         attemptId: stableDigest({ attempt: "published" }),
         sourceDigest: stableDigest({ source: "published" }),
-        jevModel: "jev-1.13.0",
+        jevModel: DEFAULT_JEV_MODEL,
         createdAt: "2026-09-22T12:00:00.000Z",
         firstKeptEntryId: "kept",
         tokensBefore: 10,
@@ -202,13 +203,7 @@ test("Evidence keeps candidate, generality, and authority as independent final g
               return { type: "noul", noul: 0.1 };
             }
             if (rejectedGate === "generality" && id.startsWith("rule_generality_") && question.type === "score") {
-              return {
-                type: "score",
-                score: 0,
-                legend: Object.fromEntries(question.criteria.map((criterion, index) => [String(index), criterion])),
-                probabilities: Object.fromEntries(question.criteria.map((_criterion, index) => [String(index), index === 0 ? 1 : 0])),
-                confidence: 1,
-              };
+              return { type: "score", score: 0, confidence: 1 };
             }
             if (id.startsWith("rule_authority_") && question.type === "choice") {
               const authority = rejectedGate === "authority" ? "agent_inference" : "explicit_user";
@@ -255,7 +250,7 @@ test("Evidence failure creates no signal and preserves recoverable corpus", asyn
         schema: "a4s.jev-compaction-details/v1",
         attemptId: stableDigest({ attempt: "failure" }),
         sourceDigest: stableDigest({ source: "failure" }),
-        jevModel: "jev-1.13.0",
+        jevModel: DEFAULT_JEV_MODEL,
         createdAt: "2026-09-22T12:00:00.000Z",
         firstKeptEntryId: "kept",
         tokensBefore: 10,

@@ -6,7 +6,7 @@ import type {
   JevRequestSchedulerStats,
   RuleSignalBatch,
 } from "./types.ts";
-import { DEFAULT_JEV_MODEL } from "./types.ts";
+import { isSupportedJevModel } from "./types.ts";
 import type { BuildJevCompactionOptions } from "./compaction-core.ts";
 
 export type { BuildJevCompactionOptions } from "./compaction-core.ts";
@@ -58,7 +58,7 @@ export function recoverRuleSignalBatchesFromDetails(
     record?.schema !== "a4s.jev-compaction-details/v1" ||
     !isStableDigest(record.attemptId) ||
     !isStableDigest(record.sourceDigest) ||
-    record.jevModel !== DEFAULT_JEV_MODEL ||
+    !isSupportedJevModel(record.jevModel) ||
     !Array.isArray(record.ruleSignalBatches)
   ) {
     return undefined;

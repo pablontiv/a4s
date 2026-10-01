@@ -3,11 +3,15 @@ import test from "node:test";
 import {
   collectEvidenceReceipts,
   EVIDENCE_RECEIPT_ENTRY_TYPE,
+  observeCompactionRules,
   parseEvidenceReceipt,
+  parseRuleSignalBatch,
   stableDigest,
   StoredEntryValidationError,
   type EvidenceReceipt,
+  type JevClient,
 } from "../src/index.ts";
+import { validJevResponse } from "./fixtures.ts";
 
 function receipt(): EvidenceReceipt {
   const body = {
@@ -27,6 +31,18 @@ function receipt(): EvidenceReceipt {
   };
   return { ...body, idempotencyKey: stableDigest(body) };
 }
+
+test("historical pinned-model RuleSignal batches remain readable", async () => {
+  const jev: JevClient = { evaluate: async (request) => validJevResponse(request) };
+  const batch = await observeCompactionRules(
+    { messagesToSummarize: [{ role: "user", content: "Always run deterministic tests." }], turnPrefixMessages: [] },
+    { reason: "manual", willRetry: false, observedAt: "2026-10-01T20:00:00.000Z" },
+    jev,
+    new AbortController().signal,
+  );
+  const historical = { ...batch, jevModel: "jev-1.13.0" };
+  assert.equal(parseRuleSignalBatch(historical).jevModel, "jev-1.13.0");
+});
 
 test("Evidence receipts validate their idempotency binding and deduplicate storage replay", () => {
   const valid = receipt();

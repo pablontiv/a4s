@@ -17,7 +17,7 @@ export type SafeCompactionDiagnosticCategory =
   (typeof SAFE_COMPACTION_DIAGNOSTIC_CATEGORIES)[number];
 
 const SAFE_NOTIFICATION_MESSAGES = new Map<string, SafeCompactionDiagnosticCategory>([
-  ["Context expert compaction skipped: Jev is unavailable (missing TYPESAFE_API_KEY). Compaction was cancelled; native fallback is disabled.", "missing_key"],
+  ["Context expert compaction skipped: Jev is unavailable (missing Pi TypeSafe credentials). Compaction was cancelled; native fallback is disabled.", "missing_key"],
   ["Context expert compaction skipped: the bounded analysis timed out. Compaction was cancelled; native fallback is disabled.", "timeout"],
   ["Context expert compaction skipped: a model response failed strict validation. Compaction was cancelled; native fallback is disabled.", "validation"],
   ["Context expert compaction skipped: the sanitized state or summary exceeded configured bounds. Compaction was cancelled; native fallback is disabled.", "oversized_state"],

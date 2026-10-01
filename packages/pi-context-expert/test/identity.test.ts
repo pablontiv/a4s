@@ -54,19 +54,12 @@ test("Pi host packages stay wildcard peers while development declares the minimu
   const minimum = ">=0.99.1";
   const workspace = manifest(resolve(workspaceRoot, "package.json"));
   const contextExpert = manifest(resolve(packageRoot, "package.json"));
-  const typesafe = manifest(resolve(workspaceRoot, "packages/typesafe/package.json"));
 
   assert.equal(workspace.devDependencies?.["@earendil-works/pi-coding-agent"], minimum);
   assert.equal(contextExpert.peerDependencies?.["@earendil-works/pi-coding-agent"], "*");
   assert.equal(contextExpert.devDependencies?.["@earendil-works/pi-coding-agent"], minimum);
-  assert.equal(typesafe.peerDependencies?.["@earendil-works/pi-coding-agent"], "*");
-  assert.equal(typesafe.peerDependencies?.["@earendil-works/pi-ai"], "*");
-  assert.equal(typesafe.devDependencies?.["@earendil-works/pi-coding-agent"], minimum);
-  assert.equal(typesafe.devDependencies?.["@earendil-works/pi-ai"], minimum);
-
-  for (const packageManifest of [contextExpert, typesafe]) {
-    for (const hostPackage of ["@earendil-works/pi-coding-agent", "@earendil-works/pi-ai"]) {
-      assert.equal(packageManifest.dependencies?.[hostPackage], undefined);
-    }
+  assert.equal(contextExpert.devDependencies?.["@earendil-works/pi-ai"], minimum);
+  for (const hostPackage of ["@earendil-works/pi-coding-agent", "@earendil-works/pi-ai"]) {
+    assert.equal(contextExpert.dependencies?.[hostPackage], undefined);
   }
 });

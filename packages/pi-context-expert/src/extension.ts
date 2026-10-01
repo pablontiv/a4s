@@ -1,8 +1,4 @@
 import {
-  createTypesafeAuthResolver,
-  registerTypesafeProvider,
-} from "@a4s/typesafe";
-import {
   SettingsManager,
   type ContextWithSystemEvent,
   type ExtensionAPI,
@@ -36,7 +32,7 @@ import {
 } from "./ladder.ts";
 import { applyContextProjection } from "./projection.ts";
 import { redactAndLimitCorpusText } from "./redaction.ts";
-import { JevApiError, JevUnavailableError, JevValidationError, TypesafeJevClient } from "./jev.ts";
+import { JevApiError, JevUnavailableError, JevValidationError, PiJevClient } from "./jev.ts";
 import {
   observePreparedCompactionRules,
   prepareRuleObservationsWithMessages,
@@ -70,6 +66,7 @@ import {
   RULE_ACCEPTANCE_ENTRY_TYPE,
   RULE_PROPOSAL_ENTRY_TYPE,
 } from "./storage.ts";
+import { TYPESAFE_PROVIDER_ID } from "./types.ts";
 import type {
   CorpusChunk,
   JevClient,
@@ -84,7 +81,6 @@ import type {
 
 export interface PiContextExpertOptions {
   jevClient?: JevClient;
-  env?: Readonly<Record<string, string | undefined>>;
   hookTimeoutMs?: number;
   retroTimeoutMs?: number;
   observation?: RuleObservationOptions;
@@ -187,14 +183,11 @@ export function registerPiContextExpert(pi: ExtensionAPI, options: PiContextExpe
     }
   });
 
-  registerTypesafeProvider(pi);
-
-  const resolveTypesafeApiKey = createTypesafeAuthResolver(
-    options.env === undefined ? {} : { env: options.env },
-  );
   const createJevClient = async (ctx: ExtensionContext, timeoutMs: number): Promise<JevClient> => {
     if (options.jevClient) return options.jevClient;
-    return new TypesafeJevClient({ apiKey: await resolveTypesafeApiKey(ctx), timeoutMs });
+    const auth = await ctx.modelRegistry.getProviderAuth(TYPESAFE_PROVIDER_ID);
+    if (!auth?.auth.apiKey?.trim()) throw new JevUnavailableError();
+    return new PiJevClient({ modelRegistry: ctx.modelRegistry, timeoutMs });
   };
 
   // Retrieval is opt-in and request-time only. Basic never registers this hook,
@@ -363,7 +356,9 @@ export function registerPiContextExpert(pi: ExtensionAPI, options: PiContextExpe
     }
     if (!compactableHistory) return;
 
-    const credentialAvailable = options.jevClient !== undefined || Boolean(await resolveTypesafeApiKey(ctx));
+    const credentialAvailable = options.jevClient !== undefined || Boolean(
+      (await ctx.modelRegistry.getProviderAuth(TYPESAFE_PROVIDER_ID))?.auth.apiKey?.trim(),
+    );
     if (!credentialAvailable) return;
     const input: TriggerInput = {
       ...baseInput,
@@ -1164,7 +1159,7 @@ function emitAbortedTransportDiagnostic(
 function safeNotify(ctx: ExtensionContext, phase: "compaction" | "signals" | "retro", code: DiagnosticCode): void {
   if (code === "aborted") emitAbortedTransportDiagnostic(ctx, phase);
   const descriptions: Record<DiagnosticCode, string> = {
-    missing_key: "Jev is unavailable (missing TYPESAFE_API_KEY)",
+    missing_key: "Jev is unavailable (missing Pi TypeSafe credentials)",
     timeout: "the bounded analysis timed out",
     malformed_response: "a model response failed strict validation",
     oversized_state: "the sanitized state or summary exceeded configured bounds",

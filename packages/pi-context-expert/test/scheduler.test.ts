@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  DEFAULT_JEV_MODEL,
   JevApiError,
   OperationAbortedError,
   ScheduledJevClient,
@@ -160,7 +161,7 @@ test("scheduler aborts during 429 backoff and performs no further attempt", asyn
 function sampleRequest(): JevRequest {
   return {
     state: { message: "sanitized" },
-    model: "jev-1.13.0",
+    model: DEFAULT_JEV_MODEL,
     questions: {
       retain: {
         type: "choice",

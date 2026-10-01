@@ -68,7 +68,6 @@ export {
   type LadderShortlistOptions,
 } from "./ladder.ts";
 export { applyContextProjection } from "./projection.ts";
-export { createTypesafeAuthResolver } from "@a4s/typesafe";
 export {
   LADDER_PROJECTION_FAILURE_TYPE,
   LADDER_PROJECTION_RECEIPT_TYPE,
@@ -80,7 +79,7 @@ export {
   JevUnavailableError,
   JevValidationError,
   parseScoreAnswer,
-  TypesafeJevClient,
+  PiJevClient,
   validateJevResponse,
 } from "./jev.ts";
 export {

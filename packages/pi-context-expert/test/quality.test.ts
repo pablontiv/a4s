@@ -33,14 +33,7 @@ class RulePromotingJev implements JevClient {
         };
       }
       if (id.startsWith("rule_generality_") && question.type === "score") {
-        const top = question.criteria.length - 1;
-        return {
-          type: "score",
-          score: top,
-          legend: Object.fromEntries(question.criteria.map((c, i) => [String(i), c])),
-          probabilities: Object.fromEntries(question.criteria.map((_c, i) => [String(i), i === top ? 1 : 0])),
-          confidence: 1,
-        };
+        return { type: "score", score: 1, confidence: 1 };
       }
       return undefined;
     });

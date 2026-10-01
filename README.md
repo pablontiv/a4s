@@ -16,8 +16,7 @@ El monorepo reúne capacidades que pueden evolucionar a ritmos distintos. Cada u
 - [`agents/`](agents/) conserva roles portátiles con provenance explícita.
 - [`output-styles/`](output-styles/) define contratos de interacción.
 - [`src/`](src/) contiene el runtime experimental E0 y sus adapters.
-- [`packages/pi-context-expert/`](packages/pi-context-expert/) contiene una extensión Pi para gestión de contexto, compaction y propuestas de reglas review-only.
-- [`packages/typesafe/`](packages/typesafe/) contiene la superficie TypeSafe/Jev canónica; [ADR 0020](.workspace/docs/adr/0020-canonizar-superficie-typesafe-en-paquete-a4s.md) conserva su contexto y procedencia arquitectónica, sin gobernar la forma de trabajo.
+- [`packages/pi-context-expert/`](packages/pi-context-expert/) contiene una extensión Pi para gestión de contexto, compaction y propuestas de reglas review-only; consume TypeSafe/Jev mediante el runtime nativo de Pi según [ADR 0065](.workspace/docs/adr/0065-usar-clasificador-typesafe-nativo-de-pi.md).
 - [`test/`](test/) verifica runtime y contratos del repositorio.
 
 ## Integraciones

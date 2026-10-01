@@ -21,7 +21,7 @@ import type {
   StoredRuleProposal,
   StoredRuleProposalCandidate,
 } from "./types.ts";
-import { DEFAULT_JEV_MODEL } from "./types.ts";
+import { isSupportedJevModel } from "./types.ts";
 
 export const RULE_SIGNAL_ENTRY_TYPE = "a4s.pi-context-expert.rule-signals.v2" as const;
 export const RETRO_PENDING_ENTRY_TYPE = "a4s.pi-context-expert.retro-pending.v1" as const;
@@ -350,7 +350,7 @@ export function parseRuleProposalReceipt(value: unknown): RuleProposalReceipt {
   );
   if (
     record.schema !== "a4s.rule-proposal-batch/v1" ||
-    record.jevModel !== DEFAULT_JEV_MODEL ||
+    !isSupportedJevModel(record.jevModel) ||
     !Array.isArray(record.sourceCompactionAttemptIds) ||
     !Array.isArray(record.sourceBatchDigests) ||
     !Array.isArray(record.sourceSignalIds) ||
@@ -486,7 +486,8 @@ export function parseRuleSignalBatch(value: unknown): RuleSignalBatch {
   const sourceDigest = requireDigest(batch.sourceDigest, "$batch.sourceDigest");
   const stateDigest = requireDigest(batch.stateDigest, "$batch.stateDigest");
   const observedAt = requireTimestamp(batch.observedAt, "$batch.observedAt");
-  if (batch.jevModel !== DEFAULT_JEV_MODEL) fail("$batch.jevModel");
+  if (!isSupportedJevModel(batch.jevModel)) fail("$batch.jevModel");
+  const jevModel = batch.jevModel;
   const compaction = parseCompaction(batch.compaction);
   if (!Array.isArray(batch.signals)) fail("$batch.signals");
   const signals = batch.signals.map((signal, index) => parseSignal(signal, index, sourceDigest));
@@ -500,7 +501,7 @@ export function parseRuleSignalBatch(value: unknown): RuleSignalBatch {
     sourceDigest,
     stateDigest,
     observedAt,
-    jevModel: DEFAULT_JEV_MODEL,
+    jevModel,
     compaction,
     signals,
     provenance,

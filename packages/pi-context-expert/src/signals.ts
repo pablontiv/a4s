@@ -120,9 +120,10 @@ export function selectObservation(
 }
 
 export function normalizeScore(answer: ScoreAnswer): number {
-  const highestLevel = Object.keys(answer.legend).length - 1;
-  if (highestLevel <= 0) throw new JevValidationError("score.legend");
-  return answer.score / highestLevel;
+  if (!Number.isFinite(answer.score) || answer.score < 0 || answer.score > 1) {
+    throw new JevValidationError("score.score");
+  }
+  return answer.score;
 }
 
 function selectRuleSignals(
