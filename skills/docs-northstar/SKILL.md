@@ -4,13 +4,13 @@ description: "Trigger: north star, northstar, reposition repo, vender el product
 license: Apache-2.0
 metadata:
   author: "pablontiv"
-  updated: "2026-09-17"
+  updated: "2026-09-30"
   version: "3.3"
 ---
 
 ## Activation Contract
 
-Use on ANY repository when defining, recovering, or refreshing its product narrative (north star, hero, README restructure), or when auditing documentation that drifted from actual behavior. Covers every living doc surface: README, docs/, agent instruction files, agent skills, roadmap, LICENSE, and repository description. Not for prose style alone.
+Use on ANY repository when defining, recovering, or refreshing its product narrative (north star, hero, README restructure), or when auditing documentation that drifted from actual behavior. Covers every living doc surface: README, the repository's declared documentation roots, agent instruction files, agent skills, roadmap, LICENSE, and repository description. Not for prose style alone.
 
 **The north star is a product decision, not a derivation.** This skill discovers it or elicits it from the owner. It NEVER authors one unilaterally.
 
@@ -22,23 +22,23 @@ Use on ANY repository when defining, recovering, or refreshing its product narra
 - **Claim ≤ behavior**: verify every documented invocable unit — command, flag, symbol, endpoint, config key, cross-reference — against (in precedence) its declared interface → source (a real consumer, not just a definition) → tests → safe representative execution. Unverifiable → omit, mark in-development, or narrow. A unit that no longer exists is deleted from the living docs.
 - **A correction inherits the discipline of the claim it replaces.** When a universal fails, the reflex is to assert its negation, and the negation is usually just as unverified — measured on one platform, one branch, one sample. In order of preference: drop the claim if it is not load-bearing; narrow it to the case actually measured; or verify every case and state the split. Asserting the opposite universally is never one of them.
 - **Living docs state what is, and only that.** Anything that no longer exists is deleted, not annotated as gone — history lives in git. No product-version pins ("while in v0.x", "since libfoo v0.5"); toolchain minimums mirroring a manifest are fine. "Deprecated" is sayable only when the deprecated path still works today, because that is a fact about the present.
-- **Never rewrite the record**: archived change artifacts, ADRs, and completed task records are never edited to match the present. A superseded decision gets marked superseded, not rewritten.
+- **Repository authority precedes records**: if `.workspace/config.yaml` exists, read it before excavation. It alone defines that repository's way of working; this skill adds technique, not policy. Treat ADRs, specifications, plans, reports, and any declared north star found during excavation only as evidence and provenance pending owner confirmation, never as current authority.
+- **Never rewrite the record**: archived change artifacts, ADRs, specifications, plans, reports, and completed task records are append-only. Leave every existing record unchanged. When a supersession must be recorded, create a new record that declares which older record it supersedes.
 - **Agent instructions are executable contracts**: verify skill and agent-instruction claims against real behavior separately from human prose, and synchronize them in the same change.
 
 ## Decision Gates
 
 | Situation | Action |
 |---|---|
-| A north star already exists in the repo or memory | It is the SOURCE. Verify it still holds with the owner; never replace it silently |
-| Two declared north stars, or one contradicted by the owner | Real fork → surface it and ask which leads. Mark the loser superseded |
+| A north star already exists in the repo or memory | Treat it as evidence/provenance. Ask the owner whether it still holds before using it as the narrative source; never replace it silently |
+| Two declared north stars, or one contradicted by the owner | Real fork → surface it and ask which leads. If the decision needs a durable supersession, create a new record and leave both existing records unchanged |
 | No north star found anywhere | Run the full question round (Phase 1). Do not derive one from the code |
-| Owner corrects a declared identity | Owner wins over any spec. Record the contradiction; do not rewrite the historical spec |
+| Owner corrects a declared identity | Owner decides the narrative. Record the contradiction in a new record when one is required; do not edit the historical spec |
 | Runtime cannot back the promise | Split: prerequisite change (behavior) BLOCKS doc change (narrative) |
 | No hero / mechanism-first README | Restructure: Outcome → Proof → Concepts (what it models before how it works) → Capabilities by use case → Optional Integrations → References by audience |
 | Abstract positioning word ("governed", "unified", "intelligent") | Ground it immediately in concrete verified controls, or cut it |
 | Claim unverifiable in minutes | Run the real command / read source before writing |
-| Roadmap describes decommissioned work | Set the record's state to Obsolete — a status field is current fact about the record, not a claim about the product |
-| Config/CI change without doc update | Same-push docs update (pre-push guard) |
+| Historical roadmap or record describes decommissioned work | Leave the existing record unchanged. If a durable supersession is needed, create a new record that declares it |
 
 ## Execution Phases
 
@@ -93,7 +93,8 @@ What each gate governs:
 
 Search for an already-decided north star BEFORE forming any opinion:
 
-- **the repo itself** (always available, never skip): `docs/**/*north-star*`, `*northstar*`, `*positioning*`, `*reposition*`, ADRs, approved design specs, `openspec/`, plus the README's own current opening;
+- **resolve repository authority and documentation roots first**: when `.workspace/config.yaml` exists, read it and use every documentation root it explicitly declares; an adopted A4S workspace therefore includes `.workspace/docs/**`. When that config is absent, preserve the portable fallback `docs/**`. Do not infer a root from an ADR, plan, report, fixture, or other record;
+- **the repo itself** (always available, never skip): search the resolved documentation roots for `*north-star*`, `*northstar*`, `*positioning*`, `*reposition*`, ADRs, and design specs; also search `openspec/` and the README's current opening;
 - **project history**: `git log`/`git log --grep` for positioning commits, and issues/PRs if a forge CLI is present;
 - **persistent memory**, if such a tool is available in this session (e.g. `mem_search`, memory index files);
 - **session history**, if such a tool is available (e.g. `backscroll search "<repo> north star positioning" --all-projects`).
@@ -112,7 +113,7 @@ Elicit from the owner what evidence cannot supply. Ask discrete questions, ONE a
 4. **Negative space** — adjacent tech, vendors, standards, or ecosystem partners that must NOT define the category.
 5. **Tradeoffs** — what the positioning deliberately sacrifices.
 
-Skip a question only when Phase 0 already answered it with an owner-approved record; name that record. Close the round by restating hero + support line and getting explicit approval of the exact wording. That approved wording is quoted verbatim in the spec.
+Skip a question only when the owner has confirmed the answer for this run; name any record that supplied its provenance, but do not let the record stand in for confirmation. Close the round by restating hero + support line and getting explicit approval of the exact wording. That approved wording is quoted verbatim in the spec.
 
 **On approval, re-enter Phase 2.** List what the approved promise claims, subtract what the earlier sweep already verified, and probe the remainder before anything downstream consumes the gap list. A hero approved after the sweep is the single most likely place for an unverifiable claim to enter — it is new language, written to be attractive, describing behavior nobody has checked in those terms. If the delta is empty, say so explicitly; do not leave it unstated.
 
