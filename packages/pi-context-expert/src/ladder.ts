@@ -47,7 +47,7 @@ export class LadderShortlistError extends Error {
   }
 }
 
-/** Stable corpus identity independent of durable-entry append order. */
+/** Stable corpus identity for one canonical durable append chronology. */
 export function corpusDigest(corpus: readonly CorpusChunk[]): string {
   return stableDigest({
     schema: "a4s.ladder-corpus/v1",
@@ -90,18 +90,30 @@ export function validateProjection(
   }
 }
 
-/** Renders only validated source text, ordered by corpus position and source offset. */
+/** Renders validated historical sources with explicit chronology and boundaries. */
 export function renderProjection(
   projection: VisibilityProjection,
   corpus: readonly CorpusChunk[],
 ): string {
   validateProjection(projection, corpus);
-  const chunks = new Map(corpus.map((chunk) => [chunk.id, chunk]));
-  const rendered = [...projection.selections]
-    .sort((left, right) => compareChunks(requireChunk(chunks, left.chunkId), requireChunk(chunks, right.chunkId)))
-    .flatMap((selection) => renderSelection(selection, requireChunk(chunks, selection.chunkId)))
-    .filter((text) => text.length > 0);
-  return rendered.length === 0 ? "" : `[a4s ladder context]\n${rendered.join("\n")}`;
+  const selections = new Map(projection.selections.map((selection) => [selection.chunkId, selection]));
+  const visible = orderedCorpus(corpus).flatMap((chunk) => {
+    const selection = selections.get(chunk.id);
+    if (!selection) return [];
+    const excerpts = renderSelection(selection, chunk).filter((text) => text.length > 0);
+    return excerpts.length > 0 ? [{ chunk, excerpts }] : [];
+  });
+  if (visible.length === 0) return "";
+
+  const sources = visible.map(({ chunk, excerpts }, index) =>
+    `[source ${index + 1}/${visible.length} | role=${chunk.role}]\n${excerpts.join("\n")}`
+  );
+  return [
+    "[a4s ladder context]",
+    "Selected historical source excerpts are ordered oldest to newest.",
+    "Later source excerpts supersede conflicting earlier excerpts. Mutable repository state must be verified against the current checkout.",
+    ...sources,
+  ].join("\n");
 }
 
 /**
@@ -140,17 +152,16 @@ export function shortlistLadderCorpus(
 
   const terms = queryTerms(query);
   const normalizedQuery = query.trim().toLocaleLowerCase();
+  const timelineIndex = new Map(ordered.map((chunk, index) => [chunk.id, index]));
   const ranked = ordered
     .map((chunk) => ({ chunk, score: lexicalScore(chunk.text, normalizedQuery, terms) }))
     .filter((candidate) => candidate.score > 0)
     .sort((left, right) =>
       right.score - left.score ||
-      right.chunk.position - left.chunk.position ||
+      requireTimelineIndex(timelineIndex, right.chunk.id) - requireTimelineIndex(timelineIndex, left.chunk.id) ||
       left.chunk.id.localeCompare(right.chunk.id)
     );
-  const newest = [...ordered].sort((left, right) =>
-    right.position - left.position || left.id.localeCompare(right.id)
-  );
+  const newest = [...ordered].reverse();
   const selected = new Map<string, CorpusChunk>();
   let selectedTokens = ladderStateTokens([], query, profile);
   if (ordered.length > 0 && selectedTokens > maxStateTokens) throw new LadderShortlistError();
@@ -170,7 +181,7 @@ export function shortlistLadderCorpus(
   if (ordered.length > 0 && selected.size === 0) throw new LadderShortlistError();
 
   return {
-    corpus: [...selected.values()].sort(compareChunks),
+    corpus: ordered.filter((chunk) => selected.has(chunk.id)),
     estimatedStateTokens: selectedTokens,
     sourceChunks: ordered.length,
     strategy: "lexical-recency",
@@ -302,8 +313,13 @@ function ladderState(corpus: readonly CorpusChunk[], query: string, profile: Lad
     schema: "a4s.ladder-query/v1" as const,
     query,
     profile,
-    corpus: corpus.map((chunk) => ({
+    chronology: {
+      direction: "oldest-to-newest" as const,
+      conflictPolicy: "later sources supersede conflicting earlier sources" as const,
+    },
+    corpus: corpus.map((chunk, timelineIndex) => ({
       id: chunk.id,
+      timelineIndex,
       position: chunk.position,
       role: chunk.role,
       text: chunk.text,
@@ -325,18 +341,38 @@ function nonNegativeInteger(value: number, name: string): number {
   return value;
 }
 
+/**
+ * Orders local message positions within attempts and preserves the first-seen
+ * attempt sequence. Callers must supply chunks in durable branch append order.
+ */
 function orderedCorpus(corpus: readonly CorpusChunk[]): CorpusChunk[] {
-  return [...corpus].sort(compareChunks);
+  const attemptOrder = new Map<string, number>();
+  for (const chunk of corpus) {
+    if (!attemptOrder.has(chunk.provenance.compactionAttemptId)) {
+      attemptOrder.set(chunk.provenance.compactionAttemptId, attemptOrder.size);
+    }
+  }
+  return [...corpus].sort((left, right) =>
+    requireAttemptOrder(attemptOrder, left.provenance.compactionAttemptId) -
+      requireAttemptOrder(attemptOrder, right.provenance.compactionAttemptId) ||
+    compareChunks(left, right)
+  );
 }
 
 function compareChunks(left: CorpusChunk, right: CorpusChunk): number {
   return left.position - right.position || left.id.localeCompare(right.id);
 }
 
-function requireChunk(chunks: ReadonlyMap<string, CorpusChunk>, id: string): CorpusChunk {
-  const chunk = chunks.get(id);
-  if (!chunk) throw new LadderProjectionError("projection selected an unknown corpus chunk");
-  return chunk;
+function requireAttemptOrder(order: ReadonlyMap<string, number>, attemptId: string): number {
+  const index = order.get(attemptId);
+  if (index === undefined) throw new LadderProjectionError(`unknown compaction attempt ${attemptId}`);
+  return index;
+}
+
+function requireTimelineIndex(order: ReadonlyMap<string, number>, chunkId: string): number {
+  const index = order.get(chunkId);
+  if (index === undefined) throw new LadderProjectionError(`unknown corpus chunk ${chunkId}`);
+  return index;
 }
 
 function isVisibilityLevel(value: string | undefined): value is VisibilityLevel {

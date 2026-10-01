@@ -55,7 +55,17 @@ test("renderer orders valid short and long source spans deterministically", () =
 
   assert.equal(
     renderProjection(projection, corpus),
-    "[a4s ladder context]\nklmnop\ncde\n0123456789",
+    [
+      "[a4s ladder context]",
+      "Selected historical source excerpts are ordered oldest to newest.",
+      "Later source excerpts supersede conflicting earlier excerpts. Mutable repository state must be verified against the current checkout.",
+      "[source 1/3 | role=user]",
+      "klmnop",
+      "[source 2/3 | role=user]",
+      "cde",
+      "[source 3/3 | role=user]",
+      "0123456789",
+    ].join("\n"),
   );
   assert.deepEqual(corpus.map((item) => item.text), ["abcdefghij", "klmnopqrst", "uvwxyz", "0123456789"]);
 });
@@ -114,6 +124,70 @@ test("Ladder selection sends a concrete query and returns a validated projection
   validateProjection(projection, [corpus[0]!]);
 });
 
+test("Ladder request exposes chronology and supersession to Jev", async () => {
+  const historical = {
+    ...chunk("historical-server", 99, "dolt_mode server on port 3308"),
+    provenance: {
+      branchId: "sha256:branch",
+      compactionAttemptId: "sha256:attempt-old",
+      sourceDigest: "sha256:source-old",
+    },
+  };
+  const current = {
+    ...chunk("current-embedded", 0, "dolt_mode embedded with no listener"),
+    provenance: {
+      branchId: "sha256:branch",
+      compactionAttemptId: "sha256:attempt-new",
+      sourceDigest: "sha256:source-new",
+    },
+  };
+  const requests: JevRequest[] = [];
+
+  await selectLadderProjection(
+    [historical, current],
+    "what is the current dolt mode?",
+    {
+      async evaluate(request) {
+        requests.push(request);
+        return validJevResponse(request, (id, question) =>
+          question.type === "choice"
+            ? {
+              type: "choice",
+              choice: id.endsWith("000000") ? "hide" : "full",
+              probabilities: id.endsWith("000000")
+                ? { hide: 1, short: 0, long: 0, full: 0 }
+                : { hide: 0, short: 0, long: 0, full: 1 },
+              confidence: 1,
+            }
+            : undefined,
+        );
+      },
+    },
+    new AbortController().signal,
+  );
+
+  const request = requests[0];
+  assert.ok(request);
+  const state = request.state as {
+    chronology?: { direction?: unknown; conflictPolicy?: unknown };
+    corpus?: Array<{ id?: unknown; timelineIndex?: unknown }>;
+  };
+  assert.deepEqual(state.chronology, {
+    direction: "oldest-to-newest",
+    conflictPolicy: "later sources supersede conflicting earlier sources",
+  });
+  assert.deepEqual(state.corpus?.map(({ id, timelineIndex }) => ({ id, timelineIndex })), [
+    { id: "historical-server", timelineIndex: 0 },
+    { id: "current-embedded", timelineIndex: 1 },
+  ]);
+  const firstQuestion = request.questions.ladder_visibility_000000;
+  assert.equal(firstQuestion?.type, "choice");
+  const hideCriteria = firstQuestion?.type === "choice" ? firstQuestion.criteria.hide : undefined;
+  assert.equal(typeof hideCriteria, "string");
+  if (typeof hideCriteria !== "string") throw new TypeError("missing Ladder hide criterion");
+  assert.match(hideCriteria, /superseded/i);
+});
+
 test("Ladder shortlist deterministically bounds large corpora while retaining lexical and recent candidates", () => {
   const largeCorpus = Array.from({ length: 160 }, (_, index) => chunk(
     `chunk-${String(index).padStart(3, "0")}`,
@@ -148,6 +222,120 @@ test("Ladder shortlist deterministically bounds large corpora while retaining le
     }),
     LadderShortlistError,
   );
+});
+
+test("Ladder recency follows compaction chronology instead of reset message positions", () => {
+  const historical = {
+    ...chunk("historical-server", 99, "dolt_mode server on port 3308"),
+    provenance: {
+      branchId: "sha256:branch",
+      compactionAttemptId: "sha256:attempt-old",
+      sourceDigest: "sha256:source-old",
+    },
+  };
+  const current = {
+    ...chunk("current-embedded", 0, "dolt_mode embedded with no listener"),
+    provenance: {
+      branchId: "sha256:branch",
+      compactionAttemptId: "sha256:attempt-new",
+      sourceDigest: "sha256:source-new",
+    },
+  };
+
+  const result = shortlistLadderCorpus(
+    [historical, current],
+    "unrelated query",
+    "ordinary",
+    { maxCandidateChunks: 1, recentChunks: 1, maxStateTokens: 5_000 },
+  );
+
+  assert.deepEqual(result.corpus.map((item) => item.id), ["current-embedded"]);
+});
+
+test("bounded Ladder preserves compaction chronology through selection and rendering", async () => {
+  const historical = [0, 1, 2].map((position) => ({
+    ...chunk(`z-old-${position}`, position, `dolt_mode server on port 3308 old-${position}`),
+    provenance: {
+      branchId: "sha256:branch",
+      compactionAttemptId: "sha256:attempt-old",
+      sourceDigest: `sha256:source-old-${position}`,
+    },
+  }));
+  const current = [0, 1].map((position) => ({
+    ...chunk(`a-new-${position}`, position, `dolt_mode embedded with no listener new-${position}`),
+    provenance: {
+      branchId: "sha256:branch",
+      compactionAttemptId: "sha256:attempt-new",
+      sourceDigest: `sha256:source-new-${position}`,
+    },
+  }));
+  const shortlist = shortlistLadderCorpus(
+    [...historical, ...current],
+    "current dolt_mode",
+    "ordinary",
+    { maxCandidateChunks: 4, recentChunks: 1, maxStateTokens: 5_000 },
+  );
+
+  assert.equal(shortlist.strategy, "lexical-recency");
+  assert.deepEqual(
+    shortlist.corpus.map((item) => item.provenance.compactionAttemptId),
+    ["sha256:attempt-old", "sha256:attempt-old", "sha256:attempt-new", "sha256:attempt-new"],
+  );
+
+  const projection = await selectLadderProjection(
+    shortlist.corpus,
+    "current dolt_mode",
+    {
+      async evaluate(request) {
+        return validJevResponse(request, (_id, question) =>
+          question.type === "choice"
+            ? {
+              type: "choice",
+              choice: "full",
+              probabilities: { hide: 0, short: 0, long: 0, full: 1 },
+              confidence: 1,
+            }
+            : undefined,
+        );
+      },
+    },
+    new AbortController().signal,
+  );
+  const rendered = renderProjection(projection, shortlist.corpus);
+  assert.ok(rendered.indexOf("dolt_mode server") < rendered.indexOf("dolt_mode embedded"));
+});
+
+test("Ladder renderer frames selected sources with chronological precedence", () => {
+  const historical = {
+    ...chunk("historical-server", 99, "dolt_mode server on port 3308"),
+    provenance: {
+      branchId: "sha256:branch",
+      compactionAttemptId: "sha256:attempt-old",
+      sourceDigest: "sha256:source-old",
+    },
+  };
+  const current = {
+    ...chunk("current-embedded", 0, "dolt_mode embedded with no listener"),
+    provenance: {
+      branchId: "sha256:branch",
+      compactionAttemptId: "sha256:attempt-new",
+      sourceDigest: "sha256:source-new",
+    },
+  };
+  const timeline = [historical, current];
+  const rendered = renderProjection({
+    queryDigest: "sha256:query",
+    corpusDigest: corpusDigest(timeline),
+    selections: [
+      { chunkId: current.id, level: "full", spans: [] },
+      { chunkId: historical.id, level: "full", spans: [] },
+    ],
+  }, timeline);
+
+  assert.match(rendered, /Later source excerpts supersede conflicting earlier excerpts/);
+  assert.ok(rendered.indexOf(historical.text) < rendered.indexOf(current.text));
+  assert.match(rendered, /source 1\/2.*role=user/);
+  assert.match(rendered, /source 2\/2.*role=user/);
 });
 
 test("failed Ladder leaves context_with_system unchanged", async () => {

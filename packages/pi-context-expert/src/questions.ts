@@ -41,10 +41,10 @@ export const RULE_AUTHORITY_CRITERIA = {
 } as const;
 
 export const LADDER_VISIBILITY_CRITERIA = {
-  hide: "The chunk is not useful for answering the concrete query.",
-  short: "Only a bounded source excerpt is useful for answering the concrete query.",
-  long: "A longer bounded source excerpt is useful for answering the concrete query.",
-  full: "The full sanitized chunk is necessary for answering the concrete query.",
+  hide: "The chunk is irrelevant, or its claim is superseded or contradicted by a later source and the query does not ask for history.",
+  short: "A bounded excerpt is useful and is not superseded by a later source, or the query explicitly asks for this historical evidence.",
+  long: "A longer bounded excerpt is useful and is not superseded by a later source, or the query explicitly asks for this historical evidence.",
+  full: "The complete chunk is necessary and is not superseded by a later source, or the query explicitly asks for this historical evidence.",
 } as const;
 
 export interface LadderQuestionRef {
@@ -180,7 +180,7 @@ export function buildLadderQuestions(
   }));
   const questions = Object.fromEntries(refs.map((ref) => [ref.questionId, {
     type: "choice" as const,
-    instructions: `How much of corpus chunk ${ref.corpusIndex} should be visible to answer the concrete query in the shared state?`,
+    instructions: `Considering the complete oldest-to-newest corpus and its conflict policy, how much of corpus chunk ${ref.corpusIndex} should be visible to answer the concrete query?`,
     criteria: { ...LADDER_VISIBILITY_CRITERIA },
   } satisfies ChoiceQuestion]));
   return { questions, refs };
