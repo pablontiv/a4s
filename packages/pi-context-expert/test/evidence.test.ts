@@ -36,15 +36,15 @@ class EvidenceJev implements JevClient {
         if (this.uncertainVisibility) {
           return {
             type: "choice",
-            choice: "hide",
-            probabilities: { hide: 0.4, short: 0.2, long: 0.2, full: 0.2 },
+            choice: "current",
+            probabilities: { current: 0.4, superseded: 0.2, historical: 0.2, irrelevant: 0.2 },
             confidence: 0.4,
           };
         }
         return {
           type: "choice",
-          choice: "full",
-          probabilities: Object.fromEntries(levels.map((level) => [level, level === "full" ? 1 : 0])),
+          choice: "current",
+          probabilities: Object.fromEntries(levels.map((level) => [level, level === "current" ? 1 : 0])),
           confidence: 1,
         };
       }
@@ -193,8 +193,8 @@ test("Evidence keeps candidate, generality, and authority as independent final g
             if (id.startsWith("ladder_visibility_") && question.type === "choice") {
               return {
                 type: "choice",
-                choice: "full",
-                probabilities: { hide: 0, short: 0, long: 0, full: 1 },
+                choice: "current",
+                probabilities: { current: 1, superseded: 0, historical: 0, irrelevant: 0 },
                 confidence: 1,
               };
             }

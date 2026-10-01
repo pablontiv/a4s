@@ -55,7 +55,17 @@ test("renderer orders valid short and long source spans deterministically", () =
 
   assert.equal(
     renderProjection(projection, corpus),
-    "[a4s ladder context]\nklmnop\ncde\n0123456789",
+    [
+      "[a4s ladder context]",
+      "Selected historical source excerpts are ordered oldest to newest.",
+      "Later source excerpts supersede conflicting earlier excerpts. Mutable repository state must be verified against the current checkout.",
+      "[source 1/3 | role=user]",
+      "klmnop",
+      "[source 2/3 | role=user]",
+      "cde",
+      "[source 3/3 | role=user]",
+      "0123456789",
+    ].join("\n"),
   );
   assert.deepEqual(corpus.map((item) => item.text), ["abcdefghij", "klmnopqrst", "uvwxyz", "0123456789"]);
 });
@@ -95,8 +105,8 @@ test("Ladder selection sends a concrete query and returns a validated projection
           question.type === "choice"
             ? {
               type: "choice",
-              choice: "short",
-              probabilities: { hide: 0, short: 1, long: 0, full: 0 },
+              choice: "current",
+              probabilities: { current: 1, superseded: 0, historical: 0, irrelevant: 0 },
               confidence: 1,
             }
             : undefined,
@@ -109,9 +119,236 @@ test("Ladder selection sends a concrete query and returns a validated projection
   assert.equal(requests.length, 1);
   assert.equal((requests[0]?.state as { query?: unknown }).query, "find cde");
   assert.deepEqual(projection.selections, [
-    { chunkId: "chunk-late", level: "short", spans: [{ chunkId: "chunk-late", start: 2, end: 10 }] },
+    { chunkId: "chunk-late", level: "full", spans: [] },
   ]);
   validateProjection(projection, [corpus[0]!]);
+});
+
+test("Ladder request exposes chronology and supersession to Jev", async () => {
+  const historical = {
+    ...chunk("historical-server", 99, "dolt_mode server on port 3308"),
+    provenance: {
+      branchId: "sha256:branch",
+      compactionAttemptId: "sha256:attempt-old",
+      sourceDigest: "sha256:source-old",
+    },
+  };
+  const current = {
+    ...chunk("current-embedded", 0, "dolt_mode embedded with no listener"),
+    provenance: {
+      branchId: "sha256:branch",
+      compactionAttemptId: "sha256:attempt-new",
+      sourceDigest: "sha256:source-new",
+    },
+  };
+  const requests: JevRequest[] = [];
+
+  await selectLadderProjection(
+    [historical, current],
+    "what is the current dolt mode?",
+    {
+      async evaluate(request) {
+        requests.push(request);
+        return validJevResponse(request, (id, question) =>
+          question.type === "choice"
+            ? {
+              type: "choice",
+              choice: id.endsWith("000000") ? "superseded" : "current",
+              probabilities: id.endsWith("000000")
+                ? { current: 0, superseded: 1, historical: 0, irrelevant: 0 }
+                : { current: 1, superseded: 0, historical: 0, irrelevant: 0 },
+              confidence: 1,
+            }
+            : undefined,
+        );
+      },
+    },
+    new AbortController().signal,
+  );
+
+  const request = requests[0];
+  assert.ok(request);
+  const state = request.state as {
+    chronology?: { direction?: unknown; conflictPolicy?: unknown };
+    corpus?: Array<{ id?: unknown; timelineIndex?: unknown; attemptLocalPosition?: unknown; position?: unknown }>;
+  };
+  assert.deepEqual(state.chronology, {
+    direction: "oldest-to-newest",
+    conflictPolicy: "later sources supersede conflicting earlier sources",
+  });
+  assert.deepEqual(state.corpus?.map(({ id, timelineIndex, attemptLocalPosition, position }) => ({
+    id,
+    timelineIndex,
+    attemptLocalPosition,
+    hasAmbiguousPosition: position !== undefined,
+  })), [
+    { id: "historical-server", timelineIndex: 0, attemptLocalPosition: 99, hasAmbiguousPosition: false },
+    { id: "current-embedded", timelineIndex: 1, attemptLocalPosition: 0, hasAmbiguousPosition: false },
+  ]);
+  const firstQuestion = request.questions.ladder_visibility_000000;
+  assert.equal(firstQuestion?.type, "choice");
+  const supersededCriteria = firstQuestion?.type === "choice" ? firstQuestion.criteria.superseded : undefined;
+  assert.equal(typeof supersededCriteria, "string");
+  if (typeof supersededCriteria !== "string") throw new TypeError("missing Ladder superseded criterion");
+  assert.match(supersededCriteria, /later source/i);
+});
+
+test("Ladder maps explicit temporal statuses to deterministic visibility", async () => {
+  const historical = {
+    ...chunk("historical-server", 0, "dolt_mode server on port 3308"),
+    provenance: {
+      branchId: "sha256:branch",
+      compactionAttemptId: "sha256:attempt-old",
+      sourceDigest: "sha256:source-old",
+    },
+  };
+  const current = {
+    ...chunk("current-embedded", 0, "dolt_mode embedded with no listener"),
+    provenance: {
+      branchId: "sha256:branch",
+      compactionAttemptId: "sha256:attempt-new",
+      sourceDigest: "sha256:source-new",
+    },
+  };
+  const requests: JevRequest[] = [];
+
+  const projection = await selectLadderProjection(
+    [historical, current],
+    "what is the current dolt mode?",
+    {
+      async evaluate(request) {
+        requests.push(request);
+        return validJevResponse(request, (id, question) =>
+          question.type === "choice"
+            ? {
+              type: "choice",
+              choice: id.endsWith("000000") ? "superseded" : "current",
+              probabilities: id.endsWith("000000")
+                ? { current: 0, superseded: 1, historical: 0, irrelevant: 0 }
+                : { current: 1, superseded: 0, historical: 0, irrelevant: 0 },
+              confidence: 1,
+            }
+            : undefined,
+        );
+      },
+    },
+    new AbortController().signal,
+  );
+
+  assert.deepEqual(projection.selections, [
+    { chunkId: "historical-server", level: "hide", spans: [] },
+    { chunkId: "current-embedded", level: "full", spans: [] },
+  ]);
+  const state = requests[0]?.state as {
+    comparisons?: Array<{
+      candidateIndex?: unknown;
+      laterSourceIndexes?: unknown[];
+    }>;
+  };
+  assert.deepEqual(state.comparisons, [
+    { candidateIndex: 0, laterSourceIndexes: [1] },
+    { candidateIndex: 1, laterSourceIndexes: [] },
+  ]);
+});
+
+test("Ladder rejects interleaved compaction attempts instead of inventing chronology", () => {
+  const oldFirst = {
+    ...chunk("old-first", 0, "old first"),
+    provenance: { branchId: "sha256:branch", compactionAttemptId: "sha256:attempt-old", sourceDigest: "sha256:old-first" },
+  };
+  const current = {
+    ...chunk("current", 0, "current"),
+    provenance: { branchId: "sha256:branch", compactionAttemptId: "sha256:attempt-new", sourceDigest: "sha256:current" },
+  };
+  const oldReappears = {
+    ...chunk("old-reappears", 1, "old reappears"),
+    provenance: { branchId: "sha256:branch", compactionAttemptId: "sha256:attempt-old", sourceDigest: "sha256:old-reappears" },
+  };
+
+  assert.throws(
+    () => corpusDigest([oldFirst, current, oldReappears]),
+    /contiguous compaction attempt/i,
+  );
+});
+
+test("Ladder ordinary inclusion threshold is explicit at the 0.5 boundary", async () => {
+  const selectAt = async (confidence: number, profile: "ordinary" | "conservative-evidence" = "ordinary") =>
+    selectLadderProjection(
+      [chunk("candidate", 0, "current repository state")],
+      "what is the current repository state?",
+      {
+        async evaluate(request) {
+          const remainder = (1 - confidence) / 3;
+          return validJevResponse(request, (_id, question) => question.type === "choice"
+            ? {
+              type: "choice",
+              choice: "current",
+              probabilities: { current: confidence, superseded: remainder, historical: remainder, irrelevant: remainder },
+              confidence,
+            }
+            : undefined);
+        },
+      },
+      new AbortController().signal,
+      profile,
+    );
+
+  assert.equal((await selectAt(0.49)).selections[0]?.level, "hide");
+  assert.equal((await selectAt(0.5)).selections[0]?.level, "full");
+
+  const conservativeSuperseded = await selectLadderProjection(
+    [chunk("candidate", 0, "superseded repository state")],
+    "extract a durable rule",
+    {
+      async evaluate(request) {
+        return validJevResponse(request, (_id, question) => question.type === "choice"
+          ? {
+            type: "choice",
+            choice: "superseded",
+            probabilities: { current: 0.2, superseded: 0.4, historical: 0.2, irrelevant: 0.2 },
+            confidence: 0.4,
+          }
+          : undefined);
+      },
+    },
+    new AbortController().signal,
+    "conservative-evidence",
+  );
+  assert.equal(conservativeSuperseded.selections[0]?.level, "hide");
+});
+
+test("Ladder hides a superseded operational instruction and keeps the later user decision", async () => {
+  const historical = {
+    ...chunk("historical-confirmation", 0, "Ask the user before resuming; do not continue autonomously."),
+    provenance: { branchId: "sha256:branch", compactionAttemptId: "sha256:attempt-old", sourceDigest: "sha256:old-instruction" },
+  };
+  const current = {
+    ...chunk("current-autonomy", 0, "Continue autonomously and delegate long-running commands."),
+    provenance: { branchId: "sha256:branch", compactionAttemptId: "sha256:attempt-new", sourceDigest: "sha256:current-instruction" },
+  };
+  const projection = await selectLadderProjection(
+    [historical, current],
+    "How should work continue now?",
+    {
+      async evaluate(request) {
+        return validJevResponse(request, (id, question) => question.type === "choice"
+          ? {
+            type: "choice",
+            choice: id.endsWith("000000") ? "superseded" : "current",
+            probabilities: id.endsWith("000000")
+              ? { current: 0, superseded: 1, historical: 0, irrelevant: 0 }
+              : { current: 1, superseded: 0, historical: 0, irrelevant: 0 },
+            confidence: 1,
+          }
+          : undefined);
+      },
+    },
+    new AbortController().signal,
+  );
+  const rendered = renderProjection(projection, [historical, current]);
+
+  assert.doesNotMatch(rendered, /Ask the user before resuming/);
+  assert.match(rendered, /Continue autonomously/);
 });
 
 test("Ladder shortlist deterministically bounds large corpora while retaining lexical and recent candidates", () => {
@@ -148,6 +385,120 @@ test("Ladder shortlist deterministically bounds large corpora while retaining le
     }),
     LadderShortlistError,
   );
+});
+
+test("Ladder recency follows compaction chronology instead of reset message positions", () => {
+  const historical = {
+    ...chunk("historical-server", 99, "dolt_mode server on port 3308"),
+    provenance: {
+      branchId: "sha256:branch",
+      compactionAttemptId: "sha256:attempt-old",
+      sourceDigest: "sha256:source-old",
+    },
+  };
+  const current = {
+    ...chunk("current-embedded", 0, "dolt_mode embedded with no listener"),
+    provenance: {
+      branchId: "sha256:branch",
+      compactionAttemptId: "sha256:attempt-new",
+      sourceDigest: "sha256:source-new",
+    },
+  };
+
+  const result = shortlistLadderCorpus(
+    [historical, current],
+    "unrelated query",
+    "ordinary",
+    { maxCandidateChunks: 1, recentChunks: 1, maxStateTokens: 5_000 },
+  );
+
+  assert.deepEqual(result.corpus.map((item) => item.id), ["current-embedded"]);
+});
+
+test("bounded Ladder preserves compaction chronology through selection and rendering", async () => {
+  const historical = [0, 1, 2].map((position) => ({
+    ...chunk(`z-old-${position}`, position, `dolt_mode server on port 3308 old-${position}`),
+    provenance: {
+      branchId: "sha256:branch",
+      compactionAttemptId: "sha256:attempt-old",
+      sourceDigest: `sha256:source-old-${position}`,
+    },
+  }));
+  const current = [0, 1].map((position) => ({
+    ...chunk(`a-new-${position}`, position, `dolt_mode embedded with no listener new-${position}`),
+    provenance: {
+      branchId: "sha256:branch",
+      compactionAttemptId: "sha256:attempt-new",
+      sourceDigest: `sha256:source-new-${position}`,
+    },
+  }));
+  const shortlist = shortlistLadderCorpus(
+    [...historical, ...current],
+    "current dolt_mode",
+    "ordinary",
+    { maxCandidateChunks: 4, recentChunks: 1, maxStateTokens: 5_000 },
+  );
+
+  assert.equal(shortlist.strategy, "lexical-recency");
+  assert.deepEqual(
+    shortlist.corpus.map((item) => item.provenance.compactionAttemptId),
+    ["sha256:attempt-old", "sha256:attempt-old", "sha256:attempt-new", "sha256:attempt-new"],
+  );
+
+  const projection = await selectLadderProjection(
+    shortlist.corpus,
+    "current dolt_mode",
+    {
+      async evaluate(request) {
+        return validJevResponse(request, (_id, question) =>
+          question.type === "choice"
+            ? {
+              type: "choice",
+              choice: "current",
+              probabilities: { current: 1, superseded: 0, historical: 0, irrelevant: 0 },
+              confidence: 1,
+            }
+            : undefined,
+        );
+      },
+    },
+    new AbortController().signal,
+  );
+  const rendered = renderProjection(projection, shortlist.corpus);
+  assert.ok(rendered.indexOf("dolt_mode server") < rendered.indexOf("dolt_mode embedded"));
+});
+
+test("Ladder renderer frames selected sources with chronological precedence", () => {
+  const historical = {
+    ...chunk("historical-server", 99, "dolt_mode server on port 3308"),
+    provenance: {
+      branchId: "sha256:branch",
+      compactionAttemptId: "sha256:attempt-old",
+      sourceDigest: "sha256:source-old",
+    },
+  };
+  const current = {
+    ...chunk("current-embedded", 0, "dolt_mode embedded with no listener"),
+    provenance: {
+      branchId: "sha256:branch",
+      compactionAttemptId: "sha256:attempt-new",
+      sourceDigest: "sha256:source-new",
+    },
+  };
+  const timeline = [historical, current];
+  const rendered = renderProjection({
+    queryDigest: "sha256:query",
+    corpusDigest: corpusDigest(timeline),
+    selections: [
+      { chunkId: current.id, level: "full", spans: [] },
+      { chunkId: historical.id, level: "full", spans: [] },
+    ],
+  }, timeline);
+
+  assert.match(rendered, /Later source excerpts supersede conflicting earlier excerpts/);
+  assert.ok(rendered.indexOf(historical.text) < rendered.indexOf(current.text));
+  assert.match(rendered, /source 1\/2.*role=user/);
+  assert.match(rendered, /source 2\/2.*role=user/);
 });
 
 test("failed Ladder leaves context_with_system unchanged", async () => {
