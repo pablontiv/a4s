@@ -52,15 +52,22 @@ class GitHubCommunicationStyleContractTests(unittest.TestCase):
         self.assertNotIn("standing instruction pre-authorizes", self.skill)
 
     def test_current_issue_and_comment_gate_matches_config(self) -> None:
-        self.assertIn("full text of an issue or of a comment on an issue or PR", self.communication)
-        self.assertIn("obtain approval before publishing it", self.communication)
+        for phrase in (
+            "approval before publishing a new issue or a substantive comment",
+            "changes commitments, scope, authority",
+            "Routine factual status, evidence, and closure updates",
+            "without a separate approval",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, self.communication)
 
         authority = section(self.skill, "## Publication Authority", "## Style and Evidence Rules")
         execution = section(self.skill, "## Execution Steps", "## Output Contract")
         for content in (authority, execution):
             self.assertIn("complete exact", content)
-            self.assertIn("issue/PR comment", content)
+            self.assertIn("substantive issue/PR comment", content)
             self.assertIn("explicit approval", content)
+            self.assertIn("Routine factual status, evidence, and closure updates", content)
 
     def test_current_pull_request_exception_adds_no_gate(self) -> None:
         self.assertIn("Pull requests and their descriptions need no prior approval", self.communication)
@@ -69,7 +76,7 @@ class GitHubCommunicationStyleContractTests(unittest.TestCase):
         execution = section(self.skill, "## Execution Steps", "## Output Contract")
         self.assertIn("including their titles and descriptions, need no prior approval", authority)
         self.assertIn("Do not add a presentation or approval gate to them", authority)
-        self.assertIn("do not add that gate for a pull request, its title, or its description", execution)
+        self.assertIn("do not add that gate for a pull request, its title, or its description", execution.lower())
 
     def test_writing_and_evidence_technique_is_preserved(self) -> None:
         for phrase in (
