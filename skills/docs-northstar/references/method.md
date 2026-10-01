@@ -6,20 +6,21 @@ The single most important lesson from that arc: **the north star was never deriv
 
 ## 0. Excavate before forming an opinion
 
-Repositioning a repo that already decided its identity is a recovery job, not a creative one. Sweep, in this order, and report each result:
+Repositioning a repo that already decided its identity is a recovery job, not a creative one. Resolve authority and documentation roots before the sweep, then report each result:
 
-1. **Persistent memory** — `mem_search` for north star, positioning, identity, hero, reposition; read the project memory index.
-2. **Session history** — `backscroll search "<repo> north star positioning" --all-projects --indexed-only`; also search for the proposal/spec artifact names (e.g. `sdd/<change>/spec`), which surface the whole prior cycle.
-3. **The repo** — `docs/**/*north-star*`, `*northstar*`, `*positioning*`, `*reposition*`, ADRs, approved design specs, `openspec/changes/`.
+1. **Repository authority and roots** — if `.workspace/config.yaml` exists, read it first. It is the only authority for that repository's way of working, and every documentation root it explicitly declares belongs in the sweep; for an adopted A4S workspace this includes `.workspace/docs/**`. Do not infer roots or policy from records. If the config is absent, use the portable fallback `docs/**`.
+2. **Persistent memory** — `mem_search` for north star, positioning, identity, hero, reposition; read the project memory index.
+3. **Session history** — `backscroll search "<repo> north star positioning" --all-projects --indexed-only`; also search for the proposal/spec artifact names (e.g. `sdd/<change>/spec`), which surface the whole prior cycle.
+4. **The repo** — search the resolved documentation roots for `*north-star*`, `*northstar*`, `*positioning*`, `*reposition*`, ADRs, and design specs; also search `openspec/changes/` and the README's current opening.
 
 Possible outcomes, each with a required action:
 
 | Finding | Action |
 |---|---|
-| One declared north star, still true | It is the source. Confirm with the owner, then verify the docs against IT |
-| Two declared north stars (e.g. a master identity + a later feature arc) | Real fork. Surface both, ask which leads the public narrative |
-| Declared north star contradicted by the owner in conversation | Owner wins. Record the contradiction; mark the spec superseded; never edit the historical spec |
-| Nothing anywhere | State that explicitly, then run the full question round |
+| One declared north star, apparently current | It is evidence/provenance, not authority. Confirm it with the owner before using it as the narrative source, then verify the docs against the confirmed wording |
+| Two declared north stars (e.g. a master identity + a later feature arc) | Real fork. Surface both as evidence and ask which leads the public narrative |
+| Declared north star contradicted by the owner in conversation | Owner decides the narrative. Leave the historical spec unchanged; when durable supersession is needed, create a new record that names the superseded record |
+| Nothing found across the roots and sources actually swept | Report that bounded result, then run the full question round |
 
 In the rootline arc the excavation covered Engram, backscroll, Pi, OpenCode, and raw Claude transcripts before concluding "no prior recorded decision existed" for the relicense. That negative result was itself reported as a finding.
 
@@ -67,7 +68,7 @@ Run the product in the environment the promise implies, **including the adversar
 **A disproven claim is not queued behind an engineering cycle.** The gates in this method exist to stop unagreed claims going *in*; making a *demonstrably false* published claim wait out a prerequisite cycle inverts their purpose and keeps readers misled meanwhile. So correcting one is expedited — but expedited is not ungoverned, and the exemption is narrow on four axes:
 
 - **Only demonstrably false, never merely unverified.** "We ran it and it does not do this" qualifies. "We could not check" does not: unverified means unknown, and deleting documentation that is probably true harms the people relying on it. Unverified claims stay, flagged, pending verification.
-- **Only living surfaces.** The record — ADRs, archived change artifacts, git history — is never edited to match the present, false or not. It gets a superseding note; the rule above it does not bend.
+- **Only living surfaces.** Records — ADRs, specifications, plans, reports, archived change artifacts, completed task records, and git history — are never edited to match the present, false or not. If supersession must be durable, create a new record that declares which existing record it supersedes; the old record remains unchanged.
 - **Never the hero or positioning copy.** A disproven hero claim is a product decision, so it returns to the question round for new approved wording. The expedited path is for ordinary documentation claims, not for what the product says it is.
 - **Smallest span, and nothing new asserted afterwards.** Target the falsehood, not the section around it. Then check the result: the docs may claim only what they already claimed *and* verified. Nothing is added — not even a note that the thing does not work, which is still a sentence about something the living doc no longer needs to mention at all. That leaves three permitted edits: delete the false span; narrow it to a subset of what was already verified; or, when the subject still exists but is unproven, mark it in-development. Writing a corrected sentence is *not* a retraction: it is new copy, unapproved and quite possibly unverified itself, arriving through a door built for removals. Route replacement wording through approval like any other claim.
 
@@ -156,9 +157,9 @@ One continuous arc, delivered in slices that each preserve the whole hierarchy:
 ## 8. Truth mechanics for satellite surfaces
 
 - **Coherence set**: repo description = hero line; README badge ⇄ LICENSE file ⇄ License section ⇄ agent skills — one story, no contradictions. GitHub only auto-detects canonical license texts (verbatim Apache-2.0 detects; PolyForm shows "Other").
-- **Roadmap truth**: record states reflect reality. Work superseded by a decommission decision → `Obsolete`. A status field is current fact *about the record*; that is why it is set rather than deleted, and it does not conflict with deleting product claims that no longer hold. Use the product's own tooling to mutate records when it has one (dogfood).
-- **Never rewrite the record**: archived change artifacts, completed task records, and ADRs are never rewritten to match the present — fidelity of history outranks tidiness. A superseded identity statement gets marked superseded, not edited. Archive copies must be byte-faithful (diff them; agents that "archive" by rewriting lose content).
-- **Enforcement**: a pre-push docs-sync guard (config/CI/manifest change requires README, docs/, or CLAUDE.md in the same push) keeps drift from re-accumulating. When a guard predates a surface it should cover, fix the guard rather than bypassing it.
+- **Roadmap truth**: update a living, non-record roadmap only when repository authority and the approved change permit it. Historical roadmaps and other records remain unchanged; when their decision is superseded and that fact must be durable, create a new record that declares the supersession.
+- **Never rewrite the record**: ADRs, specifications, plans, reports, archived change artifacts, and completed task records are append-only — fidelity of history outranks tidiness. A new record may declare an older identity statement superseded; the older file is never edited or marked. Archive copies must be byte-faithful (diff them; agents that "archive" by rewriting lose content).
+- **Enforcement follows repository authority**: this method does not add synchronization hooks or delivery gates. Apply one only when the repository's normative authority already requires it.
 
 ## 9. Audit tooling gotchas
 
@@ -185,5 +186,5 @@ These are CLI-specific traps, hit hard in the rootline and backscroll sweeps. Fo
 **backscroll 2026-07 (excavation failure, corrected)**
 
 - The skill v1 went straight to "derive hero" and invented one, while TWO approved north-star specs sat in `docs/superpowers/specs/`. The owner caught it: "esperaba preguntas, ¿sabemos cuál es el northstar?"
-- A declared spec can also be stale: the master design locked identity as "complements engram", and the owner later corrected it to standalone. Owner overrides spec; the spec gets marked superseded, not rewritten.
+- A declared spec can also be stale: the master design locked identity as "complements engram", and the owner later corrected it to standalone. Owner decides the narrative; a new record declares supersession when needed, while the original spec remains unchanged.
 - Both failures trace to the same missing gate — no excavation, no approval. Hence Phases 0 and 1.

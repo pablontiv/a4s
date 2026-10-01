@@ -158,6 +158,10 @@ run_step "Check context cleanup CLI" \
 run_step "Test model-optimizer" \
     python3 -m unittest discover -s skills/model-optimizer/tests -t skills/model-optimizer -p "test_*.py" -v
 
+# Step 21: Test Docs Northstar
+run_step "Test Docs Northstar" \
+    python3 -m unittest discover -s skills/docs-northstar/tests -t skills/docs-northstar -p "test_*.py" -v
+
 # Print summary
 echo ""
 echo "=========================================="
