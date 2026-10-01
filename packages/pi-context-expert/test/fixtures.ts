@@ -210,12 +210,9 @@ export function validAnswer(question: JevQuestion): JevAnswer {
     };
   }
 
-  const top = question.criteria.length - 1;
   return {
     type: "score",
-    score: top,
-    legend: Object.fromEntries(question.criteria.map((criterion, index) => [String(index), criterion])),
-    probabilities: Object.fromEntries(question.criteria.map((_criterion, index) => [String(index), index === top ? 1 : 0])),
+    score: 1,
     confidence: 1,
   };
 }
@@ -236,11 +233,7 @@ export function scoreAnswer(criteria: readonly string[], selectedLevel: number, 
   }
   return {
     type: "score",
-    score: selectedLevel,
-    legend: Object.fromEntries(criteria.map((criterion, index) => [String(index), criterion])),
-    probabilities: Object.fromEntries(
-      criteria.map((_criterion, index) => [String(index), index === selectedLevel ? 1 : 0]),
-    ),
+    score: selectedLevel / (criteria.length - 1),
     confidence,
   };
 }

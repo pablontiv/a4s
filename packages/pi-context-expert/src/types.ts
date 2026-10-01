@@ -1,15 +1,17 @@
-import {
-  JEV_MODEL,
-  TYPESAFE_API_KEY_ENV,
-  TYPESAFE_PROVIDER_ID,
-} from "@a4s/typesafe";
-
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
 
-/** Backward-compatible name delegated to the canonical TypeSafe model pin. */
-export const DEFAULT_JEV_MODEL = JEV_MODEL;
-export { TYPESAFE_API_KEY_ENV, TYPESAFE_PROVIDER_ID };
+/** Pi's built-in TypeSafe classifier selected by Context Expert. */
+export const TYPESAFE_PROVIDER_ID = "typesafe";
+export const JEV_MODEL_ID = "jev-latest";
+export const DEFAULT_JEV_MODEL = `${TYPESAFE_PROVIDER_ID}/${JEV_MODEL_ID}` as const;
+export const LEGACY_JEV_MODEL = "jev-1.13.0" as const;
+export type SupportedJevModel = typeof DEFAULT_JEV_MODEL | typeof LEGACY_JEV_MODEL;
+
+/** Historical artifacts remain readable after moving execution to Pi's native classifier. */
+export function isSupportedJevModel(value: unknown): value is SupportedJevModel {
+  return value === DEFAULT_JEV_MODEL || value === LEGACY_JEV_MODEL;
+}
 
 /** Evidence lifecycle strategy; it remains inactive unless both Ladder flags are enabled. */
 export interface EvidenceOptions {
@@ -139,7 +141,7 @@ export interface ScoreQuestion {
 export type JevQuestion = NoulQuestion | ChoiceQuestion | ScoreQuestion;
 
 export interface JevRequest {
-  state: string | readonly unknown[] | object;
+  state: object;
   model: typeof DEFAULT_JEV_MODEL;
   questions: Record<string, JevQuestion>;
 }
@@ -158,9 +160,8 @@ export interface ChoiceAnswer {
 
 export interface ScoreAnswer {
   type: "score";
+  /** Pi-native score normalized to the inclusive 0..1 range. */
   score: number;
-  legend: Record<string, string>;
-  probabilities: Record<string, number>;
   confidence: number;
 }
 
@@ -293,7 +294,7 @@ export interface RuleSignalBatch {
   sourceDigest: string;
   stateDigest: string;
   observedAt: string;
-  jevModel: typeof DEFAULT_JEV_MODEL;
+  jevModel: SupportedJevModel;
   compaction: CompactionWindowObservation;
   signals: RuleSignal[];
   provenance: {
@@ -329,7 +330,7 @@ export interface JevCompactionDetails {
   schema: "a4s.jev-compaction-details/v1";
   attemptId: string;
   sourceDigest: string;
-  jevModel: typeof DEFAULT_JEV_MODEL;
+  jevModel: SupportedJevModel;
   createdAt: string;
   firstKeptEntryId: string;
   tokensBefore: number;
@@ -428,7 +429,7 @@ export interface RuleProposalBatch {
     provider: string;
     id: string;
   };
-  jevModel: typeof DEFAULT_JEV_MODEL;
+  jevModel: SupportedJevModel;
   candidates: EvaluatedRuleCandidate[];
 }
 

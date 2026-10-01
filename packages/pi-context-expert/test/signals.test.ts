@@ -78,7 +78,7 @@ test("independent Jev batches run concurrently against the same fitted state", a
   assert.equal(batch.provenance.requestCount, plan.requests.length);
 });
 
-test("RuleSignal selection uses independent configurable thresholds and pinned Jev model", async () => {
+test("RuleSignal selection uses independent configurable thresholds and Pi's latest Jev selector", async () => {
   const jev = new RecordingJev();
   const controller = new AbortController();
   const batch = await observeCompactionRules(

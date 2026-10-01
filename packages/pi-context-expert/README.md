@@ -11,13 +11,13 @@ The extension supports Pi `>=0.99.1`. Pi-provided runtime packages remain wildca
 - The newest and true preparation-boundary messages are pinned. A selected durable rule candidate is always retained even when its immediate-continuity score is low.
 - Large inputs are split into chronological windows; every compacted message receives one retention judgment. Rule-candidate questions are added only for roles that can originate authority from intent or an explicit decision (`user`, `custom`). `toolResult` and `bashExecution` still receive retention judgments but never enter the rule-candidate pool: their content is evidence, not authority. Generated assistant/summary roles likewise receive only retention judgments.
 - Every window shares one global scheduler: default concurrency is 1, `429`/`529` retries are bounded, `Retry-After` is honored up to 30 seconds, and the whole compaction remains abortable under a 180-second deadline.
-- Requests are packed up to 120 questions only while verified below Jev 1.13's guarded budgets: 60k estimated tokens per request and 30k for state plus the longest question.
+- Requests are packed up to 120 questions only while verified below conservative System One budgets: 60k estimated tokens per request and 30k for state plus the longest question.
 - Compaction details never contain RuleSignals. With Evidence off, successful compaction publishes only the sanitized corpus and its receipt; `basic` does not extract, publish, or synthesize rules.
 - Evidence runs only when both `compaction.strategy=ladder` and `evidence.strategy=ladder`. After Pi confirms compaction and corpus publication, it issues its own fixed conservative Ladder query over the current branch corpus. It never consumes the projection made for an ordinary user query.
 - Only full chunks or validated `short`/`long` source spans selected by that Evidence query enter extraction. The existing candidate-probability, generality, authority-probability, authority-confidence, and allowed-authority gates remain unchanged.
 - Validated signal batches, retro-pending markers, and an Evidence receipt are appended only after selection and extraction both succeed. Batch digests, attempt markers, proposal receipts, and the final Evidence receipt make replay idempotent. Any selection/extraction failure publishes no Evidence artifact and never removes corpus.
 - Manual/threshold Evidence success may run current-model synthesis plus Jev stage 2 from `session_compact`; overflow recovery with `willRetry=true` defers that review-only work until `agent_settled`. Retro failure never rolls back compaction and leaves signals plus pending state available for `/retro-rules` retry.
-- Jev uses the canonical `@a4s/typesafe` SDK client with the pinned model `jev-1.13.0`. The package registers the credential-only `typesafe` provider so `/login typesafe` stores an API key via Pi's own auth storage; the resolved credential is cached for the session. Stored `auth.json` credentials take precedence, with `TYPESAFE_API_KEY` used only as the headless fallback.
+- Jev runs through Pi's native classifier runtime: Context Expert resolves the built-in `typesafe/jev-latest` catalog model and calls `ctx.modelRegistry.classify()`. Pi owns provider registration, `/login typesafe`, stored-credential precedence, the `TYPESAFE_API_KEY` headless fallback, request construction, and transport. Context Expert keeps its bounded scheduler, disables Pi's per-call retries so retry accounting remains deterministic, validates Pi-normalized answers, and fails closed. New artifacts record `typesafe/jev-latest`; persisted `jev-1.13.0` artifacts remain readable.
 - Automatic retro and `/retro-rules` store proposals only. They never write Rootline documents or activate rules; `/retro-rules` exists solely for manual retry/recovery.
 - Review is store-only. `/rules-review` lists stored proposals with their acceptance state, `/rules-show <id>` shows one candidate, and `/rules-accept <id>` records a manual acceptance receipt for a `propose` candidate. When no proposal is stored, `/rules-review` reports whether the latest session-local compaction had no eligible `user`/`custom` sources, filtered all eligible candidates, or retained signals awaiting retro; it never displays message content. Acceptance still writes nothing to Rootline or AGENTS.md; the durable apply of an accepted rule is deferred to the decision in ADR 0020.
 - The extension does not read, write, or replace gentle-engram entries.
@@ -43,8 +43,12 @@ the same three flat, non-secret mode keys:
 }
 ```
 
-Create or edit that fixed file, then restart Pi so new sessions load the
-change. A missing file, malformed JSON, a non-object value, any unknown field,
+Create or edit that fixed file, then run `/reload` in an active Pi session or
+restart Pi. Reload replaces the extension runtime and its in-memory Ladder
+projection caches while preserving the session and persisted corpus; no state
+regeneration is required. A request already in flight keeps the prior runtime,
+so verify the change on the next request. A missing file, malformed JSON, a
+non-object value, any unknown field,
 an invalid mode, or an invalid combination fails closed to the complete basic
 safe configuration (`basic`, `hint`, `off`). The extension does not use custom
 Pi `settings.json` keys, session text, credentials, environment variables, or
@@ -145,7 +149,7 @@ npm test --workspace @a4s/pi-context-expert
 npm run typecheck --workspace @a4s/pi-context-expert
 ```
 
-Tests use fake Jev and model gateways; they make no live TypeSafe calls.
+Tests use fake Pi classifier and model gateways; they make no live TypeSafe calls.
 
 The fixture-only Evidence eval is also offline:
 
@@ -206,4 +210,4 @@ matching artifacts pathname alone never authorizes deletion.
 
 Whole-session fitting, repeated-state batching, and the conservative token estimator follow demonstrated patterns from [`fast-jev-compaction`](https://github.com/tamaratran/fast-jev-compaction) (MIT). This package implements its own Pi-specific schemas, deterministic summary assembler, privacy boundary, success-gated signal lifecycle, and recovery contract.
 
-[`pi-jev`](https://github.com/TheoOliveira/pi-jev) (MIT) was evaluated but is not a dependency: its public package entrypoint and current internal client do not provide this package's pinned-model, strict-validation, window coverage, provenance, or success-only persistence contracts.
+[`pi-jev`](https://github.com/TheoOliveira/pi-jev) (MIT) was evaluated but is not a dependency: Context Expert uses Pi's built-in classifier runtime while retaining its own normalized-response validation, window coverage, provenance, and success-only persistence contracts.

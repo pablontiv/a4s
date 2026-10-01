@@ -351,6 +351,48 @@ test("Ladder hides a superseded operational instruction and keeps the later user
   assert.match(rendered, /Continue autonomously/);
 });
 
+test("Ladder does not render stale shared-server state after embedded becomes authoritative", async () => {
+  const sharedServer = {
+    ...chunk("historical-shared-server", 0, "Run Beads through the shared Dolt server and keep its listener active."),
+    provenance: {
+      branchId: "sha256:branch",
+      compactionAttemptId: "sha256:attempt-old",
+      sourceDigest: "sha256:shared-server-old",
+    },
+  };
+  const embedded = {
+    ...chunk("current-embedded", 0, "A4S Beads uses .beads/embeddeddolt only; no shared server or listener."),
+    provenance: {
+      branchId: "sha256:branch",
+      compactionAttemptId: "sha256:attempt-new",
+      sourceDigest: "sha256:embedded-current",
+    },
+  };
+  const projection = await selectLadderProjection(
+    [sharedServer, embedded],
+    "How does A4S store Beads data now?",
+    {
+      async evaluate(request) {
+        return validJevResponse(request, (id, question) => question.type === "choice"
+          ? {
+            type: "choice",
+            choice: id.endsWith("000000") ? "superseded" : "current",
+            probabilities: id.endsWith("000000")
+              ? { current: 0, superseded: 1, historical: 0, irrelevant: 0 }
+              : { current: 1, superseded: 0, historical: 0, irrelevant: 0 },
+            confidence: 1,
+          }
+          : undefined);
+      },
+    },
+    new AbortController().signal,
+  );
+  const rendered = renderProjection(projection, [sharedServer, embedded]);
+
+  assert.doesNotMatch(rendered, /shared Dolt server|listener active/);
+  assert.match(rendered, /\.beads\/embeddeddolt only/);
+});
+
 test("Ladder shortlist deterministically bounds large corpora while retaining lexical and recent candidates", () => {
   const largeCorpus = Array.from({ length: 160 }, (_, index) => chunk(
     `chunk-${String(index).padStart(3, "0")}`,

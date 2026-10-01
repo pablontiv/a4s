@@ -8,7 +8,6 @@ import piContextExpertExtension, {
   collectCorpus,
   corpusDigest,
   CORPUS_ENTRY_TYPE,
-  createTypesafeAuthResolver,
   EVIDENCE_RECEIPT_ENTRY_TYPE,
   estimateJevTokens,
   JevApiError,
@@ -19,7 +18,6 @@ import piContextExpertExtension, {
   RETRO_PENDING_ENTRY_TYPE,
   RULE_PROPOSAL_ENTRY_TYPE,
   RULE_SIGNAL_ENTRY_TYPE,
-  TYPESAFE_PROVIDER_ID,
   stableDigest,
   stageCorpus,
   type JevClient,
@@ -878,7 +876,7 @@ test("missing key, timeout, malformed response, API failure, and unfittable stat
     options: Parameters<typeof registerPiContextExpert>[1];
     expectedDiagnostic: RegExp;
   }> = [
-    { name: "missing key", options: { env: {}, hookTimeoutMs: 30 }, expectedDiagnostic: /missing TYPESAFE_API_KEY/ },
+    { name: "missing key", options: { hookTimeoutMs: 30 }, expectedDiagnostic: /TypeSafe credentials/ },
     {
       name: "timeout",
       options: { hookTimeoutMs: 10, jevClient: { evaluate: async () => new Promise<never>(() => undefined) } },
@@ -989,7 +987,7 @@ test("an aborted compaction outside RPC mode never writes the stderr diagnostic"
 
 test("a non-aborted cancel under RPC mode never writes the stderr diagnostic", async () => {
   const fake = createFakePi();
-  registerPiContextExpert(fake.pi, { env: {}, hookTimeoutMs: 30 });
+  registerPiContextExpert(fake.pi, { hookTimeoutMs: 30 });
   const { context } = createContext(fake.entries, { mode: "rpc" });
   const stderr = captureStderr();
   let stderrChunks: string[];
@@ -1164,67 +1162,10 @@ test("/retro-rules fails closed when the current model is unavailable", async ()
   assert.match(notifications.at(-1) ?? "", /current Pi model is unavailable/);
 });
 
-test("registers a credential-only typesafe provider wired into /login", async () => {
+test("uses Pi's built-in TypeSafe provider instead of registering an override", () => {
   const fake = createFakePi();
   registerPiContextExpert(fake.pi, { jevClient: new ValidFakeJev() });
-  assert.equal(fake.registeredProviders.length, 1);
-
-  const provider = fake.registeredProviders[0] as {
-    id: string;
-    getModels(): unknown[];
-    auth: {
-      oauth?: unknown;
-      apiKey: {
-        login(interaction: { prompt(prompt: unknown): Promise<string> }): Promise<{ type: string; key: string }>;
-        resolve(input: {
-          credential?: { key?: string };
-        }): Promise<{ auth: { apiKey: string }; source: string } | undefined>;
-      };
-    };
-  };
-  assert.equal(provider.id, TYPESAFE_PROVIDER_ID);
-  assert.deepEqual(provider.getModels(), []);
-  assert.equal(provider.auth.oauth, undefined);
-
-  const prompts: unknown[] = [];
-  const credential = await provider.auth.apiKey.login({
-    prompt: async (prompt) => {
-      prompts.push(prompt);
-      return "typesafe-secret";
-    },
-  });
-  assert.deepEqual(credential, { type: "api_key", key: "typesafe-secret" });
-  assert.deepEqual(prompts, [{ type: "secret", message: "TypeSafe API key" }]);
-
-  assert.equal(await provider.auth.apiKey.resolve({}), undefined);
-  assert.deepEqual(await provider.auth.apiKey.resolve({ credential: { key: "typesafe-secret" } }), {
-    auth: { apiKey: "typesafe-secret" },
-    source: "stored API key",
-  });
-});
-
-test("canonical TypeSafe auth resolver caches auth.json and gives it precedence over env", async () => {
-  let calls = 0;
-  const ctx = {
-    modelRegistry: {
-      async getProviderAuth(provider: string) {
-        calls += 1;
-        assert.equal(provider, TYPESAFE_PROVIDER_ID);
-        return { auth: { apiKey: "from-login" } };
-      },
-    },
-  } as unknown as Parameters<ReturnType<typeof createTypesafeAuthResolver>>[0];
-
-  const resolve = createTypesafeAuthResolver({ env: { TYPESAFE_API_KEY: "from-env" } });
-  assert.equal(await resolve(ctx), "from-login");
-  assert.equal(await resolve(ctx), "from-login");
-  assert.equal(calls, 1, "getProviderAuth must be cached after the first successful resolution");
-
-  const headlessContext = {
-    modelRegistry: { async getProviderAuth() { return undefined; } },
-  } as unknown as Parameters<ReturnType<typeof createTypesafeAuthResolver>>[0];
-  const envResolve = createTypesafeAuthResolver({ env: { TYPESAFE_API_KEY: "from-env" } });
-  assert.equal(await envResolve(headlessContext), "from-env");
+  assert.deepEqual(fake.registeredProviders, []);
 });
 
 test("/rules-review explains that no rule observation exists", async () => {
@@ -1296,29 +1237,6 @@ test("/rules-review identifies a completed retro batch with no candidates", asyn
 test("/rules-show treats an empty completed retro batch as having no proposals", async () => {
   const message = await runRuleCommand([storedProposalEntry()], "rules-show", "any-id");
   assert.equal(message, "No stored rule proposals. Run compaction or /retro-rules first.");
-});
-
-test("createTypesafeAuthResolver retries getProviderAuth until a credential is stored", async () => {
-  let calls = 0;
-  let stored: { auth: { apiKey: string } } | undefined;
-  const ctx = {
-    modelRegistry: {
-      async getProviderAuth() {
-        calls += 1;
-        return stored;
-      },
-    },
-  } as unknown as Parameters<ReturnType<typeof createTypesafeAuthResolver>>[0];
-
-  const resolve = createTypesafeAuthResolver({ env: {} });
-  assert.equal(await resolve(ctx), undefined);
-  assert.equal(await resolve(ctx), undefined);
-  assert.equal(calls, 2, "an unconfigured provider must be retried, never cached as absent");
-
-  stored = { auth: { apiKey: "logged-in-key" } };
-  assert.equal(await resolve(ctx), "logged-in-key");
-  assert.equal(await resolve(ctx), "logged-in-key");
-  assert.equal(calls, 3, "the successful resolution is cached going forward");
 });
 
 function compactableTriggerProjection() {

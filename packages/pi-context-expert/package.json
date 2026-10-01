@@ -34,10 +34,8 @@
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*"
   },
-  "dependencies": {
-    "@a4s/typesafe": "0.1.0"
-  },
   "devDependencies": {
+    "@earendil-works/pi-ai": ">=0.99.1",
     "@earendil-works/pi-coding-agent": ">=0.99.1",
     "@types/node": "26.6.1",
     "tsx": "4.23.13",

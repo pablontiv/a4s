@@ -1,8 +1,4 @@
-import {
-  createTypesafeClient,
-  MissingTypesafeKeyError,
-  type CreateTypesafeClientOptions,
-} from "@a4s/typesafe";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type {
   ChoiceAnswer,
   JevAnswer,
@@ -13,13 +9,17 @@ import type {
   ScoreAnswer,
   ValidatedJevResponse,
 } from "./types.ts";
-import { DEFAULT_JEV_MODEL, TYPESAFE_API_KEY_ENV } from "./types.ts";
+import {
+  DEFAULT_JEV_MODEL,
+  JEV_MODEL_ID,
+  TYPESAFE_PROVIDER_ID,
+} from "./types.ts";
 
 export class JevUnavailableError extends Error {
   readonly code = "missing_key" as const;
 
   constructor() {
-    super(`${TYPESAFE_API_KEY_ENV} is not configured`);
+    super(`Pi classifier ${DEFAULT_JEV_MODEL} is unavailable`);
     this.name = "JevUnavailableError";
   }
 }
@@ -37,7 +37,9 @@ export class JevApiError extends Error {
 }
 
 const PROBABILITY_ROUNDING_TOLERANCE = 0.02;
-const SCORE_ROUNDING_TOLERANCE = 0.05;
+
+type PiModelRegistry = Pick<ExtensionContext["modelRegistry"], "findOfType" | "classify">;
+type PiClassifierContext = Parameters<PiModelRegistry["classify"]>[1];
 
 export class JevValidationError extends Error {
   readonly code = "malformed_response" as const;
@@ -48,62 +50,103 @@ export class JevValidationError extends Error {
   }
 }
 
-export interface TypesafeJevClientOptions {
-  apiKey: string | undefined;
-  /** Per-attempt SDK timeout derived from the owning hook/operation budget. */
+export interface PiJevClientOptions {
+  modelRegistry: PiModelRegistry;
+  /** Per-attempt timeout derived from the owning hook/operation budget. */
   timeoutMs: number;
-  fetch?: CreateTypesafeClientOptions["fetch"];
+  /** Injectable transport observer for tests; Pi still owns request construction and auth. */
+  fetch?: typeof globalThis.fetch;
 }
 
-/** Adapts the canonical SDK client to pi-context-expert's existing JevClient seam. */
-export class TypesafeJevClient implements JevClient {
-  private readonly client: ReturnType<typeof createTypesafeClient>;
+/** Adapts Pi's native classifier runtime to Context Expert's JevClient seam. */
+export class PiJevClient implements JevClient {
+  private readonly model;
 
-  constructor(options: TypesafeJevClientOptions) {
-    try {
-      this.client = createTypesafeClient({
-        apiKey: options.apiKey,
-        model: DEFAULT_JEV_MODEL,
-        timeoutMs: options.timeoutMs,
-        ...(options.fetch ? { fetch: options.fetch } : {}),
-      });
-    } catch (error) {
-      if (error instanceof MissingTypesafeKeyError) throw new JevUnavailableError();
-      throw error;
-    }
+  constructor(private readonly options: PiJevClientOptions) {
+    const model = options.modelRegistry.findOfType("classifier", TYPESAFE_PROVIDER_ID, JEV_MODEL_ID);
+    if (!model) throw new JevUnavailableError();
+    this.model = model;
   }
 
   async evaluate(request: JevRequest, options: { signal: AbortSignal }): Promise<unknown> {
     if (request.model !== DEFAULT_JEV_MODEL) throw new TypeError(`Jev model must be ${DEFAULT_JEV_MODEL}`);
 
-    try {
-      // Retry remains owned by ScheduledJevClient so its bounded stats and
-      // compaction policy do not change when transport moves to the SDK.
-      return await this.client.systemOne(
-        request as Parameters<typeof this.client.systemOne>[0],
-        { signal: options.signal, retry: { maxRetries: 0 } },
+    let responseMetadata: { status: number; headers: Headers } | undefined;
+    const requestFetch = this.options.fetch ?? globalThis.fetch;
+    const observedFetch: typeof globalThis.fetch = async (input, init) => {
+      const response = await requestFetch(input, init);
+      responseMetadata = { status: response.status, headers: response.headers };
+      return response;
+    };
+    const result = await this.options.modelRegistry.classify(
+      this.model,
+      {
+        state: request.state as PiClassifierContext["state"],
+        questions: classifierQuestions(request.questions),
+      },
+      {
+        signal: options.signal,
+        timeoutMs: this.options.timeoutMs,
+        maxRetries: 0,
+        fetch: observedFetch,
+      },
+    );
+    if (result.stopReason !== "stop") {
+      if (options.signal.aborted) throw options.signal.reason ?? new Error("Jev request aborted");
+      if (responseMetadata && responseMetadata.status >= 200 && responseMetadata.status < 300) {
+        throw new JevValidationError("$.native");
+      }
+      throw new JevApiError(
+        responseMetadata?.status,
+        responseMetadata === undefined ? undefined : parseRetryAfterMs(responseMetadata.headers),
       );
-    } catch (error) {
-      if (options.signal.aborted) throw error;
-      const metadata = apiErrorMetadata(error);
-      throw new JevApiError(metadata.status, metadata.retryAfterMs);
     }
+    if (
+      result.provider !== TYPESAFE_PROVIDER_ID ||
+      result.model !== JEV_MODEL_ID ||
+      result.api !== "typesafe-system-one"
+    ) {
+      throw new JevValidationError("$.model");
+    }
+    if (!result.usage) throw new JevValidationError("$.usage");
+
+    const answers: Record<string, JevAnswer> = {};
+    for (const [id, question] of Object.entries(request.questions)) {
+      const answer = result.answers[id];
+      if (!answer) throw new JevValidationError(`$.answers.${id}`);
+      if (question.type === "noul") {
+        if (answer.type !== "bool") throw new JevValidationError(`$.answers.${id}.type`);
+        answers[id] = { type: "noul", noul: answer.probability };
+      } else if (question.type === "choice") {
+        if (answer.type !== "choice") throw new JevValidationError(`$.answers.${id}.type`);
+        answers[id] = {
+          type: "choice",
+          choice: answer.choice,
+          probabilities: answer.probabilities,
+          confidence: answer.confidence,
+        };
+      } else {
+        if (answer.type !== "score") throw new JevValidationError(`$.answers.${id}.type`);
+        const maximum = question.criteria.length - 1;
+        if (maximum <= 0) throw new JevValidationError(`$.questions.${id}.criteria`);
+        // Pi reports classifier scores on the criterion-index scale 0..N-1.
+        // Normalize exactly once at this bridge so A4S keeps its 0..1 contract.
+        answers[id] = { type: "score", score: answer.score / maximum, confidence: answer.confidence };
+      }
+    }
+    return {
+      model: DEFAULT_JEV_MODEL,
+      answers,
+      usage: { input_tokens: result.usage.input, output_tokens: result.usage.output },
+    };
   }
 }
 
-function apiErrorMetadata(error: unknown): { status?: number; retryAfterMs?: number } {
-  if (error === null || typeof error !== "object") return {};
-  const candidate = error as { status?: unknown; retryAfterMs?: unknown; headers?: unknown };
-  const status = typeof candidate.status === "number" ? candidate.status : undefined;
-  const explicitRetryAfter = typeof candidate.retryAfterMs === "number" ? candidate.retryAfterMs : undefined;
-  const headerRetryAfter = candidate.headers instanceof Headers
-    ? parseRetryAfterMs(candidate.headers)
-    : undefined;
-  const retryAfterMs = explicitRetryAfter ?? headerRetryAfter;
-  return {
-    ...(status === undefined ? {} : { status }),
-    ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
-  };
+function classifierQuestions(questions: Readonly<Record<string, JevQuestion>>) {
+  return Object.fromEntries(Object.entries(questions).map(([id, question]) => {
+    if (question.type !== "noul") return [id, question];
+    return [id, { ...question, type: "bool" as const }];
+  }));
 }
 
 export function validateJevResponse(
@@ -144,37 +187,14 @@ export function parseScoreAnswer(
   criteria: readonly string[],
   path = "$",
 ): ScoreAnswer {
+  if (criteria.length < 2) throw new JevValidationError(`${path}.criteria`);
   const answer = requireRecord(value, path);
-  requireExactKeys(answer, ["type", "score", "legend", "probabilities", "confidence"], path);
+  requireExactKeys(answer, ["type", "score", "confidence"], path);
   if (answer.type !== "score") throw new JevValidationError(`${path}.type`);
-
-  const levelKeys = criteria.map((_criterion, index) => String(index));
-  const legend = requireRecord(answer.legend, `${path}.legend`);
-  requireExactKeys(legend, levelKeys, `${path}.legend`);
-  const parsedLegend: Record<string, string> = {};
-  for (const [index, criterion] of criteria.entries()) {
-    const key = String(index);
-    if (legend[key] !== criterion) throw new JevValidationError(`${path}.legend.${key}`);
-    parsedLegend[key] = criterion;
-  }
-
-  const probabilities = parseProbabilityMap(answer.probabilities, levelKeys, `${path}.probabilities`);
-  const score = requireRange(answer.score, 0, criteria.length - 1, `${path}.score`);
-  const confidence = requireRange(answer.confidence, 0, 1, `${path}.confidence`);
-  const weightedScore = levelKeys.reduce(
-    (total, key) => total + Number(key) * (probabilities[key] ?? 0),
-    0,
-  );
-  if (Math.abs(weightedScore - score) > SCORE_ROUNDING_TOLERANCE) {
-    throw new JevValidationError(`${path}.score`);
-  }
-
   return {
     type: "score",
-    score,
-    legend: parsedLegend,
-    probabilities,
-    confidence,
+    score: requireRange(answer.score, 0, 1, `${path}.score`),
+    confidence: requireRange(answer.confidence, 0, 1, `${path}.confidence`),
   };
 }
 

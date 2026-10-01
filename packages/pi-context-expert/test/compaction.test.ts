@@ -6,10 +6,23 @@ import {
   CompactionBuildError,
   observePreparedCompactionRules,
   prepareRuleObservation,
+  recoverRuleSignalBatchesFromDetails,
   stableDigest,
   type JevClient,
 } from "../src/index.ts";
 import { choiceAnswer, scoreAnswer, validJevResponse } from "./fixtures.ts";
+
+test("historical pinned-model compaction details remain readable after native Jev migration", () => {
+  const attemptId = stableDigest({ test: "historical-native-migration" });
+  const sourceDigest = stableDigest({ source: "historical-native-migration" });
+  assert.deepEqual(recoverRuleSignalBatchesFromDetails({
+    schema: "a4s.jev-compaction-details/v1",
+    attemptId,
+    sourceDigest,
+    jevModel: "jev-1.13.0",
+    ruleSignalBatches: [],
+  }), { attemptId, sourceDigest, batches: [] });
+});
 
 test("basic preserves the established deterministic compaction fixture", async () => {
   const plan = prepareRuleObservation({

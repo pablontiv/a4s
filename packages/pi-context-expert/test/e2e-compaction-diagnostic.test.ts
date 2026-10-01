@@ -16,7 +16,7 @@ function notification(description: string): unknown {
 }
 
 test("classifies only safeNotify's bounded compaction cancellation categories", () => {
-  assert.equal(classifySafeCompactionNotification(notification("Jev is unavailable (missing TYPESAFE_API_KEY)")), "missing_key");
+  assert.equal(classifySafeCompactionNotification(notification("Jev is unavailable (missing Pi TypeSafe credentials)")), "missing_key");
   assert.equal(classifySafeCompactionNotification(notification("the bounded analysis timed out")), "timeout");
   assert.equal(classifySafeCompactionNotification(notification("a model response failed strict validation")), "validation");
   assert.equal(classifySafeCompactionNotification(notification("the sanitized state or summary exceeded configured bounds")), "oversized_state");

@@ -1,17 +1,35 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import type {
+  ClassifierApi,
+  ClassifierContext,
+  ClassifierModel,
+  ClassifierResult,
+  ModelsClassifierOptions,
+} from "@earendil-works/pi-ai";
 import {
   DEFAULT_JEV_MODEL,
   JevApiError,
   JevUnavailableError,
+  JevValidationError,
   OperationAbortedError,
+  PiJevClient,
   ScheduledJevClient,
-  TYPESAFE_API_KEY_ENV,
-  TypesafeJevClient,
   validateJevResponse,
   type JevRequest,
 } from "../src/index.ts";
-import { validJevResponse } from "./fixtures.ts";
+
+const MODEL = {
+  type: "classifier",
+  provider: "typesafe",
+  id: "jev-latest",
+  name: "Jev",
+  api: "typesafe-system-one",
+  baseUrl: "https://api.typesafe.ai/v1/",
+  input: ["text"],
+  contextWindow: 64_000,
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+} as unknown as ClassifierModel<"typesafe-system-one">;
 
 function request(): JevRequest {
   return {
@@ -19,45 +37,174 @@ function request(): JevRequest {
     model: DEFAULT_JEV_MODEL,
     questions: {
       candidate: { type: "noul", instructions: "Is this a reusable rule?" },
+      status: {
+        type: "choice",
+        instructions: "What is its status?",
+        criteria: { current: "Current", superseded: "Superseded" },
+      },
+      continuity: {
+        type: "score",
+        instructions: "How much continuity does it provide?",
+        criteria: ["None", "Minor", "Useful", "Essential"],
+      },
     },
   };
 }
 
-test("canonical TypeSafe bridge pins the model, uses the SDK request shape, and remains strictly validatable", async () => {
-  const seen: Array<{ input: string; init: RequestInit | undefined }> = [];
-  const expected = validJevResponse(request());
-  const client = new TypesafeJevClient({
-    apiKey: "test-key-not-a-real-secret",
-    timeoutMs: 180_000,
-    fetch: async (input, init) => {
-      seen.push({ input: String(input), init });
-      return new Response(JSON.stringify(expected), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
+function successfulResult(): ClassifierResult {
+  return {
+    api: "typesafe-system-one",
+    provider: "typesafe",
+    model: "jev-latest",
+    stopReason: "stop",
+    timestamp: 1,
+    answers: {
+      candidate: { type: "bool", probability: 0.9 },
+      status: {
+        type: "choice",
+        choice: "current",
+        probabilities: { current: 0.8, superseded: 0.2 },
+        confidence: 0.7,
+      },
+      continuity: { type: "score", score: 2.5, confidence: 0.75 },
+    },
+    usage: {
+      input: 100,
+      output: 10,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 110,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+  };
+}
+
+function registry(result: ClassifierResult | ((options: ModelsClassifierOptions | undefined) => Promise<ClassifierResult>)) {
+  const calls: Array<{
+    model: ClassifierModel<ClassifierApi>;
+    context: ClassifierContext;
+    options: ModelsClassifierOptions | undefined;
+  }> = [];
+  return {
+    calls,
+    findOfType(type: string, provider: string, id: string) {
+      assert.equal(type, "classifier");
+      assert.equal(provider, "typesafe");
+      assert.equal(id, "jev-latest");
+      return MODEL;
+    },
+    async classify(
+      model: ClassifierModel<ClassifierApi>,
+      context: ClassifierContext,
+      options?: ModelsClassifierOptions,
+    ): Promise<ClassifierResult> {
+      calls.push({ model, context, options });
+      return typeof result === "function" ? result(options) : result;
+    },
+  } as unknown as ConstructorParameters<typeof PiJevClient>[0]["modelRegistry"] & { calls: typeof calls };
+}
+
+test("Pi Jev bridge selects typesafe/jev-latest and converts Pi classifier answers", async () => {
+  const native = registry(successfulResult());
+  const client = new PiJevClient({ modelRegistry: native, timeoutMs: 180_000 });
+  const signal = new AbortController().signal;
+
+  const raw = await client.evaluate(request(), { signal });
+  const result = validateJevResponse(raw, request().questions);
+
+  assert.equal(native.calls.length, 1);
+  assert.equal(native.calls[0]?.model, MODEL);
+  assert.deepEqual(native.calls[0]?.context, {
+    state: { message: "sanitized" },
+    questions: {
+      candidate: { type: "bool", instructions: "Is this a reusable rule?" },
+      status: {
+        type: "choice",
+        instructions: "What is its status?",
+        criteria: { current: "Current", superseded: "Superseded" },
+      },
+      continuity: {
+        type: "score",
+        instructions: "How much continuity does it provide?",
+        criteria: ["None", "Minor", "Useful", "Essential"],
+      },
     },
   });
-  const controller = new AbortController();
-  const result = await client.evaluate(request(), { signal: controller.signal });
-
-  assert.deepEqual(validateJevResponse(result, request().questions), expected);
-  assert.equal(seen.length, 1);
-  assert.equal(seen[0]?.input, "https://api.typesafe.ai/v1/systemone");
-  assert.equal(new Headers(seen[0]?.init?.headers).get("authorization"), "Bearer test-key-not-a-real-secret");
-  assert.equal(JSON.parse(String(seen[0]?.init?.body)).model, "jev-1.13.0");
-  assert.equal(JSON.parse(String(seen[0]?.init?.body)).state.message, "sanitized");
+  assert.equal(native.calls[0]?.options?.signal, signal);
+  assert.equal(native.calls[0]?.options?.timeoutMs, 180_000);
+  assert.equal(native.calls[0]?.options?.maxRetries, 0);
+  assert.equal(result.model, "typesafe/jev-latest");
+  assert.deepEqual(result.answers.candidate, { type: "noul", noul: 0.9 });
+  assert.deepEqual(result.answers.status, successfulResult().answers.status);
+  assert.deepEqual(result.answers.continuity, { type: "score", score: 2.5 / 3, confidence: 0.75 });
+  assert.deepEqual(result.usage, { input_tokens: 100, output_tokens: 10 });
 });
 
-test("canonical TypeSafe bridge preserves scheduler-visible rate-limit metadata without SDK retries", async () => {
-  const secret = "test-key-not-a-real-secret";
-  const content = "sanitized-content-sentinel";
-  let calls = 0;
-  const client = new TypesafeJevClient({
-    apiKey: secret,
+test("Pi Jev bridge rejects a stopped result from the wrong native model identity", async () => {
+  const mismatched = successfulResult();
+  mismatched.model = "jev-other";
+  const client = new PiJevClient({ modelRegistry: registry(mismatched), timeoutMs: 180_000 });
+
+  await assert.rejects(
+    client.evaluate(request(), { signal: new AbortController().signal }),
+    (error: unknown) => error instanceof JevValidationError && error.path === "$.model",
+  );
+});
+
+test("Pi Jev bridge rejects a stopped result without usage accounting", async () => {
+  const withoutUsage = successfulResult();
+  delete withoutUsage.usage;
+  const client = new PiJevClient({ modelRegistry: registry(withoutUsage), timeoutMs: 180_000 });
+
+  await assert.rejects(
+    client.evaluate(request(), { signal: new AbortController().signal }),
+    (error: unknown) => error instanceof JevValidationError && error.path === "$.usage",
+  );
+});
+
+test("Pi Jev bridge rejects a native score outside its criterion-index range", async () => {
+  const outOfRange = successfulResult();
+  outOfRange.answers.continuity = { type: "score", score: 4, confidence: 1 };
+  const client = new PiJevClient({ modelRegistry: registry(outOfRange), timeoutMs: 180_000 });
+
+  const raw = await client.evaluate(request(), { signal: new AbortController().signal });
+  assert.throws(
+    () => validateJevResponse(raw, request().questions),
+    (error: unknown) => error instanceof JevValidationError && error.path === "$.answers.continuity.score",
+  );
+});
+
+test("Pi Jev bridge fails closed when the native classifier model is unavailable", () => {
+  const native = {
+    findOfType() { return undefined; },
+    async classify() { throw new Error("must not classify"); },
+  };
+  assert.throws(
+    () => new PiJevClient({ modelRegistry: native, timeoutMs: 180_000 }),
+    JevUnavailableError,
+  );
+});
+
+test("Pi Jev bridge preserves scheduler-visible rate-limit metadata without Pi retries", async () => {
+  let fetchCalls = 0;
+  const native = registry(async (options) => {
+    await options?.fetch?.("https://api.typesafe.ai/v1/systemone", {});
+    return {
+      api: "typesafe-system-one",
+      provider: "typesafe",
+      model: "jev-latest",
+      answers: {},
+      stopReason: "error",
+      errorMessage: "System One API error",
+      timestamp: 1,
+    };
+  });
+  const client = new PiJevClient({
+    modelRegistry: native,
     timeoutMs: 180_000,
     fetch: async () => {
-      calls += 1;
-      return new Response(content, { status: 429, headers: { "retry-after-ms": "1250" } });
+      fetchCalls += 1;
+      return new Response("overloaded", { status: 429, headers: { "retry-after-ms": "1250" } });
     },
   });
 
@@ -67,166 +214,73 @@ test("canonical TypeSafe bridge preserves scheduler-visible rate-limit metadata 
       assert.ok(error instanceof JevApiError);
       assert.equal(error.status, 429);
       assert.equal(error.retryAfterMs, 1_250);
-      assert.doesNotMatch(String(error), new RegExp(`${secret}|${content}`));
       return true;
     },
   );
-  assert.equal(calls, 1, "the existing context-expert scheduler owns retry policy");
+  assert.equal(fetchCalls, 1);
+  assert.equal(native.calls[0]?.options?.maxRetries, 0);
 });
 
-test(`canonical TypeSafe bridge fails before fetch when ${TYPESAFE_API_KEY_ENV} is absent`, () => {
-  let called = false;
-  assert.throws(
-    () => new TypesafeJevClient({
-      apiKey: "   ",
-      timeoutMs: 180_000,
-      fetch: async () => {
-        called = true;
-        throw new Error("must not be called");
-      },
-    }),
-    JevUnavailableError,
-  );
-  assert.equal(called, false);
-});
-
-test("canonical TypeSafe bridge rejects a non-pinned request model before fetch", async () => {
-  let called = false;
-  const client = new TypesafeJevClient({
-    apiKey: "test-key-not-a-real-secret",
-    timeoutMs: 180_000,
-    fetch: async () => {
-      called = true;
-      throw new Error("must not be called");
-    },
+test("Pi Jev bridge treats a successful HTTP response with invalid provider output as malformed", async () => {
+  const native = registry(async (options) => {
+    await options?.fetch?.("https://api.typesafe.ai/v1/systemone", {});
+    return {
+      api: "typesafe-system-one",
+      provider: "typesafe",
+      model: "jev-latest",
+      answers: {},
+      stopReason: "error",
+      errorMessage: "System One API returned an unexpected response",
+      timestamp: 1,
+    };
   });
-  const invalid = { ...request(), model: "jev-latest" } as unknown as JevRequest;
+  const client = new PiJevClient({
+    modelRegistry: native,
+    timeoutMs: 180_000,
+    fetch: async () => new Response("{}", { status: 200 }),
+  });
+
+  await assert.rejects(
+    client.evaluate(request(), { signal: new AbortController().signal }),
+    JevValidationError,
+  );
+});
+
+test("Pi Jev bridge rejects a request for any non-native model selector", async () => {
+  const native = registry(successfulResult());
+  const client = new PiJevClient({ modelRegistry: native, timeoutMs: 180_000 });
+  const invalid = { ...request(), model: "jev-1.13.0" } as unknown as JevRequest;
+
   await assert.rejects(
     client.evaluate(invalid, { signal: new AbortController().signal }),
     new TypeError(`Jev model must be ${DEFAULT_JEV_MODEL}`),
   );
-  assert.equal(called, false);
+  assert.equal(native.calls.length, 0);
 });
 
-test("canonical TypeSafe bridge preserves 529 Retry-After seconds without SDK retries", async () => {
-  let calls = 0;
-  const client = new TypesafeJevClient({
-    apiKey: "test-key-not-a-real-secret",
-    timeoutMs: 180_000,
-    fetch: async () => {
-      calls += 1;
-      return new Response("overloaded", {
-        status: 529,
-        headers: { "retry-after": "2" },
-      });
-    },
-  });
-
-  await assert.rejects(
-    client.evaluate(request(), { signal: new AbortController().signal }),
-    (error: unknown) => {
-      assert.ok(error instanceof JevApiError);
-      assert.equal(error.status, 529);
-      assert.equal(error.retryAfterMs, 2_000);
-      return true;
-    },
-  );
-  assert.equal(calls, 1);
-});
-
-test("canonical TypeSafe bridge maps a transport throw to a status-less JevApiError once", async () => {
-  let calls = 0;
-  const client = new TypesafeJevClient({
-    apiKey: "test-key-not-a-real-secret",
-    timeoutMs: 180_000,
-    fetch: async () => {
-      calls += 1;
-      throw new Error("sanitized transport failure");
-    },
-  });
-
-  await assert.rejects(
-    client.evaluate(request(), { signal: new AbortController().signal }),
-    (error: unknown) => {
-      assert.ok(error instanceof JevApiError);
-      assert.equal(error.status, undefined);
-      assert.equal(error.retryAfterMs, undefined);
-      return true;
-    },
-  );
-  assert.equal(calls, 1);
-});
-
-test("configured bridge timeout aborts SDK transport without taking retry ownership", async () => {
-  let calls = 0;
-  let transportAborted = false;
-  const client = new TypesafeJevClient({
-    apiKey: "test-key-not-a-real-secret",
-    timeoutMs: 10,
-    fetch: async (_input, init) => new Promise<Response>((_resolve, reject) => {
-      calls += 1;
-      const signal = init?.signal;
-      signal?.addEventListener("abort", () => {
-        transportAborted = true;
-        reject(signal.reason);
-      }, { once: true });
-      setTimeout(() => reject(new Error("configured timeout did not reach transport")), 100);
-    }),
-  });
-
-  await assert.rejects(
-    client.evaluate(request(), { signal: new AbortController().signal }),
-    (error: unknown) => error instanceof JevApiError && error.status === undefined,
-  );
-  assert.equal(transportAborted, true);
-  assert.equal(calls, 1);
-});
-
-test("caller abort reaches SDK transport and is not mapped to JevApiError", async () => {
+test("scheduler normalizes a Pi classifier caller abort", async () => {
   const caller = new AbortController();
-  let transportSignal: AbortSignal | undefined;
-  const client = new TypesafeJevClient({
-    apiKey: "test-key-not-a-real-secret",
-    timeoutMs: 180_000,
-    fetch: async (_input, init) => new Promise<Response>((_resolve, reject) => {
-      transportSignal = init?.signal ?? undefined;
-      transportSignal?.addEventListener("abort", () => reject(transportSignal?.reason), { once: true });
-      queueMicrotask(() => caller.abort());
-    }),
+  const native = registry(async () => {
+    caller.abort(new Error("caller aborted"));
+    return {
+      api: "typesafe-system-one",
+      provider: "typesafe",
+      model: "jev-latest",
+      answers: {},
+      stopReason: "aborted",
+      errorMessage: "aborted",
+      timestamp: 1,
+    };
   });
-
-  await assert.rejects(
-    client.evaluate(request(), { signal: caller.signal }),
-    (error: unknown) => {
-      assert.equal(error instanceof JevApiError, false);
-      assert.equal((error as Error).name, "APIUserAbortError");
-      return true;
-    },
+  const scheduler = new ScheduledJevClient(
+    new PiJevClient({ modelRegistry: native, timeoutMs: 180_000 }),
+    { maxRetries: 3 },
   );
-  assert.equal(transportSignal?.aborted, true);
-});
-
-test("scheduler normalizes an in-flight SDK caller abort to OperationAbortedError", async () => {
-  const caller = new AbortController();
-  let transportAborted = false;
-  const scheduler = new ScheduledJevClient(new TypesafeJevClient({
-    apiKey: "test-key-not-a-real-secret",
-    timeoutMs: 180_000,
-    fetch: async (_input, init) => new Promise<Response>((_resolve, reject) => {
-      const signal = init?.signal;
-      signal?.addEventListener("abort", () => {
-        transportAborted = true;
-        reject(signal.reason);
-      }, { once: true });
-      queueMicrotask(() => caller.abort());
-    }),
-  }), { maxRetries: 3 });
 
   await assert.rejects(
     scheduler.evaluate(request(), { signal: caller.signal }),
     OperationAbortedError,
   );
-  assert.equal(transportAborted, true);
   assert.deepEqual(scheduler.getStats(), {
     maxConcurrency: 1,
     maxRetries: 3,

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { existsSync, readFileSync } from "node:fs";
 import test from "node:test";
 import {
   VERSION,
@@ -9,6 +10,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { createCompatiblePiFake } from "./fixtures.ts";
 
+const ROOT = new URL("../../../", import.meta.url);
 const MINIMUM_PI_VERSION = "0.99.1";
 const MINIMUM_PI_RELEASE = [0, 99, 1] as const;
 
@@ -24,6 +26,31 @@ function supportsPiVersion(version: string): boolean {
       release[2] >= MINIMUM_PI_RELEASE[2])
   );
 }
+
+test("Context Expert has no duplicate private TypeSafe runtime", () => {
+  const contextManifest = JSON.parse(readFileSync(new URL("packages/pi-context-expert/package.json", ROOT), "utf8")) as {
+    dependencies?: Record<string, string>;
+  };
+  const lock = JSON.parse(readFileSync(new URL("package-lock.json", ROOT), "utf8")) as {
+    packages: Record<string, unknown>;
+  };
+  assert.equal(contextManifest.dependencies?.["@a4s/typesafe"], undefined);
+  assert.equal(existsSync(new URL("packages/typesafe", ROOT)), false);
+  assert.equal(lock.packages["packages/typesafe"], undefined);
+  assert.equal(lock.packages["node_modules/@typesafe-ai/sdk"], undefined);
+});
+
+test("development resolves Pi 1.0 while preserving the inclusive minimum", () => {
+  const manifest = JSON.parse(readFileSync(new URL("package.json", ROOT), "utf8")) as {
+    devDependencies: Record<string, string>;
+  };
+  const lock = JSON.parse(readFileSync(new URL("package-lock.json", ROOT), "utf8")) as {
+    packages: Record<string, { version?: string }>;
+  };
+  assert.equal(manifest.devDependencies["@earendil-works/pi-coding-agent"], ">=0.99.1");
+  assert.equal(lock.packages["node_modules/@earendil-works/pi-coding-agent"]?.version, "1.0.0");
+  assert.equal(lock.packages["node_modules/@earendil-works/pi-ai"]?.version, "1.0.0");
+});
 
 test("the runtime contract declares an inclusive minimum instead of an exact Pi version", () => {
   for (const supported of [MINIMUM_PI_VERSION, "0.99.2", "0.100.0", "1.0.0", "0.99.1+build.1"]) {

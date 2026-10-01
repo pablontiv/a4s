@@ -177,44 +177,19 @@ test("1000-message planning preserves retention coverage and verified Jev budget
   }
 });
 
-test("Score parsing validates legend, distribution, weighted score, and exact fields", () => {
+test("Pi-normalized Score parsing validates bounds and exact fields", () => {
   const criteria = ["low", "medium", "high"];
-  const parsed = parseScoreAnswer({
-    type: "score",
-    score: 1.6,
-    legend: { "0": "low", "1": "medium", "2": "high" },
-    probabilities: { "0": 0.1, "1": 0.2, "2": 0.7 },
-    confidence: 0.7,
-  }, criteria);
-  assert.equal(parsed.score, 1.6);
-
-  const rounded = parseScoreAnswer({
-    type: "score",
-    score: 1.42,
-    legend: { "0": "low", "1": "medium", "2": "high", "3": "critical" },
-    probabilities: { "0": 0.39, "1": 0.07, "2": 0.28, "3": 0.26 },
-    confidence: 0,
-  }, ["low", "medium", "high", "critical"]);
-  assert.equal(rounded.score, 1.42);
+  const parsed = parseScoreAnswer({ type: "score", score: 0.8, confidence: 0.7 }, criteria);
+  assert.deepEqual(parsed, { type: "score", score: 0.8, confidence: 0.7 });
 
   assert.throws(() =>
-    parseScoreAnswer({
-      type: "score",
-      score: 1.2,
-      legend: { "0": "low", "1": "medium", "2": "high" },
-      probabilities: { "0": 0.1, "1": 0.2, "2": 0.7 },
-      confidence: 0.7,
-    }, criteria),
+    parseScoreAnswer({ type: "score", score: 1.2, confidence: 0.7 }, criteria),
   );
   assert.throws(() =>
-    parseScoreAnswer({
-      type: "score",
-      score: 1.6,
-      legend: { "0": "low", "1": "medium", "2": "wrong" },
-      probabilities: { "0": 0.1, "1": 0.2, "2": 0.7 },
-      confidence: 0.7,
-      extra: true,
-    }, criteria),
+    parseScoreAnswer({ type: "score", score: 0.8, confidence: 0.7, extra: true }, criteria),
+  );
+  assert.throws(() =>
+    parseScoreAnswer({ type: "score", score: 0.8, confidence: 0.7 }, ["only"]),
   );
 });
 
