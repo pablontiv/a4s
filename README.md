@@ -17,7 +17,7 @@ El monorepo reúne capacidades que pueden evolucionar a ritmos distintos. Cada u
 - [`output-styles/`](output-styles/) define contratos de interacción.
 - [`src/`](src/) contiene el runtime experimental E0 y sus adapters.
 - [`packages/pi-context-expert/`](packages/pi-context-expert/) contiene una extensión Pi para gestión de contexto, compaction y propuestas de reglas review-only.
-- [`packages/typesafe/`](packages/typesafe/) contiene la superficie TypeSafe/Jev canónica gobernada por ADR 0020.
+- [`packages/typesafe/`](packages/typesafe/) contiene la superficie TypeSafe/Jev canónica; [ADR 0020](.workspace/docs/adr/0020-canonizar-superficie-typesafe-en-paquete-a4s.md) conserva su contexto y procedencia arquitectónica, sin gobernar la forma de trabajo.
 - [`test/`](test/) verifica runtime y contratos del repositorio.
 
 ## Integraciones
@@ -27,22 +27,22 @@ Pi, Herdr, TypeSafe, Jev, Rootline y Backscroll se integran mediante contratos e
 ## Modelo
 
 ```text
-Engineering Handbook 1.4
-        → especialización
-profiles/pablontiv/PROFILE.md
-        → instancia efectiva
-.workspace/config.yaml
-        → materialización
-capacidades A4S + integraciones externas
+única autoridad normativa del WoW: .workspace/config.yaml
+derivados no normativos: README + profiles/pablontiv/PROFILE.md
+mecanismos sin reglas propias: skills + methods
+referencia de procedencia: Engineering Handbook 1.4
+producto: capacidades A4S + integraciones externas
 ```
 
 La configuración, los artefactos portátiles, los paquetes y el runtime experimental conservan límites explícitos. Los providers externos conservan su propia autoridad; A4S no los reemplaza ni se define por ellos.
 
-## Dirección vigente
+## Registros y referencias
 
-- [North Star](.workspace/docs/adr/0021-adoptar-monorepo-incremental-para-outer-harnesses.md)
-- [Gate runtime-first](.workspace/docs/adr/0009-evaluar-runtime-externo-antes-de-construir-control-plane.md)
-- [Arquitectura v0.9](.workspace/docs/specs/a4s-architecture-spec-v0.9.md)
+Estos enlaces conservan contexto, decisiones y diseño. Los ADRs y la spec son registros no normativos; las referencias tampoco gobiernan la forma de trabajo:
+
+- [Registro North Star](.workspace/docs/adr/0021-adoptar-monorepo-incremental-para-outer-harnesses.md)
+- [Registro sobre runtime-first](.workspace/docs/adr/0009-evaluar-runtime-externo-antes-de-construir-control-plane.md)
+- [Spec de arquitectura v0.9](.workspace/docs/specs/a4s-architecture-spec-v0.9.md)
 - [Referencias a proyectos relacionados](.workspace/docs/references/related-projects.md)
 
 Los ADRs y diseños del antiguo repositorio Handbook se preservan como historia en [`.workspace/docs/history/handbook/`](.workspace/docs/history/handbook/); no forman un segundo decision log.
