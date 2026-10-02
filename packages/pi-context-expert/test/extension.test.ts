@@ -35,6 +35,7 @@ interface StoredEntry {
   customType?: string;
   data?: unknown;
   details?: unknown;
+  message?: unknown;
 }
 
 function createFakePi(initialEntries: StoredEntry[] = []) {
@@ -1408,6 +1409,96 @@ test("agent_settled resolves active-model keepRecentTokens from Pi project setti
   }
 });
 
+test("agent_settled auto trigger ignores an aborted assistant branch tip", async () => {
+  const jev = new CompactTriggerJev();
+  const fake = createFakePi([{
+    type: "message",
+    message: { role: "assistant", stopReason: "aborted", content: [] },
+  }]);
+  registerPiContextExpert(fake.pi, {
+    jevClient: jev,
+    config: { "trigger.mode": "auto" },
+    trigger: {
+      editorHasText: () => false,
+      minimumContextRatio: 0.2,
+      resolveCompactionSettings: () => ({ keepRecentTokens: 20_000 }),
+    },
+  });
+  let compactCalls = 0;
+  const { context } = createContext(fake.entries, {
+    projectionEntries: compactableTriggerProjection(),
+  });
+  const triggerContext = {
+    ...context,
+    hasUI: true,
+    isIdle: () => true,
+    hasPendingMessages: () => false,
+    getContextUsage: () => ({ tokens: 40_000, contextWindow: 128_000, percent: 31.25 }),
+    signal: undefined,
+    compact: () => { compactCalls += 1; },
+  };
+
+  await fake.handlers.get("agent_settled")?.({ type: "agent_settled" }, triggerContext);
+
+  assert.equal(compactCalls, 0);
+  assert.equal(jev.calls, 0, "the aborted-turn gate must run before Jev");
+});
+
+test("agent_settled auto trigger retries failure and starts cooldown only after success", async () => {
+  const jev = new CompactTriggerJev();
+  const fake = createFakePi();
+  registerPiContextExpert(fake.pi, {
+    jevClient: jev,
+    config: { "trigger.mode": "auto" },
+    trigger: {
+      editorHasText: () => false,
+      minimumContextRatio: 0.2,
+      resolveCompactionSettings: () => ({ keepRecentTokens: 20_000 }),
+    },
+    now: () => new Date("2026-09-22T12:00:00.000Z"),
+  });
+  let compactCalls = 0;
+  let onComplete: ((result: never) => void) | undefined;
+  let onError: ((error: Error) => void) | undefined;
+  const { context } = createContext(fake.entries, {
+    projectionEntries: compactableTriggerProjection(),
+  });
+  const triggerContext = {
+    ...context,
+    hasUI: true,
+    isIdle: () => true,
+    hasPendingMessages: () => false,
+    getContextUsage: () => ({ tokens: 40_000, contextWindow: 128_000, percent: 31.25 }),
+    signal: undefined,
+    compact: (callbacks?: {
+      onComplete?: (result: never) => void;
+      onError?: (error: Error) => void;
+    }) => {
+      compactCalls += 1;
+      onComplete = callbacks?.onComplete;
+      onError = callbacks?.onError;
+    },
+  };
+
+  await Promise.all([
+    fake.handlers.get("agent_settled")?.({ type: "agent_settled" }, triggerContext),
+    fake.handlers.get("agent_settled")?.({ type: "agent_settled" }, triggerContext),
+  ]);
+  assert.equal(jev.calls, 1, "overlapping settlements must share one automatic attempt");
+  assert.equal(compactCalls, 1, "an in-flight automatic compaction must not duplicate");
+  assert.equal(fake.entries.some((entry) => entry.customType?.includes("cooldown")), false);
+
+  onError?.(new Error("compaction failed"));
+  await fake.handlers.get("agent_settled")?.({ type: "agent_settled" }, triggerContext);
+  assert.equal(compactCalls, 2, "a failed automatic compaction must be retryable");
+  assert.equal(fake.entries.some((entry) => entry.customType?.includes("cooldown")), false);
+
+  onComplete?.({} as never);
+  await fake.handlers.get("agent_settled")?.({ type: "agent_settled" }, triggerContext);
+  assert.equal(compactCalls, 2, "a successful automatic compaction starts the cooldown");
+  assert.equal(fake.entries.some((entry) => entry.customType?.includes("cooldown")), true);
+});
+
 test("agent_settled auto trigger treats persisted config as consent and enters session_before_compact", async () => {
   const jev = new ValidFakeJev();
   const fake = createFakePi();
@@ -1433,16 +1524,18 @@ test("agent_settled auto trigger treats persisted config as consent and enters s
     hasPendingMessages: () => false,
     getContextUsage: () => ({ tokens: 40_000, contextWindow: 128_000, percent: 31.25 }),
     signal: undefined,
-    compact: async () => {
+    compact: async (callbacks?: { onComplete?: (result: never) => void }) => {
       compactCalls += 1;
       beforeCompactCalls += 1;
       await fake.handlers.get("session_before_compact")?.(compactionEvent(), triggerContext);
+      callbacks?.onComplete?.({} as never);
     },
   };
 
   assert.equal(fake.commands.has("compaction-trigger-acknowledge"), false);
 
   await fake.handlers.get("agent_settled")?.({ type: "agent_settled" }, triggerContext);
+  await new Promise((resolve) => setImmediate(resolve));
   assert.equal(compactCalls, 1);
   assert.equal(beforeCompactCalls, 1, "auto uses ctx.compact and the existing compaction hook");
   assert.equal(
