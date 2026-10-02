@@ -25,7 +25,6 @@ type Block = {
 type Presentation = { density: "full" | "summary" | "hidden" };
 type EventName = "session_start" | "session_shutdown";
 type EventHandler = () => void | Promise<void>;
-type CommandHandler = (args: string, context: FakeContext) => void | Promise<void>;
 type ShortcutHandler = (context: FakeContext) => void | Promise<void>;
 type FakeContext = { ui: { notify(message: string, type?: Notification["type"]): void } };
 
@@ -40,7 +39,7 @@ function createHarness(options: {
 	const definitions = new Map<string, SettingDefinition>();
 	const listeners = new Map<string, Set<(value: unknown) => void>>();
 	const events = new Map<EventName, EventHandler[]>();
-	const commands = new Map<string, { description: string; handler: CommandHandler }>();
+	const commands = new Set<string>();
 	const shortcuts = new Map<string, { description?: string; handler: ShortcutHandler }>();
 	const writes: SettingWrite[] = [];
 	const notifications: Notification[] = [];
@@ -95,8 +94,8 @@ function createHarness(options: {
 			return () => {};
 		},
 		getSettings: () => rawSettings,
-		registerCommand(name: string, command: { description: string; handler: CommandHandler }) {
-			commands.set(name, command);
+		registerCommand(name: string) {
+			commands.add(name);
 		},
 		registerShortcut(key: string, shortcut: { description?: string; handler: ShortcutHandler }) {
 			shortcuts.set(key, shortcut);
@@ -112,11 +111,6 @@ function createHarness(options: {
 	};
 	const emit = async (event: EventName): Promise<void> => {
 		for (const handler of events.get(event) ?? []) await handler();
-	};
-	const runCommand = async (args: string): Promise<void> => {
-		const command = commands.get("tool-rows");
-		assert.ok(command);
-		await command.handler(args, context);
 	};
 	const runShortcut = async (): Promise<void> => {
 		const shortcut = shortcuts.get("ctrl+alt+o");
@@ -138,7 +132,6 @@ function createHarness(options: {
 		resolve,
 		set,
 		emit,
-		runCommand,
 		runShortcut,
 		resolvePresentation,
 		get invalidations() {
@@ -192,29 +185,15 @@ describe("A4S tool row presentation extension public contract", () => {
 		assert.equal(Check(marker.schema, "true"), false);
 	});
 
-	it("preserves the command and shortcut behavior for all three modes", async () => {
+	it("registers no command and cycles the native mode setting through all three values", async () => {
 		const harness = createHarness({ global: { [MIGRATION_KEY]: true } });
-		assert.equal(harness.commands.get("tool-rows")?.description, "Show or set tool row presentation (full, compact, or hidden)");
+		assert.deepEqual([...harness.commands], []);
 		assert.equal(harness.shortcuts.get("ctrl+alt+o")?.description, "Cycle tool row presentation");
 
-		await harness.runCommand("   ");
-		assert.deepEqual(harness.notifications.at(-1), { message: "Tool rows: full", type: "info" });
-		assert.equal(harness.writes.length, 0);
-
-		await harness.runCommand("compact");
-		assert.equal(harness.resolve(MODE_KEY), "compact");
-		assert.deepEqual(harness.writes.at(-1), { key: MODE_KEY, value: "compact", scope: "global" });
-
-		await harness.runCommand("verbose");
-		assert.equal(harness.resolve(MODE_KEY), "compact");
-		assert.deepEqual(harness.notifications.at(-1), {
-			message: "Usage: /tool-rows [full|compact|hidden]",
-			type: "error",
-		});
-
-		for (const expected of ["hidden", "full", "compact"] as const) {
+		for (const expected of ["compact", "hidden", "full"] as const) {
 			await harness.runShortcut();
 			assert.equal(harness.resolve(MODE_KEY), expected);
+			assert.deepEqual(harness.writes.at(-1), { key: MODE_KEY, value: expected, scope: "global" });
 			assert.deepEqual(harness.notifications.at(-1), { message: `Tool rows: ${expected}`, type: "info" });
 		}
 	});

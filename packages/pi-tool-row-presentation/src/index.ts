@@ -67,23 +67,6 @@ export default function toolRowPresentation(pi: ExtensionAPI): void {
 		unsubscribe = undefined;
 	});
 
-	pi.registerCommand("tool-rows", {
-		description: "Show or set tool row presentation (full, compact, or hidden)",
-		handler: async (args, ctx) => {
-			const requested = args.trim();
-			if (requested === "") {
-				ctx.ui.notify(`Tool rows: ${mode.get()}`, "info");
-				return;
-			}
-			if (!isToolRowsMode(requested)) {
-				ctx.ui.notify("Usage: /tool-rows [full|compact|hidden]", "error");
-				return;
-			}
-			mode.set(requested, { scope: "global" });
-			ctx.ui.notify(`Tool rows: ${requested}`, "info");
-		},
-	});
-
 	pi.registerShortcut("ctrl+alt+o", {
 		description: "Cycle tool row presentation",
 		handler: (ctx) => {

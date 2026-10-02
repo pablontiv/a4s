@@ -1,6 +1,6 @@
 # A4S Pi Tool Row Presentation
 
-Private Pi extension that controls how tool calls appear in the interactive transcript. It contributes the native `Tool rows` setting and preserves `/tool-rows` plus `Ctrl+Alt+O` as direct controls for `full`, `compact`, and `hidden` modes.
+Private Pi extension that controls how tool calls appear in the interactive transcript. Pi's native `Settings > Tool rows` row is the authoritative UI for choosing `full`, `compact`, or `hidden`; `Ctrl+Alt+O` cycles through the same persisted setting as a quick shortcut. The extension registers no slash command.
 
 `compact` requests Pi's `summary` transcript density. `hidden` also hides Pi's orphaned-thinking placeholder; the other modes leave that placeholder visible.
 
@@ -12,20 +12,18 @@ This package is a pre-release candidate and is not currently installable against
 pi -e packages/pi-tool-row-presentation/src/index.ts
 ```
 
-Then use:
+Open Pi's native settings and select `Tool rows`, or press `Ctrl+Alt+O` to cycle `full` -> `compact` -> `hidden` -> `full`. Both surfaces use the same global `a4s.tool-rows.mode` setting.
 
-```text
-/tool-rows
-/tool-rows full
-/tool-rows compact
-/tool-rows hidden
-```
-
-The `Ctrl+Alt+O` shortcut cycles through the same modes. Values are stored globally under `a4s.tool-rows.mode`; `a4s.tool-rows.migrated-v1` records one-time migration of Pi's legacy core `toolRowsMode` value. The extension does not migrate any other extension namespace.
+`a4s.tool-rows.migrated-v1` records one-time migration of Pi's legacy core `toolRowsMode` value. The extension does not migrate any other extension namespace.
 
 ## Host dependency blocker
 
-The package requires the public Pi extension methods `registerSetting` and `registerTranscriptPresentationPolicy`. Published Pi 1.0.0 lacks both declarations, so this candidate must not merge until a published Pi version provides them and a fresh `npm ci`, root tests, and root typecheck pass without a local type mapping or pi-local checkout. The eventual development minimum remains pending that publication; no future version is assumed here.
+The package still requires two unpublished Pi extension ports after removing its former command surface:
+
+- `registerSetting` registers the native settings row, persists the mode and migration marker, and supplies the `get`, `set`, and `onChange` handle operations shared by settings, migration, the shortcut, and live invalidation.
+- `registerTranscriptPresentationPolicy` applies `full`, `summary`, or `hidden` density to transcript blocks and provides invalidation when the mode changes.
+
+Pi 1.0.0 already publishes `registerCommand`, but this extension no longer uses it. Removing that published API does not replace either required port. Published Pi 1.0.0 lacks declarations for both remaining methods, so this candidate must not merge until a published Pi version provides them and a fresh `npm ci`, root tests, and root typecheck pass without a local type mapping or pi-local checkout. The eventual development minimum remains pending that publication; no future version is assumed here.
 
 Pi and TypeBox remain wildcard peer dependencies so the active host supplies one shared runtime.
 
@@ -36,4 +34,4 @@ npm test --workspace @a4s/pi-tool-row-presentation
 npm run typecheck --workspace @a4s/pi-tool-row-presentation
 ```
 
-Contract tests use a fake of the public extension API and import no Pi private internals. Until the host dependency blocker is resolved, the normal typecheck is expected to fail only because the installed Pi declarations lack the two required ports.
+Contract tests use a fake of the public extension API and import no Pi private internals. Until the host dependency blocker is resolved, the normal typecheck is expected to fail only because the installed Pi declarations lack `registerSetting` and `registerTranscriptPresentationPolicy`.
