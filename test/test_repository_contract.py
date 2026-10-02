@@ -17,10 +17,10 @@ DEPENDABOT_PATH = ROOT / ".github" / "dependabot.yml"
 TEST_REQUIREMENTS_PATH = ROOT / "requirements-test.txt"
 WORKSPACE_CONFIG_PATH = ROOT / ".workspace" / "config.yaml"
 GLOBAL_STEERING_PATH = ROOT / "output-styles" / "mentor-telemetria.assets" / "append-system.md"
-ROADMAP_SKILL_PATH = ROOT / "skills" / "roadmap" / "SKILL.md"
-ROADMAP_TREE_PATH = ROOT / "skills" / "roadmap" / "references" / "tree.md"
-ROADMAP_PLAN_PATH = ROOT / "skills" / "roadmap" / "references" / "plan.md"
-ROADMAP_DOCTOR_PATH = ROOT / "skills" / "roadmap" / "references" / "doctor.md"
+ROADMAP_SKILL_PATH = ROOT / "skills" / "roadmap-legacy" / "SKILL.md"
+ROADMAP_TREE_PATH = ROOT / "skills" / "roadmap-legacy" / "references" / "tree.md"
+ROADMAP_PLAN_PATH = ROOT / "skills" / "roadmap-legacy" / "references" / "plan.md"
+ROADMAP_DOCTOR_PATH = ROOT / "skills" / "roadmap-legacy" / "references" / "doctor.md"
 LINK_PATTERN = re.compile(r"(?<!!)\[[^]]+\]\(([^)]+)\)")
 BACKLOG_DECISIONS_POLICY = (
     "When presenting an existing Bead to the operator, the executor shows its human Description, Bead ID, "
@@ -69,6 +69,11 @@ class RepositoryContractTests(unittest.TestCase):
         skills = sorted(path.parent.name for path in (ROOT / "skills").glob("*/SKILL.md"))
         self.assertTrue(skills)
         self.assertIn("(skills/)", self.readme)
+
+    def test_legacy_roadmap_uses_renamed_public_name(self) -> None:
+        frontmatter = load_skill_frontmatter(ROADMAP_SKILL_PATH)
+        self.assertEqual(frontmatter.get("name"), "roadmap-legacy")
+        self.assertFalse((ROOT / "skills" / "roadmap").exists())
 
     def test_every_published_skill_declares_pablontiv_author(self) -> None:
         skill_paths = sorted((ROOT / "skills").glob("*/SKILL.md"))
