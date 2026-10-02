@@ -70,10 +70,11 @@ class RepositoryContractTests(unittest.TestCase):
         self.assertTrue(skills)
         self.assertIn("(skills/)", self.readme)
 
-    def test_legacy_roadmap_uses_renamed_public_name(self) -> None:
-        frontmatter = load_skill_frontmatter(ROADMAP_SKILL_PATH)
-        self.assertEqual(frontmatter.get("name"), "roadmap-legacy")
-        self.assertFalse((ROOT / "skills" / "roadmap").exists())
+    def test_roadmap_names_are_distinct(self) -> None:
+        legacy = load_skill_frontmatter(ROADMAP_SKILL_PATH)
+        stripped = load_skill_frontmatter(ROOT / "skills" / "roadmap" / "SKILL.md")
+        self.assertEqual(legacy.get("name"), "roadmap-legacy")
+        self.assertEqual(stripped.get("name"), "roadmap")
 
     def test_every_published_skill_declares_pablontiv_author(self) -> None:
         skill_paths = sorted((ROOT / "skills").glob("*/SKILL.md"))
