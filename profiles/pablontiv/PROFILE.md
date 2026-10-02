@@ -152,7 +152,7 @@ Backscroll se consulta en fase 0 cuando trabajo previo puede afectar una feature
 La pertenencia al catálogo no activa una herramienta rutinariamente. Pi enruta cada artefacto solamente bajo su trigger real y no selecciona equivalentes cuando el artefacto oficial aplicable no está disponible:
 
 - `adr`: se activa después de una decisión significativa nueva o revocada, ante una corrección que invalida una decisión, o cuando se solicita registrar o recuperar un ADR.
-- `roadmap`: se activa al planificar trabajo en Beads, visualizar la topología pendiente, alinear Beads existentes o ejecutar secuencialmente el backlog.
+- `roadmap-legacy`: se activa cuando el operador solicita explícitamente el workflow completo anterior para planificar, alinear o ejecutar secuencialmente trabajo en Beads.
 - `context-save`: se activa para guardar, restaurar o listar estado estructurado entre sesiones; para conversaciones históricas se usa Backscroll.
 - `cost-analyzer`: se activa cuando el usuario pregunta por costo, tokens, outcomes por harness, extensión Pi, topología de agentes o subagentes.
 - `decision-calibrator`: se activa tras una corrección contradictoria, una pregunta repetida, recuperación de contexto, una tercera ronda sin nuevos unknowns decisivos o una elección de herramienta o arquitectura con costo operativo sostenido.
