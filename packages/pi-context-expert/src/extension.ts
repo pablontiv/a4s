@@ -159,6 +159,7 @@ export function registerPiContextExpert(pi: ExtensionAPI, options: PiContextExpe
   const retroInFlight = new Set<string>();
   const ladderProjectionCache = new Map<string, CachedLadderProjection>();
   const ladderProjectionFailureCache = new Map<string, CachedLadderProjectionFailure>();
+  let autoCompactionInFlight = false;
   let recoveredCorpus: CorpusChunk[] = [];
   const now = options.now ?? (() => new Date());
   const hookTimeoutMs = options.hookTimeoutMs ?? 180_000;
@@ -303,6 +304,7 @@ export function registerPiContextExpert(pi: ExtensionAPI, options: PiContextExpe
   pi.on("session_start", (_event, ctx) => {
     pendingByAttempt.clear();
     retroInFlight.clear();
+    autoCompactionInFlight = false;
     ladderProjectionCache.clear();
     ladderProjectionFailureCache.clear();
     // getBranch is Pi's branch-local view, so reload cannot blend sibling branches.
@@ -325,6 +327,10 @@ export function registerPiContextExpert(pi: ExtensionAPI, options: PiContextExpe
     if (config.trigger.mode === "off") return;
     const usage = ctx.getContextUsage();
     const branch = ctx.sessionManager.getBranch();
+    if (
+      config.trigger.mode === "auto" &&
+      (autoCompactionInFlight || latestMessageIsAbortedAssistant(branch))
+    ) return;
     const baseInput = {
       mode: config.trigger.mode,
       interactive: ctx.hasUI,
@@ -356,29 +362,55 @@ export function registerPiContextExpert(pi: ExtensionAPI, options: PiContextExpe
     }
     if (!compactableHistory) return;
 
-    const credentialAvailable = options.jevClient !== undefined || Boolean(
-      (await ctx.modelRegistry.getProviderAuth(TYPESAFE_PROVIDER_ID))?.auth.apiKey?.trim(),
-    );
-    if (!credentialAvailable) return;
-    const input: TriggerInput = {
-      ...baseInput,
-      compactableHistory,
-      credentialAvailable,
-      jevClient: await createJevClient(ctx, hookTimeoutMs),
-      signal: ctx.signal ?? new AbortController().signal,
-    };
-    const decision = await evaluateTrigger(input);
-    if (decision.action === "none") return;
+    const ownsAutoAttempt = config.trigger.mode === "auto";
+    if (ownsAutoAttempt) autoCompactionInFlight = true;
+    let compactionDispatched = false;
     try {
-      pi.appendEntry(TRIGGER_COOLDOWN_ENTRY_TYPE, {
-        schema: "a4s.compaction-trigger-cooldown/v1",
-        action: decision.action,
-        triggeredAt: now().toISOString(),
-      });
-    } catch {
-      return;
+      const credentialAvailable = options.jevClient !== undefined || Boolean(
+        (await ctx.modelRegistry.getProviderAuth(TYPESAFE_PROVIDER_ID))?.auth.apiKey?.trim(),
+      );
+      if (!credentialAvailable) return;
+      const input: TriggerInput = {
+        ...baseInput,
+        compactableHistory,
+        credentialAvailable,
+        jevClient: await createJevClient(ctx, hookTimeoutMs),
+        signal: ctx.signal ?? new AbortController().signal,
+      };
+      const decision = await evaluateTrigger(input);
+      if (decision.action === "none") return;
+      const appendCooldown = () => {
+        try {
+          pi.appendEntry(TRIGGER_COOLDOWN_ENTRY_TYPE, {
+            schema: "a4s.compaction-trigger-cooldown/v1",
+            action: decision.action,
+            triggeredAt: now().toISOString(),
+          });
+          return true;
+        } catch {
+          return false;
+        }
+      };
+      if (decision.action === "hint") {
+        if (appendCooldown()) await applyTriggerDecision(decision, ctx);
+        return;
+      }
+
+      compactionDispatched = true;
+      try {
+        ctx.compact({
+          onComplete: () => {
+            appendCooldown();
+            autoCompactionInFlight = false;
+          },
+          onError: () => { autoCompactionInFlight = false; },
+        });
+      } catch {
+        compactionDispatched = false;
+      }
+    } finally {
+      if (ownsAutoAttempt && !compactionDispatched) autoCompactionInFlight = false;
     }
-    await applyTriggerDecision(decision, ctx);
   });
 
   pi.on("session_before_compact", async (event, ctx) => {
@@ -469,6 +501,7 @@ export function registerPiContextExpert(pi: ExtensionAPI, options: PiContextExpe
   pi.on("session_shutdown", () => {
     pendingByAttempt.clear();
     retroInFlight.clear();
+    autoCompactionInFlight = false;
     ladderProjectionCache.clear();
     ladderProjectionFailureCache.clear();
   });
@@ -555,6 +588,19 @@ export function registerPiContextExpert(pi: ExtensionAPI, options: PiContextExpe
 }
 
 const TRIGGER_COOLDOWN_ENTRY_TYPE = "a4s.pi-context-expert.compaction-trigger-cooldown.v1";
+
+function latestMessageIsAbortedAssistant(entries: readonly unknown[]): boolean {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index];
+    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) continue;
+    if ((entry as { type?: unknown }).type !== "message") continue;
+    const message = (entry as { message?: unknown }).message;
+    return message !== null && typeof message === "object" && !Array.isArray(message) &&
+      (message as { role?: unknown }).role === "assistant" &&
+      (message as { stopReason?: unknown }).stopReason === "aborted";
+  }
+  return false;
+}
 
 function customEntryData(entry: unknown, customType: string): Record<string, unknown> | undefined {
   if (entry === null || typeof entry !== "object" || Array.isArray(entry)) return undefined;
