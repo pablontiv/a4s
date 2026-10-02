@@ -12,7 +12,7 @@ El monorepo reúne capacidades que pueden evolucionar a ritmos distintos. Cada u
 - [`profiles/`](profiles/) publica perfiles reutilizables de configuración.
 - [`methods/`](methods/) contiene métodos de trabajo opt-in.
 - [`skills/`](skills/) distribuye workflows portátiles y sus herramientas deterministas.
-- [Roadmap](skills/roadmap/) publica un workflow Markdown sobre Beads para Plan, árbol pendiente, Doctor y loop secuencial, sin reclamar un runtime personalizado.
+- [Roadmap Legacy](skills/roadmap-legacy/) conserva el workflow completo anterior sobre Beads para Plan, árbol pendiente, Doctor y loop secuencial.
 - [`agents/`](agents/) conserva roles portátiles con provenance explícita.
 - [`output-styles/`](output-styles/) define contratos de interacción.
 - [`src/`](src/) contiene el runtime experimental E0 y sus adapters.
