@@ -18,7 +18,7 @@ El monorepo reúne capacidades que pueden evolucionar a ritmos distintos. Cada u
 - [`output-styles/`](output-styles/) define contratos de interacción.
 - [`src/`](src/) contiene el runtime experimental E0 y sus adapters.
 - [`packages/pi-context-expert/`](packages/pi-context-expert/) contiene una extensión Pi para gestión de contexto, compaction y propuestas de reglas review-only; consume TypeSafe/Jev mediante el runtime nativo de Pi según [ADR 0065](.workspace/docs/adr/0065-usar-clasificador-typesafe-nativo-de-pi.md).
-- [`packages/pi-tool-row-presentation/`](packages/pi-tool-row-presentation/) contiene un candidato de extensión Pi que controla la densidad de tool rows mediante `Settings > Tool rows` y el atajo `Ctrl+Alt+O`, sin comando propio; permanece no mergeable hasta que una release publicada de Pi exponga sus dos puertos públicos requeridos y pasen los checks normales sin mapping local.
+- [`packages/pi-tool-row-presentation/`](packages/pi-tool-row-presentation/) contiene un candidato de extensión Pi que controla la densidad de tool rows mediante `Settings > Tool rows` y el atajo `Ctrl+Alt+O`, sin comando propio; CI ejecuta sus contratos fake pero omite temporalmente su integración TypeScript, y el candidato permanece no mergeable hasta que una release publicada de Pi exponga sus dos puertos públicos requeridos.
 - [`test/`](test/) verifica runtime y contratos del repositorio.
 
 ## Integraciones
@@ -57,6 +57,8 @@ npm ci
 npm test
 npm run typecheck
 ```
+
+Mientras Pi no publique `registerSetting` y `registerTranscriptPresentationPolicy`, el aggregate raíz conserva los seis tests fake de `pi-tool-row-presentation` pero excluye deliberadamente su `typecheck`: esos tests ejecutan la factory contra un API estructural en memoria y no cargan Pi ni dependen de sus declaraciones. El script `npm run typecheck --workspace @a4s/pi-tool-row-presentation` permanece como gate explícito bloqueado. El typecheck mapeado y el E2E contra pi-local son sólo evidencia local disposable, nunca pasos de CI. Tras publicar ambos puertos se debe actualizar la dependencia, restaurar ese typecheck al aggregate raíz y ejecutar `npm ci`, checks raíz, E2E y revisión frescos antes de considerar el draft ready.
 
 Contratos de artefactos portátiles:
 
