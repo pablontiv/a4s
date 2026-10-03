@@ -32,11 +32,12 @@
     "rpc:compact-driver": "tsx scripts/run-rpc-compact.ts"
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "*"
+    "@pablontiv/pion": "1.0.0-ports.1"
   },
   "devDependencies": {
     "@earendil-works/pi-ai": ">=0.99.1",
     "@earendil-works/pi-coding-agent": ">=0.99.1",
+    "@pablontiv/pion": "https://github.com/pablontiv/pi/releases/download/pion-v1.0.0-ports.1/pablontiv-pion-1.0.0-ports.1.tgz",
     "@types/node": "26.6.1",
     "tsx": "4.23.13",
     "typescript": "7.0.2"

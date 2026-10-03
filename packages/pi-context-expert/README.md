@@ -2,7 +2,7 @@
 
 Private Pi extension that uses Jev as the semantic authority for deterministic compaction. Evidence is disabled by default; Ladder retrieval and Ladder-backed Evidence are explicit opt-ins.
 
-This release is validated against [Pion 1.0.0-ports.1](https://github.com/pablontiv/pi/releases/tag/pion-v1.0.0-ports.1). Pion preserves the public Pi extension module names through its managed loader, so host-provided runtime packages remain wildcard peers and the extension keeps one shared runtime.
+This release requires [Pion 1.0.0-ports.1](https://github.com/pablontiv/pi/releases/tag/pion-v1.0.0-ports.1) as its exact runtime peer. Legacy Pi module names remain development-only compatibility imports; Pion's managed loader supplies that API at runtime without installing the superseded Pi host.
 
 ## Runtime contract
 

@@ -50,16 +50,25 @@ test("the active extension exposes only the pi-context-expert identity", () => {
   assert.doesNotMatch(gitignore, /^artifacts\/pi-rule-compiler-e2e\/$/m);
 });
 
-test("Pi host packages stay wildcard peers while development declares the minimum", () => {
-  const minimum = ">=0.99.1";
+test("Pion is the runtime peer while legacy Pi ABI types stay development-only", () => {
+  const legacyMinimum = ">=0.99.1";
+  const pionVersion = "1.0.0-ports.1";
+  const pionArtifact =
+    "https://github.com/pablontiv/pi/releases/download/pion-v1.0.0-ports.1/pablontiv-pion-1.0.0-ports.1.tgz";
   const workspace = manifest(resolve(workspaceRoot, "package.json"));
   const contextExpert = manifest(resolve(packageRoot, "package.json"));
 
-  assert.equal(workspace.devDependencies?.["@earendil-works/pi-coding-agent"], minimum);
-  assert.equal(contextExpert.peerDependencies?.["@earendil-works/pi-coding-agent"], "*");
-  assert.equal(contextExpert.devDependencies?.["@earendil-works/pi-coding-agent"], minimum);
-  assert.equal(contextExpert.devDependencies?.["@earendil-works/pi-ai"], minimum);
-  for (const hostPackage of ["@earendil-works/pi-coding-agent", "@earendil-works/pi-ai"]) {
+  assert.equal(workspace.devDependencies?.["@earendil-works/pi-coding-agent"], legacyMinimum);
+  assert.equal(contextExpert.peerDependencies?.["@pablontiv/pion"], pionVersion);
+  assert.equal(contextExpert.peerDependencies?.["@earendil-works/pi-coding-agent"], undefined);
+  assert.equal(contextExpert.devDependencies?.["@earendil-works/pi-coding-agent"], legacyMinimum);
+  assert.equal(contextExpert.devDependencies?.["@earendil-works/pi-ai"], legacyMinimum);
+  assert.equal(contextExpert.devDependencies?.["@pablontiv/pion"], pionArtifact);
+  for (const hostPackage of [
+    "@pablontiv/pion",
+    "@earendil-works/pi-coding-agent",
+    "@earendil-works/pi-ai",
+  ]) {
     assert.equal(contextExpert.dependencies?.[hostPackage], undefined);
   }
 });
