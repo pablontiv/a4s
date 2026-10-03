@@ -3,6 +3,15 @@
   "version": "0.1.0",
   "private": true,
   "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pablontiv/a4s.git",
+    "directory": "packages/pi-channel-adapter-poc"
+  },
+  "homepage": "https://github.com/pablontiv/a4s/tree/main/packages/pi-channel-adapter-poc#readme",
+  "bugs": {
+    "url": "https://github.com/pablontiv/a4s/issues"
+  },
   "type": "module",
   "engines": {
     "node": ">=22.19.0"
