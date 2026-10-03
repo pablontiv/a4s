@@ -29,11 +29,10 @@
     "typecheck": "tsc --noEmit"
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "*",
+    "@pablontiv/pion": "1.0.0-ports.1",
     "typebox": "*"
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "*",
     "@pablontiv/pion": "https://github.com/pablontiv/pi/releases/download/pion-v1.0.0-ports.1/pablontiv-pion-1.0.0-ports.1.tgz",
     "@types/node": "26.6.1",
     "tsx": "4.23.13",

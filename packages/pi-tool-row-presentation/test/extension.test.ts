@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 import { Check } from "typebox/value";
 import toolRowPresentation from "../src/index.ts";
@@ -147,6 +148,18 @@ const block = (kind: Block["kind"], subtype?: Block["subtype"]): Block => ({
 });
 
 describe("A4S tool row presentation extension public contract", () => {
+	it("declares Pion as its exact runtime host without pulling the legacy Pi package", () => {
+		const manifest = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as {
+			dependencies?: Record<string, string>;
+			peerDependencies?: Record<string, string>;
+			devDependencies?: Record<string, string>;
+		};
+		assert.equal(manifest.peerDependencies?.["@pablontiv/pion"], "1.0.0-ports.1");
+		assert.equal(manifest.peerDependencies?.["@earendil-works/pi-coding-agent"], undefined);
+		assert.equal(manifest.devDependencies?.["@earendil-works/pi-coding-agent"], undefined);
+		assert.equal(manifest.dependencies?.["@pablontiv/pion"], undefined);
+	});
+
 	it("registers only the A4S mode and migration keys with the expected schemas", () => {
 		const harness = createHarness();
 		assert.deepEqual([...harness.definitions.keys()], [MODE_KEY, MIGRATION_KEY]);
