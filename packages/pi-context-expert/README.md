@@ -2,7 +2,7 @@
 
 Private Pi extension that uses Jev as the semantic authority for deterministic compaction. Evidence is disabled by default; Ladder retrieval and Ladder-backed Evidence are explicit opt-ins.
 
-The extension supports Pi `>=0.99.1`. Pi-provided runtime packages remain wildcard peers so the active host supplies one shared runtime; the repository's development ranges and compatibility contract enforce the minimum without pinning an exact Pi release.
+This release is validated against [Pion 1.0.0-ports.1](https://github.com/pablontiv/pi/releases/tag/pion-v1.0.0-ports.1). Pion preserves the public Pi extension module names through its managed loader, so host-provided runtime packages remain wildcard peers and the extension keeps one shared runtime.
 
 ## Runtime contract
 
@@ -31,7 +31,7 @@ flat `config` values for `compaction.strategy` (`basic|ladder`),
 `trigger.mode` (`off|hint|auto`), and `evidence.strategy` (`off|ladder`);
 invalid combinations preserve the prior safe configuration.
 
-The installed `pi -e` entrypoint reads the persisted global file
+The installed `pion -e` entrypoint reads the persisted global file
 `~/.pi/agent/pi-context-expert.json` once at startup. The file may contain only
 the same three flat, non-secret mode keys:
 
@@ -83,7 +83,7 @@ From the repository root:
 
 ```sh
 npm install
-pi -e packages/pi-context-expert/src/index.ts
+pion -e packages/pi-context-expert/src/index.ts
 # then, inside Pi:
 /login typesafe
 ```
@@ -94,7 +94,7 @@ If Jev is unavailable, Pi compaction is deliberately cancelled and can be retrie
 
 ## RPC callers must hold stdin open through `compact`
 
-If you drive this extension over `pi --mode rpc` and issue a `compact`
+If you drive this extension over `pion --mode rpc` and issue a `compact`
 command, **do not close the child process's stdin (EOF) until you have
 received the matching `compact` response.** Closing stdin early — e.g.
 piping a fixed command file with `< input.jsonl`, or any writer that ends
@@ -104,7 +104,7 @@ real HTTP round trip (15-50+ seconds) can finish.
 
 ### What actually happens (bead a4s-6ak.7/`.8`)
 
-- `pi --mode rpc`'s stdin handling (`dist/modes/rpc/rpc-mode.js`) registers
+- `pion --mode rpc`'s stdin handling (`dist/modes/rpc/rpc-mode.js`) registers
   an unconditional `process.stdin.on("end", () => void shutdown())`. This
   fires the moment stdin closes, independent of whether a command is
   mid-flight.
@@ -132,7 +132,7 @@ real HTTP round trip (15-50+ seconds) can finish.
   awaits the correlated response (via `src/rpc-stdin-guard.ts`) before
   ending the child's stdin — the correct pattern to copy into your own RPC
   client. Run it with `npm run rpc:compact-driver --workspace
-  @a4s/pi-context-expert -- --pi <path-to-pi> [-- <extra pi args>]`.
+  @a4s/pi-context-expert -- --pi "$(command -v pion)" [-- <extra Pion args>]`.
 - **Best-effort extension diagnostic**: when this extension classifies a
   compaction or retro failure as `"aborted"` while `ctx.mode === "rpc"`, it
   writes a single line to stderr prefixed
@@ -168,7 +168,7 @@ npm run e2e --workspace @a4s/pi-context-expert -- --mode evidence
 ```
 
 This is a headless product test, not an E0 or fixture run. It starts the
-configured `pi` binary in RPC mode with this extension, uses the configured Pi
+installed `pion` binary in RPC mode with this extension, uses the configured Pion
 model and real TypeSafe/Jev provider, sends four distinct benign non-secret
 prompts generated for that run whose total exceeds Pi's production 20k
 retained-token threshold, compacts, and verifies persisted corpus chunks plus
