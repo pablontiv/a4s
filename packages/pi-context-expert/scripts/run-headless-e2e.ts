@@ -122,7 +122,7 @@ class HeadlessPi {
   #compactionDiagnostic: SafeCompactionDiagnosticCategory | undefined;
 
   constructor(args: readonly string[]) {
-    this.#child = spawn("pi", args, { stdio: ["pipe", "pipe", "pipe"] });
+    this.#child = spawn("pion", args, { stdio: ["pipe", "pipe", "pipe"] });
     // Keep stderr drained without exposing provider diagnostics or credentials.
     this.#child.stderr.on("data", () => undefined);
     const reader = createJsonlLineReader((line) => this.#receiveLine(line));
