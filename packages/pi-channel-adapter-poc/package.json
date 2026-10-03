@@ -1,0 +1,37 @@
+{
+  "name": "@a4s/pi-channel-adapter-poc",
+  "version": "0.1.0",
+  "private": true,
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pablontiv/a4s.git",
+    "directory": "packages/pi-channel-adapter-poc"
+  },
+  "homepage": "https://github.com/pablontiv/a4s/tree/main/packages/pi-channel-adapter-poc#readme",
+  "bugs": {
+    "url": "https://github.com/pablontiv/a4s/issues"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
+  "scripts": {
+    "test": "tsx --test test/*.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@types/node": "26.6.1",
+    "tsx": "4.23.13",
+    "typescript": "7.0.2"
+  }
+}

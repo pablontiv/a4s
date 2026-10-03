@@ -19,9 +19,9 @@
     "node": ">=22.19.0"
   },
   "scripts": {
-    "typecheck": "npm run typecheck:e0 && npm run typecheck --workspace @a4s/pi-context-expert",
+    "typecheck": "npm run typecheck:e0 && npm run typecheck --workspace @a4s/pi-context-expert && npm run typecheck --workspace @a4s/pi-channel-adapter-poc",
     "typecheck:e0": "tsc --noEmit",
-    "test": "npm run test:e0 && npm test --workspace @a4s/pi-context-expert && npm test --workspace @a4s/pi-tool-row-presentation",
+    "test": "npm run test:e0 && npm test --workspace @a4s/pi-context-expert && npm test --workspace @a4s/pi-tool-row-presentation && npm test --workspace @a4s/pi-channel-adapter-poc",
     "test:e0": "tsx --test test/*.test.ts",
     "e0": "tsx src/e0/driver.ts",
     "e0:report": "tsx src/e0/report.ts"
