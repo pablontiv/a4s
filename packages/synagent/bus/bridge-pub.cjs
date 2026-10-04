@@ -2,13 +2,13 @@
 // $.process.run. Publica un mensaje canónico (contrato §3 del boceto) al inbox
 // del destinatario y termina.
 //
-//   node bridge-pub.js <to> <body> [from] [kind] [id] [replyTo] [brokerUrl]
+//   node bridge-pub.cjs <to> <body> [from] [kind] [id] [replyTo] [brokerUrl]
 const mqtt = require('mqtt')
 
 const [, , to, body, from = 'claude', kind = 'prompt', id, replyTo, url] = process.argv
 const URL = url || 'mqtt://127.0.0.1:1884'
 if (!to || body === undefined) {
-  console.error('uso: node bridge-pub.js <to> <body> [from] [kind] [id] [replyTo] [url]')
+  console.error('uso: node bridge-pub.cjs <to> <body> [from] [kind] [id] [replyTo] [url]')
   process.exit(2)
 }
 

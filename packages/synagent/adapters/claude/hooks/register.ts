@@ -10,7 +10,7 @@
 // mi outbox = publicar al inbox del destinatario.
 //
 // SEPARACIÓN DE RESPONSABILIDADES:
-//   - El BUS es una app aparte, se arranca por shell: `node bus/broker.js`
+//   - El BUS es una app aparte, se arranca por shell: `node bus/broker.cjs`
 //     (o `npm run bus`). El adaptador NO lo levanta; solo se conecta (:1884).
 //   - El ADAPTADOR (este módulo) solo se suscribe y publica.
 //

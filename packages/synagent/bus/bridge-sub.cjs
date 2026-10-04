@@ -3,7 +3,7 @@
 // canónico como UNA línea JSON en stdout. El adaptador lee esas líneas
 // (for await) y hace $.prompt.submit.
 //
-//   node bridge-sub.js <address> [brokerUrl]
+//   node bridge-sub.cjs <address> [brokerUrl]
 //
 // clean:false + clientId estable => sesión persistente: si el adaptador se cae
 // y el bridge se relanza, el broker le re-entrega lo encolado (QoS1).
