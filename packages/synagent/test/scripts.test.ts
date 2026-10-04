@@ -3,6 +3,7 @@
 // cubre el modo de carga (ESM/CJS) y el round-trip real, que bus.test.ts no
 // ejercita porque construye su propio broker en memoria.
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { existsSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -10,6 +11,8 @@ import assert from 'node:assert/strict'
 import { after, test } from 'node:test'
 
 const BUS = new URL('../bus/', import.meta.url).pathname
+// Los bridges viven dentro del plugin (para viajar al instalar), el broker en bus/.
+const BRIDGE = new URL('../adapters/claude/bridge/', import.meta.url).pathname
 
 function waitFor(
   proc: ChildProcessWithoutNullStreams,
@@ -49,7 +52,7 @@ test('scripts del bus: broker.cjs + bridges arrancan y hacen round-trip real', a
   const port = ready[1]
   const url = `mqtt://127.0.0.1:${port}`
 
-  const sub = spawn('node', [join(BUS, 'bridge-sub.cjs'), 'claude', url]) as ChildProcessWithoutNullStreams
+  const sub = spawn('node', [join(BRIDGE, 'bridge-sub.cjs'), 'claude', url]) as ChildProcessWithoutNullStreams
   procs.push(sub)
   // bridge-sub loguea la suscripción a stderr; esperamos a estar suscritos.
   await waitFor(sub, 'stderr', /suscrito a a4s\/inbox\/claude/)
@@ -57,7 +60,7 @@ test('scripts del bus: broker.cjs + bridges arrancan y hacen round-trip real', a
   const gotLine = waitFor(sub, 'stdout', /\{.*"id"\s*:\s*"scripts-1".*\}/)
 
   const pub = spawn('node', [
-    join(BUS, 'bridge-pub.cjs'), 'claude', 'hola desde scripts.test', 'pi', 'prompt', 'scripts-1', '', url,
+    join(BRIDGE, 'bridge-pub.cjs'), 'claude', 'hola desde scripts.test', 'pi', 'prompt', 'scripts-1', '', url,
   ]) as ChildProcessWithoutNullStreams
   procs.push(pub)
   const pubExit: number = await new Promise((res) => pub.on('exit', (c) => res(c ?? -1)))
@@ -70,4 +73,16 @@ test('scripts del bus: broker.cjs + bridges arrancan y hacen round-trip real', a
   assert.equal(msg.from, 'pi')
   assert.equal(msg.kind, 'prompt')
   assert.equal(msg.body, 'hola desde scripts.test')
+})
+
+// Guard estructural (review LOW-1): register.ts resuelve sus bridges como
+// `${$.plugin.root}/bridge/bridge-{sub,pub}.cjs`, donde $.plugin.root es el dir
+// del plugin (adapters/claude). Si alguien renombra/mueve `bridge/`, los otros
+// tests podrían seguir pasando con su propia ruta mientras el adaptador
+// instalado falla en silencio. Este test ancla esa suposición.
+test('estructura: los bridges existen donde register.ts los resuelve', () => {
+  const pluginRoot = new URL('../adapters/claude/', import.meta.url).pathname
+  for (const rel of ['bridge/bridge-sub.cjs', 'bridge/bridge-pub.cjs']) {
+    assert.ok(existsSync(join(pluginRoot, rel)), `falta ${rel} bajo $.plugin.root`)
+  }
 })

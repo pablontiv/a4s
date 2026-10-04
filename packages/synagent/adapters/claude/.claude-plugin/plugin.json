@@ -4,5 +4,13 @@
   "description": "Adaptador de canal de Claude para synagent: JALAR por push vía bridge subproceso, ENVIAR por publish al bus MQTT.",
   "author": {
     "name": "pablontiv"
+  },
+  "userConfig": {
+    "brokerUrl": {
+      "type": "string",
+      "title": "Broker URL",
+      "description": "URL del broker MQTT del bus synagent al que se conecta el adaptador.",
+      "default": "mqtt://127.0.0.1:1884"
+    }
   }
 }

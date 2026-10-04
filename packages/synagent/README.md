@@ -12,7 +12,8 @@ y la decisión registrada en `.workspace/docs/adr/0066-synagent-bus-mqtt-embebid
 
 ## Dos piezas
 
-1. **El bus** (`bus/`) — app aparte que se arranca por shell.
+1. **El bus** (`bus/`) — app aparte que se arranca por shell. `bus/` contiene
+   **solo** `broker.cjs`; los bridges viven dentro del plugin.
    Broker MQTT embebido (**aedes**, provider) con persistencia **LevelDB**
    (classic-level, provider). No requiere Docker ni un manejador de base de
    datos instalado.
@@ -54,21 +55,54 @@ inyecte prompts publicando en `a4s/inbox/<address>`. Un uso en red requiere
 El plugin vive en `adapters/claude/`. Cárgalo en Claude Code (dev-mods o
 `claude --plugin-dir packages/synagent/adapters/claude`). Al cargar:
 
-- **JALAR (bus → Claude):** spawnea `bus/bridge-sub.cjs` suscrito a
+- **JALAR (bus → Claude):** spawnea `bridge/bridge-sub.cjs` suscrito a
   `a4s/inbox/claude`; cada mensaje entrante se inyecta como un turno vía
   `$.prompt.submit` (solo cuando la sesión está idle; nunca interrumpe un turno
   vivo). Deduplica por `id`.
 - **ENVIAR (Claude → bus):** el comando `/mq-send [to:] texto` publica un
   mensaje canónico al inbox del destinatario (`to` por defecto `pi`); lo publica
-con `bus/bridge-pub.cjs`.
+con `bridge/bridge-pub.cjs`.
 
-El adaptador resuelve la ruta del bus desde `$.plugin.root` como `../../bus`.
-Por eso **solo funciona cargado en el sitio dentro de este layout del repo**
-(dev-mods o `claude --plugin-dir packages/synagent/adapters/claude`). Todavía
-**no es una instalación independiente de marketplace**: copiar el adaptador solo
-a otro lugar rompería la ruta al bus. Requiere **Node disponible en el host** (el
-sandbox del mod no corre Node ni TCP crudo; broker y bridges son procesos Node
-que el adaptador lanza con `$.process`).
+Los bridges (`bridge-sub.cjs` y `bridge-pub.cjs`) viven dentro del plugin, en
+`adapters/claude/bridge/`. El adaptador los resuelve desde `$.plugin.root` como
+`$.plugin.root/bridge`, así que el plugin es **autocontenido**: tiene su propio
+`package.json` (dependencia `mqtt`) y `package-lock.json` versionado, y se puede
+copiar/instalar fuera de este layout del repo. Requiere **Node disponible en el
+host** (el sandbox del mod no corre Node ni TCP crudo; broker y bridges son
+procesos Node que el adaptador lanza con `$.process`).
+
+### Desarrollo en el repo
+
+Para trabajar sobre el adaptador dentro del repo, cárgalo en el sitio (dev-mods o
+`claude --plugin-dir packages/synagent/adapters/claude`).
+
+### Instalar desde un marketplace (GitHub)
+
+El repo es un **marketplace**: `.claude-plugin/marketplace.json` en la raíz lista
+el plugin `synagent-adapter-mqtt` con source `./packages/synagent/adapters/claude`.
+
+```sh
+claude plugin marketplace add pablontiv/a4s
+claude plugin install synagent-adapter-mqtt@a4s
+```
+
+La instalación copia el directorio del plugin y provisiona su dependencia `mqtt`
+(instala con `--ignore-scripts`; `mqtt` es JS puro, así que basta; requiere el
+`package-lock.json` versionado, que está presente).
+
+**El broker NO se instala.** Es la app aparte del bus: sigues arrancándolo tú
+(`npm run bus` desde el repo, o donde lo alojes) y apuntas el adaptador a él con
+`brokerUrl`.
+
+### Configuración: `brokerUrl`
+
+El plugin declara el campo `userConfig` `brokerUrl` (por defecto
+`mqtt://127.0.0.1:1884`). Para otro broker, cámbialo con `/plugin configure` o al
+instalar:
+
+```sh
+claude plugin install synagent-adapter-mqtt@a4s --config brokerUrl=mqtt://host:1884
+```
 
 ### Semántica de entrega
 

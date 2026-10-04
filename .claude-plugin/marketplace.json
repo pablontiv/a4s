@@ -1,0 +1,17 @@
+{
+  "name": "a4s",
+  "owner": {
+    "name": "pablontiv"
+  },
+  "metadata": {
+    "description": "Marketplace de A4S: adaptadores de canal de synagent para harnesses de agentes."
+  },
+  "plugins": [
+    {
+      "name": "synagent-adapter-mqtt",
+      "source": "./packages/synagent/adapters/claude",
+      "description": "Adaptador de canal de Claude para synagent (bus MQTT): JALAR por push + ENVIAR con /mq-send.",
+      "category": "messaging"
+    }
+  ]
+}
