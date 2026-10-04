@@ -1,0 +1,39 @@
+{
+  "name": "@a4s/synagent",
+  "version": "0.1.0",
+  "private": true,
+  "license": "UNLICENSED",
+  "description": "synagent (sinapsis + agent): bus de mensajería MQTT embebido + adaptadores de canal por harness para comunicación entre agentes.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pablontiv/a4s.git",
+    "directory": "packages/synagent"
+  },
+  "homepage": "https://github.com/pablontiv/a4s/tree/main/packages/synagent#readme",
+  "bugs": {
+    "url": "https://github.com/pablontiv/a4s/issues"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "bin": {
+    "synagent-bus": "./bus/broker.js"
+  },
+  "scripts": {
+    "bus": "node bus/broker.js",
+    "test": "tsx --test test/*.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "aedes": "1.2.0",
+    "aedes-persistence-level": "9.2.0",
+    "classic-level": "3.0.0",
+    "mqtt": "5.16.0"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.1",
+    "tsx": "4.23.13",
+    "typescript": "7.0.2"
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "noEmit": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "skipLibCheck": true,
+    "verbatimModuleSyntax": true,
+    "allowImportingTsExtensions": true,
+    "types": [
+      "node"
+    ]
+  },
+  "//": "El núcleo puro del adaptador y los tests se typecheckean aquí. register.ts (glue del runtime de Claude Code) NO se incluye: importa 'claude-code', tipos que solo existen cargado en el engine; se valida con `claude plugin validate`.",
+  "include": [
+    "adapters/claude/hooks/adapter.ts",
+    "test/**/*.ts"
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "name": "synagent-adapter-mqtt",
+  "version": "0.1.0",
+  "description": "Adaptador de canal de Claude para synagent: JALAR por push vía bridge subproceso, ENVIAR por publish al bus MQTT.",
+  "author": {
+    "name": "pablontiv"
+  }
+}
