@@ -47,6 +47,17 @@ test('JALAR: parseCanonical rechaza un kind inválido', () => {
   assert.throws(() => parseCanonical(malKind), /kind inválido/)
 })
 
+test('JALAR: el protocolo compartido rechaza coerciones de tipos', () => {
+  assert.throws(
+    () => parseCanonical(JSON.stringify({ id: 1, from: 'pi', to: 'claude', kind: 'prompt', body: 'hi', ts: 1 })),
+    /campo canónico inválido: id/,
+  )
+  assert.throws(
+    () => parseCanonical(JSON.stringify({ id: 'x', from: 'pi', to: 'claude', kind: 'prompt', body: 'hi', ts: '1' })),
+    /campo canónico inválido: ts/,
+  )
+})
+
 test('JALAR: isForSelf solo acepta mensajes dirigidos a este adaptador', () => {
   assert.equal(isForSelf(toCanonical('oye claude', { id: 'm3', ts: 3000, to: SELF_ADDRESS })), true)
   assert.equal(isForSelf(toCanonical('oye pi', { id: 'm4', ts: 3000, to: 'pi' })), false)

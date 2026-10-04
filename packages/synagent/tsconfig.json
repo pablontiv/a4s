@@ -14,9 +14,11 @@
       "node"
     ]
   },
-  "//": "El núcleo puro del adaptador y los tests se typecheckean aquí. register.ts (glue del runtime de Claude Code) NO se incluye: importa 'claude-code', tipos que solo existen cargado en el engine; se valida con `claude plugin validate`.",
+  "//": "El protocolo, el adaptador Pi, el núcleo puro de Claude y los tests se typecheckean aquí. register.ts (glue del runtime de Claude Code) importa tipos del engine y se valida con `claude plugin validate`.",
   "include": [
+    "protocol.ts",
     "adapters/claude/hooks/adapter.ts",
+    "adapters/pi/**/*.ts",
     "test/**/*.ts"
   ]
 }

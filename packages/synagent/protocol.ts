@@ -1,10 +1,6 @@
-// Núcleo puro y autocontenido del plugin Claude. Duplica el contrato mínimo
-// porque el marketplace copia solo adapters/claude/, no el paquete Synagent.
+export const MESSAGE_KINDS = ['prompt', 'steer', 'result', 'notify', 'ack'] as const
 
-export const SELF_ADDRESS = 'claude'
-export const DEFAULT_PEER = 'pi'
-
-export type MessageKind = 'prompt' | 'steer' | 'result' | 'notify' | 'ack'
+export type MessageKind = (typeof MESSAGE_KINDS)[number]
 
 export interface CanonicalMessage {
   id: string
@@ -16,16 +12,21 @@ export interface CanonicalMessage {
   ts: number
 }
 
-const KINDS: readonly MessageKind[] = ['prompt', 'steer', 'result', 'notify', 'ack']
-
-export function toCanonical(
+export function createCanonical(
   body: string,
-  options: { id: string; ts: number; to?: string; from?: string; kind?: MessageKind; reply_to?: string },
+  options: {
+    id: string
+    from: string
+    to: string
+    ts: number
+    kind?: MessageKind
+    reply_to?: string
+  },
 ): CanonicalMessage {
   return {
     id: options.id,
-    from: options.from ?? SELF_ADDRESS,
-    to: options.to ?? DEFAULT_PEER,
+    from: options.from,
+    to: options.to,
     kind: options.kind ?? 'prompt',
     body,
     ...(options.reply_to ? { reply_to: options.reply_to } : {}),
@@ -61,7 +62,7 @@ export function parseCanonical(text: string): CanonicalMessage {
   if (typeof message.ts !== 'number' || !Number.isFinite(message.ts)) {
     throw new Error('campo canónico inválido: ts')
   }
-  if (!KINDS.includes(message.kind as MessageKind)) {
+  if (!MESSAGE_KINDS.includes(message.kind as MessageKind)) {
     throw new Error(`kind inválido: ${String(message.kind)}`)
   }
   if (message.reply_to !== undefined && (typeof message.reply_to !== 'string' || message.reply_to.length === 0)) {
@@ -79,8 +80,8 @@ export function parseCanonical(text: string): CanonicalMessage {
   }
 }
 
-export function isForSelf(message: CanonicalMessage): boolean {
-  return message.to === SELF_ADDRESS
+export function isFor(message: CanonicalMessage, address: string): boolean {
+  return message.to === address
 }
 
 export function renderForAgent(message: CanonicalMessage): string {
@@ -89,6 +90,10 @@ export function renderForAgent(message: CanonicalMessage): string {
   return `${head}\n${message.body}${tail}`
 }
 
-export function newId(ts: number): string {
-  return `${SELF_ADDRESS}-${ts}-${Math.random().toString(36).slice(2, 8)}`
+export function newId(address: string, ts: number): string {
+  return `${address}-${ts}-${Math.random().toString(36).slice(2, 8)}`
+}
+
+export function isAddress(value: string): boolean {
+  return /^[A-Za-z][\w-]*$/.test(value)
 }
