@@ -18,10 +18,10 @@
     "node": ">=22.19.0"
   },
   "bin": {
-    "synagent-bus": "./bus/broker.js"
+    "synagent-bus": "./bus/broker.cjs"
   },
   "scripts": {
-    "bus": "node bus/broker.js",
+    "bus": "node bus/broker.cjs",
     "test": "tsx --test test/*.test.ts",
     "typecheck": "tsc --noEmit"
   },

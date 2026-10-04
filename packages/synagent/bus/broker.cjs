@@ -1,8 +1,13 @@
 // synagent BUS — broker MQTT embebido (aedes) + persistencia LevelDB.
 // El bus es una app aparte: se arranca por shell y vive independiente de los
-// adaptadores. `node bus/broker.js [port] [dbdir]` (o `npm run bus`).
-// Imprime "BROKER READY" cuando escucha. Idempotente: si el puerto ya está
-// ocupado por otro broker, sale limpio.
+// adaptadores. `node bus/broker.cjs [port] [dbdir]` (o `npm run bus`).
+// Imprime "BROKER READY :<puerto>" cuando escucha. Idempotente: si el puerto ya
+// está ocupado por otro broker, sale limpio.
+//
+// SEGURIDAD: escucha solo en loopback (127.0.0.1). No hay auth/TLS/ACL, así que
+// exponerlo a otras interfaces convertiría a cualquier host de la red en un
+// publicador capaz de inyectar prompts vía a4s/inbox/<address>. Para uso en red
+// hay que añadir authenticate/authorizePublish y TLS (fuera de este PoC).
 const net = require('net')
 const { Aedes } = require('aedes')
 
@@ -30,8 +35,10 @@ async function main() {
     console.error('[broker] listen error', e)
     process.exit(1)
   })
-  await new Promise((res) => server.listen(PORT, res))
-  console.log(`BROKER READY :${PORT} persistencia=${kind}`)
+  await new Promise((res) => server.listen(PORT, '127.0.0.1', res))
+  const addr = server.address()
+  const actual = addr && typeof addr === 'object' ? addr.port : PORT
+  console.log(`BROKER READY :${actual} persistencia=${kind}`)
 }
 main().catch((e) => {
   console.error('[broker] ERROR', e)
