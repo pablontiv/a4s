@@ -1,104 +1,79 @@
 # synagent
 
-**synagent** (sinapsis + agent) es la mensajería aislada que deja a agentes de
-distintos harnesses (Claude, Pi, …) **comunicarse** sin que uno conozca al otro.
-Materializa el patrón *Channel Adapter + Message Bus* descrito en
+**synagent** (sinapsis + agent) es la mensajería aislada que permite que agentes
+de distintos harnesses se comuniquen sin conocerse entre sí. Materializa el
+patrón *Channel Adapter + Message Bus* del boceto
 `.workspace/docs/research/2026-10-02-agent-messaging-adapter-pattern-boceto.md`
-y la decisión registrada en `.workspace/docs/adr/0066-synagent-bus-mqtt-embebido-y-adaptadores-de-canal-por-harness.md`.
+y el ADR 0066.
 
-> Estado: **PoC promovido**. El contrato, el bus y el adaptador de Claude están
-> verificados en vivo (JALAR + ENVIAR). Durabilidad/orden/ACK semántico y más
-> adaptadores quedan como evolución (ver ADR 0066 y §9 del boceto).
+## Componentes
 
-## Dos piezas
+1. **Bus** (`bus/`): app separada con el broker MQTT embebido Aedes y
+   persistencia LevelDB. `bus/` contiene solo `broker.cjs`; los bridges de
+   Claude viven dentro de su plugin.
+2. **Adaptadores** (`adapters/<harness>/`): bordes finos que traducen el API de
+   cada harness al contrato canónico. Incluye el plugin de Claude Code y la
+   extensión Pi.
+3. **Protocolo** (`protocol.ts`): validación, serialización y presentación del
+   contrato canónico. El plugin Claude conserva una copia mínima compatible en
+   `hooks/adapter.ts` porque el marketplace instala solo su directorio.
 
-1. **El bus** (`bus/`) — app aparte que se arranca por shell. `bus/` contiene
-   **solo** `broker.cjs`; los bridges viven dentro del plugin.
-   Broker MQTT embebido (**aedes**, provider) con persistencia **LevelDB**
-   (classic-level, provider). No requiere Docker ni un manejador de base de
-   datos instalado.
-2. **Los adaptadores** (`adapters/<harness>/`) — un borde fino por harness que
-   traduce entre el API del harness y el contrato canónico del bus. Hoy:
-   `adapters/claude/` (plugin de Claude Code).
-
-Agregar un harness = escribir **un adaptador nuevo**; el bus y los demás
-adaptadores no cambian.
+Agregar otro harness requiere un adaptador nuevo; no modifica el bus ni los
+adaptadores existentes.
 
 ## Contrato canónico
 
-Cada mensaje lleva: `id`, `from`, `to`, `kind` (`prompt | steer | result |
-notify | ack`), `body`, `reply_to?`, `ts`. El adaptador **solo** traduce; la
-semántica durable (orden, retención, ACK) es del bus.
-
-Los inbox/outbox se emulan con topics MQTT: `a4s/inbox/<address>`. Mi inbox = lo
-que suscribo; mi outbox = publicar al inbox del destinatario.
+Cada mensaje lleva `id`, `from`, `to`, `kind` (`prompt | steer | result |
+notify | ack`), `body`, `reply_to?` y `ts`. Los inbox se representan con topics
+MQTT `a4s/inbox/<address>`: cada adaptador se suscribe a su address y publica al
+del destinatario.
 
 ## Arrancar el bus
 
 ```sh
-npm run bus                 # escucha en :1884, persistencia LevelDB en bus/mqtt-db
+npm run bus
 # o: node bus/broker.cjs [puerto] [dbdir]
 ```
 
-El broker imprime `BROKER READY :<puerto>`. Es idempotente: si el puerto ya está
-ocupado por otro broker, sale limpio.
+El default es `mqtt://127.0.0.1:1884`, con datos en `bus/mqtt-db`. El proceso
+imprime `BROKER READY :<puerto>`. El broker es una aplicación separada: ningún
+adaptador lo arranca.
 
-### Seguridad
+## Adaptador de Claude Code
 
-El broker escucha **solo en loopback (127.0.0.1)** y **no tiene auth, TLS ni
-ACL**. Exponerlo a otras interfaces permitiría que cualquier host de la red
-inyecte prompts publicando en `a4s/inbox/<address>`. Un uso en red requiere
-`authenticate`/`authorizePublish` y TLS (fuera del alcance de este PoC).
+El plugin vive en `adapters/claude/`. Cárgalo en Claude Code con dev-mods o con:
 
-## Adaptador de Claude
-
-El plugin vive en `adapters/claude/`. Cárgalo en Claude Code (dev-mods o
-`claude --plugin-dir packages/synagent/adapters/claude`). Al cargar:
+```sh
+claude --plugin-dir packages/synagent/adapters/claude
+```
 
 - **JALAR (bus → Claude):** spawnea `bridge/bridge-sub.cjs` suscrito a
   `a4s/inbox/claude`; cada mensaje entrante se inyecta como un turno vía
-  `$.prompt.submit` (solo cuando la sesión está idle; nunca interrumpe un turno
-  vivo). Deduplica por `id`.
-- **ENVIAR (Claude → bus):** el comando `/mq-send [to:] texto` publica un
-  mensaje canónico al inbox del destinatario (`to` por defecto `pi`); lo publica
-con `bridge/bridge-pub.cjs`.
+  `$.prompt.submit` cuando la sesión está idle. Deduplica por `id`.
+- **ENVIAR (Claude → bus):** `/mq-send [to:] texto` publica un mensaje canónico
+  al inbox del destinatario; `to` por defecto es `pi`.
 
-Los bridges (`bridge-sub.cjs` y `bridge-pub.cjs`) viven dentro del plugin, en
-`adapters/claude/bridge/`. El adaptador los resuelve desde `$.plugin.root` como
-`$.plugin.root/bridge`, así que el plugin es **autocontenido**: tiene su propio
-`package.json` (dependencia `mqtt`) y `package-lock.json` versionado, y se puede
-copiar/instalar fuera de este layout del repo. Requiere **Node disponible en el
-host** (el sandbox del mod no corre Node ni TCP crudo; broker y bridges son
-procesos Node que el adaptador lanza con `$.process`).
-
-### Desarrollo en el repo
-
-Para trabajar sobre el adaptador dentro del repo, cárgalo en el sitio (dev-mods o
-`claude --plugin-dir packages/synagent/adapters/claude`).
+Los bridges viven en `adapters/claude/bridge/` y se resuelven desde
+`$.plugin.root`, por lo que el plugin es autocontenido. Tiene `package.json` y
+`package-lock.json` propios y requiere Node en el host.
 
 ### Instalar desde un marketplace (GitHub)
 
-El repo es un **marketplace**: `.claude-plugin/marketplace.json` en la raíz lista
-el plugin `synagent-adapter-mqtt` con source `./packages/synagent/adapters/claude`.
+El repo es un marketplace: `.claude-plugin/marketplace.json` lista el plugin
+`synagent-adapter-mqtt`.
 
 ```sh
 claude plugin marketplace add pablontiv/a4s
 claude plugin install synagent-adapter-mqtt@a4s
 ```
 
-La instalación copia el directorio del plugin y provisiona su dependencia `mqtt`
-(instala con `--ignore-scripts`; `mqtt` es JS puro, así que basta; requiere el
-`package-lock.json` versionado, que está presente).
-
-**El broker NO se instala.** Es la app aparte del bus: sigues arrancándolo tú
-(`npm run bus` desde el repo, o donde lo alojes) y apuntas el adaptador a él con
-`brokerUrl`.
+La instalación provisiona `mqtt` con el lockfile del plugin. El broker no se
+instala: sigue siendo la aplicación separada del bus.
 
 ### Configuración: `brokerUrl`
 
-El plugin declara el campo `userConfig` `brokerUrl` (por defecto
-`mqtt://127.0.0.1:1884`). Para otro broker, cámbialo con `/plugin configure` o al
-instalar:
+El plugin declara `brokerUrl` en `userConfig`, con default
+`mqtt://127.0.0.1:1884`. Puede cambiarse con `/plugin configure` o al instalar:
 
 ```sh
 claude plugin install synagent-adapter-mqtt@a4s --config brokerUrl=mqtt://host:1884
@@ -106,37 +81,109 @@ claude plugin install synagent-adapter-mqtt@a4s --config brokerUrl=mqtt://host:1
 
 ### Semántica de entrega
 
-La entrega al modelo es **at-most-once**: el adaptador reserva el `id` de cada
-mensaje **antes** de llamar a `$.prompt.submit` (el set de dedup es acotado,
-~últimos 1000 ids). Esto evita reinyectar el mismo turno, pero puede perder uno
-si la entrega falla tras reservar. MQTT da QoS1/retained/sesión persistente
-hasta el bridge, pero mqtt.js hace auto-ACK del mensaje QoS1 al retornar el
-handler, así que la redelivery de la sesión persistente **no** protege ante una
-caída del adaptador a mitad del manejo. La re-suscripción en hot-reload depende
-de que el takeover por `clientId` de MQTT expulse al bridge anterior; no es una
-muerte garantizada del proceso viejo.
+La entrega al modelo es at-most-once: el adaptador reserva el `id` antes de
+llamar a `$.prompt.submit`. MQTT QoS1 protege el transporte hasta el bridge,
+pero no evita perder un mensaje si el adaptador cae después de reservarlo.
 
-Validar / probar el plugin:
+## Adaptador de Pi
+
+La extensión vive en `adapters/pi/index.ts` y usa `mqtt.js` directamente, sin
+polling ni subprocesos bridge. Puede cargarse para una sesión con:
 
 ```sh
-claude plugin validate packages/synagent/adapters/claude
+pi -e packages/synagent/adapters/pi/index.ts
 ```
 
-## Pruebas del paquete
+O instalarse desde el checkout:
 
 ```sh
-npm test        # núcleo del adaptador (node:test) + round-trip del bus (aedes en memoria)
-npm run typecheck
+pi install ./packages/synagent
 ```
 
-El núcleo puro (`adapters/claude/hooks/adapter.ts`) se typecheckea y testea como
-código normal. `register.ts` (glue del runtime de Claude Code) se excluye del
-typecheck del repo y se valida con `claude plugin validate`.
+Al iniciar una sesión abre un cliente MQTT persistente (`clean: false`) y se
+suscribe con QoS 1 a `a4s/inbox/<address>`. El `clientId` deriva del ID estable
+de la sesión Pi, por lo que dos sesiones no se expulsan entre sí. Si comparten
+la misma address, MQTT entrega el mensaje a ambas; usa addresses distintas
+cuando deba existir un único destinatario. En `session_shutdown` cancela sus
+listeners y cierra la conexión idempotentemente sin borrar la suscripción
+durable.
 
-## Qué NO hace este PoC
+### Comandos Pi
 
-No provee ACK semántico fenceado, retención configurable, replay histórico tipo
-log/offsets ni event sourcing. MQTT da **entrega** (QoS, retained, sesiones
-persistentes), no replay. El log/event sourcing queda como evolución **aditiva**
-(ver §9.9 del boceto): un *log sink* suscrito a todos los topics, sin cambiar los
-adaptadores.
+```text
+/mq-send [to:] texto
+/synagent status
+/synagent enable|disable
+/synagent resume
+/synagent set broker-url <mqtt://loopback:puerto>
+/synagent set address <address>
+/synagent set default-peer <address>
+```
+
+`/synagent` persiste cambios en el scope global de settings de Pi. Los cambios
+de `enabled`, `broker-url` o `address` reinician solo la conexión MQTT. Al
+cambiar de address, el adaptador elimina la suscripción anterior antes de usar
+la nueva y reintenta esa limpieza al reconectar. El cambio descarta mensajes
+aún no enviados de la configuración anterior. Una entrega ya pasada a Pi no se
+puede cancelar y permanece como barrera de orden hasta `agent_settled`.
+
+### Settings propios
+
+| Key | Default |
+| --- | --- |
+| `a4s.synagent.enabled` | `true` |
+| `a4s.synagent.broker-url` | `mqtt://127.0.0.1:1884` |
+| `a4s.synagent.address` | `pi` |
+| `a4s.synagent.default-peer` | `claude` |
+
+No usa variables de entorno. Mientras el broker no tenga autenticación, el
+adaptador acepta únicamente URLs `mqtt://` de loopback sin credenciales. Las
+addresses rechazan separadores y comodines MQTT.
+
+### Entrega en Pi
+
+Los mensajes recibidos se validan y se encolan en orden de llegada. Como la API
+pública `sendUserMessage` de Pi retorna `void`, el adaptador no finge esperar su
+procesamiento interno: invoca como máximo un mensaje, confirma su aceptación
+al observar el `message_start` de usuario con su marcador y libera el siguiente
+solo después de `agent_settled`. Un turno ajeno no puede liberar esa barrera. Pi
+conserva la autoridad sobre la planificación de turnos. Si una entrega no
+alcanza `message_start`, o una ya aceptada no alcanza `agent_settled`, en 30
+segundos mantiene la barrera y muestra una advertencia. Esto también cubre un
+mensaje interceptado por otro input handler y evita confundir un fallo con un
+preflight o turno lento. El operador puede ejecutar `/synagent resume` para
+liberar la cola explícitamente, aceptando orden best-effort desde ese punto. El
+adaptador reserva cada `id` antes de encolarlo y conserva los
+últimos 1000 IDs en entradas privadas de la sesión:
+
+- si Pi está idle, inicia un turno normal;
+- `kind=steer` interrumpe un turno activo con `deliverAs: "steer"`;
+- los demás mensajes se encolan con `deliverAs: "followUp"`.
+
+La entrega al modelo es **at-most-once**. Puede perderse un mensaje si el
+proceso cae después de reservar su ID y antes de entregarlo.
+
+## Seguridad
+
+El broker escucha solo en loopback y no implementa auth, TLS ni ACL. Cualquier
+proceso local puede publicar, falsificar `from` y enviar incluso mensajes
+`steer`; esos campos no prueban identidad. Exponer el broker a otra interfaz
+permitiría inyección remota de prompts. Uso remoto requiere añadir
+autenticación, autorización de topics y TLS antes de admitir URLs no locales.
+
+## Pruebas
+
+```sh
+npm test --workspace @a4s/synagent
+npm run typecheck --workspace @a4s/synagent
+```
+
+Las pruebas incluyen el protocolo compartido, el broker, los scripts reales y
+un recorrido MQTT bidireccional del adaptador Pi contra un broker Aedes real
+con el peer emulado.
+
+## Límites actuales
+
+Synagent no ofrece ACK semántico fenceado, replay histórico, event sourcing ni
+alta disponibilidad. MQTT aporta QoS, retención y sesiones persistentes; esas
+garantías no convierten el bus en un log reproducible.

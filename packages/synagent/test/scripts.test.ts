@@ -4,9 +4,10 @@
 // ejercita porque construye su propio broker en memoria.
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { cp, mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import assert from 'node:assert/strict'
 import { after, test } from 'node:test'
 
@@ -85,4 +86,15 @@ test('estructura: los bridges existen donde register.ts los resuelve', () => {
   for (const rel of ['bridge/bridge-sub.cjs', 'bridge/bridge-pub.cjs']) {
     assert.ok(existsSync(join(pluginRoot, rel)), `falta ${rel} bajo $.plugin.root`)
   }
+})
+
+test('marketplace: el núcleo Claude carga al copiar solo el plugin', async t => {
+  const source = new URL('../adapters/claude/', import.meta.url).pathname
+  const temp = await mkdtemp(join(tmpdir(), 'synagent-claude-plugin-'))
+  const installed = join(temp, 'synagent-adapter-mqtt')
+  t.after(() => rm(temp, { recursive: true, force: true }))
+  await cp(source, installed, { recursive: true })
+
+  const adapter = await import(pathToFileURL(join(installed, 'hooks/adapter.ts')).href)
+  assert.equal(adapter.toCanonical('hola', { id: 'installed-1', ts: 1 }).to, 'pi')
 })
