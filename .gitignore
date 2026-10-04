@@ -48,6 +48,9 @@ Thumbs.db
 __pycache__/
 *.py[cod]
 
+# synagent bus: LevelDB persistence (default path when running the broker)
+packages/synagent/bus/mqtt-db/
+
 # Beads / Dolt files (added by bd init)
 .dolt/
 *.db
