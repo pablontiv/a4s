@@ -1,0 +1,40 @@
+{
+  "name": "@a4s/synagent-bus",
+  "version": "0.1.0",
+  "license": "UNLICENSED",
+  "description": "Standalone loopback MQTT broker for Synagent with durable LevelDB state.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pablontiv/a4s.git",
+    "directory": "packages/synagent-bus"
+  },
+  "homepage": "https://github.com/pablontiv/a4s/tree/main/packages/synagent-bus#readme",
+  "bugs": {
+    "url": "https://github.com/pablontiv/a4s/issues"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "bin": {
+    "synagent-bus": "./broker.cjs"
+  },
+  "files": [
+    "broker.cjs",
+    "herdr/",
+    "herdr-plugin.toml",
+    "README.md"
+  ],
+  "scripts": {
+    "bus": "node broker.cjs",
+    "test": "node --test --test-concurrency=1 test/*.test.cjs",
+    "typecheck": "node --check broker.cjs && node --check herdr/ensure.cjs"
+  },
+  "dependencies": {
+    "aedes": "1.2.0",
+    "aedes-persistence-level": "9.2.0",
+    "classic-level": "3.0.0"
+  },
+  "devDependencies": {
+    "mqtt": "5.16.0"
+  }
+}
