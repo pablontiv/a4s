@@ -3,6 +3,7 @@
 // cubre el modo de carga (ESM/CJS) y el round-trip real, que bus.test.ts no
 // ejercita porque construye su propio broker en memoria.
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { existsSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -72,4 +73,16 @@ test('scripts del bus: broker.cjs + bridges arrancan y hacen round-trip real', a
   assert.equal(msg.from, 'pi')
   assert.equal(msg.kind, 'prompt')
   assert.equal(msg.body, 'hola desde scripts.test')
+})
+
+// Guard estructural (review LOW-1): register.ts resuelve sus bridges como
+// `${$.plugin.root}/bridge/bridge-{sub,pub}.cjs`, donde $.plugin.root es el dir
+// del plugin (adapters/claude). Si alguien renombra/mueve `bridge/`, los otros
+// tests podrían seguir pasando con su propia ruta mientras el adaptador
+// instalado falla en silencio. Este test ancla esa suposición.
+test('estructura: los bridges existen donde register.ts los resuelve', () => {
+  const pluginRoot = new URL('../adapters/claude/', import.meta.url).pathname
+  for (const rel of ['bridge/bridge-sub.cjs', 'bridge/bridge-pub.cjs']) {
+    assert.ok(existsSync(join(pluginRoot, rel)), `falta ${rel} bajo $.plugin.root`)
+  }
 })
