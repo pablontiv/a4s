@@ -10,6 +10,8 @@ import assert from 'node:assert/strict'
 import { after, test } from 'node:test'
 
 const BUS = new URL('../bus/', import.meta.url).pathname
+// Los bridges viven dentro del plugin (para viajar al instalar), el broker en bus/.
+const BRIDGE = new URL('../adapters/claude/bridge/', import.meta.url).pathname
 
 function waitFor(
   proc: ChildProcessWithoutNullStreams,
@@ -49,7 +51,7 @@ test('scripts del bus: broker.cjs + bridges arrancan y hacen round-trip real', a
   const port = ready[1]
   const url = `mqtt://127.0.0.1:${port}`
 
-  const sub = spawn('node', [join(BUS, 'bridge-sub.cjs'), 'claude', url]) as ChildProcessWithoutNullStreams
+  const sub = spawn('node', [join(BRIDGE, 'bridge-sub.cjs'), 'claude', url]) as ChildProcessWithoutNullStreams
   procs.push(sub)
   // bridge-sub loguea la suscripción a stderr; esperamos a estar suscritos.
   await waitFor(sub, 'stderr', /suscrito a a4s\/inbox\/claude/)
@@ -57,7 +59,7 @@ test('scripts del bus: broker.cjs + bridges arrancan y hacen round-trip real', a
   const gotLine = waitFor(sub, 'stdout', /\{.*"id"\s*:\s*"scripts-1".*\}/)
 
   const pub = spawn('node', [
-    join(BUS, 'bridge-pub.cjs'), 'claude', 'hola desde scripts.test', 'pi', 'prompt', 'scripts-1', '', url,
+    join(BRIDGE, 'bridge-pub.cjs'), 'claude', 'hola desde scripts.test', 'pi', 'prompt', 'scripts-1', '', url,
   ]) as ChildProcessWithoutNullStreams
   procs.push(pub)
   const pubExit: number = await new Promise((res) => pub.on('exit', (c) => res(c ?? -1)))

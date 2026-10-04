@@ -10,9 +10,15 @@
 // mi outbox = publicar al inbox del destinatario.
 //
 // SEPARACIÓN DE RESPONSABILIDADES:
-//   - El BUS es una app aparte, se arranca por shell: `node bus/broker.cjs`
-//     (o `npm run bus`). El adaptador NO lo levanta; solo se conecta (:1884).
-//   - El ADAPTADOR (este módulo) solo se suscribe y publica.
+//   - El BUS (broker) es una app aparte, se arranca por shell: `npm run bus`
+//     (packages/synagent/bus/broker.cjs). El adaptador NO lo levanta; se conecta.
+//   - El ADAPTADOR (este módulo + sus bridges) solo se suscribe y publica.
+//
+// AUTOCONTENCIÓN: los bridges (cliente MQTT) viven DENTRO del plugin, en
+// ./bridge, y se resuelven desde $.plugin.root. Así, cuando el plugin se instala
+// desde un marketplace (Claude Code copia solo el dir del plugin e instala sus
+// deps de package.json), los bridges y su dependencia `mqtt` viajan con él. El
+// broker queda fuera del plugin a propósito (es el bus, no el adaptador).
 //
 // ARRANQUE PEREZOSO: la suscripción y el registro del comando NO van en
 // session.start (un mod añadido/editado a mitad de sesión no re-dispara ese
@@ -21,10 +27,10 @@
 // $.state) lo guarda: se resetea en cada recarga, así el bridge se respawnea
 // fresco (misma clientId => el broker desaloja al viejo).
 //
-// Las rutas del bus se resuelven desde $.plugin.root (dir del plugin, que es
-// adapters/claude): el bus vive dos niveles arriba, en packages/synagent/bus.
+// La URL del broker es configurable (userConfig `brokerUrl`); por defecto
+// mqtt://127.0.0.1:1884 (el bus escucha solo en loopback).
 
-import type { EngineInterface, Register } from 'claude-code'
+import type { EngineInterface, PluginOptions, Register } from 'claude-code'
 
 import {
   DEFAULT_PEER,
@@ -35,7 +41,7 @@ import {
   SELF_ADDRESS,
 } from './adapter'
 
-const BROKER_URL = 'mqtt://127.0.0.1:1884'
+const DEFAULT_BROKER_URL = 'mqtt://127.0.0.1:1884'
 const PROCESSED_KEY = 'processed'
 // Tope del set de dedupe: entrega at-most-once al modelo, LRU acotado para que
 // el store no crezca sin límite.
@@ -46,7 +52,13 @@ const MAX_BUF = 1_000_000
 // de una misma carga cuando session.start y prompt.submit se disparan.
 let started = false
 
-const busDir = ($: EngineInterface): string => `${$.plugin.root}/../../bus`
+// Los bridges viven dentro del plugin (./bridge), para que viajen al instalar.
+const bridgeDir = ($: EngineInterface): string => `${$.plugin.root}/bridge`
+
+function resolveBrokerUrl(options: PluginOptions): string {
+  const v = options['brokerUrl']
+  return typeof v === 'string' && v.length > 0 ? v : DEFAULT_BROKER_URL
+}
 
 // Idempotencia por id: reserva ANTES de entregar (lección del PoC de fs). Esto
 // da entrega at-most-once al modelo: evita re-inyectar el mismo turno, a costa
@@ -62,11 +74,11 @@ async function reserve($: EngineInterface, id: string): Promise<boolean> {
 }
 
 // Abre la suscripción JALAR y registra /mq-send. Idempotente por carga.
-async function ensureStarted($: EngineInterface): Promise<void> {
+async function ensureStarted($: EngineInterface, brokerUrl: string): Promise<void> {
   if (started) return
   started = true // marcar ANTES de await para que no entren dos a la vez
 
-  const bridgeSub = `${busDir($)}/bridge-sub.cjs`
+  const bridgeSub = `${bridgeDir($)}/bridge-sub.cjs`
 
   // JALAR es lo CORE: se spawnea PRIMERO. El registro del comando va después y
   // es no-fatal (try/catch), para que un fallo de $.command.register —p. ej. una
@@ -77,7 +89,7 @@ async function ensureStarted($: EngineInterface): Promise<void> {
   // libera `started` para que el próximo prompt re-suscriba.
   void (async () => {
     try {
-      const bridge = $.process.spawn({ argv: ['node', bridgeSub, SELF_ADDRESS, BROKER_URL] })
+      const bridge = $.process.spawn({ argv: ['node', bridgeSub, SELF_ADDRESS, brokerUrl] })
       let buf = ''
       for await (const chunk of bridge) {
         if (chunk.stream !== 'stdout' || typeof chunk.text !== 'string') continue
@@ -128,17 +140,19 @@ async function ensureStarted($: EngineInterface): Promise<void> {
   void $.ui.status(`synagent: ${SELF_ADDRESS} (JALAR activo)`)
 }
 
-export const register: Register = on => {
+export const register: Register = (on, options) => {
+  const brokerUrl = resolveBrokerUrl(options)
+
   // Arranque limpio: session.start arranca el adaptador.
   on('session.start', async ($, e, next) => {
-    await ensureStarted($)
+    await ensureStarted($, brokerUrl)
     return next(e)
   })
 
   // Recarga en caliente (mod añadido/editado a mitad de sesión): el primer
   // prompt del usuario arranca el adaptador sin necesidad de reiniciar.
   on('prompt.submit', async ($, e, next) => {
-    await ensureStarted($)
+    await ensureStarted($, brokerUrl)
     return next(e)
   })
 
@@ -156,9 +170,9 @@ export const register: Register = on => {
       body = m[2] ?? body
     }
     const id = newId(await $.clock.now())
-    const bridgePub = `${busDir($)}/bridge-pub.cjs`
+    const bridgePub = `${bridgeDir($)}/bridge-pub.cjs`
     const r = await $.process.run([
-      'node', bridgePub, to, body, SELF_ADDRESS, 'prompt', id, '', BROKER_URL,
+      'node', bridgePub, to, body, SELF_ADDRESS, 'prompt', id, '', brokerUrl,
     ])
     if (r.exitCode !== 0) {
       return { text: `mq-send ERROR (exit ${r.exitCode}): ${r.stderr || r.stdout}` }
