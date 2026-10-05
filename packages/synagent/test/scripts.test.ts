@@ -11,10 +11,45 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
+import { connect, type IClientOptions, type MqttClient } from 'mqtt'
 
 const require = createRequire(import.meta.url)
 const { Aedes } = require('aedes')
 const BRIDGE = new URL('../adapters/claude/bridge/', import.meta.url).pathname
+
+function waitForExit(proc: ChildProcessWithoutNullStreams, timeoutMs = 5000): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('timeout esperando fin del proceso')), timeoutMs)
+    proc.once('exit', (code) => {
+      clearTimeout(timer)
+      resolve(code ?? -1)
+    })
+  })
+}
+
+function openMqtt(url: string, options: IClientOptions): Promise<{ client: MqttClient; sessionPresent: boolean }> {
+  return new Promise((resolve, reject) => {
+    const client = connect(url, { ...options, reconnectPeriod: 0 })
+    const onError = (error: Error) => reject(error)
+    client.once('error', onError)
+    client.once('connect', (packet) => {
+      client.off('error', onError)
+      resolve({ client, sessionPresent: packet.sessionPresent })
+    })
+  })
+}
+
+function subscribe(client: MqttClient, topic: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    client.subscribe(topic, { qos: 1 }, (error) => error ? reject(error) : resolve())
+  })
+}
+
+function endMqtt(client: MqttClient): Promise<void> {
+  return new Promise((resolve, reject) => {
+    client.end(false, {}, (error) => error ? reject(error) : resolve())
+  })
+}
 
 function waitFor(
   proc: ChildProcessWithoutNullStreams,
@@ -91,9 +126,9 @@ test('scripts de Claude v1: bridges arrancan y hacen round-trip real', async (t)
     join(BRIDGE, 'bridge-sub.cjs'),
     '--url', url,
     '--durable-id', 'd1',
-    '--durable', 'synagent/v1/a4s/claude-1', 'a4s/inbox/claude',
+    '--durable', 'synagent/v1/a4s/claude-1',
     '--transient-id', 't1',
-    '--transient', 'synagent/v1/a4s/all',
+    '--transient', 'synagent/v1/a4s/all', 'synagent/v1/all',
   ]) as ChildProcessWithoutNullStreams
   procs.push(sub)
 
@@ -133,7 +168,66 @@ test('scripts de Claude v1: bridges arrancan y hacen round-trip real', async (t)
   assert.equal(msg.body, 'hola desde scripts.test (v1)')
 })
 
-test('scripts de Claude v1: bridge-sub soporta dual-read (durable + transient)', async (t) => {
+test('scripts de Claude v1: la migración elimina la sesión durable histórica con su clientId exacto', async (t) => {
+  const broker = await Aedes.createBroker({})
+  const server = net.createServer(broker.handle)
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const port = (server.address() as net.AddressInfo).port
+  const url = `mqtt://127.0.0.1:${port}`
+  const procs: ChildProcessWithoutNullStreams[] = []
+  t.after(async () => {
+    for (const process of procs) process.kill('SIGKILL')
+    await new Promise<void>((resolve) => server.close(() => resolve()))
+    await new Promise<void>((resolve) => broker.close(() => resolve()))
+  })
+
+  // Recrea el estado que dejó el adaptador histórico: sesión clean=false y
+  // suscripción legacy persistida bajo el clientId fijo.
+  const seeded = await openMqtt(url, { clientId: 'synagent-legacy-claude', clean: false })
+  assert.equal(seeded.sessionPresent, false)
+  await subscribe(seeded.client, 'a4s/inbox/claude')
+  await endMqtt(seeded.client)
+
+  // clean=true con EL MISMO clientId descarta en el broker toda la sesión
+  // durable. El proceso es one-shot y repetirlo es seguro.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const retire = spawn('node', [
+      join(BRIDGE, 'bridge-sub.cjs'),
+      '--url', url,
+      '--retire-id', 'synagent-legacy-claude',
+    ]) as ChildProcessWithoutNullStreams
+    procs.push(retire)
+    const exited = waitForExit(retire)
+    await waitFor(retire, 'stderr', /sesión durable retirada: synagent-legacy-claude/)
+    assert.equal(await exited, 0, `migración ${attempt + 1} debe cerrar limpiamente`)
+  }
+
+  // Al reconectar como sesión durable no debe existir estado previo: prueba que
+  // no solo se desuscribió con el clientId v1 actual, sino que se eliminó la
+  // sesión asociada al clientId histórico correcto.
+  const probe = await openMqtt(url, { clientId: 'synagent-legacy-claude', clean: false })
+  assert.equal(probe.sessionPresent, false, 'la sesión histórica ya no existe en el broker')
+  await endMqtt(probe.client)
+})
+
+test('scripts de Claude v1: retiro legacy termina sin retries si el broker está ausente', async (t) => {
+  const reservation = net.createServer()
+  await new Promise<void>((resolve) => reservation.listen(0, '127.0.0.1', resolve))
+  const port = (reservation.address() as net.AddressInfo).port
+  await new Promise<void>((resolve) => reservation.close(() => resolve()))
+
+  const retire = spawn('node', [
+    join(BRIDGE, 'bridge-sub.cjs'),
+    '--url', `mqtt://127.0.0.1:${port}`,
+    '--retire-id', 'synagent-legacy-claude',
+  ]) as ChildProcessWithoutNullStreams
+  t.after(() => retire.kill('SIGKILL'))
+  const exited = waitForExit(retire)
+  await waitFor(retire, 'stderr', /no se pudo retirar sesión durable synagent-legacy-claude/)
+  assert.notEqual(await exited, 0, 'ausencia del broker se reporta sin dejar proceso persistente')
+})
+
+test('scripts de Claude v1: bridge-sub soporta clientes durable + transient', async (t) => {
   const broker = await Aedes.createBroker({})
   const server = net.createServer(broker.handle)
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))

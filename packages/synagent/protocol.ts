@@ -8,7 +8,7 @@
 // Topología v1 (regla: topic == `${TOPIC_ROOT}/${version}/${to}`):
 //   synagent/v1/<proyecto>/<instancia>  — buzón directo
 //   synagent/v1/<proyecto>/all          — broadcast de proyecto
-//   synagent/v1/all                     — broadcast global (opt-in)
+//   synagent/v1/all                     — broadcast global (activo por defecto)
 //
 // IDENTIDAD (ADR 0069): cada binding la deriva de APIs NATIVAS de sesión del
 // host, NO de variables de entorno ni de un launcher. La instancia viene del id
@@ -116,8 +116,8 @@ export function legacyTopic(address: string): string {
 }
 
 // --- plan de suscripción -------------------------------------------------------
-// durable   (clean=false): buzón directo + legacy → entrega offline encolada.
-// transient (clean=true):  broadcast de proyecto + global opt-in → online-only.
+// durable   (clean=false): buzón directo (+ legacy solo si se pide explícitamente).
+// transient (clean=true):  broadcasts de proyecto + global por defecto → online-only.
 
 export interface SubscriptionPlan {
   readonly durable: readonly string[]
@@ -134,7 +134,7 @@ export function subscriptions(options: {
   const durable: string[] = [toTopic(directAddress(options.identity), version)]
   if (options.legacyAddress) durable.push(legacyTopic(options.legacyAddress))
   const transient: string[] = [toTopic(projectAddress(options.identity.project), version)]
-  if (options.global) transient.push(toTopic(GLOBAL_ADDRESS, version))
+  if (options.global !== false) transient.push(toTopic(GLOBAL_ADDRESS, version))
   return { durable, transient }
 }
 
@@ -146,7 +146,7 @@ export function isFor(message: CanonicalMessage, address: string): boolean {
 }
 
 // ¿Este mensaje es para mí? Directo a mi identidad, broadcast de mi proyecto,
-// global (solo si opté por él) o legacy plano (dual-read).
+// global (si está habilitado) o legacy plano (compatibilidad explícita).
 export function isForIdentity(
   message: CanonicalMessage,
   options: { identity: Identity; global?: boolean; legacyAddress?: string },
@@ -158,7 +158,7 @@ export function isForIdentity(
     return address.project === options.identity.project && address.instance === options.identity.instance
   }
   if (address.scope === 'project') return address.project === options.identity.project
-  return options.global === true
+  return options.global !== false
 }
 
 // steer solo tiene sentido directo: se rechaza en ENVÍO y en RECEPCIÓN.
