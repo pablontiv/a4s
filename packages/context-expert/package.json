@@ -2,8 +2,17 @@
   "name": "@a4s/context-expert",
   "version": "0.1.0",
   "private": true,
-  "license": "MIT",
+  "license": "UNLICENSED",
   "description": "Host-neutral Jev compaction core with a Claude Code marketplace plugin (adapters/claude) and a Pi extension adapter. Port of context-expert, reusing fast-jev-compaction (MIT).",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pablontiv/a4s.git",
+    "directory": "packages/context-expert"
+  },
+  "homepage": "https://github.com/pablontiv/a4s/tree/main/packages/context-expert#readme",
+  "bugs": {
+    "url": "https://github.com/pablontiv/a4s/issues"
+  },
   "type": "module",
   "engines": {
     "node": ">=22.19.0"

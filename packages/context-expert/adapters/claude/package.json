@@ -2,7 +2,7 @@
   "name": "@a4s/context-expert-claude",
   "version": "0.1.0",
   "private": true,
-  "license": "MIT",
+  "license": "UNLICENSED",
   "description": "Claude Code marketplace plugin for context-expert: Jev-guided deterministic compaction with an auto-compact trigger. Self-contained (bundled core).",
   "type": "module",
   "engines": {
