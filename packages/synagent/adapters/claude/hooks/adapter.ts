@@ -258,6 +258,9 @@ export function acceptInbound(
   message: CanonicalMessage,
   options: { global?: boolean; legacyAddress?: string } = {},
 ): boolean {
+  // Self-echo: un broadcast propio vuelve por mi propia suscripción. No entregar
+  // lo que yo mismo emití (comparando la dirección de origen con la mía).
+  if (message.from === directAddress(self)) return false
   if (isBroadcastSteer(message)) return false
   return isForIdentity(message, { identity: self, ...options })
 }

@@ -156,6 +156,9 @@ test('acceptInbound = enrutado para mí Y no steer-broadcast', () => {
   assert.equal(acceptInbound(identity, msg({ to: 'otro/all' })), false)
   assert.equal(acceptInbound(identity, msg({ to: 'all' }), { global: true }), true)
   assert.equal(acceptInbound(identity, msg({ to: 'claude' }), { legacyAddress: 'claude' }), true)
+  // self-echo: un broadcast propio (from = mi dirección) no se entrega
+  assert.equal(acceptInbound(identity, msg({ to: 'a4s/all', from: directAddress(identity) })), false)
+  assert.equal(acceptInbound(identity, msg({ to: 'a4s/sess-01HXYZ', from: directAddress(identity) })), false)
 })
 
 test('createCanonical/serialize/parseCanonical round-trip y render', () => {

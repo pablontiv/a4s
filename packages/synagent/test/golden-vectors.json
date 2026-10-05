@@ -51,6 +51,13 @@
       "topic": null,
       "acceptPlain": true,
       "acceptGlobal": true
+    },
+    {
+      "name": "self-echo (from = mi propia dirección) — no entregar",
+      "wire": "{\"id\":\"g8\",\"from\":\"a4s/sess-01\",\"to\":\"a4s/all\",\"kind\":\"notify\",\"body\":\"mío\",\"ts\":8}",
+      "topic": "synagent/v1/a4s/all",
+      "acceptPlain": false,
+      "acceptGlobal": false
     }
   ]
 }
