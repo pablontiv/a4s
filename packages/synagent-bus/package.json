@@ -32,7 +32,8 @@
   "dependencies": {
     "aedes": "1.2.0",
     "aedes-persistence-level": "9.2.0",
-    "classic-level": "3.0.0"
+    "classic-level": "3.0.0",
+    "proper-lockfile": "4.1.2"
   },
   "devDependencies": {
     "mqtt": "5.16.0"

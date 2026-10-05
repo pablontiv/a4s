@@ -1,15 +1,17 @@
 'use strict'
 
 const assert = require('node:assert/strict')
-const { spawn } = require('node:child_process')
+const { fork, spawn } = require('node:child_process')
 const fs = require('node:fs/promises')
 const net = require('node:net')
 const os = require('node:os')
 const path = require('node:path')
 const { test } = require('node:test')
-const { acquireLock, releaseLock } = require('../herdr/ensure.cjs')
 
 const ENSURE = path.join(__dirname, '..', 'herdr', 'ensure.cjs')
+const LOCK_WORKER = path.join(__dirname, 'lock-worker.cjs')
+const LOCK_STALE_MS = 2_000
+const LOCK_UPDATE_MS = 1_000
 
 function exitWithOutput(proc) {
   return new Promise(resolve => {
@@ -241,81 +243,129 @@ test('Herdr ensure repairs its recorded stopped plugin pane and tab only', async
   assertExactProcessInfoCalls(state)
 })
 
-test('stale lock owned by a dead PID is recovered with new PID, timestamp, and token', async t => {
-  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'synagent-lock-stale-'))
-  t.after(() => fs.rm(temp, { recursive: true, force: true }))
-  const lockFile = path.join(temp, 'ensure.lock')
-  await fs.writeFile(lockFile, `${JSON.stringify({ pid: 99999999, createdAt: Date.now() - 60_000, token: 'stale' })}\n`)
-  const token = await acquireLock(lockFile, { attempts: 1, delayMs: 1 })
-  const owner = JSON.parse(await fs.readFile(lockFile, 'utf8'))
-  assert.equal(owner.pid, process.pid)
-  assert.equal(typeof owner.createdAt, 'number')
-  assert.equal(owner.token, token)
-  assert.notEqual(token, 'stale')
-  await releaseLock(lockFile, token)
-  await assert.rejects(fs.access(lockFile), { code: 'ENOENT' })
+function startLockWorker(target, { retries = 0, holdMs = -1, logFile = '' } = {}) {
+  return fork(LOCK_WORKER, [
+    target, String(LOCK_STALE_MS), String(LOCK_UPDATE_MS), String(retries), String(holdMs), logFile,
+  ], { silent: true })
+}
+
+function waitForWorkerMessage(worker, type, timeoutMs = 10_000) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`timeout waiting for worker ${type}`)), timeoutMs)
+    const onMessage = message => {
+      if (message?.type !== type) return
+      clearTimeout(timer)
+      worker.off('exit', onExit)
+      resolve(message)
+    }
+    const onExit = code => {
+      clearTimeout(timer)
+      worker.off('message', onMessage)
+      reject(new Error(`lock worker exited ${code} before ${type}`))
+    }
+    worker.on('message', onMessage)
+    worker.once('exit', onExit)
+  })
+}
+
+function waitForWorkerExit(worker) {
+  return new Promise(resolve => worker.once('exit', (code, signal) => resolve({ code, signal })))
+}
+
+async function releaseWorker(worker) {
+  const released = waitForWorkerMessage(worker, 'released')
+  const exited = waitForWorkerExit(worker)
+  worker.send({ type: 'release' })
+  await released
+  assert.deepEqual(await exited, { code: 0, signal: null })
+}
+
+async function killWorker(worker) {
+  const exited = waitForWorkerExit(worker)
+  worker.kill('SIGKILL')
+  const result = await exited
+  assert.equal(result.signal, 'SIGKILL')
+}
+
+async function lockFixture(t, prefix) {
+  const temp = await fs.mkdtemp(path.join(os.tmpdir(), prefix))
+  const workers = new Set()
+  t.after(async () => {
+    for (const worker of workers) {
+      if (worker.exitCode === null && worker.signalCode === null) worker.kill('SIGKILL')
+    }
+    await fs.rm(temp, { recursive: true, force: true })
+  })
+  return {
+    target: path.join(temp, 'ensure'),
+    track(worker) { workers.add(worker); return worker },
+    temp,
+  }
+}
+
+test('multiprocess lock preserves a live owner and rejects every contender', async t => {
+  const fixture = await lockFixture(t, 'synagent-lock-live-')
+  const owner = fixture.track(startLockWorker(fixture.target))
+  await waitForWorkerMessage(owner, 'acquired')
+
+  const contenders = Array.from({ length: 6 }, () => fixture.track(startLockWorker(fixture.target)))
+  const failures = await Promise.all(contenders.map(worker => waitForWorkerMessage(worker, 'failed')))
+  assert.ok(failures.every(failure => failure.code === 'ELOCKED'))
+  assert.equal((await fs.stat(`${fixture.target}.lock`)).isDirectory(), true)
+
+  await releaseWorker(owner)
+  const successor = fixture.track(startLockWorker(fixture.target))
+  await waitForWorkerMessage(successor, 'acquired')
+  await releaseWorker(successor)
 })
 
-test('live lock is preserved and blocks a second ensure owner', async t => {
-  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'synagent-lock-live-'))
-  t.after(() => fs.rm(temp, { recursive: true, force: true }))
-  const lockFile = path.join(temp, 'ensure.lock')
-  const live = { pid: process.pid, createdAt: Date.now(), token: 'live-owner' }
-  await fs.writeFile(lockFile, `${JSON.stringify(live)}\n`)
-  await assert.rejects(
-    acquireLock(lockFile, { attempts: 1, delayMs: 1 }),
-    /another live Synagent ensure operation/,
-  )
-  assert.deepEqual(JSON.parse(await fs.readFile(lockFile, 'utf8')), live)
+test('multiprocess lock recovers after SIGKILL, including a recovered owner crashing', { timeout: 20_000 }, async t => {
+  const fixture = await lockFixture(t, 'synagent-lock-crash-')
+  const first = fixture.track(startLockWorker(fixture.target))
+  await waitForWorkerMessage(first, 'acquired')
+  await killWorker(first)
+
+  const tooEarly = fixture.track(startLockWorker(fixture.target))
+  assert.equal((await waitForWorkerMessage(tooEarly, 'failed')).code, 'ELOCKED')
+  await new Promise(resolve => setTimeout(resolve, LOCK_STALE_MS + 250))
+
+  const recoveredThenCrashed = fixture.track(startLockWorker(fixture.target, { retries: 150 }))
+  await waitForWorkerMessage(recoveredThenCrashed, 'acquired')
+  await killWorker(recoveredThenCrashed)
+
+  const stillProtected = fixture.track(startLockWorker(fixture.target))
+  assert.equal((await waitForWorkerMessage(stillProtected, 'failed')).code, 'ELOCKED')
+  await new Promise(resolve => setTimeout(resolve, LOCK_STALE_MS + 250))
+
+  const finalOwner = fixture.track(startLockWorker(fixture.target, { retries: 150 }))
+  await waitForWorkerMessage(finalOwner, 'acquired')
+  await releaseWorker(finalOwner)
 })
 
-test('concurrent stale recovery admits at most one critical-section owner', async t => {
-  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'synagent-lock-race-'))
-  t.after(() => fs.rm(temp, { recursive: true, force: true }))
-  const lockFile = path.join(temp, 'ensure.lock')
-  await fs.writeFile(lockFile, `${JSON.stringify({
-    pid: 99999999, createdAt: Date.now() - 60_000, token: 'stale-race',
-  })}\n`)
+test('multiprocess stale contention never overlaps critical sections', { timeout: 20_000 }, async t => {
+  const fixture = await lockFixture(t, 'synagent-lock-contention-')
+  const seed = fixture.track(startLockWorker(fixture.target))
+  await waitForWorkerMessage(seed, 'acquired')
+  await killWorker(seed)
+  await new Promise(resolve => setTimeout(resolve, LOCK_STALE_MS + 250))
 
+  const logFile = path.join(fixture.temp, 'critical.log')
+  const contenders = Array.from({ length: 8 }, () => fixture.track(startLockWorker(
+    fixture.target, { retries: 100, holdMs: 80, logFile },
+  )))
+  const exits = await Promise.all(contenders.map(waitForWorkerExit))
+  assert.ok(exits.every(result => result.code === 0 && result.signal === null))
+
+  const lines = (await fs.readFile(logFile, 'utf8')).trim().split('\n')
   let active = 0
   let maximumActive = 0
-  const entered = []
-  await Promise.all(Array.from({ length: 12 }, async (_, index) => {
-    const token = await acquireLock(lockFile, { attempts: 1000, delayMs: 1 })
-    active += 1
+  for (const line of lines) {
+    if (line.startsWith('ENTER ')) active += 1
+    if (line.startsWith('EXIT ')) active -= 1
     maximumActive = Math.max(maximumActive, active)
-    entered.push(index)
-    await new Promise(resolve => setTimeout(resolve, 3))
-    active -= 1
-    await releaseLock(lockFile, token)
-  }))
-
+    assert.ok(active >= 0)
+  }
+  assert.equal(lines.filter(line => line.startsWith('ENTER ')).length, contenders.length)
+  assert.equal(active, 0)
   assert.equal(maximumActive, 1)
-  assert.equal(entered.length, 12)
-  await assert.rejects(fs.access(lockFile), { code: 'ENOENT' })
-})
-
-test('a live main lock appearing during stale recovery is never removed', async t => {
-  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'synagent-lock-revalidate-'))
-  t.after(() => fs.rm(temp, { recursive: true, force: true }))
-  const lockFile = path.join(temp, 'ensure.lock')
-  const recoveryDir = `${lockFile}.recovery`
-  const stale = { pid: 99999999, createdAt: Date.now() - 60_000, token: 'stale-before-recovery' }
-  await fs.writeFile(lockFile, `${JSON.stringify(stale)}\n`)
-
-  await fs.mkdir(recoveryDir)
-  await fs.writeFile(path.join(recoveryDir, 'owner.json'), `${JSON.stringify({
-    pid: process.pid, createdAt: Date.now(), token: 'held-recovery',
-  })}\n`)
-  const contender = acquireLock(lockFile, { attempts: 20, delayMs: 10 })
-  await new Promise(resolve => setTimeout(resolve, 25))
-
-  const live = { pid: process.pid, createdAt: Date.now(), token: 'live-during-recovery' }
-  await fs.unlink(lockFile)
-  await fs.writeFile(lockFile, `${JSON.stringify(live)}\n`, { flag: 'wx' })
-  await fs.unlink(path.join(recoveryDir, 'owner.json'))
-  await fs.rmdir(recoveryDir)
-
-  await assert.rejects(contender, /another live Synagent ensure operation/)
-  assert.deepEqual(JSON.parse(await fs.readFile(lockFile, 'utf8')), live)
 })

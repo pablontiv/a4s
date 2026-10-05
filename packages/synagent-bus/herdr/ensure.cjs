@@ -2,16 +2,15 @@
 'use strict'
 
 const { spawnSync } = require('node:child_process')
-const { randomUUID } = require('node:crypto')
 const fs = require('node:fs/promises')
 const net = require('node:net')
 const os = require('node:os')
 const path = require('node:path')
+const lockfile = require('proper-lockfile')
 
 const PLUGIN_ID = 'a4s.synagent-bus'
 const WORKSPACE_LABEL = 'Synagent'
 const TAB_LABEL = 'Bus'
-const INCOMPLETE_LOCK_STALE_MS = 30_000
 const delay = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds))
 
 function command(bin, args, { allowFailure = false } = {}) {
@@ -84,141 +83,14 @@ async function waitForBroker(port) {
   return false
 }
 
-function pidExists(pid) {
-  if (!Number.isInteger(pid) || pid < 1) return false
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch (error) {
-    if (error.code === 'ESRCH') return false
-    if (error.code === 'EPERM') return true
-    throw error
-  }
-}
-
-function validOwner(owner) {
-  return Number.isInteger(owner?.pid) && owner.pid > 0 &&
-    Number.isFinite(owner.createdAt) && typeof owner.token === 'string' && owner.token.length > 0
-}
-
-async function createMainLock(lockFile, token) {
-  let handle
-  try {
-    handle = await fs.open(lockFile, 'wx', 0o600)
-    await handle.writeFile(`${JSON.stringify({ pid: process.pid, createdAt: Date.now(), token })}\n`)
-    await handle.close()
-    return true
-  } catch (error) {
-    await handle?.close().catch(() => {})
-    if (error.code === 'EEXIST') return false
-    throw error
-  }
-}
-
-async function acquireRecoveryMutex(lockFile) {
-  const directory = `${lockFile}.recovery`
-  const token = randomUUID()
-  try {
-    await fs.mkdir(directory, { mode: 0o700 })
-  } catch (error) {
-    if (error.code === 'EEXIST') return null
-    throw error
-  }
-  try {
-    await fs.writeFile(
-      path.join(directory, 'owner.json'),
-      `${JSON.stringify({ pid: process.pid, createdAt: Date.now(), token })}\n`,
-      { flag: 'wx', mode: 0o600 },
-    )
-    return { directory, token }
-  } catch (error) {
-    await fs.rmdir(directory).catch(() => {})
-    throw error
-  }
-}
-
-async function releaseRecoveryMutex(mutex) {
-  const ownerFile = path.join(mutex.directory, 'owner.json')
-  const owner = JSON.parse(await fs.readFile(ownerFile, 'utf8'))
-  if (owner.token !== mutex.token || owner.pid !== process.pid) {
-    throw new Error('Synagent recovery mutex owner changed; refusing removal')
-  }
-  await fs.unlink(ownerFile)
-  await fs.rmdir(mutex.directory)
-}
-
-async function recoverStaleLock(lockFile, token) {
-  const mutex = await acquireRecoveryMutex(lockFile)
-  if (!mutex) return false
-  try {
-    let observed
-    try {
-      observed = await fs.readFile(lockFile, 'utf8')
-    } catch (error) {
-      if (error.code !== 'ENOENT') throw error
-      return await createMainLock(lockFile, token)
-    }
-
-    let owner
-    try {
-      owner = JSON.parse(observed)
-    } catch {
-      owner = null
-    }
-    if (validOwner(owner)) {
-      if (pidExists(owner.pid)) return false
-    } else {
-      const stat = await fs.stat(lockFile)
-      if (Date.now() - stat.mtimeMs <= INCOMPLETE_LOCK_STALE_MS) {
-        throw new Error('Synagent ensure lock metadata is incomplete and not yet stale')
-      }
-    }
-
-    // This is the only path that removes a stale main lock. The recovery
-    // mutex excludes every other stale remover, so no replacement can appear
-    // between this revalidation and unlink. A normal contender may win only
-    // after unlink; createMainLock then observes EEXIST and never removes it.
-    await fs.unlink(lockFile)
-    return await createMainLock(lockFile, token)
-  } finally {
-    await releaseRecoveryMutex(mutex)
-  }
-}
-
-async function acquireLock(lockFile, { attempts = 100, delayMs = 100 } = {}) {
-  const token = randomUUID()
-  let attemptsUsed = 0
-  while (attemptsUsed < attempts) {
-    if (await createMainLock(lockFile, token)) return token
-
-    let owner
-    try {
-      owner = JSON.parse(await fs.readFile(lockFile, 'utf8'))
-    } catch (error) {
-      if (error.code === 'ENOENT') continue
-      owner = null
-    }
-
-    if (!validOwner(owner) || !pidExists(owner.pid)) {
-      if (await recoverStaleLock(lockFile, token)) return token
-    }
-
-    attemptsUsed += 1
-    if (attemptsUsed < attempts) await delay(delayMs)
-  }
-  throw new Error('another live Synagent ensure operation holds the runtime lock')
-}
-
-async function releaseLock(lockFile, token) {
-  try {
-    const owner = JSON.parse(await fs.readFile(lockFile, 'utf8'))
-    if (owner.token !== token || owner.pid !== process.pid) return
-    // A live owner cannot be classified stale, and the token is unique, so no
-    // replacement can occupy this pathname before its owner removes it.
-    await fs.unlink(lockFile)
-  } catch (error) {
-    if (error.code !== 'ENOENT') throw error
-  }
+async function acquireEnsureLock(target, overrides = {}) {
+  return lockfile.lock(target, {
+    realpath: false,
+    stale: 10_000,
+    update: 2_000,
+    retries: { retries: 100, factor: 1, minTimeout: 100, maxTimeout: 100 },
+    ...overrides,
+  })
 }
 
 function inspectPane(herdr, state) {
@@ -293,9 +165,9 @@ async function ensure() {
   }
 
   await fs.mkdir(stateDir, { recursive: true, mode: 0o700 })
-  const lockFile = path.join(stateDir, 'ensure.lock')
+  const lockTarget = path.join(stateDir, 'ensure')
   const stateFile = path.join(stateDir, 'runtime.json')
-  const lockToken = await acquireLock(lockFile)
+  const releaseLock = await acquireEnsureLock(lockTarget)
   try {
     const workspaceResult = resultOf(command(herdr, ['workspace', 'list']), 'workspace_list')
     const matches = workspaceResult.workspaces.filter(workspace => workspace.label === WORKSPACE_LABEL)
@@ -353,7 +225,7 @@ async function ensure() {
     if (!await waitForBroker(port)) throw new Error('new Synagent MQTT listener did not become ready')
     return state
   } finally {
-    await releaseLock(lockFile, lockToken)
+    await releaseLock()
   }
 }
 
@@ -366,4 +238,4 @@ if (require.main === module) {
   })
 }
 
-module.exports = { acquireLock, ensure, mqttProbe, releaseLock }
+module.exports = { acquireEnsureLock, ensure, mqttProbe }
