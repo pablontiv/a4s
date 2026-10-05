@@ -162,8 +162,9 @@ Al iniciar una sesión abre **dos** clientes MQTT: uno durable (`clean: false`,
 (dual-read), y uno transitorio (`clean: true`) al broadcast de proyecto
 `synagent/v1/<proyecto>/all` (y al global si se activa). La instancia es
 exactamente `ctx.sessionManager.getSessionId()`: conserva mayúsculas y puntos.
-Un *resume* conserva la identidad; *new*, *fork* y *clear* la re-resuelven y
-vuelven a vincular el adaptador. Dos sesiones no se expulsan entre sí. En
+Un *reload* o *resume* conserva esa identidad nativa; *new* y *fork* la
+re-resuelven y vuelven a vincular el adaptador. Dos sesiones no se expulsan
+entre sí. En
 `session_shutdown` cancela sus listeners y cierra ambas conexiones
 idempotentemente sin borrar la suscripción durable.
 
@@ -171,7 +172,9 @@ El proyecto sale primero de `a4s.synagent.project`; si está vacío, se deriva d
 `remote.origin.url` canónico leído en el `ctx.cwd` de la sesión, nunca del cwd
 del proceso ni de su basename. Si no resuelve, muestra un warning y permanece
 vivo en modo **legacy-only** sobre `a4s/inbox/<address>`: recibe legacy, no
-publica v1 y los intentos de envío piden configurar el proyecto.
+publica v1 y los intentos de envío piden configurar el proyecto. El estado de
+`/synagent status` muestra `legacy-only=true`; se remedia con
+`/synagent set project <token>` o configurando `remote.origin.url`.
 
 ### Envío y comandos Pi
 
@@ -192,8 +195,9 @@ de depuración:
 /synagent set default-peer <address>
 ```
 
-`/synagent` persiste cambios en el scope global de settings de Pi. Los cambios
-de `enabled`, `broker-url`, `address`, `project` o `global` reinician solo la
+`/synagent set project` persiste en el scope de proyecto de settings de Pi;
+los demás subcomandos `set` persisten en el scope global. Los cambios de
+`enabled`, `broker-url`, `address`, `project` o `global` reinician solo la
 conexión MQTT. Al cambiar de topics durables, el adaptador elimina las
 suscripciones obsoletas antes de usar las nuevas y reintenta esa limpieza al
 reconectar. El cambio descarta mensajes aún no enviados de la configuración
@@ -213,7 +217,9 @@ barrera de orden hasta `agent_settled`.
 
 No existe setting de instancia y el adaptador no lee variables de entorno
 `SYNAGENT_*`. Mientras el broker no tenga autenticación, acepta únicamente URLs
-`mqtt://` de loopback sin credenciales. Los tokens v1 son sensibles a
+`mqtt://` de loopback sin credenciales. Si la URL configurada no cumple esa
+restricción, muestra un warning y usa el default seguro
+`mqtt://127.0.0.1:1884`. Los tokens v1 son sensibles a
 mayúsculas y admiten puntos (`[A-Za-z0-9][A-Za-z0-9._-]{0,63}`); rechazan `/`,
 `+` y `#` dentro de cada token.
 
