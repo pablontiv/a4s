@@ -152,6 +152,7 @@ Backscroll se consulta en fase 0 cuando trabajo previo puede afectar una feature
 La pertenencia al catálogo no activa una herramienta rutinariamente. Pi enruta cada artefacto solamente bajo su trigger real y no selecciona equivalentes cuando el artefacto oficial aplicable no está disponible:
 
 - `adr`: se activa después de una decisión significativa nueva o revocada, ante una corrección que invalida una decisión, o cuando se solicita registrar o recuperar un ADR.
+- `work-lifecycle`: se activa cuando hay que mover una unidad de trabajo por el ciclo de vida (admitir, elegir, definir, preparar, ejecutar, aceptar, entregar, cerrar); un solo skill con todo el flujo cuyos gates leen la política del config (ADR 0069 propuesto).
 - `roadmap`: se activa cuando el operador pide ver el backlog, roadmap o árbol por prioridades sin planificar, recomendar ni modificar nada.
 - `roadmap-legacy`: se activa cuando el operador solicita explícitamente el workflow completo anterior para planificar, alinear o ejecutar secuencialmente trabajo en Beads.
 - `context-save`: se activa para guardar, restaurar o listar estado estructurado entre sesiones; para conversaciones históricas se usa Backscroll.

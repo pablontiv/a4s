@@ -188,16 +188,13 @@ class RepositoryContractTests(unittest.TestCase):
                 self.assertIn(f"rootline validate --all {target}", self.workflow)
 
     def test_workspace_sync_and_closure_refresh_main_explicitly(self) -> None:
+        # Config states the sync invariant; the literal git commands are
+        # procedure and live in the work-lifecycle skill (authority.mechanism).
         workspace = self.workspace_config["workspace"]
         starting_point = workspace["do_work"]["starting_point"]
         closure = workspace["deliver_work"]["close"]
 
-        for command in ("git fetch origin main", "git pull --ff-only origin main"):
-            with self.subTest(surface="starting_point", command=command):
-                self.assertIn(command, starting_point)
-            with self.subTest(surface="close", command=command):
-                self.assertIn(command, closure)
-
+        self.assertIn("synchronized with origin/main", starting_point)
         self.assertIn("main equals origin/main", closure)
         self.assertIn("git status --porcelain", closure)
 

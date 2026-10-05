@@ -441,8 +441,8 @@ class DogfoodConfigTests(unittest.TestCase):
             with self.subTest(surface="merge", marker=marker):
                 self.assertIn(marker, merge)
         review = self.workspace["accept_work"]["review"]
-        self.assertIn("one fresh independent review", review)
-        self.assertIn("different model family or provider", review)
+        self.assertIn("one independent review", review)
+        self.assertNotIn("different model family or provider", review)
         self.assertNotIn("billing_exception", deliver)
 
     def test_work_units_and_kinds_preserve_profile_contract(self) -> None:
@@ -464,11 +464,12 @@ class DogfoodConfigTests(unittest.TestCase):
     def test_starting_point_is_observable_and_fail_closed(self) -> None:
         do_work = self.workspace["do_work"]
         starting_point = do_work["starting_point"]
+        # The literal git commands are procedure and live in the work-lifecycle
+        # skill; config states the sync invariant (authority.mechanism).
         for required in (
             "main branch",
             "clean working tree",
-            "git fetch origin main",
-            "git pull --ff-only origin main",
+            "synchronized with origin/main",
             "dedicated worktree",
         ):
             with self.subTest(required=required):
@@ -480,7 +481,6 @@ class DogfoodConfigTests(unittest.TestCase):
             "pablontiv/a4s",
             "AGENTS.md",
             "Rootline",
-            "Backscroll",
             ".workspace/docs/",
             ".workspace/secrets/",
             "SOPS",
@@ -522,14 +522,12 @@ class DogfoodConfigTests(unittest.TestCase):
         for marker in ("sanitized result", "Raw session or provider output", "disposable"):
             with self.subTest(surface="evidence", marker=marker):
                 self.assertIn(marker, evidence)
+        # close states the closure-gate invariant; the exact cleanup targets
+        # (worktree, branches, PR head) are bounded in improve_work.cleanup.
         for marker in (
-            "PR head",
-            "dedicated worktree",
-            "local branch",
-            "remote branch",
+            "main equals origin/main",
             "unintegrated change",
             "retained output",
-            "resources are absent",
         ):
             with self.subTest(surface="close", marker=marker):
                 self.assertIn(marker, close)
