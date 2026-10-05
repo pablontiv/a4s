@@ -36,8 +36,13 @@ function makeEngine() {
   const statuses: string[] = []
   const $ = {
     plugin: { root: '/fake/plugin' },
-    env: { get: async () => undefined },
-    session: { cwd: async () => '/fake/cwd' },
+    // Sin `env`: si register.ts leyera una variable de entorno, fallaría aquí
+    // (identidad debe venir solo de $.session.*, ADR 0069).
+    session: {
+      id: async () => 'sess-test-1',
+      repo: async () => ({ remote: 'https://github.com/pablontiv/a4s.git', root: '/fake', internal: true, name: 'pablontiv/a4s' }),
+      cwd: async () => '/fake/cwd',
+    },
     clock: { now: async () => 1000 },
     store: (() => {
       const m = new Map<string, unknown>()

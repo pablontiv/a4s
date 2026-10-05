@@ -1,70 +1,59 @@
-// Adaptador de canal de Claude para synagent (v1: direccionamiento jerárquico).
-// Sobre bus MQTT (aedes).
+// Adaptador de canal de Claude para synagent (ADR 0069: identidad por sesión
+// nativa, sin variables de entorno). Sobre bus MQTT (aedes).
 //
-// El adaptador habla con el bus por PUSH (no polling):
-//   JALAR  — un bridge suscriptor (subproceso de por vida, $.process.spawn)
-//            escribe cada mensaje canónico como una línea en stdout; el mod la
-//            lee con `for await` ENTRE TURNOS y la entrega con $.prompt.submit.
+//   JALAR  — bridge suscriptor (subproceso de por vida); cada mensaje canónico
+//            llega como una línea en stdout y se inyecta con $.prompt.submit.
 //   ENVIAR — herramienta synagent_send (invocada por el modelo) publica al bus.
 //
-// TOPOLOGÍA v1:
-//   synagent/v1/<proyecto>/<instancia>  — buzón directo (durable, clean=false)
-//   synagent/v1/<proyecto>/all          — broadcast de proyecto (transient)
-//   synagent/v1/all                     — broadcast global (transient, opt-in)
+// IDENTIDAD (ADR 0069): la instancia sale de $.session.id() (única por sesión →
+// sin colisión aunque haya cientos de sesiones); el proyecto, de un setting del
+// host (userConfig `project`) o del remoto `origin` del repo ($.session.repo()).
+// NADA de env ni de launcher. Si no se resuelve, se opera LEGACY-ONLY.
 //
-// DUAL-READ: durante la transición SUSCRIBE y ACEPTA legacy (a4s/inbox/claude)
-// además de v1, pero PUBLICA solo v1. Dedupe compartido por id entre clientes.
-//
-// AUTOCONTENCIÓN: los bridges viven DENTRO del plugin (./bridge), para que
-// viajen al instalar desde marketplace (copia solo el dir adapters/claude).
-//
-// ARRANQUE PEREZOSO: va en ensureStarted, llamado desde session.start Y el
-// primer prompt.submit (recarga en caliente). Un flag de MÓDULO se resetea en
-// cada carga para re-spawnear el bridge fresco.
+// Topología v1: synagent/v1/<proyecto>/<instancia> (directo, durable),
+// /all (proyecto, transient), synagent/v1/all (global, transient opt-in).
+// DUAL-READ: también acepta legacy a4s/inbox/claude; publica solo v1.
 
 import type { EngineInterface, PluginOptions, Register } from 'claude-code'
 
 import {
-  createCanonical,
+  acceptInbound,
   directAddress,
-  isAddress,
-  isBroadcast,
-  isBroadcastSteer,
-  isForIdentity,
+  instanceFromHostSession,
   LEGACY_TOPIC_ROOT,
+  makeOutbound,
   MESSAGE_KINDS,
   newId,
   parseCanonical,
   renderForAgent,
-  resolveInstance,
   resolveProject,
   serialize,
   subscriptions,
-  toTopic,
   type Identity,
   type MessageKind,
 } from './adapter'
 
 const DEFAULT_BROKER_URL = 'mqtt://127.0.0.1:1884'
 const PROCESSED_KEY = 'processed'
-const INSTANCE_KEY = 'synagent-instance'
 const LEGACY_ADDRESS = 'claude'
 const MAX_SEEN = 1000
 const MAX_BUF = 1_000_000
 
-// Flag de módulo: se resetea en cada (re)carga del mod. Evita doble arranque.
 let started = false
-
-// Identidad resuelta (cacheada en esta carga del módulo).
 let identity: Identity | undefined
 let globalOptIn = false
-// Aviso diferido: resolveBrokerUrl corre en register() sin `$`; se emite al arrancar.
+// resolveBrokerUrl corre en register() sin `$`; el aviso se emite al arrancar.
 let brokerWarning: string | undefined
 
 const bridgeDir = ($: EngineInterface): string => `${$.plugin.root}/bridge`
 
-// El bus no tiene auth: igual que el adaptador Pi, solo aceptamos brokers de
-// loopback sin credenciales. Una URL no conforme se ignora y se usa el default.
+function optString(options: PluginOptions, key: string): string | undefined {
+  const v = options[key]
+  return typeof v === 'string' && v.length > 0 ? v : undefined
+}
+
+// El bus no tiene auth: solo aceptamos brokers de loopback sin credenciales
+// (paridad con el adaptador Pi). Una URL no conforme cae al default.
 function isLoopbackMqtt(value: string): boolean {
   let u: URL
   try {
@@ -84,8 +73,7 @@ function isLoopbackMqtt(value: string): boolean {
 }
 
 function resolveBrokerUrl(options: PluginOptions): string {
-  const v = options['brokerUrl']
-  const candidate = typeof v === 'string' && v.length > 0 ? v : DEFAULT_BROKER_URL
+  const candidate = optString(options, 'brokerUrl') ?? DEFAULT_BROKER_URL
   if (!isLoopbackMqtt(candidate)) {
     brokerWarning = `synagent: brokerUrl no loopback/sin credenciales rechazado (${candidate}); usando ${DEFAULT_BROKER_URL}`
     return DEFAULT_BROKER_URL
@@ -93,42 +81,20 @@ function resolveBrokerUrl(options: PluginOptions): string {
   return candidate
 }
 
-function optString(options: PluginOptions, key: string): string | undefined {
-  const v = options[key]
-  return typeof v === 'string' && v.length > 0 ? v : undefined
-}
-
-// Resuelve la identidad (proyecto, instancia, global). Lanza si el proyecto no
-// se puede determinar; el llamador cae a LEGACY-ONLY.
+// Identidad SOLO de APIs nativas de sesión (ADR 0069). Lanza si no resuelve; el
+// llamador cae a LEGACY-ONLY. instancia = $.session.id() (única por sesión);
+// proyecto = setting del host > nombre del repo del remoto origin.
 async function resolveIdentity($: EngineInterface, options: PluginOptions): Promise<Identity> {
-  const env = await $.env.get('SYNAGENT_PROJECT')
-  let remoteUrl: string | undefined
-  try {
-    const git = await $.process.run(['git', 'config', '--get', 'remote.origin.url'], { cwd: await $.session.cwd() })
-    if (git.exitCode === 0 && git.stdout.trim()) remoteUrl = git.stdout.trim()
-  } catch {
-    // sin remoto: resolveProject decidirá con env/config o lanzará.
-  }
-  const project = resolveProject({ env, config: optString(options, 'project'), remoteUrl })
-
-  // Instancia: SYNAGENT_INSTANCE > config > generada-persistida (ligada a esta
-  // instalación del plugin en $.store; resume la conserva, otra la regenera).
-  let generated = (await $.store.get(INSTANCE_KEY)) as string | undefined
-  if (!generated) {
-    generated = `c-${(await $.clock.now()).toString(36)}`
-    await $.store.set(INSTANCE_KEY, generated)
-  }
-  const instance = resolveInstance({
-    env: await $.env.get('SYNAGENT_INSTANCE'),
-    config: optString(options, 'instance'),
-    generated,
+  const instance = instanceFromHostSession(await $.session.id())
+  const repo = await $.session.repo()
+  const project = resolveProject({
+    ...(optString(options, 'project') !== undefined ? { setting: optString(options, 'project') } : {}),
+    ...(repo?.remote ? { origin: repo.remote } : {}),
   })
-
   return { project, instance }
 }
 
-// Idempotencia por id: reserva ANTES de entregar (at-most-once). Dedupe
-// compartido entre ambos clientes (precisión B): una sola cola stdout, un set.
+// Idempotencia por id (at-most-once); dedupe compartido entre clientes.
 async function reserve($: EngineInterface, id: string): Promise<boolean> {
   const list = ((await $.store.get(PROCESSED_KEY)) as string[] | undefined) ?? []
   if (list.includes(id)) return false
@@ -138,13 +104,9 @@ async function reserve($: EngineInterface, id: string): Promise<boolean> {
   return true
 }
 
-// Lanza el bridge-sub con los argv dados y corre el loop JALAR: cada línea es un
-// mensaje canónico; se filtra por `accept`, se deduplica y se inyecta como turno.
-function runJalar(
-  $: EngineInterface,
-  argv: readonly string[],
-  accept: (message: ReturnType<typeof parseCanonical>) => boolean,
-): void {
+// Loop JALAR: cada línea stdout es un mensaje canónico; se filtra por `accept`,
+// se deduplica y se inyecta como turno.
+function runJalar($: EngineInterface, argv: readonly string[], accept: (m: ReturnType<typeof parseCanonical>) => boolean): void {
   void (async () => {
     try {
       const bridge = $.process.spawn({ argv: [...argv] })
@@ -162,12 +124,11 @@ function runJalar(
           try {
             msg = parseCanonical(line)
           } catch {
-            continue // malformado no detiene el bridge
+            continue
           }
           if (!accept(msg)) continue
-          if (isBroadcastSteer(msg)) continue // steer solo directo (recepción)
           try {
-            if (!(await reserve($, msg.id))) continue // ya entregado
+            if (!(await reserve($, msg.id))) continue
             await $.prompt.submit({ text: renderForAgent(msg) })
           } catch (err) {
             void $.ui.status(`synagent: entrega falló (${msg.id}): ${err instanceof Error ? err.message : String(err)}`)
@@ -183,12 +144,9 @@ function runJalar(
   })()
 }
 
-// Abre JALAR y registra la herramienta synagent_send + el comando debug.
-// Idempotente por carga.
 async function ensureStarted($: EngineInterface, brokerUrl: string, options: PluginOptions): Promise<void> {
   if (started) return
   started = true
-
   if (brokerWarning) void $.ui.status(brokerWarning)
 
   const bridgeSub = `${bridgeDir($)}/bridge-sub.cjs`
@@ -197,7 +155,6 @@ async function ensureStarted($: EngineInterface, brokerUrl: string, options: Plu
     identity = await resolveIdentity($, options)
     globalOptIn = options['global'] === true || options['global'] === 'true'
   } catch (err) {
-    // LEGACY-ONLY: sin identidad v1, solo JALAR del buzón legacy (durable).
     identity = undefined
     globalOptIn = false
     void $.ui.status(
@@ -215,14 +172,13 @@ async function ensureStarted($: EngineInterface, brokerUrl: string, options: Plu
   const addr = directAddress(self)
   const plan = subscriptions({ identity: self, global: globalOptIn, legacyAddress: LEGACY_ADDRESS })
   const durableId = `synagent-${addr.replace(/\//g, ':')}`
-  const transientId = `synagent-t-${addr.replace(/\//g, ':')}-${(await $.clock.now()).toString(36)}`
+  const transientId = `synagent-t-${addr.replace(/\//g, ':')}`
 
   const argv = ['node', bridgeSub, '--url', brokerUrl, '--durable-id', durableId, '--durable', ...plan.durable]
   if (plan.transient.length > 0) argv.push('--transient-id', transientId, '--transient', ...plan.transient)
 
-  runJalar($, argv, msg => isForIdentity(msg, { identity: self, global: globalOptIn, legacyAddress: LEGACY_ADDRESS }))
+  runJalar($, argv, msg => acceptInbound(self, msg, { global: globalOptIn, legacyAddress: LEGACY_ADDRESS }))
 
-  // ENVIAR por INTENCIÓN: tool que el MODELO invoca. No-fatal.
   try {
     await $.tool.register({
       name: 'synagent_send',
@@ -246,13 +202,8 @@ async function ensureStarted($: EngineInterface, brokerUrl: string, options: Plu
     void $.ui.status(`synagent_send no registrado: ${err instanceof Error ? err.message : String(err)}`)
   }
 
-  // ENVIAR (debug humano): /mq-send <to>: texto
   try {
-    await $.command.register({
-      name: 'mq-send',
-      description: 'Publica un mensaje al bus synagent (debug)',
-      argumentHint: '<to>: texto',
-    })
+    await $.command.register({ name: 'mq-send', description: 'Publica un mensaje al bus synagent (debug)', argumentHint: '<to>: texto' })
   } catch (err) {
     void $.ui.status(`mq-send no registrado: ${err instanceof Error ? err.message : String(err)}`)
   }
@@ -260,8 +211,8 @@ async function ensureStarted($: EngineInterface, brokerUrl: string, options: Plu
   void $.ui.status(`synagent: ${addr} (JALAR activo, tool synagent_send + /mq-send)`)
 }
 
-// Publica un mensaje canónico v1 con el bridge-pub one-shot. Devuelve el id o un
-// mensaje de error. Valida dirección y rechaza steer broadcast (envío).
+// Publica un mensaje canónico v1 con el bridge-pub one-shot. makeOutbound valida
+// dirección y rechaza steer broadcast (lanza). Devuelve el id o un error.
 async function publishV1(
   $: EngineInterface,
   brokerUrl: string,
@@ -271,22 +222,21 @@ async function publishV1(
   kind: MessageKind,
   replyTo: string | undefined,
 ): Promise<{ ok: true; id: string } | { ok: false; error: string }> {
-  if (!isAddress(to)) {
-    return { ok: false, error: `dirección v1 inválida: ${to} (usa "<proyecto>/<instancia>", "<proyecto>/all" o "all")` }
-  }
-  if (kind === 'steer' && isBroadcast(to)) return { ok: false, error: 'steer solo a destino directo, no broadcast' }
   const now = await $.clock.now()
-  const from = directAddress(self)
-  const id = newId(from, now)
-  const message = createCanonical(body, { id, from, to, ts: now, kind, ...(replyTo ? { reply_to: replyTo } : {}) })
+  let built
+  try {
+    built = makeOutbound(self, to, { body, kind, id: newId(directAddress(self), now), ts: now, ...(replyTo ? { replyTo } : {}) })
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) }
+  }
   let r
   try {
-    r = await $.process.run(['node', `${bridgeDir($)}/bridge-pub.cjs`, toTopic(to), serialize(message), brokerUrl])
+    r = await $.process.run(['node', `${bridgeDir($)}/bridge-pub.cjs`, built.topic, serialize(built.message), brokerUrl])
   } catch (err) {
     return { ok: false, error: `publish lanzó: ${err instanceof Error ? err.message : String(err)}` }
   }
   if (r.exitCode !== 0) return { ok: false, error: `publish falló (exit ${r.exitCode}): ${r.stderr || r.stdout}` }
-  return { ok: true, id }
+  return { ok: true, id: built.message.id }
 }
 
 export const register: Register = (on, options) => {
@@ -302,14 +252,13 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
-  // ENVIAR por INTENCIÓN: el modelo llama synagent_send. Sin matcher (el nombre
-  // dinámico mcp__<plugin>__<tool> no está en la unión de tipos): filtramos por
-  // e.tool y dejamos pasar los demás con next. Los args van ESPARCIDOS en e.
+  // ENVIAR por INTENCIÓN: synagent_send. Sin matcher; filtramos por e.tool y
+  // dejamos pasar los demás con next. Los args van ESPARCIDOS en e.
   on('tool.call', async ($, e, next) => {
     const a = e as unknown as Record<string, unknown>
     if (a.tool !== 'mcp__synagent-adapter-mqtt__synagent_send') return next(e)
     const result = (text: string) => ({ result: text })
-    if (!identity) return result('error: identidad v1 no resuelta (legacy-only); configura project/instance o SYNAGENT_PROJECT/SYNAGENT_INSTANCE')
+    if (!identity) return result('error: identidad v1 no resuelta (legacy-only); configura el setting project o verifica el remoto origin del repo')
     const to = typeof a.to === 'string' ? a.to : ''
     const body = typeof a.body === 'string' ? a.body : ''
     const kind = typeof a.kind === 'string' ? a.kind : 'prompt'
@@ -320,7 +269,6 @@ export const register: Register = (on, options) => {
     return result(sent.ok ? `enviado ${sent.id} a ${to} (kind=${kind})` : `error: ${sent.error}`)
   })
 
-  // ENVIAR (debug): /mq-send <to>: texto
   on('command.run', { command: 'mq-send' }, async ($, e) => {
     const raw = (e.args ?? '').trim()
     if (!raw) return { text: 'mq-send: /mq-send <to>: texto  (<to> = "<proyecto>/<instancia>", "<proyecto>/all" o "all")' }
@@ -334,7 +282,6 @@ export const register: Register = (on, options) => {
     return { text: sent.ok ? `mq-send → publicado ${sent.id} a ${to}` : `mq-send ERROR: ${sent.error}` }
   })
 
-  // Nota de capacidad en el system prompt.
   on('prompt.compose', async ($, e, next) => {
     const r = await next(e)
     return {
