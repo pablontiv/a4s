@@ -49,6 +49,7 @@ type ActiveDelivery = {
   token: number
 }
 type ClientRole = 'durable' | 'transient'
+type SendResult = { ok: true; message: string } | { ok: false; message: string }
 
 export type SynagentPiOptions = { deliveryStartTimeoutMs?: number }
 
@@ -139,13 +140,23 @@ function synagentPi(pi: ExtensionAPI, deliveryStartTimeoutMs: number): void {
     parameters: Type.Object({
       to: Type.String({ description: 'v1 address: <project>/<instance>, <project>/all, or all.' }),
       body: Type.String({ description: 'Self-contained message body.' }),
-      kind: Type.Optional(Type.String({ description: 'prompt, steer, result, notify, or ack; defaults to prompt.' })),
+      kind: Type.Optional(Type.Union([
+        Type.Literal('prompt'),
+        Type.Literal('steer'),
+        Type.Literal('result'),
+        Type.Literal('notify'),
+        Type.Literal('ack'),
+      ], { description: 'Message kind; defaults to prompt.' })),
       reply_to: Type.Optional(Type.String({ description: 'Message id being replied to.' })),
     }),
     annotations: { openWorldHint: true },
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const text = await send(params, ctx)
-      return { content: [{ type: 'text', text }], details: {} }
+      const result = await send(params, ctx)
+      return {
+        content: [{ type: 'text', text: result.message }],
+        details: {},
+        ...(result.ok ? {} : { isError: true }),
+      }
     },
   })
 
@@ -158,7 +169,7 @@ function synagentPi(pi: ExtensionAPI, deliveryStartTimeoutMs: number): void {
         return
       }
       const result = await send(parsed, ctx)
-      ctx.ui.notify(result, result.startsWith('Synagent message sent:') ? 'info' : 'error')
+      ctx.ui.notify(result.message, result.ok ? 'info' : 'error')
     },
   })
 
@@ -170,9 +181,11 @@ function synagentPi(pi: ExtensionAPI, deliveryStartTimeoutMs: number): void {
       if (action === 'status') {
         let state = 'disabled'
         if (enabled.get()) state = durable?.connected ? 'connected' : 'connecting'
-        const addr = identity ? directAddress(identity) : 'unresolved'
+        const identityStatus = identity
+          ? `address=${directAddress(identity)}`
+          : 'address=unresolved legacy-only=true; remediate with /synagent set project <project> or configure remote.origin.url'
         ctx.ui.notify(
-          `Synagent ${state}; address=${addr} legacy=${legacyAddressSetting.get()} `
+          `Synagent ${state}; ${identityStatus} legacy=${legacyAddressSetting.get()} `
           + `global=${globalSetting.get() === true} peer=${defaultPeer.get()} broker=${brokerUrl.get()}`,
           'info',
         )
@@ -207,7 +220,7 @@ function synagentPi(pi: ExtensionAPI, deliveryStartTimeoutMs: number): void {
 
       const value = rest.join(' ')
       try {
-        setSetting(key, value, 'global')
+        setSetting(key, value, key === 'project' ? 'project' : 'global')
         ctx.ui.notify(`Synagent ${key} updated`, 'info')
       } catch (error) {
         ctx.ui.notify(formatError(error), 'error')
@@ -262,18 +275,23 @@ function synagentPi(pi: ExtensionAPI, deliveryStartTimeoutMs: number): void {
   async function send(
     params: { to: string; body: string; kind?: string; reply_to?: string },
     ctx: ExtensionContext,
-  ): Promise<string> {
-    if (!useCurrentContext(ctx)) return 'Synagent session is no longer active'
-    if (!params.body.trim()) return 'Synagent send requires a non-empty body'
+  ): Promise<SendResult> {
+    if (!useCurrentContext(ctx)) return { ok: false, message: 'Synagent session is no longer active' }
+    if (!params.body.trim()) return { ok: false, message: 'Synagent send requires a non-empty body' }
     const active = durable
-    if (!active?.connected) return 'Synagent is not connected'
+    if (!active?.connected) return { ok: false, message: 'Synagent is not connected' }
     if (legacyOnly || !identity) {
-      return 'Synagent cannot send: identity unresolved (legacy-only); configure the project setting or remote origin'
+      return {
+        ok: false,
+        message: 'Synagent cannot send: identity unresolved (legacy-only); configure the project setting or remote origin',
+      }
     }
     const to = resolveDestination(params.to, identity)
-    if (!to) return `Invalid Synagent address: ${params.to}`
+    if (!to) return { ok: false, message: `Invalid Synagent address: ${params.to}` }
     const kind = params.kind ?? 'prompt'
-    if (!MESSAGE_KINDS.includes(kind as MessageKind)) return `Invalid Synagent kind: ${kind}`
+    if (!MESSAGE_KINDS.includes(kind as MessageKind)) {
+      return { ok: false, message: `Invalid Synagent kind: ${kind}` }
+    }
 
     const ts = Date.now()
     try {
@@ -285,9 +303,9 @@ function synagentPi(pi: ExtensionAPI, deliveryStartTimeoutMs: number): void {
         ...(params.reply_to ? { replyTo: params.reply_to } : {}),
       })
       await publish(active, outbound.topic, serialize(outbound.message))
-      return `Synagent message sent: ${outbound.message.id}`
+      return { ok: true, message: `Synagent message sent: ${outbound.message.id}` }
     } catch (error) {
-      return `Synagent publish failed: ${formatError(error)}`
+      return { ok: false, message: `Synagent publish failed: ${formatError(error)}` }
     }
   }
 
@@ -344,12 +362,16 @@ function synagentPi(pi: ExtensionAPI, deliveryStartTimeoutMs: number): void {
   }
 
   function start(ctx: ExtensionContext, staleFromDisconnect: string[] = []): void {
-    const url = brokerUrl.get()
+    const configuredUrl = brokerUrl.get()
+    let url = configuredUrl
     try {
-      assertLoopbackBrokerUrl(url)
+      assertLoopbackBrokerUrl(configuredUrl)
     } catch (error) {
-      ctx.ui.notify(formatError(error), 'error')
-      return
+      url = DEFAULT_BROKER_URL
+      ctx.ui.notify(
+        `Synagent broker URL rejected (${formatError(error)}); falling back to ${DEFAULT_BROKER_URL}`,
+        'warning',
+      )
     }
 
     const legacyAddress = legacyAddressSetting.get()
@@ -394,7 +416,7 @@ function synagentPi(pi: ExtensionAPI, deliveryStartTimeoutMs: number): void {
       ? connectClient({
         ctx,
         url,
-        clientId: `a4s-pi-t-${sessionId}`,
+        clientId: `a4s-pi-${sessionId}:transient`,
         clean: true,
         topics: [...plan.transient],
         role: 'transient',
