@@ -1,0 +1,25 @@
+{
+  "name": "@a4s/context-expert",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "description": "Host-neutral Jev compaction core with Claude (mod) and Pi (extension) adapters. PoC port of context-expert to Claude Code, reusing fast-jev-compaction (MIT).",
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "exports": {
+    ".": "./core/index.ts",
+    "./claude": "./hooks/register.ts",
+    "./pi": "./adapters/pi/adapter.ts"
+  },
+  "scripts": {
+    "test": "tsx --test test/*.test.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc -p tsconfig.hooks.json"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.1",
+    "tsx": "4.23.13",
+    "typescript": "7.0.2"
+  }
+}
