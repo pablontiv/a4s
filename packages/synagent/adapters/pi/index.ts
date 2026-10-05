@@ -493,8 +493,12 @@ function synagentPi(pi: ExtensionAPI, deliveryStartTimeoutMs: number): void {
       try {
         // Unsubscribe from all topics before closing
         if (activeTransient.connected) {
-          await new Promise<void>((resolve) => {
-            activeTransient.unsubscribe('#', () => resolve())
+          await new Promise<void>((resolve, reject) => {
+            const timeout = setTimeout(() => reject(new Error('unsubscribe timeout')), 500)
+            activeTransient.unsubscribe('#', () => {
+              clearTimeout(timeout)
+              resolve()
+            })
           })
         }
       } catch {
@@ -767,7 +771,15 @@ function assertLoopbackBrokerUrl(value: string): void {
 
 function publish(client: MqttClient, topic: string, payload: string): Promise<void> {
   return new Promise((resolve, reject) => {
-    client.publish(topic, payload, { qos: 1 }, error => error ? reject(error) : resolve())
+    // Set a timeout to prevent hanging if the callback never fires
+    const timeout = setTimeout(() => {
+      reject(new Error('publish timeout: callback did not fire within 5 seconds'))
+    }, 5000)
+
+    client.publish(topic, payload, { qos: 1 }, error => {
+      clearTimeout(timeout)
+      return error ? reject(error) : resolve()
+    })
   })
 }
 
@@ -778,21 +790,79 @@ function unsubscribeAll(client: MqttClient, topics: string[]): Promise<void> {
 }
 
 function endClient(client: MqttClient): Promise<void> {
-  // Force destroy the stream immediately (don't wait for callback)
-  try {
-    (client as any).stream?.destroy?.()
-  } catch {
-    // Ignore errors
-  }
+  return new Promise<void>((resolve) => {
+    const mqttAny = client as any
 
-  // Attempt graceful close and resolve immediately
-  try {
-    client.end(true, {})
-  } catch {
-    // Ignore errors from end()
-  }
+    // Stop any reconnection attempts FIRST
+    if (mqttAny.reconnecting !== undefined) {
+      mqttAny.reconnecting = false
+    }
 
-  return Promise.resolve()
+    // Kill all timers that mqtt.js might have set up
+    const timersToKill = [
+      'reconnectTimer',
+      'keepaliveTimer',
+      'pingTimer',
+      'connackTimer',
+      'pubackTimer',
+      'pubrecTimer',
+      'pubrelTimer',
+      'pubcompTimer',
+    ]
+    timersToKill.forEach(timerName => {
+      if (mqttAny[timerName]) {
+        clearTimeout(mqttAny[timerName])
+        clearInterval(mqttAny[timerName])
+        mqttAny[timerName] = undefined
+      }
+    })
+
+    // Remove all event listeners to break any pending callbacks
+    client.removeAllListeners()
+
+    // Set up close listener with timeout
+    let closeTimeout: NodeJS.Timeout | undefined = setTimeout(() => {
+      resolve()
+    }, 500)
+
+    client.once('close', () => {
+      if (closeTimeout) {
+        clearTimeout(closeTimeout)
+        closeTimeout = undefined
+      }
+      resolve()
+    })
+
+    // Force destroy the underlying socket/stream immediately
+    try {
+      if (mqttAny.stream) {
+        mqttAny.stream.destroy()
+      }
+      if (mqttAny.socket) {
+        mqttAny.socket.destroy()
+      }
+    } catch {
+      // Ignore errors
+    }
+
+    // Attempt to end the client
+    try {
+      client.end(true, () => {
+        if (closeTimeout) {
+          clearTimeout(closeTimeout)
+          closeTimeout = undefined
+        }
+        resolve()
+      })
+    } catch {
+      // If end() throws, resolve after timeout
+      if (closeTimeout) {
+        clearTimeout(closeTimeout)
+        closeTimeout = undefined
+      }
+      resolve()
+    }
+  })
 }
 
 function formatError(error: unknown): string {
