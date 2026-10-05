@@ -284,16 +284,16 @@ export const register: Register = (on, options) => {
   on('tool.call', async ($, e, next) => {
     const a = e as unknown as Record<string, unknown>
     if (a.tool !== 'mcp__synagent-adapter-mqtt__synagent_send') return next(e)
-    const result = (text: string) => ({ result: text })
-    if (!identity) return result('error: identidad v1 no resuelta (legacy-only); configura el setting project o verifica el remoto origin del repo')
+    const result = (text: string, isError = false) => ({ result: text, ...(isError && { isError }) })
+    if (!identity) return result('error: identidad v1 no resuelta (legacy-only); configura el setting project o verifica el remoto origin del repo', true)
     const to = typeof a.to === 'string' ? a.to : ''
     const body = typeof a.body === 'string' ? a.body : ''
     const kind = typeof a.kind === 'string' ? a.kind : 'prompt'
     const replyTo = typeof a.reply_to === 'string' ? a.reply_to : undefined
-    if (!to || !body) return result('error: synagent_send requiere "to" y "body"')
-    if (!MESSAGE_KINDS.includes(kind as MessageKind)) return result(`error: kind inválido: ${kind}`)
+    if (!to || !body) return result('error: synagent_send requiere "to" y "body"', true)
+    if (!MESSAGE_KINDS.includes(kind as MessageKind)) return result(`error: kind inválido: ${kind}`, true)
     const sent = await publishV1($, brokerUrl, identity, to, body, kind as MessageKind, replyTo)
-    return result(sent.ok ? `enviado ${sent.id} a ${to} (kind=${kind})` : `error: ${sent.error}`)
+    return result(sent.ok ? `enviado ${sent.id} a ${to} (kind=${kind})` : `error: ${sent.error}`, !sent.ok)
   })
 
   on('command.run', { command: 'mq-send' }, async ($, e) => {
