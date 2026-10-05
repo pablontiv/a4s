@@ -268,3 +268,54 @@ test('live lock is preserved and blocks a second ensure owner', async t => {
   )
   assert.deepEqual(JSON.parse(await fs.readFile(lockFile, 'utf8')), live)
 })
+
+test('concurrent stale recovery admits at most one critical-section owner', async t => {
+  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'synagent-lock-race-'))
+  t.after(() => fs.rm(temp, { recursive: true, force: true }))
+  const lockFile = path.join(temp, 'ensure.lock')
+  await fs.writeFile(lockFile, `${JSON.stringify({
+    pid: 99999999, createdAt: Date.now() - 60_000, token: 'stale-race',
+  })}\n`)
+
+  let active = 0
+  let maximumActive = 0
+  const entered = []
+  await Promise.all(Array.from({ length: 12 }, async (_, index) => {
+    const token = await acquireLock(lockFile, { attempts: 1000, delayMs: 1 })
+    active += 1
+    maximumActive = Math.max(maximumActive, active)
+    entered.push(index)
+    await new Promise(resolve => setTimeout(resolve, 3))
+    active -= 1
+    await releaseLock(lockFile, token)
+  }))
+
+  assert.equal(maximumActive, 1)
+  assert.equal(entered.length, 12)
+  await assert.rejects(fs.access(lockFile), { code: 'ENOENT' })
+})
+
+test('a live main lock appearing during stale recovery is never removed', async t => {
+  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'synagent-lock-revalidate-'))
+  t.after(() => fs.rm(temp, { recursive: true, force: true }))
+  const lockFile = path.join(temp, 'ensure.lock')
+  const recoveryDir = `${lockFile}.recovery`
+  const stale = { pid: 99999999, createdAt: Date.now() - 60_000, token: 'stale-before-recovery' }
+  await fs.writeFile(lockFile, `${JSON.stringify(stale)}\n`)
+
+  await fs.mkdir(recoveryDir)
+  await fs.writeFile(path.join(recoveryDir, 'owner.json'), `${JSON.stringify({
+    pid: process.pid, createdAt: Date.now(), token: 'held-recovery',
+  })}\n`)
+  const contender = acquireLock(lockFile, { attempts: 20, delayMs: 10 })
+  await new Promise(resolve => setTimeout(resolve, 25))
+
+  const live = { pid: process.pid, createdAt: Date.now(), token: 'live-during-recovery' }
+  await fs.unlink(lockFile)
+  await fs.writeFile(lockFile, `${JSON.stringify(live)}\n`, { flag: 'wx' })
+  await fs.unlink(path.join(recoveryDir, 'owner.json'))
+  await fs.rmdir(recoveryDir)
+
+  await assert.rejects(contender, /another live Synagent ensure operation/)
+  assert.deepEqual(JSON.parse(await fs.readFile(lockFile, 'utf8')), live)
+})

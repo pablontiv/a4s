@@ -96,69 +96,126 @@ function pidExists(pid) {
   }
 }
 
-async function removeUnchangedLock(lockFile, observed) {
-  let current
+function validOwner(owner) {
+  return Number.isInteger(owner?.pid) && owner.pid > 0 &&
+    Number.isFinite(owner.createdAt) && typeof owner.token === 'string' && owner.token.length > 0
+}
+
+async function createMainLock(lockFile, token) {
+  let handle
   try {
-    current = await fs.readFile(lockFile, 'utf8')
+    handle = await fs.open(lockFile, 'wx', 0o600)
+    await handle.writeFile(`${JSON.stringify({ pid: process.pid, createdAt: Date.now(), token })}\n`)
+    await handle.close()
+    return true
   } catch (error) {
-    if (error.code === 'ENOENT') return
+    await handle?.close().catch(() => {})
+    if (error.code === 'EEXIST') return false
     throw error
   }
-  if (current !== observed) throw new Error('Synagent ensure lock changed while checking its owner')
-  await fs.unlink(lockFile)
+}
+
+async function acquireRecoveryMutex(lockFile) {
+  const directory = `${lockFile}.recovery`
+  const token = randomUUID()
+  try {
+    await fs.mkdir(directory, { mode: 0o700 })
+  } catch (error) {
+    if (error.code === 'EEXIST') return null
+    throw error
+  }
+  try {
+    await fs.writeFile(
+      path.join(directory, 'owner.json'),
+      `${JSON.stringify({ pid: process.pid, createdAt: Date.now(), token })}\n`,
+      { flag: 'wx', mode: 0o600 },
+    )
+    return { directory, token }
+  } catch (error) {
+    await fs.rmdir(directory).catch(() => {})
+    throw error
+  }
+}
+
+async function releaseRecoveryMutex(mutex) {
+  const ownerFile = path.join(mutex.directory, 'owner.json')
+  const owner = JSON.parse(await fs.readFile(ownerFile, 'utf8'))
+  if (owner.token !== mutex.token || owner.pid !== process.pid) {
+    throw new Error('Synagent recovery mutex owner changed; refusing removal')
+  }
+  await fs.unlink(ownerFile)
+  await fs.rmdir(mutex.directory)
+}
+
+async function recoverStaleLock(lockFile, token) {
+  const mutex = await acquireRecoveryMutex(lockFile)
+  if (!mutex) return false
+  try {
+    let observed
+    try {
+      observed = await fs.readFile(lockFile, 'utf8')
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error
+      return await createMainLock(lockFile, token)
+    }
+
+    let owner
+    try {
+      owner = JSON.parse(observed)
+    } catch {
+      owner = null
+    }
+    if (validOwner(owner)) {
+      if (pidExists(owner.pid)) return false
+    } else {
+      const stat = await fs.stat(lockFile)
+      if (Date.now() - stat.mtimeMs <= INCOMPLETE_LOCK_STALE_MS) {
+        throw new Error('Synagent ensure lock metadata is incomplete and not yet stale')
+      }
+    }
+
+    // This is the only path that removes a stale main lock. The recovery
+    // mutex excludes every other stale remover, so no replacement can appear
+    // between this revalidation and unlink. A normal contender may win only
+    // after unlink; createMainLock then observes EEXIST and never removes it.
+    await fs.unlink(lockFile)
+    return await createMainLock(lockFile, token)
+  } finally {
+    await releaseRecoveryMutex(mutex)
+  }
 }
 
 async function acquireLock(lockFile, { attempts = 100, delayMs = 100 } = {}) {
   const token = randomUUID()
-  let liveAttempts = 0
-  while (liveAttempts < attempts) {
-    let handle
-    try {
-      handle = await fs.open(lockFile, 'wx', 0o600)
-      await handle.writeFile(`${JSON.stringify({ pid: process.pid, createdAt: Date.now(), token })}\n`)
-      await handle.close()
-      return token
-    } catch (error) {
-      await handle?.close().catch(() => {})
-      if (error.code !== 'EEXIST') throw error
+  let attemptsUsed = 0
+  while (attemptsUsed < attempts) {
+    if (await createMainLock(lockFile, token)) return token
 
-      let observed
-      try {
-        observed = await fs.readFile(lockFile, 'utf8')
-        const owner = JSON.parse(observed)
-        if (!Number.isInteger(owner.pid) || owner.pid < 1 ||
-            !Number.isFinite(owner.createdAt) || typeof owner.token !== 'string' || !owner.token) {
-          throw new Error('invalid lock metadata')
-        }
-        if (!pidExists(owner.pid)) {
-          await removeUnchangedLock(lockFile, observed)
-          continue
-        }
-      } catch (lockError) {
-        if (lockError.code === 'ENOENT') continue
-        if (lockError.message === 'invalid lock metadata' || lockError instanceof SyntaxError) {
-          const stat = await fs.stat(lockFile)
-          if (Date.now() - stat.mtimeMs > INCOMPLETE_LOCK_STALE_MS) {
-            await removeUnchangedLock(lockFile, observed ?? '')
-            continue
-          }
-          throw new Error('Synagent ensure lock metadata is incomplete and not yet stale')
-        }
-        throw lockError
-      }
-      liveAttempts += 1
-      if (liveAttempts < attempts) await delay(delayMs)
+    let owner
+    try {
+      owner = JSON.parse(await fs.readFile(lockFile, 'utf8'))
+    } catch (error) {
+      if (error.code === 'ENOENT') continue
+      owner = null
     }
+
+    if (!validOwner(owner) || !pidExists(owner.pid)) {
+      if (await recoverStaleLock(lockFile, token)) return token
+    }
+
+    attemptsUsed += 1
+    if (attemptsUsed < attempts) await delay(delayMs)
   }
   throw new Error('another live Synagent ensure operation holds the runtime lock')
 }
 
 async function releaseLock(lockFile, token) {
   try {
-    const observed = await fs.readFile(lockFile, 'utf8')
-    const owner = JSON.parse(observed)
-    if (owner.token !== token) return
-    await removeUnchangedLock(lockFile, observed)
+    const owner = JSON.parse(await fs.readFile(lockFile, 'utf8'))
+    if (owner.token !== token || owner.pid !== process.pid) return
+    // A live owner cannot be classified stale, and the token is unique, so no
+    // replacement can occupy this pathname before its owner removes it.
+    await fs.unlink(lockFile)
   } catch (error) {
     if (error.code !== 'ENOENT') throw error
   }

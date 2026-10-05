@@ -61,8 +61,10 @@ claude --plugin-dir packages/synagent/adapters/claude
   al inbox del destinatario; `to` por defecto es `pi`.
 
 Los bridges viven en `adapters/claude/bridge/` y se resuelven desde
-`$.plugin.root`, por lo que el plugin es autocontenido. Tiene `package.json` y
-`package-lock.json` propios y requiere Node en el host.
+`$.plugin.root`, por lo que el plugin es autocontenido. Tiene su propio
+`package.json`; el repositorio mantiene un único lockfile en la raíz y el
+marketplace instala las dependencias declaradas por el plugin. Requiere Node en
+el host.
 
 ### Instalar desde un marketplace (GitHub)
 
