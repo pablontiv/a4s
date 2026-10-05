@@ -1,0 +1,122 @@
+// Cobertura del GLUE de runtime del adaptador Claude (register.ts), el punto más
+// frágil: el nombre exacto del tool MCP, que los args se leen ESPARCIDOS en `e`
+// (no en e.input), el topic v1 publicado, y que prompt.compose usa la clave
+// `text`. Un error aquí dejaría synagent_send como no-op silencioso con el resto
+// de la suite en verde. register.ts importa `claude-code` solo como tipo (se
+// borra en runtime), así que se puede cargar bajo tsx con un `$` falso.
+// (Excluido del tsc del paquete en tsconfig: su único import de valor es ./adapter.)
+import assert from 'node:assert/strict'
+import { test } from 'node:test'
+
+import { register } from '../adapters/claude/hooks/register.ts'
+
+type Hook = (...a: unknown[]) => unknown
+type Entry = { event: string; matcher: unknown; hook: Hook }
+
+function collectHooks(options: Record<string, unknown> = {}) {
+  const entries: Entry[] = []
+  const on = (event: string, a: unknown, b?: unknown): void => {
+    const hook = (b ?? a) as Hook
+    const matcher = b ? a : undefined
+    entries.push({ event, matcher, hook })
+  }
+  ;(register as unknown as (on: unknown, options: unknown) => void)(on, options)
+  const get = (event: string): Hook => {
+    const found = entries.find(e => e.event === event)
+    assert.ok(found, `hook no registrado: ${event}`)
+    return found.hook
+  }
+  return { entries, get }
+}
+
+function makeEngine() {
+  const runCalls: string[][] = []
+  const toolRegistered: Array<Record<string, unknown>> = []
+  const commandRegistered: string[] = []
+  const statuses: string[] = []
+  const $ = {
+    plugin: { root: '/fake/plugin' },
+    env: { get: async () => undefined },
+    session: { cwd: async () => '/fake/cwd' },
+    clock: { now: async () => 1000 },
+    store: (() => {
+      const m = new Map<string, unknown>()
+      return { get: async (k: string) => m.get(k), set: async (k: string, v: unknown) => void m.set(k, v) }
+    })(),
+    process: {
+      run: async (argv: readonly string[]) => {
+        runCalls.push([...argv])
+        if (argv[0] === 'git') return { exitCode: 1, stdout: '', stderr: '' }
+        return { exitCode: 0, stdout: '{"published":true}', stderr: '' }
+      },
+      // bridge-sub: iterable asíncrono que termina de inmediato (sin mensajes).
+      spawn: () => (async function* () {})(),
+    },
+    tool: { register: async (def: Record<string, unknown>) => void toolRegistered.push(def) },
+    command: { register: async (def: { name: string }) => void commandRegistered.push(def.name) },
+    prompt: { submit: async () => {} },
+    ui: { status: (s: string) => void statuses.push(s) },
+  }
+  return { $, runCalls, toolRegistered, commandRegistered, statuses }
+}
+
+test('register: session.start resuelve identidad y registra synagent_send + /mq-send', async () => {
+  const eng = makeEngine()
+  const { get } = collectHooks({ project: 'a4s', instance: 'claude-1' })
+  const next = async (e: unknown) => e
+  await get('session.start')(eng.$, {}, next)
+
+  assert.ok(eng.toolRegistered.some(d => d.name === 'synagent_send'), 'synagent_send debe registrarse')
+  assert.ok(eng.commandRegistered.includes('mq-send'), '/mq-send debe registrarse')
+})
+
+test('register: tool.call enruta por el nombre MCP exacto, lee args de e y publica v1', async () => {
+  const eng = makeEngine()
+  const { get } = collectHooks({ project: 'a4s', instance: 'claude-1' })
+  const next = async (e: unknown) => e
+  await get('session.start')(eng.$, {}, next)
+
+  const toolHook = get('tool.call')
+  // Args ESPARCIDOS en e (no en e.input): así los entrega el engine.
+  const e = { tool: 'mcp__synagent-adapter-mqtt__synagent_send', to: 'a4s/pi-1', body: 'hola pi', kind: 'prompt' }
+  const res = (await toolHook(eng.$, e, next)) as { result: string }
+  assert.match(res.result, /^enviado /, 'debe confirmar el envío')
+
+  const pub = eng.runCalls.find(c => c.some(a => a.includes('bridge-pub.cjs')))
+  assert.ok(pub, 'debe invocar bridge-pub')
+  assert.equal(pub.includes('synagent/v1/a4s/pi-1'), true, 'topic v1 == synagent/v1/<to>')
+  const payload = pub.find(a => a.startsWith('{') && a.includes('"to":"a4s/pi-1"'))
+  assert.ok(payload, 'payload canónico con to v1')
+})
+
+test('register: tool.call ajeno pasa de largo con next', async () => {
+  const eng = makeEngine()
+  const { get } = collectHooks({ project: 'a4s', instance: 'claude-1' })
+  const next = async (e: unknown) => ({ passed: true, e })
+  await get('session.start')(eng.$, {}, (x: unknown) => x)
+
+  const res = await get('tool.call')(eng.$, { tool: 'Bash', command: 'ls' }, next)
+  assert.deepEqual(res, { passed: true, e: { tool: 'Bash', command: 'ls' } })
+})
+
+test('register: prompt.compose añade una sección con la clave `text`', async () => {
+  const eng = makeEngine()
+  const { get } = collectHooks({ project: 'a4s', instance: 'claude-1' })
+  await get('session.start')(eng.$, {}, (x: unknown) => x)
+
+  const next = async () => ({ sections: [{ id: 'otra', scope: 'session', text: 'x' }] })
+  const r = (await get('prompt.compose')(eng.$, {}, next)) as {
+    sections: Array<{ id: string; scope: string; text: string }>
+  }
+  const section = r.sections.find(s => s.id === 'synagent')
+  assert.ok(section, 'debe añadir la sección synagent')
+  assert.equal(typeof section.text, 'string', 'la sección usa la clave `text`')
+  assert.match(section.text, /synagent_send/)
+})
+
+test('register: brokerUrl no-loopback se rechaza y cae al default', async () => {
+  const eng = makeEngine()
+  const { get } = collectHooks({ project: 'a4s', instance: 'claude-1', brokerUrl: 'mqtt://evil.example.com:1884' })
+  await get('session.start')(eng.$, {}, (x: unknown) => x)
+  assert.ok(eng.statuses.some(s => /no loopback/.test(s)), 'debe avisar del rechazo')
+})

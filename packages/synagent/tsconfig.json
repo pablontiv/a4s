@@ -20,5 +20,9 @@
     "adapters/claude/hooks/adapter.ts",
     "adapters/pi/**/*.ts",
     "test/**/*.ts"
+  ],
+  "//exclude": "register.test.ts carga register.ts (glue de runtime que importa tipos de 'claude-code', ausentes en este programa); se valida con `claude plugin validate` y se ejecuta con tsx.",
+  "exclude": [
+    "test/register.test.ts"
   ]
 }
