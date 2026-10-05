@@ -160,29 +160,41 @@ Al iniciar una sesión abre **dos** clientes MQTT: uno durable (`clean: false`,
 `clientId` derivado del ID de sesión) suscrito a su buzón directo
 `synagent/v1/<proyecto>/<instancia>` y al legacy `a4s/inbox/<address>`
 (dual-read), y uno transitorio (`clean: true`) al broadcast de proyecto
-`synagent/v1/<proyecto>/all` (y al global si se activa). Dos sesiones no se
-expulsan entre sí. En `session_shutdown` cancela sus listeners y cierra ambas
-conexiones idempotentemente sin borrar la suscripción durable. Si la identidad
-no se resuelve, opera **legacy-only** sobre `a4s/inbox/<address>`.
+`synagent/v1/<proyecto>/all` (y al global si se activa). La instancia es
+exactamente `ctx.sessionManager.getSessionId()`: conserva mayúsculas y puntos.
+Un *resume* conserva la identidad; *new*, *fork* y *clear* la re-resuelven y
+vuelven a vincular el adaptador. Dos sesiones no se expulsan entre sí. En
+`session_shutdown` cancela sus listeners y cierra ambas conexiones
+idempotentemente sin borrar la suscripción durable.
 
-### Comandos Pi
+El proyecto sale primero de `a4s.synagent.project`; si está vacío, se deriva del
+`remote.origin.url` canónico leído en el `ctx.cwd` de la sesión, nunca del cwd
+del proceso ni de su basename. Si no resuelve, muestra un warning y permanece
+vivo en modo **legacy-only** sobre `a4s/inbox/<address>`: recibe legacy, no
+publica v1 y los intentos de envío piden configurar el proyecto.
+
+### Envío y comandos Pi
+
+El modelo usa la herramienta `synagent_send` con `to`, `body`, `kind?` y
+`reply_to?` cuando el usuario pide mensajear a otro agente o proyecto. Conserva
+mayúsculas y puntos en destinos válidos. `/mq-send` es solo un atajo explícito
+de depuración:
 
 ```text
-/mq-send <to>: texto        (to = dirección v1, o un token que se cualifica con tu proyecto)
+/mq-send <to>: texto        (debug; to = dirección v1, o token cualificado con tu proyecto)
 /synagent status
 /synagent enable|disable
 /synagent resume
 /synagent set broker-url <mqtt://loopback:puerto>
 /synagent set address <address>        (dirección LEGACY para dual-read)
 /synagent set project <token>
-/synagent set instance <token>
 /synagent set global <true|false>
 /synagent set default-peer <address>
 ```
 
 `/synagent` persiste cambios en el scope global de settings de Pi. Los cambios
-de `enabled`, `broker-url`, `address`, `project`, `instance` o `global` reinician
-solo la conexión MQTT. Al cambiar de topics durables, el adaptador elimina las
+de `enabled`, `broker-url`, `address`, `project` o `global` reinician solo la
+conexión MQTT. Al cambiar de topics durables, el adaptador elimina las
 suscripciones obsoletas antes de usar las nuevas y reintenta esa limpieza al
 reconectar. El cambio descarta mensajes aún no enviados de la configuración
 anterior. Una entrega ya pasada a Pi no se puede cancelar y permanece como
@@ -195,15 +207,15 @@ barrera de orden hasta `agent_settled`.
 | `a4s.synagent.enabled` | `true` |
 | `a4s.synagent.broker-url` | `mqtt://127.0.0.1:1884` |
 | `a4s.synagent.address` (legacy, dual-read) | `pi` |
-| `a4s.synagent.project` | derivado |
-| `a4s.synagent.instance` | generado-persistido |
+| `a4s.synagent.project` | remoto `origin` del `ctx.cwd` de sesión |
 | `a4s.synagent.global` | `false` |
 | `a4s.synagent.default-peer` | `claude` |
 
-Lee los env `SYNAGENT_PROJECT` y `SYNAGENT_INSTANCE` para la identidad v1.
-Mientras el broker no tenga autenticación, el adaptador acepta únicamente URLs
-`mqtt://` de loopback sin credenciales. Las direcciones rechazan comodines MQTT
-y mayúsculas (tokens `[a-z0-9][a-z0-9_-]{0,63}`).
+No existe setting de instancia y el adaptador no lee variables de entorno
+`SYNAGENT_*`. Mientras el broker no tenga autenticación, acepta únicamente URLs
+`mqtt://` de loopback sin credenciales. Los tokens v1 son sensibles a
+mayúsculas y admiten puntos (`[A-Za-z0-9][A-Za-z0-9._-]{0,63}`); rechazan `/`,
+`+` y `#` dentro de cada token.
 
 ### Entrega en Pi
 
