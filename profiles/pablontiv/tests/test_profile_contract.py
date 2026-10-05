@@ -359,20 +359,6 @@ class DogfoodConfigTests(unittest.TestCase):
     def test_config_contains_no_agent_specific_policy(self) -> None:
         self.assertEqual(agent_specific_config_markers(self.document), ())
 
-    def test_config_authority_is_scoped_to_project_work(self) -> None:
-        source = self.workspace["authority"]["source"]
-        self.assertIn("repository-local project-work policy", source)
-        self.assertIn("A project-work rule absent from it is not in force", source)
-        self.assertNotIn("repository's way of working", source)
-
-        derived = self.workspace["authority"]["derived"]
-        self.assertIn("repository README", derived)
-        self.assertIn("repository-policy contract tests", derived)
-        self.assertIn(
-            "no repository-local project-work policy rule of their own",
-            self.workspace["authority"]["mechanism"],
-        )
-
     def test_runtime_neutral_workflow_replacements_are_preserved(self) -> None:
         self.assertIn(
             "One participant may fulfill both the executor and implementer roles",

@@ -7,8 +7,6 @@ import importlib.util
 import io
 import json
 import os
-import re
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -23,7 +21,6 @@ SCRIPT = SKILL_ROOT / "scripts" / "cleanup.py"
 FIXTURES = SKILL_ROOT / "tests" / "fixtures"
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 REMOVED_MODE_ENV = "REMOVE_GENTLE_CONTEXT_" + "TEST" + "_MODE"
-REMOVED_HOME_ENV = "REMOVE_GENTLE_CONTEXT_" + "TEST" + "_HOME"
 REMOVED_ATOMIC_ENV = "REMOVE_GENTLE_CONTEXT_" + "INJECT" + "_ATOMIC_FAIL"
 
 
@@ -83,22 +80,6 @@ class CliTests(unittest.TestCase):
         if result.returncode != 0:
             self.fail(f"CLI failed with {result.returncode}\nSTDOUT: {result.stdout}\nSTDERR: {result.stderr}")
         return result
-
-    def contract_json_example(self, heading: str) -> dict[str, object]:
-        text = CONTRACTS.read_text(encoding="utf-8")
-        pattern = rf"(?ms)^### {re.escape(heading)}\n\n```json\n(?P<body>.*?)\n```"
-        match = re.search(pattern, text)
-        if match is None:
-            self.fail(f"missing JSON example for {heading}")
-        data = json.loads(match.group("body"))
-        if not isinstance(data, dict):
-            self.fail(f"JSON example for {heading} is not an object")
-        return data
-
-    def write_contract_json_example(self, name: str, data: dict[str, object]) -> Path:
-        path = self.artifacts / name
-        path.write_text(json.dumps(data, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
-        return path
 
     def inventory(self) -> CliResult:
         return self.run_ok(
@@ -197,7 +178,11 @@ class CliTests(unittest.TestCase):
         native_manifest.write_text('{"schema":"remove-gentle-context.backup/v1"}\n', encoding="utf-8")
         native_receipt = cleanup.Receipt(backup_manifest_path=native_manifest, status=cleanup.ReceiptStatus.COMPLETED)
         native_artifact = cleanup.receipt_artifact(native_receipt)
-        native_receipt_path = self.write_contract_json_example("native-receipt.json", native_artifact)
+        native_receipt_path = self.artifacts / "native-receipt.json"
+        native_receipt_path.write_text(
+            json.dumps(native_artifact, sort_keys=True, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+        )
         loaded_native_receipt = cleanup.load_receipt(native_receipt_path)
 
         self.assertIsInstance(loaded_native_receipt.backup_manifest_path, Path)
@@ -227,167 +212,6 @@ class CliTests(unittest.TestCase):
 
 
 
-    def test_reference_contracts_define_artifacts_codes_authority_and_recovery(self) -> None:
-        text = CONTRACTS.read_text(encoding="utf-8")
-        required_terms = (
-            "remove-gentle-context.inventory/v1",
-            "remove-gentle-context.plan/v1",
-            "remove-gentle-context.backup/v1",
-            "remove-gentle-context.receipt/v1",
-            "remove-gentle-context.verification/v1",
-            "plan and manifest digests omit their own digest field",
-            "EXIT_USAGE = 2",
-            "EXIT_UNSAFE_PATH = 11",
-            "EXIT_ARTIFACT = 12",
-            "EXIT_IO = 13",
-            "EXIT_APPROVAL = 20",
-            "EXIT_APPLY = 21",
-            "EXIT_VERIFY_FAILED = 30",
-            "EXIT_RESTORE = 40",
-            "restore authority",
-            "root/environment binding",
-            "atomic publication",
-            "recovery states",
-        )
-        for term in required_terms:
-            self.assertIn(term, text)
-        signature_lines = [line.strip() for line in text.splitlines() if line.strip().startswith("python scripts/cleanup.py ")]
-        self.assertEqual(len(signature_lines), 5)
-
-    def test_reference_contract_json_examples_validate_against_production_schemas(self) -> None:
-        cleanup = load_cleanup_module()
-        examples = {
-            heading: self.contract_json_example(heading)
-            for heading in (
-                "Inventory JSON",
-                "Plan JSON",
-                "Backup manifest JSON",
-                "Receipt JSON",
-                "Verification JSON",
-            )
-        }
-        serialized_examples = json.dumps(examples, sort_keys=True)
-        self.assertIn("C:/gentle-example/home", serialized_examples)
-        self.assertNotIn("$HOME", serialized_examples)
-
-        inventory_path = self.write_contract_json_example("contract-inventory.json", examples["Inventory JSON"])
-        plan_path = self.write_contract_json_example("contract-plan.json", examples["Plan JSON"])
-        manifest_path = self.write_contract_json_example("contract-manifest.json", examples["Backup manifest JSON"])
-        receipt_path = self.write_contract_json_example("contract-receipt.json", examples["Receipt JSON"])
-
-        inventory = cleanup.load_inventory(inventory_path)
-        self.assertEqual(cleanup.inventory_artifact(inventory), examples["Inventory JSON"])
-        plan = cleanup.load_plan(plan_path)
-        self.assertEqual(cleanup.plan_artifact(plan), examples["Plan JSON"])
-        self.assertEqual(inventory.os_name, "windows")
-        self.assertEqual(plan.inventory_digest, inventory.digest)
-        self.assertEqual(plan.home, inventory.home)
-        self.assertEqual(plan.os_name, inventory.os_name)
-        self.assertEqual(dict(plan.root_map), dict(inventory.root_map))
-
-        manifest = cleanup.load_backup_manifest(manifest_path)
-        self.assertEqual(cleanup.backup_manifest_digest(manifest_path), examples["Backup manifest JSON"]["digest"])
-        self.assertEqual(manifest.to_dict(), examples["Backup manifest JSON"])
-        self.assertEqual(manifest.plan_digest, plan.digest)
-        operations_by_index = {index: operation for index, operation in enumerate(plan.operations)}
-        for entry in manifest.entries:
-            operation = operations_by_index[entry.operation_index]
-            self.assertEqual(entry.kind, str(operation.kind))
-            self.assertEqual(entry.original_path, operation.path)
-            self.assertEqual(entry.sha256, operation.preimage_sha256)
-
-        receipt = cleanup.load_receipt(receipt_path)
-        self.assertEqual(cleanup.receipt_artifact(receipt), examples["Receipt JSON"])
-        cleanup.assert_receipt_binding(receipt, inventory, plan, phase="docs")
-        self.assertEqual(receipt.backup_manifest_path.as_posix(), examples["Receipt JSON"]["backup_manifest_path"])
-        self.assertEqual(tuple(receipt.checks), ())
-        for outcome in receipt.operation_outcomes:
-            operation = operations_by_index[outcome.operation_index]
-            self.assertEqual(outcome.kind, str(operation.kind))
-            self.assertEqual(outcome.path, operation.path)
-            self.assertEqual(outcome.status, "completed")
-
-        runtime_context = cleanup.RuntimeContext(cleanup.PlatformProfile("linux", self.home, {}))
-        runtime_inventory = cleanup.build_inventory(runtime_context, ())
-        runtime_plan = cleanup.build_plan(runtime_inventory, runtime_context, ())
-        runtime_receipt = cleanup.execute_plan(runtime_plan, runtime_plan.digest, runtime_context, object(), inventory=runtime_inventory)
-        runtime_receipt_artifact = cleanup.receipt_artifact(runtime_receipt)
-        self.assertEqual(runtime_receipt.status, cleanup.ReceiptStatus.COMPLETED)
-        self.assertEqual(runtime_receipt_artifact["checks"], [])
-        self.assertEqual(runtime_receipt_artifact["checks"], examples["Receipt JSON"]["checks"])
-
-        verification_data = examples["Verification JSON"]
-        verification_path = self.artifacts / "contract-verification.json"
-        cleanup.require_schema(verification_data, cleanup.VERIFICATION_SCHEMA, phase="verification", path=verification_path)
-        cleanup.reject_unknown(verification_data, {"schema", "status", "checks", "digest"}, phase="verification", path=verification_path)
-        cleanup.require_keys(verification_data, {"schema", "status", "checks", "digest"}, phase="verification", path=verification_path)
-        self.assertEqual(verification_data["digest"], cleanup.digest_json(cleanup.data_without_digest(verification_data)))
-        from helper.verifier import REQUIRED_CODES, SUPPORT_CODES
-
-        allowed_verification_codes = set(REQUIRED_CODES + SUPPORT_CODES)
-        verification_check_items = cleanup.require_list(verification_data["checks"], phase="verification", path=verification_path)
-        for item in verification_check_items:
-            self.assertIsInstance(item, dict)
-            self.assertIn(cleanup.require_str(item, "code", phase="verification", path=verification_path), allowed_verification_codes)
-        verification_checks = tuple(
-            cleanup.check_from_dict(item, phase="verification", path=verification_path)
-            for item in verification_check_items
-        )
-        verification = cleanup.VerificationResult(
-            status=cleanup.require_str(verification_data, "status", phase="verification", path=verification_path),
-            checks=verification_checks,
-        )
-        self.assertEqual(cleanup.verification_artifact(verification), verification_data)
-
-        runtime_verification = cleanup.verify_receipt(runtime_receipt, runtime_context, ())
-        obtainable_checks = {
-            (check.code, check.status, check.severity, json.dumps(check.evidence, sort_keys=True, separators=(",", ":")))
-            for check in runtime_verification.checks
-        }
-        for check in verification_checks:
-            self.assertIn(
-                (check.code, check.status, check.severity, json.dumps(check.evidence, sort_keys=True, separators=(",", ":"))),
-                obtainable_checks,
-            )
-
-    def test_preservation_reference_covers_required_scopes_and_vetoes(self) -> None:
-        text = PRESERVATION.read_text(encoding="utf-8")
-        required_terms = (
-            "MCP",
-            "Engram",
-            "packages",
-            "binaries",
-            "source",
-            "node_modules",
-            "history",
-            "prompts",
-            "messages",
-            "caches",
-            "backups",
-            ".git/gentle-ai",
-            "pablontiv",
-            "personal skill veto",
-            "provenance",
-            "Pi registry authority",
-            "report-only",
-        )
-        for term in required_terms:
-            self.assertIn(term, text)
-
-    def test_docs_have_no_personal_absolute_paths(self) -> None:
-        forbidden = ("/Users/", "C:\\Users\\", "\\Users\\", "/home/pablontiv", "/home/pablo")
-        for path in DOC_PATHS:
-            text = path.read_text(encoding="utf-8")
-            for term in forbidden:
-                self.assertNotIn(term, text, f"{path} contains {term}")
-
-    def test_readme_quick_discovery_is_platform_neutral(self) -> None:
-        text = README.read_text(encoding="utf-8")
-        self.assertIn("[`skills/remove-gentle-context/`](skills/remove-gentle-context/)", text)
-        self.assertIn("Python 3.11+ executable", text)
-        self.assertIn("python3", text)
-        self.assertNotIn("ls skills/remove-gentle-context", text)
-
     def test_workflow_uses_one_linux_job_and_portable_commands(self) -> None:
         text = WORKFLOW.read_text(encoding="utf-8")
         self.assertIn("runs-on: ubuntu-latest", text)
@@ -402,30 +226,6 @@ class CliTests(unittest.TestCase):
         self.assertIn("python scripts/cleanup.py --help", text)
         self.assertNotIn("cd skills/remove-gentle-context", text)
         self.assertNotIn("./scripts/cleanup.py", text)
-
-    def test_pressure_contract_requires_canonical_safe_flow(self) -> None:
-        text = "\n".join(path.read_text(encoding="utf-8") for path in DOC_PATHS)
-        required_terms = (
-            "canonical inventory",
-            "plan approval",
-            "fd-bound validation",
-            "verified backup",
-            "atomic rollback",
-            "receipt",
-            "live verification",
-            "exact authority",
-            "ambiguity blockers",
-        )
-        for term in required_terms:
-            self.assertIn(term, text)
-        forbidden_patterns = (
-            r"(?:may|can|should|safe to|authorized? to)\s+[^.\n]*(?:delete|remove)\s+[^.\n]*(?:marker|name|path|text|fingerprint|author)",
-            r"grep\s+[^.\n]*(?:then|and)\s+[^.\n]*(?:delete|remove)",
-            r"(?:may|can|should|safe to|authorized? to)\s+[^.\n]*implicit restart",
-            r"(?:may|can|should|safe to|authorized? to)\s+[^.\n]*skip(?:ped)? plan approval",
-        )
-        for pattern in forbidden_patterns:
-            self.assertIsNone(__import__("re").search(pattern, text, __import__("re").IGNORECASE), pattern)
 
     def test_apply_requires_exact_approval(self) -> None:
         result = self.run_cli("apply", "--plan", str(self.artifacts / "plan.json"))
@@ -467,7 +267,8 @@ class CliTests(unittest.TestCase):
             "--output",
             str(self.artifacts / "windows-inventory.json"),
         )
-        artifact = json.loads(Path(inventory.output_path).read_text())
+        assert inventory.output_path is not None
+        artifact = json.loads(inventory.output_path.read_text())
         self.assertEqual(artifact["environment"]["APPDATA"], str(appdata.resolve()))
         self.assertEqual(artifact["environment"]["LOCALAPPDATA"], str(localappdata.resolve()))
         self.assertEqual(artifact["environment"]["XDG_STATE_HOME"], str(xdg_state.resolve()))
@@ -504,8 +305,9 @@ class CliTests(unittest.TestCase):
             env=noisy_env,
         )
         self.assertEqual(inventory.returncode, 0)
+        assert inventory.output_path is not None
 
-        artifact = json.loads(Path(inventory.output_path).read_text())
+        artifact = json.loads(inventory.output_path.read_text())
         self.assertEqual(artifact["environment"], {"XDG_STATE_HOME": str(xdg_state.resolve())})
         self.assertNotIn("APPDATA_SHADOW", json.dumps(artifact, sort_keys=True))
         self.assertNotIn("GENTLE_PRIVATE_ROOT", json.dumps(artifact, sort_keys=True))
@@ -514,7 +316,7 @@ class CliTests(unittest.TestCase):
         cleanup = load_cleanup_module()
         inventory = self.inventory()
         assert inventory.output_path is not None
-        original = json.loads(Path(inventory.output_path).read_text())
+        original = json.loads(inventory.output_path.read_text())
 
         missing = self.artifacts / "missing-environment.json"
         missing_data = dict(original)

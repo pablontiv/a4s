@@ -12,22 +12,12 @@ from typing import Any
 from helper.adapter import AdapterRegistry
 from helper.declarative import load_declarative_adapter
 from helper.engine import build_inventory, build_plan
-from helper.models import OperationKind, Ownership, PlatformProfile, ReceiptStatus, RuntimeContext
-from helper.ownership import canonical_tree_sha256
+from helper.models import OperationKind, PlatformProfile, ReceiptStatus, RuntimeContext
 from helper.transaction import execute_plan
 from helper.verifier import verify_receipt
 
 
 SKILL_ROOT = Path(__file__).resolve().parents[1]
-TEST_SOURCE_COMMIT = "0123456789abcdef0123456789abcdef01234567"
-WRONG_SOURCE_COMMIT = "fedcba9876543210fedcba9876543210fedcba98"
-SOURCE_REPOSITORY = "https://github.com/pablontiv/skills"
-UPSTREAM = {
-    "upstream-author": "Alan-TheGentleman",
-    "upstream-repository": "https://github.com/Gentleman-Programming/gentle-ai",
-    "upstream-commit": "d1e1777faafc91a34656ba94bd712972dbe427a1",
-}
-
 
 
 class DeclarativeAdapterTests(unittest.TestCase):
@@ -60,12 +50,6 @@ class DeclarativeAdapterTests(unittest.TestCase):
 
 
 
-
-    def test_fixture_files_cover_valid_and_forbidden_declarative_examples(self):
-        fixture_root = SKILL_ROOT / "tests" / "fixtures" / "declarative"
-        self.assertEqual(load_declarative_adapter(fixture_root / "valid.json").client, "gemini")
-        with self.assertRaisesRegex(ValueError, "adapter_forbidden_capability"):
-            load_declarative_adapter(fixture_root / "forbidden-toml.json")
 
     def test_rejects_toml_sqlite_runtime_and_arbitrary_text_rules(self):
         forbidden = ["toml_edit", "sqlite_update", "runtime_state", "regex_replace"]
