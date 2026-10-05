@@ -7,6 +7,7 @@ const net = require('node:net')
 const os = require('node:os')
 const path = require('node:path')
 const { test } = require('node:test')
+const { acquireLock, releaseLock } = require('../herdr/ensure.cjs')
 
 const ENSURE = path.join(__dirname, '..', 'herdr', 'ensure.cjs')
 
@@ -28,6 +29,19 @@ async function unusedPort() {
   return port
 }
 
+async function waitForClosedPort(port) {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    const open = await new Promise(resolve => {
+      const socket = net.createConnection({ host: '127.0.0.1', port })
+      socket.once('connect', () => { socket.destroy(); resolve(true) })
+      socket.once('error', () => resolve(false))
+    })
+    if (!open) return
+    await new Promise(resolve => setTimeout(resolve, 20))
+  }
+  throw new Error(`port ${port} stayed open`)
+}
+
 async function makeFakeHerdr(temp) {
   const fake = path.join(temp, 'fake-herdr.cjs')
   await fs.writeFile(fake, `#!/usr/bin/env node
@@ -45,24 +59,31 @@ const fail = message => { save(); console.error(JSON.stringify({ error: { messag
 if (args[0] === 'workspace' && args[1] === 'list') {
   ok({ type: 'workspace_list', workspaces: state.workspaces })
 } else if (args[0] === 'workspace' && args[1] === 'create') {
-  const workspace = { workspace_id: 'w-test', label: 'Synagent', active_tab_id: 'w-test:t1' }
+  const workspace = { workspace_id: 'w-test', label: 'Synagent', active_tab_id: 'w-test:t-root' }
   state.workspaces.push(workspace)
-  state.tabs['w-test:t1'] = { tab_id: 'w-test:t1', workspace_id: 'w-test', label: 'shell' }
-  ok({ type: 'workspace_created', workspace, tab: state.tabs['w-test:t1'], root_pane: { pane_id: 'w-test:p1' } })
+  state.tabs['w-test:t-root'] = { tab_id: 'w-test:t-root', workspace_id: 'w-test', label: 'shell', pane_count: 1 }
+  ok({ type: 'workspace_created', workspace, tab: state.tabs['w-test:t-root'], root_pane: { pane_id: 'w-test:p-root' } })
 } else if (args[0] === 'plugin' && args[1] === 'pane' && args[2] === 'open') {
   state.openCount += 1
-  state.tabs['w-test:t2'] = { tab_id: 'w-test:t2', workspace_id: 'w-test', label: 'Bus' }
-  state.panes['w-test:p2'] = { pane_id: 'w-test:p2', tab_id: 'w-test:t2', workspace_id: 'w-test' }
-  if (!state.listenerPid) {
-    const child = spawn(process.execPath, ['-e', \`
-      const net = require('node:net');
-      const server = net.createServer(socket => socket.once('data', () => socket.end(Buffer.from([0x20, 0x02, 0x00, 0x00]))));
-      server.listen(Number(process.env.SYNAGENT_PORT), '127.0.0.1');
-    \`], { detached: true, stdio: 'ignore', env: process.env })
-    child.unref()
-    state.listenerPid = child.pid
-  }
-  ok({ type: 'plugin_pane_opened', plugin_pane: { plugin_id: 'a4s.synagent-bus', entrypoint: 'bus', pane: state.panes['w-test:p2'] } })
+  const tabId = 'w-test:t-bus-' + state.openCount
+  const paneId = 'w-test:p-bus-' + state.openCount
+  state.tabs[tabId] = { tab_id: tabId, workspace_id: 'w-test', label: 'Bus', pane_count: 1 }
+  state.panes[paneId] = { pane_id: paneId, tab_id: tabId, workspace_id: 'w-test', running: true }
+  const child = spawn(process.execPath, ['-e', \`
+    const net = require('node:net');
+    const server = net.createServer(socket => socket.once('data', () => socket.end(Buffer.from([0x20, 0x02, 0x00, 0x00]))));
+    server.listen(Number(process.env.SYNAGENT_PORT), '127.0.0.1');
+  \`], { detached: true, stdio: 'ignore', env: process.env })
+  child.unref()
+  state.listenerPid = child.pid
+  ok({ type: 'plugin_pane_opened', plugin_pane: { plugin_id: 'a4s.synagent-bus', entrypoint: 'bus', pane: state.panes[paneId] } })
+} else if (args[0] === 'plugin' && args[1] === 'pane' && args[2] === 'close') {
+  const pane = state.panes[args[3]]
+  if (!pane) fail('plugin pane missing')
+  delete state.tabs[pane.tab_id]
+  delete state.panes[args[3]]
+  state.closeCount += 1
+  ok({ type: 'plugin_pane_closed', pane_id: args[3] })
 } else if (args[0] === 'tab' && args[1] === 'rename') {
   state.tabs[args[2]].label = args.slice(3).join(' ')
   ok({ type: 'tab_info', tab: state.tabs[args[2]] })
@@ -76,7 +97,13 @@ if (args[0] === 'workspace' && args[1] === 'list') {
   const pane = state.panes[args[2]]
   pane ? ok({ type: 'pane_info', pane }) : fail('pane missing')
 } else if (args[0] === 'pane' && args[1] === 'process-info') {
-  state.panes[args[2]] ? ok({ type: 'pane_process_info', process_info: { foreground_processes: [{ cmdline: 'node broker.cjs' }] } }) : fail('pane missing')
+  if (args.length !== 4 || args[2] !== '--pane') fail('process-info requires --pane <id>')
+  const pane = state.panes[args[3]]
+  if (!pane) fail('pane missing')
+  const process = pane.running
+    ? { pid: 101, name: 'node', argv0: 'node', argv: ['node', 'broker.cjs'], cmdline: 'node broker.cjs' }
+    : { pid: 102, name: 'zsh', argv0: '/bin/zsh', argv: ['/bin/zsh'], cmdline: '/bin/zsh' }
+  ok({ type: 'pane_process_info', process_info: { pane_id: args[3], foreground_processes: [process] } })
 } else {
   fail('unexpected command: ' + args.join(' '))
 }
@@ -84,7 +111,40 @@ if (args[0] === 'workspace' && args[1] === 'list') {
   return fake
 }
 
-async function runEnsure(fake, stateFile, pluginState, port) {
+async function fixture(t, initial = {}) {
+  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'synagent-herdr-'))
+  const stateFile = path.join(temp, 'fake-state.json')
+  const pluginState = path.join(temp, 'plugin-state')
+  const state = {
+    workspaces: [], tabs: {}, panes: {}, calls: [], openCount: 0, closeCount: 0, listenerPid: null,
+    ...initial,
+  }
+  await fs.writeFile(stateFile, JSON.stringify(state))
+  const fake = await makeFakeHerdr(temp)
+  const port = await unusedPort()
+  t.after(async () => {
+    try {
+      const latest = JSON.parse(await fs.readFile(stateFile, 'utf8'))
+      if (latest.listenerPid) {
+        try { process.kill(latest.listenerPid, 'SIGTERM') } catch (error) { if (error.code !== 'ESRCH') throw error }
+        await waitForClosedPort(port)
+      }
+    } finally {
+      await fs.rm(temp, { recursive: true, force: true })
+    }
+  })
+  return { temp, stateFile, pluginState, fake, port }
+}
+
+async function readFake(stateFile) {
+  return JSON.parse(await fs.readFile(stateFile, 'utf8'))
+}
+
+async function writeFake(stateFile, state) {
+  await fs.writeFile(stateFile, JSON.stringify(state))
+}
+
+async function runEnsure({ fake, stateFile, pluginState, port }) {
   return exitWithOutput(spawn(process.execPath, [ENSURE], {
     env: {
       ...process.env,
@@ -96,28 +156,25 @@ async function runEnsure(fake, stateFile, pluginState, port) {
   }))
 }
 
-test('Herdr ensure uses an explicit workspace, is basically idempotent, and does not focus', async t => {
-  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'synagent-herdr-'))
-  t.after(() => fs.rm(temp, { recursive: true, force: true }))
-  const stateFile = path.join(temp, 'fake-state.json')
-  const pluginState = path.join(temp, 'plugin-state')
-  await fs.writeFile(stateFile, JSON.stringify({
-    workspaces: [], tabs: {}, panes: {}, calls: [], openCount: 0, listenerPid: null,
-  }))
-  const fake = await makeFakeHerdr(temp)
-  const port = await unusedPort()
+function assertExactProcessInfoCalls(state) {
+  const calls = state.calls.filter(args => args[0] === 'pane' && args[1] === 'process-info')
+  assert.ok(calls.length > 0)
+  for (const args of calls) assert.deepEqual(args.slice(0, 3), ['pane', 'process-info', '--pane'])
+  for (const args of calls) assert.equal(args.length, 4)
+}
 
-  const first = await runEnsure(fake, stateFile, pluginState, port)
+test('Herdr ensure uses explicit workspace/process flags and is idempotent without focusing', async t => {
+  const context = await fixture(t)
+  const first = await runEnsure(context)
   assert.equal(first.code, 0, first.stderr)
-  const second = await runEnsure(fake, stateFile, pluginState, port)
+  const second = await runEnsure(context)
   assert.equal(second.code, 0, second.stderr)
 
-  const state = JSON.parse(await fs.readFile(stateFile, 'utf8'))
-  t.after(() => { if (state.listenerPid) process.kill(state.listenerPid, 'SIGTERM') })
+  const state = await readFake(context.stateFile)
   assert.equal(state.openCount, 1)
   assert.equal(state.workspaces.length, 1)
-  assert.equal(state.workspaces[0].label, 'Synagent')
-  assert.equal(state.tabs['w-test:t2'].label, 'Bus')
+  assert.equal(state.tabs['w-test:t-bus-1'].label, 'Bus')
+  assertExactProcessInfoCalls(state)
 
   const create = state.calls.find(args => args[0] === 'workspace' && args[1] === 'create')
   assert.deepEqual(create.slice(2), ['--cwd', os.homedir(), '--label', 'Synagent', '--no-focus'])
@@ -125,23 +182,89 @@ test('Herdr ensure uses an explicit workspace, is basically idempotent, and does
   assert.equal(open[open.indexOf('--workspace') + 1], 'w-test')
   assert.ok(open.includes('--no-focus'))
   assert.equal(open.includes('--target-pane'), false)
+  assert.equal(open.includes('--cwd'), false)
+})
+
+test('Herdr ensure reuses one pre-existing Synagent workspace without touching unknown tabs', async t => {
+  const context = await fixture(t, {
+    workspaces: [{ workspace_id: 'w-test', label: 'Synagent', active_tab_id: 'w-test:t-user' }],
+    tabs: {
+      'w-test:t-user': { tab_id: 'w-test:t-user', workspace_id: 'w-test', label: 'User', pane_count: 1 },
+    },
+  })
+  const result = await runEnsure(context)
+  assert.equal(result.code, 0, result.stderr)
+  const state = await readFake(context.stateFile)
+  assert.equal(state.openCount, 1)
+  assert.ok(state.tabs['w-test:t-user'])
+  assert.equal(state.calls.some(args => args[0] === 'workspace' && args[1] === 'create'), false)
+  assert.equal(state.calls.some(args => args[0] === 'tab' && args[1] === 'close'), false)
+  const open = state.calls.find(args => args[0] === 'plugin' && args[1] === 'pane' && args[2] === 'open')
+  assert.equal(open[open.indexOf('--workspace') + 1], 'w-test')
+  assert.ok(open.includes('--no-focus'))
 })
 
 test('Herdr ensure fails closed when Synagent workspace ownership is ambiguous', async t => {
-  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'synagent-herdr-ambiguous-'))
-  t.after(() => fs.rm(temp, { recursive: true, force: true }))
-  const stateFile = path.join(temp, 'fake-state.json')
-  await fs.writeFile(stateFile, JSON.stringify({
+  const context = await fixture(t, {
     workspaces: [
       { workspace_id: 'w1', label: 'Synagent' },
       { workspace_id: 'w2', label: 'Synagent' },
     ],
-    tabs: {}, panes: {}, calls: [], openCount: 0, listenerPid: null,
-  }))
-  const fake = await makeFakeHerdr(temp)
-  const result = await runEnsure(fake, stateFile, path.join(temp, 'plugin-state'), await unusedPort())
+  })
+  const result = await runEnsure(context)
   assert.equal(result.code, 1)
   assert.match(result.stderr, /multiple Herdr workspaces/)
-  const state = JSON.parse(await fs.readFile(stateFile, 'utf8'))
-  assert.equal(state.openCount, 0)
+  assert.equal((await readFake(context.stateFile)).openCount, 0)
+})
+
+test('Herdr ensure repairs its recorded stopped plugin pane and tab only', async t => {
+  const context = await fixture(t)
+  const first = await runEnsure(context)
+  assert.equal(first.code, 0, first.stderr)
+  let state = await readFake(context.stateFile)
+  const oldPid = state.listenerPid
+  process.kill(oldPid, 'SIGTERM')
+  await waitForClosedPort(context.port)
+  state.listenerPid = null
+  state.panes['w-test:p-bus-1'].running = false
+  await writeFake(context.stateFile, state)
+
+  const repaired = await runEnsure(context)
+  assert.equal(repaired.code, 0, repaired.stderr)
+  state = await readFake(context.stateFile)
+  assert.equal(state.openCount, 2)
+  assert.equal(state.closeCount, 1)
+  assert.equal(state.panes['w-test:p-bus-1'], undefined)
+  assert.equal(state.tabs['w-test:t-bus-1'], undefined)
+  assert.ok(state.panes['w-test:p-bus-2'])
+  assert.ok(state.calls.some(args => args.join(' ') === 'plugin pane close w-test:p-bus-1'))
+  assertExactProcessInfoCalls(state)
+})
+
+test('stale lock owned by a dead PID is recovered with new PID, timestamp, and token', async t => {
+  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'synagent-lock-stale-'))
+  t.after(() => fs.rm(temp, { recursive: true, force: true }))
+  const lockFile = path.join(temp, 'ensure.lock')
+  await fs.writeFile(lockFile, `${JSON.stringify({ pid: 99999999, createdAt: Date.now() - 60_000, token: 'stale' })}\n`)
+  const token = await acquireLock(lockFile, { attempts: 1, delayMs: 1 })
+  const owner = JSON.parse(await fs.readFile(lockFile, 'utf8'))
+  assert.equal(owner.pid, process.pid)
+  assert.equal(typeof owner.createdAt, 'number')
+  assert.equal(owner.token, token)
+  assert.notEqual(token, 'stale')
+  await releaseLock(lockFile, token)
+  await assert.rejects(fs.access(lockFile), { code: 'ENOENT' })
+})
+
+test('live lock is preserved and blocks a second ensure owner', async t => {
+  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'synagent-lock-live-'))
+  t.after(() => fs.rm(temp, { recursive: true, force: true }))
+  const lockFile = path.join(temp, 'ensure.lock')
+  const live = { pid: process.pid, createdAt: Date.now(), token: 'live-owner' }
+  await fs.writeFile(lockFile, `${JSON.stringify(live)}\n`)
+  await assert.rejects(
+    acquireLock(lockFile, { attempts: 1, delayMs: 1 }),
+    /another live Synagent ensure operation/,
+  )
+  assert.deepEqual(JSON.parse(await fs.readFile(lockFile, 'utf8')), live)
 })

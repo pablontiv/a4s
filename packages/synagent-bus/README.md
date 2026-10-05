@@ -49,22 +49,26 @@ El mismo directorio es un plugin Herdr instalable desde GitHub:
 herdr plugin install pablontiv/a4s/packages/synagent-bus
 # desarrollo local
 herdr plugin link "$PWD/packages/synagent-bus"
-herdr plugin action invoke a4s.synagent-bus.ensure
+herdr plugin action invoke ensure --plugin a4s.synagent-bus
 ```
 
-Al arrancar el servidor, el hook one-shot `ensure` crea o reutiliza un único
+Al arrancar el servidor, el hook one-shot `ensure` crea o reutiliza el único
 space `Synagent`, con cwd estable en el home del usuario, y abre el entrypoint
-`bus` como tab `Bus` sin cambiar el foco. La acción global `ensure` ejecuta la
-misma operación. El estado de coordinación (`runtime.json` y un lock efímero)
-vive en `HERDR_PLUGIN_STATE_DIR`; la base MQTT sigue en la ruta de estado del
+`bus` como tab `Bus` sin cambiar el foco. Un space preexistente único se adopta
+sin cerrar ni modificar sus tabs previos. La acción global `ensure` ejecuta la
+misma operación. El estado de coordinación (`runtime.json` y un lock con PID,
+timestamp y token) vive en `HERDR_PLUGIN_STATE_DIR`; un lock cuyo PID ya no
+existe se recupera tras un crash. La base MQTT sigue en la ruta de estado del
 usuario indicada arriba. Para un override de plugin, define `SYNAGENT_PORT` o
 `SYNAGENT_DB` en el entorno del servidor Herdr antes del arranque.
 
-`ensure` falla cerrado si existen varios spaces `Synagent`, si encuentra uno
-sin estado de ownership verificable, o si no puede verificar simultáneamente el
-pane, su proceso y el listener MQTT. No usa el workspace enfocado y no es un
-supervisor: si el broker termina después del ensure, ejecuta de nuevo la acción
-o reinicia Herdr; no hay reintento continuo.
+`ensure` falla cerrado si existen varios spaces `Synagent`, si un listener no
+puede atribuirse al pane registrado, o si pane, proceso y listener no pueden
+verificarse conjuntamente. Si el pane registrado sigue presente pero el broker
+terminó, cierra únicamente ese pane de plugin y su tab de un solo pane antes de
+abrir el reemplazo; rehúsa reparar un tab que contenga otros panes. No usa el
+workspace enfocado y no es un supervisor continuo: la reparación ocurre al
+volver a ejecutar la acción o al reiniciar Herdr.
 
 ## Límites y seguridad
 

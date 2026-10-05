@@ -2,6 +2,7 @@
 'use strict'
 
 const { spawnSync } = require('node:child_process')
+const { randomUUID } = require('node:crypto')
 const fs = require('node:fs/promises')
 const net = require('node:net')
 const os = require('node:os')
@@ -10,6 +11,7 @@ const path = require('node:path')
 const PLUGIN_ID = 'a4s.synagent-bus'
 const WORKSPACE_LABEL = 'Synagent'
 const TAB_LABEL = 'Bus'
+const INCOMPLETE_LOCK_STALE_MS = 30_000
 const delay = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds))
 
 function command(bin, args, { allowFailure = false } = {}) {
@@ -82,43 +84,121 @@ async function waitForBroker(port) {
   return false
 }
 
-async function acquireLock(lockDir) {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    try {
-      await fs.mkdir(lockDir)
-      return
-    } catch (error) {
-      if (error.code !== 'EEXIST') throw error
-      await delay(100)
-    }
+function pidExists(pid) {
+  if (!Number.isInteger(pid) || pid < 1) return false
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    if (error.code === 'ESRCH') return false
+    if (error.code === 'EPERM') return true
+    throw error
   }
-  throw new Error('another Synagent ensure operation still holds the runtime lock')
 }
 
-function verifyPane(herdr, state) {
+async function removeUnchangedLock(lockFile, observed) {
+  let current
+  try {
+    current = await fs.readFile(lockFile, 'utf8')
+  } catch (error) {
+    if (error.code === 'ENOENT') return
+    throw error
+  }
+  if (current !== observed) throw new Error('Synagent ensure lock changed while checking its owner')
+  await fs.unlink(lockFile)
+}
+
+async function acquireLock(lockFile, { attempts = 100, delayMs = 100 } = {}) {
+  const token = randomUUID()
+  let liveAttempts = 0
+  while (liveAttempts < attempts) {
+    let handle
+    try {
+      handle = await fs.open(lockFile, 'wx', 0o600)
+      await handle.writeFile(`${JSON.stringify({ pid: process.pid, createdAt: Date.now(), token })}\n`)
+      await handle.close()
+      return token
+    } catch (error) {
+      await handle?.close().catch(() => {})
+      if (error.code !== 'EEXIST') throw error
+
+      let observed
+      try {
+        observed = await fs.readFile(lockFile, 'utf8')
+        const owner = JSON.parse(observed)
+        if (!Number.isInteger(owner.pid) || owner.pid < 1 ||
+            !Number.isFinite(owner.createdAt) || typeof owner.token !== 'string' || !owner.token) {
+          throw new Error('invalid lock metadata')
+        }
+        if (!pidExists(owner.pid)) {
+          await removeUnchangedLock(lockFile, observed)
+          continue
+        }
+      } catch (lockError) {
+        if (lockError.code === 'ENOENT') continue
+        if (lockError.message === 'invalid lock metadata' || lockError instanceof SyntaxError) {
+          const stat = await fs.stat(lockFile)
+          if (Date.now() - stat.mtimeMs > INCOMPLETE_LOCK_STALE_MS) {
+            await removeUnchangedLock(lockFile, observed ?? '')
+            continue
+          }
+          throw new Error('Synagent ensure lock metadata is incomplete and not yet stale')
+        }
+        throw lockError
+      }
+      liveAttempts += 1
+      if (liveAttempts < attempts) await delay(delayMs)
+    }
+  }
+  throw new Error('another live Synagent ensure operation holds the runtime lock')
+}
+
+async function releaseLock(lockFile, token) {
+  try {
+    const observed = await fs.readFile(lockFile, 'utf8')
+    const owner = JSON.parse(observed)
+    if (owner.token !== token) return
+    await removeUnchangedLock(lockFile, observed)
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error
+  }
+}
+
+function inspectPane(herdr, state) {
   const paneResponse = command(herdr, ['pane', 'get', state.paneId], { allowFailure: true })
-  if (!paneResponse) return false
+  if (!paneResponse) return { status: 'missing' }
   const pane = resultOf(paneResponse, 'pane_info').pane
   if (!pane || pane.workspace_id !== state.workspaceId || pane.tab_id !== state.tabId) {
     throw new Error('saved Synagent pane does not match its workspace and tab')
   }
-  const processResponse = command(herdr, ['pane', 'process-info', state.paneId], { allowFailure: true })
-  if (!processResponse) throw new Error('Synagent pane process cannot be verified')
-  const processText = JSON.stringify(resultOf(processResponse, 'pane_process_info'))
-  if (!processText.includes('broker.cjs') && !processText.includes('synagent-bus')) {
-    throw new Error('Synagent pane is not running the declared bus command')
-  }
+
   const tabResponse = command(herdr, ['tab', 'get', state.tabId], { allowFailure: true })
   if (!tabResponse) throw new Error('Synagent Bus tab cannot be verified')
   const tab = resultOf(tabResponse, 'tab_info').tab
-  if (!tab || tab.label !== TAB_LABEL) throw new Error('Synagent pane is not in the Bus tab')
-  return true
+  if (!tab || tab.workspace_id !== state.workspaceId || tab.label !== TAB_LABEL) {
+    throw new Error('Synagent pane is not in its recorded Bus tab')
+  }
+
+  const processResponse = command(herdr, ['pane', 'process-info', '--pane', state.paneId], { allowFailure: true })
+  if (!processResponse) throw new Error('Synagent pane process cannot be verified')
+  const processInfo = resultOf(processResponse, 'pane_process_info').process_info
+  if (!processInfo || !Array.isArray(processInfo.foreground_processes)) {
+    throw new Error('Synagent pane process list cannot be verified')
+  }
+  const running = processInfo.foreground_processes.some(process => {
+    const argv = Array.isArray(process.argv) ? process.argv : []
+    if (argv.some(argument => path.basename(argument) === 'broker.cjs')) return true
+    if (process.argv0 && path.basename(process.argv0) === 'synagent-bus') return true
+    return typeof process.cmdline === 'string' &&
+      /(?:^|[\\/\s])(?:broker\.cjs|synagent-bus)(?:\s|$)/.test(process.cmdline)
+  })
+  return { status: running ? 'running' : 'stopped', pane, tab }
 }
 
-function openBusPane(herdr, workspaceId, home) {
+function openBusPane(herdr, workspaceId) {
   const args = [
     'plugin', 'pane', 'open', '--plugin', PLUGIN_ID, '--entrypoint', 'bus',
-    '--placement', 'tab', '--workspace', workspaceId, '--cwd', home, '--no-focus',
+    '--placement', 'tab', '--workspace', workspaceId, '--no-focus',
   ]
   for (const name of ['SYNAGENT_PORT', 'SYNAGENT_DB']) {
     if (process.env[name]) args.push('--env', `${name}=${process.env[name]}`)
@@ -129,6 +209,19 @@ function openBusPane(herdr, workspaceId, home) {
   }
   command(herdr, ['tab', 'rename', opened.tab_id, TAB_LABEL])
   return { paneId: opened.pane_id, tabId: opened.tab_id }
+}
+
+function closeStoppedOwnedPane(herdr, inspection, state) {
+  if (inspection.tab.pane_count !== 1) {
+    throw new Error('stopped Synagent plugin tab contains unowned panes; refusing repair')
+  }
+  command(herdr, ['plugin', 'pane', 'close', state.paneId])
+  if (command(herdr, ['pane', 'get', state.paneId], { allowFailure: true })) {
+    throw new Error('stopped Synagent plugin pane still exists after close')
+  }
+  if (command(herdr, ['tab', 'get', state.tabId], { allowFailure: true })) {
+    throw new Error('stopped Synagent plugin tab still exists after its only pane closed')
+  }
 }
 
 async function ensure() {
@@ -143,9 +236,9 @@ async function ensure() {
   }
 
   await fs.mkdir(stateDir, { recursive: true, mode: 0o700 })
-  const lockDir = path.join(stateDir, 'ensure.lock')
+  const lockFile = path.join(stateDir, 'ensure.lock')
   const stateFile = path.join(stateDir, 'runtime.json')
-  await acquireLock(lockDir)
+  const lockToken = await acquireLock(lockFile)
   try {
     const workspaceResult = resultOf(command(herdr, ['workspace', 'list']), 'workspace_list')
     const matches = workspaceResult.workspaces.filter(workspace => workspace.label === WORKSPACE_LABEL)
@@ -162,17 +255,18 @@ async function ensure() {
       if (await mqttProbe(port)) throw new Error('MQTT listener exists but its Synagent workspace is missing')
       state = null
     }
-    if (!state && workspace) {
-      throw new Error('existing Synagent workspace is not owned by verifiable plugin runtime state')
+    if (!state && workspace && await mqttProbe(port)) {
+      throw new Error('MQTT listener exists in an unowned pre-existing Synagent workspace')
     }
 
     if (state && workspace) {
-      const paneExists = verifyPane(herdr, state)
-      if (paneExists) {
+      const inspection = inspectPane(herdr, state)
+      if (inspection.status === 'running') {
         if (!await waitForBroker(port)) throw new Error('Synagent pane exists but its MQTT listener is not verifiable')
         return state
       }
-      if (await mqttProbe(port)) throw new Error('MQTT listener exists but the saved Synagent pane is missing')
+      if (await mqttProbe(port)) throw new Error('MQTT listener exists but the recorded Synagent pane is not running it')
+      if (inspection.status === 'stopped') closeStoppedOwnedPane(herdr, inspection, state)
     }
 
     if (!workspace) {
@@ -189,18 +283,20 @@ async function ensure() {
       }
     }
 
-    const opened = openBusPane(herdr, workspace.workspace_id, os.homedir())
+    const opened = openBusPane(herdr, workspace.workspace_id)
     state = { version: 1, workspaceId: workspace.workspace_id, ...opened }
     await writeState(stateFile, state)
 
     if (initialTabId && initialTabId !== state.tabId) {
       command(herdr, ['tab', 'close', initialTabId])
     }
-    if (!verifyPane(herdr, state)) throw new Error('new Synagent pane disappeared before verification')
+    if (inspectPane(herdr, state).status !== 'running') {
+      throw new Error('new Synagent pane is not running the declared bus command')
+    }
     if (!await waitForBroker(port)) throw new Error('new Synagent MQTT listener did not become ready')
     return state
   } finally {
-    await fs.rmdir(lockDir).catch(() => {})
+    await releaseLock(lockFile, lockToken)
   }
 }
 
@@ -213,4 +309,4 @@ if (require.main === module) {
   })
 }
 
-module.exports = { ensure, mqttProbe }
+module.exports = { acquireLock, ensure, mqttProbe, releaseLock }
