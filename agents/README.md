@@ -2,9 +2,15 @@
 
 This family preserves portable agent role definitions owned by A4S. Agent runtimes are integrations, not the category of this directory.
 
+## Authority boundary
+
+[`common/AGENTS.md`](common/AGENTS.md) is Pi's root runtime entry point and the authoritative runtime contract for Orchestrator identity, decomposition, dispatch, Worker topology, concurrency, and adjudication. Repository-local policy remains the authority for what project work is authorized and for project-specific readiness, mutation, review, safety, and delivery. The two contracts are cumulative: neither replaces or extends the other, and installing these definitions does not grant project authority.
+
+The Orchestrator is Pi and performs orchestration only. Every domain action goes to a direct leaf Worker. Each independently adjudicable work unit has one result and one primary specialization; all ready, non-conflicting units are dispatched concurrently under the exceptions and wave behavior defined by the runtime contract.
+
 ## Current contents
 
-- [`common/`](common/) contains the manually derived Orchestrator instructions for Agent operating model version 1.0.
+- [`common/`](common/) contains the Pi Orchestrator root runtime contract for Agent operating model version 1.0.
 - [`pi/`](pi/) contains the five manual Pi Worker definitions for that model.
 - [`claude/`](claude/) contains the corresponding five Claude Code custom-subagent definitions with Claude-native tool names.
 - [`superpowers/`](superpowers/) contains:
@@ -25,7 +31,9 @@ $PI_CODING_AGENT_DIR/agents/<role-name>.md
   -> <checkout>/agents/claude/<role-name>.md
 ```
 
-When `PI_CODING_AGENT_DIR` is unset, Pi's default root is `~/.pi/agent`. The five role names are `explorer`, `implementer`, `reviewer`, `debugger`, and `generalist`. These projections must fail closed rather than overwrite an existing runtime file.
+When `PI_CODING_AGENT_DIR` is unset, Pi's default root is `~/.pi/agent`. Pi loads `AGENTS.md` there as its root entry point and assumes the user-facing Orchestrator identity defined in that file. The five role names are `explorer`, `implementer`, `reviewer`, `debugger`, and `generalist`. These projections must fail closed rather than overwrite an existing runtime file.
+
+Static files and contract tests do not prove runtime behavior. Before an agent or skill definition is released or activated, its representative end-to-end path must invoke it through the consuming harness; focused contract tests remain supplementary evidence.
 
 The separate Superpowers Claude Code adapters are activated via [ADR 0049](../.workspace/docs/adr/0049-superpowers-claude-code-adapters.md):
 

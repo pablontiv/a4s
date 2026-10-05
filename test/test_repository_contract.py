@@ -28,9 +28,10 @@ BACKLOG_DECISIONS_POLICY = (
     "it. This presentation does not infer a value, affect readiness, mutate, or backfill the Bead; an absent field "
     "is shown as missing or unknown."
 )
-EXPECTED_AGENT_POINTER = (
-    "La forma de trabajo de este repositorio la define `.workspace/config.yaml`; "
-    "ningún otro documento la sustituye."
+EXPECTED_AGENT_ENTRY_POINT = (
+    "`.workspace/config.yaml` gobierna sólo el workflow y la policy locales de este repositorio. "
+    "El contrato runtime aplicable de los agentes es separado y acumulativo; esta referencia no lo sustituye "
+    "ni lo subordina."
 )
 REQUIRED_GLOBAL_STEERING_CLAUSES = (
     "A correction to an instruction is not automatically a durable preference.",
@@ -126,8 +127,8 @@ class RepositoryContractTests(unittest.TestCase):
             with self.subTest(target=target):
                 self.assertTrue((ROOT / relative).exists(), target)
 
-    def test_agent_contract_points_only_to_canonical_workspace_config(self) -> None:
-        self.assertEqual(self.agents.strip(), EXPECTED_AGENT_POINTER)
+    def test_agent_entry_point_separates_local_policy_from_runtime_contract(self) -> None:
+        self.assertEqual(self.agents.strip(), EXPECTED_AGENT_ENTRY_POINT)
 
     def test_global_steering_preserves_behavioral_guards(self) -> None:
         normalized_steering = " ".join(self.global_steering.split())
