@@ -5,8 +5,9 @@
 // only (a) binds Claude's SessionMessage transcript to the core via a
 // HostBinding, (b) registers the `session.compact` hook to replace the native
 // summary with the core's rebuilt message array, and (c) registers a
-// `turn.complete` trigger that asks the engine to compact once the context
-// window crosses a threshold.
+// `turn.complete` trigger that, past a local context-fill floor, asks Jev
+// whether now is the ideal moment to compact and acts only when Jev says so
+// (the Claude analog of pi-context-expert's `trigger.mode: auto`).
 //
 // Jev runs over the engine's `$.http.fetch` against the TypeSafe System One
 // endpoint; the API key resolves from userConfig, then TYPESAFE_API_KEY, then
@@ -31,6 +32,12 @@ import type {
 import { reductionRatio, resolveOptions } from '../core/compact.js';
 import { buildJevRequest, DEFAULT_MODEL, parseJevResponse } from '../core/request.js';
 import { runCompaction, type HostBinding } from '../core/binding.js';
+import {
+  buildTriggerState,
+  DEFAULT_MINIMUM_CONTEXT_RATIO,
+  evaluateTrigger,
+  triggerFloorPasses,
+} from '../core/trigger.js';
 import type {
   CompactOptions,
   CompactResult,
@@ -40,11 +47,18 @@ import type {
   ToolUse,
 } from '../core/types.js';
 
+/** Pi-parity trigger modes: off disables it, hint suggests, auto compacts. */
+export type TriggerMode = 'off' | 'hint' | 'auto';
+
 const HOOK_DEFAULTS = {
-  compactAtPercent: 60,
+  triggerMode: 'auto' as TriggerMode,
+  minimumContextRatio: DEFAULT_MINIMUM_CONTEXT_RATIO,
   minReductionRatio: 0.25,
   model: DEFAULT_MODEL,
 };
+
+/** Minimum ms between auto-compactions, so the trigger never hammers Jev. */
+const TRIGGER_COOLDOWN_MS = 60_000;
 
 export type HookFetchInit = { method?: string; headers?: Record<string, string>; body?: string };
 export type HookFetchResponse = { status: number; ok: boolean; text: string };
@@ -53,10 +67,16 @@ export type HookFetch = (url: string, init?: HookFetchInit) => Promise<HookFetch
 
 export type HookConfig = CompactOptions & {
   apiKey?: string;
-  compactAtPercent: number;
+  triggerMode: TriggerMode;
+  minimumContextRatio: number;
   minReductionRatio: number;
   model: string;
 };
+
+function optionTriggerMode(options: PluginOptions, fallback: TriggerMode): TriggerMode {
+  const value = options['triggerMode'];
+  return value === 'off' || value === 'hint' || value === 'auto' ? value : fallback;
+}
 
 function optionNumber(options: PluginOptions, key: string, fallback: number): number {
   const value = options[key];
@@ -83,7 +103,8 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
   }
   const config: HookConfig = {
     ...numbers,
-    compactAtPercent: optionNumber(options, 'compactAtPercent', HOOK_DEFAULTS.compactAtPercent),
+    triggerMode: optionTriggerMode(options, HOOK_DEFAULTS.triggerMode),
+    minimumContextRatio: optionNumber(options, 'minimumContextRatio', HOOK_DEFAULTS.minimumContextRatio),
     minReductionRatio: optionNumber(options, 'minReductionRatio', HOOK_DEFAULTS.minReductionRatio),
     model: optionString(options, 'model') ?? HOOK_DEFAULTS.model,
   };
@@ -281,6 +302,7 @@ function notify(
 export const register: Register = (on: On, options: PluginOptions) => {
   const configured = resolveHookConfig(options);
   let compacting = false;
+  let lastCompactAt = 0;
 
   on('session.compact', async ($, event, next) => {
     try {
@@ -302,12 +324,46 @@ export const register: Register = (on: On, options: PluginOptions) => {
     }
   });
 
+  // The Jev-decided trigger: it does NOT compact at a fixed percentage. Past a
+  // local floor it asks Jev "is now the ideal moment?" and acts only on
+  // `compact` — the Claude analog of pi-context-expert's `trigger.mode: auto`.
   on('turn.complete', async ($, event: TurnCompleteInput, next) => {
-    if (compacting) return next(event);
+    if (configured.triggerMode === 'off' || compacting) return next(event);
     try {
+      if (Date.now() - lastCompactAt < TRIGGER_COOLDOWN_MS) return next(event);
+
       const { context } = await $.session.usage();
-      if ((context.percent ?? 0) < configured.compactAtPercent) return next(event);
+      const contextWindow = context.window;
+      const contextTokens =
+        context.tokens ?? (typeof context.percent === 'number' ? (context.percent / 100) * contextWindow : 0);
+
+      // Local floor gate first — never spend a Jev call on a near-empty window.
+      if (!triggerFloorPasses(contextTokens, contextWindow, configured.minimumContextRatio)) return next(event);
+
+      const apiKey = await getApiKey($, configured);
+      if (!apiKey) return next(event); // No credential → cannot ask Jev; stay quiet.
+
+      const asker = jevAsker(
+        async (url, init) => {
+          const response = await $.http.fetch(url, init);
+          return { status: response.status, ok: response.ok, text: response.text };
+        },
+        apiKey,
+        configured.model,
+      );
+      const decision = await evaluateTrigger(
+        asker,
+        buildTriggerState(contextTokens, contextWindow, configured.minimumContextRatio),
+      );
+      if (decision !== 'compact') return next(event);
+
+      if (configured.triggerMode === 'hint') {
+        notify($, 'Jev suggests compacting now — run /compact');
+        return next(event);
+      }
+
       compacting = true;
+      lastCompactAt = Date.now();
       await $.session.compact();
     } catch (error) {
       $.ui.log(`[context-expert] auto-compact skipped (${error instanceof Error ? error.message : String(error)})`);

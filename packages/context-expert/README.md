@@ -53,11 +53,13 @@ in-process only and never logged or written to disk.
 
 ## Auto-compact (the Pi-global analog)
 
-The plugin registers a `turn.complete` trigger that auto-compacts once the
-context window reaches `compactAtPercent` (default `60`). This is the Claude
-analog of `pi-context-expert` configured with `trigger.mode: "auto"` in
-`~/.pi/agent/pi-context-expert.json`. Set `compactAtPercent` to `100` to disable
-the trigger and keep only manual `/compact`.
+The plugin registers a `turn.complete` trigger that is **decided by Jev**, not a
+fixed percentage: past a local floor (`minimumContextRatio`, default `0.5`) it
+asks Jev — with a text-free state — whether now is the ideal moment to compact,
+and compacts only when Jev chooses `compact`. `triggerMode` (`auto` | `hint` |
+`off`, default `auto`) is the Claude analog of `pi-context-expert`'s
+`trigger.mode` in `~/.pi/agent/pi-context-expert.json`. Set `triggerMode` to
+`off` to disable the trigger and keep only manual `/compact`.
 
 ## Verified
 
