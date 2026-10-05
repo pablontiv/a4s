@@ -58,12 +58,39 @@ let started = false
 // Identidad resuelta (cacheada en esta carga del módulo).
 let identity: Identity | undefined
 let globalOptIn = false
+// Aviso diferido: resolveBrokerUrl corre en register() sin `$`; se emite al arrancar.
+let brokerWarning: string | undefined
 
 const bridgeDir = ($: EngineInterface): string => `${$.plugin.root}/bridge`
 
+// El bus no tiene auth: igual que el adaptador Pi, solo aceptamos brokers de
+// loopback sin credenciales. Una URL no conforme se ignora y se usa el default.
+function isLoopbackMqtt(value: string): boolean {
+  let u: URL
+  try {
+    u = new URL(value)
+  } catch {
+    return false
+  }
+  return (
+    u.protocol === 'mqtt:'
+    && ['127.0.0.1', 'localhost', '[::1]'].includes(u.hostname)
+    && !u.username
+    && !u.password
+    && (u.pathname === '' || u.pathname === '/')
+    && !u.search
+    && !u.hash
+  )
+}
+
 function resolveBrokerUrl(options: PluginOptions): string {
   const v = options['brokerUrl']
-  return typeof v === 'string' && v.length > 0 ? v : DEFAULT_BROKER_URL
+  const candidate = typeof v === 'string' && v.length > 0 ? v : DEFAULT_BROKER_URL
+  if (!isLoopbackMqtt(candidate)) {
+    brokerWarning = `synagent: brokerUrl no loopback/sin credenciales rechazado (${candidate}); usando ${DEFAULT_BROKER_URL}`
+    return DEFAULT_BROKER_URL
+  }
+  return candidate
 }
 
 function optString(options: PluginOptions, key: string): string | undefined {
@@ -162,6 +189,8 @@ async function ensureStarted($: EngineInterface, brokerUrl: string, options: Plu
   if (started) return
   started = true
 
+  if (brokerWarning) void $.ui.status(brokerWarning)
+
   const bridgeSub = `${bridgeDir($)}/bridge-sub.cjs`
 
   try {
@@ -250,7 +279,12 @@ async function publishV1(
   const from = directAddress(self)
   const id = newId(from, now)
   const message = createCanonical(body, { id, from, to, ts: now, kind, ...(replyTo ? { reply_to: replyTo } : {}) })
-  const r = await $.process.run(['node', `${bridgeDir($)}/bridge-pub.cjs`, toTopic(to), serialize(message), brokerUrl])
+  let r
+  try {
+    r = await $.process.run(['node', `${bridgeDir($)}/bridge-pub.cjs`, toTopic(to), serialize(message), brokerUrl])
+  } catch (err) {
+    return { ok: false, error: `publish lanzó: ${err instanceof Error ? err.message : String(err)}` }
+  }
   if (r.exitCode !== 0) return { ok: false, error: `publish falló (exit ${r.exitCode}): ${r.stderr || r.stdout}` }
   return { ok: true, id }
 }

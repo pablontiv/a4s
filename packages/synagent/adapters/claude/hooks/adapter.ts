@@ -62,7 +62,8 @@ export function parseAddress(to: string): Address | null {
   if (parts.length !== 2) return null
   const project = parts[0] as string
   const leaf = parts[1] as string
-  if (!isToken(project)) return null
+  // 'all' está reservado para el global; un proyecto no puede llamarse 'all'.
+  if (!isToken(project) || project === GLOBAL_ADDRESS) return null
   if (leaf === GLOBAL_ADDRESS) return { scope: 'project', project }
   if (!isToken(leaf)) return null
   return { scope: 'direct', project, instance: leaf }

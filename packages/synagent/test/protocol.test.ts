@@ -61,6 +61,8 @@ test('parseAddress distingue global, proyecto y directo; rechaza lo inválido', 
   assert.equal(parseAddress('a/b/c'), null)
   assert.equal(parseAddress('A4S/x'), null)
   assert.equal(parseAddress('a4s/'), null)
+  assert.equal(parseAddress('all/x'), null) // 'all' reservado: no puede ser proyecto
+  assert.equal(parseAddress('all/all'), null)
 })
 
 test('isAddress/isBroadcast coinciden con el scope', () => {

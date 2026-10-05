@@ -8,7 +8,6 @@ import { Type } from 'typebox'
 import {
   createCanonical,
   directAddress,
-  GLOBAL_ADDRESS,
   isAddress,
   isBroadcastSteer,
   isForIdentity,
