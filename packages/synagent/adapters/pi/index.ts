@@ -490,6 +490,16 @@ function synagentPi(pi: ExtensionAPI, deliveryStartTimeoutMs: number): void {
 
     // El cliente transient es clean=true: su sesión no retiene suscripciones, basta cerrarlo.
     if (activeTransient) {
+      try {
+        // Unsubscribe from all topics before closing
+        if (activeTransient.connected) {
+          await new Promise<void>((resolve) => {
+            activeTransient.unsubscribe('#', () => resolve())
+          })
+        }
+      } catch {
+        // Ignore unsubscribe errors
+      }
       activeTransient.removeAllListeners()
       await endClient(activeTransient)
     }
@@ -768,9 +778,21 @@ function unsubscribeAll(client: MqttClient, topics: string[]): Promise<void> {
 }
 
 function endClient(client: MqttClient): Promise<void> {
-  return new Promise((resolve, reject) => {
-    client.end(false, {}, error => error ? reject(error) : resolve())
-  })
+  // Force destroy the stream immediately (don't wait for callback)
+  try {
+    (client as any).stream?.destroy?.()
+  } catch {
+    // Ignore errors
+  }
+
+  // Attempt graceful close and resolve immediately
+  try {
+    client.end(true, {})
+  } catch {
+    // Ignore errors from end()
+  }
+
+  return Promise.resolve()
 }
 
 function formatError(error: unknown): string {

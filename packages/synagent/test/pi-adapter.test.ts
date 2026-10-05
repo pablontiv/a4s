@@ -74,7 +74,56 @@ function publish(client: any, topic: string, payload: string): Promise<void> {
 }
 
 function end(client: any): Promise<void> {
-  return new Promise(resolve => client.end(false, {}, () => resolve()))
+  // Force destroy the stream immediately and destroy the client
+  try {
+    client.stream?.destroy?.()
+  } catch {
+    // Ignore errors
+  }
+
+  // Attempt to end gracefully but don't wait for callback
+  try {
+    client.end(true, {})
+  } catch {
+    // Ignore errors
+  }
+
+  return Promise.resolve()
+}
+
+async function closeBroker(broker: any): Promise<void> {
+  try {
+    await new Promise<void>((resolve) => {
+      const timeout = setTimeout(() => {
+        resolve()
+      }, 2000)
+
+      broker.close(() => {
+        clearTimeout(timeout)
+        resolve()
+      })
+    })
+  } catch {
+    // Ignore errors
+  }
+}
+
+async function closeServer(server: any): Promise<void> {
+  try {
+    server.closeAllConnections?.()
+    await new Promise<void>((resolve) => {
+      const timeout = setTimeout(() => {
+        resolve()
+      }, 2000)
+
+      server.close(() => {
+        clearTimeout(timeout)
+        resolve()
+      })
+    })
+  } catch {
+    // Ignore errors
+  }
 }
 
 // Direcciones y topics v1 fijos usados por el harness (project=a4s, instance=pi-1).
@@ -99,8 +148,8 @@ test('Pi adapter: v1 push bidireccional, dual-read, broadcast, orden y dedupe', 
     await harness.shutdown()
     await end(subscriber)
     await end(publisher)
-    await new Promise<void>(resolve => server.close(() => resolve()))
-    await new Promise<void>(resolve => broker.close(() => resolve()))
+    await closeServer(server)
+    await closeBroker(broker)
   })
 
   await harness.start()
@@ -247,8 +296,8 @@ test('Pi adapter gives concurrent sessions distinct durable MQTT identities', as
     await first.shutdown()
     await second.shutdown()
     await end(publisher)
-    await new Promise<void>(resolve => server.close(() => resolve()))
-    await new Promise<void>(resolve => broker.close(() => resolve()))
+    await closeServer(server)
+    await closeBroker(broker)
   })
 
   await first.start()
@@ -286,8 +335,8 @@ test('Pi adapter keeps session IDs X and t-X from colliding or evicting each oth
     await first.shutdown()
     await second.shutdown()
     await end(publisher)
-    await new Promise<void>(resolve => server.close(() => resolve()))
-    await new Promise<void>(resolve => broker.close(() => resolve()))
+    await closeServer(server)
+    await closeBroker(broker)
   })
 
   await first.start()
@@ -313,8 +362,8 @@ test('Pi adapter reload/resume retains the same native session ID and correlatio
     await first.shutdown()
     await reloaded?.shutdown()
     await end(publisher)
-    await new Promise<void>(resolve => server.close(() => resolve()))
-    await new Promise<void>(resolve => broker.close(() => resolve()))
+    await closeServer(server)
+    await closeBroker(broker)
   })
 
   await first.start()
@@ -358,8 +407,8 @@ test('Pi adapter preserves FIFO across a late start and supports explicit recove
   t.after(async () => {
     await harness.shutdown()
     await end(publisher)
-    await new Promise<void>(resolve => server.close(() => resolve()))
-    await new Promise<void>(resolve => broker.close(() => resolve()))
+    await closeServer(server)
+    await closeBroker(broker)
   })
 
   const topic = 'synagent/v1/a4s/pi-timeout'
@@ -420,8 +469,8 @@ test('Pi adapter new/fork session_start re-resolves the native session ID and re
   t.after(async () => {
     await harness.shutdown()
     await end(publisher)
-    await new Promise<void>(resolve => server.close(() => resolve()))
-    await new Promise<void>(resolve => broker.close(() => resolve()))
+    await closeServer(server)
+    await closeBroker(broker)
   })
 
   const before = 'synagent/v1/a4s/pi-before'
@@ -469,8 +518,8 @@ test('Pi adapter cleans a durable subscription changed before its first SUBACK',
     await harness.shutdown()
     if (probe) await end(probe)
     await end(publisher)
-    await new Promise<void>(resolve => server.close(() => resolve()))
-    await new Promise<void>(resolve => broker.close(() => resolve()))
+    await closeServer(server)
+    await closeBroker(broker)
   })
 
   await harness.start()
@@ -525,8 +574,8 @@ test('Pi adapter uses session cwd origin and native mixed-case identity, ignores
     else process.env.SYNAGENT_INSTANCE = oldInstance
     await harness.shutdown()
     await end(subscriber)
-    await new Promise<void>(resolve => server.close(() => resolve()))
-    await new Promise<void>(resolve => broker.close(() => resolve()))
+    await closeServer(server)
+    await closeBroker(broker)
     rmSync(cwd, { recursive: true, force: true })
   })
 
@@ -593,8 +642,8 @@ test('Pi adapter configured project wins over a conflicting session cwd origin',
   t.after(async () => {
     await harness.shutdown()
     await end(publisher)
-    await new Promise<void>(resolve => server.close(() => resolve()))
-    await new Promise<void>(resolve => broker.close(() => resolve()))
+    await closeServer(server)
+    await closeBroker(broker)
     rmSync(cwd, { recursive: true, force: true })
   })
 
@@ -634,8 +683,8 @@ test('Pi adapter unresolved project stays legacy-only and refuses all v1 send in
     await harness.shutdown()
     await end(publisher)
     await end(observer)
-    await new Promise<void>(resolve => server.close(() => resolve()))
-    await new Promise<void>(resolve => broker.close(() => resolve()))
+    await closeServer(server)
+    await closeBroker(broker)
     rmSync(cwd, { recursive: true, force: true })
   })
 
@@ -691,8 +740,8 @@ test('Pi adapter marks MQTT publish failures as tool errors', async t => {
   }, [], 'publish-failure')
   t.after(async () => {
     await harness.shutdown()
-    await new Promise<void>(resolve => server.close(() => resolve()))
-    await new Promise<void>(resolve => broker.close(() => resolve()))
+    await closeServer(server)
+    await closeBroker(broker)
   })
 
   await harness.start()
@@ -779,9 +828,8 @@ function createHarness(
       received.push({ text, ...(options ? { options } : {}) })
     },
   }
-  const adapter = deliveryStartTimeoutMs === undefined
-    ? synagentPi
-    : createSynagentPi({ deliveryStartTimeoutMs })
+  // Always create a new adapter instance to avoid shared state between test harnesses
+  const adapter = createSynagentPi({ deliveryStartTimeoutMs })
   adapter(api as never)
 
   return {
