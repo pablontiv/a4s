@@ -1,1 +1,1 @@
-`.workspace/config.yaml` gobierna sólo el workflow y la policy locales de este repositorio. El contrato runtime aplicable de los agentes es separado y acumulativo; esta referencia no lo sustituye ni lo subordina.
+`.workspace/docs/workflow-reference.md` es documentación informativa sin autoridad operativa; no existe configuración local de workflow/policy y el contrato runtime es separado.

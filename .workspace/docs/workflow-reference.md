@@ -1,3 +1,8 @@
+# Workflow reference
+
+Este documento es documentación informativa sin autoridad operativa.
+
+```yaml
 ---
 workspace:
   purpose:
@@ -319,3 +324,4 @@ repository:
   id: pablontiv/a4s
   url: https://github.com/pablontiv/a4s.git
   base_branch: main
+```
