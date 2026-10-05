@@ -1,8 +1,11 @@
-// Suite de CONFORMIDAD compartida (ADR 0069): ejercita el core host-neutral con
-// vectores dorados que todo adaptador —actual o futuro— debe reproducir. Fija el
-// formato de wire, el mapa dirección→topic y el enrutado/aceptación. La copia
-// generada del plugin Claude queda cubierta por su test de paridad (es idéntica
-// a protocol.ts), y ambos adaptadores enrutan con estas mismas funciones.
+// Suite de CONFORMIDAD compartida (ADR 0069): verifica el core host-neutral TS
+// (protocol.ts) contra los vectores dorados de `golden-vectors.json`. El CONTRATO
+// que fijan los vectores —formato de wire, mapa dirección→topic y enrutado/
+// aceptación— es independiente de lenguaje; todo adaptador debe reproducirlo EN
+// SU PROPIO RUNTIME. Este test cubre los adaptadores JS que comparten protocol.ts
+// (incluida la copia generada del plugin Claude, anclada por su test de paridad);
+// Pi, en otro runtime, corre los mismos vectores por su lado — este archivo NO lo
+// prueba.
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'

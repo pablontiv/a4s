@@ -40,6 +40,16 @@ const MAX_SEEN = 1000
 const MAX_BUF = 1_000_000
 
 let started = false
+// Session id para el que arrancamos. ADR 0069: la identidad sale de
+// $.session.id(). `/clear` NO dispara session.start pero cambia el session id y el
+// módulo puede seguir cargado; detectamos el cambio para re-resolver y re-suscribir.
+// (La compactación conserva el session id, así que no reinicia.)
+let startedSessionId: string | undefined
+// Generación del arranque actual: invalida los loops de bridges previos para que
+// su cierre no pise el estado del arranque nuevo.
+let generation = 0
+// Detiene el bridge-sub vivo (mata el subproceso vía HookStream.return()).
+let stopBridge: (() => void) | undefined
 let identity: Identity | undefined
 let globalOptIn = false
 // resolveBrokerUrl corre en register() sin `$`; el aviso se emite al arrancar.
@@ -106,10 +116,12 @@ async function reserve($: EngineInterface, id: string): Promise<boolean> {
 
 // Loop JALAR: cada línea stdout es un mensaje canónico; se filtra por `accept`,
 // se deduplica y se inyecta como turno.
-function runJalar($: EngineInterface, argv: readonly string[], accept: (m: ReturnType<typeof parseCanonical>) => boolean): void {
+function runJalar(gen: number, $: EngineInterface, argv: readonly string[], accept: (m: ReturnType<typeof parseCanonical>) => boolean): void {
   void (async () => {
     try {
       const bridge = $.process.spawn({ argv: [...argv] })
+      // Permite detener ESTE bridge (p. ej. al cambiar de sesión con /clear).
+      if (gen === generation) stopBridge = () => void bridge.return(undefined as never)
       let buf = ''
       for await (const chunk of bridge) {
         if (chunk.stream !== 'stdout' || typeof chunk.text !== 'string') continue
@@ -135,18 +147,32 @@ function runJalar($: EngineInterface, argv: readonly string[], accept: (m: Retur
           }
         }
       }
-      started = false
-      void $.ui.status('synagent: bridge detenido; re-suscribe en el próximo prompt')
+      if (gen === generation) {
+        started = false
+        void $.ui.status('synagent: bridge detenido; re-suscribe en el próximo prompt')
+      }
     } catch (err) {
-      started = false
-      void $.ui.status(`synagent: bridge error: ${err instanceof Error ? err.message : String(err)}`)
+      if (gen === generation) {
+        started = false
+        void $.ui.status(`synagent: bridge error: ${err instanceof Error ? err.message : String(err)}`)
+      }
     }
   })()
 }
 
 async function ensureStarted($: EngineInterface, brokerUrl: string, options: PluginOptions): Promise<void> {
-  if (started) return
+  // ADR 0069: la identidad depende del session id. `/clear` lo cambia SIN disparar
+  // session.start y el módulo puede seguir cargado; si ya arrancamos para otra
+  // sesión, detenemos el bridge viejo y re-resolvemos. Compactación: mismo id → no-op.
+  const sid = await $.session.id()
+  if (started && startedSessionId === sid) return
+  if (started) {
+    stopBridge?.()
+    stopBridge = undefined
+  }
+  const gen = ++generation
   started = true
+  startedSessionId = sid
   if (brokerWarning) void $.ui.status(brokerWarning)
 
   const bridgeSub = `${bridgeDir($)}/bridge-sub.cjs`
@@ -161,6 +187,7 @@ async function ensureStarted($: EngineInterface, brokerUrl: string, options: Plu
       `synagent: identidad no resuelta (${err instanceof Error ? err.message : String(err)}); operando LEGACY-ONLY`,
     )
     runJalar(
+      gen,
       $,
       ['node', bridgeSub, '--url', brokerUrl, '--durable-id', 'synagent-legacy-claude', '--durable', `${LEGACY_TOPIC_ROOT}/${LEGACY_ADDRESS}`],
       msg => msg.to === LEGACY_ADDRESS,
@@ -177,7 +204,7 @@ async function ensureStarted($: EngineInterface, brokerUrl: string, options: Plu
   const argv = ['node', bridgeSub, '--url', brokerUrl, '--durable-id', durableId, '--durable', ...plan.durable]
   if (plan.transient.length > 0) argv.push('--transient-id', transientId, '--transient', ...plan.transient)
 
-  runJalar($, argv, msg => acceptInbound(self, msg, { global: globalOptIn, legacyAddress: LEGACY_ADDRESS }))
+  runJalar(gen, $, argv, msg => acceptInbound(self, msg, { global: globalOptIn, legacyAddress: LEGACY_ADDRESS }))
 
   try {
     await $.tool.register({

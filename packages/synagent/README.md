@@ -30,7 +30,7 @@ Cada mensaje lleva `id`, `from`, `to`, `kind` (`prompt | steer | result |
 notify | ack`), `body`, `reply_to?` y `ts`. `from` y `to` son direcciones v1;
 `reply_to` es un id de mensaje, no una dirección.
 
-## Direccionamiento v1 (ADR 0068)
+## Direccionamiento v1 (ADR 0068; identidad por ADR 0069)
 
 Topología jerárquica versionada, con la regla `topic == "synagent/" + versión +
 "/" + to`:
@@ -41,12 +41,15 @@ Topología jerárquica versionada, con la regla `topic == "synagent/" + versión
 | `<proyecto>/all` | `synagent/v1/<proyecto>/all` | todo el proyecto |
 | `all` | `synagent/v1/all` | global (opt-in) |
 
-- **proyecto**: token determinista; `SYNAGENT_PROJECT` > config > `owner-repo`
-  del remoto `origin` (nunca el basename del cwd).
-- **instancia**: token legible ligado a la tarea/sesión; `SYNAGENT_INSTANCE` >
-  config > generado y persistido (un *resume* conserva el id, un *fork* obtiene
-  otro). El id no es el tipo de agente: puede haber varias instancias Claude o
-  Pi por proyecto.
+- **proyecto**: token determinista; setting del host > nombre canónico del repo
+  del remoto `origin` (nunca el basename del cwd ni una variable de entorno).
+  Falla explícito si no hay fuente válida.
+- **instancia**: id de sesión **nativo** del harness (`$.session.id()` en Claude,
+  `getSessionId()` en Pi), único por sesión — un *resume* conserva el id, un
+  *new*/*fork* obtiene otro. No se persiste ni se deriva de entorno: se arranca
+  un adaptador por sesión, así que persistir el id haría colisionar sesiones
+  distintas. El id no es el tipo de agente: puede haber varias instancias Claude
+  o Pi por proyecto.
 - **steer** solo tiene sentido a destino directo; un `steer` a broadcast se
   rechaza en el envío y en la recepción.
 - **global** es opt-in: un adaptador no recibe `synagent/v1/all` salvo que lo
@@ -93,8 +96,8 @@ claude --plugin-dir packages/synagent/adapters/claude
 - **ENVIAR (Claude → bus):** la herramienta `synagent_send` (invocada por el
   modelo) publica un mensaje canónico v1 al destino. `/mq-send <to>: texto` queda
   como atajo de depuración. Si la identidad no se resuelve, el adaptador opera
-  **legacy-only** (solo JALAR de `a4s/inbox/claude`) y `synagent_send` pide
-  configurar proyecto/instancia.
+  **legacy-only** (solo JALAR de `a4s/inbox/claude`, **sin publicar v1**) y
+  `synagent_send` pide configurar el proyecto.
 
 Los bridges viven en `adapters/claude/bridge/` y se resuelven desde
 `$.plugin.root`, por lo que el plugin es autocontenido. Tiene su propio
@@ -121,12 +124,12 @@ no forma parte del plugin Claude: sigue siendo la aplicación separada
 | Clave | Default | Uso |
 | --- | --- | --- |
 | `brokerUrl` | `mqtt://127.0.0.1:1884` | URL loopback del broker. |
-| `project` | derivado | Token de proyecto v1 (si vacío: `SYNAGENT_PROJECT` > git remote). |
-| `instance` | generado | Token de instancia v1 (si vacío: `SYNAGENT_INSTANCE` > generado-persistido). |
+| `project` | derivado | Token de proyecto v1 (si vacío: nombre del repo del remoto `origin`). |
 | `global` | `false` | Suscribirse al broadcast global `synagent/v1/all`. |
 
-También lee los env `SYNAGENT_PROJECT` y `SYNAGENT_INSTANCE`. Se configura con
-`/plugin configure` o al instalar:
+La instancia **no** es configurable: sale del id de sesión nativo
+(`$.session.id()`), una por sesión. El adaptador **no lee variables de entorno**.
+Se configura con `/plugin configure` o al instalar:
 
 ```sh
 claude plugin install synagent-adapter-mqtt@a4s --config brokerUrl=mqtt://host:1884
