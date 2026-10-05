@@ -829,7 +829,7 @@ function createHarness(
     },
   }
   // Always create a new adapter instance to avoid shared state between test harnesses
-  const adapter = createSynagentPi({ deliveryStartTimeoutMs })
+  const adapter = createSynagentPi(deliveryStartTimeoutMs !== undefined ? { deliveryStartTimeoutMs } : {})
   adapter(api as never)
 
   return {
