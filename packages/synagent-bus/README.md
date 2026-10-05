@@ -56,13 +56,16 @@ Al arrancar el servidor, el hook one-shot `ensure` crea o reutiliza el único
 space `Synagent`, con cwd estable en el home del usuario, y abre el entrypoint
 `bus` como tab `Bus` sin cambiar el foco. Un space preexistente único se adopta
 sin cerrar ni modificar sus tabs previos. La acción global `ensure` ejecuta la
-misma operación. El estado de coordinación (`runtime.json` y un lock de
-filesystem renovado periódicamente) vive en `HERDR_PLUGIN_STATE_DIR`. El lock
-usa `proper-lockfile`: un owner vivo conserva la exclusión y, tras un crash, el
-directorio de lock se recupera cuando supera el umbral stale de 10 segundos.
+misma operación. El estado de coordinación declarativo (`runtime.json`) vive
+en `HERDR_PLUGIN_STATE_DIR`. La exclusión de `ensure` no usa archivos: reserva
+atómicamente el mutex TCP `127.0.0.1:11884`, que el kernel libera incluso tras
+un crash o `SIGKILL`. `SYNAGENT_ENSURE_PORT` permite cambiar sólo ese puerto de
+control y debe ser distinto del puerto MQTT. Si otro proceso local lo ocupa,
+`ensure` reintenta de forma acotada y falla cerrado sin abrir un pane.
+
 La base MQTT sigue en la ruta de estado del usuario indicada arriba. Para un
-override de plugin, define `SYNAGENT_PORT` o
-`SYNAGENT_DB` en el entorno del servidor Herdr antes del arranque.
+override de plugin, define `SYNAGENT_PORT`, `SYNAGENT_DB` o
+`SYNAGENT_ENSURE_PORT` en el entorno del servidor Herdr antes del arranque.
 
 `ensure` falla cerrado si existen varios spaces `Synagent`, si un listener no
 puede atribuirse al pane registrado, o si pane, proceso y listener no pueden

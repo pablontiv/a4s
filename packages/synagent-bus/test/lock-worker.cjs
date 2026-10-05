@@ -1,12 +1,12 @@
 'use strict'
 
 const fs = require('node:fs/promises')
-const { acquireEnsureLock } = require('../herdr/ensure.cjs')
+const { acquireEnsureMutex } = require('../herdr/ensure.cjs')
 
-const [target, staleText, updateText, retriesText, holdText, logFile = ''] = process.argv.slice(2)
-const stale = Number(staleText)
-const update = Number(updateText)
-const retries = Number(retriesText)
+const [portText, attemptsText, delayText, holdText, logFile = ''] = process.argv.slice(2)
+const port = Number(portText)
+const attempts = Number(attemptsText)
+const delayMs = Number(delayText)
 const holdMs = Number(holdText)
 
 async function report(message) {
@@ -14,11 +14,7 @@ async function report(message) {
 }
 
 async function main() {
-  const release = await acquireEnsureLock(target, {
-    stale,
-    update,
-    retries: { retries, factor: 1, minTimeout: 20, maxTimeout: 20, randomize: false },
-  })
+  const release = await acquireEnsureMutex(port, { attempts, delayMs })
   if (logFile) await fs.appendFile(logFile, `ENTER ${process.pid} ${Date.now()}\n`)
   await report({ type: 'acquired', pid: process.pid })
 

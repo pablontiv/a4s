@@ -6,7 +6,6 @@ const fs = require('node:fs/promises')
 const net = require('node:net')
 const os = require('node:os')
 const path = require('node:path')
-const lockfile = require('proper-lockfile')
 
 const PLUGIN_ID = 'a4s.synagent-bus'
 const WORKSPACE_LABEL = 'Synagent'
@@ -83,14 +82,42 @@ async function waitForBroker(port) {
   return false
 }
 
-async function acquireEnsureLock(target, overrides = {}) {
-  return lockfile.lock(target, {
-    realpath: false,
-    stale: 10_000,
-    update: 2_000,
-    retries: { retries: 100, factor: 1, minTimeout: 100, maxTimeout: 100 },
-    ...overrides,
+function listenControl(server, port) {
+  return new Promise((resolve, reject) => {
+    const onError = error => {
+      server.off('listening', onListening)
+      reject(error)
+    }
+    const onListening = () => {
+      server.off('error', onError)
+      resolve()
+    }
+    server.once('error', onError)
+    server.once('listening', onListening)
+    server.listen({ port, host: '127.0.0.1', exclusive: true })
   })
+}
+
+async function acquireEnsureMutex(port, { attempts = 100, delayMs = 100 } = {}) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const server = net.createServer(socket => socket.destroy())
+    try {
+      await listenControl(server, port)
+      let released = false
+      return () => new Promise((resolve, reject) => {
+        if (released) return resolve()
+        released = true
+        server.close(error => error ? reject(error) : resolve())
+      })
+    } catch (error) {
+      if (error.code !== 'EADDRINUSE') throw error
+      if (attempt + 1 < attempts) await delay(delayMs)
+    }
+  }
+  throw Object.assign(
+    new Error(`Synagent ensure control port 127.0.0.1:${port} remains in use`),
+    { code: 'EADDRINUSE' },
+  )
 }
 
 function inspectPane(herdr, state) {
@@ -163,11 +190,14 @@ async function ensure() {
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
     throw new Error('SYNAGENT_PORT must be a fixed port from 1 to 65535 for Herdr verification')
   }
+  const controlPort = Number(process.env.SYNAGENT_ENSURE_PORT || 11884)
+  if (!Number.isInteger(controlPort) || controlPort < 1 || controlPort > 65535 || controlPort === port) {
+    throw new Error('SYNAGENT_ENSURE_PORT must be a fixed port from 1 to 65535 distinct from SYNAGENT_PORT')
+  }
 
   await fs.mkdir(stateDir, { recursive: true, mode: 0o700 })
-  const lockTarget = path.join(stateDir, 'ensure')
   const stateFile = path.join(stateDir, 'runtime.json')
-  const releaseLock = await acquireEnsureLock(lockTarget)
+  const releaseMutex = await acquireEnsureMutex(controlPort)
   try {
     const workspaceResult = resultOf(command(herdr, ['workspace', 'list']), 'workspace_list')
     const matches = workspaceResult.workspaces.filter(workspace => workspace.label === WORKSPACE_LABEL)
@@ -225,7 +255,7 @@ async function ensure() {
     if (!await waitForBroker(port)) throw new Error('new Synagent MQTT listener did not become ready')
     return state
   } finally {
-    await releaseLock()
+    await releaseMutex()
   }
 }
 
@@ -238,4 +268,4 @@ if (require.main === module) {
   })
 }
 
-module.exports = { acquireEnsureLock, ensure, mqttProbe }
+module.exports = { acquireEnsureMutex, ensure, mqttProbe }

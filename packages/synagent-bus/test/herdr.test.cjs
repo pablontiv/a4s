@@ -10,8 +10,6 @@ const { test } = require('node:test')
 
 const ENSURE = path.join(__dirname, '..', 'herdr', 'ensure.cjs')
 const LOCK_WORKER = path.join(__dirname, 'lock-worker.cjs')
-const LOCK_STALE_MS = 2_000
-const LOCK_UPDATE_MS = 1_000
 
 function exitWithOutput(proc) {
   return new Promise(resolve => {
@@ -124,6 +122,8 @@ async function fixture(t, initial = {}) {
   await fs.writeFile(stateFile, JSON.stringify(state))
   const fake = await makeFakeHerdr(temp)
   const port = await unusedPort()
+  let controlPort = await unusedPort()
+  while (controlPort === port || controlPort === 1884) controlPort = await unusedPort()
   t.after(async () => {
     try {
       const latest = JSON.parse(await fs.readFile(stateFile, 'utf8'))
@@ -135,7 +135,7 @@ async function fixture(t, initial = {}) {
       await fs.rm(temp, { recursive: true, force: true })
     }
   })
-  return { temp, stateFile, pluginState, fake, port }
+  return { temp, stateFile, pluginState, fake, port, controlPort }
 }
 
 async function readFake(stateFile) {
@@ -146,7 +146,7 @@ async function writeFake(stateFile, state) {
   await fs.writeFile(stateFile, JSON.stringify(state))
 }
 
-async function runEnsure({ fake, stateFile, pluginState, port }) {
+async function runEnsure({ fake, stateFile, pluginState, port, controlPort }) {
   return exitWithOutput(spawn(process.execPath, [ENSURE], {
     env: {
       ...process.env,
@@ -154,6 +154,7 @@ async function runEnsure({ fake, stateFile, pluginState, port }) {
       HERDR_PLUGIN_STATE_DIR: pluginState,
       FAKE_HERDR_STATE: stateFile,
       SYNAGENT_PORT: String(port),
+      SYNAGENT_ENSURE_PORT: String(controlPort),
     },
   }))
 }
@@ -243,9 +244,9 @@ test('Herdr ensure repairs its recorded stopped plugin pane and tab only', async
   assertExactProcessInfoCalls(state)
 })
 
-function startLockWorker(target, { retries = 0, holdMs = -1, logFile = '' } = {}) {
+function startLockWorker(port, { attempts = 1, delayMs = 20, holdMs = -1, logFile = '' } = {}) {
   return fork(LOCK_WORKER, [
-    target, String(LOCK_STALE_MS), String(LOCK_UPDATE_MS), String(retries), String(holdMs), logFile,
+    String(port), String(attempts), String(delayMs), String(holdMs), logFile,
   ], { silent: true })
 }
 
@@ -287,9 +288,20 @@ async function killWorker(worker) {
   assert.equal(result.signal, 'SIGKILL')
 }
 
+async function assertControlPortBindable(port) {
+  const server = net.createServer()
+  await new Promise((resolve, reject) => {
+    server.once('error', reject)
+    server.listen(port, '127.0.0.1', resolve)
+  })
+  await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
+}
+
 async function lockFixture(t, prefix) {
   const temp = await fs.mkdtemp(path.join(os.tmpdir(), prefix))
   const workers = new Set()
+  let controlPort = await unusedPort()
+  while (controlPort === 1884) controlPort = await unusedPort()
   t.after(async () => {
     for (const worker of workers) {
       if (worker.exitCode === null && worker.signalCode === null) worker.kill('SIGKILL')
@@ -297,61 +309,62 @@ async function lockFixture(t, prefix) {
     await fs.rm(temp, { recursive: true, force: true })
   })
   return {
-    target: path.join(temp, 'ensure'),
+    controlPort,
     track(worker) { workers.add(worker); return worker },
     temp,
   }
 }
 
-test('multiprocess lock preserves a live owner and rejects every contender', async t => {
-  const fixture = await lockFixture(t, 'synagent-lock-live-')
-  const owner = fixture.track(startLockWorker(fixture.target))
+test('multiprocess TCP mutex preserves a long-lived owner and rejects every contender', { timeout: 10_000 }, async t => {
+  const fixture = await lockFixture(t, 'synagent-mutex-live-')
+  const owner = fixture.track(startLockWorker(fixture.controlPort))
   await waitForWorkerMessage(owner, 'acquired')
 
-  const contenders = Array.from({ length: 6 }, () => fixture.track(startLockWorker(fixture.target)))
+  // Longer than the old filesystem stale/heartbeat threshold: kernel
+  // ownership must remain exclusive without any timeout-based takeover.
+  await new Promise(resolve => setTimeout(resolve, 2_250))
+  const contenders = Array.from({ length: 6 }, () => fixture.track(startLockWorker(
+    fixture.controlPort, { attempts: 5, delayMs: 20 },
+  )))
   const failures = await Promise.all(contenders.map(worker => waitForWorkerMessage(worker, 'failed')))
-  assert.ok(failures.every(failure => failure.code === 'ELOCKED'))
-  assert.equal((await fs.stat(`${fixture.target}.lock`)).isDirectory(), true)
+  assert.ok(failures.every(failure => failure.code === 'EADDRINUSE'))
 
   await releaseWorker(owner)
-  const successor = fixture.track(startLockWorker(fixture.target))
+  await assertControlPortBindable(fixture.controlPort)
+  const successor = fixture.track(startLockWorker(fixture.controlPort))
   await waitForWorkerMessage(successor, 'acquired')
   await releaseWorker(successor)
 })
 
-test('multiprocess lock recovers after SIGKILL, including a recovered owner crashing', { timeout: 20_000 }, async t => {
-  const fixture = await lockFixture(t, 'synagent-lock-crash-')
-  const first = fixture.track(startLockWorker(fixture.target))
+test('multiprocess TCP mutex is immediately recoverable after repeated SIGKILL', { timeout: 10_000 }, async t => {
+  const fixture = await lockFixture(t, 'synagent-mutex-crash-')
+  const first = fixture.track(startLockWorker(fixture.controlPort))
   await waitForWorkerMessage(first, 'acquired')
   await killWorker(first)
 
-  const tooEarly = fixture.track(startLockWorker(fixture.target))
-  assert.equal((await waitForWorkerMessage(tooEarly, 'failed')).code, 'ELOCKED')
-  await new Promise(resolve => setTimeout(resolve, LOCK_STALE_MS + 250))
-
-  const recoveredThenCrashed = fixture.track(startLockWorker(fixture.target, { retries: 150 }))
+  const recoveredThenCrashed = fixture.track(startLockWorker(
+    fixture.controlPort, { attempts: 100, delayMs: 10 },
+  ))
   await waitForWorkerMessage(recoveredThenCrashed, 'acquired')
   await killWorker(recoveredThenCrashed)
 
-  const stillProtected = fixture.track(startLockWorker(fixture.target))
-  assert.equal((await waitForWorkerMessage(stillProtected, 'failed')).code, 'ELOCKED')
-  await new Promise(resolve => setTimeout(resolve, LOCK_STALE_MS + 250))
-
-  const finalOwner = fixture.track(startLockWorker(fixture.target, { retries: 150 }))
+  const finalOwner = fixture.track(startLockWorker(
+    fixture.controlPort, { attempts: 100, delayMs: 10 },
+  ))
   await waitForWorkerMessage(finalOwner, 'acquired')
   await releaseWorker(finalOwner)
+  await assertControlPortBindable(fixture.controlPort)
 })
 
-test('multiprocess stale contention never overlaps critical sections', { timeout: 20_000 }, async t => {
-  const fixture = await lockFixture(t, 'synagent-lock-contention-')
-  const seed = fixture.track(startLockWorker(fixture.target))
+test('multiprocess contenders after crash never overlap TCP-mutex critical sections', { timeout: 10_000 }, async t => {
+  const fixture = await lockFixture(t, 'synagent-mutex-contention-')
+  const seed = fixture.track(startLockWorker(fixture.controlPort))
   await waitForWorkerMessage(seed, 'acquired')
   await killWorker(seed)
-  await new Promise(resolve => setTimeout(resolve, LOCK_STALE_MS + 250))
 
   const logFile = path.join(fixture.temp, 'critical.log')
   const contenders = Array.from({ length: 8 }, () => fixture.track(startLockWorker(
-    fixture.target, { retries: 100, holdMs: 80, logFile },
+    fixture.controlPort, { attempts: 200, delayMs: 10, holdMs: 80, logFile },
   )))
   const exits = await Promise.all(contenders.map(waitForWorkerExit))
   assert.ok(exits.every(result => result.code === 0 && result.signal === null))
@@ -368,4 +381,5 @@ test('multiprocess stale contention never overlaps critical sections', { timeout
   assert.equal(lines.filter(line => line.startsWith('ENTER ')).length, contenders.length)
   assert.equal(active, 0)
   assert.equal(maximumActive, 1)
+  await assertControlPortBindable(fixture.controlPort)
 })
