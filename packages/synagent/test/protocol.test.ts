@@ -1,14 +1,14 @@
-// Pruebas del contrato compartido v1 (ADR 0068): gramática de direcciones,
-// topics, plan de suscripción, enrutado, steer-broadcast y resolución.
+// Pruebas del contrato compartido v1 + core host-neutral (ADR 0069).
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
 import {
+  acceptInbound,
   createCanonical,
-  deriveProjectFromRemote,
   directAddress,
   formatAddress,
   GLOBAL_ADDRESS,
+  instanceFromHostSession,
   isAddress,
   isBroadcast,
   isBroadcastSteer,
@@ -16,14 +16,14 @@ import {
   isForIdentity,
   isToken,
   legacyTopic,
+  makeOutbound,
   newId,
-  normalizeProject,
   parseAddress,
   parseCanonical,
   PROTOCOL_VERSION,
   projectAddress,
   renderForAgent,
-  resolveInstance,
+  repoNameFromOrigin,
   resolveProject,
   serialize,
   subscriptions,
@@ -31,7 +31,7 @@ import {
   type CanonicalMessage,
 } from '../protocol.ts'
 
-const identity = { project: 'a4s', instance: 'claude-1' }
+const identity = { project: 'a4s', instance: 'sess-01HXYZ' }
 
 function msg(overrides: Partial<CanonicalMessage> & { to: string }): CanonicalMessage {
   return createCanonical(overrides.body ?? 'x', {
@@ -44,47 +44,44 @@ function msg(overrides: Partial<CanonicalMessage> & { to: string }): CanonicalMe
   })
 }
 
-test('isToken acepta tokens legibles y rechaza mayúsculas, vacíos y largos', () => {
+test('isToken es no-lossy: admite mayúsculas y punto, rechaza vacíos/largos/separadores', () => {
   assert.equal(isToken('a4s'), true)
-  assert.equal(isToken('claude-1_x'), true)
-  assert.equal(isToken('A4S'), false)
+  assert.equal(isToken('Claude-Sess.01'), true) // mayúsculas + punto (no-lossy)
+  assert.equal(isToken('01HXYZ-abc_DEF'), true)
   assert.equal(isToken(''), false)
   assert.equal(isToken('-leading'), false)
-  assert.equal(isToken('a'.repeat(65)), false)
+  assert.equal(isToken('a/b'), false) // separador de topic prohibido
+  assert.equal(isToken('a+b'), false)
+  assert.equal(isToken('a#b'), false)
+  assert.equal(isToken('a'.repeat(65)), true)
+  assert.equal(isToken('a'.repeat(256)), true)
+  assert.equal(isToken('a'.repeat(257)), false)
 })
 
-test('parseAddress distingue global, proyecto y directo; rechaza lo inválido', () => {
+test('parseAddress distingue global, proyecto y directo; reserva "all"', () => {
   assert.deepEqual(parseAddress('all'), { scope: 'global' })
   assert.deepEqual(parseAddress('a4s/all'), { scope: 'project', project: 'a4s' })
-  assert.deepEqual(parseAddress('a4s/claude-1'), { scope: 'direct', project: 'a4s', instance: 'claude-1' })
-  assert.equal(parseAddress('a4s'), null) // plano legacy no es dirección v1
+  assert.deepEqual(parseAddress('a4s/Sess.01'), { scope: 'direct', project: 'a4s', instance: 'Sess.01' })
+  assert.equal(parseAddress('a4s'), null)
   assert.equal(parseAddress('a/b/c'), null)
-  assert.equal(parseAddress('A4S/x'), null)
   assert.equal(parseAddress('a4s/'), null)
-  assert.equal(parseAddress('all/x'), null) // 'all' reservado: no puede ser proyecto
+  assert.equal(parseAddress('all/x'), null) // 'all' no puede ser proyecto
   assert.equal(parseAddress('all/all'), null)
 })
 
-test('isAddress/isBroadcast coinciden con el scope', () => {
+test('isAddress/isBroadcast/formatAddress', () => {
   assert.equal(isAddress('a4s/claude-1'), true)
   assert.equal(isAddress('pi'), false)
   assert.equal(isBroadcast('a4s/all'), true)
   assert.equal(isBroadcast('all'), true)
   assert.equal(isBroadcast('a4s/claude-1'), false)
-  assert.equal(isBroadcast('pi'), false)
-})
-
-test('formatAddress es inverso de parseAddress', () => {
-  for (const to of ['all', 'a4s/all', 'a4s/claude-1']) {
-    assert.equal(formatAddress(parseAddress(to)!), to)
-  }
-  assert.equal(directAddress(identity), 'a4s/claude-1')
+  for (const to of ['all', 'a4s/all', 'a4s/claude-1']) assert.equal(formatAddress(parseAddress(to)!), to)
+  assert.equal(directAddress(identity), 'a4s/sess-01HXYZ')
   assert.equal(projectAddress('a4s'), 'a4s/all')
 })
 
-test('toTopic aplica la regla synagent/<version>/<to> y valida', () => {
+test('toTopic/legacyTopic', () => {
   assert.equal(toTopic('a4s/claude-1'), `synagent/${PROTOCOL_VERSION}/a4s/claude-1`)
-  assert.equal(toTopic('a4s/all'), 'synagent/v1/a4s/all')
   assert.equal(toTopic('all'), 'synagent/v1/all')
   assert.throws(() => toTopic('no-es-direccion'), /dirección v1 inválida/)
   assert.equal(legacyTopic('claude'), 'a4s/inbox/claude')
@@ -92,89 +89,90 @@ test('toTopic aplica la regla synagent/<version>/<to> y valida', () => {
 
 test('subscriptions: durable=directo(+legacy), transient=proyecto(+global opt-in)', () => {
   const base = subscriptions({ identity })
-  assert.deepEqual(base.durable, ['synagent/v1/a4s/claude-1'])
+  assert.deepEqual(base.durable, ['synagent/v1/a4s/sess-01HXYZ'])
   assert.deepEqual(base.transient, ['synagent/v1/a4s/all'])
-
   const full = subscriptions({ identity, global: true, legacyAddress: 'claude' })
-  assert.deepEqual(full.durable, ['synagent/v1/a4s/claude-1', 'a4s/inbox/claude'])
+  assert.deepEqual(full.durable, ['synagent/v1/a4s/sess-01HXYZ', 'a4s/inbox/claude'])
   assert.deepEqual(full.transient, ['synagent/v1/a4s/all', 'synagent/v1/all'])
 })
 
-test('isForIdentity acepta directo, proyecto, legacy y global solo si opt-in', () => {
+test('isForIdentity / isFor: directo, proyecto, legacy y global opt-in', () => {
   const opts = { identity, legacyAddress: 'claude' }
-  assert.equal(isForIdentity(msg({ to: 'a4s/claude-1' }), opts), true)
+  assert.equal(isForIdentity(msg({ to: 'a4s/sess-01HXYZ' }), opts), true)
   assert.equal(isForIdentity(msg({ to: 'a4s/all' }), opts), true)
-  assert.equal(isForIdentity(msg({ to: 'claude' }), opts), true) // legacy plano
-  assert.equal(isForIdentity(msg({ to: 'a4s/pi-1' }), opts), false) // otra instancia
-  assert.equal(isForIdentity(msg({ to: 'otro/all' }), opts), false) // otro proyecto
-  assert.equal(isForIdentity(msg({ to: 'all' }), opts), false) // global sin opt-in
+  assert.equal(isForIdentity(msg({ to: 'claude' }), opts), true)
+  assert.equal(isForIdentity(msg({ to: 'a4s/otra' }), opts), false)
+  assert.equal(isForIdentity(msg({ to: 'otro/all' }), opts), false)
+  assert.equal(isForIdentity(msg({ to: 'all' }), opts), false)
   assert.equal(isForIdentity(msg({ to: 'all' }), { identity, global: true }), true)
-  assert.equal(isForIdentity(msg({ to: 'claude' }), { identity }), false) // sin legacy configurado
-})
-
-test('isFor conserva igualdad exacta (buzón directo/legacy)', () => {
-  assert.equal(isFor(msg({ to: 'a4s/claude-1' }), 'a4s/claude-1'), true)
   assert.equal(isFor(msg({ to: 'claude' }), 'claude'), true)
-  assert.equal(isFor(msg({ to: 'a4s/all' }), 'a4s/claude-1'), false)
 })
 
-test('isBroadcastSteer marca steer a broadcast (rechazo en ambos extremos)', () => {
+test('isBroadcastSteer marca steer a broadcast', () => {
   assert.equal(isBroadcastSteer(msg({ to: 'a4s/all', kind: 'steer' })), true)
   assert.equal(isBroadcastSteer(msg({ to: 'all', kind: 'steer' })), true)
-  assert.equal(isBroadcastSteer(msg({ to: 'a4s/claude-1', kind: 'steer' })), false) // directo OK
-  assert.equal(isBroadcastSteer(msg({ to: 'a4s/all', kind: 'prompt' })), false) // no-steer OK
+  assert.equal(isBroadcastSteer(msg({ to: 'a4s/x', kind: 'steer' })), false)
+  assert.equal(isBroadcastSteer(msg({ to: 'a4s/all', kind: 'prompt' })), false)
 })
 
-test('normalizeProject: token passthrough, mapeo determinista o fallo', () => {
-  assert.equal(normalizeProject('a4s'), 'a4s')
-  assert.equal(normalizeProject('A4S'), 'a4s')
-  assert.equal(normalizeProject('pablontiv/a4s'), 'pablontiv-a4s')
-  assert.equal(normalizeProject('my.project'), 'my-project')
-  assert.throws(() => normalizeProject('  '), /no normalizable/)
-  assert.throws(() => normalizeProject('a'.repeat(65)), /no normalizable/)
+test('repoNameFromOrigin: nombre canónico del repo, https y git@ (no basename de cwd)', () => {
+  assert.equal(repoNameFromOrigin('https://github.com/pablontiv/a4s.git'), 'a4s')
+  assert.equal(repoNameFromOrigin('git@github.com:pablontiv/a4s.git'), 'a4s')
+  assert.equal(repoNameFromOrigin('https://github.com/pablontiv/a4s'), 'a4s')
+  assert.equal(repoNameFromOrigin('https://github.com/acme/My.Repo.git'), 'My.Repo')
+  assert.equal(repoNameFromOrigin('no-remoto'), null) // sin host/path no es un remoto
+  assert.equal(repoNameFromOrigin('bad name/with space'), null)
 })
 
-test('deriveProjectFromRemote soporta https y git@ como owner-repo', () => {
-  assert.equal(deriveProjectFromRemote('https://github.com/pablontiv/a4s.git'), 'pablontiv-a4s')
-  assert.equal(deriveProjectFromRemote('git@github.com:pablontiv/a4s.git'), 'pablontiv-a4s')
-  assert.equal(deriveProjectFromRemote('https://github.com/pablontiv/a4s'), 'pablontiv-a4s')
-  assert.throws(() => deriveProjectFromRemote('no-remoto'), /no se pudo derivar/)
-})
-
-test('resolveProject sigue env > config > remoto; falla sin fuente', () => {
-  assert.equal(resolveProject({ env: 'a4s', config: 'otro' }), 'a4s')
-  assert.equal(resolveProject({ config: 'otro' }), 'otro')
-  assert.equal(resolveProject({ remoteUrl: 'git@github.com:pablontiv/a4s.git' }), 'pablontiv-a4s')
+test('resolveProject: setting > origin; FALLA explícito sin fuente ni token válido', () => {
+  assert.equal(resolveProject({ setting: 'a4s', origin: 'git@github.com:x/y.git' }), 'a4s')
+  assert.equal(resolveProject({ origin: 'https://github.com/pablontiv/a4s.git' }), 'a4s')
   assert.throws(() => resolveProject({}), /no se pudo resolver/)
+  assert.throws(() => resolveProject({ setting: 'no válido' }), /no es un token válido/)
+  assert.throws(() => resolveProject({ origin: 'https://h/x/bad name' }), /no se pudo derivar/)
 })
 
-test('resolveInstance sigue env > config > generado; explícito inválido falla', () => {
-  assert.equal(resolveInstance({ env: 'claude-1', generated: 'gen' }), 'claude-1')
-  assert.equal(resolveInstance({ config: 'cfg-1', generated: 'gen' }), 'cfg-1')
-  assert.equal(resolveInstance({ generated: 'GEN-X' }), 'gen-x')
-  assert.throws(() => resolveInstance({ env: 'in valido', generated: 'gen' }), /instancia inválida/)
+test('instanceFromHostSession: id de sesión nativo tal cual; falla si no es token', () => {
+  assert.equal(instanceFromHostSession('01HXYZ-abc'), '01HXYZ-abc')
+  assert.equal(instanceFromHostSession('b0e0-0b0ae61c6f0c'), 'b0e0-0b0ae61c6f0c')
+  assert.throws(() => instanceFromHostSession('tiene espacio'), /no es un token válido/)
+  assert.throws(() => instanceFromHostSession('a/b'), /no es un token válido/)
 })
 
-test('createCanonical/serialize/parseCanonical hace round-trip con to jerárquico', () => {
-  const m = createCanonical('hola', {
-    id: newId('a4s/claude-1', 1000),
-    from: 'a4s/claude-1',
-    to: 'a4s/pi-1',
-    ts: 1000,
-    kind: 'result',
-    reply_to: 'a4s/pi-1-999-abc',
-  })
+test('makeOutbound: arma {topic,message} v1, from=identidad; rechaza inválido y steer-broadcast', () => {
+  const { topic, message } = makeOutbound(identity, 'a4s/pi-1', { body: 'hola', id: 'm9', ts: 5 })
+  assert.equal(topic, 'synagent/v1/a4s/pi-1')
+  assert.equal(message.from, 'a4s/sess-01HXYZ')
+  assert.equal(message.to, 'a4s/pi-1')
+  assert.equal(message.kind, 'prompt')
+  assert.throws(() => makeOutbound(identity, 'no-dir', { body: 'x', id: 'm', ts: 1 }), /dirección v1 inválida/)
+  assert.throws(() => makeOutbound(identity, 'a4s/all', { body: 'x', kind: 'steer', id: 'm', ts: 1 }), /steer solo/)
+  const direct = makeOutbound(identity, 'a4s/pi-1', { body: 'x', kind: 'steer', id: 'm', ts: 1 })
+  assert.equal(direct.message.kind, 'steer') // steer directo OK
+})
+
+test('acceptInbound = enrutado para mí Y no steer-broadcast', () => {
+  assert.equal(acceptInbound(identity, msg({ to: 'a4s/sess-01HXYZ' })), true)
+  assert.equal(acceptInbound(identity, msg({ to: 'a4s/all' })), true)
+  assert.equal(acceptInbound(identity, msg({ to: 'a4s/all', kind: 'steer' })), false) // steer broadcast
+  assert.equal(acceptInbound(identity, msg({ to: 'otro/all' })), false)
+  assert.equal(acceptInbound(identity, msg({ to: 'all' }), { global: true }), true)
+  assert.equal(acceptInbound(identity, msg({ to: 'claude' }), { legacyAddress: 'claude' }), true)
+  // self-echo: un broadcast propio (from = mi dirección) no se entrega
+  assert.equal(acceptInbound(identity, msg({ to: 'a4s/all', from: directAddress(identity) })), false)
+  assert.equal(acceptInbound(identity, msg({ to: 'a4s/sess-01HXYZ', from: directAddress(identity) })), false)
+})
+
+test('createCanonical/serialize/parseCanonical round-trip y render', () => {
+  const m = makeOutbound(identity, 'a4s/pi-1', {
+    body: 'hola', id: newId(directAddress(identity), 1000), ts: 1000, kind: 'result', replyTo: 'a4s/pi-1-9-abc',
+  }).message
   assert.deepEqual(parseCanonical(serialize(m)), m)
-  assert.match(renderForAgent(m), /\[bus:result\] de a4s\/claude-1/)
+  assert.match(renderForAgent(m), /\[bus:result\] de a4s\/sess-01HXYZ/)
 })
 
-test('parseCanonical acepta to plano legacy (dual-read) y valida campos', () => {
-  const legacy = JSON.stringify({ id: 'x', from: 'pi', to: 'claude', kind: 'prompt', body: 'hi', ts: 1 })
-  assert.equal(parseCanonical(legacy).to, 'claude')
+test('parseCanonical acepta to legacy plano (dual-read) y valida campos', () => {
+  assert.equal(parseCanonical(JSON.stringify({ id: 'x', from: 'pi', to: 'claude', kind: 'prompt', body: 'hi', ts: 1 })).to, 'claude')
   assert.throws(() => parseCanonical(JSON.stringify({ id: 'x', from: 'pi', kind: 'prompt', body: 'hi', ts: 1 })), /falta campo canónico: to/)
-})
-
-test('newId incluye la dirección de origen', () => {
-  assert.match(newId('a4s/claude-1', 1234), /^a4s\/claude-1-1234-[a-z0-9]{1,6}$/)
   assert.equal(GLOBAL_ADDRESS, 'all')
 })

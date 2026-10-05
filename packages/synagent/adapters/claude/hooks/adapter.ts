@@ -2,22 +2,29 @@
 // Regenerar: node adapters/claude/scripts/sync-protocol.mjs (desde packages/synagent).
 // El plugin se instala copiándose solo; por eso lleva su propia copia del contrato.
 
-// Contrato canónico de synagent y direccionamiento JERÁRQUICO v1 (ADR 0068).
+// Contrato canónico de synagent, direccionamiento v1 y CORE host-neutral de
+// adaptadores (ADR 0069, supera a 0068).
 //
-// Este módulo es la ÚNICA fuente del contrato: gramática de direcciones, mapa
-// dirección→topic, plan de suscripción, enrutado de recepción y resolución de
-// proyecto/instancia. Ambos adaptadores (Claude y Pi) lo consumen. El plugin de
-// Claude, al instalarse desde un marketplace, se copia solo, por lo que lleva
-// una COPIA GENERADA de este archivo (adapters/claude/hooks/adapter.ts) anclada
-// por un test de paridad: este archivo no debe importar nada (autocontenido).
+// Fuente ÚNICA del contrato. Autocontenido (no importa nada): el plugin de
+// Claude lleva una COPIA GENERADA (adapters/claude/hooks/adapter.ts) anclada por
+// un test de paridad, porque el marketplace lo instala copiándose solo.
 //
 // Topología v1 (regla: topic == `${TOPIC_ROOT}/${version}/${to}`):
-//   synagent/v1/<proyecto>/<instancia>  — buzón directo de un agente
+//   synagent/v1/<proyecto>/<instancia>  — buzón directo
 //   synagent/v1/<proyecto>/all          — broadcast de proyecto
 //   synagent/v1/all                     — broadcast global (opt-in)
 //
-// Transición (dual-read/single-write): durante el cutover cada adaptador SUSCRIBE
-// y ACEPTA legacy (a4s/inbox/<addr>) además de v1, pero PUBLICA solo v1.
+// IDENTIDAD (ADR 0069): cada binding la deriva de APIs NATIVAS de sesión del
+// host, NO de variables de entorno ni de un launcher. La instancia viene del id
+// de sesión nativo (único por sesión → sin colisión aunque haya cientos); el
+// proyecto, de un setting del host o de la identidad canónica del repo. El alias
+// humano/tab es solo presentación, nunca identidad.
+//
+// CONTRATO DE ADAPTADOR (extensible a hosts futuros): un adaptador provee un
+// HarnessBinding (identity/reserve/deliver) y un transporte Publish/Subscribe;
+// la lógica de direccionamiento vive en funciones puras (makeOutbound/
+// acceptInbound/resolveProject/instanceFromHostSession) que la suite de
+// conformidad ejercita por igual en todo adaptador.
 
 export const MESSAGE_KINDS = ['prompt', 'steer', 'result', 'notify', 'ack'] as const
 
@@ -40,8 +47,10 @@ export const TOPIC_ROOT = 'synagent'
 export const LEGACY_TOPIC_ROOT = 'a4s/inbox'
 export const GLOBAL_ADDRESS = 'all'
 
-// Token legible: minúsculas, direccionable por intención. 1..64 chars.
-const TOKEN_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/
+// Token NO-LOSSY (ADR 0069): sensible a mayúsculas y admite punto, para
+// representar ids de host (UUIDs, nombres con mayúsculas o '.') sin saneado.
+// Seguro para un nivel de topic MQTT: sin '/', '+' ni '#'. 1..256 chars.
+const TOKEN_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$/
 
 export function isToken(value: string): boolean {
   return TOKEN_RE.test(value)
@@ -54,15 +63,15 @@ export type Address =
   | { readonly scope: 'project'; readonly project: string }
   | { readonly scope: 'global' }
 
-// Parsea el campo canónico `to`. `all` reservado para global; `<proyecto>/all`
-// es broadcast de proyecto, por lo que una instancia NUNCA puede llamarse `all`.
+// Parsea el campo canónico `to`. `all` reservado al global; `<proyecto>/all` es
+// broadcast de proyecto, por lo que una instancia NUNCA puede llamarse `all` ni
+// un proyecto puede llamarse `all`.
 export function parseAddress(to: string): Address | null {
   if (to === GLOBAL_ADDRESS) return { scope: 'global' }
   const parts = to.split('/')
   if (parts.length !== 2) return null
   const project = parts[0] as string
   const leaf = parts[1] as string
-  // 'all' está reservado para el global; un proyecto no puede llamarse 'all'.
   if (!isToken(project) || project === GLOBAL_ADDRESS) return null
   if (leaf === GLOBAL_ADDRESS) return { scope: 'project', project }
   if (!isToken(leaf)) return null
@@ -110,7 +119,7 @@ export function legacyTopic(address: string): string {
   return `${LEGACY_TOPIC_ROOT}/${address}`
 }
 
-// --- plan de suscripción (precisión F) -----------------------------------------
+// --- plan de suscripción -------------------------------------------------------
 // durable   (clean=false): buzón directo + legacy → entrega offline encolada.
 // transient (clean=true):  broadcast de proyecto + global opt-in → online-only.
 
@@ -140,8 +149,8 @@ export function isFor(message: CanonicalMessage, address: string): boolean {
   return message.to === address
 }
 
-// ¿Este mensaje es para mí? Acepta directo a mi identidad, broadcast de mi
-// proyecto, global (solo si opté por él) y legacy plano (dual-read).
+// ¿Este mensaje es para mí? Directo a mi identidad, broadcast de mi proyecto,
+// global (solo si opté por él) o legacy plano (dual-read).
 export function isForIdentity(
   message: CanonicalMessage,
   options: { identity: Identity; global?: boolean; legacyAddress?: string },
@@ -156,65 +165,104 @@ export function isForIdentity(
   return options.global === true
 }
 
-// steer solo tiene sentido directo: un broadcast no puede interrumpir el turno de
-// muchos. Se rechaza en ENVÍO y en RECEPCIÓN (precisión F).
+// steer solo tiene sentido directo: se rechaza en ENVÍO y en RECEPCIÓN.
 export function isBroadcastSteer(message: CanonicalMessage): boolean {
   return message.kind === 'steer' && isBroadcast(message.to)
 }
 
-// --- resolución de proyecto / instancia (precisiones C y E) --------------------
+// --- resolución de identidad por sesión nativa (ADR 0069) ----------------------
 
-function firstNonEmpty(...values: Array<string | undefined>): string | undefined {
-  for (const value of values) {
-    if (typeof value === 'string' && value.trim().length > 0) return value.trim()
+// Nombre canónico del repo desde la URL del remoto `origin` (último segmento sin
+// `.git`). Determinista y compartido entre hosts: el mismo repo da el mismo
+// token en Pi y en Claude. NO usa el basename del cwd. Devuelve null si no parsea.
+export function repoNameFromOrigin(origin: string): string | null {
+  const cleaned = origin.trim().replace(/\.git$/, '').replace(/\/+$/, '')
+  const match = cleaned.match(/[/:]([^/:]+)$/)
+  const name = match?.[1]
+  return name && isToken(name) ? name : null
+}
+
+// Proyecto: setting del host > nombre canónico del repo (origin). FALLA explícito
+// si no hay ninguno (sin env, sin basename de cwd, sin saneado lossy).
+export function resolveProject(options: { setting?: string; origin?: string }): string {
+  const setting = options.setting?.trim()
+  if (setting) {
+    if (!isToken(setting)) throw new Error(`proyecto (setting) no es un token válido: ${setting}`)
+    return setting
   }
-  return undefined
-}
-
-// Normalización determinista a token. NO saneado lossy silencioso: aplica una
-// única transformación (separadores de ruta/punto → '-') y, si aún no es token,
-// FALLA en vez de truncar en silencio.
-export function normalizeProject(raw: string): string {
-  const lowered = raw.trim().toLowerCase()
-  if (isToken(lowered)) return lowered
-  const mapped = lowered.replace(/[/.]+/g, '-').replace(/^-+|-+$/g, '')
-  if (isToken(mapped)) return mapped
-  throw new Error(`proyecto no normalizable a token [a-z0-9][a-z0-9_-]{0,63}: ${raw}`)
-}
-
-// Deriva <proyecto> del remoto como `${owner}-${repo}` (collision-safe frente al
-// basename de cwd, precisión E). Soporta https://host/owner/repo(.git) y
-// git@host:owner/repo(.git).
-export function deriveProjectFromRemote(remoteUrl: string): string {
-  const cleaned = remoteUrl.trim().replace(/\.git$/, '')
-  const match = cleaned.match(/[/:]([^/:]+)\/([^/]+)$/)
-  if (!match) throw new Error(`no se pudo derivar owner/repo del remoto: ${remoteUrl}`)
-  return normalizeProject(`${match[1]}-${match[2]}`)
-}
-
-// Resuelve <proyecto> por cadena de prioridad: env (SYNAGENT_PROJECT) > config >
-// derivado del remoto origin. Falla si ninguno resuelve (no usa basename de cwd).
-export function resolveProject(options: { env?: string; config?: string; remoteUrl?: string }): string {
-  const explicit = firstNonEmpty(options.env, options.config)
-  if (explicit !== undefined) return normalizeProject(explicit)
-  const remote = firstNonEmpty(options.remoteUrl)
-  if (remote !== undefined) return deriveProjectFromRemote(remote)
-  throw new Error('no se pudo resolver <proyecto>: define SYNAGENT_PROJECT, config o un remoto origin')
-}
-
-// Resuelve <instancia> por cadena: env (SYNAGENT_INSTANCE) > config > generado y
-// persistido. Un valor explícito inválido FALLA (no se sanea en silencio). La
-// instancia va ligada a la tarea/sesión; nunca es un escalar global compartido.
-export function resolveInstance(options: { env?: string; config?: string; generated: string }): string {
-  const explicit = firstNonEmpty(options.env, options.config)
-  if (explicit !== undefined) {
-    const lowered = explicit.toLowerCase()
-    if (!isToken(lowered)) throw new Error(`instancia inválida (SYNAGENT_INSTANCE/config): ${explicit}`)
-    return lowered
+  const origin = options.origin?.trim()
+  if (origin) {
+    const name = repoNameFromOrigin(origin)
+    if (!name) throw new Error(`no se pudo derivar un proyecto-token del remoto origin: ${origin}`)
+    return name
   }
-  const generated = options.generated.trim().toLowerCase()
-  if (!isToken(generated)) throw new Error(`instancia generada inválida: ${options.generated}`)
-  return generated
+  throw new Error('no se pudo resolver <proyecto>: define un setting de proyecto o un remoto origin del repo')
+}
+
+// Instancia: derivada del id de sesión NATIVO del host (único por sesión). Un
+// resume conserva el id; new/fork/clear lo re-resuelven. FALLA explícito si el id
+// nativo no es un token válido (no se trunca ni se sanea: provocaría colisión).
+export function instanceFromHostSession(sessionId: string): string {
+  const id = sessionId.trim()
+  if (!isToken(id)) throw new Error(`id de sesión del host no es un token válido para instancia: ${sessionId}`)
+  return id
+}
+
+// --- contrato de adaptador host-neutral ----------------------------------------
+// Un adaptador implementa estas piezas; la lógica de direccionamiento es común.
+
+// Lo que un host expone al core para entregar/deduplicar bajo su identidad.
+export interface HarnessBinding {
+  readonly identity: Identity
+  // Reserva un id ANTES de entregar (at-most-once). true si es nuevo.
+  reserve(id: string): boolean | Promise<boolean>
+  // Entrega un mensaje aceptado al host (inyecta turno / sendUserMessage).
+  deliver(message: CanonicalMessage): void | Promise<void>
+}
+
+export type Publish = (topic: string, payload: string) => void | Promise<void>
+export type Subscribe = (
+  topics: readonly string[],
+  onMessage: (payload: string) => void,
+) => void | Promise<void>
+
+export interface Transport {
+  readonly publish: Publish
+  readonly subscribe: Subscribe
+}
+
+// Construye un envío v1 (single-write): valida la dirección, rechaza steer a
+// broadcast y arma {topic, message}. Lanza ante dirección inválida o steer broadcast.
+export function makeOutbound(
+  self: Identity,
+  to: string,
+  options: { body: string; kind?: MessageKind; replyTo?: string; id: string; ts: number },
+): { topic: string; message: CanonicalMessage } {
+  if (!isAddress(to)) throw new Error(`dirección v1 inválida: ${to}`)
+  const kind = options.kind ?? 'prompt'
+  if (kind === 'steer' && isBroadcast(to)) throw new Error('steer solo a destino directo, no broadcast')
+  const message = createCanonical(options.body, {
+    id: options.id,
+    from: directAddress(self),
+    to,
+    ts: options.ts,
+    kind,
+    ...(options.replyTo ? { reply_to: options.replyTo } : {}),
+  })
+  return { topic: toTopic(to), message }
+}
+
+// ¿Aceptar un mensaje entrante? Enrutado para mi identidad y NO steer-broadcast.
+export function acceptInbound(
+  self: Identity,
+  message: CanonicalMessage,
+  options: { global?: boolean; legacyAddress?: string } = {},
+): boolean {
+  // Self-echo: un broadcast propio vuelve por mi propia suscripción. No entregar
+  // lo que yo mismo emití (comparando la dirección de origen con la mía).
+  if (message.from === directAddress(self)) return false
+  if (isBroadcastSteer(message)) return false
+  return isForIdentity(message, { identity: self, ...options })
 }
 
 // --- contrato canónico (mensaje) -----------------------------------------------

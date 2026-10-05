@@ -1,0 +1,70 @@
+{
+  "//": "Vectores dorados host-neutral (ADR 0069). `wire` es el serialize() canónico EXACTO (orden de claves de createCanonical: id,from,to,kind,body,[reply_to],ts) — debe re-serializar idéntico. `topic` es toTopic(to) o null para direcciones legacy planas. accept.* son acceptInbound() para la identidad de referencia a4s/sess-01 con legacyAddress=claude. Cualquier adaptador, actual o futuro, debe reproducir esto.",
+  "identity": { "project": "a4s", "instance": "sess-01" },
+  "legacyAddress": "claude",
+  "vectors": [
+    {
+      "name": "directo a mí (prompt)",
+      "wire": "{\"id\":\"g1\",\"from\":\"a4s/pi-1\",\"to\":\"a4s/sess-01\",\"kind\":\"prompt\",\"body\":\"hola\",\"ts\":1}",
+      "topic": "synagent/v1/a4s/sess-01",
+      "acceptPlain": true,
+      "acceptGlobal": true
+    },
+    {
+      "name": "broadcast de proyecto (notify)",
+      "wire": "{\"id\":\"g2\",\"from\":\"a4s/pi-1\",\"to\":\"a4s/all\",\"kind\":\"notify\",\"body\":\"aviso\",\"ts\":2}",
+      "topic": "synagent/v1/a4s/all",
+      "acceptPlain": true,
+      "acceptGlobal": true
+    },
+    {
+      "name": "global (notify) — solo con opt-in",
+      "wire": "{\"id\":\"g3\",\"from\":\"otro/x\",\"to\":\"all\",\"kind\":\"notify\",\"body\":\"global\",\"ts\":3}",
+      "topic": "synagent/v1/all",
+      "acceptPlain": false,
+      "acceptGlobal": true
+    },
+    {
+      "name": "steer directo (OK)",
+      "wire": "{\"id\":\"g4\",\"from\":\"a4s/pi-1\",\"to\":\"a4s/sess-01\",\"kind\":\"steer\",\"body\":\"corrige\",\"ts\":4}",
+      "topic": "synagent/v1/a4s/sess-01",
+      "acceptPlain": true,
+      "acceptGlobal": true
+    },
+    {
+      "name": "steer a broadcast (rechazado en recepción)",
+      "wire": "{\"id\":\"g5\",\"from\":\"a4s/pi-1\",\"to\":\"a4s/all\",\"kind\":\"steer\",\"body\":\"no\",\"ts\":5}",
+      "topic": "synagent/v1/a4s/all",
+      "acceptPlain": false,
+      "acceptGlobal": false
+    },
+    {
+      "name": "result con reply_to a otra instancia (no para mí)",
+      "wire": "{\"id\":\"g6\",\"from\":\"a4s/pi-1\",\"to\":\"a4s/otra\",\"kind\":\"result\",\"body\":\"ok\",\"reply_to\":\"g1\",\"ts\":6}",
+      "topic": "synagent/v1/a4s/otra",
+      "acceptPlain": false,
+      "acceptGlobal": false
+    },
+    {
+      "name": "legacy plano (dual-read)",
+      "wire": "{\"id\":\"g7\",\"from\":\"pi\",\"to\":\"claude\",\"kind\":\"prompt\",\"body\":\"legacy\",\"ts\":7}",
+      "topic": null,
+      "acceptPlain": true,
+      "acceptGlobal": true
+    },
+    {
+      "name": "self-echo (from = mi propia dirección) — no entregar",
+      "wire": "{\"id\":\"g8\",\"from\":\"a4s/sess-01\",\"to\":\"a4s/all\",\"kind\":\"notify\",\"body\":\"mío\",\"ts\":8}",
+      "topic": "synagent/v1/a4s/all",
+      "acceptPlain": false,
+      "acceptGlobal": false
+    },
+    {
+      "name": "directo desde instancia con ID largo (>64 chars, non-lossy)",
+      "wire": "{\"id\":\"g9\",\"from\":\"a4s/sess-01hxyz-0b0ae61c6f0c-abcdefghijklmnopqrstuvwxyz-01\",\"to\":\"a4s/sess-01\",\"kind\":\"prompt\",\"body\":\"long-id\",\"ts\":9}",
+      "topic": "synagent/v1/a4s/sess-01",
+      "acceptPlain": true,
+      "acceptGlobal": true
+    }
+  ]
+}

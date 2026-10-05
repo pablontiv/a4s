@@ -9,12 +9,7 @@
     "project": {
       "type": "string",
       "title": "Proyecto",
-      "description": "Token de proyecto (p. ej. 'a4s', 'growthbook'). Por defecto: derivado de git remote origin."
-    },
-    "instance": {
-      "type": "string",
-      "title": "Instancia",
-      "description": "Token de instancia (p. ej. 'claude-1'). Por defecto: generado y persistido."
+      "description": "Token de proyecto (p. ej. 'a4s'). Opcional; por defecto se deriva del remoto origin del repo. La instancia NO es configurable: sale del id de sesión nativo (una por sesión)."
     },
     "global": {
       "type": "boolean",

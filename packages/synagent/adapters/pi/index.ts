@@ -6,23 +6,24 @@ import { connect, type MqttClient } from 'mqtt'
 import { Type } from 'typebox'
 
 import {
-  createCanonical,
+  acceptInbound,
   directAddress,
+  instanceFromHostSession,
   isAddress,
   isBroadcastSteer,
-  isForIdentity,
   isToken,
   legacyTopic,
+  makeOutbound,
+  MESSAGE_KINDS,
   newId,
   parseCanonical,
   renderForAgent,
-  resolveInstance,
   resolveProject,
   serialize,
   subscriptions,
-  toTopic,
   type CanonicalMessage,
   type Identity,
+  type MessageKind,
   type SubscriptionPlan,
 } from '../../protocol.ts'
 
@@ -34,13 +35,10 @@ const MAX_SEEN = 1000
 const SEEN_ENTRY = 'synagent-delivered'
 // Topics durables efectivamente suscritos; sirve para limpiar stale tras cambiar de identidad.
 const STATE_ENTRY = 'synagent-state'
-// Instancia generada y persistida por sesión (precisión C): un RESUME conserva el id, un fork obtiene otro.
-const INSTANCE_ENTRY = 'synagent-instance'
 const DEFAULT_DELIVERY_START_TIMEOUT_MS = 30_000
 
 type SeenEntry = { id: string }
 type StateEntry = { topics: string }
-type InstanceEntry = { instance: string; sessionId: string }
 type QueuedDelivery = { generation: number; message: CanonicalMessage }
 type DeliveryMode = 'idle' | 'steer' | 'followUp'
 type ActiveDelivery = {
@@ -51,6 +49,7 @@ type ActiveDelivery = {
   token: number
 }
 type ClientRole = 'durable' | 'transient'
+type SendResult = { ok: true; message: string } | { ok: false; message: string }
 
 export type SynagentPiOptions = { deliveryStartTimeoutMs?: number }
 
@@ -95,16 +94,7 @@ function synagentPi(pi: ExtensionAPI, deliveryStartTimeoutMs: number): void {
     schema: Type.String(),
     defaultValue: '',
     title: 'Synagent project',
-    description:
-      'Optional v1 project token. When empty it is derived from SYNAGENT_PROJECT, this config, or the git origin remote.',
-  })
-  const instanceSetting = pi.registerSetting({
-    key: 'a4s.synagent.instance',
-    schema: Type.String(),
-    defaultValue: '',
-    title: 'Synagent instance',
-    description:
-      'Optional v1 instance token. When empty a per-session token is generated and persisted so a resume keeps the same id.',
+    description: 'Optional v1 project token. When empty it is derived from the session cwd git origin remote.',
   })
   const globalSetting = pi.registerSetting({
     key: 'a4s.synagent.global',
@@ -115,7 +105,7 @@ function synagentPi(pi: ExtensionAPI, deliveryStartTimeoutMs: number): void {
   })
   const defaultPeer = pi.registerSetting({
     key: 'a4s.synagent.default-peer',
-    schema: Type.String({ pattern: '^[a-z0-9][a-z0-9/_-]*$' }),
+    schema: Type.String({ pattern: '^[A-Za-z0-9][A-Za-z0-9._/-]*$' }),
     defaultValue: DEFAULT_PEER,
     title: 'Synagent default peer',
     description:
@@ -129,8 +119,6 @@ function synagentPi(pi: ExtensionAPI, deliveryStartTimeoutMs: number): void {
   let persistedDurableTopics: string | undefined
   let identity: Identity | undefined
   let legacyOnly = false
-  let persistedInstance: string | undefined
-  let persistedInstanceSession: string | undefined
   let activeSessionId: string | undefined
   let context: ExtensionContext | undefined
   let lifecycle = Promise.resolve()
@@ -144,48 +132,44 @@ function synagentPi(pi: ExtensionAPI, deliveryStartTimeoutMs: number): void {
   const queuedDeliveries: QueuedDelivery[] = []
   const seen = new Set<string>()
 
+  pi.registerTool({
+    name: 'synagent_send',
+    label: 'Send Synagent message',
+    description:
+      'Send a message to another agent through Synagent v1. Use only when the user asks to notify or message another agent or project, not for normal conversation. The body must be self-contained.',
+    parameters: Type.Object({
+      to: Type.String({ description: 'v1 address: <project>/<instance>, <project>/all, or all.' }),
+      body: Type.String({ description: 'Self-contained message body.' }),
+      kind: Type.Optional(Type.Union([
+        Type.Literal('prompt'),
+        Type.Literal('steer'),
+        Type.Literal('result'),
+        Type.Literal('notify'),
+        Type.Literal('ack'),
+      ], { description: 'Message kind; defaults to prompt.' })),
+      reply_to: Type.Optional(Type.String({ description: 'Message id being replied to.' })),
+    }),
+    annotations: { openWorldHint: true },
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const result = await send(params, ctx)
+      return {
+        content: [{ type: 'text', text: result.message }],
+        details: {},
+        ...(result.ok ? {} : { isError: true }),
+      }
+    },
+  })
+
   pi.registerCommand('mq-send', {
-    description: 'Publish a prompt to the Synagent MQTT bus',
+    description: 'Debug-only Synagent publish command',
     handler: async (args, ctx) => {
-      useCurrentContext(ctx)
       const parsed = parseSendArgs(args, defaultPeer.get())
       if (!parsed) {
-        ctx.ui.notify('Usage: /mq-send [to:] text', 'warning')
+        ctx.ui.notify('Usage: /mq-send [to:] text (debug only)', 'warning')
         return
       }
-      const active = durable
-      if (!active?.connected) {
-        ctx.ui.notify('Synagent is not connected', 'error')
-        return
-      }
-      if (legacyOnly || !identity) {
-        ctx.ui.notify('Synagent cannot send: identity unresolved (legacy-only)', 'error')
-        return
-      }
-      const to = resolveDestination(parsed.to, identity)
-      if (!to) {
-        ctx.ui.notify(`Invalid Synagent address: ${parsed.to}`, 'error')
-        return
-      }
-
-      const from = directAddress(identity)
-      const ts = Date.now()
-      const message = createCanonical(parsed.body, {
-        id: newId(from, ts),
-        from,
-        to,
-        ts,
-      })
-      if (isBroadcastSteer(message)) {
-        ctx.ui.notify('Synagent refuses a steer to a broadcast address', 'error')
-        return
-      }
-      try {
-        await publish(active, toTopic(to), serialize(message))
-        ctx.ui.notify(`Synagent message sent: ${message.id}`, 'info')
-      } catch (error) {
-        ctx.ui.notify(`Synagent publish failed: ${formatError(error)}`, 'error')
-      }
+      const result = await send(parsed, ctx)
+      ctx.ui.notify(result.message, result.ok ? 'info' : 'error')
     },
   })
 
@@ -197,9 +181,11 @@ function synagentPi(pi: ExtensionAPI, deliveryStartTimeoutMs: number): void {
       if (action === 'status') {
         let state = 'disabled'
         if (enabled.get()) state = durable?.connected ? 'connected' : 'connecting'
-        const addr = identity ? directAddress(identity) : 'unresolved'
+        const identityStatus = identity
+          ? `address=${directAddress(identity)}`
+          : 'address=unresolved legacy-only=true; remediate with /synagent set project <project> or configure remote.origin.url'
         ctx.ui.notify(
-          `Synagent ${state}; address=${addr} legacy=${legacyAddressSetting.get()} `
+          `Synagent ${state}; ${identityStatus} legacy=${legacyAddressSetting.get()} `
           + `global=${globalSetting.get() === true} peer=${defaultPeer.get()} broker=${brokerUrl.get()}`,
           'info',
         )
@@ -226,7 +212,7 @@ function synagentPi(pi: ExtensionAPI, deliveryStartTimeoutMs: number): void {
       if (action !== 'set' || !key || rest.length === 0) {
         ctx.ui.notify(
           'Usage: /synagent status|enable|disable|resume|set '
-          + '<broker-url|address|project|instance|global|default-peer> <value>',
+          + '<broker-url|address|project|global|default-peer> <value>',
           'warning',
         )
         return
@@ -234,7 +220,7 @@ function synagentPi(pi: ExtensionAPI, deliveryStartTimeoutMs: number): void {
 
       const value = rest.join(' ')
       try {
-        setSetting(key, value, 'global')
+        setSetting(key, value, key === 'project' ? 'project' : 'global')
         ctx.ui.notify(`Synagent ${key} updated`, 'info')
       } catch (error) {
         ctx.ui.notify(formatError(error), 'error')
@@ -254,7 +240,6 @@ function synagentPi(pi: ExtensionAPI, deliveryStartTimeoutMs: number): void {
       brokerUrl.onChange(() => void restart(ctx, true)),
       legacyAddressSetting.onChange(() => void restart(ctx, true)),
       projectSetting.onChange(() => void restart(ctx, true)),
-      instanceSetting.onChange(() => void restart(ctx, true)),
       globalSetting.onChange(() => void restart(ctx, true)),
     ]
     await restart(ctx, false)
@@ -287,6 +272,43 @@ function synagentPi(pi: ExtensionAPI, deliveryStartTimeoutMs: number): void {
     await stop()
   })
 
+  async function send(
+    params: { to: string; body: string; kind?: string; reply_to?: string },
+    ctx: ExtensionContext,
+  ): Promise<SendResult> {
+    if (!useCurrentContext(ctx)) return { ok: false, message: 'Synagent session is no longer active' }
+    if (!params.body.trim()) return { ok: false, message: 'Synagent send requires a non-empty body' }
+    const active = durable
+    if (!active?.connected) return { ok: false, message: 'Synagent is not connected' }
+    if (legacyOnly || !identity) {
+      return {
+        ok: false,
+        message: 'Synagent cannot send: identity unresolved (legacy-only); configure the project setting or remote origin',
+      }
+    }
+    const to = resolveDestination(params.to, identity)
+    if (!to) return { ok: false, message: `Invalid Synagent address: ${params.to}` }
+    const kind = params.kind ?? 'prompt'
+    if (!MESSAGE_KINDS.includes(kind as MessageKind)) {
+      return { ok: false, message: `Invalid Synagent kind: ${kind}` }
+    }
+
+    const ts = Date.now()
+    try {
+      const outbound = makeOutbound(identity, to, {
+        body: params.body,
+        kind: kind as MessageKind,
+        id: newId(directAddress(identity), ts),
+        ts,
+        ...(params.reply_to ? { replyTo: params.reply_to } : {}),
+      })
+      await publish(active, outbound.topic, serialize(outbound.message))
+      return { ok: true, message: `Synagent message sent: ${outbound.message.id}` }
+    } catch (error) {
+      return { ok: false, message: `Synagent publish failed: ${formatError(error)}` }
+    }
+  }
+
   function setSetting(key: string, value: string, scope: SettingsScope): void {
     if (key === 'broker-url') {
       assertLoopbackBrokerUrl(value)
@@ -294,21 +316,21 @@ function synagentPi(pi: ExtensionAPI, deliveryStartTimeoutMs: number): void {
       return
     }
     if (key === 'address') {
-      const token = value.trim().toLowerCase()
+      const token = value.trim()
       if (!isToken(token)) throw new Error(`Invalid Synagent legacy address: ${value}`)
       legacyAddressSetting.set(token, { scope })
       return
     }
     if (key === 'default-peer') {
       const peer = value.trim()
-      if (!isAddress(peer) && !isToken(peer.toLowerCase())) throw new Error(`Invalid Synagent peer: ${value}`)
-      defaultPeer.set(isAddress(peer) ? peer : peer.toLowerCase(), { scope })
+      if (!isAddress(peer) && !isToken(peer)) throw new Error(`Invalid Synagent peer: ${value}`)
+      defaultPeer.set(peer, { scope })
       return
     }
-    if (key === 'project' || key === 'instance') {
-      const token = value.trim().toLowerCase()
+    if (key === 'project') {
+      const token = value.trim()
       if (!isToken(token)) throw new Error(`Invalid Synagent ${key}: ${value}`)
-      ;(key === 'project' ? projectSetting : instanceSetting).set(token, { scope })
+      projectSetting.set(token, { scope })
       return
     }
     if (key === 'global') {
@@ -340,12 +362,16 @@ function synagentPi(pi: ExtensionAPI, deliveryStartTimeoutMs: number): void {
   }
 
   function start(ctx: ExtensionContext, staleFromDisconnect: string[] = []): void {
-    const url = brokerUrl.get()
+    const configuredUrl = brokerUrl.get()
+    let url = configuredUrl
     try {
-      assertLoopbackBrokerUrl(url)
+      assertLoopbackBrokerUrl(configuredUrl)
     } catch (error) {
-      ctx.ui.notify(formatError(error), 'error')
-      return
+      url = DEFAULT_BROKER_URL
+      ctx.ui.notify(
+        `Synagent broker URL rejected (${configuredUrl}); falling back to ${DEFAULT_BROKER_URL}`,
+        'warning',
+      )
     }
 
     const legacyAddress = legacyAddressSetting.get()
@@ -390,7 +416,7 @@ function synagentPi(pi: ExtensionAPI, deliveryStartTimeoutMs: number): void {
       ? connectClient({
         ctx,
         url,
-        clientId: `a4s-pi-t-${sessionId}`,
+        clientId: `a4s-pi-${sessionId}:transient`,
         clean: true,
         topics: [...plan.transient],
         role: 'transient',
@@ -464,6 +490,20 @@ function synagentPi(pi: ExtensionAPI, deliveryStartTimeoutMs: number): void {
 
     // El cliente transient es clean=true: su sesión no retiene suscripciones, basta cerrarlo.
     if (activeTransient) {
+      try {
+        // Unsubscribe from all topics before closing
+        if (activeTransient.connected) {
+          await new Promise<void>((resolve, reject) => {
+            const timeout = setTimeout(() => reject(new Error('unsubscribe timeout')), 500)
+            activeTransient.unsubscribe('#', () => {
+              clearTimeout(timeout)
+              resolve()
+            })
+          })
+        }
+      } catch {
+        // Ignore unsubscribe errors
+      }
       activeTransient.removeAllListeners()
       await endClient(activeTransient)
     }
@@ -497,12 +537,13 @@ function synagentPi(pi: ExtensionAPI, deliveryStartTimeoutMs: number): void {
       ctx.ui.notify(`Synagent ignored invalid message: ${formatError(error)}`, 'warning')
       return
     }
-    // steer a broadcast se rechaza también en recepción (precisión F).
-    if (isBroadcastSteer(message)) {
-      ctx.ui.notify(`Synagent rejected broadcast steer: ${message.id}`, 'warning')
+    if (!acceptsMessage(message)) {
+      if (isBroadcastSteer(message)) {
+        ctx.ui.notify(`Synagent rejected broadcast steer: ${message.id}`, 'warning')
+      }
       return
     }
-    if (!acceptsMessage(message) || seen.has(message.id)) return
+    if (seen.has(message.id)) return
 
     seen.add(message.id)
     if (seen.size > MAX_SEEN) seen.delete(seen.values().next().value as string)
@@ -513,8 +554,8 @@ function synagentPi(pi: ExtensionAPI, deliveryStartTimeoutMs: number): void {
 
   function acceptsMessage(message: CanonicalMessage): boolean {
     const legacyAddress = legacyAddressSetting.get()
-    if (legacyOnly || !identity) return message.to === legacyAddress
-    return isForIdentity(message, { identity, global: globalSetting.get() === true, legacyAddress })
+    if (legacyOnly || !identity) return message.to === legacyAddress && !isBroadcastSteer(message)
+    return acceptInbound(identity, message, { global: globalSetting.get() === true, legacyAddress })
   }
 
   function drainDeliveries(ctx: ExtensionContext): void {
@@ -609,38 +650,13 @@ function synagentPi(pi: ExtensionAPI, deliveryStartTimeoutMs: number): void {
     awaitingSettlement = false
   }
 
-  // Resuelve la identidad v1 por las cadenas de prioridad del contrato (protocol.ts).
   function computeIdentity(ctx: ExtensionContext): Identity {
-    const projectEnv = emptyToUndefined(process.env.SYNAGENT_PROJECT)
-    const projectConfig = emptyToUndefined(projectSetting.get())
-    // El remoto solo se consulta si no hay env/config que lo haga redundante.
-    const remoteUrl = projectEnv ?? projectConfig ? undefined : readGitRemote()
-    const project = resolveProject({
-      ...(projectEnv !== undefined ? { env: projectEnv } : {}),
-      ...(projectConfig !== undefined ? { config: projectConfig } : {}),
-      ...(remoteUrl !== undefined ? { remoteUrl } : {}),
-    })
-    const instanceEnv = emptyToUndefined(process.env.SYNAGENT_INSTANCE)
-    const instanceConfig = emptyToUndefined(instanceSetting.get())
-    const instance = resolveInstance({
-      ...(instanceEnv !== undefined ? { env: instanceEnv } : {}),
-      ...(instanceConfig !== undefined ? { config: instanceConfig } : {}),
-      // El token generado solo se usa si no hay env/config; evitamos persistir uno que no se usará.
-      generated: instanceEnv ?? instanceConfig ? 'pi' : generatedInstanceArg(ctx),
-    })
-    return { project, instance }
-  }
-
-  // Token de instancia derivado del sessionId, persistido y ligado a esa sesión:
-  // un RESUME (mismo sessionId, mismas entries) reusa el id; un fork/new obtiene otro.
-  function generatedInstanceArg(ctx: ExtensionContext): string {
-    const sessionId = ctx.sessionManager.getSessionId()
-    if (persistedInstance && persistedInstanceSession === sessionId) return persistedInstance
-    const token = deriveInstanceToken(sessionId)
-    persistedInstance = token
-    persistedInstanceSession = sessionId
-    pi.appendEntry<InstanceEntry>(INSTANCE_ENTRY, { instance: token, sessionId })
-    return token
+    const setting = emptyToUndefined(projectSetting.get())
+    const origin = setting ? undefined : readGitRemote(ctx.cwd)
+    return {
+      project: resolveProject({ setting: setting!, origin: origin! }),
+      instance: instanceFromHostSession(ctx.sessionManager.getSessionId()),
+    }
   }
 
   function persistDurableTopics(topics: string[]): void {
@@ -654,8 +670,6 @@ function synagentPi(pi: ExtensionAPI, deliveryStartTimeoutMs: number): void {
     seen.clear()
     lastDurableTopics = []
     persistedDurableTopics = undefined
-    persistedInstance = undefined
-    persistedInstanceSession = undefined
     identity = undefined
     legacyOnly = false
     const branch = ctx.sessionManager.getBranch()
@@ -676,12 +690,6 @@ function synagentPi(pi: ExtensionAPI, deliveryStartTimeoutMs: number): void {
           lastDurableTopics = topics.split(',').filter(Boolean)
           persistedDurableTopics = topics
         }
-      } else if (entry.customType === INSTANCE_ENTRY) {
-        const data = entry.data as InstanceEntry | undefined
-        if (typeof data?.instance === 'string' && typeof data?.sessionId === 'string') {
-          persistedInstance = data.instance
-          persistedInstanceSession = data.sessionId
-        }
       }
     }
   }
@@ -692,9 +700,8 @@ export default createSynagentPi()
 function resolveDestination(raw: string, identity: Identity): string | undefined {
   if (isAddress(raw)) return raw
   // Un token simple (p.ej. el default-peer) se cualifica con nuestro propio proyecto.
-  const token = raw.toLowerCase()
-  if (isToken(token)) {
-    const qualified = `${identity.project}/${token}`
+  if (isToken(raw)) {
+    const qualified = `${identity.project}/${raw}`
     if (isAddress(qualified)) return qualified
   }
   return undefined
@@ -719,7 +726,7 @@ function parseSendArgs(input: string, fallback: string): { to: string; body: str
   const raw = input.trim()
   if (!raw) return undefined
   // Prefijo de dirección: token plano o dirección v1 jerárquica (con '/').
-  const match = raw.match(/^([a-z0-9][a-z0-9/_-]*):\s*([\s\S]*)$/)
+  const match = raw.match(/^([A-Za-z0-9][A-Za-z0-9._/-]*):\s*([\s\S]*)$/)
   if (match) {
     const body = (match[2] as string).trim()
     return body ? { to: match[1] as string, body } : undefined
@@ -733,22 +740,13 @@ function emptyToUndefined(value: unknown): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined
 }
 
-function readGitRemote(): string | undefined {
+function readGitRemote(cwd: string): string | undefined {
   try {
-    const out = execFileSync('git', ['config', '--get', 'remote.origin.url'], {
-      cwd: process.cwd(),
-      encoding: 'utf8',
-    }).trim()
+    const out = execFileSync('git', ['config', '--get', 'remote.origin.url'], { cwd, encoding: 'utf8' }).trim()
     return out.length > 0 ? out : undefined
   } catch {
     return undefined
   }
-}
-
-function deriveInstanceToken(sessionId: string): string {
-  const base = sessionId.trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '')
-  const candidate = `pi-${base}`.slice(0, 64).replace(/-+$/, '')
-  return isToken(candidate) ? candidate : `pi-${randomUUID().slice(0, 8)}`
 }
 
 function assertLoopbackBrokerUrl(value: string): void {
@@ -773,7 +771,15 @@ function assertLoopbackBrokerUrl(value: string): void {
 
 function publish(client: MqttClient, topic: string, payload: string): Promise<void> {
   return new Promise((resolve, reject) => {
-    client.publish(topic, payload, { qos: 1 }, error => error ? reject(error) : resolve())
+    // Set a timeout to prevent hanging if the callback never fires
+    const timeout = setTimeout(() => {
+      reject(new Error('publish timeout: callback did not fire within 5 seconds'))
+    }, 5000)
+
+    client.publish(topic, payload, { qos: 1 }, error => {
+      clearTimeout(timeout)
+      return error ? reject(error) : resolve()
+    })
   })
 }
 
@@ -784,8 +790,80 @@ function unsubscribeAll(client: MqttClient, topics: string[]): Promise<void> {
 }
 
 function endClient(client: MqttClient): Promise<void> {
-  return new Promise((resolve, reject) => {
-    client.end(false, {}, error => error ? reject(error) : resolve())
+  return new Promise<void>((resolve) => {
+    const mqttAny = client as any
+
+    // Stop any reconnection attempts FIRST
+    if (mqttAny.reconnecting !== undefined) {
+      mqttAny.reconnecting = false
+    }
+
+    // Kill all timers that mqtt.js might have set up.
+    // NOTE: This reaches into mqtt.js internal state and may need revisiting on an mqtt.js upgrade.
+    const timersToKill = [
+      'reconnectTimer',
+      'keepaliveTimer',
+      'pingTimer',
+      'connackTimer',
+      'pubackTimer',
+      'pubrecTimer',
+      'pubrelTimer',
+      'pubcompTimer',
+    ]
+    timersToKill.forEach(timerName => {
+      if (mqttAny[timerName]) {
+        clearTimeout(mqttAny[timerName])
+        clearInterval(mqttAny[timerName])
+        mqttAny[timerName] = undefined
+      }
+    })
+
+    // Remove all event listeners to break any pending callbacks
+    client.removeAllListeners()
+
+    // Set up close listener with timeout
+    let closeTimeout: NodeJS.Timeout | undefined = setTimeout(() => {
+      resolve()
+    }, 500)
+
+    client.once('close', () => {
+      if (closeTimeout) {
+        clearTimeout(closeTimeout)
+        closeTimeout = undefined
+      }
+      resolve()
+    })
+
+    // Force destroy the underlying socket/stream immediately.
+    // NOTE: Direct access to stream/socket is an mqtt.js internal detail; may require adjustment on upgrades.
+    try {
+      if (mqttAny.stream) {
+        mqttAny.stream.destroy()
+      }
+      if (mqttAny.socket) {
+        mqttAny.socket.destroy()
+      }
+    } catch {
+      // Ignore errors
+    }
+
+    // Attempt to end the client
+    try {
+      client.end(true, () => {
+        if (closeTimeout) {
+          clearTimeout(closeTimeout)
+          closeTimeout = undefined
+        }
+        resolve()
+      })
+    } catch {
+      // If end() throws, resolve after timeout
+      if (closeTimeout) {
+        clearTimeout(closeTimeout)
+        closeTimeout = undefined
+      }
+      resolve()
+    }
   })
 }
 

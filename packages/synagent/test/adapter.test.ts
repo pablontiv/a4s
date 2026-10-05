@@ -22,17 +22,17 @@ import {
   toTopic,
 } from '../adapters/claude/hooks/adapter.ts'
 
-test('adapter: isToken valida tokens en v1', () => {
+test('adapter: isToken valida tokens no-lossy en v1 (mayúsculas y punto)', () => {
   assert.equal(isToken('a4s'), true)
   assert.equal(isToken('claude-1'), true)
   assert.equal(isToken('x_y-z'), true)
-  assert.equal(isToken('123'), true) // números válidos
-  assert.equal(isToken('a-'), true) // '-' es válido en posición no-inicial
-  assert.equal(isToken('a_b'), true) // '_' es válido
-  assert.equal(isToken('A4S'), false) // no mayúsculas
+  assert.equal(isToken('123'), true)
+  assert.equal(isToken('A4S'), true) // mayúsculas válidas (no-lossy)
+  assert.equal(isToken('My.Repo'), true) // punto válido
   assert.equal(isToken(''), false)
   assert.equal(isToken('-a'), false) // no empieza con -
   assert.equal(isToken(' a'), false) // no empieza con espacio
+  assert.equal(isToken('a/b'), false) // separador de topic prohibido
 })
 
 test('adapter: parseAddress reconoce gramática v1', () => {
