@@ -13,5 +13,5 @@
       "claude-code": ["./types/claude-code.d.ts"]
     }
   },
-  "include": ["core", "hooks", "adapters", "test", "types"]
+  "include": ["core", "adapters", "test", "types"]
 }

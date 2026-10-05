@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 import { runCompaction } from '../core/index.js';
 import type { JevAsker, Message } from '../core/index.js';
-import { claudeBinding, toSessionMessages } from '../hooks/register.js';
+import { claudeBinding, toSessionMessages } from '../adapters/claude/hooks/register.js';
 
 function fixture(): Message[] {
   const longResult = 'RESULT '.repeat(100);

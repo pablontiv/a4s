@@ -10,7 +10,9 @@
 //
 // Jev runs over the engine's `$.http.fetch` against the TypeSafe System One
 // endpoint; the API key resolves from userConfig, then TYPESAFE_API_KEY, then
-// the plugin settings `env`. On any error — missing key, Jev failure, or an
+// the plugin settings `env`, and finally Pi's native credential provider
+// (~/.pi/agent/auth.json → typesafe.key), the source the way-of-working
+// sanctions. On any error — missing key, Jev failure, or an
 // under-threshold reduction — the hook falls back to the engine's native
 // compaction via `next(event)`, so a failure never degrades the session.
 //
@@ -225,10 +227,33 @@ export function decisionLogLines(result: CompactResult, maxChars: number = UI_LO
   );
 }
 
+/**
+ * Resolves the TypeSafe Jev key from Pi's native credential provider, the way
+ * the way-of-working requires (`do_work.credentials`: "TypeSafe resolves
+ * credentials only through Pi's native provider"). Pi persists it at
+ * `~/.pi/agent/auth.json` under `typesafe.key`. Read in-process only; the key
+ * is never logged, written to disk, or copied elsewhere.
+ */
+async function piTypeSafeKey($: {
+  env: { get: (name: string) => Promise<string | undefined> };
+  fs: { read: (path: string) => Promise<string> };
+}): Promise<string | undefined> {
+  try {
+    const home = (await $.env.get('HOME')) ?? (await $.env.get('USERPROFILE'));
+    if (!home) return undefined;
+    const raw = await $.fs.read(`${home}/.pi/agent/auth.json`);
+    const key: unknown = (JSON.parse(raw) as { typesafe?: { key?: unknown } })?.typesafe?.key;
+    return typeof key === 'string' && key.length > 0 ? key : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 async function getApiKey(
   $: {
     env: { get: (name: string) => Promise<string | undefined> };
     settings: { read: () => Promise<Readonly<Record<string, unknown>>> };
+    fs: { read: (path: string) => Promise<string> };
   },
   config: HookConfig,
 ): Promise<string | undefined> {
@@ -241,7 +266,8 @@ async function getApiKey(
     const value = (env as Record<string, unknown>)['TYPESAFE_API_KEY'];
     if (typeof value === 'string' && value) return value;
   }
-  return undefined;
+  // Final fallback: Pi's native provider — the sanctioned credential source.
+  return piTypeSafeKey($);
 }
 
 function notify(
