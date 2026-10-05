@@ -49,8 +49,8 @@ export const GLOBAL_ADDRESS = 'all'
 
 // Token NO-LOSSY (ADR 0069): sensible a mayúsculas y admite punto, para
 // representar ids de host (UUIDs, nombres con mayúsculas o '.') sin saneado.
-// Seguro para un nivel de topic MQTT: sin '/', '+' ni '#'. 1..64 chars.
-const TOKEN_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
+// Seguro para un nivel de topic MQTT: sin '/', '+' ni '#'. 1..256 chars.
+const TOKEN_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$/
 
 export function isToken(value: string): boolean {
   return TOKEN_RE.test(value)

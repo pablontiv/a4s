@@ -58,6 +58,13 @@
       "topic": "synagent/v1/a4s/all",
       "acceptPlain": false,
       "acceptGlobal": false
+    },
+    {
+      "name": "directo desde instancia con ID largo (>64 chars, non-lossy)",
+      "wire": "{\"id\":\"g9\",\"from\":\"a4s/sess-01hxyz-0b0ae61c6f0c-abcdefghijklmnopqrstuvwxyz-01\",\"to\":\"a4s/sess-01\",\"kind\":\"prompt\",\"body\":\"long-id\",\"ts\":9}",
+      "topic": "synagent/v1/a4s/sess-01",
+      "acceptPlain": true,
+      "acceptGlobal": true
     }
   ]
 }

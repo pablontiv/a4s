@@ -53,7 +53,9 @@ test('isToken es no-lossy: admite mayúsculas y punto, rechaza vacíos/largos/se
   assert.equal(isToken('a/b'), false) // separador de topic prohibido
   assert.equal(isToken('a+b'), false)
   assert.equal(isToken('a#b'), false)
-  assert.equal(isToken('a'.repeat(65)), false)
+  assert.equal(isToken('a'.repeat(65)), true)
+  assert.equal(isToken('a'.repeat(256)), true)
+  assert.equal(isToken('a'.repeat(257)), false)
 })
 
 test('parseAddress distingue global, proyecto y directo; reserva "all"', () => {
