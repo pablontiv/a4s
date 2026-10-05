@@ -1,0 +1,36 @@
+{
+  "name": "@a4s/context-expert",
+  "version": "0.1.0",
+  "private": true,
+  "license": "UNLICENSED",
+  "description": "Host-neutral Jev compaction core with a Claude Code marketplace plugin (adapters/claude) and a Pi extension adapter. Port of context-expert, reusing fast-jev-compaction (MIT).",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pablontiv/a4s.git",
+    "directory": "packages/context-expert"
+  },
+  "homepage": "https://github.com/pablontiv/a4s/tree/main/packages/context-expert#readme",
+  "bugs": {
+    "url": "https://github.com/pablontiv/a4s/issues"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "exports": {
+    ".": "./core/index.ts",
+    "./claude": "./adapters/claude/hooks/register.ts",
+    "./pi": "./adapters/pi/adapter.ts"
+  },
+  "scripts": {
+    "test": "tsx --test test/*.test.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc -p tsconfig.hooks.json",
+    "sync-core": "node adapters/claude/scripts/sync-core.mjs",
+    "check-core": "node adapters/claude/scripts/sync-core.mjs --check"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.1",
+    "tsx": "4.23.13",
+    "typescript": "7.0.2"
+  }
+}
