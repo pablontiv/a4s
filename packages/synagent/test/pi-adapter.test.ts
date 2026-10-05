@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { createRequire } from 'node:module'
+import { Check } from 'typebox/value'
 
 import synagentPi, { createSynagentPi } from '../adapters/pi/index.ts'
 import { serialize, type CanonicalMessage } from '../protocol.ts'
@@ -27,7 +28,7 @@ type Tool = {
     signal: undefined,
     onUpdate: undefined,
     context: FakeContext,
-  ): Promise<{ content: Array<{ type: 'text'; text: string }> }>
+  ): Promise<{ content: Array<{ type: 'text'; text: string }>; isError?: boolean }>
 }
 type Notification = { message: string; type: 'info' | 'warning' | 'error' | undefined }
 type Received = { text: string; options?: { deliverAs: 'steer' | 'followUp' } }
@@ -270,6 +271,37 @@ test('Pi adapter gives concurrent sessions distinct durable MQTT identities', as
   await second.settle()
 })
 
+test('Pi adapter keeps session IDs X and t-X from colliding or evicting each other', async t => {
+  const { broker, server, url } = await startBroker()
+  const publisher = await connectClient(url, 'pi-adapter-collision-publisher')
+  const first = createHarness({
+    'a4s.synagent.broker-url': url,
+    'a4s.synagent.project': 'a4s',
+  }, [], 'X')
+  const second = createHarness({
+    'a4s.synagent.broker-url': url,
+    'a4s.synagent.project': 'a4s',
+  }, [], 't-X')
+  t.after(async () => {
+    await first.shutdown()
+    await second.shutdown()
+    await end(publisher)
+    await new Promise<void>(resolve => server.close(() => resolve()))
+    await new Promise<void>(resolve => broker.close(() => resolve()))
+  })
+
+  await first.start()
+  await second.start()
+  await waitFor(() => first.notifications.some(({ message }) => message.includes('subscribed to synagent/v1/a4s/X')))
+  await waitFor(() => second.notifications.some(({ message }) => message.includes('subscribed to synagent/v1/a4s/t-X')))
+
+  await publish(publisher, PROJECT_TOPIC, serialize(message({ id: 'collision-project', to: 'a4s/all' })))
+  await publish(publisher, 'synagent/v1/a4s/t-X', serialize(message({ id: 'collision-direct', to: 'a4s/t-X' })))
+  await new Promise(resolve => setTimeout(resolve, 100))
+  assert.ok(first.received.some(({ text }) => text.includes('id collision-project')))
+  assert.ok(second.received.some(({ text }) => text.includes('id collision-direct')))
+})
+
 test('Pi adapter reload/resume retains the same native session ID and correlation state', async t => {
   const { broker, server, url } = await startBroker()
   const publisher = await connectClient(url, 'pi-adapter-reload-publisher')
@@ -509,12 +541,20 @@ test('Pi adapter uses session cwd origin and native mixed-case identity, ignores
   subscriber.on('message', (_topic: string, payload: Buffer) => outbound.push(JSON.parse(payload.toString())))
   await subscribe(subscriber, 'synagent/v1/Repo.Name/Peer.Agent')
   await subscribe(subscriber, 'synagent/v1/Repo.Name/all')
+  const toolSchema = harness.toolSchemas.get('synagent_send')
+  assert.ok(toolSchema)
+  assert.equal(Check(toolSchema, { to: 'Repo.Name/Peer.Agent', body: 'valid', kind: 'result' }), true)
+  assert.equal(Check(toolSchema, { to: 'Repo.Name/Peer.Agent', body: 'invalid', kind: 'bogus' }), false)
+
+  const invalid = await harness.tool('synagent_send', { to: 'not/an/address/at/all', body: 'invalid' })
+  assert.equal(invalid.isError, true)
   const sent = await harness.tool('synagent_send', {
     to: 'Repo.Name/Peer.Agent',
     body: 'intent message',
     kind: 'result',
     reply_to: 'request-1',
   })
+  assert.notEqual(sent.isError, true)
   assert.match(sent.content[0]?.text ?? '', /^Synagent message sent:/)
   await waitFor(() => outbound.length === 1)
   assert.deepEqual(
@@ -612,7 +652,12 @@ test('Pi adapter unresolved project stays legacy-only and refuses all v1 send in
   ))
 
   const toolResult = await harness.tool('synagent_send', { to: 'Some.Project/Peer.One', body: 'must not publish' })
+  assert.equal(toolResult.isError, true)
   assert.match(toolResult.content[0]?.text ?? '', /configure the project setting/)
+  await harness.command('synagent', 'status')
+  assert.ok(harness.notifications.some(({ message }) =>
+    message.includes('legacy-only') && message.includes('configure the project setting'),
+  ))
   await harness.command('mq-send', 'must not publish either')
   assert.ok(harness.notifications.some(({ message }) => message.includes('configure the project setting')))
   await new Promise(resolve => setTimeout(resolve, 50))
@@ -623,17 +668,39 @@ test('Pi adapter unresolved project stays legacy-only and refuses all v1 send in
   assert.match(harness.received[0]?.text ?? '', /id legacy-only-in/)
 })
 
-test('Pi adapter rejects non-loopback brokers before connecting', async () => {
+test('Pi adapter warns and falls back to the default for invalid or non-loopback brokers', async () => {
+  for (const configured of ['not-a-url', 'mqtt://example.com:1884']) {
+    const harness = createHarness({ 'a4s.synagent.broker-url': configured })
+    await harness.start()
+    assert.ok(harness.notifications.some(({ message, type }) =>
+      type === 'warning'
+      && message.includes(configured)
+      && message.includes('mqtt://127.0.0.1:1883'),
+    ))
+    await harness.shutdown()
+  }
+})
+
+test('Pi adapter marks MQTT publish failures as tool errors', async t => {
+  const { broker, server, url } = await startBroker()
   const harness = createHarness({
-    'a4s.synagent.broker-url': 'mqtt://example.com:1884',
+    'a4s.synagent.broker-url': url,
+    'a4s.synagent.project': 'a4s',
+  }, [], 'publish-failure')
+  t.after(async () => {
+    await harness.shutdown()
+    await new Promise<void>(resolve => server.close(() => resolve()))
+    await new Promise<void>(resolve => broker.close(() => resolve()))
   })
+
   await harness.start()
-  assert.ok(harness.notifications.some(({ message, type }) =>
-    type === 'error' && message.includes('loopback mqtt:// URL'),
-  ))
-  await harness.command('synagent', 'set broker-url mqtt://192.0.2.1:1884')
-  assert.ok(harness.notifications.filter(({ message }) => message.includes('loopback mqtt:// URL')).length >= 2)
-  await harness.shutdown()
+  await waitFor(() => harness.notifications.some(({ message }) => message.includes('subscribed to')))
+  broker.authorizePublish = (_client: unknown, _packet: unknown, callback: (error?: Error) => void) => {
+    callback(new Error('publish denied for regression test'))
+  }
+  const result = await harness.tool('synagent_send', { to: 'a4s/peer', body: 'must fail' })
+  assert.equal(result.isError, true)
+  assert.match(result.content[0]?.text ?? '', /publish failed/i)
 })
 
 test('Pi adapter stays disconnected when its enabled setting is false', async () => {
