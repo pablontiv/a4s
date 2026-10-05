@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 
 import type { ExtensionAPI, ExtensionContext, SettingsScope } from '@pablontiv/pion'
@@ -6,25 +7,41 @@ import { Type } from 'typebox'
 
 import {
   createCanonical,
+  directAddress,
+  GLOBAL_ADDRESS,
   isAddress,
-  isFor,
+  isBroadcastSteer,
+  isForIdentity,
+  isToken,
+  legacyTopic,
   newId,
   parseCanonical,
   renderForAgent,
+  resolveInstance,
+  resolveProject,
   serialize,
+  subscriptions,
+  toTopic,
   type CanonicalMessage,
+  type Identity,
+  type SubscriptionPlan,
 } from '../../protocol.ts'
 
 const DEFAULT_BROKER_URL = 'mqtt://127.0.0.1:1884'
-const DEFAULT_ADDRESS = 'pi'
+// Dirección LEGACY (plana) para dual-read durante el cutover a v1.
+const DEFAULT_LEGACY_ADDRESS = 'pi'
 const DEFAULT_PEER = 'claude'
 const MAX_SEEN = 1000
 const SEEN_ENTRY = 'synagent-delivered'
+// Topics durables efectivamente suscritos; sirve para limpiar stale tras cambiar de identidad.
 const STATE_ENTRY = 'synagent-state'
+// Instancia generada y persistida por sesión (precisión C): un RESUME conserva el id, un fork obtiene otro.
+const INSTANCE_ENTRY = 'synagent-instance'
 const DEFAULT_DELIVERY_START_TIMEOUT_MS = 30_000
 
 type SeenEntry = { id: string }
-type StateEntry = { address: string }
+type StateEntry = { topics: string }
+type InstanceEntry = { instance: string; sessionId: string }
 type QueuedDelivery = { generation: number; message: CanonicalMessage }
 type DeliveryMode = 'idle' | 'steer' | 'followUp'
 type ActiveDelivery = {
@@ -34,6 +51,7 @@ type ActiveDelivery = {
   mode: DeliveryMode
   token: number
 }
+type ClientRole = 'durable' | 'transient'
 
 export type SynagentPiOptions = { deliveryStartTimeoutMs?: number }
 
@@ -64,24 +82,56 @@ function synagentPi(pi: ExtensionAPI, deliveryStartTimeoutMs: number): void {
     title: 'Synagent broker URL',
     description: 'Loopback MQTT URL used by the Pi channel adapter.',
   })
-  const address = pi.registerSetting({
+  const legacyAddressSetting = pi.registerSetting({
     key: 'a4s.synagent.address',
-    schema: Type.String({ pattern: '^[A-Za-z][A-Za-z0-9_-]*$' }),
-    defaultValue: DEFAULT_ADDRESS,
-    title: 'Synagent address',
-    description: 'Logical bus address subscribed by this Pi session.',
+    schema: Type.String({ pattern: '^[A-Za-z0-9][A-Za-z0-9_-]*$' }),
+    defaultValue: DEFAULT_LEGACY_ADDRESS,
+    title: 'Synagent legacy address',
+    description:
+      'LEGACY flat address (a4s/inbox/<addr>) still accepted on receive for dual-read during the v1 cutover. '
+      + 'Outbound traffic always uses the v1 hierarchical identity; this only widens what we accept.',
+  })
+  const projectSetting = pi.registerSetting({
+    key: 'a4s.synagent.project',
+    schema: Type.String(),
+    defaultValue: '',
+    title: 'Synagent project',
+    description:
+      'Optional v1 project token. When empty it is derived from SYNAGENT_PROJECT, this config, or the git origin remote.',
+  })
+  const instanceSetting = pi.registerSetting({
+    key: 'a4s.synagent.instance',
+    schema: Type.String(),
+    defaultValue: '',
+    title: 'Synagent instance',
+    description:
+      'Optional v1 instance token. When empty a per-session token is generated and persisted so a resume keeps the same id.',
+  })
+  const globalSetting = pi.registerSetting({
+    key: 'a4s.synagent.global',
+    schema: Type.Boolean(),
+    defaultValue: false,
+    title: 'Synagent global broadcast opt-in',
+    description: 'Subscribe to the v1 global broadcast address (synagent/v1/all) in addition to the project broadcast.',
   })
   const defaultPeer = pi.registerSetting({
     key: 'a4s.synagent.default-peer',
-    schema: Type.String({ pattern: '^[A-Za-z][A-Za-z0-9_-]*$' }),
+    schema: Type.String({ pattern: '^[a-z0-9][a-z0-9/_-]*$' }),
     defaultValue: DEFAULT_PEER,
     title: 'Synagent default peer',
-    description: 'Recipient used by /mq-send when no address prefix is given.',
+    description:
+      'Recipient used by /mq-send when no address prefix is given. A bare token is qualified with our own project.',
   })
 
-  let client: MqttClient | undefined
-  let subscribedTopic: string | undefined
-  let lastSubscribedAddress: string | undefined
+  let durable: MqttClient | undefined
+  let transient: MqttClient | undefined
+  let durableTopics: string[] = []
+  let lastDurableTopics: string[] = []
+  let persistedDurableTopics: string | undefined
+  let identity: Identity | undefined
+  let legacyOnly = false
+  let persistedInstance: string | undefined
+  let persistedInstanceSession: string | undefined
   let activeSessionId: string | undefined
   let context: ExtensionContext | undefined
   let lifecycle = Promise.resolve()
@@ -104,26 +154,35 @@ function synagentPi(pi: ExtensionAPI, deliveryStartTimeoutMs: number): void {
         ctx.ui.notify('Usage: /mq-send [to:] text', 'warning')
         return
       }
-      if (!isAddress(parsed.to)) {
-        ctx.ui.notify(`Invalid Synagent address: ${parsed.to}`, 'error')
-        return
-      }
-      const active = client
+      const active = durable
       if (!active?.connected) {
         ctx.ui.notify('Synagent is not connected', 'error')
         return
       }
+      if (legacyOnly || !identity) {
+        ctx.ui.notify('Synagent cannot send: identity unresolved (legacy-only)', 'error')
+        return
+      }
+      const to = resolveDestination(parsed.to, identity)
+      if (!to) {
+        ctx.ui.notify(`Invalid Synagent address: ${parsed.to}`, 'error')
+        return
+      }
 
-      const from = address.get()
+      const from = directAddress(identity)
       const ts = Date.now()
       const message = createCanonical(parsed.body, {
         id: newId(from, ts),
         from,
-        to: parsed.to,
+        to,
         ts,
       })
+      if (isBroadcastSteer(message)) {
+        ctx.ui.notify('Synagent refuses a steer to a broadcast address', 'error')
+        return
+      }
       try {
-        await publish(active, `a4s/inbox/${parsed.to}`, serialize(message))
+        await publish(active, toTopic(to), serialize(message))
         ctx.ui.notify(`Synagent message sent: ${message.id}`, 'info')
       } catch (error) {
         ctx.ui.notify(`Synagent publish failed: ${formatError(error)}`, 'error')
@@ -138,9 +197,11 @@ function synagentPi(pi: ExtensionAPI, deliveryStartTimeoutMs: number): void {
       const [action = 'status', key, ...rest] = args.trim().split(/\s+/)
       if (action === 'status') {
         let state = 'disabled'
-        if (enabled.get()) state = client?.connected ? 'connected' : 'connecting'
+        if (enabled.get()) state = durable?.connected ? 'connected' : 'connecting'
+        const addr = identity ? directAddress(identity) : 'unresolved'
         ctx.ui.notify(
-          `Synagent ${state}; address=${address.get()} peer=${defaultPeer.get()} broker=${brokerUrl.get()}`,
+          `Synagent ${state}; address=${addr} legacy=${legacyAddressSetting.get()} `
+          + `global=${globalSetting.get() === true} peer=${defaultPeer.get()} broker=${brokerUrl.get()}`,
           'info',
         )
         return
@@ -164,7 +225,11 @@ function synagentPi(pi: ExtensionAPI, deliveryStartTimeoutMs: number): void {
         return
       }
       if (action !== 'set' || !key || rest.length === 0) {
-        ctx.ui.notify('Usage: /synagent status|enable|disable|resume|set <broker-url|address|default-peer> <value>', 'warning')
+        ctx.ui.notify(
+          'Usage: /synagent status|enable|disable|resume|set '
+          + '<broker-url|address|project|instance|global|default-peer> <value>',
+          'warning',
+        )
         return
       }
 
@@ -188,7 +253,10 @@ function synagentPi(pi: ExtensionAPI, deliveryStartTimeoutMs: number): void {
     unsubscribeSettings = [
       enabled.onChange(value => void restart(ctx, !value)),
       brokerUrl.onChange(() => void restart(ctx, true)),
-      address.onChange(() => void restart(ctx, true)),
+      legacyAddressSetting.onChange(() => void restart(ctx, true)),
+      projectSetting.onChange(() => void restart(ctx, true)),
+      instanceSetting.onChange(() => void restart(ctx, true)),
+      globalSetting.onChange(() => void restart(ctx, true)),
     ]
     await restart(ctx, false)
   })
@@ -226,9 +294,27 @@ function synagentPi(pi: ExtensionAPI, deliveryStartTimeoutMs: number): void {
       brokerUrl.set(value, { scope })
       return
     }
-    if (key === 'address' || key === 'default-peer') {
-      if (!isAddress(value)) throw new Error(`Invalid Synagent address: ${value}`)
-      ;(key === 'address' ? address : defaultPeer).set(value, { scope })
+    if (key === 'address') {
+      const token = value.trim().toLowerCase()
+      if (!isToken(token)) throw new Error(`Invalid Synagent legacy address: ${value}`)
+      legacyAddressSetting.set(token, { scope })
+      return
+    }
+    if (key === 'default-peer') {
+      const peer = value.trim()
+      if (!isAddress(peer) && !isToken(peer.toLowerCase())) throw new Error(`Invalid Synagent peer: ${value}`)
+      defaultPeer.set(isAddress(peer) ? peer : peer.toLowerCase(), { scope })
+      return
+    }
+    if (key === 'project' || key === 'instance') {
+      const token = value.trim().toLowerCase()
+      if (!isToken(token)) throw new Error(`Invalid Synagent ${key}: ${value}`)
+      ;(key === 'project' ? projectSetting : instanceSetting).set(token, { scope })
+      return
+    }
+    if (key === 'global') {
+      if (value !== 'true' && value !== 'false') throw new Error(`Invalid Synagent global (use true|false): ${value}`)
+      globalSetting.set(value === 'true', { scope })
       return
     }
     throw new Error(`Unknown Synagent setting: ${key}`)
@@ -240,9 +326,9 @@ function synagentPi(pi: ExtensionAPI, deliveryStartTimeoutMs: number): void {
     lifecycle = lifecycle
       .then(async () => {
         if (requestedGeneration !== connectionGeneration) return
-        const staleTopic = await disconnect(removeSubscription)
+        const staleTopics = await disconnect(removeSubscription)
         if (requestedGeneration !== connectionGeneration || !isCurrentSession(ctx) || !enabled.get()) return
-        start(ctx, staleTopic)
+        start(ctx, staleTopics)
       })
       .catch(error => ctx.ui.notify(`Synagent restart failed: ${formatError(error)}`, 'error'))
     return lifecycle
@@ -254,98 +340,156 @@ function synagentPi(pi: ExtensionAPI, deliveryStartTimeoutMs: number): void {
     return lifecycle
   }
 
-  function start(ctx: ExtensionContext, staleTopic?: string): void {
+  function start(ctx: ExtensionContext, staleFromDisconnect: string[] = []): void {
     const url = brokerUrl.get()
-    const ownAddress = address.get()
     try {
       assertLoopbackBrokerUrl(url)
-      if (!isAddress(ownAddress)) throw new Error(`Invalid Synagent address: ${ownAddress}`)
     } catch (error) {
       ctx.ui.notify(formatError(error), 'error')
       return
     }
 
-    const topic = `a4s/inbox/${ownAddress}`
-    const previousTopic = lastSubscribedAddress && lastSubscribedAddress !== ownAddress
-      ? `a4s/inbox/${lastSubscribedAddress}`
-      : undefined
-    const topicsToRemove = [...new Set([staleTopic, previousTopic].filter((value): value is string =>
-      typeof value === 'string' && value !== topic,
-    ))]
+    const legacyAddress = legacyAddressSetting.get()
+    const global = globalSetting.get() === true
+
+    // Resolución de identidad; si lanza, operamos LEGACY-ONLY sin tumbar la sesión.
+    let plan: SubscriptionPlan
+    try {
+      identity = computeIdentity(ctx)
+      legacyOnly = false
+      plan = subscriptions({ identity, global, legacyAddress })
+      ctx.ui.notify(`Synagent identity ${directAddress(identity)} legacy=${legacyAddress} global=${global}`, 'info')
+    } catch (error) {
+      identity = undefined
+      legacyOnly = true
+      plan = { durable: [legacyTopic(legacyAddress)], transient: [] }
+      ctx.ui.notify(
+        `Synagent identity unresolved; operating legacy-only on ${legacyTopic(legacyAddress)}: ${formatError(error)}`,
+        'warning',
+      )
+    }
+
     const sessionId = ctx.sessionManager.getSessionId()
-    const active = connect(url, {
-      clean: false,
+    const newDurableTopics = [...plan.durable]
+    durableTopics = newDurableTopics
+
+    // Limpieza de suscripciones durables obsoletas (el cliente clean=false las retiene).
+    const topicsToRemove = [...new Set([...staleFromDisconnect, ...lastDurableTopics])]
+      .filter(topic => !newDurableTopics.includes(topic))
+
+    durable = connectClient({
+      ctx,
+      url,
       clientId: `a4s-pi-${sessionId}`,
-      reconnectPeriod: 1000,
+      clean: false,
+      topics: newDurableTopics,
+      staleTopics: topicsToRemove,
+      role: 'durable',
     })
-    client = active
-    subscribedTopic = topic
+
+    transient = plan.transient.length > 0
+      ? connectClient({
+        ctx,
+        url,
+        clientId: `a4s-pi-t-${sessionId}`,
+        clean: true,
+        topics: [...plan.transient],
+        role: 'transient',
+      })
+      : undefined
+  }
+
+  function connectClient(opts: {
+    ctx: ExtensionContext
+    url: string
+    clientId: string
+    clean: boolean
+    topics: string[]
+    staleTopics?: string[]
+    role: ClientRole
+  }): MqttClient {
+    const { ctx, url, clientId, clean, topics, role } = opts
+    const staleTopics = opts.staleTopics ?? []
+    const active = connect(url, { clean, clientId, reconnectPeriod: 1000 })
     let lastError = ''
+    const isActive = (): boolean => (role === 'durable' ? durable === active : transient === active)
 
     active.on('connect', () => {
-      if (client !== active) return
+      if (!isActive()) return
       const subscribeCurrent = (): void => {
-        subscribedTopic = topic
-        active.subscribe(topic, { qos: 1 }, error => {
-          if (client !== active) return
+        if (topics.length === 0) return
+        active.subscribe(topics, { qos: 1 }, error => {
+          if (!isActive()) return
           if (error) {
             ctx.ui.notify(`Synagent subscribe failed: ${error.message}`, 'error')
             return
           }
-          subscribedTopic = topic
           lastError = ''
-          if (lastSubscribedAddress !== ownAddress) {
-            lastSubscribedAddress = ownAddress
-            pi.appendEntry<StateEntry>(STATE_ENTRY, { address: ownAddress })
+          if (role === 'durable') {
+            lastDurableTopics = [...topics]
+            persistDurableTopics(topics)
           }
-          ctx.ui.notify(`Synagent subscribed to ${topic}`, 'info')
+          ctx.ui.notify(`Synagent subscribed to ${topics.join(', ')}`, 'info')
         })
       }
-      if (topicsToRemove.length === 0) {
+      const stale = staleTopics.filter(topic => !topics.includes(topic))
+      if (stale.length === 0) {
         subscribeCurrent()
         return
       }
-      active.unsubscribe(topicsToRemove, error => {
-        if (client !== active) return
+      active.unsubscribe(stale, error => {
+        if (!isActive()) return
         if (error) ctx.ui.notify(`Synagent stale subscription cleanup failed: ${error.message}`, 'warning')
         subscribeCurrent()
       })
     })
     active.on('message', (receivedTopic, payload) => {
-      if (receivedTopic !== topic || client !== active) return
-      enqueueDelivery(payload.toString(), ownAddress, ctx)
+      if (!isActive() || !topics.includes(receivedTopic)) return
+      enqueueDelivery(payload.toString(), ctx)
     })
     active.on('error', error => {
       if (error.message === lastError) return
       lastError = error.message
       ctx.ui.notify(`Synagent connection error: ${error.message}`, 'error')
     })
+    return active
   }
 
-  async function disconnect(removeSubscription: boolean): Promise<string | undefined> {
-    const active = client
-    const oldTopic = subscribedTopic
-    client = undefined
-    subscribedTopic = undefined
-    if (!active) return removeSubscription ? oldTopic : undefined
+  async function disconnect(removeSubscription: boolean): Promise<string[]> {
+    const activeDurable = durable
+    const activeTransient = transient
+    const oldDurableTopics = durableTopics
+    durable = undefined
+    transient = undefined
+    durableTopics = []
 
-    let staleTopic = removeSubscription ? oldTopic : undefined
-    if (staleTopic && active.connected) {
-      try {
-        await unsubscribe(active, staleTopic)
-        staleTopic = undefined
-      } catch {
-        // The next connection with this session-scoped client id retries cleanup.
+    // El cliente transient es clean=true: su sesión no retiene suscripciones, basta cerrarlo.
+    if (activeTransient) {
+      activeTransient.removeAllListeners()
+      await endClient(activeTransient)
+    }
+
+    if (!activeDurable) return removeSubscription ? oldDurableTopics : []
+
+    let stale: string[] = []
+    if (removeSubscription && oldDurableTopics.length > 0) {
+      if (activeDurable.connected) {
+        try {
+          await unsubscribeAll(activeDurable, oldDurableTopics)
+        } catch {
+          // El próximo start con este clientId reintenta la limpieza.
+          stale = oldDurableTopics
+        }
+      } else {
+        stale = oldDurableTopics
       }
     }
-    active.removeAllListeners()
-    await new Promise<void>((resolve, reject) => {
-      active.end(false, {}, error => error ? reject(error) : resolve())
-    })
-    return staleTopic
+    activeDurable.removeAllListeners()
+    await endClient(activeDurable)
+    return stale
   }
 
-  function enqueueDelivery(text: string, ownAddress: string, ctx: ExtensionContext): void {
+  function enqueueDelivery(text: string, ctx: ExtensionContext): void {
     if (!isCurrentSession(ctx)) return
     let message: CanonicalMessage
     try {
@@ -354,13 +498,24 @@ function synagentPi(pi: ExtensionAPI, deliveryStartTimeoutMs: number): void {
       ctx.ui.notify(`Synagent ignored invalid message: ${formatError(error)}`, 'warning')
       return
     }
-    if (!isFor(message, ownAddress) || seen.has(message.id)) return
+    // steer a broadcast se rechaza también en recepción (precisión F).
+    if (isBroadcastSteer(message)) {
+      ctx.ui.notify(`Synagent rejected broadcast steer: ${message.id}`, 'warning')
+      return
+    }
+    if (!acceptsMessage(message) || seen.has(message.id)) return
 
     seen.add(message.id)
     if (seen.size > MAX_SEEN) seen.delete(seen.values().next().value as string)
     pi.appendEntry<SeenEntry>(SEEN_ENTRY, { id: message.id })
     queuedDeliveries.push({ generation: deliveryGeneration, message })
     drainDeliveries(context ?? ctx)
+  }
+
+  function acceptsMessage(message: CanonicalMessage): boolean {
+    const legacyAddress = legacyAddressSetting.get()
+    if (legacyOnly || !identity) return message.to === legacyAddress
+    return isForIdentity(message, { identity, global: globalSetting.get() === true, legacyAddress })
   }
 
   function drainDeliveries(ctx: ExtensionContext): void {
@@ -455,9 +610,55 @@ function synagentPi(pi: ExtensionAPI, deliveryStartTimeoutMs: number): void {
     awaitingSettlement = false
   }
 
+  // Resuelve la identidad v1 por las cadenas de prioridad del contrato (protocol.ts).
+  function computeIdentity(ctx: ExtensionContext): Identity {
+    const projectEnv = emptyToUndefined(process.env.SYNAGENT_PROJECT)
+    const projectConfig = emptyToUndefined(projectSetting.get())
+    // El remoto solo se consulta si no hay env/config que lo haga redundante.
+    const remoteUrl = projectEnv ?? projectConfig ? undefined : readGitRemote()
+    const project = resolveProject({
+      ...(projectEnv !== undefined ? { env: projectEnv } : {}),
+      ...(projectConfig !== undefined ? { config: projectConfig } : {}),
+      ...(remoteUrl !== undefined ? { remoteUrl } : {}),
+    })
+    const instanceEnv = emptyToUndefined(process.env.SYNAGENT_INSTANCE)
+    const instanceConfig = emptyToUndefined(instanceSetting.get())
+    const instance = resolveInstance({
+      ...(instanceEnv !== undefined ? { env: instanceEnv } : {}),
+      ...(instanceConfig !== undefined ? { config: instanceConfig } : {}),
+      // El token generado solo se usa si no hay env/config; evitamos persistir uno que no se usará.
+      generated: instanceEnv ?? instanceConfig ? 'pi' : generatedInstanceArg(ctx),
+    })
+    return { project, instance }
+  }
+
+  // Token de instancia derivado del sessionId, persistido y ligado a esa sesión:
+  // un RESUME (mismo sessionId, mismas entries) reusa el id; un fork/new obtiene otro.
+  function generatedInstanceArg(ctx: ExtensionContext): string {
+    const sessionId = ctx.sessionManager.getSessionId()
+    if (persistedInstance && persistedInstanceSession === sessionId) return persistedInstance
+    const token = deriveInstanceToken(sessionId)
+    persistedInstance = token
+    persistedInstanceSession = sessionId
+    pi.appendEntry<InstanceEntry>(INSTANCE_ENTRY, { instance: token, sessionId })
+    return token
+  }
+
+  function persistDurableTopics(topics: string[]): void {
+    const joined = topics.join(',')
+    if (joined === persistedDurableTopics) return
+    persistedDurableTopics = joined
+    pi.appendEntry<StateEntry>(STATE_ENTRY, { topics: joined })
+  }
+
   function restoreState(ctx: ExtensionContext): void {
     seen.clear()
-    lastSubscribedAddress = undefined
+    lastDurableTopics = []
+    persistedDurableTopics = undefined
+    persistedInstance = undefined
+    persistedInstanceSession = undefined
+    identity = undefined
+    legacyOnly = false
     const branch = ctx.sessionManager.getBranch()
     const ids = branch
       .map(entry => {
@@ -469,14 +670,36 @@ function synagentPi(pi: ExtensionAPI, deliveryStartTimeoutMs: number): void {
     for (const id of ids) seen.add(id)
 
     for (const entry of branch) {
-      if (entry.type !== 'custom' || entry.customType !== STATE_ENTRY || !('data' in entry)) continue
-      const savedAddress = (entry.data as StateEntry | undefined)?.address
-      if (typeof savedAddress === 'string' && isAddress(savedAddress)) lastSubscribedAddress = savedAddress
+      if (entry.type !== 'custom' || !('data' in entry)) continue
+      if (entry.customType === STATE_ENTRY) {
+        const topics = (entry.data as StateEntry | undefined)?.topics
+        if (typeof topics === 'string' && topics.length > 0) {
+          lastDurableTopics = topics.split(',').filter(Boolean)
+          persistedDurableTopics = topics
+        }
+      } else if (entry.customType === INSTANCE_ENTRY) {
+        const data = entry.data as InstanceEntry | undefined
+        if (typeof data?.instance === 'string' && typeof data?.sessionId === 'string') {
+          persistedInstance = data.instance
+          persistedInstanceSession = data.sessionId
+        }
+      }
     }
   }
 }
 
 export default createSynagentPi()
+
+function resolveDestination(raw: string, identity: Identity): string | undefined {
+  if (isAddress(raw)) return raw
+  // Un token simple (p.ej. el default-peer) se cualifica con nuestro propio proyecto.
+  const token = raw.toLowerCase()
+  if (isToken(token)) {
+    const qualified = `${identity.project}/${token}`
+    if (isAddress(qualified)) return qualified
+  }
+  return undefined
+}
 
 function userMessageText(content: unknown): string {
   if (typeof content === 'string') return content
@@ -496,12 +719,37 @@ function userMessageText(content: unknown): string {
 function parseSendArgs(input: string, fallback: string): { to: string; body: string } | undefined {
   const raw = input.trim()
   if (!raw) return undefined
-  const match = raw.match(/^([A-Za-z][\w-]*):\s*([\s\S]*)$/)
+  // Prefijo de dirección: token plano o dirección v1 jerárquica (con '/').
+  const match = raw.match(/^([a-z0-9][a-z0-9/_-]*):\s*([\s\S]*)$/)
   if (match) {
     const body = (match[2] as string).trim()
     return body ? { to: match[1] as string, body } : undefined
   }
   return { to: fallback, body: raw }
+}
+
+function emptyToUndefined(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined
+  const trimmed = value.trim()
+  return trimmed.length > 0 ? trimmed : undefined
+}
+
+function readGitRemote(): string | undefined {
+  try {
+    const out = execFileSync('git', ['config', '--get', 'remote.origin.url'], {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+    }).trim()
+    return out.length > 0 ? out : undefined
+  } catch {
+    return undefined
+  }
+}
+
+function deriveInstanceToken(sessionId: string): string {
+  const base = sessionId.trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '')
+  const candidate = `pi-${base}`.slice(0, 64).replace(/-+$/, '')
+  return isToken(candidate) ? candidate : `pi-${randomUUID().slice(0, 8)}`
 }
 
 function assertLoopbackBrokerUrl(value: string): void {
@@ -530,9 +778,15 @@ function publish(client: MqttClient, topic: string, payload: string): Promise<vo
   })
 }
 
-function unsubscribe(client: MqttClient, topic: string): Promise<void> {
+function unsubscribeAll(client: MqttClient, topics: string[]): Promise<void> {
   return new Promise((resolve, reject) => {
-    client.unsubscribe(topic, error => error ? reject(error) : resolve())
+    client.unsubscribe(topics, error => error ? reject(error) : resolve())
+  })
+}
+
+function endClient(client: MqttClient): Promise<void> {
+  return new Promise((resolve, reject) => {
+    client.end(false, {}, error => error ? reject(error) : resolve())
   })
 }
 

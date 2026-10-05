@@ -1,95 +1,241 @@
-// Pruebas del núcleo traducible del adaptador (boceto §3/§4), sin bus ni `$`.
+// Pruebas de la COPIA standalone de protocol.ts (adapters/claude/hooks/adapter.ts).
+// Estas pruebas verifican que la copia funciona SOLA, sin importar protocol.ts original.
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
 import {
-  DEFAULT_PEER,
-  isForSelf,
+  createCanonical,
+  directAddress,
+  formatAddress,
+  isAddress,
+  isBroadcast,
+  isBroadcastSteer,
+  isForIdentity,
+  isToken,
+  MESSAGE_KINDS,
   newId,
+  parseAddress,
   parseCanonical,
   renderForAgent,
-  SELF_ADDRESS,
   serialize,
-  toCanonical,
+  subscriptions,
+  toTopic,
 } from '../adapters/claude/hooks/adapter.ts'
 
-test('ENVIAR: toCanonical arma el contrato mínimo con defaults', () => {
-  const msg = toCanonical('hola pi', { id: 'm1', ts: 1000 })
-  assert.equal(msg.id, 'm1')
-  assert.equal(msg.from, SELF_ADDRESS)
-  assert.equal(msg.to, DEFAULT_PEER)
-  assert.equal(msg.kind, 'prompt')
-  assert.equal(msg.body, 'hola pi')
-  assert.equal(msg.ts, 1000)
-  assert.ok(!('reply_to' in msg))
+test('adapter: isToken valida tokens en v1', () => {
+  assert.equal(isToken('a4s'), true)
+  assert.equal(isToken('claude-1'), true)
+  assert.equal(isToken('x_y-z'), true)
+  assert.equal(isToken('123'), true) // números válidos
+  assert.equal(isToken('a-'), true) // '-' es válido en posición no-inicial
+  assert.equal(isToken('a_b'), true) // '_' es válido
+  assert.equal(isToken('A4S'), false) // no mayúsculas
+  assert.equal(isToken(''), false)
+  assert.equal(isToken('-a'), false) // no empieza con -
+  assert.equal(isToken(' a'), false) // no empieza con espacio
 })
 
-test('ENVIAR: serialize/parse hace round-trip del contrato', () => {
-  const msg = toCanonical('resultado listo', {
-    id: 'm2',
-    ts: 2000,
-    to: 'pi',
+test('adapter: parseAddress reconoce gramática v1', () => {
+  assert.deepEqual(parseAddress('all'), { scope: 'global' })
+  assert.deepEqual(parseAddress('a4s/claude-1'), { scope: 'direct', project: 'a4s', instance: 'claude-1' })
+  assert.deepEqual(parseAddress('a4s/all'), { scope: 'project', project: 'a4s' })
+  assert.equal(parseAddress('invalid'), null)
+  assert.equal(parseAddress('a4s/all/extra'), null)
+  assert.equal(parseAddress(''), null)
+})
+
+test('adapter: isAddress y isBroadcast', () => {
+  assert.equal(isAddress('all'), true)
+  assert.equal(isAddress('a4s/claude-1'), true)
+  assert.equal(isAddress('a4s/all'), true)
+  assert.equal(isAddress('invalid'), false)
+
+  assert.equal(isBroadcast('all'), true)
+  assert.equal(isBroadcast('a4s/all'), true)
+  assert.equal(isBroadcast('a4s/claude-1'), false)
+})
+
+test('adapter: formatAddress invierte parseAddress', () => {
+  assert.equal(formatAddress({ scope: 'global' }), 'all')
+  assert.equal(formatAddress({ scope: 'project', project: 'a4s' }), 'a4s/all')
+  assert.equal(formatAddress({ scope: 'direct', project: 'a4s', instance: 'claude-1' }), 'a4s/claude-1')
+})
+
+test('adapter: toTopic mapea dirección → topic v1', () => {
+  assert.equal(toTopic('all'), 'synagent/v1/all')
+  assert.equal(toTopic('a4s/all'), 'synagent/v1/a4s/all')
+  assert.equal(toTopic('a4s/claude-1'), 'synagent/v1/a4s/claude-1')
+  assert.throws(() => toTopic('invalid'), /dirección v1 inválida/)
+})
+
+test('adapter: directAddress y subscriptions', () => {
+  const identity = { project: 'a4s', instance: 'claude-1' }
+  assert.equal(directAddress(identity), 'a4s/claude-1')
+
+  const plan = subscriptions({ identity, global: false, legacyAddress: 'claude' })
+  assert.deepEqual(plan.durable, ['synagent/v1/a4s/claude-1', 'a4s/inbox/claude'])
+  assert.deepEqual(plan.transient, ['synagent/v1/a4s/all'])
+
+  const globalPlan = subscriptions({ identity, global: true, legacyAddress: 'claude' })
+  assert.deepEqual(globalPlan.transient, ['synagent/v1/a4s/all', 'synagent/v1/all'])
+})
+
+test('adapter: isForIdentity filtra por identidad', () => {
+  const identity = { project: 'a4s', instance: 'claude-1' }
+  const msg = (to: string) =>
+    createCanonical('test', {
+      id: 'test-1',
+      from: 'pi/pi-1',
+      to,
+      ts: 1000,
+    })
+
+  // Directo a mí
+  assert.equal(
+    isForIdentity(msg('a4s/claude-1'), { identity, global: false, legacyAddress: 'claude' }),
+    true,
+  )
+
+  // Directo a otro
+  assert.equal(
+    isForIdentity(msg('a4s/other'), { identity, global: false, legacyAddress: 'claude' }),
+    false,
+  )
+
+  // Broadcast de mi proyecto
+  assert.equal(
+    isForIdentity(msg('a4s/all'), { identity, global: false, legacyAddress: 'claude' }),
+    true,
+  )
+
+  // Broadcast de otro proyecto
+  assert.equal(
+    isForIdentity(msg('other/all'), { identity, global: false, legacyAddress: 'claude' }),
+    false,
+  )
+
+  // Global (sin opt-in)
+  assert.equal(isForIdentity(msg('all'), { identity, global: false, legacyAddress: 'claude' }), false)
+
+  // Global (con opt-in)
+  assert.equal(isForIdentity(msg('all'), { identity, global: true, legacyAddress: 'claude' }), true)
+
+  // Legacy
+  assert.equal(
+    isForIdentity(msg('claude'), { identity, global: false, legacyAddress: 'claude' }),
+    true,
+  )
+})
+
+test('adapter: isBroadcastSteer rechaza steer broadcast', () => {
+  const directMsg = createCanonical('test', {
+    id: 'test-1',
+    from: 'pi/pi-1',
+    to: 'a4s/claude-1',
+    ts: 1000,
+    kind: 'steer',
+  })
+  assert.equal(isBroadcastSteer(directMsg), false)
+
+  const projectMsg = createCanonical('test', {
+    id: 'test-2',
+    from: 'pi/pi-1',
+    to: 'a4s/all',
+    ts: 1000,
+    kind: 'steer',
+  })
+  assert.equal(isBroadcastSteer(projectMsg), true)
+
+  const globalMsg = createCanonical('test', {
+    id: 'test-3',
+    from: 'pi/pi-1',
+    to: 'all',
+    ts: 1000,
+    kind: 'steer',
+  })
+  assert.equal(isBroadcastSteer(globalMsg), true)
+
+  const promptMsg = createCanonical('test', {
+    id: 'test-4',
+    from: 'pi/pi-1',
+    to: 'a4s/all',
+    ts: 1000,
+    kind: 'prompt',
+  })
+  assert.equal(isBroadcastSteer(promptMsg), false)
+})
+
+test('adapter: createCanonical + serialize + parseCanonical round-trip', () => {
+  const msg = createCanonical('contenido', {
+    id: 'test-1',
+    from: 'a4s/claude-1',
+    to: 'a4s/other',
+    ts: 5000,
     kind: 'result',
-    reply_to: 'claude',
+    reply_to: 'test-0',
   })
-  assert.deepEqual(parseCanonical(serialize(msg)), msg)
+
+  const serialized = serialize(msg)
+  const parsed = parseCanonical(serialized)
+
+  assert.deepEqual(parsed, msg)
 })
 
-test('JALAR: parseCanonical rechaza un mensaje sin campos obligatorios', () => {
-  const incompleto = JSON.stringify({ id: 'x', from: 'pi', body: 'hi' })
-  assert.throws(() => parseCanonical(incompleto), /falta campo canónico: to/)
-})
-
-test('JALAR: parseCanonical rechaza un kind inválido', () => {
-  const malKind = JSON.stringify({
-    id: 'x', from: 'pi', to: 'claude', kind: 'grito', body: 'hi', ts: 1,
-  })
-  assert.throws(() => parseCanonical(malKind), /kind inválido/)
-})
-
-test('JALAR: el protocolo compartido rechaza coerciones de tipos', () => {
+test('adapter: parseCanonical rechaza mensajes malformados', () => {
+  assert.throws(() => parseCanonical('not json'), /no es JSON válido/)
+  assert.throws(() => parseCanonical('[]'), /debe ser un objeto/)
   assert.throws(
-    () => parseCanonical(JSON.stringify({ id: 1, from: 'pi', to: 'claude', kind: 'prompt', body: 'hi', ts: 1 })),
+    () =>
+      parseCanonical(
+        JSON.stringify({
+          id: 'test',
+          from: 'a4s/claude-1',
+          body: 'test',
+          ts: 1000,
+          // falta 'to' y 'kind'
+        }),
+      ),
+    /falta campo canónico/,
+  )
+  assert.throws(
+    () =>
+      parseCanonical(
+        JSON.stringify({
+          id: 1, // debe ser string
+          from: 'a4s/claude-1',
+          to: 'a4s/other',
+          kind: 'prompt',
+          body: 'test',
+          ts: 1000,
+        }),
+      ),
     /campo canónico inválido: id/,
   )
-  assert.throws(
-    () => parseCanonical(JSON.stringify({ id: 'x', from: 'pi', to: 'claude', kind: 'prompt', body: 'hi', ts: '1' })),
-    /campo canónico inválido: ts/,
-  )
 })
 
-test('JALAR: isForSelf solo acepta mensajes dirigidos a este adaptador', () => {
-  assert.equal(isForSelf(toCanonical('oye claude', { id: 'm3', ts: 3000, to: SELF_ADDRESS })), true)
-  assert.equal(isForSelf(toCanonical('oye pi', { id: 'm4', ts: 3000, to: 'pi' })), false)
-})
+test('adapter: renderForAgent produce texto legible', () => {
+  const msg = createCanonical('¿cómo estás?', {
+    id: 'msg-1',
+    from: 'a4s/pi-1',
+    to: 'a4s/claude-1',
+    ts: 1000,
+    kind: 'steer',
+    reply_to: 'msg-0',
+  })
 
-test('ENTREGAR: renderForAgent produce texto legible con metadatos', () => {
-  const text = renderForAgent(
-    toCanonical('¿avanzamos?', { id: 'm5', ts: 5000, to: SELF_ADDRESS, kind: 'steer', reply_to: 'pi' }),
-  )
+  const text = renderForAgent(msg)
   assert.match(text, /\[bus:steer\]/)
-  assert.match(text, /de claude/)
-  assert.match(text, /id m5/)
-  assert.match(text, /¿avanzamos\?/)
-  assert.match(text, /responder a: pi/)
+  assert.match(text, /de a4s\/pi-1/)
+  assert.match(text, /id msg-1/)
+  assert.match(text, /¿cómo estás\?/)
+  assert.match(text, /responder a: msg-0/)
 })
 
-test('IDEMPOTENCIA: el id permite deduplicar re-entregas del bus', () => {
-  const entregados = new Set<string>()
-  const incoming = [
-    toCanonical('a', { id: 'dup', ts: 1, to: SELF_ADDRESS }),
-    toCanonical('a (re-entregado)', { id: 'dup', ts: 2, to: SELF_ADDRESS }),
-    toCanonical('b', { id: 'otro', ts: 3, to: SELF_ADDRESS }),
-  ]
-  const entregas: string[] = []
-  for (const msg of incoming) {
-    if (!isForSelf(msg) || entregados.has(msg.id)) continue
-    entregas.push(msg.id)
-    entregados.add(msg.id)
-  }
-  assert.deepEqual(entregas, ['dup', 'otro'])
+test('adapter: newId incluye dirección y ts', () => {
+  const id = newId('a4s/claude-1', 5000)
+  assert.match(id, /^a4s\/claude-1-5000-[a-z0-9]+$/)
 })
 
-test('newId incluye la dirección propia y el ts', () => {
-  assert.match(newId(1234), /^claude-1234-[a-z0-9]{1,6}$/)
+test('adapter: MESSAGE_KINDS incluye todos los tipos', () => {
+  assert.deepEqual(MESSAGE_KINDS, ['prompt', 'steer', 'result', 'notify', 'ack'])
 })
