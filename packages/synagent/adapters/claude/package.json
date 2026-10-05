@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Runtime deps del adaptador de canal de Claude para synagent. Su propósito es que, al instalar el plugin desde un marketplace, Claude Code provisione estas dependencias (copia solo el dir del plugin e instala su package.json + package-lock.json). El bridge (./bridge/*.cjs) solo necesita mqtt. No es un workspace del monorepo (packages/* solo matchea profundidad 1).",
+  "description": "Runtime deps del adaptador de canal de Claude para synagent. Al instalar el plugin desde un marketplace, Claude Code copia su directorio e instala las dependencias declaradas en este package.json. El bridge (./bridge/*.cjs) sólo necesita mqtt. No es un workspace del monorepo (packages/* sólo matchea profundidad 1).",
   "dependencies": {
     "mqtt": "5.16.0"
   }

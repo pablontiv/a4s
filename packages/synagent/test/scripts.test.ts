@@ -1,18 +1,19 @@
-// Smoke test de los SCRIPTS reales del bus (broker.cjs + bridge-sub.cjs +
-// bridge-pub.cjs), ejecutándolos como procesos igual que en runtime. Esto
-// cubre el modo de carga (ESM/CJS) y el round-trip real, que bus.test.ts no
-// ejercita porque construye su propio broker en memoria.
+// Smoke test de los bridges reales del adaptador Claude, ejecutándolos como
+// procesos igual que en runtime contra un broker Aedes efímero. El broker
+// instalable y sus pruebas viven en el workspace @a4s/synagent-bus.
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { cp, mkdtemp, rm } from 'node:fs/promises'
+import { createRequire } from 'node:module'
+import net from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import assert from 'node:assert/strict'
-import { after, test } from 'node:test'
+import { test } from 'node:test'
 
-const BUS = new URL('../bus/', import.meta.url).pathname
-// Los bridges viven dentro del plugin (para viajar al instalar), el broker en bus/.
+const require = createRequire(import.meta.url)
+const { Aedes } = require('aedes')
 const BRIDGE = new URL('../adapters/claude/bridge/', import.meta.url).pathname
 
 function waitFor(
@@ -38,20 +39,18 @@ function waitFor(
   })
 }
 
-test('scripts del bus: broker.cjs + bridges arrancan y hacen round-trip real', async () => {
-  const db = await mkdtemp(join(tmpdir(), 'synagent-scripts-'))
-  const broker = spawn('node', [join(BUS, 'broker.cjs'), '0', db]) as ChildProcessWithoutNullStreams
-  const procs: ChildProcessWithoutNullStreams[] = [broker]
-
-  after(async () => {
-    for (const p of procs) p.kill('SIGKILL')
-    await rm(db, { recursive: true, force: true })
-  })
-
-  // El broker imprime el puerto REAL escuchado (arrancamos con 0 = efímero).
-  const ready = await waitFor(broker, 'stdout', /BROKER READY :(\d+)/)
-  const port = ready[1]
+test('scripts de Claude: bridges arrancan y hacen round-trip real', async t => {
+  const broker = await Aedes.createBroker({})
+  const server = net.createServer(broker.handle)
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const port = (server.address() as net.AddressInfo).port
   const url = `mqtt://127.0.0.1:${port}`
+  const procs: ChildProcessWithoutNullStreams[] = []
+  t.after(async () => {
+    for (const process of procs) process.kill('SIGKILL')
+    await new Promise<void>(resolve => server.close(() => resolve()))
+    await new Promise<void>(resolve => broker.close(() => resolve()))
+  })
 
   const sub = spawn('node', [join(BRIDGE, 'bridge-sub.cjs'), 'claude', url]) as ChildProcessWithoutNullStreams
   procs.push(sub)

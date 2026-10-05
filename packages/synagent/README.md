@@ -8,9 +8,9 @@ y el ADR 0066.
 
 ## Componentes
 
-1. **Bus** (`bus/`): app separada con el broker MQTT embebido Aedes y
-   persistencia LevelDB. `bus/` contiene solo `broker.cjs`; los bridges de
-   Claude viven dentro de su plugin.
+1. **Bus** (`../synagent-bus/`): paquete instalable separado
+   `@a4s/synagent-bus`, con broker MQTT Aedes, persistencia LevelDB y plugin
+   Herdr. Los bridges de Claude viven dentro de su propio plugin.
 2. **Adaptadores** (`adapters/<harness>/`): bordes finos que traducen el API de
    cada harness al contrato canónico. Incluye el plugin de Claude Code y la
    extensión Pi.
@@ -30,14 +30,21 @@ del destinatario.
 
 ## Arrancar el bus
 
+Instálalo globalmente o ejecútalo desde el monorepo:
+
 ```sh
-npm run bus
-# o: node bus/broker.cjs [puerto] [dbdir]
+npm install --global @a4s/synagent-bus
+synagent-bus
+
+npm run bus -- 0 --db /tmp/synagent-dev-db
 ```
 
-El default es `mqtt://127.0.0.1:1884`, con datos en `bus/mqtt-db`. El proceso
-imprime `BROKER READY :<puerto>`. El broker es una aplicación separada: ningún
-adaptador lo arranca.
+El default es `mqtt://127.0.0.1:1884`; el estado vive en la ruta de estado del
+usuario para cada SO, no dentro del checkout. El proceso imprime
+`BROKER READY :<puerto>` cuando listener y LevelDB están realmente listos. El
+broker es una aplicación separada: ningún adaptador lo arranca. Instalación,
+overrides de estado y uso del space Herdr `Synagent`/tab `Bus` se documentan en
+[`../synagent-bus/README.md`](../synagent-bus/README.md).
 
 ## Adaptador de Claude Code
 
@@ -54,8 +61,10 @@ claude --plugin-dir packages/synagent/adapters/claude
   al inbox del destinatario; `to` por defecto es `pi`.
 
 Los bridges viven en `adapters/claude/bridge/` y se resuelven desde
-`$.plugin.root`, por lo que el plugin es autocontenido. Tiene `package.json` y
-`package-lock.json` propios y requiere Node en el host.
+`$.plugin.root`, por lo que el plugin es autocontenido. Tiene su propio
+`package.json`; el repositorio mantiene un único lockfile en la raíz y el
+marketplace instala las dependencias declaradas por el plugin. Requiere Node en
+el host.
 
 ### Instalar desde un marketplace (GitHub)
 
@@ -67,8 +76,9 @@ claude plugin marketplace add pablontiv/a4s
 claude plugin install synagent-adapter-mqtt@a4s
 ```
 
-La instalación provisiona `mqtt` con el lockfile del plugin. El broker no se
-instala: sigue siendo la aplicación separada del bus.
+La instalación provisiona `mqtt` desde el `package.json` del plugin. El broker
+no forma parte del plugin Claude: sigue siendo la aplicación separada
+`@a4s/synagent-bus`.
 
 ### Configuración: `brokerUrl`
 
@@ -176,11 +186,13 @@ autenticación, autorización de topics y TLS antes de admitir URLs no locales.
 ```sh
 npm test --workspace @a4s/synagent
 npm run typecheck --workspace @a4s/synagent
+npm test --workspace @a4s/synagent-bus
 ```
 
-Las pruebas incluyen el protocolo compartido, el broker, los scripts reales y
-un recorrido MQTT bidireccional del adaptador Pi contra un broker Aedes real
-con el peer emulado.
+Las pruebas de este workspace incluyen el protocolo compartido, los bridges
+reales y un recorrido MQTT bidireccional del adaptador Pi contra Aedes con el
+peer emulado. El workspace del bus prueba por separado la CLI persistente, el
+bin global empacado y la integración Herdr.
 
 ## Límites actuales
 

@@ -1,0 +1,24 @@
+id = "a4s.synagent-bus"
+name = "Synagent Bus"
+version = "0.1.0"
+min_herdr_version = "0.7.5"
+description = "Keep the local Synagent MQTT bus in a dedicated Herdr workspace."
+platforms = ["linux", "macos"]
+
+[[build]]
+command = ["npm", "install", "--omit=dev", "--no-package-lock", "--ignore-scripts", "--workspaces=false"]
+
+[[startup]]
+command = ["node", "herdr/ensure.cjs"]
+
+[[actions]]
+id = "ensure"
+title = "Ensure Synagent bus"
+contexts = ["global"]
+command = ["node", "herdr/ensure.cjs"]
+
+[[panes]]
+id = "bus"
+title = "Bus"
+placement = "tab"
+command = ["node", "broker.cjs"]

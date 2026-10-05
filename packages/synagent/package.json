@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "license": "UNLICENSED",
-  "description": "synagent (sinapsis + agent): bus de mensajería MQTT embebido + adaptadores de canal por harness para comunicación entre agentes.",
+  "description": "Canonical Synagent messaging contract and channel adapters for agent harnesses.",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/pablontiv/a4s.git",
@@ -17,23 +17,16 @@
   "engines": {
     "node": ">=22.19.0"
   },
-  "bin": {
-    "synagent-bus": "./bus/broker.cjs"
-  },
   "pi": {
     "extensions": [
       "./adapters/pi/index.ts"
     ]
   },
   "scripts": {
-    "bus": "node bus/broker.cjs",
     "test": "tsx --test test/*.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "aedes": "1.2.0",
-    "aedes-persistence-level": "9.2.0",
-    "classic-level": "3.0.0",
     "mqtt": "5.16.0"
   },
   "peerDependencies": {
@@ -42,6 +35,7 @@
   },
   "devDependencies": {
     "@pablontiv/pion": "https://github.com/pablontiv/pi/releases/download/pion-v1.0.0-ports.1/pablontiv-pion-1.0.0-ports.1.tgz",
+    "aedes": "1.2.0",
     "@types/node": "26.6.1",
     "typebox": "1.3.27",
     "tsx": "4.23.13",
