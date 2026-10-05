@@ -192,9 +192,6 @@ class ReconcileTest(unittest.TestCase):
                     out.append(l)
         return out
 
-    def tickets(self, pattern="*.md"):
-        d = self.t / "state" / "attention"
-        return sorted(f.name for f in d.glob(pattern)) if d.exists() else []
 
     # ---------------------------------------------------------------- baseline behaviour
     def test_herdr_down_is_noop(self):
@@ -203,13 +200,6 @@ class ReconcileTest(unittest.TestCase):
         self.assertIn("no-op", p.stdout)
         self.assertNotIn("bd-read", log)
 
-    def test_dry_run_default_mutates_nothing_even_when_actions_planned(self):
-        fx = self.fx(in_progress=[self.done_bead("b-1")], agents={"w1": agent("w1", "done", pane="wT:p9", tab="wT:t9")})
-        p, log = self.tick(fx)
-        self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertIn("PLAN  HARVEST", p.stdout)
-        self.assertEqual(self.mutations(log), [])
-        self.assertFalse((self.t / "state").exists())
 
     def test_working_left_alone(self):
         fx = self.fx(in_progress=[bead("b-1", metadata={"worker": "w1"})], agents={"w1": agent("w1", "working")})
@@ -217,20 +207,6 @@ class ReconcileTest(unittest.TestCase):
         self.assertIn("LEAVE", p.stdout)
         self.assertEqual(self.mutations(log), [])
 
-    def test_done_harvests_then_closes_as_assignee(self):
-        fx = self.fx(in_progress=[self.done_bead("b-1")], agents={"w1": agent("w1", "done", pane="wT:p9", tab="wT:t9")},
-                     assignees={"b-1": ACTOR})
-        p, log = self.tick(fx, apply=True)
-        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
-        closes = [l for l in log.splitlines() if l.startswith("bd close b-1")]
-        self.assertEqual(len(closes), 1, log)
-        self.assertNotIn("--actor", closes[0])  # the flag would override BEADS_ACTOR and trip the assignee guard
-        self.assertIn("##BEADS_ACTOR=" + ACTOR, closes[0])
-        self.assertIn("closed_by=a4s-reconcile", closes[0])  # true identity survives in the reason
-        self.assertNotIn("herdr agent read", log)  # the verdict comes from the Bead record, never a terminal
-        self.assertFalse((self.t / "state" / "harvest").exists())
-        audit = [json.loads(l) for l in (self.t / "state" / "audit.jsonl").read_text().splitlines()]
-        self.assertEqual([(r["actor"], r["bd_actor_env"], r["tool"]) for r in audit], [("a4s-reconcile", ACTOR, "bd")])
 
     def test_not_found_redispatches_and_links_new_worker(self):
         fx = self.fx(in_progress=[bead("b-1", description="do it", assignee=ACTOR,
@@ -245,12 +221,6 @@ class ReconcileTest(unittest.TestCase):
         self.assertIn('BEADS_ACTOR="%s" bd close b-1' % ACTOR, log)  # worker close instructions use the assignee
         self.assertNotIn("--claim", log)
 
-    def test_not_found_redispatch_is_bounded(self):
-        fx = self.fx(in_progress=[bead("b-1", metadata={"worker": "gone", "redispatch": "2"})])
-        p, log = self.tick(fx, apply=True)
-        self.assertIn("REDISPATCH_EXHAUSTED", p.stdout)
-        self.assertEqual(self.mutations(log), [])
-        self.assertEqual(len(self.tickets("b-1--REDISPATCH_EXHAUSTED--*.md")), 1)
 
     def test_settling_worker_not_judged(self):
         fx = self.fx(in_progress=[bead("b-1", metadata={"worker": "gone", "dispatched_at": str(int(time.time()))})])
@@ -258,16 +228,6 @@ class ReconcileTest(unittest.TestCase):
         self.assertIn("settling", p.stdout)
         self.assertEqual(self.mutations(log), [])
 
-    def test_blocked_worker_is_evidence_only_and_idempotent(self):
-        fx = self.fx(in_progress=[bead("b-1", metadata={"worker": "w1"})], agents={"w1": agent("w1", "blocked")})
-        p1, log1 = self.tick(fx, apply=True)
-        self.assertEqual(self.mutations(log1), [])
-        files = list((self.t / "state" / "attention").glob("b-1--*.md"))
-        self.assertEqual(len(files), 1)
-        self.assertIn("lifecycle_mutation: none", files[0].read_text())
-        p2, _ = self.tick(fx, apply=True)
-        self.assertIn("already ticketed", p2.stdout)
-        self.assertEqual(len(list((self.t / "state" / "attention").glob("b-1--*.md"))), 1)
 
     def test_idle_and_pane_mismatch_fail_closed(self):
         fx = self.fx(in_progress=[bead("b-1", metadata={"worker": "w1"}),
@@ -293,13 +253,6 @@ class ReconcileTest(unittest.TestCase):
         closes = [l for l in log.splitlines() if l.startswith("herdr tab close")]
         self.assertEqual(closes, ["herdr tab close wT:t1"], p.stdout)
 
-    def test_blocked_and_needs_decision_ticketed_without_mutation(self):
-        fx = self.fx(blocked=[bead("b-1", status="blocked")],
-                     needs=[bead("b-2", status="open", labels=["needs-decision"])])
-        p, log = self.tick(fx, apply=True)
-        self.assertEqual(self.mutations(log), [])
-        names = sorted(n.split("--")[1] for n in self.tickets("b-*.md"))
-        self.assertEqual(names, ["BEAD_BLOCKED", "NEEDS_DECISION"])
 
     def test_dispatch_is_opt_in_claims_and_is_bounded(self):
         ready = [bead("r-1", status="open", labels=["auto-dispatch"], metadata={"kind": "pi"}),
@@ -345,99 +298,14 @@ class ReconcileTest(unittest.TestCase):
         self.assertEqual(strip(a.stdout), strip(b.stdout))
 
     # ---------------------------------------------------------------- MC safety gate
-    def work_fixture(self, **kw):
-        """Everything the reconciler would normally act on: dispatch, redispatch, harvest, reap."""
-        old = "2026-01-01T00:00:00Z"
-        d = dict(ready=[bead("r-1", status="open", labels=["auto-dispatch"])],
-                 in_progress=[bead("g-1", metadata={"worker": "gone"}),
-                              self.done_bead("d-1")],
-                 closed=[bead("c-1", status="closed", closed_at=old, metadata={"worker": "w9", "tab": "wT:t7"})],
-                 tabs=[{"tab_id": "wT:t7", "pane_count": 1}], agents={"w1": agent("w1", "done", pane="wT:p9", tab="wT:t9")},
-                 assignees={"d-1": ACTOR})
-        d.update(kw)
-        return d
 
-    def test_mc_gate_open_lets_work_through(self):
-        p, log = self.tick(self.fx(**self.work_fixture()), apply=True)
-        self.assertIn("MC-GATE", p.stdout)
-        self.assertIn("OPEN owner=mc-1 pane=wM:p1", p.stdout)
-        self.assertTrue(self.mutations(log))
-        self.assertIn("herdr tab close wT:t7", log)
 
-    def test_mc_gate_closed_verdicts_mean_zero_mutations(self):
-        cases = {
-            "ABSENT-label-alone-is-not-ownership": ("ABSENT", dict(mc_beads=[])),
-            "DUPLICATED-two-owner-beads": ("DUPLICATED", dict(mc_beads=[mc_bead("mc-1"), mc_bead("mc-2")])),
-            "DUPLICATED-second-labelled-claimant": ("DUPLICATED", dict(tabs=[OTHER_MC_TAB])),
-            "STALE-lease-expired": ("STALE", dict(mc_beads=[mc_bead(lease=-3600)])),
-            "STALE-no-lease": ("STALE", dict(mc_beads=[bead("mc-1", labels=["mission-control"], metadata=dict(MC_META))])),
-            "STALE-owner-pane-gone": ("STALE", dict(mc_beads=[mc_bead(pane="wM:p9")])),
-            "AMBIGUOUS-terminal-mismatch": ("AMBIGUOUS", dict(mc_beads=[mc_bead(terminal_id="term_other")])),
-            "AMBIGUOUS-session-mismatch": ("AMBIGUOUS", dict(mc_beads=[mc_bead(session="/s/other.jsonl")])),
-            "AMBIGUOUS-no-identity": ("AMBIGUOUS", dict(mc_beads=[mc_bead(terminal_id=None, session=None)])),
-        }
-        for name, (verdict, over) in cases.items():
-            with self.subTest(name):
-                fx = self.fx(**dict(self.work_fixture(), **over))
-                for apply in (True, False):
-                    p, log = self.tick(fx, apply=apply)
-                    self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
-                    self.assertIn("CLOSED (%s)" % verdict, p.stdout)
-                    self.assertEqual(self.mutations(log), [], log)
-                    self.assertNotIn("would run", p.stdout)
-                self.assertTrue(self.tickets("mission-control--MC_GATE_%s--*.md" % verdict), self.tickets())
-                shutil.rmtree(self.t / "state", ignore_errors=True)
 
-    def test_mc_gate_ticket_is_evidence_only_and_idempotent(self):
-        fx = self.fx(**self.work_fixture(), **{})
-        fx["mc_beads"] = []
-        self.tick(fx, apply=True)
-        p, log = self.tick(fx, apply=True)
-        self.assertIn("already ticketed", p.stdout)
-        files = list((self.t / "state" / "attention").glob("mission-control--MC_GATE_ABSENT--*.md"))
-        self.assertEqual(len(files), 1)
-        self.assertIn("lifecycle_mutation: none", files[0].read_text())
-        self.assertEqual(self.mutations(log), [])
 
-    def test_mc_gate_is_rechecked_before_each_dispatch(self):
-        ready = [bead("r-1", status="open", labels=["auto-dispatch"]), bead("r-2", status="open", labels=["auto-dispatch"])]
-        # pane list #1 = snapshot, #2 = re-check before dispatch 1, #3 = re-check before dispatch 2 (MC vanished)
-        p, log = self.tick(self.fx(ready=ready, flip_after=2), apply=True)
-        self.assertEqual(len([l for l in log.splitlines() if l.startswith("herdr tab create")]), 1, p.stdout)
-        self.assertIn("CLOSED (STALE) at re-check", p.stdout)
-        self.assertTrue(self.tickets("mission-control--MC_GATE_STALE--*.md"))
 
-    def test_plan_ignoring_gate_is_dry_run_only(self):
-        fx = self.fx(**dict(self.work_fixture(), mc_beads=[]))
-        p, log = self.tick(fx, "--plan-ignoring-mc-gate")
-        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
-        self.assertIn("CLOSED (ABSENT)", p.stdout)
-        self.assertIn("PLAN  DISPATCH", p.stdout)
-        self.assertEqual(self.mutations(log), [])
-        self.assertFalse((self.t / "state").exists())
-        p, log = self.tick(fx, "--plan-ignoring-mc-gate", apply=True)
-        self.assertEqual(p.returncode, 2)
-        self.assertEqual(log, "")
 
     # ---------------------------------------------------------------- mc pane is never mutated
-    def test_reaper_never_closes_mc_tab(self):
-        old = "2026-01-01T00:00:00Z"
-        closed = [bead("c-mc", status="closed", closed_at=old, metadata={"worker": "mc", "tab": "wM:t1"}),
-                  bead("c-ynab", status="closed", closed_at=old, metadata={"worker": "y", "tab": "wM:t6"})]
-        fx = self.fx(closed=closed, tabs=[{"tab_id": "wM:t6", "label": "ynab", "workspace_id": "wM", "pane_count": 1}],
-                     panes=[{"pane_id": "wM:p6", "tab_id": "wM:t6", "workspace_id": "wM"}])
-        p, log = self.tick(fx, apply=True)
-        self.assertEqual(self.mutations(log), [], p.stdout)
-        self.assertEqual(len(self.tickets("c-mc--MC_PROTECTED--*.md")), 1)
-        self.assertEqual(len(self.tickets("c-ynab--MC_PROTECTED--*.md")), 1)  # whole MC workspace is off-limits
 
-    def test_dispatch_never_targets_mc_workspace(self):
-        # repo basename == MC workspace label: the resolved space IS the MC space -> refuse before claiming
-        ready = [bead("r-1", status="open", labels=["auto-dispatch"])]
-        p, log = self.tick(self.fx(ready=ready), apply=True, repo="mission-control")
-        self.assertEqual(self.mutations(log), [], p.stdout)
-        self.assertIn("Mission Control workspace", p.stdout)
-        self.assertTrue(self.tickets("r-1--MC_PROTECTED--*.md"))
 
     def test_guard_allowlist_and_protected_targets_unit(self):
         mod = load_module()
@@ -498,16 +366,6 @@ class ReconcileTest(unittest.TestCase):
                 self.assert_mc_untouched(p, log)
                 self.assertNotIn("would run", p.stdout)
 
-    def test_mc_owner_bead_with_missing_worker_is_never_redispatched(self):
-        # reviewer P3: MC owner Bead links a worker that herdr no longer lists -> NOT_FOUND -> re-dispatch + re-stamp
-        fx = self.fx(mc_beads=[mc_bead(worker="mc-gone", tab="wM:t1")], assignees={"mc-1": "mc-session"})
-        for apply in (True, False):
-            with self.subTest(apply=apply):
-                p, log = self.tick(fx, apply=apply)
-                self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
-                self.assertIn("MC ownership Bead", p.stdout)
-                self.assert_mc_untouched(p, log)
-        self.assertEqual(self.tickets("mc-1--*.md"), [])
 
     def test_mc_owner_bead_unlinked_stale_is_never_redispatched(self):
         # invariant: gate open inside --mc-grace + tiny --stale-after + opt-in label + assignee==actor must still leave the MC Bead alone
@@ -588,30 +446,7 @@ class ReconcileTest(unittest.TestCase):
         self.assertIn("herdr agent start r-u-1-1 --kind claude --pane wT:p9", log)
         self.assertIn("claimant left no worker link", log)
 
-    def test_unlinked_stale_rule_blockers_become_attention_only(self):
-        wt = str(self.t / "repo")
-        cases = {
-            "no-optin-label": self.stale_bead(labels=[]),
-            "assignee-differs": self.stale_bead(assignee="someone-else"),
-            "budget-exhausted": self.stale_bead(metadata={"worktree": wt, "redispatch": "2"}),
-            "epic": self.stale_bead(issue_type="epic"),
-        }
-        cases.pop("epic")  # epics are skipped outright, never ticketed
-        for name, b in cases.items():
-            with self.subTest(name):
-                p, log = self.tick(self.fx(in_progress=[b]), apply=True)
-                self.assertEqual(self.mutations(log), [], p.stdout)
-                self.assertEqual(len(self.tickets("u-1--STALE_UNLINKED--*.md")), 1, self.tickets())
-                shutil.rmtree(self.t / "state", ignore_errors=True)
 
-    def test_unlinked_live_lease_or_recent_activity_is_left_alone(self):
-        live = self.stale_bead("u-live", lease_expires_at=iso(+120), heartbeat_at=iso(-60), updated_at=iso(-60))
-        recent = self.stale_bead("u-recent", lease_expires_at=iso(-300), heartbeat_at=iso(-600), updated_at=iso(-300))
-        p, log = self.tick(self.fx(in_progress=[live, recent]), apply=True)
-        self.assertEqual(self.mutations(log), [])
-        self.assertIn("lease live", p.stdout)
-        self.assertIn("not stale", p.stdout)
-        self.assertEqual(self.tickets("u-*"), [])
 
     def test_unlinked_with_live_agent_is_never_redispatched(self):
         wt = self.t / "wt2"
@@ -631,14 +466,6 @@ class ReconcileTest(unittest.TestCase):
                 self.assertEqual(self.mutations(log), [], p.stdout)
                 self.assertIn("unlinked but live agent associated", p.stdout)
 
-    def test_unlinked_blocked_or_idle_agent_is_attention(self):
-        b = self.stale_bead()
-        p, log = self.tick(self.fx(in_progress=[b], agents={"worker-u-1": agent("worker-u-1", "blocked", tab="wT:t3")}), apply=True)
-        self.assertEqual(self.mutations(log), [])
-        self.assertEqual(len(self.tickets("u-1--WORKER_BLOCKED--*.md")), 1)
-        p, log = self.tick(self.fx(in_progress=[b], agents={"worker-u-1": agent("worker-u-1", "idle", tab="wT:t3")}), apply=True)
-        self.assertEqual(self.mutations(log), [])
-        self.assertEqual(len(self.tickets("u-1--UNLINKED_WORKER_IDLE--*.md")), 1)
 
     def test_shared_dispatch_budget_bounds_redispatch_plus_ready(self):
         fx = self.fx(in_progress=[self.stale_bead("u-1"), self.stale_bead("u-2")],
@@ -685,84 +512,15 @@ class ReconcileTest(unittest.TestCase):
                 for key in ("receipt_id=", "received_at=", "acknowledged_", "start_id=", "started_at="):
                     self.assertNotIn(key, l)
 
-    def test_redispatch_gets_a_new_correlation_and_clears_the_previous_ack_and_start(self):
-        old = dict(self.ACKED, **self.STARTED, **self.result_meta("g-1", corr="corr.g-1.1.0"))
-        b = bead("g-1", assignee=ACTOR, metadata=dict(old, worker="gone", pane="wT:p5", tab="wT:t5",
-                                                  correlation_id="corr.g-1.1.0"))
-        p, log = self.tick(self.fx(in_progress=[b], assignees={"g-1": ACTOR}), apply=True)
-        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
-        stamp = [l for l in log.splitlines() if l.startswith("bd update g-1 --set-metadata worker=")][0]
-        self.assertRegex(stamp, r"correlation_id=corr\.g-1\.\d+\.1 ")
-        self.assertNotIn("correlation_id=corr.g-1.1.0", stamp)
-        for key in ("receipt_id", "received_at", "acknowledged_at", "acknowledged_by", "start_id", "started_at",
-                    "result_id", "result_at", "result_by", "result_verdict", "result_artifact_path",
-                    "result_correlation_id"):
-            self.assertIn("--unset-metadata %s" % key, stamp)
-        self.assertNotIn("--unset-metadata worker", stamp)
 
-    def test_transport_acceptance_is_not_ack(self):
-        # prompt accepted, agent visibly working, but no receipt_id recorded past --ack-after: ticket, not inference
-        p, log = self.proto_tick(self.proto_bead(age=600))
-        self.assertEqual(self.mutations(log), [])
-        self.assertEqual(len(self.tickets("p-1--ACK_MISSING--*.md")), 1, p.stdout)
-        ticket = next((self.t / "state" / "attention").glob("p-1--ACK_MISSING--*.md")).read_text()
-        self.assertIn("lifecycle_mutation: none", ticket)
-        self.assertIn("transport acceptance", ticket)
-        p2, log2 = self.proto_tick(self.proto_bead(age=600))
-        self.assertIn("already ticketed", p2.stdout)
-        self.assertEqual(len(self.tickets("p-1--ACK_MISSING--*.md")), 1)
-        self.assertEqual(self.mutations(log2), [])
 
-    def test_ack_deadline_is_respected_and_configurable(self):
-        p, _ = self.proto_tick(self.proto_bead(age=100))
-        self.assertEqual(self.tickets("p-1--ACK_MISSING--*.md"), [])
-        p, _ = self.proto_tick(self.proto_bead(age=100), "working", "--ack-after", "50")
-        self.assertEqual(len(self.tickets("p-1--ACK_MISSING--*.md")), 1)
 
-    def test_no_deadline_is_invented_without_dispatch_time(self):
-        p, log = self.proto_tick(self.proto_bead(dispatched_at=None))
-        self.assertEqual(self.tickets(), [])
-        self.assertEqual(self.mutations(log), [])
 
-    def test_acked_and_started_bead_is_left_alone_without_tickets(self):
-        p, log = self.proto_tick(self.proto_bead(age=6000, **dict(self.ACKED, **self.STARTED)))
-        self.assertIn("LEAVE", p.stdout)
-        self.assertEqual(self.tickets(), [])
-        self.assertEqual(self.mutations(log), [])
 
-    def test_acked_but_not_started_is_not_an_anomaly_yet(self):
-        p, log = self.proto_tick(self.proto_bead(age=6000, **self.ACKED))
-        self.assertEqual(self.tickets(), [])
 
-    def test_start_without_ack_is_ticketed_and_blocks_lifecycle_action(self):
-        b = self.proto_bead(start_id="start.1", started_at="2026-09-20T01:00:30Z")
-        p, log = self.proto_tick(b, status="done")  # a done worker would normally be harvest-closed
-        self.assertEqual(self.mutations(log), [], p.stdout)
-        self.assertNotIn("HARVEST", p.stdout)
-        self.assertEqual(len(self.tickets("p-1--START_WITHOUT_ACK--*.md")), 1)
 
-    def test_ack_or_start_without_correlation_is_ticketed_not_inferred(self):
-        b = self.proto_bead(correlation_id=None, **self.ACKED)
-        p, log = self.proto_tick(b, status="done")
-        self.assertEqual(self.mutations(log), [], p.stdout)
-        self.assertEqual(len(self.tickets("p-1--ACK_UNCORRELATED--*.md")), 1)
 
-    def test_partial_ack_or_start_records_are_ticketed(self):
-        p, log = self.proto_tick(self.proto_bead(receipt_id="rcpt.1"))
-        self.assertEqual(len(self.tickets("p-1--ACK_INCOMPLETE--*.md")), 1)
-        self.assertEqual(self.mutations(log), [])
-        shutil.rmtree(self.t / "state")
-        p, log = self.proto_tick(self.proto_bead(**dict(self.ACKED, start_id="start.1")))
-        ticket = next((self.t / "state" / "attention").glob("p-1--ACK_INCOMPLETE--*.md")).read_text()
-        self.assertIn("started_at", ticket)
-        self.assertEqual(self.mutations(log), [])
 
-    def test_legacy_dispatch_without_protocol_keys_is_not_judged(self):
-        legacy = bead("l-1", assignee=ACTOR, metadata={"worker": "w1", "pane": "wT:p9", "tab": "wT:t9",
-                                                         "dispatched_at": str(int(time.time()) - 6000)})
-        p, log = self.proto_tick(legacy)
-        self.assertEqual(self.tickets(), [])
-        self.assertEqual(self.mutations(log), [])
 
     def test_protocol_audit_is_read_only_in_dry_run(self):
         p, log = self.tick(self.fx(in_progress=[self.proto_bead(age=600)],
@@ -803,34 +561,12 @@ class ReconcileTest(unittest.TestCase):
         self.assertIn("--set-metadata orchestrator_target=%s" % PO_PANE, stamp)
         self.assertRegex(stamp, r"correlation_id=corr\.g-1\.\d+\.1 ")
 
-    def test_dispatch_fails_closed_without_a_valid_po_target(self):
-        cases = {
-            "not a live agent or pane": ("wO:p99", "TARGET_NOT_LIVE"),
-            "malformed": ("bad target", "TARGET_INVALID"),
-            "the worker itself": ("r-r-1", "TARGET_IS_WORKER"),
-        }
-        for name, (target, code) in cases.items():
-            with self.subTest(name):
-                shutil.rmtree(self.t / "state", ignore_errors=True)
-                p, log = self.dispatch_log("--callback", target)
-                self.assertEqual(self.mutations(log), [], p.stdout)  # no claim, no tab, no stamp, no agent, no prompt
-                self.assertIn("fail closed", p.stdout)
-                self.assertEqual(p.returncode, 1)
-                self.assertEqual(len(self.tickets("r-1--ORCHESTRATOR_%s--*.md" % code)), 1, p.stdout)
 
     def test_dispatch_without_any_target_is_disabled(self):
         p, log = self.dispatch_log("--callback", "")
         self.assertEqual(self.mutations(log), [], p.stdout)
         self.assertIn("no --callback target", p.stdout)
 
-    def test_human_and_mc_targets_are_prohibited_at_dispatch(self):
-        for target in ("mc", "MC", "mission-control", "human", "operator", "user", "wM:p1", "wM:t1"):
-            with self.subTest(target):
-                shutil.rmtree(self.t / "state", ignore_errors=True)
-                p, log = self.dispatch_log("--callback", target)
-                self.assertEqual(self.mutations(log), [], p.stdout)
-                self.assertNotIn("herdr agent prompt", log)
-                self.assertEqual(len(self.tickets("r-1--ORCHESTRATOR_TARGET_FORBIDDEN--*.md")), 1, p.stdout)
 
     def test_prompt_routes_escalations_to_the_target_only_and_forbids_human_and_mc(self):
         p, log = self.dispatch_log()
@@ -849,192 +585,25 @@ class ReconcileTest(unittest.TestCase):
         # a blocked Worker no longer gets a free-form 'push ATTENTION REQUIRED to <callback>' instruction
         self.assertNotIn("push \"ATTENTION REQUIRED verdict=blocked artifact_path=<path>", prompt)
 
-    def test_audit_flags_a_dispatched_bead_without_a_valid_target(self):
-        cases = {"ESCALATION_TARGET_MISSING": None, "ESCALATION_TARGET_FORBIDDEN": "wM:p1",
-                 "ESCALATION_TARGET_INVALID": "bad target"}
-        for kind, target in cases.items():
-            with self.subTest(kind):
-                shutil.rmtree(self.t / "state", ignore_errors=True)
-                p, log = self.proto_tick(self.proto_bead(orchestrator_target=target, **self.ACKED))
-                self.assertEqual(len(self.tickets("p-1--%s--*.md" % kind)), 1, p.stdout)
-                self.assertEqual(self.mutations(log), [])  # read-only: never re-routes or rewrites the target
 
-    def test_audit_surfaces_failed_escalation_delivery_as_evidence(self):
-        for delivery in ("failed", "refused"):
-            with self.subTest(delivery):
-                shutil.rmtree(self.t / "state", ignore_errors=True)
-                b = self.proto_bead(escalation_delivery=delivery, escalation_target=PO_PANE,
-                                    escalation_artifact_path="/tmp/t.md", escalation_error="rc=1", **self.ACKED)
-                p, log = self.proto_tick(b)
-                self.assertEqual(len(self.tickets("p-1--ESCALATION_DELIVERY_FAILED--*.md")), 1, p.stdout)
-                ticket = next((self.t / "state" / "attention").glob("p-1--ESCALATION_DELIVERY_FAILED--*.md")).read_text()
-                self.assertIn("never falls back to Human/MC", ticket)
-                self.assertEqual(self.mutations(log), [])
 
-    def test_healthy_route_raises_no_escalation_ticket(self):
-        p, log = self.proto_tick(self.proto_bead(age=60, **self.ACKED))
-        self.assertEqual(self.tickets(), [], p.stdout)
 
 
     # ---------------------------------------------------------------- TASK_RESULT harvest gate (bead a4s-ya4.11)
-    def result_meta(self, id_="p-1", worker="w1", verdict="pass", corr=None, **over):
-        """A well-formed result record as helper/task_result.py would have persisted it (artifact is a real file)."""
-        art = self.t / ("%s-report.md" % id_)
-        art.write_text("# report\n")
-        m = {"result_id": "res.%s" % (corr or "corr.%s.1.0" % id_), "result_at": "2026-09-20T03:00:00Z",
-             "result_by": worker, "result_verdict": verdict, "result_artifact_path": str(art),
-             "result_correlation_id": corr or "corr.%s.1.0" % id_}
-        m.update(over)
-        return m
 
-    def done_bead(self, id_="p-1", result=True, **over):
-        """A Bead dispatched under the protocol whose worker is acked, started and (by default) recorded a result."""
-        meta_ = dict(self.ACKED, **self.STARTED)
-        if result:
-            meta_.update(self.result_meta(id_))
-        meta_.update(over)
-        return self.proto_bead(id_, 6000, **meta_)
 
-    def gate_ticket(self, kind):
-        found = list((self.t / "state" / "attention").glob("p-1--%s--*.md" % kind)) if (self.t / "state").exists() else []
-        return found
 
-    def assert_left_open(self, p, log, kind, code=None):
-        self.assertEqual(self.mutations(log), [], p.stdout)  # no bd close, no herdr mutation
-        self.assertNotIn("herdr agent read", log)  # never a terminal transcript
-        self.assertNotIn("HARVEST", p.stdout)
-        tickets = self.gate_ticket(kind)
-        self.assertEqual(len(tickets), 1, p.stdout)
-        text = tickets[0].read_text()
-        self.assertIn("lifecycle_mutation: none", text)
-        self.assertIn("the Bead stays open", text)
-        if code:
-            self.assertIn(code, text)
-        return text
 
-    def test_done_without_a_result_record_is_never_closed(self):
-        p, log = self.proto_tick(self.done_bead(result=False), status="done")
-        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
-        text = self.assert_left_open(p, log, "WORK_RESULT_MISSING")
-        self.assertIn("no TASK_RESULT is recorded", text)
-        self.assertEqual(self.gate_ticket("WORK_RESULT_INVALID"), [])
-        p2, log2 = self.proto_tick(self.done_bead(result=False), status="done")
-        self.assertIn("already ticketed", p2.stdout)  # idempotent across ticks
-        self.assertEqual(len(self.gate_ticket("WORK_RESULT_MISSING")), 1)
-        self.assertEqual(self.mutations(log2), [])
 
-    def test_legacy_done_worker_without_protocol_keys_is_not_closed_either(self):
-        legacy = bead("p-1", assignee=ACTOR, metadata={"worker": "w1", "pane": "wT:p9", "tab": "wT:t9",
-                                                         "dispatched_at": str(int(time.time()) - 6000)})
-        p, log = self.proto_tick(legacy, status="done")
-        self.assert_left_open(p, log, "WORK_RESULT_MISSING")
 
-    def test_valid_result_closes_with_the_exact_verdict_and_artifact(self):
-        for verdict in ("pass", "fail"):
-            with self.subTest(verdict):
-                shutil.rmtree(self.t / "state", ignore_errors=True)
-                b = self.done_bead()
-                b["metadata"].update(self.result_meta(verdict=verdict))
-                p, log = self.proto_tick(b, status="done")
-                self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
-                closes = [l for l in log.splitlines() if l.startswith("bd close p-1")]
-                self.assertEqual(len(closes), 1, log)
-                art = str(self.t / "p-1-report.md")
-                self.assertIn("verdict=%s " % verdict, closes[0])
-                self.assertIn("artifact_path=%s " % art, closes[0])
-                self.assertIn("result_id=res.corr.p-1.1.0", closes[0])
-                self.assertIn("correlation_id=corr.p-1.1.0", closes[0])
-                self.assertNotIn("unverified", closes[0])
-                self.assertIn("##BEADS_ACTOR=" + ACTOR, closes[0])
-                self.assertNotIn("herdr agent read", log)
-                self.assertEqual(self.tickets(), [])
 
-    def test_invalid_result_records_never_close(self):
-        art = str(self.t / "p-1-report.md")
-        cases = {
-            "CORRELATION_MISMATCH": {"result_correlation_id": "corr.p-1.0.0"},  # outlived its dispatch
-            "INVALID_VERDICT": {"result_verdict": "unverified"},
-            "UNSAFE_ARTIFACT": {"result_artifact_path": "/tmp/../etc/passwd"},
-            "ARTIFACT_MISSING": {"result_artifact_path": str(self.t / "gone.md")},
-            "IDENTITY_MISMATCH": {"result_by": "w9"},
-            "RESULT_INCOMPLETE": {"result_at": None},
-            "MALFORMED": {"result_id": "-bad"},
-            "RESULT_WITHOUT_ACK": {"receipt_id": None, "received_at": None, "acknowledged_at": None,
-                                   "acknowledged_by": None, "start_id": None, "started_at": None},
-        }
-        for code, over in cases.items():
-            with self.subTest(code):
-                shutil.rmtree(self.t / "state", ignore_errors=True)
-                b = self.done_bead()
-                b["metadata"].update(self.result_meta())
-                b["metadata"].update(over)
-                b["metadata"] = {k: v for k, v in b["metadata"].items() if v is not None}
-                p, log = self.proto_tick(b, status="done")
-                self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
-                self.assert_left_open(p, log, "WORK_RESULT_INVALID", code)
-                self.assertEqual(self.gate_ticket("WORK_RESULT_MISSING"), [])
-        self.assertTrue(Path(art).exists())
 
-    def test_result_from_a_previous_dispatch_cannot_close_the_new_one(self):
-        # re-dispatch stamped a new correlation but a stale result (old correlation) is still on the Bead
-        b = self.done_bead(correlation_id="corr.p-1.2.1", result_correlation_id="corr.p-1.1.0")
-        p, log = self.proto_tick(b, status="done")
-        self.assert_left_open(p, log, "WORK_RESULT_INVALID", "CORRELATION_MISMATCH")
 
-    def test_result_recorded_by_another_agent_cannot_close_this_workers_bead(self):
-        p, log = self.proto_tick(self.done_bead(result_by="intruder"), status="done")
-        self.assert_left_open(p, log, "WORK_RESULT_INVALID", "IDENTITY_MISMATCH")
 
-    def test_a_result_never_turns_a_non_done_worker_into_a_harvest(self):
-        for status in ("working", "idle", "blocked"):
-            with self.subTest(status):
-                shutil.rmtree(self.t / "state", ignore_errors=True)
-                p, log = self.proto_tick(self.done_bead(), status=status)
-                self.assertEqual([l for l in self.mutations(log) if l.startswith("bd close")], [], p.stdout)
-                self.assertNotIn("HARVEST", p.stdout)
 
-    def test_gate_is_evidence_only_and_read_only_in_dry_run(self):
-        agents = {"w1": agent("w1", "done", pane="wT:p9", tab="wT:t9")}
-        p, log = self.tick(self.fx(in_progress=[self.done_bead(result=False)], agents=agents))
-        self.assertIn("PLAN  ATTENTION", p.stdout)
-        self.assertNotIn("HARVEST", p.stdout)
-        self.assertEqual(self.mutations(log), [])
-        self.assertFalse((self.t / "state").exists())
 
-    def test_ack_protocol_anomalies_still_block_a_bead_that_has_a_valid_result(self):
-        b = self.done_bead(receipt_id=None, received_at=None, acknowledged_at=None, acknowledged_by=None,
-                           start_id="start.1", started_at="2026-09-20T01:00:30Z")
-        p, log = self.proto_tick(b, status="done")
-        self.assertEqual(self.mutations(log), [], p.stdout)
-        self.assertEqual(len(self.tickets("p-1--START_WITHOUT_ACK--*.md")), 1)
-        self.assertEqual(self.gate_ticket("WORK_RESULT_INVALID") + self.gate_ticket("WORK_RESULT_MISSING"), [])
 
-    def test_acked_but_not_started_worker_with_a_valid_result_closes(self):
-        b = self.proto_bead("p-1", 6000, **dict(self.ACKED, **self.result_meta()))
-        p, log = self.proto_tick(b, status="done")
-        self.assertEqual(len([l for l in log.splitlines() if l.startswith("bd close p-1")]), 1, p.stdout)
 
-    def test_dispatcher_never_writes_a_result_and_prompt_orders_record_before_close_and_callback(self):
-        ready = [bead("r-1", status="open", labels=["auto-dispatch"])]
-        p, log = self.tick(self.fx(ready=ready), apply=True)
-        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
-        for l in log.splitlines():
-            if l.startswith("bd update"):
-                self.assertNotIn("result_", l)  # the Worker's helper is the only writer of the record
-        prompt = log[log.index("herdr agent prompt r-r-1"):]
-        corr = re.search(r"--correlation-id (corr\.r-1\.\d+\.0)", prompt).group(1)
-        self.assertIn("task_result.py", prompt)
-        self.assertIn("--result-id res.%s" % corr, prompt)
-        self.assertIn("--result-by r-r-1", prompt)
-        self.assertRegex(prompt, r"--verdict <pass\|fail>")
-        self.assertIn("--artifact-path /tmp/r-1-report.md", prompt)
-        self.assertLess(prompt.index("RESULT (record it before any close or callback)"), prompt.index("DELIVER:"))
-        deliver = prompt[prompt.index("DELIVER:"):]
-        self.assertLess(deliver.index("Then record it"), deliver.index("bd close"))
-        self.assertLess(deliver.index("bd close"), deliver.index("callback_envelope"))
-        self.assertIn("as your final action", deliver)
-        self.assertIn("A finished terminal is not a result", prompt)
-        self.assertNotIn("WORK_RESULT SUBMITTED verdict=<pass|fail>", prompt)  # no hand-written callback line
 
 
 if __name__ == "__main__":

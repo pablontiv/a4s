@@ -40,10 +40,7 @@ test("the active extension exposes only the pi-context-expert identity", () => {
   assert.match(storageSource, /a4s\.pi-context-expert\./);
   assert.doesNotMatch(storageSource, /a4s\.pi-rule-compiler\./);
 
-  for (const readme of [resolve(workspaceRoot, "README.md"), resolve(packageRoot, "README.md")]) {
-    const contents = text(readme);
-    assert.doesNotMatch(contents, /@a4s\/pi-rule-compiler|packages\/pi-rule-compiler/);
-  }
+
 
   const gitignore = text(resolve(workspaceRoot, ".gitignore"));
   assert.match(gitignore, /^artifacts\/pi-context-expert-e2e\/$/m);

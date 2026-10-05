@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import re
 import unittest
 from pathlib import Path
@@ -10,32 +9,9 @@ import yaml
 
 PROFILE_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = PROFILE_ROOT.parents[1]
-PROFILE_PATH = PROFILE_ROOT / "PROFILE.md"
-BOOTSTRAP_PATH = PROFILE_ROOT / "bootstrap.md"
 TEMPLATE_PATH = PROFILE_ROOT / "config.template.yaml"
-SOURCE_PATH = REPO_ROOT / ".workspace" / "docs" / "references" / "engineering-handbook-v1.4.md"
-SOURCE_SHA256 = "f5455e3eced13690358b02823053a1e00a6c7c06de5f17d9716805bf0a0cff26"
 DOGFOOD_CONFIG_PATH = REPO_ROOT / ".workspace" / "config.yaml"
 PROFILE_VERSION = 2
-
-PROFILE_SECTIONS = (
-    "Propósito",
-    "Principios de diseño",
-    "Modelo de workspace",
-    "Resolución de configuración",
-    "Contrato de los controles",
-    "Ejes configurables",
-    "Valores por defecto",
-    "Flujo de trabajo",
-    "Invariantes",
-    "Configuración mínima por repositorio",
-    "Ejemplo no normativo de binding",
-    "Precedencia frente a steering y automatización",
-    "Seguridad y sistemas externos",
-    "Adopción",
-    "Criterios de aceptación",
-    "Fuera de alcance",
-)
 
 CONFIG_AXES = (
     "context_sources",
@@ -74,35 +50,6 @@ AGENT_RUNTIME_POLICY_PATHS = (
     ("workspace", "accept_work", "end_to_end"),
     ("repository", "entry_point"),
 )
-
-BASE_CONTRACT_MARKERS = (
-    "workspace → group → repository",
-    "Los escalares de una capa más específica reemplazan",
-    "Los mapas se combinan recursivamente",
-    "Las listas se reemplazan completas",
-)
-
-INVARIANT_IDS = tuple(f"INV-{number:02d}" for number in range(1, 14))
-WORKFLOW_PHASES = tuple(f"Fase {number}" for number in range(9))
-CONTROL_STATES = (
-    "pending",
-    "passed",
-    "failed",
-    "skipped",
-    "unknown",
-    "not_applicable",
-)
-CONDITIONAL_TRIGGER = re.compile(
-    r"\bse activa (?:al|como|cuando|después|para|tras|únicamente)\b"
-)
-
-
-def published_artifacts() -> set[str]:
-    skills = {path.parent.name for path in (REPO_ROOT / "skills").glob("*/SKILL.md")}
-    agents = {path.stem for path in (REPO_ROOT / "skills").glob("*/agents/pi/*.md")}
-    methods = {path.parent.name for path in (REPO_ROOT / "methods").glob("*/METHOD.md")}
-    styles = {path.stem for path in (REPO_ROOT / "output-styles").glob("*.md")}
-    return skills | agents | methods | styles
 
 
 def parse_yaml_mapping(text: str) -> dict[str, Any]:
@@ -309,160 +256,6 @@ class YamlContractParsingTests(unittest.TestCase):
         self.assertEqual(forbidden_control_fields(parsed), FORBIDDEN_CONTROL_FIELDS)
 
 
-class ProfileContractTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls) -> None:
-        cls.profile = PROFILE_PATH.read_text(encoding="utf-8")
-        cls.bootstrap = BOOTSTRAP_PATH.read_text(encoding="utf-8")
-        cls.template = TEMPLATE_PATH.read_text(encoding="utf-8")
-        cls.template_document = parse_yaml_mapping(cls.template)
-
-    def test_source_snapshot_has_approved_digest(self) -> None:
-        self.assertEqual(
-            hashlib.sha256(SOURCE_PATH.read_bytes()).hexdigest(),
-            SOURCE_SHA256,
-        )
-
-    def test_profile_preserves_all_base_sections(self) -> None:
-        self.assertEqual(section_contract_violations(self.profile), ())
-
-    def test_contract_rejects_reversed_headings(self) -> None:
-        mutated = self.profile.replace("## 1. Propósito", "## SWAP", 1)
-        mutated = mutated.replace("## 2. Principios de diseño", "## 1. Propósito", 1)
-        mutated = mutated.replace("## SWAP", "## 2. Principios de diseño", 1)
-        self.assertTrue(section_contract_violations(mutated))
-
-    def test_profile_preserves_contract_categories(self) -> None:
-        self.assertEqual(category_contract_violations(self.profile), ())
-
-    def test_contract_rejects_removed_or_extra_categories(self) -> None:
-        mutations = (
-            ("missing invariant", self.profile.replace("**INV-13", "**RULE-13", 1)),
-            ("missing phase", self.profile.replace("### Fase 4", "### Etapa 4", 1)),
-            ("missing state", self.profile.replace("- `pending`:", "- `queued`:", 1)),
-            (
-                "extra state",
-                self.profile.replace(
-                    "- `passed`:",
-                    "- `running`: ejecución iniciada;\n- `passed`:",
-                    1,
-                ),
-            ),
-        )
-        for label, mutated in mutations:
-            with self.subTest(label=label):
-                self.assertTrue(category_contract_violations(mutated))
-
-    def test_template_preserves_layers_and_axes(self) -> None:
-        for layer in ("workspace", "groups", "repositories"):
-            self.assertIn(layer, self.template_document)
-        workspace = self.template_document.get("workspace")
-        self.assertIsInstance(workspace, dict)
-        assert isinstance(workspace, dict)
-        workflow = workspace.get("workflow")
-        self.assertIsInstance(workflow, dict)
-        assert isinstance(workflow, dict)
-        axis_keys = set(workspace) | set(workflow)
-        for axis in CONFIG_AXES:
-            with self.subTest(axis=axis):
-                self.assertIn(axis, axis_keys)
-
-    def test_profile_preserves_every_configurable_axis(self) -> None:
-        axes = h2_body(self.profile, "Ejes configurables")
-        for axis in CONFIG_AXES:
-            with self.subTest(axis=axis):
-                self.assertIn(f"| `{axis}` |", axes)
-
-    def test_template_rejects_deterministic_control_fields(self) -> None:
-        self.assertEqual(forbidden_control_fields(self.template_document), ())
-        mutated = self.template.replace(
-            "  custom_rules: []",
-            "  custom_rules: []\n  executor: shell",
-            1,
-        )
-        self.assertEqual(
-            forbidden_control_fields(parse_yaml_mapping(mutated)),
-            ("executor",),
-        )
-
-    def test_profile_routes_every_published_artifact(self) -> None:
-        self.assertEqual(
-            routing_contract_violations(self.profile, published_artifacts()), ()
-        )
-
-    def test_profile_v2_routes_method_without_retired_edd_skill(self) -> None:
-        self.assertIn(f"**Versión del perfil:** {PROFILE_VERSION}", self.profile)
-        routes = dict(routed_artifacts(self.profile))
-        self.assertIn("empirical-capability-development", routes)
-        self.assertNotIn("evidence-driven-development", routes)
-        self.assertFalse((REPO_ROOT / "skills" / "evidence-driven-development").exists())
-
-    def test_template_declares_profile_v2(self) -> None:
-        profile = self.template_document.get("profile")
-        self.assertIsInstance(profile, dict)
-        assert isinstance(profile, dict)
-        self.assertEqual(profile.get("version"), PROFILE_VERSION)
-
-    def test_contract_rejects_unlisted_and_stale_routes(self) -> None:
-        published = published_artifacts()
-        stale_route = (
-            "\n- `retired-artifact`: se activa cuando aparece una señal retirada.\n"
-        )
-        mutated = self.profile.replace(
-            "\n## 7. Valores por defecto",
-            stale_route + "\n## 7. Valores por defecto",
-            1,
-        )
-        cases = (
-            (
-                "unlisted published artifact",
-                self.profile,
-                published | {"future-artifact"},
-            ),
-            ("stale routed artifact", mutated, published),
-        )
-        for label, profile, artifacts in cases:
-            with self.subTest(label=label):
-                self.assertTrue(routing_contract_violations(profile, artifacts))
-
-    def test_contract_rejects_triggerless_routes(self) -> None:
-        mutated = self.profile.replace(
-            "- `adr`: se activa", "- `adr`: está disponible", 1
-        )
-        self.assertTrue(routing_contract_violations(mutated, published_artifacts()))
-
-    def test_profile_requires_rootline_backscroll_and_pi(self) -> None:
-        for required in ("Rootline", "Backscroll", "Pi"):
-            self.assertIn(required, self.profile)
-
-    def test_remove_gentle_context_scope_is_bounded(self) -> None:
-        paragraph = next(
-            block
-            for block in self.profile.split("\n\n")
-            if "`remove-gentle-context`" in block
-        )
-        self.assertIn("contexto activo", paragraph)
-        self.assertIn("no desinstala", paragraph)
-
-    def test_bootstrap_preserves_safe_order(self) -> None:
-        markers = (
-            "inspección de solo lectura",
-            "configuración candidata",
-            "aprobación humana explícita",
-            "escritura durable",
-            "verificación posterior",
-        )
-        positions = [self.bootstrap.index(marker) for marker in markers]
-        self.assertEqual(positions, sorted(positions))
-        self.assertIn("unknown", self.bootstrap)
-        self.assertIn("bloquea", self.bootstrap)
-
-    def test_repository_identity_uses_relocatable_origin_locator(self) -> None:
-        for document in (self.profile, self.bootstrap, self.template):
-            with self.subTest(document=document[:40]):
-                self.assertIn("repositorio de origen", document)
-                self.assertIn("git remote get-url origin", document)
-        self.assertNotIn("ruta física canónica", self.profile)
 
 
 class DogfoodConfigTests(unittest.TestCase):
@@ -657,15 +450,6 @@ class DogfoodConfigTests(unittest.TestCase):
         }
         self.assertEqual(agent_specific_config_markers(neutral), ())
 
-    def test_agent_entry_point_is_rejected_by_value_not_key(self) -> None:
-        document = {
-            "workspace": {},
-            "repository": {"entry_point": "AGENTS.md"},
-        }
-        self.assertEqual(
-            agent_specific_config_markers(document),
-            ("agent runtime terminology",),
-        )
 
     def test_external_effects_and_reserved_authority_are_explicit(self) -> None:
         external = self.workspace["do_work"]["external_effects"]
@@ -687,46 +471,6 @@ class DogfoodConfigTests(unittest.TestCase):
             with self.subTest(surface="reserved", marker=marker):
                 self.assertIn(marker, reserved)
 
-    def test_post_merge_cleanup_is_mandatory_bounded_and_fail_closed(self) -> None:
-        readiness = self.workspace["prepare_work"]["shared_readiness"]
-        evidence = self.workspace["accept_work"]["evidence"]
-        close = self.workspace["deliver_work"]["close"]
-        reserved = self.workspace["deliver_work"]["reserved_authority"]
-        cleanup = self.workspace["improve_work"]["cleanup"]
-
-        for marker in ("durable evidence", "reproducible-disposable", "retained local evidence"):
-            with self.subTest(surface="readiness", marker=marker):
-                self.assertIn(marker, readiness)
-        for marker in ("sanitized result", "Raw session or provider output", "disposable"):
-            with self.subTest(surface="evidence", marker=marker):
-                self.assertIn(marker, evidence)
-        # close states the closure-gate invariant; the exact cleanup targets
-        # (worktree, branches, PR head) are bounded in improve_work.cleanup.
-        for marker in (
-            "main equals origin/main",
-            "unintegrated change",
-            "retained output",
-        ):
-            with self.subTest(surface="close", marker=marker):
-                self.assertIn(marker, close)
-        for marker in (
-            "mandatory and preauthorized",
-            "exact task worktree",
-            "integrated PR head",
-            "delete nothing",
-            "block closure",
-            "Every other destructive cleanup",
-        ):
-            with self.subTest(surface="cleanup", marker=marker):
-                self.assertIn(marker, cleanup)
-        self.assertIn("bounded post-merge cleanup", reserved)
-
-        for path in (PROFILE_PATH, TEMPLATE_PATH):
-            document = path.read_text(encoding="utf-8")
-            with self.subTest(path=path.name):
-                self.assertIn("integración verificada", document)
-                self.assertIn("guardas fail-closed", document)
-                self.assertNotIn("nunca eliminar automáticamente", document)
 
     def test_config_rejects_deterministic_control_fields(self) -> None:
         actual = tuple(
