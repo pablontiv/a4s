@@ -1,1 +1,1 @@
-La forma de trabajo de este repositorio la define `.workspace/config.yaml`; ningún otro documento la sustituye.
+`.workspace/config.yaml` gobierna sólo el workflow y la policy locales de este repositorio. El contrato runtime aplicable de los agentes es separado y acumulativo; esta referencia no lo sustituye ni lo subordina.

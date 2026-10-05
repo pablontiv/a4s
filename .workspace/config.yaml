@@ -12,22 +12,24 @@ workspace:
   authority:
     source: >-
       This file, as integrated on the main branch, is the only normative
-      source of this repository's way of working. A rule absent from it is
-      not in force. A copy in a worktree or branch is a candidate until its
-      PR is integrated.
+      source of repository-local project-work policy. A project-work rule
+      absent from it is not in force. A copy in a worktree or branch is a
+      candidate until its PR is integrated.
     records: >-
       ADRs, specifications, plans, and reports record what was decided, when,
       and why; they do not govern. Records are append-only: an existing
       record is never edited, and a supersession is declared only in the new
       record that supersedes it.
     derived: >-
-      The profile, AGENTS.md, README, and contract tests derive from this file.
-      On conflict this file prevails and the derived artifact is corrected.
+      The profile, repository README, and repository-policy contract tests
+      derive from this file. On conflict this file prevails and the derived
+      artifact is corrected.
     mechanism: >-
       Skills and methods carry the procedure (the how and the order of the
-      work) and read their policy from this file; they add no rule of their
-      own. This file states invariants, not steps. The work-lifecycle skill
-      holds the stage-by-stage flow and its gates cite the keys below.
+      work) and read repository-local project-work policy from this file; they
+      add no repository-local project-work policy rule of their own. This file
+      states invariants, not steps. The work-lifecycle skill holds the
+      stage-by-stage flow and its gates cite the keys below.
     deviation: >-
       When an operator instruction contradicts this file, the executor names
       the affected rule and proceeds only after the operator explicitly
@@ -44,8 +46,8 @@ workspace:
       scope, reports evidence and blockers, and returns changed decisions to
       the operator.
     implementer: >-
-      Produces the assigned task result. The executor and implementer may be
-      the same person or agent.
+      Produces the assigned task result. One participant may fulfill both the
+      executor and implementer roles.
     reviewer: >-
       Checks the candidate against its acceptance criteria and applicable
       controls, independently of the implementer as accept_work.review
@@ -136,8 +138,8 @@ workspace:
         continue with independent executable tasks in scope. Stop when the
         scope has no executable work, a human decision is required, a
         finding is escalated under improve_work, a general control fails or
-        remains unknown, or the operator cancels. A status question from the
-        operator does not stop the loop.
+        remains unknown, or the operator cancels. A request from the operator
+        for progress information does not stop autonomous mode.
       common_rule: >-
         Both modes use the same readiness, acceptance, review, delivery,
         security, and external-effect controls. Permission to select work
@@ -156,14 +158,14 @@ workspace:
       establish its cause, reproduce it with a failing test, correct it, and
       obtain independent review and renewed authorization before retrying.
     credentials: >-
-      TypeSafe resolves credentials only through Pi's native provider.
-      Store other services' credentials as SOPS ciphertext under
-      .workspace/secrets/ and version public age recipient rules in
+      Resolve credentials only through each service's approved credential
+      mechanism. Store repository-managed credentials as SOPS ciphertext
+      under .workspace/secrets/ and version public age recipient rules in
       .sops.yaml. Keep the private age identity in user configuration outside
-      the repository. Decrypt only for an authorized operation; keep
-      plaintext out of Git, logs, task evidence, and durable temporary files.
-      Stop the credential-dependent action if its encrypted source or
-      decryption identity cannot be established.
+      the repository. Decrypt only for an authorized operation; keep plaintext
+      out of Git, logs, task evidence, and durable temporary files. Stop the
+      credential-dependent action if its approved source or required identity
+      cannot be established.
     knowledge: >-
       Keep decision records, specifications, plans, and durable research or
       experiment findings under .workspace/docs/, and use Rootline when
@@ -171,7 +173,6 @@ workspace:
       the same PR as the change it records. Component usage guides may live
       beside the component and must agree with this file. Keep execution
       evidence in the task record with links to versioned artifacts.
-      AGENTS.md is a one-line entry that points to this file.
     decision_records: >-
       Record an ADR for an architectural change that other components, users,
       or future tasks depend on or that is costly to reverse: a contract
@@ -185,8 +186,7 @@ workspace:
       party's expected action. Routine factual status, evidence, and closure
       updates inside an already authorized task may be published without a
       separate approval. Pull requests and their descriptions need no prior
-      approval. Publish generated text as the operator's own voice, without an
-      AI disclosure on that ground alone.
+      approval.
     history: >-
       Current sources and this file govern over episodic history; a required
       source that is unavailable remains unknown.
@@ -209,12 +209,13 @@ workspace:
       Require an end-to-end check when the task changes executable behavior
       and a safe representative entry point exists. Exercise the changed path
       in its real runtime or a non-production environment; run bundled scripts
-      as real commands. Before a skill or agent definition is released or
-      activated, invoke it in the consuming harness. During pre-release
-      development, focused contract tests may verify behavior that cannot yet
-      be activated. A pre-existing defect outside the changed path is recorded
-      separately and does not fail a bounded task unless its acceptance
-      criteria require that behavior. Documentation, research, configuration
+      as real commands. Before an executable integration is released or
+      activated, invoke its representative entry point from a consuming
+      runtime. During pre-release development, focused contract tests may
+      verify behavior that cannot yet be activated. A pre-existing defect
+      outside the changed path is recorded separately and does not fail a
+      bounded task unless its acceptance criteria require that behavior.
+      Documentation, research, configuration
       policy, and non-executable records need no end-to-end check.
     public_api: >-
       When an implementation changes a public API, updating its documentation
@@ -233,10 +234,11 @@ workspace:
     mechanism: >-
       Deliver every task's proportional, Git-versioned artifact through a
       pull request. Use conventional commits with a `Bead: <id>` trailer, and
-      run applicable checks before committing. Bot-authored PRs are exempt
-      from the trailer. A task may be integrated before its epic is complete;
-      report that distinction. If PR delivery is unavailable, preserve the
-      candidate and stop delivery; never push directly to main.
+      run applicable checks before committing. PRs authored by repository
+      automation are exempt from the trailer. A task may be integrated before
+      its epic is complete; report that distinction. If PR delivery is
+      unavailable, preserve the candidate and stop delivery; never push
+      directly to main.
     cadence: >-
       Integrate each task as soon as it is accepted. A4S does not require a
       user-global skill installation.
@@ -249,9 +251,9 @@ workspace:
       focused local evidence after verifying an equivalent patch and passing
       required CI on the new head. Use --match-head-commit when supported.
     external_prs: >-
-      A bot-authored PR, or any other PR the operator did not originate,
-      passes the same merge controls as any other PR. Process it when the
-      operator requests it or within an autonomous scope that includes it.
+      A PR the operator did not originate passes the same merge controls as
+      any other PR. Process it when the operator requests it or within an
+      autonomous scope that includes it.
       Merge it when the controls pass. If a control fails, fix the cause in
       the same PR. If required remote CI cannot run, leave the PR pending and
       report the unavailable control; do not invent an implicit exception.
@@ -276,7 +278,6 @@ workspace:
       of an epic's completion. An autonomous loop skips a blocked task and may
       continue independent authorized tasks; it never marks a blocked
       objective complete.
-    controller_identity: env:PI_SESSION_ID
   improve_work:
     change: >-
       A way-of-working finding is evidence, not new scope: escalate it only
@@ -318,4 +319,3 @@ repository:
   id: pablontiv/a4s
   url: https://github.com/pablontiv/a4s.git
   base_branch: main
-  entry_point: AGENTS.md

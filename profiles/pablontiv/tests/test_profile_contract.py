@@ -63,6 +63,17 @@ FORBIDDEN_CONTROL_FIELDS = (
     "success",
     "on_failure",
 )
+AGENT_RUNTIME_TERM_PATTERN = re.compile(
+    r"\b(?:agents?|subagents?|orchestrators?|workers?)\b",
+    re.IGNORECASE,
+)
+AGENT_RUNTIME_POLICY_PATHS = (
+    ("workspace", "authority", "derived"),
+    ("workspace", "roles", "implementer"),
+    ("workspace", "do_work", "knowledge"),
+    ("workspace", "accept_work", "end_to_end"),
+    ("repository", "entry_point"),
+)
 
 BASE_CONTRACT_MARKERS = (
     "workspace → group → repository",
@@ -118,6 +129,69 @@ def forbidden_control_fields(value: Any) -> tuple[str, ...]:
 
     visit(value)
     return tuple(field for field in FORBIDDEN_CONTROL_FIELDS if field in found)
+
+
+def agent_specific_config_markers(document: dict[str, Any]) -> tuple[str, ...]:
+    found: list[str] = []
+
+    def scalar(path: tuple[str, ...]) -> str | None:
+        node: Any = document
+        for key in path:
+            if not isinstance(node, dict):
+                return None
+            node = node.get(key)
+        if not isinstance(node, str):
+            return None
+        return node.replace("_", " ").replace("-", " ")
+
+    def mark_when(
+        label: str,
+        path: tuple[str, ...],
+        *patterns: str,
+    ) -> None:
+        text = scalar(path)
+        if text is not None and all(
+            re.search(pattern, text, re.IGNORECASE) for pattern in patterns
+        ):
+            if label not in found:
+                found.append(label)
+
+    for path in AGENT_RUNTIME_POLICY_PATHS:
+        mark_when("agent runtime terminology", path, AGENT_RUNTIME_TERM_PATTERN.pattern)
+
+    credentials_path = ("workspace", "do_work", "credentials")
+    credential_terms = r"\b(?:credentials?|authentication|provider)\b"
+    mark_when(
+        "TypeSafe credential binding",
+        credentials_path,
+        r"\bTypeSafe\b",
+        credential_terms,
+    )
+    mark_when(
+        "Pi credential binding",
+        credentials_path,
+        r"\bPi\b",
+        credential_terms,
+    )
+    mark_when(
+        "generated-text disclosure",
+        ("workspace", "do_work", "communication"),
+        r"\b(?:AI|machine generated|model generated|generated text)\b",
+        r"\bdisclos(?:e|es|ed|ure)\b",
+    )
+    mark_when(
+        "model/provider reviewer routing",
+        ("workspace", "accept_work", "review"),
+        r"\bmodel\b",
+        r"\b(?:family|lineage|provider)\b",
+    )
+    mark_when(
+        "Pi session binding",
+        ("workspace", "track_work", "controller_identity"),
+        r"\bPi\b",
+        r"\bsession\b",
+    )
+    return tuple(found)
 
 
 def h2_body(profile: str, heading: str) -> str:
@@ -479,15 +553,119 @@ class DogfoodConfigTests(unittest.TestCase):
     def test_config_names_required_security_and_knowledge_authorities(self) -> None:
         for required in (
             "pablontiv/a4s",
-            "AGENTS.md",
             "Rootline",
             ".workspace/docs/",
             ".workspace/secrets/",
             "SOPS",
-            "Pi's native provider",
         ):
             with self.subTest(required=required):
                 self.assertIn(required, self.config)
+        credentials = self.workspace["do_work"]["credentials"]
+        self.assertIn("approved credential mechanism", credentials)
+
+    def test_config_contains_no_agent_specific_policy(self) -> None:
+        self.assertEqual(agent_specific_config_markers(self.document), ())
+
+    def test_config_authority_is_scoped_to_project_work(self) -> None:
+        source = self.workspace["authority"]["source"]
+        self.assertIn("repository-local project-work policy", source)
+        self.assertIn("A project-work rule absent from it is not in force", source)
+        self.assertNotIn("repository's way of working", source)
+
+        derived = self.workspace["authority"]["derived"]
+        self.assertIn("repository README", derived)
+        self.assertIn("repository-policy contract tests", derived)
+        self.assertIn(
+            "no repository-local project-work policy rule of their own",
+            self.workspace["authority"]["mechanism"],
+        )
+
+    def test_runtime_neutral_workflow_replacements_are_preserved(self) -> None:
+        self.assertIn(
+            "One participant may fulfill both the executor and implementer roles",
+            self.workspace["roles"]["implementer"],
+        )
+        self.assertIn(
+            "Before an executable integration is released or activated",
+            self.workspace["accept_work"]["end_to_end"],
+        )
+        self.assertIn(
+            "A PR the operator did not originate",
+            self.workspace["deliver_work"]["external_prs"],
+        )
+        self.assertIn(
+            "PRs authored by repository automation are exempt from the trailer",
+            self.workspace["deliver_work"]["mechanism"],
+        )
+        self.assertIn(
+            "A request from the operator for progress information does not stop",
+            self.workspace["do_work"]["modes"]["autonomous"],
+        )
+
+    def test_agent_specific_policy_detection_covers_semantic_variants(self) -> None:
+        cases = (
+            (
+                "agent runtime terminology",
+                ("workspace", "accept_work", "end_to_end"),
+                "Dispatch each Worker through the consuming runtime.",
+            ),
+            (
+                "TypeSafe credential binding",
+                ("workspace", "do_work", "credentials"),
+                "The credential provider approved for TypeSafe supplies authentication.",
+            ),
+            (
+                "Pi credential binding",
+                ("workspace", "do_work", "credentials"),
+                "Through the configured provider, credentials for Pi are resolved.",
+            ),
+            (
+                "Pi session binding",
+                ("workspace", "track_work", "controller_identity"),
+                "session identity from PI",
+            ),
+            (
+                "generated-text disclosure",
+                ("workspace", "do_work", "communication"),
+                "For machine-generated text, no disclosure is needed.",
+            ),
+            (
+                "model/provider reviewer routing",
+                ("workspace", "accept_work", "review"),
+                "Provider diversity should guide selection across a model lineage.",
+            ),
+        )
+        for expected, path, policy in cases:
+            with self.subTest(expected=expected, policy=policy):
+                document: dict[str, Any] = {"workspace": {}, "repository": {}}
+                target = document
+                for key in path[:-1]:
+                    target = target.setdefault(key, {})
+                target[path[-1]] = policy
+                self.assertIn(expected, agent_specific_config_markers(document))
+
+    def test_agent_specific_policy_detection_allows_neutral_config(self) -> None:
+        neutral = {
+            "workspace": {
+                "track_work": {"controller_identity": "lease-holder"},
+                "product": {
+                    "metadata": {"user_agent": "a4s-client"},
+                    "providers": ["TypeSafe"],
+                },
+            },
+            "repository": {"entry_point": "src/main.py"},
+        }
+        self.assertEqual(agent_specific_config_markers(neutral), ())
+
+    def test_agent_entry_point_is_rejected_by_value_not_key(self) -> None:
+        document = {
+            "workspace": {},
+            "repository": {"entry_point": "AGENTS.md"},
+        }
+        self.assertEqual(
+            agent_specific_config_markers(document),
+            ("agent runtime terminology",),
+        )
 
     def test_external_effects_and_reserved_authority_are_explicit(self) -> None:
         external = self.workspace["do_work"]["external_effects"]
@@ -556,9 +734,11 @@ class DogfoodConfigTests(unittest.TestCase):
         )
         self.assertEqual(actual, ())
         mutated = self.config.replace(
-            "  controller_identity: env:PI_SESSION_ID",
-            "  timeout_seconds: 30\n  success: exit-zero\n"
-            "  on_failure: stop\n  controller_identity: env:PI_SESSION_ID",
+            "  track_work:\n",
+            "  track_work:\n"
+            "    timeout_seconds: 30\n"
+            "    success: exit-zero\n"
+            "    on_failure: stop\n",
             1,
         )
         mutated_fields = tuple(
@@ -574,11 +754,14 @@ class DogfoodConfigTests(unittest.TestCase):
         self.assertNotIn("/Users/", self.config)
 
     def test_repository_binding_is_public_and_source_canonical(self) -> None:
-        self.assertEqual(self.repository["id"], "pablontiv/a4s")
-        self.assertEqual(self.repository["url"], "https://github.com/pablontiv/a4s.git")
-        self.assertEqual(self.repository["base_branch"], "main")
-        self.assertEqual(self.repository["entry_point"], "AGENTS.md")
-        self.assertTrue((REPO_ROOT / self.repository["entry_point"]).is_file())
+        self.assertEqual(
+            self.repository,
+            {
+                "id": "pablontiv/a4s",
+                "url": "https://github.com/pablontiv/a4s.git",
+                "base_branch": "main",
+            },
+        )
 
 
 if __name__ == "__main__":
