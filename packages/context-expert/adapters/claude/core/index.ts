@@ -11,3 +11,4 @@ export * from './state.js';
 export * from './compact.js';
 export * from './messages.js';
 export * from './binding.js';
+export * from './trigger.js';

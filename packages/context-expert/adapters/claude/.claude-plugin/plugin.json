@@ -1,8 +1,8 @@
 {
   "name": "a4s-context-expert",
   "version": "0.1.0",
-  "description": "Jev-guided deterministic compaction for Claude Code: replaces the native summary with a keep/truncate/drop transcript scored by TypeSafe Jev. PoC port of context-expert.",
-  "license": "MIT",
+  "description": "Jev-guided deterministic compaction for Claude Code: replaces the native summary with a keep/truncate/drop transcript scored by TypeSafe Jev, and auto-compacts when Jev decides the moment is right.",
+  "license": "UNLICENSED",
   "author": {
     "name": "pablontiv"
   },
@@ -25,11 +25,17 @@
       "description": "Number of newest messages pinned from compaction (the first message is always kept).",
       "default": 6
     },
-    "compactAtPercent": {
+    "triggerMode": {
+      "type": "string",
+      "title": "Auto-compact trigger mode",
+      "description": "off | hint | auto. 'auto' lets Jev decide when to compact; 'hint' only suggests /compact; 'off' disables the trigger. Analogous to pi-context-expert trigger.mode.",
+      "default": "auto"
+    },
+    "minimumContextRatio": {
       "type": "number",
-      "title": "Compaction percentage",
-      "description": "Context-window percentage at which turn.complete requests compaction.",
-      "default": 60
+      "title": "Minimum context ratio before asking Jev",
+      "description": "Context-window fill (0..1) below which the trigger never asks Jev. Above it, Jev decides whether now is the ideal moment to compact.",
+      "default": 0.5
     },
     "minReductionRatio": {
       "type": "number",

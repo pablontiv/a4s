@@ -20,9 +20,13 @@ directory.
   estimated reduction is below `minReductionRatio`, or anything fails, it falls
   back to the native summary via `next(event)` — a failure never degrades the
   session.
-- **`turn.complete`** — the auto-compact trigger. When `$.session.usage()`
-  reports the context window at or above `compactAtPercent`, it asks the engine
-  to compact. This is the "compact automatic" behavior.
+- **`turn.complete`** — the Jev-decided auto-compact trigger. It does **not**
+  compact at a fixed percentage. Past a local floor (`minimumContextRatio`), and
+  subject to a cooldown and an available credential, it asks Jev — with a
+  text-free state — whether now is the ideal moment to compact, and acts only
+  when Jev chooses `compact`. `triggerMode` controls what then happens: `auto`
+  compacts, `hint` only suggests `/compact`, `off` disables it. This is the
+  Claude analog of `pi-context-expert`'s `trigger.mode`.
 
 ## Credentials
 
@@ -49,7 +53,8 @@ claude --plugin-dir packages/context-expert/adapters/claude
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `compactAtPercent` | `60` | Context-window % at which `turn.complete` auto-compacts. |
+| `triggerMode` | `auto` | `auto` (Jev decides, then compacts), `hint` (suggest `/compact`), or `off`. |
+| `minimumContextRatio` | `0.5` | Context-window fill (0..1) below which the trigger never asks Jev. |
 | `minReductionRatio` | `0.25` | Minimum estimated reduction to replace history; below it, native summary. |
 | `keepThreshold` | `0.5` | Minimum Jev probability to keep a tool call/result. |
 | `preserveRecentMessages` | `6` | Newest messages pinned from compaction. |
@@ -58,7 +63,7 @@ claude --plugin-dir packages/context-expert/adapters/claude
 | `model` | `jev-latest` | TypeSafe Jev model. |
 | `apiKey` | — | TypeSafe key override (sensitive); otherwise resolved as above. |
 
-To turn the auto-compact trigger **off**, set `compactAtPercent` to `100`.
+To turn the auto-compact trigger **off**, set `triggerMode` to `off`.
 
 Derived from [fast-jev-compaction](https://github.com/tamaratran/fast-jev-compaction)
 (MIT) — see `NOTICE`.
