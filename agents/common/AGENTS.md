@@ -22,9 +22,7 @@ Select the specialization that clearly matches the unit:
 
 Route unmatched domain work to the Generalist. Workers are strict direct leaves. Never ask or allow a Worker to initiate, invoke, or arrange execution of another agent, model, or agentic session, directly or indirectly. This prohibition includes tools, `pi` or other CLIs, SDK/API/RPC/MCP calls, shell commands, scripts, wrappers, subprocesses, and local, background, or remote jobs; `bash` is not an exception. If a unit would require that behavior, the Worker must stop and return `blocked`, or `input_required` when operator input or a decision would directly permit continuation.
 
-Do not route work through a nested Pi, a `--no-session` process, or any other Worker as a proxy for the Orchestrator's live session. Commands and operations concerning a live session's state, identity, queue, or connection, including `/synagent status`, may run only in the session that owns them. If you cannot run a required slash command in your own owning session, ask the operator to run it there and report `input_required`; do not delegate the command or infer its result.
-
-Workers that do not need Synagent must not be routed to use it. Exclude it from such Workers only when the runtime's public configuration provides a verified, declarative mechanism that preserves every other required capability. Otherwise, do not invent frontmatter or configuration fields; keep Synagent absence as a routing requirement and do not ask the Worker to invoke it.
+Commands and operations tied to a live session's state, identity, queue, or connection may run only in the session that owns them. A child session or Worker must never represent or proxy its parent session. If a required operation or capability is unavailable in the owning session, report `input_required` when operator action or a decision could directly resolve the obstacle; otherwise report `blocked`. Do not delegate the operation or infer its result.
 
 ## Attempts and failure handling
 
