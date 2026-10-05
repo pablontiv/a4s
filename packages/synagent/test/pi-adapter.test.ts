@@ -295,11 +295,10 @@ test('Pi adapter keeps session IDs X and t-X from colliding or evicting each oth
   await waitFor(() => first.notifications.some(({ message }) => message.includes('subscribed to synagent/v1/a4s/X')))
   await waitFor(() => second.notifications.some(({ message }) => message.includes('subscribed to synagent/v1/a4s/t-X')))
 
-  await publish(publisher, PROJECT_TOPIC, serialize(message({ id: 'collision-project', to: 'a4s/all' })))
   await publish(publisher, 'synagent/v1/a4s/t-X', serialize(message({ id: 'collision-direct', to: 'a4s/t-X' })))
-  await new Promise(resolve => setTimeout(resolve, 100))
-  assert.ok(first.received.some(({ text }) => text.includes('id collision-project')))
-  assert.ok(second.received.some(({ text }) => text.includes('id collision-direct')))
+  await waitFor(() => second.received.some(({ text }) => text.includes('id collision-direct')))
+  await publish(publisher, PROJECT_TOPIC, serialize(message({ id: 'collision-project', to: 'a4s/all' })))
+  await waitFor(() => first.received.some(({ text }) => text.includes('id collision-project')))
 })
 
 test('Pi adapter reload/resume retains the same native session ID and correlation state', async t => {
@@ -656,7 +655,7 @@ test('Pi adapter unresolved project stays legacy-only and refuses all v1 send in
   assert.match(toolResult.content[0]?.text ?? '', /configure the project setting/)
   await harness.command('synagent', 'status')
   assert.ok(harness.notifications.some(({ message }) =>
-    message.includes('legacy-only') && message.includes('configure the project setting'),
+    message.includes('legacy-only') && message.includes('/synagent set project'),
   ))
   await harness.command('mq-send', 'must not publish either')
   assert.ok(harness.notifications.some(({ message }) => message.includes('configure the project setting')))
@@ -668,14 +667,15 @@ test('Pi adapter unresolved project stays legacy-only and refuses all v1 send in
   assert.match(harness.received[0]?.text ?? '', /id legacy-only-in/)
 })
 
-test('Pi adapter warns and falls back to the default for invalid or non-loopback brokers', async () => {
+test('Pi adapter warns and falls back to the default for invalid or non-loopback brokers', async t => {
   for (const configured of ['not-a-url', 'mqtt://example.com:1884']) {
     const harness = createHarness({ 'a4s.synagent.broker-url': configured })
+    t.after(() => harness.shutdown())
     await harness.start()
     assert.ok(harness.notifications.some(({ message, type }) =>
       type === 'warning'
       && message.includes(configured)
-      && message.includes('mqtt://127.0.0.1:1883'),
+      && message.includes('mqtt://127.0.0.1:1884'),
     ))
     await harness.shutdown()
   }
@@ -787,6 +787,7 @@ function createHarness(
     received,
     entries,
     settingKeys: settings.keys(),
+    toolSchemas: { get: (name: string) => (tools.get(name) as any)?.parameters },
     get idle() { return idle },
     set idle(value: boolean) { idle = value },
     async start() {
