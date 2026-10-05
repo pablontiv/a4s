@@ -220,7 +220,7 @@ No existe setting de instancia y el adaptador no lee variables de entorno
 `mqtt://` de loopback sin credenciales. Si la URL configurada no cumple esa
 restricción, muestra un warning y usa el default seguro
 `mqtt://127.0.0.1:1884`. Los tokens v1 son sensibles a
-mayúsculas y admiten puntos (`[A-Za-z0-9][A-Za-z0-9._-]{0,63}`); rechazan `/`,
+mayúsculas y admiten puntos (`[A-Za-z0-9][A-Za-z0-9._-]{0,255}`); rechazan `/`,
 `+` y `#` dentro de cada token.
 
 ### Entrega en Pi

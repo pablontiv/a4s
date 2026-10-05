@@ -798,7 +798,8 @@ function endClient(client: MqttClient): Promise<void> {
       mqttAny.reconnecting = false
     }
 
-    // Kill all timers that mqtt.js might have set up
+    // Kill all timers that mqtt.js might have set up.
+    // NOTE: This reaches into mqtt.js internal state and may need revisiting on an mqtt.js upgrade.
     const timersToKill = [
       'reconnectTimer',
       'keepaliveTimer',
@@ -833,7 +834,8 @@ function endClient(client: MqttClient): Promise<void> {
       resolve()
     })
 
-    // Force destroy the underlying socket/stream immediately
+    // Force destroy the underlying socket/stream immediately.
+    // NOTE: Direct access to stream/socket is an mqtt.js internal detail; may require adjustment on upgrades.
     try {
       if (mqttAny.stream) {
         mqttAny.stream.destroy()
