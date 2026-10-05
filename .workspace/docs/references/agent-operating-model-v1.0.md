@@ -108,11 +108,9 @@ For `input_required`, the Orchestrator presents the Worker's question and releva
 
 ## Session ownership, capabilities, and attempts
 
-A live session exclusively owns its commands, state, identity, queue, and connection. Operations on those resources, including status slash commands such as `/synagent status`, run only in that owning session. A Worker, nested Pi, or `--no-session` process never represents or proxies its parent. If the Orchestrator cannot run a required slash command in its own owning session, it asks the operator to run it there and reports `input_required`; it neither delegates the command nor infers its result.
+A live session exclusively owns its commands, state, identity, queue, and connection. Operations on those resources run only in that owning session. A child session or Worker never represents or proxies its parent session. If a required operation or capability is unavailable in the owning session, the affected unit reports `input_required` when operator action or a decision could directly resolve the obstacle; otherwise it reports `blocked`. It neither delegates the operation nor infers its result.
 
 A dispatch or requested operation has one attempt unless the operator explicitly authorizes retries or fallbacks and their limits. All authorized attempts consume one shared total budget; fallback does not reset time, token, cost, or attempt limits. Loss of a mandatory session, extension, tool, identity, connection, or other capability stops the affected work. No fallback may remove a required session, extension, or capability, and a one-off command must not become exploratory investigation. An unauthorized retry or fallback ends as `blocked`, or `input_required` when operator action or a decision can directly resolve it.
-
-Workers that do not need a capability such as Synagent should not load or invoke it. An adapter may declaratively exclude that capability only after its public runtime configuration has been verified to support per-Worker exclusion without removing other required capabilities. If no safe supported mechanism exists, the adapter must not invent frontmatter or configuration fields; the constraint remains a routing rule.
 
 ## Multi-worker execution
 
