@@ -369,7 +369,7 @@ function synagentPi(pi: ExtensionAPI, deliveryStartTimeoutMs: number): void {
     } catch (error) {
       url = DEFAULT_BROKER_URL
       ctx.ui.notify(
-        `Synagent broker URL rejected (${formatError(error)}); falling back to ${DEFAULT_BROKER_URL}`,
+        `Synagent broker URL rejected (${configuredUrl}); falling back to ${DEFAULT_BROKER_URL}`,
         'warning',
       )
     }
