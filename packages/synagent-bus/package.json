@@ -1,6 +1,7 @@
 {
   "name": "@a4s/synagent-bus",
   "version": "0.1.0",
+  "private": true,
   "license": "UNLICENSED",
   "description": "Standalone loopback MQTT broker for Synagent with durable LevelDB state.",
   "repository": {
