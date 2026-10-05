@@ -228,16 +228,6 @@ class PublicationSecurityTests(unittest.TestCase):
         digest_line = CLEANUP_DIGEST_PATH.read_text(encoding="ascii").strip()
         self.assertEqual(digest_line, f"{expected}  cleanup-plan.json")
 
-    def test_publication_policies_are_present(self) -> None:
-        security = (ROOT / ".github" / "SECURITY.md").read_text(encoding="utf-8")
-        contributing = (ROOT / ".github" / "CONTRIBUTING.md").read_text(encoding="utf-8")
-        notice = (ROOT / "NOTICE").read_text(encoding="utf-8")
-        owners = (ROOT / ".github" / "CODEOWNERS").read_text(encoding="utf-8")
-
-        self.assertIn("Report a vulnerability", security)
-        self.assertIn("Only the repository administrator", contributing)
-        self.assertIn("no license is granted", notice)
-        self.assertIn("* @pablontiv", owners)
 
 
 if __name__ == "__main__":

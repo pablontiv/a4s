@@ -31,11 +31,11 @@ Every Worker in this model is a direct Subagent of the Orchestrator, and every S
 The Orchestrator:
 
 - communicates with the user and requests clarification when required;
-- decomposes requests into bounded work units;
-- selects a Worker specialization and model for each unit;
+- decomposes requests into one bounded work unit per independently acceptable result;
+- selects exactly one primary Worker specialization and a model for each unit, allowing multiple units to use the same specialization;
 - supplies the relevant context, constraints, acceptance criteria, and expected evidence;
 - dispatches, steers, and cancels Workers;
-- tracks dependencies and coordinates concurrent or sequential work;
+- tracks dependencies, recalculates readiness after every completion or blockage, and dispatches all ready units concurrently;
 - accepts, compares, rejects, and adjudicates returned work;
 - requests corrections or additional work through another dispatch; and
 - reports progress and accepted results to the user.
@@ -60,6 +60,8 @@ Residual domain work always goes to the Generalist. The Orchestrator does not ab
 
 ## Dispatch contract
 
+Before dispatch, the Orchestrator decomposes the authorized scope into one unit per result that can be accepted or rejected independently. Every unit has exactly one primary Worker specialization. Multiple units can have the same specialization or different specializations; specialization does not determine grouping.
+
 Each dispatch states:
 
 1. the objective;
@@ -67,10 +69,11 @@ Each dispatch states:
 3. only the context relevant to the unit;
 4. the expected result or artifact;
 5. acceptance criteria;
-6. constraints, including mutation and delivery limits; and
-7. required evidence or validation.
+6. constraints, including mutation and delivery limits;
+7. required evidence or validation; and
+8. the primary Worker specialization.
 
-The dispatch carries the work-unit requirements rather than an unfiltered conversation transcript. Dependencies on other units must be explicit.
+The dispatch carries the work-unit requirements rather than an unfiltered conversation transcript. Dependencies on other units must be explicit. Independently acceptable results are not combined merely because they share sources, a specialization, or a report.
 
 ## Worker return contract
 
@@ -105,11 +108,13 @@ For `input_required`, the Orchestrator presents the Worker's question and releva
 
 ## Multi-worker execution
 
-The Orchestrator may run multiple Workers concurrently when units are independent, when separate perspectives can evaluate the same immutable input, or when results can be adjudicated without conflicting mutations. It sequences work when one unit depends on another.
+A unit is ready when its required inputs, dependencies, and authorization are satisfied. The Orchestrator dispatches all ready units concurrently, including multiple units with the same primary specialization. Whenever a unit completes or becomes blocked, the Orchestrator recalculates readiness and immediately dispatches every newly ready unit.
 
-Concurrent Workers must not modify the same artifact. Intentionally separate alternative implementations must use isolated artifacts or workspaces, followed by a distinct integration and validation unit. Workers do not coordinate directly; all dependency management and adjudication passes through the Orchestrator.
+A unit can be held, grouped, or sequenced only for an ordering dependency; a mutation conflict on the same artifact, shared state, or target; an explicit operator restriction; or an actual runtime worker limit. This exception list is closed. A dependency or mutation conflict requires sequencing rather than grouping. A runtime limit creates waves of unchanged units and never permits merging them. Shared sources, a shared specialization, a shared report, convenience, apparent cohesion, or fewer dispatches are not exceptions.
 
-An `input_required` result pauses only its affected unit. Independent units may continue. Concurrency among tool calls inside one Worker is outside this model.
+Concurrent Workers must not mutate the same artifact, shared state, or target. Intentionally separate alternative implementations must use isolated artifacts or workspaces, followed by a distinct integration and validation unit. Workers are direct leaves: they do not coordinate, delegate, create children, or invoke subagent tools. All dependency management and adjudication passes through the Orchestrator.
+
+An `input_required` result pauses only its affected unit and never blocks unrelated ready units. Concurrency among tool calls inside one Worker is outside this model.
 
 ## Execution mode
 
@@ -165,7 +170,7 @@ Installation or activation is not performed by this experiment. Existing runtime
 
 ## Source management and deferred enforcement
 
-Version 1.0 is intentionally prose-first and manually derived. This versioned reference is intended to remain the single semantic source from which distributable runtime files are eventually generated and checked. The current manually derived files can drift because this baseline creates no generator, templates, schema, or generation pipeline.
+Version 1.0 is intentionally prose-first. This document is the conceptual reference; `agents/common/AGENTS.md` is Pi's authoritative runtime contract. The files remain manually synchronized because this baseline creates no generator, templates, schema, or generation pipeline.
 
 Deterministic and runtime enforcement are deferred. This includes automated semantic equivalence checks, generated adapters, dispatch-schema validation, tool-policy enforcement, leaf-topology enforcement, status parsing, exact-output enforcement, installation automation, and live conformance tests. Prompt statements are behavioral instructions, not proof of runtime enforcement.
 
@@ -198,4 +203,4 @@ The artifact baseline succeeds when:
 5. the reference is Rootline-valid and the candidate diff is whitespace-clean; and
 6. manual inspection finds the reference and all distributable files internally consistent.
 
-Operational success requires later, explicitly authorized activation and representative manual runs in each runtime. Those runs should show that the Orchestrator dispatches instead of doing domain work, all five specializations can return the common contract through the runtime adapter, concurrent independent units remain isolated, `input_required` reaches the user, and acceptance gaps cause redispatch rather than Orchestrator execution. These live checks are outside this artifact-only experiment.
+Operational success requires later, explicitly authorized activation and representative runs in each runtime. The repository has no executable Orchestrator harness that can observe fan-out timing or Worker counts, and static document checks do not prove runtime fan-out. A future behavioral test must submit multiple independent units, including at least two with the same specialization, and observe that every ready unit is dispatched concurrently up to a real runtime limit, limits create waves without merged units, readiness is recalculated after completion or blockage, and `input_required` leaves unrelated units running. Representative runs must also show that the Orchestrator dispatches instead of doing domain work, all five specializations return the common contract, concurrent mutations remain isolated, and acceptance gaps cause redispatch rather than Orchestrator execution.

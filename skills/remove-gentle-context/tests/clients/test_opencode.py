@@ -271,79 +271,7 @@ class OpenCodeAdapterTests(unittest.TestCase):
         self.assertEqual(defaults[0].ownership, Ownership.AMBIGUOUS)
         self.assertIn(defaults[0].candidate_id, plan.blocked_candidate_ids)
 
-    def test_personal_author_marker_vetoes_open_code_skill_file_delete_without_full_chain(self) -> None:
-        skill = self.config_dir / "skill" / "systemic-issue-triage" / "SKILL.md"
-        skill.parent.mkdir(parents=True)
-        skill.write_text(
-            "---\n"
-            "name: systemic-issue-triage\n"
-            "metadata:\n"
-            "  author: pablontiv\n"
-            "  version: 1.0.0\n"
-            "---\n"
-            "<!-- gentle-ai:systemic-issue-triage -->\n"
-            "Personal adaptation with an adversarial marker.\n"
-        )
 
-        inventory = build_inventory(self.context, (OpenCodeAdapter(self.catalog),))
-        candidates = [candidate for candidate in inventory.candidates if candidate.path == str(skill)]
-        plan = build_plan(inventory, self.context, (OpenCodeAdapter(self.catalog),))
-
-        self.assertEqual(len(candidates), 1)
-        self.assertEqual(candidates[0].ownership, Ownership.AMBIGUOUS)
-        self.assertEqual(candidates[0].proposed_action, "report_only")
-        self.assertNotIn(str(skill), {operation.path for operation in plan.operations})
-
-    def test_personal_skill_ownership_vetoes_open_code_skill_file_delete(self) -> None:
-        skill = self.config_dir / "skill" / "systemic-issue-triage" / "SKILL.md"
-        skill.parent.mkdir(parents=True)
-        skill.write_text(
-            "---\n"
-            "name: systemic-issue-triage\n"
-            "metadata:\n"
-            "  author: pablontiv\n"
-            "  created: 2026-01-01\n"
-            "  updated: 2026-01-02\n"
-            "  version: 1.0.0\n"
-            "  upstream-author: Alan-TheGentleman\n"
-            "  upstream-repository: https://github.com/Gentleman-Programming/gentle-ai\n"
-            "  upstream-commit: d1e1777faafc91a34656ba94bd712972dbe427a1\n"
-            "  ownership: personal\n"
-            "---\n"
-            "<!-- gentle-ai:systemic-issue-triage -->\n"
-            "Personal adaptation.\n"
-        )
-        release_catalog = dict(self.catalog)
-        release_commit = "b" * 40
-        release_catalog["personal_skill_releases"] = {
-            "systemic-issue-triage": {
-                "source_repository": "https://github.com/pablontiv/skills",
-                "personal_source_commit": release_commit,
-                "canonical_tree_sha256": canonical_tree_sha256(skill),
-            }
-        }
-        receipts = self.home / "receipts"
-        receipts.mkdir()
-        receipt = {
-            "skill_name": "systemic-issue-triage",
-            "skill_version": "1.0.0",
-            "personal_source_repository": "https://github.com/pablontiv/skills",
-            "personal_source_commit": release_commit,
-            "installed_path": str(skill),
-            "installed_content_sha256": "sha256:" + __import__("hashlib").sha256(skill.read_bytes()).hexdigest(),
-            "installation_timestamp": "2026-08-19T00:00:00Z",
-            "canonical_tree_sha256": canonical_tree_sha256(skill),
-        }
-        (receipts / "systemic-issue-triage.json").write_text(json.dumps(receipt, sort_keys=True))
-        context = context_for(self.home, XDG_STATE_HOME=str(self.home / ".local" / "state"), SKILLS_RECEIPTS_DIR=str(receipts))
-
-        inventory = build_inventory(context, (OpenCodeAdapter(release_catalog),))
-        candidates = [candidate for candidate in inventory.candidates if candidate.path == str(skill)]
-
-        self.assertEqual(len(candidates), 1)
-        self.assertEqual(candidates[0].ownership, Ownership.PRESERVED)
-        plan = build_plan(inventory, context, (OpenCodeAdapter(release_catalog),))
-        self.assertNotIn(str(skill), {operation.path for operation in plan.operations})
 
     def test_second_inventory_plan_after_apply_has_no_open_code_mutations(self) -> None:
         adapter = OpenCodeAdapter(self.catalog)

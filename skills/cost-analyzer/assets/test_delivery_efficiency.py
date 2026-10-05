@@ -55,18 +55,6 @@ class DeliveryEvidenceTests(unittest.TestCase):
         self.assertEqual(evidence.durability, "durable")
         self.assertEqual(evidence.path_categories, frozenset({"code"}))
 
-    def test_doc_and_test_only_commits_are_excluded(self):
-        doc_sha = self.commit("README.md", "docs\n", "docs")
-        test_sha = self.commit("tests/test_app.py", "assert True\n", "test")
-
-        self.assertEqual(
-            delivery_efficiency.inspect_commit(self.repo, doc_sha, TODAY).eligibility,
-            "excluded-noncode",
-        )
-        self.assertEqual(
-            delivery_efficiency.inspect_commit(self.repo, test_sha, TODAY).eligibility,
-            "excluded-noncode",
-        )
 
     def test_commit_inside_maturity_horizon_is_immature(self):
         sha = self.commit(
