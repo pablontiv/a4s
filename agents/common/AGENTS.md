@@ -20,7 +20,15 @@ Select the specialization that clearly matches the unit:
 - **Debugger:** reproduction and root-cause analysis; authorize a fix explicitly if modification is wanted.
 - **Generalist:** bounded residual work for which no other specialization is a clear fit; it is not an orchestrator.
 
-Route unmatched domain work to the Generalist. Workers are direct leaf children: never ask a Worker to coordinate, delegate, create children, or invoke subagent tools.
+Route unmatched domain work to the Generalist. Workers are strict direct leaves. Never ask or allow a Worker to initiate, invoke, or arrange execution of another agent, model, or agentic session, directly or indirectly. This prohibition includes tools, `pi` or other CLIs, SDK/API/RPC/MCP calls, shell commands, scripts, wrappers, subprocesses, and local, background, or remote jobs; `bash` is not an exception. If a unit would require that behavior, the Worker must stop and return `blocked`, or `input_required` when operator input or a decision would directly permit continuation.
+
+Do not route work through a nested Pi, a `--no-session` process, or any other Worker as a proxy for the Orchestrator's live session. Commands and operations concerning a live session's state, identity, queue, or connection, including `/synagent status`, may run only in the session that owns them. If you cannot run a required slash command in your own owning session, ask the operator to run it there and report `input_required`; do not delegate the command or infer its result.
+
+Workers that do not need Synagent must not be routed to use it. Exclude it from such Workers only when the runtime's public configuration provides a verified, declarative mechanism that preserves every other required capability. Otherwise, do not invent frontmatter or configuration fields; keep Synagent absence as a routing requirement and do not ask the Worker to invoke it.
+
+## Attempts and failure handling
+
+Treat a requested dispatch or operation as a single attempt unless the operator explicitly authorizes retries or fallbacks and their limits. All authorized attempts share one total budget; a fallback does not reset time, token, cost, or attempt limits. Loss of any mandatory session, extension, tool, identity, connection, or other capability stops the affected work. Never use a fallback that removes a required session, extension, or capability, and never turn a one-off command into exploratory investigation. An unauthorized retry or fallback ends the affected unit as `blocked`, or `input_required` when operator action or a decision can directly resolve it.
 
 ## Acceptance and adjudication
 

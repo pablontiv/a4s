@@ -22,7 +22,7 @@ This document records the complete conceptual intent. It is not itself a runtime
 - **Dispatch:** the act and contract by which the Orchestrator assigns a work unit.
 - **Artifact:** a concrete output such as findings, source changes, a document, test evidence, or a review.
 
-Every Worker in this model is a direct Subagent of the Orchestrator, and every Subagent dispatched by the Orchestrator acts as a Worker. Workers are peers and leaves. They do not create children, delegate, or invoke subagent tools. The model has no additional authority level.
+Every Worker in this model is a direct Subagent of the Orchestrator, and every Subagent dispatched by the Orchestrator acts as a Worker. Workers are peers and strict leaves. A Worker never initiates, invokes, or arranges execution of another agent, model, or agentic session, directly or indirectly. This includes delegation tools, agent CLIs, SDK/API/RPC/MCP calls, shell commands, scripts, wrappers, subprocesses, and local, background, or remote jobs; shell access is not an exception. If a unit would require such execution, the Worker stops and returns `blocked`, or `input_required` when operator input or a decision would directly permit continuation. The model has no additional authority level.
 
 ## Structural roles
 
@@ -106,6 +106,14 @@ Adjudication is not independent domain analysis or verification. If acceptance r
 
 For `input_required`, the Orchestrator presents the Worker's question and relevant context to the user. After receiving the answer, it continues orchestration or redispatches the affected unit. It does not invent the missing decision.
 
+## Session ownership, capabilities, and attempts
+
+A live session exclusively owns its commands, state, identity, queue, and connection. Operations on those resources, including status slash commands such as `/synagent status`, run only in that owning session. A Worker, nested Pi, or `--no-session` process never represents or proxies its parent. If the Orchestrator cannot run a required slash command in its own owning session, it asks the operator to run it there and reports `input_required`; it neither delegates the command nor infers its result.
+
+A dispatch or requested operation has one attempt unless the operator explicitly authorizes retries or fallbacks and their limits. All authorized attempts consume one shared total budget; fallback does not reset time, token, cost, or attempt limits. Loss of a mandatory session, extension, tool, identity, connection, or other capability stops the affected work. No fallback may remove a required session, extension, or capability, and a one-off command must not become exploratory investigation. An unauthorized retry or fallback ends as `blocked`, or `input_required` when operator action or a decision can directly resolve it.
+
+Workers that do not need a capability such as Synagent should not load or invoke it. An adapter may declaratively exclude that capability only after its public runtime configuration has been verified to support per-Worker exclusion without removing other required capabilities. If no safe supported mechanism exists, the adapter must not invent frontmatter or configuration fields; the constraint remains a routing rule.
+
 ## Multi-worker execution
 
 A unit is ready when its required inputs, dependencies, and authorization are satisfied. The Orchestrator dispatches all ready units concurrently, including multiple units with the same primary specialization. Whenever a unit completes or becomes blocked, the Orchestrator recalculates readiness and immediately dispatches every newly ready unit.
@@ -141,7 +149,7 @@ A runtime adapter may:
 - place the Orchestrator and Worker prompts on runtime discovery surfaces; and
 - map the runtime's return mechanism to the common return semantics.
 
-An adapter must not merge structural roles, let Workers delegate, add a short-task exception, or weaken status and acceptance semantics. Runtime support must be verified rather than inferred from a file's presence. The baseline includes manual Pi and Claude Code Worker adapters.
+An adapter must not merge structural roles, let Workers execute or arrange other agents by any path, add a short-task exception, weaken session ownership, introduce unauthorized retries or fallbacks, or weaken status and acceptance semantics. Runtime support must be verified rather than inferred from a file's presence. The baseline includes manual Pi and Claude Code Worker adapters.
 
 ## Distribution and installation
 
