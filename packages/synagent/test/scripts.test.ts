@@ -42,6 +42,37 @@ function waitFor(
   })
 }
 
+// Espera VARIOS patrones en un mismo stream sin asumir ORDEN de llegada: acumula
+// con un único listener y resuelve cuando todos aparecieron. (Dos waitFor
+// secuenciales se perderían un patrón ya emitido antes de adjuntar el segundo
+// listener — p. ej. el cliente transient suele suscribirse antes que el durable.)
+function waitForAll(
+  proc: ChildProcessWithoutNullStreams,
+  stream: 'stdout' | 'stderr',
+  patterns: readonly RegExp[],
+  timeoutMs = 15000,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let acc = ''
+    const pending = new Set(patterns)
+    const timer = setTimeout(
+      () => reject(new Error(`timeout esperando ${[...pending]} en ${stream}; visto: ${acc.slice(0, 300)}`)),
+      timeoutMs,
+    )
+    proc[stream].setEncoding('utf8')
+    const onData = (d: string) => {
+      acc += d
+      for (const re of [...pending]) if (re.test(acc)) pending.delete(re)
+      if (pending.size === 0) {
+        clearTimeout(timer)
+        proc[stream].off('data', onData)
+        resolve()
+      }
+    }
+    proc[stream].on('data', onData)
+  })
+}
+
 test('scripts de Claude v1: bridges arrancan y hacen round-trip real', async (t) => {
   const broker = await Aedes.createBroker({})
   const server = net.createServer(broker.handle)
@@ -66,9 +97,9 @@ test('scripts de Claude v1: bridges arrancan y hacen round-trip real', async (t)
   ]) as ChildProcessWithoutNullStreams
   procs.push(sub)
 
-  // bridge-sub loguea las suscripciones a stderr; esperamos a estar suscritos.
-  await waitFor(sub, 'stderr', /suscrito durable:/)
-  await waitFor(sub, 'stderr', /suscrito transient:/)
+  // bridge-sub loguea las suscripciones a stderr; esperamos a AMBAS sin asumir
+  // orden (durable/transient se suscriben en paralelo).
+  await waitForAll(sub, 'stderr', [/suscrito durable:/, /suscrito transient:/])
 
   // Esperamos a recibir un mensaje canónico en stdout
   const gotLine = waitFor(sub, 'stdout', /\{.*"id"\s*:\s*"v1-test-1".*\}/)
@@ -126,8 +157,9 @@ test('scripts de Claude v1: bridge-sub soporta dual-read (durable + transient)',
   ]) as ChildProcessWithoutNullStreams
   procs.push(sub)
 
-  // Esperar a que durable se suscriba (más time limit por si el transient es lento)
-  await waitFor(sub, 'stderr', /suscrito durable:/, 15000)
+  // Esperar a que AMBOS clientes estén suscritos antes de publicar: el broadcast
+  // va al transient (clean=true, online-only), que debe estar activo o se pierde.
+  await waitForAll(sub, 'stderr', [/suscrito durable:/, /suscrito transient:/], 15000)
 
   // Preparar dos esperas en paralelo: una para mensaje directo, otra para broadcast
   const gotDirect = waitFor(sub, 'stdout', /\{.*"id"\s*:\s*"direct-msg".*\}/)
