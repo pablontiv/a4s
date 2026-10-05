@@ -87,24 +87,24 @@ test('toTopic/legacyTopic', () => {
   assert.equal(legacyTopic('claude'), 'a4s/inbox/claude')
 })
 
-test('subscriptions: durable=directo(+legacy), transient=proyecto(+global opt-in)', () => {
+test('subscriptions: directo + broadcasts de proyecto/global por defecto; legacy solo explícito', () => {
   const base = subscriptions({ identity })
   assert.deepEqual(base.durable, ['synagent/v1/a4s/sess-01HXYZ'])
-  assert.deepEqual(base.transient, ['synagent/v1/a4s/all'])
-  const full = subscriptions({ identity, global: true, legacyAddress: 'claude' })
-  assert.deepEqual(full.durable, ['synagent/v1/a4s/sess-01HXYZ', 'a4s/inbox/claude'])
-  assert.deepEqual(full.transient, ['synagent/v1/a4s/all', 'synagent/v1/all'])
+  assert.deepEqual(base.transient, ['synagent/v1/a4s/all', 'synagent/v1/all'])
+  const compatible = subscriptions({ identity, global: false, legacyAddress: 'claude' })
+  assert.deepEqual(compatible.durable, ['synagent/v1/a4s/sess-01HXYZ', 'a4s/inbox/claude'])
+  assert.deepEqual(compatible.transient, ['synagent/v1/a4s/all'])
 })
 
-test('isForIdentity / isFor: directo, proyecto, legacy y global opt-in', () => {
+test('isForIdentity / isFor: directo, proyecto, legacy y global default-on con opt-out', () => {
   const opts = { identity, legacyAddress: 'claude' }
   assert.equal(isForIdentity(msg({ to: 'a4s/sess-01HXYZ' }), opts), true)
   assert.equal(isForIdentity(msg({ to: 'a4s/all' }), opts), true)
   assert.equal(isForIdentity(msg({ to: 'claude' }), opts), true)
   assert.equal(isForIdentity(msg({ to: 'a4s/otra' }), opts), false)
   assert.equal(isForIdentity(msg({ to: 'otro/all' }), opts), false)
-  assert.equal(isForIdentity(msg({ to: 'all' }), opts), false)
-  assert.equal(isForIdentity(msg({ to: 'all' }), { identity, global: true }), true)
+  assert.equal(isForIdentity(msg({ to: 'all' }), opts), true)
+  assert.equal(isForIdentity(msg({ to: 'all' }), { identity, global: false }), false)
   assert.equal(isFor(msg({ to: 'claude' }), 'claude'), true)
 })
 
@@ -156,7 +156,8 @@ test('acceptInbound = enrutado para mí Y no steer-broadcast', () => {
   assert.equal(acceptInbound(identity, msg({ to: 'a4s/all' })), true)
   assert.equal(acceptInbound(identity, msg({ to: 'a4s/all', kind: 'steer' })), false) // steer broadcast
   assert.equal(acceptInbound(identity, msg({ to: 'otro/all' })), false)
-  assert.equal(acceptInbound(identity, msg({ to: 'all' }), { global: true }), true)
+  assert.equal(acceptInbound(identity, msg({ to: 'all' })), true)
+  assert.equal(acceptInbound(identity, msg({ to: 'all' }), { global: false }), false)
   assert.equal(acceptInbound(identity, msg({ to: 'claude' }), { legacyAddress: 'claude' }), true)
   // self-echo: un broadcast propio (from = mi dirección) no se entrega
   assert.equal(acceptInbound(identity, msg({ to: 'a4s/all', from: directAddress(identity) })), false)

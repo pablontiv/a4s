@@ -8,11 +8,10 @@
 // IDENTIDAD (ADR 0069): la instancia sale de $.session.id() (única por sesión →
 // sin colisión aunque haya cientos de sesiones); el proyecto, de un setting del
 // host (userConfig `project`) o del remoto `origin` del repo ($.session.repo()).
-// NADA de env ni de launcher. Si no se resuelve, se opera LEGACY-ONLY.
+// NADA de env ni de launcher. Si no se resuelve, el adaptador queda inactivo.
 //
 // Topología v1: synagent/v1/<proyecto>/<instancia> (directo, durable),
-// /all (proyecto, transient), synagent/v1/all (global, transient opt-in).
-// DUAL-READ: también acepta legacy a4s/inbox/claude; publica solo v1.
+// /all (proyecto, transient), synagent/v1/all (global, transient por defecto).
 
 import type { EngineInterface, PluginOptions, Register } from 'claude-code'
 
@@ -20,7 +19,6 @@ import {
   acceptInbound,
   directAddress,
   instanceFromHostSession,
-  LEGACY_TOPIC_ROOT,
   makeOutbound,
   MESSAGE_KINDS,
   newId,
@@ -34,8 +32,8 @@ import {
 } from './adapter'
 
 const DEFAULT_BROKER_URL = 'mqtt://127.0.0.1:1884'
+const LEGACY_CLIENT_ID = 'synagent-legacy-claude'
 const PROCESSED_KEY = 'processed'
-const LEGACY_ADDRESS = 'claude'
 const MAX_SEEN = 1000
 const MAX_BUF = 1_000_000
 
@@ -51,9 +49,12 @@ let generation = 0
 // Detiene el bridge-sub vivo (mata el subproceso vía HookStream.return()).
 let stopBridge: (() => void) | undefined
 let identity: Identity | undefined
-let globalOptIn = false
+let globalEnabled = true
 // resolveBrokerUrl corre en register() sin `$`; el aviso se emite al arrancar.
 let brokerWarning: string | undefined
+// Como máximo una migración one-shot en vuelo por instancia del engine. Tras
+// éxito queda hecha; si falta el broker puede reintentarse en un prompt futuro.
+const retirementInFlightOrDone = new WeakSet<object>()
 
 const bridgeDir = ($: EngineInterface): string => `${$.plugin.root}/bridge`
 
@@ -91,8 +92,8 @@ function resolveBrokerUrl(options: PluginOptions): string {
   return candidate
 }
 
-// Identidad SOLO de APIs nativas de sesión (ADR 0069). Lanza si no resuelve; el
-// llamador cae a LEGACY-ONLY. instancia = $.session.id() (única por sesión);
+// Identidad SOLO de APIs nativas de sesión (ADR 0069). Lanza si no resuelve.
+// instancia = $.session.id() (única por sesión);
 // proyecto = setting del host > nombre del repo del remoto origin.
 async function resolveIdentity($: EngineInterface, options: PluginOptions): Promise<Identity> {
   const instance = instanceFromHostSession(await $.session.id())
@@ -112,6 +113,29 @@ async function reserve($: EngineInterface, id: string): Promise<boolean> {
   if (next.length > MAX_SEEN) next.splice(0, next.length - MAX_SEEN)
   await $.store.set(PROCESSED_KEY, next)
   return true
+}
+
+function retireLegacySession($: EngineInterface, brokerUrl: string): void {
+  if (retirementInFlightOrDone.has($)) return
+  retirementInFlightOrDone.add($)
+  const argv = [
+    'node',
+    `${bridgeDir($)}/bridge-sub.cjs`,
+    '--url',
+    brokerUrl,
+    '--retire-id',
+    LEGACY_CLIENT_ID,
+  ]
+  // No bloquear el arranque: el bridge usa clean=true, sin retries, y termina.
+  void $.process.run(argv).then((result) => {
+    if (result.exitCode !== 0) {
+      retirementInFlightOrDone.delete($)
+      void $.ui.status(`synagent: no se pudo retirar la sesión legacy (${result.stderr || `exit ${result.exitCode}`})`)
+    }
+  }).catch((err) => {
+    retirementInFlightOrDone.delete($)
+    void $.ui.status(`synagent: no se pudo retirar la sesión legacy (${err instanceof Error ? err.message : String(err)})`)
+  })
 }
 
 // Loop JALAR: cada línea stdout es un mensaje canónico; se filtra por `accept`,
@@ -161,6 +185,10 @@ function runJalar(gen: number, $: EngineInterface, argv: readonly string[], acce
 }
 
 async function ensureStarted($: EngineInterface, brokerUrl: string, options: PluginOptions): Promise<void> {
+  // La sesión histórica tenía un clientId fijo distinto de los clientId v1. Se
+  // retira incluso si luego no puede resolverse la identidad actual.
+  retireLegacySession($, brokerUrl)
+
   // ADR 0069: la identidad depende del session id. `/clear` lo cambia SIN disparar
   // session.start y el módulo puede seguir cargado; si ya arrancamos para otra
   // sesión, detenemos el bridge viejo y re-resolvemos. Compactación: mismo id → no-op.
@@ -179,32 +207,27 @@ async function ensureStarted($: EngineInterface, brokerUrl: string, options: Plu
 
   try {
     identity = await resolveIdentity($, options)
-    globalOptIn = options['global'] === true || options['global'] === 'true'
+    globalEnabled = options['global'] !== false && options['global'] !== 'false'
   } catch (err) {
     identity = undefined
-    globalOptIn = false
+    globalEnabled = true
+    started = false
     void $.ui.status(
-      `synagent: identidad no resuelta (${err instanceof Error ? err.message : String(err)}); operando LEGACY-ONLY`,
-    )
-    runJalar(
-      gen,
-      $,
-      ['node', bridgeSub, '--url', brokerUrl, '--durable-id', 'synagent-legacy-claude', '--durable', `${LEGACY_TOPIC_ROOT}/${LEGACY_ADDRESS}`],
-      msg => msg.to === LEGACY_ADDRESS,
+      `synagent: identidad no resuelta (${err instanceof Error ? err.message : String(err)}); adaptador inactivo`,
     )
     return
   }
 
   const self = identity
   const addr = directAddress(self)
-  const plan = subscriptions({ identity: self, global: globalOptIn, legacyAddress: LEGACY_ADDRESS })
+  const plan = subscriptions({ identity: self, global: globalEnabled })
   const durableId = `synagent-${addr.replace(/\//g, ':')}`
   const transientId = `synagent-t-${addr.replace(/\//g, ':')}`
 
   const argv = ['node', bridgeSub, '--url', brokerUrl, '--durable-id', durableId, '--durable', ...plan.durable]
   if (plan.transient.length > 0) argv.push('--transient-id', transientId, '--transient', ...plan.transient)
 
-  runJalar(gen, $, argv, msg => acceptInbound(self, msg, { global: globalOptIn, legacyAddress: LEGACY_ADDRESS }))
+  runJalar(gen, $, argv, msg => acceptInbound(self, msg, { global: globalEnabled }))
 
   try {
     await $.tool.register({
@@ -285,7 +308,7 @@ export const register: Register = (on, options) => {
     const a = e as unknown as Record<string, unknown>
     if (a.tool !== 'mcp__synagent-adapter-mqtt__synagent_send') return next(e)
     const result = (text: string, isError = false) => ({ result: text, ...(isError && { isError }) })
-    if (!identity) return result('error: identidad v1 no resuelta (legacy-only); configura el setting project o verifica el remoto origin del repo', true)
+    if (!identity) return result('error: identidad v1 no resuelta; configura el setting project o verifica el remoto origin del repo', true)
     const to = typeof a.to === 'string' ? a.to : ''
     const body = typeof a.body === 'string' ? a.body : ''
     const kind = typeof a.kind === 'string' ? a.kind : 'prompt'
@@ -299,7 +322,7 @@ export const register: Register = (on, options) => {
   on('command.run', { command: 'mq-send' }, async ($, e) => {
     const raw = (e.args ?? '').trim()
     if (!raw) return { text: 'mq-send: /mq-send <to>: texto  (<to> = "<proyecto>/<instancia>", "<proyecto>/all" o "all")' }
-    if (!identity) return { text: 'mq-send: identidad v1 no resuelta (legacy-only)' }
+    if (!identity) return { text: 'mq-send: identidad v1 no resuelta' }
     const m = raw.match(/^([^:]+):\s*([\s\S]*)$/)
     if (!m) return { text: 'mq-send: formato /mq-send <to>: texto' }
     const to = (m[1] ?? '').trim()
@@ -321,7 +344,7 @@ export const register: Register = (on, options) => {
           text:
             'Bus synagent (v1): para mandar a otro agente usa la herramienta synagent_send (solo cuando el usuario pida notificar/mensajear a otro agente o proyecto, no en conversación normal). '
             + 'Direcciones: "<proyecto>/<instancia>" (directo), "<proyecto>/all" (proyecto), "all" (global). Los mensajes deben ser hechos autoexplicativos. '
-            + `Tu dirección: ${identity ? directAddress(identity) : 'no configurada (legacy-only)'}.`,
+            + `Tu dirección: ${identity ? directAddress(identity) : 'no configurada (adaptador inactivo)'}.`
         },
       ],
     }
