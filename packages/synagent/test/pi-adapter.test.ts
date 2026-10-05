@@ -670,14 +670,16 @@ test('Pi adapter unresolved project stays legacy-only and refuses all v1 send in
 test('Pi adapter warns and falls back to the default for invalid or non-loopback brokers', async t => {
   for (const configured of ['not-a-url', 'mqtt://example.com:1884']) {
     const harness = createHarness({ 'a4s.synagent.broker-url': configured })
-    t.after(() => harness.shutdown())
-    await harness.start()
-    assert.ok(harness.notifications.some(({ message, type }) =>
-      type === 'warning'
-      && message.includes(configured)
-      && message.includes('mqtt://127.0.0.1:1884'),
-    ))
-    await harness.shutdown()
+    try {
+      await harness.start()
+      assert.ok(harness.notifications.some(({ message, type }) =>
+        type === 'warning'
+        && message.includes(configured)
+        && message.includes('mqtt://127.0.0.1:1884'),
+      ))
+    } finally {
+      await harness.shutdown()
+    }
   }
 })
 
