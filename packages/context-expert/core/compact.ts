@@ -202,7 +202,7 @@ export function applyDecisions(
           : {
               tool_use_id: result.tool_use_id,
               text,
-              isError: result.isError,
+              ...(result.isError === undefined ? {} : { isError: result.isError }),
             };
       });
     if (

@@ -8,8 +8,11 @@ This release supports Pi 1.0.3 and Pion 1.0.4. The extension uses the canonical 
 
 - `session_before_compact` uses a thin Pi `HostBinding` over `runCompaction()` from `@a4s/context-expert`.
 - The binding converts real Pi messages to the neutral core type. It removes thinking and image blocks. It applies the existing private-data sanitization to text and tool input.
-- The shared core preserves the first boundary and the configured recent tail. It keeps each tool call with its result for `keep`, `drop_result`, and `drop_call` decisions.
+- Pi preserves the canonical recent tail from `firstKeptEntryId`. The binding derives the core recent-message protection from converted `turnPrefixMessages`. It protects the complete split-turn prefix.
+- The shared core preserves the first boundary. It keeps each tool call with its result for `keep`, `drop_result`, and `drop_call` decisions.
+- The binding limits the summary and serialized details to 160,000 characters by default. It uses the existing ` …[truncated]… ` marker when it bounds retained text.
 - The binding returns a Pi `CompactionResult` with the rendered summary, the original kept boundary, the original token count, cumulative file lists, and the upstream-compatible `fastJev` continuity details.
+- Persisted decisions use `source="jev"` for Jev answers. Pinned decisions use `source="pinned"` and omit `keepCall` and `keepResult`.
 - Missing credentials, timeout, abort, HTTP failure, invalid response, rejection, or an unprocessable state returns `undefined`. Pi then runs its native compaction fallback once.
 - The shared core fits state to 25,000 estimated tokens by default. It batches tool questions within a 30,000 estimated token request limit.
 - Compaction details never contain RuleSignals. With Evidence off, successful compaction publishes only the sanitized corpus and its receipt; `basic` does not extract, publish, or synthesize rules.

@@ -19,15 +19,20 @@ export {
 } from "./config.ts";
 export {
   buildCoreTranscript,
+  coreOptionsForPreparation,
   CORE_DETAILS_KEY,
   CORE_DETAILS_VERSION,
   createCoreAsker,
+  DEFAULT_MAX_COMPACTION_CHARS,
+  DEFAULT_MINIMUM_COMPACTION_EXCERPT_CHARS,
   createPiCompactionBinding,
   findPreviousCoreCompaction,
   piContentToText,
+  PiCompactionBuildError,
   renderCoreSummary,
   runPiCoreCompaction,
   toNeutralPiMessages,
+  type CompactionPreparationProtection,
   type PiCompactionBindingInput,
   type PreviousCoreCompaction,
 } from "./binding.ts";

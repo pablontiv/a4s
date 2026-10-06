@@ -85,6 +85,23 @@ test("agent_settled defers ctx.compact and enters the existing compact hook once
   assert.equal(runtime.nativeFallbackCalls, 0, "a cancelled custom compaction must not fall back to native compaction");
 });
 
+test("the compatibility fake executes native fallback once for an undefined hook result", async () => {
+  const runtime = createCompatiblePiFake();
+  runtime.pi.on("session_before_compact", () => {
+    runtime.beforeCompactCalls += 1;
+    return undefined;
+  });
+  runtime.pi.on("agent_settled", (_event, ctx) => {
+    ctx.compact();
+  });
+
+  await runtime.emit("agent_settled");
+
+  assert.equal(runtime.compactCalls, 1);
+  assert.equal(runtime.beforeCompactCalls, 1);
+  assert.equal(runtime.nativeFallbackCalls, 1);
+});
+
 test("the compatibility fake derives lifecycle payloads, results, and context", async () => {
   const runtime = createCompatiblePiFake();
   runtime.pi.on("agent_settled", (event, ctx) => {

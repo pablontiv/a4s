@@ -13,6 +13,7 @@ import {
 import { stableDigest } from "./digest.ts";
 import { validateJevResponse } from "./jev.ts";
 import { redactPrivateData } from "./redaction.ts";
+import { truncateExcerpt } from "./state.ts";
 import {
   DEFAULT_JEV_MODEL,
   type CoreCompactionDetails,
@@ -20,10 +21,20 @@ import {
   type JevCompactionResult,
   type JevQuestion,
   type JevRequest,
+  type PersistedCoreCallDecision,
 } from "./types.ts";
 
 export const CORE_DETAILS_KEY = "fastJev";
 export const CORE_DETAILS_VERSION = 1;
+export const DEFAULT_MAX_COMPACTION_CHARS = 160_000;
+export const DEFAULT_MINIMUM_COMPACTION_EXCERPT_CHARS = 24;
+
+export class PiCompactionBuildError extends Error {
+  constructor() {
+    super("compaction summary or persisted details cannot fit the configured limit");
+    this.name = "PiCompactionBuildError";
+  }
+}
 
 export interface PreviousCoreCompaction {
   messages?: Message[];
@@ -40,6 +51,12 @@ export interface PiCompactionBindingInput {
   tokensBefore: number;
   previous?: PreviousCoreCompaction;
   fileOps?: unknown;
+  maxSummaryChars?: number;
+  minimumSummaryExcerptChars?: number;
+}
+
+export interface CompactionPreparationProtection {
+  turnPrefixMessages: readonly unknown[];
 }
 
 interface AssistantBlock {
@@ -105,6 +122,17 @@ export function toNeutralPiMessages(agentMessages: readonly unknown[]): Message[
     }
   }
   return messages;
+}
+
+/** Protects every converted split-turn prefix message. Pi keeps the canonical recent tail outside the summarized span. */
+export function coreOptionsForPreparation(
+  preparation: CompactionPreparationProtection,
+  options: CompactOptions = {},
+): CompactOptions {
+  return {
+    ...options,
+    preserveRecentMessages: toNeutralPiMessages(preparation.turnPrefixMessages).length,
+  };
 }
 
 export function renderCoreSummary(messages: readonly Message[]): string {
@@ -199,36 +227,7 @@ export function createPiCompactionBinding(
   return {
     toNeutral: toNeutralPiMessages,
     assemble(_host, result) {
-      const summary = renderCoreSummary(result.messages);
-      if (summary.length === 0) throw new Error("shared core produced an empty summary");
-      const files = computeFileLists(input.previous, input.fileOps);
-      const details: CoreCompactionDetails = {
-        attemptId: input.attemptId,
-        sourceDigest: input.sourceDigest,
-        jevModel: DEFAULT_JEV_MODEL,
-        createdAt: new Date(input.createdAt).toISOString(),
-        firstKeptEntryId: input.firstKeptEntryId,
-        tokensBefore: input.tokensBefore,
-        summary: {
-          digest: stableDigest(summary),
-          chars: summary.length,
-          retainedMessages: result.messages.length,
-        },
-        readFiles: files.readFiles,
-        modifiedFiles: files.modifiedFiles,
-        [CORE_DETAILS_KEY]: {
-          version: CORE_DETAILS_VERSION,
-          messages: result.messages,
-          stats: result.stats,
-          decisions: result.decisions,
-        },
-      };
-      return {
-        summary,
-        firstKeptEntryId: input.firstKeptEntryId,
-        tokensBefore: input.tokensBefore,
-        details,
-      };
+      return fitCompactionOutput(result, input);
     },
   };
 }
@@ -238,14 +237,173 @@ export async function runPiCoreCompaction(
   input: PiCompactionBindingInput,
   client: JevClient,
   signal: AbortSignal,
-  options: CompactOptions = {},
+  options: CompactOptions,
 ): Promise<{ result: CompactResult; output: JevCompactionResult }> {
   return runCompaction(
     hostMessages,
     createPiCompactionBinding(input),
     createCoreAsker(client, signal),
-    { preserveRecentMessages: 0, ...options },
+    options,
   );
+}
+
+interface BoundedOutput {
+  output: JevCompactionResult;
+  detailsChars: number;
+}
+
+function fitCompactionOutput(
+  result: CompactResult,
+  input: PiCompactionBindingInput,
+): JevCompactionResult {
+  const maximumChars = positiveInteger(
+    input.maxSummaryChars ?? DEFAULT_MAX_COMPACTION_CHARS,
+    "maxSummaryChars",
+  );
+  const minimumExcerptChars = positiveInteger(
+    input.minimumSummaryExcerptChars ?? DEFAULT_MINIMUM_COMPACTION_EXCERPT_CHARS,
+    "minimumSummaryExcerptChars",
+  );
+  const decisions = result.decisions.map(persistDecision);
+  const files = computeFileLists(input.previous, input.fileOps);
+  const build = (excerptChars: number): BoundedOutput => {
+    const bounded = boundMessages(result.messages, excerptChars);
+    const summary = renderCoreSummary(bounded.messages);
+    const details: CoreCompactionDetails = {
+      attemptId: input.attemptId,
+      sourceDigest: input.sourceDigest,
+      jevModel: DEFAULT_JEV_MODEL,
+      createdAt: new Date(input.createdAt).toISOString(),
+      firstKeptEntryId: input.firstKeptEntryId,
+      tokensBefore: input.tokensBefore,
+      summary: {
+        digest: stableDigest(summary),
+        chars: summary.length,
+        budgetChars: maximumChars,
+        retainedMessages: bounded.messages.length,
+        budgetTruncatedMessages: bounded.truncatedMessages,
+      },
+      readFiles: files.readFiles,
+      modifiedFiles: files.modifiedFiles,
+      [CORE_DETAILS_KEY]: {
+        version: CORE_DETAILS_VERSION,
+        messages: bounded.messages,
+        stats: result.stats,
+        decisions,
+      },
+    };
+    return {
+      output: {
+        summary,
+        firstKeptEntryId: input.firstKeptEntryId,
+        tokensBefore: input.tokensBefore,
+        details,
+      },
+      detailsChars: JSON.stringify(details).length,
+    };
+  };
+  const fits = (candidate: BoundedOutput): boolean =>
+    candidate.output.summary.length <= maximumChars && candidate.detailsChars <= maximumChars;
+  const upper = Math.max(minimumExcerptChars, maximumMessageFieldChars(result.messages));
+  const full = build(upper);
+  if (fits(full)) return full.output;
+  const minimum = build(minimumExcerptChars);
+  if (!fits(minimum)) throw new PiCompactionBuildError();
+
+  let best = minimum;
+  let lower = minimumExcerptChars + 1;
+  let higher = upper - 1;
+  while (lower <= higher) {
+    const midpoint = Math.floor((lower + higher) / 2);
+    const candidate = build(midpoint);
+    if (fits(candidate)) {
+      best = candidate;
+      lower = midpoint + 1;
+    } else {
+      higher = midpoint - 1;
+    }
+  }
+  return best.output;
+}
+
+function persistDecision(decision: CompactResult["decisions"][number]): PersistedCoreCallDecision {
+  if (decision.reason === "pinned") {
+    return {
+      id: decision.id,
+      tool: decision.tool,
+      action: decision.action,
+      reason: decision.reason,
+      source: "pinned",
+    };
+  }
+  return { ...decision, source: "jev" };
+}
+
+function boundMessages(
+  messages: readonly Message[],
+  excerptChars: number,
+): { messages: Message[]; truncatedMessages: number } {
+  let truncatedMessages = 0;
+  const bounded = messages.map((message) => {
+    const next = boundMessage(message, excerptChars);
+    if (next !== message) truncatedMessages += 1;
+    return next;
+  });
+  return { messages: bounded, truncatedMessages };
+}
+
+function boundMessage(message: Message, excerptChars: number): Message {
+  const text = truncateExcerpt(message.text, excerptChars);
+  let changed = text !== message.text;
+  const toolUses = message.toolUses.map((tool) => {
+    const input = boundInput(tool.input, excerptChars);
+    const toolText = tool.text === undefined ? undefined : truncateExcerpt(tool.text, excerptChars);
+    if (input === tool.input && toolText === tool.text) return tool;
+    changed = true;
+    return {
+      tool_use_id: tool.tool_use_id,
+      tool: tool.tool,
+      input,
+      ...(toolText === undefined ? {} : { text: toolText }),
+      ...(tool.isError === undefined ? {} : { isError: tool.isError }),
+    };
+  });
+  const originalResults = message.toolResults ?? [];
+  const toolResults = originalResults.map((result) => {
+    const resultText = truncateExcerpt(result.text, excerptChars);
+    if (resultText === result.text) return result;
+    changed = true;
+    return {
+      tool_use_id: result.tool_use_id,
+      text: resultText,
+      ...(result.isError === undefined ? {} : { isError: result.isError }),
+    };
+  });
+  if (!changed) return message;
+  return {
+    role: message.role,
+    text,
+    toolUses,
+    ...(toolResults.length === 0 ? {} : { toolResults }),
+  };
+}
+
+function boundInput(input: Record<string, unknown>, excerptChars: number): Record<string, unknown> {
+  const json = safeJson(input);
+  if (json.length <= excerptChars) return input;
+  return { "[truncated input]": truncateExcerpt(json, excerptChars) };
+}
+
+function maximumMessageFieldChars(messages: readonly Message[]): number {
+  let maximum = 0;
+  for (const message of messages) {
+    maximum = Math.max(maximum, message.text.length);
+    for (const tool of message.toolUses) {
+      maximum = Math.max(maximum, safeJson(tool.input).length, tool.text?.length ?? 0);
+    }
+    for (const result of message.toolResults ?? []) maximum = Math.max(maximum, result.text.length);
+  }
+  return maximum;
 }
 
 function neutralToPiMessages(message: Message): unknown[] {
@@ -337,6 +495,11 @@ function iterableStrings(value: unknown): string[] {
 
 function stringList(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
+function positiveInteger(value: number, name: string): number {
+  if (!Number.isSafeInteger(value) || value <= 0) throw new RangeError(`${name} must be a positive integer`);
+  return value;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

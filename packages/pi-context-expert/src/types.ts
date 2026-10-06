@@ -346,6 +346,12 @@ export interface LegacyJevCompactionDetails {
   ruleSignalBatches: RuleSignalBatch[];
 }
 
+export type PersistedCoreCallDecision =
+  | (import("@a4s/context-expert").CallDecision & { source: "jev" })
+  | Pick<import("@a4s/context-expert").CallDecision, "id" | "tool" | "action" | "reason"> & {
+    source: "pinned";
+  };
+
 /** Details emitted by the Pi HostBinding over the shared context-expert core. */
 export interface CoreCompactionDetails {
   attemptId: string;
@@ -357,7 +363,9 @@ export interface CoreCompactionDetails {
   summary: {
     digest: string;
     chars: number;
+    budgetChars: number;
     retainedMessages: number;
+    budgetTruncatedMessages: number;
   };
   readFiles: string[];
   modifiedFiles: string[];
@@ -365,7 +373,7 @@ export interface CoreCompactionDetails {
     version: 1;
     messages: import("@a4s/context-expert").Message[];
     stats: import("@a4s/context-expert").CompactResult["stats"];
-    decisions: import("@a4s/context-expert").CallDecision[];
+    decisions: PersistedCoreCallDecision[];
   };
 }
 

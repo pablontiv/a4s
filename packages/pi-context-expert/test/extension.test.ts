@@ -8,6 +8,7 @@ import piContextExpertExtension, {
   collectCorpus,
   corpusDigest,
   CORPUS_ENTRY_TYPE,
+  DEFAULT_MAX_COMPACTION_CHARS,
   EVIDENCE_RECEIPT_ENTRY_TYPE,
   estimateJevTokens,
   JevApiError,
@@ -160,14 +161,18 @@ function createRetroCapableContext(entries: StoredEntry[], options: { failModel?
   return { ...base, context, modelCalls: () => modelCalls };
 }
 
-function compactableToolMessages(resultText = "tool result ".repeat(200)): unknown[] {
+function compactableToolMessages(
+  resultText = "tool result ".repeat(200),
+  toolCallId = "call-1",
+  path = "src/file.ts",
+): unknown[] {
   return [
     { role: "user", content: "Inspect the file.", timestamp: 1 },
     {
       role: "assistant",
       content: [
         { type: "text", text: "Reading the file." },
-        { type: "toolCall", id: "call-1", name: "read", arguments: { path: "src/file.ts" } },
+        { type: "toolCall", id: toolCallId, name: "read", arguments: { path } },
       ],
       api: "test",
       provider: "test",
@@ -185,7 +190,7 @@ function compactableToolMessages(resultText = "tool result ".repeat(200)): unkno
     },
     {
       role: "toolResult",
-      toolCallId: "call-1",
+      toolCallId,
       toolName: "read",
       content: [{ type: "text", text: resultText }],
       isError: false,
@@ -197,15 +202,20 @@ function compactableToolMessages(resultText = "tool result ".repeat(200)): unkno
 
 function compactionEvent(
   messages: unknown[] = [{ role: "user", content: "Always run deterministic tests." }],
-  lifecycle: { reason?: "manual" | "threshold" | "overflow"; willRetry?: boolean } = {},
+  lifecycle: {
+    reason?: "manual" | "threshold" | "overflow";
+    willRetry?: boolean;
+    turnPrefixMessages?: unknown[];
+    isSplitTurn?: boolean;
+  } = {},
 ) {
   return {
     type: "session_before_compact",
     preparation: {
       firstKeptEntryId: "kept-entry",
       messagesToSummarize: messages,
-      turnPrefixMessages: [],
-      isSplitTurn: false,
+      turnPrefixMessages: lifecycle.turnPrefixMessages ?? [],
+      isSplitTurn: lifecycle.isSplitTurn ?? false,
       tokensBefore: 10_000,
       fileOps: { read: [], modified: [] },
       settings: { enabled: true, reserveTokens: 16_384, keepRecentTokens: 20_000 },
@@ -392,6 +402,70 @@ test("basic does not publish rule artifacts when Evidence is off", async () => {
     context,
   );
   assert.equal(hasRuleArtifact(fake.entries), false);
+});
+
+test("a long session without tool calls bounds the summary and persisted details", async () => {
+  const jev = new ValidFakeJev();
+  const fake = createFakePi();
+  registerPiContextExpert(fake.pi, { jevClient: jev });
+  const { context } = createContext(fake.entries);
+  const messages = Array.from({ length: 80 }, (_, index) => ({
+    role: index % 2 === 0 ? "user" : "assistant",
+    content: `LONG-${index} ${"content ".repeat(1_500)}`,
+  }));
+
+  const compaction = requireCompactionResult(
+    await fake.handlers.get("session_before_compact")?.(compactionEvent(messages), context),
+  );
+
+  assert.equal(jev.calls, 0);
+  assert.ok(compaction.summary.length <= DEFAULT_MAX_COMPACTION_CHARS);
+  assert.ok(JSON.stringify(compaction.details).length <= DEFAULT_MAX_COMPACTION_CHARS);
+  assert.match(compaction.summary, / …\[truncated\]… /);
+  if ("schema" in compaction.details) assert.fail("expected HostBinding details");
+  assert.equal(compaction.details.fastJev.messages.length, messages.length);
+  assert.ok(compaction.details.summary.budgetTruncatedMessages > 0);
+});
+
+test("split-turn compaction pins every converted turn prefix message", async () => {
+  const oldMessages = compactableToolMessages("old result ".repeat(100), "old-call", "old.ts");
+  const turnPrefixMessages = compactableToolMessages(
+    "recent result must remain",
+    "recent-call",
+    "recent.ts",
+  ).slice(0, 3);
+  const jev: JevClient = {
+    async evaluate(request) {
+      return validJevResponse(request, (_id, question) =>
+        question.type === "noul" ? { type: "noul", noul: 0 } : undefined
+      );
+    },
+  };
+  const fake = createFakePi();
+  registerPiContextExpert(fake.pi, { jevClient: jev });
+  const { context } = createContext(fake.entries);
+  const event = compactionEvent(oldMessages, {
+    turnPrefixMessages,
+    isSplitTurn: true,
+  });
+
+  const compaction = requireCompactionResult(
+    await fake.handlers.get("session_before_compact")?.(event, context),
+  );
+
+  assert.equal(compaction.firstKeptEntryId, event.preparation.firstKeptEntryId);
+  assert.match(compaction.summary, /recent\.ts/);
+  assert.match(compaction.summary, /recent result must remain/);
+  assert.doesNotMatch(compaction.summary, /old\.ts|old result/);
+  if ("schema" in compaction.details) assert.fail("expected HostBinding details");
+  assert.deepEqual(
+    compaction.details.fastJev.decisions.map((decision) => [decision.reason, decision.source]),
+    [["call_dropped", "jev"], ["pinned", "pinned"]],
+  );
+  const recent = compaction.details.fastJev.decisions[1];
+  assert.ok(recent);
+  assert.equal("keepCall" in recent, false);
+  assert.equal("keepResult" in recent, false);
 });
 
 test("a cancelled compaction publishes no corpus while a successful one is reloadable", async () => {

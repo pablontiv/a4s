@@ -110,7 +110,7 @@ test("HostBinding applies keep, drop_result, and drop_call to one and multiple P
       return 0.1;
     }),
     new AbortController().signal,
-    { preserveRecentMessages: 0, truncateHeadChars: 40 },
+    { preserveRecentMessages: 1, truncateHeadChars: 40 },
   );
 
   assert.deepEqual(result.decisions.map((decision) => decision.action), ["keep", "drop_result", "drop_call"]);
@@ -122,6 +122,11 @@ test("HostBinding applies keep, drop_result, and drop_call to one and multiple P
   assert.equal(output.tokensBefore, 20_000);
   if ("schema" in output.details) assert.fail("expected HostBinding details");
   assert.equal(output.details[CORE_DETAILS_KEY].decisions.length, 3);
+  assert.deepEqual(output.details[CORE_DETAILS_KEY].decisions.map((decision) => decision.source), [
+    "jev",
+    "jev",
+    "jev",
+  ]);
 });
 
 test("HostBinding preserves boundary and recent tool pairs", async () => {
@@ -133,7 +138,7 @@ test("HostBinding preserves boundary and recent tool pairs", async () => {
     assistant([{ type: "toolCall", id: "recent", name: "read", arguments: { path: "recent.ts" } }]),
     toolResult("recent", "recent result"),
   ];
-  const { result } = await runPiCoreCompaction(
+  const { result, output } = await runPiCoreCompaction(
     host,
     input(),
     answering(() => 0),
@@ -149,6 +154,13 @@ test("HostBinding preserves boundary and recent tool pairs", async () => {
   assert.ok(result.messages.some((message) => message.toolUses.some((call) => call.tool_use_id === "boundary")));
   assert.ok(result.messages.some((message) => message.toolUses.some((call) => call.tool_use_id === "recent")));
   assert.ok(!result.messages.some((message) => message.toolUses.some((call) => call.tool_use_id === "middle")));
+  if ("schema" in output.details) assert.fail("expected HostBinding details");
+  const stored = output.details.fastJev.decisions;
+  assert.deepEqual(stored.map((decision) => decision.source), ["pinned", "jev", "pinned"]);
+  assert.equal("keepCall" in stored[0]!, false);
+  assert.equal("keepResult" in stored[0]!, false);
+  assert.equal(stored[0]?.reason, "pinned");
+  assert.equal("keepCall" in stored[1]!, true);
 });
 
 test("continuity reads structured upstream, built-in, and historical A4S compactions", () => {
@@ -156,7 +168,20 @@ test("continuity reads structured upstream, built-in, and historical A4S compact
   const upstream = findPreviousCoreCompaction([{
     type: "compaction",
     summary: "rendered",
-    details: { fastJev: { version: 1, messages } },
+    details: {
+      fastJev: {
+        version: 1,
+        messages,
+        decisions: [{
+          id: "t1",
+          tool: "read",
+          action: "keep",
+          reason: "pinned",
+          keepCall: 1,
+          keepResult: 1,
+        }],
+      },
+    },
   }]);
   assert.deepEqual(upstream, { messages, readFiles: [], modifiedFiles: [] });
   const reconstructed = toNeutralPiMessages(buildCoreTranscript(upstream, [

@@ -9,7 +9,9 @@ import {
 import type { CompactOptions } from "@a4s/context-expert";
 import {
   buildCoreTranscript,
+  coreOptionsForPreparation,
   findPreviousCoreCompaction,
+  PiCompactionBuildError,
   runPiCoreCompaction,
 } from "./binding.ts";
 import { collectCorpus, publishCorpusAfterCompaction, stageCorpus } from "./corpus.ts";
@@ -458,6 +460,7 @@ export function registerPiContextExpert(pi: ExtensionAPI, options: PiContextExpe
         hookTimeoutMs,
         now,
         options.coreCompaction,
+        options.compaction,
       );
     } catch {
       safeNotify(ctx, "compaction", "internal_failure");
@@ -833,6 +836,7 @@ async function handleCompaction(
   timeoutMs: number,
   now: () => Date,
   coreOptions: CompactOptions | undefined,
+  compactionOptions: BuildJevCompactionOptions | undefined,
 ): Promise<SessionBeforeCompactResult | undefined> {
   let attemptId: string | undefined;
   try {
@@ -861,6 +865,7 @@ async function handleCompaction(
       ...event.preparation.turnPrefixMessages,
     ]);
     const client = await createJevClient(ctx, timeoutMs);
+    const customGoal = event.customInstructions?.trim();
     const { output: result } = await runWithDeadline(
       (signal) => runPiCoreCompaction(
         hostMessages,
@@ -870,15 +875,21 @@ async function handleCompaction(
           createdAt: observedAt,
           firstKeptEntryId: event.preparation.firstKeptEntryId,
           tokensBefore: event.preparation.tokensBefore,
-          previous,
+          ...(previous === undefined ? {} : { previous }),
           fileOps: event.preparation.fileOps,
+          ...(compactionOptions?.maxSummaryChars === undefined
+            ? {}
+            : { maxSummaryChars: compactionOptions.maxSummaryChars }),
+          ...(compactionOptions?.minimumSummaryExcerptChars === undefined
+            ? {}
+            : { minimumSummaryExcerptChars: compactionOptions.minimumSummaryExcerptChars }),
         },
         client,
         signal,
-        {
+        coreOptionsForPreparation(event.preparation, {
           ...coreOptions,
-          ...(event.customInstructions?.trim() ? { goal: event.customInstructions.trim() } : {}),
-        },
+          ...(customGoal ? { goal: customGoal } : {}),
+        }),
       ),
       timeoutMs,
       event.signal,
@@ -1231,7 +1242,7 @@ function classifyCompactionError(error: unknown): OperationalFailureCode {
   if (error instanceof DeadlineExceededError) return "timeout";
   if (error instanceof OperationAbortedError) return "aborted";
   if (error instanceof JevValidationError) return "malformed_response";
-  if (error instanceof StateFitError || error instanceof ObservationPlanError) {
+  if (error instanceof StateFitError || error instanceof ObservationPlanError || error instanceof PiCompactionBuildError) {
     return "oversized_state";
   }
   if (error instanceof JevApiError) return "api_failure";
