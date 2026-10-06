@@ -1,29 +1,27 @@
 import { estimateTokens, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { DeadlineExceededError, OperationAbortedError } from "./deadline.ts";
-import { JevApiError, JevUnavailableError, JevValidationError, validateJevResponse } from "./jev.ts";
-import type { OperationalFailureCode } from "./storage.ts";
 import {
-  DEFAULT_JEV_MODEL,
-  type JevClient,
-  type JevRequest,
+  type Message,
+  type ToolUse,
   type TriggerDecision,
-  type TriggerMode,
-} from "./types.ts";
+} from "@a4s/context-expert";
+import { toNeutralPiMessages } from "./binding.ts";
+import type { TriggerMode } from "./types.ts";
 
-export interface TriggerInput {
+export {
+  buildRecentConversation,
+  buildTriggerState,
+  evaluateTrigger,
+  triggerFloorPasses,
+} from "@a4s/context-expert";
+
+export interface PiTriggerGateInput {
   mode: TriggerMode;
   interactive: boolean;
   idle: boolean;
-  contextTokens: number;
-  contextWindow: number;
-  minimumContextRatio: number;
   compactableHistory: boolean;
   hasPendingWork: boolean;
   cooldownActive: boolean;
   editorHasText: boolean;
-  credentialAvailable: boolean;
-  jevClient: JevClient;
-  signal: AbortSignal;
 }
 
 type CompactableMessage = Parameters<typeof estimateTokens>[0];
@@ -32,15 +30,6 @@ export interface TriggerProjectionEntry {
   sourceType: string;
   messages: readonly CompactableMessage[];
 }
-
-const TRIGGER_QUESTION = {
-  type: "choice" as const,
-  instructions: "Should Pi compact now after deterministic readiness checks have passed?",
-  criteria: {
-    compact: "Compaction would usefully summarize the eligible conversation history now.",
-    wait: "The eligible history should remain uncompressed for now.",
-  },
-};
 
 function startsConversationTurn(entry: TriggerProjectionEntry): boolean {
   if (entry.sourceType === "compaction") return false;
@@ -53,10 +42,7 @@ function startsConversationTurn(entry: TriggerProjectionEntry): boolean {
   );
 }
 
-/**
- * Conservative readiness proof: after Pi keeps its configured recent tail,
- * at least one complete older turn must remain available for summarization.
- */
+/** Proves that Pi can summarize one complete older turn after it retains its recent tail. */
 export function hasConservativeCompactableHistory(
   entries: readonly TriggerProjectionEntry[],
   keepRecentTokens: number,
@@ -82,83 +68,51 @@ export function hasConservativeCompactableHistory(
   return recentTailTokens >= keepRecentTokens;
 }
 
-/** Evaluates local safety gates before making a deliberately text-free Jev request. */
-export async function evaluateTrigger(input: TriggerInput): Promise<TriggerDecision> {
-  return evaluateTriggerWithFailure(input);
-}
-
-export async function evaluateTriggerWithFailure(
-  input: TriggerInput,
-  onFailure?: (code: OperationalFailureCode) => void,
-): Promise<TriggerDecision> {
-  if (!localTriggerGatesPass(input)) return { action: "none" };
-
-  const request: JevRequest = {
-    model: DEFAULT_JEV_MODEL,
-    state: {
-      schema: "a4s.compaction-trigger-state/v2",
-      contextTokens: input.contextTokens,
-      contextWindow: input.contextWindow,
-      contextRatio: input.contextTokens / input.contextWindow,
-      minimumContextRatio: input.minimumContextRatio,
-      compactableHistory: input.compactableHistory,
-    },
-    questions: { compact_now: TRIGGER_QUESTION },
-  };
-  try {
-    const response = validateJevResponse(
-      await input.jevClient.evaluate(request, { signal: input.signal }),
-      request.questions,
-    );
-    if (response.answers.compact_now?.type !== "choice" || response.answers.compact_now.choice !== "compact") {
-      return { action: "none" };
-    }
-  } catch (error) {
-    try {
-      onFailure?.(classifyTriggerFailure(error));
-    } catch {
-      // El receipt es best-effort. El trigger conserva su salida segura.
-    }
-    return { action: "none" };
-  }
-
-  return input.mode === "auto"
-    ? { action: "compact" }
-    : { action: "hint", reason: "Jev recommends compaction" };
-}
-
-function classifyTriggerFailure(error: unknown): OperationalFailureCode {
-  if (error instanceof JevUnavailableError) return "missing_key";
-  if (error instanceof DeadlineExceededError) return "timeout";
-  if (error instanceof OperationAbortedError) return "aborted";
-  if (error instanceof JevValidationError) return "malformed_response";
-  if (error instanceof JevApiError) return "api_failure";
-  return "internal_failure";
-}
-
-export function localTriggerGatesPass(input: Omit<TriggerInput, "jevClient" | "signal">): boolean {
+/** Applies only Pi lifecycle gates. The shared core owns the ratio floor and semantic decision. */
+export function localTriggerGatesPass(input: PiTriggerGateInput): boolean {
   return (
     input.mode !== "off" &&
     input.interactive &&
     input.idle &&
-    Number.isFinite(input.contextTokens) &&
-    input.contextTokens >= 0 &&
-    Number.isFinite(input.contextWindow) &&
-    input.contextWindow > 0 &&
-    Number.isFinite(input.minimumContextRatio) &&
-    input.minimumContextRatio > 0 &&
-    input.minimumContextRatio <= 1 &&
-    input.contextTokens / input.contextWindow >= input.minimumContextRatio &&
     input.compactableHistory &&
     !input.hasPendingWork &&
     !input.cooldownActive &&
-    !input.editorHasText &&
-    input.credentialAvailable
+    !input.editorHasText
   );
 }
 
-/** The trigger owns no compaction implementation; Pi's normal lifecycle remains authoritative. */
-export async function applyTriggerDecision(decision: TriggerDecision, ctx: ExtensionContext): Promise<void> {
-  if (decision.action === "hint") ctx.ui.notify(`Compaction suggested: ${decision.reason}`, "info");
-  if (decision.action === "compact") await ctx.compact();
+/** Converts real Pi messages and associates each sanitized tool result with its tool call. */
+export function toTriggerMessages(agentMessages: readonly unknown[]): Message[] {
+  const messages = toNeutralPiMessages(agentMessages).map((message) => ({
+    ...message,
+    toolUses: message.toolUses.map((tool) => ({ ...tool })),
+    ...(message.toolResults === undefined
+      ? {}
+      : { toolResults: message.toolResults.map((result) => ({ ...result })) }),
+  }));
+  const calls = new Map<string, ToolUse>();
+  for (const message of messages) {
+    for (const tool of message.toolUses) calls.set(tool.tool_use_id, tool);
+    for (const result of message.toolResults ?? []) {
+      const call = calls.get(result.tool_use_id);
+      if (!call) continue;
+      call.text = result.text;
+      call.isError = result.isError === true;
+    }
+  }
+  return messages;
+}
+
+/** Applies a shared-core decision through Pi's existing lifecycle. */
+export async function applyTriggerDecision(
+  decision: TriggerDecision,
+  mode: Exclude<TriggerMode, "off">,
+  ctx: ExtensionContext,
+): Promise<void> {
+  if (decision === "wait") return;
+  if (mode === "hint") {
+    ctx.ui.notify("Compaction suggested: Jev recommends compaction", "info");
+    return;
+  }
+  await ctx.compact();
 }

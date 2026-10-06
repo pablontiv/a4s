@@ -6,10 +6,17 @@ import {
   type SessionBeforeCompactEvent,
   type SessionBeforeCompactResult,
 } from "@earendil-works/pi-coding-agent";
-import type { CompactOptions } from "@a4s/context-expert";
+import {
+  buildTriggerState,
+  evaluateTrigger,
+  triggerFloorPasses,
+  type CompactOptions,
+  type TriggerDiagnostic,
+} from "@a4s/context-expert";
 import {
   buildCoreTranscript,
   coreOptionsForPreparation,
+  createCoreAsker,
   findPreviousCoreCompaction,
   PiCompactionBuildError,
   runPiCoreCompaction,
@@ -51,11 +58,9 @@ import {
   type RetroOptions,
 } from "./retro.ts";
 import {
-  applyTriggerDecision,
-  evaluateTriggerWithFailure,
   hasConservativeCompactableHistory,
   localTriggerGatesPass,
-  type TriggerInput,
+  toTriggerMessages,
 } from "./trigger.ts";
 import { StateFitError } from "./state.ts";
 import {
@@ -183,11 +188,19 @@ export function registerPiContextExpert(pi: ExtensionAPI, options: PiContextExpe
     }
   });
 
-  const createJevClient = async (ctx: ExtensionContext, timeoutMs: number): Promise<JevClient> => {
-    if (options.jevClient) return options.jevClient;
+  const createJevClient = async (
+    ctx: ExtensionContext,
+    timeoutMs: number,
+    resolvedSecrets?: Array<string | undefined>,
+  ): Promise<JevClient> => {
+    if (options.jevClient) {
+      resolvedSecrets?.push(process.env.TYPESAFE_API_KEY);
+      return options.jevClient;
+    }
     const auth = await ctx.modelRegistry.getProviderAuth(TYPESAFE_PROVIDER_ID);
     const nativeCredential = auth?.auth.apiKey?.trim();
     const environmentFallback = process.env.TYPESAFE_API_KEY?.trim();
+    resolvedSecrets?.push(nativeCredential, environmentFallback);
     if (!nativeCredential && !environmentFallback) throw new JevUnavailableError();
     return new PiJevClient({ modelRegistry: ctx.modelRegistry, timeoutMs });
   };
@@ -332,25 +345,28 @@ export function registerPiContextExpert(pi: ExtensionAPI, options: PiContextExpe
       config.trigger.mode === "auto" &&
       (autoCompactionInFlight || latestMessageIsAbortedAssistant(branch))
     ) return;
+    const contextTokens = usage?.tokens ?? 0;
+    const contextWindow = usage?.contextWindow ?? 0;
     const baseInput = {
       mode: config.trigger.mode,
       interactive: ctx.hasUI,
       idle: ctx.isIdle(),
-      contextTokens: usage?.tokens ?? 0,
-      contextWindow: usage?.contextWindow ?? 0,
+      contextTokens,
+      contextWindow,
       minimumContextRatio: triggerMinimumContextRatio,
       compactableHistory: true,
       hasPendingWork: ctx.hasPendingMessages(),
       cooldownActive: hasTriggerCooldown(branch, now(), triggerCooldownMs),
       editorHasText: editorHasText(ctx),
     };
-    if (!localTriggerGatesPass({ ...baseInput, credentialAvailable: true })) return;
+    if (!triggerFloorPasses(contextTokens, contextWindow, triggerMinimumContextRatio)) return;
+    if (!localTriggerGatesPass(baseInput)) return;
 
-    let compactableHistory = false;
+    let triggerMessages = [] as ReturnType<typeof toTriggerMessages>;
     try {
       const settings = resolveTriggerCompactionSettings(ctx);
       const projection = ctx.sessionManager.buildSessionProjection();
-      compactableHistory = hasConservativeCompactableHistory(
+      const compactableHistory = hasConservativeCompactableHistory(
         projection.entries.map((entry) => ({
           sourceType: entry.sourceEntry.type,
           messages: entry.messages,
@@ -358,6 +374,8 @@ export function registerPiContextExpert(pi: ExtensionAPI, options: PiContextExpe
         settings.keepRecentTokens,
         branch.at(-1)?.type === "compaction",
       );
+      if (!compactableHistory) return;
+      triggerMessages = toTriggerMessages(projection.messages);
     } catch {
       recordOperationalFailure({
         phase: "trigger",
@@ -367,45 +385,37 @@ export function registerPiContextExpert(pi: ExtensionAPI, options: PiContextExpe
       });
       return;
     }
-    if (!compactableHistory) return;
 
     const ownsAutoAttempt = config.trigger.mode === "auto";
     if (ownsAutoAttempt) autoCompactionInFlight = true;
     let compactionDispatched = false;
     try {
-      const credentialAvailable = options.jevClient !== undefined || Boolean(
-        (await ctx.modelRegistry.getProviderAuth(TYPESAFE_PROVIDER_ID))?.auth.apiKey?.trim(),
+      const secrets: Array<string | undefined> = [];
+      const jevClient = await createJevClient(ctx, hookTimeoutMs, secrets);
+      const state = buildTriggerState(
+        contextTokens,
+        contextWindow,
+        triggerMinimumContextRatio,
+        triggerMessages,
+        secrets,
       );
-      if (!credentialAvailable) {
-        recordOperationalFailure({
+      const decision = await evaluateTrigger(
+        createCoreAsker(jevClient, ctx.signal ?? new AbortController().signal),
+        state,
+        (diagnostic) => recordOperationalFailure({
           phase: "trigger",
-          code: "missing_key",
+          code: triggerDiagnosticCode(diagnostic),
           reason: "agent_settled",
           willRetry: true,
-        });
-        return;
-      }
-      const input: TriggerInput = {
-        ...baseInput,
-        compactableHistory,
-        credentialAvailable,
-        jevClient: await createJevClient(ctx, hookTimeoutMs),
-        signal: ctx.signal ?? new AbortController().signal,
-      };
-      const decision = await evaluateTriggerWithFailure(input, (code) =>
-        recordOperationalFailure({
-          phase: "trigger",
-          code,
-          reason: "agent_settled",
-          willRetry: true,
-        })
+        }),
       );
-      if (decision.action === "none") return;
+      if (decision === "wait") return;
+      const action = config.trigger.mode === "auto" ? "compact" : "hint";
       const appendCooldown = () => {
         try {
           pi.appendEntry(TRIGGER_COOLDOWN_ENTRY_TYPE, {
             schema: "a4s.compaction-trigger-cooldown/v1",
-            action: decision.action,
+            action,
             triggeredAt: now().toISOString(),
           });
           return true;
@@ -413,8 +423,8 @@ export function registerPiContextExpert(pi: ExtensionAPI, options: PiContextExpe
           return false;
         }
       };
-      if (decision.action === "hint") {
-        if (appendCooldown()) await applyTriggerDecision(decision, ctx);
+      if (action === "hint") {
+        if (appendCooldown()) ctx.ui.notify("Compaction suggested: Jev recommends compaction", "info");
         return;
       }
 
@@ -443,7 +453,6 @@ export function registerPiContextExpert(pi: ExtensionAPI, options: PiContextExpe
         reason: "agent_settled",
         willRetry: true,
       });
-      throw error;
     } finally {
       if (ownsAutoAttempt && !compactionDispatched) autoCompactionInFlight = false;
     }
@@ -1234,6 +1243,17 @@ function classifyLadderProjectionError(error: unknown): DiagnosticCode {
   if (error instanceof DeadlineExceededError) return "timeout";
   if (error instanceof OperationAbortedError) return "aborted";
   if (error instanceof JevApiError) return "api_failure";
+  return "internal_failure";
+}
+
+function triggerDiagnosticCode(diagnostic: TriggerDiagnostic): OperationalFailureCode {
+  if (diagnostic.code === "http_status") return "api_failure";
+  if (
+    diagnostic.code === "invalid_json" ||
+    diagnostic.code === "invalid_response" ||
+    diagnostic.code === "invalid_answer"
+  ) return "malformed_response";
+  if (diagnostic.code === "request_too_large") return "oversized_state";
   return "internal_failure";
 }
 

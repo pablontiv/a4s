@@ -88,13 +88,22 @@ leaves at least one complete older turn for compaction. This conservative gate
 is recalculated after model changes and may omit a valid hint rather than show
 one that `/compact` cannot execute.
 
-Only after those deterministic gates pass does Trigger resolve a credential and
-send Jev a text-free request with token count, context window, ratio, and
-compactable-history state. `hint` displays a notification. Persisting
-`trigger.mode=auto` is the operator's durable consent for automatic compaction;
-no per-session acknowledgement or additional command is required. `auto` calls
-only `ctx.compact()`, which enters the existing `session_before_compact`
-handler. Trigger persistence contains only hint/compact cooldown metadata.
+Only after those deterministic gates pass does Trigger resolve a credential.
+Trigger checks Pi's stored TypeSafe credential first. It uses
+`TYPESAFE_API_KEY` as the fallback through Pi's native classifier transport.
+The Pi binding converts the real projected messages to the shared core message
+type. It removes the system prompt, thinking blocks, reasoning blocks, and
+images. It sanitizes text and tool input before the shared core builds the
+Trigger state. The shared core clips each tool result to 512 bytes and enforces
+the complete 32,000-byte request limit. The shared core owns the exact `done`
+and `shape` questions, response parser, score formula, and interpolated floor.
+Any Trigger failure returns `wait`.
+
+`hint` displays a notification. Persisting `trigger.mode=auto` is the
+operator's durable consent for automatic compaction. No per-session
+acknowledgement or additional command is required. `auto` calls only
+`ctx.compact()`, which enters the existing `session_before_compact` handler.
+Trigger persistence contains only hint/compact cooldown metadata.
 
 Supported Pi versions expose the editor text in TUI mode. The production Trigger uses that
 value unless an embedding supplies the `trigger.editorHasText` runtime gate;

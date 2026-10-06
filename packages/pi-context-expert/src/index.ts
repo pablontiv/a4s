@@ -169,10 +169,14 @@ export {
 } from "./scheduler.ts";
 export {
   applyTriggerDecision,
+  buildRecentConversation,
+  buildTriggerState,
   evaluateTrigger,
   hasConservativeCompactableHistory,
   localTriggerGatesPass,
-  type TriggerInput,
+  toTriggerMessages,
+  triggerFloorPasses,
+  type PiTriggerGateInput,
   type TriggerProjectionEntry,
 } from "./trigger.ts";
 export {

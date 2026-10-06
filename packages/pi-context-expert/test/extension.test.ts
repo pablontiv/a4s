@@ -242,16 +242,8 @@ class CompactTriggerJev extends ValidFakeJev {
   override async evaluate(request: JevRequest): Promise<unknown> {
     this.calls += 1;
     this.requests.push(request);
-    return validJevResponse(request, (_id, question) =>
-      question.type === "choice" && Object.hasOwn(question.criteria, "compact")
-        ? {
-          type: "choice",
-          choice: "compact",
-          probabilities: { compact: 1, wait: 0 },
-          confidence: 1,
-        }
-        : undefined,
-    );
+    assert.deepEqual(Object.keys(request.questions), ["done", "shape"]);
+    return validJevResponse(request);
   }
 }
 
@@ -1214,6 +1206,84 @@ test("native classification accepts stored credentials first and TYPESAFE_API_KE
   }
 });
 
+test("Trigger checks stored credentials first and accepts TYPESAFE_API_KEY as fallback", async (t) => {
+  const priorKey = process.env.TYPESAFE_API_KEY;
+  t.after(() => {
+    if (priorKey === undefined) delete process.env.TYPESAFE_API_KEY;
+    else process.env.TYPESAFE_API_KEY = priorKey;
+  });
+
+  for (const scenario of [
+    { name: "stored credential", nativeKey: "stored-key", environmentKey: "environment-key" },
+    { name: "environment fallback", nativeKey: undefined, environmentKey: "environment-key" },
+  ]) {
+    await t.test(scenario.name, async () => {
+      process.env.TYPESAFE_API_KEY = scenario.environmentKey;
+      const fake = createFakePi();
+      const base = createContext(fake.entries, { projectionEntries: compactableTriggerProjection() });
+      const order: string[] = [];
+      const context = {
+        ...base.context,
+        hasUI: true,
+        isIdle: () => true,
+        hasPendingMessages: () => false,
+        getContextUsage: () => ({ tokens: 40_000, contextWindow: 128_000, percent: 31.25 }),
+        signal: undefined,
+        modelRegistry: {
+          async getProviderAuth() {
+            order.push("auth");
+            return scenario.nativeKey ? { auth: { apiKey: scenario.nativeKey }, source: "stored" } : undefined;
+          },
+          findOfType() {
+            order.push("model");
+            return { type: "classifier", provider: "typesafe", id: "jev-latest", api: "typesafe-system-one" };
+          },
+          async classify(
+            _model: unknown,
+            request: { questions: Record<string, { type: string; criteria: Record<string, string> }> },
+          ) {
+            order.push("classify");
+            assert.deepEqual(Object.keys(request.questions), ["done", "shape"]);
+            return {
+              api: "typesafe-system-one",
+              provider: "typesafe",
+              model: "jev-latest",
+              stopReason: "stop",
+              timestamp: 1,
+              answers: Object.fromEntries(Object.entries(request.questions).map(([id, question]) => {
+                const choices = Object.keys(question.criteria);
+                return [id, {
+                  type: "choice",
+                  choice: choices[0],
+                  probabilities: Object.fromEntries(choices.map((choice, index) => [choice, index === 0 ? 1 : 0])),
+                  confidence: 1,
+                }];
+              })),
+              usage: {
+                input: 10,
+                output: 2,
+                cacheRead: 0,
+                cacheWrite: 0,
+                totalTokens: 12,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+              },
+            };
+          },
+        },
+      };
+      registerPiContextExpert(fake.pi, {
+        config: { "trigger.mode": "hint" },
+        trigger: { resolveCompactionSettings: () => ({ keepRecentTokens: 20_000 }) },
+      });
+
+      await fake.handlers.get("agent_settled")?.({ type: "agent_settled" }, context);
+
+      assert.deepEqual(order, ["auth", "model", "classify"]);
+      assert.equal(base.notifications.length, 1);
+    });
+  }
+});
+
 test("an aborted compaction returns undefined for native fallback", async () => {
   const controller = new AbortController();
   controller.abort();
@@ -1880,7 +1950,7 @@ test("agent_settled auto trigger retries failure and starts cooldown only after 
 });
 
 test("agent_settled auto trigger treats persisted config as consent and enters session_before_compact", async () => {
-  const jev = new ValidFakeJev();
+  const jev = new CompactTriggerJev();
   const fake = createFakePi();
   registerPiContextExpert(fake.pi, {
     jevClient: jev,
@@ -1918,10 +1988,10 @@ test("agent_settled auto trigger treats persisted config as consent and enters s
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(compactCalls, 1);
   assert.equal(beforeCompactCalls, 1, "auto uses ctx.compact and the existing compaction hook");
-  assert.equal(
-    jev.requests.filter((request) => Object.hasOwn(request.questions, "compact_now")).length,
-    1,
-  );
+  assert.equal(jev.requests.length, 1);
+  assert.deepEqual(Object.keys(jev.requests[0]?.questions ?? {}), ["done", "shape"]);
+  const triggerState = jev.requests[0]?.state as { recent?: Array<{ text?: string }> };
+  assert.ok(triggerState.recent?.some((message) => (message.text?.length ?? 0) > 0));
   assert.equal(notifications.length, 0);
   assert.equal(fake.entries.some((entry) => entry.customType?.includes("acknowledgement")), false);
   assert.equal(fake.entries.some((entry) => entry.customType?.includes("cooldown")), true);
