@@ -72,12 +72,13 @@ test('adapter: directAddress y subscriptions', () => {
   const identity = { project: 'a4s', instance: 'claude-1' }
   assert.equal(directAddress(identity), 'a4s/claude-1')
 
-  const plan = subscriptions({ identity, global: false, legacyAddress: 'claude' })
-  assert.deepEqual(plan.durable, ['synagent/v1/a4s/claude-1', 'a4s/inbox/claude'])
-  assert.deepEqual(plan.transient, ['synagent/v1/a4s/all'])
+  const plan = subscriptions({ identity })
+  assert.deepEqual(plan.durable, ['synagent/v1/a4s/claude-1'])
+  assert.deepEqual(plan.transient, ['synagent/v1/a4s/all', 'synagent/v1/all'])
 
-  const globalPlan = subscriptions({ identity, global: true, legacyAddress: 'claude' })
-  assert.deepEqual(globalPlan.transient, ['synagent/v1/a4s/all', 'synagent/v1/all'])
+  const optOutPlan = subscriptions({ identity, global: false, legacyAddress: 'claude' })
+  assert.deepEqual(optOutPlan.durable, ['synagent/v1/a4s/claude-1', 'a4s/inbox/claude'])
+  assert.deepEqual(optOutPlan.transient, ['synagent/v1/a4s/all'])
 })
 
 test('adapter: isForIdentity filtra por identidad', () => {
@@ -114,11 +115,11 @@ test('adapter: isForIdentity filtra por identidad', () => {
     false,
   )
 
-  // Global (sin opt-in)
-  assert.equal(isForIdentity(msg('all'), { identity, global: false, legacyAddress: 'claude' }), false)
+  // Global (habilitado por defecto)
+  assert.equal(isForIdentity(msg('all'), { identity, legacyAddress: 'claude' }), true)
 
-  // Global (con opt-in)
-  assert.equal(isForIdentity(msg('all'), { identity, global: true, legacyAddress: 'claude' }), true)
+  // Global (opt-out explícito)
+  assert.equal(isForIdentity(msg('all'), { identity, global: false, legacyAddress: 'claude' }), false)
 
   // Legacy
   assert.equal(

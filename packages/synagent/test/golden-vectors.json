@@ -1,5 +1,5 @@
 {
-  "//": "Vectores dorados host-neutral (ADR 0069). `wire` es el serialize() canónico EXACTO (orden de claves de createCanonical: id,from,to,kind,body,[reply_to],ts) — debe re-serializar idéntico. `topic` es toTopic(to) o null para direcciones legacy planas. accept.* son acceptInbound() para la identidad de referencia a4s/sess-01 con legacyAddress=claude. Cualquier adaptador, actual o futuro, debe reproducir esto.",
+  "//": "Vectores dorados host-neutral (ADR 0069). `wire` es el serialize() canónico EXACTO (orden de claves de createCanonical: id,from,to,kind,body,[reply_to],ts) — debe re-serializar idéntico. `topic` es toTopic(to) o null para direcciones legacy planas. acceptPlain es acceptInbound() con global=false; acceptGlobal usa el default global habilitado. Cualquier adaptador, actual o futuro, debe reproducir esto.",
   "identity": { "project": "a4s", "instance": "sess-01" },
   "legacyAddress": "claude",
   "vectors": [
@@ -18,7 +18,7 @@
       "acceptGlobal": true
     },
     {
-      "name": "global (notify) — solo con opt-in",
+      "name": "global (notify) — default-on con opt-out",
       "wire": "{\"id\":\"g3\",\"from\":\"otro/x\",\"to\":\"all\",\"kind\":\"notify\",\"body\":\"global\",\"ts\":3}",
       "topic": "synagent/v1/all",
       "acceptPlain": false,

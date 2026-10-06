@@ -132,14 +132,13 @@ const PROJECT_TOPIC = 'synagent/v1/a4s/all'
 const GLOBAL_TOPIC = 'synagent/v1/all'
 const LEGACY_TOPIC = 'a4s/inbox/pi'
 
-test('Pi adapter: v1 push bidireccional, dual-read, broadcast, orden y dedupe', async t => {
+test('Pi adapter: v1 push bidireccional, broadcasts por defecto, orden y dedupe', async t => {
   const { broker, server, url } = await startBroker()
   const subscriber = await connectClient(url, 'pi-adapter-test-subscriber')
   const publisher = await connectClient(url, 'pi-adapter-test-publisher')
   const harness = createHarness({
     'a4s.synagent.broker-url': url,
     'a4s.synagent.project': 'a4s',
-    'a4s.synagent.address': 'pi',
     'a4s.synagent.default-peer': 'a4s/claude-1',
   }, [], 'pi-1')
   let restored: ReturnType<typeof createHarness> | undefined
@@ -153,11 +152,15 @@ test('Pi adapter: v1 push bidireccional, dual-read, broadcast, orden y dedupe', 
   })
 
   await harness.start()
-  // El cliente durable suscribe directo + legacy; el transient, el broadcast de proyecto.
+  // El cliente durable suscribe directo; el transient, ambos broadcasts v1 por defecto.
   await waitFor(() =>
     harness.notifications.some(({ message }) => message.includes('subscribed to') && message.includes(DIRECT_TOPIC))
-    && harness.notifications.some(({ message }) => message.includes('subscribed to') && message.includes(PROJECT_TOPIC)),
+    && harness.notifications.some(({ message }) => message.includes('subscribed to') && message.includes(PROJECT_TOPIC))
+    && harness.notifications.some(({ message }) => message.includes('subscribed to') && message.includes(GLOBAL_TOPIC)),
   )
+  assert.ok(!harness.notifications.some(({ message }) =>
+    message.includes('subscribed to') && message.includes(LEGACY_TOPIC),
+  ))
 
   const outbound: CanonicalMessage[] = []
   subscriber.on('message', (_topic: string, payload: Buffer) => outbound.push(JSON.parse(payload.toString())))
@@ -198,10 +201,15 @@ test('Pi adapter: v1 push bidireccional, dual-read, broadcast, orden y dedupe', 
   await harness.confirmDelivery(1)
   await harness.settle()
 
-  // Legacy dual-read (a4s/inbox/pi) — se entrega gracias al cliente durable.
-  await publish(publisher, LEGACY_TOPIC, serialize(message({ id: 'legacy-1', to: 'pi', body: 'via legacy' })))
+  // Legacy ya no está suscrito ni se entrega.
+  await publish(publisher, LEGACY_TOPIC, serialize(message({ id: 'legacy-ignored', to: 'pi', body: 'via legacy' })))
+  await new Promise(resolve => setTimeout(resolve, 50))
+  assert.equal(harness.received.length, 2)
+
+  // El broadcast global está activo sin configurar un override.
+  await publish(publisher, GLOBAL_TOPIC, serialize(message({ id: 'global-default', to: 'all', body: 'global' })))
   await waitFor(() => harness.received.length === 3)
-  assert.match(harness.received[2]?.text ?? '', /id legacy-1/)
+  assert.match(harness.received[2]?.text ?? '', /id global-default/)
   await harness.confirmDelivery(2)
   await harness.settle()
 
@@ -224,13 +232,24 @@ test('Pi adapter: v1 push bidireccional, dual-read, broadcast, orden y dedupe', 
   await harness.confirmDelivery(4)
   await harness.settle()
 
-  // Global es opt-in: con global=false no llega.
+  // El opt-out explícito sigue disponible.
+  const projectSubscriptionCount = harness.notifications.filter(({ message }) =>
+    message.includes('subscribed to') && message.includes(PROJECT_TOPIC),
+  ).length
+  await harness.command('synagent', 'set global false')
+  await waitFor(() => harness.notifications.filter(({ message }) =>
+    message.includes('subscribed to') && message.includes(PROJECT_TOPIC),
+  ).length > projectSubscriptionCount)
   await publish(publisher, GLOBAL_TOPIC, serialize(message({ id: 'global-off', to: 'all', body: 'global' })))
   await new Promise(resolve => setTimeout(resolve, 50))
   assert.equal(harness.received.length, 5)
-  // Con global=true el cliente transient añade synagent/v1/all y el mismo mensaje sí llega.
+  const globalSubscriptionCount = harness.notifications.filter(({ message }) =>
+    message.includes('subscribed to') && message.includes(GLOBAL_TOPIC),
+  ).length
   await harness.command('synagent', 'set global true')
-  await waitFor(() => harness.notifications.some(({ message }) => message.includes('subscribed to') && message.includes(GLOBAL_TOPIC)))
+  await waitFor(() => harness.notifications.filter(({ message }) =>
+    message.includes('subscribed to') && message.includes(GLOBAL_TOPIC),
+  ).length > globalSubscriptionCount)
   await publish(publisher, GLOBAL_TOPIC, serialize(message({ id: 'global-on', to: 'all', body: 'global now' })))
   await waitFor(() => harness.received.length === 6)
   assert.match(harness.received[5]?.text ?? '', /id global-on/)
@@ -256,7 +275,7 @@ test('Pi adapter: v1 push bidireccional, dual-read, broadcast, orden y dedupe', 
   assert.equal(harness.received.length, 7)
   assert.deepEqual(
     harness.entries.filter(entry => entry.customType === 'synagent-delivered').map(entry => entry.data.id),
-    ['incoming-1', 'project-1', 'legacy-1', 'steer-1', 'follow-1', 'global-on', 'new-instance', 'queued-before-shutdown'],
+    ['incoming-1', 'project-1', 'global-default', 'steer-1', 'follow-1', 'global-on', 'new-instance', 'queued-before-shutdown'],
   )
 
   // Reanudación durable: misma sesión → mismo clientId → recibe lo encolado offline (deduplicando).
@@ -265,7 +284,6 @@ test('Pi adapter: v1 push bidireccional, dual-read, broadcast, orden y dedupe', 
   restored = createHarness({
     'a4s.synagent.broker-url': url,
     'a4s.synagent.project': 'a4s',
-    'a4s.synagent.address': 'pi',
   }, harness.entries, 'pi-2')
   await restored.start()
   await waitFor(() => restored?.notifications.some(({ message }) => message.includes('subscribed to') && message.includes('synagent/v1/a4s/pi-2')) ?? false)
@@ -670,7 +688,7 @@ test('Pi adapter configured project wins over a conflicting session cwd origin',
   assert.equal(harness.received.length, 1)
 })
 
-test('Pi adapter unresolved project stays legacy-only and refuses all v1 send intent', async t => {
+test('Pi adapter unresolved project stays inactive and refuses all v1 send intent', async t => {
   const { broker, server, url } = await startBroker()
   const publisher = await connectClient(url, 'pi-adapter-legacy-publisher')
   const observer = await connectClient(url, 'pi-adapter-legacy-observer')
@@ -693,10 +711,10 @@ test('Pi adapter unresolved project stays legacy-only and refuses all v1 send in
   await subscribe(observer, 'synagent/v1/#')
   await harness.start()
   await waitFor(() => harness.notifications.some(({ message, type }) =>
-    type === 'warning' && message.includes('identity unresolved') && message.includes('legacy-only'),
+    type === 'warning' && message.includes('identity unresolved') && message.includes('inactive'),
   ))
-  await waitFor(() => harness.notifications.some(({ message }) =>
-    message.includes('subscribed to a4s/inbox/pi') && !message.includes('synagent/v1/'),
+  assert.ok(!harness.notifications.some(({ message }) =>
+    message.includes('subscribed to') && message.includes(LEGACY_TOPIC),
   ))
 
   const toolResult = await harness.tool('synagent_send', { to: 'Some.Project/Peer.One', body: 'must not publish' })
@@ -704,16 +722,16 @@ test('Pi adapter unresolved project stays legacy-only and refuses all v1 send in
   assert.match(toolResult.content[0]?.text ?? '', /configure the project setting/)
   await harness.command('synagent', 'status')
   assert.ok(harness.notifications.some(({ message }) =>
-    message.includes('legacy-only') && message.includes('/synagent set project'),
+    message.includes('inactive=true') && message.includes('/synagent set project'),
   ))
   await harness.command('mq-send', 'must not publish either')
   assert.ok(harness.notifications.some(({ message }) => message.includes('configure the project setting')))
   await new Promise(resolve => setTimeout(resolve, 50))
   assert.deepEqual(publishedV1, [])
 
-  await publish(publisher, LEGACY_TOPIC, serialize(message({ id: 'legacy-only-in', to: 'pi' })))
-  await waitFor(() => harness.received.length === 1)
-  assert.match(harness.received[0]?.text ?? '', /id legacy-only-in/)
+  await publish(publisher, LEGACY_TOPIC, serialize(message({ id: 'legacy-ignored', to: 'pi' })))
+  await new Promise(resolve => setTimeout(resolve, 50))
+  assert.equal(harness.received.length, 0)
 })
 
 test('Pi adapter warns and falls back to the default for invalid or non-loopback brokers', async t => {

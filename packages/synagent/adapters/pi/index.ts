@@ -12,7 +12,6 @@ import {
   isAddress,
   isBroadcastSteer,
   isToken,
-  legacyTopic,
   makeOutbound,
   MESSAGE_KINDS,
   newId,
@@ -28,8 +27,6 @@ import {
 } from '../../protocol.ts'
 
 const DEFAULT_BROKER_URL = 'mqtt://127.0.0.1:1884'
-// Dirección LEGACY (plana) para dual-read durante el cutover a v1.
-const DEFAULT_LEGACY_ADDRESS = 'pi'
 const DEFAULT_PEER = 'claude'
 const MAX_SEEN = 1000
 const SEEN_ENTRY = 'synagent-delivered'
@@ -80,15 +77,6 @@ function synagentPi(pi: ExtensionAPI, deliveryStartTimeoutMs: number): void {
     title: 'Synagent broker URL',
     description: 'Loopback MQTT URL used by the Pi channel adapter.',
   })
-  const legacyAddressSetting = pi.registerSetting({
-    key: 'a4s.synagent.address',
-    schema: Type.String({ pattern: '^[A-Za-z0-9][A-Za-z0-9_-]*$' }),
-    defaultValue: DEFAULT_LEGACY_ADDRESS,
-    title: 'Synagent legacy address',
-    description:
-      'LEGACY flat address (a4s/inbox/<addr>) still accepted on receive for dual-read during the v1 cutover. '
-      + 'Outbound traffic always uses the v1 hierarchical identity; this only widens what we accept.',
-  })
   const projectSetting = pi.registerSetting({
     key: 'a4s.synagent.project',
     schema: Type.String(),
@@ -99,8 +87,8 @@ function synagentPi(pi: ExtensionAPI, deliveryStartTimeoutMs: number): void {
   const globalSetting = pi.registerSetting({
     key: 'a4s.synagent.global',
     schema: Type.Boolean(),
-    defaultValue: false,
-    title: 'Synagent global broadcast opt-in',
+    defaultValue: true,
+    title: 'Synagent global broadcast',
     description: 'Subscribe to the v1 global broadcast address (synagent/v1/all) in addition to the project broadcast.',
   })
   const defaultPeer = pi.registerSetting({
@@ -118,7 +106,6 @@ function synagentPi(pi: ExtensionAPI, deliveryStartTimeoutMs: number): void {
   let lastDurableTopics: string[] = []
   let persistedDurableTopics: string | undefined
   let identity: Identity | undefined
-  let legacyOnly = false
   let activeSessionId: string | undefined
   let context: ExtensionContext | undefined
   let lifecycle = Promise.resolve()
@@ -180,13 +167,13 @@ function synagentPi(pi: ExtensionAPI, deliveryStartTimeoutMs: number): void {
       const [action = 'status', key, ...rest] = args.trim().split(/\s+/)
       if (action === 'status') {
         let state = 'disabled'
-        if (enabled.get()) state = durable?.connected ? 'connected' : 'connecting'
+        if (enabled.get()) state = identity ? (durable?.connected ? 'connected' : 'connecting') : 'inactive'
         const identityStatus = identity
           ? `address=${directAddress(identity)}`
-          : 'address=unresolved legacy-only=true; remediate with /synagent set project <project> or configure remote.origin.url'
+          : 'address=unresolved inactive=true; remediate with /synagent set project <project> or configure remote.origin.url'
         ctx.ui.notify(
-          `Synagent ${state}; ${identityStatus} legacy=${legacyAddressSetting.get()} `
-          + `global=${globalSetting.get() === true} peer=${defaultPeer.get()} broker=${brokerUrl.get()}`,
+          `Synagent ${state}; ${identityStatus} global=${globalSetting.get() === true} `
+          + `peer=${defaultPeer.get()} broker=${brokerUrl.get()}`,
           'info',
         )
         return
@@ -212,7 +199,7 @@ function synagentPi(pi: ExtensionAPI, deliveryStartTimeoutMs: number): void {
       if (action !== 'set' || !key || rest.length === 0) {
         ctx.ui.notify(
           'Usage: /synagent status|enable|disable|resume|set '
-          + '<broker-url|address|project|global|default-peer> <value>',
+          + '<broker-url|project|global|default-peer> <value>',
           'warning',
         )
         return
@@ -238,7 +225,6 @@ function synagentPi(pi: ExtensionAPI, deliveryStartTimeoutMs: number): void {
     unsubscribeSettings = [
       enabled.onChange(value => void restart(ctx, !value)),
       brokerUrl.onChange(() => void restart(ctx, true)),
-      legacyAddressSetting.onChange(() => void restart(ctx, true)),
       projectSetting.onChange(() => void restart(ctx, true)),
       globalSetting.onChange(() => void restart(ctx, true)),
     ]
@@ -279,13 +265,14 @@ function synagentPi(pi: ExtensionAPI, deliveryStartTimeoutMs: number): void {
     if (!useCurrentContext(ctx)) return { ok: false, message: 'Synagent session is no longer active' }
     if (!params.body.trim()) return { ok: false, message: 'Synagent send requires a non-empty body' }
     const active = durable
-    if (!active?.connected) return { ok: false, message: 'Synagent is not connected' }
-    if (legacyOnly || !identity) {
+    if (!active?.connected && !enabled.get()) return { ok: false, message: 'Synagent is not connected' }
+    if (!identity) {
       return {
         ok: false,
-        message: 'Synagent cannot send: identity unresolved (legacy-only); configure the project setting or remote origin',
+        message: 'Synagent cannot send: identity unresolved; configure the project setting or remote origin',
       }
     }
+    if (!active?.connected) return { ok: false, message: 'Synagent is not connected' }
     const to = resolveDestination(params.to, identity)
     if (!to) return { ok: false, message: `Invalid Synagent address: ${params.to}` }
     const kind = params.kind ?? 'prompt'
@@ -313,12 +300,6 @@ function synagentPi(pi: ExtensionAPI, deliveryStartTimeoutMs: number): void {
     if (key === 'broker-url') {
       assertLoopbackBrokerUrl(value)
       brokerUrl.set(value, { scope })
-      return
-    }
-    if (key === 'address') {
-      const token = value.trim()
-      if (!isToken(token)) throw new Error(`Invalid Synagent legacy address: ${value}`)
-      legacyAddressSetting.set(token, { scope })
       return
     }
     if (key === 'default-peer') {
@@ -374,22 +355,19 @@ function synagentPi(pi: ExtensionAPI, deliveryStartTimeoutMs: number): void {
       )
     }
 
-    const legacyAddress = legacyAddressSetting.get()
     const global = globalSetting.get() === true
 
-    // Resolución de identidad; si lanza, operamos LEGACY-ONLY sin tumbar la sesión.
+    // Sin identidad v1 no hay ningún topic seguro al que suscribirse.
     let plan: SubscriptionPlan
     try {
       identity = computeIdentity(ctx)
-      legacyOnly = false
-      plan = subscriptions({ identity, global, legacyAddress })
-      ctx.ui.notify(`Synagent identity ${directAddress(identity)} legacy=${legacyAddress} global=${global}`, 'info')
+      plan = subscriptions({ identity, global })
+      ctx.ui.notify(`Synagent identity ${directAddress(identity)} global=${global}`, 'info')
     } catch (error) {
       identity = undefined
-      legacyOnly = true
-      plan = { durable: [legacyTopic(legacyAddress)], transient: [] }
+      plan = { durable: [], transient: [] }
       ctx.ui.notify(
-        `Synagent identity unresolved; operating legacy-only on ${legacyTopic(legacyAddress)}: ${formatError(error)}`,
+        `Synagent identity unresolved; adapter inactive until project is configured: ${formatError(error)}`,
         'warning',
       )
     }
@@ -553,9 +531,8 @@ function synagentPi(pi: ExtensionAPI, deliveryStartTimeoutMs: number): void {
   }
 
   function acceptsMessage(message: CanonicalMessage): boolean {
-    const legacyAddress = legacyAddressSetting.get()
-    if (legacyOnly || !identity) return message.to === legacyAddress && !isBroadcastSteer(message)
-    return acceptInbound(identity, message, { global: globalSetting.get() === true, legacyAddress })
+    if (!identity) return false
+    return acceptInbound(identity, message, { global: globalSetting.get() === true })
   }
 
   function drainDeliveries(ctx: ExtensionContext): void {
@@ -671,7 +648,6 @@ function synagentPi(pi: ExtensionAPI, deliveryStartTimeoutMs: number): void {
     lastDurableTopics = []
     persistedDurableTopics = undefined
     identity = undefined
-    legacyOnly = false
     const branch = ctx.sessionManager.getBranch()
     const ids = branch
       .map(entry => {

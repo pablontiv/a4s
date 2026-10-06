@@ -13,9 +13,9 @@
     },
     "global": {
       "type": "boolean",
-      "title": "Global opt-in",
-      "description": "Suscribirse a mensajes broadcast globales (synagent/v1/all).",
-      "default": false
+      "title": "Global broadcast",
+      "description": "Suscribirse a mensajes broadcast globales (synagent/v1/all); activo por defecto.",
+      "default": true
     },
     "brokerUrl": {
       "type": "string",

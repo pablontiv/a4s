@@ -50,16 +50,16 @@ test('golden: dirección→topic es la regla v1 (o null para legacy plano)', () 
   }
 })
 
-test('golden: acceptInbound coincide sin y con global opt-in', () => {
+test('golden: acceptInbound coincide con global default-on y opt-out', () => {
   const { identity, legacyAddress } = golden
   for (const v of golden.vectors) {
     const message = parseCanonical(v.wire)
-    assert.equal(acceptInbound(identity, message, { legacyAddress }), v.acceptPlain, `${v.name} (plain)`)
     assert.equal(
-      acceptInbound(identity, message, { legacyAddress, global: true }),
-      v.acceptGlobal,
-      `${v.name} (global)`,
+      acceptInbound(identity, message, { legacyAddress, global: false }),
+      v.acceptPlain,
+      `${v.name} (opt-out)`,
     )
+    assert.equal(acceptInbound(identity, message, { legacyAddress }), v.acceptGlobal, `${v.name} (default)`)
   }
 })
 

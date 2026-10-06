@@ -41,6 +41,42 @@ archivos lo permite. `SYNAGENT_PORT` es un override operativo opcional para el
 puerto por defecto; el argumento posicional tiene precedencia. `SIGINT` y
 `SIGTERM` cierran listener, broker y base limpiamente.
 
+## Logging operacional
+
+El broker y la acción Herdr `ensure` escriben JSONL separado de stdout/stderr en
+`${XDG_STATE_HOME:-$HOME/.local/state}/a4s/log/synagent-bus/<instance>/operational.jsonl`.
+`A4S_SYNAGENT_BUS_LOG_DIR` permite cambiar sólo la raíz de logs. Los IDs de
+instancia, operación y correlación pueden fijarse con
+`A4S_SERVICE_INSTANCE_ID`, `A4S_OPERATION_ID` y `A4S_CORRELATION_ID`. Si faltan,
+`ensure` los genera una vez. Luego reenvía los mismos valores al pane del
+broker. El logger normaliza el identificador de instancia como un componente.
+Verifica la ruta contra la raíz léxica y la raíz real disponible. Rechaza un
+directorio de instancia que sea symlink o no sea un directorio. También rechaza
+un archivo que sea symlink o no sea regular. Fuerza `0700` en el directorio.
+Abre el archivo en append con `O_NOFOLLOW` cuando está disponible. Aplica
+`fchmod(0600)` antes del primer byte. Si no puede garantizar la seguridad,
+omite el logging. No usa un fallback inseguro.
+
+Cada línea incluye severidad OTel, identidad de recurso, identidad del harness,
+estado de flush, estado de pérdida, fase permitida y taxonomía de error. Los
+eventos cubren el inicio, readiness, instancia existente, cierre y error del
+broker. También cubren lock, spawn, readiness y fallo de `ensure`.
+
+`a4s.logging.flush_status=sync_requested` indica que el cierre siguiente
+solicita `fsync`. Las demás líneas no solicitan un sync individual. Un fallo de
+`fsync` no puede cambiar una línea ya escrita. Esta es una limitación del primer
+JSONL local. `herdr.ensure.ready` representa la escritura posterior de
+`SYNAGENT BUS READY` en stdout. También solicita sync antes de retornar.
+
+El logger comprueba el tipo, inode y la contención real. Aun existe una ventana
+TOCTOU portable ante un reemplazo concurrente del path. Este candidato no usa
+APIs no portables para cerrar esa ventana.
+
+Los registros no contienen mensajes externos crudos, stack traces, payloads
+MQTT, tokens, entorno, argv completo ni rutas de base/plugin. El JSONL nunca se
+escribe a los canales de protocolo, por lo que conserva sin cambios las líneas
+`BROKER READY`, `BROKER ALREADY RUNNING` y `SYNAGENT BUS READY`.
+
 ## Plugin Herdr
 
 El mismo directorio es un plugin Herdr instalable desde GitHub:
@@ -66,6 +102,10 @@ control y debe ser distinto del puerto MQTT. Si otro proceso local lo ocupa,
 La base MQTT sigue en la ruta de estado del usuario indicada arriba. Para un
 override de plugin, define `SYNAGENT_PORT`, `SYNAGENT_DB` o
 `SYNAGENT_ENSURE_PORT` en el entorno del servidor Herdr antes del arranque.
+Al abrir el pane, `ensure` usa una lista permitida. Reenvía `SYNAGENT_PORT`,
+`SYNAGENT_DB`, la raíz de logging, los tres IDs y `XDG_STATE_HOME`. Los IDs
+siempre tienen valor. Las demás variables sólo se reenvían cuando están
+definidas. `ensure` no reenvía el entorno completo.
 
 `ensure` falla cerrado si existen varios spaces `Synagent`, si un listener no
 puede atribuirse al pane registrado, o si pane, proceso y listener no pueden

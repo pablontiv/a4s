@@ -31,6 +31,7 @@ function collectHooks(options: Record<string, unknown> = {}) {
 
 function makeEngine() {
   const runCalls: string[][] = []
+  const spawnArgs: string[][] = []
   const toolRegistered: Array<Record<string, unknown>> = []
   const commandRegistered: string[] = []
   const statuses: string[] = []
@@ -55,14 +56,17 @@ function makeEngine() {
         return { exitCode: 0, stdout: '{"published":true}', stderr: '' }
       },
       // bridge-sub: iterable asíncrono que termina de inmediato (sin mensajes).
-      spawn: () => (async function* () {})(),
+      spawn: (req: { argv: readonly string[] }) => {
+        spawnArgs.push([...req.argv])
+        return (async function* () {})()
+      },
     },
     tool: { register: async (def: Record<string, unknown>) => void toolRegistered.push(def) },
     command: { register: async (def: { name: string }) => void commandRegistered.push(def.name) },
     prompt: { submit: async () => {} },
     ui: { status: (s: string) => void statuses.push(s) },
   }
-  return { $, runCalls, toolRegistered, commandRegistered, statuses }
+  return { $, runCalls, spawnArgs, toolRegistered, commandRegistered, statuses }
 }
 
 test('register: session.start resuelve identidad y registra synagent_send + /mq-send', async () => {
@@ -73,6 +77,25 @@ test('register: session.start resuelve identidad y registra synagent_send + /mq-
 
   assert.ok(eng.toolRegistered.some(d => d.name === 'synagent_send'), 'synagent_send debe registrarse')
   assert.ok(eng.commandRegistered.includes('mq-send'), '/mq-send debe registrarse')
+  assert.ok(eng.spawnArgs[0]?.includes('synagent/v1/a4s/sess-test-1'), 'suscribe al buzón directo')
+  assert.ok(eng.spawnArgs[0]?.includes('synagent/v1/a4s/all'), 'suscribe al broadcast de proyecto')
+  assert.ok(eng.spawnArgs[0]?.includes('synagent/v1/all'), 'suscribe al broadcast global por defecto')
+  assert.ok(!eng.spawnArgs[0]?.includes('a4s/inbox/claude'), 'no suscribe al topic legacy')
+  const retirement = eng.runCalls.find(c => c.includes('--retire-id'))
+  assert.ok(retirement, 'lanza la migración one-shot de la sesión durable histórica')
+  assert.equal(retirement[retirement.indexOf('--retire-id') + 1], 'synagent-legacy-claude')
+})
+
+test('register: retira la sesión legacy aunque no pueda resolver identidad', async () => {
+  const eng = makeEngine()
+  eng.$.session.repo = async () => undefined as never
+  const { get } = collectHooks({})
+  await get('session.start')(eng.$, {}, (e: unknown) => e)
+
+  const retirement = eng.runCalls.find(c => c.includes('--retire-id'))
+  assert.ok(retirement, 'la migración no depende de la identidad v1')
+  assert.equal(retirement[retirement.indexOf('--retire-id') + 1], 'synagent-legacy-claude')
+  assert.equal(eng.spawnArgs.length, 0, 'sin identidad no deja un consumidor legacy activo')
 })
 
 test('register: tool.call enruta por el nombre MCP exacto, lee args de e y publica v1', async () => {

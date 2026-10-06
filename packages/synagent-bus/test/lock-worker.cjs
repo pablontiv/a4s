@@ -39,6 +39,6 @@ async function main() {
 }
 
 main().catch(async error => {
-  await report({ type: 'failed', code: error.code, message: error.message })
+  await report({ type: 'failed', code: error.code, a4sCode: error.a4sCode, message: error.message })
   process.exitCode = 1
 })
