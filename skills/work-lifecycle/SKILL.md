@@ -1,133 +1,88 @@
 ---
 name: work-lifecycle
-description: "Trigger: driving a unit of work through the A4S lifecycle — intake, choose/define/prepare/do/accept/deliver/close work, elegir trabajo, qué hacemos, admitir trabajo, avanzar una tarea, entregar, cerrar. One skill for the whole workflow; reads every rule from workspace config and adds none of its own."
+description: "Trigger: driving a unit of work through the A4S lifecycle — intake, choose/define/prepare/do/accept/deliver/close work, elegir trabajo, qué hacemos, admitir trabajo, avanzar una tarea, entregar, cerrar. Applies the repository-local lifecycle policy without adding gates."
 metadata:
   author: pablontiv
-  updated: "2026-10-05"
+  updated: "2026-10-06"
 ---
 
 # Work lifecycle
 
-One skill for the whole A4S work pipeline (ADR 0069 proposed). It carries the
-*technique* of moving a unit of work from a need to a closed result. It carries
-**no rule**: every gate below verifies against a key of `.workspace/config.yaml`,
-which is the only authority.
+Esta skill aplica la técnica del ciclo de trabajo A4S. Lee `AGENTS.md` en la
+raíz del repositorio. Ese archivo es la autoridad local para readiness,
+mutación, review, entrega y cierre.
 
-The point of this skill is to stop spreading the workflow across config prose
-and many sibling skills (which multiplied ceremony). One lean skill, seven
-stages, gates that check config.
+El contrato runtime global conserva su autoridad separada. Esta skill no lo
+sustituye. `.workspace/config.yaml`, los ADR, los planes y la documentación
+histórica no tienen autoridad operativa sobre este procedimiento.
 
-## Authority
+## Clasifica el trabajo
 
-This skill is technique only. The applicable integrated `.workspace/config.yaml`
-is the only authority for the rules these gates enforce; this skill adds no rule
-or gate of its own and grants no authorization. Every `<condition ref="...">`
-names the config key that governs it (`authority.mechanism`): the gate verifies,
-it does not define. If `.workspace/config.yaml` is absent, fail closed and stop.
+Clasifica la unidad como `read_only` o `mutating` según `AGENTS.md`.
 
-## How it works
+El trabajo `read_only` puede inspeccionar y explicar. Debe permanecer sin
+efectos. El trabajo `mutating` debe usar un worktree dedicado. No aceptes una
+rama aislada, una copia u otro directorio como equivalente.
 
-- **No declared sequence (model C2).** Order is not written down as a sequence.
-  Each stage has an entry gate that checks the evidence the previous stage's exit
-  gate produced, so order *emerges* from the gates, not from narration.
-- **One hard barrier** is the only precedence config asserts: `integration →
-  cleanup` — never clean up before integration is verified
-  (`deliver_work.close`, `improve_work.cleanup`). Every other ordering emerges
-  from the gates (C2), not from a declared sequence.
-- **Resolve, don't perform ceremony.** A gate is a short check against config,
-  not a ritual. If a condition is met, pass and continue; if not, say which and
-  stop. Do not invent checks config does not require.
-- **Emit a `<gate_check>`** at each stage boundary (format at the end).
+## Resuelve el gate inicial
 
-## Stages
+Antes de una mutación de tarea:
 
-<stage id="1" name="intake">
-  <gate_entry>
-    <condition ref="choose_work">operator_need_presented</condition>
-    <condition ref="do_work.modes">entry_mode_authorized</condition>
-  </gate_entry>
-  <activity>Investigate repo/records/history read-only (`do_work.history`,
-    `do_work.safety`); present results, acceptance criteria, fit with
-    `purpose.outcome`, dependencies/value/risks (`choose_work`). Present Beads
-    with Description/ID/Result/Scope, no inference or backfill
-    (`choose_work.backlog_decisions`). Operator chooses (`roles.operator`).</activity>
-  <gate_exit>
-    <condition ref="choose_work">result_chosen_by_operator</condition>
-    <condition ref="choose_work">acceptance_criteria_presented</condition>
-  </gate_exit>
-</stage>
+1. Presenta criterios, resultado, alcance, exclusiones, invariantes y evidencia.
+2. Obtén el acuerdo explícito del operador. Reconoce y verifica la readiness.
+3. Identifica el checkout estable de `main`. Verifica que está limpio.
+4. Ejecuta `git fetch`.
+5. Ejecuta `git pull --ff-only` en el `main` estable.
+6. Verifica que `main` y `origin/main` son iguales.
+7. Crea el worktree dedicado. Verifica su ruta, rama y base.
+8. Verifica el gate. Haz la primera mutación dentro del worktree.
 
-<stage id="2" name="refinement">
-  <gate_entry><condition ref="choose_work">result_chosen</condition></gate_entry>
-  <activity>Classify the kind and bound one unit with one result
-    (`define_work.classification`, `define_work.kinds`). One label
-    `kind-*` per task (`define_work.beads`).</activity>
-  <gate_exit><condition ref="define_work.units">unit_with_one_kind</condition></gate_exit>
-</stage>
+Trata `failed` y `unknown` como bloqueos. Nombra la condición que bloquea.
+Emite el bloqueo explícito con la salida estructurada del gate. Copia sin
+cambios en `condition` el identificador canónico en mayúsculas que devuelve la
+evidencia. No traduzcas, resumas ni renombres ese identificador. No intentes el
+efecto siguiente.
 
-<stage id="3" name="planning">
-  <gate_entry><condition ref="define_work.units">unit_defined</condition></gate_entry>
-  <activity>Agree result, acceptance criteria, scope/exclusions, applicable
-    invariants, and evidence required (`prepare_work.shared_readiness`,
-    `prepare_work.shared_readiness`). Design shared interfaces before dependent work
-    (`prepare_work.design`).</activity>
-  <gate_exit><condition ref="prepare_work.shared_readiness">readiness_agreed</condition></gate_exit>
-</stage>
+## Produce y revisa el candidato
 
-<stage id="4" name="implementation">
-  <gate_entry>
-    <condition ref="prepare_work.shared_readiness">readiness_agreed</condition>
-    <condition ref="do_work.starting_point">main_clean_synced_and_dedicated_worktree</condition>
-  </gate_entry>
-  <activity>Implement the agreed result. Inspection never mutates; ambiguity
-    stops (`do_work.safety`). External effects only after payload authorization
-    (`do_work.external_effects`, `reserved_authority`). Credentials via SOPS/Pi
-    native (`do_work.credentials`).</activity>
-  <gate_exit><condition ref="accept_work.evidence">candidate_with_evidence</condition></gate_exit>
-</stage>
+Implementa sólo el resultado acordado. Produce la evidencia aplicable.
+Determina el requisito de review según el riesgo. Pide review independiente
+cuando el riesgo lo requiera. Haz self-review cuando no aplique review
+independiente. Un review `failed` o `unknown` bloquea.
 
-<stage id="5" name="verification">
-  <gate_entry><condition ref="accept_work.evidence">candidate_exists</condition></gate_entry>
-  <activity>Map each criterion to its evidence; E2E when executable behavior
-    changed (`accept_work.end_to_end`); kind-appropriate checks
-    (`accept_work.kind_checks`); independent review when risk warrants
-    (`accept_work.review`).</activity>
-  <gate_exit><condition ref="accept_work.evidence">accepted_or_returned</condition></gate_exit>
-</stage>
+## Resuelve el gate final
 
-<stage id="6" name="delivery">
-  <gate_entry>
-    <condition ref="accept_work.evidence">accepted</condition>
-    <condition ref="deliver_work.merge">no_open_high_findings</condition>
-  </gate_entry>
-  <activity>PR with a `Bead:` trailer and applicable checks; merge under
-    `deliver_work.merge` controls; never push to main
-    (`deliver_work.mechanism`). Bot/external PRs pass the same controls
-    (`deliver_work.external_prs`).</activity>
-  <gate_exit><condition ref="deliver_work.merge">integrated_into_main</condition></gate_exit>
-</stage>
+Antes del cierre:
 
-<stage id="7" name="closure">
-  <gate_entry><condition ref="deliver_work.close">integrated_and_verified</condition></gate_entry>
-  <activity>Exact preauthorized cleanup only — task worktree, local branch,
-    remote branch still naming the integrated head, reproducible-disposable
-    outputs (`deliver_work.close`, `improve_work.cleanup`). Any other
-    destructive cleanup needs explicit authorization (`reserved_authority`).</activity>
-  <gate_exit><condition ref="deliver_work.close">unit_closed</condition></gate_exit>
-</stage>
+1. Verifica el candidato y su review.
+2. Verifica el PR, su head y su base `main`. Verifica que los checks requeridos
+   existen y pasan. Un PR abierto con una lista vacía de checks no pasa.
+3. Fusiona el PR a `main`. Verifica el merge y el head integrado.
+4. Ejecuta `git fetch`.
+5. Ejecuta `git pull --ff-only` en el `main` estable.
+6. Ejecuta un segundo `git fetch`.
+7. Verifica que `main` está limpio y sincronizado. Verifica el resultado
+   integrado.
+8. Ejecuta y verifica sólo el cleanup exacto autorizado.
+9. Escribe el receipt durable. Reléelo y verifica su contenido.
+10. Verifica el gate final. Cierra la tarea.
 
-**Alongside every stage:** report progress and blockers (`track_work`); escalate
-a way-of-working finding at any point (`improve_work.change`).
+Trata `failed` y `unknown` como bloqueos. No hagas cleanup antes de la
+integración verificada. No cierres antes de releer el receipt. Nombra la
+condición que bloquea. No añadas gates ni ceremonia.
 
-## Gate check output
+## Salida del gate
 
-At each stage boundary emit:
+Usa una salida breve:
 
-```
-<gate_check stage="<name>" result="pass|block">
-  <evidence condition="<condition>">…the fact, citing its config key…</evidence>
+```text
+<gate_check gate="initial|final" result="pass|block">
+  <evidence condition="CANONICAL_CONDITION">hecho observado</evidence>
 </gate_check>
 ```
 
-`result="block"` when a condition is unmet: name the condition, say why, stop.
-A blocked stage does not advance.
+Usa `result="block"` cuando falte una condición. Sustituye
+`CANONICAL_CONDITION` por el identificador canónico exacto que devuelve la
+evidencia, por ejemplo
+`OPERATOR_AGREEMENT_OBSERVED`. Conserva las mayúsculas y los guiones bajos.
+No cierres con prosa libre. Detén el avance de ese gate.
