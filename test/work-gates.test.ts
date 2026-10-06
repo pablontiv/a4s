@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -11,14 +11,18 @@ import workGateLiveProbe, {
   applyScenarioAction,
   assertSimulatedToolSurface,
   attestSkillExpansion,
+  bashParseOnly,
+  classifyExplicitCleanup,
   conditions,
   effects,
   evaluateWorkGate,
   firstBlockingCondition,
   initializeScenarioState,
+  isCanonicalModelId,
   normalizeSkillContentForExpansion,
   redactString,
   sanitize,
+  summarizedArgs,
   WorkGateProbe,
   type ConditionName,
   type EffectEvent,
@@ -33,14 +37,17 @@ import {
   classifyProcessOutcome,
   cleanupCampaignSnapshot,
   createCampaignSnapshot,
+  digestShellParser,
   effectiveModelId,
   filterAuthForModel,
   modelIdentityFor,
   parseCli,
   parseScenarioManifest,
   parseVerifyShardCli,
+  persistFailureTrace,
   persistedCaptureMetadata,
   pionArgs,
+  resolveFailureTracePath,
   resolveVariantInputs,
   resultsIdentifier,
   safeErrorText,
@@ -48,6 +55,16 @@ import {
   shardRange,
   shardResultsPath,
   summarizeScenarioTrace,
+  TRACE_CLASSIFICATION_RULES,
+  TRACE_DECISIONS,
+  TRACE_ERROR_CATEGORIES,
+  TRACE_ERROR_CODES,
+  TRACE_EVENT_TYPES,
+  TRACE_EXECUTABLES,
+  TRACE_GATES,
+  TRACE_REASON_CODES,
+  TRACE_SCENARIO_IDS,
+  TRACE_STATUSES,
   usage,
   validateLoadedInputAttestation,
   validateResumeResults,
@@ -78,6 +95,7 @@ const fixtureText = readFileSync(new URL("./fixtures/work-gate-scenarios.json", 
 const policyText = readFileSync(new URL("../AGENTS.md", import.meta.url), "utf8");
 const skillText = readFileSync(new URL("../skills/work-lifecycle/SKILL.md", import.meta.url), "utf8");
 const scenarios = parseScenarioManifest(fixtureText) as Scenario[];
+const shellParserSha256 = createHash("sha256").update(readFileSync("/bin/bash")).digest("hex");
 
 function oauthCredential(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -132,6 +150,7 @@ function completeResult(
     artifactId: `artifact:${index}`,
     sessionId: `session:${index}`,
     eventLogId: `event-log:${index}`,
+    traceId: null,
     oracle: {
       [scenario.gate]: {
         passed: true,
@@ -488,7 +507,291 @@ test("the oracle rejects free-text block conditions", () => {
   assert.match(result.reasons.join("\n"), /non-canonical/);
 });
 
-test("the live probe preserves an injected fault across a commit and the oracle sees it", async () => {
+test("Bash parse-only uses fixed argv, bounded dependencies, and never executes input", async () => {
+  const root = await mkdtemp(join(tmpdir(), "a4s-bash-parse-only-"));
+  const touched = join(root, "touch-marker");
+  const substituted = join(root, "substitution-marker");
+  const redirected = join(root, "redirect-marker");
+  try {
+    assert.equal(bashParseOnly(`touch ${touched}; echo $(touch ${substituted}); echo safe > ${redirected}`), true);
+    await Promise.all([touched, substituted, redirected].map((path) => assert.rejects(access(path))));
+
+    let invocation: Record<string, unknown> | undefined;
+    assert.equal(bashParseOnly("cleanup", (executable, args, options) => {
+      invocation = { executable, args, options };
+      return { status: 0, signal: null };
+    }), true);
+    assert.deepEqual(invocation, {
+      executable: "/bin/bash",
+      args: ["--noprofile", "--norc", "-n"],
+      options: {
+        input: "cleanup",
+        timeout: 250,
+        env: { LC_ALL: "C", PATH: "/usr/bin:/bin" },
+        stdio: ["pipe", "ignore", "ignore"],
+      },
+    });
+    assert.equal((invocation!.args as string[]).includes("-c"), false);
+    assert.equal(bashParseOnly("cleanup", () => ({ status: 2, signal: null })), false);
+    assert.equal(bashParseOnly("cleanup", () => ({
+      status: null,
+      signal: null,
+      error: Object.assign(new Error("missing"), { code: "ENOENT" }),
+    })), false);
+    assert.equal(bashParseOnly("cleanup", () => ({
+      status: null,
+      signal: "SIGTERM",
+      error: Object.assign(new Error("timeout"), { code: "ETIMEDOUT" }),
+    })), false);
+    assert.equal(bashParseOnly("cleanup", () => { throw new Error("unavailable"); }), false);
+    assert.equal(classifyExplicitCleanup("cleanup", () => false), undefined);
+    assert.deepEqual(summarizedArgs("bash", { command: "cleanup" }, () => false), { operation: "read" });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("the semantic Git grammar consumes each complete recognized operation", () => {
+  const operation = (command: string): unknown =>
+    summarizedArgs("bash", { command }, () => true).operation;
+  const canonical = [
+    ["git fetch", "fetch"],
+    ["git fetch origin", "fetch"],
+    ["git fetch --prune origin main", "fetch"],
+    ["git pull --ff-only", "pull"],
+    ["git pull --ff-only origin main", "pull"],
+    ["git pull --ff-on\\\nly origin main", "pull"],
+    ["git worktree add -b candidate /tmp/candidate main", "worktree"],
+    ["git worktree add /tmp/candidate candidate", "worktree"],
+    ["git worktree remove /tmp/candidate", "cleanup"],
+    ["git worktree remove --force /tmp/candidate", "cleanup"],
+    ["git commit -m candidate", "commit"],
+    ["git commit --allow-empty --message candidate", "commit"],
+    ["git merge --ff-only candidate", "merge"],
+    ["git merge --no-edit -m candidate candidate", "merge"],
+    ["git rev-parse HEAD", "rev-parse"],
+    ["git rev-parse --quiet --verify origin/main", "rev-parse"],
+    ["git -C /tmp/repository fetch origin", "fetch"],
+  ] as const;
+  for (const [command, expected] of canonical) assert.equal(operation(command), expected, command);
+
+  const rejected = [
+    "git --definitely-invalid fetch",
+    "git fetch --definitely-invalid",
+    "git fetch origin --definitely-invalid",
+    "git --definitely-invalid pull --ff-only",
+    "git pull --ff-only --definitely-invalid",
+    "git worktree add --definitely-invalid /tmp/candidate main",
+    "git worktree add /tmp/candidate main --definitely-invalid",
+    "git worktree remove --definitely-invalid /tmp/candidate",
+    "git worktree remove /tmp/candidate --definitely-invalid",
+    "git commit --definitely-invalid -m candidate",
+    "git commit -m candidate --definitely-invalid",
+    "git merge --definitely-invalid candidate",
+    "git merge candidate --definitely-invalid",
+    "git pull origin main",
+    "git pull --ff-only\\\n --definitely-invalid",
+    "git -C/tmp/repository fetch",
+    "git -C ../repository fetch",
+    "git -C /tmp/repository -C /tmp/other fetch",
+    "git --version fetch",
+    "git --help worktree remove /tmp/candidate",
+    "git fetch -- origin main",
+    "git pull --ff-only -- origin main",
+    "git worktree add -- /tmp/candidate candidate",
+    "git worktree remove -- /tmp/candidate",
+    "git commit -- -m candidate",
+    "git merge -- candidate",
+    "git rev-parse -- HEAD",
+    "git fetch -pq origin main",
+    "git pull -qf --ff-only origin main",
+    "git worktree remove -ff /tmp/candidate",
+    "git commit -am candidate",
+    "git merge -qm candidate",
+    "git rev-parse -qv HEAD",
+    "git fetch --depth=1 origin main",
+    "git pull --ff-only=always origin main",
+    "git worktree add -bcandidate /tmp/candidate main",
+    "git commit -mcandidate",
+    "git merge --message=candidate candidate",
+    "git fetch origin main extra",
+    "git pull --ff-only origin main extra",
+    "git worktree add -b candidate /tmp/candidate main extra",
+    "git worktree remove /tmp/candidate extra",
+    "git commit extra one two",
+    "git merge one two three",
+    "git rev-parse HEAD main",
+    "git fetch upstream main",
+    "git fetch origin feature",
+    "git pull --ff-only upstream main",
+    "git pull --ff-only origin feature",
+  ];
+  for (const command of rejected) assert.equal(operation(command), "read", command);
+});
+
+test("opaque shell tokens fail closed without suppressing later valid units", () => {
+  const operation = (command: string): unknown =>
+    summarizedArgs("bash", { command }, () => true).operation;
+  const opaqueFetchTokens = [
+    "*", "?", "[om]*", "{origin,upstream}", "@(origin|upstream)", "~", "$REMOTE", "${REMOTE}",
+    "$(printf origin)", "`printf origin`", "\"$REMOTE\"", "'$REMOTE'", "\"*\"", "'?'",
+  ];
+  for (const token of opaqueFetchTokens) {
+    assert.equal(operation(`git fetch ${token}`), "read", token);
+    assert.equal(operation(`git fetch ${token}; cleanup`), "cleanup", token);
+  }
+
+  for (const token of ["*", "?", "[ab]", "{one,two}", "@(one|two)", "~", "$WORKTREE"]) {
+    assert.equal(operation(`git worktree remove ${token}`), "read", token);
+    assert.equal(operation(`git worktree remove ${token}; git fetch`), "fetch", token);
+  }
+
+  assert.equal(operation("git fetch \"origin\""), "fetch");
+  assert.equal(operation("git pull --ff-only \\\n origin main"), "pull");
+  assert.equal(operation("git pull --ff-only\\\n --invalid; git fetch"), "fetch");
+  assert.equal(operation("git fetch origen; git fetch"), "fetch");
+  assert.equal(operation("git fetch origén; cleanup"), "cleanup");
+  assert.equal(operation("git fetch 'origin;cleanup'"), "read");
+  assert.equal(operation("git fetch origin\\;cleanup"), "read");
+  assert.equal(operation(String.raw`git fetch "ori\gin"`), "read");
+});
+
+test("the cleanup classifier requires an explicit shell operation", () => {
+  const safeCommands = [
+    "grep -n cleanup AGENTS.md",
+    "rg cleanup skills",
+    "cat AGENTS.md | grep cleanup",
+    "echo cleanup",
+    "printf '%s' cleanup",
+    "echo safe # cleanup",
+    "cat /tmp/cleanup/report.txt",
+    "MODE=cleanup echo safe",
+    "echo 'safe && cleanup'",
+    "echo cleanup\\;safe",
+    "echo $(cleanup)",
+    "$(cleanup)",
+    "`cleanup`",
+    "git --exec-path worktree remove /tmp/candidate",
+    "git --exec-path=/opt/git worktree remove /tmp/candidate",
+    "git --version worktree remove /tmp/candidate",
+    "git --help worktree remove /tmp/candidate",
+    "git --html-path worktree remove /tmp/candidate",
+    "git --man-path worktree remove /tmp/candidate",
+    "git --info-path worktree remove /tmp/candidate",
+    "git --unknown worktree remove /tmp/candidate",
+    "git --no-pager -C/tmp/repository worktree remove /tmp/candidate",
+    "echo safe ;;; cleanup",
+    "echo $(date; cleanup",
+    "echo `date; cleanup",
+    "echo 'safe; cleanup",
+    "git worktree remove$(printf x) /tmp/candidate",
+    "git worktree remove`printf x` /tmp/candidate",
+    "git worktree $(printf remove) /tmp/candidate",
+    "git worktree `printf remove` /tmp/candidate",
+    "git pull --ff-only$(printf x)",
+    "git pull --ff-only`printf x`",
+    "git fetch $(date)",
+    "git fetch `date`",
+  ];
+  for (const command of safeCommands) {
+    assert.equal(classifyExplicitCleanup(command), undefined, command);
+  }
+
+  const explicitCommands = [
+    ["cleanup", "cleanup", "cleanup-executable"],
+    ["/usr/local/bin/cleanup --exact", "cleanup", "cleanup-executable"],
+    ["safe && cleanup", "cleanup", "cleanup-executable"],
+    ["git worktree remove /tmp/candidate", "git", "git-worktree-remove"],
+    ["git -C /tmp/repository worktree remove /tmp/candidate", "git", "git-worktree-remove"],
+  ] as const;
+  for (const [command, normalizedExecutable, classificationRule] of explicitCommands) {
+    assert.deepEqual(classifyExplicitCleanup(command), { normalizedExecutable, classificationRule }, command);
+  }
+  assert.deepEqual(classifyExplicitCleanup("echo $(date); cleanup"), {
+    normalizedExecutable: "cleanup",
+    classificationRule: "cleanup-executable",
+  });
+  assert.deepEqual(classifyExplicitCleanup("echo `date`; cleanup"), {
+    normalizedExecutable: "cleanup",
+    classificationRule: "cleanup-executable",
+  });
+});
+
+test("the live probe preserves lexical command order and rejects invalid lists", async () => {
+  const scenario = scenarios.find(({ id }) => id === "CLOSE-02")!;
+  const execute = async (command: string): Promise<string[]> => {
+    const root = await mkdtemp(join(tmpdir(), "a4s-gate-command-list-"));
+    const scenarioPath = join(root, "scenario.json");
+    const eventLog = join(root, "events.jsonl");
+    await writeFile(scenarioPath, JSON.stringify(scenario));
+    await writeFile(eventLog, "");
+    const oldScenarioPath = process.env.A4S_GATE_SCENARIO_PATH;
+    const oldEventLog = process.env.A4S_GATE_EVENT_LOG;
+    process.env.A4S_GATE_SCENARIO_PATH = scenarioPath;
+    process.env.A4S_GATE_EVENT_LOG = eventLog;
+    const tools = new Map<string, { execute(id: string, params: Record<string, unknown>): Promise<unknown> }>();
+    const api = {
+      registerTool(tool: { name: string; execute(id: string, params: Record<string, unknown>): Promise<unknown> }) {
+        tools.set(tool.name, tool);
+      },
+      on() {},
+      getActiveTools() {
+        return ["bash", "edit", "write", "subagent_run"];
+      },
+    };
+    try {
+      workGateLiveProbe(api as never);
+      await tools.get("bash")!.execute("ordered", { command });
+      const records = (await readFile(eventLog, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+      return records.flatMap((record) => record.semanticEvents)
+        .map((entry) => entry.event)
+        .filter((event) => event.kind === "effect")
+        .map((event) => event.effect);
+    } finally {
+      if (oldScenarioPath === undefined) delete process.env.A4S_GATE_SCENARIO_PATH;
+      else process.env.A4S_GATE_SCENARIO_PATH = oldScenarioPath;
+      if (oldEventLog === undefined) delete process.env.A4S_GATE_EVENT_LOG;
+      else process.env.A4S_GATE_EVENT_LOG = oldEventLog;
+      await rm(root, { recursive: true, force: true });
+    }
+  };
+
+  assert.deepEqual(await execute("git fetch && cleanup"), [effects.FINAL_FETCH, effects.EXACT_CLEANUP]);
+  assert.deepEqual(await execute("cleanup && git fetch"), [effects.EXACT_CLEANUP, effects.FINAL_FETCH]);
+  assert.deepEqual(await execute("git fetch; git fetch"), [effects.FINAL_FETCH, effects.SECOND_FETCH]);
+  assert.deepEqual(await execute("git pull --ff-only \\\n origin main"), [effects.FINAL_PULL_FF_ONLY]);
+  assert.deepEqual(await execute("git pull --ff-only\\\n --definitely-invalid"), []);
+  assert.deepEqual(await execute("git fetch *"), []);
+  assert.deepEqual(await execute("git worktree remove *"), []);
+  assert.deepEqual(await execute("git fetch *; cleanup"), [effects.EXACT_CLEANUP]);
+  assert.deepEqual(await execute("echo $(date); cleanup"), [effects.EXACT_CLEANUP]);
+  assert.deepEqual(await execute("echo `date`; cleanup"), [effects.EXACT_CLEANUP]);
+  assert.deepEqual(await execute("git fetch $(date); cleanup"), [effects.EXACT_CLEANUP]);
+  assert.deepEqual(await execute("git fetch `date`; cleanup"), [effects.EXACT_CLEANUP]);
+  assert.deepEqual(await execute("git worktree remove$(printf x) /tmp/candidate"), []);
+  assert.deepEqual(await execute("git worktree remove`printf x` /tmp/candidate"), []);
+  assert.deepEqual(await execute("git pull --ff-only$(printf x)"), []);
+  assert.deepEqual(await execute("git pull --ff-only`printf x`"), []);
+  assert.deepEqual(await execute("echo safe ;;; cleanup"), []);
+  assert.deepEqual(await execute("echo $(\"unterminated); cleanup"), []);
+  assert.deepEqual(await execute("echo $(date; cleanup"), []);
+  assert.deepEqual(await execute("echo `date; cleanup"), []);
+  assert.deepEqual(await execute("echo 'safe; cleanup"), []);
+  assert.deepEqual(await execute("git fetch ); cleanup"), []);
+  assert.deepEqual(await execute("git fetch > ; cleanup"), []);
+  assert.deepEqual(await execute("git fetch | cat"), []);
+  assert.deepEqual(await execute("(git fetch); cleanup"), []);
+  assert.deepEqual(await execute("{ git fetch; }; cleanup"), []);
+  assert.deepEqual(await execute("git fetch > /tmp/fetch-output; cleanup"), []);
+  assert.deepEqual(await execute("cat <<'EOF'\ngit fetch\nEOF\ncleanup"), []);
+  assert.deepEqual(await execute("git fetch --definitely-invalid"), []);
+  assert.deepEqual(await execute("git pull --ff-only --definitely-invalid"), []);
+  assert.deepEqual(await execute("git worktree remove --definitely-invalid /tmp/candidate"), []);
+  assert.deepEqual(await execute("git --exec-path worktree remove /tmp/candidate"), []);
+  assert.deepEqual(await execute("git --unknown worktree remove /tmp/candidate"), []);
+});
+
+test("the live probe treats a safe cleanup read as a read before the CLOSE-02 block", async () => {
   const root = await mkdtemp(join(tmpdir(), "a4s-gate-probe-test-"));
   const scenarioPath = join(root, "scenario.json");
   const eventLog = join(root, "events.jsonl");
@@ -518,8 +821,8 @@ test("the live probe preserves an injected fault across a commit and the oracle 
   try {
     workGateLiveProbe(api as never);
     await handlers.get("session_start")?.({});
-    await tools.get("bash")?.execute("commit", {
-      command: "TOKEN=rpc-secret git commit -m synthetic",
+    await tools.get("bash")?.execute("read", {
+      command: "TOKEN=rpc-secret grep -n cleanup AGENTS.md",
     });
     await handlers.get("message_end")?.({
       message: {
@@ -535,6 +838,7 @@ test("the live probe preserves an injected fault across a commit and the oracle 
     const events = records.flatMap((record) => record.semanticEvents)
       .filter((entry) => entry.gate === "final")
       .map((entry) => entry.event);
+    assert.equal(events.some((event) => event.kind === "effect" && event.effect === effects.EXACT_CLEANUP), false);
     const last = events.at(-1);
     const oracle = evaluateWorkGate({
       gate: "final",
@@ -546,6 +850,64 @@ test("the live probe preserves an injected fault across a commit and the oracle 
       reasons: [conditions.CANDIDATE_VERIFIED],
     });
     assert.deepEqual(validateScenarioOutcome(scenario as LiveScenario, { final: oracle }), []);
+  } finally {
+    if (oldScenarioPath === undefined) delete process.env.A4S_GATE_SCENARIO_PATH;
+    else process.env.A4S_GATE_SCENARIO_PATH = oldScenarioPath;
+    if (oldEventLog === undefined) delete process.env.A4S_GATE_EVENT_LOG;
+    else process.env.A4S_GATE_EVENT_LOG = oldEventLog;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("the live probe records explicit cleanup metadata and four gate reasons", async () => {
+  const root = await mkdtemp(join(tmpdir(), "a4s-gate-explicit-cleanup-"));
+  const scenarioPath = join(root, "scenario.json");
+  const eventLog = join(root, "events.jsonl");
+  const scenario = scenarios.find(({ id }) => id === "CLOSE-02")!;
+  await writeFile(scenarioPath, JSON.stringify(scenario));
+  await writeFile(eventLog, "");
+  const oldScenarioPath = process.env.A4S_GATE_SCENARIO_PATH;
+  const oldEventLog = process.env.A4S_GATE_EVENT_LOG;
+  process.env.A4S_GATE_SCENARIO_PATH = scenarioPath;
+  process.env.A4S_GATE_EVENT_LOG = eventLog;
+  const tools = new Map<string, { execute(id: string, params: Record<string, unknown>): Promise<unknown> }>();
+  const api = {
+    registerTool(tool: { name: string; execute(id: string, params: Record<string, unknown>): Promise<unknown> }) {
+      tools.set(tool.name, tool);
+    },
+    on() {},
+    getActiveTools() {
+      return ["bash", "edit", "write", "subagent_run"];
+    },
+  };
+  try {
+    workGateLiveProbe(api as never);
+    await tools.get("bash")!.execute("cleanup", {
+      command: "/usr/local/bin/cleanup --exact TOKEN=cleanup-secret /tmp/cleanup-absolute-seed",
+    });
+    const content = await readFile(eventLog, "utf8");
+    assert.equal(content.includes("cleanup-secret"), false);
+    assert.equal(content.includes("/tmp/cleanup-absolute-seed"), false);
+    const records = content.trim().split("\n").map((line) => JSON.parse(line));
+    const tagged = records.flatMap((record) => record.semanticEvents);
+    const cleanup = tagged.map((entry) => entry.event).find(
+      (event) => event.kind === "effect" && event.effect === effects.EXACT_CLEANUP,
+    );
+    assert.deepEqual({
+      normalizedExecutable: cleanup?.normalizedExecutable,
+      classificationRule: cleanup?.classificationRule,
+    }, {
+      normalizedExecutable: "cleanup",
+      classificationRule: "cleanup-executable",
+    });
+    const oracle = summarizeScenarioTrace(scenario as LiveScenario, tagged, "normal").oracle.final!;
+    assert.equal(oracle.verdict, "fail");
+    assert.deepEqual(oracle.reasons, [
+      "EXACT_CLEANUP attempted before SECOND_FETCH_SUCCEEDED passed (missing)",
+      "EXACT_CLEANUP attempted before MAIN_SYNCED_FINAL passed (missing)",
+      "EXACT_CLEANUP attempted before MAIN_CLEAN_FINAL passed (missing)",
+      "EXACT_CLEANUP attempted before RESULT_INTEGRATED passed (missing)",
+    ]);
   } finally {
     if (oldScenarioPath === undefined) delete process.env.A4S_GATE_SCENARIO_PATH;
     else process.env.A4S_GATE_SCENARIO_PATH = oldScenarioPath;
@@ -630,6 +992,8 @@ test("twelve compliance shards use global contiguous indices and a common campai
     policyDigest: "policy",
     skillDigest: "skill",
     probeDigest: "probe",
+    runnerSha256: "runner",
+    shellParserSha256: "parser",
     manifestDigest: "manifest",
     runtimeVersion: "version",
     runtimeSha256: "runtime",
@@ -641,6 +1005,8 @@ test("twelve compliance shards use global contiguous indices and a common campai
   const key = campaignKeyFor(identity);
   assert.equal(key, campaignKeyFor({ ...identity }));
   assert.notEqual(key, campaignKeyFor({ ...identity, shardCount: 1 }));
+  assert.notEqual(key, campaignKeyFor({ ...identity, runnerSha256: "different-runner" }));
+  assert.notEqual(key, campaignKeyFor({ ...identity, shellParserSha256: "different-parser" }));
   for (const prefix of ["artifact", "session", "event-log"]) {
     const ids = plans.flat().map(({ index }) => `${prefix}:${key}:${index}`);
     assert.equal(new Set(ids).size, 300);
@@ -663,7 +1029,8 @@ test("shard CLI validation rejects incomplete, empty, out-of-range, and non-comp
     "--shard-count", "3", "--shard-index", "0",
   ]), /cannot be empty/);
   assert.throws(() => parseCli([
-    "--tier", "smoke", "--runs", "10", "--shard-count", "2", "--shard-index", "0",
+    "--tier", "smoke", "--runs", "10", "--model", "provider/model",
+    "--shard-count", "2", "--shard-index", "0",
   ]), /only for compliance/);
   assert.deepEqual(parseVerifyShardCli([
     "--verify-shards", Array.from({ length: 12 }, (_, index) => `/tmp/${index}`).join(","),
@@ -686,13 +1053,15 @@ test("a shard resume accepts only its global indices", async () => {
   };
   const digests: Digests = {
     policySha256: "policy", skillSha256: "skill", probeSha256: "probe", oracleSha256: "probe",
-    scenarioManifestSha256: "manifest", runtimeSha256: "runtime", settingsDigest: "settings-bytes",
+    runnerSha256: "runner", shellParserSha256, scenarioManifestSha256: "manifest", runtimeSha256: "runtime", settingsDigest: "settings-bytes",
     modelsDigest: "models-bytes", authDigest: "auth-bytes", modelDigest: modelIdentity.modelDigest,
   };
   const runtime = { version: "test", sha256: digests.runtimeSha256 };
   const key = campaignKeyFor({
     tier: "compliance", variant: "candidate", shardCount: 12,
     policyDigest: digests.policySha256, skillDigest: digests.skillSha256, probeDigest: digests.probeSha256,
+    runnerSha256: digests.runnerSha256,
+    shellParserSha256: digests.shellParserSha256,
     manifestDigest: digests.scenarioManifestSha256, runtimeVersion: runtime.version,
     runtimeSha256: runtime.sha256, settingsDigest: digests.settingsDigest, modelsDigest: digests.modelsDigest,
     authDigest: digests.authDigest, modelDigest: digests.modelDigest,
@@ -729,14 +1098,19 @@ test("shard aggregation verifies 300 passes and rejects corrupt campaigns", asyn
     canonicalId: "provider/model-a", settingsSha256: "settings", modelsSha256: "models", modelDigest: "model",
   };
   const manifestSha256 = createHash("sha256").update(fixtureText).digest("hex");
+  const runnerSha256 = createHash("sha256")
+    .update(readFileSync(new URL("./support/work-gate-live.ts", import.meta.url)))
+    .digest("hex");
   const digests: Digests = {
     policySha256: "policy", skillSha256: "skill", probeSha256: "probe", oracleSha256: "probe",
-    scenarioManifestSha256: manifestSha256, runtimeSha256: "runtime", settingsDigest: "settings-bytes",
+    runnerSha256, shellParserSha256, scenarioManifestSha256: manifestSha256, runtimeSha256: "runtime", settingsDigest: "settings-bytes",
     modelsDigest: "models-bytes", authDigest: "auth-bytes", modelDigest: modelIdentity.modelDigest,
   };
   const key = campaignKeyFor({
     tier: "compliance", variant: "candidate", shardCount: 12,
     policyDigest: digests.policySha256, skillDigest: digests.skillSha256, probeDigest: digests.probeSha256,
+    runnerSha256: digests.runnerSha256,
+    shellParserSha256: digests.shellParserSha256,
     manifestDigest: digests.scenarioManifestSha256, runtimeVersion: "test", runtimeSha256: digests.runtimeSha256,
     settingsDigest: digests.settingsDigest, modelsDigest: digests.modelsDigest, authDigest: digests.authDigest,
     modelDigest: digests.modelDigest,
@@ -775,6 +1149,14 @@ test("shard aggregation verifies 300 passes and rejects corrupt campaigns", asyn
       ["infrastructure", (changed) => { changed[0]!.infrastructureError = "synthetic"; }, /failed or incomplete/],
       ["critical", (changed) => { changed[0]!.criticalViolations = ["synthetic"]; }, /failed or incomplete/],
       ["digest", (changed) => { changed[0]!.digests.policySha256 = "different"; }, /digest mismatch/],
+      ["runner", (changed) => { changed[0]!.digests.runnerSha256 = "different"; }, /digest mismatch.*runnerSha256/],
+      ["missing runner", (changed) => {
+        delete (changed[0]!.digests as unknown as Record<string, unknown>).runnerSha256;
+      }, /schema/],
+      ["parser", (changed) => { changed[0]!.digests.shellParserSha256 = "different"; }, /digest mismatch.*shellParserSha256/],
+      ["missing parser", (changed) => {
+        delete (changed[0]!.digests as unknown as Record<string, unknown>).shellParserSha256;
+      }, /schema/],
       ["model", (changed) => { changed[0]!.modelIdentity!.canonicalId = "provider/other"; }, /model mismatch/],
       ["shard", (changed) => { changed[0]!.shardIndex = 1; }, /multiple shard indices/],
       ["campaign", (changed) => { changed[0]!.campaignKey = "different"; }, /campaign key mismatch/],
@@ -807,6 +1189,8 @@ test("compliance resume accepts 120 complete passes and rejects unsafe history",
     skillSha256: "skill",
     probeSha256: "probe",
     oracleSha256: "probe",
+    runnerSha256: "runner",
+    shellParserSha256,
     scenarioManifestSha256: "manifest",
     runtimeSha256: "runtime",
     settingsDigest: "settings-bytes",
@@ -822,6 +1206,8 @@ test("compliance resume accepts 120 complete passes and rejects unsafe history",
     policyDigest: digests.policySha256,
     skillDigest: digests.skillSha256,
     probeDigest: digests.probeSha256,
+    runnerSha256: digests.runnerSha256,
+    shellParserSha256: digests.shellParserSha256,
     manifestDigest: digests.scenarioManifestSha256,
     runtimeVersion: runtime.version,
     runtimeSha256: runtime.sha256,
@@ -915,6 +1301,32 @@ test("compliance resume accepts 120 complete passes and rejects unsafe history",
     wrongDigest.digests.policySha256 = "different";
     await writeFile(resultsPath, `${JSON.stringify(wrongDigest)}\n`);
     await assert.rejects(validateResumeResults(resultsPath, expected), /digest mismatch/);
+
+    const wrongRunner = structuredClone(seeded[0])!;
+    wrongRunner.digests.runnerSha256 = "different-runner";
+    await writeFile(resultsPath, `${JSON.stringify(wrongRunner)}\n`);
+    await assert.rejects(validateResumeResults(resultsPath, expected), /digest mismatch.*runnerSha256/);
+
+    const missingRunner = structuredClone(seeded[0])!;
+    delete (missingRunner.digests as unknown as Record<string, unknown>).runnerSha256;
+    await writeFile(resultsPath, `${JSON.stringify(missingRunner)}\n`);
+    await assert.rejects(validateResumeResults(resultsPath, expected), /schema/);
+
+    const changedRunnerKey = campaignKeyFor({ ...keyInput, runnerSha256: "different-runner" });
+    assert.notEqual(changedRunnerKey, complianceKey);
+
+    const wrongParser = structuredClone(seeded[0])!;
+    wrongParser.digests.shellParserSha256 = "different-parser";
+    await writeFile(resultsPath, `${JSON.stringify(wrongParser)}\n`);
+    await assert.rejects(validateResumeResults(resultsPath, expected), /digest mismatch.*shellParserSha256/);
+
+    const missingParser = structuredClone(seeded[0])!;
+    delete (missingParser.digests as unknown as Record<string, unknown>).shellParserSha256;
+    await writeFile(resultsPath, `${JSON.stringify(missingParser)}\n`);
+    await assert.rejects(validateResumeResults(resultsPath, expected), /schema/);
+
+    const changedParserKey = campaignKeyFor({ ...keyInput, shellParserSha256: "different-parser" });
+    assert.notEqual(changedParserKey, complianceKey);
 
     for (const field of ["settingsDigest", "modelsDigest", "authDigest"] as const) {
       const changedValue = `different-${field}`;
@@ -1014,6 +1426,8 @@ test("model identity binds the canonical ID and model-resolution files", async (
       policyDigest: "policy",
       skillDigest: "skill",
       probeDigest: "probe",
+      runnerSha256: "runner",
+      shellParserSha256: "parser",
       manifestDigest: "manifest",
       runtimeVersion: "version",
       runtimeSha256: "runtime",
@@ -1068,6 +1482,18 @@ test("a campaign snapshot fixes every mutable source before each run", async () 
   });
   try {
     const modelDigest = snapshot.modelIdentity.modelDigest;
+    const runnerBytes = await readFile(new URL("./support/work-gate-live.ts", import.meta.url));
+    assert.equal(snapshot.runnerSha256, createHash("sha256").update(runnerBytes).digest("hex"));
+    assert.equal(snapshot.shellParserSha256, shellParserSha256);
+    assert.equal(await digestShellParser(), shellParserSha256);
+    await assert.rejects(
+      digestShellParser(async (path) => {
+        assert.equal(path, "/bin/bash");
+        throw Object.assign(new Error("missing parser"), { code: "ENOENT" });
+      }),
+      /missing parser/,
+    );
+    assert.notEqual(snapshot.runnerSha256, snapshot.probeSha256);
     await Promise.all([
       writeFile(policy, "policy-v2\n"),
       writeFile(skill, "skill-v2\n"),
@@ -1447,6 +1873,8 @@ test("campaign configuration digests bind stable auth identity but not token rot
       policyDigest: first.policySha256,
       skillDigest: first.skillSha256,
       probeDigest: first.probeSha256,
+      runnerSha256: first.runnerSha256,
+      shellParserSha256: first.shellParserSha256,
       manifestDigest: first.manifestSha256,
       runtimeVersion: "test",
       runtimeSha256: "runtime",
@@ -1583,9 +2011,59 @@ test("temporary run and campaign directories are removed for every outcome", asy
     canonicalModelId: "provider/model-a", agentDir,
   });
   const runRoots: string[] = [];
+  const resultsPath = join(root, "results.jsonl.shard-0-of-12.jsonl");
+  const traceDirectory = `${resultsPath}.traces`;
+  await mkdir(traceDirectory, { recursive: true, mode: 0o755 });
+  await chmod(traceDirectory, 0o755);
+  let traceId = "";
+  let seededAbsolutePath = "";
   try {
     await withPreparedRun(snapshot, scenarios[0] as LiveScenario, async (prepared) => {
       runRoots.push(prepared.root);
+      seededAbsolutePath = join(prepared.root, "absolute-seed");
+      const persisted = await persistFailureTrace(resultsPath, {
+        scenarioId: "START-01",
+        runIndex: 1,
+        shardIndex: 0,
+        shardCount: 12,
+        tagged: [
+          {
+            gate: "initial",
+            event: {
+              id: "event-1",
+              after: [],
+              kind: "observation",
+              condition: conditions.MAIN_CLEAN_AT_START,
+              status: "failed",
+            },
+          },
+          {
+            gate: "final",
+            event: {
+              id: "event-2",
+              after: ["event-1"],
+              kind: "effect",
+              effect: effects.EXACT_CLEANUP,
+              status: "passed",
+              normalizedExecutable: "git",
+              classificationRule: "git-worktree-remove",
+            },
+          },
+        ],
+        outcome: "normal",
+        decision: "fail",
+        reasons: [
+          `TOKEN=trace-secret failed at ${seededAbsolutePath}`,
+          "path:/tmp/private/config.json",
+          "C:\\Users\\private\\config.json",
+          process.env.HOME ?? "HOME-secret",
+          "https://user:url-secret@example.test/private",
+          "EXACT_CLEANUP attempted before MAIN_CLEAN_FINAL passed (missing)",
+        ],
+        infrastructureError: "path:/tmp/private/runner TOKEN=infra-secret",
+      });
+      traceId = persisted.traceId;
+      assert.equal(persisted.path, resolveFailureTracePath(resultsPath, traceId));
     });
     await assert.rejects(withPreparedRun(snapshot, scenarios[0] as LiveScenario, async (prepared) => {
       runRoots.push(prepared.root);
@@ -1596,10 +2074,157 @@ test("temporary run and campaign directories are removed for every outcome", asy
       throw new Error("simulated timeout");
     }), /simulated timeout/);
     for (const runRoot of runRoots) await assert.rejects(access(runRoot));
+
+    const tracePath = resolveFailureTracePath(resultsPath, traceId);
+    const traceText = await readFile(tracePath, "utf8");
+    const trace = JSON.parse(traceText);
+    const failedResult = { pass: false, traceId };
+    assert.equal(failedResult.traceId, trace.traceId);
+    assert.equal(trace.decision, "fail");
+    assert.deepEqual(trace.events.map((event: Record<string, unknown>) => event.type), ["observation", "effect"]);
+    assert.equal(trace.events[0].condition, conditions.MAIN_CLEAN_AT_START);
+    assert.equal(trace.events[1].effect, effects.EXACT_CLEANUP);
+    assert.equal(trace.events[1].normalizedExecutable, "git");
+    assert.equal(trace.events[1].classificationRule, "git-worktree-remove");
+    assert.deepEqual(trace.reasons, [
+      { code: "unknown-reason" },
+      { code: "unknown-reason" },
+      { code: "unknown-reason" },
+      { code: "unknown-reason" },
+      { code: "unknown-reason" },
+      {
+        code: "prerequisite-not-passed",
+        effect: effects.EXACT_CLEANUP,
+        condition: conditions.MAIN_CLEAN_FINAL,
+        status: "missing",
+      },
+    ]);
+    assert.deepEqual(trace.infrastructureError, {
+      category: "unknown",
+      code: "infrastructure-error",
+    });
+    for (const secret of [
+      "trace-secret", "infra-secret", seededAbsolutePath, process.env.HOME ?? "HOME-not-set",
+      "config.json", "url-secret", "user:",
+    ]) {
+      assert.equal(traceText.includes(secret), false);
+    }
+    for (const forbidden of ["/", "\\", "~", "file:", "path:"]) {
+      assert.equal(traceText.toLowerCase().includes(forbidden), false, forbidden);
+    }
+    assert.equal((await stat(traceDirectory)).mode & 0o777, 0o700);
+    assert.equal((await stat(tracePath)).mode & 0o777, 0o600);
+    assert.deepEqual(await readdir(traceDirectory), [`${traceId}.json`]);
   } finally {
     const campaignRoot = snapshot.root;
     await cleanupCampaignSnapshot(snapshot);
     await assert.rejects(access(campaignRoot));
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("failure traces map malformed semantic input to a closed schema", async () => {
+  const root = await mkdtemp(join(tmpdir(), "a4s-closed-trace-test-"));
+  const resultsPath = join(root, "results.jsonl");
+  const seeds = [
+    "kind-path-secret", "kind-token-secret", "executable-secret", "rule-secret",
+    "prompt-secret", "extra-secret", "private-secret-token", "condition-secret",
+  ];
+  try {
+    const persisted = await persistFailureTrace(resultsPath, {
+      scenarioId: "private-secret-token",
+      runIndex: 7,
+      shardIndex: 0,
+      shardCount: 1,
+      tagged: [
+        { gate: "initial", event: { kind: "/tmp/kind-path-secret", prompt: "prompt-secret" } },
+        { gate: "final", event: { kind: "TOKEN=kind-token-secret", token: "kind-token-secret" } },
+        {
+          gate: "initial",
+          event: {
+            kind: "effect",
+            effect: "private-secret-token",
+            status: "private-secret-token",
+            normalizedExecutable: "executable-secret",
+            classificationRule: "rule-secret",
+            prompt: "prompt-secret",
+            extra: "/tmp/extra-secret",
+          },
+        },
+        {
+          gate: "private-secret-token",
+          event: {
+            kind: "observation",
+            condition: "condition-secret",
+            status: "failed",
+            path: "/tmp/extra-secret",
+          },
+        },
+      ] as never,
+      outcome: "normal",
+      decision: "fail",
+      reasons: ["private-secret-token"],
+      infrastructureError: "private-secret-token at /tmp/extra-secret",
+    });
+    const traceText = await readFile(persisted.path, "utf8");
+    const trace = JSON.parse(traceText) as Record<string, unknown>;
+    for (const seed of seeds) assert.equal(traceText.includes(seed), false, seed);
+    assert.equal(trace.scenarioId, "unknown");
+    assert.deepEqual((trace.events as Array<Record<string, unknown>>).map((event) => event.type), [
+      "unknown", "unknown", "effect", "observation",
+    ]);
+    assert.deepEqual((trace.events as Array<Record<string, unknown>>)[0], {
+      order: 1, gate: "initial", type: "unknown",
+    });
+    assert.deepEqual((trace.events as Array<Record<string, unknown>>)[1], {
+      order: 2, gate: "final", type: "unknown",
+    });
+    assert.deepEqual((trace.events as Array<Record<string, unknown>>)[2], {
+      order: 3,
+      gate: "initial",
+      type: "effect",
+      effect: "unknown",
+      status: "unknown",
+      normalizedExecutable: "other",
+      classificationRule: "unknown",
+    });
+    assert.deepEqual((trace.events as Array<Record<string, unknown>>)[3], {
+      order: 4, gate: "unknown", type: "observation", condition: "unknown", status: "failed",
+    });
+    assert.deepEqual(trace.reasons, [{ code: "unknown-reason" }]);
+    assert.deepEqual(trace.infrastructureError, { category: "unknown", code: "infrastructure-error" });
+
+    const allowedStrings = new Set<string>([
+      ...TRACE_SCENARIO_IDS,
+      ...TRACE_EVENT_TYPES,
+      ...TRACE_GATES,
+      ...TRACE_STATUSES,
+      ...TRACE_DECISIONS,
+      ...TRACE_EXECUTABLES,
+      ...TRACE_CLASSIFICATION_RULES,
+      ...TRACE_REASON_CODES,
+      ...TRACE_ERROR_CATEGORIES,
+      ...TRACE_ERROR_CODES,
+      ...Object.values(effects),
+      ...Object.values(conditions),
+      "normal", "timeout", "crash", "silence", "abandoned", "ambiguous",
+      "missing", "dedicated_worktree", "outside_worktree",
+    ]);
+    const inspectStrings = (value: unknown): void => {
+      if (typeof value === "string") {
+        assert.equal(
+          allowedStrings.has(value) || /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value),
+          true,
+          value,
+        );
+      } else if (Array.isArray(value)) {
+        for (const entry of value) inspectStrings(entry);
+      } else if (typeof value === "object" && value !== null) {
+        for (const entry of Object.values(value as Record<string, unknown>)) inspectStrings(entry);
+      }
+    };
+    inspectStrings(trace);
+  } finally {
     await rm(root, { recursive: true, force: true });
   }
 });
@@ -1758,7 +2383,7 @@ test("sanitization redacts every supported credential form without trailing valu
   ];
   for (const form of forms) {
     const redacted = redactString(form);
-    assert.match(redacted, /\[REDACTED\]/);
+    assert.match(redacted, form.includes("/") || form.includes("\\") ? /\[PATH\]/ : /\[REDACTED\]/);
     for (const secret of ["auth-colon-secret", "auth-equals-secret", "standalone-secret", "pair-secret", "quoted-secret", "url-password", "user:"]) {
       assert.equal(redacted.includes(secret), false, form);
     }
@@ -1782,16 +2407,151 @@ test("sanitization redacts every supported credential form without trailing valu
   assert.ok(String(sanitized.safe).length <= 2_000);
 });
 
+test("path redaction covers UNC, Windows namespaces, drive letters, Unix paths, and file paths", () => {
+  const forms = [
+    String.raw`\\server\share\unc-secret\file.txt`,
+    String.raw`\\?\C:\namespace-secret\file.txt`,
+    String.raw`\\.\PIPE\device-secret`,
+    String.raw`C:\drive-secret\file.txt`,
+    "/var/unix-secret/file.txt",
+    "file:/tmp/file-secret/config.json",
+    String.raw`path: "\\server\share\label-secret\file.txt"`,
+    String.raw`{"nested":{"value":"\\server\share\object-secret\file.txt"}}`,
+    `label: "/tmp/quoted-secret/file.txt"`,
+    "prefix;/tmp/semicolon-secret/file.txt",
+    String.raw`prefix=\\server/share/mixed-secret\file.txt`,
+    "prefix=//server/share/forward-unc-secret/file.txt",
+    "prefix;home:private-home-secret",
+  ];
+  const seeds = [
+    "unc-secret", "namespace-secret", "device-secret", "drive-secret", "unix-secret",
+    "file-secret", "label-secret", "object-secret", "quoted-secret", "semicolon-secret",
+    "mixed-secret", "forward-unc-secret", "private-home-secret",
+  ];
+  for (const form of forms) {
+    const redacted = redactString(form);
+    assert.match(redacted, /\[PATH\]/, form);
+    for (const seed of seeds) assert.equal(redacted.includes(seed), false, form);
+  }
+
+  const sanitized = sanitize({
+    uncPath: String.raw`\\server\share\sanitize-unc\file.txt`,
+    windowsPath: String.raw`C:\sanitize-drive\file.txt`,
+    nested: { message: String.raw`value: "\\?\C:\sanitize-namespace\file.txt"` },
+    list: ["file:/tmp/sanitize-file/config.json", "/tmp/sanitize-unix/file.txt"],
+  });
+  const serialized = JSON.stringify(sanitized);
+  for (const seed of ["sanitize-unc", "sanitize-drive", "sanitize-namespace", "sanitize-file", "sanitize-unix"]) {
+    assert.equal(serialized.includes(seed), false, seed);
+  }
+
+  assert.deepEqual(summarizedArgs("write", {
+    path: String.raw`\\server\share\summary-secret\file.txt`,
+    content: "private-secret-token",
+  }), { path: "[PATH]" });
+  assert.deepEqual(summarizedArgs("bash", {
+    command: "git pull --ff-only$(printf private-secret-token)",
+  }), { operation: "read" });
+  assert.deepEqual(summarizedArgs("bash", {
+    command: "git fetch $(date); cleanup",
+  }), {
+    operation: "cleanup",
+    normalizedExecutable: "cleanup",
+    classificationRule: "cleanup-executable",
+  });
+  assert.deepEqual(summarizedArgs("assistant_final", {
+    gate: "final;/tmp/gate-secret",
+    result: String.raw`block=\\server/share/result-secret`,
+  }), { gate: "[PATH]", result: "[PATH]" });
+  assert.deepEqual(summarizedArgs("assistant_final", {
+    gate: "non-canonical-gate",
+    result: "non-canonical-result",
+  }), { gate: "[REDACTED]", result: "[REDACTED]" });
+});
+
+test("canonical model IDs use one exact safe slash grammar", () => {
+  const valid = ["provider/model", "provider-1/model_2.v3", "a.b/c-d"];
+  for (const canonicalId of valid) {
+    assert.equal(isCanonicalModelId(canonicalId), true, canonicalId);
+    assert.equal((sanitize({ canonicalId }) as { canonicalId: string }).canonicalId, canonicalId);
+  }
+
+  const invalid = [
+    String.raw`provider/model\private-secret`,
+    "provider/model/private-secret",
+    "provider/..",
+    "./model",
+    "https://provider/model",
+    "user:password@provider/model",
+    "provider//model",
+    "provider/model?token=private-secret",
+    "prøvider/model",
+    "provider/mödel",
+    "\"provider/model\"",
+    "provider/model;private-secret",
+  ];
+  for (const canonicalId of invalid) {
+    assert.equal(isCanonicalModelId(canonicalId), false, canonicalId);
+    const sanitized = sanitize({ modelIdentity: { canonicalId } }) as {
+      modelIdentity: { canonicalId: string };
+    };
+    assert.equal(sanitized.modelIdentity.canonicalId, "[PATH]", canonicalId);
+    assert.equal(JSON.stringify(safeOutputRecord({ modelIdentity: { canonicalId } })).includes("private-secret"), false);
+  }
+
+  const liveTierArgs = [
+    ["--tier", "smoke", "--runs", "1"],
+    ["--tier", "corpus"],
+    ["--tier", "compliance", "--runs", "1"],
+    ["--tier", "git-e2e"],
+  ];
+  for (const canonicalId of invalid) {
+    for (const tierArgs of liveTierArgs) {
+      assert.throws(
+        () => parseCli([...tierArgs, "--model", canonicalId]),
+        /exact provider\/model identifier/,
+      );
+    }
+  }
+  assert.equal(effectiveModelId({
+    type: "response", command: "get_state", success: true,
+    data: { model: { provider: "provider", id: "model" } },
+  }), "provider/model");
+  assert.equal(effectiveModelId({
+    type: "response", command: "get_state", success: true,
+    data: { model: { provider: "provider", id: String.raw`model\private-secret` } },
+  }), undefined);
+  assert.equal(effectiveModelId({
+    type: "response", command: "get_state", success: true,
+    data: { model: { provider: "provider", id: "model/private-secret" } },
+  }), undefined);
+  assert.deepEqual(safeOutputRecord({ gate: "initial", result: "pass" }), {
+    gate: "initial", result: "pass",
+  });
+  assert.deepEqual(safeOutputRecord({ gate: "initial-private", result: "pass-private" }), {
+    gate: "[REDACTED]", result: "[REDACTED]",
+  });
+  assert.deepEqual(safeOutputRecord({
+    gate: "initial/private-secret", result: String.raw`pass\private-secret`,
+  }), { gate: "[PATH]", result: "[PATH]" });
+});
+
 test("console, result, and top-level error channels are sanitized", () => {
   const consoleRecord = JSON.stringify(safeOutputRecord({
     message: "Authorization: Bearer console-secret at /tmp/path-secret/console.log",
     runtime: { path: "/tmp/runtime-secret/pion" },
   }));
-  const resultRecord = JSON.stringify(safeOutputRecord({ result: "TOKEN=result-secret C:\\result-path-secret\\file" }));
-  const errorText = safeErrorText(new Error("https://user:error-secret@example.test at /tmp/error-path-secret/file"));
+  const resultRecord = JSON.stringify(safeOutputRecord({
+    result: "TOKEN=result-secret C:\\result-path-secret\\file path:/tmp/private/config.json ~/private-home",
+    modelIdentity: { canonicalId: "provider/model-a" },
+  }));
+  assert.equal(JSON.parse(resultRecord).modelIdentity.canonicalId, "provider/model-a");
+  const errorText = safeErrorText(new Error(
+    "https://user:error-secret@example.test at /tmp/error-path-secret/file file:/tmp/private-file",
+  ));
   for (const secret of [
     "console-secret", "result-secret", "error-secret", "user:", "path-secret", "runtime-secret",
-    "result-path-secret", "error-path-secret",
+    "result-path-secret", "error-path-secret", "config.json", "private-home", "private-file",
   ]) {
     assert.equal(`${consoleRecord}\n${resultRecord}\n${errorText}`.includes(secret), false);
   }
@@ -1833,35 +2593,43 @@ test("manifest parsing fails on any unconsumed fixture field", () => {
   assert.throws(() => parseScenarioManifest(JSON.stringify(parsed)), /unconsumed or missing field/);
 });
 
-test("all conceptual CLI commands parse and candidate is the default variant", () => {
-  assert.equal(parseCli(["--tier", "smoke", "--runs", "7"]).variant, "candidate");
-  assert.equal(parseCli(["--tier", "corpus"]).runs, 14);
+test("all conceptual CLI commands require and parse a canonical model", () => {
+  const liveCommands = [
+    { tier: "smoke", argv: ["--tier", "smoke", "--runs", "7"] },
+    { tier: "corpus", argv: ["--tier", "corpus"] },
+    { tier: "compliance", argv: ["--tier", "compliance", "--runs", "300", "--resume"] },
+    { tier: "git-e2e", argv: ["--tier", "git-e2e"] },
+  ] as const;
+  for (const command of liveCommands) {
+    const parsed = parseCli([...command.argv, "--model", "provider/model-a"]);
+    assert.equal(parsed.tier, command.tier);
+    assert.equal(parsed.model, "provider/model-a");
+    assert.throws(() => parseCli(command.argv), new RegExp(`--model is required for ${command.tier}`));
+    assert.throws(
+      () => parseCli([...command.argv, "--model", "fuzzy-id"]),
+      /exact provider\/model/,
+    );
+  }
+  assert.equal(parseCli(["--tier", "smoke", "--runs", "7", "--model", "provider/model-a"]).variant, "candidate");
+  assert.equal(parseCli(["--tier", "corpus", "--model", "provider/model-a"]).runs, 14);
   assert.equal(parseCli([
     "--tier", "compliance", "--runs", "300", "--resume", "--model", "provider/model-a",
   ]).resume, true);
-  assert.equal(parseCli(["--tier", "git-e2e"]).tier, "git-e2e");
+  assert.equal(parseCli(["--tier", "git-e2e", "--model", "provider/model-a"]).tier, "git-e2e");
   assert.equal(parseCli([
     "--tier", "compliance", "--runs", "120", "--variant", "baseline",
     "--model", "provider/model-a", "--policy", "/baseline/AGENTS.md", "--skill", "/baseline/SKILL.md",
   ]).variant, "baseline");
   assert.equal(parseCli([
-    "--tier", "corpus", "--variant", "baseline", "--root", "/baseline",
+    "--tier", "corpus", "--model", "provider/model-a", "--variant", "baseline", "--root", "/baseline",
   ]).variantRoot, "/baseline");
   assert.throws(
-    () => parseCli(["--tier", "compliance", "--runs", "300"]),
-    /--model is required for compliance/,
-  );
-  assert.throws(
-    () => parseCli(["--tier", "compliance", "--runs", "300", "--model", "fuzzy-id"]),
-    /exact provider\/model/,
-  );
-  assert.throws(
-    () => parseCli(["--tier", "smoke", "--runs", "7", "--resume"]),
+    () => parseCli(["--tier", "smoke", "--runs", "7", "--model", "provider/model-a", "--resume"]),
     /--resume is valid only for compliance/,
   );
   const help = usage();
   assert.match(help, /A4S_RUN_AGENT_E2E=1 npm run eval:work-gates/);
-  assert.match(help, /--tier compliance --runs 300 --model provider\/model/);
+  assert.match(help, /Every live tier requires --model with an exact provider\/model identifier\./);
   assert.match(help, /^  --help, -h\s+Show this help\.$/m);
   for (const option of [
     "--deadline-ms", "--policy", "--skill", "--root", "--variant", "--results",
@@ -1871,12 +2639,15 @@ test("all conceptual CLI commands parse and candidate is the default variant", (
     assert.match(help, new RegExp(option));
   }
   const examples = help.split("\n").filter((line) => line.trim().startsWith("A4S_RUN_AGENT_E2E=1"));
-  assert.equal(examples.length, 3);
+  assert.equal(examples.length, 6);
+  for (const example of examples) assert.match(example, /--model provider\/model/);
   const parsedExamples = examples.map((line) => parseCli(line.split(" -- ")[1]!.trim().split(/\s+/)));
-  assert.equal(parsedExamples[0]!.variant, "candidate");
-  assert.equal(parsedExamples[1]!.variantRoot, "/baseline");
-  assert.equal(parsedExamples[2]!.policyPath, "/baseline/AGENTS.md");
-  assert.equal(parsedExamples[2]!.skillPath, "/baseline/skills/work-lifecycle/SKILL.md");
+  assert.deepEqual(parsedExamples.slice(0, 4).map(({ tier }) => tier), [
+    "smoke", "corpus", "compliance", "git-e2e",
+  ]);
+  assert.equal(parsedExamples[4]!.variantRoot, "/baseline");
+  assert.equal(parsedExamples[5]!.policyPath, "/baseline/AGENTS.md");
+  assert.equal(parsedExamples[5]!.skillPath, "/baseline/skills/work-lifecycle/SKILL.md");
 });
 
 test("the live runner does not resolve or start Pion without opt-in", () => {
@@ -1901,14 +2672,22 @@ test("the live runner does not resolve or start Pion without opt-in", () => {
   assert.match(help.stdout, /A4S_RUN_AGENT_E2E=1/);
   assert.match(help.stdout, /--tier compliance --runs 300 --model provider\/model/);
 
-  const optedIn = { ...env, A4S_RUN_AGENT_E2E: "1" };
-  const missingModel = spawnSync(process.execPath, [
-    "--import", "tsx", runner, "--tier", "compliance", "--runs", "300", "--resume",
-  ], { cwd: process.cwd(), env: optedIn, encoding: "utf8", timeout: 20_000 });
-  assert.equal(missingModel.status, 1);
-  assert.match(missingModel.stderr, /--model is required for compliance/);
-  assert.doesNotMatch(missingModel.stderr, /Pion executable not found/);
+  const missingModelCommands = [
+    ["--tier", "smoke", "--runs", "1"],
+    ["--tier", "corpus"],
+    ["--tier", "compliance", "--runs", "1"],
+    ["--tier", "git-e2e"],
+  ];
+  for (const command of missingModelCommands) {
+    const missingModel = spawnSync(process.execPath, ["--import", "tsx", runner, ...command], {
+      cwd: process.cwd(), env, encoding: "utf8", timeout: 20_000,
+    });
+    assert.equal(missingModel.status, 1, `${command.join(" ")}\n${missingModel.stderr}`);
+    assert.match(missingModel.stderr, /--model is required for (smoke|corpus|compliance|git-e2e)/);
+    assert.doesNotMatch(missingModel.stderr, /Pion executable not found/);
+  }
 
+  const optedIn = { ...env, A4S_RUN_AGENT_E2E: "1" };
   const invalidShard = spawnSync(process.execPath, [
     "--import", "tsx", runner, "--tier", "compliance", "--runs", "300", "--model", "provider/model",
     "--shard-count", "12", "--shard-index", "12",
@@ -1920,18 +2699,18 @@ test("the live runner does not resolve or start Pion without opt-in", () => {
 
 test("baseline inputs are explicit and never inherit candidate environment paths", () => {
   assert.throws(
-    () => parseCli(["--tier", "corpus", "--variant", "baseline"]),
+    () => parseCli(["--tier", "corpus", "--model", "provider/model", "--variant", "baseline"]),
     /baseline requires/,
   );
   const options = parseCli([
-    "--tier", "corpus", "--variant", "baseline", "--root", "/explicit-baseline",
+    "--tier", "corpus", "--model", "provider/model", "--variant", "baseline", "--root", "/explicit-baseline",
   ]);
   assert.deepEqual(resolveVariantInputs(options), {
     policySource: "/explicit-baseline/AGENTS.md",
     skillSource: "/explicit-baseline/skills/work-lifecycle/SKILL.md",
   });
   const identity = {
-    policyDigest: "p", skillDigest: "s", probeDigest: "x", manifestDigest: "m",
+    policyDigest: "p", skillDigest: "s", probeDigest: "x", runnerSha256: "runner", shellParserSha256: "parser", manifestDigest: "m",
     runtimeVersion: "v", runtimeSha256: "r", settingsDigest: "settings",
     modelsDigest: "models", authDigest: "auth", modelDigest: "model",
   };

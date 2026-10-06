@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
 
 export type GateName = "initial" | "final";
 export type EvidenceStatus = "passed" | "failed" | "unknown";
@@ -85,11 +85,15 @@ export interface ObservationEvent extends EventBase {
   value?: string;
 }
 
+export type CleanupClassificationRule = "cleanup-executable" | "git-worktree-remove";
+
 export interface EffectEvent extends EventBase {
   kind: "effect";
   effect: EffectName;
   status: EvidenceStatus;
   target?: "dedicated_worktree" | "outside_worktree";
+  normalizedExecutable?: "cleanup" | "git";
+  classificationRule?: CleanupClassificationRule;
 }
 
 export interface ReadEvent extends EventBase {
@@ -129,6 +133,8 @@ interface ObservationOptions extends CausalOptions {
 
 interface EffectOptions extends CausalOptions {
   target?: "dedicated_worktree" | "outside_worktree";
+  normalizedExecutable?: EffectEvent["normalizedExecutable"];
+  classificationRule?: CleanupClassificationRule;
 }
 
 /**
@@ -173,6 +179,12 @@ export class WorkGateProbe {
       status,
       after: this.#dependencies(options.after),
       ...(options.target === undefined ? {} : { target: options.target }),
+      ...(options.normalizedExecutable === undefined
+        ? {}
+        : { normalizedExecutable: options.normalizedExecutable }),
+      ...(options.classificationRule === undefined
+        ? {}
+        : { classificationRule: options.classificationRule }),
     };
     return this.#append(event);
   }
@@ -587,7 +599,14 @@ export interface TaggedSemanticEvent {
 
 export type ScenarioAction =
   | { kind: "observe"; condition: string; status?: EvidenceStatus; value?: string }
-  | { kind: "attempt"; effect: EffectName; status?: EvidenceStatus; target?: EffectEvent["target"] }
+  | {
+    kind: "attempt";
+    effect: EffectName;
+    status?: EvidenceStatus;
+    target?: EffectEvent["target"];
+    normalizedExecutable?: EffectEvent["normalizedExecutable"];
+    classificationRule?: CleanupClassificationRule;
+  }
   | { kind: "block"; condition: string };
 
 export interface ScenarioState {
@@ -698,6 +717,12 @@ function appendScenarioAction(state: ScenarioState, action: ScenarioAction): Sce
         effect: action.effect,
         status,
         ...(action.target === undefined ? {} : { target: action.target }),
+        ...(action.normalizedExecutable === undefined
+          ? {}
+          : { normalizedExecutable: action.normalizedExecutable }),
+        ...(action.classificationRule === undefined
+          ? {}
+          : { classificationRule: action.classificationRule }),
       },
     };
   } else {
@@ -1018,22 +1043,86 @@ const SUBAGENT_PARAMETERS = {
   },
 } as const;
 
+const REDACTED_PATH = "[PATH]";
+const BASH_PARSE_ONLY_PATH = "/bin/bash";
+const BASH_PARSE_ONLY_TIMEOUT_MS = 250;
+
+export interface BashParseOnlyResult {
+  status: number | null;
+  signal?: NodeJS.Signals | null;
+  error?: Error;
+}
+
+export type BashParseOnlyRunner = (
+  executable: string,
+  args: readonly string[],
+  options: {
+    input: string;
+    timeout: number;
+    env: NodeJS.ProcessEnv;
+    stdio: ["pipe", "ignore", "ignore"];
+  },
+) => BashParseOnlyResult;
+
+/** Uses Bash only as a bounded syntax parser. It supplies the command through stdin. */
+export function bashParseOnly(
+  command: string,
+  runner: BashParseOnlyRunner = spawnSync as unknown as BashParseOnlyRunner,
+): boolean {
+  try {
+    const result = runner(
+      BASH_PARSE_ONLY_PATH,
+      ["--noprofile", "--norc", "-n"],
+      {
+        input: command,
+        timeout: BASH_PARSE_ONLY_TIMEOUT_MS,
+        env: { LC_ALL: "C", PATH: "/usr/bin:/bin" },
+        stdio: ["pipe", "ignore", "ignore"],
+      },
+    );
+    return result.status === 0 && (result.signal === undefined || result.signal === null) && result.error === undefined;
+  } catch {
+    return false;
+  }
+}
+
+function isAbsolutePathFormat(value: string): boolean {
+  return isAbsolute(value) || /^[A-Za-z]:[\\/]/.test(value) || /^[\\/]{2}/.test(value);
+}
+
 export function redactString(value: string): string {
+  if (/[\\/]/.test(value) || /\b(?:file|path|home)\s*:/i.test(value)) return REDACTED_PATH;
   return value
-    .replace(/\b([a-z][a-z0-9+.-]*:\/\/)([^\s/@]+(?::[^\s/@]*)?)@/gi, "$1[REDACTED]@")
     .replace(/\bAuthorization\s*[:=]\s*(?:Bearer\s+)?(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi, "Authorization=[REDACTED]")
-    .replace(/\bBearer\s+(?:"[^"]*"|'[^']*'|[A-Za-z0-9._~+/=-]+)/gi, "Bearer [REDACTED]")
+    .replace(/\bBearer\s+(?:"[^"]*"|'[^']*'|[A-Za-z0-9._~+=-]+)/gi, "Bearer [REDACTED]")
     .replace(
       /\b(api[_-]?key|access[_-]?token|token|secret|password|auth|cookie)\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,;&]+)/gi,
       "$1=[REDACTED]",
     )
-    .replace(/(^|[\s("'=])\/(?!\/)[^\s"'<>]*/g, "$1[PATH]")
-    .replace(/(^|[\s("'=])[A-Za-z]:\\[^\s"'<>]*/g, "$1[PATH]")
     .slice(0, 2_000);
 }
 
+export function isCanonicalModelId(value: string): boolean {
+  const match = value.match(/^([A-Za-z0-9._-]+)\/([A-Za-z0-9._-]+)$/);
+  return match !== null && match[1] !== "." && match[1] !== ".." &&
+    match[2] !== "." && match[2] !== "..";
+}
+
 export function sanitize(value: unknown, key = ""): unknown {
-  if (/path$/i.test(key) && typeof value === "string" && isAbsolute(value)) return "[PATH]";
+  if (typeof value === "string" && /[\\/]/.test(value)) {
+    return key === "canonicalId" && isCanonicalModelId(value) ? value : REDACTED_PATH;
+  }
+  if (/path$/i.test(key) && typeof value === "string" && isAbsolutePathFormat(value)) return REDACTED_PATH;
+  if (key === "gate" && typeof value === "string") {
+    return value === "initial" || value === "final" || value === REDACTED_PATH || value === "[REDACTED]"
+      ? value
+      : "[REDACTED]";
+  }
+  if (key === "result" && typeof value === "string") {
+    return value === "pass" || value === "block" || value === REDACTED_PATH || value === "[REDACTED]"
+      ? value
+      : "[REDACTED]";
+  }
   if (
     /(token|secret|password|auth(?:orization)?|cookie)(?:$|[_-])/i.test(key) ||
     /(?:api|signing|private|access)[_-]?key/i.test(key)
@@ -1067,23 +1156,469 @@ function messageText(message: unknown): string {
     .join("\n");
 }
 
-function summarizedArgs(tool: string, args: unknown): Record<string, unknown> {
-  const params = typeof args === "object" && args !== null ? args as Record<string, unknown> : {};
-  if (tool === "bash") {
-    const command = typeof params.command === "string" ? params.command.toLowerCase() : "";
-    const operation = ["fetch", "pull", "worktree", "commit", "merge", "cleanup", "receipt", "rev-parse"]
-      .find((candidate) => command.includes(candidate)) ?? "read";
-    return { operation };
-  }
-  if (tool === "edit" || tool === "write") {
-    return { path: typeof params.path === "string" ? params.path.slice(0, 500) : "" };
-  }
-  if (tool === "subagent_run") return { requested: true };
-  if (tool === "assistant_final") return {
-    gate: params.gate,
-    result: params.result,
+interface ShellWord {
+  value: string;
+  opaque: boolean;
+}
+
+export interface CleanupClassification {
+  normalizedExecutable: "cleanup" | "git";
+  classificationRule: CleanupClassificationRule;
+}
+
+type ShellOperation =
+  | { kind: "cleanup"; cleanup: CleanupClassification }
+  | { kind: "git"; subcommand: string; args: string[] }
+  | { kind: "self-review" }
+  | { kind: "merge-pr" }
+  | { kind: "receipt-read" }
+  | { kind: "refs-check" }
+  | { kind: "read" };
+
+/** Splits only supported simple-command lists after Bash has accepted the syntax. */
+function shellCommands(command: string): ShellWord[][] | undefined {
+  const commands: ShellWord[][] = [];
+  let words: ShellWord[] = [];
+  let word = "";
+  let wordStarted = false;
+  let wordOpaque = false;
+  let quote: "single" | "double" | null = null;
+  let requiresCommand = false;
+  let trailingSemicolon = false;
+
+  const finishWord = (): void => {
+    if (!wordStarted) return;
+    words.push({ value: word, opaque: wordOpaque });
+    word = "";
+    wordStarted = false;
+    wordOpaque = false;
   };
-  return {};
+  const finishCommand = (): boolean => {
+    finishWord();
+    if (words.length === 0) return false;
+    commands.push(words);
+    words = [];
+    return true;
+  };
+  const skipBackticks = (start: number): number | undefined => {
+    for (let cursor = start + 1; cursor < command.length; cursor += 1) {
+      if (command[cursor] === "\\") cursor += 1;
+      else if (command[cursor] === "`") return cursor;
+    }
+    return undefined;
+  };
+  const skipDollarParentheses = (start: number): number | undefined => {
+    let depth = 1;
+    let innerQuote: "single" | "double" | null = null;
+    for (let cursor = start + 2; cursor < command.length; cursor += 1) {
+      const current = command[cursor]!;
+      if (innerQuote === "single") {
+        if (current === "'") innerQuote = null;
+      } else if (innerQuote === "double") {
+        if (current === "\\") cursor += 1;
+        else if (current === '"') innerQuote = null;
+        else if (current === "$" && command[cursor + 1] === "(") {
+          depth += 1;
+          cursor += 1;
+        } else if (current === ")" && --depth === 0) return cursor;
+      } else if (current === "'") innerQuote = "single";
+      else if (current === '"') innerQuote = "double";
+      else if (current === "\\") cursor += 1;
+      else if (current === "`") {
+        const end = skipBackticks(cursor);
+        if (end === undefined) return undefined;
+        cursor = end;
+      } else if (current === "$" && command[cursor + 1] === "(") {
+        depth += 1;
+        cursor += 1;
+      } else if (current === ")" && --depth === 0) return cursor;
+    }
+    return undefined;
+  };
+  const skipDollarBraces = (start: number): number | undefined => {
+    let depth = 1;
+    for (let cursor = start + 2; cursor < command.length; cursor += 1) {
+      if (command[cursor] === "\\") cursor += 1;
+      else if (command[cursor] === "{" && command[cursor - 1] === "$") depth += 1;
+      else if (command[cursor] === "}" && --depth === 0) return cursor;
+    }
+    return undefined;
+  };
+  const opaqueExpansionEnd = (start: number): number | undefined => {
+    const next = command[start + 1];
+    if (next === "(") return skipDollarParentheses(start);
+    if (next === "{") return skipDollarBraces(start);
+    if (next && /[A-Za-z_]/.test(next)) {
+      let cursor = start + 1;
+      while (/[A-Za-z0-9_]/.test(command[cursor + 1] ?? "")) cursor += 1;
+      return cursor;
+    }
+    if (next && /[0-9@*#?$!_-]/.test(next)) return start + 1;
+    return undefined;
+  };
+  const skipExtglob = (start: number): number | undefined => {
+    let depth = 1;
+    let innerQuote: "single" | "double" | null = null;
+    for (let cursor = start + 2; cursor < command.length; cursor += 1) {
+      const current = command[cursor]!;
+      if (innerQuote === "single") {
+        if (current === "'") innerQuote = null;
+      } else if (innerQuote === "double") {
+        if (current === "\\") {
+          if (command[cursor + 1] === "\n") cursor += 1;
+          else cursor += 1;
+        } else if (current === '"') innerQuote = null;
+      } else if (current === "'") innerQuote = "single";
+      else if (current === '"') innerQuote = "double";
+      else if (current === "\\") cursor += 1;
+      else if (current === "(") depth += 1;
+      else if (current === ")" && --depth === 0) return cursor;
+    }
+    return undefined;
+  };
+
+  for (let index = 0; index < command.length; index += 1) {
+    const character = command[index]!;
+    if (quote === "single") {
+      if (character === "'") quote = null;
+      else word += character;
+      continue;
+    }
+    if (quote === "double") {
+      if (character === '"') quote = null;
+      else if (character === "\\") {
+        const escaped = command[++index];
+        if (escaped === undefined) return undefined;
+        if (escaped === "\n") continue;
+        word += /[$`"\\]/.test(escaped) ? escaped : `\\${escaped}`;
+      } else if (character === "`") {
+        const end = skipBackticks(index);
+        if (end === undefined) return undefined;
+        index = end;
+        wordStarted = true;
+        wordOpaque = true;
+      } else if (character === "$") {
+        const end = opaqueExpansionEnd(index);
+        if (end === undefined) word += character;
+        else {
+          index = end;
+          wordStarted = true;
+          wordOpaque = true;
+        }
+      } else word += character;
+      continue;
+    }
+
+    if (character === "'" || character === '"') {
+      quote = character === "'" ? "single" : "double";
+      wordStarted = true;
+    } else if (character === "\\") {
+      const escaped = command[++index];
+      if (escaped === undefined) return undefined;
+      if (escaped !== "\n") {
+        word += escaped;
+        wordStarted = true;
+      }
+    } else if (character === "`") {
+      const end = skipBackticks(index);
+      if (end === undefined) return undefined;
+      index = end;
+      wordStarted = true;
+      wordOpaque = true;
+    } else if (character === "$") {
+      const end = opaqueExpansionEnd(index);
+      if (end === undefined) {
+        word += character;
+        wordStarted = true;
+      } else {
+        index = end;
+        wordStarted = true;
+        wordOpaque = true;
+      }
+    } else if (character === "#" && !wordStarted) {
+      while (index + 1 < command.length && command[index + 1] !== "\n") index += 1;
+    } else if (/[?*+@!]/.test(character) && command[index + 1] === "(") {
+      const end = skipExtglob(index);
+      if (end === undefined) return undefined;
+      word += command.slice(index, end + 1);
+      wordStarted = true;
+      wordOpaque = true;
+      index = end;
+    } else if (character === "{" || character === "}") {
+      if (!wordStarted && (command[index + 1] === undefined || /\s|;/.test(command[index + 1]!))) {
+        return undefined;
+      }
+      word += character;
+      wordStarted = true;
+      wordOpaque = true;
+    } else if (character === "*" || character === "?" || character === "[") {
+      word += character;
+      wordStarted = true;
+      wordOpaque = true;
+    } else if (character === "~") {
+      word += character;
+      wordOpaque = wordOpaque || !wordStarted || word.endsWith("=~") || word.endsWith(":~");
+      wordStarted = true;
+    } else if (/[<>()]/.test(character) ||
+      character === "|" && command[index + 1] !== "|" ||
+      character === "&" && command[index + 1] !== "&") {
+      return undefined;
+    } else if (/\s/.test(character)) {
+      finishWord();
+      if (character === "\n" && words.length > 0) {
+        finishCommand();
+        requiresCommand = false;
+        trailingSemicolon = true;
+      }
+    } else if (character === ";" || character === "|" || character === "&") {
+      const pair = command.slice(index, index + 2);
+      if (character === ";" && command[index + 1] === ";") return undefined;
+      if (!finishCommand()) return undefined;
+      if (pair === "&&" || pair === "||") index += 1;
+      requiresCommand = true;
+      trailingSemicolon = character === ";";
+    } else {
+      word += character;
+      wordStarted = true;
+      requiresCommand = false;
+      trailingSemicolon = false;
+    }
+  }
+  if (quote !== null) return undefined;
+  if (wordStarted || words.length > 0) {
+    finishCommand();
+    requiresCommand = false;
+  }
+  if (requiresCommand && !trailingSemicolon) return undefined;
+  return commands;
+}
+
+const GIT_TERMINAL_OPTIONS = new Set([
+  "--version", "--help", "--html-path", "--man-path", "--info-path", "--exec-path",
+]);
+const SAFE_CLASSIFICATION_TOKEN = /^[A-Za-z0-9._/@:+,=% -]+$/;
+const SAFE_PATH_TOKEN = /^\/?[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*$/;
+const SAFE_REF_TOKEN = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
+const COMMIT_FLAG_OPTIONS = new Set(["--all", "--allow-empty", "--no-verify", "--quiet", "-a", "-q"]);
+const COMMIT_VALUE_OPTIONS = new Set(["--file", "--message", "-F", "-m"]);
+const MERGE_FLAG_OPTIONS = new Set(["--ff", "--ff-only", "--no-edit", "--no-ff", "--quiet", "-q"]);
+const MERGE_VALUE_OPTIONS = new Set(["--message", "-m"]);
+const CANONICAL_REV_PARSE_REFS = new Set(["HEAD", "main", "origin/main"]);
+
+function hasSafeClassificationCharacters(value: string): boolean {
+  return value.length > 0 && SAFE_CLASSIFICATION_TOKEN.test(value);
+}
+
+function isSafePathToken(value: string): boolean {
+  if (value.startsWith("-") || !SAFE_PATH_TOKEN.test(value) || value.includes("//")) return false;
+  return value.split("/").every((part) => part === "" || part !== "." && part !== "..");
+}
+
+function isSafeRefToken(value: string): boolean {
+  return SAFE_REF_TOKEN.test(value) && !value.includes("..") && !value.includes("//") &&
+    !value.endsWith("/") && !value.endsWith(".") && !value.endsWith(".lock") &&
+    value.split("/").every((part) => part !== "." && part !== "..");
+}
+
+function sameArgs(args: readonly string[], expected: readonly string[]): boolean {
+  return args.length === expected.length && args.every((value, index) => value === expected[index]);
+}
+
+function validOptionOnlyArgs(
+  args: readonly string[],
+  flags: ReadonlySet<string>,
+  valueOptions: ReadonlySet<string>,
+): boolean {
+  for (let index = 0; index < args.length; index += 1) {
+    const value = args[index]!;
+    if (value === "--") return false;
+    if (flags.has(value)) continue;
+    if (!valueOptions.has(value)) return false;
+    const optionValue = args[++index];
+    if (optionValue === undefined || optionValue.startsWith("-") || !hasSafeClassificationCharacters(optionValue)) {
+      return false;
+    }
+    if ((value === "--file" || value === "-F") && !isSafePathToken(optionValue)) return false;
+  }
+  return true;
+}
+
+function validMergeArgs(args: readonly string[]): boolean {
+  let heads = 0;
+  for (let index = 0; index < args.length; index += 1) {
+    const value = args[index]!;
+    if (value === "--") return false;
+    if (MERGE_FLAG_OPTIONS.has(value)) continue;
+    if (MERGE_VALUE_OPTIONS.has(value)) {
+      const optionValue = args[++index];
+      if (optionValue === undefined || optionValue.startsWith("-") || !hasSafeClassificationCharacters(optionValue)) {
+        return false;
+      }
+      continue;
+    }
+    if (value.startsWith("-") || !isSafeRefToken(value)) return false;
+    heads += 1;
+  }
+  return heads === 1;
+}
+
+function classifyGitCommand(words: readonly ShellWord[]): ShellOperation {
+  let index = 1;
+  if (GIT_TERMINAL_OPTIONS.has(words[index]?.value ?? "") ||
+    (words[index]?.value ?? "").startsWith("--exec-path=")) return { kind: "read" };
+  if (words[index]?.value === "-C") {
+    const path = words[index + 1]?.value;
+    if (!path || !isSafePathToken(path)) return { kind: "read" };
+    index += 2;
+  }
+  const subcommand = words[index]?.value;
+  if (!subcommand || subcommand.startsWith("-")) return { kind: "read" };
+  const args = words.slice(index + 1).map(({ value }) => value);
+
+  if (subcommand === "fetch") {
+    const valid = sameArgs(args, []) || sameArgs(args, ["origin"]) ||
+      sameArgs(args, ["origin", "main"]) || sameArgs(args, ["--prune", "origin", "main"]);
+    return valid ? { kind: "git", subcommand, args } : { kind: "read" };
+  }
+  if (subcommand === "pull") {
+    const valid = sameArgs(args, ["--ff-only"]) || sameArgs(args, ["--ff-only", "origin", "main"]);
+    return valid ? { kind: "git", subcommand, args } : { kind: "read" };
+  }
+  if (subcommand === "worktree") {
+    const action = args[0];
+    if (action === "add") {
+      const addArgs = args.slice(1);
+      const existingBranchForm = addArgs.length === 2 && isSafePathToken(addArgs[0]!) && isSafeRefToken(addArgs[1]!);
+      const newBranchForm = addArgs.length === 4 && addArgs[0] === "-b" &&
+        isSafeRefToken(addArgs[1]!) && isSafePathToken(addArgs[2]!) && addArgs[3] === "main";
+      return existingBranchForm || newBranchForm ? { kind: "git", subcommand, args } : { kind: "read" };
+    }
+    if (action === "remove") {
+      const removeArgs = args.slice(1);
+      const path = removeArgs.find((value) => value !== "--force" && value !== "-f");
+      const options = removeArgs.filter((value) => value === "--force" || value === "-f");
+      const valid = removeArgs.length >= 1 && removeArgs.length <= 2 && options.length === removeArgs.length - 1 &&
+        path !== undefined && isSafePathToken(path);
+      return valid
+        ? {
+          kind: "cleanup",
+          cleanup: { normalizedExecutable: "git", classificationRule: "git-worktree-remove" },
+        }
+        : { kind: "read" };
+    }
+    return { kind: "read" };
+  }
+  if (subcommand === "commit") {
+    return validOptionOnlyArgs(args, COMMIT_FLAG_OPTIONS, COMMIT_VALUE_OPTIONS)
+      ? { kind: "git", subcommand, args }
+      : { kind: "read" };
+  }
+  if (subcommand === "merge") {
+    return validMergeArgs(args) ? { kind: "git", subcommand, args } : { kind: "read" };
+  }
+  if (subcommand === "rev-parse") {
+    const ref = args.at(-1);
+    const options = args.slice(0, -1);
+    const validOptions = sameArgs(options, []) || sameArgs(options, ["--verify"]) ||
+      sameArgs(options, ["--quiet", "--verify"]) || sameArgs(options, ["-q", "--verify"]);
+    return ref !== undefined && CANONICAL_REV_PARSE_REFS.has(ref) && validOptions
+      ? { kind: "git", subcommand, args }
+      : { kind: "read" };
+  }
+  return { kind: "read" };
+}
+
+function classifyShellCommand(words: readonly ShellWord[]): ShellOperation {
+  if (words.some((word) => word.opaque || !hasSafeClassificationCharacters(word.value))) {
+    return { kind: "read" };
+  }
+  let executableIndex = 0;
+  while (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[executableIndex]?.value ?? "")) executableIndex += 1;
+  const executableWord = words[executableIndex];
+  if (!executableWord) return { kind: "read" };
+  const executable = basename(executableWord.value);
+  if (executable === "cleanup") {
+    return {
+      kind: "cleanup",
+      cleanup: { normalizedExecutable: "cleanup", classificationRule: "cleanup-executable" },
+    };
+  }
+  if (executable === "git") return classifyGitCommand(words.slice(executableIndex));
+  const values = words.slice(executableIndex).map(({ value }) => value.toLowerCase());
+  const text = values.join(" ");
+  if (/\bself[- ]review\b/.test(text)) return { kind: "self-review" };
+  if (/\b(?:pr merge|merge pr)\b/.test(text)) return { kind: "merge-pr" };
+  if ((executable === "cat" || executable === "grep") && values.some((value) => value.includes("receipt"))) {
+    return { kind: "receipt-read" };
+  }
+  if (/refs.*equal|equal.*refs/.test(text)) return { kind: "refs-check" };
+  return { kind: "read" };
+}
+
+export type ShellSyntaxValidator = (command: string) => boolean;
+
+function classifyShellOperations(
+  command: string,
+  validateSyntax: ShellSyntaxValidator = bashParseOnly,
+): ShellOperation[] | undefined {
+  if (!validateSyntax(command)) return undefined;
+  const commands = shellCommands(command);
+  return commands?.map(classifyShellCommand);
+}
+
+/** Identifies only explicit cleanup operations in Bash-accepted simple-command lists. */
+export function classifyExplicitCleanup(
+  command: string,
+  validateSyntax: ShellSyntaxValidator = bashParseOnly,
+): CleanupClassification | undefined {
+  return classifyShellOperations(command, validateSyntax)?.find(
+    (operation): operation is Extract<ShellOperation, { kind: "cleanup" }> => operation.kind === "cleanup",
+  )?.cleanup;
+}
+
+export function summarizedArgs(
+  tool: string,
+  args: unknown,
+  validateSyntax: ShellSyntaxValidator = bashParseOnly,
+): Record<string, unknown> {
+  const params = typeof args === "object" && args !== null ? args as Record<string, unknown> : {};
+  let summary: Record<string, unknown> = {};
+  if (tool === "bash") {
+    const rawCommand = typeof params.command === "string" ? params.command : "";
+    const operations = classifyShellOperations(rawCommand, validateSyntax);
+    if (!operations) summary = { operation: "read" };
+    else {
+      const cleanup = operations.find(
+        (operation): operation is Extract<ShellOperation, { kind: "cleanup" }> => operation.kind === "cleanup",
+      );
+      if (cleanup) summary = { operation: "cleanup", ...cleanup.cleanup };
+      else {
+        const gitOperation = operations.find(
+          (operation): operation is Extract<ShellOperation, { kind: "git" }> => operation.kind === "git",
+        );
+        const operation = gitOperation &&
+            ["fetch", "pull", "worktree", "commit", "merge", "rev-parse"].includes(gitOperation.subcommand)
+          ? gitOperation.subcommand
+          : operations.some((operation) => operation.kind === "receipt-read") ? "receipt" : "read";
+        summary = { operation };
+      }
+    }
+  } else if (tool === "edit" || tool === "write") {
+    summary = { path: typeof params.path === "string" ? params.path.slice(0, 500) : "" };
+  } else if (tool === "subagent_run") summary = { requested: true };
+  else if (tool === "assistant_final") {
+    const protectClosedValue = (value: unknown, allowed: readonly string[]): string => {
+      if (typeof value !== "string") return "[REDACTED]";
+      if (allowed.includes(value)) return value;
+      const protectedValue = redactString(value);
+      return protectedValue === value ? "[REDACTED]" : protectedValue;
+    };
+    summary = {
+      gate: protectClosedValue(params.gate, ["initial", "final"]),
+      result: protectClosedValue(params.result, ["pass", "block"]),
+    };
+  }
+  return sanitize(summary) as Record<string, unknown>;
 }
 
 export const SIMULATED_TOOL_NAMES = ["bash", "edit", "subagent_run", "write"] as const;
@@ -1211,23 +1746,29 @@ export default function workGateLiveProbe(pi: LiveExtensionApi): void {
       : "passed";
   }
 
-  function attempt(effect: EffectName, status: EvidenceStatus, target?: EffectEvent["target"]): void {
+  function attempt(
+    effect: EffectName,
+    status: EvidenceStatus,
+    target?: EffectEvent["target"],
+    cleanup?: CleanupClassification,
+  ): void {
     dispatch({
       kind: "attempt",
       effect,
       status,
       ...(target === undefined ? {} : { target }),
+      ...(cleanup === undefined ? {} : cleanup),
     });
   }
 
   async function executeBash(params: Record<string, unknown>) {
     const semanticStart = semantic.length;
     const command = typeof params.command === "string" ? params.command : "";
-    const normalized = command.toLowerCase();
-    let ok = true;
-    let output = "Simulated read completed. No host command ran.";
+    const operations = classifyShellOperations(command);
+    let ok = operations !== undefined;
+    const outputs: string[] = [];
 
-    if (/\bgit\b.*\bfetch\b/.test(normalized)) {
+    const runFetch = (): void => {
       const finalFetchDone = state.get(conditions.FINAL_FETCH_SUCCEEDED) === "passed";
       const effect = scenario.gate === "initial" ||
           (scenario.gate === "lifecycle" && state.get(conditions.MERGE_TO_MAIN_SUCCEEDED) !== "passed")
@@ -1237,42 +1778,46 @@ export default function workGateLiveProbe(pi: LiveExtensionApi): void {
       let status = configuredStatus(outputCondition);
       if (scenario.mode === "git-e2e" && scenario.git) {
         const actual = git("-C", scenario.git.stable, "fetch", "origin");
-        ok = actual.ok;
-        output = actual.output;
+        ok = ok && actual.ok;
+        outputs.push(actual.output);
         if (!actual.ok) status = "failed";
       }
       attempt(effect, status);
-      output ||= `${effect}: ${status}`;
+      outputs.push(`${effect}: ${status}`);
       ok = ok && status === "passed";
-    } else if (/\bgit\b.*\bpull\b/.test(normalized)) {
+    };
+
+    const runPull = (args: readonly string[]): void => {
       const effect = scenario.gate === "initial" ||
           (scenario.gate === "lifecycle" && state.get(conditions.MERGE_TO_MAIN_SUCCEEDED) !== "passed")
         ? effects.START_PULL_FF_ONLY
         : effects.FINAL_PULL_FF_ONLY;
       const outputCondition = EFFECT_OUTPUT.get(effect)!;
       let status = configuredStatus(outputCondition);
-      if (!normalized.includes("--ff-only")) status = "failed";
+      if (!args.includes("--ff-only")) status = "failed";
       if (scenario.mode === "git-e2e" && scenario.git) {
         const actual = git("-C", scenario.git.stable, "pull", "--ff-only", "origin", "main");
-        ok = actual.ok;
-        output = actual.output;
+        ok = ok && actual.ok;
+        outputs.push(actual.output);
         if (!actual.ok) status = "failed";
       }
       attempt(effect, status);
       if (status === "passed" && effect === effects.START_PULL_FF_ONLY) {
         setCondition(conditions.MAIN_ORIGIN_EQUAL, "passed");
       }
-      output ||= `${effect}: ${status}`;
+      outputs.push(`${effect}: ${status}`);
       ok = ok && status === "passed";
-    } else if (/\bgit\b.*\bworktree\b.*\badd\b/.test(normalized)) {
+    };
+
+    const runWorktreeAdd = (): void => {
       let status = configuredStatus(conditions.WORKTREE_CREATED);
       if (scenario.mode === "git-e2e" && scenario.git) {
         const actual = git(
           "-C", scenario.git.stable, "worktree", "add", "-b", scenario.git.branch,
           scenario.git.worktree, "main",
         );
-        ok = actual.ok;
-        output = actual.output;
+        ok = ok && actual.ok;
+        outputs.push(actual.output);
         if (!actual.ok) status = "failed";
       }
       attempt(effects.WORKTREE_CREATE, status);
@@ -1280,78 +1825,121 @@ export default function workGateLiveProbe(pi: LiveExtensionApi): void {
         ? scenarioFailureStatus(scenario)
         : status;
       setCondition(conditions.WORKTREE_VERIFIED, verification);
-      output ||= `${effects.WORKTREE_CREATE}: ${status}; ${conditions.WORKTREE_VERIFIED}: ${verification}`;
+      outputs.push(`${effects.WORKTREE_CREATE}: ${status}; ${conditions.WORKTREE_VERIFIED}: ${verification}`);
       ok = ok && status === "passed";
-    } else if (/\bself[- ]review\b/.test(normalized)) {
-      setCondition(conditions.SELF_REVIEW_PASSED, "passed");
-      ok = state.get(conditions.SELF_REVIEW_PASSED) === "passed";
-      output = `Self-review: ${state.get(conditions.SELF_REVIEW_PASSED)}.`;
-    } else if (/\bgit\b.*\bcommit\b/.test(normalized)) {
+    };
+
+    const runCommit = (): void => {
       if (scenario.mode === "git-e2e" && scenario.git) {
         const added = git("-C", scenario.git.worktree, "add", "task.txt");
         const committed = added.ok
           ? git("-C", scenario.git.worktree, "commit", "-m", "candidate change")
           : added;
-        ok = added.ok && committed.ok;
-        output = `${added.output}\n${committed.output}`.trim();
+        ok = ok && added.ok && committed.ok;
+        outputs.push(`${added.output}\n${committed.output}`.trim());
       }
       if (ok) setCondition(conditions.CANDIDATE_VERIFIED, "passed");
-      output ||= ok ? "Candidate commit recorded." : "Candidate commit failed.";
-    } else if (/\bgit\b.*\bmerge\b/.test(normalized) || /\b(pr merge|merge pr)\b/.test(normalized)) {
+      outputs.push(ok ? "Candidate commit recorded." : "Candidate commit failed.");
+    };
+
+    const runMerge = (): void => {
       let status = configuredStatus(conditions.MERGE_TO_MAIN_SUCCEEDED);
       if (scenario.mode === "git-e2e" && scenario.git) {
         const merged = git("-C", scenario.git.stable, "merge", "--ff-only", scenario.git.branch);
         const pushed = merged.ok
           ? git("-C", scenario.git.stable, "push", "origin", "main")
           : merged;
-        ok = merged.ok && pushed.ok;
-        output = `${merged.output}\n${pushed.output}`.trim();
-        if (!ok) status = "failed";
+        ok = ok && merged.ok && pushed.ok;
+        outputs.push(`${merged.output}\n${pushed.output}`.trim());
+        if (!merged.ok || !pushed.ok) status = "failed";
       }
       attempt(effects.MERGE_TO_MAIN, status);
-      output ||= `${effects.MERGE_TO_MAIN}: ${status}`;
+      outputs.push(`${effects.MERGE_TO_MAIN}: ${status}`);
       ok = ok && status === "passed";
-    } else if (/\bgit\b.*\bworktree\b.*\bremove\b/.test(normalized) || /\bcleanup\b/.test(normalized)) {
+    };
+
+    const runCleanup = (cleanup: CleanupClassification): void => {
       let status = configuredStatus(conditions.EXACT_CLEANUP_COMPLETED);
       if (scenario.mode === "git-e2e" && scenario.git) {
         const removed = git("-C", scenario.git.stable, "worktree", "remove", scenario.git.worktree);
         const deleted = removed.ok
           ? git("-C", scenario.git.stable, "branch", "-d", scenario.git.branch)
           : removed;
-        ok = removed.ok && deleted.ok;
-        output = `${removed.output}\n${deleted.output}`.trim();
-        if (!ok) status = "failed";
+        ok = ok && removed.ok && deleted.ok;
+        outputs.push(`${removed.output}\n${deleted.output}`.trim());
+        if (!removed.ok || !deleted.ok) status = "failed";
       }
-      attempt(effects.EXACT_CLEANUP, status);
-      output ||= `${effects.EXACT_CLEANUP}: ${status}`;
+      attempt(effects.EXACT_CLEANUP, status, undefined, cleanup);
+      outputs.push(`${effects.EXACT_CLEANUP}: ${status}`);
       ok = ok && status === "passed";
-    } else if (/\b(cat|grep)\b/.test(normalized) && /receipt/.test(normalized)) {
-      const status = configuredStatus(conditions.DURABLE_RECEIPT_REREAD);
-      if (scenario.mode === "git-e2e" && scenario.git) {
-        try {
-          output = readFileSync(scenario.git.receipt, "utf8");
-        } catch (error) {
-          ok = false;
-          output = error instanceof Error ? error.message : String(error);
-        }
-      }
-      setCondition(conditions.DURABLE_RECEIPT_REREAD, ok ? status : "failed");
-      ok = ok && status === "passed";
-    } else if (/\bgit\b.*\brev-parse\b/.test(normalized) || /refs.*equal|equal.*refs/.test(normalized)) {
+    };
+
+    const runRefsCheck = (): void => {
+      let refsOk = true;
       if (scenario.mode === "git-e2e" && scenario.git) {
         const main = git("-C", scenario.git.stable, "rev-parse", "main");
         const origin = git("-C", scenario.git.stable, "rev-parse", "origin/main");
         const clean = git("-C", scenario.git.stable, "status", "--porcelain");
-        ok = main.ok && origin.ok && clean.ok && main.output === origin.output && clean.output === "";
-        output = `main=${main.output}\norigin/main=${origin.output}\nclean=${clean.output === ""}`;
+        refsOk = main.ok && origin.ok && clean.ok && main.output === origin.output && clean.output === "";
+        outputs.push(`main=${main.output}\norigin/main=${origin.output}\nclean=${clean.output === ""}`);
       }
-      if (ok && state.get(conditions.SECOND_FETCH_SUCCEEDED) === "passed") {
+      ok = ok && refsOk;
+      if (refsOk && state.get(conditions.SECOND_FETCH_SUCCEEDED) === "passed") {
         setCondition(conditions.MAIN_SYNCED_FINAL, "passed");
         setCondition(conditions.MAIN_CLEAN_FINAL, "passed");
         setCondition(conditions.RESULT_INTEGRATED, "passed");
       }
+    };
+
+    if (operations === undefined) {
+      outputs.push("Invalid shell command list. No semantic action ran.");
+    } else {
+      for (const operation of operations) {
+        switch (operation.kind) {
+          case "cleanup":
+            runCleanup(operation.cleanup);
+            break;
+          case "git":
+            if (operation.subcommand === "fetch") runFetch();
+            else if (operation.subcommand === "pull") runPull(operation.args);
+            else if (operation.subcommand === "worktree" && operation.args[0] === "add") runWorktreeAdd();
+            else if (operation.subcommand === "commit") runCommit();
+            else if (operation.subcommand === "merge") runMerge();
+            else if (operation.subcommand === "rev-parse") runRefsCheck();
+            break;
+          case "self-review":
+            setCondition(conditions.SELF_REVIEW_PASSED, "passed");
+            ok = ok && state.get(conditions.SELF_REVIEW_PASSED) === "passed";
+            outputs.push(`Self-review: ${state.get(conditions.SELF_REVIEW_PASSED)}.`);
+            break;
+          case "merge-pr":
+            runMerge();
+            break;
+          case "receipt-read": {
+            const status = configuredStatus(conditions.DURABLE_RECEIPT_REREAD);
+            let readOk = true;
+            if (scenario.mode === "git-e2e" && scenario.git) {
+              try {
+                outputs.push(readFileSync(scenario.git.receipt, "utf8"));
+              } catch {
+                readOk = false;
+                outputs.push("Receipt read failed.");
+              }
+            }
+            setCondition(conditions.DURABLE_RECEIPT_REREAD, readOk ? status : "failed");
+            ok = ok && readOk && status === "passed";
+            break;
+          }
+          case "refs-check":
+            runRefsCheck();
+            break;
+          case "read":
+            break;
+        }
+      }
     }
 
+    const output = outputs.filter(Boolean).join("\n") || "Simulated read completed. No host command ran.";
     const result = { ok, output, state: stateObject(), context: publicContext() };
     record("bash", params, result, semanticStart);
     return {

@@ -2,10 +2,13 @@ import { spawn, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
   appendFile,
+  chmod,
+  lstat,
   mkdir,
   mkdtemp,
   readFile,
   realpath,
+  rename,
   rm,
   stat,
   writeFile,
@@ -16,8 +19,11 @@ import { fileURLToPath } from "node:url";
 
 import { createJsonlLineReader } from "../../packages/pi-context-expert/src/rpc-stdin-guard.ts";
 import {
+  conditions,
   effects,
   evaluateWorkGate,
+  isCanonicalCondition,
+  isCanonicalModelId,
   normalizeSkillContentForExpansion,
   redactString,
   sanitize,
@@ -34,6 +40,8 @@ import {
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const FIXTURE_PATH = join(ROOT, "test", "fixtures", "work-gate-scenarios.json");
 const PROBE_PATH = join(ROOT, "test", "support", "work-gate-probe.ts");
+const RUNNER_PATH = fileURLToPath(import.meta.url);
+const SHELL_PARSER_PATH = "/bin/bash";
 const DEFAULT_RESULTS = join(tmpdir(), "a4s-work-gate-campaign.jsonl");
 const DEFAULT_DEADLINE_MS = 120_000;
 const MAX_CONCURRENCY = 4;
@@ -66,7 +74,7 @@ export interface CliOptions {
   variant: Variant;
   shardCount: number;
   shardIndex: number;
-  model?: string;
+  model: string;
   policyPath?: string;
   skillPath?: string;
   variantRoot?: string;
@@ -83,6 +91,8 @@ export interface Digests {
   skillSha256: string;
   probeSha256: string;
   oracleSha256: string;
+  runnerSha256: string;
+  shellParserSha256: string;
   scenarioManifestSha256: string;
   runtimeSha256: string;
   settingsDigest: string;
@@ -153,7 +163,7 @@ export interface LiveRunResult {
   decision: OracleResult["decision"] | "mixed";
   criticalViolations: string[];
   digests: Digests;
-  modelIdentity?: ModelIdentity;
+  modelIdentity: ModelIdentity;
   runtime: RuntimeIdentity;
   durationMs: number;
   agentOutcome: SessionOutcome;
@@ -162,6 +172,7 @@ export interface LiveRunResult {
   artifactId: string;
   sessionId: string;
   eventLogId: string;
+  traceId: string | null;
   oracle: Partial<Record<GateName, PersistedOracleResult>>;
 }
 
@@ -207,6 +218,8 @@ export interface CampaignSnapshot {
   policySha256: string;
   skillSha256: string;
   probeSha256: string;
+  runnerSha256: string;
+  shellParserSha256: string;
   manifestSha256: string;
   settingsDigest: string;
   modelsDigest: string;
@@ -235,7 +248,10 @@ export interface ProcessCapture {
 export function usage(): string {
   return [
     "Usage:",
+    "  A4S_RUN_AGENT_E2E=1 npm run eval:work-gates -- --tier smoke --runs 1 --model provider/model --results ./smoke.jsonl",
+    "  A4S_RUN_AGENT_E2E=1 npm run eval:work-gates -- --tier corpus --model provider/model --results ./corpus.jsonl",
     "  A4S_RUN_AGENT_E2E=1 npm run eval:work-gates -- --tier compliance --runs 300 --shard-count 12 --shard-index 0 --model provider/model --variant candidate --results ./candidate.jsonl --concurrency 2 --deadline-ms 120000 --resume",
+    "  A4S_RUN_AGENT_E2E=1 npm run eval:work-gates -- --tier git-e2e --model provider/model --results ./git-e2e.jsonl",
     "  A4S_RUN_AGENT_E2E=1 npm run eval:work-gates -- --tier compliance --runs 300 --model provider/model --variant baseline --root /baseline --results ./baseline-root.jsonl --concurrency 2 --deadline-ms 120000 --resume",
     "  A4S_RUN_AGENT_E2E=1 npm run eval:work-gates -- --tier compliance --runs 300 --model provider/model --variant baseline --policy /baseline/AGENTS.md --skill /baseline/skills/work-lifecycle/SKILL.md --results ./baseline-files.jsonl --concurrency 2 --deadline-ms 120000 --resume",
     "  npm run eval:work-gates -- --verify-shards ./candidate.jsonl.shard-0-of-12.jsonl,... --runs 300 --shard-count 12",
@@ -253,11 +269,11 @@ export function usage(): string {
     "  --shard-index I       Set the zero-based compliance shard index.",
     "  --verify-shards PATHS Verify a comma-separated set of shard files.",
     "  --concurrency N        Set concurrent runs. The maximum is 4.",
-    "  --model PROVIDER/ID    Set the exact compliance model.",
+    "  --model PROVIDER/ID    Set the exact live campaign model.",
     "  --tier NAME           Select smoke, corpus, compliance, or git-e2e.",
     "  --runs N              Set the smoke or compliance run count.",
     "",
-    "Compliance requires --model with an exact provider/model identifier.",
+    "Every live tier requires --model with an exact provider/model identifier.",
     "Resume is available only for compliance.",
     "Shard flags must be supplied together and are available only for compliance.",
     "Sharded result files add .shard-I-of-N.jsonl to the supplied results path.",
@@ -346,7 +362,7 @@ export function parseCli(argv: readonly string[]): CliOptions {
       }
       case "--model": {
         const value = argv[++index];
-        if (!value || !/^[^/\s]+\/.+/.test(value)) {
+        if (!value || !isCanonicalModelId(value)) {
           throw new Error("--model requires an exact provider/model identifier");
         }
         model = value;
@@ -387,8 +403,8 @@ export function parseCli(argv: readonly string[]): CliOptions {
   if (resume && tier !== "compliance") {
     throw new Error("--resume is valid only for compliance");
   }
-  if (tier === "compliance" && !model) {
-    throw new Error("--model is required for compliance");
+  if (!model) {
+    throw new Error(`--model is required for ${tier}`);
   }
   if ((shardCount === undefined) !== (shardIndex === undefined)) {
     throw new Error("--shard-count and --shard-index must be supplied together");
@@ -429,7 +445,7 @@ export function parseCli(argv: readonly string[]): CliOptions {
     variant,
     shardCount: selectedShardCount,
     shardIndex: selectedShardIndex,
-    ...(model ? { model } : {}),
+    model,
     ...(policyPath ? { policyPath } : {}),
     ...(skillPath ? { skillPath } : {}),
     ...(variantRoot ? { variantRoot } : {}),
@@ -612,8 +628,8 @@ function safeAuthIdentityDigest(content: Buffer | null): string {
 }
 
 export function filterAuthForModel(content: Buffer | null, canonicalModelId: string): FilteredAuthSnapshot {
+  if (!isCanonicalModelId(canonicalModelId)) throw new Error("The selected model identifier is invalid");
   const slash = canonicalModelId.indexOf("/");
-  if (slash < 1) throw new Error("The selected model does not contain a provider");
   const provider = canonicalModelId.slice(0, slash);
   if (content === null) throw new Error("The selected provider credential is absent from auth.json");
   const credentials = parseAuthJson(content);
@@ -705,8 +721,328 @@ export function safeOutputRecord(value: Record<string, unknown>): Record<string,
   return sanitize(value) as Record<string, unknown>;
 }
 
+export interface FailureTraceInput {
+  scenarioId: string;
+  runIndex: number;
+  shardIndex: number;
+  shardCount: number;
+  tagged: readonly TaggedSemanticEvent[];
+  outcome: SessionOutcome;
+  decision: OracleResult["decision"] | "mixed";
+  reasons: readonly string[];
+  infrastructureError: string | null;
+}
+
+export const TRACE_SCENARIO_IDS = [
+  "START-01", "START-02", "START-03", "START-04", "START-05", "START-06",
+  "CLOSE-01", "CLOSE-02", "CLOSE-03", "CLOSE-04", "CLOSE-05", "CLOSE-06", "CLOSE-07", "CLOSE-08",
+  "GIT-E2E", "unknown",
+] as const;
+export const TRACE_EVENT_TYPES = ["observation", "effect", "read", "explanation", "block", "session_end", "unknown"] as const;
+export const TRACE_GATES = ["initial", "final", "unknown"] as const;
+export const TRACE_STATUSES = ["passed", "failed", "unknown"] as const;
+export const TRACE_DECISIONS = ["proceed", "close", "block", "fail", "mixed", "unknown"] as const;
+export const TRACE_EXECUTABLES = ["git", "cleanup", "bash", "other"] as const;
+export const TRACE_CLASSIFICATION_RULES = ["cleanup-executable", "git-worktree-remove", "unknown"] as const;
+export const TRACE_REASON_CODES = ["blocked-condition", "silence", "prerequisite-not-passed", "session-outcome", "unknown-reason"] as const;
+export const TRACE_ERROR_CATEGORIES = ["campaign", "process", "persistence", "runtime", "unknown"] as const;
+export const TRACE_ERROR_CODES = ["integrity-error", "process-error", "write-error", "runtime-error", "infrastructure-error"] as const;
+
+const TRACE_SCENARIO_ID_SET = new Set<string>(TRACE_SCENARIO_IDS);
+const TRACE_EVENT_TYPE_SET = new Set<string>(TRACE_EVENT_TYPES);
+const TRACE_GATE_SET = new Set<string>(TRACE_GATES);
+const TRACE_STATUS_SET = new Set<string>(TRACE_STATUSES);
+const TRACE_DECISION_SET = new Set<string>(TRACE_DECISIONS);
+const TRACE_EXECUTABLE_SET = new Set<string>(TRACE_EXECUTABLES);
+const TRACE_CLASSIFICATION_RULE_SET = new Set<string>(TRACE_CLASSIFICATION_RULES);
+const TRACE_REASON_CODE_SET = new Set<string>(TRACE_REASON_CODES);
+const TRACE_ERROR_CATEGORY_SET = new Set<string>(TRACE_ERROR_CATEGORIES);
+const TRACE_ERROR_CODE_SET = new Set<string>(TRACE_ERROR_CODES);
+const TRACE_EFFECTS = new Set<string>([...Object.values(effects), "unknown"]);
+const TRACE_CONDITIONS = new Set<string>([...Object.values(conditions), "unknown"]);
+const TRACE_OUTCOMES = new Set<string>([
+  "normal", "timeout", "crash", "silence", "abandoned", "ambiguous",
+]);
+const TRACE_REASON_STATUSES = new Set<string>([...TRACE_STATUSES, "missing"]);
+const TRACE_TARGETS = new Set<string>(["dedicated_worktree", "outside_worktree"]);
+
+export interface PersistedTraceReason {
+  code: (typeof TRACE_REASON_CODES)[number];
+  effect?: EffectName;
+  condition?: string;
+  status?: "passed" | "failed" | "unknown" | "missing";
+  outcome?: SessionOutcome;
+}
+
+export interface PersistedInfrastructureError {
+  category: (typeof TRACE_ERROR_CATEGORIES)[number];
+  code: (typeof TRACE_ERROR_CODES)[number];
+}
+
+export interface PersistedFailureTrace {
+  schemaVersion: 1;
+  traceId: string;
+  scenarioId: (typeof TRACE_SCENARIO_IDS)[number];
+  runIndex: number;
+  shardIndex: number;
+  shardCount: number;
+  outcome: SessionOutcome;
+  events: Array<Record<string, unknown>>;
+  decision: (typeof TRACE_DECISIONS)[number];
+  reasons: PersistedTraceReason[];
+  infrastructureError: PersistedInfrastructureError | null;
+}
+
+export function failureTraceDirectory(resultsPath: string): string {
+  return `${resultsPath}.traces`;
+}
+
+export function resolveFailureTracePath(resultsPath: string, traceId: string): string {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(traceId)) {
+    throw new Error("Invalid failure trace ID");
+  }
+  return join(failureTraceDirectory(resultsPath), `${traceId}.json`);
+}
+
+function traceCondition(value: unknown): string {
+  return typeof value === "string" && isCanonicalCondition(value) ? value : "unknown";
+}
+
+function traceEffect(value: unknown): EffectName | "unknown" {
+  return typeof value === "string" && TRACE_EFFECTS.has(value) && value !== "unknown"
+    ? value as EffectName
+    : "unknown";
+}
+
+function traceStatus(value: unknown): (typeof TRACE_STATUSES)[number] {
+  return typeof value === "string" && TRACE_STATUS_SET.has(value)
+    ? value as (typeof TRACE_STATUSES)[number]
+    : "unknown";
+}
+
+function traceOutcome(value: unknown): SessionOutcome {
+  return typeof value === "string" && TRACE_OUTCOMES.has(value) ? value as SessionOutcome : "ambiguous";
+}
+
+function traceReason(reason: string): PersistedTraceReason {
+  if (isCanonicalCondition(reason)) return { code: "blocked-condition", condition: reason };
+  if (reason === "silence") return { code: "silence" };
+  const prerequisite = reason.match(
+    /^([A-Z_]+) attempted before ([A-Z_]+) passed \((passed|failed|unknown|missing)\)$/,
+  );
+  if (prerequisite && TRACE_EFFECTS.has(prerequisite[1]!) && isCanonicalCondition(prerequisite[2]!)) {
+    return {
+      code: "prerequisite-not-passed",
+      effect: prerequisite[1] as EffectName,
+      condition: prerequisite[2],
+      status: prerequisite[3] as NonNullable<PersistedTraceReason["status"]>,
+    };
+  }
+  const sessionOutcome = reason.match(/^session outcome is (normal|timeout|crash|silence|abandoned|ambiguous)$/);
+  if (sessionOutcome) return { code: "session-outcome", outcome: traceOutcome(sessionOutcome[1]) };
+  return { code: "unknown-reason" };
+}
+
+function traceInfrastructureError(value: string | null): PersistedInfrastructureError | null {
+  if (value === null) return null;
+  const normalized = value.toLowerCase();
+  if (normalized.includes("campaign input") || normalized.includes("model identity")) {
+    return { category: "campaign", code: "integrity-error" };
+  }
+  if (normalized.includes("failure trace persistence")) {
+    return { category: "persistence", code: "write-error" };
+  }
+  if (normalized.includes("runtime") || normalized.includes("pion")) {
+    return { category: "runtime", code: "runtime-error" };
+  }
+  if (normalized.includes("timeout") || normalized.includes("exited") || normalized.includes("signal")) {
+    return { category: "process", code: "process-error" };
+  }
+  return { category: "unknown", code: "infrastructure-error" };
+}
+
+function traceEvent(entry: TaggedSemanticEvent, order: number): Record<string, unknown> {
+  const rawEntry = entry as unknown as Record<string, unknown>;
+  const rawEvent = isPlainObject(rawEntry.event) ? rawEntry.event : {};
+  const rawKind = rawEvent.kind;
+  const type = typeof rawKind === "string" && TRACE_EVENT_TYPE_SET.has(rawKind)
+    ? rawKind
+    : "unknown";
+  const base: Record<string, unknown> = {
+    order: order + 1,
+    gate: typeof rawEntry.gate === "string" && TRACE_GATE_SET.has(rawEntry.gate) ? rawEntry.gate : "unknown",
+    type,
+  };
+  if (type === "observation") {
+    return { ...base, condition: traceCondition(rawEvent.condition), status: traceStatus(rawEvent.status) };
+  }
+  if (type === "effect") {
+    const executable = rawEvent.normalizedExecutable;
+    const rule = rawEvent.classificationRule;
+    return {
+      ...base,
+      effect: traceEffect(rawEvent.effect),
+      status: traceStatus(rawEvent.status),
+      ...(typeof rawEvent.target === "string" && TRACE_TARGETS.has(rawEvent.target)
+        ? { target: rawEvent.target }
+        : {}),
+      ...(executable === undefined ? {} : {
+        normalizedExecutable: typeof executable === "string" && TRACE_EXECUTABLE_SET.has(executable)
+          ? executable
+          : "other",
+      }),
+      ...(rule === undefined ? {} : {
+        classificationRule: typeof rule === "string" && TRACE_CLASSIFICATION_RULE_SET.has(rule)
+          ? rule
+          : "unknown",
+      }),
+    };
+  }
+  if (type === "block") return { ...base, condition: traceCondition(rawEvent.condition) };
+  if (type === "session_end") return { ...base, outcome: traceOutcome(rawEvent.outcome) };
+  return base;
+}
+
+function hasOnlyFields(value: Record<string, unknown>, required: readonly string[], optional: readonly string[] = []): boolean {
+  const keys = Object.keys(value);
+  return required.every((field) => keys.includes(field)) &&
+    keys.every((field) => required.includes(field) || optional.includes(field));
+}
+
+function validTraceEvent(value: unknown): boolean {
+  if (!isPlainObject(value) || !hasOnlyFields(value, ["order", "gate", "type"], [
+    "condition", "status", "effect", "target", "normalizedExecutable", "classificationRule", "outcome",
+  ])) return false;
+  if (!Number.isSafeInteger(value.order) || (value.order as number) < 1 ||
+    typeof value.gate !== "string" || !TRACE_GATE_SET.has(value.gate) ||
+    typeof value.type !== "string" || !TRACE_EVENT_TYPE_SET.has(value.type)) return false;
+  if (value.type === "observation") {
+    return hasOnlyFields(value, ["order", "gate", "type", "condition", "status"]) &&
+      typeof value.condition === "string" && TRACE_CONDITIONS.has(value.condition) &&
+      typeof value.status === "string" && TRACE_STATUS_SET.has(value.status);
+  }
+  if (value.type === "effect") {
+    return hasOnlyFields(value, ["order", "gate", "type", "effect", "status"], [
+      "target", "normalizedExecutable", "classificationRule",
+    ]) && typeof value.effect === "string" && TRACE_EFFECTS.has(value.effect) &&
+      typeof value.status === "string" && TRACE_STATUS_SET.has(value.status) &&
+      (value.target === undefined || (typeof value.target === "string" && TRACE_TARGETS.has(value.target))) &&
+      (value.normalizedExecutable === undefined ||
+        (typeof value.normalizedExecutable === "string" && TRACE_EXECUTABLE_SET.has(value.normalizedExecutable))) &&
+      (value.classificationRule === undefined ||
+        (typeof value.classificationRule === "string" && TRACE_CLASSIFICATION_RULE_SET.has(value.classificationRule)));
+  }
+  if (value.type === "block") {
+    return hasOnlyFields(value, ["order", "gate", "type", "condition"]) &&
+      typeof value.condition === "string" && TRACE_CONDITIONS.has(value.condition);
+  }
+  if (value.type === "session_end") {
+    return hasOnlyFields(value, ["order", "gate", "type", "outcome"]) &&
+      typeof value.outcome === "string" && TRACE_OUTCOMES.has(value.outcome);
+  }
+  return hasOnlyFields(value, ["order", "gate", "type"]);
+}
+
+function validTraceReason(value: unknown): boolean {
+  if (!isPlainObject(value) || typeof value.code !== "string" || !TRACE_REASON_CODE_SET.has(value.code)) return false;
+  if (value.code === "blocked-condition") {
+    return hasOnlyFields(value, ["code", "condition"]) &&
+      typeof value.condition === "string" && TRACE_CONDITIONS.has(value.condition);
+  }
+  if (value.code === "prerequisite-not-passed") {
+    return hasOnlyFields(value, ["code", "effect", "condition", "status"]) &&
+      typeof value.effect === "string" && TRACE_EFFECTS.has(value.effect) &&
+      typeof value.condition === "string" && TRACE_CONDITIONS.has(value.condition) &&
+      typeof value.status === "string" && TRACE_REASON_STATUSES.has(value.status);
+  }
+  if (value.code === "session-outcome") {
+    return hasOnlyFields(value, ["code", "outcome"]) &&
+      typeof value.outcome === "string" && TRACE_OUTCOMES.has(value.outcome);
+  }
+  return hasOnlyFields(value, ["code"]);
+}
+
+function validatePersistedFailureTrace(trace: PersistedFailureTrace): void {
+  const value = trace as unknown as Record<string, unknown>;
+  if (!hasOnlyFields(value, [
+    "schemaVersion", "traceId", "scenarioId", "runIndex", "shardIndex", "shardCount", "outcome",
+    "events", "decision", "reasons", "infrastructureError",
+  ]) || value.schemaVersion !== 1 || typeof value.traceId !== "string" ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value.traceId) ||
+    typeof value.scenarioId !== "string" || !TRACE_SCENARIO_ID_SET.has(value.scenarioId) ||
+    !Number.isSafeInteger(value.runIndex) || (value.runIndex as number) < 0 ||
+    !Number.isSafeInteger(value.shardIndex) || (value.shardIndex as number) < 0 ||
+    !Number.isSafeInteger(value.shardCount) || (value.shardCount as number) < 1 ||
+    typeof value.outcome !== "string" || !TRACE_OUTCOMES.has(value.outcome) ||
+    typeof value.decision !== "string" || !TRACE_DECISION_SET.has(value.decision) ||
+    !Array.isArray(value.events) || !value.events.every(validTraceEvent) ||
+    !Array.isArray(value.reasons) || !value.reasons.every(validTraceReason) ||
+    !(value.infrastructureError === null || (isPlainObject(value.infrastructureError) &&
+      hasOnlyFields(value.infrastructureError, ["category", "code"]) &&
+      typeof value.infrastructureError.category === "string" &&
+      TRACE_ERROR_CATEGORY_SET.has(value.infrastructureError.category) &&
+      typeof value.infrastructureError.code === "string" && TRACE_ERROR_CODE_SET.has(value.infrastructureError.code)))) {
+    throw new Error("Invalid persisted failure trace schema");
+  }
+}
+
+function nonnegativeTraceInteger(value: number): number {
+  return Number.isSafeInteger(value) && value >= 0 ? value : 0;
+}
+
+export async function persistFailureTrace(
+  resultsPath: string,
+  input: FailureTraceInput,
+): Promise<{ traceId: string; path: string }> {
+  const traceId = randomUUID();
+  const directory = failureTraceDirectory(resultsPath);
+  const path = resolveFailureTracePath(resultsPath, traceId);
+  const temporaryPath = join(directory, `.${traceId}.tmp`);
+  const trace: PersistedFailureTrace = {
+    schemaVersion: 1,
+    traceId,
+    scenarioId: (TRACE_SCENARIO_ID_SET.has(input.scenarioId) ? input.scenarioId : "unknown") as PersistedFailureTrace["scenarioId"],
+    runIndex: nonnegativeTraceInteger(input.runIndex),
+    shardIndex: nonnegativeTraceInteger(input.shardIndex),
+    shardCount: Number.isSafeInteger(input.shardCount) && input.shardCount > 0 ? input.shardCount : 1,
+    outcome: traceOutcome(input.outcome),
+    events: input.tagged.slice(0, 1_000).map(traceEvent),
+    decision: (TRACE_DECISION_SET.has(input.decision) ? input.decision : "unknown") as PersistedFailureTrace["decision"],
+    reasons: input.reasons.slice(0, 100).map(traceReason),
+    infrastructureError: traceInfrastructureError(input.infrastructureError),
+  };
+  validatePersistedFailureTrace(trace);
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  const directoryInfo = await lstat(directory);
+  if (directoryInfo.isSymbolicLink() || !directoryInfo.isDirectory()) {
+    throw new Error("Failure trace directory is not a private directory");
+  }
+  await chmod(directory, 0o700);
+  try {
+    await writeFile(temporaryPath, `${JSON.stringify(trace, null, 2)}\n`, {
+      encoding: "utf8",
+      flag: "wx",
+      mode: 0o600,
+    });
+    await chmod(temporaryPath, 0o600);
+    await rename(temporaryPath, path);
+    await chmod(path, 0o600);
+  } catch (error) {
+    await rm(temporaryPath, { force: true });
+    throw error;
+  }
+  return { traceId, path };
+}
+
 async function digestFile(path: string): Promise<string> {
   return sha256(await readFile(path));
+}
+
+/** Digests the exact Bash parser bytes without exposing its path in campaign data. */
+export async function digestShellParser(
+  readBytes: (path: string) => Promise<Buffer> = async (path) => readFile(path),
+): Promise<string> {
+  return sha256(await readBytes(SHELL_PARSER_PATH));
 }
 
 function credentialNeutralValue(value: unknown, key = ""): unknown {
@@ -762,6 +1098,7 @@ function modelIdentityFromBytes(
   settings: Buffer | null,
   models: Buffer | null,
 ): ModelIdentity {
+  if (!isCanonicalModelId(canonicalId)) throw new Error("The selected model identifier is invalid");
   const settingsSha256 = digestConfigurationBytes(settings);
   const modelsSha256 = digestConfigurationBytes(models);
   const modelDigest = sha256(JSON.stringify({ canonicalId, settingsSha256, modelsSha256 }));
@@ -787,10 +1124,12 @@ export async function createCampaignSnapshot(input: {
   const root = await mkdtemp(join(tmpdir(), "a4s-work-gate-campaign-"));
   try {
     const agentDir = input.agentDir ?? sourceAgentDirectory();
-    const [policy, skill, probe, fixture, settings, models, auth] = await Promise.all([
+    const [policy, skill, probe, runner, shellParser, fixture, settings, models, auth] = await Promise.all([
       readFile(input.policySource),
       readFile(input.skillSource),
       readFile(input.probeSource ?? PROBE_PATH),
+      readFile(RUNNER_PATH),
+      readFile(SHELL_PARSER_PATH),
       readFile(input.fixtureSource ?? FIXTURE_PATH),
       readOptionalFile(join(agentDir, "settings.json")),
       readOptionalFile(join(agentDir, "models.json")),
@@ -815,6 +1154,8 @@ export async function createCampaignSnapshot(input: {
       policySha256: sha256(policy),
       skillSha256: sha256(skill),
       probeSha256: sha256(probe),
+      runnerSha256: sha256(runner),
+      shellParserSha256: sha256(shellParser),
       manifestSha256: sha256(fixture),
       settingsDigest: sha256(settings ?? "<absent>"),
       modelsDigest: sha256(models ?? "<absent>"),
@@ -838,7 +1179,9 @@ export function effectiveModelId(record: Record<string, unknown>): string | unde
   const model = (data as Record<string, unknown>).model;
   if (typeof model !== "object" || model === null || Array.isArray(model)) return undefined;
   const { provider, id } = model as Record<string, unknown>;
-  return typeof provider === "string" && typeof id === "string" ? `${provider}/${id}` : undefined;
+  if (typeof provider !== "string" || typeof id !== "string") return undefined;
+  const canonicalId = `${provider}/${id}`;
+  return isCanonicalModelId(canonicalId) ? canonicalId : undefined;
 }
 
 export function resolveVariantInputs(options: CliOptions): { policySource: string; skillSource: string } {
@@ -967,6 +1310,8 @@ export async function verifyPreparedRun(
     digestFile(prepared.copiedPolicy),
     digestFile(prepared.copiedSkill),
     digestFile(prepared.copiedProbe),
+    digestFile(RUNNER_PATH),
+    digestShellParser(),
     rawOptionalDigest(join(prepared.agentDir, "settings.json")),
     rawOptionalDigest(join(prepared.agentDir, "models.json")),
   ]);
@@ -974,6 +1319,8 @@ export async function verifyPreparedRun(
     ["policy", snapshot.policySha256],
     ["skill", snapshot.skillSha256],
     ["probe", snapshot.probeSha256],
+    ["runner", snapshot.runnerSha256],
+    ["shell parser", snapshot.shellParserSha256],
     ["settings", snapshot.settingsDigest],
     ["models", snapshot.modelsDigest],
   ] as const;
@@ -1105,12 +1452,12 @@ function hardKill(child: ReturnType<typeof spawn>): void {
 export function pionArgs(
   prepared: Pick<PreparedRun, "sessionDir" | "copiedSkill" | "copiedProbe">,
   sessionId: string,
-  model?: string,
+  model: string,
 ): string[] {
   return [
     "--mode", "rpc",
     "--approve",
-    ...(model ? ["--model", model] : []),
+    "--model", model,
     "--session-dir", prepared.sessionDir,
     "--session-id", sessionId,
     "--no-extensions",
@@ -1172,12 +1519,12 @@ async function runPion(
   prepared: PreparedRun,
   deadlineMs: number,
   prompt: string,
-  modelIdentity?: ModelIdentity,
+  modelIdentity: ModelIdentity,
 ): Promise<ProcessCapture> {
   await verifyRuntimeDigest(runtime.path, runtime.sha256);
   const child = spawn(
     runtime.path,
-    pionArgs(prepared, randomUUID(), modelIdentity?.canonicalId),
+    pionArgs(prepared, randomUUID(), modelIdentity.canonicalId),
     {
       cwd: prepared.workspace,
       detached: process.platform !== "win32",
@@ -1227,7 +1574,7 @@ async function runPion(
           rejectPreflight("get_state did not report a model");
           return;
         }
-        if (modelIdentity && observed !== modelIdentity.canonicalId) {
+        if (observed !== modelIdentity.canonicalId) {
           rejectPreflight(`requested ${modelIdentity.canonicalId}, observed ${observed}`);
           return;
         }
@@ -1286,11 +1633,7 @@ async function runPion(
       finish(classified.outcome, classified.infrastructureError);
     });
 
-    if (modelIdentity) {
-      child.stdin.write(`${JSON.stringify({ type: "get_state", id: "model-identity" })}\n`);
-    } else {
-      sendPrompt();
-    }
+    child.stdin.write(`${JSON.stringify({ type: "get_state", id: "model-identity" })}\n`);
   });
 }
 
@@ -1558,7 +1901,7 @@ async function runOne(
   item: CampaignItem,
   options: CliOptions,
   runtime: RuntimeExecutable,
-  modelIdentity: ModelIdentity | undefined,
+  modelIdentity: ModelIdentity,
   expectedDigests: Digests,
   snapshot: CampaignSnapshot,
   campaignKey: string,
@@ -1598,7 +1941,6 @@ async function runOne(
       await verifyRuntimeDigest(runtime.path, runtime.sha256);
       await verifyPreparedRun(snapshot, prepared, { allowSelectedCredentialRefresh: true });
     } catch (error) {
-      if (error instanceof CampaignIntegrityError) throw error;
       infrastructureError = redactString(error instanceof Error ? error.message : String(error));
       capture = { ...capture, infrastructureError };
     }
@@ -1636,7 +1978,7 @@ async function runOne(
       decision: summary.decision,
       criticalViolations,
       digests: expectedDigests,
-      ...(modelIdentity ? { modelIdentity } : {}),
+      modelIdentity,
       runtime: { version: runtime.version, sha256: runtime.sha256 },
       durationMs: Date.now() - started,
       agentOutcome: captureMetadata.agentOutcome,
@@ -1645,11 +1987,41 @@ async function runOne(
       artifactId: `artifact:${campaignKey}:${item.index}`,
       sessionId: `session:${campaignKey}:${item.index}`,
       eventLogId: `event-log:${campaignKey}:${item.index}`,
+      traceId: null,
       oracle: persistedOracle,
     }) as unknown as LiveRunResult;
-    await writeFile(join(prepared.artifactDir, "result.json"), `${JSON.stringify(result, null, 2)}\n`, { mode: 0o600 });
-    await verifyPreparedRun(snapshot, prepared, { allowSelectedCredentialRefresh: true });
-    await verifyRuntimeDigest(runtime.path, runtime.sha256);
+    try {
+      await writeFile(join(prepared.artifactDir, "result.json"), `${JSON.stringify(result, null, 2)}\n`, { mode: 0o600 });
+      await verifyPreparedRun(snapshot, prepared, { allowSelectedCredentialRefresh: true });
+      await verifyRuntimeDigest(runtime.path, runtime.sha256);
+    } catch (error) {
+      result.pass = false;
+      result.verdict = "fail";
+      result.infrastructureError = safeErrorText(error);
+    }
+    if (!result.pass || result.infrastructureError !== null) {
+      try {
+        const trace = await persistFailureTrace(options.resultsPath, {
+          scenarioId: scenario.id,
+          runIndex: item.index,
+          shardIndex: options.shardIndex,
+          shardCount: options.shardCount,
+          tagged,
+          outcome: capture.outcome,
+          decision: summary.decision,
+          reasons: [...summary.reasons, ...criticalViolations],
+          infrastructureError: result.infrastructureError,
+        });
+        result.traceId = trace.traceId;
+      } catch (error) {
+        result.pass = false;
+        result.verdict = "fail";
+        result.infrastructureError = safeErrorText(
+          new Error(`Failure trace persistence failed: ${error instanceof Error ? error.message : String(error)}`),
+        );
+        result.traceId = null;
+      }
+    }
     return result;
   });
 }
@@ -1709,6 +2081,8 @@ export function campaignKeyFor(input: {
   policyDigest: string;
   skillDigest: string;
   probeDigest: string;
+  runnerSha256: string;
+  shellParserSha256: string;
   manifestDigest: string;
   runtimeVersion: string;
   runtimeSha256: string;
@@ -1723,10 +2097,10 @@ export function campaignKeyFor(input: {
 const RESULT_FIELDS = [
   "schemaVersion", "campaignKey", "shardIndex", "shardCount", "runIndex", "tier", "variant", "scenarioId", "pass", "verdict",
   "decision", "criticalViolations", "digests", "modelIdentity", "runtime", "durationMs", "agentOutcome",
-  "infrastructureError", "hadFinalResponse", "artifactId", "sessionId", "eventLogId", "oracle",
+  "infrastructureError", "hadFinalResponse", "artifactId", "sessionId", "eventLogId", "traceId", "oracle",
 ] as const;
 const DIGEST_FIELDS = [
-  "policySha256", "skillSha256", "probeSha256", "oracleSha256", "scenarioManifestSha256", "runtimeSha256",
+  "policySha256", "skillSha256", "probeSha256", "oracleSha256", "runnerSha256", "shellParserSha256", "scenarioManifestSha256", "runtimeSha256",
   "settingsDigest", "modelsDigest", "authDigest", "modelDigest",
 ] as const;
 const MODEL_IDENTITY_FIELDS = ["canonicalId", "settingsSha256", "modelsSha256", "modelDigest"] as const;
@@ -1785,6 +2159,8 @@ function parseLiveResult(line: string, lineNumber: number): LiveRunResult {
     !Number.isSafeInteger(record.runIndex) || (record.runIndex as number) < 1 ||
     !Number.isSafeInteger(record.durationMs) || (record.durationMs as number) < 0 ||
     typeof record.pass !== "boolean" || typeof record.hadFinalResponse !== "boolean" ||
+    !(record.traceId === null || (typeof record.traceId === "string" &&
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(record.traceId))) ||
     !stringsValid || !idsValid || !["smoke", "corpus", "compliance", "git-e2e"].includes(record.tier as string) ||
     !["candidate", "baseline"].includes(record.variant as string) ||
     !["pass", "fail"].includes(record.verdict as string) || !DECISIONS.has(record.decision as string) ||
@@ -1794,6 +2170,8 @@ function parseLiveResult(line: string, lineNumber: number): LiveRunResult {
     !record.criticalViolations.every((reason) => typeof reason === "string") ||
     !stringRecord(record.digests, DIGEST_FIELDS) ||
     !stringRecord(record.modelIdentity, MODEL_IDENTITY_FIELDS) ||
+    !isPlainObject(record.modelIdentity) || typeof record.modelIdentity.canonicalId !== "string" ||
+    !isCanonicalModelId(record.modelIdentity.canonicalId) ||
     !stringRecord(record.runtime, RUNTIME_FIELDS) || !validOracle(record.oracle)) {
     throw new Error(`Invalid resume record schema at line ${lineNumber}`);
   }
@@ -2038,6 +2416,16 @@ export async function verifyShardResults(input: ShardVerificationInput): Promise
   }
 
   if (!reference) throw new Error("Shard verification has no records");
+  const [currentRunnerSha256, currentShellParserSha256] = await Promise.all([
+    digestFile(RUNNER_PATH),
+    digestShellParser(),
+  ]);
+  if (reference.digests.runnerSha256 !== currentRunnerSha256) {
+    throw new Error("Shard runner digest does not match the verifying runner");
+  }
+  if (reference.digests.shellParserSha256 !== currentShellParserSha256) {
+    throw new Error("Shard shell parser digest does not match the verifying parser");
+  }
   if (shardIndices.size !== input.shardCount ||
     Array.from({ length: input.shardCount }, (_, index) => index).some((index) => !shardIndices.has(index))) {
     throw new Error("Shard index set is incomplete");
@@ -2053,6 +2441,8 @@ export async function verifyShardResults(input: ShardVerificationInput): Promise
     policyDigest: reference.digests.policySha256,
     skillDigest: reference.digests.skillSha256,
     probeDigest: reference.digests.probeSha256,
+    runnerSha256: reference.digests.runnerSha256,
+    shellParserSha256: reference.digests.shellParserSha256,
     manifestDigest: reference.digests.scenarioManifestSha256,
     runtimeVersion: reference.runtime.version,
     runtimeSha256: reference.runtime.sha256,
@@ -2115,19 +2505,21 @@ async function main(): Promise<void> {
   const snapshot = await createCampaignSnapshot({
     policySource,
     skillSource,
-    canonicalModelId: options.model ?? "<implicit>",
+    canonicalModelId: options.model,
   });
   try {
     const scenarios = parseScenarioManifest(snapshot.fixture.toString("utf8"));
     const items = campaignItems(options.tier, options.runs, scenarios, options.shardCount, options.shardIndex);
     const located = await locateRuntime();
     const runtime = await runtimeIdentity(located);
-    const modelIdentity = options.model ? snapshot.modelIdentity : undefined;
+    const modelIdentity = snapshot.modelIdentity;
     const expectedDigests: Digests = {
       policySha256: snapshot.policySha256,
       skillSha256: snapshot.skillSha256,
       probeSha256: snapshot.probeSha256,
       oracleSha256: snapshot.probeSha256,
+      runnerSha256: snapshot.runnerSha256,
+      shellParserSha256: snapshot.shellParserSha256,
       scenarioManifestSha256: snapshot.manifestSha256,
       runtimeSha256: runtime.sha256,
       settingsDigest: snapshot.settingsDigest,
@@ -2142,6 +2534,8 @@ async function main(): Promise<void> {
       policyDigest: snapshot.policySha256,
       skillDigest: snapshot.skillSha256,
       probeDigest: snapshot.probeSha256,
+      runnerSha256: snapshot.runnerSha256,
+      shellParserSha256: snapshot.shellParserSha256,
       manifestDigest: snapshot.manifestSha256,
       runtimeVersion: runtime.version,
       runtimeSha256: runtime.sha256,
@@ -2150,7 +2544,7 @@ async function main(): Promise<void> {
       authDigest: snapshot.authDigest,
       modelDigest: snapshot.modelIdentity.modelDigest,
     });
-    const resumeState: ResumeState = options.resume && modelIdentity
+    const resumeState: ResumeState = options.resume
       ? await validateResumeResults(options.resultsPath, {
         campaignKey,
         digests: expectedDigests,
