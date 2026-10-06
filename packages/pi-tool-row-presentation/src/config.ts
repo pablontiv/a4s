@@ -4,7 +4,6 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
 export const TOOL_ROW_PRESENTATION_FILE_NAME = "pi-tool-row-presentation.json";
-export const TOOL_ROW_PRESENTATION_GLOBAL_PATH = "~/.pi/agent/pi-tool-row-presentation.json";
 export const TOOL_ROW_MODES = ["full", "compact", "hidden"] as const;
 
 export type ToolRowsMode = (typeof TOOL_ROW_MODES)[number];

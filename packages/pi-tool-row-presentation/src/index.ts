@@ -125,8 +125,8 @@ export function registerToolRowPresentation(
 	pi.registerShortcut("ctrl+alt+o", {
 		description: "Cycle tool row presentation",
 		handler: (ctx) => {
-			const currentIndex = TOOL_ROW_MODES.indexOf(currentMode);
-			const nextMode = TOOL_ROW_MODES[(currentIndex + 1) % TOOL_ROW_MODES.length] ?? "full";
+			const globalIndex = TOOL_ROW_MODES.indexOf(globalMode);
+			const nextMode = TOOL_ROW_MODES[(globalIndex + 1) % TOOL_ROW_MODES.length] ?? "full";
 			saveGlobalMode(nextMode, ctx);
 		},
 	});

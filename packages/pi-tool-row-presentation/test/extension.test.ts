@@ -1,5 +1,13 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import {
+	closeSync,
+	existsSync,
+	fstatSync,
+	mkdirSync,
+	openSync,
+	readFileSync,
+	writeFileSync,
+} from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -148,6 +156,18 @@ function writeModeFile(path: string, contents: string): void {
 	writeFileSync(path, contents, "utf8");
 }
 
+function readFileSnapshot(path: string): { contents: string; mode: number } {
+	const descriptor = openSync(path, "r");
+	try {
+		return {
+			contents: readFileSync(descriptor, "utf8"),
+			mode: fstatSync(descriptor).mode & 0o777,
+		};
+	} finally {
+		closeSync(descriptor);
+	}
+}
+
 const tool = (): Block => ({ kind: "tool" });
 const orphanedThinking = (): Block => ({
 	kind: "thinking",
@@ -280,8 +300,9 @@ describe("tool row host contract", () => {
 		await harness.start();
 
 		await harness.runCommand("compact");
-		assert.deepEqual(JSON.parse(readFileSync(globalPath, "utf8")), { mode: "compact" });
-		assert.equal(statSync(globalPath).mode & 0o777, 0o600);
+		const saved = readFileSnapshot(globalPath);
+		assert.deepEqual(JSON.parse(saved.contents), { mode: "compact" });
+		assert.equal(saved.mode, 0o600);
 		assert.deepEqual(harness.resolvePresentation(tool()), { density: "summary" });
 		assert.deepEqual(harness.notifications.at(-1), { message: "Tool rows: compact", type: "info" });
 
@@ -322,6 +343,23 @@ describe("tool row host contract", () => {
 		for (const expected of ["compact", "hidden", "full"] as const) {
 			await harness.runShortcut();
 			assert.deepEqual(JSON.parse(readFileSync(globalPath, "utf8")), { mode: expected });
+		}
+	});
+
+	it("cycles the global mode while a project override keeps the effective mode unchanged", async () => {
+		const root = await temporaryDirectory();
+		const globalPath = join(root, "agent", "pi-tool-row-presentation.json");
+		writeModeFile(globalPath, serializeMode("compact"));
+		writeModeFile(projectModePath(root), serializeMode("hidden"));
+		const harness = createHarness({ globalPath, cwd: root });
+		await harness.start();
+		assert.equal(harness.invalidations, 1);
+
+		for (const expected of ["hidden", "full", "compact"] as const) {
+			await harness.runShortcut();
+			assert.deepEqual(JSON.parse(readFileSync(globalPath, "utf8")), { mode: expected });
+			assert.deepEqual(harness.resolvePresentation(tool()), { density: "hidden" });
+			assert.equal(harness.invalidations, 1);
 		}
 	});
 
