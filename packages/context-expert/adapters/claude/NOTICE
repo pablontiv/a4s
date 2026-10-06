@@ -30,6 +30,8 @@ El timing del trigger incorpora código de:
 compact-adviser — https://github.com/kunchenguid/compact-adviser.git
 Tag: compact-adviser-v0.1.12
 Commit: ef216af7cb639947bb4642fdf063117f12a91fc6
+Derived file: packages/context-expert/core/trigger.ts
+Synchronized Claude copy: packages/context-expert/adapters/claude/core/trigger.ts
 Licensed under the MIT License. Original license text:
 
 MIT License
@@ -53,3 +55,15 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+Pi host integration adapts patterns from:
+
+fast-jev-compaction-pi — https://github.com/zaycruz/fast-jev-compaction-pi
+Tag: v0.6.0
+Commit: 1499833c088753798c5e406856a170b9f5669d28
+Adapted patterns: Pi message conversion, native compaction lifecycle, native
+fallback, compaction boundary retention, token metadata retention, and native
+model-registry transport.
+Integration files: packages/pi-context-expert/src/binding.ts and
+packages/pi-context-expert/src/extension.ts
+No source code was copied from fast-jev-compaction-pi.

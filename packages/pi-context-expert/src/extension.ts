@@ -28,7 +28,6 @@ import {
   isLadderEvidence,
   resolveCompactionConfig,
 } from "./config.ts";
-import type { BuildJevCompactionOptions } from "./compaction.ts";
 import { disabledEvidencePipeline, runEvidenceWithFailure } from "./evidence-pipeline.ts";
 import { DeadlineExceededError, OperationAbortedError, runWithDeadline } from "./deadline.ts";
 import { isStableDigest, stableDigest } from "./digest.ts";
@@ -89,14 +88,19 @@ import type {
   StoredRuleProposalCandidate,
 } from "./types.ts";
 
+interface CompactionOutputLimits {
+  maxSummaryChars?: number;
+  minimumSummaryExcerptChars?: number;
+}
+
 export interface PiContextExpertOptions {
   jevClient?: JevClient;
   hookTimeoutMs?: number;
   retroTimeoutMs?: number;
   observation?: RuleObservationOptions;
   scheduling?: JevRequestSchedulerOptions;
-  /** Legacy summary-builder options retained for embedding compatibility. */
-  compaction?: BuildJevCompactionOptions;
+  /** Output limits retained for embedding compatibility. The shared HostBinding applies them. */
+  compaction?: CompactionOutputLimits;
   /** Shared core options for embedding and deterministic tests. */
   coreCompaction?: CompactOptions;
   evidence?: EvidenceOptions;
@@ -845,7 +849,7 @@ async function handleCompaction(
   timeoutMs: number,
   now: () => Date,
   coreOptions: CompactOptions | undefined,
-  compactionOptions: BuildJevCompactionOptions | undefined,
+  compactionOptions: CompactionOutputLimits | undefined,
 ): Promise<SessionBeforeCompactResult | undefined> {
   let attemptId: string | undefined;
   try {

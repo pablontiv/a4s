@@ -44,18 +44,7 @@ export {
   type CorpusEntryAppender,
   type CorpusStageOptions,
 } from "./corpus.ts";
-export {
-  assertCompleteCoverage,
-  buildBasicCompactionResult,
-  type BasicCompactionInput,
-} from "./compaction-core.ts";
-export {
-  buildJevCompactionResult,
-  CompactionBuildError,
-  recoverRuleSignalBatchesFromDetails,
-  type BuildJevCompactionInput,
-  type BuildJevCompactionOptions,
-} from "./compaction.ts";
+export { recoverRuleSignalBatchesFromDetails } from "./compaction.ts";
 export {
   disabledEvidencePipeline,
   runEvidence,
