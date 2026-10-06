@@ -10,7 +10,8 @@
 // and only reports `compact` when Jev chooses it. A host adapter wires its
 // own cheap gates (mode, cooldown, credential, reentrancy) around this.
 
-import type { ChoiceAnswer, ChoiceQuestion, JevAsker, JevState } from './types.js';
+import { JevRequestError, type JevRequestErrorCode } from './request.js';
+import type { ChoiceQuestion, JevAsker, JevState } from './types.js';
 
 /** Default context fill (0..1) below which the trigger never bothers Jev. */
 export const DEFAULT_MINIMUM_CONTEXT_RATIO = 0.5;
@@ -42,6 +43,16 @@ export interface TriggerState {
 }
 
 export type TriggerDecision = 'compact' | 'wait';
+export type TriggerDiagnosticCode = JevRequestErrorCode | 'request_failed' | 'invalid_answer';
+export type TriggerDiagnosticPhase = 'request' | 'response';
+
+export interface TriggerDiagnostic {
+  code: TriggerDiagnosticCode;
+  phase: TriggerDiagnosticPhase;
+  status?: number;
+}
+
+export type TriggerDiagnosticReporter = (diagnostic: TriggerDiagnostic) => void;
 
 /** Builds the text-free trigger state from the host's context-window reading. */
 export function buildTriggerState(
@@ -80,28 +91,62 @@ export function triggerFloorPasses(
   );
 }
 
-/** Reads the trigger answer; accepts a `choice` or a `noul` probability form. */
-function decisionFromAnswer(answer: ChoiceAnswer | { noul: number } | undefined): TriggerDecision {
-  if (!answer) return 'wait';
-  if ('choice' in answer && typeof answer.choice === 'string') {
-    return answer.choice === 'compact' ? 'compact' : 'wait';
+/** Lee una respuesta válida de tipo `choice` o `noul`. */
+function decisionFromAnswer(answer: unknown): TriggerDecision | undefined {
+  if (answer === null || typeof answer !== 'object') return undefined;
+  if ('choice' in answer) {
+    return answer.choice === 'compact' || answer.choice === 'wait' ? answer.choice : undefined;
   }
   if ('noul' in answer && typeof answer.noul === 'number' && Number.isFinite(answer.noul)) {
-    // Fallback if Jev ever answers the trigger as a probability: >=0.5 compacts.
     return answer.noul >= 0.5 ? 'compact' : 'wait';
   }
-  return 'wait';
+  return undefined;
 }
 
-/**
- * Asks Jev whether to compact now. Returns `wait` on any failure or malformed
- * answer, so the trigger is fail-safe: an error never forces a compaction.
- */
-export async function evaluateTrigger(asker: JevAsker, state: TriggerState): Promise<TriggerDecision> {
+function answerFromResponse(response: unknown): unknown {
+  if (response === null || typeof response !== 'object' || !('answers' in response)) return undefined;
+  const answers = response.answers;
+  if (answers === null || typeof answers !== 'object') return undefined;
+  return (answers as Record<string, unknown>)[TRIGGER_QUESTION_NAME];
+}
+
+function reportDiagnostic(reporter: TriggerDiagnosticReporter | undefined, diagnostic: TriggerDiagnostic): void {
   try {
-    const response = await asker.ask(state as unknown as JevState, { [TRIGGER_QUESTION_NAME]: TRIGGER_QUESTION });
-    return decisionFromAnswer(response.answers[TRIGGER_QUESTION_NAME] as ChoiceAnswer | undefined);
+    reporter?.(diagnostic);
   } catch {
+    // El diagnóstico no cambia la decisión fail-open.
+  }
+}
+
+/** Consulta a Jev. Un fallo conserva `wait` y emite un diagnóstico seguro. */
+export async function evaluateTrigger(
+  asker: JevAsker,
+  state: TriggerState,
+  reporter?: TriggerDiagnosticReporter,
+): Promise<TriggerDecision> {
+  let response: unknown;
+  try {
+    response = await asker.ask(state as unknown as JevState, { [TRIGGER_QUESTION_NAME]: TRIGGER_QUESTION });
+  } catch (error) {
+    if (error instanceof JevRequestError) {
+      reportDiagnostic(
+        reporter,
+        error.status === undefined
+          ? { code: error.code, phase: 'response' }
+          : { code: error.code, phase: 'response', status: error.status },
+      );
+    } else {
+      reportDiagnostic(reporter, { code: 'request_failed', phase: 'request' });
+    }
     return 'wait';
   }
+
+  try {
+    const decision = decisionFromAnswer(answerFromResponse(response));
+    if (decision) return decision;
+  } catch {
+    // Una respuesta hostil también es una respuesta inválida.
+  }
+  reportDiagnostic(reporter, { code: 'invalid_answer', phase: 'response' });
+  return 'wait';
 }
