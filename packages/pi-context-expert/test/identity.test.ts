@@ -15,6 +15,7 @@ interface PackageManifest {
   name?: string;
   dependencies?: Record<string, string>;
   peerDependencies?: Record<string, string>;
+  peerDependenciesMeta?: Record<string, { optional?: boolean }>;
   devDependencies?: Record<string, string>;
 }
 
@@ -47,19 +48,20 @@ test("the active extension exposes only the pi-context-expert identity", () => {
   assert.doesNotMatch(gitignore, /^artifacts\/pi-rule-compiler-e2e\/$/m);
 });
 
-test("Pion is the runtime peer while legacy Pi ABI types stay development-only", () => {
-  const legacyMinimum = ">=0.99.1";
-  const pionVersion = "1.0.0-ports.1";
+test("Pi and Pion are optional alternative runtime peers", () => {
+  const developmentMinimum = ">=0.99.1";
   const pionArtifact =
     "https://github.com/pablontiv/pi/releases/download/pion-v1.0.0-ports.1/pablontiv-pion-1.0.0-ports.1.tgz";
   const workspace = manifest(resolve(workspaceRoot, "package.json"));
   const contextExpert = manifest(resolve(packageRoot, "package.json"));
 
-  assert.equal(workspace.devDependencies?.["@earendil-works/pi-coding-agent"], legacyMinimum);
-  assert.equal(contextExpert.peerDependencies?.["@pablontiv/pion"], pionVersion);
-  assert.equal(contextExpert.peerDependencies?.["@earendil-works/pi-coding-agent"], undefined);
-  assert.equal(contextExpert.devDependencies?.["@earendil-works/pi-coding-agent"], legacyMinimum);
-  assert.equal(contextExpert.devDependencies?.["@earendil-works/pi-ai"], legacyMinimum);
+  assert.equal(workspace.devDependencies?.["@earendil-works/pi-coding-agent"], developmentMinimum);
+  assert.equal(contextExpert.peerDependencies?.["@earendil-works/pi-coding-agent"], ">=1.0.3");
+  assert.equal(contextExpert.peerDependencies?.["@pablontiv/pion"], ">=1.0.4");
+  assert.equal(contextExpert.peerDependenciesMeta?.["@earendil-works/pi-coding-agent"]?.optional, true);
+  assert.equal(contextExpert.peerDependenciesMeta?.["@pablontiv/pion"]?.optional, true);
+  assert.equal(contextExpert.devDependencies?.["@earendil-works/pi-coding-agent"], developmentMinimum);
+  assert.equal(contextExpert.devDependencies?.["@earendil-works/pi-ai"], developmentMinimum);
   assert.equal(contextExpert.devDependencies?.["@pablontiv/pion"], pionArtifact);
   for (const hostPackage of [
     "@pablontiv/pion",

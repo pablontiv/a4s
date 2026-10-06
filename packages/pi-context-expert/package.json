@@ -32,7 +32,16 @@
     "rpc:compact-driver": "tsx scripts/run-rpc-compact.ts"
   },
   "peerDependencies": {
-    "@pablontiv/pion": "1.0.0-ports.1"
+    "@earendil-works/pi-coding-agent": ">=1.0.3",
+    "@pablontiv/pion": ">=1.0.4"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    },
+    "@pablontiv/pion": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@earendil-works/pi-ai": ">=0.99.1",

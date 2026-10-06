@@ -1,10 +1,18 @@
-import { readFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import {
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { CompactionConfig } from "./types.ts";
 
 export const PI_CONTEXT_EXPERT_GLOBAL_CONFIG_PATH = "~/.pi/agent/pi-context-expert.json";
 
+const CONFIG_FILE_NAME = "pi-context-expert.json";
 const FLAT_CONFIG_KEYS = new Set([
   "compaction.strategy",
   "trigger.mode",
@@ -75,20 +83,77 @@ export function configurationFromGlobalFile(
   }
 }
 
-/** Reads the sole installed configuration location. Any read failure is basic. */
-export function loadGlobalCompactionConfiguration(): Readonly<Record<string, unknown>> {
+/** Serializes the complete supported configuration in its public flat format. */
+export function serializeGlobalCompactionConfiguration(config: CompactionConfig): string {
+  return `${JSON.stringify(flatConfiguration(config), null, 2)}\n`;
+}
+
+/**
+ * Reads the configured location. A missing configured file falls back to the
+ * former fixed location so existing installations remain active.
+ */
+export function loadGlobalCompactionConfiguration(
+  configPath = globalCompactionConfigPath(),
+  legacyPath = legacyGlobalCompactionConfigPath(),
+): Readonly<Record<string, unknown>> {
   try {
-    return configurationFromGlobalFile(readFileSync(globalCompactionConfigPath(), "utf8"));
+    return configurationFromGlobalFile(readFileSync(configPath, "utf8"));
   } catch {
+    if (configPath !== legacyPath) {
+      try {
+        return configurationFromGlobalFile(readFileSync(legacyPath, "utf8"));
+      } catch {
+        // Use the safe default below.
+      }
+    }
     return configurationFromGlobalFile(undefined);
   }
 }
 
-export function globalCompactionConfigPath(): string {
-  return join(homedir(), ".pi", "agent", "pi-context-expert.json");
+/** Writes a complete configuration through a same-directory atomic rename. */
+export function writeGlobalCompactionConfiguration(
+  config: CompactionConfig,
+  configPath = globalCompactionConfigPath(),
+): void {
+  const directory = dirname(configPath);
+  mkdirSync(directory, { recursive: true });
+  const temporaryPath = join(
+    directory,
+    `.${CONFIG_FILE_NAME}.${process.pid}.${randomUUID()}.tmp`,
+  );
+  let temporaryFileExists = true;
+  try {
+    writeFileSync(temporaryPath, serializeGlobalCompactionConfiguration(config), {
+      encoding: "utf8",
+      flag: "wx",
+      mode: 0o600,
+    });
+    temporaryFileExists = true;
+    renameSync(temporaryPath, configPath);
+    temporaryFileExists = false;
+  } finally {
+    if (temporaryFileExists) rmSync(temporaryPath, { force: true });
+  }
 }
 
-function flatConfiguration(config: CompactionConfig): Readonly<Record<string, unknown>> {
+/** Resolves the active agent directory and ignores an empty override. */
+export function globalCompactionConfigPath(
+  environment: NodeJS.ProcessEnv = process.env,
+  homeDirectory = homedir(),
+): string {
+  const configuredDirectory = environment.PI_CODING_AGENT_DIR?.trim();
+  return join(
+    configuredDirectory || join(homeDirectory, ".pi", "agent"),
+    CONFIG_FILE_NAME,
+  );
+}
+
+/** Returns the fixed path used before PI_CODING_AGENT_DIR support. */
+export function legacyGlobalCompactionConfigPath(homeDirectory = homedir()): string {
+  return join(homeDirectory, ".pi", "agent", CONFIG_FILE_NAME);
+}
+
+export function flatConfiguration(config: CompactionConfig): Readonly<Record<string, unknown>> {
   return {
     "compaction.strategy": config.compaction.strategy,
     "trigger.mode": config.trigger.mode,

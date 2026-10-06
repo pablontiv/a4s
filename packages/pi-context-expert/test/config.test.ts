@@ -1,9 +1,25 @@
 import assert from "node:assert/strict";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import {
   BASIC_COMPACTION_CONFIG,
   configurationFromGlobalFile,
+  globalCompactionConfigPath,
+  legacyGlobalCompactionConfigPath,
+  loadGlobalCompactionConfiguration,
   resolveCompactionConfig,
+  serializeGlobalCompactionConfiguration,
+  writeGlobalCompactionConfiguration,
 } from "../src/config.ts";
 
 const BASIC_FLAT_CONFIG = {
@@ -90,4 +106,75 @@ test("invalid global values and combinations fail closed to the complete basic c
     })),
     BASIC_FLAT_CONFIG,
   );
+});
+
+test("global configuration serialization round trips all supported values", () => {
+  const config = {
+    compaction: { strategy: "ladder" as const },
+    trigger: { mode: "auto" as const },
+    evidence: { strategy: "ladder" as const },
+  };
+  assert.deepEqual(
+    resolveCompactionConfig(configurationFromGlobalFile(serializeGlobalCompactionConfiguration(config))),
+    config,
+  );
+});
+
+test("global configuration writes atomically with mode 0600", () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-context-expert-config-"));
+  const configPath = join(root, "agent", "pi-context-expert.json");
+  try {
+    writeGlobalCompactionConfiguration({
+      compaction: { strategy: "ladder" },
+      trigger: { mode: "off" },
+      evidence: { strategy: "ladder" },
+    }, configPath);
+
+    assert.deepEqual(configurationFromGlobalFile(readFileSync(configPath, "utf8")), {
+      "compaction.strategy": "ladder",
+      "trigger.mode": "off",
+      "evidence.strategy": "ladder",
+    });
+    assert.equal(statSync(configPath).mode & 0o777, 0o600);
+    assert.deepEqual(readdirSync(join(root, "agent")), ["pi-context-expert.json"]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("the active path uses a non-empty PI_CODING_AGENT_DIR and keeps the fixed fallback", () => {
+  const home = join(tmpdir(), "context-expert-home");
+  assert.equal(
+    globalCompactionConfigPath({ PI_CODING_AGENT_DIR: " /tmp/custom-pi-agent " }, home),
+    "/tmp/custom-pi-agent/pi-context-expert.json",
+  );
+  assert.equal(
+    globalCompactionConfigPath({ PI_CODING_AGENT_DIR: "  " }, home),
+    join(home, ".pi", "agent", "pi-context-expert.json"),
+  );
+  assert.equal(
+    legacyGlobalCompactionConfigPath(home),
+    join(home, ".pi", "agent", "pi-context-expert.json"),
+  );
+});
+
+test("a missing configured path reads the former fixed path", () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-context-expert-fallback-"));
+  const configuredPath = join(root, "custom", "pi-context-expert.json");
+  const legacyPath = join(root, "legacy", "pi-context-expert.json");
+  try {
+    mkdirSync(join(root, "legacy"), { recursive: true });
+    writeFileSync(legacyPath, JSON.stringify({
+      "compaction.strategy": "ladder",
+      "trigger.mode": "hint",
+      "evidence.strategy": "off",
+    }));
+    assert.deepEqual(loadGlobalCompactionConfiguration(configuredPath, legacyPath), {
+      "compaction.strategy": "ladder",
+      "trigger.mode": "hint",
+      "evidence.strategy": "off",
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
