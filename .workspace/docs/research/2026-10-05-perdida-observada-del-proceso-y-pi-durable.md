@@ -83,15 +83,6 @@ Fuente:
 
 - `/Users/pones/.pi/agent/sessions/--Users-Shared-harness-handbook--/2026-09-07T19-35-20-832Z_01a07d5e-3400-7f3b-9b58-d903ff9ac537.jsonl`
 
-## Near-miss recuperado
-
-A4S agotó el contexto dos veces en siete minutos el 2026-10-05. La sesión se recuperó.
-Lo trato como un near-miss recuperado, no como pérdida permanente confirmada.
-
-Fuente:
-
-- `/Users/pones/.claude/projects/-Users-Shared-harness-a4s/8547165e-ecc4-4f16-9a38-8dc7b0cb2b3e.jsonl`
-
 ## Tres problemas distintos
 
 1. **Ejecución y estado durables.** El proceso cae, una llamada falla o un worker cambia. La tarea debe conservar un punto de reanudación seguro.
