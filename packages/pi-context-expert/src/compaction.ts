@@ -1,55 +1,9 @@
-import { assertCompleteCoverage, buildBasicCompactionResult } from "./compaction-core.ts";
 import { isStableDigest } from "./digest.ts";
 import { parseRuleSignalBatch, StoredEntryValidationError } from "./storage.ts";
-import type {
-  JevCompactionResult,
-  JevRequestSchedulerStats,
-  RuleSignalBatch,
-} from "./types.ts";
+import type { RuleSignalBatch } from "./types.ts";
 import { isSupportedJevModel } from "./types.ts";
-import type { BuildJevCompactionOptions } from "./compaction-core.ts";
 
-export type { BuildJevCompactionOptions } from "./compaction-core.ts";
-export { CompactionBuildError } from "./compaction-core.ts";
-
-/**
- * Backward-compatible adapter for callers that still provide RuleSignal batches.
- * Retention is built exclusively from their decisions; basic results never retain
- * Evidence artifacts.
- */
-export interface BuildJevCompactionInput {
-  attemptId: string;
-  sourceDigest: string;
-  createdAt: string;
-  firstKeptEntryId: string;
-  tokensBefore: number;
-  messageCount: number;
-  scheduler: JevRequestSchedulerStats;
-  ruleSignalBatches: RuleSignalBatch[];
-}
-
-export function buildJevCompactionResult(
-  input: BuildJevCompactionInput,
-  options: BuildJevCompactionOptions = {},
-): JevCompactionResult {
-  const decisions = input.ruleSignalBatches
-    .flatMap((batch) => batch.compaction.decisions)
-    .sort((left, right) => left.sourceMessageIndex - right.sourceMessageIndex);
-  assertCompleteCoverage(decisions, input.messageCount, input.attemptId);
-  return buildBasicCompactionResult(
-    {
-      attemptId: input.attemptId,
-      sourceDigest: input.sourceDigest,
-      createdAt: input.createdAt,
-      firstKeptEntryId: input.firstKeptEntryId,
-      tokensBefore: input.tokensBefore,
-      decisions,
-      scheduler: input.scheduler,
-    },
-    options,
-  );
-}
-
+/** Reads RuleSignal batches from historical compaction details without creating a new compaction. */
 export function recoverRuleSignalBatchesFromDetails(
   value: unknown,
 ): { attemptId: string; sourceDigest: string; batches: RuleSignalBatch[] } | undefined {

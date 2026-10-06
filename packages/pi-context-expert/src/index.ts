@@ -18,6 +18,25 @@ export {
   writeGlobalCompactionConfiguration,
 } from "./config.ts";
 export {
+  buildCoreTranscript,
+  coreOptionsForPreparation,
+  CORE_DETAILS_KEY,
+  CORE_DETAILS_VERSION,
+  createCoreAsker,
+  DEFAULT_MAX_COMPACTION_CHARS,
+  DEFAULT_MINIMUM_COMPACTION_EXCERPT_CHARS,
+  createPiCompactionBinding,
+  findPreviousCoreCompaction,
+  piContentToText,
+  PiCompactionBuildError,
+  renderCoreSummary,
+  runPiCoreCompaction,
+  toNeutralPiMessages,
+  type CompactionPreparationProtection,
+  type PiCompactionBindingInput,
+  type PreviousCoreCompaction,
+} from "./binding.ts";
+export {
   collectCorpus,
   CORPUS_ENTRY_TYPE,
   publishCorpusAfterCompaction,
@@ -25,18 +44,7 @@ export {
   type CorpusEntryAppender,
   type CorpusStageOptions,
 } from "./corpus.ts";
-export {
-  assertCompleteCoverage,
-  buildBasicCompactionResult,
-  type BasicCompactionInput,
-} from "./compaction-core.ts";
-export {
-  buildJevCompactionResult,
-  CompactionBuildError,
-  recoverRuleSignalBatchesFromDetails,
-  type BuildJevCompactionInput,
-  type BuildJevCompactionOptions,
-} from "./compaction.ts";
+export { recoverRuleSignalBatchesFromDetails } from "./compaction.ts";
 export {
   disabledEvidencePipeline,
   runEvidence,
@@ -150,10 +158,14 @@ export {
 } from "./scheduler.ts";
 export {
   applyTriggerDecision,
+  buildRecentConversation,
+  buildTriggerState,
   evaluateTrigger,
   hasConservativeCompactableHistory,
   localTriggerGatesPass,
-  type TriggerInput,
+  toTriggerMessages,
+  triggerFloorPasses,
+  type PiTriggerGateInput,
   type TriggerProjectionEntry,
 } from "./trigger.ts";
 export {

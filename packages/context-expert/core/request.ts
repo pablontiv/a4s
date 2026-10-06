@@ -9,18 +9,21 @@ import type { JevAnswer, JevQuestions, JevResponse, JevState } from './types.js'
 export const SYSTEM_ONE_URL = 'https://api.typesafe.ai/v1/systemone';
 export const DEFAULT_MODEL = 'jev-latest';
 
-export type JevRequestErrorCode = 'http_status' | 'invalid_json' | 'invalid_response';
+export type JevRequestErrorCode = 'http_status' | 'invalid_json' | 'invalid_response' | 'request_too_large';
 
 /** Expone solo datos seguros sobre un fallo de respuesta HTTP. */
 export class JevRequestError extends Error {
   readonly code: JevRequestErrorCode;
   readonly status: number | undefined;
 
-  constructor(code: JevRequestErrorCode, status: number) {
+  constructor(code: JevRequestErrorCode, status?: number) {
     super('Jev request failed');
     this.name = 'JevRequestError';
     this.code = code;
-    this.status = Number.isInteger(status) && status >= 100 && status <= 599 ? status : undefined;
+    this.status =
+      typeof status === 'number' && Number.isInteger(status) && status >= 100 && status <= 599
+        ? status
+        : undefined;
   }
 }
 
@@ -37,10 +40,22 @@ export function buildJevRequest(
     apiKey: string;
     model?: string;
     baseUrl?: string;
+    maxBodyBytes?: number;
   },
   state: JevState,
   questions: JevQuestions,
 ): JevRequest {
+  const body = JSON.stringify({
+    model: params.model ?? DEFAULT_MODEL,
+    state,
+    questions,
+  });
+  if (
+    params.maxBodyBytes !== undefined &&
+    new TextEncoder().encode(body).byteLength > params.maxBodyBytes
+  ) {
+    throw new JevRequestError('request_too_large');
+  }
   return {
     url: params.baseUrl ?? SYSTEM_ONE_URL,
     method: 'POST',
@@ -48,11 +63,7 @@ export function buildJevRequest(
       authorization: `Bearer ${params.apiKey}`,
       'content-type': 'application/json',
     },
-    body: JSON.stringify({
-      model: params.model ?? DEFAULT_MODEL,
-      state,
-      questions,
-    }),
+    body,
   };
 }
 

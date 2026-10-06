@@ -6,7 +6,21 @@ import {
   type SessionBeforeCompactEvent,
   type SessionBeforeCompactResult,
 } from "@earendil-works/pi-coding-agent";
-import { buildBasicCompactionResult } from "./compaction-core.ts";
+import {
+  buildTriggerState,
+  evaluateTrigger,
+  triggerFloorPasses,
+  type CompactOptions,
+  type TriggerDiagnostic,
+} from "@a4s/context-expert";
+import {
+  buildCoreTranscript,
+  coreOptionsForPreparation,
+  createCoreAsker,
+  findPreviousCoreCompaction,
+  PiCompactionBuildError,
+  runPiCoreCompaction,
+} from "./binding.ts";
 import { collectCorpus, publishCorpusAfterCompaction, stageCorpus } from "./corpus.ts";
 import {
   BASIC_COMPACTION_CONFIG,
@@ -14,10 +28,6 @@ import {
   isLadderEvidence,
   resolveCompactionConfig,
 } from "./config.ts";
-import {
-  CompactionBuildError,
-  type BuildJevCompactionOptions,
-} from "./compaction.ts";
 import { disabledEvidencePipeline, runEvidenceWithFailure } from "./evidence-pipeline.ts";
 import { DeadlineExceededError, OperationAbortedError, runWithDeadline } from "./deadline.ts";
 import { isStableDigest, stableDigest } from "./digest.ts";
@@ -34,11 +44,7 @@ import { applyContextProjection } from "./projection.ts";
 import { redactAndLimitCorpusText } from "./redaction.ts";
 import { JevApiError, JevUnavailableError, JevValidationError, PiJevClient } from "./jev.ts";
 import { digestNormalizedMessages, normalizeCompactionMessages } from "./messages.ts";
-import {
-  observePreparedCompactionRules,
-  prepareRuleObservationsWithMessages,
-  type RuleObservationOptions,
-} from "./observer.ts";
+import type { RuleObservationOptions } from "./observer.ts";
 import { canProvideRuleAuthority, ObservationPlanError } from "./questions.ts";
 import {
   ScheduledJevClient,
@@ -51,11 +57,9 @@ import {
   type RetroOptions,
 } from "./retro.ts";
 import {
-  applyTriggerDecision,
-  evaluateTriggerWithFailure,
   hasConservativeCompactableHistory,
   localTriggerGatesPass,
-  type TriggerInput,
+  toTriggerMessages,
 } from "./trigger.ts";
 import { StateFitError } from "./state.ts";
 import {
@@ -84,13 +88,21 @@ import type {
   StoredRuleProposalCandidate,
 } from "./types.ts";
 
+interface CompactionOutputLimits {
+  maxSummaryChars?: number;
+  minimumSummaryExcerptChars?: number;
+}
+
 export interface PiContextExpertOptions {
   jevClient?: JevClient;
   hookTimeoutMs?: number;
   retroTimeoutMs?: number;
   observation?: RuleObservationOptions;
   scheduling?: JevRequestSchedulerOptions;
-  compaction?: BuildJevCompactionOptions;
+  /** Output limits retained for embedding compatibility. The shared HostBinding applies them. */
+  compaction?: CompactionOutputLimits;
+  /** Shared core options for embedding and deterministic tests. */
+  coreCompaction?: CompactOptions;
   evidence?: EvidenceOptions;
   retro?: RetroOptions;
   ladder?: LadderShortlistOptions;
@@ -180,10 +192,20 @@ export function registerPiContextExpert(pi: ExtensionAPI, options: PiContextExpe
     }
   });
 
-  const createJevClient = async (ctx: ExtensionContext, timeoutMs: number): Promise<JevClient> => {
-    if (options.jevClient) return options.jevClient;
+  const createJevClient = async (
+    ctx: ExtensionContext,
+    timeoutMs: number,
+    resolvedSecrets?: Array<string | undefined>,
+  ): Promise<JevClient> => {
+    if (options.jevClient) {
+      resolvedSecrets?.push(process.env.TYPESAFE_API_KEY);
+      return options.jevClient;
+    }
     const auth = await ctx.modelRegistry.getProviderAuth(TYPESAFE_PROVIDER_ID);
-    if (!auth?.auth.apiKey?.trim()) throw new JevUnavailableError();
+    const nativeCredential = auth?.auth.apiKey?.trim();
+    const environmentFallback = process.env.TYPESAFE_API_KEY?.trim();
+    resolvedSecrets?.push(nativeCredential, environmentFallback);
+    if (!nativeCredential && !environmentFallback) throw new JevUnavailableError();
     return new PiJevClient({ modelRegistry: ctx.modelRegistry, timeoutMs });
   };
 
@@ -327,25 +349,28 @@ export function registerPiContextExpert(pi: ExtensionAPI, options: PiContextExpe
       config.trigger.mode === "auto" &&
       (autoCompactionInFlight || latestMessageIsAbortedAssistant(branch))
     ) return;
+    const contextTokens = usage?.tokens ?? 0;
+    const contextWindow = usage?.contextWindow ?? 0;
     const baseInput = {
       mode: config.trigger.mode,
       interactive: ctx.hasUI,
       idle: ctx.isIdle(),
-      contextTokens: usage?.tokens ?? 0,
-      contextWindow: usage?.contextWindow ?? 0,
+      contextTokens,
+      contextWindow,
       minimumContextRatio: triggerMinimumContextRatio,
       compactableHistory: true,
       hasPendingWork: ctx.hasPendingMessages(),
       cooldownActive: hasTriggerCooldown(branch, now(), triggerCooldownMs),
       editorHasText: editorHasText(ctx),
     };
-    if (!localTriggerGatesPass({ ...baseInput, credentialAvailable: true })) return;
+    if (!triggerFloorPasses(contextTokens, contextWindow, triggerMinimumContextRatio)) return;
+    if (!localTriggerGatesPass(baseInput)) return;
 
-    let compactableHistory = false;
+    let triggerMessages = [] as ReturnType<typeof toTriggerMessages>;
     try {
       const settings = resolveTriggerCompactionSettings(ctx);
       const projection = ctx.sessionManager.buildSessionProjection();
-      compactableHistory = hasConservativeCompactableHistory(
+      const compactableHistory = hasConservativeCompactableHistory(
         projection.entries.map((entry) => ({
           sourceType: entry.sourceEntry.type,
           messages: entry.messages,
@@ -353,6 +378,8 @@ export function registerPiContextExpert(pi: ExtensionAPI, options: PiContextExpe
         settings.keepRecentTokens,
         branch.at(-1)?.type === "compaction",
       );
+      if (!compactableHistory) return;
+      triggerMessages = toTriggerMessages(projection.messages);
     } catch {
       recordOperationalFailure({
         phase: "trigger",
@@ -362,45 +389,37 @@ export function registerPiContextExpert(pi: ExtensionAPI, options: PiContextExpe
       });
       return;
     }
-    if (!compactableHistory) return;
 
     const ownsAutoAttempt = config.trigger.mode === "auto";
     if (ownsAutoAttempt) autoCompactionInFlight = true;
     let compactionDispatched = false;
     try {
-      const credentialAvailable = options.jevClient !== undefined || Boolean(
-        (await ctx.modelRegistry.getProviderAuth(TYPESAFE_PROVIDER_ID))?.auth.apiKey?.trim(),
+      const secrets: Array<string | undefined> = [];
+      const jevClient = await createJevClient(ctx, hookTimeoutMs, secrets);
+      const state = buildTriggerState(
+        contextTokens,
+        contextWindow,
+        triggerMinimumContextRatio,
+        triggerMessages,
+        secrets,
       );
-      if (!credentialAvailable) {
-        recordOperationalFailure({
+      const decision = await evaluateTrigger(
+        createCoreAsker(jevClient, ctx.signal ?? new AbortController().signal),
+        state,
+        (diagnostic) => recordOperationalFailure({
           phase: "trigger",
-          code: "missing_key",
+          code: triggerDiagnosticCode(diagnostic),
           reason: "agent_settled",
           willRetry: true,
-        });
-        return;
-      }
-      const input: TriggerInput = {
-        ...baseInput,
-        compactableHistory,
-        credentialAvailable,
-        jevClient: await createJevClient(ctx, hookTimeoutMs),
-        signal: ctx.signal ?? new AbortController().signal,
-      };
-      const decision = await evaluateTriggerWithFailure(input, (code) =>
-        recordOperationalFailure({
-          phase: "trigger",
-          code,
-          reason: "agent_settled",
-          willRetry: true,
-        })
+        }),
       );
-      if (decision.action === "none") return;
+      if (decision === "wait") return;
+      const action = config.trigger.mode === "auto" ? "compact" : "hint";
       const appendCooldown = () => {
         try {
           pi.appendEntry(TRIGGER_COOLDOWN_ENTRY_TYPE, {
             schema: "a4s.compaction-trigger-cooldown/v1",
-            action: decision.action,
+            action,
             triggeredAt: now().toISOString(),
           });
           return true;
@@ -408,8 +427,8 @@ export function registerPiContextExpert(pi: ExtensionAPI, options: PiContextExpe
           return false;
         }
       };
-      if (decision.action === "hint") {
-        if (appendCooldown()) await applyTriggerDecision(decision, ctx);
+      if (action === "hint") {
+        if (appendCooldown()) ctx.ui.notify("Compaction suggested: Jev recommends compaction", "info");
         return;
       }
 
@@ -438,7 +457,6 @@ export function registerPiContextExpert(pi: ExtensionAPI, options: PiContextExpe
         reason: "agent_settled",
         willRetry: true,
       });
-      throw error;
     } finally {
       if (ownsAutoAttempt && !compactionDispatched) autoCompactionInFlight = false;
     }
@@ -454,13 +472,12 @@ export function registerPiContextExpert(pi: ExtensionAPI, options: PiContextExpe
         recordOperationalFailure,
         hookTimeoutMs,
         now,
-        options.observation,
-        options.scheduling,
+        options.coreCompaction,
         options.compaction,
       );
     } catch {
       safeNotify(ctx, "compaction", "internal_failure");
-      return { cancel: true };
+      return undefined;
     }
   });
 
@@ -831,10 +848,9 @@ async function handleCompaction(
   recordFailure: (input: OperationalFailureInput) => void,
   timeoutMs: number,
   now: () => Date,
-  observationOptions: RuleObservationOptions | undefined,
-  schedulingOptions: JevRequestSchedulerOptions | undefined,
-  compactionOptions: BuildJevCompactionOptions | undefined,
-): Promise<SessionBeforeCompactResult> {
+  coreOptions: CompactOptions | undefined,
+  compactionOptions: CompactionOutputLimits | undefined,
+): Promise<SessionBeforeCompactResult | undefined> {
   let attemptId: string | undefined;
   try {
     const preparation = {
@@ -844,58 +860,56 @@ async function handleCompaction(
       messagesToSummarize: event.preparation.messagesToSummarize,
       turnPrefixMessages: event.preparation.turnPrefixMessages,
     };
-    const sourceDigest = digestNormalizedMessages(normalizeCompactionMessages(preparation));
+    const normalizedMessages = normalizeCompactionMessages(preparation);
+    const sourceDigest = digestNormalizedMessages(normalizedMessages);
     attemptId = stableDigest({
       schema: "a4s.jev-compaction-attempt/v1",
       sourceDigest,
       firstKeptEntryId: event.preparation.firstKeptEntryId,
       tokensBefore: event.preparation.tokensBefore,
     });
-    const prepared = prepareRuleObservationsWithMessages(preparation, observationOptions);
     const existing = pendingByAttempt.get(attemptId);
     if (existing) return { compaction: existing.result };
 
     const observedAt = now().toISOString();
-    const jevClient = new ScheduledJevClient(await createJevClient(ctx, timeoutMs), schedulingOptions);
-    const batches = await runWithDeadline(
-      (signal) =>
-        Promise.all(
-          prepared.plans.map((plan, windowIndex) =>
-            observePreparedCompactionRules(
-              plan,
-              {
-                attemptId: attemptId!,
-                reason: event.reason,
-                willRetry: event.willRetry,
-                observedAt,
-                windowIndex,
-                windowCount: prepared.plans.length,
-                pins: prepared.pins,
-              },
-              jevClient,
-              signal,
-              observationOptions,
-            ),
-          ),
-        ),
+    const previous = findPreviousCoreCompaction(event.branchEntries);
+    const hostMessages = buildCoreTranscript(previous, [
+      ...event.preparation.messagesToSummarize,
+      ...event.preparation.turnPrefixMessages,
+    ]);
+    const client = await createJevClient(ctx, timeoutMs);
+    const customGoal = event.customInstructions?.trim();
+    const { output: result } = await runWithDeadline(
+      (signal) => runPiCoreCompaction(
+        hostMessages,
+        {
+          attemptId: attemptId!,
+          sourceDigest,
+          createdAt: observedAt,
+          firstKeptEntryId: event.preparation.firstKeptEntryId,
+          tokensBefore: event.preparation.tokensBefore,
+          ...(previous === undefined ? {} : { previous }),
+          fileOps: event.preparation.fileOps,
+          ...(compactionOptions?.maxSummaryChars === undefined
+            ? {}
+            : { maxSummaryChars: compactionOptions.maxSummaryChars }),
+          ...(compactionOptions?.minimumSummaryExcerptChars === undefined
+            ? {}
+            : { minimumSummaryExcerptChars: compactionOptions.minimumSummaryExcerptChars }),
+        },
+        client,
+        signal,
+        coreOptionsForPreparation(event.preparation, {
+          ...coreOptions,
+          ...(customGoal ? { goal: customGoal } : {}),
+        }),
+      ),
       timeoutMs,
       event.signal,
     );
-    const result = buildBasicCompactionResult(
-      {
-        attemptId,
-        sourceDigest: prepared.sourceDigest,
-        createdAt: observedAt,
-        firstKeptEntryId: event.preparation.firstKeptEntryId,
-        tokensBefore: event.preparation.tokensBefore,
-        decisions: batches.flatMap((batch) => batch.compaction.decisions),
-        scheduler: jevClient.getStats(),
-      },
-      compactionOptions,
-    );
     pendingByAttempt.set(attemptId, {
       result,
-      corpus: stageCorpus(prepared.messages, {
+      corpus: stageCorpus(normalizedMessages, {
         branchId: corpusBranchId(ctx),
         compactionAttemptId: attemptId,
       }),
@@ -913,7 +927,7 @@ async function handleCompaction(
       });
     }
     safeNotify(ctx, "compaction", code);
-    return { cancel: true };
+    return undefined;
   }
 }
 
@@ -1236,12 +1250,23 @@ function classifyLadderProjectionError(error: unknown): DiagnosticCode {
   return "internal_failure";
 }
 
+function triggerDiagnosticCode(diagnostic: TriggerDiagnostic): OperationalFailureCode {
+  if (diagnostic.code === "http_status") return "api_failure";
+  if (
+    diagnostic.code === "invalid_json" ||
+    diagnostic.code === "invalid_response" ||
+    diagnostic.code === "invalid_answer"
+  ) return "malformed_response";
+  if (diagnostic.code === "request_too_large") return "oversized_state";
+  return "internal_failure";
+}
+
 function classifyCompactionError(error: unknown): OperationalFailureCode {
   if (error instanceof JevUnavailableError) return "missing_key";
   if (error instanceof DeadlineExceededError) return "timeout";
   if (error instanceof OperationAbortedError) return "aborted";
   if (error instanceof JevValidationError) return "malformed_response";
-  if (error instanceof StateFitError || error instanceof ObservationPlanError || error instanceof CompactionBuildError) {
+  if (error instanceof StateFitError || error instanceof ObservationPlanError || error instanceof PiCompactionBuildError) {
     return "oversized_state";
   }
   if (error instanceof JevApiError) return "api_failure";
@@ -1340,7 +1365,7 @@ function safeNotify(ctx: ExtensionContext, phase: "compaction" | "signals" | "re
   };
   const suffix =
     phase === "compaction"
-      ? "Compaction was cancelled; native fallback is disabled."
+      ? "Pi will run native compaction once."
       : phase === "signals"
         ? "Signals remain recoverable from the successful compaction entry."
         : "Persisted signals were preserved.";

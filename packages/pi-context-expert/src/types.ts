@@ -326,7 +326,7 @@ export interface PersistedCompactionDecision extends MessageCompactionDecision {
   budgetTruncated: boolean;
 }
 
-export interface JevCompactionDetails {
+export interface LegacyJevCompactionDetails {
   schema: "a4s.jev-compaction-details/v1";
   attemptId: string;
   sourceDigest: string;
@@ -345,6 +345,39 @@ export interface JevCompactionDetails {
   decisions: PersistedCompactionDecision[];
   ruleSignalBatches: RuleSignalBatch[];
 }
+
+export type PersistedCoreCallDecision =
+  | (import("@a4s/context-expert").CallDecision & { source: "jev" })
+  | Pick<import("@a4s/context-expert").CallDecision, "id" | "tool" | "action" | "reason"> & {
+    source: "pinned";
+  };
+
+/** Details emitted by the Pi HostBinding over the shared context-expert core. */
+export interface CoreCompactionDetails {
+  attemptId: string;
+  sourceDigest: string;
+  jevModel: typeof DEFAULT_JEV_MODEL;
+  createdAt: string;
+  firstKeptEntryId: string;
+  tokensBefore: number;
+  summary: {
+    digest: string;
+    chars: number;
+    budgetChars: number;
+    retainedMessages: number;
+    budgetTruncatedMessages: number;
+  };
+  readFiles: string[];
+  modifiedFiles: string[];
+  fastJev: {
+    version: 1;
+    messages: import("@a4s/context-expert").Message[];
+    stats: import("@a4s/context-expert").CompactResult["stats"];
+    decisions: PersistedCoreCallDecision[];
+  };
+}
+
+export type JevCompactionDetails = LegacyJevCompactionDetails | CoreCompactionDetails;
 
 export interface JevCompactionResult {
   summary: string;

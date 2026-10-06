@@ -1,106 +1,91 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import * as publicApi from "../src/index.ts";
 import {
   applyTriggerDecision,
+  buildTriggerState,
+  createCoreAsker,
   evaluateTrigger,
-  evaluateTriggerWithFailure,
   hasConservativeCompactableHistory,
-  type TriggerInput,
-} from "../src/trigger.ts";
-import type { JevClient, JevRequest } from "../src/types.ts";
+  localTriggerGatesPass,
+  toTriggerMessages,
+  type JevClient,
+  type JevRequest,
+} from "../src/index.ts";
 import { validJevResponse } from "./fixtures.ts";
 
-type AssertNever<T extends never> = T;
-type TriggerInputHasNoFailureHook = AssertNever<Extract<keyof TriggerInput, "onFailure">>;
-const triggerInputHasNoFailureHook: TriggerInputHasNoFailureHook[] = [];
-
-class SuggestingJev implements JevClient {
-  calls = 0;
+class StrictTriggerJev implements JevClient {
   requests: JevRequest[] = [];
 
   async evaluate(request: JevRequest): Promise<unknown> {
-    this.calls += 1;
+    assert.deepEqual(Object.keys(request.questions), ["done", "shape"]);
     this.requests.push(request);
-    return validJevResponse(request, (_id, question) =>
-      question.type === "choice"
-        ? {
-            type: "choice",
-            choice: "compact",
-            probabilities: { compact: 1, wait: 0 },
-            confidence: 1,
-          }
-        : undefined,
-    );
+    return validJevResponse(request);
   }
 }
 
-function readyInput(jevClient: JevClient): TriggerInput {
+function assistant(content: unknown[]) {
   return {
-    mode: "hint",
-    interactive: true,
-    idle: true,
-    contextTokens: 200_000,
-    contextWindow: 872_000,
-    minimumContextRatio: 0.2,
-    compactableHistory: true,
-    hasPendingWork: false,
-    cooldownActive: false,
-    editorHasText: false,
-    credentialAvailable: true,
-    jevClient,
-    signal: new AbortController().signal,
+    role: "assistant",
+    content,
+    api: "test",
+    provider: "test",
+    model: "test",
+    usage: {
+      input: 1,
+      output: 1,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 2,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "toolUse",
+    timestamp: 2,
   };
 }
 
-test("persisted auto mode compacts after all local gates pass", async () => {
-  const decision = await evaluateTrigger({
-    ...readyInput(new SuggestingJev()),
-    mode: "auto",
-  });
-  assert.equal(decision.action, "compact");
+test("Pi Trigger uses the core with populated sanitized conversation", async () => {
+  const longResult = `HEAD${"á".repeat(1_000)}TAIL`;
+  const messages = toTriggerMessages([
+    { role: "system", content: "SYSTEM_PROMPT_CANARY", timestamp: 0 },
+    {
+      role: "user",
+      content: [
+        { type: "text", text: "Inspect alice@example.com" },
+        { type: "image", data: "IMAGE_CANARY", mimeType: "image/png" },
+      ],
+      timestamp: 1,
+    },
+    assistant([
+      { type: "thinking", thinking: "THINKING_CANARY" },
+      { type: "text", text: "Inspection is complete." },
+      { type: "toolCall", id: "call-1", name: "read", arguments: { path: "src/file.ts" } },
+    ]),
+    {
+      role: "toolResult",
+      toolCallId: "call-1",
+      toolName: "read",
+      content: [{ type: "text", text: longResult }],
+      isError: false,
+      timestamp: 3,
+    },
+  ]);
+  const state = buildTriggerState(80_000, 100_000, 0.2, messages);
+  const jev = new StrictTriggerJev();
+
+  assert.equal(await evaluateTrigger(createCoreAsker(jev, new AbortController().signal), state), "compact");
+  assert.equal(jev.requests.length, 1);
+  const serialized = JSON.stringify(jev.requests[0]?.state);
+  assert.match(serialized, /Inspect/);
+  assert.match(serialized, /Inspection is complete/);
+  assert.doesNotMatch(serialized, /SYSTEM_PROMPT_CANARY|THINKING_CANARY|IMAGE_CANARY|alice@example.com/);
+  const recent = (jev.requests[0]?.state as typeof state).recent;
+  const excerpt = recent.find((message) => message.role === "assistant")?.tools?.[0]?.excerpt ?? "";
+  assert.match(excerpt, /^HEAD/);
+  assert.match(excerpt, /TAIL$/);
+  assert.ok(new TextEncoder().encode(excerpt).byteLength <= 512);
 });
 
-test("auto with pending work, cooldown, editor text, or non-compactable history is inert", async () => {
-  const blockedInputs = [
-    { mode: "auto" as const, hasPendingWork: true },
-    { mode: "auto" as const, cooldownActive: true },
-    { mode: "auto" as const, editorHasText: true },
-    { mode: "auto" as const, compactableHistory: false },
-  ];
-  for (const blocked of blockedInputs) {
-    const jev = new SuggestingJev();
-    const decision = await evaluateTrigger({ ...readyInput(jev), ...blocked });
-    assert.equal(decision.action, "none");
-    assert.equal(jev.calls, 0, "local gates must run before Jev");
-  }
-});
-
-test("trigger recomputes the percentage gate from the active model context window", async () => {
-  const largeWindowJev = new SuggestingJev();
-  assert.deepEqual(
-    await evaluateTrigger({
-      ...readyInput(largeWindowJev),
-      contextTokens: 40_000,
-      contextWindow: 872_000,
-    }),
-    { action: "none" },
-  );
-  assert.equal(largeWindowJev.calls, 0);
-
-  const smallWindowJev = new SuggestingJev();
-  assert.deepEqual(
-    await evaluateTrigger({
-      ...readyInput(smallWindowJev),
-      contextTokens: 40_000,
-      contextWindow: 128_000,
-    }),
-    { action: "hint", reason: "Jev recommends compaction" },
-  );
-  assert.equal(smallWindowJev.calls, 1);
-});
-
-test("conservative readiness requires an older turn beyond Pi's retained tail", () => {
+test("Pi Trigger keeps its compactable-history and lifecycle gates", () => {
   const oldTurn = {
     sourceType: "message",
     messages: [{ role: "user" as const, content: "old request", timestamp: 0 }],
@@ -109,71 +94,38 @@ test("conservative readiness requires an older turn beyond Pi's retained tail", 
     sourceType: "message",
     messages: [{ role: "user" as const, content: "x".repeat(80_000), timestamp: 0 }],
   };
+  assert.equal(hasConservativeCompactableHistory([oldTurn, recentLargeTurn], 20_000, false), true);
+  assert.equal(hasConservativeCompactableHistory([recentLargeTurn], 20_000, false), false);
+  assert.equal(hasConservativeCompactableHistory([oldTurn, recentLargeTurn], 20_000, true), false);
 
-  assert.equal(
-    hasConservativeCompactableHistory([oldTurn, recentLargeTurn], 20_000, false),
-    true,
-  );
-  assert.equal(
-    hasConservativeCompactableHistory([recentLargeTurn], 20_000, false),
-    false,
-    "one large user turn is not enough for Pi to summarize history",
-  );
-  assert.equal(
-    hasConservativeCompactableHistory([oldTurn, recentLargeTurn], 20_000, true),
-    false,
-    "a compaction at the branch tip is already compacted",
-  );
+  const ready = {
+    mode: "auto" as const,
+    interactive: true,
+    idle: true,
+    contextTokens: 20_000,
+    contextWindow: 100_000,
+    minimumContextRatio: 0.2,
+    compactableHistory: true,
+    hasPendingWork: false,
+    cooldownActive: false,
+    editorHasText: false,
+  };
+  assert.equal(localTriggerGatesPass(ready), true);
+  assert.equal(localTriggerGatesPass({ ...ready, hasPendingWork: true }), false);
+  assert.equal(localTriggerGatesPass({ ...ready, cooldownActive: true }), false);
+  assert.equal(localTriggerGatesPass({ ...ready, editorHasText: true }), false);
 });
 
-test("off never queries Jev and the request contains no chunk text or credentials", async () => {
-  const offJev = new SuggestingJev();
-  assert.deepEqual(
-    await evaluateTrigger({ ...readyInput(offJev), mode: "off" }),
-    { action: "none" },
-  );
-  assert.equal(offJev.calls, 0);
-
-  const jev = new SuggestingJev();
-  assert.deepEqual(
-    await evaluateTrigger({ ...readyInput(jev), mode: "hint" }),
-    { action: "hint", reason: "Jev recommends compaction" },
-  );
-  assert.equal(jev.calls, 1);
-  const serialized = JSON.stringify(jev.requests[0]);
-  assert.doesNotMatch(serialized, /chunk-secret|credential-secret|password/i);
-  assert.doesNotMatch(serialized, /Bearer|TYPESAFE_API_KEY/);
-  assert.match(serialized, /contextWindow/);
-  assert.match(serialized, /contextRatio/);
-  assert.doesNotMatch(serialized, /minimumContextTokens/);
-});
-
-test("el Trigger mantiene la API pública y la decisión segura", async () => {
-  assert.deepEqual(triggerInputHasNoFailureHook, []);
-  assert.equal("evaluateTriggerWithFailure" in publicApi, false);
-  const failures: string[] = [];
-  const decision = await evaluateTriggerWithFailure(
-    readyInput({ evaluate: async () => { throw new Error("private failure"); } }),
-    (code) => failures.push(code),
-  );
-  assert.deepEqual(decision, { action: "none" });
-  assert.deepEqual(failures, ["internal_failure"]);
-
-  await assert.doesNotReject(() => evaluateTriggerWithFailure(
-    readyInput({ evaluate: async () => { throw new Error("private failure"); } }),
-    () => { throw new Error("receipt append failed"); },
-  ));
-});
-
-test("applyTriggerDecision delegates compaction only through ctx.compact", async () => {
+test("Pi applies core decisions only through its existing lifecycle", async () => {
   const notifications: string[] = [];
   let compactCalls = 0;
   const ctx = {
     ui: { notify: (message: string) => notifications.push(message) },
     compact: () => { compactCalls += 1; },
   };
-  await applyTriggerDecision({ action: "hint", reason: "Jev recommends compaction" }, ctx as never);
-  await applyTriggerDecision({ action: "compact" }, ctx as never);
+  await applyTriggerDecision("compact", "hint", ctx as never);
+  await applyTriggerDecision("compact", "auto", ctx as never);
+  await applyTriggerDecision("wait", "auto", ctx as never);
   assert.deepEqual(notifications, ["Compaction suggested: Jev recommends compaction"]);
   assert.equal(compactCalls, 1);
 });

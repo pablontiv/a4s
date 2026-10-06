@@ -20,13 +20,13 @@ directory.
   estimated reduction is below `minReductionRatio`, or anything fails, it falls
   back to the native summary via `next(event)` — a failure never degrades the
   session.
-- **`turn.complete`** — the Jev-decided auto-compact trigger. It does **not**
-  compact at a fixed percentage. Past a local floor (`minimumContextRatio`), and
-  subject to a cooldown and an available credential, it asks Jev — with a
-  text-free state — whether now is the ideal moment to compact, and acts only
-  when Jev chooses `compact`. `triggerMode` controls what then happens: `auto`
-  compacts, `hint` only suggests `/compact`, `off` disables it. This is the
-  Claude analog of `pi-context-expert`'s `trigger.mode`.
+- **`turn.complete`** usa el timing de `compact-adviser`. El gate local usa
+  `minimumContextRatio`. Jev recibe las preguntas `done` y `shape`. El estado
+  `a4s.compaction-trigger-state/v3` recibe `$.session.messages()` mediante la
+  API de Claude. El adaptador excluye el system prompt, reasoning e imágenes.
+  El adaptador sanitiza el texto. Cada resultado de herramienta usa como máximo
+  512 bytes UTF-8. Cada request usa como máximo 32,000 bytes. `triggerMode`
+  controla la acción posterior.
 
 ## Credentials
 
@@ -67,3 +67,9 @@ To turn the auto-compact trigger **off**, set `triggerMode` to `off`.
 
 Derived from [fast-jev-compaction](https://github.com/tamaratran/fast-jev-compaction)
 (MIT) — see `NOTICE`.
+
+El timing del trigger deriva de
+[`compact-adviser`](https://github.com/kunchenguid/compact-adviser.git), tag
+`compact-adviser-v0.1.12`, commit
+`ef216af7cb639947bb4642fdf063117f12a91fc6`, licencia MIT. `NOTICE` incluye la
+licencia exacta.

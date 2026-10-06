@@ -42,6 +42,7 @@ import {
   buildTriggerState,
   DEFAULT_MINIMUM_CONTEXT_RATIO,
   evaluateTrigger,
+  MAX_REQUEST_BYTES,
   triggerFloorPasses,
   type TriggerDiagnostic,
   type TriggerDiagnosticCode,
@@ -67,11 +68,13 @@ const HOOK_DEFAULTS = {
 
 /** Minimum ms between auto-compactions, so the trigger never hammers Jev. */
 const TRIGGER_COOLDOWN_MS = 60_000;
+export const JEV_TIMEOUT_MS = 2_000;
 
 export type HookFetchInit = { method?: string; headers?: Record<string, string>; body?: string };
 export type HookFetchResponse = { status: number; ok: boolean; text: string };
 /** The shape of `$.http.fetch`, so the hook can be driven without an engine. */
 export type HookFetch = (url: string, init?: HookFetchInit) => Promise<HookFetchResponse>;
+export type HookSleep = (ms: number) => Promise<void>;
 
 export type HookConfig = CompactOptions & {
   apiKey?: string;
@@ -123,16 +126,31 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
   return config;
 }
 
-/** A `JevAsker` over the engine's `$.http.fetch`. */
-export function jevAsker(fetchFn: HookFetch, apiKey: string, model: string): JevAsker {
+const TIMED_OUT: unique symbol = Symbol('timeout');
+
+/** Un `JevAsker` sobre `$.http.fetch` con un timeout opcional. */
+export function jevAsker(
+  fetchFn: HookFetch,
+  apiKey: string,
+  model: string,
+  maxBodyBytes?: number,
+  sleepFn?: HookSleep,
+): JevAsker {
   return {
     async ask(state, questions) {
-      const request = buildJevRequest({ apiKey, model }, state, questions);
-      const response = await fetchFn(request.url, {
+      const request = buildJevRequest({ apiKey, model, maxBodyBytes }, state, questions);
+      const pending = fetchFn(request.url, {
         method: request.method,
         headers: request.headers,
         body: request.body,
       });
+      const response = sleepFn
+        ? await Promise.race([
+            pending,
+            sleepFn(JEV_TIMEOUT_MS).then((): typeof TIMED_OUT => TIMED_OUT),
+          ])
+        : await pending;
+      if (response === TIMED_OUT) throw new Error('El request de Jev excedió el timeout');
       return parseJevResponse(response.status, response.ok, response.text);
     },
   };
@@ -336,6 +354,7 @@ const DIAGNOSTIC_CODES: readonly DiagnosticCode[] = [
   'invalid_response',
   'request_failed',
   'invalid_answer',
+  'request_too_large',
   'operation_failed',
 ];
 const DIAGNOSTIC_PHASES: readonly DiagnosticPhase[] = [
@@ -386,6 +405,7 @@ function logTriggerDiagnostic(
 export const register: Register = (on: On, options: PluginOptions) => {
   const configured = resolveHookConfig(options);
   let compacting = false;
+  let triggerRequestActive = false;
   let lastCompactAt = 0;
 
   on('session.compact', async ($, event, next) => {
@@ -420,7 +440,15 @@ export const register: Register = (on: On, options: PluginOptions) => {
   // local floor it asks Jev "is now the ideal moment?" and acts only on
   // `compact` — the Claude analog of pi-context-expert's `trigger.mode: auto`.
   on('turn.complete', async ($, event: TurnCompleteInput, next) => {
-    if (configured.triggerMode === 'off' || compacting) return next(event);
+    if (
+      configured.triggerMode === 'off' ||
+      compacting ||
+      triggerRequestActive ||
+      event.agentId !== undefined ||
+      event.isAborted ||
+      event.reason !== 'answer' ||
+      event.answer.trim() === ''
+    ) return next(event);
     try {
       if (Date.now() - lastCompactAt < TRIGGER_COOLDOWN_MS) return next(event);
 
@@ -437,16 +465,30 @@ export const register: Register = (on: On, options: PluginOptions) => {
 
       const asker = jevAsker(
         async (url, init) => {
-          const response = await $.http.fetch(url, init);
-          return { status: response.status, ok: response.ok, text: response.text };
+          triggerRequestActive = true;
+          try {
+            const response = await $.http.fetch(url, init);
+            return { status: response.status, ok: response.ok, text: response.text };
+          } finally {
+            triggerRequestActive = false;
+          }
         },
         apiKey,
         configured.model,
+        MAX_REQUEST_BYTES,
+        (ms) => $.clock.sleep(ms, { signal: next.signal }),
       );
+      const messages = await $.session.messages();
       let triggerDiagnostic: TriggerDiagnostic | undefined;
       const decision = await evaluateTrigger(
         asker,
-        buildTriggerState(contextTokens, contextWindow, configured.minimumContextRatio),
+        buildTriggerState(
+          contextTokens,
+          contextWindow,
+          configured.minimumContextRatio,
+          messages as unknown as readonly Message[],
+          [apiKey],
+        ),
         (diagnostic) => {
           triggerDiagnostic = diagnostic;
         },
