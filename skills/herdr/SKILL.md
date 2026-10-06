@@ -197,24 +197,30 @@ A blocked or attention path is evidence-only: write the blocker report and escal
 
 The Project Orchestrator remains thin: dispatch units, track state by Bead, verdict, and artifact pointer, integrate only bounded evidence, and compact its own context aggressively. Never accumulate child transcripts or duplicate their working context. Reconciliation across a fanned-out DAG is not this session's job and not a prompt: a deterministic reconciler (`skills/herdr/scripts/a4s-reconcile`, run by launchd/cron, no LLM) reads durable state from Beads and liveness from Herdr via `metadata.worker` — `bd ready` → dispatch, `in_progress` → `herdr agent get <worker>` (working: leave; done: close only on a valid `TASK_RESULT` record, else `WORK_RESULT_MISSING`/`WORK_RESULT_INVALID` evidence and the Bead stays open; not found: re-dispatch; blocked: evidence-only AttentionTicket; a Bead dispatched with a `correlation_id` also gets the read-only TASK_ACK/TASK_STARTED audit above), `in_progress` with no `metadata.worker` → leave while the lease is live, a live agent is tied to it, or activity is recent; stale lease + no live agent + opt-in label + assignee == actor → re-dispatch in a new tab; anything else → AttentionTicket, closed Bead with a live tab → close the tab. Before any of it the reconciler runs the **Mission Control safety gate**: the canonical MC is the one `in_progress` Bead labelled `mission-control` whose lease is live and whose recorded session identity (`terminal_id`/`session`, `pane`, `tab`, `workspace`) matches the live herdr pane — a label alone never counts. If MC ownership is absent, duplicated, stale or ambiguous it emits an AttentionTicket and performs no mutation; it never creates, moves, relabels, closes or prompts an mc pane, and never harvest-closes, re-dispatches, re-stamps, claims or reaps the MC ownership Bead or any Bead wired to an MC-owned target (allowlist: `tab create|close`, `agent start|prompt`, never aimed at an mc/MC-owned target). The Worker's `bd close` and WORK_RESULT/ATTENTION callback remain the authoritative completion signals; liveness proves a process exists, not semantic progress, and never grows into a scheduler or control plane inside the session. `herdr agent prompt` to a running agent is an optional nudge, never the mechanism that keeps the loop alive.
 
-### Heartbeat H2 — a wake only counts with evidence
+### Heartbeat H2 — un wake solo cuenta con evidencia
 
-A launchd wake that exits 0 proves only that Herdr accepted the prompt (H1): in the recorded w4J session 73 of 73 wakes got an assistant turn, yet 57 issued no `bd` write or `herdr` dispatch command. `helper/heartbeat_h2.py` runs once per tick (launchd stays the transport), diffs Beads/Herdr against the previous tick, and classifies it from observable state instead of the model's willingness to speak:
+`helper/heartbeat_h2.py` ejecuta un tick. Compara Beads y Herdr con el estado anterior. No espera ni reintenta. No cambia el ciclo de vida de un Bead.
 
-| Verdict | Evidence |
+| Veredicto | Evidencia |
 | --- | --- |
-| `PASS_HARVEST` | a `WORK_RESULT`/`ATTENTION` callback reached the PO session record and an assistant turn followed |
-| `PASS_PROGRESS` | a non-epic Bead was claimed or closed since the previous tick |
-| `PASS_STALE` | concrete `STALE_WORK` / `ATTENTION type=QUESTION` with `pane_id` + `bead_id` was emitted — the helper's own observation (stall made visible), not proof the PO responded; a stale Bead repeats it every tick |
-| `NOOP`, `WORKING`, `BASELINE` | nothing to do, live workers in flight, or first tick — reported, never counted as PASS |
-| `FAIL` | none of the above, an undelivered wake, or unobservable state (Beads/Herdr unreadable, or a malformed `state.json` — inspect or delete it) — exit 2, visible notification |
+| `PASS_HARVEST` | Llegó un callback `WORK_RESULT` o `ATTENTION`. Luego ocurrió un turno del PO. |
+| `PASS_PROGRESS` | Se reclamó o cerró un Bead que no es epic. |
+| `PASS_STALE` | El helper emitió `STALE_WORK` o `ATTENTION type=QUESTION` con `pane_id` y `bead_id`. |
+| `NOOP`, `WORKING`, `BASELINE` | No hay trabajo, hay trabajo activo o es el primer tick. |
+| `FAIL` | Falta evidencia, falla el wake o no se puede observar el estado. |
 
 ```bash
-python skills/herdr/helper/heartbeat_h2.py --po-pane <po-pane> --repo <repo-root>          # read-only, prints one verdict
-python skills/herdr/helper/heartbeat_h2.py --po-pane <po-pane> --repo <repo-root> --live   # + one wake prompt, one notification, state + ticks.jsonl
+python3 skills/herdr/helper/heartbeat_h2.py --po-pane <po-pane> --repo <repo-root>
+python3 skills/herdr/helper/heartbeat_h2.py --po-pane <po-pane> --repo <repo-root> --live
 ```
 
-`--live` prompts the PO once per tick with the H1 text plus `H2 verdict=… ; STALE_WORK pane_id=… bead_id=…` pointers and notifies through `herdr notification show`, so a stalled PO cannot hide its own stall. The measurement crosses ticks (tick N+1 judges the wake sent at tick N): there is no wait, timeout, retry, or poll loop, and it never claims, closes, or mutates a Bead. `helper/com.pablontiv.a4s.orchestrator-heartbeat-h2.plist.example` is the reversible LaunchAgent template; retire it when the A4S tick lands. Run the tests with `python -m unittest discover -s skills/herdr/tests -t skills/herdr -p "test_*.py"`.
+La raíz es `${A4S_STATE_ROOT:-${XDG_STATE_HOME:-$HOME/.local/state}/a4s}`. El estado usa `state/heartbeat/state.json`. El lock usa `state/heartbeat/tick.lock`. `--state-dir` conserva la selección explícita del directorio de estado. Si existe el estado por defecto anterior en `heartbeat-h2`, el helper lo copia. No borra ni mueve el original. Tampoco modifica `ticks.jsonl`.
+
+El journal usa `log/heartbeat/YYYY-MM-DD.jsonl` con fecha UTC. Cada línea cumple `a4s.log/1`. El journal registra inicio, fin o fallo. No incluye rutas, argumentos, entorno, prompts ni payloads. Un fallo del journal no cambia el veredicto, el wake ni el código de salida. El archivo acotado `state/heartbeat/logging-health.json` usa el schema `a4s.logging-health/1`. Guarda solo el total de pérdidas para la raíz A4S. Un archivo inválido activa el modo con pérdidas. El evento siguiente informa el total acotado. El contador no depende de `--state-dir`.
+
+Los directorios usan modo `0700`. Los archivos usan modo `0600`. El lock del tick es no bloqueante y cubre todo el tick. Un lock adicional serializa cada append del journal. El estado usa un temporal, `fsync` y reemplazo atómico. Un evento WARN informa si el directorio no confirma la durabilidad después del reemplazo. Esta condición no cambia el resultado del tick. El helper no aplica retención. El plan v1 mide 14 días antes de decidirla.
+
+`--live` envía un wake al PO. También muestra una notificación ante un fallo o evidencia nueva. La medición cruza ticks. El tick siguiente evalúa el wake anterior. La plantilla `helper/com.pablontiv.a4s.orchestrator-heartbeat-h2.plist.example` conserva el intervalo. Envía stdout y stderr a `/dev/null`. Ejecuta las pruebas con `python3 -m unittest skills/herdr/tests/test_heartbeat_h2.py`.
 
 Create panes only when the user explicitly asks for a split view inside one session. Pass `--no-focus` for background setup so you do not steal the user's focus.
 
