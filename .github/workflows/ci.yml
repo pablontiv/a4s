@@ -15,8 +15,98 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  test:
-    name: test (ubuntu-latest)
+  classify:
+    name: Clasificar cambios
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      docs_only: ${{ steps.changes.outputs.docs_only }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Clasificar rutas modificadas
+        id: changes
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          PUSH_BASE: ${{ github.event.before }}
+          PUSH_HEAD: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -eu
+          echo "docs_only=false" >> "$GITHUB_OUTPUT"
+
+          case "$EVENT_NAME" in
+            pull_request)
+              base="$PR_BASE"
+              head="$PR_HEAD"
+              ;;
+            push)
+              base="$PUSH_BASE"
+              head="$PUSH_HEAD"
+              if [[ -z "$base" || "$base" =~ ^0+$ ]]; then
+                echo "La base del push no está disponible; se ejecutará la suite runtime."
+                exit 0
+              fi
+              ;;
+            *)
+              echo "El evento no permite clasificar cambios; se ejecutará la suite runtime."
+              exit 0
+              ;;
+          esac
+
+          if ! git cat-file -e "$base^{commit}" || ! git cat-file -e "$head^{commit}"; then
+            echo "No se pueden comparar los commits; se ejecutará la suite runtime."
+            exit 0
+          fi
+
+          changed_paths="$RUNNER_TEMP/changed-paths"
+          if ! git diff --name-only -z "$base" "$head" > "$changed_paths"; then
+            echo "No se pudieron clasificar los cambios." >&2
+            exit 1
+          fi
+
+          mapfile -d '' -t paths < "$changed_paths"
+          echo "Rutas modificadas:"
+          if (( ${#paths[@]} == 0 )); then
+            echo "(ninguna)"
+            exit 0
+          fi
+
+          docs_only=true
+          for path in "${paths[@]}"; do
+            printf 'changed_path=%q\n' "$path"
+            if [[ "$path" != .workspace/docs/* ]]; then
+              docs_only=false
+            fi
+          done
+          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
+
+  docs:
+    name: Validar documentación
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version: "1.27.1"
+      - name: Instalar Rootline fijado
+        run: >-
+          go install
+          github.com/pablontiv/rootline/cmd/rootline@14ee8aa4d5067c7ff6d0708d79e3aaebf27b7a56
+      - name: Validar documentación gobernada
+        run: rootline validate --all .workspace/docs -o json
+
+  runtime:
+    name: Probar runtime
+    needs: classify
+    if: always() && needs.classify.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -75,9 +165,7 @@ jobs:
           -p "test_*.py"
           -v
       - name: Validate governed knowledge
-        run: |
-          rootline validate --all .workspace/docs -o json
-          rootline validate --all profiles/pablontiv -o json
+        run: rootline validate --all profiles/pablontiv -o json
       - name: Test agent behavior doctor
         run: >-
           python -m unittest discover
@@ -131,3 +219,28 @@ jobs:
       - name: Check context cleanup CLI
         working-directory: skills/remove-gentle-context
         run: python scripts/cleanup.py --help
+
+  test:
+    name: test (ubuntu-latest)
+    needs:
+      - classify
+      - docs
+      - runtime
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Comprobar resultados
+        env:
+          CLASSIFY_RESULT: ${{ needs.classify.result }}
+          DOCS_ONLY: ${{ needs.classify.outputs.docs_only }}
+          DOCS_RESULT: ${{ needs.docs.result }}
+          RUNTIME_RESULT: ${{ needs.runtime.result }}
+        run: |
+          test "$CLASSIFY_RESULT" = success
+          test "$DOCS_RESULT" = success
+          if [ "$DOCS_ONLY" = true ]; then
+            test "$RUNTIME_RESULT" = skipped
+          else
+            test "$RUNTIME_RESULT" = success
+          fi
