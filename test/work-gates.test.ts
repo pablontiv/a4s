@@ -1647,7 +1647,7 @@ test("a campaign snapshot fixes every mutable source before each run", async () 
   }
 });
 
-test("auth filtering selects one provider and preserves its complete credential", () => {
+test("auth filtering selects one provider and hashes only allowlisted identity fields", () => {
   const selected = oauthCredential({
     providerField: "provider-required-value",
     nested: { profile: { id: "nested-profile" }, opaque: "preserved" },
@@ -1660,11 +1660,34 @@ test("auth filtering selects one provider and preserves its complete credential"
   assert.deepEqual(JSON.parse(filtered.bytes.toString("utf8")), { provider: selected });
   assert.equal(filtered.bytes.toString("utf8").includes("xai"), false);
   assert.equal(filtered.bytes.toString("utf8").includes("provider-required-value"), true);
-  assert.deepEqual(filtered.identity.identifiers, {});
-  assert.equal(JSON.stringify(filtered.identity).includes("access-token-a"), false);
-  assert.equal(JSON.stringify(filtered.identity).includes("refresh-token-a"), false);
-  assert.equal(JSON.stringify(filtered.identity).includes("provider-required-value"), false);
-  assert.equal(JSON.stringify(filtered.identity).includes("nested-profile"), false);
+  assert.deepEqual(filtered.identity, {
+    schemaVersion: 1,
+    provider: "provider",
+    type: "oauth",
+    identifiers: {},
+  });
+  const changedExcludedFields = filterAuthForModel(authBytes({
+    provider: oauthCredential({
+      access: "changed-access-secret",
+      refresh: "changed-refresh-secret",
+      providerField: "changed-provider-field",
+      nested: { profile: { id: "changed-profile" } },
+    }),
+  }), "provider/model-a");
+  assert.equal(filtered.identityDigest, changedExcludedFields.identityDigest);
+  assert.equal(filtered.identityDigest, filterAuthForModel(authBytes({ provider: selected }), "provider/model-a").identityDigest);
+  for (const excluded of [
+    "access-token-a",
+    "refresh-token-a",
+    "provider-required-value",
+    "nested-profile",
+    "changed-access-secret",
+    "changed-refresh-secret",
+    "changed-provider-field",
+    "changed-profile",
+  ]) {
+    assert.equal(JSON.stringify(changedExcludedFields.identity).includes(excluded), false);
+  }
 });
 
 test("api-key env identity uses an explicit deterministic non-secret allowlist", () => {

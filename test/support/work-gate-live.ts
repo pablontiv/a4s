@@ -586,32 +586,28 @@ const STABLE_API_KEY_ENV_IDENTIFIER_KEYS = [
 
 function stableAuthIdentifiers(
   provider: string,
-  credential: Record<string, unknown>,
+  type: "api_key" | "oauth",
+  env: unknown,
+  enterpriseUrl: unknown,
+  accountId: unknown,
 ): Record<string, string | number | boolean> {
-  if (credential.type === "api_key") {
-    const env = credential.env;
+  if (type === "api_key") {
     if (!isPlainObject(env)) return {};
     return Object.fromEntries(STABLE_API_KEY_ENV_IDENTIFIER_KEYS.flatMap((key) =>
       typeof env[key] === "string" ? [[`env.${key}`, env[key]]] : []));
   }
-
-  const stableKeys = provider === "github-copilot"
-    ? ["enterpriseUrl"]
-    : provider === "openai-codex"
-      ? ["accountId"]
-      : [];
-  return Object.fromEntries(stableKeys.flatMap((key) =>
-    typeof credential[key] === "string" ? [[key, credential[key]]] : []));
+  if (provider === "github-copilot" && typeof enterpriseUrl === "string") return { enterpriseUrl };
+  if (provider === "openai-codex" && typeof accountId === "string") return { accountId };
+  return {};
 }
 
-function authIdentityFor(provider: string, credential: Record<string, unknown>): StableAuthIdentity {
-  // If a provider exposes no stable non-secret identity, bind only its provider and credential type.
-  return {
-    schemaVersion: 1,
-    provider,
-    type: credential.type as "api_key" | "oauth",
-    identifiers: stableAuthIdentifiers(provider, credential),
-  };
+function authIdentityFor(
+  provider: string,
+  type: "api_key" | "oauth",
+  identifiers: Record<string, string | number | boolean>,
+): StableAuthIdentity {
+  // The caller supplies only allowlisted non-secret fields. The credential object never reaches the hash input.
+  return { schemaVersion: 1, provider, type, identifiers };
 }
 
 function safeAuthIdentityDigest(content: Buffer | null): string {
@@ -621,7 +617,14 @@ function safeAuthIdentityDigest(content: Buffer | null): string {
     const providers = Object.keys(credentials).sort();
     if (providers.length !== 1) return sha256(JSON.stringify({ schemaVersion: 1, providers }));
     const provider = providers[0]!;
-    return sha256(JSON.stringify(authIdentityFor(provider, credentials[provider]!)));
+    const credential = credentials[provider]!;
+    const type = credential.type as "api_key" | "oauth";
+    const identity = authIdentityFor(
+      provider,
+      type,
+      stableAuthIdentifiers(provider, type, credential.env, credential.enterpriseUrl, credential.accountId),
+    );
+    return sha256(JSON.stringify(identity));
   } catch {
     return sha256("<invalid-auth-schema>");
   }
@@ -639,7 +642,12 @@ export function filterAuthForModel(content: Buffer | null, canonicalModelId: str
     throw new Error("The selected provider credential is ambiguous in auth.json");
   }
   const credential = credentials[provider]!;
-  const identity = authIdentityFor(provider, credential);
+  const type = credential.type as "api_key" | "oauth";
+  const identity = authIdentityFor(
+    provider,
+    type,
+    stableAuthIdentifiers(provider, type, credential.env, credential.enterpriseUrl, credential.accountId),
+  );
   const bytes = Buffer.from(`${JSON.stringify({ [provider]: credential }, null, 2)}\n`);
   return {
     provider,
@@ -1351,7 +1359,19 @@ export async function verifyPreparedRun(
     if (providers.length !== 1 || providers[0] !== snapshot.authProvider) {
       throw new CampaignIntegrityError("auth", snapshot.authDigest, sha256(JSON.stringify({ providers: providers.sort() })));
     }
-    const observedIdentity = authIdentityFor(snapshot.authProvider, credentials[snapshot.authProvider]!);
+    const credential = credentials[snapshot.authProvider]!;
+    const type = credential.type as "api_key" | "oauth";
+    const observedIdentity = authIdentityFor(
+      snapshot.authProvider,
+      type,
+      stableAuthIdentifiers(
+        snapshot.authProvider,
+        type,
+        credential.env,
+        credential.enterpriseUrl,
+        credential.accountId,
+      ),
+    );
     const observedIdentityDigest = sha256(JSON.stringify(observedIdentity));
     if (observedIdentityDigest !== snapshot.authDigest) {
       throw new CampaignIntegrityError("auth", snapshot.authDigest, observedIdentityDigest);
