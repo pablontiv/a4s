@@ -16,10 +16,9 @@ El monorepo reúne capacidades que pueden evolucionar a ritmos distintos. Cada u
 - [Roadmap Legacy](skills/roadmap-legacy/) conserva el workflow completo anterior sobre Beads para Plan, árbol pendiente, Doctor y loop secuencial.
 - [`agents/`](agents/) conserva roles portátiles con provenance explícita.
 - [`output-styles/`](output-styles/) define contratos de interacción.
-- [`src/`](src/) contiene el runtime experimental E0 y sus adapters.
 - [`packages/pi-context-expert/`](packages/pi-context-expert/) contiene una extensión para Pion que gestiona contexto, compaction y propuestas de reglas review-only; consume TypeSafe/Jev mediante el runtime nativo del host según [ADR 0065](.workspace/docs/adr/0065-usar-clasificador-typesafe-nativo-de-pi.md).
 - [`packages/pi-tool-row-presentation/`](packages/pi-tool-row-presentation/) contiene una extensión para Pion que controla la densidad de tool rows mediante `Settings > Tool rows` y el atajo `Ctrl+Alt+O`, sin comando propio.
-- [`test/`](test/) verifica runtime y contratos del repositorio.
+- [`test/`](test/) verifica contratos transversales del repositorio.
 
 ## Integraciones
 
@@ -35,7 +34,7 @@ referencia de procedencia: Engineering Handbook 1.4
 producto: capacidades A4S + integraciones externas
 ```
 
-La configuración, los artefactos portátiles, los paquetes y el runtime experimental conservan límites explícitos. Los providers externos conservan su propia autoridad; A4S no los reemplaza ni se define por ellos.
+La configuración, los artefactos portátiles y los paquetes conservan límites explícitos. Los providers externos conservan su propia autoridad; A4S no los reemplaza ni se define por ellos.
 
 ## Registros y referencias
 
@@ -50,7 +49,7 @@ Los ADRs y diseños del antiguo repositorio Handbook se preservan como historia 
 
 ## Verificación
 
-Runtime TypeScript:
+Productos TypeScript:
 
 ```sh
 npm ci

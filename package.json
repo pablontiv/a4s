@@ -1,6 +1,6 @@
 {
   "name": "a4s",
-  "version": "0.0.0-e0",
+  "version": "0.0.0",
   "private": true,
   "license": "UNLICENSED",
   "repository": {
@@ -19,12 +19,8 @@
     "node": ">=22.19.0"
   },
   "scripts": {
-    "typecheck": "npm run typecheck:e0 && npm run typecheck --workspace @a4s/pi-context-expert && npm run typecheck --workspace @a4s/pi-tool-row-presentation && npm run typecheck --workspace @a4s/synagent && npm run typecheck --workspace @a4s/synagent-bus && npm run typecheck --workspace @a4s/context-expert",
-    "typecheck:e0": "tsc --noEmit",
-    "test": "npm run test:e0 && npm test --workspace @a4s/pi-context-expert && npm test --workspace @a4s/pi-tool-row-presentation && npm test --workspace @a4s/synagent && npm test --workspace @a4s/synagent-bus && npm test --workspace @a4s/context-expert",
-    "test:e0": "tsx --test test/*.test.ts",
-    "e0": "tsx src/e0/driver.ts",
-    "e0:report": "tsx src/e0/report.ts",
+    "typecheck": "npm run typecheck --workspace @a4s/pi-context-expert && npm run typecheck --workspace @a4s/pi-tool-row-presentation && npm run typecheck --workspace @a4s/synagent && npm run typecheck --workspace @a4s/synagent-bus && npm run typecheck --workspace @a4s/context-expert",
+    "test": "npm test --workspace @a4s/pi-context-expert && npm test --workspace @a4s/pi-tool-row-presentation && npm test --workspace @a4s/synagent && npm test --workspace @a4s/synagent-bus && npm test --workspace @a4s/context-expert",
     "bus": "npm run bus --workspace @a4s/synagent-bus --"
   },
   "devDependencies": {
