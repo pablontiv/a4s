@@ -40,13 +40,13 @@ class ClassifierRegressionTests(unittest.TestCase):
         """
         from collections import Counter
         # Plain session with 'a4s' in directory path - should now be S1 (not S3)
-        result = classify_pi_topology('/home/user/work/a4s/session1', Counter(), spawn_tool_calls=0)
+        result = classify_pi_topology(Counter(), spawn_tool_calls=0)
         self.assertEqual(result, 'S1', 'After DEFECT 1 fix: a4s in path no longer marks as orchestrated')
 
     def test_defect1_directory_token_heuristic_removed_worktrees_is_now_s1(self):
         """DEFECT 1 FIX: directory containing 'worktrees' should NOT mark as orchestrated."""
         from collections import Counter
-        result = classify_pi_topology('/home/.claude/worktrees/session1', Counter(), spawn_tool_calls=0)
+        result = classify_pi_topology(Counter(), spawn_tool_calls=0)
         self.assertEqual(result, 'S1', 'After DEFECT 1 fix: worktrees in path no longer marks as orchestrated')
 
     def test_defect2_intercom_toolcall_now_detected(self):
@@ -57,20 +57,20 @@ class ClassifierRegressionTests(unittest.TestCase):
         """
         from collections import Counter
         # Session with intercom toolCall (detected separately)
-        result = classify_pi_topology('plain-session', Counter(), spawn_tool_calls=0, intercom_toolcalls=1)
+        result = classify_pi_topology(Counter(), spawn_tool_calls=0, intercom_toolcalls=1)
         self.assertEqual(result, 'S3', 'After DEFECT 2 fix: intercom toolCall marks as S3 (orchestrated)')
 
     def test_intercom_as_customtype_still_detected(self):
         """Regression check: intercom as customType='intercom-*' still works."""
         from collections import Counter
         custom_types = Counter({'intercom-orchestrator': 5})
-        result = classify_pi_topology('plain-dir', custom_types, spawn_tool_calls=0)
+        result = classify_pi_topology(custom_types, spawn_tool_calls=0)
         self.assertEqual(result, 'S3', 'intercom customType still marks as S3 (orchestrated)')
 
     def test_both_defects_fixed_s1_remains_s1(self):
         """Regression check: plain session with no signals should still be S1."""
         from collections import Counter
-        result = classify_pi_topology('plain-session', Counter(), spawn_tool_calls=0)
+        result = classify_pi_topology(Counter(), spawn_tool_calls=0)
         self.assertEqual(result, 'S1', 'Plain session with no signals is S1')
 
 
