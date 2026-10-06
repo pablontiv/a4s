@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Iterable
 
 from dataset import SessionRecord
@@ -20,14 +20,9 @@ class CohortSummary:
     cache_write_tokens: int = 0
     total_tokens: int = 0
     git_observable_sessions: int = 0
-    commits: set[str] | None = None
-    prs: set[int] | None = None
-    beads: set[str] | None = None
-
-    def __post_init__(self):
-        self.commits = self.commits or set()
-        self.prs = self.prs or set()
-        self.beads = self.beads or set()
+    commits: set[str] = field(default_factory=set)
+    prs: set[int] = field(default_factory=set)
+    beads: set[str] = field(default_factory=set)
 
     @property
     def unique_shas(self) -> int:
@@ -104,4 +99,35 @@ def render_harness_overview(summary: dict[str, HarnessSummary]) -> str:
         )
     out.append('')
     out.append('winner $/SHA: available only when every harness has native-cost coverage' if complete_coverage else 'winner $/SHA: unavailable (native-cost coverage is partial)')
+    return '\n'.join(out)
+
+
+def render_tokens_breakdown(summary: dict[str, HarnessSummary]) -> str:
+    """Token breakdown by harness, highlighting cacheRead impact on quota.
+
+    cacheRead tokens count against quota even though cost in USD is lower.
+    """
+    out = ['=== TOKEN BREAKDOWN BY HARNESS ===', '']
+    out.append('Note: cacheRead tokens count against quota even though cost in USD is lower.')
+    out.append('')
+    out.append(
+        f"{'harness':10s} {'sessions':>9s} {'input':>12s} {'output':>12s} "
+        f"{'cacheRead':>12s} {'cacheWrite':>12s} {'total':>12s} {'%cached':>8s}"
+    )
+    for harness in ('pi', 'claude', 'codex'):
+        item = summary.get(harness)
+        if not item:
+            continue
+        cached = item.cache_read_tokens + item.cache_write_tokens
+        total = item.total_tokens
+        cached_pct = (cached / total * 100) if total > 0 else 0.0
+        out.append(
+            f"{harness:10s} {item.sessions:>9d} {item.input_tokens:>12d} "
+            f"{item.output_tokens:>12d} {item.cache_read_tokens:>12d} "
+            f"{item.cache_write_tokens:>12d} {total:>12d} {cached_pct:>7.1f}%"
+        )
+    out.append('')
+    out.append('Interpretation: input and output tokens are cache-agnostic.')
+    out.append('                cacheRead is quota-counted volume even if cost-effective.')
+    out.append('                cacheWrite is quota-counted volume even if cost-effective.')
     return '\n'.join(out)

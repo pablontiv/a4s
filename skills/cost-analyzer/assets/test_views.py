@@ -4,7 +4,7 @@ import unittest
 from dataclasses import replace
 
 from dataset import SessionRecord
-from views import CohortSummary, aggregate_harness, aggregate_topology, render_harness_overview, render_topology_overview
+from views import CohortSummary, aggregate_harness, aggregate_topology, render_harness_overview, render_topology_overview, render_tokens_breakdown
 
 
 BASE = SessionRecord(
@@ -51,6 +51,19 @@ class HarnessViewTests(unittest.TestCase):
         self.assertIn('1/1', text)
         self.assertIn('0/1', text)
         self.assertIn('Git', text)
+
+    def test_tokens_breakdown_shows_cache_impact(self):
+        records = [
+            replace(BASE, harness='pi', input_tokens=1000, output_tokens=500, cache_read_tokens=2000, cache_write_tokens=100),
+        ]
+        summary = aggregate_harness(records)
+        text = render_tokens_breakdown(summary)
+        self.assertIn('TOKEN BREAKDOWN', text)
+        self.assertIn('cacheRead', text)
+        self.assertIn('quota', text)
+        self.assertIn('pi', text)
+        self.assertIn('1000', text)
+        self.assertIn('2000', text)
 
 
 if __name__ == '__main__':

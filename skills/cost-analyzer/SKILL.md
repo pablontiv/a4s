@@ -2,39 +2,89 @@
 name: cost-analyzer
 metadata:
   author: pablontiv
-  updated: "2026-09-23"
-description: Analiza un ledger canónico de sesiones Pi, Claude Code y Codex; Pi se clasifica además en S1-S4 y j0k3r/pi-subagents. Use when the user asks about costo/tokens/outcomes por harness, extensión Pi, topología de agentes o subagentes. Requiere `git`, opcionalmente `gh` y `bd`.
+  updated: "2026-10-06"
+description: Analiza un ledger canónico de sesiones Pi, Claude Code y Codex de TODAS LAS SESIONES (sin filtro de proyecto). Clasifica sesiones Pi en 4 formas de topología. Costo/cuota predicho por tokens (input/output/cacheRead/cacheWrite), no por forma. Use when the user asks about costo/tokens/outcomes por harness, topología de sesión, o eficiencia de delegación. Requiere `git`, opcionalmente `gh` y `bd`.
 ---
 
 ## What this skill answers
 
-Dada la pregunta del usuario sobre el gasto de Pi por topología de dispatch, este skill entrega el cuadro clásico S1–S4 **más outcomes reales**:
+El skill analiza sesiones de TODOS LOS PROYECTOS (Pi, Claude Code, Codex) y clasifica las sesiones Pi en 4 formas de topología independientes del costo. El costo/cuota se predice por tokens consumidos, no por forma.
 
-| Escenario | Definición | Qué hace |
-|---|---|---|
-| **S1** | Solo (1 agente, todo) | Ejecuta trabajo. Commitea código. |
-| **S2** | Solo + subagentes | Un agente que abre sub-agentes. Caro. |
-| **S3** | Orquestador + minions (peer, sin subagentes) | Un tab por unidad de trabajo. Barato. |
-| **S4** | Orquestador + minions CON subagentes (anidado) | Orquestador que delega. El más caro. |
+### 4-Form Topology Model (Pi only)
 
-El método base del 18-sept (sesión 2026-09-18 18:24 UTC) está preservado en `assets/quad.py`. El clasificador del skill añade la superficie legacy de Pi descubierta al ampliar a mayo–agosto — **NO improvisar otras señales sin prueba de regresión**.
+| Forma | Definición | Señales | Confianza |
+|-------|-----------|---------|-----------|
+| **Form 1: Solo** | Un agente, sin subagentes, sin coordinación cross-sesión | `subagent-notify == 0`, sin `intercom` | direct (ausencia de señales) |
+| **Form 2: Orch-Hybrid** | Subagentes presentes + trabajo directo del agente (grado mixto) | Delegación presente, `delegation_degree < 0.8` | direct (si señales de delegación) |
+| **Form 3: Delegator-Pure** | Delegación dominante (>= 80% de turnos) | Delegación presente, `delegation_degree >= 0.8` | direct (si señales de delegación) |
+| **Form 4: Cross-Session** | Coordina sesiones separadas (PARCIAL/heurística, requiere `parent_session_id` para prueba) | `intercom` presente + heurística de sesiones distintas | inferred (heurística sin parent_session_id) |
 
-## Method (original + compatibilidad legacy)
+**intercom Flag (Orthogonal)**: Presente en cualquier forma. No determina forma. Campo `has_intercom` aparte.
 
-Proxies de **orquestado**:
-- `customType` empieza con `intercom`
-- `customType` empieza con `fm-` o contiene `firstmate`
-- directorio contiene `a4s`, `bead-hs`, `review`, o `worktrees`
+**Delegation Degree (0.0–1.0)**: `spawn_tool_calls / assistant_turns`. Proxy medible para distinguir Form 2 vs 3.
 
-Proxies de **delegó** (ambas superficies son equivalentes):
-- `customType == 'subagent-notify'` — formato actual
-- bloque `message.content[]` con `type='toolCall'` y `name in {'subagent', 'subagent_run'}` — formato legacy, dominante en agosto
+### Legacy S1-S4 Compatibility
 
-Costos: `usage.cost.total` por cada `message`/`compaction` en el JSONL.
-Tokens: `usage.totalTokens` por cada `message`/`compaction`.
-Filtro: `os.path.getmtime(p)` del archivo, NO timestamp interno.
+El skill mantiene compatible la nomenclatura S1-S4 para reportes legacy:
+- S1 ↔ Form 1 (Solo)
+- S2 ↔ Form 2 (Orch-Hybrid con bajo grado)
+- S3 ↔ Form 2 (Orch-Hybrid con alto grado) o Form 3 (Delegator-Pure)
+- S4 ↔ Form 4 (Cross-Session)
 
-**Crítico**: Pi tiene dos serializaciones: `custom`/`custom_message` con `customType` y tool calls embebidos en `message.content[]`. Buscar `obj.type == 'tool'` retorna **cero** hits. Ignorar el tool call legacy `subagent`/`subagent_run` clasifica falsamente sesiones S2 como S1 y sesiones S4 como S3; agosto quedaba falsamente como S2=0.
+**Cambios en v2 (2026-10-06)**:
+- Quitó heurístico de directorio (a4s, bead-hs, review, worktrees) — DEFECT 1
+- Añadió detección de `intercom` como `toolCall` — DEFECT 2
+- Añadió vista de tokens con desglose de cacheRead — DEFECT 3
+- Implementó 4-form model con degree-based distinction — DEFECT 4
+- Expandió alcance a TODAS LAS SESIONES (quitó filtro de a4s)
+
+El método base del 18-sept está preservado en `assets/quad.py`. Classifier añade superficie legacy de agosto — **NO improvisar otras señales sin prueba de regresión**.
+
+## Method (4-Form + Token-Based Cost)
+
+### Session Discovery (Scope = ALL SESSIONS)
+
+Busca recursivamente JSONL en todas las raíces (sin filtro de proyecto):
+- Pi: `~/.pi/agent/sessions/**/*.jsonl`
+- Claude: `~/.claude/projects/**/*.jsonl`
+- Codex: `~/.codex/**/*.jsonl`
+
+Filtro por mtime del archivo: `os.path.getmtime(path)`, NO timestamp interno.
+
+**Cambio**: Antes filtraba a4s. Ahora analiza TODAS LAS SESIONES.
+
+### Form Classification Signals (Pi only)
+
+**Delegación** (subagent spawning):
+- `customType == 'subagent-notify'` (formato actual)
+- `message.content[]` con `type='toolCall'` y `name in {'subagent', 'subagent_run'}` (legacy, agosto)
+
+**Coordinación** (intercom/fm):
+- `customType` comienza con `intercom` (actual)
+- `message.content[]` con `type='toolCall'` y `name == 'intercom'` (legacy)
+- `customType` comienza con `fm-` o contiene `firstmate`
+
+**Grado de Delegación** (`delegation_degree`):
+- Ratio: `spawn_tool_calls / assistant_turns` (0.0–1.0)
+- Umbral Form 2 vs 3: 0.8 (>= 80% delegación = Form 3, < 80% = Form 2)
+
+**Nota**: Quitó heurístico de directorio (a4s, bead-hs, review, worktrees). No marca sesiones como orquestadas por ruta.
+
+### Cost Model = TOKENS (No by Form)
+
+**Métrica principal**: Tokens consumidos por sesión (no costo por forma ni $/sesión por topología):
+
+```
+Quota consumed = ∑(input_tokens + output_tokens + cache_read_tokens + cache_write_tokens)
+```
+
+Desglose por harness y modelo (ver `render_tokens_breakdown()` view).
+
+**cacheRead**: Cuenta contra cuota aunque costo en USD sea menor. Campo ortogonal en resultado.
+
+**Costo nativo** (Pi only): `usage.cost.total` para referencia histórica, pero NO es proxy de cuota. Usar tokens para predicción.
+
+**Crítico**: Pi tiene dos serializaciones: `custom`/`custom_message` con `customType` y tool calls en `message.content[]`. Buscar `obj.type == 'tool'` retorna **cero** hits. Ignorar legacy `subagent`/`subagent_run` clasifica falsamente.
 
 ## Outcomes reales (opcional pero recomendado)
 
@@ -109,9 +159,13 @@ Divide por el cutover verificado `2026-09-04T04:43:09Z`: sesiones antes = `pi-su
 
 ## Hard Rules
 
-- **Nunca improvisar clasificador**. El método base del 18-sept y su compatibilidad legacy están en `quad.py`. Si necesitas modificarlo, añade primero una prueba de regresión (`assets/test_quad.py`) y compáralo contra un rango conocido.
+- **Nunca improvisar clasificador**. El método de 4 formas está en `dataset.py` (functions: `classify_pi_form`, `calculate_delegation_degree`). Si necesitas modificarlo, añade primero una prueba de regresión (`assets/test_quad.py`) contra un rango conocido.
+- **Alcance = TODAS LAS SESIONES**. No filtrar por proyecto ni por directorio. Busca recursivamente en todas las raíces (Pi, Claude, Codex).
 - **Filtrar por mtime**, no por timestamp interno. Sesiones antiguas reabriertas/migradas después del cutoff SÍ cuentan.
 - **El filtro mtime es la ÚNICA fuente de rango válida**. No usar el timestamp del primer mensaje.
+- **Costo/Cuota = TOKENS, no Form**. Métrica: ∑(input + output + cacheRead + cacheWrite) por sesión. Usar `render_tokens_breakdown()` view, no $/form.
+- **intercom es ORTHOGONAL**. Presente en cualquier forma. Campo `has_intercom` independiente de `form`.
+- **delegation_degree para distinguir Form 2 vs 3**. Umbral: 0.8 (>= 80% = Form 3 Delegator-Pure, < 80% = Form 2 Orch-Hybrid).
 - **Reportar SIEMPRE el rango de fechas en el cuadro** (incluido en el header).
 
 ## Interpretation guide

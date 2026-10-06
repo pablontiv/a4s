@@ -256,9 +256,9 @@ def compute_outcome_for_session(jsonl_path: str, with_prs: bool = True, with_bea
             if pr and pr.get('number') not in prs_seen:
                 prs_seen[pr['number']] = pr
 
-    # 3. Beads cerradas (solo si el cwd parece un worktree a4s)
+    # 3. Beads cerradas (si el cwd es un worktree válido)
     beads = []
-    if with_beads and cwd and 'a4s' in cwd:
+    if with_beads and cwd:
         beads = _bd_closed_in_range(cwd, t1, t2)
 
     # 4. Subagent-notify y fan-out
