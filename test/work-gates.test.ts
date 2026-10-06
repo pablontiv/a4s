@@ -10,11 +10,13 @@ import test from "node:test";
 import workGateLiveProbe, {
   applyScenarioAction,
   assertSimulatedToolSurface,
+  attestSkillExpansion,
   conditions,
   effects,
   evaluateWorkGate,
   firstBlockingCondition,
   initializeScenarioState,
+  normalizeSkillContentForExpansion,
   redactString,
   sanitize,
   WorkGateProbe,
@@ -43,6 +45,7 @@ import {
   safeOutputRecord,
   summarizeScenarioTrace,
   usage,
+  validateLoadedInputAttestation,
   validateResumeResults,
   validateScenarioOutcome,
   verifyPreparedRun,
@@ -67,6 +70,8 @@ interface Scenario {
 }
 
 const fixtureText = readFileSync(new URL("./fixtures/work-gate-scenarios.json", import.meta.url), "utf8");
+const policyText = readFileSync(new URL("../AGENTS.md", import.meta.url), "utf8");
+const skillText = readFileSync(new URL("../skills/work-lifecycle/SKILL.md", import.meta.url), "utf8");
 const scenarios = parseScenarioManifest(fixtureText) as Scenario[];
 
 function completeResult(
@@ -1013,6 +1018,112 @@ test("temporary run and campaign directories are removed for every outcome", asy
     await assert.rejects(access(campaignRoot));
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("policy and skill require the exact canonical condition in an explicit block", () => {
+  for (const source of [policyText, skillText]) {
+    assert.match(source, /bloqueo explícito/);
+    assert.match(source, /identificador canónico exacto|identificador canónico en mayúsculas/);
+    assert.match(source, /No traduzcas, resumas ni renombres ese identificador/);
+    assert.match(source, /condition="CANONICAL_CONDITION"/);
+  }
+});
+
+test("loaded-input attestation compares the complete expanded skill content", () => {
+  const file = Buffer.from([
+    "\uFEFF---\r\n",
+    "name: work-lifecycle\r\n",
+    "description: Test skill\r\n",
+    "---\r\n",
+    "First instruction.\r\n",
+    "Second instruction.\r\n",
+  ].join(""));
+  const filePath = "/tmp/work-lifecycle/SKILL.md";
+  const normalized = "First instruction.\nSecond instruction.";
+  assert.equal(normalizeSkillContentForExpansion(file), normalized);
+  const block = [
+    `<skill name="work-lifecycle" location="${filePath}">`,
+    "References are relative to /tmp/work-lifecycle.",
+    "",
+    normalized,
+    "</skill>",
+  ].join("\n");
+  const expected = {
+    policySha256: "policy",
+    skillSha256: createHash("sha256").update(file).digest("hex"),
+    skill: file,
+  };
+  const validatePrompt = (prompt: string) => validateLoadedInputAttestation({
+    contextFileSha256: ["policy"],
+    skills: [attestSkillExpansion(prompt, { name: "work-lifecycle", filePath, content: file })],
+  }, expected);
+
+  const exact = attestSkillExpansion(`${block}\n\nDo the requested work.`, {
+    name: "work-lifecycle", filePath, content: file,
+  });
+  assert.equal(exact.expansionStatus, "verified");
+  assert.match(exact.expandedContentSha256 ?? "", /^[a-f0-9]{64}$/);
+  assert.deepEqual(Object.keys(exact).sort(), [
+    "expandedContentSha256", "expansionStatus", "fileSha256",
+  ]);
+  assert.equal(JSON.stringify(exact).includes("First instruction"), false);
+  assert.equal("expanded" in exact, false);
+  assert.deepEqual(validatePrompt(`${block}\n\nDo the requested work.`), []);
+
+  const truncated = block.slice(0, -"\n</skill>".length);
+  assert.match(validatePrompt(truncated).join("\n"), /contract could not be verified: truncated/);
+
+  const altered = block.replace("Second instruction.", "Changed instruction.");
+  const alteredAttestation = attestSkillExpansion(altered, {
+    name: "work-lifecycle", filePath, content: file,
+  });
+  assert.equal(alteredAttestation.fileSha256, expected.skillSha256);
+  const alteredViolations = validateLoadedInputAttestation({
+    contextFileSha256: ["policy"],
+    skills: [alteredAttestation],
+  }, expected);
+  assert.match(alteredViolations.join("\n"), /content-mismatch/);
+  assert.match(alteredViolations.join("\n"), /expanded skill content digest/);
+
+  const duplicate = `${block}\n\n${block}`;
+  assert.match(validatePrompt(duplicate).join("\n"), /contract could not be verified: duplicate/);
+
+  const otherSkill = block
+    .replace('name="work-lifecycle"', 'name="other-skill"')
+    .replace('location="/tmp/work-lifecycle/SKILL.md"', 'location="/tmp/other-skill/SKILL.md"')
+    .replace("relative to /tmp/work-lifecycle.", "relative to /tmp/other-skill.");
+  assert.match(validatePrompt(otherSkill).join("\n"), /contract could not be verified: wrong-skill/);
+
+  const changedContract = block.replace("References are relative to", "Skill files are relative to");
+  assert.match(validatePrompt(changedContract).join("\n"), /contract could not be verified: contract-mismatch/);
+
+  for (const version of ["Pion runtime-a", "Pion runtime-b"]) {
+    const campaign = { ...expected, runtime: { version } };
+    assert.deepEqual(validateLoadedInputAttestation({
+      contextFileSha256: ["policy"],
+      skills: [exact],
+    }, campaign), []);
+  }
+});
+
+test("loaded-input attestation fails closed for missing policy or skill evidence", () => {
+  const file = Buffer.from("instruction\n");
+  const expected = {
+    policySha256: "policy",
+    skillSha256: createHash("sha256").update(file).digest("hex"),
+    skill: file,
+  };
+  assert.deepEqual(validateLoadedInputAttestation(undefined, expected), [
+    "missing policy and skill load attestation",
+  ]);
+  assert.deepEqual(validateLoadedInputAttestation({
+    contextFileSha256: ["other"],
+    skills: [],
+  }, expected), [
+    "loaded policy digest does not match the campaign snapshot",
+    "loaded skill set does not contain exactly one skill",
+    "work-lifecycle skill load attestation is missing",
+  ]);
 });
 
 test("Pion argv fixes the model, disables builtin tools, and loads only the probe extension", () => {

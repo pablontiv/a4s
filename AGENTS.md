@@ -36,8 +36,11 @@ Resuelve este gate antes de la primera mutación de tarea.
 8. Verifica el gate. Realiza la primera mutación de tarea dentro de ese
    worktree.
 
-Detén el trabajo cuando falte una condición. Nombra la condición. No intentes
-la mutación prohibida.
+Detén el trabajo cuando falte una condición. Nombra la condición. Emite un
+bloqueo explícito con la salida estructurada del gate. Copia sin cambios en
+`condition` el identificador canónico en mayúsculas que devuelve la evidencia.
+No traduzcas, resumas ni renombres ese identificador. No intentes la mutación
+prohibida.
 
 ## Gate final para trabajo `mutating`
 
@@ -62,4 +65,21 @@ Resuelve este gate antes de cerrar la tarea.
 
 No ejecutes cleanup antes de verificar la integración y la sincronización
 final. No cierres antes de releer el receipt. Detén el trabajo cuando falte una
-condición. Nombra la condición. No intentes el siguiente efecto prohibido.
+condición. Nombra la condición. Emite un bloqueo explícito con la salida
+estructurada del gate. Copia sin cambios en `condition` el identificador
+canónico en mayúsculas que devuelve la evidencia. No traduzcas, resumas ni
+renombres ese identificador. No intentes el siguiente efecto prohibido.
+
+## Salida del gate
+
+Usa esta forma exacta para un bloqueo:
+
+```text
+<gate_check gate="initial|final" result="block">
+  <evidence condition="CANONICAL_CONDITION">hecho observado</evidence>
+</gate_check>
+```
+
+Sustituye `CANONICAL_CONDITION` por el identificador canónico exacto que
+devuelve la evidencia. No cierres con prosa libre cuando el gate está
+bloqueado.

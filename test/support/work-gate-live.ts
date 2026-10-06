@@ -18,11 +18,13 @@ import { createJsonlLineReader } from "../../packages/pi-context-expert/src/rpc-
 import {
   effects,
   evaluateWorkGate,
+  normalizeSkillContentForExpansion,
   redactString,
   sanitize,
   type EffectName,
   type GateName,
   type GateSnapshot,
+  type LoadedInputAttestation,
   type OracleResult,
   type SemanticEvent,
   type SessionOutcome,
@@ -122,6 +124,7 @@ interface ProbeRecord {
   event?: unknown;
   sequence?: unknown;
   semanticEvents?: unknown;
+  inputAttestation?: unknown;
 }
 
 export interface PersistedOracleResult extends OracleResult {
@@ -995,6 +998,62 @@ async function readProbeEvents(path: string): Promise<TaggedSemanticEvent[]> {
   return tagged;
 }
 
+const SKILL_EXPANSION_STATUSES = new Set([
+  "verified", "missing", "truncated", "content-mismatch", "duplicate", "wrong-skill", "contract-mismatch",
+]);
+
+function isLoadedInputAttestation(value: unknown): value is LoadedInputAttestation {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const candidate = value as Partial<LoadedInputAttestation>;
+  return Array.isArray(candidate.contextFileSha256) &&
+    candidate.contextFileSha256.every((digest) => typeof digest === "string") &&
+    Array.isArray(candidate.skills) && candidate.skills.every((skill) =>
+      typeof skill === "object" && skill !== null &&
+      typeof skill.fileSha256 === "string" &&
+      (skill.expandedContentSha256 === null || typeof skill.expandedContentSha256 === "string") &&
+      SKILL_EXPANSION_STATUSES.has(skill.expansionStatus)
+    );
+}
+
+async function readLoadedInputAttestation(path: string): Promise<LoadedInputAttestation | undefined> {
+  const content = await readFile(path, "utf8");
+  for (const line of content.split("\n").reverse()) {
+    const record = parseRecord(line) as ProbeRecord | undefined;
+    if (record && isLoadedInputAttestation(record.inputAttestation)) return record.inputAttestation;
+  }
+  return undefined;
+}
+
+export function validateLoadedInputAttestation(
+  attestation: LoadedInputAttestation | undefined,
+  expected: Pick<CampaignSnapshot, "policySha256" | "skillSha256" | "skill">,
+): string[] {
+  if (!attestation) return ["missing policy and skill load attestation"];
+  const violations: string[] = [];
+  if (!attestation.contextFileSha256.includes(expected.policySha256)) {
+    violations.push("loaded policy digest does not match the campaign snapshot");
+  }
+  if (attestation.skills.length !== 1) {
+    violations.push("loaded skill set does not contain exactly one skill");
+  }
+  const skill = attestation.skills[0];
+  if (!skill) {
+    violations.push("work-lifecycle skill load attestation is missing");
+    return violations;
+  }
+  if (skill.fileSha256 !== expected.skillSha256) {
+    violations.push("loaded skill file digest does not match the campaign snapshot");
+  }
+  if (skill.expansionStatus !== "verified") {
+    violations.push(`Pion skill expansion contract could not be verified: ${skill.expansionStatus}`);
+  }
+  const expectedExpandedSha256 = sha256(normalizeSkillContentForExpansion(expected.skill));
+  if (skill.expandedContentSha256 !== expectedExpandedSha256) {
+    violations.push("expanded skill content digest does not match the campaign snapshot");
+  }
+  return violations;
+}
+
 export function evaluateTrace(
   scenario: Scenario | GitScenario,
   tagged: readonly TaggedSemanticEvent[],
@@ -1215,6 +1274,11 @@ async function runOne(
       }
       infrastructureError = capture.infrastructureError === null ? null : redactString(capture.infrastructureError);
       tagged = await readProbeEvents(prepared.eventLog);
+      const inputViolations = validateLoadedInputAttestation(
+        await readLoadedInputAttestation(prepared.eventLog),
+        snapshot,
+      );
+      if (inputViolations.length > 0) throw new CampaignIntegrityError(inputViolations.join("; "));
       await verifyRuntimeDigest(runtime.path, runtime.sha256);
       await verifyPreparedRun(snapshot, prepared);
     } catch (error) {

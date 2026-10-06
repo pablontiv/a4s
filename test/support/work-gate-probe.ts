@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 
@@ -805,14 +806,51 @@ interface ProbeToolDefinition {
   }>;
 }
 
+interface LoadedResource {
+  path?: string;
+  filePath?: string;
+  content?: string;
+  name?: string;
+}
+
 interface LiveExtensionApi {
-  on(event: "message_end" | "session_start", handler: (event: { message?: unknown }) => Promise<void> | void): unknown;
+  on(
+    event: "before_agent_start" | "message_end" | "session_start",
+    handler: (event: {
+      message?: unknown;
+      prompt?: string;
+      systemPromptOptions?: {
+        contextFiles?: LoadedResource[];
+        skills?: LoadedResource[];
+      };
+    }) => Promise<void> | void,
+  ): unknown;
   registerTool(tool: ProbeToolDefinition): void;
   getActiveTools(): string[];
 }
 
+export type SkillExpansionStatus =
+  | "verified"
+  | "missing"
+  | "truncated"
+  | "content-mismatch"
+  | "duplicate"
+  | "wrong-skill"
+  | "contract-mismatch";
+
+export interface LoadedSkillAttestation {
+  fileSha256: string;
+  expandedContentSha256: string | null;
+  expansionStatus: SkillExpansionStatus;
+}
+
+export interface LoadedInputAttestation {
+  contextFileSha256: string[];
+  skills: LoadedSkillAttestation[];
+}
+
 interface ProbeRecord {
-  event: "probe_tool" | "probe_terminal";
+  event: "probe_input" | "probe_tool" | "probe_terminal";
   sequence: number;
   stateRevision: number;
   tool: string;
@@ -820,6 +858,106 @@ interface ProbeRecord {
   stateReadbacks: Record<string, EvidenceStatus>;
   result: Record<string, unknown>;
   semanticEvents: TaggedSemanticEvent[];
+  inputAttestation?: LoadedInputAttestation;
+}
+
+function sha256(value: string | Buffer): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+/** Applies the text normalization that Pion uses before it inserts SKILL.md content. */
+export function normalizeSkillContentForExpansion(value: string | Buffer): string {
+  let normalized = (typeof value === "string" ? value : value.toString("utf8"))
+    .replace(/^\uFEFF/, "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n");
+  if (normalized.startsWith("---")) {
+    const endIndex = normalized.indexOf("\n---", 3);
+    if (endIndex !== -1) normalized = normalized.slice(endIndex + 4).trim();
+  }
+  return normalized.trim();
+}
+
+interface ExpandedSkillBlock {
+  name: string;
+  location: string;
+  baseDir: string;
+  content: string;
+  remainder: string;
+}
+
+function extractExpandedSkillBlock(prompt: string): ExpandedSkillBlock | undefined {
+  const openingEnd = prompt.indexOf("\n");
+  if (openingEnd < 0) return undefined;
+  const opening = prompt.slice(0, openingEnd).match(/^<skill name="([^"]+)" location="([^"]+)">$/);
+  if (!opening) return undefined;
+  const referencesStart = openingEnd + 1;
+  const referencesEnd = prompt.indexOf("\n\n", referencesStart);
+  if (referencesEnd < 0) return undefined;
+  const references = prompt.slice(referencesStart, referencesEnd)
+    .match(/^References are relative to (.+)\.$/);
+  if (!references) return undefined;
+  const contentStart = referencesEnd + 2;
+  const closingStart = prompt.indexOf("\n</skill>", contentStart);
+  if (closingStart < 0) return undefined;
+  const afterClosing = closingStart + "\n</skill>".length;
+  const remainder = prompt.slice(afterClosing);
+  if (remainder !== "" && !remainder.startsWith("\n\n")) return undefined;
+  return {
+    name: opening[1]!,
+    location: opening[2]!,
+    baseDir: references[1]!,
+    content: prompt.slice(contentStart, closingStart),
+    remainder: remainder.slice(2),
+  };
+}
+
+/** Attests the complete expanded skill block without retaining the prompt text. */
+export function attestSkillExpansion(
+  prompt: string,
+  skill: { name: string; filePath: string; content: string | Buffer },
+): LoadedSkillAttestation {
+  const expectedContent = normalizeSkillContentForExpansion(skill.content);
+  const expectedBlock = [
+    `<skill name="${skill.name}" location="${skill.filePath}">`,
+    `References are relative to ${dirname(skill.filePath)}.`,
+    "",
+    expectedContent,
+    "</skill>",
+  ].join("\n");
+  const fileSha256 = sha256(skill.content);
+  const block = extractExpandedSkillBlock(prompt);
+  const exactBoundary = prompt.length === expectedBlock.length || prompt.startsWith(`${expectedBlock}\n\n`);
+  if (prompt.startsWith(expectedBlock) && exactBoundary && block) {
+    const duplicated = /<skill name="[^"]+" location="[^"]+">/.test(block.remainder);
+    return {
+      fileSha256,
+      expandedContentSha256: duplicated ? null : sha256(block.content),
+      expansionStatus: duplicated ? "duplicate" : "verified",
+    };
+  }
+
+  const openings = prompt.match(/<skill name="[^"]+" location="[^"]+">/g) ?? [];
+  if (openings.length > 1) {
+    return { fileSha256, expandedContentSha256: null, expansionStatus: "duplicate" };
+  }
+  if (!block) {
+    const hasExpectedOpening = prompt.startsWith(
+      `<skill name="${skill.name}" location="${skill.filePath}">`,
+    );
+    const status = hasExpectedOpening
+      ? prompt.includes("\n</skill>") ? "contract-mismatch" : "truncated"
+      : openings.length === 0 ? "missing" : "contract-mismatch";
+    return { fileSha256, expandedContentSha256: null, expansionStatus: status };
+  }
+  const expandedContentSha256 = sha256(block.content);
+  if (block.name !== skill.name) {
+    return { fileSha256, expandedContentSha256, expansionStatus: "wrong-skill" };
+  }
+  if (block.location !== skill.filePath || block.baseDir !== dirname(skill.filePath)) {
+    return { fileSha256, expandedContentSha256, expansionStatus: "contract-mismatch" };
+  }
+  return { fileSha256, expandedContentSha256, expansionStatus: "content-mismatch" };
 }
 
 const INITIAL_CONDITIONS = new Set<string>([
@@ -1329,6 +1467,39 @@ export default function workGateLiveProbe(pi: LiveExtensionApi): void {
         ...(status !== "passed" ? { isError: true } : {}),
       };
     },
+  });
+
+  pi.on("before_agent_start", (event) => {
+    const prompt = event.prompt ?? "";
+    const contextFileSha256 = (event.systemPromptOptions?.contextFiles ?? [])
+      .flatMap((resource) => resource.content === undefined ? [] : [sha256(resource.content)])
+      .sort();
+    const skills = (event.systemPromptOptions?.skills ?? []).flatMap((resource) => {
+      const filePath = resource.filePath ?? resource.path;
+      if (!filePath || !resource.name) return [];
+      const attestation = attestSkillExpansion(prompt, {
+        name: resource.name,
+        filePath,
+        content: readFileSync(filePath),
+      });
+      return [{
+        ...attestation,
+        expansionStatus: resource.name === "work-lifecycle"
+          ? attestation.expansionStatus
+          : "wrong-skill" as const,
+      }];
+    }).sort((left, right) => left.fileSha256.localeCompare(right.fileSha256));
+    emit({
+      event: "probe_input",
+      sequence: ++sequence,
+      stateRevision,
+      tool: "input_attestation",
+      args: {},
+      stateReadbacks: stateObject(),
+      result: { ok: true },
+      semanticEvents: [],
+      inputAttestation: { contextFileSha256, skills },
+    });
   });
 
   pi.on("session_start", () => {

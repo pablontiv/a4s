@@ -37,8 +37,11 @@ Antes de una mutación de tarea:
 7. Crea el worktree dedicado. Verifica su ruta, rama y base.
 8. Verifica el gate. Haz la primera mutación dentro del worktree.
 
-Trata `failed` y `unknown` como bloqueos. Nombra la condición que bloquea. No
-intentes el efecto siguiente.
+Trata `failed` y `unknown` como bloqueos. Nombra la condición que bloquea.
+Emite el bloqueo explícito con la salida estructurada del gate. Copia sin
+cambios en `condition` el identificador canónico en mayúsculas que devuelve la
+evidencia. No traduzcas, resumas ni renombres ese identificador. No intentes el
+efecto siguiente.
 
 ## Produce y revisa el candidato
 
@@ -74,8 +77,12 @@ Usa una salida breve:
 
 ```text
 <gate_check gate="initial|final" result="pass|block">
-  <evidence condition="<condition>">hecho observado</evidence>
+  <evidence condition="CANONICAL_CONDITION">hecho observado</evidence>
 </gate_check>
 ```
 
-Usa `result="block"` cuando falte una condición. Detén el avance de ese gate.
+Usa `result="block"` cuando falte una condición. Sustituye
+`CANONICAL_CONDITION` por el identificador canónico exacto que devuelve la
+evidencia, por ejemplo
+`OPERATOR_AGREEMENT_OBSERVED`. Conserva las mayúsculas y los guiones bajos.
+No cierres con prosa libre. Detén el avance de ese gate.
