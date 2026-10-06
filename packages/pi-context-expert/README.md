@@ -2,7 +2,7 @@
 
 Private Pi extension that uses Jev as the semantic authority for deterministic compaction. Evidence is disabled by default; Ladder retrieval and Ladder-backed Evidence are explicit opt-ins.
 
-This release requires [Pion 1.0.0-ports.1](https://github.com/pablontiv/pi/releases/tag/pion-v1.0.0-ports.1) as its exact runtime peer. Legacy Pi module names remain development-only compatibility imports; Pion's managed loader supplies that API at runtime without installing the superseded Pi host.
+This release supports Pi 1.0.3 and Pion 1.0.4. The extension uses the canonical `@earendil-works/pi-coding-agent` API for both hosts.
 
 ## Runtime contract
 
@@ -47,9 +47,13 @@ flat `config` values for `compaction.strategy` (`basic|ladder`),
 `trigger.mode` (`off|hint|auto`), and `evidence.strategy` (`off|ladder`);
 invalid combinations preserve the prior safe configuration.
 
-The installed `pion -e` entrypoint reads the persisted global file
-`~/.pi/agent/pi-context-expert.json` once at startup. The file may contain only
-the same three flat, non-secret mode keys:
+Run `/pi-context-expert-settings` in Pi or Pion to change these settings. The command shows the current Compaction, Trigger, and Evidence values. It also provides reset and cancel actions. The command confirms coupled Ladder changes, automatic Trigger, and reset. A successful change writes the file, reports the complete configuration, and reloads the extension once.
+
+The entry point reads the persisted global file once at startup. It uses
+`$PI_CODING_AGENT_DIR/pi-context-expert.json` when `PI_CODING_AGENT_DIR` is not
+empty. Otherwise, it uses `~/.pi/agent/pi-context-expert.json`. It also reads
+the former fixed path as a fallback when the configured path does not exist.
+The file may contain only the same three flat, non-secret mode keys:
 
 ```json
 {
@@ -59,17 +63,18 @@ the same three flat, non-secret mode keys:
 }
 ```
 
-Create or edit that fixed file, then run `/reload` in an active Pi session or
-restart Pi. Reload replaces the extension runtime and its in-memory Ladder
-projection caches while preserving the session and persisted corpus; no state
-regeneration is required. A request already in flight keeps the prior runtime,
-so verify the change on the next request. A missing file, malformed JSON, a
-non-object value, any unknown field,
-an invalid mode, or an invalid combination fails closed to the complete basic
-safe configuration (`basic`, `hint`, `off`). The extension does not use custom
-Pi `settings.json` keys, session text, credentials, environment variables, or
-a user-selected path as mode configuration. Provider credentials remain
-separate.
+You can edit this JSON format manually. Run `/reload` in an active Pi or Pion
+session after a manual change. You can also restart the host. The settings
+command runs the reload for you. Reload replaces the extension runtime and its
+in-memory Ladder projection caches. It preserves the session and persisted
+corpus. A request that is already active keeps the prior runtime.
+
+The command creates the directory when necessary. It publishes the JSON file
+with an atomic rename and mode `0600`. A write failure leaves the active
+configuration unchanged. A missing file, malformed JSON, non-object value,
+unknown field, invalid mode, or invalid combination fails closed to the
+complete basic configuration (`basic`, `hint`, `off`). The extension does not
+read or write Pi `settings.json`. Provider credentials remain separate.
 
 On `agent_settled`, an enabled Trigger first requires interactive UI, idle
 state, at least 20% use of the active model's context window, no pending

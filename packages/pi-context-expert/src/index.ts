@@ -1,16 +1,21 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { loadGlobalCompactionConfiguration } from "./config.ts";
 import { registerPiContextExpert } from "./extension.ts";
+import { registerPiContextExpertSettingsCommand } from "./settings-command.ts";
 
 export {
   BASIC_COMPACTION_CONFIG,
   configurationFromGlobalFile,
+  flatConfiguration,
   globalCompactionConfigPath,
   isLadderCompaction,
   isLadderEvidence,
+  legacyGlobalCompactionConfigPath,
   loadGlobalCompactionConfiguration,
   PI_CONTEXT_EXPERT_GLOBAL_CONFIG_PATH,
   resolveCompactionConfig,
+  serializeGlobalCompactionConfiguration,
+  writeGlobalCompactionConfiguration,
 } from "./config.ts";
 export {
   collectCorpus,
@@ -191,8 +196,16 @@ export {
   RULE_SIGNAL_ENTRY_TYPE,
   StoredEntryValidationError,
 } from "./storage.ts";
+export {
+  PI_CONTEXT_EXPERT_SETTINGS_COMMAND,
+  registerPiContextExpertSettingsCommand,
+  runPiContextExpertSettingsCommand,
+  type PiContextExpertSettingsCommandOptions,
+} from "./settings-command.ts";
 export * from "./types.ts";
 
 export default function piContextExpertExtension(pi: ExtensionAPI): void {
-  registerPiContextExpert(pi, { config: loadGlobalCompactionConfiguration() });
+  const config = loadGlobalCompactionConfiguration();
+  registerPiContextExpert(pi, { config });
+  registerPiContextExpertSettingsCommand(pi, { initialConfiguration: config });
 }
