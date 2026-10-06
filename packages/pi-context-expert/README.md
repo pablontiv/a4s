@@ -23,6 +23,22 @@ This release requires [Pion 1.0.0-ports.1](https://github.com/pablontiv/pi/relea
 - The extension does not read, write, or replace gentle-engram entries.
 - With `compaction.strategy=ladder`, `context_with_system` derives a concrete sanitized user query from the pending request. Large branch corpora are first reduced by a deterministic lexical-plus-recency shortlist capped at 48 chunks and 20,000 estimated state tokens. The shortlist preserves durable append chronology across compaction attempts and rejects interleaved attempts rather than inventing an order. In one request, Jev classifies every candidate as `current`, `superseded`, `historical`, or `irrelevant` after checking explicit later-source indexes; ordinary retrieval deterministically hides superseded, irrelevant, or insufficiently confident evidence and renders accepted current or query-requested historical evidence in full. The validated result is reused from a bounded session-local cache keyed by the full corpus and query digests, so every model request in the same turn receives the identical projection without another Jev call. It validates complete candidate coverage, ids, spans, and both candidate and full-corpus consistency before rendering; the renderer still supports validated bounded source spans, and corpus entries are never changed. The request-local projection is a hidden custom message immediately after the latest user message, leaving Pi's leading system prompt and earlier cacheable transcript unchanged. Rendered sources carry explicit boundaries, are ordered oldest to newest, state that later sources supersede conflicting earlier sources, and warn that mutable repository state requires current-checkout verification. A successful non-empty-corpus evaluation appends a content-free projection receipt with cache status, full-corpus/query/projection digests, source/candidate/selected chunk counts, shortlist strategy, estimated state tokens, and rendered status. A failed evaluation is cached for the same corpus/query pair and appends one deduplicated content-free failure receipt containing only stage, category, digests, and counts. Any missing query or projection failure returns Pi's original context without additional omission. `basic` does not register this hook or spend Ladder quota.
 
+## Receipts de fallo operativo
+
+Pi guarda cada receipt con `appendEntry()`. El tipo es
+`a4s.pi-context-expert.operational-failure.v1`. El esquema es
+`a4s.operational-failure/v1`.
+
+El receipt cubre fallos observados por callbacks propios en compactación,
+corpus, Evidence, retro y Trigger. Solo contiene `timestamp`, `phase`, `code`,
+`reason`, `willRetry` y el `attemptId` disponible. No contiene texto, rutas,
+entorno, credenciales ni datos del error. La escritura es best-effort. Un fallo
+de escritura no cambia la semántica del flujo.
+
+`session_compact_failed` no identifica la extensión ni el intento. Context
+Expert no atribuye ese evento. Pi o Pion conservan la observabilidad de ese
+fallo terminal.
+
 ## Opt-in Trigger
 
 The default configuration remains `compaction.strategy=basic`,

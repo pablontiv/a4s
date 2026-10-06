@@ -11,6 +11,11 @@ import {
   type EvidenceReceipt,
   type JevClient,
 } from "../src/index.ts";
+import {
+  collectOperationalFailureReceipts,
+  OPERATIONAL_FAILURE_ENTRY_TYPE,
+  parseOperationalFailureReceipt,
+} from "../src/storage.ts";
 import { validJevResponse } from "./fixtures.ts";
 
 function receipt(): EvidenceReceipt {
@@ -56,6 +61,36 @@ test("Evidence receipts validate their idempotency binding and deduplicate stora
   assert.throws(
     () => parseEvidenceReceipt({ ...valid, corpusDigest: stableDigest({ corpus: "other" }) }),
     (error: unknown) => error instanceof StoredEntryValidationError && error.path === "$evidenceReceipt.idempotencyKey",
+  );
+});
+
+test("el receipt de fallo aplica la lista privada de campos", () => {
+  const valid = {
+    schema: "a4s.operational-failure/v1" as const,
+    timestamp: "2026-10-01T20:01:00.000Z",
+    phase: "evidence" as const,
+    code: "storage_failure" as const,
+    attemptId: stableDigest({ attempt: "failure" }),
+    reason: "threshold" as const,
+    willRetry: false,
+  };
+  assert.deepEqual(parseOperationalFailureReceipt(valid), valid);
+  assert.deepEqual(collectOperationalFailureReceipts([{
+    type: "custom",
+    customType: OPERATIONAL_FAILURE_ENTRY_TYPE,
+    data: valid,
+  }]), [valid]);
+  assert.throws(
+    () => parseOperationalFailureReceipt({ ...valid, errorMessage: "private text" }),
+    (error: unknown) => error instanceof StoredEntryValidationError && error.path === "$operationalFailure",
+  );
+  assert.throws(
+    () => parseOperationalFailureReceipt({ ...valid, reason: "private text" }),
+    (error: unknown) => error instanceof StoredEntryValidationError && error.path === "$operationalFailure",
+  );
+  assert.throws(
+    () => parseOperationalFailureReceipt({ ...valid, phase: "session_compact_failed" }),
+    (error: unknown) => error instanceof StoredEntryValidationError && error.path === "$operationalFailure",
   );
 });
 

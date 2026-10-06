@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import * as publicApi from "../src/index.ts";
 import {
   collectCorpus,
   collectEvidenceReceipts,
@@ -21,8 +22,14 @@ import {
   type JevClient,
   type JevQuestion,
   type JevRequest,
+  type RunEvidenceResult,
 } from "../src/index.ts";
+import { runEvidenceWithFailure } from "../src/evidence-pipeline.ts";
 import { validJevResponse } from "./fixtures.ts";
+
+type AssertNever<T extends never> = T;
+type RunEvidenceResultHasNoFailureCode = AssertNever<Extract<keyof RunEvidenceResult, "failureCode">>;
+const runEvidenceResultHasNoFailureCode: RunEvidenceResultHasNoFailureCode[] = [];
 
 class EvidenceJev implements JevClient {
   readonly requests: JevRequest[] = [];
@@ -269,10 +276,59 @@ test("Evidence failure creates no signal and preserves recoverable corpus", asyn
   });
 
   assert.equal(result.status, "failed");
+  assert.equal("failureCode" in result, false);
   assert.deepEqual(result.signals, []);
   assert.equal(collectCorpus(entries).length, chunks.length);
   assert.equal(collectRuleSignalBatches(entries).length, 0);
   assert.equal(collectEvidenceReceipts(entries).length, 0);
+});
+
+test("Evidence clasifica límites de estado y plan como oversized_state", async (t) => {
+  for (const scenario of [
+    { name: "estado", observation: { maxStateTokens: 1, minimumExcerptChars: 48 } },
+    { name: "plan", observation: { maxQuestionsPerRequest: 4 } },
+  ]) {
+    await t.test(scenario.name, async () => {
+      const chunks = corpus();
+      const failureCodes: string[] = [];
+      const result = await runEvidenceWithFailure({
+        config: ENABLED_CONFIG,
+        result: {
+          summary: "summary",
+          firstKeptEntryId: "kept",
+          tokensBefore: 10,
+          details: {
+            schema: "a4s.jev-compaction-details/v1",
+            attemptId: stableDigest({ attempt: scenario.name }),
+            sourceDigest: stableDigest({ source: scenario.name }),
+            jevModel: DEFAULT_JEV_MODEL,
+            createdAt: "2026-09-22T12:00:00.000Z",
+            firstKeptEntryId: "kept",
+            tokensBefore: 10,
+            summary: { digest: stableDigest("summary"), chars: 7, budgetChars: 100, retainedMessages: 1, budgetTruncatedMessages: 0 },
+            scheduler: { maxConcurrency: 1, maxRetries: 0, logicalRequests: 1, attempts: 1, retries: 0, maxObservedConcurrency: 1 },
+            decisions: [],
+            ruleSignalBatches: [],
+          },
+        },
+        reason: "manual",
+        willRetry: false,
+        corpus: chunks,
+        getBranch: () => [],
+        appender: { appendEntry: () => undefined },
+        jev: new EvidenceJev(),
+        observation: scenario.observation,
+      }, (code) => failureCodes.push(code));
+
+      assert.equal(result.status, "failed");
+      assert.deepEqual(failureCodes, ["oversized_state"]);
+    });
+  }
+});
+
+test("Evidence conserva su API pública", () => {
+  assert.deepEqual(runEvidenceResultHasNoFailureCode, []);
+  assert.equal("runEvidenceWithFailure" in publicApi, false);
 });
 
 test("Evidence requires both Ladder strategies", () => {

@@ -23,12 +23,71 @@ import type {
 } from "./types.ts";
 import { isSupportedJevModel } from "./types.ts";
 
+export type OperationalFailurePhase =
+  | "compaction"
+  | "corpus"
+  | "evidence"
+  | "retro"
+  | "trigger";
+
+export type OperationalFailureCode =
+  | "missing_key"
+  | "timeout"
+  | "malformed_response"
+  | "oversized_state"
+  | "api_failure"
+  | "aborted"
+  | "model_unavailable"
+  | "no_signals"
+  | "storage_failure"
+  | "internal_failure";
+
+export type OperationalFailureReason = "manual" | "threshold" | "overflow" | "agent_settled";
+
+/** Datos mínimos de un fallo operativo. No contiene texto de la sesión ni del error. */
+export interface OperationalFailureReceipt {
+  schema: "a4s.operational-failure/v1";
+  timestamp: string;
+  phase: OperationalFailurePhase;
+  code: OperationalFailureCode;
+  attemptId?: string;
+  reason: OperationalFailureReason;
+  willRetry: boolean;
+}
+
 export const RULE_SIGNAL_ENTRY_TYPE = "a4s.pi-context-expert.rule-signals.v2" as const;
 export const RETRO_PENDING_ENTRY_TYPE = "a4s.pi-context-expert.retro-pending.v1" as const;
 export const RULE_PROPOSAL_ENTRY_TYPE = "a4s.pi-context-expert.rule-proposals.v1" as const;
 export const RULE_ACCEPTANCE_ENTRY_TYPE = "a4s.pi-context-expert.rule-acceptance.v1" as const;
 export const CORPUS_ENTRY_TYPE = "a4s.pi-context-expert.corpus.v1" as const;
 export const EVIDENCE_RECEIPT_ENTRY_TYPE = "a4s.pi-context-expert.evidence-receipt.v1" as const;
+export const OPERATIONAL_FAILURE_ENTRY_TYPE = "a4s.pi-context-expert.operational-failure.v1" as const;
+
+const OPERATIONAL_FAILURE_PHASES: readonly OperationalFailurePhase[] = [
+  "compaction",
+  "corpus",
+  "evidence",
+  "retro",
+  "trigger",
+];
+const OPERATIONAL_FAILURE_CODES: readonly OperationalFailureCode[] = [
+  "missing_key",
+  "timeout",
+  "malformed_response",
+  "oversized_state",
+  "api_failure",
+  "aborted",
+  "model_unavailable",
+  "no_signals",
+  "storage_failure",
+  "internal_failure",
+];
+const OPERATIONAL_FAILURE_REASONS: readonly OperationalFailureReason[] = [
+  "manual",
+  "threshold",
+  "overflow",
+  "agent_settled",
+];
 
 const RULE_SCOPE_KINDS: readonly RuleScopeKind[] = ["global", "project", "path", "task"];
 const RULE_CLASSES: readonly RuleClass[] = [
@@ -252,6 +311,47 @@ export function parseEvidenceReceipt(value: unknown): EvidenceReceipt {
     sourceSpans,
     batchDigests,
     signalIds,
+  };
+}
+
+export function collectOperationalFailureReceipts(entries: readonly unknown[]): OperationalFailureReceipt[] {
+  const receipts: OperationalFailureReceipt[] = [];
+  for (const entry of entries) {
+    const record = optionalRecord(entry);
+    if (record?.type !== "custom" || record.customType !== OPERATIONAL_FAILURE_ENTRY_TYPE) continue;
+    try {
+      receipts.push(parseOperationalFailureReceipt(record.data));
+    } catch (error) {
+      if (!(error instanceof StoredEntryValidationError)) throw error;
+    }
+  }
+  return receipts;
+}
+
+export function parseOperationalFailureReceipt(value: unknown): OperationalFailureReceipt {
+  const path = "$operationalFailure";
+  const record = requireRecord(value, path);
+  const keys = ["schema", "timestamp", "phase", "code", "reason", "willRetry"];
+  if (record.attemptId !== undefined) keys.push("attemptId");
+  requireExactKeys(record, keys, path);
+  if (
+    record.schema !== "a4s.operational-failure/v1" ||
+    typeof record.phase !== "string" ||
+    !OPERATIONAL_FAILURE_PHASES.includes(record.phase as OperationalFailurePhase) ||
+    typeof record.code !== "string" ||
+    !OPERATIONAL_FAILURE_CODES.includes(record.code as OperationalFailureCode) ||
+    typeof record.reason !== "string" ||
+    !OPERATIONAL_FAILURE_REASONS.includes(record.reason as OperationalFailureReason) ||
+    typeof record.willRetry !== "boolean"
+  ) fail(path);
+  return {
+    schema: "a4s.operational-failure/v1",
+    timestamp: requireTimestamp(record.timestamp, `${path}.timestamp`),
+    phase: record.phase as OperationalFailurePhase,
+    code: record.code as OperationalFailureCode,
+    ...(record.attemptId === undefined ? {} : { attemptId: requireDigest(record.attemptId, `${path}.attemptId`) }),
+    reason: record.reason as OperationalFailureReason,
+    willRetry: record.willRetry,
   };
 }
 

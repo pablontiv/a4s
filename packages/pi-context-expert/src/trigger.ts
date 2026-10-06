@@ -1,6 +1,14 @@
 import { estimateTokens, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { validateJevResponse } from "./jev.ts";
-import { DEFAULT_JEV_MODEL, type JevClient, type JevRequest, type TriggerDecision, type TriggerMode } from "./types.ts";
+import { DeadlineExceededError, OperationAbortedError } from "./deadline.ts";
+import { JevApiError, JevUnavailableError, JevValidationError, validateJevResponse } from "./jev.ts";
+import type { OperationalFailureCode } from "./storage.ts";
+import {
+  DEFAULT_JEV_MODEL,
+  type JevClient,
+  type JevRequest,
+  type TriggerDecision,
+  type TriggerMode,
+} from "./types.ts";
 
 export interface TriggerInput {
   mode: TriggerMode;
@@ -76,6 +84,13 @@ export function hasConservativeCompactableHistory(
 
 /** Evaluates local safety gates before making a deliberately text-free Jev request. */
 export async function evaluateTrigger(input: TriggerInput): Promise<TriggerDecision> {
+  return evaluateTriggerWithFailure(input);
+}
+
+export async function evaluateTriggerWithFailure(
+  input: TriggerInput,
+  onFailure?: (code: OperationalFailureCode) => void,
+): Promise<TriggerDecision> {
   if (!localTriggerGatesPass(input)) return { action: "none" };
 
   const request: JevRequest = {
@@ -98,13 +113,27 @@ export async function evaluateTrigger(input: TriggerInput): Promise<TriggerDecis
     if (response.answers.compact_now?.type !== "choice" || response.answers.compact_now.choice !== "compact") {
       return { action: "none" };
     }
-  } catch {
+  } catch (error) {
+    try {
+      onFailure?.(classifyTriggerFailure(error));
+    } catch {
+      // El receipt es best-effort. El trigger conserva su salida segura.
+    }
     return { action: "none" };
   }
 
   return input.mode === "auto"
     ? { action: "compact" }
     : { action: "hint", reason: "Jev recommends compaction" };
+}
+
+function classifyTriggerFailure(error: unknown): OperationalFailureCode {
+  if (error instanceof JevUnavailableError) return "missing_key";
+  if (error instanceof DeadlineExceededError) return "timeout";
+  if (error instanceof OperationAbortedError) return "aborted";
+  if (error instanceof JevValidationError) return "malformed_response";
+  if (error instanceof JevApiError) return "api_failure";
+  return "internal_failure";
 }
 
 export function localTriggerGatesPass(input: Omit<TriggerInput, "jevClient" | "signal">): boolean {
