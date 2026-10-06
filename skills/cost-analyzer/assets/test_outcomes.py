@@ -2,6 +2,7 @@
 import os
 import tempfile
 import unittest
+from pathlib import Path
 
 import outcomes  # pyright: ignore[reportMissingImports]
 from dataset import SessionRecord  # pyright: ignore[reportMissingImports]
@@ -39,6 +40,17 @@ class OutcomeContractTests(unittest.TestCase):
     def test_missing_session_file_returns_empty_outcome(self):
         outcome = outcomes.compute_outcome_for_session('/does-not-exist.jsonl', with_prs=False, with_beads=False)
         self.assertEqual(outcome['commit_shas'], [])
+
+    def test_d7_enumerate_worktrees_returns_empty_for_non_repo(self):
+        """D7 FIX: _enumerate_worktrees returns empty list for non-git-repo."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = outcomes._enumerate_worktrees(tmpdir)
+            self.assertEqual(result, [])
+
+    def test_d7_enumerate_worktrees_handles_missing_directory(self):
+        """D7 FIX: _enumerate_worktrees handles missing directory gracefully."""
+        result = outcomes._enumerate_worktrees('/nonexistent/path')
+        self.assertEqual(result, [])
 
 
 if __name__ == '__main__':
