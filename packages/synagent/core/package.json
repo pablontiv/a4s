@@ -7,9 +7,9 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/pablontiv/a4s.git",
-    "directory": "packages/synagent"
+    "directory": "packages/synagent/core"
   },
-  "homepage": "https://github.com/pablontiv/a4s/tree/main/packages/synagent#readme",
+  "homepage": "https://github.com/pablontiv/a4s/tree/main/packages/synagent/core#readme",
   "bugs": {
     "url": "https://github.com/pablontiv/a4s/issues"
   },

@@ -82,9 +82,9 @@ escribe a los canales de protocolo, por lo que conserva sin cambios las líneas
 El mismo directorio es un plugin Herdr instalable desde GitHub:
 
 ```sh
-herdr plugin install pablontiv/a4s/packages/synagent-bus
+herdr plugin install pablontiv/a4s/packages/synagent/bus
 # desarrollo local
-herdr plugin link "$PWD/packages/synagent-bus"
+herdr plugin link "$PWD/packages/synagent/bus"
 herdr plugin action invoke ensure --plugin a4s.synagent-bus
 ```
 
@@ -107,13 +107,16 @@ Al abrir el pane, `ensure` usa una lista permitida. Reenvía `SYNAGENT_PORT`,
 siempre tienen valor. Las demás variables sólo se reenvían cuando están
 definidas. `ensure` no reenvía el entorno completo.
 
-`ensure` falla cerrado si existen varios spaces `Synagent`, si un listener no
-puede atribuirse al pane registrado, o si pane, proceso y listener no pueden
-verificarse conjuntamente. Si el pane registrado sigue presente pero el broker
-terminó, cierra únicamente ese pane de plugin y su tab de un solo pane antes de
-abrir el reemplazo; rehúsa reparar un tab que contenga otros panes. No usa el
-workspace enfocado y no es un supervisor continuo: la reparación ocurre al
-volver a ejecutar la acción o al reiniciar Herdr.
+`ensure` usa la salud del broker como fuente de verdad. Sondea MQTT antes de
+esperar el mutex y vuelve a sondearlo después de adquirirlo. Si el broker
+responde, termina sin abrir otro pane. Si no responde, selecciona o crea el
+único space `Synagent` y abre un pane `bus` nuevo con un cwd estable. Espera que
+MQTT responda y luego verifica el proceso nuevo antes de guardar sus
+identificadores. Ignora con una advertencia el estado previo mal formado o
+incompatible. Después intenta cerrar el pane de plugin registrado anteriormente.
+Esa limpieza es de mejor esfuerzo y nunca bloquea el arranque. No cierra tabs
+ni spaces con comandos nativos. Tampoco cambia el foco ni actúa como supervisor
+continuo. La reconciliación ocurre al ejecutar la acción o al reiniciar Herdr.
 
 ## Límites y seguridad
 

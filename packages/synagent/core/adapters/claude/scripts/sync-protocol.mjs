@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Script que sincroniza protocol.ts en adapter.ts con un banner.
-// Uso: node adapters/claude/scripts/sync-protocol.mjs (desde packages/synagent)
+// Uso: node adapters/claude/scripts/sync-protocol.mjs (desde packages/synagent/core)
 
 import { readFileSync, writeFileSync } from 'fs'
 import { dirname, join } from 'path'
@@ -8,8 +8,8 @@ import { fileURLToPath } from 'url'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
-const BANNER = `// GENERADO — copia de packages/synagent/protocol.ts. NO editar a mano.
-// Regenerar: node adapters/claude/scripts/sync-protocol.mjs (desde packages/synagent).
+const BANNER = `// GENERADO — copia de packages/synagent/core/protocol.ts. NO editar a mano.
+// Regenerar: node adapters/claude/scripts/sync-protocol.mjs (desde packages/synagent/core).
 // El plugin se instala copiándose solo; por eso lleva su propia copia del contrato.`
 
 // Resolver rutas

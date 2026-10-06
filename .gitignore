@@ -58,12 +58,12 @@ packages/synagent/bus/mqtt-db/
 *.gate.lock*
 
 # synagent adapter: deps instaladas por el marketplace (no versionar)
-packages/synagent/adapters/claude/node_modules/
+packages/synagent/core/adapters/claude/node_modules/
 
 # Claude Code: andamiaje de tipos que el engine genera al cargar un plugin
 # (se reescribe en cada carga; no se versiona). Cubre el tsconfig de raíz del
 # plugin y la carpeta de tipos generada, para cualquier adaptador de plugin.
-packages/synagent/adapters/claude/.claude-plugin/types/
-packages/synagent/adapters/claude/tsconfig.json
+packages/synagent/core/adapters/claude/.claude-plugin/types/
+packages/synagent/core/adapters/claude/tsconfig.json
 packages/*/adapters/*/tsconfig.json
 packages/*/adapters/*/.claude-plugin/types/

@@ -8,7 +8,7 @@ y el ADR 0066.
 
 ## Componentes
 
-1. **Bus** (`../synagent-bus/`): paquete instalable separado
+1. **Bus** (`../bus/`): paquete instalable separado
    `@a4s/synagent-bus`, con broker MQTT Aedes, persistencia LevelDB y plugin
    Herdr. Los bridges de Claude viven dentro de su propio plugin.
 2. **Adaptadores** (`adapters/<harness>/`): bordes finos que traducen el API de
@@ -73,14 +73,14 @@ usuario para cada SO, no dentro del checkout. El proceso imprime
 `BROKER READY :<puerto>` cuando listener y LevelDB están realmente listos. El
 broker es una aplicación separada: ningún adaptador lo arranca. Instalación,
 overrides de estado y uso del space Herdr `Synagent`/tab `Bus` se documentan en
-[`../synagent-bus/README.md`](../synagent-bus/README.md).
+[`../bus/README.md`](../bus/README.md).
 
 ## Adaptador de Claude Code
 
 El plugin vive en `adapters/claude/`. Cárgalo en Claude Code con dev-mods o con:
 
 ```sh
-claude --plugin-dir packages/synagent/adapters/claude
+claude --plugin-dir packages/synagent/core/adapters/claude
 ```
 
 - **JALAR (bus → Claude):** spawnea `bridge/bridge-sub.cjs` con dos clientes —
@@ -141,13 +141,13 @@ La extensión vive en `adapters/pi/index.ts` y usa `mqtt.js` directamente, sin
 polling ni subprocesos bridge. Puede cargarse para una sesión con:
 
 ```sh
-pi -e packages/synagent/adapters/pi/index.ts
+pi -e packages/synagent/core/adapters/pi/index.ts
 ```
 
 O instalarse desde el checkout:
 
 ```sh
-pi install ./packages/synagent
+pi install ./packages/synagent/core
 ```
 
 Al iniciar una sesión abre **dos** clientes MQTT: uno durable (`clean: false`,

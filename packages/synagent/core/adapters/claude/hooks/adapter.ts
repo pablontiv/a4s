@@ -1,5 +1,5 @@
-// GENERADO — copia de packages/synagent/protocol.ts. NO editar a mano.
-// Regenerar: node adapters/claude/scripts/sync-protocol.mjs (desde packages/synagent).
+// GENERADO — copia de packages/synagent/core/protocol.ts. NO editar a mano.
+// Regenerar: node adapters/claude/scripts/sync-protocol.mjs (desde packages/synagent/core).
 // El plugin se instala copiándose solo; por eso lleva su propia copia del contrato.
 
 // Contrato canónico de synagent, direccionamiento v1 y CORE host-neutral de
