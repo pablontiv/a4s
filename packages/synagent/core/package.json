@@ -30,11 +30,11 @@
     "mqtt": "5.16.0"
   },
   "peerDependencies": {
-    "@pablontiv/pion": "1.0.0-ports.1",
+    "@earendil-works/pi-coding-agent": ">=0.99.1",
     "typebox": "*"
   },
   "devDependencies": {
-    "@pablontiv/pion": "https://github.com/pablontiv/pi/releases/download/pion-v1.0.0-ports.1/pablontiv-pion-1.0.0-ports.1.tgz",
+    "@earendil-works/pi-coding-agent": ">=0.99.1",
     "aedes": "1.2.0",
     "@types/node": "26.6.1",
     "typebox": "1.3.27",

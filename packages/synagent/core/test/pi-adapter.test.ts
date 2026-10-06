@@ -1,7 +1,7 @@
 import net from 'node:net'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
@@ -34,9 +34,16 @@ type Notification = { message: string; type: 'info' | 'warning' | 'error' | unde
 type Received = { text: string; options?: { deliverAs: 'steer' | 'followUp' } }
 type FakeContext = {
   cwd: string
+  hasUI: boolean
   isIdle(): boolean
+  isProjectTrusted(): boolean
   sessionManager: { getBranch(): unknown[]; getSessionId(): string }
-  ui: { notify(message: string, type?: Notification['type']): void }
+  ui: {
+    confirm(title: string, message: string): Promise<boolean>
+    input(title: string, placeholder?: string): Promise<string | undefined>
+    notify(message: string, type?: Notification['type']): void
+    select(title: string, options: string[]): Promise<string | undefined>
+  }
 }
 
 interface StartedBroker {
@@ -1018,13 +1025,112 @@ test('Pi adapter stays disconnected when its enabled setting is false', async ()
   await harness.shutdown()
 })
 
+test('Pi adapter registers /synagent-settings without registerSetting and persists each scope', async t => {
+  const { broker, server, url } = await startBroker()
+  const harness = createHarness({
+    'a4s.synagent.broker-url': url,
+    'a4s.synagent.project': 'a4s',
+  }, [], 'native-settings')
+  t.after(async () => {
+    await harness.shutdown()
+    await closeServer(server)
+    await closeBroker(broker)
+  })
+
+  await harness.start()
+  await waitFor(() => harness.notifications.some(({ message }) => message.includes('subscribed to')))
+  const initialStarts = harness.notifications.filter(({ message }) => message.includes('Synagent identity')).length
+
+  harness.queueSelections('Global broadcast: true', 'false', 'Default peer: claude', 'Cancel')
+  harness.queueInputs('a4s/New.Peer')
+  await harness.command('synagent-settings', '')
+  await waitFor(() => harness.notifications.filter(({ message }) => message.includes('Synagent identity')).length > initialStarts)
+  const afterGlobalEdit = harness.notifications.filter(({ message }) => message.includes('Synagent identity')).length
+  assert.equal(afterGlobalEdit, initialStarts + 1)
+  assert.deepEqual(JSON.parse(readFileSync(harness.globalSettingsPath, 'utf8')), {
+    'broker-url': url,
+    project: 'a4s',
+    global: false,
+    'default-peer': 'a4s/New.Peer',
+  })
+
+  harness.queueSelections('Project: a4s', 'Enter token', 'Cancel')
+  harness.queueInputs('Native.Project')
+  await harness.command('synagent-settings', '')
+  assert.deepEqual(JSON.parse(readFileSync(harness.projectSettingsPath, 'utf8')), {
+    project: 'Native.Project',
+  })
+
+  harness.queueSelections('Reset a setting', 'default-peer', 'Cancel')
+  harness.queueConfirmations(true)
+  await harness.command('synagent-settings', '')
+  assert.equal(JSON.parse(readFileSync(harness.globalSettingsPath, 'utf8'))['default-peer'], undefined)
+})
+
+test('Pi adapter does not restart MQTT for default-peer and keeps /synagent set compatibility', async t => {
+  const { broker, server, url } = await startBroker()
+  const harness = createHarness({
+    'a4s.synagent.broker-url': url,
+    'a4s.synagent.project': 'a4s',
+  }, [], 'set-compatibility')
+  t.after(async () => {
+    await harness.shutdown()
+    await closeServer(server)
+    await closeBroker(broker)
+  })
+
+  await harness.start()
+  await waitFor(() => harness.notifications.some(({ message }) => message.includes('subscribed to')))
+  const starts = harness.notifications.filter(({ message }) => message.includes('Synagent identity')).length
+  await harness.command('synagent', 'set default-peer a4s/Automation.Peer')
+  assert.equal(harness.notifications.filter(({ message }) => message.includes('Synagent identity')).length, starts)
+  assert.equal(JSON.parse(readFileSync(harness.globalSettingsPath, 'utf8'))['default-peer'], 'a4s/Automation.Peer')
+})
+
+test('Pi adapter refuses project persistence for an untrusted project', async () => {
+  const harness = createHarness({
+    'a4s.synagent.enabled': false,
+    'a4s.synagent.project': 'Global.Project',
+  }, [], 'untrusted-settings', undefined, undefined, undefined, false)
+  await harness.start()
+  await harness.command('synagent', 'set project Untrusted.Project')
+  assert.ok(harness.notifications.some(({ message, type }) =>
+    type === 'error' && message.includes('trusted project'),
+  ))
+  assert.equal(existsSync(harness.projectSettingsPath), false)
+  await harness.shutdown()
+})
+
+test('Pi adapter rejects remote broker edits and keeps state after a write failure', async () => {
+  const harness = createHarness({
+    'a4s.synagent.enabled': false,
+    'a4s.synagent.project': 'a4s',
+    'a4s.synagent.default-peer': 'Original.Peer',
+  })
+  await harness.start()
+  await harness.command('synagent', 'set broker-url mqtt://broker.example.com:1883')
+  assert.ok(harness.notifications.some(({ message, type }) =>
+    type === 'error' && message.includes('loopback'),
+  ))
+
+  const errorCount = harness.notifications.filter(({ type }) => type === 'error').length
+  rmSync(harness.agentDir, { recursive: true, force: true })
+  writeFileSync(harness.agentDir, 'blocks directory creation')
+  await harness.command('synagent', 'set default-peer Changed.Peer')
+  await harness.command('synagent', 'status')
+  assert.equal(harness.notifications.filter(({ type }) => type === 'error').length, errorCount + 1)
+  assert.ok(harness.notifications.some(({ message }) => message.includes('peer=Original.Peer')))
+  await harness.shutdown()
+})
+
 function createHarness(
   overrides: Record<string, unknown>,
   initialEntries: Array<{ type: 'custom'; customType: string; data: Record<string, string> }> = [],
   sessionId = `session-${Math.random().toString(36).slice(2)}`,
   deliveryStartTimeoutMs?: number,
-  cwd = process.cwd(),
+  cwd?: string,
   diagnostics?: SynagentPiOptions['diagnostics'],
+  trusted = true,
 ) {
   const events = new Map<EventName, Handler>()
   const commands = new Map<string, Command>()
@@ -1034,41 +1140,36 @@ function createHarness(
   const entries = initialEntries.map(entry => ({ ...entry, data: { ...entry.data } }))
   const ownedDiagnosticsRoot = diagnostics ? undefined : mkdtempSync(join(tmpdir(), 'synagent-pi-test-log-'))
   const effectiveDiagnostics = diagnostics ?? { env: { A4S_STATE_ROOT: ownedDiagnosticsRoot } }
-  const settings = new Map<string, {
-    value: unknown
-    listeners: Set<(value: unknown) => void>
-  }>()
+  const agentDir = mkdtempSync(join(tmpdir(), 'synagent-pi-agent-'))
+  const ownedCwd = cwd ? undefined : mkdtempSync(join(tmpdir(), 'synagent-pi-cwd-'))
+  const effectiveCwd = cwd ?? ownedCwd!
+  const globalSettingsPath = join(agentDir, 'synagent.json')
+  const initialSettings = Object.fromEntries(Object.entries(overrides).map(([key, value]) => [
+    key.replace(/^a4s\.synagent\./, ''),
+    value,
+  ]))
+  writeFileSync(globalSettingsPath, `${JSON.stringify(initialSettings, null, 2)}\n`, { mode: 0o600 })
+  const selections: string[] = []
+  const inputs: Array<string | undefined> = []
+  const confirmations: boolean[] = []
   let idle = true
   let failDelivery = false
   let currentSessionId = sessionId
 
   const createContext = (): FakeContext => ({
-    cwd,
+    cwd: effectiveCwd,
+    hasUI: true,
     isIdle: () => idle,
+    isProjectTrusted: () => trusted,
     sessionManager: { getBranch: () => entries, getSessionId: () => currentSessionId },
-    ui: { notify: (message, type) => notifications.push({ message, type }) },
+    ui: {
+      confirm: async () => confirmations.shift() ?? false,
+      input: async () => inputs.shift(),
+      notify: (message, type) => notifications.push({ message, type }),
+      select: async () => selections.shift(),
+    },
   })
   const api = {
-    registerSetting(definition: { key: string; defaultValue: unknown }) {
-      const state = {
-        value: Object.hasOwn(overrides, definition.key) ? overrides[definition.key] : definition.defaultValue,
-        listeners: new Set<(value: unknown) => void>(),
-      }
-      settings.set(definition.key, state)
-      return {
-        key: definition.key,
-        get: () => state.value,
-        set(value: unknown) {
-          if (Object.is(value, state.value)) return
-          state.value = value
-          for (const listener of state.listeners) listener(value)
-        },
-        onChange(listener: (value: unknown) => void) {
-          state.listeners.add(listener)
-          return () => state.listeners.delete(listener)
-        },
-      }
-    },
     registerCommand(name: string, command: Command) {
       commands.set(name, command)
     },
@@ -1087,19 +1188,36 @@ function createHarness(
       received.push({ text, ...(options ? { options } : {}) })
     },
   }
-  // Cada harness usa una instancia aislada del adaptador.
   const adapter = createSynagentPi({
     ...(deliveryStartTimeoutMs !== undefined ? { deliveryStartTimeoutMs } : {}),
     diagnostics: effectiveDiagnostics,
   })
   adapter(api as never)
 
+  async function withAgentDir(action: () => void | Promise<void>): Promise<void> {
+    const previous = process.env.PI_CODING_AGENT_DIR
+    process.env.PI_CODING_AGENT_DIR = agentDir
+    try {
+      await action()
+    } finally {
+      if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR
+      else process.env.PI_CODING_AGENT_DIR = previous
+    }
+  }
+
   return {
     notifications,
     received,
     entries,
-    settingKeys: settings.keys(),
+    agentDir,
+    cwd: effectiveCwd,
+    globalSettingsPath,
+    projectSettingsPath: join(effectiveCwd, '.pi', 'synagent.json'),
+    settingKeys: ([] as string[])[Symbol.iterator](),
     toolSchemas: { get: (name: string) => (tools.get(name) as any)?.parameters },
+    queueSelections(...values: string[]) { selections.push(...values) },
+    queueInputs(...values: Array<string | undefined>) { inputs.push(...values) },
+    queueConfirmations(...values: boolean[]) { confirmations.push(...values) },
     get idle() { return idle },
     set idle(value: boolean) { idle = value },
     get failDelivery() { return failDelivery },
@@ -1107,13 +1225,13 @@ function createHarness(
     async start() {
       const handler = events.get('session_start')
       assert.ok(handler)
-      await handler({ type: 'session_start' }, createContext())
+      await withAgentDir(() => handler({ type: 'session_start' }, createContext()))
     },
     async startSession(nextSessionId: string) {
       currentSessionId = nextSessionId
       const handler = events.get('session_start')
       assert.ok(handler)
-      await handler({ type: 'session_start' }, createContext())
+      await withAgentDir(() => handler({ type: 'session_start' }, createContext()))
     },
     async messageStart(text: string) {
       const messageStart = events.get('message_start')
@@ -1143,6 +1261,8 @@ function createHarness(
       assert.ok(handler)
       await handler({ type: 'session_shutdown' }, createContext())
       if (ownedDiagnosticsRoot) rmSync(ownedDiagnosticsRoot, { recursive: true, force: true })
+      rmSync(agentDir, { recursive: true, force: true })
+      if (ownedCwd) rmSync(ownedCwd, { recursive: true, force: true })
     },
     async command(name: string, args: string) {
       const command = commands.get(name)
