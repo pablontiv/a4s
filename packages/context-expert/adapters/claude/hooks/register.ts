@@ -405,6 +405,7 @@ function logTriggerDiagnostic(
 export const register: Register = (on: On, options: PluginOptions) => {
   const configured = resolveHookConfig(options);
   let compacting = false;
+  let triggerRequestActive = false;
   let lastCompactAt = 0;
 
   on('session.compact', async ($, event, next) => {
@@ -442,6 +443,7 @@ export const register: Register = (on: On, options: PluginOptions) => {
     if (
       configured.triggerMode === 'off' ||
       compacting ||
+      triggerRequestActive ||
       event.agentId !== undefined ||
       event.isAborted ||
       event.reason !== 'answer' ||
@@ -463,8 +465,13 @@ export const register: Register = (on: On, options: PluginOptions) => {
 
       const asker = jevAsker(
         async (url, init) => {
-          const response = await $.http.fetch(url, init);
-          return { status: response.status, ok: response.ok, text: response.text };
+          triggerRequestActive = true;
+          try {
+            const response = await $.http.fetch(url, init);
+            return { status: response.status, ok: response.ok, text: response.text };
+          } finally {
+            triggerRequestActive = false;
+          }
         },
         apiKey,
         configured.model,

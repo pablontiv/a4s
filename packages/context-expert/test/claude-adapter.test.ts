@@ -407,3 +407,94 @@ test('claude adapter: el timeout de 2,000 ms abandona el request y conserva next
   ]);
   assert.doesNotMatch(logs.join('\n'), /TIMEOUT_SECRET_CANARY|TIMEOUT_ANSWER_CANARY|state|questions/);
 });
+
+test('claude adapter: mantiene cerrado el gate hasta que termina el fetch pendiente', async () => {
+  const hooks = new Map<string, unknown>();
+  const on = (pattern: string, hook: unknown) => {
+    hooks.set(pattern, hook);
+    return {};
+  };
+  register(on as never, {
+    apiKey: 'PENDING_SECRET_CANARY',
+    triggerMode: 'auto',
+    minimumContextRatio: 0.5,
+  });
+
+  type Response = { status: number; ok: boolean; text: string };
+  let rejectFirst: (error: Error) => void = () => undefined;
+  const firstFetch = new Promise<Response>((_resolve, reject) => {
+    rejectFirst = reject;
+  });
+  const logs: string[] = [];
+  const sleepValues: number[] = [];
+  let fetchCalls = 0;
+  let usageCalls = 0;
+  const host = {
+    ui: { log: (text: string) => logs.push(text), toast: () => undefined },
+    session: {
+      usage: async () => {
+        usageCalls++;
+        return { context: { window: 100_000, tokens: 90_000 }, rateLimits: [] };
+      },
+      messages: async () => fixture(),
+      compact: async () => ({}),
+    },
+    http: {
+      fetch: async () => {
+        fetchCalls++;
+        if (fetchCalls === 1) return firstFetch;
+        return { status: 503, ok: false, text: 'LATER_BODY_CANARY' };
+      },
+    },
+    clock: {
+      sleep: async (ms: number) => {
+        sleepValues.push(ms);
+        if (sleepValues.length > 1) return new Promise<void>(() => undefined);
+      },
+    },
+  };
+  const expected = { text: 'unchanged' };
+  const event = (turnId: string) => ({
+    reason: 'answer',
+    answer: `answer-${turnId}`,
+    isAborted: false,
+    durationMs: 1,
+    turnId,
+  });
+  const turnHook = hooks.get('turn.complete') as (
+    $: typeof host,
+    input: ReturnType<typeof event>,
+    next: (input: ReturnType<typeof event>) => Promise<typeof expected>,
+  ) => Promise<typeof expected>;
+  let nextCalls = 0;
+  const next = async () => {
+    nextCalls++;
+    return expected;
+  };
+
+  assert.equal(await turnHook(host, event('turn-1'), next), expected);
+  assert.equal(fetchCalls, 1);
+  assert.equal(nextCalls, 1);
+
+  assert.equal(await turnHook(host, event('turn-2'), next), expected);
+  assert.equal(fetchCalls, 1);
+  assert.equal(usageCalls, 1);
+  assert.equal(nextCalls, 2);
+
+  rejectFirst(new Error('LATE_FETCH_REJECTION_CANARY'));
+  await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(await turnHook(host, event('turn-3'), next), expected);
+  assert.equal(fetchCalls, 2);
+  assert.equal(usageCalls, 2);
+  assert.equal(nextCalls, 3);
+  assert.deepEqual(sleepValues, [2_000, 2_000]);
+  assert.deepEqual(logs, [
+    '[context-expert] diagnostic phase=trigger_request code=request_failed',
+    '[context-expert] diagnostic phase=trigger_response code=http_status status=503',
+  ]);
+  assert.doesNotMatch(
+    logs.join('\n'),
+    /PENDING_SECRET_CANARY|LATE_FETCH_REJECTION_CANARY|LATER_BODY_CANARY|state|questions/,
+  );
+});
