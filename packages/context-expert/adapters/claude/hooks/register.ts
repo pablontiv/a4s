@@ -30,13 +30,21 @@ import type {
 } from 'claude-code';
 
 import { reductionRatio, resolveOptions } from '../core/compact.js';
-import { buildJevRequest, DEFAULT_MODEL, parseJevResponse } from '../core/request.js';
+import {
+  buildJevRequest,
+  DEFAULT_MODEL,
+  JevRequestError,
+  parseJevResponse,
+  type JevRequestErrorCode,
+} from '../core/request.js';
 import { runCompaction, type HostBinding } from '../core/binding.js';
 import {
   buildTriggerState,
   DEFAULT_MINIMUM_CONTEXT_RATIO,
   evaluateTrigger,
   triggerFloorPasses,
+  type TriggerDiagnostic,
+  type TriggerDiagnosticCode,
 } from '../core/trigger.js';
 import type {
   CompactOptions,
@@ -299,6 +307,82 @@ function notify(
   $.ui.toast(`context-expert: ${text}`, { timeoutMs: 15_000 });
 }
 
+function logCompactResult(
+  $: { ui: { log: (text: string) => void } },
+  result: CompactResult,
+  outcome: 'applied' | 'fallback',
+): void {
+  const { stats } = result;
+  $.ui.log(
+    `[context-expert] event=compact code=compact_result outcome=${outcome}` +
+      ` messages_before=${stats.messagesBefore} messages_after=${stats.messagesAfter}` +
+      ` calls=${stats.calls} kept=${stats.kept}` +
+      ` results_dropped=${stats.resultsDropped} calls_dropped=${stats.callsDropped}`,
+  );
+}
+
+export type DiagnosticCode = TriggerDiagnosticCode | JevRequestErrorCode | 'operation_failed';
+export type DiagnosticPhase = 'compact' | 'trigger_request' | 'trigger_response' | 'trigger_host';
+
+export interface SafeDiagnostic {
+  code: DiagnosticCode;
+  phase: DiagnosticPhase;
+  status?: number;
+}
+
+const DIAGNOSTIC_CODES: readonly DiagnosticCode[] = [
+  'http_status',
+  'invalid_json',
+  'invalid_response',
+  'request_failed',
+  'invalid_answer',
+  'operation_failed',
+];
+const DIAGNOSTIC_PHASES: readonly DiagnosticPhase[] = [
+  'compact',
+  'trigger_request',
+  'trigger_response',
+  'trigger_host',
+];
+
+/** Registra solo campos con valores permitidos. */
+export function logDiagnostic(
+  $: { ui: { log: (text: string) => void } },
+  diagnostic: SafeDiagnostic,
+): void {
+  const code = DIAGNOSTIC_CODES.includes(diagnostic.code) ? diagnostic.code : 'operation_failed';
+  const phase = DIAGNOSTIC_PHASES.includes(diagnostic.phase) ? diagnostic.phase : 'trigger_host';
+  const status =
+    Number.isInteger(diagnostic.status) && diagnostic.status! >= 100 && diagnostic.status! <= 599
+      ? ` status=${diagnostic.status}`
+      : '';
+  $.ui.log(`[context-expert] diagnostic phase=${phase} code=${code}${status}`);
+}
+
+/** Convierte cualquier excepción en un diagnóstico sin contenido externo. */
+export function logSafeError(
+  $: { ui: { log: (text: string) => void } },
+  phase: DiagnosticPhase,
+  error: unknown,
+): void {
+  if (error instanceof JevRequestError) {
+    logDiagnostic($, { code: error.code, phase, status: error.status });
+    return;
+  }
+  logDiagnostic($, { code: 'operation_failed', phase });
+}
+
+function logTriggerDiagnostic(
+  $: { ui: { log: (text: string) => void } },
+  diagnostic: TriggerDiagnostic,
+): void {
+  logDiagnostic($, {
+    code: diagnostic.code,
+    phase: diagnostic.phase === 'request' ? 'trigger_request' : 'trigger_response',
+    ...(diagnostic.status === undefined ? {} : { status: diagnostic.status }),
+  });
+}
+
 export const register: Register = (on: On, options: PluginOptions) => {
   const configured = resolveHookConfig(options);
   let compacting = false;
@@ -311,15 +395,23 @@ export const register: Register = (on: On, options: PluginOptions) => {
         const response = await $.http.fetch(url, init);
         return { status: response.status, ok: response.ok, text: response.text };
       });
-      for (const line of decisionLogLines(result)) $.ui.log(`[context-expert] ${line}`);
       if (reductionRatio(result) < config.minReductionRatio) {
-        notify($, `fallback to built-in summary (below ${percent(config.minReductionRatio)} minimum: ${summarize(result)})`);
+        logCompactResult($, result, 'fallback');
+        $.ui.toast(
+          `context-expert: fallback to built-in summary (below ${percent(config.minReductionRatio)} minimum: ${summarize(result)})`,
+          { timeoutMs: 15_000 },
+        );
         return next(event);
       }
-      notify($, `kept ${messages.length}/${event.messages.length} messages, no summary (${summarize(result)})`);
+      logCompactResult($, result, 'applied');
+      $.ui.toast(
+        `context-expert: kept ${messages.length}/${event.messages.length} messages, no summary (${summarize(result)})`,
+        { timeoutMs: 15_000 },
+      );
       return { messages };
     } catch (error) {
-      notify($, `fallback to built-in summary (${error instanceof Error ? error.message : String(error)})`);
+      logSafeError($, 'compact', error);
+      $.ui.toast('context-expert: fallback to built-in summary', { timeoutMs: 15_000 });
       return next(event);
     }
   });
@@ -351,10 +443,18 @@ export const register: Register = (on: On, options: PluginOptions) => {
         apiKey,
         configured.model,
       );
+      let triggerDiagnostic: TriggerDiagnostic | undefined;
       const decision = await evaluateTrigger(
         asker,
         buildTriggerState(contextTokens, contextWindow, configured.minimumContextRatio),
+        (diagnostic) => {
+          triggerDiagnostic = diagnostic;
+        },
       );
+      if (triggerDiagnostic) {
+        logTriggerDiagnostic($, triggerDiagnostic);
+        return next(event);
+      }
       if (decision !== 'compact') return next(event);
 
       if (configured.triggerMode === 'hint') {
@@ -366,7 +466,7 @@ export const register: Register = (on: On, options: PluginOptions) => {
       lastCompactAt = Date.now();
       await $.session.compact();
     } catch (error) {
-      $.ui.log(`[context-expert] auto-compact skipped (${error instanceof Error ? error.message : String(error)})`);
+      logSafeError($, 'trigger_host', error);
     } finally {
       compacting = false;
     }

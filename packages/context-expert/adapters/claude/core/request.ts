@@ -9,6 +9,21 @@ import type { JevAnswer, JevQuestions, JevResponse, JevState } from './types.js'
 export const SYSTEM_ONE_URL = 'https://api.typesafe.ai/v1/systemone';
 export const DEFAULT_MODEL = 'jev-latest';
 
+export type JevRequestErrorCode = 'http_status' | 'invalid_json' | 'invalid_response';
+
+/** Expone solo datos seguros sobre un fallo de respuesta HTTP. */
+export class JevRequestError extends Error {
+  readonly code: JevRequestErrorCode;
+  readonly status: number | undefined;
+
+  constructor(code: JevRequestErrorCode, status: number) {
+    super('Jev request failed');
+    this.name = 'JevRequestError';
+    this.code = code;
+    this.status = Number.isInteger(status) && status >= 100 && status <= 599 ? status : undefined;
+  }
+}
+
 export interface JevRequest {
   url: string;
   method: 'POST';
@@ -41,20 +56,19 @@ export function buildJevRequest(
   };
 }
 
-/** Validates a Jev response body; throws on anything but an `answers` object. */
+/** Valida la respuesta sin copiar contenido remoto en el error. */
 export function parseJevResponse(
   status: number,
   ok: boolean,
   text: string,
 ): JevResponse {
-  if (!ok) {
-    throw new Error(`Jev request failed (${status}): ${text.slice(0, 200)}`);
-  }
+  if (!ok) throw new JevRequestError('http_status', status);
+
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
   } catch {
-    throw new Error('Jev returned malformed JSON');
+    throw new JevRequestError('invalid_json', status);
   }
   if (
     parsed === null ||
@@ -63,7 +77,7 @@ export function parseJevResponse(
     parsed.answers === null ||
     typeof parsed.answers !== 'object'
   ) {
-    throw new Error('Jev response is missing answers');
+    throw new JevRequestError('invalid_response', status);
   }
   return parsed as JevResponse;
 }

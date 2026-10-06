@@ -7,7 +7,14 @@ import {
   TRIGGER_QUESTION_NAME,
   triggerFloorPasses,
 } from '../core/index.js';
-import type { JevAsker, JevQuestions, JevResponse, JevState } from '../core/index.js';
+import type {
+  JevAsker,
+  JevQuestions,
+  JevResponse,
+  JevState,
+  TriggerDecision,
+  TriggerDiagnostic,
+} from '../core/index.js';
 
 function askerAnswering(choice: string): { asker: JevAsker; seen: { state?: JevState; questions?: JevQuestions } } {
   const seen: { state?: JevState; questions?: JevQuestions } = {};
@@ -24,11 +31,12 @@ function askerAnswering(choice: string): { asker: JevAsker; seen: { state?: JevS
   return { asker, seen };
 }
 
-test('trigger: Jev choosing "compact" yields compact; "wait" yields wait', async () => {
+test('trigger: conserva la API de decisión por cadena', async () => {
   const state = buildTriggerState(80_000, 100_000, 0.5);
   const { asker: yes, seen } = askerAnswering('compact');
-  assert.equal(await evaluateTrigger(yes, state), 'compact');
-  // The state is text-free: only the ratio shape, never transcript content.
+  const compact: TriggerDecision = await evaluateTrigger(yes, state);
+  assert.equal(compact, 'compact');
+  // El estado omite el contenido del transcript.
   assert.deepEqual(seen.state, {
     schema: 'a4s.compaction-trigger-state/v2',
     contextTokens: 80_000,
@@ -40,13 +48,51 @@ test('trigger: Jev choosing "compact" yields compact; "wait" yields wait', async
   assert.equal(await evaluateTrigger(no, state), 'wait');
 });
 
-test('trigger: a thrown Jev call is fail-safe (wait, never a forced compaction)', async () => {
+test('trigger: un fallo conserva wait y emite un diagnóstico seguro', async () => {
+  const canary = 'REMOTE_TRIGGER_CONTENT';
   const asker: JevAsker = {
     async ask() {
-      throw new Error('network down');
+      throw new Error(canary);
     },
   };
-  assert.equal(await evaluateTrigger(asker, buildTriggerState(90_000, 100_000, 0.5)), 'wait');
+  let diagnostic: TriggerDiagnostic | undefined;
+  const decision = await evaluateTrigger(
+    asker,
+    buildTriggerState(90_000, 100_000, 0.5),
+    (value) => {
+      diagnostic = value;
+    },
+  );
+  assert.equal(decision, 'wait');
+  assert.deepEqual(diagnostic, { code: 'request_failed', phase: 'request' });
+  assert.doesNotMatch(JSON.stringify(diagnostic), new RegExp(canary));
+});
+
+test('trigger: toda respuesta malformada conserva wait y emite invalid_answer', async () => {
+  const responses: unknown[] = [
+    7,
+    null,
+    {},
+    { answers: null },
+    { answers: {} },
+    { answers: { [TRIGGER_QUESTION_NAME]: 'texto' } },
+    { answers: { [TRIGGER_QUESTION_NAME]: { choice: 'otro' } } },
+    { answers: { [TRIGGER_QUESTION_NAME]: { noul: Number.NaN } } },
+  ];
+
+  for (const response of responses) {
+    const asker: JevAsker = { async ask() { return response as never; } };
+    let diagnostic: TriggerDiagnostic | undefined;
+    const decision = await evaluateTrigger(
+      asker,
+      buildTriggerState(90_000, 100_000, 0.5),
+      (value) => {
+        diagnostic = value;
+      },
+    );
+    assert.equal(decision, 'wait');
+    assert.deepEqual(diagnostic, { code: 'invalid_answer', phase: 'response' });
+  }
 });
 
 test('trigger: the local floor gate holds back Jev until the window is full enough', () => {
