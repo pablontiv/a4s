@@ -134,6 +134,7 @@ test('claude adapter: el host registra el fallo del trigger sin contenido extern
     },
     session: {
       usage: async () => ({ context: { window: 100_000, tokens: 90_000 }, rateLimits: [] }),
+      messages: async () => fixture(),
       compact: async () => ({}),
     },
     http: {
@@ -155,4 +156,88 @@ test('claude adapter: el host registra el fallo del trigger sin contenido extern
     '[context-expert] diagnostic phase=trigger_response code=http_status status=503',
   ]);
   assert.doesNotMatch(logs.join('\n'), /REMOTE_HTTP_BODY_CANARY|TOKEN_CANARY|TURN_CONTENT_CANARY/);
+});
+
+test('claude adapter: popula conversación con $.session.messages y excluye system, reasoning e imágenes', async () => {
+  const hooks = new Map<string, unknown>();
+  const on = (pattern: string, hook: unknown) => {
+    hooks.set(pattern, hook);
+    return {};
+  };
+  const apiKey = 'known-api-key-canary';
+  register(on as never, {
+    apiKey,
+    triggerMode: 'auto',
+    minimumContextRatio: 0.5,
+  });
+
+  let requestBody = '';
+  let compactCalls = 0;
+  const transcript = [
+    { role: 'system', text: 'SYSTEM_PROMPT_CANARY', toolUses: [] },
+    { role: 'user', text: `Use ${apiKey} and API_KEY=hidden-value`, toolUses: [], images: ['IMAGE_CANARY'] },
+    {
+      role: 'assistant',
+      text: 'Visible result.',
+      toolUses: [{ tool_use_id: 't1', tool: 'Bash', input: { command: 'echo ok' }, text: 'tool output' }],
+      reasoning: 'REASONING_CANARY',
+    },
+  ];
+  const host = {
+    ui: { log: () => undefined, toast: () => undefined },
+    session: {
+      usage: async () => ({ context: { window: 100_000, tokens: 90_000 }, rateLimits: [] }),
+      messages: async () => transcript,
+      compact: async () => { compactCalls++; return {}; },
+    },
+    http: {
+      fetch: async (_url: string, init?: { body?: string }) => {
+        requestBody = init?.body ?? '';
+        return {
+          status: 200,
+          ok: true,
+          text: JSON.stringify({
+            model: 'jev-test',
+            answers: {
+              done: {
+                type: 'choice',
+                choice: 'not_finished',
+                confidence: 0.9,
+                probabilities: { finished: 0.1, not_finished: 0.9, unclear: 0 },
+              },
+              shape: {
+                type: 'choice',
+                choice: 'coordinating',
+                confidence: 0.9,
+                probabilities: { hands_on: 0.1, coordinating: 0.9, unclear: 0 },
+              },
+            },
+            usage: { input_tokens: 100, output_tokens: 10 },
+          }),
+        };
+      },
+    },
+  };
+  const event = { reason: 'answer', answer: 'answer', durationMs: 1 };
+  const expected = { text: 'unchanged' };
+  const turnHook = hooks.get('turn.complete') as (
+    $: typeof host,
+    input: typeof event,
+    next: (input: typeof event) => Promise<typeof expected>,
+  ) => Promise<typeof expected>;
+
+  assert.equal(await turnHook(host, event, async () => expected), expected);
+  const body = JSON.parse(requestBody) as {
+    state: { schema: string; recent: { role: string; text: string; tools?: unknown[] }[] };
+    questions: Record<string, unknown>;
+  };
+  assert.equal(body.state.schema, 'a4s.compaction-trigger-state/v3');
+  assert.deepEqual(Object.keys(body.questions), ['done', 'shape']);
+  assert.deepEqual(body.state.recent.map((message) => message.role), ['user', 'assistant']);
+  assert.equal(body.state.recent[1]?.tools?.length, 1);
+  assert.doesNotMatch(
+    requestBody,
+    /SYSTEM_PROMPT_CANARY|REASONING_CANARY|IMAGE_CANARY|known-api-key-canary|hidden-value/,
+  );
+  assert.equal(compactCalls, 0);
 });

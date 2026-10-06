@@ -8,6 +8,12 @@ It reuses [`fast-jev-compaction`](https://github.com/tamaratran/fast-jev-compact
 (MIT — see [`NOTICE`](./NOTICE)), restructured into the a4s core + dual-adapter
 shape used by the synagent adapters.
 
+El timing del trigger deriva de
+[`compact-adviser`](https://github.com/kunchenguid/compact-adviser.git), tag
+`compact-adviser-v0.1.12`, commit
+`ef216af7cb639947bb4642fdf063117f12a91fc6`, licencia MIT. El archivo
+[`NOTICE`](./NOTICE) incluye la licencia exacta.
+
 ## Architecture
 
 ```
@@ -53,13 +59,14 @@ in-process only and never logged or written to disk.
 
 ## Auto-compact (the Pi-global analog)
 
-The plugin registers a `turn.complete` trigger that is **decided by Jev**, not a
-fixed percentage: past a local floor (`minimumContextRatio`, default `0.5`) it
-asks Jev — with a text-free state — whether now is the ideal moment to compact,
-and compacts only when Jev chooses `compact`. `triggerMode` (`auto` | `hint` |
-`off`, default `auto`) is the Claude analog of `pi-context-expert`'s
-`trigger.mode` in `~/.pi/agent/pi-context-expert.json`. Set `triggerMode` to
-`off` to disable the trigger and keep only manual `/compact`.
+El plugin registra un trigger `turn.complete` decidido por Jev. El gate local
+usa `minimumContextRatio`, con valor predeterminado `0.5`. Jev recibe las dos
+preguntas `done` y `shape`. El estado `a4s.compaction-trigger-state/v3` incluye
+una conversación reciente sanitizada. Cada resultado de herramienta usa como
+máximo 512 bytes UTF-8. Cada request usa como máximo 32,000 bytes. El score usa
+`finished * (0.5 + 0.5 * hands_on)`. El floor baja de `0.90` a `0.50` entre
+`0.10` y `0.90` de uso. El trigger redondea el floor a tres decimales.
+`triggerMode` acepta `auto`, `hint` u `off`.
 
 ## Verified
 

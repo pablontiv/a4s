@@ -42,6 +42,7 @@ import {
   buildTriggerState,
   DEFAULT_MINIMUM_CONTEXT_RATIO,
   evaluateTrigger,
+  MAX_REQUEST_BYTES,
   triggerFloorPasses,
   type TriggerDiagnostic,
   type TriggerDiagnosticCode,
@@ -124,10 +125,15 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
 }
 
 /** A `JevAsker` over the engine's `$.http.fetch`. */
-export function jevAsker(fetchFn: HookFetch, apiKey: string, model: string): JevAsker {
+export function jevAsker(
+  fetchFn: HookFetch,
+  apiKey: string,
+  model: string,
+  maxBodyBytes?: number,
+): JevAsker {
   return {
     async ask(state, questions) {
-      const request = buildJevRequest({ apiKey, model }, state, questions);
+      const request = buildJevRequest({ apiKey, model, maxBodyBytes }, state, questions);
       const response = await fetchFn(request.url, {
         method: request.method,
         headers: request.headers,
@@ -336,6 +342,7 @@ const DIAGNOSTIC_CODES: readonly DiagnosticCode[] = [
   'invalid_response',
   'request_failed',
   'invalid_answer',
+  'request_too_large',
   'operation_failed',
 ];
 const DIAGNOSTIC_PHASES: readonly DiagnosticPhase[] = [
@@ -442,11 +449,19 @@ export const register: Register = (on: On, options: PluginOptions) => {
         },
         apiKey,
         configured.model,
+        MAX_REQUEST_BYTES,
       );
+      const messages = await $.session.messages();
       let triggerDiagnostic: TriggerDiagnostic | undefined;
       const decision = await evaluateTrigger(
         asker,
-        buildTriggerState(contextTokens, contextWindow, configured.minimumContextRatio),
+        buildTriggerState(
+          contextTokens,
+          contextWindow,
+          configured.minimumContextRatio,
+          messages as unknown as readonly Message[],
+          [apiKey],
+        ),
         (diagnostic) => {
           triggerDiagnostic = diagnostic;
         },
