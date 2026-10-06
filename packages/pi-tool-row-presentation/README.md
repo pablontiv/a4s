@@ -1,28 +1,64 @@
 # A4S Pi Tool Row Presentation
 
-Private Pion extension that controls how tool calls appear in the interactive transcript. Pion's native `Settings > Tool rows` row is the authoritative UI for choosing `full`, `compact`, or `hidden`; `Ctrl+Alt+O` cycles through the same persisted setting as a quick shortcut. The extension registers no slash command.
+This extension controls tool rows in Pi and Pion. It supports `full`, `compact`, and `hidden` modes.
 
-`compact` requests Pion's `summary` transcript density. `hidden` also hides Pion's orphaned-thinking placeholder; the other modes leave that placeholder visible.
+Pion 1.0.4 applies the complete transcript presentation policy. The policy includes tool rows, images, and orphaned reasoning coordination. Pi 1.0.3 does not provide this policy API. Pi can save the mode, but Pi cannot apply the presentation. The extension reports this limitation after each successful change in Pi.
 
-## Requirement
-
-This extension requires [Pion 1.0.0-ports.1](https://github.com/pablontiv/pi/releases/tag/pion-v1.0.0-ports.1), which provides extension-owned settings and transcript presentation policies. Its development type import is pinned to that immutable release artifact; runtime host imports remain compatible through Pion's managed extension loader.
+The extension does not use a tool renderer or `setToolsExpanded()`. Those APIs do not implement the complete policy.
 
 ## Use
 
+Load the extension in Pi or Pion.
+
 ```sh
+pi -e packages/pi-tool-row-presentation/src/index.ts
 pion -e packages/pi-tool-row-presentation/src/index.ts
 ```
 
-Open Pion's native settings and select `Tool rows`, or press `Ctrl+Alt+O` to cycle `full` -> `compact` -> `hidden` -> `full`. Both surfaces use the same global `a4s.tool-rows.mode` setting.
+Run this command in an interactive session:
 
-`a4s.tool-rows.migrated-v1` records one-time migration of Pi's legacy core `toolRowsMode` value. The extension does not migrate any other extension namespace.
+```text
+/pi-tool-row-presentation-settings
+```
+
+The command offers `full`, `compact`, `hidden`, reset, and cancel. `Ctrl+Alt+O` cycles through the three modes. Both controls write the same global file.
+
+## Configuration
+
+The global file is:
+
+```text
+<agent-dir>/pi-tool-row-presentation.json
+```
+
+The extension uses the non-empty `PI_CODING_AGENT_DIR` value as `<agent-dir>`. It uses `~/.pi/agent` when that value is absent or empty. The file has this format:
+
+```json
+{
+  "mode": "compact"
+}
+```
+
+The extension writes this file through an atomic rename. It creates the parent directory. It sets file mode `0600`.
+
+A trusted project can provide this override:
+
+```text
+<project>/.pi/pi-tool-row-presentation.json
+```
+
+The project file uses the same format. The project mode takes precedence over the global mode. The extension ignores the project file when Pi does not trust the project. The command and shortcut always write the global file.
+
+## Migration
+
+The extension checks legacy settings only when the new global file does not exist. It first checks `extensionSettings["a4s.tool-rows.mode"]`. It then checks `toolRowsMode`. It migrates only `full`, `compact`, or `hidden`. It does not read `a4s.tool-rows.migrated-v1`. It does not change `settings.json`.
 
 ## Development
 
 ```sh
 npm test --workspace @a4s/pi-tool-row-presentation
 npm run typecheck --workspace @a4s/pi-tool-row-presentation
+git diff --check
 ```
 
-The contract tests exercise settings, migration, shortcut, invalidation, and transcript presentation behavior against an in-memory structural host. The package typecheck uses Pion's published declarations and is part of the root aggregate gate.
+The package declares Pi and Pion as optional peer hosts. A consumer does not need to install both hosts.
