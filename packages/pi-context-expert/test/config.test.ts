@@ -178,3 +178,25 @@ test("a missing configured path reads the former fixed path", () => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("a configured path read error other than ENOENT does not use the former path", () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-context-expert-no-fallback-"));
+  const configuredPath = join(root, "configured-directory");
+  const legacyPath = join(root, "legacy", "pi-context-expert.json");
+  try {
+    mkdirSync(configuredPath);
+    mkdirSync(join(root, "legacy"));
+    writeFileSync(legacyPath, JSON.stringify({
+      "compaction.strategy": "ladder",
+      "trigger.mode": "auto",
+      "evidence.strategy": "ladder",
+    }));
+
+    assert.deepEqual(
+      loadGlobalCompactionConfiguration(configuredPath, legacyPath),
+      BASIC_FLAT_CONFIG,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

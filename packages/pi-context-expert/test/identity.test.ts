@@ -49,20 +49,20 @@ test("the active extension exposes only the pi-context-expert identity", () => {
 });
 
 test("Pi and Pion are optional alternative runtime peers", () => {
-  const developmentMinimum = ">=0.99.1";
-  const pionArtifact =
-    "https://github.com/pablontiv/pi/releases/download/pion-v1.0.0-ports.1/pablontiv-pion-1.0.0-ports.1.tgz";
   const workspace = manifest(resolve(workspaceRoot, "package.json"));
   const contextExpert = manifest(resolve(packageRoot, "package.json"));
 
-  assert.equal(workspace.devDependencies?.["@earendil-works/pi-coding-agent"], developmentMinimum);
+  assert.equal(workspace.devDependencies?.["@earendil-works/pi-coding-agent"], ">=0.99.1");
   assert.equal(contextExpert.peerDependencies?.["@earendil-works/pi-coding-agent"], ">=1.0.3");
   assert.equal(contextExpert.peerDependencies?.["@pablontiv/pion"], ">=1.0.4");
   assert.equal(contextExpert.peerDependenciesMeta?.["@earendil-works/pi-coding-agent"]?.optional, true);
   assert.equal(contextExpert.peerDependenciesMeta?.["@pablontiv/pion"]?.optional, true);
-  assert.equal(contextExpert.devDependencies?.["@earendil-works/pi-coding-agent"], developmentMinimum);
-  assert.equal(contextExpert.devDependencies?.["@earendil-works/pi-ai"], developmentMinimum);
-  assert.equal(contextExpert.devDependencies?.["@pablontiv/pion"], pionArtifact);
+  assert.equal(contextExpert.devDependencies?.["@earendil-works/pi-coding-agent"], "1.0.3");
+  assert.equal(contextExpert.devDependencies?.["@earendil-works/pi-ai"], "1.0.3");
+  assert.equal(
+    contextExpert.devDependencies?.["@pablontiv/pion"],
+    "https://github.com/pablontiv/pi/releases/download/pion-v1.0.4/pablontiv-pion-1.0.4.tgz",
+  );
   for (const hostPackage of [
     "@pablontiv/pion",
     "@earendil-works/pi-coding-agent",

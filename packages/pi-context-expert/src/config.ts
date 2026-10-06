@@ -98,8 +98,8 @@ export function loadGlobalCompactionConfiguration(
 ): Readonly<Record<string, unknown>> {
   try {
     return configurationFromGlobalFile(readFileSync(configPath, "utf8"));
-  } catch {
-    if (configPath !== legacyPath) {
+  } catch (error) {
+    if (configPath !== legacyPath && isNodeErrorWithCode(error, "ENOENT")) {
       try {
         return configurationFromGlobalFile(readFileSync(legacyPath, "utf8"));
       } catch {
@@ -163,6 +163,10 @@ export function flatConfiguration(config: CompactionConfig): Readonly<Record<str
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function isNodeErrorWithCode(error: unknown, code: string): error is NodeJS.ErrnoException {
+  return error instanceof Error && "code" in error && error.code === code;
 }
 
 function isCompactionStrategy(value: unknown): value is CompactionConfig["compaction"]["strategy"] {
