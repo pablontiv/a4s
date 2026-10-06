@@ -179,6 +179,20 @@ export interface PreparedRun {
   copiedProbe: string;
 }
 
+export interface StableAuthIdentity {
+  schemaVersion: 1;
+  provider: string;
+  type: "api_key" | "oauth";
+  identifiers: Record<string, string | number | boolean>;
+}
+
+export interface FilteredAuthSnapshot {
+  provider: string;
+  bytes: Buffer;
+  identity: StableAuthIdentity;
+  identityDigest: string;
+}
+
 export interface CampaignSnapshot {
   root: string;
   policy: Buffer;
@@ -188,6 +202,8 @@ export interface CampaignSnapshot {
   settings: Buffer | null;
   models: Buffer | null;
   auth: Buffer | null;
+  authProvider: string | null;
+  authIdentity: StableAuthIdentity | null;
   policySha256: string;
   skillSha256: string;
   probeSha256: string;
@@ -198,7 +214,15 @@ export interface CampaignSnapshot {
   modelIdentity: ModelIdentity;
 }
 
-export class CampaignIntegrityError extends Error {}
+export class CampaignIntegrityError extends Error {
+  constructor(input: string, expectedSha256?: string, observedSha256?: string, detail?: string) {
+    const digests = expectedSha256 && observedSha256
+      ? ` (expected sha256:${expectedSha256}, observed sha256:${observedSha256})`
+      : "";
+    super(`Campaign input "${input}" changed${digests}${detail ? `: ${detail}` : ""}`);
+    this.name = "CampaignIntegrityError";
+  }
+}
 
 export interface ProcessCapture {
   outcome: SessionOutcome;
@@ -239,8 +263,8 @@ export function usage(): string {
     "Sharded result files add .shard-I-of-N.jsonl to the supplied results path.",
     "Shard verification does not require A4S_RUN_AGENT_E2E.",
     "Baseline requires --root PATH or both --policy PATH and --skill PATH.",
-    "authDigest is an opaque SHA-256 digest of the effective auth.json bytes.",
-    "authDigest only detects a credential change. Results do not contain credential content.",
+    "authDigest is an opaque SHA-256 digest of the selected credential's stable identity.",
+    "authDigest excludes tokens, expiry, ephemeral scopes, and other secret values.",
   ].join("\n");
 }
 
@@ -450,6 +474,165 @@ function sha256(content: Buffer | string): string {
   return createHash("sha256").update(content).digest("hex");
 }
 
+function topLevelJsonKeys(content: string): string[] {
+  const keys: string[] = [];
+  let objectDepth = 0;
+  let arrayDepth = 0;
+  let expectsRootKey = false;
+  for (let index = 0; index < content.length; index += 1) {
+    const character = content[index]!;
+    if (character === '"') {
+      const start = index;
+      for (index += 1; index < content.length; index += 1) {
+        if (content[index] === "\\") {
+          index += 1;
+          continue;
+        }
+        if (content[index] === '"') break;
+      }
+      if (index >= content.length) break;
+      if (objectDepth === 1 && arrayDepth === 0 && expectsRootKey) {
+        keys.push(JSON.parse(content.slice(start, index + 1)) as string);
+        expectsRootKey = false;
+      }
+      continue;
+    }
+    if (character === "{") {
+      objectDepth += 1;
+      if (objectDepth === 1 && arrayDepth === 0) expectsRootKey = true;
+    } else if (character === "}") {
+      objectDepth -= 1;
+    } else if (character === "[") {
+      arrayDepth += 1;
+    } else if (character === "]") {
+      arrayDepth -= 1;
+    } else if (character === "," && objectDepth === 1 && arrayDepth === 0) {
+      expectsRootKey = true;
+    }
+  }
+  return keys;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parseAuthJson(content: Buffer): Record<string, Record<string, unknown>> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content.toString("utf8"));
+  } catch {
+    throw new Error("auth.json has invalid JSON");
+  }
+  if (!isPlainObject(parsed)) throw new Error("auth.json has an unknown schema");
+  const keys = topLevelJsonKeys(content.toString("utf8"));
+  if (new Set(keys).size !== keys.length || keys.length !== Object.keys(parsed).length) {
+    throw new Error("auth.json has an ambiguous provider credential");
+  }
+  for (const [provider, value] of Object.entries(parsed)) {
+    if (!provider || !isPlainObject(value)) throw new Error("auth.json has an unknown credential schema");
+    if (value.type === "api_key") {
+      const fields = Object.keys(value);
+      const validFields = fields.every((field) => field === "type" || field === "key" || field === "env");
+      const validKey = value.key === undefined || typeof value.key === "string";
+      const validEnv = value.env === undefined ||
+        (isPlainObject(value.env) && Object.values(value.env).every((entry) => typeof entry === "string"));
+      if (validFields && validKey && validEnv) continue;
+    } else if (value.type === "oauth" &&
+      typeof value.access === "string" &&
+      typeof value.refresh === "string" &&
+      typeof value.expires === "number" && Number.isFinite(value.expires)) {
+      continue;
+    }
+    throw new Error("auth.json has an unknown credential schema");
+  }
+  return parsed as Record<string, Record<string, unknown>>;
+}
+
+const STABLE_API_KEY_ENV_IDENTIFIER_KEYS = [
+  "ANTHROPIC_FEDERATION_RULE_ID",
+  "ANTHROPIC_ORGANIZATION_ID",
+  "ANTHROPIC_SERVICE_ACCOUNT_ID",
+  "ANTHROPIC_WORKSPACE_ID",
+  "AWS_DEFAULT_REGION",
+  "AWS_PROFILE",
+  "AWS_REGION",
+  "AZURE_OPENAI_BASE_URL",
+  "AZURE_OPENAI_DEPLOYMENT_NAME_MAP",
+  "AZURE_OPENAI_RESOURCE_NAME",
+  "CLOUDFLARE_ACCOUNT_ID",
+  "CLOUDFLARE_GATEWAY_ID",
+  "GCLOUD_PROJECT",
+  "GOOGLE_CLOUD_LOCATION",
+  "GOOGLE_CLOUD_PROJECT",
+  "LLAMA_BASE_URL",
+] as const;
+
+function stableAuthIdentifiers(
+  provider: string,
+  credential: Record<string, unknown>,
+): Record<string, string | number | boolean> {
+  if (credential.type === "api_key") {
+    const env = credential.env;
+    if (!isPlainObject(env)) return {};
+    return Object.fromEntries(STABLE_API_KEY_ENV_IDENTIFIER_KEYS.flatMap((key) =>
+      typeof env[key] === "string" ? [[`env.${key}`, env[key]]] : []));
+  }
+
+  const stableKeys = provider === "github-copilot"
+    ? ["enterpriseUrl"]
+    : provider === "openai-codex"
+      ? ["accountId"]
+      : [];
+  return Object.fromEntries(stableKeys.flatMap((key) =>
+    typeof credential[key] === "string" ? [[key, credential[key]]] : []));
+}
+
+function authIdentityFor(provider: string, credential: Record<string, unknown>): StableAuthIdentity {
+  // If a provider exposes no stable non-secret identity, bind only its provider and credential type.
+  return {
+    schemaVersion: 1,
+    provider,
+    type: credential.type as "api_key" | "oauth",
+    identifiers: stableAuthIdentifiers(provider, credential),
+  };
+}
+
+function safeAuthIdentityDigest(content: Buffer | null): string {
+  if (content === null) return sha256(JSON.stringify({ schemaVersion: 1, provider: null }));
+  try {
+    const credentials = parseAuthJson(content);
+    const providers = Object.keys(credentials).sort();
+    if (providers.length !== 1) return sha256(JSON.stringify({ schemaVersion: 1, providers }));
+    const provider = providers[0]!;
+    return sha256(JSON.stringify(authIdentityFor(provider, credentials[provider]!)));
+  } catch {
+    return sha256("<invalid-auth-schema>");
+  }
+}
+
+export function filterAuthForModel(content: Buffer | null, canonicalModelId: string): FilteredAuthSnapshot {
+  const slash = canonicalModelId.indexOf("/");
+  if (slash < 1) throw new Error("The selected model does not contain a provider");
+  const provider = canonicalModelId.slice(0, slash);
+  if (content === null) throw new Error("The selected provider credential is absent from auth.json");
+  const credentials = parseAuthJson(content);
+  const candidates = Object.keys(credentials).filter((candidate) => candidate.toLowerCase() === provider.toLowerCase());
+  if (candidates.length === 0) throw new Error("The selected provider credential is absent from auth.json");
+  if (candidates.length !== 1 || candidates[0] !== provider) {
+    throw new Error("The selected provider credential is ambiguous in auth.json");
+  }
+  const credential = credentials[provider]!;
+  const identity = authIdentityFor(provider, credential);
+  const bytes = Buffer.from(`${JSON.stringify({ [provider]: credential }, null, 2)}\n`);
+  return {
+    provider,
+    bytes,
+    identity,
+    identityDigest: sha256(JSON.stringify(identity)),
+  };
+}
+
 const SCENARIO_FIELDS = [
   "id",
   "gate",
@@ -614,6 +797,10 @@ export async function createCampaignSnapshot(input: {
       readOptionalFile(join(agentDir, "auth.json")),
     ]);
     const modelIdentity = modelIdentityFromBytes(input.canonicalModelId, settings, models);
+    const filteredAuth = input.canonicalModelId.includes("/")
+      ? filterAuthForModel(auth, input.canonicalModelId)
+      : null;
+    const effectiveAuth = filteredAuth?.bytes ?? null;
     return {
       root,
       policy,
@@ -622,14 +809,16 @@ export async function createCampaignSnapshot(input: {
       fixture,
       settings,
       models,
-      auth,
+      auth: effectiveAuth,
+      authProvider: filteredAuth?.provider ?? null,
+      authIdentity: filteredAuth?.identity ?? null,
       policySha256: sha256(policy),
       skillSha256: sha256(skill),
       probeSha256: sha256(probe),
       manifestSha256: sha256(fixture),
       settingsDigest: sha256(settings ?? "<absent>"),
       modelsDigest: sha256(models ?? "<absent>"),
-      authDigest: sha256(auth ?? "<absent>"),
+      authDigest: filteredAuth?.identityDigest ?? sha256(JSON.stringify({ schemaVersion: 1, provider: null })),
       modelIdentity,
     };
   } catch (error) {
@@ -769,33 +958,70 @@ async function rawOptionalDigest(path: string): Promise<string> {
   return sha256((await readOptionalFile(path)) ?? "<absent>");
 }
 
-export async function verifyPreparedRun(snapshot: CampaignSnapshot, prepared: PreparedRun): Promise<void> {
-  const checks = await Promise.all([
+export async function verifyPreparedRun(
+  snapshot: CampaignSnapshot,
+  prepared: PreparedRun,
+  options: { allowSelectedCredentialRefresh?: boolean } = {},
+): Promise<void> {
+  const strictChecks = await Promise.all([
     digestFile(prepared.copiedPolicy),
     digestFile(prepared.copiedSkill),
     digestFile(prepared.copiedProbe),
     rawOptionalDigest(join(prepared.agentDir, "settings.json")),
     rawOptionalDigest(join(prepared.agentDir, "models.json")),
-    rawOptionalDigest(join(prepared.agentDir, "auth.json")),
   ]);
-  const expected = [
-    snapshot.policySha256,
-    snapshot.skillSha256,
-    snapshot.probeSha256,
-    snapshot.settingsDigest,
-    snapshot.modelsDigest,
-    snapshot.authDigest,
-  ];
-  if (checks.some((digest, index) => digest !== expected[index])) {
-    throw new CampaignIntegrityError("A run input does not match the campaign snapshot");
+  const expectedStrictChecks = [
+    ["policy", snapshot.policySha256],
+    ["skill", snapshot.skillSha256],
+    ["probe", snapshot.probeSha256],
+    ["settings", snapshot.settingsDigest],
+    ["models", snapshot.modelsDigest],
+  ] as const;
+  for (let index = 0; index < expectedStrictChecks.length; index += 1) {
+    const [input, expected] = expectedStrictChecks[index]!;
+    const observed = strictChecks[index]!;
+    if (observed !== expected) throw new CampaignIntegrityError(input, expected, observed);
   }
+
+  const authPath = join(prepared.agentDir, "auth.json");
+  const observedAuth = await readOptionalFile(authPath);
+  if (!options.allowSelectedCredentialRefresh) {
+    const matchesSnapshot = snapshot.auth === null ? observedAuth === null : observedAuth?.equals(snapshot.auth) === true;
+    if (!matchesSnapshot) {
+      throw new CampaignIntegrityError("auth", snapshot.authDigest, safeAuthIdentityDigest(observedAuth));
+    }
+  } else if (snapshot.authIdentity && snapshot.authProvider) {
+    if (observedAuth === null) {
+      throw new CampaignIntegrityError("auth", snapshot.authDigest, sha256("<absent>"));
+    }
+    let credentials: Record<string, Record<string, unknown>>;
+    try {
+      credentials = parseAuthJson(observedAuth);
+    } catch {
+      throw new CampaignIntegrityError("auth", snapshot.authDigest, sha256("<invalid-auth-schema>"));
+    }
+    const providers = Object.keys(credentials);
+    if (providers.length !== 1 || providers[0] !== snapshot.authProvider) {
+      throw new CampaignIntegrityError("auth", snapshot.authDigest, sha256(JSON.stringify({ providers: providers.sort() })));
+    }
+    const observedIdentity = authIdentityFor(snapshot.authProvider, credentials[snapshot.authProvider]!);
+    const observedIdentityDigest = sha256(JSON.stringify(observedIdentity));
+    if (observedIdentityDigest !== snapshot.authDigest) {
+      throw new CampaignIntegrityError("auth", snapshot.authDigest, observedIdentityDigest);
+    }
+  } else if (observedAuth !== null) {
+    throw new CampaignIntegrityError("auth", snapshot.authDigest, safeAuthIdentityDigest(observedAuth));
+  }
+
   const [settingsSha256, modelsSha256] = await Promise.all([
     digestConfigurationFile(join(prepared.agentDir, "settings.json")),
     digestConfigurationFile(join(prepared.agentDir, "models.json")),
   ]);
-  if (settingsSha256 !== snapshot.modelIdentity.settingsSha256 ||
-      modelsSha256 !== snapshot.modelIdentity.modelsSha256) {
-    throw new CampaignIntegrityError("A model configuration does not match the campaign snapshot");
+  if (settingsSha256 !== snapshot.modelIdentity.settingsSha256) {
+    throw new CampaignIntegrityError("settings", snapshot.modelIdentity.settingsSha256, settingsSha256);
+  }
+  if (modelsSha256 !== snapshot.modelIdentity.modelsSha256) {
+    throw new CampaignIntegrityError("models", snapshot.modelIdentity.modelsSha256, modelsSha256);
   }
 }
 
@@ -935,8 +1161,9 @@ export function persistedCaptureMetadata(capture: ProcessCapture): {
 }
 
 export async function verifyRuntimeDigest(path: string, expectedSha256: string): Promise<void> {
-  if (await digestFile(path) !== expectedSha256) {
-    throw new CampaignIntegrityError("The Pion runtime changed during the campaign");
+  const observedSha256 = await digestFile(path);
+  if (observedSha256 !== expectedSha256) {
+    throw new CampaignIntegrityError("runtime", expectedSha256, observedSha256);
   }
 }
 
@@ -1357,7 +1584,7 @@ async function runOne(
       await verifyPreparedRun(snapshot, prepared);
       capture = await runPion(runtime, prepared, options.deadlineMs, promptFor(scenario), modelIdentity);
       if (capture.infrastructureError?.startsWith("Model identity preflight failed:")) {
-        throw new ModelPreflightError(capture.infrastructureError);
+        throw new ModelPreflightError("model identity", undefined, undefined, capture.infrastructureError);
       }
       infrastructureError = capture.infrastructureError === null ? null : redactString(capture.infrastructureError);
       tagged = await readProbeEvents(prepared.eventLog);
@@ -1365,9 +1592,11 @@ async function runOne(
         await readLoadedInputAttestation(prepared.eventLog),
         snapshot,
       );
-      if (inputViolations.length > 0) throw new CampaignIntegrityError(inputViolations.join("; "));
+      if (inputViolations.length > 0) {
+        throw new CampaignIntegrityError("loaded policy and skill", undefined, undefined, inputViolations.join("; "));
+      }
       await verifyRuntimeDigest(runtime.path, runtime.sha256);
-      await verifyPreparedRun(snapshot, prepared);
+      await verifyPreparedRun(snapshot, prepared, { allowSelectedCredentialRefresh: true });
     } catch (error) {
       if (error instanceof CampaignIntegrityError) throw error;
       infrastructureError = redactString(error instanceof Error ? error.message : String(error));
@@ -1419,7 +1648,7 @@ async function runOne(
       oracle: persistedOracle,
     }) as unknown as LiveRunResult;
     await writeFile(join(prepared.artifactDir, "result.json"), `${JSON.stringify(result, null, 2)}\n`, { mode: 0o600 });
-    await verifyPreparedRun(snapshot, prepared);
+    await verifyPreparedRun(snapshot, prepared, { allowSelectedCredentialRefresh: true });
     await verifyRuntimeDigest(runtime.path, runtime.sha256);
     return result;
   });

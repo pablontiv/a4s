@@ -34,6 +34,7 @@ import {
   cleanupCampaignSnapshot,
   createCampaignSnapshot,
   effectiveModelId,
+  filterAuthForModel,
   modelIdentityFor,
   parseCli,
   parseScenarioManifest,
@@ -77,6 +78,27 @@ const fixtureText = readFileSync(new URL("./fixtures/work-gate-scenarios.json", 
 const policyText = readFileSync(new URL("../AGENTS.md", import.meta.url), "utf8");
 const skillText = readFileSync(new URL("../skills/work-lifecycle/SKILL.md", import.meta.url), "utf8");
 const scenarios = parseScenarioManifest(fixtureText) as Scenario[];
+
+function oauthCredential(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    type: "oauth",
+    access: "access-token-a",
+    refresh: "refresh-token-a",
+    expires: 1_900_000_000_000,
+    ...overrides,
+  };
+}
+
+function apiKeyCredential(
+  env: Record<string, string> = {},
+  key = "api-key-a",
+): Record<string, unknown> {
+  return { type: "api_key", key, env };
+}
+
+function authBytes(entries: Record<string, Record<string, unknown>>): Buffer {
+  return Buffer.from(JSON.stringify(entries));
+}
 
 function completeResult(
   index: number,
@@ -1031,7 +1053,10 @@ test("a campaign snapshot fixes every mutable source before each run", async () 
     writeFile(fixture, fixtureText),
     writeFile(join(agentDir, "settings.json"), JSON.stringify({ defaultModel: "model-a" })),
     writeFile(join(agentDir, "models.json"), JSON.stringify({ providers: { provider: ["model-a"] } })),
-    writeFile(join(agentDir, "auth.json"), JSON.stringify({ token: "auth-v1" })),
+    writeFile(join(agentDir, "auth.json"), JSON.stringify({
+      provider: oauthCredential({ providerField: "required-by-pion" }),
+      xai: oauthCredential({ access: "expired-xai-access", refresh: "xai-refresh", expires: 0 }),
+    })),
   ]);
   const snapshot = await createCampaignSnapshot({
     policySource: policy,
@@ -1050,7 +1075,7 @@ test("a campaign snapshot fixes every mutable source before each run", async () 
       writeFile(fixture, "[]\n"),
       writeFile(join(agentDir, "settings.json"), JSON.stringify({ defaultModel: "model-b" })),
       writeFile(join(agentDir, "models.json"), JSON.stringify({ providers: { provider: ["model-b"] } })),
-      writeFile(join(agentDir, "auth.json"), JSON.stringify({ token: "auth-v2" })),
+      writeFile(join(agentDir, "auth.json"), JSON.stringify({ provider: oauthCredential({ access: "changed-source" }) })),
     ]);
     assert.equal(snapshot.fixture.toString("utf8"), fixtureText);
     await withPreparedRun(snapshot, scenarios[0] as LiveScenario, async (prepared) => {
@@ -1064,7 +1089,7 @@ test("a campaign snapshot fixes every mutable source before each run", async () 
         providers: { provider: ["model-a"] },
       });
       assert.deepEqual(JSON.parse(await readFile(join(prepared.agentDir, "auth.json"), "utf8")), {
-        token: "auth-v1",
+        provider: oauthCredential({ providerField: "required-by-pion" }),
       });
       await verifyPreparedRun(snapshot, prepared);
     });
@@ -1075,7 +1100,314 @@ test("a campaign snapshot fixes every mutable source before each run", async () 
   }
 });
 
-test("campaign configuration byte digests change independently", async () => {
+test("auth filtering selects one provider and preserves its complete credential", () => {
+  const selected = oauthCredential({
+    providerField: "provider-required-value",
+    nested: { profile: { id: "nested-profile" }, opaque: "preserved" },
+  });
+  const filtered = filterAuthForModel(authBytes({
+    provider: selected,
+    xai: oauthCredential({ access: "expired-xai", refresh: "xai-refresh", expires: 0 }),
+  }), "provider/model-a");
+  assert.equal(filtered.provider, "provider");
+  assert.deepEqual(JSON.parse(filtered.bytes.toString("utf8")), { provider: selected });
+  assert.equal(filtered.bytes.toString("utf8").includes("xai"), false);
+  assert.equal(filtered.bytes.toString("utf8").includes("provider-required-value"), true);
+  assert.deepEqual(filtered.identity.identifiers, {});
+  assert.equal(JSON.stringify(filtered.identity).includes("access-token-a"), false);
+  assert.equal(JSON.stringify(filtered.identity).includes("refresh-token-a"), false);
+  assert.equal(JSON.stringify(filtered.identity).includes("provider-required-value"), false);
+  assert.equal(JSON.stringify(filtered.identity).includes("nested-profile"), false);
+});
+
+test("api-key env identity uses an explicit deterministic non-secret allowlist", () => {
+  const baseEnv = {
+    CLOUDFLARE_GATEWAY_ID: "gateway-a",
+    AWS_PROFILE: "profile-a",
+    CLOUDFLARE_ACCOUNT_ID: "account-a",
+  };
+  const base = filterAuthForModel(authBytes({ provider: apiKeyCredential(baseEnv) }), "provider/model-a");
+  assert.deepEqual(base.identity.identifiers, {
+    "env.AWS_PROFILE": "profile-a",
+    "env.CLOUDFLARE_ACCOUNT_ID": "account-a",
+    "env.CLOUDFLARE_GATEWAY_ID": "gateway-a",
+  });
+
+  for (const field of ["CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_GATEWAY_ID", "AWS_PROFILE"] as const) {
+    const changed = filterAuthForModel(authBytes({
+      provider: apiKeyCredential({ ...baseEnv, [field]: `${field}-b` }),
+    }), "provider/model-a");
+    assert.notEqual(base.identityDigest, changed.identityDigest, field);
+  }
+
+  const changedKey = filterAuthForModel(
+    authBytes({ provider: apiKeyCredential(baseEnv, "api-key-b") }),
+    "provider/model-a",
+  );
+  assert.equal(base.identityDigest, changedKey.identityDigest);
+
+  const unknownSecret = filterAuthForModel(authBytes({
+    provider: apiKeyCredential({ ...baseEnv, UNKNOWN_CLIENT_SECRET: "unknown-secret" }),
+  }), "provider/model-a");
+  assert.equal(base.identityDigest, unknownSecret.identityDigest);
+  assert.equal(JSON.stringify(unknownSecret.identity).includes("unknown-secret"), false);
+  assert.equal("env.UNKNOWN_CLIENT_SECRET" in unknownSecret.identity.identifiers, false);
+
+  const reordered = filterAuthForModel(authBytes({
+    provider: apiKeyCredential({
+      CLOUDFLARE_ACCOUNT_ID: "account-a",
+      CLOUDFLARE_GATEWAY_ID: "gateway-a",
+      AWS_PROFILE: "profile-a",
+    }),
+  }), "provider/model-a");
+  assert.equal(base.identityDigest, reordered.identityDigest);
+  assert.deepEqual(Object.keys(reordered.identity.identifiers), [
+    "env.AWS_PROFILE",
+    "env.CLOUDFLARE_ACCOUNT_ID",
+    "env.CLOUDFLARE_GATEWAY_ID",
+  ]);
+});
+
+test("installed api-key env consumers expose only demonstrated stable identifiers", () => {
+  const env = {
+    ANTHROPIC_FEDERATION_RULE_ID: "federation-rule-a",
+    ANTHROPIC_ORGANIZATION_ID: "organization-a",
+    ANTHROPIC_SERVICE_ACCOUNT_ID: "service-account-a",
+    ANTHROPIC_WORKSPACE_ID: "workspace-a",
+    AWS_DEFAULT_REGION: "us-east-1",
+    AWS_PROFILE: "profile-a",
+    AWS_REGION: "us-west-2",
+    AZURE_OPENAI_BASE_URL: "https://resource-a.openai.azure.com/openai/v1",
+    AZURE_OPENAI_DEPLOYMENT_NAME_MAP: "model-a=deployment-a",
+    AZURE_OPENAI_RESOURCE_NAME: "resource-a",
+    CLOUDFLARE_ACCOUNT_ID: "account-a",
+    CLOUDFLARE_GATEWAY_ID: "gateway-a",
+    GCLOUD_PROJECT: "gcloud-project-a",
+    GOOGLE_CLOUD_LOCATION: "us-central1",
+    GOOGLE_CLOUD_PROJECT: "google-project-a",
+    LLAMA_BASE_URL: "http://127.0.0.1:8080",
+    ANTHROPIC_IDENTITY_TOKEN_FILE: "/secret/identity-token",
+    AWS_ACCESS_KEY_ID: "access-key-secret",
+    AWS_SECRET_ACCESS_KEY: "secret-access-key",
+    AWS_SESSION_TOKEN: "session-token-secret",
+    AZURE_OPENAI_API_KEY: "azure-key-secret",
+    GOOGLE_APPLICATION_CREDENTIALS: "/secret/credentials.json",
+  };
+  const filtered = filterAuthForModel(authBytes({ provider: apiKeyCredential(env) }), "provider/model-a");
+  assert.deepEqual(Object.keys(filtered.identity.identifiers), [
+    "env.ANTHROPIC_FEDERATION_RULE_ID",
+    "env.ANTHROPIC_ORGANIZATION_ID",
+    "env.ANTHROPIC_SERVICE_ACCOUNT_ID",
+    "env.ANTHROPIC_WORKSPACE_ID",
+    "env.AWS_DEFAULT_REGION",
+    "env.AWS_PROFILE",
+    "env.AWS_REGION",
+    "env.AZURE_OPENAI_BASE_URL",
+    "env.AZURE_OPENAI_DEPLOYMENT_NAME_MAP",
+    "env.AZURE_OPENAI_RESOURCE_NAME",
+    "env.CLOUDFLARE_ACCOUNT_ID",
+    "env.CLOUDFLARE_GATEWAY_ID",
+    "env.GCLOUD_PROJECT",
+    "env.GOOGLE_CLOUD_LOCATION",
+    "env.GOOGLE_CLOUD_PROJECT",
+    "env.LLAMA_BASE_URL",
+  ]);
+  for (const secret of [
+    "/secret/identity-token",
+    "access-key-secret",
+    "secret-access-key",
+    "session-token-secret",
+    "azure-key-secret",
+    "/secret/credentials.json",
+  ]) {
+    assert.equal(JSON.stringify(filtered.identity).includes(secret), false);
+  }
+});
+
+test("providers without a stable non-secret identity bind only provider and credential type", () => {
+  const transientOauth = {
+    type: "oauth",
+    access: "temporary-access-token",
+    refresh: "temporary-refresh-token",
+    expires: 1_900_000_000_000,
+  };
+  for (const provider of ["xai", "anthropic"]) {
+    const filtered = filterAuthForModel(authBytes({ [provider]: transientOauth }), `${provider}/model-a`);
+    assert.deepEqual(filtered.identity, {
+      schemaVersion: 1,
+      provider,
+      type: "oauth",
+      identifiers: {},
+    });
+  }
+});
+
+test("Amazon Bedrock accepts a bare api-key credential for the AWS credential chain", () => {
+  const filtered = filterAuthForModel(
+    authBytes({ "amazon-bedrock": { type: "api_key" } }),
+    "amazon-bedrock/model-a",
+  );
+  assert.deepEqual(JSON.parse(filtered.bytes.toString("utf8")), {
+    "amazon-bedrock": { type: "api_key" },
+  });
+  assert.deepEqual(filtered.identity, {
+    schemaVersion: 1,
+    provider: "amazon-bedrock",
+    type: "api_key",
+    identifiers: {},
+  });
+});
+
+test("GitHub Copilot enterpriseUrl is the exact stable OAuth identity", () => {
+  const first = filterAuthForModel(authBytes({
+    "github-copilot": oauthCredential({ enterpriseUrl: "github.example-a.test" }),
+  }), "github-copilot/model-a");
+  const same = filterAuthForModel(authBytes({
+    "github-copilot": oauthCredential({
+      enterpriseUrl: "github.example-a.test",
+      access: "rotated-access",
+      refresh: "rotated-refresh",
+    }),
+  }), "github-copilot/model-a");
+  const changed = filterAuthForModel(authBytes({
+    "github-copilot": oauthCredential({ enterpriseUrl: "github.example-b.test" }),
+  }), "github-copilot/model-a");
+  const wrongCase = filterAuthForModel(authBytes({
+    "github-copilot": oauthCredential({ enterpriseurl: "github.example-b.test" }),
+  }), "github-copilot/model-a");
+  assert.deepEqual(first.identity.identifiers, { enterpriseUrl: "github.example-a.test" });
+  assert.equal(first.identityDigest, same.identityDigest);
+  assert.notEqual(first.identityDigest, changed.identityDigest);
+  assert.deepEqual(wrongCase.identity.identifiers, {});
+});
+
+test("invented OAuth identity fields and nested generic ids are excluded", () => {
+  const base = filterAuthForModel(authBytes({
+    "openai-codex": oauthCredential({ accountId: "account-a" }),
+  }), "openai-codex/model-a");
+  const invented = filterAuthForModel(authBytes({
+    "openai-codex": oauthCredential({
+      accountId: "account-a",
+      email: "person@example.test",
+      profileId: "profile-b",
+      tenantId: "tenant-b",
+      userId: "user-b",
+      profile: { id: "nested-id-b" },
+    }),
+  }), "openai-codex/model-a");
+  assert.deepEqual(invented.identity.identifiers, { accountId: "account-a" });
+  assert.equal(base.identityDigest, invented.identityDigest);
+});
+
+test("OpenAI Codex accountId remains a stable account identity", () => {
+  const first = filterAuthForModel(authBytes({
+    "openai-codex": oauthCredential({ accountId: "codex-account-a" }),
+  }), "openai-codex/model-a");
+  const second = filterAuthForModel(authBytes({
+    "openai-codex": oauthCredential({ accountId: "codex-account-b" }),
+  }), "openai-codex/model-a");
+  const rotated = filterAuthForModel(authBytes({
+    "openai-codex": oauthCredential({
+      accountId: "codex-account-a",
+      access: "rotated-access",
+      refresh: "rotated-refresh",
+      expires: 2_100_000_000_000,
+    }),
+  }), "openai-codex/model-a");
+  assert.equal(first.identity.identifiers.accountId, "codex-account-a");
+  assert.notEqual(first.identityDigest, second.identityDigest);
+  assert.equal(first.identityDigest, rotated.identityDigest);
+});
+
+test("auth filtering rejects unknown, absent, and ambiguous selected credentials", () => {
+  assert.throws(
+    () => filterAuthForModel(authBytes({ provider: { type: "unknown", value: "secret" } }), "provider/model-a"),
+    /unknown credential schema/,
+  );
+  assert.throws(
+    () => filterAuthForModel(authBytes({ other: oauthCredential() }), "provider/model-a"),
+    /credential is absent/,
+  );
+  assert.throws(
+    () => filterAuthForModel(Buffer.from(JSON.stringify({ provider: oauthCredential() })
+      .replace(/}$/, `,"provider":${JSON.stringify(oauthCredential())}}`)), "provider/model-a"),
+    /ambiguous provider credential/,
+  );
+  assert.throws(
+    () => filterAuthForModel(authBytes({ provider: oauthCredential(), Provider: oauthCredential() }), "provider/model-a"),
+    /credential is ambiguous/,
+  );
+});
+
+test("post-run auth verification permits token renewal and rejects identity changes", async () => {
+  const root = await mkdtemp(join(tmpdir(), "a4s-auth-integrity-test-"));
+  const agentDir = join(root, "agent");
+  const policy = join(root, "AGENTS.md");
+  const skill = join(root, "SKILL.md");
+  const probe = join(root, "probe.ts");
+  const fixture = join(root, "fixture.json");
+  await mkdir(agentDir, { recursive: true });
+  await Promise.all([
+    writeFile(policy, "policy\n"), writeFile(skill, "skill\n"), writeFile(probe, "probe\n"),
+    writeFile(fixture, fixtureText), writeFile(join(agentDir, "settings.json"), "{}"),
+    writeFile(join(agentDir, "models.json"), "{}"),
+    writeFile(join(agentDir, "auth.json"), JSON.stringify({
+      "openai-codex": oauthCredential({ accountId: "account-a" }),
+    })),
+  ]);
+  const snapshot = await createCampaignSnapshot({
+    policySource: policy, skillSource: skill, probeSource: probe, fixtureSource: fixture,
+    canonicalModelId: "openai-codex/model-a", agentDir,
+  });
+  const authPathFor = (prepared: { agentDir: string }) => join(prepared.agentDir, "auth.json");
+  try {
+    await withPreparedRun(snapshot, scenarios[0] as LiveScenario, async (prepared) => {
+      await writeFile(authPathFor(prepared), JSON.stringify({
+        "openai-codex": oauthCredential({
+          accountId: "account-a",
+          access: "rotated-access-secret",
+          refresh: "rotated-refresh-secret",
+          expires: 2_100_000_000_000,
+          scopes: ["ephemeral-scope"],
+        }),
+      }));
+      await assert.rejects(verifyPreparedRun(snapshot, prepared), /input "auth" changed/);
+      await verifyPreparedRun(snapshot, prepared, { allowSelectedCredentialRefresh: true });
+    });
+
+    const changedCredentials: Record<string, Record<string, Record<string, unknown>>> = {
+      provider: { other: oauthCredential() },
+      type: { "openai-codex": { type: "api_key", key: "api-key-secret" } },
+      account: { "openai-codex": oauthCredential({ accountId: "account-b" }) },
+      added: {
+        "openai-codex": oauthCredential({ accountId: "account-a" }),
+        other: oauthCredential(),
+      },
+    };
+    for (const [name, changed] of Object.entries(changedCredentials)) {
+      await withPreparedRun(snapshot, scenarios[0] as LiveScenario, async (prepared) => {
+        await writeFile(authPathFor(prepared), JSON.stringify(changed));
+        let message = "";
+        await assert.rejects(
+          verifyPreparedRun(snapshot, prepared, { allowSelectedCredentialRefresh: true }),
+          (error: Error) => {
+            message = error.message;
+            return /input "auth" changed.*sha256:/.test(message);
+          },
+          name,
+        );
+        for (const secret of ["access-token-a", "refresh-token-a", "api-key-secret", "account-b", "profile-b"]) {
+          assert.equal(message.includes(secret), false, name);
+        }
+      });
+    }
+  } finally {
+    await cleanupCampaignSnapshot(snapshot);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("campaign configuration digests bind stable auth identity but not token rotation", async () => {
   const root = await mkdtemp(join(tmpdir(), "a4s-campaign-config-test-"));
   const agentDir = join(root, "agent");
   await mkdir(agentDir, { recursive: true });
@@ -1090,20 +1422,42 @@ test("campaign configuration byte digests change independently", async () => {
     writeFile(fixture, fixtureText),
     writeFile(join(agentDir, "settings.json"), "{}"),
     writeFile(join(agentDir, "models.json"), "{}"),
-    writeFile(join(agentDir, "auth.json"), JSON.stringify({ token: "first" })),
+    writeFile(join(agentDir, "auth.json"), JSON.stringify({
+      "openai-codex": oauthCredential({ accountId: "account-a" }),
+    })),
   ]);
   const input = {
     policySource: policy,
     skillSource: skill,
     probeSource: probe,
     fixtureSource: fixture,
-    canonicalModelId: "provider/model-a",
+    canonicalModelId: "openai-codex/model-a",
     agentDir,
   };
   const snapshots: Awaited<ReturnType<typeof createCampaignSnapshot>>[] = [];
   try {
     const first = await createCampaignSnapshot(input);
     snapshots.push(first);
+    const legacyAuthBytesDigest = createHash("sha256").update(first.auth!).digest("hex");
+    assert.notEqual(first.authDigest, legacyAuthBytesDigest);
+    const keyInput = {
+      tier: "compliance" as const,
+      variant: "candidate" as const,
+      shardCount: 1,
+      policyDigest: first.policySha256,
+      skillDigest: first.skillSha256,
+      probeDigest: first.probeSha256,
+      manifestDigest: first.manifestSha256,
+      runtimeVersion: "test",
+      runtimeSha256: "runtime",
+      settingsDigest: first.settingsDigest,
+      modelsDigest: first.modelsDigest,
+      modelDigest: first.modelIdentity.modelDigest,
+    };
+    assert.notEqual(
+      campaignKeyFor({ ...keyInput, authDigest: legacyAuthBytesDigest }),
+      campaignKeyFor({ ...keyInput, authDigest: first.authDigest }),
+    );
 
     await writeFile(join(agentDir, "settings.json"), "{ }\n");
     const changedSettings = await createCampaignSnapshot(input);
@@ -1119,13 +1473,34 @@ test("campaign configuration byte digests change independently", async () => {
     assert.notEqual(changedSettings.modelsDigest, changedModels.modelsDigest);
     assert.equal(changedSettings.authDigest, changedModels.authDigest);
 
-    await writeFile(join(agentDir, "auth.json"), JSON.stringify({ token: "second" }));
-    const changedAuth = await createCampaignSnapshot(input);
-    snapshots.push(changedAuth);
-    assert.equal(changedModels.settingsDigest, changedAuth.settingsDigest);
-    assert.equal(changedModels.modelsDigest, changedAuth.modelsDigest);
-    assert.notEqual(changedModels.authDigest, changedAuth.authDigest);
-    assert.equal(changedModels.modelIdentity.modelDigest, changedAuth.modelIdentity.modelDigest);
+    await writeFile(join(agentDir, "auth.json"), JSON.stringify({
+      "openai-codex": oauthCredential({
+        accountId: "account-a",
+        access: "access-token-b",
+        refresh: "refresh-token-b",
+        expires: 2_000_000_000_000,
+      }),
+    }));
+    const rotatedAuth = await createCampaignSnapshot(input);
+    snapshots.push(rotatedAuth);
+    assert.equal(changedModels.settingsDigest, rotatedAuth.settingsDigest);
+    assert.equal(changedModels.modelsDigest, rotatedAuth.modelsDigest);
+    assert.equal(changedModels.authDigest, rotatedAuth.authDigest);
+    assert.notDeepEqual(changedModels.auth, rotatedAuth.auth);
+    assert.equal(changedModels.modelIdentity.modelDigest, rotatedAuth.modelIdentity.modelDigest);
+    assert.equal(
+      campaignKeyFor({ ...keyInput, settingsDigest: changedModels.settingsDigest, modelsDigest: changedModels.modelsDigest,
+        authDigest: changedModels.authDigest }),
+      campaignKeyFor({ ...keyInput, settingsDigest: rotatedAuth.settingsDigest, modelsDigest: rotatedAuth.modelsDigest,
+        authDigest: rotatedAuth.authDigest }),
+    );
+
+    await writeFile(join(agentDir, "auth.json"), JSON.stringify({
+      "openai-codex": oauthCredential({ accountId: "account-b" }),
+    }));
+    const changedIdentity = await createCampaignSnapshot(input);
+    snapshots.push(changedIdentity);
+    assert.notEqual(rotatedAuth.authDigest, changedIdentity.authDigest);
   } finally {
     await Promise.all(snapshots.map(cleanupCampaignSnapshot));
     await rm(root, { recursive: true, force: true });
@@ -1144,16 +1519,31 @@ test("run input verification rejects an effective file mismatch", async () => {
     writeFile(policy, "policy\n"), writeFile(skill, "skill\n"), writeFile(probe, "probe\n"),
     writeFile(fixture, fixtureText), writeFile(join(agentDir, "settings.json"), "{}"),
     writeFile(join(agentDir, "models.json"), "{}"),
+    writeFile(join(agentDir, "auth.json"), JSON.stringify({ provider: oauthCredential() })),
   ]);
   const snapshot = await createCampaignSnapshot({
     policySource: policy, skillSource: skill, probeSource: probe, fixtureSource: fixture,
     canonicalModelId: "provider/model-a", agentDir,
   });
   try {
-    await assert.rejects(withPreparedRun(snapshot, scenarios[0] as LiveScenario, async (prepared) => {
-      await writeFile(join(prepared.agentDir, "settings.json"), JSON.stringify({ changed: true }));
-      await verifyPreparedRun(snapshot, prepared);
-    }), /does not match the campaign snapshot/);
+    const changes: Array<[string, (prepared: {
+      copiedPolicy: string;
+      copiedSkill: string;
+      copiedProbe: string;
+      agentDir: string;
+    }) => Promise<void>]> = [
+      ["policy", (prepared) => writeFile(prepared.copiedPolicy, "changed-policy-secret")],
+      ["skill", (prepared) => writeFile(prepared.copiedSkill, "changed-skill-secret")],
+      ["probe", (prepared) => writeFile(prepared.copiedProbe, "changed-probe-secret")],
+      ["settings", (prepared) => writeFile(join(prepared.agentDir, "settings.json"), JSON.stringify({ changed: true }))],
+      ["models", (prepared) => writeFile(join(prepared.agentDir, "models.json"), JSON.stringify({ changed: true }))],
+    ];
+    for (const [inputName, change] of changes) {
+      await assert.rejects(withPreparedRun(snapshot, scenarios[0] as LiveScenario, async (prepared) => {
+        await change(prepared);
+        await verifyPreparedRun(snapshot, prepared);
+      }), new RegExp(`input "${inputName}" changed.*sha256:`));
+    }
   } finally {
     await cleanupCampaignSnapshot(snapshot);
     await rm(root, { recursive: true, force: true });
@@ -1168,7 +1558,7 @@ test("runtime verification rejects a changed executable", async () => {
     const digest = createHash("sha256").update("runtime-v1\n").digest("hex");
     await verifyRuntimeDigest(runtime, digest);
     await writeFile(runtime, "runtime-v2\n");
-    await assert.rejects(verifyRuntimeDigest(runtime, digest), /runtime changed/);
+    await assert.rejects(verifyRuntimeDigest(runtime, digest), /runtime.*changed/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -1185,7 +1575,8 @@ test("temporary run and campaign directories are removed for every outcome", asy
   await Promise.all([
     writeFile(policy, "policy\n"), writeFile(skill, "skill\n"), writeFile(probe, "probe\n"),
     writeFile(fixture, fixtureText), writeFile(join(agentDir, "settings.json"), "{}"),
-    writeFile(join(agentDir, "models.json"), "{}"), writeFile(join(agentDir, "auth.json"), "{}"),
+    writeFile(join(agentDir, "models.json"), "{}"),
+    writeFile(join(agentDir, "auth.json"), JSON.stringify({ provider: oauthCredential() })),
   ]);
   const snapshot = await createCampaignSnapshot({
     policySource: policy, skillSource: skill, probeSource: probe, fixtureSource: fixture,
