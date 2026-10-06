@@ -7,8 +7,8 @@ import { test } from 'node:test'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
-const BANNER = `// GENERADO — copia de packages/synagent/protocol.ts. NO editar a mano.
-// Regenerar: node adapters/claude/scripts/sync-protocol.mjs (desde packages/synagent).
+const BANNER = `// GENERADO — copia de packages/synagent/core/protocol.ts. NO editar a mano.
+// Regenerar: node adapters/claude/scripts/sync-protocol.mjs (desde packages/synagent/core).
 // El plugin se instala copiándose solo; por eso lleva su propia copia del contrato.`
 
 test('claude-parity: adapter.ts === BANNER + protocol.ts', () => {

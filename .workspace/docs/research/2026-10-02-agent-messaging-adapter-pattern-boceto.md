@@ -3,7 +3,7 @@
 > Estado: **boceto / braindump**, no spec formal. El producto decidido se llama
 > **synagent** (sinapsis + agent). La decisión está registrada en el ADR
 > `0066-synagent-bus-mqtt-embebido-y-adaptadores-de-canal-por-harness`; el
-> código promovido vive en `packages/synagent/`.
+> código promovido vive en `packages/synagent/core/` y `packages/synagent/bus/`.
 > Fecha: 2026-10-02 (actualizado 2026-10-04). Fuentes primarias citadas al final.
 
 ## 1. Qué queremos (y qué NO)
@@ -173,7 +173,7 @@ Límites / pendiente: la validación de lectura es estructural mínima (no valid
   - **JALAR (bus → Claude):** publicar a `a4s/inbox/claude` → el bridge suscriptor (`$.process.spawn`, `clean:false`) lo recibe por push → el mod lo lee entre turnos → `$.prompt.submit` lo **materializa como un turno real** (gated por idle). Observado: apareció un turno `[bus:prompt] de pi …` que nadie tecleó.
   - **ENVIAR (Claude → bus):** `/mq-send pi: hola pi` → `command.run` → publisher one-shot publica el mensaje canónico a `a4s/inbox/pi` (PUBACK QoS1); un suscriptor simulando a `pi` lo recibió.
 - **Causa raíz corregida (lección reutilizable):** al cargar dos adaptadores que registraban el mismo comando (`/bus-send`), `$.command.register` del segundo **lanzaba** ("refused: ya registrado por otro plugin"); como el registro se hacía con `await` **antes** de abrir la suscripción, la excepción abortaba todo el arranque y el bridge nunca spawneaba — lo que se leyó erróneamente como "hace falta restart". **Fix:** (1) abrir la suscripción (lo core) **primero** y aislar `command.register` en `try/catch` no-fatal; (2) **arranque perezoso** — llamar al arranque desde `session.start` y desde el primer `prompt.submit`, con un flag de módulo, porque un mod añadido a mitad de sesión re-ejecuta `register` pero el reload sí re-dispara los hooks; (3) nombre de comando propio por adaptador (`/mq-send`). Regla general: en un mod, lo core va antes y aislado de llamadas que pueden fallar.
-- **Graduación al repo:** `packages/synagent/` — `bus/` (broker + bridges; aedes/mqtt/classic-level como *providers*) y `adapters/claude/` (plugin: `.claude-plugin/` + `hooks/`). El núcleo puro `adapter.ts` se typecheckea y testea como paquete (node:test); `register.ts` se excluye del typecheck y se valida con `claude plugin validate`. El adaptador resuelve la ruta del bus desde `$.plugin.root`. Verificado: typecheck limpio, tests 9/9 (núcleo + round-trip del bus), `claude plugin validate` PASS.
+- **Graduación al repo:** `packages/synagent/` contiene `bus/` (broker + bridges; aedes/mqtt/classic-level como *providers*) y `core/adapters/claude/` (plugin: `.claude-plugin/` + `hooks/`). El núcleo puro `adapter.ts` se typecheckea y testea como paquete (node:test); `register.ts` se excluye del typecheck y se valida con `claude plugin validate`. El adaptador resuelve la ruta del bus desde `$.plugin.root`. Verificado: typecheck limpio, tests 9/9 (núcleo + round-trip del bus), `claude plugin validate` PASS.
 
 ## 10. Fuentes
 
@@ -184,6 +184,6 @@ Límites / pendiente: la validación de lectura es estructural mínima (no valid
 - Almacenamiento (libSQL/Turso): turso.tech/blog/introducing-change-data-capture-in-turso-sqlite-rewrite ; docs.turso.tech/tursodb/cdc ; news.ycombinator.com/item?id=43537577 (Turso: sin realtime nativo)
 - Brokers investigados: github.com/mochi-mqtt/server ; github.com/dunglas/mercure ; github.com/moscajs/aedes ; github.com/russellromney/honker ; github.com/nanomq/nanomq
 - Repo: `.workspace/docs/specs/a4s-architecture-spec-v0.9.md` §6.5, §8.5, §25.2
-- synagent (código promovido): `packages/synagent/` (bus + `adapters/claude/`) ; `packages/synagent/README.md`
+- synagent (código promovido): `packages/synagent/` (`bus/` + `core/adapters/claude/`) ; `packages/synagent/core/README.md`
 - Decisión: `.workspace/docs/adr/0066-synagent-bus-mqtt-embebido-y-adaptadores-de-canal-por-harness.md`
 - Claude mods (plugin root para rutas estables): `$.plugin.root` en los tipos del engine (`claude-code` d.ts)

@@ -71,6 +71,18 @@ state.calls.push(args)
 const save = () => fs.writeFileSync(stateFile, JSON.stringify(state))
 const ok = result => { save(); console.log(JSON.stringify({ id: 'fake', result })) }
 const fail = message => { save(); console.error(JSON.stringify({ error: { message } })); process.exit(1) }
+const paneInfo = pane => ({
+  pane_id: pane.reportedPaneId ?? pane.pane_id,
+  tab_id: pane.reportedTabId ?? pane.tab_id,
+  workspace_id: pane.workspace_id,
+  ...(typeof pane.cwd === 'string' ? { cwd: pane.cwd } : {}),
+})
+const tabInfo = tab => ({
+  tab_id: tab.reportedTabId ?? tab.tab_id,
+  workspace_id: tab.workspace_id,
+  label: tab.label,
+  pane_count: tab.pane_count,
+})
 
 if (args[0] === 'workspace' && args[1] === 'list') {
   if (state.failWorkspaceList) fail('workspace list failed')
@@ -85,17 +97,32 @@ if (args[0] === 'workspace' && args[1] === 'list') {
   state.openCount += 1
   const tabId = 'w-test:t-bus-' + state.openCount
   const paneId = 'w-test:p-bus-' + state.openCount
+  const cwd = args.includes('--cwd') ? args[args.indexOf('--cwd') + 1] : null
   state.tabs[tabId] = { tab_id: tabId, workspace_id: 'w-test', label: 'Bus', pane_count: 1 }
-  state.panes[paneId] = { pane_id: paneId, tab_id: tabId, workspace_id: 'w-test', running: true }
-  const child = spawn(process.execPath, ['-e', \`
-    const net = require('node:net');
-    const server = net.createServer(socket => socket.once('data', () => socket.end(Buffer.from([0x20, 0x02, 0x00, 0x00]))));
-    server.listen(Number(process.env.SYNAGENT_PORT), '127.0.0.1');
-  \`], { detached: true, stdio: 'ignore', env: process.env })
-  child.unref()
-  state.listenerPid = child.pid
-  ok({ type: 'plugin_pane_opened', plugin_pane: { plugin_id: 'a4s.synagent-bus', entrypoint: 'bus', pane: state.panes[paneId] } })
+  state.panes[paneId] = {
+    pane_id: paneId, tab_id: tabId, workspace_id: 'w-test', running: state.openedPaneRunning !== false,
+    processInfoError: state.openedPaneProcessInfoError === true,
+    processVisibleAt: Date.now() + Number(state.openedProcessVisibleDelayMs || 0),
+    cwd,
+  }
+  if (!state.skipListener) {
+    const child = spawn(process.execPath, ['-e', \`
+      const net = require('node:net');
+      const server = net.createServer(socket => socket.once('data', () => socket.end(Buffer.from([0x20, 0x02, 0x00, 0x00]))));
+      setTimeout(() => server.listen(Number(process.env.SYNAGENT_PORT), '127.0.0.1'), Number(process.env.FAKE_LISTENER_DELAY_MS));
+    \`], {
+      detached: true,
+      stdio: 'ignore',
+      env: { ...process.env, FAKE_LISTENER_DELAY_MS: String(state.listenerDelayMs || 0) },
+    })
+    child.unref()
+    state.listenerPid = child.pid
+  }
+  ok({ type: 'plugin_pane_opened', plugin_pane: { plugin_id: 'a4s.synagent-bus', entrypoint: 'bus', pane: paneInfo(state.panes[paneId]) } })
 } else if (args[0] === 'plugin' && args[1] === 'pane' && args[2] === 'close') {
+  const runtimeFile = require('node:path').join(process.env.HERDR_PLUGIN_STATE_DIR, 'runtime.json')
+  state.runtimeAtClose = JSON.parse(fs.readFileSync(runtimeFile, 'utf8'))
+  if (state.closeError) fail('plugin pane ownership rejected')
   const pane = state.panes[args[3]]
   if (!pane) fail('plugin pane missing')
   delete state.tabs[pane.tab_id]
@@ -110,18 +137,27 @@ if (args[0] === 'workspace' && args[1] === 'list') {
   ok({ type: 'ok' })
 } else if (args[0] === 'tab' && args[1] === 'get') {
   const tab = state.tabs[args[2]]
-  tab ? ok({ type: 'tab_info', tab }) : fail('tab missing')
+  tab ? ok({ type: 'tab_info', tab: tabInfo(tab) }) : fail('tab missing')
 } else if (args[0] === 'pane' && args[1] === 'get') {
   const pane = state.panes[args[2]]
-  pane ? ok({ type: 'pane_info', pane }) : fail('pane missing')
+  pane ? ok({ type: 'pane_info', pane: paneInfo(pane) }) : fail('pane missing')
 } else if (args[0] === 'pane' && args[1] === 'process-info') {
   if (args.length !== 4 || args[2] !== '--pane') fail('process-info requires --pane <id>')
   const pane = state.panes[args[3]]
   if (!pane) fail('pane missing')
+  if (pane.processInfoError || Date.now() < pane.processVisibleAt) fail('process-info unavailable')
   const process = pane.running
     ? { pid: 101, name: 'node', argv0: 'node', argv: ['node', 'broker.cjs'], cmdline: 'node broker.cjs' }
-    : { pid: 102, name: 'zsh', argv0: '/bin/zsh', argv: ['/bin/zsh'], cmdline: '/bin/zsh' }
-  ok({ type: 'pane_process_info', process_info: { pane_id: args[3], foreground_processes: [process] } })
+    : pane.process || { pid: 102, name: 'zsh', argv0: '/bin/zsh', argv: ['/bin/zsh'], cmdline: '/bin/zsh' }
+  const processes = Array.isArray(pane.processes) ? pane.processes : [process]
+  if (pane.driftAfterProcessInfo) {
+    pane.process = pane.driftAfterProcessInfo
+    delete pane.driftAfterProcessInfo
+  }
+  ok({
+    type: 'pane_process_info',
+    process_info: { pane_id: pane.processInfoPaneId ?? args[3], foreground_processes: processes },
+  })
 } else {
   fail('unexpected command: ' + args.join(' '))
 }
@@ -136,8 +172,8 @@ async function fixture(t, initial = {}) {
   const logRoot = path.join(temp, 'logs')
   const logInstance = 'herdr-ensure-test'
   const state = {
-    workspaces: [], tabs: {}, panes: {}, calls: [], openCount: 0, closeCount: 0, listenerPid: null,
-    ...initial,
+    workspaces: [], tabs: {}, panes: {}, calls: [], openCount: 0, closeCount: 0,
+    listenerPid: null, ...initial,
   }
   await fs.writeFile(stateFile, JSON.stringify(state))
   const fake = await makeFakeHerdr(temp)
@@ -223,7 +259,7 @@ test('Herdr ensure uses explicit workspace/process flags and is idempotent witho
   const second = await runEnsure(context)
   assert.deepEqual(second, {
     code: 0,
-    stdout: 'SYNAGENT BUS READY workspace=w-test pane=w-test:p-bus-1\n',
+    stdout: 'SYNAGENT BUS READY\n',
     stderr: '',
   })
 
@@ -239,7 +275,7 @@ test('Herdr ensure uses explicit workspace/process flags and is idempotent witho
   assert.equal(open[open.indexOf('--workspace') + 1], 'w-test')
   assert.ok(open.includes('--no-focus'))
   assert.equal(open.includes('--target-pane'), false)
-  assert.equal(open.includes('--cwd'), false)
+  assert.equal(open[open.indexOf('--cwd') + 1], path.join(__dirname, '..'))
   const forwarded = []
   for (let index = 0; index < open.length; index += 1) {
     if (open[index] === '--env') forwarded.push(open[index + 1])
@@ -262,7 +298,6 @@ test('Herdr ensure uses explicit workspace/process flags and is idempotent witho
     'herdr.ensure.spawned',
     'herdr.ensure.ready',
     'herdr.ensure.started',
-    'herdr.ensure.lock_acquired',
     'herdr.ensure.already_running',
     'herdr.ensure.ready',
   ])
@@ -386,22 +421,19 @@ test('Herdr ensure fails closed when Synagent workspace ownership is ambiguous',
   assert.equal(failure['error.phase'], 'workspace.validate')
 })
 
-test('Herdr ensure classifies invalid runtime state without raw state data', async t => {
+test('Herdr ensure ignores unsupported runtime state without logging raw state data', async t => {
   const context = await fixture(t)
   await fs.mkdir(context.pluginState, { recursive: true })
-  await fs.writeFile(path.join(context.pluginState, 'runtime.json'), '{"unexpected":"value"}\n')
+  await fs.writeFile(path.join(context.pluginState, 'runtime.json'), '{"unexpected":"private-value"}\n')
   const result = await runEnsure(context)
-  assert.deepEqual(result, {
-    code: 1,
-    stdout: '',
-    stderr: '[synagent-bus ensure] invalid runtime state\n',
+  assert.equal(result.code, 0, result.stderr)
+  assert.equal(result.stderr, '[synagent-bus ensure] ignoring unsupported runtime state\n')
+  const events = await readLogEvents(context.logFile)
+  assert.equal(events.some(event => event.event_name === 'herdr.ensure.failed'), false)
+  assert.doesNotMatch(JSON.stringify(events), /unexpected|private-value/)
+  assert.deepEqual(JSON.parse(await fs.readFile(path.join(context.pluginState, 'runtime.json'), 'utf8')), {
+    version: 1, workspaceId: 'w-test', paneId: 'w-test:p-bus-1', tabId: 'w-test:t-bus-1',
   })
-  const failure = (await readLogEvents(context.logFile)).at(-1)
-  assert.equal(failure.event_name, 'herdr.ensure.failed')
-  assert.equal(failure['error.code'], 'A4S_ENSURE_STATE_INVALID')
-  assert.equal(failure['error.retryable'], false)
-  assert.equal(failure['error.phase'], 'state.read')
-  assert.doesNotMatch(JSON.stringify(failure), /unexpected|value/)
 })
 
 test('Herdr ensure classifies invalid ports and pane spawn failures', async t => {
@@ -452,28 +484,209 @@ test('Herdr taxonomy distinguishes command failure from executable unavailabilit
   assert.equal(failure['error.retryable'], true)
 })
 
-test('Herdr ensure repairs its recorded stopped plugin pane and tab only', async t => {
+test('Herdr ensure exits promptly for a healthy broker while the control port is held', { timeout: 5_000 }, async t => {
   const context = await fixture(t)
-  const first = await runEnsure(context)
-  assert.equal(first.code, 0, first.stderr)
-  let state = await readFake(context.stateFile)
-  const oldPid = state.listenerPid
-  process.kill(oldPid, 'SIGTERM')
-  await waitForClosedPort(context.port)
-  state.listenerPid = null
-  state.panes['w-test:p-bus-1'].running = false
-  await writeFake(context.stateFile, state)
+  const broker = net.createServer(socket => {
+    socket.once('data', () => socket.end(Buffer.from([0x20, 0x02, 0x00, 0x00])))
+  })
+  const controlHolder = net.createServer(socket => socket.destroy())
+  await Promise.all([
+    new Promise((resolve, reject) => {
+      broker.once('error', reject)
+      broker.listen(context.port, '127.0.0.1', resolve)
+    }),
+    new Promise((resolve, reject) => {
+      controlHolder.once('error', reject)
+      controlHolder.listen(context.controlPort, '127.0.0.1', resolve)
+    }),
+  ])
+  t.after(() => Promise.all([
+    new Promise(resolve => broker.close(resolve)),
+    new Promise(resolve => controlHolder.close(resolve)),
+  ]))
 
-  const repaired = await runEnsure(context)
-  assert.equal(repaired.code, 0, repaired.stderr)
-  state = await readFake(context.stateFile)
-  assert.equal(state.openCount, 2)
+  const startedAt = Date.now()
+  const result = await runEnsure(context)
+  assert.equal(result.code, 0, result.stderr)
+  assert.ok(Date.now() - startedAt < 1_500)
+  const state = await readFake(context.stateFile)
+  assert.equal(state.openCount, 0)
+  assert.deepEqual(state.calls, [])
+})
+
+test('Herdr ensure re-probes after waiting for the mutex and opens one pane', { timeout: 10_000 }, async t => {
+  const context = await fixture(t)
+  const controlHolder = net.createServer(socket => socket.destroy())
+  await new Promise((resolve, reject) => {
+    controlHolder.once('error', reject)
+    controlHolder.listen(context.controlPort, '127.0.0.1', resolve)
+  })
+
+  const first = runEnsure(context)
+  const second = runEnsure(context)
+  await new Promise(resolve => setTimeout(resolve, 800))
+  await new Promise(resolve => controlHolder.close(resolve))
+  const results = await Promise.all([first, second])
+  assert.equal(results[0].code, 0, results[0].stderr)
+  assert.equal(results[1].code, 0, results[1].stderr)
+  const state = await readFake(context.stateFile)
+  assert.equal(state.openCount, 1)
+  assert.equal(state.calls.filter(args => args[0] === 'plugin' && args[1] === 'pane' && args[2] === 'open').length, 1)
+})
+
+test('Herdr ensure ignores malformed previous runtime state and replaces it after readiness', async t => {
+  const context = await fixture(t)
+  await fs.mkdir(context.pluginState, { recursive: true })
+  await fs.writeFile(path.join(context.pluginState, 'runtime.json'), '{malformed')
+
+  const result = await runEnsure(context)
+  assert.equal(result.code, 0, result.stderr)
+  assert.equal(result.stderr, '[synagent-bus ensure] ignoring malformed runtime state\n')
+  const events = await readLogEvents(context.logFile)
+  assert.equal(events.some(event => event.event_name === 'herdr.ensure.failed'), false)
+  assert.doesNotMatch(JSON.stringify(events), /malformed/)
+  const state = await readFake(context.stateFile)
+  assert.equal(state.openCount, 1)
+  assert.equal(state.closeCount, 0)
+  assert.deepEqual(JSON.parse(await fs.readFile(path.join(context.pluginState, 'runtime.json'), 'utf8')), {
+    version: 1, workspaceId: 'w-test', paneId: 'w-test:p-bus-1', tabId: 'w-test:t-bus-1',
+  })
+})
+
+async function preparePreviousPane(context, stateOverrides = {}) {
+  const state = await readFake(context.stateFile)
+  state.workspaces = [{ workspace_id: 'w-test', label: 'Synagent', active_tab_id: 'w-test:t-old' }]
+  state.tabs['w-test:t-old'] = {
+    tab_id: 'w-test:t-old', workspace_id: 'w-test', label: 'Old', pane_count: 99,
+  }
+  state.panes['w-test:p-old'] = {
+    pane_id: 'w-test:p-old', tab_id: 'w-test:t-old', workspace_id: null,
+    cwd: { malformed: true }, running: 'unknown', processInfoError: true,
+    reportedPaneId: 'malformed', reportedTabId: 'malformed',
+  }
+  Object.assign(state, stateOverrides)
+  await writeFake(context.stateFile, state)
+  await fs.mkdir(context.pluginState, { recursive: true })
+  const runtime = { version: 1, workspaceId: 'w-stale', paneId: 'w-test:p-old', tabId: 'w-stale:t-old' }
+  await fs.writeFile(path.join(context.pluginState, 'runtime.json'), JSON.stringify(runtime))
+  return runtime
+}
+
+test('Herdr ensure replaces arbitrary old pane metadata and cleans up after readiness', async t => {
+  const context = await fixture(t)
+  await preparePreviousPane(context)
+
+  const result = await runEnsure(context)
+  assert.equal(result.code, 0, result.stderr)
+  const state = await readFake(context.stateFile)
+  const replacement = {
+    version: 1, workspaceId: 'w-test', paneId: 'w-test:p-bus-1', tabId: 'w-test:t-bus-1',
+  }
+  assert.equal(state.openCount, 1)
   assert.equal(state.closeCount, 1)
-  assert.equal(state.panes['w-test:p-bus-1'], undefined)
-  assert.equal(state.tabs['w-test:t-bus-1'], undefined)
-  assert.ok(state.panes['w-test:p-bus-2'])
-  assert.ok(state.calls.some(args => args.join(' ') === 'plugin pane close w-test:p-bus-1'))
-  assertExactProcessInfoCalls(state)
+  assert.equal(state.panes['w-test:p-old'], undefined)
+  assert.ok(state.panes['w-test:p-bus-1'])
+  assert.equal(state.panes['w-test:p-bus-1'].cwd, path.join(__dirname, '..'))
+  assert.deepEqual(state.runtimeAtClose, replacement)
+  assert.deepEqual(JSON.parse(await fs.readFile(path.join(context.pluginState, 'runtime.json'), 'utf8')), replacement)
+  assert.equal(
+    state.calls.some(args => args[0] === 'pane' && args[1] === 'get' && args[2] === 'w-test:p-old'),
+    false,
+  )
+  assert.equal(
+    state.calls.some(args => args[0] === 'pane' && args[1] === 'process-info' && args[3] === 'w-test:p-old'),
+    false,
+  )
+  assert.equal(state.calls.some(args => args[0] === 'tab' && args[1] === 'close'), false)
+  assert.equal(state.calls.some(args => args[0] === 'workspace' && args[1] === 'close'), false)
+  assert.deepEqual(
+    state.calls.filter(args => args[0] === 'plugin' && args[1] === 'pane' && args[2] === 'close'),
+    [['plugin', 'pane', 'close', 'w-test:p-old']],
+  )
+  const open = state.calls.find(args => args[0] === 'plugin' && args[1] === 'pane' && args[2] === 'open')
+  assert.equal(open[open.indexOf('--cwd') + 1], path.join(__dirname, '..'))
+  assert.ok(open.includes('--no-focus'))
+})
+
+test('Herdr ensure tolerates old plugin pane cleanup failure after state replacement', async t => {
+  const context = await fixture(t)
+  await preparePreviousPane(context, { closeError: true })
+
+  const result = await runEnsure(context)
+  assert.equal(result.code, 0, result.stderr)
+  assert.equal(result.stderr, '[synagent-bus ensure] old pane cleanup failed\n')
+  const events = await readLogEvents(context.logFile)
+  assert.equal(events.some(event => event.event_name === 'herdr.ensure.failed'), false)
+  assert.doesNotMatch(JSON.stringify(events), /plugin pane ownership rejected/)
+  const state = await readFake(context.stateFile)
+  const replacement = {
+    version: 1, workspaceId: 'w-test', paneId: 'w-test:p-bus-1', tabId: 'w-test:t-bus-1',
+  }
+  assert.equal(state.openCount, 1)
+  assert.equal(state.closeCount, 0)
+  assert.ok(state.panes['w-test:p-old'])
+  assert.ok(state.panes['w-test:p-bus-1'])
+  assert.deepEqual(state.runtimeAtClose, replacement)
+  assert.deepEqual(JSON.parse(await fs.readFile(path.join(context.pluginState, 'runtime.json'), 'utf8')), replacement)
+  assert.equal(state.calls.some(args => args[0] === 'tab' && args[1] === 'close'), false)
+  assert.equal(state.calls.some(args => args[0] === 'workspace' && args[1] === 'close'), false)
+})
+
+test('Herdr ensure waits for MQTT before checking delayed process metadata', async t => {
+  const context = await fixture(t, { openedProcessVisibleDelayMs: 600, listenerDelayMs: 900 })
+
+  const result = await runEnsure(context)
+  assert.equal(result.code, 0, result.stderr)
+  const state = await readFake(context.stateFile)
+  assert.equal(state.openCount, 1)
+  assert.deepEqual(JSON.parse(await fs.readFile(path.join(context.pluginState, 'runtime.json'), 'utf8')), {
+    version: 1, workspaceId: 'w-test', paneId: 'w-test:p-bus-1', tabId: 'w-test:t-bus-1',
+  })
+})
+
+test('Herdr ensure preserves old state when post-readiness process verification fails', async t => {
+  const cases = [
+    { label: 'missing process metadata', state: { openedPaneProcessInfoError: true }, error: /process cannot be verified/ },
+    { label: 'wrong process', state: { openedPaneRunning: false }, error: /not running the declared bus command/ },
+  ]
+
+  for (const scenario of cases) {
+    const context = await fixture(t)
+    const runtime = await preparePreviousPane(context, scenario.state)
+    const result = await runEnsure(context)
+    assert.equal(result.code, 1, `${scenario.label}: ${result.stderr}`)
+    assert.match(result.stderr, scenario.error, scenario.label)
+    const state = await readFake(context.stateFile)
+    assert.equal(state.openCount, 1, scenario.label)
+    assert.equal(state.closeCount, 0, scenario.label)
+    assert.equal(state.runtimeAtClose, undefined, scenario.label)
+    assert.ok(state.panes['w-test:p-old'], scenario.label)
+    assert.deepEqual(
+      JSON.parse(await fs.readFile(path.join(context.pluginState, 'runtime.json'), 'utf8')),
+      runtime,
+      scenario.label,
+    )
+  }
+})
+
+test('Herdr ensure preserves old runtime state when the replacement broker is not ready', async t => {
+  const context = await fixture(t)
+  const runtime = await preparePreviousPane(context, { skipListener: true })
+
+  const result = await runEnsure(context)
+  assert.equal(result.code, 1)
+  assert.match(result.stderr, /new Synagent MQTT listener did not become ready/)
+  const state = await readFake(context.stateFile)
+  assert.equal(state.openCount, 1)
+  assert.equal(state.closeCount, 0)
+  assert.ok(state.panes['w-test:p-old'])
+  assert.equal(state.runtimeAtClose, undefined)
+  assert.deepEqual(
+    JSON.parse(await fs.readFile(path.join(context.pluginState, 'runtime.json'), 'utf8')),
+    runtime,
+  )
+  assert.equal(state.calls.some(args => args[0] === 'tab' && args[1] === 'close'), false)
+  assert.equal(state.calls.some(args => args[0] === 'workspace' && args[1] === 'close'), false)
 })
 
 function startLockWorker(port, { attempts = 1, delayMs = 20, holdMs = -1, logFile = '' } = {}) {

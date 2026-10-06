@@ -24,7 +24,6 @@ function commandPhase(args) {
     'pane process-info --pane': 'pane.process_info',
     'tab get': 'tab.get',
     'tab rename': 'tab.rename',
-    'tab close': 'tab.close',
   }
   return phases[signature] || phases[args.slice(0, 2).join(' ')] || 'ensure'
 }
@@ -70,18 +69,28 @@ function resultOf(response, type, phase) {
 }
 
 async function readState(stateFile) {
+  let source
   try {
-    const value = JSON.parse(await fs.readFile(stateFile, 'utf8'))
-    if (value?.version !== 1 || typeof value.workspaceId !== 'string' ||
-        typeof value.paneId !== 'string' || typeof value.tabId !== 'string') {
-      throw operationalError('A4S_ENSURE_STATE_INVALID', 'invalid runtime state', { phase: 'state.read' })
-    }
-    return value
+    source = await fs.readFile(stateFile, 'utf8')
   } catch (error) {
     if (error.code === 'ENOENT') return null
-    if (error.a4sCode) throw error
     throw tagOperationalError(error, 'A4S_ENSURE_STATE_INVALID', { phase: 'state.read' })
   }
+
+  let value
+  try {
+    value = JSON.parse(source)
+  } catch {
+    console.warn('[synagent-bus ensure] ignoring malformed runtime state')
+    return null
+  }
+  if (value?.version !== 1 || typeof value.workspaceId !== 'string' || value.workspaceId.length === 0 ||
+      typeof value.paneId !== 'string' || value.paneId.length === 0 ||
+      typeof value.tabId !== 'string' || value.tabId.length === 0) {
+    console.warn('[synagent-bus ensure] ignoring unsupported runtime state')
+    return null
+  }
+  return value
 }
 
 async function writeState(stateFile, state) {
@@ -162,14 +171,21 @@ async function acquireEnsureMutex(port, { attempts = 100, delayMs = 100 } = {}) 
   ), 'A4S_ENSURE_LOCK_BUSY', { phase: 'lock.acquire', retryable: true })
 }
 
-function inspectPane(herdr, state) {
+function verifyNewBusPane(herdr, state) {
   const paneResponse = command(herdr, ['pane', 'get', state.paneId], { allowFailure: true })
-  if (!paneResponse) return { status: 'missing' }
+  if (!paneResponse) {
+    throw operationalError(
+      'A4S_ENSURE_HERDR_COMMAND_FAILED',
+      'new Synagent pane cannot be verified',
+      { phase: 'pane.get' },
+    )
+  }
   const pane = resultOf(paneResponse, 'pane_info', 'pane.get').pane
-  if (!pane || pane.workspace_id !== state.workspaceId || pane.tab_id !== state.tabId) {
+  if (!pane || pane.pane_id !== state.paneId || pane.workspace_id !== state.workspaceId ||
+      pane.tab_id !== state.tabId) {
     throw operationalError(
       'A4S_ENSURE_STATE_INVALID',
-      'saved Synagent pane does not match its workspace and tab',
+      'new Synagent pane identity cannot be verified',
       { phase: 'pane.get' },
     )
   }
@@ -178,15 +194,15 @@ function inspectPane(herdr, state) {
   if (!tabResponse) {
     throw operationalError(
       'A4S_ENSURE_HERDR_COMMAND_FAILED',
-      'Synagent Bus tab cannot be verified',
+      'new Synagent Bus tab cannot be verified',
       { phase: 'tab.get' },
     )
   }
   const tab = resultOf(tabResponse, 'tab_info', 'tab.get').tab
-  if (!tab || tab.workspace_id !== state.workspaceId || tab.label !== TAB_LABEL) {
+  if (!tab || tab.tab_id !== state.tabId || tab.workspace_id !== state.workspaceId || tab.label !== TAB_LABEL) {
     throw operationalError(
       'A4S_ENSURE_STATE_INVALID',
-      'Synagent pane is not in its recorded Bus tab',
+      'new Synagent Bus tab identity cannot be verified',
       { phase: 'tab.get' },
     )
   }
@@ -195,32 +211,39 @@ function inspectPane(herdr, state) {
   if (!processResponse) {
     throw operationalError(
       'A4S_ENSURE_HERDR_COMMAND_FAILED',
-      'Synagent pane process cannot be verified',
+      'new Synagent pane process cannot be verified',
       { phase: 'pane.process_info' },
     )
   }
   const processInfo = resultOf(processResponse, 'pane_process_info', 'pane.process_info').process_info
-  if (!processInfo || !Array.isArray(processInfo.foreground_processes)) {
+  if (!processInfo || processInfo.pane_id !== state.paneId || !Array.isArray(processInfo.foreground_processes)) {
     throw operationalError(
       'A4S_ENSURE_STATE_INVALID',
-      'Synagent pane process list cannot be verified',
+      'new Synagent pane process identity cannot be verified',
       { phase: 'pane.process_info' },
     )
   }
   const running = processInfo.foreground_processes.some(process => {
+    if (!process || typeof process !== 'object') return false
     const argv = Array.isArray(process.argv) ? process.argv : []
-    if (argv.some(argument => path.basename(argument) === 'broker.cjs')) return true
-    if (process.argv0 && path.basename(process.argv0) === 'synagent-bus') return true
+    if (argv.some(argument => typeof argument === 'string' && path.basename(argument) === 'broker.cjs')) return true
+    if (typeof process.argv0 === 'string' && path.basename(process.argv0) === 'synagent-bus') return true
     return typeof process.cmdline === 'string' &&
       /(?:^|[\\/\s])(?:broker\.cjs|synagent-bus)(?:\s|$)/.test(process.cmdline)
   })
-  return { status: running ? 'running' : 'stopped', pane, tab }
+  if (!running) {
+    throw operationalError(
+      'A4S_ENSURE_READINESS_FAILED',
+      'new Synagent pane is not running the declared bus command',
+      { phase: 'pane.process_info', retryable: true },
+    )
+  }
 }
 
 function openBusPane(herdr, workspaceId, paneEnv) {
   const args = [
     'plugin', 'pane', 'open', '--plugin', PLUGIN_ID, '--entrypoint', 'bus',
-    '--placement', 'tab', '--workspace', workspaceId, '--no-focus',
+    '--placement', 'tab', '--workspace', workspaceId, '--cwd', path.dirname(__dirname), '--no-focus',
   ]
   for (const name of [
     'SYNAGENT_PORT',
@@ -249,31 +272,6 @@ function openBusPane(herdr, workspaceId, paneEnv) {
   return { paneId: opened.pane_id, tabId: opened.tab_id }
 }
 
-function closeStoppedOwnedPane(herdr, inspection, state) {
-  if (inspection.tab.pane_count !== 1) {
-    throw operationalError(
-      'A4S_ENSURE_STATE_INVALID',
-      'stopped Synagent plugin tab contains unowned panes; refusing repair',
-      { phase: 'pane.close' },
-    )
-  }
-  command(herdr, ['plugin', 'pane', 'close', state.paneId])
-  if (command(herdr, ['pane', 'get', state.paneId], { allowFailure: true })) {
-    throw operationalError(
-      'A4S_ENSURE_STATE_INVALID',
-      'stopped Synagent plugin pane still exists after close',
-      { phase: 'pane.close' },
-    )
-  }
-  if (command(herdr, ['tab', 'get', state.tabId], { allowFailure: true })) {
-    throw operationalError(
-      'A4S_ENSURE_STATE_INVALID',
-      'stopped Synagent plugin tab still exists after its only pane closed',
-      { phase: 'tab.close' },
-    )
-  }
-}
-
 function paneEnvironment(logger, env = process.env) {
   return {
     SYNAGENT_PORT: env.SYNAGENT_PORT,
@@ -284,6 +282,20 @@ function paneEnvironment(logger, env = process.env) {
     A4S_CORRELATION_ID: logger.correlationId,
     XDG_STATE_HOME: env.XDG_STATE_HOME,
   }
+}
+
+function logAlreadyRunning(logger, port) {
+  logger.info('herdr.ensure.already_running', {
+    body: 'Synagent broker is already running',
+    attributes: { 'server.port': port },
+    protocol: { channel: 'mqtt_loopback', contaminated: false },
+  })
+  logger.info('herdr.ensure.ready', {
+    body: 'Existing Synagent broker is ready',
+    attributes: { 'server.port': port },
+    protocol: { channel: 'stdout', contaminated: false },
+    flushStatus: 'sync_requested',
+  })
 }
 
 async function ensure() {
@@ -330,6 +342,11 @@ async function ensure() {
       )
     }
 
+    if (await mqttProbe(port)) {
+      logAlreadyRunning(logger, port)
+      return null
+    }
+
     try {
       await fs.mkdir(stateDir, { recursive: true, mode: 0o700 })
     } catch (error) {
@@ -350,7 +367,14 @@ async function ensure() {
       attributes: { 'server.port': controlPort },
       protocol: { channel: 'tcp_loopback', contaminated: false },
     })
+
     try {
+      if (await mqttProbe(port)) {
+        logAlreadyRunning(logger, port)
+        return null
+      }
+
+      const previousState = await readState(stateFile)
       const workspaceResult = resultOf(
         command(herdr, ['workspace', 'list']),
         'workspace_list',
@@ -372,75 +396,13 @@ async function ensure() {
         )
       }
 
-      let state = await readState(stateFile)
       let workspace = matches[0]
-      let initialTabId
-
-      if (state && workspace && state.workspaceId !== workspace.workspace_id) {
-        throw operationalError(
-          'A4S_ENSURE_WORKSPACE_INVALID',
-          'Synagent runtime state points to a different workspace',
-          { phase: 'workspace.validate' },
-        )
-      }
-      if (state && !workspace) {
-        if (await mqttProbe(port)) {
-          throw operationalError(
-            'A4S_ENSURE_WORKSPACE_INVALID',
-            'MQTT listener exists but its Synagent workspace is missing',
-            { phase: 'workspace.validate' },
-          )
-        }
-        state = null
-      }
-      if (!state && workspace && await mqttProbe(port)) {
-        throw operationalError(
-          'A4S_ENSURE_WORKSPACE_INVALID',
-          'MQTT listener exists in an unowned pre-existing Synagent workspace',
-          { phase: 'workspace.validate' },
-        )
-      }
-
-      if (state && workspace) {
-        const inspection = inspectPane(herdr, state)
-        if (inspection.status === 'running') {
-          logger.info('herdr.ensure.already_running', {
-            body: 'Recorded Synagent pane is already running',
-            attributes: { 'server.port': port },
-            protocol: { channel: 'mqtt_loopback', contaminated: false },
-          })
-          if (!await waitForBroker(port)) {
-            throw operationalError(
-              'A4S_ENSURE_READINESS_FAILED',
-              'Synagent pane exists but its MQTT listener is not verifiable',
-              { phase: 'readiness.mqtt', retryable: true },
-            )
-          }
-          logger.info('herdr.ensure.ready', {
-            body: 'Existing Synagent broker is ready',
-            attributes: { 'server.port': port },
-            protocol: { channel: 'stdout', contaminated: false },
-            flushStatus: 'sync_requested',
-          })
-          return state
-        }
-        if (await mqttProbe(port)) {
-          throw operationalError(
-            'A4S_ENSURE_STATE_INVALID',
-            'MQTT listener exists but the recorded Synagent pane is not running it',
-            { phase: 'pane.process_info' },
-          )
-        }
-        if (inspection.status === 'stopped') closeStoppedOwnedPane(herdr, inspection, state)
-      }
-
       if (!workspace) {
         const created = resultOf(command(herdr, [
           'workspace', 'create', '--cwd', os.homedir(), '--label', WORKSPACE_LABEL, '--no-focus',
         ]), 'workspace_created', 'workspace.create')
         workspace = created.workspace
-        initialTabId = created.tab?.tab_id
-        if (!workspace?.workspace_id || !initialTabId) {
+        if (!workspace?.workspace_id || !created.tab?.tab_id) {
           throw operationalError(
             'A4S_ENSURE_WORKSPACE_INVALID',
             'Herdr did not return a complete Synagent workspace',
@@ -469,19 +431,7 @@ async function ensure() {
         body: 'Herdr Synagent broker pane was opened',
         protocol: { channel: 'herdr_command', contaminated: false },
       })
-      state = { version: 1, workspaceId: workspace.workspace_id, ...opened }
-      await writeState(stateFile, state)
-
-      if (initialTabId && initialTabId !== state.tabId) {
-        command(herdr, ['tab', 'close', initialTabId])
-      }
-      if (inspectPane(herdr, state).status !== 'running') {
-        throw operationalError(
-          'A4S_ENSURE_READINESS_FAILED',
-          'new Synagent pane is not running the declared bus command',
-          { phase: 'pane.process_info', retryable: true },
-        )
-      }
+      const replacementState = { version: 1, workspaceId: workspace.workspace_id, ...opened }
       if (!await waitForBroker(port)) {
         throw operationalError(
           'A4S_ENSURE_READINESS_FAILED',
@@ -489,13 +439,24 @@ async function ensure() {
           { phase: 'readiness.mqtt', retryable: true },
         )
       }
+      verifyNewBusPane(herdr, replacementState)
+      await writeState(stateFile, replacementState)
+
+      if (previousState?.paneId && previousState.paneId !== replacementState.paneId) {
+        try {
+          command(herdr, ['plugin', 'pane', 'close', previousState.paneId])
+        } catch {
+          console.warn('[synagent-bus ensure] old pane cleanup failed')
+        }
+      }
+
       logger.info('herdr.ensure.ready', {
         body: 'New Synagent broker is ready',
         attributes: { 'server.port': port },
         protocol: { channel: 'stdout', contaminated: false },
         flushStatus: 'sync_requested',
       })
-      return state
+      return replacementState
     } finally {
       try {
         await releaseMutex()
@@ -524,7 +485,8 @@ async function ensure() {
 
 if (require.main === module) {
   ensure().then(state => {
-    console.log(`SYNAGENT BUS READY workspace=${state.workspaceId} pane=${state.paneId}`)
+    if (state) console.log(`SYNAGENT BUS READY workspace=${state.workspaceId} pane=${state.paneId}`)
+    else console.log('SYNAGENT BUS READY')
   }).catch(error => {
     console.error(`[synagent-bus ensure] ${error.message}`)
     process.exitCode = 1

@@ -9,7 +9,7 @@
   "plugins": [
     {
       "name": "synagent-adapter-mqtt",
-      "source": "./packages/synagent/adapters/claude",
+      "source": "./packages/synagent/core/adapters/claude",
       "description": "Adaptador de canal de Claude para synagent (bus MQTT): JALAR por push + ENVIAR con /mq-send.",
       "category": "messaging"
     },
