@@ -11,6 +11,7 @@ const { test } = require('node:test')
 const BROKER = path.join(__dirname, '..', 'broker.cjs')
 const ENSURE = path.join(__dirname, '..', 'herdr', 'ensure.cjs')
 const LOCK_WORKER = path.join(__dirname, 'lock-worker.cjs')
+const { mqttProbe } = require(ENSURE)
 
 function exitWithOutput(proc) {
   return new Promise(resolve => {
@@ -107,13 +108,31 @@ if (args[0] === 'workspace' && args[1] === 'list') {
   }
   if (!state.skipListener) {
     const child = spawn(process.execPath, ['-e', \`
+      const fs = require('node:fs');
       const net = require('node:net');
-      const server = net.createServer(socket => socket.once('data', () => socket.end(Buffer.from([0x20, 0x02, 0x00, 0x00]))));
+      const earlyCloseCount = Number(process.env.FAKE_EARLY_CLOSE_COUNT);
+      const probeLog = process.env.FAKE_PROBE_LOG;
+      let connectionCount = 0;
+      const server = net.createServer(socket => socket.once('data', () => {
+        connectionCount += 1;
+        if (connectionCount <= earlyCloseCount) {
+          if (probeLog) fs.appendFileSync(probeLog, 'close,');
+          socket.end();
+          return;
+        }
+        if (probeLog) fs.appendFileSync(probeLog, 'connack,');
+        socket.end(Buffer.from([0x20, 0x02, 0x00, 0x00]));
+      }));
       setTimeout(() => server.listen(Number(process.env.SYNAGENT_PORT), '127.0.0.1'), Number(process.env.FAKE_LISTENER_DELAY_MS));
     \`], {
       detached: true,
       stdio: 'ignore',
-      env: { ...process.env, FAKE_LISTENER_DELAY_MS: String(state.listenerDelayMs || 0) },
+      env: {
+        ...process.env,
+        FAKE_EARLY_CLOSE_COUNT: String(state.earlyCloseCount || 0),
+        FAKE_LISTENER_DELAY_MS: String(state.listenerDelayMs || 0),
+        FAKE_PROBE_LOG: stateFile + '.probes',
+      },
     })
     child.unref()
     state.listenerPid = child.pid
@@ -482,6 +501,51 @@ test('Herdr taxonomy distinguishes command failure from executable unavailabilit
   assert.equal(failure['error.code'], 'A4S_ENSURE_HERDR_UNAVAILABLE')
   assert.equal(failure['error.phase'], 'workspace.list')
   assert.equal(failure['error.retryable'], true)
+})
+
+test('MQTT probe settles promptly when the peer closes without data', { timeout: 3_000 }, async t => {
+  const server = net.createServer(socket => {
+    socket.resume()
+    socket.end()
+  })
+  await new Promise((resolve, reject) => {
+    server.once('error', reject)
+    server.listen(0, '127.0.0.1', resolve)
+  })
+  t.after(() => new Promise(resolve => server.close(resolve)))
+
+  const startedAt = Date.now()
+  assert.equal(await mqttProbe(server.address().port, 1_500), false)
+  assert.ok(Date.now() - startedAt < 750)
+})
+
+test('MQTT probe accepts a valid CONNACK split across data events', { timeout: 3_000 }, async t => {
+  const server = net.createServer(socket => socket.once('data', () => {
+    socket.write(Buffer.from([0x20, 0x02]))
+    setTimeout(() => socket.end(Buffer.from([0x00, 0x00])), 25)
+  }))
+  await new Promise((resolve, reject) => {
+    server.once('error', reject)
+    server.listen(0, '127.0.0.1', resolve)
+  })
+  t.after(() => new Promise(resolve => server.close(resolve)))
+
+  assert.equal(await mqttProbe(server.address().port, 1_500), true)
+})
+
+test('Herdr ensure retries early closed probes, reaches readiness, and releases the mutex', {
+  timeout: 5_000,
+}, async t => {
+  const context = await fixture(t, { earlyCloseCount: 2 })
+  const result = await runEnsure(context)
+  assert.deepEqual(result, {
+    code: 0,
+    stdout: 'SYNAGENT BUS READY workspace=w-test pane=w-test:p-bus-1\n',
+    stderr: '',
+  })
+  const probes = (await fs.readFile(`${context.stateFile}.probes`, 'utf8')).split(',').filter(Boolean)
+  assert.deepEqual(probes, ['close', 'close', 'connack'])
+  await assertControlPortBindable(context.controlPort)
 })
 
 test('Herdr ensure exits promptly for a healthy broker while the control port is held', { timeout: 5_000 }, async t => {

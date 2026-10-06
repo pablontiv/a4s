@@ -18,6 +18,15 @@ CLEANUP_DIGEST_PATH = PUBLICATION_ROOT / "cleanup-plan.json.sha256"
 WORKFLOW_ROOT = ROOT / ".github" / "workflows"
 
 
+def workspace_package_paths() -> tuple[Path, ...]:
+    root_package = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))
+    return tuple(sorted({
+        path
+        for pattern in root_package["workspaces"]
+        for path in ROOT.glob(f"{pattern}/package.json")
+    }))
+
+
 class PublicationSecurityTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -59,8 +68,15 @@ class PublicationSecurityTests(unittest.TestCase):
         )
         self.assertEqual(examples.returncode, 1, examples.stdout.decode(errors="replace"))
 
+    def test_workspace_package_discovery_includes_nested_packages_once(self) -> None:
+        package_paths = workspace_package_paths()
+        self.assertEqual(len(package_paths), len(set(package_paths)))
+        self.assertEqual(package_paths.count(ROOT / "packages/pi-context-expert/package.json"), 1)
+        self.assertIn(ROOT / "packages/synagent/bus/package.json", package_paths)
+        self.assertIn(ROOT / "packages/synagent/core/package.json", package_paths)
+
     def test_packages_are_private_and_explicitly_unlicensed(self) -> None:
-        package_paths = (ROOT / "package.json", *sorted((ROOT / "packages").glob("*/package.json")))
+        package_paths = (ROOT / "package.json", *workspace_package_paths())
         for path in package_paths:
             with self.subTest(package=path.relative_to(ROOT)):
                 package = json.loads(path.read_text(encoding="utf-8"))

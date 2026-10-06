@@ -109,19 +109,48 @@ function mqttProbe(port, timeoutMs = 500) {
     Buffer.from([0x10, 0x18, 0x00, 0x04]), Buffer.from('MQTT'),
     Buffer.from([0x04, 0x02, 0x00, 0x03, 0x00, 0x0c]), Buffer.from('ensure-probe'),
   ])
+  const response = Buffer.alloc(4)
   return new Promise(resolve => {
+    let responseLength = 0
     let settled = false
     const socket = net.createConnection({ host: '127.0.0.1', port })
+    const cleanup = () => {
+      socket.setTimeout(0)
+      socket.off('timeout', onTimeout)
+      socket.off('error', onError)
+      socket.off('connect', onConnect)
+      socket.off('data', onData)
+      socket.off('end', onEnd)
+      socket.off('close', onClose)
+    }
     const finish = value => {
       if (settled) return
       settled = true
+      cleanup()
       socket.destroy()
       resolve(value)
     }
-    socket.setTimeout(timeoutMs, () => finish(false))
-    socket.once('error', () => finish(false))
-    socket.once('connect', () => socket.write(connectPacket))
-    socket.once('data', data => finish(data.length >= 4 && data[0] === 0x20 && data[3] === 0x00))
+    const onTimeout = () => finish(false)
+    const onError = () => finish(false)
+    const onConnect = () => socket.write(connectPacket)
+    const onData = data => {
+      if (responseLength + data.length > response.length) return finish(false)
+      data.copy(response, responseLength)
+      responseLength += data.length
+      if (responseLength === response.length) {
+        finish(response[0] === 0x20 && response[1] === 0x02 && response[2] === 0x00 && response[3] === 0x00)
+      }
+    }
+    const onEnd = () => finish(false)
+    const onClose = () => finish(false)
+
+    socket.setTimeout(timeoutMs)
+    socket.once('timeout', onTimeout)
+    socket.once('error', onError)
+    socket.once('connect', onConnect)
+    socket.on('data', onData)
+    socket.once('end', onEnd)
+    socket.once('close', onClose)
   })
 }
 
