@@ -18,7 +18,7 @@ import {
   CompactionBuildError,
   type BuildJevCompactionOptions,
 } from "./compaction.ts";
-import { disabledEvidencePipeline, runEvidence } from "./evidence-pipeline.ts";
+import { disabledEvidencePipeline, runEvidenceWithFailure } from "./evidence-pipeline.ts";
 import { DeadlineExceededError, OperationAbortedError, runWithDeadline } from "./deadline.ts";
 import { isStableDigest, stableDigest } from "./digest.ts";
 import {
@@ -33,6 +33,7 @@ import {
 import { applyContextProjection } from "./projection.ts";
 import { redactAndLimitCorpusText } from "./redaction.ts";
 import { JevApiError, JevUnavailableError, JevValidationError, PiJevClient } from "./jev.ts";
+import { digestNormalizedMessages, normalizeCompactionMessages } from "./messages.ts";
 import {
   observePreparedCompactionRules,
   prepareRuleObservationsWithMessages,
@@ -51,7 +52,7 @@ import {
 } from "./retro.ts";
 import {
   applyTriggerDecision,
-  evaluateTrigger,
+  evaluateTriggerWithFailure,
   hasConservativeCompactableHistory,
   localTriggerGatesPass,
   type TriggerInput,
@@ -63,8 +64,12 @@ import {
   collectRuleProposalBatches,
   collectRuleProposalReceipts,
   collectRuleSignalBatches,
+  OPERATIONAL_FAILURE_ENTRY_TYPE,
   RULE_ACCEPTANCE_ENTRY_TYPE,
   RULE_PROPOSAL_ENTRY_TYPE,
+  type OperationalFailureCode,
+  type OperationalFailurePhase,
+  type OperationalFailureReason,
 } from "./storage.ts";
 import { TYPESAFE_PROVIDER_ID } from "./types.ts";
 import type {
@@ -101,18 +106,7 @@ export interface PiContextExpertOptions {
   now?: () => Date;
 }
 
-type DiagnosticCode =
-  | "missing_key"
-  | "timeout"
-  | "malformed_response"
-  | "oversized_state"
-  | "api_failure"
-  | "aborted"
-  | "model_unavailable"
-  | "no_signals"
-  | "no_pending_retro"
-  | "storage_failure"
-  | "internal_failure";
+type DiagnosticCode = OperationalFailureCode | "no_pending_retro";
 
 interface PendingCompaction {
   result: JevCompactionResult;
@@ -162,6 +156,8 @@ export function registerPiContextExpert(pi: ExtensionAPI, options: PiContextExpe
   let autoCompactionInFlight = false;
   let recoveredCorpus: CorpusChunk[] = [];
   const now = options.now ?? (() => new Date());
+  const recordOperationalFailure = (input: OperationalFailureInput): void =>
+    appendOperationalFailure(pi, now, input);
   const hookTimeoutMs = options.hookTimeoutMs ?? 180_000;
   const retroTimeoutMs = options.retroTimeoutMs ?? 120_000;
   const config = resolveCompactionConfig(
@@ -358,6 +354,12 @@ export function registerPiContextExpert(pi: ExtensionAPI, options: PiContextExpe
         branch.at(-1)?.type === "compaction",
       );
     } catch {
+      recordOperationalFailure({
+        phase: "trigger",
+        code: "internal_failure",
+        reason: "agent_settled",
+        willRetry: true,
+      });
       return;
     }
     if (!compactableHistory) return;
@@ -369,7 +371,15 @@ export function registerPiContextExpert(pi: ExtensionAPI, options: PiContextExpe
       const credentialAvailable = options.jevClient !== undefined || Boolean(
         (await ctx.modelRegistry.getProviderAuth(TYPESAFE_PROVIDER_ID))?.auth.apiKey?.trim(),
       );
-      if (!credentialAvailable) return;
+      if (!credentialAvailable) {
+        recordOperationalFailure({
+          phase: "trigger",
+          code: "missing_key",
+          reason: "agent_settled",
+          willRetry: true,
+        });
+        return;
+      }
       const input: TriggerInput = {
         ...baseInput,
         compactableHistory,
@@ -377,7 +387,14 @@ export function registerPiContextExpert(pi: ExtensionAPI, options: PiContextExpe
         jevClient: await createJevClient(ctx, hookTimeoutMs),
         signal: ctx.signal ?? new AbortController().signal,
       };
-      const decision = await evaluateTrigger(input);
+      const decision = await evaluateTriggerWithFailure(input, (code) =>
+        recordOperationalFailure({
+          phase: "trigger",
+          code,
+          reason: "agent_settled",
+          willRetry: true,
+        })
+      );
       if (decision.action === "none") return;
       const appendCooldown = () => {
         try {
@@ -407,7 +424,21 @@ export function registerPiContextExpert(pi: ExtensionAPI, options: PiContextExpe
         });
       } catch {
         compactionDispatched = false;
+        recordOperationalFailure({
+          phase: "trigger",
+          code: "internal_failure",
+          reason: "agent_settled",
+          willRetry: true,
+        });
       }
+    } catch (error) {
+      recordOperationalFailure({
+        phase: "trigger",
+        code: classifyCompactionError(error),
+        reason: "agent_settled",
+        willRetry: true,
+      });
+      throw error;
     } finally {
       if (ownsAutoAttempt && !compactionDispatched) autoCompactionInFlight = false;
     }
@@ -420,6 +451,7 @@ export function registerPiContextExpert(pi: ExtensionAPI, options: PiContextExpe
         ctx,
         createJevClient,
         pendingByAttempt,
+        recordOperationalFailure,
         hookTimeoutMs,
         now,
         options.observation,
@@ -449,25 +481,48 @@ export function registerPiContextExpert(pi: ExtensionAPI, options: PiContextExpe
       }
     }
 
+    if (pending && !corpusPublished) {
+      recordOperationalFailure({
+        phase: "corpus",
+        code: "storage_failure",
+        attemptId: pending.result.details.attemptId,
+        reason: event.reason,
+        willRetry: event.willRetry,
+      });
+    }
+
     if (pending && isLadderEvidence(config) && corpusPublished) {
       try {
         const jevClient = new ScheduledJevClient(await createJevClient(ctx, hookTimeoutMs), options.scheduling);
+        let evidenceFailureCode: OperationalFailureCode | undefined;
         const evidence = await runWithDeadline(
-          (signal) => runEvidence({
-            config,
-            result: pending.result,
-            reason: event.reason,
-            willRetry: event.willRetry,
-            corpus: collectCorpus(ctx.sessionManager.getBranch()),
-            getBranch: () => ctx.sessionManager.getBranch(),
-            appender: pi,
-            jev: jevClient,
-            signal,
-            ...(options.observation === undefined ? {} : { observation: options.observation }),
-          }),
+          (signal) => runEvidenceWithFailure(
+            {
+              config,
+              result: pending.result,
+              reason: event.reason,
+              willRetry: event.willRetry,
+              corpus: collectCorpus(ctx.sessionManager.getBranch()),
+              getBranch: () => ctx.sessionManager.getBranch(),
+              appender: pi,
+              jev: jevClient,
+              signal,
+              ...(options.observation === undefined ? {} : { observation: options.observation }),
+            },
+            (code) => { evidenceFailureCode = code; },
+          ),
           hookTimeoutMs,
           ctx.signal,
         );
+        if (evidence.status === "failed") {
+          recordOperationalFailure({
+            phase: "evidence",
+            code: evidenceFailureCode ?? "internal_failure",
+            attemptId: pending.result.details.attemptId,
+            reason: event.reason,
+            willRetry: event.willRetry,
+          });
+        }
         if (
           !event.willRetry &&
           evidence.receipt &&
@@ -486,7 +541,15 @@ export function registerPiContextExpert(pi: ExtensionAPI, options: PiContextExpe
           );
         }
       } catch (error) {
-        safeNotify(ctx, "signals", classifyRetroError(error));
+        const code = classifyRetroError(error);
+        recordOperationalFailure({
+          phase: "evidence",
+          code,
+          attemptId: pending.result.details.attemptId,
+          reason: event.reason,
+          willRetry: event.willRetry,
+        });
+        safeNotify(ctx, "signals", code);
       }
     } else if (pending) {
       await disabledEvidencePipeline.afterCompaction(pending.result, ctx);
@@ -765,12 +828,14 @@ async function handleCompaction(
   ctx: ExtensionContext,
   createJevClient: (ctx: ExtensionContext, timeoutMs: number) => Promise<JevClient>,
   pendingByAttempt: Map<string, PendingCompaction>,
+  recordFailure: (input: OperationalFailureInput) => void,
   timeoutMs: number,
   now: () => Date,
   observationOptions: RuleObservationOptions | undefined,
   schedulingOptions: JevRequestSchedulerOptions | undefined,
   compactionOptions: BuildJevCompactionOptions | undefined,
 ): Promise<SessionBeforeCompactResult> {
+  let attemptId: string | undefined;
   try {
     const preparation = {
       ...(event.preparation.previousSummary === undefined
@@ -779,13 +844,14 @@ async function handleCompaction(
       messagesToSummarize: event.preparation.messagesToSummarize,
       turnPrefixMessages: event.preparation.turnPrefixMessages,
     };
-    const prepared = prepareRuleObservationsWithMessages(preparation, observationOptions);
-    const attemptId = stableDigest({
+    const sourceDigest = digestNormalizedMessages(normalizeCompactionMessages(preparation));
+    attemptId = stableDigest({
       schema: "a4s.jev-compaction-attempt/v1",
-      sourceDigest: prepared.sourceDigest,
+      sourceDigest,
       firstKeptEntryId: event.preparation.firstKeptEntryId,
       tokensBefore: event.preparation.tokensBefore,
     });
+    const prepared = prepareRuleObservationsWithMessages(preparation, observationOptions);
     const existing = pendingByAttempt.get(attemptId);
     if (existing) return { compaction: existing.result };
 
@@ -798,7 +864,7 @@ async function handleCompaction(
             observePreparedCompactionRules(
               plan,
               {
-                attemptId,
+                attemptId: attemptId!,
                 reason: event.reason,
                 willRetry: event.willRetry,
                 observedAt,
@@ -836,7 +902,17 @@ async function handleCompaction(
     });
     return { compaction: result };
   } catch (error) {
-    safeNotify(ctx, "compaction", classifyCompactionError(error));
+    const code = classifyCompactionError(error);
+    if (attemptId) {
+      recordFailure({
+        phase: "compaction",
+        code,
+        attemptId,
+        reason: event.reason,
+        willRetry: event.willRetry,
+      });
+    }
+    safeNotify(ctx, "compaction", code);
     return { cancel: true };
   }
 }
@@ -1047,6 +1123,15 @@ async function drainPendingRetro(
 
   const model = ctx.model;
   if (!model || !ctx.modelRegistry.hasConfiguredAuth(model)) {
+    for (const item of work) {
+      appendOperationalFailure(pi, now, {
+        phase: "retro",
+        code: "model_unavailable",
+        attemptId: item.marker.attemptId,
+        reason: item.marker.compactionReason,
+        willRetry: true,
+      });
+    }
     safeNotify(ctx, "retro", "model_unavailable");
     return { eligible: work.length, completed: 0 };
   }
@@ -1096,7 +1181,15 @@ async function drainPendingRetro(
         "info",
       );
     } catch (error) {
-      safeNotify(ctx, "retro", classifyRetroError(error));
+      const code = classifyRetroError(error);
+      appendOperationalFailure(pi, now, {
+        phase: "retro",
+        code,
+        attemptId: item.marker.attemptId,
+        reason: item.marker.compactionReason,
+        willRetry: true,
+      });
+      safeNotify(ctx, "retro", code);
     } finally {
       inFlight.delete(item.marker.attemptId);
     }
@@ -1143,7 +1236,7 @@ function classifyLadderProjectionError(error: unknown): DiagnosticCode {
   return "internal_failure";
 }
 
-function classifyCompactionError(error: unknown): DiagnosticCode {
+function classifyCompactionError(error: unknown): OperationalFailureCode {
   if (error instanceof JevUnavailableError) return "missing_key";
   if (error instanceof DeadlineExceededError) return "timeout";
   if (error instanceof OperationAbortedError) return "aborted";
@@ -1155,7 +1248,7 @@ function classifyCompactionError(error: unknown): DiagnosticCode {
   return "internal_failure";
 }
 
-function classifyRetroError(error: unknown): DiagnosticCode {
+function classifyRetroError(error: unknown): OperationalFailureCode {
   if (error instanceof JevUnavailableError) return "missing_key";
   if (error instanceof DeadlineExceededError) return "timeout";
   if (error instanceof OperationAbortedError) return "aborted";
@@ -1168,6 +1261,34 @@ function classifyRetroError(error: unknown): DiagnosticCode {
     if (error.code === "model_failure" || error.code === "malformed_model_json") return "malformed_response";
   }
   return "internal_failure";
+}
+
+interface OperationalFailureInput {
+  phase: OperationalFailurePhase;
+  code: OperationalFailureCode;
+  attemptId?: string;
+  reason: OperationalFailureReason;
+  willRetry: boolean;
+}
+
+function appendOperationalFailure(
+  pi: ExtensionAPI,
+  now: () => Date,
+  input: OperationalFailureInput,
+): void {
+  try {
+    pi.appendEntry(OPERATIONAL_FAILURE_ENTRY_TYPE, {
+      schema: "a4s.operational-failure/v1",
+      timestamp: now().toISOString(),
+      phase: input.phase,
+      code: input.code,
+      ...(input.attemptId === undefined ? {} : { attemptId: input.attemptId }),
+      reason: input.reason,
+      willRetry: input.willRetry,
+    });
+  } catch {
+    // El receipt es best-effort. El flujo conserva su semántica previa.
+  }
 }
 
 const ABORTED_TRANSPORT_DIAGNOSTIC_PREFIX = "[a4s-pi-context-expert:rpc-stdin-guard]";

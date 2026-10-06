@@ -1,7 +1,12 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { DeadlineExceededError, OperationAbortedError } from "./deadline.ts";
 import { stableDigest } from "./digest.ts";
 import { extractRuleSignals, selectEvidenceContext } from "./evidence.ts";
+import { JevApiError, JevUnavailableError, JevValidationError } from "./jev.ts";
+import { LadderProjectionError } from "./ladder.ts";
 import type { RuleObservationOptions } from "./observer.ts";
+import { ObservationPlanError } from "./questions.ts";
+import { StateFitError } from "./state.ts";
 import {
   collectEvidenceReceipts,
   collectRetroPendingMarkers,
@@ -12,6 +17,7 @@ import {
   parseRuleSignalBatch,
   RETRO_PENDING_ENTRY_TYPE,
   RULE_SIGNAL_ENTRY_TYPE,
+  type OperationalFailureCode,
 } from "./storage.ts";
 import type {
   CompactionConfig,
@@ -65,6 +71,13 @@ export const disabledEvidencePipeline: EvidencePipeline = {
  * to replay without duplicating validated batches or markers.
  */
 export async function runEvidence(input: RunEvidenceInput): Promise<RunEvidenceResult> {
+  return runEvidenceWithFailure(input);
+}
+
+export async function runEvidenceWithFailure(
+  input: RunEvidenceInput,
+  onFailure?: (code: OperationalFailureCode) => void,
+): Promise<RunEvidenceResult> {
   const base = { signals: [] as RuleSignal[], rootlineWrites: 0 as const, compactionResult: input.result };
   if (input.config.compaction.strategy !== "ladder" || input.config.evidence.strategy !== "ladder") {
     return { status: "disabled", ...base };
@@ -78,6 +91,7 @@ export async function runEvidence(input: RunEvidenceInput): Promise<RunEvidenceR
     return { status: "already-published", ...base, receipt: existingReceipt };
   }
 
+  let publishing = false;
   try {
     const projection = await selectEvidenceContext(
       input.corpus,
@@ -144,6 +158,7 @@ export async function runEvidence(input: RunEvidenceInput): Promise<RunEvidenceR
     const existingBatchDigests = new Set(
       collectRuleSignalBatches(input.getBranch()).map((batch) => stableDigest(batch)),
     );
+    publishing = true;
     for (const [index, batch] of extracted.batches.entries()) {
       if (!existingBatchDigests.has(batchDigests[index]!)) {
         input.appender.appendEntry(RULE_SIGNAL_ENTRY_TYPE, batch);
@@ -163,7 +178,22 @@ export async function runEvidence(input: RunEvidenceInput): Promise<RunEvidenceR
       rootlineWrites: 0,
       compactionResult: input.result,
     };
-  } catch {
+  } catch (error) {
+    try {
+      onFailure?.(publishing ? "storage_failure" : classifyEvidenceFailure(error));
+    } catch {
+      // El callback es best-effort. Evidence conserva su resultado público.
+    }
     return { status: "failed", ...base };
   }
+}
+
+function classifyEvidenceFailure(error: unknown): OperationalFailureCode {
+  if (error instanceof JevUnavailableError) return "missing_key";
+  if (error instanceof DeadlineExceededError) return "timeout";
+  if (error instanceof OperationAbortedError) return "aborted";
+  if (error instanceof LadderProjectionError || error instanceof JevValidationError) return "malformed_response";
+  if (error instanceof StateFitError || error instanceof ObservationPlanError) return "oversized_state";
+  if (error instanceof JevApiError) return "api_failure";
+  return "internal_failure";
 }
