@@ -429,6 +429,60 @@ class StateFileTests(unittest.TestCase):
                 self.assertEqual(failed["heartbeat.reason"], "state_error")
                 self.assertEqual(failed["error.code"], "state_invalid" if path == "load" else "state_io")
 
+    def test_outer_state_failures_notify_once_only_in_live_mode(self):
+        scenarios = [
+            (failure, live, notification_fails)
+            for failure in ("prepare", "lock")
+            for live, notification_fails in ((False, False), (True, False), (True, True))
+        ]
+        for failure, live, notification_fails in scenarios:
+            with self.subTest(failure=failure, live=live, notification_fails=notification_fails), tempfile.TemporaryDirectory() as d:
+                base = Path(d)
+                root = base / "root"
+                state_dir = base / "state"
+                calls = []
+                real_secure_open = h2._secure_open
+
+                def fake_run(argv, **kwargs):
+                    calls.append((argv, kwargs))
+                    if notification_fails:
+                        raise OSError("notification failed")
+                    return mock.Mock(returncode=0)
+
+                def fail_lock(path, flags, mode=0o600):
+                    if Path(path).name == "tick.lock":
+                        raise OSError("lock failed")
+                    return real_secure_open(path, flags, mode)
+
+                args = ["--po-pane", PO, "--state-dir", str(state_dir), "--live" if live else "--record"]
+                out = io.StringIO()
+                err = io.StringIO()
+                with contextlib.ExitStack() as stack:
+                    stack.enter_context(mock.patch.dict(os.environ, {"A4S_STATE_ROOT": str(root)}))
+                    stack.enter_context(mock.patch.object(h2.subprocess, "run", side_effect=fake_run))
+                    observe = stack.enter_context(mock.patch.object(h2, "observe"))
+                    if failure == "prepare":
+                        stack.enter_context(mock.patch.object(h2, "ensure_private_dir", side_effect=h2.StateError("prepare failed")))
+                    else:
+                        stack.enter_context(mock.patch.object(h2, "_secure_open", side_effect=fail_lock))
+                    stack.enter_context(contextlib.redirect_stdout(out))
+                    stack.enter_context(contextlib.redirect_stderr(err))
+                    code = h2.main(args)
+                report = json.loads(out.getvalue())
+                self.assertEqual((code, report["verdict"], report["reason"]), (2, "FAIL", "state_error"))
+                self.assertFalse(observe.called)
+                self.assertEqual(err.getvalue(), "")
+                notifications = [call for call in calls if call[0][:3] == ["herdr", "notification", "show"]]
+                self.assertEqual(len(notifications), 1 if live else 0)
+                if live:
+                    argv, kwargs = notifications[0]
+                    self.assertEqual(argv, ["herdr", "notification", "show", "A4S heartbeat H2 FAIL", "--body", "state_error"])
+                    self.assertEqual((kwargs["stdout"], kwargs["stderr"]), (h2.subprocess.DEVNULL, h2.subprocess.DEVNULL))
+                if failure == "lock":
+                    records = [json.loads(line) for file in (root / "log" / "heartbeat").glob("*.jsonl") for line in file.read_text().splitlines()]
+                    failed = next(record for record in records if record["event_name"] == "heartbeat.tick.failed")
+                    self.assertEqual(failed["heartbeat.notification_sent"], live and not notification_fails)
+
 
 class LoggingStorageTests(unittest.TestCase):
     def test_root_precedence_and_default_layout(self):

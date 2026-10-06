@@ -720,38 +720,43 @@ def _journal_attributes(
     }
 
 
+def _notify_state_failure(live: bool) -> bool:
+    if not live:
+        return False
+    try:
+        notice = subprocess.run(
+            ["herdr", "notification", "show", "A4S heartbeat H2 FAIL", "--body", "state_error"],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return notice.returncode == 0
+    except OSError:
+        return False
+
+
 def _handle_state_failure(
     *,
-    journal: Journal,
+    journal: Journal | None,
     live: bool,
     started: float,
     wake_sent: bool,
     error_code: str,
 ) -> dict[str, object]:
     result: dict[str, object] = {"verdict": "FAIL", "reason": "state_error", "facts": {}, "events": []}
-    notification_sent = False
-    if live:
-        try:
-            notice = subprocess.run(
-                ["herdr", "notification", "show", "A4S heartbeat H2 FAIL", "--body", "state_error"],
-                check=False,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-            notification_sent = notice.returncode == 0
-        except OSError:
-            notification_sent = False
-    journal.append(
-        "heartbeat.tick.failed",
-        severity="ERROR",
-        attributes=_journal_attributes(
-            result,
-            duration_ms=int((time.monotonic() - started) * 1000),
-            wake_sent=wake_sent,
-            notification_sent=notification_sent,
-        ),
-        error_code=error_code,
-    )
+    notification_sent = _notify_state_failure(live)
+    if journal is not None:
+        journal.append(
+            "heartbeat.tick.failed",
+            severity="ERROR",
+            attributes=_journal_attributes(
+                result,
+                duration_ms=int((time.monotonic() - started) * 1000),
+                wake_sent=wake_sent,
+                notification_sent=notification_sent,
+            ),
+            error_code=error_code,
+        )
     return result
 
 
@@ -914,16 +919,15 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"status": "lock_contended"}, sort_keys=True))
         return 0
     except StateError:
-        result = {"verdict": "FAIL", "reason": "state_error", "facts": {}, "events": []}
-        Journal(log_dir, generated_correlation, operation_id, mode).append(
-            "heartbeat.tick.failed",
-            severity="ERROR",
-            attributes=_journal_attributes(
-                result,
-                duration_ms=int((time.monotonic() - started) * 1000),
-                wake_sent=False,
-                notification_sent=False,
-            ),
+        try:
+            journal = Journal(log_dir, generated_correlation, operation_id, mode)
+        except Exception:
+            journal = None
+        result = _handle_state_failure(
+            journal=journal,
+            live=args.live,
+            started=started,
+            wake_sent=False,
             error_code="state_io",
         )
         print(json.dumps(result, sort_keys=True))
