@@ -41,8 +41,8 @@
   <integer>30</integer>
 
   <key>StandardOutPath</key>
-  <string>__HOME__/.local/state/a4s/reconcile/launchd.out.log</string>
+  <string>/dev/null</string>
   <key>StandardErrorPath</key>
-  <string>__HOME__/.local/state/a4s/reconcile/launchd.err.log</string>
+  <string>/dev/null</string>
 </dict>
 </plist>

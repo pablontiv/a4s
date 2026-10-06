@@ -1,84 +1,137 @@
 # a4s-reconcile
 
-Deterministic reconciler for the Herdr/Beads loop: **only `bd` + `herdr`, zero LLM, no messages**. It replaces the soft heartbeat-as-prompt. Executor is launchd/cron, never an agent. `skills/herdr/SKILL.md` defines the worker-link (`metadata.worker|pane|tab`) it reads.
+`a4s-reconcile` converge Beads y Herdr una vez por ejecución. No usa modelos. El modo por defecto es `--dry-run`.
 
-## Tick (idempotent)
+## Flujo
 
-| # | Source of truth | Action |
-|---|---|---|
-| 0 | Mission Control ownership (see below) | gate: absent/duplicated/stale/ambiguous → AttentionTicket, **no mutation this tick**; re-checked before every dispatch/close/reap |
-| 1 | `bd ready` (opt-in label, work-type Beads) | claim → `herdr tab create` → stamp worker → `agent start` → `agent prompt` with the Bead's content |
-| 2 | `bd in_progress` + `herdr agent get <metadata.worker>` | `working` leave · `done` `bd close` **only** on a valid `TASK_RESULT` record (else `WORK_RESULT_MISSING`/`WORK_RESULT_INVALID` ticket, Bead stays open) · `NOT_FOUND` re-dispatch (max 2) · `blocked` AttentionTicket · `idle`/unknown/pane mismatch AttentionTicket |
-| 2b | `bd in_progress` **without** `metadata.worker` | see "Unlinked in_progress rule" |
-| 2c | `bd in_progress` with `metadata.correlation_id` (dispatched under the ack contract) | read-only TASK_ACK/TASK_STARTED audit → `ACK_MISSING` (no `receipt_id` within `--ack-after`, default 300s) · `START_WITHOUT_ACK` · `ACK_UNCORRELATED` · `ACK_INCOMPLETE` — evidence-only tickets; the last three also skip lifecycle actions on that Bead. See "Task acknowledgement" |
-| 2d | dispatched Bead's escalation route (read-only) | `ESCALATION_TARGET_MISSING` / `ESCALATION_TARGET_FORBIDDEN` (no valid `orchestrator_target`, or Human/MC) · `ESCALATION_DELIVERY_FAILED` (`escalation_delivery=failed\|refused` left by `helper/escalation.py`) — evidence-only tickets. See "Worker escalation" |
-| 3 | `bd closed` with `metadata.tab` + live tab | `herdr tab close` (skipped if <120s old, agent still working, foreign agent, shared/multi-pane tab, or own tab) |
-| 4 | status `blocked` or label `needs-decision` | AttentionTicket file under `$XDG_STATE_HOME/a4s/reconcile/attention/` — evidence only, no lifecycle mutation |
-| 5 | re-run over unchanged state | plans nothing (tickets are keyed by bead+kind+facts digest) |
+El reconciliador aplica estas reglas:
 
-Guards: Herdr server not running → no-op. Unknown status, name/pane mismatch, missing workspace/callback, `kind` other than `claude|pi` → fail closed. A snapshot error aborts the tick (exit 3) before any mutation.
+1. Valida la propiedad de Mission Control.
+2. Despacha Beads listos con la etiqueta `auto-dispatch`.
+3. Revisa Workers activos.
+4. Cierra un Bead solo con un registro `TASK_RESULT` válido.
+5. Cierra una pestaña terminada cuando pasan todas las guardas.
+6. Crea un AttentionTicket para un estado que necesita atención.
 
-## Mission Control safety gate (fail closed)
+El gate de Mission Control falla cerrado. El propietario debe tener un Bead `in_progress` con la etiqueta `mission-control`, un lease vigente y una identidad que coincida con Herdr. El reconciliador nunca muta ese Bead ni sus recursos.
 
-Before any dispatch/recovery/close/reap the canonical MC is discovered by **owner + lease + session identity, never by label alone**:
+`--callback` y `--orchestrator-target` son el mismo flag. El valor identifica al Project Orchestrator. El Worker envía sus preguntas solo a ese destino.
 
-- Ownership record = exactly one `in_progress` Bead labelled `mission-control` (the label is only the lookup index) with a live lease (`lease_expires_at` + `--mc-grace`, default 60s) and identity metadata `pane`, `tab`, `workspace` plus `terminal_id` and/or `session` (the pi/claude session file). The live herdr pane must exist, host an agent, and match every recorded field.
-- Anything labelled `mc` / `mission-control` (tab or workspace) that is not that owner is a *claimant*, not an owner.
-- Verdicts: `ABSENT` (no owner Bead) · `DUPLICATED` (>1 owner Bead, or a second label-only claimant) · `STALE` (lease expired / no lease / owner pane gone) · `AMBIGUOUS` (identity metadata missing or mismatching the live pane). Any verdict but `OK` → one `MC_GATE_<verdict>` AttentionTicket, **zero bd/herdr mutations**, no auto-resolution. Exit 0 (the ticket is the signal).
-- Never-mutate guard: the reconciler's herdr vocabulary is an allowlist (`tab create|close`, `agent start|prompt`); `pane *`, `workspace *`, tab rename/move are refused. Targets that are mc-labelled or MC-owned (pane, tab, agent, the whole `mission-control` workspace, an `mc`-labelled new tab) are refused in `mutate()` — in dry-run too — and ticketed `MC_PROTECTED`. It never creates, moves or relabels an mc pane; relocation/promotion is an Operator + incumbent-MC handshake with a handover artifact.
-- MC ownership Bead is untouchable: the current owner Bead, any Bead labelled `mission-control`, and any Bead whose `worker`/`pane`/`tab`/`workspace` metadata points at an MC-owned target are filtered out of harvest-close, re-dispatch (`NOT_FOUND` and unlinked), claim/dispatch and the reaper, and `mutate()` refuses every bd write aimed at them (`GuardViolation`, dry-run too). Only MC/the Operator changes that Bead.
-- Registering MC (Operator/MC, not the reconciler): `bd create "Mission Control ownership" --type task --label mission-control`, claim it, `bd update <id> --set-metadata pane=… --set-metadata tab=… --set-metadata workspace=… --set-metadata terminal_id=… --set-metadata session=…`, and `bd heartbeat <id>` inside the lease TTL. Until that exists the reconciler is a ticket-only observer.
+## Persistencia
 
-## Unlinked in_progress rule (no `metadata.worker`)
+La raíz estándar es:
 
-Deterministic, evaluated in order: (1) an agent tied to the Bead without the link — name or tab label contains the Bead id, `metadata.pane`/`tab`, or cwd == the Bead's own `metadata.worktree|cwd` — `working` → leave, `blocked` → `WORKER_BLOCKED` ticket, other → leave unless stale, then `UNLINKED_WORKER_IDLE` ticket; (2) live lease → leave; (3) last activity (max of lease expiry, heartbeat, updated, started) newer than `--stale-after` (1800s) → leave; (4) stale, no live agent → **re-dispatch in a new tab** (no re-claim, `redispatch` counter, reuses `metadata.worktree` as cwd) iff opt-in label, `assignee == actor`, work-type Bead, `--callback` set and `redispatch < --max-redispatch`; otherwise a `STALE_UNLINKED` ticket with the blockers. Parent ids also match children's names/labels — conservative: that can only suppress action. Re-dispatch and ready dispatch share one `--max-dispatch` budget per tick.
-
-## Task acknowledgement (TASK_ACK / TASK_STARTED)
-
-`herdr agent prompt` succeeding is transport acceptance, not acknowledgement. Dispatch stamps `metadata.correlation_id` (`corr.<bead>.<epoch>.<redispatch>`) and `metadata.orchestrator_target` before the prompt, and the prompt tells the Worker to run `helper/task_ack.py ack` first and `start` once it begins, with literal `rcpt.<corr>` / `start.<corr>` ids. The helper is the only writer of `receipt_id`, `received_at`, `acknowledged_at`, `acknowledged_by`, `start_id`, `started_at`, `worker`, `pane`, `tab`; the reconciler never writes them and never infers them. A re-dispatch stamps a new correlation and `--unset-metadata`s the previous receipt/start record. Grammar, idempotency and fail-closed rules: `skills/herdr/SKILL.md` § "Task acknowledgement".
-
-## Task result (TASK_RESULT harvest gate)
-
-`done` from `herdr agent get` proves a process stopped, not a verdict. The Worker records `result_id`, `result_at`, `result_by`, `result_verdict` (`pass|fail`), `result_artifact_path`, `result_correlation_id` with `helper/task_result.py` before its close and final callback (literal `res.<corr>` id in the prompt). Harvest re-validates the record read back from the Bead — correlation to the current dispatch, closed verdict set, safe existing artifact file, `result_by` == `worker` == acker, a recorded ack — and closes with the record's exact verdict/artifact; otherwise an evidence-only `WORK_RESULT_MISSING`/`WORK_RESULT_INVALID` ticket and the Bead stays open. No terminal transcript is read (harvest no longer saves an agent tail) and nothing is inferred from liveness. A re-dispatch `--unset-metadata`s the whole record. Details: `skills/herdr/SKILL.md` § "Task result".
-
-## Worker escalation (orchestrator_target only)
-
-`--callback <pane-or-name>` (alias `--orchestrator-target`) is the Project Orchestrator. Dispatch stamps it as `metadata.orchestrator_target`, in the same `bd update` as `correlation_id`, before `agent start` and `agent prompt`, and **fails closed** (no claim, no tab, no agent; an `ORCHESTRATOR_TARGET_*` ticket) unless it names a live agent that is not the new Worker, not a Human/operator/user identity and not `mc`/Mission Control-owned. The prompt tells the Worker it never asks the Human Operator or Mission Control, and that every blocker/question goes through `helper/escalation.py` to that target as a correlated `ATTENTION REQUIRED`; a failed delivery leaves `escalation_*` evidence on the Bead, sends `ATTENTION DELIVERY_FAILED` to the same target if possible and stops, never falling back to Human/MC. The reconciler only audits this (2d); it never re-routes. Contract and codes: `skills/herdr/SKILL.md` § "Worker escalation".
-
-## Closing actor (bd assignee guard)
-
-`bd` refuses writes by an actor other than the assignee, and `--actor` overrides `$BEADS_ACTOR`. Reconciler and Workers therefore run `BEADS_ACTOR=<assignee> bd close|update …` and never pass `--actor` or `--force`. Tradeoff: `bd`'s audit trail shows the assignee as the closer; the real actor is kept in the close `--reason` (`closed_by=a4s-reconcile worker=<name>`) and in `$XDG_STATE_HOME/a4s/reconcile/audit.jsonl` (one JSON line per applied mutation). Operator/Jev decision; revisit if `bd` grows a delegated-actor field.
-
-## Usage
-
-```bash
-# Default is DRY-RUN: prints planned actions, mutates nothing (bd runs with --readonly).
-skills/herdr/scripts/a4s-reconcile --callback <orchestrator-pane>
-
-# Dry-run planning as if the MC gate were open (read-only; refused with --apply)
-skills/herdr/scripts/a4s-reconcile --callback <orchestrator-pane> --plan-ignoring-mc-gate
-
-# Mutating tick (what launchd runs)
-skills/herdr/scripts/a4s-reconcile --apply --callback <orchestrator-pane>
+```text
+${A4S_STATE_ROOT:-${XDG_STATE_HOME:-$HOME/.local/state}/a4s}
 ```
 
-Dispatch is **opt-in**: only ready Beads labelled `auto-dispatch` (`--dispatch-label ''` widens it to every ready task/bug/feature/chore/spike; epics never). Optional per-Bead `metadata`: `kind` (`claude`|`pi`, default `claude -- --model sonnet`), `model`, `cwd` (absolute dir; give concurrent mutating Beads their own worktree). The reconciler stamps `worker`, `pane`, `tab`, `dispatched_at`, `redispatch`, `correlation_id`, `orchestrator_target` (and `prev_tabs`/`prev_workers` on re-dispatch) before starting the agent, so a crash mid-dispatch self-heals through `NOT_FOUND`.
+El reconciliador usa este árbol:
 
-## launchd (documented, not installed)
+```text
+<root>/log/reconcile/events.jsonl
+<root>/audit/reconcile/audit.jsonl
+<root>/state/reconcile/tick.lock
+<root>/state/reconcile/attention/*.md
+```
 
-`dev.a4s.reconcile.plist` is a template (StartInterval 45s). To adopt:
+Los directorios usan modo `0700`. Los archivos usan modo `0600`. El reconciliador rechaza un enlace simbólico y un objeto que no sea regular.
+
+`--root` y `--a4s-root` cambian la raíz. `--state-dir` queda como alias de migración. Si su valor termina en `reconcile`, el padre pasa a ser la raíz. Para otros valores, el valor pasa a ser la raíz. `A4S_RECONCILE_STATE` conserva la misma regla cuando termina en `reconcile`.
+
+## Audit durable
+
+Cada mutación externa pasa por `mutate()`. Hay seis operaciones:
+
+- `bd.update`
+- `bd.close`
+- `herdr.tab.create`
+- `herdr.tab.close`
+- `herdr.agent.start`
+- `herdr.agent.prompt`
+
+Cada operación recibe un descriptor tipado. El audit no deriva datos desde el comando.
+
+El protocolo usa este orden:
+
+1. Valida las guardas y construye el comando.
+2. Agrega un registro `intent` y ejecuta `fsync`.
+3. Ejecuta el proceso una vez.
+4. Agrega un registro `result` y ejecuta `fsync`.
+5. Revierte una escritura parcial al tamaño inicial y confirma el tamaño.
+6. Detiene las mutaciones del tick si el resultado queda `ambiguous` o si falla la persistencia del resultado.
+
+Un rollback fallido marca el audit como corrupto. El proceso no inicia cuando falla el `intent`. Un fallo del `result` detiene el tick y conserva el `intent` pendiente cuando el rollback funciona.
+
+Un `intent` sin `result` queda `pending`. Un código cero queda `applied`. Un fallo al crear el proceso queda `not-applied`. Un timeout, una señal, una excepción posterior al inicio o un código no cero queda `ambiguous`. El reconciliador no repite ni infiere la mutación.
+
+Cada línea usa `a4s.audit/1`. Contiene estos campos:
+
+```text
+schema, record_id, mutation_id, event, utc, operation, ids, scopes, status, code
+```
+
+`ids` contiene solo IDs semánticos. `scopes` usa `bead:`, `dispatch:`, `tab:` y `agent:`. El audit nunca contiene comando, prompt, payload, ruta, entorno, stdout, stderr ni texto de error.
+
+El parser valida UTF-8, JSON, claves duplicadas, newline final, tamaño, versión, IDs, scopes y orden. Un audit corrupto bloquea todas las mutaciones. Un estado abierto antiguo sin `scopes` también bloquea todas las mutaciones. Un estado `pending` o `ambiguous` con scopes bloquea solo un scope que intersecta.
+
+No existe replay automático. Una persona puede cerrar un estado abierto con este comando exacto:
 
 ```bash
-sed -e "s#__REPO__#[REDACTED:shared-root]/harness/a4s#g" -e "s#__HOME__#$HOME#g" -e "s#__CALLBACK__#<orchestrator-pane>#g" \
-  skills/herdr/scripts/dev.a4s.reconcile.plist > ~/Library/LaunchAgents/dev.a4s.reconcile.plist
-mkdir -p ~/.local/state/a4s/reconcile
+skills/herdr/scripts/a4s-reconcile \
+  --audit-resolve <mutation_id> \
+  --decision mutation-applied \
+  --confirm-human
+```
+
+La otra decisión válida es `mutation-not-applied`. La resolución agrega una línea. No modifica líneas anteriores. El comando rechaza un ID desconocido, cerrado o ya resuelto.
+
+Este comando muestra el estado sin cambiar audit, log ni estado funcional:
+
+```bash
+skills/herdr/scripts/a4s-reconcile --audit-status
+```
+
+## Log operacional
+
+`events.jsonl` usa `a4s.log/1`. Registra inicio del tick, lock, snapshot, gate, AttentionTicket, resultado de mutación y resultado del tick. El log es best-effort. Un fallo del log no cambia el resultado. No hay rotación ni retención.
+
+## Lock
+
+`--apply` mantiene un lock exclusivo durante todo el tick. `--audit-resolve` usa un lock exclusivo. `--audit-status` usa un lock compartido. Puede crear el lock en la primera ejecución. El archivo nunca se trunca.
+
+## Uso
+
+```bash
+# Plan. No crea directorios, archivos, lock, audit, log ni tickets.
+skills/herdr/scripts/a4s-reconcile --dry-run --callback <orchestrator>
+
+# Tick con mutaciones.
+skills/herdr/scripts/a4s-reconcile --apply --callback <orchestrator>
+
+# Plan sin el gate. Este flag solo funciona con dry-run.
+skills/herdr/scripts/a4s-reconcile --plan-ignoring-mc-gate --callback <orchestrator>
+```
+
+Cada consulta `bd` usa `--readonly` en dry-run. Un snapshot inválido aborta antes de una mutación.
+
+## launchd
+
+`dev.a4s.reconcile.plist` es una plantilla. Envía stdout y stderr a `/dev/null`. El log operacional queda en el árbol estándar.
+
+```bash
+sed -e "s#__REPO__#/ruta/a4s#g" \
+    -e "s#__HOME__#$HOME#g" \
+    -e "s#__CALLBACK__#<orchestrator>#g" \
+  skills/herdr/scripts/dev.a4s.reconcile.plist \
+  > ~/Library/LaunchAgents/dev.a4s.reconcile.plist
 plutil -lint ~/Library/LaunchAgents/dev.a4s.reconcile.plist
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.a4s.reconcile.plist   # enable
-launchctl bootout gui/$(id -u)/dev.a4s.reconcile                                  # disable
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.a4s.reconcile.plist
 ```
 
-Run a dry-run by hand first. Cron alternative: `* * * * * /usr/bin/python3 <repo>/skills/herdr/scripts/a4s-reconcile --apply --repo <repo> --callback <pane>`.
+## Pruebas
 
-## Tests
+```bash
+python3 -m unittest discover -s skills/herdr/tests -t skills/herdr
+```
 
-`python3 -m unittest discover -s skills/herdr/tests -t skills/herdr` — offline, fake `bd`/`herdr` via `A4S_BD`/`A4S_HERDR` (MC gate verdicts, unlinked rule, mc-pane-never-mutated, idempotency; `test_task_ack.py` covers receipt, start, duplicate, missing/mismatched correlation and no-start-without-ack; `test_task_result.py` covers the result record, closed verdicts, safe artifacts, identity, duplicate/conflict, ack compatibility and re-dispatch reset).
+Las pruebas usan ejecutables falsos. No contactan Beads, Herdr ni un proveedor.
