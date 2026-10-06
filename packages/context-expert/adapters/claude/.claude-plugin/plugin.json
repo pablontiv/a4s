@@ -1,6 +1,6 @@
 {
   "name": "a4s-context-expert",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Jev-guided deterministic compaction for Claude Code: replaces the native summary with a keep/truncate/drop transcript scored by TypeSafe Jev, and auto-compacts when Jev decides the moment is right.",
   "license": "UNLICENSED",
   "author": {
