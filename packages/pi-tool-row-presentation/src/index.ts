@@ -4,6 +4,13 @@ import type {
 	ExtensionCommandContext,
 	ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import { sliceByColumn } from "@earendil-works/pi-tui";
+import type {
+	ExtensionAPI as PionExtensionAPI,
+	ToolRendererRegistration,
+	ToolRendererResolver,
+	ToolRenderers,
+} from "@pablontiv/pion";
 import {
 	globalModePath,
 	isToolRowsMode,
@@ -16,21 +23,6 @@ import {
 
 export const TOOL_ROW_PRESENTATION_SETTINGS_COMMAND = "pi-tool-row-presentation-settings";
 
-interface TranscriptBlock {
-	readonly kind: string;
-	readonly subtype?: string;
-}
-
-interface TranscriptPolicyRegistration {
-	invalidate(): void;
-}
-
-interface TranscriptPolicyAPI {
-	registerTranscriptPresentationPolicy(
-		policy: (block: TranscriptBlock) => { density: "full" | "summary" | "hidden" } | undefined,
-	): TranscriptPolicyRegistration;
-}
-
 interface RegistrationDependencies {
 	readonly globalPath?: string;
 	readonly fileExists?: (path: string) => boolean;
@@ -40,6 +32,24 @@ interface RegistrationDependencies {
 
 type SettingsContext = Pick<ExtensionCommandContext, "hasUI" | "ui">;
 type ShortcutContext = Pick<ExtensionContext, "ui">;
+
+class CompactToolRow {
+	public constructor(private readonly toolName: string) {}
+
+	public render(width: number): string[] {
+		return [sliceByColumn(this.toolName, 0, Math.max(0, width), true)];
+	}
+
+	public invalidate(): void {}
+}
+
+class HiddenToolRow {
+	public render(): string[] {
+		return [];
+	}
+
+	public invalidate(): void {}
+}
 
 export default function toolRowPresentation(pi: ExtensionAPI): void {
 	registerToolRowPresentation(pi);
@@ -56,27 +66,21 @@ export function registerToolRowPresentation(
 	let globalMode: ToolRowsMode = "full";
 	let projectMode: ToolRowsMode | undefined;
 	let currentMode: ToolRowsMode = "full";
+	let rendererEnabled = false;
 
-	const policyApi = transcriptPolicyAPI(pi);
-	const presentation = policyApi?.registerTranscriptPresentationPolicy((block) => {
-		if (block.kind === "tool") {
-			return { density: currentMode === "compact" ? "summary" : currentMode };
-		}
-		if (
-			currentMode === "hidden" &&
-			block.kind === "thinking" &&
-			block.subtype === "orphaned-thinking-placeholder"
-		) {
-			return { density: "hidden" };
-		}
-		return undefined;
-	});
+	const resolver: ToolRendererResolver = (toolName, next) => {
+		const inherited = next();
+		if (!rendererEnabled || currentMode === "full") return inherited;
+		return toolRowRenderers(toolName, currentMode, inherited);
+	};
+	const registration = registerToolRenderer(pi, resolver);
+	if (registration !== undefined) rendererEnabled = true;
 
 	const applyEffectiveMode = (): void => {
 		const nextMode = projectMode ?? globalMode;
 		if (nextMode === currentMode) return;
 		currentMode = nextMode;
-		presentation?.invalidate();
+		registration?.invalidate();
 	};
 
 	const saveGlobalMode = (
@@ -92,9 +96,9 @@ export function registerToolRowPresentation(
 
 		globalMode = nextMode;
 		applyEffectiveMode();
-		if (!presentation) {
+		if (!registration) {
 			ctx.ui.notify(
-				"Tool row mode was saved. This Pi version cannot apply transcript presentation.",
+				"Tool row mode was saved. This host version cannot apply tool row presentation.",
 				"warning",
 			);
 			return;
@@ -184,11 +188,30 @@ function loadGlobalMode(
 	}
 }
 
-function transcriptPolicyAPI(pi: ExtensionAPI): TranscriptPolicyAPI | undefined {
-	const candidate = pi as unknown as Partial<TranscriptPolicyAPI>;
-	return typeof candidate.registerTranscriptPresentationPolicy === "function"
-		? (candidate as TranscriptPolicyAPI)
-		: undefined;
+function registerToolRenderer(
+	pi: ExtensionAPI,
+	resolver: ToolRendererResolver,
+): ToolRendererRegistration | undefined {
+	const register = (pi as unknown as Partial<Pick<PionExtensionAPI, "registerToolRenderer">>)
+		.registerToolRenderer;
+	if (typeof register !== "function") return undefined;
+	const candidate: unknown = register.call(pi, resolver);
+	if (!isRecord(candidate) || typeof candidate.invalidate !== "function") return undefined;
+	return candidate as unknown as ToolRendererRegistration;
+}
+
+function toolRowRenderers(
+	toolName: string,
+	mode: Exclude<ToolRowsMode, "full">,
+	inherited: ToolRenderers | undefined,
+): ToolRenderers {
+	return {
+		...inherited,
+		renderRow: (_args, _result, _theme, context) => {
+			if (context.expanded || context.isError) return undefined;
+			return mode === "compact" ? new CompactToolRow(toolName) : new HiddenToolRow();
+		},
+	};
 }
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {

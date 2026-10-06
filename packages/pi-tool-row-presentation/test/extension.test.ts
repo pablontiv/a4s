@@ -12,6 +12,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
+import type { ToolRendererResolver, ToolRenderers, ToolRowResult } from "@pablontiv/pion";
 import {
 	globalModePath,
 	modeFromFile,
@@ -28,8 +29,6 @@ const temporaryDirectories: string[] = [];
 
 type Mode = "full" | "compact" | "hidden";
 type Notification = { message: string; type: "info" | "warning" | "error" | undefined };
-type Block = { kind: "tool" | "thinking"; subtype?: "orphaned-thinking-placeholder" };
-type Presentation = { density: "full" | "summary" | "hidden" };
 type Context = {
 	hasUI: boolean;
 	cwd: string;
@@ -55,7 +54,7 @@ function createHarness(options: {
 	cwd: string;
 	trusted?: boolean;
 	settings?: Record<string, unknown>;
-	withPolicy?: boolean;
+	registration?: "valid" | "void" | "absent";
 	writeMode?: (mode: Mode, path: string) => void;
 }) {
 	const events = new Map<string, Array<(event: unknown, ctx: Context) => void | Promise<void>>>();
@@ -67,10 +66,10 @@ function createHarness(options: {
 		string,
 		{ description?: string; handler: (ctx: Context) => void | Promise<void> }
 	>();
-	const policies: Array<(block: Block) => Presentation | undefined> = [];
 	const notifications: Notification[] = [];
 	const selections: Array<string | undefined> = [];
 	let invalidations = 0;
+	let resolver: ToolRendererResolver | undefined;
 
 	const api: Record<string, unknown> = {
 		on: (event: string, handler: (event: unknown, ctx: Context) => void | Promise<void>) => {
@@ -89,11 +88,10 @@ function createHarness(options: {
 			shortcut: { description?: string; handler: (ctx: Context) => void | Promise<void> },
 		) => shortcuts.set(key, shortcut),
 	};
-	if (options.withPolicy !== false) {
-		api.registerTranscriptPresentationPolicy = (
-			policy: (block: Block) => Presentation | undefined,
-		) => {
-			policies.push(policy);
+	if (options.registration !== "absent") {
+		api.registerToolRenderer = (candidate: ToolRendererResolver) => {
+			resolver = candidate;
+			if (options.registration === "void") return undefined;
 			return {
 				invalidate: () => {
 					invalidations += 1;
@@ -130,10 +128,17 @@ function createHarness(options: {
 		assert.ok(shortcut);
 		await shortcut.handler(context);
 	};
-	const resolvePresentation = (block: Block): Presentation => {
-		let current: Presentation = { density: "full" };
-		for (const policy of policies) current = policy(block) ?? current;
-		return current;
+	const resolveRenderers = (
+		toolName: string,
+		inherited: ToolRenderers | undefined,
+	): { renderers: ToolRenderers | undefined; nextCalls: number } => {
+		let nextCalls = 0;
+		const renderers =
+			resolver?.(toolName, () => {
+				nextCalls += 1;
+				return inherited;
+			}) ?? inherited;
+		return { renderers, nextCalls };
 	};
 
 	return {
@@ -144,7 +149,7 @@ function createHarness(options: {
 		start,
 		runCommand,
 		runShortcut,
-		resolvePresentation,
+		resolveRenderers,
 		get invalidations() {
 			return invalidations;
 		},
@@ -168,11 +173,52 @@ function readFileSnapshot(path: string): { contents: string; mode: number } {
 	}
 }
 
-const tool = (): Block => ({ kind: "tool" });
-const orphanedThinking = (): Block => ({
-	kind: "thinking",
-	subtype: "orphaned-thinking-placeholder",
-});
+function component(label: string) {
+	return {
+		render: () => [label],
+		invalidate: () => {},
+	};
+}
+
+function inheritedRenderers(): ToolRenderers {
+	return {
+		renderShell: "self",
+		renderCall: () => component("call"),
+		renderResult: () => component("result"),
+		renderRow: () => component("row"),
+	};
+}
+
+function renderRow(
+	renderers: ToolRenderers | undefined,
+	options: {
+		width?: number;
+		expanded?: boolean;
+		isError?: boolean;
+		result?: ToolRowResult;
+	} = {},
+): string[] | undefined {
+	const row = renderers?.renderRow?.(
+		{},
+		options.result,
+		{} as never,
+		{
+			args: {},
+			toolCallId: "call-1",
+			invalidate: () => {},
+			lastComponent: undefined,
+			state: {},
+			cwd: "/project",
+			executionStarted: true,
+			argsComplete: true,
+			isPartial: options.result === undefined,
+			expanded: options.expanded ?? false,
+			showImages: true,
+			isError: options.isError ?? false,
+		},
+	);
+	return row?.render(options.width ?? 80);
+}
 
 describe("tool row configuration", () => {
 	it("resolves the agent directory and parses only the supported file format", () => {
@@ -199,12 +245,11 @@ describe("tool row configuration", () => {
 		const harness = createHarness({ globalPath, cwd });
 
 		await harness.start();
-		assert.deepEqual(harness.resolvePresentation(tool()), { density: "hidden" });
-		assert.deepEqual(harness.resolvePresentation(orphanedThinking()), { density: "hidden" });
+		assert.deepEqual(renderRow(harness.resolveRenderers("read", undefined).renderers), []);
 
 		writeModeFile(projectModePath(cwd), '{"mode":"dense"}\n');
 		await harness.start();
-		assert.deepEqual(harness.resolvePresentation(tool()), { density: "full" });
+		assert.equal(harness.resolveRenderers("read", undefined).renderers, undefined);
 	});
 
 	it("ignores the project override when the project is not trusted", async () => {
@@ -216,11 +261,10 @@ describe("tool row configuration", () => {
 		const harness = createHarness({ globalPath, cwd, trusted: false });
 
 		await harness.start();
-		assert.deepEqual(harness.resolvePresentation(tool()), { density: "summary" });
-		assert.deepEqual(harness.resolvePresentation(orphanedThinking()), { density: "full" });
+		assert.deepEqual(renderRow(harness.resolveRenderers("read", undefined).renderers), ["read"]);
 	});
 
-	it("migrates extensionSettings before toolRowsMode only when the new file is absent", async () => {
+	it("migrates supported legacy values only when the new file is absent", async () => {
 		const root = await temporaryDirectory();
 		const extensionPath = join(root, "extension", "pi-tool-row-presentation.json");
 		const extension = createHarness({
@@ -280,90 +324,159 @@ describe("tool row configuration", () => {
 });
 
 describe("tool row host contract", () => {
-	it("uses a common host fake that does not implement registerSetting", async () => {
+	it("keeps controls on an old host and uses native rows", async () => {
+		const root = await temporaryDirectory();
+		const globalPath = join(root, "agent", "pi-tool-row-presentation.json");
+		const harness = createHarness({ globalPath, cwd: root, registration: "void" });
+		const inherited = inheritedRenderers();
+
+		await harness.start();
+		await harness.runCommand("compact");
+		assert.deepEqual(JSON.parse(readFileSync(globalPath, "utf8")), { mode: "compact" });
+		assert.deepEqual(harness.notifications.at(-1), {
+			message: "Tool row mode was saved. This host version cannot apply tool row presentation.",
+			type: "warning",
+		});
+		assert.strictEqual(harness.resolveRenderers("read", inherited).renderers, inherited);
+
+		await harness.runShortcut();
+		assert.deepEqual(JSON.parse(readFileSync(globalPath, "utf8")), { mode: "hidden" });
+		assert.deepEqual(harness.notifications.at(-1), {
+			message: "Tool row mode was saved. This host version cannot apply tool row presentation.",
+			type: "warning",
+		});
+		assert.equal(harness.invalidations, 0);
+		assert.deepEqual([...harness.commands.keys()], [TOOL_ROW_PRESENTATION_SETTINGS_COMMAND]);
+		assert.equal(harness.shortcuts.has("ctrl+alt+o"), true);
+	});
+
+	it("loads without an old host registration method", async () => {
+		const root = await temporaryDirectory();
+		const harness = createHarness({
+			globalPath: join(root, "agent", "pi-tool-row-presentation.json"),
+			cwd: root,
+			registration: "absent",
+		});
+		await harness.start();
+		await harness.runCommand("hidden");
+		assert.equal(harness.invalidations, 0);
+	});
+
+	it("calls next once and returns inherited renderers unchanged in full mode", async () => {
 		const root = await temporaryDirectory();
 		const harness = createHarness({
 			globalPath: join(root, "agent", "pi-tool-row-presentation.json"),
 			cwd: root,
 		});
-		assert.equal("registerSetting" in harness.api, false);
-		assert.deepEqual([...harness.commands.keys()], [TOOL_ROW_PRESENTATION_SETTINGS_COMMAND]);
-		assert.equal(harness.shortcuts.has("ctrl+alt+o"), true);
+		const inherited = inheritedRenderers();
 		await harness.start();
-		assert.deepEqual(harness.resolvePresentation(tool()), { density: "full" });
+
+		const resolution = harness.resolveRenderers("grep", inherited);
+		assert.equal(resolution.nextCalls, 1);
+		assert.strictEqual(resolution.renderers, inherited);
 	});
 
-	it("changes and persists the mode through the command", async () => {
+	it("replaces only the complete row in compact and hidden modes", async () => {
 		const root = await temporaryDirectory();
 		const globalPath = join(root, "agent", "pi-tool-row-presentation.json");
 		const harness = createHarness({ globalPath, cwd: root });
+		const inherited = inheritedRenderers();
 		await harness.start();
 
-		await harness.runCommand("compact");
-		const saved = readFileSnapshot(globalPath);
-		assert.deepEqual(JSON.parse(saved.contents), { mode: "compact" });
-		assert.equal(saved.mode, 0o600);
-		assert.deepEqual(harness.resolvePresentation(tool()), { density: "summary" });
-		assert.deepEqual(harness.notifications.at(-1), { message: "Tool rows: compact", type: "info" });
-
-		await harness.runCommand("Reset");
-		assert.deepEqual(JSON.parse(readFileSync(globalPath, "utf8")), { mode: "full" });
-		assert.deepEqual(harness.resolvePresentation(tool()), { density: "full" });
-	});
-
-	it("writes the global file without replacing a trusted project override", async () => {
-		const root = await temporaryDirectory();
-		const globalPath = join(root, "agent", "pi-tool-row-presentation.json");
-		writeModeFile(projectModePath(root), serializeMode("hidden"));
-		const harness = createHarness({ globalPath, cwd: root });
-		await harness.start();
-
-		await harness.runCommand("compact");
-		assert.deepEqual(JSON.parse(readFileSync(globalPath, "utf8")), { mode: "compact" });
-		assert.deepEqual(harness.resolvePresentation(tool()), { density: "hidden" });
-	});
-
-	it("cancels without writing", async () => {
-		const root = await temporaryDirectory();
-		const globalPath = join(root, "agent", "pi-tool-row-presentation.json");
-		const harness = createHarness({ globalPath, cwd: root });
-		await harness.start();
-
-		await harness.runCommand("Cancel");
-		assert.equal(existsSync(globalPath), false);
-		assert.deepEqual(harness.notifications, []);
-	});
-
-	it("persists each shortcut change", async () => {
-		const root = await temporaryDirectory();
-		const globalPath = join(root, "agent", "pi-tool-row-presentation.json");
-		const harness = createHarness({ globalPath, cwd: root });
-		await harness.start();
-
-		for (const expected of ["compact", "hidden", "full"] as const) {
-			await harness.runShortcut();
-			assert.deepEqual(JSON.parse(readFileSync(globalPath, "utf8")), { mode: expected });
+		for (const mode of ["compact", "hidden"] as const) {
+			await harness.runCommand(mode);
+			const resolution = harness.resolveRenderers("bash", inherited);
+			assert.equal(resolution.nextCalls, 1);
+			assert.notStrictEqual(resolution.renderers, inherited);
+			assert.strictEqual(resolution.renderers?.renderCall, inherited.renderCall);
+			assert.strictEqual(resolution.renderers?.renderResult, inherited.renderResult);
+			assert.strictEqual(resolution.renderers?.renderShell, inherited.renderShell);
+			assert.notStrictEqual(resolution.renderers?.renderRow, inherited.renderRow);
 		}
 	});
 
-	it("cycles the global mode while a project override keeps the effective mode unchanged", async () => {
+	it("renders compact pending and successful rows as one width-limited line", async () => {
+		const root = await temporaryDirectory();
+		const harness = createHarness({
+			globalPath: join(root, "agent", "pi-tool-row-presentation.json"),
+			cwd: root,
+		});
+		await harness.start();
+		await harness.runCommand("compact");
+		const renderers = harness.resolveRenderers("long-tool-name", inheritedRenderers()).renderers;
+
+		assert.deepEqual(renderRow(renderers, { width: 4 }), ["long"]);
+		assert.deepEqual(
+			renderRow(harness.resolveRenderers("工具名称", inheritedRenderers()).renderers, { width: 4 }),
+			["工具"],
+		);
+		assert.deepEqual(
+			renderRow(renderers, {
+				result: { content: [{ type: "text", text: "done" }], details: { complete: true } },
+			}),
+			["long-tool-name"],
+		);
+		assert.equal(renderRow(renderers, { isError: true }), undefined);
+		assert.equal(renderRow(renderers, { expanded: true }), undefined);
+	});
+
+	it("renders hidden pending and successful rows with no lines", async () => {
+		const root = await temporaryDirectory();
+		const harness = createHarness({
+			globalPath: join(root, "agent", "pi-tool-row-presentation.json"),
+			cwd: root,
+		});
+		await harness.start();
+		await harness.runCommand("hidden");
+		const renderers = harness.resolveRenderers("read", inheritedRenderers()).renderers;
+
+		assert.deepEqual(renderRow(renderers), []);
+		assert.deepEqual(
+			renderRow(renderers, { result: { content: [{ type: "text", text: "done" }], details: {} } }),
+			[],
+		);
+		assert.equal(renderRow(renderers, { isError: true }), undefined);
+		assert.equal(renderRow(renderers, { expanded: true }), undefined);
+	});
+
+	it("invalidates once only when the effective mode changes", async () => {
 		const root = await temporaryDirectory();
 		const globalPath = join(root, "agent", "pi-tool-row-presentation.json");
-		writeModeFile(globalPath, serializeMode("compact"));
+		const harness = createHarness({ globalPath, cwd: root });
+		await harness.start();
+
+		await harness.runCommand("compact");
+		assert.equal(harness.invalidations, 1);
+		await harness.runCommand("compact");
+		assert.equal(harness.invalidations, 1);
+		await harness.runCommand("hidden");
+		assert.equal(harness.invalidations, 2);
+
+		const renderers = harness.resolveRenderers("read", inheritedRenderers()).renderers;
+		renderRow(renderers, { width: 1 });
+		renderRow(renderers, { expanded: true });
+		assert.equal(harness.invalidations, 2);
+	});
+
+	it("does not invalidate for a global change hidden by a project override", async () => {
+		const root = await temporaryDirectory();
+		const globalPath = join(root, "agent", "pi-tool-row-presentation.json");
 		writeModeFile(projectModePath(root), serializeMode("hidden"));
 		const harness = createHarness({ globalPath, cwd: root });
 		await harness.start();
 		assert.equal(harness.invalidations, 1);
 
-		for (const expected of ["hidden", "full", "compact"] as const) {
-			await harness.runShortcut();
-			assert.deepEqual(JSON.parse(readFileSync(globalPath, "utf8")), { mode: expected });
-			assert.deepEqual(harness.resolvePresentation(tool()), { density: "hidden" });
-			assert.equal(harness.invalidations, 1);
-		}
+		await harness.runCommand("compact");
+		assert.deepEqual(JSON.parse(readFileSync(globalPath, "utf8")), { mode: "compact" });
+		assert.equal(harness.invalidations, 1);
+		assert.deepEqual(renderRow(harness.resolveRenderers("read", undefined).renderers), []);
+		assert.deepEqual(harness.notifications.at(-1), {
+			message: "Global tool rows saved: compact. Project override remains: hidden.",
+			type: "info",
+		});
 	});
 
-	it("does not change the active mode after a write failure", async () => {
+	it("does not change or invalidate the effective mode after a write failure", async () => {
 		const root = await temporaryDirectory();
 		const harness = createHarness({
 			globalPath: join(root, "agent", "pi-tool-row-presentation.json"),
@@ -372,11 +485,12 @@ describe("tool row host contract", () => {
 				throw new Error("write failed");
 			},
 		});
+		const inherited = inheritedRenderers();
 		await harness.start();
 
 		await harness.runCommand("hidden");
 		await harness.runShortcut();
-		assert.deepEqual(harness.resolvePresentation(tool()), { density: "full" });
+		assert.strictEqual(harness.resolveRenderers("read", inherited).renderers, inherited);
 		assert.equal(harness.invalidations, 0);
 		assert.deepEqual(harness.notifications.at(-1), {
 			message: "Tool row presentation could not save its settings.",
@@ -384,46 +498,37 @@ describe("tool row host contract", () => {
 		});
 	});
 
-	it("invalidates the Pion policy after a successful change", async () => {
-		const root = await temporaryDirectory();
-		const harness = createHarness({
-			globalPath: join(root, "agent", "pi-tool-row-presentation.json"),
-			cwd: root,
-		});
-		await harness.start();
-		await harness.runCommand("hidden");
-
-		assert.equal(harness.invalidations, 1);
-		assert.deepEqual(harness.resolvePresentation(tool()), { density: "hidden" });
-		assert.deepEqual(harness.resolvePresentation(orphanedThinking()), { density: "hidden" });
-	});
-
-	it("loads in Pi without the policy and reports that Pi cannot apply the saved mode", async () => {
-		const root = await temporaryDirectory();
-		const globalPath = join(root, "agent", "pi-tool-row-presentation.json");
-		const harness = createHarness({ globalPath, cwd: root, withPolicy: false });
-		await harness.start();
-		await harness.runCommand("hidden");
-
-		assert.deepEqual(JSON.parse(readFileSync(globalPath, "utf8")), { mode: "hidden" });
-		assert.deepEqual(harness.notifications.at(-1), {
-			message: "Tool row mode was saved. This Pi version cannot apply transcript presentation.",
-			type: "warning",
-		});
+	it("does not use retired host APIs or transcript markers", () => {
+		const source = readFileSync(new URL("../src/index.ts", import.meta.url), "utf8");
+		const retiredNames = [
+			["register", "Setting"].join(""),
+			["registerTranscript", "PresentationPolicy"].join(""),
+			["orphaned-thinking", "-placeholder"].join(""),
+		];
+		for (const name of retiredNames) {
+			assert.equal(source.includes(name), false);
+		}
 	});
 });
 
 describe("package host dependencies", () => {
-	it("declares Pi and Pion as optional peers and uses Pi for common development types", () => {
+	it("declares compatible optional peers and uses the approved Pion snapshot", () => {
 		const manifest = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as {
+			dependencies?: Record<string, string>;
 			peerDependencies?: Record<string, string>;
 			peerDependenciesMeta?: Record<string, { optional?: boolean }>;
 			devDependencies?: Record<string, string>;
 		};
+		const version = "1.0.2-dev.40713b10ba6db5c6f083026e3367e2af72cea0ea";
+		assert.equal(manifest.dependencies?.["@earendil-works/pi-tui"], "1.0.4");
 		assert.equal(manifest.peerDependencies?.["@earendil-works/pi-coding-agent"], ">=1.0.3");
-		assert.equal(manifest.peerDependencies?.["@pablontiv/pion"], ">=1.0.4");
+		assert.equal(manifest.peerDependencies?.["@pablontiv/pion"], `>=1.0.4 || ${version}`);
 		assert.equal(manifest.peerDependenciesMeta?.["@earendil-works/pi-coding-agent"]?.optional, true);
 		assert.equal(manifest.peerDependenciesMeta?.["@pablontiv/pion"]?.optional, true);
 		assert.equal(manifest.devDependencies?.["@earendil-works/pi-coding-agent"], "1.0.3");
+		assert.equal(
+			manifest.devDependencies?.["@pablontiv/pion"],
+			`https://github.com/pablontiv/pi/releases/download/pion-local-v${version}/pablontiv-pion-${version}.tgz`,
+		);
 	});
 });

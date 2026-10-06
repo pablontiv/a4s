@@ -2,9 +2,9 @@
 
 This extension controls tool rows in Pi and Pion. It supports `full`, `compact`, and `hidden` modes.
 
-Pion 1.0.4 applies the complete transcript presentation policy. The policy includes tool rows, images, and orphaned reasoning coordination. Pi 1.0.3 does not provide this policy API. Pi can save the mode, but Pi cannot apply the presentation. The extension reports this limitation after each successful change in Pi.
+A Pion host with the final `renderRow()` contract applies all three modes. The `full` mode uses the native tool row. The `compact` mode uses one private line when the row is collapsed and does not report an error. The `hidden` mode removes that collapsed row. Expanded rows and error rows use the native tool row. Direct Bash output does not change. HTML export does not use this renderer.
 
-The extension does not use a tool renderer or `setToolsExpanded()`. Those APIs do not implement the complete policy.
+Pi 1.0.3 and Pion 1.0.4 keep command, shortcut, and storage support. These hosts use the native tool row. The extension reports this limitation after each successful change.
 
 ## Use
 
@@ -62,3 +62,5 @@ git diff --check
 ```
 
 The package declares Pi and Pion as optional peer hosts. A consumer does not need to install both hosts.
+
+The development dependency uses the immutable Pion snapshot for the final `renderRow()` contract.

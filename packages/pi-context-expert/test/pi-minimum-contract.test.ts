@@ -40,7 +40,7 @@ test("Context Expert has no duplicate private TypeSafe runtime", () => {
   assert.equal(lock.packages["node_modules/@typesafe-ai/sdk"], undefined);
 });
 
-test("development installs the declared minimum Pi and Pion hosts", () => {
+test("development installs the minimum Pi host and approved Pion snapshot", () => {
   const manifest = JSON.parse(
     readFileSync(new URL("packages/pi-context-expert/package.json", ROOT), "utf8"),
   ) as {
@@ -49,14 +49,12 @@ test("development installs the declared minimum Pi and Pion hosts", () => {
   const lock = JSON.parse(readFileSync(new URL("package-lock.json", ROOT), "utf8")) as {
     packages: Record<string, { version?: string }>;
   };
+  const pionVersion = "1.0.2-dev.40713b10ba6db5c6f083026e3367e2af72cea0ea";
   assert.equal(manifest.devDependencies["@earendil-works/pi-coding-agent"], "1.0.3");
-  assert.match(manifest.devDependencies["@pablontiv/pion"] ?? "", /pion-v1\.0\.4/);
+  assert.match(manifest.devDependencies["@pablontiv/pion"] ?? "", new RegExp(pionVersion));
   assert.equal(lock.packages["node_modules/@earendil-works/pi-coding-agent"]?.version, "1.0.3");
   assert.equal(lock.packages["node_modules/@earendil-works/pi-ai"]?.version, "1.0.3");
-  assert.equal(
-    lock.packages["packages/pi-context-expert/node_modules/@pablontiv/pion"]?.version,
-    "1.0.4",
-  );
+  assert.equal(lock.packages["node_modules/@pablontiv/pion"]?.version, pionVersion);
 });
 
 test("the runtime contract declares an inclusive minimum instead of an exact Pi version", () => {
