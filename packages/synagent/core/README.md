@@ -162,13 +162,13 @@ entre sí. En
 `session_shutdown` cancela sus listeners y cierra ambas conexiones
 idempotentemente sin borrar la suscripción durable.
 
-El proyecto sale primero de `a4s.synagent.project`; si está vacío, se deriva del
-`remote.origin.url` canónico leído en el `ctx.cwd` de la sesión, nunca del cwd
-del proceso ni de su basename. Si no resuelve, muestra un warning y queda
-inactivo, sin suscripciones ni publicación; los intentos de envío piden
-configurar el proyecto. El estado de `/synagent status` muestra `inactive=true`;
-se remedia con `/synagent set project <token>` o configurando
-`remote.origin.url`.
+El proyecto sale primero de la configuración nativa de Synagent. Si está vacío,
+se deriva del `remote.origin.url` canónico leído en el `ctx.cwd` de la sesión.
+No usa el cwd del proceso ni su basename. Si no resuelve, muestra un warning y
+queda inactivo, sin suscripciones ni publicación. Los intentos de envío piden
+configurar el proyecto. El estado de `/synagent status` muestra
+`inactive=true`. Se remedia con `/synagent-settings`, con
+`/synagent set project <token>` o con un `remote.origin.url` válido.
 
 ### Envío y comandos Pi
 
@@ -179,6 +179,7 @@ de depuración:
 
 ```text
 /mq-send <to>: texto        (debug; to = dirección v1, o token cualificado con tu proyecto)
+/synagent-settings
 /synagent status
 /synagent enable|disable
 /synagent resume
@@ -188,32 +189,70 @@ de depuración:
 /synagent set default-peer <address>
 ```
 
-`/synagent set project` persiste en el scope de proyecto de settings de Pi;
-los demás subcomandos `set` persisten en el scope global. Los cambios de
-`enabled`, `broker-url`, `project` o `global` reinician solo la conexión MQTT.
-Al cambiar de topics durables, el adaptador elimina las
-suscripciones obsoletas antes de usar las nuevas y reintenta esa limpieza al
-reconectar. El cambio descarta mensajes aún no enviados de la configuración
-anterior. Una entrega ya pasada a Pi no se puede cancelar y permanece como
-barrera de orden hasta `agent_settled`.
+`/synagent-settings` muestra los valores efectivos. Permite editar cada valor.
+Permite restablecer un valor a su valor heredado. Permite cancelar sin cambios.
+`enabled` y `global` usan una selección booleana. `broker-url` y
+`default-peer` usan entradas validadas. `project` acepta un token explícito.
+Un valor vacío de `project` restaura la derivación desde Git.
 
-### Settings propios
+Los subcomandos de `/synagent` conservan las automatizaciones existentes.
+`/synagent set project` persiste en el ámbito de proyecto. Los otros
+subcomandos persisten en el ámbito global. Los cambios de `enabled`,
+`broker-url`, `project` o `global` ejecutan una reconfiguración MQTT. Un cambio
+de `default-peer` no reinicia MQTT. Al cambiar los topics durables, el adaptador
+elimina las suscripciones obsoletas antes de usar las nuevas. Reintenta esa
+limpieza al reconectar. El cambio descarta mensajes aún no enviados de la
+configuración anterior. Una entrega ya pasada a Pi no se puede cancelar.
+Permanece como barrera de orden hasta `agent_settled`.
 
-| Key | Default |
-| --- | --- |
-| `a4s.synagent.enabled` | `true` |
-| `a4s.synagent.broker-url` | `mqtt://127.0.0.1:1884` |
-| `a4s.synagent.project` | remoto `origin` del `ctx.cwd` de sesión |
-| `a4s.synagent.global` | `true` |
-| `a4s.synagent.default-peer` | `claude` |
+### Configuración nativa de Pi
 
-No existe setting de instancia y el adaptador no lee variables de entorno
+| Clave | Default | Ámbito de escritura |
+| --- | --- | --- |
+| `enabled` | `true` | global |
+| `broker-url` | `mqtt://127.0.0.1:1884` | global |
+| `project` | derivado del remoto `origin` | proyecto |
+| `global` | `true` | global |
+| `default-peer` | `claude` | global |
+
+El archivo global es `<agent-dir>/synagent.json`. El adaptador usa el valor no
+vacío de `PI_CODING_AGENT_DIR` como `<agent-dir>`. Si la variable está vacía o
+no existe, usa `~/.pi/agent`. El archivo de proyecto es
+`<ctx.cwd>/.pi/synagent.json`. El adaptador sólo lee, crea o modifica el archivo
+de proyecto cuando Pi indica que el proyecto es confiable.
+
+Cada archivo contiene un objeto JSON plano. Puede contener una o más de las
+cinco claves. Este ejemplo muestra el formato completo:
+
+```json
+{
+  "enabled": true,
+  "broker-url": "mqtt://127.0.0.1:1884",
+  "project": "Example.Project",
+  "global": true,
+  "default-peer": "claude"
+}
+```
+
+El adaptador resuelve cada clave por separado. Usa este orden: archivo nuevo de
+proyecto, archivo nuevo global, `extensionSettings` legacy de proyecto,
+`extensionSettings` legacy global y default. Ignora los archivos de proyecto
+cuando el proyecto no es confiable.
+
+Si un archivo `synagent.json` no existe, el adaptador migra las cinco claves
+`a4s.synagent.*` conocidas desde el `settings.json` del mismo ámbito. No copia
+otras claves. No modifica `settings.json`. No migra una URL MQTT que no sea
+loopback. La escritura usa un archivo temporal y un cambio de nombre atómico.
+El adaptador crea los directorios necesarios. El archivo global usa modo
+`0600`.
+
+No existe una clave de instancia. El adaptador no usa variables de entorno
 `SYNAGENT_*`. Mientras el broker no tenga autenticación, acepta únicamente URLs
 `mqtt://` de loopback sin credenciales. Si la URL configurada no cumple esa
 restricción, muestra un warning y usa el default seguro
-`mqtt://127.0.0.1:1884`. Los tokens v1 son sensibles a
-mayúsculas y admiten puntos (`[A-Za-z0-9][A-Za-z0-9._-]{0,255}`); rechazan `/`,
-`+` y `#` dentro de cada token.
+`mqtt://127.0.0.1:1884`. Los tokens v1 son sensibles a mayúsculas y admiten
+puntos (`[A-Za-z0-9][A-Za-z0-9._-]{0,255}`). Rechazan `/`, `+` y `#` dentro de
+cada token.
 
 ### Entrega en Pi
 
