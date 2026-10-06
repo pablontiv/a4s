@@ -69,6 +69,84 @@ def compute_outcome_for_record(record, with_prs: bool = True, with_beads: bool =
     )
 
 
+def _enumerate_worktrees(repo_root: str) -> List[str]:
+    """Enumerate all worktrees from a git repository root.
+
+    D7 FIX: Lists worktrees via `git worktree list --porcelain` and returns
+    their paths. This allows discovering commits in worktrees when a session
+    cwd is inside one.
+
+    Returns list of worktree paths (git directories).
+    """
+    if not (repo_root and os.path.isdir(repo_root)):
+        return []
+    try:
+        r = subprocess.run(
+            ['git', '-C', repo_root, 'worktree', 'list', '--porcelain'],
+            capture_output=True, text=True, timeout=10
+        )
+        if r.returncode != 0 or not r.stdout.strip():
+            return []
+        worktrees = []
+        for line in r.stdout.strip().split('\n'):
+            if line.startswith('worktree '):
+                path = line.split(None, 1)[1]
+                if os.path.isdir(path):
+                    worktrees.append(path)
+        return worktrees
+    except Exception:
+        return []
+
+
+def _git_log_from_worktrees(cwd: Optional[str], repo_root: Optional[str], since: datetime.datetime, until: datetime.datetime, author_email: Optional[str] = None) -> List[tuple[str, str]]:
+    """Extract commits from session cwd and all worktrees of the repo.
+
+    D7 enhancement: If cwd is a repo, enumerate worktrees and search all of them
+    for commits in the given time window. Deduplicates commit SHAs.
+
+    Returns [(sha, subject)] for all unique commits found.
+    """
+    commits_dict = {}
+
+    if cwd and os.path.isdir(cwd):
+        try:
+            r = subprocess.run(
+                ['git', '-C', cwd, 'rev-parse', '--show-toplevel'],
+                capture_output=True, text=True, timeout=5
+            )
+            if r.returncode == 0:
+                repo_root = r.stdout.strip()
+        except Exception:
+            pass
+
+    if not repo_root or not os.path.isdir(repo_root):
+        return _git_log(cwd, since, until)
+
+    search_dirs = [cwd] if cwd else [repo_root]
+    worktrees = _enumerate_worktrees(repo_root)
+    search_dirs.extend(worktrees)
+    search_dirs = [d for d in search_dirs if d and os.path.isdir(d)]
+
+    for search_dir in search_dirs:
+        try:
+            cmd = ['git', '-C', search_dir, 'log',
+                   '--since', since.strftime('%Y-%m-%dT%H:%M:%S'),
+                   '--until', until.strftime('%Y-%m-%dT%H:%M:%S'),
+                   '--format=%H %s']
+            if author_email:
+                cmd.extend(['--author', author_email])
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+            if r.returncode == 0 and r.stdout.strip():
+                for ln in r.stdout.strip().split('\n'):
+                    sha, _, subject = ln.partition(' ')
+                    if sha and sha not in commits_dict:
+                        commits_dict[sha] = subject
+        except Exception:
+            continue
+
+    return [(sha, subject) for sha, subject in commits_dict.items()]
+
+
 def _git_log(cwd: Optional[str], since: datetime.datetime, until: datetime.datetime) -> List[tuple[str, str]]:
     """Devuelve los commits en `cwd` entre since y until como [(sha, subject)]."""
     if not (cwd and os.path.isdir(cwd)):
@@ -88,39 +166,6 @@ def _git_log(cwd: Optional[str], since: datetime.datetime, until: datetime.datet
             sha, _, subject = ln.partition(' ')
             lines.append((sha, subject))
         return lines
-    except Exception:
-        return []
-
-
-def _git_log_with_files(cwd: str, since: datetime.datetime, until: datetime.datetime) -> List[tuple]:
-    """Devuelve [(sha, filepath)] para cada archivo modificado en commits del rango.
-
-    Si un commit toca N archivos, aparece N veces.
-    """
-    if not (cwd and os.path.isdir(cwd)):
-        return []
-    try:
-        r = subprocess.run(
-            ['git', '-C', cwd, 'log',
-             '--since', since.strftime('%Y-%m-%dT%H:%M:%S'),
-             '--until', until.strftime('%Y-%m-%dT%H:%M:%S'),
-             '--name-only', '--format=%H'],
-            capture_output=True, text=True, timeout=15
-        )
-        if r.returncode != 0 or not r.stdout.strip():
-            return []
-        out = []
-        current_sha = None
-        for ln in r.stdout.split('\n'):
-            ln = ln.strip()
-            if not ln:
-                current_sha = None
-                continue
-            if len(ln) >= 7 and all(c in '0123456789abcdef' for c in ln.lower()):
-                current_sha = ln
-            elif current_sha:
-                out.append((current_sha, ln))
-        return out
     except Exception:
         return []
 
@@ -245,13 +290,24 @@ def compute_outcome_for_session(jsonl_path: str, with_prs: bool = True, with_bea
         )
     cwd = _session_cwd(jsonl_path)
 
-    # 1. Commits
-    commits = _git_log(cwd, t1, t2)
+    # D7 FIX: Commits from cwd and all worktrees
+    repo_root = None
+    if cwd and os.path.isdir(cwd):
+        try:
+            r = subprocess.run(
+                ['git', '-C', cwd, 'rev-parse', '--show-toplevel'],
+                capture_output=True, text=True, timeout=5
+            )
+            if r.returncode == 0:
+                repo_root = r.stdout.strip()
+        except Exception:
+            pass
+    commits = _git_log_from_worktrees(cwd, repo_root, t1, t2)
 
     # 2. PRs (uno por commit; deduplicar por PR number)
     prs_seen = {}
     if with_prs:
-        for sha, subj in commits:
+        for sha, _ in commits:
             pr = _gh_pr_for_commit(cwd, sha)
             if pr and pr.get('number') not in prs_seen:
                 prs_seen[pr['number']] = pr
@@ -284,7 +340,7 @@ def compute_outcome_for_session(jsonl_path: str, with_prs: bool = True, with_bea
             except Exception:
                 pass
         ts_sorted.sort()
-        for i, t in enumerate(ts_sorted):
+        for _, t in enumerate(ts_sorted):
             window = sum(1 for t2_ in ts_sorted if 0 <= (t2_ - t).total_seconds() <= 60)
             fan_out_max = max(fan_out_max, window)
 

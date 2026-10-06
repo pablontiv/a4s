@@ -40,6 +40,27 @@ class OutcomeContractTests(unittest.TestCase):
         outcome = outcomes.compute_outcome_for_session('/does-not-exist.jsonl', with_prs=False, with_beads=False)
         self.assertEqual(outcome['commit_shas'], [])
 
+    def test_d7_enumerate_worktrees_returns_empty_for_non_repo(self):
+        """D7 FIX: _enumerate_worktrees returns empty list for non-git-repo."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = outcomes._enumerate_worktrees(tmpdir)
+            self.assertEqual(result, [])
+
+    def test_d7_enumerate_worktrees_handles_missing_directory(self):
+        """D7 FIX: _enumerate_worktrees handles missing directory gracefully."""
+        result = outcomes._enumerate_worktrees('/nonexistent/path')
+        self.assertEqual(result, [])
+
+    def test_d7_git_log_from_worktrees_includes_cwd(self):
+        """D7 FIX: _git_log_from_worktrees searches cwd in addition to worktrees."""
+        import datetime as dt
+        cwd = '/nonexistent/cwd'
+        repo_root = '/nonexistent/repo'
+        since = dt.datetime(2026, 1, 1, tzinfo=dt.timezone.utc)
+        until = dt.datetime(2026, 12, 31, tzinfo=dt.timezone.utc)
+        result = outcomes._git_log_from_worktrees(cwd, repo_root, since, until)
+        self.assertEqual(result, [])
+
 
 if __name__ == '__main__':
     unittest.main()

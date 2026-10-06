@@ -70,6 +70,34 @@ def aggregate_topology(records: Iterable[SessionRecord]) -> dict[str, CohortSumm
     return dict(summary)
 
 
+def aggregate_form(records: Iterable[SessionRecord]) -> dict[str, CohortSummary]:
+    """D4 FIX: Aggregate sessions by form (4 forms taxonomy).
+
+    Groups sessions by their form classification (form-solo, form-orch-hybrid,
+    form-delegator-pure, form-cross-session) across all harnesses.
+    """
+    summary: dict[str, CohortSummary] = defaultdict(CohortSummary)
+    for record in records:
+        key = record.form
+        if key == 'unknown':
+            continue
+        target = summary[key]
+        target.sessions += 1
+        target.input_tokens += record.input_tokens
+        target.output_tokens += record.output_tokens
+        target.cache_read_tokens += record.cache_read_tokens
+        target.cache_write_tokens += record.cache_write_tokens
+        target.total_tokens += record.input_tokens + record.output_tokens + record.cache_read_tokens + record.cache_write_tokens
+        target.git_observable_sessions += record.commit_coverage == 'observable'
+        target.commits.update(record.commits)
+        target.prs.update(record.prs)
+        target.beads.update(record.beads_closed)
+        if record.cost_native_usd is not None:
+            target.native_cost_sessions += 1
+            target.native_cost_usd += record.cost_native_usd
+    return dict(summary)
+
+
 def render_topology_overview(summary: dict[str, CohortSummary]) -> str:
     out = ['=== TOPOLOGÍA POR HARNESS ===', '', f"{'cohorte':18s} {'sess':>5s} {'tokens':>12s} {'SHAs':>6s} {'tok/SHA':>10s}"]
     for key in sorted(summary):
@@ -130,4 +158,31 @@ def render_tokens_breakdown(summary: dict[str, HarnessSummary]) -> str:
     out.append('Interpretation: input and output tokens are cache-agnostic.')
     out.append('                cacheRead is quota-counted volume even if cost-effective.')
     out.append('                cacheWrite is quota-counted volume even if cost-effective.')
+    return '\n'.join(out)
+
+
+def render_form_overview(summary: dict[str, CohortSummary]) -> str:
+    """D4 FIX: Render the 4 forms taxonomy in the report.
+
+    Displays sessions, tokens, and commits by form classification.
+    Forms are mutually exclusive classifications independent of topology.
+    """
+    form_labels = {
+        'form-solo': 'Form 1: Solo (no subagents, no cross-session)',
+        'form-orch-hybrid': 'Form 2: Orchestrator + Subagents (hybrid)',
+        'form-delegator-pure': 'Form 3: Pure Delegator (subagents dominant)',
+        'form-cross-session': 'Form 4: Cross-Session Orchestration',
+    }
+
+    out = ['=== TAXONOMÍA DE FORMAS (4 FORMAS) ===', '', f"{'form':30s} {'sess':>5s} {'tokens':>12s} {'commits':>8s} {'tok/commit':>12s}"]
+    for form_key in ('form-solo', 'form-orch-hybrid', 'form-delegator-pure', 'form-cross-session'):
+        item = summary.get(form_key)
+        if not item or item.sessions == 0:
+            continue
+        label = form_labels.get(form_key, form_key)
+        tokens_per_commit = (item.total_tokens // item.unique_shas) if item.unique_shas else 0
+        out.append(
+            f"{label:30s} {item.sessions:>5d} {item.total_tokens:>12d} "
+            f"{item.unique_shas:>8d} {tokens_per_commit:>12d}"
+        )
     return '\n'.join(out)

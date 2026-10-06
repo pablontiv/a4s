@@ -90,6 +90,70 @@ class PiDatasetTests(unittest.TestCase):
             record = parse_codex_session(path)
         self.assertEqual((record.observed_topology, record.topology_confidence), ('S2', 'direct'))
 
+    def test_d5_cross_session_with_parent_session_id_and_intercom(self):
+        """D5 FIX: Detect cross_session_heuristic via parent_session_id + intercom."""
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / 'cross-session.jsonl'
+            path.write_text(
+                '{"type":"session","timestamp":"2026-08-01T00:00:00Z","cwd":"/repo","id":"s1","parent_session_id":"parent-s2"}\n'
+                '{"type":"custom","customType":"intercom"}\n'
+                '{"type":"message","timestamp":"2026-08-01T00:01:00Z","message":{"role":"assistant","content":[],"usage":{"input":5,"output":2}}}\n'
+            )
+            record = parse_pi_session(path)
+        self.assertEqual(record.form, 'form-cross-session')
+
+    def test_d5_cross_session_with_parent_session_id_no_intercom(self):
+        """D5 FIX: cross_session_heuristic alone (no intercom) detects Form 4."""
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / 'cross-session-no-intercom.jsonl'
+            path.write_text(
+                '{"type":"session","timestamp":"2026-08-01T00:00:00Z","cwd":"/repo","id":"s1","parent_session_id":"parent-s2"}\n'
+                '{"type":"message","timestamp":"2026-08-01T00:01:00Z","message":{"role":"assistant","content":[],"usage":{"input":5,"output":2}}}\n'
+            )
+            record = parse_pi_session(path)
+        self.assertEqual(record.form, 'form-cross-session')
+
+    def test_d5_no_cross_session_without_signal(self):
+        """D5 FIX: No cross_session_heuristic without parent_session_id."""
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / 'solo.jsonl'
+            path.write_text(
+                '{"type":"session","timestamp":"2026-08-01T00:00:00Z","cwd":"/repo","id":"s1"}\n'
+                '{"type":"message","timestamp":"2026-08-01T00:01:00Z","message":{"role":"assistant","content":[],"usage":{"input":5,"output":2}}}\n'
+            )
+            record = parse_pi_session(path)
+        self.assertEqual(record.form, 'form-solo')
+
+    def test_d9_claude_with_delegation_is_form_orch_hybrid(self):
+        """D9 FIX: Claude session with Agent tool is classified as form."""
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / 'claude-form.jsonl'
+            path.write_text(
+                '{"type":"assistant","timestamp":"2026-09-01T00:00:00Z",'
+                '"message":{"model":"claude-sonnet","role":"assistant",'
+                '"content":[{"type":"tool_use","name":"Agent"}],'
+                '"usage":{"input_tokens":11,"output_tokens":3}}}\n'
+            )
+            record = parse_claude_session(path)
+        self.assertEqual(record.form, 'form-orch-hybrid')
+        self.assertNotEqual(record.form, 'unknown')
+
+    def test_d9_codex_with_delegation_is_form_orch_hybrid(self):
+        """D9 FIX: Codex session with spawn_agent is classified as form."""
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / 'codex-form.jsonl'
+            path.write_text(
+                '{"type":"session_meta","timestamp":"2026-09-01T00:00:00Z",'
+                '"payload":{"session_id":"s1","cwd":"/repo","model":"gpt-4"}}\n'
+                '{"type":"response_item","timestamp":"2026-09-01T00:01:00Z",'
+                '"payload":{"type":"function_call","name":"spawn_agent"}}\n'
+                '{"type":"event_msg","payload":{"type":"token_count",'
+                '"info":{"total_token_usage":{"input_tokens":10,"output_tokens":5}}}}\n'
+            )
+            record = parse_codex_session(path)
+        self.assertEqual(record.form, 'form-orch-hybrid')
+        self.assertNotEqual(record.form, 'unknown')
+
 
 if __name__ == '__main__':
     unittest.main()

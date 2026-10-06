@@ -41,6 +41,29 @@ class ReportViewTests(unittest.TestCase):
         self.assertIn('claude × S2', stdout.getvalue())
         self.assertIn('codex × S2', stdout.getvalue())
 
+    def test_d4_form_taxonomy_section_renders(self):
+        """D4 FIX: render_form_overview emits the 4 formas taxonomy."""
+        from views import aggregate_form, render_form_overview
+        records = [
+            SessionRecord(
+                id='s1', harness='pi', source_path='s1.jsonl', schema_version='pi-jsonl-v1',
+                started_at=None, ended_at=None, cwd=None, model=None, provider=None,
+                input_tokens=100, output_tokens=50,
+                form='form-solo', observed_topology='S1',
+            ),
+            SessionRecord(
+                id='s2', harness='pi', source_path='s2.jsonl', schema_version='pi-jsonl-v1',
+                started_at=None, ended_at=None, cwd=None, model=None, provider=None,
+                input_tokens=200, output_tokens=100,
+                form='form-orch-hybrid', observed_topology='S2',
+            ),
+        ]
+        summary = aggregate_form(records)
+        output = render_form_overview(summary)
+        self.assertIn('TAXONOMÍA DE FORMAS', output)
+        self.assertIn('Form 1', output)
+        self.assertIn('Form 2', output)
+
 
 if __name__ == '__main__':
     unittest.main()

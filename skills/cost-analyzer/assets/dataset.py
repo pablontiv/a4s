@@ -137,25 +137,41 @@ def calculate_delegation_degree(spawn_tool_calls: int, total_assistant_turns: in
     return min(1.0, spawn_tool_calls / max(1, total_assistant_turns))
 
 
-def classify_pi_form(delegation_present: bool, delegation_degree: float, intercom_present: bool, cross_session_heuristic: bool) -> Literal['form-solo', 'form-orch-hybrid', 'form-delegator-pure', 'form-cross-session']:
+def classify_pi_form(delegation_present: bool, delegation_degree: float, cross_session_heuristic: bool) -> Literal['form-solo', 'form-orch-hybrid', 'form-delegator-pure', 'form-cross-session']:
     """Classify session into 4 forms based on delegation and coordination signals.
 
     Form 1 (Solo): No delegation, no cross-session signals.
     Form 2 (Orch-Hybrid): Delegation + intercom/coordination, degree < 0.8 (mixed work).
     Form 3 (Delegator-Pure): Delegation + intercom/coordination, degree >= 0.8 (delegation-dominant).
-    Form 4 (Cross-Session): Intercom detected with separate session evidence (heuristic).
+    Form 4 (Cross-Session): Detected via parent_session_id or multi-session signals.
 
-    intercom is orthogonal: can appear in any form.
-    delegation_degree distinguishes Form 2 vs 3 by workload composition.
-    cross_session_heuristic flags potential multi-session coordination (requires parent_session_id for proof).
+    D5 FIX: cross_session_heuristic is primary classifier for Form 4. Intercom is orthogonal.
+    A session is cross-session if parent_session_id, intercom target_session_id, or
+    synagent/firstmate signal is detected. Intercom presence does not determine form.
     """
-    if cross_session_heuristic and intercom_present:
+    if cross_session_heuristic:
         return 'form-cross-session'
     if delegation_present:
         if delegation_degree >= 0.8:
             return 'form-delegator-pure'
         else:
             return 'form-orch-hybrid'
+    return 'form-solo'
+
+
+def classify_non_pi_form(delegation_present: bool) -> Literal['form-solo', 'form-orch-hybrid', 'form-delegator-pure', 'form-cross-session']:
+    """Classify Claude or Codex session into forms based on available signals.
+
+    D9 FIX: Non-Pi harnesses (Claude, Codex) do not have rich instrumentation
+    for delegation_degree or cross-session signals. Classification uses only
+    delegation presence as the signal.
+
+    Form 1 (Solo): No delegation.
+    Form 2 (Orch-Hybrid): Delegation present (assume moderate degree; no further breakdown available).
+    Form 3, 4: Not applicable without richer signals; classify as Form 2.
+    """
+    if delegation_present:
+        return 'form-orch-hybrid'
     return 'form-solo'
 
 
@@ -207,6 +223,32 @@ def load_ledger(since: dt.date, until: dt.date | None = None, roots: Mapping[str
     return records
 
 
+def detect_cross_session_signal(records_iter) -> bool:
+    """Detects cross-session coordination signals in JSONL records.
+
+    D5 FIX: Detect Form 4 (cross-session) via:
+    1. parent_session_id field in session record (explicit cross-session link)
+    2. intercom customType with target pointing to another session
+    3. synagent or firstmate signals indicating multi-session orchestration
+
+    Returns True if cross-session signal is found.
+    """
+    for record in records_iter:
+        kind = record.get('type')
+        if kind == 'session':
+            if record.get('parent_session_id'):
+                return True
+        if kind in ('custom', 'custom_message'):
+            custom_type = record.get('customType', '')
+            if custom_type.startswith('intercom') and record.get('target_session_id'):
+                return True
+            if 'synagent' in custom_type or 'firstmate' in custom_type:
+                message = record.get('message') or record.get('payload', {})
+                if isinstance(message, dict) and message.get('target_session_id'):
+                    return True
+    return False
+
+
 def parse_pi_session(path: Path) -> SessionRecord:
     started_at = ended_at = None
     session_id = cwd = model = provider = None
@@ -214,11 +256,13 @@ def parse_pi_session(path: Path) -> SessionRecord:
     spawn_tool_calls = intercom_toolcalls = assistant_turns = input_tokens = output_tokens = cache_read_tokens = cache_write_tokens = 0
     cost = 0.0
     parsed_records = 0
+    all_records = []
 
     with path.open(errors='ignore') as source:
         for line in source:
             try:
                 record = json.loads(line)
+                all_records.append(record)
             except json.JSONDecodeError:
                 continue
             parsed_records += 1
@@ -257,8 +301,8 @@ def parse_pi_session(path: Path) -> SessionRecord:
     delegation_present = custom_types['subagent-notify'] > 0 or spawn_tool_calls > 0
     delegation_degree = calculate_delegation_degree(spawn_tool_calls, assistant_turns)
     has_intercom_flag = intercom_toolcalls > 0 or any(name.startswith('intercom') for name in custom_types)
-    cross_session_heuristic = False
-    form = classify_pi_form(delegation_present, delegation_degree, has_intercom_flag, cross_session_heuristic)
+    cross_session_heuristic = detect_cross_session_signal(all_records)
+    form = classify_pi_form(delegation_present, delegation_degree, cross_session_heuristic)
     evidence = TopologyEvidence(
         delegation=delegation_present,
         coordination=topology in {'S3', 'S4'},
@@ -321,6 +365,7 @@ def parse_claude_session(path: Path) -> SessionRecord:
                 cache_write_tokens += usage.get('cache_creation_input_tokens', 0) or 0
     evidence = TopologyEvidence(delegation=delegation)
     observed_topology, topology_confidence = classify_topology(evidence, parsed_records > 0)
+    form = classify_non_pi_form(delegation)
     return SessionRecord(
         id=session_id or path.stem, harness='claude', source_path=str(path),
         schema_version='claude-jsonl-v1', started_at=started_at, ended_at=ended_at,
@@ -329,6 +374,8 @@ def parse_claude_session(path: Path) -> SessionRecord:
         cache_read_tokens=cache_read_tokens, cache_write_tokens=cache_write_tokens,
         cost_native_usd=None, observed_topology=observed_topology,
         topology_confidence=topology_confidence, topology_evidence=evidence,
+        form=form,
+        form_confidence='direct' if delegation else 'inferred',
     )
 
 
@@ -364,6 +411,7 @@ def parse_codex_session(path: Path) -> SessionRecord:
                 cache_write_tokens = usage.get('cache_write_input_tokens', 0) or 0
     evidence = TopologyEvidence(delegation=delegation)
     observed_topology, topology_confidence = classify_topology(evidence, parsed_records > 0)
+    form = classify_non_pi_form(delegation)
     return SessionRecord(
         id=session_id or path.stem, harness='codex', source_path=str(path),
         schema_version='codex-jsonl-v1', started_at=started_at, ended_at=ended_at,
@@ -372,4 +420,6 @@ def parse_codex_session(path: Path) -> SessionRecord:
         cache_read_tokens=cache_read_tokens, cache_write_tokens=cache_write_tokens,
         cost_native_usd=None, observed_topology=observed_topology,
         topology_confidence=topology_confidence, topology_evidence=evidence,
+        form=form,
+        form_confidence='direct' if delegation else 'inferred',
     )
