@@ -79,22 +79,22 @@ class FormModelTests(unittest.TestCase):
 
     def test_form1_solo_no_delegation_no_intercom(self):
         """Form 1: Solo session with no delegation and no intercom."""
-        result = classify_pi_form(delegation_present=False, delegation_degree=0.0, intercom_present=False, cross_session_heuristic=False)
+        result = classify_pi_form(delegation_present=False, delegation_degree=0.0, cross_session_heuristic=False)
         self.assertEqual(result, 'form-solo')
 
     def test_form2_orch_hybrid_low_degree_delegation(self):
         """Form 2: Orchestrator + Subagents (hybrid) when delegation_degree < 0.8."""
-        result = classify_pi_form(delegation_present=True, delegation_degree=0.5, intercom_present=True, cross_session_heuristic=False)
+        result = classify_pi_form(delegation_present=True, delegation_degree=0.5, cross_session_heuristic=False)
         self.assertEqual(result, 'form-orch-hybrid')
 
     def test_form3_delegator_pure_high_degree_delegation(self):
         """Form 3: Pure Delegator when delegation_degree >= 0.8."""
-        result = classify_pi_form(delegation_present=True, delegation_degree=0.85, intercom_present=True, cross_session_heuristic=False)
+        result = classify_pi_form(delegation_present=True, delegation_degree=0.85, cross_session_heuristic=False)
         self.assertEqual(result, 'form-delegator-pure')
 
     def test_form4_cross_session_with_intercom_heuristic(self):
         """Form 4: Cross-session orchestration marked with heuristic."""
-        result = classify_pi_form(delegation_present=False, delegation_degree=0.0, intercom_present=True, cross_session_heuristic=True)
+        result = classify_pi_form(delegation_present=False, delegation_degree=0.0, cross_session_heuristic=True)
         self.assertEqual(result, 'form-cross-session')
 
     def test_delegation_degree_calculation(self):
@@ -115,13 +115,13 @@ class FormModelTests(unittest.TestCase):
 
     def test_intercom_orthogonal_flag_solo_with_intercom(self):
         """Solo session can have intercom flag (orthogonal)."""
-        result = classify_pi_form(delegation_present=False, delegation_degree=0.0, intercom_present=True, cross_session_heuristic=False)
+        result = classify_pi_form(delegation_present=False, delegation_degree=0.0, cross_session_heuristic=False)
         self.assertEqual(result, 'form-solo', 'Solo remains Solo even with intercom (intercom is orthogonal)')
 
     def test_intercom_orthogonal_not_part_of_form_distinction(self):
         """intercom presence does not change form classification (it is orthogonal)."""
-        form_without = classify_pi_form(delegation_present=True, delegation_degree=0.5, intercom_present=False, cross_session_heuristic=False)
-        form_with = classify_pi_form(delegation_present=True, delegation_degree=0.5, intercom_present=True, cross_session_heuristic=False)
+        form_without = classify_pi_form(delegation_present=True, delegation_degree=0.5, cross_session_heuristic=False)
+        form_with = classify_pi_form(delegation_present=True, delegation_degree=0.5, cross_session_heuristic=False)
         self.assertEqual(form_without, 'form-orch-hybrid')
         self.assertEqual(form_with, 'form-orch-hybrid', 'intercom presence does not change form (orthogonal flag)')
 

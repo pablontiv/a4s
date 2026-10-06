@@ -137,7 +137,7 @@ def calculate_delegation_degree(spawn_tool_calls: int, total_assistant_turns: in
     return min(1.0, spawn_tool_calls / max(1, total_assistant_turns))
 
 
-def classify_pi_form(delegation_present: bool, delegation_degree: float, intercom_present: bool, cross_session_heuristic: bool) -> Literal['form-solo', 'form-orch-hybrid', 'form-delegator-pure', 'form-cross-session']:
+def classify_pi_form(delegation_present: bool, delegation_degree: float, cross_session_heuristic: bool) -> Literal['form-solo', 'form-orch-hybrid', 'form-delegator-pure', 'form-cross-session']:
     """Classify session into 4 forms based on delegation and coordination signals.
 
     Form 1 (Solo): No delegation, no cross-session signals.
@@ -302,7 +302,7 @@ def parse_pi_session(path: Path) -> SessionRecord:
     delegation_degree = calculate_delegation_degree(spawn_tool_calls, assistant_turns)
     has_intercom_flag = intercom_toolcalls > 0 or any(name.startswith('intercom') for name in custom_types)
     cross_session_heuristic = detect_cross_session_signal(all_records)
-    form = classify_pi_form(delegation_present, delegation_degree, has_intercom_flag, cross_session_heuristic)
+    form = classify_pi_form(delegation_present, delegation_degree, cross_session_heuristic)
     evidence = TopologyEvidence(
         delegation=delegation_present,
         coordination=topology in {'S3', 'S4'},

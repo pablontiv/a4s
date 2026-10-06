@@ -14,9 +14,7 @@ Uso:
 """
 import sys
 import os
-import json
 import datetime
-import collections
 import argparse
 
 # Permitir imports cuando se ejecuta desde assets/
