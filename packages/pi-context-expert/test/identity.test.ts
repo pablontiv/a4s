@@ -54,14 +54,17 @@ test("Pi and Pion are optional alternative runtime peers", () => {
 
   assert.equal(workspace.devDependencies?.["@earendil-works/pi-coding-agent"], ">=0.99.1");
   assert.equal(contextExpert.peerDependencies?.["@earendil-works/pi-coding-agent"], ">=1.0.3");
-  assert.equal(contextExpert.peerDependencies?.["@pablontiv/pion"], ">=1.0.4");
+  assert.equal(
+    contextExpert.peerDependencies?.["@pablontiv/pion"],
+    ">=1.0.4 || 1.0.2-dev.40713b10ba6db5c6f083026e3367e2af72cea0ea",
+  );
   assert.equal(contextExpert.peerDependenciesMeta?.["@earendil-works/pi-coding-agent"]?.optional, true);
   assert.equal(contextExpert.peerDependenciesMeta?.["@pablontiv/pion"]?.optional, true);
   assert.equal(contextExpert.devDependencies?.["@earendil-works/pi-coding-agent"], "1.0.3");
   assert.equal(contextExpert.devDependencies?.["@earendil-works/pi-ai"], "1.0.3");
   assert.equal(
     contextExpert.devDependencies?.["@pablontiv/pion"],
-    "https://github.com/pablontiv/pi/releases/download/pion-v1.0.4/pablontiv-pion-1.0.4.tgz",
+    "https://github.com/pablontiv/pi/releases/download/pion-local-v1.0.2-dev.40713b10ba6db5c6f083026e3367e2af72cea0ea/pablontiv-pion-1.0.2-dev.40713b10ba6db5c6f083026e3367e2af72cea0ea.tgz",
   );
   for (const hostPackage of [
     "@pablontiv/pion",
