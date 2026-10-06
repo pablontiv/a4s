@@ -3,7 +3,12 @@ import assert from 'node:assert/strict';
 
 import { runCompaction } from '../core/index.js';
 import type { JevAsker, Message } from '../core/index.js';
-import { claudeBinding, register, toSessionMessages } from '../adapters/claude/hooks/register.js';
+import {
+  claudeBinding,
+  JEV_TIMEOUT_MS,
+  register,
+  toSessionMessages,
+} from '../adapters/claude/hooks/register.js';
 
 function fixture(): Message[] {
   const longResult = 'RESULT '.repeat(100);
@@ -140,6 +145,9 @@ test('claude adapter: el host registra el fallo del trigger sin contenido extern
     http: {
       fetch: async () => ({ status: 503, ok: false, text: bodyCanary }),
     },
+    clock: {
+      sleep: async () => new Promise<void>(() => undefined),
+    },
   };
   const event = { reason: 'answer', answer: 'TURN_CONTENT_CANARY', durationMs: 1 };
   const expected = { text: 'unchanged' };
@@ -217,6 +225,9 @@ test('claude adapter: popula conversación con $.session.messages y excluye syst
         };
       },
     },
+    clock: {
+      sleep: async () => new Promise<void>(() => undefined),
+    },
   };
   const event = { reason: 'answer', answer: 'answer', durationMs: 1 };
   const expected = { text: 'unchanged' };
@@ -240,4 +251,159 @@ test('claude adapter: popula conversación con $.session.messages y excluye syst
     /SYSTEM_PROMPT_CANARY|REASONING_CANARY|IMAGE_CANARY|known-api-key-canary|hidden-value/,
   );
   assert.equal(compactCalls, 0);
+});
+
+async function runIgnoredTurn(event: {
+  reason: string;
+  answer: string;
+  isAborted: boolean;
+  durationMs: number;
+  turnId: string;
+  agentId?: string;
+}): Promise<{ result: unknown; expected: object; hostCalls: number; nextCalls: number }> {
+  const hooks = new Map<string, unknown>();
+  const on = (pattern: string, hook: unknown) => {
+    hooks.set(pattern, hook);
+    return {};
+  };
+  register(on as never, { apiKey: 'TOKEN_CANARY', triggerMode: 'auto' });
+  let hostCalls = 0;
+  let nextCalls = 0;
+  const host = {
+    session: {
+      usage: async () => { hostCalls++; return { context: { window: 100_000, tokens: 90_000 } }; },
+      messages: async () => { hostCalls++; return fixture(); },
+      compact: async () => { hostCalls++; return {}; },
+    },
+    http: {
+      fetch: async () => { hostCalls++; return { status: 500, ok: false, text: '' }; },
+    },
+    clock: {
+      sleep: async () => { hostCalls++; },
+    },
+    ui: { log: () => undefined, toast: () => undefined },
+  };
+  const expected = { text: 'unchanged' };
+  const turnHook = hooks.get('turn.complete') as (
+    $: typeof host,
+    input: typeof event,
+    next: (input: typeof event) => Promise<typeof expected>,
+  ) => Promise<typeof expected>;
+  const result = await turnHook(host, event, async () => {
+    nextCalls++;
+    return expected;
+  });
+  return { result, expected, hostCalls, nextCalls };
+}
+
+test('claude adapter: ignora eventos de subagente', async () => {
+  const outcome = await runIgnoredTurn({
+    reason: 'answer',
+    answer: 'done',
+    isAborted: false,
+    durationMs: 1,
+    turnId: 'turn-1',
+    agentId: 'agent-1',
+  });
+  assert.equal(outcome.result, outcome.expected);
+  assert.equal(outcome.hostCalls, 0);
+  assert.equal(outcome.nextCalls, 1);
+});
+
+test('claude adapter: ignora turnos con isAborted', async () => {
+  const outcome = await runIgnoredTurn({
+    reason: 'answer',
+    answer: 'partial',
+    isAborted: true,
+    durationMs: 1,
+    turnId: 'turn-2',
+  });
+  assert.equal(outcome.result, outcome.expected);
+  assert.equal(outcome.hostCalls, 0);
+  assert.equal(outcome.nextCalls, 1);
+});
+
+test('claude adapter: ignora razones distintas de answer', async () => {
+  const outcome = await runIgnoredTurn({
+    reason: 'error',
+    answer: 'failed',
+    isAborted: false,
+    durationMs: 1,
+    turnId: 'turn-3',
+  });
+  assert.equal(outcome.result, outcome.expected);
+  assert.equal(outcome.hostCalls, 0);
+  assert.equal(outcome.nextCalls, 1);
+});
+
+test('claude adapter: ignora respuestas vacías', async () => {
+  const outcome = await runIgnoredTurn({
+    reason: 'answer',
+    answer: '  \n ',
+    isAborted: false,
+    durationMs: 1,
+    turnId: 'turn-4',
+  });
+  assert.equal(outcome.result, outcome.expected);
+  assert.equal(outcome.hostCalls, 0);
+  assert.equal(outcome.nextCalls, 1);
+});
+
+test('claude adapter: el timeout de 2,000 ms abandona el request y conserva next', async () => {
+  const hooks = new Map<string, unknown>();
+  const on = (pattern: string, hook: unknown) => {
+    hooks.set(pattern, hook);
+    return {};
+  };
+  const apiKey = 'TIMEOUT_SECRET_CANARY';
+  register(on as never, {
+    apiKey,
+    triggerMode: 'auto',
+    minimumContextRatio: 0.5,
+  });
+
+  const logs: string[] = [];
+  const sleepValues: number[] = [];
+  let fetchCalls = 0;
+  let compactCalls = 0;
+  const host = {
+    ui: { log: (text: string) => logs.push(text), toast: () => undefined },
+    session: {
+      usage: async () => ({ context: { window: 100_000, tokens: 90_000 }, rateLimits: [] }),
+      messages: async () => fixture(),
+      compact: async () => { compactCalls++; return {}; },
+    },
+    http: {
+      fetch: async () => {
+        fetchCalls++;
+        return new Promise<{ status: number; ok: boolean; text: string }>(() => undefined);
+      },
+    },
+    clock: {
+      sleep: async (ms: number) => { sleepValues.push(ms); },
+    },
+  };
+  const event = {
+    reason: 'answer',
+    answer: 'TIMEOUT_ANSWER_CANARY',
+    isAborted: false,
+    durationMs: 1,
+    turnId: 'turn-timeout',
+  };
+  const expected = { text: 'unchanged' };
+  const turnHook = hooks.get('turn.complete') as (
+    $: typeof host,
+    input: typeof event,
+    next: (input: typeof event) => Promise<typeof expected>,
+  ) => Promise<typeof expected>;
+
+  assert.equal(JEV_TIMEOUT_MS, 2_000);
+  assert.equal(await turnHook(host, event, async () => expected), expected);
+  assert.equal(fetchCalls, 1);
+  assert.deepEqual(sleepValues, [2_000]);
+  assert.equal(compactCalls, 0);
+  assert.deepEqual(logs, [
+    '[context-expert] diagnostic phase=trigger_request code=request_failed',
+  ]);
+  assert.doesNotMatch(logs.join('\n'), /TIMEOUT_SECRET_CANARY|TIMEOUT_ANSWER_CANARY|state|questions/);
 });
