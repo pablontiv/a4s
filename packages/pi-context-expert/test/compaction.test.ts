@@ -122,7 +122,9 @@ test("basic preserves the established deterministic compaction fixture", async (
   const marker2 = first.summary.indexOf("MARKER-2");
   const marker3 = first.summary.indexOf("MARKER-3");
   assert.ok(marker0 >= 0 && marker0 < marker2 && marker2 < marker3);
+  if (!("schema" in first.details)) assert.fail("expected legacy details");
   assert.deepEqual(first.details.decisions.map((decision) => decision.sourceMessageIndex), [0, 1, 2, 3, 4]);
+  assert.equal(first.details.schema, "a4s.jev-compaction-details/v1");
   assert.ok(first.details.summary.budgetTruncatedMessages > 0);
   assert.match(first.summary, /…\[truncated\]…/);
   assert.equal(first.details.ruleSignalBatches.length, 0);

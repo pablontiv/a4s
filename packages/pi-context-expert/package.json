@@ -31,6 +31,9 @@
     "e2e": "tsx scripts/run-headless-e2e.ts",
     "rpc:compact-driver": "tsx scripts/run-rpc-compact.ts"
   },
+  "dependencies": {
+    "@a4s/context-expert": "0.2.0"
+  },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": ">=1.0.3",
     "@pablontiv/pion": ">=1.0.4 || 1.0.2-dev.40713b10ba6db5c6f083026e3367e2af72cea0ea"

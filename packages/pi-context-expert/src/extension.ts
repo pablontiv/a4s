@@ -6,7 +6,12 @@ import {
   type SessionBeforeCompactEvent,
   type SessionBeforeCompactResult,
 } from "@earendil-works/pi-coding-agent";
-import { buildBasicCompactionResult } from "./compaction-core.ts";
+import type { CompactOptions } from "@a4s/context-expert";
+import {
+  buildCoreTranscript,
+  findPreviousCoreCompaction,
+  runPiCoreCompaction,
+} from "./binding.ts";
 import { collectCorpus, publishCorpusAfterCompaction, stageCorpus } from "./corpus.ts";
 import {
   BASIC_COMPACTION_CONFIG,
@@ -14,10 +19,7 @@ import {
   isLadderEvidence,
   resolveCompactionConfig,
 } from "./config.ts";
-import {
-  CompactionBuildError,
-  type BuildJevCompactionOptions,
-} from "./compaction.ts";
+import type { BuildJevCompactionOptions } from "./compaction.ts";
 import { disabledEvidencePipeline, runEvidenceWithFailure } from "./evidence-pipeline.ts";
 import { DeadlineExceededError, OperationAbortedError, runWithDeadline } from "./deadline.ts";
 import { isStableDigest, stableDigest } from "./digest.ts";
@@ -34,11 +36,7 @@ import { applyContextProjection } from "./projection.ts";
 import { redactAndLimitCorpusText } from "./redaction.ts";
 import { JevApiError, JevUnavailableError, JevValidationError, PiJevClient } from "./jev.ts";
 import { digestNormalizedMessages, normalizeCompactionMessages } from "./messages.ts";
-import {
-  observePreparedCompactionRules,
-  prepareRuleObservationsWithMessages,
-  type RuleObservationOptions,
-} from "./observer.ts";
+import type { RuleObservationOptions } from "./observer.ts";
 import { canProvideRuleAuthority, ObservationPlanError } from "./questions.ts";
 import {
   ScheduledJevClient,
@@ -90,7 +88,10 @@ export interface PiContextExpertOptions {
   retroTimeoutMs?: number;
   observation?: RuleObservationOptions;
   scheduling?: JevRequestSchedulerOptions;
+  /** Legacy summary-builder options retained for embedding compatibility. */
   compaction?: BuildJevCompactionOptions;
+  /** Shared core options for embedding and deterministic tests. */
+  coreCompaction?: CompactOptions;
   evidence?: EvidenceOptions;
   retro?: RetroOptions;
   ladder?: LadderShortlistOptions;
@@ -183,7 +184,9 @@ export function registerPiContextExpert(pi: ExtensionAPI, options: PiContextExpe
   const createJevClient = async (ctx: ExtensionContext, timeoutMs: number): Promise<JevClient> => {
     if (options.jevClient) return options.jevClient;
     const auth = await ctx.modelRegistry.getProviderAuth(TYPESAFE_PROVIDER_ID);
-    if (!auth?.auth.apiKey?.trim()) throw new JevUnavailableError();
+    const nativeCredential = auth?.auth.apiKey?.trim();
+    const environmentFallback = process.env.TYPESAFE_API_KEY?.trim();
+    if (!nativeCredential && !environmentFallback) throw new JevUnavailableError();
     return new PiJevClient({ modelRegistry: ctx.modelRegistry, timeoutMs });
   };
 
@@ -454,13 +457,11 @@ export function registerPiContextExpert(pi: ExtensionAPI, options: PiContextExpe
         recordOperationalFailure,
         hookTimeoutMs,
         now,
-        options.observation,
-        options.scheduling,
-        options.compaction,
+        options.coreCompaction,
       );
     } catch {
       safeNotify(ctx, "compaction", "internal_failure");
-      return { cancel: true };
+      return undefined;
     }
   });
 
@@ -831,10 +832,8 @@ async function handleCompaction(
   recordFailure: (input: OperationalFailureInput) => void,
   timeoutMs: number,
   now: () => Date,
-  observationOptions: RuleObservationOptions | undefined,
-  schedulingOptions: JevRequestSchedulerOptions | undefined,
-  compactionOptions: BuildJevCompactionOptions | undefined,
-): Promise<SessionBeforeCompactResult> {
+  coreOptions: CompactOptions | undefined,
+): Promise<SessionBeforeCompactResult | undefined> {
   let attemptId: string | undefined;
   try {
     const preparation = {
@@ -844,58 +843,49 @@ async function handleCompaction(
       messagesToSummarize: event.preparation.messagesToSummarize,
       turnPrefixMessages: event.preparation.turnPrefixMessages,
     };
-    const sourceDigest = digestNormalizedMessages(normalizeCompactionMessages(preparation));
+    const normalizedMessages = normalizeCompactionMessages(preparation);
+    const sourceDigest = digestNormalizedMessages(normalizedMessages);
     attemptId = stableDigest({
       schema: "a4s.jev-compaction-attempt/v1",
       sourceDigest,
       firstKeptEntryId: event.preparation.firstKeptEntryId,
       tokensBefore: event.preparation.tokensBefore,
     });
-    const prepared = prepareRuleObservationsWithMessages(preparation, observationOptions);
     const existing = pendingByAttempt.get(attemptId);
     if (existing) return { compaction: existing.result };
 
     const observedAt = now().toISOString();
-    const jevClient = new ScheduledJevClient(await createJevClient(ctx, timeoutMs), schedulingOptions);
-    const batches = await runWithDeadline(
-      (signal) =>
-        Promise.all(
-          prepared.plans.map((plan, windowIndex) =>
-            observePreparedCompactionRules(
-              plan,
-              {
-                attemptId: attemptId!,
-                reason: event.reason,
-                willRetry: event.willRetry,
-                observedAt,
-                windowIndex,
-                windowCount: prepared.plans.length,
-                pins: prepared.pins,
-              },
-              jevClient,
-              signal,
-              observationOptions,
-            ),
-          ),
-        ),
+    const previous = findPreviousCoreCompaction(event.branchEntries);
+    const hostMessages = buildCoreTranscript(previous, [
+      ...event.preparation.messagesToSummarize,
+      ...event.preparation.turnPrefixMessages,
+    ]);
+    const client = await createJevClient(ctx, timeoutMs);
+    const { output: result } = await runWithDeadline(
+      (signal) => runPiCoreCompaction(
+        hostMessages,
+        {
+          attemptId: attemptId!,
+          sourceDigest,
+          createdAt: observedAt,
+          firstKeptEntryId: event.preparation.firstKeptEntryId,
+          tokensBefore: event.preparation.tokensBefore,
+          previous,
+          fileOps: event.preparation.fileOps,
+        },
+        client,
+        signal,
+        {
+          ...coreOptions,
+          ...(event.customInstructions?.trim() ? { goal: event.customInstructions.trim() } : {}),
+        },
+      ),
       timeoutMs,
       event.signal,
     );
-    const result = buildBasicCompactionResult(
-      {
-        attemptId,
-        sourceDigest: prepared.sourceDigest,
-        createdAt: observedAt,
-        firstKeptEntryId: event.preparation.firstKeptEntryId,
-        tokensBefore: event.preparation.tokensBefore,
-        decisions: batches.flatMap((batch) => batch.compaction.decisions),
-        scheduler: jevClient.getStats(),
-      },
-      compactionOptions,
-    );
     pendingByAttempt.set(attemptId, {
       result,
-      corpus: stageCorpus(prepared.messages, {
+      corpus: stageCorpus(normalizedMessages, {
         branchId: corpusBranchId(ctx),
         compactionAttemptId: attemptId,
       }),
@@ -913,7 +903,7 @@ async function handleCompaction(
       });
     }
     safeNotify(ctx, "compaction", code);
-    return { cancel: true };
+    return undefined;
   }
 }
 
@@ -1241,7 +1231,7 @@ function classifyCompactionError(error: unknown): OperationalFailureCode {
   if (error instanceof DeadlineExceededError) return "timeout";
   if (error instanceof OperationAbortedError) return "aborted";
   if (error instanceof JevValidationError) return "malformed_response";
-  if (error instanceof StateFitError || error instanceof ObservationPlanError || error instanceof CompactionBuildError) {
+  if (error instanceof StateFitError || error instanceof ObservationPlanError) {
     return "oversized_state";
   }
   if (error instanceof JevApiError) return "api_failure";
@@ -1340,7 +1330,7 @@ function safeNotify(ctx: ExtensionContext, phase: "compaction" | "signals" | "re
   };
   const suffix =
     phase === "compaction"
-      ? "Compaction was cancelled; native fallback is disabled."
+      ? "Pi will run native compaction once."
       : phase === "signals"
         ? "Signals remain recoverable from the successful compaction entry."
         : "Persisted signals were preserved.";

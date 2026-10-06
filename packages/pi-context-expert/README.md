@@ -6,12 +6,12 @@ This release supports Pi 1.0.3 and Pion 1.0.4. The extension uses the canonical 
 
 ## Runtime contract
 
-- `session_before_compact` returns a deterministic custom compaction assembled from Jev `keep`, `truncate`, and `drop` decisions.
-- There is no native or generative summary fallback. Missing credentials, timeout, malformed response, oversized state/summary, abort, or API failure returns `{ cancel: true }`.
-- The newest and true preparation-boundary messages are pinned. A selected durable rule candidate is always retained even when its immediate-continuity score is low.
-- Large inputs are split into chronological windows; every compacted message receives one retention judgment. Rule-candidate questions are added only for roles that can originate authority from intent or an explicit decision (`user`, `custom`). `toolResult` and `bashExecution` still receive retention judgments but never enter the rule-candidate pool: their content is evidence, not authority. Generated assistant/summary roles likewise receive only retention judgments.
-- Every window shares one global scheduler: default concurrency is 1, `429`/`529` retries are bounded, `Retry-After` is honored up to 30 seconds, and the whole compaction remains abortable under a 180-second deadline.
-- Requests are packed up to 120 questions only while verified below conservative System One budgets: 60k estimated tokens per request and 30k for state plus the longest question.
+- `session_before_compact` uses a thin Pi `HostBinding` over `runCompaction()` from `@a4s/context-expert`.
+- The binding converts real Pi messages to the neutral core type. It removes thinking and image blocks. It applies the existing private-data sanitization to text and tool input.
+- The shared core preserves the first boundary and the configured recent tail. It keeps each tool call with its result for `keep`, `drop_result`, and `drop_call` decisions.
+- The binding returns a Pi `CompactionResult` with the rendered summary, the original kept boundary, the original token count, cumulative file lists, and the upstream-compatible `fastJev` continuity details.
+- Missing credentials, timeout, abort, HTTP failure, invalid response, rejection, or an unprocessable state returns `undefined`. Pi then runs its native compaction fallback once.
+- The shared core fits state to 25,000 estimated tokens by default. It batches tool questions within a 30,000 estimated token request limit.
 - Compaction details never contain RuleSignals. With Evidence off, successful compaction publishes only the sanitized corpus and its receipt; `basic` does not extract, publish, or synthesize rules.
 - Evidence runs only when both `compaction.strategy=ladder` and `evidence.strategy=ladder`. After Pi confirms compaction and corpus publication, it issues its own fixed conservative Ladder query over the current branch corpus. It never consumes the projection made for an ordinary user query.
 - Only full chunks or validated `short`/`long` source spans selected by that Evidence query enter extraction. The existing candidate-probability, generality, authority-probability, authority-confidence, and allowed-authority gates remain unchanged.
@@ -111,7 +111,7 @@ pion -e packages/pi-context-expert/src/index.ts
 
 Alternatively, when no stored `typesafe` credential exists, set `TYPESAFE_API_KEY` in the environment before starting Pi for headless use.
 
-If Jev is unavailable, Pi compaction is deliberately cancelled and can be retried after restoring the dependency. With both Ladder flags enabled, retro may run after successful Evidence extraction; use `/retro-rules` only to retry preserved pending work after a model, Jev, or storage failure.
+If Jev is unavailable, the hook returns `undefined` and Pi runs native compaction once. With both Ladder flags enabled, retro may run after successful Evidence extraction; use `/retro-rules` only to retry preserved pending work after a model, Jev, or storage failure.
 
 ## RPC callers must hold stdin open through `compact`
 
@@ -134,14 +134,7 @@ real HTTP round trip (15-50+ seconds) can finish.
   `entry_appended` events and this extension's own `ctx.ui.notify()` calls
   depend on), disposes the runtime, and calls `process.exit()` — all before
   waiting for any command already in progress.
-- `AgentSession.compact()` (`dist/core/agent-session.js`) throws
-  `"Compaction cancelled"` when this extension's `session_before_compact`
-  hook returns `{cancel: true}`. Under the stdin-close race, that "aborted"
-  classification (see `classifyCompactionError` in `src/extension.ts`) is
-  the ordinary outcome — but the forwarder that would carry this
-  extension's own diagnostic notify to the RPC client is often already
-  torn down, so the RPC caller only sees a fast, generic
-  `{"success":false,"error":"Compaction cancelled"}` with no subcode.
+- Under the stdin-close race, this extension classifies the interrupted request as `aborted` and returns `undefined`. Pi owns the native fallback. The closed RPC transport can prevent the extension notification and the final command response from reaching the client.
 - This is vendored `@earendil-works/pi-coding-agent` RPC lifecycle behavior,
   not a defect in this package or something A4S patches in place (AGENTS.md
   scopes vendored runtimes as external providers). The correction is a
@@ -158,10 +151,9 @@ real HTTP round trip (15-50+ seconds) can finish.
   compaction or retro failure as `"aborted"` while `ctx.mode === "rpc"`, it
   writes a single line to stderr prefixed
   `[a4s-pi-context-expert:rpc-stdin-guard]` (stderr is outside the RPC JSONL
-  stdout protocol, so it can't corrupt framing, and it never changes
-  cancel/notify semantics). Grep an RPC caller's captured stderr for that
-  prefix to confirm this failure mode even when the client-facing response
-  is the generic `"Compaction cancelled"` message.
+  stdout protocol, so it cannot corrupt framing, and it never changes
+  fallback or notification behavior). Grep an RPC caller's captured stderr
+  for that prefix to confirm this failure mode.
 
 ## Development
 

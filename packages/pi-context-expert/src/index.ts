@@ -18,6 +18,20 @@ export {
   writeGlobalCompactionConfiguration,
 } from "./config.ts";
 export {
+  buildCoreTranscript,
+  CORE_DETAILS_KEY,
+  CORE_DETAILS_VERSION,
+  createCoreAsker,
+  createPiCompactionBinding,
+  findPreviousCoreCompaction,
+  piContentToText,
+  renderCoreSummary,
+  runPiCoreCompaction,
+  toNeutralPiMessages,
+  type PiCompactionBindingInput,
+  type PreviousCoreCompaction,
+} from "./binding.ts";
+export {
   collectCorpus,
   CORPUS_ENTRY_TYPE,
   publishCorpusAfterCompaction,

@@ -160,6 +160,41 @@ function createRetroCapableContext(entries: StoredEntry[], options: { failModel?
   return { ...base, context, modelCalls: () => modelCalls };
 }
 
+function compactableToolMessages(resultText = "tool result ".repeat(200)): unknown[] {
+  return [
+    { role: "user", content: "Inspect the file.", timestamp: 1 },
+    {
+      role: "assistant",
+      content: [
+        { type: "text", text: "Reading the file." },
+        { type: "toolCall", id: "call-1", name: "read", arguments: { path: "src/file.ts" } },
+      ],
+      api: "test",
+      provider: "test",
+      model: "test",
+      usage: {
+        input: 1,
+        output: 1,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 2,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "toolUse",
+      timestamp: 2,
+    },
+    {
+      role: "toolResult",
+      toolCallId: "call-1",
+      toolName: "read",
+      content: [{ type: "text", text: resultText }],
+      isError: false,
+      timestamp: 3,
+    },
+    { role: "user", content: "Continue.", timestamp: 4 },
+  ];
+}
+
 function compactionEvent(
   messages: unknown[] = [{ role: "user", content: "Always run deterministic tests." }],
   lifecycle: { reason?: "manual" | "threshold" | "overflow"; willRetry?: boolean } = {},
@@ -338,16 +373,9 @@ test("basic does not publish rule artifacts when Evidence is off", async () => {
   assert.deepEqual(event.preparation, before);
   assert.equal(compaction.firstKeptEntryId, "kept-entry");
   assert.equal(compaction.tokensBefore, 10_000);
-  assert.deepEqual(compaction.details.scheduler, {
-    maxConcurrency: 1,
-    maxRetries: 3,
-    logicalRequests: 1,
-    attempts: 1,
-    retries: 0,
-    maxObservedConcurrency: 1,
-  });
-  assert.deepEqual(compaction.details.decisions[0]?.forcedBy, ["boundary", "newest", "rule_candidate"]);
-  assert.match(compaction.summary, /^# Jev-authoritative compaction/);
+  if ("schema" in compaction.details) assert.fail("expected HostBinding details");
+  assert.deepEqual(compaction.details.fastJev.decisions, []);
+  assert.match(compaction.summary, /^<compacted-conversation engine="a4s-context-expert">/);
   assert.doesNotMatch(JSON.stringify(compaction), /private-fixture-value|alice@example\.com/);
   assert.equal(fake.entries.length, 0, "before hook must not publish RuleSignals");
 
@@ -964,15 +992,21 @@ test("basic success never publishes RuleSignals or starts retro", async (t) => {
   }
 });
 
-test("missing key, timeout, malformed response, API failure, and unfittable state cancel without native fallback", async (t) => {
+test("compaction failures return undefined and activate the native fallback", async (t) => {
+  const priorKey = process.env.TYPESAFE_API_KEY;
+  delete process.env.TYPESAFE_API_KEY;
+  t.after(() => {
+    if (priorKey === undefined) delete process.env.TYPESAFE_API_KEY;
+    else process.env.TYPESAFE_API_KEY = priorKey;
+  });
   const cases: Array<{
     name: string;
     options: Parameters<typeof registerPiContextExpert>[1];
-    expectedCode: "missing_key" | "timeout" | "malformed_response" | "api_failure" | "oversized_state";
+    expectedCode: "missing_key" | "timeout" | "malformed_response" | "api_failure" | "internal_failure";
     expectedDiagnostic: RegExp;
   }> = [
     {
-      name: "missing key",
+      name: "missing credential",
       options: { hookTimeoutMs: 30 },
       expectedCode: "missing_key",
       expectedDiagnostic: /TypeSafe credentials/,
@@ -984,16 +1018,13 @@ test("missing key, timeout, malformed response, API failure, and unfittable stat
       expectedDiagnostic: /timed out/,
     },
     {
-      name: "429 retry bounded by hook deadline",
-      options: {
-        hookTimeoutMs: 10,
-        jevClient: { evaluate: async () => { throw new JevApiError(429, 1_000); } },
-      },
-      expectedCode: "timeout",
-      expectedDiagnostic: /timed out/,
+      name: "HTTP failure",
+      options: { jevClient: { evaluate: async () => { throw new JevApiError(503); } } },
+      expectedCode: "api_failure",
+      expectedDiagnostic: /Jev request failed/,
     },
     {
-      name: "malformed response",
+      name: "invalid response",
       options: {
         jevClient: {
           evaluate: async (request: JevRequest) => ({ ...validJevResponse(request), unexpected: true }),
@@ -1003,22 +1034,16 @@ test("missing key, timeout, malformed response, API failure, and unfittable stat
       expectedDiagnostic: /strict validation/,
     },
     {
-      name: "API failure",
-      options: { jevClient: { evaluate: async () => { throw new JevApiError(503); } } },
-      expectedCode: "api_failure",
-      expectedDiagnostic: /Jev request failed/,
+      name: "rejected request",
+      options: { jevClient: { evaluate: async () => { throw new Error("rejected"); } } },
+      expectedCode: "internal_failure",
+      expectedDiagnostic: /internal bounded failure/,
     },
     {
-      name: "unfittable state",
-      options: { jevClient: new ValidFakeJev(), observation: { maxStateTokens: 1, minimumExcerptChars: 48 } },
-      expectedCode: "oversized_state",
-      expectedDiagnostic: /exceeded configured bounds/,
-    },
-    {
-      name: "impossible summary budget",
-      options: { jevClient: new ValidFakeJev(), compaction: { maxSummaryChars: 20 } },
-      expectedCode: "oversized_state",
-      expectedDiagnostic: /exceeded configured bounds/,
+      name: "unprocessable state",
+      options: { jevClient: new ValidFakeJev(), coreCompaction: { maxStateTokens: 1 } },
+      expectedCode: "internal_failure",
+      expectedDiagnostic: /internal bounded failure/,
     },
   ];
 
@@ -1030,32 +1055,92 @@ test("missing key, timeout, malformed response, API failure, and unfittable stat
         now: () => new Date("2026-09-22T12:04:00.000Z"),
       });
       const { context, notifications } = createContext(fake.entries);
-      const result = await fake.handlers.get("session_before_compact")?.(compactionEvent(), context);
-      assert.deepEqual(result, { cancel: true });
-      await fake.handlers.get("session_compact_failed")?.(
-        {
-          type: "session_compact_failed",
-          reason: "threshold",
-          aborted: false,
-          willRetry: false,
-          fromExtension: true,
-          errorMessage: "token=private-compaction-error",
-        },
+      const result = await fake.handlers.get("session_before_compact")?.(
+        compactionEvent(compactableToolMessages()),
         context,
       );
+      assert.equal(result, undefined);
       const failures = collectOperationalFailureReceipts(fake.entries);
       assert.equal(failures.length, 1);
       assert.equal(failures[0]?.code, scenario.expectedCode);
       assert.equal(failures[0]?.phase, "compaction");
       assert.match(failures[0]?.attemptId ?? "", /^sha256:[0-9a-f]{64}$/);
-      assert.doesNotMatch(JSON.stringify(failures), /private-compaction-error/);
       assert.match(notifications.at(-1)?.message ?? "", scenario.expectedDiagnostic);
-      assert.match(notifications.at(-1)?.message ?? "", /native fallback is disabled/);
+      assert.match(notifications.at(-1)?.message ?? "", /native compaction once/);
     });
   }
 });
 
-test("an aborted compaction cancels without native fallback", async () => {
+test("native classification accepts stored credentials first and TYPESAFE_API_KEY as fallback", async (t) => {
+  const priorKey = process.env.TYPESAFE_API_KEY;
+  t.after(() => {
+    if (priorKey === undefined) delete process.env.TYPESAFE_API_KEY;
+    else process.env.TYPESAFE_API_KEY = priorKey;
+  });
+
+  for (const scenario of [
+    { name: "stored credential", nativeKey: "stored-key", environmentKey: "environment-key" },
+    { name: "environment fallback", nativeKey: undefined, environmentKey: "environment-key" },
+  ]) {
+    await t.test(scenario.name, async () => {
+      process.env.TYPESAFE_API_KEY = scenario.environmentKey;
+      const fake = createFakePi();
+      const base = createContext(fake.entries);
+      const order: string[] = [];
+      let classifyCalls = 0;
+      const context = {
+        ...base.context,
+        modelRegistry: {
+          async getProviderAuth() {
+            order.push("auth");
+            return scenario.nativeKey ? { auth: { apiKey: scenario.nativeKey }, source: "stored" } : undefined;
+          },
+          findOfType() {
+            order.push("model");
+            return { type: "classifier", provider: "typesafe", id: "jev-latest", api: "typesafe-system-one" };
+          },
+          async classify(
+            _model: unknown,
+            request: { questions: Record<string, { type: string }> },
+          ) {
+            order.push("classify");
+            classifyCalls += 1;
+            return {
+              api: "typesafe-system-one",
+              provider: "typesafe",
+              model: "jev-latest",
+              stopReason: "stop",
+              timestamp: 1,
+              answers: Object.fromEntries(Object.keys(request.questions).map((id) => [
+                id,
+                { type: "bool", probability: 0.1 },
+              ])),
+              usage: {
+                input: 10,
+                output: 2,
+                cacheRead: 0,
+                cacheWrite: 0,
+                totalTokens: 12,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+              },
+            };
+          },
+        },
+      };
+      registerPiContextExpert(fake.pi);
+      const result = await fake.handlers.get("session_before_compact")?.(
+        compactionEvent(compactableToolMessages()),
+        context,
+      );
+
+      assert.ok(requireCompactionResult(result));
+      assert.equal(classifyCalls, 1);
+      assert.deepEqual(order, ["auth", "model", "classify"]);
+    });
+  }
+});
+
+test("an aborted compaction returns undefined for native fallback", async () => {
   const controller = new AbortController();
   controller.abort();
   const event = compactionEvent();
@@ -1064,9 +1149,9 @@ test("an aborted compaction cancels without native fallback", async () => {
   registerPiContextExpert(fake.pi, { jevClient: new ValidFakeJev() });
   const { context, notifications } = createContext(fake.entries);
   const result = await fake.handlers.get("session_before_compact")?.(event, context);
-  assert.deepEqual(result, { cancel: true });
+  assert.equal(result, undefined);
   assert.match(notifications.at(-1)?.message ?? "", /aborted/);
-  assert.match(notifications.at(-1)?.message ?? "", /native fallback is disabled/);
+  assert.match(notifications.at(-1)?.message ?? "", /native compaction once/);
 });
 
 test("an aborted compaction under RPC mode also emits a best-effort stderr diagnostic", async () => {
@@ -1085,7 +1170,7 @@ test("an aborted compaction under RPC mode also emits a best-effort stderr diagn
   } finally {
     stderrChunks = stderr.restore();
   }
-  assert.deepEqual(result, { cancel: true });
+  assert.equal(result, undefined);
   assert.match(notifications.at(-1)?.message ?? "", /aborted/);
   assert.equal(stderrChunks.length, 1);
   assert.match(stderrChunks[0] ?? "", /\[a4s-pi-context-expert:rpc-stdin-guard]/);
@@ -1129,7 +1214,7 @@ test("session_compact_failed ajeno no crea un receipt", async () => {
   const fake = createFakePi();
   registerPiContextExpert(fake.pi, { jevClient: jev });
   const { context } = createContext(fake.entries);
-  const event = compactionEvent();
+  const event = compactionEvent(compactableToolMessages());
   assert.ok(requireCompactionResult(await fake.handlers.get("session_before_compact")?.(event, context)));
   const callsBeforeFailure = jev.calls;
   const failedEvent = {
@@ -1176,12 +1261,12 @@ test("el fallo al guardar el receipt conserva la cancelación", async () => {
 
   const result = await fake.handlers.get("session_before_compact")?.(compactionEvent(), context);
 
-  assert.deepEqual(result, { cancel: true });
+  assert.equal(result, undefined);
   assert.deepEqual(fake.entries, []);
-  assert.match(notifications.at(-1)?.message ?? "", /native fallback is disabled/);
+  assert.match(notifications.at(-1)?.message ?? "", /native compaction once/);
 });
 
-test("large basic sessions evaluate every message once, cache pending work, and retain no RuleSignals", async () => {
+test("large text-only sessions use the shared core, cache pending work, and retain no RuleSignals", async () => {
   const jev = new ValidFakeJev();
   const fake = createFakePi();
   registerPiContextExpert(fake.pi, {
@@ -1196,13 +1281,10 @@ test("large basic sessions evaluate every message once, cache pending work, and 
   }));
   const event = compactionEvent(messages);
   const first = requireCompactionResult(await fake.handlers.get("session_before_compact")?.(event, context));
-  const actionQuestionIds = jev.requests.flatMap((request) =>
-    Object.keys(request.questions).filter((id) => id.startsWith("compaction_action_")),
-  );
-  assert.equal(actionQuestionIds.length, 70);
-  assert.equal(new Set(actionQuestionIds).size, 70);
-  assert.equal(first.details.ruleSignalBatches.length, 0);
-  assert.equal(first.details.decisions.length, 70);
+  assert.equal(jev.calls, 0);
+  if ("schema" in first.details) assert.fail("expected HostBinding details");
+  assert.equal(first.details.fastJev.decisions.length, 0);
+  assert.equal(first.details.fastJev.messages.length, 70);
   const calls = jev.calls;
 
   const cached = requireCompactionResult(await fake.handlers.get("session_before_compact")?.(event, context));
