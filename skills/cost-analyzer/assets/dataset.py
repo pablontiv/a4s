@@ -175,7 +175,7 @@ def classify_non_pi_form(delegation_present: bool) -> Literal['form-solo', 'form
     return 'form-solo'
 
 
-def classify_pi_topology(directory: str, custom_types: Counter[str], spawn_tool_calls: int, intercom_toolcalls: int = 0) -> Literal['S1', 'S2', 'S3', 'S4']:
+def classify_pi_topology(custom_types: Counter[str], spawn_tool_calls: int, intercom_toolcalls: int = 0) -> Literal['S1', 'S2', 'S3', 'S4']:
     """Classify Pi session topology (S1-S4).
 
     DEFECT 1 fix: Removed directory heuristic that was marking non-coordinating
@@ -297,7 +297,7 @@ def parse_pi_session(path: Path) -> SessionRecord:
                     cost += usage.get('cost', {}).get('total', 0) or 0
 
     ended_at = ended_at or started_at
-    topology = classify_pi_topology(path.parent.name, custom_types, spawn_tool_calls, intercom_toolcalls)
+    topology = classify_pi_topology(custom_types, spawn_tool_calls, intercom_toolcalls)
     delegation_present = custom_types['subagent-notify'] > 0 or spawn_tool_calls > 0
     delegation_degree = calculate_delegation_degree(spawn_tool_calls, assistant_turns)
     has_intercom_flag = intercom_toolcalls > 0 or any(name.startswith('intercom') for name in custom_types)
