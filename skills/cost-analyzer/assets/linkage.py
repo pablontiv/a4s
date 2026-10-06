@@ -14,9 +14,6 @@ Methodology:
 
 Output: LinkageResult with session->commit mapping and metrics.
 """
-import sys
-import os
-import json
 import subprocess
 import datetime
 from typing import Optional, List, Dict, Tuple

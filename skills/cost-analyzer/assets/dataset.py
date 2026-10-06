@@ -143,13 +143,13 @@ def classify_pi_form(delegation_present: bool, delegation_degree: float, interco
     Form 1 (Solo): No delegation, no cross-session signals.
     Form 2 (Orch-Hybrid): Delegation + intercom/coordination, degree < 0.8 (mixed work).
     Form 3 (Delegator-Pure): Delegation + intercom/coordination, degree >= 0.8 (delegation-dominant).
-    Form 4 (Cross-Session): Intercom detected with separate session evidence (heuristic).
+    Form 4 (Cross-Session): Detected via parent_session_id or multi-session signals.
 
-    intercom is orthogonal: can appear in any form.
-    delegation_degree distinguishes Form 2 vs 3 by workload composition.
-    cross_session_heuristic flags potential multi-session coordination (requires parent_session_id for proof).
+    D5 FIX: cross_session_heuristic is primary classifier for Form 4. Intercom is orthogonal.
+    A session is cross-session if parent_session_id, intercom target_session_id, or
+    synagent/firstmate signal is detected. Intercom presence does not determine form.
     """
-    if cross_session_heuristic and intercom_present:
+    if cross_session_heuristic:
         return 'form-cross-session'
     if delegation_present:
         if delegation_degree >= 0.8:
@@ -223,7 +223,7 @@ def load_ledger(since: dt.date, until: dt.date | None = None, roots: Mapping[str
     return records
 
 
-def detect_cross_session_signal(records_iter, session_id: str | None) -> bool:
+def detect_cross_session_signal(records_iter) -> bool:
     """Detects cross-session coordination signals in JSONL records.
 
     D5 FIX: Detect Form 4 (cross-session) via:
@@ -301,7 +301,7 @@ def parse_pi_session(path: Path) -> SessionRecord:
     delegation_present = custom_types['subagent-notify'] > 0 or spawn_tool_calls > 0
     delegation_degree = calculate_delegation_degree(spawn_tool_calls, assistant_turns)
     has_intercom_flag = intercom_toolcalls > 0 or any(name.startswith('intercom') for name in custom_types)
-    cross_session_heuristic = detect_cross_session_signal(all_records, session_id)
+    cross_session_heuristic = detect_cross_session_signal(all_records)
     form = classify_pi_form(delegation_present, delegation_degree, has_intercom_flag, cross_session_heuristic)
     evidence = TopologyEvidence(
         delegation=delegation_present,

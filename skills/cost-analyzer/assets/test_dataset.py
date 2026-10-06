@@ -102,6 +102,17 @@ class PiDatasetTests(unittest.TestCase):
             record = parse_pi_session(path)
         self.assertEqual(record.form, 'form-cross-session')
 
+    def test_d5_cross_session_with_parent_session_id_no_intercom(self):
+        """D5 FIX: cross_session_heuristic alone (no intercom) detects Form 4."""
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / 'cross-session-no-intercom.jsonl'
+            path.write_text(
+                '{"type":"session","timestamp":"2026-08-01T00:00:00Z","cwd":"/repo","id":"s1","parent_session_id":"parent-s2"}\n'
+                '{"type":"message","timestamp":"2026-08-01T00:01:00Z","message":{"role":"assistant","content":[],"usage":{"input":5,"output":2}}}\n'
+            )
+            record = parse_pi_session(path)
+        self.assertEqual(record.form, 'form-cross-session')
+
     def test_d5_no_cross_session_without_signal(self):
         """D5 FIX: No cross_session_heuristic without parent_session_id."""
         with TemporaryDirectory() as directory:

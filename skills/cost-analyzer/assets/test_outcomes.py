@@ -2,7 +2,6 @@
 import os
 import tempfile
 import unittest
-from pathlib import Path
 
 import outcomes  # pyright: ignore[reportMissingImports]
 from dataset import SessionRecord  # pyright: ignore[reportMissingImports]
@@ -50,6 +49,16 @@ class OutcomeContractTests(unittest.TestCase):
     def test_d7_enumerate_worktrees_handles_missing_directory(self):
         """D7 FIX: _enumerate_worktrees handles missing directory gracefully."""
         result = outcomes._enumerate_worktrees('/nonexistent/path')
+        self.assertEqual(result, [])
+
+    def test_d7_git_log_from_worktrees_includes_cwd(self):
+        """D7 FIX: _git_log_from_worktrees searches cwd in addition to worktrees."""
+        import datetime as dt
+        cwd = '/nonexistent/cwd'
+        repo_root = '/nonexistent/repo'
+        since = dt.datetime(2026, 1, 1, tzinfo=dt.timezone.utc)
+        until = dt.datetime(2026, 12, 31, tzinfo=dt.timezone.utc)
+        result = outcomes._git_log_from_worktrees(cwd, repo_root, since, until)
         self.assertEqual(result, [])
 
 

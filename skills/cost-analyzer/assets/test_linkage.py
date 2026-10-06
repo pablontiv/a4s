@@ -8,8 +8,6 @@ from tempfile import TemporaryDirectory
 from dataset import SessionRecord
 from linkage import (
     parse_timestamp,
-    get_all_commits,
-    get_main_commits,
     attribute_commit_to_session,
     analyze_linkage,
 )

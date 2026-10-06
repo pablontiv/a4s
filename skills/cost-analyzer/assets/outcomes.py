@@ -170,39 +170,6 @@ def _git_log(cwd: Optional[str], since: datetime.datetime, until: datetime.datet
         return []
 
 
-def _git_log_with_files(cwd: str, since: datetime.datetime, until: datetime.datetime) -> List[tuple]:
-    """Devuelve [(sha, filepath)] para cada archivo modificado en commits del rango.
-
-    Si un commit toca N archivos, aparece N veces.
-    """
-    if not (cwd and os.path.isdir(cwd)):
-        return []
-    try:
-        r = subprocess.run(
-            ['git', '-C', cwd, 'log',
-             '--since', since.strftime('%Y-%m-%dT%H:%M:%S'),
-             '--until', until.strftime('%Y-%m-%dT%H:%M:%S'),
-             '--name-only', '--format=%H'],
-            capture_output=True, text=True, timeout=15
-        )
-        if r.returncode != 0 or not r.stdout.strip():
-            return []
-        out = []
-        current_sha = None
-        for ln in r.stdout.split('\n'):
-            ln = ln.strip()
-            if not ln:
-                current_sha = None
-                continue
-            if len(ln) >= 7 and all(c in '0123456789abcdef' for c in ln.lower()):
-                current_sha = ln
-            elif current_sha:
-                out.append((current_sha, ln))
-        return out
-    except Exception:
-        return []
-
-
 def categorize_path(path: str) -> str:
     """Categoriza un filepath: 'code', 'doc', 'test', 'config', 'other'."""
     p = path.lower()
@@ -323,13 +290,24 @@ def compute_outcome_for_session(jsonl_path: str, with_prs: bool = True, with_bea
         )
     cwd = _session_cwd(jsonl_path)
 
-    # 1. Commits
-    commits = _git_log(cwd, t1, t2)
+    # D7 FIX: Commits from cwd and all worktrees
+    repo_root = None
+    if cwd and os.path.isdir(cwd):
+        try:
+            r = subprocess.run(
+                ['git', '-C', cwd, 'rev-parse', '--show-toplevel'],
+                capture_output=True, text=True, timeout=5
+            )
+            if r.returncode == 0:
+                repo_root = r.stdout.strip()
+        except Exception:
+            pass
+    commits = _git_log_from_worktrees(cwd, repo_root, t1, t2)
 
     # 2. PRs (uno por commit; deduplicar por PR number)
     prs_seen = {}
     if with_prs:
-        for sha, subj in commits:
+        for sha, _ in commits:
             pr = _gh_pr_for_commit(cwd, sha)
             if pr and pr.get('number') not in prs_seen:
                 prs_seen[pr['number']] = pr
@@ -362,7 +340,7 @@ def compute_outcome_for_session(jsonl_path: str, with_prs: bool = True, with_bea
             except Exception:
                 pass
         ts_sorted.sort()
-        for i, t in enumerate(ts_sorted):
+        for _, t in enumerate(ts_sorted):
             window = sum(1 for t2_ in ts_sorted if 0 <= (t2_ - t).total_seconds() <= 60)
             fan_out_max = max(fan_out_max, window)
 

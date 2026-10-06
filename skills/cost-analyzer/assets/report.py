@@ -26,12 +26,12 @@ import quad
 import outcomes
 import attribution
 from dataset import load_ledger
-from views import aggregate_harness, aggregate_topology, render_harness_overview, render_topology_overview
+from views import aggregate_harness, aggregate_topology, aggregate_form, render_harness_overview, render_topology_overview, render_form_overview
 from enrich import enrich_records
 from delivery_efficiency import analyze_delivery_efficiency, render_delivery_efficiency
 
 
-def scan_by_day(since: str, until: str = None):
+def scan_by_day(since: str, until: str | None = None):
     """Itera día por día y devuelve dict {YYYY-MM-DD: cells}."""
     d0 = datetime.date.fromisoformat(since)
     d1 = datetime.date.fromisoformat(until) if until else datetime.date.today()
@@ -177,9 +177,16 @@ def main():
     out.append(format_cost_per_outcome(cells, out_agg))
     out.append('')
 
+    # D4 FIX: 4.5. Taxonomía de formas
+    out.append('Clasificando sesiones por taxonomía de 4 formas...')
+    records = load_ledger(datetime.date.fromisoformat(args.since), datetime.date.fromisoformat(args.until) if args.until else None)
+    form_summary = aggregate_form(records)
+    out.append(render_form_overview(form_summary))
+    out.append('')
+
     # 5. Attribution S3/S4 -> S1 spawneadas
     out.append('Calculando attribution S3/S4 -> S1 spawneadas...')
-    attr = attribution.build_attribution(cells)
+    attr = attribution.build_attribution(cells)  # type: ignore
     out.append(attribution.format_attribution_report(cells, attr))
     out.append('')
 
