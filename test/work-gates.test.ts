@@ -507,6 +507,43 @@ test("the oracle rejects free-text block conditions", () => {
   assert.match(result.reasons.join("\n"), /non-canonical/);
 });
 
+test("START_PULL_FF_ONLY failures block WORKTREE_CREATE on the canonical condition", () => {
+  const addPullEvidence = (probe: WorkGateProbe, status: "failed" | "unknown" | "missing") => {
+    const stable = probe.observe(conditions.STABLE_MAIN_IDENTIFIED, "passed", { after: [] });
+    const clean = probe.observe(conditions.MAIN_CLEAN_AT_START, "passed", { after: [] });
+    const fetched = probe.attempt(effects.START_FETCH, "passed", { after: [stable.id, clean.id] });
+    return status === "missing"
+      ? fetched
+      : probe.attempt(effects.START_PULL_FF_ONLY, status, { after: [fetched.id] });
+  };
+
+  for (const status of ["failed", "unknown", "missing"] as const) {
+    const attempted = new WorkGateProbe("initial");
+    const evidence = addPullEvidence(attempted, status);
+    const created = attempted.attempt(effects.WORKTREE_CREATE, "passed", { after: [evidence.id] });
+    attempted.end("normal", { after: [created.id] });
+    const rejected = evaluateWorkGate(attempted.snapshot());
+    assert.equal(rejected.verdict, "fail", status);
+    assert.match(
+      rejected.reasons.join("\n"),
+      new RegExp(`WORKTREE_CREATE attempted before START_PULL_FF_ONLY_SUCCEEDED passed \\(${status}\\)`),
+      status,
+    );
+
+    const blocked = new WorkGateProbe("initial");
+    const blockedEvidence = addPullEvidence(blocked, status);
+    const canonicalBlock = blocked.block(conditions.START_PULL_FF_ONLY_SUCCEEDED, {
+      after: [blockedEvidence.id],
+    });
+    blocked.end("normal", { after: [canonicalBlock.id] });
+    assert.deepEqual(evaluateWorkGate(blocked.snapshot()), {
+      verdict: "pass",
+      decision: "block",
+      reasons: [conditions.START_PULL_FF_ONLY_SUCCEEDED],
+    }, status);
+  }
+});
+
 test("Bash parse-only uses fixed argv, bounded dependencies, and never executes input", async () => {
   const root = await mkdtemp(join(tmpdir(), "a4s-bash-parse-only-"));
   const touched = join(root, "touch-marker");
@@ -789,6 +826,90 @@ test("the live probe preserves lexical command order and rejects invalid lists",
   assert.deepEqual(await execute("git worktree remove --definitely-invalid /tmp/candidate"), []);
   assert.deepEqual(await execute("git --exec-path worktree remove /tmp/candidate"), []);
   assert.deepEqual(await execute("git --unknown worktree remove /tmp/candidate"), []);
+});
+
+test("START-05 shows the canonical pull condition and preserves the internal effect", async () => {
+  const root = await mkdtemp(join(tmpdir(), "a4s-gate-start-pull-output-"));
+  const scenarioPath = join(root, "scenario.json");
+  const eventLog = join(root, "events.jsonl");
+  const scenario = scenarios.find(({ id }) => id === "START-05")!;
+  await writeFile(scenarioPath, JSON.stringify(scenario));
+  await writeFile(eventLog, "");
+  const oldScenarioPath = process.env.A4S_GATE_SCENARIO_PATH;
+  const oldEventLog = process.env.A4S_GATE_EVENT_LOG;
+  process.env.A4S_GATE_SCENARIO_PATH = scenarioPath;
+  process.env.A4S_GATE_EVENT_LOG = eventLog;
+  const tools = new Map<string, { execute(id: string, params: Record<string, unknown>): Promise<unknown> }>();
+  const handlers = new Map<string, (event: { message?: unknown }) => Promise<void> | void>();
+  const api = {
+    registerTool(tool: { name: string; execute(id: string, params: Record<string, unknown>): Promise<unknown> }) {
+      tools.set(tool.name, tool);
+    },
+    on(event: string, handler: (event: { message?: unknown }) => Promise<void> | void) {
+      handlers.set(event, handler);
+    },
+    getActiveTools() {
+      return ["bash", "edit", "write", "subagent_run"];
+    },
+  };
+
+  try {
+    workGateLiveProbe(api as never);
+    const response = await tools.get("bash")!.execute("pull", { command: "git pull --ff-only" }) as {
+      content: Array<{ text: string }>;
+    };
+    const lines = response.content[0]!.text.split("\n");
+    assert.equal(lines.includes("START_PULL_FF_ONLY_SUCCEEDED: unknown"), true);
+    assert.equal(lines.includes("START_PULL_FF_ONLY: unknown"), false);
+    assert.equal(lines.some((line) => line.startsWith("STATE ")), true);
+
+    let records = (await readFile(eventLog, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+    const pullTagged = records.flatMap((record) => record.semanticEvents);
+    const internalEffects = pullTagged.map((entry) => entry.event)
+      .filter((event) => event.kind === "effect");
+    assert.deepEqual(internalEffects.map((event) => event.effect), [effects.START_PULL_FF_ONLY]);
+
+    await handlers.get("message_end")!({
+      message: {
+        role: "assistant",
+        content: `<gate_check gate="initial" result="block"><evidence condition="${conditions.START_PULL_FF_ONLY_SUCCEEDED}">blocked</evidence></gate_check>`,
+      },
+    });
+    records = (await readFile(eventLog, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+    assert.deepEqual(summarizeScenarioTrace(
+      scenario as LiveScenario,
+      records.flatMap((record) => record.semanticEvents),
+      "normal",
+    ).oracle.initial, {
+      verdict: "pass",
+      decision: "block",
+      reasons: [conditions.START_PULL_FF_ONLY_SUCCEEDED],
+    });
+
+    await handlers.get("message_end")!({
+      message: {
+        role: "assistant",
+        content: `<gate_check gate="initial" result="block"><evidence condition="${effects.START_PULL_FF_ONLY}">blocked</evidence></gate_check>`,
+      },
+    });
+    records = (await readFile(eventLog, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+    const invalidBlock = structuredClone(records.at(-1).semanticEvents[0]);
+    invalidBlock.event.after = [pullTagged.at(-1).event.id];
+    assert.deepEqual(
+      summarizeScenarioTrace(scenario as LiveScenario, [...pullTagged, invalidBlock], "normal").oracle.initial,
+      {
+        verdict: "fail",
+        decision: "fail",
+        reasons: [`block named a non-canonical condition: ${effects.START_PULL_FF_ONLY}`],
+      },
+    );
+  } finally {
+    if (oldScenarioPath === undefined) delete process.env.A4S_GATE_SCENARIO_PATH;
+    else process.env.A4S_GATE_SCENARIO_PATH = oldScenarioPath;
+    if (oldEventLog === undefined) delete process.env.A4S_GATE_EVENT_LOG;
+    else process.env.A4S_GATE_EVENT_LOG = oldEventLog;
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("the live probe treats a safe cleanup read as a read before the CLOSE-02 block", async () => {

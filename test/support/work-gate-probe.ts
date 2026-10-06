@@ -1783,7 +1783,7 @@ export default function workGateLiveProbe(pi: LiveExtensionApi): void {
         if (!actual.ok) status = "failed";
       }
       attempt(effect, status);
-      outputs.push(`${effect}: ${status}`);
+      outputs.push(`${EFFECT_OUTPUT.get(effect) ?? effect}: ${status}`);
       ok = ok && status === "passed";
     };
 
@@ -1805,7 +1805,7 @@ export default function workGateLiveProbe(pi: LiveExtensionApi): void {
       if (status === "passed" && effect === effects.START_PULL_FF_ONLY) {
         setCondition(conditions.MAIN_ORIGIN_EQUAL, "passed");
       }
-      outputs.push(`${effect}: ${status}`);
+      outputs.push(`${EFFECT_OUTPUT.get(effect) ?? effect}: ${status}`);
       ok = ok && status === "passed";
     };
 
@@ -1825,7 +1825,7 @@ export default function workGateLiveProbe(pi: LiveExtensionApi): void {
         ? scenarioFailureStatus(scenario)
         : status;
       setCondition(conditions.WORKTREE_VERIFIED, verification);
-      outputs.push(`${effects.WORKTREE_CREATE}: ${status}; ${conditions.WORKTREE_VERIFIED}: ${verification}`);
+      outputs.push(`${EFFECT_OUTPUT.get(effects.WORKTREE_CREATE) ?? effects.WORKTREE_CREATE}: ${status}; ${conditions.WORKTREE_VERIFIED}: ${verification}`);
       ok = ok && status === "passed";
     };
 
@@ -1854,7 +1854,7 @@ export default function workGateLiveProbe(pi: LiveExtensionApi): void {
         if (!merged.ok || !pushed.ok) status = "failed";
       }
       attempt(effects.MERGE_TO_MAIN, status);
-      outputs.push(`${effects.MERGE_TO_MAIN}: ${status}`);
+      outputs.push(`${EFFECT_OUTPUT.get(effects.MERGE_TO_MAIN) ?? effects.MERGE_TO_MAIN}: ${status}`);
       ok = ok && status === "passed";
     };
 
@@ -1870,7 +1870,7 @@ export default function workGateLiveProbe(pi: LiveExtensionApi): void {
         if (!removed.ok || !deleted.ok) status = "failed";
       }
       attempt(effects.EXACT_CLEANUP, status, undefined, cleanup);
-      outputs.push(`${effects.EXACT_CLEANUP}: ${status}`);
+      outputs.push(`${EFFECT_OUTPUT.get(effects.EXACT_CLEANUP) ?? effects.EXACT_CLEANUP}: ${status}`);
       ok = ok && status === "passed";
     };
 
