@@ -1,14 +1,14 @@
 import net from 'node:net'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { createRequire } from 'node:module'
 import { Check } from 'typebox/value'
 
-import synagentPi, { createSynagentPi } from '../adapters/pi/index.ts'
+import synagentPi, { createSynagentPi, type SynagentPiOptions } from '../adapters/pi/index.ts'
 import { serialize, type CanonicalMessage } from '../protocol.ts'
 
 const require = createRequire(import.meta.url)
@@ -693,10 +693,11 @@ test('Pi adapter unresolved project stays inactive and refuses all v1 send inten
   const publisher = await connectClient(url, 'pi-adapter-legacy-publisher')
   const observer = await connectClient(url, 'pi-adapter-legacy-observer')
   const cwd = mkdtempSync(join(tmpdir(), 'synagent-pi-no-origin-'))
+  const stateRoot = mkdtempSync(join(tmpdir(), 'synagent-pi-no-identity-log-'))
   const harness = createHarness({
     'a4s.synagent.broker-url': url,
     'a4s.synagent.default-peer': 'Some.Project/Peer.One',
-  }, [], 'Legacy.Session', undefined, cwd)
+  }, [], 'Legacy.Session', undefined, cwd, { env: { A4S_STATE_ROOT: stateRoot } })
   t.after(async () => {
     await harness.shutdown()
     await end(publisher)
@@ -704,6 +705,7 @@ test('Pi adapter unresolved project stays inactive and refuses all v1 send inten
     await closeServer(server)
     await closeBroker(broker)
     rmSync(cwd, { recursive: true, force: true })
+    rmSync(stateRoot, { recursive: true, force: true })
   })
 
   const publishedV1: string[] = []
@@ -732,6 +734,13 @@ test('Pi adapter unresolved project stays inactive and refuses all v1 send inten
   await publish(publisher, LEGACY_TOPIC, serialize(message({ id: 'legacy-ignored', to: 'pi' })))
   await new Promise(resolve => setTimeout(resolve, 50))
   assert.equal(harness.received.length, 0)
+  await harness.shutdown()
+  const records = readFileSync(findOperationalLog(stateRoot), 'utf8')
+    .trim().split('\n').map(line => JSON.parse(line) as Record<string, unknown>)
+  const identityFailure = records.find(record => record.event_name === 'synagent.pi.identity.failed')
+  assert.ok(identityFailure)
+  assert.equal(identityFailure['error.code'], 'IDENTITY_UNRESOLVED')
+  assert.equal(identityFailure['error.phase'], 'identity.resolve')
 })
 
 test('Pi adapter warns and falls back to the default for invalid or non-loopback brokers', async t => {
@@ -772,6 +781,233 @@ test('Pi adapter marks MQTT publish failures as tool errors', async t => {
   assert.match(result.content[0]?.text ?? '', /publish failed/i)
 })
 
+test('Pi adapter records focused RCA events without message or transport data', async t => {
+  const { broker, server, url } = await startBroker()
+  const publisher = await connectClient(url, 'pi-logging-publisher')
+  const stateRoot = mkdtempSync(join(tmpdir(), 'synagent-pi-logging-'))
+  const sessionId = 'Raw.Session.Logging'
+  const harness = createHarness({
+    'a4s.synagent.broker-url': url,
+    'a4s.synagent.project': 'Sensitive.Project',
+  }, [], sessionId, 20, process.cwd(), { env: { A4S_STATE_ROOT: stateRoot } })
+  t.after(async () => {
+    await harness.shutdown()
+    await end(publisher)
+    await closeServer(server)
+    await closeBroker(broker)
+    rmSync(stateRoot, { recursive: true, force: true })
+  })
+
+  const topic = 'synagent/v1/Sensitive.Project/Raw.Session.Logging'
+  await harness.start()
+  await waitFor(() => harness.notifications.some(({ message }) => message.includes('subscribed to') && message.includes(topic)))
+
+  const sent = await harness.tool('synagent_send', {
+    to: 'Sensitive.Project/Peer.Private',
+    body: 'outbound prompt body private',
+    kind: 'notify',
+  })
+  assert.notEqual(sent.isError, true)
+  const invalidSend = await harness.tool('synagent_send', {
+    to: 'Sensitive.Project/not/valid',
+    body: 'rejected body private',
+  })
+  assert.equal(invalidSend.isError, true)
+
+  const first = message({
+    id: 'raw-incoming-secret-one',
+    to: 'Sensitive.Project/Raw.Session.Logging',
+    body: 'incoming transcript private',
+  })
+  await publish(publisher, topic, serialize(first))
+  await publish(publisher, topic, serialize(first))
+  await publish(publisher, topic, '{"payload":"invalid-private"')
+  await waitFor(() => harness.received.length === 1)
+  await waitFor(() => harness.notifications.some(({ message }) => message.includes('raw-incoming-secret-one')))
+  await harness.command('synagent', 'resume')
+
+  await publish(publisher, topic, serialize(message({
+    id: 'raw-incoming-secret-two',
+    to: 'Sensitive.Project/Raw.Session.Logging',
+    body: 'second response private',
+  })))
+  await waitFor(() => harness.received.length === 2)
+  await harness.confirmDelivery(1)
+  await harness.settle()
+
+  harness.failDelivery = true
+  await publish(publisher, topic, serialize(message({
+    id: 'raw-incoming-secret-three',
+    to: 'Sensitive.Project/Raw.Session.Logging',
+    body: 'third body private',
+  })))
+  await waitFor(() => harness.notifications.some(({ message }) => message.includes('delivery failed')))
+  harness.failDelivery = false
+  await harness.shutdown()
+
+  const logText = readFileSync(findOperationalLog(stateRoot), 'utf8')
+  const records = logText.trim().split('\n').map(line => JSON.parse(line) as Record<string, unknown>)
+  const events = new Set(records.map(record => record.event_name))
+  for (const event of [
+    'synagent.pi.started',
+    'synagent.pi.shutdown',
+    'synagent.pi.identity.resolved',
+    'synagent.pi.mqtt.connected',
+    'synagent.pi.message.sent',
+    'synagent.pi.message.received',
+    'synagent.pi.message.rejected',
+    'synagent.pi.message.duplicate',
+    'synagent.pi.delivery.dispatched',
+    'synagent.pi.delivery.confirmed',
+    'synagent.pi.delivery.settled',
+    'synagent.pi.delivery.timeout',
+    'synagent.pi.delivery.resumed',
+    'synagent.pi.delivery.failed',
+  ]) assert.ok(events.has(event), `missing ${event}`)
+
+  assert.ok(records.some(record => record['messaging.message.id_hash'] === undefined))
+  assert.ok(records.some(record => typeof record['messaging.message.id_hash'] === 'string'))
+  assert.ok(records.every(record => record.schema === 'a4s.log/1'))
+  assert.ok(records.every(record => record['resource.a4s.harness.name'] === 'pion'))
+  assert.ok(records.some(record => record['a4s.client.role'] === 'durable'))
+  assert.ok(records.some(record => record['a4s.delivery.mode'] === 'idle'))
+  assert.ok(records.some(record => record['a4s.timeout.ms'] === 20))
+  assert.ok(records.some(record => typeof record['a4s.queue.depth'] === 'number'))
+  assert.ok(records.some(record => typeof record['a4s.connection.generation'] === 'number'))
+
+  for (const forbidden of [
+    sessionId,
+    url,
+    topic,
+    'a4s-pi-',
+    'Sensitive.Project',
+    'Peer.Private',
+    'raw-incoming-secret-one',
+    'raw-incoming-secret-two',
+    'raw-incoming-secret-three',
+    'outbound prompt body private',
+    'rejected body private',
+    'incoming transcript private',
+    'second response private',
+    'third body private',
+    'invalid-private',
+  ]) assert.equal(logText.includes(forbidden), false, `log contains forbidden data: ${forbidden}`)
+})
+
+test('Pi adapter contains logger failure after publish, delivery and settlement', async t => {
+  const { broker, server, url } = await startBroker()
+  const publisher = await connectClient(url, 'pi-best-effort-publisher')
+  const stateRoot = mkdtempSync(join(tmpdir(), 'synagent-pi-best-effort-'))
+  let loggerFails = false
+  const harness = createHarness({
+    'a4s.synagent.broker-url': url,
+    'a4s.synagent.project': 'a4s',
+  }, [], 'best-effort-session', 100, process.cwd(), {
+    env: { A4S_STATE_ROOT: stateRoot },
+    now: () => {
+      if (loggerFails) throw new Error('simulated clock failure')
+      return new Date()
+    },
+  })
+  t.after(async () => {
+    await harness.shutdown()
+    await end(publisher)
+    await closeServer(server)
+    await closeBroker(broker)
+    rmSync(stateRoot, { recursive: true, force: true })
+  })
+
+  const topic = 'synagent/v1/a4s/best-effort-session'
+  await harness.start()
+  await waitFor(() => harness.notifications.some(({ message }) => message.includes('subscribed to') && message.includes(topic)))
+  loggerFails = true
+
+  const sent = await harness.tool('synagent_send', { to: 'a4s/peer', body: 'private outbound' })
+  assert.notEqual(sent.isError, true)
+
+  const first = message({ id: 'best-effort-one', to: 'a4s/best-effort-session' })
+  await publish(publisher, topic, serialize(first))
+  await publish(publisher, topic, serialize(first))
+  await publish(publisher, topic, serialize(message({ id: 'best-effort-two', to: 'a4s/best-effort-session' })))
+  await waitFor(() => harness.received.length === 1)
+  assert.equal(harness.entries.filter(entry => entry.data.id === 'best-effort-one').length, 1)
+  await harness.confirmDelivery(0)
+  await harness.settle()
+  await waitFor(() => harness.received.length === 2)
+  assert.match(harness.received[1]?.text ?? '', /id best-effort-two/)
+  await harness.confirmDelivery(1)
+  await harness.settle()
+})
+
+test('Pi adapter preserves shutdown rejection after logging and close', async t => {
+  const { broker, server, url } = await startBroker()
+  const stateRoot = mkdtempSync(join(tmpdir(), 'synagent-pi-shutdown-reject-'))
+  const harness = createHarness({
+    'a4s.synagent.broker-url': url,
+    'a4s.synagent.project': 'a4s',
+  }, [], 'shutdown-reject-session', undefined, process.cwd(), { env: { A4S_STATE_ROOT: stateRoot } })
+  t.after(async () => {
+    await harness.shutdown()
+    await closeServer(server)
+    await closeBroker(broker)
+    rmSync(stateRoot, { recursive: true, force: true })
+  })
+
+  await harness.start()
+  await waitFor(() => harness.notifications.some(({ message }) => message.includes('subscribed to')))
+  const prototype = mqtt.MqttClient.prototype
+  const originalRemoveAllListeners = prototype.removeAllListeners
+  prototype.removeAllListeners = function removeAllListenersFailure() {
+    const client = this as any
+    if (client.options?.clean !== false) return originalRemoveAllListeners.call(this)
+    client.options.reconnectPeriod = 0
+    client.reconnecting = false
+    if (client.reconnectTimer) clearTimeout(client.reconnectTimer)
+    client.reconnectTimer = undefined
+    originalRemoveAllListeners.call(this)
+    client.stream?.destroy?.()
+    client.end(true)
+    throw new Error('simulated stop rejection')
+  }
+  try {
+    await assert.rejects(harness.shutdown(), /simulated stop rejection/)
+  } finally {
+    prototype.removeAllListeners = originalRemoveAllListeners
+  }
+
+  const records = readFileSync(findOperationalLog(stateRoot), 'utf8')
+    .trim().split('\n').map(line => JSON.parse(line) as Record<string, unknown>)
+  const shutdown = records.find(record =>
+    record.event_name === 'synagent.pi.shutdown' && record['error.code'] === 'SHUTDOWN_FAILED',
+  )
+  assert.ok(shutdown)
+})
+
+test('Pi adapter records MQTT connection failure with stable taxonomy', async t => {
+  const stateRoot = mkdtempSync(join(tmpdir(), 'synagent-pi-mqtt-failure-'))
+  const port = await unusedPort()
+  const harness = createHarness({
+    'a4s.synagent.broker-url': `mqtt://127.0.0.1:${port}`,
+    'a4s.synagent.project': 'a4s',
+  }, [], 'mqtt-failure-session', undefined, process.cwd(), { env: { A4S_STATE_ROOT: stateRoot } })
+  t.after(async () => {
+    await harness.shutdown()
+    rmSync(stateRoot, { recursive: true, force: true })
+  })
+
+  await harness.start()
+  await waitFor(() => harness.notifications.some(({ message }) => message.includes('connection error')))
+  await harness.shutdown()
+  const records = readFileSync(findOperationalLog(stateRoot), 'utf8')
+    .trim().split('\n').map(line => JSON.parse(line) as Record<string, unknown>)
+  const failure = records.find(record => record.event_name === 'synagent.pi.mqtt.failed')
+  assert.ok(failure)
+  assert.equal(failure['error.phase'], 'mqtt.connect')
+  assert.equal(failure['error.retryable'], true)
+  assert.equal(failure['a4s.client.role'], 'durable')
+  assert.equal(JSON.stringify(failure).includes(`127.0.0.1:${port}`), false)
+})
+
 test('Pi adapter stays disconnected when its enabled setting is false', async () => {
   const harness = createHarness({ 'a4s.synagent.enabled': false })
   await harness.start()
@@ -788,6 +1024,7 @@ function createHarness(
   sessionId = `session-${Math.random().toString(36).slice(2)}`,
   deliveryStartTimeoutMs?: number,
   cwd = process.cwd(),
+  diagnostics?: SynagentPiOptions['diagnostics'],
 ) {
   const events = new Map<EventName, Handler>()
   const commands = new Map<string, Command>()
@@ -795,11 +1032,14 @@ function createHarness(
   const notifications: Notification[] = []
   const received: Received[] = []
   const entries = initialEntries.map(entry => ({ ...entry, data: { ...entry.data } }))
+  const ownedDiagnosticsRoot = diagnostics ? undefined : mkdtempSync(join(tmpdir(), 'synagent-pi-test-log-'))
+  const effectiveDiagnostics = diagnostics ?? { env: { A4S_STATE_ROOT: ownedDiagnosticsRoot } }
   const settings = new Map<string, {
     value: unknown
     listeners: Set<(value: unknown) => void>
   }>()
   let idle = true
+  let failDelivery = false
   let currentSessionId = sessionId
 
   const createContext = (): FakeContext => ({
@@ -843,11 +1083,15 @@ function createHarness(
       entries.push({ type: 'custom', customType, data })
     },
     sendUserMessage(text: string, options?: Received['options']) {
+      if (failDelivery) throw new Error('simulated delivery failure with private detail')
       received.push({ text, ...(options ? { options } : {}) })
     },
   }
-  // Always create a new adapter instance to avoid shared state between test harnesses
-  const adapter = createSynagentPi(deliveryStartTimeoutMs !== undefined ? { deliveryStartTimeoutMs } : {})
+  // Cada harness usa una instancia aislada del adaptador.
+  const adapter = createSynagentPi({
+    ...(deliveryStartTimeoutMs !== undefined ? { deliveryStartTimeoutMs } : {}),
+    diagnostics: effectiveDiagnostics,
+  })
   adapter(api as never)
 
   return {
@@ -858,6 +1102,8 @@ function createHarness(
     toolSchemas: { get: (name: string) => (tools.get(name) as any)?.parameters },
     get idle() { return idle },
     set idle(value: boolean) { idle = value },
+    get failDelivery() { return failDelivery },
+    set failDelivery(value: boolean) { failDelivery = value },
     async start() {
       const handler = events.get('session_start')
       assert.ok(handler)
@@ -896,6 +1142,7 @@ function createHarness(
       const handler = events.get('session_shutdown')
       assert.ok(handler)
       await handler({ type: 'session_shutdown' }, createContext())
+      if (ownedDiagnosticsRoot) rmSync(ownedDiagnosticsRoot, { recursive: true, force: true })
     },
     async command(name: string, args: string) {
       const command = commands.get(name)
@@ -920,6 +1167,21 @@ function message(overrides: Partial<CanonicalMessage> & { id: string; to: string
     ts: overrides.ts ?? Date.now(),
     ...(overrides.reply_to ? { reply_to: overrides.reply_to } : {}),
   }
+}
+
+function findOperationalLog(stateRoot: string): string {
+  const harnessRoot = join(stateRoot, 'log', 'synagent', 'pi')
+  const instances = readdirSync(harnessRoot, { withFileTypes: true }).filter(entry => entry.isDirectory())
+  assert.equal(instances.length, 1)
+  return join(harnessRoot, instances[0]!.name, 'operational.jsonl')
+}
+
+async function unusedPort(): Promise<number> {
+  const server = net.createServer()
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const port = (server.address() as net.AddressInfo).port
+  await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
+  return port
 }
 
 async function waitFor(condition: () => boolean): Promise<void> {

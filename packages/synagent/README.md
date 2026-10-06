@@ -238,6 +238,37 @@ adaptador reserva cada `id` antes de encolarlo y conserva los
 La entrega al modelo es **at-most-once**. Puede perderse un mensaje si el
 proceso cae después de reservar su ID y antes de entregarlo.
 
+### Diagnóstico operacional de Pi
+
+El adaptador Pi escribe JSONL fuera de stdout y stderr. La ruta por defecto es
+`${A4S_STATE_ROOT:-${XDG_STATE_HOME:-$HOME/.local/state}/a4s}/log/synagent/pi/<instancia>/operational.jsonl`.
+`A4S_STATE_ROOT` cambia la raíz completa. Cada línea usa el contrato
+`a4s.log/1`. Los campos siguen nombres de OTel para recurso, scope, severidad,
+correlación y error.
+
+El adaptador registra solo hitos útiles para RCA. Incluye ciclo de vida,
+identidad, conexión MQTT, resultado de mensaje y barrera de entrega. Registra
+profundidad de cola, generación, rol, operación, tipo de mensaje, alcance,
+modo y timeout cuando aplican. El ID de mensaje se correlaciona con un digest
+SHA-256 determinista. El mismo cálculo se puede usar en el adaptador Claude.
+
+El JSONL no contiene body, payload, prompt, respuesta, transcript, token,
+topic, dirección, URL, client ID, entorno, argv ni ID de sesión crudo. El
+nombre de instancia deriva de un digest del ID de sesión. El escritor aplica
+`0700` a sus directorios y `0600` al archivo. Rechaza rutas de instancia y
+archivos que sean symlinks o tipos no regulares. Usa `O_NOFOLLOW` cuando el
+sistema lo ofrece. Si no garantiza la ruta o los permisos, omite el registro.
+Nunca usa stdout o stderr como fallback.
+
+El escritor es best-effort. Un fallo de creación, formato o escritura no
+detiene el adaptador. Cada archivo tiene una cuota fija de 16 MiB. El escritor
+deja de escribir antes de superar la cuota. No borra ni rota datos. La cuota
+limita el consumo de disco. No ofrece retención. El cierre solicita `fsync`,
+pero un fallo posterior no cambia una línea ya escrita. Las defensas cubren a
+otros usuarios y paths hostiles preexistentes.
+No cubren un proceso malicioso con el mismo UID. También existe una ventana
+TOCTOU donde faltan APIs portables para cerrarla.
+
 ## Seguridad
 
 El broker escucha solo en loopback y no implementa auth, TLS ni ACL. Cualquier
