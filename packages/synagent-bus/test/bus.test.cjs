@@ -13,6 +13,21 @@ const { defaultDbDir, parseArgs } = require('../broker.cjs')
 
 const BROKER = path.join(__dirname, '..', 'broker.cjs')
 
+function loggingEnv(logRoot, instanceId) {
+  return {
+    ...process.env,
+    A4S_SYNAGENT_BUS_LOG_DIR: logRoot,
+    A4S_SERVICE_INSTANCE_ID: instanceId,
+    A4S_OPERATION_ID: `${instanceId}-operation`,
+    A4S_CORRELATION_ID: `${instanceId}-correlation`,
+  }
+}
+
+async function readEvents(logFile) {
+  const text = await fs.readFile(logFile, 'utf8')
+  return text.trim().split('\n').map(line => JSON.parse(line))
+}
+
 function waitForOutput(proc, stream, pattern, timeoutMs = 15000) {
   return new Promise((resolve, reject) => {
     let output = ''
@@ -85,7 +100,11 @@ async function roundTrip(url, suffix) {
 async function startRealBroker(t, executable = process.execPath, leadingArgs = [BROKER]) {
   const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'synagent-bus-real-'))
   const db = path.join(temp, 'mqtt-db')
-  const proc = spawn(executable, [...leadingArgs, '0', '--db', db], { env: process.env })
+  const logRoot = path.join(temp, 'logs')
+  const instanceId = 'broker-real-test'
+  const proc = spawn(executable, [...leadingArgs, '0', '--db', db], {
+    env: loggingEnv(logRoot, instanceId),
+  })
   t.after(async () => {
     if (proc.exitCode === null) {
       proc.kill('SIGTERM')
@@ -94,7 +113,12 @@ async function startRealBroker(t, executable = process.execPath, leadingArgs = [
     await fs.rm(temp, { recursive: true, force: true })
   })
   const match = await waitForOutput(proc, 'stdout', /BROKER READY :(\d+) db=(.+)/)
-  return { proc, db, url: `mqtt://127.0.0.1:${match[1]}` }
+  return {
+    proc,
+    db,
+    logFile: path.join(logRoot, instanceId, 'operational.jsonl'),
+    url: `mqtt://127.0.0.1:${match[1]}`,
+  }
 }
 
 test('database defaults and precedence are OS-aware', () => {
@@ -119,7 +143,7 @@ test('database defaults and precedence are OS-aware', () => {
 })
 
 test('real CLI uses an ephemeral port, durable LevelDB, and MQTT round-trip', async t => {
-  const { proc, db, url } = await startRealBroker(t)
+  const { proc, db, logFile, url } = await startRealBroker(t)
   await roundTrip(url, 'real-cli')
   const entries = await fs.readdir(db)
   assert.ok(entries.length > 0, 'LevelDB should create files')
@@ -127,8 +151,16 @@ test('real CLI uses an ephemeral port, durable LevelDB, and MQTT round-trip', as
     const mode = (await fs.stat(db)).mode & 0o777
     assert.equal(mode, 0o700)
   }
+  const shutdownLine = waitForOutput(proc, 'stdout', /^\[broker\] closing on SIGTERM$/m)
+  const exitResult = exited(proc)
   proc.kill('SIGTERM')
-  assert.deepEqual(await exited(proc), { code: 0, signal: null })
+  assert.equal((await shutdownLine)[0], '[broker] closing on SIGTERM')
+  assert.deepEqual(await exitResult, { code: 0, signal: null })
+  const events = await readEvents(logFile)
+  assert.deepEqual(
+    events.map(event => event.event_name),
+    ['broker.started', 'broker.ready', 'broker.shutdown'],
+  )
 })
 
 test('EADDRINUSE exits zero before creating or opening LevelDB', async t => {
@@ -140,11 +172,16 @@ test('EADDRINUSE exits zero before creating or opening LevelDB', async t => {
   const db = path.join(temp, 'must-not-exist')
   t.after(() => fs.rm(temp, { recursive: true, force: true }))
 
-  const proc = spawn(process.execPath, [BROKER, String(port), '--db', db])
-  const output = await waitForOutput(proc, 'stdout', new RegExp(`BROKER ALREADY RUNNING :${port}`))
-  assert.ok(output)
-  assert.deepEqual(await exited(proc), { code: 0, signal: null })
+  const instanceId = 'broker-inuse-test'
+  const result = await outputAndExit(spawn(process.execPath, [BROKER, String(port), '--db', db], {
+    env: loggingEnv(path.join(temp, 'logs'), instanceId),
+  }))
+  assert.equal(result.code, 0)
+  assert.equal(result.stdout, `BROKER ALREADY RUNNING :${port}\n`)
+  assert.equal(result.stderr, '')
   assert.equal(existsSync(db), false)
+  const events = await readEvents(path.join(temp, 'logs', instanceId, 'operational.jsonl'))
+  assert.deepEqual(events.map(event => event.event_name), ['broker.started', 'broker.already_running'])
 })
 
 test('LevelDB initialization failure exits nonzero instead of degrading to memory', async t => {
@@ -152,10 +189,41 @@ test('LevelDB initialization failure exits nonzero instead of degrading to memor
   t.after(() => fs.rm(temp, { recursive: true, force: true }))
   const notDirectory = path.join(temp, 'file')
   await fs.writeFile(notDirectory, 'not a directory')
-  const result = await outputAndExit(spawn(process.execPath, [BROKER, '0', '--db', notDirectory]))
+  const instanceId = 'broker-failure-test'
+  const result = await outputAndExit(spawn(process.execPath, [BROKER, '0', '--db', notDirectory], {
+    env: loggingEnv(path.join(temp, 'logs'), instanceId),
+  }))
   assert.equal(result.code, 1)
   assert.doesNotMatch(result.stdout, /BROKER READY/)
   assert.match(result.stderr, /\[broker\] ERROR/)
+  const events = await readEvents(path.join(temp, 'logs', instanceId, 'operational.jsonl'))
+  assert.deepEqual(events.map(event => event.event_name), [
+    'broker.started', 'broker.error', 'broker.shutdown',
+  ])
+  const errorEvent = events.find(event => event.event_name === 'broker.error')
+  assert.equal(errorEvent['error.type'], 'Error')
+  assert.equal(errorEvent['error.code'], 'A4S_BROKER_DB_FAILED')
+  assert.equal(errorEvent['error.source'], 'broker.runtime')
+  assert.equal(errorEvent['error.retryable'], false)
+  assert.equal(errorEvent['error.phase'], 'db.open')
+})
+
+test('invalid broker port has a structured non-retryable taxonomy', async t => {
+  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'synagent-bus-invalid-port-'))
+  t.after(() => fs.rm(temp, { recursive: true, force: true }))
+  const instanceId = 'broker-invalid-port-test'
+  const result = await outputAndExit(spawn(process.execPath, [BROKER, 'not-a-port'], {
+    env: loggingEnv(path.join(temp, 'logs'), instanceId),
+  }))
+  assert.equal(result.code, 1)
+  assert.equal(result.stdout, '')
+  assert.match(result.stderr, /^\[broker\] ERROR Error: invalid port: not-a-port\n/)
+  const events = await readEvents(path.join(temp, 'logs', instanceId, 'operational.jsonl'))
+  const errorEvent = events.find(event => event.event_name === 'broker.error')
+  assert.equal(errorEvent['error.code'], 'A4S_BROKER_PORT_INVALID')
+  assert.equal(errorEvent['error.source'], 'broker.runtime')
+  assert.equal(errorEvent['error.retryable'], false)
+  assert.equal(errorEvent['error.phase'], 'arguments')
 })
 
 test('npm tarball installs globally into an isolated prefix and its real bin works', { timeout: 120000 }, async t => {
