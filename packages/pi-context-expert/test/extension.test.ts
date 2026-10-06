@@ -25,6 +25,7 @@ import piContextExpertExtension, {
   type JevCompactionResult,
   type JevRequest,
 } from "../src/index.ts";
+import { collectOperationalFailureReceipts } from "../src/storage.ts";
 import { validJevResponse } from "./fixtures.ts";
 
 type EventHandler = (event: unknown, context: unknown) => unknown;
@@ -394,6 +395,98 @@ test("a cancelled compaction publishes no corpus while a successful one is reloa
   assert.equal(collectCorpus(reloaded.entries).length, 1);
   await reloaded.handlers.get("session_start")?.({ type: "session_start", reason: "reload" }, reloadedContext);
   assert.equal(reloaded.entries.filter((entry) => entry.customType === CORPUS_ENTRY_TYPE).length, 2);
+});
+
+test("el fallo de publicación del corpus guarda un receipt y conserva la compactación", async () => {
+  const fake = createFakePi();
+  const originalAppend = fake.pi.appendEntry.bind(fake.pi);
+  let failCorpus = true;
+  Object.defineProperty(fake.pi, "appendEntry", {
+    value(customType: string, data: unknown) {
+      if (customType === CORPUS_ENTRY_TYPE && failCorpus) {
+        failCorpus = false;
+        throw new Error("path=/private/corpus password=private-corpus-error");
+      }
+      return originalAppend(customType, data);
+    },
+  });
+  registerPiContextExpert(fake.pi, {
+    jevClient: new ValidFakeJev(),
+    now: () => new Date("2026-09-22T12:01:00.000Z"),
+  });
+  const { context } = createContext(fake.entries);
+  const result = requireCompactionResult(
+    await fake.handlers.get("session_before_compact")?.(
+      compactionEvent([{ role: "user", content: "password=private-corpus-source" }]),
+      context,
+    ),
+  );
+  const compactionEntry = appendSuccessfulCompaction(fake, result);
+
+  await fake.handlers.get("session_compact")?.(
+    { type: "session_compact", compactionEntry, fromExtension: true, reason: "manual", willRetry: false },
+    context,
+  );
+  await fake.handlers.get("session_compact")?.(
+    { type: "session_compact", compactionEntry, fromExtension: true, reason: "manual", willRetry: false },
+    context,
+  );
+
+  assert.deepEqual(collectOperationalFailureReceipts(fake.entries), [{
+    schema: "a4s.operational-failure/v1",
+    timestamp: "2026-09-22T12:01:00.000Z",
+    phase: "corpus",
+    code: "storage_failure",
+    attemptId: result.details.attemptId,
+    reason: "manual",
+    willRetry: false,
+  }]);
+  assert.equal(fake.entries.includes(compactionEntry), true);
+  assert.doesNotMatch(JSON.stringify(collectOperationalFailureReceipts(fake.entries)), /private-corpus/);
+});
+
+test("el fallo de Evidence guarda un receipt sin publicar artefactos", async () => {
+  const jev: JevClient = {
+    async evaluate(request) {
+      if ((request.state as { profile?: unknown }).profile === "conservative-evidence") {
+        throw new Error("transcript=private-evidence-error");
+      }
+      return validJevResponse(request);
+    },
+  };
+  const fake = createFakePi();
+  registerPiContextExpert(fake.pi, {
+    jevClient: jev,
+    config: {
+      "compaction.strategy": "ladder",
+      "trigger.mode": "off",
+      "evidence.strategy": "ladder",
+    },
+    now: () => new Date("2026-09-22T12:02:00.000Z"),
+  });
+  const { context } = createContext(fake.entries);
+  const result = requireCompactionResult(
+    await fake.handlers.get("session_before_compact")?.(compactionEvent(), context),
+  );
+  const compactionEntry = appendSuccessfulCompaction(fake, result);
+
+  await fake.handlers.get("session_compact")?.(
+    { type: "session_compact", compactionEntry, fromExtension: true, reason: "threshold", willRetry: false },
+    context,
+  );
+
+  assert.deepEqual(collectOperationalFailureReceipts(fake.entries), [{
+    schema: "a4s.operational-failure/v1",
+    timestamp: "2026-09-22T12:02:00.000Z",
+    phase: "evidence",
+    code: "internal_failure",
+    attemptId: result.details.attemptId,
+    reason: "threshold",
+    willRetry: false,
+  }]);
+  assert.equal(fake.entries.some((entry) => entry.customType === EVIDENCE_RECEIPT_ENTRY_TYPE), false);
+  assert.equal(fake.entries.some((entry) => entry.customType === RULE_SIGNAL_ENTRY_TYPE), false);
+  assert.doesNotMatch(JSON.stringify(collectOperationalFailureReceipts(fake.entries)), /private-evidence/);
 });
 
 test("basic does not register or consume Ladder context projection", () => {
@@ -875,12 +968,19 @@ test("missing key, timeout, malformed response, API failure, and unfittable stat
   const cases: Array<{
     name: string;
     options: Parameters<typeof registerPiContextExpert>[1];
+    expectedCode: "missing_key" | "timeout" | "malformed_response" | "api_failure" | "oversized_state";
     expectedDiagnostic: RegExp;
   }> = [
-    { name: "missing key", options: { hookTimeoutMs: 30 }, expectedDiagnostic: /TypeSafe credentials/ },
+    {
+      name: "missing key",
+      options: { hookTimeoutMs: 30 },
+      expectedCode: "missing_key",
+      expectedDiagnostic: /TypeSafe credentials/,
+    },
     {
       name: "timeout",
       options: { hookTimeoutMs: 10, jevClient: { evaluate: async () => new Promise<never>(() => undefined) } },
+      expectedCode: "timeout",
       expectedDiagnostic: /timed out/,
     },
     {
@@ -889,6 +989,7 @@ test("missing key, timeout, malformed response, API failure, and unfittable stat
         hookTimeoutMs: 10,
         jevClient: { evaluate: async () => { throw new JevApiError(429, 1_000); } },
       },
+      expectedCode: "timeout",
       expectedDiagnostic: /timed out/,
     },
     {
@@ -898,21 +999,25 @@ test("missing key, timeout, malformed response, API failure, and unfittable stat
           evaluate: async (request: JevRequest) => ({ ...validJevResponse(request), unexpected: true }),
         },
       },
+      expectedCode: "malformed_response",
       expectedDiagnostic: /strict validation/,
     },
     {
       name: "API failure",
       options: { jevClient: { evaluate: async () => { throw new JevApiError(503); } } },
+      expectedCode: "api_failure",
       expectedDiagnostic: /Jev request failed/,
     },
     {
       name: "unfittable state",
       options: { jevClient: new ValidFakeJev(), observation: { maxStateTokens: 1, minimumExcerptChars: 48 } },
+      expectedCode: "oversized_state",
       expectedDiagnostic: /exceeded configured bounds/,
     },
     {
       name: "impossible summary budget",
       options: { jevClient: new ValidFakeJev(), compaction: { maxSummaryChars: 20 } },
+      expectedCode: "oversized_state",
       expectedDiagnostic: /exceeded configured bounds/,
     },
   ];
@@ -920,11 +1025,30 @@ test("missing key, timeout, malformed response, API failure, and unfittable stat
   for (const scenario of cases) {
     await t.test(scenario.name, async () => {
       const fake = createFakePi();
-      registerPiContextExpert(fake.pi, scenario.options);
+      registerPiContextExpert(fake.pi, {
+        ...scenario.options,
+        now: () => new Date("2026-09-22T12:04:00.000Z"),
+      });
       const { context, notifications } = createContext(fake.entries);
       const result = await fake.handlers.get("session_before_compact")?.(compactionEvent(), context);
       assert.deepEqual(result, { cancel: true });
-      assert.equal(fake.entries.length, 0);
+      await fake.handlers.get("session_compact_failed")?.(
+        {
+          type: "session_compact_failed",
+          reason: "threshold",
+          aborted: false,
+          willRetry: false,
+          fromExtension: true,
+          errorMessage: "token=private-compaction-error",
+        },
+        context,
+      );
+      const failures = collectOperationalFailureReceipts(fake.entries);
+      assert.equal(failures.length, 1);
+      assert.equal(failures[0]?.code, scenario.expectedCode);
+      assert.equal(failures[0]?.phase, "compaction");
+      assert.match(failures[0]?.attemptId ?? "", /^sha256:[0-9a-f]{64}$/);
+      assert.doesNotMatch(JSON.stringify(failures), /private-compaction-error/);
       assert.match(notifications.at(-1)?.message ?? "", scenario.expectedDiagnostic);
       assert.match(notifications.at(-1)?.message ?? "", /native fallback is disabled/);
     });
@@ -1000,7 +1124,7 @@ test("a non-aborted cancel under RPC mode never writes the stderr diagnostic", a
   assert.deepEqual(stderrChunks, []);
 });
 
-test("failed compaction clears pending work and never publishes signals", async () => {
+test("session_compact_failed ajeno no crea un receipt", async () => {
   const jev = new ValidFakeJev();
   const fake = createFakePi();
   registerPiContextExpert(fake.pi, { jevClient: jev });
@@ -1008,13 +1132,53 @@ test("failed compaction clears pending work and never publishes signals", async 
   const event = compactionEvent();
   assert.ok(requireCompactionResult(await fake.handlers.get("session_before_compact")?.(event, context)));
   const callsBeforeFailure = jev.calls;
-  await fake.handlers.get("session_compact_failed")?.(
-    { type: "session_compact_failed", reason: "threshold", aborted: true, willRetry: false, fromExtension: true },
-    context,
-  );
-  assert.equal(fake.entries.length, 0);
+  const failedEvent = {
+    type: "session_compact_failed",
+    reason: "threshold",
+    aborted: true,
+    willRetry: false,
+    fromExtension: true,
+    errorMessage: "password=private-failure-message",
+  };
+  await fake.handlers.get("session_compact_failed")?.(failedEvent, context);
+
+  assert.deepEqual(collectOperationalFailureReceipts(fake.entries), []);
+  assert.doesNotMatch(JSON.stringify(fake.entries), /private-failure-message/);
   assert.ok(requireCompactionResult(await fake.handlers.get("session_before_compact")?.(event, context)));
   assert.ok(jev.calls > callsBeforeFailure, "cleared pending work must be re-evaluated on retry");
+});
+
+test("session_compact_failed ignora una compactación ajena", async () => {
+  const fake = createFakePi();
+  registerPiContextExpert(fake.pi, { jevClient: new ValidFakeJev() });
+  const { context } = createContext(fake.entries);
+  assert.ok(requireCompactionResult(
+    await fake.handlers.get("session_before_compact")?.(compactionEvent(), context),
+  ));
+
+  await fake.handlers.get("session_compact_failed")?.(
+    { type: "session_compact_failed", reason: "threshold", aborted: false, willRetry: false, fromExtension: false },
+    context,
+  );
+
+  assert.deepEqual(collectOperationalFailureReceipts(fake.entries), []);
+});
+
+test("el fallo al guardar el receipt conserva la cancelación", async () => {
+  const fake = createFakePi();
+  registerPiContextExpert(fake.pi, { hookTimeoutMs: 30 });
+  const { context, notifications } = createContext(fake.entries);
+  Object.defineProperty(fake.pi, "appendEntry", {
+    value() {
+      throw new Error("receipt storage unavailable");
+    },
+  });
+
+  const result = await fake.handlers.get("session_before_compact")?.(compactionEvent(), context);
+
+  assert.deepEqual(result, { cancel: true });
+  assert.deepEqual(fake.entries, []);
+  assert.match(notifications.at(-1)?.message ?? "", /native fallback is disabled/);
 });
 
 test("large basic sessions evaluate every message once, cache pending work, and retain no RuleSignals", async () => {
@@ -1077,6 +1241,15 @@ test("/retro-rules preserves manually stored evidence after failure and retries 
   await fake.commands.get("retro-rules")?.("", failing.context);
   assert.equal(fake.entries.filter((entry) => entry.customType === RULE_SIGNAL_ENTRY_TYPE).length, 1);
   assert.equal(fake.entries.filter((entry) => entry.customType === RULE_PROPOSAL_ENTRY_TYPE).length, 0);
+  assert.deepEqual(collectOperationalFailureReceipts(fake.entries), [{
+    schema: "a4s.operational-failure/v1",
+    timestamp: "2026-09-18T13:30:00.000Z",
+    phase: "retro",
+    code: "model_unavailable",
+    attemptId: batch.provenance.compactionAttemptId,
+    reason: "manual",
+    willRetry: true,
+  }]);
 
   const recovered = createRetroCapableContext(fake.entries);
   await fake.commands.get("retro-rules")?.("", recovered.context);
@@ -1150,7 +1323,10 @@ test("/retro-rules fails closed when the current model is unavailable", async ()
     new AbortController().signal,
   );
   const fake = createFakePi([{ type: "custom", customType: RULE_SIGNAL_ENTRY_TYPE, data: batch }]);
-  registerPiContextExpert(fake.pi, { jevClient: new ValidFakeJev() });
+  registerPiContextExpert(fake.pi, {
+    jevClient: new ValidFakeJev(),
+    now: () => new Date("2026-09-18T14:11:00.000Z"),
+  });
   const notifications: string[] = [];
   await fake.commands.get("retro-rules")?.("", {
     waitForIdle: async () => undefined,
@@ -1159,7 +1335,15 @@ test("/retro-rules fails closed when the current model is unavailable", async ()
     modelRegistry: {},
     ui: { notify: (message: string) => notifications.push(message) },
   });
-  assert.equal(fake.entries.length, 1);
+  assert.deepEqual(collectOperationalFailureReceipts(fake.entries), [{
+    schema: "a4s.operational-failure/v1",
+    timestamp: "2026-09-18T14:11:00.000Z",
+    phase: "retro",
+    code: "model_unavailable",
+    attemptId: batch.provenance.compactionAttemptId,
+    reason: "manual",
+    willRetry: true,
+  }]);
   assert.match(notifications.at(-1) ?? "", /current Pi model is unavailable/);
 });
 
@@ -1331,6 +1515,46 @@ test("agent_settled hints only after percentage and compactable-history gates pa
     assert.equal(notifications.length, scenario.expectedNotifications);
     assert.equal(jev.calls, scenario.expectedNotifications);
   }
+});
+
+test("una sesión larga conserva un receipt por evaluación fallida del Trigger", async () => {
+  const fake = createFakePi();
+  registerPiContextExpert(fake.pi, {
+    jevClient: {
+      evaluate: async () => {
+        throw new Error("argv=private-trigger-error");
+      },
+    },
+    config: { "trigger.mode": "hint" },
+    trigger: { resolveCompactionSettings: () => ({ keepRecentTokens: 20_000 }) },
+    now: () => new Date("2026-09-22T12:03:00.000Z"),
+  });
+  const { context, notifications } = createContext(fake.entries, {
+    projectionEntries: compactableTriggerProjection(),
+  });
+  const triggerContext = {
+    ...context,
+    hasUI: true,
+    isIdle: () => true,
+    hasPendingMessages: () => false,
+    getContextUsage: () => ({ tokens: 40_000, contextWindow: 128_000, percent: 31.25 }),
+    signal: undefined,
+  };
+
+  for (let index = 0; index < 128; index += 1) {
+    await fake.handlers.get("agent_settled")?.({ type: "agent_settled" }, triggerContext);
+  }
+
+  const failures = collectOperationalFailureReceipts(fake.entries);
+  assert.equal(failures.length, 128);
+  assert.equal(failures.every((failure) =>
+    failure.phase === "trigger" &&
+    failure.code === "internal_failure" &&
+    failure.reason === "agent_settled" &&
+    failure.willRetry
+  ), true);
+  assert.deepEqual(notifications, []);
+  assert.doesNotMatch(JSON.stringify(fake.entries), /private-trigger-error/);
 });
 
 test("agent_settled recalculates the trigger ratio after a model window change", async () => {

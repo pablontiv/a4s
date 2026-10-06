@@ -1,13 +1,19 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import * as publicApi from "../src/index.ts";
 import {
   applyTriggerDecision,
   evaluateTrigger,
+  evaluateTriggerWithFailure,
   hasConservativeCompactableHistory,
   type TriggerInput,
 } from "../src/trigger.ts";
 import type { JevClient, JevRequest } from "../src/types.ts";
 import { validJevResponse } from "./fixtures.ts";
+
+type AssertNever<T extends never> = T;
+type TriggerInputHasNoFailureHook = AssertNever<Extract<keyof TriggerInput, "onFailure">>;
+const triggerInputHasNoFailureHook: TriggerInputHasNoFailureHook[] = [];
 
 class SuggestingJev implements JevClient {
   calls = 0;
@@ -140,6 +146,23 @@ test("off never queries Jev and the request contains no chunk text or credential
   assert.match(serialized, /contextWindow/);
   assert.match(serialized, /contextRatio/);
   assert.doesNotMatch(serialized, /minimumContextTokens/);
+});
+
+test("el Trigger mantiene la API pública y la decisión segura", async () => {
+  assert.deepEqual(triggerInputHasNoFailureHook, []);
+  assert.equal("evaluateTriggerWithFailure" in publicApi, false);
+  const failures: string[] = [];
+  const decision = await evaluateTriggerWithFailure(
+    readyInput({ evaluate: async () => { throw new Error("private failure"); } }),
+    (code) => failures.push(code),
+  );
+  assert.deepEqual(decision, { action: "none" });
+  assert.deepEqual(failures, ["internal_failure"]);
+
+  await assert.doesNotReject(() => evaluateTriggerWithFailure(
+    readyInput({ evaluate: async () => { throw new Error("private failure"); } }),
+    () => { throw new Error("receipt append failed"); },
+  ));
 });
 
 test("applyTriggerDecision delegates compaction only through ctx.compact", async () => {
