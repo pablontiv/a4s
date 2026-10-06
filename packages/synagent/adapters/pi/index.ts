@@ -6,6 +6,13 @@ import { connect, type MqttClient } from 'mqtt'
 import { Type } from 'typebox'
 
 import {
+  classifyDiagnosticError,
+  createDiagnostics,
+  type DiagnosticEvent,
+  type Diagnostics,
+  type DiagnosticsOptions,
+} from '../../diagnostics.ts'
+import {
   acceptInbound,
   directAddress,
   instanceFromHostSession,
@@ -38,9 +45,13 @@ type SeenEntry = { id: string }
 type StateEntry = { topics: string }
 type QueuedDelivery = { generation: number; message: CanonicalMessage }
 type DeliveryMode = 'idle' | 'steer' | 'followUp'
+type DestinationScope = 'direct' | 'project' | 'global' | 'invalid'
 type ActiveDelivery = {
   confirmed: boolean
+  destinationScope: DestinationScope
+  generation: number
   id: string
+  kind: MessageKind
   marker: string
   mode: DeliveryMode
   token: number
@@ -48,14 +59,21 @@ type ActiveDelivery = {
 type ClientRole = 'durable' | 'transient'
 type SendResult = { ok: true; message: string } | { ok: false; message: string }
 
-export type SynagentPiOptions = { deliveryStartTimeoutMs?: number }
+export type SynagentPiOptions = {
+  deliveryStartTimeoutMs?: number
+  diagnostics?: Omit<DiagnosticsOptions, 'harnessName' | 'instanceId'>
+}
 
 export function createSynagentPi(options: SynagentPiOptions = {}): (pi: ExtensionAPI) => void {
   const deliveryStartTimeoutMs = options.deliveryStartTimeoutMs ?? DEFAULT_DELIVERY_START_TIMEOUT_MS
-  return pi => synagentPi(pi, deliveryStartTimeoutMs)
+  return pi => synagentPi(pi, deliveryStartTimeoutMs, options.diagnostics)
 }
 
-function synagentPi(pi: ExtensionAPI, deliveryStartTimeoutMs: number): void {
+function synagentPi(
+  pi: ExtensionAPI,
+  deliveryStartTimeoutMs: number,
+  diagnosticsOptions?: Omit<DiagnosticsOptions, 'harnessName' | 'instanceId'>,
+): void {
   const enabled = pi.registerSetting({
     key: 'a4s.synagent.enabled',
     schema: Type.Boolean(),
@@ -102,6 +120,7 @@ function synagentPi(pi: ExtensionAPI, deliveryStartTimeoutMs: number): void {
 
   let durable: MqttClient | undefined
   let transient: MqttClient | undefined
+  let diagnostics: Diagnostics | undefined
   let durableTopics: string[] = []
   let lastDurableTopics: string[] = []
   let persistedDurableTopics: string | undefined
@@ -188,10 +207,23 @@ function synagentPi(pi: ExtensionAPI, deliveryStartTimeoutMs: number): void {
           ctx.ui.notify('Synagent has no blocked delivery', 'info')
           return
         }
+        const resumed = activeDelivery
         clearDeliveryStartTimer()
         ++deliveryDispatchToken
         activeDelivery = undefined
         awaitingSettlement = false
+        logDiagnostic('synagent.pi.delivery.resumed', {
+          operation: 'delivery.resume',
+          queueDepth: queuedDeliveries.length,
+          ...(resumed ? messageDiagnostic(resumed.id) : {}),
+          ...(resumed ? {
+            deliveryMode: resumed.mode,
+            destinationScope: resumed.destinationScope,
+            generation: resumed.generation,
+            messageKind: resumed.kind,
+            timeoutMs: deliveryStartTimeoutMs,
+          } : {}),
+        })
         ctx.ui.notify('Synagent delivery queue resumed manually; ordering is now best-effort', 'warning')
         drainDeliveries(ctx)
         return
@@ -216,9 +248,31 @@ function synagentPi(pi: ExtensionAPI, deliveryStartTimeoutMs: number): void {
   })
 
   pi.on('session_start', async (_event, ctx) => {
-    activeSessionId = ctx.sessionManager.getSessionId()
+    logDiagnostic('synagent.pi.shutdown', {
+      operation: 'lifecycle.rebind',
+      queueDepth: queuedDeliveries.length,
+    })
+    closeDiagnostics()
+    const sessionId = ctx.sessionManager.getSessionId()
+    try {
+      diagnostics = createDiagnostics({
+        ...diagnosticsOptions,
+        componentName: 'pi',
+        harnessName: 'pion',
+        instanceId: sessionId,
+        scopeName: 'a4s.synagent.pi',
+      })
+    } catch {
+      diagnostics = undefined
+    }
+    activeSessionId = sessionId
     context = ctx
     restoreState(ctx)
+    logDiagnostic('synagent.pi.started', {
+      operation: 'lifecycle.start',
+      generation: connectionGeneration,
+      queueDepth: queuedDeliveries.length,
+    })
     resetDeliveryQueue()
     resetActiveDelivery()
     unsubscribeSettings.forEach(unsubscribe => unsubscribe())
@@ -241,46 +295,91 @@ function synagentPi(pi: ExtensionAPI, deliveryStartTimeoutMs: number): void {
 
   pi.on('agent_settled', (_event, ctx) => {
     if (!useCurrentContext(ctx) || !activeDelivery?.confirmed) return
+    const settled = activeDelivery
     clearDeliveryStartTimer()
     activeDelivery = undefined
     awaitingSettlement = false
+    logDiagnostic('synagent.pi.delivery.settled', {
+      operation: 'delivery.settle',
+      generation: settled.generation,
+      queueDepth: queuedDeliveries.length,
+      deliveryMode: settled.mode,
+      destinationScope: settled.destinationScope,
+      messageKind: settled.kind,
+      ...messageDiagnostic(settled.id),
+    })
     drainDeliveries(ctx)
   })
 
   pi.on('session_shutdown', async (_event, ctx) => {
     if (!isCurrentSession(ctx)) return
+    const shutdownQueueDepth = queuedDeliveries.length
     activeSessionId = undefined
     context = undefined
     resetDeliveryQueue()
     resetActiveDelivery()
     unsubscribeSettings.forEach(unsubscribe => unsubscribe())
     unsubscribeSettings = []
-    await stop()
+    try {
+      await stop()
+      logDiagnostic('synagent.pi.shutdown', {
+        operation: 'lifecycle.shutdown',
+        generation: connectionGeneration,
+        queueDepth: shutdownQueueDepth,
+      })
+    } catch (error) {
+      logDiagnostic('synagent.pi.shutdown', {
+        operation: 'lifecycle.shutdown',
+        generation: connectionGeneration,
+        queueDepth: shutdownQueueDepth,
+        severity: 'ERROR',
+        error: classifyDiagnosticError(error, 'SHUTDOWN_FAILED', 'shutdown', false, 'pi.lifecycle'),
+      })
+      throw error
+    } finally {
+      closeDiagnostics()
+    }
   })
 
   async function send(
     params: { to: string; body: string; kind?: string; reply_to?: string },
     ctx: ExtensionContext,
   ): Promise<SendResult> {
-    if (!useCurrentContext(ctx)) return { ok: false, message: 'Synagent session is no longer active' }
-    if (!params.body.trim()) return { ok: false, message: 'Synagent send requires a non-empty body' }
-    const active = durable
-    if (!active?.connected && !enabled.get()) return { ok: false, message: 'Synagent is not connected' }
-    if (!identity) {
-      return {
-        ok: false,
-        message: 'Synagent cannot send: identity unresolved; configure the project setting or remote origin',
-      }
-    }
-    if (!active?.connected) return { ok: false, message: 'Synagent is not connected' }
-    const to = resolveDestination(params.to, identity)
-    if (!to) return { ok: false, message: `Invalid Synagent address: ${params.to}` }
     const kind = params.kind ?? 'prompt'
+    const loggedKind = MESSAGE_KINDS.includes(kind as MessageKind) ? kind : 'invalid'
+    const destinationScope = destinationScopeOf(params.to)
+    const reject = (code: string, message: string, phase = 'message.send'): SendResult => {
+      logDiagnostic('synagent.pi.message.rejected', {
+        operation: 'message.send',
+        messageKind: loggedKind,
+        destinationScope,
+        queueDepth: queuedDeliveries.length,
+        severity: 'WARN',
+        error: classifyDiagnosticError(undefined, code, phase, false, 'pi.send'),
+      })
+      return { ok: false, message }
+    }
+
+    if (!useCurrentContext(ctx)) return reject('SESSION_INACTIVE', 'Synagent session is no longer active')
+    if (!params.body.trim()) return reject('MESSAGE_BODY_EMPTY', 'Synagent send requires a non-empty body')
+    const active = durable
+    if (!active?.connected && !enabled.get()) return reject('ADAPTER_DISABLED', 'Synagent is not connected')
+    if (!identity) {
+      return reject(
+        'IDENTITY_UNRESOLVED',
+        'Synagent cannot send: identity unresolved; configure the project setting or remote origin',
+        'identity.resolve',
+      )
+    }
+    if (!active?.connected) return reject('MQTT_DISCONNECTED', 'Synagent is not connected', 'mqtt.connect')
+    const to = resolveDestination(params.to, identity)
+    if (!to) return reject('DESTINATION_INVALID', `Invalid Synagent address: ${params.to}`)
     if (!MESSAGE_KINDS.includes(kind as MessageKind)) {
-      return { ok: false, message: `Invalid Synagent kind: ${kind}` }
+      return reject('MESSAGE_KIND_INVALID', `Invalid Synagent kind: ${kind}`)
     }
 
     const ts = Date.now()
+    let messageId: string | undefined
     try {
       const outbound = makeOutbound(identity, to, {
         body: params.body,
@@ -289,9 +388,26 @@ function synagentPi(pi: ExtensionAPI, deliveryStartTimeoutMs: number): void {
         ts,
         ...(params.reply_to ? { replyTo: params.reply_to } : {}),
       })
+      messageId = outbound.message.id
       await publish(active, outbound.topic, serialize(outbound.message))
+      logDiagnostic('synagent.pi.message.sent', {
+        operation: 'message.send',
+        messageKind: outbound.message.kind,
+        destinationScope: destinationScopeOf(outbound.message.to),
+        queueDepth: queuedDeliveries.length,
+        ...messageDiagnostic(outbound.message.id),
+      })
       return { ok: true, message: `Synagent message sent: ${outbound.message.id}` }
     } catch (error) {
+      logDiagnostic('synagent.pi.message.rejected', {
+        operation: 'message.send',
+        messageKind: loggedKind,
+        destinationScope: destinationScopeOf(to),
+        queueDepth: queuedDeliveries.length,
+        severity: 'ERROR',
+        ...(messageId ? messageDiagnostic(messageId) : {}),
+        error: classifyDiagnosticError(error, 'MQTT_PUBLISH_FAILED', 'message.send', true, 'mqtt.publish'),
+      })
       return { ok: false, message: `Synagent publish failed: ${formatError(error)}` }
     }
   }
@@ -362,10 +478,22 @@ function synagentPi(pi: ExtensionAPI, deliveryStartTimeoutMs: number): void {
     try {
       identity = computeIdentity(ctx)
       plan = subscriptions({ identity, global })
+      logDiagnostic('synagent.pi.identity.resolved', {
+        operation: 'identity.resolve',
+        generation: connectionGeneration,
+        queueDepth: queuedDeliveries.length,
+      })
       ctx.ui.notify(`Synagent identity ${directAddress(identity)} global=${global}`, 'info')
     } catch (error) {
       identity = undefined
       plan = { durable: [], transient: [] }
+      logDiagnostic('synagent.pi.identity.failed', {
+        operation: 'identity.resolve',
+        generation: connectionGeneration,
+        queueDepth: queuedDeliveries.length,
+        severity: 'ERROR',
+        error: classifyDiagnosticError(error, 'IDENTITY_UNRESOLVED', 'identity.resolve', false, 'pi.identity'),
+      })
       ctx.ui.notify(
         `Synagent identity unresolved; adapter inactive until project is configured: ${formatError(error)}`,
         'warning',
@@ -413,17 +541,44 @@ function synagentPi(pi: ExtensionAPI, deliveryStartTimeoutMs: number): void {
   }): MqttClient {
     const { ctx, url, clientId, clean, topics, role } = opts
     const staleTopics = opts.staleTopics ?? []
-    const active = connect(url, { clean, clientId, reconnectPeriod: 1000 })
+    let active: MqttClient
+    try {
+      active = connect(url, { clean, clientId, reconnectPeriod: 1000 })
+    } catch (error) {
+      logDiagnostic('synagent.pi.mqtt.failed', {
+        operation: 'mqtt.connect',
+        generation: connectionGeneration,
+        role,
+        queueDepth: queuedDeliveries.length,
+        severity: 'ERROR',
+        error: classifyDiagnosticError(error, 'MQTT_CONNECT_FAILED', 'mqtt.connect', true, 'mqtt.client'),
+      })
+      throw error
+    }
     let lastError = ''
     const isActive = (): boolean => (role === 'durable' ? durable === active : transient === active)
 
     active.on('connect', () => {
       if (!isActive()) return
+      logDiagnostic('synagent.pi.mqtt.connected', {
+        operation: 'mqtt.connect',
+        generation: connectionGeneration,
+        role,
+        queueDepth: queuedDeliveries.length,
+      })
       const subscribeCurrent = (): void => {
         if (topics.length === 0) return
         active.subscribe(topics, { qos: 1 }, error => {
           if (!isActive()) return
           if (error) {
+            logDiagnostic('synagent.pi.mqtt.failed', {
+              operation: 'mqtt.subscribe',
+              generation: connectionGeneration,
+              role,
+              queueDepth: queuedDeliveries.length,
+              severity: 'ERROR',
+              error: classifyDiagnosticError(error, 'MQTT_SUBSCRIBE_FAILED', 'mqtt.connect', true, 'mqtt.subscribe'),
+            })
             ctx.ui.notify(`Synagent subscribe failed: ${error.message}`, 'error')
             return
           }
@@ -442,7 +597,17 @@ function synagentPi(pi: ExtensionAPI, deliveryStartTimeoutMs: number): void {
       }
       active.unsubscribe(stale, error => {
         if (!isActive()) return
-        if (error) ctx.ui.notify(`Synagent stale subscription cleanup failed: ${error.message}`, 'warning')
+        if (error) {
+          logDiagnostic('synagent.pi.mqtt.failed', {
+            operation: 'mqtt.unsubscribe',
+            generation: connectionGeneration,
+            role,
+            queueDepth: queuedDeliveries.length,
+            severity: 'WARN',
+            error: classifyDiagnosticError(error, 'MQTT_UNSUBSCRIBE_FAILED', 'mqtt.connect', true, 'mqtt.unsubscribe'),
+          })
+          ctx.ui.notify(`Synagent stale subscription cleanup failed: ${error.message}`, 'warning')
+        }
         subscribeCurrent()
       })
     })
@@ -453,6 +618,14 @@ function synagentPi(pi: ExtensionAPI, deliveryStartTimeoutMs: number): void {
     active.on('error', error => {
       if (error.message === lastError) return
       lastError = error.message
+      logDiagnostic('synagent.pi.mqtt.failed', {
+        operation: 'mqtt.connect',
+        generation: connectionGeneration,
+        role,
+        queueDepth: queuedDeliveries.length,
+        severity: 'ERROR',
+        error: classifyDiagnosticError(error, 'MQTT_CONNECTION_FAILED', 'mqtt.connect', true, 'mqtt.client'),
+      })
       ctx.ui.notify(`Synagent connection error: ${error.message}`, 'error')
     })
     return active
@@ -512,21 +685,58 @@ function synagentPi(pi: ExtensionAPI, deliveryStartTimeoutMs: number): void {
     try {
       message = parseCanonical(text)
     } catch (error) {
+      logDiagnostic('synagent.pi.message.rejected', {
+        operation: 'message.receive',
+        destinationScope: 'invalid',
+        queueDepth: queuedDeliveries.length,
+        severity: 'WARN',
+        error: classifyDiagnosticError(error, 'MESSAGE_INVALID', 'message.receive', false, 'protocol.parse'),
+      })
       ctx.ui.notify(`Synagent ignored invalid message: ${formatError(error)}`, 'warning')
       return
     }
+    const messageFields = {
+      messageKind: message.kind,
+      destinationScope: destinationScopeOf(message.to),
+      ...messageDiagnostic(message.id),
+    }
     if (!acceptsMessage(message)) {
+      logDiagnostic('synagent.pi.message.rejected', {
+        operation: 'message.receive',
+        queueDepth: queuedDeliveries.length,
+        severity: 'WARN',
+        ...messageFields,
+        error: classifyDiagnosticError(
+          undefined,
+          isBroadcastSteer(message) ? 'BROADCAST_STEER_REJECTED' : 'DESTINATION_REJECTED',
+          'message.receive',
+          false,
+          'protocol.accept',
+        ),
+      })
       if (isBroadcastSteer(message)) {
         ctx.ui.notify(`Synagent rejected broadcast steer: ${message.id}`, 'warning')
       }
       return
     }
-    if (seen.has(message.id)) return
+    if (seen.has(message.id)) {
+      logDiagnostic('synagent.pi.message.duplicate', {
+        operation: 'message.receive',
+        queueDepth: queuedDeliveries.length,
+        ...messageFields,
+      })
+      return
+    }
 
     seen.add(message.id)
     if (seen.size > MAX_SEEN) seen.delete(seen.values().next().value as string)
     pi.appendEntry<SeenEntry>(SEEN_ENTRY, { id: message.id })
     queuedDeliveries.push({ generation: deliveryGeneration, message })
+    logDiagnostic('synagent.pi.message.received', {
+      operation: 'message.receive',
+      queueDepth: queuedDeliveries.length,
+      ...messageFields,
+    })
     drainDeliveries(context ?? ctx)
   }
 
@@ -551,7 +761,10 @@ function synagentPi(pi: ExtensionAPI, deliveryStartTimeoutMs: number): void {
         const rendered = `${marker}\n${renderForAgent(queued.message)}`
         activeDelivery = {
           confirmed: false,
+          destinationScope: destinationScopeOf(queued.message.to),
+          generation: queued.generation,
           id: queued.message.id,
+          kind: queued.message.kind,
           marker,
           mode,
           token: dispatchToken,
@@ -565,10 +778,31 @@ function synagentPi(pi: ExtensionAPI, deliveryStartTimeoutMs: number): void {
         if (mode === 'idle') pi.sendUserMessage(rendered)
         else if (mode === 'steer') pi.sendUserMessage(rendered, { deliverAs: 'steer' })
         else pi.sendUserMessage(rendered, { deliverAs: 'followUp' })
+        logDiagnostic('synagent.pi.delivery.dispatched', {
+          operation: 'delivery.dispatch',
+          generation: queued.generation,
+          queueDepth: queuedDeliveries.length,
+          deliveryMode: mode,
+          timeoutMs: deliveryStartTimeoutMs,
+          messageKind: queued.message.kind,
+          destinationScope: destinationScopeOf(queued.message.to),
+          ...messageDiagnostic(queued.message.id),
+        })
       } catch (error) {
         clearDeliveryStartTimer()
         activeDelivery = undefined
         awaitingSettlement = false
+        logDiagnostic('synagent.pi.delivery.failed', {
+          operation: 'delivery.dispatch',
+          generation: queued.generation,
+          queueDepth: queuedDeliveries.length,
+          deliveryMode: mode,
+          messageKind: queued.message.kind,
+          destinationScope: destinationScopeOf(queued.message.to),
+          severity: 'ERROR',
+          ...messageDiagnostic(queued.message.id),
+          error: classifyDiagnosticError(error, 'DELIVERY_DISPATCH_FAILED', 'delivery.dispatch', false, 'pion.sendUserMessage'),
+        })
         ctx.ui.notify(`Synagent delivery failed: ${formatError(error)}`, 'error')
         continue
       }
@@ -579,6 +813,16 @@ function synagentPi(pi: ExtensionAPI, deliveryStartTimeoutMs: number): void {
   function confirmActiveDelivery(active: ActiveDelivery, ctx: ExtensionContext): void {
     if (activeDelivery !== active || active.token !== deliveryDispatchToken) return
     active.confirmed = true
+    logDiagnostic('synagent.pi.delivery.confirmed', {
+      operation: 'delivery.confirm',
+      generation: active.generation,
+      queueDepth: queuedDeliveries.length,
+      deliveryMode: active.mode,
+      destinationScope: active.destinationScope,
+      messageKind: active.kind,
+      timeoutMs: deliveryStartTimeoutMs,
+      ...messageDiagnostic(active.id),
+    })
     armDeliveryStartTimeout(active.token, active.id, ctx, 'agent_settled')
   }
 
@@ -592,6 +836,26 @@ function synagentPi(pi: ExtensionAPI, deliveryStartTimeoutMs: number): void {
     deliveryStartTimer = setTimeout(() => {
       deliveryStartTimer = undefined
       if (!isCurrentSession(ctx) || !awaitingSettlement || dispatchToken !== deliveryDispatchToken) return
+      logDiagnostic('synagent.pi.delivery.timeout', {
+        operation: expectedEvent === 'message_start' ? 'delivery.confirm' : 'delivery.settle',
+        queueDepth: queuedDeliveries.length,
+        ...(activeDelivery ? {
+          deliveryMode: activeDelivery.mode,
+          destinationScope: activeDelivery.destinationScope,
+          generation: activeDelivery.generation,
+          messageKind: activeDelivery.kind,
+        } : {}),
+        timeoutMs: deliveryStartTimeoutMs,
+        severity: 'WARN',
+        ...messageDiagnostic(messageId),
+        error: classifyDiagnosticError(
+          undefined,
+          expectedEvent === 'message_start' ? 'DELIVERY_CONFIRM_TIMEOUT' : 'DELIVERY_SETTLE_TIMEOUT',
+          'delivery.timeout',
+          false,
+          'pion.lifecycle',
+        ),
+      })
       ctx.ui.notify(
         `Synagent delivery reached no ${expectedEvent} before timeout: ${messageId}; `
         + 'use /synagent resume to override the ordering barrier',
@@ -625,6 +889,24 @@ function synagentPi(pi: ExtensionAPI, deliveryStartTimeoutMs: number): void {
     ++deliveryDispatchToken
     activeDelivery = undefined
     awaitingSettlement = false
+  }
+
+  function logDiagnostic(eventName: string, event: DiagnosticEvent): void {
+    try {
+      diagnostics?.record(eventName, event)
+    } catch {}
+  }
+
+  function closeDiagnostics(): void {
+    const active = diagnostics
+    diagnostics = undefined
+    try {
+      active?.close()
+    } catch {}
+  }
+
+  function messageDiagnostic(messageId: string): Pick<DiagnosticEvent, 'messageId'> {
+    return { messageId }
   }
 
   function computeIdentity(ctx: ExtensionContext): Identity {
@@ -672,6 +954,13 @@ function synagentPi(pi: ExtensionAPI, deliveryStartTimeoutMs: number): void {
 }
 
 export default createSynagentPi()
+
+function destinationScopeOf(destination: string): DestinationScope {
+  if (destination === 'all') return 'global'
+  if (/^[A-Za-z0-9][A-Za-z0-9._-]*\/all$/.test(destination)) return 'project'
+  if (isAddress(destination)) return 'direct'
+  return 'invalid'
+}
 
 function resolveDestination(raw: string, identity: Identity): string | undefined {
   if (isAddress(raw)) return raw
