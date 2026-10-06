@@ -18,7 +18,7 @@ Aquí, "proceso" puede significar ejecución, estado, continuidad de entrega u o
 
 ## Resultado conservador de Backscroll
 
-La búsqueda encontró **14 grupos causales sólidos** en un corpus de:
+La búsqueda completada con Backscroll encontró **14 grupos causales sólidos** en un corpus de:
 
 - 6,173 archivos;
 - cerca de 547,988 mensajes;
@@ -82,26 +82,6 @@ No hizo redispatch, redo ni resend. El diagnóstico registrado fue `the event ne
 Fuente:
 
 - `/Users/pones/.pi/agent/sessions/--Users-Shared-harness-handbook--/2026-09-07T19-35-20-832Z_01a07d5e-3400-7f3b-9b58-d903ff9ac537.jsonl`
-
-### 5. Rootline, versioning y orca dispatch, 2026-08-05/06
-
-Varios prompts desaparecieron durante el inicio de TUI o MCP, aunque el sistema indicó aceptación. La lección registrada fue `input_accepted is not proof of delivery`.
-La evidencia sostiene una carrera de entrega. No prueba que un checkpoint de tarea corrija por sí solo esa carrera.
-
-Fuentes:
-
-- `/Users/pones/.claude/projects/-Users-Shared-harness-rootline-gnhf-worktrees-you-are-the-orchestr-17c79c/883f0c40-da5d-4dce-8b80-5ba44b3e7909.jsonl`
-- `/Users/pones/.codex/archived_sessions/rollout-2026-08-05T15-59-48-019fd3f0-9948-72f2-b687-67418e4b6f40.jsonl`
-- `/Users/pones/.claude/projects/-Users-Shared-harness-orca-dispatch-kit-gnhf-worktrees-you-are-the-orchestr-7f5444/be831a20-6b6e-4884-a928-ed9d29257f01.jsonl`
-
-### 6. Wiki, 2026-08-05: estado temporal reconstruido
-
-Un archivo temporal de monitor se perdió al reiniciar la sesión.
-El registro resume el ciclo como `created, lost on session restart, rebuilt`: hubo pérdida real de estado temporal, seguida por reconstrucción.
-
-Fuente:
-
-- `/Users/pones/.claude/projects/-Users-Shared-wiki/d208e3fd-bbc3-41f7-bf30-bdec1182d1fc.jsonl`
 
 ## Near-miss recuperado
 
