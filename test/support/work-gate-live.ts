@@ -64,10 +64,18 @@ export interface CliOptions {
   resume: boolean;
   deadlineMs: number;
   variant: Variant;
+  shardCount: number;
+  shardIndex: number;
   model?: string;
   policyPath?: string;
   skillPath?: string;
   variantRoot?: string;
+}
+
+export interface VerifyShardOptions {
+  paths: string[];
+  runs: number;
+  shardCount: number;
 }
 
 export interface Digests {
@@ -134,6 +142,8 @@ export interface PersistedOracleResult extends OracleResult {
 export interface LiveRunResult {
   schemaVersion: 1;
   campaignKey: string;
+  shardIndex: number;
+  shardCount: number;
   runIndex: number;
   tier: Tier;
   variant: Variant;
@@ -201,9 +211,10 @@ export interface ProcessCapture {
 export function usage(): string {
   return [
     "Usage:",
-    "  A4S_RUN_AGENT_E2E=1 npm run eval:work-gates -- --tier compliance --runs 300 --model provider/model --variant candidate --results ./candidate.jsonl --concurrency 2 --deadline-ms 120000 --resume",
+    "  A4S_RUN_AGENT_E2E=1 npm run eval:work-gates -- --tier compliance --runs 300 --shard-count 12 --shard-index 0 --model provider/model --variant candidate --results ./candidate.jsonl --concurrency 2 --deadline-ms 120000 --resume",
     "  A4S_RUN_AGENT_E2E=1 npm run eval:work-gates -- --tier compliance --runs 300 --model provider/model --variant baseline --root /baseline --results ./baseline-root.jsonl --concurrency 2 --deadline-ms 120000 --resume",
     "  A4S_RUN_AGENT_E2E=1 npm run eval:work-gates -- --tier compliance --runs 300 --model provider/model --variant baseline --policy /baseline/AGENTS.md --skill /baseline/skills/work-lifecycle/SKILL.md --results ./baseline-files.jsonl --concurrency 2 --deadline-ms 120000 --resume",
+    "  npm run eval:work-gates -- --verify-shards ./candidate.jsonl.shard-0-of-12.jsonl,... --runs 300 --shard-count 12",
     "",
     "Options:",
     "  --help, -h            Show this help.",
@@ -214,6 +225,9 @@ export function usage(): string {
     "  --variant NAME        Select candidate or baseline.",
     "  --results PATH        Set the JSONL results file.",
     "  --resume              Resume a compliance campaign.",
+    "  --shard-count N       Set the compliance shard count.",
+    "  --shard-index I       Set the zero-based compliance shard index.",
+    "  --verify-shards PATHS Verify a comma-separated set of shard files.",
     "  --concurrency N        Set concurrent runs. The maximum is 4.",
     "  --model PROVIDER/ID    Set the exact compliance model.",
     "  --tier NAME           Select smoke, corpus, compliance, or git-e2e.",
@@ -221,6 +235,9 @@ export function usage(): string {
     "",
     "Compliance requires --model with an exact provider/model identifier.",
     "Resume is available only for compliance.",
+    "Shard flags must be supplied together and are available only for compliance.",
+    "Sharded result files add .shard-I-of-N.jsonl to the supplied results path.",
+    "Shard verification does not require A4S_RUN_AGENT_E2E.",
     "Baseline requires --root PATH or both --policy PATH and --skill PATH.",
     "authDigest is an opaque SHA-256 digest of the effective auth.json bytes.",
     "authDigest only detects a credential change. Results do not contain credential content.",
@@ -231,6 +248,16 @@ function positiveInteger(value: string | undefined, flag: string): number {
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed) || parsed < 1) throw new Error(`${flag} requires a positive integer`);
   return parsed;
+}
+
+function nonnegativeInteger(value: string | undefined, flag: string): number {
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) throw new Error(`${flag} requires a nonnegative integer`);
+  return parsed;
+}
+
+export function shardResultsPath(resultsPath: string, shardCount: number, shardIndex: number): string {
+  return shardCount === 1 ? resultsPath : `${resultsPath}.shard-${shardIndex}-of-${shardCount}.jsonl`;
 }
 
 export function parseCli(argv: readonly string[]): CliOptions {
@@ -245,6 +272,8 @@ export function parseCli(argv: readonly string[]): CliOptions {
   let policyPath: string | undefined;
   let skillPath: string | undefined;
   let variantRoot: string | undefined;
+  let shardCount: number | undefined;
+  let shardIndex: number | undefined;
 
   for (let index = 0; index < argv.length; index += 1) {
     const flag = argv[index];
@@ -272,6 +301,14 @@ export function parseCli(argv: readonly string[]): CliOptions {
       case "--resume":
         resume = true;
         break;
+      case "--shard-count":
+        shardCount = positiveInteger(argv[++index], "--shard-count");
+        break;
+      case "--shard-index":
+        shardIndex = nonnegativeInteger(argv[++index], "--shard-index");
+        break;
+      case "--verify-shards":
+        throw new Error("--verify-shards cannot be combined with live campaign flags");
       case "--deadline-ms":
         deadlineMs = positiveInteger(argv[++index], "--deadline-ms");
         break;
@@ -329,6 +366,20 @@ export function parseCli(argv: readonly string[]): CliOptions {
   if (tier === "compliance" && !model) {
     throw new Error("--model is required for compliance");
   }
+  if ((shardCount === undefined) !== (shardIndex === undefined)) {
+    throw new Error("--shard-count and --shard-index must be supplied together");
+  }
+  if ((shardCount !== undefined || shardIndex !== undefined) && tier !== "compliance") {
+    throw new Error("shard flags are valid only for compliance");
+  }
+  const selectedShardCount = shardCount ?? 1;
+  const selectedShardIndex = shardIndex ?? 0;
+  if (selectedShardIndex >= selectedShardCount) {
+    throw new Error("--shard-index must be less than --shard-count");
+  }
+  if (selectedShardCount > (runs ?? 1)) {
+    throw new Error("shard partition cannot be empty");
+  }
 
   const selectedConcurrency = concurrency ?? (tier === "compliance" ? 2 : 1);
   if (selectedConcurrency > MAX_CONCURRENCY) {
@@ -348,15 +399,51 @@ export function parseCli(argv: readonly string[]): CliOptions {
     tier,
     runs: runs ?? (tier === "corpus" ? 14 : 1),
     concurrency: selectedConcurrency,
-    resultsPath,
+    resultsPath: shardResultsPath(resultsPath, selectedShardCount, selectedShardIndex),
     resume,
     deadlineMs,
     variant,
+    shardCount: selectedShardCount,
+    shardIndex: selectedShardIndex,
     ...(model ? { model } : {}),
     ...(policyPath ? { policyPath } : {}),
     ...(skillPath ? { skillPath } : {}),
     ...(variantRoot ? { variantRoot } : {}),
   };
+}
+
+export function parseVerifyShardCli(argv: readonly string[]): VerifyShardOptions {
+  let paths: string[] | undefined;
+  let runs: number | undefined;
+  let shardCount: number | undefined;
+  for (let index = 0; index < argv.length; index += 1) {
+    const flag = argv[index];
+    switch (flag) {
+      case "--verify-shards": {
+        const value = argv[++index];
+        if (!value) throw new Error("--verify-shards requires comma-separated paths");
+        paths = value.split(",").map((path) => path.trim()).filter(Boolean).map((path) => resolve(path));
+        break;
+      }
+      case "--runs":
+        runs = positiveInteger(argv[++index], "--runs");
+        break;
+      case "--shard-count":
+        shardCount = positiveInteger(argv[++index], "--shard-count");
+        break;
+      default:
+        throw new Error(`Unknown shard verification argument: ${flag ?? ""}`);
+    }
+  }
+  if (!paths || runs === undefined || shardCount === undefined) {
+    throw new Error("--verify-shards, --runs, and --shard-count are required together");
+  }
+  if (shardCount > runs) throw new Error("shard partition cannot be empty");
+  if (paths.length !== shardCount) {
+    throw new Error(`--verify-shards requires exactly ${shardCount} files`);
+  }
+  if (new Set(paths).size !== paths.length) throw new Error("--verify-shards contains a duplicate file");
+  return { paths, runs, shardCount };
 }
 
 function sha256(content: Buffer | string): string {
@@ -1309,6 +1396,8 @@ async function runOne(
     const result = safeOutputRecord({
       schemaVersion: 1,
       campaignKey,
+      shardIndex: options.shardIndex,
+      shardCount: options.shardCount,
       runIndex: item.index,
       tier: options.tier,
       variant: options.variant,
@@ -1336,7 +1425,27 @@ async function runOne(
   });
 }
 
-export function campaignItems(tier: Tier, runs: number, scenarios: readonly Scenario[]): CampaignItem[] {
+export function shardRange(runs: number, shardCount: number, shardIndex: number): { start: number; end: number } {
+  if (!Number.isSafeInteger(runs) || runs < 1 || !Number.isSafeInteger(shardCount) || shardCount < 1 ||
+    !Number.isSafeInteger(shardIndex) || shardIndex < 0 || shardIndex >= shardCount) {
+    throw new Error("Invalid shard partition");
+  }
+  const start = Math.floor((runs * shardIndex) / shardCount) + 1;
+  const end = Math.floor((runs * (shardIndex + 1)) / shardCount);
+  if (start > end) throw new Error("Shard partition cannot be empty");
+  return { start, end };
+}
+
+export function campaignItems(
+  tier: Tier,
+  runs: number,
+  scenarios: readonly Scenario[],
+  shardCount = 1,
+  shardIndex = 0,
+): CampaignItem[] {
+  if (tier !== "compliance" && (shardCount !== 1 || shardIndex !== 0)) {
+    throw new Error("Shard partitions are valid only for compliance");
+  }
   if (tier === "git-e2e") {
     const placeholder: GitScenario = {
       id: "GIT-E2E",
@@ -1354,17 +1463,20 @@ export function campaignItems(tier: Tier, runs: number, scenarios: readonly Scen
     ? ["START-01", "START-04", "START-06", "CLOSE-01", "CLOSE-03", "CLOSE-07", "CLOSE-08"]
     : scenarios.map((scenario) => scenario.id);
   const count = tier === "corpus" ? scenarios.length : runs;
-  return Array.from({ length: count }, (_, offset) => {
-    const id = ids[offset % ids.length]!;
+  const { start, end } = shardRange(count, shardCount, shardIndex);
+  return Array.from({ length: end - start + 1 }, (_, offset) => {
+    const globalIndex = start + offset;
+    const id = ids[(globalIndex - 1) % ids.length]!;
     const scenario = byId.get(id);
     if (!scenario) throw new Error(`Scenario not found: ${id}`);
-    return { index: offset + 1, scenario };
+    return { index: globalIndex, scenario };
   });
 }
 
 export function campaignKeyFor(input: {
   tier: Tier;
   variant: Variant;
+  shardCount: number;
   policyDigest: string;
   skillDigest: string;
   probeDigest: string;
@@ -1380,7 +1492,7 @@ export function campaignKeyFor(input: {
 }
 
 const RESULT_FIELDS = [
-  "schemaVersion", "campaignKey", "runIndex", "tier", "variant", "scenarioId", "pass", "verdict",
+  "schemaVersion", "campaignKey", "shardIndex", "shardCount", "runIndex", "tier", "variant", "scenarioId", "pass", "verdict",
   "decision", "criticalViolations", "digests", "modelIdentity", "runtime", "durationMs", "agentOutcome",
   "infrastructureError", "hadFinalResponse", "artifactId", "sessionId", "eventLogId", "oracle",
 ] as const;
@@ -1438,6 +1550,9 @@ function parseLiveResult(line: string, lineNumber: number): LiveRunResult {
     typeof record[field] === "string" && !isAbsolute(record[field] as string) && (record[field] as string).length <= 200
   );
   if (!hasExactFields(record, RESULT_FIELDS) || record.schemaVersion !== 1 ||
+    !Number.isSafeInteger(record.shardIndex) || (record.shardIndex as number) < 0 ||
+    !Number.isSafeInteger(record.shardCount) || (record.shardCount as number) < 1 ||
+    (record.shardIndex as number) >= (record.shardCount as number) ||
     !Number.isSafeInteger(record.runIndex) || (record.runIndex as number) < 1 ||
     !Number.isSafeInteger(record.durationMs) || (record.durationMs as number) < 0 ||
     typeof record.pass !== "boolean" || typeof record.hadFinalResponse !== "boolean" ||
@@ -1463,6 +1578,8 @@ export interface ResumeExpectations {
   runtime: RuntimeIdentity;
   tier: Tier;
   variant: Variant;
+  shardCount: number;
+  shardIndex: number;
   items: readonly CampaignItem[];
 }
 
@@ -1522,7 +1639,8 @@ export async function validateResumeResults(
       throw new Error(`Resume campaign identity mismatch at index ${record.runIndex}`);
     }
     if (completed.has(record.runIndex)) throw new Error(`Duplicate resume index ${record.runIndex}`);
-    if (record.tier !== expected.tier || record.variant !== expected.variant) {
+    if (record.tier !== expected.tier || record.variant !== expected.variant ||
+      record.shardCount !== expected.shardCount || record.shardIndex !== expected.shardIndex) {
       throw new Error(`Resume campaign metadata mismatch at index ${record.runIndex}`);
     }
     const expectedItem = expectedItems.get(record.runIndex);
@@ -1578,6 +1696,154 @@ export async function completedIndices(
   return (await validateResumeResults(resultsPath, expected)).completed;
 }
 
+export interface ShardVerificationInput extends VerifyShardOptions {
+  scenarios: readonly Scenario[];
+  manifestSha256: string;
+}
+
+export interface ShardVerificationSummary {
+  status: "verified";
+  campaignKey: string;
+  variant: Variant;
+  shardCount: number;
+  accumulated: number;
+  passed: number;
+  failed: number;
+}
+
+function assertMatchingRecordIdentity(reference: LiveRunResult, record: LiveRunResult): void {
+  if (record.campaignKey !== reference.campaignKey) throw new Error("Shard campaign key mismatch");
+  if (record.variant !== reference.variant) throw new Error("Shard variant mismatch");
+  for (const field of DIGEST_FIELDS) {
+    if (record.digests[field] !== reference.digests[field]) throw new Error(`Shard digest mismatch: ${field}`);
+  }
+  for (const field of MODEL_IDENTITY_FIELDS) {
+    if (record.modelIdentity?.[field] !== reference.modelIdentity?.[field]) {
+      throw new Error(`Shard model mismatch: ${field}`);
+    }
+  }
+  for (const field of RUNTIME_FIELDS) {
+    if (record.runtime[field] !== reference.runtime[field]) throw new Error(`Shard runtime mismatch: ${field}`);
+  }
+}
+
+function assertPassingManifestRecord(record: LiveRunResult, item: CampaignItem): void {
+  if (record.scenarioId !== item.scenario.id) throw new Error(`Shard scenario mismatch at index ${record.runIndex}`);
+  if (!record.pass || record.verdict !== "pass" || record.hadFinalResponse !== true ||
+    record.agentOutcome !== "normal" || record.infrastructureError !== null || record.criticalViolations.length !== 0) {
+    throw new Error(`Shard contains a failed or incomplete run at index ${record.runIndex}`);
+  }
+  if (!("expectedDecision" in item.scenario)) throw new Error("Git scenario is invalid in shard verification");
+  const expected = item.scenario;
+  const gates = Object.keys(record.oracle);
+  const oracle = record.oracle[expected.gate];
+  if (gates.length !== 1 || gates[0] !== expected.gate || !oracle || oracle.passed !== true ||
+    oracle.verdict !== "pass" || oracle.decision !== expected.expectedDecision ||
+    oracle.reasons.length !== 1 || oracle.reasons[0] !== expected.missingOrFailedCondition) {
+    throw new Error(`Shard oracle mismatch at index ${record.runIndex}`);
+  }
+}
+
+export async function verifyShardResults(input: ShardVerificationInput): Promise<ShardVerificationSummary> {
+  if (input.paths.length !== input.shardCount) {
+    throw new Error(`Shard verification requires exactly ${input.shardCount} files`);
+  }
+  if (new Set(input.paths).size !== input.paths.length) throw new Error("Shard verification contains a duplicate file");
+  if (input.shardCount > input.runs) throw new Error("Shard partition cannot be empty");
+
+  let reference: LiveRunResult | undefined;
+  const globalIndices = new Set<number>();
+  const shardIndices = new Set<number>();
+  const identifiers = {
+    artifactId: new Set<string>(),
+    sessionId: new Set<string>(),
+    eventLogId: new Set<string>(),
+  };
+
+  for (const path of input.paths) {
+    const content = await readFile(path, "utf8");
+    if (!content.endsWith("\n")) throw new Error("Shard file has a partial final line");
+    const records = content.split("\n").filter((line) => line.length > 0)
+      .map((line, offset) => parseLiveResult(line, offset + 1));
+    if (records.length === 0) throw new Error("Shard file is empty");
+    const fileShardIndices = new Set(records.map((record) => record.shardIndex));
+    if (fileShardIndices.size !== 1) throw new Error("Shard file contains multiple shard indices");
+    const shardIndex = records[0]!.shardIndex;
+    if (shardIndices.has(shardIndex)) throw new Error(`Duplicate shard index ${shardIndex}`);
+    shardIndices.add(shardIndex);
+    const expectedItems = campaignItems("compliance", input.runs, input.scenarios, input.shardCount, shardIndex);
+    const expectedByIndex = new Map(expectedItems.map((item) => [item.index, item]));
+    const fileIndices = new Set<number>();
+
+    for (const record of records) {
+      if (record.tier !== "compliance" || record.shardCount !== input.shardCount || record.shardIndex !== shardIndex) {
+        throw new Error(`Shard metadata mismatch at index ${record.runIndex}`);
+      }
+      if (record.digests.scenarioManifestSha256 !== input.manifestSha256) {
+        throw new Error("Shard manifest digest mismatch");
+      }
+      if (record.modelIdentity?.modelDigest !== record.digests.modelDigest) {
+        throw new Error(`Shard model digest mismatch at index ${record.runIndex}`);
+      }
+      if (record.runtime.sha256 !== record.digests.runtimeSha256) {
+        throw new Error(`Shard runtime digest mismatch at index ${record.runIndex}`);
+      }
+      if (reference) assertMatchingRecordIdentity(reference, record);
+      else reference = record;
+      if (fileIndices.has(record.runIndex) || globalIndices.has(record.runIndex)) {
+        throw new Error(`Duplicate shard run index ${record.runIndex}`);
+      }
+      const item = expectedByIndex.get(record.runIndex);
+      if (!item) throw new Error(`Run index ${record.runIndex} is outside shard ${shardIndex}`);
+      assertPassingManifestRecord(record, item);
+      fileIndices.add(record.runIndex);
+      globalIndices.add(record.runIndex);
+      for (const field of ["artifactId", "sessionId", "eventLogId"] as const) {
+        if (identifiers[field].has(record[field])) throw new Error(`Duplicate ${field}`);
+        identifiers[field].add(record[field]);
+      }
+    }
+    if (fileIndices.size !== expectedItems.length || expectedItems.some((item) => !fileIndices.has(item.index))) {
+      throw new Error(`Shard ${shardIndex} has a gap`);
+    }
+  }
+
+  if (!reference) throw new Error("Shard verification has no records");
+  if (shardIndices.size !== input.shardCount ||
+    Array.from({ length: input.shardCount }, (_, index) => index).some((index) => !shardIndices.has(index))) {
+    throw new Error("Shard index set is incomplete");
+  }
+  if (globalIndices.size !== input.runs ||
+    Array.from({ length: input.runs }, (_, index) => index + 1).some((index) => !globalIndices.has(index))) {
+    throw new Error("Shard campaign has a gap");
+  }
+  const expectedCampaignKey = campaignKeyFor({
+    tier: "compliance",
+    variant: reference.variant,
+    shardCount: input.shardCount,
+    policyDigest: reference.digests.policySha256,
+    skillDigest: reference.digests.skillSha256,
+    probeDigest: reference.digests.probeSha256,
+    manifestDigest: reference.digests.scenarioManifestSha256,
+    runtimeVersion: reference.runtime.version,
+    runtimeSha256: reference.runtime.sha256,
+    settingsDigest: reference.digests.settingsDigest,
+    modelsDigest: reference.digests.modelsDigest,
+    authDigest: reference.digests.authDigest,
+    modelDigest: reference.digests.modelDigest,
+  });
+  if (reference.campaignKey !== expectedCampaignKey) throw new Error("Shard campaign key is invalid");
+  return {
+    status: "verified",
+    campaignKey: reference.campaignKey,
+    variant: reference.variant,
+    shardCount: input.shardCount,
+    accumulated: input.runs,
+    passed: input.runs,
+    failed: 0,
+  };
+}
+
 async function runPool<T>(items: readonly T[], concurrency: number, worker: (item: T) => Promise<void>): Promise<void> {
   let cursor = 0;
   await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, async () => {
@@ -1594,7 +1860,19 @@ async function main(): Promise<void> {
     process.stdout.write(`${usage()}\n`);
     return;
   }
+  if (argv.includes("--verify-shards")) {
+    const verifyOptions = parseVerifyShardCli(argv);
+    const fixture = await readFile(FIXTURE_PATH);
+    const summary = await verifyShardResults({
+      ...verifyOptions,
+      scenarios: parseScenarioManifest(fixture.toString("utf8")),
+      manifestSha256: sha256(fixture),
+    });
+    process.stdout.write(`${JSON.stringify(safeOutputRecord(summary as unknown as Record<string, unknown>))}\n`);
+    return;
+  }
   if (process.env.A4S_RUN_AGENT_E2E !== "1") {
+    if (argv.length > 0) parseCli(argv);
     process.stdout.write(`${JSON.stringify({
       status: "skipped",
       reason: "set A4S_RUN_AGENT_E2E=1 to run live Pion work-gate evaluation",
@@ -1612,7 +1890,7 @@ async function main(): Promise<void> {
   });
   try {
     const scenarios = parseScenarioManifest(snapshot.fixture.toString("utf8"));
-    const items = campaignItems(options.tier, options.runs, scenarios);
+    const items = campaignItems(options.tier, options.runs, scenarios, options.shardCount, options.shardIndex);
     const located = await locateRuntime();
     const runtime = await runtimeIdentity(located);
     const modelIdentity = options.model ? snapshot.modelIdentity : undefined;
@@ -1631,6 +1909,7 @@ async function main(): Promise<void> {
     const campaignKey = campaignKeyFor({
       tier: options.tier,
       variant: options.variant,
+      shardCount: options.shardCount,
       policyDigest: snapshot.policySha256,
       skillDigest: snapshot.skillSha256,
       probeDigest: snapshot.probeSha256,
@@ -1650,6 +1929,8 @@ async function main(): Promise<void> {
         runtime,
         tier: options.tier,
         variant: options.variant,
+        shardCount: options.shardCount,
+        shardIndex: options.shardIndex,
         items,
       })
       : { completed: new Set<number>(), results: [], recovery: null };
@@ -1683,6 +1964,8 @@ async function main(): Promise<void> {
       process.stdout.write(`${JSON.stringify(safeOutputRecord({
         scenarioId: result.scenarioId,
         runIndex: result.runIndex,
+        shardIndex: result.shardIndex,
+        shardCount: result.shardCount,
         variant: result.variant,
         pass: result.pass,
         criticalViolations: result.criticalViolations,
@@ -1696,6 +1979,8 @@ async function main(): Promise<void> {
       tier: options.tier,
       variant: options.variant,
       campaignKey,
+      shardIndex: options.shardIndex,
+      shardCount: options.shardCount,
       scheduled: pending.length,
       resumed: resumeState.completed.size,
       accumulated: resumeState.completed.size + pending.length,

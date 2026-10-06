@@ -37,18 +37,22 @@ import {
   modelIdentityFor,
   parseCli,
   parseScenarioManifest,
+  parseVerifyShardCli,
   persistedCaptureMetadata,
   pionArgs,
   resolveVariantInputs,
   resultsIdentifier,
   safeErrorText,
   safeOutputRecord,
+  shardRange,
+  shardResultsPath,
   summarizeScenarioTrace,
   usage,
   validateLoadedInputAttestation,
   validateResumeResults,
   validateScenarioOutcome,
   verifyPreparedRun,
+  verifyShardResults,
   verifyRuntimeDigest,
   withPreparedRun,
   type Digests,
@@ -79,11 +83,15 @@ function completeResult(
   campaignKey: string,
   digests: Digests,
   modelIdentity: ModelIdentity,
+  shardIndex = 0,
+  shardCount = 1,
 ): LiveRunResult {
   const scenario = scenarios[(index - 1) % scenarios.length]!;
   return {
     schemaVersion: 1,
     campaignKey,
+    shardIndex,
+    shardCount,
     runIndex: index,
     tier: "compliance",
     variant: "candidate",
@@ -582,6 +590,187 @@ test("CLOSE-03 and CLOSE-04 reject commit, self-review, and subagent review bypa
   }
 });
 
+test("twelve compliance shards use global contiguous indices and a common campaign key", () => {
+  const plans = Array.from({ length: 12 }, (_, shardIndex) =>
+    campaignItems("compliance", 300, scenarios as LiveScenario[], 12, shardIndex));
+  assert.equal(plans.every((items) => items.length === 25), true);
+  assert.deepEqual(shardRange(300, 12, 0), { start: 1, end: 25 });
+  assert.deepEqual(shardRange(300, 12, 11), { start: 276, end: 300 });
+  assert.deepEqual(plans.flatMap((items) => items.map(({ index }) => index)),
+    Array.from({ length: 300 }, (_, index) => index + 1));
+  for (const item of plans.flat()) {
+    assert.equal(item.scenario.id, scenarios[(item.index - 1) % scenarios.length]!.id);
+  }
+  const identity = {
+    tier: "compliance" as const,
+    variant: "candidate" as const,
+    shardCount: 12,
+    policyDigest: "policy",
+    skillDigest: "skill",
+    probeDigest: "probe",
+    manifestDigest: "manifest",
+    runtimeVersion: "version",
+    runtimeSha256: "runtime",
+    settingsDigest: "settings",
+    modelsDigest: "models",
+    authDigest: "auth",
+    modelDigest: "model",
+  };
+  const key = campaignKeyFor(identity);
+  assert.equal(key, campaignKeyFor({ ...identity }));
+  assert.notEqual(key, campaignKeyFor({ ...identity, shardCount: 1 }));
+  for (const prefix of ["artifact", "session", "event-log"]) {
+    const ids = plans.flat().map(({ index }) => `${prefix}:${key}:${index}`);
+    assert.equal(new Set(ids).size, 300);
+  }
+  assert.equal(shardResultsPath("/tmp/results", 12, 0), "/tmp/results.shard-0-of-12.jsonl");
+  assert.equal(shardResultsPath("/tmp/results", 12, 11), "/tmp/results.shard-11-of-12.jsonl");
+});
+
+test("shard CLI validation rejects incomplete, empty, out-of-range, and non-compliance partitions", () => {
+  const base = ["--tier", "compliance", "--runs", "300", "--model", "provider/model"];
+  const parsed = parseCli([...base, "--shard-count", "12", "--shard-index", "11", "--results", "/tmp/results"]);
+  assert.equal(parsed.shardCount, 12);
+  assert.equal(parsed.shardIndex, 11);
+  assert.equal(parsed.resultsPath, "/tmp/results.shard-11-of-12.jsonl");
+  assert.throws(() => parseCli([...base, "--shard-count", "12"]), /must be supplied together/);
+  assert.throws(() => parseCli([...base, "--shard-index", "0"]), /must be supplied together/);
+  assert.throws(() => parseCli([...base, "--shard-count", "12", "--shard-index", "12"]), /less than/);
+  assert.throws(() => parseCli([
+    "--tier", "compliance", "--runs", "2", "--model", "provider/model",
+    "--shard-count", "3", "--shard-index", "0",
+  ]), /cannot be empty/);
+  assert.throws(() => parseCli([
+    "--tier", "smoke", "--runs", "10", "--shard-count", "2", "--shard-index", "0",
+  ]), /only for compliance/);
+  assert.deepEqual(parseVerifyShardCli([
+    "--verify-shards", Array.from({ length: 12 }, (_, index) => `/tmp/${index}`).join(","),
+    "--runs", "300", "--shard-count", "12",
+  ]), {
+    paths: Array.from({ length: 12 }, (_, index) => `/tmp/${index}`),
+    runs: 300,
+    shardCount: 12,
+  });
+  assert.throws(() => parseVerifyShardCli([
+    "--verify-shards", "/tmp/one", "--runs", "300", "--shard-count", "12",
+  ]), /exactly 12 files/);
+});
+
+test("a shard resume accepts only its global indices", async () => {
+  const root = await mkdtemp(join(tmpdir(), "a4s-shard-resume-test-"));
+  const resultsPath = join(root, "results.jsonl");
+  const modelIdentity: ModelIdentity = {
+    canonicalId: "provider/model-a", settingsSha256: "settings", modelsSha256: "models", modelDigest: "model",
+  };
+  const digests: Digests = {
+    policySha256: "policy", skillSha256: "skill", probeSha256: "probe", oracleSha256: "probe",
+    scenarioManifestSha256: "manifest", runtimeSha256: "runtime", settingsDigest: "settings-bytes",
+    modelsDigest: "models-bytes", authDigest: "auth-bytes", modelDigest: modelIdentity.modelDigest,
+  };
+  const runtime = { version: "test", sha256: digests.runtimeSha256 };
+  const key = campaignKeyFor({
+    tier: "compliance", variant: "candidate", shardCount: 12,
+    policyDigest: digests.policySha256, skillDigest: digests.skillSha256, probeDigest: digests.probeSha256,
+    manifestDigest: digests.scenarioManifestSha256, runtimeVersion: runtime.version,
+    runtimeSha256: runtime.sha256, settingsDigest: digests.settingsDigest, modelsDigest: digests.modelsDigest,
+    authDigest: digests.authDigest, modelDigest: digests.modelDigest,
+  });
+  const items = campaignItems("compliance", 300, scenarios as LiveScenario[], 12, 4);
+  const expected = {
+    campaignKey: key, digests, modelIdentity, runtime, tier: "compliance" as const,
+    variant: "candidate" as const, shardCount: 12, shardIndex: 4, items,
+  };
+  try {
+    const seeded = items.slice(0, 10).map(({ index }) => completeResult(index, key, digests, modelIdentity, 4, 12));
+    await writeFile(resultsPath, `${seeded.map((record) => JSON.stringify(record)).join("\n")}\n`);
+    const resumed = await validateResumeResults(resultsPath, expected);
+    assert.deepEqual([...resumed.completed], items.slice(0, 10).map(({ index }) => index));
+    assert.deepEqual(items.filter(({ index }) => !resumed.completed.has(index)).map(({ index }) => index),
+      items.slice(10).map(({ index }) => index));
+
+    const wrongShard = completeResult(items[0]!.index, key, digests, modelIdentity, 3, 12);
+    await writeFile(resultsPath, `${JSON.stringify(wrongShard)}\n`);
+    await assert.rejects(validateResumeResults(resultsPath, expected), /metadata mismatch/);
+
+    const outside = completeResult(1, key, digests, modelIdentity, 4, 12);
+    await writeFile(resultsPath, `${JSON.stringify(outside)}\n`);
+    await assert.rejects(validateResumeResults(resultsPath, expected), /scenario mismatch/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("shard aggregation verifies 300 passes and rejects corrupt campaigns", async () => {
+  const root = await mkdtemp(join(tmpdir(), "a4s-shard-aggregation-test-"));
+  const paths = Array.from({ length: 12 }, (_, index) => join(root, `shard-${index}.jsonl`));
+  const modelIdentity: ModelIdentity = {
+    canonicalId: "provider/model-a", settingsSha256: "settings", modelsSha256: "models", modelDigest: "model",
+  };
+  const manifestSha256 = createHash("sha256").update(fixtureText).digest("hex");
+  const digests: Digests = {
+    policySha256: "policy", skillSha256: "skill", probeSha256: "probe", oracleSha256: "probe",
+    scenarioManifestSha256: manifestSha256, runtimeSha256: "runtime", settingsDigest: "settings-bytes",
+    modelsDigest: "models-bytes", authDigest: "auth-bytes", modelDigest: modelIdentity.modelDigest,
+  };
+  const key = campaignKeyFor({
+    tier: "compliance", variant: "candidate", shardCount: 12,
+    policyDigest: digests.policySha256, skillDigest: digests.skillSha256, probeDigest: digests.probeSha256,
+    manifestDigest: digests.scenarioManifestSha256, runtimeVersion: "test", runtimeSha256: digests.runtimeSha256,
+    settingsDigest: digests.settingsDigest, modelsDigest: digests.modelsDigest, authDigest: digests.authDigest,
+    modelDigest: digests.modelDigest,
+  });
+  const records = Array.from({ length: 12 }, (_, shardIndex) =>
+    campaignItems("compliance", 300, scenarios as LiveScenario[], 12, shardIndex)
+      .map(({ index }) => completeResult(index, key, digests, modelIdentity, shardIndex, 12)));
+  const writeShard = async (shardIndex: number, changed = records[shardIndex]!, finalNewline = true) => {
+    await writeFile(paths[shardIndex]!, `${changed.map((record) => JSON.stringify(record)).join("\n")}${finalNewline ? "\n" : ""}`);
+  };
+  const verifyInput = { paths, runs: 300, shardCount: 12, scenarios: scenarios as LiveScenario[], manifestSha256 };
+  try {
+    await Promise.all(records.map((_, shardIndex) => writeShard(shardIndex)));
+    assert.deepEqual(await verifyShardResults(verifyInput), {
+      status: "verified", campaignKey: key, variant: "candidate", shardCount: 12,
+      accumulated: 300, passed: 300, failed: 0,
+    });
+    const runner = new URL("./support/work-gate-live.ts", import.meta.url).pathname;
+    const env: NodeJS.ProcessEnv = { ...process.env, PI_BIN: "/tmp/should-not-resolve/pion" };
+    delete env.A4S_RUN_AGENT_E2E;
+    const cliVerification = spawnSync(process.execPath, [
+      "--import", "tsx", runner, "--verify-shards", paths.join(","), "--runs", "300", "--shard-count", "12",
+    ], { cwd: process.cwd(), env, encoding: "utf8", timeout: 20_000 });
+    assert.equal(cliVerification.status, 0, cliVerification.stderr);
+    assert.deepEqual(JSON.parse(cliVerification.stdout), {
+      status: "verified", campaignKey: key, variant: "candidate", shardCount: 12,
+      accumulated: 300, passed: 300, failed: 0,
+    });
+
+    await assert.rejects(verifyShardResults({ ...verifyInput, paths: [...paths.slice(0, 11), join(root, "missing")] }), /ENOENT/);
+
+    const cases: Array<[string, (changed: LiveRunResult[]) => void, RegExp]> = [
+      ["gap", (changed) => { changed.splice(0, 1); }, /gap/],
+      ["duplicate", (changed) => { changed.push(structuredClone(changed[0]!)); }, /Duplicate shard run index/],
+      ["fail", (changed) => { changed[0]!.pass = false; changed[0]!.verdict = "fail"; }, /failed or incomplete/],
+      ["infrastructure", (changed) => { changed[0]!.infrastructureError = "synthetic"; }, /failed or incomplete/],
+      ["critical", (changed) => { changed[0]!.criticalViolations = ["synthetic"]; }, /failed or incomplete/],
+      ["digest", (changed) => { changed[0]!.digests.policySha256 = "different"; }, /digest mismatch/],
+      ["model", (changed) => { changed[0]!.modelIdentity!.canonicalId = "provider/other"; }, /model mismatch/],
+      ["shard", (changed) => { changed[0]!.shardIndex = 1; }, /multiple shard indices/],
+      ["campaign", (changed) => { changed[0]!.campaignKey = "different"; }, /campaign key mismatch/],
+    ];
+    for (const [name, mutate, expected] of cases) {
+      const changed = structuredClone(records[0]!);
+      mutate(changed);
+      await writeShard(0, changed);
+      await assert.rejects(verifyShardResults(verifyInput), expected, name);
+      await writeShard(0);
+    }
+    await writeShard(0, records[0]!, false);
+    await assert.rejects(verifyShardResults(verifyInput), /partial final line/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("compliance resume accepts 120 complete passes and rejects unsafe history", async () => {
   const root = await mkdtemp(join(tmpdir(), "a4s-gate-resume-test-"));
   const resultsPath = join(root, "results.jsonl");
@@ -607,6 +796,7 @@ test("compliance resume accepts 120 complete passes and rejects unsafe history",
   const keyInput = {
     tier: "compliance" as const,
     variant: "candidate" as const,
+    shardCount: 1,
     policyDigest: digests.policySha256,
     skillDigest: digests.skillSha256,
     probeDigest: digests.probeSha256,
@@ -627,6 +817,8 @@ test("compliance resume accepts 120 complete passes and rejects unsafe history",
     runtime,
     tier: "compliance" as const,
     variant: "candidate" as const,
+    shardCount: 1,
+    shardIndex: 0,
     items,
   };
   const seeded = Array.from({ length: 120 }, (_, index) =>
@@ -796,6 +988,7 @@ test("model identity binds the canonical ID and model-resolution files", async (
     const keyFor = (modelDigest: string) => campaignKeyFor({
       tier: "compliance",
       variant: "candidate",
+      shardCount: 1,
       policyDigest: "policy",
       skillDigest: "skill",
       probeDigest: "probe",
@@ -1281,7 +1474,8 @@ test("all conceptual CLI commands parse and candidate is the default variant", (
   assert.match(help, /^  --help, -h\s+Show this help\.$/m);
   for (const option of [
     "--deadline-ms", "--policy", "--skill", "--root", "--variant", "--results",
-    "--resume", "--concurrency", "--model", "--tier", "--runs",
+    "--resume", "--shard-count", "--shard-index", "--verify-shards",
+    "--concurrency", "--model", "--tier", "--runs",
   ]) {
     assert.match(help, new RegExp(option));
   }
@@ -1323,6 +1517,14 @@ test("the live runner does not resolve or start Pion without opt-in", () => {
   assert.equal(missingModel.status, 1);
   assert.match(missingModel.stderr, /--model is required for compliance/);
   assert.doesNotMatch(missingModel.stderr, /Pion executable not found/);
+
+  const invalidShard = spawnSync(process.execPath, [
+    "--import", "tsx", runner, "--tier", "compliance", "--runs", "300", "--model", "provider/model",
+    "--shard-count", "12", "--shard-index", "12",
+  ], { cwd: process.cwd(), env: optedIn, encoding: "utf8", timeout: 20_000 });
+  assert.equal(invalidShard.status, 1);
+  assert.match(invalidShard.stderr, /--shard-index must be less than --shard-count/);
+  assert.doesNotMatch(invalidShard.stderr, /Pion executable not found/);
 });
 
 test("baseline inputs are explicit and never inherit candidate environment paths", () => {
@@ -1343,10 +1545,10 @@ test("baseline inputs are explicit and never inherit candidate environment paths
     modelsDigest: "models", authDigest: "auth", modelDigest: "model",
   };
   const candidateKey = campaignKeyFor({
-    tier: "corpus", variant: "candidate", ...identity,
+    tier: "corpus", variant: "candidate", shardCount: 1, ...identity,
   });
   const baselineKey = campaignKeyFor({
-    tier: "corpus", variant: "baseline", ...identity,
+    tier: "corpus", variant: "baseline", shardCount: 1, ...identity,
   });
   assert.notEqual(candidateKey, baselineKey);
 });
