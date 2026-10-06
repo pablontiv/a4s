@@ -5,9 +5,9 @@ from __future__ import annotations
 import datetime as dt
 import json
 from collections import Counter
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable, Literal, Mapping
+from typing import Literal, Mapping
 
 UTC = dt.timezone.utc
 PI_CUTOVER = dt.datetime(2026, 9, 4, 4, 43, 9, tzinfo=UTC)
@@ -15,6 +15,13 @@ DEFAULT_ROOTS = {
     'pi': Path.home() / '.pi/agent/sessions',
     'claude': Path.home() / '.claude/projects',
     'codex': Path.home() / '.codex',
+}
+
+FORM_LABELS = {
+    'form-solo': 'Form 1: Solo (no subagents, no cross-session coordination)',
+    'form-orch-hybrid': 'Form 2: Orchestrator + Subagents in Session (hybrid)',
+    'form-delegator-pure': 'Form 3: Pure Delegator (subagents dominant)',
+    'form-cross-session': 'Form 4: Cross-Session Orchestration (partial heuristic)',
 }
 
 
@@ -25,18 +32,19 @@ class TopologyEvidence:
     direct_coordination: bool = False
 
 
-def classify_topology(evidence: TopologyEvidence, parseable: bool) -> tuple[str, str]:
+def classify_topology(evidence: TopologyEvidence, parseable: bool) -> tuple[Literal['S1', 'S2', 'S3', 'S4', 'unknown'], Literal['direct', 'inferred', 'unknown']]:
     if not parseable:
         return 'unknown', 'unknown'
     if evidence.coordination and evidence.delegation:
-        topology = 'S4'
+        topology: Literal['S1', 'S2', 'S3', 'S4'] = 'S4'
     elif evidence.coordination:
         topology = 'S3'
     elif evidence.delegation:
         topology = 'S2'
     else:
         topology = 'S1'
-    return topology, 'direct' if evidence.delegation or evidence.direct_coordination else 'inferred'
+    confidence: Literal['direct', 'inferred'] = 'direct' if evidence.delegation or evidence.direct_coordination else 'inferred'
+    return topology, confidence
 
 
 @dataclass(frozen=True)
@@ -59,6 +67,10 @@ class SessionRecord:
     observed_topology: Literal['S1', 'S2', 'S3', 'S4', 'unknown'] = 'unknown'
     topology_confidence: Literal['direct', 'inferred', 'unknown'] = 'unknown'
     topology_evidence: TopologyEvidence = field(default_factory=TopologyEvidence)
+    form: Literal['form-solo', 'form-orch-hybrid', 'form-delegator-pure', 'form-cross-session', 'unknown'] = 'unknown'
+    form_confidence: Literal['direct', 'inferred', 'unknown'] = 'unknown'
+    delegation_degree: float = 0.0
+    has_intercom: bool = False
     pi_extension: Literal['pi-subagents-j0k3r', 'pi-subagents', 'mixed/unknown'] | None = None
     commits: frozenset[str] = field(default_factory=frozenset)
     commit_coverage: Literal['observable', 'not-a-repo', 'no-timestamps', 'error'] = 'not-a-repo'
@@ -92,11 +104,72 @@ def legacy_spawn_count(record: dict) -> int:
     )
 
 
-def classify_pi_topology(directory: str, custom_types: Counter[str], spawn_tool_calls: int) -> Literal['S1', 'S2', 'S3', 'S4']:
-    lower = directory.lower()
+def intercom_toolcall_count(record: dict) -> int:
+    """Detect intercom coordination via toolCall (DEFECT 2 fix).
+
+    DEFECT 2: intercom signal appears as toolCall name in message.content[],
+    not just as customType. This function detects both appearances.
+    """
+    if record.get('type') != 'message':
+        return 0
+    message = record.get('message')
+    if not isinstance(message, dict) or message.get('role') != 'assistant':
+        return 0
+    content = message.get('content')
+    if not isinstance(content, list):
+        return 0
+    return sum(
+        1 for block in content
+        if isinstance(block, dict)
+        and block.get('type') == 'toolCall'
+        and block.get('name') == 'intercom'
+    )
+
+
+def calculate_delegation_degree(spawn_tool_calls: int, total_assistant_turns: int) -> float:
+    """Calculate delegation degree as fraction of turns with delegation signals.
+
+    Distinguishes Form 2 (hybrid: some delegation) from Form 3 (pure delegator: dominant delegation).
+    Returns 0.0-1.0 where 1.0 means 100% of turns had delegation signals.
+    """
+    if total_assistant_turns == 0:
+        return 0.0
+    return min(1.0, spawn_tool_calls / max(1, total_assistant_turns))
+
+
+def classify_pi_form(delegation_present: bool, delegation_degree: float, intercom_present: bool, cross_session_heuristic: bool) -> Literal['form-solo', 'form-orch-hybrid', 'form-delegator-pure', 'form-cross-session']:
+    """Classify session into 4 forms based on delegation and coordination signals.
+
+    Form 1 (Solo): No delegation, no cross-session signals.
+    Form 2 (Orch-Hybrid): Delegation + intercom/coordination, degree < 0.8 (mixed work).
+    Form 3 (Delegator-Pure): Delegation + intercom/coordination, degree >= 0.8 (delegation-dominant).
+    Form 4 (Cross-Session): Intercom detected with separate session evidence (heuristic).
+
+    intercom is orthogonal: can appear in any form.
+    delegation_degree distinguishes Form 2 vs 3 by workload composition.
+    cross_session_heuristic flags potential multi-session coordination (requires parent_session_id for proof).
+    """
+    if cross_session_heuristic and intercom_present:
+        return 'form-cross-session'
+    if delegation_present:
+        if delegation_degree >= 0.8:
+            return 'form-delegator-pure'
+        else:
+            return 'form-orch-hybrid'
+    return 'form-solo'
+
+
+def classify_pi_topology(directory: str, custom_types: Counter[str], spawn_tool_calls: int, intercom_toolcalls: int = 0) -> Literal['S1', 'S2', 'S3', 'S4']:
+    """Classify Pi session topology (S1-S4).
+
+    DEFECT 1 fix: Removed directory heuristic that was marking non-coordinating
+    sessions with 'a4s'/'bead-hs'/'review'/'worktrees' in path as orchestrated.
+
+    DEFECT 2 fix: intercom detection now includes toolCall in addition to customType.
+    """
     orchestrated = (
         any(name.startswith('intercom') or name.startswith('fm-') or 'firstmate' in name for name in custom_types)
-        or any(token in lower for token in ('a4s', 'bead-hs', 'review', 'worktrees'))
+        or intercom_toolcalls > 0
     )
     delegated = custom_types['subagent-notify'] > 0 or spawn_tool_calls > 0
     if orchestrated and delegated:
@@ -138,7 +211,7 @@ def parse_pi_session(path: Path) -> SessionRecord:
     started_at = ended_at = None
     session_id = cwd = model = provider = None
     custom_types: Counter[str] = Counter()
-    spawn_tool_calls = input_tokens = output_tokens = cache_read_tokens = cache_write_tokens = 0
+    spawn_tool_calls = intercom_toolcalls = assistant_turns = input_tokens = output_tokens = cache_read_tokens = cache_write_tokens = 0
     cost = 0.0
     parsed_records = 0
 
@@ -159,7 +232,12 @@ def parse_pi_session(path: Path) -> SessionRecord:
                 provider = record.get('provider') or provider
             if kind in ('message', 'tool'):
                 ended_at = parse_timestamp(record.get('timestamp')) or ended_at
+                if kind == 'message':
+                    message = record.get('message')
+                    if isinstance(message, dict) and message.get('role') == 'assistant':
+                        assistant_turns += 1
             spawn_tool_calls += legacy_spawn_count(record)
+            intercom_toolcalls += intercom_toolcall_count(record)
             if kind in ('custom', 'custom_message'):
                 custom_types[record.get('customType', '')] += 1
             if kind in ('message', 'compaction'):
@@ -175,11 +253,16 @@ def parse_pi_session(path: Path) -> SessionRecord:
                     cost += usage.get('cost', {}).get('total', 0) or 0
 
     ended_at = ended_at or started_at
-    topology = classify_pi_topology(path.parent.name, custom_types, spawn_tool_calls)
+    topology = classify_pi_topology(path.parent.name, custom_types, spawn_tool_calls, intercom_toolcalls)
+    delegation_present = custom_types['subagent-notify'] > 0 or spawn_tool_calls > 0
+    delegation_degree = calculate_delegation_degree(spawn_tool_calls, assistant_turns)
+    has_intercom_flag = intercom_toolcalls > 0 or any(name.startswith('intercom') for name in custom_types)
+    cross_session_heuristic = False
+    form = classify_pi_form(delegation_present, delegation_degree, has_intercom_flag, cross_session_heuristic)
     evidence = TopologyEvidence(
-        delegation=custom_types['subagent-notify'] > 0 or spawn_tool_calls > 0,
+        delegation=delegation_present,
         coordination=topology in {'S3', 'S4'},
-        direct_coordination=any(name.startswith('intercom') or name.startswith('fm-') or 'firstmate' in name for name in custom_types),
+        direct_coordination=any(name.startswith('intercom') or name.startswith('fm-') or 'firstmate' in name for name in custom_types) or intercom_toolcalls > 0,
     )
     observed_topology, topology_confidence = classify_topology(evidence, parseable=parsed_records > 0)
     return SessionRecord(
@@ -201,6 +284,10 @@ def parse_pi_session(path: Path) -> SessionRecord:
         observed_topology=observed_topology,
         topology_confidence=topology_confidence,
         topology_evidence=evidence,
+        form=form,
+        form_confidence='direct' if delegation_present or has_intercom_flag else 'inferred',
+        delegation_degree=delegation_degree,
+        has_intercom=has_intercom_flag,
         pi_extension=extension_for_window(started_at, ended_at),
     )
 

@@ -4,8 +4,18 @@ import argparse
 import datetime
 import json
 from pathlib import Path
+from typing import Any, TypedDict
 
 from dataset import load_ledger
+
+
+class CellDict(TypedDict):
+    """Type definition for session cell data."""
+    n: int
+    cost: float
+    tok: int
+    msgs: int
+    files: list[str]
 
 BASE = str(Path.home() / '.pi/agent/sessions')
 
@@ -28,9 +38,12 @@ def count_legacy_spawn_tool_calls(record: dict) -> int:
 
 
 def classify(dirn: str, intercom: int, fm: int, subn: int, spawned_tool_calls: int = 0) -> str:
-    """Legacy classifier retained for callers and regression fixtures."""
-    lower = dirn.lower()
-    coordinated = intercom > 0 or fm > 0 or any(token in lower for token in ('a4s', 'bead-hs', 'review', 'worktrees'))
+    """Legacy classifier retained for callers and regression fixtures.
+
+    Note: Directory heuristic removed (DEFECT 1 fix). Does not mark sessions as orchestrated
+    based on path tokens (a4s, bead-hs, review, worktrees).
+    """
+    coordinated = intercom > 0 or fm > 0
     delegated = subn > 0 or spawned_tool_calls > 0
     if coordinated and delegated:
         return 'S4'
@@ -41,11 +54,11 @@ def classify(dirn: str, intercom: int, fm: int, subn: int, spawned_tool_calls: i
     return 'S1'
 
 
-def scan_sessions(since: str, until: str | None = None, base: str = BASE):
+def scan_sessions(since: str, until: str | None = None, base: str = BASE) -> dict[str, CellDict]:
     """Return legacy cells, built from canonical Pi `SessionRecord` values."""
     roots = {'pi': Path(base)}
     records = load_ledger(datetime.date.fromisoformat(since), datetime.date.fromisoformat(until) if until else None, roots=roots)
-    cells = {key: dict(n=0, cost=0.0, tok=0, msgs=0, files=[]) for key in SCENARIO_LABELS}
+    cells: dict[str, CellDict] = {key: CellDict(n=0, cost=0.0, tok=0, msgs=0, files=[]) for key in SCENARIO_LABELS}
     for record in records:
         scenario = record.observed_topology
         if scenario not in SCENARIO_LABELS:
