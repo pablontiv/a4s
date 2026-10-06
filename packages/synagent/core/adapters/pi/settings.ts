@@ -155,12 +155,13 @@ export function persistSetting(
   scope: SynagentSettingsScope,
   key: SynagentSettingKey,
   value: SynagentSettings[SynagentSettingKey],
+  operations: { chmodSync?: typeof chmodSync } = {},
 ): void {
   if (!isValidSetting(key, value)) throw new Error(`Invalid Synagent ${key}: ${String(value)}`)
   const path = paths[scope]
   const current = readNativeFileForUpdate(path)
   current[key] = value
-  atomicWriteJson(path, current, scope === 'global')
+  atomicWriteJson(path, current, scope === 'global', operations.chmodSync)
 }
 
 export function resetSetting(
@@ -293,7 +294,12 @@ function assignSetting<K extends SynagentSettingKey>(
   target[key] = value
 }
 
-function atomicWriteJson(path: string, value: JsonRecord | SettingsRecord, globalFile: boolean): void {
+function atomicWriteJson(
+  path: string,
+  value: JsonRecord | SettingsRecord,
+  globalFile: boolean,
+  setMode: typeof chmodSync = chmodSync,
+): void {
   mkdirSync(dirname(path), { recursive: true })
   const temporaryPath = join(dirname(path), `.${randomUUID()}.synagent.tmp`)
   let descriptor: number | undefined
@@ -302,8 +308,8 @@ function atomicWriteJson(path: string, value: JsonRecord | SettingsRecord, globa
     writeFileSync(descriptor, `${JSON.stringify(value, null, 2)}\n`, 'utf8')
     closeSync(descriptor)
     descriptor = undefined
+    if (globalFile) setMode(temporaryPath, 0o600)
     renameSync(temporaryPath, path)
-    if (globalFile) chmodSync(path, 0o600)
   } catch (error) {
     if (descriptor !== undefined) closeSync(descriptor)
     rmSync(temporaryPath, { force: true })

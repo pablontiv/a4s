@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
@@ -8,6 +8,7 @@ import {
   DEFAULT_SETTINGS,
   initializeSynagentSettings,
   loadSynagentSettings,
+  persistSetting,
   resolveAgentDir,
   settingsPaths,
 } from '../adapters/pi/settings.ts'
@@ -110,6 +111,23 @@ test('Synagent migration rejects a remote MQTT broker URL', () => {
   assert.equal(settings['broker-url'], DEFAULT_SETTINGS['broker-url'])
   assert.equal(settings.project, 'Safe.Project')
   assert.deepEqual(JSON.parse(readFileSync(paths.global, 'utf8')), { project: 'Safe.Project' })
+})
+
+test('Synagent keeps the destination unchanged when temporary chmod fails', () => {
+  const { agentDir, paths } = fixture()
+  writeJson(paths.global, { enabled: true, project: 'Original.Project' })
+  const original = readFileSync(paths.global, 'utf8')
+
+  assert.throws(
+    () => persistSetting(paths, 'global', 'enabled', false, {
+      chmodSync() {
+        throw new Error('simulated temporary chmod failure')
+      },
+    }),
+    /simulated temporary chmod failure/,
+  )
+  assert.equal(readFileSync(paths.global, 'utf8'), original)
+  assert.deepEqual(readdirSync(agentDir).filter(name => name.endsWith('.synagent.tmp')), [])
 })
 
 test('Synagent resolves the agent directory from a non-empty environment value', () => {
