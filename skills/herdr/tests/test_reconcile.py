@@ -332,18 +332,18 @@ class ReconcileTest(unittest.TestCase):
                    ["agent", "prompt", "mc", "hi"], ["agent", "prompt", "wM:p1", "hi"]]
         for argv in refused:
             with self.subTest(argv=argv), self.assertRaises(mod.GuardViolation):
-                mod.mutate(ctx, argv)  # dry-run too: the guard runs before the would-run print
-        allowed = [["tab", "create", "--workspace", "wT", "--cwd", "/x", "--label", "b-1", "--no-focus"],
-                   ["tab", "close", "wT:t1"], ["agent", "start", "n", "--kind", "pi", "--pane", "wT:p1"],
-                   ["agent", "prompt", "w", "hi"]]
-        for argv in allowed:
-            with self.subTest(argv=argv), contextlib.redirect_stdout(io.StringIO()):
-                mod.mutate(ctx, argv)
+                mod.guard_herdr(ctx, argv)
+        allowed = [mod.TabCreate("b-1", "d-1", "wT", "/x", "b-1"),
+                   mod.TabClose("b-1", "wT:t1"), mod.AgentStart("b-1", "d-1", "n", "wT:p1", "pi"),
+                   mod.AgentPrompt("b-1", "d-1", "w", "hi")]
+        for change in allowed:
+            with self.subTest(change=change), contextlib.redirect_stdout(io.StringIO()):
+                mod.mutate(ctx, change)
         ctx.gate = {"verdict": "STALE", "reasons": ["x"], "owner": None}
         with self.assertRaises(mod.GuardViolation):
-            mod.mutate(ctx, allowed[0])  # closed gate refuses every mutation, even benign ones
+            mod.mutate(ctx, allowed[0])
         with self.assertRaises(mod.GuardViolation):
-            mod.mutate(ctx, ["update", "b-1"], tool="bd")
+            mod.mutate(ctx, mod.BdUpdate("b-1", ("--claim",)))
 
     # ---------------------------------------------------------------- MC ownership Bead is never mutated (F1)
     def assert_mc_untouched(self, p, log, bead_id="mc-1"):
@@ -415,12 +415,13 @@ class ReconcileTest(unittest.TestCase):
         other = bead("o-1", metadata={"worker": "w1"})
         ctx.bead_index = {b["id"]: b for b in ctx.mc_beads + [other, bead("mc-9", labels=["mission-control"])]}
         for bid in ("mc-1", "mc-9"):
-            for argv in (["close", bid, "--reason", "x"], ["update", bid, "--set-metadata", "worker=r-x"],
-                         ["update", bid, "--claim"]):
-                with self.subTest(argv=argv), self.assertRaises(mod.GuardViolation):
-                    mod.mutate(ctx, argv, tool="bd")
+            changes = (mod.BdClose(bid, "x"), mod.BdUpdate(bid, ("--set-metadata", "worker=r-x")),
+                       mod.BdUpdate(bid, ("--claim",)))
+            for change in changes:
+                with self.subTest(change=change), self.assertRaises(mod.GuardViolation):
+                    mod.mutate(ctx, change)
         with contextlib.redirect_stdout(io.StringIO()):
-            mod.mutate(ctx, ["close", "o-1", "--reason", "x"], tool="bd")  # ordinary Beads still pass
+            mod.mutate(ctx, mod.BdClose("o-1", "x"))
 
     # ---------------------------------------------------------------- in_progress without metadata.worker
     def stale_bead(self, id_="u-1", **kw):
