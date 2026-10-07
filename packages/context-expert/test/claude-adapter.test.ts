@@ -645,46 +645,137 @@ test('claude adapter: la banda semántica conserva score y floor para wait', asy
   assert.doesNotMatch(logs.join('\n'), /PRIVATE_CONVERSATION_CANARY|SEMANTIC_SECRET_CANARY/);
 });
 
-for (const mode of ['hint', 'auto'] as const) {
-  test(`claude adapter: mode=${mode} compacta exactamente una vez tras una decisión semántica positiva`, async () => {
+for (const scenario of [
+  { name: 'banda', tokens: 62_000, reason: 'semantic_score_meets_floor', basis: 'semantic', timingCalls: 2 },
+  { name: 'ceiling', tokens: 65_000, reason: 'adaptive_ceiling', basis: 'ceiling', timingCalls: 0 },
+] as const) {
+  test(`claude adapter: mode=hint avisa sin compactar en ${scenario.name}`, async () => {
     const hooks = new Map<string, unknown>();
     register(((pattern: string, hook: unknown) => { hooks.set(pattern, hook); return {}; }) as never, {
       apiKey: 'key',
-      triggerMode: mode,
+      triggerMode: 'hint',
     });
     const logs: string[] = [];
+    const toasts: string[] = [];
     let compactCalls = 0;
+    let timingCalls = 0;
     const host = {
-      ui: { log: (text: string) => logs.push(text), toast: () => undefined },
+      ui: {
+        log: (text: string) => logs.push(text),
+        toast: (text: string) => { toasts.push(text); },
+      },
       session: {
-        usage: async () => ({ context: { window: 100_000, tokens: 62_000 }, rateLimits: [] }),
+        usage: async () => ({ context: { window: 100_000, tokens: scenario.tokens }, rateLimits: [] }),
         messages: async () => fixture(),
         compact: async () => { compactCalls++; return { messages: [], tokensAfter: 20_000 }; },
       },
-      http: { fetch: async () => ({ status: 200, ok: true, text: timingResponse(0.95, 0.95) }) },
+      http: {
+        fetch: async () => {
+          timingCalls++;
+          return { status: 200, ok: true, text: timingResponse(0.95, 0.95) };
+        },
+      },
       clock: { sleep: async () => new Promise<void>(() => undefined) },
     };
-    const event = {
-      reason: 'answer', answer: 'done', isAborted: false, durationMs: 1,
-      turnId: `positive-${mode}`, usage: { model: 'claude-test' },
-    };
+    const event = (turnId: string) => ({
+      reason: 'answer' as const, answer: 'done', isAborted: false, durationMs: 1,
+      turnId, usage: { model: 'claude-test' },
+    });
     const turnHook = hooks.get('turn.complete') as (
       $: typeof host,
-      input: typeof event,
+      input: ReturnType<typeof event>,
       next: () => Promise<{ text: string }>,
     ) => Promise<{ text: string }>;
+    const next = async () => ({ text: 'unchanged' });
+    const originalNow = Date.now;
+    let now = 1_000_000;
+    Date.now = () => now;
+    try {
+      await turnHook(host, event(`${scenario.name}-first`), next);
+      assert.equal(compactCalls, 0);
+      assert.equal(timingCalls, scenario.timingCalls === 0 ? 0 : 1);
+      assert.equal(toasts.length, 1);
+      assert.match(toasts[0]!, /\/compact/);
+      const positive = triggerRecords(logs).find((record) => record.decision === 'compact');
+      assert.deepEqual(
+        {
+          decision: positive?.decision,
+          reason: positive?.reason,
+          basis: positive?.basis,
+          mode: positive?.mode,
+          dispatchOutcome: positive?.dispatchOutcome,
+          uiOutcome: positive?.uiOutcome,
+          rearmTokens: positive?.rearmTokens,
+          rearmStatus: positive?.rearmStatus,
+        },
+        {
+          decision: 'compact',
+          reason: scenario.reason,
+          basis: scenario.basis,
+          mode: 'hint',
+          dispatchOutcome: 'not_dispatched',
+          uiOutcome: 'hinted',
+          rearmTokens: undefined,
+          rearmStatus: undefined,
+        },
+      );
 
-    await turnHook(host, event, async () => ({ text: 'unchanged' }));
-    assert.equal(compactCalls, 1);
-    const completed = triggerRecords(logs).find((record) => record.dispatchOutcome === 'completed');
-    assert.equal(completed?.decision, 'compact');
-    assert.equal(completed?.reason, 'semantic_score_meets_floor');
-    assert.equal(completed?.mode, mode);
-    assert.equal(completed?.postContextTokens, 20_000);
-    assert.equal(completed?.actualReclaimTokens, 42_000);
-    assert.equal(completed?.rearmTokens, 60_000);
+      await turnHook(host, event(`${scenario.name}-cooldown`), next);
+      assert.equal(compactCalls, 0);
+      assert.equal(toasts.length, 1);
+      assert.equal(triggerRecords(logs).at(-1)?.reason, 'cooldown');
+
+      now += 300_001;
+      await turnHook(host, event(`${scenario.name}-after-cooldown`), next);
+      assert.equal(compactCalls, 0);
+      assert.equal(timingCalls, scenario.timingCalls);
+      assert.equal(toasts.length, 2);
+      assert.match(toasts[1]!, /\/compact/);
+      assert.equal(triggerRecords(logs).at(-1)?.uiOutcome, 'hinted');
+    } finally {
+      Date.now = originalNow;
+    }
   });
 }
+
+test('claude adapter: mode=auto compacta exactamente una vez tras una decisión semántica positiva', async () => {
+  const hooks = new Map<string, unknown>();
+  register(((pattern: string, hook: unknown) => { hooks.set(pattern, hook); return {}; }) as never, {
+    apiKey: 'key',
+    triggerMode: 'auto',
+  });
+  const logs: string[] = [];
+  let compactCalls = 0;
+  const host = {
+    ui: { log: (text: string) => logs.push(text), toast: () => undefined },
+    session: {
+      usage: async () => ({ context: { window: 100_000, tokens: 62_000 }, rateLimits: [] }),
+      messages: async () => fixture(),
+      compact: async () => { compactCalls++; return { messages: [], tokensAfter: 20_000 }; },
+    },
+    http: { fetch: async () => ({ status: 200, ok: true, text: timingResponse(0.95, 0.95) }) },
+    clock: { sleep: async () => new Promise<void>(() => undefined) },
+  };
+  const event = {
+    reason: 'answer', answer: 'done', isAborted: false, durationMs: 1,
+    turnId: 'positive-auto', usage: { model: 'claude-test' },
+  };
+  const turnHook = hooks.get('turn.complete') as (
+    $: typeof host,
+    input: typeof event,
+    next: () => Promise<{ text: string }>,
+  ) => Promise<{ text: string }>;
+
+  await turnHook(host, event, async () => ({ text: 'unchanged' }));
+  assert.equal(compactCalls, 1);
+  const completed = triggerRecords(logs).find((record) => record.dispatchOutcome === 'completed');
+  assert.equal(completed?.decision, 'compact');
+  assert.equal(completed?.reason, 'semantic_score_meets_floor');
+  assert.equal(completed?.mode, 'auto');
+  assert.equal(completed?.postContextTokens, 20_000);
+  assert.equal(completed?.actualReclaimTokens, 42_000);
+  assert.equal(completed?.rearmTokens, 60_000);
+});
 
 test('claude adapter: C fuerza compactación sin credenciales ni Jev de timing', async () => {
   const hooks = new Map<string, unknown>();

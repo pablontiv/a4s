@@ -7,7 +7,8 @@
 // summary with the core's rebuilt message array, and (c) registers a
 // `turn.complete` trigger that applies the shared adaptive policy. It asks the
 // timing Jev only between the policy floor and ceiling. A positive decision in
-// either active mode dispatches one host compaction.
+// hint mode asks the user to run `/compact`; auto mode dispatches one host
+// compaction.
 //
 // Jev runs over the engine's `$.http.fetch` against the TypeSafe System One
 // endpoint; the API key resolves from userConfig, then TYPESAFE_API_KEY, then
@@ -430,6 +431,7 @@ interface TriggerDecisionLogInput {
   floor: number | null;
   triggerOrigin: 'turn.complete';
   dispatchOutcome: TriggerDispatchOutcome;
+  uiOutcome?: 'hinted';
 }
 
 function policyLogInput(
@@ -495,7 +497,7 @@ function compactWasSkipped(result: unknown): boolean {
     typeof (result as { skip?: unknown }).skip === 'string';
 }
 
-/** The only positive-trigger dispatch path for both hint and auto mode. */
+/** The only positive-trigger dispatch path for auto mode. */
 async function dispatchCompaction(
   $: { session: { compact: () => Promise<unknown> } },
 ): Promise<unknown> {
@@ -540,7 +542,7 @@ export const register: Register = (on: On, options: PluginOptions) => {
   });
 
   // The shared policy uses an adaptive floor and ceiling. It asks timing Jev
-  // only in the semantic band. Both positive modes use one compaction path.
+  // only in the semantic band. Hint notifies the user. Auto dispatches.
   on('turn.complete', async ($, event: TurnCompleteInput, next) => {
     if (
       configured.triggerMode === 'off' ||
@@ -691,8 +693,16 @@ export const register: Register = (on: On, options: PluginOptions) => {
           return next(event);
         }
 
-        if (mode === 'hint') notify($, 'context policy selected compaction');
         lastTriggerAt = Date.now();
+        if (mode === 'hint') {
+          notify($, 'context policy recommends compaction; run /compact to compact now');
+          recordTrigger({
+            ...policyLogInput(policyDecision, 'not_dispatched'),
+            uiOutcome: 'hinted',
+          });
+          return next(event);
+        }
+
         compacting = true;
         let compactResult: unknown;
         try {

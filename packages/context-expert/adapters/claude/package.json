@@ -1,6 +1,6 @@
 {
   "name": "@a4s/context-expert-claude",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "private": true,
   "license": "UNLICENSED",
   "description": "Claude Code marketplace plugin for context-expert: Jev-guided deterministic compaction with an auto-compact trigger. Self-contained (bundled core).",
@@ -11,6 +11,6 @@
   "scripts": {
     "sync-core": "node scripts/sync-core.mjs",
     "check-core": "node scripts/sync-core.mjs --check",
-    "test:e2e:offline": "claude plugin test ."
+    "test:e2e:offline": "claude plugin test . && node scripts/test-hint-e2e.mjs"
   }
 }
