@@ -1112,6 +1112,7 @@ test("twelve compliance shards use global contiguous indices and a common campai
     policyDigest: "policy",
     skillDigest: "skill",
     probeDigest: "probe",
+    workerAgentSha256: "worker-agent",
     runnerSha256: "runner",
     shellParserSha256: "parser",
     manifestDigest: "manifest",
@@ -1125,6 +1126,7 @@ test("twelve compliance shards use global contiguous indices and a common campai
   const key = campaignKeyFor(identity);
   assert.equal(key, campaignKeyFor({ ...identity }));
   assert.notEqual(key, campaignKeyFor({ ...identity, shardCount: 1 }));
+  assert.notEqual(key, campaignKeyFor({ ...identity, workerAgentSha256: "different-agent" }));
   assert.notEqual(key, campaignKeyFor({ ...identity, runnerSha256: "different-runner" }));
   assert.notEqual(key, campaignKeyFor({ ...identity, shellParserSha256: "different-parser" }));
   for (const prefix of ["artifact", "session", "event-log"]) {
@@ -1173,14 +1175,14 @@ test("a shard resume accepts only its global indices", async () => {
   };
   const digests: Digests = {
     policySha256: "policy", skillSha256: "skill", probeSha256: "probe", oracleSha256: "probe",
-    runnerSha256: "runner", shellParserSha256, scenarioManifestSha256: "manifest", runtimeSha256: "runtime", settingsDigest: "settings-bytes",
+    workerAgentSha256: "worker-agent", runnerSha256: "runner", shellParserSha256, scenarioManifestSha256: "manifest", runtimeSha256: "runtime", settingsDigest: "settings-bytes",
     modelsDigest: "models-bytes", authDigest: "auth-bytes", modelDigest: modelIdentity.modelDigest,
   };
   const runtime = { version: "test", sha256: digests.runtimeSha256 };
   const key = campaignKeyFor({
     tier: "compliance", variant: "candidate", shardCount: 12,
     policyDigest: digests.policySha256, skillDigest: digests.skillSha256, probeDigest: digests.probeSha256,
-    runnerSha256: digests.runnerSha256,
+    workerAgentSha256: digests.workerAgentSha256, runnerSha256: digests.runnerSha256,
     shellParserSha256: digests.shellParserSha256,
     manifestDigest: digests.scenarioManifestSha256, runtimeVersion: runtime.version,
     runtimeSha256: runtime.sha256, settingsDigest: digests.settingsDigest, modelsDigest: digests.modelsDigest,
@@ -1221,15 +1223,18 @@ test("shard aggregation verifies 300 passes and rejects corrupt campaigns", asyn
   const runnerSha256 = createHash("sha256")
     .update(readFileSync(new URL("./support/work-gate-live.ts", import.meta.url)))
     .digest("hex");
+  const workerAgentSha256 = createHash("sha256")
+    .update(readFileSync(new URL("../agents/pi/reviewer.md", import.meta.url)))
+    .digest("hex");
   const digests: Digests = {
     policySha256: "policy", skillSha256: "skill", probeSha256: "probe", oracleSha256: "probe",
-    runnerSha256, shellParserSha256, scenarioManifestSha256: manifestSha256, runtimeSha256: "runtime", settingsDigest: "settings-bytes",
+    workerAgentSha256, runnerSha256, shellParserSha256, scenarioManifestSha256: manifestSha256, runtimeSha256: "runtime", settingsDigest: "settings-bytes",
     modelsDigest: "models-bytes", authDigest: "auth-bytes", modelDigest: modelIdentity.modelDigest,
   };
   const key = campaignKeyFor({
     tier: "compliance", variant: "candidate", shardCount: 12,
     policyDigest: digests.policySha256, skillDigest: digests.skillSha256, probeDigest: digests.probeSha256,
-    runnerSha256: digests.runnerSha256,
+    workerAgentSha256: digests.workerAgentSha256, runnerSha256: digests.runnerSha256,
     shellParserSha256: digests.shellParserSha256,
     manifestDigest: digests.scenarioManifestSha256, runtimeVersion: "test", runtimeSha256: digests.runtimeSha256,
     settingsDigest: digests.settingsDigest, modelsDigest: digests.modelsDigest, authDigest: digests.authDigest,
@@ -1309,6 +1314,7 @@ test("compliance resume accepts 120 complete passes and rejects unsafe history",
     skillSha256: "skill",
     probeSha256: "probe",
     oracleSha256: "probe",
+    workerAgentSha256: "worker-agent",
     runnerSha256: "runner",
     shellParserSha256,
     scenarioManifestSha256: "manifest",
@@ -1326,6 +1332,7 @@ test("compliance resume accepts 120 complete passes and rejects unsafe history",
     policyDigest: digests.policySha256,
     skillDigest: digests.skillSha256,
     probeDigest: digests.probeSha256,
+    workerAgentSha256: digests.workerAgentSha256,
     runnerSha256: digests.runnerSha256,
     shellParserSha256: digests.shellParserSha256,
     manifestDigest: digests.scenarioManifestSha256,
@@ -1546,6 +1553,7 @@ test("model identity binds the canonical ID and model-resolution files", async (
       policyDigest: "policy",
       skillDigest: "skill",
       probeDigest: "probe",
+      workerAgentSha256: "worker-agent",
       runnerSha256: "runner",
       shellParserSha256: "parser",
       manifestDigest: "manifest",
@@ -1603,7 +1611,9 @@ test("a campaign snapshot fixes every mutable source before each run", async () 
   try {
     const modelDigest = snapshot.modelIdentity.modelDigest;
     const runnerBytes = await readFile(new URL("./support/work-gate-live.ts", import.meta.url));
+    const workerAgentBytes = await readFile(new URL("../agents/pi/reviewer.md", import.meta.url));
     assert.equal(snapshot.runnerSha256, createHash("sha256").update(runnerBytes).digest("hex"));
+    assert.equal(snapshot.workerAgentSha256, createHash("sha256").update(workerAgentBytes).digest("hex"));
     assert.equal(snapshot.shellParserSha256, shellParserSha256);
     assert.equal(await digestShellParser(), shellParserSha256);
     await assert.rejects(
@@ -1628,6 +1638,10 @@ test("a campaign snapshot fixes every mutable source before each run", async () 
       assert.equal(await readFile(prepared.copiedPolicy, "utf8"), "policy-v1\n");
       assert.equal(await readFile(prepared.copiedSkill, "utf8"), "skill-v1\n");
       assert.equal(await readFile(prepared.copiedProbe, "utf8"), "probe-v1\n");
+      assert.deepEqual(await readFile(prepared.copiedWorkerAgent), snapshot.workerAgent);
+      await writeFile(prepared.copiedWorkerAgent, "altered Worker agent\n");
+      await assert.rejects(verifyPreparedRun(snapshot, prepared), /copied Worker agent/);
+      await writeFile(prepared.copiedWorkerAgent, snapshot.workerAgent);
       assert.deepEqual(JSON.parse(await readFile(join(prepared.agentDir, "settings.json"), "utf8")), {
         defaultModel: "model-a",
       });
@@ -2016,6 +2030,7 @@ test("campaign configuration digests bind stable auth identity but not token rot
       policyDigest: first.policySha256,
       skillDigest: first.skillSha256,
       probeDigest: first.probeSha256,
+      workerAgentSha256: first.workerAgentSha256,
       runnerSha256: first.runnerSha256,
       shellParserSha256: first.shellParserSha256,
       manifestDigest: first.manifestSha256,
@@ -2851,7 +2866,7 @@ test("baseline inputs are explicit and never inherit candidate environment paths
     skillSource: "/explicit-baseline/skills/work-lifecycle/SKILL.md",
   });
   const identity = {
-    policyDigest: "p", skillDigest: "s", probeDigest: "x", runnerSha256: "runner", shellParserSha256: "parser", manifestDigest: "m",
+    policyDigest: "p", skillDigest: "s", probeDigest: "x", workerAgentSha256: "worker-agent", runnerSha256: "runner", shellParserSha256: "parser", manifestDigest: "m",
     runtimeVersion: "v", runtimeSha256: "r", settingsDigest: "settings",
     modelsDigest: "models", authDigest: "auth", modelDigest: "model",
   };

@@ -1,4 +1,5 @@
 export type WitnessVerdict = "pass" | "fail" | "unknown";
+export type WorkerRuntimeState = "dispatch" | "queued" | "running" | "terminal";
 
 export interface WorkerLink {
   correlationId: string;
@@ -13,8 +14,8 @@ export interface WorkerLink {
 export type WorkerLinkEvidence = Partial<WorkerLink>;
 
 export interface RuntimeWorkerEvent {
-  kind: "started" | "terminated";
-  observedAt: number;
+  state: WorkerRuntimeState;
+  observedAt: string;
   link: WorkerLinkEvidence;
 }
 
@@ -23,7 +24,7 @@ export interface InventoryProcess {
 }
 
 export interface InventorySnapshot {
-  observedAt: number;
+  observedAt: string;
   complete: boolean;
   processes: readonly InventoryProcess[];
 }
@@ -64,8 +65,8 @@ type LinkField = (typeof LINK_FIELDS)[number];
 
 interface Lifecycle {
   expected: WorkerLink;
-  startedAt: number | undefined;
-  terminatedAt: number | undefined;
+  runningAt: bigint | undefined;
+  terminalAt: bigint | undefined;
 }
 
 function check(verdict: WitnessVerdict, reasons: string[]): WitnessCheck {
@@ -94,11 +95,7 @@ function sameProcess(actual: WorkerLinkEvidence, expected: WorkerLink): boolean 
   return actual.pid === expected.pid && actual.processStartTime === expected.processStartTime;
 }
 
-function isCandidateDuringLifecycle(actual: WorkerLinkEvidence, expected: WorkerLink): boolean {
-  return actual.correlationId === expected.correlationId || actual.pid === expected.pid;
-}
-
-function isCandidateAfterTermination(actual: WorkerLinkEvidence, expected: WorkerLink): boolean {
+function isCandidate(actual: WorkerLinkEvidence, expected: WorkerLink): boolean {
   return actual.correlationId === expected.correlationId || sameProcess(actual, expected);
 }
 
@@ -112,6 +109,35 @@ function uniqueReasons(reasons: readonly string[]): string[] {
   return [...new Set(reasons)];
 }
 
+function observedTime(value: string, label: string, failures: string[]): bigint | undefined {
+  if (!/^(0|[1-9][0-9]*)$/.test(value)) {
+    failures.push(`${label} has an invalid observed time`);
+    return undefined;
+  }
+  return BigInt(value);
+}
+
+function validateObservedOrder(input: WorkerWitnessInput): string[] {
+  const failures: string[] = [];
+  let previousEvent: bigint | undefined;
+  for (const event of input.runtimeEvents) {
+    const current = observedTime(event.observedAt, `runtime ${event.state} event`, failures);
+    if (current !== undefined && previousEvent !== undefined && current <= previousEvent) {
+      failures.push("runtime event time regressed or repeated");
+    }
+    if (current !== undefined) previousEvent = current;
+  }
+  let previousSnapshot: bigint | undefined;
+  for (const snapshot of input.inventorySnapshots) {
+    const current = observedTime(snapshot.observedAt, "inventory snapshot", failures);
+    if (current !== undefined && previousSnapshot !== undefined && current <= previousSnapshot) {
+      failures.push("inventory snapshot time regressed or repeated");
+    }
+    if (current !== undefined) previousSnapshot = current;
+  }
+  return failures;
+}
+
 function validateExpectedWorkers(expectedWorkers: readonly WorkerLink[]): string[] {
   const reasons: string[] = [];
   const correlationIds = new Set<string>();
@@ -119,15 +145,10 @@ function validateExpectedWorkers(expectedWorkers: readonly WorkerLink[]): string
 
   for (const worker of expectedWorkers) {
     const missing = missingFields(worker);
-    if (missing.length > 0) {
-      reasons.push(`expected worker has missing identity fields: ${missing.join(",")}`);
-    }
-    if (correlationIds.has(worker.correlationId)) {
-      reasons.push(`duplicate correlationId: ${worker.correlationId}`);
-    }
-    if (workerNames.has(worker.worker)) {
-      reasons.push(`duplicate worker: ${worker.worker}`);
-    }
+    if (missing.length > 0) reasons.push(`expected worker has missing identity fields: ${missing.join(",")}`);
+    if (!Number.isSafeInteger(worker.pid) || worker.pid < 1) reasons.push(`invalid pid for worker: ${worker.worker}`);
+    if (correlationIds.has(worker.correlationId)) reasons.push(`duplicate correlationId: ${worker.correlationId}`);
+    if (workerNames.has(worker.worker)) reasons.push(`duplicate worker: ${worker.worker}`);
     correlationIds.add(worker.correlationId);
     workerNames.add(worker.worker);
   }
@@ -137,8 +158,8 @@ function validateExpectedWorkers(expectedWorkers: readonly WorkerLink[]): string
 
 function buildLifecycles(
   input: WorkerWitnessInput,
-  identityFailures: string[],
-  identityUnknowns: string[],
+  failures: string[],
+  unknowns: string[],
 ): Lifecycle[] {
   return input.expectedWorkers.map((expected) => {
     const events = input.runtimeEvents.filter(
@@ -146,39 +167,35 @@ function buildLifecycles(
     );
 
     for (const event of events) {
-      const missing = missingFields(event.link);
-      if (missing.length > 0) {
-        identityUnknowns.push(
-          `${expected.worker} ${event.kind} event lacks: ${missing.join(",")}`,
-        );
-      }
       const mismatched = mismatchedFields(event.link, expected);
       if (mismatched.length > 0) {
-        identityFailures.push(
-          `${expected.worker} ${event.kind} event contradicts: ${mismatched.join(",")}`,
-        );
+        failures.push(`${expected.worker} ${event.state} event contradicts: ${mismatched.join(",")}`);
       }
     }
 
-    const starts = events.filter((event) => event.kind === "started");
-    const terminations = events.filter((event) => event.kind === "terminated");
-    if (starts.length === 0) identityUnknowns.push(`${expected.worker} has no started event`);
-    if (terminations.length === 0) {
-      identityUnknowns.push(`${expected.worker} has no terminated event`);
-    }
-    if (starts.length > 1) identityFailures.push(`${expected.worker} has duplicate started events`);
-    if (terminations.length > 1) {
-      identityFailures.push(`${expected.worker} has duplicate terminated events`);
+    const running = events.filter((event) => event.state === "running");
+    const terminal = events.filter((event) => event.state === "terminal");
+    if (running.length === 0) unknowns.push(`${expected.worker} has no running event`);
+    if (terminal.length === 0) unknowns.push(`${expected.worker} has no terminal event`);
+    if (running.length > 1) failures.push(`${expected.worker} has duplicate running events`);
+    if (terminal.length > 1) failures.push(`${expected.worker} has duplicate terminal events`);
+
+    const runningAt = running.length === 1
+      ? observedTime(running[0]!.observedAt, `${expected.worker} running event`, failures)
+      : undefined;
+    const terminalAt = terminal.length === 1
+      ? observedTime(terminal[0]!.observedAt, `${expected.worker} terminal event`, failures)
+      : undefined;
+    if (runningAt !== undefined && terminalAt !== undefined && terminalAt <= runningAt) {
+      failures.push(`${expected.worker} reaches terminal before it runs`);
     }
 
-    const startedAt = starts.length === 1 ? starts[0]!.observedAt : undefined;
-    const terminatedAt = terminations.length === 1 ? terminations[0]!.observedAt : undefined;
-    if (startedAt !== undefined && terminatedAt !== undefined && terminatedAt <= startedAt) {
-      identityFailures.push(`${expected.worker} terminates before it starts`);
-    }
-
-    return { expected, startedAt, terminatedAt };
+    return { expected, runningAt, terminalAt };
   });
+}
+
+function snapshotTime(snapshot: InventorySnapshot): bigint | undefined {
+  return /^(0|[1-9][0-9]*)$/.test(snapshot.observedAt) ? BigInt(snapshot.observedAt) : undefined;
 }
 
 function evaluateIdentity(
@@ -190,202 +207,129 @@ function evaluateIdentity(
   const failures = [...initialFailures];
   const unknowns = [...initialUnknowns];
 
-  for (const lifecycle of lifecycles) {
-    const { expected, startedAt, terminatedAt } = lifecycle;
+  for (const { expected, runningAt, terminalAt } of lifecycles) {
     let hasIndependentIdentity = false;
-
     for (const snapshot of input.inventorySnapshots) {
-      const inLifecycle =
-        startedAt !== undefined &&
-        terminatedAt !== undefined &&
-        snapshot.observedAt >= startedAt &&
-        snapshot.observedAt < terminatedAt;
-      if (!inLifecycle) continue;
-
-      const candidates = snapshot.processes.filter((process) =>
-        isCandidateDuringLifecycle(process.link, expected),
-      );
+      const time = snapshotTime(snapshot);
+      if (time === undefined || runningAt === undefined || terminalAt === undefined || time < runningAt || time >= terminalAt) continue;
+      const candidates = snapshot.processes.filter((process) => isCandidate(process.link, expected));
       for (const process of candidates) {
         const missing = missingFields(process.link);
         if (missing.length > 0) {
-          unknowns.push(
-            `${expected.worker} inventory identity lacks: ${missing.join(",")}`,
-          );
-          continue;
+          unknowns.push(`${expected.worker} inventory identity lacks: ${missing.join(",")}`);
+        } else if (linksEqual(process.link, expected)) {
+          hasIndependentIdentity = true;
+        } else {
+          failures.push(`${expected.worker} inventory identity contradicts: ${mismatchedFields(process.link, expected).join(",")}`);
         }
-        const mismatched = mismatchedFields(process.link, expected);
-        if (mismatched.length > 0) {
-          failures.push(
-            `${expected.worker} inventory identity contradicts: ${mismatched.join(",")}`,
-          );
-          continue;
-        }
-        hasIndependentIdentity = true;
       }
     }
-
-    if (!hasIndependentIdentity) {
-      unknowns.push(`${expected.worker} has no matching inventory identity`);
-    }
+    if (!hasIndependentIdentity) unknowns.push(`${expected.worker} has no matching external inventory identity`);
   }
 
   if (failures.length > 0) return check("fail", uniqueReasons(failures));
   if (unknowns.length > 0) return check("unknown", uniqueReasons(unknowns));
-  return check("pass", ["runtime and inventory identities match"]);
+  return check("pass", ["runtime identities match external inventory"]);
 }
 
 function evaluateConcurrency(
   input: WorkerWitnessInput,
   lifecycles: readonly Lifecycle[],
   minimumConcurrentWorkers: number,
+  timeFailures: readonly string[],
 ): WitnessCheck {
+  if (timeFailures.length > 0) return check("fail", uniqueReasons(timeFailures));
   if (!Number.isInteger(minimumConcurrentWorkers) || minimumConcurrentWorkers < 2) {
     return check("fail", ["minimumConcurrentWorkers must be an integer of at least 2"]);
   }
   if (lifecycles.length < minimumConcurrentWorkers) {
-    return check("unknown", [
-      `only ${lifecycles.length} expected workers are available for concurrency evidence`,
-    ]);
+    return check("unknown", [`only ${lifecycles.length} expected workers are available for concurrency evidence`]);
   }
-  if (lifecycles.some((item) => item.startedAt === undefined || item.terminatedAt === undefined)) {
-    return check("unknown", ["runtime lifecycle evidence is incomplete"]);
+  if (lifecycles.some((item) => item.runningAt === undefined || item.terminalAt === undefined)) {
+    return check("unknown", ["runtime running evidence is incomplete"]);
   }
 
-  const usable = lifecycles.map((item) => ({
-    ...item,
-    startedAt: item.startedAt!,
-    terminatedAt: item.terminatedAt!,
-  }));
-  let inspectedCompleteOverlap = false;
-
+  const usable = lifecycles.map((item) => ({ ...item, runningAt: item.runningAt!, terminalAt: item.terminalAt! }));
+  let completeContradiction = false;
   for (const snapshot of input.inventorySnapshots) {
-    const active = usable.filter(
-      (item) => snapshot.observedAt >= item.startedAt && snapshot.observedAt < item.terminatedAt,
-    );
-    if (active.length < minimumConcurrentWorkers) continue;
-
-    const matching = active.filter((item) =>
-      snapshot.processes.some((process) => linksEqual(process.link, item.expected)),
+    const time = snapshotTime(snapshot);
+    if (time === undefined) continue;
+    const running = usable.filter((item) => time >= item.runningAt && time < item.terminalAt);
+    if (running.length < minimumConcurrentWorkers) continue;
+    const matching = running.filter((item) =>
+      snapshot.processes.some((process) => linksEqual(process.link, item.expected))
     );
     if (matching.length >= minimumConcurrentWorkers) {
-      return check("pass", [
-        `${matching.length} workers have independent concurrent inventory evidence`,
-      ]);
+      return check("pass", [`${matching.length} Workers are simultaneously running in external inventory`]);
     }
-    const ambiguous = active.filter((item) =>
-      snapshot.processes.some(
-        (process) =>
-          isCandidateDuringLifecycle(process.link, item.expected) &&
-          missingFields(process.link).length > 0,
-      ),
-    );
-    if (snapshot.complete && matching.length + ambiguous.length < minimumConcurrentWorkers) {
-      inspectedCompleteOverlap = true;
-    }
+    if (snapshot.complete) completeContradiction = true;
   }
 
-  const overlapExists = usable.some((candidate) => {
-    const concurrent = usable.filter(
-      (item) =>
-        candidate.startedAt >= item.startedAt && candidate.startedAt < item.terminatedAt,
-    );
-    return concurrent.length >= minimumConcurrentWorkers;
-  });
-  if (!overlapExists) {
-    return check("fail", ["runtime lifecycles do not meet the concurrency requirement"]);
-  }
-  if (inspectedCompleteOverlap) {
-    return check("fail", ["complete inventory contradicts runtime concurrency"]);
-  }
-  return check("unknown", ["no inventory snapshot proves runtime concurrency"]);
+  const boundaries = usable.map((item) => item.runningAt);
+  const runtimeOverlap = boundaries.some((time) =>
+    usable.filter((item) => time >= item.runningAt && time < item.terminalAt).length >= minimumConcurrentWorkers
+  );
+  if (!runtimeOverlap) return check("fail", ["Workers were executed serially"]);
+  if (completeContradiction) return check("fail", ["complete external inventory contradicts running concurrency"]);
+  return check("unknown", ["no external inventory snapshot proves running concurrency"]);
 }
 
 function evaluateTermination(
   input: WorkerWitnessInput,
   lifecycles: readonly Lifecycle[],
+  timeFailures: readonly string[],
 ): WitnessCheck {
-  const failures: string[] = [];
+  const failures = [...timeFailures];
   const unknowns: string[] = [];
 
-  for (const lifecycle of lifecycles) {
-    const { expected, terminatedAt } = lifecycle;
-    if (terminatedAt === undefined) {
-      unknowns.push(`${expected.worker} has no termination time`);
+  for (const { expected, terminalAt } of lifecycles) {
+    if (terminalAt === undefined) {
+      unknowns.push(`${expected.worker} has no terminal time`);
       continue;
     }
-
-    const laterSnapshots = input.inventorySnapshots.filter(
-      (snapshot) => snapshot.observedAt > terminatedAt,
-    );
-    let hasCompleteAbsence = false;
-    for (const snapshot of laterSnapshots) {
-      const candidates = snapshot.processes.filter((process) =>
-        isCandidateAfterTermination(process.link, expected),
-      );
+    const later = input.inventorySnapshots.filter((snapshot) => {
+      const time = snapshotTime(snapshot);
+      return time !== undefined && time > terminalAt;
+    });
+    let completeAbsence = false;
+    for (const snapshot of later) {
+      const candidates = snapshot.processes.filter((process) => isCandidate(process.link, expected));
       for (const process of candidates) {
-        const missing = missingFields(process.link);
-        if (missing.length > 0) {
-          unknowns.push(
-            `${expected.worker} post-termination inventory identity lacks: ${missing.join(",")}`,
-          );
-          continue;
-        }
-        if (linksEqual(process.link, expected)) {
-          failures.push(`${expected.worker} process remains after termination`);
-        } else if (process.link.correlationId === expected.correlationId) {
-          failures.push(`${expected.worker} correlationId maps to a different process`);
+        if (missingFields(process.link).length > 0) {
+          unknowns.push(`${expected.worker} post-terminal inventory identity is incomplete`);
+        } else if (linksEqual(process.link, expected)) {
+          failures.push(`${expected.worker} process remains after terminal state`);
+        } else {
+          failures.push(`${expected.worker} identity maps to a different post-terminal process`);
         }
       }
-
-      const hasAmbiguousCandidate = candidates.some(
-        (process) => missingFields(process.link).length > 0,
-      );
-      if (
-        snapshot.complete &&
-        !hasAmbiguousCandidate &&
-        !snapshot.processes.some((process) => linksEqual(process.link, expected))
-      ) {
-        hasCompleteAbsence = true;
-      }
+      if (snapshot.complete && candidates.length === 0) completeAbsence = true;
     }
-    if (!hasCompleteAbsence) {
-      unknowns.push(`${expected.worker} has no complete post-termination inventory snapshot`);
-    }
+    if (!completeAbsence) unknowns.push(`${expected.worker} has no complete post-terminal external inventory snapshot`);
   }
 
   if (failures.length > 0) return check("fail", uniqueReasons(failures));
   if (unknowns.length > 0) return check("unknown", uniqueReasons(unknowns));
-  return check("pass", ["complete inventory proves that all worker processes terminated"]);
+  return check("pass", ["external inventory proves that all Worker processes terminated"]);
 }
 
 export function reconcileWorkerWitness(input: WorkerWitnessInput): WorkerWitnessResult {
   const minimumConcurrentWorkers = input.minimumConcurrentWorkers ?? 2;
-  const expectedFailures = validateExpectedWorkers(input.expectedWorkers);
+  const timeFailures = validateObservedOrder(input);
+  const identityFailures = [...validateExpectedWorkers(input.expectedWorkers), ...timeFailures];
   const identityUnknowns: string[] = [];
-  if (input.expectedWorkers.length === 0) {
-    identityUnknowns.push("expected worker inventory is empty");
-  }
-  const identityFailures = [...expectedFailures];
+  if (input.expectedWorkers.length === 0) identityUnknowns.push("expected Worker inventory is empty");
   const lifecycles = buildLifecycles(input, identityFailures, identityUnknowns);
-
-  const identity = evaluateIdentity(
-    input,
-    lifecycles,
-    identityFailures,
-    identityUnknowns,
-  );
-  const concurrency = evaluateConcurrency(input, lifecycles, minimumConcurrentWorkers);
-  const termination = evaluateTermination(input, lifecycles);
+  const identity = evaluateIdentity(input, lifecycles, identityFailures, identityUnknowns);
+  const concurrency = evaluateConcurrency(input, lifecycles, minimumConcurrentWorkers, timeFailures);
+  const termination = evaluateTermination(input, lifecycles, timeFailures);
   const checks = { identity, concurrency, termination };
   const verdict = overallVerdict(Object.values(checks));
-
   return {
     verdict,
     checks,
-    reasons: uniqueReasons(
-      Object.entries(checks).flatMap(([name, item]) =>
-        item.verdict === "pass" ? [] : item.reasons.map((reason) => `${name}: ${reason}`),
-      ),
-    ),
+    reasons: uniqueReasons(Object.entries(checks).flatMap(([name, item]) =>
+      item.verdict === "pass" ? [] : item.reasons.map((reason) => `${name}: ${reason}`)
+    )),
   };
 }

@@ -18,7 +18,15 @@ import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { createJsonlLineReader } from "../../packages/pi-context-expert/src/rpc-stdin-guard.ts";
-import { RealWorkerObserver, type RealWorkerRecordDisposition } from "./real-worker-observer.ts";
+import {
+  REAL_WORKER_MODE,
+  REAL_WORKER_ROLE,
+  REAL_WORKER_UNIT_COUNT,
+  RealWorkerObserver,
+  parseWorkerInventoryJsonl,
+  realWorkerTask,
+  type RealWorkerRecordDisposition,
+} from "./real-worker-observer.ts";
 import {
   conditions,
   effects,
@@ -47,8 +55,8 @@ const SHELL_PARSER_PATH = "/bin/bash";
 const DEFAULT_RESULTS = join(tmpdir(), "a4s-work-gate-campaign.jsonl");
 const DEFAULT_DEADLINE_MS = 120_000;
 const MAX_CONCURRENCY = 4;
-export const REAL_WORKER_EXTENSION = "npm:pi-subagents-j0k3r";
-export const REAL_WORKER_UNIT_COUNT = 8;
+export const REAL_WORKER_EXTENSION = "npm:pi-subagents-j0k3r@1.6.1";
+export { REAL_WORKER_UNIT_COUNT };
 
 export interface Scenario {
   id: string;
@@ -81,6 +89,7 @@ export interface CliOptions {
   shardIndex: number;
   model: string;
   workerMode: WorkerMode;
+  workerInventoryDir?: string;
   policyPath?: string;
   skillPath?: string;
   variantRoot?: string;
@@ -97,6 +106,7 @@ export interface Digests {
   skillSha256: string;
   probeSha256: string;
   oracleSha256: string;
+  workerAgentSha256: string;
   runnerSha256: string;
   shellParserSha256: string;
   scenarioManifestSha256: string;
@@ -222,9 +232,11 @@ export interface CampaignSnapshot {
   auth: Buffer | null;
   authProvider: string | null;
   authIdentity: StableAuthIdentity | null;
+  workerAgent: Buffer;
   policySha256: string;
   skillSha256: string;
   probeSha256: string;
+  workerAgentSha256: string;
   runnerSha256: string;
   shellParserSha256: string;
   manifestSha256: string;
@@ -277,7 +289,8 @@ export function usage(): string {
     "  --verify-shards PATHS Verify a comma-separated set of shard files.",
     "  --concurrency N        Set concurrent runs. The maximum is 4.",
     "  --model PROVIDER/ID    Set the exact live campaign model.",
-    "  --real-workers         Use eight real Workers through pi-subagents-j0k3r.",
+    "  --real-workers         Use eight real Workers through pi-subagents-j0k3r@1.6.1.",
+    "  --worker-inventory-dir PATH  Read external Worker inventory evidence from PATH.",
     "  --tier NAME           Select smoke, corpus, compliance, or git-e2e.",
     "  --runs N              Set the smoke or compliance run count.",
     "",
@@ -318,6 +331,7 @@ export function parseCli(argv: readonly string[]): CliOptions {
   let variant: Variant = "candidate";
   let model: string | undefined;
   let workerMode: WorkerMode = "simulated";
+  let workerInventoryDir: string | undefined;
   let policyPath: string | undefined;
   let skillPath: string | undefined;
   let variantRoot: string | undefined;
@@ -380,6 +394,12 @@ export function parseCli(argv: readonly string[]): CliOptions {
       case "--real-workers":
         workerMode = "real";
         break;
+      case "--worker-inventory-dir": {
+        const value = argv[++index];
+        if (!value) throw new Error("--worker-inventory-dir requires a path");
+        workerInventoryDir = resolve(value);
+        break;
+      }
       case "--policy": {
         const value = argv[++index];
         if (!value) throw new Error("--policy requires a path");
@@ -440,6 +460,12 @@ export function parseCli(argv: readonly string[]): CliOptions {
   if (tier === "git-e2e" && selectedConcurrency !== 1) {
     throw new Error("git-e2e requires --concurrency 1");
   }
+  if (workerMode === "real" && !workerInventoryDir) {
+    throw new Error("--real-workers requires --worker-inventory-dir");
+  }
+  if (workerMode === "simulated" && workerInventoryDir) {
+    throw new Error("--worker-inventory-dir requires --real-workers");
+  }
   if (variantRoot && (policyPath || skillPath)) {
     throw new Error("--root cannot be combined with --policy or --skill");
   }
@@ -459,6 +485,7 @@ export function parseCli(argv: readonly string[]): CliOptions {
     shardIndex: selectedShardIndex,
     model,
     workerMode,
+    ...(workerInventoryDir ? { workerInventoryDir } : {}),
     ...(policyPath ? { policyPath } : {}),
     ...(skillPath ? { skillPath } : {}),
     ...(variantRoot ? { variantRoot } : {}),
@@ -1145,10 +1172,11 @@ export async function createCampaignSnapshot(input: {
   const root = await mkdtemp(join(tmpdir(), "a4s-work-gate-campaign-"));
   try {
     const agentDir = input.agentDir ?? sourceAgentDirectory();
-    const [policy, skill, probe, runner, shellParser, fixture, settings, models, auth] = await Promise.all([
+    const [policy, skill, probe, workerAgent, runner, shellParser, fixture, settings, models, auth] = await Promise.all([
       readFile(input.policySource),
       readFile(input.skillSource),
       readFile(input.probeSource ?? PROBE_PATH),
+      readFile(WORKER_AGENT_PATH),
       readFile(RUNNER_PATH),
       readFile(SHELL_PARSER_PATH),
       readFile(input.fixtureSource ?? FIXTURE_PATH),
@@ -1172,9 +1200,11 @@ export async function createCampaignSnapshot(input: {
       auth: effectiveAuth,
       authProvider: filteredAuth?.provider ?? null,
       authIdentity: filteredAuth?.identity ?? null,
+      workerAgent,
       policySha256: sha256(policy),
       skillSha256: sha256(skill),
       probeSha256: sha256(probe),
+      workerAgentSha256: sha256(workerAgent),
       runnerSha256: sha256(runner),
       shellParserSha256: sha256(shellParser),
       manifestSha256: sha256(fixture),
@@ -1294,7 +1324,7 @@ export async function prepareRun(
       writeFile(copiedPolicy, snapshot.policy, { mode: 0o600 }),
       writeFile(copiedSkill, snapshot.skill, { mode: 0o600 }),
       writeFile(copiedProbe, snapshot.probe, { mode: 0o600 }),
-      readFile(WORKER_AGENT_PATH).then((content) => writeFile(copiedWorkerAgent, content, { mode: 0o600 })),
+      writeFile(copiedWorkerAgent, snapshot.workerAgent, { mode: 0o600 }),
       writeFile(scenarioPath, `${JSON.stringify(scenario, null, 2)}\n`, { mode: 0o600 }),
       writeFile(eventLog, "", { mode: 0o600 }),
       writeOptionalSnapshot(snapshot.settings, join(agentDir, "settings.json")),
@@ -1335,6 +1365,8 @@ export async function verifyPreparedRun(
     digestFile(prepared.copiedPolicy),
     digestFile(prepared.copiedSkill),
     digestFile(prepared.copiedProbe),
+    digestFile(prepared.copiedWorkerAgent),
+    digestFile(WORKER_AGENT_PATH),
     digestFile(RUNNER_PATH),
     digestShellParser(),
     rawOptionalDigest(join(prepared.agentDir, "settings.json")),
@@ -1344,6 +1376,8 @@ export async function verifyPreparedRun(
     ["policy", snapshot.policySha256],
     ["skill", snapshot.skillSha256],
     ["probe", snapshot.probeSha256],
+    ["copied Worker agent", snapshot.workerAgentSha256],
+    ["source Worker agent", snapshot.workerAgentSha256],
     ["runner", snapshot.runnerSha256],
     ["shell parser", snapshot.shellParserSha256],
     ["settings", snapshot.settingsDigest],
@@ -1428,9 +1462,12 @@ function promptFor(scenario: Scenario | GitScenario, workerMode: WorkerMode): st
   const workerDispatch = workerMode === "real"
     ? [
       "Primero delega exactamente ocho unidades independientes en una sola respuesta.",
-      "Usa ocho llamadas subagent_run con agent=reviewer y mode=task.",
-      "Usa los nombres unit-01 a unit-08, sin repetir nombres.",
-      "Pide a cada Worker una revisión breve del estado y de la condición del gate.",
+      `Usa ocho llamadas subagent_run con agent=${REAL_WORKER_ROLE} y mode=${REAL_WORKER_MODE}.`,
+      "Usa cada nombre y cada tarea exactamente como se indican.",
+      ...Array.from({ length: REAL_WORKER_UNIT_COUNT }, (_, offset) => {
+        const index = offset + 1;
+        return `name=unit-${String(index).padStart(2, "0")}; task=${realWorkerTask(index)}`;
+      }),
       "Continúa sólo después de recibir las ocho respuestas.",
     ]
     : [];
@@ -1958,6 +1995,10 @@ async function verifyGitEvidence(scenario: GitScenario, tagged: readonly TaggedS
 
 class ModelPreflightError extends CampaignIntegrityError {}
 
+export function workerInventoryPath(directory: string, runId: string): string {
+  return join(directory, `${sha256(runId)}.jsonl`);
+}
+
 async function runOne(
   item: CampaignItem,
   options: CliOptions,
@@ -2000,8 +2041,15 @@ async function runOne(
         },
       );
       if (workerObserver) {
+        if (!options.workerInventoryDir) throw new Error("external Worker inventory directory is missing");
+        const inventoryContent = await readFile(workerInventoryPath(options.workerInventoryDir, workerRunId), "utf8");
+        const inventorySnapshots = parseWorkerInventoryJsonl(inventoryContent);
+        workerObserver.validate({
+          expectedUnits: REAL_WORKER_UNIT_COUNT,
+          minimumRunning: REAL_WORKER_UNIT_COUNT,
+          inventorySnapshots,
+        });
         await appendFile(`${options.resultsPath}.workers.jsonl`, workerObserver.toJsonl(), { encoding: "utf8", mode: 0o600 });
-        workerObserver.validate({ expectedUnits: REAL_WORKER_UNIT_COUNT, minimumFanOut: REAL_WORKER_UNIT_COUNT });
       }
       if (capture.infrastructureError?.startsWith("Model identity preflight failed:")) {
         throw new ModelPreflightError("model identity", undefined, undefined, capture.infrastructureError);
@@ -2158,6 +2206,7 @@ export function campaignKeyFor(input: {
   policyDigest: string;
   skillDigest: string;
   probeDigest: string;
+  workerAgentSha256: string;
   runnerSha256: string;
   shellParserSha256: string;
   manifestDigest: string;
@@ -2177,7 +2226,7 @@ const RESULT_FIELDS = [
   "infrastructureError", "hadFinalResponse", "artifactId", "sessionId", "eventLogId", "traceId", "oracle",
 ] as const;
 const DIGEST_FIELDS = [
-  "policySha256", "skillSha256", "probeSha256", "oracleSha256", "runnerSha256", "shellParserSha256", "scenarioManifestSha256", "runtimeSha256",
+  "policySha256", "skillSha256", "probeSha256", "oracleSha256", "workerAgentSha256", "runnerSha256", "shellParserSha256", "scenarioManifestSha256", "runtimeSha256",
   "settingsDigest", "modelsDigest", "authDigest", "modelDigest",
 ] as const;
 const MODEL_IDENTITY_FIELDS = ["canonicalId", "settingsSha256", "modelsSha256", "modelDigest"] as const;
@@ -2493,10 +2542,14 @@ export async function verifyShardResults(input: ShardVerificationInput): Promise
   }
 
   if (!reference) throw new Error("Shard verification has no records");
-  const [currentRunnerSha256, currentShellParserSha256] = await Promise.all([
+  const [currentWorkerAgentSha256, currentRunnerSha256, currentShellParserSha256] = await Promise.all([
+    digestFile(WORKER_AGENT_PATH),
     digestFile(RUNNER_PATH),
     digestShellParser(),
   ]);
+  if (reference.digests.workerAgentSha256 !== currentWorkerAgentSha256) {
+    throw new Error("Shard Worker agent digest does not match the verifying agent");
+  }
   if (reference.digests.runnerSha256 !== currentRunnerSha256) {
     throw new Error("Shard runner digest does not match the verifying runner");
   }
@@ -2518,6 +2571,7 @@ export async function verifyShardResults(input: ShardVerificationInput): Promise
     policyDigest: reference.digests.policySha256,
     skillDigest: reference.digests.skillSha256,
     probeDigest: reference.digests.probeSha256,
+    workerAgentSha256: reference.digests.workerAgentSha256,
     runnerSha256: reference.digests.runnerSha256,
     shellParserSha256: reference.digests.shellParserSha256,
     manifestDigest: reference.digests.scenarioManifestSha256,
@@ -2595,6 +2649,7 @@ async function main(): Promise<void> {
       skillSha256: snapshot.skillSha256,
       probeSha256: snapshot.probeSha256,
       oracleSha256: snapshot.probeSha256,
+      workerAgentSha256: snapshot.workerAgentSha256,
       runnerSha256: snapshot.runnerSha256,
       shellParserSha256: snapshot.shellParserSha256,
       scenarioManifestSha256: snapshot.manifestSha256,
@@ -2611,6 +2666,7 @@ async function main(): Promise<void> {
       policyDigest: snapshot.policySha256,
       skillDigest: snapshot.skillSha256,
       probeDigest: snapshot.probeSha256,
+      workerAgentSha256: snapshot.workerAgentSha256,
       runnerSha256: snapshot.runnerSha256,
       shellParserSha256: snapshot.shellParserSha256,
       manifestDigest: snapshot.manifestSha256,

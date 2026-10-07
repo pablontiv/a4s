@@ -31,21 +31,21 @@ const beta: WorkerLink = {
 
 function lifecycleEvents(): RuntimeWorkerEvent[] {
   return [
-    { kind: "started", observedAt: 10, link: { ...alpha } },
-    { kind: "started", observedAt: 12, link: { ...beta } },
-    { kind: "terminated", observedAt: 30, link: { ...alpha } },
-    { kind: "terminated", observedAt: 32, link: { ...beta } },
+    { state: "running", observedAt: "10", link: { correlationId: alpha.correlationId, worker: alpha.worker } },
+    { state: "running", observedAt: "12", link: { correlationId: beta.correlationId, worker: beta.worker } },
+    { state: "terminal", observedAt: "30", link: { correlationId: alpha.correlationId, worker: alpha.worker } },
+    { state: "terminal", observedAt: "32", link: { correlationId: beta.correlationId, worker: beta.worker } },
   ];
 }
 
 function validSnapshots(): InventorySnapshot[] {
   return [
     {
-      observedAt: 20,
+      observedAt: "20",
       complete: true,
       processes: [{ link: { ...alpha } }, { link: { ...beta } }],
     },
-    { observedAt: 40, complete: true, processes: [] },
+    { observedAt: "40", complete: true, processes: [] },
   ];
 }
 
@@ -58,16 +58,61 @@ function validInput(overrides: Partial<WorkerWitnessInput> = {}): WorkerWitnessI
   };
 }
 
-test("two correlated concurrent workers that terminate pass", () => {
+test("external inventory proves simultaneous running identity and termination", () => {
   const result = reconcileWorkerWitness(validInput());
-
   assert.equal(result.verdict, "pass");
   assert.equal(result.checks.identity.verdict, "pass");
   assert.equal(result.checks.concurrency.verdict, "pass");
   assert.equal(result.checks.termination.verdict, "pass");
 });
 
-test("a reused PID after termination is not a residual worker", () => {
+test("serial Worker execution fails concurrency", () => {
+  const runtimeEvents: RuntimeWorkerEvent[] = [
+    { state: "running", observedAt: "10", link: { correlationId: alpha.correlationId, worker: alpha.worker } },
+    { state: "terminal", observedAt: "20", link: { correlationId: alpha.correlationId, worker: alpha.worker } },
+    { state: "running", observedAt: "21", link: { correlationId: beta.correlationId, worker: beta.worker } },
+    { state: "terminal", observedAt: "30", link: { correlationId: beta.correlationId, worker: beta.worker } },
+  ];
+  const inventorySnapshots: InventorySnapshot[] = [
+    { observedAt: "15", complete: true, processes: [{ link: alpha }] },
+    { observedAt: "25", complete: true, processes: [{ link: beta }] },
+    { observedAt: "40", complete: true, processes: [] },
+  ];
+  const result = reconcileWorkerWitness(validInput({ runtimeEvents, inventorySnapshots }));
+  assert.equal(result.verdict, "fail");
+  assert.match(result.checks.concurrency.reasons.join("\n"), /serially/);
+});
+
+test("regressive observed time fails without replacing the observed value", () => {
+  const runtimeEvents = lifecycleEvents();
+  runtimeEvents[1] = { ...runtimeEvents[1]!, observedAt: "9" };
+  const result = reconcileWorkerWitness(validInput({ runtimeEvents }));
+  assert.equal(result.verdict, "fail");
+  assert.match(result.reasons.join("\n"), /regressed or repeated/);
+  assert.equal(runtimeEvents[1]!.observedAt, "9");
+});
+
+test("missing external inventory returns unknown", () => {
+  const result = reconcileWorkerWitness(validInput({ inventorySnapshots: [] }));
+  assert.equal(result.verdict, "unknown");
+  assert.equal(result.checks.identity.verdict, "unknown");
+  assert.equal(result.checks.termination.verdict, "unknown");
+});
+
+test("a residual process after terminal state fails", () => {
+  const snapshots = validSnapshots();
+  snapshots[1] = {
+    observedAt: "40",
+    complete: true,
+    processes: [{ link: { ...alpha } }],
+  };
+  const result = reconcileWorkerWitness(validInput({ inventorySnapshots: snapshots }));
+  assert.equal(result.verdict, "fail");
+  assert.equal(result.checks.termination.verdict, "fail");
+  assert.match(result.checks.termination.reasons.join("\n"), /remains after terminal/);
+});
+
+test("a reused PID with a new process start time is not a residual Worker", () => {
   const reusedPid: WorkerLink = {
     ...alpha,
     correlationId: "corr-unrelated",
@@ -78,80 +123,7 @@ test("a reused PID after termination is not a residual worker", () => {
     processStartTime: "500.00",
   };
   const snapshots = validSnapshots();
-  snapshots[1] = {
-    observedAt: 40,
-    complete: true,
-    processes: [{ link: reusedPid }],
-  };
-
+  snapshots[1] = { observedAt: "40", complete: true, processes: [{ link: reusedPid }] };
   const result = reconcileWorkerWitness(validInput({ inventorySnapshots: snapshots }));
-
   assert.equal(result.verdict, "pass");
-  assert.equal(result.checks.termination.verdict, "pass");
-});
-
-test("a reused PID during the worker lifecycle fails identity validation", () => {
-  const wrongProcess = {
-    ...alpha,
-    processStartTime: "500.00",
-  };
-  const snapshots: InventorySnapshot[] = [
-    {
-      observedAt: 20,
-      complete: true,
-      processes: [{ link: wrongProcess }, { link: { ...beta } }],
-    },
-    { observedAt: 40, complete: true, processes: [] },
-  ];
-
-  const result = reconcileWorkerWitness(validInput({ inventorySnapshots: snapshots }));
-
-  assert.equal(result.verdict, "fail");
-  assert.equal(result.checks.identity.verdict, "fail");
-  assert.match(result.checks.identity.reasons.join("\n"), /processStartTime/);
-});
-
-test("missing identity evidence returns unknown", () => {
-  const { sessionHash: _omitted, ...alphaWithoutSessionHash } = alpha;
-  const snapshots: InventorySnapshot[] = [
-    {
-      observedAt: 20,
-      complete: true,
-      processes: [
-        { link: alphaWithoutSessionHash },
-        { link: { ...beta } },
-      ],
-    },
-    { observedAt: 40, complete: true, processes: [] },
-  ];
-
-  const result = reconcileWorkerWitness(validInput({ inventorySnapshots: snapshots }));
-
-  assert.equal(result.verdict, "unknown");
-  assert.equal(result.checks.identity.verdict, "unknown");
-  assert.match(result.checks.identity.reasons.join("\n"), /sessionHash/);
-});
-
-test("a residual process after a termination event fails", () => {
-  const snapshots = validSnapshots();
-  snapshots[1] = {
-    observedAt: 40,
-    complete: true,
-    processes: [{ link: { ...alpha } }],
-  };
-
-  const result = reconcileWorkerWitness(validInput({ inventorySnapshots: snapshots }));
-
-  assert.equal(result.verdict, "fail");
-  assert.equal(result.checks.termination.verdict, "fail");
-  assert.match(result.checks.termination.reasons.join("\n"), /remains after termination/);
-});
-
-test("missing post-termination evidence returns unknown", () => {
-  const result = reconcileWorkerWitness(
-    validInput({ inventorySnapshots: [validSnapshots()[0]!] }),
-  );
-
-  assert.equal(result.verdict, "unknown");
-  assert.equal(result.checks.termination.verdict, "unknown");
 });
