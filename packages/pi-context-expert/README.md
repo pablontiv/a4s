@@ -79,31 +79,36 @@ unknown field, invalid mode, or invalid combination fails closed to the
 complete basic configuration (`basic`, `hint`, `off`). The extension does not
 read or write Pi `settings.json`. Provider credentials remain separate.
 
-On `agent_settled`, an enabled Trigger first requires interactive UI, idle
-state, at least 20% use of the active model's context window, no pending
-messages, no cooldown, and an empty editor. It then resolves Pi's effective
-`keepRecentTokens` for the active model and inspects the current projected
-session. The Trigger fails closed unless retaining that recent tail still
-leaves at least one complete older turn for compaction. This conservative gate
-is recalculated after model changes and may omit a valid hint rather than show
-one that `/compact` cannot execute.
+On `agent_settled`, an enabled Trigger first applies Pi lifecycle gates. It
+requires interactive UI, idle state, no pending messages, no active Trigger
+compaction, no cooldown, no rearm block, and an empty editor. It then resolves
+Pi's effective `keepRecentTokens` for the active model and inspects the current
+projected session. The Trigger fails closed unless retaining that recent tail
+still leaves at least one complete older turn for compaction.
 
-Only after those deterministic gates pass does Trigger resolve a credential.
-Trigger checks Pi's stored TypeSafe credential first. It uses
-`TYPESAFE_API_KEY` as the fallback through Pi's native classifier transport.
-The Pi binding converts the real projected messages to the shared core message
-type. It removes the system prompt, thinking blocks, reasoning blocks, and
-images. It sanitizes text and tool input before the shared core builds the
-Trigger state. The shared core clips each tool result to 512 bytes and enforces
-the complete 32,000-byte request limit. The shared core owns the exact `done`
-and `shape` questions, response parser, score formula, and interpolated floor.
-Any Trigger failure returns `wait`.
+The shared core calculates an adaptive floor `F=max(60000, ceil(0.15W))` and
+ceiling `C=max(ceil(0.20W), F+ceil(0.05W))` for context window `W`. Usage below
+`F` does not resolve credentials or call timing Jev. Usage from `F` to `C`
+uses Pi's stored TypeSafe credential first and uses `TYPESAFE_API_KEY` as the
+fallback through Pi's native classifier transport. Usage at or above `C`
+selects compaction without credential resolution or a timing Jev call.
 
-`hint` displays a notification. Persisting `trigger.mode=auto` is the
-operator's durable consent for automatic compaction. No per-session
-acknowledgement or additional command is required. `auto` calls only
-`ctx.compact()`, which enters the existing `session_before_compact` handler.
-Trigger persistence contains only hint/compact cooldown metadata.
+The Pi binding converts projected messages to the shared core message type. It
+removes the system prompt, thinking blocks, reasoning blocks, and images. It
+sanitizes text and tool input before the shared core builds the Trigger state.
+The shared core clips each tool result to 512 bytes and enforces the complete
+32,000-byte request limit. The shared core owns the exact `done` and `shape`
+questions, response parser, score formula, and interpolated quality floor. Any
+semantic Trigger failure returns `wait`.
+
+Both `hint` and `auto` send a positive decision to one `ctx.compact()` call.
+`hint` also displays an informational notification. The call enters the
+existing `session_before_compact` handler. A completed compaction starts a
+300-second cooldown. It also blocks another Trigger decision until context
+usage reaches `max(F, postCompactionTokens + 40000)`. Trigger decisions and
+mechanical gates use versioned technical custom entries in Pi's session JSONL.
+These entries do not contain conversation content, Jev responses, summaries,
+paths, commands, credentials, or raw errors.
 
 Supported Pi versions expose the editor text in TUI mode. The production Trigger uses that
 value unless an embedding supplies the `trigger.editorHasText` runtime gate;

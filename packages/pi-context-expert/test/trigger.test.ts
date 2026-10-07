@@ -69,7 +69,7 @@ test("Pi Trigger uses the core with populated sanitized conversation", async () 
       timestamp: 3,
     },
   ]);
-  const state = buildTriggerState(80_000, 100_000, 0.2, messages);
+  const state = buildTriggerState(62_000, 200_000, 0.2, messages);
   const jev = new StrictTriggerJev();
 
   assert.equal(await evaluateTrigger(createCoreAsker(jev, new AbortController().signal), state), "compact");
@@ -126,6 +126,6 @@ test("Pi applies core decisions only through its existing lifecycle", async () =
   await applyTriggerDecision("compact", "hint", ctx as never);
   await applyTriggerDecision("compact", "auto", ctx as never);
   await applyTriggerDecision("wait", "auto", ctx as never);
-  assert.deepEqual(notifications, ["Compaction suggested: Jev recommends compaction"]);
-  assert.equal(compactCalls, 1);
+  assert.deepEqual(notifications, ["Compaction selected by Context Expert"]);
+  assert.equal(compactCalls, 2);
 });
