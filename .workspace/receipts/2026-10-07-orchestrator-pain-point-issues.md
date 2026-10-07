@@ -23,6 +23,20 @@ Este cambio no modifica código. Este cambio no modifica política. Este cambio 
 - SHA base: `1c448b5954d78b57c9b968781e38550748ba9e37`
 - POC: `ee4d4e546cc6decc3d8cf7354b84f04179d8d06a`
 
+## Demostrado por el POC
+
+- Node observó ocho Workers reales únicos.
+- Los ocho completaron y sus inicios abarcaron 3 ms.
+- El probe detectó `OPERATOR_AGREEMENT_OBSERVED`.
+- AgentEvals 0.0.9 llamó a un juez Pion real y produjo `VETO`.
+
+## No demostrado por el POC
+
+- La vía atómica no fue validada en vivo.
+- La condición terminal no fue validada en vivo.
+- El último canary no completó el flujo integrado de receipts por timeout externo.
+- El POC no está promovido ni fusionado.
+
 ## Issues
 
 1. [#70 feat(orchestrator): añadir una vía atómica para tareas de una unidad](https://github.com/pablontiv/a4s/issues/70)
