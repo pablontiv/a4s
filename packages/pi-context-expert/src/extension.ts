@@ -8,10 +8,13 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import {
   buildTriggerState,
-  evaluateTrigger,
+  evaluateTriggerPolicy,
   triggerFloorPasses,
+  triggerThresholds,
+  TRIGGER_POLICY_VERSION,
   type CompactOptions,
   type TriggerDiagnostic,
+  type TriggerPolicyDecision,
 } from "@a4s/context-expert";
 import {
   buildCoreTranscript,
@@ -57,8 +60,8 @@ import {
   type RetroOptions,
 } from "./retro.ts";
 import {
+  applyTriggerDecision,
   hasConservativeCompactableHistory,
-  localTriggerGatesPass,
   toTriggerMessages,
 } from "./trigger.ts";
 import { StateFitError } from "./state.ts";
@@ -113,7 +116,11 @@ export interface PiContextExpertOptions {
     minimumContextRatio?: number;
     cooldownMs?: number;
     editorHasText?: (ctx: ExtensionContext) => boolean;
-    resolveCompactionSettings?: (ctx: ExtensionContext) => { keepRecentTokens: number };
+    resolveCompactionSettings?: (ctx: ExtensionContext) => {
+      keepRecentTokens: number;
+      enabled?: boolean;
+      reserveTokens?: number;
+    };
   };
   now?: () => Date;
 }
@@ -165,7 +172,9 @@ export function registerPiContextExpert(pi: ExtensionAPI, options: PiContextExpe
   const retroInFlight = new Set<string>();
   const ladderProjectionCache = new Map<string, CachedLadderProjection>();
   const ladderProjectionFailureCache = new Map<string, CachedLadderProjectionFailure>();
-  let autoCompactionInFlight = false;
+  let triggerCompactionInFlight = false;
+  let triggerRearmTokens: number | undefined;
+  let triggerDecisionSequence = 0;
   let recoveredCorpus: CorpusChunk[] = [];
   const now = options.now ?? (() => new Date());
   const recordOperationalFailure = (input: OperationalFailureInput): void =>
@@ -322,7 +331,8 @@ export function registerPiContextExpert(pi: ExtensionAPI, options: PiContextExpe
   pi.on("session_start", (_event, ctx) => {
     pendingByAttempt.clear();
     retroInFlight.clear();
-    autoCompactionInFlight = false;
+    triggerCompactionInFlight = false;
+    triggerRearmTokens = latestTriggerRearmTokens(ctx.sessionManager.getBranch());
     ladderProjectionCache.clear();
     ladderProjectionFailureCache.clear();
     // getBranch is Pi's branch-local view, so reload cannot blend sibling branches.
@@ -343,32 +353,94 @@ export function registerPiContextExpert(pi: ExtensionAPI, options: PiContextExpe
       );
     }
     if (config.trigger.mode === "off") return;
+
     const usage = ctx.getContextUsage();
     const branch = ctx.sessionManager.getBranch();
-    if (
-      config.trigger.mode === "auto" &&
-      (autoCompactionInFlight || latestMessageIsAbortedAssistant(branch))
-    ) return;
     const contextTokens = usage?.tokens ?? 0;
     const contextWindow = usage?.contextWindow ?? 0;
-    const baseInput = {
-      mode: config.trigger.mode,
-      interactive: ctx.hasUI,
-      idle: ctx.isIdle(),
-      contextTokens,
-      contextWindow,
-      minimumContextRatio: triggerMinimumContextRatio,
-      compactableHistory: true,
-      hasPendingWork: ctx.hasPendingMessages(),
-      cooldownActive: hasTriggerCooldown(branch, now(), triggerCooldownMs),
-      editorHasText: editorHasText(ctx),
-    };
     if (!triggerFloorPasses(contextTokens, contextWindow, triggerMinimumContextRatio)) return;
-    if (!localTriggerGatesPass(baseInput)) return;
+
+    const thresholds = triggerThresholds(contextWindow);
+    const observedAt = now();
+    const mode = config.trigger.mode;
+    let nativeOverflowThreshold: number | undefined;
+    const recordTrigger = (input: TriggerDecisionLogInput, decisionId?: string): void => {
+      const timestamp = now();
+      const id = decisionId ?? triggerDecisionId(timestamp, ++triggerDecisionSequence, input);
+      appendTriggerDecision(pi, ctx, timestamp, id, {
+        contextWindowTokens: contextWindow,
+        effectiveFloorTokens: thresholds.floorTokens,
+        effectiveCeilingTokens: thresholds.ceilingTokens,
+        preContextTokens: contextTokens,
+        preRatio: contextTokens / contextWindow,
+        mode,
+        triggerOrigin: "agent_settled",
+        ...(nativeOverflowThreshold === undefined ? {} : { nativeOverflowThreshold }),
+        ...input,
+      });
+    };
+    const block = (reason: TriggerGateReason, extra: Partial<TriggerDecisionLogInput> = {}): void => {
+      recordTrigger({
+        decision: "wait",
+        reason,
+        basis: "mechanical",
+        score: null,
+        floor: null,
+        dispatchOutcome: "not_dispatched",
+        ...extra,
+      });
+    };
+
+    if (triggerCompactionInFlight) {
+      block("compaction_in_flight");
+      return;
+    }
+    if (latestMessageIsAbortedAssistant(branch)) {
+      block("aborted_assistant_tip");
+      return;
+    }
+    if (!ctx.hasUI) {
+      block("non_interactive");
+      return;
+    }
+    if (!ctx.isIdle()) {
+      block("not_idle");
+      return;
+    }
+    if (ctx.hasPendingMessages()) {
+      block("pending_messages");
+      return;
+    }
+    const cooldownRemainingMs = triggerCooldownRemainingMs(branch, observedAt, triggerCooldownMs);
+    if (cooldownRemainingMs > 0) {
+      block("cooldown", { cooldownRemainingMs });
+      return;
+    }
+    if (editorHasText(ctx)) {
+      block("editor_not_empty");
+      return;
+    }
+    if (triggerRearmTokens !== undefined && contextTokens < triggerRearmTokens) {
+      block(
+        "rearm",
+        Number.isFinite(triggerRearmTokens)
+          ? { rearmTokens: triggerRearmTokens }
+          : { rearmStatus: "post_context_unavailable" },
+      );
+      return;
+    }
+    if (triggerRearmTokens !== undefined) triggerRearmTokens = undefined;
 
     let triggerMessages = [] as ReturnType<typeof toTriggerMessages>;
     try {
       const settings = resolveTriggerCompactionSettings(ctx);
+      if (
+        settings.enabled !== false &&
+        typeof settings.reserveTokens === "number" &&
+        Number.isFinite(settings.reserveTokens)
+      ) {
+        nativeOverflowThreshold = Math.max(0, contextWindow - settings.reserveTokens);
+      }
       const projection = ctx.sessionManager.buildSessionProjection();
       const compactableHistory = hasConservativeCompactableHistory(
         projection.entries.map((entry) => ({
@@ -378,9 +450,13 @@ export function registerPiContextExpert(pi: ExtensionAPI, options: PiContextExpe
         settings.keepRecentTokens,
         branch.at(-1)?.type === "compaction",
       );
-      if (!compactableHistory) return;
+      if (!compactableHistory) {
+        block("insufficient_compactable_history");
+        return;
+      }
       triggerMessages = toTriggerMessages(projection.messages);
     } catch {
+      block("projection_failed");
       recordOperationalFailure({
         phase: "trigger",
         code: "internal_failure",
@@ -390,67 +466,106 @@ export function registerPiContextExpert(pi: ExtensionAPI, options: PiContextExpe
       return;
     }
 
-    const ownsAutoAttempt = config.trigger.mode === "auto";
-    if (ownsAutoAttempt) autoCompactionInFlight = true;
+    triggerCompactionInFlight = true;
     let compactionDispatched = false;
+    let policyDecision: TriggerPolicyDecision | undefined;
+    let positiveDecisionId: string | undefined;
     try {
-      const secrets: Array<string | undefined> = [];
-      const jevClient = await createJevClient(ctx, hookTimeoutMs, secrets);
-      const state = buildTriggerState(
-        contextTokens,
-        contextWindow,
-        triggerMinimumContextRatio,
-        triggerMessages,
-        secrets,
-      );
-      const decision = await evaluateTrigger(
-        createCoreAsker(jevClient, ctx.signal ?? new AbortController().signal),
-        state,
-        (diagnostic) => recordOperationalFailure({
-          phase: "trigger",
-          code: triggerDiagnosticCode(diagnostic),
-          reason: "agent_settled",
-          willRetry: true,
-        }),
-      );
-      if (decision === "wait") return;
-      const action = config.trigger.mode === "auto" ? "compact" : "hint";
-      const appendCooldown = () => {
-        try {
-          pi.appendEntry(TRIGGER_COOLDOWN_ENTRY_TYPE, {
-            schema: "a4s.compaction-trigger-cooldown/v1",
-            action,
-            triggeredAt: now().toISOString(),
-          });
-          return true;
-        } catch {
-          return false;
-        }
-      };
-      if (action === "hint") {
-        if (appendCooldown()) ctx.ui.notify("Compaction suggested: Jev recommends compaction", "info");
+      const reportDiagnostic = (diagnostic: TriggerDiagnostic): void => recordOperationalFailure({
+        phase: "trigger",
+        code: triggerDiagnosticCode(diagnostic),
+        reason: "agent_settled",
+        willRetry: true,
+      });
+      if (contextTokens >= thresholds.ceilingTokens) {
+        const state = buildTriggerState(
+          contextTokens,
+          contextWindow,
+          triggerMinimumContextRatio,
+          triggerMessages,
+        );
+        policyDecision = await evaluateTriggerPolicy(
+          { ask: async () => { throw new Error("ceiling must not call Jev"); } },
+          state,
+          reportDiagnostic,
+        );
+      } else {
+        const secrets: Array<string | undefined> = [];
+        const jevClient = await createJevClient(ctx, hookTimeoutMs, secrets);
+        const state = buildTriggerState(
+          contextTokens,
+          contextWindow,
+          triggerMinimumContextRatio,
+          triggerMessages,
+          secrets,
+        );
+        policyDecision = await evaluateTriggerPolicy(
+          createCoreAsker(jevClient, ctx.signal ?? new AbortController().signal),
+          state,
+          reportDiagnostic,
+        );
+      }
+
+      if (policyDecision.decision === "wait") {
+        recordTrigger(policyLogInput(policyDecision, "not_dispatched"));
         return;
       }
 
+      positiveDecisionId = triggerDecisionId(now(), ++triggerDecisionSequence, policyDecision);
+      const appendCooldown = (): void => {
+        try {
+          pi.appendEntry(TRIGGER_COOLDOWN_ENTRY_TYPE, {
+            schema: "a4s.compaction-trigger-cooldown/v1",
+            action: "compact",
+            triggeredAt: now().toISOString(),
+          });
+        } catch {
+          // Cooldown persistence is best-effort. In-flight and rearm state still prevent duplicates.
+        }
+      };
+      await applyTriggerDecision(policyDecision.decision, mode, ctx, {
+        onComplete: (result) => {
+          const postContextTokens = result.estimatedTokensAfter;
+          appendCooldown();
+          if (typeof postContextTokens === "number" && Number.isFinite(postContextTokens)) {
+            triggerRearmTokens = Math.max(thresholds.floorTokens, postContextTokens + 40_000);
+          } else {
+            triggerRearmTokens = Number.POSITIVE_INFINITY;
+          }
+          recordTrigger({
+            ...policyLogInput(policyDecision!, "completed"),
+            ...(typeof postContextTokens === "number" && Number.isFinite(postContextTokens)
+              ? {
+                postContextTokens,
+                actualReclaimTokens: Math.max(0, contextTokens - postContextTokens),
+              }
+              : {}),
+            ...(Number.isFinite(triggerRearmTokens)
+              ? { rearmTokens: triggerRearmTokens, rearmStatus: "armed" as const }
+              : { rearmStatus: "post_context_unavailable" as const }),
+          }, positiveDecisionId);
+          triggerCompactionInFlight = false;
+        },
+        onError: () => {
+          recordTrigger(policyLogInput(policyDecision!, "failed"), positiveDecisionId);
+          triggerCompactionInFlight = false;
+        },
+      });
       compactionDispatched = true;
-      try {
-        ctx.compact({
-          onComplete: () => {
-            appendCooldown();
-            autoCompactionInFlight = false;
-          },
-          onError: () => { autoCompactionInFlight = false; },
-        });
-      } catch {
-        compactionDispatched = false;
-        recordOperationalFailure({
-          phase: "trigger",
-          code: "internal_failure",
-          reason: "agent_settled",
-          willRetry: true,
-        });
-      }
+      recordTrigger(policyLogInput(policyDecision, "dispatched"), positiveDecisionId);
     } catch (error) {
+      recordTrigger({
+        ...(policyDecision
+          ? policyLogInput(policyDecision, "failed")
+          : {
+            decision: "wait",
+            reason: "adapter_failure",
+            basis: "mechanical",
+            score: null,
+            floor: null,
+            dispatchOutcome: "failed",
+          }),
+      }, positiveDecisionId);
       recordOperationalFailure({
         phase: "trigger",
         code: classifyCompactionError(error),
@@ -458,7 +573,7 @@ export function registerPiContextExpert(pi: ExtensionAPI, options: PiContextExpe
         willRetry: true,
       });
     } finally {
-      if (ownsAutoAttempt && !compactionDispatched) autoCompactionInFlight = false;
+      if (!compactionDispatched) triggerCompactionInFlight = false;
     }
   });
 
@@ -581,7 +696,8 @@ export function registerPiContextExpert(pi: ExtensionAPI, options: PiContextExpe
   pi.on("session_shutdown", () => {
     pendingByAttempt.clear();
     retroInFlight.clear();
-    autoCompactionInFlight = false;
+    triggerCompactionInFlight = false;
+    triggerRearmTokens = undefined;
     ladderProjectionCache.clear();
     ladderProjectionFailureCache.clear();
   });
@@ -668,6 +784,115 @@ export function registerPiContextExpert(pi: ExtensionAPI, options: PiContextExpe
 }
 
 const TRIGGER_COOLDOWN_ENTRY_TYPE = "a4s.pi-context-expert.compaction-trigger-cooldown.v1";
+export const TRIGGER_DECISION_ENTRY_TYPE = "a4s.pi-context-expert.trigger-decision.v1";
+
+const TRIGGER_GATE_REASONS = [
+  "compaction_in_flight",
+  "aborted_assistant_tip",
+  "non_interactive",
+  "not_idle",
+  "pending_messages",
+  "cooldown",
+  "editor_not_empty",
+  "rearm",
+  "insufficient_compactable_history",
+  "projection_failed",
+] as const;
+
+type TriggerGateReason = typeof TRIGGER_GATE_REASONS[number];
+type TriggerDispatchOutcome = "not_dispatched" | "dispatched" | "completed" | "failed";
+
+interface TriggerDecisionLogInput {
+  contextWindowTokens?: number;
+  nativeOverflowThreshold?: number;
+  effectiveFloorTokens?: number;
+  effectiveCeilingTokens?: number;
+  preContextTokens?: number;
+  preRatio?: number;
+  postContextTokens?: number;
+  actualReclaimTokens?: number;
+  rearmTokens?: number;
+  rearmStatus?: "armed" | "post_context_unavailable";
+  cooldownRemainingMs?: number;
+  mode?: "hint" | "auto";
+  decision: "wait" | "compact";
+  reason: TriggerPolicyDecision["reason"] | TriggerGateReason | "adapter_failure";
+  basis: TriggerPolicyDecision["basis"] | "mechanical";
+  score: number | null;
+  floor: number | null;
+  triggerOrigin?: "agent_settled";
+  dispatchOutcome: TriggerDispatchOutcome;
+}
+
+function policyLogInput(
+  decision: TriggerPolicyDecision,
+  dispatchOutcome: TriggerDispatchOutcome,
+): TriggerDecisionLogInput {
+  return {
+    decision: decision.decision,
+    reason: decision.reason,
+    basis: decision.basis,
+    score: decision.score,
+    floor: decision.floor,
+    dispatchOutcome,
+  };
+}
+
+function triggerDecisionId(
+  timestamp: Date,
+  sequence: number,
+  input: Pick<TriggerDecisionLogInput, "decision" | "reason">,
+): string {
+  return stableDigest({
+    schema: "a4s.pi-context-expert.trigger-decision-id/v1",
+    timestamp: timestamp.toISOString(),
+    sequence,
+    decision: input.decision,
+    reason: input.reason,
+  });
+}
+
+function appendTriggerDecision(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  timestamp: Date,
+  id: string,
+  input: TriggerDecisionLogInput,
+): void {
+  const model = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined;
+  const timestampText = timestamp.toISOString();
+  try {
+    pi.appendEntry(TRIGGER_DECISION_ENTRY_TYPE, {
+      schema: "a4s.pi-context-expert.trigger-decision/v1",
+      policyVersion: TRIGGER_POLICY_VERSION,
+      adapter: "pi",
+      id,
+      timestamp: timestampText,
+      ...(model === undefined ? {} : { model }),
+      ...input,
+    });
+  } catch {
+    // Trigger observability is best-effort and must not change dispatch.
+  }
+}
+
+function latestTriggerRearmTokens(entries: readonly unknown[]): number | undefined {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const data = customEntryData(entries[index], TRIGGER_DECISION_ENTRY_TYPE);
+    if (
+      data?.schema !== "a4s.pi-context-expert.trigger-decision/v1" ||
+      data.dispatchOutcome !== "completed"
+    ) continue;
+    if (data.rearmStatus === "post_context_unavailable") return Number.POSITIVE_INFINITY;
+    if (
+      typeof data.rearmTokens === "number" &&
+      Number.isFinite(data.rearmTokens) &&
+      data.rearmTokens >= 0
+    ) return data.rearmTokens;
+    return undefined;
+  }
+  return undefined;
+}
 
 function latestMessageIsAbortedAssistant(entries: readonly unknown[]): boolean {
   for (let index = entries.length - 1; index >= 0; index -= 1) {
@@ -690,19 +915,22 @@ function customEntryData(entry: unknown, customType: string): Record<string, unk
   return candidate.data as Record<string, unknown>;
 }
 
-function hasTriggerCooldown(entries: readonly unknown[], current: Date, cooldownMs: number): boolean {
-  if (!Number.isFinite(cooldownMs) || cooldownMs <= 0) return false;
+function triggerCooldownRemainingMs(entries: readonly unknown[], current: Date, cooldownMs: number): number {
+  if (!Number.isFinite(cooldownMs) || cooldownMs <= 0) return 0;
   const currentMs = current.getTime();
-  return entries.some((entry) => {
+  let remainingMs = 0;
+  for (const entry of entries) {
     const data = customEntryData(entry, TRIGGER_COOLDOWN_ENTRY_TYPE);
     if (
       data?.schema !== "a4s.compaction-trigger-cooldown/v1" ||
       (data.action !== "hint" && data.action !== "compact") ||
       typeof data.triggeredAt !== "string"
-    ) return false;
+    ) continue;
     const triggeredAt = Date.parse(data.triggeredAt);
-    return Number.isFinite(triggeredAt) && triggeredAt <= currentMs && currentMs - triggeredAt < cooldownMs;
-  });
+    if (!Number.isFinite(triggeredAt) || triggeredAt > currentMs) continue;
+    remainingMs = Math.max(remainingMs, cooldownMs - (currentMs - triggeredAt));
+  }
+  return Math.max(0, remainingMs);
 }
 
 type CandidateResolution =

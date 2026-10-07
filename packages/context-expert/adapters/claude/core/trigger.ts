@@ -1,5 +1,6 @@
 // Parte del core de compactación Jev de @a4s/context-expert.
-// El timing del trigger y la conversación limitada derivan de compact-adviser.
+// El timing semántico y la conversación limitada derivan de compact-adviser.
+// Las bandas adaptativas y el techo determinista son una extensión de A4S.
 // Commit ef216af7cb639947bb4642fdf063117f12a91fc6. Licencia MIT.
 // https://github.com/kunchenguid/compact-adviser
 // Consulte ../NOTICE.
@@ -7,8 +8,10 @@
 import { JevRequestError, type JevRequestErrorCode } from './request.js';
 import type { JevAsker, JevQuestions, JevState, Message } from './types.js';
 
-/** Uso de contexto predeterminado por debajo del cual el trigger no llama a Jev. */
+/** Uso de contexto predeterminado conservado para compatibilidad de configuración. */
 export const DEFAULT_MINIMUM_CONTEXT_RATIO = 0.5;
+export const TRIGGER_POLICY_VERSION = 'a4s.compaction-trigger-policy/v1';
+export const MINIMUM_CONTEXT_TOKENS = 60_000;
 export const MAX_REQUEST_BYTES = 32_000;
 export const RECENT_TAIL_MESSAGES = 64;
 export const TOOL_RESULT_BUDGET = 512;
@@ -76,6 +79,35 @@ export interface Judgment {
 }
 
 export type TriggerDecision = 'compact' | 'wait';
+export type TriggerDecisionBasis = 'below_floor' | 'semantic' | 'ceiling';
+export type TriggerDecisionReason =
+  | 'below_adaptive_floor'
+  | 'semantic_score_meets_floor'
+  | 'semantic_score_below_floor'
+  | 'adaptive_ceiling'
+  | 'request_failed'
+  | 'request_too_large'
+  | 'invalid_answer';
+
+export interface TriggerThresholds {
+  floorTokens: number;
+  ceilingTokens: number;
+}
+
+/** Decisión normalizada sin contenido de conversación. */
+export interface TriggerPolicyDecision extends TriggerThresholds {
+  policyVersion: typeof TRIGGER_POLICY_VERSION;
+  tokens: number;
+  ratio: number;
+  decision: TriggerDecision;
+  reason: TriggerDecisionReason;
+  basis: TriggerDecisionBasis;
+  score: number | null;
+  floor: number;
+  done: Choice | null;
+  shape: Choice | null;
+}
+
 export type TriggerDiagnosticCode =
   | JevRequestErrorCode
   | 'request_failed'
@@ -237,7 +269,17 @@ export function buildTriggerState(
   };
 }
 
-/** El gate local rechaza valores inválidos y valores inferiores al mínimo. */
+/** Calcula F y C para una ventana de contexto válida. */
+export function triggerThresholds(contextWindow: number): TriggerThresholds {
+  const floorTokens = Math.max(MINIMUM_CONTEXT_TOKENS, Math.ceil(0.15 * contextWindow));
+  const ceilingTokens = Math.max(
+    Math.ceil(0.20 * contextWindow),
+    floorTokens + Math.ceil(0.05 * contextWindow),
+  );
+  return { floorTokens, ceilingTokens };
+}
+
+/** El gate local rechaza valores inválidos y valores inferiores a F. */
 export function triggerFloorPasses(
   contextTokens: number,
   contextWindow: number,
@@ -251,7 +293,7 @@ export function triggerFloorPasses(
     Number.isFinite(minimumContextRatio) &&
     minimumContextRatio > 0 &&
     minimumContextRatio <= 1 &&
-    contextTokens / contextWindow >= minimumContextRatio
+    contextTokens >= triggerThresholds(contextWindow).floorTokens
   );
 }
 
@@ -353,17 +395,61 @@ function reportDiagnostic(reporter: TriggerDiagnosticReporter | undefined, diagn
   }
 }
 
-/** Llama a Jev. Cada fallo de request o respuesta devuelve wait. */
-export async function evaluateTrigger(
+function policyDecision(
+  state: TriggerState,
+  thresholds: TriggerThresholds,
+  input: Omit<TriggerPolicyDecision, keyof TriggerThresholds | 'policyVersion' | 'tokens' | 'ratio' | 'floor'>,
+): TriggerPolicyDecision {
+  return {
+    policyVersion: TRIGGER_POLICY_VERSION,
+    tokens: state.contextTokens,
+    ratio: state.contextRatio,
+    ...thresholds,
+    floor: floorFor(state.contextRatio),
+    ...input,
+  };
+}
+
+/** Aplica las bandas adaptativas y llama a Jev sólo en la banda semántica. */
+export async function evaluateTriggerPolicy(
   asker: JevAsker,
   state: TriggerState,
   reporter?: TriggerDiagnosticReporter,
-): Promise<TriggerDecision> {
+): Promise<TriggerPolicyDecision> {
+  const thresholds = triggerThresholds(state.contextWindow);
+  if (state.contextTokens < thresholds.floorTokens) {
+    return policyDecision(state, thresholds, {
+      decision: 'wait',
+      reason: 'below_adaptive_floor',
+      basis: 'below_floor',
+      score: null,
+      done: null,
+      shape: null,
+    });
+  }
+  if (state.contextTokens >= thresholds.ceilingTokens) {
+    return policyDecision(state, thresholds, {
+      decision: 'compact',
+      reason: 'adaptive_ceiling',
+      basis: 'ceiling',
+      score: null,
+      done: null,
+      shape: null,
+    });
+  }
+
   try {
     requestBody(state);
   } catch {
     reportDiagnostic(reporter, { code: 'request_too_large', phase: 'request' });
-    return 'wait';
+    return policyDecision(state, thresholds, {
+      decision: 'wait',
+      reason: 'request_too_large',
+      basis: 'semantic',
+      score: null,
+      done: null,
+      shape: null,
+    });
   }
 
   let response: unknown;
@@ -380,13 +466,50 @@ export async function evaluateTrigger(
     } else {
       reportDiagnostic(reporter, { code: 'request_failed', phase: 'request' });
     }
-    return 'wait';
+    return policyDecision(state, thresholds, {
+      decision: 'wait',
+      reason: 'request_failed',
+      basis: 'semantic',
+      score: null,
+      done: null,
+      shape: null,
+    });
   }
 
   try {
-    return qualifies(parseJudgment(response), state.contextRatio) ? 'compact' : 'wait';
+    const judgment = parseJudgment(response);
+    const semanticScore = score(judgment);
+    const semanticFloor = floorFor(state.contextRatio);
+    const decision = semanticScore >= semanticFloor ? 'compact' : 'wait';
+    return {
+      ...policyDecision(state, thresholds, {
+        decision,
+        reason: decision === 'compact' ? 'semantic_score_meets_floor' : 'semantic_score_below_floor',
+        basis: 'semantic',
+        score: semanticScore,
+        done: judgment.done,
+        shape: judgment.shape,
+      }),
+      floor: semanticFloor,
+    };
   } catch {
     reportDiagnostic(reporter, { code: 'invalid_answer', phase: 'response' });
-    return 'wait';
+    return policyDecision(state, thresholds, {
+      decision: 'wait',
+      reason: 'invalid_answer',
+      basis: 'semantic',
+      score: null,
+      done: null,
+      shape: null,
+    });
   }
+}
+
+/** API compatible que devuelve sólo la acción de la política compartida. */
+export async function evaluateTrigger(
+  asker: JevAsker,
+  state: TriggerState,
+  reporter?: TriggerDiagnosticReporter,
+): Promise<TriggerDecision> {
+  return (await evaluateTriggerPolicy(asker, state, reporter)).decision;
 }

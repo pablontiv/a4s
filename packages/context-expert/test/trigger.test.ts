@@ -6,6 +6,7 @@ import {
   buildTriggerState,
   clipMiddle,
   evaluateTrigger,
+  evaluateTriggerPolicy,
   FLOOR_MAX,
   FLOOR_MIN,
   floorFor,
@@ -16,7 +17,9 @@ import {
   requestBody,
   score,
   TOOL_RESULT_BUDGET,
+  TRIGGER_POLICY_VERSION,
   triggerFloorPasses,
+  triggerThresholds,
   USAGE_LOOSE_AT,
   USAGE_STRICT_UNTIL,
 } from '../core/index.js';
@@ -206,15 +209,62 @@ test('trigger: aplica el límite exacto de 32,000 bytes por request', () => {
   assert.throws(() => requestBody({ text: 'x'.repeat(MAX_REQUEST_BYTES - base + 1) }));
 });
 
-test('trigger: decide con el score y envía solo las dos preguntas', async () => {
-  const state = buildTriggerState(50_000, 100_000, 0.5);
+test('trigger: aplica F, banda semántica y C con metadata normalizada', async () => {
+  assert.deepEqual(triggerThresholds(128_000), { floorTokens: 60_000, ceilingTokens: 66_400 });
+  assert.deepEqual(triggerThresholds(200_000), { floorTokens: 60_000, ceilingTokens: 70_000 });
+  assert.deepEqual(triggerThresholds(272_000), { floorTokens: 60_000, ceilingTokens: 73_600 });
+  assert.deepEqual(triggerThresholds(872_000), { floorTokens: 130_800, ceilingTokens: 174_400 });
+
+  let calls = 0;
+  const forbidden: JevAsker = {
+    async ask() {
+      calls += 1;
+      throw new Error('Jev no debe ejecutarse fuera de la banda semántica');
+    },
+  };
+  const below = await evaluateTriggerPolicy(forbidden, buildTriggerState(59_999, 200_000));
+  assert.deepEqual(below, {
+    policyVersion: TRIGGER_POLICY_VERSION,
+    tokens: 59_999,
+    ratio: 59_999 / 200_000,
+    floorTokens: 60_000,
+    ceilingTokens: 70_000,
+    decision: 'wait',
+    reason: 'below_adaptive_floor',
+    basis: 'below_floor',
+    score: null,
+    floor: floorFor(59_999 / 200_000),
+    done: null,
+    shape: null,
+  });
+
+  const state = buildTriggerState(60_000, 200_000);
   const { asker, seen } = askerAnswering(answer(0.95, 0.95));
-  assert.equal(await evaluateTrigger(asker, state), 'compact');
+  const semantic = await evaluateTriggerPolicy(asker, state);
+  assert.equal(semantic.decision, 'compact');
+  assert.equal(semantic.reason, 'semantic_score_meets_floor');
+  assert.equal(semantic.basis, 'semantic');
+  assert.equal(semantic.score, score(parseJudgment(answer(0.95, 0.95))));
+  assert.equal(semantic.floor, floorFor(0.3));
+  assert.deepEqual(semantic.done, parseJudgment(answer(0.95, 0.95)).done);
+  assert.deepEqual(semantic.shape, parseJudgment(answer(0.95, 0.95)).shape);
   assert.equal(seen.state, state);
   assert.deepEqual(seen.questions, QUESTIONS);
 
   const low = askerAnswering(answer(0.6, 0.6));
-  assert.equal(await evaluateTrigger(low.asker, state), 'wait');
+  const semanticWait = await evaluateTriggerPolicy(low.asker, state);
+  assert.equal(semanticWait.decision, 'wait');
+  assert.equal(semanticWait.reason, 'semantic_score_below_floor');
+  assert.equal(semanticWait.basis, 'semantic');
+
+  const ceiling = await evaluateTriggerPolicy(forbidden, buildTriggerState(70_000, 200_000));
+  assert.equal(ceiling.decision, 'compact');
+  assert.equal(ceiling.reason, 'adaptive_ceiling');
+  assert.equal(ceiling.basis, 'ceiling');
+  assert.equal(ceiling.score, null);
+  assert.equal(calls, 0);
+
+  assert.equal(await evaluateTrigger(askerAnswering(answer()).asker, state), 'compact');
 });
 
 test('trigger: conserva wait y diagnóstico seguro ante cualquier fallo', async () => {
@@ -226,7 +276,7 @@ test('trigger: conserva wait y diagnóstico seguro ante cualquier fallo', async 
   };
   let diagnostic: TriggerDiagnostic | undefined;
   assert.equal(
-    await evaluateTrigger(asker, buildTriggerState(90_000, 100_000), (value) => {
+    await evaluateTrigger(asker, buildTriggerState(62_000, 100_000), (value) => {
       diagnostic = value;
     }),
     'wait',
@@ -236,7 +286,7 @@ test('trigger: conserva wait y diagnóstico seguro ante cualquier fallo', async 
 
   diagnostic = undefined;
   assert.equal(
-    await evaluateTrigger({ async ask() { return { answers: {} }; } }, buildTriggerState(90_000, 100_000), (value) => {
+    await evaluateTrigger({ async ask() { return { answers: {} }; } }, buildTriggerState(62_000, 100_000), (value) => {
       diagnostic = value;
     }),
     'wait',
@@ -245,8 +295,8 @@ test('trigger: conserva wait y diagnóstico seguro ante cualquier fallo', async 
 });
 
 test('trigger: mantiene el gate local para entradas válidas', () => {
-  assert.equal(triggerFloorPasses(40_000, 100_000, 0.5), false);
-  assert.equal(triggerFloorPasses(50_000, 100_000, 0.5), true);
+  assert.equal(triggerFloorPasses(59_999, 100_000, 0.5), false);
+  assert.equal(triggerFloorPasses(60_000, 100_000, 0.5), true);
   assert.equal(triggerFloorPasses(90_000, 0, 0.5), false);
   assert.equal(triggerFloorPasses(Number.NaN, 100_000, 0.5), false);
   assert.equal(triggerFloorPasses(90_000, 100_000, 0), false);

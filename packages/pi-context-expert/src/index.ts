@@ -84,6 +84,7 @@ export { applyContextProjection } from "./projection.ts";
 export {
   LADDER_PROJECTION_FAILURE_TYPE,
   LADDER_PROJECTION_RECEIPT_TYPE,
+  TRIGGER_DECISION_ENTRY_TYPE,
   registerPiContextExpert,
   type PiContextExpertOptions,
 } from "./extension.ts";
@@ -161,11 +162,14 @@ export {
   buildRecentConversation,
   buildTriggerState,
   evaluateTrigger,
+  evaluateTriggerPolicy,
   hasConservativeCompactableHistory,
   localTriggerGatesPass,
   toTriggerMessages,
   triggerFloorPasses,
+  triggerThresholds,
   type PiTriggerGateInput,
+  type TriggerPolicyDecision,
   type TriggerProjectionEntry,
 } from "./trigger.ts";
 export {

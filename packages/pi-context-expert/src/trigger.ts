@@ -11,7 +11,10 @@ export {
   buildRecentConversation,
   buildTriggerState,
   evaluateTrigger,
+  evaluateTriggerPolicy,
   triggerFloorPasses,
+  triggerThresholds,
+  type TriggerPolicyDecision,
 } from "@a4s/context-expert";
 
 export interface PiTriggerGateInput {
@@ -103,16 +106,20 @@ export function toTriggerMessages(agentMessages: readonly unknown[]): Message[] 
   return messages;
 }
 
-/** Applies a shared-core decision through Pi's existing lifecycle. */
+/** Applies a positive shared-core decision through Pi's existing lifecycle exactly once. */
 export async function applyTriggerDecision(
   decision: TriggerDecision,
   mode: Exclude<TriggerMode, "off">,
   ctx: ExtensionContext,
+  options?: Parameters<ExtensionContext["compact"]>[0],
 ): Promise<void> {
   if (decision === "wait") return;
   if (mode === "hint") {
-    ctx.ui.notify("Compaction suggested: Jev recommends compaction", "info");
-    return;
+    try {
+      ctx.ui.notify("Compaction selected by Context Expert", "info");
+    } catch {
+      // The informational hint must not replace or block compaction.
+    }
   }
-  await ctx.compact();
+  ctx.compact(options);
 }

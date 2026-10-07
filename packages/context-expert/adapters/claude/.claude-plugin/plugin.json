@@ -1,7 +1,7 @@
 {
   "name": "a4s-context-expert",
-  "version": "0.3.0",
-  "description": "Jev-guided deterministic compaction for Claude Code: replaces the native summary with a keep/truncate/drop transcript scored by TypeSafe Jev, and auto-compacts when Jev decides the moment is right.",
+  "version": "0.3.1",
+  "description": "Jev-guided deterministic compaction for Claude Code with the shared adaptive trigger policy and keep/truncate/drop transcript selection.",
   "license": "UNLICENSED",
   "author": {
     "name": "pablontiv"
@@ -28,13 +28,13 @@
     "triggerMode": {
       "type": "string",
       "title": "Auto-compact trigger mode",
-      "description": "off | hint | auto. 'auto' lets Jev decide when to compact; 'hint' only suggests /compact; 'off' disables the trigger. Analogous to pi-context-expert trigger.mode.",
+      "description": "off | hint | auto. Both 'hint' and 'auto' compact after a positive shared-policy decision; 'hint' also shows an informational notice. 'off' disables the trigger.",
       "default": "auto"
     },
     "minimumContextRatio": {
       "type": "number",
-      "title": "Minimum context ratio before asking Jev",
-      "description": "Context-window fill (0..1) below which the trigger never asks Jev. Above it, Jev decides whether now is the ideal moment to compact.",
+      "title": "Legacy minimum context ratio",
+      "description": "Validated compatibility setting. The shared adaptive policy computes its token floor and ceiling from the model context window.",
       "default": 0.5
     },
     "minReductionRatio": {

@@ -5,9 +5,9 @@
 // only (a) binds Claude's SessionMessage transcript to the core via a
 // HostBinding, (b) registers the `session.compact` hook to replace the native
 // summary with the core's rebuilt message array, and (c) registers a
-// `turn.complete` trigger that, past a local context-fill floor, asks Jev
-// whether now is the ideal moment to compact and acts only when Jev says so
-// (the Claude analog of pi-context-expert's `trigger.mode: auto`).
+// `turn.complete` trigger that applies the shared adaptive policy. It asks the
+// timing Jev only between the policy floor and ceiling. A positive decision in
+// either active mode dispatches one host compaction.
 //
 // Jev runs over the engine's `$.http.fetch` against the TypeSafe System One
 // endpoint; the API key resolves from userConfig, then TYPESAFE_API_KEY, then
@@ -41,11 +41,14 @@ import { runCompaction, type HostBinding } from '../core/binding.js';
 import {
   buildTriggerState,
   DEFAULT_MINIMUM_CONTEXT_RATIO,
-  evaluateTrigger,
+  evaluateTriggerPolicy,
   MAX_REQUEST_BYTES,
   triggerFloorPasses,
+  triggerThresholds,
+  TRIGGER_POLICY_VERSION,
   type TriggerDiagnostic,
   type TriggerDiagnosticCode,
+  type TriggerPolicyDecision,
 } from '../core/trigger.js';
 import type {
   CompactOptions,
@@ -66,9 +69,11 @@ const HOOK_DEFAULTS = {
   model: DEFAULT_MODEL,
 };
 
-/** Minimum ms between auto-compactions, so the trigger never hammers Jev. */
-const TRIGGER_COOLDOWN_MS = 60_000;
+/** Minimum ms between trigger compactions, so the trigger never hammers Jev. */
+export const TRIGGER_COOLDOWN_MS = 300_000;
+const TRIGGER_REARM_DELTA_TOKENS = 40_000;
 export const JEV_TIMEOUT_MS = 2_000;
+export const TRIGGER_DECISION_EVENT = 'a4s.claude-context-expert.trigger-decision.v1';
 
 export type HookFetchInit = { method?: string; headers?: Record<string, string>; body?: string };
 export type HookFetchResponse = { status: number; ok: boolean; text: string };
@@ -402,11 +407,109 @@ function logTriggerDiagnostic(
   });
 }
 
+type TriggerDispatchOutcome = 'not_dispatched' | 'completed' | 'failed';
+type TriggerGateReason = 'cooldown' | 'rearm';
+
+interface TriggerDecisionLogInput {
+  contextWindowTokens: number;
+  nativeOverflowThreshold?: number;
+  effectiveFloorTokens: number;
+  effectiveCeilingTokens: number;
+  preContextTokens: number;
+  preRatio: number;
+  postContextTokens?: number;
+  actualReclaimTokens?: number;
+  rearmTokens?: number;
+  rearmStatus?: 'armed' | 'post_context_unavailable';
+  cooldownRemainingMs?: number;
+  mode: Exclude<TriggerMode, 'off'>;
+  decision: 'wait' | 'compact';
+  reason: TriggerPolicyDecision['reason'] | TriggerGateReason | 'adapter_failure';
+  basis: TriggerPolicyDecision['basis'] | 'mechanical';
+  score: number | null;
+  floor: number | null;
+  triggerOrigin: 'turn.complete';
+  dispatchOutcome: TriggerDispatchOutcome;
+}
+
+function policyLogInput(
+  decision: TriggerPolicyDecision,
+  dispatchOutcome: TriggerDispatchOutcome,
+): Pick<TriggerDecisionLogInput, 'decision' | 'reason' | 'basis' | 'score' | 'floor' | 'dispatchOutcome'> {
+  return {
+    decision: decision.decision,
+    reason: decision.reason,
+    basis: decision.basis,
+    score: decision.score,
+    floor: decision.floor,
+    dispatchOutcome,
+  };
+}
+
+function opaqueTriggerId(timestamp: string, turnId: string, sequence: number): string {
+  let hash = 0x811c9dc5;
+  for (const codePoint of `${timestamp}:${turnId}:${sequence}`) {
+    hash ^= codePoint.codePointAt(0) ?? 0;
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return `td-${(hash >>> 0).toString(16).padStart(8, '0')}-${sequence.toString(36)}`;
+}
+
+/** Emits only normalized policy metadata through Claude's existing UI/debug log. */
+export function logTriggerDecision(
+  $: { ui: { log: (text: string) => void } },
+  timestamp: Date,
+  turnId: string,
+  sequence: number,
+  model: string,
+  input: TriggerDecisionLogInput,
+): void {
+  const timestampText = timestamp.toISOString();
+  const record = {
+    event: TRIGGER_DECISION_EVENT,
+    schema: 'a4s.claude-context-expert.trigger-decision/v1',
+    policyVersion: TRIGGER_POLICY_VERSION,
+    adapter: 'claude',
+    id: opaqueTriggerId(timestampText, turnId, sequence),
+    timestamp: timestampText,
+    model,
+    ...input,
+  };
+  try {
+    $.ui.log(`[context-expert] ${JSON.stringify(record)}`);
+  } catch {
+    // Trigger observability is best-effort and must not change dispatch.
+  }
+}
+
+function compactedTokensAfter(result: unknown): number | undefined {
+  if (!result || typeof result !== 'object' || Array.isArray(result)) return undefined;
+  const tokensAfter = (result as { tokensAfter?: unknown }).tokensAfter;
+  return typeof tokensAfter === 'number' && Number.isFinite(tokensAfter) && tokensAfter >= 0
+    ? tokensAfter
+    : undefined;
+}
+
+function compactWasSkipped(result: unknown): boolean {
+  return !!result && typeof result === 'object' && !Array.isArray(result) &&
+    typeof (result as { skip?: unknown }).skip === 'string';
+}
+
+/** The only positive-trigger dispatch path for both hint and auto mode. */
+async function dispatchCompaction(
+  $: { session: { compact: () => Promise<unknown> } },
+): Promise<unknown> {
+  return $.session.compact();
+}
+
 export const register: Register = (on: On, options: PluginOptions) => {
   const configured = resolveHookConfig(options);
   let compacting = false;
+  let triggerEvaluationActive = false;
   let triggerRequestActive = false;
-  let lastCompactAt = 0;
+  let lastTriggerAt = 0;
+  let triggerRearmTokens: number | undefined;
+  let triggerDecisionSequence = 0;
 
   on('session.compact', async ($, event, next) => {
     try {
@@ -436,81 +539,208 @@ export const register: Register = (on: On, options: PluginOptions) => {
     }
   });
 
-  // The Jev-decided trigger: it does NOT compact at a fixed percentage. Past a
-  // local floor it asks Jev "is now the ideal moment?" and acts only on
-  // `compact` — the Claude analog of pi-context-expert's `trigger.mode: auto`.
+  // The shared policy uses an adaptive floor and ceiling. It asks timing Jev
+  // only in the semantic band. Both positive modes use one compaction path.
   on('turn.complete', async ($, event: TurnCompleteInput, next) => {
     if (
       configured.triggerMode === 'off' ||
       compacting ||
+      triggerEvaluationActive ||
       triggerRequestActive ||
       event.agentId !== undefined ||
       event.isAborted ||
       event.reason !== 'answer' ||
       event.answer.trim() === ''
     ) return next(event);
+
+    triggerEvaluationActive = true;
     try {
-      if (Date.now() - lastCompactAt < TRIGGER_COOLDOWN_MS) return next(event);
-
-      const { context } = await $.session.usage();
+      const { context } = await $.session.usage({ breakdown: 'summary' });
       const contextWindow = context.window;
-      const contextTokens =
-        context.tokens ?? (typeof context.percent === 'number' ? (context.percent / 100) * contextWindow : 0);
+      const contextTokens = context.tokens;
 
-      // Local floor gate first — never spend a Jev call on a near-empty window.
-      if (!triggerFloorPasses(contextTokens, contextWindow, configured.minimumContextRatio)) return next(event);
+      // Claude exposes exact input tokens after a response. Never derive them
+      // from the rounded percentage when that exact metric is unavailable.
+      if (
+        contextTokens === undefined ||
+        !triggerFloorPasses(contextTokens, contextWindow, configured.minimumContextRatio)
+      ) return next(event);
 
-      const apiKey = await getApiKey($, configured);
-      if (!apiKey) return next(event); // No credential → cannot ask Jev; stay quiet.
+      const thresholds = triggerThresholds(contextWindow);
+      const nativeThreshold = context.breakdown?.autoCompactThreshold;
+      const nativeOverflowThreshold =
+        typeof nativeThreshold === 'number' && Number.isFinite(nativeThreshold)
+          ? nativeThreshold
+          : undefined;
+      let model = event.usage?.model;
+      if (!model) {
+        try {
+          model = await $.session.model();
+        } catch {
+          model = 'unknown';
+        }
+      }
+      const mode: Exclude<TriggerMode, 'off'> =
+        configured.triggerMode === 'hint' ? 'hint' : 'auto';
+      const recordTrigger = (
+        input: Omit<TriggerDecisionLogInput,
+          | 'contextWindowTokens'
+          | 'nativeOverflowThreshold'
+          | 'effectiveFloorTokens'
+          | 'effectiveCeilingTokens'
+          | 'preContextTokens'
+          | 'preRatio'
+          | 'mode'
+          | 'triggerOrigin'>,
+      ): void => {
+        logTriggerDecision($, new Date(), event.turnId, ++triggerDecisionSequence, model, {
+          contextWindowTokens: contextWindow,
+          effectiveFloorTokens: thresholds.floorTokens,
+          effectiveCeilingTokens: thresholds.ceilingTokens,
+          preContextTokens: contextTokens,
+          preRatio: contextTokens / contextWindow,
+          mode,
+          triggerOrigin: 'turn.complete',
+          ...(nativeOverflowThreshold === undefined ? {} : { nativeOverflowThreshold }),
+          ...input,
+        });
+      };
+      const block = (
+        reason: TriggerGateReason,
+        extra: Partial<Pick<TriggerDecisionLogInput, 'cooldownRemainingMs' | 'rearmTokens'>> = {},
+      ): void => {
+        recordTrigger({
+          decision: 'wait',
+          reason,
+          basis: 'mechanical',
+          score: null,
+          floor: null,
+          dispatchOutcome: 'not_dispatched',
+          ...extra,
+        });
+      };
 
-      const asker = jevAsker(
-        async (url, init) => {
-          triggerRequestActive = true;
-          try {
-            const response = await $.http.fetch(url, init);
-            return { status: response.status, ok: response.ok, text: response.text };
-          } finally {
-            triggerRequestActive = false;
+      const cooldownRemainingMs = Math.max(0, TRIGGER_COOLDOWN_MS - (Date.now() - lastTriggerAt));
+      if (cooldownRemainingMs > 0) {
+        block('cooldown', { cooldownRemainingMs });
+        return next(event);
+      }
+      if (triggerRearmTokens !== undefined && contextTokens < triggerRearmTokens) {
+        block('rearm', {
+          ...(Number.isFinite(triggerRearmTokens) ? { rearmTokens: triggerRearmTokens } : {}),
+        });
+        return next(event);
+      }
+      if (triggerRearmTokens !== undefined) triggerRearmTokens = undefined;
+
+      let policyDecision: TriggerPolicyDecision | undefined;
+      try {
+        const reportDiagnostic = (diagnostic: TriggerDiagnostic): void => {
+          logTriggerDiagnostic($, diagnostic);
+        };
+        if (contextTokens >= thresholds.ceilingTokens) {
+          policyDecision = await evaluateTriggerPolicy(
+            { ask: async () => { throw new Error('ceiling must not call timing Jev'); } },
+            buildTriggerState(contextTokens, contextWindow, configured.minimumContextRatio),
+            reportDiagnostic,
+          );
+        } else {
+          const apiKey = await getApiKey($, configured);
+          if (!apiKey) {
+            recordTrigger({
+              decision: 'wait',
+              reason: 'adapter_failure',
+              basis: 'mechanical',
+              score: null,
+              floor: null,
+              dispatchOutcome: 'failed',
+            });
+            return next(event);
           }
-        },
-        apiKey,
-        configured.model,
-        MAX_REQUEST_BYTES,
-        (ms) => $.clock.sleep(ms, { signal: next.signal }),
-      );
-      const messages = await $.session.messages();
-      let triggerDiagnostic: TriggerDiagnostic | undefined;
-      const decision = await evaluateTrigger(
-        asker,
-        buildTriggerState(
-          contextTokens,
-          contextWindow,
-          configured.minimumContextRatio,
-          messages as unknown as readonly Message[],
-          [apiKey],
-        ),
-        (diagnostic) => {
-          triggerDiagnostic = diagnostic;
-        },
-      );
-      if (triggerDiagnostic) {
-        logTriggerDiagnostic($, triggerDiagnostic);
-        return next(event);
-      }
-      if (decision !== 'compact') return next(event);
+          const asker = jevAsker(
+            async (url, init) => {
+              triggerRequestActive = true;
+              try {
+                const response = await $.http.fetch(url, init);
+                return { status: response.status, ok: response.ok, text: response.text };
+              } finally {
+                triggerRequestActive = false;
+              }
+            },
+            apiKey,
+            configured.model,
+            MAX_REQUEST_BYTES,
+            (ms) => $.clock.sleep(ms, { signal: next.signal }),
+          );
+          const messages = await $.session.messages();
+          policyDecision = await evaluateTriggerPolicy(
+            asker,
+            buildTriggerState(
+              contextTokens,
+              contextWindow,
+              configured.minimumContextRatio,
+              messages as unknown as readonly Message[],
+              [apiKey],
+            ),
+            reportDiagnostic,
+          );
+        }
 
-      if (configured.triggerMode === 'hint') {
-        notify($, 'Jev suggests compacting now — run /compact');
-        return next(event);
-      }
+        if (policyDecision.decision === 'wait') {
+          recordTrigger(policyLogInput(policyDecision, 'not_dispatched'));
+          return next(event);
+        }
 
-      compacting = true;
-      lastCompactAt = Date.now();
-      await $.session.compact();
+        if (mode === 'hint') notify($, 'context policy selected compaction');
+        lastTriggerAt = Date.now();
+        compacting = true;
+        let compactResult: unknown;
+        try {
+          compactResult = await dispatchCompaction($);
+        } finally {
+          compacting = false;
+        }
+        if (compactWasSkipped(compactResult)) {
+          recordTrigger(policyLogInput(policyDecision, 'failed'));
+          return next(event);
+        }
+
+        const postContextTokens = compactedTokensAfter(compactResult);
+        if (postContextTokens === undefined) {
+          triggerRearmTokens = Number.POSITIVE_INFINITY;
+          recordTrigger({
+            ...policyLogInput(policyDecision, 'completed'),
+            rearmStatus: 'post_context_unavailable',
+          });
+        } else {
+          triggerRearmTokens = Math.max(thresholds.floorTokens, postContextTokens + TRIGGER_REARM_DELTA_TOKENS);
+          recordTrigger({
+            ...policyLogInput(policyDecision, 'completed'),
+            postContextTokens,
+            actualReclaimTokens: Math.max(0, contextTokens - postContextTokens),
+            rearmTokens: triggerRearmTokens,
+            rearmStatus: 'armed',
+          });
+        }
+      } catch (error) {
+        recordTrigger(
+          policyDecision
+            ? policyLogInput(policyDecision, 'failed')
+            : {
+              decision: 'wait',
+              reason: 'adapter_failure',
+              basis: 'mechanical',
+              score: null,
+              floor: null,
+              dispatchOutcome: 'failed',
+            },
+        );
+        logSafeError($, 'trigger_host', error);
+      }
     } catch (error) {
       logSafeError($, 'trigger_host', error);
     } finally {
-      compacting = false;
+      triggerEvaluationActive = false;
     }
     return next(event);
   });

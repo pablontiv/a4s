@@ -21,13 +21,14 @@ import piContextExpertExtension, {
   RULE_SIGNAL_ENTRY_TYPE,
   stableDigest,
   stageCorpus,
+  TRIGGER_DECISION_ENTRY_TYPE,
   type JevClient,
   type RuleSignalBatch,
   type JevCompactionResult,
   type JevRequest,
 } from "../src/index.ts";
 import { collectOperationalFailureReceipts } from "../src/storage.ts";
-import { validJevResponse } from "./fixtures.ts";
+import { choiceAnswer, validJevResponse } from "./fixtures.ts";
 
 type EventHandler = (event: unknown, context: unknown) => unknown;
 type CommandHandler = (args: string, context: unknown) => Promise<void>;
@@ -97,6 +98,7 @@ function createContext(
         return undefined;
       },
     },
+    compact: () => undefined,
   };
   return { context, notifications };
 }
@@ -244,6 +246,20 @@ class CompactTriggerJev extends ValidFakeJev {
     this.requests.push(request);
     assert.deepEqual(Object.keys(request.questions), ["done", "shape"]);
     return validJevResponse(request);
+  }
+}
+
+class WaitTriggerJev extends ValidFakeJev {
+  override async evaluate(request: JevRequest): Promise<unknown> {
+    this.calls += 1;
+    this.requests.push(request);
+    return validJevResponse(request, (id, question) => {
+      if (question.type !== "choice") return undefined;
+      return choiceAnswer(
+        Object.keys(question.criteria),
+        id === "done" ? "not_finished" : "coordinating",
+      );
+    });
   }
 }
 
@@ -1227,7 +1243,7 @@ test("Trigger checks stored credentials first and accepts TYPESAFE_API_KEY as fa
         hasUI: true,
         isIdle: () => true,
         hasPendingMessages: () => false,
-        getContextUsage: () => ({ tokens: 40_000, contextWindow: 128_000, percent: 31.25 }),
+        getContextUsage: () => ({ tokens: 62_000, contextWindow: 128_000, percent: 48.4375 }),
         signal: undefined,
         modelRegistry: {
           async getProviderAuth() {
@@ -1663,7 +1679,7 @@ function compactableTriggerProjection() {
   ];
 }
 
-test("agent_settled hints only after percentage and compactable-history gates pass", async () => {
+test("agent_settled dispatches only after adaptive and compactable-history gates pass", async () => {
   for (const scenario of [
     {
       mode: "tui" as const,
@@ -1739,7 +1755,7 @@ test("agent_settled hints only after percentage and compactable-history gates pa
     await fake.handlers.get("agent_settled")?.({ type: "agent_settled" }, triggerContext);
 
     assert.equal(notifications.length, scenario.expectedNotifications);
-    assert.equal(jev.calls, scenario.expectedNotifications);
+    assert.equal(jev.calls, 0, "the adaptive ceiling must not call timing Jev");
   }
 });
 
@@ -1763,7 +1779,7 @@ test("una sesión larga conserva un receipt por evaluación fallida del Trigger"
     hasUI: true,
     isIdle: () => true,
     hasPendingMessages: () => false,
-    getContextUsage: () => ({ tokens: 40_000, contextWindow: 128_000, percent: 31.25 }),
+    getContextUsage: () => ({ tokens: 62_000, contextWindow: 128_000, percent: 48.4375 }),
     signal: undefined,
   };
 
@@ -1801,7 +1817,7 @@ test("agent_settled recalculates the trigger ratio after a model window change",
     hasUI: true,
     isIdle: () => true,
     hasPendingMessages: () => false,
-    getContextUsage: () => ({ tokens: 40_000, contextWindow, percent: 40_000 / contextWindow * 100 }),
+    getContextUsage: () => ({ tokens: 62_000, contextWindow, percent: 62_000 / contextWindow * 100 }),
     signal: undefined,
   };
 
@@ -1847,7 +1863,7 @@ test("agent_settled resolves active-model keepRecentTokens from Pi project setti
       hasUI: true,
       isIdle: () => true,
       hasPendingMessages: () => false,
-      getContextUsage: () => ({ tokens: 40_000, contextWindow: 128_000, percent: 31.25 }),
+      getContextUsage: () => ({ tokens: 62_000, contextWindow: 128_000, percent: 48.4375 }),
       signal: undefined,
     };
 
@@ -1883,7 +1899,7 @@ test("agent_settled auto trigger ignores an aborted assistant branch tip", async
     hasUI: true,
     isIdle: () => true,
     hasPendingMessages: () => false,
-    getContextUsage: () => ({ tokens: 40_000, contextWindow: 128_000, percent: 31.25 }),
+    getContextUsage: () => ({ tokens: 62_000, contextWindow: 128_000, percent: 48.4375 }),
     signal: undefined,
     compact: () => { compactCalls += 1; },
   };
@@ -1908,7 +1924,7 @@ test("agent_settled auto trigger retries failure and starts cooldown only after 
     now: () => new Date("2026-09-22T12:00:00.000Z"),
   });
   let compactCalls = 0;
-  let onComplete: ((result: never) => void) | undefined;
+  let onComplete: ((result: { estimatedTokensAfter?: number }) => void) | undefined;
   let onError: ((error: Error) => void) | undefined;
   const { context } = createContext(fake.entries, {
     projectionEntries: compactableTriggerProjection(),
@@ -1918,10 +1934,10 @@ test("agent_settled auto trigger retries failure and starts cooldown only after 
     hasUI: true,
     isIdle: () => true,
     hasPendingMessages: () => false,
-    getContextUsage: () => ({ tokens: 40_000, contextWindow: 128_000, percent: 31.25 }),
+    getContextUsage: () => ({ tokens: 62_000, contextWindow: 128_000, percent: 48.4375 }),
     signal: undefined,
     compact: (callbacks?: {
-      onComplete?: (result: never) => void;
+      onComplete?: (result: { estimatedTokensAfter?: number }) => void;
       onError?: (error: Error) => void;
     }) => {
       compactCalls += 1;
@@ -1943,14 +1959,14 @@ test("agent_settled auto trigger retries failure and starts cooldown only after 
   assert.equal(compactCalls, 2, "a failed automatic compaction must be retryable");
   assert.equal(fake.entries.some((entry) => entry.customType?.includes("cooldown")), false);
 
-  onComplete?.({} as never);
+  onComplete?.({ estimatedTokensAfter: 20_000 });
   await fake.handlers.get("agent_settled")?.({ type: "agent_settled" }, triggerContext);
   assert.equal(compactCalls, 2, "a successful automatic compaction starts the cooldown");
   assert.equal(fake.entries.some((entry) => entry.customType?.includes("cooldown")), true);
 });
 
-test("agent_settled auto trigger treats persisted config as consent and enters session_before_compact", async () => {
-  const jev = new CompactTriggerJev();
+test("agent_settled dispatches once and FastJev runs only in session_before_compact", async () => {
+  const jev = new ValidFakeJev();
   const fake = createFakePi();
   registerPiContextExpert(fake.pi, {
     jevClient: jev,
@@ -1972,13 +1988,16 @@ test("agent_settled auto trigger treats persisted config as consent and enters s
     hasUI: true,
     isIdle: () => true,
     hasPendingMessages: () => false,
-    getContextUsage: () => ({ tokens: 40_000, contextWindow: 128_000, percent: 31.25 }),
+    getContextUsage: () => ({ tokens: 62_000, contextWindow: 128_000, percent: 48.4375 }),
     signal: undefined,
-    compact: async (callbacks?: { onComplete?: (result: never) => void }) => {
+    compact: async (callbacks?: { onComplete?: (result: { estimatedTokensAfter?: number }) => void }) => {
       compactCalls += 1;
       beforeCompactCalls += 1;
-      await fake.handlers.get("session_before_compact")?.(compactionEvent(), triggerContext);
-      callbacks?.onComplete?.({} as never);
+      await fake.handlers.get("session_before_compact")?.(
+        compactionEvent(compactableToolMessages()),
+        triggerContext,
+      );
+      callbacks?.onComplete?.({ estimatedTokensAfter: 20_000 });
     },
   };
 
@@ -1988,12 +2007,441 @@ test("agent_settled auto trigger treats persisted config as consent and enters s
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(compactCalls, 1);
   assert.equal(beforeCompactCalls, 1, "auto uses ctx.compact and the existing compaction hook");
-  assert.equal(jev.requests.length, 1);
-  assert.deepEqual(Object.keys(jev.requests[0]?.questions ?? {}), ["done", "shape"]);
-  const triggerState = jev.requests[0]?.state as { recent?: Array<{ text?: string }> };
+  const timingRequests = jev.requests.filter(
+    (request) => Object.keys(request.questions).join(",") === "done,shape",
+  );
+  const fastJevRequests = jev.requests.filter(
+    (request) => Object.keys(request.questions).join(",") !== "done,shape",
+  );
+  assert.equal(timingRequests.length, 1);
+  assert.equal(fastJevRequests.length, 1, "FastJev enters once through session_before_compact");
+  const triggerState = timingRequests[0]?.state as { recent?: Array<{ text?: string }> };
   assert.ok(triggerState.recent?.some((message) => (message.text?.length ?? 0) > 0));
   assert.equal(notifications.length, 0);
   assert.equal(fake.entries.some((entry) => entry.customType?.includes("acknowledgement")), false);
   assert.equal(fake.entries.some((entry) => entry.customType?.includes("cooldown")), true);
   assert.doesNotMatch(JSON.stringify(jev.requests), /credential|secret|chunk text/i);
+});
+
+test("adaptive Trigger bands avoid credentials and timing Jev outside the semantic band", async () => {
+  for (const scenario of [
+    { name: "below floor", tokens: 59_999, expectedCompactions: 0, expectedLogs: 0 },
+    { name: "at ceiling", tokens: 70_000, expectedCompactions: 1, expectedLogs: 1 },
+  ]) {
+    await test(scenario.name, async () => {
+      let authCalls = 0;
+      let classifyCalls = 0;
+      let compactCalls = 0;
+      const fake = createFakePi();
+      registerPiContextExpert(fake.pi, {
+        config: { "trigger.mode": "hint" },
+        trigger: {
+          resolveCompactionSettings: () => ({
+            enabled: true,
+            reserveTokens: 20_000,
+            keepRecentTokens: 20_000,
+          }),
+        },
+        now: () => new Date("2026-09-22T12:00:00.000Z"),
+      });
+      const base = createContext(fake.entries, { projectionEntries: compactableTriggerProjection() });
+      const context = {
+        ...base.context,
+        model: { provider: "fake-provider", id: "fake-model" },
+        hasUI: true,
+        isIdle: () => true,
+        hasPendingMessages: () => false,
+        getContextUsage: () => ({
+          tokens: scenario.tokens,
+          contextWindow: 200_000,
+          percent: scenario.tokens / 2_000,
+        }),
+        modelRegistry: {
+          async getProviderAuth() {
+            authCalls += 1;
+            return { auth: { apiKey: "credential-canary" }, source: "stored" };
+          },
+          findOfType() {
+            classifyCalls += 1;
+            return undefined;
+          },
+        },
+        compact: () => { compactCalls += 1; },
+      };
+
+      await fake.handlers.get("agent_settled")?.({ type: "agent_settled" }, context);
+
+      assert.equal(authCalls, 0);
+      assert.equal(classifyCalls, 0);
+      assert.equal(compactCalls, scenario.expectedCompactions);
+      const logs = fake.entries.filter((entry) => entry.customType === TRIGGER_DECISION_ENTRY_TYPE);
+      assert.equal(logs.length, scenario.expectedLogs);
+      if (scenario.tokens === 70_000) {
+        assert.deepEqual(
+          logs[0]?.data && {
+            basis: (logs[0].data as { basis?: unknown }).basis,
+            nativeOverflowThreshold: (logs[0].data as { nativeOverflowThreshold?: unknown }).nativeOverflowThreshold,
+          },
+          { basis: "ceiling", nativeOverflowThreshold: 180_000 },
+        );
+      }
+    });
+  }
+});
+
+test("Trigger decision logging failure does not block ceiling compaction", async () => {
+  const fake = createFakePi();
+  Object.defineProperty(fake.pi, "appendEntry", {
+    value() {
+      throw new Error("trigger log unavailable");
+    },
+  });
+  registerPiContextExpert(fake.pi, {
+    config: { "trigger.mode": "hint" },
+    trigger: { resolveCompactionSettings: () => ({ keepRecentTokens: 20_000 }) },
+  });
+  let compactCalls = 0;
+  const base = createContext(fake.entries, { projectionEntries: compactableTriggerProjection() });
+  const context = {
+    ...base.context,
+    hasUI: true,
+    isIdle: () => true,
+    hasPendingMessages: () => false,
+    getContextUsage: () => ({ tokens: 70_000, contextWindow: 200_000, percent: 35 }),
+    compact: () => { compactCalls += 1; },
+  };
+
+  await fake.handlers.get("agent_settled")?.({ type: "agent_settled" }, context);
+
+  assert.equal(compactCalls, 1);
+});
+
+test("semantic Trigger decisions preserve wait and compact policy metadata", async () => {
+  for (const scenario of [
+    { name: "wait", jev: new WaitTriggerJev(), expectedDecision: "wait", expectedCompactions: 0 },
+    { name: "compact", jev: new CompactTriggerJev(), expectedDecision: "compact", expectedCompactions: 1 },
+  ]) {
+    await test(scenario.name, async () => {
+      let compactCalls = 0;
+      const fake = createFakePi();
+      registerPiContextExpert(fake.pi, {
+        jevClient: scenario.jev,
+        config: { "trigger.mode": "auto" },
+        trigger: {
+          editorHasText: () => false,
+          resolveCompactionSettings: () => ({ keepRecentTokens: 20_000 }),
+        },
+      });
+      const base = createContext(fake.entries, { projectionEntries: compactableTriggerProjection() });
+      const context = {
+        ...base.context,
+        hasUI: true,
+        isIdle: () => true,
+        hasPendingMessages: () => false,
+        getContextUsage: () => ({ tokens: 62_000, contextWindow: 200_000, percent: 31 }),
+        compact: () => { compactCalls += 1; },
+      };
+
+      await fake.handlers.get("agent_settled")?.({ type: "agent_settled" }, context);
+
+      assert.equal(scenario.jev.calls, 1);
+      assert.equal(compactCalls, scenario.expectedCompactions);
+      const log = fake.entries.find((entry) => entry.customType === TRIGGER_DECISION_ENTRY_TYPE)?.data as {
+        decision?: unknown;
+        basis?: unknown;
+        done?: unknown;
+        shape?: unknown;
+        score?: unknown;
+        floor?: unknown;
+      };
+      assert.equal(log.decision, scenario.expectedDecision);
+      assert.equal(log.basis, "semantic");
+      assert.equal(log.done, undefined, "durable logs must not store Jev answers");
+      assert.equal(log.shape, undefined, "durable logs must not store Jev answers");
+      assert.equal(typeof log.score, "number");
+      assert.equal(typeof log.floor, "number");
+    });
+  }
+});
+
+test("hint and auto dispatch one compaction for one positive decision", async () => {
+  for (const mode of ["hint", "auto"] as const) {
+    let compactCalls = 0;
+    const fake = createFakePi();
+    const jev = new CompactTriggerJev();
+    const base = createContext(fake.entries, { projectionEntries: compactableTriggerProjection() });
+    registerPiContextExpert(fake.pi, {
+      jevClient: jev,
+      config: { "trigger.mode": mode },
+      trigger: {
+        editorHasText: () => false,
+        resolveCompactionSettings: () => ({ keepRecentTokens: 20_000 }),
+      },
+    });
+    const context = {
+      ...base.context,
+      hasUI: true,
+      isIdle: () => true,
+      hasPendingMessages: () => false,
+      getContextUsage: () => ({ tokens: 62_000, contextWindow: 200_000, percent: 31 }),
+      compact: () => { compactCalls += 1; },
+    };
+
+    await fake.handlers.get("agent_settled")?.({ type: "agent_settled" }, context);
+
+    assert.equal(jev.calls, 1);
+    assert.equal(compactCalls, 1);
+    assert.equal(base.notifications.length, mode === "hint" ? 1 : 0);
+  }
+});
+
+test("Trigger correlation survives an interleaved in-flight attempt and rearm blocks duplicates", async () => {
+  const jev = new CompactTriggerJev();
+  const fake = createFakePi();
+  let current = new Date("2026-09-22T12:00:00.000Z");
+  let tokens = 62_000;
+  let compactCalls = 0;
+  let onComplete: ((result: { estimatedTokensAfter?: number }) => void) | undefined;
+  registerPiContextExpert(fake.pi, {
+    jevClient: jev,
+    config: { "trigger.mode": "auto" },
+    trigger: {
+      editorHasText: () => false,
+      resolveCompactionSettings: () => ({ keepRecentTokens: 20_000 }),
+    },
+    now: () => current,
+  });
+  const base = createContext(fake.entries, {
+    projectionEntries: [{
+      sourceEntry: { type: "message" },
+      messages: [{ role: "user", content: "PRIVATE_CONVERSATION_CANARY" }],
+    }, ...compactableTriggerProjection()],
+  });
+  const context = {
+    ...base.context,
+    model: { provider: "fake-provider", id: "fake-model" },
+    hasUI: true,
+    isIdle: () => true,
+    hasPendingMessages: () => false,
+    getContextUsage: () => ({ tokens, contextWindow: 200_000, percent: tokens / 2_000 }),
+    compact: (callbacks?: { onComplete?: (result: { estimatedTokensAfter?: number }) => void }) => {
+      compactCalls += 1;
+      onComplete = callbacks?.onComplete;
+    },
+  };
+
+  await Promise.all([
+    fake.handlers.get("agent_settled")?.({ type: "agent_settled" }, context),
+    fake.handlers.get("agent_settled")?.({ type: "agent_settled" }, context),
+  ]);
+  assert.equal(jev.calls, 1);
+  assert.equal(compactCalls, 1);
+  assert.ok(fake.entries.some((entry) =>
+    entry.customType === TRIGGER_DECISION_ENTRY_TYPE &&
+    (entry.data as { reason?: unknown }).reason === "compaction_in_flight"
+  ));
+  const dispatchedIndex = fake.entries.findIndex((entry) =>
+    entry.customType === TRIGGER_DECISION_ENTRY_TYPE &&
+    (entry.data as { dispatchOutcome?: unknown }).dispatchOutcome === "dispatched"
+  );
+  assert.notEqual(dispatchedIndex, -1);
+
+  await fake.handlers.get("agent_settled")?.({ type: "agent_settled" }, context);
+  assert.equal(compactCalls, 1, "an interleaved in-flight attempt must not dispatch");
+  const interleavedIndex = fake.entries
+    .map((entry, index) => ({ entry, index }))
+    .filter(({ entry }) =>
+      entry.customType === TRIGGER_DECISION_ENTRY_TYPE &&
+      (entry.data as { reason?: unknown }).reason === "compaction_in_flight"
+    )
+    .at(-1)?.index ?? -1;
+  assert.ok(interleavedIndex > dispatchedIndex, "the in-flight attempt must occur after dispatch");
+
+  onComplete?.({ estimatedTokensAfter: 30_000 });
+  const completedIndex = fake.entries.findIndex((entry) =>
+    entry.customType === TRIGGER_DECISION_ENTRY_TYPE &&
+    (entry.data as { dispatchOutcome?: unknown }).dispatchOutcome === "completed"
+  );
+  assert.ok(completedIndex > interleavedIndex, "completion must occur after the in-flight attempt");
+  const positiveLogs = fake.entries.filter((entry) =>
+    entry.customType === TRIGGER_DECISION_ENTRY_TYPE &&
+    ["dispatched", "completed"].includes(
+      String((entry.data as { dispatchOutcome?: unknown }).dispatchOutcome),
+    )
+  );
+  assert.equal(positiveLogs.filter((entry) =>
+    (entry.data as { dispatchOutcome?: unknown }).dispatchOutcome === "dispatched"
+  ).length, 1);
+  assert.equal(
+    (positiveLogs[0]?.data as { id?: unknown }).id,
+    (positiveLogs[1]?.data as { id?: unknown }).id,
+    "dispatch and completion must share one decision id",
+  );
+  assert.deepEqual(
+    positiveLogs.map((entry) => (entry.data as { dispatchOutcome?: unknown }).dispatchOutcome),
+    ["dispatched", "completed"],
+  );
+  await fake.handlers.get("agent_settled")?.({ type: "agent_settled" }, context);
+  assert.equal(compactCalls, 1, "cooldown must block a completed trigger");
+  assert.ok(fake.entries.some((entry) =>
+    entry.customType === TRIGGER_DECISION_ENTRY_TYPE &&
+    (entry.data as { reason?: unknown }).reason === "cooldown"
+  ));
+
+  current = new Date("2026-09-22T12:05:01.000Z");
+  await fake.handlers.get("agent_settled")?.({ type: "agent_settled" }, context);
+  assert.equal(compactCalls, 1, "rearm must block before post-context plus 40000 tokens");
+  assert.ok(fake.entries.some((entry) =>
+    entry.customType === TRIGGER_DECISION_ENTRY_TYPE &&
+    (entry.data as { reason?: unknown }).reason === "rearm"
+  ));
+
+  tokens = 70_000;
+  await fake.handlers.get("agent_settled")?.({ type: "agent_settled" }, context);
+  assert.equal(compactCalls, 2);
+  assert.equal(jev.calls, 1, "the ceiling decision must not call timing Jev");
+
+  const logs = fake.entries.filter((entry) => entry.customType === TRIGGER_DECISION_ENTRY_TYPE);
+  const serializedLogs = JSON.stringify(logs);
+  assert.doesNotMatch(serializedLogs, /PRIVATE_CONVERSATION_CANARY/);
+  const completed = logs.find((entry) => (entry.data as { dispatchOutcome?: unknown }).dispatchOutcome === "completed");
+  assert.deepEqual(
+    completed?.data && {
+      postContextTokens: (completed.data as { postContextTokens?: unknown }).postContextTokens,
+      actualReclaimTokens: (completed.data as { actualReclaimTokens?: unknown }).actualReclaimTokens,
+      rearmTokens: (completed.data as { rearmTokens?: unknown }).rearmTokens,
+    },
+    { postContextTokens: 30_000, actualReclaimTokens: 32_000, rearmTokens: 70_000 },
+  );
+});
+
+test("Trigger reload preserves fail-closed rearm when post-context usage is unavailable", async () => {
+  const earlierFiniteRearm: StoredEntry = {
+    type: "custom",
+    customType: TRIGGER_DECISION_ENTRY_TYPE,
+    data: {
+      schema: "a4s.pi-context-expert.trigger-decision/v1",
+      id: "earlier-finite-rearm",
+      dispatchOutcome: "completed",
+      rearmStatus: "armed",
+      rearmTokens: 70_000,
+    },
+  };
+  const fake = createFakePi([earlierFiniteRearm]);
+  let current = new Date("2026-09-22T12:00:00.000Z");
+  let onComplete: ((result: { estimatedTokensAfter?: number }) => void) | undefined;
+  registerPiContextExpert(fake.pi, {
+    jevClient: new CompactTriggerJev(),
+    config: { "trigger.mode": "auto" },
+    trigger: {
+      editorHasText: () => false,
+      resolveCompactionSettings: () => ({ keepRecentTokens: 20_000 }),
+    },
+    now: () => current,
+  });
+  const base = createContext(fake.entries, { projectionEntries: compactableTriggerProjection() });
+  const context = {
+    ...base.context,
+    hasUI: true,
+    isIdle: () => true,
+    hasPendingMessages: () => false,
+    getContextUsage: () => ({ tokens: 62_000, contextWindow: 200_000, percent: 31 }),
+    compact: (callbacks?: { onComplete?: (result: { estimatedTokensAfter?: number }) => void }) => {
+      onComplete = callbacks?.onComplete;
+    },
+  };
+
+  await fake.handlers.get("agent_settled")?.({ type: "agent_settled" }, context);
+  onComplete?.({});
+
+  const completed = [...fake.entries].reverse().find((entry) =>
+    entry.customType === TRIGGER_DECISION_ENTRY_TYPE &&
+    (entry.data as { dispatchOutcome?: unknown }).dispatchOutcome === "completed"
+  );
+  const completedData = completed?.data as Record<string, unknown>;
+  assert.equal(completedData.rearmStatus, "post_context_unavailable");
+  assert.equal(Object.hasOwn(completedData, "rearmTokens"), false);
+  assert.equal(
+    Object.values(completedData).some((value) => typeof value === "number" && !Number.isFinite(value)),
+    false,
+  );
+  assert.doesNotMatch(JSON.stringify(completedData), /"rearmTokens":null/);
+
+  current = new Date("2026-09-22T12:05:01.000Z");
+  const reloaded = createFakePi(fake.entries);
+  const reloadedJev = new CompactTriggerJev();
+  let reloadedCompactCalls = 0;
+  registerPiContextExpert(reloaded.pi, {
+    jevClient: reloadedJev,
+    config: { "trigger.mode": "auto" },
+    trigger: {
+      editorHasText: () => false,
+      resolveCompactionSettings: () => ({ keepRecentTokens: 20_000 }),
+    },
+    now: () => current,
+  });
+  const reloadedBase = createContext(reloaded.entries, { projectionEntries: compactableTriggerProjection() });
+  const reloadedContext = {
+    ...reloadedBase.context,
+    hasUI: true,
+    isIdle: () => true,
+    hasPendingMessages: () => false,
+    getContextUsage: () => ({ tokens: 70_000, contextWindow: 200_000, percent: 35 }),
+    compact: () => { reloadedCompactCalls += 1; },
+  };
+
+  await reloaded.handlers.get("session_start")?.(
+    { type: "session_start", reason: "reload" },
+    reloadedContext,
+  );
+  await reloaded.handlers.get("agent_settled")?.({ type: "agent_settled" }, reloadedContext);
+
+  assert.equal(reloadedCompactCalls, 0, "reload must retain fail-closed rearm");
+  assert.equal(reloadedJev.calls, 0);
+  const rearmLog = reloaded.entries.at(-1)?.data as Record<string, unknown>;
+  assert.equal(rearmLog.reason, "rearm");
+  assert.equal(rearmLog.rearmStatus, "post_context_unavailable");
+  assert.equal(Object.hasOwn(rearmLog, "rearmTokens"), false);
+  assert.doesNotMatch(JSON.stringify(rearmLog), /"rearmTokens":null/);
+});
+
+test("Trigger reload restores a finite rearm value", async () => {
+  const fake = createFakePi([{
+    type: "custom",
+    customType: TRIGGER_DECISION_ENTRY_TYPE,
+    data: {
+      schema: "a4s.pi-context-expert.trigger-decision/v1",
+      id: "finite-rearm",
+      dispatchOutcome: "completed",
+      rearmStatus: "armed",
+      rearmTokens: 70_000,
+    },
+  }]);
+  let tokens = 69_000;
+  let compactCalls = 0;
+  registerPiContextExpert(fake.pi, {
+    config: { "trigger.mode": "auto" },
+    trigger: {
+      editorHasText: () => false,
+      resolveCompactionSettings: () => ({ keepRecentTokens: 20_000 }),
+    },
+  });
+  const base = createContext(fake.entries, { projectionEntries: compactableTriggerProjection() });
+  const context = {
+    ...base.context,
+    hasUI: true,
+    isIdle: () => true,
+    hasPendingMessages: () => false,
+    getContextUsage: () => ({ tokens, contextWindow: 200_000, percent: tokens / 2_000 }),
+    compact: () => { compactCalls += 1; },
+  };
+
+  await fake.handlers.get("session_start")?.({ type: "session_start", reason: "reload" }, context);
+  await fake.handlers.get("agent_settled")?.({ type: "agent_settled" }, context);
+  assert.equal(compactCalls, 0);
+  assert.equal((fake.entries.at(-1)?.data as { rearmTokens?: unknown }).rearmTokens, 70_000);
+
+  tokens = 70_000;
+  await fake.handlers.get("agent_settled")?.({ type: "agent_settled" }, context);
+  assert.equal(compactCalls, 1, "the restored finite rearm must release at its boundary");
 });

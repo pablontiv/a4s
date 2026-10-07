@@ -34,6 +34,34 @@ const asker: JevAsker = {
 // set the fields the core reads, so the cast is sound for the adapter contract.
 const asSession = (messages: Message[]) => messages as unknown as Parameters<typeof claudeBinding.toNeutral>[0];
 
+function triggerRecords(logs: readonly string[]): Array<Record<string, unknown>> {
+  const prefix = '[context-expert] {';
+  return logs
+    .filter((line) => line.startsWith(prefix))
+    .map((line) => JSON.parse(line.slice('[context-expert] '.length)) as Record<string, unknown>);
+}
+
+function timingResponse(finished: number, handsOn: number): string {
+  return JSON.stringify({
+    model: 'jev-test',
+    answers: {
+      done: {
+        type: 'choice',
+        choice: finished >= 0.5 ? 'finished' : 'not_finished',
+        confidence: 0.9,
+        probabilities: { finished, not_finished: 1 - finished, unclear: 0 },
+      },
+      shape: {
+        type: 'choice',
+        choice: handsOn >= 0.5 ? 'hands_on' : 'coordinating',
+        confidence: 0.9,
+        probabilities: { hands_on: handsOn, coordinating: 1 - handsOn, unclear: 0 },
+      },
+    },
+    usage: { input_tokens: 100, output_tokens: 10 },
+  });
+}
+
 test('claude adapter: kept messages keep their identity (engine handle), edited ones are rebuilt', async () => {
   const input = fixture();
   const { output } = await runCompaction(asSession(input), claudeBinding, asker, {
@@ -138,7 +166,7 @@ test('claude adapter: el host registra el fallo del trigger sin contenido extern
       toast: () => undefined,
     },
     session: {
-      usage: async () => ({ context: { window: 100_000, tokens: 90_000 }, rateLimits: [] }),
+      usage: async () => ({ context: { window: 100_000, tokens: 62_000 }, rateLimits: [] }),
       messages: async () => fixture(),
       compact: async () => ({}),
     },
@@ -160,9 +188,27 @@ test('claude adapter: el host registra el fallo del trigger sin contenido extern
   const result = await turnHook(host, event, async () => expected);
 
   assert.equal(result, expected);
-  assert.deepEqual(logs, [
-    '[context-expert] diagnostic phase=trigger_response code=http_status status=503',
-  ]);
+  assert.equal(logs[0], '[context-expert] diagnostic phase=trigger_response code=http_status status=503');
+  const records = triggerRecords(logs);
+  assert.equal(records.length, 1);
+  assert.deepEqual(
+    {
+      policyVersion: records[0]?.policyVersion,
+      adapter: records[0]?.adapter,
+      decision: records[0]?.decision,
+      reason: records[0]?.reason,
+      basis: records[0]?.basis,
+      dispatchOutcome: records[0]?.dispatchOutcome,
+    },
+    {
+      policyVersion: 'a4s.compaction-trigger-policy/v1',
+      adapter: 'claude',
+      decision: 'wait',
+      reason: 'request_failed',
+      basis: 'semantic',
+      dispatchOutcome: 'not_dispatched',
+    },
+  );
   assert.doesNotMatch(logs.join('\n'), /REMOTE_HTTP_BODY_CANARY|TOKEN_CANARY|TURN_CONTENT_CANARY/);
 });
 
@@ -194,7 +240,7 @@ test('claude adapter: popula conversación con $.session.messages y excluye syst
   const host = {
     ui: { log: () => undefined, toast: () => undefined },
     session: {
-      usage: async () => ({ context: { window: 100_000, tokens: 90_000 }, rateLimits: [] }),
+      usage: async () => ({ context: { window: 100_000, tokens: 62_000 }, rateLimits: [] }),
       messages: async () => transcript,
       compact: async () => { compactCalls++; return {}; },
     },
@@ -271,7 +317,7 @@ async function runIgnoredTurn(event: {
   let nextCalls = 0;
   const host = {
     session: {
-      usage: async () => { hostCalls++; return { context: { window: 100_000, tokens: 90_000 } }; },
+      usage: async () => { hostCalls++; return { context: { window: 100_000, tokens: 62_000 } }; },
       messages: async () => { hostCalls++; return fixture(); },
       compact: async () => { hostCalls++; return {}; },
     },
@@ -369,7 +415,7 @@ test('claude adapter: el timeout de 2,000 ms abandona el request y conserva next
   const host = {
     ui: { log: (text: string) => logs.push(text), toast: () => undefined },
     session: {
-      usage: async () => ({ context: { window: 100_000, tokens: 90_000 }, rateLimits: [] }),
+      usage: async () => ({ context: { window: 100_000, tokens: 62_000 }, rateLimits: [] }),
       messages: async () => fixture(),
       compact: async () => { compactCalls++; return {}; },
     },
@@ -402,9 +448,11 @@ test('claude adapter: el timeout de 2,000 ms abandona el request y conserva next
   assert.equal(fetchCalls, 1);
   assert.deepEqual(sleepValues, [2_000]);
   assert.equal(compactCalls, 0);
-  assert.deepEqual(logs, [
-    '[context-expert] diagnostic phase=trigger_request code=request_failed',
-  ]);
+  assert.deepEqual(
+    logs.filter((line) => line.includes('diagnostic phase=')),
+    ['[context-expert] diagnostic phase=trigger_request code=request_failed'],
+  );
+  assert.equal(triggerRecords(logs)[0]?.reason, 'request_failed');
   assert.doesNotMatch(logs.join('\n'), /TIMEOUT_SECRET_CANARY|TIMEOUT_ANSWER_CANARY|state|questions/);
 });
 
@@ -434,7 +482,7 @@ test('claude adapter: mantiene cerrado el gate hasta que termina el fetch pendie
     session: {
       usage: async () => {
         usageCalls++;
-        return { context: { window: 100_000, tokens: 90_000 }, rateLimits: [] };
+        return { context: { window: 100_000, tokens: 62_000 }, rateLimits: [] };
       },
       messages: async () => fixture(),
       compact: async () => ({}),
@@ -489,12 +537,319 @@ test('claude adapter: mantiene cerrado el gate hasta que termina el fetch pendie
   assert.equal(usageCalls, 2);
   assert.equal(nextCalls, 3);
   assert.deepEqual(sleepValues, [2_000, 2_000]);
-  assert.deepEqual(logs, [
-    '[context-expert] diagnostic phase=trigger_request code=request_failed',
-    '[context-expert] diagnostic phase=trigger_response code=http_status status=503',
-  ]);
+  assert.deepEqual(
+    logs.filter((line) => line.includes('diagnostic phase=')),
+    [
+      '[context-expert] diagnostic phase=trigger_request code=request_failed',
+      '[context-expert] diagnostic phase=trigger_response code=http_status status=503',
+    ],
+  );
+  assert.equal(triggerRecords(logs).length, 2);
   assert.doesNotMatch(
     logs.join('\n'),
     /PENDING_SECRET_CANARY|LATE_FETCH_REJECTION_CANARY|LATER_BODY_CANARY|state|questions/,
   );
+});
+
+test('claude adapter: mode=off no consulta al host', async () => {
+  const hooks = new Map<string, unknown>();
+  register(((pattern: string, hook: unknown) => { hooks.set(pattern, hook); return {}; }) as never, {
+    triggerMode: 'off',
+  });
+  let hostCalls = 0;
+  const host = {
+    session: { usage: async () => { hostCalls++; return { context: { window: 100_000, tokens: 90_000 } }; } },
+  };
+  const event = {
+    reason: 'answer', answer: 'done', isAborted: false, durationMs: 1, turnId: 'off',
+  };
+  const turnHook = hooks.get('turn.complete') as (
+    $: typeof host,
+    input: typeof event,
+    next: () => Promise<{ text: string }>,
+  ) => Promise<{ text: string }>;
+
+  assert.deepEqual(await turnHook(host, event, async () => ({ text: 'unchanged' })), { text: 'unchanged' });
+  assert.equal(hostCalls, 0);
+});
+
+test('claude adapter: bajo F no resuelve credenciales ni llama al Jev de timing', async () => {
+  const hooks = new Map<string, unknown>();
+  register(((pattern: string, hook: unknown) => { hooks.set(pattern, hook); return {}; }) as never, {
+    triggerMode: 'auto',
+  });
+  let protectedCalls = 0;
+  const host = {
+    ui: { log: () => undefined, toast: () => undefined },
+    session: {
+      usage: async () => ({ context: { window: 200_000, tokens: 59_999 }, rateLimits: [] }),
+      model: async () => { protectedCalls++; return 'claude-test'; },
+      messages: async () => { protectedCalls++; return fixture(); },
+      compact: async () => { protectedCalls++; return {}; },
+    },
+    env: { get: async () => { protectedCalls++; return undefined; } },
+    settings: { read: async () => { protectedCalls++; return {}; } },
+    fs: { read: async () => { protectedCalls++; return ''; } },
+    http: { fetch: async () => { protectedCalls++; return { status: 500, ok: false, text: '' }; } },
+    clock: { sleep: async () => undefined },
+  };
+  const event = {
+    reason: 'answer', answer: 'done', isAborted: false, durationMs: 1, turnId: 'below-floor',
+  };
+  const turnHook = hooks.get('turn.complete') as (
+    $: typeof host,
+    input: typeof event,
+    next: (input: typeof event) => Promise<{ text: string }>,
+  ) => Promise<{ text: string }>;
+
+  assert.deepEqual(await turnHook(host, event, async () => ({ text: 'unchanged' })), { text: 'unchanged' });
+  assert.equal(protectedCalls, 0);
+});
+
+test('claude adapter: la banda semántica conserva score y floor para wait', async () => {
+  const hooks = new Map<string, unknown>();
+  register(((pattern: string, hook: unknown) => { hooks.set(pattern, hook); return {}; }) as never, {
+    apiKey: 'SEMANTIC_SECRET_CANARY',
+    triggerMode: 'auto',
+  });
+  const logs: string[] = [];
+  let compactCalls = 0;
+  const host = {
+    ui: { log: (text: string) => logs.push(text), toast: () => undefined },
+    session: {
+      usage: async () => ({ context: { window: 100_000, tokens: 62_000 }, rateLimits: [] }),
+      messages: async () => fixture(),
+      compact: async () => { compactCalls++; return {}; },
+    },
+    http: { fetch: async () => ({ status: 200, ok: true, text: timingResponse(0.6, 0.6) }) },
+    clock: { sleep: async () => new Promise<void>(() => undefined) },
+  };
+  const event = {
+    reason: 'answer', answer: 'PRIVATE_CONVERSATION_CANARY', isAborted: false, durationMs: 1,
+    turnId: 'semantic-wait', usage: { model: 'claude-test' },
+  };
+  const turnHook = hooks.get('turn.complete') as (
+    $: typeof host,
+    input: typeof event,
+    next: () => Promise<{ text: string }>,
+  ) => Promise<{ text: string }>;
+
+  await turnHook(host, event, async () => ({ text: 'unchanged' }));
+  assert.equal(compactCalls, 0);
+  const record = triggerRecords(logs)[0];
+  assert.equal(record?.decision, 'wait');
+  assert.equal(record?.reason, 'semantic_score_below_floor');
+  assert.equal(record?.basis, 'semantic');
+  assert.equal(record?.score, 0.48);
+  assert.equal(typeof record?.floor, 'number');
+  assert.doesNotMatch(logs.join('\n'), /PRIVATE_CONVERSATION_CANARY|SEMANTIC_SECRET_CANARY/);
+});
+
+for (const mode of ['hint', 'auto'] as const) {
+  test(`claude adapter: mode=${mode} compacta exactamente una vez tras una decisión semántica positiva`, async () => {
+    const hooks = new Map<string, unknown>();
+    register(((pattern: string, hook: unknown) => { hooks.set(pattern, hook); return {}; }) as never, {
+      apiKey: 'key',
+      triggerMode: mode,
+    });
+    const logs: string[] = [];
+    let compactCalls = 0;
+    const host = {
+      ui: { log: (text: string) => logs.push(text), toast: () => undefined },
+      session: {
+        usage: async () => ({ context: { window: 100_000, tokens: 62_000 }, rateLimits: [] }),
+        messages: async () => fixture(),
+        compact: async () => { compactCalls++; return { messages: [], tokensAfter: 20_000 }; },
+      },
+      http: { fetch: async () => ({ status: 200, ok: true, text: timingResponse(0.95, 0.95) }) },
+      clock: { sleep: async () => new Promise<void>(() => undefined) },
+    };
+    const event = {
+      reason: 'answer', answer: 'done', isAborted: false, durationMs: 1,
+      turnId: `positive-${mode}`, usage: { model: 'claude-test' },
+    };
+    const turnHook = hooks.get('turn.complete') as (
+      $: typeof host,
+      input: typeof event,
+      next: () => Promise<{ text: string }>,
+    ) => Promise<{ text: string }>;
+
+    await turnHook(host, event, async () => ({ text: 'unchanged' }));
+    assert.equal(compactCalls, 1);
+    const completed = triggerRecords(logs).find((record) => record.dispatchOutcome === 'completed');
+    assert.equal(completed?.decision, 'compact');
+    assert.equal(completed?.reason, 'semantic_score_meets_floor');
+    assert.equal(completed?.mode, mode);
+    assert.equal(completed?.postContextTokens, 20_000);
+    assert.equal(completed?.actualReclaimTokens, 42_000);
+    assert.equal(completed?.rearmTokens, 60_000);
+  });
+}
+
+test('claude adapter: C fuerza compactación sin credenciales ni Jev de timing', async () => {
+  const hooks = new Map<string, unknown>();
+  register(((pattern: string, hook: unknown) => { hooks.set(pattern, hook); return {}; }) as never, {
+    triggerMode: 'auto',
+  });
+  const logs: string[] = [];
+  let credentialCalls = 0;
+  let timingCalls = 0;
+  let messageCalls = 0;
+  let compactCalls = 0;
+  const host = {
+    ui: { log: (text: string) => logs.push(text), toast: () => undefined },
+    session: {
+      usage: async () => ({
+        context: {
+          window: 100_000,
+          tokens: 65_000,
+          breakdown: { autoCompactThreshold: 90_000 },
+        },
+        rateLimits: [],
+      }),
+      messages: async () => { messageCalls++; return fixture(); },
+      compact: async () => { compactCalls++; return { messages: [], tokensAfter: 21_000 }; },
+    },
+    env: { get: async () => { credentialCalls++; return undefined; } },
+    settings: { read: async () => { credentialCalls++; return {}; } },
+    fs: { read: async () => { credentialCalls++; return ''; } },
+    http: { fetch: async () => { timingCalls++; return { status: 500, ok: false, text: '' }; } },
+    clock: { sleep: async () => undefined },
+  };
+  const event = {
+    reason: 'answer', answer: 'done', isAborted: false, durationMs: 1,
+    turnId: 'ceiling', usage: { model: 'claude-test' },
+  };
+  const turnHook = hooks.get('turn.complete') as (
+    $: typeof host,
+    input: typeof event,
+    next: () => Promise<{ text: string }>,
+  ) => Promise<{ text: string }>;
+
+  await turnHook(host, event, async () => ({ text: 'unchanged' }));
+  assert.equal(credentialCalls, 0);
+  assert.equal(timingCalls, 0);
+  assert.equal(messageCalls, 0);
+  assert.equal(compactCalls, 1);
+  const record = triggerRecords(logs)[0];
+  assert.equal(record?.reason, 'adaptive_ceiling');
+  assert.equal(record?.basis, 'ceiling');
+  assert.equal(record?.nativeOverflowThreshold, 90_000);
+});
+
+test('claude adapter: aplica cooldown, exclusión mutua y rearme', async () => {
+  const hooks = new Map<string, unknown>();
+  register(((pattern: string, hook: unknown) => { hooks.set(pattern, hook); return {}; }) as never, {
+    triggerMode: 'auto',
+  });
+  const logs: string[] = [];
+  let contextTokens = 70_000;
+  let usageCalls = 0;
+  let compactCalls = 0;
+  let resolveFirst: (value: { messages: never[]; tokensAfter: number }) => void = () => undefined;
+  const firstCompact = new Promise<{ messages: never[]; tokensAfter: number }>((resolve) => {
+    resolveFirst = resolve;
+  });
+  const host = {
+    ui: { log: (text: string) => logs.push(text), toast: () => undefined },
+    session: {
+      usage: async () => { usageCalls++; return { context: { window: 100_000, tokens: contextTokens }, rateLimits: [] }; },
+      compact: async () => {
+        compactCalls++;
+        if (compactCalls === 1) return firstCompact;
+        return { messages: [], tokensAfter: 30_000 };
+      },
+    },
+  };
+  const event = (turnId: string) => ({
+    reason: 'answer' as const, answer: 'done', isAborted: false, durationMs: 1,
+    turnId, usage: { model: 'claude-test' },
+  });
+  const turnHook = hooks.get('turn.complete') as (
+    $: typeof host,
+    input: ReturnType<typeof event>,
+    next: () => Promise<{ text: string }>,
+  ) => Promise<{ text: string }>;
+  const next = async () => ({ text: 'unchanged' });
+  const originalNow = Date.now;
+  let now = 1_000_000;
+  Date.now = () => now;
+  try {
+    const active = turnHook(host, event('first'), next);
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    assert.equal(compactCalls, 1);
+    assert.deepEqual(await turnHook(host, event('concurrent'), next), { text: 'unchanged' });
+    assert.equal(usageCalls, 1);
+    assert.equal(compactCalls, 1);
+    resolveFirst({ messages: [], tokensAfter: 30_000 });
+    await active;
+
+    await turnHook(host, event('cooldown'), next);
+    assert.equal(compactCalls, 1);
+    assert.equal(triggerRecords(logs).at(-1)?.reason, 'cooldown');
+
+    now += 300_001;
+    contextTokens = 65_000;
+    await turnHook(host, event('rearm-block'), next);
+    assert.equal(compactCalls, 1);
+    assert.equal(triggerRecords(logs).at(-1)?.reason, 'rearm');
+    assert.equal(triggerRecords(logs).at(-1)?.rearmTokens, 70_000);
+
+    contextTokens = 70_000;
+    await turnHook(host, event('rearmed'), next);
+    assert.equal(compactCalls, 2);
+  } finally {
+    Date.now = originalNow;
+  }
+});
+
+test('claude adapter: el hook de compactación ejecuta FastJev una vez por dispatch', async () => {
+  const hooks = new Map<string, unknown>();
+  register(((pattern: string, hook: unknown) => { hooks.set(pattern, hook); return {}; }) as never, {
+    apiKey: 'key',
+    triggerMode: 'auto',
+    preserveRecentMessages: 0,
+    minReductionRatio: 0,
+  });
+  const logs: string[] = [];
+  let fastJevCalls = 0;
+  let compactDispatches = 0;
+  const host: Record<string, any> = {
+    ui: { log: (text: string) => logs.push(text), toast: () => undefined },
+    session: {
+      usage: async () => ({ context: { window: 100_000, tokens: 65_000 }, rateLimits: [] }),
+    },
+    http: {
+      fetch: async (_url: string, init?: { body?: string }) => {
+        fastJevCalls++;
+        const request = JSON.parse(init?.body ?? '{}') as { questions?: Record<string, unknown> };
+        const answers: Record<string, { noul: number }> = {};
+        for (const name of Object.keys(request.questions ?? {})) answers[name] = { noul: 0.9 };
+        return { status: 200, ok: true, text: JSON.stringify({ answers }) };
+      },
+    },
+  };
+  const compactHook = hooks.get('session.compact') as (
+    $: typeof host,
+    input: { messages: ReturnType<typeof asSession> },
+    next: (input: unknown) => Promise<unknown>,
+  ) => Promise<unknown>;
+  host.session.compact = async () => {
+    compactDispatches++;
+    return compactHook(host, { messages: asSession(fixture()) }, async () => ({ skip: 'fallback' }));
+  };
+  const event = {
+    reason: 'answer', answer: 'done', isAborted: false, durationMs: 1,
+    turnId: 'fast-jev', usage: { model: 'claude-test' },
+  };
+  const turnHook = hooks.get('turn.complete') as (
+    $: typeof host,
+    input: typeof event,
+    next: () => Promise<{ text: string }>,
+  ) => Promise<{ text: string }>;
+
+  await turnHook(host, event, async () => ({ text: 'unchanged' }));
+  assert.equal(compactDispatches, 1);
+  assert.equal(fastJevCalls, 1);
+  assert.equal(triggerRecords(logs)[0]?.reason, 'adaptive_ceiling');
 });
