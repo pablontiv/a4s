@@ -126,6 +126,7 @@ test("Pi applies core decisions only through its existing lifecycle", async () =
   await applyTriggerDecision("compact", "hint", ctx as never);
   await applyTriggerDecision("compact", "auto", ctx as never);
   await applyTriggerDecision("wait", "auto", ctx as never);
-  assert.deepEqual(notifications, ["Compaction selected by Context Expert"]);
-  assert.equal(compactCalls, 2);
+  assert.equal(notifications.length, 1);
+  assert.match(notifications[0] ?? "", /\/compact/);
+  assert.equal(compactCalls, 1);
 });

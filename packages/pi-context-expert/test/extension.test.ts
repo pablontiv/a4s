@@ -1679,6 +1679,30 @@ function compactableTriggerProjection() {
   ];
 }
 
+test("agent_settled returns before trigger policy evaluation when Trigger is off", async () => {
+  const jev = new CompactTriggerJev();
+  const fake = createFakePi();
+  registerPiContextExpert(fake.pi, {
+    jevClient: jev,
+    config: { "trigger.mode": "off" },
+  });
+  const base = createContext(fake.entries, { projectionEntries: compactableTriggerProjection() });
+  let usageCalls = 0;
+  const context = {
+    ...base.context,
+    getContextUsage: () => {
+      usageCalls += 1;
+      return { tokens: 70_000, contextWindow: 200_000, percent: 35 };
+    },
+  };
+
+  await fake.handlers.get("agent_settled")?.({ type: "agent_settled" }, context);
+
+  assert.equal(usageCalls, 0);
+  assert.equal(jev.calls, 0);
+  assert.deepEqual(fake.entries, []);
+});
+
 test("agent_settled dispatches only after adaptive and compactable-history gates pass", async () => {
   for (const scenario of [
     {
@@ -2026,7 +2050,7 @@ test("agent_settled dispatches once and FastJev runs only in session_before_comp
 test("adaptive Trigger bands avoid credentials and timing Jev outside the semantic band", async () => {
   for (const scenario of [
     { name: "below floor", tokens: 59_999, expectedCompactions: 0, expectedLogs: 0 },
-    { name: "at ceiling", tokens: 70_000, expectedCompactions: 1, expectedLogs: 1 },
+    { name: "at ceiling", tokens: 70_000, expectedCompactions: 0, expectedLogs: 1 },
   ]) {
     await test(scenario.name, async () => {
       let authCalls = 0;
@@ -2077,19 +2101,30 @@ test("adaptive Trigger bands avoid credentials and timing Jev outside the semant
       const logs = fake.entries.filter((entry) => entry.customType === TRIGGER_DECISION_ENTRY_TYPE);
       assert.equal(logs.length, scenario.expectedLogs);
       if (scenario.tokens === 70_000) {
+        assert.equal(base.notifications.length, 1);
+        assert.match(base.notifications[0]?.message ?? "", /\/compact/);
         assert.deepEqual(
           logs[0]?.data && {
             basis: (logs[0].data as { basis?: unknown }).basis,
+            decision: (logs[0].data as { decision?: unknown }).decision,
+            dispatchOutcome: (logs[0].data as { dispatchOutcome?: unknown }).dispatchOutcome,
+            uiOutcome: (logs[0].data as { uiOutcome?: unknown }).uiOutcome,
             nativeOverflowThreshold: (logs[0].data as { nativeOverflowThreshold?: unknown }).nativeOverflowThreshold,
           },
-          { basis: "ceiling", nativeOverflowThreshold: 180_000 },
+          {
+            basis: "ceiling",
+            decision: "compact",
+            dispatchOutcome: "not_dispatched",
+            uiOutcome: "hinted",
+            nativeOverflowThreshold: 180_000,
+          },
         );
       }
     });
   }
 });
 
-test("Trigger decision logging failure does not block ceiling compaction", async () => {
+test("Trigger decision logging failure does not start ceiling compaction in hint mode", async () => {
   const fake = createFakePi();
   Object.defineProperty(fake.pi, "appendEntry", {
     value() {
@@ -2113,7 +2148,8 @@ test("Trigger decision logging failure does not block ceiling compaction", async
 
   await fake.handlers.get("agent_settled")?.({ type: "agent_settled" }, context);
 
-  assert.equal(compactCalls, 1);
+  assert.equal(compactCalls, 0);
+  assert.match(base.notifications.at(-1)?.message ?? "", /\/compact/);
 });
 
 test("semantic Trigger decisions preserve wait and compact policy metadata", async () => {
@@ -2164,35 +2200,100 @@ test("semantic Trigger decisions preserve wait and compact policy metadata", asy
   }
 });
 
-test("hint and auto dispatch one compaction for one positive decision", async () => {
-  for (const mode of ["hint", "auto"] as const) {
-    let compactCalls = 0;
-    const fake = createFakePi();
-    const jev = new CompactTriggerJev();
-    const base = createContext(fake.entries, { projectionEntries: compactableTriggerProjection() });
-    registerPiContextExpert(fake.pi, {
-      jevClient: jev,
-      config: { "trigger.mode": mode },
-      trigger: {
-        editorHasText: () => false,
-        resolveCompactionSettings: () => ({ keepRecentTokens: 20_000 }),
-      },
-    });
-    const context = {
-      ...base.context,
-      hasUI: true,
-      isIdle: () => true,
-      hasPendingMessages: () => false,
-      getContextUsage: () => ({ tokens: 62_000, contextWindow: 200_000, percent: 31 }),
-      compact: () => { compactCalls += 1; },
-    };
+test("hint reports a positive semantic decision without dispatch or rearm", async () => {
+  let current = new Date("2026-09-22T12:00:00.000Z");
+  let compactCalls = 0;
+  const fake = createFakePi();
+  const jev = new CompactTriggerJev();
+  const base = createContext(fake.entries, { projectionEntries: compactableTriggerProjection() });
+  registerPiContextExpert(fake.pi, {
+    jevClient: jev,
+    config: { "trigger.mode": "hint" },
+    trigger: {
+      editorHasText: () => false,
+      resolveCompactionSettings: () => ({ keepRecentTokens: 20_000 }),
+    },
+    now: () => current,
+  });
+  const context = {
+    ...base.context,
+    hasUI: true,
+    isIdle: () => true,
+    hasPendingMessages: () => false,
+    getContextUsage: () => ({ tokens: 62_000, contextWindow: 200_000, percent: 31 }),
+    compact: () => { compactCalls += 1; },
+  };
 
-    await fake.handlers.get("agent_settled")?.({ type: "agent_settled" }, context);
+  await fake.handlers.get("agent_settled")?.({ type: "agent_settled" }, context);
 
-    assert.equal(jev.calls, 1);
-    assert.equal(compactCalls, 1);
-    assert.equal(base.notifications.length, mode === "hint" ? 1 : 0);
-  }
+  assert.equal(jev.calls, 1);
+  assert.equal(compactCalls, 0);
+  assert.equal(base.notifications.length, 1);
+  assert.match(base.notifications[0]?.message ?? "", /\/compact/);
+  const positive = fake.entries.find((entry) =>
+    entry.customType === TRIGGER_DECISION_ENTRY_TYPE &&
+    (entry.data as { decision?: unknown }).decision === "compact"
+  );
+  assert.deepEqual(
+    positive?.data && {
+      decision: (positive.data as { decision?: unknown }).decision,
+      dispatchOutcome: (positive.data as { dispatchOutcome?: unknown }).dispatchOutcome,
+      uiOutcome: (positive.data as { uiOutcome?: unknown }).uiOutcome,
+      rearmStatus: (positive.data as { rearmStatus?: unknown }).rearmStatus,
+      rearmTokens: (positive.data as { rearmTokens?: unknown }).rearmTokens,
+    },
+    {
+      decision: "compact",
+      dispatchOutcome: "not_dispatched",
+      uiOutcome: "hinted",
+      rearmStatus: undefined,
+      rearmTokens: undefined,
+    },
+  );
+
+  await fake.handlers.get("agent_settled")?.({ type: "agent_settled" }, context);
+  assert.equal(jev.calls, 1, "hint must apply cooldown");
+  assert.equal(base.notifications.length, 1);
+  assert.equal(compactCalls, 0);
+  assert.equal(
+    (fake.entries.at(-1)?.data as { reason?: unknown } | undefined)?.reason,
+    "cooldown",
+  );
+
+  current = new Date("2026-09-22T12:05:01.000Z");
+  await fake.handlers.get("agent_settled")?.({ type: "agent_settled" }, context);
+  assert.equal(jev.calls, 2, "hint must clear in-flight state and must not create rearm state");
+  assert.equal(base.notifications.length, 2);
+  assert.equal(compactCalls, 0);
+});
+
+test("auto dispatches one compaction for one positive decision", async () => {
+  let compactCalls = 0;
+  const fake = createFakePi();
+  const jev = new CompactTriggerJev();
+  const base = createContext(fake.entries, { projectionEntries: compactableTriggerProjection() });
+  registerPiContextExpert(fake.pi, {
+    jevClient: jev,
+    config: { "trigger.mode": "auto" },
+    trigger: {
+      editorHasText: () => false,
+      resolveCompactionSettings: () => ({ keepRecentTokens: 20_000 }),
+    },
+  });
+  const context = {
+    ...base.context,
+    hasUI: true,
+    isIdle: () => true,
+    hasPendingMessages: () => false,
+    getContextUsage: () => ({ tokens: 62_000, contextWindow: 200_000, percent: 31 }),
+    compact: () => { compactCalls += 1; },
+  };
+
+  await fake.handlers.get("agent_settled")?.({ type: "agent_settled" }, context);
+
+  assert.equal(jev.calls, 1);
+  assert.equal(compactCalls, 1);
+  assert.equal(base.notifications.length, 0);
 });
 
 test("Trigger correlation survives an interleaved in-flight attempt and rearm blocks duplicates", async () => {

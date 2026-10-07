@@ -512,21 +512,30 @@ export function registerPiContextExpert(pi: ExtensionAPI, options: PiContextExpe
       }
 
       positiveDecisionId = triggerDecisionId(now(), ++triggerDecisionSequence, policyDecision);
-      const appendCooldown = (): void => {
+      const appendCooldown = (action: "hint" | "compact"): void => {
         try {
           pi.appendEntry(TRIGGER_COOLDOWN_ENTRY_TYPE, {
             schema: "a4s.compaction-trigger-cooldown/v1",
-            action: "compact",
+            action,
             triggeredAt: now().toISOString(),
           });
         } catch {
-          // Cooldown persistence is best-effort. In-flight and rearm state still prevent duplicates.
+          // Cooldown persistence is best-effort. In-flight state still prevents overlapping decisions.
         }
       };
+      if (mode === "hint") {
+        await applyTriggerDecision(policyDecision.decision, mode, ctx);
+        appendCooldown("hint");
+        recordTrigger({
+          ...policyLogInput(policyDecision, "not_dispatched"),
+          uiOutcome: "hinted",
+        }, positiveDecisionId);
+        return;
+      }
       await applyTriggerDecision(policyDecision.decision, mode, ctx, {
         onComplete: (result) => {
           const postContextTokens = result.estimatedTokensAfter;
-          appendCooldown();
+          appendCooldown("compact");
           if (typeof postContextTokens === "number" && Number.isFinite(postContextTokens)) {
             triggerRearmTokens = Math.max(thresholds.floorTokens, postContextTokens + 40_000);
           } else {
@@ -822,6 +831,7 @@ interface TriggerDecisionLogInput {
   floor: number | null;
   triggerOrigin?: "agent_settled";
   dispatchOutcome: TriggerDispatchOutcome;
+  uiOutcome?: "hinted";
 }
 
 function policyLogInput(

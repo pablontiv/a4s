@@ -299,7 +299,7 @@ async function runScenario(
       mode: "tui",
       uiContext: uiContext(notifications) as never,
     });
-    const compacted = waitForCompaction(session);
+    const compacted = mode === "auto" ? waitForCompaction(session) : undefined;
     await session.prompt(`controlled ceiling turn ${CANARY}`);
     await compacted;
     await new Promise<void>((resolvePromise) => setImmediate(resolvePromise));
@@ -307,20 +307,42 @@ async function runScenario(
     const entries = sessionManager.getBranch() as StoredEntry[];
     const compactions = entries.filter((entry) => entry.type === "compaction");
     const decisions = entries.filter((entry) => entry.customType === TRIGGER_DECISION_ENTRY_TYPE);
-    const completed = decisions.find((entry) => entry.data?.dispatchOutcome === "completed");
+    const positive = decisions.find((entry) =>
+      entry.data?.decision === "compact" &&
+      entry.data?.dispatchOutcome === (mode === "hint" ? "not_dispatched" : "completed")
+    );
 
-    assert.equal(beforeCompactCalls, 1, "AgentSession must emit session_before_compact once");
-    assert.equal(compactions.length, 1, "the consumer must compact once");
-    assert.equal(compactions[0]?.details?.fastJev?.version, 1);
-    assert.equal(classifierCalls, 1, "ceiling must skip timing Jev and run one FastJev selection");
-    assert.notDeepEqual(classifierQuestionSets[0], ["done", "shape"]);
-    assert.ok(completed, "the real extension must append a completed trigger decision");
-    assert.equal(completed.data?.effectiveFloorTokens, matrix.floorTokens);
-    assert.equal(completed.data?.effectiveCeilingTokens, matrix.ceilingTokens);
-    assert.equal(completed.data?.preContextTokens, matrix.ceilingTokens);
-    assert.equal(completed.data?.mode, mode);
-    assert.equal(completed.data?.reason, "adaptive_ceiling");
+    assert.ok(positive, "the real extension must append a positive trigger decision");
+    assert.equal(positive.data?.effectiveFloorTokens, matrix.floorTokens);
+    assert.equal(positive.data?.effectiveCeilingTokens, matrix.ceilingTokens);
+    assert.equal(positive.data?.preContextTokens, matrix.ceilingTokens);
+    assert.equal(positive.data?.mode, mode);
+    assert.equal(positive.data?.reason, "adaptive_ceiling");
     assert.equal(JSON.stringify(decisions).includes(CANARY), false);
+
+    if (mode === "hint") {
+      assert.equal(beforeCompactCalls, 0, "hint must not emit session_before_compact");
+      assert.equal(compactions.length, 0, "hint must not compact the consumer session");
+      assert.equal(classifierCalls, 0, "ceiling hint must not run timing Jev or FastJev");
+      assert.equal(positive.data?.dispatchOutcome, "not_dispatched");
+      assert.equal(positive.data?.uiOutcome, "hinted");
+      assert.match(notifications[0] ?? "", /\/compact/);
+
+      await session.prompt("hint cooldown probe");
+      const currentDecisions = (sessionManager.getBranch() as StoredEntry[])
+        .filter((entry) => entry.customType === TRIGGER_DECISION_ENTRY_TYPE);
+      assert.equal(currentDecisions.at(-1)?.data?.reason, "cooldown");
+      assert.equal(notifications.length, 1);
+      assert.equal(beforeCompactCalls, 0);
+    } else {
+      assert.equal(beforeCompactCalls, 1, "auto must emit session_before_compact once");
+      assert.equal(compactions.length, 1, "auto must compact the consumer once");
+      assert.equal(compactions[0]?.details?.fastJev?.version, 1);
+      assert.equal(classifierCalls, 1, "ceiling auto must skip timing Jev and run one FastJev selection");
+      assert.notDeepEqual(classifierQuestionSets[0], ["done", "shape"]);
+      assert.equal(positive.data?.dispatchOutcome, "completed");
+      assert.equal(notifications.length, 0);
+    }
 
     if (mode === "auto" && matrix.contextWindow === 872_000) {
       requestedTokens = matrix.ceilingTokens;
@@ -344,7 +366,7 @@ async function runScenario(
   }
 }
 
-test("Pi 1.0.3 consumer runs the offline automatic lifecycle for every adaptive window", async (t) => {
+test("Pi 1.0.3 consumer distinguishes offline hint and auto lifecycles for every adaptive window", async (t) => {
   const root = mkdtempSync(join(tmpdir(), "a4s-pi-consumer-e2e-"));
   const originalHome = process.env.HOME;
   const originalOffline = process.env.PI_OFFLINE;

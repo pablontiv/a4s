@@ -101,14 +101,18 @@ The shared core clips each tool result to 512 bytes and enforces the complete
 questions, response parser, score formula, and interpolated quality floor. Any
 semantic Trigger failure returns `wait`.
 
-Both `hint` and `auto` send a positive decision to one `ctx.compact()` call.
-`hint` also displays an informational notification. The call enters the
-existing `session_before_compact` handler. A completed compaction starts a
-300-second cooldown. It also blocks another Trigger decision until context
-usage reaches `max(F, postCompactionTokens + 40000)`. Trigger decisions and
-mechanical gates use versioned technical custom entries in Pi's session JSONL.
-These entries do not contain conversation content, Jev responses, summaries,
-paths, commands, credentials, or raw errors.
+A positive `hint` decision displays an informational notification that tells
+the user to run `/compact`. It does not call `ctx.compact()`. It records
+`decision=compact`, `dispatchOutcome=not_dispatched`, and `uiOutcome=hinted`.
+It starts a 300-second cooldown. It does not create rearm state.
+
+A positive `auto` decision calls `ctx.compact()` once. The call enters the
+existing `session_before_compact` handler. A completed automatic compaction
+starts a 300-second cooldown. It also blocks another Trigger decision until
+context usage reaches `max(F, postCompactionTokens + 40000)`. Trigger decisions
+and mechanical gates use versioned technical custom entries in Pi's session
+JSONL. These entries do not contain conversation content, Jev responses,
+summaries, paths, commands, credentials, or raw errors.
 
 Supported Pi versions expose the editor text in TUI mode. The production Trigger uses that
 value unless an embedding supplies the `trigger.editorHasText` runtime gate;

@@ -116,10 +116,11 @@ export async function applyTriggerDecision(
   if (decision === "wait") return;
   if (mode === "hint") {
     try {
-      ctx.ui.notify("Compaction selected by Context Expert", "info");
+      ctx.ui.notify("Context Expert recommends compaction. Run /compact when you are ready.", "info");
     } catch {
-      // The informational hint must not replace or block compaction.
+      // Hint delivery is best-effort and must never start automatic compaction.
     }
+    return;
   }
   ctx.compact(options);
 }
