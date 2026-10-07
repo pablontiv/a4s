@@ -20,13 +20,27 @@ directory.
   estimated reduction is below `minReductionRatio`, or anything fails, it falls
   back to the native summary via `next(event)` — a failure never degrades the
   session.
-- **`turn.complete`** usa el timing de `compact-adviser`. El gate local usa
-  `minimumContextRatio`. Jev recibe las preguntas `done` y `shape`. El estado
-  `a4s.compaction-trigger-state/v3` recibe `$.session.messages()` mediante la
-  API de Claude. El adaptador excluye el system prompt, reasoning e imágenes.
-  El adaptador sanitiza el texto. Cada resultado de herramienta usa como máximo
-  512 bytes UTF-8. Cada request usa como máximo 32,000 bytes. `triggerMode`
-  controla la acción posterior.
+- **`turn.complete`** usa la política compartida adaptativa. El floor es
+  `max(60000, 15% de la ventana)`. El ceiling es el mayor entre `20% de la
+  ventana` y `floor + 5% de la ventana`. Bajo el floor, el adaptador no resuelve
+  credenciales ni llama al Jev de timing. Entre floor y ceiling, Jev recibe las
+  preguntas `done` y `shape`. En el ceiling, la política compacta sin llamar al
+  Jev de timing. El estado `a4s.compaction-trigger-state/v3` recibe
+  `$.session.messages()` mediante la API de Claude. El adaptador excluye el
+  system prompt, reasoning e imágenes. El adaptador sanitiza el texto. Cada
+  resultado de herramienta usa como máximo 512 bytes UTF-8. Cada request usa
+  como máximo 32,000 bytes. Los modos `hint` y `auto` compactan una vez tras una
+  decisión positiva. El modo `hint` también muestra una notificación.
+- El trigger aplica un cooldown de 300 segundos. El trigger permite una sola
+  compactación concurrente. Tras completar, el trigger se rearma en
+  `max(floor, postContextTokens + 40000)`. Si Claude no devuelve
+  `tokensAfter`, el adaptador bloquea nuevas decisiones automáticas durante la
+  sesión. El adaptador no estima este valor.
+- El adaptador registra decisiones estructuradas con el identificador
+  `a4s.claude-context-expert.trigger-decision.v1`. Usa `$.ui.log`, que también
+  entra en el debug log del host. Claude no ofrece al plugin un almacén durable
+  equivalente a las custom entries de Pi. El adaptador no crea un archivo de
+  logging propio.
 
 ## Credentials
 
@@ -53,8 +67,8 @@ claude --plugin-dir packages/context-expert/adapters/claude
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `triggerMode` | `auto` | `auto` (Jev decides, then compacts), `hint` (suggest `/compact`), or `off`. |
-| `minimumContextRatio` | `0.5` | Context-window fill (0..1) below which the trigger never asks Jev. |
+| `triggerMode` | `auto` | `auto` and `hint` compact after a positive policy decision. `hint` also notifies. `off` disables the trigger. |
+| `minimumContextRatio` | `0.5` | Compatibility setting. The shared adaptive policy uses token floor and ceiling values. |
 | `minReductionRatio` | `0.25` | Minimum estimated reduction to replace history; below it, native summary. |
 | `keepThreshold` | `0.5` | Minimum Jev probability to keep a tool call/result. |
 | `preserveRecentMessages` | `6` | Newest messages pinned from compaction. |
