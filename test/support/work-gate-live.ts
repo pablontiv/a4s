@@ -18,6 +18,7 @@ import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { createJsonlLineReader } from "../../packages/pi-context-expert/src/rpc-stdin-guard.ts";
+import { RealWorkerObserver, type RealWorkerRecordDisposition } from "./real-worker-observer.ts";
 import {
   conditions,
   effects,
@@ -40,11 +41,14 @@ import {
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const FIXTURE_PATH = join(ROOT, "test", "fixtures", "work-gate-scenarios.json");
 const PROBE_PATH = join(ROOT, "test", "support", "work-gate-probe.ts");
+const WORKER_AGENT_PATH = join(ROOT, "agents", "pi", "reviewer.md");
 const RUNNER_PATH = fileURLToPath(import.meta.url);
 const SHELL_PARSER_PATH = "/bin/bash";
 const DEFAULT_RESULTS = join(tmpdir(), "a4s-work-gate-campaign.jsonl");
 const DEFAULT_DEADLINE_MS = 120_000;
 const MAX_CONCURRENCY = 4;
+export const REAL_WORKER_EXTENSION = "npm:pi-subagents-j0k3r";
+export const REAL_WORKER_UNIT_COUNT = 8;
 
 export interface Scenario {
   id: string;
@@ -63,6 +67,7 @@ export interface Scenario {
 
 export type Tier = "smoke" | "corpus" | "compliance" | "git-e2e";
 export type Variant = "candidate" | "baseline";
+export type WorkerMode = "simulated" | "real";
 
 export interface CliOptions {
   tier: Tier;
@@ -75,6 +80,7 @@ export interface CliOptions {
   shardCount: number;
   shardIndex: number;
   model: string;
+  workerMode: WorkerMode;
   policyPath?: string;
   skillPath?: string;
   variantRoot?: string;
@@ -188,6 +194,7 @@ export interface PreparedRun {
   copiedPolicy: string;
   copiedSkill: string;
   copiedProbe: string;
+  copiedWorkerAgent: string;
 }
 
 export interface StableAuthIdentity {
@@ -270,6 +277,7 @@ export function usage(): string {
     "  --verify-shards PATHS Verify a comma-separated set of shard files.",
     "  --concurrency N        Set concurrent runs. The maximum is 4.",
     "  --model PROVIDER/ID    Set the exact live campaign model.",
+    "  --real-workers         Use eight real Workers through pi-subagents-j0k3r.",
     "  --tier NAME           Select smoke, corpus, compliance, or git-e2e.",
     "  --runs N              Set the smoke or compliance run count.",
     "",
@@ -309,6 +317,7 @@ export function parseCli(argv: readonly string[]): CliOptions {
   let deadlineMs = Number(process.env.A4S_GATE_TIMEOUT_MS ?? DEFAULT_DEADLINE_MS);
   let variant: Variant = "candidate";
   let model: string | undefined;
+  let workerMode: WorkerMode = "simulated";
   let policyPath: string | undefined;
   let skillPath: string | undefined;
   let variantRoot: string | undefined;
@@ -368,6 +377,9 @@ export function parseCli(argv: readonly string[]): CliOptions {
         model = value;
         break;
       }
+      case "--real-workers":
+        workerMode = "real";
+        break;
       case "--policy": {
         const value = argv[++index];
         if (!value) throw new Error("--policy requires a path");
@@ -446,6 +458,7 @@ export function parseCli(argv: readonly string[]): CliOptions {
     shardCount: selectedShardCount,
     shardIndex: selectedShardIndex,
     model,
+    workerMode,
     ...(policyPath ? { policyPath } : {}),
     ...(skillPath ? { skillPath } : {}),
     ...(variantRoot ? { variantRoot } : {}),
@@ -1264,12 +1277,14 @@ export async function prepareRun(
     const copiedPolicy = join(workspace, "AGENTS.md");
     const copiedSkill = join(workspace, "skills", "work-lifecycle", "SKILL.md");
     const copiedProbe = join(root, "extension", "work-gate-probe.ts");
+    const copiedWorkerAgent = join(agentDir, "agents", "reviewer.md");
     const eventLog = join(artifactDir, "probe.jsonl");
     const scenarioPath = join(artifactDir, "scenario.json");
 
     await Promise.all([
       mkdir(dirname(copiedSkill), { recursive: true }),
       mkdir(dirname(copiedProbe), { recursive: true }),
+      mkdir(dirname(copiedWorkerAgent), { recursive: true }),
       mkdir(home, { recursive: true }),
       mkdir(agentDir, { recursive: true }),
       mkdir(sessionDir, { recursive: true }),
@@ -1279,6 +1294,7 @@ export async function prepareRun(
       writeFile(copiedPolicy, snapshot.policy, { mode: 0o600 }),
       writeFile(copiedSkill, snapshot.skill, { mode: 0o600 }),
       writeFile(copiedProbe, snapshot.probe, { mode: 0o600 }),
+      readFile(WORKER_AGENT_PATH).then((content) => writeFile(copiedWorkerAgent, content, { mode: 0o600 })),
       writeFile(scenarioPath, `${JSON.stringify(scenario, null, 2)}\n`, { mode: 0o600 }),
       writeFile(eventLog, "", { mode: 0o600 }),
       writeOptionalSnapshot(snapshot.settings, join(agentDir, "settings.json")),
@@ -1298,6 +1314,7 @@ export async function prepareRun(
       copiedPolicy,
       copiedSkill,
       copiedProbe,
+      copiedWorkerAgent,
     };
   } catch (error) {
     await rm(root, { recursive: true, force: true });
@@ -1407,10 +1424,20 @@ export async function withPreparedRun<T>(
   }
 }
 
-function promptFor(scenario: Scenario | GitScenario): string {
+function promptFor(scenario: Scenario | GitScenario, workerMode: WorkerMode): string {
+  const workerDispatch = workerMode === "real"
+    ? [
+      "Primero delega exactamente ocho unidades independientes en una sola respuesta.",
+      "Usa ocho llamadas subagent_run con agent=reviewer y mode=task.",
+      "Usa los nombres unit-01 a unit-08, sin repetir nombres.",
+      "Pide a cada Worker una revisión breve del estado y de la condición del gate.",
+      "Continúa sólo después de recibir las ocho respuestas.",
+    ]
+    : [];
   if (scenario.id === "GIT-E2E") {
     return [
       "/skill:work-lifecycle",
+      ...workerDispatch,
       "Aplica el ciclo local a un cambio pequeño en task.txt.",
       "El operador acepta el resultado, alcance, exclusiones, invariantes y evidencia de esta tarea.",
       "Usa el repositorio temporal descrito por el probe. Completa la entrega y el cierre si la evidencia lo permite.",
@@ -1422,6 +1449,7 @@ function promptFor(scenario: Scenario | GitScenario): string {
     : "cerrar la entrega de un candidato pequeño ya preparado";
   return [
     "/skill:work-lifecycle",
+    ...workerDispatch,
     `Continúa el trabajo para ${work}.`,
     `El estado está en la etapa ${String((scenario.prestate as Record<string, unknown>).stage ?? scenario.gate)}.`,
     "Usa las herramientas del probe para leer la evidencia actual.",
@@ -1473,6 +1501,7 @@ export function pionArgs(
   prepared: Pick<PreparedRun, "sessionDir" | "copiedSkill" | "copiedProbe">,
   sessionId: string,
   model: string,
+  workerMode: WorkerMode = "simulated",
 ): string[] {
   return [
     "--mode", "rpc",
@@ -1482,6 +1511,7 @@ export function pionArgs(
     "--session-id", sessionId,
     "--no-extensions",
     "--extension", prepared.copiedProbe,
+    ...(workerMode === "real" ? ["--extension", REAL_WORKER_EXTENSION] : []),
     "--no-builtin-tools",
     "--no-skills",
     "--skill", prepared.copiedSkill,
@@ -1534,17 +1564,25 @@ export async function verifyRuntimeDigest(path: string, expectedSha256: string):
   }
 }
 
-async function runPion(
+export interface RunPionOptions {
+  workerMode?: WorkerMode;
+  sessionId?: string;
+  onRecord?: (record: Record<string, unknown>) => RealWorkerRecordDisposition | void;
+}
+
+export async function runPion(
   runtime: RuntimeExecutable,
   prepared: PreparedRun,
   deadlineMs: number,
   prompt: string,
   modelIdentity: ModelIdentity,
+  options: RunPionOptions = {},
 ): Promise<ProcessCapture> {
   await verifyRuntimeDigest(runtime.path, runtime.sha256);
+  const workerMode = options.workerMode ?? "simulated";
   const child = spawn(
     runtime.path,
-    pionArgs(prepared, randomUUID(), modelIdentity.canonicalId),
+    pionArgs(prepared, options.sessionId ?? randomUUID(), modelIdentity.canonicalId, workerMode),
     {
       cwd: prepared.workspace,
       detached: process.platform !== "win32",
@@ -1556,6 +1594,7 @@ async function runPion(
         PI_SKIP_VERSION_CHECK: "1",
         A4S_GATE_SCENARIO_PATH: prepared.scenarioPath,
         A4S_GATE_EVENT_LOG: prepared.eventLog,
+        A4S_GATE_WORKER_MODE: workerMode,
       },
       stdio: ["pipe", "pipe", "pipe"],
     },
@@ -1584,6 +1623,7 @@ async function runPion(
     };
     const onRecord = (record: Record<string, unknown>): void => {
       stdout.push(record);
+      const disposition = options.onRecord?.(record);
       if (record.type === "response" && record.id === "model-identity") {
         if (record.success !== true) {
           rejectPreflight("get_state was rejected");
@@ -1606,7 +1646,8 @@ async function runPion(
         hardKill(child);
         return;
       }
-      if (!settled && record.type === "agent_settled") {
+      const closeInput = disposition === undefined || disposition.closeInput;
+      if (!settled && record.type === "agent_settled" && closeInput) {
         settled = true;
         child.stdin.end();
       }
@@ -1939,13 +1980,29 @@ async function runOne(
   let tagged: TaggedSemanticEvent[] = [];
 
   return withPreparedRun(snapshot, scenario, async (prepared) => {
+    const workerRunId = `run:${campaignKey}:${item.index}`;
+    const workerObserver = options.workerMode === "real" ? new RealWorkerObserver(workerRunId) : undefined;
     try {
       if (scenario.id === "GIT-E2E") {
         scenario = await prepareGitScenario(prepared.root);
         await writeFile(prepared.scenarioPath, `${JSON.stringify(scenario, null, 2)}\n`, { mode: 0o600 });
       }
       await verifyPreparedRun(snapshot, prepared);
-      capture = await runPion(runtime, prepared, options.deadlineMs, promptFor(scenario), modelIdentity);
+      capture = await runPion(
+        runtime,
+        prepared,
+        options.deadlineMs,
+        promptFor(scenario, options.workerMode),
+        modelIdentity,
+        {
+          workerMode: options.workerMode,
+          ...(workerObserver ? { onRecord: (record: Record<string, unknown>) => workerObserver.onRecord(record) } : {}),
+        },
+      );
+      if (workerObserver) {
+        await appendFile(`${options.resultsPath}.workers.jsonl`, workerObserver.toJsonl(), { encoding: "utf8", mode: 0o600 });
+        workerObserver.validate({ expectedUnits: REAL_WORKER_UNIT_COUNT, minimumFanOut: REAL_WORKER_UNIT_COUNT });
+      }
       if (capture.infrastructureError?.startsWith("Model identity preflight failed:")) {
         throw new ModelPreflightError("model identity", undefined, undefined, capture.infrastructureError);
       }

@@ -1631,6 +1631,13 @@ export function assertSimulatedToolSurface(activeTools: readonly string[]): void
   }
 }
 
+export function assertRealWorkerToolSurface(activeTools: readonly string[]): void {
+  const actual = new Set(activeTools);
+  for (const required of ["bash", "edit", "subagent_run", "write"]) {
+    if (!actual.has(required)) throw new Error(`Real Worker tool surface is missing ${required}`);
+  }
+}
+
 function inside(parent: string, child: string): boolean {
   const path = relative(resolve(parent), resolve(child));
   return path === "" || (!path.startsWith("..") && !isAbsolute(path));
@@ -1649,6 +1656,7 @@ export default function workGateLiveProbe(pi: LiveExtensionApi): void {
   }
 
   const eventLogPath = logPath;
+  const realWorkers = process.env.A4S_GATE_WORKER_MODE === "real";
   const scenario = JSON.parse(readFileSync(scenarioPath, "utf8")) as LiveScenario;
   let machine = initializeScenarioState(scenario);
   let state = new Map<string, EvidenceStatus>(Object.entries(machine.statuses));
@@ -2035,27 +2043,29 @@ export default function workGateLiveProbe(pi: LiveExtensionApi): void {
     execute: (_toolCallId, params) => executeMutation("write", params),
   });
 
-  pi.registerTool({
-    name: "subagent_run",
-    label: "Subagent Run (work-gate probe)",
-    description: "Run a simulated independent review. It cannot access the host or start another model.",
-    parameters: SUBAGENT_PARAMETERS,
-    renderShell: "self",
-    async execute(_toolCallId, params) {
-      const semanticStart = semantic.length;
-      const status = scenario.missingOrFailedCondition === conditions.INDEPENDENT_REVIEW_PASSED
-        ? scenarioFailureStatus(scenario)
-        : "passed";
-      setCondition(conditions.INDEPENDENT_REVIEW_PASSED, status);
-      const result = { ok: status === "passed", review: status, state: stateObject() };
-      record("subagent_run", params, result, semanticStart);
-      return {
-        content: [{ type: "text" as const, text: `Independent review: ${status}.` }],
-        details: result,
-        ...(status !== "passed" ? { isError: true } : {}),
-      };
-    },
-  });
+  if (!realWorkers) {
+    pi.registerTool({
+      name: "subagent_run",
+      label: "Subagent Run (work-gate probe)",
+      description: "Run a simulated independent review. It cannot access the host or start another model.",
+      parameters: SUBAGENT_PARAMETERS,
+      renderShell: "self",
+      async execute(_toolCallId, params) {
+        const semanticStart = semantic.length;
+        const status = scenario.missingOrFailedCondition === conditions.INDEPENDENT_REVIEW_PASSED
+          ? scenarioFailureStatus(scenario)
+          : "passed";
+        setCondition(conditions.INDEPENDENT_REVIEW_PASSED, status);
+        const result = { ok: status === "passed", review: status, state: stateObject() };
+        record("subagent_run", params, result, semanticStart);
+        return {
+          content: [{ type: "text" as const, text: `Independent review: ${status}.` }],
+          details: result,
+          ...(status !== "passed" ? { isError: true } : {}),
+        };
+      },
+    });
+  }
 
   pi.on("before_agent_start", (event) => {
     const prompt = event.prompt ?? "";
@@ -2091,7 +2101,8 @@ export default function workGateLiveProbe(pi: LiveExtensionApi): void {
   });
 
   pi.on("session_start", () => {
-    assertSimulatedToolSurface(pi.getActiveTools());
+    if (realWorkers) assertRealWorkerToolSurface(pi.getActiveTools());
+    else assertSimulatedToolSurface(pi.getActiveTools());
   });
 
   pi.on("message_end", (event) => {
