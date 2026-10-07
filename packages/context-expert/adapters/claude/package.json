@@ -10,6 +10,7 @@
   },
   "scripts": {
     "sync-core": "node scripts/sync-core.mjs",
-    "check-core": "node scripts/sync-core.mjs --check"
+    "check-core": "node scripts/sync-core.mjs --check",
+    "test:e2e:offline": "claude plugin test ."
   }
 }

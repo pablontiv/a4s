@@ -26,6 +26,7 @@
   },
   "scripts": {
     "test": "tsx --test test/*.test.ts",
+    "test:e2e:offline": "tsx --test test/consumer-lifecycle.e2e.test.ts",
     "typecheck": "tsc --noEmit",
     "eval:evidence": "tsx eval/evidence/run.ts",
     "e2e": "tsx scripts/run-headless-e2e.ts",
