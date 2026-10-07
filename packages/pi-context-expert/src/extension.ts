@@ -364,8 +364,10 @@ export function registerPiContextExpert(pi: ExtensionAPI, options: PiContextExpe
     const observedAt = now();
     const mode = config.trigger.mode;
     let nativeOverflowThreshold: number | undefined;
-    const recordTrigger = (input: TriggerDecisionLogInput): void => {
-      appendTriggerDecision(pi, ctx, now(), ++triggerDecisionSequence, {
+    const recordTrigger = (input: TriggerDecisionLogInput, decisionId?: string): void => {
+      const timestamp = now();
+      const id = decisionId ?? triggerDecisionId(timestamp, ++triggerDecisionSequence, input);
+      appendTriggerDecision(pi, ctx, timestamp, id, {
         contextWindowTokens: contextWindow,
         effectiveFloorTokens: thresholds.floorTokens,
         effectiveCeilingTokens: thresholds.ceilingTokens,
@@ -419,7 +421,12 @@ export function registerPiContextExpert(pi: ExtensionAPI, options: PiContextExpe
       return;
     }
     if (triggerRearmTokens !== undefined && contextTokens < triggerRearmTokens) {
-      block("rearm", { rearmTokens: triggerRearmTokens });
+      block(
+        "rearm",
+        Number.isFinite(triggerRearmTokens)
+          ? { rearmTokens: triggerRearmTokens }
+          : { rearmStatus: "post_context_unavailable" },
+      );
       return;
     }
     if (triggerRearmTokens !== undefined) triggerRearmTokens = undefined;
@@ -462,6 +469,7 @@ export function registerPiContextExpert(pi: ExtensionAPI, options: PiContextExpe
     triggerCompactionInFlight = true;
     let compactionDispatched = false;
     let policyDecision: TriggerPolicyDecision | undefined;
+    let positiveDecisionId: string | undefined;
     try {
       const reportDiagnostic = (diagnostic: TriggerDiagnostic): void => recordOperationalFailure({
         phase: "trigger",
@@ -503,6 +511,7 @@ export function registerPiContextExpert(pi: ExtensionAPI, options: PiContextExpe
         return;
       }
 
+      positiveDecisionId = triggerDecisionId(now(), ++triggerDecisionSequence, policyDecision);
       const appendCooldown = (): void => {
         try {
           pi.appendEntry(TRIGGER_COOLDOWN_ENTRY_TYPE, {
@@ -534,16 +543,16 @@ export function registerPiContextExpert(pi: ExtensionAPI, options: PiContextExpe
             ...(Number.isFinite(triggerRearmTokens)
               ? { rearmTokens: triggerRearmTokens, rearmStatus: "armed" as const }
               : { rearmStatus: "post_context_unavailable" as const }),
-          });
+          }, positiveDecisionId);
           triggerCompactionInFlight = false;
         },
         onError: () => {
-          recordTrigger(policyLogInput(policyDecision!, "failed"));
+          recordTrigger(policyLogInput(policyDecision!, "failed"), positiveDecisionId);
           triggerCompactionInFlight = false;
         },
       });
       compactionDispatched = true;
-      recordTrigger(policyLogInput(policyDecision, "dispatched"));
+      recordTrigger(policyLogInput(policyDecision, "dispatched"), positiveDecisionId);
     } catch (error) {
       recordTrigger({
         ...(policyDecision
@@ -556,7 +565,7 @@ export function registerPiContextExpert(pi: ExtensionAPI, options: PiContextExpe
             floor: null,
             dispatchOutcome: "failed",
           }),
-      });
+      }, positiveDecisionId);
       recordOperationalFailure({
         phase: "trigger",
         code: classifyCompactionError(error),
@@ -829,23 +838,29 @@ function policyLogInput(
   };
 }
 
+function triggerDecisionId(
+  timestamp: Date,
+  sequence: number,
+  input: Pick<TriggerDecisionLogInput, "decision" | "reason">,
+): string {
+  return stableDigest({
+    schema: "a4s.pi-context-expert.trigger-decision-id/v1",
+    timestamp: timestamp.toISOString(),
+    sequence,
+    decision: input.decision,
+    reason: input.reason,
+  });
+}
+
 function appendTriggerDecision(
   pi: ExtensionAPI,
   ctx: ExtensionContext,
   timestamp: Date,
-  sequence: number,
+  id: string,
   input: TriggerDecisionLogInput,
 ): void {
   const model = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined;
   const timestampText = timestamp.toISOString();
-  const id = stableDigest({
-    schema: "a4s.pi-context-expert.trigger-decision-id/v1",
-    timestamp: timestampText,
-    sequence,
-    decision: input.decision,
-    reason: input.reason,
-    dispatchOutcome: input.dispatchOutcome,
-  });
   try {
     pi.appendEntry(TRIGGER_DECISION_ENTRY_TYPE, {
       schema: "a4s.pi-context-expert.trigger-decision/v1",
@@ -865,12 +880,16 @@ function latestTriggerRearmTokens(entries: readonly unknown[]): number | undefin
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const data = customEntryData(entries[index], TRIGGER_DECISION_ENTRY_TYPE);
     if (
-      data?.schema === "a4s.pi-context-expert.trigger-decision/v1" &&
-      data.dispatchOutcome === "completed" &&
+      data?.schema !== "a4s.pi-context-expert.trigger-decision/v1" ||
+      data.dispatchOutcome !== "completed"
+    ) continue;
+    if (data.rearmStatus === "post_context_unavailable") return Number.POSITIVE_INFINITY;
+    if (
       typeof data.rearmTokens === "number" &&
       Number.isFinite(data.rearmTokens) &&
       data.rearmTokens >= 0
     ) return data.rearmTokens;
+    return undefined;
   }
   return undefined;
 }

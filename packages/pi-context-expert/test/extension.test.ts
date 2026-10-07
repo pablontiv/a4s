@@ -2195,7 +2195,7 @@ test("hint and auto dispatch one compaction for one positive decision", async ()
   }
 });
 
-test("Trigger concurrency, cooldown, and rearm block duplicate compactions", async () => {
+test("Trigger correlation survives an interleaved in-flight attempt and rearm blocks duplicates", async () => {
   const jev = new CompactTriggerJev();
   const fake = createFakePi();
   let current = new Date("2026-09-22T12:00:00.000Z");
@@ -2240,8 +2240,47 @@ test("Trigger concurrency, cooldown, and rearm block duplicate compactions", asy
     entry.customType === TRIGGER_DECISION_ENTRY_TYPE &&
     (entry.data as { reason?: unknown }).reason === "compaction_in_flight"
   ));
+  const dispatchedIndex = fake.entries.findIndex((entry) =>
+    entry.customType === TRIGGER_DECISION_ENTRY_TYPE &&
+    (entry.data as { dispatchOutcome?: unknown }).dispatchOutcome === "dispatched"
+  );
+  assert.notEqual(dispatchedIndex, -1);
+
+  await fake.handlers.get("agent_settled")?.({ type: "agent_settled" }, context);
+  assert.equal(compactCalls, 1, "an interleaved in-flight attempt must not dispatch");
+  const interleavedIndex = fake.entries
+    .map((entry, index) => ({ entry, index }))
+    .filter(({ entry }) =>
+      entry.customType === TRIGGER_DECISION_ENTRY_TYPE &&
+      (entry.data as { reason?: unknown }).reason === "compaction_in_flight"
+    )
+    .at(-1)?.index ?? -1;
+  assert.ok(interleavedIndex > dispatchedIndex, "the in-flight attempt must occur after dispatch");
 
   onComplete?.({ estimatedTokensAfter: 30_000 });
+  const completedIndex = fake.entries.findIndex((entry) =>
+    entry.customType === TRIGGER_DECISION_ENTRY_TYPE &&
+    (entry.data as { dispatchOutcome?: unknown }).dispatchOutcome === "completed"
+  );
+  assert.ok(completedIndex > interleavedIndex, "completion must occur after the in-flight attempt");
+  const positiveLogs = fake.entries.filter((entry) =>
+    entry.customType === TRIGGER_DECISION_ENTRY_TYPE &&
+    ["dispatched", "completed"].includes(
+      String((entry.data as { dispatchOutcome?: unknown }).dispatchOutcome),
+    )
+  );
+  assert.equal(positiveLogs.filter((entry) =>
+    (entry.data as { dispatchOutcome?: unknown }).dispatchOutcome === "dispatched"
+  ).length, 1);
+  assert.equal(
+    (positiveLogs[0]?.data as { id?: unknown }).id,
+    (positiveLogs[1]?.data as { id?: unknown }).id,
+    "dispatch and completion must share one decision id",
+  );
+  assert.deepEqual(
+    positiveLogs.map((entry) => (entry.data as { dispatchOutcome?: unknown }).dispatchOutcome),
+    ["dispatched", "completed"],
+  );
   await fake.handlers.get("agent_settled")?.({ type: "agent_settled" }, context);
   assert.equal(compactCalls, 1, "cooldown must block a completed trigger");
   assert.ok(fake.entries.some((entry) =>
@@ -2274,4 +2313,135 @@ test("Trigger concurrency, cooldown, and rearm block duplicate compactions", asy
     },
     { postContextTokens: 30_000, actualReclaimTokens: 32_000, rearmTokens: 70_000 },
   );
+});
+
+test("Trigger reload preserves fail-closed rearm when post-context usage is unavailable", async () => {
+  const earlierFiniteRearm: StoredEntry = {
+    type: "custom",
+    customType: TRIGGER_DECISION_ENTRY_TYPE,
+    data: {
+      schema: "a4s.pi-context-expert.trigger-decision/v1",
+      id: "earlier-finite-rearm",
+      dispatchOutcome: "completed",
+      rearmStatus: "armed",
+      rearmTokens: 70_000,
+    },
+  };
+  const fake = createFakePi([earlierFiniteRearm]);
+  let current = new Date("2026-09-22T12:00:00.000Z");
+  let onComplete: ((result: { estimatedTokensAfter?: number }) => void) | undefined;
+  registerPiContextExpert(fake.pi, {
+    jevClient: new CompactTriggerJev(),
+    config: { "trigger.mode": "auto" },
+    trigger: {
+      editorHasText: () => false,
+      resolveCompactionSettings: () => ({ keepRecentTokens: 20_000 }),
+    },
+    now: () => current,
+  });
+  const base = createContext(fake.entries, { projectionEntries: compactableTriggerProjection() });
+  const context = {
+    ...base.context,
+    hasUI: true,
+    isIdle: () => true,
+    hasPendingMessages: () => false,
+    getContextUsage: () => ({ tokens: 62_000, contextWindow: 200_000, percent: 31 }),
+    compact: (callbacks?: { onComplete?: (result: { estimatedTokensAfter?: number }) => void }) => {
+      onComplete = callbacks?.onComplete;
+    },
+  };
+
+  await fake.handlers.get("agent_settled")?.({ type: "agent_settled" }, context);
+  onComplete?.({});
+
+  const completed = [...fake.entries].reverse().find((entry) =>
+    entry.customType === TRIGGER_DECISION_ENTRY_TYPE &&
+    (entry.data as { dispatchOutcome?: unknown }).dispatchOutcome === "completed"
+  );
+  const completedData = completed?.data as Record<string, unknown>;
+  assert.equal(completedData.rearmStatus, "post_context_unavailable");
+  assert.equal(Object.hasOwn(completedData, "rearmTokens"), false);
+  assert.equal(
+    Object.values(completedData).some((value) => typeof value === "number" && !Number.isFinite(value)),
+    false,
+  );
+  assert.doesNotMatch(JSON.stringify(completedData), /"rearmTokens":null/);
+
+  current = new Date("2026-09-22T12:05:01.000Z");
+  const reloaded = createFakePi(fake.entries);
+  const reloadedJev = new CompactTriggerJev();
+  let reloadedCompactCalls = 0;
+  registerPiContextExpert(reloaded.pi, {
+    jevClient: reloadedJev,
+    config: { "trigger.mode": "auto" },
+    trigger: {
+      editorHasText: () => false,
+      resolveCompactionSettings: () => ({ keepRecentTokens: 20_000 }),
+    },
+    now: () => current,
+  });
+  const reloadedBase = createContext(reloaded.entries, { projectionEntries: compactableTriggerProjection() });
+  const reloadedContext = {
+    ...reloadedBase.context,
+    hasUI: true,
+    isIdle: () => true,
+    hasPendingMessages: () => false,
+    getContextUsage: () => ({ tokens: 70_000, contextWindow: 200_000, percent: 35 }),
+    compact: () => { reloadedCompactCalls += 1; },
+  };
+
+  await reloaded.handlers.get("session_start")?.(
+    { type: "session_start", reason: "reload" },
+    reloadedContext,
+  );
+  await reloaded.handlers.get("agent_settled")?.({ type: "agent_settled" }, reloadedContext);
+
+  assert.equal(reloadedCompactCalls, 0, "reload must retain fail-closed rearm");
+  assert.equal(reloadedJev.calls, 0);
+  const rearmLog = reloaded.entries.at(-1)?.data as Record<string, unknown>;
+  assert.equal(rearmLog.reason, "rearm");
+  assert.equal(rearmLog.rearmStatus, "post_context_unavailable");
+  assert.equal(Object.hasOwn(rearmLog, "rearmTokens"), false);
+  assert.doesNotMatch(JSON.stringify(rearmLog), /"rearmTokens":null/);
+});
+
+test("Trigger reload restores a finite rearm value", async () => {
+  const fake = createFakePi([{
+    type: "custom",
+    customType: TRIGGER_DECISION_ENTRY_TYPE,
+    data: {
+      schema: "a4s.pi-context-expert.trigger-decision/v1",
+      id: "finite-rearm",
+      dispatchOutcome: "completed",
+      rearmStatus: "armed",
+      rearmTokens: 70_000,
+    },
+  }]);
+  let tokens = 69_000;
+  let compactCalls = 0;
+  registerPiContextExpert(fake.pi, {
+    config: { "trigger.mode": "auto" },
+    trigger: {
+      editorHasText: () => false,
+      resolveCompactionSettings: () => ({ keepRecentTokens: 20_000 }),
+    },
+  });
+  const base = createContext(fake.entries, { projectionEntries: compactableTriggerProjection() });
+  const context = {
+    ...base.context,
+    hasUI: true,
+    isIdle: () => true,
+    hasPendingMessages: () => false,
+    getContextUsage: () => ({ tokens, contextWindow: 200_000, percent: tokens / 2_000 }),
+    compact: () => { compactCalls += 1; },
+  };
+
+  await fake.handlers.get("session_start")?.({ type: "session_start", reason: "reload" }, context);
+  await fake.handlers.get("agent_settled")?.({ type: "agent_settled" }, context);
+  assert.equal(compactCalls, 0);
+  assert.equal((fake.entries.at(-1)?.data as { rearmTokens?: unknown }).rearmTokens, 70_000);
+
+  tokens = 70_000;
+  await fake.handlers.get("agent_settled")?.({ type: "agent_settled" }, context);
+  assert.equal(compactCalls, 1, "the restored finite rearm must release at its boundary");
 });
