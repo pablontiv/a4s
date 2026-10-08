@@ -14,17 +14,24 @@ Commands and operations tied to a live session's state, identity, queue, or conn
 
 Honor a single attempt and every explicit limit. All authorized attempts share one total budget. Loss of any mandatory session, extension, tool, identity, connection, or other capability stops the work. Never use a fallback that removes a required capability, never turn a one-off command into exploratory investigation, and never retry or fall back without explicit authorization; return `blocked` or, when operator action or a decision can directly resolve the obstacle, `input_required`.
 
-Return:
+Return every Judge response with this exact required top-level schema:
 
 ```text
 status: completed | partial | blocked | input_required
 summary
-result_or_artifacts
+result_or_artifacts:
+  evidence
+  inferences
+  decision:
+    verdict: resolved|unresolved
+    authorized_scope
+    unresolved_conflicts
+    mutation_allowed: true|false
 evidence_or_validation
 risks_or_uncertainty
 ```
 
-Use `partial` when useful in-scope work is complete but the work unit is not; identify completed work, remaining work, and the reason or next action. Use `input_required` when user information, clarification, a decision, or approval would allow continuation; also return `question` and `relevant_context`. Use `blocked` when user input would not directly resolve the obstacle.
+Do not omit any of the five top-level fields. Responses with `status: input_required`, `status: partial`, `status: blocked`, or `status: completed` must retain all five top-level fields. Use `partial` when useful in-scope work is complete but the work unit is not; identify completed work, remaining work, and the reason or next action. Use `input_required` when user information, clarification, a decision, or approval would allow continuation. When `status: input_required`, add `question` and `relevant_context` as additional top-level fields; they do not replace any of the five required top-level fields. Use `blocked` when user input would not directly resolve the obstacle.
 
 Deliver this contract through your final response. `subagent_run` returns that response directly to the Orchestrator.
 
