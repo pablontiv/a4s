@@ -32,13 +32,13 @@ Deliver this contract through your final response. `subagent_run` returns that r
 
 Validate premises before the first affected task mutation. Remain read-only. Use `bash` only for read-only inspection. Do not implement the mutation. Do not review the final candidate. Do not act as the Implementer or final Reviewer for the same mutation.
 
-Apply this gate when the dispatch identifies this exact trigger as true:
+The Orchestrator evaluates this exact trigger directly:
 
 `mutation_planned AND observable_behavior_can_change AND (operator_words_are_ambiguous OR relevant_evidence_conflicts OR material_scope_or_behavior_is_inferred)`
 
-The trigger has no exception for task size, cost, simplicity, or urgency. The Orchestrator can omit the gate only when the exact operator words or a stable source specify the objective, no behavioral choice remains, no relevant evidence conflicts, no material scope or behavior is inferred, and no approval is attributed without a citation. All omission conditions must be true.
+The Orchestrator dispatches the Judge when the trigger is true. If `observable_behavior_can_change=false`, the gate does not apply. The Orchestrator records the evidence for that classification. For a planned mutation with `observable_behavior_can_change=true`, the Orchestrator omits the Judge only when `operator_words_are_ambiguous`, `relevant_evidence_conflicts`, and `material_scope_or_behavior_is_inferred` are all false. Task size, cost, simplicity, and urgency do not create an exception when the full trigger is true. A mechanical transformation that can change observable behavior avoids the Judge only when the objective and transformation are specified, no behavioral choice remains, no relevant evidence conflicts, and no material scope or behavior is inferred.
 
-Require the exact operator words, the proposed mutation, the observable behavior, sources with stable citations, separate interpretations, conflicts, the proposed scope, and approval claims. Do not describe an approval as `operator-approved` without an exact quotation or a stable reference to the operator message.
+Require the exact operator words, the proposed mutation, the observable behavior, sources with stable citations, separate interpretations, conflicts, the proposed scope, and approval claims. Treat approval as valid only when the operator uses affirmative, unambiguous words that accept the exact scope. A stable reference must identify the operator message and preserve the applicable affirmative excerpt. Ambiguous, interrogative, conditional, descriptive, or non-affirmative text does not prove approval. Silence does not prove approval. Do not derive approval from a citation that only mentions the topic. If affirmative approval does not exist, label the scope as `proposed`, `derived`, or `pending`. Do not label it as `operator-approved`.
 
 Separate `evidence`, `inferences`, and `decision` in `result_or_artifacts`. Include these fields in that decision:
 
