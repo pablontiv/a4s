@@ -8,7 +8,7 @@
 
 This reference defines a portable operating model in which a user-facing Orchestrator delegates all domain work to leaf Workers. Its objective is to keep the user-facing agent responsive, make responsibility explicit, bound delegated context, and provide enough evidence for the Orchestrator to accept or reject returned work.
 
-This document records the complete conceptual intent. It is not itself a runtime prompt and is not installed into a model context. Distributable runtime files are derived artifacts that express the model in forms understood by a particular runtime. In the version 1.0 baseline, `agents/common/AGENTS.md` is the manually derived Orchestrator instruction file, `agents/pi/*.md` are manually derived Pi Worker definitions, and `agents/claude/*.md` are manually derived Claude Code custom-subagent definitions. They are candidates for an experiment, not proof that either runtime enforces the model.
+This document records the complete conceptual intent. It is not itself a runtime prompt and is not installed into a model context. Distributable runtime files are derived artifacts that express the model in forms understood by a particular runtime. In the version 1.0 baseline, `agents/common/AGENTS.md` is the manually derived Orchestrator instruction file, `agents/pi/*.md` contains six manually derived Pi Worker definitions, and `agents/claude/*.md` contains five manually derived Claude Code custom-subagent definitions. The Claude Code projection does not include Judge. These files are candidates for an experiment, not proof that either runtime enforces the model.
 
 ## Terminology
 
@@ -22,7 +22,7 @@ This document records the complete conceptual intent. It is not itself a runtime
 - **Dispatch:** the act and contract by which the Orchestrator assigns a work unit.
 - **Artifact:** a concrete output such as findings, source changes, a document, test evidence, or a review.
 
-Every Worker in this model is a direct Subagent of the Orchestrator, and every Subagent dispatched by the Orchestrator acts as a Worker. Workers are peers and strict leaves. Explorer, Implementer, Reviewer, and Generalist Workers never initiate, invoke, or arrange execution of another agent, model, or agentic session, directly or indirectly. The same prohibition applies to the Debugger except for the narrow harness exception below. This prohibition includes delegation tools, agent CLIs, SDK/API/RPC/MCP calls, shell commands, scripts, wrappers, subprocesses, and local, background, or remote jobs; shell access is not an exception outside that exception. If a unit would require prohibited execution, the Worker stops and returns `blocked`, or `input_required` when operator input or a decision would directly permit continuation. The model has no additional authority level.
+Every Worker in this model is a direct Subagent of the Orchestrator, and every Subagent dispatched by the Orchestrator acts as a Worker. Workers are peers and strict leaves. Explorer, Judge, Implementer, Reviewer, and Generalist Workers never initiate, invoke, or arrange execution of another agent, model, or agentic session, directly or indirectly. The same prohibition applies to the Debugger except for the narrow harness exception below. This prohibition includes delegation tools, agent CLIs, SDK/API/RPC/MCP calls, shell commands, scripts, wrappers, subprocesses, and local, background, or remote jobs; shell access is not an exception outside that exception. If a unit would require prohibited execution, the Worker stops and returns `blocked`, or `input_required` when operator input or a decision would directly permit continuation. The model has no additional authority level.
 
 Debugger harness exception: only the Debugger may execute test or harness commands that launch agents or models as the subject under test, and only when the operator request or the dispatch explicitly authorizes agent E2E, harness validation, trajectory validation/debugging, subagent policy validation/debugging, or an equivalent agentic-trajectory validation/debugging purpose. This exception does not authorize delegating work, using agents or models to solve the assigned task, opening unrelated auxiliary sessions, or performing real fan-out outside the harness under test. The Debugger must use an isolated worktree when there are unrelated local changes or when tests may mutate files. It must report the command, cwd, explicit opt-in environment, result, and relevant traces or receipts. Missing credentials, permissions, session ownership, required tools, or required connections stop the work; the Debugger reports `input_required` when operator action or a decision could directly resolve the obstacle, otherwise it reports `blocked`.
 
@@ -53,12 +53,27 @@ A Worker executes one bounded work unit. It performs the domain reasoning, uses 
 Use the specialization that clearly matches the unit. Specialization affects routing and procedures, not structural authority.
 
 - **Explorer:** investigates without modifying artifacts. It returns findings, evidence, sources, uncertainty, and gaps.
+- **Judge:** validates premises before an affected task mutation. It is read-only and returns an authorization decision.
 - **Implementer:** creates or modifies artifacts within assigned scope and returns changes plus validation. Mechanical and integration work are profiles of this specialization.
 - **Reviewer:** evaluates supplied artifacts against supplied criteria without modifying them. It returns prioritized substantive findings, evidence, and a verdict. Task, architecture, and final review are profiles of this specialization.
 - **Debugger:** reproduces a problem and establishes root cause. It modifies artifacts only when the dispatch explicitly authorizes a fix, then validates against the original symptom.
 - **Generalist:** executes a bounded residual unit for which no other specialization is a clear fit. It remains a Worker and is not a smaller Orchestrator.
 
 Residual domain work always goes to the Generalist. The Orchestrator does not absorb unmatched work.
+
+## Premise validation gate
+
+The Orchestrator applies the Judge gate before the first affected task mutation when this exact trigger is true:
+
+`mutation_planned AND observable_behavior_can_change AND (operator_words_are_ambiguous OR relevant_evidence_conflicts OR material_scope_or_behavior_is_inferred)`
+
+The trigger has no exception for task size, cost, simplicity, or urgency. The Orchestrator omits the gate only when the exact operator words or a stable source specify the objective, no behavioral choice remains, no relevant evidence conflicts, no material scope or behavior is inferred, and no approval is attributed without a citation. All omission conditions must be true.
+
+The Judge is a new direct, read-only Worker. Its dispatch supplies the exact operator words, the proposed mutation, the observable behavior, sources with stable citations, separate interpretations, conflicts, the proposed scope, and approval claims. No Agent describes an approval as `operator-approved` without an exact quotation or a stable reference to the operator message.
+
+The Judge separates `evidence`, `inferences`, and `decision`. It returns `verdict: resolved|unresolved`, `authorized_scope`, `unresolved_conflicts`, and `mutation_allowed` inside the common return contract. A `resolved` verdict permits mutation only within `authorized_scope`. An `unresolved` verdict uses `mutation_allowed: false` and blocks every affected mutation. An unresolved premise that needs an operator decision uses `status: input_required` and includes `question` and `relevant_context`.
+
+The Judge cannot act as the Implementer or final Reviewer for the same mutation. The Judge does not implement the mutation and does not review the final candidate. The final Reviewer remains a separate, fresh Worker.
 
 ## Dispatch contract
 
@@ -130,7 +145,7 @@ Dispatch Workers in background by default so the user-facing conversation remain
 
 ## Model selection
 
-Structural role, specialization, and model choice are independent. Select the least expensive model that can reliably satisfy the dispatch. Use a more capable model for broad context, integration across boundaries, high uncertainty, or substantial technical judgment. Model choice does not change Worker authority or relax the contracts.
+Structural role, specialization, and model choice are independent. Select the least expensive model that can reliably satisfy the dispatch. Use a more capable model for broad context, integration across boundaries, high uncertainty, or substantial technical judgment. Prefer a different model family for the Judge when one is readily available. This preference is non-blocking. Model choice does not change Worker authority or relax the contracts.
 
 ## Exact-output work
 
@@ -149,7 +164,7 @@ A runtime adapter may:
 - place the Orchestrator and Worker prompts on runtime discovery surfaces; and
 - map the runtime's return mechanism to the common return semantics.
 
-An adapter must not do any of the following: merge structural roles; let Explorer, Implementer, Reviewer, or Generalist Workers execute or arrange other agents by any path; let the Debugger do so outside the narrow harness exception; add a short-task exception; weaken session ownership; introduce unauthorized retries or fallbacks; or weaken status and acceptance semantics. Runtime support must be verified rather than inferred from a file's presence. The baseline includes manual Pi and Claude Code Worker adapters.
+An adapter must not do any of the following: merge structural roles; let Explorer, Judge, Implementer, Reviewer, or Generalist Workers execute or arrange other agents by any path; let the Debugger do so outside the narrow harness exception; let the Judge mutate artifacts; add a short-task exception; weaken session ownership; introduce unauthorized retries or fallbacks; or weaken status and acceptance semantics. Runtime support must be verified rather than inferred from a file's presence. The baseline includes manual Pi Worker adapters and Claude Code Worker adapters without Judge.
 
 ## Distribution and installation
 
@@ -161,8 +176,8 @@ For the Pi baseline, the intended global projections are:
 $PI_CODING_AGENT_DIR/AGENTS.md
   -> <checkout>/agents/common/AGENTS.md
 
-$PI_CODING_AGENT_DIR/agents/{explorer,implementer,reviewer,debugger,generalist}.md
-  -> <checkout>/agents/pi/{explorer,implementer,reviewer,debugger,generalist}.md
+$PI_CODING_AGENT_DIR/agents/{explorer,judge,implementer,reviewer,debugger,generalist}.md
+  -> <checkout>/agents/pi/{explorer,judge,implementer,reviewer,debugger,generalist}.md
 ```
 
 When `PI_CODING_AGENT_DIR` is unset, Pi's default root is `~/.pi/agent`.
@@ -174,7 +189,7 @@ For the Claude Code baseline, the intended global Worker projections are:
   -> <checkout>/agents/claude/{explorer,implementer,reviewer,debugger,generalist}.md
 ```
 
-Installation or activation is not performed by this experiment. Existing runtime files must not be overwritten.
+A4S is the versioned source for these definitions. Installation or activation is not performed by this experiment. Global activation by symlink occurs only after the pull request and requires separate authorization. Existing runtime files must not be overwritten.
 
 ## Source management and deferred enforcement
 
@@ -190,7 +205,7 @@ Version 1.0 does not:
 
 - implement a new agent runtime or modify `pi-subagents-j0k3r`;
 - install or activate global runtime files;
-- create adapters for runtimes other than Pi and Claude Code;
+- create adapters for runtimes other than Pi and Claude Code, or create a Judge adapter for Claude Code;
 - create a generator, template system, or canonical machine-readable schema;
 - enforce tool permissions or topology deterministically;
 - define project-specific development, security, delivery, or approval policy;
@@ -200,15 +215,15 @@ Version 1.0 does not:
 
 ## Baseline cross-harness experiment
 
-The manual baseline consists of one Orchestrator file, five Pi Worker definitions, and five Claude Code custom-subagent definitions, all manually derived from this reference. Pi Worker definitions target lean nested system prompts for `pi-subagents-j0k3r`; Claude Code definitions use native custom-agent frontmatter. Both sets use specialization-specific minimal tool lists and leave model selection outside the role definition.
+The manual baseline consists of one Orchestrator file, six Pi Worker definitions, and five Claude Code custom-subagent definitions, all manually derived from this reference. Pi Worker definitions target lean nested system prompts for `pi-subagents-j0k3r`; Claude Code definitions use native custom-agent frontmatter. The Pi projection includes Judge. The Claude Code projection does not include Judge. Both sets use specialization-specific minimal tool lists and leave model selection outside the role definition.
 
 The artifact baseline succeeds when:
 
-1. the reference and eleven distributable files exist at their specified repository paths and no runtime-global file is changed;
+1. the reference and twelve distributable files exist at their specified repository paths and no runtime-global file is changed;
 2. the Orchestrator file routes every domain action, with no short-task exception, and contains no Worker-internal procedure;
 3. each Worker definition has valid discovery frontmatter, identifies itself as a direct leaf Worker, preserves the common status semantics and its runtime's delivery mechanism, and includes only its own specialization after the common core;
-4. Pi Explorer and Reviewer have only `read`, `grep`, `find`, and `bash`, while Pi Implementer, Debugger, and Generalist additionally have `edit` and `write`; Claude Code roles have only the corresponding native tools `Read`, `Grep`, `Glob`, `Bash`, `Edit`, and `Write` according to the same boundaries, with no delegation tool;
+4. Pi Explorer, Judge, and Reviewer have only `read`, `grep`, `find`, and `bash`, while Pi Implementer, Debugger, and Generalist additionally have `edit` and `write`; Claude Code roles have only the corresponding native tools `Read`, `Grep`, `Glob`, `Bash`, `Edit`, and `Write` according to the same boundaries, with no delegation tool;
 5. the reference is Rootline-valid and the candidate diff is whitespace-clean; and
 6. manual inspection finds the reference and all distributable files internally consistent.
 
-Operational success requires later, explicitly authorized activation and representative runs in each runtime. The repository has no executable Orchestrator harness that can observe fan-out timing or Worker counts, and static document checks do not prove runtime fan-out. A future behavioral test must submit multiple independent units, including at least two with the same specialization, and observe that every ready unit is dispatched concurrently up to a real runtime limit, limits create waves without merged units, readiness is recalculated after completion or blockage, and `input_required` leaves unrelated units running. Representative runs must also show that the Orchestrator dispatches instead of doing domain work, all five specializations return the common contract, concurrent mutations remain isolated, and acceptance gaps cause redispatch rather than Orchestrator execution.
+Operational success requires later, explicitly authorized activation and representative runs in each supported runtime projection. The repository has no executable Orchestrator harness that can observe fan-out timing or Worker counts, and static document checks do not prove runtime fan-out. A future behavioral test must submit multiple independent units, including at least two with the same specialization, and observe that every ready unit is dispatched concurrently up to a real runtime limit, limits create waves without merged units, readiness is recalculated after completion or blockage, and `input_required` leaves unrelated units running. Representative runs must also show that the Orchestrator dispatches instead of doing domain work, all six Pi specializations return the common contract, the Judge blocks unresolved affected mutations, concurrent mutations remain isolated, and acceptance gaps cause redispatch rather than Orchestrator execution.
