@@ -738,6 +738,74 @@ for (const scenario of [
   });
 }
 
+test('claude adapter: mode=hint reintenta el aviso tras un fallo de UI sin compactar', async () => {
+  const hooks = new Map<string, unknown>();
+  register(((pattern: string, hook: unknown) => { hooks.set(pattern, hook); return {}; }) as never, {
+    triggerMode: 'hint',
+  });
+  const logs: string[] = [];
+  const toasts: string[] = [];
+  let compactCalls = 0;
+  let toastCalls = 0;
+  const host = {
+    ui: {
+      log: (text: string) => logs.push(text),
+      toast: (text: string) => {
+        toasts.push(text);
+        toastCalls++;
+        if (toastCalls === 1) throw new Error('UI_FAILURE_CANARY');
+      },
+    },
+    session: {
+      usage: async () => ({ context: { window: 100_000, tokens: 65_000 }, rateLimits: [] }),
+      compact: async () => { compactCalls++; return {}; },
+    },
+  };
+  const event = (turnId: string) => ({
+    reason: 'answer' as const, answer: 'done', isAborted: false, durationMs: 1,
+    turnId, usage: { model: 'claude-test' },
+  });
+  const turnHook = hooks.get('turn.complete') as (
+    $: typeof host,
+    input: ReturnType<typeof event>,
+    next: () => Promise<{ text: string }>,
+  ) => Promise<{ text: string }>;
+  const next = async () => ({ text: 'unchanged' });
+
+  await turnHook(host, event('hint-ui-failure'), next);
+  await turnHook(host, event('hint-ui-retry'), next);
+
+  assert.equal(toastCalls, 2);
+  assert.equal(compactCalls, 0);
+  assert.ok(toasts.every((toast) => toast.includes('/compact')));
+  assert.deepEqual(
+    triggerRecords(logs).map((record) => ({
+      decision: record.decision,
+      dispatchOutcome: record.dispatchOutcome,
+      uiOutcome: record.uiOutcome,
+      rearmTokens: record.rearmTokens,
+      rearmStatus: record.rearmStatus,
+    })),
+    [
+      {
+        decision: 'compact',
+        dispatchOutcome: 'not_dispatched',
+        uiOutcome: 'failed',
+        rearmTokens: undefined,
+        rearmStatus: undefined,
+      },
+      {
+        decision: 'compact',
+        dispatchOutcome: 'not_dispatched',
+        uiOutcome: 'hinted',
+        rearmTokens: undefined,
+        rearmStatus: undefined,
+      },
+    ],
+  );
+  assert.doesNotMatch(logs.join('\n'), /UI_FAILURE_CANARY/);
+});
+
 test('claude adapter: mode=auto compacta exactamente una vez tras una decisión semántica positiva', async () => {
   const hooks = new Map<string, unknown>();
   register(((pattern: string, hook: unknown) => { hooks.set(pattern, hook); return {}; }) as never, {

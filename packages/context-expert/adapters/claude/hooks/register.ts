@@ -431,7 +431,7 @@ interface TriggerDecisionLogInput {
   floor: number | null;
   triggerOrigin: 'turn.complete';
   dispatchOutcome: TriggerDispatchOutcome;
-  uiOutcome?: 'hinted';
+  uiOutcome?: 'hinted' | 'failed';
 }
 
 function policyLogInput(
@@ -693,9 +693,18 @@ export const register: Register = (on: On, options: PluginOptions) => {
           return next(event);
         }
 
-        lastTriggerAt = Date.now();
         if (mode === 'hint') {
-          notify($, 'context policy recommends compaction; run /compact to compact now');
+          try {
+            notify($, 'context policy recommends compaction; run /compact to compact now');
+          } catch (error) {
+            recordTrigger({
+              ...policyLogInput(policyDecision, 'not_dispatched'),
+              uiOutcome: 'failed',
+            });
+            logSafeError($, 'trigger_host', error);
+            return next(event);
+          }
+          lastTriggerAt = Date.now();
           recordTrigger({
             ...policyLogInput(policyDecision, 'not_dispatched'),
             uiOutcome: 'hinted',
@@ -703,6 +712,7 @@ export const register: Register = (on: On, options: PluginOptions) => {
           return next(event);
         }
 
+        lastTriggerAt = Date.now();
         compacting = true;
         let compactResult: unknown;
         try {
