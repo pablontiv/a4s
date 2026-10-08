@@ -174,7 +174,7 @@ export function registerPiContextExpert(pi: ExtensionAPI, options: PiContextExpe
   const ladderProjectionFailureCache = new Map<string, CachedLadderProjectionFailure>();
   let triggerCompactionInFlight = false;
   let triggerRearmTokens: number | undefined;
-  let hintCooldownTriggeredAtMs: number | undefined;
+  let triggerCooldownTriggeredAtMs: number | undefined;
   let triggerDecisionSequence = 0;
   let recoveredCorpus: CorpusChunk[] = [];
   const now = options.now ?? (() => new Date());
@@ -334,7 +334,7 @@ export function registerPiContextExpert(pi: ExtensionAPI, options: PiContextExpe
     retroInFlight.clear();
     triggerCompactionInFlight = false;
     triggerRearmTokens = latestTriggerRearmTokens(ctx.sessionManager.getBranch());
-    hintCooldownTriggeredAtMs = undefined;
+    triggerCooldownTriggeredAtMs = undefined;
     ladderProjectionCache.clear();
     ladderProjectionFailureCache.clear();
     // getBranch is Pi's branch-local view, so reload cannot blend sibling branches.
@@ -417,7 +417,7 @@ export function registerPiContextExpert(pi: ExtensionAPI, options: PiContextExpe
       branch,
       observedAt,
       triggerCooldownMs,
-      hintCooldownTriggeredAtMs,
+      triggerCooldownTriggeredAtMs,
     );
     if (cooldownRemainingMs > 0) {
       block("cooldown", { cooldownRemainingMs });
@@ -521,7 +521,10 @@ export function registerPiContextExpert(pi: ExtensionAPI, options: PiContextExpe
       positiveDecisionId = triggerDecisionId(now(), ++triggerDecisionSequence, policyDecision);
       const appendCooldown = (action: "hint" | "compact"): void => {
         const triggeredAt = now();
-        if (action === "hint") hintCooldownTriggeredAtMs = triggeredAt.getTime();
+        triggerCooldownTriggeredAtMs = Math.max(
+          triggerCooldownTriggeredAtMs ?? Number.NEGATIVE_INFINITY,
+          triggeredAt.getTime(),
+        );
         try {
           pi.appendEntry(TRIGGER_COOLDOWN_ENTRY_TYPE, {
             schema: "a4s.compaction-trigger-cooldown/v1",
@@ -529,7 +532,7 @@ export function registerPiContextExpert(pi: ExtensionAPI, options: PiContextExpe
             triggeredAt: triggeredAt.toISOString(),
           });
         } catch {
-          // Cooldown persistence is best-effort. Hint mode keeps its timestamp in memory.
+          // Cooldown persistence is best-effort. The common timestamp remains in memory.
         }
       };
       if (mode === "hint") {

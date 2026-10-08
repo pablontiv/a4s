@@ -1989,6 +1989,70 @@ test("agent_settled auto trigger retries failure and starts cooldown only after 
   assert.equal(fake.entries.some((entry) => entry.customType?.includes("cooldown")), true);
 });
 
+test("appendEntry failure preserves the in-memory auto cooldown after rearm", async () => {
+  const jev = new CompactTriggerJev();
+  const fake = createFakePi();
+  const originalAppend = fake.pi.appendEntry.bind(fake.pi);
+  Object.defineProperty(fake.pi, "appendEntry", {
+    value(customType: string, data: unknown) {
+      if (customType === "a4s.pi-context-expert.compaction-trigger-cooldown.v1") {
+        throw new Error("trigger cooldown storage unavailable");
+      }
+      return originalAppend(customType, data);
+    },
+  });
+  let current = new Date("2026-09-22T12:00:00.000Z");
+  let tokens = 62_000;
+  let compactCalls = 0;
+  let onComplete: ((result: { estimatedTokensAfter?: number }) => void) | undefined;
+  registerPiContextExpert(fake.pi, {
+    jevClient: jev,
+    config: { "trigger.mode": "auto" },
+    trigger: {
+      editorHasText: () => false,
+      minimumContextRatio: 0.2,
+      resolveCompactionSettings: () => ({ keepRecentTokens: 20_000 }),
+    },
+    now: () => current,
+  });
+  const { context } = createContext(fake.entries, {
+    projectionEntries: compactableTriggerProjection(),
+  });
+  const triggerContext = {
+    ...context,
+    hasUI: true,
+    isIdle: () => true,
+    hasPendingMessages: () => false,
+    getContextUsage: () => ({ tokens, contextWindow: 200_000, percent: tokens / 2_000 }),
+    signal: undefined,
+    compact: (callbacks?: { onComplete?: (result: { estimatedTokensAfter?: number }) => void }) => {
+      compactCalls += 1;
+      onComplete = callbacks?.onComplete;
+    },
+  };
+
+  await fake.handlers.get("agent_settled")?.({ type: "agent_settled" }, triggerContext);
+  assert.equal(compactCalls, 1);
+  onComplete?.({ estimatedTokensAfter: 20_000 });
+  assert.equal(
+    fake.entries.some((entry) =>
+      entry.customType === "a4s.pi-context-expert.compaction-trigger-cooldown.v1"
+    ),
+    false,
+  );
+
+  current = new Date("2026-09-22T12:01:00.000Z");
+  tokens = 65_000;
+  await fake.handlers.get("agent_settled")?.({ type: "agent_settled" }, triggerContext);
+
+  assert.equal(compactCalls, 1, "cooldown must prevent another dispatch after rearm");
+  assert.equal(jev.calls, 1, "cooldown must prevent another policy evaluation after rearm");
+  const lastDecision = fake.entries
+    .filter((entry) => entry.customType === TRIGGER_DECISION_ENTRY_TYPE)
+    .at(-1)?.data as { reason?: unknown } | undefined;
+  assert.equal(lastDecision?.reason, "cooldown");
+});
+
 test("agent_settled dispatches once and FastJev runs only in session_before_compact", async () => {
   const jev = new ValidFakeJev();
   const fake = createFakePi();
