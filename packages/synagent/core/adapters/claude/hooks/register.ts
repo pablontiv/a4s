@@ -52,9 +52,9 @@ let identity: Identity | undefined
 let globalEnabled = true
 // resolveBrokerUrl corre en register() sin `$`; el aviso se emite al arrancar.
 let brokerWarning: string | undefined
-// Como máximo una migración one-shot en vuelo por instancia del engine. Tras
+// Como máximo una migración one-shot en vuelo por activación del módulo. Tras
 // éxito queda hecha; si falta el broker puede reintentarse en un prompt futuro.
-const retirementInFlightOrDone = new WeakSet<object>()
+let retirementInFlightOrDone = false
 
 const bridgeDir = ($: EngineInterface): string => `${$.plugin.root}/bridge`
 
@@ -116,8 +116,8 @@ async function reserve($: EngineInterface, id: string): Promise<boolean> {
 }
 
 function retireLegacySession($: EngineInterface, brokerUrl: string): void {
-  if (retirementInFlightOrDone.has($)) return
-  retirementInFlightOrDone.add($)
+  if (retirementInFlightOrDone) return
+  retirementInFlightOrDone = true
   const argv = [
     'node',
     `${bridgeDir($)}/bridge-sub.cjs`,
@@ -129,11 +129,11 @@ function retireLegacySession($: EngineInterface, brokerUrl: string): void {
   // No bloquear el arranque: el bridge usa clean=true, sin retries, y termina.
   void $.process.run(argv).then((result) => {
     if (result.exitCode !== 0) {
-      retirementInFlightOrDone.delete($)
+      retirementInFlightOrDone = false
       void $.ui.status(`synagent: no se pudo retirar la sesión legacy (${result.stderr || `exit ${result.exitCode}`})`)
     }
   }).catch((err) => {
-    retirementInFlightOrDone.delete($)
+    retirementInFlightOrDone = false
     void $.ui.status(`synagent: no se pudo retirar la sesión legacy (${err instanceof Error ? err.message : String(err)})`)
   })
 }
