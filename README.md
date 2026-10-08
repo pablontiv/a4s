@@ -11,6 +11,7 @@ El monorepo reúne capacidades que pueden evolucionar a ritmos distintos. Cada u
 - [`.workspace/`](.workspace/) contiene la configuración efectiva y el conocimiento gobernado de este workspace.
 - [`profiles/`](profiles/) publica perfiles reutilizables de configuración.
 - [`methods/`](methods/) contiene métodos de trabajo opt-in.
+- [Diagnóstico continuo](methods/continuous-diagnostics/) combina un contrato común con lentes independientes (cobertura funcional, límites de confianza, ciclo de vida de datos, resiliencia y cadena de suministro) para diagnosticar un repositorio en modo de solo lectura.
 - [`skills/`](skills/) distribuye workflows portátiles y sus herramientas deterministas.
 - [Roadmap](skills/roadmap/) muestra el backlog Beads como un árbol de solo lectura agrupado por prioridad.
 - [Roadmap Legacy](skills/roadmap-legacy/) conserva el workflow completo anterior sobre Beads para Plan, árbol pendiente, Doctor y loop secuencial.
