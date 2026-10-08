@@ -2124,16 +2124,19 @@ test("adaptive Trigger bands avoid credentials and timing Jev outside the semant
   }
 });
 
-test("Trigger decision logging failure does not start ceiling compaction in hint mode", async () => {
+test("appendEntry failure preserves the in-memory hint cooldown", async () => {
   const fake = createFakePi();
+  const jev = new CompactTriggerJev();
   Object.defineProperty(fake.pi, "appendEntry", {
     value() {
-      throw new Error("trigger log unavailable");
+      throw new Error("trigger storage unavailable");
     },
   });
   registerPiContextExpert(fake.pi, {
+    jevClient: jev,
     config: { "trigger.mode": "hint" },
     trigger: { resolveCompactionSettings: () => ({ keepRecentTokens: 20_000 }) },
+    now: () => new Date("2026-09-22T12:00:00.000Z"),
   });
   let compactCalls = 0;
   const base = createContext(fake.entries, { projectionEntries: compactableTriggerProjection() });
@@ -2142,14 +2145,16 @@ test("Trigger decision logging failure does not start ceiling compaction in hint
     hasUI: true,
     isIdle: () => true,
     hasPendingMessages: () => false,
-    getContextUsage: () => ({ tokens: 70_000, contextWindow: 200_000, percent: 35 }),
+    getContextUsage: () => ({ tokens: 62_000, contextWindow: 200_000, percent: 31 }),
     compact: () => { compactCalls += 1; },
   };
 
   await fake.handlers.get("agent_settled")?.({ type: "agent_settled" }, context);
+  await fake.handlers.get("agent_settled")?.({ type: "agent_settled" }, context);
 
+  assert.equal(jev.calls, 1, "the second event must not evaluate during the in-memory cooldown");
+  assert.equal(base.notifications.length, 1);
   assert.equal(compactCalls, 0);
-  assert.match(base.notifications.at(-1)?.message ?? "", /\/compact/);
 });
 
 test("semantic Trigger decisions preserve wait and compact policy metadata", async () => {
@@ -2265,6 +2270,90 @@ test("hint reports a positive semantic decision without dispatch or rearm", asyn
   assert.equal(jev.calls, 2, "hint must clear in-flight state and must not create rearm state");
   assert.equal(base.notifications.length, 2);
   assert.equal(compactCalls, 0);
+});
+
+test("failed hint notification logs the UI failure and allows a later retry", async () => {
+  let notifyCalls = 0;
+  let compactCalls = 0;
+  const fake = createFakePi();
+  const jev = new CompactTriggerJev();
+  const base = createContext(fake.entries, { projectionEntries: compactableTriggerProjection() });
+  registerPiContextExpert(fake.pi, {
+    jevClient: jev,
+    config: { "trigger.mode": "hint" },
+    trigger: {
+      editorHasText: () => false,
+      resolveCompactionSettings: () => ({ keepRecentTokens: 20_000 }),
+    },
+    now: () => new Date("2026-09-22T12:00:00.000Z"),
+  });
+  const context = {
+    ...base.context,
+    ui: {
+      ...base.context.ui,
+      notify(message: string, type?: string) {
+        notifyCalls += 1;
+        if (notifyCalls === 1) throw new Error("UI unavailable");
+        base.context.ui.notify(message, type);
+      },
+    },
+    hasUI: true,
+    isIdle: () => true,
+    hasPendingMessages: () => false,
+    getContextUsage: () => ({ tokens: 62_000, contextWindow: 200_000, percent: 31 }),
+    compact: () => { compactCalls += 1; },
+  };
+
+  await fake.handlers.get("agent_settled")?.({ type: "agent_settled" }, context);
+
+  const firstPositive = fake.entries.find((entry) =>
+    entry.customType === TRIGGER_DECISION_ENTRY_TYPE &&
+    (entry.data as { decision?: unknown }).decision === "compact"
+  );
+  assert.deepEqual(
+    firstPositive?.data && {
+      dispatchOutcome: (firstPositive.data as { dispatchOutcome?: unknown }).dispatchOutcome,
+      uiOutcome: (firstPositive.data as { uiOutcome?: unknown }).uiOutcome,
+      rearmStatus: (firstPositive.data as { rearmStatus?: unknown }).rearmStatus,
+      rearmTokens: (firstPositive.data as { rearmTokens?: unknown }).rearmTokens,
+    },
+    {
+      dispatchOutcome: "not_dispatched",
+      uiOutcome: "failed",
+      rearmStatus: undefined,
+      rearmTokens: undefined,
+    },
+  );
+  assert.equal(jev.calls, 1);
+  assert.equal(base.notifications.length, 0);
+  assert.equal(compactCalls, 0);
+  assert.equal(
+    fake.entries.filter((entry) =>
+      entry.customType === "a4s.pi-context-expert.compaction-trigger-cooldown.v1"
+    ).length,
+    0,
+  );
+
+  await fake.handlers.get("agent_settled")?.({ type: "agent_settled" }, context);
+
+  const positiveLogs = fake.entries.filter((entry) =>
+    entry.customType === TRIGGER_DECISION_ENTRY_TYPE &&
+    (entry.data as { decision?: unknown }).decision === "compact"
+  );
+  assert.equal(jev.calls, 2, "the next event must retry after the UI failure");
+  assert.equal(notifyCalls, 2);
+  assert.equal(base.notifications.length, 1);
+  assert.equal(compactCalls, 0);
+  assert.deepEqual(
+    positiveLogs.map((entry) => (entry.data as { uiOutcome?: unknown }).uiOutcome),
+    ["failed", "hinted"],
+  );
+  assert.equal(
+    fake.entries.filter((entry) =>
+      entry.customType === "a4s.pi-context-expert.compaction-trigger-cooldown.v1"
+    ).length,
+    1,
+  );
 });
 
 test("auto dispatches one compaction for one positive decision", async () => {

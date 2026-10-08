@@ -174,6 +174,7 @@ export function registerPiContextExpert(pi: ExtensionAPI, options: PiContextExpe
   const ladderProjectionFailureCache = new Map<string, CachedLadderProjectionFailure>();
   let triggerCompactionInFlight = false;
   let triggerRearmTokens: number | undefined;
+  let hintCooldownTriggeredAtMs: number | undefined;
   let triggerDecisionSequence = 0;
   let recoveredCorpus: CorpusChunk[] = [];
   const now = options.now ?? (() => new Date());
@@ -333,6 +334,7 @@ export function registerPiContextExpert(pi: ExtensionAPI, options: PiContextExpe
     retroInFlight.clear();
     triggerCompactionInFlight = false;
     triggerRearmTokens = latestTriggerRearmTokens(ctx.sessionManager.getBranch());
+    hintCooldownTriggeredAtMs = undefined;
     ladderProjectionCache.clear();
     ladderProjectionFailureCache.clear();
     // getBranch is Pi's branch-local view, so reload cannot blend sibling branches.
@@ -411,7 +413,12 @@ export function registerPiContextExpert(pi: ExtensionAPI, options: PiContextExpe
       block("pending_messages");
       return;
     }
-    const cooldownRemainingMs = triggerCooldownRemainingMs(branch, observedAt, triggerCooldownMs);
+    const cooldownRemainingMs = triggerCooldownRemainingMs(
+      branch,
+      observedAt,
+      triggerCooldownMs,
+      hintCooldownTriggeredAtMs,
+    );
     if (cooldownRemainingMs > 0) {
       block("cooldown", { cooldownRemainingMs });
       return;
@@ -513,22 +520,24 @@ export function registerPiContextExpert(pi: ExtensionAPI, options: PiContextExpe
 
       positiveDecisionId = triggerDecisionId(now(), ++triggerDecisionSequence, policyDecision);
       const appendCooldown = (action: "hint" | "compact"): void => {
+        const triggeredAt = now();
+        if (action === "hint") hintCooldownTriggeredAtMs = triggeredAt.getTime();
         try {
           pi.appendEntry(TRIGGER_COOLDOWN_ENTRY_TYPE, {
             schema: "a4s.compaction-trigger-cooldown/v1",
             action,
-            triggeredAt: now().toISOString(),
+            triggeredAt: triggeredAt.toISOString(),
           });
         } catch {
-          // Cooldown persistence is best-effort. In-flight state still prevents overlapping decisions.
+          // Cooldown persistence is best-effort. Hint mode keeps its timestamp in memory.
         }
       };
       if (mode === "hint") {
-        await applyTriggerDecision(policyDecision.decision, mode, ctx);
-        appendCooldown("hint");
+        const uiOutcome = await applyTriggerDecision(policyDecision.decision, mode, ctx);
+        if (uiOutcome === "hinted") appendCooldown("hint");
         recordTrigger({
           ...policyLogInput(policyDecision, "not_dispatched"),
-          uiOutcome: "hinted",
+          uiOutcome: uiOutcome === "hinted" ? "hinted" : "failed",
         }, positiveDecisionId);
         return;
       }
@@ -831,7 +840,7 @@ interface TriggerDecisionLogInput {
   floor: number | null;
   triggerOrigin?: "agent_settled";
   dispatchOutcome: TriggerDispatchOutcome;
-  uiOutcome?: "hinted";
+  uiOutcome?: "hinted" | "failed";
 }
 
 function policyLogInput(
@@ -925,10 +934,20 @@ function customEntryData(entry: unknown, customType: string): Record<string, unk
   return candidate.data as Record<string, unknown>;
 }
 
-function triggerCooldownRemainingMs(entries: readonly unknown[], current: Date, cooldownMs: number): number {
+function triggerCooldownRemainingMs(
+  entries: readonly unknown[],
+  current: Date,
+  cooldownMs: number,
+  inMemoryTriggeredAtMs?: number,
+): number {
   if (!Number.isFinite(cooldownMs) || cooldownMs <= 0) return 0;
   const currentMs = current.getTime();
-  let remainingMs = 0;
+  let remainingMs =
+    typeof inMemoryTriggeredAtMs === "number" &&
+      Number.isFinite(inMemoryTriggeredAtMs) &&
+      inMemoryTriggeredAtMs <= currentMs
+      ? cooldownMs - (currentMs - inMemoryTriggeredAtMs)
+      : 0;
   for (const entry of entries) {
     const data = customEntryData(entry, TRIGGER_COOLDOWN_ENTRY_TYPE);
     if (

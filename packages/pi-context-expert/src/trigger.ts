@@ -106,21 +106,23 @@ export function toTriggerMessages(agentMessages: readonly unknown[]): Message[] 
   return messages;
 }
 
-/** Applies a positive shared-core decision through Pi's existing lifecycle exactly once. */
+/** Applies a positive decision. Hint notifies and returns. Auto enters Pi's compaction lifecycle. */
 export async function applyTriggerDecision(
   decision: TriggerDecision,
   mode: Exclude<TriggerMode, "off">,
   ctx: ExtensionContext,
   options?: Parameters<ExtensionContext["compact"]>[0],
-): Promise<void> {
-  if (decision === "wait") return;
+): Promise<"hinted" | "failed" | undefined> {
+  if (decision === "wait") return undefined;
   if (mode === "hint") {
     try {
       ctx.ui.notify("Context Expert recommends compaction. Run /compact when you are ready.", "info");
+      return "hinted";
     } catch {
       // Hint delivery is best-effort and must never start automatic compaction.
+      return "failed";
     }
-    return;
   }
   ctx.compact(options);
+  return undefined;
 }
