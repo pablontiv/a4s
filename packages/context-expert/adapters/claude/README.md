@@ -29,15 +29,19 @@ directory.
   `$.session.messages()` mediante la API de Claude. El adaptador excluye el
   system prompt, reasoning e imágenes. El adaptador sanitiza el texto. Cada
   resultado de herramienta usa como máximo 512 bytes UTF-8. Cada request usa
-  como máximo 32,000 bytes. Los modos `hint` y `auto` compactan una vez tras una
-  decisión positiva. El modo `hint` también muestra una notificación.
-- El trigger aplica un cooldown de 300 segundos. El trigger permite una sola
-  compactación concurrente. Tras completar, el trigger se rearma en
-  `max(floor, postContextTokens + 40000)`. Si Claude no devuelve
-  `tokensAfter`, el adaptador bloquea nuevas decisiones automáticas durante la
-  sesión. El adaptador no estima este valor.
+  como máximo 32,000 bytes. El modo `hint` muestra un aviso que indica al
+  usuario que ejecute `/compact`. El modo `hint` no inicia una compactación. El
+  modo `auto` inicia una compactación tras una decisión positiva.
+- El trigger aplica un cooldown de 300 segundos a los avisos y a las
+  compactaciones automáticas. El trigger permite una sola compactación
+  concurrente. Tras completar una compactación automática, el trigger se
+  rearma en `max(floor, postContextTokens + 40000)`. El modo `hint` no crea
+  rearme. Si Claude no devuelve `tokensAfter`, el adaptador bloquea nuevas
+  decisiones automáticas durante la sesión. El adaptador no estima este valor.
 - El adaptador registra decisiones estructuradas con el identificador
-  `a4s.claude-context-expert.trigger-decision.v1`. Usa `$.ui.log`, que también
+  `a4s.claude-context-expert.trigger-decision.v1`. Un aviso positivo registra
+  `decision=compact`, `dispatchOutcome=not_dispatched` y `uiOutcome=hinted`.
+  Usa `$.ui.log`, que también
   entra en el debug log del host. Claude no ofrece al plugin un almacén durable
   equivalente a las custom entries de Pi. El adaptador no crea un archivo de
   logging propio.
@@ -67,7 +71,7 @@ claude --plugin-dir packages/context-expert/adapters/claude
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `triggerMode` | `auto` | `auto` and `hint` compact after a positive policy decision. `hint` also notifies. `off` disables the trigger. |
+| `triggerMode` | `auto` | `auto` compacts after a positive policy decision. `hint` asks the user to run `/compact` and does not compact. `off` disables the trigger. |
 | `minimumContextRatio` | `0.5` | Compatibility setting. The shared adaptive policy uses token floor and ceiling values. |
 | `minReductionRatio` | `0.25` | Minimum estimated reduction to replace history; below it, native summary. |
 | `keepThreshold` | `0.5` | Minimum Jev probability to keep a tool call/result. |

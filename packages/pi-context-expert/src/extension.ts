@@ -174,6 +174,7 @@ export function registerPiContextExpert(pi: ExtensionAPI, options: PiContextExpe
   const ladderProjectionFailureCache = new Map<string, CachedLadderProjectionFailure>();
   let triggerCompactionInFlight = false;
   let triggerRearmTokens: number | undefined;
+  let triggerCooldownTriggeredAtMs: number | undefined;
   let triggerDecisionSequence = 0;
   let recoveredCorpus: CorpusChunk[] = [];
   const now = options.now ?? (() => new Date());
@@ -333,6 +334,7 @@ export function registerPiContextExpert(pi: ExtensionAPI, options: PiContextExpe
     retroInFlight.clear();
     triggerCompactionInFlight = false;
     triggerRearmTokens = latestTriggerRearmTokens(ctx.sessionManager.getBranch());
+    triggerCooldownTriggeredAtMs = undefined;
     ladderProjectionCache.clear();
     ladderProjectionFailureCache.clear();
     // getBranch is Pi's branch-local view, so reload cannot blend sibling branches.
@@ -411,7 +413,12 @@ export function registerPiContextExpert(pi: ExtensionAPI, options: PiContextExpe
       block("pending_messages");
       return;
     }
-    const cooldownRemainingMs = triggerCooldownRemainingMs(branch, observedAt, triggerCooldownMs);
+    const cooldownRemainingMs = triggerCooldownRemainingMs(
+      branch,
+      observedAt,
+      triggerCooldownMs,
+      triggerCooldownTriggeredAtMs,
+    );
     if (cooldownRemainingMs > 0) {
       block("cooldown", { cooldownRemainingMs });
       return;
@@ -512,21 +519,35 @@ export function registerPiContextExpert(pi: ExtensionAPI, options: PiContextExpe
       }
 
       positiveDecisionId = triggerDecisionId(now(), ++triggerDecisionSequence, policyDecision);
-      const appendCooldown = (): void => {
+      const appendCooldown = (action: "hint" | "compact"): void => {
+        const triggeredAt = now();
+        triggerCooldownTriggeredAtMs = Math.max(
+          triggerCooldownTriggeredAtMs ?? Number.NEGATIVE_INFINITY,
+          triggeredAt.getTime(),
+        );
         try {
           pi.appendEntry(TRIGGER_COOLDOWN_ENTRY_TYPE, {
             schema: "a4s.compaction-trigger-cooldown/v1",
-            action: "compact",
-            triggeredAt: now().toISOString(),
+            action,
+            triggeredAt: triggeredAt.toISOString(),
           });
         } catch {
-          // Cooldown persistence is best-effort. In-flight and rearm state still prevent duplicates.
+          // Cooldown persistence is best-effort. The common timestamp remains in memory.
         }
       };
+      if (mode === "hint") {
+        const uiOutcome = await applyTriggerDecision(policyDecision.decision, mode, ctx);
+        if (uiOutcome === "hinted") appendCooldown("hint");
+        recordTrigger({
+          ...policyLogInput(policyDecision, "not_dispatched"),
+          uiOutcome: uiOutcome === "hinted" ? "hinted" : "failed",
+        }, positiveDecisionId);
+        return;
+      }
       await applyTriggerDecision(policyDecision.decision, mode, ctx, {
         onComplete: (result) => {
           const postContextTokens = result.estimatedTokensAfter;
-          appendCooldown();
+          appendCooldown("compact");
           if (typeof postContextTokens === "number" && Number.isFinite(postContextTokens)) {
             triggerRearmTokens = Math.max(thresholds.floorTokens, postContextTokens + 40_000);
           } else {
@@ -822,6 +843,7 @@ interface TriggerDecisionLogInput {
   floor: number | null;
   triggerOrigin?: "agent_settled";
   dispatchOutcome: TriggerDispatchOutcome;
+  uiOutcome?: "hinted" | "failed";
 }
 
 function policyLogInput(
@@ -915,10 +937,20 @@ function customEntryData(entry: unknown, customType: string): Record<string, unk
   return candidate.data as Record<string, unknown>;
 }
 
-function triggerCooldownRemainingMs(entries: readonly unknown[], current: Date, cooldownMs: number): number {
+function triggerCooldownRemainingMs(
+  entries: readonly unknown[],
+  current: Date,
+  cooldownMs: number,
+  inMemoryTriggeredAtMs?: number,
+): number {
   if (!Number.isFinite(cooldownMs) || cooldownMs <= 0) return 0;
   const currentMs = current.getTime();
-  let remainingMs = 0;
+  let remainingMs =
+    typeof inMemoryTriggeredAtMs === "number" &&
+      Number.isFinite(inMemoryTriggeredAtMs) &&
+      inMemoryTriggeredAtMs <= currentMs
+      ? cooldownMs - (currentMs - inMemoryTriggeredAtMs)
+      : 0;
   for (const entry of entries) {
     const data = customEntryData(entry, TRIGGER_COOLDOWN_ENTRY_TYPE);
     if (

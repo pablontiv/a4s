@@ -1,6 +1,6 @@
 {
   "name": "a4s-context-expert",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Jev-guided deterministic compaction for Claude Code with the shared adaptive trigger policy and keep/truncate/drop transcript selection.",
   "license": "UNLICENSED",
   "author": {
@@ -28,7 +28,7 @@
     "triggerMode": {
       "type": "string",
       "title": "Auto-compact trigger mode",
-      "description": "off | hint | auto. Both 'hint' and 'auto' compact after a positive shared-policy decision; 'hint' also shows an informational notice. 'off' disables the trigger.",
+      "description": "off | hint | auto. 'hint' asks the user to run /compact and does not compact. 'auto' compacts after a positive shared-policy decision. 'off' disables the trigger.",
       "default": "auto"
     },
     "minimumContextRatio": {
