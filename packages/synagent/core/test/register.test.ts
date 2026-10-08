@@ -12,15 +12,23 @@ import { register } from '../adapters/claude/hooks/register.ts'
 
 type Hook = (...a: unknown[]) => unknown
 type Entry = { event: string; matcher: unknown; hook: Hook }
+type RegisterHook = typeof register
 
-function collectHooks(options: Record<string, unknown> = {}) {
+let freshModule = 0
+
+async function loadFreshRegister(): Promise<RegisterHook> {
+  const module = await import(`../adapters/claude/hooks/register.ts?retirement-test=${freshModule++}`)
+  return module.register
+}
+
+function collectHooks(options: Record<string, unknown> = {}, registerHook: RegisterHook = register) {
   const entries: Entry[] = []
   const on = (event: string, a: unknown, b?: unknown): void => {
     const hook = (b ?? a) as Hook
     const matcher = b ? a : undefined
     entries.push({ event, matcher, hook })
   }
-  ;(register as unknown as (on: unknown, options: unknown) => void)(on, options)
+  ;(registerHook as unknown as (on: unknown, options: unknown) => void)(on, options)
   const get = (event: string): Hook => {
     const found = entries.find(e => e.event === event)
     assert.ok(found, `hook no registrado: ${event}`)
@@ -81,21 +89,68 @@ test('register: session.start resuelve identidad y registra synagent_send + /mq-
   assert.ok(eng.spawnArgs[0]?.includes('synagent/v1/a4s/all'), 'suscribe al broadcast de proyecto')
   assert.ok(eng.spawnArgs[0]?.includes('synagent/v1/all'), 'suscribe al broadcast global por defecto')
   assert.ok(!eng.spawnArgs[0]?.includes('a4s/inbox/claude'), 'no suscribe al topic legacy')
-  const retirement = eng.runCalls.find(c => c.includes('--retire-id'))
-  assert.ok(retirement, 'lanza la migración one-shot de la sesión durable histórica')
-  assert.equal(retirement[retirement.indexOf('--retire-id') + 1], 'synagent-legacy-claude')
 })
 
-test('register: retira la sesión legacy aunque no pueda resolver identidad', async () => {
+test('register: evita retiradas simultáneas durante una activación', async () => {
+  const eng = makeEngine()
+  let resolveRetirement!: (value: { exitCode: number; stdout: string; stderr: string }) => void
+  const retirementPending = new Promise<{ exitCode: number; stdout: string; stderr: string }>((resolve) => {
+    resolveRetirement = resolve
+  })
+  eng.$.process.run = async (argv: readonly string[]) => {
+    eng.runCalls.push([...argv])
+    if (argv.includes('--retire-id')) return retirementPending
+    return { exitCode: 0, stdout: '{}', stderr: '' }
+  }
+  const freshRegister = await loadFreshRegister()
+  const { get } = collectHooks({ project: 'a4s' }, freshRegister)
+  const next = async (e: unknown) => e
+
+  const first = get('session.start')(eng.$, {}, next)
+  const second = get('prompt.submit')(eng.$, {}, next)
+  assert.equal(eng.runCalls.filter(c => c.includes('--retire-id')).length, 1, 'solo inicia una retirada mientras está en vuelo')
+
+  resolveRetirement({ exitCode: 0, stdout: '{}', stderr: '' })
+  await Promise.all([first, second])
+})
+
+test('register: conserva la marca tras una retirada exitosa', async () => {
   const eng = makeEngine()
   eng.$.session.repo = async () => undefined as never
-  const { get } = collectHooks({})
-  await get('session.start')(eng.$, {}, (e: unknown) => e)
+  const freshRegister = await loadFreshRegister()
+  const { get } = collectHooks({}, freshRegister)
+  const next = (e: unknown) => e
 
-  const retirement = eng.runCalls.find(c => c.includes('--retire-id'))
-  assert.ok(retirement, 'la migración no depende de la identidad v1')
-  assert.equal(retirement[retirement.indexOf('--retire-id') + 1], 'synagent-legacy-claude')
+  await get('session.start')(eng.$, {}, next)
+  await get('prompt.submit')(eng.$, {}, next)
+
+  const retirements = eng.runCalls.filter(c => c.includes('--retire-id'))
+  assert.equal(retirements.length, 1, 'la retirada exitosa queda marcada durante la activación')
+  assert.equal(retirements[0]?.[retirements[0].indexOf('--retire-id') + 1], 'synagent-legacy-claude')
   assert.equal(eng.spawnArgs.length, 0, 'sin identidad no deja un consumidor legacy activo')
+})
+
+test('register: restablece la marca y reintenta tras error', async () => {
+  const eng = makeEngine()
+  let retirementAttempts = 0
+  eng.$.process.run = async (argv: readonly string[]) => {
+    eng.runCalls.push([...argv])
+    if (argv.includes('--retire-id')) {
+      retirementAttempts += 1
+      if (retirementAttempts === 1) return { exitCode: 1, stdout: '', stderr: 'broker ausente' }
+    }
+    return { exitCode: 0, stdout: '{}', stderr: '' }
+  }
+  const freshRegister = await loadFreshRegister()
+  const { get } = collectHooks({ project: 'a4s' }, freshRegister)
+  const next = (e: unknown) => e
+
+  await get('session.start')(eng.$, {}, next)
+  await new Promise(resolve => setImmediate(resolve))
+  await get('prompt.submit')(eng.$, {}, next)
+
+  assert.equal(retirementAttempts, 2, 'reintenta después de restablecer la marca por error')
+  assert.ok(eng.statuses.some(s => s.includes('broker ausente')), 'informa el error de la primera retirada')
 })
 
 test('register: tool.call enruta por el nombre MCP exacto, lee args de e y publica v1', async () => {
