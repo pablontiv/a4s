@@ -1,8 +1,23 @@
 import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { createReadStream, watch, type FSWatcher } from "node:fs";
+import {
+  chmod,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  readlink,
+  realpath,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, isAbsolute, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { dirname, isAbsolute, join, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { RpcClient } from "@earendil-works/pi-coding-agent";
 import type { JsonAgentSessionEvent } from "@earendil-works/pi-coding-agent";
@@ -10,6 +25,7 @@ import type { JsonAgentSessionEvent } from "@earendil-works/pi-coding-agent";
 const INPUT = "Inspecciona package.json en modo read_only. Devuelve en esta misma respuesta el valor exacto de engines.node y cita la ruta. No modifiques archivos.";
 const EXPECTED_NODE_ENGINE = ">=22.19.0";
 const SCHEMA = "a4s.pi-atomic-e2e/v1";
+const FAILURE_SCHEMA = "a4s.pi-atomic-e2e-failure/v1";
 const PI_CLI = "/Users/pones/.local/bin/pi";
 const DEFAULT_AGENT_DIR = "/Users/pones/.pi/agent";
 const SUBJECT_PROVIDER = "openai-codex";
@@ -21,6 +37,7 @@ const JUDGE_TIMEOUT_SECONDS = 180;
 const MAX_CAPTURED_EVENTS = 100;
 const MAX_CAPTURED_BYTES = 1024 * 1024;
 const MAX_PROCESS_OUTPUT_BYTES = 64 * 1024;
+const MAX_WATCHER_EVENTS = 100;
 const REQUIRED_WORKER_FIELDS = [
   "status",
   "summary",
@@ -31,6 +48,8 @@ const REQUIRED_WORKER_FIELDS = [
 
 type JsonRecord = Record<string, unknown>;
 type CapturedEvent = { streamIndex: number; event: JsonRecord };
+type Inventory = { digest: string; entryCount: number };
+type WatcherSnapshot = { eventCount: number; overflow: boolean };
 
 type StructuralOracle = {
   unitCount: number;
@@ -50,10 +69,40 @@ type Analysis = {
   dispatchCall: JsonRecord;
   workerResult: CapturedEvent;
   results: unknown[];
+  workerInternalTrajectoryAvailable: boolean;
   final: CapturedEvent;
   finalText: string;
   settled: CapturedEvent;
+  toolStartCount: number;
+  toolEndCount: number;
+  extensionErrorCount: number;
 };
+
+type DiagnosticState = {
+  stage: string;
+  counts?: StructuralOracle;
+  rpcEventCount?: number;
+  capturedEventCount?: number;
+  watcherEventCount?: number;
+  watcherOverflow?: boolean;
+  inventoryBefore?: Inventory;
+  inventoryAfter?: Inventory;
+};
+
+const diagnosticState: DiagnosticState = { stage: "preflight" };
+
+class HarnessFailure extends Error {
+  readonly code: string;
+
+  constructor(code: string) {
+    super(code);
+    this.code = code;
+  }
+}
+
+function fail(code: string): never {
+  throw new HarnessFailure(code);
+}
 
 function record(value: unknown): JsonRecord | undefined {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -89,9 +138,125 @@ function assistantToolCalls(message: unknown): JsonRecord[] {
     .filter((block): block is JsonRecord => block?.type === "toolCall");
 }
 
-function findWorkerFields(result: string): string[] {
+function workerContractComplete(result: string): boolean {
   const lines = result.split("\n");
-  return REQUIRED_WORKER_FIELDS.filter((field) => lines.some((line) => line.startsWith(`${field}:`)));
+  const normalized = lines.map((line) => line.trim().replace(/^#{1,6}\s+/, ""));
+  const indices = REQUIRED_WORKER_FIELDS.map((field) => {
+    const matches = normalized
+      .map((line, index) => line === field || line.startsWith(`${field}:`) ? index : -1)
+      .filter((index) => index >= 0);
+    return matches.length === 1 ? matches[0]! : -1;
+  });
+  if (indices.some((index) => index < 0)) return false;
+  if (indices.some((index, position) => position > 0 && index <= indices[position - 1]!)) return false;
+  for (let position = 0; position < REQUIRED_WORKER_FIELDS.length; position += 1) {
+    const start = indices[position]!;
+    const end = indices[position + 1] ?? lines.length;
+    const separator = normalized[start]!.indexOf(":");
+    const firstValue = separator >= 0 ? normalized[start]!.slice(separator + 1) : "";
+    const section = [firstValue, ...lines.slice(start + 1, end)].join("\n").trim();
+    if (!section) return false;
+    if (REQUIRED_WORKER_FIELDS[position] === "status" && section !== "completed") return false;
+  }
+  return result.includes(EXPECTED_NODE_ENGINE) && result.includes("package.json");
+}
+
+async function hashFile(path: string): Promise<string> {
+  return new Promise((resolvePromise, reject) => {
+    const hash = createHash("sha256");
+    const stream = createReadStream(path);
+    stream.on("data", (chunk) => hash.update(chunk));
+    stream.once("error", reject);
+    stream.once("end", () => resolvePromise(hash.digest("hex")));
+  });
+}
+
+export async function inventoryTree(root: string): Promise<Inventory> {
+  const rows: string[] = [];
+  const rootMetadata = await lstat(root);
+  rows.push(JSON.stringify([
+    ".",
+    "directory",
+    rootMetadata.mode,
+    rootMetadata.mtimeMs,
+    rootMetadata.ctimeMs,
+  ]));
+  async function visit(absoluteDirectory: string, relativeDirectory: string): Promise<void> {
+    const entries = await readdir(absoluteDirectory, { withFileTypes: true });
+    entries.sort((left, right) => left.name.localeCompare(right.name, "en"));
+    for (const entry of entries) {
+      const relativePath = relativeDirectory ? `${relativeDirectory}/${entry.name}` : entry.name;
+      const absolutePath = join(absoluteDirectory, entry.name);
+      const metadata = await lstat(absolutePath);
+      if (entry.isDirectory()) {
+        rows.push(JSON.stringify([
+          relativePath,
+          "directory",
+          metadata.mode,
+          metadata.mtimeMs,
+          metadata.ctimeMs,
+        ]));
+        await visit(absolutePath, relativePath);
+      } else if (entry.isFile()) {
+        rows.push(JSON.stringify([
+          relativePath,
+          "file",
+          metadata.mode,
+          metadata.size,
+          metadata.mtimeMs,
+          metadata.ctimeMs,
+          await hashFile(absolutePath),
+        ]));
+      } else if (entry.isSymbolicLink()) {
+        rows.push(JSON.stringify([
+          relativePath,
+          "symlink",
+          metadata.mode,
+          metadata.mtimeMs,
+          metadata.ctimeMs,
+          await readlink(absolutePath),
+        ]));
+      } else {
+        rows.push(JSON.stringify([
+          relativePath,
+          "other",
+          metadata.mode,
+          metadata.size,
+          metadata.mtimeMs,
+          metadata.ctimeMs,
+        ]));
+      }
+    }
+  }
+  await visit(root, "");
+  return {
+    digest: createHash("sha256").update(rows.join("\n")).digest("hex"),
+    entryCount: rows.length,
+  };
+}
+
+export function startMutationWatcher(root: string): {
+  snapshot: () => WatcherSnapshot;
+  stop: () => WatcherSnapshot;
+} {
+  let eventCount = 0;
+  let overflow = false;
+  let stopped = false;
+  const watcher: FSWatcher = watch(root, { recursive: true }, () => {
+    if (eventCount < MAX_WATCHER_EVENTS) eventCount += 1;
+    else overflow = true;
+  });
+  const snapshot = (): WatcherSnapshot => ({ eventCount, overflow });
+  return {
+    snapshot,
+    stop: () => {
+      if (!stopped) {
+        watcher.close();
+        stopped = true;
+      }
+      return snapshot();
+    },
+  };
 }
 
 function killProcessGroup(pid: number | undefined): void {
@@ -118,25 +283,25 @@ async function runBounded(
     const stdout: Buffer[] = [];
     let outputBytes = 0;
     let finished = false;
-    const timer = setTimeout(() => fail(new Error("process timeout")), options.timeoutMs);
-    function fail(error: Error): void {
+    const timer = setTimeout(() => rejectProcess("PROCESS_TIMEOUT"), options.timeoutMs);
+    function rejectProcess(code: string): void {
       if (finished) return;
       finished = true;
       clearTimeout(timer);
       killProcessGroup(child.pid);
-      reject(error);
+      reject(new HarnessFailure(code));
     }
     function countOutput(chunk: Buffer, keep: boolean): void {
       outputBytes += chunk.length;
       if (outputBytes > MAX_PROCESS_OUTPUT_BYTES) {
-        fail(new Error("process output is too large"));
+        rejectProcess("PROCESS_OUTPUT_LIMIT");
         return;
       }
       if (keep) stdout.push(chunk);
     }
     child.stdout.on("data", (chunk: Buffer) => countOutput(chunk, true));
     child.stderr.on("data", (chunk: Buffer) => countOutput(chunk, false));
-    child.once("error", fail);
+    child.once("error", () => rejectProcess("PROCESS_START_FAILED"));
     child.once("close", (code) => {
       killProcessGroup(child.pid);
       if (finished) return;
@@ -147,25 +312,9 @@ async function runBounded(
   });
 }
 
-async function captureWorktreeState(root: string): Promise<string> {
-  const env = { ...process.env };
-  const commands = [
-    ["status", "--porcelain=v2", "--untracked-files=all"],
-    ["diff", "--no-ext-diff", "--binary", "HEAD", "--"],
-    ["diff", "--cached", "--no-ext-diff", "--binary", "HEAD", "--"],
-  ];
-  const values: string[] = [];
-  for (const args of commands) {
-    const result = await runBounded("git", args, { cwd: root, env, timeoutMs: 10_000 });
-    if (result.code !== 0) throw new Error("worktree state check failed");
-    values.push(result.stdout);
-  }
-  return JSON.stringify(values);
-}
-
 async function validatePython(python: string, root: string): Promise<void> {
-  if (!isAbsolute(python)) throw new Error("A4S_PYTHON must be an absolute path");
-  await stat(python);
+  if (!isAbsolute(python)) fail("PYTHON_PATH_INVALID");
+  await stat(python).catch(() => fail("PYTHON_UNAVAILABLE"));
   const script = [
     "import importlib.metadata as metadata",
     "import json",
@@ -177,16 +326,49 @@ async function validatePython(python: string, root: string): Promise<void> {
     env: { ...process.env },
     timeoutMs: 10_000,
   });
-  if (result.code !== 0) throw new Error("A4S_PYTHON does not contain AgentEvals");
-  const value = record(JSON.parse(result.stdout));
+  if (result.code !== 0) fail("PYTHON_PACKAGES_UNAVAILABLE");
+  let value: JsonRecord | undefined;
+  try {
+    value = record(JSON.parse(result.stdout));
+  } catch {
+    fail("PYTHON_IDENTITY_INVALID");
+  }
   if (
     value?.agentevals !== "0.0.9"
     || value.openevals !== "0.2.0"
     || typeof value.executable !== "string"
     || await realpath(value.executable) !== await realpath(python)
   ) {
-    throw new Error("A4S_PYTHON has an incompatible evaluation environment");
+    fail("PYTHON_IDENTITY_INVALID");
   }
+}
+
+async function createRuntimeAgentDir(temporaryDirectory: string): Promise<string> {
+  const runtimeAgentDir = resolve(temporaryDirectory, "agent");
+  await mkdir(runtimeAgentDir, { mode: 0o700 });
+  await mkdir(resolve(runtimeAgentDir, "sessions"), { mode: 0o700 });
+  const requiredResources = [
+    "auth.json",
+    "models.json",
+    "models-store.json",
+    "settings.json",
+    "agents",
+  ];
+  for (const name of requiredResources) {
+    const source = resolve(DEFAULT_AGENT_DIR, name);
+    await lstat(source).catch(() => fail("AGENT_RESOURCE_UNAVAILABLE"));
+    await symlink(source, resolve(runtimeAgentDir, name));
+  }
+  await writeFile(resolve(runtimeAgentDir, "subagents.json"), `${JSON.stringify({
+    default_mode: "task",
+    default_model: `${SUBJECT_PROVIDER}/${SUBJECT_MODEL}`,
+    default_effort: "high",
+    timeout_ms: 180_000,
+    stall_timeout_ms: 60_000,
+    max_concurrency: 1,
+    session_resources: "lean",
+  })}\n`, { mode: 0o600 });
+  return runtimeAgentDir;
 }
 
 function analyze(captured: CapturedEvent[]): Analysis {
@@ -200,6 +382,7 @@ function analyze(captured: CapturedEvent[]): Analysis {
   const dispatches = allStarts.filter(({ event }) => event.toolName === "subagent_run");
   const workerResults = allEnds.filter(({ event }) => event.toolName === "subagent_run");
   const settled = captured.filter(({ event }) => event.type === "agent_settled");
+  const extensionErrors = captured.filter(({ event }) => event.type === "extension_error");
   const dispatchMessages = captured.filter(({ event }) => {
     return event.type === "message_end" && assistantToolCalls(event.message).length > 0;
   });
@@ -220,6 +403,7 @@ function analyze(captured: CapturedEvent[]): Analysis {
     subjectSettledCount: settled.length,
     laterDomainPhaseCount: laterDomainPhases.length,
   };
+  diagnosticState.counts = oracle;
   const expected: StructuralOracle = {
     unitCount: 1,
     dispatchCount: 1,
@@ -229,16 +413,12 @@ function analyze(captured: CapturedEvent[]): Analysis {
     laterDomainPhaseCount: 0,
   };
   for (const key of Object.keys(expected) as Array<keyof StructuralOracle>) {
-    if (oracle[key] !== expected[key]) throw new Error("structural oracle failed");
+    if (oracle[key] !== expected[key]) fail("STRUCTURAL_COUNTS_INVALID");
   }
-  if (
-    allStarts.length !== 1
-    || allEnds.length !== 1
-    || dispatchMessages.length !== 1
-    || captured.some(({ event }) => event.type === "extension_error")
-  ) {
-    throw new Error("subject tool evidence is invalid");
+  if (allStarts.length !== 1 || allEnds.length !== 1 || dispatchMessages.length !== 1) {
+    fail("TOOL_CARDINALITY_INVALID");
   }
+  if (extensionErrors.length !== 0) fail("SUBJECT_EXTENSION_ERROR");
 
   const unit = units[0]!;
   const dispatchMessage = dispatchMessages[0]!;
@@ -247,7 +427,7 @@ function analyze(captured: CapturedEvent[]): Analysis {
   const final = finals[0]!;
   const settledEvent = settled[0]!;
   const calls = assistantToolCalls(dispatchMessage.event.message);
-  if (calls.length !== 1) throw new Error("subject dispatch message is invalid");
+  if (calls.length !== 1) fail("DISPATCH_MESSAGE_INVALID");
   const dispatchCall = calls[0]!;
   const dispatchArgs = record(dispatchStart.event.args);
   const callArgs = record(dispatchCall.arguments);
@@ -262,7 +442,7 @@ function analyze(captured: CapturedEvent[]): Analysis {
     || dispatchArgs.agent !== "explorer"
     || (dispatchArgs.mode !== undefined && dispatchArgs.mode !== "task")
   ) {
-    throw new Error("subject dispatch identity is invalid");
+    fail("DISPATCH_IDENTITY_INVALID");
   }
   if (
     !(unit.streamIndex < dispatchMessage.streamIndex
@@ -271,17 +451,14 @@ function analyze(captured: CapturedEvent[]): Analysis {
       && workerResult.streamIndex < final.streamIndex
       && final.streamIndex < settledEvent.streamIndex)
   ) {
-    throw new Error("subject event order is invalid");
+    fail("SUBJECT_ORDER_INVALID");
   }
-  if (
-    workerResult.event.isError !== false
-    || workerResult.event.toolCallId !== dispatchCall.id
-  ) {
-    throw new Error("worker tool result is invalid");
+  if (workerResult.event.isError !== false || workerResult.event.toolCallId !== dispatchCall.id) {
+    fail("WORKER_TOOL_RESULT_INVALID");
   }
   const details = record(record(workerResult.event.result)?.details);
   if (!details || !Array.isArray(details.results) || details.results.length !== 1) {
-    throw new Error("worker details.results is invalid");
+    fail("WORKER_RESULTS_INVALID");
   }
   const task = record(details.results[0]);
   if (
@@ -290,15 +467,14 @@ function analyze(captured: CapturedEvent[]): Analysis {
     || task.status !== "completed"
     || task.effective_mode !== "task"
     || typeof task.result !== "string"
-    || findWorkerFields(task.result).length !== REQUIRED_WORKER_FIELDS.length
-    || !task.result.split("\n").some((line) => line.startsWith("status: completed"))
+    || !workerContractComplete(task.result)
   ) {
-    throw new Error("worker contract is incomplete");
+    fail("WORKER_CONTRACT_INVALID");
   }
   const unitText = messageText(record(unit.event.message));
   const finalText = messageText(record(final.event.message));
   if (!finalText.includes(EXPECTED_NODE_ENGINE) || !finalText.includes("package.json")) {
-    throw new Error("subject result is incorrect");
+    fail("SUBJECT_RESULT_INVALID");
   }
   return {
     oracle,
@@ -309,18 +485,60 @@ function analyze(captured: CapturedEvent[]): Analysis {
     dispatchCall,
     workerResult,
     results: details.results,
+    workerInternalTrajectoryAvailable: Object.hasOwn(task, "thread_snapshot"),
     final,
     finalText,
     settled: settledEvent,
+    toolStartCount: allStarts.length,
+    toolEndCount: allEnds.length,
+    extensionErrorCount: extensionErrors.length,
   };
 }
 
-async function main(): Promise<void> {
-  if (process.env.A4S_RUN_AGENT_E2E !== "1") {
-    throw new Error("Set A4S_RUN_AGENT_E2E=1 to run the Pi atomic E2E.");
+function evaluationFailure(result: JsonRecord | undefined): never {
+  const status = result?.status;
+  const error = result?.error;
+  if (status === "VETO") {
+    diagnosticState.stage = "judge";
+    fail("JUDGE_VETO");
   }
+  if (error === "BRIDGE_FAILURE") {
+    diagnosticState.stage = "bridge";
+    fail("BRIDGE_FAILURE");
+  }
+  if (error === "JUDGE_TIMEOUT" || error === "JUDGE_FAILURE") {
+    diagnosticState.stage = "judge";
+    fail(error);
+  }
+  diagnosticState.stage = "agentevals";
+  fail(typeof error === "string" && /^[A-Z0-9_]+$/.test(error) ? error : "AGENTEVALS_FAILURE");
+}
+
+async function persistFailureEvidence(error: unknown): Promise<string> {
+  const code = error instanceof HarnessFailure ? error.code : `${diagnosticState.stage.toUpperCase()}_UNEXPECTED`;
+  const directory = await mkdtemp(resolve(tmpdir(), "a4s-pi-atomic-failure-"));
+  await chmod(directory, 0o700);
+  const path = resolve(directory, "evidence.json");
+  const evidence = {
+    schema: FAILURE_SCHEMA,
+    stage: diagnosticState.stage,
+    code,
+    counts: diagnosticState.counts ?? null,
+    rpcEventCount: diagnosticState.rpcEventCount ?? null,
+    capturedEventCount: diagnosticState.capturedEventCount ?? null,
+    watcherEventCount: diagnosticState.watcherEventCount ?? null,
+    watcherOverflow: diagnosticState.watcherOverflow ?? null,
+    inventoryBefore: diagnosticState.inventoryBefore ?? null,
+    inventoryAfter: diagnosticState.inventoryAfter ?? null,
+  };
+  await writeFile(path, `${JSON.stringify(evidence, null, 2)}\n`, { mode: 0o600 });
+  return path;
+}
+
+async function main(): Promise<void> {
+  if (process.env.A4S_RUN_AGENT_E2E !== "1") fail("OPT_IN_REQUIRED");
   const python = process.env.A4S_PYTHON;
-  if (!python) throw new Error("Set A4S_PYTHON to the prepared AgentEvals interpreter.");
+  if (!python) fail("A4S_PYTHON_REQUIRED");
 
   const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
   const packagePath = resolve(root, "package.json");
@@ -328,11 +546,13 @@ async function main(): Promise<void> {
   const bridgePath = resolve(root, "evals/pi_atomic_e2e/judge-result.ts");
   const extensionPath = resolve(DEFAULT_AGENT_DIR, "npm/node_modules/pi-subagents-j0k3r/index.ts");
   const extensionPackagePath = resolve(DEFAULT_AGENT_DIR, "npm/node_modules/pi-subagents-j0k3r/package.json");
-  const projectPiDir = resolve(root, ".pi");
-  const projectConfigPath = resolve(projectPiDir, "subagents.json");
-  const agentDir = process.env.PI_CODING_AGENT_DIR || DEFAULT_AGENT_DIR;
 
-  await Promise.all([stat(PI_CLI), stat(adapterPath), stat(bridgePath), stat(extensionPath)]);
+  await Promise.all([
+    stat(PI_CLI),
+    stat(adapterPath),
+    stat(bridgePath),
+    stat(extensionPath),
+  ]).catch(() => fail("RUNTIME_PATH_UNAVAILABLE"));
   await validatePython(python, root);
   const [packageBytes, extensionPackageBytes] = await Promise.all([
     readFile(packagePath),
@@ -340,37 +560,22 @@ async function main(): Promise<void> {
   ]);
   const packageValue = JSON.parse(packageBytes.toString("utf8")) as JsonRecord;
   const extensionPackage = JSON.parse(extensionPackageBytes.toString("utf8")) as JsonRecord;
-  if (record(packageValue.engines)?.node !== EXPECTED_NODE_ENGINE) {
-    throw new Error("package.json has an unexpected Node engine");
-  }
+  if (record(packageValue.engines)?.node !== EXPECTED_NODE_ENGINE) fail("WORKSPACE_IDENTITY_INVALID");
   if (extensionPackage.name !== "pi-subagents-j0k3r" || extensionPackage.version !== "1.6.1") {
-    throw new Error("pi-subagents-j0k3r@1.6.1 is required");
-  }
-  try {
-    await stat(projectPiDir);
-    throw new Error("the runner requires an absent project .pi directory");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-  }
-  const initialWorktreeState = await captureWorktreeState(root);
-  if (initialWorktreeState !== JSON.stringify(["", "", ""])) {
-    throw new Error("the runner requires a clean worktree");
+    fail("SUBAGENT_EXTENSION_IDENTITY_INVALID");
   }
 
-  const temporaryDirectory = await mkdtemp(resolve(tmpdir(), "a4s-pi-atomic-"));
+  const temporaryDirectory = await mkdtemp(resolve(tmpdir(), "a4s-pi-atomic-run-"));
   let client: RpcClient | undefined;
   let unsubscribe: (() => void) | undefined;
+  let mutationWatcher: ReturnType<typeof startMutationWatcher> | undefined;
+  let initialInventory: Inventory | undefined;
+  let watcherStopped = false;
   try {
-    await mkdir(projectPiDir, { mode: 0o700 });
-    await writeFile(projectConfigPath, `${JSON.stringify({
-      default_mode: "task",
-      default_model: `${SUBJECT_PROVIDER}/${SUBJECT_MODEL}`,
-      default_effort: "high",
-      timeout_ms: 180_000,
-      stall_timeout_ms: 60_000,
-      max_concurrency: 1,
-      session_resources: "lean",
-    })}\n`, { mode: 0o600 });
+    const runtimeAgentDir = await createRuntimeAgentDir(temporaryDirectory);
+    initialInventory = await inventoryTree(root);
+    diagnosticState.inventoryBefore = initialInventory;
+    mutationWatcher = startMutationWatcher(root);
 
     const captured: CapturedEvent[] = [];
     let capturedBytes = 0;
@@ -388,7 +593,7 @@ async function main(): Promise<void> {
       cwd: root,
       provider: SUBJECT_PROVIDER,
       model: SUBJECT_MODEL,
-      env: { PI_CODING_AGENT_DIR: agentDir },
+      env: { PI_CODING_AGENT_DIR: runtimeAgentDir },
       args: [
         "--no-session",
         "--no-extensions",
@@ -412,28 +617,63 @@ async function main(): Promise<void> {
       captured.push({ streamIndex, event });
     });
 
+    diagnosticState.stage = "subject";
     await client.start();
     const state = await client.getState();
     if (state.model?.provider !== SUBJECT_PROVIDER || state.model.id !== SUBJECT_MODEL) {
-      throw new Error("subject model identity is invalid");
+      fail("SUBJECT_MODEL_INVALID");
     }
     await client.setAutoRetry(false);
     await client.setAutoCompaction(false);
     const disposition = await client.prompt(INPUT);
-    if (disposition !== "started") throw new Error("subject prompt did not start");
+    if (disposition !== "started") fail("SUBJECT_PROMPT_NOT_STARTED");
     await client.waitForIdle(SUBJECT_TIMEOUT_MS);
-    if (captureFailure) throw new Error("subject trajectory is too large");
+    diagnosticState.rpcEventCount = streamIndex;
+    diagnosticState.capturedEventCount = captured.length;
+    if (captureFailure) fail("SUBJECT_TRAJECTORY_LIMIT");
+
+    diagnosticState.stage = "structure";
     const analysis = analyze(captured);
+    if (analysis.settled.streamIndex !== streamIndex) fail("SUBJECT_SETTLED_NOT_FINAL");
 
     unsubscribe();
     unsubscribe = undefined;
     await client.stop();
     client = undefined;
-    await rm(projectPiDir, { recursive: true, force: true });
-    if (await captureWorktreeState(root) !== initialWorktreeState) {
-      throw new Error("the subject changed the worktree");
+
+    diagnosticState.stage = "mutation";
+    const afterSubjectInventory = await inventoryTree(root);
+    diagnosticState.inventoryAfter = afterSubjectInventory;
+    const subjectWatcher = mutationWatcher.snapshot();
+    diagnosticState.watcherEventCount = subjectWatcher.eventCount;
+    diagnosticState.watcherOverflow = subjectWatcher.overflow;
+    if (
+      canonical(initialInventory) !== canonical(afterSubjectInventory)
+      || subjectWatcher.eventCount !== 0
+      || subjectWatcher.overflow
+    ) {
+      fail("SUBJECT_MUTATION_DETECTED");
     }
 
+    const runnerObservation = {
+      source: "runner",
+      rpcEventCount: streamIndex,
+      capturedEventCount: captured.length,
+      lastRpcStreamIndex: streamIndex,
+      settledStreamIndex: analysis.settled.streamIndex,
+      toolStartCount: analysis.toolStartCount,
+      toolEndCount: analysis.toolEndCount,
+      extensionErrorCount: analysis.extensionErrorCount,
+      laterDomainPhaseCount: analysis.oracle.laterDomainPhaseCount,
+      subjectSettledCount: analysis.oracle.subjectSettledCount,
+      settledWasLastRpcEvent: analysis.settled.streamIndex === streamIndex,
+      inventoryBefore: initialInventory,
+      inventoryAfterSubject: afterSubjectInventory,
+      inventoryEqual: canonical(initialInventory) === canonical(afterSubjectInventory),
+      watcherEventCount: subjectWatcher.eventCount,
+      watcherOverflow: subjectWatcher.overflow,
+      workerInternalTrajectoryAvailable: analysis.workerInternalTrajectoryAvailable,
+    };
     const trajectory = {
       schema: SCHEMA,
       input: analysis.unitText,
@@ -474,26 +714,58 @@ async function main(): Promise<void> {
           type: "subject_settled",
         },
       ],
+      runnerObservation,
     };
     const trajectoryPath = resolve(temporaryDirectory, "trajectory.json");
     await writeFile(trajectoryPath, `${JSON.stringify(trajectory)}\n`, { mode: 0o600 });
 
-    const evaluation = await runBounded(python, [
-      adapterPath,
-      "--trajectory", trajectoryPath,
-      "--bridge", bridgePath,
-      "--provider", JUDGE_PROVIDER,
-      "--model", JUDGE_MODEL,
-      "--timeout-seconds", String(JUDGE_TIMEOUT_SECONDS),
-    ], {
-      cwd: root,
-      env: { ...process.env, PI_CODING_AGENT_DIR: agentDir },
-      timeoutMs: (JUDGE_TIMEOUT_SECONDS + 30) * 1000,
-    });
-    if (evaluation.code !== 0) throw new Error("AgentEvals rejected the trajectory");
+    diagnosticState.stage = "agentevals";
+    let evaluation: { code: number; stdout: string } | undefined;
+    let evaluationError: unknown;
+    try {
+      evaluation = await runBounded(python, [
+        adapterPath,
+        "--trajectory", trajectoryPath,
+        "--bridge", bridgePath,
+        "--provider", JUDGE_PROVIDER,
+        "--model", JUDGE_MODEL,
+        "--timeout-seconds", String(JUDGE_TIMEOUT_SECONDS),
+      ], {
+        cwd: root,
+        env: { ...process.env, PI_CODING_AGENT_DIR: runtimeAgentDir },
+        timeoutMs: (JUDGE_TIMEOUT_SECONDS + 30) * 1000,
+      });
+    } catch (error) {
+      evaluationError = error;
+    }
+
+    const finalInventory = await inventoryTree(root);
+    diagnosticState.inventoryAfter = finalInventory;
+    const finalWatcher = mutationWatcher.stop();
+    watcherStopped = true;
+    diagnosticState.watcherEventCount = finalWatcher.eventCount;
+    diagnosticState.watcherOverflow = finalWatcher.overflow;
+    if (
+      canonical(initialInventory) !== canonical(finalInventory)
+      || finalWatcher.eventCount !== 0
+      || finalWatcher.overflow
+    ) {
+      diagnosticState.stage = "mutation";
+      fail("E2E_MUTATION_DETECTED");
+    }
+    if (evaluationError) throw evaluationError;
+    if (!evaluation) fail("AGENTEVALS_PROCESS_FAILURE");
+
     const lines = evaluation.stdout.trim().split("\n");
-    if (lines.length !== 1) throw new Error("AgentEvals output is invalid");
-    const result = record(JSON.parse(lines[0]!));
+    let result: JsonRecord | undefined;
+    if (lines.length === 1) {
+      try {
+        result = record(JSON.parse(lines[0]!));
+      } catch {
+        result = undefined;
+      }
+    }
+    if (evaluation.code !== 0) evaluationFailure(result);
     const judge = record(result?.judge);
     if (
       result?.schema !== SCHEMA
@@ -502,18 +774,47 @@ async function main(): Promise<void> {
       || judge?.key !== "trajectory_accuracy"
       || judge.score !== true
     ) {
-      throw new Error("AgentEvals did not pass");
+      evaluationFailure(result);
     }
+    diagnosticState.stage = "completed";
     process.stdout.write("PI_ATOMIC_E2E PASS\n");
   } finally {
     unsubscribe?.();
     await client?.stop().catch(() => undefined);
-    await rm(projectPiDir, { recursive: true, force: true });
+    if (mutationWatcher && !watcherStopped) {
+      const snapshot = mutationWatcher.stop();
+      diagnosticState.watcherEventCount = snapshot.eventCount;
+      diagnosticState.watcherOverflow = snapshot.overflow;
+      if (initialInventory) {
+        try {
+          diagnosticState.inventoryAfter = await inventoryTree(root);
+        } catch {
+          delete diagnosticState.inventoryAfter;
+        }
+      }
+    }
     await rm(temporaryDirectory, { recursive: true, force: true });
   }
 }
 
-main().catch(() => {
-  process.stderr.write("PI_ATOMIC_E2E FAIL\n");
+async function reportFailure(error: unknown): Promise<void> {
+  let evidencePath = "unavailable";
+  try {
+    evidencePath = await persistFailureEvidence(error);
+  } catch {
+    evidencePath = "unavailable";
+  }
+  const code = error instanceof HarnessFailure ? error.code : `${diagnosticState.stage.toUpperCase()}_UNEXPECTED`;
+  const counts = diagnosticState.counts
+    ? Object.entries(diagnosticState.counts).map(([key, value]) => `${key}:${value}`).join(",")
+    : "unavailable";
+  process.stderr.write(
+    `PI_ATOMIC_E2E FAIL stage=${diagnosticState.stage} code=${code} counts=${counts} evidence=${evidencePath}\n`,
+  );
   process.exitCode = 1;
-});
+}
+
+const invokedPath = process.argv[1] ? pathToFileURL(resolve(process.argv[1])).href : "";
+if (import.meta.url === invokedPath) {
+  main().catch(reportFailure);
+}

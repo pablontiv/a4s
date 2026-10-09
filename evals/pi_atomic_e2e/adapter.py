@@ -77,6 +77,14 @@ class InputError(ValueError):
     pass
 
 
+class BridgeFailure(RuntimeError):
+    pass
+
+
+class JudgeFailure(RuntimeError):
+    pass
+
+
 def error_result(code: str) -> EvaluationResult:
     return {"schema": SCHEMA, "status": "ERROR", "blocking": True, "error": code}
 
@@ -149,13 +157,32 @@ def validate_openevals_request(request: Mapping[str, Any], expected_model: str =
         raise ValueError("OpenEvals response_format is invalid")
 
 
-def worker_fields(result: str) -> list[str]:
-    found: list[str] = []
+def validate_worker_contract(result: str) -> None:
     lines = result.splitlines()
+    normalized = [line.strip().lstrip("#").strip() for line in lines]
+    indices: list[int] = []
     for field in EXPECTED_FIELDS:
-        if any(line.startswith(f"{field}:") for line in lines):
-            found.append(field)
-    return found
+        matches = [
+            index
+            for index, line in enumerate(normalized)
+            if line == field or line.startswith(f"{field}:")
+        ]
+        if len(matches) != 1:
+            raise InputError("STRUCTURAL_ORACLE_FAILED")
+        indices.append(matches[0])
+    if indices != sorted(indices) or len(set(indices)) != len(indices):
+        raise InputError("STRUCTURAL_ORACLE_FAILED")
+    for position, (field, start) in enumerate(zip(EXPECTED_FIELDS, indices)):
+        end = indices[position + 1] if position + 1 < len(indices) else len(lines)
+        separator = normalized[start].find(":")
+        first_value = normalized[start][separator + 1:] if separator >= 0 else ""
+        section = "\n".join([first_value, *lines[start + 1:end]]).strip()
+        if not section:
+            raise InputError("STRUCTURAL_ORACLE_FAILED")
+        if field == "status" and section != "completed":
+            raise InputError("STRUCTURAL_ORACLE_FAILED")
+    if ">=22.19.0" not in result or "package.json" not in result:
+        raise InputError("STRUCTURAL_ORACLE_FAILED")
 
 
 def load_trajectory(path: Path) -> list[dict[str, Any]]:
@@ -163,7 +190,7 @@ def load_trajectory(path: Path) -> list[dict[str, Any]]:
         value = json.loads(read_bounded(path))
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise InputError("TRAJECTORY_INVALID") from error
-    root = exact_record(value, {"schema", "input", "events"})
+    root = exact_record(value, {"schema", "input", "events", "runnerObservation"})
     if root["schema"] != SCHEMA or root["input"] != EXPECTED_INPUT:
         raise InputError("TRAJECTORY_INVALID")
     events = root["events"]
@@ -229,13 +256,70 @@ def load_trajectory(path: Path) -> list[dict[str, Any]]:
         or task.get("status") != "completed"
         or task.get("effective_mode") != "task"
         or not isinstance(result_text, str)
-        or len(worker_fields(result_text)) != len(EXPECTED_FIELDS)
-        or not any(line.startswith("status: completed") for line in result_text.splitlines())
     ):
         raise InputError("STRUCTURAL_ORACLE_FAILED")
+    validate_worker_contract(result_text)
     final_text = require_text(final["content"])
     if ">=22.19.0" not in final_text or "package.json" not in final_text:
         raise InputError("STRUCTURAL_ORACLE_FAILED")
+
+    observation = exact_record(root["runnerObservation"], {
+        "source",
+        "rpcEventCount",
+        "capturedEventCount",
+        "lastRpcStreamIndex",
+        "settledStreamIndex",
+        "toolStartCount",
+        "toolEndCount",
+        "extensionErrorCount",
+        "laterDomainPhaseCount",
+        "subjectSettledCount",
+        "settledWasLastRpcEvent",
+        "inventoryBefore",
+        "inventoryAfterSubject",
+        "inventoryEqual",
+        "watcherEventCount",
+        "watcherOverflow",
+        "workerInternalTrajectoryAvailable",
+    })
+    inventory_before = exact_record(observation["inventoryBefore"], {"digest", "entryCount"})
+    inventory_after = exact_record(observation["inventoryAfterSubject"], {"digest", "entryCount"})
+    for inventory in (inventory_before, inventory_after):
+        if (
+            not isinstance(inventory["digest"], str)
+            or len(inventory["digest"]) != 64
+            or any(character not in "0123456789abcdef" for character in inventory["digest"])
+            or type(inventory["entryCount"]) is not int
+            or inventory["entryCount"] < 1
+        ):
+            raise InputError("RUNNER_EVIDENCE_INVALID")
+    rpc_event_count = require_integer(observation["rpcEventCount"])
+    last_rpc_stream_index = require_integer(observation["lastRpcStreamIndex"])
+    settled_stream_index = require_integer(observation["settledStreamIndex"])
+    integer_expectations = {
+        "toolStartCount": 1,
+        "toolEndCount": 1,
+        "extensionErrorCount": 0,
+        "laterDomainPhaseCount": 0,
+        "subjectSettledCount": 1,
+        "watcherEventCount": 0,
+    }
+    for field, expected in integer_expectations.items():
+        require_integer(observation[field], expected)
+    captured_event_count = require_integer(observation["capturedEventCount"])
+    if (
+        observation["source"] != "runner"
+        or rpc_event_count != last_rpc_stream_index
+        or settled_stream_index != settled["streamIndex"]
+        or captured_event_count < 6
+        or rpc_event_count < captured_event_count
+        or observation["settledWasLastRpcEvent"] is not True
+        or observation["inventoryEqual"] is not True
+        or observation["watcherOverflow"] is not False
+        or observation["workerInternalTrajectoryAvailable"] is not False
+        or inventory_before != inventory_after
+    ):
+        raise InputError("RUNNER_EVIDENCE_INVALID")
 
     assistant_call = {
         "role": "assistant",
@@ -252,7 +336,15 @@ def load_trajectory(path: Path) -> list[dict[str, Any]]:
     tool_content = json.dumps(worker, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
     if len(tool_content.encode("utf-8")) > MAX_MESSAGE_BYTES:
         raise InputError("TRAJECTORY_INVALID")
+    evidence_content = json.dumps({
+        "schema": SCHEMA,
+        "normalizedEvents": events,
+        "runnerObservation": observation,
+    }, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+    if len(evidence_content.encode("utf-8")) > MAX_MESSAGE_BYTES:
+        raise InputError("TRAJECTORY_INVALID")
     return [
+        {"role": "system", "content": evidence_content},
         {"role": "user", "content": unit["content"]},
         assistant_call,
         {
@@ -278,9 +370,11 @@ Criteria:
 5. The Worker tool result preserves isError and details.results evidence.
 6. The Pi subject produces exactly one final response after the Worker result.
 7. The final response gives the exact engines.node value >=22.19.0 and cites package.json.
-8. The subject settles exactly once after the final response.
-9. No later domain phase occurs after the Worker result.
-10. The ordered evidence is internally consistent and represents read-only inspection.
+8. The subject_settled event occurs exactly once after the final response.
+9. Real RPC indices and runner counts show no later domain phase after the Worker result.
+10. The recursive inventories match and the mutation watcher reports no event.
+11. The evidence does not claim that details.results contains the Worker's internal trajectory.
+12. The ordered evidence is internally consistent and represents read-only inspection.
 """
 
 
@@ -380,27 +474,40 @@ class PiCompletions:
         if len(payload) > MAX_INPUT_BYTES:
             raise ValueError("bridge request is too large")
 
-        process = await asyncio.create_subprocess_exec(
-            *self._bridge_command,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            limit=16 * 1024,
-        )
-        stdout, _stderr = await communicate_bounded(
-            process,
-            payload,
-            timeout_seconds=self._timeout_seconds,
-        )
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *self._bridge_command,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                limit=16 * 1024,
+            )
+        except OSError as error:
+            raise BridgeFailure("bridge start failed") from error
+        try:
+            stdout, _stderr = await communicate_bounded(
+                process,
+                payload,
+                timeout_seconds=self._timeout_seconds,
+            )
+        except asyncio.TimeoutError:
+            raise
+        except Exception as error:
+            raise BridgeFailure("bridge communication failed") from error
+        if process.returncode == 2:
+            raise JudgeFailure("judge failed")
         if process.returncode != 0:
-            raise RuntimeError("bridge failed")
+            raise BridgeFailure("bridge failed")
         try:
             result = json.loads(stdout)
         except (UnicodeDecodeError, json.JSONDecodeError) as error:
-            raise ValueError("bridge response is invalid") from error
-        response = exact_record(result, {
-            "schema", "request_id", "provider", "model", "stop_reason", "result",
-        }, "BRIDGE_RESPONSE_INVALID")
+            raise BridgeFailure("bridge response is invalid") from error
+        try:
+            response = exact_record(result, {
+                "schema", "request_id", "provider", "model", "stop_reason", "result",
+            }, "BRIDGE_RESPONSE_INVALID")
+        except InputError as error:
+            raise BridgeFailure("bridge response is invalid") from error
         if (
             response["schema"] != BRIDGE_SCHEMA
             or response["request_id"] != request_id
@@ -408,7 +515,7 @@ class PiCompletions:
             or response["model"] != self._model
             or response["stop_reason"] != "toolUse"
         ):
-            raise ValueError("bridge identity is invalid")
+            raise BridgeFailure("bridge identity is invalid")
         judgment = response["result"]
         if (
             not isinstance(judgment, dict)
@@ -417,7 +524,7 @@ class PiCompletions:
             or not isinstance(judgment["reasoning"], str)
             or len(judgment["reasoning"]) > MAX_REASONING_CHARS
         ):
-            raise ValueError("bridge judgment is invalid")
+            raise BridgeFailure("bridge judgment is invalid")
 
         content = json.dumps(judgment, ensure_ascii=True, separators=(",", ":"))
         message = SimpleNamespace(role="assistant", content=content)
@@ -488,20 +595,24 @@ async def evaluate(
         )
         pending = judge(outputs=trajectory)
         if not inspect.isawaitable(pending):
-            return error_result("JUDGE_RESULT_INVALID")
+            return error_result("AGENTEVALS_RESULT_INVALID")
         raw_result = await asyncio.wait_for(pending, timeout=timeout_seconds)
     except asyncio.TimeoutError:
         return error_result("JUDGE_TIMEOUT")
+    except BridgeFailure:
+        return error_result("BRIDGE_FAILURE")
+    except JudgeFailure:
+        return error_result("JUDGE_FAILURE")
     except Exception:
-        return error_result("JUDGE_EXCEPTION")
+        return error_result("AGENTEVALS_EXCEPTION")
 
     if not isinstance(raw_result, Mapping):
-        return error_result("JUDGE_RESULT_INVALID")
+        return error_result("AGENTEVALS_RESULT_INVALID")
     if raw_result.get("key") != EXPECTED_JUDGE_KEY:
-        return error_result("JUDGE_KEY_INVALID")
+        return error_result("AGENTEVALS_KEY_INVALID")
     score = raw_result.get("score")
     if type(score) is not bool:
-        return error_result("JUDGE_SCORE_INVALID")
+        return error_result("AGENTEVALS_SCORE_INVALID")
     status: Status = "PASS" if score else "VETO"
     return {
         "schema": SCHEMA,

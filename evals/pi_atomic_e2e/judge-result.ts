@@ -43,6 +43,8 @@ const JUDGE_SYSTEM = [
 
 type JsonRecord = Record<string, unknown>;
 
+class JudgeFailure extends Error {}
+
 type JudgeRequest = {
   schema: typeof SCHEMA;
   request_id: string;
@@ -172,16 +174,16 @@ function buildJudgePrompt(request: JudgeRequest, messages: Array<{ role: string;
 
 function validateJudgeEvents(events: unknown[]): { score: boolean; reasoning: string; tool_call_id: string } {
   const rows = events.map(record);
-  if (rows.some((row) => row === undefined)) throw new Error("judge event is invalid");
+  if (rows.some((row) => row === undefined)) throw new JudgeFailure("judge event is invalid");
   const typedRows = rows as JsonRecord[];
   if (typedRows.some((event) => event.type === "extension_error")) {
-    throw new Error("judge extension failed");
+    throw new JudgeFailure("judge extension failed");
   }
   const starts = typedRows.filter((event) => event.type === "tool_execution_start");
   const ends = typedRows.filter((event) => event.type === "tool_execution_end");
   const settled = typedRows.filter((event) => event.type === "agent_settled");
   if (starts.length !== 1 || ends.length !== 1 || settled.length !== 1) {
-    throw new Error("judge evidence is incomplete");
+    throw new JudgeFailure("judge evidence is incomplete");
   }
 
   const start = starts[0]!;
@@ -194,7 +196,7 @@ function validateJudgeEvents(events: unknown[]): { score: boolean; reasoning: st
     || end.toolCallId !== start.toolCallId
     || end.isError !== false
   ) {
-    throw new Error("judge tool identity is invalid");
+    throw new JudgeFailure("judge tool identity is invalid");
   }
 
   const calls = typedRows
@@ -207,7 +209,7 @@ function validateJudgeEvents(events: unknown[]): { score: boolean; reasoning: st
     .flatMap((event) => assistantContent(event.message))
     .map(record)
     .some((block) => block?.type === "text" && typeof block.text === "string" && block.text.trim().length > 0);
-  if (freeText || calls.length !== 1) throw new Error("judge response content is invalid");
+  if (freeText || calls.length !== 1) throw new JudgeFailure("judge response content is invalid");
 
   const call = calls[0]!;
   const callMessageIndex = typedRows.findIndex((event) => {
@@ -218,7 +220,7 @@ function validateJudgeEvents(events: unknown[]): { score: boolean; reasoning: st
   const endIndex = typedRows.indexOf(end);
   const settledIndex = typedRows.indexOf(settled[0]!);
   if (!(callMessageIndex >= 0 && callMessageIndex < startIndex && startIndex < endIndex && endIndex < settledIndex)) {
-    throw new Error("judge event order is invalid");
+    throw new JudgeFailure("judge event order is invalid");
   }
 
   const argumentsValue = record(call.arguments);
@@ -238,7 +240,7 @@ function validateJudgeEvents(events: unknown[]): { score: boolean; reasoning: st
     || argumentsValue.score !== details.score
     || argumentsValue.reasoning !== details.reasoning
   ) {
-    throw new Error("judge_result evidence is invalid");
+    throw new JudgeFailure("judge_result evidence is invalid");
   }
   return {
     score: details.score,
@@ -321,8 +323,13 @@ async function runBridge(): Promise<void> {
     }
     await client.setAutoRetry(false);
     await client.setAutoCompaction(false);
-    const events = await client.promptAndWait(buildJudgePrompt(request, messages), undefined, request.timeout_ms);
-    if (controller.signal.aborted) throw new Error("judge timeout");
+    let events: unknown[];
+    try {
+      events = await client.promptAndWait(buildJudgePrompt(request, messages), undefined, request.timeout_ms);
+    } catch (error) {
+      throw new JudgeFailure("judge execution failed", { cause: error });
+    }
+    if (controller.signal.aborted) throw new JudgeFailure("judge timeout");
     const judgment = validateJudgeEvents(events);
     process.stdout.write(JSON.stringify({
       schema: SCHEMA,
@@ -346,8 +353,9 @@ async function runBridge(): Promise<void> {
 
 const invokedPath = process.argv[1] ? pathToFileURL(resolve(process.argv[1])).href : "";
 if (import.meta.url === invokedPath) {
-  runBridge().catch(() => {
-    process.stderr.write("judge bridge failed\n");
-    process.exitCode = 1;
+  runBridge().catch((error: unknown) => {
+    const judgeFailure = error instanceof JudgeFailure;
+    process.stderr.write(judgeFailure ? "judge failed\n" : "judge bridge failed\n");
+    process.exitCode = judgeFailure ? 2 : 1;
   });
 }
