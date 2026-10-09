@@ -5,7 +5,6 @@ import asyncio
 import inspect
 import json
 import os
-import signal
 import stat
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from pathlib import Path
@@ -15,22 +14,51 @@ from typing import Any, Literal, TypedDict
 SCHEMA = "a4s.pi-atomic-e2e/v1"
 BRIDGE_SCHEMA = "a4s.pi-atomic-judge/v1"
 EXPECTED_JUDGE_KEY = "trajectory_accuracy"
+EXPECTED_MODEL = "gpt-5.6-terra"
 EXPECTED_INPUT = (
     "Inspecciona package.json en modo read_only. Devuelve en esta misma respuesta "
     "el valor exacto de engines.node y cita la ruta. No modifiques archivos."
 )
-EXPECTED_FIELDS = {
+EXPECTED_FIELDS = (
     "status",
     "summary",
     "result_or_artifacts",
     "evidence_or_validation",
     "risks_or_uncertainty",
+)
+SCORE_DESCRIPTION = (
+    "A score that is true if criteria in the prompt are met, and false otherwise."
+)
+REASONING_DESCRIPTION = (
+    "A human-readable explanation of the score. You MUST end the reasoning with "
+    "a sentence that says: Thus, the score should be: SCORE_YOU_ASSIGN."
+)
+EXPECTED_RESPONSE_FORMAT = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "score",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "reasoning": {
+                    "type": "string",
+                    "description": REASONING_DESCRIPTION,
+                },
+                "score": {
+                    "type": "boolean",
+                    "description": SCORE_DESCRIPTION,
+                },
+            },
+            "required": ["reasoning", "score"],
+        },
+    },
 }
 MAX_INPUT_BYTES = 1024 * 1024
 MAX_BRIDGE_BYTES = 64 * 1024
 MAX_REASONING_CHARS = 8_000
-MAX_MESSAGES = 20
-MAX_MESSAGE_BYTES = 128 * 1024
+MAX_MESSAGE_BYTES = 512 * 1024
 
 Status = Literal["PASS", "VETO", "ERROR"]
 Judge = Callable[..., Awaitable[Mapping[str, Any]] | Mapping[str, Any]]
@@ -79,92 +107,162 @@ def read_bounded(path: Path) -> bytes:
         os.close(descriptor)
 
 
-def require_int(value: Any, expected: int) -> None:
-    if type(value) is not int or value != expected:
-        raise InputError("STRUCTURAL_ORACLE_FAILED")
+def exact_record(value: Any, fields: set[str], code: str = "TRAJECTORY_INVALID") -> dict[str, Any]:
+    if not isinstance(value, dict) or set(value) != fields:
+        raise InputError(code)
+    return value
 
 
-def load_trajectory(path: Path) -> list[dict[str, str]]:
+def require_integer(value: Any, expected: int | None = None) -> int:
+    if type(value) is not int or value < 0:
+        raise InputError("TRAJECTORY_INVALID")
+    if expected is not None and value != expected:
+        raise InputError("TRAJECTORY_INVALID")
+    return value
+
+
+def require_text(value: Any) -> str:
+    if not isinstance(value, str) or not value:
+        raise InputError("TRAJECTORY_INVALID")
+    if len(value.encode("utf-8")) > MAX_MESSAGE_BYTES:
+        raise InputError("TRAJECTORY_INVALID")
+    return value
+
+
+def validate_openevals_request(request: Mapping[str, Any], expected_model: str = EXPECTED_MODEL) -> None:
+    if set(request) != {"messages", "model", "response_format"}:
+        raise ValueError("OpenEvals request fields are invalid")
+    if request.get("model") != expected_model:
+        raise ValueError("OpenEvals model is invalid")
+    messages = request.get("messages")
+    if not isinstance(messages, list) or not messages:
+        raise ValueError("OpenEvals messages are invalid")
+    for message in messages:
+        if not isinstance(message, dict) or set(message) != {"role", "content"}:
+            raise ValueError("OpenEvals messages are invalid")
+        if message["role"] not in {"system", "user", "assistant"}:
+            raise ValueError("OpenEvals message role is invalid")
+        content = message["content"]
+        if not isinstance(content, (str, list)):
+            raise ValueError("OpenEvals message content is invalid")
+    if request.get("response_format") != EXPECTED_RESPONSE_FORMAT:
+        raise ValueError("OpenEvals response_format is invalid")
+
+
+def worker_fields(result: str) -> list[str]:
+    found: list[str] = []
+    lines = result.splitlines()
+    for field in EXPECTED_FIELDS:
+        if any(line.startswith(f"{field}:") for line in lines):
+            found.append(field)
+    return found
+
+
+def load_trajectory(path: Path) -> list[dict[str, Any]]:
     try:
         value = json.loads(read_bounded(path))
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise InputError("TRAJECTORY_INVALID") from error
-    if not isinstance(value, dict) or set(value) != {
-        "schema",
-        "input",
-        "oracle",
-        "worker",
-        "final",
-        "messages",
-    }:
+    root = exact_record(value, {"schema", "input", "events"})
+    if root["schema"] != SCHEMA or root["input"] != EXPECTED_INPUT:
         raise InputError("TRAJECTORY_INVALID")
-    if value["schema"] != SCHEMA or value["input"] != EXPECTED_INPUT:
-        raise InputError("TRAJECTORY_INVALID")
+    events = root["events"]
+    if not isinstance(events, list) or len(events) != 5:
+        raise InputError("STRUCTURAL_ORACLE_FAILED")
 
-    oracle = value["oracle"]
-    if not isinstance(oracle, dict) or set(oracle) != {
-        "unitCount",
-        "dispatchCount",
-        "workerResultCount",
-        "parentFinalCount",
-        "subjectSettledCount",
-        "laterDomainPhaseCount",
-    }:
-        raise InputError("TRAJECTORY_INVALID")
-    for key in (
-        "unitCount",
-        "dispatchCount",
-        "workerResultCount",
-        "parentFinalCount",
-        "subjectSettledCount",
-    ):
-        require_int(oracle[key], 1)
-    require_int(oracle["laterDomainPhaseCount"], 0)
-
-    worker = value["worker"]
-    if not isinstance(worker, dict) or set(worker) != {"agent", "status", "result", "fields"}:
-        raise InputError("TRAJECTORY_INVALID")
-    fields = worker["fields"]
+    unit = exact_record(events[0], {"order", "streamIndex", "type", "content"})
+    dispatch = exact_record(
+        events[1],
+        {"order", "streamIndex", "startedStreamIndex", "type", "toolCallId", "toolName", "args"},
+    )
+    worker = exact_record(
+        events[2],
+        {"order", "streamIndex", "type", "toolCallId", "toolName", "isError", "details"},
+    )
+    final = exact_record(events[3], {"order", "streamIndex", "type", "content"})
+    settled = exact_record(events[4], {"order", "streamIndex", "type"})
+    for index, event in enumerate(events, start=1):
+        require_integer(event["order"], index)
+    stream_indices = [require_integer(event["streamIndex"]) for event in events]
+    if stream_indices != sorted(stream_indices) or len(set(stream_indices)) != len(stream_indices):
+        raise InputError("STRUCTURAL_ORACLE_FAILED")
+    started_stream_index = require_integer(dispatch["startedStreamIndex"])
+    if not dispatch["streamIndex"] < started_stream_index < worker["streamIndex"]:
+        raise InputError("STRUCTURAL_ORACLE_FAILED")
     if (
-        worker["agent"] != "explorer"
-        or worker["status"] != "completed"
-        or not isinstance(worker["result"], str)
-        or not worker["result"].strip()
-        or not isinstance(fields, list)
-        or set(fields) != EXPECTED_FIELDS
-        or len(fields) != len(EXPECTED_FIELDS)
+        unit["type"] != "unit"
+        or require_text(unit["content"]) != EXPECTED_INPUT
+        or dispatch["type"] != "dispatch"
+        or dispatch["toolName"] != "subagent_run"
+        or worker["type"] != "worker_result"
+        or worker["toolName"] != "subagent_run"
+        or worker["isError"] is not False
+        or final["type"] != "parent_final"
+        or settled["type"] != "subject_settled"
+    ):
+        raise InputError("STRUCTURAL_ORACLE_FAILED")
+    tool_call_id = require_text(dispatch["toolCallId"])
+    if worker["toolCallId"] != tool_call_id:
+        raise InputError("STRUCTURAL_ORACLE_FAILED")
+    args = dispatch["args"]
+    allowed_args = {"agent", "task", "name", "display_name", "context", "mode"}
+    if (
+        not isinstance(args, dict)
+        or not {"agent", "task"} <= set(args) <= allowed_args
+        or args.get("agent") != "explorer"
+        or not isinstance(args.get("task"), str)
+        or not args["task"]
+        or ("mode" in args and args["mode"] != "task")
     ):
         raise InputError("STRUCTURAL_ORACLE_FAILED")
 
-    final = value["final"]
+    details = exact_record(worker["details"], {"results"})
+    results = details["results"]
+    if not isinstance(results, list) or len(results) != 1:
+        raise InputError("STRUCTURAL_ORACLE_FAILED")
+    task = results[0]
+    if not isinstance(task, dict):
+        raise InputError("TRAJECTORY_INVALID")
+    result_text = task.get("result")
     if (
-        not isinstance(final, str)
-        or ">=22.19.0" not in final
-        or "package.json" not in final
+        task.get("agent") != "explorer"
+        or task.get("status") != "completed"
+        or task.get("effective_mode") != "task"
+        or not isinstance(result_text, str)
+        or len(worker_fields(result_text)) != len(EXPECTED_FIELDS)
+        or not any(line.startswith("status: completed") for line in result_text.splitlines())
     ):
         raise InputError("STRUCTURAL_ORACLE_FAILED")
+    final_text = require_text(final["content"])
+    if ">=22.19.0" not in final_text or "package.json" not in final_text:
+        raise InputError("STRUCTURAL_ORACLE_FAILED")
 
-    messages = value["messages"]
-    if not isinstance(messages, list) or not 1 <= len(messages) <= MAX_MESSAGES:
+    assistant_call = {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [{
+            "id": tool_call_id,
+            "type": "function",
+            "function": {
+                "name": "subagent_run",
+                "arguments": json.dumps(dispatch["args"], ensure_ascii=True, separators=(",", ":")),
+            },
+        }],
+    }
+    tool_content = json.dumps(worker, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+    if len(tool_content.encode("utf-8")) > MAX_MESSAGE_BYTES:
         raise InputError("TRAJECTORY_INVALID")
-    validated: list[dict[str, str]] = []
-    total = 0
-    for message in messages:
-        if (
-            not isinstance(message, dict)
-            or set(message) != {"role", "content"}
-            or message["role"] not in {"system", "user", "assistant"}
-            or not isinstance(message["content"], str)
-        ):
-            raise InputError("TRAJECTORY_INVALID")
-        size = len(message["content"].encode("utf-8"))
-        if size > MAX_MESSAGE_BYTES:
-            raise InputError("TRAJECTORY_INVALID")
-        total += size
-        validated.append({"role": message["role"], "content": message["content"]})
-    if total > MAX_INPUT_BYTES:
-        raise InputError("TRAJECTORY_INVALID")
-    return validated
+    return [
+        {"role": "user", "content": unit["content"]},
+        assistant_call,
+        {
+            "role": "tool",
+            "tool_call_id": tool_call_id,
+            "name": "subagent_run",
+            "content": tool_content,
+        },
+        {"role": "assistant", "content": final_text},
+    ]
 
 
 def judge_prompt() -> str:
@@ -175,21 +273,26 @@ Return true only when all criteria pass.
 Criteria:
 1. The trajectory contains one user unit with the fixed Spanish input.
 2. The Pi subject dispatches exactly one explorer through subagent_run.
-3. The explorer completes exactly once and returns all five Worker contract sections.
-4. The Pi subject produces exactly one final response after the Worker result.
-5. The final response gives the exact engines.node value >=22.19.0 and cites package.json.
-6. The subject settles exactly once.
-7. No later domain phase occurs after the Worker result.
-8. The evidence is internally consistent and represents read-only inspection.
+3. The dispatch preserves the real tool call ID and real arguments.
+4. The explorer completes exactly once and returns all five Worker contract sections.
+5. The Worker tool result preserves isError and details.results evidence.
+6. The Pi subject produces exactly one final response after the Worker result.
+7. The final response gives the exact engines.node value >=22.19.0 and cites package.json.
+8. The subject settles exactly once after the final response.
+9. No later domain phase occurs after the Worker result.
+10. The ordered evidence is internally consistent and represents read-only inspection.
 """
 
 
-async def kill_process_group(process: asyncio.subprocess.Process) -> None:
+async def terminate_bridge(process: asyncio.subprocess.Process) -> None:
+    if process.returncode is not None:
+        return
+    process.terminate()
     try:
-        os.killpg(process.pid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
-    await process.wait()
+        await asyncio.wait_for(process.wait(), timeout=2.0)
+    except asyncio.TimeoutError:
+        process.kill()
+        await process.wait()
 
 
 async def read_stream(
@@ -237,7 +340,7 @@ async def communicate_bounded(
     try:
         return await asyncio.wait_for(communicate(), timeout=timeout_seconds)
     except BaseException:
-        await kill_process_group(process)
+        await terminate_bridge(process)
         for task in (stdout_task, stderr_task):
             task.cancel()
         await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
@@ -259,19 +362,7 @@ class PiCompletions:
         self._timeout_seconds = timeout_seconds
 
     async def create(self, **request: Any) -> Any:
-        if request.get("model") != self._model:
-            raise ValueError("bridge model mismatch")
-        messages = request.get("messages")
-        if not isinstance(messages, list):
-            raise ValueError("bridge messages are invalid")
-        tools = request.get("tools")
-        if not isinstance(tools, list) or len(tools) != 1 or not isinstance(tools[0], dict):
-            raise ValueError("AgentEvals tool request is invalid")
-        function = tools[0].get("function")
-        if not isinstance(function, dict) or not isinstance(function.get("name"), str):
-            raise ValueError("AgentEvals tool request is invalid")
-        requested_tool_name = function["name"]
-
+        validate_openevals_request(request, self._model)
         request_id = os.urandom(16).hex()
         payload = json.dumps(
             {
@@ -279,7 +370,8 @@ class PiCompletions:
                 "request_id": request_id,
                 "provider": self._provider,
                 "model": self._model,
-                "messages": messages,
+                "messages": request["messages"],
+                "response_format": request["response_format"],
                 "timeout_ms": max(1, int(self._timeout_seconds * 1000)),
             },
             ensure_ascii=True,
@@ -293,7 +385,6 @@ class PiCompletions:
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            start_new_session=True,
             limit=16 * 1024,
         )
         stdout, _stderr = await communicate_bounded(
@@ -307,24 +398,18 @@ class PiCompletions:
             result = json.loads(stdout)
         except (UnicodeDecodeError, json.JSONDecodeError) as error:
             raise ValueError("bridge response is invalid") from error
-        if not isinstance(result, dict) or set(result) != {
-            "schema",
-            "request_id",
-            "provider",
-            "model",
-            "stop_reason",
-            "result",
-        }:
-            raise ValueError("bridge response is invalid")
+        response = exact_record(result, {
+            "schema", "request_id", "provider", "model", "stop_reason", "result",
+        }, "BRIDGE_RESPONSE_INVALID")
         if (
-            result["schema"] != BRIDGE_SCHEMA
-            or result["request_id"] != request_id
-            or result["provider"] != self._provider
-            or result["model"] != self._model
-            or result["stop_reason"] != "toolUse"
+            response["schema"] != BRIDGE_SCHEMA
+            or response["request_id"] != request_id
+            or response["provider"] != self._provider
+            or response["model"] != self._model
+            or response["stop_reason"] != "toolUse"
         ):
             raise ValueError("bridge identity is invalid")
-        judgment = result["result"]
+        judgment = response["result"]
         if (
             not isinstance(judgment, dict)
             or set(judgment) != {"score", "reasoning"}
@@ -334,19 +419,10 @@ class PiCompletions:
         ):
             raise ValueError("bridge judgment is invalid")
 
-        arguments = json.dumps(judgment, ensure_ascii=True, separators=(",", ":"))
-        message = SimpleNamespace(
-            content=arguments,
-            tool_calls=[
-                SimpleNamespace(
-                    id=f"judge_{request_id}",
-                    type="function",
-                    function=SimpleNamespace(name=requested_tool_name, arguments=arguments),
-                )
-            ],
-        )
+        content = json.dumps(judgment, ensure_ascii=True, separators=(",", ":"))
+        message = SimpleNamespace(role="assistant", content=content)
         return SimpleNamespace(
-            choices=[SimpleNamespace(index=0, finish_reason="tool_calls", message=message)]
+            choices=[SimpleNamespace(index=0, finish_reason="stop", message=message)]
         )
 
 
@@ -389,7 +465,7 @@ async def evaluate(
         return error_result(str(error))
     except Exception:
         return error_result("TRAJECTORY_ERROR")
-    if provider != "openai-codex" or model != "gpt-5.6-terra":
+    if provider != "openai-codex" or model != EXPECTED_MODEL:
         return error_result("JUDGE_IDENTITY_INVALID")
     if not bridge_command or timeout_seconds <= 0 or timeout_seconds > 180:
         return error_result("JUDGE_CONFIGURATION_INVALID")
@@ -440,7 +516,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--trajectory", required=True, type=Path)
     parser.add_argument("--bridge", required=True, type=Path)
     parser.add_argument("--provider", default="openai-codex")
-    parser.add_argument("--model", default="gpt-5.6-terra")
+    parser.add_argument("--model", default=EXPECTED_MODEL)
     parser.add_argument("--timeout-seconds", default=180.0, type=float)
     return parser
 

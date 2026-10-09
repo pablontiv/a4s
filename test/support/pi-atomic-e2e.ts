@@ -1,8 +1,7 @@
 import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, resolve } from "node:path";
+import { dirname, isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { RpcClient } from "@earendil-works/pi-coding-agent";
@@ -12,7 +11,6 @@ const INPUT = "Inspecciona package.json en modo read_only. Devuelve en esta mism
 const EXPECTED_NODE_ENGINE = ">=22.19.0";
 const SCHEMA = "a4s.pi-atomic-e2e/v1";
 const PI_CLI = "/Users/pones/.local/bin/pi";
-const PYTHON = "/Users/pones/.local/bin/python3.11";
 const DEFAULT_AGENT_DIR = "/Users/pones/.pi/agent";
 const SUBJECT_PROVIDER = "openai-codex";
 const SUBJECT_MODEL = "gpt-5.6-sol";
@@ -32,6 +30,7 @@ const REQUIRED_WORKER_FIELDS = [
 ] as const;
 
 type JsonRecord = Record<string, unknown>;
+type CapturedEvent = { streamIndex: number; event: JsonRecord };
 
 type StructuralOracle = {
   unitCount: number;
@@ -42,10 +41,33 @@ type StructuralOracle = {
   laterDomainPhaseCount: number;
 };
 
+type Analysis = {
+  oracle: StructuralOracle;
+  unit: CapturedEvent;
+  unitText: string;
+  dispatchMessage: CapturedEvent;
+  dispatchStart: CapturedEvent;
+  dispatchCall: JsonRecord;
+  workerResult: CapturedEvent;
+  results: unknown[];
+  final: CapturedEvent;
+  finalText: string;
+  settled: CapturedEvent;
+};
+
 function record(value: unknown): JsonRecord | undefined {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? value as JsonRecord
     : undefined;
+}
+
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+  const item = record(value);
+  if (item) {
+    return `{${Object.keys(item).sort().map((key) => `${JSON.stringify(key)}:${canonical(item[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
 }
 
 function messageText(message: unknown): string {
@@ -59,33 +81,26 @@ function messageText(message: unknown): string {
   }).join("");
 }
 
-function assistantHasToolCall(message: unknown): boolean {
+function assistantToolCalls(message: unknown): JsonRecord[] {
   const value = record(message);
-  return Array.isArray(value?.content)
-    && value.content.some((part) => record(part)?.type === "toolCall");
-}
-
-function taskFromWorkerEvent(event: JsonRecord): JsonRecord | undefined {
-  const details = record(record(event.result)?.details);
-  if (!details) return undefined;
-  if (Array.isArray(details.results) && details.results.length === 1) {
-    return record(details.results[0]);
-  }
-  if (Array.isArray(details.tasks) && details.tasks.length === 1) {
-    return record(details.tasks[0]);
-  }
-  return record(details.task);
+  if (value?.role !== "assistant" || !Array.isArray(value.content)) return [];
+  return value.content
+    .map(record)
+    .filter((block): block is JsonRecord => block?.type === "toolCall");
 }
 
 function findWorkerFields(result: string): string[] {
-  return REQUIRED_WORKER_FIELDS.filter((field) => {
-    const expression = new RegExp(`(?:^|\\n)${field}\\s*:`, "m");
-    return expression.test(result);
-  });
+  const lines = result.split("\n");
+  return REQUIRED_WORKER_FIELDS.filter((field) => lines.some((line) => line.startsWith(`${field}:`)));
 }
 
-function sha256(value: Buffer): string {
-  return createHash("sha256").update(value).digest("hex");
+function killProcessGroup(pid: number | undefined): void {
+  if (pid === undefined) return;
+  try {
+    process.kill(-pid, "SIGKILL");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+  }
 }
 
 async function runBounded(
@@ -97,67 +112,106 @@ async function runBounded(
     const child = spawn(command, args, {
       cwd: options.cwd,
       env: options.env,
+      detached: true,
       stdio: ["ignore", "pipe", "pipe"],
     });
     const stdout: Buffer[] = [];
     let outputBytes = 0;
-    let failed = false;
-    const fail = (error: Error) => {
-      if (failed) return;
-      failed = true;
-      child.kill("SIGKILL");
+    let finished = false;
+    const timer = setTimeout(() => fail(new Error("process timeout")), options.timeoutMs);
+    function fail(error: Error): void {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      killProcessGroup(child.pid);
       reject(error);
-    };
-    const collect = (chunk: Buffer) => {
+    }
+    function countOutput(chunk: Buffer, keep: boolean): void {
       outputBytes += chunk.length;
       if (outputBytes > MAX_PROCESS_OUTPUT_BYTES) {
-        fail(new Error("evaluation output is too large"));
+        fail(new Error("process output is too large"));
         return;
       }
-      stdout.push(chunk);
-    };
-    child.stdout.on("data", collect);
-    child.stderr.on("data", (chunk: Buffer) => {
-      outputBytes += chunk.length;
-      if (outputBytes > MAX_PROCESS_OUTPUT_BYTES) fail(new Error("evaluation output is too large"));
-    });
+      if (keep) stdout.push(chunk);
+    }
+    child.stdout.on("data", (chunk: Buffer) => countOutput(chunk, true));
+    child.stderr.on("data", (chunk: Buffer) => countOutput(chunk, false));
     child.once("error", fail);
-    const timer = setTimeout(() => fail(new Error("evaluation timeout")), options.timeoutMs);
     child.once("close", (code) => {
+      killProcessGroup(child.pid);
+      if (finished) return;
+      finished = true;
       clearTimeout(timer);
-      if (failed) return;
       resolvePromise({ code: code ?? -1, stdout: Buffer.concat(stdout).toString("utf8") });
     });
   });
 }
 
-function analyze(events: JsonRecord[]): {
-  oracle: StructuralOracle;
-  worker: JsonRecord;
-  workerResult: string;
-  workerFields: string[];
-  final: string;
-  dispatch: JsonRecord;
-} {
-  const units = events.filter((event) => {
+async function captureWorktreeState(root: string): Promise<string> {
+  const env = { ...process.env };
+  const commands = [
+    ["status", "--porcelain=v2", "--untracked-files=all"],
+    ["diff", "--no-ext-diff", "--binary", "HEAD", "--"],
+    ["diff", "--cached", "--no-ext-diff", "--binary", "HEAD", "--"],
+  ];
+  const values: string[] = [];
+  for (const args of commands) {
+    const result = await runBounded("git", args, { cwd: root, env, timeoutMs: 10_000 });
+    if (result.code !== 0) throw new Error("worktree state check failed");
+    values.push(result.stdout);
+  }
+  return JSON.stringify(values);
+}
+
+async function validatePython(python: string, root: string): Promise<void> {
+  if (!isAbsolute(python)) throw new Error("A4S_PYTHON must be an absolute path");
+  await stat(python);
+  const script = [
+    "import importlib.metadata as metadata",
+    "import json",
+    "import sys",
+    "print(json.dumps({'agentevals': metadata.version('agentevals'), 'openevals': metadata.version('openevals'), 'executable': sys.executable}, sort_keys=True))",
+  ].join("; ");
+  const result = await runBounded(python, ["-c", script], {
+    cwd: root,
+    env: { ...process.env },
+    timeoutMs: 10_000,
+  });
+  if (result.code !== 0) throw new Error("A4S_PYTHON does not contain AgentEvals");
+  const value = record(JSON.parse(result.stdout));
+  if (
+    value?.agentevals !== "0.0.9"
+    || value.openevals !== "0.2.0"
+    || typeof value.executable !== "string"
+    || await realpath(value.executable) !== await realpath(python)
+  ) {
+    throw new Error("A4S_PYTHON has an incompatible evaluation environment");
+  }
+}
+
+function analyze(captured: CapturedEvent[]): Analysis {
+  const units = captured.filter(({ event }) => {
     if (event.type !== "message_end") return false;
     const message = record(event.message);
     return message?.role === "user" && messageText(message) === INPUT;
   });
-  const dispatches = events.filter((event) => event.type === "tool_execution_start" && event.toolName === "subagent_run");
-  const workerResults = events.filter((event) => event.type === "tool_execution_end" && event.toolName === "subagent_run");
-  const settled = events.filter((event) => event.type === "agent_settled");
-  const workerResultIndex = events.findIndex((event) => event === workerResults[0]);
-  const finals = events.filter((event, index) => {
-    if (index <= workerResultIndex || event.type !== "message_end") return false;
+  const allStarts = captured.filter(({ event }) => event.type === "tool_execution_start");
+  const allEnds = captured.filter(({ event }) => event.type === "tool_execution_end");
+  const dispatches = allStarts.filter(({ event }) => event.toolName === "subagent_run");
+  const workerResults = allEnds.filter(({ event }) => event.toolName === "subagent_run");
+  const settled = captured.filter(({ event }) => event.type === "agent_settled");
+  const dispatchMessages = captured.filter(({ event }) => {
+    return event.type === "message_end" && assistantToolCalls(event.message).length > 0;
+  });
+  const workerResultStreamIndex = workerResults[0]?.streamIndex ?? -1;
+  const finals = captured.filter(({ event, streamIndex }) => {
+    if (streamIndex <= workerResultStreamIndex || event.type !== "message_end") return false;
     const message = record(event.message);
     return message?.role === "assistant"
-      && !assistantHasToolCall(message)
+      && assistantToolCalls(message).length === 0
       && messageText(message).trim().length > 0;
   });
-  const laterDomainPhases = events.filter((event, index) => {
-    return index > workerResultIndex && event.type === "tool_execution_start";
-  });
+  const laterDomainPhases = allStarts.filter(({ streamIndex }) => streamIndex > workerResultStreamIndex);
   const oracle: StructuralOracle = {
     unitCount: units.length,
     dispatchCount: dispatches.length,
@@ -166,60 +220,107 @@ function analyze(events: JsonRecord[]): {
     subjectSettledCount: settled.length,
     laterDomainPhaseCount: laterDomainPhases.length,
   };
-  for (const [key, expected] of Object.entries({
+  const expected: StructuralOracle = {
     unitCount: 1,
     dispatchCount: 1,
     workerResultCount: 1,
     parentFinalCount: 1,
     subjectSettledCount: 1,
     laterDomainPhaseCount: 0,
-  })) {
-    if (oracle[key as keyof StructuralOracle] !== expected) {
-      throw new Error("structural oracle failed");
-    }
+  };
+  for (const key of Object.keys(expected) as Array<keyof StructuralOracle>) {
+    if (oracle[key] !== expected[key]) throw new Error("structural oracle failed");
+  }
+  if (
+    allStarts.length !== 1
+    || allEnds.length !== 1
+    || dispatchMessages.length !== 1
+    || captured.some(({ event }) => event.type === "extension_error")
+  ) {
+    throw new Error("subject tool evidence is invalid");
   }
 
-  const dispatch = dispatches[0]!;
-  const dispatchArgs = record(dispatch.args);
-  if (dispatchArgs?.agent !== "explorer" || (dispatchArgs.mode !== undefined && dispatchArgs.mode !== "task")) {
-    throw new Error("worker dispatch is invalid");
-  }
-  const workerEvent = workerResults[0]!;
-  if (workerEvent.isError !== false || workerEvent.toolCallId !== dispatch.toolCallId) {
-    throw new Error("worker tool evidence is invalid");
-  }
-  const worker = taskFromWorkerEvent(workerEvent);
+  const unit = units[0]!;
+  const dispatchMessage = dispatchMessages[0]!;
+  const dispatchStart = dispatches[0]!;
+  const workerResult = workerResults[0]!;
+  const final = finals[0]!;
+  const settledEvent = settled[0]!;
+  const calls = assistantToolCalls(dispatchMessage.event.message);
+  if (calls.length !== 1) throw new Error("subject dispatch message is invalid");
+  const dispatchCall = calls[0]!;
+  const dispatchArgs = record(dispatchStart.event.args);
+  const callArgs = record(dispatchCall.arguments);
   if (
-    !worker
-    || worker.agent !== "explorer"
-    || worker.status !== "completed"
-    || worker.effective_mode !== "task"
-    || typeof worker.result !== "string"
+    dispatchCall.name !== "subagent_run"
+    || typeof dispatchCall.id !== "string"
+    || dispatchCall.id.length === 0
+    || dispatchStart.event.toolCallId !== dispatchCall.id
+    || !dispatchArgs
+    || !callArgs
+    || canonical(dispatchArgs) !== canonical(callArgs)
+    || dispatchArgs.agent !== "explorer"
+    || (dispatchArgs.mode !== undefined && dispatchArgs.mode !== "task")
   ) {
-    throw new Error("worker result is invalid");
+    throw new Error("subject dispatch identity is invalid");
   }
-  const workerResult = worker.result;
-  const workerFields = findWorkerFields(workerResult);
   if (
-    workerFields.length !== REQUIRED_WORKER_FIELDS.length
-    || !/(?:^|\n)status\s*:\s*completed\b/m.test(workerResult)
+    !(unit.streamIndex < dispatchMessage.streamIndex
+      && dispatchMessage.streamIndex < dispatchStart.streamIndex
+      && dispatchStart.streamIndex < workerResult.streamIndex
+      && workerResult.streamIndex < final.streamIndex
+      && final.streamIndex < settledEvent.streamIndex)
+  ) {
+    throw new Error("subject event order is invalid");
+  }
+  if (
+    workerResult.event.isError !== false
+    || workerResult.event.toolCallId !== dispatchCall.id
+  ) {
+    throw new Error("worker tool result is invalid");
+  }
+  const details = record(record(workerResult.event.result)?.details);
+  if (!details || !Array.isArray(details.results) || details.results.length !== 1) {
+    throw new Error("worker details.results is invalid");
+  }
+  const task = record(details.results[0]);
+  if (
+    !task
+    || task.agent !== "explorer"
+    || task.status !== "completed"
+    || task.effective_mode !== "task"
+    || typeof task.result !== "string"
+    || findWorkerFields(task.result).length !== REQUIRED_WORKER_FIELDS.length
+    || !task.result.split("\n").some((line) => line.startsWith("status: completed"))
   ) {
     throw new Error("worker contract is incomplete");
   }
-  const final = messageText(record(finals[0]!.message));
-  if (!final.includes(EXPECTED_NODE_ENGINE) || !final.includes("package.json")) {
+  const unitText = messageText(record(unit.event.message));
+  const finalText = messageText(record(final.event.message));
+  if (!finalText.includes(EXPECTED_NODE_ENGINE) || !finalText.includes("package.json")) {
     throw new Error("subject result is incorrect");
   }
-  if (events.some((event) => event.type === "extension_error")) {
-    throw new Error("subject extension failed");
-  }
-  return { oracle, worker, workerResult, workerFields, final, dispatch };
+  return {
+    oracle,
+    unit,
+    unitText,
+    dispatchMessage,
+    dispatchStart,
+    dispatchCall,
+    workerResult,
+    results: details.results,
+    final,
+    finalText,
+    settled: settledEvent,
+  };
 }
 
 async function main(): Promise<void> {
   if (process.env.A4S_RUN_AGENT_E2E !== "1") {
     throw new Error("Set A4S_RUN_AGENT_E2E=1 to run the Pi atomic E2E.");
   }
+  const python = process.env.A4S_PYTHON;
+  if (!python) throw new Error("Set A4S_PYTHON to the prepared AgentEvals interpreter.");
 
   const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
   const packagePath = resolve(root, "package.json");
@@ -231,7 +332,8 @@ async function main(): Promise<void> {
   const projectConfigPath = resolve(projectPiDir, "subagents.json");
   const agentDir = process.env.PI_CODING_AGENT_DIR || DEFAULT_AGENT_DIR;
 
-  await Promise.all([stat(PI_CLI), stat(PYTHON), stat(adapterPath), stat(bridgePath), stat(extensionPath)]);
+  await Promise.all([stat(PI_CLI), stat(adapterPath), stat(bridgePath), stat(extensionPath)]);
+  await validatePython(python, root);
   const [packageBytes, extensionPackageBytes] = await Promise.all([
     readFile(packagePath),
     readFile(extensionPackagePath),
@@ -248,8 +350,11 @@ async function main(): Promise<void> {
     await stat(projectPiDir);
     throw new Error("the runner requires an absent project .pi directory");
   } catch (error) {
-    const candidate = error as NodeJS.ErrnoException;
-    if (candidate.code !== "ENOENT") throw error;
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  const initialWorktreeState = await captureWorktreeState(root);
+  if (initialWorktreeState !== JSON.stringify(["", "", ""])) {
+    throw new Error("the runner requires a clean worktree");
   }
 
   const temporaryDirectory = await mkdtemp(resolve(tmpdir(), "a4s-pi-atomic-"));
@@ -267,9 +372,10 @@ async function main(): Promise<void> {
       session_resources: "lean",
     })}\n`, { mode: 0o600 });
 
-    const captured: JsonRecord[] = [];
+    const captured: CapturedEvent[] = [];
     let capturedBytes = 0;
     let captureFailure = false;
+    let streamIndex = 0;
     const retainedTypes = new Set([
       "message_end",
       "tool_execution_start",
@@ -294,6 +400,7 @@ async function main(): Promise<void> {
       ],
     });
     unsubscribe = client.onEvent((rawEvent: JsonAgentSessionEvent) => {
+      streamIndex += 1;
       const event = record(rawEvent);
       if (!event || !retainedTypes.has(String(event.type))) return;
       const eventBytes = Buffer.byteLength(JSON.stringify(event), "utf8");
@@ -302,7 +409,7 @@ async function main(): Promise<void> {
         captureFailure = true;
         return;
       }
-      captured.push(event);
+      captured.push({ streamIndex, event });
     });
 
     await client.start();
@@ -316,56 +423,62 @@ async function main(): Promise<void> {
     if (disposition !== "started") throw new Error("subject prompt did not start");
     await client.waitForIdle(SUBJECT_TIMEOUT_MS);
     if (captureFailure) throw new Error("subject trajectory is too large");
-
     const analysis = analyze(captured);
-    if (sha256(await readFile(packagePath)) !== sha256(packageBytes)) {
-      throw new Error("package.json changed during read-only inspection");
+
+    unsubscribe();
+    unsubscribe = undefined;
+    await client.stop();
+    client = undefined;
+    await rm(projectPiDir, { recursive: true, force: true });
+    if (await captureWorktreeState(root) !== initialWorktreeState) {
+      throw new Error("the subject changed the worktree");
     }
+
     const trajectory = {
       schema: SCHEMA,
-      input: INPUT,
-      oracle: analysis.oracle,
-      worker: {
-        agent: analysis.worker.agent,
-        status: analysis.worker.status,
-        result: analysis.workerResult,
-        fields: analysis.workerFields,
-      },
-      final: analysis.final,
-      messages: [
+      input: analysis.unitText,
+      events: [
         {
-          role: "system",
-          content: JSON.stringify({
-            source: "Pi RpcClient events",
-            subject: `${SUBJECT_PROVIDER}/${SUBJECT_MODEL}`,
-            extension: "pi-subagents-j0k3r@1.6.1",
-            oracle: analysis.oracle,
-          }),
-        },
-        { role: "user", content: INPUT },
-        {
-          role: "assistant",
-          content: `subagent_run dispatch: ${JSON.stringify(analysis.dispatch.args)}`,
+          order: 1,
+          streamIndex: analysis.unit.streamIndex,
+          type: "unit",
+          content: analysis.unitText,
         },
         {
-          role: "assistant",
-          content: `Explorer result:\n${analysis.workerResult}`,
+          order: 2,
+          streamIndex: analysis.dispatchMessage.streamIndex,
+          startedStreamIndex: analysis.dispatchStart.streamIndex,
+          type: "dispatch",
+          toolCallId: analysis.dispatchCall.id,
+          toolName: analysis.dispatchCall.name,
+          args: analysis.dispatchStart.event.args,
         },
         {
-          role: "assistant",
-          content: `Parent final response:\n${analysis.final}`,
+          order: 3,
+          streamIndex: analysis.workerResult.streamIndex,
+          type: "worker_result",
+          toolCallId: analysis.workerResult.event.toolCallId,
+          toolName: analysis.workerResult.event.toolName,
+          isError: analysis.workerResult.event.isError,
+          details: { results: analysis.results },
+        },
+        {
+          order: 4,
+          streamIndex: analysis.final.streamIndex,
+          type: "parent_final",
+          content: analysis.finalText,
+        },
+        {
+          order: 5,
+          streamIndex: analysis.settled.streamIndex,
+          type: "subject_settled",
         },
       ],
     };
     const trajectoryPath = resolve(temporaryDirectory, "trajectory.json");
     await writeFile(trajectoryPath, `${JSON.stringify(trajectory)}\n`, { mode: 0o600 });
 
-    unsubscribe();
-    unsubscribe = undefined;
-    await client.stop();
-    client = undefined;
-
-    const evaluation = await runBounded(PYTHON, [
+    const evaluation = await runBounded(python, [
       adapterPath,
       "--trajectory", trajectoryPath,
       "--bridge", bridgePath,
