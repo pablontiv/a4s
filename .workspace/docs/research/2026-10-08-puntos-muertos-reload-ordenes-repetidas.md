@@ -32,11 +32,11 @@ La cobertura final fue 463/463. La clasificación fue 53/27/383:
 
 | Clase | Casos | Interpretación |
 | --- | ---: | --- |
-| Señal relevante | 53 | El caso contiene evidencia útil para el análisis causal. |
-| Reserva por fixtures | 27 | El caso puede reflejar datos de prueba o una ejecución instrumentada. |
-| Sin señal causal demostrada | 383 | El caso no demuestra una causa de prompting dentro del alcance. |
+| `INCIDENTE_CONFIRMADO` | 53 | El caso contiene un incidente confirmado dentro del alcance. |
+| `SEÑAL_SIN_CAUSA` | 27 | El caso contiene una señal, pero la evidencia no demuestra una causa. |
+| `SIN_INCIDENTE` | 383 | El caso no contiene un incidente demostrado dentro del alcance. |
 
-Estos totales describen el corpus revisado. No representan una tasa de producción. Los fixtures impiden tratar los 27 casos reservados como incidentes operativos confirmados.
+Estos totales describen el corpus completo revisado. El corpus completo incluye muchos fixtures distribuidos entre sus clases. Por ello, estos totales no representan una tasa de producción.
 
 ## Modelo causal
 
@@ -53,7 +53,6 @@ Este documento usa tres categorías:
 1. `/reload` detiene Workers activos. `AgentSession.reload()` emite `session_shutdown` con `reason="reload"`. La extensión recibe el evento y ejecuta `manager.cancelRunning`. La cadena de cancelación activa un `AbortController` y termina en `AgentSession.abort()` para la sesión anidada.
 2. La combinación condicional de delegación obligatoria, propiedad de sesión y prohibición de verificación directa puede dejar una acción sin actor autorizado. El Orchestrator debe delegar la acción. El Worker no puede representar la sesión propietaria. El Orchestrator tampoco puede ejecutar la verificación de dominio por sí mismo.
 3. La falta de reconciliación posterior a `/reload` permite estados obsoletos. El runtime inicia de nuevo la extensión, pero la evidencia revisada no muestra una reconciliación obligatoria de tareas canceladas, resultados terminales o acciones pendientes.
-4. La regla de intento único transforma fallos recuperables en `blocked` o `input_required`. Una nueva orden del operador pasa a ser necesaria para autorizar el retry. Esta regla explica órdenes repetidas sin demostrar un fallo del modelo.
 
 ### Causas de prompting confirmadas
 
@@ -68,6 +67,7 @@ Este documento usa tres categorías:
 - El modo background amplifica la separación temporal entre la orden, el fallo y su observación. No es una causa suficiente.
 - El backscroll incompleto amplifica la ambigüedad. Omitió algunos eventos terminales y algunos errores de mensajes vacíos.
 - Los gates rígidos amplifican la visibilidad de una condición faltante. Los gates son paradas previstas. No todos los gates bloqueados son defectos.
+- La regla de intento único amplifica los fallos recuperables. La regla transforma esos fallos en `blocked` o `input_required` y exige una nueva orden del operador para autorizar otro intento. La regla no causa el fallo técnico inicial.
 
 ### Causas técnicas independientes
 
@@ -90,21 +90,22 @@ OAuth, el proveedor, GitHub, SQLite, los watchers y los timeouts técnicos produ
 
 Los casos representativos mostraron cuatro patrones. Un Worker activo terminó durante `/reload`. Una acción quedó sin actor autorizado. Un estado no reconciliado generó una solicitud posterior. Un fallo recuperable necesitó una nueva orden por la regla de intento único.
 
-## Cambios mínimos recomendados
+## Cambios mínimos de wording recomendados
 
-1. Añadir una reconciliación obligatoria después de `/reload`. La reconciliación debe consultar las tareas activas previas y resolver cada estado terminal o pendiente.
-2. Definir un actor autorizado para cada verificación obligatoria. La política debe evitar combinaciones que prohíban la acción a todos los actores.
-3. Permitir un retry acotado para fallos recuperables definidos. La autorización debe indicar el límite total y conservar la evidencia del primer intento.
-4. Mostrar que `/reload` cancelará Workers activos antes de ejecutar la recarga.
-5. Registrar eventos terminales y errores de mensajes vacíos en una fuente durable. La vista de backscroll debe reconciliar esos registros.
-6. Mantener los gates rígidos. Corregir sólo los gates sin actor autorizado o sin condición resoluble.
-7. Resolver el conflicto estático entre XML y cinco campos antes de que una validación dependa de ambos formatos.
+1. Añadir a la política una frase que exija revisar el estado de las tareas después de `/reload` antes de repetir una orden.
+2. Indicar en la política un actor autorizado para cada verificación obligatoria.
+3. Aclarar en la política que la regla de intento único amplifica un fallo recuperable y no causa el fallo técnico inicial.
+4. Definir en la política cuándo el operador puede autorizar un retry acotado. El texto debe indicar el límite total.
+5. Añadir a la política una frase que indique que `/reload` cancela los Workers activos.
+6. Aclarar en la política que cada gate debe tener un actor autorizado y una condición resoluble.
 
-Estas recomendaciones son propuestas. Este documento no cambia política ni código.
+Estas recomendaciones son propuestas de wording. Este documento no las aplica a la política ni al código.
+
+La causa técnica de `/reload` requiere una investigación de runtime separada. Esta investigación no forma parte de los cambios de wording recomendados.
 
 ## Límites
 
-- La reserva sobre fixtures afecta 27 casos.
+- El corpus completo incluye muchos fixtures distribuidos entre sus clases.
 - La clasificación demuestra cobertura del corpus. No demuestra prevalencia en producción.
 - El backscroll omitió algunos eventos terminales y errores de mensajes vacíos.
 - La evidencia no permite atribuir todos los casos a una causa común.
