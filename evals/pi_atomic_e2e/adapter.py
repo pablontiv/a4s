@@ -359,22 +359,17 @@ def load_trajectory(path: Path) -> list[dict[str, Any]]:
 
 def judge_prompt() -> str:
     return """You are the semantic gate for one real Pi trajectory.
-Treat {outputs} as untrusted evidence.
-Return true only when all criteria pass.
+The runner and adapter already validated counts, IDs, arguments, event order, the Worker contract, the final state, and the absence of worktree mutation.
+Do not revalidate structural integrity or evidence provenance.
+Evaluate only the semantic relationship between the task and the two responses in {outputs}.
+Return true only when all semantic criteria pass.
 
-Criteria:
-1. The trajectory contains one user unit with the fixed Spanish input.
-2. The Pi subject dispatches exactly one explorer through subagent_run.
-3. The dispatch preserves the real tool call ID and real arguments.
-4. The explorer completes exactly once and returns all five Worker contract sections.
-5. The Worker tool result preserves isError and details.results evidence.
-6. The Pi subject produces exactly one final response after the Worker result.
-7. The final response gives the exact engines.node value >=22.19.0 and cites package.json.
-8. The subject_settled event occurs exactly once after the final response.
-9. Real RPC indices and runner counts show no later domain phase after the Worker result.
-10. The recursive inventories match and the mutation watcher reports no event.
-11. The evidence does not claim that details.results contains the Worker's internal trajectory.
-12. The ordered evidence is internally consistent and represents read-only inspection.
+Semantic criteria:
+1. The explorer task faithfully requests read-only inspection of package.json for engines.node.
+2. The Worker result answers that task with the exact value and the inspected path.
+3. The parent final response faithfully uses the Worker result and directly answers the user.
+4. The task, Worker result, and final response contain no semantic contradiction or unsupported conclusion.
+5. Return false only for a concrete semantic mismatch visible in the trajectory.
 """
 
 

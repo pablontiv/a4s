@@ -38,6 +38,11 @@ const MAX_CAPTURED_EVENTS = 100;
 const MAX_CAPTURED_BYTES = 1024 * 1024;
 const MAX_PROCESS_OUTPUT_BYTES = 64 * 1024;
 const MAX_WATCHER_EVENTS = 100;
+const MAX_FAILURE_EVIDENCE_BYTES = 48 * 1024;
+const MAX_DIAGNOSTIC_INPUT_BYTES = 2 * 1024;
+const MAX_DIAGNOSTIC_ARGUMENT_BYTES = 1024;
+const MAX_DIAGNOSTIC_WORKER_RESULT_BYTES = 12 * 1024;
+const MAX_DIAGNOSTIC_FINAL_BYTES = 8 * 1024;
 const REQUIRED_WORKER_FIELDS = [
   "status",
   "summary",
@@ -78,8 +83,9 @@ type Analysis = {
   extensionErrorCount: number;
 };
 
-type DiagnosticState = {
+export type DiagnosticState = {
   stage: string;
+  failureCode?: string;
   counts?: StructuralOracle;
   rpcEventCount?: number;
   capturedEventCount?: number;
@@ -87,6 +93,17 @@ type DiagnosticState = {
   watcherOverflow?: boolean;
   inventoryBefore?: Inventory;
   inventoryAfter?: Inventory;
+  semanticProjection?: JsonRecord;
+  agentEvals?: {
+    status?: string;
+    blocking?: boolean;
+    error?: string;
+  };
+  judge?: {
+    key?: string;
+    score?: boolean;
+  };
+  evidencePath?: string;
 };
 
 const diagnosticState: DiagnosticState = { stage: "preflight" };
@@ -101,6 +118,7 @@ class HarnessFailure extends Error {
 }
 
 function fail(code: string): never {
+  diagnosticState.failureCode = code;
   throw new HarnessFailure(code);
 }
 
@@ -495,6 +513,159 @@ function analyze(captured: CapturedEvent[]): Analysis {
   };
 }
 
+function redactDiagnosticText(value: string): string {
+  return value
+    .replace(/\bBearer\s+[A-Za-z0-9._~+\/-]+=*/gi, "Bearer [REDACTED]")
+    .replace(/"(api[_-]?key|token|secret|password)"\s*:\s*"[^"]*"/gi, '"$1":"[REDACTED]"')
+    .replace(/\b(api[_-]?key|token|secret|password)\s*[:=]\s*\S+/gi, "$1=[REDACTED]");
+}
+
+function boundedDiagnosticText(value: unknown, maxBytes: number): {
+  text: string;
+  truncated: boolean;
+  originalBytes: number;
+} {
+  const redacted = redactDiagnosticText(typeof value === "string" ? value : "");
+  const originalBytes = Buffer.byteLength(redacted, "utf8");
+  if (originalBytes <= maxBytes) return { text: redacted, truncated: false, originalBytes };
+  const marker = "[TRUNCATED]";
+  const markerBytes = Buffer.byteLength(marker, "utf8");
+  let text = "";
+  let bytes = 0;
+  for (const character of redacted) {
+    const characterBytes = Buffer.byteLength(character, "utf8");
+    if (bytes + characterBytes + markerBytes > maxBytes) break;
+    text += character;
+    bytes += characterBytes;
+  }
+  return { text: `${text}${marker}`, truncated: true, originalBytes };
+}
+
+function projectedArguments(value: unknown): JsonRecord {
+  const source = record(value) ?? {};
+  const projected: JsonRecord = {};
+  for (const field of ["agent", "task", "name", "display_name", "context", "mode"]) {
+    if (typeof source[field] !== "string") continue;
+    const bounded = boundedDiagnosticText(source[field], MAX_DIAGNOSTIC_ARGUMENT_BYTES);
+    projected[field] = bounded.text;
+    if (bounded.truncated) {
+      projected[`${field}Truncated`] = true;
+      projected[`${field}OriginalBytes`] = bounded.originalBytes;
+    }
+  }
+  return projected;
+}
+
+function projectedWorkerResults(value: unknown): JsonRecord[] {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, 1).map((rawResult) => {
+    const source = record(rawResult) ?? {};
+    const result = boundedDiagnosticText(source.result, MAX_DIAGNOSTIC_WORKER_RESULT_BYTES);
+    const projected: JsonRecord = {
+      agent: typeof source.agent === "string" ? source.agent : null,
+      status: typeof source.status === "string" ? source.status : null,
+      effective_mode: typeof source.effective_mode === "string" ? source.effective_mode : null,
+      result: result.text,
+      resultTruncated: result.truncated,
+      resultOriginalBytes: result.originalBytes,
+    };
+    return projected;
+  });
+}
+
+function projectedRunnerObservation(value: unknown): JsonRecord {
+  const source = record(value) ?? {};
+  const projected: JsonRecord = {};
+  for (const field of [
+    "source",
+    "rpcEventCount",
+    "capturedEventCount",
+    "lastRpcStreamIndex",
+    "settledStreamIndex",
+    "toolStartCount",
+    "toolEndCount",
+    "extensionErrorCount",
+    "laterDomainPhaseCount",
+    "subjectSettledCount",
+    "settledWasLastRpcEvent",
+    "inventoryBefore",
+    "inventoryAfterSubject",
+    "inventoryEqual",
+    "watcherEventCount",
+    "watcherOverflow",
+    "workerInternalTrajectoryAvailable",
+  ]) {
+    if (source[field] !== undefined) projected[field] = source[field];
+  }
+  return projected;
+}
+
+export function createFailureProjection(trajectory: JsonRecord): JsonRecord {
+  const events = Array.isArray(trajectory.events) ? trajectory.events.map(record).filter(Boolean) as JsonRecord[] : [];
+  const dispatch = events.find((event) => event.type === "dispatch") ?? {};
+  const workerResult = events.find((event) => event.type === "worker_result") ?? {};
+  const parentFinal = events.find((event) => event.type === "parent_final") ?? {};
+  const workerDetails = record(workerResult.details) ?? {};
+  const input = boundedDiagnosticText(trajectory.input, MAX_DIAGNOSTIC_INPUT_BYTES);
+  const finalContent = boundedDiagnosticText(parentFinal.content, MAX_DIAGNOSTIC_FINAL_BYTES);
+  const eventOrder = events.map((event) => {
+    const projected: JsonRecord = {};
+    for (const field of ["order", "type", "streamIndex", "startedStreamIndex", "toolCallId"]) {
+      if (event[field] !== undefined) projected[field] = event[field];
+    }
+    return projected;
+  });
+  return {
+    input: input.text,
+    inputTruncated: input.truncated,
+    inputOriginalBytes: input.originalBytes,
+    dispatch: { args: projectedArguments(dispatch.args) },
+    worker_result: {
+      isError: workerResult.isError,
+      details: { results: projectedWorkerResults(workerDetails.results) },
+    },
+    parent_final: {
+      content: finalContent.text,
+      contentTruncated: finalContent.truncated,
+      contentOriginalBytes: finalContent.originalBytes,
+    },
+    eventOrder,
+    runnerObservation: projectedRunnerObservation(trajectory.runnerObservation),
+  };
+}
+
+export function createEvaluationProjection(result: JsonRecord | undefined): {
+  agentEvals: NonNullable<DiagnosticState["agentEvals"]>;
+  judge: NonNullable<DiagnosticState["judge"]>;
+} {
+  const status = typeof result?.status === "string" ? result.status : undefined;
+  const blocking = typeof result?.blocking === "boolean" ? result.blocking : undefined;
+  const error = typeof result?.error === "string" && /^[A-Z0-9_]+$/.test(result.error)
+    ? result.error
+    : undefined;
+  const agentEvals = {
+    ...(status !== undefined ? { status } : {}),
+    ...(blocking !== undefined ? { blocking } : {}),
+    ...(error !== undefined ? { error } : {}),
+  };
+  const judgeResult = record(result?.judge);
+  const key = typeof judgeResult?.key === "string"
+    ? boundedDiagnosticText(judgeResult.key, 128).text
+    : undefined;
+  const score = typeof judgeResult?.score === "boolean" ? judgeResult.score : undefined;
+  const judge = {
+    ...(key !== undefined ? { key } : {}),
+    ...(score !== undefined ? { score } : {}),
+  };
+  return { agentEvals, judge };
+}
+
+function recordEvaluationState(result: JsonRecord | undefined): void {
+  const projection = createEvaluationProjection(result);
+  diagnosticState.agentEvals = projection.agentEvals;
+  diagnosticState.judge = projection.judge;
+}
+
 function evaluationFailure(result: JsonRecord | undefined): never {
   const status = result?.status;
   const error = result?.error;
@@ -514,24 +685,44 @@ function evaluationFailure(result: JsonRecord | undefined): never {
   fail(typeof error === "string" && /^[A-Z0-9_]+$/.test(error) ? error : "AGENTEVALS_FAILURE");
 }
 
-async function persistFailureEvidence(error: unknown): Promise<string> {
-  const code = error instanceof HarnessFailure ? error.code : `${diagnosticState.stage.toUpperCase()}_UNEXPECTED`;
+export async function persistFailureEvidence(
+  error: unknown,
+  state: DiagnosticState = diagnosticState,
+): Promise<string> {
+  const code = error instanceof HarnessFailure
+    ? error.code
+    : state.failureCode ?? `${state.stage.toUpperCase()}_UNEXPECTED`;
   const directory = await mkdtemp(resolve(tmpdir(), "a4s-pi-atomic-failure-"));
   await chmod(directory, 0o700);
   const path = resolve(directory, "evidence.json");
   const evidence = {
     schema: FAILURE_SCHEMA,
-    stage: diagnosticState.stage,
+    stage: state.stage,
     code,
-    counts: diagnosticState.counts ?? null,
-    rpcEventCount: diagnosticState.rpcEventCount ?? null,
-    capturedEventCount: diagnosticState.capturedEventCount ?? null,
-    watcherEventCount: diagnosticState.watcherEventCount ?? null,
-    watcherOverflow: diagnosticState.watcherOverflow ?? null,
-    inventoryBefore: diagnosticState.inventoryBefore ?? null,
-    inventoryAfter: diagnosticState.inventoryAfter ?? null,
+    limits: {
+      totalBytes: MAX_FAILURE_EVIDENCE_BYTES,
+      inputBytes: MAX_DIAGNOSTIC_INPUT_BYTES,
+      argumentBytes: MAX_DIAGNOSTIC_ARGUMENT_BYTES,
+      workerResultBytes: MAX_DIAGNOSTIC_WORKER_RESULT_BYTES,
+      parentFinalBytes: MAX_DIAGNOSTIC_FINAL_BYTES,
+    },
+    ...(state.counts ? { counts: state.counts } : {}),
+    ...(state.rpcEventCount !== undefined ? { rpcEventCount: state.rpcEventCount } : {}),
+    ...(state.capturedEventCount !== undefined ? { capturedEventCount: state.capturedEventCount } : {}),
+    ...(state.watcherEventCount !== undefined ? { watcherEventCount: state.watcherEventCount } : {}),
+    ...(state.watcherOverflow !== undefined ? { watcherOverflow: state.watcherOverflow } : {}),
+    ...(state.inventoryBefore ? { inventoryBefore: state.inventoryBefore } : {}),
+    ...(state.inventoryAfter ? { inventoryAfter: state.inventoryAfter } : {}),
+    ...(state.semanticProjection ? { semanticProjection: state.semanticProjection } : {}),
+    ...(state.agentEvals ? { agentEvals: state.agentEvals } : {}),
+    ...(state.judge ? { judge: state.judge } : {}),
   };
-  await writeFile(path, `${JSON.stringify(evidence, null, 2)}\n`, { mode: 0o600 });
+  const serialized = `${JSON.stringify(evidence, null, 2)}\n`;
+  if (Buffer.byteLength(serialized, "utf8") > MAX_FAILURE_EVIDENCE_BYTES) {
+    await rm(directory, { recursive: true, force: true });
+    throw new HarnessFailure("FAILURE_EVIDENCE_LIMIT");
+  }
+  await writeFile(path, serialized, { mode: 0o600 });
   return path;
 }
 
@@ -716,6 +907,7 @@ async function main(): Promise<void> {
       ],
       runnerObservation,
     };
+    diagnosticState.semanticProjection = createFailureProjection(trajectory);
     const trajectoryPath = resolve(temporaryDirectory, "trajectory.json");
     await writeFile(trajectoryPath, `${JSON.stringify(trajectory)}\n`, { mode: 0o600 });
 
@@ -765,6 +957,7 @@ async function main(): Promise<void> {
         result = undefined;
       }
     }
+    recordEvaluationState(result);
     if (evaluation.code !== 0) evaluationFailure(result);
     const judge = record(result?.judge);
     if (
@@ -778,6 +971,15 @@ async function main(): Promise<void> {
     }
     diagnosticState.stage = "completed";
     process.stdout.write("PI_ATOMIC_E2E PASS\n");
+  } catch (error) {
+    if (!diagnosticState.evidencePath) {
+      try {
+        diagnosticState.evidencePath = await persistFailureEvidence(error);
+      } catch {
+        delete diagnosticState.evidencePath;
+      }
+    }
+    throw error;
   } finally {
     unsubscribe?.();
     await client?.stop().catch(() => undefined);
@@ -793,16 +995,18 @@ async function main(): Promise<void> {
         }
       }
     }
-    await rm(temporaryDirectory, { recursive: true, force: true });
+    await rm(temporaryDirectory, { recursive: true, force: true }).catch(() => undefined);
   }
 }
 
 async function reportFailure(error: unknown): Promise<void> {
-  let evidencePath = "unavailable";
-  try {
-    evidencePath = await persistFailureEvidence(error);
-  } catch {
-    evidencePath = "unavailable";
+  let evidencePath = diagnosticState.evidencePath ?? "unavailable";
+  if (evidencePath === "unavailable") {
+    try {
+      evidencePath = await persistFailureEvidence(error);
+    } catch {
+      evidencePath = "unavailable";
+    }
   }
   const code = error instanceof HarnessFailure ? error.code : `${diagnosticState.stage.toUpperCase()}_UNEXPECTED`;
   const counts = diagnosticState.counts
