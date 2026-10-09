@@ -23,6 +23,7 @@
     "typecheck": "npm run typecheck --workspace @a4s/pi-context-expert && npm run typecheck --workspace @a4s/pi-tool-row-presentation && npm run typecheck --workspace @a4s/synagent && npm run typecheck --workspace @a4s/synagent-bus && npm run typecheck --workspace @a4s/context-expert && tsc -p tsconfig.json",
     "test": "npm test --workspace @a4s/pi-context-expert && npm test --workspace @a4s/pi-tool-row-presentation && npm test --workspace @a4s/synagent && npm test --workspace @a4s/synagent-bus && npm test --workspace @a4s/context-expert && tsx --test test/work-gates.test.ts",
     "eval:work-gates": "tsx test/support/work-gate-live.ts",
+    "eval:pi-atomic": "tsx test/support/pi-atomic-e2e.ts",
     "bus": "npm run bus --workspace @a4s/synagent-bus --"
   },
   "devDependencies": {
