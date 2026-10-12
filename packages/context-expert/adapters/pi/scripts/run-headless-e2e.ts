@@ -461,7 +461,8 @@ async function main(args: readonly string[] = process.argv.slice(2)): Promise<vo
   const mode = parseE2eMode(args);
   assertE2eGlobalConfiguration(mode, loadGlobalCompactionConfiguration());
   const scriptDir = dirname(fileURLToPath(import.meta.url));
-  const packageDir = resolve(scriptDir, "..");
+  const adapterDir = resolve(scriptDir, "..");
+  const packageDir = resolve(adapterDir, "..", "..");
   const repositoryDir = resolve(packageDir, "..", "..");
   const runDir = resolve(
     repositoryDir,
@@ -474,7 +475,7 @@ async function main(args: readonly string[] = process.argv.slice(2)): Promise<vo
   await mkdir(sessionDir, { recursive: true });
 
   try {
-    const extensionPath = resolve(packageDir, "src", "index.ts");
+    const extensionPath = resolve(adapterDir, "src", "index.ts");
     const first = await runFirstSession(extensionPath, sessionDir, mode, runId);
     const reloaded = await runReloadedSession(
       extensionPath,

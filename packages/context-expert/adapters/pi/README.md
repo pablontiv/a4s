@@ -125,7 +125,7 @@ From the repository root:
 
 ```sh
 npm install
-pion -e packages/pi-context-expert/src/index.ts
+pion -e packages/context-expert/adapters/pi/src/index.ts
 # then, inside Pi:
 /login typesafe
 ```
@@ -167,7 +167,7 @@ real HTTP round trip (15-50+ seconds) can finish.
   awaits the correlated response (via `src/rpc-stdin-guard.ts`) before
   ending the child's stdin — the correct pattern to copy into your own RPC
   client. Run it with `npm run rpc:compact-driver --workspace
-  @a4s/pi-context-expert -- --pi "$(command -v pion)" [-- <extra Pion args>]`.
+  @a4s/context-expert -- --pi "$(command -v pion)" [-- <extra Pion args>]`.
 - **Best-effort extension diagnostic**: when this extension classifies a
   compaction or retro failure as `"aborted"` while `ctx.mode === "rpc"`, it
   writes a single line to stderr prefixed
@@ -179,8 +179,8 @@ real HTTP round trip (15-50+ seconds) can finish.
 ## Development
 
 ```sh
-npm test --workspace @a4s/pi-context-expert
-npm run typecheck --workspace @a4s/pi-context-expert
+npm test --workspace @a4s/context-expert
+npm run typecheck --workspace @a4s/context-expert
 ```
 
 Tests use fake Pi classifier and model gateways; they make no live TypeSafe calls.
@@ -188,7 +188,7 @@ Tests use fake Pi classifier and model gateways; they make no live TypeSafe call
 The fixture-only Evidence eval is also offline:
 
 ```sh
-npm run eval:evidence --workspace @a4s/pi-context-expert
+npm run eval:evidence --workspace @a4s/context-expert
 ```
 
 It reports precision, recall, selected-boundary coverage, and false negatives for the checked-in true-rule, non-rule, and uncertain-candidate fixtures. Local session/corpus/result captures stay in ignored eval paths.
@@ -196,9 +196,9 @@ It reports precision, recall, selected-boundary coverage, and false negatives fo
 ### Product E2E
 
 ```sh
-npm run e2e --workspace @a4s/pi-context-expert -- --mode basic
-npm run e2e --workspace @a4s/pi-context-expert -- --mode ladder
-npm run e2e --workspace @a4s/pi-context-expert -- --mode evidence
+npm run e2e --workspace @a4s/context-expert -- --mode basic
+npm run e2e --workspace @a4s/context-expert -- --mode ladder
+npm run e2e --workspace @a4s/context-expert -- --mode evidence
 ```
 
 This is a headless product test, not an E0 or fixture run. It starts the

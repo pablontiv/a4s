@@ -31,8 +31,9 @@ adapters/claude/      Self-contained Claude Code marketplace plugin:
                         marketplace installs only this directory). Regenerated
                         by scripts/sync-core.mjs, anchored by the
                         claude-bundle-parity test.
-adapters/pi/          Pi adapter — contract-parity shim: piBinding implements
-                      the same HostBinding but assembles Pi's string-summary.
+adapters/pi/          Live Pi/Pion extension: lifecycle binding, settings,
+                      compaction, Ladder retrieval, Evidence, corpus, and
+                      review-only rule proposals over the shared core.
 ```
 
 The one seam both hosts share, `HostBinding<HostMsg, HostResult>`:
@@ -43,6 +44,18 @@ The one seam both hosts share, `HostBinding<HostMsg, HostResult>`:
 Claude returns `{ messages }` (keep = engine message **with its handle**;
 truncate = rebuilt message **without a handle**; drop = omitted). Pi returns a
 summary **string** plus a kept boundary. Same core decisions, two assemblers.
+
+## Install the Pi/Pion extension
+
+```sh
+pi install ./packages/context-expert
+# or
+pion -e packages/context-expert/adapters/pi/src/index.ts
+```
+
+The persisted runtime identity remains `pi-context-expert`: existing settings,
+commands, receipts, and stored session artifacts keep their current names.
+See [`adapters/pi/README.md`](./adapters/pi/README.md) for behavior and configuration.
 
 ## Install the Claude plugin (from the A4S marketplace)
 
@@ -76,8 +89,9 @@ máximo 512 bytes UTF-8. Cada request usa como máximo 32,000 bytes. El score us
 - ✅ **Claude adapter** maps `SessionMessage` ↔ neutral and back: kept messages
   keep object identity (engine handle), truncated ones are rebuilt, dropped
   ones are omitted. (`test/claude-adapter.test.ts`)
-- ✅ **Pi adapter** drives the identical core and assembles Pi's string-summary.
-  (`test/pi-adapter.test.ts`)
+- ✅ **Pi adapter** registers the live Pi/Pion lifecycle over the identical core
+  and preserves the existing `pi-context-expert` runtime identity.
+  (`adapters/pi/test/`)
 - ✅ **Bundle self-containment**: `adapters/claude/core` is byte-identical to
   canonical `core/`. (`test/claude-bundle-parity.test.ts`)
 - ✅ `claude plugin validate` passes: `session.compact` + `turn.complete`,
@@ -87,18 +101,18 @@ máximo 512 bytes UTF-8. Cada request usa como máximo 32,000 bytes. El score us
   Jev key from Pi, scoring the transcript and choosing keep/truncate/drop; the
   below-min-reduction fallback to the native summary was exercised end-to-end.
 
-## Not in this plugin (Pi's richer layers)
+## Host-specific layers
 
-Ladder request-time retrieval, the rule-candidate pool, retro/rules, evidence,
-and corpus from `@a4s/pi-context-expert` are **not** ported here; this plugin is
-the deterministic compaction core + auto-compact trigger. A faithful Pi port
-refactoring `@a4s/pi-context-expert` onto this shared core remains future work.
+The Pi adapter owns Ladder request-time retrieval, the rule-candidate pool,
+retro/rules, Evidence, corpus, and Pi settings. The Claude adapter remains the
+smaller deterministic-compaction and trigger integration. Both consume the
+same canonical core.
 
 ## Develop
 
 ```sh
-# from this package dir (tools resolve from the repo-root node_modules)
-tsx --test test/*.test.ts
-tsc --noEmit -p tsconfig.json && tsc -p tsconfig.hooks.json
-node adapters/claude/scripts/sync-core.mjs --check   # bundle parity
+# from the repository root
+npm test --workspace @a4s/context-expert
+npm run typecheck --workspace @a4s/context-expert
+npm run check-core --workspace @a4s/context-expert
 ```

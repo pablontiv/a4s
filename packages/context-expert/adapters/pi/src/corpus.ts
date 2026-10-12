@@ -18,7 +18,7 @@ export interface CorpusStageOptions {
 }
 
 export interface CorpusEntryAppender {
-  appendEntry(customType: string, data: unknown): unknown;
+  appendEntry(customType: string, data: unknown): void;
 }
 
 /**

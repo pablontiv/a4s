@@ -30,7 +30,7 @@
     "mqtt": "5.16.0"
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": ">=0.99.1",
+    "@earendil-works/pi-coding-agent": "*",
     "typebox": "*"
   },
   "devDependencies": {

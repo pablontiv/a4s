@@ -10,14 +10,14 @@ import {
   type JevClient,
   type JevQuestion,
   type JevRequest,
-} from "../../src/index.ts";
+} from "../../src/index.js";
 
 interface EvidenceFixture {
   id: string;
   text: string;
   expectedRule: boolean;
   expectedBoundary: { start: number; end: number } | null;
-  visibility: { choice: "hide" | "short" | "long" | "full"; confidence: number };
+  visibility: { choice: "current" | "superseded" | "historical" | "irrelevant"; confidence: number };
   candidateProbability: number;
   generalityLevel: number;
   authority: "explicit_user" | "repository_policy" | "team_convention" | "agent_inference" | "incidental";
@@ -36,7 +36,7 @@ const names = (await readdir(fixtureDirectory)).filter((name) => name.endsWith("
 const results: FixtureResult[] = [];
 
 for (const name of names) {
-  const fixture = JSON.parse(await readFile(join(fixtureDirectory, name), "utf8")) as EvidenceFixture;
+  const fixture = await readFixture(join(fixtureDirectory, name));
   const chunks = stageCorpus([{
     index: 0,
     role: "user",
@@ -94,6 +94,14 @@ const report = {
 };
 console.log(JSON.stringify(report, null, 2));
 
+async function readFixture(path: string): Promise<EvidenceFixture> {
+  try {
+    return JSON.parse(await readFile(path, "utf8")) as EvidenceFixture;
+  } catch {
+    throw new Error(`invalid evidence fixture: ${path}`);
+  }
+}
+
 function fixtureJev(fixture: EvidenceFixture): JevClient {
   return {
     async evaluate(request: JevRequest): Promise<unknown> {
@@ -140,13 +148,7 @@ function choice(question: Extract<JevQuestion, { type: "choice" }>, selected: st
 }
 
 function score(question: Extract<JevQuestion, { type: "score" }>, selected: number): JevAnswer {
-  return {
-    type: "score",
-    score: selected,
-    legend: Object.fromEntries(question.criteria.map((criterion, index) => [String(index), criterion])),
-    probabilities: Object.fromEntries(question.criteria.map((_criterion, index) => [String(index), index === selected ? 1 : 0])),
-    confidence: 1,
-  };
+  return { type: "score", score: selected / (question.criteria.length - 1), confidence: 1 };
 }
 
 function ratio(numerator: number, denominator: number): number {
