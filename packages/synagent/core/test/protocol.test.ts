@@ -1,5 +1,8 @@
 // Pruebas del contrato compartido v1 + core host-neutral (ADR 0069).
 import assert from 'node:assert/strict'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
 import { test } from 'node:test'
 
 import {
@@ -22,9 +25,11 @@ import {
   parseCanonical,
   PROTOCOL_VERSION,
   projectAddress,
+  readWorkspaceProject,
   renderForAgent,
   repoNameFromOrigin,
   resolveProject,
+  resolveProjectWithSource,
   serialize,
   subscriptions,
   toTopic,
@@ -122,6 +127,63 @@ test('repoNameFromOrigin: nombre canónico del repo, https y git@ (no basename d
   assert.equal(repoNameFromOrigin('https://github.com/acme/My.Repo.git'), 'My.Repo')
   assert.equal(repoNameFromOrigin('no-remoto'), null) // sin host/path no es un remoto
   assert.equal(repoNameFromOrigin('bad name/with space'), null)
+})
+
+test('readWorkspaceProject reads only the exact cwd contract', () => {
+  const root = mkdtempSync(join(tmpdir(), 'synagent-workspace-'))
+  const child = join(root, 'child')
+  try {
+    mkdirSync(join(root, '.workspace', 'config'), { recursive: true })
+    mkdirSync(child)
+    writeFileSync(join(root, '.workspace', 'config', 'synagent.json'), JSON.stringify({ workspace: 'Root.Space' }))
+
+    assert.equal(readWorkspaceProject(root), 'Root.Space')
+    assert.equal(readWorkspaceProject(child), undefined)
+
+    mkdirSync(join(child, '.workspace', 'config'), { recursive: true })
+    writeFileSync(join(child, '.workspace', 'config', 'synagent.json'), JSON.stringify({ workspace: 'Child.Repo' }))
+    assert.equal(readWorkspaceProject(child), 'Child.Repo')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('readWorkspaceProject rejects malformed, ambiguous, and invalid workspace config', () => {
+  const root = mkdtempSync(join(tmpdir(), 'synagent-workspace-invalid-'))
+  const cases = [
+    ['malformed', '{'],
+    ['wrong-shape', JSON.stringify({ project: 'Root.Space' })],
+    ['ambiguous', JSON.stringify({ workspace: 'Root.Space', project: 'Child.Repo' })],
+    ['invalid-token', JSON.stringify({ workspace: ' Root.Space ' })],
+  ] as const
+  try {
+    for (const [name, contents] of cases) {
+      const cwd = join(root, name)
+      mkdirSync(join(cwd, '.workspace', 'config'), { recursive: true })
+      writeFileSync(join(cwd, '.workspace', 'config', 'synagent.json'), contents)
+      assert.throws(() => readWorkspaceProject(cwd))
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('resolveProject uses setting > workspace > origin and reports the source', () => {
+  const origin = 'https://github.com/acme/Origin.Repo.git'
+  assert.deepEqual(resolveProjectWithSource({ setting: 'Root.Space', workspace: 'invalid workspace', origin }), {
+    project: 'Root.Space',
+    source: 'setting',
+  })
+  assert.deepEqual(resolveProjectWithSource({ workspace: 'Child.Repo', origin }), {
+    project: 'Child.Repo',
+    source: 'workspace',
+  })
+  assert.deepEqual(resolveProjectWithSource({ origin }), {
+    project: 'Origin.Repo',
+    source: 'origin',
+  })
+  assert.equal(resolveProject({ workspace: 'Child.Repo', origin }), 'Child.Repo')
+  assert.throws(() => resolveProjectWithSource({ workspace: ' Child.Repo ', origin }), /workspace no es un token válido/)
 })
 
 test('resolveProject: setting > origin; FALLA explícito sin fuente ni token válido', () => {
