@@ -7,8 +7,9 @@
 //
 // IDENTIDAD (ADR 0069): la instancia sale de $.session.id() (única por sesión →
 // sin colisión aunque haya cientos de sesiones); el proyecto, de un setting del
-// host (userConfig `project`) o del remoto `origin` del repo ($.session.repo()).
-// NADA de env ni de launcher. Si no se resuelve, el adaptador queda inactivo.
+// host (userConfig `project`), del workspace del cwd exacto, o del remoto `origin`
+// del repo ($.session.repo()). NADA de env ni de launcher. Si no se resuelve, el
+// adaptador queda inactivo.
 //
 // Topología v1: synagent/v1/<proyecto>/<instancia> (directo, durable),
 // /all (proyecto, transient), synagent/v1/all (global, transient por defecto).
@@ -23,8 +24,9 @@ import {
   MESSAGE_KINDS,
   newId,
   parseCanonical,
+  readWorkspaceProject,
   renderForAgent,
-  resolveProject,
+  resolveProjectWithSource,
   serialize,
   subscriptions,
   type Identity,
@@ -94,15 +96,26 @@ function resolveBrokerUrl(options: PluginOptions): string {
 
 // Identidad SOLO de APIs nativas de sesión (ADR 0069). Lanza si no resuelve.
 // instancia = $.session.id() (única por sesión);
-// proyecto = setting del host > nombre del repo del remoto origin.
-async function resolveIdentity($: EngineInterface, options: PluginOptions): Promise<Identity> {
+// proyecto = setting del host > workspace del cwd exacto > remoto origin.
+async function resolveIdentity(
+  $: EngineInterface,
+  options: PluginOptions,
+): Promise<{ identity: Identity; source: ReturnType<typeof resolveProjectWithSource>['source'] }> {
+  const setting = optString(options, 'project')
+  let resolved: ReturnType<typeof resolveProjectWithSource>
+  if (setting !== undefined) {
+    resolved = resolveProjectWithSource({ setting })
+  } else {
+    const workspace = readWorkspaceProject(await $.session.cwd())
+    if (workspace !== undefined) {
+      resolved = resolveProjectWithSource({ workspace })
+    } else {
+      const repo = await $.session.repo()
+      resolved = resolveProjectWithSource({ ...(repo?.remote ? { origin: repo.remote } : {}) })
+    }
+  }
   const instance = instanceFromHostSession(await $.session.id())
-  const repo = await $.session.repo()
-  const project = resolveProject({
-    ...(optString(options, 'project') !== undefined ? { setting: optString(options, 'project') } : {}),
-    ...(repo?.remote ? { origin: repo.remote } : {}),
-  })
-  return { project, instance }
+  return { identity: { project: resolved.project, instance }, source: resolved.source }
 }
 
 // Idempotencia por id (at-most-once); dedupe compartido entre clientes.
@@ -205,8 +218,10 @@ async function ensureStarted($: EngineInterface, brokerUrl: string, options: Plu
 
   const bridgeSub = `${bridgeDir($)}/bridge-sub.cjs`
 
+  let activation: Awaited<ReturnType<typeof resolveIdentity>>
   try {
-    identity = await resolveIdentity($, options)
+    activation = await resolveIdentity($, options)
+    identity = activation.identity
     globalEnabled = options['global'] !== false && options['global'] !== 'false'
   } catch (err) {
     identity = undefined
@@ -258,7 +273,7 @@ async function ensureStarted($: EngineInterface, brokerUrl: string, options: Plu
     void $.ui.status(`mq-send no registrado: ${err instanceof Error ? err.message : String(err)}`)
   }
 
-  void $.ui.status(`synagent: ${addr} (JALAR activo, tool synagent_send + /mq-send)`)
+  void $.ui.status(`synagent: ${addr} (source=${activation.source}; JALAR activo, tool synagent_send + /mq-send)`)
 }
 
 // Publica un mensaje canónico v1 con el bridge-pub one-shot. makeOutbound valida
@@ -308,7 +323,7 @@ export const register: Register = (on, options) => {
     const a = e as unknown as Record<string, unknown>
     if (a.tool !== 'mcp__synagent-adapter-mqtt__synagent_send') return next(e)
     const result = (text: string, isError = false) => ({ result: text, ...(isError && { isError }) })
-    if (!identity) return result('error: identidad v1 no resuelta; configura el setting project o verifica el remoto origin del repo', true)
+    if (!identity) return result('error: identidad v1 no resuelta; configura el setting project, workspace o remoto origin del repo', true)
     const to = typeof a.to === 'string' ? a.to : ''
     const body = typeof a.body === 'string' ? a.body : ''
     const kind = typeof a.kind === 'string' ? a.kind : 'prompt'

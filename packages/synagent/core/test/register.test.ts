@@ -6,6 +6,9 @@
 // borra en runtime), así que se puede cargar bajo tsx con un `$` falso.
 // (Excluido del tsc del paquete en tsconfig: su único import de valor es ./adapter.)
 import assert from 'node:assert/strict'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { test } from 'node:test'
 
 import { register } from '../adapters/claude/hooks/register.ts'
@@ -35,6 +38,14 @@ function collectHooks(options: Record<string, unknown> = {}, registerHook: Regis
     return found.hook
   }
   return { entries, get }
+}
+
+function makeWorkspaceConfig(contents: string): { cwd: string; cleanup: () => void } {
+  const cwd = mkdtempSync(join(tmpdir(), 'synagent-claude-workspace-'))
+  const configDir = join(cwd, '.workspace', 'config')
+  mkdirSync(configDir, { recursive: true })
+  writeFileSync(join(configDir, 'synagent.json'), contents)
+  return { cwd, cleanup: () => rmSync(cwd, { recursive: true, force: true }) }
 }
 
 function makeEngine() {
@@ -76,6 +87,81 @@ function makeEngine() {
   }
   return { $, runCalls, spawnArgs, toolRegistered, commandRegistered, statuses }
 }
+
+test('register activates Claude from exact-cwd workspace without Git', async () => {
+  const workspace = makeWorkspaceConfig('{"workspace":"Shared.Workspace"}\n')
+  try {
+    const eng = makeEngine()
+    let repoCalls = 0
+    eng.$.session.cwd = async () => workspace.cwd
+    eng.$.session.repo = async () => {
+      repoCalls += 1
+      return undefined as never
+    }
+    const freshRegister = await loadFreshRegister()
+    const { get } = collectHooks({}, freshRegister)
+
+    await get('session.start')(eng.$, {}, (event: unknown) => event)
+
+    assert.ok(eng.spawnArgs[0]?.includes('synagent/v1/Shared.Workspace/sess-test-1'), 'suscribe con el token del workspace')
+    assert.ok(eng.spawnArgs[0]?.includes('synagent/v1/Shared.Workspace/all'), 'suscribe al broadcast del workspace')
+    assert.equal(repoCalls, 0, 'no consulta Git cuando el workspace resuelve el proyecto')
+    assert.ok(eng.statuses.some(status => status.includes('source=workspace')), 'informa workspace como fuente efectiva')
+  } finally {
+    workspace.cleanup()
+  }
+})
+
+test('register project setting wins over an invalid workspace', async () => {
+  const workspace = makeWorkspaceConfig('{"workspace":"invalid workspace"}\n')
+  try {
+    const eng = makeEngine()
+    let cwdCalls = 0
+    let repoCalls = 0
+    eng.$.session.cwd = async () => {
+      cwdCalls += 1
+      return workspace.cwd
+    }
+    eng.$.session.repo = async () => {
+      repoCalls += 1
+      return { remote: 'https://github.com/acme/origin-fallback.git', root: workspace.cwd, internal: true, name: 'acme/origin-fallback' }
+    }
+    const freshRegister = await loadFreshRegister()
+    const { get } = collectHooks({ project: 'Configured.Project' }, freshRegister)
+
+    await get('session.start')(eng.$, {}, (event: unknown) => event)
+
+    assert.ok(eng.spawnArgs[0]?.includes('synagent/v1/Configured.Project/sess-test-1'), 'suscribe con el setting explícito')
+    assert.equal(cwdCalls, 0, 'no lee el workspace cuando existe un setting')
+    assert.equal(repoCalls, 0, 'no consulta Git cuando existe un setting')
+    assert.ok(eng.statuses.some(status => status.includes('source=setting')), 'informa setting como fuente efectiva')
+  } finally {
+    workspace.cleanup()
+  }
+})
+
+test('register rejects invalid workspace instead of falling back to origin', async () => {
+  const workspace = makeWorkspaceConfig('{"workspace":"invalid workspace"}\n')
+  try {
+    const eng = makeEngine()
+    let repoCalls = 0
+    eng.$.session.cwd = async () => workspace.cwd
+    eng.$.session.repo = async () => {
+      repoCalls += 1
+      return { remote: 'https://github.com/acme/origin-fallback.git', root: workspace.cwd, internal: true, name: 'acme/origin-fallback' }
+    }
+    const freshRegister = await loadFreshRegister()
+    const { get } = collectHooks({}, freshRegister)
+
+    await get('session.start')(eng.$, {}, (event: unknown) => event)
+
+    assert.equal(eng.spawnArgs.length, 0, 'un workspace inválido deja el adaptador inactivo')
+    assert.equal(repoCalls, 0, 'no oculta el workspace inválido con un fallback a origin')
+    assert.ok(eng.statuses.some(status => status.includes('workspace no es un token válido') && status.includes('adaptador inactivo')))
+  } finally {
+    workspace.cleanup()
+  }
+})
 
 test('register: session.start resuelve identidad y registra synagent_send + /mq-send', async () => {
   const eng = makeEngine()
