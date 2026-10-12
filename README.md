@@ -1,6 +1,6 @@
 # A4S
 
-Repositorio reducido a las extensiones verificadas y al skill `refine`.
+Repositorio reducido a las extensiones verificadas, los agentes y el skill `refine`.
 
 ## Extensiones
 
@@ -11,6 +11,10 @@ Repositorio reducido a las extensiones verificadas y al skill `refine`.
 - [`packages/synagent/bus/`](packages/synagent/bus/): bus MQTT requerido por Synagent.
 
 Los plugins de Claude están publicados en [`.claude-plugin/marketplace.json`](.claude-plugin/marketplace.json).
+
+## Agentes
+
+Los agentes para Pi, Claude y Superpowers están en [`agents/`](agents/).
 
 ## Refine
 
