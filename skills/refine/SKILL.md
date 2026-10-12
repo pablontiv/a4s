@@ -16,6 +16,7 @@ The invocation authorizes:
 - investigating the supplied need;
 - asking refinement questions;
 - bootstrapping the ticket destination when it is not configured;
+- keeping a temporary evidence inventory;
 - staging one temporary ticket;
 - offering immediate materialization.
 
@@ -60,7 +61,7 @@ When the configuration or destination is missing:
 3. Persist only those values in `.workspace/config/refine.json`.
 4. Continue refining the original need in the same invocation.
 
-Ask all bootstrap questions in one response. That response counts toward the three-round limit.
+Ask all bootstrap questions in one response. Bootstrap configures the destination; it does not refine the need, so it does not count toward the three-round limit.
 
 ## Phase 1: identify the needs
 
@@ -89,7 +90,28 @@ Ask the user to select one. Refine exactly one candidate per invocation. Candida
 
 ## Phase 2: investigate the selected need
 
-Investigate enough to compare five surfaces.
+Investigate enough to compare five surfaces. Record what each surface establishes in the evidence inventory (see "Evidence inventory") as you go, not at the end.
+
+### Local sources first
+
+Before searching online or fetching any external copy of a system, enumerate the local sources that may already hold it:
+
+- the current repository, including its other worktrees and local branches;
+- local checkouts of the systems the need targets, such as vendored or sibling repositories, with their worktrees and branches;
+- installed builds, binaries, or packages of those systems and their reported versions.
+
+Read the relevant local sources before using an external copy. Fetch or clone an external copy only when no local source covers the need or when the authoritative reference is not available locally, and record why in the inventory.
+
+### Reference authority
+
+When a system appears at more than one reference, list every reference found, for example:
+
+- installed version;
+- local checkout `HEAD`;
+- local remote-tracking ref;
+- current remote default branch, checked without modifying the checkout.
+
+Declare which reference is authoritative for this need and why. By default, the current remote default branch is authoritative for what the system can do, and the installed version is authoritative for what the user runs today. State every divergence that could change a finding. Do not update, pull, or modify a local checkout without the user's request; read a newer reference from temporary storage instead.
 
 ### Need
 
@@ -110,9 +132,10 @@ Establish:
 - relevant execution paths and boundaries;
 - existing capabilities;
 - local constraints;
-- evidence that confirms or contradicts the need.
+- evidence that confirms or contradicts the need;
+- related work in other worktrees and unmerged branches, of the current repository and of local checkouts of the target systems.
 
-Read only what is needed to understand the boundary.
+Read only what is needed to understand the boundary, but cover every local source enumerated above that touches it.
 
 ### Documentation
 
@@ -147,6 +170,23 @@ Prefer standards, official documentation, primary source material, and maintaine
 
 Research both the problem and possible solutions. Solution research informs questions and trade-offs; it does not automatically prescribe an implementation in the ticket.
 
+### Evidence inventory
+
+Keep the intermediate evidence outside the conversation so it survives context compaction. Create the inventory when investigation starts, next to the draft location described in Phase 8 and under the same isolation and cleanup rules:
+
+```text
+<system-temporary-storage>/refine/<repository-id>/<session-id>/evidence--<draftId>.md
+```
+
+Assign the `draftId` when creating the inventory; Phase 7 reuses it. For each of the five surfaces, record:
+
+- the sources read, as checkable references;
+- the local sources enumerated and which were read or skipped, with the reason;
+- the references found for each target system and the declared authority;
+- what the surface establishes and what it leaves open.
+
+Update the inventory after each research step and after each user answer or correction. After a context compaction or any loss of earlier detail, re-read the inventory before continuing.
+
 ## Phase 3: find gaps and inconsistencies
 
 Compare the five evidence surfaces. Raise a question when evidence cannot resolve a material decision, including when:
@@ -161,11 +201,11 @@ Compare the five evidence surfaces. Raise a question when evidence cannot resolv
 - ticket classification depends on user intent;
 - existing related work needs an explicit disposition.
 
-Verify facts with available evidence instead of asking the user. Do not ask implementation questions that can remain open without changing the intended outcome.
+Verify facts with available evidence instead of asking the user. Do not ask a question the evidence already answers, such as which component to evaluate when only one candidate exists. Do not ask implementation questions that can remain open without changing the intended outcome.
 
 ## Phase 4: refinement rounds
 
-Use at most three question rounds across the entire invocation. Bootstrap and candidate-selection questions count toward this total, leaving only the remaining rounds for later refinement.
+Use at most three question rounds across the entire invocation. Candidate-selection questions count toward this total, leaving only the remaining rounds for later refinement. Bootstrap questions do not count.
 
 For each round:
 
@@ -178,11 +218,24 @@ For each round:
 
 Defer a question to a later round only when it depends on an earlier answer or on research enabled by that answer.
 
-After the third round, ask no more skill-initiated refinement questions. Any remaining material uncertainty becomes the subject of a spike ticket.
+An answer that directs the investigation instead of answering the question, such as pointing at sources to read or a reference to use, is a correction. Apply it to the research, update the inventory, and re-ask any question it left unanswered in the next round. Do not force it into an answer to the question asked.
+
+After the third round, ask no more skill-initiated refinement questions. Before turning remaining uncertainty into a spike, resolve every part that available research can still resolve. Only uncertainty that requires user intent or evidence that cannot be gathered in this invocation becomes the subject of a spike ticket.
 
 ## Phase 5: classify the ticket
 
 Always produce a ticket proposal.
+
+### Evidence gate
+
+Do not name, propose, or imply a ticket type, in the proposal or in intermediate messages, until the evidence inventory shows that:
+
+- every surface has been investigated, or the reason it could not be is recorded;
+- every enumerated local source that touches the need has been read, or the reason it was skipped is recorded;
+- each target system has a declared authoritative reference and every material divergence is stated;
+- every user correction has been applied to the research.
+
+Before classifying, show the user a concise summary of the inventory: sources per surface, authoritative references, divergences, and remaining unknowns. Classification follows from that summary.
 
 ### Defect
 
@@ -333,6 +386,8 @@ Requirements:
 - the draft is not a durable backlog;
 - a later session does not discover or resume it.
 
+The evidence inventory from Phase 2 lives in the same directory under the same requirements. Delete it together with the draft after materialization, rejection, or normal session closure; keep it across corrected proposals, updating it as Phase 10 requires.
+
 Delete the draft after successful materialization, rejection, replacement by a corrected proposal, or normal session closure. An interrupted environment may retain temporary bytes until its own cleanup, but the draft remains functionally unavailable to later sessions.
 
 ## Phase 9: present the exact proposal
@@ -360,7 +415,7 @@ When the user accepts the exact proposal:
 
 1. Materialize exactly the rendered ticket in the configured destination.
 2. Verify that the destination returns an identifier.
-3. Delete the temporary JSON.
+3. Delete the temporary JSON and the evidence inventory.
 4. Return the identifier or locator.
 5. Stop.
 
@@ -371,7 +426,7 @@ When the user supplies corrections:
 1. Invalidate and delete the previous temporary JSON.
 2. Apply the corrections to the selected need.
 3. Verify any new factual claim.
-4. Repeat affected research when the correction changes evidence or scope.
+4. Repeat affected research when the correction changes evidence or scope, and update the evidence inventory.
 5. Preserve the `draftId`.
 6. Generate a new slug when appropriate.
 7. Write a new temporary JSON.
@@ -386,7 +441,7 @@ Do not preserve superseded proposals.
 
 When the user rejects the proposal, declines immediate materialization, or ends the session:
 
-1. Delete or abandon the temporary JSON according to the environment's session cleanup.
+1. Delete or abandon the temporary JSON and evidence inventory according to the environment's session cleanup.
 2. Do not create a durable record.
 3. Do not offer future resumption.
 4. Stop.
@@ -409,6 +464,8 @@ Before staging the JSON, verify internally that:
 
 - exactly one selected need is being refined;
 - the ticket type follows from the evidence;
+- the evidence gate in Phase 5 was satisfied before the type was named;
+- authoritative references and their divergences are stated in the evidence;
 - assumptions and unknowns are explicit;
 - the title describes the problem or outcome;
 - scope and exclusions do not conflict;
