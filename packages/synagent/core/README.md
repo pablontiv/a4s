@@ -41,9 +41,31 @@ Topología jerárquica versionada, con la regla `topic == "synagent/" + versión
 | `<proyecto>/all` | `synagent/v1/<proyecto>/all` | todo el proyecto |
 | `all` | `synagent/v1/all` | global (activo por defecto) |
 
-- **proyecto**: token determinista; setting del host > nombre canónico del repo
-  del remoto `origin` (nunca el basename del cwd ni una variable de entorno).
-  Falla explícito si no hay fuente válida.
+### Identidad compartida de workspace
+
+Synagent puede resolver el token de proyecto desde el archivo
+`<cwd>/.workspace/config/synagent.json` del directorio de trabajo exacto:
+
+```json
+{
+  "workspace": "Example.Workspace"
+}
+```
+
+La precedencia es: setting explícito `project` del host, workspace y remoto Git
+`origin`. No busca el archivo en directorios ancestros. Si el archivo existe
+pero el JSON, su forma exacta o el token v1 son inválidos, la resolución falla
+sin recurrir a Git; un setting explícito gana antes de leerlo. Los estados de
+los adaptadores identifican la fuente efectiva como `source=setting`,
+`source=workspace` o `source=origin`.
+
+Workspace es solo otra fuente del token de proyecto; el direccionamiento v1 no
+cambia: `<workspace>/<instance>`, `<workspace>/all` y sus topics
+`synagent/v1/...` conservan las mismas reglas.
+
+- **proyecto**: token determinista; setting del host > workspace del cwd exacto
+  > nombre canónico del repo del remoto `origin` (nunca el basename del cwd ni
+  una variable de entorno). Falla explícito si no hay fuente válida.
 - **instancia**: id de sesión **nativo** del harness (`$.session.id()` en Claude,
   `getSessionId()` en Pi), único por sesión — un *resume* conserva el id, un
   *new*/*fork* obtiene otro. No se persiste ni se deriva de entorno: se arranca
@@ -118,7 +140,7 @@ no forma parte del plugin Claude: sigue siendo la aplicación separada
 | Clave | Default | Uso |
 | --- | --- | --- |
 | `brokerUrl` | `mqtt://127.0.0.1:1884` | URL loopback del broker. |
-| `project` | derivado | Token de proyecto v1 (si vacío: nombre del repo del remoto `origin`). |
+| `project` | derivado | Token de proyecto v1 (si vacío: workspace del cwd exacto y luego remoto `origin`). |
 | `global` | `true` | Suscribirse al broadcast global `synagent/v1/all`; `false` lo desactiva. |
 
 La instancia **no** es configurable: sale del id de sesión nativo
@@ -163,12 +185,13 @@ entre sí. En
 idempotentemente sin borrar la suscripción durable.
 
 El proyecto sale primero de la configuración nativa de Synagent. Si está vacío,
-se deriva del `remote.origin.url` canónico leído en el `ctx.cwd` de la sesión.
-No usa el cwd del proceso ni su basename. Si no resuelve, muestra un warning y
-queda inactivo, sin suscripciones ni publicación. Los intentos de envío piden
-configurar el proyecto. El estado de `/synagent status` muestra
-`inactive=true`. Se remedia con `/synagent-settings`, con
-`/synagent set project <token>` o con un `remote.origin.url` válido.
+usa el workspace del `ctx.cwd` exacto y, solo si ese archivo no existe, deriva
+el `remote.origin.url` canónico leído en ese mismo cwd. No usa el cwd del
+proceso ni su basename. Si no resuelve, muestra un warning y queda inactivo,
+sin suscripciones ni publicación. Los intentos de envío piden configurar el
+proyecto. El estado de `/synagent status` muestra `inactive=true`. Se remedia
+con `/synagent-settings`, con `/synagent set project <token>`, con un archivo
+`.workspace/config/synagent.json` válido o con un `remote.origin.url` válido.
 
 ### Envío y comandos Pi
 
@@ -211,7 +234,7 @@ Permanece como barrera de orden hasta `agent_settled`.
 | --- | --- | --- |
 | `enabled` | `true` | global |
 | `broker-url` | `mqtt://127.0.0.1:1884` | global |
-| `project` | derivado del remoto `origin` | proyecto |
+| `project` | derivado del workspace o remoto `origin` | proyecto |
 | `global` | `true` | global |
 | `default-peer` | `claude` | global |
 
