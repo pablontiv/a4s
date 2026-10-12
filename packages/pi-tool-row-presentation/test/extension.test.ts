@@ -12,6 +12,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
+import { stripTerminalSequences } from "@earendil-works/pi-tui";
 import type { ToolRendererResolver, ToolRenderers, ToolRowResult } from "@pablontiv/pion";
 import {
 	globalModePath,
@@ -189,6 +190,14 @@ function inheritedRenderers(): ToolRenderers {
 	};
 }
 
+const TEST_BACKGROUND = "\x1b[48;5;236m";
+const testTheme = {
+	fg: (_color: string, text: string) => `\x1b[36m${text}\x1b[39m`,
+	bg: (_color: string, text: string) => `${TEST_BACKGROUND}${text}\x1b[49m`,
+	bold: (text: string) => `\x1b[1m${text}\x1b[22m`,
+	getBgAnsi: (_color: string) => TEST_BACKGROUND,
+};
+
 function renderRow(
 	renderers: ToolRenderers | undefined,
 	options: {
@@ -201,7 +210,7 @@ function renderRow(
 	const row = renderers?.renderRow?.(
 		{},
 		options.result,
-		{} as never,
+		testTheme as never,
 		{
 			args: {},
 			toolCallId: "call-1",
@@ -261,7 +270,8 @@ describe("tool row configuration", () => {
 		const harness = createHarness({ globalPath, cwd, trusted: false });
 
 		await harness.start();
-		assert.deepEqual(renderRow(harness.resolveRenderers("read", undefined).renderers), ["read"]);
+		const row = renderRow(harness.resolveRenderers("read", undefined).renderers);
+		assert.equal(stripTerminalSequences(row?.[0] ?? "").trimEnd(), " read {} [running]");
 	});
 
 	it("migrates supported legacy values only when the new file is absent", async () => {
@@ -395,7 +405,7 @@ describe("tool row host contract", () => {
 		}
 	});
 
-	it("renders compact pending and successful rows as one width-limited line", async () => {
+	it("renders the inherited multiline call as one styled width-limited compact line", async () => {
 		const root = await temporaryDirectory();
 		const harness = createHarness({
 			globalPath: join(root, "agent", "pi-tool-row-presentation.json"),
@@ -403,19 +413,27 @@ describe("tool row host contract", () => {
 		});
 		await harness.start();
 		await harness.runCommand("compact");
-		const renderers = harness.resolveRenderers("long-tool-name", inheritedRenderers()).renderers;
-
-		assert.deepEqual(renderRow(renderers, { width: 4 }), ["long"]);
-		assert.deepEqual(
-			renderRow(harness.resolveRenderers("工具名称", inheritedRenderers()).renderers, { width: 4 }),
-			["工具"],
-		);
-		assert.deepEqual(
-			renderRow(renderers, {
-				result: { content: [{ type: "text", text: "done" }], details: { complete: true } },
+		const inherited: ToolRenderers = {
+			...inheritedRenderers(),
+			renderCall: (_args, theme) => ({
+				render: () => [theme.fg("toolTitle", theme.bold("alpha beta")), theme.fg("accent", "gamma delta")],
+				invalidate: () => {},
 			}),
-			["long-tool-name"],
-		);
+		};
+		const renderers = harness.resolveRenderers("long-tool-name", inherited).renderers;
+
+		const pending = renderRow(renderers, { width: 24 });
+		assert.equal(pending?.length, 1);
+		assert.equal(stripTerminalSequences(pending?.[0] ?? ""), " alpha beta... [running]");
+		assert.equal(pending?.[0]?.startsWith(TEST_BACKGROUND), true);
+		assert.equal(stripTerminalSequences(renderRow(renderers, { width: 4 })?.[0] ?? ""), "[run");
+
+		const successful = renderRow(renderers, {
+			width: 30,
+			result: { content: [{ type: "text", text: "done" }], details: { complete: true } },
+		});
+		assert.equal(successful?.length, 1);
+		assert.equal(stripTerminalSequences(successful?.[0] ?? "").trimEnd(), " alpha beta gamma delta [ok]");
 		assert.equal(renderRow(renderers, { isError: true }), undefined);
 		assert.equal(renderRow(renderers, { expanded: true }), undefined);
 	});
