@@ -1,0 +1,25 @@
+node:internal/modules/run_main:107
+    triggerUncaughtException(
+    ^
+
+Error: Transform failed with 13 errors:
+/private/tmp/a4s-e2e-a0d2471c.20261007T182223Z.tQ1EwZ/validate.ts:5:15: ERROR: Top-level await is currently not supported with the "cjs" output format
+/private/tmp/a4s-e2e-a0d2471c.20261007T182223Z.tQ1EwZ/validate.ts:10:61: ERROR: Top-level await is currently not supported with the "cjs" output format
+/private/tmp/a4s-e2e-a0d2471c.20261007T182223Z.tQ1EwZ/validate.ts:11:27: ERROR: Top-level await is currently not supported with the "cjs" output format
+/private/tmp/a4s-e2e-a0d2471c.20261007T182223Z.tQ1EwZ/validate.ts:14:27: ERROR: Top-level await is currently not supported with the "cjs" output format
+/private/tmp/a4s-e2e-a0d2471c.20261007T182223Z.tQ1EwZ/validate.ts:16:25: ERROR: Top-level await is currently not supported with the "cjs" output format
+...
+    at failureErrorWithLog (/private/tmp/a4s-e2e-a0d2471c.20261007T182223Z.tQ1EwZ/worktree/node_modules/esbuild/lib/main.js:1752:15)
+    at /private/tmp/a4s-e2e-a0d2471c.20261007T182223Z.tQ1EwZ/worktree/node_modules/esbuild/lib/main.js:1019:50
+    at responseCallbacks.<computed> (/private/tmp/a4s-e2e-a0d2471c.20261007T182223Z.tQ1EwZ/worktree/node_modules/esbuild/lib/main.js:886:9)
+    at handleIncomingPacket (/private/tmp/a4s-e2e-a0d2471c.20261007T182223Z.tQ1EwZ/worktree/node_modules/esbuild/lib/main.js:941:12)
+    at Socket.readFromStdout (/private/tmp/a4s-e2e-a0d2471c.20261007T182223Z.tQ1EwZ/worktree/node_modules/esbuild/lib/main.js:864:7)
+    at Socket.emit (node:events:514:20)
+    at addChunk (node:internal/streams/readable:576:12)
+    at readableAddChunkPushByteMode (node:internal/streams/readable:527:3)
+    at Readable.push (node:internal/streams/readable:407:5)
+    at Pipe.onStreamRead (node:internal/stream_base_commons:189:23) {
+  name: 'TransformError'
+}
+
+Node.js v26.9.0

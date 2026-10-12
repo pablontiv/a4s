@@ -1,0 +1,22 @@
+test_cached_codex_input_is_not_added_twice (__main__.ProbeTests.test_cached_codex_input_is_not_added_twice) ... ok
+test_claude_copied_response_counted_once (__main__.ProbeTests.test_claude_copied_response_counted_once) ... ok
+test_claude_synthetic_not_counted (__main__.ProbeTests.test_claude_synthetic_not_counted) ... ok
+test_compaction_resets_baseline (__main__.ProbeTests.test_compaction_resets_baseline) ... ok
+test_date_window_is_half_open (__main__.ProbeTests.test_date_window_is_half_open) ... ok
+test_edit_counts_added_lines_not_context (__main__.ProbeTests.test_edit_counts_added_lines_not_context) ... ok
+test_exploration_not_detected (__main__.ProbeTests.test_exploration_not_detected) ... ok
+test_failed_write_is_not_success (__main__.ProbeTests.test_failed_write_is_not_success) ... ok
+test_missing_git_does_not_trigger_decline (__main__.ProbeTests.test_missing_git_does_not_trigger_decline) ... ok
+test_patch_does_not_credit_removed_lines (__main__.ProbeTests.test_patch_does_not_credit_removed_lines) ... ok
+test_pi_context_includes_cache (__main__.ProbeTests.test_pi_context_includes_cache) ... ok
+test_productive_decline_detected (__main__.ProbeTests.test_productive_decline_detected) ... ok
+test_repeated_snapshot_lines_do_not_exceed_emitted_lines (__main__.ProbeTests.test_repeated_snapshot_lines_do_not_exceed_emitted_lines) ... Blame: 1 / 1
+Git matched: 1 lines
+ok
+test_verified_faux_fixture_is_excluded (__main__.ProbeTests.test_verified_faux_fixture_is_excluded) ... ok
+test_zero_sample_formats_as_unavailable (__main__.ProbeTests.test_zero_sample_formats_as_unavailable) ... ok
+
+----------------------------------------------------------------------
+Ran 15 tests in 0.003s
+
+OK

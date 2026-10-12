@@ -1,0 +1,5 @@
+candidate=a0d2471c69654641b8344706099cf7d86463428c
+model=openai-codex/gpt-5.6-sol
+opt_in=A4S_RUN_AGENT_E2E=1
+python=/Users/pones/.local/bin/python3.11
+runtime=/Users/pones/.local/bin/pion

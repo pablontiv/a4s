@@ -1,0 +1,10 @@
+harness,model,candidate_streams,observed_candidate_families,median_context_tokens,minimum_context_tokens,maximum_context_tokens,status
+claude,claude-haiku-4-5-20251001,2,1,129868.5,123516,136221,exploratory; not a validated compaction threshold
+claude,claude-opus-4-8,4,4,449948.5,287579,645089,exploratory; not a validated compaction threshold
+codex,gpt-6-astra,1,1,196549,196549,196549,exploratory; not a validated compaction threshold
+pi,MiniMax-M3,1,1,305251,305251,305251,exploratory; not a validated compaction threshold
+pi,gpt-5.6-luna,4,4,118667.5,114136,176171,exploratory; not a validated compaction threshold
+pi,gpt-5.6-sol,1,1,253355,253355,253355,exploratory; not a validated compaction threshold
+pi,gpt-5.6-terra,1,1,185524,185524,185524,exploratory; not a validated compaction threshold
+pi,grok-4.6,1,1,222773,222773,222773,exploratory; not a validated compaction threshold
+pi,k3,2,2,116280.0,83657,148903,exploratory; not a validated compaction threshold

@@ -1,0 +1,86 @@
+MERGE RECEIPT: PR #69 (shared adaptive Context Expert policy)
+================================================================
+
+Date: 2026-10-07
+PR: https://github.com/pablontiv/a4s/pull/69
+Title: fix(context-expert): share adaptive auto-compaction policy
+Base: main
+Head branch: fix/context-expert-auto-compaction-policy
+Candidate head: 4adf8a04b2943311b01dd4e9f8f02a7c38b2d354
+PR state: MERGED
+Merge method: squash
+Merge OID: 1c448b5954d78b57c9b968781e38550748ba9e37
+Merge parent: cb37a7f4f74e7577672448b6d85aace881e951dc
+
+CANDIDATE
+=========
+The shared trigger policy calculates F=max(60000, ceil(0.15W)) and C=max(ceil(0.20W), F+ceil(0.05W)).
+Below F, the adapters do not resolve credentials or call timing Jev.
+From F to C, Jev decides with the done and shape questions.
+At C, the policy requests compaction without a timing Jev call.
+The hint and auto modes dispatch one compaction after a positive decision.
+The hint mode also sends a notification.
+Pi stores sanitized technical gate and decision custom entries.
+Claude sends sanitized decision records through $.ui.log.
+Claude has no durable store equivalent to Pi custom entries.
+Claude retains these records according to the host debug log retention.
+The Claude plugin version is 0.3.1.
+No dependency was added.
+
+REVIEW
+======
+Fresh reviewer verdict: APPROVE
+Findings: critical 0, high 0, medium 0
+Known low finding: the main README retains an old description of minimumContextRatio.
+Disposition: non-blocking and unchanged in this unit.
+
+LOCAL VALIDATION ON CANDIDATE HEAD
+==================================
+[PASS] npm test --workspace @a4s/pi-context-expert: 199 tests
+[PASS] npm test --workspace @a4s/context-expert: 36 tests
+[PASS] Pi offline E2E: 9 tests
+[PASS] Claude dispatcher offline E2E: 4 tests
+[PASS] npm run typecheck --workspace @a4s/pi-context-expert
+[PASS] npm run typecheck --workspace @a4s/context-expert
+[PASS] npm run check-core --workspace @a4s/context-expert
+[PASS] Claude bundle parity test
+[PASS] git diff --check cb37a7f4f74e7577672448b6d85aace881e951dc..4adf8a04b2943311b01dd4e9f8f02a7c38b2d354
+[PASS] Pi headed real: one compaction, fromHook=true, fastJev.version=1, basis=ceiling, sanitized logging
+The final gate did not repeat the paid headed test.
+
+REMOTE CHECKS
+=============
+[PASS] test (ubuntu-latest), required check
+[PASS] CodeQL
+[PASS] Probar runtime
+[PASS] Clasificar cambios
+[PASS] Validar documentación
+[PASS] Analyze (actions)
+[PASS] Analyze (javascript-typescript)
+[PASS] Analyze (python)
+All checks belonged to candidate head 4adf8a04b2943311b01dd4e9f8f02a7c38b2d354.
+
+MERGE AND INTEGRATION
+=====================
+[PASS] PR #69 reports head 4adf8a04b2943311b01dd4e9f8f02a7c38b2d354 and base main.
+[PASS] PR #69 reports merge OID 1c448b5954d78b57c9b968781e38550748ba9e37.
+[PASS] The squash merge tree and candidate tree are both 50ebc6f38dc9e9c46eaa8e76d5a1814896a297b6.
+[PASS] The stable checkout ran git fetch, git pull --ff-only, and a second git fetch after merge.
+[PASS] /Users/Shared/harness/a4s-main is clean.
+[PASS] main equals origin/main and the remote main ref at 1c448b5954d78b57c9b968781e38550748ba9e37.
+[PASS] The candidate is integrated.
+
+PRESERVATION
+============
+Cleanup authorization: none.
+Cleanup performed: none.
+[PASS] Worktree /Users/Shared/harness/a4s-context-expert-policy remains present and clean.
+[PASS] Local branch fix/context-expert-auto-compaction-policy remains at 4adf8a04b2943311b01dd4e9f8f02a7c38b2d354.
+[PASS] Remote branch origin/fix/context-expert-auto-compaction-policy was recreated under explicit operator authorization.
+[PASS] The remote branch points to 4adf8a04b2943311b01dd4e9f8f02a7c38b2d354.
+No worktree or branch was removed during the authorized continuation.
+
+FINAL GATE
+==========
+Result: PASS
+Receipt path: /Users/Shared/harness/a4s/.workspace/receipts/merge-pr-69-context-expert-auto-compaction-policy-receipt.txt

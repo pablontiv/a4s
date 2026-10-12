@@ -1,0 +1,4 @@
+b61b91cf7972f7262ee01122e9e16c20856a17b5c668105f2c5b943d69068262  /Users/Shared/harness/a4s/.workspace/receipts/e2e-f687b307-20261007T163638Z-aad133ff/compliance.jsonl
+ce6d9b96891c9067d8454d22c7e9cc2ef121e5ac764e8d14f73bd28f3767b56c  /Users/Shared/harness/a4s/.workspace/receipts/e2e-f687b307-20261007T163638Z-aad133ff/compliance.jsonl.traces/0ef2cdce-994a-40b5-b8c8-24eac9496c8a.json
+b0cd8603670486f575eac2478e89f29931c129d8bfadc5407823a5b021eff5cb  /Users/Shared/harness/a4s/.workspace/receipts/e2e-f687b307-20261007T163638Z-aad133ff/external-inventory/4b8ebec1432b210369d49a06f03b46fdc3123bc835669b4341f865314685037a.host.json
+3d3d7a93350d74b4613ed323a32b5f969dcfdeb1a8c2983f00019691f9bf688b  /Users/Shared/harness/a4s/.workspace/receipts/e2e-f687b307-20261007T163638Z-aad133ff/external-inventory/4b8ebec1432b210369d49a06f03b46fdc3123bc835669b4341f865314685037a.jsonl

@@ -1,0 +1,12 @@
+candidate=4f1335cf7ca34d5cd6bdd8dc4a0be537305fa153
+cwd=/Users/Shared/harness/a4s-orchestrator-conformance-poc
+isolation_root=/private/tmp/a4s-canary-4f1335cf.4iorOA
+artifact_dir=/Users/Shared/harness/a4s/.workspace/receipts/e2e-4f1335cf-20261007T193908Z
+opt_in=A4S_RUN_AGENT_E2E=1
+model=openai-codex/gpt-5.6-sol
+python=Python 3.11.15
+tarball_sha256=84e0596b6baf2d304349dc0702d0c80391f5bca54f44d9cfb0cadbe83dc69e36
+tarball_size=117125
+key_id=e2e-a2b10e866f463589
+attempt_limit=1
+external_collector_started=false

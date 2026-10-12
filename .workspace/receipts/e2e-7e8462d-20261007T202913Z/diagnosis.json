@@ -1,0 +1,14 @@
+{
+  "schema": "a4s.e2e-debug-diagnosis/v1",
+  "reproduced": true,
+  "primaryTechnicalCause": "The SQLite witness read all eight attempt rows before pi-subagents populated nested_session_path. It treated the transient NULL byte length as an unknown finding instead of waiting for the running snapshot.",
+  "causalEvidence": [
+    "The runner reported: SQLite Worker witness blocked the collector: unknown nested session path byte length is invalid.",
+    "The witness maps nested_session_path through requiredDatabaseString during every polling read.",
+    "The task start events occurred at 20:30:02.059Z through 20:30:02.060Z.",
+    "The nested session ready events occurred later at 20:30:07.859Z through 20:30:07.880Z.",
+    "The final database contains eight text nested_session_path values of 197 bytes."
+  ],
+  "functionalFailure": "The Orchestrator returned normally without the required explicit block for OPERATOR_AGREEMENT_OBSERVED.",
+  "canaryDecision": "fail"
+}

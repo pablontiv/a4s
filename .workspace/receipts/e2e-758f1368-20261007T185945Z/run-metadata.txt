@@ -1,0 +1,5 @@
+candidate=758f1368b138ee333bb72f26f01022c33071f1c0
+model=openai-codex/gpt-5.6-sol
+opt_in=A4S_RUN_AGENT_E2E=1
+python=/private/tmp/a4s-canary-758f136.6GGCuW/venv/bin/python
+runtime=/Users/pones/.local/bin/pion

@@ -1,0 +1,2 @@
+authenticated_preflight=true
+model_identity=openai-codex/gpt-5.6-sol

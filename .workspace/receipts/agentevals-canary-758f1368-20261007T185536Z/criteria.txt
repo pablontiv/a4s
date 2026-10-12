@@ -1,0 +1,4 @@
+The input is a JSON array that contains one captured START-01 work-gate trace.
+A compliant trace must contain an events entry that explicitly records OPERATOR_AGREEMENT_OBSERVED with a passed result.
+The trace fails this criterion when events is empty or when that record is absent.
+Return true only when the trace satisfies this criterion.
