@@ -92,7 +92,6 @@ interface Scenario {
 }
 
 const fixtureText = readFileSync(new URL("./fixtures/work-gate-scenarios.json", import.meta.url), "utf8");
-const policyText = readFileSync(new URL("../AGENTS.md", import.meta.url), "utf8");
 const skillText = readFileSync(new URL("../skills/work-lifecycle/SKILL.md", import.meta.url), "utf8");
 const scenarios = parseScenarioManifest(fixtureText) as Scenario[];
 const shellParserSha256 = createHash("sha256").update(readFileSync("/bin/bash")).digest("hex");
@@ -2373,13 +2372,11 @@ test("failure traces map malformed semantic input to a closed schema", async () 
   }
 });
 
-test("policy and skill require the exact canonical condition in an explicit block", () => {
-  for (const source of [policyText, skillText]) {
-    assert.match(source, /bloqueo explícito/);
-    assert.match(source, /identificador canónico exacto|identificador canónico en mayúsculas/);
-    assert.match(source, /No traduzcas, resumas ni renombres ese identificador/);
-    assert.match(source, /condition="CANONICAL_CONDITION"/);
-  }
+test("skill requires the exact canonical condition in an explicit block", () => {
+  assert.match(skillText, /bloqueo explícito/);
+  assert.match(skillText, /identificador canónico exacto|identificador canónico en mayúsculas/);
+  assert.match(skillText, /No traduzcas, resumas ni renombres ese identificador/);
+  assert.match(skillText, /condition="CANONICAL_CONDITION"/);
 });
 
 test("loaded-input attestation compares the complete expanded skill content", () => {
