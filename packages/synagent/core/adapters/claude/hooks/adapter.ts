@@ -2,10 +2,13 @@
 // Regenerar: node adapters/claude/scripts/sync-protocol.mjs (desde packages/synagent/core).
 // El plugin se instala copiándose solo; por eso lleva su propia copia del contrato.
 
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+
 // Contrato canónico de synagent, direccionamiento v1 y CORE host-neutral de
 // adaptadores (ADR 0069, supera a 0068).
 //
-// Fuente ÚNICA del contrato. Autocontenido (no importa nada): el plugin de
+// Fuente ÚNICA del contrato. Solo importa built-ins de Node: el plugin de
 // Claude lleva una COPIA GENERADA (adapters/claude/hooks/adapter.ts) anclada por
 // un test de paridad, porque el marketplace lo instala copiándose solo.
 //
@@ -182,21 +185,69 @@ export function repoNameFromOrigin(origin: string): string | null {
   return name && isToken(name) ? name : null
 }
 
-// Proyecto: setting del host > nombre canónico del repo (origin). FALLA explícito
-// si no hay ninguno (sin env, sin basename de cwd, sin saneado lossy).
-export function resolveProject(options: { setting?: string; origin?: string }): string {
+// Identidad compartida opcional, leída solo desde el cwd exacto. La ausencia
+// del archivo no es error; cualquier archivo presente debe cumplir el contrato
+// estricto `{ "workspace": "<token-v1>" }` sin campos adicionales.
+export function readWorkspaceProject(cwd: string): string | undefined {
+  const configPath = join(cwd, '.workspace', 'config', 'synagent.json')
+  let contents: string
+  try {
+    contents = readFileSync(configPath, 'utf8')
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
+    throw error
+  }
+
+  let config: unknown
+  try {
+    config = JSON.parse(contents)
+  } catch {
+    throw new Error(`configuración de workspace no es JSON válido: ${configPath}`)
+  }
+  if (!config || typeof config !== 'object' || Array.isArray(config)) {
+    throw new Error(`configuración de workspace debe tener exactamente { "workspace": "<token-v1>" }: ${configPath}`)
+  }
+  const keys = Object.keys(config)
+  if (keys.length !== 1 || keys[0] !== 'workspace') {
+    throw new Error(`configuración de workspace debe tener exactamente { "workspace": "<token-v1>" }: ${configPath}`)
+  }
+  const workspace = (config as Record<string, unknown>).workspace
+  if (typeof workspace !== 'string' || !isToken(workspace)) {
+    throw new Error(`workspace no es un token válido: ${String(workspace)}`)
+  }
+  return workspace
+}
+
+// Proyecto: setting del host > workspace exacto > nombre canónico del repo
+// (origin). FALLA explícito si no hay ninguno (sin env, basename ni saneado).
+export function resolveProjectWithSource(options: {
+  setting?: string
+  workspace?: string
+  origin?: string
+}): { project: string; source: 'setting' | 'workspace' | 'origin' } {
   const setting = options.setting?.trim()
   if (setting) {
     if (!isToken(setting)) throw new Error(`proyecto (setting) no es un token válido: ${setting}`)
-    return setting
+    return { project: setting, source: 'setting' }
+  }
+  if (options.workspace !== undefined) {
+    if (typeof options.workspace !== 'string' || !isToken(options.workspace)) {
+      throw new Error(`workspace no es un token válido: ${String(options.workspace)}`)
+    }
+    return { project: options.workspace, source: 'workspace' }
   }
   const origin = options.origin?.trim()
   if (origin) {
     const name = repoNameFromOrigin(origin)
     if (!name) throw new Error(`no se pudo derivar un proyecto-token del remoto origin: ${origin}`)
-    return name
+    return { project: name, source: 'origin' }
   }
-  throw new Error('no se pudo resolver <proyecto>: define un setting de proyecto o un remoto origin del repo')
+  throw new Error('no se pudo resolver <proyecto>: define un setting, workspace o remoto origin del repo')
+}
+
+// API histórica para callers que solo necesitan el proyecto como string.
+export function resolveProject(options: { setting?: string; workspace?: string; origin?: string }): string {
+  return resolveProjectWithSource(options).project
 }
 
 // Instancia: derivada del id de sesión NATIVO del host (único por sesión). Un
