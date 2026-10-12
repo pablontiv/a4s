@@ -1,7 +1,7 @@
 import net from 'node:net'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
@@ -654,6 +654,122 @@ test('Pi adapter uses session cwd origin and native mixed-case identity, ignores
   assert.ok(harness.notifications.some(({ message, type }) => type === 'error' && message.includes('Unknown Synagent setting: instance')))
 })
 
+test('Pi adapter activates from exact-cwd workspace without Git', async t => {
+  const { broker, server, url } = await startBroker()
+  const cwd = mkdtempSync(join(tmpdir(), 'synagent-pi-workspace-'))
+  mkdirSync(join(cwd, '.workspace', 'config'), { recursive: true })
+  writeFileSync(
+    join(cwd, '.workspace', 'config', 'synagent.json'),
+    `${JSON.stringify({ workspace: 'Workspace.Name' })}\n`,
+  )
+  const harness = createHarness({
+    'a4s.synagent.broker-url': url,
+  }, [], 'Workspace.Session', undefined, cwd)
+  t.after(async () => {
+    await harness.shutdown()
+    await closeServer(server)
+    await closeBroker(broker)
+    rmSync(cwd, { recursive: true, force: true })
+  })
+
+  await harness.start()
+  for (const topic of [
+    'synagent/v1/Workspace.Name/Workspace.Session',
+    'synagent/v1/Workspace.Name/all',
+    GLOBAL_TOPIC,
+  ]) {
+    await waitFor(() => harness.notifications.some(({ message }) =>
+      message.includes('subscribed to') && message.includes(topic),
+    ))
+  }
+  assert.ok(harness.notifications.some(({ message }) =>
+    message.includes('Synagent identity Workspace.Name/Workspace.Session')
+    && message.includes('source=workspace'),
+  ))
+
+  await harness.command('synagent', 'status')
+  assert.ok(harness.notifications.some(({ message }) =>
+    message.includes('address=Workspace.Name/Workspace.Session')
+    && message.includes('source=workspace'),
+  ))
+
+  harness.queueSelections('Cancel')
+  await harness.command('synagent-settings', '')
+  assert.ok(harness.selectionOptions.some(options =>
+    options.includes('Project: Workspace.Name (source=workspace)'),
+  ))
+})
+
+test('Pi adapter explicit project wins over an invalid workspace', async t => {
+  const { broker, server, url } = await startBroker()
+  const cwd = mkdtempSync(join(tmpdir(), 'synagent-pi-explicit-workspace-'))
+  mkdirSync(join(cwd, '.workspace', 'config'), { recursive: true })
+  writeFileSync(join(cwd, '.workspace', 'config', 'synagent.json'), '{')
+  execFileSync('git', ['init', '-q'], { cwd })
+  execFileSync('git', ['remote', 'add', 'origin', 'git@github.com:Example/Git.Project.git'], { cwd })
+  const harness = createHarness({
+    'a4s.synagent.broker-url': url,
+    'a4s.synagent.project': 'Setting.Project',
+  }, [], 'Setting.Session', undefined, cwd)
+  t.after(async () => {
+    await harness.shutdown()
+    await closeServer(server)
+    await closeBroker(broker)
+    rmSync(cwd, { recursive: true, force: true })
+  })
+
+  await harness.start()
+  await waitFor(() => harness.notifications.some(({ message }) =>
+    message.includes('subscribed to') && message.includes('synagent/v1/Setting.Project/Setting.Session'),
+  ))
+  assert.ok(harness.notifications.some(({ message }) =>
+    message.includes('Synagent identity Setting.Project/Setting.Session')
+    && message.includes('source=setting'),
+  ))
+  assert.ok(!harness.notifications.some(({ message }) =>
+    message.includes('subscribed to')
+    && (message.includes('synagent/v1/Git.Project/') || message.includes('synagent/v1/Workspace.Name/')),
+  ))
+
+  await harness.command('synagent', 'status')
+  assert.ok(harness.notifications.some(({ message }) =>
+    message.includes('address=Setting.Project/Setting.Session')
+    && message.includes('source=setting'),
+  ))
+})
+
+test('Pi adapter rejects invalid workspace instead of falling back to Git', async t => {
+  const { broker, server, url } = await startBroker()
+  const cwd = mkdtempSync(join(tmpdir(), 'synagent-pi-invalid-workspace-'))
+  mkdirSync(join(cwd, '.workspace', 'config'), { recursive: true })
+  writeFileSync(join(cwd, '.workspace', 'config', 'synagent.json'), JSON.stringify({ workspace: 'invalid workspace' }))
+  execFileSync('git', ['init', '-q'], { cwd })
+  execFileSync('git', ['remote', 'add', 'origin', 'git@github.com:Example/Git.Fallback.git'], { cwd })
+  const harness = createHarness({
+    'a4s.synagent.broker-url': url,
+  }, [], 'Invalid.Workspace.Session', undefined, cwd)
+  t.after(async () => {
+    await harness.shutdown()
+    await closeServer(server)
+    await closeBroker(broker)
+    rmSync(cwd, { recursive: true, force: true })
+  })
+
+  await harness.start()
+  await waitFor(() => harness.notifications.some(({ message, type }) =>
+    type === 'warning' && message.includes('identity unresolved') && message.includes('inactive'),
+  ))
+  assert.ok(!harness.notifications.some(({ message }) =>
+    message.includes('subscribed to') && message.includes('synagent/v1/'),
+  ))
+  assert.ok(!harness.notifications.some(({ message }) => message.includes('Git.Fallback')))
+
+  await harness.command('synagent', 'status')
+  assert.ok(harness.notifications.some(({ message }) =>
+    message.includes('inactive=true') && message.includes('.workspace/config/synagent.json'),
+  ))
+})
+
 test('Pi adapter configured project wins over a conflicting session cwd origin', async t => {
   const { broker, server, url } = await startBroker()
   const publisher = await connectClient(url, 'pi-adapter-configured-project-publisher')
@@ -1044,6 +1160,9 @@ test('Pi adapter registers /synagent-settings without registerSetting and persis
   harness.queueSelections('Global broadcast: true', 'false', 'Default peer: claude', 'Cancel')
   harness.queueInputs('a4s/New.Peer')
   await harness.command('synagent-settings', '')
+  assert.ok(harness.selectionOptions.some(options =>
+    options.includes('Project: a4s (source=setting)'),
+  ))
   await waitFor(() => harness.notifications.filter(({ message }) => message.includes('Synagent identity')).length > initialStarts)
   const afterGlobalEdit = harness.notifications.filter(({ message }) => message.includes('Synagent identity')).length
   assert.equal(afterGlobalEdit, initialStarts + 1)
@@ -1054,7 +1173,7 @@ test('Pi adapter registers /synagent-settings without registerSetting and persis
     'default-peer': 'a4s/New.Peer',
   })
 
-  harness.queueSelections('Project: a4s', 'Enter token', 'Cancel')
+  harness.queueSelections('Project: a4s (source=setting)', 'Enter token', 'Cancel')
   harness.queueInputs('Native.Project')
   await harness.command('synagent-settings', '')
   assert.deepEqual(JSON.parse(readFileSync(harness.projectSettingsPath, 'utf8')), {
@@ -1150,6 +1269,7 @@ function createHarness(
   ]))
   writeFileSync(globalSettingsPath, `${JSON.stringify(initialSettings, null, 2)}\n`, { mode: 0o600 })
   const selections: string[] = []
+  const selectionOptions: string[][] = []
   const inputs: Array<string | undefined> = []
   const confirmations: boolean[] = []
   let idle = true
@@ -1166,7 +1286,10 @@ function createHarness(
       confirm: async () => confirmations.shift() ?? false,
       input: async () => inputs.shift(),
       notify: (message, type) => notifications.push({ message, type }),
-      select: async () => selections.shift(),
+      select: async (_title, options) => {
+        selectionOptions.push([...options])
+        return selections.shift()
+      },
     },
   })
   const api = {
@@ -1215,6 +1338,7 @@ function createHarness(
     projectSettingsPath: join(effectiveCwd, '.pi', 'synagent.json'),
     settingKeys: ([] as string[])[Symbol.iterator](),
     toolSchemas: { get: (name: string) => (tools.get(name) as any)?.parameters },
+    selectionOptions,
     queueSelections(...values: string[]) { selections.push(...values) },
     queueInputs(...values: Array<string | undefined>) { inputs.push(...values) },
     queueConfirmations(...values: boolean[]) { confirmations.push(...values) },

@@ -38,8 +38,9 @@ import {
   MESSAGE_KINDS,
   newId,
   parseCanonical,
+  readWorkspaceProject,
   renderForAgent,
-  resolveProject,
+  resolveProjectWithSource,
   serialize,
   subscriptions,
   type CanonicalMessage,
@@ -70,6 +71,7 @@ type ActiveDelivery = {
   token: number
 }
 type ClientRole = 'durable' | 'transient'
+type ProjectSource = ReturnType<typeof resolveProjectWithSource>['source']
 type SendResult = { ok: true; message: string } | { ok: false; message: string }
 
 export type SynagentPiOptions = {
@@ -94,6 +96,7 @@ function synagentPi(
   let lastDurableTopics: string[] = []
   let persistedDurableTopics: string | undefined
   let identity: Identity | undefined
+  let identitySource: ProjectSource | undefined
   let activeSessionId: string | undefined
   let context: ExtensionContext | undefined
   let lifecycle = Promise.resolve()
@@ -166,8 +169,9 @@ function synagentPi(
         let state = 'disabled'
         if (settings.enabled) state = identity ? (durable?.connected ? 'connected' : 'connecting') : 'inactive'
         const identityStatus = identity
-          ? `address=${directAddress(identity)}`
-          : 'address=unresolved inactive=true; remediate with /synagent set project <project> or configure remote.origin.url'
+          ? `address=${directAddress(identity)} source=${identitySource}`
+          : 'address=unresolved inactive=true; remediate with /synagent set project <project>, '
+            + '.workspace/config/synagent.json, or configure remote.origin.url'
         ctx.ui.notify(
           `Synagent ${state}; ${identityStatus} global=${settings.global} `
           + `peer=${settings['default-peer']} broker=${settings['broker-url']}`,
@@ -357,7 +361,8 @@ function synagentPi(
     if (!identity) {
       return reject(
         'IDENTITY_UNRESOLVED',
-        'Synagent cannot send: identity unresolved; configure the project setting or remote origin',
+        'Synagent cannot send: identity unresolved; configure the project setting, '
+        + '.workspace/config/synagent.json, or remote origin',
         'identity.resolve',
       )
     }
@@ -500,12 +505,11 @@ function synagentPi(
   }
 
   function effectiveProjectLabel(ctx: ExtensionContext): string {
-    if (settings.project) return settings.project
-    const origin = readGitRemote(ctx.cwd)
     try {
-      return `${resolveProject({ setting: undefined!, origin: origin! })} (derived)`
+      const resolved = resolveEffectiveProject(ctx)
+      return `${resolved.project} (source=${resolved.source})`
     } catch {
-      return '(unresolved; derived from git)'
+      return '(unresolved; configure setting, workspace, or Git origin)'
     }
   }
 
@@ -558,16 +562,22 @@ function synagentPi(
     // Sin identidad v1 no hay ningún topic seguro al que suscribirse.
     let plan: SubscriptionPlan
     try {
-      identity = computeIdentity(ctx)
+      const resolved = computeIdentity(ctx)
+      identity = resolved.identity
+      identitySource = resolved.source
       plan = subscriptions({ identity, global })
       logDiagnostic('synagent.pi.identity.resolved', {
         operation: 'identity.resolve',
         generation: connectionGeneration,
         queueDepth: queuedDeliveries.length,
       })
-      ctx.ui.notify(`Synagent identity ${directAddress(identity)} global=${global}`, 'info')
+      ctx.ui.notify(
+        `Synagent identity ${directAddress(identity)} source=${identitySource} global=${global}`,
+        'info',
+      )
     } catch (error) {
       identity = undefined
+      identitySource = undefined
       plan = { durable: [], transient: [] }
       logDiagnostic('synagent.pi.identity.failed', {
         operation: 'identity.resolve',
@@ -577,7 +587,8 @@ function synagentPi(
         error: classifyDiagnosticError(error, 'IDENTITY_UNRESOLVED', 'identity.resolve', false, 'pi.identity'),
       })
       ctx.ui.notify(
-        `Synagent identity unresolved; adapter inactive until project is configured: ${formatError(error)}`,
+        'Synagent identity unresolved; adapter inactive until project is configured with '
+        + `/synagent set project <project>, .workspace/config/synagent.json, or remote.origin.url: ${formatError(error)}`,
         'warning',
       )
     }
@@ -991,12 +1002,21 @@ function synagentPi(
     return { messageId }
   }
 
-  function computeIdentity(ctx: ExtensionContext): Identity {
+  function resolveEffectiveProject(ctx: ExtensionContext): ReturnType<typeof resolveProjectWithSource> {
     const setting = emptyToUndefined(settings.project)
-    const origin = setting ? undefined : readGitRemote(ctx.cwd)
+    const workspace = setting === undefined ? readWorkspaceProject(ctx.cwd) : undefined
+    const origin = setting === undefined && workspace === undefined ? readGitRemote(ctx.cwd) : undefined
+    return resolveProjectWithSource({ setting, workspace, origin })
+  }
+
+  function computeIdentity(ctx: ExtensionContext): { identity: Identity; source: ProjectSource } {
+    const resolved = resolveEffectiveProject(ctx)
     return {
-      project: resolveProject({ setting: setting!, origin: origin! }),
-      instance: instanceFromHostSession(ctx.sessionManager.getSessionId()),
+      identity: {
+        project: resolved.project,
+        instance: instanceFromHostSession(ctx.sessionManager.getSessionId()),
+      },
+      source: resolved.source,
     }
   }
 
@@ -1012,6 +1032,7 @@ function synagentPi(
     lastDurableTopics = []
     persistedDurableTopics = undefined
     identity = undefined
+    identitySource = undefined
     const branch = ctx.sessionManager.getBranch()
     const ids = branch
       .map(entry => {
