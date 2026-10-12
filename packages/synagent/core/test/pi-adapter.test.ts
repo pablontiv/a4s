@@ -738,11 +738,12 @@ test('Pi adapter explicit project wins over an invalid workspace', async t => {
   ))
 })
 
-test('Pi adapter rejects invalid workspace instead of falling back to Git', async t => {
+test('Pi adapter rejects invalid workspace without disclosing it or falling back to Git', async t => {
   const { broker, server, url } = await startBroker()
   const cwd = mkdtempSync(join(tmpdir(), 'synagent-pi-invalid-workspace-'))
+  const secret = 'DO_NOT_LEAK_PI_WORKSPACE_SECRET!'
   mkdirSync(join(cwd, '.workspace', 'config'), { recursive: true })
-  writeFileSync(join(cwd, '.workspace', 'config', 'synagent.json'), JSON.stringify({ workspace: 'invalid workspace' }))
+  writeFileSync(join(cwd, '.workspace', 'config', 'synagent.json'), JSON.stringify({ workspace: secret }))
   execFileSync('git', ['init', '-q'], { cwd })
   execFileSync('git', ['remote', 'add', 'origin', 'git@github.com:Example/Git.Fallback.git'], { cwd })
   const harness = createHarness({
@@ -763,11 +764,13 @@ test('Pi adapter rejects invalid workspace instead of falling back to Git', asyn
     message.includes('subscribed to') && message.includes('synagent/v1/'),
   ))
   assert.ok(!harness.notifications.some(({ message }) => message.includes('Git.Fallback')))
+  assert.ok(!harness.notifications.some(({ message }) => message.includes(secret)), 'no expone el workspace inválido en avisos')
 
   await harness.command('synagent', 'status')
   assert.ok(harness.notifications.some(({ message }) =>
     message.includes('inactive=true') && message.includes('.workspace/config/synagent.json'),
   ))
+  assert.ok(!harness.notifications.some(({ message }) => message.includes(secret)), 'no expone el workspace inválido en estado')
 })
 
 test('Pi adapter configured project wins over a conflicting session cwd origin', async t => {

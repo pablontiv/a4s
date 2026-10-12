@@ -103,7 +103,7 @@ async function resolveIdentity(
 ): Promise<{ identity: Identity; source: ReturnType<typeof resolveProjectWithSource>['source'] }> {
   const setting = optString(options, 'project')
   let resolved: ReturnType<typeof resolveProjectWithSource>
-  if (setting !== undefined) {
+  if (setting?.trim()) {
     resolved = resolveProjectWithSource({ setting })
   } else {
     const workspace = readWorkspaceProject(await $.session.cwd())

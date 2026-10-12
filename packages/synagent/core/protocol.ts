@@ -209,7 +209,7 @@ export function readWorkspaceProject(cwd: string): string | undefined {
   }
   const workspace = (config as Record<string, unknown>).workspace
   if (typeof workspace !== 'string' || !isToken(workspace)) {
-    throw new Error(`workspace no es un token válido: ${String(workspace)}`)
+    throw new Error(`workspace no es un token válido en configuración: ${configPath}`)
   }
   return workspace
 }
@@ -228,7 +228,7 @@ export function resolveProjectWithSource(options: {
   }
   if (options.workspace !== undefined) {
     if (typeof options.workspace !== 'string' || !isToken(options.workspace)) {
-      throw new Error(`workspace no es un token válido: ${String(options.workspace)}`)
+      throw new Error('workspace no es un token válido')
     }
     return { project: options.workspace, source: 'workspace' }
   }

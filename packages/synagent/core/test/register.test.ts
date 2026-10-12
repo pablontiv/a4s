@@ -140,8 +140,55 @@ test('register project setting wins over an invalid workspace', async () => {
   }
 })
 
-test('register rejects invalid workspace instead of falling back to origin', async () => {
-  const workspace = makeWorkspaceConfig('{"workspace":"invalid workspace"}\n')
+test('register whitespace-only project falls through to exact-cwd workspace', async () => {
+  const workspace = makeWorkspaceConfig('{"workspace":"Whitespace.Workspace"}\n')
+  try {
+    const eng = makeEngine()
+    let repoCalls = 0
+    eng.$.session.cwd = async () => workspace.cwd
+    eng.$.session.repo = async () => {
+      repoCalls += 1
+      return undefined as never
+    }
+    const freshRegister = await loadFreshRegister()
+    const { get } = collectHooks({ project: ' \t ' }, freshRegister)
+
+    await get('session.start')(eng.$, {}, (event: unknown) => event)
+
+    assert.ok(eng.spawnArgs[0]?.includes('synagent/v1/Whitespace.Workspace/sess-test-1'), 'usa el workspace para project vacío tras trim')
+    assert.equal(repoCalls, 0, 'no consulta Git cuando el workspace resuelve el proyecto')
+    assert.ok(eng.statuses.some(status => status.includes('source=workspace')), 'informa workspace como fuente efectiva')
+  } finally {
+    workspace.cleanup()
+  }
+})
+
+test('register whitespace-only project falls through to Git origin without workspace', async () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'synagent-claude-whitespace-origin-'))
+  try {
+    const eng = makeEngine()
+    let repoCalls = 0
+    eng.$.session.cwd = async () => cwd
+    eng.$.session.repo = async () => {
+      repoCalls += 1
+      return { remote: 'https://github.com/acme/Whitespace.Origin.git', root: cwd, internal: true, name: 'acme/Whitespace.Origin' }
+    }
+    const freshRegister = await loadFreshRegister()
+    const { get } = collectHooks({ project: '   ' }, freshRegister)
+
+    await get('session.start')(eng.$, {}, (event: unknown) => event)
+
+    assert.ok(eng.spawnArgs[0]?.includes('synagent/v1/Whitespace.Origin/sess-test-1'), 'usa origin cuando no existe workspace')
+    assert.equal(repoCalls, 1, 'consulta Git tras project vacío y workspace ausente')
+    assert.ok(eng.statuses.some(status => status.includes('source=origin')), 'informa origin como fuente efectiva')
+  } finally {
+    rmSync(cwd, { recursive: true, force: true })
+  }
+})
+
+test('register rejects invalid workspace without disclosing it or falling back to origin', async () => {
+  const secret = 'DO_NOT_LEAK_CLAUDE_WORKSPACE_SECRET!'
+  const workspace = makeWorkspaceConfig(`${JSON.stringify({ workspace: secret })}\n`)
   try {
     const eng = makeEngine()
     let repoCalls = 0
@@ -158,6 +205,7 @@ test('register rejects invalid workspace instead of falling back to origin', asy
     assert.equal(eng.spawnArgs.length, 0, 'un workspace inválido deja el adaptador inactivo')
     assert.equal(repoCalls, 0, 'no oculta el workspace inválido con un fallback a origin')
     assert.ok(eng.statuses.some(status => status.includes('workspace no es un token válido') && status.includes('adaptador inactivo')))
+    assert.ok(!eng.statuses.some(status => status.includes(secret)), 'no expone el workspace inválido en estado UI')
   } finally {
     workspace.cleanup()
   }

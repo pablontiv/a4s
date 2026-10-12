@@ -38,6 +38,17 @@ import {
 
 const identity = { project: 'a4s', instance: 'sess-01HXYZ' }
 
+function thrownMessage(action: () => unknown): string {
+  let caught: unknown
+  try {
+    action()
+  } catch (error) {
+    caught = error
+  }
+  assert.ok(caught instanceof Error, 'expected action to throw')
+  return caught.message
+}
+
 function msg(overrides: Partial<CanonicalMessage> & { to: string }): CanonicalMessage {
   return createCanonical(overrides.body ?? 'x', {
     id: overrides.id ?? 'm1',
@@ -163,6 +174,26 @@ test('readWorkspaceProject rejects malformed, ambiguous, and invalid workspace c
       writeFileSync(join(cwd, '.workspace', 'config', 'synagent.json'), contents)
       assert.throws(() => readWorkspaceProject(cwd))
     }
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('workspace validation errors never disclose the invalid value', () => {
+  const root = mkdtempSync(join(tmpdir(), 'synagent-workspace-secret-'))
+  const secret = 'DO_NOT_LEAK_WORKSPACE_SECRET!'
+  const configPath = join(root, '.workspace', 'config', 'synagent.json')
+  try {
+    mkdirSync(join(root, '.workspace', 'config'), { recursive: true })
+    writeFileSync(configPath, JSON.stringify({ workspace: secret }))
+
+    const readerMessage = thrownMessage(() => readWorkspaceProject(root))
+    assert.ok(readerMessage.includes(configPath), 'exact-cwd error identifies the config source')
+    assert.ok(!readerMessage.includes(secret), 'exact-cwd error omits the invalid workspace value')
+
+    const resolverMessage = thrownMessage(() => resolveProjectWithSource({ workspace: secret }))
+    assert.ok(resolverMessage.includes('workspace no es un token válido'))
+    assert.ok(!resolverMessage.includes(secret), 'source-aware resolver error omits the invalid workspace value')
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
