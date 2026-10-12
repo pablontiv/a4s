@@ -2,7 +2,7 @@
 
 This extension controls tool rows in Pi and Pion. It supports `full`, `compact`, and `hidden` modes.
 
-A Pion host with the final `renderRow()` contract applies all three modes. The `full` mode uses the native tool row. The `compact` mode uses one private line when the row is collapsed and does not report an error. The `hidden` mode removes that collapsed row. Expanded rows and error rows use the native tool row. Direct Bash output does not change. HTML export does not use this renderer.
+A Pion host with the final `renderRow()` contract applies all three modes. The `full` mode uses the native tool row. The `compact` mode reuses the native call renderer, replaces line breaks with spaces, and fits the call and status on one styled line. The `hidden` mode removes that collapsed row. Expanded rows and error rows use the native tool row. Direct Bash output does not change. HTML export does not use this renderer.
 
 Pi 1.0.3 and Pion 1.0.4 keep command, shortcut, and storage support. These hosts use the native tool row. The extension reports this limitation after each successful change.
 

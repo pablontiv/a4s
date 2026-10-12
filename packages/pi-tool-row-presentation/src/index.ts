@@ -4,9 +4,12 @@ import type {
 	ExtensionCommandContext,
 	ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { sliceByColumn } from "@earendil-works/pi-tui";
+import {
+	type Component,
+	truncateToWidth,
+	visibleWidth,
+} from "@earendil-works/pi-tui";
 import type {
-	ExtensionAPI as PionExtensionAPI,
 	ToolRendererRegistration,
 	ToolRendererResolver,
 	ToolRenderers,
@@ -34,10 +37,33 @@ type SettingsContext = Pick<ExtensionCommandContext, "hasUI" | "ui">;
 type ShortcutContext = Pick<ExtensionContext, "ui">;
 
 class CompactToolRow {
-	public constructor(private readonly toolName: string) {}
+	public constructor(
+		private readonly fallbackCall: string,
+		public readonly callComponent: Component | undefined,
+		private readonly status: string,
+		private readonly background: (text: string) => string,
+		private readonly backgroundAnsi: string,
+	) {}
 
 	public render(width: number): string[] {
-		return [sliceByColumn(this.toolName, 0, Math.max(0, width), true)];
+		const renderedCall = this.callComponent?.render(width) ?? [];
+		const call =
+			renderedCall
+				.flatMap((line) => line.split(/\r?\n/))
+				.map((line) => line.trim())
+				.filter((line) => visibleWidth(line) > 0)
+				.join(" ") || this.fallbackCall;
+		const availableWidth = Math.max(0, width - visibleWidth(this.status) - 2);
+		const header = truncateToWidth(call, availableWidth, "...").replaceAll(
+			"\x1b[0m",
+			`\x1b[0m${this.backgroundAnsi}`,
+		);
+		const line = visibleWidth(header) > 0 ? ` ${header} ${this.status}` : this.status;
+		const clippedLine = truncateToWidth(line, Math.max(0, width), "").replaceAll(
+			"\x1b[0m",
+			`\x1b[0m${this.backgroundAnsi}`,
+		);
+		return [this.background(clippedLine + " ".repeat(Math.max(0, width - visibleWidth(clippedLine))))];
 	}
 
 	public invalidate(): void {}
@@ -192,12 +218,10 @@ function registerToolRenderer(
 	pi: ExtensionAPI,
 	resolver: ToolRendererResolver,
 ): ToolRendererRegistration | undefined {
-	const register = (pi as unknown as Partial<Pick<PionExtensionAPI, "registerToolRenderer">>)
-		.registerToolRenderer;
-	if (typeof register !== "function") return undefined;
-	const candidate: unknown = register.call(pi, resolver);
-	if (!isRecord(candidate) || typeof candidate.invalidate !== "function") return undefined;
-	return candidate as unknown as ToolRendererRegistration;
+	const host: unknown = pi;
+	if (!isRecord(host) || typeof host.registerToolRenderer !== "function") return undefined;
+	const candidate: unknown = host.registerToolRenderer(resolver);
+	return isToolRendererRegistration(candidate) ? candidate : undefined;
 }
 
 function toolRowRenderers(
@@ -207,11 +231,41 @@ function toolRowRenderers(
 ): ToolRenderers {
 	return {
 		...inherited,
-		renderRow: (_args, _result, _theme, context) => {
+		renderRow: (args, _result, theme, context) => {
 			if (context.expanded || context.isError) return undefined;
-			return mode === "compact" ? new CompactToolRow(toolName) : new HiddenToolRow();
+			if (mode === "hidden") return new HiddenToolRow();
+
+			let callComponent: Component | undefined;
+			try {
+				callComponent = inherited?.renderCall?.(args, theme, {
+					...context,
+					lastComponent:
+						context.lastComponent instanceof CompactToolRow
+							? context.lastComponent.callComponent
+							: undefined,
+				});
+			} catch {
+				callComponent = undefined;
+			}
+			const serializedArgs = JSON.stringify(args);
+			const fallbackCall = `${theme.fg("toolTitle", theme.bold(toolName))}${serializedArgs ? ` ${serializedArgs}` : ""}`;
+			const backgroundToken = context.isPartial ? "toolPendingBg" : "toolSuccessBg";
+			const status = context.isPartial
+				? theme.fg("muted", "[running]")
+				: theme.fg("success", "[ok]");
+			return new CompactToolRow(
+				fallbackCall,
+				callComponent,
+				status,
+				(text) => theme.bg(backgroundToken, text),
+				theme.getBgAnsi(backgroundToken),
+			);
 		},
 	};
+}
+
+function isToolRendererRegistration(value: unknown): value is ToolRendererRegistration {
+	return isRecord(value) && typeof value.invalidate === "function";
 }
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
