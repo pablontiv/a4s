@@ -1,9 +1,0 @@
-inference_steps,output_chars,retained_chars,mature_chars,write_chars,harness,form,streams,yield_pct
-2877,3961707,23416,8146,486573,claude,form-orch-hybrid,20,0.5910583493428464
-4612,4102008,28839,0,633695,claude,form-solo,174,0.7030459228748457
-354,556297,0,0,3602,codex,form-orch-hybrid,2,0.0
-1108,1053192,0,0,84552,codex,form-solo,42,0.0
-0,0,0,0,0,pi,form-cross-session,0,
-0,0,0,0,0,pi,form-delegator-pure,0,
-29148,27732272,128846,124465,2684700,pi,form-orch-hybrid,112,0.4646067224495707
-4551,4058724,7843,7787,530219,pi,form-solo,85,0.1932380718669217

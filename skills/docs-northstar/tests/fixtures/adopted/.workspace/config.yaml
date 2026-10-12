@@ -1,9 +1,0 @@
----
-workspace:
-  authority:
-    source: >-
-      This file is the only normative source of this fixture's way of working.
-      Records provide evidence and provenance; they do not govern.
-  do_work:
-    knowledge: >-
-      Keep decision records and specifications under .workspace/docs/.

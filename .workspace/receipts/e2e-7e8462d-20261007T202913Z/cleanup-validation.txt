@@ -1,3 +1,0 @@
-isolation_root_removed=true
-live_processes=false
-worktree_registration_removed=true

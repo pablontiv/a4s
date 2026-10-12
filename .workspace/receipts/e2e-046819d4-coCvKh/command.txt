@@ -1,2 +1,0 @@
-cwd=/tmp/a4s-e2e-046819d4.bkNqIx/worktree
-command=A4S_RUN_AGENT_E2E=1 HOME=<isolated-home> PI_CODING_AGENT_DIR=<isolated-agent-dir> A4S_PI_SUBAGENTS_TGZ=<verified-tarball> A4S_PYTHON=<isolated-python> PI_BIN=/Users/pones/.local/bin/pion A4S_RECEIPT_HMAC_KEY_B64=<ephemeral-redacted> A4S_RECEIPT_KEY_ID=e2e-b54dabe393e67923 npm run eval:work-gates -- --tier compliance --runs 1 --concurrency 1 --deadline-ms 300000 --model openai-codex/gpt-5.6-sol --variant candidate --results <artifact-dir>/compliance.jsonl --real-workers

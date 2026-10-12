@@ -1,4 +1,0 @@
-processes_after_cleanup=3
-root_present=0
-worktree_registered=0
-verdict=FAIL

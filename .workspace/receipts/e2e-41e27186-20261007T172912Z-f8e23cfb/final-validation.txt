@@ -1,6 +1,0 @@
-result_reread=PASS
-trace_reread=PASS
-sqlite_evidence=PASS
-secret_redaction=PASS
-cleanup=PASS
-overall_e2e=FAIL
