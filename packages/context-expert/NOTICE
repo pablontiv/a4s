@@ -64,6 +64,6 @@ Commit: 1499833c088753798c5e406856a170b9f5669d28
 Adapted patterns: Pi message conversion, native compaction lifecycle, native
 fallback, compaction boundary retention, token metadata retention, and native
 model-registry transport.
-Integration files: packages/pi-context-expert/src/binding.ts and
-packages/pi-context-expert/src/extension.ts
+Integration files: packages/context-expert/adapters/pi/src/binding.ts and
+packages/context-expert/adapters/pi/src/extension.ts
 No source code was copied from fast-jev-compaction-pi.

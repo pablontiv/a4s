@@ -10,7 +10,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { createCompatiblePiFake } from "./fixtures.ts";
 
-const ROOT = new URL("../../../", import.meta.url);
+const ROOT = new URL("../../../../../", import.meta.url);
 const MINIMUM_PI_VERSION = "1.0.3";
 const MINIMUM_PI_RELEASE = [1, 0, 3] as const;
 
@@ -28,7 +28,7 @@ function supportsPiVersion(version: string): boolean {
 }
 
 test("Context Expert has no duplicate private TypeSafe runtime", () => {
-  const contextManifest = JSON.parse(readFileSync(new URL("packages/pi-context-expert/package.json", ROOT), "utf8")) as {
+  const contextManifest = JSON.parse(readFileSync(new URL("packages/context-expert/package.json", ROOT), "utf8")) as {
     dependencies?: Record<string, string>;
   };
   const lock = JSON.parse(readFileSync(new URL("package-lock.json", ROOT), "utf8")) as {
@@ -42,7 +42,7 @@ test("Context Expert has no duplicate private TypeSafe runtime", () => {
 
 test("development installs the minimum Pi host and approved Pion snapshot", () => {
   const manifest = JSON.parse(
-    readFileSync(new URL("packages/pi-context-expert/package.json", ROOT), "utf8"),
+    readFileSync(new URL("packages/context-expert/package.json", ROOT), "utf8"),
   ) as {
     devDependencies: Record<string, string>;
   };

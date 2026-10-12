@@ -6,7 +6,7 @@
 - Audited commit: `ef216af7cb639947bb4642fdf063117f12a91fc6`
 - Upstream tag: `compact-adviser-v0.1.12`
 - License: MIT
-- License copy: `packages/pi-context-expert/third_party/compact-adviser/LICENSE`
+- License copy: `packages/context-expert/adapters/pi/third_party/compact-adviser/LICENSE`
 
 The repository derives Trigger code from this upstream version.
 
@@ -52,8 +52,8 @@ Adapted integration patterns:
 
 Files that implement these adapted patterns:
 
-- `packages/pi-context-expert/src/binding.ts`
-- `packages/pi-context-expert/src/extension.ts`
+- `packages/context-expert/adapters/pi/src/binding.ts`
+- `packages/context-expert/adapters/pi/src/extension.ts`
 
 ## fast-jev-compaction
 

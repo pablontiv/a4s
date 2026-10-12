@@ -34,7 +34,7 @@ export interface EvidencePipeline {
 }
 
 export interface EvidenceEntryAppender {
-  appendEntry(customType: string, data: unknown): unknown;
+  appendEntry(customType: string, data: unknown): void;
 }
 
 export interface RunEvidenceInput {

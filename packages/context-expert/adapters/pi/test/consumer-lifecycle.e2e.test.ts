@@ -267,7 +267,7 @@ async function runScenario(
       retry: { enabled: false },
       cacheWarming: "off",
     }, { projectTrusted: true }),
-    additionalExtensionPaths: [resolve("src/index.ts")],
+    additionalExtensionPaths: [resolve(import.meta.dirname, "../src/index.ts")],
     extensionFactories: [
       (pi: ExtensionAPI) => {
         pi.on("session_before_compact", () => {

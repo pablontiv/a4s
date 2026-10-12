@@ -20,8 +20,8 @@
     "node": ">=22.19.0"
   },
   "scripts": {
-    "typecheck": "npm run typecheck --workspace @a4s/pi-context-expert && npm run typecheck --workspace @a4s/pi-tool-row-presentation && npm run typecheck --workspace @a4s/synagent && npm run typecheck --workspace @a4s/synagent-bus && npm run typecheck --workspace @a4s/context-expert",
-    "test": "npm test --workspace @a4s/pi-context-expert && npm test --workspace @a4s/pi-tool-row-presentation && npm test --workspace @a4s/synagent && npm test --workspace @a4s/synagent-bus && npm test --workspace @a4s/context-expert",
+    "typecheck": "npm run typecheck --workspace @a4s/context-expert && npm run typecheck --workspace @a4s/pi-tool-row-presentation && npm run typecheck --workspace @a4s/synagent && npm run typecheck --workspace @a4s/synagent-bus",
+    "test": "npm test --workspace @a4s/context-expert && npm test --workspace @a4s/pi-tool-row-presentation && npm test --workspace @a4s/synagent && npm test --workspace @a4s/synagent-bus",
     "bus": "npm run bus --workspace @a4s/synagent-bus --"
   },
   "devDependencies": {

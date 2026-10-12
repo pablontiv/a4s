@@ -216,6 +216,7 @@ export function createCoreAsker(client: JevClient, signal: AbortSignal): JevAske
       const request: JevRequest = { state, model: DEFAULT_JEV_MODEL, questions: nativeQuestions };
       const raw = await client.evaluate(request, { signal });
       const validated = validateJevResponse(raw, nativeQuestions);
+      // SAFETY: validation checks every answer; this cast only widens to the core's legacy optional fields.
       return validated as unknown as JevResponse;
     },
   };
@@ -452,7 +453,12 @@ function isStoredCoreDetails(value: unknown): value is { messages: Message[] } {
   );
 }
 
-function safeInput(value: unknown, depth = 0): Record<string, unknown> {
+type SafeScalar = string | number | boolean | null;
+interface SafeObject { [key: string]: SafeValue }
+interface SafeArray extends Array<SafeValue> {}
+type SafeValue = SafeScalar | SafeObject | SafeArray;
+
+function safeInput(value: unknown, depth = 0): SafeObject {
   if (!isRecord(value) || depth > 12) return {};
   return Object.fromEntries(Object.entries(value).map(([key, item]) => [
     safeLabel(key, "field"),
@@ -464,7 +470,7 @@ function isSecretKey(key: string): boolean {
   return /^(?:api[_ -]?key|access[_ -]?token|auth[_ -]?token|refresh[_ -]?token|secret|client[_ -]?secret|password|passwd|private[_ -]?key)$/i.test(key);
 }
 
-function safeValue(value: unknown, depth: number): unknown {
+function safeValue(value: unknown, depth: number): SafeValue {
   if (typeof value === "string") return redactPrivateData(value).text;
   if (value === null || typeof value === "boolean") return value;
   if (typeof value === "number") return Number.isFinite(value) ? value : String(value);

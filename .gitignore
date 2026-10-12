@@ -66,4 +66,5 @@ packages/synagent/core/adapters/claude/node_modules/
 packages/synagent/core/adapters/claude/.claude-plugin/types/
 packages/synagent/core/adapters/claude/tsconfig.json
 packages/*/adapters/*/tsconfig.json
+!packages/context-expert/adapters/pi/tsconfig.json
 packages/*/adapters/*/.claude-plugin/types/
