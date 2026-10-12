@@ -27,14 +27,14 @@ Pi, Herdr, TypeSafe, Jev, Rootline y Backscroll se integran mediante contratos e
 ## Modelo
 
 ```text
-única autoridad normativa del WoW: .workspace/config.yaml
-derivados no normativos: README + profiles/pablontiv/PROFILE.md
-mecanismos sin reglas propias: skills + methods
+configuración del workspace: .workspace/config.yaml
+documentación: README + profiles/pablontiv/PROFILE.md
+mecanismos: skills + methods
 referencia de procedencia: Engineering Handbook 1.4
 producto: capacidades A4S + integraciones externas
 ```
 
-La configuración, los artefactos portátiles y los paquetes conservan límites explícitos. Los providers externos conservan su propia autoridad; A4S no los reemplaza ni se define por ellos.
+La configuración, los artefactos portátiles y los paquetes conservan límites explícitos. Los providers externos conservan sus propios límites; A4S no los reemplaza ni se define por ellos.
 
 ## Registros y referencias
 
