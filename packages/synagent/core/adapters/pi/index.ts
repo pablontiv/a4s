@@ -1004,9 +1004,13 @@ function synagentPi(
 
   function resolveEffectiveProject(ctx: ExtensionContext): ReturnType<typeof resolveProjectWithSource> {
     const setting = emptyToUndefined(settings.project)
-    const workspace = setting === undefined ? readWorkspaceProject(ctx.cwd) : undefined
-    const origin = setting === undefined && workspace === undefined ? readGitRemote(ctx.cwd) : undefined
-    return resolveProjectWithSource({ setting, workspace, origin })
+    if (setting !== undefined) return resolveProjectWithSource({ setting })
+
+    const workspace = readWorkspaceProject(ctx.cwd)
+    if (workspace !== undefined) return resolveProjectWithSource({ workspace })
+
+    const origin = readGitRemote(ctx.cwd)
+    return resolveProjectWithSource(origin === undefined ? {} : { origin })
   }
 
   function computeIdentity(ctx: ExtensionContext): { identity: Identity; source: ProjectSource } {
