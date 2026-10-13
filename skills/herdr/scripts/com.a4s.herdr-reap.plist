@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  launchd unit for herdr-reap (bead a4s-1to.2).
+
+  Safety-net scheduler ONLY. It runs the reaper in DRY-RUN by default: the
+  ProgramArguments below deliberately do NOT pass --close, so a scheduled run
+  can never close a tab. To authorize real closing, add "--close" as its own
+  <string> in ProgramArguments — that is the explicit, separate authorization
+  step required by the bead's acceptance criteria.
+
+  Install (per-user):
+    cp skills/herdr/scripts/com.a4s.herdr-reap.plist ~/Library/LaunchAgents/
+    # edit the absolute repo path below to match this checkout first
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.a4s.herdr-reap.plist
+    launchctl kickstart -p gui/$(id -u)/com.a4s.herdr-reap   # optional immediate run
+  Uninstall:
+    launchctl bootout gui/$(id -u)/com.a4s.herdr-reap
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.a4s.herdr-reap</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/python3</string>
+    <string>/Users/Shared/harness/a4s/skills/herdr/scripts/herdr-reap</string>
+    <string>--idle-threshold</string>
+    <string>3600</string>
+    <string>--report</string>
+    <string>/tmp/herdr-reap.report</string>
+    <!-- Add <string>--close</string> here to authorize real closing. -->
+  </array>
+
+  <!-- Every 30 minutes. -->
+  <key>StartInterval</key>
+  <integer>1800</integer>
+
+  <key>RunAtLoad</key>
+  <false/>
+
+  <!-- Reaper needs the same PATH as an interactive shell to find herdr/bd. -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>HERDR_ENV</key>
+    <string>1</string>
+  </dict>
+
+  <key>StandardOutPath</key>
+  <string>/tmp/herdr-reap.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/herdr-reap.err</string>
+</dict>
+</plist>

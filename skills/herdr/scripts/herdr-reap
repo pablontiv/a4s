@@ -1,0 +1,417 @@
+#!/usr/bin/env python3
+"""herdr-reap — fail-closed reaper for orphaned Herdr tabs (bead a4s-1to.2).
+
+A safety net for the case where a Project Orchestrator dies before running the
+event-driven teardown (a4s-1to.1). Herdr has no native TTL/reaper; the server is
+a persistent multiplexer, not a loop host. This script is meant to be invoked by
+an OS scheduler (launchd on macOS, cron elsewhere) — NOT a Pi package, NOT an
+agent loop, NOT a subagent.
+
+Design invariants (see skills/herdr/SKILL.md and epic a4s-1to):
+  * Dry-run is the DEFAULT. Real closes require the explicit --close mode.
+  * Fail-closed: any uncertainty KEEPS the tab. Nothing is closed unless every
+    guard is affirmatively satisfied.
+  * If Herdr is unreachable (`herdr` liveness probe fails), the whole run is a
+    no-op — never guess at state we cannot read.
+  * Scope is Herdr tabs only. Worktrees, branches and PRs are sweep's job; this
+    reaper never deletes any of them.
+
+Reap guards (ALL must hold; conjunctive):
+  1. The tab has an agent and agent_status == "done".
+  2. Neither the tab nor its agent is focused.
+  3. The tab is not protected (mission-control / `mc` pane / this reaper's own
+     tab / a workspace's sole tab).
+  4. Idle age (now - mtime of the agent session transcript) exceeds the
+     threshold. Unknown idle age => not reapable.
+  5. Callback harvested: the tab/pane is bound (canonical `bd` note
+     `worker=.. pane=.. tab=..`) to a bead whose status is CLOSED. A binding to
+     an OPEN bead => KEEP (work in flight). No binding at all => ATTENTION
+     (unreconciled orphan, reported, never auto-closed).
+  6. Worktree clean AND merged (or a clean non-worktree checkout). Dirty or
+     unknown => ATTENTION, never closed.
+
+Exit codes: 0 normal (dry-run or closes done), 2 nothing-to-do no-op because the
+Herdr liveness probe failed.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+from dataclasses import dataclass, field
+from typing import Callable, Optional
+
+# ---------------------------------------------------------------------------
+# Pure decision core — no IO, unit-testable. The IO layer below builds `Unit`
+# records and feeds them to classify(); tests build `Unit`s directly.
+# ---------------------------------------------------------------------------
+
+REAP = "REAP"
+KEEP = "KEEP"
+ATTENTION = "ATTENTION"
+
+WORKTREE_CLEAN_MERGED = "clean_merged"
+WORKTREE_DIRTY = "dirty"
+WORKTREE_UNKNOWN = "unknown"
+
+DEFAULT_IDLE_THRESHOLD = 3600  # seconds (1h) idle before a done tab is eligible
+
+
+@dataclass
+class Unit:
+    """One reconcilable Herdr tab, normalized for the decision core."""
+
+    tab_id: str
+    workspace_id: str = ""
+    label: str = ""
+    pane_id: str = ""
+    focused: bool = False
+    agent_present: bool = False
+    agent_status: str = ""
+    idle_age: Optional[float] = None          # seconds; None => unknown
+    cwd: str = ""
+    bead: Optional[dict] = None               # {"id":.., "status":..} or None
+    worktree_state: str = WORKTREE_UNKNOWN     # WORKTREE_* constant
+    protected: bool = False
+    protected_reason: str = ""
+
+
+@dataclass
+class Decision:
+    tab_id: str
+    decision: str
+    reasons: list = field(default_factory=list)
+    bead_id: str = ""
+
+
+def classify(unit: Unit, idle_threshold: float) -> Decision:
+    """Return the fail-closed disposition for one tab. Pure function."""
+    bead_id = (unit.bead or {}).get("id", "")
+
+    # Guard 3 (cheap, absolute): never touch protected tabs.
+    if unit.protected:
+        return Decision(unit.tab_id, KEEP,
+                        [f"protected: {unit.protected_reason or 'protected tab'}"],
+                        bead_id)
+
+    # Guard 2: focused tabs are live user context.
+    if unit.focused:
+        return Decision(unit.tab_id, KEEP, ["focused"], bead_id)
+
+    # Guard 1: only agents that reported done are candidates.
+    if not unit.agent_present:
+        return Decision(unit.tab_id, KEEP, ["no agent bound to tab"], bead_id)
+    if unit.agent_status != "done":
+        return Decision(unit.tab_id, KEEP,
+                        [f"agent_status={unit.agent_status or 'unknown'} (not done)"],
+                        bead_id)
+
+    # Guard 4: idle age must be known and past threshold.
+    if unit.idle_age is None:
+        return Decision(unit.tab_id, KEEP, ["idle age unknown (no session mtime)"], bead_id)
+    if unit.idle_age < idle_threshold:
+        return Decision(unit.tab_id, KEEP,
+                        [f"idle {int(unit.idle_age)}s < threshold {int(idle_threshold)}s"],
+                        bead_id)
+
+    # Guard 5: callback-harvested proof via a CLOSED bound bead.
+    if unit.bead is None:
+        return Decision(unit.tab_id, ATTENTION,
+                        ["done+idle but no bead binding — unreconciled orphan"], bead_id)
+    if unit.bead.get("status") != "closed":
+        return Decision(unit.tab_id, KEEP,
+                        [f"bound bead {bead_id} status={unit.bead.get('status')} (not closed)"],
+                        bead_id)
+
+    # Guard 6: worktree must be clean and merged.
+    if unit.worktree_state == WORKTREE_DIRTY:
+        return Decision(unit.tab_id, ATTENTION,
+                        [f"bead {bead_id} closed but worktree dirty"], bead_id)
+    if unit.worktree_state != WORKTREE_CLEAN_MERGED:
+        return Decision(unit.tab_id, ATTENTION,
+                        [f"bead {bead_id} closed but worktree state unknown"], bead_id)
+
+    # All guards satisfied.
+    return Decision(unit.tab_id, REAP,
+                    [f"done, idle {int(unit.idle_age)}s, bead {bead_id} closed, worktree clean+merged"],
+                    bead_id)
+
+
+# ---------------------------------------------------------------------------
+# IO layer — talks to `herdr`, `bd`, and git. Kept thin and defensive.
+# ---------------------------------------------------------------------------
+
+BINDING_RE = re.compile(r"\b(?:pane|tab)=(\S+)")
+
+
+def _run(cmd: list, timeout: int = 30) -> tuple[int, str, str]:
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        return p.returncode, p.stdout, p.stderr
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
+        return 127, "", str(e)
+
+
+def herdr_alive() -> bool:
+    """Liveness probe. If this fails, the run must no-op (never guess state)."""
+    rc, out, _ = _run(["herdr", "workspace", "list"])
+    if rc != 0:
+        return False
+    try:
+        json.loads(out)
+        return True
+    except json.JSONDecodeError:
+        return False
+
+
+def list_workspaces() -> list:
+    rc, out, _ = _run(["herdr", "workspace", "list"])
+    if rc != 0:
+        return []
+    try:
+        return json.loads(out).get("result", {}).get("workspaces", [])
+    except json.JSONDecodeError:
+        return []
+
+
+def list_tabs(workspace_id: str) -> list:
+    rc, out, _ = _run(["herdr", "tab", "list", "--workspace", workspace_id])
+    if rc != 0:
+        return []
+    try:
+        return json.loads(out).get("result", {}).get("tabs", [])
+    except json.JSONDecodeError:
+        return []
+
+
+def list_agents() -> list:
+    rc, out, _ = _run(["herdr", "agent", "list"])
+    if rc != 0:
+        return []
+    try:
+        return json.loads(out).get("result", {}).get("agents", [])
+    except json.JSONDecodeError:
+        return []
+
+
+def agent_idle_age(agent: dict, now: float) -> Optional[float]:
+    """Idle age from the agent session transcript mtime. None if unknowable."""
+    sess = (agent or {}).get("agent_session") or {}
+    path = sess.get("value")
+    if not path or sess.get("kind") != "path":
+        return None
+    try:
+        return max(0.0, now - os.stat(path).st_mtime)
+    except OSError:
+        return None
+
+
+def build_binding_index() -> dict:
+    """Map tab_id/pane_id -> {"id":bead_id,"status":status} from canonical bd notes.
+
+    The binding line is written by the orchestrator per SKILL.md:
+        worker=<name> pane=<pane-id> tab=<tab-id> kind=<kind> model=<route>
+    We scan every bead (open and closed) so a closed bead still proves harvest.
+    Absent an index entry, the tab is treated as an unreconciled orphan (never
+    auto-closed).
+    """
+    index: dict = {}
+    rc, out, _ = _run(["bd", "list", "--all", "--json"])
+    if rc != 0:
+        return index
+    try:
+        beads = json.loads(out)
+    except json.JSONDecodeError:
+        return index
+    for b in beads:
+        bead_id = b.get("id")
+        status = b.get("status")
+        if not bead_id:
+            continue
+        rc2, show, _ = _run(["bd", "show", bead_id])
+        if rc2 != 0:
+            continue
+        for line in show.splitlines():
+            if "worker=" not in line:
+                continue
+            for handle in BINDING_RE.findall(line):
+                # Last write wins is fine; a handle maps to one work unit.
+                index[handle] = {"id": bead_id, "status": status}
+    return index
+
+
+def worktree_state(cwd: str, main_branch: str = "main") -> str:
+    """clean_merged / dirty / unknown for the checkout at cwd. Fail-closed."""
+    if not cwd or not os.path.isdir(cwd):
+        return WORKTREE_UNKNOWN
+    rc, out, _ = _run(["git", "-C", cwd, "status", "--porcelain"])
+    if rc != 0:
+        return WORKTREE_UNKNOWN
+    if out.strip():
+        return WORKTREE_DIRTY
+    # Clean tree. Now require the current branch's commits to be contained in
+    # the main branch (i.e. merged), or that we are already on main.
+    rc, branch, _ = _run(["git", "-C", cwd, "rev-parse", "--abbrev-ref", "HEAD"])
+    if rc != 0:
+        return WORKTREE_UNKNOWN
+    branch = branch.strip()
+    if branch in (main_branch, "HEAD"):
+        return WORKTREE_CLEAN_MERGED
+    rc, merged, _ = _run(["git", "-C", cwd, "branch", "--merged", main_branch])
+    if rc != 0:
+        return WORKTREE_UNKNOWN
+    merged_branches = {ln.strip().lstrip("* ").strip() for ln in merged.splitlines()}
+    return WORKTREE_CLEAN_MERGED if branch in merged_branches else WORKTREE_UNKNOWN
+
+
+def protected_reason(tab: dict, ws: dict, self_tab: str) -> str:
+    """Non-empty reason string if the tab must never be reaped."""
+    tab_id = tab.get("tab_id", "")
+    label = (tab.get("label") or "").lower()
+    ws_label = (ws.get("label") or "").lower()
+    if tab_id and tab_id == self_tab:
+        return "reaper's own tab"
+    if label in ("mc", "mission-control") or ws_label in ("mission-control",):
+        return "mission-control"
+    if ws.get("active_tab_id") == tab_id and ws.get("tab_count", 0) <= 1:
+        return "sole/active tab of workspace"
+    return ""
+
+
+def collect_units(idle_threshold: float, now: float,
+                  only_workspaces: Optional[set], main_branch: str) -> list:
+    self_tab = os.environ.get("HERDR_TAB_ID", "")
+    workspaces = list_workspaces()
+    agents_by_tab = {a.get("tab_id"): a for a in list_agents() if a.get("tab_id")}
+    binding_index = build_binding_index()
+    units: list = []
+    for ws in workspaces:
+        wid = ws.get("workspace_id")
+        if only_workspaces and wid not in only_workspaces:
+            continue
+        for tab in list_tabs(wid):
+            tab_id = tab.get("tab_id")
+            if not tab_id:
+                continue
+            agent = agents_by_tab.get(tab_id)
+            pane_id = (agent or {}).get("pane_id", "")
+            bead = binding_index.get(tab_id) or binding_index.get(pane_id)
+            cwd = (agent or {}).get("cwd", "")
+            preason = protected_reason(tab, ws, self_tab)
+            # Only probe git when a close is otherwise plausible (done + bead).
+            wstate = WORKTREE_UNKNOWN
+            if agent and agent.get("agent_status") == "done" and bead:
+                wstate = worktree_state(cwd, main_branch)
+            units.append(Unit(
+                tab_id=tab_id,
+                workspace_id=wid,
+                label=tab.get("label", ""),
+                pane_id=pane_id,
+                focused=bool(tab.get("focused") or (agent or {}).get("focused")),
+                agent_present=agent is not None,
+                agent_status=(agent or {}).get("agent_status", ""),
+                idle_age=agent_idle_age(agent, now) if agent else None,
+                cwd=cwd,
+                bead=bead,
+                worktree_state=wstate,
+                protected=bool(preason),
+                protected_reason=preason,
+            ))
+    return units
+
+
+def close_tab(tab_id: str) -> tuple[bool, str]:
+    rc, out, err = _run(["herdr", "tab", "close", tab_id])
+    return rc == 0, (err.strip() or out.strip())
+
+
+# ---------------------------------------------------------------------------
+# Reporting + CLI
+# ---------------------------------------------------------------------------
+
+def render_report(decisions: list, closed: dict, dry_run: bool) -> str:
+    counts = {REAP: 0, KEEP: 0, ATTENTION: 0}
+    for d in decisions:
+        counts[d.decision] = counts.get(d.decision, 0) + 1
+    lines = []
+    stamp = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+    mode = "DRY-RUN" if dry_run else "CLOSE"
+    lines.append(f"herdr-reap {stamp} mode={mode} "
+                 f"reap={counts[REAP]} keep={counts[KEEP]} attention={counts[ATTENTION]}")
+    for d in sorted(decisions, key=lambda x: (x.decision != REAP, x.decision != ATTENTION, x.tab_id)):
+        if d.decision == KEEP:
+            continue  # keep the report focused on actionable rows
+        applied = ""
+        if d.decision == REAP:
+            if dry_run:
+                applied = " [would close]"
+            elif d.tab_id in closed:
+                ok, msg = closed[d.tab_id]
+                applied = " [CLOSED]" if ok else f" [CLOSE FAILED: {msg}]"
+        reason = "; ".join(d.reasons)
+        bead = f" bead={d.bead_id}" if d.bead_id else ""
+        lines.append(f"  {d.decision:9} {d.tab_id}{bead} :: {reason}{applied}")
+    if counts[REAP] == 0 and counts[ATTENTION] == 0:
+        lines.append("  (no reap or attention candidates)")
+    return "\n".join(lines)
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(description="Fail-closed reaper for orphaned Herdr tabs")
+    ap.add_argument("--workspace", action="append", default=[],
+                    help="Restrict to this workspace id (repeatable). Default: all.")
+    ap.add_argument("--idle-threshold", type=int, default=DEFAULT_IDLE_THRESHOLD,
+                    help=f"Idle seconds before a done tab is eligible (default {DEFAULT_IDLE_THRESHOLD}).")
+    ap.add_argument("--main-branch", default="main", help="Branch treated as merge target.")
+    ap.add_argument("--close", action="store_true",
+                    help="Actually close REAP tabs. Default is dry-run (report only).")
+    ap.add_argument("--json", action="store_true", help="Emit the report as JSON.")
+    ap.add_argument("--report", help="Also write the text report to this path.")
+    args = ap.parse_args(argv)
+
+    if not herdr_alive():
+        sys.stderr.write("herdr-reap: herdr liveness probe failed — no-op\n")
+        return 2
+
+    now = time.time()
+    only = set(args.workspace) or None
+    units = collect_units(args.idle_threshold, now, only, args.main_branch)
+    decisions = [classify(u, args.idle_threshold) for u in units]
+
+    closed: dict = {}
+    if args.close:
+        for d in decisions:
+            if d.decision == REAP:
+                closed[d.tab_id] = close_tab(d.tab_id)
+
+    if args.json:
+        payload = {
+            "mode": "close" if args.close else "dry-run",
+            "idle_threshold": args.idle_threshold,
+            "decisions": [
+                {"tab_id": d.tab_id, "decision": d.decision, "bead_id": d.bead_id,
+                 "reasons": d.reasons,
+                 "closed": (closed.get(d.tab_id)[0] if d.tab_id in closed else None)}
+                for d in decisions
+            ],
+        }
+        report = json.dumps(payload, indent=2)
+    else:
+        report = render_report(decisions, closed, dry_run=not args.close)
+
+    print(report)
+    if args.report:
+        try:
+            with open(args.report, "w") as fh:
+                fh.write(report + "\n")
+        except OSError as e:
+            sys.stderr.write(f"herdr-reap: could not write report: {e}\n")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
