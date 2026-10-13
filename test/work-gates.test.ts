@@ -47,6 +47,9 @@ import {
   persistFailureTrace,
   persistedCaptureMetadata,
   pionArgs,
+  provisionRealWorkerExtension,
+  REAL_WORKER_EXTENSION_BYTES,
+  REAL_WORKER_EXTENSION_SHA256,
   resolveFailureTracePath,
   resolveVariantInputs,
   resultsIdentifier,
@@ -134,6 +137,8 @@ function completeResult(
     runIndex: index,
     tier: "compliance",
     variant: "candidate",
+    workerMode: "real",
+    workerWitnessSha256: digests.workerWitnessSha256,
     scenarioId: scenario.id,
     pass: true,
     verdict: "pass",
@@ -150,6 +155,9 @@ function completeResult(
     sessionId: `session:${index}`,
     eventLogId: `event-log:${index}`,
     traceId: null,
+    structuralReceiptSha256: "a".repeat(64),
+    witnessReceiptSha256: "b".repeat(64),
+    semanticVeto: "PASS",
     oracle: {
       [scenario.gate]: {
         passed: true,
@@ -1113,6 +1121,8 @@ test("twelve compliance shards use global contiguous indices and a common campai
     skillDigest: "skill",
     probeDigest: "probe",
     workerAgentSha256: "worker-agent",
+    workerWitnessSha256: "worker-witness",
+    workerMode: "real" as const,
     runnerSha256: "runner",
     shellParserSha256: "parser",
     manifestDigest: "manifest",
@@ -1127,6 +1137,8 @@ test("twelve compliance shards use global contiguous indices and a common campai
   assert.equal(key, campaignKeyFor({ ...identity }));
   assert.notEqual(key, campaignKeyFor({ ...identity, shardCount: 1 }));
   assert.notEqual(key, campaignKeyFor({ ...identity, workerAgentSha256: "different-agent" }));
+  assert.notEqual(key, campaignKeyFor({ ...identity, workerWitnessSha256: "different-witness" }));
+  assert.notEqual(key, campaignKeyFor({ ...identity, workerMode: "simulated" }));
   assert.notEqual(key, campaignKeyFor({ ...identity, runnerSha256: "different-runner" }));
   assert.notEqual(key, campaignKeyFor({ ...identity, shellParserSha256: "different-parser" }));
   for (const prefix of ["artifact", "session", "event-log"]) {
@@ -1138,7 +1150,7 @@ test("twelve compliance shards use global contiguous indices and a common campai
 });
 
 test("shard CLI validation rejects incomplete, empty, out-of-range, and non-compliance partitions", () => {
-  const base = ["--tier", "compliance", "--runs", "300", "--model", "provider/model"];
+  const base = ["--tier", "compliance", "--runs", "300", "--model", "provider/model", "--real-workers"];
   const parsed = parseCli([...base, "--shard-count", "12", "--shard-index", "11", "--results", "/tmp/results"]);
   assert.equal(parsed.shardCount, 12);
   assert.equal(parsed.shardIndex, 11);
@@ -1175,15 +1187,15 @@ test("a shard resume accepts only its global indices", async () => {
   };
   const digests: Digests = {
     policySha256: "policy", skillSha256: "skill", probeSha256: "probe", oracleSha256: "probe",
-    workerAgentSha256: "worker-agent", runnerSha256: "runner", shellParserSha256, scenarioManifestSha256: "manifest", runtimeSha256: "runtime", settingsDigest: "settings-bytes",
+    workerAgentSha256: "worker-agent", workerWitnessSha256: "worker-witness", runnerSha256: "runner", shellParserSha256, scenarioManifestSha256: "manifest", runtimeSha256: "runtime", settingsDigest: "settings-bytes",
     modelsDigest: "models-bytes", authDigest: "auth-bytes", modelDigest: modelIdentity.modelDigest,
   };
   const runtime = { version: "test", sha256: digests.runtimeSha256 };
   const key = campaignKeyFor({
     tier: "compliance", variant: "candidate", shardCount: 12,
     policyDigest: digests.policySha256, skillDigest: digests.skillSha256, probeDigest: digests.probeSha256,
-    workerAgentSha256: digests.workerAgentSha256, runnerSha256: digests.runnerSha256,
-    shellParserSha256: digests.shellParserSha256,
+    workerAgentSha256: digests.workerAgentSha256, workerWitnessSha256: digests.workerWitnessSha256, workerMode: "real",
+    runnerSha256: digests.runnerSha256, shellParserSha256: digests.shellParserSha256,
     manifestDigest: digests.scenarioManifestSha256, runtimeVersion: runtime.version,
     runtimeSha256: runtime.sha256, settingsDigest: digests.settingsDigest, modelsDigest: digests.modelsDigest,
     authDigest: digests.authDigest, modelDigest: digests.modelDigest,
@@ -1191,7 +1203,7 @@ test("a shard resume accepts only its global indices", async () => {
   const items = campaignItems("compliance", 300, scenarios as LiveScenario[], 12, 4);
   const expected = {
     campaignKey: key, digests, modelIdentity, runtime, tier: "compliance" as const,
-    variant: "candidate" as const, shardCount: 12, shardIndex: 4, items,
+    variant: "candidate" as const, shardCount: 12, shardIndex: 4, workerMode: "real" as const, items,
   };
   try {
     const seeded = items.slice(0, 10).map(({ index }) => completeResult(index, key, digests, modelIdentity, 4, 12));
@@ -1228,14 +1240,14 @@ test("shard aggregation verifies 300 passes and rejects corrupt campaigns", asyn
     .digest("hex");
   const digests: Digests = {
     policySha256: "policy", skillSha256: "skill", probeSha256: "probe", oracleSha256: "probe",
-    workerAgentSha256, runnerSha256, shellParserSha256, scenarioManifestSha256: manifestSha256, runtimeSha256: "runtime", settingsDigest: "settings-bytes",
+    workerAgentSha256, workerWitnessSha256: createHash("sha256").update(readFileSync(new URL("./support/sqlite_worker_witness.py", import.meta.url))).digest("hex"), runnerSha256, shellParserSha256, scenarioManifestSha256: manifestSha256, runtimeSha256: "runtime", settingsDigest: "settings-bytes",
     modelsDigest: "models-bytes", authDigest: "auth-bytes", modelDigest: modelIdentity.modelDigest,
   };
   const key = campaignKeyFor({
     tier: "compliance", variant: "candidate", shardCount: 12,
     policyDigest: digests.policySha256, skillDigest: digests.skillSha256, probeDigest: digests.probeSha256,
-    workerAgentSha256: digests.workerAgentSha256, runnerSha256: digests.runnerSha256,
-    shellParserSha256: digests.shellParserSha256,
+    workerAgentSha256: digests.workerAgentSha256, workerWitnessSha256: digests.workerWitnessSha256, workerMode: "real",
+    runnerSha256: digests.runnerSha256, shellParserSha256: digests.shellParserSha256,
     manifestDigest: digests.scenarioManifestSha256, runtimeVersion: "test", runtimeSha256: digests.runtimeSha256,
     settingsDigest: digests.settingsDigest, modelsDigest: digests.modelsDigest, authDigest: digests.authDigest,
     modelDigest: digests.modelDigest,
@@ -1273,6 +1285,7 @@ test("shard aggregation verifies 300 passes and rejects corrupt campaigns", asyn
       ["fail", (changed) => { changed[0]!.pass = false; changed[0]!.verdict = "fail"; }, /failed or incomplete/],
       ["infrastructure", (changed) => { changed[0]!.infrastructureError = "synthetic"; }, /failed or incomplete/],
       ["critical", (changed) => { changed[0]!.criticalViolations = ["synthetic"]; }, /failed or incomplete/],
+      ["semantic veto", (changed) => { changed[0]!.semanticVeto = "VETO"; }, /failed or incomplete/],
       ["digest", (changed) => { changed[0]!.digests.policySha256 = "different"; }, /digest mismatch/],
       ["runner", (changed) => { changed[0]!.digests.runnerSha256 = "different"; }, /digest mismatch.*runnerSha256/],
       ["missing runner", (changed) => {
@@ -1315,6 +1328,7 @@ test("compliance resume accepts 120 complete passes and rejects unsafe history",
     probeSha256: "probe",
     oracleSha256: "probe",
     workerAgentSha256: "worker-agent",
+    workerWitnessSha256: "worker-witness",
     runnerSha256: "runner",
     shellParserSha256,
     scenarioManifestSha256: "manifest",
@@ -1333,6 +1347,8 @@ test("compliance resume accepts 120 complete passes and rejects unsafe history",
     skillDigest: digests.skillSha256,
     probeDigest: digests.probeSha256,
     workerAgentSha256: digests.workerAgentSha256,
+    workerWitnessSha256: digests.workerWitnessSha256,
+    workerMode: "real" as const,
     runnerSha256: digests.runnerSha256,
     shellParserSha256: digests.shellParserSha256,
     manifestDigest: digests.scenarioManifestSha256,
@@ -1354,6 +1370,7 @@ test("compliance resume accepts 120 complete passes and rejects unsafe history",
     variant: "candidate" as const,
     shardCount: 1,
     shardIndex: 0,
+    workerMode: "real" as const,
     items,
   };
   const seeded = Array.from({ length: 120 }, (_, index) =>
@@ -1368,6 +1385,11 @@ test("compliance resume accepts 120 complete passes and rejects unsafe history",
     assert.equal(pending[0]?.index, 121);
     assert.equal(pending.at(-1)?.index, 300);
     assert.equal(new Set([...resumed.completed, ...pending.map(({ index }) => index)]).size, 300);
+
+    const incompatibleMode = structuredClone(seeded[0])!;
+    incompatibleMode.workerMode = "simulated";
+    await writeFile(resultsPath, `${JSON.stringify(incompatibleMode)}\n`);
+    await assert.rejects(validateResumeResults(resultsPath, expected), /metadata mismatch/);
 
     await writeFile(resultsPath, `${JSON.stringify(seeded[0])}\n{"schemaVersion":`);
     const recovered = await validateResumeResults(resultsPath, expected);
@@ -2491,6 +2513,18 @@ test("loaded-input attestation fails closed for missing policy or skill evidence
   ]);
 });
 
+test("real Worker archive provisioning rejects any digest other than the pinned artifact", async () => {
+  const root = await mkdtemp(join(tmpdir(), "a4s-worker-extension-test-"));
+  const archive = join(root, "extension.tgz");
+  try {
+    await writeFile(archive, Buffer.alloc(REAL_WORKER_EXTENSION_BYTES));
+    assert.equal(REAL_WORKER_EXTENSION_SHA256.length, 64);
+    await assert.rejects(provisionRealWorkerExtension(archive, root), /invalid SHA-256 digest/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("Pion argv fixes the model, disables builtin tools, and loads only the probe extension", () => {
   const args = pionArgs(
     { sessionDir: "/tmp/session", copiedSkill: "/tmp/SKILL.md", copiedProbe: "/tmp/probe.ts" },
@@ -2753,7 +2787,7 @@ test("all conceptual CLI commands require and parse a canonical model", () => {
   const liveCommands = [
     { tier: "smoke", argv: ["--tier", "smoke", "--runs", "7"] },
     { tier: "corpus", argv: ["--tier", "corpus"] },
-    { tier: "compliance", argv: ["--tier", "compliance", "--runs", "300", "--resume"] },
+    { tier: "compliance", argv: ["--tier", "compliance", "--runs", "300", "--resume", "--real-workers"] },
     { tier: "git-e2e", argv: ["--tier", "git-e2e"] },
   ] as const;
   for (const command of liveCommands) {
@@ -2769,11 +2803,11 @@ test("all conceptual CLI commands require and parse a canonical model", () => {
   assert.equal(parseCli(["--tier", "smoke", "--runs", "7", "--model", "provider/model-a"]).variant, "candidate");
   assert.equal(parseCli(["--tier", "corpus", "--model", "provider/model-a"]).runs, 14);
   assert.equal(parseCli([
-    "--tier", "compliance", "--runs", "300", "--resume", "--model", "provider/model-a",
+    "--tier", "compliance", "--runs", "300", "--resume", "--model", "provider/model-a", "--real-workers",
   ]).resume, true);
   assert.equal(parseCli(["--tier", "git-e2e", "--model", "provider/model-a"]).tier, "git-e2e");
   assert.equal(parseCli([
-    "--tier", "compliance", "--runs", "120", "--variant", "baseline",
+    "--tier", "compliance", "--runs", "120", "--variant", "baseline", "--real-workers",
     "--model", "provider/model-a", "--policy", "/baseline/AGENTS.md", "--skill", "/baseline/SKILL.md",
   ]).variant, "baseline");
   assert.equal(parseCli([

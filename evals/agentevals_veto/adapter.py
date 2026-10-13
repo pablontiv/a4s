@@ -85,12 +85,53 @@ def _load_json_object(value: bytes, error_code: str) -> dict[str, Any]:
     return parsed
 
 
-def _require_pass_receipt(value: bytes, schema: str, error_code: str) -> None:
-    receipt = _load_json_object(value, error_code)
-    if set(receipt) != {"schema", "status"}:
-        raise AdapterInputError(error_code)
-    if receipt["schema"] != schema or receipt["status"] != "PASS":
-        raise AdapterInputError(error_code)
+def _require_linked_receipts(
+    structural_bytes: bytes,
+    witness_bytes: bytes,
+    trajectory_sha256: str,
+    expected_campaign_key: str,
+) -> None:
+    structural = _load_json_object(structural_bytes, "STRUCTURAL_RECEIPT_INVALID")
+    if set(structural) != {
+        "schema", "status", "campaign_key", "worker_mode", "trajectory_sha256",
+        "witness_receipt_sha256", "worker_witness_sha256",
+    }:
+        raise AdapterInputError("STRUCTURAL_RECEIPT_INVALID")
+    if (
+        structural["schema"] != STRUCTURAL_RECEIPT_SCHEMA
+        or structural["status"] != "PASS"
+        or structural["campaign_key"] != expected_campaign_key
+        or structural["worker_mode"] != "real"
+        or structural["trajectory_sha256"] != trajectory_sha256
+        or structural["witness_receipt_sha256"] != sha256_bytes(witness_bytes)
+        or not isinstance(structural["worker_witness_sha256"], str)
+        or not re.fullmatch(r"[0-9a-f]{64}", structural["worker_witness_sha256"])
+    ):
+        raise AdapterInputError("STRUCTURAL_RECEIPT_INVALID")
+    witness = _load_json_object(witness_bytes, "WITNESS_RECEIPT_INVALID")
+    required = {
+        "schema", "status", "campaign_key", "nonce", "cwd", "parent_session_id",
+        "snapshots", "started_events", "task_ids", "attempts", "nested_sessions",
+        "running_view_seen", "terminal_complete", "overlap",
+    }
+    if set(witness) != required:
+        raise AdapterInputError("WITNESS_RECEIPT_INVALID")
+    if (
+        witness["schema"] != WITNESS_RECEIPT_SCHEMA
+        or witness["status"] != "PASS"
+        or witness["campaign_key"] != expected_campaign_key
+        or len(witness["task_ids"]) != 8
+        or len(set(witness["task_ids"])) != 8
+        or witness["attempts"] != [1] * 8
+        or not isinstance(witness["started_events"], list)
+        or {event.get("taskId") for event in witness["started_events"] if isinstance(event, dict) and event.get("activity") == "started"} != set(witness["task_ids"])
+        or len(witness["nested_sessions"]) != 8
+        or len(set(witness["nested_sessions"])) != 8
+        or witness["running_view_seen"] is not True
+        or witness["terminal_complete"] is not True
+        or witness["overlap"] is not True
+    ):
+        raise AdapterInputError("WITNESS_RECEIPT_INVALID")
 
 
 def _load_inputs(
@@ -99,6 +140,7 @@ def _load_inputs(
     trajectory_path: Path,
     criteria_path: Path,
     expected_criteria_sha256: str,
+    expected_campaign_key: str,
 ) -> tuple[list[Any], str, dict[str, str]]:
     structural_bytes = _read_bounded(structural_receipt_path)
     witness_bytes = _read_bounded(witness_receipt_path)
@@ -117,11 +159,10 @@ def _load_inputs(
         if input_hashes["criteria_sha256"] != expected_criteria_sha256:
             raise AdapterInputError("CRITERIA_DIGEST_MISMATCH")
 
-        _require_pass_receipt(
-            structural_bytes, STRUCTURAL_RECEIPT_SCHEMA, "STRUCTURAL_RECEIPT_INVALID"
-        )
-        _require_pass_receipt(
-            witness_bytes, WITNESS_RECEIPT_SCHEMA, "WITNESS_RECEIPT_INVALID"
+        if not re.fullmatch(r"[0-9a-f]{24}", expected_campaign_key):
+            raise AdapterInputError("CAMPAIGN_KEY_INVALID")
+        _require_linked_receipts(
+            structural_bytes, witness_bytes, input_hashes["trajectory_sha256"], expected_campaign_key
         )
 
         payload = _load_json_object(trajectory_bytes, "TRAJECTORY_INVALID")
@@ -210,14 +251,32 @@ class _PionCompletions:
             stderr=asyncio.subprocess.DEVNULL,
             start_new_session=True,
         )
+        async def exchange() -> bytes:
+            assert process.stdin is not None
+            assert process.stdout is not None
+            process.stdin.write(payload)
+            await process.stdin.drain()
+            process.stdin.close()
+            chunks: list[bytes] = []
+            size = 0
+            while True:
+                chunk = await process.stdout.read(min(8192, MAX_BRIDGE_BYTES + 1 - size))
+                if not chunk:
+                    break
+                size += len(chunk)
+                if size > MAX_BRIDGE_BYTES:
+                    await _kill_process_group(process)
+                    raise RuntimeError("bridge output is too large")
+                chunks.append(chunk)
+            await process.wait()
+            return b"".join(chunks)
+
         try:
-            stdout, _ = await asyncio.wait_for(
-                process.communicate(payload), timeout=self._timeout_seconds
-            )
+            stdout = await asyncio.wait_for(exchange(), timeout=self._timeout_seconds)
         except BaseException:
             await _kill_process_group(process)
             raise
-        if process.returncode != 0 or len(stdout) > MAX_BRIDGE_BYTES:
+        if process.returncode != 0:
             raise RuntimeError("bridge failed")
         try:
             result = json.loads(stdout)
@@ -305,6 +364,7 @@ async def evaluate(
     trajectory_path: Path,
     criteria_path: Path,
     expected_criteria_sha256: str,
+    expected_campaign_key: str,
     provider: str,
     model: str,
     timeout_seconds: float,
@@ -319,6 +379,7 @@ async def evaluate(
             trajectory_path,
             criteria_path,
             expected_criteria_sha256,
+            expected_campaign_key,
         )
     except AdapterInputError as error:
         return _error(str(error), error.input_hashes)
@@ -400,6 +461,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--trajectory", type=Path, required=True)
     parser.add_argument("--criteria", type=Path, required=True)
     parser.add_argument("--criteria-sha256", required=True)
+    parser.add_argument("--campaign-key", required=True)
     parser.add_argument("--provider", required=True)
     parser.add_argument("--model", required=True)
     parser.add_argument("--timeout-seconds", type=float, default=60.0)
@@ -420,6 +482,7 @@ async def _async_main(arguments: list[str] | None = None) -> int:
         trajectory_path=options.trajectory,
         criteria_path=options.criteria,
         expected_criteria_sha256=options.criteria_sha256,
+        expected_campaign_key=options.campaign_key,
         provider=options.provider,
         model=options.model,
         timeout_seconds=options.timeout_seconds,

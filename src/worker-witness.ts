@@ -1,39 +1,40 @@
 export type WitnessVerdict = "pass" | "fail" | "unknown";
-export type WorkerRuntimeState = "dispatch" | "queued" | "running" | "terminal";
+export type WorkerTaskStatus = "queued" | "running" | "completed" | "failed" | "cancelled" | "interrupted";
 
-export interface WorkerLink {
-  correlationId: string;
-  worker: string;
-  pane: string;
-  tab: string;
-  sessionHash: string;
-  pid: number;
-  processStartTime: string;
+export interface WorkerTaskEvidence {
+  taskId: string;
+  attempt: number;
+  cwd: string;
+  parentSessionId: string;
+  nestedSessionPath: string | null;
+  task: string;
+  status: WorkerTaskStatus;
+  startedAt: string | null;
+  endedAt: string | null;
 }
 
-export type WorkerLinkEvidence = Partial<WorkerLink>;
-
-export interface RuntimeWorkerEvent {
-  state: WorkerRuntimeState;
-  observedAt: string;
-  link: WorkerLinkEvidence;
+export interface WorkerStartedEvent {
+  taskId: string;
+  attempt: number;
+  cwd: string;
+  createdAt: string;
+  status: string;
+  activity: string;
 }
 
-export interface InventoryProcess {
-  link: WorkerLinkEvidence;
-}
-
-export interface InventorySnapshot {
+export interface WorkerSqliteSnapshot {
   observedAt: string;
   complete: boolean;
-  processes: readonly InventoryProcess[];
+  tasks: readonly WorkerTaskEvidence[];
 }
 
 export interface WorkerWitnessInput {
-  expectedWorkers: readonly WorkerLink[];
-  runtimeEvents: readonly RuntimeWorkerEvent[];
-  inventorySnapshots: readonly InventorySnapshot[];
-  minimumConcurrentWorkers?: number;
+  nonce: string;
+  cwd: string;
+  parentSessionId: string;
+  snapshots: readonly WorkerSqliteSnapshot[];
+  startedEvents: readonly WorkerStartedEvent[];
+  expectedWorkers?: number;
 }
 
 export interface WitnessCheck {
@@ -48,288 +49,109 @@ export interface WorkerWitnessResult {
     concurrency: WitnessCheck;
     termination: WitnessCheck;
   };
+  taskIds: string[];
   reasons: string[];
 }
 
-const LINK_FIELDS = [
-  "correlationId",
-  "worker",
-  "pane",
-  "tab",
-  "sessionHash",
-  "pid",
-  "processStartTime",
-] as const satisfies readonly (keyof WorkerLink)[];
-
-type LinkField = (typeof LINK_FIELDS)[number];
-
-interface Lifecycle {
-  expected: WorkerLink;
-  runningAt: bigint | undefined;
-  terminalAt: bigint | undefined;
-}
+const TERMINAL = new Set<WorkerTaskStatus>(["completed", "failed", "cancelled", "interrupted"]);
 
 function check(verdict: WitnessVerdict, reasons: string[]): WitnessCheck {
-  return { verdict, reasons };
+  return { verdict, reasons: [...new Set(reasons)] };
 }
 
-function isPresent(value: unknown): boolean {
-  return value !== undefined && value !== null && value !== "";
+function validIso(value: string | null): value is string {
+  return value !== null && Number.isFinite(Date.parse(value));
 }
 
-function missingFields(link: WorkerLinkEvidence): LinkField[] {
-  return LINK_FIELDS.filter((field) => !isPresent(link[field]));
-}
-
-function mismatchedFields(actual: WorkerLinkEvidence, expected: WorkerLink): LinkField[] {
-  return LINK_FIELDS.filter(
-    (field) => isPresent(actual[field]) && actual[field] !== expected[field],
+function matchingTasks(input: WorkerWitnessInput, snapshot: WorkerSqliteSnapshot): WorkerTaskEvidence[] {
+  const marker = `[a4s-worker-nonce:${input.nonce}]`;
+  return snapshot.tasks.filter((task) =>
+    task.cwd === input.cwd && task.parentSessionId === input.parentSessionId && task.task.includes(marker)
   );
 }
 
-function linksEqual(actual: WorkerLinkEvidence, expected: WorkerLink): boolean {
-  return missingFields(actual).length === 0 && mismatchedFields(actual, expected).length === 0;
+function latestComplete(input: WorkerWitnessInput): WorkerSqliteSnapshot | undefined {
+  return [...input.snapshots].reverse().find((snapshot) => snapshot.complete);
 }
 
-function sameProcess(actual: WorkerLinkEvidence, expected: WorkerLink): boolean {
-  return actual.pid === expected.pid && actual.processStartTime === expected.processStartTime;
-}
-
-function isCandidate(actual: WorkerLinkEvidence, expected: WorkerLink): boolean {
-  return actual.correlationId === expected.correlationId || sameProcess(actual, expected);
-}
-
-function overallVerdict(checks: readonly WitnessCheck[]): WitnessVerdict {
+function overall(checks: readonly WitnessCheck[]): WitnessVerdict {
   if (checks.some((item) => item.verdict === "fail")) return "fail";
   if (checks.some((item) => item.verdict === "unknown")) return "unknown";
   return "pass";
 }
 
-function uniqueReasons(reasons: readonly string[]): string[] {
-  return [...new Set(reasons)];
-}
-
-function observedTime(value: string, label: string, failures: string[]): bigint | undefined {
-  if (!/^(0|[1-9][0-9]*)$/.test(value)) {
-    failures.push(`${label} has an invalid observed time`);
-    return undefined;
-  }
-  return BigInt(value);
-}
-
-function validateObservedOrder(input: WorkerWitnessInput): string[] {
-  const failures: string[] = [];
-  let previousEvent: bigint | undefined;
-  for (const event of input.runtimeEvents) {
-    const current = observedTime(event.observedAt, `runtime ${event.state} event`, failures);
-    if (current !== undefined && previousEvent !== undefined && current <= previousEvent) {
-      failures.push("runtime event time regressed or repeated");
-    }
-    if (current !== undefined) previousEvent = current;
-  }
-  let previousSnapshot: bigint | undefined;
-  for (const snapshot of input.inventorySnapshots) {
-    const current = observedTime(snapshot.observedAt, "inventory snapshot", failures);
-    if (current !== undefined && previousSnapshot !== undefined && current <= previousSnapshot) {
-      failures.push("inventory snapshot time regressed or repeated");
-    }
-    if (current !== undefined) previousSnapshot = current;
-  }
-  return failures;
-}
-
-function validateExpectedWorkers(expectedWorkers: readonly WorkerLink[]): string[] {
-  const reasons: string[] = [];
-  const correlationIds = new Set<string>();
-  const workerNames = new Set<string>();
-
-  for (const worker of expectedWorkers) {
-    const missing = missingFields(worker);
-    if (missing.length > 0) reasons.push(`expected worker has missing identity fields: ${missing.join(",")}`);
-    if (!Number.isSafeInteger(worker.pid) || worker.pid < 1) reasons.push(`invalid pid for worker: ${worker.worker}`);
-    if (correlationIds.has(worker.correlationId)) reasons.push(`duplicate correlationId: ${worker.correlationId}`);
-    if (workerNames.has(worker.worker)) reasons.push(`duplicate worker: ${worker.worker}`);
-    correlationIds.add(worker.correlationId);
-    workerNames.add(worker.worker);
-  }
-
-  return reasons;
-}
-
-function buildLifecycles(
-  input: WorkerWitnessInput,
-  failures: string[],
-  unknowns: string[],
-): Lifecycle[] {
-  return input.expectedWorkers.map((expected) => {
-    const events = input.runtimeEvents.filter(
-      (event) => event.link.correlationId === expected.correlationId,
-    );
-
-    for (const event of events) {
-      const mismatched = mismatchedFields(event.link, expected);
-      if (mismatched.length > 0) {
-        failures.push(`${expected.worker} ${event.state} event contradicts: ${mismatched.join(",")}`);
-      }
-    }
-
-    const running = events.filter((event) => event.state === "running");
-    const terminal = events.filter((event) => event.state === "terminal");
-    if (running.length === 0) unknowns.push(`${expected.worker} has no running event`);
-    if (terminal.length === 0) unknowns.push(`${expected.worker} has no terminal event`);
-    if (running.length > 1) failures.push(`${expected.worker} has duplicate running events`);
-    if (terminal.length > 1) failures.push(`${expected.worker} has duplicate terminal events`);
-
-    const runningAt = running.length === 1
-      ? observedTime(running[0]!.observedAt, `${expected.worker} running event`, failures)
-      : undefined;
-    const terminalAt = terminal.length === 1
-      ? observedTime(terminal[0]!.observedAt, `${expected.worker} terminal event`, failures)
-      : undefined;
-    if (runningAt !== undefined && terminalAt !== undefined && terminalAt <= runningAt) {
-      failures.push(`${expected.worker} reaches terminal before it runs`);
-    }
-
-    return { expected, runningAt, terminalAt };
-  });
-}
-
-function snapshotTime(snapshot: InventorySnapshot): bigint | undefined {
-  return /^(0|[1-9][0-9]*)$/.test(snapshot.observedAt) ? BigInt(snapshot.observedAt) : undefined;
-}
-
-function evaluateIdentity(
-  input: WorkerWitnessInput,
-  lifecycles: readonly Lifecycle[],
-  initialFailures: readonly string[],
-  initialUnknowns: readonly string[],
-): WitnessCheck {
-  const failures = [...initialFailures];
-  const unknowns = [...initialUnknowns];
-
-  for (const { expected, runningAt, terminalAt } of lifecycles) {
-    let hasIndependentIdentity = false;
-    for (const snapshot of input.inventorySnapshots) {
-      const time = snapshotTime(snapshot);
-      if (time === undefined || runningAt === undefined || terminalAt === undefined || time < runningAt || time >= terminalAt) continue;
-      const candidates = snapshot.processes.filter((process) => isCandidate(process.link, expected));
-      for (const process of candidates) {
-        const missing = missingFields(process.link);
-        if (missing.length > 0) {
-          unknowns.push(`${expected.worker} inventory identity lacks: ${missing.join(",")}`);
-        } else if (linksEqual(process.link, expected)) {
-          hasIndependentIdentity = true;
-        } else {
-          failures.push(`${expected.worker} inventory identity contradicts: ${mismatchedFields(process.link, expected).join(",")}`);
-        }
-      }
-    }
-    if (!hasIndependentIdentity) unknowns.push(`${expected.worker} has no matching external inventory identity`);
-  }
-
-  if (failures.length > 0) return check("fail", uniqueReasons(failures));
-  if (unknowns.length > 0) return check("unknown", uniqueReasons(unknowns));
-  return check("pass", ["runtime identities match external inventory"]);
-}
-
-function evaluateConcurrency(
-  input: WorkerWitnessInput,
-  lifecycles: readonly Lifecycle[],
-  minimumConcurrentWorkers: number,
-  timeFailures: readonly string[],
-): WitnessCheck {
-  if (timeFailures.length > 0) return check("fail", uniqueReasons(timeFailures));
-  if (!Number.isInteger(minimumConcurrentWorkers) || minimumConcurrentWorkers < 2) {
-    return check("fail", ["minimumConcurrentWorkers must be an integer of at least 2"]);
-  }
-  if (lifecycles.length < minimumConcurrentWorkers) {
-    return check("unknown", [`only ${lifecycles.length} expected workers are available for concurrency evidence`]);
-  }
-  if (lifecycles.some((item) => item.runningAt === undefined || item.terminalAt === undefined)) {
-    return check("unknown", ["runtime running evidence is incomplete"]);
-  }
-
-  const usable = lifecycles.map((item) => ({ ...item, runningAt: item.runningAt!, terminalAt: item.terminalAt! }));
-  let completeContradiction = false;
-  for (const snapshot of input.inventorySnapshots) {
-    const time = snapshotTime(snapshot);
-    if (time === undefined) continue;
-    const running = usable.filter((item) => time >= item.runningAt && time < item.terminalAt);
-    if (running.length < minimumConcurrentWorkers) continue;
-    const matching = running.filter((item) =>
-      snapshot.processes.some((process) => linksEqual(process.link, item.expected))
-    );
-    if (matching.length >= minimumConcurrentWorkers) {
-      return check("pass", [`${matching.length} Workers are simultaneously running in external inventory`]);
-    }
-    if (snapshot.complete) completeContradiction = true;
-  }
-
-  const boundaries = usable.map((item) => item.runningAt);
-  const runtimeOverlap = boundaries.some((time) =>
-    usable.filter((item) => time >= item.runningAt && time < item.terminalAt).length >= minimumConcurrentWorkers
-  );
-  if (!runtimeOverlap) return check("fail", ["Workers were executed serially"]);
-  if (completeContradiction) return check("fail", ["complete external inventory contradicts running concurrency"]);
-  return check("unknown", ["no external inventory snapshot proves running concurrency"]);
-}
-
-function evaluateTermination(
-  input: WorkerWitnessInput,
-  lifecycles: readonly Lifecycle[],
-  timeFailures: readonly string[],
-): WitnessCheck {
-  const failures = [...timeFailures];
-  const unknowns: string[] = [];
-
-  for (const { expected, terminalAt } of lifecycles) {
-    if (terminalAt === undefined) {
-      unknowns.push(`${expected.worker} has no terminal time`);
-      continue;
-    }
-    const later = input.inventorySnapshots.filter((snapshot) => {
-      const time = snapshotTime(snapshot);
-      return time !== undefined && time > terminalAt;
-    });
-    let completeAbsence = false;
-    for (const snapshot of later) {
-      const candidates = snapshot.processes.filter((process) => isCandidate(process.link, expected));
-      for (const process of candidates) {
-        if (missingFields(process.link).length > 0) {
-          unknowns.push(`${expected.worker} post-terminal inventory identity is incomplete`);
-        } else if (linksEqual(process.link, expected)) {
-          failures.push(`${expected.worker} process remains after terminal state`);
-        } else {
-          failures.push(`${expected.worker} identity maps to a different post-terminal process`);
-        }
-      }
-      if (snapshot.complete && candidates.length === 0) completeAbsence = true;
-    }
-    if (!completeAbsence) unknowns.push(`${expected.worker} has no complete post-terminal external inventory snapshot`);
-  }
-
-  if (failures.length > 0) return check("fail", uniqueReasons(failures));
-  if (unknowns.length > 0) return check("unknown", uniqueReasons(unknowns));
-  return check("pass", ["external inventory proves that all Worker processes terminated"]);
-}
-
 export function reconcileWorkerWitness(input: WorkerWitnessInput): WorkerWitnessResult {
-  const minimumConcurrentWorkers = input.minimumConcurrentWorkers ?? 2;
-  const timeFailures = validateObservedOrder(input);
-  const identityFailures = [...validateExpectedWorkers(input.expectedWorkers), ...timeFailures];
+  const expected = input.expectedWorkers ?? 8;
+  const identityFailures: string[] = [];
   const identityUnknowns: string[] = [];
-  if (input.expectedWorkers.length === 0) identityUnknowns.push("expected Worker inventory is empty");
-  const lifecycles = buildLifecycles(input, identityFailures, identityUnknowns);
-  const identity = evaluateIdentity(input, lifecycles, identityFailures, identityUnknowns);
-  const concurrency = evaluateConcurrency(input, lifecycles, minimumConcurrentWorkers, timeFailures);
-  const termination = evaluateTermination(input, lifecycles, timeFailures);
+  if (!input.nonce || !input.cwd || !input.parentSessionId) identityFailures.push("witness filter identity is incomplete");
+  if (!Number.isSafeInteger(expected) || expected < 1) identityFailures.push("expectedWorkers is invalid");
+  if (input.snapshots.length === 0 || input.snapshots.every((snapshot) => !snapshot.complete)) {
+    identityUnknowns.push("SQLite evidence is absent or incomplete");
+  }
+
+  const terminalSnapshot = latestComplete(input);
+  const terminalTasks = terminalSnapshot ? matchingTasks(input, terminalSnapshot) : [];
+  if (terminalTasks.length > expected) identityFailures.push(`SQLite contains more than ${expected} matching tasks`);
+  if (terminalTasks.length < expected) identityUnknowns.push(`SQLite contains only ${terminalTasks.length} of ${expected} matching tasks`);
+  const ids = new Set(terminalTasks.map((task) => task.taskId));
+  if (ids.size !== terminalTasks.length) identityFailures.push("task IDs are not unique");
+  if (terminalTasks.some((task) => task.attempt !== 1)) identityFailures.push("each Worker must have exactly attempt 1");
+  const nested = terminalTasks.map((task) => task.nestedSessionPath).filter((value): value is string => Boolean(value));
+  if (nested.length < terminalTasks.length) identityUnknowns.push("a nested session is missing");
+  if (new Set(nested).size !== nested.length) identityFailures.push("nested sessions are not unique");
+
+  const identity = identityFailures.length > 0
+    ? check("fail", identityFailures)
+    : identityUnknowns.length > 0
+      ? check("unknown", identityUnknowns)
+      : check("pass", [`SQLite proves ${expected} unique task IDs, attempts, and nested sessions`]);
+
+  const runningSnapshot = input.snapshots.find((snapshot) => {
+    if (!snapshot.complete) return false;
+    const tasks = matchingTasks(input, snapshot);
+    return tasks.length === expected && tasks.every((task) => task.status === "running");
+  });
+  const concurrency = runningSnapshot
+    ? check("pass", [`one complete SQLite view contains ${expected} running Workers`])
+    : check("unknown", [`no complete SQLite view contains ${expected} running Workers`]);
+
+  const terminationFailures: string[] = [];
+  const terminationUnknowns: string[] = [];
+  for (const task of terminalTasks) {
+    const starts = input.startedEvents.filter((event) =>
+      event.taskId === task.taskId && event.attempt === task.attempt && event.cwd === input.cwd &&
+      event.status === "running" && event.activity === "started"
+    );
+    if (starts.length === 0) terminationUnknowns.push(`${task.taskId} has no persisted started event`);
+    if (!validIso(task.startedAt) || !validIso(task.endedAt)) {
+      terminationUnknowns.push(`${task.taskId} has incomplete persisted times`);
+    } else if (Date.parse(task.endedAt) <= Date.parse(task.startedAt)) {
+      terminationFailures.push(`${task.taskId} has an invalid terminal time`);
+    }
+    if (!TERMINAL.has(task.status)) terminationUnknowns.push(`${task.taskId} has no persisted terminal state`);
+  }
+  if (terminalTasks.length === expected && terminalTasks.every((task) => validIso(task.startedAt) && validIso(task.endedAt))) {
+    const latestStart = Math.max(...terminalTasks.map((task) => Date.parse(task.startedAt!)));
+    const earliestEnd = Math.min(...terminalTasks.map((task) => Date.parse(task.endedAt!)));
+    if (latestStart >= earliestEnd) terminationFailures.push("persisted Worker intervals do not overlap");
+  } else {
+    terminationUnknowns.push("persisted Worker intervals are incomplete");
+  }
+  const termination = terminationFailures.length > 0
+    ? check("fail", terminationFailures)
+    : terminationUnknowns.length > 0
+      ? check("unknown", terminationUnknowns)
+      : check("pass", ["SQLite proves started events, later terminal states, and temporal overlap"]);
+
   const checks = { identity, concurrency, termination };
-  const verdict = overallVerdict(Object.values(checks));
+  const verdict = overall(Object.values(checks));
   return {
     verdict,
     checks,
-    reasons: uniqueReasons(Object.entries(checks).flatMap(([name, item]) =>
+    taskIds: [...ids].sort(),
+    reasons: Object.entries(checks).flatMap(([name, item]) =>
       item.verdict === "pass" ? [] : item.reasons.map((reason) => `${name}: ${reason}`)
-    )),
+    ),
   };
 }

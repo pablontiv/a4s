@@ -23,10 +23,15 @@ import {
   REAL_WORKER_ROLE,
   REAL_WORKER_UNIT_COUNT,
   RealWorkerObserver,
-  parseWorkerInventoryJsonl,
   realWorkerTask,
   type RealWorkerRecordDisposition,
 } from "./real-worker-observer.ts";
+import {
+  reconcileWorkerWitness,
+  type WorkerSqliteSnapshot,
+  type WorkerStartedEvent,
+  type WorkerWitnessResult,
+} from "../../src/worker-witness.ts";
 import {
   conditions,
   effects,
@@ -50,12 +55,20 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const FIXTURE_PATH = join(ROOT, "test", "fixtures", "work-gate-scenarios.json");
 const PROBE_PATH = join(ROOT, "test", "support", "work-gate-probe.ts");
 const WORKER_AGENT_PATH = join(ROOT, "agents", "pi", "reviewer.md");
+const WORKER_WITNESS_PATH = join(ROOT, "test", "support", "sqlite_worker_witness.py");
+const AGENTEVALS_ADAPTER_PATH = join(ROOT, "evals", "agentevals_veto", "adapter.py");
+const AGENTEVALS_CRITERIA_PATH = join(ROOT, "evals", "agentevals_veto", "criteria.txt");
 const RUNNER_PATH = fileURLToPath(import.meta.url);
 const SHELL_PARSER_PATH = "/bin/bash";
 const DEFAULT_RESULTS = join(tmpdir(), "a4s-work-gate-campaign.jsonl");
 const DEFAULT_DEADLINE_MS = 120_000;
 const MAX_CONCURRENCY = 4;
-export const REAL_WORKER_EXTENSION = "npm:pi-subagents-j0k3r@1.6.1";
+const MAX_RPC_STDOUT_BYTES = 10 * 1024 * 1024;
+const MAX_RPC_STDOUT_RECORDS = 20_000;
+const MAX_CHILD_STDOUT_BYTES = 64 * 1024;
+export const REAL_WORKER_EXTENSION_PACKAGE = "pi-subagents-j0k3r@1.6.1";
+export const REAL_WORKER_EXTENSION_BYTES = 117125;
+export const REAL_WORKER_EXTENSION_SHA256 = "84e0596b6baf2d304349dc0702d0c80391f5bca54f44d9cfb0cadbe83dc69e36";
 export { REAL_WORKER_UNIT_COUNT };
 
 export interface Scenario {
@@ -89,7 +102,6 @@ export interface CliOptions {
   shardIndex: number;
   model: string;
   workerMode: WorkerMode;
-  workerInventoryDir?: string;
   policyPath?: string;
   skillPath?: string;
   variantRoot?: string;
@@ -107,6 +119,7 @@ export interface Digests {
   probeSha256: string;
   oracleSha256: string;
   workerAgentSha256: string;
+  workerWitnessSha256: string;
   runnerSha256: string;
   shellParserSha256: string;
   scenarioManifestSha256: string;
@@ -173,6 +186,8 @@ export interface LiveRunResult {
   runIndex: number;
   tier: Tier;
   variant: Variant;
+  workerMode: WorkerMode;
+  workerWitnessSha256: string;
   scenarioId: string;
   pass: boolean;
   verdict: "pass" | "fail";
@@ -189,6 +204,9 @@ export interface LiveRunResult {
   sessionId: string;
   eventLogId: string;
   traceId: string | null;
+  structuralReceiptSha256: string | null;
+  witnessReceiptSha256: string | null;
+  semanticVeto: "PASS" | "VETO" | "ERROR" | "NOT_RUN";
   oracle: Partial<Record<GateName, PersistedOracleResult>>;
 }
 
@@ -205,6 +223,9 @@ export interface PreparedRun {
   copiedSkill: string;
   copiedProbe: string;
   copiedWorkerAgent: string;
+  copiedWorkerWitness: string;
+  copiedSemanticCriteria: string;
+  workerHistoryDb: string;
 }
 
 export interface StableAuthIdentity {
@@ -233,10 +254,15 @@ export interface CampaignSnapshot {
   authProvider: string | null;
   authIdentity: StableAuthIdentity | null;
   workerAgent: Buffer;
+  workerWitness: Buffer;
+  semanticCriteria: Buffer;
+  realWorkerExtensionPath?: string;
   policySha256: string;
   skillSha256: string;
   probeSha256: string;
   workerAgentSha256: string;
+  workerWitnessSha256: string;
+  semanticCriteriaSha256: string;
   runnerSha256: string;
   shellParserSha256: string;
   manifestSha256: string;
@@ -269,10 +295,10 @@ export function usage(): string {
     "Usage:",
     "  A4S_RUN_AGENT_E2E=1 npm run eval:work-gates -- --tier smoke --runs 1 --model provider/model --results ./smoke.jsonl",
     "  A4S_RUN_AGENT_E2E=1 npm run eval:work-gates -- --tier corpus --model provider/model --results ./corpus.jsonl",
-    "  A4S_RUN_AGENT_E2E=1 npm run eval:work-gates -- --tier compliance --runs 300 --shard-count 12 --shard-index 0 --model provider/model --variant candidate --results ./candidate.jsonl --concurrency 2 --deadline-ms 120000 --resume",
+    "  A4S_RUN_AGENT_E2E=1 npm run eval:work-gates -- --tier compliance --runs 300 --shard-count 12 --shard-index 0 --model provider/model --real-workers --variant candidate --results ./candidate.jsonl --concurrency 2 --deadline-ms 120000 --resume",
     "  A4S_RUN_AGENT_E2E=1 npm run eval:work-gates -- --tier git-e2e --model provider/model --results ./git-e2e.jsonl",
-    "  A4S_RUN_AGENT_E2E=1 npm run eval:work-gates -- --tier compliance --runs 300 --model provider/model --variant baseline --root /baseline --results ./baseline-root.jsonl --concurrency 2 --deadline-ms 120000 --resume",
-    "  A4S_RUN_AGENT_E2E=1 npm run eval:work-gates -- --tier compliance --runs 300 --model provider/model --variant baseline --policy /baseline/AGENTS.md --skill /baseline/skills/work-lifecycle/SKILL.md --results ./baseline-files.jsonl --concurrency 2 --deadline-ms 120000 --resume",
+    "  A4S_RUN_AGENT_E2E=1 npm run eval:work-gates -- --tier compliance --runs 300 --model provider/model --real-workers --variant baseline --root /baseline --results ./baseline-root.jsonl --concurrency 2 --deadline-ms 120000 --resume",
+    "  A4S_RUN_AGENT_E2E=1 npm run eval:work-gates -- --tier compliance --runs 300 --model provider/model --real-workers --variant baseline --policy /baseline/AGENTS.md --skill /baseline/skills/work-lifecycle/SKILL.md --results ./baseline-files.jsonl --concurrency 2 --deadline-ms 120000 --resume",
     "  npm run eval:work-gates -- --verify-shards ./candidate.jsonl.shard-0-of-12.jsonl,... --runs 300 --shard-count 12",
     "",
     "Options:",
@@ -289,8 +315,7 @@ export function usage(): string {
     "  --verify-shards PATHS Verify a comma-separated set of shard files.",
     "  --concurrency N        Set concurrent runs. The maximum is 4.",
     "  --model PROVIDER/ID    Set the exact live campaign model.",
-    "  --real-workers         Use eight real Workers through pi-subagents-j0k3r@1.6.1.",
-    "  --worker-inventory-dir PATH  Read external Worker inventory evidence from PATH.",
+    "  --real-workers         Use eight real Workers through the verified local pi-subagents-j0k3r@1.6.1 archive.",
     "  --tier NAME           Select smoke, corpus, compliance, or git-e2e.",
     "  --runs N              Set the smoke or compliance run count.",
     "",
@@ -331,7 +356,6 @@ export function parseCli(argv: readonly string[]): CliOptions {
   let variant: Variant = "candidate";
   let model: string | undefined;
   let workerMode: WorkerMode = "simulated";
-  let workerInventoryDir: string | undefined;
   let policyPath: string | undefined;
   let skillPath: string | undefined;
   let variantRoot: string | undefined;
@@ -394,12 +418,6 @@ export function parseCli(argv: readonly string[]): CliOptions {
       case "--real-workers":
         workerMode = "real";
         break;
-      case "--worker-inventory-dir": {
-        const value = argv[++index];
-        if (!value) throw new Error("--worker-inventory-dir requires a path");
-        workerInventoryDir = resolve(value);
-        break;
-      }
       case "--policy": {
         const value = argv[++index];
         if (!value) throw new Error("--policy requires a path");
@@ -460,11 +478,8 @@ export function parseCli(argv: readonly string[]): CliOptions {
   if (tier === "git-e2e" && selectedConcurrency !== 1) {
     throw new Error("git-e2e requires --concurrency 1");
   }
-  if (workerMode === "real" && !workerInventoryDir) {
-    throw new Error("--real-workers requires --worker-inventory-dir");
-  }
-  if (workerMode === "simulated" && workerInventoryDir) {
-    throw new Error("--worker-inventory-dir requires --real-workers");
+  if (tier === "compliance" && workerMode !== "real") {
+    throw new Error("compliance requires --real-workers");
   }
   if (variantRoot && (policyPath || skillPath)) {
     throw new Error("--root cannot be combined with --policy or --skill");
@@ -485,7 +500,6 @@ export function parseCli(argv: readonly string[]): CliOptions {
     shardIndex: selectedShardIndex,
     model,
     workerMode,
-    ...(workerInventoryDir ? { workerInventoryDir } : {}),
     ...(policyPath ? { policyPath } : {}),
     ...(skillPath ? { skillPath } : {}),
     ...(variantRoot ? { variantRoot } : {}),
@@ -1172,11 +1186,13 @@ export async function createCampaignSnapshot(input: {
   const root = await mkdtemp(join(tmpdir(), "a4s-work-gate-campaign-"));
   try {
     const agentDir = input.agentDir ?? sourceAgentDirectory();
-    const [policy, skill, probe, workerAgent, runner, shellParser, fixture, settings, models, auth] = await Promise.all([
+    const [policy, skill, probe, workerAgent, workerWitness, semanticCriteria, runner, shellParser, fixture, settings, models, auth] = await Promise.all([
       readFile(input.policySource),
       readFile(input.skillSource),
       readFile(input.probeSource ?? PROBE_PATH),
       readFile(WORKER_AGENT_PATH),
+      readFile(WORKER_WITNESS_PATH),
+      readFile(AGENTEVALS_CRITERIA_PATH),
       readFile(RUNNER_PATH),
       readFile(SHELL_PARSER_PATH),
       readFile(input.fixtureSource ?? FIXTURE_PATH),
@@ -1201,10 +1217,14 @@ export async function createCampaignSnapshot(input: {
       authProvider: filteredAuth?.provider ?? null,
       authIdentity: filteredAuth?.identity ?? null,
       workerAgent,
+      workerWitness,
+      semanticCriteria,
       policySha256: sha256(policy),
       skillSha256: sha256(skill),
       probeSha256: sha256(probe),
       workerAgentSha256: sha256(workerAgent),
+      workerWitnessSha256: sha256(workerWitness),
+      semanticCriteriaSha256: sha256(semanticCriteria),
       runnerSha256: sha256(runner),
       shellParserSha256: sha256(shellParser),
       manifestSha256: sha256(fixture),
@@ -1274,6 +1294,30 @@ async function locateRuntime(): Promise<Pick<RuntimeExecutable, "path" | "sha256
   return { path, sha256: await digestFile(path) };
 }
 
+export async function provisionRealWorkerExtension(tgzPath: string, destinationRoot: string): Promise<string> {
+  const archive = await realpath(tgzPath);
+  const info = await stat(archive);
+  if (!info.isFile() || info.size !== REAL_WORKER_EXTENSION_BYTES) {
+    throw new Error(`A4S_PI_SUBAGENTS_TGZ must be exactly ${REAL_WORKER_EXTENSION_BYTES} bytes`);
+  }
+  const digest = await digestFile(archive);
+  if (digest !== REAL_WORKER_EXTENSION_SHA256) {
+    throw new Error(`A4S_PI_SUBAGENTS_TGZ has an invalid SHA-256 digest`);
+  }
+  const destination = join(destinationRoot, "pi-subagents-j0k3r");
+  await mkdir(destination, { recursive: true, mode: 0o700 });
+  const extracted = spawnSync("tar", ["-xzf", archive, "-C", destination], {
+    encoding: "utf8", timeout: 20_000, env: process.env,
+  });
+  if (extracted.status !== 0) throw new Error("Unable to extract A4S_PI_SUBAGENTS_TGZ");
+  const packageRoot = join(destination, "package");
+  const manifest = JSON.parse(await readFile(join(packageRoot, "package.json"), "utf8")) as Record<string, unknown>;
+  if (manifest.name !== "pi-subagents-j0k3r" || manifest.version !== "1.6.1" || manifest.main !== "./index.ts") {
+    throw new Error("A4S_PI_SUBAGENTS_TGZ has invalid package metadata");
+  }
+  return realpath(join(packageRoot, "index.ts"));
+}
+
 async function runtimeIdentity(located: Pick<RuntimeExecutable, "path" | "sha256">): Promise<RuntimeExecutable> {
   await verifyRuntimeDigest(located.path, located.sha256);
   const versionResult = spawnSync(located.path, ["--version"], {
@@ -1308,13 +1352,20 @@ export async function prepareRun(
     const copiedSkill = join(workspace, "skills", "work-lifecycle", "SKILL.md");
     const copiedProbe = join(root, "extension", "work-gate-probe.ts");
     const copiedWorkerAgent = join(agentDir, "agents", "reviewer.md");
+    const copiedWorkerWitness = join(root, "witness", "sqlite_worker_witness.py");
+    const copiedSemanticCriteria = join(root, "evals", "criteria.txt");
     const eventLog = join(artifactDir, "probe.jsonl");
+    const workerHistoryDb = join(artifactDir, "worker-history.sqlite");
     const scenarioPath = join(artifactDir, "scenario.json");
+    const subagentsConfig = join(workspace, ".pi", "subagents.json");
 
     await Promise.all([
       mkdir(dirname(copiedSkill), { recursive: true }),
       mkdir(dirname(copiedProbe), { recursive: true }),
       mkdir(dirname(copiedWorkerAgent), { recursive: true }),
+      mkdir(dirname(copiedWorkerWitness), { recursive: true }),
+      mkdir(dirname(copiedSemanticCriteria), { recursive: true }),
+      mkdir(dirname(subagentsConfig), { recursive: true }),
       mkdir(home, { recursive: true }),
       mkdir(agentDir, { recursive: true }),
       mkdir(sessionDir, { recursive: true }),
@@ -1325,6 +1376,9 @@ export async function prepareRun(
       writeFile(copiedSkill, snapshot.skill, { mode: 0o600 }),
       writeFile(copiedProbe, snapshot.probe, { mode: 0o600 }),
       writeFile(copiedWorkerAgent, snapshot.workerAgent, { mode: 0o600 }),
+      writeFile(copiedWorkerWitness, snapshot.workerWitness, { mode: 0o600 }),
+      writeFile(copiedSemanticCriteria, snapshot.semanticCriteria, { mode: 0o600 }),
+      writeFile(subagentsConfig, `${JSON.stringify({ max_concurrency: REAL_WORKER_UNIT_COUNT })}\n`, { mode: 0o600 }),
       writeFile(scenarioPath, `${JSON.stringify(scenario, null, 2)}\n`, { mode: 0o600 }),
       writeFile(eventLog, "", { mode: 0o600 }),
       writeOptionalSnapshot(snapshot.settings, join(agentDir, "settings.json")),
@@ -1345,6 +1399,9 @@ export async function prepareRun(
       copiedSkill,
       copiedProbe,
       copiedWorkerAgent,
+      copiedWorkerWitness,
+      copiedSemanticCriteria,
+      workerHistoryDb,
     };
   } catch (error) {
     await rm(root, { recursive: true, force: true });
@@ -1366,7 +1423,10 @@ export async function verifyPreparedRun(
     digestFile(prepared.copiedSkill),
     digestFile(prepared.copiedProbe),
     digestFile(prepared.copiedWorkerAgent),
+    digestFile(prepared.copiedWorkerWitness),
+    digestFile(prepared.copiedSemanticCriteria),
     digestFile(WORKER_AGENT_PATH),
+    digestFile(WORKER_WITNESS_PATH),
     digestFile(RUNNER_PATH),
     digestShellParser(),
     rawOptionalDigest(join(prepared.agentDir, "settings.json")),
@@ -1377,7 +1437,10 @@ export async function verifyPreparedRun(
     ["skill", snapshot.skillSha256],
     ["probe", snapshot.probeSha256],
     ["copied Worker agent", snapshot.workerAgentSha256],
+    ["copied Worker witness", snapshot.workerWitnessSha256],
+    ["copied semantic criteria", snapshot.semanticCriteriaSha256],
     ["source Worker agent", snapshot.workerAgentSha256],
+    ["source Worker witness", snapshot.workerWitnessSha256],
     ["runner", snapshot.runnerSha256],
     ["shell parser", snapshot.shellParserSha256],
     ["settings", snapshot.settingsDigest],
@@ -1458,7 +1521,7 @@ export async function withPreparedRun<T>(
   }
 }
 
-function promptFor(scenario: Scenario | GitScenario, workerMode: WorkerMode): string {
+function promptFor(scenario: Scenario | GitScenario, workerMode: WorkerMode, workerNonce: string): string {
   const workerDispatch = workerMode === "real"
     ? [
       "Primero delega exactamente ocho unidades independientes en una sola respuesta.",
@@ -1466,7 +1529,7 @@ function promptFor(scenario: Scenario | GitScenario, workerMode: WorkerMode): st
       "Usa cada nombre y cada tarea exactamente como se indican.",
       ...Array.from({ length: REAL_WORKER_UNIT_COUNT }, (_, offset) => {
         const index = offset + 1;
-        return `name=unit-${String(index).padStart(2, "0")}; task=${realWorkerTask(index)}`;
+        return `name=unit-${String(index).padStart(2, "0")}; task=${realWorkerTask(index, workerNonce)}`;
       }),
       "Continúa sólo después de recibir las ocho respuestas.",
     ]
@@ -1539,7 +1602,9 @@ export function pionArgs(
   sessionId: string,
   model: string,
   workerMode: WorkerMode = "simulated",
+  realWorkerExtensionPath?: string,
 ): string[] {
+  if (workerMode === "real" && !realWorkerExtensionPath) throw new Error("real Worker mode requires a verified local extension path");
   return [
     "--mode", "rpc",
     "--approve",
@@ -1548,7 +1613,7 @@ export function pionArgs(
     "--session-id", sessionId,
     "--no-extensions",
     "--extension", prepared.copiedProbe,
-    ...(workerMode === "real" ? ["--extension", REAL_WORKER_EXTENSION] : []),
+    ...(workerMode === "real" ? ["--extension", realWorkerExtensionPath!] : []),
     "--no-builtin-tools",
     "--no-skills",
     "--skill", prepared.copiedSkill,
@@ -1604,6 +1669,7 @@ export async function verifyRuntimeDigest(path: string, expectedSha256: string):
 export interface RunPionOptions {
   workerMode?: WorkerMode;
   sessionId?: string;
+  realWorkerExtensionPath?: string;
   onRecord?: (record: Record<string, unknown>) => RealWorkerRecordDisposition | void;
 }
 
@@ -1619,7 +1685,7 @@ export async function runPion(
   const workerMode = options.workerMode ?? "simulated";
   const child = spawn(
     runtime.path,
-    pionArgs(prepared, options.sessionId ?? randomUUID(), modelIdentity.canonicalId, workerMode),
+    pionArgs(prepared, options.sessionId ?? randomUUID(), modelIdentity.canonicalId, workerMode, options.realWorkerExtensionPath),
     {
       cwd: prepared.workspace,
       detached: process.platform !== "win32",
@@ -1632,6 +1698,7 @@ export async function runPion(
         A4S_GATE_SCENARIO_PATH: prepared.scenarioPath,
         A4S_GATE_EVENT_LOG: prepared.eventLog,
         A4S_GATE_WORKER_MODE: workerMode,
+        PI_SUBAGENTS_HISTORY_DB_PATH: prepared.workerHistoryDb,
       },
       stdio: ["pipe", "pipe", "pipe"],
     },
@@ -1646,6 +1713,7 @@ export async function runPion(
     let promptSent = false;
     let promptRejected: string | null = null;
     let completed = false;
+    let stdoutBytes = 0;
 
     const rejectPreflight = (reason: string): void => {
       if (promptRejected) return;
@@ -1659,6 +1727,10 @@ export async function runPion(
       child.stdin.write(`${JSON.stringify({ type: "prompt", id: "work-gate", message: prompt })}\n`);
     };
     const onRecord = (record: Record<string, unknown>): void => {
+      if (stdout.length >= MAX_RPC_STDOUT_RECORDS) {
+        rejectPreflight("RPC stdout has too many records");
+        return;
+      }
       stdout.push(record);
       const disposition = options.onRecord?.(record);
       if (record.type === "response" && record.id === "model-identity") {
@@ -1693,7 +1765,14 @@ export async function runPion(
       const record = parseRecord(line);
       if (record) onRecord(record);
     });
-    child.stdout.on("data", (chunk: Buffer) => stdoutReader.feed(chunk.toString("utf8")));
+    child.stdout.on("data", (chunk: Buffer) => {
+      stdoutBytes += chunk.length;
+      if (stdoutBytes > MAX_RPC_STDOUT_BYTES) {
+        rejectPreflight("RPC stdout exceeds the size limit");
+        return;
+      }
+      stdoutReader.feed(chunk.toString("utf8"));
+    });
     child.stdout.on("end", () => stdoutReader.end());
     child.stderr.on("data", (chunk: Buffer) => {
       if (stderrChunks.join("").length < 50_000) stderrChunks.push(chunk.toString("utf8"));
@@ -1995,8 +2074,111 @@ async function verifyGitEvidence(scenario: GitScenario, tagged: readonly TaggedS
 
 class ModelPreflightError extends CampaignIntegrityError {}
 
-export function workerInventoryPath(directory: string, runId: string): string {
-  return join(directory, `${sha256(runId)}.jsonl`);
+interface SqliteWitnessReceipt {
+  schema: "a4s.worker-witness-receipt/v1";
+  status: "PASS" | "FAIL" | "UNKNOWN";
+  campaign_key: string;
+  nonce: string;
+  cwd: string;
+  parent_session_id: string;
+  snapshots: WorkerSqliteSnapshot[];
+  started_events: WorkerStartedEvent[];
+}
+
+async function captureBoundedProcess(command: string, args: readonly string[], timeoutMs: number): Promise<{ code: number | null; stdout: Buffer }> {
+  const child = spawn(command, args, { stdio: ["ignore", "pipe", "ignore"], detached: process.platform !== "win32" });
+  const chunks: Buffer[] = [];
+  let size = 0;
+  return new Promise((resolveCapture, rejectCapture) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      hardKill(child);
+      if (!settled) { settled = true; rejectCapture(new Error("child process timed out")); }
+    }, timeoutMs);
+    child.stdout.on("data", (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > MAX_CHILD_STDOUT_BYTES) {
+        hardKill(child);
+        if (!settled) { settled = true; clearTimeout(timer); rejectCapture(new Error("child stdout exceeds the size limit")); }
+        return;
+      }
+      chunks.push(chunk);
+    });
+    child.on("error", (error) => {
+      if (!settled) { settled = true; clearTimeout(timer); rejectCapture(error); }
+    });
+    child.on("close", (code) => {
+      if (!settled) { settled = true; clearTimeout(timer); resolveCapture({ code, stdout: Buffer.concat(chunks) }); }
+    });
+  });
+}
+
+function parseWitnessReceipt(value: Buffer, input: { campaignKey: string; nonce: string; cwd: string; parentSessionId: string }): { receipt: SqliteWitnessReceipt; result: WorkerWitnessResult } {
+  let parsed: unknown;
+  try { parsed = JSON.parse(value.toString("utf8")); } catch { throw new Error("SQLite witness returned invalid JSON"); }
+  if (!isPlainObject(parsed) || parsed.schema !== "a4s.worker-witness-receipt/v1" ||
+      !["PASS", "FAIL", "UNKNOWN"].includes(String(parsed.status)) ||
+      parsed.campaign_key !== input.campaignKey || parsed.nonce !== input.nonce || parsed.cwd !== input.cwd ||
+      parsed.parent_session_id !== input.parentSessionId || !Array.isArray(parsed.snapshots) || !Array.isArray(parsed.started_events)) {
+    throw new Error("SQLite witness returned an incompatible receipt");
+  }
+  const receipt = parsed as unknown as SqliteWitnessReceipt;
+  const result = reconcileWorkerWitness({
+    nonce: input.nonce, cwd: input.cwd, parentSessionId: input.parentSessionId,
+    snapshots: receipt.snapshots, startedEvents: receipt.started_events, expectedWorkers: REAL_WORKER_UNIT_COUNT,
+  });
+  const expectedStatus = result.verdict === "pass" ? "PASS" : result.verdict === "fail" ? "FAIL" : "UNKNOWN";
+  if (receipt.status !== expectedStatus) throw new Error("SQLite witness receipt contradicts its evidence");
+  return { receipt, result };
+}
+
+async function startSqliteWitness(input: {
+  prepared: PreparedRun; campaignKey: string; nonce: string; parentSessionId: string; timeoutMs: number;
+}): Promise<{ bytes: Buffer; receipt: SqliteWitnessReceipt; result: WorkerWitnessResult }> {
+  const captured = await captureBoundedProcess(process.env.A4S_PYTHON ?? "python3", [
+    input.prepared.copiedWorkerWitness,
+    "--database", input.prepared.workerHistoryDb,
+    "--cwd", input.prepared.workspace,
+    "--parent-session", input.parentSessionId,
+    "--nonce", input.nonce,
+    "--campaign-key", input.campaignKey,
+    "--timeout-ms", String(input.timeoutMs),
+  ], input.timeoutMs + 5_000);
+  const parsed = parseWitnessReceipt(captured.stdout, {
+    campaignKey: input.campaignKey, nonce: input.nonce, cwd: input.prepared.workspace, parentSessionId: input.parentSessionId,
+  });
+  return { bytes: captured.stdout, ...parsed };
+}
+
+async function invokeAgentEvals(input: {
+  prepared: PreparedRun; campaignKey: string; model: string; structuralPath: string; witnessPath: string;
+  trajectoryPath: string; criteriaPath: string; criteriaSha256: string; timeoutMs: number;
+}): Promise<"PASS" | "VETO" | "ERROR"> {
+  const output = join(input.prepared.artifactDir, "agentevals-result.json");
+  const [provider, ...modelParts] = input.model.split("/");
+  const captured = await captureBoundedProcess(process.env.A4S_PYTHON ?? "python3", [
+    AGENTEVALS_ADAPTER_PATH,
+    "--structural-receipt", input.structuralPath,
+    "--witness-receipt", input.witnessPath,
+    "--trajectory", input.trajectoryPath,
+    "--criteria", input.criteriaPath,
+    "--criteria-sha256", input.criteriaSha256,
+    "--campaign-key", input.campaignKey,
+    "--provider", provider!,
+    "--model", modelParts.join("/"),
+    "--timeout-seconds", String(Math.max(1, Math.floor(input.timeoutMs / 1000))),
+    "--output", output,
+  ], input.timeoutMs + 5_000);
+  if (captured.stdout.length > MAX_CHILD_STDOUT_BYTES) throw new Error("AgentEvals stdout exceeds the size limit");
+  const info = await stat(output);
+  if (info.size > MAX_CHILD_STDOUT_BYTES) throw new Error("AgentEvals result exceeds the size limit");
+  const result = JSON.parse(await readFile(output, "utf8")) as Record<string, unknown>;
+  const status = result.status;
+  if (status !== "PASS" && status !== "VETO" && status !== "ERROR") throw new Error("AgentEvals returned an invalid status");
+  if ((status === "PASS" && captured.code !== 0) || (status === "VETO" && captured.code !== 1) || (status === "ERROR" && captured.code !== 2)) {
+    throw new Error("AgentEvals status and exit code differ");
+  }
+  return status;
 }
 
 async function runOne(
@@ -2022,32 +2204,46 @@ async function runOne(
 
   return withPreparedRun(snapshot, scenario, async (prepared) => {
     const workerRunId = `run:${campaignKey}:${item.index}`;
-    const workerObserver = options.workerMode === "real" ? new RealWorkerObserver(workerRunId) : undefined;
+    const workerNonce = randomUUID();
+    const parentSessionId = randomUUID();
+    const workerObserver = options.workerMode === "real" ? new RealWorkerObserver(workerRunId, workerNonce) : undefined;
+    let witnessPending: Promise<{ bytes: Buffer; receipt: SqliteWitnessReceipt; result: WorkerWitnessResult }> | undefined;
+    let witnessBytes: Buffer | undefined;
+    let structuralReceiptSha256: string | null = null;
+    let witnessReceiptSha256: string | null = null;
+    let semanticVeto: LiveRunResult["semanticVeto"] = "NOT_RUN";
     try {
       if (scenario.id === "GIT-E2E") {
         scenario = await prepareGitScenario(prepared.root);
         await writeFile(prepared.scenarioPath, `${JSON.stringify(scenario, null, 2)}\n`, { mode: 0o600 });
       }
       await verifyPreparedRun(snapshot, prepared);
+      if (workerObserver) {
+        witnessPending = startSqliteWitness({
+          prepared, campaignKey, nonce: workerNonce, parentSessionId, timeoutMs: options.deadlineMs,
+        });
+      }
       capture = await runPion(
         runtime,
         prepared,
         options.deadlineMs,
-        promptFor(scenario, options.workerMode),
+        promptFor(scenario, options.workerMode, workerNonce),
         modelIdentity,
         {
           workerMode: options.workerMode,
+          sessionId: parentSessionId,
+          ...(snapshot.realWorkerExtensionPath ? { realWorkerExtensionPath: snapshot.realWorkerExtensionPath } : {}),
           ...(workerObserver ? { onRecord: (record: Record<string, unknown>) => workerObserver.onRecord(record) } : {}),
         },
       );
-      if (workerObserver) {
-        if (!options.workerInventoryDir) throw new Error("external Worker inventory directory is missing");
-        const inventoryContent = await readFile(workerInventoryPath(options.workerInventoryDir, workerRunId), "utf8");
-        const inventorySnapshots = parseWorkerInventoryJsonl(inventoryContent);
+      if (workerObserver && witnessPending) {
+        const witnessed = await witnessPending;
+        witnessPending = undefined;
+        witnessBytes = witnessed.bytes;
         workerObserver.validate({
           expectedUnits: REAL_WORKER_UNIT_COUNT,
           minimumRunning: REAL_WORKER_UNIT_COUNT,
-          inventorySnapshots,
+          witness: witnessed.result,
         });
         await appendFile(`${options.resultsPath}.workers.jsonl`, workerObserver.toJsonl(), { encoding: "utf8", mode: 0o600 });
       }
@@ -2066,6 +2262,10 @@ async function runOne(
       await verifyRuntimeDigest(runtime.path, runtime.sha256);
       await verifyPreparedRun(snapshot, prepared, { allowSelectedCredentialRefresh: true });
     } catch (error) {
+      if (witnessPending) {
+        try { await witnessPending; } catch { /* The primary failure remains authoritative. */ }
+        witnessPending = undefined;
+      }
       infrastructureError = redactString(error instanceof Error ? error.message : String(error));
       capture = { ...capture, infrastructureError };
     }
@@ -2083,7 +2283,45 @@ async function runOne(
       ? await verifyGitEvidence(scenario as GitScenario, tagged)
       : [];
     const criticalViolations = sanitize([...scenarioViolations, ...gitViolations]) as string[];
-    const pass = summary.pass && criticalViolations.length === 0 && infrastructureError === null;
+    let pass = summary.pass && criticalViolations.length === 0 && infrastructureError === null;
+    if (pass && options.workerMode === "real") {
+      try {
+        if (!witnessBytes) throw new Error("Worker witness receipt is absent");
+        const trajectoryPath = join(prepared.artifactDir, "trajectory.json");
+        const witnessPath = join(prepared.artifactDir, "witness-receipt.json");
+        const structuralPath = join(prepared.artifactDir, "structural-receipt.json");
+        const trajectoryBytes = Buffer.from(`${JSON.stringify({ trajectory: capture.stdout })}\n`);
+        witnessReceiptSha256 = sha256(witnessBytes);
+        const structuralBytes = Buffer.from(`${JSON.stringify({
+          schema: "a4s.structural-receipt/v1",
+          status: "PASS",
+          campaign_key: campaignKey,
+          worker_mode: options.workerMode,
+          trajectory_sha256: sha256(trajectoryBytes),
+          witness_receipt_sha256: witnessReceiptSha256,
+          worker_witness_sha256: expectedDigests.workerWitnessSha256,
+        })}\n`);
+        structuralReceiptSha256 = sha256(structuralBytes);
+        await Promise.all([
+          writeFile(trajectoryPath, trajectoryBytes, { mode: 0o600 }),
+          writeFile(witnessPath, witnessBytes, { mode: 0o600 }),
+          writeFile(structuralPath, structuralBytes, { mode: 0o600 }),
+        ]);
+        semanticVeto = await invokeAgentEvals({
+          prepared, campaignKey, model: modelIdentity.canonicalId, structuralPath, witnessPath, trajectoryPath,
+          criteriaPath: prepared.copiedSemanticCriteria,
+          criteriaSha256: snapshot.semanticCriteriaSha256, timeoutMs: options.deadlineMs,
+        });
+        if (semanticVeto !== "PASS") {
+          pass = false;
+          criticalViolations.push(`AgentEvals ${semanticVeto} blocks promotion`);
+        }
+      } catch (error) {
+        semanticVeto = "ERROR";
+        pass = false;
+        infrastructureError = redactString(error instanceof Error ? error.message : String(error));
+      }
+    }
     const captureMetadata = persistedCaptureMetadata(capture);
     const persistedOracle = Object.fromEntries(Object.entries(oracle).map(([gate, value]) => [
       gate,
@@ -2097,6 +2335,8 @@ async function runOne(
       runIndex: item.index,
       tier: options.tier,
       variant: options.variant,
+      workerMode: options.workerMode,
+      workerWitnessSha256: expectedDigests.workerWitnessSha256,
       scenarioId: scenario.id,
       pass,
       verdict: pass ? "pass" : "fail",
@@ -2113,6 +2353,9 @@ async function runOne(
       sessionId: `session:${campaignKey}:${item.index}`,
       eventLogId: `event-log:${campaignKey}:${item.index}`,
       traceId: null,
+      structuralReceiptSha256,
+      witnessReceiptSha256,
+      semanticVeto,
       oracle: persistedOracle,
     }) as unknown as LiveRunResult;
     try {
@@ -2207,6 +2450,8 @@ export function campaignKeyFor(input: {
   skillDigest: string;
   probeDigest: string;
   workerAgentSha256: string;
+  workerWitnessSha256?: string;
+  workerMode?: WorkerMode;
   runnerSha256: string;
   shellParserSha256: string;
   manifestDigest: string;
@@ -2217,16 +2462,16 @@ export function campaignKeyFor(input: {
   authDigest: string;
   modelDigest: string;
 }): string {
-  return sha256(JSON.stringify(input)).slice(0, 24);
+  return sha256(JSON.stringify({ ...input, workerMode: input.workerMode ?? "simulated", workerWitnessSha256: input.workerWitnessSha256 ?? "absent" })).slice(0, 24);
 }
 
 const RESULT_FIELDS = [
-  "schemaVersion", "campaignKey", "shardIndex", "shardCount", "runIndex", "tier", "variant", "scenarioId", "pass", "verdict",
+  "schemaVersion", "campaignKey", "shardIndex", "shardCount", "runIndex", "tier", "variant", "workerMode", "workerWitnessSha256", "scenarioId", "pass", "verdict",
   "decision", "criticalViolations", "digests", "modelIdentity", "runtime", "durationMs", "agentOutcome",
-  "infrastructureError", "hadFinalResponse", "artifactId", "sessionId", "eventLogId", "traceId", "oracle",
+  "infrastructureError", "hadFinalResponse", "artifactId", "sessionId", "eventLogId", "traceId", "structuralReceiptSha256", "witnessReceiptSha256", "semanticVeto", "oracle",
 ] as const;
 const DIGEST_FIELDS = [
-  "policySha256", "skillSha256", "probeSha256", "oracleSha256", "workerAgentSha256", "runnerSha256", "shellParserSha256", "scenarioManifestSha256", "runtimeSha256",
+  "policySha256", "skillSha256", "probeSha256", "oracleSha256", "workerAgentSha256", "workerWitnessSha256", "runnerSha256", "shellParserSha256", "scenarioManifestSha256", "runtimeSha256",
   "settingsDigest", "modelsDigest", "authDigest", "modelDigest",
 ] as const;
 const MODEL_IDENTITY_FIELDS = ["canonicalId", "settingsSha256", "modelsSha256", "modelDigest"] as const;
@@ -2289,6 +2534,11 @@ function parseLiveResult(line: string, lineNumber: number): LiveRunResult {
       /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(record.traceId))) ||
     !stringsValid || !idsValid || !["smoke", "corpus", "compliance", "git-e2e"].includes(record.tier as string) ||
     !["candidate", "baseline"].includes(record.variant as string) ||
+    !["simulated", "real"].includes(record.workerMode as string) || typeof record.workerWitnessSha256 !== "string" ||
+    record.workerWitnessSha256 !== (record.digests as Record<string, unknown>)?.workerWitnessSha256 ||
+    !(record.structuralReceiptSha256 === null || /^[0-9a-f]{64}$/.test(String(record.structuralReceiptSha256))) ||
+    !(record.witnessReceiptSha256 === null || /^[0-9a-f]{64}$/.test(String(record.witnessReceiptSha256))) ||
+    !["PASS", "VETO", "ERROR", "NOT_RUN"].includes(String(record.semanticVeto)) ||
     !["pass", "fail"].includes(record.verdict as string) || !DECISIONS.has(record.decision as string) ||
     !OUTCOMES.has(record.agentOutcome as SessionOutcome) ||
     !(record.infrastructureError === null || typeof record.infrastructureError === "string") ||
@@ -2313,6 +2563,7 @@ export interface ResumeExpectations {
   variant: Variant;
   shardCount: number;
   shardIndex: number;
+  workerMode?: WorkerMode;
   items: readonly CampaignItem[];
 }
 
@@ -2373,7 +2624,8 @@ export async function validateResumeResults(
     }
     if (completed.has(record.runIndex)) throw new Error(`Duplicate resume index ${record.runIndex}`);
     if (record.tier !== expected.tier || record.variant !== expected.variant ||
-      record.shardCount !== expected.shardCount || record.shardIndex !== expected.shardIndex) {
+      record.shardCount !== expected.shardCount || record.shardIndex !== expected.shardIndex ||
+      (expected.workerMode !== undefined && record.workerMode !== expected.workerMode)) {
       throw new Error(`Resume campaign metadata mismatch at index ${record.runIndex}`);
     }
     const expectedItem = expectedItems.get(record.runIndex);
@@ -2413,7 +2665,8 @@ export async function validateResumeResults(
     // This check rejects detectable contradictions. It cannot detect a coherent forged record.
     if (!record.pass || record.verdict !== "pass" || record.hadFinalResponse !== true ||
       record.infrastructureError !== null || record.criticalViolations.length !== 0 ||
-      record.agentOutcome !== "normal" || !oracleMatches) {
+      record.agentOutcome !== "normal" || !oracleMatches ||
+      (record.workerMode === "real" && (record.semanticVeto !== "PASS" || record.structuralReceiptSha256 === null || record.witnessReceiptSha256 === null))) {
       throw new Error(`Resume contains a failed or incomplete run at index ${record.runIndex}`);
     }
     completed.add(record.runIndex);
@@ -2447,6 +2700,7 @@ export interface ShardVerificationSummary {
 function assertMatchingRecordIdentity(reference: LiveRunResult, record: LiveRunResult): void {
   if (record.campaignKey !== reference.campaignKey) throw new Error("Shard campaign key mismatch");
   if (record.variant !== reference.variant) throw new Error("Shard variant mismatch");
+  if (record.workerMode !== reference.workerMode || record.workerWitnessSha256 !== reference.workerWitnessSha256) throw new Error("Shard Worker witness identity mismatch");
   for (const field of DIGEST_FIELDS) {
     if (record.digests[field] !== reference.digests[field]) throw new Error(`Shard digest mismatch: ${field}`);
   }
@@ -2463,7 +2717,8 @@ function assertMatchingRecordIdentity(reference: LiveRunResult, record: LiveRunR
 function assertPassingManifestRecord(record: LiveRunResult, item: CampaignItem): void {
   if (record.scenarioId !== item.scenario.id) throw new Error(`Shard scenario mismatch at index ${record.runIndex}`);
   if (!record.pass || record.verdict !== "pass" || record.hadFinalResponse !== true ||
-    record.agentOutcome !== "normal" || record.infrastructureError !== null || record.criticalViolations.length !== 0) {
+    record.agentOutcome !== "normal" || record.infrastructureError !== null || record.criticalViolations.length !== 0 ||
+    record.workerMode !== "real" || record.semanticVeto !== "PASS" || record.structuralReceiptSha256 === null || record.witnessReceiptSha256 === null) {
     throw new Error(`Shard contains a failed or incomplete run at index ${record.runIndex}`);
   }
   if (!("expectedDecision" in item.scenario)) throw new Error("Git scenario is invalid in shard verification");
@@ -2542,13 +2797,17 @@ export async function verifyShardResults(input: ShardVerificationInput): Promise
   }
 
   if (!reference) throw new Error("Shard verification has no records");
-  const [currentWorkerAgentSha256, currentRunnerSha256, currentShellParserSha256] = await Promise.all([
+  const [currentWorkerAgentSha256, currentWorkerWitnessSha256, currentRunnerSha256, currentShellParserSha256] = await Promise.all([
     digestFile(WORKER_AGENT_PATH),
+    digestFile(WORKER_WITNESS_PATH),
     digestFile(RUNNER_PATH),
     digestShellParser(),
   ]);
   if (reference.digests.workerAgentSha256 !== currentWorkerAgentSha256) {
     throw new Error("Shard Worker agent digest does not match the verifying agent");
+  }
+  if (reference.digests.workerWitnessSha256 !== currentWorkerWitnessSha256) {
+    throw new Error("Shard Worker witness digest does not match the verifying witness");
   }
   if (reference.digests.runnerSha256 !== currentRunnerSha256) {
     throw new Error("Shard runner digest does not match the verifying runner");
@@ -2572,6 +2831,8 @@ export async function verifyShardResults(input: ShardVerificationInput): Promise
     skillDigest: reference.digests.skillSha256,
     probeDigest: reference.digests.probeSha256,
     workerAgentSha256: reference.digests.workerAgentSha256,
+    workerWitnessSha256: reference.digests.workerWitnessSha256,
+    workerMode: reference.workerMode,
     runnerSha256: reference.digests.runnerSha256,
     shellParserSha256: reference.digests.shellParserSha256,
     manifestDigest: reference.digests.scenarioManifestSha256,
@@ -2639,6 +2900,11 @@ async function main(): Promise<void> {
     canonicalModelId: options.model,
   });
   try {
+    if (options.workerMode === "real") {
+      const archive = process.env.A4S_PI_SUBAGENTS_TGZ;
+      if (!archive) throw new Error("A4S_PI_SUBAGENTS_TGZ is required for real Worker mode");
+      snapshot.realWorkerExtensionPath = await provisionRealWorkerExtension(archive, snapshot.root);
+    }
     const scenarios = parseScenarioManifest(snapshot.fixture.toString("utf8"));
     const items = campaignItems(options.tier, options.runs, scenarios, options.shardCount, options.shardIndex);
     const located = await locateRuntime();
@@ -2650,6 +2916,7 @@ async function main(): Promise<void> {
       probeSha256: snapshot.probeSha256,
       oracleSha256: snapshot.probeSha256,
       workerAgentSha256: snapshot.workerAgentSha256,
+      workerWitnessSha256: snapshot.workerWitnessSha256,
       runnerSha256: snapshot.runnerSha256,
       shellParserSha256: snapshot.shellParserSha256,
       scenarioManifestSha256: snapshot.manifestSha256,
@@ -2667,6 +2934,8 @@ async function main(): Promise<void> {
       skillDigest: snapshot.skillSha256,
       probeDigest: snapshot.probeSha256,
       workerAgentSha256: snapshot.workerAgentSha256,
+      workerWitnessSha256: snapshot.workerWitnessSha256,
+      workerMode: options.workerMode,
       runnerSha256: snapshot.runnerSha256,
       shellParserSha256: snapshot.shellParserSha256,
       manifestDigest: snapshot.manifestSha256,
@@ -2687,6 +2956,7 @@ async function main(): Promise<void> {
         variant: options.variant,
         shardCount: options.shardCount,
         shardIndex: options.shardIndex,
+        workerMode: options.workerMode,
         items,
       })
       : { completed: new Set<number>(), results: [], recovery: null };

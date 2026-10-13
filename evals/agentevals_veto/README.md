@@ -4,19 +4,11 @@ This adapter runs the `agentevals==0.0.9` asynchronous trajectory judge after tw
 
 ## Gate inputs
 
-The structural receipt must contain this exact object shape:
+The structural receipt uses schema `a4s.structural-receipt/v1`. It binds `PASS` to the campaign key, real Worker mode, trajectory digest, witness receipt digest, and witness implementation digest.
 
-```json
-{"schema":"a4s.structural-receipt/v1","status":"PASS"}
-```
+The witness receipt uses schema `a4s.worker-witness-receipt/v1`. It binds `PASS` to the same campaign key. It records eight unique task IDs, attempt values, nested sessions, started events, one eight-Worker running view, terminal persistence, and interval overlap.
 
-The independent witness receipt must contain this exact object shape:
-
-```json
-{"schema":"a4s.worker-witness-receipt/v1","status":"PASS"}
-```
-
-Any other schema, status, or field blocks judge creation. The exact uppercase value `PASS` is required.
+Any other schema, status, campaign key, link, or field blocks judge creation. The exact uppercase value `PASS` is required.
 
 The trajectory file must contain only a `trajectory` array:
 
@@ -63,6 +55,7 @@ python3 -m evals.agentevals_veto.adapter \
   --trajectory trajectory.json \
   --criteria trusted-criteria.txt \
   --criteria-sha256 "$TRUSTED_CRITERIA_SHA256" \
+  --campaign-key "$CAMPAIGN_KEY" \
   --provider "$APPROVED_PROVIDER" \
   --model "$APPROVED_MODEL" \
   --timeout-seconds 60 \
@@ -73,7 +66,7 @@ Exit code `0` means `PASS`. Exit code `1` means `VETO`. Exit code `2` means `ERR
 
 ## Test
 
-The focused tests use a deterministic fake bridge. They do not import AgentEvals. They do not call a model or external service.
+The focused tests use a deterministic fake bridge. The integration test imports the pinned AgentEvals package when the fixed dependency set is installed. The tests do not call a model or external service.
 
 ```sh
 python3 -m unittest discover -s evals/agentevals_veto/tests -t . -p "test_*.py" -v
