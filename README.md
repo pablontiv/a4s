@@ -5,6 +5,7 @@ Repositorio reducido a las extensiones verificadas, los agentes y el skill `refi
 ## Extensiones
 
 - [`packages/context-expert/`](packages/context-expert/): núcleo compartido y adaptadores de Context Expert para Pi/Pion y Claude.
+- [`packages/orca-omp-integration/`](packages/orca-omp-integration/): contratos de lifecycle y routing explícito de modelos para coordinadores OMP que usan workers de Orca.
 - [`packages/pi-tool-row-presentation/`](packages/pi-tool-row-presentation/): presentación configurable de tool rows para Pi/Pion.
 - [`packages/synagent/core/`](packages/synagent/core/): adaptadores de mensajería Synagent para Pi y Claude.
 - [`packages/synagent/bus/`](packages/synagent/bus/): bus MQTT requerido por Synagent.
