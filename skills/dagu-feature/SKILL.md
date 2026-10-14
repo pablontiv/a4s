@@ -144,7 +144,7 @@ Apply exactly one transition per observation:
 |---|---|
 | `state=MERGED` | `dagu human-task complete --run-id <id> --step await_merge feature`. `close_gate` then verifies the merged head, the successful required check, and the tested SHA, and fast-forwards the primary checkout. |
 | `state=OPEN`, `mergeStateStatus=BEHIND` | Read the current iteration and push back: `dagu human-task push-back --run-id <id> --step await_merge --expected-iteration <n> feature`. The same run resumes at `rebase`, reruns the gate, pushes the new tested SHA, waits for the required check, and re-enables guarded auto-merge. |
-| `state=OPEN`, `mergeStateStatus` `CLEAN`, `BLOCKED` or `UNKNOWN`, with `autoMergeRequest` non-null | Keep waiting and observe again later. |
+| `state=OPEN`, `mergeStateStatus` `CLEAN`, `BLOCKED`, `UNSTABLE` or `UNKNOWN`, with `autoMergeRequest` non-null | Keep waiting and observe again later. `UNSTABLE` means a check that is not required is still pending or failing, and auto-merge still waits for the required one. |
 
 Read `<n>` from `dagu status --run-id <id> feature`. The `await_merge` entry prints `push-back iteration: <n>` after the first push-back, and the iteration is `0` while that line is absent. Every push-back increments it. Read it again before the next push-back. A mismatch fails with a conflict and changes nothing, so two reconcilers cannot rewind the same checkpoint twice.
 
