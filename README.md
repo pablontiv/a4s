@@ -38,6 +38,10 @@ Sprint Planning alone ranks and enqueues new work; Dagu executes it. Discovery a
 - Análisis de coste y resultados: [`skills/cost-analyzer/SKILL.md`](skills/cost-analyzer/SKILL.md).
 - Model routing review: [`skills/omp-model-routing-audit/SKILL.md`](skills/omp-model-routing-audit/SKILL.md). Manual catalog/quota/routing snapshots and comparisons, evidence-backed proposals, operator-approved configuration and actual new-agent verification; default collection performs no inference or assignment.
 
+## Workspace hygiene
+
+- Skill: [`skills/workspace-hygiene/SKILL.md`](skills/workspace-hygiene/SKILL.md): opt-in inventory, classification (keep / preserve / remove), approved cleanup and publication, and final verification of worktrees, branches, stashes and Orca contexts.
+
 ## Dagu feature
 
 - Skill: [`packages/omp-dagu/skills/dagu-feature/SKILL.md`](packages/omp-dagu/skills/dagu-feature/SKILL.md): ciclo de issue con un DAG de Dagu propiedad del repo, con un solo run por issue.
