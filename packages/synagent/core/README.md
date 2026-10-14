@@ -12,8 +12,8 @@ y el ADR 0066.
    `@a4s/synagent-bus`, con broker MQTT Aedes, persistencia LevelDB y plugin
    Herdr. Los bridges de Claude viven dentro de su propio plugin.
 2. **Adaptadores** (`adapters/<harness>/`): bordes finos que traducen el API de
-   cada harness al contrato canónico. Incluye el plugin de Claude Code y la
-   extensión Pi.
+   cada harness al contrato canónico. Incluye el plugin de Claude Code y
+   las extensiones independientes de Pi y omp.
 3. **Protocolo** (`protocol.ts`): contrato canónico compartido — gramática de
    direcciones, mapa dirección→topic, plan de suscripción, enrutado y resolución
    de proyecto/instancia. El plugin Claude lleva una **copia generada** en
@@ -226,7 +226,7 @@ de `default-peer` no reinicia MQTT. Al cambiar los topics durables, el adaptador
 elimina las suscripciones obsoletas antes de usar las nuevas. Reintenta esa
 limpieza al reconectar. El cambio descarta mensajes aún no enviados de la
 configuración anterior. Una entrega ya pasada a Pi no se puede cancelar.
-Permanece como barrera de orden hasta `agent_settled`.
+Permanece como barrera de orden hasta que la sesión se asienta.
 
 ### Configuración nativa de Pi
 
@@ -283,10 +283,10 @@ Los mensajes recibidos se validan y se encolan en orden de llegada. Como la API
 pública `sendUserMessage` de Pi retorna `void`, el adaptador no finge esperar su
 procesamiento interno: invoca como máximo un mensaje, confirma su aceptación
 al observar el `message_start` de usuario con su marcador y libera el siguiente
-solo después de `agent_settled`. Un turno ajeno no puede liberar esa barrera. Pi
-conserva la autoridad sobre la planificación de turnos. Si una entrega no
-alcanza `message_start`, o una ya aceptada no alcanza `agent_settled`, en 30
-segundos mantiene la barrera y muestra una advertencia. Esto también cubre un
+solo cuando Pi emite `agent_settled`. Un turno ajeno no puede
+liberar esa barrera. El harness conserva la autoridad sobre la planificación de
+turnos. Si una entrega no alcanza `message_start`, o una ya aceptada no se
+asienta, en 30 segundos mantiene la barrera y muestra una advertencia. Esto también cubre un
 mensaje interceptado por otro input handler y evita confundir un fallo con un
 preflight o turno lento. El operador puede ejecutar `/synagent resume` para
 liberar la cola explícitamente, aceptando orden best-effort desde ese punto. El
@@ -330,6 +330,22 @@ pero un fallo posterior no cambia una línea ya escrita. Las defensas cubren a
 otros usuarios y paths hostiles preexistentes.
 No cubren un proceso malicioso con el mismo UID. También existe una ventana
 TOCTOU donde faltan APIs portables para cerrarla.
+
+## Adaptador de omp
+
+El adaptador independiente vive en `adapters/omp/index.ts`. El manifiesto del
+paquete declara `omp.extensions: ["./adapters/omp/index.ts"]` para cargarlo en
+omp; Pi conserva su propia entrada `pi.extensions`.
+
+La entrega libera el siguiente mensaje cuando omp emite `agent_end`, salvo
+que el evento indique `willContinue: true`. El adaptador comparte el motor de
+sesión con Pi, pero usa las señales y la configuración propias de omp.
+
+El archivo global es `~/.omp/agent/synagent.json` y el archivo de proyecto es
+`<ctx.cwd>/.omp/synagent.json`. Un valor no vacío de `PI_CODING_AGENT_DIR`
+sustituye `~/.omp/agent` como directorio del archivo global. Cada clave se
+resuelve desde el archivo de proyecto confiable, el archivo global y su
+default, en ese orden.
 
 ## Seguridad
 

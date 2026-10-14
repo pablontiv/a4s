@@ -22,6 +22,11 @@
       "./adapters/pi/index.ts"
     ]
   },
+  "omp": {
+    "extensions": [
+      "./adapters/omp/index.ts"
+    ]
+  },
   "scripts": {
     "test": "tsx --test test/*.test.ts",
     "typecheck": "tsc --noEmit"

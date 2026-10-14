@@ -8,129 +8,28 @@ import { test } from 'node:test'
 import { createRequire } from 'node:module'
 import { Check } from 'typebox/value'
 
-import synagentPi, { createSynagentPi, type SynagentPiOptions } from '../adapters/pi/index.ts'
+import synagentPi, { createSynagentPi } from '../adapters/pi/index.ts'
 import { serialize, type CanonicalMessage } from '../protocol.ts'
+import {
+  closeBroker,
+  closeServer,
+  connectClient,
+  createHarness as createAdapterHarness,
+  end,
+  message,
+  publish,
+  startBroker,
+  waitFor,
+} from './support/harness.ts'
 
 const require = createRequire(import.meta.url)
-const { Aedes } = require('aedes')
+const createHarness = createAdapterHarness.bind(undefined, createSynagentPi, '.pi')
 const mqtt = require('mqtt')
-
-type EventName = 'session_start' | 'message_start' | 'agent_settled' | 'session_shutdown'
-type FakeEvent =
-  | { type: 'session_start' | 'agent_settled' | 'session_shutdown' }
-  | { type: 'message_start'; message: { role: 'user'; content: Array<{ type: 'text'; text: string }> } }
-type Handler = (event: FakeEvent, context: FakeContext) => void | Promise<void>
-type Command = { handler(args: string, context: FakeContext): void | Promise<void> }
-type Tool = {
-  execute(
-    id: string,
-    params: { to: string; body: string; kind?: string; reply_to?: string },
-    signal: undefined,
-    onUpdate: undefined,
-    context: FakeContext,
-  ): Promise<{ content: Array<{ type: 'text'; text: string }>; isError?: boolean }>
-}
-type Notification = { message: string; type: 'info' | 'warning' | 'error' | undefined }
-type Received = { text: string; options?: { deliverAs: 'steer' | 'followUp' } }
-type FakeContext = {
-  cwd: string
-  hasUI: boolean
-  isIdle(): boolean
-  isProjectTrusted(): boolean
-  sessionManager: { getBranch(): unknown[]; getSessionId(): string }
-  ui: {
-    confirm(title: string, message: string): Promise<boolean>
-    input(title: string, placeholder?: string): Promise<string | undefined>
-    notify(message: string, type?: Notification['type']): void
-    select(title: string, options: string[]): Promise<string | undefined>
-  }
-}
-
-interface StartedBroker {
-  broker: any
-  server: net.Server
-  url: string
-}
-
-async function startBroker(): Promise<StartedBroker> {
-  const broker = await Aedes.createBroker({})
-  const server = net.createServer(broker.handle)
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
-  const port = (server.address() as net.AddressInfo).port
-  return { broker, server, url: `mqtt://127.0.0.1:${port}` }
-}
-
-function connectClient(url: string, clientId: string): Promise<any> {
-  return new Promise((resolve, reject) => {
-    const client = mqtt.connect(url, { clientId, clean: true })
-    client.once('connect', () => resolve(client))
-    client.once('error', reject)
-  })
-}
 
 function subscribe(client: any, topic: string): Promise<void> {
   return new Promise((resolve, reject) => {
     client.subscribe(topic, { qos: 1 }, (error: Error | null) => error ? reject(error) : resolve())
   })
-}
-
-function publish(client: any, topic: string, payload: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    client.publish(topic, payload, { qos: 1 }, (error: Error | null) => error ? reject(error) : resolve())
-  })
-}
-
-function end(client: any): Promise<void> {
-  // Force destroy the stream immediately and destroy the client
-  try {
-    client.stream?.destroy?.()
-  } catch {
-    // Ignore errors
-  }
-
-  // Attempt to end gracefully but don't wait for callback
-  try {
-    client.end(true, {})
-  } catch {
-    // Ignore errors
-  }
-
-  return Promise.resolve()
-}
-
-async function closeBroker(broker: any): Promise<void> {
-  try {
-    await new Promise<void>((resolve) => {
-      const timeout = setTimeout(() => {
-        resolve()
-      }, 2000)
-
-      broker.close(() => {
-        clearTimeout(timeout)
-        resolve()
-      })
-    })
-  } catch {
-    // Ignore errors
-  }
-}
-
-async function closeServer(server: any): Promise<void> {
-  try {
-    server.closeAllConnections?.()
-    await new Promise<void>((resolve) => {
-      const timeout = setTimeout(() => {
-        resolve()
-      }, 2000)
-
-      server.close(() => {
-        clearTimeout(timeout)
-        resolve()
-      })
-    })
-  } catch {
-    // Ignore errors
-  }
 }
 
 // Direcciones y topics v1 fijos usados por el harness (project=a4s, instance=pi-1).
@@ -526,7 +425,7 @@ test('Pi adapter cleans a durable subscription changed before its first SUBACK',
   let blocked = false
   const oldTopic = 'synagent/v1/a4s/pi-old'
   const newTopic = 'synagent/v1/next/pi-old'
-  broker.authorizeSubscribe = (_client: unknown, subscription: { topic: string }, callback: (error: Error | null, value?: unknown) => void) => {
+  broker.authorizeSubscribe = (_client, subscription, callback) => {
     if (!blocked && subscription.topic === oldTopic) {
       blocked = true
       releaseSubscribe = () => callback(null, subscription)
@@ -1245,177 +1144,6 @@ test('Pi adapter rejects remote broker edits and keeps state after a write failu
   await harness.shutdown()
 })
 
-function createHarness(
-  overrides: Record<string, unknown>,
-  initialEntries: Array<{ type: 'custom'; customType: string; data: Record<string, string> }> = [],
-  sessionId = `session-${Math.random().toString(36).slice(2)}`,
-  deliveryStartTimeoutMs?: number,
-  cwd?: string,
-  diagnostics?: SynagentPiOptions['diagnostics'],
-  trusted = true,
-) {
-  const events = new Map<EventName, Handler>()
-  const commands = new Map<string, Command>()
-  const tools = new Map<string, Tool>()
-  const notifications: Notification[] = []
-  const received: Received[] = []
-  const entries = initialEntries.map(entry => ({ ...entry, data: { ...entry.data } }))
-  const ownedDiagnosticsRoot = diagnostics ? undefined : mkdtempSync(join(tmpdir(), 'synagent-pi-test-log-'))
-  const effectiveDiagnostics = diagnostics ?? { env: { A4S_STATE_ROOT: ownedDiagnosticsRoot } }
-  const agentDir = mkdtempSync(join(tmpdir(), 'synagent-pi-agent-'))
-  const ownedCwd = cwd ? undefined : mkdtempSync(join(tmpdir(), 'synagent-pi-cwd-'))
-  const effectiveCwd = cwd ?? ownedCwd!
-  const globalSettingsPath = join(agentDir, 'synagent.json')
-  const initialSettings = Object.fromEntries(Object.entries(overrides).map(([key, value]) => [
-    key.replace(/^a4s\.synagent\./, ''),
-    value,
-  ]))
-  writeFileSync(globalSettingsPath, `${JSON.stringify(initialSettings, null, 2)}\n`, { mode: 0o600 })
-  const selections: string[] = []
-  const selectionOptions: string[][] = []
-  const inputs: Array<string | undefined> = []
-  const confirmations: boolean[] = []
-  let idle = true
-  let failDelivery = false
-  let currentSessionId = sessionId
-
-  const createContext = (): FakeContext => ({
-    cwd: effectiveCwd,
-    hasUI: true,
-    isIdle: () => idle,
-    isProjectTrusted: () => trusted,
-    sessionManager: { getBranch: () => entries, getSessionId: () => currentSessionId },
-    ui: {
-      confirm: async () => confirmations.shift() ?? false,
-      input: async () => inputs.shift(),
-      notify: (message, type) => notifications.push({ message, type }),
-      select: async (_title, options) => {
-        selectionOptions.push([...options])
-        return selections.shift()
-      },
-    },
-  })
-  const api = {
-    registerCommand(name: string, command: Command) {
-      commands.set(name, command)
-    },
-    registerTool(tool: Tool & { name: string }) {
-      tools.set(tool.name, tool)
-    },
-    on(event: EventName, handler: Handler) {
-      events.set(event, handler)
-      return () => {}
-    },
-    appendEntry(customType: string, data: Record<string, string>) {
-      entries.push({ type: 'custom', customType, data })
-    },
-    sendUserMessage(text: string, options?: Received['options']) {
-      if (failDelivery) throw new Error('simulated delivery failure with private detail')
-      received.push({ text, ...(options ? { options } : {}) })
-    },
-  }
-  const adapter = createSynagentPi({
-    ...(deliveryStartTimeoutMs !== undefined ? { deliveryStartTimeoutMs } : {}),
-    diagnostics: effectiveDiagnostics,
-  })
-  adapter(api as never)
-
-  async function withAgentDir(action: () => void | Promise<void>): Promise<void> {
-    const previous = process.env.PI_CODING_AGENT_DIR
-    process.env.PI_CODING_AGENT_DIR = agentDir
-    try {
-      await action()
-    } finally {
-      if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR
-      else process.env.PI_CODING_AGENT_DIR = previous
-    }
-  }
-
-  return {
-    notifications,
-    received,
-    entries,
-    agentDir,
-    cwd: effectiveCwd,
-    globalSettingsPath,
-    projectSettingsPath: join(effectiveCwd, '.pi', 'synagent.json'),
-    settingKeys: ([] as string[])[Symbol.iterator](),
-    toolSchemas: { get: (name: string) => (tools.get(name) as any)?.parameters },
-    selectionOptions,
-    queueSelections(...values: string[]) { selections.push(...values) },
-    queueInputs(...values: Array<string | undefined>) { inputs.push(...values) },
-    queueConfirmations(...values: boolean[]) { confirmations.push(...values) },
-    get idle() { return idle },
-    set idle(value: boolean) { idle = value },
-    get failDelivery() { return failDelivery },
-    set failDelivery(value: boolean) { failDelivery = value },
-    async start() {
-      const handler = events.get('session_start')
-      assert.ok(handler)
-      await withAgentDir(() => handler({ type: 'session_start' }, createContext()))
-    },
-    async startSession(nextSessionId: string) {
-      currentSessionId = nextSessionId
-      const handler = events.get('session_start')
-      assert.ok(handler)
-      await withAgentDir(() => handler({ type: 'session_start' }, createContext()))
-    },
-    async messageStart(text: string) {
-      const messageStart = events.get('message_start')
-      assert.ok(messageStart)
-      await messageStart({
-        type: 'message_start',
-        message: { role: 'user', content: [{ type: 'text', text }] },
-      }, createContext())
-    },
-    async confirmDelivery(index = received.length - 1) {
-      const delivery = received[index]
-      assert.ok(delivery)
-      const messageStart = events.get('message_start')
-      assert.ok(messageStart)
-      await messageStart({
-        type: 'message_start',
-        message: { role: 'user', content: [{ type: 'text', text: delivery.text }] },
-      }, createContext())
-    },
-    async settle() {
-      const handler = events.get('agent_settled')
-      assert.ok(handler)
-      await handler({ type: 'agent_settled' }, createContext())
-    },
-    async shutdown() {
-      const handler = events.get('session_shutdown')
-      assert.ok(handler)
-      await handler({ type: 'session_shutdown' }, createContext())
-      if (ownedDiagnosticsRoot) rmSync(ownedDiagnosticsRoot, { recursive: true, force: true })
-      rmSync(agentDir, { recursive: true, force: true })
-      if (ownedCwd) rmSync(ownedCwd, { recursive: true, force: true })
-    },
-    async command(name: string, args: string) {
-      const command = commands.get(name)
-      assert.ok(command)
-      await command.handler(args, createContext())
-    },
-    async tool(name: string, params: { to: string; body: string; kind?: string; reply_to?: string }) {
-      const tool = tools.get(name)
-      assert.ok(tool)
-      return tool.execute('tool-call', params, undefined, undefined, createContext())
-    },
-  }
-}
-
-function message(overrides: Partial<CanonicalMessage> & { id: string; to: string }): CanonicalMessage {
-  return {
-    id: overrides.id,
-    from: overrides.from ?? 'a4s/claude-1',
-    to: overrides.to,
-    kind: overrides.kind ?? 'notify',
-    body: overrides.body ?? 'Done',
-    ts: overrides.ts ?? Date.now(),
-    ...(overrides.reply_to ? { reply_to: overrides.reply_to } : {}),
-  }
-}
-
 function findOperationalLog(stateRoot: string): string {
   const harnessRoot = join(stateRoot, 'log', 'synagent', 'pi')
   const instances = readdirSync(harnessRoot, { withFileTypes: true }).filter(entry => entry.isDirectory())
@@ -1431,10 +1159,3 @@ async function unusedPort(): Promise<number> {
   return port
 }
 
-async function waitFor(condition: () => boolean): Promise<void> {
-  const deadline = Date.now() + 3000
-  while (!condition()) {
-    if (Date.now() >= deadline) throw new Error('timed out waiting for condition')
-    await new Promise(resolve => setTimeout(resolve, 10))
-  }
-}

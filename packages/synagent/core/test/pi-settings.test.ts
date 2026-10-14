@@ -11,7 +11,7 @@ import {
   persistSetting,
   resolveAgentDir,
   settingsPaths,
-} from '../adapters/pi/settings.ts'
+} from '../adapters/session/settings.ts'
 
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), 'synagent-settings-'))
@@ -19,7 +19,11 @@ function fixture() {
   const agentDir = join(root, 'agent')
   mkdirSync(join(cwd, '.pi'), { recursive: true })
   mkdirSync(agentDir, { recursive: true })
-  return { root, cwd, agentDir, paths: settingsPaths(cwd, agentDir) }
+  const paths = settingsPaths(cwd, agentDir)
+  const { projectLegacy, globalLegacy } = paths
+  assert.ok(projectLegacy)
+  assert.ok(globalLegacy)
+  return { root, cwd, agentDir, paths: { ...paths, projectLegacy, globalLegacy } }
 }
 
 function writeJson(path: string, value: unknown): void {
