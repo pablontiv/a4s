@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+      # The @pablontiv/pion dev tarball (github.com/pablontiv/pi releases) is no
+      # longer downloadable. Install without it, then restore the manifests that
+      # the identity tests read.
+      - name: Install without @pablontiv/pion
+        run: |
+          pion='@pablontiv/pion'
+          for manifest in packages/context-expert/package.json packages/pi-tool-row-presentation/package.json; do
+            jq --arg p "$pion" 'del(.devDependencies[$p])' "$manifest" > "$manifest.ci"
+            mv "$manifest.ci" "$manifest"
+          done
+          jq --arg p "$pion" '
+            del(.packages["node_modules/" + $p])
+            | .packages |= with_entries(
+                if .value.devDependencies then .value.devDependencies |= del(.[$p]) else . end)' \
+            package-lock.json > package-lock.ci.json
+          mv package-lock.ci.json package-lock.json
+          npm ci
+          git checkout -- package-lock.json packages
+      - run: npm test
+      # @a4s/pi-tool-row-presentation typechecks against @pablontiv/pion.
+      - name: Typecheck
+        run: |
+          for workspace in @a4s/context-expert @a4s/orca-omp-integration @a4s/synagent @a4s/synagent-bus; do
+            npm run typecheck --workspace "$workspace"
+          done
