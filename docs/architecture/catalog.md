@@ -69,6 +69,7 @@ native skill root, or configure `skills.customDirectories`; see
 | [`skills/gpt-quota-audit/`](../../skills/gpt-quota-audit/SKILL.md) | OMP provider quota investigation; independent advisor and canonical reviewer must resolve outside the audited provider |
 | [`skills/cost-analyzer/`](../../skills/cost-analyzer/SKILL.md) | Cross-harness session ledger, token/cost attribution and outcomes; retained design/ADR material is architecture, not an additional runtime port |
 | [`skills/agent-throughput/`](../../skills/agent-throughput/SKILL.md) | Agent throughput, active time and tokens per PR |
+| [`skills/workspace-hygiene/`](../../skills/workspace-hygiene/SKILL.md) | Opt-in repository inventory, classification, approved preservation/publication and cleanup of worktrees, branches, stashes and Orca contexts; foreign repositories remain under their owning sessions |
 
 ### Conditional #311 ingestion
 
