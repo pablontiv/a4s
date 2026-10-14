@@ -8,7 +8,7 @@ Repositorio reducido a las extensiones verificadas, los agentes y los skills `re
 - [`packages/orca-omp-integration/`](packages/orca-omp-integration/): contratos de lifecycle y routing explícito de modelos para coordinadores OMP que usan workers de Orca.
 - [`packages/omp-cross-family-review/`](packages/omp-cross-family-review/): selección cross-family de modelos para subagentes revisores de OMP.
 - [`packages/pi-tool-row-presentation/`](packages/pi-tool-row-presentation/): presentación configurable de tool rows para Pi/Pion.
-- [`packages/synagent/core/`](packages/synagent/core/): adaptadores de mensajería Synagent para Pi y Claude.
+- [`packages/synagent/core/`](packages/synagent/core/): adaptadores de mensajería Synagent para Pi, OMP y Claude.
 - [`packages/synagent/bus/`](packages/synagent/bus/): bus MQTT requerido por Synagent.
 
 Los plugins de Claude están publicados en [`.claude-plugin/marketplace.json`](.claude-plugin/marketplace.json).
