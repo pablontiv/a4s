@@ -21,7 +21,9 @@ steps:
       repo=$(gh repo view --json name --jq .name)
       nwo=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
       base=$(gh repo view --json defaultBranchRef --jq .defaultBranchRef.name)
-      required=$(gh api "repos/$nwo/branches/$base/protection/required_status_checks" --jq '.contexts | join(",")' 2>/dev/null || true)
+      if ! required=$(gh api "repos/$nwo/branches/$base/protection/required_status_checks" --jq '.contexts | join(",")' 2>/dev/null); then
+        required=""
+      fi
       last_pr=$(gh pr list --state merged --limit 1 --json number --jq '.[0].number // empty')
       checks=""
       if test -n "$last_pr"; then
