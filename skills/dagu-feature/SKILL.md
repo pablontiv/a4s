@@ -43,7 +43,7 @@ The bootstrap replaces every `__NAME__` placeholder in `feature.yaml` once, when
 | `__GATE__` | Default of `GATE`, the local gate command, run with `bash -euo pipefail -c` in the worktree | `just check && just test` | `make hook-validate` |
 | `__REQUIRED_CHECK__` | Default of `REQUIRED_CHECK`, the GitHub check that must be required on the default branch | `candidate` | `validate` |
 
-The DAG's fixed invariants: the gate runs with `umask 0022` and without `GH_TOKEN`/`GITHUB_TOKEN`; auto-merge is bound to the tested SHA with `--match-head-commit`; the queue has concurrency one per repository; `handler_on.exit` removes the run's worktree and local branch whether the run succeeds, fails, or is aborted.
+The DAG's fixed invariants: `PRIMARY` is the repository clone, its main working tree, on `BASE_BRANCH` and clean; the run's worktree is always `$PRIMARY/.workspace/worktrees/issue-<n>`, ignored by git; the gate runs with `umask 0022` and without `GH_TOKEN`/`GITHUB_TOKEN`; auto-merge is bound to the tested SHA with `--match-head-commit`; the queue has concurrency one per repository; `handler_on.exit` removes the run's worktree and local branch whether the run succeeds, fails, or is aborted.
 
 ## Adopt in a repository
 
@@ -51,7 +51,7 @@ Adoption runs through two DAGs. [`dagu-feature-bootstrap.yaml`](dagu-feature-boo
 
 ### 1. Bootstrap
 
-Enqueue the bootstrap from the primary checkout. Use `enqueue`, not `start`: the run executes only if the user-level scheduler reads the same `DAGU_HOME` you do, and that is the first thing the bootstrap confirms.
+Enqueue the bootstrap from the repository clone, not from a linked worktree. Use `enqueue`, not `start`: the run executes only if the user-level scheduler reads the same `DAGU_HOME` you do, and that is the first thing the bootstrap confirms.
 
 ```sh
 dagu enqueue --run-id "bootstrap-<repo>" <skill-dir>/dagu-feature-bootstrap.yaml -- \
@@ -62,11 +62,12 @@ The steps:
 
 | Step | Effect |
 |---|---|
-| `detect` | Checks `git`, `gh` (authenticated), `jq` and `dagu`. Reads the repository name, the default branch, the checks already required, and the checks on the last merged PR. |
+| `detect` | Checks `git`, `gh` (authenticated), `jq` and `dagu`, and that `PRIMARY` is the main working tree of the clone. Reads the repository name, the default branch, the checks already required, and the checks on the last merged PR. |
 | `answers` | `human.task` that asks for `GATE` and `REQUIRED_CHECK`. The prompt shows the detected values. |
-| `render` | Writes the configured template to `~/.local/share/<repo>/dagu/feature.yaml`, outside the checkout, so the primary stays clean. Every value is JSON-quoted, and the step fails on any leftover placeholder or a `dagu validate` error. |
+| `worktrees` | Makes git ignore `.workspace/worktrees/`. When nothing ignores it yet, appends `/.workspace/worktrees/` to the clone's `info/exclude`, so the primary stays clean without a commit. |
+| `render` | Writes the configured template to `<git-dir>/dagu-feature/feature.yaml` inside the clone's git directory, so the primary stays clean. Every value is JSON-quoted, and the step fails on any leftover placeholder or a `dagu validate` error. |
 | `github` | Enables auto-merge and squash merge, and adds `REQUIRED_CHECK` as a strict required status check on the default branch. It keeps the existing contexts and every other protection setting. When it has to recreate the protection, it reads the protection back and fails if any other setting changed. |
-| `confirm` | Reads the settings back and validates the staged file again. |
+| `confirm` | Reads the settings and the ignore rule back and validates the staged file again. |
 
 Answer the form after `detect` succeeds. Choose `GATE` from the repository's documented local check plus tests (`Justfile`, `Makefile`, `package.json`, contributing docs). `REQUIRED_CHECK` is the aggregate CI job that runs on pull requests:
 
@@ -80,28 +81,29 @@ The bootstrap is done when the run is `Succeeded`. To change an answer, enqueue 
 
 ### 2. Adoption issue
 
-Open an issue in the repository to adopt the lifecycle. Enqueue it as described below, but pass the staged file instead of `.workspace/dagu/dags/feature.yaml`, which does not exist yet. In `implement`, make a single commit that:
+Open an issue in the repository to adopt the lifecycle. Enqueue it as described below, but pass the staged file (`$(git rev-parse --git-path dagu-feature/feature.yaml)`) instead of `.workspace/dagu/dags/feature.yaml`, which does not exist yet. In `implement`, make a single commit that:
 
-- copies `~/.local/share/<repo>/dagu/feature.yaml` to `.workspace/dagu/dags/feature.yaml`;
+- copies the staged file to `.workspace/dagu/dags/feature.yaml`;
 - adds the CI job that publishes `REQUIRED_CHECK`, if none exists yet.
 
 Once that run is `Succeeded`, every later issue enqueues `.workspace/dagu/dags/feature.yaml` from the primary checkout.
 
 ## Enqueue an issue
 
-Preconditions: the primary checkout is clean and on `BASE_BRANCH`. Choose a worktree path outside the primary checkout and one branch. Dagu scopes run IDs to the DAG name `feature`, and every adopting repository shares that name, so prefix the run ID with the repository:
+Preconditions: run from the repository clone, its main working tree, clean and on `BASE_BRANCH`. That clone is the only `PRIMARY`. The DAG creates the run's worktree at `$PRIMARY/.workspace/worktrees/issue-<n>`. Dagu scopes run IDs to the DAG name `feature`, and every adopting repository shares that name, so prefix the run ID with the repository:
 
 ```sh
 repo=<repo>; n=<issue>
 dagu enqueue --run-id "$repo-issue-$n" .workspace/dagu/dags/feature.yaml -- \
   ISSUE="$n" \
-  PRIMARY="$PWD" \
-  WORKTREE="$HOME/.local/share/$repo/worktrees/issue-$n" \
+  PRIMARY="$(git rev-parse --show-toplevel)" \
   BRANCH="dagu/issue-$n" \
   PR_NUMBER=""
 ```
 
-`PRIMARY` must be the absolute top-level path printed by `git rev-parse --show-toplevel`. Set `PR_NUMBER` only to adopt an existing open PR whose head branch is `BRANCH`. `BASE_BRANCH`, `GATE` and `REQUIRED_CHECK` take their defaults from the versioned file. Pass them only to override them for this run.
+Set `PR_NUMBER` only to adopt an existing open PR whose head branch is `BRANCH`. `BASE_BRANCH`, `GATE` and `REQUIRED_CHECK` take their defaults from the versioned file. Pass them only to override them for this run.
+
+`start_gate` fails when `PRIMARY` is a linked worktree, is not on `BASE_BRANCH`, or has local changes. Report the state of the clone and stop. Enqueue the issue again from that same clone once it is clean and on `BASE_BRANCH`.
 
 Dagu snapshots the definition when you enqueue. Later edits to the file do not affect runs that already exist.
 

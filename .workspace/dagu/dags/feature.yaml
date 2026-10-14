@@ -17,9 +17,6 @@ params:
   - name: PRIMARY
     type: string
     required: true
-  - name: WORKTREE
-    type: string
-    required: true
   - name: BRANCH
     type: string
     required: true
@@ -34,14 +31,18 @@ params:
   - name: REQUIRED_CHECK
     type: string
     default: "validate"
+env:
+  - WORKTREE: ${PRIMARY}/.workspace/worktrees/issue-${ISSUE}
 steps:
   - id: start_gate
     run: |
       set -euo pipefail
       umask 0022
-      test -n "$PRIMARY" && test -n "$WORKTREE" && test "$PRIMARY" != "$WORKTREE"
+      test -n "$PRIMARY"
       test -n "$GATE" && test -n "$REQUIRED_CHECK"
       test "$(git -C "$PRIMARY" rev-parse --show-toplevel)" = "$PRIMARY"
+      test "$(git -C "$PRIMARY" rev-parse --absolute-git-dir)" = "$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-common-dir)"
+      git -C "$PRIMARY" check-ignore -q "$WORKTREE"
       test "$(git -C "$PRIMARY" branch --show-current)" = "$BASE_BRANCH"
       test -z "$(git -C "$PRIMARY" status --porcelain)"
       git -C "$PRIMARY" fetch origin
