@@ -30,8 +30,13 @@ export type SynagentSettingsScope = 'global' | 'project'
 export type SynagentSettingsPaths = {
   global: string
   project: string
-  globalLegacy: string
-  projectLegacy: string
+  globalLegacy?: string
+  projectLegacy?: string
+}
+
+export type SynagentSettingsHost = {
+  agentDirName: string
+  legacySettings: boolean
 }
 
 type SettingsRecord = Partial<SynagentSettings>
@@ -64,17 +69,25 @@ const LEGACY_KEYS: Readonly<Record<SynagentSettingKey, string>> = {
 export function resolveAgentDir(
   env: NodeJS.ProcessEnv = process.env,
   home: string = homedir(),
+  agentDirName = '.pi',
 ): string {
   const configured = env.PI_CODING_AGENT_DIR?.trim()
-  return configured ? configured : join(home, '.pi', 'agent')
+  return configured ? configured : join(home, agentDirName, 'agent')
 }
 
-export function settingsPaths(cwd: string, agentDir = resolveAgentDir()): SynagentSettingsPaths {
+export function settingsPaths(
+  cwd: string,
+  agentDir?: string,
+  host: SynagentSettingsHost = { agentDirName: '.pi', legacySettings: true },
+): SynagentSettingsPaths {
+  const globalDir = agentDir ?? resolveAgentDir(process.env, homedir(), host.agentDirName)
   return {
-    global: join(agentDir, 'synagent.json'),
-    project: join(cwd, '.pi', 'synagent.json'),
-    globalLegacy: join(agentDir, 'settings.json'),
-    projectLegacy: join(cwd, '.pi', 'settings.json'),
+    global: join(globalDir, 'synagent.json'),
+    project: join(cwd, host.agentDirName, 'synagent.json'),
+    ...(host.legacySettings ? {
+      globalLegacy: join(globalDir, 'settings.json'),
+      projectLegacy: join(cwd, host.agentDirName, 'settings.json'),
+    } : {}),
   }
 }
 
@@ -82,8 +95,8 @@ export function initializeSynagentSettings(
   paths: SynagentSettingsPaths,
   projectTrusted: boolean,
 ): SynagentSettings {
-  migrateLegacyScope(paths.global, paths.globalLegacy, 'global')
-  if (projectTrusted) migrateLegacyScope(paths.project, paths.projectLegacy, 'project')
+  if (paths.globalLegacy) migrateLegacyScope(paths.global, paths.globalLegacy, 'global')
+  if (projectTrusted && paths.projectLegacy) migrateLegacyScope(paths.project, paths.projectLegacy, 'project')
   return loadSynagentSettings(paths, projectTrusted)
 }
 
@@ -94,8 +107,8 @@ export function findRejectedBrokerUrl(
   const candidates: unknown[] = []
   if (projectTrusted) candidates.push(readRawNativeValue(paths.project, 'broker-url'))
   candidates.push(readRawNativeValue(paths.global, 'broker-url'))
-  if (projectTrusted) candidates.push(readRawLegacyValue(paths.projectLegacy, 'broker-url'))
-  candidates.push(readRawLegacyValue(paths.globalLegacy, 'broker-url'))
+  if (projectTrusted && paths.projectLegacy) candidates.push(readRawLegacyValue(paths.projectLegacy, 'broker-url'))
+  if (paths.globalLegacy) candidates.push(readRawLegacyValue(paths.globalLegacy, 'broker-url'))
   for (const candidate of candidates) {
     if (typeof candidate !== 'string') continue
     try {
@@ -113,8 +126,8 @@ export function loadSynagentSettings(
 ): SynagentSettings {
   const projectNew = projectTrusted ? readNativeSettings(paths.project) : {}
   const globalNew = readNativeSettings(paths.global)
-  const projectLegacy = projectTrusted ? readLegacySettings(paths.projectLegacy) : {}
-  const globalLegacy = readLegacySettings(paths.globalLegacy)
+  const projectLegacy = projectTrusted && paths.projectLegacy ? readLegacySettings(paths.projectLegacy) : {}
+  const globalLegacy = paths.globalLegacy ? readLegacySettings(paths.globalLegacy) : {}
   const resolved = { ...DEFAULT_SETTINGS }
 
   for (const key of SYNAGENT_SETTING_KEYS) {
