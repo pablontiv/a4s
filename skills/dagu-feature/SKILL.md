@@ -34,7 +34,7 @@ This skill does not install Dagu, and it carries no logic specific to any reposi
 
 ## Template parameters
 
-Every `__NAME__` placeholder in `feature.yaml` is replaced once at adoption:
+The bootstrap replaces every `__NAME__` placeholder in `feature.yaml` once, when the repository adopts the lifecycle:
 
 | Placeholder | Meaning | rootline | homeserver |
 |---|---|---|---|
@@ -47,50 +47,45 @@ The DAG's fixed invariants: the gate runs with `umask 0022` and without `GH_TOKE
 
 ## Adopt in a repository
 
-1. Read the real values from the repository:
-   - default branch: `gh repo view --json defaultBranchRef --jq .defaultBranchRef.name`;
-   - gate: the command that the repository's contributing docs, `Justfile`, or `Makefile` define as the local check plus tests;
-   - required check: the aggregate job that CI publishes on pull requests (`gh pr checks <recent-pr> --json name`).
-2. Configure a copy outside the checkout, so that the primary checkout stays clean:
+Adoption runs through two DAGs. [`dagu-feature-bootstrap.yaml`](dagu-feature-bootstrap.yaml) configures the repository and confirms the flow. Then the repository's own adoption issue versions the result through `feature.yaml`.
 
-   ```sh
-   repo=<repo>
-   stage="${TMPDIR:-/tmp}/dagu-feature-$repo"
-   mkdir -p "$stage"
-   sed -e "s|__REPO__|$repo|g" \
-       -e "s|__BASE_BRANCH__|<base-branch>|" \
-       -e "s|__GATE__|<gate command>|" \
-       -e "s|__REQUIRED_CHECK__|<required-check>|" \
-       <skill-dir>/feature.yaml > "$stage/feature.yaml"
-   grep -n '__[A-Z_]*__' "$stage/feature.yaml"   # must print nothing
-   dagu validate "$stage/feature.yaml"
-   ```
+### 1. Bootstrap
 
-   Escape `&` as `\&` and `|` as `\|` inside the `sed` replacement.
-3. Make `REQUIRED_CHECK` a strict required status check on the default branch. Merge `strict` and the context into the existing required checks, never replace them:
+Enqueue the bootstrap from the primary checkout. Use `enqueue`, not `start`: the run executes only if the user-level scheduler reads the same `DAGU_HOME` you do, and that is the first thing the bootstrap confirms.
 
-   ```sh
-   gh api "repos/{owner}/{repo}/branches/<base-branch>/protection" --jq '.required_status_checks'
-   ```
+```sh
+dagu enqueue --run-id "bootstrap-<repo>" <skill-dir>/dagu-feature-bootstrap.yaml -- \
+  PRIMARY="$(git rev-parse --show-toplevel)" SKILL_DIR=<skill-dir>
+```
 
-   - **Status checks already required:** `PATCH` them, listing every existing context plus the new one, because `contexts` replaces the list:
+The steps:
 
-     ```sh
-     gh api -X PATCH "repos/{owner}/{repo}/branches/<base-branch>/protection/required_status_checks" \
-       -F strict=true -f 'contexts[]=<existing-check>' -f 'contexts[]=<required-check>'
-     ```
+| Step | Effect |
+|---|---|
+| `detect` | Checks `git`, `gh` (authenticated), `jq` and `dagu`. Reads the repository name, the default branch, the checks already required, and the checks on the last merged PR. |
+| `answers` | `human.task` that asks for `GATE` and `REQUIRED_CHECK`. The prompt shows the detected values. |
+| `render` | Writes the configured template to `~/.local/share/<repo>/dagu/feature.yaml`, outside the checkout, so the primary stays clean. Every value is JSON-quoted, and the step fails on any leftover placeholder or a `dagu validate` error. |
+| `github` | Enables auto-merge and squash merge, and adds `REQUIRED_CHECK` as a strict required status check on the default branch. It keeps the existing contexts and every other protection setting. When it has to recreate the protection, it reads the protection back and fails if any other setting changed. |
+| `confirm` | Reads the settings back and validates the staged file again. |
 
-   - **No required status checks** (`null` or a 404): `PUT` the protection. When protection already exists, carry over its current `enforce_admins`, `required_pull_request_reviews`, `restrictions` and flags from the `GET` instead of the `null`s below:
+Answer the form after `detect` succeeds. Choose `GATE` from the repository's documented local check plus tests (`Justfile`, `Makefile`, `package.json`, contributing docs). `REQUIRED_CHECK` is the aggregate CI job that runs on pull requests:
 
-     ```sh
-     gh api -X PUT "repos/{owner}/{repo}/branches/<base-branch>/protection" --input - <<'EOF'
-     {"required_status_checks":{"strict":true,"contexts":["<required-check>"]},
-      "enforce_admins":null,"required_pull_request_reviews":null,"restrictions":null}
-     EOF
-     ```
+```sh
+dagu status --run-id "bootstrap-<repo>" dagu-feature-bootstrap   # read the prompt
+dagu human-task complete --run-id "bootstrap-<repo>" --step answers \
+  --input GATE='<gate command>' --input REQUIRED_CHECK=<check> dagu-feature-bootstrap
+```
 
-   The repository must also allow auto-merge and squash merge (`gh api repos/{owner}/{repo} --jq '{allow_auto_merge,allow_squash_merge}'`). Without a required check, `auto_merge` has nothing to wait for and GitHub rejects the request.
-4. Version the file through the lifecycle itself. Open an adoption issue and enqueue that issue with the staged copy (see below). In `implement`, copy `$stage/feature.yaml` to `.workspace/dagu/dags/feature.yaml` in the worktree, run `dagu validate` on it, and commit it. From then on, every run uses `.workspace/dagu/dags/feature.yaml` from the primary checkout.
+The bootstrap is done when the run is `Succeeded`. To change an answer, enqueue a new bootstrap run. The bootstrap does not write CI: if no workflow publishes `REQUIRED_CHECK` yet, the adoption commit must add it.
+
+### 2. Adoption issue
+
+Open an issue in the repository to adopt the lifecycle. Enqueue it as described below, but pass the staged file instead of `.workspace/dagu/dags/feature.yaml`, which does not exist yet. In `implement`, make a single commit that:
+
+- copies `~/.local/share/<repo>/dagu/feature.yaml` to `.workspace/dagu/dags/feature.yaml`;
+- adds the CI job that publishes `REQUIRED_CHECK`, if none exists yet.
+
+Once that run is `Succeeded`, every later issue enqueues `.workspace/dagu/dags/feature.yaml` from the primary checkout.
 
 ## Enqueue an issue
 

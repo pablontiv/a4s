@@ -1,0 +1,168 @@
+type: graph
+dotenv: []
+shell: bash
+max_active_steps: 1
+params:
+  - name: PRIMARY
+    type: string
+    required: true
+  - name: SKILL_DIR
+    type: string
+    required: true
+steps:
+  - id: detect
+    run: |
+      set -euo pipefail
+      for tool in git gh jq dagu; do command -v "$tool" >/dev/null; done
+      gh auth status >/dev/null
+      test -f "$SKILL_DIR/feature.yaml"
+      test "$(git -C "$PRIMARY" rev-parse --show-toplevel)" = "$PRIMARY"
+      cd "$PRIMARY"
+      repo=$(gh repo view --json name --jq .name)
+      nwo=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
+      base=$(gh repo view --json defaultBranchRef --jq .defaultBranchRef.name)
+      required=$(gh api "repos/$nwo/branches/$base/protection/required_status_checks" --jq '.contexts | join(",")' 2>/dev/null || true)
+      last_pr=$(gh pr list --state merged --limit 1 --json number --jq '.[0].number // empty')
+      checks=""
+      if test -n "$last_pr"; then
+        checks=$(gh pr checks "$last_pr" --json name --jq '[.[].name] | unique | join(",")' 2>/dev/null || true)
+      fi
+      {
+        printf 'REPO=%s\n' "$repo"
+        printf 'NWO=%s\n' "$nwo"
+        printf 'BASE_BRANCH=%s\n' "$base"
+        printf 'REQUIRED_NOW=%s\n' "${required:-none}"
+        printf 'RECENT_CHECKS=%s\n' "${checks:-none}"
+        printf 'STAGE=%s\n' "$HOME/.local/share/$repo/dagu/feature.yaml"
+      } >> "$DAGU_OUTPUT_FILE"
+    outputs:
+      - name: REPO
+      - name: NWO
+      - name: BASE_BRANCH
+      - name: REQUIRED_NOW
+      - name: RECENT_CHECKS
+      - name: STAGE
+
+  - id: answers
+    depends: detect
+    action: human.task
+    with:
+      prompt: >-
+        Configure the dagu-feature lifecycle for ${steps.detect.outputs.NWO}
+        (default branch ${steps.detect.outputs.BASE_BRANCH}).
+        GATE: local gate command run in the issue worktree with bash -euo pipefail -c.
+        REQUIRED_CHECK: GitHub check the default branch will require (strict).
+        Required now: ${steps.detect.outputs.REQUIRED_NOW}.
+        Checks on the last merged PR: ${steps.detect.outputs.RECENT_CHECKS}.
+      form:
+        type: object
+        additionalProperties: false
+        properties:
+          GATE:
+            type: string
+            minLength: 1
+          REQUIRED_CHECK:
+            type: string
+            minLength: 1
+        required: [GATE, REQUIRED_CHECK]
+
+  - id: render
+    depends: answers
+    env:
+      - GATE: ${steps.answers.outputs.GATE}
+      - REQUIRED_CHECK: ${steps.answers.outputs.REQUIRED_CHECK}
+      - REPO: ${steps.detect.outputs.REPO}
+      - BASE_BRANCH: ${steps.detect.outputs.BASE_BRANCH}
+      - STAGE: ${steps.detect.outputs.STAGE}
+    run: |
+      set -euo pipefail
+      umask 0022
+      mkdir -p "$(dirname "$STAGE")"
+      jq -Rr --rawfile template "$SKILL_DIR/feature.yaml" \
+        --arg repo "$REPO" --arg base "$BASE_BRANCH" \
+        --arg gate "$GATE" --arg check "$REQUIRED_CHECK" \
+        '$template
+          | gsub("__REPO__"; $repo)
+          | gsub("__BASE_BRANCH__"; $base | tojson)
+          | gsub("__GATE__"; $gate | tojson)
+          | gsub("__REQUIRED_CHECK__"; $check | tojson)' \
+        -n > "$STAGE"
+      if grep -n '__[A-Z_]*__' "$STAGE"; then exit 1; fi
+      dagu validate "$STAGE"
+      printf 'stage=%s\n' "$STAGE"
+
+  - id: github
+    depends: render
+    env:
+      - REQUIRED_CHECK: ${steps.answers.outputs.REQUIRED_CHECK}
+      - NWO: ${steps.detect.outputs.NWO}
+      - BASE_BRANCH: ${steps.detect.outputs.BASE_BRANCH}
+    run: |
+      set -euo pipefail
+      settings=$(gh api "repos/$NWO" --jq '[.allow_auto_merge, .allow_squash_merge] | map(tostring) | join(" ")')
+      if test "$settings" != "true true"; then
+        gh api -X PATCH "repos/$NWO" -F allow_auto_merge=true -F allow_squash_merge=true >/dev/null
+        printf 'repo_settings=updated\n'
+      fi
+      protection_url="repos/$NWO/branches/$BASE_BRANCH/protection"
+      if ! before=$(gh api "$protection_url" 2>&1); then
+        grep -q 'Branch not protected' <<<"$before"
+        jq -n --arg c "$REQUIRED_CHECK" '{
+            required_status_checks: {strict: true, contexts: [$c]},
+            enforce_admins: null,
+            required_pull_request_reviews: null,
+            restrictions: null
+          }' | gh api -X PUT "$protection_url" --input - >/dev/null
+        printf 'protection=created\n'
+      elif jq -e '.required_status_checks != null' <<<"$before" >/dev/null; then
+        jq --arg c "$REQUIRED_CHECK" '{
+            strict: true,
+            contexts: ((.required_status_checks.contexts + [$c]) | unique)
+          }' <<<"$before" \
+          | gh api -X PATCH "$protection_url/required_status_checks" --input - >/dev/null
+        printf 'required_status_checks=updated\n'
+      else
+        jq -e '(.required_pull_request_reviews.dismissal_restrictions // null) == null
+          and (.required_pull_request_reviews.bypass_pull_request_allowances // null) == null' \
+          <<<"$before" >/dev/null
+        jq --arg c "$REQUIRED_CHECK" '{
+            required_status_checks: {strict: true, contexts: [$c]},
+            enforce_admins: (.enforce_admins.enabled // false),
+            required_pull_request_reviews: (.required_pull_request_reviews
+              | if . == null then null else {
+                  dismiss_stale_reviews, require_code_owner_reviews,
+                  required_approving_review_count, require_last_push_approval
+                } end),
+            restrictions: (.restrictions
+              | if . == null then null else {
+                  users: [.users[].login], teams: [.teams[].slug], apps: [.apps[].slug]
+                } end),
+            required_linear_history: (.required_linear_history.enabled // false),
+            allow_force_pushes: (.allow_force_pushes.enabled // false),
+            allow_deletions: (.allow_deletions.enabled // false),
+            block_creations: (.block_creations.enabled // false),
+            required_conversation_resolution: (.required_conversation_resolution.enabled // false),
+            lock_branch: (.lock_branch.enabled // false),
+            allow_fork_syncing: (.allow_fork_syncing.enabled // false)
+          }' <<<"$before" | gh api -X PUT "$protection_url" --input - >/dev/null
+        after=$(gh api "$protection_url")
+        normalize='del(.required_status_checks) | walk(if type == "object" then del(.url, .contexts_url) else . end)'
+        test "$(jq -S "$normalize" <<<"$before")" = "$(jq -S "$normalize" <<<"$after")"
+        printf 'protection=required_status_checks_added\n'
+      fi
+
+  - id: confirm
+    depends: github
+    env:
+      - REQUIRED_CHECK: ${steps.answers.outputs.REQUIRED_CHECK}
+      - NWO: ${steps.detect.outputs.NWO}
+      - BASE_BRANCH: ${steps.detect.outputs.BASE_BRANCH}
+      - STAGE: ${steps.detect.outputs.STAGE}
+    run: |
+      set -euo pipefail
+      test "$(gh api "repos/$NWO" --jq '.allow_auto_merge and .allow_squash_merge')" = true
+      test "$(gh api "repos/$NWO/branches/$BASE_BRANCH/protection/required_status_checks" \
+        --jq '.strict and (.contexts | index(env.REQUIRED_CHECK) != null)')" = true
+      dagu validate "$STAGE"
+      printf 'scheduler=ok\nrepo=%s\nbase_branch=%s\nrequired_check=%s\nstage=%s\n' \
+        "$NWO" "$BASE_BRANCH" "$REQUIRED_CHECK" "$STAGE"
