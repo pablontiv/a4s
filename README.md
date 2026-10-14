@@ -30,13 +30,12 @@ Los agentes para Pi, Claude y Superpowers están en [`agents/`](agents/).
 
 ## Flujo de issues
 
-a4s usa su propio ciclo `dagu-feature`, versionado en [`.workspace/dagu/dags/feature.yaml`](.workspace/dagu/dags/feature.yaml). El gate local es `npm ci && npm test && npm run typecheck`, y `main` exige el check `validate` de [`.github/workflows/ci.yml`](.github/workflows/ci.yml). Cada issue se lleva con un run, desde el checkout principal limpio en `main`:
+a4s usa su propio ciclo `dagu-feature`, versionado en [`.workspace/dagu/dags/feature.yaml`](.workspace/dagu/dags/feature.yaml). El gate local es `npm ci && npm test && npm run typecheck`, y `main` exige el check `validate` de [`.github/workflows/ci.yml`](.github/workflows/ci.yml). Cada issue se lleva con un run desde el clone (no desde un worktree), limpio y en `main`. El DAG crea el worktree del issue en `.workspace/worktrees/issue-<n>`:
 
 ```sh
 n=<issue>
 dagu enqueue --run-id "a4s-issue-$n" .workspace/dagu/dags/feature.yaml -- \
-  ISSUE="$n" PRIMARY="$(git rev-parse --show-toplevel)" \
-  WORKTREE="$HOME/.local/share/a4s/worktrees/issue-$n" BRANCH="dagu/issue-$n"
+  ISSUE="$n" PRIMARY="$(git rev-parse --show-toplevel)" BRANCH="dagu/issue-$n"
 ```
 
 El checkpoint `implement`, la reconciliación de `await_merge` y la recuperación de fallos siguen [`skills/dagu-feature/SKILL.md`](skills/dagu-feature/SKILL.md).

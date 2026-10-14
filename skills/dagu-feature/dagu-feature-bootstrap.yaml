@@ -17,6 +17,7 @@ steps:
       gh auth status >/dev/null
       test -f "$SKILL_DIR/feature.yaml"
       test "$(git -C "$PRIMARY" rev-parse --show-toplevel)" = "$PRIMARY"
+      test "$(git -C "$PRIMARY" rev-parse --absolute-git-dir)" = "$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-common-dir)"
       cd "$PRIMARY"
       repo=$(gh repo view --json name --jq .name)
       nwo=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
@@ -35,7 +36,7 @@ steps:
         printf 'BASE_BRANCH=%s\n' "$base"
         printf 'REQUIRED_NOW=%s\n' "${required:-none}"
         printf 'RECENT_CHECKS=%s\n' "${checks:-none}"
-        printf 'STAGE=%s\n' "$HOME/.local/share/$repo/dagu/feature.yaml"
+        printf 'STAGE=%s\n' "$(git rev-parse --path-format=absolute --git-path dagu-feature/feature.yaml)"
       } >> "$DAGU_OUTPUT_FILE"
     outputs:
       - name: REPO
@@ -68,8 +69,18 @@ steps:
             minLength: 1
         required: [GATE, REQUIRED_CHECK]
 
-  - id: render
+  - id: worktrees
     depends: answers
+    run: |
+      set -euo pipefail
+      if ! git -C "$PRIMARY" check-ignore -q "$PRIMARY/.workspace/worktrees/issue-1"; then
+        printf '/.workspace/worktrees/\n' >> "$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path info/exclude)"
+        printf 'worktrees=ignored\n'
+      fi
+      git -C "$PRIMARY" check-ignore -q "$PRIMARY/.workspace/worktrees/issue-1"
+
+  - id: render
+    depends: worktrees
     env:
       - GATE: ${steps.answers.outputs.GATE}
       - REQUIRED_CHECK: ${steps.answers.outputs.REQUIRED_CHECK}
@@ -165,6 +176,7 @@ steps:
       test "$(gh api "repos/$NWO" --jq '.allow_auto_merge and .allow_squash_merge')" = true
       test "$(gh api "repos/$NWO/branches/$BASE_BRANCH/protection/required_status_checks" \
         --jq '.strict and (.contexts | index(env.REQUIRED_CHECK) != null)')" = true
+      git -C "$PRIMARY" check-ignore -q "$PRIMARY/.workspace/worktrees/issue-1"
       dagu validate "$STAGE"
       printf 'scheduler=ok\nrepo=%s\nbase_branch=%s\nrequired_check=%s\nstage=%s\n' \
         "$NWO" "$BASE_BRANCH" "$REQUIRED_CHECK" "$STAGE"
