@@ -6,6 +6,8 @@ Conserva el modelo principal si ya pertenece a otra familia; si comparte familia
 
 ## Instalación global
 
+Desde el clone principal de a4s en `main` (no desde un worktree de issue, que se elimina al cerrar el run):
+
 ```sh
-omp plugin link /Users/Shared/harness/a4s-worktrees/main/packages/omp-cross-family-review
+omp plugin link "$(git rev-parse --show-toplevel)/packages/omp-cross-family-review"
 ```
