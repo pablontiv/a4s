@@ -1,6 +1,6 @@
 # A4S
 
-Repositorio reducido a las extensiones verificadas, los agentes y el skill `refine`.
+Repositorio reducido a las extensiones verificadas, los agentes y los skills `refine` y `dagu-feature`.
 
 ## Extensiones
 
@@ -20,6 +20,12 @@ Los agentes para Pi, Claude y Superpowers están en [`agents/`](agents/).
 
 - Skill: [`skills/refine/SKILL.md`](skills/refine/SKILL.md)
 - Configuración: [`.workspace/config/refine.json`](.workspace/config/refine.json)
+
+## Dagu feature
+
+- Skill: [`skills/dagu-feature/SKILL.md`](skills/dagu-feature/SKILL.md): ciclo de issue con un DAG de Dagu propiedad del repo, con un solo run por issue.
+- Template: [`skills/dagu-feature/feature.yaml`](skills/dagu-feature/feature.yaml)
+- Bootstrap: [`skills/dagu-feature/dagu-feature-bootstrap.yaml`](skills/dagu-feature/dagu-feature-bootstrap.yaml)
 
 ## Verificación
 
