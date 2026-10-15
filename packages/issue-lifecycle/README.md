@@ -421,6 +421,13 @@ Admission rejects policy overrides and requires a valid persistent
 `OMP_SESSION_ID` before writing a receipt, touching stores or enqueueing.
 Successor runs carry operational inputs and the same owner, never policy.
 
+To reenqueue a terminal run's retained candidate, use a suffixed run ID and the
+same `ISSUE` and `OMP_SESSION_ID`, preserving `POC_BASIS`/`PR_NUMBER` when
+applicable. The branch is derived from `ISSUE` as `dagu/issue-<N>`; admission
+rejects `BRANCH`, so do not pass it to `a4s enqueue`. See the
+[failed-run recovery procedure](skills/issue-execution/SKILL.md#enqueue-an-issue)
+for the ownership-transfer contract and a concrete replacement command.
+
 ```sh
 a4s queue .workspace/dagu/config.json
 # Before first adoption, select the station lane to inspect:

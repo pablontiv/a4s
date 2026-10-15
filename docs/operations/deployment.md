@@ -380,7 +380,11 @@ with its observed iteration to retry its command, not implementation.
 Inspect `<git-dir>/dagu-feature/runs/<run>/` receipts, candidate, tested SHA,
 resource owner and cleanup proof before retry or transfer. Terminal recovery can
 reuse retained resources through a new suffixed run under the execution skill's
-ownership-transfer contract. Interrupted semantic jobs retain their native
+ownership-transfer contract. Keep the same `ISSUE` and `OMP_SESSION_ID`, plus
+`POC_BASIS`/`PR_NUMBER` when applicable. The branch is derived from `ISSUE` as
+`dagu/issue-<N>`; do not pass `BRANCH` to `a4s enqueue`, which rejects it.
+See the execution skill's concrete replacement command.
+Interrupted semantic jobs retain their native
 receipt/transcript; inspect side effects before retrying `triage` or `implement`.
 A stale lock is diagnostic evidence requiring operator inspection, not permission
 to discard a live owner. For a durable checkpoint in a separate clean recovery
