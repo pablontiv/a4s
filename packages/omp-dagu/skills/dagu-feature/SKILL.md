@@ -39,6 +39,26 @@ flowchart LR
 
 This skill does not install Dagu, and it carries no logic specific to any repository. Everything that varies between repositories is a DAG param.
 
+## Bundle identity and compatibility
+
+Every rendered DAG starts with
+`# dagu-feature-bundle: @a4s/omp-dagu@<version> source=<owner/name>@<sha40> bootstrap=<run> dagu=<version>`
+and carries the label `dagu-feature-bundle=<version>`. `start_gate` and PoC
+`base` print the same bundle, source and bootstrap identity into the run log.
+Identify an installed bundle directly from that header and label, from repository
+history, or across indexed session history:
+
+```sh
+git log --format='%h %(trailers:key=Dagu-Feature-Bundle,valueonly)' -- .workspace/dagu/dags
+git log -G '^# dagu-feature-bundle:' -p -- .workspace/dagu/dags
+backscroll search dagu-feature-bundle --all-projects
+```
+
+A DAG and extension are compatible when their major versions match and, while
+that major is `0`, their minor versions also match. A missing label is
+`unstamped`; a version outside that rule is `incompatible`. The extension warns
+in its widget and `[DAGU STATE]` notice without blocking a run.
+
 ## Template parameters
 
 The bootstrap renders both templates once when the repository adopts the lifecycle:
@@ -60,10 +80,14 @@ Adoption runs through two DAGs. [`dagu-feature-bootstrap.yaml`](dagu-feature-boo
 
 ### 1. Bootstrap
 
-Enqueue the bootstrap from the repository clone, not from a linked worktree. Use `enqueue`, not `start`: the run executes only if the user-level scheduler reads the same `DAGU_HOME` you do, and that is the first thing the bootstrap confirms.
+Enqueue the bootstrap from the repository clone, not from a linked worktree. Use
+`enqueue`, not `start`: the run executes only if the user-level scheduler reads
+the same `DAGU_HOME` you do. Dagu run IDs reject periods, so replace the bundle
+version's periods with hyphens: `bootstrap-backscroll-v0-2-0` for version
+`0.2.0`.
 
 ```sh
-dagu enqueue --run-id "bootstrap-<repo>" <skill-dir>/dagu-feature-bootstrap.yaml -- \
+dagu enqueue --run-id "bootstrap-<repo>-v<version-with-hyphens>" <skill-dir>/dagu-feature-bootstrap.yaml -- \
   PRIMARY="$(git rev-parse --show-toplevel)" SKILL_DIR=<skill-dir>
 ```
 
@@ -71,24 +95,32 @@ The steps:
 
 | Step | Effect |
 |---|---|
-| `detect` | Checks `git`, `gh` (authenticated), `jq` and `dagu`, and that `PRIMARY` is the main working tree of the clone. Reads the repository name, the default branch, the checks already required, and the checks on the last merged PR. |
-| `answers` | `human.task` that asks for `GATE`, `REQUIRED_CHECK`, and `TEST_PATHS`. Select the test-path ERE from the repository's actual conventions. In a4s use `(^\|/)(test\|tests)/\|\.test\.(ts\|cjs)$` (root or nested `test/` and `tests/`, plus `*.test.ts` and `*.test.cjs`). |
+| `detect` | Checks `git`, `gh` (authenticated), `jq` and the exact required `dagu version`; reads package/version, source commit and source `origin`; fetches and requires that clean package commit on the remote default branch; reads repository settings and the installed DAG values and stamps. |
+| `answers` | `human.task` that shows the current stamp, `GATE`, `REQUIRED_CHECK`, and `TEST_PATHS`, then asks for those three values. Select the test-path ERE from the repository's actual conventions. In a4s use `(^\|/)(test\|tests)/\|\.test\.(ts\|cjs)$`. |
 | `worktrees` | Makes git ignore `.workspace/worktrees/`. When nothing ignores it yet, appends `/.workspace/worktrees/` to the clone's `info/exclude`, so the primary stays clean without a commit. |
-| `render` | Writes configured `feature.yaml` and `poc.yaml` under `<git-dir>/dagu-feature/`, keeping PRIMARY clean. PoC receives only repo, PRIMARY, BASE_BRANCH and TEST_PATHS; feature owns GATE, REQUIRED_CHECK and protection. Fails on leftover placeholders or validation errors. |
-| `reconcile` | Validates and idempotently installs the shared scheduled `reconcile.yaml` to `$DAGU_HOME/dags/reconcile.yaml` (`DAGU_HOME` defaults to `~/.dagu`), then validates the installed file. One user-level DAG serves every adopting repository. |
+| `render` | Writes stamped and validated `feature.yaml`, `poc.yaml`, and `reconcile.yaml` under `<git-dir>/dagu-feature/`, keeping PRIMARY clean. |
+| `reconcile` | Idempotently installs the stamped staged `reconcile.yaml` to `$DAGU_HOME/dags/reconcile.yaml` (`DAGU_HOME` defaults to `~/.dagu`) and validates it. One user-level DAG serves every adopting repository. |
 | `github` | Enables auto-merge and squash merge, and adds `REQUIRED_CHECK` as a strict required status check on the default branch. It keeps the existing contexts and every other protection setting. When it has to recreate the protection, it reads the protection back and fails if any other setting changed. |
-| `confirm` | Reads the settings and the ignore rule back, validates both staged DAGs, and confirms the installed reconciler matches the skill source and validates. |
+| `confirm` | Reads settings back, validates both staged DAGs, compares the installed reconciler with its stamped render, and prints the bundle identity plus the three adoption commit trailers. |
 
-Answer the form after `detect` succeeds. Choose `GATE` from the repository's documented local check plus tests (`Justfile`, `Makefile`, `package.json`, contributing docs). `REQUIRED_CHECK` is the aggregate CI job that runs on pull requests:
+Answer the form after `detect` succeeds, reusing the current values shown in its
+prompt during an upgrade. Choose `GATE` from the repository's documented local
+check plus tests. `REQUIRED_CHECK` is the aggregate CI job:
 
 ```sh
-dagu status --run-id "bootstrap-<repo>" dagu-feature-bootstrap   # read the prompt
-dagu human-task complete --run-id "bootstrap-<repo>" --step answers \
-  --input GATE='<gate command>' --input REQUIRED_CHECK=<check> \
-  --input TEST_PATHS='<Bash ERE>' dagu-feature-bootstrap
+dagu status --run-id "bootstrap-<repo>-v<version-with-hyphens>" dagu-feature-bootstrap
+dagu human-task complete --run-id "bootstrap-<repo>-v<version-with-hyphens>" --step answers \
+  --input GATE='<current gate>' --input REQUIRED_CHECK='<current check>' \
+  --input TEST_PATHS='<current Bash ERE>' dagu-feature-bootstrap
 ```
 
-The bootstrap is done when the run is `Succeeded`. To change an answer, enqueue a new bootstrap run. The bootstrap does not write CI: if no workflow publishes `REQUIRED_CHECK` yet, the adoption commit must add it.
+The bootstrap is done when the run is `Succeeded`. To adopt or upgrade, open a
+self-contained adoption issue and enqueue the staged `feature.yaml` for that
+issue. The adoption commit copies both staged DAGs and includes the exact three
+trailers printed by `confirm`: `Dagu-Feature-Bundle`,
+`Dagu-Feature-Source`, and `Dagu-Feature-Bootstrap`. The bootstrap does not
+write CI; an initial adoption adds the workflow that publishes
+`REQUIRED_CHECK` when needed.
 
 ### 2. Adoption issue
 
@@ -144,7 +176,7 @@ Inspect a run with `dagu status --run-id <id> feature`. Step logs are listed und
 
 ### Coordinator flow
 
-The `@a4s/omp-dagu` status extension delivers hidden model context with the form `[DAGU STATE] run=<id> status=<waiting|failed|aborted> step=<step> issue=<issue>`. It starts or continues a coordinator turn without rendering the notice in chat. Notices report run state rather than user instructions.
+The `@a4s/omp-dagu` status extension delivers hidden model context with the form `[DAGU STATE] run=<id> status=<waiting|failed|aborted> step=<step> issue=<issue> bundle=<version|unstamped> extension=<version> compat=<ok|incompatible|unstamped>`. It starts or continues a coordinator turn without rendering the notice in chat. Notices report run state rather than user instructions.
 
 - On a `triage` notice, the coordinator obtains the guard generation marker and launches `task agent=triage-reviewer` itself with that marker and the fixed prompt, naming the subagent `TriageReview<ISSUE>` (or `TriageReview<ISSUE>v<N>` for a retry). Several `triage-reviewer` tasks may share one batched `task` call; each task includes its own run's generation marker. The coordinator completes `triage` with that allocated reviewer ID. A `dependency_review` push-back produces a new `triage` notice and the coordinator repeats this flow for the new generation.
 - At `run_poc`, the coordinator launches the PoC subagent as `Poc<ISSUE>`.
@@ -153,6 +185,7 @@ The `@a4s/omp-dagu` status extension delivers hidden model context with the form
 - A retried subagent appends `v<N>` to its base name, for example `Implement182v2`.
 - For every issue in the fixed batch, keep one todo for the agent action at the `human.task` where its run is waiting: triage review, PoC execution, implementation, or recovery. Update that todo when the run moves to another human task. The package widget shows the active step plus live activity: the last non-empty Dagu log line for a running command, or the newest `toolCall` name, intention (falling back to its principal argument) and age from `TriageReview<ISSUE>`, `Poc<ISSUE>` or `Implement<ISSUE>` while its human task waits. It refreshes activity about every two seconds and leaves the line unchanged when no source is available.
 - Keep `task.maxRecursionDepth: 1`; every implementation and triage-reviewer subagent remains at level 1 and appears in the main view.
+- A notice whose `compat` is not `ok` goes under **Blockers and decisions**. Put the exact `dagu enqueue --run-id "bootstrap-<repo>-v<version-with-hyphens>" ...` upgrade command under **Proposals**. When the request authorizes upgrades, the coordinator runs that upgrade procedure, completes `answers` with the current values shown by the prompt, opens the adoption issue, and enqueues its staged `feature.yaml`.
 
 ## Turn status
 

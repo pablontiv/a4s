@@ -1,0 +1,39 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import test from "node:test";
+
+const skill = (name: string): string => readFileSync(
+  fileURLToPath(new URL(`../skills/dagu-feature/${name}`, import.meta.url)),
+  "utf8",
+);
+
+test("all distributed DAG templates carry bundle stamp and label placeholders", () => {
+  for (const name of ["feature.yaml", "poc.yaml", "reconcile.yaml"]) {
+    const contents = skill(name);
+    assert.equal(contents.split("\n", 1)[0], "# dagu-feature-bundle: __DAGU_FEATURE_STAMP__", name);
+    assert.match(contents, /^  - dagu-feature-bundle=__DAGU_FEATURE_VERSION__$/m, name);
+  }
+});
+
+test("feature and PoC identity steps print the rendered bundle identity", () => {
+  const feature = skill("feature.yaml");
+  const poc = skill("poc.yaml");
+  assert.match(feature, /- DAGU_FEATURE_BUNDLE: "__DAGU_FEATURE_IDENTITY__"/);
+  assert.match(feature, /- id: start_gate[\s\S]*?printf '%s\\n' "\$DAGU_FEATURE_BUNDLE"/);
+  assert.match(poc, /- DAGU_FEATURE_BUNDLE: "__DAGU_FEATURE_IDENTITY__"/);
+  assert.match(poc, /- id: base[\s\S]*?printf '%s\\n' "\$DAGU_FEATURE_BUNDLE"/);
+});
+
+test("bootstrap detects source compatibility and renders and confirms all stamps", () => {
+  const bootstrap = skill("dagu-feature-bootstrap.yaml");
+  assert.match(bootstrap, /git -C "\$source_root" status --porcelain --untracked-files=all/);
+  assert.match(bootstrap, /git -C "\$source_root" merge-base --is-ancestor "\$source_sha" "\$source_default"/);
+  assert.match(bootstrap, /cmp "\$version_tmp\/expected" "\$version_tmp\/stdout"/);
+  assert.match(bootstrap, /CURRENT_FEATURE_STAMP/);
+  assert.match(bootstrap, /CURRENT_POC_STAMP/);
+  assert.match(bootstrap, /\$SKILL_DIR\/reconcile\.yaml/);
+  assert.match(bootstrap, /Dagu-Feature-Bundle: %s/);
+  assert.match(bootstrap, /Dagu-Feature-Source: %s@%s/);
+  assert.match(bootstrap, /Dagu-Feature-Bootstrap: %s/);
+});

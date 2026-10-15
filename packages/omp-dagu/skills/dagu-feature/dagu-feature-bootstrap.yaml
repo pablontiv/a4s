@@ -17,6 +17,44 @@ steps:
       gh auth status >/dev/null
       test -f "$SKILL_DIR/feature.yaml"
       test -f "$SKILL_DIR/poc.yaml"
+      test -f "$SKILL_DIR/reconcile.yaml"
+      package_dir=$(cd "$SKILL_DIR/../.." && pwd -P)
+      package_json="$package_dir/package.json"
+      test -f "$package_json"
+      bundle_name=$(jq -er '.name | select(type == "string" and length > 0)' "$package_json")
+      bundle_version=$(jq -er '.version | select(type == "string" and length > 0)' "$package_json")
+      required_dagu=$(jq -er '.daguFeature.dagu | select(type == "string" and length > 0)' "$package_json")
+      source_root=$(git -C "$SKILL_DIR" rev-parse --show-toplevel)
+      package_prefix=$(git -C "$package_dir" rev-parse --show-prefix)
+      test -z "$(git -C "$source_root" status --porcelain --untracked-files=all -- "${package_prefix%/}")"
+      source_sha=$(git -C "$source_root" rev-parse HEAD)
+      test "${#source_sha}" = 40
+      git -C "$source_root" fetch origin
+      git -C "$source_root" remote set-head origin -a >/dev/null
+      source_default=$(git -C "$source_root" symbolic-ref --quiet refs/remotes/origin/HEAD)
+      git -C "$source_root" merge-base --is-ancestor "$source_sha" "$source_default"
+      source_url=$(git -C "$source_root" remote get-url origin)
+      source_path=${source_url#git@*:}
+      source_path=${source_path#http://*/}
+      source_path=${source_path#https://*/}
+      source_path=${source_path#ssh://*/}
+      source_path=${source_path#file://}
+      source_path=${source_path%.git}
+      source_path=${source_path%/}
+      source_repo=${source_path##*/}
+      source_owner_path=${source_path%/*}
+      source_owner=${source_owner_path##*/}
+      test -n "$source_owner" && test -n "$source_repo"
+      source_nwo="$source_owner/$source_repo"
+      version_tmp=$(mktemp -d)
+      trap 'rm -rf "$version_tmp"' EXIT
+      if ! dagu version >"$version_tmp/stdout" 2>"$version_tmp/stderr"; then
+        cat "$version_tmp/stderr" >&2
+        exit 1
+      fi
+      printf '%s\n' "$required_dagu" >"$version_tmp/expected"
+      cmp "$version_tmp/expected" "$version_tmp/stdout"
+      test ! -s "$version_tmp/stderr"
       test "$(git -C "$PRIMARY" rev-parse --show-toplevel)" = "$PRIMARY"
       test "$(git -C "$PRIMARY" rev-parse --absolute-git-dir)" = "$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-common-dir)"
       cd "$PRIMARY"
@@ -31,6 +69,42 @@ steps:
       if test -n "$last_pr"; then
         checks=$(gh pr checks "$last_pr" --json name --jq '[.[].name] | unique | join(",")' 2>/dev/null || true)
       fi
+      read_default() {
+        local file=$1 wanted=$2 raw
+        raw=$(awk -v wanted="$wanted" '
+          $0 == "  - name: " wanted { found=1; next }
+          found && /^    default: / { sub(/^    default: /, ""); print; exit }
+          found && /^  - name: / { exit }
+        ' "$file")
+        test -n "$raw" || return 0
+        jq -nr --arg raw "$raw" 'try ($raw | fromjson) catch $raw'
+      }
+      read_stamp() {
+        local file=$1 line
+        test -f "$file" || { printf 'unstamped\n'; return; }
+        IFS= read -r line <"$file" || true
+        case "$line" in
+          '# dagu-feature-bundle: '*) printf '%s\n' "${line#\# dagu-feature-bundle: }" ;;
+          *) printf 'unstamped\n' ;;
+        esac
+      }
+      installed_feature="$PRIMARY/.workspace/dagu/dags/feature.yaml"
+      installed_poc="$PRIMARY/.workspace/dagu/dags/poc.yaml"
+      current_gate=not-configured
+      current_check=not-configured
+      current_tests=not-configured
+      if test -f "$installed_feature"; then
+        current_gate=$(read_default "$installed_feature" GATE)
+        current_check=$(read_default "$installed_feature" REQUIRED_CHECK)
+      fi
+      if test -f "$installed_poc"; then
+        current_tests=$(read_default "$installed_poc" TEST_PATHS)
+        if test -z "$current_tests"; then
+          test_line=$(awk '/\[\[ "\$path" == \*\.md \|\| "\$path" =~ / { print; exit }' "$installed_poc")
+          current_tests=${test_line#* =~ }
+          current_tests=${current_tests% ]]; then}
+        fi
+      fi
       {
         printf 'REPO=%s\n' "$repo"
         printf 'NWO=%s\n' "$nwo"
@@ -38,6 +112,17 @@ steps:
         printf 'REQUIRED_NOW=%s\n' "${required:-none}"
         printf 'RECENT_CHECKS=%s\n' "${checks:-none}"
         printf 'STAGE=%s\n' "$(git rev-parse --path-format=absolute --git-path dagu-feature/feature.yaml)"
+        printf 'BUNDLE_NAME=%s\n' "$bundle_name"
+        printf 'BUNDLE_VERSION=%s\n' "$bundle_version"
+        printf 'REQUIRED_DAGU=%s\n' "$required_dagu"
+        printf 'DAGU_VERSION=%s\n' "$required_dagu"
+        printf 'SOURCE_NWO=%s\n' "$source_nwo"
+        printf 'SOURCE_SHA=%s\n' "$source_sha"
+        printf 'CURRENT_GATE=%s\n' "${current_gate:-not-configured}"
+        printf 'CURRENT_REQUIRED_CHECK=%s\n' "${current_check:-not-configured}"
+        printf 'CURRENT_TEST_PATHS=%s\n' "${current_tests:-not-configured}"
+        printf 'CURRENT_FEATURE_STAMP=%s\n' "$(read_stamp "$installed_feature")"
+        printf 'CURRENT_POC_STAMP=%s\n' "$(read_stamp "$installed_poc")"
       } >> "$DAGU_OUTPUT_FILE"
     outputs:
       - name: REPO
@@ -46,6 +131,17 @@ steps:
       - name: REQUIRED_NOW
       - name: RECENT_CHECKS
       - name: STAGE
+      - name: BUNDLE_NAME
+      - name: BUNDLE_VERSION
+      - name: REQUIRED_DAGU
+      - name: DAGU_VERSION
+      - name: SOURCE_NWO
+      - name: SOURCE_SHA
+      - name: CURRENT_GATE
+      - name: CURRENT_REQUIRED_CHECK
+      - name: CURRENT_TEST_PATHS
+      - name: CURRENT_FEATURE_STAMP
+      - name: CURRENT_POC_STAMP
 
   - id: answers
     depends: detect
@@ -54,11 +150,16 @@ steps:
       prompt: >-
         Configure the dagu-feature lifecycle for ${steps.detect.outputs.NWO}
         (default branch ${steps.detect.outputs.BASE_BRANCH}).
-        GATE: local gate command run in the issue worktree with bash -euo pipefail -c.
-        REQUIRED_CHECK: GitHub check the default branch will require (strict).
+        Current feature stamp: ${steps.detect.outputs.CURRENT_FEATURE_STAMP}.
+        Current poc stamp: ${steps.detect.outputs.CURRENT_POC_STAMP}.
+        GATE: local gate command run in the issue worktree with bash -euo pipefail -c
+        (current: ${steps.detect.outputs.CURRENT_GATE}).
+        REQUIRED_CHECK: GitHub check the default branch will require (strict)
+        (current: ${steps.detect.outputs.CURRENT_REQUIRED_CHECK}).
         Required now: ${steps.detect.outputs.REQUIRED_NOW}.
         Checks on the last merged PR: ${steps.detect.outputs.RECENT_CHECKS}.
-        TEST_PATHS: Bash ERE matching this repository's test paths (for a4s: (^|/)(test|tests)/|\.test\.(ts|cjs)$).
+        TEST_PATHS: Bash ERE matching this repository's test paths
+        (current: ${steps.detect.outputs.CURRENT_TEST_PATHS}; for a4s: (^|/)(test|tests)/|\.test\.(ts|cjs)$).
       form:
         type: object
         additionalProperties: false
@@ -93,42 +194,64 @@ steps:
       - BASE_BRANCH: ${steps.detect.outputs.BASE_BRANCH}
       - STAGE: ${steps.detect.outputs.STAGE}
       - TEST_PATHS: ${steps.answers.outputs.TEST_PATHS}
+      - BUNDLE_NAME: ${steps.detect.outputs.BUNDLE_NAME}
+      - BUNDLE_VERSION: ${steps.detect.outputs.BUNDLE_VERSION}
+      - DAGU_VERSION: ${steps.detect.outputs.DAGU_VERSION}
+      - SOURCE_NWO: ${steps.detect.outputs.SOURCE_NWO}
+      - SOURCE_SHA: ${steps.detect.outputs.SOURCE_SHA}
     run: |
       set -euo pipefail
       umask 0022
+      test -n "${DAG_RUN_ID:-}"
       mkdir -p "$(dirname "$STAGE")"
-      jq -Rr --rawfile template "$SKILL_DIR/feature.yaml" \
+      source="$SOURCE_NWO@$SOURCE_SHA"
+      identity="dagu-feature-bundle=$BUNDLE_VERSION source=$source bootstrap=$DAG_RUN_ID"
+      stamp="$BUNDLE_NAME@$BUNDLE_VERSION source=$source bootstrap=$DAG_RUN_ID dagu=$DAGU_VERSION"
+      render_common='
+        gsub("__DAGU_FEATURE_STAMP__"; $stamp)
+        | gsub("__DAGU_FEATURE_VERSION__"; $version)
+        | gsub("__DAGU_FEATURE_IDENTITY__"; $identity)'
+      jq -nr --rawfile template "$SKILL_DIR/feature.yaml" \
         --arg repo "$REPO" --arg base "$BASE_BRANCH" \
         --arg gate "$GATE" --arg check "$REQUIRED_CHECK" \
-        '$template
-          | gsub("TEMPLATE_REPO"; $repo)
-          | gsub("TEMPLATE_BASE_BRANCH"; $base | tojson)
-          | gsub("__GATE__"; $gate | tojson)
-          | gsub("__REQUIRED_CHECK__"; $check | tojson)' \
-        -n > "$STAGE"
-      if grep -En 'TEMPLATE_[A-Z_]+|__[A-Z_]*__' "$STAGE"; then exit 1; fi
-      dagu validate "$STAGE"
+        --arg stamp "$stamp" --arg version "$BUNDLE_VERSION" --arg identity "$identity" \
+        "\$template
+          | $render_common
+          | gsub(\"TEMPLATE_REPO\"; \$repo)
+          | gsub(\"TEMPLATE_BASE_BRANCH\"; \$base | tojson)
+          | gsub(\"__GATE__\"; \$gate | tojson)
+          | gsub(\"__REQUIRED_CHECK__\"; \$check | tojson)" > "$STAGE"
       jq -nr --rawfile template "$SKILL_DIR/poc.yaml" \
         --arg repo "$REPO" --arg base "$BASE_BRANCH" \
         --arg primary "$PRIMARY" --arg tests "$TEST_PATHS" \
-        '$template
-          | gsub("TEMPLATE_REPO"; $repo)
-          | gsub("TEMPLATE_BASE_BRANCH"; $base | tojson)
-          | gsub("__PRIMARY__"; $primary | tojson)
-          | gsub("__TEST_PATHS__"; $tests)' > "$(dirname "$STAGE")/poc.yaml"
-      if grep -En 'TEMPLATE_[A-Z_]+|__[A-Z_]*__' "$(dirname "$STAGE")/poc.yaml"; then exit 1; fi
-      dagu validate "$(dirname "$STAGE")/poc.yaml"
+        --arg stamp "$stamp" --arg version "$BUNDLE_VERSION" --arg identity "$identity" \
+        "\$template
+          | $render_common
+          | gsub(\"TEMPLATE_REPO\"; \$repo)
+          | gsub(\"TEMPLATE_BASE_BRANCH\"; \$base | tojson)
+          | gsub(\"__PRIMARY__\"; \$primary | tojson)
+          | gsub(\"__TEST_PATHS__\"; \$tests | tojson)" > "$(dirname "$STAGE")/poc.yaml"
+      jq -nr --rawfile template "$SKILL_DIR/reconcile.yaml" \
+        --arg stamp "$stamp" --arg version "$BUNDLE_VERSION" --arg identity "$identity" \
+        "\$template | $render_common" > "$(dirname "$STAGE")/reconcile.yaml"
+      for rendered in "$STAGE" "$(dirname "$STAGE")/poc.yaml" "$(dirname "$STAGE")/reconcile.yaml"; do
+        if grep -En 'TEMPLATE_[A-Z_]+|__[A-Z_]*__' "$rendered"; then exit 1; fi
+        dagu validate "$rendered"
+      done
       printf 'stage=%s\n' "$STAGE"
 
   - id: reconcile
     depends: render
+    env:
+      - STAGE: ${steps.detect.outputs.STAGE}
     run: |
       set -euo pipefail
       destination="${DAGU_HOME:-$HOME/.dagu}/dags/reconcile.yaml"
-      dagu validate "$SKILL_DIR/reconcile.yaml"
+      rendered="$(dirname "$STAGE")/reconcile.yaml"
+      dagu validate "$rendered"
       mkdir -p "$(dirname "$destination")"
-      if ! cmp -s "$SKILL_DIR/reconcile.yaml" "$destination"; then
-        install -m 0644 "$SKILL_DIR/reconcile.yaml" "$destination"
+      if ! cmp -s "$rendered" "$destination"; then
+        install -m 0644 "$rendered" "$destination"
       fi
       dagu validate "$destination"
       printf 'reconcile=%s\n' "$destination"
@@ -200,6 +323,10 @@ steps:
       - NWO: ${steps.detect.outputs.NWO}
       - BASE_BRANCH: ${steps.detect.outputs.BASE_BRANCH}
       - STAGE: ${steps.detect.outputs.STAGE}
+      - BUNDLE_VERSION: ${steps.detect.outputs.BUNDLE_VERSION}
+      - DAGU_VERSION: ${steps.detect.outputs.DAGU_VERSION}
+      - SOURCE_NWO: ${steps.detect.outputs.SOURCE_NWO}
+      - SOURCE_SHA: ${steps.detect.outputs.SOURCE_SHA}
     run: |
       set -euo pipefail
       test "$(gh api "repos/$NWO" --jq '.allow_auto_merge and .allow_squash_merge')" = true
@@ -209,8 +336,13 @@ steps:
       dagu validate "$STAGE"
       dagu validate "$(dirname "$STAGE")/poc.yaml"
       destination="${DAGU_HOME:-$HOME/.dagu}/dags/reconcile.yaml"
-      cmp "$SKILL_DIR/reconcile.yaml" "$destination"
+      cmp "$(dirname "$STAGE")/reconcile.yaml" "$destination"
       dagu validate "$destination"
+      printf 'dagu-feature-bundle=%s source=%s@%s bootstrap=%s dagu=%s\n' \
+        "$BUNDLE_VERSION" "$SOURCE_NWO" "$SOURCE_SHA" "$DAG_RUN_ID" "$DAGU_VERSION"
+      printf 'Dagu-Feature-Bundle: %s\n' "$BUNDLE_VERSION"
+      printf 'Dagu-Feature-Source: %s@%s\n' "$SOURCE_NWO" "$SOURCE_SHA"
+      printf 'Dagu-Feature-Bootstrap: %s\n' "$DAG_RUN_ID"
       printf 'reconcile=%s\n' "$destination"
       printf 'scheduler=ok\nrepo=%s\nbase_branch=%s\nrequired_check=%s\nstage=%s\n' \
         "$NWO" "$BASE_BRANCH" "$REQUIRED_CHECK" "$STAGE"

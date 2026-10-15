@@ -1,4 +1,7 @@
+# dagu-feature-bundle: __DAGU_FEATURE_STAMP__
 description: Reconciles every waiting feature run's await_merge with its PR and reports waiting runs whose issue is closed.
+labels:
+  - dagu-feature-bundle=__DAGU_FEATURE_VERSION__
 schedule: "* * * * *"
 catchup_window: ""
 overlap_policy: skip
