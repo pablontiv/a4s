@@ -83,14 +83,25 @@ export function settingsPaths(
 
 export function initializeSynagentSettings(
   paths: SynagentSettingsPaths,
+  env: NodeJS.ProcessEnv = process.env,
 ): SynagentSettings {
   if (paths.globalLegacy) migrateLegacySettings(paths.global, paths.globalLegacy)
-  return loadSynagentSettings(paths)
+  return loadSynagentSettings(paths, env)
 }
 
 export function findRejectedBrokerUrl(
   paths: SynagentSettingsPaths,
+  env: NodeJS.ProcessEnv = process.env,
 ): string | undefined {
+  const environmentBrokerUrl = env.SYNAGENT_BROKER_URL?.trim()
+  if (environmentBrokerUrl) {
+    try {
+      assertLoopbackBrokerUrl(environmentBrokerUrl)
+      return undefined
+    } catch {
+      return environmentBrokerUrl
+    }
+  }
   const candidates: unknown[] = []
   candidates.push(readRawNativeValue(paths.global, 'broker-url'))
   if (paths.globalLegacy) candidates.push(readRawLegacyValue(paths.globalLegacy, 'broker-url'))
@@ -107,13 +118,17 @@ export function findRejectedBrokerUrl(
 
 export function loadSynagentSettings(
   paths: SynagentSettingsPaths,
+  env: NodeJS.ProcessEnv = process.env,
 ): SynagentSettings {
   const globalNew = readNativeSettings(paths.global)
   const globalLegacy = paths.globalLegacy ? readLegacySettings(paths.globalLegacy) : {}
   const resolved = { ...DEFAULT_SETTINGS }
+  const environmentBrokerUrl = env.SYNAGENT_BROKER_URL?.trim()
 
   for (const key of SYNAGENT_SETTING_KEYS) {
-    const candidates = [globalNew[key], globalLegacy[key], DEFAULT_SETTINGS[key]]
+    const candidates = key === 'broker-url'
+      ? [environmentBrokerUrl, globalNew[key], globalLegacy[key], DEFAULT_SETTINGS[key]]
+      : [globalNew[key], globalLegacy[key], DEFAULT_SETTINGS[key]]
     for (const candidate of candidates) {
       if (isValidSetting(key, candidate)) {
         assignSetting(resolved, key, candidate)

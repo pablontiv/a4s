@@ -244,7 +244,10 @@ Este ejemplo muestra el formato completo:
 ```
 
 El adaptador resuelve cada clave por separado: archivo de usuario, valores
-legacy de usuario (Pi) y default. Los cambios se conservan al arrancar otra sesión.
+legacy de usuario (Pi) y default. `SYNAGENT_BROKER_URL`, cuando no está vacío,
+sobrescribe `broker-url` solo para el proceso y nunca se persiste; se valida con
+la misma restricción loopback. Los cambios de archivo se conservan al arrancar
+otra sesión.
 
 En Pi, si falta `synagent.json`, el adaptador migra las cuatro claves
 `a4s.synagent.*` conocidas desde el `settings.json` de usuario. Conserva el
@@ -265,15 +268,25 @@ Los mensajes recibidos se validan y se encolan en orden de llegada. Como la API
 pública `sendUserMessage` de Pi retorna `void`, el adaptador no finge esperar su
 procesamiento interno: invoca como máximo un mensaje, confirma su aceptación
 al observar el `message_start` de usuario con su marcador y libera el siguiente
-solo cuando Pi emite `agent_settled`. Un turno ajeno no puede
-liberar esa barrera. El harness conserva la autoridad sobre la planificación de
-turnos. Si una entrega no alcanza `message_start`, o una ya aceptada no se
-asienta, en 30 segundos mantiene la barrera y muestra una advertencia. Esto también cubre un
-mensaje interceptado por otro input handler y evita confundir un fallo con un
-preflight o turno lento. El operador puede ejecutar `/synagent resume` para
+solo cuando Pi emite `agent_settled`. Un turno ajeno no puede liberar esa
+barrera. El harness conserva la autoridad sobre la planificación de turnos.
+
+Para cada entrega confirmada, el adaptador captura en `message_end` el último
+contenido assistant con bloques `text` no vacíos. Un texto previo a una tool se
+reemplaza por el texto final posterior; `toolCall`, `thinking` y `toolResult` no
+son resultados. El filtro de vacío no recorta el contenido conservado. La
+captura se asocia al ID, generación, token y marcador de esa entrega, y se
+congela en el siguiente `message_start` de usuario. Por eso un `followUp`
+procesado en el mismo ciclo no contamina el resultado que `agent_settled`
+entrega al motor. Un resultado sin texto queda sin `a4s.delivery.text`.
+
+Si una entrega no alcanza `message_start`, o una ya aceptada no se asienta, en
+30 segundos mantiene la barrera y muestra una advertencia. Esto también cubre
+un mensaje interceptado por otro input handler y evita confundir un fallo con
+un preflight o turno lento. El operador puede ejecutar `/synagent resume` para
 liberar la cola explícitamente, aceptando orden best-effort desde ese punto. El
-adaptador reserva cada `id` antes de encolarlo y conserva los
-últimos 1000 IDs en entradas privadas de la sesión:
+adaptador reserva cada `id` antes de encolarlo y conserva los últimos 1000 IDs
+en entradas privadas de la sesión:
 
 - si Pi está idle, inicia un turno normal;
 - `kind=steer` interrumpe un turno activo con `deliverAs: "steer"`;
@@ -294,15 +307,18 @@ El adaptador registra solo hitos útiles para RCA. Incluye ciclo de vida,
 identidad, conexión MQTT, resultado de mensaje y barrera de entrega. Registra
 profundidad de cola, generación, rol, operación, tipo de mensaje, alcance,
 modo y timeout cuando aplican. El ID de mensaje se correlaciona con un digest
-SHA-256 determinista. El mismo cálculo se puede usar en el adaptador Claude.
+SHA-256 determinista. `synagent.pi.delivery.settled` añade el resultado exacto
+de la entrega en `a4s.delivery.text` cuando existe, incluidos sus espacios; este
+campo contiene salida del modelo y debe tratarse como contenido sensible. El
+mismo cálculo de digest se puede usar en el adaptador Claude.
 
-El JSONL no contiene body, payload, prompt, respuesta, transcript, token,
-topic, dirección, URL, client ID, entorno, argv ni ID de sesión crudo. El
-nombre de instancia deriva de un digest del ID de sesión. El escritor aplica
-`0700` a sus directorios y `0600` al archivo. Rechaza rutas de instancia y
-archivos que sean symlinks o tipos no regulares. Usa `O_NOFOLLOW` cuando el
-sistema lo ofrece. Si no garantiza la ruta o los permisos, omite el registro.
-Nunca usa stdout o stderr como fallback.
+Fuera de esa captura explícita, el JSONL no contiene body, payload, prompt,
+transcript, token, topic, dirección, URL, client ID, entorno, argv ni ID de
+sesión crudo. El nombre de instancia deriva de un digest del ID de sesión. El
+escritor aplica `0700` a sus directorios y `0600` al archivo. Rechaza rutas de
+instancia y archivos que sean symlinks o tipos no regulares. Usa `O_NOFOLLOW`
+cuando el sistema lo ofrece. Si no garantiza la ruta o los permisos, omite el
+registro. Nunca usa stdout o stderr como fallback.
 
 El escritor es best-effort. Un fallo de creación, formato o escritura no
 detiene el adaptador. Cada archivo tiene una cuota fija de 16 MiB. El escritor
@@ -344,6 +360,24 @@ npm test --workspace @a4s/synagent
 npm run typecheck --workspace @a4s/synagent
 npm test --workspace @a4s/synagent-bus
 ```
+
+La comprobación viva permanente requiere Pi 1.0.3 y credenciales ya disponibles
+para un modelo real. Arranca dos sesiones RPC, un broker propio en `18224` y
+directorios de sesión/estado temporales; carga solo el adaptador del checkout,
+espera cada acuse RPC y no modifica ni copia la configuración o credenciales
+globales:
+
+```sh
+SYNAGENT_PI_MODEL=openai-codex/gpt-6.1-sol \
+  npm run verify:pi-delivery-capture --workspace @a4s/synagent
+```
+
+El script ejecuta tres entregas con texto previo, tool bash y texto final. En la
+segunda encola un `followUp` al comenzar la tool y comprueba que el diagnóstico
+conserva `FINAL_124_TWO`, no `USER_AFTER_124_TWO`. También correlaciona el ID
+publicado en el bus, el marcador observado en destino y el hash diagnóstico.
+`SYNAGENT_LIVE_ROOT` conserva la evidencia en una ruta elegida; si se omite, el
+script imprime la ruta temporal que creó.
 
 Las pruebas de este workspace incluyen el protocolo compartido, los bridges
 reales y un recorrido MQTT bidireccional del adaptador Pi contra Aedes con el

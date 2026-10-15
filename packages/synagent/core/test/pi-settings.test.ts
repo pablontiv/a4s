@@ -6,6 +6,7 @@ import { test, type TestContext } from 'node:test'
 
 import {
   DEFAULT_SETTINGS,
+  findRejectedBrokerUrl,
   initializeSynagentSettings,
   loadSynagentSettings,
   persistSetting,
@@ -44,6 +45,28 @@ test('Synagent resolves each user setting from native, legacy, and default value
     'broker-url': 'mqtt://localhost:1885',
     global: false,
     'default-peer': 'User.Peer',
+  })
+})
+
+test('Synagent broker environment override wins without changing user settings', t => {
+  const { paths } = fixture(t)
+  writeJson(paths.global, { 'broker-url': 'mqtt://localhost:1885', global: false })
+  const env = { SYNAGENT_BROKER_URL: ' mqtt://127.0.0.1:18224 ' }
+
+  assert.deepEqual(loadSynagentSettings(paths, env), {
+    enabled: true,
+    'broker-url': 'mqtt://127.0.0.1:18224',
+    global: false,
+    'default-peer': 'claude',
+  })
+  assert.equal(findRejectedBrokerUrl(paths, env), undefined)
+  assert.equal(
+    findRejectedBrokerUrl(paths, { SYNAGENT_BROKER_URL: 'mqtt://broker.example.com:1883' }),
+    'mqtt://broker.example.com:1883',
+  )
+  assert.deepEqual(JSON.parse(readFileSync(paths.global, 'utf8')), {
+    'broker-url': 'mqtt://localhost:1885',
+    global: false,
   })
 })
 
