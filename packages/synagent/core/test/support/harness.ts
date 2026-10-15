@@ -15,11 +15,13 @@ import type { CanonicalMessage } from '../../protocol.ts'
 
 export type AdapterFactory = (options?: SynagentAdapterOptions) => (api: never) => void
 
-type EventName = 'session_start' | 'message_start' | 'agent_end' | 'agent_settled' | 'session_shutdown'
+type EventName = 'session_start' | 'message_start' | 'message_end' | 'agent_end' | 'agent_settled' | 'session_shutdown'
+type FakeContent = string | Array<{ type: string; text?: string }>
 type FakeEvent =
   | { type: 'session_start' | 'agent_settled' | 'session_shutdown' }
   | { type: 'agent_end'; messages: [] }
-  | { type: 'message_start'; message: { role: 'user'; content: Array<{ type: 'text'; text: string }> } }
+  | { type: 'message_start'; message: { role: 'user'; content: FakeContent } }
+  | { type: 'message_end'; message: { role: 'assistant' | 'toolResult' | 'user'; content: FakeContent } }
 type Handler = (event: FakeEvent, context: FakeContext) => void | Promise<void>
 type Command = { handler(args: string, context: FakeContext): void | Promise<void> }
 type Tool = {
@@ -141,7 +143,7 @@ export function createHarness(
   diagnostics?: SynagentAdapterOptions['diagnostics'],
   trusted = true,
 ) {
-  const events = new Map<EventName, Handler>()
+  const events = new Map<EventName, Handler[]>()
   const commands = new Map<string, Command>()
   const tools = new Map<string, Tool>()
   const notifications: Notification[] = []
@@ -194,7 +196,9 @@ export function createHarness(
       tools.set(tool.name, tool)
     },
     on(event: EventName, handler: Handler) {
-      events.set(event, handler)
+      const handlers = events.get(event) ?? []
+      handlers.push(handler)
+      events.set(event, handlers)
       return () => {}
     },
     appendEntry(customType: string, data: Record<string, string>) {
@@ -222,6 +226,12 @@ export function createHarness(
     }
   }
 
+  async function emit(eventName: EventName, event: FakeEvent): Promise<void> {
+    for (const handler of events.get(eventName) ?? []) {
+      await handler(event, createContext())
+    }
+  }
+
   return {
     notifications,
     received,
@@ -240,48 +250,40 @@ export function createHarness(
     get failDelivery() { return failDelivery },
     set failDelivery(value: boolean) { failDelivery = value },
     async start() {
-      const handler = events.get('session_start')
-      assert.ok(handler)
-      await withAgentDir(() => handler({ type: 'session_start' }, createContext()))
+      await withAgentDir(() => emit('session_start', { type: 'session_start' }))
     },
     async startSession(nextSessionId: string) {
       currentSessionId = nextSessionId
-      const handler = events.get('session_start')
-      assert.ok(handler)
-      await withAgentDir(() => handler({ type: 'session_start' }, createContext()))
+      await withAgentDir(() => emit('session_start', { type: 'session_start' }))
     },
     async messageStart(text: string) {
-      const messageStart = events.get('message_start')
-      assert.ok(messageStart)
-      await messageStart({
+      await emit('message_start', {
         type: 'message_start',
         message: { role: 'user', content: [{ type: 'text', text }] },
-      }, createContext())
+      })
+    },
+    async messageEnd(
+      role: 'assistant' | 'toolResult' | 'user',
+      content: FakeContent,
+    ) {
+      await emit('message_end', { type: 'message_end', message: { role, content } })
     },
     async confirmDelivery(index = received.length - 1) {
       const delivery = received[index]
       assert.ok(delivery)
-      const messageStart = events.get('message_start')
-      assert.ok(messageStart)
-      await messageStart({
+      await emit('message_start', {
         type: 'message_start',
         message: { role: 'user', content: [{ type: 'text', text: delivery.text }] },
-      }, createContext())
+      })
     },
     async settle() {
-      const handler = events.get('agent_settled')
-      assert.ok(handler)
-      await handler({ type: 'agent_settled' }, createContext())
+      await emit('agent_settled', { type: 'agent_settled' })
     },
     agentEnd<Event extends { type: 'agent_end'; messages: [] }>(event: Event) {
-      const handler = events.get('agent_end')
-      assert.ok(handler)
-      return handler(event, createContext())
+      return emit('agent_end', event)
     },
     async shutdown() {
-      const handler = events.get('session_shutdown')
-      assert.ok(handler)
-      await handler({ type: 'session_shutdown' }, createContext())
+      await emit('session_shutdown', { type: 'session_shutdown' })
       if (ownedDiagnosticsRoot) rmSync(ownedDiagnosticsRoot, { recursive: true, force: true })
       rmSync(agentDir, { recursive: true, force: true })
       if (ownedCwd) rmSync(ownedCwd, { recursive: true, force: true })

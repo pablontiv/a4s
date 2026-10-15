@@ -67,6 +67,14 @@ type ActiveDelivery = {
   mode: DeliveryMode
   token: number
 }
+export type DeliveryResultKey = Pick<ActiveDelivery, 'generation' | 'id' | 'marker' | 'token'>
+export type DeliveryResultCapture = {
+  start: (delivery: DeliveryResultKey) => void
+  result: (delivery: DeliveryResultKey) => string | undefined
+  reset: () => void
+}
+
+type AdapterDiagnosticEvent = DiagnosticEvent & { deliveryText?: string }
 type ClientRole = 'durable' | 'transient'
 type ProjectSource = ReturnType<typeof resolveProjectWithSource>['source']
 type SendResult = { ok: true; message: string } | { ok: false; message: string }
@@ -84,6 +92,7 @@ export type SynagentAdapterHost = {
   diagnosticEventPrefix: string
   settleEventName: string
   settingsPaths: () => SynagentSettingsPaths
+  createDeliveryResultCapture?: (pi: ExtensionAPI) => DeliveryResultCapture
   bindSettle: (pi: ExtensionAPI, release: (ctx: ExtensionContext) => void) => void
 }
 
@@ -121,6 +130,7 @@ function synagentAdapter(
   let settings: SynagentSettings = { ...DEFAULT_SETTINGS }
   let activeSettingsPaths: SynagentSettingsPaths | undefined
   const queuedDeliveries: QueuedDelivery[] = []
+  const deliveryResultCapture = host.createDeliveryResultCapture?.(pi)
   const seen = new Set<string>()
 
   pi.registerTool({
@@ -207,6 +217,7 @@ function synagentAdapter(
         clearDeliveryStartTimer()
         ++deliveryDispatchToken
         activeDelivery = undefined
+        deliveryResultCapture?.reset()
         awaitingSettlement = false
         logDiagnostic('delivery.resumed', {
           operation: 'delivery.resume',
@@ -302,8 +313,10 @@ function synagentAdapter(
   function releaseSettledDelivery(ctx: ExtensionContext): void {
     if (!useCurrentContext(ctx) || !activeDelivery?.confirmed) return
     const settled = activeDelivery
+    const deliveryText = deliveryResultCapture?.result(settled)
     clearDeliveryStartTimer()
     activeDelivery = undefined
+    deliveryResultCapture?.reset()
     awaitingSettlement = false
     logDiagnostic('delivery.settled', {
       operation: 'delivery.settle',
@@ -312,6 +325,7 @@ function synagentAdapter(
       deliveryMode: settled.mode,
       destinationScope: settled.destinationScope,
       messageKind: settled.kind,
+      ...(deliveryText === undefined ? {} : { deliveryText }),
       ...messageDiagnostic(settled.id),
     })
     drainDeliveries(ctx)
@@ -841,6 +855,7 @@ function synagentAdapter(
           mode,
           token: dispatchToken,
         }
+        deliveryResultCapture?.start(activeDelivery)
         armDeliveryStartTimeout(
           dispatchToken,
           queued.message.id,
@@ -863,6 +878,7 @@ function synagentAdapter(
       } catch (error) {
         clearDeliveryStartTimer()
         activeDelivery = undefined
+        deliveryResultCapture?.reset()
         awaitingSettlement = false
         logDiagnostic('delivery.failed', {
           operation: 'delivery.dispatch',
@@ -954,16 +970,18 @@ function synagentAdapter(
   function resetDeliveryQueue(): void {
     ++deliveryGeneration
     queuedDeliveries.length = 0
+    deliveryResultCapture?.reset()
   }
 
   function resetActiveDelivery(): void {
     clearDeliveryStartTimer()
     ++deliveryDispatchToken
     activeDelivery = undefined
+    deliveryResultCapture?.reset()
     awaitingSettlement = false
   }
 
-  function logDiagnostic(eventName: string, event: DiagnosticEvent): void {
+  function logDiagnostic(eventName: string, event: AdapterDiagnosticEvent): void {
     try {
       diagnostics?.record(`${host.diagnosticEventPrefix}.${eventName}`, event)
     } catch {}

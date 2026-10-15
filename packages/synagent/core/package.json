@@ -29,6 +29,7 @@
   },
   "scripts": {
     "observer": "tsx observer-cli.ts",
+    "verify:pi-delivery-capture": "tsx scripts/verify-pi-delivery-capture.ts",
     "sync-diagnostics": "node adapters/claude/scripts/sync-diagnostics.mjs",
     "test": "npm run sync-diagnostics -- --check && tsx --test test/*.test.ts",
     "typecheck": "tsc --noEmit"

@@ -203,6 +203,70 @@ test('Pi adapter: v1 push bidireccional, broadcasts por defecto, orden y dedupe'
   assert.equal(restored.received.length, 1)
 })
 
+test('Pi adapter records the frozen assistant result for each confirmed delivery', async t => {
+  const { broker, server, url } = await startBroker()
+  const publisher = await connectClient(url, 'pi-result-publisher')
+  const stateRoot = mkdtempSync(join(tmpdir(), 'synagent-pi-result-'))
+  const topic = 'synagent/v1/a4s/pi-result'
+  const harness = createHarness({
+    'a4s.synagent.broker-url': url,
+  }, [], 'pi-result', undefined, process.cwd(), { env: { A4S_STATE_ROOT: stateRoot } })
+  t.after(async () => {
+    await harness.shutdown()
+    await end(publisher)
+    await closeServer(server)
+    await closeBroker(broker)
+    rmSync(stateRoot, { recursive: true, force: true })
+  })
+
+  await harness.start()
+  await waitFor(() => harness.notifications.some(({ message }) => message.includes(`subscribed to ${topic}`)))
+
+  await publish(publisher, topic, serialize(message({ id: 'result-tools', to: 'a4s/pi-result' })))
+  await waitFor(() => harness.received.length === 1)
+  await harness.confirmDelivery()
+  await harness.messageEnd('assistant', [
+    { type: 'text', text: 'PRE_TOOL_RESULT' },
+    { type: 'toolCall' },
+  ])
+  await harness.messageEnd('toolResult', [{ type: 'text', text: 'TOOL_ONE' }])
+  await harness.messageEnd('assistant', [{ type: 'toolCall' }])
+  await harness.messageEnd('toolResult', [{ type: 'text', text: 'TOOL_TWO' }])
+  await harness.messageEnd('assistant', '  FINAL_RESULT  \n')
+  await harness.settle()
+
+  await publish(publisher, topic, serialize(message({ id: 'result-empty', to: 'a4s/pi-result' })))
+  await waitFor(() => harness.received.length === 2)
+  await harness.confirmDelivery()
+  await harness.messageEnd('assistant', [{ type: 'toolCall' }])
+  await harness.messageEnd('assistant', [{ type: 'text', text: ' \n ' }])
+  await harness.settle()
+
+  await publish(publisher, topic, serialize(message({ id: 'result-frozen', to: 'a4s/pi-result' })))
+  await waitFor(() => harness.received.length === 3)
+  await harness.confirmDelivery()
+  await harness.messageEnd('assistant', [
+    { type: 'text', text: 'PRE_TOOL_FROZEN' },
+    { type: 'toolCall' },
+  ])
+  await harness.messageEnd('toolResult', [{ type: 'text', text: 'TOOL_THREE' }])
+  await harness.messageEnd('assistant', [{ type: 'text', text: 'FINAL_FROZEN' }])
+  await harness.messageStart('separate user follow-up')
+  await harness.messageEnd('assistant', [{ type: 'text', text: 'USER_AFTER_FROZEN' }])
+  await harness.settle()
+  await harness.shutdown()
+
+  const settled = readFileSync(findOperationalLog(stateRoot), 'utf8')
+    .trim().split('\n')
+    .map(line => JSON.parse(line) as Record<string, unknown>)
+    .filter(record => record.event_name === 'synagent.pi.delivery.settled')
+  assert.deepEqual(settled.map(record => record['a4s.delivery.text']), [
+    '  FINAL_RESULT  \n',
+    undefined,
+    'FINAL_FROZEN',
+  ])
+})
+
 test('Pi adapter gives concurrent sessions distinct durable MQTT identities', async t => {
   const { broker, server, url } = await startBroker()
   const publisher = await connectClient(url, 'pi-adapter-multi-publisher')

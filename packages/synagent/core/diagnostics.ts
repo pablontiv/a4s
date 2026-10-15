@@ -213,6 +213,9 @@ function createDiagnosticsUnsafe({
       if (event.messageKind) line['messaging.message.kind'] = cleanIdentifier(event.messageKind, 'unknown')
       if (event.destinationScope) line['messaging.destination.scope'] = event.destinationScope
       if (event.deliveryMode) line['a4s.delivery.mode'] = event.deliveryMode
+      if ('deliveryText' in event && typeof event.deliveryText === 'string') {
+        line['a4s.delivery.text'] = event.deliveryText
+      }
       if (event.role) line['a4s.client.role'] = cleanIdentifier(event.role, 'unknown')
       if (Number.isFinite(event.generation)) line['a4s.connection.generation'] = event.generation as number
       if (Number.isFinite(event.queueDepth)) line['a4s.queue.depth'] = event.queueDepth as number
