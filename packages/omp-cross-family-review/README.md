@@ -1,8 +1,8 @@
 # OMP Cross-family Review
 
-Extensión de OMP que prioriza modelos de una familia diferente a la del modelo actual de la sesión para los subagentes `reviewer`, `triage-reviewer` y `security-reviewer`. El agente dedicado de triage se distribuye con `@a4s/omp-dagu`; `reviewer` conserva su uso para code review.
+Extensión de OMP que prioriza modelos de familias distintas a las referencias de cada subagente de revisión. Para `reviewer` y `security-reviewer`, que revisan código escrito por `task`, excluye tanto la familia del modelo actual de la sesión como la de `@task`. Para `triage-reviewer`, que revisa la decisión de triage del padre, excluye solo la familia del modelo actual. El agente dedicado de triage se distribuye con `@a4s/omp-dagu`; `reviewer` conserva su uso para code review.
 
-Conserva el modelo principal si ya pertenece a otra familia; si comparte familia con el padre, promueve el primer candidato de otra familia. Ordena los demás candidatos cross-family antes de los de la misma familia, incorpora los roles `@task`, `@slow` y `@default`, y deduplica por proveedor/modelo conservando los specs originales (incluidos aliases y sufijos de thinking). Sin padre o modelo principal resoluble, mantiene la selección existente.
+Conserva el modelo principal si pertenece a una familia no excluida; si comparte una familia excluida, promueve el primer candidato que califica. Ordena los demás candidatos que califican antes de los de familias excluidas y deduplica por proveedor/modelo conservando los specs originales (incluidos aliases y sufijos de thinking). `reviewer` y `security-reviewer` incorporan los fallbacks `@slow` y `@default`; `triage-reviewer` incorpora `@task`, `@slow` y `@default`. Sin padre o modelo principal resoluble, mantiene la selección existente. Si `@task` no resuelve, los revisores de código excluyen solo la familia del padre.
 
 ## Instalación global
 
@@ -13,5 +13,5 @@ omp plugin link "$(git rev-parse --show-toplevel)/packages/omp-cross-family-revi
 ```
 
 También se puede cargar el directorio con `omp -e /ruta/a/omp-cross-family-review`
-sin cambiar settings globales. La misma política de roles/fallbacks se aplica a
-los tres nombres; el hook se ejecuta después de la selección inicial del agente.
+sin cambiar settings globales. El hook se ejecuta después de la selección inicial
+del agente.
