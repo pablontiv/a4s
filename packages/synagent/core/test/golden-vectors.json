@@ -1,47 +1,47 @@
 {
-  "//": "Vectores host-neutral v1. routingVectors conserva la conformidad de direccionamiento. schemaVectors pasa primero por el gate de versión del topic y luego por parseCanonical; cada kind tiene un caso válido y uno inválido. Los campos desconocidos del sobre v1 se aceptan y se eliminan del resultado.",
+  "//": "Vectores host-neutral v2. routingVectors conserva la conformidad de direccionamiento. schemaVectors pasa primero por el gate de versión del topic y luego por parseCanonical; cada kind tiene un caso válido y uno inválido. Los campos desconocidos del sobre v2 se aceptan y se eliminan del resultado.",
   "identity": { "project": "a4s", "instance": "sess-01" },
   "legacyAddress": "claude",
   "routingVectors": [
     {
       "name": "directo a mí (task.request)",
       "wire": "{\"id\":\"g1\",\"from\":\"a4s/pi-1\",\"to\":\"a4s/sess-01\",\"kind\":\"task.request\",\"body\":\"hola\",\"ts\":1}",
-      "topic": "synagent/v1/a4s/sess-01",
+      "topic": "synagent/v2/a4s/sess-01",
       "acceptPlain": true,
       "acceptGlobal": true
     },
     {
       "name": "broadcast de proyecto (note.published)",
       "wire": "{\"id\":\"g2\",\"from\":\"a4s/pi-1\",\"to\":\"a4s/all\",\"kind\":\"note.published\",\"body\":\"aviso\",\"ts\":2}",
-      "topic": "synagent/v1/a4s/all",
+      "topic": "synagent/v2/a4s/all",
       "acceptPlain": true,
       "acceptGlobal": true
     },
     {
       "name": "global (note.published) — default-on con opt-out",
       "wire": "{\"id\":\"g3\",\"from\":\"otro/x\",\"to\":\"all\",\"kind\":\"note.published\",\"body\":\"global\",\"ts\":3}",
-      "topic": "synagent/v1/all",
+      "topic": "synagent/v2/all",
       "acceptPlain": false,
       "acceptGlobal": true
     },
     {
       "name": "task.redirect directo (OK)",
       "wire": "{\"id\":\"g4\",\"from\":\"a4s/pi-1\",\"to\":\"a4s/sess-01\",\"kind\":\"task.redirect\",\"body\":\"corrige\",\"ts\":4}",
-      "topic": "synagent/v1/a4s/sess-01",
+      "topic": "synagent/v2/a4s/sess-01",
       "acceptPlain": true,
       "acceptGlobal": true
     },
     {
       "name": "task.redirect a broadcast (rechazado en recepción)",
       "wire": "{\"id\":\"g5\",\"from\":\"a4s/pi-1\",\"to\":\"a4s/all\",\"kind\":\"task.redirect\",\"body\":\"no\",\"ts\":5}",
-      "topic": "synagent/v1/a4s/all",
+      "topic": "synagent/v2/a4s/all",
       "acceptPlain": false,
       "acceptGlobal": false
     },
     {
       "name": "task.completed correlacionado a otra instancia (no para mí)",
       "wire": "{\"id\":\"g6\",\"from\":\"a4s/pi-1\",\"to\":\"a4s/otra\",\"kind\":\"task.completed\",\"body\":\"ok\",\"reply_to\":\"g1\",\"correlation_id\":\"g1\",\"causation_id\":\"g1\",\"ts\":6}",
-      "topic": "synagent/v1/a4s/otra",
+      "topic": "synagent/v2/a4s/otra",
       "acceptPlain": false,
       "acceptGlobal": false
     },
@@ -55,14 +55,14 @@
     {
       "name": "self-echo (from = mi propia dirección) — no entregar",
       "wire": "{\"id\":\"g8\",\"from\":\"a4s/sess-01\",\"to\":\"a4s/all\",\"kind\":\"note.published\",\"body\":\"mío\",\"ts\":8}",
-      "topic": "synagent/v1/a4s/all",
+      "topic": "synagent/v2/a4s/all",
       "acceptPlain": false,
       "acceptGlobal": false
     },
     {
       "name": "directo desde instancia con ID largo (>64 chars, non-lossy)",
       "wire": "{\"id\":\"g9\",\"from\":\"a4s/sess-01hxyz-0b0ae61c6f0c-abcdefghijklmnopqrstuvwxyz-01\",\"to\":\"a4s/sess-01\",\"kind\":\"task.request\",\"body\":\"long-id\",\"ts\":9}",
-      "topic": "synagent/v1/a4s/sess-01",
+      "topic": "synagent/v2/a4s/sess-01",
       "acceptPlain": true,
       "acceptGlobal": true
     }
@@ -71,14 +71,14 @@
     {
       "name": "task.request válido",
       "kind": "task.request",
-      "topic": "synagent/v1/a4s/sess-01",
+      "topic": "synagent/v2/a4s/sess-01",
       "wire": "{\"id\":\"s-request-ok\",\"from\":\"a4s/pi\",\"to\":\"a4s/sess-01\",\"kind\":\"task.request\",\"body\":\"hazlo\",\"correlation_id\":\"s-request-ok\",\"deadline\":1797000000000,\"ts\":1}",
       "valid": true
     },
     {
       "name": "task.request inválido sin body",
       "kind": "task.request",
-      "topic": "synagent/v1/a4s/sess-01",
+      "topic": "synagent/v2/a4s/sess-01",
       "wire": "{\"id\":\"s-request-bad\",\"from\":\"a4s/pi\",\"to\":\"a4s/sess-01\",\"kind\":\"task.request\",\"ts\":1}",
       "valid": false,
       "code": "MESSAGE_INVALID"
@@ -86,14 +86,14 @@
     {
       "name": "task.redirect válido",
       "kind": "task.redirect",
-      "topic": "synagent/v1/a4s/sess-01",
+      "topic": "synagent/v2/a4s/sess-01",
       "wire": "{\"id\":\"s-redirect-ok\",\"from\":\"a4s/pi\",\"to\":\"a4s/sess-01\",\"kind\":\"task.redirect\",\"body\":\"corrige\",\"correlation_id\":\"root\",\"ts\":2}",
       "valid": true
     },
     {
       "name": "task.redirect inválido body numérico",
       "kind": "task.redirect",
-      "topic": "synagent/v1/a4s/sess-01",
+      "topic": "synagent/v2/a4s/sess-01",
       "wire": "{\"id\":\"s-redirect-bad\",\"from\":\"a4s/pi\",\"to\":\"a4s/sess-01\",\"kind\":\"task.redirect\",\"body\":42,\"ts\":2}",
       "valid": false,
       "code": "MESSAGE_INVALID"
@@ -101,14 +101,14 @@
     {
       "name": "task.cancel válido",
       "kind": "task.cancel",
-      "topic": "synagent/v1/a4s/sess-01",
+      "topic": "synagent/v2/a4s/sess-01",
       "wire": "{\"id\":\"s-cancel-ok\",\"from\":\"a4s/pi\",\"to\":\"a4s/sess-01\",\"kind\":\"task.cancel\",\"body\":\"cancelar\",\"reply_to\":\"s-request-ok\",\"correlation_id\":\"s-request-ok\",\"ts\":3}",
       "valid": true
     },
     {
       "name": "task.cancel inválido reply_to vacío",
       "kind": "task.cancel",
-      "topic": "synagent/v1/a4s/sess-01",
+      "topic": "synagent/v2/a4s/sess-01",
       "wire": "{\"id\":\"s-cancel-bad\",\"from\":\"a4s/pi\",\"to\":\"a4s/sess-01\",\"kind\":\"task.cancel\",\"body\":\"cancelar\",\"reply_to\":\"\",\"ts\":3}",
       "valid": false,
       "code": "MESSAGE_INVALID"
@@ -116,14 +116,14 @@
     {
       "name": "task.delivered válido",
       "kind": "task.delivered",
-      "topic": "synagent/v1/a4s/sess-01",
+      "topic": "synagent/v2/a4s/sess-01",
       "wire": "{\"id\":\"s-delivered-ok\",\"from\":\"a4s/pi\",\"to\":\"a4s/sess-01\",\"kind\":\"task.delivered\",\"body\":\"\",\"reply_to\":\"s-request-ok\",\"ts\":4}",
       "valid": true
     },
     {
       "name": "task.delivered inválido ts string",
       "kind": "task.delivered",
-      "topic": "synagent/v1/a4s/sess-01",
+      "topic": "synagent/v2/a4s/sess-01",
       "wire": "{\"id\":\"s-delivered-bad\",\"from\":\"a4s/pi\",\"to\":\"a4s/sess-01\",\"kind\":\"task.delivered\",\"body\":\"\",\"ts\":\"4\"}",
       "valid": false,
       "code": "MESSAGE_INVALID"
@@ -131,14 +131,14 @@
     {
       "name": "task.completed válido",
       "kind": "task.completed",
-      "topic": "synagent/v1/a4s/sess-01",
+      "topic": "synagent/v2/a4s/sess-01",
       "wire": "{\"id\":\"s-completed-ok\",\"from\":\"a4s/pi\",\"to\":\"a4s/sess-01\",\"kind\":\"task.completed\",\"body\":\"hecho\",\"reply_to\":\"s-request-ok\",\"causation_id\":\"s-request-ok\",\"ts\":5}",
       "valid": true
     },
     {
       "name": "task.completed inválido id vacío",
       "kind": "task.completed",
-      "topic": "synagent/v1/a4s/sess-01",
+      "topic": "synagent/v2/a4s/sess-01",
       "wire": "{\"id\":\"\",\"from\":\"a4s/pi\",\"to\":\"a4s/sess-01\",\"kind\":\"task.completed\",\"body\":\"hecho\",\"ts\":5}",
       "valid": false,
       "code": "MESSAGE_INVALID"
@@ -146,30 +146,75 @@
     {
       "name": "task.expired válido",
       "kind": "task.expired",
-      "topic": "synagent/v1/a4s/sess-01",
+      "topic": "synagent/v2/a4s/sess-01",
       "wire": "{\"id\":\"s-expired-ok\",\"from\":\"a4s/pi\",\"to\":\"a4s/sess-01\",\"kind\":\"task.expired\",\"body\":\"vencido\",\"reply_to\":\"s-request-ok\",\"ts\":6}",
       "valid": true
     },
     {
       "name": "task.expired inválido correlation_id vacío",
       "kind": "task.expired",
-      "topic": "synagent/v1/a4s/sess-01",
+      "topic": "synagent/v2/a4s/sess-01",
       "wire": "{\"id\":\"s-expired-bad\",\"from\":\"a4s/pi\",\"to\":\"a4s/sess-01\",\"kind\":\"task.expired\",\"body\":\"vencido\",\"correlation_id\":\"\",\"ts\":6}",
       "valid": false,
       "code": "MESSAGE_INVALID"
     },
     {
-      "name": "note.published válido con extensiones v1 desconocidas",
+      "name": "note.published válido con extensiones v2 desconocidas",
       "kind": "note.published",
-      "topic": "synagent/v1/a4s/sess-01",
+      "topic": "synagent/v2/a4s/sess-01",
       "wire": "{\"id\":\"s-note-ok\",\"from\":\"a4s/pi\",\"to\":\"a4s/sess-01\",\"kind\":\"note.published\",\"body\":\"nota\\nlínea\",\"ts\":7,\"version\":\"v99\",\"future_optional\":{\"x\":1}}",
       "valid": true
     },
     {
       "name": "note.published inválido causation_id numérico",
       "kind": "note.published",
-      "topic": "synagent/v1/a4s/sess-01",
+      "topic": "synagent/v2/a4s/sess-01",
       "wire": "{\"id\":\"s-note-bad\",\"from\":\"a4s/pi\",\"to\":\"a4s/sess-01\",\"kind\":\"note.published\",\"body\":\"nota\",\"causation_id\":7,\"ts\":7}",
+      "valid": false,
+      "code": "MESSAGE_INVALID"
+    },
+    {
+      "name": "task.offer válido",
+      "kind": "task.offer",
+      "topic": "synagent/v2/a4s/all",
+      "wire": "{\"id\":\"s-offer-ok\",\"from\":\"a4s/pi\",\"to\":\"a4s/all\",\"kind\":\"task.offer\",\"body\":\"trabajo disponible\",\"ts\":8}",
+      "valid": true
+    },
+    {
+      "name": "task.offer inválido body numérico",
+      "kind": "task.offer",
+      "topic": "synagent/v2/a4s/all",
+      "wire": "{\"id\":\"s-offer-bad\",\"from\":\"a4s/pi\",\"to\":\"a4s/all\",\"kind\":\"task.offer\",\"body\":8,\"ts\":8}",
+      "valid": false,
+      "code": "MESSAGE_INVALID"
+    },
+    {
+      "name": "task.claim válido",
+      "kind": "task.claim",
+      "topic": "synagent/v2/a4s/pi",
+      "wire": "{\"id\":\"s-claim-ok\",\"from\":\"a4s/omp\",\"to\":\"a4s/pi\",\"kind\":\"task.claim\",\"body\":\"reclamo\",\"reply_to\":\"s-offer-ok\",\"correlation_id\":\"s-offer-ok\",\"ts\":9}",
+      "valid": true
+    },
+    {
+      "name": "task.claim inválido ts string",
+      "kind": "task.claim",
+      "topic": "synagent/v2/a4s/pi",
+      "wire": "{\"id\":\"s-claim-bad\",\"from\":\"a4s/omp\",\"to\":\"a4s/pi\",\"kind\":\"task.claim\",\"body\":\"reclamo\",\"ts\":\"9\"}",
+      "valid": false,
+      "code": "MESSAGE_INVALID"
+    },
+    {
+      "name": "task.offer.closed válido",
+      "kind": "task.offer.closed",
+      "topic": "synagent/v2/a4s/omp",
+      "wire": "{\"id\":\"s-closed-ok\",\"from\":\"a4s/pi\",\"to\":\"a4s/omp\",\"kind\":\"task.offer.closed\",\"body\":\"Oferta ya asignada: s-offer-ok\",\"reply_to\":\"s-claim-ok\",\"correlation_id\":\"s-offer-ok\",\"ts\":10}",
+      "valid": true
+    },
+    {
+      "name": "task.offer.closed inválido reply_to vacío",
+      "kind": "task.offer.closed",
+      "topic": "synagent/v2/a4s/omp",
+      "wire": "{\"id\":\"s-closed-bad\",\"from\":\"a4s/pi\",\"to\":\"a4s/omp\",\"kind\":\"task.offer.closed\",\"body\":\"cerrada\",\"reply_to\":\"\",\"ts\":10}",
       "valid": false,
       "code": "MESSAGE_INVALID"
     },
@@ -177,7 +222,7 @@
       "name": "versión de transporte desconocida",
       "kind": "note.published",
       "topic": "synagent/v99/a4s/sess-01",
-      "wire": "{\"id\":\"s-version-bad\",\"from\":\"a4s/pi\",\"to\":\"a4s/sess-01\",\"kind\":\"note.published\",\"body\":\"válido bajo v1\",\"ts\":8}",
+      "wire": "{\"id\":\"s-version-bad\",\"from\":\"a4s/pi\",\"to\":\"a4s/sess-01\",\"kind\":\"note.published\",\"body\":\"válido bajo v2\",\"ts\":11}",
       "valid": false,
       "code": "VERSION_UNSUPPORTED"
     }

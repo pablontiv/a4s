@@ -416,8 +416,8 @@ async function runHost(config: HostConfig, bus: BusRecord[], publisher: MqttClie
     assert.ok(isJsonRecord(state.data))
     assert.equal(typeof state.data.sessionId, 'string')
     const sessionId = state.data.sessionId
-    const topic = `synagent/v1/a4s/${sessionId}`
-    const dlqTopic = `synagent/v1/dlq/a4s/${sessionId}`
+    const topic = `synagent/v2/a4s/${sessionId}`
+    const dlqTopic = `synagent/v2/dlq/a4s/${sessionId}`
     await waitForCondition(`${config.name} private broker connection`, () => {
       try {
         assertBrokerIsolation(process, config.name)

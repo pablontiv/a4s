@@ -28,7 +28,7 @@ test('omp adapter captures completion and releases only on terminal agent_end', 
     events.push(JSON.parse(payload.toString()) as CanonicalMessage)
   })
   await new Promise<void>((resolveSubscription, rejectSubscription) => {
-    publisher.subscribe('synagent/v1/a4s/claude-1', { qos: 1 }, error => {
+    publisher.subscribe('synagent/v2/a4s/claude-1', { qos: 1 }, error => {
       if (error) rejectSubscription(error)
       else resolveSubscription()
     })
@@ -43,7 +43,7 @@ test('omp adapter captures completion and releases only on terminal agent_end', 
     await closeBroker(broker)
   })
 
-  const topic = 'synagent/v1/a4s/omp-end'
+  const topic = 'synagent/v2/a4s/omp-end'
   await harness.start()
   await waitFor(() => harness.notifications.some(({ message }) => message.includes('subscribed to') && message.includes(topic)))
   assert.ok(harness.notifications.some(({ message }) =>
@@ -94,7 +94,7 @@ test('omp adapter holds deadline requests outside followUp and wakes on terminal
     events.push(JSON.parse(payload.toString()) as CanonicalMessage)
   })
   await new Promise<void>((resolveSubscription, rejectSubscription) => {
-    publisher.subscribe('synagent/v1/a4s/sender', { qos: 1 }, error => {
+    publisher.subscribe('synagent/v2/a4s/sender', { qos: 1 }, error => {
       if (error) rejectSubscription(error)
       else resolveSubscription()
     })
@@ -109,7 +109,7 @@ test('omp adapter holds deadline requests outside followUp and wakes on terminal
     await closeBroker(broker)
   })
 
-  const topic = 'synagent/v1/a4s/omp-deadline'
+  const topic = 'synagent/v2/a4s/omp-deadline'
   harness.idle = false
   await harness.start()
   await waitFor(() => harness.notifications.some(({ message }) => message.includes(`subscribed to ${topic}`)))

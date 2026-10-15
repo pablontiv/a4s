@@ -13,7 +13,7 @@ import { closeBroker, closeServer, connectClient, end, publish, startBroker, wai
 
 function observation(message: unknown, index = 0): Observation {
   return {
-    topic: 'synagent/v1/project/peer',
+    topic: 'synagent/v2/project/peer',
     received_at: new Date(Date.UTC(2026, 0, 1, 0, 0, index)).toISOString(),
     payload: JSON.stringify(message),
   }
@@ -111,7 +111,7 @@ test('live observer subscribes to the whole tree and appends every reception for
     JSON.stringify({ id: 'reply', reply_to: 'request', body: 'respuesta íntegra' }),
     'raw status',
   ]
-  const topics = ['synagent/v1/project/receiver', 'synagent/v1/project/sender', 'synagent/status']
+  const topics = ['synagent/v2/project/receiver', 'synagent/v2/project/sender', 'synagent/status']
   for (let index = 0; index < payloads.length; index += 1) await publish(publisher, topics[index]!, payloads[index]!)
   await waitFor(() => snapshots.length === 3)
   controller.abort()
@@ -147,8 +147,8 @@ test('CLI reads the user-scoped omp broker, stops cleanly, and replays the final
   await waitFor(() => stderr.includes('Subscribed to synagent/#'))
   const publisher = await connectClient(url, 'observer-cli-publisher')
   t.after(() => end(publisher))
-  await publish(publisher, 'synagent/v1/project/receiver', JSON.stringify({ id: 'request', body: 'request' }))
-  await publish(publisher, 'synagent/v1/project/sender', JSON.stringify({ id: 'reply', reply_to: 'request', body: 'reply' }))
+  await publish(publisher, 'synagent/v2/project/receiver', JSON.stringify({ id: 'request', body: 'request' }))
+  await publish(publisher, 'synagent/v2/project/sender', JSON.stringify({ id: 'reply', reply_to: 'request', body: 'reply' }))
   await waitFor(() => stdout.includes('Synagent observer: 2 message(s)'))
   child.kill('SIGTERM')
   assert.deepEqual(await exited, [0, null])

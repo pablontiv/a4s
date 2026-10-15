@@ -345,9 +345,9 @@ async function runHost(config: HostConfig, publisher: MqttClient, bus: BusRecord
       ts: 1,
     } as const
     const validMessages: CanonicalMessage[] = [
-      { ...validBase, id: `${config.name}-direct-v1`, to: `a4s/${sessionId}` },
-      { ...validBase, id: `${config.name}-project-v1`, to: 'a4s/all' },
-      { ...validBase, id: `${config.name}-global-v1`, to: 'all' },
+      { ...validBase, id: `${config.name}-direct-v2`, to: `a4s/${sessionId}` },
+      { ...validBase, id: `${config.name}-project-v2`, to: 'a4s/all' },
+      { ...validBase, id: `${config.name}-global-v2`, to: 'all' },
     ]
     const unknownMessages: CanonicalMessage[] = [
       { ...validBase, id: `${config.name}-direct-v99`, to: `a4s/${sessionId}` },
@@ -356,19 +356,19 @@ async function runHost(config: HostConfig, publisher: MqttClient, bus: BusRecord
     ]
     const diagnosticsBefore = readDiagnostics(stateRoot).length
     const busBefore = bus.length
-    await publishRaw(publisher, `synagent/v1/a4s/${sessionId}`, malformed)
-    const v1Topics = [
-      `synagent/v1/a4s/${sessionId}`,
-      'synagent/v1/a4s/all',
-      'synagent/v1/all',
+    await publishRaw(publisher, `synagent/v2/a4s/${sessionId}`, malformed)
+    const v2Topics = [
+      `synagent/v2/a4s/${sessionId}`,
+      'synagent/v2/a4s/all',
+      'synagent/v2/all',
     ]
     const v99Topics = [
       `synagent/v99/a4s/${sessionId}`,
       'synagent/v99/a4s/all',
       'synagent/v99/all',
     ]
-    for (let index = 0; index < v1Topics.length; index++) {
-      await publishRaw(publisher, v1Topics[index] as string, serialize(validMessages[index] as CanonicalMessage))
+    for (let index = 0; index < v2Topics.length; index++) {
+      await publishRaw(publisher, v2Topics[index] as string, serialize(validMessages[index] as CanonicalMessage))
     }
     for (let index = 0; index < v99Topics.length; index++) {
       await publishRaw(publisher, v99Topics[index] as string, serialize(unknownMessages[index] as CanonicalMessage))
@@ -383,7 +383,7 @@ async function runHost(config: HostConfig, publisher: MqttClient, bus: BusRecord
     })
     await waitForCondition(`${config.name} malformed DLQ only`, () => {
       const dlqRecords = bus.slice(busBefore)
-        .filter(record => record.topic === `synagent/v1/dlq/a4s/${sessionId}`)
+        .filter(record => record.topic === `synagent/v2/dlq/a4s/${sessionId}`)
         .map(record => parseDeadLetter(record.payload))
       return dlqRecords.length === 1 && dlqRecords[0]?.cause === 'INVALID_JSON'
     })
@@ -395,7 +395,7 @@ async function runHost(config: HostConfig, publisher: MqttClient, bus: BusRecord
     console.log(
       `PASS host=${config.name} version=${version} subscriptions=version-wildcard `
       + 'malformed=MESSAGE_INVALID unknown=VERSION_UNSUPPORTED unknown_count=3 '
-      + 'v1_received=3 duplicates=false version_dlq=false',
+      + 'v2_received=3 duplicates=false version_dlq=false',
     )
   } finally {
     await rpc.close().catch(() => undefined)

@@ -1,4 +1,4 @@
-// synagent BRIDGE v1 de JALAR (suscriptor). Dos clientes MQTT:
+// synagent BRIDGE v2 de JALAR (suscriptor). Dos clientes MQTT:
 // - Durable (clean=false, QoS 1): buzón directo (offline queued)
 // - Transient (clean=true, QoS 1): broadcasts de proyecto + global (online-only)
 //

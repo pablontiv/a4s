@@ -51,6 +51,7 @@ test('Synagent resolves each user setting from native, legacy, and default value
     global: false,
     'default-peer': 'User.Peer',
     'request-ttl': 5,
+    'accept-offers': false,
   })
 })
 
@@ -64,6 +65,7 @@ test('Synagent broker environment override wins without changing user settings',
     'broker-url': 'mqtt://127.0.0.1:18224',
     global: false,
     'default-peer': 'claude',
+    'accept-offers': false,
   })
   assert.equal(findRejectedBrokerUrl(paths, env), undefined)
   assert.equal(
@@ -87,6 +89,7 @@ test('Synagent request TTL environment override wins without changing user setti
     global: false,
     'default-peer': 'claude',
     'request-ttl': 5,
+    'accept-offers': false,
   })
   assert.deepEqual(readFileSync(paths.global), before)
 
@@ -106,7 +109,7 @@ test('Synagent request TTL environment override wins without changing user setti
   assert.deepEqual(readFileSync(paths.global), before)
 })
 
-test('Synagent migrates the five user settings and preserves the legacy file', t => {
+test('Synagent migrates the six user settings and preserves the legacy file', t => {
   const { paths } = fixture(t)
   const legacy = {
     'a4s.synagent.enabled': false,
@@ -114,6 +117,7 @@ test('Synagent migrates the five user settings and preserves the legacy file', t
     'a4s.synagent.global': false,
     'a4s.synagent.default-peer': 'Migrated.Peer',
     'a4s.synagent.request-ttl': 15,
+    'a4s.synagent.accept-offers': true,
     'other.extension.value': 'unchanged',
   }
   writeJson(paths.globalLegacy, { theme: 'dark', extensionSettings: legacy })
@@ -123,6 +127,7 @@ test('Synagent migrates the five user settings and preserves the legacy file', t
     global: false,
     'default-peer': 'Migrated.Peer',
     'request-ttl': 15,
+    'accept-offers': true,
   }
   assert.deepEqual(initializeSynagentSettings(paths), expected)
   assert.deepEqual(JSON.parse(readFileSync(paths.global, 'utf8')), expected)
@@ -145,16 +150,17 @@ test('Synagent migration uses the default broker for a remote MQTT URL', t => {
   assert.deepEqual(JSON.parse(readFileSync(paths.global, 'utf8')), { global: false })
 })
 
-test('Synagent persists all five user settings across initialization', t => {
+test('Synagent persists all six user settings across initialization', t => {
   const { paths } = fixture(t)
   persistSetting(paths, 'enabled', false)
   persistSetting(paths, 'broker-url', 'mqtt://localhost:1999')
   persistSetting(paths, 'global', false)
   persistSetting(paths, 'default-peer', 'User.Peer')
   persistSetting(paths, 'request-ttl', 5)
+  persistSetting(paths, 'accept-offers', true)
   assert.deepEqual(initializeSynagentSettings(paths), {
     enabled: false, 'broker-url': 'mqtt://localhost:1999', global: false,
-    'default-peer': 'User.Peer', 'request-ttl': 5,
+    'default-peer': 'User.Peer', 'request-ttl': 5, 'accept-offers': true,
   })
   assert.equal(statSync(paths.global).mode & 0o777, 0o600)
 })
@@ -181,4 +187,11 @@ test('Synagent request-ttl accepts positive seconds and rejects absent-value sub
   assert.equal(parseSettingValue('request-ttl', '0.25'), 0.25)
   assert.throws(() => parseSettingValue('request-ttl', '0'), /positive seconds/)
   assert.throws(() => parseSettingValue('request-ttl', 'NaN'), /positive seconds/)
+})
+
+test('Synagent accept-offers is boolean and defaults off', () => {
+  assert.equal(DEFAULT_SETTINGS['accept-offers'], false)
+  assert.equal(parseSettingValue('accept-offers', 'true'), true)
+  assert.equal(parseSettingValue('accept-offers', 'false'), false)
+  assert.throws(() => parseSettingValue('accept-offers', 'yes'), /true\|false/)
 })

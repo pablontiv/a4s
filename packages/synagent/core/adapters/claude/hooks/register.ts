@@ -10,8 +10,8 @@
 // remote.origin.url del repo ($.session.repo()). Si no se resuelve, el
 // adaptador queda inactivo con remediación para configurar remote.origin.url.
 //
-// Topología v1: synagent/v1/<proyecto>/<instancia> (directo, durable),
-// /all (proyecto, transient), synagent/v1/all (global, transient por defecto).
+// Topología v2: synagent/v2/<proyecto>/<instancia> (directo, durable),
+// /all (proyecto, transient), synagent/v2/all (global, transient por defecto).
 
 import type { EngineInterface, PluginOptions, Register } from 'claude-code'
 
@@ -31,14 +31,26 @@ import {
   toTopic,
   type CanonicalMessage,
   type Identity,
+  type CanonicalMessage,
+  type MessageKind,
   type SynagentSendKind,
 } from './adapter'
 
 const DEFAULT_BROKER_URL = 'mqtt://127.0.0.1:1884'
 const LEGACY_CLIENT_ID = 'synagent-legacy-claude'
 const PROCESSED_KEY = 'processed'
+const OFFERS_KEY = 'offers'
 const MAX_SEEN = 1000
 const MAX_BUF = 1_000_000
+type OfferClaim = { closed: boolean; from: string; id: string }
+type OutgoingOffer = {
+  assignedClaimId?: string
+  assignedTo?: string
+  assignmentSent: boolean
+  body: string
+  claims: OfferClaim[]
+  id: string
+}
 
 let started = false
 // Session id para el que arrancamos. ADR 0069: la identidad sale de
@@ -53,6 +65,9 @@ let generation = 0
 let stopBridge: (() => void) | undefined
 let identity: Identity | undefined
 let globalEnabled = true
+let acceptOffersEnabled = false
+let sessionIdle = true
+const outgoingOffers = new Map<string, OutgoingOffer>()
 // resolveBrokerUrl corre en register() sin `$`; el aviso se emite al arrancar.
 let brokerWarning: string | undefined
 // Como máximo una migración one-shot en vuelo por activación del módulo. Tras
@@ -116,6 +131,76 @@ async function reserve($: EngineInterface, id: string): Promise<boolean> {
   await $.store.set(PROCESSED_KEY, next)
   return true
 }
+function parseOffer(value: unknown): OutgoingOffer | undefined {
+  if (
+    typeof value !== 'object'
+    || value === null
+    || !('id' in value)
+    || !('body' in value)
+    || !('claims' in value)
+    || !('assignmentSent' in value)
+    || typeof value.id !== 'string'
+    || typeof value.body !== 'string'
+    || !Array.isArray(value.claims)
+    || typeof value.assignmentSent !== 'boolean'
+  ) return undefined
+  const claims: OfferClaim[] = []
+  for (const claim of value.claims) {
+    if (
+      typeof claim !== 'object'
+      || claim === null
+      || !('id' in claim)
+      || !('from' in claim)
+      || !('closed' in claim)
+      || typeof claim.id !== 'string'
+      || typeof claim.from !== 'string'
+      || typeof claim.closed !== 'boolean'
+    ) return undefined
+    claims.push({ closed: claim.closed, from: claim.from, id: claim.id })
+  }
+  const assignedTo = 'assignedTo' in value ? value.assignedTo : undefined
+  const assignedClaimId = 'assignedClaimId' in value ? value.assignedClaimId : undefined
+  if (
+    (assignedTo !== undefined && typeof assignedTo !== 'string')
+    || (assignedClaimId !== undefined && typeof assignedClaimId !== 'string')
+  ) return undefined
+  return {
+    assignmentSent: value.assignmentSent,
+    body: value.body,
+    claims,
+    id: value.id,
+    ...(assignedTo === undefined ? {} : { assignedTo }),
+    ...(assignedClaimId === undefined ? {} : { assignedClaimId }),
+  }
+}
+
+async function restoreOffers($: EngineInterface): Promise<void> {
+  outgoingOffers.clear()
+  const stored = await $.store.get(OFFERS_KEY)
+  if (!Array.isArray(stored)) return
+  for (const value of stored) {
+    const offer = parseOffer(value)
+    if (offer) outgoingOffers.set(offer.id, offer)
+  }
+}
+
+async function persistOffers($: EngineInterface): Promise<void> {
+  await $.store.set(OFFERS_KEY, [...outgoingOffers.values()].map(offer => ({
+    ...offer,
+    claims: offer.claims.map(claim => ({ ...claim })),
+  })))
+}
+async function recordOutgoingOffer($: EngineInterface, message: CanonicalMessage): Promise<void> {
+  outgoingOffers.set(message.id, {
+    assignmentSent: false,
+    body: message.body,
+    claims: [],
+    id: message.id,
+  })
+  await persistOffers($)
+}
+
+
 
 function retireLegacySession($: EngineInterface, brokerUrl: string): void {
   if (retirementInFlightOrDone) return
@@ -142,10 +227,72 @@ function retireLegacySession($: EngineInterface, brokerUrl: string): void {
 
 type BridgeFrame = { topic: string; payload: string }
 
+async function handleOfferProtocol(
+  $: EngineInterface,
+  brokerUrl: string,
+  self: Identity,
+  message: CanonicalMessage,
+): Promise<boolean> {
+  if (message.kind === 'task.offer') {
+    if (acceptOffersEnabled && sessionIdle) {
+      const claim = await publishCanonical(
+        $, brokerUrl, self, message.from, `Reclamo oferta ${message.id}`, 'task.claim',
+        message.id, message.id, message.id,
+      )
+      if (!claim.ok) void $.ui.status(`synagent: reclamo falló (${message.id}): ${claim.error}`)
+    }
+    return true
+  }
+  if (message.kind === 'task.offer.closed') {
+    void $.ui.status(`synagent: ${message.body}`)
+    return true
+  }
+  if (message.kind !== 'task.claim') return false
+  const offer = message.reply_to ? outgoingOffers.get(message.reply_to) : undefined
+  if (!offer) return true
+  const claim: OfferClaim = { closed: offer.assignedTo !== undefined, from: message.from, id: message.id }
+  offer.claims.push(claim)
+  if (!offer.assignedTo) {
+    offer.assignedClaimId = claim.id
+    offer.assignedTo = claim.from
+    await persistOffers($)
+    const assignment = await publishCanonical(
+      $, brokerUrl, self, claim.from, offer.body, 'task.request',
+      offer.id, offer.id, claim.id,
+    )
+    if (!assignment.ok) {
+      void $.ui.status(`synagent: asignación falló (${offer.id}): ${assignment.error}`)
+      return true
+    }
+    offer.assignmentSent = true
+    await persistOffers($)
+    return true
+  }
+  await persistOffers($)
+  const closed = await publishCanonical(
+    $, brokerUrl, self, claim.from, `Oferta ya asignada: ${offer.id}`, 'task.offer.closed',
+    claim.id, offer.id, offer.assignedClaimId ?? offer.id,
+  )
+  if (!closed.ok) {
+    void $.ui.status(`synagent: cierre de oferta falló (${offer.id}): ${closed.error}`)
+    return true
+  }
+  claim.closed = true
+  await persistOffers($)
+  return true
+}
+
 // Loop JALAR: cada línea stdout es una trama {topic,payload}; la versión se
-// valida antes del parser canónico, luego se filtra por `accept`, se deduplica y
-// se inyecta como turno.
-function runJalar(gen: number, $: EngineInterface, argv: readonly string[], accept: (m: CanonicalMessage) => boolean): void {
+// valida antes del parser canónico, luego procesa ofertas mecánicamente, filtra
+// por `accept`, deduplica e inyecta los demás mensajes como turno.
+function runJalar(
+  gen: number,
+  $: EngineInterface,
+  argv: readonly string[],
+  brokerUrl: string,
+  self: Identity,
+  accept: (message: CanonicalMessage) => boolean,
+): void {
   void (async () => {
     try {
       const bridge = $.process.spawn({ argv: [...argv] })
@@ -194,7 +341,9 @@ function runJalar(gen: number, $: EngineInterface, argv: readonly string[], acce
           if (!accept(msg)) continue
           try {
             if (!(await reserve($, msg.id))) continue
+            if (await handleOfferProtocol($, brokerUrl, self, msg)) continue
             if (msg.kind === 'task.delivered') continue
+            sessionIdle = false
             await $.prompt.submit({ text: renderForAgent(msg) })
           } catch (err) {
             void $.ui.status(`synagent: entrega falló (${msg.id}): ${err instanceof Error ? err.message : String(err)}`)
@@ -215,8 +364,8 @@ function runJalar(gen: number, $: EngineInterface, argv: readonly string[], acce
 }
 
 async function ensureStarted($: EngineInterface, brokerUrl: string, options: PluginOptions): Promise<void> {
-  // La sesión histórica tenía un clientId fijo distinto de los clientId v1. Se
-  // retira incluso si luego no puede resolverse la identidad actual.
+  // La sesión histórica tenía un clientId fijo distinto de los clientId actuales.
+  // Se retira incluso si luego no puede resolverse la identidad actual.
   retireLegacySession($, brokerUrl)
 
   // ADR 0069: la identidad depende del session id. `/clear` lo cambia SIN disparar
@@ -240,9 +389,13 @@ async function ensureStarted($: EngineInterface, brokerUrl: string, options: Plu
     activation = await resolveIdentity($)
     identity = activation.identity
     globalEnabled = options['global'] !== false && options['global'] !== 'false'
+    acceptOffersEnabled = options['acceptOffers'] === true || options['acceptOffers'] === 'true'
+    await restoreOffers($)
   } catch (err) {
     identity = undefined
     globalEnabled = true
+    acceptOffersEnabled = false
+    outgoingOffers.clear()
     started = false
     void $.ui.status(
       `synagent: identidad no resuelta (${err instanceof Error ? err.message : String(err)}); inactive=true; configura remote.origin.url`,
@@ -264,26 +417,26 @@ async function ensureStarted($: EngineInterface, brokerUrl: string, options: Plu
     '--durable-id',
     durableId,
     '--stale-durable',
-    toTopic(addr),
+    toTopic(addr, 'v1'),
     '--durable',
     ...plan.durable,
   ]
   if (plan.transient.length > 0) argv.push('--transient-id', transientId, '--transient', ...plan.transient)
 
-  runJalar(gen, $, argv, msg => acceptInbound(self, msg, { global: globalEnabled }))
+  runJalar(gen, $, argv, brokerUrl, self, msg => acceptInbound(self, msg, { global: globalEnabled }))
 
   try {
     await $.tool.register({
       name: 'synagent_send',
       description:
-        'Envía un comando de tarea o una nota publicada por el bus synagent (v1). '
+        'Envía un comando de tarea o una nota publicada por el bus synagent (v2). '
         + 'Úsalo solo cuando el usuario pida mensajear a otro agente o proyecto. El body debe ser autoexplicativo.',
       inputSchema: {
         type: 'object',
         properties: {
           to: {
             type: 'string',
-            description: 'Dirección v1: "<proyecto>/<instancia>" (directo), "<proyecto>/all" (proyecto) o "all" (global).',
+            description: 'Dirección canónica: "<proyecto>/<instancia>" (directo), "<proyecto>/all" (proyecto) o "all" (global).',
           },
           body: { type: 'string', description: 'Mensaje autoexplicativo.' },
           kind: {
@@ -307,22 +460,36 @@ async function ensureStarted($: EngineInterface, brokerUrl: string, options: Plu
   } catch (err) {
     void $.ui.status(`mq-send no registrado: ${err instanceof Error ? err.message : String(err)}`)
   }
+  try {
+    await $.command.register({
+      name: 'synagent-offer',
+      description: 'Ofrece una tarea al proyecto',
+      argumentHint: '<descripción>',
+    })
+  } catch (err) {
+    void $.ui.status(`synagent-offer no registrado: ${err instanceof Error ? err.message : String(err)}`)
+  }
 
-  void $.ui.status(`synagent: ${addr} (source=${activation.source}; JALAR activo, tool synagent_send + /mq-send)`)
+
+  void $.ui.status(
+    `synagent: ${addr} (source=${activation.source}; accept-offers=${acceptOffersEnabled}; `
+    + 'JALAR activo, tool synagent_send + /mq-send)',
+  )
 }
 
-// Publica un mensaje canónico v1 con el bridge-pub one-shot. makeOutbound valida
+// Publica un mensaje canónico v2 con el bridge-pub one-shot. makeOutbound valida
 // dirección y rechaza task.redirect broadcast (lanza). Devuelve el id o un error.
-async function publishV1(
+async function publishCanonical(
   $: EngineInterface,
   brokerUrl: string,
   self: Identity,
   to: string,
   body: string,
-  kind: SynagentSendKind,
+  kind: MessageKind,
   replyTo: string | undefined,
   correlationId: string | undefined,
   causationId: string | undefined,
+  beforePublish?: (message: CanonicalMessage) => void | Promise<void>,
 ): Promise<{ ok: true; id: string } | { ok: false; error: string }> {
   const now = await $.clock.now()
   let built
@@ -339,6 +506,13 @@ async function publishV1(
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) }
   }
+  if (beforePublish) {
+    try {
+      await beforePublish(built.message)
+    } catch (err) {
+      return { ok: false, error: `persistencia falló: ${err instanceof Error ? err.message : String(err)}` }
+    }
+  }
   let r
   try {
     r = await $.process.run(['node', `${bridgeDir($)}/bridge-pub.cjs`, built.topic, serialize(built.message), brokerUrl])
@@ -353,12 +527,22 @@ export const register: Register = (on, options) => {
   const brokerUrl = resolveBrokerUrl(options)
 
   on('session.start', async ($, e, next) => {
+    sessionIdle = true
     await ensureStarted($, brokerUrl, options)
     return next(e)
   })
 
   on('prompt.submit', async ($, e, next) => {
+    sessionIdle = false
     await ensureStarted($, brokerUrl, options)
+    return next(e)
+  })
+  on('turn.start', ($, e, next) => {
+    sessionIdle = false
+    return next(e)
+  })
+  on('turn.complete', ($, e, next) => {
+    sessionIdle = true
     return next(e)
   })
 
@@ -368,7 +552,7 @@ export const register: Register = (on, options) => {
     const a = e as unknown as Record<string, unknown>
     if (a.tool !== 'mcp__synagent-adapter-mqtt__synagent_send') return next(e)
     const result = (text: string, isError = false) => ({ result: text, ...(isError && { isError }) })
-    if (!identity) return result('error: identidad v1 no resuelta; configura remote.origin.url del repo', true)
+    if (!identity) return result('error: identidad no resuelta; configura remote.origin.url del repo', true)
     const to = typeof a.to === 'string' ? a.to : ''
     const body = typeof a.body === 'string' ? a.body : ''
     const kind = typeof a.kind === 'string' ? a.kind : 'task.request'
@@ -377,8 +561,12 @@ export const register: Register = (on, options) => {
     const causationId = typeof a.causation_id === 'string' ? a.causation_id : undefined
     if (!to || !body) return result('error: synagent_send requiere "to" y "body"', true)
     if (!SYNAGENT_SEND_KINDS.includes(kind as SynagentSendKind)) return result(`error: kind inválido: ${kind}`, true)
-    const sent = await publishV1(
+    if (kind === 'task.offer' && to !== `${identity.project}/all`) {
+      return result(`error: task.offer requiere destino ${identity.project}/all`, true)
+    }
+    const sent = await publishCanonical(
       $, brokerUrl, identity, to, body, kind as SynagentSendKind, replyTo, correlationId, causationId,
+      kind === 'task.offer' ? message => recordOutgoingOffer($, message) : undefined,
     )
     return result(sent.ok ? `enviado ${sent.id} a ${to} (kind=${kind})` : `error: ${sent.error}`, !sent.ok)
   })
@@ -386,14 +574,30 @@ export const register: Register = (on, options) => {
   on('command.run', { command: 'mq-send' }, async ($, e) => {
     const raw = (e.args ?? '').trim()
     if (!raw) return { text: 'mq-send: /mq-send <to>: texto  (<to> = "<proyecto>/<instancia>", "<proyecto>/all" o "all")' }
-    if (!identity) return { text: 'mq-send: identidad v1 no resuelta' }
+    if (!identity) return { text: 'mq-send: identidad no resuelta' }
     const m = raw.match(/^([^:]+):\s*([\s\S]*)$/)
     if (!m) return { text: 'mq-send: formato /mq-send <to>: texto' }
     const to = (m[1] ?? '').trim()
     const body = (m[2] ?? '').trim()
     if (!body) return { text: 'mq-send: falta el texto' }
-    const sent = await publishV1($, brokerUrl, identity, to, body, 'task.request', undefined, undefined, undefined)
+    const sent = await publishCanonical($, brokerUrl, identity, to, body, 'task.request', undefined, undefined, undefined)
     return { text: sent.ok ? `mq-send → publicado ${sent.id} a ${to}` : `mq-send ERROR: ${sent.error}` }
+  })
+
+  on('command.run', { command: 'synagent-offer' }, async ($, e) => {
+    const body = (e.args ?? '').trim()
+    if (!body) return { text: 'synagent-offer: /synagent-offer <descripción>' }
+    if (!identity) return { text: 'synagent-offer: identidad no resuelta' }
+    const to = `${identity.project}/all`
+    const sent = await publishCanonical(
+      $, brokerUrl, identity, to, body, 'task.offer', undefined, undefined, undefined,
+      message => recordOutgoingOffer($, message),
+    )
+    return {
+      text: sent.ok
+        ? `synagent-offer → publicado ${sent.id} a ${to}`
+        : `synagent-offer ERROR: ${sent.error}`,
+    }
   })
 
   on('prompt.compose', async ($, e, next) => {
@@ -406,7 +610,7 @@ export const register: Register = (on, options) => {
           id: 'synagent',
           scope: 'session',
           text:
-            'Bus synagent (v1): para mandar a otro agente usa la herramienta synagent_send (solo cuando el usuario pida notificar/mensajear a otro agente o proyecto, no en conversación normal). '
+            'Bus synagent (v2): para mandar a otro agente usa la herramienta synagent_send (solo cuando el usuario pida notificar/mensajear a otro agente o proyecto, no en conversación normal). '
             + 'Direcciones: "<proyecto>/<instancia>" (directo), "<proyecto>/all" (proyecto), "all" (global). Los mensajes deben ser hechos autoexplicativos. '
             + `Tu dirección: ${identity ? directAddress(identity) : 'no configurada (adaptador inactivo)'}.`
         },

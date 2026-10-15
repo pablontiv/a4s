@@ -22,7 +22,7 @@ import {
   toTopic,
 } from '../adapters/claude/hooks/adapter.ts'
 
-test('adapter: isToken valida tokens no-lossy en v1 (mayúsculas y punto)', () => {
+test('adapter: isToken valida tokens no-lossy (mayúsculas y punto)', () => {
   assert.equal(isToken('a4s'), true)
   assert.equal(isToken('claude-1'), true)
   assert.equal(isToken('x_y-z'), true)
@@ -35,7 +35,7 @@ test('adapter: isToken valida tokens no-lossy en v1 (mayúsculas y punto)', () =
   assert.equal(isToken('a/b'), false) // separador de topic prohibido
 })
 
-test('adapter: parseAddress reconoce gramática v1', () => {
+test('adapter: parseAddress reconoce la gramática canónica', () => {
   assert.deepEqual(parseAddress('all'), { scope: 'global' })
   assert.deepEqual(parseAddress('a4s/claude-1'), { scope: 'direct', project: 'a4s', instance: 'claude-1' })
   assert.deepEqual(parseAddress('a4s/all'), { scope: 'project', project: 'a4s' })
@@ -61,11 +61,11 @@ test('adapter: formatAddress invierte parseAddress', () => {
   assert.equal(formatAddress({ scope: 'direct', project: 'a4s', instance: 'claude-1' }), 'a4s/claude-1')
 })
 
-test('adapter: toTopic mapea dirección → topic v1', () => {
-  assert.equal(toTopic('all'), 'synagent/v1/all')
-  assert.equal(toTopic('a4s/all'), 'synagent/v1/a4s/all')
-  assert.equal(toTopic('a4s/claude-1'), 'synagent/v1/a4s/claude-1')
-  assert.throws(() => toTopic('invalid'), /dirección v1 inválida/)
+test('adapter: toTopic mapea dirección → topic v2', () => {
+  assert.equal(toTopic('all'), 'synagent/v2/all')
+  assert.equal(toTopic('a4s/all'), 'synagent/v2/a4s/all')
+  assert.equal(toTopic('a4s/claude-1'), 'synagent/v2/a4s/claude-1')
+  assert.throws(() => toTopic('invalid'), /dirección inválida/)
 })
 
 test('adapter: directAddress y subscriptions', () => {
@@ -244,7 +244,7 @@ test('adapter: newId incluye dirección y ts', () => {
 
 test('adapter: MESSAGE_KINDS incluye comandos y eventos', () => {
   assert.deepEqual(MESSAGE_KINDS, [
-    'task.request', 'task.redirect', 'task.cancel',
-    'task.delivered', 'task.completed', 'task.expired', 'note.published',
+    'task.request', 'task.redirect', 'task.offer', 'task.claim', 'task.cancel',
+    'task.delivered', 'task.completed', 'task.expired', 'task.offer.closed', 'note.published',
   ])
 })

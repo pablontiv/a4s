@@ -34,6 +34,7 @@
     "verify:request-lifecycle": "tsx scripts/verify-request-lifecycle.ts",
     "verify:dlq": "tsx scripts/verify-dlq.ts",
     "verify:protocol-schema": "tsx scripts/verify-protocol-schema.ts",
+    "verify:offer-race": "tsx scripts/verify-offer-race.ts",
     "sync-diagnostics": "node adapters/claude/scripts/sync-diagnostics.mjs",
     "test": "npm run sync-diagnostics -- --check && tsx --test test/*.test.ts",
     "typecheck": "tsc --noEmit"
