@@ -59,6 +59,15 @@ that major is `0`, their minor versions also match. A missing label is
 `unstamped`; a version outside that rule is `incompatible`. The extension warns
 in its widget and `[DAGU STATE]` notice without blocking a run.
 
+Changing any distributed template (`feature.yaml`, `poc.yaml`, `discovery.yaml`,
+`reconcile.yaml`, or `dagu-feature-bootstrap.yaml`) or this `SKILL.md` requires
+a package version greater than the PR merge-base version on `origin/main` and
+a matching `## <version>` section in `CHANGELOG.md`. `npm test` enforces this
+for committed and local tracked changes, fetching main and ancestry when CI
+has a shallow checkout. In 0.x, a minor bump marks a compatibility break.
+After merge, the operator runs bootstrap to apply the new version and real
+source/bootstrap identity to installed renders.
+
 ## Template parameters
 
 The bootstrap renders the repository DAG templates when a repository adopts the lifecycle:

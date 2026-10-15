@@ -75,6 +75,14 @@ Con `@a4s/omp-cross-family-review` cargado, `triage-reviewer` conserva la selecc
 
 OMP resuelve `skill://dagu-feature` y sus plantillas desde `skills/dagu-feature/` dentro del paquete. `SKILL.md`, `feature.yaml`, `poc.yaml`, `discovery.yaml`, `reconcile.yaml` y `dagu-feature-bootstrap.yaml` permanecen juntos para conservar sus enlaces relativos y las rutas `$SKILL_DIR/<archivo>` del bootstrap.
 
+Todo cambio en esas cinco plantillas o en `SKILL.md` exige una versión del
+paquete mayor que la de la base del PR (`git merge-base origin/main HEAD`) y
+una sección `## <versión>` en `CHANGELOG.md`; `npm test` lo comprueba,
+incluyendo cambios locales rastreados y obteniendo main y su historia en CI
+shallow. En 0.x, subir el minor indica ruptura de compatibilidad. Después del
+merge, el operador ejecuta bootstrap para sellar los renders con la versión y
+la identidad real del source y del run de bootstrap.
+
 ## Discovery
 
 El bootstrap renderiza `.workspace/dagu/dags/discovery.yaml`. Su label
