@@ -226,6 +226,14 @@ the new definition. Record that run and the affected step logs in the issue.
 
 ### Coordinator flow
 
+Each run is coordinated from an OMP session opened in its `PRIMARY` repository.
+From another repository, open `omp -p --cwd <primary>` or an Orca tab in that
+primary before enqueueing and coordinating its run. The `POC=no` guard compares
+canonical main-worktree identities and the session's actual transcript directory
+with `triage_decision`'s encoded `PRIMARY` namespace. A linked-worktree session
+matches only when its transcript directory belongs to that primary namespace.
+On mismatch the guard names the expected primary and keeps triage waiting.
+
 The `@a4s/omp-dagu` status extension delivers hidden model context with the form `[DAGU STATE] run=<id> status=<waiting|failed|aborted> step=<step> issue=<issue> bundle=<version|unstamped> extension=<version> compat=<ok|incompatible|unstamped>`. It starts or continues a coordinator turn without rendering the notice in chat. Notices report run state rather than user instructions.
 
 - On a `triage` notice, the coordinator obtains the guard generation marker and launches `task agent=triage-reviewer` itself with that marker and the fixed prompt, naming the subagent `TriageReview<ISSUE>` (or `TriageReview<ISSUE>v<N>` for a retry). Several `triage-reviewer` tasks may share one batched `task` call; each task includes its own run's generation marker. The coordinator completes `triage` with that allocated reviewer ID. A `dependency_review` push-back produces a new `triage` notice and the coordinator repeats this flow for the new generation.
