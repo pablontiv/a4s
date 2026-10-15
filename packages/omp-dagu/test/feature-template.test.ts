@@ -102,18 +102,28 @@ esac
   chmodSync(executable, 0o755);
 }
 
+function featureScriptEnv(repo: Repository): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    PATH: `${join(repo.root, "bin")}:${process.env.PATH ?? ""}`,
+    ISSUE: "189",
+    PR_NUMBER: "",
+    PRIMARY: repo.primary,
+    WORKTREE: repo.worktree,
+    BRANCH: repo.branch,
+    BASE_BRANCH: "main",
+    GATE: "npm test",
+    REQUIRED_CHECK: "validate",
+    OMP_SESSION_ID: "",
+    POC_BASIS: "",
+    RUN: "test-run",
+  };
+}
+
 function runFailingCloseGate(script: string, repo: Repository) {
   return spawnSync("bash", ["-c", script], {
     encoding: "utf8",
-    env: {
-      ...process.env,
-      PATH: `${join(repo.root, "bin")}:${process.env.PATH ?? ""}`,
-      PRIMARY: repo.primary,
-      WORKTREE: repo.worktree,
-      BRANCH: repo.branch,
-      BASE_BRANCH: "main",
-      REQUIRED_CHECK: "validate",
-    },
+    env: featureScriptEnv(repo),
   });
 }
 
@@ -121,15 +131,7 @@ function runScript(script: string, repo: Repository): string {
   const result = spawnSync("bash", ["-c", script], {
     encoding: "utf8",
     cwd: repo.root,
-    env: {
-      ...process.env,
-      PATH: `${join(repo.root, "bin")}:${process.env.PATH ?? ""}`,
-      PRIMARY: repo.primary,
-      WORKTREE: repo.worktree,
-      BRANCH: repo.branch,
-      BASE_BRANCH: "main",
-      RUN: "test-run",
-    },
+    env: featureScriptEnv(repo),
   });
   assert.equal(result.status, 0, `script failed\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
   return `${result.stdout}${result.stderr}`;
