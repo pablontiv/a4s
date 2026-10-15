@@ -21,15 +21,26 @@ type SchemaVector = {
   valid: boolean
   code?: string
 }
-type Golden = { schemaVectors: SchemaVector[] }
+type DeliveryResultVector = {
+  name: string
+  status: 'complete' | 'failed'
+  wire: string
+  valid: boolean
+  code?: string
+}
+type Golden = {
+  deliveryResultVectors: DeliveryResultVector[]
+  schemaVectors: SchemaVector[]
+}
 type ProtocolContract = {
   assertSupportedTopicVersion(topic: string): void
   parseCanonical(wire: string): sharedProtocol.CanonicalMessage
+  parseDeliveryResult(wire: string): sharedProtocol.DeliveryResult
 }
 type Evaluation = {
   accepted: boolean
   code: string
-  message?: sharedProtocol.CanonicalMessage
+  message?: sharedProtocol.CanonicalMessage | sharedProtocol.DeliveryResult
 }
 
 const golden = JSON.parse(
@@ -43,6 +54,21 @@ function evaluate(protocol: ProtocolContract, vector: SchemaVector): Evaluation 
       accepted: true,
       code: 'ACCEPT',
       message: protocol.parseCanonical(vector.wire),
+    }
+  } catch (error) {
+    const code = typeof error === 'object' && error !== null && 'code' in error && typeof error.code === 'string'
+      ? error.code
+      : 'UNCLASSIFIED'
+    return { accepted: false, code }
+  }
+}
+
+function evaluateDeliveryResult(protocol: ProtocolContract, vector: DeliveryResultVector): Evaluation {
+  try {
+    return {
+      accepted: true,
+      code: 'ACCEPT',
+      message: protocol.parseDeliveryResult(vector.wire),
     }
   } catch (error) {
     const code = typeof error === 'object' && error !== null && 'code' in error && typeof error.code === 'string'
@@ -73,6 +99,20 @@ test('claude-parity: Pi/omp y Claude aceptan o rechazan los golden con el mismo 
   for (const vector of golden.schemaVectors) {
     const shared = evaluate(sharedProtocol, vector)
     const claude = evaluate(claudeProtocol, vector)
+    assert.deepEqual(claude, shared, vector.name)
+    assert.equal(shared.accepted, vector.valid, vector.name)
+    assert.equal(shared.code, vector.valid ? 'ACCEPT' : vector.code, vector.name)
+  }
+})
+
+test('claude-parity: resultados de entrega usan el mismo esquema v2', () => {
+  for (const status of ['complete', 'failed'] as const) {
+    assert.ok(golden.deliveryResultVectors.some(vector => vector.status === status && vector.valid), `${status}: falta válido`)
+    assert.ok(golden.deliveryResultVectors.some(vector => vector.status === status && !vector.valid), `${status}: falta inválido`)
+  }
+  for (const vector of golden.deliveryResultVectors) {
+    const shared = evaluateDeliveryResult(sharedProtocol, vector)
+    const claude = evaluateDeliveryResult(claudeProtocol, vector)
     assert.deepEqual(claude, shared, vector.name)
     assert.equal(shared.accepted, vector.valid, vector.name)
     assert.equal(shared.code, vector.valid ? 'ACCEPT' : vector.code, vector.name)

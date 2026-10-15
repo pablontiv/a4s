@@ -14,6 +14,7 @@ import {
   acceptInbound,
   isAddress,
   makeOutbound,
+  parseDeliveryResult,
   parseCanonical,
   serialize,
   toTopic,
@@ -27,7 +28,19 @@ type Vector = {
   acceptPlain: boolean
   acceptGlobal: boolean
 }
-type Golden = { identity: Identity; legacyAddress: string; routingVectors: Vector[] }
+type DeliveryResultVector = {
+  name: string
+  status: 'complete' | 'failed'
+  wire: string
+  valid: boolean
+  code?: string
+}
+type Golden = {
+  deliveryResultVectors: DeliveryResultVector[]
+  identity: Identity
+  legacyAddress: string
+  routingVectors: Vector[]
+}
 
 const golden = JSON.parse(
   readFileSync(new URL('./golden-vectors.json', import.meta.url), 'utf8'),
@@ -70,4 +83,25 @@ test('golden: makeOutbound determinista (mismo id/ts → mismo topic y wire)', (
   assert.equal(a.topic, 'synagent/v2/a4s/pi-1')
   assert.equal(serialize(a.message), serialize(b.message))
   assert.equal(a.message.from, 'a4s/sess-01')
+})
+
+test('golden: resultados de entrega completos y fallidos cumplen su esquema v2', () => {
+  for (const status of ['complete', 'failed'] as const) {
+    assert.ok(golden.deliveryResultVectors.some(vector => vector.status === status && vector.valid), `${status}: falta válido`)
+    assert.ok(golden.deliveryResultVectors.some(vector => vector.status === status && !vector.valid), `${status}: falta inválido`)
+  }
+  for (const vector of golden.deliveryResultVectors) {
+    try {
+      const result = parseDeliveryResult(vector.wire)
+      assert.equal(vector.valid, true, vector.name)
+      assert.equal(result.status, vector.status, vector.name)
+    } catch (error) {
+      assert.equal(vector.valid, false, vector.name)
+      assert.equal(
+        typeof error === 'object' && error !== null && 'code' in error ? error.code : undefined,
+        vector.code,
+        vector.name,
+      )
+    }
+  }
 })

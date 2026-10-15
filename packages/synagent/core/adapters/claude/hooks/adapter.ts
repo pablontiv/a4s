@@ -60,6 +60,28 @@ export type SynagentSendKind = (typeof SYNAGENT_SEND_KINDS)[number]
 export const PROTOCOL_ERROR_CODES = ['MESSAGE_INVALID', 'VERSION_UNSUPPORTED'] as const
 export type ProtocolErrorCode = (typeof PROTOCOL_ERROR_CODES)[number]
 
+export const DELIVERY_RESULT_REASONS = ['answer', 'aborted', 'refusal', 'error'] as const
+export const DELIVERY_FAILURE_CAUSES = ['aborted', 'refusal', 'error'] as const
+export const DELIVERY_RESULT_STATUSES = ['complete', 'failed'] as const
+
+export type DeliveryResultReason = (typeof DELIVERY_RESULT_REASONS)[number]
+export type DeliveryFailureCause = (typeof DELIVERY_FAILURE_CAUSES)[number]
+export type DeliveryResult =
+  | { cause?: undefined; reason: 'answer'; status: 'complete'; text: string }
+  | { cause: DeliveryFailureCause; reason: DeliveryFailureCause; status: 'failed'; text: string }
+
+export interface DeliveryResultSchema {
+  readonly status: DeliveryResult['status']
+  readonly required: readonly ('cause' | 'reason' | 'status' | 'text')[]
+}
+
+// El resultado nativo de una entrega se persiste bajo el contrato vigente v2.
+// Los fallos exigen una causa exacta; un resultado completo nunca lleva causa.
+export const DELIVERY_RESULT_SCHEMAS = {
+  complete: { status: 'complete', required: ['reason', 'status', 'text'] },
+  failed: { status: 'failed', required: ['cause', 'reason', 'status', 'text'] },
+} as const satisfies Readonly<Record<DeliveryResult['status'], DeliveryResultSchema>>
+
 export class ProtocolError extends Error {
   readonly code: ProtocolErrorCode
 
@@ -524,6 +546,52 @@ export function parseDeadLetter(text: string): DeadLetterRecord {
     time: record.time as string,
     harness: record.harness as string,
   }
+}
+
+export function parseDeliveryResult(text: string): DeliveryResult {
+  let value: unknown
+  try {
+    value = JSON.parse(text)
+  } catch {
+    throw new ProtocolError('MESSAGE_INVALID', 'resultado de entrega no es JSON válido')
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new ProtocolError('MESSAGE_INVALID', 'resultado de entrega debe ser un objeto')
+  }
+
+  const result = value as Record<string, unknown>
+  const status = result.status
+  if (typeof status !== 'string' || !DELIVERY_RESULT_STATUSES.includes(status as DeliveryResult['status'])) {
+    throw new ProtocolError('MESSAGE_INVALID', `estado de entrega inválido: ${String(status)}`)
+  }
+  const schema = DELIVERY_RESULT_SCHEMAS[status as DeliveryResult['status']]
+  for (const field of schema.required) {
+    if (result[field] === undefined || result[field] === null) {
+      throw new ProtocolError('MESSAGE_INVALID', `falta campo de resultado: ${field}`)
+    }
+  }
+  if (typeof result.text !== 'string') {
+    throw new ProtocolError('MESSAGE_INVALID', 'campo de resultado inválido: text')
+  }
+  if (typeof result.reason !== 'string' || !DELIVERY_RESULT_REASONS.includes(result.reason as DeliveryResultReason)) {
+    throw new ProtocolError('MESSAGE_INVALID', `razón de entrega inválida: ${String(result.reason)}`)
+  }
+
+  if (status === 'complete') {
+    if (result.reason !== 'answer' || result.cause !== undefined) {
+      throw new ProtocolError('MESSAGE_INVALID', 'resultado completo debe tener reason answer y ninguna causa')
+    }
+    return { reason: 'answer', status: 'complete', text: result.text }
+  }
+  if (
+    typeof result.cause !== 'string'
+    || !DELIVERY_FAILURE_CAUSES.includes(result.cause as DeliveryFailureCause)
+    || result.reason !== result.cause
+  ) {
+    throw new ProtocolError('MESSAGE_INVALID', 'resultado fallido debe conservar su causa')
+  }
+  const cause = result.cause as DeliveryFailureCause
+  return { cause, reason: cause, status: 'failed', text: result.text }
 }
 
 export function parseCanonical(text: string): CanonicalMessage {

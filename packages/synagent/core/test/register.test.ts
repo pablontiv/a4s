@@ -9,8 +9,14 @@ import assert from 'node:assert/strict'
 import { EventEmitter, once } from 'node:events'
 import { test } from 'node:test'
 
-import { register } from '../adapters/claude/hooks/register.ts'
-import { createCanonical, parseCanonical, serialize, toTopic, type CanonicalMessage } from '../adapters/claude/hooks/adapter.ts'
+import { mapClaudeDeliveryResult, register } from '../adapters/claude/hooks/register.ts'
+import {
+  createCanonical,
+  parseCanonical,
+  serialize,
+  toTopic,
+  type CanonicalMessage,
+} from '../adapters/claude/hooks/adapter.ts'
 
 type Hook = (...a: unknown[]) => unknown
 type Entry = { event: string; matcher: unknown; hook: Hook }
@@ -90,6 +96,94 @@ function makeEngine(
   }
   return { $, runCalls, spawnArgs, toolRegistered, commandRegistered, statuses, submitted }
 }
+
+test('register maps native Claude turn reasons to delivery results', () => {
+  assert.deepEqual(mapClaudeDeliveryResult('answer', 'FINAL'), {
+    reason: 'answer',
+    status: 'complete',
+    text: 'FINAL',
+  })
+  for (const reason of ['aborted', 'refusal', 'error'] as const) {
+    assert.deepEqual(mapClaudeDeliveryResult(reason, `partial-${reason}`), {
+      cause: reason,
+      reason,
+      status: 'failed',
+      text: `partial-${reason}`,
+    })
+  }
+})
+
+test('register publishes correlated task events only for completed Claude deliveries', async () => {
+
+  const eng = makeEngine()
+  const submitted: string[] = []
+  const requests = [
+    {
+      id: 'claude-answer',
+      from: 'a4s/source',
+      to: 'a4s/sess-test-1',
+      kind: 'task.request',
+      body: 'answer',
+      correlation_id: 'root-answer',
+      ts: 1,
+    },
+    {
+      id: 'claude-aborted',
+      from: 'a4s/source',
+      to: 'a4s/sess-test-1',
+      kind: 'task.request',
+      body: 'abort',
+      correlation_id: 'root-aborted',
+      ts: 2,
+    },
+  ]
+  eng.$.prompt.submit = async ({ text }: { text: string }) => { submitted.push(text) }
+  eng.$.process.spawn = () => (async function* () {
+    const frames = requests.map(request => ({
+      topic: 'synagent/v2/a4s/sess-test-1',
+      payload: JSON.stringify(request),
+    }))
+    yield { stream: 'stdout', text: `${frames.map(frame => JSON.stringify(frame)).join('\n')}\n` }
+  })()
+
+  const { get } = collectHooks({}, await loadFreshRegister())
+  const next = async (event: unknown) => event
+  await get('session.start')(eng.$, {}, next)
+  for (let attempt = 0; attempt < 20 && submitted.length < 2; attempt += 1) {
+    const tick = Promise.withResolvers<void>()
+    setImmediate(tick.resolve)
+    await tick.promise
+  }
+  assert.equal(submitted.length, 2)
+
+  await get('turn.start')(eng.$, { text: submitted[0], turnId: 'turn-answer' }, next)
+  await get('turn.complete')(eng.$, {
+    answer: 'FINAL_ANSWER',
+    durationMs: 1,
+    isAborted: false,
+    reason: 'answer',
+    turnId: 'turn-answer',
+  }, next)
+  await get('turn.start')(eng.$, { text: submitted[1], turnId: 'turn-aborted' }, next)
+  await get('turn.complete')(eng.$, {
+    answer: '',
+    durationMs: 1,
+    isAborted: true,
+    reason: 'aborted',
+    turnId: 'turn-aborted',
+  }, next)
+
+  const publications = eng.runCalls
+    .filter(argv => argv.some(value => value.includes('bridge-pub.cjs')))
+    .map(argv => parseCanonical(argv.find(value => value.startsWith('{'))!) as unknown as Record<string, unknown>)
+  assert.deepEqual(publications.map(({ kind, causation_id, correlation_id, body }) => ({
+    body, causation_id, correlation_id, kind,
+  })), [
+    { body: '', causation_id: 'claude-answer', correlation_id: 'root-answer', kind: 'task.delivered' },
+    { body: 'FINAL_ANSWER', causation_id: 'claude-answer', correlation_id: 'root-answer', kind: 'task.completed' },
+    { body: '', causation_id: 'claude-aborted', correlation_id: 'root-aborted', kind: 'task.delivered' },
+  ])
+})
 
 test('register resolves identity from origin and reports its source', async () => {
   const eng = makeEngine()
