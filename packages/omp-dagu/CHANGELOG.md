@@ -13,6 +13,7 @@
 - Wake the coordinating OMP session at the four `discovery` human checkpoints and document its operator flow.
 
 - Bind every `triage-reviewer` in a batched `task` call to its own run generation across synchronous results, native spawn feedback, waits and asynchronous completions.
+- Allow a fresh explicit triage review request to bind a replacement reviewer within the same generation; the latest valid bound review supplies the required `REVIEW`, including when it replaces `poc=yes` with `poc=no`.
 - Request SHA-guarded auto-merge immediately after PR creation, releasing the repository queue slot while GitHub waits for the required check and letting the reconciler return `DIRTY` PRs through rebase and conflict review.
 - Report managed feature and PoC worktrees and local `dagu/*` branches that have no queued, running or waiting owner on every reconcile tick.
 - Make lifecycle completion verify cleanup: `close_gate` now removes and asserts the feature worktree and local/remote branches, PoC cleanup asserts its worktree and branch are gone, and lifecycle changes are exercised by the first post-merge run.

@@ -13,6 +13,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
+import { TriageGuard } from "../src/triage/guard.ts";
 
 const runId = "fixture-run";
 const sessionId = "01a1400f-185a-7646-b9f6-6bee1f622f5f";
@@ -182,6 +183,41 @@ for (const [source, url] of yamlFiles) {
       restBody = rest("2026-10-15T08:00:00-04:00");
       pass(await runBash(script, environment(external, "TriageReview188v2")));
       fail(await runBash(script, environment(external, "TriageReview188")), /check\.timestamp_after_cutoff=FAIL/);
+    });
+    await t.test("accepts the guard-selected replacement after a bound yes in the same generation", async () => {
+      clearTranscripts();
+      restBody = rest();
+      const guard = new TriageGuard();
+      const completion = (review: string) => ({
+        toolName: "bash", toolCallId: "complete", input: {
+          command: `dagu human-task complete feature --run-id ${runId} --step triage --input POC=no --input REVIEW=${review}`,
+        },
+      });
+      const bind = (id: string, poc: string) => {
+        const request = guard.toolCall(completion(id));
+        assert.ok(request && "reason" in request);
+        const launch = { toolName: "task", toolCallId: id, input: { agent: "triage-reviewer", task: request.reason } };
+        const bound = guard.toolCall(launch);
+        assert.ok(bound && "input" in bound);
+        const decision = { poc, behavior: "already demonstrated", question: "Runtime behavior?", reason: "corrected scope" };
+        guard.toolResult({ ...launch, details: { results: [{ index: 0, id, agent: "triage-reviewer", exitCode: 0, output: JSON.stringify(decision) }] } });
+        const transcript = writeTranscript(external, id, "generation-0.jsonl");
+        const rows = readFileSync(transcript, "utf8").trim().split("\n").map(line => JSON.parse(line));
+        rows.find(row => row.type === "session_init").task = bound.input.task;
+        rows.find(row => row.type === "message").message.details.data = decision;
+        writeFileSync(transcript, rows.map(row => JSON.stringify(row)).join("\n") + "\n");
+        return request.reason;
+      };
+      const first = bind("TriageReview237", "yes");
+      const replacement = bind("TriageReview237v2", "no");
+      assert.match(first, /GENERATION=0 REQUEST=1/);
+      assert.match(replacement, /GENERATION=0 REQUEST=2/);
+      const stale = guard.toolCall(completion("TriageReview237"));
+      assert.ok(stale && "reason" in stale);
+      assert.match(stale.reason, /--input REVIEW=TriageReview237v2/);
+      assert.equal(guard.toolCall(completion("TriageReview237v2")), undefined);
+      pass(await runBash(script, environment(external, "TriageReview237v2")));
+      fail(await runBash(script, environment(external, "TriageReview237")), /check\.last_yield_poc_no=FAIL/);
     });
 
     for (const [name, fixtureName, check] of [
