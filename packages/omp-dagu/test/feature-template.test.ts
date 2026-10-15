@@ -77,7 +77,7 @@ function stubGh(repo: Repository, stdout: string, status: number, stderr = ""): 
   const executable = join(bin, "gh");
   writeFileSync(
     executable,
-    `#!/bin/sh\nprintf '%b' ${JSON.stringify(stdout)}\nprintf '%b' ${JSON.stringify(stderr)} >&2\nexit ${status}\n`,
+    `#!/bin/sh\nif [ "$PWD" != ${JSON.stringify(repo.primary)} ]; then\n  printf 'failed to run git: fatal: not a git repository\\n' >&2\n  exit 2\nfi\nprintf '%b' ${JSON.stringify(stdout)}\nprintf '%b' ${JSON.stringify(stderr)} >&2\nexit ${status}\n`,
   );
   chmodSync(executable, 0o755);
 }
@@ -85,6 +85,7 @@ function stubGh(repo: Repository, stdout: string, status: number, stderr = ""): 
 function runScript(script: string, repo: Repository): string {
   const result = spawnSync("bash", ["-c", script], {
     encoding: "utf8",
+    cwd: repo.root,
     env: {
       ...process.env,
       PATH: `${join(repo.root, "bin")}:${process.env.PATH ?? ""}`,
@@ -120,7 +121,7 @@ for (const [name, definition] of definitions) {
     }
   });
 
-  test(`${name} exit cleans a squash-merged head after its remote branch is deleted`, () => {
+  test(`${name} exit cleans a squash-merged head when invoked outside the repository`, () => {
     const repo = repository();
     try {
       commit(repo, "README.txt", "squash merged\n");

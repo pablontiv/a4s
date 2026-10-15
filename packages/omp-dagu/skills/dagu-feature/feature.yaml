@@ -524,7 +524,7 @@ handler_on:
           elif git -C "$PRIMARY" show-ref --verify --quiet "refs/remotes/origin/$BASE_BRANCH" &&
                git -C "$PRIMARY" merge-base --is-ancestor "$head" "origin/$BASE_BRANCH"; then
             published=true
-          elif pr=$(gh pr view "$pr_ref" --json state,headRefOid 2>/dev/null) &&
+          elif pr=$(cd "$PRIMARY" && gh pr view "$pr_ref" --json state,headRefOid 2>/dev/null) &&
                [[ "$(jq -r '.state // empty' <<<"$pr")" == MERGED ]] &&
                [[ "$(jq -r '.headRefOid // empty' <<<"$pr")" == "$head" ]]; then
             published=true
