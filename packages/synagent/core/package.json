@@ -29,7 +29,8 @@
   },
   "scripts": {
     "observer": "tsx observer-cli.ts",
-    "test": "tsx --test test/*.test.ts",
+    "sync-diagnostics": "node adapters/claude/scripts/sync-diagnostics.mjs",
+    "test": "npm run sync-diagnostics -- --check && tsx --test test/*.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
