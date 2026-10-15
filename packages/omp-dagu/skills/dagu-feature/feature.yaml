@@ -249,8 +249,41 @@ steps:
           OMP_SESSION_ID="$OMP_SESSION_ID"
       fi
 
-  - id: start_gate
+  - id: detect_start_primary
     depends: triage_decision
+    preconditions:
+      - condition: "${steps.triage.outputs.POC}"
+        expected: "no"
+    run: |
+      set -euo pipefail
+      branch=$(git -C "$PRIMARY" branch --show-current)
+      status=$(git -C "$PRIMARY" status --porcelain)
+      if [[ "$branch" != "$BASE_BRANCH" ]]; then
+        reason="primary on ${branch:-detached HEAD}, expected $BASE_BRANCH"
+      elif [[ -n "$status" ]]; then
+        reason="primary dirty: ${status//$'\n'/; }"
+      else
+        reason=ready
+      fi
+      printf 'start_gate: %s\n' "$reason" >&2
+      printf 'reason=%s\n' "$reason" >> "$DAGU_OUTPUT_FILE"
+    outputs:
+      - name: reason
+
+  - id: start_primary_unavailable
+    depends: detect_start_primary
+    continue_on: skipped
+    preconditions:
+      - condition: "${steps.detect_start_primary.outputs.reason}"
+        expected: "re:^primary "
+    action: human.task
+    with:
+      prompt: "start_gate: ${steps.detect_start_primary.outputs.reason}. Restore ${PRIMARY} to clean ${BASE_BRANCH}, preserving the operator's changes; then push back this checkpoint with the observed iteration to recheck in the same run. start_gate creates the worktree."
+      push_back:
+        rewind_to: detect_start_primary
+
+  - id: start_gate
+    depends: start_primary_unavailable
     env:
       - POC: ${steps.triage.outputs.POC}
     preconditions:
@@ -267,8 +300,8 @@ steps:
       git -C "$PRIMARY" check-ignore -q "$WORKTREE"
       test "$(git -C "$PRIMARY" branch --show-current)" = "$BASE_BRANCH"
       test -z "$(git -C "$PRIMARY" status --porcelain)"
-      git -C "$PRIMARY" fetch origin
-      git -C "$PRIMARY" merge --ff-only "origin/$BASE_BRANCH"
+      git -C "$PRIMARY" fetch origin || { printf 'start_gate: fetch origin failed; restore origin access and recover this run\n' >&2; exit 1; }
+      git -C "$PRIMARY" merge --ff-only "origin/$BASE_BRANCH" || { printf 'start_gate: ff-only failed; reconcile primary with origin/%s preserving commits, then recover this run\n' "$BASE_BRANCH" >&2; exit 1; }
       if test -e "$WORKTREE"; then
         test "$(git -C "$WORKTREE" rev-parse --show-toplevel)" = "$WORKTREE"
         test "$(git -C "$WORKTREE" branch --show-current)" = "$BRANCH"
@@ -448,8 +481,38 @@ steps:
       push_back:
         rewind_to: rebase
 
-  - id: close_gate
+  - id: detect_close_primary
     depends: await_merge
+    run: |
+      set -euo pipefail
+      branch=$(git -C "$PRIMARY" branch --show-current)
+      status=$(git -C "$PRIMARY" status --porcelain)
+      if [[ "$branch" != "$BASE_BRANCH" ]]; then
+        reason="primary on ${branch:-detached HEAD}, expected $BASE_BRANCH"
+      elif [[ -n "$status" ]]; then
+        reason="primary dirty: ${status//$'\n'/; }"
+      else
+        reason=ready
+      fi
+      printf 'close_gate: %s\n' "$reason" >&2
+      printf 'reason=%s\n' "$reason" >> "$DAGU_OUTPUT_FILE"
+    outputs:
+      - name: reason
+
+  - id: close_primary_unavailable
+    depends: detect_close_primary
+    continue_on: skipped
+    preconditions:
+      - condition: "${steps.detect_close_primary.outputs.reason}"
+        expected: "re:^primary "
+    action: human.task
+    with:
+      prompt: "close_gate: ${steps.detect_close_primary.outputs.reason}. Restore ${PRIMARY} to clean ${BASE_BRANCH}, preserving the operator's changes; then push back this checkpoint with the observed iteration to recheck in the same run. close_gate removes the worktree."
+      push_back:
+        rewind_to: detect_close_primary
+
+  - id: close_gate
+    depends: close_primary_unavailable
     run: |
       set -euo pipefail
       umask 0022

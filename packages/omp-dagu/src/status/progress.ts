@@ -15,7 +15,7 @@ export interface RunDetails {
 }
 
 export interface RunNode {
-  step: { id?: string; name: string };
+  step: { id?: string; name: string; humanTask?: { prompt?: string } };
   statusLabel: string;
 }
 
@@ -134,14 +134,20 @@ export class Transitions {
     const issue = issueNumber(run);
     const sessionMatches = this.sessionId !== undefined
       && runParam(run, "OMP_SESSION_ID") === this.sessionId;
-    const targetedFeature = sessionMatches && run.name === "feature" && issue !== undefined;
+    const owned = sessionMatches && issue !== undefined;
+    const targetedFeature = owned && run.name === "feature";
     const targetedDiscovery = sessionMatches && run.name === "discovery";
     const bundle = runBundleState(run);
     const bundleNotice = ` bundle=${plain(bundle.displayVersion)} extension=${bundle.extensionVersion} compat=${bundle.compat}`;
 
     if (enteredWaiting) {
-      if (targetedFeature && (step === "triage" || step === "implement")) {
-        effects.wakeMessage = `[DAGU STATE] run=${plain(run.dagRunId)} status=waiting step=${step} issue=${issue}${bundleNotice}`;
+      const primaryCheckpoint = (run.name === "feature"
+        && (step === "start_primary_unavailable" || step === "close_primary_unavailable"))
+        || (run.name === "poc" && step === "base_primary_unavailable");
+      if ((targetedFeature && (step === "triage" || step === "implement")) || (owned && primaryCheckpoint)) {
+        const prompt = primaryCheckpoint ? currentNode(run)?.step.humanTask?.prompt : undefined;
+        const cause = prompt ? ` cause=${plain(prompt)}` : "";
+        effects.wakeMessage = `[DAGU STATE] run=${plain(run.dagRunId)} status=waiting step=${step} issue=${issue}${bundleNotice}${cause}`;
       } else if (targetedDiscovery && step !== undefined
         && ["discover", "validate", "consolidate", "approve"].includes(step)) {
         effects.wakeMessage = `[DAGU STATE] run=${plain(run.dagRunId)} status=waiting step=${step} dag=discovery${bundleNotice}`;
