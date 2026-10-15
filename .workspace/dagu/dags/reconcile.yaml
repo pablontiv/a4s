@@ -32,7 +32,7 @@ steps:
       jq -s '
         def param($key):
           .params as $params
-          | try ($params | capture("(^| )" + $key + "=(?<value>[^ ]*)($| )").value) catch "";
+          | (try ($params | capture("(^| )" + $key + "=(?<value>[^ ]*)($| )").value) catch "") // "";
         [(.[][]) | {
           kind: .name,
           run: .dagRunId,
@@ -80,6 +80,10 @@ steps:
       }
 
       while IFS= read -r primary; do
+        if [[ ! -d "$primary" ]]; then
+          printf 'SKIP_PRIMARY %s missing\n' "$primary"
+          continue
+        fi
         managed_root=$(git -C "$primary" rev-parse --show-toplevel)
         : >"$TMP/worktree-branches"
         worktree=
@@ -115,7 +119,7 @@ steps:
       fi
 
   - id: tick
-    depends: leftovers
+    depends: discover
     preconditions:
       - condition: "${RUNS}"
         expected: "re:^\\[.+\\]$"
