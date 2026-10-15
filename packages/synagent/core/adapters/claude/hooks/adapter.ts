@@ -46,6 +46,23 @@ export type EventKind = (typeof EVENT_KINDS)[number]
 export type MessageKind = (typeof MESSAGE_KINDS)[number]
 export type SynagentSendKind = (typeof SYNAGENT_SEND_KINDS)[number]
 
+export const DEAD_LETTER_CAUSES = [
+  'INVALID_JSON',
+  'INVALID_MESSAGE',
+  'DELIVERY_DISPATCH_FAILED',
+  'DELIVERY_TIMEOUT',
+] as const
+
+export type DeadLetterCause = (typeof DEAD_LETTER_CAUSES)[number]
+
+export interface DeadLetterRecord {
+  readonly id: string
+  readonly payload: string
+  readonly cause: DeadLetterCause
+  readonly time: string
+  readonly harness: string
+}
+
 export interface CanonicalMessage {
   id: string
   from: string
@@ -133,6 +150,16 @@ export function projectAddress(project: string): string {
 export function toTopic(to: string, version: string = PROTOCOL_VERSION): string {
   if (!isAddress(to)) throw new Error(`dirección v1 inválida: ${to}`)
   return `${TOPIC_ROOT}/${version}/${to}`
+}
+
+export function deadLetterTopic(identity: Identity, version: string = PROTOCOL_VERSION): string {
+  if (!isToken(identity.project) || identity.project === GLOBAL_ADDRESS) {
+    throw new Error(`proyecto DLQ inválido: ${identity.project}`)
+  }
+  if (!isToken(identity.instance) || identity.instance === GLOBAL_ADDRESS) {
+    throw new Error(`instancia DLQ inválida: ${identity.instance}`)
+  }
+  return `${TOPIC_ROOT}/${version}/dlq/${identity.project}/${identity.instance}`
 }
 
 export function legacyTopic(address: string): string {
@@ -347,6 +374,42 @@ export function createCanonical(
 
 export function serialize(message: CanonicalMessage): string {
   return JSON.stringify(message)
+}
+
+export function serializeDeadLetter(record: DeadLetterRecord): string {
+  return JSON.stringify(record)
+}
+
+export function parseDeadLetter(text: string): DeadLetterRecord {
+  let value: unknown
+  try {
+    value = JSON.parse(text)
+  } catch {
+    throw new Error('registro DLQ no es JSON válido')
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('registro DLQ debe ser un objeto')
+  }
+  const record = value as Record<string, unknown>
+  if (typeof record.payload !== 'string') throw new Error('campo DLQ inválido: payload')
+  for (const field of ['id', 'cause', 'time', 'harness'] as const) {
+    if (typeof record[field] !== 'string' || record[field].length === 0) {
+      throw new Error(`campo DLQ inválido: ${field}`)
+    }
+  }
+  if (!DEAD_LETTER_CAUSES.includes(record.cause as DeadLetterCause)) {
+    throw new Error(`causa DLQ inválida: ${String(record.cause)}`)
+  }
+  if (Number.isNaN(Date.parse(record.time as string))) {
+    throw new Error(`hora DLQ inválida: ${String(record.time)}`)
+  }
+  return {
+    id: record.id as string,
+    payload: record.payload as string,
+    cause: record.cause as DeadLetterCause,
+    time: record.time as string,
+    harness: record.harness as string,
+  }
 }
 
 export function parseCanonical(text: string): CanonicalMessage {

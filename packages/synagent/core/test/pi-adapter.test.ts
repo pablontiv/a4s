@@ -9,7 +9,11 @@ import { createRequire } from 'node:module'
 import { Check } from 'typebox/value'
 
 import synagentPi, { createSynagentPi } from '../adapters/pi/index.ts'
-import { serialize, type CanonicalMessage } from '../protocol.ts'
+import {
+  parseDeadLetter,
+  serialize,
+  type CanonicalMessage,
+} from '../protocol.ts'
 import {
   closeBroker,
   closeServer,
@@ -220,6 +224,117 @@ test('Pi adapter: v1 push bidireccional, broadcasts por defecto, orden y dedupe'
   await new Promise(resolve => setTimeout(resolve, 75))
   assert.equal(harness.received.length, 7)
   assert.equal(restored.received.length, 3)
+})
+
+test('Pi adapter persists and lists DLQ failures, then reinjects a record exactly once', async t => {
+  const { broker, server, url } = await startBroker()
+  const observer = await connectClient(url, 'pi-adapter-dlq-observer')
+  const publisher = await connectClient(url, 'pi-adapter-dlq-publisher')
+  const sessionId = 'pi-dlq'
+  const topic = `synagent/v1/a4s/${sessionId}`
+  const dlqTopic = `synagent/v1/dlq/a4s/${sessionId}`
+  const observed: Array<{ topic: string; payload: string }> = []
+  observer.on('message', (receivedTopic, payload) => {
+    observed.push({ topic: receivedTopic, payload: payload.toString() })
+  })
+  await subscribe(observer, topic)
+  await subscribe(observer, dlqTopic)
+  const settings = { 'a4s.synagent.broker-url': url }
+  const harness = createHarness(settings, [], sessionId, 50)
+  let restored: typeof harness | undefined
+  t.after(async () => {
+    await restored?.shutdown()
+    await harness.shutdown()
+    await end(observer)
+    await end(publisher)
+    await closeServer(server)
+    await closeBroker(broker)
+  })
+
+  await harness.start()
+  await waitFor(() => harness.notifications.some(({ message }) =>
+    message.includes('subscribed to')
+    && message.includes(topic)
+    && message.includes(dlqTopic)))
+
+  const invalidJson = '  {"broken": '
+  const invalidMessage = '{"id":"invalid-envelope"}'
+  await publish(publisher, topic, invalidJson)
+  await publish(publisher, topic, invalidMessage)
+  await waitFor(() => observed.filter(({ topic: observedTopic }) => observedTopic === dlqTopic).length >= 2)
+  const firstRecords = observed
+    .filter(({ topic: observedTopic }) => observedTopic === dlqTopic)
+    .map(({ payload }) => parseDeadLetter(payload))
+  assert.deepEqual(firstRecords.map(({ payload, cause }) => ({ payload, cause })), [
+    { payload: invalidJson, cause: 'INVALID_JSON' },
+    { payload: invalidMessage, cause: 'INVALID_MESSAGE' },
+  ])
+
+  harness.failDelivery = true
+  const dispatchPayload = ` ${serialize(message({
+    id: 'dispatch-dlq',
+    to: `a4s/${sessionId}`,
+    body: 'dispatch must fail',
+  }))} `
+  await publish(publisher, topic, dispatchPayload)
+  await waitFor(() => observed.some(({ topic: observedTopic, payload }) =>
+    observedTopic === dlqTopic
+    && parseDeadLetter(payload).cause === 'DELIVERY_DISPATCH_FAILED'))
+  const dispatchRecord = observed
+    .filter(({ topic: observedTopic }) => observedTopic === dlqTopic)
+    .map(({ payload }) => parseDeadLetter(payload))
+    .find(({ cause }) => cause === 'DELIVERY_DISPATCH_FAILED')
+  assert.ok(dispatchRecord)
+  assert.equal(dispatchRecord.payload, dispatchPayload)
+  assert.equal(dispatchRecord.harness, 'pion')
+  assert.equal(harness.received.length, 0)
+
+  await harness.command('synagent', 'dlq')
+  const listing = harness.notifications.at(-1)?.message ?? ''
+  for (const cause of ['INVALID_JSON', 'INVALID_MESSAGE', 'DELIVERY_DISPATCH_FAILED']) {
+    assert.match(listing, new RegExp(`causa=${cause}`))
+  }
+
+  harness.failDelivery = false
+  await harness.command('synagent', `dlq retry ${dispatchRecord.id}`)
+  await waitFor(() => harness.received.length === 1)
+  await waitFor(() => observed.filter(({ topic: observedTopic, payload }) =>
+    observedTopic === topic && payload === dispatchPayload).length === 2)
+  assert.match(harness.received[0]?.text ?? '', /id dispatch-dlq/)
+  await harness.confirmDelivery(0)
+  await harness.settle()
+  await harness.command('synagent', `dlq retry ${dispatchRecord.id}`)
+  assert.match(harness.notifications.at(-1)?.message ?? '', /already retried/)
+  assert.equal(observed.filter(({ topic: observedTopic, payload }) =>
+    observedTopic === topic && payload === dispatchPayload).length, 2)
+
+  const timeoutPayload = serialize(message({
+    id: 'timeout-dlq',
+    to: `a4s/${sessionId}`,
+    body: 'delivery confirmation times out',
+  }))
+  await publish(publisher, topic, timeoutPayload)
+  await waitFor(() => observed.some(({ topic: observedTopic, payload }) =>
+    observedTopic === dlqTopic
+    && parseDeadLetter(payload).cause === 'DELIVERY_TIMEOUT'))
+  const timeoutRecord = observed
+    .filter(({ topic: observedTopic }) => observedTopic === dlqTopic)
+    .map(({ payload }) => parseDeadLetter(payload))
+    .find(({ cause }) => cause === 'DELIVERY_TIMEOUT')
+  assert.ok(timeoutRecord)
+  assert.equal(timeoutRecord.payload, timeoutPayload)
+  assert.equal(harness.received.length, 2)
+
+  await harness.command('synagent', 'resume')
+  await harness.shutdown()
+  restored = createHarness(settings, harness.entries, sessionId, 50)
+  await restored.start()
+  await waitFor(() => restored?.notifications.some(({ message }) =>
+    message.includes('subscribed to') && message.includes(dlqTopic)) ?? false)
+  await restored.command('synagent', 'dlq')
+  assert.match(restored.notifications.at(-1)?.message ?? '', new RegExp(dispatchRecord.id))
+  assert.match(restored.notifications.at(-1)?.message ?? '', /reintentado=/)
+  assert.equal(restored.received.length, 0)
 })
 
 test('Pi adapter publishes task events with frozen assistant completion text', async t => {
@@ -563,7 +678,7 @@ test('Pi adapter restores pending FIFO beyond seen retention and recognizes a pe
   assert.match(harness.received[2]?.text ?? '', /id retention-sentinel/)
 })
 
-test('Pi adapter retries persistence and dispatch failures without reinjecting a confirmed marker', async t => {
+test('Pi adapter retries persistence failures and restores dispatch failures only through DLQ retry', async t => {
   const { broker, server, url } = await startBroker()
   const publisher = await connectClient(url, 'pi-adapter-persistence-publisher')
   const settings = { 'a4s.synagent.broker-url': url }
@@ -618,6 +733,13 @@ test('Pi adapter retries persistence and dispatch failures without reinjecting a
   await publish(publisher, topic, serialize(dispatchRetry))
   await waitFor(() => recovered?.notifications.some(({ message }) => message.includes('delivery failed')) ?? false)
   recovered.failDelivery = false
+  const dispatchDeadLetter = recovered.entries.find(entry =>
+    entry.customType === 'synagent-dlq'
+    && entry.data.cause === 'DELIVERY_DISPATCH_FAILED'
+    && typeof entry.data.id === 'string')
+  assert.ok(dispatchDeadLetter)
+  const dispatchDeadLetterId = dispatchDeadLetter.data.id
+  assert.equal(typeof dispatchDeadLetterId, 'string')
   await recovered.shutdown()
 
   dispatchRecovered = createHarness({
@@ -628,6 +750,10 @@ test('Pi adapter retries persistence and dispatch failures without reinjecting a
   await dispatchRecovered.start()
   assert.equal(dispatchRecovered.received.length, 0)
   await dispatchRecovered.command('synagent', 'enable')
+  await waitFor(() => dispatchRecovered?.notifications.some(({ message }) =>
+    message.includes('subscribed to') && message.includes(topic)) ?? false)
+  assert.equal(dispatchRecovered.received.length, 0)
+  await dispatchRecovered.command('synagent', `dlq retry ${dispatchDeadLetterId}`)
   await waitFor(() => dispatchRecovered?.received.length === 1)
   assert.match(dispatchRecovered.received[0]?.text ?? '', /id dispatch-retry/)
 })

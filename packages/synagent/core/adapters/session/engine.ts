@@ -27,6 +27,7 @@ import {
 } from './settings.ts'
 import {
   acceptInbound,
+  deadLetterTopic,
   directAddress,
   instanceFromHostSession,
   isAddress,
@@ -37,12 +38,17 @@ import {
   MESSAGE_KINDS,
   newId,
   parseCanonical,
+  parseDeadLetter,
   renderForAgent,
   resolveProjectWithSource,
   serialize,
+  serializeDeadLetter,
   subscriptions,
   SYNAGENT_SEND_KINDS,
+  toTopic,
   type CanonicalMessage,
+  type DeadLetterCause,
+  type DeadLetterRecord,
   type Identity,
   type MessageKind,
   type SubscriptionPlan,
@@ -53,14 +59,18 @@ const MAX_SEEN = 1000
 const SEEN_ENTRY = 'synagent-delivered'
 const PENDING_ENTRY = 'synagent-pending'
 const REQUEST_ENTRY = 'synagent-request'
+const DEAD_LETTER_ENTRY = 'synagent-dlq'
+const DEAD_LETTER_RETRY_ENTRY = 'synagent-dlq-retry'
 // Topics durables efectivamente suscritos; sirve para limpiar stale tras cambiar de identidad.
 const STATE_ENTRY = 'synagent-state'
 const DEFAULT_DELIVERY_START_TIMEOUT_MS = 30_000
 
 type SeenEntry = { id: string }
 type StateEntry = { topics: string }
-type PendingEntry = { message: CanonicalMessage; marker: string; sessionId: string }
+type PendingEntry = { message: CanonicalMessage; marker: string; payload: string; sessionId: string }
 type QueuedDelivery = PendingEntry & { generation: number }
+type DeadLetterEntry = { record: DeadLetterRecord; retriedAt?: string }
+type DeadLetterRetryEntry = { id: string; retriedAt: string }
 type RequestStatus = 'pending' | 'delivered' | 'completed' | 'expired' | 'cancelled'
 type RequestEntry = {
   deadline?: number
@@ -89,6 +99,7 @@ type ActiveDelivery = {
   marker: string
   message: CanonicalMessage
   mode: DeliveryMode
+  payload: string
   token: number
 }
 export type DeliveryResultKey = Pick<ActiveDelivery, 'generation' | 'id' | 'marker' | 'token'>
@@ -144,6 +155,7 @@ function synagentAdapter(
   let persistedDurableTopics: string | undefined
   let identity: Identity | undefined
   let identitySource: ProjectSource | undefined
+  let dlqTopic: string | undefined
   let activeSessionId: string | undefined
   let context: ExtensionContext | undefined
   let lifecycle = Promise.resolve()
@@ -160,6 +172,8 @@ function synagentAdapter(
   const deliveryResultCapture = createDeliveryResultCapture(pi)
   const seen = new Set<string>()
   const pending = new Map<string, PendingEntry>()
+  const deadLetters = new Map<string, DeadLetterEntry>()
+  const deadLetteredMessageIds = new Set<string>()
   const requests = new Map<string, RequestEntry>()
 
   pi.registerTool({
@@ -245,6 +259,19 @@ function synagentAdapter(
         ctx.ui.notify(formatRequestRegistry(), 'info')
         return
       }
+      if (action === 'dlq') {
+        if (key === undefined) {
+          ctx.ui.notify(formatDeadLetterRegistry(), 'info')
+          return
+        }
+        if (key === 'retry' && rest.length === 1) {
+          const result = await retryDeadLetter(rest[0] as string)
+          ctx.ui.notify(result.message, result.ok ? 'info' : 'warning')
+          return
+        }
+        ctx.ui.notify('Usage: /synagent dlq [retry <id>]', 'warning')
+        return
+      }
       if (action === 'cancel' && key && rest.length === 0) {
         const request = requests.get(key)
         if (!request) {
@@ -295,7 +322,7 @@ function synagentAdapter(
       }
       if (action !== 'set' || !key || rest.length === 0) {
         ctx.ui.notify(
-          'Usage: /synagent status|pending|cancel <request-id>|enable|disable|resume|set '
+          'Usage: /synagent status|pending|dlq|dlq retry <id>|cancel <request-id>|enable|disable|resume|set '
           + '<enabled|broker-url|global|default-peer|request-ttl> <value>',
           'warning',
         )
@@ -716,7 +743,12 @@ function synagentAdapter(
       const resolved = computeIdentity(ctx)
       identity = resolved.identity
       identitySource = resolved.source
-      plan = subscriptions({ identity, global })
+      dlqTopic = deadLetterTopic(identity)
+      const basePlan = subscriptions({ identity, global })
+      plan = {
+        durable: [...basePlan.durable, dlqTopic],
+        transient: basePlan.transient,
+      }
       logDiagnostic('identity.resolved', {
         operation: 'identity.resolve',
         generation: connectionGeneration,
@@ -729,6 +761,7 @@ function synagentAdapter(
     } catch (error) {
       identity = undefined
       identitySource = undefined
+      dlqTopic = undefined
       plan = { durable: [], transient: [] }
       logDiagnostic('identity.failed', {
         operation: 'identity.resolve',
@@ -856,7 +889,12 @@ function synagentAdapter(
     })
     active.on('message', (receivedTopic, payload) => {
       if (!isActive() || !topics.includes(receivedTopic)) return
-      enqueueDelivery(payload.toString(), ctx)
+      const text = payload.toString()
+      if (receivedTopic === dlqTopic) {
+        receiveDeadLetter(text, ctx)
+        return
+      }
+      enqueueDelivery(text, ctx)
     })
     active.on('error', error => {
       if (error.message === lastError) return
@@ -922,12 +960,102 @@ function synagentAdapter(
     return stale
   }
 
+  function receiveDeadLetter(text: string, ctx: ExtensionContext): void {
+    try {
+      recordDeadLetter(parseDeadLetter(text), ctx)
+    } catch (error) {
+      ctx.ui.notify(`Synagent ignored invalid DLQ record: ${formatError(error)}`, 'warning')
+    }
+  }
+
+  function recordDeadLetter(record: DeadLetterRecord, ctx: ExtensionContext): void {
+    if (deadLetters.has(record.id)) return
+    try {
+      const message = parseCanonical(record.payload)
+      pending.delete(message.id)
+      deadLetteredMessageIds.add(message.id)
+    } catch {}
+    try {
+      pi.appendEntry<DeadLetterRecord>(DEAD_LETTER_ENTRY, record)
+      deadLetters.set(record.id, { record })
+    } catch (error) {
+      ctx.ui.notify(`Synagent DLQ index could not be persisted: ${formatError(error)}`, 'error')
+    }
+  }
+
+  function publishDeadLetter(payload: string, cause: DeadLetterCause, ctx: ExtensionContext): void {
+    const record: DeadLetterRecord = {
+      id: randomUUID(),
+      payload,
+      cause,
+      time: new Date().toISOString(),
+      harness: host.harnessName,
+    }
+    recordDeadLetter(record, ctx)
+    const active = durable
+    const topic = dlqTopic
+    if (!active?.connected || !topic) {
+      ctx.ui.notify(`Synagent could not publish ${cause} to DLQ: adapter disconnected`, 'error')
+      return
+    }
+    void publish(active, topic, serializeDeadLetter(record)).catch(error => {
+      ctx.ui.notify(`Synagent DLQ publish failed: ${formatError(error)}`, 'error')
+    })
+  }
+
+  async function retryDeadLetter(id: string): Promise<SendResult> {
+    const entry = deadLetters.get(id)
+    if (!entry) return { ok: false, message: `Synagent DLQ record not found: ${id}` }
+    if (entry.retriedAt) return { ok: false, message: `Synagent DLQ record already retried: ${id}` }
+    const active = durable
+    const currentIdentity = identity
+    if (!active?.connected || !currentIdentity) {
+      return { ok: false, message: 'Synagent cannot retry DLQ record: adapter disconnected' }
+    }
+    const retriedAt = new Date().toISOString()
+    try {
+      pi.appendEntry<DeadLetterRetryEntry>(DEAD_LETTER_RETRY_ENTRY, { id, retriedAt })
+    } catch (error) {
+      return { ok: false, message: `Synagent DLQ retry could not be persisted: ${formatError(error)}` }
+    }
+    entry.retriedAt = retriedAt
+    try {
+      const message = parseCanonical(entry.record.payload)
+      seen.delete(message.id)
+      deadLetteredMessageIds.delete(message.id)
+    } catch {}
+    try {
+      await publish(active, toTopic(directAddress(currentIdentity)), entry.record.payload)
+      return { ok: true, message: `Synagent DLQ record reinjected: ${id}` }
+    } catch (error) {
+      return { ok: false, message: `Synagent DLQ reinjection failed: ${formatError(error)}` }
+    }
+  }
+
+  function formatDeadLetterRegistry(): string {
+    if (deadLetters.size === 0) return 'Synagent DLQ: vacía'
+    const rows = [...deadLetters.values()].map(entry => {
+      const status = entry.retriedAt ? `reintentado=${entry.retriedAt}` : 'estado=disponible'
+      const { record } = entry
+      return `${record.id} causa=${record.cause} hora=${record.time} harness=${record.harness} `
+        + `${status} payload=${JSON.stringify(record.payload)}`
+    })
+    return `Synagent DLQ:\n${rows.join('\n')}`
+  }
+
   function enqueueDelivery(text: string, ctx: ExtensionContext): void {
     if (!isCurrentSession(ctx)) return
     let message: CanonicalMessage
     try {
       message = parseCanonical(text)
     } catch (error) {
+      let cause: DeadLetterCause = 'INVALID_MESSAGE'
+      try {
+        JSON.parse(text)
+      } catch {
+        cause = 'INVALID_JSON'
+      }
+      publishDeadLetter(text, cause, ctx)
       logDiagnostic('message.rejected', {
         operation: 'message.receive',
         destinationScope: 'invalid',
@@ -962,7 +1090,7 @@ function synagentAdapter(
       }
       return
     }
-    if (seen.has(message.id) || pending.has(message.id)) {
+    if (seen.has(message.id) || pending.has(message.id) || deadLetteredMessageIds.has(message.id)) {
       logDiagnostic('message.duplicate', {
         operation: 'message.receive',
         queueDepth: queuedDeliveries.length,
@@ -989,6 +1117,7 @@ function synagentAdapter(
     const delivery: PendingEntry = {
       marker: `[synagent-delivery ${randomUUID()}]`,
       message,
+      payload: text,
       sessionId: ctx.sessionManager.getSessionId(),
     }
     try {
@@ -1055,6 +1184,7 @@ function synagentAdapter(
           marker,
           message: queued.message,
           mode,
+          payload: queued.payload,
           token: dispatchToken,
         }
         deliveryResultCapture.start(activeDelivery)
@@ -1093,6 +1223,7 @@ function synagentAdapter(
           ...messageDiagnostic(queued.message.id),
           error: classifyDiagnosticError(error, 'DELIVERY_DISPATCH_FAILED', 'delivery.dispatch', false, `${host.harnessName}.sendUserMessage`),
         })
+        publishDeadLetter(queued.payload, 'DELIVERY_DISPATCH_FAILED', ctx)
         ctx.ui.notify(`Synagent delivery failed: ${formatError(error)}`, 'error')
         continue
       }
@@ -1152,6 +1283,7 @@ function synagentAdapter(
           `${host.harnessName}.lifecycle`,
         ),
       })
+      if (activeDelivery) publishDeadLetter(activeDelivery.payload, 'DELIVERY_TIMEOUT', ctx)
       ctx.ui.notify(
         `Synagent delivery reached no ${expectedEvent} before timeout: ${messageId}; `
         + 'use /synagent resume to override the ordering barrier',
@@ -1416,6 +1548,7 @@ function synagentAdapter(
         delivery.sessionId !== sessionId
         || delivery.message.id === activeDelivery?.id
         || alreadyQueued.has(delivery.message.id)
+        || deadLetteredMessageIds.has(delivery.message.id)
         || !acceptsMessage(delivery.message)
       ) continue
       queuedDeliveries.push({ ...delivery, generation: deliveryGeneration })
@@ -1439,7 +1572,10 @@ function synagentAdapter(
     ) return undefined
     try {
       const message = parseCanonical(JSON.stringify(value.message))
-      return { marker: value.marker, message, sessionId: value.sessionId }
+      const payload = 'payload' in value && typeof value.payload === 'string'
+        ? value.payload
+        : serialize(message)
+      return { marker: value.marker, message, payload, sessionId: value.sessionId }
     } catch {
       return undefined
     }
@@ -1482,18 +1618,25 @@ function synagentAdapter(
   function restoreState(ctx: ExtensionContext): void {
     seen.clear()
     pending.clear()
+    deadLetters.clear()
+    deadLetteredMessageIds.clear()
     requests.clear()
     lastDurableTopics = []
     persistedDurableTopics = undefined
     identity = undefined
     identitySource = undefined
+    dlqTopic = undefined
     const branch = ctx.sessionManager.getBranch()
     const markers = new Map<string, string>()
     for (const entry of branch) {
       if (entry.type === 'custom' && 'data' in entry) {
         if (entry.customType === PENDING_ENTRY) {
           const delivery = parsePendingEntry(entry.data)
-          if (delivery && !seen.has(delivery.message.id)) {
+          if (
+            delivery
+            && !seen.has(delivery.message.id)
+            && !deadLetteredMessageIds.has(delivery.message.id)
+          ) {
             pending.set(delivery.message.id, delivery)
             markers.set(delivery.marker, delivery.message.id)
           }
@@ -1502,6 +1645,36 @@ function synagentAdapter(
           if (typeof data === 'object' && data !== null && 'id' in data && typeof data.id === 'string') {
             pending.delete(data.id)
             rememberSeen(data.id)
+          }
+        } else if (entry.customType === DEAD_LETTER_ENTRY) {
+          try {
+            const record = parseDeadLetter(JSON.stringify(entry.data))
+            deadLetters.set(record.id, { record })
+            try {
+              const message = parseCanonical(record.payload)
+              pending.delete(message.id)
+              deadLetteredMessageIds.add(message.id)
+            } catch {}
+          } catch {}
+        } else if (entry.customType === DEAD_LETTER_RETRY_ENTRY) {
+          const data = entry.data
+          if (
+            typeof data === 'object'
+            && data !== null
+            && 'id' in data
+            && 'retriedAt' in data
+            && typeof data.id === 'string'
+            && typeof data.retriedAt === 'string'
+          ) {
+            const deadLetter = deadLetters.get(data.id)
+            if (deadLetter) {
+              deadLetter.retriedAt = data.retriedAt
+              try {
+                const message = parseCanonical(deadLetter.record.payload)
+                seen.delete(message.id)
+                deadLetteredMessageIds.delete(message.id)
+              } catch {}
+            }
           }
         } else if (entry.customType === REQUEST_ENTRY) {
           const request = parseRequestEntry(entry.data)
