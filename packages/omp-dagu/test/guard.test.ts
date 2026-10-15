@@ -177,3 +177,26 @@ test("an executor-rejected launch preserves the request for a valid triage-revie
     assert.equal(guard.toolCall(approved()), undefined);
   }
 });
+
+test("a synchronous batch binds each triage-reviewer to its own run", () => {
+  const guard = new TriageGuard();
+  const first = blocked(guard.toolCall({ ...call(command("run-a")), toolCallId: "request-a" }));
+  const second = blocked(guard.toolCall({ ...call(command("run-b")), toolCallId: "request-b" }));
+  const batch = guard.toolCall({ toolName: "task", toolCallId: "batch", input: { tasks: [
+    { name: "ReviewA", agent: "triage-reviewer", task: first },
+    { name: "Worker", agent: "worker", task: "Work without a review schema" },
+    { name: "ReviewB", agent: "triage-reviewer", task: second },
+  ] } });
+  assert.ok(batch && "input" in batch);
+  assert.ok(batch.input.tasks[0].outputSchema);
+  assert.equal(batch.input.tasks[1].outputSchema, undefined);
+  assert.ok(batch.input.tasks[2].outputSchema);
+  guard.toolResult({ toolName: "task", toolCallId: "batch", input: {}, details: { results: [
+    { index: 0, id: "ReviewA", agent: "triage-reviewer", exitCode: 0, output: output() },
+    { index: 1, id: "Worker", agent: "worker", exitCode: 0, output: "done" },
+    { index: 2, id: "ReviewB", agent: "triage-reviewer", exitCode: 0, output: output() },
+  ] } });
+  assert.match(blocked(guard.toolCall({ ...call(command("run-a", "--input REVIEW=ReviewB")), toolCallId: "wrong" })), /--input REVIEW=ReviewA/);
+  assert.equal(guard.toolCall({ ...call(command("run-a", "--input REVIEW=ReviewA")), toolCallId: "complete-a" }), undefined);
+  assert.equal(guard.toolCall({ ...call(command("run-b", "--input REVIEW=ReviewB")), toolCallId: "complete-b" }), undefined);
+});
