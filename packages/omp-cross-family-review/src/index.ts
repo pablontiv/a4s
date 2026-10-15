@@ -17,6 +17,7 @@ interface ExtensionAPI {
 
 const REVIEW_AGENTS: Record<string, true> = {
   reviewer: true,
+  "triage-reviewer": true,
   "security-reviewer": true,
 };
 const FALLBACK_ROLES = ["@task", "@slow", "@default"] as const;

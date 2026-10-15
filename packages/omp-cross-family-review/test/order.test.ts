@@ -60,7 +60,7 @@ test("leaves absent parent, empty patterns and unresolved primary unchanged", ()
   assert.equal(orderReviewModels(["missing", "gpt"], roles, facade()), undefined);
 });
 
-test("registers the spawn hook and applies it only to both reviewer roles", () => {
+test("registers the spawn hook and routes every review role cross-family", () => {
   let handler: ((event: { agent: string; patterns: readonly string[] }, ctx: { models: Models }) => ReviewModels | undefined) | undefined;
   crossFamilyReview({ on(event, callback) {
     assert.equal(event, "before_subagent_spawn");
@@ -68,7 +68,7 @@ test("registers the spawn hook and applies it only to both reviewer roles", () =
     handler = callback;
   } });
   assert.ok(handler);
-  for (const agent of ["reviewer", "security-reviewer"]) {
+  for (const agent of ["reviewer", "triage-reviewer", "security-reviewer"]) {
     assert.deepEqual(handler({ agent, patterns: ["opus"] }, { models: facade() })?.model,
       ["@task", "opus", "@slow"]);
   }

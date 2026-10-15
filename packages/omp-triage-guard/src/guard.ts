@@ -1,4 +1,4 @@
-export const REVIEW_PROMPT = `Review the triage scope supplied by the parent. A PoC is required when implementation depends on an unexercised external or runtime behavior that could change the implementation path. Reusing behavior already demonstrated proceeds directly. Reproducing a bug is not a PoC. Reply with one JSON line: {"poc":"yes or no","behavior":"...","question":"...","reason":"..."}.`;
+export const REVIEW_PROMPT = `Review the triage scope supplied by the parent. A PoC is required when implementation depends on an unexercised external or runtime behavior that could change the implementation path. Reusing behavior already demonstrated proceeds directly. Reproducing a bug is not a PoC. Return the structured triage decision with poc ("yes" or "no"), behavior, question, and reason.`;
 const REVIEW_SCHEMA = {
   type: "object",
   properties: { poc: { type: "string", enum: ["yes", "no"] }, behavior: { type: "string" }, question: { type: "string" }, reason: { type: "string" } },
@@ -56,10 +56,10 @@ export class TriageGuard {
       const tasks: RecordValue[] = Array.isArray(event.input.tasks) ? event.input.tasks : [event.input];
       const bound = new Map<RecordValue, Generation>();
       for (const task of tasks) {
-        if (task.agent !== "reviewer") continue;
+        if (task.agent !== "triage-reviewer") continue;
         const assignment = `${event.input.context ?? ""}\n${task.task ?? ""}`;
         for (const generation of this.generations.values()) {
-          const marker = `TRIAGE_REVIEW DAG=${generation.target.dag} RUN=${generation.target.run} GENERATION=${generation.number}`;
+          const marker = `TRIAGE_REVIEW AGENT=triage-reviewer DAG=${generation.target.dag} RUN=${generation.target.run} GENERATION=${generation.number}`;
           if (generation.requested && assignment.includes(marker) && assignment.includes(REVIEW_PROMPT)) { bound.set(task, generation); break; }
         }
       }
@@ -73,7 +73,6 @@ export class TriageGuard {
         return { ...task, outputSchema: REVIEW_SCHEMA };
       });
       this.calls.set(event.toolCallId, { generation, number: generation.number, indexes });
-      generation.requested = false;
       return { input: Array.isArray(event.input.tasks) ? { ...event.input, tasks: revised } : revised[0]! };
     }
     const field = event.toolName === "bash" ? "command" : event.toolName === "eval" ? "code" : undefined;
@@ -91,7 +90,7 @@ export class TriageGuard {
       const review = generation.review;
       if (!review) {
         generation.requested = true;
-        return { block: true, reason: `TRIAGE_REVIEW_REQUIRED: Run task agent=reviewer for this triage, including this marker and fixed prompt in its assignment:\nTRIAGE_REVIEW DAG=${completion.dag} RUN=${completion.run} GENERATION=${generation.number}\n${REVIEW_PROMPT}` };
+        return { block: true, reason: `TRIAGE_REVIEW_REQUIRED: Run task agent=triage-reviewer for this triage, including this marker and fixed prompt in its assignment:\nTRIAGE_REVIEW AGENT=triage-reviewer DAG=${completion.dag} RUN=${completion.run} GENERATION=${generation.number}\n${REVIEW_PROMPT}` };
       }
       if (review.poc === "yes") return { block: true, reason: `TRIAGE_POC_REQUIRED: ${review.question}` };
       if (completion.reviewer !== review.id) return { block: true, reason: `TRIAGE_REVIEW_REQUIRED: Retry this completion with --input REVIEW=${review.id}; this is the completed reviewer for the current triage generation.` };
@@ -121,14 +120,18 @@ export class TriageGuard {
     if (!pending) return;
     this.calls.delete(event.toolCallId);
     for (const result of event.details?.results ?? []) {
-      if (result.agent === "reviewer" && pending.indexes.has(result.index) && result.exitCode === 0 && !result.aborted && !result.error) this.record(pending, result.id, result.output);
+      if (result.agent !== "triage-reviewer" || !pending.indexes.has(result.index)) continue;
+      if (pending.number === pending.generation.number) pending.generation.requested = false;
+      if (result.exitCode === 0 && !result.aborted && !result.error) this.record(pending, result.id, result.output);
     }
     // Native task-spawn-feedback lists every started agent/job pair, whereas
     // details.async.jobId contains only the primary job of a batch.
     const feedback = (event.content ?? []).filter(item => item.type === "text").map(item => item.text ?? "").join("\n");
-    const reviewerIds = new Set<string>((event.details?.progress ?? []).filter((item: RecordValue) => item.agent === "reviewer" && pending.indexes.has(item.index)).map((item: RecordValue) => item.id));
+    const reviewerIds = new Set<string>((event.details?.progress ?? []).filter((item: RecordValue) => item.agent === "triage-reviewer" && pending.indexes.has(item.index)).map((item: RecordValue) => item.id));
     for (const match of feedback.matchAll(/`([^`]+)` \(job `([^`]+)`\)/g)) {
-      if (reviewerIds.has(match[1]!)) this.jobs.set(match[2]!, { pending, agentId: match[1]! });
+      if (!reviewerIds.has(match[1]!)) continue;
+      this.jobs.set(match[2]!, { pending, agentId: match[1]! });
+      if (pending.number === pending.generation.number) pending.generation.requested = false;
     }
   }
 
@@ -146,7 +149,7 @@ export class TriageGuard {
     if (!job || job.agentId !== agentId || status !== "completed" || type !== "task" || typeof text !== "string") return;
     for (const match of text.matchAll(/<task-result\b([^>]*)>([\s\S]*?)<\/task-result>/g)) {
       const attrs = Object.fromEntries(Array.from(match[1]!.matchAll(/([\w-]+)="([^"]*)"/g), m => [m[1], m[2]]));
-      if (attrs.id !== agentId || attrs.agent !== "reviewer" || attrs.status !== "completed") continue;
+      if (attrs.id !== agentId || attrs.agent !== "triage-reviewer" || attrs.status !== "completed") continue;
       this.record(job.pending, agentId, /<output>([\s\S]*?)<\/output>/.exec(match[2]!)?.[1]);
       this.jobs.delete(jobId);
     }
