@@ -24,7 +24,7 @@ interface Job { binding: Binding; agentId: string }
 // Deliberately fail closed on literal triage completion text. This is not a
 // shell parser: substitutions, separators and eval syntax must not hide the
 // protected input. Removing quote delimiters preserves POC="no".
-function target(text: string): Target | undefined {
+export function target(text: string): Target | undefined {
   const literal = text.replace(/\\\r?\n/g, "").replace(/["'`]/g, "");
   if (!/\bhuman-task\b/.test(literal) || !/\bcomplete\b/.test(literal) || !/\btriage\b/.test(literal)) return undefined;
   const poc = /\bPOC\s*=\s*(no|yes)\b/.exec(literal)?.[1];
