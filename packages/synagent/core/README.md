@@ -67,6 +67,7 @@ Topología jerárquica versionada, con la regla `topic == "synagent/" + versión
 | `<proyecto>/<instancia>` | `synagent/v1/<proyecto>/<instancia>` | un agente (buzón directo) |
 | `<proyecto>/all` | `synagent/v1/<proyecto>/all` | todo el proyecto |
 | `all` | `synagent/v1/all` | global (activo por defecto) |
+| sesión fallida | `synagent/v1/dlq/<proyecto>/<instancia>` | cola de mensajes muertos de esa sesión |
 
 ### Identidad desde origin
 
@@ -190,8 +191,9 @@ pi install ./packages/synagent/core
 
 Al iniciar una sesión abre **dos** clientes MQTT: uno durable (`clean: false`,
 `clientId` derivado del ID de sesión) suscrito a su buzón directo
-`synagent/v1/<proyecto>/<instancia>`, y uno transitorio (`clean: true`) a los
-broadcasts de proyecto `synagent/v1/<proyecto>/all` y global
+`synagent/v1/<proyecto>/<instancia>` y a su cola
+`synagent/v1/dlq/<proyecto>/<instancia>`, y uno transitorio (`clean: true`) a
+los broadcasts de proyecto `synagent/v1/<proyecto>/all` y global
 `synagent/v1/all`. La instancia es
 exactamente `ctx.sessionManager.getSessionId()`: conserva mayúsculas y puntos.
 Un *reload* o *resume* conserva esa identidad nativa; *new* y *fork* la
@@ -222,6 +224,8 @@ de depuración:
 /synagent-settings
 /synagent status
 /synagent pending
+/synagent dlq
+/synagent dlq retry <id>
 /synagent cancel <request-id>
 /synagent enable|disable
 /synagent resume
@@ -235,6 +239,12 @@ de depuración:
 estado `pendiente`, `entregado`, `completo`, `vencido` o `cancelado`.
 `/synagent cancel` publica `task.cancel` al destino original únicamente si el
 pedido sigue pendiente.
+
+`/synagent dlq` muestra el índice persistido de mensajes muertos con su `id`,
+causa, hora, harness, estado y payload textual. `/synagent dlq retry <id>`
+publica ese payload sin reconstruirlo una sola vez en el buzón directo de la
+misma sesión. La marca de reintento se persiste antes de publicar: ningún
+registro se reinyecta automáticamente ni admite un segundo reintento.
 
 `/synagent-settings` muestra los valores efectivos de usuario. Permite editar
 cada valor, restablecerlo a su valor heredado o cancelar sin cambios.
@@ -322,20 +332,30 @@ entrega sin texto produce un body vacío. Entregar un evento o una cancelación 
 publica eventos adicionales.
 
 Si una entrega no alcanza `message_start`, o una ya aceptada no se asienta, en
-30 segundos mantiene la barrera y muestra una advertencia. Esto también cubre
-un mensaje interceptado por otro input handler y evita confundir un fallo con
-un preflight o turno lento. El operador puede ejecutar `/synagent resume` para
+30 segundos mantiene la barrera, publica el payload original en la DLQ con
+causa `DELIVERY_TIMEOUT` y muestra una advertencia. Esto también cubre un
+mensaje interceptado por otro input handler y evita confundir un fallo con un
+preflight o turno lento. El operador puede ejecutar `/synagent resume` para
 liberar la cola explícitamente, aceptando orden best-effort desde ese punto.
 
 Antes de encolar un mensaje inyectable, el motor guarda una entrada privada
-`synagent-pending` con el mensaje canónico completo, el id de sesión receptor y
-un marcador estable. Un *resume* de esa misma sesión rehidrata los pendientes
-aceptables en orden. Los pedidos con deadline permanecen en esta cola mientras
-el host está ocupado, fuera de su cola opaca `followUp`; el motor compara
-`Date.now() >= deadline` otra vez inmediatamente antes de `sendUserMessage`.
-Si vencieron, guarda su id como consumido, no los inyecta y publica
-`task.expired`. Una cancelación hace la misma transición consumida sin publicar
-otro evento. Por eso ninguno se rehidrata después de un reinicio.
+`synagent-pending` con el mensaje canónico completo, su payload textual original,
+el id de sesión receptor y un marcador estable. Un *resume* de esa misma sesión
+rehidrata los pendientes aceptables en orden. Los pedidos con deadline
+permanecen en esta cola mientras el host está ocupado, fuera de su cola opaca
+`followUp`; el motor compara `Date.now() >= deadline` otra vez inmediatamente
+antes de `sendUserMessage`. Si vencieron, guarda su id como consumido, no los
+inyecta y publica `task.expired`. Una cancelación hace la misma transición
+consumida sin publicar otro evento. Vencimiento y cancelación son estados
+canónicos, no fallos DLQ, y ninguno se rehidrata después de un reinicio.
+
+Un JSON no parseable se publica con `INVALID_JSON`; un sobre JSON que no cumple
+el contrato, con `INVALID_MESSAGE`; y una excepción de `sendUserMessage`, con
+`DELIVERY_DISPATCH_FAILED`. Cada registro contiene `id`, el `payload` textual
+sin modificar, `cause`, `time` ISO 8601 y `harness`, y se publica con QoS 1. El
+topic DLQ se filtra antes de `parseCanonical`, por lo que sus registros nunca
+entran en la entrega canónica. El índice privado `synagent-dlq` sobrevive al
+resume; `synagent-dlq-retry` conserva la decisión de reintentar una sola vez.
 
 `message_start` confirma únicamente el turno de usuario que contiene el
 marcador y entonces guarda `synagent-delivered`; los reenvíos de ids pendientes
@@ -486,6 +506,25 @@ el TTL y restaura el archivo al cerrar:
 SYNAGENT_OMP_MODEL=anthropic/claude-haiku-5-5 \
 SYNAGENT_PI_MODEL=openai-codex/gpt-6.1-sol \
   npm run verify:request-lifecycle --workspace @a4s/synagent
+```
+
+La comprobación viva de DLQ usa omp 18.11.0, Pi 1.0.3 y el broker propio
+`18329`. Crea con `mkdtemp` una raíz de evidencia privada (`0700`) bajo el
+directorio temporal del sistema, imprime su ruta real y guarda allí la DB.
+`SYNAGENT_LIVE_ROOT` permite elegir explícitamente otra raíz. Para cada host
+publica JSON inválido y fuerza de forma determinista una excepción de
+`sendUserMessage` desde una extensión de verificación temporal creada de forma
+exclusiva (`0600`); el adaptador de producción no contiene un disparador. Exige
+ambos registros QoS 1 con payload intacto, ejecuta `/synagent dlq`, reintenta el
+fallo de despacho una vez y comprueba una sola republicación e inyección. Antes
+de enviar, `lsof` filtrado por PID exige que el proceso use solo `18329` y nunca
+`1884`. Usa los directorios reales únicamente para autenticación y no modifica
+sus archivos:
+
+```sh
+SYNAGENT_OMP_MODEL=anthropic/claude-haiku-5-5 \
+SYNAGENT_PI_MODEL=openai-codex/gpt-6.1-sol \
+  npm run verify:dlq --workspace @a4s/synagent
 ```
 
 Las pruebas de este workspace incluyen el protocolo compartido, los bridges

@@ -5,6 +5,7 @@ import { test } from 'node:test'
 import {
   acceptInbound,
   createCanonical,
+  deadLetterTopic,
   directAddress,
   formatAddress,
   GLOBAL_ADDRESS,
@@ -22,6 +23,7 @@ import {
   MESSAGE_KINDS,
   newId,
   parseAddress,
+  parseDeadLetter,
   parseCanonical,
   PROTOCOL_VERSION,
   projectAddress,
@@ -29,6 +31,7 @@ import {
   repoNameFromOrigin,
   resolveProject,
   resolveProjectWithSource,
+  serializeDeadLetter,
   serialize,
   subscriptions,
   SYNAGENT_SEND_KINDS,
@@ -93,6 +96,24 @@ test('toTopic/legacyTopic', () => {
   assert.equal(toTopic('all'), 'synagent/v1/all')
   assert.throws(() => toTopic('no-es-direccion'), /dirección v1 inválida/)
   assert.equal(legacyTopic('claude'), 'a4s/inbox/claude')
+})
+
+test('DLQ topic and records preserve the original payload and validate causes', () => {
+  assert.equal(deadLetterTopic(identity), 'synagent/v1/dlq/a4s/sess-01HXYZ')
+  const record = {
+    id: 'dlq-1',
+    payload: '  {"broken": ',
+    cause: 'INVALID_JSON',
+    time: '2026-10-15T12:00:00.000Z',
+    harness: 'pion',
+  } as const
+  assert.deepEqual(parseDeadLetter(serializeDeadLetter(record)), record)
+  assert.equal(parseDeadLetter(JSON.stringify({ ...record, payload: '' })).payload, '')
+  assert.throws(
+    () => parseDeadLetter(JSON.stringify({ ...record, cause: 'EXPIRED' })),
+    /causa DLQ inválida/,
+  )
+  assert.throws(() => deadLetterTopic({ project: 'all', instance: 'x' }), /proyecto DLQ inválido/)
 })
 
 test('subscriptions: directo + broadcasts de proyecto/global por defecto; legacy solo explícito', () => {
