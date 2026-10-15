@@ -28,6 +28,7 @@
     ]
   },
   "scripts": {
+    "observer": "tsx observer-cli.ts",
     "test": "tsx --test test/*.test.ts",
     "typecheck": "tsc --noEmit"
   },

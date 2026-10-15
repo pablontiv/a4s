@@ -346,3 +346,55 @@ bin global empacado y la integración Herdr.
 Synagent no ofrece ACK semántico fenceado, replay histórico, event sourcing ni
 alta disponibilidad. MQTT aporta QoS, retención y sesiones persistentes; esas
 garantías no convierten el bus en un log reproducible.
+
+## Observador del bus (CLI de solo lectura)
+
+Desde la raíz del repo, después de `npm ci`:
+
+```sh
+npm run observer --workspace @a4s/synagent -- --output /tmp/synagent.jsonl
+# Otra terminal: intercambiar un pedido y su respuesta entre sesiones.
+# Ctrl-C termina la captura; también admite SIGTERM.
+npm run observer --workspace @a4s/synagent -- --replay /tmp/synagent.jsonl
+```
+
+El modo en vivo se suscribe a `synagent/#` con QoS 1, sesión limpia y sin
+reconexión automática. Solo recibe: no publica mensajes, presencia ni will.
+Los acuses MQTT de recepción no son publicaciones. Un fallo de conexión,
+suscripción o escritura termina el comando con error. El cliente no impone
+ACL: las garantías de acceso del broker son independientes.
+
+Por defecto lee `broker-url` de la configuración de usuario de **omp**,
+`~/.omp/agent/synagent.json`, y finalmente usa `mqtt://127.0.0.1:1884`.
+`PI_CODING_AGENT_DIR` sustituye el directorio de usuario, como en los
+adaptadores. La CLI solo lee settings. `--host pi` selecciona los settings de
+usuario de Pi, incluidos sus settings legacy.
+`--broker-url mqtt://127.0.0.1:1884` sobrescribe el broker para esa captura;
+admite las mismas URLs loopback que los adaptadores. `--help` muestra las
+opciones.
+
+Cada recepción añade una línea JSON con `{topic, received_at, payload}`:
+`received_at` es la hora local ISO 8601 y `payload` es el texto UTF-8 original,
+incluidos sobres desconocidos, `correlation_id` y mensajes que no sean JSON.
+El archivo se abre en append; uno nuevo se crea con permisos `0600`. Contiene
+el contenido completo del bus, potencialmente privado: el operador elige su
+ruta y retención. La captura comienza al confirmar la suscripción; no recupera
+historial del broker. QoS 1 puede producir recepciones duplicadas, que se
+conservan en el archivo y la vista.
+
+La terminal muestra un snapshot agrupado por enlaces `id`/`reply_to` y por
+`correlation_id` cuando exista. Los enlaces transitivos unen las cadenas,
+incluso si el padre llega después del hijo. Las cadenas se ordenan por su
+primera recepción y los mensajes de cada cadena conservan el orden de
+recepción, sin ordenar por el reloj del emisor. Los mensajes sin enlaces
+tienen su propia cadena; el payload se muestra escapado para la terminal.
+Cada recepción redibuja la vista interactiva; al redirigir stdout se escriben
+snapshots sucesivos. La vista en vivo incluye solo las recepciones de esa
+invocación y conserva sus mensajes en memoria.
+
+`--replay ARCHIVO` imprime un único snapshot con el mismo agrupador y
+renderer, leyendo todas las líneas capturadas y sin conectar al broker ni
+leer settings. Para un archivo nuevo, coincide con el último snapshot de su
+captura en vivo; si se reutiliza un archivo, replay incluye también sus
+capturas anteriores. La reproducción es una vista local del JSONL, no un
+reenvío de mensajes ni un replay histórico del bus.

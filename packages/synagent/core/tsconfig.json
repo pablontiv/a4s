@@ -17,6 +17,8 @@
   "//": "El protocolo, los adaptadores Pi y omp, el núcleo puro de Claude y los tests se typecheckean aquí. register.ts (glue del runtime de Claude Code) importa tipos del engine y se valida con `claude plugin validate`.",
   "include": [
     "protocol.ts",
+    "observer.ts",
+    "observer-cli.ts",
     "adapters/claude/hooks/adapter.ts",
     "adapters/pi/**/*.ts",
     "adapters/omp/**/*.ts",
