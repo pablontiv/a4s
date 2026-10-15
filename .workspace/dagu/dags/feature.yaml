@@ -517,11 +517,16 @@ handler_on:
       if git -C "$PRIMARY" show-ref --verify --quiet "refs/heads/$BRANCH"; then
         head=$(git -C "$PRIMARY" rev-parse "refs/heads/$BRANCH")
         if git -C "$PRIMARY" fetch --prune origin; then
+          pr_ref=${PR_NUMBER:-$BRANCH}
           if git -C "$PRIMARY" show-ref --verify --quiet "refs/remotes/origin/$BRANCH" &&
              git -C "$PRIMARY" merge-base --is-ancestor "$head" "origin/$BRANCH"; then
             published=true
           elif git -C "$PRIMARY" show-ref --verify --quiet "refs/remotes/origin/$BASE_BRANCH" &&
                git -C "$PRIMARY" merge-base --is-ancestor "$head" "origin/$BASE_BRANCH"; then
+            published=true
+          elif pr=$(gh pr view "$pr_ref" --json state,headRefOid 2>/dev/null) &&
+               [[ "$(jq -r '.state // empty' <<<"$pr")" == MERGED ]] &&
+               [[ "$(jq -r '.headRefOid // empty' <<<"$pr")" == "$head" ]]; then
             published=true
           fi
         fi
