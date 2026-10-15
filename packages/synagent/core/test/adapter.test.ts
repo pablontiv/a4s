@@ -73,12 +73,12 @@ test('adapter: directAddress y subscriptions', () => {
   assert.equal(directAddress(identity), 'a4s/claude-1')
 
   const plan = subscriptions({ identity })
-  assert.deepEqual(plan.durable, ['synagent/v1/a4s/claude-1'])
-  assert.deepEqual(plan.transient, ['synagent/v1/a4s/all', 'synagent/v1/all'])
+  assert.deepEqual(plan.durable, ['synagent/+/a4s/claude-1'])
+  assert.deepEqual(plan.transient, ['synagent/+/a4s/all', 'synagent/+/all'])
 
   const optOutPlan = subscriptions({ identity, global: false, legacyAddress: 'claude' })
-  assert.deepEqual(optOutPlan.durable, ['synagent/v1/a4s/claude-1', 'a4s/inbox/claude'])
-  assert.deepEqual(optOutPlan.transient, ['synagent/v1/a4s/all'])
+  assert.deepEqual(optOutPlan.durable, ['synagent/+/a4s/claude-1', 'a4s/inbox/claude'])
+  assert.deepEqual(optOutPlan.transient, ['synagent/+/a4s/all'])
 })
 
 test('adapter: isForIdentity filtra por identidad', () => {

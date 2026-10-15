@@ -17,6 +17,7 @@ import type { EngineInterface, PluginOptions, Register } from 'claude-code'
 
 import {
   acceptInbound,
+  assertSupportedTopicVersion,
   directAddress,
   instanceFromHostSession,
   makeOutbound,
@@ -27,6 +28,8 @@ import {
   serialize,
   subscriptions,
   SYNAGENT_SEND_KINDS,
+  toTopic,
+  type CanonicalMessage,
   type Identity,
   type SynagentSendKind,
 } from './adapter'
@@ -137,9 +140,12 @@ function retireLegacySession($: EngineInterface, brokerUrl: string): void {
   })
 }
 
-// Loop JALAR: cada línea stdout es un mensaje canónico; se filtra por `accept`,
-// se deduplica y se inyecta como turno.
-function runJalar(gen: number, $: EngineInterface, argv: readonly string[], accept: (m: ReturnType<typeof parseCanonical>) => boolean): void {
+type BridgeFrame = { topic: string; payload: string }
+
+// Loop JALAR: cada línea stdout es una trama {topic,payload}; la versión se
+// valida antes del parser canónico, luego se filtra por `accept`, se deduplica y
+// se inyecta como turno.
+function runJalar(gen: number, $: EngineInterface, argv: readonly string[], accept: (m: CanonicalMessage) => boolean): void {
   void (async () => {
     try {
       const bridge = $.process.spawn({ argv: [...argv] })
@@ -155,10 +161,34 @@ function runJalar(gen: number, $: EngineInterface, argv: readonly string[], acce
           const line = buf.slice(0, i)
           buf = buf.slice(i + 1)
           if (!line.trim()) continue
+          let frame: BridgeFrame
+          try {
+            const decoded: unknown = JSON.parse(line)
+            if (
+              typeof decoded !== 'object'
+              || decoded === null
+              || !('topic' in decoded)
+              || typeof decoded.topic !== 'string'
+              || !('payload' in decoded)
+              || typeof decoded.payload !== 'string'
+            ) throw new TypeError('trama bridge inválida')
+            frame = { topic: decoded.topic, payload: decoded.payload }
+            assertSupportedTopicVersion(frame.topic)
+          } catch (error) {
+            const code = typeof error === 'object' && error !== null && 'code' in error && typeof error.code === 'string'
+              ? error.code
+              : 'MESSAGE_INVALID'
+            void $.ui.status(`synagent: mensaje rechazado (${code}): ${error instanceof Error ? error.message : String(error)}`)
+            continue
+          }
           let msg
           try {
-            msg = parseCanonical(line)
-          } catch {
+            msg = parseCanonical(frame.payload)
+          } catch (error) {
+            const code = typeof error === 'object' && error !== null && 'code' in error && typeof error.code === 'string'
+              ? error.code
+              : 'MESSAGE_INVALID'
+            void $.ui.status(`synagent: mensaje rechazado (${code}): ${error instanceof Error ? error.message : String(error)}`)
             continue
           }
           if (!accept(msg)) continue
@@ -226,7 +256,18 @@ async function ensureStarted($: EngineInterface, brokerUrl: string, options: Plu
   const durableId = `synagent-${addr.replace(/\//g, ':')}`
   const transientId = `synagent-t-${addr.replace(/\//g, ':')}`
 
-  const argv = ['node', bridgeSub, '--url', brokerUrl, '--durable-id', durableId, '--durable', ...plan.durable]
+  const argv = [
+    'node',
+    bridgeSub,
+    '--url',
+    brokerUrl,
+    '--durable-id',
+    durableId,
+    '--stale-durable',
+    toTopic(addr),
+    '--durable',
+    ...plan.durable,
+  ]
   if (plan.transient.length > 0) argv.push('--transient-id', transientId, '--transient', ...plan.transient)
 
   runJalar(gen, $, argv, msg => acceptInbound(self, msg, { global: globalEnabled }))

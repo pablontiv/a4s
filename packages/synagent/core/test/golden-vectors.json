@@ -1,8 +1,8 @@
 {
-  "//": "Vectores dorados host-neutral (ADR 0069). `wire` es el serialize() canónico EXACTO (orden de claves de createCanonical: id,from,to,kind,body,[reply_to],[correlation_id],[causation_id],ts) — debe re-serializar idéntico. `topic` es toTopic(to) o null para direcciones legacy planas. acceptPlain es acceptInbound() con global=false; acceptGlobal usa el default global habilitado. Cualquier adaptador, actual o futuro, debe reproducir esto.",
+  "//": "Vectores host-neutral v1. routingVectors conserva la conformidad de direccionamiento. schemaVectors pasa primero por el gate de versión del topic y luego por parseCanonical; cada kind tiene un caso válido y uno inválido. Los campos desconocidos del sobre v1 se aceptan y se eliminan del resultado.",
   "identity": { "project": "a4s", "instance": "sess-01" },
   "legacyAddress": "claude",
-  "vectors": [
+  "routingVectors": [
     {
       "name": "directo a mí (task.request)",
       "wire": "{\"id\":\"g1\",\"from\":\"a4s/pi-1\",\"to\":\"a4s/sess-01\",\"kind\":\"task.request\",\"body\":\"hola\",\"ts\":1}",
@@ -65,6 +65,121 @@
       "topic": "synagent/v1/a4s/sess-01",
       "acceptPlain": true,
       "acceptGlobal": true
+    }
+  ],
+  "schemaVectors": [
+    {
+      "name": "task.request válido",
+      "kind": "task.request",
+      "topic": "synagent/v1/a4s/sess-01",
+      "wire": "{\"id\":\"s-request-ok\",\"from\":\"a4s/pi\",\"to\":\"a4s/sess-01\",\"kind\":\"task.request\",\"body\":\"hazlo\",\"correlation_id\":\"s-request-ok\",\"deadline\":1797000000000,\"ts\":1}",
+      "valid": true
+    },
+    {
+      "name": "task.request inválido sin body",
+      "kind": "task.request",
+      "topic": "synagent/v1/a4s/sess-01",
+      "wire": "{\"id\":\"s-request-bad\",\"from\":\"a4s/pi\",\"to\":\"a4s/sess-01\",\"kind\":\"task.request\",\"ts\":1}",
+      "valid": false,
+      "code": "MESSAGE_INVALID"
+    },
+    {
+      "name": "task.redirect válido",
+      "kind": "task.redirect",
+      "topic": "synagent/v1/a4s/sess-01",
+      "wire": "{\"id\":\"s-redirect-ok\",\"from\":\"a4s/pi\",\"to\":\"a4s/sess-01\",\"kind\":\"task.redirect\",\"body\":\"corrige\",\"correlation_id\":\"root\",\"ts\":2}",
+      "valid": true
+    },
+    {
+      "name": "task.redirect inválido body numérico",
+      "kind": "task.redirect",
+      "topic": "synagent/v1/a4s/sess-01",
+      "wire": "{\"id\":\"s-redirect-bad\",\"from\":\"a4s/pi\",\"to\":\"a4s/sess-01\",\"kind\":\"task.redirect\",\"body\":42,\"ts\":2}",
+      "valid": false,
+      "code": "MESSAGE_INVALID"
+    },
+    {
+      "name": "task.cancel válido",
+      "kind": "task.cancel",
+      "topic": "synagent/v1/a4s/sess-01",
+      "wire": "{\"id\":\"s-cancel-ok\",\"from\":\"a4s/pi\",\"to\":\"a4s/sess-01\",\"kind\":\"task.cancel\",\"body\":\"cancelar\",\"reply_to\":\"s-request-ok\",\"correlation_id\":\"s-request-ok\",\"ts\":3}",
+      "valid": true
+    },
+    {
+      "name": "task.cancel inválido reply_to vacío",
+      "kind": "task.cancel",
+      "topic": "synagent/v1/a4s/sess-01",
+      "wire": "{\"id\":\"s-cancel-bad\",\"from\":\"a4s/pi\",\"to\":\"a4s/sess-01\",\"kind\":\"task.cancel\",\"body\":\"cancelar\",\"reply_to\":\"\",\"ts\":3}",
+      "valid": false,
+      "code": "MESSAGE_INVALID"
+    },
+    {
+      "name": "task.delivered válido",
+      "kind": "task.delivered",
+      "topic": "synagent/v1/a4s/sess-01",
+      "wire": "{\"id\":\"s-delivered-ok\",\"from\":\"a4s/pi\",\"to\":\"a4s/sess-01\",\"kind\":\"task.delivered\",\"body\":\"\",\"reply_to\":\"s-request-ok\",\"ts\":4}",
+      "valid": true
+    },
+    {
+      "name": "task.delivered inválido ts string",
+      "kind": "task.delivered",
+      "topic": "synagent/v1/a4s/sess-01",
+      "wire": "{\"id\":\"s-delivered-bad\",\"from\":\"a4s/pi\",\"to\":\"a4s/sess-01\",\"kind\":\"task.delivered\",\"body\":\"\",\"ts\":\"4\"}",
+      "valid": false,
+      "code": "MESSAGE_INVALID"
+    },
+    {
+      "name": "task.completed válido",
+      "kind": "task.completed",
+      "topic": "synagent/v1/a4s/sess-01",
+      "wire": "{\"id\":\"s-completed-ok\",\"from\":\"a4s/pi\",\"to\":\"a4s/sess-01\",\"kind\":\"task.completed\",\"body\":\"hecho\",\"reply_to\":\"s-request-ok\",\"causation_id\":\"s-request-ok\",\"ts\":5}",
+      "valid": true
+    },
+    {
+      "name": "task.completed inválido id vacío",
+      "kind": "task.completed",
+      "topic": "synagent/v1/a4s/sess-01",
+      "wire": "{\"id\":\"\",\"from\":\"a4s/pi\",\"to\":\"a4s/sess-01\",\"kind\":\"task.completed\",\"body\":\"hecho\",\"ts\":5}",
+      "valid": false,
+      "code": "MESSAGE_INVALID"
+    },
+    {
+      "name": "task.expired válido",
+      "kind": "task.expired",
+      "topic": "synagent/v1/a4s/sess-01",
+      "wire": "{\"id\":\"s-expired-ok\",\"from\":\"a4s/pi\",\"to\":\"a4s/sess-01\",\"kind\":\"task.expired\",\"body\":\"vencido\",\"reply_to\":\"s-request-ok\",\"ts\":6}",
+      "valid": true
+    },
+    {
+      "name": "task.expired inválido correlation_id vacío",
+      "kind": "task.expired",
+      "topic": "synagent/v1/a4s/sess-01",
+      "wire": "{\"id\":\"s-expired-bad\",\"from\":\"a4s/pi\",\"to\":\"a4s/sess-01\",\"kind\":\"task.expired\",\"body\":\"vencido\",\"correlation_id\":\"\",\"ts\":6}",
+      "valid": false,
+      "code": "MESSAGE_INVALID"
+    },
+    {
+      "name": "note.published válido con extensiones v1 desconocidas",
+      "kind": "note.published",
+      "topic": "synagent/v1/a4s/sess-01",
+      "wire": "{\"id\":\"s-note-ok\",\"from\":\"a4s/pi\",\"to\":\"a4s/sess-01\",\"kind\":\"note.published\",\"body\":\"nota\\nlínea\",\"ts\":7,\"version\":\"v99\",\"future_optional\":{\"x\":1}}",
+      "valid": true
+    },
+    {
+      "name": "note.published inválido causation_id numérico",
+      "kind": "note.published",
+      "topic": "synagent/v1/a4s/sess-01",
+      "wire": "{\"id\":\"s-note-bad\",\"from\":\"a4s/pi\",\"to\":\"a4s/sess-01\",\"kind\":\"note.published\",\"body\":\"nota\",\"causation_id\":7,\"ts\":7}",
+      "valid": false,
+      "code": "MESSAGE_INVALID"
+    },
+    {
+      "name": "versión de transporte desconocida",
+      "kind": "note.published",
+      "topic": "synagent/v99/a4s/sess-01",
+      "wire": "{\"id\":\"s-version-bad\",\"from\":\"a4s/pi\",\"to\":\"a4s/sess-01\",\"kind\":\"note.published\",\"body\":\"válido bajo v1\",\"ts\":8}",
+      "valid": false,
+      "code": "VERSION_UNSUPPORTED"
     }
   ]
 }

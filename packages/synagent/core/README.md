@@ -57,6 +57,27 @@ Solo `task.request` y `task.redirect` producen eventos; una cancelación o un
 evento nunca produce otro evento. `task.delivered` es un acuse mecánico y se
 consume sin turno; `task.completed` y `task.expired` se inyectan al emisor.
 
+### Esquemas y compatibilidad
+
+`protocol.ts` declara un esquema por cada `kind`; Pi y omp importan esa fuente y
+la copia de Claude se regenera con `adapters/claude/scripts/sync-protocol.mjs`.
+Todo fallo JSON o de esquema usa el código estable `MESSAGE_INVALID`.
+
+La versión pertenece exclusivamente al topic de transporte. Un lector v1 acepta
+campos desconocidos en el sobre, incluido un campo llamado `version`, y los
+elimina al producir `CanonicalMessage`; ese campo no cambia ni declara la
+versión del mensaje. Esta tolerancia permite agregar un campo opcional sin subir
+la versión. Agregar o quitar un `kind`, o cambiar o quitar cualquier campo,
+requiere subir `PROTOCOL_VERSION`.
+
+Los adaptadores publican sólo en `v1`, pero se suscriben con `+` únicamente en
+el nivel de versión para los alcances directo, proyecto y global. Así una
+publicación de otra versión llega al adaptador, se rechaza antes de
+`parseCanonical` y registra `VERSION_UNSUPPORTED` sin entrar en la cola de
+entrega. Ese rechazo de transporte no va a la DLQ: las causas de DLQ permanecen
+`INVALID_JSON`, `INVALID_MESSAGE`, `DELIVERY_DISPATCH_FAILED` y
+`DELIVERY_TIMEOUT`.
+
 ## Direccionamiento v1 (ADR 0068; identidad por ADR 0069)
 
 Topología jerárquica versionada, con la regla `topic == "synagent/" + versión +
@@ -91,10 +112,11 @@ git remote add origin git@github.com:Example/Project.git
   o Pi por proyecto.
 - **`task.redirect`** solo tiene sentido a destino directo; un redirect a
   broadcast se rechaza en el envío y en la recepción.
-- **global** está activo por defecto: ambos adaptadores reciben
-  `synagent/v1/all`; se puede desactivar explícitamente con su setting `global`.
-- Los adaptadores solo se suscriben a topics v1. No crean ni usan suscripciones
-  legacy `a4s/inbox/<address>`.
+- **global** está activo por defecto: ambos adaptadores reciben el filtro
+  `synagent/+/all`; se puede desactivar explícitamente con su setting `global`.
+- Los adaptadores se suscriben a `synagent/+/<to>` para diagnosticar versiones
+  desconocidas, pero sólo publican v1. No crean ni usan suscripciones legacy
+  `a4s/inbox/<address>`.
 
 ## Arrancar el bus
 
@@ -123,11 +145,13 @@ claude --plugin-dir packages/synagent/core/adapters/claude
 ```
 
 - **JALAR (bus → Claude):** spawnea `bridge/bridge-sub.cjs` con dos clientes —
-  uno durable (`clean=false`) suscrito a su buzón directo `synagent/v1/<proyecto>/<instancia>`
-  y uno transitorio (`clean=true`) a los broadcasts de proyecto
-  `synagent/v1/<proyecto>/all` y global `synagent/v1/all`. Reserva y deduplica
-  cada `id`; consume `task.delivered` sin crear un turno e inyecta los demás
-  mensajes, incluido `task.completed`, mediante `$.prompt.submit`.
+  uno durable (`clean=false`) suscrito a su buzón directo
+  `synagent/+/<proyecto>/<instancia>` y uno transitorio (`clean=true`) a los
+  broadcasts `synagent/+/<proyecto>/all` y `synagent/+/all`. El bridge entrega
+  una trama `{topic,payload}` sin cambiar el payload, lo que permite rechazar
+  versiones desconocidas antes del parser. Reserva y deduplica cada `id`;
+  consume `task.delivered` sin crear un turno e inyecta los demás mensajes,
+  incluido `task.completed`, mediante `$.prompt.submit`.
 - **ENVIAR (Claude → bus):** la herramienta `synagent_send` (invocada por el
   modelo) publica `task.request`, `task.redirect` o `note.published`.
   `/mq-send <to>: texto` publica un `task.request` como atajo de depuración. Si la identidad
@@ -351,11 +375,12 @@ canónicos, no fallos DLQ, y ninguno se rehidrata después de un reinicio.
 
 Un JSON no parseable se publica con `INVALID_JSON`; un sobre JSON que no cumple
 el contrato, con `INVALID_MESSAGE`; y una excepción de `sendUserMessage`, con
-`DELIVERY_DISPATCH_FAILED`. Cada registro contiene `id`, el `payload` textual
-sin modificar, `cause`, `time` ISO 8601 y `harness`, y se publica con QoS 1. El
-topic DLQ se filtra antes de `parseCanonical`, por lo que sus registros nunca
-entran en la entrega canónica. El índice privado `synagent-dlq` sobrevive al
-resume; `synagent-dlq-retry` conserva la decisión de reintentar una sola vez.
+`DELIVERY_DISPATCH_FAILED`. `VERSION_UNSUPPORTED` es un rechazo de transporte y
+no se publica en DLQ. Cada registro DLQ contiene `id`, el `payload` textual sin
+modificar, `cause`, `time` ISO 8601 y `harness`, y se publica con QoS 1. El topic
+DLQ se filtra antes de `parseCanonical`, por lo que sus registros nunca entran
+en la entrega canónica. El índice privado `synagent-dlq` sobrevive al resume;
+`synagent-dlq-retry` conserva la decisión de reintentar una sola vez.
 
 `message_start` confirma únicamente el turno de usuario que contiene el
 marcador y entonces guarda `synagent-delivered`; los reenvíos de ids pendientes
@@ -525,6 +550,19 @@ sus archivos:
 SYNAGENT_OMP_MODEL=anthropic/claude-haiku-5-5 \
 SYNAGENT_PI_MODEL=openai-codex/gpt-6.1-sol \
   npm run verify:dlq --workspace @a4s/synagent
+```
+
+La comprobación viva del esquema versionado usa un broker propio en `18330` y
+una DB dentro de una raíz privada creada con `mkdtemp`. En omp 18.11.0 y Pi
+1.0.3 confirma mediante `lsof` filtrado por PID que sólo existe conexión al
+puerto `18330` antes de publicar. Después recorre directo, proyecto y global:
+los v1 llegan una vez, los v99 producen `VERSION_UNSUPPORTED` sin alcanzar el
+parser ni la DLQ, y un JSON malformado produce `MESSAGE_INVALID` y
+`INVALID_JSON` en DLQ. Usa los directorios reales únicamente para autenticación,
+sin copiar ni modificar sus archivos:
+
+```sh
+npm run verify:protocol-schema --workspace @a4s/synagent
 ```
 
 Las pruebas de este workspace incluyen el protocolo compartido, los bridges

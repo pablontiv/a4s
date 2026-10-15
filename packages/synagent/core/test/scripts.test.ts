@@ -126,9 +126,9 @@ test('scripts de Claude v1: bridges arrancan y hacen round-trip real', async (t)
     join(BRIDGE, 'bridge-sub.cjs'),
     '--url', url,
     '--durable-id', 'd1',
-    '--durable', 'synagent/v1/a4s/claude-1',
+    '--durable', 'synagent/+/a4s/claude-1',
     '--transient-id', 't1',
-    '--transient', 'synagent/v1/a4s/all', 'synagent/v1/all',
+    '--transient', 'synagent/+/a4s/all', 'synagent/+/all',
   ]) as ChildProcessWithoutNullStreams
   procs.push(sub)
 
@@ -136,8 +136,12 @@ test('scripts de Claude v1: bridges arrancan y hacen round-trip real', async (t)
   // orden (durable/transient se suscriben en paralelo).
   await waitForAll(sub, 'stderr', [/suscrito durable:/, /suscrito transient:/])
 
-  // Esperamos a recibir un mensaje canónico en stdout
-  const gotLine = waitFor(sub, 'stdout', /\{.*"id"\s*:\s*"v1-test-1".*\}/)
+  // Esperamos una trama JSONL que preserve topic y payload exacto.
+  const gotLine = waitFor(
+    sub,
+    'stdout',
+    /\{"topic":"synagent\/v1\/a4s\/claude-1","payload":.*\}\n/,
+  )
 
   // Publicar un mensaje canónico al topic directo de Claude
   const payload = JSON.stringify({
@@ -145,7 +149,7 @@ test('scripts de Claude v1: bridges arrancan y hacen round-trip real', async (t)
     from: 'a4s/pi-1',
     to: 'a4s/claude-1',
     kind: 'task.request',
-    body: 'hola desde scripts.test (v1)',
+    body: 'hola desde scripts.test (v1)\nlínea intacta',
     ts: Date.now(),
   })
 
@@ -159,13 +163,15 @@ test('scripts de Claude v1: bridges arrancan y hacen round-trip real', async (t)
   const pubExit: number = await new Promise((res) => pub.on('exit', (c) => res(c ?? -1)))
   assert.equal(pubExit, 0, 'bridge-pub.cjs debe salir 0 (PUBACK)')
 
-  const line = (await gotLine)[0]
-  const msg = JSON.parse(line) as { id: string; to: string; from: string; kind: string; body: string }
+  const frame = JSON.parse((await gotLine)[0]) as { topic: string; payload: string }
+  assert.equal(frame.topic, 'synagent/v1/a4s/claude-1')
+  assert.equal(frame.payload, payload)
+  const msg = JSON.parse(frame.payload) as { id: string; to: string; from: string; kind: string; body: string }
   assert.equal(msg.id, 'v1-test-1')
   assert.equal(msg.to, 'a4s/claude-1')
   assert.equal(msg.from, 'a4s/pi-1')
   assert.equal(msg.kind, 'task.request')
-  assert.equal(msg.body, 'hola desde scripts.test (v1)')
+  assert.equal(msg.body, 'hola desde scripts.test (v1)\nlínea intacta')
 })
 
 test('scripts de Claude v1: la migración elimina la sesión durable histórica con su clientId exacto', async (t) => {
@@ -245,9 +251,9 @@ test('scripts de Claude v1: bridge-sub soporta clientes durable + transient', as
     join(BRIDGE, 'bridge-sub.cjs'),
     '--url', url,
     '--durable-id', 'd-test-2',
-    '--durable', 'synagent/v1/a4s/test-2',
+    '--durable', 'synagent/+/a4s/test-2',
     '--transient-id', 't-test-2',
-    '--transient', 'synagent/v1/a4s/all',
+    '--transient', 'synagent/+/a4s/all',
   ]) as ChildProcessWithoutNullStreams
   procs.push(sub)
 
@@ -255,9 +261,9 @@ test('scripts de Claude v1: bridge-sub soporta clientes durable + transient', as
   // va al transient (clean=true, online-only), que debe estar activo o se pierde.
   await waitForAll(sub, 'stderr', [/suscrito durable:/, /suscrito transient:/], 15000)
 
-  // Preparar dos esperas en paralelo: una para mensaje directo, otra para broadcast
-  const gotDirect = waitFor(sub, 'stdout', /\{.*"id"\s*:\s*"direct-msg".*\}/)
-  const gotBroadcast = waitFor(sub, 'stdout', /\{.*"id"\s*:\s*"broadcast-msg".*\}/)
+  // Preparar dos esperas en paralelo sin asumir orden entre clientes.
+  const gotDirect = waitFor(sub, 'stdout', /\{"topic":"synagent\/v1\/a4s\/test-2","payload":.*\}\n/)
+  const gotBroadcast = waitFor(sub, 'stdout', /\{"topic":"synagent\/v1\/a4s\/all","payload":.*\}\n/)
 
   // Publicar al topic directo (durable)
   const directPayload = JSON.stringify({
@@ -299,14 +305,18 @@ test('scripts de Claude v1: bridge-sub soporta clientes durable + transient', as
   const exit2: number = await new Promise((resolve) => pub2.on('exit', (code) => resolve(code ?? 0)))
   assert.equal(exit2, 0, 'bridge-pub broadcast debe salir 0')
 
-  // Verificar que ambos mensajes llegaron
-  const directLine = (await gotDirect)[0]
-  const directMsg = JSON.parse(directLine) as { id: string; body: string }
+  // Verificar que ambas tramas conservaron topic y payload.
+  const directFrame = JSON.parse((await gotDirect)[0]) as { topic: string; payload: string }
+  assert.equal(directFrame.topic, 'synagent/v1/a4s/test-2')
+  assert.equal(directFrame.payload, directPayload)
+  const directMsg = JSON.parse(directFrame.payload) as { id: string; body: string }
   assert.equal(directMsg.id, 'direct-msg')
   assert.equal(directMsg.body, 'msg directo')
 
-  const broadcastLine = (await gotBroadcast)[0]
-  const broadcastMsg = JSON.parse(broadcastLine) as { id: string; body: string }
+  const broadcastFrame = JSON.parse((await gotBroadcast)[0]) as { topic: string; payload: string }
+  assert.equal(broadcastFrame.topic, 'synagent/v1/a4s/all')
+  assert.equal(broadcastFrame.payload, broadcastPayload)
+  const broadcastMsg = JSON.parse(broadcastFrame.payload) as { id: string; body: string }
   assert.equal(broadcastMsg.id, 'broadcast-msg')
   assert.equal(broadcastMsg.body, 'msg broadcast')
 })
