@@ -6,10 +6,9 @@
 //   ENVIAR — herramienta synagent_send (invocada por el modelo) publica al bus.
 //
 // IDENTIDAD (ADR 0069): la instancia sale de $.session.id() (única por sesión →
-// sin colisión aunque haya cientos de sesiones); el proyecto, de un setting del
-// host (userConfig `project`), del workspace del cwd exacto, o del remoto `origin`
-// del repo ($.session.repo()). NADA de env ni de launcher. Si no se resuelve, el
-// adaptador queda inactivo.
+// sin colisión aunque haya cientos de sesiones); el proyecto, del remoto
+// remote.origin.url del repo ($.session.repo()). Si no se resuelve, el
+// adaptador queda inactivo con remediación para configurar remote.origin.url.
 //
 // Topología v1: synagent/v1/<proyecto>/<instancia> (directo, durable),
 // /all (proyecto, transient), synagent/v1/all (global, transient por defecto).
@@ -24,7 +23,6 @@ import {
   MESSAGE_KINDS,
   newId,
   parseCanonical,
-  readWorkspaceProject,
   renderForAgent,
   resolveProjectWithSource,
   serialize,
@@ -96,24 +94,12 @@ function resolveBrokerUrl(options: PluginOptions): string {
 
 // Identidad SOLO de APIs nativas de sesión (ADR 0069). Lanza si no resuelve.
 // instancia = $.session.id() (única por sesión);
-// proyecto = setting del host > workspace del cwd exacto > remoto origin.
+// proyecto = remote.origin.url.
 async function resolveIdentity(
   $: EngineInterface,
-  options: PluginOptions,
 ): Promise<{ identity: Identity; source: ReturnType<typeof resolveProjectWithSource>['source'] }> {
-  const setting = optString(options, 'project')
-  let resolved: ReturnType<typeof resolveProjectWithSource>
-  if (setting?.trim()) {
-    resolved = resolveProjectWithSource({ setting })
-  } else {
-    const workspace = readWorkspaceProject(await $.session.cwd())
-    if (workspace !== undefined) {
-      resolved = resolveProjectWithSource({ workspace })
-    } else {
-      const repo = await $.session.repo()
-      resolved = resolveProjectWithSource({ ...(repo?.remote ? { origin: repo.remote } : {}) })
-    }
-  }
+  const repo = await $.session.repo()
+  const resolved = resolveProjectWithSource({ ...(repo?.remote ? { origin: repo.remote } : {}) })
   const instance = instanceFromHostSession(await $.session.id())
   return { identity: { project: resolved.project, instance }, source: resolved.source }
 }
@@ -220,7 +206,7 @@ async function ensureStarted($: EngineInterface, brokerUrl: string, options: Plu
 
   let activation: Awaited<ReturnType<typeof resolveIdentity>>
   try {
-    activation = await resolveIdentity($, options)
+    activation = await resolveIdentity($)
     identity = activation.identity
     globalEnabled = options['global'] !== false && options['global'] !== 'false'
   } catch (err) {
@@ -228,7 +214,7 @@ async function ensureStarted($: EngineInterface, brokerUrl: string, options: Plu
     globalEnabled = true
     started = false
     void $.ui.status(
-      `synagent: identidad no resuelta (${err instanceof Error ? err.message : String(err)}); adaptador inactivo`,
+      `synagent: identidad no resuelta (${err instanceof Error ? err.message : String(err)}); inactive=true; configura remote.origin.url`,
     )
     return
   }
@@ -323,7 +309,7 @@ export const register: Register = (on, options) => {
     const a = e as unknown as Record<string, unknown>
     if (a.tool !== 'mcp__synagent-adapter-mqtt__synagent_send') return next(e)
     const result = (text: string, isError = false) => ({ result: text, ...(isError && { isError }) })
-    if (!identity) return result('error: identidad v1 no resuelta; configura el setting project, workspace o remoto origin del repo', true)
+    if (!identity) return result('error: identidad v1 no resuelta; configura remote.origin.url del repo', true)
     const to = typeof a.to === 'string' ? a.to : ''
     const body = typeof a.body === 'string' ? a.body : ''
     const kind = typeof a.kind === 'string' ? a.kind : 'prompt'

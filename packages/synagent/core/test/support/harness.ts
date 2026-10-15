@@ -1,6 +1,7 @@
 import net from 'node:net'
 import { randomUUID } from 'node:crypto'
 import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -132,7 +133,6 @@ export async function closeServer(server: net.Server): Promise<void> {
 
 export function createHarness(
   adapterFactory: AdapterFactory,
-  agentDirName: '.pi' | '.omp',
   overrides: Record<string, unknown>,
   initialEntries: Array<{ type: 'custom'; customType: string; data: Record<string, string> }> = [],
   sessionId = `session-${randomUUID()}`,
@@ -152,6 +152,10 @@ export function createHarness(
   const agentDir = mkdtempSync(join(tmpdir(), 'synagent-agent-'))
   const ownedCwd = cwd ? undefined : mkdtempSync(join(tmpdir(), 'synagent-cwd-'))
   const effectiveCwd = cwd ?? ownedCwd!
+  if (ownedCwd) {
+    execFileSync('git', ['init', '-q'], { cwd: effectiveCwd })
+    execFileSync('git', ['remote', 'add', 'origin', 'git@github.com:pablontiv/a4s.git'], { cwd: effectiveCwd })
+  }
   const globalSettingsPath = join(agentDir, 'synagent.json')
   const initialSettings = Object.fromEntries(Object.entries(overrides).map(([key, value]) => [
     key.replace(/^a4s\.synagent\./, ''),
@@ -225,7 +229,6 @@ export function createHarness(
     agentDir,
     cwd: effectiveCwd,
     globalSettingsPath,
-    projectSettingsPath: join(effectiveCwd, agentDirName, 'synagent.json'),
     settingKeys: ([] as string[])[Symbol.iterator](),
     toolSchemas: { get: (name: string) => tools.get(name)?.parameters },
     selectionOptions,

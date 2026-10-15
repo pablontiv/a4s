@@ -2,9 +2,6 @@
 // Regenerar: node adapters/claude/scripts/sync-protocol.mjs (desde packages/synagent/core).
 // El plugin se instala copiándose solo; por eso lleva su propia copia del contrato.
 
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
-
 // Contrato canónico de synagent, direccionamiento v1 y CORE host-neutral de
 // adaptadores (ADR 0069, supera a 0068).
 //
@@ -20,8 +17,8 @@ import { join } from 'node:path'
 // IDENTIDAD (ADR 0069): cada binding la deriva de APIs NATIVAS de sesión del
 // host, NO de variables de entorno ni de un launcher. La instancia viene del id
 // de sesión nativo (único por sesión → sin colisión aunque haya cientos); el
-// proyecto, de un setting del host o de la identidad canónica del repo. El alias
-// humano/tab es solo presentación, nunca identidad.
+// proyecto, del remoto remote.origin.url del repo. El alias humano/tab es solo
+// presentación, nunca identidad.
 //
 // CONTRATO DE ADAPTADOR (extensible a hosts futuros): un adaptador provee un
 // HarnessBinding (identity/reserve/deliver) y un transporte Publish/Subscribe;
@@ -185,68 +182,22 @@ export function repoNameFromOrigin(origin: string): string | null {
   return name && isToken(name) ? name : null
 }
 
-// Identidad compartida opcional, leída solo desde el cwd exacto. La ausencia
-// del archivo no es error; cualquier archivo presente debe cumplir el contrato
-// estricto `{ "workspace": "<token-v1>" }` sin campos adicionales.
-export function readWorkspaceProject(cwd: string): string | undefined {
-  const configPath = join(cwd, '.workspace', 'config', 'synagent.json')
-  let contents: string
-  try {
-    contents = readFileSync(configPath, 'utf8')
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
-    throw error
-  }
-
-  let config: unknown
-  try {
-    config = JSON.parse(contents)
-  } catch {
-    throw new Error(`configuración de workspace no es JSON válido: ${configPath}`)
-  }
-  if (!config || typeof config !== 'object' || Array.isArray(config)) {
-    throw new Error(`configuración de workspace debe tener exactamente { "workspace": "<token-v1>" }: ${configPath}`)
-  }
-  const keys = Object.keys(config)
-  if (keys.length !== 1 || keys[0] !== 'workspace') {
-    throw new Error(`configuración de workspace debe tener exactamente { "workspace": "<token-v1>" }: ${configPath}`)
-  }
-  const workspace = (config as Record<string, unknown>).workspace
-  if (typeof workspace !== 'string' || !isToken(workspace)) {
-    throw new Error(`workspace no es un token válido en configuración: ${configPath}`)
-  }
-  return workspace
-}
-
-// Proyecto: setting del host > workspace exacto > nombre canónico del repo
-// (origin). FALLA explícito si no hay ninguno (sin env, basename ni saneado).
+// Proyecto: nombre canónico del repo desde remote.origin.url.
+// FALLA explícito si no es válido (sin env, basename ni saneado).
 export function resolveProjectWithSource(options: {
-  setting?: string
-  workspace?: string
   origin?: string
-}): { project: string; source: 'setting' | 'workspace' | 'origin' } {
-  const setting = options.setting?.trim()
-  if (setting) {
-    if (!isToken(setting)) throw new Error(`proyecto (setting) no es un token válido: ${setting}`)
-    return { project: setting, source: 'setting' }
-  }
-  if (options.workspace !== undefined) {
-    if (typeof options.workspace !== 'string' || !isToken(options.workspace)) {
-      throw new Error('workspace no es un token válido')
-    }
-    return { project: options.workspace, source: 'workspace' }
-  }
+}): { project: string; source: 'origin' } {
   const origin = options.origin?.trim()
   if (origin) {
     const name = repoNameFromOrigin(origin)
-    if (!name) throw new Error(`no se pudo derivar un proyecto-token del remoto origin: ${origin}`)
+    if (!name) throw new Error(`no se pudo derivar un proyecto-token de remote.origin.url: ${origin}`)
     return { project: name, source: 'origin' }
   }
-  throw new Error('no se pudo resolver <proyecto>: define un setting, workspace o remoto origin del repo')
+  throw new Error('no se pudo resolver <proyecto>: configura remote.origin.url del repo')
 }
 
 // API histórica para callers que solo necesitan el proyecto como string.
-export function resolveProject(options: { setting?: string; workspace?: string; origin?: string }): string {
+export function resolveProject(options: { origin?: string }): string {
   return resolveProjectWithSource(options).project
 }
 

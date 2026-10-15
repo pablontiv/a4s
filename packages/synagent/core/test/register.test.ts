@@ -6,9 +6,6 @@
 // borra en runtime), así que se puede cargar bajo tsx con un `$` falso.
 // (Excluido del tsc del paquete en tsconfig: su único import de valor es ./adapter.)
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 import { test } from 'node:test'
 
 import { register } from '../adapters/claude/hooks/register.ts'
@@ -38,14 +35,6 @@ function collectHooks(options: Record<string, unknown> = {}, registerHook: Regis
     return found.hook
   }
   return { entries, get }
-}
-
-function makeWorkspaceConfig(contents: string): { cwd: string; cleanup: () => void } {
-  const cwd = mkdtempSync(join(tmpdir(), 'synagent-claude-workspace-'))
-  const configDir = join(cwd, '.workspace', 'config')
-  mkdirSync(configDir, { recursive: true })
-  writeFileSync(join(configDir, 'synagent.json'), contents)
-  return { cwd, cleanup: () => rmSync(cwd, { recursive: true, force: true }) }
 }
 
 function makeEngine() {
@@ -88,132 +77,27 @@ function makeEngine() {
   return { $, runCalls, spawnArgs, toolRegistered, commandRegistered, statuses }
 }
 
-test('register activates Claude from exact-cwd workspace without Git', async () => {
-  const workspace = makeWorkspaceConfig('{"workspace":"Shared.Workspace"}\n')
-  try {
-    const eng = makeEngine()
-    let repoCalls = 0
-    eng.$.session.cwd = async () => workspace.cwd
-    eng.$.session.repo = async () => {
-      repoCalls += 1
-      return undefined as never
-    }
-    const freshRegister = await loadFreshRegister()
-    const { get } = collectHooks({}, freshRegister)
-
-    await get('session.start')(eng.$, {}, (event: unknown) => event)
-
-    assert.ok(eng.spawnArgs[0]?.includes('synagent/v1/Shared.Workspace/sess-test-1'), 'suscribe con el token del workspace')
-    assert.ok(eng.spawnArgs[0]?.includes('synagent/v1/Shared.Workspace/all'), 'suscribe al broadcast del workspace')
-    assert.equal(repoCalls, 0, 'no consulta Git cuando el workspace resuelve el proyecto')
-    assert.ok(eng.statuses.some(status => status.includes('source=workspace')), 'informa workspace como fuente efectiva')
-  } finally {
-    workspace.cleanup()
-  }
+test('register resolves identity from origin and reports its source', async () => {
+  const eng = makeEngine()
+  const { get } = collectHooks({}, await loadFreshRegister())
+  await get('session.start')(eng.$, {}, (event: unknown) => event)
+  assert.ok(eng.spawnArgs[0]?.includes('synagent/v1/a4s/sess-test-1'))
+  assert.ok(eng.statuses.some(status => status.includes('source=origin')))
 })
 
-test('register project setting wins over an invalid workspace', async () => {
-  const workspace = makeWorkspaceConfig('{"workspace":"invalid workspace"}\n')
-  try {
-    const eng = makeEngine()
-    let cwdCalls = 0
-    let repoCalls = 0
-    eng.$.session.cwd = async () => {
-      cwdCalls += 1
-      return workspace.cwd
-    }
-    eng.$.session.repo = async () => {
-      repoCalls += 1
-      return { remote: 'https://github.com/acme/origin-fallback.git', root: workspace.cwd, internal: true, name: 'acme/origin-fallback' }
-    }
-    const freshRegister = await loadFreshRegister()
-    const { get } = collectHooks({ project: 'Configured.Project' }, freshRegister)
-
-    await get('session.start')(eng.$, {}, (event: unknown) => event)
-
-    assert.ok(eng.spawnArgs[0]?.includes('synagent/v1/Configured.Project/sess-test-1'), 'suscribe con el setting explícito')
-    assert.equal(cwdCalls, 0, 'no lee el workspace cuando existe un setting')
-    assert.equal(repoCalls, 0, 'no consulta Git cuando existe un setting')
-    assert.ok(eng.statuses.some(status => status.includes('source=setting')), 'informa setting como fuente efectiva')
-  } finally {
-    workspace.cleanup()
-  }
+test('register stays inactive with remote.origin.url remediation without origin', async () => {
+  const eng = makeEngine()
+  eng.$.session.repo = async () => undefined as never
+  const { get } = collectHooks({}, await loadFreshRegister())
+  await get('session.start')(eng.$, {}, (event: unknown) => event)
+  assert.equal(eng.spawnArgs.length, 0)
+  assert.ok(eng.statuses.some(status => status.includes('inactive=true') && status.includes('remote.origin.url')))
 })
 
-test('register whitespace-only project falls through to exact-cwd workspace', async () => {
-  const workspace = makeWorkspaceConfig('{"workspace":"Whitespace.Workspace"}\n')
-  try {
-    const eng = makeEngine()
-    let repoCalls = 0
-    eng.$.session.cwd = async () => workspace.cwd
-    eng.$.session.repo = async () => {
-      repoCalls += 1
-      return undefined as never
-    }
-    const freshRegister = await loadFreshRegister()
-    const { get } = collectHooks({ project: ' \t ' }, freshRegister)
-
-    await get('session.start')(eng.$, {}, (event: unknown) => event)
-
-    assert.ok(eng.spawnArgs[0]?.includes('synagent/v1/Whitespace.Workspace/sess-test-1'), 'usa el workspace para project vacío tras trim')
-    assert.equal(repoCalls, 0, 'no consulta Git cuando el workspace resuelve el proyecto')
-    assert.ok(eng.statuses.some(status => status.includes('source=workspace')), 'informa workspace como fuente efectiva')
-  } finally {
-    workspace.cleanup()
-  }
-})
-
-test('register whitespace-only project falls through to Git origin without workspace', async () => {
-  const cwd = mkdtempSync(join(tmpdir(), 'synagent-claude-whitespace-origin-'))
-  try {
-    const eng = makeEngine()
-    let repoCalls = 0
-    eng.$.session.cwd = async () => cwd
-    eng.$.session.repo = async () => {
-      repoCalls += 1
-      return { remote: 'https://github.com/acme/Whitespace.Origin.git', root: cwd, internal: true, name: 'acme/Whitespace.Origin' }
-    }
-    const freshRegister = await loadFreshRegister()
-    const { get } = collectHooks({ project: '   ' }, freshRegister)
-
-    await get('session.start')(eng.$, {}, (event: unknown) => event)
-
-    assert.ok(eng.spawnArgs[0]?.includes('synagent/v1/Whitespace.Origin/sess-test-1'), 'usa origin cuando no existe workspace')
-    assert.equal(repoCalls, 1, 'consulta Git tras project vacío y workspace ausente')
-    assert.ok(eng.statuses.some(status => status.includes('source=origin')), 'informa origin como fuente efectiva')
-  } finally {
-    rmSync(cwd, { recursive: true, force: true })
-  }
-})
-
-test('register rejects invalid workspace without disclosing it or falling back to origin', async () => {
-  const secret = 'DO_NOT_LEAK_CLAUDE_WORKSPACE_SECRET!'
-  const workspace = makeWorkspaceConfig(`${JSON.stringify({ workspace: secret })}\n`)
-  try {
-    const eng = makeEngine()
-    let repoCalls = 0
-    eng.$.session.cwd = async () => workspace.cwd
-    eng.$.session.repo = async () => {
-      repoCalls += 1
-      return { remote: 'https://github.com/acme/origin-fallback.git', root: workspace.cwd, internal: true, name: 'acme/origin-fallback' }
-    }
-    const freshRegister = await loadFreshRegister()
-    const { get } = collectHooks({}, freshRegister)
-
-    await get('session.start')(eng.$, {}, (event: unknown) => event)
-
-    assert.equal(eng.spawnArgs.length, 0, 'un workspace inválido deja el adaptador inactivo')
-    assert.equal(repoCalls, 0, 'no oculta el workspace inválido con un fallback a origin')
-    assert.ok(eng.statuses.some(status => status.includes('workspace no es un token válido') && status.includes('adaptador inactivo')))
-    assert.ok(!eng.statuses.some(status => status.includes(secret)), 'no expone el workspace inválido en estado UI')
-  } finally {
-    workspace.cleanup()
-  }
-})
 
 test('register: session.start resuelve identidad y registra synagent_send + /mq-send', async () => {
   const eng = makeEngine()
-  const { get } = collectHooks({ project: 'a4s', instance: 'claude-1' })
+  const { get } = collectHooks()
   const next = async (e: unknown) => e
   await get('session.start')(eng.$, {}, next)
 
@@ -237,7 +121,7 @@ test('register: evita retiradas simultáneas durante una activación', async () 
     return { exitCode: 0, stdout: '{}', stderr: '' }
   }
   const freshRegister = await loadFreshRegister()
-  const { get } = collectHooks({ project: 'a4s' }, freshRegister)
+  const { get } = collectHooks({}, freshRegister)
   const next = async (e: unknown) => e
 
   const first = get('session.start')(eng.$, {}, next)
@@ -276,7 +160,7 @@ test('register: restablece la marca y reintenta tras error', async () => {
     return { exitCode: 0, stdout: '{}', stderr: '' }
   }
   const freshRegister = await loadFreshRegister()
-  const { get } = collectHooks({ project: 'a4s' }, freshRegister)
+  const { get } = collectHooks({}, freshRegister)
   const next = (e: unknown) => e
 
   await get('session.start')(eng.$, {}, next)
@@ -289,7 +173,7 @@ test('register: restablece la marca y reintenta tras error', async () => {
 
 test('register: tool.call enruta por el nombre MCP exacto, lee args de e y publica v1', async () => {
   const eng = makeEngine()
-  const { get } = collectHooks({ project: 'a4s', instance: 'claude-1' })
+  const { get } = collectHooks()
   const next = async (e: unknown) => e
   await get('session.start')(eng.$, {}, next)
 
@@ -308,7 +192,7 @@ test('register: tool.call enruta por el nombre MCP exacto, lee args de e y publi
 
 test('register: tool.call ajeno pasa de largo con next', async () => {
   const eng = makeEngine()
-  const { get } = collectHooks({ project: 'a4s', instance: 'claude-1' })
+  const { get } = collectHooks()
   const next = async (e: unknown) => ({ passed: true, e })
   await get('session.start')(eng.$, {}, (x: unknown) => x)
 
@@ -318,7 +202,7 @@ test('register: tool.call ajeno pasa de largo con next', async () => {
 
 test('register: prompt.compose añade una sección con la clave `text`', async () => {
   const eng = makeEngine()
-  const { get } = collectHooks({ project: 'a4s', instance: 'claude-1' })
+  const { get } = collectHooks()
   await get('session.start')(eng.$, {}, (x: unknown) => x)
 
   const next = async () => ({ sections: [{ id: 'otra', scope: 'session', text: 'x' }] })
@@ -333,7 +217,7 @@ test('register: prompt.compose añade una sección con la clave `text`', async (
 
 test('register: brokerUrl no-loopback se rechaza y cae al default', async () => {
   const eng = makeEngine()
-  const { get } = collectHooks({ project: 'a4s', instance: 'claude-1', brokerUrl: 'mqtt://evil.example.com:1884' })
+  const { get } = collectHooks({ brokerUrl: 'mqtt://evil.example.com:1884' })
   await get('session.start')(eng.$, {}, (x: unknown) => x)
   assert.ok(eng.statuses.some(s => /no loopback/.test(s)), 'debe avisar del rechazo')
 })
@@ -391,7 +275,7 @@ test('register: /clear (session id nuevo sin session.start) re-resuelve identida
     prompt: { submit: async () => {} },
     ui: { status: () => {} },
   }
-  const { get } = collectHooks({ project: 'a4s' })
+  const { get } = collectHooks()
   const next = async (e: unknown) => e
 
   // Arranque normal para sess-A: el bridge queda vivo (no termina solo).

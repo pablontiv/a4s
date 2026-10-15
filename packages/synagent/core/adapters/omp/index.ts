@@ -16,7 +16,7 @@ const OMP_HOST: SynagentAdapterHost = {
   scopeName: 'a4s.synagent.omp',
   diagnosticEventPrefix: 'synagent.omp',
   settleEventName: 'agent_end',
-  settingsPaths: cwd => settingsPaths(cwd, undefined, { agentDirName: '.omp', legacySettings: false }),
+  settingsPaths: () => settingsPaths(undefined, { agentDirName: '.omp', legacySettings: false }),
   bindSettle(pi, release) {
     pi.on('agent_end', (event, ctx) => {
       if ('willContinue' in event && event.willContinue === true) return

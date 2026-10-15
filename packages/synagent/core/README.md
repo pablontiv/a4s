@@ -41,31 +41,20 @@ Topología jerárquica versionada, con la regla `topic == "synagent/" + versión
 | `<proyecto>/all` | `synagent/v1/<proyecto>/all` | todo el proyecto |
 | `all` | `synagent/v1/all` | global (activo por defecto) |
 
-### Identidad compartida de workspace
+### Identidad desde origin
 
-Synagent puede resolver el token de proyecto desde el archivo
-`<cwd>/.workspace/config/synagent.json` del directorio de trabajo exacto:
+Synagent deriva el token de proyecto de `remote.origin.url` del repositorio
+del cwd de la sesión: el último segmento del remoto, sin `.git`, debe ser un
+token v1 válido. Pi, omp y Claude comparten esta resolución y muestran
+`source=origin`. Si falta un origin válido, el adaptador queda inactivo y la
+remediación pide configurar `remote.origin.url`, por ejemplo:
 
-```json
-{
-  "workspace": "Example.Workspace"
-}
+```sh
+git remote add origin git@github.com:Example/Project.git
 ```
 
-La precedencia es: setting explícito `project` del host, workspace y remoto Git
-`origin`. No busca el archivo en directorios ancestros. Si el archivo existe
-pero el JSON, su forma exacta o el token v1 son inválidos, la resolución falla
-sin recurrir a Git; un setting explícito gana antes de leerlo. Los estados de
-los adaptadores identifican la fuente efectiva como `source=setting`,
-`source=workspace` o `source=origin`.
-
-Workspace es solo otra fuente del token de proyecto; el direccionamiento v1 no
-cambia: `<workspace>/<instance>`, `<workspace>/all` y sus topics
-`synagent/v1/...` conservan las mismas reglas.
-
-- **proyecto**: token determinista; setting del host > workspace del cwd exacto
-  > nombre canónico del repo del remoto `origin` (nunca el basename del cwd ni
-  una variable de entorno). Falla explícito si no hay fuente válida.
+- **proyecto**: nombre canónico del repo del remoto `origin`, determinista
+  para todos los hosts que trabajan en ese repo.
 - **instancia**: id de sesión **nativo** del harness (`$.session.id()` en Claude,
   `getSessionId()` en Pi), único por sesión — un *resume* conserva el id, un
   *new*/*fork* obtiene otro. No se persiste ni se deriva de entorno: se arranca
@@ -140,7 +129,6 @@ no forma parte del plugin Claude: sigue siendo la aplicación separada
 | Clave | Default | Uso |
 | --- | --- | --- |
 | `brokerUrl` | `mqtt://127.0.0.1:1884` | URL loopback del broker. |
-| `project` | derivado | Token de proyecto v1 (si vacío: workspace del cwd exacto y luego remoto `origin`). |
 | `global` | `true` | Suscribirse al broadcast global `synagent/v1/all`; `false` lo desactiva. |
 
 La instancia **no** es configurable: sale del id de sesión nativo
@@ -184,14 +172,11 @@ entre sí. En
 `session_shutdown` cancela sus listeners y cierra ambas conexiones
 idempotentemente sin borrar la suscripción durable.
 
-El proyecto sale primero de la configuración nativa de Synagent. Si está vacío,
-usa el workspace del `ctx.cwd` exacto y, solo si ese archivo no existe, deriva
-el `remote.origin.url` canónico leído en ese mismo cwd. No usa el cwd del
-proceso ni su basename. Si no resuelve, muestra un warning y queda inactivo,
-sin suscripciones ni publicación. Los intentos de envío piden configurar el
-proyecto. El estado de `/synagent status` muestra `inactive=true`. Se remedia
-con `/synagent-settings`, con `/synagent set project <token>`, con un archivo
-`.workspace/config/synagent.json` válido o con un `remote.origin.url` válido.
+El proyecto se deriva de `remote.origin.url` leído en el `ctx.cwd` de la sesión.
+Si no resuelve, muestra un warning y queda inactivo, sin suscripciones ni
+publicación. Los intentos de envío piden configurar `remote.origin.url`.
+`/synagent status` muestra la identidad y `source=origin`, o `inactive=true`
+con la remediación correspondiente.
 
 ### Envío y comandos Pi
 
@@ -207,70 +192,58 @@ de depuración:
 /synagent enable|disable
 /synagent resume
 /synagent set broker-url <mqtt://loopback:puerto>
-/synagent set project <token>
 /synagent set global <true|false>
 /synagent set default-peer <address>
 ```
 
-`/synagent-settings` muestra los valores efectivos. Permite editar cada valor.
-Permite restablecer un valor a su valor heredado. Permite cancelar sin cambios.
+`/synagent-settings` muestra los valores efectivos de usuario. Permite editar
+cada valor, restablecerlo a su valor heredado o cancelar sin cambios.
 `enabled` y `global` usan una selección booleana. `broker-url` y
-`default-peer` usan entradas validadas. `project` acepta un token explícito.
-Un valor vacío de `project` restaura la derivación desde Git.
+`default-peer` usan entradas validadas.
 
-Los subcomandos de `/synagent` conservan las automatizaciones existentes.
-`/synagent set project` persiste en el ámbito de proyecto. Los otros
-subcomandos persisten en el ámbito global. Los cambios de `enabled`,
-`broker-url`, `project` o `global` ejecutan una reconfiguración MQTT. Un cambio
-de `default-peer` no reinicia MQTT. Al cambiar los topics durables, el adaptador
+Todos los subcomandos de configuración persisten en el ámbito de usuario.
+Los cambios de `enabled`, `broker-url` o `global` ejecutan una reconfiguración MQTT.
+Un cambio de `default-peer` no reinicia MQTT. Al cambiar los topics durables, el adaptador
 elimina las suscripciones obsoletas antes de usar las nuevas. Reintenta esa
 limpieza al reconectar. El cambio descarta mensajes aún no enviados de la
 configuración anterior. Una entrega ya pasada a Pi no se puede cancelar.
 Permanece como barrera de orden hasta que la sesión se asienta.
 
-### Configuración nativa de Pi
+### Configuración nativa de Pi y omp
 
 | Clave | Default | Ámbito de escritura |
 | --- | --- | --- |
-| `enabled` | `true` | global |
-| `broker-url` | `mqtt://127.0.0.1:1884` | global |
-| `project` | derivado del workspace o remoto `origin` | proyecto |
-| `global` | `true` | global |
-| `default-peer` | `claude` | global |
+| `enabled` | `true` | usuario |
+| `broker-url` | `mqtt://127.0.0.1:1884` | usuario |
+| `global` | `true` | usuario |
+| `default-peer` | `claude` | usuario |
 
-El archivo global es `<agent-dir>/synagent.json`. El adaptador usa el valor no
-vacío de `PI_CODING_AGENT_DIR` como `<agent-dir>`. Si la variable está vacía o
-no existe, usa `~/.pi/agent`. El archivo de proyecto es
-`<ctx.cwd>/.pi/synagent.json`. El adaptador sólo lee, crea o modifica el archivo
-de proyecto cuando Pi indica que el proyecto es confiable.
+El archivo de usuario es `<agent-dir>/synagent.json`. El adaptador usa el valor
+no vacío de `PI_CODING_AGENT_DIR` como `<agent-dir>`. En su defecto usa
+`~/.pi/agent` en Pi y `~/.omp/agent` en omp.
 
-Cada archivo contiene un objeto JSON plano. Puede contener una o más de las
-cinco claves. Este ejemplo muestra el formato completo:
+El archivo contiene un objeto JSON plano con una o más de las cuatro claves.
+Este ejemplo muestra el formato completo:
 
 ```json
 {
   "enabled": true,
   "broker-url": "mqtt://127.0.0.1:1884",
-  "project": "Example.Project",
   "global": true,
   "default-peer": "claude"
 }
 ```
 
-El adaptador resuelve cada clave por separado. Usa este orden: archivo nuevo de
-proyecto, archivo nuevo global, `extensionSettings` legacy de proyecto,
-`extensionSettings` legacy global y default. Ignora los archivos de proyecto
-cuando el proyecto no es confiable.
+El adaptador resuelve cada clave por separado: archivo de usuario, valores
+legacy de usuario (Pi) y default. Los cambios se conservan al arrancar otra sesión.
 
-Si un archivo `synagent.json` no existe, el adaptador migra las cinco claves
-`a4s.synagent.*` conocidas desde el `settings.json` del mismo ámbito. No copia
-otras claves. No modifica `settings.json`. No migra una URL MQTT que no sea
-loopback. La escritura usa un archivo temporal y un cambio de nombre atómico.
-El adaptador crea los directorios necesarios. El archivo global usa modo
-`0600`.
+En Pi, si falta `synagent.json`, el adaptador migra las cuatro claves
+`a4s.synagent.*` conocidas desde el `settings.json` de usuario. Conserva el
+archivo original y valida los valores antes de migrarlos. La escritura usa
+un archivo temporal y un cambio de nombre atómico, crea los directorios
+necesarios y aplica modo `0600` al archivo de usuario.
 
-No existe una clave de instancia. El adaptador no usa variables de entorno
-`SYNAGENT_*`. Mientras el broker no tenga autenticación, acepta únicamente URLs
+Mientras el broker no tenga autenticación, el adaptador acepta únicamente URLs
 `mqtt://` de loopback sin credenciales. Si la URL configurada no cumple esa
 restricción, muestra un warning y usa el default seguro
 `mqtt://127.0.0.1:1884`. Los tokens v1 son sensibles a mayúsculas y admiten
