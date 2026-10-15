@@ -1,14 +1,16 @@
 // Cobertura del GLUE de runtime del adaptador Claude (register.ts), el punto más
 // frágil: el nombre exacto del tool MCP, que los args se leen ESPARCIDOS en `e`
-// (no en e.input), el topic v1 publicado, y que prompt.compose usa la clave
+// (no en e.input), el topic v2 publicado, y que prompt.compose usa la clave
 // `text`. Un error aquí dejaría synagent_send como no-op silencioso con el resto
 // de la suite en verde. register.ts importa `claude-code` solo como tipo (se
 // borra en runtime), así que se puede cargar bajo tsx con un `$` falso.
 // (Excluido del tsc del paquete en tsconfig: su único import de valor es ./adapter.)
 import assert from 'node:assert/strict'
+import { EventEmitter, once } from 'node:events'
 import { test } from 'node:test'
 
 import { register } from '../adapters/claude/hooks/register.ts'
+import { createCanonical, parseCanonical, serialize, toTopic, type CanonicalMessage } from '../adapters/claude/hooks/adapter.ts'
 
 type Hook = (...a: unknown[]) => unknown
 type Entry = { event: string; matcher: unknown; hook: Hook }
@@ -47,6 +49,7 @@ function makeEngine(
   const toolRegistered: Array<Record<string, unknown>> = []
   const commandRegistered: string[] = []
   const statuses: string[] = []
+  const submitted: Array<{ text: string }> = []
   const $ = {
     plugin: { root: '/fake/plugin' },
     // Sin `env`: si register.ts leyera una variable de entorno, fallaría aquí
@@ -68,7 +71,7 @@ function makeEngine(
         return { exitCode: 0, stdout: '{"published":true}', stderr: '' }
       },
       // bridge-sub: iterable asíncrono que termina de inmediato (sin mensajes).
-      spawn: (req: { argv: readonly string[] }) => {
+      spawn: (req: { argv: readonly string[] }): AsyncGenerator<{ stream: 'stdout' | 'stderr'; text: string }> => {
         spawnArgs.push([...req.argv])
         return (async function* () {
           for (const chunk of chunks) yield chunk
@@ -77,10 +80,15 @@ function makeEngine(
     },
     tool: { register: async (def: Record<string, unknown>) => void toolRegistered.push(def) },
     command: { register: async (def: { name: string }) => void commandRegistered.push(def.name) },
-    prompt: { submit },
+    prompt: {
+      submit: async (value: { text: string }) => {
+        submitted.push(value)
+        await submit(value)
+      },
+    },
     ui: { status: (s: string) => void statuses.push(s) },
   }
-  return { $, runCalls, spawnArgs, toolRegistered, commandRegistered, statuses }
+  return { $, runCalls, spawnArgs, toolRegistered, commandRegistered, statuses, submitted }
 }
 
 test('register resolves identity from origin and reports its source', async () => {
@@ -109,6 +117,7 @@ test('register: session.start resuelve identidad y registra synagent_send + /mq-
 
   assert.ok(eng.toolRegistered.some(d => d.name === 'synagent_send'), 'synagent_send debe registrarse')
   assert.ok(eng.commandRegistered.includes('mq-send'), '/mq-send debe registrarse')
+  assert.ok(eng.commandRegistered.includes('synagent-offer'), '/synagent-offer debe registrarse')
   assert.ok(eng.spawnArgs[0]?.includes('synagent/+/a4s/sess-test-1'), 'suscribe al buzón directo con versión wildcard')
   assert.ok(eng.spawnArgs[0]?.includes('synagent/+/a4s/all'), 'suscribe al broadcast de proyecto')
   assert.ok(eng.spawnArgs[0]?.includes('synagent/+/all'), 'suscribe al broadcast global por defecto')
@@ -177,7 +186,7 @@ test('register: restablece la marca y reintenta tras error', async () => {
   assert.ok(eng.statuses.some(s => s.includes('broker ausente')), 'informa el error de la primera retirada')
 })
 
-test('register: tool.call enruta por el nombre MCP exacto, lee args de e y publica v1', async () => {
+test('register: tool.call enruta por el nombre MCP exacto, lee args de e y publica v2', async () => {
   const eng = makeEngine()
   const { get } = collectHooks()
   const next = async (e: unknown) => e
@@ -198,7 +207,7 @@ test('register: tool.call enruta por el nombre MCP exacto, lee args de e y publi
 
   const pub = eng.runCalls.find(c => c.some(a => a.includes('bridge-pub.cjs')))
   assert.ok(pub, 'debe invocar bridge-pub')
-  assert.equal(pub.includes('synagent/v1/a4s/pi-1'), true, 'topic v1 == synagent/v1/<to>')
+  assert.equal(pub.includes('synagent/v2/a4s/pi-1'), true, 'topic v2 == synagent/v2/<to>')
   const payload = pub.find(a => a.startsWith('{') && a.includes('"to":"a4s/pi-1"'))
   assert.ok(payload, 'payload canónico presente')
   assert.ok(payload.includes('"kind":"task.request"'), 'payload canónico con kind de comando')
@@ -249,8 +258,8 @@ test('register: bridge gatea versión antes del parser y conserva payload con ne
   })
   const frames = [
     { topic: 'synagent/v99/a4s/sess-test-1', payload },
-    { topic: 'synagent/v1/a4s/sess-test-1', payload: '{' },
-    { topic: 'synagent/v1/a4s/sess-test-1', payload },
+    { topic: 'synagent/v2/a4s/sess-test-1', payload: '{' },
+    { topic: 'synagent/v2/a4s/sess-test-1', payload },
   ]
   const delivered = Promise.withResolvers<string>()
   const eng = makeEngine([{
@@ -342,4 +351,159 @@ test('register: /clear (session id nuevo sin session.start) re-resuelve identida
 
   // Limpieza: detener el bridge vivo para no filtrar estado ni handles.
   await bridges[bridges.length - 1]?.return()
+})
+
+function gatedBridge() {
+  const events = new EventEmitter()
+  const iterable = (async function* () {
+    const [value] = await once(events, 'data')
+    assert.equal(typeof value, 'string')
+    yield { stream: 'stdout' as const, text: value }
+    events.emit('done')
+  })()
+  return {
+    async feed(messages: CanonicalMessage[]) {
+      const done = once(events, 'done')
+      const frames = messages.map(message => JSON.stringify({
+        topic: toTopic(message.to),
+        payload: serialize(message),
+      }))
+      events.emit('data', `${frames.join('\n')}\n`)
+      await done
+    },
+    iterable,
+  }
+}
+
+function publishedMessages(calls: string[][]): CanonicalMessage[] {
+  return calls
+    .filter(call => call.some(value => value.includes('bridge-pub.cjs')))
+    .map(call => {
+      const payload = call.find(value => value.startsWith('{') && value.includes('"kind"'))
+      assert.ok(payload)
+      return parseCanonical(payload)
+    })
+}
+
+test('register: Claude idle with acceptOffers claims mechanically without a model turn', async () => {
+  const eng = makeEngine()
+  const bridge = gatedBridge()
+  eng.$.process.spawn = (request: { argv: readonly string[] }) => {
+    eng.spawnArgs.push([...request.argv])
+    return bridge.iterable
+  }
+  const { get } = collectHooks({ acceptOffers: true }, await loadFreshRegister())
+  await get('session.start')(eng.$, {}, (event: unknown) => event)
+  const offer = createCanonical('mechanical work', {
+    id: 'offer-claude-idle',
+    from: 'a4s/offerer',
+    to: 'a4s/all',
+    kind: 'task.offer',
+    ts: 1,
+  })
+  await bridge.feed([offer])
+
+  const claims = publishedMessages(eng.runCalls).filter(message => message.kind === 'task.claim')
+  assert.equal(claims.length, 1)
+  assert.equal(claims[0]?.from, 'a4s/sess-test-1')
+  assert.equal(claims[0]?.to, offer.from)
+  assert.equal(claims[0]?.reply_to, offer.id)
+  assert.equal(claims[0]?.correlation_id, offer.id)
+  assert.equal(eng.submitted.length, 0)
+})
+
+test('register: Claude offer arbitration assigns its first claim and closes every later claim', async () => {
+  const eng = makeEngine()
+  const bridge = gatedBridge()
+  eng.$.process.spawn = (request: { argv: readonly string[] }) => {
+    eng.spawnArgs.push([...request.argv])
+    return bridge.iterable
+  }
+  const { get } = collectHooks({}, await loadFreshRegister())
+  const next = async (event: unknown) => event
+  await get('session.start')(eng.$, {}, next)
+  const result = await get('tool.call')(eng.$, {
+    tool: 'mcp__synagent-adapter-mqtt__synagent_send',
+    to: 'a4s/all',
+    body: 'Claude offered work',
+    kind: 'task.offer',
+  }, next)
+  assert.ok(
+    typeof result === 'object'
+    && result !== null
+    && 'result' in result
+    && typeof result.result === 'string',
+  )
+  assert.match(result.result, /^enviado /)
+  const offer = publishedMessages(eng.runCalls).find(message => message.kind === 'task.offer')
+  assert.ok(offer)
+
+  const first = createCanonical('claude-claim-first', {
+    id: 'claude-claim-first',
+    from: 'a4s/pi',
+    to: 'a4s/sess-test-1',
+    kind: 'task.claim',
+    reply_to: offer.id,
+    correlation_id: offer.id,
+    causation_id: offer.id,
+    ts: 2,
+  })
+  const later = createCanonical('claude-claim-later', {
+    id: 'claude-claim-later',
+    from: 'a4s/omp',
+    to: 'a4s/sess-test-1',
+    kind: 'task.claim',
+    reply_to: offer.id,
+    correlation_id: offer.id,
+    causation_id: offer.id,
+    ts: 3,
+  })
+  await bridge.feed([first, later, first])
+
+  const related = publishedMessages(eng.runCalls).filter(message => message.correlation_id === offer.id)
+  const assignments = related.filter(message => message.kind === 'task.request')
+  const closed = related.filter(message => message.kind === 'task.offer.closed')
+  assert.equal(assignments.length, 1)
+  assert.equal(closed.length, 1)
+  assert.equal(assignments[0]?.to, first.from)
+  assert.equal(assignments[0]?.body, offer.body)
+  assert.equal(assignments[0]?.causation_id, first.id)
+  assert.equal(closed[0]?.to, later.from)
+  assert.equal(closed[0]?.reply_to, later.id)
+  assert.equal(closed[0]?.body, `Oferta ya asignada: ${offer.id}`)
+  assert.equal(eng.submitted.length, 0)
+})
+
+test('register: Claude does not claim while busy or when acceptOffers is off', async () => {
+  for (const scenario of [
+    { acceptOffers: true, busy: true, id: 'busy' },
+    { acceptOffers: false, busy: false, id: 'off' },
+  ]) {
+    const eng = makeEngine()
+    const bridge = gatedBridge()
+    eng.$.process.spawn = (request: { argv: readonly string[] }) => {
+      eng.spawnArgs.push([...request.argv])
+      return bridge.iterable
+    }
+    const { get } = collectHooks(
+      { acceptOffers: scenario.acceptOffers },
+      await loadFreshRegister(),
+    )
+    const next = async (event: unknown) => event
+    await get('session.start')(eng.$, {}, next)
+    if (scenario.busy) await get('prompt.submit')(eng.$, {}, next)
+    await bridge.feed([createCanonical(`offer-${scenario.id}`, {
+      id: `offer-${scenario.id}`,
+      from: 'a4s/offerer',
+      to: 'a4s/all',
+      kind: 'task.offer',
+      ts: 1,
+    })])
+    assert.equal(
+      publishedMessages(eng.runCalls).some(message => message.kind === 'task.claim'),
+      false,
+      scenario.id,
+    )
+    assert.equal(eng.submitted.length, 0)
+  }
 })

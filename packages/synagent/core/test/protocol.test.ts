@@ -1,4 +1,4 @@
-// Pruebas del contrato compartido v1 + core host-neutral (ADR 0069).
+// Pruebas del contrato compartido v2 + core host-neutral (ADR 0069).
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
@@ -98,13 +98,13 @@ test('isAddress/isBroadcast/formatAddress', () => {
 
 test('toTopic/legacyTopic', () => {
   assert.equal(toTopic('a4s/claude-1'), `synagent/${PROTOCOL_VERSION}/a4s/claude-1`)
-  assert.equal(toTopic('all'), 'synagent/v1/all')
-  assert.throws(() => toTopic('no-es-direccion'), /dirección v1 inválida/)
+  assert.equal(toTopic('all'), 'synagent/v2/all')
+  assert.throws(() => toTopic('no-es-direccion'), /dirección inválida/)
   assert.equal(legacyTopic('claude'), 'a4s/inbox/claude')
 })
 
 test('DLQ topic and records preserve the original payload and validate causes', () => {
-  assert.equal(deadLetterTopic(identity), 'synagent/v1/dlq/a4s/sess-01HXYZ')
+  assert.equal(deadLetterTopic(identity), 'synagent/v2/dlq/a4s/sess-01HXYZ')
   const record = {
     id: 'dlq-1',
     payload: '  {"broken": ',
@@ -134,12 +134,18 @@ test('received topics match wildcard structurally and gate transport version bef
   assert.equal(topicMatchesFilter('synagent/+/a4s/sess-01HXYZ', 'synagent/v99/a4s/sess-01HXYZ'), true)
   assert.equal(topicMatchesFilter('synagent/+/a4s/sess-01HXYZ', 'synagent/v99/a4s/other'), false)
   assert.equal(topicMatchesAnyFilter(['synagent/+/all'], 'synagent/v99/all'), true)
-  assert.deepEqual(parseCanonicalTopic('synagent/v1/a4s/all'), { version: 'v1', to: 'a4s/all' })
+  assert.deepEqual(parseCanonicalTopic('synagent/v2/a4s/all'), { version: 'v2', to: 'a4s/all' })
   assert.deepEqual(parseCanonicalTopic('synagent/v99/all'), { version: 'v99', to: 'all' })
-  assert.equal(parseCanonicalTopic('synagent/v1/dlq/a4s/sess-01HXYZ'), null)
-  assert.doesNotThrow(() => assertSupportedTopicVersion('synagent/v1/a4s/sess-01HXYZ'))
+  assert.equal(parseCanonicalTopic('synagent/v2/dlq/a4s/sess-01HXYZ'), null)
+  assert.doesNotThrow(() => assertSupportedTopicVersion('synagent/v2/a4s/sess-01HXYZ'))
   assert.throws(
     () => assertSupportedTopicVersion('synagent/v99/a4s/sess-01HXYZ'),
+    (error: unknown) => error instanceof Error
+      && 'code' in error
+      && error.code === 'VERSION_UNSUPPORTED',
+  )
+  assert.throws(
+    () => assertSupportedTopicVersion('synagent/v1/a4s/sess-01HXYZ'),
     (error: unknown) => error instanceof Error
       && 'code' in error
       && error.code === 'VERSION_UNSUPPORTED',
@@ -199,12 +205,12 @@ test('instanceFromHostSession: id de sesión nativo tal cual; falla si no es tok
 
 test('makeOutbound correlates root commands and rejects broadcast task.redirect', () => {
   const { topic, message } = makeOutbound(identity, 'a4s/pi-1', { body: 'hola', id: 'm9', ts: 5 })
-  assert.equal(topic, 'synagent/v1/a4s/pi-1')
+  assert.equal(topic, 'synagent/v2/a4s/pi-1')
   assert.equal(message.from, 'a4s/sess-01HXYZ')
   assert.equal(message.to, 'a4s/pi-1')
   assert.equal(message.kind, 'task.request')
   assert.equal(message.correlation_id, 'm9')
-  assert.throws(() => makeOutbound(identity, 'no-dir', { body: 'x', id: 'm', ts: 1 }), /dirección v1 inválida/)
+  assert.throws(() => makeOutbound(identity, 'no-dir', { body: 'x', id: 'm', ts: 1 }), /dirección inválida/)
   assert.throws(() => makeOutbound(identity, 'a4s/all', {
     body: 'x', kind: 'task.redirect', id: 'm', ts: 1,
   }), /task\.redirect solo/)
@@ -259,7 +265,7 @@ test('parseCanonical accepts legacy addresses and validates optional causal and 
   assert.equal(GLOBAL_ADDRESS, 'all')
 })
 
-test('parseCanonical uses per-kind schemas, reports stable codes, and ignores v1 extension fields', () => {
+test('parseCanonical uses per-kind schemas, reports stable codes, and ignores v2 extension fields', () => {
   assert.deepEqual(Object.keys(MESSAGE_SCHEMAS), MESSAGE_KINDS)
   for (const kind of MESSAGE_KINDS) assert.equal(MESSAGE_SCHEMAS[kind].kind, kind)
   const parsed = parseCanonical(JSON.stringify({
@@ -282,14 +288,27 @@ test('parseCanonical uses per-kind schemas, reports stable codes, and ignores v1
   )
 })
 
-test('message kinds distinguish commands, adapter events, and LLM-sendable notes', () => {
+test('message kinds distinguish v2 offer commands, adapter events, and LLM-sendable notes', () => {
   assert.deepEqual(MESSAGE_KINDS, [
-    'task.request', 'task.redirect', 'task.cancel',
-    'task.delivered', 'task.completed', 'task.expired', 'note.published',
+    'task.request', 'task.redirect', 'task.offer', 'task.claim', 'task.cancel',
+    'task.delivered', 'task.completed', 'task.expired', 'task.offer.closed', 'note.published',
   ])
-  assert.deepEqual(SYNAGENT_SEND_KINDS, ['task.request', 'task.redirect', 'task.cancel', 'note.published'])
-  assert.equal(isCommandKind('task.request'), true)
-  assert.equal(isCommandKind('task.cancel'), true)
-  assert.equal(isCommandKind('task.completed'), false)
-  assert.equal(isEventKind('task.expired'), true)
+  assert.deepEqual(SYNAGENT_SEND_KINDS, [
+    'task.request', 'task.redirect', 'task.cancel', 'task.offer', 'note.published',
+  ])
+  for (const kind of ['task.offer', 'task.claim', 'task.offer.closed'] as const) {
+    const parsed = parseCanonical(JSON.stringify({
+      id: `id-${kind}`,
+      from: 'a4s/pi-1',
+      to: kind === 'task.offer' ? 'a4s/all' : 'a4s/offerer',
+      kind,
+      body: kind,
+      ts: 1,
+    }))
+    assert.equal(parsed.kind, kind)
+  }
+  assert.equal(PROTOCOL_VERSION, 'v2')
+  assert.equal(isCommandKind('task.offer'), true)
+  assert.equal(isCommandKind('task.claim'), true)
+  assert.equal(isEventKind('task.offer.closed'), true)
 })

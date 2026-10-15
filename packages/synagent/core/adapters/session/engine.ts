@@ -62,6 +62,7 @@ const MAX_SEEN = 1000
 const SEEN_ENTRY = 'synagent-delivered'
 const PENDING_ENTRY = 'synagent-pending'
 const REQUEST_ENTRY = 'synagent-request'
+const OFFER_ENTRY = 'synagent-offer'
 const DEAD_LETTER_ENTRY = 'synagent-dlq'
 const DEAD_LETTER_RETRY_ENTRY = 'synagent-dlq-retry'
 // Topics durables efectivamente suscritos; sirve para limpiar stale tras cambiar de identidad.
@@ -74,6 +75,15 @@ type PendingEntry = { message: CanonicalMessage; marker: string; payload: string
 type QueuedDelivery = PendingEntry & { generation: number }
 type DeadLetterEntry = { record: DeadLetterRecord; retriedAt?: string }
 type DeadLetterRetryEntry = { id: string; retriedAt: string }
+type OfferClaim = { closed: boolean; from: string; id: string }
+type OutgoingOffer = {
+  assignedClaimId?: string
+  assignedTo?: string
+  assignmentSent: boolean
+  body: string
+  claims: OfferClaim[]
+  id: string
+}
 type RequestStatus = 'pending' | 'delivered' | 'completed' | 'expired' | 'cancelled'
 type RequestEntry = {
   deadline?: number
@@ -178,20 +188,22 @@ function synagentAdapter(
   const deadLetters = new Map<string, DeadLetterEntry>()
   const deadLetteredMessageIds = new Set<string>()
   const requests = new Map<string, RequestEntry>()
+  const outgoingOffers = new Map<string, OutgoingOffer>()
 
   pi.registerTool({
     name: 'synagent_send',
     label: 'Send Synagent message',
     description:
-      'Send a task command or published note to another agent through Synagent v1. '
+      'Send a task command or published note to another agent through Synagent v2. '
       + 'Use only when the user asks to message another agent or project. The body must be self-contained.',
     parameters: Type.Object({
-      to: Type.String({ description: 'v1 address: <project>/<instance>, <project>/all, or all.' }),
+      to: Type.String({ description: 'Canonical address: <project>/<instance>, <project>/all, or all.' }),
       body: Type.String({ description: 'Self-contained message body.' }),
       kind: Type.Optional(Type.Union([
         Type.Literal('task.request'),
         Type.Literal('task.redirect'),
         Type.Literal('task.cancel'),
+        Type.Literal('task.offer'),
         Type.Literal('note.published'),
       ], { description: 'Message kind; defaults to task.request.' })),
       reply_to: Type.Optional(Type.String({ description: 'Message id being replied to or cancelled.' })),
@@ -243,7 +255,8 @@ function synagentAdapter(
         const requestTtl = settings['request-ttl'] === undefined ? 'none' : `${settings['request-ttl']}s`
         ctx.ui.notify(
           `Synagent ${state}; ${identityStatus} global=${settings.global} `
-          + `peer=${settings['default-peer']} broker=${settings['broker-url']} request-ttl=${requestTtl}`,
+          + `peer=${settings['default-peer']} broker=${settings['broker-url']} request-ttl=${requestTtl} `
+          + `accept-offers=${settings['accept-offers']}`,
           'info',
         )
         return
@@ -323,10 +336,24 @@ function synagentAdapter(
         drainDeliveries(ctx)
         return
       }
+      if (action === 'offer' && key) {
+        if (!identity) {
+          ctx.ui.notify('Synagent cannot offer: identity unresolved; configure remote.origin.url', 'error')
+          return
+        }
+        const result = await send({
+          to: `${identity.project}/all`,
+          body: [key, ...rest].join(' '),
+          kind: 'task.offer',
+        }, ctx)
+        ctx.ui.notify(result.message, result.ok ? 'info' : 'error')
+        return
+      }
       if (action !== 'set' || !key || rest.length === 0) {
         ctx.ui.notify(
-          'Usage: /synagent status|pending|dlq|dlq retry <id>|cancel <request-id>|enable|disable|resume|set '
-          + '<enabled|broker-url|global|default-peer|request-ttl> <value>',
+          'Usage: /synagent status|pending|dlq|dlq retry <id>|cancel <request-id>|offer <text>|'
+          + 'enable|disable|resume|set '
+          + '<enabled|broker-url|global|default-peer|request-ttl|accept-offers> <value>',
           'warning',
         )
         return
@@ -465,6 +492,7 @@ function synagentAdapter(
       reply_to?: string
       correlation_id?: string
       causation_id?: string
+      internal?: boolean
     },
     ctx: ExtensionContext,
   ): Promise<SendResult> {
@@ -497,8 +525,14 @@ function synagentAdapter(
     if (!active?.connected) return reject('MQTT_DISCONNECTED', 'Synagent is not connected', 'mqtt.connect')
     const to = resolveDestination(params.to, identity)
     if (!to) return reject('DESTINATION_INVALID', `Invalid Synagent address: ${params.to}`)
-    if (!SYNAGENT_SEND_KINDS.includes(kind as SynagentSendKind)) {
+    if (!params.internal && !SYNAGENT_SEND_KINDS.includes(kind as SynagentSendKind)) {
       return reject('MESSAGE_KIND_INVALID', `Invalid Synagent kind: ${kind}`)
+    }
+    if (!MESSAGE_KINDS.includes(kind as MessageKind)) {
+      return reject('MESSAGE_KIND_INVALID', `Invalid Synagent kind: ${kind}`)
+    }
+    if (kind === 'task.offer' && to !== `${identity.project}/all`) {
+      return reject('OFFER_DESTINATION_INVALID', `Synagent task.offer requires destination ${identity.project}/all`)
     }
     if (kind === 'task.cancel' && !params.reply_to) {
       return reject('CANCELLATION_TARGET_REQUIRED', 'Synagent task.cancel requires reply_to')
@@ -513,7 +547,7 @@ function synagentAdapter(
     try {
       const outbound = makeOutbound(identity, to, {
         body: params.body,
-        kind: kind as SynagentSendKind,
+        kind: kind as MessageKind,
         id: newId(directAddress(identity), ts),
         ts,
         ...(params.reply_to ? { replyTo: params.reply_to } : {}),
@@ -522,6 +556,14 @@ function synagentAdapter(
         ...(deadline === undefined ? {} : { deadline }),
       })
       messageId = outbound.message.id
+      if (outbound.message.kind === 'task.offer') {
+        persistOffer({
+          assignmentSent: false,
+          body: outbound.message.body,
+          claims: [],
+          id: outbound.message.id,
+        }, ctx, true)
+      }
       await publish(active, outbound.topic, serialize(outbound.message))
       if (isTaskRequestKind(outbound.message.kind)) recordOutgoingRequest(outbound.message, ctx)
       if (outbound.message.kind === 'task.cancel' && outbound.message.reply_to) {
@@ -621,7 +663,12 @@ function synagentAdapter(
     persistSetting(paths, key, value)
     const next = loadSynagentSettings(paths)
     settings = next
-    if (Object.is(previous, next[key]) || key === 'default-peer' || key === 'request-ttl') return
+    if (
+      Object.is(previous, next[key])
+      || key === 'default-peer'
+      || key === 'request-ttl'
+      || key === 'accept-offers'
+    ) return
     void restart(ctx, key === 'enabled' ? next.enabled === false : true).then(() => requeuePending(ctx))
   }
 
@@ -631,7 +678,12 @@ function synagentAdapter(
     resetSetting(paths, key)
     const next = loadSynagentSettings(paths)
     settings = next
-    if (Object.is(previous, next[key]) || key === 'default-peer' || key === 'request-ttl') return
+    if (
+      Object.is(previous, next[key])
+      || key === 'default-peer'
+      || key === 'request-ttl'
+      || key === 'accept-offers'
+    ) return
     void restart(ctx, key === 'enabled' ? next.enabled === false : true).then(() => requeuePending(ctx))
   }
 
@@ -652,6 +704,7 @@ function synagentAdapter(
         `Global broadcast: ${settings.global}`,
         `Default peer: ${settings['default-peer']}`,
         `Request TTL: ${settings['request-ttl'] === undefined ? 'none' : settings['request-ttl']}`,
+        `Accept offers: ${settings['accept-offers']}`,
         'Reset a setting',
         'Cancel',
       ])
@@ -683,9 +736,14 @@ function synagentAdapter(
           if (value !== undefined) {
             await applySetting('request-ttl', parseSettingValue('request-ttl', value) as number, ctx)
           }
+        } else if (choice.startsWith('Accept offers:')) {
+          const selected = await ctx.ui.select('Synagent accept offers', ['true', 'false', 'Cancel'])
+          if (selected && selected !== 'Cancel') {
+            await applySetting('accept-offers', parseSettingValue('accept-offers', selected) as boolean, ctx)
+          }
         } else if (choice === 'Reset a setting') {
           const selected = await ctx.ui.select('Reset Synagent setting', [
-            'enabled', 'broker-url', 'global', 'default-peer', 'request-ttl', 'Cancel',
+            'enabled', 'broker-url', 'global', 'default-peer', 'request-ttl', 'accept-offers', 'Cancel',
           ])
           if (selected && selected !== 'Cancel') {
             const key = requireSettingKey(selected)
@@ -740,15 +798,17 @@ function synagentAdapter(
 
     const global = settings.global
 
-    // Sin identidad v1 no hay ningún topic seguro al que suscribirse.
+    // Sin identidad no hay ningún topic seguro al que suscribirse.
     let plan: SubscriptionPlan
     let obsoleteV1DirectTopic: string | undefined
+    let obsoleteV1DlqTopic: string | undefined
     try {
       const resolved = computeIdentity(ctx)
       identity = resolved.identity
       identitySource = resolved.source
       dlqTopic = deadLetterTopic(identity)
-      obsoleteV1DirectTopic = toTopic(directAddress(identity), PROTOCOL_VERSION)
+      obsoleteV1DirectTopic = toTopic(directAddress(identity), 'v1')
+      obsoleteV1DlqTopic = deadLetterTopic(identity, 'v1')
       const basePlan = subscriptions({ identity, global })
       plan = {
         durable: [...basePlan.durable, dlqTopic],
@@ -786,12 +846,13 @@ function synagentAdapter(
     durableTopics = newDurableTopics
 
     // Limpieza de suscripciones durables obsoletas (el cliente clean=false las
-    // retiene). El topic directo v1 anterior se agrega explícitamente para
-    // migrar sesiones creadas antes de persistir el plan wildcard.
+    // retiene). Los topics directos y DLQ v1 se agregan explícitamente para
+    // migrar sesiones creadas antes de v2 y del plan wildcard persistido.
     const topicsToRemove = [...new Set([
       ...staleFromDisconnect,
       ...lastDurableTopics,
       ...(obsoleteV1DirectTopic ? [obsoleteV1DirectTopic] : []),
+      ...(obsoleteV1DlqTopic ? [obsoleteV1DlqTopic] : []),
     ])].filter(topic => !newDurableTopics.includes(topic))
 
     durable = connectClient({
@@ -873,8 +934,8 @@ function synagentAdapter(
             lastDurableTopics = [...topics]
             persistDurableTopics(topics)
           }
-          const v1Topics = topics.map(topic => topic.replace('/+/', `/${PROTOCOL_VERSION}/`))
-          ctx.ui.notify(`Synagent subscribed to ${v1Topics.join(', ')} filters=${topics.join(', ')}`, 'info')
+          const currentTopics = topics.map(topic => topic.replace('/+/', `/${PROTOCOL_VERSION}/`))
+          ctx.ui.notify(`Synagent subscribed to ${currentTopics.join(', ')} filters=${topics.join(', ')}`, 'info')
         })
       }
       const stale = staleTopics.filter(topic => !topics.includes(topic))
@@ -1132,6 +1193,20 @@ function synagentAdapter(
       applyInboundCancellation(message, ctx)
       return
     }
+    if (message.kind === 'task.offer') {
+      acceptOffer(message, ctx)
+      return
+    }
+    if (message.kind === 'task.claim') {
+      recordOfferClaim(message, ctx)
+      return
+    }
+    if (message.kind === 'task.offer.closed') {
+      rememberSeen(message.id)
+      persistSeen(message.id, ctx)
+      ctx.ui.notify(message.body, 'info')
+      return
+    }
     updateRequestFromReply(message, ctx)
     if (message.kind === 'task.delivered') {
       rememberSeen(message.id)
@@ -1153,6 +1228,85 @@ function synagentAdapter(
     pending.set(message.id, delivery)
     queuedDeliveries.push({ ...delivery, generation: deliveryGeneration })
     drainDeliveries(context ?? ctx)
+  }
+
+  function acceptOffer(message: CanonicalMessage, ctx: ExtensionContext): void {
+    rememberSeen(message.id)
+    persistSeen(message.id, ctx)
+    if (!settings['accept-offers'] || !ctx.isIdle()) return
+    void send({
+      to: message.from,
+      body: `Reclamo oferta ${message.id}`,
+      kind: 'task.claim',
+      reply_to: message.id,
+      correlation_id: message.id,
+      causation_id: message.id,
+      internal: true,
+    }, ctx).then(result => {
+      if (!result.ok) ctx.ui.notify(result.message, 'error')
+    })
+  }
+
+  function recordOfferClaim(message: CanonicalMessage, ctx: ExtensionContext): void {
+    rememberSeen(message.id)
+    persistSeen(message.id, ctx)
+    const offer = message.reply_to ? outgoingOffers.get(message.reply_to) : undefined
+    if (!offer) return
+    const claim: OfferClaim = { closed: offer.assignedTo !== undefined, from: message.from, id: message.id }
+    offer.claims.push(claim)
+    if (!offer.assignedTo) {
+      offer.assignedClaimId = claim.id
+      offer.assignedTo = claim.from
+      persistOffer(offer, ctx)
+      void publishOfferAssignment(offer, claim, ctx)
+      return
+    }
+    persistOffer(offer, ctx)
+    void closeOfferClaim(offer, claim, ctx)
+  }
+
+  async function publishOfferAssignment(
+    offer: OutgoingOffer,
+    claim: OfferClaim,
+    ctx: ExtensionContext,
+  ): Promise<void> {
+    const result = await send({
+      to: claim.from,
+      body: offer.body,
+      kind: 'task.request',
+      reply_to: offer.id,
+      correlation_id: offer.id,
+      causation_id: claim.id,
+      internal: true,
+    }, ctx)
+    if (!result.ok) {
+      ctx.ui.notify(result.message, 'error')
+      return
+    }
+    offer.assignmentSent = true
+    persistOffer(offer, ctx)
+  }
+
+  async function closeOfferClaim(
+    offer: OutgoingOffer,
+    claim: OfferClaim,
+    ctx: ExtensionContext,
+  ): Promise<void> {
+    const result = await send({
+      to: claim.from,
+      body: `Oferta ya asignada: ${offer.id}`,
+      kind: 'task.offer.closed',
+      reply_to: claim.id,
+      correlation_id: offer.id,
+      causation_id: offer.assignedClaimId ?? offer.id,
+      internal: true,
+    }, ctx)
+    if (!result.ok) {
+      ctx.ui.notify(result.message, 'error')
+      return
+    }
+    claim.closed = true
+    persistOffer(offer, ctx)
   }
 
   function acceptsMessage(message: CanonicalMessage): boolean {
@@ -1523,6 +1677,19 @@ function synagentAdapter(
       if (reschedule) scheduleRequestExpiry(ctx)
     }
   }
+  function persistOffer(offer: OutgoingOffer, ctx: ExtensionContext, required = false): void {
+    const snapshot: OutgoingOffer = {
+      ...offer,
+      claims: offer.claims.map(claim => ({ ...claim })),
+    }
+    outgoingOffers.set(offer.id, offer)
+    try {
+      pi.appendEntry<OutgoingOffer>(OFFER_ENTRY, snapshot)
+    } catch (error) {
+      ctx.ui.notify(`Synagent offer registry could not be persisted: ${formatError(error)}`, 'error')
+      if (required) throw error
+    }
+  }
 
   function expireTrackedRequests(ctx: ExtensionContext, now: number): void {
     for (const request of requests.values()) {
@@ -1638,6 +1805,50 @@ function synagentAdapter(
       ...(!('deadline' in value) || value.deadline === undefined ? {} : { deadline: value.deadline as number }),
     }
   }
+  function parseOfferEntry(value: unknown): OutgoingOffer | undefined {
+    if (
+      typeof value !== 'object'
+      || value === null
+      || !('id' in value)
+      || !('body' in value)
+      || !('claims' in value)
+      || !('assignmentSent' in value)
+      || typeof value.id !== 'string'
+      || typeof value.body !== 'string'
+      || !Array.isArray(value.claims)
+      || typeof value.assignmentSent !== 'boolean'
+      || ('assignedTo' in value && value.assignedTo !== undefined
+        && (typeof value.assignedTo !== 'string' || !isAddress(value.assignedTo)))
+      || ('assignedClaimId' in value && value.assignedClaimId !== undefined
+        && typeof value.assignedClaimId !== 'string')
+    ) return undefined
+    const claims: OfferClaim[] = []
+    for (const claim of value.claims) {
+      if (
+        typeof claim !== 'object'
+        || claim === null
+        || !('id' in claim)
+        || !('from' in claim)
+        || !('closed' in claim)
+        || typeof claim.id !== 'string'
+        || typeof claim.from !== 'string'
+        || !isAddress(claim.from)
+        || typeof claim.closed !== 'boolean'
+      ) return undefined
+      claims.push({ closed: claim.closed, from: claim.from, id: claim.id })
+    }
+    return {
+      assignmentSent: value.assignmentSent,
+      body: value.body,
+      claims,
+      id: value.id,
+      ...(!('assignedTo' in value) || value.assignedTo === undefined ? {} : { assignedTo: value.assignedTo as string }),
+      ...(!('assignedClaimId' in value) || value.assignedClaimId === undefined
+        ? {}
+        : { assignedClaimId: value.assignedClaimId as string }),
+    }
+  }
+
 
   function restoreState(ctx: ExtensionContext): void {
     seen.clear()
@@ -1645,6 +1856,7 @@ function synagentAdapter(
     deadLetters.clear()
     deadLetteredMessageIds.clear()
     requests.clear()
+    outgoingOffers.clear()
     lastDurableTopics = []
     persistedDurableTopics = undefined
     identity = undefined
@@ -1703,6 +1915,9 @@ function synagentAdapter(
         } else if (entry.customType === REQUEST_ENTRY) {
           const request = parseRequestEntry(entry.data)
           if (request) requests.set(request.id, request)
+        } else if (entry.customType === OFFER_ENTRY) {
+          const offer = parseOfferEntry(entry.data)
+          if (offer) outgoingOffers.set(offer.id, offer)
         } else if (entry.customType === STATE_ENTRY) {
           const data = entry.data
           if (
@@ -1779,6 +1994,7 @@ function requireSettingKey(value: string): SynagentSettingKey {
     || value === 'global'
     || value === 'default-peer'
     || value === 'request-ttl'
+    || value === 'accept-offers'
   ) {
     return value
   }
@@ -1822,7 +2038,7 @@ function messageText(content: unknown): string {
 function parseSendArgs(input: string, fallback: string): { to: string; body: string } | undefined {
   const raw = input.trim()
   if (!raw) return undefined
-  // Prefijo de dirección: token plano o dirección v1 jerárquica (con '/').
+  // Prefijo de dirección: token plano o dirección canónica jerárquica (con '/').
   const match = raw.match(/^([A-Za-z0-9][A-Za-z0-9._/-]*):\s*([\s\S]*)$/)
   if (match) {
     const body = (match[2] as string).trim()

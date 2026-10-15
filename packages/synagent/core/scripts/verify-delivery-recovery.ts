@@ -426,7 +426,7 @@ async function runHost(config: HostConfig, publisher: MqttClient): Promise<void>
       body: `Reply exactly RECOVERED_${config.name.toUpperCase()}_127. Do not use tools.`,
       ts: Date.now(),
     }
-    await publish(publisher, `synagent/v1/a4s/${sessionId}`, message)
+    await publish(publisher, `synagent/v2/a4s/${sessionId}`, message)
     await waitForCondition(`${config.name} pending session entry`, () => persistedPending(sessionFile, message.id) !== undefined)
     const pending = persistedPending(sessionFile, message.id)
     assert.ok(pending)
@@ -450,7 +450,7 @@ async function runHost(config: HostConfig, publisher: MqttClient): Promise<void>
 
     const duplicateEvent = `synagent.${config.name}.message.duplicate`
     const duplicatesBefore = diagnosticCount(stateRoot, duplicateEvent)
-    await publish(publisher, `synagent/v1/a4s/${sessionId}`, message)
+    await publish(publisher, `synagent/v2/a4s/${sessionId}`, message)
     await waitForCondition(`${config.name} duplicate diagnostic`, () =>
       diagnosticCount(stateRoot, duplicateEvent) > duplicatesBefore)
     assert.equal(

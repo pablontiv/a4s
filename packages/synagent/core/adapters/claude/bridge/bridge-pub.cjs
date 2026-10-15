@@ -1,4 +1,4 @@
-// synagent BRIDGE v1 de ENVIAR (publisher one-shot). Publica un payload JSON
+// synagent BRIDGE v2 de ENVIAR (publisher one-shot). Publica un payload JSON
 // canónico al topic especificado con QoS 1 y termina.
 //
 //   node bridge-pub.cjs <topic> <payloadJson> [url]

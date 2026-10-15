@@ -1,7 +1,7 @@
 {
   "name": "synagent-adapter-mqtt",
   "version": "0.1.0",
-  "description": "Adaptador de canal de Claude para synagent (v1): JALAR por push vía bridge subproceso, ENVIAR por tool synagent_send al bus MQTT.",
+  "description": "Adaptador de canal de Claude para synagent (v2): JALAR por push vía bridge subproceso, ENVIAR por tool synagent_send al bus MQTT.",
   "author": {
     "name": "pablontiv"
   },
@@ -9,8 +9,14 @@
     "global": {
       "type": "boolean",
       "title": "Global broadcast",
-      "description": "Suscribirse a mensajes broadcast globales (synagent/v1/all); activo por defecto.",
+      "description": "Suscribirse a mensajes broadcast globales (synagent/v2/all); activo por defecto.",
       "default": true
+    },
+    "acceptOffers": {
+      "type": "boolean",
+      "title": "Accept offers",
+      "description": "Reclamar mecánicamente ofertas del proyecto cuando la sesión está en reposo.",
+      "default": false
     },
     "brokerUrl": {
       "type": "string",

@@ -39,11 +39,11 @@ test('golden: el wire re-serializa idéntico (estabilidad de formato cross-host)
   }
 })
 
-test('golden: dirección→topic es la regla v1 (o null para legacy plano)', () => {
+test('golden: dirección→topic es la regla v2 (o null para legacy plano)', () => {
   for (const v of golden.routingVectors) {
     const { to } = parseCanonical(v.wire)
     if (v.topic === null) {
-      assert.equal(isAddress(to), false, `${v.name}: legacy plano no es dirección v1`)
+      assert.equal(isAddress(to), false, `${v.name}: legacy plano no es dirección canónica`)
     } else {
       assert.equal(toTopic(to), v.topic, v.name)
     }
@@ -67,7 +67,7 @@ test('golden: makeOutbound determinista (mismo id/ts → mismo topic y wire)', (
   const self: Identity = golden.identity
   const a = makeOutbound(self, 'a4s/pi-1', { body: 'hola', id: 'fix', ts: 42, kind: 'task.request' })
   const b = makeOutbound(self, 'a4s/pi-1', { body: 'hola', id: 'fix', ts: 42, kind: 'task.request' })
-  assert.equal(a.topic, 'synagent/v1/a4s/pi-1')
+  assert.equal(a.topic, 'synagent/v2/a4s/pi-1')
   assert.equal(serialize(a.message), serialize(b.message))
   assert.equal(a.message.from, 'a4s/sess-01')
 })

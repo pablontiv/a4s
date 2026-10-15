@@ -1,4 +1,4 @@
-// Smoke test de los bridges v1 del adaptador Claude, ejecutándolos como
+// Smoke test de los bridges v2 del adaptador Claude, ejecutándolos como
 // procesos igual que en runtime contra un broker Aedes efímero. El broker
 // instalable y sus pruebas viven en el workspace @a4s/synagent-bus.
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
@@ -108,7 +108,7 @@ function waitForAll(
   })
 }
 
-test('scripts de Claude v1: bridges arrancan y hacen round-trip real', async (t) => {
+test('scripts de Claude v2: bridges arrancan y hacen round-trip real', async (t) => {
   const broker = await Aedes.createBroker({})
   const server = net.createServer(broker.handle)
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
@@ -140,22 +140,22 @@ test('scripts de Claude v1: bridges arrancan y hacen round-trip real', async (t)
   const gotLine = waitFor(
     sub,
     'stdout',
-    /\{"topic":"synagent\/v1\/a4s\/claude-1","payload":.*\}\n/,
+    /\{"topic":"synagent\/v2\/a4s\/claude-1","payload":.*\}\n/,
   )
 
   // Publicar un mensaje canónico al topic directo de Claude
   const payload = JSON.stringify({
-    id: 'v1-test-1',
+    id: 'v2-test-1',
     from: 'a4s/pi-1',
     to: 'a4s/claude-1',
     kind: 'task.request',
-    body: 'hola desde scripts.test (v1)\nlínea intacta',
+    body: 'hola desde scripts.test (v2)\nlínea intacta',
     ts: Date.now(),
   })
 
   const pub = spawn('node', [
     join(BRIDGE, 'bridge-pub.cjs'),
-    'synagent/v1/a4s/claude-1',
+    'synagent/v2/a4s/claude-1',
     payload,
     url,
   ]) as ChildProcessWithoutNullStreams
@@ -164,17 +164,17 @@ test('scripts de Claude v1: bridges arrancan y hacen round-trip real', async (t)
   assert.equal(pubExit, 0, 'bridge-pub.cjs debe salir 0 (PUBACK)')
 
   const frame = JSON.parse((await gotLine)[0]) as { topic: string; payload: string }
-  assert.equal(frame.topic, 'synagent/v1/a4s/claude-1')
+  assert.equal(frame.topic, 'synagent/v2/a4s/claude-1')
   assert.equal(frame.payload, payload)
   const msg = JSON.parse(frame.payload) as { id: string; to: string; from: string; kind: string; body: string }
-  assert.equal(msg.id, 'v1-test-1')
+  assert.equal(msg.id, 'v2-test-1')
   assert.equal(msg.to, 'a4s/claude-1')
   assert.equal(msg.from, 'a4s/pi-1')
   assert.equal(msg.kind, 'task.request')
-  assert.equal(msg.body, 'hola desde scripts.test (v1)\nlínea intacta')
+  assert.equal(msg.body, 'hola desde scripts.test (v2)\nlínea intacta')
 })
 
-test('scripts de Claude v1: la migración elimina la sesión durable histórica con su clientId exacto', async (t) => {
+test('scripts de Claude v2: la migración elimina la sesión durable histórica con su clientId exacto', async (t) => {
   const broker = await Aedes.createBroker({})
   const server = net.createServer(broker.handle)
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
@@ -209,14 +209,14 @@ test('scripts de Claude v1: la migración elimina la sesión durable histórica 
   }
 
   // Al reconectar como sesión durable no debe existir estado previo: prueba que
-  // no solo se desuscribió con el clientId v1 actual, sino que se eliminó la
-  // sesión asociada al clientId histórico correcto.
+  // no solo se desuscribió con el clientId actual, sino que se eliminó la sesión
+  // asociada al clientId histórico correcto.
   const probe = await openMqtt(url, { clientId: 'synagent-legacy-claude', clean: false })
   assert.equal(probe.sessionPresent, false, 'la sesión histórica ya no existe en el broker')
   await endMqtt(probe.client)
 })
 
-test('scripts de Claude v1: retiro legacy termina sin retries si el broker está ausente', async (t) => {
+test('scripts de Claude v2: retiro legacy termina sin retries si el broker está ausente', async (t) => {
   const reservation = net.createServer()
   await new Promise<void>((resolve) => reservation.listen(0, '127.0.0.1', resolve))
   const port = (reservation.address() as net.AddressInfo).port
@@ -233,7 +233,7 @@ test('scripts de Claude v1: retiro legacy termina sin retries si el broker está
   assert.notEqual(await exited, 0, 'ausencia del broker se reporta sin dejar proceso persistente')
 })
 
-test('scripts de Claude v1: bridge-sub soporta clientes durable + transient', async (t) => {
+test('scripts de Claude v2: bridge-sub soporta clientes durable + transient', async (t) => {
   const broker = await Aedes.createBroker({})
   const server = net.createServer(broker.handle)
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
@@ -262,8 +262,8 @@ test('scripts de Claude v1: bridge-sub soporta clientes durable + transient', as
   await waitForAll(sub, 'stderr', [/suscrito durable:/, /suscrito transient:/], 15000)
 
   // Preparar dos esperas en paralelo sin asumir orden entre clientes.
-  const gotDirect = waitFor(sub, 'stdout', /\{"topic":"synagent\/v1\/a4s\/test-2","payload":.*\}\n/)
-  const gotBroadcast = waitFor(sub, 'stdout', /\{"topic":"synagent\/v1\/a4s\/all","payload":.*\}\n/)
+  const gotDirect = waitFor(sub, 'stdout', /\{"topic":"synagent\/v2\/a4s\/test-2","payload":.*\}\n/)
+  const gotBroadcast = waitFor(sub, 'stdout', /\{"topic":"synagent\/v2\/a4s\/all","payload":.*\}\n/)
 
   // Publicar al topic directo (durable)
   const directPayload = JSON.stringify({
@@ -277,7 +277,7 @@ test('scripts de Claude v1: bridge-sub soporta clientes durable + transient', as
 
   const pub1 = spawn('node', [
     join(BRIDGE, 'bridge-pub.cjs'),
-    'synagent/v1/a4s/test-2',
+    'synagent/v2/a4s/test-2',
     directPayload,
     url,
   ]) as ChildProcessWithoutNullStreams
@@ -297,7 +297,7 @@ test('scripts de Claude v1: bridge-sub soporta clientes durable + transient', as
 
   const pub2 = spawn('node', [
     join(BRIDGE, 'bridge-pub.cjs'),
-    'synagent/v1/a4s/all',
+    'synagent/v2/a4s/all',
     broadcastPayload,
     url,
   ]) as ChildProcessWithoutNullStreams
@@ -307,14 +307,14 @@ test('scripts de Claude v1: bridge-sub soporta clientes durable + transient', as
 
   // Verificar que ambas tramas conservaron topic y payload.
   const directFrame = JSON.parse((await gotDirect)[0]) as { topic: string; payload: string }
-  assert.equal(directFrame.topic, 'synagent/v1/a4s/test-2')
+  assert.equal(directFrame.topic, 'synagent/v2/a4s/test-2')
   assert.equal(directFrame.payload, directPayload)
   const directMsg = JSON.parse(directFrame.payload) as { id: string; body: string }
   assert.equal(directMsg.id, 'direct-msg')
   assert.equal(directMsg.body, 'msg directo')
 
   const broadcastFrame = JSON.parse((await gotBroadcast)[0]) as { topic: string; payload: string }
-  assert.equal(broadcastFrame.topic, 'synagent/v1/a4s/all')
+  assert.equal(broadcastFrame.topic, 'synagent/v2/a4s/all')
   assert.equal(broadcastFrame.payload, broadcastPayload)
   const broadcastMsg = JSON.parse(broadcastFrame.payload) as { id: string; body: string }
   assert.equal(broadcastMsg.id, 'broadcast-msg')
@@ -333,19 +333,19 @@ test('estructura: los bridges existen donde register.ts los resuelve', () => {
   }
 })
 
-test('marketplace: el núcleo Claude v1 carga al copiar solo el plugin', async (t) => {
+test('marketplace: el núcleo Claude v2 carga al copiar solo el plugin', async (t) => {
   const source = new URL('../adapters/claude/', import.meta.url).pathname
-  const temp = await mkdtemp(join(tmpdir(), 'synagent-claude-plugin-v1-'))
+  const temp = await mkdtemp(join(tmpdir(), 'synagent-claude-plugin-v2-'))
   const installed = join(temp, 'synagent-adapter-mqtt')
   t.after(() => rm(temp, { recursive: true, force: true }))
   await cp(source, installed, { recursive: true })
 
   const adapter = await import(pathToFileURL(join(installed, 'hooks/adapter.ts')).href)
 
-  // Verificar que la copia tiene el protocolo v1
+  // Verificar que la copia tiene el protocolo v2
   assert.ok(adapter.isAddress)
   assert.ok(adapter.toTopic)
-  assert.equal(adapter.toTopic('a4s/claude-1'), 'synagent/v1/a4s/claude-1')
-  assert.equal(adapter.toTopic('a4s/all'), 'synagent/v1/a4s/all')
-  assert.equal(adapter.toTopic('all'), 'synagent/v1/all')
+  assert.equal(adapter.toTopic('a4s/claude-1'), 'synagent/v2/a4s/claude-1')
+  assert.equal(adapter.toTopic('a4s/all'), 'synagent/v2/a4s/all')
+  assert.equal(adapter.toTopic('all'), 'synagent/v2/all')
 })

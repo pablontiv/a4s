@@ -18,13 +18,20 @@ import { isAddress, isToken } from '../../protocol.ts'
 export const DEFAULT_BROKER_URL = 'mqtt://127.0.0.1:1884'
 export const DEFAULT_PEER = 'claude'
 
-export type SynagentSettingKey = 'enabled' | 'broker-url' | 'global' | 'default-peer' | 'request-ttl'
+export type SynagentSettingKey =
+  | 'enabled'
+  | 'broker-url'
+  | 'global'
+  | 'default-peer'
+  | 'request-ttl'
+  | 'accept-offers'
 export type SynagentSettings = {
   enabled: boolean
   'broker-url': string
   global: boolean
   'default-peer': string
   'request-ttl'?: number
+  'accept-offers': boolean
 }
 export type SynagentSettingsPaths = {
   global: string
@@ -45,6 +52,7 @@ export const SYNAGENT_SETTING_KEYS: readonly SynagentSettingKey[] = [
   'global',
   'default-peer',
   'request-ttl',
+  'accept-offers',
 ]
 
 export const DEFAULT_SETTINGS: Readonly<SynagentSettings> = {
@@ -52,6 +60,7 @@ export const DEFAULT_SETTINGS: Readonly<SynagentSettings> = {
   'broker-url': DEFAULT_BROKER_URL,
   global: true,
   'default-peer': DEFAULT_PEER,
+  'accept-offers': false,
 }
 
 const LEGACY_KEYS: Readonly<Record<SynagentSettingKey, string>> = {
@@ -60,6 +69,7 @@ const LEGACY_KEYS: Readonly<Record<SynagentSettingKey, string>> = {
   global: 'a4s.synagent.global',
   'default-peer': 'a4s.synagent.default-peer',
   'request-ttl': 'a4s.synagent.request-ttl',
+  'accept-offers': 'a4s.synagent.accept-offers',
 }
 
 export function resolveAgentDir(
@@ -152,7 +162,7 @@ export function loadSynagentSettings(
 }
 
 export function parseSettingValue(key: SynagentSettingKey, input: string): SynagentSettings[SynagentSettingKey] {
-  if (key === 'enabled' || key === 'global') {
+  if (key === 'enabled' || key === 'global' || key === 'accept-offers') {
     if (input !== 'true' && input !== 'false') {
       throw new Error(`Invalid Synagent ${key} (use true|false): ${input}`)
     }
@@ -294,7 +304,7 @@ function isJsonRecord(value: unknown): value is JsonRecord {
 }
 
 function isValidSetting<K extends SynagentSettingKey>(key: K, value: unknown): value is SynagentSettings[K] {
-  if (key === 'enabled' || key === 'global') return typeof value === 'boolean'
+  if (key === 'enabled' || key === 'global' || key === 'accept-offers') return typeof value === 'boolean'
   if (key === 'broker-url') {
     if (typeof value !== 'string') return false
     try {

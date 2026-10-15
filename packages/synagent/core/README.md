@@ -37,14 +37,16 @@ adaptadores existentes.
 
 Cada sobre lleva `id`, `from`, `to`, `kind`, `body`, `reply_to?`,
 `correlation_id?`, `causation_id?`, `deadline?` y `ts`. `from` y `to` son
-direcciones v1. `reply_to`, `correlation_id` y `causation_id` contienen IDs de
+direcciones canónicas. `reply_to`, `correlation_id` y `causation_id` contienen IDs de
 mensajes. `deadline`, cuando existe, es un epoch Unix absoluto en milisegundos:
 
 | Clase | Kinds | Emisor |
 | --- | --- | --- |
 | Pedido de trabajo | `task.request`, `task.redirect` | usuario o LLM mediante `synagent_send` |
+| Oferta y reclamo | `task.offer`, `task.claim` | usuario/LLM ofrece; el adaptador libre reclama |
 | Cancelación | `task.cancel` | usuario o LLM mediante `synagent_send` |
 | Evento de tarea | `task.delivered`, `task.completed`, `task.expired` | adaptador de destino |
+| Cierre de oferta | `task.offer.closed` | adaptador oferente |
 | Evento informativo | `note.published` | usuario o LLM mediante `synagent_send` |
 
 Todo comando raíz lleva su propio `id` como `correlation_id`. El adaptador de
@@ -63,14 +65,14 @@ consume sin turno; `task.completed` y `task.expired` se inyectan al emisor.
 la copia de Claude se regenera con `adapters/claude/scripts/sync-protocol.mjs`.
 Todo fallo JSON o de esquema usa el código estable `MESSAGE_INVALID`.
 
-La versión pertenece exclusivamente al topic de transporte. Un lector v1 acepta
+La versión pertenece exclusivamente al topic de transporte. Un lector v2 acepta
 campos desconocidos en el sobre, incluido un campo llamado `version`, y los
 elimina al producir `CanonicalMessage`; ese campo no cambia ni declara la
 versión del mensaje. Esta tolerancia permite agregar un campo opcional sin subir
 la versión. Agregar o quitar un `kind`, o cambiar o quitar cualquier campo,
 requiere subir `PROTOCOL_VERSION`.
 
-Los adaptadores publican sólo en `v1`, pero se suscriben con `+` únicamente en
+Los adaptadores publican sólo en `v2`, pero se suscriben con `+` únicamente en
 el nivel de versión para los alcances directo, proyecto y global. Así una
 publicación de otra versión llega al adaptador, se rechaza antes de
 `parseCanonical` y registra `VERSION_UNSUPPORTED` sin entrar en la cola de
@@ -78,23 +80,32 @@ entrega. Ese rechazo de transporte no va a la DLQ: las causas de DLQ permanecen
 `INVALID_JSON`, `INVALID_MESSAGE`, `DELIVERY_DISPATCH_FAILED` y
 `DELIVERY_TIMEOUT`.
 
-## Direccionamiento v1 (ADR 0068; identidad por ADR 0069)
+Una oferta se publica como `task.offer` en `<proyecto>/all`. Cada adaptador que
+tenga `accept-offers` activo y esté en reposo registra el `id` y publica
+mecánicamente un `task.claim` directo al `from`, sin abrir un turno ni invocar al
+LLM. El oferente persiste la oferta y sus reclamos: el primero recibe un único
+`task.request` directo con `reply_to` y `correlation_id` iguales al ID de la
+oferta; cada reclamo posterior recibe `task.offer.closed` con `reply_to` igual al
+ID del reclamo. Los IDs recibidos y el estado asignado se restauran con la
+sesión, por lo que un redelivery no reasigna la oferta.
+
+## Direccionamiento v2 (ADR 0068; identidad por ADR 0069)
 
 Topología jerárquica versionada, con la regla `topic == "synagent/" + versión +
 "/" + to`:
 
 | Dirección (`to`) | Topic | Alcance |
 | --- | --- | --- |
-| `<proyecto>/<instancia>` | `synagent/v1/<proyecto>/<instancia>` | un agente (buzón directo) |
-| `<proyecto>/all` | `synagent/v1/<proyecto>/all` | todo el proyecto |
-| `all` | `synagent/v1/all` | global (activo por defecto) |
-| sesión fallida | `synagent/v1/dlq/<proyecto>/<instancia>` | cola de mensajes muertos de esa sesión |
+| `<proyecto>/<instancia>` | `synagent/v2/<proyecto>/<instancia>` | un agente (buzón directo) |
+| `<proyecto>/all` | `synagent/v2/<proyecto>/all` | todo el proyecto |
+| `all` | `synagent/v2/all` | global (activo por defecto) |
+| sesión fallida | `synagent/v2/dlq/<proyecto>/<instancia>` | cola de mensajes muertos de esa sesión |
 
 ### Identidad desde origin
 
 Synagent deriva el token de proyecto de `remote.origin.url` del repositorio
 del cwd de la sesión: el último segmento del remoto, sin `.git`, debe ser un
-token v1 válido. Pi, omp y Claude comparten esta resolución y muestran
+token válido. Pi, omp y Claude comparten esta resolución y muestran
 `source=origin`. Si falta un origin válido, el adaptador queda inactivo y la
 remediación pide configurar `remote.origin.url`, por ejemplo:
 
@@ -115,7 +126,7 @@ git remote add origin git@github.com:Example/Project.git
 - **global** está activo por defecto: ambos adaptadores reciben el filtro
   `synagent/+/all`; se puede desactivar explícitamente con su setting `global`.
 - Los adaptadores se suscriben a `synagent/+/<to>` para diagnosticar versiones
-  desconocidas, pero sólo publican v1. No crean ni usan suscripciones legacy
+  desconocidas, pero sólo publican v2. No crean ni usan suscripciones legacy
   `a4s/inbox/<address>`.
 
 ## Arrancar el bus
@@ -150,12 +161,16 @@ claude --plugin-dir packages/synagent/core/adapters/claude
   broadcasts `synagent/+/<proyecto>/all` y `synagent/+/all`. El bridge entrega
   una trama `{topic,payload}` sin cambiar el payload, lo que permite rechazar
   versiones desconocidas antes del parser. Reserva y deduplica cada `id`;
-  consume `task.delivered` sin crear un turno e inyecta los demás mensajes,
-  incluido `task.completed`, mediante `$.prompt.submit`.
+  procesa oferta, reclamo y cierre mecánicamente, consume `task.delivered` sin
+  crear un turno e inyecta los demás mensajes, incluido `task.completed`,
+  mediante `$.prompt.submit`.
 - **ENVIAR (Claude → bus):** la herramienta `synagent_send` (invocada por el
-  modelo) publica `task.request`, `task.redirect` o `note.published`.
-  `/mq-send <to>: texto` publica un `task.request` como atajo de depuración. Si la identidad
-  no se resuelve, el adaptador queda inactivo y pide configurar el proyecto.
+  modelo) publica `task.request`, `task.redirect`, `task.cancel`, `task.offer` o
+  `note.published`. Una oferta exige el destino `<proyecto>/all`;
+  `/synagent-offer <descripción>` la publica sin abrir un turno del modelo.
+  `/mq-send <to>: texto` publica un `task.request` como atajo de depuración. Si
+  la identidad no se resuelve, el adaptador queda inactivo y pide configurar el
+  proyecto.
 
 Los bridges viven en `adapters/claude/bridge/` y se resuelven desde
 `$.plugin.root`, por lo que el plugin es autocontenido. Tiene su propio
@@ -182,7 +197,8 @@ no forma parte del plugin Claude: sigue siendo la aplicación separada
 | Clave | Default | Uso |
 | --- | --- | --- |
 | `brokerUrl` | `mqtt://127.0.0.1:1884` | URL loopback del broker. |
-| `global` | `true` | Suscribirse al broadcast global `synagent/v1/all`; `false` lo desactiva. |
+| `global` | `true` | Suscribirse al broadcast global `synagent/v2/all`; `false` lo desactiva. |
+| `acceptOffers` | `false` | Reclamar ofertas del proyecto solo mientras la sesión está en reposo. |
 
 La instancia **no** es configurable: sale del id de sesión nativo
 (`$.session.id()`), una por sesión. El adaptador **no lee variables de entorno**.
@@ -215,10 +231,10 @@ pi install ./packages/synagent/core
 
 Al iniciar una sesión abre **dos** clientes MQTT: uno durable (`clean: false`,
 `clientId` derivado del ID de sesión) suscrito a su buzón directo
-`synagent/v1/<proyecto>/<instancia>` y a su cola
-`synagent/v1/dlq/<proyecto>/<instancia>`, y uno transitorio (`clean: true`) a
-los broadcasts de proyecto `synagent/v1/<proyecto>/all` y global
-`synagent/v1/all`. La instancia es
+`synagent/v2/<proyecto>/<instancia>` y a su cola
+`synagent/v2/dlq/<proyecto>/<instancia>`, y uno transitorio (`clean: true`) a
+los broadcasts de proyecto `synagent/v2/<proyecto>/all` y global
+`synagent/v2/all`. La instancia es
 exactamente `ctx.sessionManager.getSessionId()`: conserva mayúsculas y puntos.
 Un *reload* o *resume* conserva esa identidad nativa; *new* y *fork* la
 re-resuelven y vuelven a vincular el adaptador. Dos sesiones no se expulsan
@@ -237,26 +253,29 @@ con la remediación correspondiente.
 El modelo usa `synagent_send` con `to`, `body`, `kind?`, `reply_to?`,
 `correlation_id?` y `causation_id?` cuando el usuario pide mensajear a otro
 agente o proyecto. El kind predeterminado es `task.request`; también admite
-`task.redirect`, `task.cancel` y `note.published`. El schema de la herramienta
-no expone `deadline`: para pedidos de trabajo lo calcula el adaptador desde
-`request-ttl`. Los eventos de tarea quedan reservados al adaptador. Conserva
-mayúsculas y puntos en destinos válidos. `/mq-send` es solo un atajo explícito
+`task.redirect`, `task.cancel`, `task.offer` y `note.published`. Una oferta se
+dirige al broadcast del proyecto propio. El schema de la herramienta no expone
+`deadline`: para pedidos de trabajo lo calcula el adaptador desde
+`request-ttl`. Los reclamos y cierres quedan reservados al adaptador.
+Conserva mayúsculas y puntos en destinos válidos. `/mq-send` es solo un atajo explícito
 de depuración:
 
 ```text
-/mq-send <to>: texto        (debug; to = dirección v1, o token cualificado con tu proyecto)
+/mq-send <to>: texto        (debug; to = dirección canónica, o token cualificado con tu proyecto)
 /synagent-settings
 /synagent status
 /synagent pending
 /synagent dlq
 /synagent dlq retry <id>
 /synagent cancel <request-id>
+/synagent offer <descripción>
 /synagent enable|disable
 /synagent resume
 /synagent set broker-url <mqtt://loopback:puerto>
 /synagent set global <true|false>
 /synagent set default-peer <address>
 /synagent set request-ttl <segundos>
+/synagent set accept-offers <true|false>
 ```
 
 `/synagent pending` muestra el registro persistido de pedidos de la sesión con
@@ -272,13 +291,13 @@ registro se reinyecta automáticamente ni admite un segundo reintento.
 
 `/synagent-settings` muestra los valores efectivos de usuario. Permite editar
 cada valor, restablecerlo a su valor heredado o cancelar sin cambios.
-`enabled` y `global` usan una selección booleana. Los demás valores usan
-entradas validadas.
+`enabled`, `global` y `accept-offers` usan una selección booleana. Los demás
+valores usan entradas validadas.
 
 Todos los subcomandos de configuración persisten en el ámbito de usuario.
 Los cambios de `enabled`, `broker-url` o `global` ejecutan una reconfiguración
-MQTT. Cambiar `default-peer` o `request-ttl` no reinicia MQTT. Al cambiar los
-topics durables, el adaptador elimina las suscripciones obsoletas antes de usar
+MQTT. Cambiar `default-peer`, `request-ttl` o `accept-offers` no reinicia MQTT.
+Al cambiar los topics durables, el adaptador elimina las suscripciones obsoletas antes de usar
 las nuevas y reintenta esa limpieza al reconectar. El cambio descarta mensajes
 aún no enviados de la configuración anterior. Una entrega ya pasada al host no
 se puede cancelar y permanece como barrera de orden hasta que la sesión se
@@ -293,6 +312,7 @@ asienta.
 | `global` | `true` | usuario |
 | `default-peer` | `claude` | usuario |
 | `request-ttl` | sin valor | usuario |
+| `accept-offers` | `false` | usuario |
 
 El archivo de usuario es `<agent-dir>/synagent.json`. El adaptador usa el valor
 no vacío de `PI_CODING_AGENT_DIR` como `<agent-dir>`. En su defecto usa
@@ -307,7 +327,8 @@ valores configurables:
   "broker-url": "mqtt://127.0.0.1:1884",
   "global": true,
   "default-peer": "claude",
-  "request-ttl": 5
+  "request-ttl": 5,
+  "accept-offers": false
 }
 ```
 
@@ -321,7 +342,7 @@ setting. El override sigue vigente después de `/synagent set` y
 `/synagent reset`; esos comandos modifican únicamente el archivo de usuario.
 Los cambios de archivo se conservan al arrancar otra sesión.
 
-En Pi, si falta `synagent.json`, el adaptador migra las cinco claves
+En Pi, si falta `synagent.json`, el adaptador migra las seis claves
 `a4s.synagent.*` conocidas desde el `settings.json` de usuario. Conserva el
 archivo original y valida los valores antes de migrarlos. La escritura usa un
 archivo temporal y un cambio de nombre atómico, crea los directorios necesarios
@@ -330,7 +351,7 @@ y aplica modo `0600` al archivo de usuario.
 Mientras el broker no tenga autenticación, el adaptador acepta únicamente URLs
 `mqtt://` de loopback sin credenciales. Si la URL configurada no cumple esa
 restricción, muestra un warning y usa el default seguro
-`mqtt://127.0.0.1:1884`. Los tokens v1 son sensibles a mayúsculas y admiten
+`mqtt://127.0.0.1:1884`. Los tokens son sensibles a mayúsculas y admiten
 puntos (`[A-Za-z0-9][A-Za-z0-9._-]{0,255}`). Rechazan `/`, `+` y `#` dentro de
 cada token.
 
@@ -558,13 +579,31 @@ La comprobación viva del esquema versionado usa un broker propio en `18330` y
 una DB dentro de una raíz privada creada con `mkdtemp`. En omp 18.11.0 y Pi
 1.0.3 confirma mediante `lsof` filtrado por PID que sólo existe conexión al
 puerto `18330` antes de publicar. Después recorre directo, proyecto y global:
-los v1 llegan una vez, los v99 producen `VERSION_UNSUPPORTED` sin alcanzar el
-parser ni la DLQ, y un JSON malformado produce `MESSAGE_INVALID` y
+los v2 llegan una vez, las demás versiones producen `VERSION_UNSUPPORTED` sin
+alcanzar el parser ni la DLQ, y un JSON malformado produce `MESSAGE_INVALID` y
 `INVALID_JSON` en DLQ. Usa los directorios reales únicamente para autenticación,
 sin copiar ni modificar sus archivos:
 
 ```sh
 npm run verify:protocol-schema --workspace @a4s/synagent
+```
+
+La comprobación viva de ofertas usa omp, Pi, Claude Code y un broker propio en
+`18332`. Crea una raíz privada con `mkdtemp`, o usa la ruta explícita de
+`SYNAGENT_LIVE_ROOT`, y prepara allí copias aisladas de las configuraciones de
+los hosts con `accept-offers` activo. Nunca modifica `synagent.json` del
+operador. Ejecuta dos carreras: Pi ofrece a omp y Claude; después Claude ofrece
+a Pi y omp. En cada una exige dos reclamos mecánicos, un único `task.request`
+para el primer reclamo y un `task.offer.closed` para el segundo. `lsof` verifica
+que los tres procesos usan `18332` y ninguno usa `1884`; el cierre elimina la
+raíz aislada:
+
+```sh
+SYNAGENT_OMP_MODEL=anthropic/claude-haiku-5-5 \
+SYNAGENT_PI_MODEL=openai-codex/gpt-6.1-sol \
+SYNAGENT_CLAUDE_MODEL=haiku \
+  npm run verify:offer-race --workspace @a4s/synagent
+```
 ```
 
 Las pruebas de este workspace incluyen el protocolo compartido, los bridges

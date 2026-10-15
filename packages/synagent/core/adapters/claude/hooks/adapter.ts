@@ -2,17 +2,17 @@
 // Regenerar: node adapters/claude/scripts/sync-protocol.mjs (desde packages/synagent/core).
 // El plugin se instala copiándose solo; por eso lleva su propia copia del contrato.
 
-// Contrato canónico de synagent, direccionamiento v1 y CORE host-neutral de
-// adaptadores (ADR 0069, supera a 0068).
+// Contrato canónico de synagent, direccionamiento versionado y CORE
+// host-neutral de adaptadores (ADR 0069, supera a 0068).
 //
 // Fuente ÚNICA del contrato. Solo importa built-ins de Node: el plugin de
 // Claude lleva una COPIA GENERADA (adapters/claude/hooks/adapter.ts) anclada por
 // un test de paridad, porque el marketplace lo instala copiándose solo.
 //
-// Topología v1 (regla: topic == `${TOPIC_ROOT}/${version}/${to}`):
-//   synagent/v1/<proyecto>/<instancia>  — buzón directo
-//   synagent/v1/<proyecto>/all          — broadcast de proyecto
-//   synagent/v1/all                     — broadcast global (activo por defecto)
+// Topología v2 (regla: topic == `${TOPIC_ROOT}/${version}/${to}`):
+//   synagent/v2/<proyecto>/<instancia>  — buzón directo
+//   synagent/v2/<proyecto>/all          — broadcast de proyecto
+//   synagent/v2/all                     — broadcast global (activo por defecto)
 //
 // IDENTIDAD (ADR 0069): cada binding la deriva de APIs NATIVAS de sesión del
 // host, NO de variables de entorno ni de un launcher. La instancia viene del id
@@ -21,12 +21,15 @@
 // presentación, nunca identidad.
 //
 // CONTRATO DE MENSAJERÍA: `task.request` y `task.redirect` piden trabajo;
-// `task.cancel` intenta retirar un pedido aún no inyectado. Solo los pedidos de
+// `task.cancel` intenta retirar un pedido aún no inyectado. `task.offer` ofrece
+// trabajo a un proyecto y una sesión libre responde mecánicamente con
+// `task.claim`; el oferente entrega un único `task.request` al primer reclamo y
+// responde a reclamos posteriores con `task.offer.closed`. Solo los pedidos de
 // trabajo producen los eventos mecánicos `task.delivered` y `task.completed`;
 // `task.expired` informa que el deadline se observó antes de la inyección.
 // `note.published` y los eventos nunca producen eventos adicionales.
 // `correlation_id` identifica el comando raíz y `causation_id` el mensaje que
-// causó el sobre actual. Solo agregar campos opcionales conserva v1; agregar o
+// causó el sobre actual. Solo agregar campos opcionales conserva v2; agregar o
 // quitar kinds, o cambiar/quitar campos, exige subir PROTOCOL_VERSION.
 //
 // CONTRATO DE ADAPTADOR (extensible a hosts futuros): un adaptador provee un
@@ -36,10 +39,17 @@
 // conformidad ejercita por igual en todo adaptador.
 
 export const TASK_REQUEST_KINDS = ['task.request', 'task.redirect'] as const
-export const COMMAND_KINDS = [...TASK_REQUEST_KINDS, 'task.cancel'] as const
-export const EVENT_KINDS = ['task.delivered', 'task.completed', 'task.expired', 'note.published'] as const
+export const OFFER_KINDS = ['task.offer', 'task.claim'] as const
+export const COMMAND_KINDS = [...TASK_REQUEST_KINDS, ...OFFER_KINDS, 'task.cancel'] as const
+export const EVENT_KINDS = [
+  'task.delivered',
+  'task.completed',
+  'task.expired',
+  'task.offer.closed',
+  'note.published',
+] as const
 export const MESSAGE_KINDS = [...COMMAND_KINDS, ...EVENT_KINDS] as const
-export const SYNAGENT_SEND_KINDS = [...COMMAND_KINDS, 'note.published'] as const
+export const SYNAGENT_SEND_KINDS = [...TASK_REQUEST_KINDS, 'task.cancel', 'task.offer', 'note.published'] as const
 
 export type TaskRequestKind = (typeof TASK_REQUEST_KINDS)[number]
 export type CommandKind = (typeof COMMAND_KINDS)[number]
@@ -90,15 +100,18 @@ function canonicalKindSchema(kind: MessageKind): CanonicalKindSchema {
   }
 }
 
-// Esquema declarativo por kind. Los lectores v1 ignoran y no re-emiten campos
+// Esquema declarativo por kind. Los lectores v2 ignoran y no re-emiten campos
 // desconocidos: así pueden leer sobres que agreguen campos opcionales.
 export const MESSAGE_SCHEMAS = {
   'task.request': canonicalKindSchema('task.request'),
   'task.redirect': canonicalKindSchema('task.redirect'),
+  'task.offer': canonicalKindSchema('task.offer'),
+  'task.claim': canonicalKindSchema('task.claim'),
   'task.cancel': canonicalKindSchema('task.cancel'),
   'task.delivered': canonicalKindSchema('task.delivered'),
   'task.completed': canonicalKindSchema('task.completed'),
   'task.expired': canonicalKindSchema('task.expired'),
+  'task.offer.closed': canonicalKindSchema('task.offer.closed'),
   'note.published': canonicalKindSchema('note.published'),
 } as const satisfies Readonly<Record<MessageKind, CanonicalKindSchema>>
 
@@ -135,7 +148,7 @@ export interface CanonicalMessage {
 
 // --- versión y raíces de topic -------------------------------------------------
 
-export const PROTOCOL_VERSION = 'v1'
+export const PROTOCOL_VERSION = 'v2'
 export const TOPIC_ROOT = 'synagent'
 export const SUBSCRIPTION_VERSION = '+'
 export const LEGACY_TOPIC_ROOT = 'a4s/inbox'
@@ -205,7 +218,7 @@ export function projectAddress(project: string): string {
 // --- mapa dirección → topic ----------------------------------------------------
 
 export function toTopic(to: string, version: string = PROTOCOL_VERSION): string {
-  if (!isAddress(to)) throw new Error(`dirección v1 inválida: ${to}`)
+  if (!isAddress(to)) throw new Error(`dirección inválida: ${to}`)
   return `${TOPIC_ROOT}/${version}/${to}`
 }
 
@@ -393,7 +406,7 @@ export interface Transport {
   readonly subscribe: Subscribe
 }
 
-// Construye un envío v1 (single-write): valida la dirección, rechaza
+// Construye un envío canónico (single-write): valida la dirección, rechaza
 // `task.redirect` a broadcast y arma {topic, message}. Todo comando raíz se
 // correlaciona con su propio id cuando el caller no aporta otra correlación.
 export function makeOutbound(
@@ -410,7 +423,7 @@ export function makeOutbound(
     ts: number
   },
 ): { topic: string; message: CanonicalMessage } {
-  if (!isAddress(to)) throw new Error(`dirección v1 inválida: ${to}`)
+  if (!isAddress(to)) throw new Error(`dirección inválida: ${to}`)
   const kind = options.kind ?? 'task.request'
   if (kind === 'task.redirect' && isBroadcast(to)) {
     throw new Error('task.redirect solo a destino directo, no broadcast')
