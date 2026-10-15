@@ -17,8 +17,9 @@ export type CallDecision = { block: true; reason: string } | { input: RecordValu
 interface Target { key: string; dag: string; run: string; poc: string; reviewer?: string }
 interface Review { id: string; output: string; poc: string; question: string }
 interface Generation { target: Target; number: number; requested: boolean; review?: Review }
-interface Pending { generation: Generation; number: number; indexes: Set<number> }
-interface Job { pending: Pending; agentId: string }
+interface Binding { generation: Generation; number: number }
+interface Pending { bindings: Map<number, Binding> }
+interface Job { binding: Binding; agentId: string }
 
 // Deliberately fail closed on literal triage completion text. This is not a
 // shell parser: substitutions, separators and eval syntax must not hide the
@@ -54,25 +55,24 @@ export class TriageGuard {
   toolCall(event: Event): CallDecision {
     if (event.toolName === "task") {
       const tasks: RecordValue[] = Array.isArray(event.input.tasks) ? event.input.tasks : [event.input];
-      const bound = new Map<RecordValue, Generation>();
-      for (const task of tasks) {
+      const bound = new Map<number, Generation>();
+      for (const [index, task] of tasks.entries()) {
         if (task.agent !== "triage-reviewer") continue;
         const assignment = `${event.input.context ?? ""}\n${task.task ?? ""}`;
         for (const generation of this.generations.values()) {
           const marker = `TRIAGE_REVIEW AGENT=triage-reviewer DAG=${generation.target.dag} RUN=${generation.target.run} GENERATION=${generation.number}`;
-          if (generation.requested && assignment.includes(marker) && assignment.includes(REVIEW_PROMPT)) { bound.set(task, generation); break; }
+          if (generation.requested && assignment.includes(marker) && assignment.includes(REVIEW_PROMPT)) { bound.set(index, generation); break; }
         }
       }
-      // One triage request per task call; workers can share its native batch.
-      const generation = bound.values().next().value as Generation | undefined;
-      if (!generation) return undefined;
-      const indexes = new Set<number>();
+      if (!bound.size) return undefined;
+      const bindings = new Map<number, Binding>();
       const revised = tasks.map((task, index) => {
-        if (bound.get(task) !== generation) return task;
-        indexes.add(index);
+        const generation = bound.get(index);
+        if (!generation) return task;
+        bindings.set(index, { generation, number: generation.number });
         return { ...task, outputSchema: REVIEW_SCHEMA };
       });
-      this.calls.set(event.toolCallId, { generation, number: generation.number, indexes });
+      this.calls.set(event.toolCallId, { bindings });
       return { input: Array.isArray(event.input.tasks) ? { ...event.input, tasks: revised } : revised[0]! };
     }
     const field = event.toolName === "bash" ? "command" : event.toolName === "eval" ? "code" : undefined;
@@ -120,18 +120,26 @@ export class TriageGuard {
     if (!pending) return;
     this.calls.delete(event.toolCallId);
     for (const result of event.details?.results ?? []) {
-      if (result.agent !== "triage-reviewer" || !pending.indexes.has(result.index)) continue;
-      if (pending.number === pending.generation.number) pending.generation.requested = false;
-      if (result.exitCode === 0 && !result.aborted && !result.error) this.record(pending, result.id, result.output);
+      if (result.agent !== "triage-reviewer") continue;
+      const binding = pending.bindings.get(result.index);
+      if (!binding) continue;
+      if (binding.number === binding.generation.number) binding.generation.requested = false;
+      if (result.exitCode === 0 && !result.aborted && !result.error) this.record(binding, result.id, result.output);
     }
     // Native task-spawn-feedback lists every started agent/job pair, whereas
     // details.async.jobId contains only the primary job of a batch.
     const feedback = (event.content ?? []).filter(item => item.type === "text").map(item => item.text ?? "").join("\n");
-    const reviewerIds = new Set<string>((event.details?.progress ?? []).filter((item: RecordValue) => item.agent === "triage-reviewer" && pending.indexes.has(item.index)).map((item: RecordValue) => item.id));
+    const reviewers = new Map<string, Binding>();
+    for (const item of event.details?.progress ?? []) {
+      if (item.agent !== "triage-reviewer") continue;
+      const binding = pending.bindings.get(item.index);
+      if (binding) reviewers.set(item.id, binding);
+    }
     for (const match of feedback.matchAll(/`([^`]+)` \(job `([^`]+)`\)/g)) {
-      if (!reviewerIds.has(match[1]!)) continue;
-      this.jobs.set(match[2]!, { pending, agentId: match[1]! });
-      if (pending.number === pending.generation.number) pending.generation.requested = false;
+      const binding = reviewers.get(match[1]!);
+      if (!binding) continue;
+      this.jobs.set(match[2]!, { binding, agentId: match[1]! });
+      if (binding.number === binding.generation.number) binding.generation.requested = false;
     }
   }
 
@@ -139,10 +147,10 @@ export class TriageGuard {
     if (message.role !== "custom" || message.customType !== "async-result") return;
     for (const job of message.details?.jobs ?? []) this.finish(job.jobId, job.agentId, job.status, job.type, message.content);
   }
-  private record(pending: Pending, id: string, output: unknown): void {
-    if (pending.number !== pending.generation.number) return;
+  private record(binding: Binding, id: string, output: unknown): void {
+    if (binding.number !== binding.generation.number) return;
     const review = parseReview(id, output);
-    if (review) pending.generation.review = review;
+    if (review) binding.generation.review = review;
   }
   private finish(jobId: string, agentId: string, status: string, type: string, text: unknown): void {
     const job = this.jobs.get(jobId);
@@ -150,7 +158,7 @@ export class TriageGuard {
     for (const match of text.matchAll(/<task-result\b([^>]*)>([\s\S]*?)<\/task-result>/g)) {
       const attrs = Object.fromEntries(Array.from(match[1]!.matchAll(/([\w-]+)="([^"]*)"/g), m => [m[1], m[2]]));
       if (attrs.id !== agentId || attrs.agent !== "triage-reviewer" || attrs.status !== "completed") continue;
-      this.record(job.pending, agentId, /<output>([\s\S]*?)<\/output>/.exec(match[2]!)?.[1]);
+      this.record(job.binding, agentId, /<output>([\s\S]*?)<\/output>/.exec(match[2]!)?.[1]);
       this.jobs.delete(jobId);
     }
   }
