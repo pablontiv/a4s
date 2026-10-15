@@ -1,5 +1,6 @@
 import { setTimeout as delay } from "node:timers/promises";
-import { isActive, renderRun, topicFor, Transitions } from "./progress.ts";
+import { ghIssueTitleResolver, IssueTitles } from "./issue-title.ts";
+import { isActive, issueNumber, renderRun, topicFor, Transitions } from "./progress.ts";
 import type { RunDetails } from "./progress.ts";
 import { resolveRepository } from "./repository.ts";
 import { SSEParser } from "./sse.ts";
@@ -67,6 +68,14 @@ async function observe(ctx: Context, signal: AbortSignal): Promise<void> {
   const base = (process.env.DAGU_URL || "http://127.0.0.1:8080").replace(/\/+$/, "");
   const runs = new Map<string, RunDetails>();
   const transitions = new Transitions();
+  const titles = new IssueTitles(ghIssueTitleResolver(ctx.cwd));
+  const render = (): void => {
+    const lines = [...runs.values()].slice(0, 10).map(run => {
+      const issue = issueNumber(run);
+      return renderRun(run, issue ? titles.get(issue) : undefined);
+    });
+    ctx.ui.setWidget("dagu-status", lines.length ? lines : undefined, { placement: "aboveEditor" });
+  };
   let backoff = 1000;
   while (!signal.aborted) {
     const round = new AbortController();
@@ -75,6 +84,7 @@ async function observe(ctx: Context, signal: AbortSignal): Promise<void> {
     let timer: NodeJS.Timeout | undefined;
     try {
       const discovered = await discover(base, repo, roundSignal);
+      const unresolvedIssues = new Set<string>();
       // Retain previously active topics until their final snapshot arrives, even if
       // they finish between discovery and subscription (or during an outage).
       for (const run of discovered) {
@@ -82,9 +92,15 @@ async function observe(ctx: Context, signal: AbortSignal): Promise<void> {
         const previous = runs.get(key);
         if (!previous) transitions.observe(run);
         runs.set(key, { ...run, ...(previous?.nodes ? { nodes: previous.nodes } : {}) });
+        const issue = issueNumber(run);
+        if (issue && !titles.has(issue)) unresolvedIssues.add(issue);
       }
-      ctx.ui.setWidget("dagu-status", runs.size ? [...runs.values()].slice(0, 10).map(renderRun) : undefined,
-        { placement: "aboveEditor" });
+      render();
+      for (const issue of unresolvedIssues) {
+        void titles.load(issue, signal).then(success => {
+          if (success && !signal.aborted) render();
+        });
+      }
       if (!runs.size) {
         backoff = 1000;
         await delay(30_000, undefined, { signal });
@@ -101,7 +117,8 @@ async function observe(ctx: Context, signal: AbortSignal): Promise<void> {
         const details = data.payload?.dagRunDetails as RunDetails | undefined;
         if (!details || !runs.has(data.topic)) return;
         const run = { ...runs.get(data.topic)!, ...details };
-        const notification = transitions.observe(run);
+        const issue = issueNumber(run);
+        const notification = transitions.observe(run, issue ? titles.get(issue) : undefined);
         if (notification) ctx.ui.notify(notification.message, notification.type);
         if (isActive(run)) runs.set(data.topic, run);
         else {
@@ -109,8 +126,7 @@ async function observe(ctx: Context, signal: AbortSignal): Promise<void> {
           refresh = true;
           round.abort();
         }
-        ctx.ui.setWidget("dagu-status", runs.size ? [...runs.values()].slice(0, 10).map(renderRun) : undefined,
-          { placement: "aboveEditor" });
+        render();
         backoff = 1000;
       };
       // Dagu 2.19.2 accepts at most 20 topics per SSE connection by default.
