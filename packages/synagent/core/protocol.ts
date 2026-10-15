@@ -16,11 +16,13 @@
 // proyecto, del remoto remote.origin.url del repo. El alias humano/tab es solo
 // presentación, nunca identidad.
 //
-// CONTRATO DE MENSAJERÍA: `task.request` y `task.redirect` son comandos. Solo
-// esos kinds producen los eventos mecánicos `task.delivered` y
-// `task.completed`; `note.published` y los dos eventos de task nunca producen
-// eventos adicionales. `correlation_id` identifica el comando raíz y
-// `causation_id` el mensaje que causó el sobre actual.
+// CONTRATO DE MENSAJERÍA: `task.request` y `task.redirect` piden trabajo;
+// `task.cancel` intenta retirar un pedido aún no inyectado. Solo los pedidos de
+// trabajo producen los eventos mecánicos `task.delivered` y `task.completed`;
+// `task.expired` informa que el deadline se observó antes de la inyección.
+// `note.published` y los eventos nunca producen eventos adicionales.
+// `correlation_id` identifica el comando raíz y `causation_id` el mensaje que
+// causó el sobre actual. Añadir kinds y campos opcionales compatibles conserva v1.
 //
 // CONTRATO DE ADAPTADOR (extensible a hosts futuros): un adaptador provee un
 // HarnessBinding (identity/reserve/deliver) y un transporte Publish/Subscribe;
@@ -28,11 +30,13 @@
 // acceptInbound/resolveProject/instanceFromHostSession) que la suite de
 // conformidad ejercita por igual en todo adaptador.
 
-export const COMMAND_KINDS = ['task.request', 'task.redirect'] as const
-export const EVENT_KINDS = ['task.delivered', 'task.completed', 'note.published'] as const
+export const TASK_REQUEST_KINDS = ['task.request', 'task.redirect'] as const
+export const COMMAND_KINDS = [...TASK_REQUEST_KINDS, 'task.cancel'] as const
+export const EVENT_KINDS = ['task.delivered', 'task.completed', 'task.expired', 'note.published'] as const
 export const MESSAGE_KINDS = [...COMMAND_KINDS, ...EVENT_KINDS] as const
 export const SYNAGENT_SEND_KINDS = [...COMMAND_KINDS, 'note.published'] as const
 
+export type TaskRequestKind = (typeof TASK_REQUEST_KINDS)[number]
 export type CommandKind = (typeof COMMAND_KINDS)[number]
 export type EventKind = (typeof EVENT_KINDS)[number]
 export type MessageKind = (typeof MESSAGE_KINDS)[number]
@@ -47,6 +51,8 @@ export interface CanonicalMessage {
   reply_to?: string
   correlation_id?: string
   causation_id?: string
+  // Epoch Unix absoluto en ms. Solo el adaptador emisor lo calcula desde request-ttl.
+  deadline?: number
   ts: number
 }
 
@@ -184,6 +190,10 @@ export function isCommandKind(kind: MessageKind): kind is CommandKind {
   return COMMAND_KINDS.includes(kind as CommandKind)
 }
 
+export function isTaskRequestKind(kind: MessageKind): kind is TaskRequestKind {
+  return TASK_REQUEST_KINDS.includes(kind as TaskRequestKind)
+}
+
 export function isEventKind(kind: MessageKind): kind is EventKind {
   return EVENT_KINDS.includes(kind as EventKind)
 }
@@ -252,8 +262,8 @@ export interface Transport {
 }
 
 // Construye un envío v1 (single-write): valida la dirección, rechaza
-// `task.redirect` a broadcast y arma {topic, message}. Los comandos raíz se
-// correlacionan con su propio id cuando el caller no aporta otra correlación.
+// `task.redirect` a broadcast y arma {topic, message}. Todo comando raíz se
+// correlaciona con su propio id cuando el caller no aporta otra correlación.
 export function makeOutbound(
   self: Identity,
   to: string,
@@ -263,6 +273,7 @@ export function makeOutbound(
     replyTo?: string
     correlationId?: string
     causationId?: string
+    deadline?: number
     id: string
     ts: number
   },
@@ -282,6 +293,7 @@ export function makeOutbound(
     ...(options.replyTo ? { reply_to: options.replyTo } : {}),
     ...(correlationId ? { correlation_id: correlationId } : {}),
     ...(options.causationId ? { causation_id: options.causationId } : {}),
+    ...(options.deadline === undefined ? {} : { deadline: options.deadline }),
   })
   return { topic: toTopic(to), message }
 }
@@ -312,6 +324,7 @@ export function createCanonical(
     reply_to?: string
     correlation_id?: string
     causation_id?: string
+    deadline?: number
   },
 ): CanonicalMessage {
   return {
@@ -323,6 +336,7 @@ export function createCanonical(
     ...(options.reply_to ? { reply_to: options.reply_to } : {}),
     ...(options.correlation_id ? { correlation_id: options.correlation_id } : {}),
     ...(options.causation_id ? { causation_id: options.causation_id } : {}),
+    ...(options.deadline === undefined ? {} : { deadline: options.deadline }),
     ts: options.ts,
   }
 }
@@ -363,6 +377,9 @@ export function parseCanonical(text: string): CanonicalMessage {
       throw new Error(`campo canónico inválido: ${field}`)
     }
   }
+  if (message.deadline !== undefined && (typeof message.deadline !== 'number' || !Number.isFinite(message.deadline))) {
+    throw new Error('campo canónico inválido: deadline')
+  }
 
   return {
     id: message.id as string,
@@ -373,6 +390,7 @@ export function parseCanonical(text: string): CanonicalMessage {
     ...(message.reply_to === undefined ? {} : { reply_to: message.reply_to as string }),
     ...(message.correlation_id === undefined ? {} : { correlation_id: message.correlation_id as string }),
     ...(message.causation_id === undefined ? {} : { causation_id: message.causation_id as string }),
+    ...(message.deadline === undefined ? {} : { deadline: message.deadline as number }),
     ts: message.ts,
   }
 }

@@ -36,22 +36,26 @@ adaptadores existentes.
 ## Contrato canónico
 
 Cada sobre lleva `id`, `from`, `to`, `kind`, `body`, `reply_to?`,
-`correlation_id?`, `causation_id?` y `ts`. `from` y `to` son direcciones v1.
-`reply_to`, `correlation_id` y `causation_id` contienen IDs de mensajes:
+`correlation_id?`, `causation_id?`, `deadline?` y `ts`. `from` y `to` son
+direcciones v1. `reply_to`, `correlation_id` y `causation_id` contienen IDs de
+mensajes. `deadline`, cuando existe, es un epoch Unix absoluto en milisegundos:
 
 | Clase | Kinds | Emisor |
 | --- | --- | --- |
-| Comando | `task.request`, `task.redirect` | usuario o LLM mediante `synagent_send` |
-| Evento de tarea | `task.delivered`, `task.completed` | adaptador de destino |
+| Pedido de trabajo | `task.request`, `task.redirect` | usuario o LLM mediante `synagent_send` |
+| Cancelación | `task.cancel` | usuario o LLM mediante `synagent_send` |
+| Evento de tarea | `task.delivered`, `task.completed`, `task.expired` | adaptador de destino |
 | Evento informativo | `note.published` | usuario o LLM mediante `synagent_send` |
 
-Un comando raíz lleva su propio `id` como `correlation_id`. El adaptador de
+Todo comando raíz lleva su propio `id` como `correlation_id`. El adaptador de
 destino publica `task.delivered` al confirmar el marcador de entrega y
-`task.completed` al asentarse el turno. Ambos vuelven al `from` del comando,
-conservan el ID raíz en `correlation_id` y usan el ID del comando como
-`causation_id`. Solo los comandos producen esos eventos. Los eventos se
-reservan y deduplican, pero nunca producen otros eventos; `task.delivered` es
-un acuse mecánico y `task.completed` se inyecta al emisor como un turno.
+`task.completed` al asentarse el turno. Ambos vuelven al `from` del pedido con
+`reply_to` igual a su ID, conservan el ID raíz en `correlation_id` y usan el ID
+del pedido como `causation_id`. Un pedido vencido produce `task.expired` con la
+misma correlación y un body JSON con `event`, `deadline` y `expired_at`.
+Solo `task.request` y `task.redirect` producen eventos; una cancelación o un
+evento nunca produce otro evento. `task.delivered` es un acuse mecánico y se
+consume sin turno; `task.completed` y `task.expired` se inyectan al emisor.
 
 ## Direccionamiento v1 (ADR 0068; identidad por ADR 0069)
 
@@ -207,33 +211,44 @@ con la remediación correspondiente.
 El modelo usa `synagent_send` con `to`, `body`, `kind?`, `reply_to?`,
 `correlation_id?` y `causation_id?` cuando el usuario pide mensajear a otro
 agente o proyecto. El kind predeterminado es `task.request`; también admite
-`task.redirect` y `note.published`. Los eventos de tarea quedan reservados al
-adaptador. Conserva mayúsculas y puntos en destinos válidos. `/mq-send` es solo
-un atajo explícito de depuración:
+`task.redirect`, `task.cancel` y `note.published`. El schema de la herramienta
+no expone `deadline`: para pedidos de trabajo lo calcula el adaptador desde
+`request-ttl`. Los eventos de tarea quedan reservados al adaptador. Conserva
+mayúsculas y puntos en destinos válidos. `/mq-send` es solo un atajo explícito
+de depuración:
 
 ```text
 /mq-send <to>: texto        (debug; to = dirección v1, o token cualificado con tu proyecto)
 /synagent-settings
 /synagent status
+/synagent pending
+/synagent cancel <request-id>
 /synagent enable|disable
 /synagent resume
 /synagent set broker-url <mqtt://loopback:puerto>
 /synagent set global <true|false>
 /synagent set default-peer <address>
+/synagent set request-ttl <segundos>
 ```
+
+`/synagent pending` muestra el registro persistido de pedidos de la sesión con
+estado `pendiente`, `entregado`, `completo`, `vencido` o `cancelado`.
+`/synagent cancel` publica `task.cancel` al destino original únicamente si el
+pedido sigue pendiente.
 
 `/synagent-settings` muestra los valores efectivos de usuario. Permite editar
 cada valor, restablecerlo a su valor heredado o cancelar sin cambios.
-`enabled` y `global` usan una selección booleana. `broker-url` y
-`default-peer` usan entradas validadas.
+`enabled` y `global` usan una selección booleana. Los demás valores usan
+entradas validadas.
 
 Todos los subcomandos de configuración persisten en el ámbito de usuario.
-Los cambios de `enabled`, `broker-url` o `global` ejecutan una reconfiguración MQTT.
-Un cambio de `default-peer` no reinicia MQTT. Al cambiar los topics durables, el adaptador
-elimina las suscripciones obsoletas antes de usar las nuevas. Reintenta esa
-limpieza al reconectar. El cambio descarta mensajes aún no enviados de la
-configuración anterior. Una entrega ya pasada a Pi no se puede cancelar.
-Permanece como barrera de orden hasta que la sesión se asienta.
+Los cambios de `enabled`, `broker-url` o `global` ejecutan una reconfiguración
+MQTT. Cambiar `default-peer` o `request-ttl` no reinicia MQTT. Al cambiar los
+topics durables, el adaptador elimina las suscripciones obsoletas antes de usar
+las nuevas y reintenta esa limpieza al reconectar. El cambio descarta mensajes
+aún no enviados de la configuración anterior. Una entrega ya pasada al host no
+se puede cancelar y permanece como barrera de orden hasta que la sesión se
+asienta.
 
 ### Configuración nativa de Pi y omp
 
@@ -243,34 +258,37 @@ Permanece como barrera de orden hasta que la sesión se asienta.
 | `broker-url` | `mqtt://127.0.0.1:1884` | usuario |
 | `global` | `true` | usuario |
 | `default-peer` | `claude` | usuario |
+| `request-ttl` | sin valor | usuario |
 
 El archivo de usuario es `<agent-dir>/synagent.json`. El adaptador usa el valor
 no vacío de `PI_CODING_AGENT_DIR` como `<agent-dir>`. En su defecto usa
 `~/.pi/agent` en Pi y `~/.omp/agent` en omp.
 
-El archivo contiene un objeto JSON plano con una o más de las cuatro claves.
-Este ejemplo muestra el formato completo:
+El archivo contiene un objeto JSON plano. Este ejemplo muestra todos los
+valores configurables:
 
 ```json
 {
   "enabled": true,
   "broker-url": "mqtt://127.0.0.1:1884",
   "global": true,
-  "default-peer": "claude"
+  "default-peer": "claude",
+  "request-ttl": 5
 }
 ```
 
 El adaptador resuelve cada clave por separado: archivo de usuario, valores
-legacy de usuario (Pi) y default. `SYNAGENT_BROKER_URL`, cuando no está vacío,
-sobrescribe `broker-url` solo para el proceso y nunca se persiste; se valida con
-la misma restricción loopback. Los cambios de archivo se conservan al arrancar
-otra sesión.
+legacy de usuario (Pi) y default. `request-ttl` acepta segundos positivos,
+incluidos decimales; sin esa clave los pedidos no llevan `deadline`.
+`SYNAGENT_BROKER_URL`, cuando no está vacío, sobrescribe `broker-url` solo para
+el proceso y nunca se persiste; se valida con la misma restricción loopback.
+Los cambios de archivo se conservan al arrancar otra sesión.
 
-En Pi, si falta `synagent.json`, el adaptador migra las cuatro claves
+En Pi, si falta `synagent.json`, el adaptador migra las cinco claves
 `a4s.synagent.*` conocidas desde el `settings.json` de usuario. Conserva el
-archivo original y valida los valores antes de migrarlos. La escritura usa
-un archivo temporal y un cambio de nombre atómico, crea los directorios
-necesarios y aplica modo `0600` al archivo de usuario.
+archivo original y valida los valores antes de migrarlos. La escritura usa un
+archivo temporal y un cambio de nombre atómico, crea los directorios necesarios
+y aplica modo `0600` al archivo de usuario.
 
 Mientras el broker no tenga autenticación, el adaptador acepta únicamente URLs
 `mqtt://` de loopback sin credenciales. Si la URL configurada no cumple esa
@@ -282,8 +300,9 @@ cada token.
 ### Entrega en Pi
 
 Los mensajes recibidos se validan y se encolan en orden de llegada.
-`task.delivered` se consume sin abrir un turno; `task.completed`,
-`note.published` y los comandos se inyectan. Como la API pública
+`task.cancel` se consume y retira el pedido correlacionado si sigue en la cola
+propia; `task.delivered` se consume sin abrir un turno. `task.completed`,
+`task.expired`, `note.published` y los pedidos se inyectan. Como la API pública
 `sendUserMessage` de Pi retorna `void`, el adaptador invoca como máximo un
 mensaje, confirma su aceptación al observar el `message_start` de usuario con
 su marcador y libera el siguiente solo cuando Pi emite `agent_settled`. Un
@@ -297,10 +316,10 @@ exacto. La captura se asocia al ID, generación, token y marcador, y se congela
 en el siguiente `message_start` de usuario. Por eso un `followUp` procesado en
 el mismo ciclo no contamina el resultado.
 
-Cuando la entrega es un comando, la confirmación publica `task.delivered` y el
+Cuando la entrega es un pedido, la confirmación publica `task.delivered` y el
 asentamiento publica `task.completed` con el texto capturado como `body`. Una
-entrega sin texto produce un body vacío. Entregar un evento no publica ningún
-evento adicional.
+entrega sin texto produce un body vacío. Entregar un evento o una cancelación no
+publica eventos adicionales.
 
 Si una entrega no alcanza `message_start`, o una ya aceptada no se asienta, en
 30 segundos mantiene la barrera y muestra una advertencia. Esto también cubre
@@ -311,24 +330,43 @@ liberar la cola explícitamente, aceptando orden best-effort desde ese punto.
 Antes de encolar un mensaje inyectable, el motor guarda una entrada privada
 `synagent-pending` con el mensaje canónico completo, el id de sesión receptor y
 un marcador estable. Un *resume* de esa misma sesión rehidrata los pendientes
-aceptables en orden. `message_start` confirma únicamente el turno de usuario
-que contiene el marcador y entonces guarda `synagent-delivered`; los reenvíos
-de ids pendientes o confirmados se descartan y se diagnostican. Los ids
-confirmados se limitan a los 1000 más recientes, sin expulsar pendientes. Un
-turno de usuario ya persistido con el marcador también confirma la entrega
-aunque falte la entrada final. `task.delivered`, que no abre un turno, se marca
-consumido directamente.
+aceptables en orden. Los pedidos con deadline permanecen en esta cola mientras
+el host está ocupado, fuera de su cola opaca `followUp`; el motor compara
+`Date.now() >= deadline` otra vez inmediatamente antes de `sendUserMessage`.
+Si vencieron, guarda su id como consumido, no los inyecta y publica
+`task.expired`. Una cancelación hace la misma transición consumida sin publicar
+otro evento. Por eso ninguno se rehidrata después de un reinicio.
 
-La garantía cubre el corte demostrado: `SIGKILL` después de persistir
-`synagent-pending` y antes del `message_start`, seguido por *resume* de la misma
-sesión. `appendEntry` no promete `fsync`; la garantía no cubre pérdida de
-energía ni convierte el procesamiento del modelo en una transacción. Una caída
-entre `message_start`, la persistencia del turno de usuario y
+`message_start` confirma únicamente el turno de usuario que contiene el
+marcador y entonces guarda `synagent-delivered`; los reenvíos de ids pendientes
+o confirmados se descartan y se diagnostican. Los ids confirmados se limitan a
+los 1000 más recientes, sin expulsar pendientes. Un turno de usuario ya
+persistido con el marcador también confirma la entrega aunque falte la entrada
+final. `task.delivered`, que no abre un turno, se marca consumido directamente.
+
+El emisor guarda cada pedido y cada cambio de estado en entradas
+`synagent-request` de la sesión. Cualquier mensaje correlacionado mediante
+`reply_to` actualiza el registro; un timer local marca `vencido` un pedido aún
+pendiente cuando pasa su deadline. La última entrada por id reconstruye
+`/synagent pending` al reanudar la sesión.
+
+La garantía de recuperación cubre el corte demostrado: `SIGKILL` después de
+persistir `synagent-pending` y antes del `message_start`, seguido por *resume*
+de la misma sesión. `appendEntry` no promete `fsync`; la garantía no cubre
+pérdida de energía ni convierte el procesamiento del modelo en una transacción.
+Una caída entre `message_start`, la persistencia del turno de usuario y
 `synagent-delivered` queda limitada por lo que el host haya hecho durable.
 
 - si Pi está idle, inicia un turno normal;
-- `kind=task.redirect` interrumpe un turno activo con `deliverAs: "steer"`;
+- `kind=task.redirect` vigente interrumpe un turno activo con `deliverAs: "steer"`;
+- un `task.request` con deadline espera en la cola propia mientras Pi está ocupado;
 - los demás mensajes inyectables se encolan con `deliverAs: "followUp"`.
+
+El deadline usa el reloj del emisor para construir el epoch y el del destino
+para compararlo. El vencimiento se observa al intentar drenar la cola, no como
+una notificación puntual. MQTT QoS 1 puede redeliver, la deduplicación reserva
+el id, la cola mantiene FIFO y un fallo al publicar `task.expired` se informa
+pero no vuelve inyectable el pedido descartado.
 
 ### Diagnóstico operacional de Pi
 
@@ -432,6 +470,22 @@ reenvío del id confirmado debe producir `message.duplicate` sin otro turno:
 SYNAGENT_OMP_MODEL=anthropic/claude-haiku-5-5 \
 SYNAGENT_PI_MODEL=openai-codex/gpt-6.1-sol \
   npm run verify:delivery-recovery --workspace @a4s/synagent
+```
+
+La comprobación viva de vencimiento y cancelación usa el broker propio `18328`
+y DB `/tmp/synagent-impl-128/db`. Para cada host ocupa el destino con una tool
+real, envía desde otra sesión con `request-ttl=5`, exige `task.expired` con
+`reply_to`, ausencia de inyección y `estado=vencido` en `/synagent pending`.
+Después cancela otro pedido durante la ocupación y exige que tampoco se
+inyecte. Verifica con `lsof` que cada proceso conecta únicamente a `18328` antes
+de enviar. El script usa los directorios reales solo para la autenticación,
+guarda los bytes y permisos exactos de `synagent.json`, configura temporalmente
+el TTL y restaura el archivo al cerrar:
+
+```sh
+SYNAGENT_OMP_MODEL=anthropic/claude-haiku-5-5 \
+SYNAGENT_PI_MODEL=openai-codex/gpt-6.1-sol \
+  npm run verify:request-lifecycle --workspace @a4s/synagent
 ```
 
 Las pruebas de este workspace incluyen el protocolo compartido, los bridges
