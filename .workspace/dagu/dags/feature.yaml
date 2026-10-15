@@ -462,20 +462,47 @@ steps:
     run: |
       set -euo pipefail
       umask 0022
+      fail() { printf 'close_gate: %s\n' "$*" >&2; exit 1; }
       cd "$WORKTREE"
       sha=$(git rev-parse HEAD)
       pr_ref=${PR_NUMBER:-$BRANCH}
-      pr=$(gh pr view "$pr_ref" --json number --jq .number)
-      test "$(gh pr view "$pr" --json state --jq .state)" = MERGED
-      test "$(gh pr view "$pr" --json headRefOid --jq .headRefOid)" = "$sha"
-      test "$(gh pr checks "$pr" --required --json name,state --jq 'any(.[]; .name == env.REQUIRED_CHECK and .state == "SUCCESS")')" = true
-      test "$(git -C "$PRIMARY" branch --show-current)" = "$BASE_BRANCH"
-      test -z "$(git -C "$PRIMARY" status --porcelain)"
-      git -C "$PRIMARY" fetch origin
-      git -C "$PRIMARY" merge --ff-only "origin/$BASE_BRANCH"
-      test "$(git -C "$PRIMARY" rev-parse HEAD)" = "$(git -C "$PRIMARY" rev-parse "origin/$BASE_BRANCH")"
-      printf 'pr=%s\ntested_sha=%s\nbase_sha=%s\n' \
-        "$pr" "$sha" "$(git -C "$PRIMARY" rev-parse HEAD)"
+      if ! pr=$(gh pr view "$pr_ref" --json number --jq .number); then
+        fail "PR lookup for $pr_ref failed, expected PR number"
+      fi
+      [[ -n "$pr" ]] || fail "PR lookup for $pr_ref returned empty, expected PR number"
+      state=$(gh pr view "$pr" --json state --jq .state) ||
+        fail "PR #$pr state lookup failed, expected MERGED"
+      [[ "$state" == MERGED ]] || fail "PR #$pr state=$state, expected MERGED"
+      head_sha=$(gh pr view "$pr" --json headRefOid --jq .headRefOid) ||
+        fail "PR #$pr headRefOid lookup failed, expected $sha"
+      [[ "$head_sha" == "$sha" ]] || fail "PR #$pr headRefOid=$head_sha, expected $sha"
+      check_state=$(gh pr checks "$pr" --required --json name,state \
+        --jq 'map(select(.name == env.REQUIRED_CHECK)) | if length == 0 then "MISSING" else .[0].state end') ||
+        fail "required check $REQUIRED_CHECK lookup failed, expected SUCCESS"
+      [[ "$check_state" == SUCCESS ]] ||
+        fail "required check $REQUIRED_CHECK state=$check_state, expected SUCCESS"
+      primary_branch=$(git -C "$PRIMARY" branch --show-current) ||
+        fail "PRIMARY $PRIMARY branch lookup failed, expected $BASE_BRANCH"
+      [[ "$primary_branch" == "$BASE_BRANCH" ]] ||
+        fail "PRIMARY $PRIMARY on branch $primary_branch, expected $BASE_BRANCH"
+      primary_status=$(git -C "$PRIMARY" status --porcelain) ||
+        fail "PRIMARY $PRIMARY status lookup failed, expected clean"
+      if [[ -n "$primary_status" ]]; then
+        printf 'close_gate: PRIMARY %s has local changes, expected clean\n' "$PRIMARY" >&2
+        printf '%s\n' "$primary_status" >&2
+        exit 1
+      fi
+      git -C "$PRIMARY" fetch origin ||
+        fail "PRIMARY $PRIMARY fetch origin failed, expected success"
+      git -C "$PRIMARY" merge --ff-only "origin/$BASE_BRANCH" ||
+        fail "PRIMARY $PRIMARY ff-only merge failed, expected origin/$BASE_BRANCH"
+      base_sha=$(git -C "$PRIMARY" rev-parse HEAD) ||
+        fail "PRIMARY $PRIMARY HEAD lookup failed, expected origin/$BASE_BRANCH"
+      origin_base_sha=$(git -C "$PRIMARY" rev-parse "origin/$BASE_BRANCH") ||
+        fail "origin/$BASE_BRANCH lookup failed, expected commit SHA"
+      [[ "$base_sha" == "$origin_base_sha" ]] ||
+        fail "PRIMARY $PRIMARY HEAD=$base_sha, expected $origin_base_sha"
+      printf 'pr=%s\ntested_sha=%s\nbase_sha=%s\n' "$pr" "$sha" "$base_sha"
 
 handler_on:
   wait:
