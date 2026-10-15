@@ -6,11 +6,6 @@
     "name": "pablontiv"
   },
   "userConfig": {
-    "project": {
-      "type": "string",
-      "title": "Proyecto",
-      "description": "Token de proyecto (p. ej. 'a4s'). Opcional; por defecto se deriva del remoto origin del repo. La instancia NO es configurable: sale del id de sesión nativo (una por sesión)."
-    },
     "global": {
       "type": "boolean",
       "title": "Global broadcast",

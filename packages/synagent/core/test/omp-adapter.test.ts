@@ -22,9 +22,8 @@ import {
 test('omp adapter releases the ordering barrier only on a terminal agent_end', async t => {
   const { broker, server, url } = await startBroker()
   const publisher = await connectClient(url, 'omp-adapter-end-publisher')
-  const harness = createHarness(createSynagentOmp, '.omp', {
+  const harness = createHarness(createSynagentOmp, {
     'a4s.synagent.broker-url': url,
-    'a4s.synagent.project': 'a4s',
   }, [], 'omp-end')
   t.after(async () => {
     await harness.shutdown()
@@ -52,9 +51,8 @@ test('omp adapter releases the ordering barrier only on a terminal agent_end', a
   assert.match(harness.received[1]?.text ?? '', /id omp-second/)
 })
 
-test('omp settings use omp project and agent paths with the agent directory override', t => {
+test('omp settings use user agent paths with the agent directory override', t => {
   const root = mkdtempSync(join(tmpdir(), 'synagent-omp-settings-'))
-  const cwd = join(root, 'project')
   const home = join(root, 'home')
   const override = join(root, 'agent-override')
   const host = { agentDirName: '.omp', legacySettings: false } as const
@@ -70,15 +68,13 @@ test('omp settings use omp project and agent paths with the agent directory over
   assert.equal(resolveAgentDir({ PI_CODING_AGENT_DIR: override }, home, host.agentDirName), override)
 
   process.env.PI_CODING_AGENT_DIR = '   '
-  const defaults = settingsPaths(cwd, undefined, host)
+  const defaults = settingsPaths(undefined, host)
   assert.deepEqual(defaults, {
     global: join(homedir(), '.omp', 'agent', 'synagent.json'),
-    project: join(cwd, '.omp', 'synagent.json'),
   })
 
   process.env.PI_CODING_AGENT_DIR = override
-  assert.deepEqual(settingsPaths(cwd, undefined, host), {
+  assert.deepEqual(settingsPaths(undefined, host), {
     global: join(override, 'synagent.json'),
-    project: join(cwd, '.omp', 'synagent.json'),
   })
 })

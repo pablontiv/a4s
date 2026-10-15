@@ -18,20 +18,16 @@ import { isAddress, isToken } from '../../protocol.ts'
 export const DEFAULT_BROKER_URL = 'mqtt://127.0.0.1:1884'
 export const DEFAULT_PEER = 'claude'
 
-export type SynagentSettingKey = 'enabled' | 'broker-url' | 'project' | 'global' | 'default-peer'
+export type SynagentSettingKey = 'enabled' | 'broker-url' | 'global' | 'default-peer'
 export type SynagentSettings = {
   enabled: boolean
   'broker-url': string
-  project: string
   global: boolean
   'default-peer': string
 }
-export type SynagentSettingsScope = 'global' | 'project'
 export type SynagentSettingsPaths = {
   global: string
-  project: string
   globalLegacy?: string
-  projectLegacy?: string
 }
 
 export type SynagentSettingsHost = {
@@ -45,7 +41,6 @@ type JsonRecord = Record<string, unknown>
 export const SYNAGENT_SETTING_KEYS: readonly SynagentSettingKey[] = [
   'enabled',
   'broker-url',
-  'project',
   'global',
   'default-peer',
 ]
@@ -53,7 +48,6 @@ export const SYNAGENT_SETTING_KEYS: readonly SynagentSettingKey[] = [
 export const DEFAULT_SETTINGS: Readonly<SynagentSettings> = {
   enabled: true,
   'broker-url': DEFAULT_BROKER_URL,
-  project: '',
   global: true,
   'default-peer': DEFAULT_PEER,
 }
@@ -61,7 +55,6 @@ export const DEFAULT_SETTINGS: Readonly<SynagentSettings> = {
 const LEGACY_KEYS: Readonly<Record<SynagentSettingKey, string>> = {
   enabled: 'a4s.synagent.enabled',
   'broker-url': 'a4s.synagent.broker-url',
-  project: 'a4s.synagent.project',
   global: 'a4s.synagent.global',
   'default-peer': 'a4s.synagent.default-peer',
 }
@@ -76,38 +69,30 @@ export function resolveAgentDir(
 }
 
 export function settingsPaths(
-  cwd: string,
   agentDir?: string,
   host: SynagentSettingsHost = { agentDirName: '.pi', legacySettings: true },
 ): SynagentSettingsPaths {
   const globalDir = agentDir ?? resolveAgentDir(process.env, homedir(), host.agentDirName)
   return {
     global: join(globalDir, 'synagent.json'),
-    project: join(cwd, host.agentDirName, 'synagent.json'),
     ...(host.legacySettings ? {
       globalLegacy: join(globalDir, 'settings.json'),
-      projectLegacy: join(cwd, host.agentDirName, 'settings.json'),
     } : {}),
   }
 }
 
 export function initializeSynagentSettings(
   paths: SynagentSettingsPaths,
-  projectTrusted: boolean,
 ): SynagentSettings {
-  if (paths.globalLegacy) migrateLegacyScope(paths.global, paths.globalLegacy, 'global')
-  if (projectTrusted && paths.projectLegacy) migrateLegacyScope(paths.project, paths.projectLegacy, 'project')
-  return loadSynagentSettings(paths, projectTrusted)
+  if (paths.globalLegacy) migrateLegacySettings(paths.global, paths.globalLegacy)
+  return loadSynagentSettings(paths)
 }
 
 export function findRejectedBrokerUrl(
   paths: SynagentSettingsPaths,
-  projectTrusted: boolean,
 ): string | undefined {
   const candidates: unknown[] = []
-  if (projectTrusted) candidates.push(readRawNativeValue(paths.project, 'broker-url'))
   candidates.push(readRawNativeValue(paths.global, 'broker-url'))
-  if (projectTrusted && paths.projectLegacy) candidates.push(readRawLegacyValue(paths.projectLegacy, 'broker-url'))
   if (paths.globalLegacy) candidates.push(readRawLegacyValue(paths.globalLegacy, 'broker-url'))
   for (const candidate of candidates) {
     if (typeof candidate !== 'string') continue
@@ -122,16 +107,13 @@ export function findRejectedBrokerUrl(
 
 export function loadSynagentSettings(
   paths: SynagentSettingsPaths,
-  projectTrusted: boolean,
 ): SynagentSettings {
-  const projectNew = projectTrusted ? readNativeSettings(paths.project) : {}
   const globalNew = readNativeSettings(paths.global)
-  const projectLegacy = projectTrusted && paths.projectLegacy ? readLegacySettings(paths.projectLegacy) : {}
   const globalLegacy = paths.globalLegacy ? readLegacySettings(paths.globalLegacy) : {}
   const resolved = { ...DEFAULT_SETTINGS }
 
   for (const key of SYNAGENT_SETTING_KEYS) {
-    const candidates = [projectNew[key], globalNew[key], projectLegacy[key], globalLegacy[key], DEFAULT_SETTINGS[key]]
+    const candidates = [globalNew[key], globalLegacy[key], DEFAULT_SETTINGS[key]]
     for (const candidate of candidates) {
       if (isValidSetting(key, candidate)) {
         assignSetting(resolved, key, candidate)
@@ -153,11 +135,6 @@ export function parseSettingValue(key: SynagentSettingKey, input: string): Synag
     assertLoopbackBrokerUrl(input)
     return input
   }
-  if (key === 'project') {
-    const token = input.trim()
-    if (token !== '' && !isToken(token)) throw new Error(`Invalid Synagent project: ${input}`)
-    return token
-  }
   const peer = input.trim()
   if (!isAddress(peer) && !isToken(peer)) throw new Error(`Invalid Synagent peer: ${input}`)
   return peer
@@ -165,27 +142,25 @@ export function parseSettingValue(key: SynagentSettingKey, input: string): Synag
 
 export function persistSetting(
   paths: SynagentSettingsPaths,
-  scope: SynagentSettingsScope,
   key: SynagentSettingKey,
   value: SynagentSettings[SynagentSettingKey],
   operations: { chmodSync?: typeof chmodSync } = {},
 ): void {
   if (!isValidSetting(key, value)) throw new Error(`Invalid Synagent ${key}: ${String(value)}`)
-  const path = paths[scope]
+  const path = paths.global
   const current = readNativeFileForUpdate(path)
   current[key] = value
-  atomicWriteJson(path, current, scope === 'global', operations.chmodSync)
+  atomicWriteJson(path, current, operations.chmodSync)
 }
 
 export function resetSetting(
   paths: SynagentSettingsPaths,
-  scope: SynagentSettingsScope,
   key: SynagentSettingKey,
 ): void {
-  const path = paths[scope]
+  const path = paths.global
   const current = readNativeFileForUpdate(path)
   delete current[key]
-  atomicWriteJson(path, current, scope === 'global')
+  atomicWriteJson(path, current)
 }
 
 export function assertLoopbackBrokerUrl(value: string): void {
@@ -208,10 +183,10 @@ export function assertLoopbackBrokerUrl(value: string): void {
   }
 }
 
-function migrateLegacyScope(nativePath: string, legacyPath: string, scope: SynagentSettingsScope): void {
+function migrateLegacySettings(nativePath: string, legacyPath: string): void {
   if (existsSync(nativePath) || !existsSync(legacyPath)) return
   const migrated = readLegacySettings(legacyPath)
-  atomicWriteJson(nativePath, migrated, scope === 'global')
+  atomicWriteJson(nativePath, migrated)
 }
 
 function readRawNativeValue(path: string, key: SynagentSettingKey): unknown {
@@ -295,7 +270,6 @@ function isValidSetting<K extends SynagentSettingKey>(key: K, value: unknown): v
       return false
     }
   }
-  if (key === 'project') return typeof value === 'string' && (value.trim() === '' || isToken(value.trim()))
   return typeof value === 'string' && (isAddress(value.trim()) || isToken(value.trim()))
 }
 
@@ -310,18 +284,17 @@ function assignSetting<K extends SynagentSettingKey>(
 function atomicWriteJson(
   path: string,
   value: JsonRecord | SettingsRecord,
-  globalFile: boolean,
   setMode: typeof chmodSync = chmodSync,
 ): void {
   mkdirSync(dirname(path), { recursive: true })
   const temporaryPath = join(dirname(path), `.${randomUUID()}.synagent.tmp`)
   let descriptor: number | undefined
   try {
-    descriptor = openSync(temporaryPath, 'wx', globalFile ? 0o600 : 0o666)
+    descriptor = openSync(temporaryPath, 'wx', 0o600)
     writeFileSync(descriptor, `${JSON.stringify(value, null, 2)}\n`, 'utf8')
     closeSync(descriptor)
     descriptor = undefined
-    if (globalFile) setMode(temporaryPath, 0o600)
+    setMode(temporaryPath, 0o600)
     renameSync(temporaryPath, path)
   } catch (error) {
     if (descriptor !== undefined) closeSync(descriptor)

@@ -24,7 +24,6 @@ import {
   type SynagentSettingKey,
   type SynagentSettings,
   type SynagentSettingsPaths,
-  type SynagentSettingsScope,
 } from './settings.ts'
 import {
   acceptInbound,
@@ -37,7 +36,6 @@ import {
   MESSAGE_KINDS,
   newId,
   parseCanonical,
-  readWorkspaceProject,
   renderForAgent,
   resolveProjectWithSource,
   serialize,
@@ -85,7 +83,7 @@ export type SynagentAdapterHost = {
   scopeName: string
   diagnosticEventPrefix: string
   settleEventName: string
-  settingsPaths: (cwd: string) => SynagentSettingsPaths
+  settingsPaths: () => SynagentSettingsPaths
   bindSettle: (pi: ExtensionAPI, release: (ctx: ExtensionContext) => void) => void
 }
 
@@ -122,7 +120,6 @@ function synagentAdapter(
   let awaitingSettlement = false
   let settings: SynagentSettings = { ...DEFAULT_SETTINGS }
   let activeSettingsPaths: SynagentSettingsPaths | undefined
-  let projectTrusted = false
   const queuedDeliveries: QueuedDelivery[] = []
   const seen = new Set<string>()
 
@@ -184,8 +181,7 @@ function synagentAdapter(
         if (settings.enabled) state = identity ? (durable?.connected ? 'connected' : 'connecting') : 'inactive'
         const identityStatus = identity
           ? `address=${directAddress(identity)} source=${identitySource}`
-          : 'address=unresolved inactive=true; remediate with /synagent set project <project>, '
-            + '.workspace/config/synagent.json, or configure remote.origin.url'
+          : 'address=unresolved inactive=true; remediate by configuring remote.origin.url'
         ctx.ui.notify(
           `Synagent ${state}; ${identityStatus} global=${settings.global} `
           + `peer=${settings['default-peer']} broker=${settings['broker-url']}`,
@@ -195,7 +191,7 @@ function synagentAdapter(
       }
       if (action === 'enable' || action === 'disable') {
         try {
-          await applySetting('enabled', action === 'enable', 'global', ctx)
+          await applySetting('enabled', action === 'enable', ctx)
           ctx.ui.notify(`Synagent ${action === 'enable' ? 'enabled' : 'disabled'}`, 'info')
         } catch (error) {
           ctx.ui.notify(formatError(error), 'error')
@@ -231,7 +227,7 @@ function synagentAdapter(
       if (action !== 'set' || !key || rest.length === 0) {
         ctx.ui.notify(
           'Usage: /synagent status|enable|disable|resume|set '
-          + '<broker-url|project|global|default-peer> <value>',
+          + '<enabled|broker-url|global|default-peer> <value>',
           'warning',
         )
         return
@@ -240,7 +236,7 @@ function synagentAdapter(
       try {
         const settingKey = requireSettingKey(key)
         const value = parseSettingValue(settingKey, rest.join(' '))
-        await applySetting(settingKey, value, settingScope(settingKey), ctx)
+        await applySetting(settingKey, value, ctx)
         ctx.ui.notify(`Synagent ${key} updated`, 'info')
       } catch (error) {
         ctx.ui.notify(formatError(error), 'error')
@@ -268,15 +264,14 @@ function synagentAdapter(
     }
     activeSessionId = sessionId
     context = ctx
-    projectTrusted = ctx.isProjectTrusted()
-    activeSettingsPaths = host.settingsPaths(ctx.cwd)
+    activeSettingsPaths = host.settingsPaths()
     try {
-      settings = initializeSynagentSettings(activeSettingsPaths, projectTrusted)
+      settings = initializeSynagentSettings(activeSettingsPaths)
     } catch (error) {
-      settings = loadSynagentSettings(activeSettingsPaths, projectTrusted)
+      settings = loadSynagentSettings(activeSettingsPaths)
       ctx.ui.notify(`Synagent settings migration failed: ${formatError(error)}`, 'warning')
     }
-    const rejectedBrokerUrl = findRejectedBrokerUrl(activeSettingsPaths, projectTrusted)
+    const rejectedBrokerUrl = findRejectedBrokerUrl(activeSettingsPaths)
     if (rejectedBrokerUrl) {
       ctx.ui.notify(
         `Synagent broker URL rejected (${rejectedBrokerUrl}); falling back to ${settings['broker-url']}`,
@@ -377,8 +372,7 @@ function synagentAdapter(
     if (!identity) {
       return reject(
         'IDENTITY_UNRESOLVED',
-        'Synagent cannot send: identity unresolved; configure the project setting, '
-        + '.workspace/config/synagent.json, or remote origin',
+        'Synagent cannot send: identity unresolved; configure remote.origin.url',
         'identity.resolve',
       )
     }
@@ -426,26 +420,22 @@ function synagentAdapter(
   async function applySetting<K extends SynagentSettingKey>(
     key: K,
     value: SynagentSettings[K],
-    scope: SynagentSettingsScope,
     ctx: ExtensionContext,
   ): Promise<void> {
     const paths = requireSettingsPaths()
-    assertWritableScope(scope, ctx)
     const previous = settings[key]
-    persistSetting(paths, scope, key, value)
-    const next = loadSynagentSettings(paths, projectTrusted)
+    persistSetting(paths, key, value)
+    const next = loadSynagentSettings(paths)
     settings = next
     if (Object.is(previous, next[key]) || key === 'default-peer') return
     void restart(ctx, key === 'enabled' ? next.enabled === false : true)
   }
 
   async function applyReset(key: SynagentSettingKey, ctx: ExtensionContext): Promise<void> {
-    const scope = settingScope(key)
     const paths = requireSettingsPaths()
-    assertWritableScope(scope, ctx)
     const previous = settings[key]
-    resetSetting(paths, scope, key)
-    const next = loadSynagentSettings(paths, projectTrusted)
+    resetSetting(paths, key)
+    const next = loadSynagentSettings(paths)
     settings = next
     if (Object.is(previous, next[key]) || key === 'default-peer') return
     void restart(ctx, key === 'enabled' ? next.enabled === false : true)
@@ -465,7 +455,6 @@ function synagentAdapter(
       const choice = await ctx.ui.select('Synagent settings', [
         `Enabled: ${settings.enabled}`,
         `Broker URL: ${settings['broker-url']}`,
-        `Project: ${effectiveProjectLabel(ctx)}`,
         `Global broadcast: ${settings.global}`,
         `Default peer: ${settings['default-peer']}`,
         'Reset a setting',
@@ -476,36 +465,26 @@ function synagentAdapter(
         if (choice.startsWith('Enabled:')) {
           const selected = await ctx.ui.select('Synagent enabled', ['true', 'false', 'Cancel'])
           if (selected && selected !== 'Cancel') {
-            await applySetting('enabled', parseSettingValue('enabled', selected) as boolean, 'global', ctx)
+            await applySetting('enabled', parseSettingValue('enabled', selected) as boolean, ctx)
           }
         } else if (choice.startsWith('Broker URL:')) {
           const value = await ctx.ui.input('Synagent broker URL', settings['broker-url'])
           if (value !== undefined) {
-            await applySetting('broker-url', parseSettingValue('broker-url', value) as string, 'global', ctx)
-          }
-        } else if (choice.startsWith('Project:')) {
-          const action = await ctx.ui.select('Synagent project', ['Enter token', 'Derive from git', 'Cancel'])
-          if (action === 'Derive from git') {
-            await applySetting('project', '', 'project', ctx)
-          } else if (action === 'Enter token') {
-            const value = await ctx.ui.input('Synagent project token', settings.project)
-            if (value !== undefined) {
-              await applySetting('project', parseSettingValue('project', value) as string, 'project', ctx)
-            }
+            await applySetting('broker-url', parseSettingValue('broker-url', value) as string, ctx)
           }
         } else if (choice.startsWith('Global broadcast:')) {
           const selected = await ctx.ui.select('Synagent global broadcast', ['true', 'false', 'Cancel'])
           if (selected && selected !== 'Cancel') {
-            await applySetting('global', parseSettingValue('global', selected) as boolean, 'global', ctx)
+            await applySetting('global', parseSettingValue('global', selected) as boolean, ctx)
           }
         } else if (choice.startsWith('Default peer:')) {
           const value = await ctx.ui.input('Synagent default peer', settings['default-peer'])
           if (value !== undefined) {
-            await applySetting('default-peer', parseSettingValue('default-peer', value) as string, 'global', ctx)
+            await applySetting('default-peer', parseSettingValue('default-peer', value) as string, ctx)
           }
         } else if (choice === 'Reset a setting') {
           const selected = await ctx.ui.select('Reset Synagent setting', [
-            'enabled', 'broker-url', 'project', 'global', 'default-peer', 'Cancel',
+            'enabled', 'broker-url', 'global', 'default-peer', 'Cancel',
           ])
           if (selected && selected !== 'Cancel') {
             const key = requireSettingKey(selected)
@@ -520,24 +499,9 @@ function synagentAdapter(
     }
   }
 
-  function effectiveProjectLabel(ctx: ExtensionContext): string {
-    try {
-      const resolved = resolveEffectiveProject(ctx)
-      return `${resolved.project} (source=${resolved.source})`
-    } catch {
-      return '(unresolved; configure setting, workspace, or Git origin)'
-    }
-  }
-
   function requireSettingsPaths(): SynagentSettingsPaths {
     if (!activeSettingsPaths) throw new Error('Synagent settings require an active session')
     return activeSettingsPaths
-  }
-
-  function assertWritableScope(scope: SynagentSettingsScope, ctx: ExtensionContext): void {
-    if (scope === 'project' && !ctx.isProjectTrusted()) {
-      throw new Error('Synagent project settings require a trusted project')
-    }
   }
 
   function restart(ctx: ExtensionContext, removeSubscription: boolean): Promise<void> {
@@ -603,8 +567,7 @@ function synagentAdapter(
         error: classifyDiagnosticError(error, 'IDENTITY_UNRESOLVED', 'identity.resolve', false, `${host.componentName}.identity`),
       })
       ctx.ui.notify(
-        'Synagent identity unresolved; adapter inactive until project is configured with '
-        + `/synagent set project <project>, .workspace/config/synagent.json, or remote.origin.url: ${formatError(error)}`,
+        `Synagent identity unresolved; adapter inactive until remote.origin.url is configured: ${formatError(error)}`,
         'warning',
       )
     }
@@ -1019,12 +982,6 @@ function synagentAdapter(
   }
 
   function resolveEffectiveProject(ctx: ExtensionContext): ReturnType<typeof resolveProjectWithSource> {
-    const setting = emptyToUndefined(settings.project)
-    if (setting !== undefined) return resolveProjectWithSource({ setting })
-
-    const workspace = readWorkspaceProject(ctx.cwd)
-    if (workspace !== undefined) return resolveProjectWithSource({ workspace })
-
     const origin = readGitRemote(ctx.cwd)
     return resolveProjectWithSource(origin === undefined ? {} : { origin })
   }
@@ -1077,14 +1034,10 @@ function synagentAdapter(
 }
 
 function requireSettingKey(value: string): SynagentSettingKey {
-  if (value === 'enabled' || value === 'broker-url' || value === 'project' || value === 'global' || value === 'default-peer') {
+  if (value === 'enabled' || value === 'broker-url' || value === 'global' || value === 'default-peer') {
     return value
   }
   throw new Error(`Unknown Synagent setting: ${value}`)
-}
-
-function settingScope(key: SynagentSettingKey): SynagentSettingsScope {
-  return key === 'project' ? 'project' : 'global'
 }
 
 function destinationScopeOf(destination: string): DestinationScope {
@@ -1129,12 +1082,6 @@ function parseSendArgs(input: string, fallback: string): { to: string; body: str
     return body ? { to: match[1] as string, body } : undefined
   }
   return { to: fallback, body: raw }
-}
-
-function emptyToUndefined(value: unknown): string | undefined {
-  if (typeof value !== 'string') return undefined
-  const trimmed = value.trim()
-  return trimmed.length > 0 ? trimmed : undefined
 }
 
 function readGitRemote(cwd: string): string | undefined {
