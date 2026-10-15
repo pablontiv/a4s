@@ -18,12 +18,13 @@ import { isAddress, isToken } from '../../protocol.ts'
 export const DEFAULT_BROKER_URL = 'mqtt://127.0.0.1:1884'
 export const DEFAULT_PEER = 'claude'
 
-export type SynagentSettingKey = 'enabled' | 'broker-url' | 'global' | 'default-peer'
+export type SynagentSettingKey = 'enabled' | 'broker-url' | 'global' | 'default-peer' | 'request-ttl'
 export type SynagentSettings = {
   enabled: boolean
   'broker-url': string
   global: boolean
   'default-peer': string
+  'request-ttl'?: number
 }
 export type SynagentSettingsPaths = {
   global: string
@@ -43,6 +44,7 @@ export const SYNAGENT_SETTING_KEYS: readonly SynagentSettingKey[] = [
   'broker-url',
   'global',
   'default-peer',
+  'request-ttl',
 ]
 
 export const DEFAULT_SETTINGS: Readonly<SynagentSettings> = {
@@ -57,6 +59,7 @@ const LEGACY_KEYS: Readonly<Record<SynagentSettingKey, string>> = {
   'broker-url': 'a4s.synagent.broker-url',
   global: 'a4s.synagent.global',
   'default-peer': 'a4s.synagent.default-peer',
+  'request-ttl': 'a4s.synagent.request-ttl',
 }
 
 export function resolveAgentDir(
@@ -149,6 +152,13 @@ export function parseSettingValue(key: SynagentSettingKey, input: string): Synag
   if (key === 'broker-url') {
     assertLoopbackBrokerUrl(input)
     return input
+  }
+  if (key === 'request-ttl') {
+    const seconds = Number(input)
+    if (!Number.isFinite(seconds) || seconds <= 0 || seconds > Number.MAX_SAFE_INTEGER / 1000) {
+      throw new Error(`Invalid Synagent request-ttl (use positive seconds): ${input}`)
+    }
+    return seconds
   }
   const peer = input.trim()
   if (!isAddress(peer) && !isToken(peer)) throw new Error(`Invalid Synagent peer: ${input}`)
@@ -284,6 +294,12 @@ function isValidSetting<K extends SynagentSettingKey>(key: K, value: unknown): v
     } catch {
       return false
     }
+  }
+  if (key === 'request-ttl') {
+    return typeof value === 'number'
+      && Number.isFinite(value)
+      && value > 0
+      && value <= Number.MAX_SAFE_INTEGER / 1000
   }
   return typeof value === 'string' && (isAddress(value.trim()) || isToken(value.trim()))
 }

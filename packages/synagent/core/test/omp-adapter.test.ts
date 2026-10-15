@@ -74,6 +74,62 @@ test('omp adapter captures completion and releases only on terminal agent_end', 
   assert.equal(completed.correlation_id, 'omp-first')
 })
 
+test('omp adapter holds deadline requests outside followUp and wakes on terminal agent_end', async t => {
+  const { broker, server, url } = await startBroker()
+  const publisher = await connectClient(url, 'omp-deadline-publisher')
+  const events: CanonicalMessage[] = []
+  publisher.on('message', (_topic, payload) => {
+    events.push(JSON.parse(payload.toString()) as CanonicalMessage)
+  })
+  await new Promise<void>((resolveSubscription, rejectSubscription) => {
+    publisher.subscribe('synagent/v1/a4s/sender', { qos: 1 }, error => {
+      if (error) rejectSubscription(error)
+      else resolveSubscription()
+    })
+  })
+  const harness = createHarness(createSynagentOmp, {
+    'a4s.synagent.broker-url': url,
+  }, [], 'omp-deadline')
+  t.after(async () => {
+    await harness.shutdown()
+    await end(publisher)
+    await closeServer(server)
+    await closeBroker(broker)
+  })
+
+  const topic = 'synagent/v1/a4s/omp-deadline'
+  harness.idle = false
+  await harness.start()
+  await waitFor(() => harness.notifications.some(({ message }) => message.includes(`subscribed to ${topic}`)))
+  await publish(publisher, topic, serialize(message({
+    id: 'held-while-busy',
+    from: 'a4s/sender',
+    to: 'a4s/omp-deadline',
+    deadline: Date.now() + 600_000,
+  })))
+  await waitFor(() => harness.entries.some(entry => pendingEntryMessageId(entry) === 'held-while-busy'))
+  assert.equal(harness.received.length, 0)
+  harness.idle = true
+  await harness.agentEnd({ type: 'agent_end', messages: [], willContinue: true })
+  assert.equal(harness.received.length, 0)
+  await harness.agentEnd({ type: 'agent_end', messages: [], willContinue: undefined })
+  await waitFor(() => harness.received.length === 1)
+  assert.match(harness.received[0]?.text ?? '', /id held-while-busy/)
+  await harness.confirmDelivery(0)
+  await harness.agentEnd({ type: 'agent_end', messages: [], willContinue: undefined })
+
+  harness.idle = false
+  await publish(publisher, topic, serialize(message({
+    id: 'expired-while-busy',
+    from: 'a4s/sender',
+    to: 'a4s/omp-deadline',
+    deadline: Date.now() - 1,
+  })))
+  await waitFor(() => events.some(event =>
+    event.kind === 'task.expired' && event.reply_to === 'expired-while-busy'))
+  assert.equal(harness.received.length, 1)
+})
+
 test('omp settings use user agent paths with the agent directory override', t => {
   const root = mkdtempSync(join(tmpdir(), 'synagent-omp-settings-'))
   const home = join(root, 'home')

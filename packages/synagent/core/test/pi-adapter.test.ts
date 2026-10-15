@@ -1225,6 +1225,134 @@ test('Pi adapter rejects remote broker edits and keeps state after a write failu
   await harness.shutdown()
 })
 
+test('Pi adapter expires and cancels queued requests without rehydrating them', async t => {
+  const { broker, server, url } = await startBroker()
+  const publisher = await connectClient(url, 'pi-deadline-publisher')
+  const events: CanonicalMessage[] = []
+  publisher.on('message', (_topic, payload) => events.push(JSON.parse(payload.toString()) as CanonicalMessage))
+  await subscribe(publisher, 'synagent/v1/a4s/sender')
+  const settings = { 'a4s.synagent.broker-url': url }
+  const sessionId = 'pi-deadlines'
+  const topic = `synagent/v1/a4s/${sessionId}`
+  const harness = createHarness(settings, [], sessionId)
+  let restored: typeof harness | undefined
+  t.after(async () => {
+    await restored?.shutdown()
+    await harness.shutdown()
+    await end(publisher)
+    await closeServer(server)
+    await closeBroker(broker)
+  })
+
+  harness.idle = false
+  await harness.start()
+  await waitFor(() => harness.notifications.some(({ message }) => message.includes(`subscribed to ${topic}`)))
+  await publish(publisher, topic, serialize(message({
+    id: 'expired-before-injection',
+    from: 'a4s/sender',
+    to: `a4s/${sessionId}`,
+    deadline: Date.now() - 1,
+  })))
+  await waitFor(() => events.some(event =>
+    event.kind === 'task.expired' && event.reply_to === 'expired-before-injection'))
+  const expired = events.find(event => event.kind === 'task.expired')
+  assert.ok(expired)
+  assert.equal(expired.to, 'a4s/sender')
+  assert.equal(expired.causation_id, 'expired-before-injection')
+  assert.equal(harness.received.length, 0)
+
+  await publish(publisher, topic, serialize(message({
+    id: 'cancel-before-injection',
+    from: 'a4s/sender',
+    to: `a4s/${sessionId}`,
+    deadline: Date.now() + 600_000,
+  })))
+  await waitFor(() => harness.entries.some(entry =>
+    pendingEntryMessageId(entry) === 'cancel-before-injection'))
+  await publish(publisher, topic, serialize(message({
+    id: 'cancel-command',
+    from: 'a4s/sender',
+    to: `a4s/${sessionId}`,
+    kind: 'task.cancel',
+    reply_to: 'cancel-before-injection',
+  })))
+  await waitFor(() => harness.entries.some(entry =>
+    entry.customType === 'synagent-delivered' && entry.data.id === 'cancel-before-injection'))
+  harness.idle = true
+  await harness.settle()
+  assert.equal(harness.received.length, 0)
+
+  await harness.shutdown()
+  restored = createHarness(settings, harness.entries, sessionId)
+  await restored.start()
+  await waitFor(() => restored?.notifications.some(({ message }) => message.includes(`subscribed to ${topic}`)) ?? false)
+  assert.equal(restored.received.length, 0)
+})
+
+test('Pi adapter derives deadlines from request-ttl and persists every request status', async t => {
+  const { broker, server, url } = await startBroker()
+  const peer = await connectClient(url, 'pi-request-registry-peer')
+  const outbound: CanonicalMessage[] = []
+  peer.on('message', (_topic, payload) => outbound.push(JSON.parse(payload.toString()) as CanonicalMessage))
+  await subscribe(peer, 'synagent/v1/a4s/peer')
+  const harness = createHarness({
+    'a4s.synagent.broker-url': url,
+    'a4s.synagent.request-ttl': 5,
+  }, [], 'pi-registry')
+  t.after(async () => {
+    await harness.shutdown()
+    await end(peer)
+    await closeServer(server)
+    await closeBroker(broker)
+  })
+
+  await harness.start()
+  await waitFor(() => harness.notifications.some(({ message }) => message.includes('subscribed to')))
+  assert.doesNotMatch(JSON.stringify(harness.toolSchemas.get('synagent_send')), /deadline/)
+
+  await harness.tool('synagent_send', { to: 'a4s/peer', body: 'complete me' })
+  await harness.tool('synagent_send', { to: 'a4s/peer', body: 'expire me' })
+  await harness.tool('synagent_send', { to: 'a4s/peer', body: 'cancel me' })
+  await harness.tool('synagent_send', { to: 'a4s/peer', body: 'leave pending' })
+  await waitFor(() => outbound.filter(({ kind }) => kind === 'task.request').length === 4)
+  const requests = outbound.filter(({ kind }) => kind === 'task.request')
+  for (const request of requests) assert.equal(request.deadline, request.ts + 5000)
+  const [completedRequest, expiredRequest, cancelledRequest, pendingRequest] = requests
+  assert.ok(completedRequest && expiredRequest && cancelledRequest && pendingRequest)
+
+  await publish(peer, 'synagent/v1/a4s/pi-registry', serialize(message({
+    id: 'completed-event',
+    from: 'a4s/peer',
+    to: 'a4s/pi-registry',
+    kind: 'task.completed',
+    reply_to: completedRequest.id,
+    correlation_id: completedRequest.id,
+    causation_id: completedRequest.id,
+  })))
+  await publish(peer, 'synagent/v1/a4s/pi-registry', serialize(message({
+    id: 'expired-event',
+    from: 'a4s/peer',
+    to: 'a4s/pi-registry',
+    kind: 'task.expired',
+    reply_to: expiredRequest.id,
+    correlation_id: expiredRequest.id,
+    causation_id: expiredRequest.id,
+  })))
+  await waitFor(() => harness.entries.some(entry =>
+    entry.customType === 'synagent-request'
+    && entry.data.id === expiredRequest.id
+    && entry.data.status === 'expired'))
+  await harness.command('synagent', `cancel ${cancelledRequest.id}`)
+  await waitFor(() => outbound.some(event =>
+    event.kind === 'task.cancel' && event.reply_to === cancelledRequest.id))
+  await harness.command('synagent', 'pending')
+  const listing = harness.notifications.at(-1)?.message ?? ''
+  assert.match(listing, new RegExp(`${completedRequest.id} estado=completo`))
+  assert.match(listing, new RegExp(`${expiredRequest.id} estado=vencido`))
+  assert.match(listing, new RegExp(`${cancelledRequest.id} estado=cancelado`))
+  assert.match(listing, new RegExp(`${pendingRequest.id} estado=pendiente`))
+})
+
 function findOperationalLog(stateRoot: string): string {
   const harnessRoot = join(stateRoot, 'log', 'synagent', 'pi')
   const instances = readdirSync(harnessRoot, { withFileTypes: true }).filter(entry => entry.isDirectory())

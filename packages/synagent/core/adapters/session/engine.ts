@@ -31,7 +31,7 @@ import {
   instanceFromHostSession,
   isAddress,
   isBroadcastRedirect,
-  isCommandKind,
+  isTaskRequestKind,
   isToken,
   makeOutbound,
   MESSAGE_KINDS,
@@ -52,6 +52,7 @@ import {
 const MAX_SEEN = 1000
 const SEEN_ENTRY = 'synagent-delivered'
 const PENDING_ENTRY = 'synagent-pending'
+const REQUEST_ENTRY = 'synagent-request'
 // Topics durables efectivamente suscritos; sirve para limpiar stale tras cambiar de identidad.
 const STATE_ENTRY = 'synagent-state'
 const DEFAULT_DELIVERY_START_TIMEOUT_MS = 30_000
@@ -60,6 +61,23 @@ type SeenEntry = { id: string }
 type StateEntry = { topics: string }
 type PendingEntry = { message: CanonicalMessage; marker: string; sessionId: string }
 type QueuedDelivery = PendingEntry & { generation: number }
+type RequestStatus = 'pending' | 'delivered' | 'completed' | 'expired' | 'cancelled'
+type RequestEntry = {
+  deadline?: number
+  id: string
+  kind: 'task.request' | 'task.redirect'
+  status: RequestStatus
+  to: string
+  ts: number
+  updatedAt: number
+}
+const REQUEST_STATUS_LABEL: Readonly<Record<RequestStatus, string>> = {
+  pending: 'pendiente',
+  delivered: 'entregado',
+  completed: 'completo',
+  expired: 'vencido',
+  cancelled: 'cancelado',
+}
 type DeliveryMode = 'idle' | 'steer' | 'followUp'
 type DestinationScope = 'direct' | 'project' | 'global' | 'invalid'
 type ActiveDelivery = {
@@ -133,6 +151,7 @@ function synagentAdapter(
   let deliveryGeneration = 0
   let deliveryDispatchToken = 0
   let deliveryStartTimer: NodeJS.Timeout | undefined
+  let requestExpiryTimer: NodeJS.Timeout | undefined
   let activeDelivery: ActiveDelivery | undefined
   let awaitingSettlement = false
   let settings: SynagentSettings = { ...DEFAULT_SETTINGS }
@@ -141,6 +160,7 @@ function synagentAdapter(
   const deliveryResultCapture = createDeliveryResultCapture(pi)
   const seen = new Set<string>()
   const pending = new Map<string, PendingEntry>()
+  const requests = new Map<string, RequestEntry>()
 
   pi.registerTool({
     name: 'synagent_send',
@@ -154,9 +174,10 @@ function synagentAdapter(
       kind: Type.Optional(Type.Union([
         Type.Literal('task.request'),
         Type.Literal('task.redirect'),
+        Type.Literal('task.cancel'),
         Type.Literal('note.published'),
       ], { description: 'Message kind; defaults to task.request.' })),
-      reply_to: Type.Optional(Type.String({ description: 'Message id being replied to.' })),
+      reply_to: Type.Optional(Type.String({ description: 'Message id being replied to or cancelled.' })),
       correlation_id: Type.Optional(Type.String({ description: 'Root command id for this message chain.' })),
       causation_id: Type.Optional(Type.String({ description: 'Message id that caused this message.' })),
     }),
@@ -202,9 +223,10 @@ function synagentAdapter(
         const identityStatus = identity
           ? `address=${directAddress(identity)} source=${identitySource}`
           : 'address=unresolved inactive=true; remediate by configuring remote.origin.url'
+        const requestTtl = settings['request-ttl'] === undefined ? 'none' : `${settings['request-ttl']}s`
         ctx.ui.notify(
           `Synagent ${state}; ${identityStatus} global=${settings.global} `
-          + `peer=${settings['default-peer']} broker=${settings['broker-url']}`,
+          + `peer=${settings['default-peer']} broker=${settings['broker-url']} request-ttl=${requestTtl}`,
           'info',
         )
         return
@@ -216,6 +238,32 @@ function synagentAdapter(
         } catch (error) {
           ctx.ui.notify(formatError(error), 'error')
         }
+        return
+      }
+      if (action === 'pending') {
+        expireTrackedRequests(ctx, Date.now())
+        ctx.ui.notify(formatRequestRegistry(), 'info')
+        return
+      }
+      if (action === 'cancel' && key && rest.length === 0) {
+        const request = requests.get(key)
+        if (!request) {
+          ctx.ui.notify(`Synagent request not found: ${key}`, 'warning')
+          return
+        }
+        if (request.status !== 'pending') {
+          ctx.ui.notify(`Synagent request ${key} is ${REQUEST_STATUS_LABEL[request.status]}; cancellation not sent`, 'info')
+          return
+        }
+        const result = await send({
+          to: request.to,
+          body: `Cancel request ${request.id}`,
+          kind: 'task.cancel',
+          reply_to: request.id,
+          correlation_id: request.id,
+          causation_id: request.id,
+        }, ctx)
+        ctx.ui.notify(result.message, result.ok ? 'info' : 'error')
         return
       }
       if (action === 'resume') {
@@ -247,8 +295,8 @@ function synagentAdapter(
       }
       if (action !== 'set' || !key || rest.length === 0) {
         ctx.ui.notify(
-          'Usage: /synagent status|enable|disable|resume|set '
-          + '<enabled|broker-url|global|default-peer> <value>',
+          'Usage: /synagent status|pending|cancel <request-id>|enable|disable|resume|set '
+          + '<enabled|broker-url|global|default-peer|request-ttl> <value>',
           'warning',
         )
         return
@@ -301,7 +349,9 @@ function synagentAdapter(
     }
     resetDeliveryQueue()
     resetActiveDelivery()
+    clearRequestExpiryTimer()
     restoreState(ctx)
+    scheduleRequestExpiry(ctx)
     logDiagnostic('started', {
       operation: 'lifecycle.start',
       generation: connectionGeneration,
@@ -322,26 +372,28 @@ function synagentAdapter(
   host.bindSettle(pi, releaseSettledDelivery)
 
   async function releaseSettledDelivery(ctx: ExtensionContext): Promise<void> {
-    if (!useCurrentContext(ctx) || !activeDelivery?.confirmed) return
+    if (!useCurrentContext(ctx)) return
     const settled = activeDelivery
-    const deliveryText = deliveryResultCapture.result(settled)
-    clearDeliveryStartTimer()
-    logDiagnostic('delivery.settled', {
-      operation: 'delivery.settle',
-      generation: settled.generation,
-      queueDepth: queuedDeliveries.length,
-      deliveryMode: settled.mode,
-      destinationScope: settled.destinationScope,
-      messageKind: settled.kind,
-      ...(deliveryText === undefined ? {} : { deliveryText }),
-      ...messageDiagnostic(settled.id),
-    })
-    if (isCommandKind(settled.message.kind)) {
-      await publishTaskEvent(settled.message, 'task.completed', deliveryText ?? '', ctx)
+    if (settled?.confirmed) {
+      const deliveryText = deliveryResultCapture.result(settled)
+      clearDeliveryStartTimer()
+      logDiagnostic('delivery.settled', {
+        operation: 'delivery.settle',
+        generation: settled.generation,
+        queueDepth: queuedDeliveries.length,
+        deliveryMode: settled.mode,
+        destinationScope: settled.destinationScope,
+        messageKind: settled.kind,
+        ...(deliveryText === undefined ? {} : { deliveryText }),
+        ...messageDiagnostic(settled.id),
+      })
+      if (isTaskRequestKind(settled.message.kind)) {
+        await publishTaskEvent(settled.message, 'task.completed', deliveryText ?? '', ctx)
+      }
+      activeDelivery = undefined
+      deliveryResultCapture.reset()
+      awaitingSettlement = false
     }
-    activeDelivery = undefined
-    deliveryResultCapture.reset()
-    awaitingSettlement = false
     drainDeliveries(ctx)
   }
 
@@ -350,6 +402,7 @@ function synagentAdapter(
     const shutdownQueueDepth = queuedDeliveries.length
     activeSessionId = undefined
     context = undefined
+    clearRequestExpiryTimer()
     resetDeliveryQueue()
     resetActiveDelivery()
     activeSettingsPaths = undefined
@@ -417,8 +470,15 @@ function synagentAdapter(
     if (!SYNAGENT_SEND_KINDS.includes(kind as SynagentSendKind)) {
       return reject('MESSAGE_KIND_INVALID', `Invalid Synagent kind: ${kind}`)
     }
+    if (kind === 'task.cancel' && !params.reply_to) {
+      return reject('CANCELLATION_TARGET_REQUIRED', 'Synagent task.cancel requires reply_to')
+    }
 
     const ts = Date.now()
+    const requestTtl = settings['request-ttl']
+    const deadline = isTaskRequestKind(kind as MessageKind) && requestTtl !== undefined
+      ? ts + requestTtl * 1000
+      : undefined
     let messageId: string | undefined
     try {
       const outbound = makeOutbound(identity, to, {
@@ -429,9 +489,14 @@ function synagentAdapter(
         ...(params.reply_to ? { replyTo: params.reply_to } : {}),
         ...(params.correlation_id ? { correlationId: params.correlation_id } : {}),
         ...(params.causation_id ? { causationId: params.causation_id } : {}),
+        ...(deadline === undefined ? {} : { deadline }),
       })
       messageId = outbound.message.id
       await publish(active, outbound.topic, serialize(outbound.message))
+      if (isTaskRequestKind(outbound.message.kind)) recordOutgoingRequest(outbound.message, ctx)
+      if (outbound.message.kind === 'task.cancel' && outbound.message.reply_to) {
+        markRequestCancelled(outbound.message.reply_to, ctx, outbound.message.ts)
+      }
       logDiagnostic('message.sent', {
         operation: 'message.send',
         messageKind: outbound.message.kind,
@@ -456,7 +521,7 @@ function synagentAdapter(
 
   async function publishTaskEvent(
     command: CanonicalMessage,
-    kind: 'task.delivered' | 'task.completed',
+    kind: 'task.delivered' | 'task.completed' | 'task.expired',
     body: string,
     ctx: ExtensionContext,
   ): Promise<void> {
@@ -490,6 +555,7 @@ function synagentAdapter(
         kind,
         id: eventId,
         ts,
+        replyTo: command.id,
         correlationId: command.correlation_id ?? command.id,
         causationId: command.id,
       })
@@ -525,7 +591,7 @@ function synagentAdapter(
     persistSetting(paths, key, value)
     const next = loadSynagentSettings(paths)
     settings = next
-    if (Object.is(previous, next[key]) || key === 'default-peer') return
+    if (Object.is(previous, next[key]) || key === 'default-peer' || key === 'request-ttl') return
     void restart(ctx, key === 'enabled' ? next.enabled === false : true).then(() => requeuePending(ctx))
   }
 
@@ -535,7 +601,7 @@ function synagentAdapter(
     resetSetting(paths, key)
     const next = loadSynagentSettings(paths)
     settings = next
-    if (Object.is(previous, next[key]) || key === 'default-peer') return
+    if (Object.is(previous, next[key]) || key === 'default-peer' || key === 'request-ttl') return
     void restart(ctx, key === 'enabled' ? next.enabled === false : true).then(() => requeuePending(ctx))
   }
 
@@ -555,6 +621,7 @@ function synagentAdapter(
         `Broker URL: ${settings['broker-url']}`,
         `Global broadcast: ${settings.global}`,
         `Default peer: ${settings['default-peer']}`,
+        `Request TTL: ${settings['request-ttl'] === undefined ? 'none' : settings['request-ttl']}`,
         'Reset a setting',
         'Cancel',
       ])
@@ -580,9 +647,15 @@ function synagentAdapter(
           if (value !== undefined) {
             await applySetting('default-peer', parseSettingValue('default-peer', value) as string, ctx)
           }
+        } else if (choice.startsWith('Request TTL:')) {
+          const placeholder = settings['request-ttl'] === undefined ? '' : String(settings['request-ttl'])
+          const value = await ctx.ui.input('Synagent request TTL in seconds', placeholder)
+          if (value !== undefined) {
+            await applySetting('request-ttl', parseSettingValue('request-ttl', value) as number, ctx)
+          }
         } else if (choice === 'Reset a setting') {
           const selected = await ctx.ui.select('Reset Synagent setting', [
-            'enabled', 'broker-url', 'global', 'default-peer', 'Cancel',
+            'enabled', 'broker-url', 'global', 'default-peer', 'request-ttl', 'Cancel',
           ])
           if (selected && selected !== 'Cancel') {
             const key = requireSettingKey(selected)
@@ -903,6 +976,11 @@ function synagentAdapter(
       queueDepth: queuedDeliveries.length,
       ...messageFields,
     })
+    if (message.kind === 'task.cancel') {
+      applyInboundCancellation(message, ctx)
+      return
+    }
+    updateRequestFromReply(message, ctx)
     if (message.kind === 'task.delivered') {
       rememberSeen(message.id)
       persistSeen(message.id, ctx)
@@ -932,9 +1010,34 @@ function synagentAdapter(
   function drainDeliveries(ctx: ExtensionContext): void {
     if (!useCurrentContext(ctx) || awaitingSettlement) return
     while (queuedDeliveries.length > 0) {
-      const queued = queuedDeliveries.shift() as QueuedDelivery
-      if (queued.generation !== deliveryGeneration) continue
+      const queued = queuedDeliveries[0] as QueuedDelivery
+      if (queued.generation !== deliveryGeneration) {
+        queuedDeliveries.shift()
+        continue
+      }
+      const now = Date.now()
+      if (queued.message.deadline !== undefined && now >= queued.message.deadline) {
+        queuedDeliveries.shift()
+        pending.delete(queued.message.id)
+        rememberSeen(queued.message.id)
+        persistSeen(queued.message.id, ctx)
+        logDiagnostic('request.expired', {
+          operation: 'request.expire',
+          queueDepth: queuedDeliveries.length,
+          messageKind: queued.message.kind,
+          destinationScope: destinationScopeOf(queued.message.to),
+          ...messageDiagnostic(queued.message.id),
+        })
+        void publishTaskEvent(queued.message, 'task.expired', JSON.stringify({
+          event: 'request.expired',
+          deadline: queued.message.deadline,
+          expired_at: now,
+        }), ctx)
+        continue
+      }
       const wasIdle = ctx.isIdle()
+      if (queued.message.kind === 'task.request' && queued.message.deadline !== undefined && !wasIdle) return
+      queuedDeliveries.shift()
       let mode: DeliveryMode = 'followUp'
       if (wasIdle) mode = 'idle'
       else if (queued.message.kind === 'task.redirect') mode = 'steer'
@@ -1013,7 +1116,7 @@ function synagentAdapter(
       timeoutMs: deliveryStartTimeoutMs,
       ...messageDiagnostic(active.id),
     })
-    if (isCommandKind(active.message.kind)) {
+    if (isTaskRequestKind(active.message.kind)) {
       await publishTaskEvent(active.message, 'task.delivered', '', ctx)
     }
     armDeliveryStartTimeout(active.token, active.id, ctx, host.settleEventName)
@@ -1178,6 +1281,132 @@ function synagentAdapter(
     ctx.ui.notify(`Synagent pending delivery could not be persisted: ${formatError(error)}`, 'error')
   }
 
+  function applyInboundCancellation(message: CanonicalMessage, ctx: ExtensionContext): void {
+    rememberSeen(message.id)
+    persistSeen(message.id, ctx)
+    const cancelledIndex = message.reply_to === undefined
+      ? -1
+      : queuedDeliveries.findIndex(delivery =>
+          delivery.generation === deliveryGeneration
+          && delivery.message.id === message.reply_to
+          && delivery.message.from === message.from)
+    if (cancelledIndex < 0) {
+      logDiagnostic('request.cancel.missed', {
+        operation: 'request.cancel',
+        queueDepth: queuedDeliveries.length,
+        messageKind: message.kind,
+        destinationScope: destinationScopeOf(message.to),
+        ...messageDiagnostic(message.id),
+      })
+      return
+    }
+    const [cancelled] = queuedDeliveries.splice(cancelledIndex, 1)
+    if (!cancelled) return
+    pending.delete(cancelled.message.id)
+    rememberSeen(cancelled.message.id)
+    persistSeen(cancelled.message.id, ctx)
+    logDiagnostic('request.cancelled', {
+      operation: 'request.cancel',
+      queueDepth: queuedDeliveries.length,
+      messageKind: cancelled.message.kind,
+      destinationScope: destinationScopeOf(cancelled.message.to),
+      ...messageDiagnostic(cancelled.message.id),
+    })
+  }
+
+  function recordOutgoingRequest(message: CanonicalMessage, ctx: ExtensionContext): void {
+    if (!isTaskRequestKind(message.kind)) return
+    persistRequest({
+      id: message.id,
+      kind: message.kind,
+      status: 'pending',
+      to: message.to,
+      ts: message.ts,
+      updatedAt: message.ts,
+      ...(message.deadline === undefined ? {} : { deadline: message.deadline }),
+    }, ctx, true)
+  }
+
+  function markRequestCancelled(id: string, ctx: ExtensionContext, updatedAt: number): void {
+    const request = requests.get(id)
+    if (!request || request.status !== 'pending') return
+    persistRequest({ ...request, status: 'cancelled', updatedAt }, ctx)
+  }
+
+  function updateRequestFromReply(message: CanonicalMessage, ctx: ExtensionContext): void {
+    if (!message.reply_to) return
+    const request = requests.get(message.reply_to)
+    if (!request) return
+    let status: RequestStatus
+    if (message.kind === 'task.delivered') {
+      if (request.status === 'completed' || request.status === 'expired') return
+      status = 'delivered'
+    } else if (message.kind === 'task.expired') {
+      if (request.status === 'completed') return
+      status = 'expired'
+    } else {
+      status = 'completed'
+    }
+    if (request.status === status) return
+    persistRequest({ ...request, status, updatedAt: Date.now() }, ctx)
+  }
+
+  function persistRequest(
+    request: RequestEntry,
+    ctx: ExtensionContext,
+    required = false,
+    reschedule = true,
+  ): void {
+    requests.set(request.id, request)
+    try {
+      pi.appendEntry<RequestEntry>(REQUEST_ENTRY, request)
+    } catch (error) {
+      ctx.ui.notify(`Synagent request registry could not be persisted: ${formatError(error)}`, 'error')
+      if (required) throw error
+    } finally {
+      if (reschedule) scheduleRequestExpiry(ctx)
+    }
+  }
+
+  function expireTrackedRequests(ctx: ExtensionContext, now: number): void {
+    for (const request of requests.values()) {
+      if (request.status !== 'pending' || request.deadline === undefined || now < request.deadline) continue
+      persistRequest({ ...request, status: 'expired', updatedAt: now }, ctx, false, false)
+    }
+    scheduleRequestExpiry(ctx)
+  }
+
+  function scheduleRequestExpiry(ctx: ExtensionContext): void {
+    clearRequestExpiryTimer()
+    let nextDeadline = Number.POSITIVE_INFINITY
+    for (const request of requests.values()) {
+      if (request.status === 'pending' && request.deadline !== undefined) {
+        nextDeadline = Math.min(nextDeadline, request.deadline)
+      }
+    }
+    if (!Number.isFinite(nextDeadline)) return
+    const delay = Math.min(Math.max(0, nextDeadline - Date.now()), 2_147_483_647)
+    requestExpiryTimer = setTimeout(() => {
+      requestExpiryTimer = undefined
+      if (!isCurrentSession(ctx)) return
+      expireTrackedRequests(ctx, Date.now())
+    }, delay)
+  }
+
+  function clearRequestExpiryTimer(): void {
+    clearTimeout(requestExpiryTimer)
+    requestExpiryTimer = undefined
+  }
+
+  function formatRequestRegistry(): string {
+    if (requests.size === 0) return 'Synagent pedidos: ninguno'
+    const rows = [...requests.values()].map(request => {
+      const deadline = request.deadline === undefined ? 'sin-deadline' : String(request.deadline)
+      return `${request.id} estado=${REQUEST_STATUS_LABEL[request.status]} to=${request.to} deadline=${deadline}`
+    })
+    return `Synagent pedidos:\n${rows.join('\n')}`
+  }
+
   function requeuePending(ctx: ExtensionContext): void {
     if (!useCurrentContext(ctx) || !settings.enabled || !identity) return
     const sessionId = ctx.sessionManager.getSessionId()
@@ -1217,9 +1446,43 @@ function synagentAdapter(
   }
 
 
+  function parseRequestEntry(value: unknown): RequestEntry | undefined {
+    if (typeof value !== 'object' || value === null) return undefined
+    if (
+      !('id' in value)
+      || !('kind' in value)
+      || !('status' in value)
+      || !('to' in value)
+      || !('ts' in value)
+      || !('updatedAt' in value)
+      || typeof value.id !== 'string'
+      || (value.kind !== 'task.request' && value.kind !== 'task.redirect')
+      || typeof value.status !== 'string'
+      || !Object.hasOwn(REQUEST_STATUS_LABEL, value.status)
+      || typeof value.to !== 'string'
+      || !isAddress(value.to)
+      || typeof value.ts !== 'number'
+      || !Number.isFinite(value.ts)
+      || typeof value.updatedAt !== 'number'
+      || !Number.isFinite(value.updatedAt)
+      || ('deadline' in value && value.deadline !== undefined
+        && (typeof value.deadline !== 'number' || !Number.isFinite(value.deadline)))
+    ) return undefined
+    return {
+      id: value.id,
+      kind: value.kind,
+      status: value.status as RequestStatus,
+      to: value.to,
+      ts: value.ts,
+      updatedAt: value.updatedAt,
+      ...(!('deadline' in value) || value.deadline === undefined ? {} : { deadline: value.deadline as number }),
+    }
+  }
+
   function restoreState(ctx: ExtensionContext): void {
     seen.clear()
     pending.clear()
+    requests.clear()
     lastDurableTopics = []
     persistedDurableTopics = undefined
     identity = undefined
@@ -1240,6 +1503,9 @@ function synagentAdapter(
             pending.delete(data.id)
             rememberSeen(data.id)
           }
+        } else if (entry.customType === REQUEST_ENTRY) {
+          const request = parseRequestEntry(entry.data)
+          if (request) requests.set(request.id, request)
         } else if (entry.customType === STATE_ENTRY) {
           const data = entry.data
           if (
@@ -1310,7 +1576,13 @@ function createDeliveryResultCapture(pi: ExtensionAPI): DeliveryResultCapture {
 }
 
 function requireSettingKey(value: string): SynagentSettingKey {
-  if (value === 'enabled' || value === 'broker-url' || value === 'global' || value === 'default-peer') {
+  if (
+    value === 'enabled'
+    || value === 'broker-url'
+    || value === 'global'
+    || value === 'default-peer'
+    || value === 'request-ttl'
+  ) {
     return value
   }
   throw new Error(`Unknown Synagent setting: ${value}`)

@@ -341,6 +341,7 @@ export function message(overrides: Partial<CanonicalMessage> & { id: string; to:
     ...(overrides.reply_to ? { reply_to: overrides.reply_to } : {}),
     ...(overrides.correlation_id ? { correlation_id: overrides.correlation_id } : {}),
     ...(overrides.causation_id ? { causation_id: overrides.causation_id } : {}),
+    ...(overrides.deadline === undefined ? {} : { deadline: overrides.deadline }),
   }
 }
 

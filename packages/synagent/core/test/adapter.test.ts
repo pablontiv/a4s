@@ -176,6 +176,7 @@ test('adapter: createCanonical + serialize + parseCanonical round-trip', () => {
     reply_to: 'test-0',
     correlation_id: 'test-0',
     causation_id: 'test-0',
+    deadline: 6000,
   })
 
   const serialized = serialize(msg)
@@ -243,6 +244,7 @@ test('adapter: newId incluye dirección y ts', () => {
 
 test('adapter: MESSAGE_KINDS incluye comandos y eventos', () => {
   assert.deepEqual(MESSAGE_KINDS, [
-    'task.request', 'task.redirect', 'task.delivered', 'task.completed', 'note.published',
+    'task.request', 'task.redirect', 'task.cancel',
+    'task.delivered', 'task.completed', 'task.expired', 'note.published',
   ])
 })

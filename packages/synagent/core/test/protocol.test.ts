@@ -48,6 +48,7 @@ function msg(overrides: Partial<CanonicalMessage> & { to: string }): CanonicalMe
     ...(overrides.reply_to ? { reply_to: overrides.reply_to } : {}),
     ...(overrides.correlation_id ? { correlation_id: overrides.correlation_id } : {}),
     ...(overrides.causation_id ? { causation_id: overrides.causation_id } : {}),
+    ...(overrides.deadline === undefined ? {} : { deadline: overrides.deadline }),
   })
 }
 
@@ -193,31 +194,37 @@ test('createCanonical/serialize/parseCanonical round-trips event correlation and
     replyTo: 'a4s/pi-1-9-abc',
     correlationId: 'root-command',
     causationId: 'request-command',
+    deadline: 6000,
   }).message
   assert.deepEqual(parseCanonical(serialize(m)), m)
   assert.match(renderForAgent(m), /\[bus:task\.completed\] de a4s\/sess-01HXYZ/)
   assert.match(renderForAgent(m), /correlación: root-command; causado por: request-command/)
 })
 
-test('parseCanonical accepts legacy addresses and validates optional causal fields', () => {
+test('parseCanonical accepts legacy addresses and validates optional causal and deadline fields', () => {
   assert.equal(parseCanonical(JSON.stringify({
-    id: 'x', from: 'pi', to: 'claude', kind: 'task.request', body: 'hi', ts: 1,
-  })).to, 'claude')
+    id: 'x', from: 'pi', to: 'claude', kind: 'task.request', body: 'hi', deadline: 5001, ts: 1,
+  })).deadline, 5001)
   assert.throws(() => parseCanonical(JSON.stringify({
     id: 'x', from: 'pi', kind: 'task.request', body: 'hi', ts: 1,
   })), /falta campo canónico: to/)
   assert.throws(() => parseCanonical(JSON.stringify({
     id: 'x', from: 'pi', to: 'claude', kind: 'task.request', body: 'hi', correlation_id: '', ts: 1,
   })), /campo canónico inválido: correlation_id/)
+  assert.throws(() => parseCanonical(JSON.stringify({
+    id: 'x', from: 'pi', to: 'claude', kind: 'task.request', body: 'hi', deadline: Number.NaN, ts: 1,
+  })), /campo canónico inválido: deadline/)
   assert.equal(GLOBAL_ADDRESS, 'all')
 })
 
 test('message kinds distinguish commands, adapter events, and LLM-sendable notes', () => {
   assert.deepEqual(MESSAGE_KINDS, [
-    'task.request', 'task.redirect', 'task.delivered', 'task.completed', 'note.published',
+    'task.request', 'task.redirect', 'task.cancel',
+    'task.delivered', 'task.completed', 'task.expired', 'note.published',
   ])
-  assert.deepEqual(SYNAGENT_SEND_KINDS, ['task.request', 'task.redirect', 'note.published'])
+  assert.deepEqual(SYNAGENT_SEND_KINDS, ['task.request', 'task.redirect', 'task.cancel', 'note.published'])
   assert.equal(isCommandKind('task.request'), true)
+  assert.equal(isCommandKind('task.cancel'), true)
   assert.equal(isCommandKind('task.completed'), false)
-  assert.equal(isEventKind('task.completed'), true)
+  assert.equal(isEventKind('task.expired'), true)
 })
