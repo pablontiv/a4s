@@ -469,7 +469,8 @@ steps:
       sha=$(git rev-parse HEAD)
       pr_ref=${PR_NUMBER:-$BRANCH}
       test "$(gh pr view "$pr_ref" --json headRefOid --jq .headRefOid)" = "$sha"
-      gh pr merge "$pr_ref" --auto --squash --match-head-commit "$sha"
+      merge_body=$(printf 'Closes #%s\n\n%s' "$ISSUE" "$(git log -1 --format=%b "$sha")")
+      gh pr merge "$pr_ref" --auto --squash --match-head-commit "$sha" --body "$merge_body"
       printf 'pr=%s\nhead_sha=%s\n' \
         "$(gh pr view "$pr_ref" --json number --jq .number)" "$sha"
 

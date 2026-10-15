@@ -141,6 +141,48 @@ for (const [name, definition] of definitions) {
   const exitScript = extractScript(definition, "  exit:");
   const checkpointScript = extractScript(definition, "  - id: checkpoint_push");
   const closeGateScript = extractScript(definition, "  - id: close_gate");
+  const autoMergeScript = extractScript(definition, "  - id: auto_merge");
+
+  test(`${name} auto_merge sends the tested body with terminal trailers and the closing reference`, () => {
+    const repo = repository();
+    try {
+      const trailers = [
+        "Dagu-Feature-Bundle: 0.2.0",
+        `Dagu-Feature-Source: pablontiv/a4s@${"a".repeat(40)}`,
+        "Dagu-Feature-Bootstrap: bootstrap-test",
+      ].join("\n");
+      const commitBody = `Tested body, not the PR description.\nA second line with "quotes" and $variables.\n\n${trailers}`;
+      git(repo.worktree, "commit", "--allow-empty", "-m", "feat: tested change", "-m", commitBody);
+      const sha = git(repo.worktree, "rev-parse", "HEAD");
+      const bin = join(repo.root, "bin");
+      mkdirSync(bin, { recursive: true });
+      const executable = join(bin, "gh");
+      const argsFile = join(repo.root, "merge-args");
+      writeFileSync(executable, `#!/bin/sh
+case "$*" in
+  "pr view ${repo.branch} --json headRefOid --jq .headRefOid") printf '${sha}\\n' ;;
+  "pr view ${repo.branch} --json number --jq .number") printf '190\\n' ;;
+  "pr view ${repo.branch} --json body --jq .body") printf 'Closes #189\\n' ;;
+  "pr merge "*) printf '%s\\0' "$@" > "${argsFile}" ;;
+  *) printf 'unexpected gh invocation: %s\\n' "$*" >&2; exit 1 ;;
+esac
+`);
+      chmodSync(executable, 0o755);
+      assert.match(runScript(autoMergeScript, repo), new RegExp(`pr=190\\nhead_sha=${sha}`));
+      const mergeBody = `Closes #189\n\n${commitBody}`;
+      assert.deepEqual(readFileSync(argsFile, "utf8").split("\0"), [
+        "pr", "merge", repo.branch, "--auto", "--squash", "--match-head-commit", sha, "--body", mergeBody, "",
+      ]);
+      assert.ok(mergeBody.endsWith(trailers));
+      const parsed = execFileSync("git", ["interpret-trailers", "--parse"], {
+        input: mergeBody,
+        encoding: "utf8",
+      });
+      assert.equal(parsed.trim(), trailers);
+    } finally {
+      rmSync(repo.root, { recursive: true, force: true });
+    }
+  });
 
   test(`${name} close_gate reports a PRIMARY outside BASE_BRANCH`, () => {
     const repo = repository();
