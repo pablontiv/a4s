@@ -51,13 +51,15 @@ import {
 
 const MAX_SEEN = 1000
 const SEEN_ENTRY = 'synagent-delivered'
+const PENDING_ENTRY = 'synagent-pending'
 // Topics durables efectivamente suscritos; sirve para limpiar stale tras cambiar de identidad.
 const STATE_ENTRY = 'synagent-state'
 const DEFAULT_DELIVERY_START_TIMEOUT_MS = 30_000
 
 type SeenEntry = { id: string }
 type StateEntry = { topics: string }
-type QueuedDelivery = { generation: number; message: CanonicalMessage }
+type PendingEntry = { message: CanonicalMessage; marker: string; sessionId: string }
+type QueuedDelivery = PendingEntry & { generation: number }
 type DeliveryMode = 'idle' | 'steer' | 'followUp'
 type DestinationScope = 'direct' | 'project' | 'global' | 'invalid'
 type ActiveDelivery = {
@@ -138,6 +140,7 @@ function synagentAdapter(
   const queuedDeliveries: QueuedDelivery[] = []
   const deliveryResultCapture = createDeliveryResultCapture(pi)
   const seen = new Set<string>()
+  const pending = new Map<string, PendingEntry>()
 
   pi.registerTool({
     name: 'synagent_send',
@@ -296,15 +299,16 @@ function synagentAdapter(
         'warning',
       )
     }
+    resetDeliveryQueue()
+    resetActiveDelivery()
     restoreState(ctx)
     logDiagnostic('started', {
       operation: 'lifecycle.start',
       generation: connectionGeneration,
       queueDepth: queuedDeliveries.length,
     })
-    resetDeliveryQueue()
-    resetActiveDelivery()
     await restart(ctx, false)
+    requeuePending(ctx)
   })
 
   pi.on('message_start', async (event, ctx) => {
@@ -522,7 +526,7 @@ function synagentAdapter(
     const next = loadSynagentSettings(paths)
     settings = next
     if (Object.is(previous, next[key]) || key === 'default-peer') return
-    void restart(ctx, key === 'enabled' ? next.enabled === false : true)
+    void restart(ctx, key === 'enabled' ? next.enabled === false : true).then(() => requeuePending(ctx))
   }
 
   async function applyReset(key: SynagentSettingKey, ctx: ExtensionContext): Promise<void> {
@@ -532,7 +536,7 @@ function synagentAdapter(
     const next = loadSynagentSettings(paths)
     settings = next
     if (Object.is(previous, next[key]) || key === 'default-peer') return
-    void restart(ctx, key === 'enabled' ? next.enabled === false : true)
+    void restart(ctx, key === 'enabled' ? next.enabled === false : true).then(() => requeuePending(ctx))
   }
 
   async function showSettings(ctx: ExtensionContext): Promise<void> {
@@ -885,7 +889,7 @@ function synagentAdapter(
       }
       return
     }
-    if (seen.has(message.id)) {
+    if (seen.has(message.id) || pending.has(message.id)) {
       logDiagnostic('message.duplicate', {
         operation: 'message.receive',
         queueDepth: queuedDeliveries.length,
@@ -894,16 +898,29 @@ function synagentAdapter(
       return
     }
 
-    seen.add(message.id)
-    if (seen.size > MAX_SEEN) seen.delete(seen.values().next().value as string)
-    pi.appendEntry<SeenEntry>(SEEN_ENTRY, { id: message.id })
     logDiagnostic('message.received', {
       operation: 'message.receive',
       queueDepth: queuedDeliveries.length,
       ...messageFields,
     })
-    if (message.kind === 'task.delivered') return
-    queuedDeliveries.push({ generation: deliveryGeneration, message })
+    if (message.kind === 'task.delivered') {
+      rememberSeen(message.id)
+      persistSeen(message.id, ctx)
+      return
+    }
+    const delivery: PendingEntry = {
+      marker: `[synagent-delivery ${randomUUID()}]`,
+      message,
+      sessionId: ctx.sessionManager.getSessionId(),
+    }
+    try {
+      pi.appendEntry<PendingEntry>(PENDING_ENTRY, delivery)
+    } catch (error) {
+      logPersistenceFailure(message, error, ctx, 'pending')
+      return
+    }
+    pending.set(message.id, delivery)
+    queuedDeliveries.push({ ...delivery, generation: deliveryGeneration })
     drainDeliveries(context ?? ctx)
   }
 
@@ -924,7 +941,7 @@ function synagentAdapter(
       try {
         awaitingSettlement = true
         const dispatchToken = ++deliveryDispatchToken
-        const marker = `[synagent-delivery ${randomUUID()}]`
+        const marker = queued.marker
         const rendered = `${marker}\n${renderForAgent(queued.message)}`
         activeDelivery = {
           confirmed: false,
@@ -981,7 +998,10 @@ function synagentAdapter(
   }
 
   async function confirmActiveDelivery(active: ActiveDelivery, ctx: ExtensionContext): Promise<void> {
-    if (activeDelivery !== active || active.token !== deliveryDispatchToken) return
+    if (activeDelivery !== active || active.token !== deliveryDispatchToken || active.confirmed) return
+    persistSeen(active.id, ctx)
+    pending.delete(active.id)
+    rememberSeen(active.id)
     active.confirmed = true
     logDiagnostic('delivery.confirmed', {
       operation: 'delivery.confirm',
@@ -1107,29 +1127,139 @@ function synagentAdapter(
     pi.appendEntry<StateEntry>(STATE_ENTRY, { topics: joined })
   }
 
+  function rememberSeen(id: string): void {
+    seen.delete(id)
+    seen.add(id)
+    if (seen.size > MAX_SEEN) seen.delete(seen.values().next().value as string)
+  }
+
+  function persistSeen(id: string, ctx: ExtensionContext): void {
+    try {
+      pi.appendEntry<SeenEntry>(SEEN_ENTRY, { id })
+    } catch (error) {
+      logDiagnostic('delivery.failed', {
+        operation: 'delivery.persist',
+        queueDepth: queuedDeliveries.length,
+        severity: 'ERROR',
+        ...messageDiagnostic(id),
+        error: classifyDiagnosticError(
+          error,
+          'DELIVERY_CONFIRM_PERSIST_FAILED',
+          'delivery.persist',
+          false,
+          `${host.harnessName}.appendEntry`,
+        ),
+      })
+      ctx.ui.notify(`Synagent delivery confirmation could not be persisted: ${formatError(error)}`, 'error')
+    }
+  }
+
+  function logPersistenceFailure(
+    message: CanonicalMessage,
+    error: unknown,
+    ctx: ExtensionContext,
+    stage: 'pending',
+  ): void {
+    logDiagnostic('delivery.failed', {
+      operation: 'delivery.persist',
+      queueDepth: queuedDeliveries.length,
+      messageKind: message.kind,
+      destinationScope: destinationScopeOf(message.to),
+      severity: 'ERROR',
+      ...messageDiagnostic(message.id),
+      error: classifyDiagnosticError(
+        error,
+        'DELIVERY_PENDING_PERSIST_FAILED',
+        'delivery.persist',
+        true,
+        `${host.harnessName}.appendEntry.${stage}`,
+      ),
+    })
+    ctx.ui.notify(`Synagent pending delivery could not be persisted: ${formatError(error)}`, 'error')
+  }
+
+  function requeuePending(ctx: ExtensionContext): void {
+    if (!useCurrentContext(ctx) || !settings.enabled || !identity) return
+    const sessionId = ctx.sessionManager.getSessionId()
+    const alreadyQueued = new Set(queuedDeliveries.map(delivery => delivery.message.id))
+    for (const delivery of pending.values()) {
+      if (
+        delivery.sessionId !== sessionId
+        || delivery.message.id === activeDelivery?.id
+        || alreadyQueued.has(delivery.message.id)
+        || !acceptsMessage(delivery.message)
+      ) continue
+      queuedDeliveries.push({ ...delivery, generation: deliveryGeneration })
+      alreadyQueued.add(delivery.message.id)
+    }
+    drainDeliveries(ctx)
+  }
+
+  function parsePendingEntry(value: unknown): PendingEntry | undefined {
+    if (
+      typeof value !== 'object'
+      || value === null
+      || !('marker' in value)
+      || !('sessionId' in value)
+      || !('message' in value)
+      || typeof value.marker !== 'string'
+      || !value.marker.startsWith('[synagent-delivery ')
+      || !value.marker.endsWith(']')
+      || typeof value.sessionId !== 'string'
+      || value.sessionId.length === 0
+    ) return undefined
+    try {
+      const message = parseCanonical(JSON.stringify(value.message))
+      return { marker: value.marker, message, sessionId: value.sessionId }
+    } catch {
+      return undefined
+    }
+  }
+
+
   function restoreState(ctx: ExtensionContext): void {
     seen.clear()
+    pending.clear()
     lastDurableTopics = []
     persistedDurableTopics = undefined
     identity = undefined
     identitySource = undefined
     const branch = ctx.sessionManager.getBranch()
-    const ids = branch
-      .map(entry => {
-        if (entry.type !== 'custom' || entry.customType !== SEEN_ENTRY || !('data' in entry)) return undefined
-        return (entry.data as SeenEntry | undefined)?.id
-      })
-      .filter((id): id is string => typeof id === 'string')
-      .slice(-MAX_SEEN)
-    for (const id of ids) seen.add(id)
-
+    const markers = new Map<string, string>()
     for (const entry of branch) {
-      if (entry.type !== 'custom' || !('data' in entry)) continue
-      if (entry.customType === STATE_ENTRY) {
-        const topics = (entry.data as StateEntry | undefined)?.topics
-        if (typeof topics === 'string' && topics.length > 0) {
-          lastDurableTopics = topics.split(',').filter(Boolean)
-          persistedDurableTopics = topics
+      if (entry.type === 'custom' && 'data' in entry) {
+        if (entry.customType === PENDING_ENTRY) {
+          const delivery = parsePendingEntry(entry.data)
+          if (delivery && !seen.has(delivery.message.id)) {
+            pending.set(delivery.message.id, delivery)
+            markers.set(delivery.marker, delivery.message.id)
+          }
+        } else if (entry.customType === SEEN_ENTRY) {
+          const data = entry.data
+          if (typeof data === 'object' && data !== null && 'id' in data && typeof data.id === 'string') {
+            pending.delete(data.id)
+            rememberSeen(data.id)
+          }
+        } else if (entry.customType === STATE_ENTRY) {
+          const data = entry.data
+          if (
+            typeof data === 'object'
+            && data !== null
+            && 'topics' in data
+            && typeof data.topics === 'string'
+            && data.topics.length > 0
+          ) {
+            lastDurableTopics = data.topics.split(',').filter(Boolean)
+            persistedDurableTopics = data.topics
+          }
+        }
+      } else if (entry.type === 'message' && entry.message.role === 'user') {
+        const marker = messageText(entry.message.content).split('\n', 1)[0]
+        if (!marker) continue
+        const id = markers.get(marker)
+        if (id) {
+          pending.delete(id)
+          rememberSeen(id)
         }
       }
     }

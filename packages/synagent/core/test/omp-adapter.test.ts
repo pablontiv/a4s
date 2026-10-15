@@ -14,6 +14,7 @@ import {
   createHarness,
   end,
   message,
+  pendingEntryMessageId,
   publish,
   startBroker,
   waitFor,
@@ -49,7 +50,7 @@ test('omp adapter captures completion and releases only on terminal agent_end', 
   await publish(publisher, topic, serialize(message({ id: 'omp-second', to: 'a4s/omp-end' })))
   await waitFor(() =>
     harness.received.length === 1
-    && harness.entries.some(entry => entry.customType === 'synagent-delivered' && entry.data.id === 'omp-second'),
+    && harness.entries.some(entry => pendingEntryMessageId(entry) === 'omp-second'),
   )
   await harness.confirmDelivery(0)
   await waitFor(() => events.some(event =>

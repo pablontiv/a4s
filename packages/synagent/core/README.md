@@ -306,16 +306,29 @@ Si una entrega no alcanza `message_start`, o una ya aceptada no se asienta, en
 30 segundos mantiene la barrera y muestra una advertencia. Esto también cubre
 un mensaje interceptado por otro input handler y evita confundir un fallo con
 un preflight o turno lento. El operador puede ejecutar `/synagent resume` para
-liberar la cola explícitamente, aceptando orden best-effort desde ese punto. El
-adaptador reserva cada `id` antes de encolarlo y conserva los últimos 1000 IDs
-en entradas privadas de la sesión:
+liberar la cola explícitamente, aceptando orden best-effort desde ese punto.
+
+Antes de encolar un mensaje inyectable, el motor guarda una entrada privada
+`synagent-pending` con el mensaje canónico completo, el id de sesión receptor y
+un marcador estable. Un *resume* de esa misma sesión rehidrata los pendientes
+aceptables en orden. `message_start` confirma únicamente el turno de usuario
+que contiene el marcador y entonces guarda `synagent-delivered`; los reenvíos
+de ids pendientes o confirmados se descartan y se diagnostican. Los ids
+confirmados se limitan a los 1000 más recientes, sin expulsar pendientes. Un
+turno de usuario ya persistido con el marcador también confirma la entrega
+aunque falte la entrada final. `task.delivered`, que no abre un turno, se marca
+consumido directamente.
+
+La garantía cubre el corte demostrado: `SIGKILL` después de persistir
+`synagent-pending` y antes del `message_start`, seguido por *resume* de la misma
+sesión. `appendEntry` no promete `fsync`; la garantía no cubre pérdida de
+energía ni convierte el procesamiento del modelo en una transacción. Una caída
+entre `message_start`, la persistencia del turno de usuario y
+`synagent-delivered` queda limitada por lo que el host haya hecho durable.
 
 - si Pi está idle, inicia un turno normal;
 - `kind=task.redirect` interrumpe un turno activo con `deliverAs: "steer"`;
 - los demás mensajes inyectables se encolan con `deliverAs: "followUp"`.
-
-La entrega al modelo es **at-most-once**. Puede perderse un mensaje si el
-proceso cae después de reservar su ID y antes de entregarlo.
 
 ### Diagnóstico operacional de Pi
 
@@ -408,6 +421,19 @@ de B a `synagent_send`. Después lanza pedidos mutuos y comprueba una secuencia
 finita de dos comandos, dos delivered y dos completed, sin eventos causados por
 eventos. `SYNAGENT_LIVE_ROOT` cambia la raíz de evidencia temporal.
 
+La comprobación viva de recuperación requiere los mismos hosts y credenciales.
+Arranca un broker propio en `18327` con DB
+`/tmp/synagent-impl-127/db`, verifica con `lsof` el aislamiento de cada proceso
+antes de enviar, deja una entrega pendiente durante `sleep 120`, mata el grupo
+del host con `SIGKILL`, reanuda el mismo archivo y exige una sola inyección. Un
+reenvío del id confirmado debe producir `message.duplicate` sin otro turno:
+
+```sh
+SYNAGENT_OMP_MODEL=anthropic/claude-haiku-5-5 \
+SYNAGENT_PI_MODEL=openai-codex/gpt-6.1-sol \
+  npm run verify:delivery-recovery --workspace @a4s/synagent
+```
+
 Las pruebas de este workspace incluyen el protocolo compartido, los bridges
 reales y un recorrido MQTT bidireccional del adaptador Pi contra Aedes con el
 peer emulado. El workspace del bus prueba por separado la CLI persistente, el
@@ -415,9 +441,11 @@ bin global empacado y la integración Herdr.
 
 ## Límites actuales
 
-`task.delivered` confirma que el adaptador de destino aceptó el turno; MQTT
-aporta QoS, retención y sesiones persistentes. Synagent no es un log
-reproducible ni ofrece replay histórico, event sourcing o alta disponibilidad.
+`task.delivered` confirma que el adaptador de destino aceptó el turno;
+`synagent-pending` recupera el corte acotado documentado arriba y MQTT aporta
+QoS, retención y sesiones persistentes. Synagent no es un log reproducible ni
+ofrece replay histórico, event sourcing, procesamiento transaccional o alta
+disponibilidad.
 
 ## Observador del bus (CLI de solo lectura)
 
