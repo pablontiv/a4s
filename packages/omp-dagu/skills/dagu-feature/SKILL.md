@@ -314,9 +314,9 @@ the PR title. Write it in the repository's commit convention.
 
 ## Reconcile `await_merge`
 
-Remote observation belongs to the scheduled [`reconcile`](reconcile.yaml) DAG, a separate process from the implementing agent, which does not wait on hosted CI. The reconciler holds no repository queue slot: it uses its own local queue with concurrency one. It runs every two minutes with `overlap_policy: skip` and an empty `catchup_window`.
+Remote observation belongs to the scheduled [`reconcile`](reconcile.yaml) DAG, a separate process from the implementing agent, which does not wait on hosted CI. The reconciler holds no repository queue slot: it uses its own local queue with concurrency one. It runs every minute with `overlap_policy: skip` and an empty `catchup_window`.
 
-`discover` reads waiting `feature` runs across all repositories with `dagu history`, parses their named params, and passes each to the local `reconcile-run` sub-DAG through `tick` with `max_concurrent: 1`. `observe` reads the waiting step and push-back iteration from `dagu status`, resolves the repository from `PRIMARY`, and reads the PR with `gh pr view` (or the issue for other waiting steps). It publishes the observation as step outputs.
+`discover` reads waiting `feature` runs across all repositories with `dagu history`, parses their named params, and passes each to the local `reconcile-run` sub-DAG through `tick` with `max_concurrent: 1`. A precondition skips `tick` when `discover` finds no waiting runs, so an idle tick succeeds. `observe` reads the waiting step and push-back iteration from `dagu status`, resolves the repository from `PRIMARY`, and reads the PR with `gh pr view` (or the issue for other waiting steps). It publishes the observation as step outputs.
 
 The scheduled DAG owns `await_merge` transitions. Each row is a step depending on `observe`, selected by a precondition on its `observation` output:
 

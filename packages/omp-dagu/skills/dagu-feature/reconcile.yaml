@@ -1,5 +1,5 @@
 description: Reconciles every waiting feature run's await_merge with its PR and reports waiting runs whose issue is closed.
-schedule: "*/2 * * * *"
+schedule: "* * * * *"
 catchup_window: ""
 overlap_policy: skip
 type: graph
@@ -12,6 +12,9 @@ steps:
 
   - id: tick
     depends: discover
+    preconditions:
+      - condition: "${RUNS}"
+        expected: "re:^\\[.+\\]$"
     action: dag.run
     with:
       dag: reconcile-run
