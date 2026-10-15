@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { IssueTitles, issueSlug } from "../src/issue-title.ts";
+import { IssueTitles, issueSlug } from "../src/status/issue-title.ts";
 
 const signal = new AbortController().signal;
 

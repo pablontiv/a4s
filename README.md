@@ -1,13 +1,13 @@
 # A4S
 
-Repositorio reducido a las extensiones verificadas, los agentes y los skills `refine` y `dagu-feature`.
+Repositorio reducido a las extensiones verificadas, los agentes y los skills distribuidos por sus paquetes.
 
 ## Extensiones
 
 - [`packages/context-expert/`](packages/context-expert/): núcleo compartido y adaptadores de Context Expert para Pi/Pion y Claude.
 - [`packages/orca-omp-integration/`](packages/orca-omp-integration/): contratos de lifecycle y routing explícito de modelos para coordinadores OMP que usan workers de Orca.
 - [`packages/omp-cross-family-review/`](packages/omp-cross-family-review/): selección cross-family de modelos para subagentes revisores de OMP.
-- [`packages/omp-dagu-status/`](packages/omp-dagu-status/): widget OMP de progreso en vivo y avisos de los runs de Dagu del repo.
+- [`packages/omp-dagu/`](packages/omp-dagu/): widget y guard OMP para Dagu, agente `triage-reviewer` y skill `dagu-feature`.
 - [`packages/pi-tool-row-presentation/`](packages/pi-tool-row-presentation/): presentación configurable de tool rows para Pi/Pion.
 - [`packages/synagent/core/`](packages/synagent/core/): adaptadores de mensajería Synagent para Pi, OMP y Claude.
 - [`packages/synagent/bus/`](packages/synagent/bus/): bus MQTT requerido por Synagent.
@@ -25,9 +25,9 @@ Los agentes para Pi, Claude y Superpowers están en [`agents/`](agents/).
 
 ## Dagu feature
 
-- Skill: [`skills/dagu-feature/SKILL.md`](skills/dagu-feature/SKILL.md): ciclo de issue con un DAG de Dagu propiedad del repo, con un solo run por issue.
-- Template: [`skills/dagu-feature/feature.yaml`](skills/dagu-feature/feature.yaml)
-- Bootstrap: [`skills/dagu-feature/dagu-feature-bootstrap.yaml`](skills/dagu-feature/dagu-feature-bootstrap.yaml)
+- Skill: [`packages/omp-dagu/skills/dagu-feature/SKILL.md`](packages/omp-dagu/skills/dagu-feature/SKILL.md): ciclo de issue con un DAG de Dagu propiedad del repo, con un solo run por issue.
+- Template: [`packages/omp-dagu/skills/dagu-feature/feature.yaml`](packages/omp-dagu/skills/dagu-feature/feature.yaml)
+- Bootstrap: [`packages/omp-dagu/skills/dagu-feature/dagu-feature-bootstrap.yaml`](packages/omp-dagu/skills/dagu-feature/dagu-feature-bootstrap.yaml)
 
 ## Flujo de issues
 
@@ -39,7 +39,7 @@ dagu enqueue --run-id "a4s-issue-$n" .workspace/dagu/dags/feature.yaml -- \
   ISSUE="$n" PRIMARY="$(git rev-parse --show-toplevel)" BRANCH="dagu/issue-$n"
 ```
 
-El checkpoint `implement`, la reconciliación de `await_merge` y la recuperación de fallos siguen [`skills/dagu-feature/SKILL.md`](skills/dagu-feature/SKILL.md).
+El checkpoint `implement`, la reconciliación de `await_merge` y la recuperación de fallos siguen [`packages/omp-dagu/skills/dagu-feature/SKILL.md`](packages/omp-dagu/skills/dagu-feature/SKILL.md).
 
 ## Verificación
 

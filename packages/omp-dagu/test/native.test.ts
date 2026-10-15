@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { TriageGuard } from "../src/guard.ts";
+import { TriageGuard } from "../src/triage/guard.ts";
 
 test("native [worker, triage-reviewer] batch correlates reviewer job from spawn feedback, not primary job", () => {
   for (const route of ["wait", "message"]) {

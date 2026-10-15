@@ -44,6 +44,6 @@ jobs:
       # @a4s/pi-tool-row-presentation typechecks against @pablontiv/pion.
       - name: Typecheck
         run: |
-          for workspace in @a4s/context-expert @a4s/orca-omp-integration @a4s/synagent @a4s/synagent-bus; do
+          for workspace in @a4s/context-expert @a4s/orca-omp-integration @a4s/omp-dagu @a4s/synagent @a4s/synagent-bus; do
             npm run typecheck --workspace "$workspace"
           done

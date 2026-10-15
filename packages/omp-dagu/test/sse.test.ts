@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { SSEParser } from "../src/sse.ts";
-import type { SSEEvent } from "../src/sse.ts";
+import { SSEParser } from "../src/status/sse.ts";
+import type { SSEEvent } from "../src/status/sse.ts";
 
 test("SSE separates control and message, joins multiline data, and ignores comments/id/retry", () => {
   const events: SSEEvent[] = [];

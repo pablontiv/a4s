@@ -142,6 +142,7 @@ Notifications arrive as priority user input with the form `[DAGU STATE] run=<id>
 
 - On a `triage` notice, the coordinator obtains the guard generation marker, launches `task agent=triage-reviewer` itself with that marker and the fixed prompt, and completes `triage` with the allocated reviewer ID. A `dependency_review` push-back produces a new `triage` notice and the coordinator repeats this flow for the new generation.
 - On an `implement` notice, the coordinator launches one level-1 implementation subagent for that issue's worktree. The subagent result auto-delivers to the coordinator, which then completes `implement`.
+- For every issue in the fixed batch, keep one todo for the agent action at the `human.task` where its run is waiting: triage review, PoC execution, implementation, or recovery. Update that todo when the run moves to another human task; the package widget provides DAG step progress rather than duplicating that progress in todos.
 - Keep `task.maxRecursionDepth: 1`; every implementation and triage-reviewer subagent remains at level 1 and appears in the main view.
 
 ## Turn status
@@ -164,8 +165,8 @@ A PoC is required when implementation depends on unexercised external or runtime
 behavior that can change the implementation path. Reusing demonstrated behavior
 proceeds directly. Bug reproduction is defect investigation.
 
-With OMP, load the `omp-triage-guard` package directory so its distributed
-`triage-reviewer` agent is discovered. An attempted `POC=no` completion returns
+With OMP, load the `@a4s/omp-dagu` package directory so its distributed
+`triage-reviewer` agent and DAG progress widget are discovered. An attempted `POC=no` completion returns
 the generation marker and fixed review prompt. Run `task agent=triage-reviewer`
 with the issue scope, that full marker and prompt. Its structured decision
 auto-delivers to the coordinator. A `no` authorizes the current generation with
