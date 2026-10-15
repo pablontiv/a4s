@@ -120,8 +120,21 @@ steps:
       dagu validate "$(dirname "$STAGE")/poc.yaml"
       printf 'stage=%s\n' "$STAGE"
 
-  - id: github
+  - id: reconcile
     depends: render
+    run: |
+      set -euo pipefail
+      destination="${DAGU_HOME:-$HOME/.dagu}/dags/reconcile.yaml"
+      dagu validate "$SKILL_DIR/reconcile.yaml"
+      mkdir -p "$(dirname "$destination")"
+      if ! cmp -s "$SKILL_DIR/reconcile.yaml" "$destination"; then
+        install -m 0644 "$SKILL_DIR/reconcile.yaml" "$destination"
+      fi
+      dagu validate "$destination"
+      printf 'reconcile=%s\n' "$destination"
+
+  - id: github
+    depends: reconcile
     env:
       - REQUIRED_CHECK: ${steps.answers.outputs.REQUIRED_CHECK}
       - NWO: ${steps.detect.outputs.NWO}
@@ -195,5 +208,9 @@ steps:
       git -C "$PRIMARY" check-ignore -q "$PRIMARY/.workspace/worktrees/issue-1"
       dagu validate "$STAGE"
       dagu validate "$(dirname "$STAGE")/poc.yaml"
+      destination="${DAGU_HOME:-$HOME/.dagu}/dags/reconcile.yaml"
+      cmp "$SKILL_DIR/reconcile.yaml" "$destination"
+      dagu validate "$destination"
+      printf 'reconcile=%s\n' "$destination"
       printf 'scheduler=ok\nrepo=%s\nbase_branch=%s\nrequired_check=%s\nstage=%s\n' \
         "$NWO" "$BASE_BRANCH" "$REQUIRED_CHECK" "$STAGE"

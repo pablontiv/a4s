@@ -1,0 +1,98 @@
+description: Reconciles every waiting feature run's await_merge with its PR and reports waiting runs whose issue is closed.
+schedule: "*/2 * * * *"
+catchup_window: ""
+overlap_policy: skip
+type: graph
+shell: bash
+steps:
+  - id: discover
+    run: |
+      dagu history feature --status waiting --format json --limit 500 | jq -c '[.[] | (.params | [splits(" +") | capture("^(?<key>[^=]+)=(?<value>.*)$")] | from_entries) as $p | {RUN: .dagRunId, ISSUE: $p.ISSUE, PRIMARY: $p.PRIMARY, BRANCH: $p.BRANCH, PR_NUMBER: ($p.PR_NUMBER // "")}]'
+    output: RUNS
+
+  - id: tick
+    depends: discover
+    action: dag.run
+    with:
+      dag: reconcile-run
+    parallel:
+      items: ${RUNS}
+      max_concurrent: 1
+
+---
+name: reconcile-run
+type: graph
+shell: bash
+params:
+  - name: RUN
+    type: string
+    required: true
+  - name: ISSUE
+    type: string
+    required: true
+  - name: PRIMARY
+    type: string
+    required: true
+  - name: BRANCH
+    type: string
+    required: true
+  - name: PR_NUMBER
+    type: string
+    default: ""
+steps:
+  - id: observe
+    run: |
+      set -euo pipefail
+      REPO=$(gh repo view "$(git -C "$PRIMARY" remote get-url origin)" --json nameWithOwner --jq .nameWithOwner)
+      STATUS=$(dagu status feature --run-id "$RUN")
+      STEP=$(sed -nE 's/^├─([A-Za-z0-9_-]+) .*\[waiting\]$/\1/p' <<<"$STATUS" | head -1)
+      ITERATION=$(sed -nE 's/.*push-back iteration: ([0-9]+).*/\1/p' <<<"$STATUS" | head -1)
+      if [[ "$STEP" == await_merge ]]; then
+        OBSERVATION="await_merge $(gh pr view "${PR_NUMBER:-$BRANCH}" -R "$REPO" --json state,mergeStateStatus,autoMergeRequest --jq '"\(.state)/\(.mergeStateStatus)/\(.autoMergeRequest != null)"')"
+      else
+        OBSERVATION="$STEP issue=$(gh issue view "$ISSUE" -R "$REPO" --json state,closedAt --jq '"\(.state) closed_at=\(.closedAt // "")"')"
+      fi
+      printf 'run=%s\nrepo=%s\nissue=%s\niteration=%s\nobservation=%s\n' "$RUN" "$REPO" "$ISSUE" "${ITERATION:-0}" "$OBSERVATION" | tee -a "$DAGU_OUTPUT_FILE"
+    outputs:
+      - name: run
+      - name: repo
+      - name: issue
+      - name: iteration
+      - name: observation
+
+  - id: complete
+    depends: observe
+    preconditions:
+      - condition: "${steps.observe.outputs.observation}"
+        expected: "re:^await_merge MERGED/"
+    run: dagu human-task complete feature --run-id "${steps.observe.outputs.run}" --step await_merge
+
+  - id: push_back
+    depends: observe
+    preconditions:
+      - condition: "${steps.observe.outputs.observation}"
+        expected: "re:^await_merge OPEN/BEHIND/"
+    run: dagu human-task push-back feature --run-id "${steps.observe.outputs.run}" --step await_merge --expected-iteration "${steps.observe.outputs.iteration}"
+
+  - id: keep_waiting
+    depends: observe
+    preconditions:
+      - condition: "${steps.observe.outputs.observation}"
+        expected: "re:^await_merge OPEN/(CLEAN|BLOCKED|UNSTABLE|UNKNOWN)/true$"
+    run: echo "PR open with auto-merge; await_merge keeps waiting"
+
+  - id: unreconciled
+    depends: observe
+    preconditions:
+      - condition: "${steps.observe.outputs.observation}"
+        expected: "re:^await_merge (CLOSED/|OPEN/(DIRTY|DRAFT|HAS_HOOKS)/|OPEN/(CLEAN|BLOCKED|UNSTABLE|UNKNOWN)/false$)"
+    run: |
+      printf 'RECONCILIATION FAILED: %s %s\n' "${steps.observe.outputs.run}" "${steps.observe.outputs.observation}" >&2
+      exit 1
+
+  - id: orphan
+    depends: observe
+    preconditions:
+      - condition: "${steps.observe.outputs.observation}"
+        expected: "re:^(triage|implement) issue=CLOSED "
+    run: echo "ORPHAN ${steps.observe.outputs.repo}#${steps.observe.outputs.issue} ${steps.observe.outputs.run} ${steps.observe.outputs.observation}"
