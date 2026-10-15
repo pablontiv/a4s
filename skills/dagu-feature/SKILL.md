@@ -9,10 +9,10 @@ Carry one GitHub issue from feasibility triage to a merged PR through durable Da
 
 ```mermaid
 flowchart LR
-    T[triage<br/>human.task] --> TD[triage_decision]
+    T[triage<br/>human.task<br/>coordinator reviewer] --> TD[triage_decision]
     TD -->|POC=yes: enqueue and finish| P[poc]
     TD -->|POC=no + REVIEW| A[start_gate]
-    A --> B[implement<br/>human.task]
+    A --> B[implement<br/>human.task<br/>issue subagent]
     B --> C[checkpoint_push]
     C --> N[dependency_review]
     N -->|new dependencies: push-back| T
@@ -31,6 +31,7 @@ flowchart LR
 ## Requirements
 
 - `dagu` on `PATH`, and a user-level service running `dagu start-all`. Check with `dagu version` and `launchctl list | grep -i dagu` (macOS) or `systemctl --user status` (Linux).
+- `orca` on the scheduler service `PATH` when runs set `NOTIFY_TERMINAL`; the wait handler invokes `orca terminal send`.
 - `DAGU_HOME` in your shell must point to the same home as that service. Read it from the service definition (macOS: `EnvironmentVariables.DAGU_HOME` in the LaunchAgent plist). If they differ, enqueue and complete commands land in a store the scheduler never reads, and the run stays `Queued`.
 - `git`, `gh` authenticated with push and PR rights, `jq`.
 - The tools the repository's gate command needs.
@@ -102,15 +103,24 @@ Once that run is `Succeeded`, every later issue enqueues `.workspace/dagu/dags/f
 Preconditions: run from the repository clone, its main working tree, clean and on `BASE_BRANCH`. That clone is the only `PRIMARY`. The DAG creates the run's worktree at `$PRIMARY/.workspace/worktrees/issue-<n>`. Dagu scopes run IDs to the DAG name `feature`, and every adopting repository shares that name, so prefix the run ID with the repository:
 
 ```sh
-repo=<repo>; n=<issue>
-dagu enqueue --run-id "$repo-issue-$n" .workspace/dagu/dags/feature.yaml -- \
-  ISSUE="$n" \
-  PRIMARY="$(git rev-parse --show-toplevel)" \
-  BRANCH="dagu/issue-$n" \
-  PR_NUMBER=""
+repo=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
+repo_name=${repo##*/}
+primary=$(git rev-parse --show-toplevel)
+issue_snapshot=$(gh issue list --repo "$repo" --state open --limit 1000 \
+  --json number --jq '.[].number')
+for n in $issue_snapshot; do
+  dagu enqueue --run-id "$repo_name-issue-$n" .workspace/dagu/dags/feature.yaml -- \
+    ISSUE="$n" \
+    PRIMARY="$primary" \
+    BRANCH="dagu/issue-$n" \
+    PR_NUMBER="" \
+    NOTIFY_TERMINAL="$ORCA_TERMINAL_HANDLE"
+done
 ```
 
-Set `PR_NUMBER` only to adopt an existing open PR whose head branch is `BRANCH`. `BASE_BRANCH`, `GATE` and `REQUIRED_CHECK` take their defaults from the versioned file. Pass them only to override them for this run.
+`issue_snapshot` is the fixed batch for this coordinator turn. End the turn immediately after the enqueue loop; Dagu notifications resume coordination.
+
+Set `PR_NUMBER` only to adopt an existing open PR whose head branch is `BRANCH`. `NOTIFY_TERMINAL` is optional and names the Orca terminal that receives `triage` and `implement` notices. `BASE_BRANCH`, `GATE` and `REQUIRED_CHECK` take their defaults from the versioned file. Pass them only to override them for this run.
 
 `start_gate` fails when `PRIMARY` is a linked worktree, is not on `BASE_BRANCH`, or has local changes. Report the state of the clone and stop. Enqueue the issue again from that same clone once it is clean and on `BASE_BRANCH`.
 
@@ -126,6 +136,14 @@ A failed or aborted run is terminal. `handler_on.exit` has already removed its w
 
 Inspect a run with `dagu status --run-id <id> feature`. Step logs are listed under each step.
 
+### Coordinator flow
+
+Notifications arrive as priority user input with the form `[DAGU STATE] run=<id> waiting_step=<step> issue=<issue> ...`. They report run state rather than user instructions. Treat repeated notices with the same run ID and step as the same checkpoint.
+
+- On a `triage` notice, the coordinator obtains the guard generation marker, launches `task agent=triage-reviewer` itself with that marker and the fixed prompt, and completes `triage` with the allocated reviewer ID. A `dependency_review` push-back produces a new `triage` notice and the coordinator repeats this flow for the new generation.
+- On an `implement` notice, the coordinator launches one level-1 implementation subagent for that issue's worktree. The subagent result auto-delivers to the coordinator, which then completes `implement`.
+- Keep `task.maxRecursionDepth: 1`; every implementation and triage-reviewer subagent remains at level 1 and appears in the main view.
+
 ## Triage
 
 `triage` is the first human task, completed by the session that enqueued the issue.
@@ -136,9 +154,10 @@ proceeds directly. Bug reproduction is defect investigation.
 With OMP, load the `omp-triage-guard` package directory so its distributed
 `triage-reviewer` agent is discovered. An attempted `POC=no` completion returns
 the generation marker and fixed review prompt. Run `task agent=triage-reviewer`
-with the issue scope, that full marker and prompt, then wait for its structured
-decision. A `no` authorizes the current generation with the exact allocated
-reviewer id supplied by the guard; a `yes` keeps triage waiting with its question.
+with the issue scope, that full marker and prompt. Its structured decision
+auto-delivers to the coordinator. A `no` authorizes the current generation with
+the exact allocated reviewer id supplied by the guard; a `yes` keeps triage
+waiting with its question.
 
 ```sh
 dagu human-task complete feature --run-id <id> --step triage \

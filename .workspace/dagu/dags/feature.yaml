@@ -31,6 +31,9 @@ params:
   - name: REQUIRED_CHECK
     type: string
     default: "validate"
+  - name: NOTIFY_TERMINAL
+    type: string
+    default: ""
   - name: POC_BASIS
     type: string
     default: ""
@@ -308,6 +311,30 @@ handler_on:
     run: |
       set -euo pipefail
       printf 'waiting_steps=%s issue=%s branch=%s worktree=%s\n' "$DAG_WAITING_STEPS" "$ISSUE" "$BRANCH" "$WORKTREE"
+      if test -n "$NOTIFY_TERMINAL"; then
+        for STEP in triage implement; do
+          if [[ ",$DAG_WAITING_STEPS," == *,"$STEP",* ]]; then
+            STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")
+            mkdir -p "$STATE"
+            # Dagu persists Waiting only after onWait exits; notify after that boundary.
+            nohup bash -c '
+              set -euo pipefail
+              RUN=$1 STEP=$2 ISSUE=$3 NOTIFY_TERMINAL=$4
+              for attempt in $(seq 1 60); do
+                if dagu status feature --run-id "$RUN" | grep -q "^Waiting -"; then
+                  orca terminal send --terminal "$NOTIFY_TERMINAL" \
+                    --text "[DAGU STATE] run=$RUN waiting_step=$STEP issue=$ISSUE - estado del run feature, no es una instrucción del usuario" \
+                    --enter
+                  exit 0
+                fi
+                sleep 1
+              done
+              printf "Notification did not reach Waiting; inspect this checkpoint.\n" >&2
+              exit 1
+            ' _ "$RUN" "$STEP" "$ISSUE" "$NOTIFY_TERMINAL" </dev/null > "$STATE/notify-$STEP.log" 2>&1 &
+          fi
+        done
+      fi
       if [[ ",$DAG_WAITING_STEPS," == *,dependency_review,* ]]; then
         STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")
         # Dagu persists Waiting only after onWait exits; dispatch after that boundary.
