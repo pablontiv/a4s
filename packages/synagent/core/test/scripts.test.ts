@@ -144,7 +144,7 @@ test('scripts de Claude v1: bridges arrancan y hacen round-trip real', async (t)
     id: 'v1-test-1',
     from: 'a4s/pi-1',
     to: 'a4s/claude-1',
-    kind: 'prompt',
+    kind: 'task.request',
     body: 'hola desde scripts.test (v1)',
     ts: Date.now(),
   })
@@ -164,7 +164,7 @@ test('scripts de Claude v1: bridges arrancan y hacen round-trip real', async (t)
   assert.equal(msg.id, 'v1-test-1')
   assert.equal(msg.to, 'a4s/claude-1')
   assert.equal(msg.from, 'a4s/pi-1')
-  assert.equal(msg.kind, 'prompt')
+  assert.equal(msg.kind, 'task.request')
   assert.equal(msg.body, 'hola desde scripts.test (v1)')
 })
 
@@ -264,7 +264,7 @@ test('scripts de Claude v1: bridge-sub soporta clientes durable + transient', as
     id: 'direct-msg',
     from: 'a4s/other-1',
     to: 'a4s/test-2',
-    kind: 'prompt',
+    kind: 'task.request',
     body: 'msg directo',
     ts: Date.now(),
   })
@@ -284,7 +284,7 @@ test('scripts de Claude v1: bridge-sub soporta clientes durable + transient', as
     id: 'broadcast-msg',
     from: 'a4s/other-1',
     to: 'a4s/all',
-    kind: 'notify',
+    kind: 'note.published',
     body: 'msg broadcast',
     ts: Date.now(),
   })

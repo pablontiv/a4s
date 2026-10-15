@@ -30,7 +30,8 @@ import {
   directAddress,
   instanceFromHostSession,
   isAddress,
-  isBroadcastSteer,
+  isBroadcastRedirect,
+  isCommandKind,
   isToken,
   makeOutbound,
   MESSAGE_KINDS,
@@ -40,10 +41,12 @@ import {
   resolveProjectWithSource,
   serialize,
   subscriptions,
+  SYNAGENT_SEND_KINDS,
   type CanonicalMessage,
   type Identity,
   type MessageKind,
   type SubscriptionPlan,
+  type SynagentSendKind,
 } from '../../protocol.ts'
 
 const MAX_SEEN = 1000
@@ -64,6 +67,7 @@ type ActiveDelivery = {
   id: string
   kind: MessageKind
   marker: string
+  message: CanonicalMessage
   mode: DeliveryMode
   token: number
 }
@@ -92,8 +96,10 @@ export type SynagentAdapterHost = {
   diagnosticEventPrefix: string
   settleEventName: string
   settingsPaths: () => SynagentSettingsPaths
-  createDeliveryResultCapture?: (pi: ExtensionAPI) => DeliveryResultCapture
-  bindSettle: (pi: ExtensionAPI, release: (ctx: ExtensionContext) => void) => void
+  bindSettle: (
+    pi: ExtensionAPI,
+    release: (ctx: ExtensionContext) => void | Promise<void>,
+  ) => void
 }
 
 export function createSynagentAdapter(
@@ -130,25 +136,26 @@ function synagentAdapter(
   let settings: SynagentSettings = { ...DEFAULT_SETTINGS }
   let activeSettingsPaths: SynagentSettingsPaths | undefined
   const queuedDeliveries: QueuedDelivery[] = []
-  const deliveryResultCapture = host.createDeliveryResultCapture?.(pi)
+  const deliveryResultCapture = createDeliveryResultCapture(pi)
   const seen = new Set<string>()
 
   pi.registerTool({
     name: 'synagent_send',
     label: 'Send Synagent message',
     description:
-      'Send a message to another agent through Synagent v1. Use only when the user asks to notify or message another agent or project, not for normal conversation. The body must be self-contained.',
+      'Send a task command or published note to another agent through Synagent v1. '
+      + 'Use only when the user asks to message another agent or project. The body must be self-contained.',
     parameters: Type.Object({
       to: Type.String({ description: 'v1 address: <project>/<instance>, <project>/all, or all.' }),
       body: Type.String({ description: 'Self-contained message body.' }),
       kind: Type.Optional(Type.Union([
-        Type.Literal('prompt'),
-        Type.Literal('steer'),
-        Type.Literal('result'),
-        Type.Literal('notify'),
-        Type.Literal('ack'),
-      ], { description: 'Message kind; defaults to prompt.' })),
+        Type.Literal('task.request'),
+        Type.Literal('task.redirect'),
+        Type.Literal('note.published'),
+      ], { description: 'Message kind; defaults to task.request.' })),
       reply_to: Type.Optional(Type.String({ description: 'Message id being replied to.' })),
+      correlation_id: Type.Optional(Type.String({ description: 'Root command id for this message chain.' })),
+      causation_id: Type.Optional(Type.String({ description: 'Message id that caused this message.' })),
     }),
     annotations: { openWorldHint: true },
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
@@ -217,7 +224,7 @@ function synagentAdapter(
         clearDeliveryStartTimer()
         ++deliveryDispatchToken
         activeDelivery = undefined
-        deliveryResultCapture?.reset()
+        deliveryResultCapture.reset()
         awaitingSettlement = false
         logDiagnostic('delivery.resumed', {
           operation: 'delivery.resume',
@@ -300,24 +307,21 @@ function synagentAdapter(
     await restart(ctx, false)
   })
 
-  pi.on('message_start', (event, ctx) => {
+  pi.on('message_start', async (event, ctx) => {
     if (!useCurrentContext(ctx)) return
     const active = activeDelivery
     if (!active || event.message.role !== 'user') return
-    const text = userMessageText(event.message.content)
-    if (text.startsWith(`${active.marker}\n`)) confirmActiveDelivery(active, ctx)
+    const text = messageText(event.message.content)
+    if (text.startsWith(`${active.marker}\n`)) await confirmActiveDelivery(active, ctx)
   })
 
   host.bindSettle(pi, releaseSettledDelivery)
 
-  function releaseSettledDelivery(ctx: ExtensionContext): void {
+  async function releaseSettledDelivery(ctx: ExtensionContext): Promise<void> {
     if (!useCurrentContext(ctx) || !activeDelivery?.confirmed) return
     const settled = activeDelivery
-    const deliveryText = deliveryResultCapture?.result(settled)
+    const deliveryText = deliveryResultCapture.result(settled)
     clearDeliveryStartTimer()
-    activeDelivery = undefined
-    deliveryResultCapture?.reset()
-    awaitingSettlement = false
     logDiagnostic('delivery.settled', {
       operation: 'delivery.settle',
       generation: settled.generation,
@@ -328,6 +332,12 @@ function synagentAdapter(
       ...(deliveryText === undefined ? {} : { deliveryText }),
       ...messageDiagnostic(settled.id),
     })
+    if (isCommandKind(settled.message.kind)) {
+      await publishTaskEvent(settled.message, 'task.completed', deliveryText ?? '', ctx)
+    }
+    activeDelivery = undefined
+    deliveryResultCapture.reset()
+    awaitingSettlement = false
     drainDeliveries(ctx)
   }
 
@@ -361,10 +371,17 @@ function synagentAdapter(
   })
 
   async function send(
-    params: { to: string; body: string; kind?: string; reply_to?: string },
+    params: {
+      to: string
+      body: string
+      kind?: string
+      reply_to?: string
+      correlation_id?: string
+      causation_id?: string
+    },
     ctx: ExtensionContext,
   ): Promise<SendResult> {
-    const kind = params.kind ?? 'prompt'
+    const kind = params.kind ?? 'task.request'
     const loggedKind = MESSAGE_KINDS.includes(kind as MessageKind) ? kind : 'invalid'
     const destinationScope = destinationScopeOf(params.to)
     const reject = (code: string, message: string, phase = 'message.send'): SendResult => {
@@ -393,7 +410,7 @@ function synagentAdapter(
     if (!active?.connected) return reject('MQTT_DISCONNECTED', 'Synagent is not connected', 'mqtt.connect')
     const to = resolveDestination(params.to, identity)
     if (!to) return reject('DESTINATION_INVALID', `Invalid Synagent address: ${params.to}`)
-    if (!MESSAGE_KINDS.includes(kind as MessageKind)) {
+    if (!SYNAGENT_SEND_KINDS.includes(kind as SynagentSendKind)) {
       return reject('MESSAGE_KIND_INVALID', `Invalid Synagent kind: ${kind}`)
     }
 
@@ -402,10 +419,12 @@ function synagentAdapter(
     try {
       const outbound = makeOutbound(identity, to, {
         body: params.body,
-        kind: kind as MessageKind,
+        kind: kind as SynagentSendKind,
         id: newId(directAddress(identity), ts),
         ts,
         ...(params.reply_to ? { replyTo: params.reply_to } : {}),
+        ...(params.correlation_id ? { correlationId: params.correlation_id } : {}),
+        ...(params.causation_id ? { causationId: params.causation_id } : {}),
       })
       messageId = outbound.message.id
       await publish(active, outbound.topic, serialize(outbound.message))
@@ -428,6 +447,67 @@ function synagentAdapter(
         error: classifyDiagnosticError(error, 'MQTT_PUBLISH_FAILED', 'message.send', true, 'mqtt.publish'),
       })
       return { ok: false, message: `Synagent publish failed: ${formatError(error)}` }
+    }
+  }
+
+  async function publishTaskEvent(
+    command: CanonicalMessage,
+    kind: 'task.delivered' | 'task.completed',
+    body: string,
+    ctx: ExtensionContext,
+  ): Promise<void> {
+    const active = durable
+    const currentIdentity = identity
+    if (!active?.connected || !currentIdentity) {
+      logDiagnostic('message.rejected', {
+        operation: 'message.send',
+        messageKind: kind,
+        destinationScope: destinationScopeOf(command.from),
+        queueDepth: queuedDeliveries.length,
+        severity: 'ERROR',
+        ...messageDiagnostic(command.id),
+        error: classifyDiagnosticError(
+          undefined,
+          'TASK_EVENT_PUBLISH_UNAVAILABLE',
+          'message.send',
+          true,
+          `${host.componentName}.event`,
+        ),
+      })
+      ctx.ui.notify(`Synagent could not publish ${kind} for ${command.id}: adapter disconnected`, 'error')
+      return
+    }
+
+    const ts = Date.now()
+    const eventId = newId(directAddress(currentIdentity), ts)
+    try {
+      const outbound = makeOutbound(currentIdentity, command.from, {
+        body,
+        kind,
+        id: eventId,
+        ts,
+        correlationId: command.correlation_id ?? command.id,
+        causationId: command.id,
+      })
+      await publish(active, outbound.topic, serialize(outbound.message))
+      logDiagnostic('message.sent', {
+        operation: 'message.send',
+        messageKind: kind,
+        destinationScope: destinationScopeOf(command.from),
+        queueDepth: queuedDeliveries.length,
+        ...messageDiagnostic(eventId),
+      })
+    } catch (error) {
+      logDiagnostic('message.rejected', {
+        operation: 'message.send',
+        messageKind: kind,
+        destinationScope: destinationScopeOf(command.from),
+        queueDepth: queuedDeliveries.length,
+        severity: 'ERROR',
+        ...messageDiagnostic(eventId),
+        error: classifyDiagnosticError(error, 'TASK_EVENT_PUBLISH_FAILED', 'message.send', true, 'mqtt.publish'),
+      })
+      ctx.ui.notify(`Synagent failed to publish ${kind} for ${command.id}: ${formatError(error)}`, 'error')
     }
   }
 
@@ -794,14 +874,14 @@ function synagentAdapter(
         ...messageFields,
         error: classifyDiagnosticError(
           undefined,
-          isBroadcastSteer(message) ? 'BROADCAST_STEER_REJECTED' : 'DESTINATION_REJECTED',
+          isBroadcastRedirect(message) ? 'BROADCAST_REDIRECT_REJECTED' : 'DESTINATION_REJECTED',
           'message.receive',
           false,
           'protocol.accept',
         ),
       })
-      if (isBroadcastSteer(message)) {
-        ctx.ui.notify(`Synagent rejected broadcast steer: ${message.id}`, 'warning')
+      if (isBroadcastRedirect(message)) {
+        ctx.ui.notify(`Synagent rejected broadcast task.redirect: ${message.id}`, 'warning')
       }
       return
     }
@@ -817,12 +897,13 @@ function synagentAdapter(
     seen.add(message.id)
     if (seen.size > MAX_SEEN) seen.delete(seen.values().next().value as string)
     pi.appendEntry<SeenEntry>(SEEN_ENTRY, { id: message.id })
-    queuedDeliveries.push({ generation: deliveryGeneration, message })
     logDiagnostic('message.received', {
       operation: 'message.receive',
       queueDepth: queuedDeliveries.length,
       ...messageFields,
     })
+    if (message.kind === 'task.delivered') return
+    queuedDeliveries.push({ generation: deliveryGeneration, message })
     drainDeliveries(context ?? ctx)
   }
 
@@ -839,7 +920,7 @@ function synagentAdapter(
       const wasIdle = ctx.isIdle()
       let mode: DeliveryMode = 'followUp'
       if (wasIdle) mode = 'idle'
-      else if (queued.message.kind === 'steer') mode = 'steer'
+      else if (queued.message.kind === 'task.redirect') mode = 'steer'
       try {
         awaitingSettlement = true
         const dispatchToken = ++deliveryDispatchToken
@@ -852,10 +933,11 @@ function synagentAdapter(
           id: queued.message.id,
           kind: queued.message.kind,
           marker,
+          message: queued.message,
           mode,
           token: dispatchToken,
         }
-        deliveryResultCapture?.start(activeDelivery)
+        deliveryResultCapture.start(activeDelivery)
         armDeliveryStartTimeout(
           dispatchToken,
           queued.message.id,
@@ -878,7 +960,7 @@ function synagentAdapter(
       } catch (error) {
         clearDeliveryStartTimer()
         activeDelivery = undefined
-        deliveryResultCapture?.reset()
+        deliveryResultCapture.reset()
         awaitingSettlement = false
         logDiagnostic('delivery.failed', {
           operation: 'delivery.dispatch',
@@ -898,7 +980,7 @@ function synagentAdapter(
     }
   }
 
-  function confirmActiveDelivery(active: ActiveDelivery, ctx: ExtensionContext): void {
+  async function confirmActiveDelivery(active: ActiveDelivery, ctx: ExtensionContext): Promise<void> {
     if (activeDelivery !== active || active.token !== deliveryDispatchToken) return
     active.confirmed = true
     logDiagnostic('delivery.confirmed', {
@@ -911,6 +993,9 @@ function synagentAdapter(
       timeoutMs: deliveryStartTimeoutMs,
       ...messageDiagnostic(active.id),
     })
+    if (isCommandKind(active.message.kind)) {
+      await publishTaskEvent(active.message, 'task.delivered', '', ctx)
+    }
     armDeliveryStartTimeout(active.token, active.id, ctx, host.settleEventName)
   }
 
@@ -970,14 +1055,14 @@ function synagentAdapter(
   function resetDeliveryQueue(): void {
     ++deliveryGeneration
     queuedDeliveries.length = 0
-    deliveryResultCapture?.reset()
+    deliveryResultCapture.reset()
   }
 
   function resetActiveDelivery(): void {
     clearDeliveryStartTimer()
     ++deliveryDispatchToken
     activeDelivery = undefined
-    deliveryResultCapture?.reset()
+    deliveryResultCapture.reset()
     awaitingSettlement = false
   }
 
@@ -1051,6 +1136,49 @@ function synagentAdapter(
   }
 }
 
+function createDeliveryResultCapture(pi: ExtensionAPI): DeliveryResultCapture {
+  let active: (DeliveryResultKey & {
+    frozen: boolean
+    lastText?: string
+    started: boolean
+  }) | undefined
+
+  pi.on('message_start', event => {
+    if (!active || event.message.role !== 'user') return
+    const text = messageText(event.message.content)
+    if (text.startsWith(`${active.marker}\n`)) {
+      active.started = true
+      return
+    }
+    if (active.started) active.frozen = true
+  })
+
+  pi.on('message_end', event => {
+    if (!active?.started || active.frozen || event.message.role !== 'assistant') return
+    const text = messageText(event.message.content)
+    if (text.trim()) active.lastText = text
+  })
+
+  return {
+    start(delivery) {
+      active = { ...delivery, frozen: false, started: false }
+    },
+    result(delivery) {
+      if (
+        !active
+        || active.id !== delivery.id
+        || active.generation !== delivery.generation
+        || active.marker !== delivery.marker
+        || active.token !== delivery.token
+      ) return undefined
+      return active.lastText
+    },
+    reset() {
+      active = undefined
+    },
+  }
+}
+
 function requireSettingKey(value: string): SynagentSettingKey {
   if (value === 'enabled' || value === 'broker-url' || value === 'global' || value === 'default-peer') {
     return value
@@ -1075,7 +1203,7 @@ function resolveDestination(raw: string, identity: Identity): string | undefined
   return undefined
 }
 
-function userMessageText(content: unknown): string {
+function messageText(content: unknown): string {
   if (typeof content === 'string') return content
   if (!Array.isArray(content)) return ''
   const text: string[] = []
@@ -1083,9 +1211,11 @@ function userMessageText(content: unknown): string {
     if (
       typeof part === 'object'
       && part !== null
-      && (part as { type?: unknown }).type === 'text'
-      && typeof (part as { text?: unknown }).text === 'string'
-    ) text.push((part as { text: string }).text)
+      && 'type' in part
+      && part.type === 'text'
+      && 'text' in part
+      && typeof part.text === 'string'
+    ) text.push(part.text)
   }
   return text.join('\n')
 }

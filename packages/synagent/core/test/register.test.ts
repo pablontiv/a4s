@@ -179,7 +179,14 @@ test('register: tool.call enruta por el nombre MCP exacto, lee args de e y publi
 
   const toolHook = get('tool.call')
   // Args ESPARCIDOS en e (no en e.input): así los entrega el engine.
-  const e = { tool: 'mcp__synagent-adapter-mqtt__synagent_send', to: 'a4s/pi-1', body: 'hola pi', kind: 'prompt' }
+  const e = {
+    tool: 'mcp__synagent-adapter-mqtt__synagent_send',
+    to: 'a4s/pi-1',
+    body: 'hola pi',
+    kind: 'task.request',
+    correlation_id: 'root-command',
+    causation_id: 'cause-message',
+  }
   const res = (await toolHook(eng.$, e, next)) as { result: string }
   assert.match(res.result, /^enviado /, 'debe confirmar el envío')
 
@@ -187,7 +194,10 @@ test('register: tool.call enruta por el nombre MCP exacto, lee args de e y publi
   assert.ok(pub, 'debe invocar bridge-pub')
   assert.equal(pub.includes('synagent/v1/a4s/pi-1'), true, 'topic v1 == synagent/v1/<to>')
   const payload = pub.find(a => a.startsWith('{') && a.includes('"to":"a4s/pi-1"'))
-  assert.ok(payload, 'payload canónico con to v1')
+  assert.ok(payload, 'payload canónico presente')
+  assert.ok(payload.includes('"kind":"task.request"'), 'payload canónico con kind de comando')
+  assert.ok(payload.includes('"correlation_id":"root-command"'), 'payload conserva correlación')
+  assert.ok(payload.includes('"causation_id":"cause-message"'), 'payload conserva causa')
 })
 
 test('register: tool.call ajeno pasa de largo con next', async () => {

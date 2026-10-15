@@ -86,7 +86,7 @@ async function roundTrip(url, suffix) {
         resolve(JSON.parse(payload.toString()))
       })
     })
-    const message = { id: suffix, from: 'pi', to: 'claude', kind: 'prompt', body: 'hola', ts: 1 }
+    const message = { id: suffix, from: 'pi', to: 'claude', kind: 'task.request', body: 'hola', ts: 1 }
     await new Promise((resolve, reject) => publisher.publish(
       'a4s/inbox/claude', JSON.stringify(message), { qos: 1 }, error => error ? reject(error) : resolve(),
     ))

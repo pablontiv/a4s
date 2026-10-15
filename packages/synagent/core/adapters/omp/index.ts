@@ -20,7 +20,7 @@ const OMP_HOST: SynagentAdapterHost = {
   bindSettle(pi, release) {
     pi.on('agent_end', (event, ctx) => {
       if ('willContinue' in event && event.willContinue === true) return
-      release(ctx)
+      return release(ctx)
     })
   },
 }

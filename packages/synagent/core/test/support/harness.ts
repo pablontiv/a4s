@@ -28,7 +28,14 @@ type Tool = {
   parameters: TSchema
   execute(
     id: string,
-    params: { to: string; body: string; kind?: string; reply_to?: string },
+    params: {
+      to: string
+      body: string
+      kind?: string
+      reply_to?: string
+      correlation_id?: string
+      causation_id?: string
+    },
     signal: undefined,
     onUpdate: undefined,
     context: FakeContext,
@@ -293,7 +300,14 @@ export function createHarness(
       assert.ok(command)
       await command.handler(args, createContext())
     },
-    async tool(name: string, params: { to: string; body: string; kind?: string; reply_to?: string }) {
+    async tool(name: string, params: {
+      to: string
+      body: string
+      kind?: string
+      reply_to?: string
+      correlation_id?: string
+      causation_id?: string
+    }) {
       const tool = tools.get(name)
       assert.ok(tool)
       return tool.execute('tool-call', params, undefined, undefined, createContext())
@@ -306,10 +320,12 @@ export function message(overrides: Partial<CanonicalMessage> & { id: string; to:
     id: overrides.id,
     from: overrides.from ?? 'a4s/claude-1',
     to: overrides.to,
-    kind: overrides.kind ?? 'notify',
+    kind: overrides.kind ?? 'task.request',
     body: overrides.body ?? 'Done',
     ts: overrides.ts ?? Date.now(),
     ...(overrides.reply_to ? { reply_to: overrides.reply_to } : {}),
+    ...(overrides.correlation_id ? { correlation_id: overrides.correlation_id } : {}),
+    ...(overrides.causation_id ? { causation_id: overrides.causation_id } : {}),
   }
 }
 

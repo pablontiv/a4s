@@ -11,12 +11,15 @@ import {
   instanceFromHostSession,
   isAddress,
   isBroadcast,
-  isBroadcastSteer,
+  isBroadcastRedirect,
+  isCommandKind,
+  isEventKind,
   isFor,
   isForIdentity,
   isToken,
   legacyTopic,
   makeOutbound,
+  MESSAGE_KINDS,
   newId,
   parseAddress,
   parseCanonical,
@@ -28,6 +31,7 @@ import {
   resolveProjectWithSource,
   serialize,
   subscriptions,
+  SYNAGENT_SEND_KINDS,
   toTopic,
   type CanonicalMessage,
 } from '../protocol.ts'
@@ -40,8 +44,10 @@ function msg(overrides: Partial<CanonicalMessage> & { to: string }): CanonicalMe
     from: overrides.from ?? 'a4s/pi-1',
     to: overrides.to,
     ts: overrides.ts ?? 1,
-    kind: overrides.kind ?? 'prompt',
+    kind: overrides.kind ?? 'task.request',
     ...(overrides.reply_to ? { reply_to: overrides.reply_to } : {}),
+    ...(overrides.correlation_id ? { correlation_id: overrides.correlation_id } : {}),
+    ...(overrides.causation_id ? { causation_id: overrides.causation_id } : {}),
   })
 }
 
@@ -109,11 +115,11 @@ test('isForIdentity / isFor: directo, proyecto, legacy y global default-on con o
   assert.equal(isFor(msg({ to: 'claude' }), 'claude'), true)
 })
 
-test('isBroadcastSteer marca steer a broadcast', () => {
-  assert.equal(isBroadcastSteer(msg({ to: 'a4s/all', kind: 'steer' })), true)
-  assert.equal(isBroadcastSteer(msg({ to: 'all', kind: 'steer' })), true)
-  assert.equal(isBroadcastSteer(msg({ to: 'a4s/x', kind: 'steer' })), false)
-  assert.equal(isBroadcastSteer(msg({ to: 'a4s/all', kind: 'prompt' })), false)
+test('isBroadcastRedirect marca task.redirect a broadcast', () => {
+  assert.equal(isBroadcastRedirect(msg({ to: 'a4s/all', kind: 'task.redirect' })), true)
+  assert.equal(isBroadcastRedirect(msg({ to: 'all', kind: 'task.redirect' })), true)
+  assert.equal(isBroadcastRedirect(msg({ to: 'a4s/x', kind: 'task.redirect' })), false)
+  assert.equal(isBroadcastRedirect(msg({ to: 'a4s/all', kind: 'task.request' })), false)
 })
 
 test('repoNameFromOrigin: nombre canónico del repo, https y git@ (no basename de cwd)', () => {
@@ -148,41 +154,70 @@ test('instanceFromHostSession: id de sesión nativo tal cual; falla si no es tok
   assert.throws(() => instanceFromHostSession('a/b'), /no es un token válido/)
 })
 
-test('makeOutbound: arma {topic,message} v1, from=identidad; rechaza inválido y steer-broadcast', () => {
+test('makeOutbound correlates root commands and rejects broadcast task.redirect', () => {
   const { topic, message } = makeOutbound(identity, 'a4s/pi-1', { body: 'hola', id: 'm9', ts: 5 })
   assert.equal(topic, 'synagent/v1/a4s/pi-1')
   assert.equal(message.from, 'a4s/sess-01HXYZ')
   assert.equal(message.to, 'a4s/pi-1')
-  assert.equal(message.kind, 'prompt')
+  assert.equal(message.kind, 'task.request')
+  assert.equal(message.correlation_id, 'm9')
   assert.throws(() => makeOutbound(identity, 'no-dir', { body: 'x', id: 'm', ts: 1 }), /dirección v1 inválida/)
-  assert.throws(() => makeOutbound(identity, 'a4s/all', { body: 'x', kind: 'steer', id: 'm', ts: 1 }), /steer solo/)
-  const direct = makeOutbound(identity, 'a4s/pi-1', { body: 'x', kind: 'steer', id: 'm', ts: 1 })
-  assert.equal(direct.message.kind, 'steer') // steer directo OK
+  assert.throws(() => makeOutbound(identity, 'a4s/all', {
+    body: 'x', kind: 'task.redirect', id: 'm', ts: 1,
+  }), /task\.redirect solo/)
+  const direct = makeOutbound(identity, 'a4s/pi-1', {
+    body: 'x', kind: 'task.redirect', id: 'm', ts: 1, correlationId: 'root',
+  })
+  assert.equal(direct.message.kind, 'task.redirect')
+  assert.equal(direct.message.correlation_id, 'root')
 })
 
-test('acceptInbound = enrutado para mí Y no steer-broadcast', () => {
+test('acceptInbound routes identity and rejects broadcast task.redirect', () => {
   assert.equal(acceptInbound(identity, msg({ to: 'a4s/sess-01HXYZ' })), true)
   assert.equal(acceptInbound(identity, msg({ to: 'a4s/all' })), true)
-  assert.equal(acceptInbound(identity, msg({ to: 'a4s/all', kind: 'steer' })), false) // steer broadcast
+  assert.equal(acceptInbound(identity, msg({ to: 'a4s/all', kind: 'task.redirect' })), false)
   assert.equal(acceptInbound(identity, msg({ to: 'otro/all' })), false)
   assert.equal(acceptInbound(identity, msg({ to: 'all' })), true)
   assert.equal(acceptInbound(identity, msg({ to: 'all' }), { global: false }), false)
   assert.equal(acceptInbound(identity, msg({ to: 'claude' }), { legacyAddress: 'claude' }), true)
-  // self-echo: un broadcast propio (from = mi dirección) no se entrega
   assert.equal(acceptInbound(identity, msg({ to: 'a4s/all', from: directAddress(identity) })), false)
   assert.equal(acceptInbound(identity, msg({ to: 'a4s/sess-01HXYZ', from: directAddress(identity) })), false)
 })
 
-test('createCanonical/serialize/parseCanonical round-trip y render', () => {
+test('createCanonical/serialize/parseCanonical round-trips event correlation and renders it', () => {
   const m = makeOutbound(identity, 'a4s/pi-1', {
-    body: 'hola', id: newId(directAddress(identity), 1000), ts: 1000, kind: 'result', replyTo: 'a4s/pi-1-9-abc',
+    body: 'hola',
+    id: newId(directAddress(identity), 1000),
+    ts: 1000,
+    kind: 'task.completed',
+    replyTo: 'a4s/pi-1-9-abc',
+    correlationId: 'root-command',
+    causationId: 'request-command',
   }).message
   assert.deepEqual(parseCanonical(serialize(m)), m)
-  assert.match(renderForAgent(m), /\[bus:result\] de a4s\/sess-01HXYZ/)
+  assert.match(renderForAgent(m), /\[bus:task\.completed\] de a4s\/sess-01HXYZ/)
+  assert.match(renderForAgent(m), /correlación: root-command; causado por: request-command/)
 })
 
-test('parseCanonical acepta to legacy plano (dual-read) y valida campos', () => {
-  assert.equal(parseCanonical(JSON.stringify({ id: 'x', from: 'pi', to: 'claude', kind: 'prompt', body: 'hi', ts: 1 })).to, 'claude')
-  assert.throws(() => parseCanonical(JSON.stringify({ id: 'x', from: 'pi', kind: 'prompt', body: 'hi', ts: 1 })), /falta campo canónico: to/)
+test('parseCanonical accepts legacy addresses and validates optional causal fields', () => {
+  assert.equal(parseCanonical(JSON.stringify({
+    id: 'x', from: 'pi', to: 'claude', kind: 'task.request', body: 'hi', ts: 1,
+  })).to, 'claude')
+  assert.throws(() => parseCanonical(JSON.stringify({
+    id: 'x', from: 'pi', kind: 'task.request', body: 'hi', ts: 1,
+  })), /falta campo canónico: to/)
+  assert.throws(() => parseCanonical(JSON.stringify({
+    id: 'x', from: 'pi', to: 'claude', kind: 'task.request', body: 'hi', correlation_id: '', ts: 1,
+  })), /campo canónico inválido: correlation_id/)
   assert.equal(GLOBAL_ADDRESS, 'all')
+})
+
+test('message kinds distinguish commands, adapter events, and LLM-sendable notes', () => {
+  assert.deepEqual(MESSAGE_KINDS, [
+    'task.request', 'task.redirect', 'task.delivered', 'task.completed', 'note.published',
+  ])
+  assert.deepEqual(SYNAGENT_SEND_KINDS, ['task.request', 'task.redirect', 'note.published'])
+  assert.equal(isCommandKind('task.request'), true)
+  assert.equal(isCommandKind('task.completed'), false)
+  assert.equal(isEventKind('task.completed'), true)
 })

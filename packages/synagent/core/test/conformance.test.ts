@@ -65,8 +65,8 @@ test('golden: acceptInbound coincide con global default-on y opt-out', () => {
 
 test('golden: makeOutbound determinista (mismo id/ts → mismo topic y wire)', () => {
   const self: Identity = golden.identity
-  const a = makeOutbound(self, 'a4s/pi-1', { body: 'hola', id: 'fix', ts: 42, kind: 'prompt' })
-  const b = makeOutbound(self, 'a4s/pi-1', { body: 'hola', id: 'fix', ts: 42, kind: 'prompt' })
+  const a = makeOutbound(self, 'a4s/pi-1', { body: 'hola', id: 'fix', ts: 42, kind: 'task.request' })
+  const b = makeOutbound(self, 'a4s/pi-1', { body: 'hola', id: 'fix', ts: 42, kind: 'task.request' })
   assert.equal(a.topic, 'synagent/v1/a4s/pi-1')
   assert.equal(serialize(a.message), serialize(b.message))
   assert.equal(a.message.from, 'a4s/sess-01')
