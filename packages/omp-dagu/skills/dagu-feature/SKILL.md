@@ -22,9 +22,8 @@ flowchart LR
     R -->|clean rebase| E[gate]
     E --> F[push]
     F --> G[pr]
-    G --> H[required_check]
-    H --> I[auto_merge]
-    I --> J[await_merge<br/>human.task]
+    G --> I[auto_merge]
+    I --> J[await_merge<br/>human.task<br/>queue slot released]
     J -->|MERGED: complete| K[close_gate]
     J -->|BEHIND or DIRTY: push-back| D
     K --> L[handler_on.exit cleanup]
@@ -319,13 +318,15 @@ When `start_gate` succeeds, the run enters `Waiting` at `implement`, and the que
    ```
 
 The run resumes through the queue: `checkpoint_push` → `dependency_review` →
-`rebase` → `conflict_review` → `gate` → `push` → `pr` → `required_check` →
-`auto_merge`. The dependency checkpoint automatically completes or returns to
-triage. A clean rebase makes the wait handler complete `conflict_review`; a
-conflicting rebase records the conflict paths, aborts to a clean worktree, and
-pushes back to `implement`. The run then waits at `await_merge`. `pr` creates the
-PR with `--fill` and the body `Closes #<issue>`, so the commit message becomes
-the PR title. Write it in the repository's commit convention.
+`rebase` → `conflict_review` → `gate` → `push` → `pr` → `auto_merge`. The
+dependency checkpoint automatically completes or returns to triage. A clean
+rebase makes the wait handler complete `conflict_review`; a conflicting rebase
+records the conflict paths, aborts to a clean worktree, and pushes back to
+`implement`. After `auto_merge` requests guarded auto-merge for the tested SHA,
+the run waits at `await_merge` and releases the repository queue slot. GitHub
+merges only after the required check succeeds. `pr` creates the PR with `--fill`
+and the body `Closes #<issue>`, so the commit message becomes the PR title.
+Write it in the repository's commit convention.
 
 ## Reconcile `await_merge`
 
@@ -338,8 +339,8 @@ The scheduled DAG owns `await_merge` transitions. Each row is a step depending o
 | Step | Observation precondition | Transition |
 |---|---|---|
 | `complete` | `await_merge MERGED/…` | Completes the checkpoint. `close_gate` verifies the merged head, the successful required check, and the tested SHA, then fast-forwards the primary checkout. |
-| `push_back` | `await_merge OPEN/` with `BEHIND` or `DIRTY` | Pushes back with the observed `--expected-iteration`. The same run resumes at `rebase`, continues through `conflict_review`, reruns the gate, pushes the tested SHA, waits for the required check, and re-enables guarded auto-merge. |
-| `keep_waiting` | `await_merge OPEN/` with `CLEAN`, `BLOCKED`, `UNSTABLE` or `UNKNOWN`, and auto-merge active | Records that the PR remains waiting for a later tick. `UNSTABLE` can include a pending or failing non-required check; auto-merge waits for required checks. |
+| `push_back` | `await_merge OPEN/` with `BEHIND` or `DIRTY` | Pushes back with the observed `--expected-iteration`. A PR born `DIRTY` reaches `await_merge`; the same run resumes at `rebase`, continues through `conflict_review`, reruns the gate, pushes the tested SHA, and requests guarded auto-merge again. |
+| `keep_waiting` | `await_merge OPEN/` with `CLEAN`, `BLOCKED`, `UNSTABLE` or `UNKNOWN`, and auto-merge active | Records that the PR remains waiting for a later tick while GitHub waits for the required check to succeed. `UNSTABLE` can include a pending or failing non-required check. |
 | `unreconciled` | `await_merge CLOSED/…`; `OPEN/` with `DRAFT` or `HAS_HOOKS`; or `OPEN/` with `CLEAN`, `BLOCKED`, `UNSTABLE` or `UNKNOWN` and auto-merge inactive | Fails the sub-run with the observation on stderr while the feature run remains waiting. The sub-run logs provide the failure evidence. |
 
 `observe` reads `push-back iteration: <n>` from the status output, defaulting to `0` when that line is absent. The value is the run-wide counter shared by all `human.task` steps, and every push-back increments it. The expected-iteration guard makes a stale observation fail with a conflict while preserving the checkpoint.

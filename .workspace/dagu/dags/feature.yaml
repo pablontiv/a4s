@@ -421,24 +421,8 @@ steps:
         gh pr create --base "$BASE_BRANCH" --head "$BRANCH" --fill --body "Closes #${ISSUE}"
       fi
 
-  - id: required_check
-    depends: pr
-    run: |
-      set -euo pipefail
-      cd "$WORKTREE"
-      pr_ref=${PR_NUMBER:-$BRANCH}
-      for attempt in $(seq 1 240); do
-        if test "$(gh pr checks "$pr_ref" --json name --jq 'any(.[]; .name == env.REQUIRED_CHECK)' 2>/dev/null || true)" = true; then
-          printf 'required_check=%s\nregistered_for=%s\n' "$REQUIRED_CHECK" "$pr_ref"
-          exit 0
-        fi
-        sleep 5
-      done
-      printf 'required check %s was not registered for %s\n' "$REQUIRED_CHECK" "$pr_ref" >&2
-      exit 1
-
   - id: auto_merge
-    depends: required_check
+    depends: pr
     run: |
       set -euo pipefail
       cd "$WORKTREE"
