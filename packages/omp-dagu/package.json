@@ -1,6 +1,6 @@
 {
   "name": "@a4s/omp-dagu",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "license": "UNLICENSED",
   "repository": {
@@ -12,9 +12,13 @@
   "bugs": { "url": "https://github.com/pablontiv/a4s/issues" },
   "type": "module",
   "engines": { "node": ">=22.19.0" },
+  "daguFeature": { "dagu": "2.19.2" },
   "exports": {
     "./status": "./src/status/index.ts",
     "./triage": "./src/triage/index.ts"
+  },
+  "bin": {
+    "dagu-feature-bundle": "./bin/dagu-feature-bundle.ts"
   },
   "omp": {
     "extensions": ["./src/status/index.ts", "./src/triage/index.ts"]

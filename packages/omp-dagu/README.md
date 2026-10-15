@@ -26,7 +26,7 @@ La extensión de status observa los runs activos del repositorio de la sesión m
 La herramienta LLM `dagu_session_id` devuelve `ctx.sessionManager.getSessionId()` únicamente a la sesión principal que la llama y rechaza subagentes. El coordinador la llama antes de `dagu enqueue` y pasa el valor como parámetro `OMP_SESSION_ID`. Cuando un run entra en `waiting` en `triage` o `implement`, o pasa a `failed` o `aborted`, la extensión entrega:
 
 ```text
-[DAGU STATE] run=<run-id> status=<waiting|failed|aborted> step=<step> issue=<issue>
+[DAGU STATE] run=<run-id> status=<waiting|failed|aborted> step=<step> issue=<issue> bundle=<version|unstamped> extension=<version> compat=<ok|incompatible|unstamped>
 ```
 
 El aviso se entrega oculto al chat con `pi.sendMessage({ customType: "dagu-state", content: message, display: false }, { deliverAs: "aside" })`: inicia o continúa el turno del modelo sin renderizar una línea en la conversación. Solo se emite si el agente es `main`, el DAG es `feature`, existe `ISSUE` y `OMP_SESSION_ID` coincide exactamente con el ID de esa sesión. En estados terminales, `step` identifica el nodo fallido o abortado que alcanzó el run. Se aceptan los params Dagu tanto en formato CLI `KEY=value` como JSON.
@@ -72,6 +72,39 @@ Con `@a4s/omp-cross-family-review` cargado, `triage-reviewer` conserva la selecc
 ## Skill dagu-feature
 
 OMP resuelve `skill://dagu-feature` y `skill://dagu-feature/feature.yaml` desde `skills/dagu-feature/` dentro del paquete. `SKILL.md`, `feature.yaml`, `poc.yaml`, `reconcile.yaml` y `dagu-feature-bootstrap.yaml` permanecen juntos para conservar sus enlaces relativos y las rutas `$SKILL_DIR/<archivo>` del bootstrap.
+
+### Versión, sello y compatibilidad
+
+La versión de `package.json` identifica el bundle completo. Cada DAG generado
+lleva en la primera línea el sello con versión, repositorio y SHA fuente, run de
+bootstrap y versión de Dagu, además de la etiqueta
+`dagu-feature-bundle=<version>`. La extensión compara esa etiqueta con su propia
+versión: exige el mismo major y, mientras sea `0`, también el mismo minor. Un
+DAG sin etiqueta queda `unstamped`; una versión fuera de la regla queda
+`incompatible`. Ambos estados se muestran como advertencia y no bloquean runs.
+
+Para inspeccionar uno o más clones, el reconciliador instalado y la versión
+exacta de Dagu requerida:
+
+```sh
+node /ruta/a/a4s/packages/omp-dagu/bin/dagu-feature-bundle.ts /ruta/al/clon
+```
+
+Sin rutas, el comando usa el toplevel Git del directorio actual. Sale con código
+distinto de cero si algún DAG, el reconciliador o Dagu no es compatible. Node.js
+>=22.19 ejecuta directamente ese archivo TypeScript; se documenta la ruta real
+del paquete porque Node rechaza el type stripping de archivos `.ts` bajo
+`node_modules`.
+
+El bootstrap verifica que el paquete fuente esté limpio, que su `HEAD` pertenezca
+a la rama remota por defecto y que `dagu version` produzca exactamente la versión
+declarada. Dagu rechaza puntos en los run IDs, por lo que la actualización usa
+`bootstrap-<repo>-v<version-with-hyphens>`; por ejemplo,
+`bootstrap-backscroll-v0-2-0` para la versión `0.2.0`. Después reutiliza los
+valores actuales mostrados por `answers`, abre el issue de adopción y encola el
+`feature.yaml` staged. El commit de adopción incluye los trailers
+`Dagu-Feature-Bundle`, `Dagu-Feature-Source` y `Dagu-Feature-Bootstrap` que
+imprime `confirm`.
 
 ## Desarrollo
 

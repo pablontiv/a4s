@@ -1,3 +1,10 @@
+import {
+  BUNDLE_VERSION,
+  bundleVersionFromLabels,
+  classifyCompatibility,
+} from "../bundle.ts";
+import type { Compatibility } from "../bundle.ts";
+
 export interface RunDetails {
   name: string;
   dagRunId: string;
@@ -49,6 +56,21 @@ export function currentNode(run: RunDetails): RunNode | undefined {
 export function currentStep(run: RunDetails): string | undefined {
   return currentNode(run)?.step.name;
 }
+export function runBundleState(run: RunDetails): {
+  version: string | undefined;
+  displayVersion: string;
+  extensionVersion: string;
+  compat: Compatibility;
+} {
+  const version = bundleVersionFromLabels(run.labels);
+  return {
+    version,
+    displayVersion: version ?? "unstamped",
+    extensionVersion: BUNDLE_VERSION,
+    compat: classifyCompatibility(version, BUNDLE_VERSION),
+  };
+}
+
 
 export function renderRun(run: RunDetails, slug?: string, activity?: string): string {
   const nodes = run.nodes ?? [];
@@ -56,7 +78,11 @@ export function renderRun(run: RunDetails, slug?: string, activity?: string): st
   const filled = nodes.length ? Math.floor(done / nodes.length * 6) : 0;
   const bar = "▰".repeat(filled) + "▱".repeat(6 - filled);
   const step = currentStep(run);
-  const status = `dagu · ${runLabel(run, slug)} ${bar} ${done}/${nodes.length}${step ? ` ${plain(step)}` : ""} ${plain(run.statusLabel)}`;
+  const bundle = runBundleState(run);
+  const compatibility = bundle.compat === "ok"
+    ? ""
+    : ` · bundle=${plain(bundle.displayVersion)} extension=${bundle.extensionVersion} compat=${bundle.compat}`;
+  const status = `dagu · ${runLabel(run, slug)} ${bar} ${done}/${nodes.length}${step ? ` ${plain(step)}` : ""} ${plain(run.statusLabel)}${compatibility}`;
   return activity ? `${status} · ${plain(activity)}` : status;
 }
 
@@ -108,10 +134,12 @@ export class Transitions {
     const issue = issueNumber(run);
     const targeted = this.sessionId !== undefined && run.name === "feature" && issue !== undefined
       && runParam(run, "OMP_SESSION_ID") === this.sessionId;
+    const bundle = runBundleState(run);
+    const bundleNotice = ` bundle=${plain(bundle.displayVersion)} extension=${bundle.extensionVersion} compat=${bundle.compat}`;
 
     if (enteredWaiting) {
       if (targeted && (step === "triage" || step === "implement")) {
-        effects.wakeMessage = `[DAGU STATE] run=${plain(run.dagRunId)} status=waiting step=${step} issue=${issue}`;
+        effects.wakeMessage = `[DAGU STATE] run=${plain(run.dagRunId)} status=waiting step=${step} issue=${issue}${bundleNotice}`;
       }
       return effects;
     }
@@ -124,7 +152,7 @@ export class Transitions {
       };
       const noticeStep = terminalStep ?? previous.step;
       if (targeted && (run.statusLabel === "failed" || run.statusLabel === "aborted") && noticeStep) {
-        effects.wakeMessage = `[DAGU STATE] run=${plain(run.dagRunId)} status=${run.statusLabel} step=${plain(noticeStep)} issue=${issue}`;
+        effects.wakeMessage = `[DAGU STATE] run=${plain(run.dagRunId)} status=${run.statusLabel} step=${plain(noticeStep)} issue=${issue}${bundleNotice}`;
       }
     }
     return effects;

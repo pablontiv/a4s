@@ -5,6 +5,7 @@ import type { RunDetails } from "../src/status/progress.ts";
 
 const run: RunDetails = {
   name: "feature", dagRunId: "a4s-issue-157", statusLabel: "running", params: "ISSUE=157 PRIMARY=/tmp/a4s",
+  labels: ["workspace=a4s", "dagu-feature-bundle=0.2.0"],
   nodes: [
     { step: { name: "triage" }, statusLabel: "succeeded" },
     { step: { name: "optional" }, statusLabel: "skipped" },
@@ -27,7 +28,7 @@ test("progress counts succeeded/skipped and renders the DAG identity and current
 });
 
 test("queued summaries and empty DAGs render zero progress and fall back to run ID", () => {
-  assert.equal(renderRun({ name: "poc", dagRunId: "run-1", statusLabel: "queued" }), "dagu · poc run-1 ▱▱▱▱▱▱ 0/0 queued");
+  assert.equal(renderRun({ name: "poc", dagRunId: "run-1", statusLabel: "queued" }), "dagu · poc run-1 ▱▱▱▱▱▱ 0/0 queued · bundle=unstamped extension=0.2.0 compat=unstamped");
   assert.equal(renderRun({ ...run, nodes: [] }), "dagu · feature #157 ▱▱▱▱▱▱ 0/0 running");
   assert.equal(renderRun({ ...run, nodes: [{ step: { name: "done" }, statusLabel: "succeeded" }] }), "dagu · feature #157 ▰▰▰▰▰▰ 1/1 running");
 });
@@ -103,7 +104,7 @@ test("targeted waiting notices accept CLI and JSON params and reject other sessi
     const transitions = new Transitions("session-a");
     assert.equal(
       transitions.observe(waitingAt("triage", params)).wakeMessage,
-      "[DAGU STATE] run=feature-triage status=waiting step=triage issue=176",
+      "[DAGU STATE] run=feature-triage status=waiting step=triage issue=176 bundle=0.2.0 extension=0.2.0 compat=ok",
     );
   }
   for (const params of [
@@ -118,7 +119,7 @@ test("targeted waiting notices are limited to feature triage and implement in a 
   for (const step of ["triage", "implement"]) {
     const effect = new Transitions("session-a").observe(waitingAt(step));
     assert.deepEqual(effect, {
-      wakeMessage: `[DAGU STATE] run=feature-${step} status=waiting step=${step} issue=176`,
+      wakeMessage: `[DAGU STATE] run=feature-${step} status=waiting step=${step} issue=176 bundle=0.2.0 extension=0.2.0 compat=ok`,
     });
   }
   assert.equal(new Transitions("session-a").observe(waitingAt("dependency_review")).wakeMessage, undefined);
@@ -138,7 +139,7 @@ test("targeted terminal notices report failed and aborted steps exactly once", (
     const effect = transitions.observe(terminal);
     assert.equal(
       effect.wakeMessage,
-      `[DAGU STATE] run=feature-${statusLabel} status=${statusLabel} step=${terminal.nodes![1]!.step.name} issue=176`,
+      `[DAGU STATE] run=feature-${statusLabel} status=${statusLabel} step=${terminal.nodes![1]!.step.name} issue=176 bundle=0.2.0 extension=0.2.0 compat=ok`,
     );
     assert.ok(effect.notification);
     assert.deepEqual(transitions.observe(terminal), {});
@@ -200,4 +201,26 @@ test("running to waiting re-entry wakes again even at the same step", () => {
   assert.deepEqual(transitions.observe(waiting), {});
   assert.deepEqual(transitions.observe({ ...waiting, statusLabel: "running" }), {});
   assert.ok(transitions.observe(waiting).wakeMessage);
+});
+
+test("widget and DAGU STATE notice report ok, incompatible and unstamped bundle states", () => {
+  for (const [labels, display, compat, widgetSuffix] of [
+    [[`dagu-feature-bundle=0.2.9`], "0.2.9", "ok", ""],
+    [[`dagu-feature-bundle=0.3.0`], "0.3.0", "incompatible",
+      " · bundle=0.3.0 extension=0.2.0 compat=incompatible"],
+    [undefined, "unstamped", "unstamped",
+      " · bundle=unstamped extension=0.2.0 compat=unstamped"],
+  ] as const) {
+    const candidate = waitingAt("implement");
+    if (labels) candidate.labels = [...labels];
+    else delete candidate.labels;
+    assert.equal(
+      renderRun(candidate),
+      `dagu · feature #176 ▱▱▱▱▱▱ 0/1 implement waiting${widgetSuffix}`,
+    );
+    assert.equal(
+      new Transitions("session-a").observe(candidate).wakeMessage,
+      `[DAGU STATE] run=feature-implement status=waiting step=implement issue=176 bundle=${display} extension=0.2.0 compat=${compat}`,
+    );
+  }
 });

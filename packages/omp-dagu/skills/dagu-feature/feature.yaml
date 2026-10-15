@@ -1,5 +1,7 @@
+# dagu-feature-bundle: __DAGU_FEATURE_STAMP__
 labels:
   - workspace=TEMPLATE_REPO
+  - dagu-feature-bundle=__DAGU_FEATURE_VERSION__
 queue: TEMPLATE_REPO
 type: graph
 dotenv: []
@@ -40,6 +42,7 @@ params:
 env:
   - WORKTREE: ${PRIMARY}/.workspace/worktrees/issue-${ISSUE}
   - RUN: ${context.run.id}
+  - DAGU_FEATURE_BUNDLE: "__DAGU_FEATURE_IDENTITY__"
 steps:
   - id: triage
     action: human.task
@@ -255,6 +258,7 @@ steps:
         expected: "no"
     run: |
       set -euo pipefail
+      printf '%s\n' "$DAGU_FEATURE_BUNDLE"
       umask 0022
       test -n "$PRIMARY"
       test -n "$GATE" && test -n "$REQUIRED_CHECK"
