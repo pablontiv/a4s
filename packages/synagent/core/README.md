@@ -64,6 +64,10 @@ consume sin turno; `task.completed` y `task.expired` se inyectan al emisor.
 `protocol.ts` declara un esquema por cada `kind`; Pi y omp importan esa fuente y
 la copia de Claude se regenera con `adapters/claude/scripts/sync-protocol.mjs`.
 Todo fallo JSON o de esquema usa el código estable `MESSAGE_INVALID`.
+Los resultados nativos de entrega usan `DELIVERY_RESULT_SCHEMAS`: `complete`
+exige `reason=answer`, mientras `failed` exige `reason` y `cause` iguales a
+`aborted`, `refusal` o `error`. Los vectores dorados y la prueba de paridad
+cubren ambas variantes bajo v2.
 
 La versión pertenece exclusivamente al topic de transporte. Un lector v2 acepta
 campos desconocidos en el sobre, incluido un campo llamado `version`, y los
@@ -213,6 +217,24 @@ claude plugin install synagent-adapter-mqtt@a4s --config brokerUrl=mqtt://host:1
 La entrega al modelo es at-most-once: el adaptador reserva el `id` antes de
 llamar a `$.prompt.submit`. MQTT QoS1 protege el transporte hasta el bridge,
 pero no evita perder un mensaje si el adaptador cae después de reservarlo.
+
+Cada entrega se correlaciona con el `turnId` de `turn.start` y termina con la
+señal nativa `turn.complete`. Un `reason=answer` publica `task.completed` con
+el `answer` final como `body`; `aborted`, `refusal` y `error` quedan como
+resultado fallido con esa causa y nunca publican `task.completed`.
+Los pedidos publican primero `task.delivered` al abrir su turno. Ambos eventos
+usan `reply_to` y `causation_id` iguales al ID del pedido y conservan su
+`correlation_id`.
+
+El resultado también se registra con `schema=a4s.log/1` en
+`${A4S_STATE_ROOT:-${XDG_STATE_HOME:-$HOME/.local/state}/a4s}/log/synagent/claude/<instancia>/operational.jsonl`.
+`a4s.delivery.status` vale `complete` o `failed`,
+`a4s.delivery.reason` conserva la razón nativa, `a4s.delivery.cause` conserva
+la causa exigida por el esquema para un fallo y `a4s.delivery.text` contiene el
+texto final exacto.
+Estos campos contienen salida del modelo y deben tratarse como contenido
+sensible.
+
 
 ## Adaptador de Pi
 
@@ -506,6 +528,23 @@ npm test --workspace @a4s/synagent
 npm run typecheck --workspace @a4s/synagent
 npm test --workspace @a4s/synagent-bus
 ```
+
+La comprobación viva de Claude Code requiere Claude Code con credenciales ya
+disponibles. Arranca dos sesiones interactivas en PTY con el plugin cargado
+directamente desde el checkout y un broker aislado en `18125`. Envía tres
+pedidos en orden, comprueba `task.delivered` y `task.completed` con su
+correlación, e interrumpe el tercero con Escape mientras ejecuta `sleep 30`.
+El tercero debe quedar `failed` con causa `aborted` y sin `task.completed`.
+El script termina ambos grupos de procesos, el broker y elimina las sesiones
+de Claude que creó:
+
+```sh
+SYNAGENT_CLAUDE_MODEL=haiku \
+  npm run verify:claude-delivery-capture --workspace @a4s/synagent
+```
+
+`SYNAGENT_LIVE_ROOT` conserva la evidencia en una ruta elegida y
+`SYNAGENT_CLAUDE_BROKER_PORT` cambia el puerto aislado.
 
 La comprobación viva permanente requiere omp 18.11.0, Pi 1.0.3 y las
 credenciales ya disponibles en sus directorios reales. Cada verificador crea

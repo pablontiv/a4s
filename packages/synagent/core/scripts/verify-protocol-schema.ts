@@ -17,7 +17,7 @@ import { pathToFileURL, fileURLToPath } from 'node:url'
 
 import { connect, type MqttClient } from 'mqtt'
 
-import { parseDeadLetter, serialize, type CanonicalMessage } from '../protocol.ts'
+import { parseDeadLetter, parseDeliveryResult, serialize, type CanonicalMessage } from '../protocol.ts'
 
 type JsonRecord = Record<string, unknown>
 type HostName = 'omp' | 'pi'
@@ -35,6 +35,13 @@ type ResponseWaiter = {
   timer: NodeJS.Timeout
 }
 type BusRecord = { payload: string; topic: string }
+type DeliveryResultVector = {
+  code?: string
+  name: string
+  status: 'complete' | 'failed'
+  valid: boolean
+  wire: string
+}
 
 const TIMEOUT_MS = 240_000
 const BROKER_PORT = 18_330
@@ -298,6 +305,35 @@ function assertBrokerIsolation(process: RpcProcess, host: HostName): void {
   console.log(`LSOF host=${host} pid=${pid} only_broker=${BROKER_PORT} forbidden_1884=false`)
 }
 
+function verifyDeliveryResultSchema(): void {
+  const golden = parseJsonRecord(readFileSync(join(coreRoot, 'test', 'golden-vectors.json'), 'utf8'))
+  const vectors = golden.deliveryResultVectors
+  assert.ok(Array.isArray(vectors), 'deliveryResultVectors must be an array')
+  for (const status of ['complete', 'failed'] as const) {
+    assert.ok(vectors.some(vector =>
+      isJsonRecord(vector) && vector.status === status && vector.valid === true), `${status}: missing valid vector`)
+    assert.ok(vectors.some(vector =>
+      isJsonRecord(vector) && vector.status === status && vector.valid === false), `${status}: missing invalid vector`)
+  }
+  for (const rawVector of vectors) {
+    assert.ok(isJsonRecord(rawVector))
+    const vector = rawVector as DeliveryResultVector
+    try {
+      const result = parseDeliveryResult(vector.wire)
+      assert.equal(vector.valid, true, vector.name)
+      assert.equal(result.status, vector.status, vector.name)
+    } catch (error) {
+      assert.equal(vector.valid, false, vector.name)
+      assert.equal(
+        typeof error === 'object' && error !== null && 'code' in error ? error.code : undefined,
+        vector.code,
+        vector.name,
+      )
+    }
+  }
+  console.log(`PASS delivery_results=${vectors.length} statuses=complete,failed failure_causes=preserved`)
+}
+
 async function runHost(config: HostConfig, publisher: MqttClient, bus: BusRecord[]): Promise<void> {
   const version = execFileSync(config.bin, ['--version'], { encoding: 'utf8' }).trim()
   assert.ok(version.includes(config.expectedVersion), `${config.name} must be ${config.expectedVersion}; got ${version}`)
@@ -403,6 +439,7 @@ async function runHost(config: HostConfig, publisher: MqttClient, bus: BusRecord
 }
 
 async function main(): Promise<void> {
+  verifyDeliveryResultSchema()
   if (rootOverride) {
     rmSync(root, { recursive: true, force: true })
     mkdirSync(root, { recursive: true, mode: 0o700 })
@@ -439,7 +476,7 @@ async function main(): Promise<void> {
     const configs: HostConfig[] = [
       {
         name: 'omp',
-        expectedVersion: '18.11.0',
+        expectedVersion: '18.11.1',
         bin: process.env.OMP_BIN ?? join(homedir(), '.bun', 'bin', 'omp'),
         adapterPath: join(coreRoot, 'adapters', 'omp', 'index.ts'),
         agentDir: join(homedir(), '.omp', 'agent'),

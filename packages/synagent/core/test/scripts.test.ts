@@ -328,7 +328,7 @@ test('scripts de Claude v2: bridge-sub soporta clientes durable + transient', as
 // instalado falla en silencio. Este test ancla esa suposición.
 test('estructura: los bridges existen donde register.ts los resuelve', () => {
   const pluginRoot = new URL('../adapters/claude/', import.meta.url).pathname
-  for (const rel of ['bridge/bridge-sub.cjs', 'bridge/bridge-pub.cjs']) {
+  for (const rel of ['bridge/bridge-sub.cjs', 'bridge/bridge-pub.cjs', 'bridge/bridge-result.cjs']) {
     assert.ok(existsSync(join(pluginRoot, rel)), `falta ${rel} bajo $.plugin.root`)
   }
 })

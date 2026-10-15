@@ -226,5 +226,40 @@
       "valid": false,
       "code": "VERSION_UNSUPPORTED"
     }
+  ],
+  "deliveryResultVectors": [
+    {
+      "name": "entrega completa válida",
+      "status": "complete",
+      "wire": "{\"reason\":\"answer\",\"status\":\"complete\",\"text\":\"hecho\"}",
+      "valid": true
+    },
+    {
+      "name": "entrega completa inválida con causa",
+      "status": "complete",
+      "wire": "{\"cause\":\"error\",\"reason\":\"answer\",\"status\":\"complete\",\"text\":\"hecho\"}",
+      "valid": false,
+      "code": "MESSAGE_INVALID"
+    },
+    {
+      "name": "entrega fallida válida con causa aborted",
+      "status": "failed",
+      "wire": "{\"cause\":\"aborted\",\"reason\":\"aborted\",\"status\":\"failed\",\"text\":\"\"}",
+      "valid": true
+    },
+    {
+      "name": "entrega fallida inválida sin causa",
+      "status": "failed",
+      "wire": "{\"reason\":\"aborted\",\"status\":\"failed\",\"text\":\"\"}",
+      "valid": false,
+      "code": "MESSAGE_INVALID"
+    },
+    {
+      "name": "entrega fallida inválida con causa distinta",
+      "status": "failed",
+      "wire": "{\"cause\":\"error\",\"reason\":\"refusal\",\"status\":\"failed\",\"text\":\"parcial\"}",
+      "valid": false,
+      "code": "MESSAGE_INVALID"
+    }
   ]
 }

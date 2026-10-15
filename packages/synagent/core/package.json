@@ -29,6 +29,7 @@
   },
   "scripts": {
     "observer": "tsx observer-cli.ts",
+    "verify:claude-delivery-capture": "tsx scripts/verify-claude-delivery-capture.ts",
     "verify:delivery-events": "tsx scripts/verify-delivery-events.ts",
     "verify:delivery-recovery": "tsx scripts/verify-delivery-recovery.ts",
     "verify:request-lifecycle": "tsx scripts/verify-request-lifecycle.ts",

@@ -13,13 +13,19 @@
 // Topología v2: synagent/v2/<proyecto>/<instancia> (directo, durable),
 // /all (proyecto, transient), synagent/v2/all (global, transient por defecto).
 
-import type { EngineInterface, PluginOptions, Register } from 'claude-code'
+import type {
+  EngineInterface,
+  PluginOptions,
+  Register,
+  TurnCompleteInput,
+} from 'claude-code'
 
 import {
   acceptInbound,
   assertSupportedTopicVersion,
   directAddress,
   instanceFromHostSession,
+  isTaskRequestKind,
   makeOutbound,
   newId,
   parseCanonical,
@@ -30,8 +36,8 @@ import {
   SYNAGENT_SEND_KINDS,
   toTopic,
   type CanonicalMessage,
+  type DeliveryResult,
   type Identity,
-  type CanonicalMessage,
   type MessageKind,
   type SynagentSendKind,
 } from './adapter'
@@ -50,6 +56,24 @@ type OutgoingOffer = {
   body: string
   claims: OfferClaim[]
   id: string
+}
+
+export type ClaudeDeliveryResult = DeliveryResult
+
+type TrackedDelivery = {
+  generation: number
+  message: CanonicalMessage
+  prompt: string
+  recipient: Identity
+}
+
+export function mapClaudeDeliveryResult(
+  reason: TurnCompleteInput['reason'],
+  text: string,
+): ClaudeDeliveryResult {
+  return reason === 'answer'
+    ? { reason, status: 'complete', text }
+    : { cause: reason, reason, status: 'failed', text }
 }
 
 let started = false
@@ -73,6 +97,8 @@ let brokerWarning: string | undefined
 // Como máximo una migración one-shot en vuelo por activación del módulo. Tras
 // éxito queda hecha; si falta el broker puede reintentarse en un prompt futuro.
 let retirementInFlightOrDone = false
+let pendingDeliveries: TrackedDelivery[] = []
+const activeDeliveries = new Map<string, TrackedDelivery>()
 
 const bridgeDir = ($: EngineInterface): string => `${$.plugin.root}/bridge`
 
@@ -225,6 +251,50 @@ function retireLegacySession($: EngineInterface, brokerUrl: string): void {
   })
 }
 
+function trackInboundDelivery(
+  gen: number,
+  recipient: Identity,
+  message: CanonicalMessage,
+  prompt: string,
+): TrackedDelivery {
+  const delivery = { generation: gen, message, prompt, recipient }
+  pendingDeliveries.push(delivery)
+  return delivery
+}
+
+function forgetPendingDelivery(delivery: TrackedDelivery): void {
+  pendingDeliveries = pendingDeliveries.filter(candidate => candidate !== delivery)
+}
+
+function resetDeliveryTracking(): void {
+  pendingDeliveries = []
+  activeDeliveries.clear()
+}
+
+async function recordDeliveryResult(
+  $: EngineInterface,
+  delivery: TrackedDelivery,
+  result: ClaudeDeliveryResult,
+): Promise<void> {
+  const payload = JSON.stringify({
+    sessionId: await $.session.id(),
+    messageId: delivery.message.id,
+    messageKind: delivery.message.kind,
+    result,
+  })
+  try {
+    const recorded = await $.process.run(
+      ['node', `${bridgeDir($)}/bridge-result.cjs`],
+      { stdin: payload },
+    )
+    if (recorded.exitCode !== 0) {
+      void $.ui.status(`synagent: no se pudo registrar resultado para ${delivery.message.id}`)
+    }
+  } catch {
+    void $.ui.status(`synagent: no se pudo registrar resultado para ${delivery.message.id}`)
+  }
+}
+
 type BridgeFrame = { topic: string; payload: string }
 
 async function handleOfferProtocol(
@@ -344,7 +414,14 @@ function runJalar(
             if (await handleOfferProtocol($, brokerUrl, self, msg)) continue
             if (msg.kind === 'task.delivered') continue
             sessionIdle = false
-            await $.prompt.submit({ text: renderForAgent(msg) })
+            const prompt = renderForAgent(msg)
+            const tracked = trackInboundDelivery(gen, self, msg, prompt)
+            try {
+              await $.prompt.submit({ text: prompt })
+            } catch (error) {
+              forgetPendingDelivery(tracked)
+              throw error
+            }
           } catch (err) {
             void $.ui.status(`synagent: entrega falló (${msg.id}): ${err instanceof Error ? err.message : String(err)}`)
           }
@@ -372,6 +449,7 @@ async function ensureStarted($: EngineInterface, brokerUrl: string, options: Plu
   // session.start y el módulo puede seguir cargado; si ya arrancamos para otra
   // sesión, detenemos el bridge viejo y re-resolvemos. Compactación: mismo id → no-op.
   const sid = await $.session.id()
+  if (startedSessionId !== undefined && startedSessionId !== sid) resetDeliveryTracking()
   if (started && startedSessionId === sid) return
   if (started) {
     stopBridge?.()
@@ -523,8 +601,64 @@ async function publishCanonical(
   return { ok: true, id: built.message.id }
 }
 
+async function publishTaskEvent(
+  $: EngineInterface,
+  brokerUrl: string,
+  delivery: TrackedDelivery,
+  kind: 'task.delivered' | 'task.completed',
+  body: string,
+): Promise<void> {
+  const command = delivery.message
+  const sent = await publishCanonical(
+    $,
+    brokerUrl,
+    delivery.recipient,
+    command.from,
+    body,
+    kind,
+    command.id,
+    command.correlation_id ?? command.id,
+    command.id,
+  )
+  if (!sent.ok) {
+    void $.ui.status(`synagent: no se pudo publicar ${kind} para ${command.id}: ${sent.error}`)
+  }
+}
+
 export const register: Register = (on, options) => {
   const brokerUrl = resolveBrokerUrl(options)
+
+  on('turn.start', async ($, e, next) => {
+    sessionIdle = false
+    const index = pendingDeliveries.findIndex(delivery =>
+      delivery.generation === generation && e.text.includes(delivery.prompt))
+    if (index >= 0) {
+      const [delivery] = pendingDeliveries.splice(index, 1)
+      if (delivery) {
+        activeDeliveries.set(e.turnId, delivery)
+        if (isTaskRequestKind(delivery.message.kind)) {
+          await publishTaskEvent($, brokerUrl, delivery, 'task.delivered', '')
+        }
+      }
+    }
+    return next(e)
+  })
+
+  on('turn.complete', async ($, e, next) => {
+    sessionIdle = true
+    if (e.agentId === undefined) {
+      const delivery = activeDeliveries.get(e.turnId)
+      if (delivery) {
+        activeDeliveries.delete(e.turnId)
+        const result = mapClaudeDeliveryResult(e.reason, e.answer)
+        await recordDeliveryResult($, delivery, result)
+        if (result.status === 'complete' && isTaskRequestKind(delivery.message.kind)) {
+          await publishTaskEvent($, brokerUrl, delivery, 'task.completed', result.text)
+        }
+      }
+    }
+    return next(e)
+  })
 
   on('session.start', async ($, e, next) => {
     sessionIdle = true
@@ -535,14 +669,6 @@ export const register: Register = (on, options) => {
   on('prompt.submit', async ($, e, next) => {
     sessionIdle = false
     await ensureStarted($, brokerUrl, options)
-    return next(e)
-  })
-  on('turn.start', ($, e, next) => {
-    sessionIdle = false
-    return next(e)
-  })
-  on('turn.complete', ($, e, next) => {
-    sessionIdle = true
     return next(e)
   })
 

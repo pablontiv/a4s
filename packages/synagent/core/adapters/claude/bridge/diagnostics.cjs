@@ -222,6 +222,15 @@ function createDiagnosticsUnsafe({
       if ('deliveryText' in event && typeof event.deliveryText === 'string') {
         line['a4s.delivery.text'] = event.deliveryText
       }
+      if ('deliveryReason' in event && typeof event.deliveryReason === 'string') {
+        line['a4s.delivery.reason'] = event.deliveryReason
+      }
+      if ('deliveryStatus' in event && typeof event.deliveryStatus === 'string') {
+        line['a4s.delivery.status'] = event.deliveryStatus
+      }
+      if ('deliveryCause' in event && typeof event.deliveryCause === 'string') {
+        line['a4s.delivery.cause'] = event.deliveryCause
+      }
       if (event.role) line['a4s.client.role'] = cleanIdentifier(event.role, 'unknown')
       if (Number.isFinite(event.generation)) line['a4s.connection.generation'] = event.generation          
       if (Number.isFinite(event.queueDepth)) line['a4s.queue.depth'] = event.queueDepth          
