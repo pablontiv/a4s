@@ -144,6 +144,19 @@ Notifications arrive as priority user input with the form `[DAGU STATE] run=<id>
 - On an `implement` notice, the coordinator launches one level-1 implementation subagent for that issue's worktree. The subagent result auto-delivers to the coordinator, which then completes `implement`.
 - Keep `task.maxRecursionDepth: 1`; every implementation and triage-reviewer subagent remains at level 1 and appears in the main view.
 
+## Turn status
+
+Every turn that drives `feature` or `poc` runs, for one issue or a batch, ends with a status report. The operator reads the state of the process from that report without asking for it. Read each run with `dagu status` (and its PR or issue) at the end of the turn, and report observed facts only:
+
+| Section | Content |
+|---|---|
+| Done | What this turn did, per run: run ID and issue, checkpoints completed, PR, tested SHA, verdict or comment URLs. |
+| Pending | What remains, per run: the current step and state (`queued`, `running`, `waiting <step>`) and who moves it next: this session, a subagent, the scheduled reconciler, or the operator. |
+| Blockers and decisions | Failed steps, `unreconciled` and `ORPHAN` observations, push-backs, and every choice that belongs to the operator, each with its evidence (log path, comment URL, observation). |
+| Proposals | For each blocker or decision: the recommended action with the exact command or input that applies it, and the alternative with its tradeoff. |
+
+A section with no entries says `none`. A turn that stops at a human task the operator owns ends with this report as well.
+
 ## Triage
 
 `triage` is the first human task, completed by the session that enqueued the issue.
@@ -298,4 +311,4 @@ The `orphan` step selects `triage` or `implement` observations whose issue is `C
 
 ## Finish
 
-After `close_gate`, the run is `Succeeded`, and `handler_on.exit` has removed the worktree and the local branch. GitHub removes the remote branch when the repository deletes head branches on merge. Report the run ID, the PR, the tested SHA, and the `base_sha` printed by `close_gate`.
+After `close_gate`, the run is `Succeeded`, and `handler_on.exit` has removed the worktree and the local branch. GitHub removes the remote branch when the repository deletes head branches on merge. The turn status reports under Done the run ID, the PR, the tested SHA, and the `base_sha` printed by `close_gate`.
