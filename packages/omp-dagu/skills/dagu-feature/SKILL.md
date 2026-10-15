@@ -174,6 +174,11 @@ before reenqueuing. Pass `PR_NUMBER` when a PR already exists for the branch.
 
 Inspect a run with `dagu status --run-id <id> feature`. Step logs are listed under each step.
 
+When `feature.yaml`, `poc.yaml`, or `reconcile.yaml` changes, verify the lifecycle
+change with the first applicable run enqueued after the change merges. Dagu
+snapshots a DAG when it is enqueued, so a run already in progress cannot verify
+the new definition. Record that run and the affected step logs in the issue.
+
 ### Coordinator flow
 
 The `@a4s/omp-dagu` status extension delivers hidden model context with the form `[DAGU STATE] run=<id> status=<waiting|failed|aborted> step=<step> issue=<issue> bundle=<version|unstamped> extension=<version> compat=<ok|incompatible|unstamped>`. It starts or continues a coordinator turn without rendering the notice in chat. Notices report run state rather than user instructions.
@@ -381,7 +386,7 @@ The scheduled DAG owns `await_merge` transitions. Each row is a step depending o
 
 | Step | Observation precondition | Transition |
 |---|---|---|
-| `complete` | `await_merge MERGED/…` | Completes the checkpoint. `close_gate` verifies the merged head, the successful required check, and the tested SHA, then fast-forwards the primary checkout. |
+| `complete` | `await_merge MERGED/…` | Completes the checkpoint. `close_gate` verifies the merged head, successful required check and tested SHA, fast-forwards the clean primary checkout to `origin/$BASE_BRANCH`, removes and verifies the run worktree, and removes and verifies both local and remote run branches. |
 | `push_back` | `await_merge OPEN/` with `BEHIND` or `DIRTY` | Pushes back with the observed `--expected-iteration`. A PR born `DIRTY` reaches `await_merge`; the same run resumes at `rebase`, continues through `conflict_review`, reruns the gate, pushes the tested SHA, and requests guarded auto-merge again. |
 | `keep_waiting` | `await_merge OPEN/` with `CLEAN`, `BLOCKED`, `UNSTABLE` or `UNKNOWN`, and auto-merge active | Records that the PR remains waiting for a later tick while GitHub waits for the required check to succeed. `UNSTABLE` can include a pending or failing non-required check. |
 | `unreconciled` | `await_merge CLOSED/…`; `OPEN/` with `DRAFT` or `HAS_HOOKS`; or `OPEN/` with `CLEAN`, `BLOCKED`, `UNSTABLE` or `UNKNOWN` and auto-merge inactive | Fails the sub-run with the observation on stderr while the feature run remains waiting. The sub-run logs provide the failure evidence. |
@@ -392,4 +397,4 @@ The `orphan` step selects `triage` or `implement` observations whose issue is `C
 
 ## Finish
 
-After `close_gate`, the run is `Succeeded`, and `handler_on.exit` has removed the worktree and the local branch. GitHub removes the remote branch when the repository deletes head branches on merge. The turn status reports under Done the run ID, the PR, the tested SHA, and the `base_sha` printed by `close_gate`.
+After `close_gate`, the run is `Succeeded`. The closing contract is a merged PR, a clean primary checkout exactly at `origin/$BASE_BRANCH`, no run worktree, and no local or remote run branch; `close_gate` performs and verifies every part of that contract and prints the cleanup result. `handler_on.exit` covers terminal runs that did not complete `close_gate`, retaining unpublished work and removing published work according to its recovery rules. The turn status reports under Done the run ID, the PR, the tested SHA, and the `base_sha` printed by `close_gate`.

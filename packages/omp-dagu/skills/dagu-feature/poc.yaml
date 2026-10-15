@@ -299,7 +299,24 @@ handler_on:
       [[ "$RUN" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]
       WT="$PRIMARY/.workspace/worktrees/poc-$RUN"
       BRANCH="poc/$RUN"
-      if [[ -d "$WT" ]]; then git -C "$PRIMARY" worktree remove --force "$WT"; fi
+      WT_REAL="$WT"
+      if [[ -d "$WT" ]]; then
+        WT_REAL=$(cd "$WT" && pwd -P)
+        git -C "$PRIMARY" worktree remove "$WT_REAL"
+      fi
+      git -C "$PRIMARY" worktree prune
       if git -C "$PRIMARY" show-ref --verify --quiet "refs/heads/$BRANCH"; then
         git -C "$PRIMARY" branch -D "$BRANCH"
       fi
+      WORKTREE_LIST=$(git -C "$PRIMARY" worktree list --porcelain)
+      if [[ -e "$WT" || -e "$WT_REAL" ]] ||
+         grep -Fqx "worktree $WT" <<<"$WORKTREE_LIST" ||
+         grep -Fqx "worktree $WT_REAL" <<<"$WORKTREE_LIST"; then
+        printf 'cleanup failed: worktree %s remains\n' "$WT" >&2
+        exit 1
+      fi
+      if git -C "$PRIMARY" show-ref --verify --quiet "refs/heads/$BRANCH"; then
+        printf 'cleanup failed: branch %s remains\n' "$BRANCH" >&2
+        exit 1
+      fi
+      printf 'cleanup worktree=%s branch=%s\n' "$WT" "$BRANCH"

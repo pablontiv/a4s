@@ -77,7 +77,7 @@ function stubGh(repo: Repository, stdout: string, status: number, stderr = ""): 
   const executable = join(bin, "gh");
   writeFileSync(
     executable,
-    `#!/bin/sh\nif [ "$PWD" != ${JSON.stringify(repo.primary)} ]; then\n  printf 'failed to run git: fatal: not a git repository\\n' >&2\n  exit 2\nfi\nprintf '%b' ${JSON.stringify(stdout)}\nprintf '%b' ${JSON.stringify(stderr)} >&2\nexit ${status}\n`,
+    `#!/bin/sh\ncase " $* " in *" --repo "*) ;; *)\n  if [ "$PWD" != ${JSON.stringify(repo.primary)} ]; then\n    printf 'failed to run git: fatal: not a git repository\\n' >&2\n    exit 2\n  fi\nesac\nprintf '%b' ${JSON.stringify(stdout)}\nprintf '%b' ${JSON.stringify(stderr)} >&2\nexit ${status}\n`,
   );
   chmodSync(executable, 0o755);
 }
@@ -91,10 +91,10 @@ function stubSuccessfulCloseGateGh(repo: Repository): void {
     executable,
     `#!/bin/sh
 case "$*" in
-  "pr view ${repo.branch} --json number --jq .number") printf '190\\n' ;;
-  "pr view 190 --json state --jq .state") printf 'MERGED\\n' ;;
-  "pr view 190 --json headRefOid --jq .headRefOid") printf '${head}\\n' ;;
-  "pr checks 190 --required --json name,state --jq "*) printf 'SUCCESS\\n' ;;
+  "pr view ${repo.branch} --repo ${repo.root}/remote.git --json number --jq .number") printf '190\\n' ;;
+  "pr view 190 --repo ${repo.root}/remote.git --json state --jq .state") printf 'MERGED\\n' ;;
+  "pr view 190 --repo ${repo.root}/remote.git --json headRefOid --jq .headRefOid") printf '${head}\\n' ;;
+  "pr checks 190 --repo ${repo.root}/remote.git --required --json name,state --jq "*) printf 'SUCCESS\\n' ;;
   *) printf 'unexpected gh invocation: %s\\n' "$*" >&2; exit 1 ;;
 esac
 `,
@@ -104,7 +104,7 @@ esac
 
 function featureScriptEnv(repo: Repository): NodeJS.ProcessEnv {
   return {
-    ...process.env,
+    HOME: process.env.HOME,
     PATH: `${join(repo.root, "bin")}:${process.env.PATH ?? ""}`,
     ISSUE: "189",
     PR_NUMBER: "",

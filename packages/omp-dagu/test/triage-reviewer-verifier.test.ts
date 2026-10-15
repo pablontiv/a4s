@@ -133,11 +133,17 @@ function rest(cutoff = "2026-10-15T12:00:00Z") {
 
 function environment(primary: string, review: string, ompSessionId = sessionId): NodeJS.ProcessEnv {
   return {
-    ...process.env,
     HOME: home,
     TMPDIR: tempRoot,
+    PATH: process.env.PATH,
     DAGU_PORT: String(port),
+    ISSUE: "",
+    PR_NUMBER: "",
     PRIMARY: primary,
+    WORKTREE: "",
+    BRANCH: "",
+    BASE_BRANCH: "",
+    REQUIRED_CHECK: "",
     OMP_SESSION_ID: ompSessionId,
     REVIEW: review,
     RUN: runId,
