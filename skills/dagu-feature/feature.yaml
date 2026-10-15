@@ -279,7 +279,7 @@ steps:
     depends: auto_merge
     action: human.task
     with:
-      prompt: "Reconciler: complete on MERGED; push back with the expected iteration on BEHIND; leave OPEN/CLEAN waiting."
+      prompt: "The scheduled reconcile DAG owns this checkpoint: complete on MERGED; push back with the expected iteration on BEHIND; keep OPEN with auto-merge waiting; report unreconciled states."
       push_back:
         rewind_to: rebase
 

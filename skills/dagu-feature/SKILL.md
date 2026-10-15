@@ -73,8 +73,9 @@ The steps:
 | `answers` | `human.task` that asks for `GATE`, `REQUIRED_CHECK`, and `TEST_PATHS`. Select the test-path ERE from the repository's actual conventions. In a4s use `(^\|/)(test\|tests)/\|\.test\.(ts\|cjs)$` (root or nested `test/` and `tests/`, plus `*.test.ts` and `*.test.cjs`). |
 | `worktrees` | Makes git ignore `.workspace/worktrees/`. When nothing ignores it yet, appends `/.workspace/worktrees/` to the clone's `info/exclude`, so the primary stays clean without a commit. |
 | `render` | Writes configured `feature.yaml` and `poc.yaml` under `<git-dir>/dagu-feature/`, keeping PRIMARY clean. PoC receives only repo, PRIMARY, BASE_BRANCH and TEST_PATHS; feature owns GATE, REQUIRED_CHECK and protection. Fails on leftover placeholders or validation errors. |
+| `reconcile` | Validates and idempotently installs the shared scheduled `reconcile.yaml` to `$DAGU_HOME/dags/reconcile.yaml` (`DAGU_HOME` defaults to `~/.dagu`), then validates the installed file. One user-level DAG serves every adopting repository. |
 | `github` | Enables auto-merge and squash merge, and adds `REQUIRED_CHECK` as a strict required status check on the default branch. It keeps the existing contexts and every other protection setting. When it has to recreate the protection, it reads the protection back and fails if any other setting changed. |
-| `confirm` | Reads the settings and the ignore rule back and validates the staged file again. |
+| `confirm` | Reads the settings and the ignore rule back, validates both staged DAGs, and confirms the installed reconciler matches the skill source and validates. |
 
 Answer the form after `detect` succeeds. Choose `GATE` from the repository's documented local check plus tests (`Justfile`, `Makefile`, `package.json`, contributing docs). `REQUIRED_CHECK` is the aggregate CI job that runs on pull requests:
 
@@ -250,23 +251,22 @@ The run resumes through the queue: `checkpoint_push` → `dependency_review` →
 
 ## Reconcile `await_merge`
 
-Remote observation belongs to a separate worker or process, not to the implementing agent, which does not wait on hosted CI. The reconciler holds no queue slot. It observes:
+Remote observation belongs to the scheduled [`reconcile`](reconcile.yaml) DAG, a separate process from the implementing agent, which does not wait on hosted CI. The reconciler holds no repository queue slot: it uses its own local queue with concurrency one. It runs every two minutes with `overlap_policy: skip` and an empty `catchup_window`.
 
-```sh
-gh pr view <branch> --json number,state,mergeStateStatus,headRefOid,autoMergeRequest
-```
+`discover` reads waiting `feature` runs across all repositories with `dagu history`, parses their named params, and passes each to the local `reconcile-run` sub-DAG through `tick` with `max_concurrent: 1`. `observe` reads the waiting step and push-back iteration from `dagu status`, resolves the repository from `PRIMARY`, and reads the PR with `gh pr view` (or the issue for other waiting steps). It publishes the observation as step outputs.
 
-Apply exactly one transition per observation:
+The scheduled DAG owns `await_merge` transitions. Each row is a step depending on `observe`, selected by a precondition on its `observation` output:
 
-| Observation | Transition |
-|---|---|
-| `state=MERGED` | `dagu human-task complete --run-id <id> --step await_merge feature`. `close_gate` then verifies the merged head, the successful required check, and the tested SHA, and fast-forwards the primary checkout. |
-| `state=OPEN`, `mergeStateStatus=BEHIND` | Read the current iteration and push back: `dagu human-task push-back --run-id <id> --step await_merge --expected-iteration <n> feature`. The same run resumes at `rebase`, reruns the gate, pushes the new tested SHA, waits for the required check, and re-enables guarded auto-merge. |
-| `state=OPEN`, `mergeStateStatus` `CLEAN`, `BLOCKED`, `UNSTABLE` or `UNKNOWN`, with `autoMergeRequest` non-null | Keep waiting and observe again later. `UNSTABLE` means a check that is not required is still pending or failing, and auto-merge still waits for the required one. |
+| Step | Observation precondition | Transition |
+|---|---|---|
+| `complete` | `await_merge MERGED/…` | Completes the checkpoint. `close_gate` verifies the merged head, the successful required check, and the tested SHA, then fast-forwards the primary checkout. |
+| `push_back` | `await_merge OPEN/BEHIND/…` | Pushes back with the observed `--expected-iteration`. The same run resumes at `rebase`, reruns the gate, pushes the tested SHA, waits for the required check, and re-enables guarded auto-merge. |
+| `keep_waiting` | `await_merge OPEN/` with `CLEAN`, `BLOCKED`, `UNSTABLE` or `UNKNOWN`, and auto-merge active | Records that the PR remains waiting for a later tick. `UNSTABLE` can include a pending or failing non-required check; auto-merge waits for required checks. |
+| `unreconciled` | `await_merge CLOSED/…`; `OPEN/` with `DIRTY`, `DRAFT` or `HAS_HOOKS`; or `OPEN/` with `CLEAN`, `BLOCKED`, `UNSTABLE` or `UNKNOWN` and auto-merge inactive | Fails the sub-run with the observation on stderr while the feature run remains waiting. The sub-run logs provide the failure evidence. |
 
-Read `<n>` from `dagu status --run-id <id> feature`. The `await_merge` entry prints `push-back iteration: <n>` after the first push-back, and the iteration is `0` while that line is absent. Every push-back increments it. Read it again before the next push-back. A mismatch fails with a conflict and changes nothing, so two reconcilers cannot rewind the same checkpoint twice.
+`observe` reads `push-back iteration: <n>` from the status output, defaulting to `0` when that line is absent. Every push-back increments it. The expected-iteration guard makes a stale observation fail with a conflict while preserving the checkpoint.
 
-Any other observation is a failed reconciliation: a head SHA different from the `auto_merge` output, `DIRTY` (conflict), a failed required check, auto-merge disabled on an open PR, or `CLOSED` without merge. Leave the run waiting, record the observation and the step logs as evidence, and report it. Do not complete the checkpoint.
+The `orphan` step selects `triage` or `implement` observations whose issue is `CLOSED`. It reports `ORPHAN <repo>#<issue> <run> <step> issue=CLOSED closed_at=<timestamp>` and leaves the run unchanged. Inspect the scheduled `reconcile` history and its sub-run logs for transitions, unreconciled states, and orphan reports.
 
 ## Finish
 
