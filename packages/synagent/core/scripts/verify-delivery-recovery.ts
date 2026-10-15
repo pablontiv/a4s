@@ -2,8 +2,8 @@
 
 import assert from 'node:assert/strict'
 import { execFileSync, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
-import { mkdirSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs'
-import { homedir } from 'node:os'
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs'
+import { homedir, tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -40,7 +40,10 @@ const BROKER_PORT = 18_327
 const coreRoot = fileURLToPath(new URL('../', import.meta.url))
 const repoRoot = resolve(coreRoot, '../../..')
 const brokerPath = join(repoRoot, 'packages', 'synagent', 'bus', 'broker.cjs')
-const root = resolve(process.env.SYNAGENT_LIVE_ROOT ?? '/tmp/synagent-impl-127')
+const rootOverride = process.env.SYNAGENT_LIVE_ROOT?.trim()
+const root = rootOverride
+  ? resolve(rootOverride)
+  : mkdtempSync(join(tmpdir(), 'synagent-verify-delivery-recovery-'))
 const dbPath = join(root, 'db')
 const brokerUrl = `mqtt://127.0.0.1:${BROKER_PORT}`
 
@@ -468,8 +471,10 @@ async function runHost(config: HostConfig, publisher: MqttClient): Promise<void>
 }
 
 async function main(): Promise<void> {
-  rmSync(root, { recursive: true, force: true })
-  mkdirSync(root, { recursive: true })
+  if (rootOverride) {
+    rmSync(root, { recursive: true, force: true })
+    mkdirSync(root, { recursive: true })
+  }
   const broker = spawn(process.execPath, [brokerPath], {
     cwd: repoRoot,
     env: {

@@ -127,11 +127,20 @@ export function loadSynagentSettings(
   const globalLegacy = paths.globalLegacy ? readLegacySettings(paths.globalLegacy) : {}
   const resolved = { ...DEFAULT_SETTINGS }
   const environmentBrokerUrl = env.SYNAGENT_BROKER_URL?.trim()
+  const environmentRequestTtl = env.SYNAGENT_REQUEST_TTL?.trim()
+  const parsedEnvironmentRequestTtl = environmentRequestTtl
+    ? parseSettingValue('request-ttl', environmentRequestTtl)
+    : undefined
 
   for (const key of SYNAGENT_SETTING_KEYS) {
-    const candidates = key === 'broker-url'
-      ? [environmentBrokerUrl, globalNew[key], globalLegacy[key], DEFAULT_SETTINGS[key]]
-      : [globalNew[key], globalLegacy[key], DEFAULT_SETTINGS[key]]
+    const environmentValue = key === 'broker-url'
+      ? environmentBrokerUrl
+      : key === 'request-ttl'
+        ? parsedEnvironmentRequestTtl
+        : undefined
+    const candidates = environmentValue === undefined
+      ? [globalNew[key], globalLegacy[key], DEFAULT_SETTINGS[key]]
+      : [environmentValue, globalNew[key], globalLegacy[key], DEFAULT_SETTINGS[key]]
     for (const candidate of candidates) {
       if (isValidSetting(key, candidate)) {
         assignSetting(resolved, key, candidate)

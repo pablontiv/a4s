@@ -76,6 +76,36 @@ test('Synagent broker environment override wins without changing user settings',
   })
 })
 
+test('Synagent request TTL environment override wins without changing user settings', t => {
+  const { paths } = fixture(t)
+  writeJson(paths.global, { 'request-ttl': 30, global: false })
+  const before = readFileSync(paths.global)
+
+  assert.deepEqual(loadSynagentSettings(paths, { SYNAGENT_REQUEST_TTL: ' 5 ' }), {
+    enabled: true,
+    'broker-url': DEFAULT_SETTINGS['broker-url'],
+    global: false,
+    'default-peer': 'claude',
+    'request-ttl': 5,
+  })
+  assert.deepEqual(readFileSync(paths.global), before)
+
+  const invalid = 'not-seconds'
+  let expectedMessage = ''
+  try {
+    parseSettingValue('request-ttl', invalid)
+  } catch (error) {
+    assert.ok(error instanceof Error)
+    expectedMessage = error.message
+  }
+  assert.notEqual(expectedMessage, '')
+  assert.throws(
+    () => loadSynagentSettings(paths, { SYNAGENT_REQUEST_TTL: invalid }),
+    error => error instanceof Error && error.message === expectedMessage,
+  )
+  assert.deepEqual(readFileSync(paths.global), before)
+})
+
 test('Synagent migrates the five user settings and preserves the legacy file', t => {
   const { paths } = fixture(t)
   const legacy = {

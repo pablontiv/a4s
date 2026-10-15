@@ -2,19 +2,20 @@
 
 import assert from 'node:assert/strict'
 import { execFileSync, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import {
-  chmodSync,
-  existsSync,
+  closeSync,
+  fstatSync,
   mkdirSync,
+  mkdtempSync,
+  openSync,
   readFileSync,
   readdirSync,
-  renameSync,
   rmSync,
   statSync,
-  writeFileSync,
 } from 'node:fs'
-import { homedir } from 'node:os'
-import { dirname, join, resolve } from 'node:path'
+import { homedir, tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { connect, type MqttClient } from 'mqtt'
@@ -45,9 +46,8 @@ type ResponseWaiter = {
   resolve: (record: JsonRecord) => void
   timer: NodeJS.Timeout
 }
-type FileSnapshot = {
-  bytes?: Buffer
-  mode?: number
+type FileDigest = {
+  digest: string
   path: string
 }
 
@@ -56,7 +56,10 @@ const BROKER_PORT = 18_328
 const coreRoot = fileURLToPath(new URL('../', import.meta.url))
 const repoRoot = resolve(coreRoot, '../../..')
 const brokerPath = join(repoRoot, 'packages', 'synagent', 'bus', 'broker.cjs')
-const root = resolve(process.env.SYNAGENT_LIVE_ROOT ?? '/tmp/synagent-impl-128')
+const rootOverride = process.env.SYNAGENT_LIVE_ROOT?.trim()
+const root = rootOverride
+  ? resolve(rootOverride)
+  : mkdtempSync(join(tmpdir(), 'synagent-verify-request-lifecycle-'))
 const dbPath = join(root, 'db')
 const brokerUrl = `mqtt://127.0.0.1:${BROKER_PORT}`
 
@@ -129,6 +132,7 @@ class RpcProcess {
         PI_CODING_AGENT_DIR: config.agentDir,
         PI_TELEMETRY: '0',
         SYNAGENT_BROKER_URL: brokerUrl,
+        SYNAGENT_REQUEST_TTL: '5',
       },
       stdio: ['pipe', 'pipe', 'pipe'],
     })
@@ -233,27 +237,35 @@ class RpcProcess {
   }
 }
 
-function snapshotSettings(path: string): FileSnapshot {
-  if (!existsSync(path)) return { path }
-  return { bytes: readFileSync(path), mode: statSync(path).mode & 0o777, path }
-}
-
-function installRequestTtl(snapshot: FileSnapshot): void {
-  const current: unknown = snapshot.bytes === undefined ? {} : JSON.parse(snapshot.bytes.toString('utf8'))
-  if (!isJsonRecord(current)) throw new Error(`Synagent settings are not an object: ${snapshot.path}`)
-  const temporary = `${snapshot.path}.verify-128-${process.pid}`
-  mkdirSync(dirname(snapshot.path), { recursive: true })
-  writeFileSync(temporary, `${JSON.stringify({ ...current, 'request-ttl': 5 }, null, 2)}\n`, { mode: 0o600 })
-  renameSync(temporary, snapshot.path)
-}
-
-function restoreSettings(snapshot: FileSnapshot): void {
-  if (snapshot.bytes === undefined) {
-    rmSync(snapshot.path, { force: true })
-    return
+function configDigest(path: string): FileDigest {
+  let fd: number
+  try {
+    fd = openSync(path, 'r')
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { digest: 'absent', path }
+    throw error
   }
-  writeFileSync(snapshot.path, snapshot.bytes)
-  if (snapshot.mode !== undefined) chmodSync(snapshot.path, snapshot.mode)
+  try {
+    const mode = (fstatSync(fd).mode & 0o777).toString(8).padStart(3, '0')
+    const sha256 = createHash('sha256').update(readFileSync(fd)).digest('hex')
+    return { digest: `sha256=${sha256},mode=${mode}`, path }
+  } finally {
+    closeSync(fd)
+  }
+}
+
+function assertConfigDigests(
+  phase: 'before' | 'during' | 'after',
+  baseline: readonly FileDigest[],
+  host?: HostName,
+): void {
+  for (const expected of baseline) {
+    const actual = configDigest(expected.path)
+    assert.equal(actual.digest, expected.digest, `${actual.path} changed ${phase}`)
+    console.log(
+      `CONFIG phase=${phase}${host ? ` host=${host}` : ''} path=${actual.path} ${actual.digest}`,
+    )
+  }
 }
 
 async function waitForBrokerReady(child: ChildProcessWithoutNullStreams): Promise<void> {
@@ -373,11 +385,13 @@ function assertBrokerIsolation(processes: readonly RpcProcess[], host: HostName)
   console.log(`LSOF host=${host} broker=${BROKER_PORT} forbidden_1884=false`)
 }
 
-async function runHost(config: HostConfig, busMessages: CanonicalMessage[]): Promise<void> {
+async function runHost(
+  config: HostConfig,
+  busMessages: CanonicalMessage[],
+  configBaseline: readonly FileDigest[],
+): Promise<void> {
   const version = execFileSync(config.bin, ['--version'], { encoding: 'utf8' }).trim()
   assert.ok(version.includes(config.expectedVersion), `${config.name} must be ${config.expectedVersion}; got ${version}`)
-  const settingsSnapshot = snapshotSettings(join(config.agentDir, 'synagent.json'))
-  installRequestTtl(settingsSnapshot)
   const hostRoot = join(root, config.name)
   const senderSessionDir = join(hostRoot, 'sessions-sender')
   const targetSessionDir = join(hostRoot, 'sessions-target')
@@ -401,6 +415,7 @@ async function runHost(config: HostConfig, busMessages: CanonicalMessage[]): Pro
     const senderAddress = `a4s/${senderState.data.sessionId}`
     const targetAddress = `a4s/${targetState.data.sessionId}`
     assertBrokerIsolation([sender, target], config.name)
+    assertConfigDigests('during', configBaseline, config.name)
 
     const expiredPayload = `EXPIRED_PAYLOAD_${config.name.toUpperCase()}_128`
     const expiredBusStart = busMessages.length
@@ -471,14 +486,15 @@ async function runHost(config: HostConfig, busMessages: CanonicalMessage[]): Pro
       sender?.close().catch(() => undefined),
       target?.close().catch(() => undefined),
     ])
-    restoreSettings(settingsSnapshot)
-    console.log(`CONFIG host=${config.name} request_ttl=5 restored_exact=true path=${settingsSnapshot.path}`)
+    assertConfigDigests('during', configBaseline, config.name)
   }
 }
 
 async function main(): Promise<void> {
-  rmSync(root, { recursive: true, force: true })
-  mkdirSync(root, { recursive: true })
+  if (rootOverride) {
+    rmSync(root, { recursive: true, force: true })
+    mkdirSync(root, { recursive: true })
+  }
   const broker = spawn(process.execPath, [brokerPath], {
     cwd: repoRoot,
     env: { ...process.env, SYNAGENT_DB: dbPath, SYNAGENT_PORT: String(BROKER_PORT) },
@@ -530,8 +546,11 @@ async function main(): Promise<void> {
         },
       },
     ]
-    for (const config of configs) await runHost(config, busMessages)
-    console.log(`PASS all_hosts=2 broker=${BROKER_PORT} forbidden_1884=false evidence=${root}`)
+    const configBaseline = configs.map(config => configDigest(join(config.agentDir, 'synagent.json')))
+    assertConfigDigests('before', configBaseline)
+    for (const config of configs) await runHost(config, busMessages, configBaseline)
+    assertConfigDigests('after', configBaseline)
+    console.log(`PASS all_hosts=2 broker=${BROKER_PORT} forbidden_1884=false configs_unchanged=true evidence=${root}`)
   } finally {
     if (observer) await closeObserver(observer).catch(() => undefined)
     await stopBroker(broker).catch(() => undefined)

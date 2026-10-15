@@ -8,6 +8,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  rmSync,
   writeFileSync,
 } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
@@ -40,7 +41,10 @@ const BROKER_PORT = 18_330
 const coreRoot = fileURLToPath(new URL('../', import.meta.url))
 const repoRoot = resolve(coreRoot, '../../..')
 const brokerPath = join(repoRoot, 'packages', 'synagent', 'bus', 'broker.cjs')
-const root = mkdtempSync(join(tmpdir(), 'synagent-verify-protocol-'))
+const rootOverride = process.env.SYNAGENT_LIVE_ROOT?.trim()
+const root = rootOverride
+  ? resolve(rootOverride)
+  : mkdtempSync(join(tmpdir(), 'synagent-verify-protocol-schema-'))
 const dbPath = join(root, 'db')
 const brokerUrl = `mqtt://127.0.0.1:${BROKER_PORT}`
 
@@ -399,6 +403,10 @@ async function runHost(config: HostConfig, publisher: MqttClient, bus: BusRecord
 }
 
 async function main(): Promise<void> {
+  if (rootOverride) {
+    rmSync(root, { recursive: true, force: true })
+    mkdirSync(root, { recursive: true, mode: 0o700 })
+  }
   chmodSync(root, 0o700)
   const broker = spawn(process.execPath, [brokerPath], {
     cwd: repoRoot,
