@@ -53,7 +53,7 @@ The bootstrap renders both templates once when the repository adopts the lifecyc
 | `__PRIMARY__` | Default clone path in `poc.yaml` | repository clone | repository clone |
 | `__TEST_PATHS__` | Bash ERE for repository test paths; every `*.md` also belongs to cutover | `_test\.go$\|^tests/` | `(^\|/)tests/` |
 
-The DAG's fixed invariants: `PRIMARY` is the repository clone, its main working tree, on `BASE_BRANCH` and clean; the run's worktree is always `$PRIMARY/.workspace/worktrees/issue-<n>`, ignored by git; the gate runs with `umask 0022` and without `GH_TOKEN`/`GITHUB_TOKEN`; auto-merge is bound to the tested SHA with `--match-head-commit`; and the queue has concurrency one per repository. `checkpoint_push` is the publication boundary. On exit, the handler removes a worktree and local branch only after fetching and confirming that its head is contained by `origin/$BRANCH` or `origin/$BASE_BRANCH`; otherwise it retains both.
+The DAG's fixed invariants: `PRIMARY` is the repository clone, its main working tree, on `BASE_BRANCH` and clean; the run's worktree is always `$PRIMARY/.workspace/worktrees/issue-<n>`, ignored by git; the gate runs with `umask 0022` and without `GH_TOKEN`/`GITHUB_TOKEN`; auto-merge is bound to the tested SHA with `--match-head-commit`; and the queue has concurrency one per repository. `checkpoint_push` is the publication boundary. On exit, the handler removes a worktree and local branch only after fetching and confirming that its head is contained by `origin/$BRANCH` or `origin/$BASE_BRANCH`, or that GitHub reports a merged PR with that exact head SHA; otherwise it retains both.
 
 ## Adopt in a repository
 
@@ -136,9 +136,10 @@ prints both recovery locations. Recover directly in that worktree, then push the
 kept branch and enqueue a new run with a suffixed ID
 (`<repo>-issue-<n>-v2`). If the worktree must be recreated, preserve the kept
 commit first with `git branch <branch> <sha>`. Once `checkpoint_push` has
-published the head, the exit handler may remove the local worktree and branch;
-restore it with `git fetch origin && git branch <branch> origin/<branch>` before
-reenqueueing. Pass `PR_NUMBER` when a PR is already open for the branch.
+published the head, or GitHub reports its PR merged with that exact head SHA,
+the exit handler may remove the local worktree and branch. Restore a published
+but unmerged branch with `git fetch origin && git branch <branch> origin/<branch>`
+before reenqueuing. Pass `PR_NUMBER` when a PR already exists for the branch.
 
 Inspect a run with `dagu status --run-id <id> feature`. Step logs are listed under each step.
 

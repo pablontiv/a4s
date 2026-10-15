@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -71,11 +71,23 @@ function commit(repo: Repository, path: string, content: string): void {
   git(repo.worktree, "commit", "-m", "feature change");
 }
 
+function stubGh(repo: Repository, stdout: string, status: number, stderr = ""): void {
+  const bin = join(repo.root, "bin");
+  mkdirSync(bin, { recursive: true });
+  const executable = join(bin, "gh");
+  writeFileSync(
+    executable,
+    `#!/bin/sh\nprintf '%b' ${JSON.stringify(stdout)}\nprintf '%b' ${JSON.stringify(stderr)} >&2\nexit ${status}\n`,
+  );
+  chmodSync(executable, 0o755);
+}
+
 function runScript(script: string, repo: Repository): string {
   const result = spawnSync("bash", ["-c", script], {
     encoding: "utf8",
     env: {
       ...process.env,
+      PATH: `${join(repo.root, "bin")}:${process.env.PATH ?? ""}`,
       PRIMARY: repo.primary,
       WORKTREE: repo.worktree,
       BRANCH: repo.branch,
@@ -91,10 +103,11 @@ for (const [name, definition] of definitions) {
   const exitScript = extractScript(definition, "  exit:");
   const checkpointScript = extractScript(definition, "  - id: checkpoint_push");
 
-  test(`${name} exit keeps failed or cancelled unpublished work and prints recovery locations`, () => {
+  test(`${name} exit keeps a never-pushed branch when no PR exists and prints recovery locations`, () => {
     const repo = repository();
     try {
       commit(repo, "README.txt", "unpublished\n");
+      stubGh(repo, "", 1, "no pull requests found\n");
       const output = runScript(exitScript, repo);
       assert.equal(hasRef(repo.primary, `refs/heads/${repo.branch}`), true);
       assert.equal(existsSync(repo.worktree), true);
@@ -102,6 +115,59 @@ for (const [name, definition] of definitions) {
       assert.match(output, new RegExp(`worktree ${repo.worktree.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
       assert.match(output, /Recovery: push/);
       assert.match(output, /suffixed run ID/);
+    } finally {
+      rmSync(repo.root, { recursive: true, force: true });
+    }
+  });
+
+  test(`${name} exit cleans a squash-merged head after its remote branch is deleted`, () => {
+    const repo = repository();
+    try {
+      commit(repo, "README.txt", "squash merged\n");
+      const head = git(repo.worktree, "rev-parse", "HEAD");
+      git(repo.worktree, "push", "origin", `HEAD:${repo.branch}`);
+      writeFileSync(join(repo.primary, "README.txt"), "squash merged\n");
+      git(repo.primary, "add", "README.txt");
+      git(repo.primary, "commit", "-m", "squash feature change");
+      git(repo.primary, "push", "origin", "main");
+      git(repo.worktree, "push", "origin", "--delete", repo.branch);
+      stubGh(repo, `${JSON.stringify({ state: "MERGED", headRefOid: head })}\n`, 0);
+      runScript(exitScript, repo);
+      assert.equal(existsSync(repo.worktree), false);
+      assert.equal(hasRef(repo.primary, `refs/heads/${repo.branch}`), false);
+    } finally {
+      rmSync(repo.root, { recursive: true, force: true });
+    }
+  });
+
+  test(`${name} exit keeps local commits newer than a merged PR head`, () => {
+    const repo = repository();
+    try {
+      commit(repo, "README.txt", "published head\n");
+      const mergedHead = git(repo.worktree, "rev-parse", "HEAD");
+      git(repo.worktree, "push", "origin", `HEAD:${repo.branch}`);
+      commit(repo, "README.txt", "new local head\n");
+      git(repo.worktree, "push", "origin", "--delete", repo.branch);
+      stubGh(repo, `${JSON.stringify({ state: "MERGED", headRefOid: mergedHead })}\n`, 0);
+      const output = runScript(exitScript, repo);
+      assert.equal(hasRef(repo.primary, `refs/heads/${repo.branch}`), true);
+      assert.equal(existsSync(repo.worktree), true);
+      assert.match(output, /Unpublished work kept/);
+      assert.match(output, /Recovery: push/);
+    } finally {
+      rmSync(repo.root, { recursive: true, force: true });
+    }
+  });
+
+  test(`${name} exit keeps unpublished work and succeeds when gh fails`, () => {
+    const repo = repository();
+    try {
+      commit(repo, "README.txt", "unpublished\n");
+      stubGh(repo, "", 2, "GitHub unavailable\n");
+      const output = runScript(exitScript, repo);
+      assert.equal(hasRef(repo.primary, `refs/heads/${repo.branch}`), true);
+      assert.equal(existsSync(repo.worktree), true);
+      assert.match(output, /Unpublished work kept/);
     } finally {
       rmSync(repo.root, { recursive: true, force: true });
     }
