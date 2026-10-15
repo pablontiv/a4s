@@ -1,0 +1,205 @@
+description: Reconciles every waiting feature run's await_merge with its PR and reports waiting runs whose issue is closed.
+schedule: "* * * * *"
+catchup_window: ""
+overlap_policy: skip
+type: graph
+shell: bash
+steps:
+  - id: discover
+    run: |
+      dagu history feature --status waiting --format json --limit 500 | jq -c '
+        def param($key):
+          .params as $params
+          | try ($params | capture("(^| )" + $key + "=(?<value>[^ ]*)($| )").value) catch "";
+        [.[] | {
+          RUN: .dagRunId,
+          ISSUE: param("ISSUE"),
+          PRIMARY: param("PRIMARY"),
+          BRANCH: param("BRANCH"),
+          PR_NUMBER: param("PR_NUMBER")
+        }]
+      '
+    output: RUNS
+
+  - id: leftovers
+    depends: discover
+    run: |
+      set -euo pipefail
+      TMP=$(mktemp -d)
+      trap 'rm -rf "$TMP"' EXIT
+      dagu history feature --format json --limit 1000 >"$TMP/feature.json"
+      dagu history poc --format json --limit 1000 >"$TMP/poc.json"
+      jq -s '
+        def param($key):
+          .params as $params
+          | try ($params | capture("(^| )" + $key + "=(?<value>[^ ]*)($| )").value) catch "";
+        [(.[][]) | {
+          kind: .name,
+          run: .dagRunId,
+          status: (.status | ascii_downcase),
+          primary: param("PRIMARY"),
+          branch: param("BRANCH"),
+          issue: param("ISSUE"),
+          time: (.startedAt // .finishedAt // "")
+        }]
+        | sort_by(.time)
+        | reverse
+      ' "$TMP/feature.json" "$TMP/poc.json" >"$TMP/runs.json"
+      : >"$TMP/leftovers"
+
+      inspect_resource() {
+        local primary=$1 worktree=$2 branch=$3 result owned last_run last_status repo
+        result=$(jq -r \
+          --arg primary "$primary" \
+          --arg worktree "$worktree" \
+          --arg branch "$branch" '
+            def possesses:
+              if .kind == "feature" then
+                (($branch != "" and .branch == $branch)
+                  or ($worktree != "" and .issue != "" and ($worktree | split("/")[-1]) == ("issue-" + .issue)))
+              elif .kind == "poc" then
+                (($worktree != "" and ($worktree | split("/")[-1]) == ("poc-" + .run))
+                  or ($branch != "" and $branch == ("poc/" + .run)))
+              else false
+              end;
+            [.[] | select(.primary == $primary and possesses)] as $owners
+            | ($owners[0] // null) as $last
+            | [
+                any($owners[]; .status == "queued" or .status == "running" or .status == "waiting"),
+                ($last.run // "none"),
+                ($last.status // "none")
+              ]
+            | @tsv
+          ' "$TMP/runs.json")
+        IFS=$'\t' read -r owned last_run last_status <<<"$result"
+        if [[ "$owned" == false ]]; then
+          repo=$(basename "$primary")
+          printf 'LEFTOVER %s worktree=%s branch=%s last_run=%s last_status=%s\n' \
+            "$repo" "${worktree:-none}" "${branch:-none}" "$last_run" "$last_status" >>"$TMP/leftovers"
+        fi
+      }
+
+      while IFS= read -r primary; do
+        managed_root=$(git -C "$primary" rev-parse --show-toplevel)
+        : >"$TMP/worktree-branches"
+        worktree=
+        branch=
+        while IFS= read -r line; do
+          case "$line" in
+            "worktree "*) worktree=${line#worktree }; branch= ;;
+            "branch refs/heads/"*) branch=${line#branch refs/heads/} ;;
+            "")
+              if [[ -n "$worktree" && "$worktree" == "$managed_root/.workspace/worktrees/"* ]]; then
+                inspect_resource "$primary" "$worktree" "$branch"
+                if [[ -n "$branch" ]]; then
+                  printf '%s\n' "$branch" >>"$TMP/worktree-branches"
+                fi
+              fi
+              worktree=
+              branch=
+              ;;
+          esac
+        done < <(git -C "$primary" worktree list --porcelain; printf '\n')
+
+        while IFS= read -r branch; do
+          if ! grep -Fqx -- "$branch" "$TMP/worktree-branches"; then
+            inspect_resource "$primary" "" "$branch"
+          fi
+        done < <(git -C "$primary" for-each-ref --format='%(refname:short)' refs/heads/dagu/)
+      done < <(jq -r --arg filter "${RECONCILE_PRIMARY:-}" \
+        '[.[].primary | select(length > 0)] | unique[] | select($filter == "" or . == $filter)' "$TMP/runs.json")
+
+      if [[ -s "$TMP/leftovers" ]]; then
+        cat "$TMP/leftovers" >&2
+        exit 1
+      fi
+
+  - id: tick
+    depends: leftovers
+    preconditions:
+      - condition: "${RUNS}"
+        expected: "re:^\\[.+\\]$"
+    action: dag.run
+    with:
+      dag: reconcile-run
+    parallel:
+      items: ${RUNS}
+      max_concurrent: 1
+
+---
+name: reconcile-run
+type: graph
+shell: bash
+params:
+  - name: RUN
+    type: string
+    required: true
+  - name: ISSUE
+    type: string
+    required: true
+  - name: PRIMARY
+    type: string
+    required: true
+  - name: BRANCH
+    type: string
+    required: true
+  - name: PR_NUMBER
+    type: string
+    default: ""
+steps:
+  - id: observe
+    run: |
+      set -euo pipefail
+      REPO=$(gh repo view "$(git -C "$PRIMARY" remote get-url origin)" --json nameWithOwner --jq .nameWithOwner)
+      STATUS=$(dagu status feature --run-id "$RUN")
+      STEP=$(sed -nE 's/^├─([A-Za-z0-9_-]+) .*\[waiting\]$/\1/p' <<<"$STATUS" | head -1)
+      ITERATION=$(sed -nE 's/.*push-back iteration: ([0-9]+).*/\1/p' <<<"$STATUS" | head -1)
+      if [[ "$STEP" == await_merge ]]; then
+        OBSERVATION="await_merge $(gh pr view "${PR_NUMBER:-$BRANCH}" -R "$REPO" --json state,mergeStateStatus,autoMergeRequest --jq '"\(.state)/\(.mergeStateStatus)/\(.autoMergeRequest != null)"')"
+      else
+        OBSERVATION="$STEP issue=$(gh issue view "$ISSUE" -R "$REPO" --json state,closedAt --jq '"\(.state) closed_at=\(.closedAt // "")"')"
+      fi
+      printf 'run=%s\nrepo=%s\nissue=%s\niteration=%s\nobservation=%s\n' "$RUN" "$REPO" "$ISSUE" "${ITERATION:-0}" "$OBSERVATION" | tee -a "$DAGU_OUTPUT_FILE"
+    outputs:
+      - name: run
+      - name: repo
+      - name: issue
+      - name: iteration
+      - name: observation
+
+  - id: complete
+    depends: observe
+    preconditions:
+      - condition: "${steps.observe.outputs.observation}"
+        expected: "re:^await_merge MERGED/"
+    run: dagu human-task complete feature --run-id "${steps.observe.outputs.run}" --step await_merge
+
+  - id: push_back
+    depends: observe
+    preconditions:
+      - condition: "${steps.observe.outputs.observation}"
+        expected: "re:^await_merge OPEN/(BEHIND|DIRTY)/"
+    run: dagu human-task push-back feature --run-id "${steps.observe.outputs.run}" --step await_merge --expected-iteration "${steps.observe.outputs.iteration}"
+
+  - id: keep_waiting
+    depends: observe
+    preconditions:
+      - condition: "${steps.observe.outputs.observation}"
+        expected: "re:^await_merge OPEN/(CLEAN|BLOCKED|UNSTABLE|UNKNOWN)/true$"
+    run: echo "PR open with auto-merge; await_merge keeps waiting"
+
+  - id: unreconciled
+    depends: observe
+    preconditions:
+      - condition: "${steps.observe.outputs.observation}"
+        expected: "re:^await_merge (CLOSED/|OPEN/(DRAFT|HAS_HOOKS)/|OPEN/(CLEAN|BLOCKED|UNSTABLE|UNKNOWN)/false$)"
+    run: |
+      printf 'RECONCILIATION FAILED: %s %s\n' "${steps.observe.outputs.run}" "${steps.observe.outputs.observation}" >&2
+      exit 1
+
+  - id: orphan
+    depends: observe
+    preconditions:
+      - condition: "${steps.observe.outputs.observation}"
+        expected: "re:^(triage|implement) issue=CLOSED "
+    run: echo "ORPHAN ${steps.observe.outputs.repo}#${steps.observe.outputs.issue} ${steps.observe.outputs.run} ${steps.observe.outputs.observation}"
