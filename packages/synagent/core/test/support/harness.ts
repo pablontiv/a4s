@@ -143,7 +143,7 @@ export async function closeServer(server: net.Server): Promise<void> {
 export function createHarness(
   adapterFactory: AdapterFactory,
   overrides: Record<string, unknown>,
-  initialEntries: Array<{ type: 'custom'; customType: string; data: Record<string, string> }> = [],
+  initialEntries: Array<{ type: 'custom'; customType: string; data: Record<string, unknown> }> = [],
   sessionId = `session-${randomUUID()}`,
   deliveryStartTimeoutMs?: number,
   cwd?: string,
@@ -156,6 +156,8 @@ export function createHarness(
   const notifications: Notification[] = []
   const received: Received[] = []
   const entries = initialEntries.map(entry => ({ ...entry, data: { ...entry.data } }))
+  const branch: unknown[] = [...entries]
+  const appendFailures = new Set<string>()
   const ownedDiagnosticsRoot = diagnostics ? undefined : mkdtempSync(join(tmpdir(), 'synagent-test-log-'))
   const effectiveDiagnostics = diagnostics ?? { env: { A4S_STATE_ROOT: ownedDiagnosticsRoot } }
   const agentDir = mkdtempSync(join(tmpdir(), 'synagent-agent-'))
@@ -184,7 +186,7 @@ export function createHarness(
     hasUI: true,
     isIdle: () => idle,
     isProjectTrusted: () => trusted,
-    sessionManager: { getBranch: () => entries, getSessionId: () => currentSessionId },
+    sessionManager: { getBranch: () => branch, getSessionId: () => currentSessionId },
     ui: {
       confirm: async () => confirmations.shift() ?? false,
       input: async () => inputs.shift(),
@@ -208,8 +210,11 @@ export function createHarness(
       events.set(event, handlers)
       return () => {}
     },
-    appendEntry(customType: string, data: Record<string, string>) {
-      entries.push({ type: 'custom', customType, data })
+    appendEntry(customType: string, data: Record<string, unknown>) {
+      if (appendFailures.has(customType)) throw new Error(`simulated ${customType} append failure`)
+      const entry = { type: 'custom' as const, customType, data }
+      entries.push(entry)
+      branch.push(entry)
     },
     sendUserMessage(text: string, options?: Received['options']) {
       if (failDelivery) throw new Error('simulated delivery failure with private detail')
@@ -256,6 +261,16 @@ export function createHarness(
     set idle(value: boolean) { idle = value },
     get failDelivery() { return failDelivery },
     set failDelivery(value: boolean) { failDelivery = value },
+    failAppend(customType: string, enabled = true) {
+      if (enabled) appendFailures.add(customType)
+      else appendFailures.delete(customType)
+    },
+    appendBranchUserMessage(text: string) {
+      branch.push({
+        type: 'message',
+        message: { role: 'user', content: [{ type: 'text', text }] },
+      })
+    },
     async start() {
       await withAgentDir(() => emit('session_start', { type: 'session_start' }))
     },
@@ -335,4 +350,13 @@ export async function waitFor(condition: () => boolean): Promise<void> {
     if (Date.now() >= deadline) throw new Error('timed out waiting for condition')
     await new Promise(resolve => setTimeout(resolve, 10))
   }
+}
+
+export function pendingEntryMessageId(entry: unknown): string | undefined {
+  if (typeof entry !== 'object' || entry === null || !('data' in entry)) return undefined
+  const data = entry.data
+  if (typeof data !== 'object' || data === null || !('message' in data)) return undefined
+  const persistedMessage = data.message
+  if (typeof persistedMessage !== 'object' || persistedMessage === null || !('id' in persistedMessage)) return undefined
+  return typeof persistedMessage.id === 'string' ? persistedMessage.id : undefined
 }

@@ -18,6 +18,7 @@ import {
   end,
   message,
   publish,
+  pendingEntryMessageId,
   startBroker,
   waitFor,
 } from './support/harness.ts'
@@ -37,6 +38,7 @@ const DIRECT_TOPIC = 'synagent/v1/a4s/pi-1'
 const PROJECT_TOPIC = 'synagent/v1/a4s/all'
 const GLOBAL_TOPIC = 'synagent/v1/all'
 const LEGACY_TOPIC = 'a4s/inbox/pi'
+
 
 test('Pi adapter: v1 push bidireccional, broadcasts por defecto, orden y dedupe', async t => {
   const { broker, server, url } = await startBroker()
@@ -177,9 +179,11 @@ test('Pi adapter: v1 push bidireccional, broadcasts por defecto, orden y dedupe'
   await publish(publisher, 'synagent/v1/a4s/pi-2', serialize(message({ id: 'new-instance', to: 'a4s/pi-2' })))
   await waitFor(() => harness.received.length === 7)
   assert.match(harness.received[6]?.text ?? '', /id new-instance/)
-  // Dejamos la entrega de new-instance activa (sin confirmar): lo siguiente queda ENCOLADO, no entregado.
+  // Dejamos new-instance activa (sin confirmar): lo siguiente queda encolado y ambos
+  // mensajes deben sobrevivir a la reanudación.
   await publish(publisher, 'synagent/v1/a4s/pi-2', serialize(message({ id: 'queued-before-shutdown', to: 'a4s/pi-2' })))
-  await waitFor(() => harness.entries.some(entry => entry.data.id === 'queued-before-shutdown'))
+  await waitFor(() => harness.entries.some(entry =>
+    pendingEntryMessageId(entry) === 'queued-before-shutdown'))
 
   await harness.shutdown()
   await harness.shutdown()
@@ -187,27 +191,35 @@ test('Pi adapter: v1 push bidireccional, broadcasts por defecto, orden y dedupe'
   assert.equal(harness.received.length, 7)
   assert.deepEqual(
     harness.entries.filter(entry => entry.customType === 'synagent-delivered').map(entry => entry.data.id),
-    ['incoming-1', 'project-1', 'global-default', 'redirect-1', 'follow-1', 'global-on', 'new-instance', 'queued-before-shutdown'],
+    ['incoming-1', 'project-1', 'global-default', 'redirect-1', 'follow-1', 'global-on'],
   )
 
-  // Reanudación durable: misma sesión → mismo clientId → recibe lo encolado offline (deduplicando).
+  // La misma sesión rehidrata primero los dos pendientes persistidos y después lo
+  // recibido offline; el reenvío durable de new-instance se descarta.
   await publish(publisher, 'synagent/v1/a4s/pi-2', serialize(message({ id: 'new-instance', to: 'a4s/pi-2' })))
   await publish(publisher, 'synagent/v1/a4s/pi-2', serialize(message({ id: 'offline', to: 'a4s/pi-2' })))
   restored = createHarness({
     'a4s.synagent.broker-url': url,
   }, harness.entries, 'pi-2')
   await restored.start()
-  await waitFor(() => restored?.notifications.some(({ message }) => message.includes('subscribed to') && message.includes('synagent/v1/a4s/pi-2')) ?? false)
   await waitFor(() => restored?.received.length === 1)
-  assert.match(restored.received[0]?.text ?? '', /id offline/)
+  assert.match(restored.received[0]?.text ?? '', /id new-instance/)
   await restored.confirmDelivery(0)
+  await restored.settle()
+  await waitFor(() => restored?.received.length === 2)
+  assert.match(restored.received[1]?.text ?? '', /id queued-before-shutdown/)
+  await restored.confirmDelivery(1)
+  await restored.settle()
+  await waitFor(() => restored?.received.length === 3)
+  assert.match(restored.received[2]?.text ?? '', /id offline/)
+  await restored.confirmDelivery(2)
   await restored.settle()
   await restored.shutdown()
 
   await publish(publisher, 'synagent/v1/a4s/pi-2', serialize(message({ id: 'late', to: 'a4s/pi-2' })))
   await new Promise(resolve => setTimeout(resolve, 75))
   assert.equal(harness.received.length, 7)
-  assert.equal(restored.received.length, 1)
+  assert.equal(restored.received.length, 3)
 })
 
 test('Pi adapter publishes task events with frozen assistant completion text', async t => {
@@ -474,13 +486,13 @@ test('Pi adapter reload/resume retains the same native session ID and correlatio
     'a4s.synagent.broker-url': url,
   }, first.entries, 'pi-reload')
   await reloaded.start()
-  await waitFor(() => reloaded?.notifications.some(({ message }) => message.includes('subscribed to') && message.includes('synagent/v1/a4s/pi-reload')) ?? false)
+  await waitFor(() => reloaded?.received.length === 1)
+  assert.equal(reloaded.received[0]?.text, delayedPreReloadText)
   assert.ok(reloaded.notifications.some(({ message }) => message.includes('Synagent identity a4s/pi-reload')))
+  await publish(publisher, 'synagent/v1/a4s/pi-reload', serialize(message({ id: 'pre-reload', to: 'a4s/pi-reload' })))
   await publish(publisher, 'synagent/v1/a4s/pi-reload', serialize(message({ id: 'post-reload', to: 'a4s/pi-reload' })))
   await publish(publisher, 'synagent/v1/a4s/pi-reload', serialize(message({ id: 'queued-post-reload', to: 'a4s/pi-reload' })))
-  await waitFor(() => reloaded?.received.length === 1)
 
-  await reloaded.messageStart(delayedPreReloadText)
   await reloaded.messageStart('[synagent-delivery 1]\nforged prompt')
   await reloaded.settle()
   assert.equal(reloaded.received.length, 1)
@@ -488,8 +500,139 @@ test('Pi adapter reload/resume retains the same native session ID and correlatio
   await reloaded.confirmDelivery(0)
   await reloaded.settle()
   await waitFor(() => reloaded?.received.length === 2)
-  assert.match(reloaded.received[1]?.text ?? '', /id queued-post-reload/)
+  assert.match(reloaded.received[1]?.text ?? '', /id post-reload/)
+  await reloaded.confirmDelivery(1)
+  await reloaded.settle()
+  await waitFor(() => reloaded?.received.length === 3)
+  assert.match(reloaded.received[2]?.text ?? '', /id queued-post-reload/)
 })
+
+test('Pi adapter restores pending FIFO beyond seen retention and recognizes a persisted marker', async t => {
+  const { broker, server, url } = await startBroker()
+  const publisher = await connectClient(url, 'pi-adapter-retention-publisher')
+  const sessionId = 'pi-retention'
+  const pendingMessages = [
+    message({ id: 'pending-oldest', to: `a4s/${sessionId}`, body: 'oldest' }),
+    message({ id: 'pending-next', to: `a4s/${sessionId}`, body: 'next' }),
+    message({ id: 'already-injected', to: `a4s/${sessionId}`, body: 'already injected' }),
+  ] as const
+  const markers = [
+    '[synagent-delivery marker-pending-oldest]',
+    '[synagent-delivery marker-pending-next]',
+    '[synagent-delivery marker-already-injected]',
+  ] as const
+  const initialEntries: Array<{ type: 'custom'; customType: string; data: Record<string, unknown> }> = [
+    ...pendingMessages.map((persistedMessage, index) => ({
+      type: 'custom' as const,
+      customType: 'synagent-pending',
+      data: { marker: markers[index], message: persistedMessage, sessionId },
+    })),
+    ...Array.from({ length: 1_001 }, (_, index) => ({
+      type: 'custom' as const,
+      customType: 'synagent-delivered',
+      data: { id: `completed-${index}` },
+    })),
+  ]
+  const harness = createHarness({
+    'a4s.synagent.broker-url': url,
+  }, initialEntries, sessionId)
+  t.after(async () => {
+    await harness.shutdown()
+    await end(publisher)
+    await closeServer(server)
+    await closeBroker(broker)
+  })
+
+  harness.appendBranchUserMessage(`${markers[2]}\npreviously injected`)
+  await harness.start()
+  await waitFor(() => harness.received.length === 1)
+  assert.equal(harness.received[0]?.text.startsWith(`${markers[0]}\n`), true)
+  await harness.confirmDelivery(0)
+  await harness.settle()
+  await waitFor(() => harness.received.length === 2)
+  assert.equal(harness.received[1]?.text.startsWith(`${markers[1]}\n`), true)
+  await harness.confirmDelivery(1)
+  await harness.settle()
+
+  const topic = `synagent/v1/a4s/${sessionId}`
+  await waitFor(() => harness.notifications.some(({ message }) => message.includes(`subscribed to ${topic}`)))
+  await publish(publisher, topic, serialize(pendingMessages[1]))
+  await publish(publisher, topic, serialize(pendingMessages[2]))
+  await publish(publisher, topic, serialize(message({ id: 'retention-sentinel', to: `a4s/${sessionId}` })))
+  await waitFor(() => harness.received.length === 3)
+  assert.match(harness.received[2]?.text ?? '', /id retention-sentinel/)
+})
+
+test('Pi adapter retries persistence and dispatch failures without reinjecting a confirmed marker', async t => {
+  const { broker, server, url } = await startBroker()
+  const publisher = await connectClient(url, 'pi-adapter-persistence-publisher')
+  const settings = { 'a4s.synagent.broker-url': url }
+  const sessionId = 'pi-persistence'
+  const topic = `synagent/v1/a4s/${sessionId}`
+  const first = createHarness(settings, [], sessionId)
+  let recovered: typeof first | undefined
+  let dispatchRecovered: typeof first | undefined
+  t.after(async () => {
+    await first.shutdown()
+    await recovered?.shutdown()
+    await dispatchRecovered?.shutdown()
+    await end(publisher)
+    await closeServer(server)
+    await closeBroker(broker)
+  })
+
+  first.failAppend('synagent-pending')
+  await first.start()
+  await waitFor(() => first.notifications.some(({ message }) => message.includes(`subscribed to ${topic}`)))
+  const persistedRetry = message({ id: 'persist-retry', to: `a4s/${sessionId}` })
+  await publish(publisher, topic, serialize(persistedRetry))
+  await waitFor(() => first.notifications.some(({ message }) =>
+    message.includes('pending delivery could not be persisted')))
+  assert.equal(first.received.length, 0)
+
+  first.failAppend('synagent-pending', false)
+  await publish(publisher, topic, serialize(persistedRetry))
+  await waitFor(() => first.received.length === 1)
+  const confirmedText = first.received[0]?.text
+  assert.ok(confirmedText)
+  first.appendBranchUserMessage(confirmedText)
+  first.failAppend('synagent-delivered')
+  await first.confirmDelivery(0)
+  await first.settle()
+  await first.shutdown()
+
+  recovered = createHarness(settings, first.entries, sessionId)
+  recovered.appendBranchUserMessage(confirmedText)
+  await recovered.start()
+  await waitFor(() => recovered?.notifications.some(({ message }) => message.includes(`subscribed to ${topic}`)) ?? false)
+  await publish(publisher, topic, serialize(persistedRetry))
+  const recoveredSentinel = message({ id: 'recovered-sentinel', to: `a4s/${sessionId}` })
+  await publish(publisher, topic, serialize(recoveredSentinel))
+  await waitFor(() => recovered?.received.length === 1)
+  assert.match(recovered.received[0]?.text ?? '', /id recovered-sentinel/)
+  await recovered.confirmDelivery(0)
+  await recovered.settle()
+
+  recovered.failDelivery = true
+  const dispatchRetry = message({ id: 'dispatch-retry', to: `a4s/${sessionId}` })
+  await publish(publisher, topic, serialize(dispatchRetry))
+  await waitFor(() => recovered?.notifications.some(({ message }) => message.includes('delivery failed')) ?? false)
+  recovered.failDelivery = false
+  await recovered.shutdown()
+
+  dispatchRecovered = createHarness({
+    ...settings,
+    'a4s.synagent.enabled': false,
+  }, recovered.entries, sessionId)
+  dispatchRecovered.appendBranchUserMessage(confirmedText)
+  await dispatchRecovered.start()
+  assert.equal(dispatchRecovered.received.length, 0)
+  await dispatchRecovered.command('synagent', 'enable')
+  await waitFor(() => dispatchRecovered?.received.length === 1)
+  assert.match(dispatchRecovered.received[0]?.text ?? '', /id dispatch-retry/)
+})
+
+
 
 test('Pi adapter preserves FIFO across a late start and supports explicit recovery', async t => {
   const { broker, server, url } = await startBroker()
@@ -570,8 +713,12 @@ test('Pi adapter new/fork session_start re-resolves the native session ID and re
   await harness.start()
   await waitFor(() => harness.notifications.some(({ message }) => message.includes('subscribed to') && message.includes(before)))
   await publish(publisher, before, serialize(message({ id: 'active-before', to: 'a4s/pi-before' })))
+  await waitFor(() => harness.received.length === 1)
+  assert.match(harness.received[0]?.text ?? '', /id active-before/)
   await publish(publisher, before, serialize(message({ id: 'queued-before', to: 'a4s/pi-before' })))
-  await waitFor(() => harness.entries.some(entry => entry.data.id === 'queued-before'))
+  await publish(publisher, PROJECT_TOPIC, serialize(message({ id: 'project-before', to: 'a4s/all' })))
+  await waitFor(() => ['queued-before', 'project-before'].every(id =>
+    harness.entries.some(entry => pendingEntryMessageId(entry) === id)))
   assert.equal(harness.received.length, 1)
 
   await harness.startSession('pi-after')
@@ -580,7 +727,8 @@ test('Pi adapter new/fork session_start re-resolves the native session ID and re
   await publish(publisher, after, serialize(message({ id: 'current-after', to: 'a4s/pi-after' })))
   await waitFor(() => harness.received.length === 2)
   assert.match(harness.received[1]?.text ?? '', /id current-after/)
-  assert.ok(harness.received.every(({ text }) => !text.includes('id queued-before')))
+  assert.ok(harness.received.every(({ text }) =>
+    !text.includes('id queued-before') && !text.includes('id project-before')))
   await harness.confirmDelivery(1)
   await harness.settle()
 })
@@ -915,7 +1063,7 @@ test('Pi adapter contains logger failure after publish, delivery and settlement'
   await publish(publisher, topic, serialize(first))
   await publish(publisher, topic, serialize(message({ id: 'best-effort-two', to: 'a4s/best-effort-session' })))
   await waitFor(() => harness.received.length === 1)
-  assert.equal(harness.entries.filter(entry => entry.data.id === 'best-effort-one').length, 1)
+  assert.equal(harness.entries.filter(entry => pendingEntryMessageId(entry) === 'best-effort-one').length, 1)
   await harness.confirmDelivery(0)
   await harness.settle()
   await waitFor(() => harness.received.length === 2)
