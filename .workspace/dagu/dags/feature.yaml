@@ -76,9 +76,159 @@ steps:
       - REVIEW: ${steps.triage.outputs.REVIEW}
     run: |
       set -euo pipefail
+      verify_triage_reviewer() {
+        local canonical home tmp encoded sessions_dir transcript expected_parent
+        local rest triage_count cutoff required
+        for required in PRIMARY OMP_SESSION_ID REVIEW RUN; do
+          if [[ -z "${!required:-}" ]]; then
+            printf 'check.params=FAIL name=%s\nVERIFIER=FAIL\n' "$required"
+            return 1
+          fi
+        done
+        printf 'check.params=PASS\n'
+        case "$REVIEW" in
+          ''|.|..|*[!A-Za-z0-9._-]*)
+            printf 'check.review_name=FAIL value=%q\nVERIFIER=FAIL\n' "$REVIEW"
+            return 1
+            ;;
+          *) printf 'check.review_name=PASS\n' ;;
+        esac
+
+        printf 'rest.url=http://127.0.0.1:%s/api/v1/dag-runs/feature/%s\n' "${DAGU_PORT:-8080}" "$RUN"
+        if ! rest=$(curl -fsS "http://127.0.0.1:${DAGU_PORT:-8080}/api/v1/dag-runs/feature/$RUN"); then
+          printf 'check.rest=FAIL\nVERIFIER=FAIL\n'
+          return 1
+        fi
+        if ! triage_count=$(jq -er '[.dagRunDetails.nodes[]? | select(.step.id == "triage")] | length' <<<"$rest"); then
+          printf 'check.rest_json=FAIL\nVERIFIER=FAIL\n'
+          return 1
+        fi
+        printf 'triage.node_count=%s\n' "$triage_count"
+        if [[ "$triage_count" != 1 ]]; then
+          printf 'check.rest_triage_node=FAIL\nVERIFIER=FAIL\n'
+          return 1
+        fi
+        if ! cutoff=$(jq -er '[.dagRunDetails.nodes[]? | select(.step.id == "triage")][0].startedAt | select(type == "string" and length > 0)' <<<"$rest"); then
+          printf 'triage.startedAt=<missing>\ncheck.rest_triage_startedAt=FAIL\nVERIFIER=FAIL\n'
+          return 1
+        fi
+        printf 'triage.startedAt=%s\ncheck.rest_triage_node=PASS\n' "$cutoff"
+
+        if ! canonical=$(cd "$PRIMARY" 2>/dev/null && pwd -P); then
+          printf 'check.primary=FAIL value=%q\nVERIFIER=FAIL\n' "$PRIMARY"
+          return 1
+        fi
+        if ! home=$(cd "$HOME" 2>/dev/null && pwd -P); then
+          printf 'check.home=FAIL value=%q\nVERIFIER=FAIL\n' "$HOME"
+          return 1
+        fi
+        if ! tmp=$(cd "${TMPDIR:-/tmp}" 2>/dev/null && pwd -P); then
+          printf 'check.tmp=FAIL value=%q\nVERIFIER=FAIL\n' "${TMPDIR:-/tmp}"
+          return 1
+        fi
+        encode_relative() {
+          local prefix=$1 relative=$2 result
+          result=${relative//\//-}
+          result=${result//\\/-}
+          result=${result//:/-}
+          if [[ -z "$result" ]]; then
+            printf '%s' "$prefix"
+          elif [[ "$prefix" == *- ]]; then
+            printf '%s%s' "$prefix" "$result"
+          else
+            printf '%s-%s' "$prefix" "$result"
+          fi
+        }
+        if [[ "$canonical" == "$tmp" ]]; then
+          encoded=$(encode_relative -tmp '')
+        elif [[ "$canonical" == "$tmp/"* ]]; then
+          encoded=$(encode_relative -tmp "${canonical#"$tmp/"}")
+        elif [[ "$canonical" == "$home" ]]; then
+          encoded=$(encode_relative - '')
+        elif [[ "$canonical" == "$home/"* ]]; then
+          encoded=$(encode_relative - "${canonical#"$home/"}")
+        else
+          encoded=${canonical#/}
+          encoded=${encoded//\//-}
+          encoded=${encoded//\\/-}
+          encoded=${encoded//:/-}
+          encoded="--${encoded}--"
+        fi
+        sessions_dir="$HOME/.omp/agent/sessions/$encoded"
+        printf 'primary.canonical=%s\nprimary.encoded=%s\nsessions.dir=%s\n' \
+          "$canonical" "$encoded" "$sessions_dir"
+
+        shopt -s nullglob
+        matches=("$sessions_dir"/*_"$OMP_SESSION_ID"/"$REVIEW".jsonl)
+        printf 'transcript.match_count=%d\n' "${#matches[@]}"
+        if [[ ${#matches[@]} -ne 1 ]]; then
+          printf 'session.parentSession=<unavailable>\n'
+          printf 'session_init.agent=<unavailable>\n'
+          printf 'session_init.task=<unavailable>\n'
+          printf 'session_init.timestamp=<unavailable>\n'
+          printf 'last_yield.details.data.poc=<unavailable>\n'
+          printf 'check.transcript_unique=FAIL\nVERIFIER=FAIL\n'
+          return 1
+        fi
+        transcript=${matches[0]}
+        expected_parent="${transcript%/*}.jsonl"
+        printf 'transcript.path=%s\nexpected.parentSession=%s\ncheck.transcript_unique=PASS\n' \
+          "$transcript" "$expected_parent"
+
+        jq -ser --arg expected_parent "$expected_parent" --arg run "$RUN" --arg cutoff "$cutoff" '
+          def rfc3339_epoch:
+            if type != "string" then null
+            else try (
+              capture("^(?<base>[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2})(?:\\.(?<frac>[0-9]+))?(?<zone>Z|(?<sign>[+-])(?<hour>[0-9]{2}):(?<minute>[0-9]{2}))$")
+              | ((.base + "Z") | fromdateiso8601) as $base
+              | (("0." + (.frac // "0")) | tonumber) as $fraction
+              | (if .zone == "Z" then 0
+                 else (((.hour | tonumber) * 3600 + (.minute | tonumber) * 60) * (if .sign == "+" then 1 else -1 end))
+                 end) as $offset
+              | $base + $fraction - $offset
+            ) catch null end;
+          . as $rows
+          | ($rows | map(select(.type == "session")) | first) as $session
+          | ($rows | map(select(.type == "session_init")) | first) as $init
+          | ($rows | map(select(.type == "message" and .message.role == "toolResult" and .message.toolName == "yield")) | last) as $yield
+          | ($init.timestamp | rfc3339_epoch) as $started
+          | ($cutoff | rfc3339_epoch) as $cutoff_epoch
+          | {
+              fields: {
+                parentSession: $session.parentSession,
+                agent: $init.agent,
+                task: $init.task,
+                timestamp: $init.timestamp,
+                poc: $yield.message.details.data.poc
+              },
+              checks: {
+                parentSession: ($session.parentSession == $expected_parent),
+                agent: ($init.agent == "triage-reviewer"),
+                task: (($init.task // "") | contains("TRIAGE_REVIEW AGENT=triage-reviewer DAG=feature RUN=\($run) ")),
+                timestamp: ($started != null and $cutoff_epoch != null and $started > $cutoff_epoch),
+                poc: ($yield.message.details.data.poc == "no")
+              }
+            }
+          | .overall = ([.checks[]] | all)
+          | "session.parentSession=\(.fields.parentSession // "<missing>")",
+            "session_init.agent=\(.fields.agent // "<missing>")",
+            "session_init.task=\((.fields.task // "<missing>") | @json)",
+            "session_init.timestamp=\(.fields.timestamp // "<missing>")",
+            "last_yield.details.data.poc=\(.fields.poc // "<missing>")",
+            "cutoff=\($cutoff)",
+            "check.parentSession=\(if .checks.parentSession then "PASS" else "FAIL" end)",
+            "check.agent=\(if .checks.agent then "PASS" else "FAIL" end)",
+            "check.task_run_marker=\(if .checks.task then "PASS" else "FAIL" end)",
+            "check.timestamp_after_cutoff=\(if .checks.timestamp then "PASS" else "FAIL" end)",
+            "check.last_yield_poc_no=\(if .checks.poc then "PASS" else "FAIL" end)",
+            "VERIFIER=\(if .overall then "PASS" else "FAIL" end)",
+            (if .overall then empty else halt_error(1) end)
+        ' "$transcript"
+      }
       if [[ "$POC" == no ]]; then
-        printf '%s' "$REVIEW" | jq -eRs 'gsub("\\s";"") | length > 0 and (contains("steps.triage.outputs") | not)' >/dev/null
+        verify_triage_reviewer
       fi
+
       STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")
       mkdir -p "$STATE"
       if test -f "$STATE/dependencies"; then
