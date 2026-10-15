@@ -1,4 +1,5 @@
 import { setTimeout as delay } from "node:timers/promises";
+import { activityTarget, readActivity } from "./activity.ts";
 import { ghIssueTitleResolver, IssueTitles } from "./issue-title.ts";
 import { isActive, issueNumber, renderRun, topicFor, Transitions } from "./progress.ts";
 import type { RunDetails } from "./progress.ts";
@@ -11,7 +12,7 @@ interface Context {
   cwd: string;
   hasUI: boolean;
   agent: { kind: "main" | "sub" };
-  sessionManager: { getSessionId(): string };
+  sessionManager: { getSessionId(): string; getSessionDir?(): string };
   ui: {
     setWidget(key: string, lines: string[] | undefined, options?: { placement: "aboveEditor" }): void;
     notify(message: string, type: "info" | "warning" | "error"): void;
@@ -98,14 +99,47 @@ async function observe(ctx: Context, signal: AbortSignal, wake: (message: string
   const runs = new Map<string, RunDetails>();
   const transitions = new Transitions(ctx.agent.kind === "main" ? ctx.sessionManager.getSessionId() : undefined);
   const titles = new IssueTitles(ghIssueTitleResolver(ctx.cwd));
+  const activities = new Map<string, string>();
+  const activityWatches = new Map<string, { key: string; controller: AbortController }>();
+  let sessionDir: string | undefined;
+  try { sessionDir = ctx.sessionManager.getSessionDir?.(); } catch {}
   let initialSweep = true;
   const render = (): void => {
     if (!ctx.hasUI) return;
     const lines = [...runs.values()].slice(0, 10).map(run => {
       const issue = issueNumber(run);
-      return renderRun(run, issue ? titles.get(issue) : undefined);
+      return renderRun(run, issue ? titles.get(issue) : undefined, activities.get(topicFor(run)));
     });
     ctx.ui.setWidget("dagu-status", lines.length ? lines : undefined, { placement: "aboveEditor" });
+  };
+  const stopActivity = (topic: string): void => {
+    activityWatches.get(topic)?.controller.abort();
+    activityWatches.delete(topic);
+    activities.delete(topic);
+  };
+  const syncActivity = (run: RunDetails): void => {
+    const topic = topicFor(run);
+    const target = activityTarget(run);
+    if (!ctx.hasUI) return;
+    if (!target) {
+      stopActivity(topic);
+      return;
+    }
+    if (activityWatches.get(topic)?.key === target.key) return;
+    stopActivity(topic);
+    const controller = new AbortController();
+    activityWatches.set(topic, { key: target.key, controller });
+    const activitySignal = AbortSignal.any([signal, controller.signal]);
+    void (async () => {
+      while (!activitySignal.aborted) {
+        const value = await readActivity(base, run, target, sessionDir ? { sessionDir } : {}, activitySignal);
+        if (activitySignal.aborted || activityWatches.get(topic)?.key !== target.key) return;
+        if (value) activities.set(topic, value);
+        else activities.delete(topic);
+        render();
+        await delay(2000, undefined, { signal: activitySignal }).catch(() => {});
+      }
+    })().catch(() => {});
   };
   const apply = (run: RunDetails, baseline = false): void => {
     const issue = issueNumber(run);
@@ -116,8 +150,13 @@ async function observe(ctx: Context, signal: AbortSignal, wake: (message: string
     }
     if (effects.wakeMessage) wake(effects.wakeMessage);
     const key = topicFor(run);
-    if (isActive(run)) runs.set(key, run);
-    else runs.delete(key);
+    if (isActive(run)) {
+      runs.set(key, run);
+      syncActivity(run);
+    } else {
+      runs.delete(key);
+      stopActivity(key);
+    }
   };
   let backoff = 1000;
   while (!signal.aborted) {
@@ -135,6 +174,14 @@ async function observe(ctx: Context, signal: AbortSignal, wake: (message: string
           return { ...previous, ...summary, ...(previous?.nodes ? { nodes: previous.nodes } : {}) };
         }
       }));
+      const snapshotTopics = new Set<string>();
+      for (const run of snapshots) snapshotTopics.add(topicFor(run));
+      for (const topic of runs.keys()) {
+        if (!snapshotTopics.has(topic)) {
+          runs.delete(topic);
+          stopActivity(topic);
+        }
+      }
       const unresolvedIssues = new Set<string>();
       for (const run of snapshots) {
         apply(run, initialSweep);

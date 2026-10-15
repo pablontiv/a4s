@@ -142,9 +142,11 @@ Inspect a run with `dagu status --run-id <id> feature`. Step logs are listed und
 
 Notices arrive from the `@a4s/omp-dagu` status extension as priority user input with the form `[DAGU STATE] run=<id> waiting_step=<step> issue=<issue> ...`. They report run state rather than user instructions.
 
-- On a `triage` notice, the coordinator obtains the guard generation marker, launches `task agent=triage-reviewer` itself with that marker and the fixed prompt, and completes `triage` with the allocated reviewer ID. A `dependency_review` push-back produces a new `triage` notice and the coordinator repeats this flow for the new generation.
-- On an `implement` notice, the coordinator launches one level-1 implementation subagent for that issue's worktree. The subagent result auto-delivers to the coordinator, which then completes `implement`.
-- For every issue in the fixed batch, keep one todo for the agent action at the `human.task` where its run is waiting: triage review, PoC execution, implementation, or recovery. Update that todo when the run moves to another human task; the package widget provides DAG step progress rather than duplicating that progress in todos.
+- On a `triage` notice, the coordinator obtains the guard generation marker and launches `task agent=triage-reviewer` itself with that marker and the fixed prompt, naming the subagent `TriageReview<ISSUE>`. It completes `triage` with that allocated reviewer ID. A `dependency_review` push-back produces a new `triage` notice and the coordinator repeats this flow for the new generation.
+- At `run_poc`, the coordinator launches the PoC subagent as `Poc<ISSUE>`.
+- On an `implement` notice, the coordinator launches one level-1 implementation subagent named `Implement<ISSUE>` for that issue's worktree. The subagent result auto-delivers to the coordinator, which then completes `implement`.
+- A retried subagent appends `v<N>` to its base name, for example `Implement182v2`.
+- For every issue in the fixed batch, keep one todo for the agent action at the `human.task` where its run is waiting: triage review, PoC execution, implementation, or recovery. Update that todo when the run moves to another human task. The package widget shows the active step plus live activity: the last non-empty Dagu log line for a running command, or the newest `toolCall` name, intention (falling back to its principal argument) and age from `TriageReview<ISSUE>`, `Poc<ISSUE>` or `Implement<ISSUE>` while its human task waits. It refreshes activity about every two seconds and leaves the line unchanged when no source is available.
 - Keep `task.maxRecursionDepth: 1`; every implementation and triage-reviewer subagent remains at level 1 and appears in the main view.
 
 ## Turn status

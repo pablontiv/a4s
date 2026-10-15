@@ -4,7 +4,12 @@ export interface RunDetails {
   statusLabel: string;
   labels?: string[];
   params?: string;
-  nodes?: { step: { name: string }; statusLabel: string }[];
+  nodes?: RunNode[];
+}
+
+export interface RunNode {
+  step: { id?: string; name: string };
+  statusLabel: string;
 }
 
 export const isActive = (run: RunDetails): boolean =>
@@ -33,21 +38,26 @@ export function runLabel(run: RunDetails, slug?: string): string {
   return `${plain(run.name)} ${identity}`;
 }
 
-export function currentStep(run: RunDetails): string | undefined {
+export function currentNode(run: RunDetails): RunNode | undefined {
   const nodes = run.nodes ?? [];
   // A waiting run can still contain parallel running nodes: show the blocking gate.
   const preferred = run.statusLabel === "waiting" ? "waiting" : "running";
-  return (nodes.find(node => node.statusLabel === preferred)
-    ?? nodes.find(node => ["running", "waiting"].includes(node.statusLabel)))?.step.name;
+  return nodes.find(node => node.statusLabel === preferred)
+    ?? nodes.find(node => ["running", "waiting"].includes(node.statusLabel));
 }
 
-export function renderRun(run: RunDetails, slug?: string): string {
+export function currentStep(run: RunDetails): string | undefined {
+  return currentNode(run)?.step.name;
+}
+
+export function renderRun(run: RunDetails, slug?: string, activity?: string): string {
   const nodes = run.nodes ?? [];
   const done = nodes.filter(node => ["succeeded", "skipped"].includes(node.statusLabel)).length;
   const filled = nodes.length ? Math.floor(done / nodes.length * 6) : 0;
   const bar = "▰".repeat(filled) + "▱".repeat(6 - filled);
   const step = currentStep(run);
-  return `dagu · ${runLabel(run, slug)} ${bar} ${done}/${nodes.length}${step ? ` ${plain(step)}` : ""} ${plain(run.statusLabel)}`;
+  const status = `dagu · ${runLabel(run, slug)} ${bar} ${done}/${nodes.length}${step ? ` ${plain(step)}` : ""} ${plain(run.statusLabel)}`;
+  return activity ? `${status} · ${plain(activity)}` : status;
 }
 
 export interface Notification {
