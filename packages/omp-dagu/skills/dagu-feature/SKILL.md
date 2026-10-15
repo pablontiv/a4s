@@ -17,14 +17,16 @@ flowchart LR
     C --> N[dependency_review]
     N -->|new dependencies: push-back| T
     N -->|reviewed dependencies| D[rebase]
-    D --> E[gate]
+    D --> R[conflict_review<br/>human.task]
+    R -->|conflict: push-back| B
+    R -->|clean rebase| E[gate]
     E --> F[push]
     F --> G[pr]
     G --> H[required_check]
     H --> I[auto_merge]
     I --> J[await_merge<br/>human.task]
     J -->|MERGED: complete| K[close_gate]
-    J -->|BEHIND: push-back| D
+    J -->|BEHIND or DIRTY: push-back| D
     K --> L[handler_on.exit cleanup]
 ```
 
@@ -187,18 +189,23 @@ Missing REVIEW with `no` fails before implementation. `yes` enqueues the absolut
 repository `poc.yaml` with ISSUE and QUESTION and ends the feature run.
 
 `checkpoint_push` compares dependencies and package/app directories against the
-entire BASE_SHA tree, using the PoC-proven manifest extractor. A new identity
-causes `dependency_review` to push back to `triage` automatically through the wait
-handler, protected by its current iteration. Completing triage records that exact
-dependency set as reviewed; changing it again triggers another review. This net
-is a complementary signal, not a substitute for triage or its reviewer. The
-detector covers package.json, Go, Python, Chart/Flux/Compose and package roots;
-undeclared external CLI/runtime behavior still requires triage judgment.
-The wait handler launches a bounded dispatcher because Dagu persists Waiting only
-after the handler exits. Its output is in
-`<git-dir>/dagu-feature/runs/<RUN>/dependency-transition.log`. If dispatch fails,
-the run remains safely at `dependency_review`; inspect the log and use the same
-protected push-back (or complete for a reviewed set) against that waiting task.
+merge base of `HEAD` and `origin/$BASE_BRANCH`, using the PoC-proven manifest
+extractor. Dependencies already merged into the base branch belong to that base.
+A new identity causes `dependency_review` to push back to `triage` automatically
+through the wait handler. Completing triage records that exact dependency set as
+reviewed; changing it again triggers another review. This net is a complementary
+signal to triage and its reviewer. The detector covers package.json, Go, Python,
+Chart/Flux/Compose and package roots; undeclared external CLI/runtime behavior
+still requires triage judgment.
+
+The wait handler launches one bounded dispatcher for `dependency_review` and
+`conflict_review` because Dagu persists Waiting only after the handler exits.
+Before a push-back, the dispatcher reads `push-back iteration: <n>` from
+`dagu status`; this is one run-wide counter shared by every `human.task`, and
+defaults to `0` when absent. Dispatcher output is in
+`<git-dir>/dagu-feature/runs/<RUN>/dependency-transition.log` or
+`conflict-transition.log`. A failed dispatch leaves the corresponding review
+step waiting; inspect its log and apply the same iteration-protected transition.
 
 ## Feasibility PoC
 
@@ -281,15 +288,27 @@ experiments can wait concurrently.
 When `start_gate` succeeds, the run enters `Waiting` at `implement`, and the queue slot is released.
 
 1. Work only in `WORKTREE` on `BRANCH`.
-2. Leave exactly **one** commit on top of `origin/$BASE_BRANCH`, and a clean worktree. `rebase` fails when the branch has any other number of commits. Squash before completing if you made several.
-3. Optionally run the gate yourself first, from the worktree.
-4. Complete the checkpoint:
+2. Leave exactly **one** commit on `BRANCH`, rebased onto `origin/$BASE_BRANCH`,
+   with conflicts resolved and a clean worktree. Squash multiple commits before
+   completing the checkpoint.
+3. After a conflict push-back, read the paths from
+   `<git-dir>/dagu-feature/runs/<RUN>/conflict-files`, rebase the single commit
+   onto `origin/$BASE_BRANCH`, resolve those paths, and leave the worktree clean.
+4. Optionally run the gate yourself first, from the worktree.
+5. Complete the checkpoint:
 
    ```sh
    dagu human-task complete --run-id <id> --step implement feature
    ```
 
-The run resumes through the queue: `checkpoint_push` → `dependency_review` → `rebase` → `gate` → `push` → `pr` → `required_check` → `auto_merge`. The dependency checkpoint automatically completes or returns to triage. The run then waits at `await_merge`. `pr` creates the PR with `--fill` and the body `Closes #<issue>`, so the commit message becomes the PR title. Write it in the repository's commit convention.
+The run resumes through the queue: `checkpoint_push` → `dependency_review` →
+`rebase` → `conflict_review` → `gate` → `push` → `pr` → `required_check` →
+`auto_merge`. The dependency checkpoint automatically completes or returns to
+triage. A clean rebase makes the wait handler complete `conflict_review`; a
+conflicting rebase records the conflict paths, aborts to a clean worktree, and
+pushes back to `implement`. The run then waits at `await_merge`. `pr` creates the
+PR with `--fill` and the body `Closes #<issue>`, so the commit message becomes
+the PR title. Write it in the repository's commit convention.
 
 ## Reconcile `await_merge`
 
@@ -302,11 +321,11 @@ The scheduled DAG owns `await_merge` transitions. Each row is a step depending o
 | Step | Observation precondition | Transition |
 |---|---|---|
 | `complete` | `await_merge MERGED/…` | Completes the checkpoint. `close_gate` verifies the merged head, the successful required check, and the tested SHA, then fast-forwards the primary checkout. |
-| `push_back` | `await_merge OPEN/BEHIND/…` | Pushes back with the observed `--expected-iteration`. The same run resumes at `rebase`, reruns the gate, pushes the tested SHA, waits for the required check, and re-enables guarded auto-merge. |
+| `push_back` | `await_merge OPEN/` with `BEHIND` or `DIRTY` | Pushes back with the observed `--expected-iteration`. The same run resumes at `rebase`, continues through `conflict_review`, reruns the gate, pushes the tested SHA, waits for the required check, and re-enables guarded auto-merge. |
 | `keep_waiting` | `await_merge OPEN/` with `CLEAN`, `BLOCKED`, `UNSTABLE` or `UNKNOWN`, and auto-merge active | Records that the PR remains waiting for a later tick. `UNSTABLE` can include a pending or failing non-required check; auto-merge waits for required checks. |
-| `unreconciled` | `await_merge CLOSED/…`; `OPEN/` with `DIRTY`, `DRAFT` or `HAS_HOOKS`; or `OPEN/` with `CLEAN`, `BLOCKED`, `UNSTABLE` or `UNKNOWN` and auto-merge inactive | Fails the sub-run with the observation on stderr while the feature run remains waiting. The sub-run logs provide the failure evidence. |
+| `unreconciled` | `await_merge CLOSED/…`; `OPEN/` with `DRAFT` or `HAS_HOOKS`; or `OPEN/` with `CLEAN`, `BLOCKED`, `UNSTABLE` or `UNKNOWN` and auto-merge inactive | Fails the sub-run with the observation on stderr while the feature run remains waiting. The sub-run logs provide the failure evidence. |
 
-`observe` reads `push-back iteration: <n>` from the status output, defaulting to `0` when that line is absent. Every push-back increments it. The expected-iteration guard makes a stale observation fail with a conflict while preserving the checkpoint.
+`observe` reads `push-back iteration: <n>` from the status output, defaulting to `0` when that line is absent. The value is the run-wide counter shared by all `human.task` steps, and every push-back increments it. The expected-iteration guard makes a stale observation fail with a conflict while preserving the checkpoint.
 
 The `orphan` step selects `triage` or `implement` observations whose issue is `CLOSED`. It reports `ORPHAN <repo>#<issue> <run> <step> issue=CLOSED closed_at=<timestamp>` and leaves the run unchanged. Inspect the scheduled `reconcile` history and its sub-run logs for transitions, unreconciled states, and orphan reports.
 

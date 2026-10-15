@@ -71,7 +71,7 @@ steps:
     depends: observe
     preconditions:
       - condition: "${steps.observe.outputs.observation}"
-        expected: "re:^await_merge OPEN/BEHIND/"
+        expected: "re:^await_merge OPEN/(BEHIND|DIRTY)/"
     run: dagu human-task push-back feature --run-id "${steps.observe.outputs.run}" --step await_merge --expected-iteration "${steps.observe.outputs.iteration}"
 
   - id: keep_waiting
@@ -85,7 +85,7 @@ steps:
     depends: observe
     preconditions:
       - condition: "${steps.observe.outputs.observation}"
-        expected: "re:^await_merge (CLOSED/|OPEN/(DIRTY|DRAFT|HAS_HOOKS)/|OPEN/(CLEAN|BLOCKED|UNSTABLE|UNKNOWN)/false$)"
+        expected: "re:^await_merge (CLOSED/|OPEN/(DRAFT|HAS_HOOKS)/|OPEN/(CLEAN|BLOCKED|UNSTABLE|UNKNOWN)/false$)"
     run: |
       printf 'RECONCILIATION FAILED: %s %s\n' "${steps.observe.outputs.run}" "${steps.observe.outputs.observation}" >&2
       exit 1
