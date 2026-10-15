@@ -16,6 +16,7 @@ steps:
       for tool in git gh jq dagu; do command -v "$tool" >/dev/null; done
       gh auth status >/dev/null
       test -f "$SKILL_DIR/feature.yaml"
+      test -f "$SKILL_DIR/poc.yaml"
       test "$(git -C "$PRIMARY" rev-parse --show-toplevel)" = "$PRIMARY"
       test "$(git -C "$PRIMARY" rev-parse --absolute-git-dir)" = "$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-common-dir)"
       cd "$PRIMARY"
@@ -57,6 +58,7 @@ steps:
         REQUIRED_CHECK: GitHub check the default branch will require (strict).
         Required now: ${steps.detect.outputs.REQUIRED_NOW}.
         Checks on the last merged PR: ${steps.detect.outputs.RECENT_CHECKS}.
+        TEST_PATHS: Bash ERE matching this repository's test paths (for a4s: (^|/)(test|tests)/|\.test\.(ts|cjs)$).
       form:
         type: object
         additionalProperties: false
@@ -67,7 +69,10 @@ steps:
           REQUIRED_CHECK:
             type: string
             minLength: 1
-        required: [GATE, REQUIRED_CHECK]
+          TEST_PATHS:
+            type: string
+            minLength: 1
+        required: [GATE, REQUIRED_CHECK, TEST_PATHS]
 
   - id: worktrees
     depends: answers
@@ -87,6 +92,7 @@ steps:
       - REPO: ${steps.detect.outputs.REPO}
       - BASE_BRANCH: ${steps.detect.outputs.BASE_BRANCH}
       - STAGE: ${steps.detect.outputs.STAGE}
+      - TEST_PATHS: ${steps.answers.outputs.TEST_PATHS}
     run: |
       set -euo pipefail
       umask 0022
@@ -102,6 +108,16 @@ steps:
         -n > "$STAGE"
       if grep -n '__[A-Z_]*__' "$STAGE"; then exit 1; fi
       dagu validate "$STAGE"
+      jq -nr --rawfile template "$SKILL_DIR/poc.yaml" \
+        --arg repo "$REPO" --arg base "$BASE_BRANCH" \
+        --arg primary "$PRIMARY" --arg tests "$TEST_PATHS" \
+        '$template
+          | gsub("__REPO__"; $repo)
+          | gsub("__BASE_BRANCH__"; $base | tojson)
+          | gsub("__PRIMARY__"; $primary | tojson)
+          | gsub("__TEST_PATHS__"; $tests)' > "$(dirname "$STAGE")/poc.yaml"
+      if grep -n '__[A-Z_]*__' "$(dirname "$STAGE")/poc.yaml"; then exit 1; fi
+      dagu validate "$(dirname "$STAGE")/poc.yaml"
       printf 'stage=%s\n' "$STAGE"
 
   - id: github
@@ -178,5 +194,6 @@ steps:
         --jq '.strict and (.contexts | index(env.REQUIRED_CHECK) != null)')" = true
       git -C "$PRIMARY" check-ignore -q "$PRIMARY/.workspace/worktrees/issue-1"
       dagu validate "$STAGE"
+      dagu validate "$(dirname "$STAGE")/poc.yaml"
       printf 'scheduler=ok\nrepo=%s\nbase_branch=%s\nrequired_check=%s\nstage=%s\n' \
         "$NWO" "$BASE_BRANCH" "$REQUIRED_CHECK" "$STAGE"
