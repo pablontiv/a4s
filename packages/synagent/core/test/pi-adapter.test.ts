@@ -79,13 +79,13 @@ test('Pi adapter: v1 push bidireccional, broadcasts por defecto, orden y dedupe'
     outbound.map(({ from, to, kind, body }) => ({ from, to, kind, body })),
     [
       // default-peer ya es una dirección v1 completa; el token suelto `bob` se cualifica con el proyecto.
-      { from: 'a4s/pi-1', to: 'a4s/claude-1', kind: 'prompt', body: 'hola desde pi' },
-      { from: 'a4s/pi-1', to: 'a4s/bob', kind: 'prompt', body: 'mensaje directo' },
+      { from: 'a4s/pi-1', to: 'a4s/claude-1', kind: 'task.request', body: 'hola desde pi' },
+      { from: 'a4s/pi-1', to: 'a4s/bob', kind: 'task.request', body: 'mensaje directo' },
     ],
   )
 
   // Entrada directa: dedupe por id, filtro por identidad y rechazo de inválidos.
-  const incoming = message({ id: 'incoming-1', to: 'a4s/pi-1', kind: 'prompt', body: 'hola desde claude' })
+  const incoming = message({ id: 'incoming-1', to: 'a4s/pi-1', kind: 'task.request', body: 'hola desde claude' })
   await publish(publisher, DIRECT_TOPIC, serialize(incoming))
   await publish(publisher, DIRECT_TOPIC, serialize(incoming))
   await publish(publisher, DIRECT_TOPIC, serialize(message({ id: 'not-mine', to: 'a4s/other' })))
@@ -119,13 +119,20 @@ test('Pi adapter: v1 push bidireccional, broadcasts por defecto, orden y dedupe'
   await harness.settle()
 
   harness.idle = false
-  // steer a broadcast se rechaza en recepción (precisión F) y NO se entrega.
-  await publish(publisher, PROJECT_TOPIC, serialize(message({ id: 'steer-bcast', to: 'a4s/all', kind: 'steer', body: 'no' })))
+  // task.redirect a broadcast se rechaza; directo interrumpe el turno.
+  await publish(publisher, PROJECT_TOPIC, serialize(message({
+    id: 'redirect-bcast', to: 'a4s/all', kind: 'task.redirect', body: 'no',
+  })))
   await waitFor(() =>
-    harness.notifications.some(({ message, type }) => type === 'warning' && message.includes('rejected broadcast steer')),
+    harness.notifications.some(({ message, type }) =>
+      type === 'warning' && message.includes('rejected broadcast task.redirect')),
   )
-  await publish(publisher, DIRECT_TOPIC, serialize(message({ id: 'steer-1', to: 'a4s/pi-1', kind: 'steer', body: 'corrige' })))
-  await publish(publisher, DIRECT_TOPIC, serialize(message({ id: 'follow-1', to: 'a4s/pi-1', kind: 'notify', body: 'termina' })))
+  await publish(publisher, DIRECT_TOPIC, serialize(message({
+    id: 'redirect-1', to: 'a4s/pi-1', kind: 'task.redirect', body: 'corrige',
+  })))
+  await publish(publisher, DIRECT_TOPIC, serialize(message({
+    id: 'follow-1', to: 'a4s/pi-1', kind: 'note.published', body: 'termina',
+  })))
   await waitFor(() => harness.received.length === 4)
   await harness.confirmDelivery(3)
   await harness.settle()
@@ -180,7 +187,7 @@ test('Pi adapter: v1 push bidireccional, broadcasts por defecto, orden y dedupe'
   assert.equal(harness.received.length, 7)
   assert.deepEqual(
     harness.entries.filter(entry => entry.customType === 'synagent-delivered').map(entry => entry.data.id),
-    ['incoming-1', 'project-1', 'global-default', 'steer-1', 'follow-1', 'global-on', 'new-instance', 'queued-before-shutdown'],
+    ['incoming-1', 'project-1', 'global-default', 'redirect-1', 'follow-1', 'global-on', 'new-instance', 'queued-before-shutdown'],
   )
 
   // Reanudación durable: misma sesión → mismo clientId → recibe lo encolado offline (deduplicando).
@@ -203,11 +210,17 @@ test('Pi adapter: v1 push bidireccional, broadcasts por defecto, orden y dedupe'
   assert.equal(restored.received.length, 1)
 })
 
-test('Pi adapter records the frozen assistant result for each confirmed delivery', async t => {
+test('Pi adapter publishes task events with frozen assistant completion text', async t => {
   const { broker, server, url } = await startBroker()
   const publisher = await connectClient(url, 'pi-result-publisher')
   const stateRoot = mkdtempSync(join(tmpdir(), 'synagent-pi-result-'))
   const topic = 'synagent/v1/a4s/pi-result'
+  const senderTopic = 'synagent/v1/a4s/claude-1'
+  const events: CanonicalMessage[] = []
+  publisher.on('message', (_topic: string, payload: Buffer) => {
+    events.push(JSON.parse(payload.toString()) as CanonicalMessage)
+  })
+  await subscribe(publisher, senderTopic)
   const harness = createHarness({
     'a4s.synagent.broker-url': url,
   }, [], 'pi-result', undefined, process.cwd(), { env: { A4S_STATE_ROOT: stateRoot } })
@@ -225,6 +238,8 @@ test('Pi adapter records the frozen assistant result for each confirmed delivery
   await publish(publisher, topic, serialize(message({ id: 'result-tools', to: 'a4s/pi-result' })))
   await waitFor(() => harness.received.length === 1)
   await harness.confirmDelivery()
+  await waitFor(() => events.some(event =>
+    event.kind === 'task.delivered' && event.causation_id === 'result-tools'))
   await harness.messageEnd('assistant', [
     { type: 'text', text: 'PRE_TOOL_RESULT' },
     { type: 'toolCall' },
@@ -234,17 +249,25 @@ test('Pi adapter records the frozen assistant result for each confirmed delivery
   await harness.messageEnd('toolResult', [{ type: 'text', text: 'TOOL_TWO' }])
   await harness.messageEnd('assistant', '  FINAL_RESULT  \n')
   await harness.settle()
+  await waitFor(() => events.some(event =>
+    event.kind === 'task.completed' && event.causation_id === 'result-tools'))
 
   await publish(publisher, topic, serialize(message({ id: 'result-empty', to: 'a4s/pi-result' })))
   await waitFor(() => harness.received.length === 2)
   await harness.confirmDelivery()
+  await waitFor(() => events.some(event =>
+    event.kind === 'task.delivered' && event.causation_id === 'result-empty'))
   await harness.messageEnd('assistant', [{ type: 'toolCall' }])
   await harness.messageEnd('assistant', [{ type: 'text', text: ' \n ' }])
   await harness.settle()
+  await waitFor(() => events.some(event =>
+    event.kind === 'task.completed' && event.causation_id === 'result-empty'))
 
   await publish(publisher, topic, serialize(message({ id: 'result-frozen', to: 'a4s/pi-result' })))
   await waitFor(() => harness.received.length === 3)
   await harness.confirmDelivery()
+  await waitFor(() => events.some(event =>
+    event.kind === 'task.delivered' && event.causation_id === 'result-frozen'))
   await harness.messageEnd('assistant', [
     { type: 'text', text: 'PRE_TOOL_FROZEN' },
     { type: 'toolCall' },
@@ -254,6 +277,8 @@ test('Pi adapter records the frozen assistant result for each confirmed delivery
   await harness.messageStart('separate user follow-up')
   await harness.messageEnd('assistant', [{ type: 'text', text: 'USER_AFTER_FROZEN' }])
   await harness.settle()
+  await waitFor(() => events.some(event =>
+    event.kind === 'task.completed' && event.causation_id === 'result-frozen'))
   await harness.shutdown()
 
   const settled = readFileSync(findOperationalLog(stateRoot), 'utf8')
@@ -265,6 +290,95 @@ test('Pi adapter records the frozen assistant result for each confirmed delivery
     undefined,
     'FINAL_FROZEN',
   ])
+  assert.deepEqual(events.map(({ kind, body, correlation_id, causation_id }) => ({
+    kind, body, correlation_id, causation_id,
+  })), [
+    {
+      kind: 'task.delivered', body: '', correlation_id: 'result-tools', causation_id: 'result-tools',
+    },
+    {
+      kind: 'task.completed',
+      body: '  FINAL_RESULT  \n',
+      correlation_id: 'result-tools',
+      causation_id: 'result-tools',
+    },
+    {
+      kind: 'task.delivered', body: '', correlation_id: 'result-empty', causation_id: 'result-empty',
+    },
+    {
+      kind: 'task.completed', body: '', correlation_id: 'result-empty', causation_id: 'result-empty',
+    },
+    {
+      kind: 'task.delivered', body: '', correlation_id: 'result-frozen', causation_id: 'result-frozen',
+    },
+    {
+      kind: 'task.completed',
+      body: 'FINAL_FROZEN',
+      correlation_id: 'result-frozen',
+      causation_id: 'result-frozen',
+    },
+  ])
+})
+
+test('Pi adapter mutual task requests terminate after delivered and completed events', async t => {
+  const { broker, server, url } = await startBroker()
+  const observer = await connectClient(url, 'pi-mutual-observer')
+  const messages: CanonicalMessage[] = []
+  observer.on('message', (_topic: string, payload: Buffer) => {
+    messages.push(JSON.parse(payload.toString()) as CanonicalMessage)
+  })
+  await subscribe(observer, 'synagent/#')
+  const a = createHarness({ 'a4s.synagent.broker-url': url }, [], 'mutual-a')
+  const b = createHarness({ 'a4s.synagent.broker-url': url }, [], 'mutual-b')
+  t.after(async () => {
+    await a.shutdown()
+    await b.shutdown()
+    await end(observer)
+    await closeServer(server)
+    await closeBroker(broker)
+  })
+
+  await Promise.all([a.start(), b.start()])
+  await waitFor(() =>
+    a.notifications.some(({ message }) => message.includes('synagent/v1/a4s/mutual-a'))
+    && b.notifications.some(({ message }) => message.includes('synagent/v1/a4s/mutual-b')))
+
+  const [sentA, sentB] = await Promise.all([
+    a.tool('synagent_send', { to: 'a4s/mutual-b', body: 'task from A' }),
+    b.tool('synagent_send', { to: 'a4s/mutual-a', body: 'task from B' }),
+  ])
+  assert.notEqual(sentA.isError, true)
+  assert.notEqual(sentB.isError, true)
+  await waitFor(() => a.received.length === 1 && b.received.length === 1)
+
+  await Promise.all([a.confirmDelivery(), b.confirmDelivery()])
+  await Promise.all([
+    a.messageEnd('assistant', 'completed by A'),
+    b.messageEnd('assistant', 'completed by B'),
+  ])
+  await Promise.all([a.settle(), b.settle()])
+  await waitFor(() => a.received.length === 2 && b.received.length === 2)
+
+  await Promise.all([a.confirmDelivery(), b.confirmDelivery()])
+  await Promise.all([
+    a.messageEnd('assistant', 'event observed by A'),
+    b.messageEnd('assistant', 'event observed by B'),
+  ])
+  await Promise.all([a.settle(), b.settle()])
+  await waitFor(() => messages.length === 6)
+
+  const commands = messages.filter(({ kind }) => kind === 'task.request')
+  const delivered = messages.filter(({ kind }) => kind === 'task.delivered')
+  const completed = messages.filter(({ kind }) => kind === 'task.completed')
+  assert.equal(commands.length, 2)
+  assert.equal(delivered.length, 2)
+  assert.equal(completed.length, 2)
+  assert.equal(messages.length, 6)
+  for (const event of [...delivered, ...completed]) {
+    const command = commands.find(({ id }) => id === event.causation_id)
+    assert.ok(command)
+    assert.equal(event.correlation_id, command.id)
+  }
 })
 
 test('Pi adapter gives concurrent sessions distinct durable MQTT identities', async t => {
@@ -422,7 +536,7 @@ test('Pi adapter preserves FIFO across a late start and supports explicit recove
   await harness.settle()
   harness.idle = false
   await publish(publisher, topic, serialize(message({
-    id: 'busy-without-settle', to: 'a4s/pi-timeout', kind: 'steer',
+    id: 'busy-without-settle', to: 'a4s/pi-timeout', kind: 'task.redirect',
   })))
   await publish(publisher, topic, serialize(message({ id: 'after-busy-timeout', to: 'a4s/pi-timeout' })))
   await harness.settle()
@@ -508,7 +622,12 @@ test('Pi adapter uses session cwd origin and native mixed-case identity, ignores
   await subscribe(subscriber, 'synagent/v1/Repo.Name/all')
   const toolSchema = harness.toolSchemas.get('synagent_send')
   assert.ok(toolSchema)
-  assert.equal(Check(toolSchema, { to: 'Repo.Name/Peer.Agent', body: 'valid', kind: 'result' }), true)
+  assert.equal(Check(toolSchema, {
+    to: 'Repo.Name/Peer.Agent', body: 'valid', kind: 'task.request',
+  }), true)
+  assert.equal(Check(toolSchema, {
+    to: 'Repo.Name/Peer.Agent', body: 'invalid', kind: 'task.completed',
+  }), false)
   assert.equal(Check(toolSchema, { to: 'Repo.Name/Peer.Agent', body: 'invalid', kind: 'bogus' }), false)
 
   const invalid = await harness.tool('synagent_send', { to: 'not/an/address/at/all', body: 'invalid' })
@@ -516,20 +635,27 @@ test('Pi adapter uses session cwd origin and native mixed-case identity, ignores
   const sent = await harness.tool('synagent_send', {
     to: 'Repo.Name/Peer.Agent',
     body: 'intent message',
-    kind: 'result',
+    kind: 'task.request',
     reply_to: 'request-1',
+    correlation_id: 'root-1',
+    causation_id: 'cause-1',
   })
   assert.notEqual(sent.isError, true)
   assert.match(sent.content[0]?.text ?? '', /^Synagent message sent:/)
   await waitFor(() => outbound.length === 1)
+  const firstOutbound = outbound[0]
+  assert.ok(firstOutbound)
+  const { from, to, kind, body, reply_to, correlation_id, causation_id } = firstOutbound
   assert.deepEqual(
-    (({ from, to, kind, body, reply_to }) => ({ from, to, kind, body, reply_to }))(outbound[0] as CanonicalMessage),
+    { from, to, kind, body, reply_to, correlation_id, causation_id },
     {
       from: 'Repo.Name/Native.Session-A',
       to: 'Repo.Name/Peer.Agent',
-      kind: 'result',
+      kind: 'task.request',
       body: 'intent message',
       reply_to: 'request-1',
+      correlation_id: 'root-1',
+      causation_id: 'cause-1',
     },
   )
   const broadcast = await harness.tool('synagent_send', {
@@ -665,7 +791,7 @@ test('Pi adapter records focused RCA events without message or transport data', 
   const sent = await harness.tool('synagent_send', {
     to: 'Sensitive.Project/Peer.Private',
     body: 'outbound prompt body private',
-    kind: 'notify',
+    kind: 'note.published',
   })
   assert.notEqual(sent.isError, true)
   const invalidSend = await harness.tool('synagent_send', {

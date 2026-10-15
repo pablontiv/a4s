@@ -26,7 +26,7 @@ function field(value: Envelope, key: string): string | undefined {
   return typeof text === 'string' && text.length > 0 ? text : undefined
 }
 
-/** Connected components of id/reply_to and correlation_id, in receipt order. */
+/** Connected components of id/reply_to/causation_id and correlation_id, in receipt order. */
 export function groupObservations(records: readonly Observation[]): Observation[][] {
   const parents = records.map((_, index) => index)
   const owners = new Map<string, number>()
@@ -42,7 +42,7 @@ export function groupObservations(records: readonly Observation[]): Observation[
   records.forEach((record, index) => {
     const message = envelope(record)
     const keys: string[] = []
-    for (const name of ['id', 'reply_to', 'correlation_id']) {
+    for (const name of ['id', 'reply_to', 'causation_id', 'correlation_id']) {
       const value = field(message, name)
       if (value) keys.push(`${name === 'correlation_id' ? 'correlation' : 'message'}:${value}`)
     }
@@ -78,7 +78,7 @@ export function renderObservations(records: readonly Observation[]): string {
     lines.push('', `Chain ${label}${correlations.map(id => ` correlation_id=${JSON.stringify(id)}`).join('')}`)
     chain.forEach((record, messageIndex) => {
       const message = messages[messageIndex]!
-      const metadata = ['id', 'reply_to', 'correlation_id', 'kind', 'from', 'to']
+      const metadata = ['id', 'reply_to', 'correlation_id', 'causation_id', 'kind', 'from', 'to']
         .flatMap(key => {
           const value = field(message, key)
           return value === undefined ? [] : [`${key}=${JSON.stringify(value)}`]

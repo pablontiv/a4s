@@ -35,9 +35,23 @@ adaptadores existentes.
 
 ## Contrato canónico
 
-Cada mensaje lleva `id`, `from`, `to`, `kind` (`prompt | steer | result |
-notify | ack`), `body`, `reply_to?` y `ts`. `from` y `to` son direcciones v1;
-`reply_to` es un id de mensaje, no una dirección.
+Cada sobre lleva `id`, `from`, `to`, `kind`, `body`, `reply_to?`,
+`correlation_id?`, `causation_id?` y `ts`. `from` y `to` son direcciones v1.
+`reply_to`, `correlation_id` y `causation_id` contienen IDs de mensajes:
+
+| Clase | Kinds | Emisor |
+| --- | --- | --- |
+| Comando | `task.request`, `task.redirect` | usuario o LLM mediante `synagent_send` |
+| Evento de tarea | `task.delivered`, `task.completed` | adaptador de destino |
+| Evento informativo | `note.published` | usuario o LLM mediante `synagent_send` |
+
+Un comando raíz lleva su propio `id` como `correlation_id`. El adaptador de
+destino publica `task.delivered` al confirmar el marcador de entrega y
+`task.completed` al asentarse el turno. Ambos vuelven al `from` del comando,
+conservan el ID raíz en `correlation_id` y usan el ID del comando como
+`causation_id`. Solo los comandos producen esos eventos. Los eventos se
+reservan y deduplican, pero nunca producen otros eventos; `task.delivered` es
+un acuse mecánico y `task.completed` se inyecta al emisor como un turno.
 
 ## Direccionamiento v1 (ADR 0068; identidad por ADR 0069)
 
@@ -70,8 +84,8 @@ git remote add origin git@github.com:Example/Project.git
   un adaptador por sesión, así que persistir el id haría colisionar sesiones
   distintas. El id no es el tipo de agente: puede haber varias instancias Claude
   o Pi por proyecto.
-- **steer** solo tiene sentido a destino directo; un `steer` a broadcast se
-  rechaza en el envío y en la recepción.
+- **`task.redirect`** solo tiene sentido a destino directo; un redirect a
+  broadcast se rechaza en el envío y en la recepción.
 - **global** está activo por defecto: ambos adaptadores reciben
   `synagent/v1/all`; se puede desactivar explícitamente con su setting `global`.
 - Los adaptadores solo se suscriben a topics v1. No crean ni usan suscripciones
@@ -106,12 +120,13 @@ claude --plugin-dir packages/synagent/core/adapters/claude
 - **JALAR (bus → Claude):** spawnea `bridge/bridge-sub.cjs` con dos clientes —
   uno durable (`clean=false`) suscrito a su buzón directo `synagent/v1/<proyecto>/<instancia>`
   y uno transitorio (`clean=true`) a los broadcasts de proyecto
-  `synagent/v1/<proyecto>/all` y global `synagent/v1/all`. Cada mensaje entrante
-  se inyecta como un turno vía `$.prompt.submit`. Deduplica por `id`.
+  `synagent/v1/<proyecto>/all` y global `synagent/v1/all`. Reserva y deduplica
+  cada `id`; consume `task.delivered` sin crear un turno e inyecta los demás
+  mensajes, incluido `task.completed`, mediante `$.prompt.submit`.
 - **ENVIAR (Claude → bus):** la herramienta `synagent_send` (invocada por el
-  modelo) publica un mensaje canónico v1 al destino. `/mq-send <to>: texto` queda
-  como atajo de depuración. Si la identidad no se resuelve, el adaptador queda
-  inactivo y pide configurar el proyecto.
+  modelo) publica `task.request`, `task.redirect` o `note.published`.
+  `/mq-send <to>: texto` publica un `task.request` como atajo de depuración. Si la identidad
+  no se resuelve, el adaptador queda inactivo y pide configurar el proyecto.
 
 Los bridges viven en `adapters/claude/bridge/` y se resuelven desde
 `$.plugin.root`, por lo que el plugin es autocontenido. Tiene su propio
@@ -189,10 +204,12 @@ con la remediación correspondiente.
 
 ### Envío y comandos Pi
 
-El modelo usa la herramienta `synagent_send` con `to`, `body`, `kind?` y
-`reply_to?` cuando el usuario pide mensajear a otro agente o proyecto. Conserva
-mayúsculas y puntos en destinos válidos. `/mq-send` es solo un atajo explícito
-de depuración:
+El modelo usa `synagent_send` con `to`, `body`, `kind?`, `reply_to?`,
+`correlation_id?` y `causation_id?` cuando el usuario pide mensajear a otro
+agente o proyecto. El kind predeterminado es `task.request`; también admite
+`task.redirect` y `note.published`. Los eventos de tarea quedan reservados al
+adaptador. Conserva mayúsculas y puntos en destinos válidos. `/mq-send` es solo
+un atajo explícito de depuración:
 
 ```text
 /mq-send <to>: texto        (debug; to = dirección v1, o token cualificado con tu proyecto)
@@ -264,21 +281,26 @@ cada token.
 
 ### Entrega en Pi
 
-Los mensajes recibidos se validan y se encolan en orden de llegada. Como la API
-pública `sendUserMessage` de Pi retorna `void`, el adaptador no finge esperar su
-procesamiento interno: invoca como máximo un mensaje, confirma su aceptación
-al observar el `message_start` de usuario con su marcador y libera el siguiente
-solo cuando Pi emite `agent_settled`. Un turno ajeno no puede liberar esa
-barrera. El harness conserva la autoridad sobre la planificación de turnos.
+Los mensajes recibidos se validan y se encolan en orden de llegada.
+`task.delivered` se consume sin abrir un turno; `task.completed`,
+`note.published` y los comandos se inyectan. Como la API pública
+`sendUserMessage` de Pi retorna `void`, el adaptador invoca como máximo un
+mensaje, confirma su aceptación al observar el `message_start` de usuario con
+su marcador y libera el siguiente solo cuando Pi emite `agent_settled`. Un
+turno ajeno no puede liberar esa barrera.
 
-Para cada entrega confirmada, el adaptador captura en `message_end` el último
-contenido assistant con bloques `text` no vacíos. Un texto previo a una tool se
-reemplaza por el texto final posterior; `toolCall`, `thinking` y `toolResult` no
-son resultados. El filtro de vacío no recorta el contenido conservado. La
-captura se asocia al ID, generación, token y marcador de esa entrega, y se
-congela en el siguiente `message_start` de usuario. Por eso un `followUp`
-procesado en el mismo ciclo no contamina el resultado que `agent_settled`
-entrega al motor. Un resultado sin texto queda sin `a4s.delivery.text`.
+Para cada entrega confirmada, el motor compartido captura en `message_end` el
+último contenido assistant con bloques `text` no vacíos. Un texto previo a una
+tool se reemplaza por el texto final posterior; `toolCall`, `thinking` y
+`toolResult` no son resultados. El filtro de vacío conserva el contenido
+exacto. La captura se asocia al ID, generación, token y marcador, y se congela
+en el siguiente `message_start` de usuario. Por eso un `followUp` procesado en
+el mismo ciclo no contamina el resultado.
+
+Cuando la entrega es un comando, la confirmación publica `task.delivered` y el
+asentamiento publica `task.completed` con el texto capturado como `body`. Una
+entrega sin texto produce un body vacío. Entregar un evento no publica ningún
+evento adicional.
 
 Si una entrega no alcanza `message_start`, o una ya aceptada no se asienta, en
 30 segundos mantiene la barrera y muestra una advertencia. Esto también cubre
@@ -289,8 +311,8 @@ adaptador reserva cada `id` antes de encolarlo y conserva los últimos 1000 IDs
 en entradas privadas de la sesión:
 
 - si Pi está idle, inicia un turno normal;
-- `kind=steer` interrumpe un turno activo con `deliverAs: "steer"`;
-- los demás mensajes se encolan con `deliverAs: "followUp"`.
+- `kind=task.redirect` interrumpe un turno activo con `deliverAs: "steer"`;
+- los demás mensajes inyectables se encolan con `deliverAs: "followUp"`.
 
 La entrega al modelo es **at-most-once**. Puede perderse un mensaje si el
 proceso cae después de reservar su ID y antes de entregarlo.
@@ -335,9 +357,13 @@ El adaptador independiente vive en `adapters/omp/index.ts`. El manifiesto del
 paquete declara `omp.extensions: ["./adapters/omp/index.ts"]` para cargarlo en
 omp; Pi conserva su propia entrada `pi.extensions`.
 
-La entrega libera el siguiente mensaje cuando omp emite `agent_end`, salvo
-que el evento indique `willContinue: true`. El adaptador comparte el motor de
-sesión con Pi, pero usa las señales y la configuración propias de omp.
+La entrega libera el siguiente mensaje cuando omp emite un `agent_end` terminal;
+`willContinue: true` conserva la barrera. omp usa la misma captura por
+`message_end` que Pi: empieza al confirmar el marcador, conserva el último
+texto assistant no vacío y congela la ventana en el siguiente
+`message_start` de usuario. Por ello publica los mismos `task.delivered` y
+`task.completed` mecánicos con la misma correlación, sin leer el historial de
+la sesión.
 
 El archivo global es `~/.omp/agent/synagent.json` y el archivo de proyecto es
 `<ctx.cwd>/.omp/synagent.json`. Un valor no vacío de `PI_CODING_AGENT_DIR`
@@ -348,9 +374,9 @@ default, en ese orden.
 ## Seguridad
 
 El broker escucha solo en loopback y no implementa auth, TLS ni ACL. Cualquier
-proceso local puede publicar, falsificar `from` y enviar incluso mensajes
-`steer`; esos campos no prueban identidad. Exponer el broker a otra interfaz
-permitiría inyección remota de prompts. Uso remoto requiere añadir
+proceso local puede publicar, falsificar `from` y enviar incluso
+`task.redirect`; esos campos no prueban identidad. Exponer el broker a otra
+interfaz permitiría inyección remota de prompts. Uso remoto requiere añadir
 autenticación, autorización de topics y TLS antes de admitir URLs no locales.
 
 ## Pruebas
@@ -361,23 +387,26 @@ npm run typecheck --workspace @a4s/synagent
 npm test --workspace @a4s/synagent-bus
 ```
 
-La comprobación viva permanente requiere Pi 1.0.3 y credenciales ya disponibles
-para un modelo real. Arranca dos sesiones RPC, un broker propio en `18224` y
-directorios de sesión/estado temporales; carga solo el adaptador del checkout,
-espera cada acuse RPC y no modifica ni copia la configuración o credenciales
-globales:
+La comprobación viva permanente requiere omp 18.11.0, Pi 1.0.3 y las
+credenciales ya disponibles en sus directorios reales. Arranca dos sesiones
+RPC por host y un broker propio en `18326`, con DB
+`/tmp/synagent-impl-126/db`; carga exclusivamente los adaptadores del checkout
+y usa `SYNAGENT_BROKER_URL` sin modificar ni copiar configuración o
+credenciales. Antes de enviar comprueba con `lsof` que cada sesión conecta a
+`18326` y ninguna conecta a `1884`:
 
 ```sh
+SYNAGENT_OMP_MODEL=anthropic/claude-haiku-5-5 \
 SYNAGENT_PI_MODEL=openai-codex/gpt-6.1-sol \
-  npm run verify:pi-delivery-capture --workspace @a4s/synagent
+  npm run verify:delivery-events --workspace @a4s/synagent
 ```
 
-El script ejecuta tres entregas con texto previo, tool bash y texto final. En la
-segunda encola un `followUp` al comenzar la tool y comprueba que el diagnóstico
-conserva `FINAL_124_TWO`, no `USER_AFTER_124_TWO`. También correlaciona el ID
-publicado en el bus, el marcador observado en destino y el hash diagnóstico.
-`SYNAGENT_LIVE_ROOT` conserva la evidencia en una ruta elegida; si se omite, el
-script imprime la ruta temporal que creó.
+Para cada host, el script hace que A envíe un `task.request` real a B, exige una
+tool bash en B y comprueba en el bus `task.delivered` y `task.completed`, su
+`correlation_id`, el body final, la inyección del completed en A y cero llamadas
+de B a `synagent_send`. Después lanza pedidos mutuos y comprueba una secuencia
+finita de dos comandos, dos delivered y dos completed, sin eventos causados por
+eventos. `SYNAGENT_LIVE_ROOT` cambia la raíz de evidencia temporal.
 
 Las pruebas de este workspace incluyen el protocolo compartido, los bridges
 reales y un recorrido MQTT bidireccional del adaptador Pi contra Aedes con el
@@ -386,9 +415,9 @@ bin global empacado y la integración Herdr.
 
 ## Límites actuales
 
-Synagent no ofrece ACK semántico fenceado, replay histórico, event sourcing ni
-alta disponibilidad. MQTT aporta QoS, retención y sesiones persistentes; esas
-garantías no convierten el bus en un log reproducible.
+`task.delivered` confirma que el adaptador de destino aceptó el turno; MQTT
+aporta QoS, retención y sesiones persistentes. Synagent no es un log
+reproducible ni ofrece replay histórico, event sourcing o alta disponibilidad.
 
 ## Observador del bus (CLI de solo lectura)
 
@@ -418,19 +447,21 @@ opciones.
 
 Cada recepción añade una línea JSON con `{topic, received_at, payload}`:
 `received_at` es la hora local ISO 8601 y `payload` es el texto UTF-8 original,
-incluidos sobres desconocidos, `correlation_id` y mensajes que no sean JSON.
+incluidos sobres desconocidos, IDs de correlación/causación y mensajes que no
+sean JSON.
 El archivo se abre en append; uno nuevo se crea con permisos `0600`. Contiene
 el contenido completo del bus, potencialmente privado: el operador elige su
 ruta y retención. La captura comienza al confirmar la suscripción; no recupera
 historial del broker. QoS 1 puede producir recepciones duplicadas, que se
 conservan en el archivo y la vista.
 
-La terminal muestra un snapshot agrupado por enlaces `id`/`reply_to` y por
-`correlation_id` cuando exista. Los enlaces transitivos unen las cadenas,
-incluso si el padre llega después del hijo. Las cadenas se ordenan por su
-primera recepción y los mensajes de cada cadena conservan el orden de
-recepción, sin ordenar por el reloj del emisor. Los mensajes sin enlaces
-tienen su propia cadena; el payload se muestra escapado para la terminal.
+La terminal muestra un snapshot agrupado por enlaces `id`/`reply_to`/
+`causation_id` y por `correlation_id` cuando exista. Los enlaces transitivos
+unen las cadenas, incluso si el padre llega después del hijo. Las cadenas se
+ordenan por su primera recepción y los mensajes de cada cadena conservan el
+orden de recepción, sin ordenar por el reloj del emisor. Los mensajes sin
+enlaces tienen su propia cadena; el payload se muestra escapado para la
+terminal.
 Cada recepción redibuja la vista interactiva; al redirigir stdout se escriben
 snapshots sucesivos. La vista en vivo incluye solo las recepciones de esa
 invocación y conserva sus mensajes en memoria.

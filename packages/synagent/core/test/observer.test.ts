@@ -21,17 +21,18 @@ function observation(message: unknown, index = 0): Observation {
 
 const cli = fileURLToPath(new URL('../observer-cli.ts', import.meta.url))
 
-test('observer groups transitive replies and correlation links while retaining receipt order', () => {
+test('observer groups causal, reply, and correlation links while retaining receipt order', () => {
   const request = observation({ id: 'request', correlation_id: 'operation', body: 'pedido íntegro' }, 0)
   const unrelated = observation({ id: 'elsewhere' }, 1)
-  const reply = observation({ id: 'reply', reply_to: 'request' }, 2)
+  const delivered = observation({ id: 'delivered', causation_id: 'request', correlation_id: 'operation' }, 2)
   const correlated = observation({ id: 'another-request', correlation_id: 'operation' }, 3)
-  const replyToReply = observation({ id: 'final', reply_to: 'reply' }, 4)
-  const records = [request, unrelated, reply, correlated, replyToReply]
-  assert.deepEqual(groupObservations(records), [[request, reply, correlated, replyToReply], [unrelated]])
+  const reply = observation({ id: 'final', reply_to: 'delivered' }, 4)
+  const records = [request, unrelated, delivered, correlated, reply]
+  assert.deepEqual(groupObservations(records), [[request, delivered, correlated, reply], [unrelated]])
   const rendered = renderObservations(records)
-  assert.match(rendered, /Chain id="request" correlation_id="operation"/)
-  assert.ok(rendered.indexOf('id="request"', rendered.indexOf('topic=')) < rendered.indexOf('id="reply"'))
+  assert.match(rendered, /Chain id=\"request\" correlation_id=\"operation\"/)
+  assert.ok(rendered.indexOf('id=\"request\"', rendered.indexOf('topic=')) < rendered.indexOf('id=\"delivered\"'))
+  assert.match(rendered, /causation_id=\"request\"/)
   assert.match(rendered, /pedido íntegro/)
 })
 

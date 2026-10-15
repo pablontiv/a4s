@@ -20,15 +20,15 @@ import {
   directAddress,
   instanceFromHostSession,
   makeOutbound,
-  MESSAGE_KINDS,
   newId,
   parseCanonical,
   renderForAgent,
   resolveProjectWithSource,
   serialize,
   subscriptions,
+  SYNAGENT_SEND_KINDS,
   type Identity,
-  type MessageKind,
+  type SynagentSendKind,
 } from './adapter'
 
 const DEFAULT_BROKER_URL = 'mqtt://127.0.0.1:1884'
@@ -164,6 +164,7 @@ function runJalar(gen: number, $: EngineInterface, argv: readonly string[], acce
           if (!accept(msg)) continue
           try {
             if (!(await reserve($, msg.id))) continue
+            if (msg.kind === 'task.delivered') continue
             await $.prompt.submit({ text: renderForAgent(msg) })
           } catch (err) {
             void $.ui.status(`synagent: entrega falló (${msg.id}): ${err instanceof Error ? err.message : String(err)}`)
@@ -234,7 +235,8 @@ async function ensureStarted($: EngineInterface, brokerUrl: string, options: Plu
     await $.tool.register({
       name: 'synagent_send',
       description:
-        'Envía un mensaje a otro agente por el bus synagent (v1). Úsalo solo cuando el usuario pida notificar/avisar/mandar algo a otro agente o proyecto. No para conversación con el usuario actual. El "body" debe ser un hecho autoexplicativo.',
+        'Envía un comando de tarea o una nota publicada por el bus synagent (v1). '
+        + 'Úsalo solo cuando el usuario pida mensajear a otro agente o proyecto. El body debe ser autoexplicativo.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -242,9 +244,15 @@ async function ensureStarted($: EngineInterface, brokerUrl: string, options: Plu
             type: 'string',
             description: 'Dirección v1: "<proyecto>/<instancia>" (directo), "<proyecto>/all" (proyecto) o "all" (global).',
           },
-          body: { type: 'string', description: 'Mensaje; un hecho autoexplicativo, no un comando suelto.' },
-          kind: { type: 'string', enum: [...MESSAGE_KINDS], description: 'Tipo; default "prompt". "steer" solo a destino directo.' },
+          body: { type: 'string', description: 'Mensaje autoexplicativo.' },
+          kind: {
+            type: 'string',
+            enum: [...SYNAGENT_SEND_KINDS],
+            description: 'Tipo; default "task.request". "task.redirect" solo a destino directo.',
+          },
           reply_to: { type: 'string', description: 'Opcional: id del mensaje al que respondes.' },
+          correlation_id: { type: 'string', description: 'Opcional: id del comando raíz.' },
+          causation_id: { type: 'string', description: 'Opcional: id del mensaje causante.' },
         },
         required: ['to', 'body'],
       },
@@ -263,20 +271,30 @@ async function ensureStarted($: EngineInterface, brokerUrl: string, options: Plu
 }
 
 // Publica un mensaje canónico v1 con el bridge-pub one-shot. makeOutbound valida
-// dirección y rechaza steer broadcast (lanza). Devuelve el id o un error.
+// dirección y rechaza task.redirect broadcast (lanza). Devuelve el id o un error.
 async function publishV1(
   $: EngineInterface,
   brokerUrl: string,
   self: Identity,
   to: string,
   body: string,
-  kind: MessageKind,
+  kind: SynagentSendKind,
   replyTo: string | undefined,
+  correlationId: string | undefined,
+  causationId: string | undefined,
 ): Promise<{ ok: true; id: string } | { ok: false; error: string }> {
   const now = await $.clock.now()
   let built
   try {
-    built = makeOutbound(self, to, { body, kind, id: newId(directAddress(self), now), ts: now, ...(replyTo ? { replyTo } : {}) })
+    built = makeOutbound(self, to, {
+      body,
+      kind,
+      id: newId(directAddress(self), now),
+      ts: now,
+      ...(replyTo ? { replyTo } : {}),
+      ...(correlationId ? { correlationId } : {}),
+      ...(causationId ? { causationId } : {}),
+    })
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) }
   }
@@ -312,11 +330,15 @@ export const register: Register = (on, options) => {
     if (!identity) return result('error: identidad v1 no resuelta; configura remote.origin.url del repo', true)
     const to = typeof a.to === 'string' ? a.to : ''
     const body = typeof a.body === 'string' ? a.body : ''
-    const kind = typeof a.kind === 'string' ? a.kind : 'prompt'
+    const kind = typeof a.kind === 'string' ? a.kind : 'task.request'
     const replyTo = typeof a.reply_to === 'string' ? a.reply_to : undefined
+    const correlationId = typeof a.correlation_id === 'string' ? a.correlation_id : undefined
+    const causationId = typeof a.causation_id === 'string' ? a.causation_id : undefined
     if (!to || !body) return result('error: synagent_send requiere "to" y "body"', true)
-    if (!MESSAGE_KINDS.includes(kind as MessageKind)) return result(`error: kind inválido: ${kind}`, true)
-    const sent = await publishV1($, brokerUrl, identity, to, body, kind as MessageKind, replyTo)
+    if (!SYNAGENT_SEND_KINDS.includes(kind as SynagentSendKind)) return result(`error: kind inválido: ${kind}`, true)
+    const sent = await publishV1(
+      $, brokerUrl, identity, to, body, kind as SynagentSendKind, replyTo, correlationId, causationId,
+    )
     return result(sent.ok ? `enviado ${sent.id} a ${to} (kind=${kind})` : `error: ${sent.error}`, !sent.ok)
   })
 
@@ -329,7 +351,7 @@ export const register: Register = (on, options) => {
     const to = (m[1] ?? '').trim()
     const body = (m[2] ?? '').trim()
     if (!body) return { text: 'mq-send: falta el texto' }
-    const sent = await publishV1($, brokerUrl, identity, to, body, 'prompt', undefined)
+    const sent = await publishV1($, brokerUrl, identity, to, body, 'task.request', undefined, undefined, undefined)
     return { text: sent.ok ? `mq-send → publicado ${sent.id} a ${to}` : `mq-send ERROR: ${sent.error}` }
   })
 

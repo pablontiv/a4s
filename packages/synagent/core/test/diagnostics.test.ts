@@ -58,7 +58,7 @@ test('diagnostics writes private JSONL with RCA fields and no sensitive input', 
     assert.equal(logger.record('synagent.pi.message.rejected', {
       operation: 'message.receive',
       messageId: rawMessage,
-      messageKind: 'notify',
+      messageKind: 'note.published',
       destinationScope: 'direct',
       queueDepth: 2,
       generation: 4,

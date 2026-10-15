@@ -6,7 +6,7 @@ import { test } from 'node:test'
 
 import { createSynagentOmp } from '../adapters/omp/index.ts'
 import { resolveAgentDir, settingsPaths } from '../adapters/session/settings.ts'
-import { serialize } from '../protocol.ts'
+import { serialize, type CanonicalMessage } from '../protocol.ts'
 import {
   closeBroker,
   closeServer,
@@ -19,9 +19,19 @@ import {
   waitFor,
 } from './support/harness.ts'
 
-test('omp adapter releases the ordering barrier only on a terminal agent_end', async t => {
+test('omp adapter captures completion and releases only on terminal agent_end', async t => {
   const { broker, server, url } = await startBroker()
   const publisher = await connectClient(url, 'omp-adapter-end-publisher')
+  const events: CanonicalMessage[] = []
+  publisher.on('message', (_topic, payload) => {
+    events.push(JSON.parse(payload.toString()) as CanonicalMessage)
+  })
+  await new Promise<void>((resolveSubscription, rejectSubscription) => {
+    publisher.subscribe('synagent/v1/a4s/claude-1', { qos: 1 }, error => {
+      if (error) rejectSubscription(error)
+      else resolveSubscription()
+    })
+  })
   const harness = createHarness(createSynagentOmp, {
     'a4s.synagent.broker-url': url,
   }, [], 'omp-end')
@@ -42,13 +52,25 @@ test('omp adapter releases the ordering barrier only on a terminal agent_end', a
     && harness.entries.some(entry => entry.customType === 'synagent-delivered' && entry.data.id === 'omp-second'),
   )
   await harness.confirmDelivery(0)
+  await waitFor(() => events.some(event =>
+    event.kind === 'task.delivered' && event.causation_id === 'omp-first'))
+  await harness.messageEnd('assistant', [{ type: 'toolCall' }])
+  await harness.messageEnd('assistant', 'OMP_FINAL')
 
-  harness.agentEnd({ type: 'agent_end', messages: [], willContinue: true })
+  await harness.agentEnd({ type: 'agent_end', messages: [], willContinue: true })
   assert.equal(harness.received.length, 1)
+  assert.equal(events.some(event => event.kind === 'task.completed'), false)
 
-  harness.agentEnd({ type: 'agent_end', messages: [], willContinue: undefined })
-  assert.equal(harness.received.length, 2)
+  await harness.agentEnd({ type: 'agent_end', messages: [], willContinue: undefined })
+  await waitFor(() => harness.received.length === 2)
   assert.match(harness.received[1]?.text ?? '', /id omp-second/)
+  await waitFor(() => events.some(event =>
+    event.kind === 'task.completed' && event.causation_id === 'omp-first'))
+  const completed = events.find(event =>
+    event.kind === 'task.completed' && event.causation_id === 'omp-first')
+  assert.ok(completed)
+  assert.equal(completed.body, 'OMP_FINAL')
+  assert.equal(completed.correlation_id, 'omp-first')
 })
 
 test('omp settings use user agent paths with the agent directory override', t => {

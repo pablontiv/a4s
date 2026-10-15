@@ -16,15 +16,27 @@
 // proyecto, del remoto remote.origin.url del repo. El alias humano/tab es solo
 // presentación, nunca identidad.
 //
+// CONTRATO DE MENSAJERÍA: `task.request` y `task.redirect` son comandos. Solo
+// esos kinds producen los eventos mecánicos `task.delivered` y
+// `task.completed`; `note.published` y los dos eventos de task nunca producen
+// eventos adicionales. `correlation_id` identifica el comando raíz y
+// `causation_id` el mensaje que causó el sobre actual.
+//
 // CONTRATO DE ADAPTADOR (extensible a hosts futuros): un adaptador provee un
 // HarnessBinding (identity/reserve/deliver) y un transporte Publish/Subscribe;
 // la lógica de direccionamiento vive en funciones puras (makeOutbound/
 // acceptInbound/resolveProject/instanceFromHostSession) que la suite de
 // conformidad ejercita por igual en todo adaptador.
 
-export const MESSAGE_KINDS = ['prompt', 'steer', 'result', 'notify', 'ack'] as const
+export const COMMAND_KINDS = ['task.request', 'task.redirect'] as const
+export const EVENT_KINDS = ['task.delivered', 'task.completed', 'note.published'] as const
+export const MESSAGE_KINDS = [...COMMAND_KINDS, ...EVENT_KINDS] as const
+export const SYNAGENT_SEND_KINDS = [...COMMAND_KINDS, 'note.published'] as const
 
+export type CommandKind = (typeof COMMAND_KINDS)[number]
+export type EventKind = (typeof EVENT_KINDS)[number]
 export type MessageKind = (typeof MESSAGE_KINDS)[number]
+export type SynagentSendKind = (typeof SYNAGENT_SEND_KINDS)[number]
 
 export interface CanonicalMessage {
   id: string
@@ -33,6 +45,8 @@ export interface CanonicalMessage {
   kind: MessageKind
   body: string
   reply_to?: string
+  correlation_id?: string
+  causation_id?: string
   ts: number
 }
 
@@ -161,9 +175,17 @@ export function isForIdentity(
   return options.global !== false
 }
 
-// steer solo tiene sentido directo: se rechaza en ENVÍO y en RECEPCIÓN.
-export function isBroadcastSteer(message: CanonicalMessage): boolean {
-  return message.kind === 'steer' && isBroadcast(message.to)
+// `task.redirect` solo tiene sentido directo: se rechaza en envío y recepción.
+export function isBroadcastRedirect(message: CanonicalMessage): boolean {
+  return message.kind === 'task.redirect' && isBroadcast(message.to)
+}
+
+export function isCommandKind(kind: MessageKind): kind is CommandKind {
+  return COMMAND_KINDS.includes(kind as CommandKind)
+}
+
+export function isEventKind(kind: MessageKind): kind is EventKind {
+  return EVENT_KINDS.includes(kind as EventKind)
 }
 
 // --- resolución de identidad por sesión nativa (ADR 0069) ----------------------
@@ -229,16 +251,28 @@ export interface Transport {
   readonly subscribe: Subscribe
 }
 
-// Construye un envío v1 (single-write): valida la dirección, rechaza steer a
-// broadcast y arma {topic, message}. Lanza ante dirección inválida o steer broadcast.
+// Construye un envío v1 (single-write): valida la dirección, rechaza
+// `task.redirect` a broadcast y arma {topic, message}. Los comandos raíz se
+// correlacionan con su propio id cuando el caller no aporta otra correlación.
 export function makeOutbound(
   self: Identity,
   to: string,
-  options: { body: string; kind?: MessageKind; replyTo?: string; id: string; ts: number },
+  options: {
+    body: string
+    kind?: MessageKind
+    replyTo?: string
+    correlationId?: string
+    causationId?: string
+    id: string
+    ts: number
+  },
 ): { topic: string; message: CanonicalMessage } {
   if (!isAddress(to)) throw new Error(`dirección v1 inválida: ${to}`)
-  const kind = options.kind ?? 'prompt'
-  if (kind === 'steer' && isBroadcast(to)) throw new Error('steer solo a destino directo, no broadcast')
+  const kind = options.kind ?? 'task.request'
+  if (kind === 'task.redirect' && isBroadcast(to)) {
+    throw new Error('task.redirect solo a destino directo, no broadcast')
+  }
+  const correlationId = options.correlationId ?? (isCommandKind(kind) ? options.id : undefined)
   const message = createCanonical(options.body, {
     id: options.id,
     from: directAddress(self),
@@ -246,11 +280,13 @@ export function makeOutbound(
     ts: options.ts,
     kind,
     ...(options.replyTo ? { reply_to: options.replyTo } : {}),
+    ...(correlationId ? { correlation_id: correlationId } : {}),
+    ...(options.causationId ? { causation_id: options.causationId } : {}),
   })
   return { topic: toTopic(to), message }
 }
 
-// ¿Aceptar un mensaje entrante? Enrutado para mi identidad y NO steer-broadcast.
+// ¿Aceptar un mensaje entrante? Enrutado para mi identidad y sin redirect a broadcast.
 export function acceptInbound(
   self: Identity,
   message: CanonicalMessage,
@@ -259,7 +295,7 @@ export function acceptInbound(
   // Self-echo: un broadcast propio vuelve por mi propia suscripción. No entregar
   // lo que yo mismo emití (comparando la dirección de origen con la mía).
   if (message.from === directAddress(self)) return false
-  if (isBroadcastSteer(message)) return false
+  if (isBroadcastRedirect(message)) return false
   return isForIdentity(message, { identity: self, ...options })
 }
 
@@ -274,15 +310,19 @@ export function createCanonical(
     ts: number
     kind?: MessageKind
     reply_to?: string
+    correlation_id?: string
+    causation_id?: string
   },
 ): CanonicalMessage {
   return {
     id: options.id,
     from: options.from,
     to: options.to,
-    kind: options.kind ?? 'prompt',
+    kind: options.kind ?? 'task.request',
     body,
     ...(options.reply_to ? { reply_to: options.reply_to } : {}),
+    ...(options.correlation_id ? { correlation_id: options.correlation_id } : {}),
+    ...(options.causation_id ? { causation_id: options.causation_id } : {}),
     ts: options.ts,
   }
 }
@@ -318,8 +358,10 @@ export function parseCanonical(text: string): CanonicalMessage {
   if (!MESSAGE_KINDS.includes(message.kind as MessageKind)) {
     throw new Error(`kind inválido: ${String(message.kind)}`)
   }
-  if (message.reply_to !== undefined && (typeof message.reply_to !== 'string' || message.reply_to.length === 0)) {
-    throw new Error('campo canónico inválido: reply_to')
+  for (const field of ['reply_to', 'correlation_id', 'causation_id'] as const) {
+    if (message[field] !== undefined && (typeof message[field] !== 'string' || message[field].length === 0)) {
+      throw new Error(`campo canónico inválido: ${field}`)
+    }
   }
 
   return {
@@ -329,14 +371,20 @@ export function parseCanonical(text: string): CanonicalMessage {
     kind: message.kind as MessageKind,
     body: message.body,
     ...(message.reply_to === undefined ? {} : { reply_to: message.reply_to as string }),
+    ...(message.correlation_id === undefined ? {} : { correlation_id: message.correlation_id as string }),
+    ...(message.causation_id === undefined ? {} : { causation_id: message.causation_id as string }),
     ts: message.ts,
   }
 }
 
 export function renderForAgent(message: CanonicalMessage): string {
   const head = `[bus:${message.kind}] de ${message.from} (id ${message.id})`
-  const tail = message.reply_to ? `\n(responder a: ${message.reply_to})` : ''
-  return `${head}\n${message.body}${tail}`
+  const metadata = [
+    message.reply_to ? `responder a: ${message.reply_to}` : undefined,
+    message.correlation_id ? `correlación: ${message.correlation_id}` : undefined,
+    message.causation_id ? `causado por: ${message.causation_id}` : undefined,
+  ].filter((line): line is string => line !== undefined)
+  return `${head}\n${message.body}${metadata.length > 0 ? `\n(${metadata.join('; ')})` : ''}`
 }
 
 // id opaco y legible: incluye la dirección de origen y el ts.

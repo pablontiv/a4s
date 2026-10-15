@@ -9,7 +9,7 @@ import {
   formatAddress,
   isAddress,
   isBroadcast,
-  isBroadcastSteer,
+  isBroadcastRedirect,
   isForIdentity,
   isToken,
   MESSAGE_KINDS,
@@ -128,42 +128,42 @@ test('adapter: isForIdentity filtra por identidad', () => {
   )
 })
 
-test('adapter: isBroadcastSteer rechaza steer broadcast', () => {
+test('adapter: isBroadcastRedirect rechaza task.redirect broadcast', () => {
   const directMsg = createCanonical('test', {
     id: 'test-1',
     from: 'pi/pi-1',
     to: 'a4s/claude-1',
     ts: 1000,
-    kind: 'steer',
+    kind: 'task.redirect',
   })
-  assert.equal(isBroadcastSteer(directMsg), false)
+  assert.equal(isBroadcastRedirect(directMsg), false)
 
   const projectMsg = createCanonical('test', {
     id: 'test-2',
     from: 'pi/pi-1',
     to: 'a4s/all',
     ts: 1000,
-    kind: 'steer',
+    kind: 'task.redirect',
   })
-  assert.equal(isBroadcastSteer(projectMsg), true)
+  assert.equal(isBroadcastRedirect(projectMsg), true)
 
   const globalMsg = createCanonical('test', {
     id: 'test-3',
     from: 'pi/pi-1',
     to: 'all',
     ts: 1000,
-    kind: 'steer',
+    kind: 'task.redirect',
   })
-  assert.equal(isBroadcastSteer(globalMsg), true)
+  assert.equal(isBroadcastRedirect(globalMsg), true)
 
-  const promptMsg = createCanonical('test', {
+  const requestMsg = createCanonical('test', {
     id: 'test-4',
     from: 'pi/pi-1',
     to: 'a4s/all',
     ts: 1000,
-    kind: 'prompt',
+    kind: 'task.request',
   })
-  assert.equal(isBroadcastSteer(promptMsg), false)
+  assert.equal(isBroadcastRedirect(requestMsg), false)
 })
 
 test('adapter: createCanonical + serialize + parseCanonical round-trip', () => {
@@ -172,8 +172,10 @@ test('adapter: createCanonical + serialize + parseCanonical round-trip', () => {
     from: 'a4s/claude-1',
     to: 'a4s/other',
     ts: 5000,
-    kind: 'result',
+    kind: 'task.completed',
     reply_to: 'test-0',
+    correlation_id: 'test-0',
+    causation_id: 'test-0',
   })
 
   const serialized = serialize(msg)
@@ -205,7 +207,7 @@ test('adapter: parseCanonical rechaza mensajes malformados', () => {
           id: 1, // debe ser string
           from: 'a4s/claude-1',
           to: 'a4s/other',
-          kind: 'prompt',
+          kind: 'task.request',
           body: 'test',
           ts: 1000,
         }),
@@ -220,16 +222,18 @@ test('adapter: renderForAgent produce texto legible', () => {
     from: 'a4s/pi-1',
     to: 'a4s/claude-1',
     ts: 1000,
-    kind: 'steer',
+    kind: 'task.redirect',
     reply_to: 'msg-0',
+    correlation_id: 'root-0',
+    causation_id: 'cause-0',
   })
 
   const text = renderForAgent(msg)
-  assert.match(text, /\[bus:steer\]/)
+  assert.match(text, /\[bus:task\.redirect\]/)
   assert.match(text, /de a4s\/pi-1/)
   assert.match(text, /id msg-1/)
   assert.match(text, /¿cómo estás\?/)
-  assert.match(text, /responder a: msg-0/)
+  assert.match(text, /responder a: msg-0; correlación: root-0; causado por: cause-0/)
 })
 
 test('adapter: newId incluye dirección y ts', () => {
@@ -237,6 +241,8 @@ test('adapter: newId incluye dirección y ts', () => {
   assert.match(id, /^a4s\/claude-1-5000-[a-z0-9]+$/)
 })
 
-test('adapter: MESSAGE_KINDS incluye todos los tipos', () => {
-  assert.deepEqual(MESSAGE_KINDS, ['prompt', 'steer', 'result', 'notify', 'ack'])
+test('adapter: MESSAGE_KINDS incluye comandos y eventos', () => {
+  assert.deepEqual(MESSAGE_KINDS, [
+    'task.request', 'task.redirect', 'task.delivered', 'task.completed', 'note.published',
+  ])
 })
