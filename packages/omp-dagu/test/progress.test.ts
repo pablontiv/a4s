@@ -127,6 +127,47 @@ test("targeted waiting notices are limited to feature triage and implement in a 
   assert.equal(new Transitions().observe(waitingAt("triage")).wakeMessage, undefined);
 });
 
+test("targeted discovery checkpoints wake once per waiting entry", () => {
+  for (const step of ["discover", "validate", "consolidate", "approve"]) {
+    const transitions = new Transitions("session-a");
+    const waiting = waitingAt(step, "OMP_SESSION_ID=session-a", "discovery");
+    assert.deepEqual(transitions.observe(waiting), {
+      wakeMessage: `[DAGU STATE] run=discovery-${step} status=waiting step=${step} dag=discovery bundle=0.2.0 extension=0.2.0 compat=ok`,
+    });
+    assert.deepEqual(transitions.observe(waiting), {});
+  }
+});
+
+test("discovery waiting notices reject other sessions and non-checkpoint steps", () => {
+  assert.equal(
+    new Transitions("session-a")
+      .observe(waitingAt("discover", "OMP_SESSION_ID=session-b", "discovery")).wakeMessage,
+    undefined,
+  );
+  assert.equal(
+    new Transitions("session-a")
+      .observe(waitingAt("snapshot", "OMP_SESSION_ID=session-a", "discovery")).wakeMessage,
+    undefined,
+  );
+});
+
+test("targeted discovery failures and aborts wake with the DAG identity", () => {
+  for (const statusLabel of ["failed", "aborted"] as const) {
+    const transitions = new Transitions("session-a");
+    const terminal = terminalAt(statusLabel, "check_units", "OMP_SESSION_ID=session-a", "discovery");
+    transitions.observe({
+      ...terminal,
+      statusLabel: "running",
+      nodes: [{ step: { name: "check_units" }, statusLabel: "running" }],
+    });
+    assert.equal(
+      transitions.observe(terminal).wakeMessage,
+      `[DAGU STATE] run=discovery-${statusLabel} status=${statusLabel} step=check_units dag=discovery bundle=0.2.0 extension=0.2.0 compat=ok`,
+    );
+    assert.deepEqual(transitions.observe(terminal), {});
+  }
+});
+
 test("targeted terminal notices report failed and aborted steps exactly once", () => {
   for (const statusLabel of ["failed", "aborted"] as const) {
     const transitions = new Transitions("session-a");

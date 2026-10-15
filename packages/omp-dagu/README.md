@@ -23,13 +23,13 @@ Usar el directorio completo permite que OMP descubra las dos extensiones, `agent
 
 La extensión de status observa los runs activos del repositorio de la sesión mediante barridos REST y eventos SSE. Con UI muestra una línea por run en un widget `aboveEditor`; no muestra toasts de espera y conserva los toasts terminales para `succeeded`, `failed` y `aborted`. La observación que despierta al coordinador también funciona con `hasUI=false`. Resuelve el repositorio desde `origin`, incluso en linked worktrees, y consulta runs `running`, `queued` y `waiting` de las últimas 48 horas con la etiqueta `workspace=<repo>`.
 
-La herramienta LLM `dagu_session_id` devuelve `ctx.sessionManager.getSessionId()` únicamente a la sesión principal que la llama y rechaza subagentes. El coordinador la llama antes de `dagu enqueue` y pasa el valor como parámetro `OMP_SESSION_ID`. Cuando un run entra en `waiting` en `triage` o `implement`, o pasa a `failed` o `aborted`, la extensión entrega:
+La herramienta LLM `dagu_session_id` devuelve `ctx.sessionManager.getSessionId()` únicamente a la sesión principal que la llama y rechaza subagentes. El coordinador la llama antes de `dagu enqueue` y pasa el valor como parámetro `OMP_SESSION_ID`. `feature` despierta en `triage`, `implement`, `failed` y `aborted`; `discovery` despierta en `discover`, `validate`, `consolidate`, `approve`, `failed` y `aborted`. Ambos avisos incluyen la compatibilidad del bundle:
 
 ```text
-[DAGU STATE] run=<run-id> status=<waiting|failed|aborted> step=<step> issue=<issue> bundle=<version|unstamped> extension=<version> compat=<ok|incompatible|unstamped>
+[DAGU STATE] run=<run-id> status=<waiting|failed|aborted> step=<step> <issue=<issue>|dag=discovery> bundle=<version|unstamped> extension=<version> compat=<ok|incompatible|unstamped>
 ```
 
-El aviso se entrega oculto al chat con `pi.sendMessage({ customType: "dagu-state", content: message, display: false }, { deliverAs: "aside" })`: inicia o continúa el turno del modelo sin renderizar una línea en la conversación. Solo se emite si el agente es `main`, el DAG es `feature`, existe `ISSUE` y `OMP_SESSION_ID` coincide exactamente con el ID de esa sesión. En estados terminales, `step` identifica el nodo fallido o abortado que alcanzó el run. Se aceptan los params Dagu tanto en formato CLI `KEY=value` como JSON.
+El aviso se entrega oculto al chat con `pi.sendMessage({ customType: "dagu-state", content: message, display: false }, { deliverAs: "aside" })`: inicia o continúa el turno del modelo sin renderizar una línea en la conversación. Solo se emite si el agente es `main`, `OMP_SESSION_ID` coincide exactamente con el ID de esa sesión y el run está en un checkpoint soportado. En estados terminales, `step` identifica el nodo fallido o abortado que alcanzó el run. Se aceptan los params Dagu tanto en formato CLI `KEY=value` como JSON.
 
 REST y SSE alimentan una sola máquina de transiciones. El primer barrido tras `session_start` o `session_switch` establece una línea base silenciosa para los runs que ya existen. Un run descubierto en un barrido posterior ya esperando sí despierta; un barrido REST recupera una transición que SSE haya perdido; snapshots repetidos no duplican el aviso; y una reentrada real `running → waiting`, incluso al mismo paso, vuelve a avisar.
 
@@ -71,7 +71,37 @@ Con `@a4s/omp-cross-family-review` cargado, `triage-reviewer` conserva la selecc
 
 ## Skill dagu-feature
 
-OMP resuelve `skill://dagu-feature` y `skill://dagu-feature/feature.yaml` desde `skills/dagu-feature/` dentro del paquete. `SKILL.md`, `feature.yaml`, `poc.yaml`, `reconcile.yaml` y `dagu-feature-bootstrap.yaml` permanecen juntos para conservar sus enlaces relativos y las rutas `$SKILL_DIR/<archivo>` del bootstrap.
+OMP resuelve `skill://dagu-feature` y sus plantillas desde `skills/dagu-feature/` dentro del paquete. `SKILL.md`, `feature.yaml`, `poc.yaml`, `discovery.yaml`, `reconcile.yaml` y `dagu-feature-bootstrap.yaml` permanecen juntos para conservar sus enlaces relativos y las rutas `$SKILL_DIR/<archivo>` del bootstrap.
+
+## Discovery
+
+El bootstrap renderiza `.workspace/dagu/dags/discovery.yaml`. Su label
+`workspace=<repo>` corresponde al workspace coordinador que recibe los avisos
+OMP; `PRIMARY` puede apuntar a otro repositorio adoptado, cuyo slug y rama por
+defecto se derivan en el run.
+
+```sh
+dagu enqueue --run-id "discovery-<id>" .workspace/dagu/dags/discovery.yaml -- \
+  LENSES="0,1,2" POLICY="defecto" SOURCE="<origen>" LIVE_TARGET="" \
+  PRIMARY="/ruta/al/repo" OMP_SESSION_ID="<dagu_session_id>"
+```
+
+`snapshot` imprime el out-dir persistente fuera del repositorio. En `discover`
+se escribe un `findings-<lente>.jsonl` por lente; en `validate`,
+`verdicts.jsonl`; y en `consolidate`, `units.jsonl`. Los validadores jq fallan
+cerrados después de cada espera. `approve` usa el formulario `APPROVED=all` o
+una lista de ids separada por comas y permite push-back a `consolidate`; hasta
+esa aprobación no hay escrituras en GitHub.
+
+`materialize` reutiliza issues por el marcador
+`<!-- discovery-unit: <id> -->` y registra el resultado en `issues.jsonl`.
+`dispose` aplica `POLICY`, omite run ids de `feature` existentes y conserva por
+lente el último `findings.jsonl` y `temporal.jsonl`, de modo que la próxima
+ejecución calcula `nuevo`, `persistente`, `resuelto` o `regresion`.
+
+La extensión despierta `OMP_SESSION_ID` en las esperas `discover`, `validate`,
+`consolidate` y `approve` con
+`[DAGU STATE] run=<id> status=waiting step=<paso> dag=discovery bundle=<version|unstamped> extension=<version> compat=<ok|incompatible|unstamped>`.
 
 ### Versión, sello y compatibilidad
 

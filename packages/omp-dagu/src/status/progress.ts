@@ -132,14 +132,19 @@ export class Transitions {
     );
     const effects: TransitionEffects = {};
     const issue = issueNumber(run);
-    const targeted = this.sessionId !== undefined && run.name === "feature" && issue !== undefined
+    const sessionMatches = this.sessionId !== undefined
       && runParam(run, "OMP_SESSION_ID") === this.sessionId;
+    const targetedFeature = sessionMatches && run.name === "feature" && issue !== undefined;
+    const targetedDiscovery = sessionMatches && run.name === "discovery";
     const bundle = runBundleState(run);
     const bundleNotice = ` bundle=${plain(bundle.displayVersion)} extension=${bundle.extensionVersion} compat=${bundle.compat}`;
 
     if (enteredWaiting) {
-      if (targeted && (step === "triage" || step === "implement")) {
+      if (targetedFeature && (step === "triage" || step === "implement")) {
         effects.wakeMessage = `[DAGU STATE] run=${plain(run.dagRunId)} status=waiting step=${step} issue=${issue}${bundleNotice}`;
+      } else if (targetedDiscovery && step !== undefined
+        && ["discover", "validate", "consolidate", "approve"].includes(step)) {
+        effects.wakeMessage = `[DAGU STATE] run=${plain(run.dagRunId)} status=waiting step=${step} dag=discovery${bundleNotice}`;
       }
       return effects;
     }
@@ -151,8 +156,12 @@ export class Transitions {
         type: run.statusLabel === "succeeded" ? "info" : run.statusLabel === "failed" ? "error" : "warning",
       };
       const noticeStep = terminalStep ?? previous.step;
-      if (targeted && (run.statusLabel === "failed" || run.statusLabel === "aborted") && noticeStep) {
-        effects.wakeMessage = `[DAGU STATE] run=${plain(run.dagRunId)} status=${run.statusLabel} step=${plain(noticeStep)} issue=${issue}${bundleNotice}`;
+      if ((run.statusLabel === "failed" || run.statusLabel === "aborted") && noticeStep) {
+        if (targetedFeature) {
+          effects.wakeMessage = `[DAGU STATE] run=${plain(run.dagRunId)} status=${run.statusLabel} step=${plain(noticeStep)} issue=${issue}${bundleNotice}`;
+        } else if (targetedDiscovery) {
+          effects.wakeMessage = `[DAGU STATE] run=${plain(run.dagRunId)} status=${run.statusLabel} step=${plain(noticeStep)} dag=discovery${bundleNotice}`;
+        }
       }
     }
     return effects;
