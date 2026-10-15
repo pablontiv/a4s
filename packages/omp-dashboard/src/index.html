@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>omp · sesiones</title>
+<style>
+  body { background:#111418; color:#d8dee9; font:14px/1.45 -apple-system, system-ui, sans-serif; margin:0; padding:20px 28px; }
+  h1 { font-size:18px; margin:0 0 4px; }
+  h2 { font-size:12px; letter-spacing:.08em; color:#8b949e; margin:26px 0 10px; text-transform:uppercase; }
+  .summary { color:#8b949e; }
+  .summary b { color:#d8dee9; }
+  .card { background:#1a1f26; border:1px solid #2a313b; border-radius:8px; padding:12px 14px; margin-bottom:10px; cursor:pointer; }
+  .card:hover { border-color:#4b5563; }
+  .card.esperando { border-left:4px solid #e3b341; }
+  .card.terminado { border-left:4px solid #3fb950; }
+  .card.trabajando { border-left:4px solid #58a6ff; }
+  .card.detenido { border-left:4px solid #f85149; }
+  .card.inactiva { border-left:4px solid #484f58; opacity:.75; }
+  .row { display:flex; justify-content:space-between; gap:12px; }
+  .title { font-weight:600; }
+  .repo { color:#8b949e; font-weight:400; }
+  .meta { color:#8b949e; font-size:12px; white-space:nowrap; }
+  .q { margin:8px 0 6px; }
+  .opt { display:inline-block; border:1px solid #3d4550; border-radius:6px; padding:2px 10px; margin:2px 6px 2px 0; font-size:13px; }
+  .msg { color:#adbac7; margin-top:6px; white-space:pre-wrap; max-height:4.5em; overflow:hidden; }
+  .bar { display:inline-block; width:110px; height:8px; background:#2a313b; border-radius:4px; vertical-align:middle; margin:0 8px; }
+  .bar i { display:block; height:100%; background:#58a6ff; border-radius:4px; }
+  .tasks { font-size:12px; color:#8b949e; margin-top:4px; }
+  .tasks span { margin-right:12px; }
+  .now { margin-top:4px; font-size:13px; }
+  button { background:#21262d; color:#d8dee9; border:1px solid #3d4550; border-radius:6px; padding:3px 10px; cursor:pointer; margin-top:6px; }
+  .empty { color:#484f58; }
+</style>
+</head>
+<body>
+<h1>omp · sesiones</h1>
+<div class="summary" id="summary"></div>
+<h2>Acciones necesarias</h2>
+<div id="actions"></div>
+<h2>Progreso</h2>
+<div id="progress"></div>
+<script>
+const ICON = { esperando: "⚠", terminado: "✓", trabajando: "⟳", detenido: "✗", inactiva: "○" };
+const MARK = { completed: "✓", in_progress: "▶", pending: "○", abandoned: "–" };
+const seen = JSON.parse(localStorage.getItem("seen") || "{}");
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const ago = (ms) => { const s = Math.max(0, Math.round(ms / 1000)); return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m${String(s % 60).padStart(2, "0")}s` : `${Math.floor(s / 3600)}h${String(Math.floor(s / 60) % 60).padStart(2, "0")}`; };
+const markSeen = (s) => { seen[s.id] = s.lastAssistantId; localStorage.setItem("seen", JSON.stringify(seen)); };
+
+async function focus(s) {
+  markSeen(s);
+  if (s.terminal) await fetch("/api/focus", { method: "POST", body: JSON.stringify({ handle: s.terminal }) });
+  render(last);
+}
+
+function head(s, now) {
+  return `<div class="row"><div>${ICON[s.state]} <span class="title">${esc(s.title)}</span> <span class="repo">· ${esc(s.repo)}</span></div>
+    <div class="meta">${s.state} · hace ${ago(now - s.lastAt)} · $${s.cost.toFixed(2)} · pid ${s.pid}${s.mapping === "inferida" ? " (jsonl inferido)" : ""}${s.terminal ? (s.terminalMatch === "título" ? "" : ` · terminal por ${s.terminalMatch}`) : " · sin terminal Orca"}</div></div>`;
+}
+
+function card(s, inner, now) {
+  const el = document.createElement("div");
+  el.className = `card ${s.state}`;
+  el.innerHTML = head(s, now) + inner;
+  el.onclick = (ev) => { if (ev.target.dataset.seen) { markSeen(s); render(last); } else focus(s); };
+  return el;
+}
+
+let last = null;
+function render(data) {
+  last = data;
+  const now = data.at;
+  const ss = data.sessions;
+  const unseen = (s) => s.state === "terminado" && seen[s.id] !== s.lastAssistantId;
+  const count = (st) => ss.filter((s) => s.state === st).length;
+  const needs = ss.filter((s) => s.state === "esperando" || unseen(s));
+  document.getElementById("summary").innerHTML =
+    `<b>${ss.length}</b> sesiones · ⚠ <b>${needs.length}</b> necesitan acción · ⟳ <b>${count("trabajando")}</b> trabajando · ✓ <b>${count("terminado")}</b> terminadas · $${ss.reduce((a, s) => a + s.cost, 0).toFixed(2)}`;
+
+  const actions = document.getElementById("actions");
+  actions.replaceChildren();
+  for (const s of needs.sort((a, b) => (a.state === "esperando" ? 0 : 1) - (b.state === "esperando" ? 0 : 1))) {
+    const inner = s.state === "esperando"
+      ? s.asks.flatMap((a) => a.questions).map((q) => `<div class="q">${esc(q.question)}</div>${q.options.map((o) => `<span class="opt">${esc(o)}</span>`).join("")}`).join("")
+      : `<div class="msg">${esc(s.lastAssistantText)}</div><button data-seen="1">Marcar visto</button>`;
+    actions.append(card(s, inner, now));
+  }
+  if (!needs.length) actions.innerHTML = `<div class="empty">Nada pendiente.</div>`;
+
+  const progress = document.getElementById("progress");
+  progress.replaceChildren();
+  const order = { esperando: 0, trabajando: 1, terminado: 2, detenido: 3, inactiva: 4 };
+  for (const s of [...ss].sort((a, b) => order[a.state] - order[b.state] || b.lastAt - a.lastAt)) {
+    let inner = "";
+    if (s.todo) {
+      const pct = s.todo.total ? Math.round((100 * s.todo.done) / s.todo.total) : 0;
+      inner += `<div class="now">fase ${s.todo.phaseNo}. ${esc(s.todo.phase)} <span class="bar"><i style="width:${pct}%"></i></span>${s.todo.done}/${s.todo.total} <span class="meta">· total ${s.todo.allDone}/${s.todo.allTotal}</span></div>
+        <div class="tasks">${s.todo.tasks.map((t) => `<span>${MARK[t.status] ?? "?"} ${esc(t.content)}</span>`).join("")}</div>`;
+    }
+    if (s.current) inner += `<div class="now">ahora: <b>${esc(s.current.tool)}</b> · “${esc(s.current.intent)}” (${ago(s.current.elapsedMs)})</div>`;
+    if (s.subagents) inner += `<div class="tasks">transcripts de subagentes abiertos: ${s.subagents}</div>`;
+    if (!s.current && s.lastAssistantText && s.state !== "esperando") inner += `<div class="msg">${esc(s.lastAssistantText)}</div>`;
+    progress.append(card(s, inner, now));
+  }
+}
+
+async function tick() {
+  try { render(await (await fetch("/api/sessions")).json()); } catch (e) { console.error(e); }
+}
+tick();
+setInterval(tick, 2000);
+</script>
+</body>
+</html>
