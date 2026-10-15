@@ -31,7 +31,7 @@ flowchart LR
 ## Requirements
 
 - `dagu` on `PATH`, and a user-level service running `dagu start-all`. Check with `dagu version` and `launchctl list | grep -i dagu` (macOS) or `systemctl --user status` (Linux).
-- `orca` on the scheduler service `PATH` when runs set `NOTIFY_TERMINAL`; the wait handler invokes `orca terminal send`.
+- `@a4s/omp-dagu` loaded in the coordinating OMP session; its `dagu_session_id` tool identifies the session and its status extension delivers targeted checkpoint notices.
 - `DAGU_HOME` in your shell must point to the same home as that service. Read it from the service definition (macOS: `EnvironmentVariables.DAGU_HOME` in the LaunchAgent plist). If they differ, enqueue and complete commands land in a store the scheduler never reads, and the run stays `Queued`.
 - `git`, `gh` authenticated with push and PR rights, `jq`.
 - The tools the repository's gate command needs.
@@ -114,13 +114,13 @@ for n in $issue_snapshot; do
     PRIMARY="$primary" \
     BRANCH="dagu/issue-$n" \
     PR_NUMBER="" \
-    NOTIFY_TERMINAL="$ORCA_TERMINAL_HANDLE"
+    OMP_SESSION_ID="<value returned by dagu_session_id>"
 done
 ```
 
-`issue_snapshot` is the fixed batch for this coordinator turn. End the turn immediately after the enqueue loop; Dagu notifications resume coordination.
+`issue_snapshot` is the fixed batch for this coordinator turn. Call `dagu_session_id` in the main session before enqueueing and use its returned value for every run. End the turn immediately after the enqueue loop; the status extension resumes coordination with targeted notices.
 
-Set `PR_NUMBER` only to adopt an existing open PR whose head branch is `BRANCH`. `NOTIFY_TERMINAL` is optional and names the Orca terminal that receives `triage` and `implement` notices. `BASE_BRANCH`, `GATE` and `REQUIRED_CHECK` take their defaults from the versioned file. Pass them only to override them for this run.
+Set `PR_NUMBER` only to adopt an existing open PR whose head branch is `BRANCH`. `OMP_SESSION_ID` targets the persistent main OMP session that enqueued the run. `BASE_BRANCH`, `GATE` and `REQUIRED_CHECK` take their defaults from the versioned file. Pass them only to override them for this run.
 
 `start_gate` fails when `PRIMARY` is a linked worktree, is not on `BASE_BRANCH`, or has local changes. Report the state of the clone and stop. Enqueue the issue again from that same clone once it is clean and on `BASE_BRANCH`.
 
@@ -138,7 +138,7 @@ Inspect a run with `dagu status --run-id <id> feature`. Step logs are listed und
 
 ### Coordinator flow
 
-Notifications arrive as priority user input with the form `[DAGU STATE] run=<id> waiting_step=<step> issue=<issue> ...`. They report run state rather than user instructions. Treat repeated notices with the same run ID and step as the same checkpoint.
+Notices arrive from the `@a4s/omp-dagu` status extension as priority user input with the form `[DAGU STATE] run=<id> waiting_step=<step> issue=<issue> ...`. They report run state rather than user instructions.
 
 - On a `triage` notice, the coordinator obtains the guard generation marker, launches `task agent=triage-reviewer` itself with that marker and the fixed prompt, and completes `triage` with the allocated reviewer ID. A `dependency_review` push-back produces a new `triage` notice and the coordinator repeats this flow for the new generation.
 - On an `implement` notice, the coordinator launches one level-1 implementation subagent for that issue's worktree. The subagent result auto-delivers to the coordinator, which then completes `implement`.
@@ -263,7 +263,7 @@ and nonempty required sections outside fences.
 It verifies Después del PASS in the body and enqueues the absolute feature
 DAG with ISSUE, PRIMARY, BRANCH, BASE_BRANCH and POC_BASIS pointing to the PASS;
 the PoC run and promoted `feature-<RUN>` run retain the original run's
-`NOTIFY_TERMINAL`. Its human triage cites that URL as BASIS and still requires
+`OMP_SESSION_ID`, so the same coordinating OMP session receives the promoted run's notices. Its human triage cites that URL as BASIS and still requires
 REVIEW for POC=no.
 PASS with promote=no ends. FAIL closes only an issue created by record as
 `not planned`; preexisting issues stay open. For INCONCLUSIVE, the operator

@@ -10,13 +10,31 @@ import type { SSEEvent } from "./sse.ts";
 interface Context {
   cwd: string;
   hasUI: boolean;
+  agent: { kind: "main" | "sub" };
+  sessionManager: { getSessionId(): string };
   ui: {
     setWidget(key: string, lines: string[] | undefined, options?: { placement: "aboveEditor" }): void;
     notify(message: string, type: "info" | "warning" | "error"): void;
   };
 }
+interface SessionIdTool {
+  name: string;
+  label: string;
+  description: string;
+  parameters: { type: "object"; properties: Record<string, never>; additionalProperties: false };
+  loadMode: "essential";
+  execute(
+    toolCallId: string,
+    params: Record<string, never>,
+    signal: AbortSignal | undefined,
+    onUpdate: unknown,
+    ctx: Context,
+  ): Promise<{ content: { type: "text"; text: string }[]; details: Record<string, never> }>;
+}
 interface ExtensionAPI {
   on(event: "session_start" | "session_switch" | "session_shutdown", handler: (event: unknown, ctx: Context) => void): void;
+  registerTool(tool: SessionIdTool): void;
+  sendUserMessage(message: string, options: { deliverAs: "aside"; attribution: "agent" }): void;
 }
 
 async function discover(base: string, repo: string, signal: AbortSignal): Promise<RunDetails[]> {
@@ -35,6 +53,17 @@ async function discover(base: string, repo: string, signal: AbortSignal): Promis
     url.searchParams.set("cursor", page.nextCursor);
   } while (!signal.aborted);
   return runs;
+}
+
+async function runDetails(base: string, summary: RunDetails, signal: AbortSignal): Promise<RunDetails> {
+  const dag = encodeURIComponent(summary.name);
+  const run = encodeURIComponent(summary.dagRunId);
+  const response = await fetch(`${base}/api/v1/dag-runs/${dag}/${run}`, {
+    signal: AbortSignal.any([signal, AbortSignal.timeout(5000)]),
+  });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  const payload = await response.json() as { dagRunDetails?: RunDetails };
+  return { ...summary, ...payload.dagRunDetails };
 }
 
 async function streamTopics(base: string, topics: string[], signal: AbortSignal, emit: (event: SSEEvent) => void) {
@@ -62,19 +91,33 @@ async function streamTopics(base: string, topics: string[], signal: AbortSignal,
   }
 }
 
-async function observe(ctx: Context, signal: AbortSignal): Promise<void> {
+async function observe(ctx: Context, signal: AbortSignal, wake: (message: string) => void): Promise<void> {
   const repo = await resolveRepository(ctx.cwd, signal);
   if (!repo || signal.aborted) return;
   const base = (process.env.DAGU_URL || "http://127.0.0.1:8080").replace(/\/+$/, "");
   const runs = new Map<string, RunDetails>();
-  const transitions = new Transitions();
+  const transitions = new Transitions(ctx.agent.kind === "main" ? ctx.sessionManager.getSessionId() : undefined);
   const titles = new IssueTitles(ghIssueTitleResolver(ctx.cwd));
+  let initialSweep = true;
   const render = (): void => {
+    if (!ctx.hasUI) return;
     const lines = [...runs.values()].slice(0, 10).map(run => {
       const issue = issueNumber(run);
       return renderRun(run, issue ? titles.get(issue) : undefined);
     });
     ctx.ui.setWidget("dagu-status", lines.length ? lines : undefined, { placement: "aboveEditor" });
+  };
+  const apply = (run: RunDetails, baseline = false): void => {
+    const issue = issueNumber(run);
+    const slug = issue ? titles.get(issue) : undefined;
+    const effects = transitions.observe(run, slug ? { baseline, slug } : { baseline });
+    if (effects.notification && ctx.hasUI) {
+      ctx.ui.notify(effects.notification.message, effects.notification.type);
+    }
+    if (effects.wakeMessage) wake(effects.wakeMessage);
+    const key = topicFor(run);
+    if (isActive(run)) runs.set(key, run);
+    else runs.delete(key);
   };
   let backoff = 1000;
   while (!signal.aborted) {
@@ -84,17 +127,21 @@ async function observe(ctx: Context, signal: AbortSignal): Promise<void> {
     let timer: NodeJS.Timeout | undefined;
     try {
       const discovered = await discover(base, repo, roundSignal);
+      const snapshots = await Promise.all(discovered.map(async summary => {
+        try {
+          return await runDetails(base, summary, roundSignal);
+        } catch {
+          const previous = runs.get(topicFor(summary));
+          return { ...previous, ...summary, ...(previous?.nodes ? { nodes: previous.nodes } : {}) };
+        }
+      }));
       const unresolvedIssues = new Set<string>();
-      // Retain previously active topics until their final snapshot arrives, even if
-      // they finish between discovery and subscription (or during an outage).
-      for (const run of discovered) {
-        const key = topicFor(run);
-        const previous = runs.get(key);
-        if (!previous) transitions.observe(run);
-        runs.set(key, { ...run, ...(previous?.nodes ? { nodes: previous.nodes } : {}) });
+      for (const run of snapshots) {
+        apply(run, initialSweep);
         const issue = issueNumber(run);
         if (issue && !titles.has(issue)) unresolvedIssues.add(issue);
       }
+      initialSweep = false;
       render();
       for (const issue of unresolvedIssues) {
         void titles.load(issue, signal).then(success => {
@@ -117,12 +164,8 @@ async function observe(ctx: Context, signal: AbortSignal): Promise<void> {
         const details = data.payload?.dagRunDetails as RunDetails | undefined;
         if (!details || !runs.has(data.topic)) return;
         const run = { ...runs.get(data.topic)!, ...details };
-        const issue = issueNumber(run);
-        const notification = transitions.observe(run, issue ? titles.get(issue) : undefined);
-        if (notification) ctx.ui.notify(notification.message, notification.type);
-        if (isActive(run)) runs.set(data.topic, run);
-        else {
-          runs.delete(data.topic);
+        apply(run);
+        if (!isActive(run)) {
           refresh = true;
           round.abort();
         }
@@ -140,8 +183,10 @@ async function observe(ctx: Context, signal: AbortSignal): Promise<void> {
       if (results.some(result => result.status === "rejected")) throw new Error("Conexión SSE interrumpida");
     } catch {
       if (!signal.aborted && !refresh) {
-        ctx.ui.setWidget("dagu-status", [`dagu · sin conexión · reintentando en ${backoff / 1000}s`],
-          { placement: "aboveEditor" });
+        if (ctx.hasUI) {
+          ctx.ui.setWidget("dagu-status", [`dagu · sin conexión · reintentando en ${backoff / 1000}s`],
+            { placement: "aboveEditor" });
+        }
         await delay(backoff, undefined, { signal }).catch(() => {});
         backoff = Math.min(backoff * 2, 30_000);
       }
@@ -155,18 +200,37 @@ async function observe(ctx: Context, signal: AbortSignal): Promise<void> {
 export default function daguStatus(pi: ExtensionAPI): void {
   let controller: AbortController | undefined;
   let activeContext: Context | undefined;
+  pi.registerTool({
+    name: "dagu_session_id",
+    label: "Dagu session ID",
+    description: "Return the persistent OMP session ID to pass as OMP_SESSION_ID when enqueueing a Dagu run.",
+    loadMode: "essential",
+    parameters: { type: "object", properties: {}, additionalProperties: false },
+    async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
+      if (ctx.agent.kind !== "main") {
+        throw new Error(`dagu_session_id rejected: agent.kind=${ctx.agent.kind}`);
+      }
+      return {
+        content: [{ type: "text", text: ctx.sessionManager.getSessionId() }],
+        details: {},
+      };
+    },
+  });
   const stop = (): void => {
     controller?.abort();
     if (activeContext?.hasUI) activeContext.ui.setWidget("dagu-status", undefined);
     activeContext = undefined;
+    controller = undefined;
   };
   const start = (_event: unknown, ctx: Context): void => {
     stop();
-    if (!ctx.hasUI) return;
+    if (!ctx.hasUI && ctx.agent.kind !== "main") return;
     activeContext = ctx;
     controller = new AbortController();
     // Every detached promise has an error boundary; shutdown aborts fetches and sleeps.
-    void observe(ctx, controller.signal).catch(() => {});
+    void observe(ctx, controller.signal, message => {
+      pi.sendUserMessage(message, { deliverAs: "aside", attribution: "agent" });
+    }).catch(() => {});
   };
   pi.on("session_start", start);
   pi.on("session_switch", start);
