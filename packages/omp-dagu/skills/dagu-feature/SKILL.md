@@ -328,6 +328,12 @@ merges only after the required check succeeds. `pr` creates the PR with `--fill`
 and the body `Closes #<issue>`, so the commit message becomes the PR title.
 Write it in the repository's commit convention.
 
+The `gate` step changes to the worktree and executes the complete `GATE`
+command from scratch. If that attempt fails, Dagu retries it once after five
+seconds. The retry therefore repeats setup such as `npm ci`; only after a
+successful gate does the step check that the worktree is clean and record the
+tested SHA.
+
 ## Reconcile `await_merge`
 
 Remote observation belongs to the scheduled [`reconcile`](reconcile.yaml) DAG, a separate process from the implementing agent, which does not wait on hosted CI. The reconciler holds no repository queue slot: it uses its own local queue with concurrency one. It runs every minute with `overlap_policy: skip` and an empty `catchup_window`.
