@@ -58,6 +58,15 @@ El paquete distribuye `triage-reviewer` con `structured: true`, el JSON Schema d
 
 La aprobación pertenece a un DAG, run y generación; se consume tras una completion exitosa y se conserva si la completion falla. Volver a triage exige otra revisión. El guard exige que la completion de triage esté sola en su tool call. `POC=yes` pasa directamente.
 
+El DAG aplica la misma autorización aunque el guard no esté cargado. Para
+`POC=no`, `REVIEW` es el nombre simple del subagente `TriageReview<ISSUE>` (o
+`TriageReview<ISSUE>v<N>` al reintentar) lanzado como `triage-reviewer` por la
+sesión coordinadora indicada por `OMP_SESSION_ID`. Antes de comentar el issue o
+copiar estado, `triage_decision` localiza un único transcript JSONL, comprueba su
+sesión padre, agente, marcador `DAG=feature RUN=<run>`, inicio posterior al
+`triage.startedAt` actual y `poc=no` en el último yield. REST, parámetros,
+transcript o campos inválidos hacen fallar el step sin efectos externos.
+
 Con `@a4s/omp-cross-family-review` cargado, `triage-reviewer` conserva la selección cross-family; `reviewer` sigue disponible para code review.
 
 ## Skill dagu-feature
@@ -77,4 +86,4 @@ El gate completo del repositorio es:
 npm ci && npm test && npm run typecheck
 ```
 
-Las pruebas cubren el parser SSE, progreso y actividad viva de comandos y subagentes, identidad y títulos de issues, resolución de repositorios/worktrees, transiciones y avisos del widget, además de la correlación nativa y el contrato estructurado del guard de triage.
+Las pruebas cubren el parser SSE, progreso y actividad viva de comandos y subagentes, identidad y títulos de issues, resolución de repositorios/worktrees, transiciones y avisos del widget, la correlación nativa y el contrato estructurado del guard de triage, y la verificación fail-closed del transcript real ejecutada desde ambos DAG `feature.yaml`.

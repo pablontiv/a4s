@@ -1,6 +1,6 @@
 labels:
-  - workspace=__REPO__
-queue: __REPO__
+  - workspace=TEMPLATE_REPO
+queue: TEMPLATE_REPO
 type: graph
 dotenv: []
 shell: bash
@@ -18,7 +18,7 @@ params:
     default: __PRIMARY__
   - name: BASE_BRANCH
     type: string
-    default: __BASE_BRANCH__
+    default: TEMPLATE_BASE_BRANCH
   - name: OMP_SESSION_ID
     type: string
     default: ""

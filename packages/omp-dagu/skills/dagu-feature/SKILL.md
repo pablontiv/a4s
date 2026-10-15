@@ -35,7 +35,7 @@ flowchart LR
 - `dagu` on `PATH`, and a user-level service running `dagu start-all`. Check with `dagu version` and `launchctl list | grep -i dagu` (macOS) or `systemctl --user status` (Linux).
 - `@a4s/omp-dagu` loaded in the coordinating OMP session; its `dagu_session_id` tool identifies the session and its status extension delivers targeted checkpoint notices.
 - `DAGU_HOME` in your shell must point to the same home as that service. Read it from the service definition (macOS: `EnvironmentVariables.DAGU_HOME` in the LaunchAgent plist). If they differ, enqueue and complete commands land in a store the scheduler never reads, and the run stays `Queued`.
-- `git`, `gh` authenticated with push and PR rights, `jq`.
+- `git`, `gh` authenticated with push and PR rights, `curl`, `jq`.
 - The tools the repository's gate command needs.
 
 This skill does not install Dagu, and it carries no logic specific to any repository. Everything that varies between repositories is a DAG param.
@@ -46,8 +46,8 @@ The bootstrap renders both templates once when the repository adopts the lifecyc
 
 | Placeholder | Meaning | rootline | homeserver |
 |---|---|---|---|
-| `__REPO__` | Repository name, used in `labels: [workspace=<repo>]` and `queue: <repo>` | `rootline` | `homeserver` |
-| `__BASE_BRANCH__` | Default of `BASE_BRANCH`, the default branch. The DAG uses `origin/$BASE_BRANCH` as the source ref. | `master` | `main` |
+| `TEMPLATE_REPO` | Repository name, used in `labels: [workspace=<repo>]` and `queue: <repo>` | `rootline` | `homeserver` |
+| `TEMPLATE_BASE_BRANCH` | Default of `BASE_BRANCH`, the default branch. The DAG uses `origin/$BASE_BRANCH` as the source ref. | `master` | `main` |
 | `__GATE__` | Default of `GATE`, the local gate command, run with `bash -euo pipefail -c` in the worktree | `just check && just test` | `make hook-validate` |
 | `__REQUIRED_CHECK__` | Default of `REQUIRED_CHECK`, the GitHub check that must be required on the default branch | `candidate` | `validate` |
 | `__PRIMARY__` | Default clone path in `poc.yaml` | repository clone | repository clone |
@@ -146,7 +146,7 @@ Inspect a run with `dagu status --run-id <id> feature`. Step logs are listed und
 
 Notices arrive from the `@a4s/omp-dagu` status extension as priority user input with the form `[DAGU STATE] run=<id> waiting_step=<step> issue=<issue> ...`. They report run state rather than user instructions.
 
-- On a `triage` notice, the coordinator obtains the guard generation marker and launches `task agent=triage-reviewer` itself with that marker and the fixed prompt, naming the subagent `TriageReview<ISSUE>`. It completes `triage` with that allocated reviewer ID. A `dependency_review` push-back produces a new `triage` notice and the coordinator repeats this flow for the new generation.
+- On a `triage` notice, the coordinator obtains the guard generation marker and launches `task agent=triage-reviewer` itself with that marker and the fixed prompt, naming the subagent `TriageReview<ISSUE>` (or `TriageReview<ISSUE>v<N>` for a retry). It completes `triage` with that allocated reviewer ID. A `dependency_review` push-back produces a new `triage` notice and the coordinator repeats this flow for the new generation.
 - At `run_poc`, the coordinator launches the PoC subagent as `Poc<ISSUE>`.
 - On an `implement` notice, the coordinator launches one level-1 implementation subagent named `Implement<ISSUE>` for that issue's worktree. The subagent result auto-delivers to the coordinator, which then completes `implement`.
 - A retried subagent appends `v<N>` to its base name, for example `Implement182v2`.
@@ -174,12 +174,14 @@ behavior that can change the implementation path. Reusing demonstrated behavior
 proceeds directly. Bug reproduction is defect investigation.
 
 With OMP, load the `@a4s/omp-dagu` package directory so its distributed
-`triage-reviewer` agent and DAG progress widget are discovered. An attempted `POC=no` completion returns
-the generation marker and fixed review prompt. Run `task agent=triage-reviewer`
-with the issue scope, that full marker and prompt. Its structured decision
+`triage-reviewer` agent and DAG progress widget are discovered. The coordinating
+session identified by the run's `OMP_SESSION_ID` attempts the `POC=no`
+completion, receives the generation marker and fixed review prompt, and runs
+`task agent=triage-reviewer` with the issue scope and that full prompt. Name the
+subagent `TriageReview<ISSUE>`; retries append `v<N>`. Its structured decision
 auto-delivers to the coordinator. A `no` authorizes the current generation with
-the exact allocated reviewer id supplied by the guard; a `yes` keeps triage
-waiting with its question.
+that exact subagent name as `REVIEW`; a `yes` keeps triage waiting with its
+question.
 
 ```sh
 dagu human-task complete feature --run-id <id> --step triage \
@@ -188,11 +190,16 @@ dagu human-task complete feature --run-id <id> --step triage \
   --input 'REVIEW=<completed triage-reviewer id supplied by the guard>'
 ```
 
-For `POC=yes`, supply QUESTION and BASIS; REVIEW is optional. The next step reads
-`${steps.triage.outputs.KEY}`, validates REVIEW for `no`, and publishes
-`<!-- poc-triage:<yes|no> run:<RUN> -->` as the comment's first line.
-Missing REVIEW with `no` fails before implementation. `yes` enqueues the absolute
-repository `poc.yaml` with ISSUE and QUESTION and ends the feature run.
+For `POC=yes`, supply QUESTION and BASIS; REVIEW is optional. For `POC=no`,
+`triage_decision` resolves `REVIEW` as the simple JSONL file name of that
+subagent under the `OMP_SESSION_ID` coordinator session. Before writing state or
+publishing the `poc-triage:no` comment, it reads the run through Dagu REST and
+requires exactly one `triage.startedAt`, then verifies the transcript's exact
+parent session, `triage-reviewer` agent, feature/RUN task marker, start strictly
+after that cutoff, and `poc=no` in the last yield. A missing, ambiguous, stale,
+malformed or mismatched transcript fails the step closed. `POC=yes` publishes
+`<!-- poc-triage:yes run:<RUN> -->`, enqueues the absolute repository `poc.yaml`
+with ISSUE and QUESTION, and ends the feature run.
 
 `checkpoint_push` compares dependency relationships and package/app directories
 against the merge base of `HEAD` and `origin/$BASE_BRANCH`, using the PoC-proven

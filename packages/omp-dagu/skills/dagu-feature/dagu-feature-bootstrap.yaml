@@ -101,22 +101,22 @@ steps:
         --arg repo "$REPO" --arg base "$BASE_BRANCH" \
         --arg gate "$GATE" --arg check "$REQUIRED_CHECK" \
         '$template
-          | gsub("__REPO__"; $repo)
-          | gsub("__BASE_BRANCH__"; $base | tojson)
+          | gsub("TEMPLATE_REPO"; $repo)
+          | gsub("TEMPLATE_BASE_BRANCH"; $base | tojson)
           | gsub("__GATE__"; $gate | tojson)
           | gsub("__REQUIRED_CHECK__"; $check | tojson)' \
         -n > "$STAGE"
-      if grep -n '__[A-Z_]*__' "$STAGE"; then exit 1; fi
+      if grep -En 'TEMPLATE_[A-Z_]+|__[A-Z_]*__' "$STAGE"; then exit 1; fi
       dagu validate "$STAGE"
       jq -nr --rawfile template "$SKILL_DIR/poc.yaml" \
         --arg repo "$REPO" --arg base "$BASE_BRANCH" \
         --arg primary "$PRIMARY" --arg tests "$TEST_PATHS" \
         '$template
-          | gsub("__REPO__"; $repo)
-          | gsub("__BASE_BRANCH__"; $base | tojson)
+          | gsub("TEMPLATE_REPO"; $repo)
+          | gsub("TEMPLATE_BASE_BRANCH"; $base | tojson)
           | gsub("__PRIMARY__"; $primary | tojson)
           | gsub("__TEST_PATHS__"; $tests)' > "$(dirname "$STAGE")/poc.yaml"
-      if grep -n '__[A-Z_]*__' "$(dirname "$STAGE")/poc.yaml"; then exit 1; fi
+      if grep -En 'TEMPLATE_[A-Z_]+|__[A-Z_]*__' "$(dirname "$STAGE")/poc.yaml"; then exit 1; fi
       dagu validate "$(dirname "$STAGE")/poc.yaml"
       printf 'stage=%s\n' "$STAGE"
 

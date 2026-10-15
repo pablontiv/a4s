@@ -1,0 +1,3 @@
+{"type":"session","parentSession":"__PARENT__"}
+{"type":"session_init","agent":"triage-reviewer","task":"Issue scope TRIAGE_REVIEW AGENT=triage-reviewer DAG=feature RUN=fixture-run GENERATION=1 Decide.","timestamp":"2026-10-15T14:00:01.125+01:00"}
+{"type":"message","message":{"role":"toolResult","toolName":"yield","details":{"data":{"poc":"no"}}}}
