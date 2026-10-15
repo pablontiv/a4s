@@ -7,11 +7,115 @@ shell: bash
 steps:
   - id: discover
     run: |
-      dagu history feature --status waiting --format json --limit 500 | jq -c '[.[] | (.params | [splits(" +") | capture("^(?<key>[^=]+)=(?<value>.*)$")] | from_entries) as $p | {RUN: .dagRunId, ISSUE: $p.ISSUE, PRIMARY: $p.PRIMARY, BRANCH: $p.BRANCH, PR_NUMBER: ($p.PR_NUMBER // "")}]'
+      dagu history feature --status waiting --format json --limit 500 | jq -c '
+        def param($key):
+          .params as $params
+          | try ($params | capture("(^| )" + $key + "=(?<value>[^ ]*)($| )").value) catch "";
+        [.[] | {
+          RUN: .dagRunId,
+          ISSUE: param("ISSUE"),
+          PRIMARY: param("PRIMARY"),
+          BRANCH: param("BRANCH"),
+          PR_NUMBER: param("PR_NUMBER")
+        }]
+      '
     output: RUNS
 
-  - id: tick
+  - id: leftovers
     depends: discover
+    run: |
+      set -euo pipefail
+      TMP=$(mktemp -d)
+      trap 'rm -rf "$TMP"' EXIT
+      dagu history feature --format json --limit 1000 >"$TMP/feature.json"
+      dagu history poc --format json --limit 1000 >"$TMP/poc.json"
+      jq -s '
+        def param($key):
+          .params as $params
+          | try ($params | capture("(^| )" + $key + "=(?<value>[^ ]*)($| )").value) catch "";
+        [(.[][]) | {
+          kind: .name,
+          run: .dagRunId,
+          status: (.status | ascii_downcase),
+          primary: param("PRIMARY"),
+          branch: param("BRANCH"),
+          issue: param("ISSUE"),
+          time: (.startedAt // .finishedAt // "")
+        }]
+        | sort_by(.time)
+        | reverse
+      ' "$TMP/feature.json" "$TMP/poc.json" >"$TMP/runs.json"
+      : >"$TMP/leftovers"
+
+      inspect_resource() {
+        local primary=$1 worktree=$2 branch=$3 result owned last_run last_status repo
+        result=$(jq -r \
+          --arg primary "$primary" \
+          --arg worktree "$worktree" \
+          --arg branch "$branch" '
+            def possesses:
+              if .kind == "feature" then
+                (($branch != "" and .branch == $branch)
+                  or ($worktree != "" and .issue != "" and ($worktree | split("/")[-1]) == ("issue-" + .issue)))
+              elif .kind == "poc" then
+                (($worktree != "" and ($worktree | split("/")[-1]) == ("poc-" + .run))
+                  or ($branch != "" and $branch == ("poc/" + .run)))
+              else false
+              end;
+            [.[] | select(.primary == $primary and possesses)] as $owners
+            | ($owners[0] // null) as $last
+            | [
+                any($owners[]; .status == "queued" or .status == "running" or .status == "waiting"),
+                ($last.run // "none"),
+                ($last.status // "none")
+              ]
+            | @tsv
+          ' "$TMP/runs.json")
+        IFS=$'\t' read -r owned last_run last_status <<<"$result"
+        if [[ "$owned" == false ]]; then
+          repo=$(basename "$primary")
+          printf 'LEFTOVER %s worktree=%s branch=%s last_run=%s last_status=%s\n' \
+            "$repo" "${worktree:-none}" "${branch:-none}" "$last_run" "$last_status" >>"$TMP/leftovers"
+        fi
+      }
+
+      while IFS= read -r primary; do
+        managed_root=$(git -C "$primary" rev-parse --show-toplevel)
+        : >"$TMP/worktree-branches"
+        worktree=
+        branch=
+        while IFS= read -r line; do
+          case "$line" in
+            "worktree "*) worktree=${line#worktree }; branch= ;;
+            "branch refs/heads/"*) branch=${line#branch refs/heads/} ;;
+            "")
+              if [[ -n "$worktree" && "$worktree" == "$managed_root/.workspace/worktrees/"* ]]; then
+                inspect_resource "$primary" "$worktree" "$branch"
+                if [[ -n "$branch" ]]; then
+                  printf '%s\n' "$branch" >>"$TMP/worktree-branches"
+                fi
+              fi
+              worktree=
+              branch=
+              ;;
+          esac
+        done < <(git -C "$primary" worktree list --porcelain; printf '\n')
+
+        while IFS= read -r branch; do
+          if ! grep -Fqx -- "$branch" "$TMP/worktree-branches"; then
+            inspect_resource "$primary" "" "$branch"
+          fi
+        done < <(git -C "$primary" for-each-ref --format='%(refname:short)' refs/heads/dagu/)
+      done < <(jq -r --arg filter "${RECONCILE_PRIMARY:-}" \
+        '[.[].primary | select(length > 0)] | unique[] | select($filter == "" or . == $filter)' "$TMP/runs.json")
+
+      if [[ -s "$TMP/leftovers" ]]; then
+        cat "$TMP/leftovers" >&2
+        exit 1
+      fi
+
+  - id: tick
+    depends: leftovers
     preconditions:
       - condition: "${RUNS}"
         expected: "re:^\\[.+\\]$"
