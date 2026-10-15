@@ -19,6 +19,9 @@ params:
   - name: BASE_BRANCH
     type: string
     default: "main"
+  - name: NOTIFY_TERMINAL
+    type: string
+    default: ""
 env:
   - RUN: ${context.run.id}
   - WORKTREE: ${PRIMARY}/.workspace/worktrees/poc-${RUN}
@@ -270,7 +273,8 @@ steps:
         ' "$STATE/pages.json" > "$STATE/promotion.url"
         dagu enqueue --run-id "feature-$RUN" "$PRIMARY/.workspace/dagu/dags/feature.yaml" -- \
           ISSUE="$ISSUE" PRIMARY="$PRIMARY" BRANCH="dagu/issue-$ISSUE" \
-          BASE_BRANCH="$BASE_BRANCH" POC_BASIS="$(cat "$STATE/promotion.url")"
+          BASE_BRANCH="$BASE_BRANCH" NOTIFY_TERMINAL="$NOTIFY_TERMINAL" \
+          POC_BASIS="$(cat "$STATE/promotion.url")"
       elif [[ "$VERDICT" == FAIL && -f "$STATE/created" ]]; then
         gh issue close "$ISSUE" --repo "$REPO" --reason 'not planned' --comment "VERDICT: FAIL; run:$RUN. $(cat "$STATE/comment.url")"
       else

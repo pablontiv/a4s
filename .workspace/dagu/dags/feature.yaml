@@ -92,7 +92,8 @@ steps:
       gh issue comment "$ISSUE" --body-file "$STATE/triage.md"
       if [[ "$POC" == yes ]]; then
         dagu enqueue --run-id "poc-$RUN" "$PRIMARY/.workspace/dagu/dags/poc.yaml" -- \
-          ISSUE="$ISSUE" QUESTION="$QUESTION" PRIMARY="$PRIMARY" BASE_BRANCH="$BASE_BRANCH"
+          ISSUE="$ISSUE" QUESTION="$QUESTION" PRIMARY="$PRIMARY" BASE_BRANCH="$BASE_BRANCH" \
+          NOTIFY_TERMINAL="$NOTIFY_TERMINAL"
       fi
 
   - id: start_gate

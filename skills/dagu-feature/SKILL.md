@@ -248,7 +248,9 @@ latest triage question (or the question body for an issue created by record)
 and nonempty required sections outside fences.
 It verifies Después del PASS in the body and enqueues the absolute feature
 DAG with ISSUE, PRIMARY, BRANCH, BASE_BRANCH and POC_BASIS pointing to the PASS;
-its human triage cites that URL as BASIS and still requires REVIEW for POC=no.
+the PoC run and promoted `feature-<RUN>` run retain the original run's
+`NOTIFY_TERMINAL`. Its human triage cites that URL as BASIS and still requires
+REVIEW for POC=no.
 PASS with promote=no ends. FAIL closes only an issue created by record as
 `not planned`; preexisting issues stay open. For INCONCLUSIVE, the operator
 chooses iteration or completion with promote=no.
