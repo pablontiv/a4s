@@ -12,12 +12,17 @@ export const isActive = (run: RunDetails): boolean =>
 
 export const topicFor = (run: RunDetails): string => `dagrun:${run.name}/${run.dagRunId}`;
 
-// Terminal control characters from DAG names/params must remain plain widget text.
+// Terminal control characters from Dagu data must remain plain widget text.
 const plain = (text: string): string => text.replace(/[\x00-\x1f\x7f-\x9f]/g, " ");
 
-export function runLabel(run: RunDetails): string {
-  const issue = run.params?.match(/(?:^|[\s"{,])ISSUE(?:["']?\s*[:=]\s*["']?)(\d+)(?=$|[\s"'},])/);
-  return issue ? `#${issue[1]}` : plain(run.dagRunId);
+export function issueNumber(run: RunDetails): string | undefined {
+  return run.params?.match(/(?:^|[\s"{,])ISSUE(?:["']?\s*[:=]\s*["']?)(\d+)(?=$|[\s"'},])/)?.[1];
+}
+
+export function runLabel(run: RunDetails, slug?: string): string {
+  const issue = issueNumber(run);
+  const identity = issue ? `#${issue}${slug ? ` ${slug}` : ""}` : plain(run.dagRunId);
+  return `${plain(run.name)} ${identity}`;
 }
 
 export function currentStep(run: RunDetails): string | undefined {
@@ -28,13 +33,13 @@ export function currentStep(run: RunDetails): string | undefined {
     ?? nodes.find(node => ["running", "waiting"].includes(node.statusLabel)))?.step.name;
 }
 
-export function renderRun(run: RunDetails): string {
+export function renderRun(run: RunDetails, slug?: string): string {
   const nodes = run.nodes ?? [];
   const done = nodes.filter(node => ["succeeded", "skipped"].includes(node.statusLabel)).length;
   const filled = nodes.length ? Math.floor(done / nodes.length * 6) : 0;
   const bar = "▰".repeat(filled) + "▱".repeat(6 - filled);
   const step = currentStep(run);
-  return `dagu · ${runLabel(run)} ${bar} ${done}/${nodes.length}${step ? ` ${plain(step)}` : ""} ${plain(run.statusLabel)}`;
+  return `dagu · ${runLabel(run, slug)} ${bar} ${done}/${nodes.length}${step ? ` ${plain(step)}` : ""} ${plain(run.statusLabel)}`;
 }
 
 export interface Notification {
@@ -45,7 +50,7 @@ export interface Notification {
 export class Transitions {
   private states = new Map<string, { status: string; step: string | undefined }>();
 
-  observe(run: RunDetails): Notification | undefined {
+  observe(run: RunDetails, slug?: string): Notification | undefined {
     const key = topicFor(run);
     const step = currentStep(run);
     const previous = this.states.get(key);
@@ -56,11 +61,11 @@ export class Transitions {
     if (!previous || (previous.status === run.statusLabel
       && (run.statusLabel !== "waiting" || previous.step === undefined || previous.step === step))) return;
     if (run.statusLabel === "waiting") {
-      return { message: `dagu · ${runLabel(run)} waiting · ${plain(step ?? "sin paso")}`, type: "warning" };
+      return { message: `dagu · ${runLabel(run, slug)} waiting · ${plain(step ?? "sin paso")}`, type: "warning" };
     }
     if (["succeeded", "failed", "aborted"].includes(run.statusLabel)) {
       return {
-        message: `dagu · ${runLabel(run)} ${run.statusLabel}`,
+        message: `dagu · ${runLabel(run, slug)} ${run.statusLabel}`,
         type: run.statusLabel === "succeeded" ? "info" : run.statusLabel === "failed" ? "error" : "warning",
       };
     }
