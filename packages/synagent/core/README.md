@@ -314,8 +314,11 @@ valores configurables:
 El adaptador resuelve cada clave por separado: archivo de usuario, valores
 legacy de usuario (Pi) y default. `request-ttl` acepta segundos positivos,
 incluidos decimales; sin esa clave los pedidos no llevan `deadline`.
-`SYNAGENT_BROKER_URL`, cuando no está vacío, sobrescribe `broker-url` solo para
-el proceso y nunca se persiste; se valida con la misma restricción loopback.
+`SYNAGENT_BROKER_URL` y `SYNAGENT_REQUEST_TTL`, cuando no están vacías,
+sobrescriben `broker-url` y `request-ttl`, respectivamente, solo para el proceso
+y nunca se persisten. Cada override se valida con el mismo parser y error que su
+setting. El override sigue vigente después de `/synagent set` y
+`/synagent reset`; esos comandos modifican únicamente el archivo de usuario.
 Los cambios de archivo se conservan al arrancar otra sesión.
 
 En Pi, si falta `synagent.json`, el adaptador migra las cinco claves
@@ -461,11 +464,11 @@ texto assistant no vacío y congela la ventana en el siguiente
 `task.completed` mecánicos con la misma correlación, sin leer el historial de
 la sesión.
 
-El archivo global es `~/.omp/agent/synagent.json` y el archivo de proyecto es
-`<ctx.cwd>/.omp/synagent.json`. Un valor no vacío de `PI_CODING_AGENT_DIR`
-sustituye `~/.omp/agent` como directorio del archivo global. Cada clave se
-resuelve desde el archivo de proyecto confiable, el archivo global y su
-default, en ese orden.
+La configuración de omp usa únicamente el archivo de usuario
+`<agent-dir>/synagent.json`: `<agent-dir>` es el valor no vacío de
+`PI_CODING_AGENT_DIR` o, en su defecto, `~/.omp/agent`. Cada clave se resuelve
+desde ese archivo de usuario y después desde su default. omp no usa un archivo
+de configuración de proyecto.
 
 ## Seguridad
 
@@ -484,12 +487,13 @@ npm test --workspace @a4s/synagent-bus
 ```
 
 La comprobación viva permanente requiere omp 18.11.0, Pi 1.0.3 y las
-credenciales ya disponibles en sus directorios reales. Arranca dos sesiones
-RPC por host y un broker propio en `18326`, con DB
-`/tmp/synagent-impl-126/db`; carga exclusivamente los adaptadores del checkout
-y usa `SYNAGENT_BROKER_URL` sin modificar ni copiar configuración o
-credenciales. Antes de enviar comprueba con `lsof` que cada sesión conecta a
-`18326` y ninguna conecta a `1884`:
+credenciales ya disponibles en sus directorios reales. Cada verificador crea
+con `mkdtemp` una raíz de evidencia privada bajo el directorio temporal del
+sistema y guarda allí la DB; `SYNAGENT_LIVE_ROOT` permite elegir explícitamente
+otra raíz. Arranca sesiones RPC y un broker propio, carga exclusivamente los
+adaptadores del checkout y usa `SYNAGENT_BROKER_URL` sin modificar ni copiar
+configuración o credenciales. Antes de enviar comprueba con `lsof` que cada
+sesión conecta al puerto privado del verificador y ninguna conecta a `1884`:
 
 ```sh
 SYNAGENT_OMP_MODEL=anthropic/claude-haiku-5-5 \
@@ -502,12 +506,12 @@ tool bash en B y comprueba en el bus `task.delivered` y `task.completed`, su
 `correlation_id`, el body final, la inyección del completed en A y cero llamadas
 de B a `synagent_send`. Después lanza pedidos mutuos y comprueba una secuencia
 finita de dos comandos, dos delivered y dos completed, sin eventos causados por
-eventos. `SYNAGENT_LIVE_ROOT` cambia la raíz de evidencia temporal.
+eventos.
 
 La comprobación viva de recuperación requiere los mismos hosts y credenciales.
-Arranca un broker propio en `18327` con DB
-`/tmp/synagent-impl-127/db`, verifica con `lsof` el aislamiento de cada proceso
-antes de enviar, deja una entrega pendiente durante `sleep 120`, mata el grupo
+Arranca un broker propio en `18327` con la DB dentro de su raíz privada, verifica
+con `lsof` el aislamiento de cada proceso antes de enviar, deja una entrega
+pendiente durante `sleep 120`, mata el grupo
 del host con `SIGKILL`, reanuda el mismo archivo y exige una sola inyección. Un
 reenvío del id confirmado debe producir `message.duplicate` sin otro turno:
 
@@ -518,14 +522,14 @@ SYNAGENT_PI_MODEL=openai-codex/gpt-6.1-sol \
 ```
 
 La comprobación viva de vencimiento y cancelación usa el broker propio `18328`
-y DB `/tmp/synagent-impl-128/db`. Para cada host ocupa el destino con una tool
-real, envía desde otra sesión con `request-ttl=5`, exige `task.expired` con
-`reply_to`, ausencia de inyección y `estado=vencido` en `/synagent pending`.
+y una DB dentro de su raíz privada. Para cada host ocupa el destino con una tool
+real, envía desde otra sesión con `SYNAGENT_REQUEST_TTL=5`, exige `task.expired`
+con `reply_to`, ausencia de inyección y `estado=vencido` en `/synagent pending`.
 Después cancela otro pedido durante la ocupación y exige que tampoco se
 inyecte. Verifica con `lsof` que cada proceso conecta únicamente a `18328` antes
-de enviar. El script usa los directorios reales solo para la autenticación,
-guarda los bytes y permisos exactos de `synagent.json`, configura temporalmente
-el TTL y restaura el archivo al cerrar:
+de enviar. El script usa los directorios reales solo para la autenticación y
+registra SHA-256 y permisos (o ausencia) de los dos `synagent.json` antes,
+durante y después; exige que sean idénticos:
 
 ```sh
 SYNAGENT_OMP_MODEL=anthropic/claude-haiku-5-5 \
@@ -534,9 +538,7 @@ SYNAGENT_PI_MODEL=openai-codex/gpt-6.1-sol \
 ```
 
 La comprobación viva de DLQ usa omp 18.11.0, Pi 1.0.3 y el broker propio
-`18329`. Crea con `mkdtemp` una raíz de evidencia privada (`0700`) bajo el
-directorio temporal del sistema, imprime su ruta real y guarda allí la DB.
-`SYNAGENT_LIVE_ROOT` permite elegir explícitamente otra raíz. Para cada host
+`18329`. Guarda la DB dentro de su raíz privada. Para cada host
 publica JSON inválido y fuerza de forma determinista una excepción de
 `sendUserMessage` desde una extensión de verificación temporal creada de forma
 exclusiva (`0600`); el adaptador de producción no contiene un disparador. Exige

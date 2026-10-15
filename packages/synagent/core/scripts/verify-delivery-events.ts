@@ -2,8 +2,8 @@
 
 import assert from 'node:assert/strict'
 import { execFileSync, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
-import { mkdirSync, rmSync } from 'node:fs'
-import { homedir } from 'node:os'
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { homedir, tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -41,7 +41,10 @@ const BROKER_PORT = 18_326
 const coreRoot = fileURLToPath(new URL('../', import.meta.url))
 const repoRoot = resolve(coreRoot, '../../..')
 const brokerPath = join(repoRoot, 'packages', 'synagent', 'bus', 'broker.cjs')
-const root = resolve(process.env.SYNAGENT_LIVE_ROOT ?? '/tmp/synagent-impl-126')
+const rootOverride = process.env.SYNAGENT_LIVE_ROOT?.trim()
+const root = rootOverride
+  ? resolve(rootOverride)
+  : mkdtempSync(join(tmpdir(), 'synagent-verify-delivery-events-'))
 const dbPath = join(root, 'db')
 const brokerUrl = `mqtt://127.0.0.1:${BROKER_PORT}`
 
