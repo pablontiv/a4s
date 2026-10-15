@@ -20,6 +20,15 @@ y el ADR 0066.
    `hooks/adapter.ts` (regenerable con `adapters/claude/scripts/sync-protocol.mjs`
    y anclada por un test de paridad) porque el marketplace instala solo su
    directorio.
+4. **Diagnostics** (`diagnostics.ts`): fuente canónica de los registros privados.
+   `adapters/claude/scripts/sync-diagnostics.mjs` genera `adapters/claude/diagnostics.ts`
+   y `adapters/claude/bridge/diagnostics.cjs` para mantener autocontenido el plugin.
+   Desde `packages/synagent/core`, `npm run sync-diagnostics` regenera ambos;
+   `npm run sync-diagnostics -- --check` verifica los artefactos sin escribir.
+   El gate de tests ejecuta ese check y la misma suite funcional sobre la fuente
+   y ambas variantes. El generador usa el borrado de tipos de Node (compatible con
+   Node 26), sin depender del compilador de TypeScript. El logging de Claude
+   sigue diferido: los bridges conservan su stdout de mensajes canónicos.
 
 Agregar otro harness requiere un adaptador nuevo; no modifica el bus ni los
 adaptadores existentes.
