@@ -8,9 +8,9 @@ y el ADR 0066.
 
 ## Componentes
 
-1. **Bus** (`../bus/`): paquete instalable separado
-   `@a4s/synagent-bus`, con broker MQTT Aedes, persistencia LevelDB y plugin
-   Herdr. Los bridges de Claude viven dentro de su propio plugin.
+1. **Bus** (`../bus/`): aplicación instalable separada
+   `@a4s/synagent-bus`, con broker MQTT Aedes y persistencia LevelDB. Los
+   bridges de Claude viven dentro de su propio plugin.
 2. **Adaptadores** (`adapters/<harness>/`): bordes finos que traducen el API de
    cada harness al contrato canónico. Incluye el plugin de Claude Code y
    las extensiones independientes de Pi y omp.
@@ -147,8 +147,8 @@ npm run bus -- 0 --db /tmp/synagent-dev-db
 El default es `mqtt://127.0.0.1:1884`; el estado vive en la ruta de estado del
 usuario para cada SO, no dentro del checkout. El proceso imprime
 `BROKER READY :<puerto>` cuando listener y LevelDB están realmente listos. El
-broker es una aplicación separada: ningún adaptador lo arranca. Instalación,
-overrides de estado y uso del space Herdr `Synagent`/tab `Bus` se documentan en
+broker es una aplicación separada: ningún adaptador lo arranca. Su instalación
+y los overrides de estado se documentan en
 [`../bus/README.md`](../bus/README.md).
 
 ## Adaptador de Claude Code
@@ -647,8 +647,8 @@ SYNAGENT_CLAUDE_MODEL=haiku \
 
 Las pruebas de este workspace incluyen el protocolo compartido, los bridges
 reales y un recorrido MQTT bidireccional del adaptador Pi contra Aedes con el
-peer emulado. El workspace del bus prueba por separado la CLI persistente, el
-bin global empacado y la integración Herdr.
+peer emulado. El workspace del bus prueba por separado la CLI persistente y el
+bin global empacado.
 
 ## Límites actuales
 

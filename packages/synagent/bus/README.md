@@ -43,13 +43,13 @@ puerto por defecto; el argumento posicional tiene precedencia. `SIGINT` y
 
 ## Logging operacional
 
-El broker y la acción Herdr `ensure` escriben JSONL separado de stdout/stderr en
+El broker escribe JSONL separado de stdout/stderr en
 `${XDG_STATE_HOME:-$HOME/.local/state}/a4s/log/synagent-bus/<instance>/operational.jsonl`.
 `A4S_SYNAGENT_BUS_LOG_DIR` permite cambiar sólo la raíz de logs. Los IDs de
 instancia, operación y correlación pueden fijarse con
-`A4S_SERVICE_INSTANCE_ID`, `A4S_OPERATION_ID` y `A4S_CORRELATION_ID`. Si faltan,
-`ensure` los genera una vez. Luego reenvía los mismos valores al pane del
-broker. El logger normaliza el identificador de instancia como un componente.
+`A4S_SERVICE_INSTANCE_ID`, `A4S_OPERATION_ID` y `A4S_CORRELATION_ID`; el broker
+genera los valores que falten. El logger normaliza el identificador de instancia
+como un componente.
 Verifica la ruta contra la raíz léxica y la raíz real disponible. Rechaza un
 directorio de instancia que sea symlink o no sea un directorio. También rechaza
 un archivo que sea symlink o no sea regular. Fuerza `0700` en el directorio.
@@ -60,63 +60,21 @@ omite el logging. No usa un fallback inseguro.
 Cada línea incluye severidad OTel, identidad de recurso, identidad del harness,
 estado de flush, estado de pérdida, fase permitida y taxonomía de error. Los
 eventos cubren el inicio, readiness, instancia existente, cierre y error del
-broker. También cubren lock, spawn, readiness y fallo de `ensure`.
+broker.
 
 `a4s.logging.flush_status=sync_requested` indica que el cierre siguiente
 solicita `fsync`. Las demás líneas no solicitan un sync individual. Un fallo de
 `fsync` no puede cambiar una línea ya escrita. Esta es una limitación del primer
-JSONL local. `herdr.ensure.ready` representa la escritura posterior de
-`SYNAGENT BUS READY` en stdout. También solicita sync antes de retornar.
+JSONL local.
 
 El logger comprueba el tipo, inode y la contención real. Aun existe una ventana
 TOCTOU portable ante un reemplazo concurrente del path. Este candidato no usa
 APIs no portables para cerrar esa ventana.
 
 Los registros no contienen mensajes externos crudos, stack traces, payloads
-MQTT, tokens, entorno, argv completo ni rutas de base/plugin. El JSONL nunca se
-escribe a los canales de protocolo, por lo que conserva sin cambios las líneas
-`BROKER READY`, `BROKER ALREADY RUNNING` y `SYNAGENT BUS READY`.
-
-## Plugin Herdr
-
-El mismo directorio es un plugin Herdr instalable desde GitHub:
-
-```sh
-herdr plugin install pablontiv/a4s/packages/synagent/bus
-# desarrollo local
-herdr plugin link "$PWD/packages/synagent/bus"
-herdr plugin action invoke ensure --plugin a4s.synagent-bus
-```
-
-Al arrancar el servidor, el hook one-shot `ensure` crea o reutiliza el único
-space `Synagent`, con cwd estable en el home del usuario, y abre el entrypoint
-`bus` como tab `Bus` sin cambiar el foco. Un space preexistente único se adopta
-sin cerrar ni modificar sus tabs previos. La acción global `ensure` ejecuta la
-misma operación. El estado de coordinación declarativo (`runtime.json`) vive
-en `HERDR_PLUGIN_STATE_DIR`. La exclusión de `ensure` no usa archivos: reserva
-atómicamente el mutex TCP `127.0.0.1:11884`, que el kernel libera incluso tras
-un crash o `SIGKILL`. `SYNAGENT_ENSURE_PORT` permite cambiar sólo ese puerto de
-control y debe ser distinto del puerto MQTT. Si otro proceso local lo ocupa,
-`ensure` reintenta de forma acotada y falla cerrado sin abrir un pane.
-
-La base MQTT sigue en la ruta de estado del usuario indicada arriba. Para un
-override de plugin, define `SYNAGENT_PORT`, `SYNAGENT_DB` o
-`SYNAGENT_ENSURE_PORT` en el entorno del servidor Herdr antes del arranque.
-Al abrir el pane, `ensure` usa una lista permitida. Reenvía `SYNAGENT_PORT`,
-`SYNAGENT_DB`, la raíz de logging, los tres IDs y `XDG_STATE_HOME`. Los IDs
-siempre tienen valor. Las demás variables sólo se reenvían cuando están
-definidas. `ensure` no reenvía el entorno completo.
-
-`ensure` usa la salud del broker como fuente de verdad. Sondea MQTT antes de
-esperar el mutex y vuelve a sondearlo después de adquirirlo. Si el broker
-responde, termina sin abrir otro pane. Si no responde, selecciona o crea el
-único space `Synagent` y abre un pane `bus` nuevo con un cwd estable. Espera que
-MQTT responda y luego verifica el proceso nuevo antes de guardar sus
-identificadores. Ignora con una advertencia el estado previo mal formado o
-incompatible. Después intenta cerrar el pane de plugin registrado anteriormente.
-Esa limpieza es de mejor esfuerzo y nunca bloquea el arranque. No cierra tabs
-ni spaces con comandos nativos. Tampoco cambia el foco ni actúa como supervisor
-continuo. La reconciliación ocurre al ejecutar la acción o al reiniciar Herdr.
+MQTT, tokens, entorno, argv completo ni rutas de base. El JSONL nunca se escribe
+a los canales de protocolo, por lo que conserva sin cambios las líneas
+`BROKER READY` y `BROKER ALREADY RUNNING`.
 
 ## Límites y seguridad
 
