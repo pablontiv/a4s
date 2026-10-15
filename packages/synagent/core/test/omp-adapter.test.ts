@@ -46,6 +46,18 @@ test('omp adapter captures completion and releases only on terminal agent_end', 
   const topic = 'synagent/v1/a4s/omp-end'
   await harness.start()
   await waitFor(() => harness.notifications.some(({ message }) => message.includes('subscribed to') && message.includes(topic)))
+  assert.ok(harness.notifications.some(({ message }) =>
+    message.includes('filters=synagent/+/a4s/omp-end')))
+  await publish(publisher, 'synagent/v99/a4s/omp-end', serialize(message({
+    id: 'omp-unknown-version',
+    to: 'a4s/omp-end',
+  })))
+  await publish(publisher, topic, '{"id":"omp-malformed"\n')
+  await waitFor(() =>
+    harness.notifications.some(({ message }) => message.includes('VERSION_UNSUPPORTED'))
+    && harness.notifications.some(({ message }) => message.includes('MESSAGE_INVALID')),
+  )
+  assert.equal(harness.received.length, 0)
   await publish(publisher, topic, serialize(message({ id: 'omp-first', to: 'a4s/omp-end' })))
   await publish(publisher, topic, serialize(message({ id: 'omp-second', to: 'a4s/omp-end' })))
   await waitFor(() =>

@@ -22,7 +22,8 @@
 // `task.expired` informa que el deadline se observó antes de la inyección.
 // `note.published` y los eventos nunca producen eventos adicionales.
 // `correlation_id` identifica el comando raíz y `causation_id` el mensaje que
-// causó el sobre actual. Añadir kinds y campos opcionales compatibles conserva v1.
+// causó el sobre actual. Solo agregar campos opcionales conserva v1; agregar o
+// quitar kinds, o cambiar/quitar campos, exige subir PROTOCOL_VERSION.
 //
 // CONTRATO DE ADAPTADOR (extensible a hosts futuros): un adaptador provee un
 // HarnessBinding (identity/reserve/deliver) y un transporte Publish/Subscribe;
@@ -41,6 +42,61 @@ export type CommandKind = (typeof COMMAND_KINDS)[number]
 export type EventKind = (typeof EVENT_KINDS)[number]
 export type MessageKind = (typeof MESSAGE_KINDS)[number]
 export type SynagentSendKind = (typeof SYNAGENT_SEND_KINDS)[number]
+
+export const PROTOCOL_ERROR_CODES = ['MESSAGE_INVALID', 'VERSION_UNSUPPORTED'] as const
+export type ProtocolErrorCode = (typeof PROTOCOL_ERROR_CODES)[number]
+
+export class ProtocolError extends Error {
+  readonly code: ProtocolErrorCode
+
+  constructor(code: ProtocolErrorCode, message: string) {
+    super(message)
+    this.name = 'ProtocolError'
+    this.code = code
+  }
+}
+
+type CanonicalField = keyof CanonicalMessage
+export interface CanonicalKindSchema {
+  readonly kind: MessageKind
+  readonly required: readonly CanonicalField[]
+  readonly nonEmptyStrings: readonly CanonicalField[]
+  readonly strings: readonly CanonicalField[]
+  readonly finiteNumbers: readonly CanonicalField[]
+  readonly optionalNonEmptyStrings: readonly CanonicalField[]
+  readonly optionalFiniteNumbers: readonly CanonicalField[]
+}
+
+const REQUIRED_FIELDS = ['id', 'from', 'to', 'kind', 'body', 'ts'] as const
+const NON_EMPTY_STRING_FIELDS = ['id', 'from', 'to', 'kind'] as const
+const STRING_FIELDS = ['body'] as const
+const FINITE_NUMBER_FIELDS = ['ts'] as const
+const OPTIONAL_NON_EMPTY_STRING_FIELDS = ['reply_to', 'correlation_id', 'causation_id'] as const
+const OPTIONAL_FINITE_NUMBER_FIELDS = ['deadline'] as const
+
+function canonicalKindSchema(kind: MessageKind): CanonicalKindSchema {
+  return {
+    kind,
+    required: REQUIRED_FIELDS,
+    nonEmptyStrings: NON_EMPTY_STRING_FIELDS,
+    strings: STRING_FIELDS,
+    finiteNumbers: FINITE_NUMBER_FIELDS,
+    optionalNonEmptyStrings: OPTIONAL_NON_EMPTY_STRING_FIELDS,
+    optionalFiniteNumbers: OPTIONAL_FINITE_NUMBER_FIELDS,
+  }
+}
+
+// Esquema declarativo por kind. Los lectores v1 ignoran y no re-emiten campos
+// desconocidos: así pueden leer sobres que agreguen campos opcionales.
+export const MESSAGE_SCHEMAS = {
+  'task.request': canonicalKindSchema('task.request'),
+  'task.redirect': canonicalKindSchema('task.redirect'),
+  'task.cancel': canonicalKindSchema('task.cancel'),
+  'task.delivered': canonicalKindSchema('task.delivered'),
+  'task.completed': canonicalKindSchema('task.completed'),
+  'task.expired': canonicalKindSchema('task.expired'),
+  'note.published': canonicalKindSchema('note.published'),
+} as const satisfies Readonly<Record<MessageKind, CanonicalKindSchema>>
 
 export const DEAD_LETTER_CAUSES = [
   'INVALID_JSON',
@@ -77,6 +133,7 @@ export interface CanonicalMessage {
 
 export const PROTOCOL_VERSION = 'v1'
 export const TOPIC_ROOT = 'synagent'
+export const SUBSCRIPTION_VERSION = '+'
 export const LEGACY_TOPIC_ROOT = 'a4s/inbox'
 export const GLOBAL_ADDRESS = 'all'
 
@@ -163,8 +220,10 @@ export function legacyTopic(address: string): string {
 }
 
 // --- plan de suscripción -------------------------------------------------------
-// durable   (clean=false): buzón directo (+ legacy solo si se pide explícitamente).
-// transient (clean=true):  broadcasts de proyecto + global por defecto → online-only.
+// `+` se limita al nivel de versión: permite observar y rechazar explícitamente
+// versiones desconocidas. durable (clean=false): buzón directo (+ legacy solo si
+// se pide explícitamente). transient (clean=true): broadcasts de proyecto +
+// global por defecto → online-only. Publicar sigue usando PROTOCOL_VERSION.
 
 export interface SubscriptionPlan {
   readonly durable: readonly string[]
@@ -177,12 +236,54 @@ export function subscriptions(options: {
   legacyAddress?: string
   version?: string
 }): SubscriptionPlan {
-  const version = options.version ?? PROTOCOL_VERSION
+  const version = options.version ?? SUBSCRIPTION_VERSION
   const durable: string[] = [toTopic(directAddress(options.identity), version)]
   if (options.legacyAddress) durable.push(legacyTopic(options.legacyAddress))
   const transient: string[] = [toTopic(projectAddress(options.identity.project), version)]
   if (options.global !== false) transient.push(toTopic(GLOBAL_ADDRESS, version))
   return { durable, transient }
+}
+
+export interface CanonicalTopic {
+  readonly version: string
+  readonly to: string
+}
+
+export function parseCanonicalTopic(topic: string): CanonicalTopic | null {
+  const parts = topic.split('/')
+  if (parts[0] !== TOPIC_ROOT) return null
+  const version = parts[1]
+  if (!version || !isToken(version)) return null
+  const to = parts.length === 3
+    ? parts[2]
+    : parts.length === 4
+      ? `${parts[2]}/${parts[3]}`
+      : undefined
+  if (!to || !isAddress(to)) return null
+  return { version, to }
+}
+
+export function topicMatchesFilter(filter: string, topic: string): boolean {
+  const filterLevels = filter.split('/')
+  const topicLevels = topic.split('/')
+  if (filterLevels.length !== topicLevels.length) return false
+  for (let index = 0; index < filterLevels.length; index++) {
+    const expected = filterLevels[index]
+    if (expected !== '+' && expected !== topicLevels[index]) return false
+  }
+  return true
+}
+
+export function topicMatchesAnyFilter(filters: readonly string[], topic: string): boolean {
+  return filters.some(filter => topicMatchesFilter(filter, topic))
+}
+
+export function assertSupportedTopicVersion(topic: string): void {
+  const parsed = parseCanonicalTopic(topic)
+  if (!parsed) throw new ProtocolError('MESSAGE_INVALID', `topic canónico inválido: ${topic}`)
+  if (parsed.version !== PROTOCOL_VERSION) {
+    throw new ProtocolError('VERSION_UNSUPPORTED', `versión de protocolo no soportada: ${parsed.version}`)
+  }
 }
 
 // --- enrutado de recepción -----------------------------------------------------
@@ -413,35 +514,56 @@ export function parseCanonical(text: string): CanonicalMessage {
   try {
     value = JSON.parse(text)
   } catch {
-    throw new Error('mensaje canónico no es JSON válido')
+    throw new ProtocolError('MESSAGE_INVALID', 'mensaje canónico no es JSON válido')
   }
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw new Error('mensaje canónico debe ser un objeto')
+    throw new ProtocolError('MESSAGE_INVALID', 'mensaje canónico debe ser un objeto')
   }
 
   const message = value as Record<string, unknown>
-  for (const field of ['id', 'from', 'to', 'kind', 'body', 'ts'] as const) {
-    if (message[field] === undefined || message[field] === null) throw new Error(`falta campo canónico: ${field}`)
+  if (message.kind === undefined || message.kind === null) {
+    throw new ProtocolError('MESSAGE_INVALID', 'falta campo canónico: kind')
   }
-  for (const field of ['id', 'from', 'to', 'kind'] as const) {
+  if (typeof message.kind !== 'string' || message.kind.length === 0) {
+    throw new ProtocolError('MESSAGE_INVALID', 'campo canónico inválido: kind')
+  }
+  const schema = MESSAGE_SCHEMAS[message.kind as MessageKind] as CanonicalKindSchema | undefined
+  if (!schema) {
+    throw new ProtocolError('MESSAGE_INVALID', `kind inválido: ${String(message.kind)}`)
+  }
+
+  for (const field of schema.required) {
+    if (message[field] === undefined || message[field] === null) {
+      throw new ProtocolError('MESSAGE_INVALID', `falta campo canónico: ${field}`)
+    }
+  }
+  for (const field of schema.nonEmptyStrings) {
     if (typeof message[field] !== 'string' || message[field].length === 0) {
-      throw new Error(`campo canónico inválido: ${field}`)
+      throw new ProtocolError('MESSAGE_INVALID', `campo canónico inválido: ${field}`)
     }
   }
-  if (typeof message.body !== 'string') throw new Error('campo canónico inválido: body')
-  if (typeof message.ts !== 'number' || !Number.isFinite(message.ts)) {
-    throw new Error('campo canónico inválido: ts')
+  for (const field of schema.strings) {
+    if (typeof message[field] !== 'string') {
+      throw new ProtocolError('MESSAGE_INVALID', `campo canónico inválido: ${field}`)
+    }
   }
-  if (!MESSAGE_KINDS.includes(message.kind as MessageKind)) {
-    throw new Error(`kind inválido: ${String(message.kind)}`)
+  for (const field of schema.finiteNumbers) {
+    if (typeof message[field] !== 'number' || !Number.isFinite(message[field])) {
+      throw new ProtocolError('MESSAGE_INVALID', `campo canónico inválido: ${field}`)
+    }
   }
-  for (const field of ['reply_to', 'correlation_id', 'causation_id'] as const) {
+  for (const field of schema.optionalNonEmptyStrings) {
     if (message[field] !== undefined && (typeof message[field] !== 'string' || message[field].length === 0)) {
-      throw new Error(`campo canónico inválido: ${field}`)
+      throw new ProtocolError('MESSAGE_INVALID', `campo canónico inválido: ${field}`)
     }
   }
-  if (message.deadline !== undefined && (typeof message.deadline !== 'number' || !Number.isFinite(message.deadline))) {
-    throw new Error('campo canónico inválido: deadline')
+  for (const field of schema.optionalFiniteNumbers) {
+    if (message[field] !== undefined && (typeof message[field] !== 'number' || !Number.isFinite(message[field]))) {
+      throw new ProtocolError('MESSAGE_INVALID', `campo canónico inválido: ${field}`)
+    }
+  }
+  if (message.kind !== schema.kind) {
+    throw new ProtocolError('MESSAGE_INVALID', `kind inválido: ${String(message.kind)}`)
   }
 
   return {
@@ -449,12 +571,12 @@ export function parseCanonical(text: string): CanonicalMessage {
     from: message.from as string,
     to: message.to as string,
     kind: message.kind as MessageKind,
-    body: message.body,
+    body: message.body as string,
     ...(message.reply_to === undefined ? {} : { reply_to: message.reply_to as string }),
     ...(message.correlation_id === undefined ? {} : { correlation_id: message.correlation_id as string }),
     ...(message.causation_id === undefined ? {} : { causation_id: message.causation_id as string }),
     ...(message.deadline === undefined ? {} : { deadline: message.deadline as number }),
-    ts: message.ts,
+    ts: message.ts as number,
   }
 }
 

@@ -2,10 +2,11 @@
 // - Durable (clean=false, QoS 1): buzón directo (offline queued)
 // - Transient (clean=true, QoS 1): broadcasts de proyecto + global (online-only)
 //
-// Cada mensaje recibido (cualquier cliente) → stdout como línea JSON.
-// También puede retirar una sesión durable histórica en modo one-shot.
+// Cada mensaje recibido (cualquier cliente) → una trama JSONL
+// `{topic,payload}`; JSON.stringify preserva exactamente los newlines del
+// payload. También puede retirar una sesión durable histórica en modo one-shot.
 //
-//   node bridge-sub.cjs --url <url> [--retire-id <id>] [--durable-id <id> --durable <t1> [t2 ...]] [--transient-id <id> --transient <t1> [t2 ...]]
+//   node bridge-sub.cjs --url <url> [--retire-id <id>] [--durable-id <id> --stale-durable <t1> [t2 ...] --durable <t1> [t2 ...]] [--transient-id <id> --transient <t1> [t2 ...]]
 
 const mqtt = require('mqtt')
 
@@ -14,6 +15,7 @@ const args = process.argv.slice(2)
 let url = 'mqtt://127.0.0.1:1884'
 let retireId, durableId, transientId
 const durableTopics = []
+const staleDurableTopics = []
 const transientTopics = []
 
 let i = 0
@@ -32,6 +34,12 @@ while (i < args.length) {
   } else if (arg === '--transient-id') {
     transientId = args[++i]
     i++
+  } else if (arg === '--stale-durable') {
+    i++
+    while (i < args.length && !args[i].startsWith('--')) {
+      staleDurableTopics.push(args[i])
+      i++
+    }
   } else if (arg === '--durable') {
     i++
     while (i < args.length && !args[i].startsWith('--')) {
@@ -87,24 +95,34 @@ if (durableTopics.length > 0 && durableId) {
 
   durableClient.on('connect', () => {
     // MQTT.js usa object format: { 'topic1': {qos:1}, 'topic2': {qos:1} }
-    const topicObj = {}
-    for (const t of durableTopics) {
-      topicObj[t] = { qos: 1 }
+    const subscribeDurable = () => {
+      const topicObj = {}
+      for (const t of durableTopics) {
+        topicObj[t] = { qos: 1 }
+      }
+      durableClient.subscribe(topicObj, (err) => {
+        if (err) {
+          console.error(`[bridge] durable subscribe error: ${err.message}`)
+          process.exit(1)
+        }
+        console.error(`[bridge] suscrito durable: ${durableTopics.join(', ')}`)
+      })
     }
-    durableClient.subscribe(topicObj, (err) => {
+    if (staleDurableTopics.length === 0) {
+      subscribeDurable()
+      return
+    }
+    durableClient.unsubscribe(staleDurableTopics, (err) => {
       if (err) {
-        console.error(`[bridge] durable subscribe error: ${err.message}`)
+        console.error(`[bridge] durable stale unsubscribe error: ${err.message}`)
         process.exit(1)
       }
-      console.error(`[bridge] suscrito durable: ${durableTopics.join(', ')}`)
+      subscribeDurable()
     })
   })
-
-  durableClient.on('message', (_topic, payload) => {
-    process.stdout.write(payload.toString().replace(/\n/g, ' ') + '\n')
+  durableClient.on('message', (topic, payload) => {
+    process.stdout.write(`${JSON.stringify({ topic, payload: payload.toString() })}\n`)
   })
-
-  durableClient.on('error', (e) => console.error(`[bridge] durable error: ${e.message}`))
 }
 
 // Transient client: clean=true, clientId, QoS 1
@@ -131,10 +149,9 @@ if (transientTopics.length > 0 && transientId) {
     })
   })
 
-  transientClient.on('message', (_topic, payload) => {
-    process.stdout.write(payload.toString().replace(/\n/g, ' ') + '\n')
+  transientClient.on('message', (topic, payload) => {
+    process.stdout.write(`${JSON.stringify({ topic, payload: payload.toString() })}\n`)
   })
-
   transientClient.on('error', (e) => {
     console.error(`[bridge] transient error: ${e.message}`)
   })

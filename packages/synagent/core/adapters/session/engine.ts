@@ -27,6 +27,7 @@ import {
 } from './settings.ts'
 import {
   acceptInbound,
+  assertSupportedTopicVersion,
   deadLetterTopic,
   directAddress,
   instanceFromHostSession,
@@ -39,6 +40,7 @@ import {
   newId,
   parseCanonical,
   parseDeadLetter,
+  PROTOCOL_VERSION,
   renderForAgent,
   resolveProjectWithSource,
   serialize,
@@ -46,6 +48,7 @@ import {
   subscriptions,
   SYNAGENT_SEND_KINDS,
   toTopic,
+  topicMatchesAnyFilter,
   type CanonicalMessage,
   type DeadLetterCause,
   type DeadLetterRecord,
@@ -739,11 +742,13 @@ function synagentAdapter(
 
     // Sin identidad v1 no hay ningún topic seguro al que suscribirse.
     let plan: SubscriptionPlan
+    let obsoleteV1DirectTopic: string | undefined
     try {
       const resolved = computeIdentity(ctx)
       identity = resolved.identity
       identitySource = resolved.source
       dlqTopic = deadLetterTopic(identity)
+      obsoleteV1DirectTopic = toTopic(directAddress(identity), PROTOCOL_VERSION)
       const basePlan = subscriptions({ identity, global })
       plan = {
         durable: [...basePlan.durable, dlqTopic],
@@ -780,9 +785,14 @@ function synagentAdapter(
     const newDurableTopics = [...plan.durable]
     durableTopics = newDurableTopics
 
-    // Limpieza de suscripciones durables obsoletas (el cliente clean=false las retiene).
-    const topicsToRemove = [...new Set([...staleFromDisconnect, ...lastDurableTopics])]
-      .filter(topic => !newDurableTopics.includes(topic))
+    // Limpieza de suscripciones durables obsoletas (el cliente clean=false las
+    // retiene). El topic directo v1 anterior se agrega explícitamente para
+    // migrar sesiones creadas antes de persistir el plan wildcard.
+    const topicsToRemove = [...new Set([
+      ...staleFromDisconnect,
+      ...lastDurableTopics,
+      ...(obsoleteV1DirectTopic ? [obsoleteV1DirectTopic] : []),
+    ])].filter(topic => !newDurableTopics.includes(topic))
 
     durable = connectClient({
       ctx,
@@ -863,7 +873,8 @@ function synagentAdapter(
             lastDurableTopics = [...topics]
             persistDurableTopics(topics)
           }
-          ctx.ui.notify(`Synagent subscribed to ${topics.join(', ')}`, 'info')
+          const v1Topics = topics.map(topic => topic.replace('/+/', `/${PROTOCOL_VERSION}/`))
+          ctx.ui.notify(`Synagent subscribed to ${v1Topics.join(', ')} filters=${topics.join(', ')}`, 'info')
         })
       }
       const stale = staleTopics.filter(topic => !topics.includes(topic))
@@ -888,10 +899,23 @@ function synagentAdapter(
       })
     })
     active.on('message', (receivedTopic, payload) => {
-      if (!isActive() || !topics.includes(receivedTopic)) return
+      if (!isActive() || !topicMatchesAnyFilter(topics, receivedTopic)) return
       const text = payload.toString()
       if (receivedTopic === dlqTopic) {
         receiveDeadLetter(text, ctx)
+        return
+      }
+      try {
+        assertSupportedTopicVersion(receivedTopic)
+      } catch (error) {
+        logDiagnostic('message.rejected', {
+          operation: 'message.receive',
+          destinationScope: 'invalid',
+          queueDepth: queuedDeliveries.length,
+          severity: 'WARN',
+          error: classifyDiagnosticError(error, 'VERSION_UNSUPPORTED', 'message.receive', false, 'protocol.version'),
+        })
+        ctx.ui.notify(`Synagent ignored unsupported protocol version (VERSION_UNSUPPORTED): ${formatError(error)}`, 'warning')
         return
       }
       enqueueDelivery(text, ctx)
@@ -1063,7 +1087,7 @@ function synagentAdapter(
         severity: 'WARN',
         error: classifyDiagnosticError(error, 'MESSAGE_INVALID', 'message.receive', false, 'protocol.parse'),
       })
-      ctx.ui.notify(`Synagent ignored invalid message: ${formatError(error)}`, 'warning')
+      ctx.ui.notify(`Synagent ignored invalid message (MESSAGE_INVALID): ${formatError(error)}`, 'warning')
       return
     }
     const messageFields = {

@@ -7,6 +7,7 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import { createRequire } from 'node:module'
 import { Check } from 'typebox/value'
+import type { MqttClient } from 'mqtt'
 
 import synagentPi, { createSynagentPi } from '../adapters/pi/index.ts'
 import {
@@ -48,11 +49,28 @@ test('Pi adapter: v1 push bidireccional, broadcasts por defecto, orden y dedupe'
   const { broker, server, url } = await startBroker()
   const subscriber = await connectClient(url, 'pi-adapter-test-subscriber')
   const publisher = await connectClient(url, 'pi-adapter-test-publisher')
+  const staleUnsubscriptions: string[] = []
+  broker.on('unsubscribe', topics => staleUnsubscriptions.push(...topics))
+  const seeded = await new Promise<MqttClient>((resolve, reject) => {
+    const client = mqtt.connect(url, {
+      clientId: 'a4s-pi-pi-1',
+      clean: false,
+      reconnectPeriod: 0,
+    })
+    client.once('connect', () => resolve(client))
+    client.once('error', reject)
+  })
+  await subscribe(seeded, DIRECT_TOPIC)
+  await end(seeded)
   const harness = createHarness({
     'a4s.synagent.broker-url': url,
     'a4s.synagent.default-peer': 'a4s/claude-1',
-  }, [], 'pi-1')
-  let restored: ReturnType<typeof createHarness> | undefined
+  }, [{
+    type: 'custom',
+    customType: 'synagent-state',
+    data: { topics: DIRECT_TOPIC },
+  }], 'pi-1')
+  let restored: typeof harness | undefined
   t.after(async () => {
     await restored?.shutdown()
     await harness.shutdown()
@@ -69,9 +87,25 @@ test('Pi adapter: v1 push bidireccional, broadcasts por defecto, orden y dedupe'
     && harness.notifications.some(({ message }) => message.includes('subscribed to') && message.includes(PROJECT_TOPIC))
     && harness.notifications.some(({ message }) => message.includes('subscribed to') && message.includes(GLOBAL_TOPIC)),
   )
+  assert.ok(harness.notifications.some(({ message }) => message.includes('filters=synagent/+/a4s/pi-1')))
+  assert.ok(harness.notifications.some(({ message }) =>
+    message.includes('filters=synagent/+/a4s/all, synagent/+/all')))
+  await waitFor(() => staleUnsubscriptions.includes(DIRECT_TOPIC))
   assert.ok(!harness.notifications.some(({ message }) =>
     message.includes('subscribed to') && message.includes(LEGACY_TOPIC),
   ))
+
+  const unknownVersionPayloads = [
+    ['synagent/v99/a4s/pi-1', message({ id: 'unknown-direct', to: 'a4s/pi-1' })],
+    ['synagent/v99/a4s/all', message({ id: 'unknown-project', to: 'a4s/all' })],
+    ['synagent/v99/all', message({ id: 'unknown-global', to: 'all' })],
+  ] as const
+  for (const [topic, unknown] of unknownVersionPayloads) {
+    await publish(publisher, topic, serialize(unknown))
+  }
+  await waitFor(() => harness.notifications.filter(({ message }) =>
+    message.includes('VERSION_UNSUPPORTED')).length === unknownVersionPayloads.length)
+  assert.equal(harness.received.length, 0)
 
   const outbound: CanonicalMessage[] = []
   subscriber.on('message', (_topic: string, payload: Buffer) => outbound.push(JSON.parse(payload.toString())))

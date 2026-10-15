@@ -37,7 +37,11 @@ function collectHooks(options: Record<string, unknown> = {}, registerHook: Regis
   return { entries, get }
 }
 
-function makeEngine() {
+type BridgeChunk = { stream: 'stdout' | 'stderr'; text: string }
+function makeEngine(
+  chunks: BridgeChunk[] = [],
+  submit: (input: { text: string }) => Promise<void> = async () => {},
+) {
   const runCalls: string[][] = []
   const spawnArgs: string[][] = []
   const toolRegistered: Array<Record<string, unknown>> = []
@@ -66,12 +70,14 @@ function makeEngine() {
       // bridge-sub: iterable asíncrono que termina de inmediato (sin mensajes).
       spawn: (req: { argv: readonly string[] }) => {
         spawnArgs.push([...req.argv])
-        return (async function* () {})()
+        return (async function* () {
+          for (const chunk of chunks) yield chunk
+        })()
       },
     },
     tool: { register: async (def: Record<string, unknown>) => void toolRegistered.push(def) },
     command: { register: async (def: { name: string }) => void commandRegistered.push(def.name) },
-    prompt: { submit: async () => {} },
+    prompt: { submit },
     ui: { status: (s: string) => void statuses.push(s) },
   }
   return { $, runCalls, spawnArgs, toolRegistered, commandRegistered, statuses }
@@ -81,7 +87,7 @@ test('register resolves identity from origin and reports its source', async () =
   const eng = makeEngine()
   const { get } = collectHooks({}, await loadFreshRegister())
   await get('session.start')(eng.$, {}, (event: unknown) => event)
-  assert.ok(eng.spawnArgs[0]?.includes('synagent/v1/a4s/sess-test-1'))
+  assert.ok(eng.spawnArgs[0]?.includes('synagent/+/a4s/sess-test-1'))
   assert.ok(eng.statuses.some(status => status.includes('source=origin')))
 })
 
@@ -103,9 +109,9 @@ test('register: session.start resuelve identidad y registra synagent_send + /mq-
 
   assert.ok(eng.toolRegistered.some(d => d.name === 'synagent_send'), 'synagent_send debe registrarse')
   assert.ok(eng.commandRegistered.includes('mq-send'), '/mq-send debe registrarse')
-  assert.ok(eng.spawnArgs[0]?.includes('synagent/v1/a4s/sess-test-1'), 'suscribe al buzón directo')
-  assert.ok(eng.spawnArgs[0]?.includes('synagent/v1/a4s/all'), 'suscribe al broadcast de proyecto')
-  assert.ok(eng.spawnArgs[0]?.includes('synagent/v1/all'), 'suscribe al broadcast global por defecto')
+  assert.ok(eng.spawnArgs[0]?.includes('synagent/+/a4s/sess-test-1'), 'suscribe al buzón directo con versión wildcard')
+  assert.ok(eng.spawnArgs[0]?.includes('synagent/+/a4s/all'), 'suscribe al broadcast de proyecto')
+  assert.ok(eng.spawnArgs[0]?.includes('synagent/+/all'), 'suscribe al broadcast global por defecto')
   assert.ok(!eng.spawnArgs[0]?.includes('a4s/inbox/claude'), 'no suscribe al topic legacy')
 })
 
@@ -232,6 +238,32 @@ test('register: brokerUrl no-loopback se rechaza y cae al default', async () => 
   assert.ok(eng.statuses.some(s => /no loopback/.test(s)), 'debe avisar del rechazo')
 })
 
+test('register: bridge gatea versión antes del parser y conserva payload con newlines', async () => {
+  const payload = JSON.stringify({
+    id: 'claude-frame-valid',
+    from: 'a4s/pi',
+    to: 'a4s/sess-test-1',
+    kind: 'note.published',
+    body: 'línea-1\nlínea-2',
+    ts: 1,
+  })
+  const frames = [
+    { topic: 'synagent/v99/a4s/sess-test-1', payload },
+    { topic: 'synagent/v1/a4s/sess-test-1', payload: '{' },
+    { topic: 'synagent/v1/a4s/sess-test-1', payload },
+  ]
+  const delivered = Promise.withResolvers<string>()
+  const eng = makeEngine([{
+    stream: 'stdout',
+    text: `${frames.map(frame => JSON.stringify(frame)).join('\n')}\n`,
+  }], async ({ text }) => { delivered.resolve(text) })
+  const { get } = collectHooks({}, await loadFreshRegister())
+  await get('session.start')(eng.$, {}, (event: unknown) => event)
+  assert.match(await delivered.promise, /línea-1\nlínea-2/)
+  assert.ok(eng.statuses.some(status => status.includes('VERSION_UNSUPPORTED')))
+  assert.ok(eng.statuses.some(status => status.includes('MESSAGE_INVALID')))
+})
+
 // Bridge controlable: queda VIVO (parkea en next()) hasta que register llama a
 // return(); así `started` no se resetea solo y podemos ejercitar el reinicio por
 // cambio de session id (/clear). Registra en `returned` cuando lo detienen.
@@ -291,7 +323,7 @@ test('register: /clear (session id nuevo sin session.start) re-resuelve identida
   // Arranque normal para sess-A: el bridge queda vivo (no termina solo).
   await get('session.start')($, {}, next)
   await new Promise(r => setTimeout(r, 0)) // deja correr la IIFE del bridge
-  assert.ok(spawnArgs[0]?.includes('synagent/v1/a4s/sess-A'), 'bridge inicial suscribe al buzón de sess-A')
+  assert.ok(spawnArgs[0]?.includes('synagent/+/a4s/sess-A'), 'bridge inicial suscribe al buzón de sess-A')
 
   // Simula /clear: el session id cambia y NO se dispara session.start; el
   // siguiente prompt.submit debe detectar el cambio, re-resolver y re-suscribir.
@@ -300,7 +332,7 @@ test('register: /clear (session id nuevo sin session.start) re-resuelve identida
   await new Promise(r => setTimeout(r, 0))
 
   assert.deepEqual(returned, [0], 'el bridge de sess-A se detuvo (return())')
-  assert.ok(spawnArgs[1]?.includes('synagent/v1/a4s/sess-B'), 're-suscribe al buzón de sess-B')
+  assert.ok(spawnArgs[1]?.includes('synagent/+/a4s/sess-B'), 're-suscribe al buzón de sess-B')
   assert.ok(!spawnArgs[1]?.includes('synagent/v1/a4s/sess-A'), 'ya no usa el buzón viejo')
 
   // La identidad publicada y la sección de prompt reflejan sess-B.

@@ -4,6 +4,7 @@ import { test } from 'node:test'
 
 import {
   acceptInbound,
+  assertSupportedTopicVersion,
   createCanonical,
   deadLetterTopic,
   directAddress,
@@ -18,6 +19,7 @@ import {
   isFor,
   isForIdentity,
   isToken,
+  MESSAGE_SCHEMAS,
   legacyTopic,
   makeOutbound,
   MESSAGE_KINDS,
@@ -25,6 +27,7 @@ import {
   parseAddress,
   parseDeadLetter,
   parseCanonical,
+  parseCanonicalTopic,
   PROTOCOL_VERSION,
   projectAddress,
   renderForAgent,
@@ -35,6 +38,8 @@ import {
   serialize,
   subscriptions,
   SYNAGENT_SEND_KINDS,
+  topicMatchesAnyFilter,
+  topicMatchesFilter,
   toTopic,
   type CanonicalMessage,
 } from '../protocol.ts'
@@ -116,13 +121,29 @@ test('DLQ topic and records preserve the original payload and validate causes', 
   assert.throws(() => deadLetterTopic({ project: 'all', instance: 'x' }), /proyecto DLQ inválido/)
 })
 
-test('subscriptions: directo + broadcasts de proyecto/global por defecto; legacy solo explícito', () => {
+test('subscriptions wildcard the version level only; legacy stays exact', () => {
   const base = subscriptions({ identity })
-  assert.deepEqual(base.durable, ['synagent/v1/a4s/sess-01HXYZ'])
-  assert.deepEqual(base.transient, ['synagent/v1/a4s/all', 'synagent/v1/all'])
+  assert.deepEqual(base.durable, ['synagent/+/a4s/sess-01HXYZ'])
+  assert.deepEqual(base.transient, ['synagent/+/a4s/all', 'synagent/+/all'])
   const compatible = subscriptions({ identity, global: false, legacyAddress: 'claude' })
-  assert.deepEqual(compatible.durable, ['synagent/v1/a4s/sess-01HXYZ', 'a4s/inbox/claude'])
-  assert.deepEqual(compatible.transient, ['synagent/v1/a4s/all'])
+  assert.deepEqual(compatible.durable, ['synagent/+/a4s/sess-01HXYZ', 'a4s/inbox/claude'])
+  assert.deepEqual(compatible.transient, ['synagent/+/a4s/all'])
+})
+
+test('received topics match wildcard structurally and gate transport version before payload parsing', () => {
+  assert.equal(topicMatchesFilter('synagent/+/a4s/sess-01HXYZ', 'synagent/v99/a4s/sess-01HXYZ'), true)
+  assert.equal(topicMatchesFilter('synagent/+/a4s/sess-01HXYZ', 'synagent/v99/a4s/other'), false)
+  assert.equal(topicMatchesAnyFilter(['synagent/+/all'], 'synagent/v99/all'), true)
+  assert.deepEqual(parseCanonicalTopic('synagent/v1/a4s/all'), { version: 'v1', to: 'a4s/all' })
+  assert.deepEqual(parseCanonicalTopic('synagent/v99/all'), { version: 'v99', to: 'all' })
+  assert.equal(parseCanonicalTopic('synagent/v1/dlq/a4s/sess-01HXYZ'), null)
+  assert.doesNotThrow(() => assertSupportedTopicVersion('synagent/v1/a4s/sess-01HXYZ'))
+  assert.throws(
+    () => assertSupportedTopicVersion('synagent/v99/a4s/sess-01HXYZ'),
+    (error: unknown) => error instanceof Error
+      && 'code' in error
+      && error.code === 'VERSION_UNSUPPORTED',
+  )
 })
 
 test('isForIdentity / isFor: directo, proyecto, legacy y global default-on con opt-out', () => {
@@ -236,6 +257,29 @@ test('parseCanonical accepts legacy addresses and validates optional causal and 
     id: 'x', from: 'pi', to: 'claude', kind: 'task.request', body: 'hi', deadline: Number.NaN, ts: 1,
   })), /campo canónico inválido: deadline/)
   assert.equal(GLOBAL_ADDRESS, 'all')
+})
+
+test('parseCanonical uses per-kind schemas, reports stable codes, and ignores v1 extension fields', () => {
+  assert.deepEqual(Object.keys(MESSAGE_SCHEMAS), MESSAGE_KINDS)
+  for (const kind of MESSAGE_KINDS) assert.equal(MESSAGE_SCHEMAS[kind].kind, kind)
+  const parsed = parseCanonical(JSON.stringify({
+    id: 'ext-1',
+    from: 'a4s/pi',
+    to: 'a4s/omp',
+    kind: 'note.published',
+    body: 'compatible',
+    ts: 1,
+    version: 'v99',
+    future_optional: { any: 'value' },
+  }))
+  assert.equal('version' in parsed, false)
+  assert.equal('future_optional' in parsed, false)
+  assert.throws(
+    () => parseCanonical('not-json'),
+    (error: unknown) => error instanceof Error
+      && 'code' in error
+      && error.code === 'MESSAGE_INVALID',
+  )
 })
 
 test('message kinds distinguish commands, adapter events, and LLM-sendable notes', () => {

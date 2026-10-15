@@ -27,20 +27,20 @@ type Vector = {
   acceptPlain: boolean
   acceptGlobal: boolean
 }
-type Golden = { identity: Identity; legacyAddress: string; vectors: Vector[] }
+type Golden = { identity: Identity; legacyAddress: string; routingVectors: Vector[] }
 
 const golden = JSON.parse(
   readFileSync(new URL('./golden-vectors.json', import.meta.url), 'utf8'),
 ) as Golden
 
 test('golden: el wire re-serializa idéntico (estabilidad de formato cross-host)', () => {
-  for (const v of golden.vectors) {
+  for (const v of golden.routingVectors) {
     assert.equal(serialize(parseCanonical(v.wire)), v.wire, v.name)
   }
 })
 
 test('golden: dirección→topic es la regla v1 (o null para legacy plano)', () => {
-  for (const v of golden.vectors) {
+  for (const v of golden.routingVectors) {
     const { to } = parseCanonical(v.wire)
     if (v.topic === null) {
       assert.equal(isAddress(to), false, `${v.name}: legacy plano no es dirección v1`)
@@ -52,7 +52,7 @@ test('golden: dirección→topic es la regla v1 (o null para legacy plano)', () 
 
 test('golden: acceptInbound coincide con global default-on y opt-out', () => {
   const { identity, legacyAddress } = golden
-  for (const v of golden.vectors) {
+  for (const v of golden.routingVectors) {
     const message = parseCanonical(v.wire)
     assert.equal(
       acceptInbound(identity, message, { legacyAddress, global: false }),
