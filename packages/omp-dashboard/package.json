@@ -1,0 +1,11 @@
+{
+  "name": "@a4s/omp-dashboard",
+  "version": "0.0.0",
+  "private": true,
+  "license": "UNLICENSED",
+  "description": "PoC: panel local de solo lectura con estado, progreso y acciones pendientes de las sesiones omp vivas (a4s#149).",
+  "type": "module",
+  "scripts": {
+    "start": "bun src/server.ts"
+  }
+}
