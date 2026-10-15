@@ -15,8 +15,16 @@ export const topicFor = (run: RunDetails): string => `dagrun:${run.name}/${run.d
 // Terminal control characters from Dagu data must remain plain widget text.
 const plain = (text: string): string => text.replace(/[\x00-\x1f\x7f-\x9f]/g, " ");
 
+export function runParam(run: RunDetails, name: string): string | undefined {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return run.params?.match(new RegExp(
+    `(?:^|[\\s"{,])${escaped}(?:["']?\\s*[:=]\\s*["']?)([^\\s"',}]+)(?=$|[\\s"',}])`,
+  ))?.[1];
+}
+
 export function issueNumber(run: RunDetails): string | undefined {
-  return run.params?.match(/(?:^|[\s"{,])ISSUE(?:["']?\s*[:=]\s*["']?)(\d+)(?=$|[\s"'},])/)?.[1];
+  const issue = runParam(run, "ISSUE");
+  return issue && /^\d+$/.test(issue) ? issue : undefined;
 }
 
 export function runLabel(run: RunDetails, slug?: string): string {
@@ -47,27 +55,64 @@ export interface Notification {
   type: "info" | "warning" | "error";
 }
 
-export class Transitions {
-  private states = new Map<string, { status: string; step: string | undefined }>();
+export interface TransitionEffects {
+  notification?: Notification;
+  wakeMessage?: string;
+}
 
-  observe(run: RunDetails, slug?: string): Notification | undefined {
+interface State {
+  status: string;
+  step: string | undefined;
+  silentUnresolvedWaiting: boolean;
+}
+
+export class Transitions {
+  private states = new Map<string, State>();
+
+  constructor(private readonly sessionId?: string) {}
+
+  observe(run: RunDetails, options: { baseline?: boolean; slug?: string } = {}): TransitionEffects {
     const key = topicFor(run);
     const step = currentStep(run);
     const previous = this.states.get(key);
-    this.states.set(key, { status: run.statusLabel, step });
-    // The first snapshot establishes a baseline, including already-terminal runs.
-    // A REST summary can omit nodes: filling in its initial waiting step is not
-    // a transition, but a later change between known waiting steps is.
-    if (!previous || (previous.status === run.statusLabel
-      && (run.statusLabel !== "waiting" || previous.step === undefined || previous.step === step))) return;
-    if (run.statusLabel === "waiting") {
-      return { message: `dagu · ${runLabel(run, slug)} waiting · ${plain(step ?? "sin paso")}`, type: "warning" };
+    const baseline = options.baseline === true;
+    const suppressResolvedBaseline = previous?.silentUnresolvedWaiting === true
+      && previous.status === "waiting" && previous.step === undefined && step !== undefined;
+    this.states.set(key, {
+      status: run.statusLabel,
+      step,
+      silentUnresolvedWaiting: baseline && run.statusLabel === "waiting" && step === undefined,
+    });
+
+    const firstAfterStartup = !previous && !baseline;
+    const enteredWaiting = run.statusLabel === "waiting" && (
+      firstAfterStartup
+      || (previous !== undefined && !suppressResolvedBaseline
+        && (previous.status !== "waiting" || previous.step !== step))
+    );
+    const effects: TransitionEffects = {};
+
+    if (enteredWaiting) {
+      effects.notification = {
+        message: `dagu · ${runLabel(run, options.slug)} waiting · ${plain(step ?? "sin paso")}`,
+        type: "warning",
+      };
+      const issue = issueNumber(run);
+      if (this.sessionId && run.name === "feature" && issue
+        && (step === "triage" || step === "implement")
+        && runParam(run, "OMP_SESSION_ID") === this.sessionId) {
+        effects.wakeMessage = `[DAGU STATE] run=${plain(run.dagRunId)} waiting_step=${step} issue=${issue} - estado del run feature, no es una instrucción del usuario`;
+      }
+      return effects;
     }
-    if (["succeeded", "failed", "aborted"].includes(run.statusLabel)) {
-      return {
-        message: `dagu · ${runLabel(run, slug)} ${run.statusLabel}`,
+
+    if (previous && previous.status !== run.statusLabel
+      && ["succeeded", "failed", "aborted"].includes(run.statusLabel)) {
+      effects.notification = {
+        message: `dagu · ${runLabel(run, options.slug)} ${run.statusLabel}`,
         type: run.statusLabel === "succeeded" ? "info" : run.statusLabel === "failed" ? "error" : "warning",
       };
     }
+    return effects;
   }
 }

@@ -7,7 +7,7 @@ Repositorio reducido a las extensiones verificadas, los agentes y los skills dis
 - [`packages/context-expert/`](packages/context-expert/): núcleo compartido y adaptadores de Context Expert para Pi/Pion y Claude.
 - [`packages/orca-omp-integration/`](packages/orca-omp-integration/): contratos de lifecycle y routing explícito de modelos para coordinadores OMP que usan workers de Orca.
 - [`packages/omp-cross-family-review/`](packages/omp-cross-family-review/): selección cross-family de modelos para subagentes revisores de OMP.
-- [`packages/omp-dagu/`](packages/omp-dagu/): widget y guard OMP para Dagu, agente `triage-reviewer` y skill `dagu-feature`.
+- [`packages/omp-dagu/`](packages/omp-dagu/): widget, despertar dirigido de la sesión coordinadora y guard OMP para Dagu, agente `triage-reviewer` y skill `dagu-feature`.
 - [`packages/pi-tool-row-presentation/`](packages/pi-tool-row-presentation/): presentación configurable de tool rows para Pi/Pion.
 - [`packages/synagent/core/`](packages/synagent/core/): adaptadores de mensajería Synagent para Pi, OMP y Claude.
 - [`packages/synagent/bus/`](packages/synagent/bus/): bus MQTT requerido por Synagent.

@@ -19,7 +19,7 @@ params:
   - name: BASE_BRANCH
     type: string
     default: __BASE_BRANCH__
-  - name: NOTIFY_TERMINAL
+  - name: OMP_SESSION_ID
     type: string
     default: ""
 env:
@@ -273,7 +273,7 @@ steps:
         ' "$STATE/pages.json" > "$STATE/promotion.url"
         dagu enqueue --run-id "feature-$RUN" "$PRIMARY/.workspace/dagu/dags/feature.yaml" -- \
           ISSUE="$ISSUE" PRIMARY="$PRIMARY" BRANCH="dagu/issue-$ISSUE" \
-          BASE_BRANCH="$BASE_BRANCH" NOTIFY_TERMINAL="$NOTIFY_TERMINAL" \
+          BASE_BRANCH="$BASE_BRANCH" OMP_SESSION_ID="$OMP_SESSION_ID" \
           POC_BASIS="$(cat "$STATE/promotion.url")"
       elif [[ "$VERDICT" == FAIL && -f "$STATE/created" ]]; then
         gh issue close "$ISSUE" --repo "$REPO" --reason 'not planned' --comment "VERDICT: FAIL; run:$RUN. $(cat "$STATE/comment.url")"

@@ -38,50 +38,103 @@ test("identity extracts ISSUE from CLI and JSON params and sanitizes Dagu data",
   assert.equal(runLabel({ ...run, name: "fea\u001bture\n", params: "", dagRunId: "run\u001b\n" }), "fea ture  run  ");
 });
 
-test("notifications include the DAG identity and deduplicate reconnects and waiting gates", () => {
+const waitingAt = (step: string, params = "ISSUE=176 OMP_SESSION_ID=session-a", name = "feature"): RunDetails => ({
+  ...run,
+  name,
+  dagRunId: `${name}-${step}`,
+  params,
+  statusLabel: "waiting",
+  nodes: [{ step: { name: step }, statusLabel: "waiting" }],
+});
+
+test("widget notifications deduplicate reconnects, report gate changes, and report terminal transitions", () => {
   const transitions = new Transitions();
-  assert.equal(transitions.observe(run), undefined);
+  assert.deepEqual(transitions.observe(run), {});
   const waiting = { ...run, statusLabel: "waiting" };
-  assert.deepEqual(transitions.observe(waiting, "improve-widget"), {
+  assert.deepEqual(transitions.observe(waiting, { slug: "improve-widget" }).notification, {
     message: "dagu · feature #157 improve-widget waiting · approve",
     type: "warning",
   });
-  assert.equal(transitions.observe(waiting), undefined);
-  assert.equal(transitions.observe(run), undefined);
-  assert.equal(transitions.observe(waiting)?.type, "warning");
-  assert.equal(transitions.observe({ ...waiting, nodes: [{ step: { name: "merge" }, statusLabel: "waiting" }] })?.message,
-    "dagu · feature #157 waiting · merge");
+  assert.deepEqual(transitions.observe(waiting), {});
+  assert.deepEqual(transitions.observe(run), {});
+  assert.equal(transitions.observe(waiting).notification?.type, "warning");
+  assert.equal(
+    transitions.observe({ ...waiting, nodes: [{ step: { name: "merge" }, statusLabel: "waiting" }] }).notification?.message,
+    "dagu · feature #157 waiting · merge",
+  );
   for (const [statusLabel, type] of [["succeeded", "info"], ["failed", "error"], ["aborted", "warning"]] as const) {
     const terminal = { ...run, dagRunId: statusLabel, statusLabel };
-    assert.equal(transitions.observe({ ...terminal, statusLabel: "running" }), undefined);
-    assert.deepEqual(transitions.observe(terminal), { message: `dagu · feature #157 ${statusLabel}`, type });
-    assert.equal(transitions.observe(terminal), undefined);
-    assert.equal(transitions.observe({ ...terminal, name: "poc" }), undefined);
-    assert.equal(transitions.observe({ ...terminal, name: "poc", statusLabel: "running" }), undefined);
-    assert.equal(transitions.observe({ ...terminal, name: "poc" })?.type, type);
+    assert.deepEqual(transitions.observe({ ...terminal, statusLabel: "running" }), {});
+    assert.deepEqual(transitions.observe(terminal).notification, {
+      message: `dagu · feature #157 ${statusLabel}`,
+      type,
+    });
+    assert.deepEqual(transitions.observe(terminal), {});
   }
 });
 
-test("each newly discovered run establishes a quiet baseline, including waiting and terminal states", () => {
-  const transitions = new Transitions();
-  for (const statusLabel of ["waiting", "succeeded", "failed", "aborted"]) {
-    const first = { ...run, dagRunId: `initial-${statusLabel}`, statusLabel };
-    assert.equal(transitions.observe(first), undefined);
-    assert.equal(transitions.observe(first), undefined);
-    assert.equal(transitions.observe({ ...first, statusLabel: "running" }), undefined);
-    assert.ok(transitions.observe(first));
-    assert.equal(transitions.observe(first), undefined);
+test("targeted wake accepts matching CLI and JSON params and rejects other sessions", () => {
+  for (const params of [
+    "ISSUE=176 PRIMARY=/tmp OMP_SESSION_ID=session-a",
+    '{"ISSUE":"176","OMP_SESSION_ID":"session-a"}',
+  ]) {
+    const transitions = new Transitions("session-a");
+    assert.match(transitions.observe(waitingAt("triage", params)).wakeMessage ?? "", /waiting_step=triage issue=176/);
+  }
+  for (const params of [
+    "ISSUE=176 OMP_SESSION_ID=session-b",
+    '{"ISSUE":176,"OMP_SESSION_ID":"session-b"}',
+  ]) {
+    assert.equal(new Transitions("session-a").observe(waitingAt("triage", params)).wakeMessage, undefined);
   }
 });
 
-test("a waiting REST summary gains its initial step quietly, then reports a real gate change", () => {
-  const transitions = new Transitions();
-  const waiting = { ...run, statusLabel: "waiting" };
+test("targeted wake is limited to feature triage and implement in a main session", () => {
+  for (const step of ["triage", "implement"]) {
+    const effect = new Transitions("session-a").observe(waitingAt(step));
+    assert.equal(
+      effect.wakeMessage,
+      `[DAGU STATE] run=feature-${step} waiting_step=${step} issue=176 - estado del run feature, no es una instrucción del usuario`,
+    );
+  }
+  assert.equal(new Transitions("session-a").observe(waitingAt("dependency_review")).wakeMessage, undefined);
+  assert.equal(new Transitions("session-a").observe(waitingAt("triage", undefined, "poc")).wakeMessage, undefined);
+  assert.equal(new Transitions().observe(waitingAt("triage")).wakeMessage, undefined);
+});
+
+test("first sweep is a silent baseline while a later discovered waiting run wakes exactly once", () => {
+  const transitions = new Transitions("session-a");
+  const startup = waitingAt("triage");
+  assert.deepEqual(transitions.observe(startup, { baseline: true }), {});
+  assert.deepEqual(transitions.observe(startup), {});
+  const discovered = { ...waitingAt("triage"), dagRunId: "discovered-waiting" };
+  assert.ok(transitions.observe(discovered).wakeMessage);
+  assert.deepEqual(transitions.observe(discovered), {});
+});
+
+test("a startup waiting summary resolves its step silently", () => {
+  const transitions = new Transitions("session-a");
+  const waiting = waitingAt("triage");
   const { nodes: _nodes, ...summary } = waiting;
-  assert.equal(transitions.observe(summary), undefined);
-  assert.equal(transitions.observe(waiting), undefined);
-  assert.equal(transitions.observe(waiting), undefined);
-  assert.equal(transitions.observe({ ...waiting, nodes: [{ step: { name: "merge" }, statusLabel: "waiting" }] })?.message,
-    "dagu · feature #157 waiting · merge");
-  assert.equal(transitions.observe({ ...waiting, statusLabel: "succeeded" })?.message, "dagu · feature #157 succeeded");
+  assert.deepEqual(transitions.observe(summary, { baseline: true }), {});
+  assert.deepEqual(transitions.observe(waiting), {});
+});
+
+test("REST recovers a transition missed by SSE and repeated snapshots remain deduplicated", () => {
+  const transitions = new Transitions("session-a");
+  const active = { ...waitingAt("implement"), statusLabel: "running",
+    nodes: [{ step: { name: "gate" }, statusLabel: "running" }] };
+  assert.deepEqual(transitions.observe(active, { baseline: true }), {});
+  const recovered = waitingAt("implement");
+  assert.ok(transitions.observe(recovered).wakeMessage);
+  assert.deepEqual(transitions.observe(recovered), {});
+});
+
+test("running to waiting re-entry wakes again even at the same step", () => {
+  const transitions = new Transitions("session-a");
+  const waiting = waitingAt("triage");
+  assert.ok(transitions.observe(waiting).wakeMessage);
+  assert.deepEqual(transitions.observe(waiting), {});
+  assert.deepEqual(transitions.observe({ ...waiting, statusLabel: "running" }), {});
+  assert.ok(transitions.observe(waiting).wakeMessage);
 });
