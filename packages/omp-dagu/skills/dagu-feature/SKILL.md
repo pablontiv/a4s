@@ -61,7 +61,7 @@ in its widget and `[DAGU STATE]` notice without blocking a run.
 
 ## Template parameters
 
-The bootstrap renders both templates once when the repository adopts the lifecycle:
+The bootstrap renders the repository DAG templates when a repository adopts the lifecycle:
 
 | Placeholder | Meaning | rootline | homeserver |
 |---|---|---|---|
@@ -98,10 +98,10 @@ The steps:
 | `detect` | Checks `git`, `gh` (authenticated), `jq` and the exact required `dagu version`; reads package/version, source commit and source `origin`; fetches and requires that clean package commit on the remote default branch; reads repository settings and the installed DAG values and stamps. |
 | `answers` | `human.task` that shows the current stamp, `GATE`, `REQUIRED_CHECK`, and `TEST_PATHS`, then asks for those three values. Select the test-path ERE from the repository's actual conventions. In a4s use `(^\|/)(test\|tests)/\|\.test\.(ts\|cjs)$`. |
 | `worktrees` | Makes git ignore `.workspace/worktrees/`. When nothing ignores it yet, appends `/.workspace/worktrees/` to the clone's `info/exclude`, so the primary stays clean without a commit. |
-| `render` | Writes stamped and validated `feature.yaml`, `poc.yaml`, and `reconcile.yaml` under `<git-dir>/dagu-feature/`, keeping PRIMARY clean. |
+| `render` | Writes stamped and validated `feature.yaml`, `poc.yaml`, `discovery.yaml`, and `reconcile.yaml` under `<git-dir>/dagu-feature/`, keeping PRIMARY clean. Discovery receives the coordinating workspace label and derives the diagnosed repository from its `PRIMARY`. |
 | `reconcile` | Idempotently installs the stamped staged `reconcile.yaml` to `$DAGU_HOME/dags/reconcile.yaml` (`DAGU_HOME` defaults to `~/.dagu`) and validates it. One user-level DAG serves every adopting repository. |
 | `github` | Enables auto-merge and squash merge, and adds `REQUIRED_CHECK` as a strict required status check on the default branch. It keeps the existing contexts and every other protection setting. When it has to recreate the protection, it reads the protection back and fails if any other setting changed. |
-| `confirm` | Reads settings back, validates both staged DAGs, compares the installed reconciler with its stamped render, and prints the bundle identity plus the three adoption commit trailers. |
+| `confirm` | Reads settings back, validates the three staged repository DAGs, compares the installed reconciler with its stamped render, and prints the bundle identity plus the three adoption commit trailers. |
 
 Answer the form after `detect` succeeds, reusing the current values shown in its
 prompt during an upgrade. Choose `GATE` from the repository's documented local
@@ -116,7 +116,7 @@ dagu human-task complete --run-id "bootstrap-<repo>-v<version-with-hyphens>" --s
 
 The bootstrap is done when the run is `Succeeded`. To adopt or upgrade, open a
 self-contained adoption issue and enqueue the staged `feature.yaml` for that
-issue. The adoption commit copies both staged DAGs and includes the exact three
+issue. The adoption commit copies all three staged repository DAGs and includes the exact three
 trailers printed by `confirm`: `Dagu-Feature-Bundle`,
 `Dagu-Feature-Source`, and `Dagu-Feature-Bootstrap`. The bootstrap does not
 write CI; an initial adoption adds the workflow that publishes
@@ -126,10 +126,55 @@ write CI; an initial adoption adds the workflow that publishes
 
 Open an issue in the repository to adopt the lifecycle. Enqueue it as described below, but pass the staged file (`$(git rev-parse --git-path dagu-feature/feature.yaml)`) instead of `.workspace/dagu/dags/feature.yaml`, which does not exist yet. In `implement`, make a single commit that:
 
-- copies both staged files to `.workspace/dagu/dags/feature.yaml` and `.workspace/dagu/dags/poc.yaml`;
+- copies the three staged files to `.workspace/dagu/dags/feature.yaml`, `.workspace/dagu/dags/poc.yaml` and `.workspace/dagu/dags/discovery.yaml`;
 - adds the CI job that publishes `REQUIRED_CHECK`, if none exists yet.
 
 Once that run is `Succeeded`, every later issue enqueues `.workspace/dagu/dags/feature.yaml` from the primary checkout.
+
+## Descubrimiento continuo
+
+`discovery` diagnostica cualquier repositorio adoptado desde un snapshot de su rama
+por defecto y materializa unidades de trabajo aprobadas como issues. El label
+`workspace=<repo>` identifica el workspace coordinador que recibe los avisos OMP;
+el repositorio diagnosticado se resuelve en tiempo de ejecución desde `PRIMARY`.
+
+```sh
+dagu enqueue --run-id "discovery-<id>" .workspace/dagu/dags/discovery.yaml -- \
+  LENSES="0,1,2" POLICY="defecto" SOURCE="<origen de la solicitud>" \
+  LIVE_TARGET="" PRIMARY="/ruta/al/repo" \
+  OMP_SESSION_ID="<valor devuelto por dagu_session_id>"
+```
+
+`snapshot` imprime `out_dir`, `sha` y `snapshot`. El out-dir es
+`${DAGU_HOME:-$HOME/.dagu}/data/discovery/<owner>__<repo>/<run-id>/`; el
+worktree detached que contiene queda en `snapshot/` y es de solo lectura.
+Cada espera tiene un único artefacto a cargo del coordinador:
+
+| `human.task` | Archivo que debe escribir |
+|---|---|
+| `discover` | Un `findings-<lente>.jsonl` por lente solicitada; ejecuta una subagente por lente, máximo 8. |
+| `validate` | `verdicts.jsonl`, con un veredicto independiente por hallazgo actual. Si `LIVE_TARGET` está definido, la validación en vivo es solo lectura. |
+| `consolidate` | `units.jsonl`, con cada hallazgo confirmado asignado exactamente a una unidad autocontenida y con linaje. |
+| `approve` | No escribe archivo: completa el formulario `APPROVED=all` o una lista de ids de unidad separada por comas. |
+
+Completa cada espera con `dagu human-task complete discovery --run-id <id>
+--step <paso>`; para `approve`, agrega `--input APPROVED=all`. Para corregir la
+consolidación, devuelve `approve` con `dagu human-task push-back discovery
+--run-id <id> --step approve --expected-iteration <n>`. Los pasos deterministas
+validan todos los JSONL y fallan cerrados antes de continuar.
+
+No se escribe en GitHub antes de `approve`. `materialize` busca primero el
+marcador `<!-- discovery-unit: <id> -->` entre todos los issues: crea una vez y
+registra `reused: true` al repetir. `dispose` aplica `POLICY`, evita run ids de
+`feature` existentes y actualiza el historial aceptado de cada lente. En la
+siguiente ejecución, `temporal-<lente>.jsonl` distingue `nuevo`, `persistente`,
+`resuelto` y `regresion`.
+
+La extensión despierta la sesión `OMP_SESSION_ID` en cada espera con:
+
+```text
+[DAGU STATE] run=<id> status=waiting step=<discover|validate|consolidate|approve> dag=discovery bundle=<version|unstamped> extension=<version> compat=<ok|incompatible|unstamped>
+```
 
 ## Enqueue an issue
 
