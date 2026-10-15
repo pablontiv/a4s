@@ -265,3 +265,30 @@ test("widget and DAGU STATE notice report ok, incompatible and unstamped bundle 
     );
   }
 });
+
+for (const [name, step] of [
+  ["feature", "start_primary_unavailable"],
+  ["feature", "close_primary_unavailable"],
+  ["poc", "base_primary_unavailable"],
+] as const) {
+  test(`${name} ${step} wakes only its owner with the resolved cause`, () => {
+    const waiting: RunDetails = {
+      ...run, name, statusLabel: "waiting", params: "ISSUE=228 OMP_SESSION_ID=owner",
+      nodes: [{
+        statusLabel: "waiting",
+        step: { id: step, name: step, humanTask: { prompt: "primary dirty:  M tracked.txt\nRestore clean main; push back." } },
+      }],
+    };
+    const transitions = new Transitions("owner");
+    const message = transitions.observe(waiting).wakeMessage!;
+    assert.match(message, /^\[DAGU STATE\] run=a4s-issue-157 status=waiting step=/);
+    assert.ok(message.includes(`step=${step} issue=228 bundle=0.2.0`));
+    assert.ok(message.includes("cause=primary dirty:  M tracked.txt Restore clean main; push back."));
+    assert.deepEqual(transitions.observe(waiting), {});
+    assert.deepEqual(new Transitions("another-owner").observe(waiting), {});
+    assert.deepEqual(new Transitions().observe(waiting), {});
+    transitions.observe({ ...waiting, statusLabel: "queued" });
+    assert.ok(transitions.observe(waiting).wakeMessage, "a repeated unavailable recheck wakes again");
+    assert.deepEqual(new Transitions("owner").observe(waiting, { baseline: true }), {});
+  });
+}

@@ -200,7 +200,31 @@ done
 
 Set `PR_NUMBER` only to adopt an existing open PR whose head branch is `BRANCH`. `OMP_SESSION_ID` targets the persistent main OMP session that enqueued the run. `BASE_BRANCH`, `GATE` and `REQUIRED_CHECK` take their defaults from the versioned file. Pass them only to override them for this run.
 
-`start_gate` fails when `PRIMARY` is a linked worktree, is not on `BASE_BRANCH`, or has local changes. Report the state of the clone and stop. Enqueue the issue again from that same clone once it is clean and on `BASE_BRANCH`.
+Before `start_gate` and `close_gate`, the DAG detects whether PRIMARY is clean and on
+`BASE_BRANCH`. An unavailable primary pauses the same run at
+`start_primary_unavailable` or `close_primary_unavailable`; PoC `base` uses
+`base_primary_unavailable`. Waiting releases the repository queue slot. The detector
+prints `primary dirty: <files>` or `primary on <branch>, expected <base>` to stderr;
+the checkpoint prompt and the owner's `[DAGU STATE]` notice carry that cause.
+
+The operator restores PRIMARY to clean `BASE_BRANCH`, preserving their changes.
+Read the current run-wide push-back iteration (default `0` when absent), then:
+
+```sh
+dagu status --run-id <id> feature
+dagu human-task push-back feature --run-id <id> \
+  --step start_primary_unavailable --expected-iteration <observed-iteration>
+```
+
+Use `close_primary_unavailable` for closing, or DAG `poc` and
+`base_primary_unavailable` for a PoC. Push-back rewinds to the detector; a still
+unavailable primary waits again, while a clean primary skips the checkpoint and
+continues in the same run. Cleaning alone leaves it Waiting. The DAG owns worktree
+creation/removal and BASE_SHA capture. `await_merge` remains reconciler-owned.
+PRIMARY must still be the main clone, not a linked worktree. Fetch failures and
+ff-only/divergence failures remain terminal with diagnostics: the operator restores
+remote access or reconciles commits preserving their work, then uses terminal-run
+recovery below. The coordinator leaves commit repair to the operator.
 
 Dagu snapshots the definition when you enqueue. Later edits to the file do not affect runs that already exist.
 

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -39,7 +39,7 @@ type Repository = {
 };
 
 function repository(): Repository {
-  const root = mkdtempSync(join(tmpdir(), "omp-dagu-feature-"));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "omp-dagu-feature-")));
   const primary = join(root, "primary");
   const remote = join(root, "remote.git");
   const worktree = join(root, "worktree");
@@ -295,4 +295,89 @@ for (const [name, definition] of definitions) {
       rmSync(repo.root, { recursive: true, force: true });
     }
   });
+}
+
+for (const [name, definition] of [
+  ...definitions,
+  ["PoC template", fileURLToPath(new URL("../skills/dagu-feature/poc.yaml", import.meta.url))],
+  ["PoC rendered DAG", fileURLToPath(new URL("../../../.workspace/dagu/dags/poc.yaml", import.meta.url))],
+] as const) {
+  const phases = name.startsWith("PoC") ? ["base"] : ["start", "close"];
+  for (const phase of phases) {
+    const detector = `detect_${phase}_primary`;
+    const checkpoint = `${phase}_primary_unavailable`;
+    test(`${name} ${phase} detects concrete causes, rechecks ready and wires the checkpoint`, () => {
+      const repo = repository();
+      try {
+        const source = readFileSync(definition, "utf8");
+        const block = source.split(`  - id: ${checkpoint}\n`)[1]!.split("\n  - id:")[0]!;
+        assert.ok(block.includes(`depends: ${detector}`));
+        assert.ok(block.includes("continue_on: skipped"));
+        assert.ok(block.includes('expected: "re:^primary "'));
+        assert.ok(block.includes("action: human.task"));
+        assert.ok(block.includes(`rewind_to: ${detector}`));
+        assert.ok(block.includes(`\${steps.${detector}.outputs.reason}`));
+        const script = extractScript(definition, `  - id: ${detector}`);
+        const output = join(repo.root, "outputs");
+        const detect = () => {
+          writeFileSync(output, "");
+          const result = spawnSync("bash", ["-c", script], {
+            encoding: "utf8", env: { ...featureScriptEnv(repo), DAGU_OUTPUT_FILE: output },
+          });
+          assert.equal(result.status, 0, result.stderr);
+          return { cause: readFileSync(output, "utf8").trim(), stderr: result.stderr };
+        };
+        assert.equal(detect().cause, "reason=ready");
+        writeFileSync(join(repo.primary, "README.txt"), "operator changes\n");
+        const dirty = detect();
+        assert.match(dirty.cause, /^reason=primary dirty: .*README.txt$/);
+        assert.match(dirty.stderr, /primary dirty: .*README.txt/);
+        git(repo.primary, "restore", "README.txt");
+        git(repo.primary, "switch", "-c", "operator");
+        const branch = detect();
+        assert.equal(branch.cause, "reason=primary on operator, expected main");
+        assert.match(branch.stderr, /primary on operator, expected main/);
+        git(repo.primary, "switch", "main");
+        assert.equal(detect().cause, "reason=ready");
+      } finally {
+        rmSync(repo.root, { recursive: true, force: true });
+      }
+    });
+  }
+}
+
+for (const [name, definition] of [
+  ...definitions,
+  ["PoC template", fileURLToPath(new URL("../skills/dagu-feature/poc.yaml", import.meta.url))],
+  ["PoC rendered DAG", fileURLToPath(new URL("../../../.workspace/dagu/dags/poc.yaml", import.meta.url))],
+] as const) {
+  const gate = name.startsWith("PoC") ? "base" : "start_gate";
+  for (const failure of ["fetch", "ff-only"] as const) {
+    test(`${name} ${gate} diagnoses ${failure} and preserves operator commits`, () => {
+      const repo = repository();
+      try {
+        const managed = join(repo.primary, ".workspace", "worktrees", "issue-189");
+        writeFileSync(join(repo.primary, ".git", "info", "exclude"), "/.workspace/\n");
+        if (failure === "fetch") git(repo.primary, "remote", "set-url", "origin", join(repo.root, "unavailable.git"));
+        else {
+          commit(repo, "remote.txt", "remote commit\n");
+          git(repo.worktree, "push", "origin", "HEAD:main");
+          writeFileSync(join(repo.primary, "operator.txt"), "operator commit\n");
+          git(repo.primary, "add", "operator.txt");
+          git(repo.primary, "commit", "-m", "operator commit");
+        }
+        const head = git(repo.primary, "rev-parse", "HEAD");
+        const result = spawnSync("bash", ["-c", extractScript(definition, `  - id: ${gate}`)], {
+          encoding: "utf8",
+          env: { ...featureScriptEnv(repo), WORKTREE: managed, DAGU_FEATURE_BUNDLE: "test" },
+        });
+        assert.equal(result.status, 1);
+        assert.ok(result.stderr.includes(`${gate}: ${failure}`), result.stderr);
+        assert.match(result.stderr, /restore origin access|reconcile primary/);
+        assert.equal(git(repo.primary, "rev-parse", "HEAD"), head);
+      } finally {
+        rmSync(repo.root, { recursive: true, force: true });
+      }
+    });
+  }
 }

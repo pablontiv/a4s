@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Pause feature start/close and PoC base gates at conditional primary-availability checkpoints, with concrete dirty/branch causes, owner-session notices and same-run push-back rechecks.
+
 ## 0.2.0
 
 - Reject `POC=no` triage completions from sessions outside the run's canonical primary repository or transcript namespace, with an actionable coordinator command before the run advances.
