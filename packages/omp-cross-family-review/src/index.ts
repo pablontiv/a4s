@@ -15,16 +15,43 @@ interface ExtensionAPI {
   ): void;
 }
 
-const REVIEW_AGENTS: Record<string, true> = {
-  reviewer: true,
-  "triage-reviewer": true,
-  "security-reviewer": true,
+interface ReviewPolicy {
+  fallbackRoles: readonly string[];
+  excludeTaskFamily: boolean;
+}
+
+const REVIEW_POLICIES: Record<string, ReviewPolicy> = {
+  reviewer: {
+    fallbackRoles: ["@slow", "@default"],
+    excludeTaskFamily: true,
+  },
+  "triage-reviewer": {
+    fallbackRoles: ["@task", "@slow", "@default"],
+    excludeTaskFamily: false,
+  },
+  "security-reviewer": {
+    fallbackRoles: ["@slow", "@default"],
+    excludeTaskFamily: true,
+  },
 };
-const FALLBACK_ROLES = ["@task", "@slow", "@default"] as const;
 
 export default function crossFamilyReview(pi: ExtensionAPI): void {
   pi.on("before_subagent_spawn", (event, ctx) => {
-    if (!Object.hasOwn(REVIEW_AGENTS, event.agent)) return undefined;
-    return orderReviewModels(event.patterns, FALLBACK_ROLES, ctx.models);
+    if (!Object.hasOwn(REVIEW_POLICIES, event.agent)) return undefined;
+    const parent = ctx.models.current();
+    if (!parent) return undefined;
+    const policy = REVIEW_POLICIES[event.agent]!;
+    const task = policy.excludeTaskFamily
+      ? ctx.models.resolve("@task")
+      : undefined;
+    return orderReviewModels(
+      event.patterns,
+      policy.fallbackRoles,
+      ctx.models,
+      [
+        { model: parent },
+        ...(task ? [{ label: "@task", model: task }] : []),
+      ],
+    );
   });
 }
