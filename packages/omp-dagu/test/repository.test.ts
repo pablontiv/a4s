@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { repositoryName, resolveRepository } from "../src/repository.ts";
+import { repositoryName, resolveRepository } from "../src/status/repository.ts";
 
 test("origin URL repo name supports HTTPS, SCP SSH, SSH URLs and .git suffixes", () => {
   for (const url of ["https://github.com/pablontiv/a4s.git", "https://github.com/pablontiv/a4s", "git@github.com:pablontiv/a4s.git", "ssh://git@github.com:2222/pablontiv/a4s.git", "git+https://github.com/pablontiv/a4s.git", "https://github.com/pablontiv/a4s.git/\n"]) {

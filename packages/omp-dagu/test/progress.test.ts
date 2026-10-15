@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { currentStep, renderRun, runLabel, Transitions } from "../src/progress.ts";
-import type { RunDetails } from "../src/progress.ts";
+import { currentStep, renderRun, runLabel, Transitions } from "../src/status/progress.ts";
+import type { RunDetails } from "../src/status/progress.ts";
 
 const run: RunDetails = {
   name: "feature", dagRunId: "a4s-issue-157", statusLabel: "running", params: "ISSUE=157 PRIMARY=/tmp/a4s",

@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import extension from "../src/index.ts";
-import { TriageGuard } from "../src/guard.ts";
-import type { CallDecision, Event } from "../src/guard.ts";
+import extension from "../src/triage/index.ts";
+import { TriageGuard } from "../src/triage/guard.ts";
+import type { CallDecision, Event } from "../src/triage/guard.ts";
 const command = (run = "run-136", extra = "") => `dagu human-task complete feature --run-id ${run} --step triage --input POC=no ${extra}`;
 const call = (text = command()): Event => ({ toolName: "bash", toolCallId: "complete", input: { command: text } });
 const output = (poc = "no") => JSON.stringify({ poc, behavior: "proven", question: "Does runtime support it?", reason: "rename" });
