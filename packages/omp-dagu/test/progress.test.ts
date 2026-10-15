@@ -19,6 +19,10 @@ test("progress counts succeeded/skipped and renders the DAG identity and current
   assert.equal(renderRun(run, "improve-widget"), "dagu · feature #157 improve-widget ▰▰▱▱▱▱ 2/5 gate running");
   assert.equal(currentStep({ ...run, statusLabel: "waiting" }), "approve");
   assert.equal(renderRun({ ...run, statusLabel: "waiting" }), "dagu · feature #157 ▰▰▱▱▱▱ 2/5 approve waiting");
+  assert.equal(
+    renderRun(run, undefined, "> npm test"),
+    "dagu · feature #157 ▰▰▱▱▱▱ 2/5 gate running · > npm test",
+  );
   assert.equal(currentStep({ ...run, nodes: [run.nodes![3]!] }), "approve");
 });
 
