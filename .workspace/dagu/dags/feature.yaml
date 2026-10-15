@@ -166,17 +166,20 @@ steps:
           else [] end
         '
       }
-      base_dependencies=$(
-        git -C "$repo" ls-tree -r --name-only "$base" |
+      relationships() {
+        git -C "$repo" ls-tree -r --name-only "$1" |
         jq -Rr 'select(test("(^|/)(package\\.json|go\\.mod|pyproject\\.toml|requirements[^/]*\\.txt)$|\\.(ya?ml|csproj|props)$"))' |
-        while IFS= read -r path; do blob "$base" "$path" | extract "$path"; done |
-        jq -s 'add // [] | unique'
-      )
-      git -C "$repo" diff --name-only "$base" "$head" -- '*package.json' '*go.mod' '*pyproject.toml' '*requirements*.txt' '*.yaml' '*.yml' '*.csproj' '*.props' |
-      while IFS= read -r path; do
-        after=$(blob "$head" "$path" | extract "$path")
-        jq -nr --arg path "$path" --argjson before "$base_dependencies" --argjson after "$after" '$after - $before | .[] | "dependency\t\($path)\t\(.)"'
-      done > "$STATE/dependencies"
+        while IFS= read -r path; do
+          dependencies=$(blob "$1" "$path" | extract "$path")
+          jq -nr --arg path "$path" --argjson dependencies "$dependencies" \
+            '$dependencies[] | "dependency\t\($path)\t\(.)"'
+        done |
+        jq -Rsc 'split("\n") | map(select(length > 0)) | unique'
+      }
+      base_relationships=$(relationships "$base")
+      head_relationships=$(relationships "$head")
+      jq -nr --argjson before "$base_relationships" --argjson after "$head_relationships" \
+        '$after - $before | .[]' > "$STATE/dependencies"
       dirs() {
         git -C "$repo" ls-tree -r --name-only "$1" | jq -Rrs '
           split("\n") | map(select(length > 0)) | map(
@@ -360,11 +363,27 @@ handler_on:
   exit:
     run: |
       set -euo pipefail
-      if test -e "$WORKTREE"; then
-        git -C "$PRIMARY" worktree remove --force "$WORKTREE"
-      fi
-      git -C "$PRIMARY" worktree prune
+      published=false
       if git -C "$PRIMARY" show-ref --verify --quiet "refs/heads/$BRANCH"; then
+        head=$(git -C "$PRIMARY" rev-parse "refs/heads/$BRANCH")
+        if git -C "$PRIMARY" fetch --prune origin; then
+          if git -C "$PRIMARY" show-ref --verify --quiet "refs/remotes/origin/$BRANCH" &&
+             git -C "$PRIMARY" merge-base --is-ancestor "$head" "origin/$BRANCH"; then
+            published=true
+          elif git -C "$PRIMARY" show-ref --verify --quiet "refs/remotes/origin/$BASE_BRANCH" &&
+               git -C "$PRIMARY" merge-base --is-ancestor "$head" "origin/$BASE_BRANCH"; then
+            published=true
+          fi
+        fi
+      fi
+      if [[ "$published" == true ]]; then
+        if test -e "$WORKTREE"; then
+          git -C "$PRIMARY" worktree remove --force "$WORKTREE"
+        fi
+        git -C "$PRIMARY" worktree prune
         git -C "$PRIMARY" branch -D "$BRANCH"
+      else
+        printf 'Unpublished work kept: branch %s; worktree %s\n' "$BRANCH" "$WORKTREE"
+        printf 'Recovery: push %s from %s, then re-enqueue this issue with a suffixed run ID.\n' "$BRANCH" "$WORKTREE"
       fi
 

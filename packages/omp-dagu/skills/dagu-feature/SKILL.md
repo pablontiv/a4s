@@ -53,7 +53,7 @@ The bootstrap renders both templates once when the repository adopts the lifecyc
 | `__PRIMARY__` | Default clone path in `poc.yaml` | repository clone | repository clone |
 | `__TEST_PATHS__` | Bash ERE for repository test paths; every `*.md` also belongs to cutover | `_test\.go$\|^tests/` | `(^\|/)tests/` |
 
-The DAG's fixed invariants: `PRIMARY` is the repository clone, its main working tree, on `BASE_BRANCH` and clean; the run's worktree is always `$PRIMARY/.workspace/worktrees/issue-<n>`, ignored by git; the gate runs with `umask 0022` and without `GH_TOKEN`/`GITHUB_TOKEN`; auto-merge is bound to the tested SHA with `--match-head-commit`; the queue has concurrency one per repository; `handler_on.exit` removes the run's worktree and local branch whether the run succeeds, fails, or is aborted.
+The DAG's fixed invariants: `PRIMARY` is the repository clone, its main working tree, on `BASE_BRANCH` and clean; the run's worktree is always `$PRIMARY/.workspace/worktrees/issue-<n>`, ignored by git; the gate runs with `umask 0022` and without `GH_TOKEN`/`GITHUB_TOKEN`; auto-merge is bound to the tested SHA with `--match-head-commit`; and the queue has concurrency one per repository. `checkpoint_push` is the publication boundary. On exit, the handler removes a worktree and local branch only after fetching and confirming that its head is contained by `origin/$BRANCH` or `origin/$BASE_BRANCH`; otherwise it retains both.
 
 ## Adopt in a repository
 
@@ -130,11 +130,15 @@ Dagu snapshots the definition when you enqueue. Later edits to the file do not a
 
 **One run per lifecycle.** Continue each run through its own checkpoints and push-backs. A feature whose triage chooses PoC ends after enqueueing `poc`; a successful PoC may enqueue a fresh feature run for the cutover.
 
-A failed or aborted run is terminal. `handler_on.exit` has already removed its worktree and its local branch. Once `checkpoint_push` has succeeded, the commit survives on `origin/<branch>`. To recover:
-
-1. Fix the cause.
-2. Restore the local branch: `git fetch origin && git branch <branch> origin/<branch>`. `start_gate` adopts an existing local branch instead of creating a new one from `origin/$BASE_BRANCH`.
-3. Enqueue a new run with a suffixed ID (`<repo>-issue-<n>-v2`). Pass `PR_NUMBER` when a PR is already open for the branch.
+A failed or aborted run is terminal. If its head has not crossed the `checkpoint_push`
+publication boundary, `handler_on.exit` keeps the local branch and worktree and
+prints both recovery locations. Recover directly in that worktree, then push the
+kept branch and enqueue a new run with a suffixed ID
+(`<repo>-issue-<n>-v2`). If the worktree must be recreated, preserve the kept
+commit first with `git branch <branch> <sha>`. Once `checkpoint_push` has
+published the head, the exit handler may remove the local worktree and branch;
+restore it with `git fetch origin && git branch <branch> origin/<branch>` before
+reenqueueing. Pass `PR_NUMBER` when a PR is already open for the branch.
 
 Inspect a run with `dagu status --run-id <id> feature`. Step logs are listed under each step.
 
@@ -190,15 +194,17 @@ For `POC=yes`, supply QUESTION and BASIS; REVIEW is optional. The next step read
 Missing REVIEW with `no` fails before implementation. `yes` enqueues the absolute
 repository `poc.yaml` with ISSUE and QUESTION and ends the feature run.
 
-`checkpoint_push` compares dependencies and package/app directories against the
-merge base of `HEAD` and `origin/$BASE_BRANCH`, using the PoC-proven manifest
-extractor. Dependencies already merged into the base branch belong to that base.
-A new identity causes `dependency_review` to push back to `triage` automatically
-through the wait handler. Completing triage records that exact dependency set as
-reviewed; changing it again triggers another review. This net is a complementary
-signal to triage and its reviewer. The detector covers package.json, Go, Python,
-Chart/Flux/Compose and package roots; undeclared external CLI/runtime behavior
-still requires triage judgment.
+`checkpoint_push` compares dependency relationships and package/app directories
+against the merge base of `HEAD` and `origin/$BASE_BRANCH`, using the PoC-proven
+manifest extractor. A dependency relationship is the pair of its manifest path
+(the consumer package) and dependency identity. Every pair in `HEAD` but not in
+the base requests `dependency_review`, including an existing repository
+dependency added to a second package; an unchanged pair does not. Completing
+triage records that exact relationship set as reviewed, and changing it again
+triggers another review. This net is a complementary signal to triage and its
+reviewer. The detector covers package.json, Go, Python, Chart/Flux/Compose and
+package roots; undeclared external CLI/runtime behavior still requires triage
+judgment.
 
 The wait handler launches one bounded dispatcher for `dependency_review` and
 `conflict_review` because Dagu persists Waiting only after the handler exits.
