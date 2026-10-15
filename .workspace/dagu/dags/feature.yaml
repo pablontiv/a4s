@@ -1,5 +1,7 @@
+# dagu-feature-bundle: @a4s/omp-dagu@0.2.0 source=pablontiv/a4s@3654f1646aba40298a6cd7ade2812c91acf94a84 bootstrap=bootstrap-a4s-v0-2-0 dagu=2.19.2
 labels:
   - workspace=a4s
+  - dagu-feature-bundle=0.2.0
 queue: a4s
 type: graph
 dotenv: []
@@ -40,6 +42,7 @@ params:
 env:
   - WORKTREE: ${PRIMARY}/.workspace/worktrees/issue-${ISSUE}
   - RUN: ${context.run.id}
+  - DAGU_FEATURE_BUNDLE: "dagu-feature-bundle=0.2.0 source=pablontiv/a4s@3654f1646aba40298a6cd7ade2812c91acf94a84 bootstrap=bootstrap-a4s-v0-2-0"
 steps:
   - id: triage
     action: human.task
@@ -255,6 +258,7 @@ steps:
         expected: "no"
     run: |
       set -euo pipefail
+      printf '%s\n' "$DAGU_FEATURE_BUNDLE"
       umask 0022
       test -n "$PRIMARY"
       test -n "$GATE" && test -n "$REQUIRED_CHECK"
