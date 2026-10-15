@@ -133,11 +133,18 @@ A PoC is required when implementation depends on unexercised external or runtime
 behavior that can change the implementation path. Reusing demonstrated behavior
 proceeds directly. Bug reproduction is defect investigation.
 
+With OMP, load the `omp-triage-guard` package directory so its distributed
+`triage-reviewer` agent is discovered. An attempted `POC=no` completion returns
+the generation marker and fixed review prompt. Run `task agent=triage-reviewer`
+with the issue scope, that full marker and prompt, then wait for its structured
+decision. A `no` authorizes the current generation with the exact allocated
+reviewer id supplied by the guard; a `yes` keeps triage waiting with its question.
+
 ```sh
 dagu human-task complete feature --run-id <id> --step triage \
   --input POC=no --input 'QUESTION=<behavior>' \
   --input 'BASIS=<prior PASS URL, merged PR URL, or reason>' \
-  --input 'REVIEW=<reviewer subagent output reference>'
+  --input 'REVIEW=<completed triage-reviewer id supplied by the guard>'
 ```
 
 For `POC=yes`, supply QUESTION and BASIS; REVIEW is optional. The next step reads
