@@ -41,17 +41,27 @@ El aviso se entrega oculto al chat con `pi.sendMessage({ customType: "dagu-state
 
 REST y SSE alimentan una sola máquina de transiciones. El primer barrido tras `session_start` o `session_switch` establece una línea base silenciosa para los runs que ya existen. Un run descubierto en un barrido posterior ya esperando sí despierta; un barrido REST recupera una transición que SSE haya perdido; snapshots repetidos no duplican el aviso; y una reentrada real `running → waiting`, incluso al mismo paso, vuelve a avisar.
 
-Cada línea del widget identifica el DAG y el issue, muestra el progreso por nodos, el paso actual y, cuando existe, su actividad. La CLI `gh` es opcional y añade el slug del título.
+El widget usa el mismo plegado que los HUD `TODO` y `Subagents` de OMP: título `Workflows` en negrita, filas en árbol y, plegado, tres runs más una fila `… N more — /workflows`. El comando `/workflows` alterna entre plegado y desplegado (hasta ocho runs, por el límite de diez líneas de OMP para widgets de extensión); `/workflows expand` y `/workflows collapse` fijan ese estado. `/workflows hide` retira el widget y `/workflows show` (o `/workflows` a secas) lo devuelve; el estado dura lo que el proceso OMP y se conserva al cambiar de sesión. Los runs se ordenan por completitud: primero los más cercanos a terminar. Cada línea identifica el tipo de workflow abreviado (`feat` para `feature`) y el issue, muestra el progreso por nodos, el paso actual y, cuando existe, su actividad. La CLI `gh` es opcional y añade el slug del título.
+
+```text
+Workflows
+ └─ feat #227 widget-plegable ▱▱▱▱▱▱ 0/1 implement waiting · eval Probe (2s)
+```
+
+Cada fila usa `<tipo> <identidad> <barra> <done>/<total> <paso> <estado>[ · <actividad>]`; la compatibilidad se informa solo en `[DAGU STATE]`.
 
 - Un paso de comando `running` consulta cada dos segundos `GET /api/v1/dag-runs/{name}/{dagRunId}/steps/{step}/log?tail=3` y muestra su última línea no vacía.
-- Un `human.task` `triage`, `run_poc` o `implement` en `waiting` localiza la sesión coordinadora con `PRIMARY` y `OMP_SESSION_ID`, y muestra el subagente determinista `TriageReview<ISSUE>`, `Poc<ISSUE>` o `Implement<ISSUE>`, su última herramienta, intención (o argumento principal) y antigüedad. Los reintentos `<Nombre>v<N>` son válidos y gana el archivo más reciente.
+- Un `human.task` `triage`, `run_poc` o `implement` en `waiting` localiza la sesión coordinadora con `PRIMARY` y `OMP_SESSION_ID`, selecciona el transcript determinista `TriageReview<ISSUE>`, `Poc<ISSUE>` o `Implement<ISSUE>` y muestra `<herramienta> <intención> (<edad>s)`, sin nombre de tarea. La intención se toma de `i`, luego `title` y luego el argumento principal. Los reintentos `<Nombre>v<N>` son válidos y gana el archivo más reciente.
 - La lectura del transcript está acotada a sus últimos 256 KiB y descarta líneas parciales. Logs, herramientas e intenciones se sanean y truncan antes de renderizar. Sin log o transcript disponible, la línea conserva el estado sin actividad.
 
 SSE sigue aplicando inmediatamente las transiciones del run; el refresco periódico cubre actividad que SSE no emite por línea. Al cambiar de paso, terminar el run o recibir `session_shutdown`, se abortan la lectura y su temporizador. Las caídas de REST o SSE muestran una reconexión con backoff sin interrumpir la sesión.
 
 ```text
-dagu · feature #182 actividad-real-del-step ▰▰▱▱▱▱ 2/5 gate running · > npm test
-dagu · feature #182 actividad-real-del-step ▰▱▱▱▱▱ 1/5 implement waiting · Implement182 · edit src/status/activity.ts (12s)
+Workflows
+ ├─ feat #182 actividad-real-del-step ▰▰▰▰▱▱ 4/6 gate running · > npm test
+ ├─ feat #183 orden-del-widget ▰▱▱▱▱▱ 1/5 implement waiting · Implement183 · edit src/status/progress.ts (12s)
+ └─ feat #184 plegado-del-widget ▱▱▱▱▱▱ 0/5 triage running
+ … 2 more — /workflows
 ```
 
 El paquete usa `fetch` y un parser SSE propios, sin dependencias runtime externas. La extensión solo observa y despierta; las acciones humanas y la reconciliación pertenecen a Dagu y al operador. Si la sesión de destino no está ejecutándose, no recibe aviso. Si el mismo ID de sesión está abierto a la vez en dos procesos OMP, ambos coinciden y ambos despiertan.
@@ -137,7 +147,7 @@ bootstrap y versión de Dagu, además de la etiqueta
 `dagu-feature-bundle=<version>`. La extensión compara esa etiqueta con su propia
 versión: exige el mismo major y, mientras sea `0`, también el mismo minor. Un
 DAG sin etiqueta queda `unstamped`; una versión fuera de la regla queda
-`incompatible`. Ambos estados se muestran como advertencia y no bloquean runs.
+`incompatible`. Ambos estados se muestran como advertencia en el aviso `[DAGU STATE]` y no bloquean runs.
 
 Para inspeccionar uno o más clones, el reconciliador instalado y la versión
 exacta de Dagu requerida:

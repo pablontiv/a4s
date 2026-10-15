@@ -81,12 +81,12 @@ test("command activity reads the last non-empty line from the Dagu step log", as
   }
 });
 
-test("agent activity renders the deterministic task, tool, intention and age", async () => {
+test("agent activity renders the tool, intention and age", async () => {
   const fixture = await transcriptFixture({
-    "Implement182.jsonl": `${message("2026-10-15T16:00:00Z", "edit", { i: "Editing src/status.ts" })}\n`,
+    "Implement182.jsonl": `${message("2026-10-15T16:00:06Z", "bash", { i: "Restoring temporary pin adjustment", title: "Fallback", command: "true" })}\n`,
   });
   try {
-    assert.equal(await activity(agentRun, fixture.sessionDir), "Implement182 · edit Editing src/status.ts (12s)");
+    assert.equal(await activity(agentRun, fixture.sessionDir), "bash Restoring temporary pin adjustment (6s)");
   } finally {
     await rm(fixture.root, { recursive: true, force: true });
   }
@@ -97,9 +97,25 @@ test("agent activity falls back to the principal tool argument when i is absent"
     "Implement182.jsonl": `${message("2026-10-15T16:00:10Z", "edit", { path: "src/status/activity.ts" })}\n`,
   });
   try {
-    assert.equal(await activity(agentRun, fixture.sessionDir), "Implement182 · edit src/status/activity.ts (2s)");
+    assert.equal(await activity(agentRun, fixture.sessionDir), "edit src/status/activity.ts (2s)");
   } finally {
     await rm(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("agent activity uses eval title before its principal argument and supports tool-only calls", async () => {
+  for (const [args, expected] of [
+    [{ title: "Probe", path: "fallback" }, "eval Probe (2s)"],
+    [{}, "eval (2s)"],
+  ] as const) {
+    const fixture = await transcriptFixture({
+      "Implement182.jsonl": `${message("2026-10-15T16:00:10Z", "eval", args)}\n`,
+    });
+    try {
+      assert.equal(await activity(agentRun, fixture.sessionDir), expected);
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+    }
   }
 });
 
@@ -108,7 +124,7 @@ test("agent activity ignores a partial trailing JSONL entry", async () => {
   const partial = message("2026-10-15T16:00:11Z", "edit", { i: "Incomplete entry" }).slice(0, 50);
   const fixture = await transcriptFixture({ "Implement182.jsonl": `${complete}\n${partial}` });
   try {
-    assert.equal(await activity(agentRun, fixture.sessionDir), "Implement182 · read Reading stable entry (12s)");
+    assert.equal(await activity(agentRun, fixture.sessionDir), "read Reading stable entry (12s)");
   } finally {
     await rm(fixture.root, { recursive: true, force: true });
   }
@@ -123,7 +139,7 @@ test("the newest retry transcript supplies agent activity", async () => {
     const artifacts = path.join(fixture.sessionDir, "2026-10-15_session-main");
     await utimes(path.join(artifacts, "Implement182.jsonl"), new Date(1000), new Date(1000));
     await utimes(path.join(artifacts, "Implement182v2.jsonl"), new Date(2000), new Date(2000));
-    assert.equal(await activity(agentRun, fixture.sessionDir), "Implement182v2 · write New attempt (2s)");
+    assert.equal(await activity(agentRun, fixture.sessionDir), "write New attempt (2s)");
   } finally {
     await rm(fixture.root, { recursive: true, force: true });
   }

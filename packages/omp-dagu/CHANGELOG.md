@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.5
+
+- Fold the status widget like OMP's `TODO` and `Subagents` HUDs: `Workflows` title, tree rows sorted by completion, three runs collapsed and up to eight expanded; `/workflows` toggles the fold and accepts `expand`, `collapse`, `show` and `hide` (#227).
+- Keep workflow rows focused on progress and tool intention (`i`, then `title`, then the principal argument); report bundle compatibility in `[DAGU STATE]` notices (#227).
+
 ## 0.3.4
 
 - Pin Dagu 2.20.1 after live compatibility verification, retaining compatibility with installed 0.3.x DAGs and documenting the observed SSE limit of 20 topics per connection; 21 returns HTTP 503 `unable to open SSE stream` (#284).

@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { currentStep, renderRun, runLabel, Transitions } from "../src/status/progress.ts";
+import { currentStep, renderOffline, renderRun, renderWidget, runLabel, Transitions } from "../src/status/progress.ts";
 import type { RunDetails } from "../src/status/progress.ts";
 
+const labels = ["workspace=a4s", "dagu-feature-bundle=0.3.1"];
 const run: RunDetails = {
   name: "feature", dagRunId: "a4s-issue-157", statusLabel: "running", params: "ISSUE=157 PRIMARY=/tmp/a4s",
   labels: ["workspace=a4s", "dagu-feature-bundle=0.3.1"],
@@ -15,22 +16,77 @@ const run: RunDetails = {
   ],
 };
 
-test("progress counts succeeded/skipped and renders the DAG identity and current step", () => {
-  assert.equal(renderRun(run), "dagu · feature #157 ▰▰▱▱▱▱ 2/5 gate running");
-  assert.equal(renderRun(run, "improve-widget"), "dagu · feature #157 improve-widget ▰▰▱▱▱▱ 2/5 gate running");
+test("progress counts succeeded/skipped and renders the abbreviated workflow, identity and current step", () => {
+  assert.equal(renderRun(run), "feat #157 ▰▰▱▱▱▱ 2/5 gate running");
+  assert.equal(renderRun(run, "improve-widget"), "feat #157 improve-widget ▰▰▱▱▱▱ 2/5 gate running");
   assert.equal(currentStep({ ...run, statusLabel: "waiting" }), "approve");
-  assert.equal(renderRun({ ...run, statusLabel: "waiting" }), "dagu · feature #157 ▰▰▱▱▱▱ 2/5 approve waiting");
+  assert.equal(renderRun({ ...run, statusLabel: "waiting" }), "feat #157 ▰▰▱▱▱▱ 2/5 approve waiting");
   assert.equal(
     renderRun(run, undefined, "> npm test"),
-    "dagu · feature #157 ▰▰▱▱▱▱ 2/5 gate running · > npm test",
+    "feat #157 ▰▰▱▱▱▱ 2/5 gate running · > npm test",
   );
   assert.equal(currentStep({ ...run, nodes: [run.nodes![3]!] }), "approve");
 });
 
 test("queued summaries and empty DAGs render zero progress and fall back to run ID", () => {
-  assert.equal(renderRun({ name: "poc", dagRunId: "run-1", statusLabel: "queued" }), "dagu · poc run-1 ▱▱▱▱▱▱ 0/0 queued · bundle=unstamped extension=0.3.4 compat=unstamped");
-  assert.equal(renderRun({ ...run, nodes: [] }), "dagu · feature #157 ▱▱▱▱▱▱ 0/0 running");
-  assert.equal(renderRun({ ...run, nodes: [{ step: { name: "done" }, statusLabel: "succeeded" }] }), "dagu · feature #157 ▰▰▰▰▰▰ 1/1 running");
+  assert.equal(renderRun({ name: "poc", dagRunId: "run-1", statusLabel: "queued" }), "poc run-1 ▱▱▱▱▱▱ 0/0 queued");
+  assert.equal(renderRun({ ...run, nodes: [] }), "feat #157 ▱▱▱▱▱▱ 0/0 running");
+  assert.equal(renderRun({ ...run, nodes: [{ step: { name: "done" }, statusLabel: "succeeded" }] }), "feat #157 ▰▰▰▰▰▰ 1/1 running");
+});
+
+// Markup stub: keeps the HUD layout visible in plain assertions.
+const theme = {
+  fg: (color: string, text: string) => `<${color}>${text}</${color}>`,
+  bold: (text: string) => `<b>${text}</b>`,
+  tree: { branch: "├─", last: "└─" },
+};
+
+test("widget folds like OMP HUDs, ordering runs closest to completion first and keeping discovery order on ties", () => {
+  const at = (issue: number, done: number, total: number): RunDetails => ({
+    ...run,
+    dagRunId: `run-${issue}`,
+    params: `ISSUE=${issue}`,
+    nodes: Array.from({ length: total }, (_, index) => ({
+      step: { name: `s${index}` },
+      statusLabel: index < done ? "succeeded" : index === done ? "running" : "pending",
+    })),
+  });
+  const entries = [
+    { run: at(1, 1, 4) },
+    { run: { name: "poc", dagRunId: "queued", statusLabel: "queued", labels } },
+    { run: at(2, 3, 4), slug: "almost" },
+    { run: at(3, 2, 8) },
+    { run: at(4, 4, 5) },
+  ];
+  const rows = [
+    "feat #4 ▰▰▰▰▱▱ 4/5 s4 running",
+    "feat #2 almost ▰▰▰▰▱▱ 3/4 s3 running",
+    "feat #1 ▰▱▱▱▱▱ 1/4 s1 running",
+    "feat #3 ▰▱▱▱▱▱ 2/8 s2 running",
+    "poc queued ▱▱▱▱▱▱ 0/0 queued",
+  ];
+  const title = "<b><accent>Workflows</accent></b>";
+  assert.deepEqual(renderWidget(entries, theme), [
+    title,
+    ` <dim>├─</dim> ${rows[0]}`,
+    ` <dim>├─</dim> ${rows[1]}`,
+    ` <dim>└─</dim> ${rows[2]}`,
+    " <dim>… 2 more — /workflows</dim>",
+  ]);
+  assert.deepEqual(renderWidget(entries, theme, true), [
+    title,
+    ...rows.slice(0, -1).map(row => ` <dim>├─</dim> ${row}`),
+    ` <dim>└─</dim> ${rows.at(-1)}`,
+    " <dim>… show less — /workflows</dim>",
+  ]);
+  // Ten runs exceed OMP's 10-line widget budget: the expanded fold still reports the rest.
+  const many = Array.from({ length: 10 }, (_, index) => ({ run: at(index + 10, 1, 2) }));
+  const expanded = renderWidget(many, theme, true)!;
+  assert.equal(expanded.length, 10);
+  assert.equal(expanded.at(-1), " <dim>… 2 more · show less — /workflows</dim>");
+  assert.deepEqual(renderWidget(entries.slice(0, 2), theme), [title, ` <dim>├─</dim> ${rows[2]}`, ` <dim>└─</dim> ${rows[4]}`]);
+  assert.equal(renderWidget([], theme), undefined);
+  assert.deepEqual(renderOffline(theme, 4), [title, " <dim>└─</dim> sin conexión · reintentando en 4s"]);
 });
 
 test("identity extracts ISSUE from CLI and JSON params and sanitizes Dagu data", () => {
@@ -104,7 +160,7 @@ test("targeted waiting notices accept CLI and JSON params and reject other sessi
     const transitions = new Transitions("session-a");
     assert.equal(
       transitions.observe(waitingAt("triage", params)).wakeMessage,
-      "[DAGU STATE] run=feature-triage status=waiting step=triage issue=176 bundle=0.3.1 extension=0.3.4 compat=ok",
+      "[DAGU STATE] run=feature-triage status=waiting step=triage issue=176 bundle=0.3.1 extension=0.3.5 compat=ok",
     );
   }
   for (const params of [
@@ -119,7 +175,7 @@ test("targeted waiting notices are limited to feature triage and implement in a 
   for (const step of ["triage", "implement"]) {
     const effect = new Transitions("session-a").observe(waitingAt(step));
     assert.deepEqual(effect, {
-      wakeMessage: `[DAGU STATE] run=feature-${step} status=waiting step=${step} issue=176 bundle=0.3.1 extension=0.3.4 compat=ok`,
+      wakeMessage: `[DAGU STATE] run=feature-${step} status=waiting step=${step} issue=176 bundle=0.3.1 extension=0.3.5 compat=ok`,
     });
   }
   assert.equal(new Transitions("session-a").observe(waitingAt("dependency_review")).wakeMessage, undefined);
@@ -132,7 +188,7 @@ test("targeted discovery checkpoints wake once per waiting entry", () => {
     const transitions = new Transitions("session-a");
     const waiting = waitingAt(step, "OMP_SESSION_ID=session-a", "discovery");
     assert.deepEqual(transitions.observe(waiting), {
-      wakeMessage: `[DAGU STATE] run=discovery-${step} status=waiting step=${step} dag=discovery bundle=0.3.1 extension=0.3.4 compat=ok`,
+      wakeMessage: `[DAGU STATE] run=discovery-${step} status=waiting step=${step} dag=discovery bundle=0.3.1 extension=0.3.5 compat=ok`,
     });
     assert.deepEqual(transitions.observe(waiting), {});
   }
@@ -162,7 +218,7 @@ test("targeted discovery failures and aborts wake with the DAG identity", () => 
     });
     assert.equal(
       transitions.observe(terminal).wakeMessage,
-      `[DAGU STATE] run=discovery-${statusLabel} status=${statusLabel} step=check_units dag=discovery bundle=0.3.1 extension=0.3.4 compat=ok`,
+      `[DAGU STATE] run=discovery-${statusLabel} status=${statusLabel} step=check_units dag=discovery bundle=0.3.1 extension=0.3.5 compat=ok`,
     );
     assert.deepEqual(transitions.observe(terminal), {});
   }
@@ -180,7 +236,7 @@ test("targeted terminal notices report failed and aborted steps exactly once", (
     const effect = transitions.observe(terminal);
     assert.equal(
       effect.wakeMessage,
-      `[DAGU STATE] run=feature-${statusLabel} status=${statusLabel} step=${terminal.nodes![1]!.step.name} issue=176 bundle=0.3.1 extension=0.3.4 compat=ok`,
+      `[DAGU STATE] run=feature-${statusLabel} status=${statusLabel} step=${terminal.nodes![1]!.step.name} issue=176 bundle=0.3.1 extension=0.3.5 compat=ok`,
     );
     assert.ok(effect.notification);
     assert.deepEqual(transitions.observe(terminal), {});
@@ -244,24 +300,22 @@ test("running to waiting re-entry wakes again even at the same step", () => {
   assert.ok(transitions.observe(waiting).wakeMessage);
 });
 
-test("widget and DAGU STATE notice report ok, incompatible and unstamped bundle states", () => {
-  for (const [labels, display, compat, widgetSuffix] of [
-    [[`dagu-feature-bundle=0.3.9`], "0.3.9", "ok", ""],
-    [[`dagu-feature-bundle=0.2.0`], "0.2.0", "incompatible",
-      " · bundle=0.2.0 extension=0.3.4 compat=incompatible"],
-    [undefined, "unstamped", "unstamped",
-      " · bundle=unstamped extension=0.3.4 compat=unstamped"],
+test("run rows stay compact while DAGU STATE notices report every compatibility state", () => {
+  for (const [labels, display, compat] of [
+    [[`dagu-feature-bundle=0.3.9`], "0.3.9", "ok"],
+    [[`dagu-feature-bundle=0.2.0`], "0.2.0", "incompatible"],
+    [undefined, "unstamped", "unstamped"],
   ] as const) {
     const candidate = waitingAt("implement");
     if (labels) candidate.labels = [...labels];
     else delete candidate.labels;
     assert.equal(
       renderRun(candidate),
-      `dagu · feature #176 ▱▱▱▱▱▱ 0/1 implement waiting${widgetSuffix}`,
+      "feat #176 ▱▱▱▱▱▱ 0/1 implement waiting",
     );
     assert.equal(
       new Transitions("session-a").observe(candidate).wakeMessage,
-      `[DAGU STATE] run=feature-implement status=waiting step=implement issue=176 bundle=${display} extension=0.3.4 compat=${compat}`,
+      `[DAGU STATE] run=feature-implement status=waiting step=implement issue=176 bundle=${display} extension=0.3.5 compat=${compat}`,
     );
   }
 });

@@ -39,11 +39,17 @@ export function issueNumber(run: RunDetails): string | undefined {
   return issue && /^\d+$/.test(issue) ? issue : undefined;
 }
 
-export function runLabel(run: RunDetails, slug?: string): string {
+const identity = (run: RunDetails, slug?: string): string => {
   const issue = issueNumber(run);
-  const identity = issue ? `#${issue}${slug ? ` ${slug}` : ""}` : plain(run.dagRunId);
-  return `${plain(run.name)} ${identity}`;
+  return issue ? `#${issue}${slug ? ` ${slug}` : ""}` : plain(run.dagRunId);
+};
+
+export function runLabel(run: RunDetails, slug?: string): string {
+  return `${plain(run.name)} ${identity(run, slug)}`;
 }
+
+// The widget title names the domain; each line keeps a compact workflow type.
+const workflowTypes: Record<string, string> = { feature: "feat" };
 
 export function currentNode(run: RunDetails): RunNode | undefined {
   const nodes = run.nodes ?? [];
@@ -72,18 +78,70 @@ export function runBundleState(run: RunDetails): {
 }
 
 
-export function renderRun(run: RunDetails, slug?: string, activity?: string): string {
+const progress = (run: RunDetails): { done: number; total: number } => {
   const nodes = run.nodes ?? [];
-  const done = nodes.filter(node => ["succeeded", "skipped"].includes(node.statusLabel)).length;
-  const filled = nodes.length ? Math.floor(done / nodes.length * 6) : 0;
+  return { done: nodes.filter(node => ["succeeded", "skipped"].includes(node.statusLabel)).length, total: nodes.length };
+};
+
+const completion = (run: RunDetails): number => {
+  const { done, total } = progress(run);
+  return total ? done / total : 0;
+};
+
+export function renderRun(run: RunDetails, slug?: string, activity?: string): string {
+  const { done, total } = progress(run);
+  const filled = total ? Math.floor(done / total * 6) : 0;
   const bar = "▰".repeat(filled) + "▱".repeat(6 - filled);
   const step = currentStep(run);
-  const bundle = runBundleState(run);
-  const compatibility = bundle.compat === "ok"
-    ? ""
-    : ` · bundle=${plain(bundle.displayVersion)} extension=${bundle.extensionVersion} compat=${bundle.compat}`;
-  const status = `dagu · ${runLabel(run, slug)} ${bar} ${done}/${nodes.length}${step ? ` ${plain(step)}` : ""} ${plain(run.statusLabel)}${compatibility}`;
+  const type = plain(workflowTypes[run.name] ?? run.name);
+  const status = `${type} ${identity(run, slug)} ${bar} ${done}/${total}${step ? ` ${plain(step)}` : ""} ${plain(run.statusLabel)}`;
   return activity ? `${status} · ${plain(activity)}` : status;
+}
+
+export interface WidgetRun {
+  run: RunDetails;
+  slug?: string;
+  activity?: string;
+}
+
+/** Subset of OMP's theme used to draw the pinned HUD layout. */
+export interface WidgetTheme {
+  fg(color: "accent" | "dim", text: string): string;
+  bold(text: string): string;
+  tree: { branch: string; last: string };
+}
+
+export const TOGGLE_COMMAND = "workflows";
+// Same fold as OMP's Subagents HUD: a few rows collapsed, an expander row to unfold.
+const COLLAPSED_ROWS = 3;
+// OMP paints at most 10 lines per extension widget: title, rows and expander.
+const EXPANDED_ROWS = 8;
+
+const title = (theme: WidgetTheme): string => theme.bold(theme.fg("accent", "Workflows"));
+
+// Unindented title, then tree rows with dim connectors shifted right by one space.
+const treeRows = (lines: string[], theme: WidgetTheme): string[] => lines.map((line, index) =>
+  ` ${theme.fg("dim", index === lines.length - 1 ? theme.tree.last : theme.tree.branch)} ${line}`);
+
+// Runs closest to finishing come first; equal completion keeps discovery order.
+export function renderWidget(entries: WidgetRun[], theme: WidgetTheme, expanded = false): string[] | undefined {
+  if (!entries.length) return undefined;
+  const sorted = [...entries].sort((a, b) => completion(b.run) - completion(a.run));
+  const shown = sorted.slice(0, expanded ? EXPANDED_ROWS : COLLAPSED_ROWS);
+  const hidden = sorted.length - shown.length;
+  const more = hidden ? `… ${hidden} more` : "…";
+  const toggle = !expanded
+    ? hidden ? `${more} — /${TOGGLE_COMMAND}` : undefined
+    : sorted.length > COLLAPSED_ROWS ? `${more}${hidden ? " ·" : ""} show less — /${TOGGLE_COMMAND}` : undefined;
+  return [
+    title(theme),
+    ...treeRows(shown.map(({ run, slug, activity }) => renderRun(run, slug, activity)), theme),
+    ...(toggle ? [` ${theme.fg("dim", toggle)}`] : []),
+  ];
+}
+
+export function renderOffline(theme: WidgetTheme, retrySeconds: number): string[] {
+  return [title(theme), ...treeRows([`sin conexión · reintentando en ${retrySeconds}s`], theme)];
 }
 
 export interface Notification {

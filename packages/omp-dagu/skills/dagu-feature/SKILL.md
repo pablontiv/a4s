@@ -57,7 +57,7 @@ backscroll search dagu-feature-bundle --all-projects
 A DAG and extension are compatible when their major versions match and, while
 that major is `0`, their minor versions also match. A missing label is
 `unstamped`; a version outside that rule is `incompatible`. The extension warns
-in its widget and `[DAGU STATE]` notice without blocking a run.
+in its `[DAGU STATE]` notice without blocking a run.
 
 Changing any distributed template (`feature.yaml`, `poc.yaml`, `discovery.yaml`,
 `reconcile.yaml`, or `dagu-feature-bootstrap.yaml`) or this `SKILL.md` requires
@@ -308,7 +308,7 @@ The `@a4s/omp-dagu` status extension delivers hidden model context with the form
 - On an `implement` notice, the coordinator launches one level-1 implementation subagent named `Implement<ISSUE>` for that issue's worktree, with the contract in **Implement**. The result auto-delivers to the coordinator, which reviews the diff before completing `implement`.
 - On a `failed` or `aborted` notice, inspect the terminal run with `dagu status --run-id <id> feature`, including the named step logs, then apply the terminal-run recovery above: preserve or restore the branch as required, recover the worktree, and enqueue the suffixed replacement run.
 - A retried subagent appends `v<N>` to its base name, for example `Implement182v2`.
-- For every issue in the fixed batch, keep one todo for the agent action at the `human.task` where its run is waiting: triage review, PoC execution, implementation, or recovery. Update that todo when the run moves to another human task. The package widget shows the active step plus live activity: the last non-empty Dagu log line for a running command, or the newest `toolCall` name, intention (falling back to its principal argument) and age from `TriageReview<ISSUE>`, `Poc<ISSUE>` or `Implement<ISSUE>` while its human task waits. It refreshes activity about every two seconds and leaves the line unchanged when no source is available.
+- For every issue in the fixed batch, keep one todo for the agent action at the `human.task` where its run is waiting: triage review, PoC execution, implementation, or recovery. Update that todo when the run moves to another human task. The package widget shows the active step plus live activity: the last non-empty Dagu log line for a running command, or `<tool> <intention> (<age>s)` from the newest `toolCall` in `TriageReview<ISSUE>`, `Poc<ISSUE>` or `Implement<ISSUE>` while its human task waits. Intention comes from `i`, then `title`, then the principal argument; the task name is omitted. It refreshes activity about every two seconds and leaves the line unchanged when no source is available. The `Workflows` HUD folds to three completion-ordered tree rows and expands to eight; `/workflows` toggles, `expand` and `collapse` set the fold, and `hide` and `show` control visibility across session switches.
 - Keep `task.maxRecursionDepth: 1`; every implementation and triage-reviewer subagent remains at level 1 and appears in the main view.
 - A notice whose `compat` is not `ok` goes under **Blockers and decisions**. Put the exact `dagu enqueue --run-id "bootstrap-<repo>-v<version-with-hyphens>" ...` upgrade command under **Proposals**. When the request authorizes upgrades, the coordinator runs that upgrade procedure, completes `answers` with the current values shown by the prompt, opens the adoption issue, and enqueues its staged `feature.yaml`.
 
