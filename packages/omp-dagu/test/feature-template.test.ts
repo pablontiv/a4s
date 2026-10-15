@@ -82,6 +82,41 @@ function stubGh(repo: Repository, stdout: string, status: number, stderr = ""): 
   chmodSync(executable, 0o755);
 }
 
+function stubSuccessfulCloseGateGh(repo: Repository): void {
+  const head = git(repo.worktree, "rev-parse", "HEAD");
+  const bin = join(repo.root, "bin");
+  mkdirSync(bin, { recursive: true });
+  const executable = join(bin, "gh");
+  writeFileSync(
+    executable,
+    `#!/bin/sh
+case "$*" in
+  "pr view ${repo.branch} --json number --jq .number") printf '190\\n' ;;
+  "pr view 190 --json state --jq .state") printf 'MERGED\\n' ;;
+  "pr view 190 --json headRefOid --jq .headRefOid") printf '${head}\\n' ;;
+  "pr checks 190 --required --json name,state --jq "*) printf 'SUCCESS\\n' ;;
+  *) printf 'unexpected gh invocation: %s\\n' "$*" >&2; exit 1 ;;
+esac
+`,
+  );
+  chmodSync(executable, 0o755);
+}
+
+function runFailingCloseGate(script: string, repo: Repository) {
+  return spawnSync("bash", ["-c", script], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      PATH: `${join(repo.root, "bin")}:${process.env.PATH ?? ""}`,
+      PRIMARY: repo.primary,
+      WORKTREE: repo.worktree,
+      BRANCH: repo.branch,
+      BASE_BRANCH: "main",
+      REQUIRED_CHECK: "validate",
+    },
+  });
+}
+
 function runScript(script: string, repo: Repository): string {
   const result = spawnSync("bash", ["-c", script], {
     encoding: "utf8",
@@ -103,6 +138,40 @@ function runScript(script: string, repo: Repository): string {
 for (const [name, definition] of definitions) {
   const exitScript = extractScript(definition, "  exit:");
   const checkpointScript = extractScript(definition, "  - id: checkpoint_push");
+  const closeGateScript = extractScript(definition, "  - id: close_gate");
+
+  test(`${name} close_gate reports a PRIMARY outside BASE_BRANCH`, () => {
+    const repo = repository();
+    try {
+      stubSuccessfulCloseGateGh(repo);
+      git(repo.primary, "checkout", "-b", "feature-x");
+      const result = runFailingCloseGate(closeGateScript, repo);
+      assert.notEqual(result.status, 0);
+      assert.match(
+        result.stderr,
+        new RegExp(`close_gate: PRIMARY ${repo.primary.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} on branch feature-x, expected main`),
+      );
+    } finally {
+      rmSync(repo.root, { recursive: true, force: true });
+    }
+  });
+
+  test(`${name} close_gate reports PRIMARY local changes and porcelain status`, () => {
+    const repo = repository();
+    try {
+      stubSuccessfulCloseGateGh(repo);
+      writeFileSync(join(repo.primary, "README.txt"), "dirty\n");
+      const result = runFailingCloseGate(closeGateScript, repo);
+      assert.notEqual(result.status, 0);
+      assert.match(
+        result.stderr,
+        new RegExp(`close_gate: PRIMARY ${repo.primary.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} has local changes, expected clean`),
+      );
+      assert.match(result.stderr, / M README\.txt/);
+    } finally {
+      rmSync(repo.root, { recursive: true, force: true });
+    }
+  });
 
   test(`${name} exit keeps a never-pushed branch when no PR exists and prints recovery locations`, () => {
     const repo = repository();
