@@ -5,13 +5,18 @@ description: Adopt and operate the repo-owned Dagu issue lifecycle DAG (worktree
 
 # Dagu feature lifecycle
 
-Carry one GitHub issue from a clean default branch to a merged PR through one durable Dagu run. The repository owns the workflow in `.workspace/dagu/dags/feature.yaml`, built from [`feature.yaml`](feature.yaml) in this skill. A user-level Dagu service runs it.
+Carry one GitHub issue from feasibility triage to a merged PR through durable Dagu runs. The repository owns `.workspace/dagu/dags/feature.yaml` and `.workspace/dagu/dags/poc.yaml`, rendered from this skill. A user-level Dagu service runs them in the same repository queue.
 
 ```mermaid
 flowchart LR
-    A[start_gate] --> B[implement<br/>human.task]
+    T[triage<br/>human.task] --> TD[triage_decision]
+    TD -->|POC=yes: enqueue and finish| P[poc]
+    TD -->|POC=no + REVIEW| A[start_gate]
+    A --> B[implement<br/>human.task]
     B --> C[checkpoint_push]
-    C --> D[rebase]
+    C --> N[dependency_review]
+    N -->|new dependencies: push-back| T
+    N -->|reviewed dependencies| D[rebase]
     D --> E[gate]
     E --> F[push]
     F --> G[pr]
@@ -34,7 +39,7 @@ This skill does not install Dagu, and it carries no logic specific to any reposi
 
 ## Template parameters
 
-The bootstrap replaces every `__NAME__` placeholder in `feature.yaml` once, when the repository adopts the lifecycle:
+The bootstrap renders both templates once when the repository adopts the lifecycle:
 
 | Placeholder | Meaning | rootline | homeserver |
 |---|---|---|---|
@@ -42,6 +47,8 @@ The bootstrap replaces every `__NAME__` placeholder in `feature.yaml` once, when
 | `__BASE_BRANCH__` | Default of `BASE_BRANCH`, the default branch. The DAG uses `origin/$BASE_BRANCH` as the source ref. | `master` | `main` |
 | `__GATE__` | Default of `GATE`, the local gate command, run with `bash -euo pipefail -c` in the worktree | `just check && just test` | `make hook-validate` |
 | `__REQUIRED_CHECK__` | Default of `REQUIRED_CHECK`, the GitHub check that must be required on the default branch | `candidate` | `validate` |
+| `__PRIMARY__` | Default clone path in `poc.yaml` | repository clone | repository clone |
+| `__TEST_PATHS__` | Bash ERE for repository test paths; every `*.md` also belongs to cutover | `_test\.go$\|^tests/` | `(^\|/)tests/` |
 
 The DAG's fixed invariants: `PRIMARY` is the repository clone, its main working tree, on `BASE_BRANCH` and clean; the run's worktree is always `$PRIMARY/.workspace/worktrees/issue-<n>`, ignored by git; the gate runs with `umask 0022` and without `GH_TOKEN`/`GITHUB_TOKEN`; auto-merge is bound to the tested SHA with `--match-head-commit`; the queue has concurrency one per repository; `handler_on.exit` removes the run's worktree and local branch whether the run succeeds, fails, or is aborted.
 
@@ -63,9 +70,9 @@ The steps:
 | Step | Effect |
 |---|---|
 | `detect` | Checks `git`, `gh` (authenticated), `jq` and `dagu`, and that `PRIMARY` is the main working tree of the clone. Reads the repository name, the default branch, the checks already required, and the checks on the last merged PR. |
-| `answers` | `human.task` that asks for `GATE` and `REQUIRED_CHECK`. The prompt shows the detected values. |
+| `answers` | `human.task` that asks for `GATE`, `REQUIRED_CHECK`, and `TEST_PATHS`. Select the test-path ERE from the repository's actual conventions. In a4s use `(^\|/)(test\|tests)/\|\.test\.(ts\|cjs)$` (root or nested `test/` and `tests/`, plus `*.test.ts` and `*.test.cjs`). |
 | `worktrees` | Makes git ignore `.workspace/worktrees/`. When nothing ignores it yet, appends `/.workspace/worktrees/` to the clone's `info/exclude`, so the primary stays clean without a commit. |
-| `render` | Writes the configured template to `<git-dir>/dagu-feature/feature.yaml` inside the clone's git directory, so the primary stays clean. Every value is JSON-quoted, and the step fails on any leftover placeholder or a `dagu validate` error. |
+| `render` | Writes configured `feature.yaml` and `poc.yaml` under `<git-dir>/dagu-feature/`, keeping PRIMARY clean. PoC receives only repo, PRIMARY, BASE_BRANCH and TEST_PATHS; feature owns GATE, REQUIRED_CHECK and protection. Fails on leftover placeholders or validation errors. |
 | `github` | Enables auto-merge and squash merge, and adds `REQUIRED_CHECK` as a strict required status check on the default branch. It keeps the existing contexts and every other protection setting. When it has to recreate the protection, it reads the protection back and fails if any other setting changed. |
 | `confirm` | Reads the settings and the ignore rule back and validates the staged file again. |
 
@@ -74,7 +81,8 @@ Answer the form after `detect` succeeds. Choose `GATE` from the repository's doc
 ```sh
 dagu status --run-id "bootstrap-<repo>" dagu-feature-bootstrap   # read the prompt
 dagu human-task complete --run-id "bootstrap-<repo>" --step answers \
-  --input GATE='<gate command>' --input REQUIRED_CHECK=<check> dagu-feature-bootstrap
+  --input GATE='<gate command>' --input REQUIRED_CHECK=<check> \
+  --input TEST_PATHS='<Bash ERE>' dagu-feature-bootstrap
 ```
 
 The bootstrap is done when the run is `Succeeded`. To change an answer, enqueue a new bootstrap run. The bootstrap does not write CI: if no workflow publishes `REQUIRED_CHECK` yet, the adoption commit must add it.
@@ -83,7 +91,7 @@ The bootstrap is done when the run is `Succeeded`. To change an answer, enqueue 
 
 Open an issue in the repository to adopt the lifecycle. Enqueue it as described below, but pass the staged file (`$(git rev-parse --git-path dagu-feature/feature.yaml)`) instead of `.workspace/dagu/dags/feature.yaml`, which does not exist yet. In `implement`, make a single commit that:
 
-- copies the staged file to `.workspace/dagu/dags/feature.yaml`;
+- copies both staged files to `.workspace/dagu/dags/feature.yaml` and `.workspace/dagu/dags/poc.yaml`;
 - adds the CI job that publishes `REQUIRED_CHECK`, if none exists yet.
 
 Once that run is `Succeeded`, every later issue enqueues `.workspace/dagu/dags/feature.yaml` from the primary checkout.
@@ -107,7 +115,7 @@ Set `PR_NUMBER` only to adopt an existing open PR whose head branch is `BRANCH`.
 
 Dagu snapshots the definition when you enqueue. Later edits to the file do not affect runs that already exist.
 
-**One run per issue.** Continue the same run through its checkpoints: `implement`, `await_merge`, and push-back. Do not enqueue a replacement run for a later phase.
+**One run per lifecycle.** Continue each run through its own checkpoints and push-backs. A feature whose triage chooses PoC ends after enqueueing `poc`; a successful PoC may enqueue a fresh feature run for the cutover.
 
 A failed or aborted run is terminal. `handler_on.exit` has already removed its worktree and its local branch. Once `checkpoint_push` has succeeded, the commit survives on `origin/<branch>`. To recover:
 
@@ -116,6 +124,114 @@ A failed or aborted run is terminal. `handler_on.exit` has already removed its w
 3. Enqueue a new run with a suffixed ID (`<repo>-issue-<n>-v2`). Pass `PR_NUMBER` when a PR is already open for the branch.
 
 Inspect a run with `dagu status --run-id <id> feature`. Step logs are listed under each step.
+
+## Triage
+
+`triage` is the first human task, completed by the session that enqueued the issue.
+A PoC is required when implementation depends on unexercised external or runtime
+behavior that can change the implementation path. Reusing demonstrated behavior
+proceeds directly. Bug reproduction is defect investigation.
+
+```sh
+dagu human-task complete feature --run-id <id> --step triage \
+  --input POC=no --input 'QUESTION=<behavior>' \
+  --input 'BASIS=<prior PASS URL, merged PR URL, or reason>' \
+  --input 'REVIEW=<reviewer subagent output reference>'
+```
+
+For `POC=yes`, supply QUESTION and BASIS; REVIEW is optional. The next step reads
+`${steps.triage.outputs.KEY}`, validates REVIEW for `no`, and publishes
+`<!-- poc-triage:<yes|no> run:<RUN> -->` as the comment's first line.
+Missing REVIEW with `no` fails before implementation. `yes` enqueues the absolute
+repository `poc.yaml` with ISSUE and QUESTION and ends the feature run.
+
+`checkpoint_push` compares dependencies and package/app directories against the
+entire BASE_SHA tree, using the PoC-proven manifest extractor. A new identity
+causes `dependency_review` to push back to `triage` automatically through the wait
+handler, protected by its current iteration. Completing triage records that exact
+dependency set as reviewed; changing it again triggers another review. This net
+is a complementary signal, not a substitute for triage or its reviewer. The
+detector covers package.json, Go, Python, Chart/Flux/Compose and package roots;
+undeclared external CLI/runtime behavior still requires triage judgment.
+The wait handler launches a bounded dispatcher because Dagu persists Waiting only
+after the handler exits. Its output is in
+`<git-dir>/dagu-feature/runs/<RUN>/dependency-transition.log`. If dispatch fails,
+the run remains safely at `dependency_review`; inspect the log and use the same
+protected push-back (or complete for a reviewed set) against that waiting task.
+
+## Feasibility PoC
+
+```sh
+dagu enqueue --run-id "<repo>-poc-<id>" .workspace/dagu/dags/poc.yaml -- \
+  PRIMARY="$(git rev-parse --show-toplevel)" QUESTION="<behavior to prove>"
+```
+
+ISSUE is optional. Without it, QUESTION is required and `record` creates the issue
+before any experiment, with the question as its body. With ISSUE, provide the
+precise QUESTION (otherwise the body is used for execution only). Promotion of a
+preexisting issue requires triage: its current question comes from `## Pregunta`
+in the latest first-line `poc-triage:yes` comment. An explicit PoC without triage
+still publishes its verdict but cannot promote. For an issue created by record,
+the question comes from its body if no triage comment exists. Triage comments
+own question binding while the body retains issue scope. `base` requires clean PRIMARY on BASE_BRANCH, fetches and
+fast-forwards it, and records BASE_SHA. `worktree` creates
+`poc/<RUN>` at `.workspace/worktrees/poc-<RUN>` from that SHA. Never push that
+branch. Git metadata under PRIMARY stores per-RUN state and published evidence.
+
+At `run_poc`, execute minimal real-target commands in that worktree. Record the
+result outside its diff at `git rev-parse --git-path poc/result.md`:
+
+```text
+VERDICT: PASS
+## Pregunta
+<the exact question>
+## Proposición demostrada
+<bounded observation>
+## Ruta ejercitada
+<real target and reference/digest of every executed release or image>
+## Comandos y salida
+<commands, observed outputs, failed attempts>
+## Después del PASS
+<maintained result, cutover scope and acceptance>
+```
+
+FAIL and INCONCLUSIVE use the same first four sections. Después del PASS is
+required for PASS. An empty diff is valid. Tests by the rendered convention and
+all Markdown paths belong to cutover; the scope gate checks tracked changes,
+both rename paths and NUL-delimited untracked names against BASE_SHA.
+
+```sh
+dagu human-task complete poc --run-id <id> --step run_poc
+dagu human-task push-back poc --run-id <id> --step decide --expected-iteration 0
+# Update the experiment/result in the same worktree, then complete run_poc again.
+dagu human-task complete poc --run-id <id> --step decide --input promote=yes
+```
+
+Read the current iteration before every push-back (initially 0). Rewind retains
+BASE_SHA/worktree and increments the publication attempt. Publication precedes
+decide: first-line verdict/scope/run/attempt/base marker, result, diffstat, full
+binary patch including new files and artifact references in Ruta ejercitada.
+Oversized evidence uses linked base64 chunks preserving the entire result,
+diffstat and patch, with a marker-bearing preview bounded to 48,000 characters.
+PASS copies Después del PASS into the issue body.
+
+PASS with promote=yes reads all paginated comments and requires the latest valid
+first-line marker to be PASS/scope:OK with a normalized question matching the
+latest triage question (or the question body for an issue created by record)
+and nonempty required sections outside fences.
+It verifies Después del PASS in the body and enqueues the absolute feature
+DAG with ISSUE, PRIMARY, BRANCH, BASE_BRANCH and POC_BASIS pointing to the PASS;
+its human triage cites that URL as BASIS and still requires REVIEW for POC=no.
+PASS with promote=no ends. FAIL closes only an issue created by record as
+`not planned`; preexisting issues stay open. For INCONCLUSIVE, the operator
+chooses iteration or completion with promote=no.
+
+On failure the handler publishes from per-RUN files before exit removes the
+dirty worktree and local branch idempotently. Missing results produce an
+orchestration-failure report, not a capacity verdict. Keep the issue/comment
+URLs as durable evidence. The queue slot is released at human tasks, so several
+experiments can wait concurrently.
+
 
 ## Implement
 
@@ -130,7 +246,7 @@ When `start_gate` succeeds, the run enters `Waiting` at `implement`, and the que
    dagu human-task complete --run-id <id> --step implement feature
    ```
 
-The run resumes through the queue: `checkpoint_push` → `rebase` → `gate` → `push` → `pr` → `required_check` → `auto_merge`. It then waits at `await_merge`. `pr` creates the PR with `--fill` and the body `Closes #<issue>`, so the commit message becomes the PR title. Write it in the repository's commit convention.
+The run resumes through the queue: `checkpoint_push` → `dependency_review` → `rebase` → `gate` → `push` → `pr` → `required_check` → `auto_merge`. The dependency checkpoint automatically completes or returns to triage. The run then waits at `await_merge`. `pr` creates the PR with `--fill` and the body `Closes #<issue>`, so the commit message becomes the PR title. Write it in the repository's commit convention.
 
 ## Reconcile `await_merge`
 
