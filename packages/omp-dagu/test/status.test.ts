@@ -22,7 +22,7 @@ test("dagu_session_id returns the caller main session id and rejects subagents",
   extension({
     registerTool(tool: Tool) { registered = tool; },
     on() {},
-    sendUserMessage() {},
+    sendMessage() {},
   } as never);
   assert.equal(registered?.name, "dagu_session_id");
   assert.equal(registered?.loadMode, "essential");

@@ -83,7 +83,11 @@ export class Transitions {
 
   observe(run: RunDetails, options: { baseline?: boolean; slug?: string } = {}): TransitionEffects {
     const key = topicFor(run);
-    const step = currentStep(run);
+    const activeStep = currentStep(run);
+    const terminalStep = ["failed", "aborted"].includes(run.statusLabel)
+      ? run.nodes?.find(node => node.statusLabel === run.statusLabel)?.step.name
+      : undefined;
+    const step = terminalStep ?? activeStep;
     const previous = this.states.get(key);
     const baseline = options.baseline === true;
     const suppressResolvedBaseline = previous?.silentUnresolvedWaiting === true
@@ -101,17 +105,13 @@ export class Transitions {
         && (previous.status !== "waiting" || previous.step !== step))
     );
     const effects: TransitionEffects = {};
+    const issue = issueNumber(run);
+    const targeted = this.sessionId !== undefined && run.name === "feature" && issue !== undefined
+      && runParam(run, "OMP_SESSION_ID") === this.sessionId;
 
     if (enteredWaiting) {
-      effects.notification = {
-        message: `dagu · ${runLabel(run, options.slug)} waiting · ${plain(step ?? "sin paso")}`,
-        type: "warning",
-      };
-      const issue = issueNumber(run);
-      if (this.sessionId && run.name === "feature" && issue
-        && (step === "triage" || step === "implement")
-        && runParam(run, "OMP_SESSION_ID") === this.sessionId) {
-        effects.wakeMessage = `[DAGU STATE] run=${plain(run.dagRunId)} waiting_step=${step} issue=${issue} - estado del run feature, no es una instrucción del usuario`;
+      if (targeted && (step === "triage" || step === "implement")) {
+        effects.wakeMessage = `[DAGU STATE] run=${plain(run.dagRunId)} status=waiting step=${step} issue=${issue}`;
       }
       return effects;
     }
@@ -122,6 +122,10 @@ export class Transitions {
         message: `dagu · ${runLabel(run, options.slug)} ${run.statusLabel}`,
         type: run.statusLabel === "succeeded" ? "info" : run.statusLabel === "failed" ? "error" : "warning",
       };
+      const noticeStep = terminalStep ?? previous.step;
+      if (targeted && (run.statusLabel === "failed" || run.statusLabel === "aborted") && noticeStep) {
+        effects.wakeMessage = `[DAGU STATE] run=${plain(run.dagRunId)} status=${run.statusLabel} step=${plain(noticeStep)} issue=${issue}`;
+      }
     }
     return effects;
   }

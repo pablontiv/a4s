@@ -32,10 +32,17 @@ interface SessionIdTool {
     ctx: Context,
   ): Promise<{ content: { type: "text"; text: string }[]; details: Record<string, never> }>;
 }
+interface CustomMessage {
+  customType?: string;
+  content?: string;
+  display?: boolean;
+  details?: unknown;
+  attribution?: string;
+}
 interface ExtensionAPI {
   on(event: "session_start" | "session_switch" | "session_shutdown", handler: (event: unknown, ctx: Context) => void): void;
   registerTool(tool: SessionIdTool): void;
-  sendUserMessage(message: string, options: { deliverAs: "aside"; attribution: "agent" }): void;
+  sendMessage(message: CustomMessage, options?: { deliverAs?: "steer" | "followUp" | "nextTurn" | "aside" }): void;
 }
 
 async function discover(base: string, repo: string, signal: AbortSignal): Promise<RunDetails[]> {
@@ -276,7 +283,7 @@ export default function daguStatus(pi: ExtensionAPI): void {
     controller = new AbortController();
     // Every detached promise has an error boundary; shutdown aborts fetches and sleeps.
     void observe(ctx, controller.signal, message => {
-      pi.sendUserMessage(message, { deliverAs: "aside", attribution: "agent" });
+      pi.sendMessage({ customType: "dagu-state", content: message, display: false }, { deliverAs: "aside" });
     }).catch(() => {});
   };
   pi.on("session_start", start);
