@@ -43,12 +43,12 @@ test("ordinary shell quoting is guarded", () => {
   for (const spelling of ['POC="no"', "POC='no'", '"POC=no"']) blocked(new TriageGuard().toolCall(call(command().replace('POC=no', spelling))));
 });
 test("only explicitly bound triage reviewer is changed, ordinary reviews stay untouched", () => {
-  const guard = new TriageGuard(); const request = blocked(guard.toolCall(call()));
+  const guard = new TriageGuard(); blocked(guard.toolCall(call()));
   const foreign = { toolName: "task", toolCallId: "foreign", input: { agent: "reviewer", name: "Foreign", task: "Review implementation", outputSchema: { type: "string" } } };
   assert.equal(guard.toolCall(foreign), undefined);
   guard.toolResult({ ...foreign, details: { results: [{ id: "Foreign", agent: "reviewer", exitCode: 0, output: output() }] } });
-  blocked(guard.toolCall(approved()));
-  const triage = guard.toolCall({ ...foreign, toolCallId: "triage", input: { ...foreign.input, agent: "triage-reviewer", task: request } });
+  const retry = blocked(guard.toolCall(approved()));
+  const triage = guard.toolCall({ ...foreign, toolCallId: "triage", input: { ...foreign.input, agent: "triage-reviewer", task: retry } });
   assert.ok(triage && "input" in triage); assert.deepEqual(triage.input.outputSchema.required, ["poc", "behavior", "question", "reason"]);
   assert.equal(guard.toolCall(foreign), undefined);
 });
@@ -57,6 +57,63 @@ test("poc yes keeps no blocked and POC=yes passes", () => {
   assert.match(blocked(guard.toolCall(approved())), /Does runtime support it/);
   assert.equal(guard.toolCall(call(command().replace("POC=no", "POC=yes"))), undefined);
 });
+test("a fresh request binds a replacement review within the same generation", () => {
+  for (const route of ["task", "message", "wait"]) {
+    const guard = new TriageGuard();
+    reviewer(guard, false, "yes");
+    const request = blocked(guard.toolCall(approved()));
+    assert.match(request, /GENERATION=0 REQUEST=2/);
+    const launch = { toolName: "task", toolCallId: "replacement", input: { agent: "triage-reviewer", name: "Review136v2", task: request } };
+    const bound = guard.toolCall(launch);
+    assert.ok(bound && "input" in bound);
+    guard.toolResult({ ...launch, content: [{ type: "text", text: "Spawned agent `Review136v2` (job `job-2`)." }], details: route === "task"
+      ? { results: [{ index: 0, id: "Review136v2", agent: "triage-reviewer", exitCode: 0, output: output() }] }
+      : { results: [], progress: [{ index: 0, id: "Review136v2", agent: "triage-reviewer" }] } });
+    const resultText = `<task-result id="Review136v2" agent="triage-reviewer" status="completed"><output>${output()}</output></task-result>`;
+    if (route === "message") guard.messageEnd({ role: "custom", customType: "async-result", content: resultText, details: { jobs: [{ jobId: "job-2", agentId: "Review136v2", status: "completed", type: "task" }] } });
+    if (route === "wait") guard.toolResult({ toolName: "wait", toolCallId: "wait", input: {}, details: { jobs: [{ id: "job-2", agentUrlId: "Review136v2", status: "completed", type: "task", resultText }] } });
+    assert.match(blocked(guard.toolCall(approved())), /--input REVIEW=Review136v2/);
+    assert.equal(guard.toolCall(call(command("run-136", "--input REVIEW=Review136v2"))), undefined);
+  }
+});
+
+test("the latest valid bound review wins over late earlier results", () => {
+  const guard = new TriageGuard();
+  reviewer(guard, true, "yes");
+  reviewer(guard, false, "yes");
+  const request = blocked(guard.toolCall(approved()));
+  guard.toolCall({ toolName: "task", toolCallId: "new", input: { agent: "triage-reviewer", task: request } });
+  guard.toolResult({ toolName: "task", toolCallId: "new", input: {}, details: { results: [{ index: 0, id: "Review136v2", agent: "triage-reviewer", exitCode: 0, output: output() }] } });
+  const earlier = `<task-result id="Review136" agent="triage-reviewer" status="completed"><output>${output("yes")}</output></task-result>`;
+  guard.messageEnd({ role: "custom", customType: "async-result", content: earlier, details: { jobs: [{ jobId: "job-1", agentId: "Review136", status: "completed", type: "task" }] } });
+  assert.match(blocked(guard.toolCall(approved())), /--input REVIEW=Review136v2/);
+  assert.equal(guard.toolCall(call(command("run-136", "--input REVIEW=Review136v2"))), undefined);
+});
+
+test("each request marker binds its next reviewer and leaves older markers unbound", () => {
+  const guard = new TriageGuard();
+  const first = blocked(guard.toolCall(call()));
+  const latest = blocked(guard.toolCall(call()));
+  assert.notEqual(first, latest);
+  assert.equal(guard.toolCall({ toolName: "task", toolCallId: "stale", input: { agent: "triage-reviewer", task: first } }), undefined);
+  const batch = guard.toolCall({ toolName: "task", toolCallId: "next", input: { tasks: [
+    { agent: "triage-reviewer", task: latest },
+    { agent: "triage-reviewer", task: latest },
+  ] } });
+  assert.ok(batch && "input" in batch);
+  assert.ok(batch.input.tasks[0].outputSchema);
+  assert.equal(batch.input.tasks[1].outputSchema, undefined);
+});
+
+test("a malformed replacement retains the latest valid bound review", () => {
+  const guard = new TriageGuard();
+  reviewer(guard, false, "yes");
+  const request = blocked(guard.toolCall(approved()));
+  guard.toolCall({ toolName: "task", toolCallId: "malformed", input: { agent: "triage-reviewer", task: request } });
+  guard.toolResult({ toolName: "task", toolCallId: "malformed", input: {}, details: { results: [{ index: 0, id: "Review136v2", agent: "triage-reviewer", exitCode: 0, output: "{}" }] } });
+  assert.match(blocked(guard.toolCall(call(command("run-136", "--input REVIEW=Review136v2")))), /TRIAGE_POC_REQUIRED/);
+});
+
 test("a batched call cannot hide an unreviewed POC=no behind a POC=yes completion", () => {
   const guard = new TriageGuard(); reviewer(guard);
   const yes = command("run-a").replace("POC=no", "POC=yes");

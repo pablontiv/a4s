@@ -296,8 +296,12 @@ completion, receives the generation marker and fixed review prompt, and runs
 `task agent=triage-reviewer` with the issue scope and that full prompt. Name the
 subagent `TriageReview<ISSUE>`; retries append `v<N>`. Its structured decision
 auto-delivers to the coordinator. A `no` authorizes the current generation with
-that exact subagent name as `REVIEW`; a `yes` keeps triage waiting with its
-question.
+the allocated reviewer ID supplied by the guard as `REVIEW`; a `yes` keeps triage
+waiting with its question. Another rejected `POC=no` completion emits a fresh
+request marker in that same generation. Include that marker and the fixed prompt
+when launching the next reviewer with corrected scope or new evidence. The
+latest valid bound review decides, and its exact allocated ID is the `REVIEW`
+submitted to `triage_decision`; earlier reviewer IDs remain rejected.
 
 ```sh
 dagu human-task complete feature --run-id <id> --step triage \

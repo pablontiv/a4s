@@ -15,9 +15,9 @@ export interface Event {
 }
 export type CallDecision = { block: true; reason: string } | { input: RecordValue } | undefined;
 interface Target { key: string; dag: string; run: string; poc: string; reviewer?: string }
-interface Review { id: string; output: string; poc: string; question: string }
-interface Generation { target: Target; number: number; requested: boolean; review?: Review }
-interface Binding { generation: Generation; number: number }
+interface Review { id: string; output: string; poc: string; question: string; request: number }
+interface Generation { target: Target; number: number; request: number; requested: boolean; review?: Review }
+interface Binding { generation: Generation; number: number; request: number }
 interface Pending { bindings: Map<number, Binding> }
 interface Job { binding: Binding; agentId: string }
 
@@ -35,12 +35,12 @@ export function target(text: string): Target | undefined {
   const reviewer = /\bREVIEW\s*=\s*([\w.-]+)/.exec(literal)?.[1];
   return { key: JSON.stringify([dag, run]), dag, run, poc, ...(reviewer ? { reviewer } : {}) };
 }
-function parseReview(id: string, output: unknown): Review | undefined {
+function parseReview(id: string, output: unknown, request: number): Review | undefined {
   if (typeof output !== "string") return undefined;
   for (const line of [output, ...output.split("\n")]) {
     try {
       const value = JSON.parse(line.trim());
-      if ((value.poc === "yes" || value.poc === "no") && [value.behavior, value.question, value.reason].every(v => typeof v === "string")) return { id, output, poc: value.poc, question: value.question };
+      if ((value.poc === "yes" || value.poc === "no") && [value.behavior, value.question, value.reason].every(v => typeof v === "string")) return { id, output, poc: value.poc, question: value.question, request };
     } catch { /* Accept a JSON line surrounded by reviewer prose. */ }
   }
   return undefined;
@@ -56,12 +56,17 @@ export class TriageGuard {
     if (event.toolName === "task") {
       const tasks: RecordValue[] = Array.isArray(event.input.tasks) ? event.input.tasks : [event.input];
       const bound = new Map<number, Generation>();
+      const claimed = new Set<Generation>();
       for (const [index, task] of tasks.entries()) {
         if (task.agent !== "triage-reviewer") continue;
         const assignment = `${event.input.context ?? ""}\n${task.task ?? ""}`;
         for (const generation of this.generations.values()) {
-          const marker = `TRIAGE_REVIEW AGENT=triage-reviewer DAG=${generation.target.dag} RUN=${generation.target.run} GENERATION=${generation.number}`;
-          if (generation.requested && assignment.includes(marker) && assignment.includes(REVIEW_PROMPT)) { bound.set(index, generation); break; }
+          const marker = `TRIAGE_REVIEW AGENT=triage-reviewer DAG=${generation.target.dag} RUN=${generation.target.run} GENERATION=${generation.number} REQUEST=${generation.request}\n`;
+          if (generation.requested && !claimed.has(generation) && assignment.includes(marker) && assignment.includes(REVIEW_PROMPT)) {
+            bound.set(index, generation);
+            claimed.add(generation);
+            break;
+          }
         }
       }
       if (!bound.size) return undefined;
@@ -69,7 +74,8 @@ export class TriageGuard {
       const revised = tasks.map((task, index) => {
         const generation = bound.get(index);
         if (!generation) return task;
-        bindings.set(index, { generation, number: generation.number });
+        bindings.set(index, { generation, number: generation.number, request: generation.request });
+        generation.requested = false;
         return { ...task, outputSchema: REVIEW_SCHEMA };
       });
       this.calls.set(event.toolCallId, { bindings });
@@ -83,16 +89,17 @@ export class TriageGuard {
     if ((text.match(/\bhuman-task\b/g) ?? []).length > 1) return { block: true, reason: "TRIAGE_SINGLE_COMPLETION: Submit each dagu human-task call in its own tool call." };
     let generation = this.generations.get(completion.key);
     if (!generation) {
-      generation = { target: completion, number: 0, requested: false };
+      generation = { target: completion, number: 0, request: 0, requested: false };
       this.generations.set(completion.key, generation);
     }
     if (completion.poc === "no") {
       const review = generation.review;
-      if (!review) {
+      if (!review || review.poc === "yes") {
         generation.requested = true;
-        return { block: true, reason: `TRIAGE_REVIEW_REQUIRED: Run task agent=triage-reviewer for this triage, including this marker and fixed prompt in its assignment:\nTRIAGE_REVIEW AGENT=triage-reviewer DAG=${completion.dag} RUN=${completion.run} GENERATION=${generation.number}\n${REVIEW_PROMPT}` };
+        generation.request++;
+        const reason = review ? `TRIAGE_POC_REQUIRED: ${review.question}\n` : "";
+        return { block: true, reason: `${reason}TRIAGE_REVIEW_REQUIRED: Run task agent=triage-reviewer for this triage, including this marker and fixed prompt in its assignment:\nTRIAGE_REVIEW AGENT=triage-reviewer DAG=${completion.dag} RUN=${completion.run} GENERATION=${generation.number} REQUEST=${generation.request}\n${REVIEW_PROMPT}` };
       }
-      if (review.poc === "yes") return { block: true, reason: `TRIAGE_POC_REQUIRED: ${review.question}` };
       if (completion.reviewer !== review.id) return { block: true, reason: `TRIAGE_REVIEW_REQUIRED: Retry this completion with --input REVIEW=${review.id}; this is the completed reviewer for the current triage generation.` };
     }
     this.completions.set(event.toolCallId, { generation, number: generation.number });
@@ -110,6 +117,11 @@ export class TriageGuard {
       }
       return;
     }
+    if (event.toolName === "task") {
+      for (const binding of this.calls.get(event.toolCallId)?.bindings.values() ?? []) {
+        if (binding.number === binding.generation.number && binding.request === binding.generation.request) binding.generation.requested = true;
+      }
+    }
     if (event.isError) { this.calls.delete(event.toolCallId); return; }
     if (event.toolName === "wait") {
       for (const job of event.details?.jobs ?? []) this.finish(job.id, job.agentUrlId, job.status, job.type, job.resultText);
@@ -123,7 +135,7 @@ export class TriageGuard {
       if (result.agent !== "triage-reviewer") continue;
       const binding = pending.bindings.get(result.index);
       if (!binding) continue;
-      if (binding.number === binding.generation.number) binding.generation.requested = false;
+      if (binding.number === binding.generation.number && binding.request === binding.generation.request) binding.generation.requested = false;
       if (result.exitCode === 0 && !result.aborted && !result.error) this.record(binding, result.id, result.output);
     }
     // Native task-spawn-feedback lists every started agent/job pair, whereas
@@ -139,7 +151,7 @@ export class TriageGuard {
       const binding = reviewers.get(match[1]!);
       if (!binding) continue;
       this.jobs.set(match[2]!, { binding, agentId: match[1]! });
-      if (binding.number === binding.generation.number) binding.generation.requested = false;
+      if (binding.number === binding.generation.number && binding.request === binding.generation.request) binding.generation.requested = false;
     }
   }
 
@@ -149,8 +161,8 @@ export class TriageGuard {
   }
   private record(binding: Binding, id: string, output: unknown): void {
     if (binding.number !== binding.generation.number) return;
-    const review = parseReview(id, output);
-    if (review) binding.generation.review = review;
+    const review = parseReview(id, output, binding.request);
+    if (review && binding.request >= (binding.generation.review?.request ?? 0)) binding.generation.review = review;
   }
   private finish(jobId: string, agentId: string, status: string, type: string, text: unknown): void {
     const job = this.jobs.get(jobId);
