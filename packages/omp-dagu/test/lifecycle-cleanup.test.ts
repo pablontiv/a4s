@@ -1,0 +1,275 @@
+import assert from "node:assert/strict";
+import { execFileSync, spawnSync } from "node:child_process";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { test } from "node:test";
+
+const featureDefinitions = [
+  ["template", fileURLToPath(new URL("../skills/dagu-feature/feature.yaml", import.meta.url))],
+  ["rendered DAG", fileURLToPath(new URL("../../../.workspace/dagu/dags/feature.yaml", import.meta.url))],
+] as const;
+const pocDefinitions = [
+  ["template", fileURLToPath(new URL("../skills/dagu-feature/poc.yaml", import.meta.url))],
+  ["rendered DAG", fileURLToPath(new URL("../../../.workspace/dagu/dags/poc.yaml", import.meta.url))],
+] as const;
+
+function extractScript(definition: string, marker: string, after = 0): string {
+  const lines = readFileSync(definition, "utf8").split("\n");
+  const markerIndex = lines.indexOf(marker, after);
+  assert.notEqual(markerIndex, -1, `missing ${marker} in ${definition}`);
+  const runIndex = lines.indexOf("    run: |", markerIndex);
+  assert.notEqual(runIndex, -1, `missing run block after ${marker}`);
+  let end = runIndex + 1;
+  while (end < lines.length && (lines[end]!.startsWith("      ") || lines[end] === "")) end++;
+  return lines.slice(runIndex + 1, end).map((line) => line.slice(6)).join("\n");
+}
+
+function git(cwd: string, ...args: string[]): string {
+  return execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
+}
+function hasRef(cwd: string, ref: string): boolean {
+  return spawnSync("git", ["-C", cwd, "show-ref", "--verify", "--quiet", ref]).status === 0;
+}
+
+type Repo = { root: string; outside: string; primary: string; remote: string; worktree: string; branch: string };
+function repository(branch = "dagu/issue-209", worktreeName = "issue-209"): Repo {
+  const root = mkdtempSync(join(tmpdir(), "omp-dagu-cleanup-"));
+  const outside = join(root, "dagu-run-root");
+  const primary = join(root, "primary");
+  const remote = join(root, "remote.git");
+  const worktree = join(primary, ".workspace", "worktrees", worktreeName);
+  mkdirSync(outside);
+  execFileSync("git", ["init", "--bare", "-b", "main", remote]);
+  execFileSync("git", ["init", "-b", "main", primary]);
+  git(primary, "config", "user.name", "Lifecycle Test");
+  git(primary, "config", "user.email", "lifecycle@example.com");
+  git(primary, "remote", "add", "origin", remote);
+  writeFileSync(join(primary, "value.txt"), "base\n");
+  git(primary, "add", ".");
+  git(primary, "commit", "-m", "base");
+  git(primary, "push", "-u", "origin", "main");
+  writeFileSync(join(primary, ".git", "info", "exclude"), "/.workspace/worktrees/\n");
+  mkdirSync(join(primary, ".workspace", "worktrees"), { recursive: true });
+  git(primary, "worktree", "add", "-b", branch, worktree, "origin/main");
+  return { root, outside, primary, remote, worktree, branch };
+}
+
+function featureCommit(repo: Repo): string {
+  writeFileSync(join(repo.worktree, "value.txt"), "feature\n");
+  git(repo.worktree, "add", "value.txt");
+  git(repo.worktree, "commit", "-m", "feature");
+  return git(repo.worktree, "rev-parse", "HEAD");
+}
+
+function squashMerge(repo: Repo, deleteRemote: boolean): string {
+  const tested = featureCommit(repo);
+  git(repo.worktree, "push", "origin", `HEAD:${repo.branch}`);
+  writeFileSync(join(repo.primary, "value.txt"), "feature\n");
+  git(repo.primary, "add", "value.txt");
+  git(repo.primary, "commit", "-m", "squash feature");
+  git(repo.primary, "push", "origin", "main");
+  if (deleteRemote) git(repo.primary, "push", "origin", "--delete", repo.branch);
+  return tested;
+}
+
+function stubGh(repo: Repo, tested: string): void {
+  const bin = join(repo.root, "bin");
+  mkdirSync(bin);
+  const executable = join(bin, "gh");
+  writeFileSync(executable, `#!/bin/sh
+case " $* " in *" --repo "*) ;; *)
+  if ! git -C "$PWD" rev-parse --git-dir >/dev/null 2>&1; then
+    printf 'fatal: not a git repository\n' >&2
+    exit 2
+  fi
+esac
+case "$*" in
+  *"pr view"*"--json number"*) printf '209\\n' ;;
+  *"pr view"*"--json state"*) printf 'MERGED\\n' ;;
+  *"pr view"*"--json headRefOid"*) printf '%s\\n' ${JSON.stringify(tested)} ;;
+  *"pr checks"*) printf 'SUCCESS\\n' ;;
+  *) printf 'unexpected gh arguments: %s\\n' "$*" >&2; exit 3 ;;
+esac
+`);
+  chmodSync(executable, 0o755);
+}
+
+function stubGitNoop(repo: Repo, operation: "worktree" | "branch" | "remote"): void {
+  const executable = join(repo.root, "bin", "git");
+  const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+  const registeredWorktree = git(repo.worktree, "rev-parse", "--show-toplevel");
+  const cases = operation === "worktree"
+    ? `*"worktree remove"*|*"branch -D"*) exit 0 ;;
+  *"worktree list"*) ${JSON.stringify(realGit)} "$@"; printf 'worktree %s\\n' ${JSON.stringify(registeredWorktree)}; exit 0 ;;`
+    : operation === "branch"
+      ? '*"branch -D"*) exit 0 ;;'
+      : '*"push origin --delete"*) exit 0 ;;';
+  writeFileSync(executable, `#!/bin/sh
+case " $* " in
+  ${cases}
+esac
+exec ${JSON.stringify(realGit)} "$@"
+`);
+  chmodSync(executable, 0o755);
+}
+
+function run(script: string, repo: Repo, extra: Record<string, string> = {}) {
+  return spawnSync("bash", ["-c", script], {
+    cwd: repo.outside,
+    encoding: "utf8",
+    env: {
+      HOME: process.env.HOME,
+      PATH: `${join(repo.root, "bin")}:${process.env.PATH ?? ""}`,
+      ISSUE: "209",
+      PR_NUMBER: "",
+      PRIMARY: repo.primary,
+      WORKTREE: repo.worktree,
+      BRANCH: repo.branch,
+      BASE_BRANCH: "main",
+      GATE: "npm test",
+      REQUIRED_CHECK: "validate",
+      OMP_SESSION_ID: "",
+      POC_BASIS: "",
+      RUN: "test-run",
+      ...extra,
+    },
+  });
+}
+
+for (const [name, definition] of featureDefinitions) {
+  const closeGate = extractScript(definition, "  - id: close_gate");
+
+  test(`${name} close_gate cleans squash-merged worktree and absent remote branch outside a repository`, () => {
+    const repo = repository();
+    try {
+      const tested = squashMerge(repo, true);
+      stubGh(repo, tested);
+      const result = run(closeGate, repo);
+      assert.equal(result.status, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+      assert.equal(existsSync(repo.worktree), false);
+      assert.equal(hasRef(repo.primary, `refs/heads/${repo.branch}`), false);
+      assert.equal(hasRef(repo.primary, `refs/remotes/origin/${repo.branch}`), false);
+      assert.equal(git(repo.primary, "rev-parse", "HEAD"), git(repo.primary, "rev-parse", "origin/main"));
+      assert.match(result.stdout, /cleanup worktree=.* branch=dagu\/issue-209 remote=absent/);
+    } finally { rmSync(repo.root, { recursive: true, force: true }); }
+  });
+
+  test(`${name} close_gate canonicalizes a symlinked worktree path`, () => {
+    const repo = repository();
+    try {
+      const primaryLink = join(repo.root, "primary-link");
+      symlinkSync(repo.primary, primaryLink, "dir");
+      const linkedRepo = {
+        ...repo,
+        worktree: join(primaryLink, ".workspace", "worktrees", "issue-209"),
+      };
+      const tested = squashMerge(linkedRepo, true);
+      stubGh(linkedRepo, tested);
+      const result = run(closeGate, linkedRepo);
+      assert.equal(result.status, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+      assert.equal(existsSync(repo.worktree), false);
+      assert.equal(hasRef(repo.primary, `refs/heads/${repo.branch}`), false);
+    } finally { rmSync(repo.root, { recursive: true, force: true }); }
+  });
+
+  test(`${name} close_gate detects a retained worktree through a symlinked path`, () => {
+    const repo = repository();
+    try {
+      const primaryLink = join(repo.root, "primary-link");
+      symlinkSync(repo.primary, primaryLink, "dir");
+      const linkedRepo = {
+        ...repo,
+        worktree: join(primaryLink, ".workspace", "worktrees", "issue-209"),
+      };
+      const tested = squashMerge(linkedRepo, true);
+      stubGh(linkedRepo, tested);
+      stubGitNoop(linkedRepo, "worktree");
+      const result = run(closeGate, linkedRepo);
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /close_gate: worktree .* remains, expected removed/);
+    } finally { rmSync(repo.root, { recursive: true, force: true }); }
+  });
+
+  test(`${name} close_gate fails and preserves a dirty worktree`, () => {
+    const repo = repository();
+    try {
+      const tested = squashMerge(repo, true);
+      writeFileSync(join(repo.worktree, "dirty.txt"), "dirty\n");
+      stubGh(repo, tested);
+      const result = run(closeGate, repo);
+      assert.notEqual(result.status, 0);
+      assert.equal(existsSync(repo.worktree), true);
+      assert.equal(hasRef(repo.primary, `refs/heads/${repo.branch}`), true);
+    } finally { rmSync(repo.root, { recursive: true, force: true }); }
+  });
+
+  test(`${name} close_gate deletes a remaining remote branch`, () => {
+    const repo = repository();
+    try {
+      const tested = squashMerge(repo, false);
+      stubGh(repo, tested);
+      const result = run(closeGate, repo);
+      assert.equal(result.status, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+      assert.equal(git(repo.primary, "ls-remote", "origin", `refs/heads/${repo.branch}`), "");
+      assert.match(result.stdout, /remote=deleted/);
+    } finally { rmSync(repo.root, { recursive: true, force: true }); }
+  });
+
+  for (const operation of ["worktree", "branch", "remote"] as const) {
+    test(`${name} close_gate fails when ${operation} cleanup reports success but leaves state`, () => {
+      const repo = repository();
+      try {
+        const tested = squashMerge(repo, operation !== "remote");
+        stubGh(repo, tested);
+        stubGitNoop(repo, operation);
+        const result = run(closeGate, repo);
+        assert.notEqual(result.status, 0);
+        assert.match(result.stderr, new RegExp(`close_gate: .*${operation === "branch" ? "local branch" : operation}.*remains, expected removed`));
+      } finally { rmSync(repo.root, { recursive: true, force: true }); }
+    });
+  }
+}
+
+for (const [name, definition] of pocDefinitions) {
+  const exit = extractScript(definition, "  exit:");
+  test(`${name} PoC cleanup fails and retains a dirty worktree and branch`, () => {
+    const repo = repository("poc/test-run", "poc-test-run");
+    try {
+      writeFileSync(join(repo.worktree, "dirty.txt"), "dirty\n");
+      const result = run(exit, repo);
+      assert.notEqual(result.status, 0);
+      assert.equal(existsSync(repo.worktree), true);
+      assert.equal(hasRef(repo.primary, "refs/heads/poc/test-run"), true);
+    } finally { rmSync(repo.root, { recursive: true, force: true }); }
+  });
+
+  test(`${name} PoC cleanup fails when branch deletion leaves the branch`, () => {
+    const repo = repository("poc/test-run", "poc-test-run");
+    try {
+      mkdirSync(join(repo.root, "bin"));
+      stubGitNoop(repo, "branch");
+      const result = run(exit, repo);
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /cleanup failed: branch poc\/test-run remains/);
+    } finally { rmSync(repo.root, { recursive: true, force: true }); }
+  });
+
+  test(`${name} PoC cleanup canonicalizes a symlinked primary path`, () => {
+    const repo = repository("poc/test-run", "poc-test-run");
+    try {
+      const primaryLink = join(repo.root, "primary-link");
+      symlinkSync(repo.primary, primaryLink, "dir");
+      const linkedRepo = {
+        ...repo,
+        primary: primaryLink,
+        worktree: join(primaryLink, ".workspace", "worktrees", "poc-test-run"),
+      };
+      const result = run(exit, linkedRepo);
+      assert.equal(result.status, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+      assert.equal(existsSync(repo.worktree), false);
+      assert.equal(hasRef(repo.primary, "refs/heads/poc/test-run"), false);
+    } finally { rmSync(repo.root, { recursive: true, force: true }); }
+  });
+}
