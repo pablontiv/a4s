@@ -206,7 +206,18 @@ for (const [name, definition] of definitions) {
     }
   });
 
-  test(`${name} auto_merge sends the tested body with terminal trailers and the closing reference`, () => {
+  for (const scenario of [
+    { label: "CLEAN", mergeStateStatus: "CLEAN", merge: "immediate" },
+    { label: "auto-merge enabled", mergeStateStatus: "CLEAN", autoMergeRequest: { enabledAt: "2026-10-16" } },
+    ...["BEHIND", "BLOCKED", "UNSTABLE", "DIRTY", "UNKNOWN"].map((mergeStateStatus) => ({
+      label: mergeStateStatus, mergeStateStatus, merge: "auto",
+    })),
+    { label: "MERGED same head", state: "MERGED", mergeCommit: { oid: "a".repeat(40) } },
+    { label: "MERGED different head", state: "MERGED", mergeCommit: { oid: "a".repeat(40) }, wrongHead: true, failure: true },
+    { label: "gh observation error", ghError: true, failure: true },
+    { label: "gh merge error", mergeStateStatus: "CLEAN", merge: "immediate", mergeError: true, failure: true },
+  ]) {
+  test(`${name} auto_merge ${scenario.label} preserves the tested body and head`, () => {
     const repo = repository();
     try {
       const trailers = [
@@ -223,18 +234,38 @@ for (const [name, definition] of definitions) {
       const argsFile = join(repo.root, "merge-args");
       writeFileSync(executable, `#!/bin/sh
 case "$*" in
-  "pr view ${repo.branch} --json headRefOid --jq .headRefOid") printf '${sha}\\n' ;;
+  "pr view ${repo.branch} --json state,mergeStateStatus,autoMergeRequest,mergeCommit,headRefOid")
+    ${"ghError" in scenario ? "printf 'gh failure\\n' >&2; exit 17" : `printf '%s\\n' '${JSON.stringify({
+      state: "state" in scenario ? scenario.state : "OPEN",
+      mergeStateStatus: "mergeStateStatus" in scenario ? scenario.mergeStateStatus : "UNKNOWN",
+      autoMergeRequest: "autoMergeRequest" in scenario ? scenario.autoMergeRequest : null,
+      mergeCommit: "mergeCommit" in scenario ? scenario.mergeCommit : null,
+      headRefOid: "wrongHead" in scenario ? "b".repeat(40) : sha,
+    })}'`} ;;
   "pr view ${repo.branch} --json number --jq .number") printf '190\\n' ;;
   "pr view ${repo.branch} --json body --jq .body") printf 'Closes #189\\n' ;;
-  "pr merge "*) printf '%s\\0' "$@" > "${argsFile}" ;;
+  "pr merge "*) printf '%s\\0' "$@" > "${argsFile}"; ${"mergeError" in scenario ? "exit 18" : ":"} ;;
   *) printf 'unexpected gh invocation: %s\\n' "$*" >&2; exit 1 ;;
 esac
 `);
       chmodSync(executable, 0o755);
+      if ("failure" in scenario) {
+        const result = spawnSync("bash", ["-c", autoMergeScript], {
+          encoding: "utf8", env: featureScriptEnv(repo),
+        });
+        assert.notEqual(result.status, 0);
+        if ("ghError" in scenario || "wrongHead" in scenario) assert.equal(existsSync(argsFile), false);
+        return;
+      }
       assert.match(runScript(autoMergeScript, repo), new RegExp(`pr=190\\nhead_sha=${sha}`));
+      if (!("merge" in scenario)) {
+        assert.equal(existsSync(argsFile), false);
+        return;
+      }
       const mergeBody = `Closes #189\n\n${commitBody}`;
       assert.deepEqual(readFileSync(argsFile, "utf8").split("\0"), [
-        "pr", "merge", repo.branch, "--auto", "--squash", "--match-head-commit", sha, "--body", mergeBody, "",
+        "pr", "merge", repo.branch, ...(scenario.merge === "auto" ? ["--auto"] : []),
+        "--squash", "--match-head-commit", sha, "--body", mergeBody, "",
       ]);
       assert.ok(mergeBody.endsWith(trailers));
       const parsed = execFileSync("git", ["interpret-trailers", "--parse"], {
@@ -246,6 +277,7 @@ esac
       rmSync(repo.root, { recursive: true, force: true });
     }
   });
+  }
 
   test(`${name} close_gate reports a PRIMARY outside BASE_BRANCH`, () => {
     const repo = repository();

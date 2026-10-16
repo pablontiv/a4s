@@ -478,11 +478,23 @@ steps:
       cd "$WORKTREE"
       sha=$(git rev-parse HEAD)
       pr_ref=${PR_NUMBER:-$BRANCH}
-      test "$(gh pr view "$pr_ref" --json headRefOid --jq .headRefOid)" = "$sha"
+      observation=$(gh pr view "$pr_ref" --json state,mergeStateStatus,autoMergeRequest,mergeCommit,headRefOid)
+      test "$(jq -r '.headRefOid' <<< "$observation")" = "$sha"
       merge_body=$(printf 'Closes #%s\n\n%s' "$ISSUE" "$(git log -1 --format=%b "$sha")")
-      gh pr merge "$pr_ref" --auto --squash --match-head-commit "$sha" --body "$merge_body"
-      printf 'pr=%s\nhead_sha=%s\n' \
-        "$(gh pr view "$pr_ref" --json number --jq .number)" "$sha"
+      if test "$(jq -r '.state' <<< "$observation")" = MERGED; then
+        jq -e '.mergeCommit.oid | type == "string" and length > 0' <<< "$observation" >/dev/null
+      elif jq -e '.autoMergeRequest != null' <<< "$observation" >/dev/null; then
+        :
+      else
+        case "$(jq -r '.mergeStateStatus' <<< "$observation")" in
+          CLEAN) gh pr merge "$pr_ref" --squash --match-head-commit "$sha" --body "$merge_body" ;;
+          BEHIND|BLOCKED|UNSTABLE|DIRTY|UNKNOWN)
+            gh pr merge "$pr_ref" --auto --squash --match-head-commit "$sha" --body "$merge_body" ;;
+          *) printf 'Unexpected PR merge state: %s\n' "$observation" >&2; exit 1 ;;
+        esac
+      fi
+      pr_number=$(gh pr view "$pr_ref" --json number --jq .number)
+      printf 'pr=%s\nhead_sha=%s\n' "$pr_number" "$sha"
 
   - id: await_merge
     depends: auto_merge

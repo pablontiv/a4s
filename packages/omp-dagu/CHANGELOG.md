@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.10
+
+- Make feature auto-merge idempotent for the verified head, merging CLEAN PRs immediately with the tested body and preserving guarded auto-merge for pending checks in the template and installed render (#242).
+
 ## 0.3.9
 
 - Report the worktree path, porcelain status and diff summary on stderr when GATE leaves tracked or untracked changes, in both the feature template and rendered DAG (#216).
