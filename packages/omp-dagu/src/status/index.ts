@@ -8,6 +8,8 @@ import { SSEParser } from "./sse.ts";
 import type { SSEEvent } from "./sse.ts";
 import { EventLog } from "./event-log.ts";
 
+const REQUEST_TIMEOUT_MS = 15_000;
+
 // OMP's structural surface avoids a runtime dependency on a provider-specific host.
 interface Context {
   cwd: string;
@@ -68,7 +70,7 @@ async function discover(base: string, repo: string, signal: AbortSignal, history
   url.searchParams.set("limit", "100");
   const runs: RunDetails[] = [];
   do {
-    const response = await fetch(url, { signal: AbortSignal.any([signal, AbortSignal.timeout(5000)]) });
+    const response = await fetch(url, { signal: AbortSignal.any([signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)]) });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const page = await response.json() as { dagRuns: RunDetails[]; nextCursor?: string };
     runs.push(...page.dagRuns.filter(run => (history || isActive(run)) && run.labels?.includes(`workspace=${repo}`)));
@@ -86,7 +88,7 @@ async function runDetails(base: string, summary: RunDetails, signal: AbortSignal
   const dag = encodeURIComponent(summary.name);
   const run = encodeURIComponent(summary.dagRunId);
   const response = await fetch(`${base}/api/v1/dag-runs/${dag}/${run}`, {
-    signal: AbortSignal.any([signal, AbortSignal.timeout(5000)]),
+    signal: AbortSignal.any([signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)]),
   });
   if (!response.ok) throw new RunDetailsError(response.status);
   const payload = await response.json() as { dagRunDetails?: RunDetails };
@@ -97,7 +99,7 @@ async function streamTopics(base: string, topics: string[], signal: AbortSignal,
   const url = new URL(`${base}/api/v1/events/stream`);
   for (const topic of topics) url.searchParams.append("topic", topic);
   const headers = new AbortController();
-  const headerTimer = setTimeout(() => headers.abort(new DOMException("SSE headers timed out", "TimeoutError")), 5000);
+  const headerTimer = setTimeout(() => headers.abort(new DOMException("SSE headers timed out", "TimeoutError")), REQUEST_TIMEOUT_MS);
   let response: Response;
   try { response = await fetch(url, { signal: AbortSignal.any([signal, headers.signal]) }); }
   finally { clearTimeout(headerTimer); }
