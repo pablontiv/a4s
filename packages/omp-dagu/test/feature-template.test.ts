@@ -180,6 +180,109 @@ function runScript(script: string, repo: Repository, env: NodeJS.ProcessEnv = {}
   return `${result.stdout}${result.stderr}`;
 }
 
+for (const live of [false, true]) {
+  test(`retained candidate merge-base capture and version-anchor rebase${live ? " installed Dagu smoke" : ""}`, live ? liveDagu : {}, () => {
+    const repo = repository();
+    const definition = definitions[0][1];
+    const manifest = "packages/omp-dagu/package.json";
+    const changelog = "packages/omp-dagu/CHANGELOG.md";
+    const putRelease = (cwd: string, version: string, entry: string) => {
+      mkdirSync(dirname(join(cwd, manifest)), { recursive: true });
+      writeFileSync(join(cwd, manifest), JSON.stringify({ name: "@a4s/omp-dagu", version }) + "\n");
+      writeFileSync(join(cwd, "package-lock.json"), JSON.stringify({ lockfileVersion: 3, packages: { "packages/omp-dagu": { version } } }) + "\n");
+      mkdirSync(join(cwd, "packages/omp-dagu/test"), { recursive: true });
+      writeFileSync(join(cwd, "packages/omp-dagu/test/bundle.test.ts"), `assert.equal(BUNDLE_VERSION, "${version}");\n`);
+      writeFileSync(join(cwd, changelog), `# Changelog\n\n## ${version}\n\n- ${entry}\n\n${version === "0.1.1" ? "" : "## 0.1.1\n\n- Base\n\n"}## 0.1.0\n\n- Published\n`);
+    };
+    try {
+      putRelease(repo.primary, "0.1.1", "Base");
+      git(repo.primary, "add", "."); git(repo.primary, "commit", "-m", "release base");
+      git(repo.primary, "push", "origin", "main");
+      git(repo.worktree, "reset", "--hard", "origin/main");
+      const base = git(repo.worktree, "rev-parse", "HEAD");
+      putRelease(repo.worktree, "0.1.2", "Retained");
+      writeFileSync(join(repo.worktree, "retained.txt"), "operator content\n");
+      git(repo.worktree, "add", "."); git(repo.worktree, "commit", "-m", "operator candidate");
+      const retained = git(repo.worktree, "rev-parse", "HEAD");
+      putRelease(repo.primary, "0.1.2", "Upstream");
+      git(repo.primary, "add", "."); git(repo.primary, "commit", "-m", "upstream release");
+      git(repo.primary, "push", "origin", "main");
+      rmSync(join(repo.state, "base")); rmSync(join(repo.state, "candidate.json"));
+      writeFileSync(join(repo.worktree, "dirty.txt"), "uncaptured content\n");
+      const resolver = fileURLToPath(new URL("../bin/dagu-bundle-rebase.mjs", import.meta.url));
+      const env = { ...featureScriptEnv(repo), DAGU_FEATURE_BUNDLE: "test", REBASE_RESOLVER: `test "$(git rev-parse REBASE_HEAD)" = "$DAGU_REBASE_CANDIDATE"; node ${JSON.stringify(resolver)}` };
+      const scripts = ["start_gate", "capture", "rebase", "gate"].map(id => {
+        let script = extractScript(definition, `  - id: ${id}`);
+        if (id === "start_gate") script += `\ntest "$(cat "$STATE/base")" = "${base}"\ntest "$(git -C "$WORKTREE" rev-parse HEAD)" = "${retained}"\n`;
+        if (id === "capture") script += `\ntest "$(git rev-list --count '${base}..HEAD')" = 1\n`;
+        return script;
+      });
+      if (live) {
+        rmSync(join(repo.root, "bin", "dagu"));
+        const home = join(repo.root, "isolated-dagu-home");
+        mkdirSync(home);
+        const file = join(repo.root, "retained-smoke.yaml");
+        writeFileSync(file, "name: retained-smoke\ntype: graph\nshell: bash\nenv:\n" + Object.entries(env).filter(([, value]) => value !== undefined).map(([key, value]) => `  - ${key}: ${JSON.stringify(value)}\n`).join("") + "steps:\n" + scripts.map((script, index) =>
+          `  - id: phase${index}\n${index ? `    depends: phase${index - 1}\n` : ""}    run: |\n${script.split("\n").map(line => "      " + line).join("\n")}\n${index === 3 ? "    outputs:\n      - name: tested_sha\n" : ""}`).join(""));
+        execFileSync("dagu", ["start", file], { cwd: repo.root, env: { ...process.env, ...env, DAGU_HOME: home }, stdio: "pipe" });
+      } else {
+        for (const script of scripts) runScript(script, repo, env);
+      }
+      assert.equal(git(repo.worktree, "rev-list", "--count", "origin/main..HEAD"), "1");
+      assert.equal(readFileSync(join(repo.worktree, "retained.txt"), "utf8"), "operator content\n");
+      assert.equal(readFileSync(join(repo.worktree, "dirty.txt"), "utf8"), "uncaptured content\n");
+      assert.equal(JSON.parse(readFileSync(join(repo.worktree, manifest), "utf8")).version, "0.1.3");
+      assert.match(readFileSync(join(repo.worktree, changelog), "utf8"), /Retained[\s\S]*Upstream/);
+      assert.equal(readFileSync(join(repo.state, "tested-sha"), "utf8").trim(), git(repo.worktree, "rev-parse", "HEAD"));
+    } finally { rmSync(repo.root, { recursive: true, force: true }); }
+  });
+}
+
+for (const retained of [false, true]) {
+  test(`conflict rewind resolves and captures delivery with ${retained ? "retained commits" : "moved remote base"}`, () => {
+    const repo = repository();
+    const definition = definitions[0][1];
+    try {
+      rmSync(join(repo.state, "base"));
+      rmSync(join(repo.state, "candidate.json"));
+      if (retained) {
+        writeFileSync(join(repo.worktree, "README.txt"), "retained feature\n");
+        writeFileSync(join(repo.worktree, "retained.txt"), "retained delivery\n");
+        git(repo.worktree, "add", ".");
+        git(repo.worktree, "commit", "-m", "retained feature");
+      }
+      runScript(extractScript(definition, "  - id: start_gate"), repo, { DAGU_FEATURE_BUNDLE: "test" });
+      const initial = git(repo.worktree, "rev-parse", "HEAD");
+      writeFileSync(join(repo.worktree, "README.txt"), "feature\n");
+      writeFileSync(join(repo.worktree, "delivery.txt"), "nonconflicting delivery\n");
+      runScript(extractScript(definition, "  - id: capture"), repo);
+      const candidate = git(repo.worktree, "rev-parse", "HEAD");
+      writeFileSync(join(repo.primary, "README.txt"), "upstream\n");
+      git(repo.primary, "add", ".");
+      git(repo.primary, "commit", "-m", "move remote base");
+      git(repo.primary, "push", "origin", "main");
+      const base = git(repo.primary, "rev-parse", "HEAD");
+      runScript(extractScript(definition, "  - id: rebase"), repo);
+      assert.equal(readFileSync(join(repo.state, "conflict-action"), "utf8"), "rewind\n");
+      assert.notEqual(base, initial);
+      assert.equal(git(repo.worktree, "rev-parse", "HEAD"), base);
+      assert.equal(readFileSync(join(repo.state, "initial-head"), "utf8").trim(), base);
+      assert.equal(JSON.parse(readFileSync(join(repo.state, "historical", candidate, "candidate.json"), "utf8")).sha, candidate);
+      assert.match(readFileSync(join(repo.worktree, "README.txt"), "utf8"), /<<<<<<< HEAD/);
+      assert.equal(readFileSync(join(repo.worktree, "delivery.txt"), "utf8"), "nonconflicting delivery\n");
+      writeFileSync(join(repo.worktree, "README.txt"), "resolved delivery\n");
+      runScript(extractScript(definition, "  - id: capture"), repo);
+      assert.equal(git(repo.worktree, "rev-parse", "HEAD^"), base);
+      assert.equal(git(repo.worktree, "rev-list", "--count", `${base}..HEAD`), "1");
+      assert.equal(git(repo.worktree, "show", "HEAD:README.txt"), "resolved delivery");
+      assert.equal(git(repo.worktree, "show", "HEAD:delivery.txt"), "nonconflicting delivery");
+      if (retained) assert.equal(git(repo.worktree, "show", "HEAD:retained.txt"), "retained delivery");
+      assert.equal(git(repo.worktree, "branch", "--show-current"), repo.branch);
+      assert.equal(git(repo.worktree, "status", "--porcelain"), "");
+    } finally { rmSync(repo.root, { recursive: true, force: true }); }
+  });
+}
+
 
 function admitQuality(repo: Repository, definition: string, verdict: "PASS" | "FAIL" = "PASS") {
   const fixture = qualityFixture(repo, verdict);

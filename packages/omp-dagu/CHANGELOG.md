@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.92
+
+- Capture retained worktree commits and delivered files as one candidate over their merge-base with the remote base branch, preserving the accepted initial HEAD guard and single-candidate rebase resolver contract.
+- Refresh the accepted initial HEAD after conflict recovery rewinds onto the remote base, so resolving and recapturing retained candidates preserves conflict work and nonconflicting delivery.
+
 ## 0.3.91
 
 - Complete the parent feature run successfully after triage delegates to PoC, skipping implementation quality preparation on that route.

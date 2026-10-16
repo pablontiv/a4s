@@ -507,7 +507,10 @@ steps:
       mkdir -p "$STATE"
       printf '%s\n' "$identity" > "$owner"
       printf '%s\n' "$identity" > "$STATE/identity"
-      if ! test -f "$STATE/base"; then git -C "$WORKTREE" rev-parse HEAD > "$STATE/base"; fi
+      if ! test -f "$STATE/base"; then
+        git -C "$WORKTREE" rev-parse HEAD > "$STATE/initial-head"
+        git -C "$WORKTREE" merge-base HEAD "origin/$BASE_BRANCH" > "$STATE/base"
+      fi
       worktree_path=$(cd "$WORKTREE" && pwd -P)
       jq -n --arg run "$RUN" --arg primary "$primary_path" --arg branch "$BRANCH" --arg worktree "$worktree_path" \
         '{run:$run,primary:$primary,branch:$branch,worktree:$worktree}' > "$STATE/resource.json"
@@ -578,6 +581,7 @@ steps:
       base=$(cat "$STATE/base")
       head=$(git rev-parse HEAD)
       expected=$base
+      if test -f "$STATE/initial-head"; then expected=$(cat "$STATE/initial-head"); fi
       if test -f "$STATE/candidate.json"; then expected=$(jq -r .sha "$STATE/candidate.json"); fi
       test "$head" = "$expected" || fail "HEAD differs from Dagu candidate"
       # Resolve every changed path and symlink lexically and physically, including dangling links.
@@ -815,6 +819,7 @@ steps:
           if test -f "$STATE/$artifact"; then mv "$STATE/$artifact" "$STATE/historical/$before/"; fi
         done
         printf '%s\n' "$base" > "$STATE/base"
+        git -C "$WORKTREE" rev-parse HEAD > "$STATE/initial-head"
         test -s "$STATE/conflict-files"
         printf 'rewind\n' > "$STATE/conflict-action"
         sed 's/^/conflict_files=/' "$STATE/conflict-files"

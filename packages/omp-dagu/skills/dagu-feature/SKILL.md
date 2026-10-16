@@ -846,6 +846,14 @@ tested SHA, or push back with the observed iteration and concrete failure reason
 Per-run state under `<git-dir>/dagu-feature/runs/<RUN>` records `identity`,
 `base`, `diff.patch` (full binary patch), `candidate.json` (SHA, tree, message,
 summary, implementer id and capture iteration), and `gate.json` (tested SHA and exact GATE).
+On initial adoption, `base` is the merge-base of the worktree HEAD and the fetched
+remote base branch; `initial-head` records the accepted HEAD separately. Capture
+requires that HEAD until a candidate exists, then requires the recorded candidate.
+Retained commits and delivered files become one candidate over that merge-base,
+so rebase replays exactly the captured commit while preserving operator content.
+Conflict recovery moves HEAD and both `base` and `initial-head` to the fetched
+remote base before rewinding to implement. Conflict markers and nonconflicting
+delivery stay in the worktree, ready for resolution and a fresh capture.
 Identical captures reuse the SHA and commit count; author/committer dates are
 fixed from the run ID and capture iteration. Capture signs new commits when Git's
 repository configuration enables `commit.gpgsign`, using `gpg.format` and
