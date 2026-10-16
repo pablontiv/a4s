@@ -10,6 +10,10 @@ import { Transitions } from "../src/status/progress.ts";
 import type { RunDetails } from "../src/status/progress.ts";
 
 const daguAvailable = spawnSync("dagu", ["version"], { encoding: "utf8" });
+const requiredDaguVersion: string = JSON.parse(
+  readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+).daguFeature.dagu;
+const foundDaguVersion = daguAvailable.status === 0 ? daguAvailable.stdout.trim() : "unavailable";
 const feature = readFileSync(new URL("../../../.workspace/dagu/dags/feature.yaml", import.meta.url), "utf8");
 const poc = readFileSync(new URL("../../../.workspace/dagu/dags/poc.yaml", import.meta.url), "utf8");
 function step(source: string, id: string): string {
@@ -28,10 +32,11 @@ async function port(): Promise<number> {
 }
 
 test("Dagu isolated primary checkpoints release the queue and rewind the same run through real gates", {
-  skip: daguAvailable.status !== 0 ? "dagu binary required for live integration" : false,
+  skip: foundDaguVersion !== requiredDaguVersion
+    ? `dagu ${requiredDaguVersion} required for live integration; found ${foundDaguVersion}`
+    : false,
   timeout: 360_000,
 }, async () => {
-  assert.match(daguAvailable.stdout, /2\.19\.2/);
   const root = realpathSync(mkdtempSync(join(tmpdir(), "omp-dagu-primary-")));
   const home = join(root, "dagu-home");
   const bin = join(root, "bin");

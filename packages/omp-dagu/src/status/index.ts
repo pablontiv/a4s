@@ -226,7 +226,7 @@ async function observe(ctx: Context, signal: AbortSignal, wake: (message: string
         render();
         backoff = 1000;
       };
-      // Dagu 2.19.2 accepts at most 20 topics per SSE connection by default.
+      // Dagu 2.20.1 accepts 20 topics per SSE connection; 21 returns HTTP 503 `unable to open SSE stream`.
       const topics = [...runs.keys()];
       const streams: Promise<void>[] = [];
       for (let index = 0; index < topics.length; index += 20) {
