@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.9
+
+- Report the worktree path, porcelain status and diff summary on stderr when GATE leaves tracked or untracked changes, in both the feature template and rendered DAG (#216).
+
 ## 0.3.8
 
 - Compare canonical directory identities in feature start and PoC base gates so symlinked primary and worktree paths are accepted, while mismatches report both paths (#265).

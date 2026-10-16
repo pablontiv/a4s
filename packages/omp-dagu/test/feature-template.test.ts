@@ -148,6 +148,40 @@ for (const [name, definition] of definitions) {
   const closeGateScript = extractScript(definition, "  - id: close_gate");
   const autoMergeScript = extractScript(definition, "  - id: auto_merge");
 
+  for (const [kind, gate, statusLine] of [
+    ["tracked", "printf 'changed\\n' >> README.txt", " M README.txt"],
+    ["untracked", "touch generated.txt", "?? generated.txt"],
+  ] as const) {
+    test(`${name} gate diagnoses ${kind} changes left by GATE`, () => {
+      const repo = repository();
+      try {
+        const result = spawnSync("bash", ["-c", extractScript(definition, "  - id: gate")], {
+          encoding: "utf8",
+          env: { ...featureScriptEnv(repo), GATE: gate },
+        });
+        assert.equal(result.status, 1);
+        assert.ok(result.stderr.includes(`gate: worktree ${repo.worktree} has changes after GATE:\n${statusLine}\n`), result.stderr);
+        if (kind === "tracked") assert.match(result.stderr, /README\.txt \| 1 \+/);
+      } finally {
+        rmSync(repo.root, { recursive: true, force: true });
+      }
+    });
+  }
+
+  test(`${name} gate prints the tested SHA after a clean GATE`, () => {
+    const repo = repository();
+    try {
+      const result = spawnSync("bash", ["-c", extractScript(definition, "  - id: gate")], {
+        encoding: "utf8",
+        env: { ...featureScriptEnv(repo), GATE: "true" },
+      });
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.stdout, `tested_sha=${git(repo.worktree, "rev-parse", "HEAD")}\n`);
+    } finally {
+      rmSync(repo.root, { recursive: true, force: true });
+    }
+  });
+
   test(`${name} start_gate creates and reuses a worktree through a symlinked primary`, () => {
     const repo = repository();
     try {
