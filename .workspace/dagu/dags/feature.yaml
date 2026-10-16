@@ -440,7 +440,13 @@ steps:
       umask 0022
       cd "$WORKTREE"
       env -u GH_TOKEN -u GITHUB_TOKEN bash -euo pipefail -c "$GATE"
-      test -z "$(git status --porcelain)"
+      status=$(git status --porcelain)
+      if [[ -n "$status" ]]; then
+        printf 'gate: worktree %s has changes after GATE:\n' "$WORKTREE" >&2
+        printf '%s\n' "$status" >&2
+        git diff --stat >&2
+        exit 1
+      fi
       printf 'tested_sha=%s\n' "$(git rev-parse HEAD)"
 
   - id: push
