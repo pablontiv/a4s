@@ -112,7 +112,9 @@ steps:
     run: |
       set -euo pipefail
       printf '%s\n' "$DAGU_FEATURE_BUNDLE"
-      test "$(git -C "$PRIMARY" rev-parse --show-toplevel)" = "$PRIMARY"
+      primary_path=$(cd "$PRIMARY" && pwd -P)
+      primary_root=$(cd "$(git -C "$PRIMARY" rev-parse --show-toplevel)" && pwd -P)
+      test "$primary_root" = "$primary_path" || { printf 'base: PRIMARY %s resolves to %s, repository root is %s\n' "$PRIMARY" "$primary_path" "$primary_root" >&2; exit 1; }
       test "$(git -C "$PRIMARY" rev-parse --absolute-git-dir)" = "$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-common-dir)"
       test "$(git -C "$PRIMARY" symbolic-ref --short HEAD)" = "$BASE_BRANCH"
       test -z "$(git -C "$PRIMARY" status --porcelain --untracked-files=all)"
