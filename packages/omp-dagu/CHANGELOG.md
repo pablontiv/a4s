@@ -7,6 +7,7 @@
 
 ## 0.3.9
 
+- Recover terminal notifications and owner-session wake messages for runs missing after a discovery outage, retrying unavailable or non-terminal details until completion or HTTP 404 (#247).
 - Report the worktree path, porcelain status and diff summary on stderr when GATE leaves tracked or untracked changes, in both the feature template and rendered DAG (#216).
 
 ## 0.3.8

@@ -85,3 +85,99 @@ for (const idle of [true, false]) test(`watcher delivers five owner notices exac
     await new Promise<void>(resolve => server.close(() => resolve()));
   }
 });
+
+for (const scenario of [
+  { terminal: "failed", retry: undefined },
+  { terminal: "failed", retry: "unavailable" },
+  { terminal: "failed", retry: "running" },
+  { terminal: "aborted", retry: undefined },
+  { terminal: "succeeded", retry: undefined },
+  { terminal: "missing", retry: undefined },
+] as const) test(`widget recovers absent ${scenario.terminal} run after outage, retry=${scenario.retry}`, { timeout: 20_000 }, async () => {
+  let round = 0;
+  const detailRounds: number[] = [];
+  const run = {
+    name: "feature", dagRunId: "outage-run", statusLabel: "running", labels: ["workspace=a4s"],
+    params: "OMP_SESSION_ID=owner", nodes: [{ step: { name: "gate" }, statusLabel: "running" }],
+  };
+  const server = createServer((request, response) => {
+    const url = new URL(request.url!, "http://fake");
+    response.setHeader("content-type", "application/json");
+    if (url.pathname === "/api/v1/dag-runs") {
+      // The durable notice sweep is independent: exercise recovery in observe().
+      if (!url.searchParams.has("status")) { response.end(JSON.stringify({ dagRuns: [] })); return; }
+      round++;
+      if (round === 2) { response.writeHead(503); response.end(); return; }
+      response.end(JSON.stringify({ dagRuns: round === 1 ? [run] : [] }));
+    } else if (url.pathname === "/api/v1/dag-runs/feature/outage-run") {
+      detailRounds.push(round);
+      if (round >= 3 && scenario.terminal === "missing") {
+        response.writeHead(404); response.end(); return;
+      }
+      if (round === 3 && scenario.retry === "unavailable") {
+        response.writeHead(503); response.end(); return;
+      }
+      const status = round === 1 || (round === 3 && scenario.retry === "running")
+        ? "running" : scenario.terminal;
+      response.end(JSON.stringify({ dagRunDetails: {
+        ...run, statusLabel: status, nodes: [{ step: { name: "gate" }, statusLabel: status }],
+      } }));
+    } else {
+      // A closed SSE connection starts the next discovery round.
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.end();
+    }
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  const previous = process.env.DAGU_URL;
+  process.env.DAGU_URL = `http://127.0.0.1:${address.port}/`;
+  const handlers: Record<string, (event: unknown, context: typeof ctx) => void> = {};
+  const notifications: { message: string; type: string; round: number }[] = [];
+  const received: { message: string; round: number }[] = [];
+  let widget: string[] | undefined;
+  const ctx = {
+    cwd: process.cwd(), hasUI: true, isIdle: () => false, agent: { kind: "main" as const },
+    sessionManager: { getSessionId: () => "owner" }, ui: {
+      theme: { fg: (_color: string, text: string) => text, bold: (text: string) => text, tree: { branch: "├─", last: "└─" } },
+      setWidget(_key: string, lines: string[] | undefined) { widget = lines; },
+      notify(message: string, type: "info" | "warning" | "error") { notifications.push({ message, type, round }); },
+    },
+  };
+  extension({
+    registerTool() {}, registerCommand() {}, on(event, handler) { handlers[event] = handler; },
+    sendMessage(message) { received.push({ message: message.content!, round }); },
+  });
+  const finalRound = scenario.retry ? 4 : 3;
+  try {
+    handlers.session_start!(null, ctx);
+    const deadline = Date.now() + 15_000;
+    while (round < finalRound || widget !== undefined) {
+      assert.ok(Date.now() < deadline, JSON.stringify({ round, detailRounds, widget, notifications, received }));
+      await delay(20);
+    }
+    await delay(1200); // Another durable sweep must not duplicate the recovered notice.
+    assert.deepEqual(detailRounds, scenario.retry ? [1, 3, 4] : [1, 3]);
+    if (scenario.terminal === "missing") {
+      assert.deepEqual(notifications, []);
+      assert.deepEqual(received, []);
+    } else {
+      const type = scenario.terminal === "failed" ? "error" : scenario.terminal === "aborted" ? "warning" : "info";
+      assert.deepEqual(notifications, [{
+        message: `dagu · feature outage-run ${scenario.terminal}`, type, round: finalRound,
+      }]);
+      // Success wake delivery belongs to the independent durable event-log watcher.
+      if (scenario.terminal !== "succeeded") {
+        assert.equal(received.length, 1);
+        assert.equal(received[0]!.round, finalRound);
+        assert.match(received[0]!.message, new RegExp(`^\\[DAGU STATE\\] run=outage-run status=${scenario.terminal} step=gate dag=feature `));
+      }
+    }
+  } finally {
+    handlers.session_shutdown!(null, ctx);
+    if (previous === undefined) delete process.env.DAGU_URL; else process.env.DAGU_URL = previous;
+    server.closeAllConnections();
+    await new Promise<void>(resolve => server.close(() => resolve()));
+  }
+});

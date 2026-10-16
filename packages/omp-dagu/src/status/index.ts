@@ -78,13 +78,17 @@ async function discover(base: string, repo: string, signal: AbortSignal, history
   return runs;
 }
 
+class RunDetailsError extends Error {
+  constructor(readonly status: number) { super(`HTTP ${status}`); }
+}
+
 async function runDetails(base: string, summary: RunDetails, signal: AbortSignal): Promise<RunDetails> {
   const dag = encodeURIComponent(summary.name);
   const run = encodeURIComponent(summary.dagRunId);
   const response = await fetch(`${base}/api/v1/dag-runs/${dag}/${run}`, {
     signal: AbortSignal.any([signal, AbortSignal.timeout(5000)]),
   });
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  if (!response.ok) throw new RunDetailsError(response.status);
   const payload = await response.json() as { dagRunDetails?: RunDetails };
   return { ...summary, ...payload.dagRunDetails };
 }
@@ -247,10 +251,17 @@ async function observe(ctx: Context, signal: AbortSignal, wake: (message: string
       const snapshots = await Promise.all(discovered.map(summary => runDetails(base, summary, roundSignal)));
       const snapshotTopics = new Set<string>();
       for (const run of snapshots) snapshotTopics.add(topicFor(run));
-      for (const topic of runs.keys()) {
-        if (!snapshotTopics.has(topic)) {
-          runs.delete(topic);
-          stopActivity(topic);
+      for (const [topic, previous] of runs) {
+        if (snapshotTopics.has(topic)) continue;
+        try {
+          const run = await runDetails(base, previous, roundSignal);
+          if (["failed", "aborted", "succeeded"].includes(run.statusLabel)) apply(run);
+        } catch (error) {
+          if (error instanceof RunDetailsError && error.status === 404) {
+            runs.delete(topic);
+            stopActivity(topic);
+          }
+          // Other failures leave the run tracked for the next discovery round.
         }
       }
       const unresolvedIssues = new Set<string>();
