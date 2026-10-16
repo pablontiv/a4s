@@ -513,7 +513,7 @@ steps:
         rewind_to: detect_close_primary
 
   - id: close_gate
-    depends: close_primary_unavailable
+    depends: [await_merge, close_primary_unavailable]
     run: |
       set -euo pipefail
       umask 0022

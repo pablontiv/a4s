@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
+import { Transitions } from "../src/status/progress.ts";
+import type { RunDetails } from "../src/status/progress.ts";
 
 const definitions = [
   ["template", fileURLToPath(new URL("../skills/dagu-feature/feature.yaml", import.meta.url))],
@@ -422,4 +426,147 @@ for (const [name, definition] of [
       }
     });
   }
+}
+
+function extractStep(source: string, id: string): string {
+  const start = source.indexOf(`  - id: ${id}\n`);
+  assert.ok(start >= 0, `missing step ${id}`);
+  const end = source.indexOf("\n  - id:", start + 1);
+  return source.slice(start, end < 0 ? source.length : end).split("\nhandler_on:")[0]! + "\n";
+}
+
+const daguAvailable = spawnSync("dagu", ["version"], { encoding: "utf8" });
+for (const [name, definition] of definitions) {
+  test(`${name} real Dagu closes implementation runs and succeeds after enqueuing a PoC`, {
+    skip: daguAvailable.status !== 0 || !/2\.20\.1/.test(daguAvailable.stdout) ? "Dagu 2.20.1 binary required for live integration" : false,
+    timeout: 180_000,
+  }, async (t) => {
+    assert.match(daguAvailable.stdout, /2\.20\.1/);
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "omp-dagu-triage-close-")));
+    const home = join(root, "dagu-home");
+    mkdirSync(join(home, "dags"), { recursive: true });
+    const listener = createServer();
+    await new Promise<void>(resolve => listener.listen(0, "127.0.0.1", resolve));
+    const address = listener.address();
+    assert.ok(address && typeof address !== "string");
+    const port = address.port;
+    await new Promise<void>((resolve, reject) => listener.close(error => error ? reject(error) : resolve()));
+    const env = { ...process.env, DAGU_HOME: home, DAGU_COORDINATOR_ENABLED: "false" };
+    writeFileSync(join(home, "config.yaml"), `host: 127.0.0.1\nport: ${port}\nauth:\n  mode: none\ncoordinator:\n  enabled: false\n`);
+    let serviceLog = "";
+    const service = spawn("dagu", ["start-all", "--host", "127.0.0.1", "--port", String(port)], {
+      cwd: root, env, stdio: ["ignore", "pipe", "pipe"],
+    });
+    service.stdout.on("data", data => { serviceLog += data; });
+    service.stderr.on("data", data => { serviceLog += data; });
+    const api = `http://127.0.0.1:${port}/api/v1`;
+    type Detail = RunDetails & {
+      nodes: Array<{ step: { name: string }; statusLabel: string; stdout?: string; stderr?: string }>;
+      onExit?: { statusLabel: string };
+    };
+    async function until<T>(description: string, probe: () => Promise<T | undefined>): Promise<T> {
+      const deadline = Date.now() + 60_000;
+      while (Date.now() < deadline) {
+        const value = await probe();
+        if (value !== undefined) return value;
+        await delay(150);
+      }
+      throw new Error(`Timed out: ${description}\n${serviceLog}`);
+    }
+    async function state(id: string, expected: string): Promise<Detail> {
+      return until(`${id} ${expected}`, async () => {
+        const response = await fetch(`${api}/dag-runs/feature/${id}`);
+        if (!response.ok) return undefined;
+        const run = (await response.json() as { dagRunDetails: Detail }).dagRunDetails;
+        assert.ok(!["failed", "aborted"].includes(run.statusLabel), JSON.stringify(run));
+        return run.statusLabel === expected ? run : undefined;
+      });
+    }
+    try {
+      await until("isolated Dagu ready", async () => {
+        try { return (await fetch(`${api}/dag-runs`)).ok ? true : undefined; } catch { return undefined; }
+      });
+      for (const mode of ["poc", "implementation-ready", "implementation-blocked"] as const) {
+        await t.test(mode, async () => {
+          const repo = repository();
+          try {
+            if (mode === "poc") {
+              // The only GitHub effect on this path is the triage comment.
+              const gh = join(repo.root, "bin", "gh");
+              mkdirSync(dirname(gh), { recursive: true });
+              writeFileSync(gh, '#!/bin/sh\ncase "$*" in\n  "issue comment 189 --body-file "*) exit 0 ;;\n  *) echo "unexpected gh $*" >&2; exit 1 ;;\nesac\n');
+              chmodSync(gh, 0o755);
+            } else stubSuccessfulCloseGateGh(repo);
+            git(repo.primary, "worktree", "remove", repo.worktree);
+            git(repo.primary, "branch", "-D", repo.branch);
+            repo.worktree = join(repo.primary, ".workspace", "worktrees", "issue-189");
+            writeFileSync(join(repo.primary, ".git", "info", "exclude"), "/.workspace/\n");
+            const pocDefinition = join(repo.primary, ".workspace", "dagu", "dags", "poc.yaml");
+            mkdirSync(dirname(pocDefinition), { recursive: true });
+            writeFileSync(pocDefinition, "steps:\n  - id: experiment\n    run: echo isolated-poc\n");
+            const source = readFileSync(definition, "utf8");
+            const triage = `  - id: triage\n    run: |\n      printf 'POC=${mode === "poc" ? "yes" : "no"}\\nQUESTION=runtime behavior\\nBASIS=regression test\\nREVIEW=fixture\\n' >> "$DAGU_OUTPUT_FILE"\n    outputs:\n      - name: POC\n      - name: QUESTION\n      - name: BASIS\n      - name: REVIEW\n`;
+            // Reviewer verification and implementation/merge are outside this routing test.
+            // Keep the production start/close gates, conditional checkpoints and exit handler.
+            const decision = mode === "poc" ? extractStep(source, "triage_decision")
+              : "  - id: triage_decision\n    depends: triage\n    run: echo reviewed-implementation\n";
+            const implementation = `  - id: implement\n    depends: start_gate\n    run: ${mode === "implementation-blocked" ? 'printf "operator changes\\n" > "$PRIMARY/README.txt"' : "echo implementation"}\n  - id: await_merge\n    depends: implement\n    run: echo merged\n`;
+            const script = [
+              "type: graph\nshell: bash\nmax_active_steps: 1\n",
+              `params:\n  - ISSUE: "189"\n  - PRIMARY: ${repo.primary}\n  - BRANCH: ${repo.branch}\n  - BASE_BRANCH: main\n  - PR_NUMBER: ""\n  - GATE: "true"\n  - REQUIRED_CHECK: validate\n  - OMP_SESSION_ID: close-owner\n`,
+              `env:\n  - PATH: ${join(repo.root, "bin")}:${process.env.PATH}\n  - WORKTREE: ${repo.worktree}\n  - RUN: \${context.run.id}\n  - DAGU_FEATURE_BUNDLE: test\n`,
+              "steps:\n", triage, decision,
+              ...["detect_start_primary", "start_primary_unavailable", "start_gate"].map(id => extractStep(source, id)),
+              implementation,
+              ...["detect_close_primary", "close_primary_unavailable", "close_gate"].map(id => extractStep(source, id)),
+              "handler_on:\n", source.slice(source.indexOf("  exit:\n")),
+            ].join("");
+            const dag = join(home, "dags", "feature.yaml");
+            writeFileSync(dag, script);
+            const runEnv = { ...env, PATH: `${join(repo.root, "bin")}:${process.env.PATH}` };
+            const dagu = (...args: string[]) => execFileSync("dagu", args, {
+              cwd: root, env: runEnv, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
+            }).trim();
+            const id = mode;
+            dagu("enqueue", "--run-id", id, dag);
+            if (mode === "implementation-blocked") {
+              const waiting = await state(id, "waiting");
+              assert.equal(waiting.nodes.find(node => node.step.name === "close_primary_unavailable")?.statusLabel, "waiting");
+              assert.equal(waiting.nodes.find(node => node.step.name === "close_gate")?.statusLabel, "not_started");
+              assert.equal(existsSync(repo.worktree), true);
+              git(repo.primary, "restore", "README.txt");
+              dagu("human-task", "push-back", "feature", "--run-id", id, "--step", "close_primary_unavailable", "--expected-iteration", "0");
+            }
+            const done = await state(id, "succeeded");
+            const status = (step: string) => done.nodes.find(node => node.step.name === step)?.statusLabel;
+            assert.equal(status("triage_decision"), "succeeded");
+            assert.equal(status("await_merge"), mode === "poc" ? "skipped" : "succeeded");
+            assert.equal(status("detect_close_primary"), mode === "poc" ? "skipped" : "succeeded");
+            assert.equal(status("close_primary_unavailable"), "skipped");
+            assert.equal(status("close_gate"), mode === "poc" ? "skipped" : "succeeded");
+            assert.equal(done.onExit?.statusLabel, "succeeded", JSON.stringify(done));
+            assert.equal(existsSync(repo.worktree), false);
+            assert.equal(hasRef(repo.primary, `refs/heads/${repo.branch}`), false);
+            const transitions = new Transitions("close-owner");
+            transitions.observe({ ...done, statusLabel: "running" }, { baseline: true });
+            assert.deepEqual(transitions.observe(done), {
+              notification: { message: "dagu · feature #189 succeeded", type: "info" },
+            });
+            if (mode === "poc") {
+              assert.match(dagu("history", "poc", "--run-id", `poc-${id}`), new RegExp(`poc-${id}`));
+            }
+          } finally {
+            rmSync(repo.root, { recursive: true, force: true });
+          }
+        });
+      }
+    } finally {
+      service.kill("SIGTERM");
+      await new Promise<void>(resolve => {
+        if (service.exitCode !== null) resolve();
+        else service.once("exit", () => resolve());
+      });
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 }
