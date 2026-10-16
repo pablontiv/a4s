@@ -40,6 +40,7 @@ jobs:
               elif startswith("packages/synagent/bus/") then "synagent-bus"
               else split("/")[1] end) | unique end')
           workspaces=$(jq -cn --argjson names "$names" '$names | map({name: ("@a4s/" + .), typecheck: (. == "context-expert" or . == "orca-omp-integration" or . == "omp-dagu" or . == "synagent" or . == "synagent-bus")})')
+          workspaces=$(jq -c '. + [{"name":"@a4s/does-not-exist","typecheck":false}]' <<< "$workspaces")
           echo "workspaces=$workspaces" >> "$GITHUB_OUTPUT"
   test:
     needs: changes
