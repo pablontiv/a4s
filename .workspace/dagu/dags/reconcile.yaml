@@ -1,4 +1,7 @@
+# dagu-feature-bundle: @a4s/omp-dagu@0.3.8 source=pablontiv/a4s@fe5d444e9c9133d5bac3d2aeef054fee56d01fdb bootstrap=bootstrap-a4s-v0-3-8 dagu=2.20.1
 description: Reconciles every waiting feature run's await_merge with its PR and reports waiting runs whose issue is closed.
+labels:
+  - dagu-feature-bundle=0.3.8
 schedule: "* * * * *"
 catchup_window: ""
 overlap_policy: skip
@@ -207,3 +210,4 @@ steps:
       - condition: "${steps.observe.outputs.observation}"
         expected: "re:^(triage|implement) issue=CLOSED "
     run: echo "ORPHAN ${steps.observe.outputs.repo}#${steps.observe.outputs.issue} ${steps.observe.outputs.run} ${steps.observe.outputs.observation}"
+

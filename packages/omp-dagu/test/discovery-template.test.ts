@@ -79,16 +79,16 @@ for (const [name, definition] of definitions) {
       assert.equal(yaml.split("\n", 1)[0], "# dagu-feature-bundle: __DAGU_FEATURE_STAMP__");
       assert.match(yaml, /^  - dagu-feature-bundle=TEMPLATE_DAGU_FEATURE_VERSION$/m);
     } else {
-      const source = "pablontiv/a4s@3654f1646aba40298a6cd7ade2812c91acf94a84";
+      const source = "pablontiv/a4s@fe5d444e9c9133d5bac3d2aeef054fee56d01fdb";
       assert.doesNotMatch(yaml, /__DAGU_FEATURE_|TEMPLATE_/);
       assert.equal(
         yaml.split("\n", 1)[0],
-        `# dagu-feature-bundle: @a4s/omp-dagu@0.2.0 source=${source} bootstrap=bootstrap-a4s-v0-2-0 dagu=2.19.2`,
+        `# dagu-feature-bundle: @a4s/omp-dagu@0.3.8 source=${source} bootstrap=bootstrap-a4s-v0-3-8 dagu=2.20.1`,
       );
-      assert.match(yaml, /^  - dagu-feature-bundle=0\.2\.0$/m);
+      assert.match(yaml, /^  - dagu-feature-bundle=0\.3\.8$/m);
       assert.match(
         yaml,
-        new RegExp(`- DAGU_FEATURE_BUNDLE: "dagu-feature-bundle=0\\.2\\.0 source=${source} bootstrap=bootstrap-a4s-v0-2-0"`),
+        new RegExp(`- DAGU_FEATURE_BUNDLE: "dagu-feature-bundle=0\\.3\\.8 source=${source} bootstrap=bootstrap-a4s-v0-3-8"`),
       );
     }
     for (const param of ["LENSES", "POLICY", "SOURCE", "LIVE_TARGET", "PRIMARY", "OMP_SESSION_ID"])
