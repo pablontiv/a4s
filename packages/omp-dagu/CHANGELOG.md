@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.6
+
+- Require the completed merge checkpoint as well as primary availability before `close_gate`: feature runs that enqueue a PoC finish successfully with closing skipped, while implementation runs retain their primary-availability checkpoint and cleanup sequence (#264).
+
 ## 0.3.5
 
 - Fold the status widget like OMP's `TODO` and `Subagents` HUDs: `Workflows` title, tree rows sorted by completion, three runs collapsed and up to eight expanded; `/workflows` toggles the fold and accepts `expand`, `collapse`, `show` and `hide` (#227).

@@ -160,7 +160,7 @@ test("targeted waiting notices accept CLI and JSON params and reject other sessi
     const transitions = new Transitions("session-a");
     assert.equal(
       transitions.observe(waitingAt("triage", params)).wakeMessage,
-      "[DAGU STATE] run=feature-triage status=waiting step=triage issue=176 bundle=0.3.1 extension=0.3.5 compat=ok",
+      "[DAGU STATE] run=feature-triage status=waiting step=triage issue=176 bundle=0.3.1 extension=0.3.6 compat=ok",
     );
   }
   for (const params of [
@@ -175,7 +175,7 @@ test("targeted waiting notices are limited to feature triage and implement in a 
   for (const step of ["triage", "implement"]) {
     const effect = new Transitions("session-a").observe(waitingAt(step));
     assert.deepEqual(effect, {
-      wakeMessage: `[DAGU STATE] run=feature-${step} status=waiting step=${step} issue=176 bundle=0.3.1 extension=0.3.5 compat=ok`,
+      wakeMessage: `[DAGU STATE] run=feature-${step} status=waiting step=${step} issue=176 bundle=0.3.1 extension=0.3.6 compat=ok`,
     });
   }
   assert.equal(new Transitions("session-a").observe(waitingAt("dependency_review")).wakeMessage, undefined);
@@ -188,7 +188,7 @@ test("targeted discovery checkpoints wake once per waiting entry", () => {
     const transitions = new Transitions("session-a");
     const waiting = waitingAt(step, "OMP_SESSION_ID=session-a", "discovery");
     assert.deepEqual(transitions.observe(waiting), {
-      wakeMessage: `[DAGU STATE] run=discovery-${step} status=waiting step=${step} dag=discovery bundle=0.3.1 extension=0.3.5 compat=ok`,
+      wakeMessage: `[DAGU STATE] run=discovery-${step} status=waiting step=${step} dag=discovery bundle=0.3.1 extension=0.3.6 compat=ok`,
     });
     assert.deepEqual(transitions.observe(waiting), {});
   }
@@ -218,7 +218,7 @@ test("targeted discovery failures and aborts wake with the DAG identity", () => 
     });
     assert.equal(
       transitions.observe(terminal).wakeMessage,
-      `[DAGU STATE] run=discovery-${statusLabel} status=${statusLabel} step=check_units dag=discovery bundle=0.3.1 extension=0.3.5 compat=ok`,
+      `[DAGU STATE] run=discovery-${statusLabel} status=${statusLabel} step=check_units dag=discovery bundle=0.3.1 extension=0.3.6 compat=ok`,
     );
     assert.deepEqual(transitions.observe(terminal), {});
   }
@@ -236,7 +236,7 @@ test("targeted terminal notices report failed and aborted steps exactly once", (
     const effect = transitions.observe(terminal);
     assert.equal(
       effect.wakeMessage,
-      `[DAGU STATE] run=feature-${statusLabel} status=${statusLabel} step=${terminal.nodes![1]!.step.name} issue=176 bundle=0.3.1 extension=0.3.5 compat=ok`,
+      `[DAGU STATE] run=feature-${statusLabel} status=${statusLabel} step=${terminal.nodes![1]!.step.name} issue=176 bundle=0.3.1 extension=0.3.6 compat=ok`,
     );
     assert.ok(effect.notification);
     assert.deepEqual(transitions.observe(terminal), {});
@@ -315,7 +315,7 @@ test("run rows stay compact while DAGU STATE notices report every compatibility 
     );
     assert.equal(
       new Transitions("session-a").observe(candidate).wakeMessage,
-      `[DAGU STATE] run=feature-implement status=waiting step=implement issue=176 bundle=${display} extension=0.3.5 compat=${compat}`,
+      `[DAGU STATE] run=feature-implement status=waiting step=implement issue=176 bundle=${display} extension=0.3.6 compat=${compat}`,
     );
   }
 });
