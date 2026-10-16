@@ -33,6 +33,12 @@ Los agentes para Pi, Claude y Superpowers están en [`agents/`](agents/).
 
 a4s usa su propio ciclo `dagu-feature`, versionado en [`.workspace/dagu/dags/feature.yaml`](.workspace/dagu/dags/feature.yaml). El gate local es `npm ci && npm test && npm run typecheck`, y `main` exige el check `validate` de [`.github/workflows/ci.yml`](.github/workflows/ci.yml). Cada issue se lleva con un run desde el clone (no desde un worktree), limpio y en `main`. El DAG crea el worktree del issue en `.workspace/worktrees/issue-<n>`:
 
+Los renders `feature`, `poc`, `discovery` y `reconcile` adoptan
+`@a4s/omp-dagu@0.3.8`, source
+`pablontiv/a4s@fe5d444e9c9133d5bac3d2aeef054fee56d01fdb`, bootstrap
+`bootstrap-a4s-v0-3-8` y Dagu `2.20.1` (#271). Su identidad se consulta con
+`node packages/omp-dagu/bin/dagu-feature-bundle.ts .`.
+
 ```sh
 n=<issue>
 dagu enqueue --run-id "a4s-issue-$n" .workspace/dagu/dags/feature.yaml -- \

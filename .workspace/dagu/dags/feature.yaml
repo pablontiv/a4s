@@ -1,7 +1,7 @@
-# dagu-feature-bundle: @a4s/omp-dagu@0.2.0 source=pablontiv/a4s@3654f1646aba40298a6cd7ade2812c91acf94a84 bootstrap=bootstrap-a4s-v0-2-0 dagu=2.19.2
+# dagu-feature-bundle: @a4s/omp-dagu@0.3.8 source=pablontiv/a4s@fe5d444e9c9133d5bac3d2aeef054fee56d01fdb bootstrap=bootstrap-a4s-v0-3-8 dagu=2.20.1
 labels:
   - workspace=a4s
-  - dagu-feature-bundle=0.2.0
+  - dagu-feature-bundle=0.3.8
 queue: a4s
 type: graph
 dotenv: []
@@ -42,7 +42,7 @@ params:
 env:
   - WORKTREE: ${PRIMARY}/.workspace/worktrees/issue-${ISSUE}
   - RUN: ${context.run.id}
-  - DAGU_FEATURE_BUNDLE: "dagu-feature-bundle=0.2.0 source=pablontiv/a4s@3654f1646aba40298a6cd7ade2812c91acf94a84 bootstrap=bootstrap-a4s-v0-2-0"
+  - DAGU_FEATURE_BUNDLE: "dagu-feature-bundle=0.3.8 source=pablontiv/a4s@fe5d444e9c9133d5bac3d2aeef054fee56d01fdb bootstrap=bootstrap-a4s-v0-3-8"
 steps:
   - id: triage
     action: human.task

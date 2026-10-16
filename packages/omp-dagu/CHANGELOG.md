@@ -3,6 +3,7 @@
 ## 0.3.8
 
 - Compare canonical directory identities in feature start and PoC base gates so symlinked primary and worktree paths are accepted, while mismatches report both paths (#265).
+- Adopt the four staged a4s renders from bundle 0.3.8, source `pablontiv/a4s@fe5d444e9c9133d5bac3d2aeef054fee56d01fdb`, bootstrap `bootstrap-a4s-v0-3-8`, and Dagu 2.20.1 (#271; 2026-10-16).
 
 ## 0.3.7
 

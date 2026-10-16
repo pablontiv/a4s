@@ -102,6 +102,11 @@ que aplica el bootstrap.
 Para la adopción de a4s, `TEST_PATHS` es
 `(^|/)(test|tests)/|\.test\.(ts|cjs)$`.
 
+Los cuatro renders de a4s adoptan el bundle `0.3.8` desde
+`pablontiv/a4s@fe5d444e9c9133d5bac3d2aeef054fee56d01fdb`, mediante
+`bootstrap-a4s-v0-3-8`, para Dagu `2.20.1` (#271). La adopción actualiza
+los renders y su documentación sin modificar las plantillas distribuidas.
+
 Todo cambio en esas cinco plantillas o en `SKILL.md` exige una versión del
 paquete mayor que la de la base del PR (`git merge-base origin/main HEAD`) y
 una sección `## <versión>` en `CHANGELOG.md`; `npm test` lo comprueba,
