@@ -1,8 +1,8 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { activityTarget, readActivity } from "./activity.ts";
 import { ghIssueTitleResolver, IssueTitles } from "./issue-title.ts";
-import { isActive, issueNumber, renderRun, topicFor, Transitions } from "./progress.ts";
-import type { RunDetails } from "./progress.ts";
+import { isActive, issueNumber, renderOffline, renderWidget, TOGGLE_COMMAND, topicFor, Transitions } from "./progress.ts";
+import type { RunDetails, WidgetTheme } from "./progress.ts";
 import { resolveRepository } from "./repository.ts";
 import { SSEParser } from "./sse.ts";
 import type { SSEEvent } from "./sse.ts";
@@ -14,6 +14,7 @@ interface Context {
   agent: { kind: "main" | "sub" };
   sessionManager: { getSessionId(): string; getSessionDir?(): string };
   ui: {
+    readonly theme: WidgetTheme;
     setWidget(key: string, lines: string[] | undefined, options?: { placement: "aboveEditor" }): void;
     notify(message: string, type: "info" | "warning" | "error"): void;
   };
@@ -42,7 +43,19 @@ interface CustomMessage {
 interface ExtensionAPI {
   on(event: "session_start" | "session_switch" | "session_shutdown", handler: (event: unknown, ctx: Context) => void): void;
   registerTool(tool: SessionIdTool): void;
+  registerCommand(name: string, options: {
+    description?: string;
+    getArgumentCompletions?(prefix: string): { label: string; value: string }[] | null;
+    handler: (args: string, ctx: Context) => Promise<void>;
+  }): void;
   sendMessage(message: CustomMessage, options?: { deliverAs?: "steer" | "followUp" | "nextTurn" | "aside" }): void;
+}
+
+/** Widget view state shared by the observer and the `/workflows` command. */
+interface WidgetView {
+  expanded: boolean;
+  hidden: boolean;
+  render?: () => void;
 }
 
 async function discover(base: string, repo: string, signal: AbortSignal): Promise<RunDetails[]> {
@@ -99,7 +112,7 @@ async function streamTopics(base: string, topics: string[], signal: AbortSignal,
   }
 }
 
-async function observe(ctx: Context, signal: AbortSignal, wake: (message: string) => void): Promise<void> {
+async function observe(ctx: Context, signal: AbortSignal, wake: (message: string) => void, view: WidgetView): Promise<void> {
   const repo = await resolveRepository(ctx.cwd, signal);
   if (!repo || signal.aborted) return;
   const base = (process.env.DAGU_URL || "http://127.0.0.1:8080").replace(/\/+$/, "");
@@ -111,14 +124,24 @@ async function observe(ctx: Context, signal: AbortSignal, wake: (message: string
   let sessionDir: string | undefined;
   try { sessionDir = ctx.sessionManager.getSessionDir?.(); } catch {}
   let initialSweep = true;
+  let offlineRetrySeconds: number | undefined;
   const render = (): void => {
     if (!ctx.hasUI) return;
-    const lines = [...runs.values()].slice(0, 10).map(run => {
-      const issue = issueNumber(run);
-      return renderRun(run, issue ? titles.get(issue) : undefined, activities.get(topicFor(run)));
-    });
-    ctx.ui.setWidget("dagu-status", lines.length ? lines : undefined, { placement: "aboveEditor" });
+    if (view.hidden) {
+      ctx.ui.setWidget("dagu-status", undefined);
+      return;
+    }
+    const lines = offlineRetrySeconds !== undefined
+      ? renderOffline(ctx.ui.theme, offlineRetrySeconds)
+      : renderWidget([...runs.values()].map(run => {
+        const issue = issueNumber(run);
+        const slug = issue ? titles.get(issue) : undefined;
+        const activity = activities.get(topicFor(run));
+        return { run, ...(slug ? { slug } : {}), ...(activity ? { activity } : {}) };
+      }), ctx.ui.theme, view.expanded);
+    ctx.ui.setWidget("dagu-status", lines, { placement: "aboveEditor" });
   };
+  view.render = render;
   const stopActivity = (topic: string): void => {
     activityWatches.get(topic)?.controller.abort();
     activityWatches.delete(topic);
@@ -173,6 +196,7 @@ async function observe(ctx: Context, signal: AbortSignal, wake: (message: string
     let timer: NodeJS.Timeout | undefined;
     try {
       const discovered = await discover(base, repo, roundSignal);
+      offlineRetrySeconds = undefined;
       const snapshots = await Promise.all(discovered.map(async summary => {
         try {
           return await runDetails(base, summary, roundSignal);
@@ -237,10 +261,8 @@ async function observe(ctx: Context, signal: AbortSignal, wake: (message: string
       if (results.some(result => result.status === "rejected")) throw new Error("Conexión SSE interrumpida");
     } catch {
       if (!signal.aborted && !refresh) {
-        if (ctx.hasUI) {
-          ctx.ui.setWidget("dagu-status", [`dagu · sin conexión · reintentando en ${backoff / 1000}s`],
-            { placement: "aboveEditor" });
-        }
+        offlineRetrySeconds = backoff / 1000;
+        render();
         await delay(backoff, undefined, { signal }).catch(() => {});
         backoff = Math.min(backoff * 2, 30_000);
       }
@@ -254,6 +276,31 @@ async function observe(ctx: Context, signal: AbortSignal, wake: (message: string
 export default function daguStatus(pi: ExtensionAPI): void {
   let controller: AbortController | undefined;
   let activeContext: Context | undefined;
+  const view: WidgetView = { expanded: false, hidden: false };
+  const modes: Record<string, (view: WidgetView) => void> = {
+    "": view => { view.hidden ? (view.hidden = false) : (view.expanded = !view.expanded); },
+    expand: view => { view.hidden = false; view.expanded = true; },
+    collapse: view => { view.hidden = false; view.expanded = false; },
+    show: view => { view.hidden = false; },
+    hide: view => { view.hidden = true; },
+  };
+  pi.registerCommand(TOGGLE_COMMAND, {
+    description: "Toggle the Workflows widget fold, or pass expand / collapse / show / hide",
+    getArgumentCompletions(prefix) {
+      const items = Object.keys(modes).filter(mode => mode && mode.startsWith(prefix.trim().toLowerCase()))
+        .map(mode => ({ label: mode, value: mode }));
+      return items.length ? items : null;
+    },
+    async handler(args, ctx) {
+      const mode = modes[args.trim().toLowerCase()];
+      if (!mode) {
+        ctx.ui.notify(`/${TOGGLE_COMMAND}: use expand, collapse, show o hide`, "warning");
+        return;
+      }
+      mode(view);
+      view.render?.();
+    },
+  });
   pi.registerTool({
     name: "dagu_session_id",
     label: "Dagu session ID",
@@ -272,6 +319,7 @@ export default function daguStatus(pi: ExtensionAPI): void {
   });
   const stop = (): void => {
     controller?.abort();
+    delete view.render;
     if (activeContext?.hasUI) activeContext.ui.setWidget("dagu-status", undefined);
     activeContext = undefined;
     controller = undefined;
@@ -284,7 +332,7 @@ export default function daguStatus(pi: ExtensionAPI): void {
     // Every detached promise has an error boundary; shutdown aborts fetches and sleeps.
     void observe(ctx, controller.signal, message => {
       pi.sendMessage({ customType: "dagu-state", content: message, display: false }, { deliverAs: "aside" });
-    }).catch(() => {});
+    }, view).catch(() => {});
   };
   pi.on("session_start", start);
   pi.on("session_switch", start);

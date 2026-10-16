@@ -185,12 +185,13 @@ async function agentActivity(
       const args = call.arguments && typeof call.arguments === "object"
         ? call.arguments as Record<string, unknown>
         : {};
-      const intent = typeof args.i === "string" && args.i.trim() ? args.i : principalArgument(args);
+      const intent = typeof args.i === "string" && args.i.trim() ? args.i
+        : typeof args.title === "string" && args.title.trim() ? args.title
+          : principalArgument(args);
       const timestamp = typeof record.timestamp === "string" ? Date.parse(record.timestamp) : Number.NaN;
       if (!Number.isFinite(timestamp)) continue;
       const age = Math.max(0, Math.round(((options.now?.() ?? Date.now()) - timestamp) / 1000));
-      const taskName = path.basename(transcript, ".jsonl");
-      return sanitizeActivity(`${taskName} · ${call.name}${intent ? ` ${intent}` : ""} (${age}s)`) || undefined;
+      return sanitizeActivity(`${call.name}${intent ? ` ${intent}` : ""} (${age}s)`) || undefined;
     }
   }
   return undefined;

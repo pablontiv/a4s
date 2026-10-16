@@ -21,6 +21,7 @@ test("dagu_session_id returns the caller main session id and rejects subagents",
   let registered: Tool | undefined;
   extension({
     registerTool(tool: Tool) { registered = tool; },
+    registerCommand() {},
     on() {},
     sendMessage() {},
   } as never);
