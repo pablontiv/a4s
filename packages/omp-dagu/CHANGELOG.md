@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.8
+
+- Compare canonical directory identities in feature start and PoC base gates so symlinked primary and worktree paths are accepted, while mismatches report both paths (#265).
+
 ## 0.3.7
 
 - Wake the owning session for every feature, PoC and discovery human-task opening and final success, deduplicated by DAG/run/step/approval iteration (#262).

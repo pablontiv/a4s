@@ -295,7 +295,9 @@ steps:
       umask 0022
       test -n "$PRIMARY"
       test -n "$GATE" && test -n "$REQUIRED_CHECK"
-      test "$(git -C "$PRIMARY" rev-parse --show-toplevel)" = "$PRIMARY"
+      primary_path=$(cd "$PRIMARY" && pwd -P)
+      primary_root=$(cd "$(git -C "$PRIMARY" rev-parse --show-toplevel)" && pwd -P)
+      test "$primary_root" = "$primary_path" || { printf 'start_gate: PRIMARY %s resolves to %s, repository root is %s\n' "$PRIMARY" "$primary_path" "$primary_root" >&2; exit 1; }
       test "$(git -C "$PRIMARY" rev-parse --absolute-git-dir)" = "$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-common-dir)"
       git -C "$PRIMARY" check-ignore -q "$WORKTREE"
       test "$(git -C "$PRIMARY" branch --show-current)" = "$BASE_BRANCH"
@@ -303,7 +305,9 @@ steps:
       git -C "$PRIMARY" fetch origin || { printf 'start_gate: fetch origin failed; restore origin access and recover this run\n' >&2; exit 1; }
       git -C "$PRIMARY" merge --ff-only "origin/$BASE_BRANCH" || { printf 'start_gate: ff-only failed; reconcile primary with origin/%s preserving commits, then recover this run\n' "$BASE_BRANCH" >&2; exit 1; }
       if test -e "$WORKTREE"; then
-        test "$(git -C "$WORKTREE" rev-parse --show-toplevel)" = "$WORKTREE"
+        worktree_path=$(cd "$WORKTREE" && pwd -P)
+        worktree_root=$(cd "$(git -C "$WORKTREE" rev-parse --show-toplevel)" && pwd -P)
+        test "$worktree_root" = "$worktree_path" || { printf 'start_gate: WORKTREE %s resolves to %s, repository root is %s\n' "$WORKTREE" "$worktree_path" "$worktree_root" >&2; exit 1; }
         test "$(git -C "$WORKTREE" branch --show-current)" = "$BRANCH"
         test -z "$(git -C "$WORKTREE" status --porcelain)"
       elif git -C "$PRIMARY" show-ref --verify --quiet "refs/heads/$BRANCH"; then

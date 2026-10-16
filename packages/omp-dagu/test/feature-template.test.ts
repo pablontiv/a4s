@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -147,6 +147,30 @@ for (const [name, definition] of definitions) {
   const checkpointScript = extractScript(definition, "  - id: checkpoint_push");
   const closeGateScript = extractScript(definition, "  - id: close_gate");
   const autoMergeScript = extractScript(definition, "  - id: auto_merge");
+
+  test(`${name} start_gate creates and reuses a worktree through a symlinked primary`, () => {
+    const repo = repository();
+    try {
+      git(repo.primary, "worktree", "remove", repo.worktree);
+      git(repo.primary, "branch", "-D", repo.branch);
+      writeFileSync(join(repo.primary, ".git", "info", "exclude"), "/.workspace/\n");
+      const alias = join(repo.root, "primary-link");
+      symlinkSync(repo.primary, alias, "dir");
+      repo.primary = alias;
+      repo.worktree = join(alias, ".workspace", "worktrees", "issue-189");
+      const script = extractScript(definition, "  - id: start_gate");
+      const env = { ...featureScriptEnv(repo), DAGU_FEATURE_BUNDLE: "test" };
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const result = spawnSync("bash", ["-c", script], { encoding: "utf8", env });
+        assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+        assert.ok(existsSync(repo.worktree));
+        assert.equal(git(repo.worktree, "branch", "--show-current"), repo.branch);
+        assert.ok(result.stdout.includes(`worktree=${repo.worktree}`));
+      }
+    } finally {
+      rmSync(repo.root, { recursive: true, force: true });
+    }
+  });
 
   test(`${name} auto_merge sends the tested body with terminal trailers and the closing reference`, () => {
     const repo = repository();
