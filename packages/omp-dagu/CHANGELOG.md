@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.7
+
+- Wake the owning session for every feature, PoC and discovery human-task opening and final success, deduplicated by DAG/run/step/approval iteration (#262).
+- Recover fast openings and eventual success from paginated DEFAULT event logs, including stale-cursor replay, while SSE continues rendering snapshots (#262).
+- Serialize idle-session notice bursts through an owner-session FIFO and deliver active-session notices as ordered hidden asides (#262).
+
 ## 0.3.6
 
 - Require the completed merge checkpoint as well as primary availability before `close_gate`: feature runs that enqueue a PoC finish successfully with closing skipped, while implementation runs retain their primary-availability checkpoint and cleanup sequence (#264).

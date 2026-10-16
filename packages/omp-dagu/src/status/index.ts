@@ -1,16 +1,18 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { activityTarget, readActivity } from "./activity.ts";
 import { ghIssueTitleResolver, IssueTitles } from "./issue-title.ts";
-import { isActive, issueNumber, renderOffline, renderWidget, TOGGLE_COMMAND, topicFor, Transitions } from "./progress.ts";
+import { isActive, issueNumber, renderOffline, renderWidget, runParam, TOGGLE_COMMAND, topicFor, Transitions } from "./progress.ts";
 import type { RunDetails, WidgetTheme } from "./progress.ts";
 import { resolveRepository } from "./repository.ts";
 import { SSEParser } from "./sse.ts";
 import type { SSEEvent } from "./sse.ts";
+import { EventLog } from "./event-log.ts";
 
 // OMP's structural surface avoids a runtime dependency on a provider-specific host.
 interface Context {
   cwd: string;
   hasUI: boolean;
+  isIdle(): boolean;
   agent: { kind: "main" | "sub" };
   sessionManager: { getSessionId(): string; getSessionDir?(): string };
   ui: {
@@ -41,7 +43,7 @@ interface CustomMessage {
   attribution?: string;
 }
 interface ExtensionAPI {
-  on(event: "session_start" | "session_switch" | "session_shutdown", handler: (event: unknown, ctx: Context) => void): void;
+  on(event: "session_start" | "session_switch" | "session_shutdown" | "agent_end", handler: (event: unknown, ctx: Context) => void): void;
   registerTool(tool: SessionIdTool): void;
   registerCommand(name: string, options: {
     description?: string;
@@ -58,9 +60,9 @@ interface WidgetView {
   render?: () => void;
 }
 
-async function discover(base: string, repo: string, signal: AbortSignal): Promise<RunDetails[]> {
+async function discover(base: string, repo: string, signal: AbortSignal, history = false): Promise<RunDetails[]> {
   const url = new URL(`${base}/api/v1/dag-runs`);
-  for (const status of [1, 5, 7]) url.searchParams.append("status", String(status));
+  if (!history) for (const status of [1, 5, 7]) url.searchParams.append("status", String(status));
   url.searchParams.set("labels", `workspace=${repo}`);
   url.searchParams.set("fromDate", String(Math.floor(Date.now() / 1000) - 48 * 60 * 60));
   url.searchParams.set("limit", "100");
@@ -69,7 +71,7 @@ async function discover(base: string, repo: string, signal: AbortSignal): Promis
     const response = await fetch(url, { signal: AbortSignal.any([signal, AbortSignal.timeout(5000)]) });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const page = await response.json() as { dagRuns: RunDetails[]; nextCursor?: string };
-    runs.push(...page.dagRuns.filter(run => isActive(run) && run.labels?.includes(`workspace=${repo}`)));
+    runs.push(...page.dagRuns.filter(run => (history || isActive(run)) && run.labels?.includes(`workspace=${repo}`)));
     if (!page.nextCursor) break;
     url.searchParams.set("cursor", page.nextCursor);
   } while (!signal.aborted);
@@ -112,10 +114,44 @@ async function streamTopics(base: string, topics: string[], signal: AbortSignal,
   }
 }
 
+async function watchNotices(base: string, repo: string, ctx: Context, signal: AbortSignal, wake: (message: string) => void): Promise<void> {
+  const transitions = new Transitions(ctx.sessionManager.getSessionId());
+  const ledger = new EventLog();
+  const tracked = new Map<string, RunDetails>();
+  const completed = new Set<string>();
+  let baseline = true;
+  while (!signal.aborted) {
+    try {
+      for (const summary of await discover(base, repo, signal, true)) {
+        if (runParam(summary, "OMP_SESSION_ID") !== ctx.sessionManager.getSessionId()) continue;
+        if (!completed.has(topicFor(summary))) tracked.set(topicFor(summary), summary);
+      }
+      for (const [topic, summary] of tracked) {
+        // A failed request leaves the run tracked, including terminal runs whose
+        // final event has not reached the eventually consistent ledger yet.
+        try {
+          const run = await runDetails(base, summary, signal);
+          for (const snapshot of await ledger.read(base, run, signal)) {
+            const effects = transitions.observe(snapshot, { baseline });
+            for (const message of effects.wakeMessages ?? (effects.wakeMessage ? [effects.wakeMessage] : [])) wake(message);
+            if (snapshot.statusLabel === "succeeded") {
+              completed.add(topic);
+              tracked.delete(topic);
+            }
+          }
+        } catch { /* Retry this run on the next head sweep. */ }
+      }
+      baseline = false;
+    } catch { /* Discovery and ingestion recover independently of SSE. */ }
+    await delay(1000, undefined, { signal }).catch(() => {});
+  }
+}
+
 async function observe(ctx: Context, signal: AbortSignal, wake: (message: string) => void, view: WidgetView): Promise<void> {
   const repo = await resolveRepository(ctx.cwd, signal);
   if (!repo || signal.aborted) return;
   const base = (process.env.DAGU_URL || "http://127.0.0.1:8080").replace(/\/+$/, "");
+  if (ctx.agent.kind === "main") void watchNotices(base, repo, ctx, signal, wake).catch(() => {});
   const runs = new Map<string, RunDetails>();
   const transitions = new Transitions(ctx.agent.kind === "main" ? ctx.sessionManager.getSessionId() : undefined);
   const titles = new IssueTitles(ghIssueTitleResolver(ctx.cwd));
@@ -174,7 +210,7 @@ async function observe(ctx: Context, signal: AbortSignal, wake: (message: string
   const apply = (run: RunDetails, baseline = false): void => {
     const issue = issueNumber(run);
     const slug = issue ? titles.get(issue) : undefined;
-    const effects = transitions.observe(run, slug ? { baseline, slug } : { baseline });
+    const effects = transitions.observe(run, slug ? { baseline, slug, checkpoints: false } : { baseline, checkpoints: false });
     if (effects.notification && ctx.hasUI) {
       ctx.ui.notify(effects.notification.message, effects.notification.type);
     }
@@ -301,6 +337,21 @@ export default function daguStatus(pi: ExtensionAPI): void {
       view.render?.();
     },
   });
+  const queues = new Map<string, { messages: string[]; claimed: boolean }>();
+  const pump = (): void => {
+    const ctx = activeContext;
+    if (!ctx || ctx.agent.kind !== "main") return;
+    const queue = queues.get(ctx.sessionManager.getSessionId());
+    if (!queue || queue.claimed) return;
+    while (queue.messages.length) {
+      const idle = ctx.isIdle();
+      // Reserve the autonomous turn before sendMessage can start it.
+      if (idle) queue.claimed = true;
+      const message = queue.messages.shift()!;
+      pi.sendMessage({ customType: "dagu-state", content: message, display: false }, { deliverAs: "aside" });
+      if (idle) break;
+    }
+  };
   pi.registerTool({
     name: "dagu_session_id",
     label: "Dagu session ID",
@@ -330,11 +381,23 @@ export default function daguStatus(pi: ExtensionAPI): void {
     activeContext = ctx;
     controller = new AbortController();
     // Every detached promise has an error boundary; shutdown aborts fetches and sleeps.
+    const session = ctx.sessionManager.getSessionId();
     void observe(ctx, controller.signal, message => {
-      pi.sendMessage({ customType: "dagu-state", content: message, display: false }, { deliverAs: "aside" });
+      if (controller?.signal.aborted || activeContext !== ctx
+        || ctx.sessionManager.getSessionId() !== session) return;
+      let queue = queues.get(session);
+      if (!queue) { queue = { messages: [], claimed: false }; queues.set(session, queue); }
+      queue.messages.push(message);
+      pump();
     }, view).catch(() => {});
   };
   pi.on("session_start", start);
   pi.on("session_switch", start);
   pi.on("session_shutdown", stop);
+  pi.on("agent_end", (_event, ctx) => {
+    const queue = queues.get(ctx.sessionManager.getSessionId());
+    if (queue) queue.claimed = false;
+    // The host becomes idle after agent_end handlers have returned.
+    setTimeout(pump, 0);
+  });
 }

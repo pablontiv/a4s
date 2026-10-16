@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { Transitions } from "../src/status/progress.ts";
 import type { RunDetails } from "../src/status/progress.ts";
+import { BUNDLE_VERSION } from "../src/bundle.ts";
 
 const definitions = [
   ["template", fileURLToPath(new URL("../skills/dagu-feature/feature.yaml", import.meta.url))],
@@ -551,6 +552,7 @@ for (const [name, definition] of definitions) {
             transitions.observe({ ...done, statusLabel: "running" }, { baseline: true });
             assert.deepEqual(transitions.observe(done), {
               notification: { message: "dagu · feature #189 succeeded", type: "info" },
+              wakeMessage: `[DAGU STATE] run=${id} status=succeeded issue=189 bundle=unstamped extension=${BUNDLE_VERSION} compat=unstamped`,
             });
             if (mode === "poc") {
               assert.match(dagu("history", "poc", "--run-id", `poc-${id}`), new RegExp(`poc-${id}`));
