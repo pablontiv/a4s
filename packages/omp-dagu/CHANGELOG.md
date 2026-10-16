@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.3
+
+- Consolidate issue coordination in `dagu-feature`: checkpoint-only coordination, Dagu-owned worktrees, session ownership, implementation-subagent boundaries, terminal PR recovery, monitoring and operator-language reports (#244).
+- Document a4s template/render pairs and operator-owned relinking after OMP package moves (#244).
+
 ## 0.3.1
 
 - Accept `POC=no` triage completions from the per-primary transcript bucket that omp's `SessionManager.getSessionDir()` returns (`~/.omp/agent/sessions/<encoded primary>`), or a directory below it, and keep rejecting other repositories, other buckets and named-profile session roots, naming the expected default-profile directory in the message (#268).

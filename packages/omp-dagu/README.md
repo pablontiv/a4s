@@ -19,6 +19,12 @@ DAGU_URL=http://127.0.0.1:8080 omp -e /ruta/a/a4s/packages/omp-dagu
 
 Usar el directorio completo permite que OMP descubra las dos extensiones, `agents/triage-reviewer.md` y `skills/dagu-feature/`. `DAGU_URL` es la raíz del servidor (por defecto `http://127.0.0.1:8080`).
 
+Tras el merge de un cambio que mueve o renombra un paquete OMP, los symlinks
+`~/.omp/plugins/node_modules/@a4s/*` siguen apuntando a las rutas del clon
+primario y pueden quedar colgando. Volver a enlazarlos es configuración del
+operador: el coordinador propone los comandos de instalación anteriores y el
+operador los ejecuta.
+
 ## Estado, progreso y despertar dirigido
 
 La extensión de status observa los runs activos del repositorio de la sesión mediante barridos REST y eventos SSE. Con UI muestra una línea por run en un widget `aboveEditor`; no muestra toasts de espera y conserva los toasts terminales para `succeeded`, `failed` y `aborted`. La observación que despierta al coordinador también funciona con `hasUI=false`. Resuelve el repositorio desde `origin`, incluso en linked worktrees, y consulta runs `running`, `queued` y `waiting` de las últimas 48 horas con la etiqueta `workspace=<repo>`.
@@ -74,6 +80,16 @@ Con `@a4s/omp-cross-family-review` cargado, `triage-reviewer` conserva la selecc
 ## Skill dagu-feature
 
 OMP resuelve `skill://dagu-feature` y sus plantillas desde `skills/dagu-feature/` dentro del paquete. `SKILL.md`, `feature.yaml`, `poc.yaml`, `discovery.yaml`, `reconcile.yaml` y `dagu-feature-bootstrap.yaml` permanecen juntos para conservar sus enlaces relativos y las rutas `$SKILL_DIR/<archivo>` del bootstrap.
+
+`skill://dagu-feature` es la única guía de coordinación de issues con subagentes.
+En a4s hay dos copias de cada DAG del ciclo: la plantilla distribuida
+`packages/omp-dagu/skills/dagu-feature/<dag>.yaml` y la renderizada
+`.workspace/dagu/dags/<dag>.yaml`. Al cambiar el ciclo, mantener ambas copias
+coherentes, conservando en el render los parámetros y la identidad del bundle
+que aplica el bootstrap.
+
+Para la adopción de a4s, `TEST_PATHS` es
+`(^|/)(test|tests)/|\.test\.(ts|cjs)$`.
 
 Todo cambio en esas cinco plantillas o en `SKILL.md` exige una versión del
 paquete mayor que la de la base del PR (`git merge-base origin/main HEAD`) y

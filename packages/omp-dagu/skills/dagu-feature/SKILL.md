@@ -105,7 +105,7 @@ The steps:
 | Step | Effect |
 |---|---|
 | `detect` | Checks `git`, `gh` (authenticated), `jq` and the exact required `dagu version`; reads package/version, source commit and source `origin`; fetches and requires that clean package commit on the remote default branch; reads repository settings and the installed DAG values and stamps. |
-| `answers` | `human.task` that shows the current stamp, `GATE`, `REQUIRED_CHECK`, and `TEST_PATHS`, then asks for those three values. Select the test-path ERE from the repository's actual conventions. In a4s use `(^\|/)(test\|tests)/\|\.test\.(ts\|cjs)$`. |
+| `answers` | `human.task` that shows the current stamp, `GATE`, `REQUIRED_CHECK`, and `TEST_PATHS`, then asks for those three values. Select the test-path ERE from the repository's actual conventions. |
 | `worktrees` | Makes git ignore `.workspace/worktrees/`. When nothing ignores it yet, appends `/.workspace/worktrees/` to the clone's `info/exclude`, so the primary stays clean without a commit. |
 | `render` | Writes stamped and validated `feature.yaml`, `poc.yaml`, `discovery.yaml`, and `reconcile.yaml` under `<git-dir>/dagu-feature/`, keeping PRIMARY clean. Discovery receives the coordinating workspace label and derives the diagnosed repository from its `PRIMARY`. |
 | `reconcile` | Idempotently installs the stamped staged `reconcile.yaml` to `$DAGU_HOME/dags/reconcile.yaml` (`DAGU_HOME` defaults to `~/.dagu`) and validates it. One user-level DAG serves every adopting repository. |
@@ -250,7 +250,21 @@ the exit handler may remove the local worktree and branch. Restore a published
 but unmerged branch with `git fetch origin && git branch <branch> origin/<branch>`
 before reenqueuing. Pass `PR_NUMBER` when a PR already exists for the branch.
 
+A failed run can leave its PR's auto-merge armed. Before reenqueuing, read
+`gh pr view <pr> --json state`: `MERGED` means the issue's delivery is complete.
+Otherwise the replacement run's `checkpoint_push` can trigger that merge before
+its later `push`, which may fail with `stale info` after branch deletion.
+
 Inspect a run with `dagu status --run-id <id> feature`. Step logs are listed under each step.
+
+For a focused snapshot of active steps and run IDs by state:
+
+```sh
+dagu status --run-id <run> feature | grep -E '\[(waiting|running|failed)\]'
+dagu history feature --status <waiting|running|queued> --format json --limit 50 | jq -r '.[].dagRunId'
+```
+
+Choose one of `waiting`, `running`, or `queued` for the history status placeholder.
 
 When `feature.yaml`, `poc.yaml`, or `reconcile.yaml` changes, verify the lifecycle
 change with the first applicable run enqueued after the change merges. Dagu
@@ -267,11 +281,31 @@ with `triage_decision`'s encoded `PRIMARY` namespace. A linked-worktree session
 matches only when its transcript directory belongs to that primary namespace.
 On mismatch the guard names the expected primary and keeps triage waiting.
 
+The coordinator only drives Dagu checkpoints; subagents perform triage review,
+PoCs and implementation, rather than the coordinator implementing inline.
+Coordinate only runs owned by this session. Before taking an issue that another
+live repository session could own, contact that session with `orca terminal send`
+and establish ownership. For waiting `poc-*` runs, inspect the issue state and
+published verdict before proposing closure; those runs may belong to another session.
+
+Worktrees belong to Dagu: `start_gate` creates or adopts
+`.workspace/worktrees/issue-<n>` and `dagu/issue-<n>`, and
+`close_gate`/`handler_on.exit` own their removal under the recovery contract above.
+The coordinator never creates them with `git worktree add` or `git branch`,
+including to get ahead while a run is blocked. Implementers start only when
+`implement` is waiting. If another session dirties PRIMARY, notify that session
+and wait for its clean confirmation, then resume the existing availability
+checkpoint; reenqueue only a terminal run under the recovery contract above.
+Keep recovery inside Dagu's lifecycle.
+
+Issue every `dagu human-task complete` in its own `bash` call: the triage guard
+blocks the entire command containing the completion.
+
 The `@a4s/omp-dagu` status extension delivers hidden model context with the form `[DAGU STATE] run=<id> status=<waiting|failed|aborted> step=<step> issue=<issue> bundle=<version|unstamped> extension=<version> compat=<ok|incompatible|unstamped>`. It starts or continues a coordinator turn without rendering the notice in chat. Notices report run state rather than user instructions.
 
 - On a `triage` notice, the coordinator obtains the guard generation marker and launches `task agent=triage-reviewer` itself with that marker and the fixed prompt, naming the subagent `TriageReview<ISSUE>` (or `TriageReview<ISSUE>v<N>` for a retry). Several `triage-reviewer` tasks may share one batched `task` call; each task includes its own run's generation marker. The coordinator completes `triage` with that allocated reviewer ID. A `dependency_review` push-back produces a new `triage` notice and the coordinator repeats this flow for the new generation.
 - At `run_poc`, the coordinator launches the PoC subagent as `Poc<ISSUE>`.
-- On an `implement` notice, the coordinator launches one level-1 implementation subagent named `Implement<ISSUE>` for that issue's worktree. The subagent result auto-delivers to the coordinator, which then completes `implement`.
+- On an `implement` notice, the coordinator launches one level-1 implementation subagent named `Implement<ISSUE>` for that issue's worktree, with the contract in **Implement**. The result auto-delivers to the coordinator, which reviews the diff before completing `implement`.
 - On a `failed` or `aborted` notice, inspect the terminal run with `dagu status --run-id <id> feature`, including the named step logs, then apply the terminal-run recovery above: preserve or restore the branch as required, recover the worktree, and enqueue the suffixed replacement run.
 - A retried subagent appends `v<N>` to its base name, for example `Implement182v2`.
 - For every issue in the fixed batch, keep one todo for the agent action at the `human.task` where its run is waiting: triage review, PoC execution, implementation, or recovery. Update that todo when the run moves to another human task. The package widget shows the active step plus live activity: the last non-empty Dagu log line for a running command, or the newest `toolCall` name, intention (falling back to its principal argument) and age from `TriageReview<ISSUE>`, `Poc<ISSUE>` or `Implement<ISSUE>` while its human task waits. It refreshes activity about every two seconds and leaves the line unchanged when no source is available.
@@ -280,7 +314,7 @@ The `@a4s/omp-dagu` status extension delivers hidden model context with the form
 
 ## Turn status
 
-A turn started by a `[DAGU STATE]` notice that only advances checkpoints completes silently with an empty response. Emit the status report when a run reaches a terminal state, a blocker is observed, or a decision belongs to the operator. Before emitting it, read each affected run with `dagu status` (and its PR or issue) and report observed facts only:
+A turn started by a `[DAGU STATE]` notice that only advances checkpoints completes silently with an empty response. Emit the status report in the operator's language when a run reaches a terminal state, a blocker is observed, or a decision belongs to the operator. Before emitting it, read each affected run with `dagu status` (and its PR or issue) and report observed facts only:
 
 | Section | Content |
 |---|---|
@@ -431,8 +465,18 @@ experiments can wait concurrently.
 
 When `start_gate` succeeds, the run enters `Waiting` at `implement`, and the queue slot is released.
 
-1. Work only in `WORKTREE` on `BRANCH`.
-2. Leave exactly **one** commit on `BRANCH`, rebased onto `origin/$BASE_BRANCH`,
+Give `Implement<ISSUE>` the exact `WORKTREE` path and `BRANCH`, plus this contract:
+
+- Leave real-`DAGU_HOME` `dagu human-task` transitions, pushes, PR creation and
+  GitHub comments to the coordinator and DAG. Leave `omp plugin link` and
+  `~/.omp` configuration to the operator.
+- Own verification and the gate, following the steps below.
+- Run live Dagu tests with an isolated `DAGU_HOME` created by `mktemp -d`.
+- When siblings edit distinct parts of shared files, touch only the assigned
+  part and add test cases rather than rewriting shared fixtures.
+
+1. Work only in `WORKTREE` on `BRANCH`; never touch the primary checkout.
+2. Leave exactly **one** conventional commit on `BRANCH`, rebased onto `origin/$BASE_BRANCH`,
    with conflicts resolved and a clean worktree. Squash multiple commits before
    completing the checkpoint.
 3. After a conflict push-back, read the paths from
