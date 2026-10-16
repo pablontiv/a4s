@@ -518,6 +518,10 @@ steps:
 
   - id: rebase
     depends: dependency_review
+    retry_policy:
+      limit: 3
+      interval_sec: 5
+      exit_code: [75]
     run: |
       set -euo pipefail
       umask 0022
@@ -544,6 +548,16 @@ steps:
         fi
         printf 'rebased_sha=%s\n' "$after"
       else
+        rebase_status=$?
+        if test -e "$(git -C "$WORKTREE" rev-parse --git-path index.lock)"; then
+          printf 'rebase: index.lock held in %s\n' "$WORKTREE" >&2
+          exit 75
+        fi
+        if ! { test -d "$(git -C "$WORKTREE" rev-parse --git-path rebase-merge)" ||
+               test -d "$(git -C "$WORKTREE" rev-parse --git-path rebase-apply)"; } ||
+           test -z "$(git -C "$WORKTREE" diff --name-only --diff-filter=U)"; then
+          exit "$rebase_status"
+        fi
         git -C "$WORKTREE" diff --name-only --diff-filter=U > "$STATE/conflict-files"
         # Keep the resolved/nonconflicting delivery and conflict markers for implement.
         git -C "$WORKTREE" rebase --quit
