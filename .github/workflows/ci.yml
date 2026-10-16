@@ -14,8 +14,51 @@ permissions:
   contents: read
 
 jobs:
-  validate:
+  changes:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      workspaces: ${{ steps.workspaces.outputs.workspaces }}
+    steps:
+      # pull_request checks out the merge commit: HEAD^1 is the base branch, so a
+      # depth of 2 is enough for the git fallback below.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+      - id: workspaces
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          all='["context-expert","orca-omp-integration","omp-dagu","synagent","synagent-bus","omp-cross-family-review","pi-tool-row-presentation"]'
+          # Paths under packages/<dir> select that workspace; any other path selects all.
+          # No @a4s/* workspace depends on another, so no transitive closure is needed.
+          if [[ "$EVENT_NAME" == pull_request ]]; then
+            files=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files" --paginate --jq '.[].filename') \
+              || files=$(git diff --name-only HEAD^1 HEAD)
+            names=$(printf '%s\n' "$files" | jq -Rsc --argjson all "$all" '
+              split("\n") | map(select(length > 0)) |
+              if any(.[]; startswith("packages/") | not) then $all
+              else map(if startswith("packages/synagent/core/") then "synagent"
+                elif startswith("packages/synagent/bus/") then "synagent-bus"
+                else split("/")[1] end) | unique end')
+          else
+            names=$all
+          fi
+          # @a4s/pi-tool-row-presentation typechecks against @pablontiv/pion, which CI does not install.
+          workspaces=$(jq -cn --argjson names "$names" '$names | map({name: ("@a4s/" + .), typecheck: (. == "context-expert" or . == "orca-omp-integration" or . == "omp-dagu" or . == "synagent" or . == "synagent-bus")})')
+          echo "workspaces=$workspaces" >> "$GITHUB_OUTPUT"
+  test:
+    needs: changes
+    if: needs.changes.outputs.workspaces != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        workspace: ${{ fromJSON(needs.changes.outputs.workspaces) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -40,10 +83,18 @@ jobs:
           mv package-lock.ci.json package-lock.json
           npm ci
           git checkout -- package-lock.json packages
-      - run: npm test
-      # @a4s/pi-tool-row-presentation typechecks against @pablontiv/pion.
+      - run: npm test --workspace "${{ matrix.workspace.name }}"
       - name: Typecheck
+        if: matrix.workspace.typecheck
+        run: npm run typecheck --workspace "${{ matrix.workspace.name }}"
+  validate:
+    needs: [changes, test]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          TEST_RESULT: ${{ needs.test.result }}
         run: |
-          for workspace in @a4s/context-expert @a4s/orca-omp-integration @a4s/omp-dagu @a4s/synagent @a4s/synagent-bus; do
-            npm run typecheck --workspace "$workspace"
-          done
+          echo "changes=$CHANGES_RESULT test=$TEST_RESULT"
+          [[ "$CHANGES_RESULT" == success && ( "$TEST_RESULT" == success || "$TEST_RESULT" == skipped ) ]]
