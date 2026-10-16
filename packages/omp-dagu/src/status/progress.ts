@@ -17,6 +17,7 @@ export interface RunDetails {
 export interface RunNode {
   step: { id?: string; name: string; humanTask?: { prompt?: string } };
   statusLabel: string;
+  approvalIteration?: number;
 }
 
 export const isActive = (run: RunDetails): boolean =>
@@ -152,82 +153,68 @@ export interface Notification {
 export interface TransitionEffects {
   notification?: Notification;
   wakeMessage?: string;
+  wakeMessages?: string[];
 }
 
 interface State {
   status: string;
   step: string | undefined;
-  silentUnresolvedWaiting: boolean;
 }
 
 export class Transitions {
   private states = new Map<string, State>();
+  private notices = new Set<string>();
 
   constructor(private readonly sessionId?: string) {}
 
-  observe(run: RunDetails, options: { baseline?: boolean; slug?: string } = {}): TransitionEffects {
+  observe(run: RunDetails, options: { baseline?: boolean; slug?: string; checkpoints?: boolean } = {}): TransitionEffects {
     const key = topicFor(run);
-    const activeStep = currentStep(run);
-    const terminalStep = ["failed", "aborted"].includes(run.statusLabel)
-      ? run.nodes?.find(node => node.statusLabel === run.statusLabel)?.step.name
-      : undefined;
-    const step = terminalStep ?? activeStep;
     const previous = this.states.get(key);
-    const baseline = options.baseline === true;
-    const suppressResolvedBaseline = previous?.silentUnresolvedWaiting === true
-      && previous.status === "waiting" && previous.step === undefined && step !== undefined;
-    this.states.set(key, {
-      status: run.statusLabel,
-      step,
-      silentUnresolvedWaiting: baseline && run.statusLabel === "waiting" && step === undefined,
-    });
-
-    const firstAfterStartup = !previous && !baseline;
-    const enteredWaiting = run.statusLabel === "waiting" && (
-      firstAfterStartup
-      || (previous !== undefined && !suppressResolvedBaseline
-        && (previous.status !== "waiting" || previous.step !== step))
-    );
+    const terminalStep = run.nodes?.find(node => node.statusLabel === run.statusLabel)?.step.name;
+    this.states.set(key, { status: run.statusLabel, step: currentStep(run) });
     const effects: TransitionEffects = {};
     const issue = issueNumber(run);
-    const sessionMatches = this.sessionId !== undefined
-      && runParam(run, "OMP_SESSION_ID") === this.sessionId;
-    const owned = sessionMatches && issue !== undefined;
-    const targetedFeature = owned && run.name === "feature";
-    const targetedDiscovery = sessionMatches && run.name === "discovery";
+    const owned = this.sessionId !== undefined && runParam(run, "OMP_SESSION_ID") === this.sessionId;
+    const supported = ["feature", "poc", "discovery"].includes(run.name);
     const bundle = runBundleState(run);
+    const identity = issue ? ` issue=${issue}` : ` dag=${plain(run.name)}`;
     const bundleNotice = ` bundle=${plain(bundle.displayVersion)} extension=${bundle.extensionVersion} compat=${bundle.compat}`;
-
-    if (enteredWaiting) {
-      const primaryCheckpoint = (run.name === "feature"
-        && (step === "start_primary_unavailable" || step === "close_primary_unavailable"))
-        || (run.name === "poc" && step === "base_primary_unavailable");
-      if ((targetedFeature && (step === "triage" || step === "implement")) || (owned && primaryCheckpoint)) {
-        const prompt = primaryCheckpoint ? currentNode(run)?.step.humanTask?.prompt : undefined;
-        const cause = prompt ? ` cause=${plain(prompt)}` : "";
-        effects.wakeMessage = `[DAGU STATE] run=${plain(run.dagRunId)} status=waiting step=${step} issue=${issue}${bundleNotice}${cause}`;
-      } else if (targetedDiscovery && step !== undefined
-        && ["discover", "validate", "consolidate", "approve"].includes(step)) {
-        effects.wakeMessage = `[DAGU STATE] run=${plain(run.dagRunId)} status=waiting step=${step} dag=discovery${bundleNotice}`;
+    const messages: string[] = [];
+    const notice = (id: string, text: string): void => {
+      if (this.notices.has(id)) return;
+      this.notices.add(id);
+      if (!options.baseline && owned && supported) messages.push(text);
+    };
+    if (options.checkpoints !== false) {
+      for (const node of run.nodes ?? []) {
+        if (!node.step.humanTask || node.statusLabel !== "waiting") continue;
+        const step = node.step.id ?? node.step.name;
+        const iteration = node.approvalIteration ?? 0;
+        const cause = step.endsWith("_primary_unavailable") && node.step.humanTask.prompt
+          ? ` cause=${plain(node.step.humanTask.prompt)}` : "";
+        notice(JSON.stringify([key, step, iteration]),
+          `[DAGU STATE] run=${plain(run.dagRunId)} status=waiting step=${plain(step)}${identity}${bundleNotice} iteration=${iteration}${cause}`);
       }
-      return effects;
+      if (run.statusLabel === "succeeded") {
+        notice(JSON.stringify([key, "succeeded"]),
+          `[DAGU STATE] run=${plain(run.dagRunId)} status=succeeded${identity}${bundleNotice}`);
+      }
     }
-
     if (previous && previous.status !== run.statusLabel
       && ["succeeded", "failed", "aborted"].includes(run.statusLabel)) {
       effects.notification = {
         message: `dagu · ${runLabel(run, options.slug)} ${run.statusLabel}`,
         type: run.statusLabel === "succeeded" ? "info" : run.statusLabel === "failed" ? "error" : "warning",
       };
-      const noticeStep = terminalStep ?? previous.step;
-      if ((run.statusLabel === "failed" || run.statusLabel === "aborted") && noticeStep) {
-        if (targetedFeature) {
-          effects.wakeMessage = `[DAGU STATE] run=${plain(run.dagRunId)} status=${run.statusLabel} step=${plain(noticeStep)} issue=${issue}${bundleNotice}`;
-        } else if (targetedDiscovery) {
-          effects.wakeMessage = `[DAGU STATE] run=${plain(run.dagRunId)} status=${run.statusLabel} step=${plain(noticeStep)} dag=discovery${bundleNotice}`;
-        }
+      const step = terminalStep ?? previous.step;
+      if (run.statusLabel !== "succeeded" && step && owned
+        && ["feature", "discovery"].includes(run.name)) {
+        notice(JSON.stringify([key, run.statusLabel]),
+          `[DAGU STATE] run=${plain(run.dagRunId)} status=${run.statusLabel} step=${plain(step)}${identity}${bundleNotice}`);
       }
     }
+    if (messages.length === 1) effects.wakeMessage = messages[0]!;
+    else if (messages.length) effects.wakeMessages = messages;
     return effects;
   }
 }

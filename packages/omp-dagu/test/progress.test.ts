@@ -99,250 +99,96 @@ test("identity extracts ISSUE from CLI and JSON params and sanitizes Dagu data",
   assert.equal(runLabel({ ...run, name: "fea\u001bture\n", params: "", dagRunId: "run\u001b\n" }), "fea ture  run  ");
 });
 
-const waitingAt = (step: string, params = "ISSUE=176 OMP_SESSION_ID=session-a", name = "feature"): RunDetails => ({
-  ...run,
-  name,
-  dagRunId: `${name}-${step}`,
-  params,
+const waitingAt = (name: string, step: string, iteration = 0): RunDetails => ({
+  ...run, name, dagRunId: "owned-run", params: "ISSUE=176 OMP_SESSION_ID=session-a",
   statusLabel: "waiting",
-  nodes: [{ step: { name: step }, statusLabel: "waiting" }],
-});
-const terminalAt = (
-  statusLabel: "succeeded" | "failed" | "aborted",
-  step: string,
-  params = "ISSUE=176 OMP_SESSION_ID=session-a",
-  name = "feature",
-): RunDetails => ({
-  ...run,
-  name,
-  dagRunId: `${name}-${statusLabel}`,
-  params,
-  statusLabel,
-  nodes: [
-    { step: { name: "triage" }, statusLabel: "succeeded" },
-    { step: { name: step }, statusLabel },
-  ],
+  nodes: [{ step: { id: step, name: step, humanTask: {} }, statusLabel: "waiting", approvalIteration: iteration }],
 });
 
-
-test("waiting transitions have no toast and terminal toasts remain deduplicated", () => {
-  const transitions = new Transitions();
-  assert.deepEqual(transitions.observe(run), {});
-  const waiting = { ...run, statusLabel: "waiting" };
-  assert.deepEqual(transitions.observe(waiting, { slug: "improve-widget" }), {});
-  assert.deepEqual(transitions.observe(waiting), {});
-  assert.deepEqual(transitions.observe(run), {});
-  assert.deepEqual(transitions.observe(waiting), {});
-  assert.deepEqual(
-    transitions.observe({ ...waiting, nodes: [{ step: { name: "merge" }, statusLabel: "waiting" }] }),
-    {},
-  );
-  for (const [statusLabel, type] of [["succeeded", "info"], ["failed", "error"], ["aborted", "warning"]] as const) {
-    const terminal = terminalAt(statusLabel, "gate");
-    assert.deepEqual(transitions.observe({
-      ...terminal,
-      statusLabel: "running",
-      nodes: [{ step: { name: "gate" }, statusLabel: "running" }],
-    }), {});
-    assert.deepEqual(transitions.observe(terminal).notification, {
-      message: `dagu · feature #176 ${statusLabel}`,
-      type,
-    });
-    assert.deepEqual(transitions.observe(terminal), {});
-  }
-});
-
-test("targeted waiting notices accept CLI and JSON params and reject other sessions", () => {
-  for (const params of [
-    "ISSUE=176 PRIMARY=/tmp OMP_SESSION_ID=session-a",
-    '{"ISSUE":"176","OMP_SESSION_ID":"session-a"}',
-  ]) {
-    const transitions = new Transitions("session-a");
-    assert.equal(
-      transitions.observe(waitingAt("triage", params)).wakeMessage,
-      "[DAGU STATE] run=feature-triage status=waiting step=triage issue=176 bundle=0.3.1 extension=0.3.6 compat=ok",
-    );
-  }
-  for (const params of [
-    "ISSUE=176 OMP_SESSION_ID=session-b",
-    '{"ISSUE":176,"OMP_SESSION_ID":"session-b"}',
-  ]) {
-    assert.equal(new Transitions("session-a").observe(waitingAt("triage", params)).wakeMessage, undefined);
-  }
-});
-
-test("targeted waiting notices are limited to feature triage and implement in a main session", () => {
-  for (const step of ["triage", "implement"]) {
-    const effect = new Transitions("session-a").observe(waitingAt(step));
-    assert.deepEqual(effect, {
-      wakeMessage: `[DAGU STATE] run=feature-${step} status=waiting step=${step} issue=176 bundle=0.3.1 extension=0.3.6 compat=ok`,
-    });
-  }
-  assert.equal(new Transitions("session-a").observe(waitingAt("dependency_review")).wakeMessage, undefined);
-  assert.equal(new Transitions("session-a").observe(waitingAt("triage", undefined, "poc")).wakeMessage, undefined);
-  assert.equal(new Transitions().observe(waitingAt("triage")).wakeMessage, undefined);
-});
-
-test("targeted discovery checkpoints wake once per waiting entry", () => {
-  for (const step of ["discover", "validate", "consolidate", "approve"]) {
-    const transitions = new Transitions("session-a");
-    const waiting = waitingAt(step, "OMP_SESSION_ID=session-a", "discovery");
-    assert.deepEqual(transitions.observe(waiting), {
-      wakeMessage: `[DAGU STATE] run=discovery-${step} status=waiting step=${step} dag=discovery bundle=0.3.1 extension=0.3.6 compat=ok`,
-    });
-    assert.deepEqual(transitions.observe(waiting), {});
-  }
-});
-
-test("discovery waiting notices reject other sessions and non-checkpoint steps", () => {
-  assert.equal(
-    new Transitions("session-a")
-      .observe(waitingAt("discover", "OMP_SESSION_ID=session-b", "discovery")).wakeMessage,
-    undefined,
-  );
-  assert.equal(
-    new Transitions("session-a")
-      .observe(waitingAt("snapshot", "OMP_SESSION_ID=session-a", "discovery")).wakeMessage,
-    undefined,
-  );
-});
-
-test("targeted discovery failures and aborts wake with the DAG identity", () => {
-  for (const statusLabel of ["failed", "aborted"] as const) {
-    const transitions = new Transitions("session-a");
-    const terminal = terminalAt(statusLabel, "check_units", "OMP_SESSION_ID=session-a", "discovery");
-    transitions.observe({
-      ...terminal,
-      statusLabel: "running",
-      nodes: [{ step: { name: "check_units" }, statusLabel: "running" }],
-    });
-    assert.equal(
-      transitions.observe(terminal).wakeMessage,
-      `[DAGU STATE] run=discovery-${statusLabel} status=${statusLabel} step=check_units dag=discovery bundle=0.3.1 extension=0.3.6 compat=ok`,
-    );
-    assert.deepEqual(transitions.observe(terminal), {});
-  }
-});
-
-test("targeted terminal notices report failed and aborted steps exactly once", () => {
-  for (const statusLabel of ["failed", "aborted"] as const) {
-    const transitions = new Transitions("session-a");
-    const terminal = terminalAt(statusLabel, statusLabel === "failed" ? "gate" : "close_gate");
-    assert.deepEqual(transitions.observe({
-      ...terminal,
-      statusLabel: "running",
-      nodes: [{ step: { name: terminal.nodes![1]!.step.name }, statusLabel: "running" }],
-    }), {});
-    const effect = transitions.observe(terminal);
-    assert.equal(
-      effect.wakeMessage,
-      `[DAGU STATE] run=feature-${statusLabel} status=${statusLabel} step=${terminal.nodes![1]!.step.name} issue=176 bundle=0.3.1 extension=0.3.6 compat=ok`,
-    );
-    assert.ok(effect.notification);
-    assert.deepEqual(transitions.observe(terminal), {});
-  }
-});
-
-test("terminal notices reject other sessions and other DAGs while preserving terminal toasts", () => {
-  for (const [params, name] of [
-    ["ISSUE=176 OMP_SESSION_ID=session-b", "feature"],
-    ["ISSUE=176 OMP_SESSION_ID=session-a", "poc"],
-  ]) {
-    for (const statusLabel of ["failed", "aborted"] as const) {
-      const transitions = new Transitions("session-a");
-      const terminal = terminalAt(statusLabel, "gate", params, name);
-      transitions.observe({
-        ...terminal,
-        statusLabel: "running",
-        nodes: [{ step: { name: "gate" }, statusLabel: "running" }],
-      });
-      const effect = transitions.observe(terminal);
-      assert.equal(effect.wakeMessage, undefined);
-      assert.ok(effect.notification);
+test("all human checkpoints wake the owner once per DAG, run, step and iteration", () => {
+  const transitions = new Transitions("session-a");
+  for (const [name, steps] of [
+    ["feature", ["triage", "implement", "dependency_review", "conflict_review", "await_merge", "start_primary_unavailable", "close_primary_unavailable"]],
+    ["poc", ["run_poc", "decide", "base_primary_unavailable"]],
+    ["discovery", ["discover", "validate", "consolidate", "approve"]],
+  ] as const) {
+    for (const step of steps) for (const iteration of [0, 1]) {
+      const candidate = waitingAt(name, step, iteration);
+      const message = transitions.observe(candidate).wakeMessage!;
+      assert.ok(message.includes(`step=${step} issue=176`), message);
+      assert.ok(message.endsWith(`iteration=${iteration}`), message);
+      assert.deepEqual(transitions.observe(candidate), {});
     }
   }
+  assert.ok(transitions.observe({ ...waitingAt("feature", "triage"), dagRunId: "another-run" }).wakeMessage);
 });
 
-test("first sweep is a silent baseline while a later discovered waiting run wakes exactly once", () => {
+test("waiting nodes wake while the global run is running, including parallel human tasks", () => {
+  const a = waitingAt("poc", "a");
+  const b = waitingAt("poc", "b");
+  const effects = new Transitions("session-a").observe({
+    ...a, statusLabel: "running", nodes: [...a.nodes!, ...b.nodes!],
+  });
+  assert.equal(effects.wakeMessages?.length, 2);
+  assert.ok(effects.wakeMessages?.[0]?.includes("step=a"));
+  assert.ok(effects.wakeMessages?.[1]?.includes("step=b"));
+});
+
+test("omitted approval iteration is zero and logical replays preserve deduplication", () => {
   const transitions = new Transitions("session-a");
-  const startup = waitingAt("triage");
-  assert.deepEqual(transitions.observe(startup, { baseline: true }), {});
-  assert.deepEqual(transitions.observe(startup), {});
-  const discovered = { ...waitingAt("triage"), dagRunId: "discovered-waiting" };
-  assert.ok(transitions.observe(discovered).wakeMessage);
-  assert.deepEqual(transitions.observe(discovered), {});
+  const candidate = waitingAt("feature", "triage");
+  delete candidate.nodes![0]!.approvalIteration;
+  assert.ok(transitions.observe(candidate).wakeMessage?.endsWith("iteration=0"));
+  transitions.observe({ ...candidate, statusLabel: "running", nodes: [] });
+  assert.deepEqual(transitions.observe(waitingAt("feature", "triage", 0)), {});
+  assert.ok(transitions.observe(waitingAt("feature", "triage", 1)).wakeMessage);
 });
 
-test("a startup waiting summary resolves its step silently", () => {
-  const transitions = new Transitions("session-a");
-  const waiting = waitingAt("triage");
-  const { nodes: _nodes, ...summary } = waiting;
-  assert.deepEqual(transitions.observe(summary, { baseline: true }), {});
-  assert.deepEqual(transitions.observe(waiting), {});
-});
-
-test("REST recovers a transition missed by SSE and repeated snapshots remain deduplicated", () => {
-  const transitions = new Transitions("session-a");
-  const active = { ...waitingAt("implement"), statusLabel: "running",
-    nodes: [{ step: { name: "gate" }, statusLabel: "running" }] };
-  assert.deepEqual(transitions.observe(active, { baseline: true }), {});
-  const recovered = waitingAt("implement");
-  assert.ok(transitions.observe(recovered).wakeMessage);
-  assert.deepEqual(transitions.observe(recovered), {});
-});
-
-test("running to waiting re-entry wakes again even at the same step", () => {
-  const transitions = new Transitions("session-a");
-  const waiting = waitingAt("triage");
-  assert.ok(transitions.observe(waiting).wakeMessage);
-  assert.deepEqual(transitions.observe(waiting), {});
-  assert.deepEqual(transitions.observe({ ...waiting, statusLabel: "running" }), {});
-  assert.ok(transitions.observe(waiting).wakeMessage);
-});
-
-test("run rows stay compact while DAGU STATE notices report every compatibility state", () => {
-  for (const [labels, display, compat] of [
-    [[`dagu-feature-bundle=0.3.9`], "0.3.9", "ok"],
-    [[`dagu-feature-bundle=0.2.0`], "0.2.0", "incompatible"],
-    [undefined, "unstamped", "unstamped"],
-  ] as const) {
-    const candidate = waitingAt("implement");
-    if (labels) candidate.labels = [...labels];
-    else delete candidate.labels;
-    assert.equal(
-      renderRun(candidate),
-      "feat #176 ▱▱▱▱▱▱ 0/1 implement waiting",
-    );
-    assert.equal(
-      new Transitions("session-a").observe(candidate).wakeMessage,
-      `[DAGU STATE] run=feature-implement status=waiting step=implement issue=176 bundle=${display} extension=0.3.6 compat=${compat}`,
-    );
+test("CLI and JSON ownership target only the matching main session", () => {
+  for (const params of ["OMP_SESSION_ID=session-a", '{"OMP_SESSION_ID":"session-a"}']) {
+    const candidate = { ...waitingAt("discovery", "discover"), params };
+    assert.ok(new Transitions("session-a").observe(candidate).wakeMessage?.includes("dag=discovery"));
+    assert.deepEqual(new Transitions("session-b").observe(candidate), {});
+    assert.deepEqual(new Transitions().observe(candidate), {});
   }
 });
 
-for (const [name, step] of [
-  ["feature", "start_primary_unavailable"],
-  ["feature", "close_primary_unavailable"],
-  ["poc", "base_primary_unavailable"],
-] as const) {
-  test(`${name} ${step} wakes only its owner with the resolved cause`, () => {
-    const waiting: RunDetails = {
-      ...run, name, statusLabel: "waiting", params: "ISSUE=228 OMP_SESSION_ID=owner",
-      nodes: [{
-        statusLabel: "waiting",
-        step: { id: step, name: step, humanTask: { prompt: "primary dirty:  M tracked.txt\nRestore clean main; push back." } },
-      }],
-    };
-    const transitions = new Transitions("owner");
-    const message = transitions.observe(waiting).wakeMessage!;
-    assert.match(message, /^\[DAGU STATE\] run=a4s-issue-157 status=waiting step=/);
-    assert.ok(message.includes(`step=${step} issue=228 bundle=0.3.1`));
-    assert.ok(message.includes("cause=primary dirty:  M tracked.txt Restore clean main; push back."));
-    assert.deepEqual(transitions.observe(waiting), {});
-    assert.deepEqual(new Transitions("another-owner").observe(waiting), {});
-    assert.deepEqual(new Transitions().observe(waiting), {});
-    transitions.observe({ ...waiting, statusLabel: "queued" });
-    assert.ok(transitions.observe(waiting).wakeMessage, "a repeated unavailable recheck wakes again");
-    assert.deepEqual(new Transitions("owner").observe(waiting, { baseline: true }), {});
-  });
-}
+test("startup baseline marks existing openings silently and subsequent iterations wake", () => {
+  const transitions = new Transitions("session-a");
+  assert.deepEqual(transitions.observe(waitingAt("feature", "triage"), { baseline: true }), {});
+  assert.deepEqual(transitions.observe(waitingAt("feature", "triage")), {});
+  assert.ok(transitions.observe(waitingAt("feature", "triage", 1)).wakeMessage);
+});
+
+test("succeeded wakes each owner once even when the terminal is the first durable snapshot", () => {
+  for (const name of ["feature", "poc", "discovery"]) {
+    const transitions = new Transitions("session-a");
+    const terminal = { ...waitingAt(name, "done"), statusLabel: "succeeded", nodes: [] };
+    assert.ok(transitions.observe(terminal).wakeMessage?.includes("status=succeeded"));
+    assert.deepEqual(transitions.observe(terminal), {});
+    assert.deepEqual(new Transitions("other").observe(terminal), {});
+  }
+});
+
+test("terminal toasts and targeted feature/discovery failure notices remain deduplicated", () => {
+  for (const name of ["feature", "discovery"]) for (const statusLabel of ["succeeded", "failed", "aborted"]) {
+    const transitions = new Transitions("session-a");
+    const candidate = waitingAt(name, "gate");
+    transitions.observe({ ...candidate, statusLabel: "running", nodes: [] });
+    const effects = transitions.observe({ ...candidate, statusLabel, nodes: [{ step: { name: "gate" }, statusLabel }] });
+    assert.ok(effects.notification?.message.endsWith(statusLabel));
+    assert.ok(effects.wakeMessage?.includes(`status=${statusLabel}`));
+    assert.deepEqual(transitions.observe({ ...candidate, statusLabel, nodes: [] }), {});
+  }
+});
+
+test("primary availability notices preserve the concrete sanitized cause", () => {
+  const candidate = waitingAt("poc", "base_primary_unavailable");
+  candidate.nodes![0]!.step.humanTask = { prompt: "primary dirty: tracked.txt\nRestore clean main." };
+  assert.ok(new Transitions("session-a").observe(candidate).wakeMessage?.includes("cause=primary dirty: tracked.txt Restore clean main."));
+});
+
+test("bundle compatibility remains visible in targeted notices", () => {
+  const candidate = { ...waitingAt("feature", "implement"), labels: ["dagu-feature-bundle=0.2.0"] };
+  assert.ok(new Transitions("session-a").observe(candidate).wakeMessage?.includes("compat=incompatible"));
+});

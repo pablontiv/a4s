@@ -27,19 +27,20 @@ operador los ejecuta.
 
 ## Estado, progreso y despertar dirigido
 
-La extensión de status observa los runs activos del repositorio de la sesión mediante barridos REST y eventos SSE. Con UI muestra una línea por run en un widget `aboveEditor`; no muestra toasts de espera y conserva los toasts terminales para `succeeded`, `failed` y `aborted`. La observación que despierta al coordinador también funciona con `hasUI=false`. Resuelve el repositorio desde `origin`, incluso en linked worktrees, y consulta runs `running`, `queued` y `waiting` de las últimas 48 horas con la etiqueta `workspace=<repo>`.
+La extensión observa los runs del repositorio mediante REST y SSE para el widget y un ledger durable de eventos para los avisos humanos y el éxito. Con UI muestra una línea por run en `aboveEditor` y conserva los toasts terminales. El despertar también funciona con `hasUI=false`. Resuelve el repositorio desde `origin`, incluso en linked worktrees, y descubre runs de las últimas 48 horas con `workspace=<repo>`, incluidos los que finalizaron entre barridos.
 
-La herramienta LLM `dagu_session_id` devuelve `ctx.sessionManager.getSessionId()` únicamente a la sesión principal que la llama y rechaza subagentes. El coordinador la llama antes de `dagu enqueue` y pasa el valor como parámetro `OMP_SESSION_ID`. `feature` despierta en `triage`, `implement`, `start_primary_unavailable`, `close_primary_unavailable`, `failed` y `aborted`; `poc` despierta en `base_primary_unavailable`; `discovery` despierta en `discover`, `validate`, `consolidate`, `approve`, `failed` y `aborted`. Los avisos incluyen la compatibilidad del bundle:
+La herramienta `dagu_session_id` devuelve el ID persistente únicamente a la sesión principal. El coordinador lo pasa como `OMP_SESSION_ID` al encolar. Todo nodo con metadatos `humanTask` en waiting de `feature`, `poc` y `discovery` despierta al propietario, incluso con status global running. El succeeded final también despierta; feature y discovery conservan failed/aborted. Los avisos incluyen la compatibilidad:
 
 ```text
-[DAGU STATE] run=<run-id> status=<waiting|failed|aborted> step=<step> <issue=<issue>|dag=discovery> bundle=<version|unstamped> extension=<version> compat=<ok|incompatible|unstamped>
+[DAGU STATE] run=<run-id> status=waiting step=<step> <issue=<issue>|dag=<dag>> bundle=<version|unstamped> extension=<version> compat=<ok|incompatible|unstamped> iteration=<approvalIteration>
+[DAGU STATE] run=<run-id> status=succeeded <issue=<issue>|dag=<dag>> bundle=<version|unstamped> extension=<version> compat=<ok|incompatible|unstamped>
 ```
 
 Los checkpoints de disponibilidad añaden `cause=<prompt resuelto>` con `primary dirty: <archivos>` o `primary on <rama>, expected <base>`. Conservan el mismo run en Waiting y liberan la cola. El operador restaura PRIMARY limpio en BASE_BRANCH respetando sus cambios, consulta `dagu status --run-id <id> feature` y ejecuta `dagu human-task push-back feature --run-id <id> --step start_primary_unavailable --expected-iteration <iteración observada>` (para cierre: `close_primary_unavailable`; para PoC: DAG `poc`, paso `base_primary_unavailable`). El detector comprueba otra vez; limpiar por sí solo mantiene Waiting. El DAG sigue creando y retirando worktrees.
 
-El aviso se entrega oculto al chat con `pi.sendMessage({ customType: "dagu-state", content: message, display: false }, { deliverAs: "aside" })`: inicia o continúa el turno del modelo sin renderizar una línea en la conversación. Solo se emite si el agente es `main`, `OMP_SESSION_ID` coincide exactamente con el ID de esa sesión y el run está en un checkpoint soportado; los avisos de `feature` y `poc` requieren `ISSUE`. En estados terminales, `step` identifica el nodo fallido o abortado que alcanzó el run. Se aceptan los params Dagu tanto en formato CLI `KEY=value` como JSON.
+Los avisos se entregan ocultos con `customType: "dagu-state"`, `display: false` y `deliverAs: "aside"`. Solo el agente main con el `OMP_SESSION_ID` exacto recibe avisos; ISSUE es opcional. Se aceptan params CLI y JSON. Una FIFO por sesión reclama sincrónicamente un único turno autónomo cuando está idle y continúa tras `agent_end`; durante un turno activo entrega los avisos como asides en orden.
 
-REST y SSE alimentan una sola máquina de transiciones. El primer barrido tras `session_start` o `session_switch` establece una línea base silenciosa para los runs que ya existen. Un run descubierto en un barrido posterior ya esperando sí despierta; un barrido REST recupera una transición que SSE haya perdido; snapshots repetidos no duplican el aviso; y una reentrada real `running → waiting`, incluso al mismo paso, vuelve a avisar.
+El primer barrido establece una línea base silenciosa. Después, el lector consulta `/api/v1/event-logs` DEFAULT de Dagu 2.20.1, con `paginationMode=cursor`, agota las páginas y emite en orden persistido. Cada ronda vuelve a la cabecera para observar ingestión eventual, incluido el succeeded que aún no sea visible al finalizar el run. Un HTTP 400 con cursor reinicia el recorrido conservando deduplicación. Los IDs de eventos y las claves `(dagName, dagRunId, step_id, approval_iteration)` evitan duplicados; una iteración omitida es cero. El éxito se deduplica por run/status. SSE actualiza el widget; el ledger recupera las aperturas rápidas omitidas por snapshots. El estado de entrega dura durante esa observación de sesión; reiniciar o cambiar sesión establece una nueva línea base.
 
 El widget usa el mismo plegado que los HUD `TODO` y `Subagents` de OMP: título `Workflows` en negrita, filas en árbol y, plegado, tres runs más una fila `… N more — /workflows`. El comando `/workflows` alterna entre plegado y desplegado (hasta ocho runs, por el límite de diez líneas de OMP para widgets de extensión); `/workflows expand` y `/workflows collapse` fijan ese estado. `/workflows hide` retira el widget y `/workflows show` (o `/workflows` a secas) lo devuelve; el estado dura lo que el proceso OMP y se conserva al cambiar de sesión. Los runs se ordenan por completitud: primero los más cercanos a terminar. Cada línea identifica el tipo de workflow abreviado (`feat` para `feature`) y el issue, muestra el progreso por nodos, el paso actual y, cuando existe, su actividad. La CLI `gh` es opcional y añade el slug del título.
 
@@ -137,7 +138,7 @@ ejecución calcula `nuevo`, `persistente`, `resuelto` o `regresion`.
 
 La extensión despierta `OMP_SESSION_ID` en las esperas `discover`, `validate`,
 `consolidate` y `approve` con
-`[DAGU STATE] run=<id> status=waiting step=<paso> dag=discovery bundle=<version|unstamped> extension=<version> compat=<ok|incompatible|unstamped>`.
+`[DAGU STATE] run=<id> status=waiting step=<paso> dag=discovery bundle=<version|unstamped> extension=<version> compat=<ok|incompatible|unstamped> iteration=<n>`.
 
 ### Versión, sello y compatibilidad
 
