@@ -25,18 +25,22 @@ test("primary guard rejects foreign repositories and transcript namespaces, pres
   await symlink(primary, alias);
   const home = await realpath(homedir());
   const tmp = await realpath(process.env.TMPDIR || "/tmp");
-  const session = (repo: string) => join(home, ".omp", "agent", "sessions", encodePrimary(repo, home, tmp), "date_session");
+  // omp's SessionManager.getSessionDir() returns the per-primary bucket that holds the transcripts.
+  const session = (repo: string) => join(home, ".omp", "agent", "sessions", encodePrimary(repo, home, tmp));
+  const profileSession = join(home, ".omp", "profiles", "coordinador", "agent", "sessions", encodePrimary(primary, home, tmp));
   const original = globalThis.fetch;
   globalThis.fetch = async () => new Response(JSON.stringify({ dagRunDetails: { params: `PRIMARY=${primary}` } }));
   t.after(() => { globalThis.fetch = original; });
-  for (const [cwd, dir] of [[foreign, session(foreign)], [linked, session(linked)], [primary, session(foreign)]]) {
+  for (const [cwd, dir] of [[foreign, session(foreign)], [linked, session(linked)], [primary, session(foreign)], [primary, profileSession], [primary, `${session(primary)}-other`]]) {
     const decision = await primarySessionDecision(event, { cwd: cwd!, sessionManager: { getSessionDir: () => dir! } });
     assert.ok(decision && "block" in decision);
     assert.ok(decision.reason.includes(primary));
+    assert.ok(decision.reason.includes(session(primary)));
     assert.match(decision.reason, /omp -p --cwd/);
   }
   for (const cwd of [primary, alias, linked]) {
     assert.equal(await primarySessionDecision(event, { cwd, sessionManager: { getSessionDir: () => session(primary) } }), undefined);
+    assert.equal(await primarySessionDecision(event, { cwd, sessionManager: { getSessionDir: () => join(session(primary), "date_session") } }), undefined);
   }
   const handlers: Record<string, Function> = {};
   extension({ on(name: string, handler: Function) { handlers[name] = handler; } });

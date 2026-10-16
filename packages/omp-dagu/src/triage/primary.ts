@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { realpath } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { join, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import { runParam } from "../status/progress.ts";
 import type { RunDetails } from "../status/progress.ts";
@@ -47,8 +47,8 @@ export async function primarySessionDecision(event: Event, ctx: SessionContext):
     ]);
     const sessionDir = resolve(ctx.sessionManager.getSessionDir());
     const expectedDir = join(home, ".omp", "agent", "sessions", encodePrimary(expected, home, tmp));
-    if (primaryRepo === sessionRepo && dirname(sessionDir) === expectedDir) return undefined;
-    return { block: true, reason: `TRIAGE_PRIMARY_MISMATCH: Expected primary ${expected}. Open the coordinator in that repository with omp -p --cwd '${expected.replace(/'/g, "'\\''")}' or an Orca tab there, then coordinate the run from that session. Session transcript directory ${basename(dirname(sessionDir))} does not match this run's PRIMARY.` };
+    if (primaryRepo === sessionRepo && (sessionDir === expectedDir || sessionDir.startsWith(`${expectedDir}${sep}`))) return undefined;
+    return { block: true, reason: `TRIAGE_PRIMARY_MISMATCH: Expected primary ${expected}. Open the coordinator in that repository with omp -p --cwd '${expected.replace(/'/g, "'\\''")}' or an Orca tab there, then coordinate the run from that session. Session transcript directory ${sessionDir} is not ${expectedDir}, the default-profile transcript namespace that triage_decision verifies.` };
   } catch (error) {
     return { block: true, reason: `TRIAGE_PRIMARY_CHECK_FAILED: Cannot verify session for ${expected}: ${error instanceof Error ? error.message : String(error)}. Open the coordinator in that primary repository (omp -p --cwd <primary> or an Orca tab there) and retry.` };
   }
