@@ -93,7 +93,7 @@ async function streamTopics(base: string, topics: string[], signal: AbortSignal,
   const url = new URL(`${base}/api/v1/events/stream`);
   for (const topic of topics) url.searchParams.append("topic", topic);
   const headers = new AbortController();
-  const headerTimer = setTimeout(() => headers.abort(), 5000);
+  const headerTimer = setTimeout(() => headers.abort(new DOMException("SSE headers timed out", "TimeoutError")), 5000);
   let response: Response;
   try { response = await fetch(url, { signal: AbortSignal.any([signal, headers.signal]) }); }
   finally { clearTimeout(headerTimer); }
@@ -147,6 +147,14 @@ async function watchNotices(base: string, repo: string, ctx: Context, signal: Ab
   }
 }
 
+function isTimeout(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const failure = error as { name?: string; code?: string; cause?: unknown };
+  return failure.name === "TimeoutError"
+    || ["ETIMEDOUT", "UND_ERR_CONNECT_TIMEOUT", "UND_ERR_HEADERS_TIMEOUT", "UND_ERR_BODY_TIMEOUT"].includes(failure.code ?? "")
+    || (failure.cause !== error && isTimeout(failure.cause));
+}
+
 async function observe(ctx: Context, signal: AbortSignal, wake: (message: string) => void, view: WidgetView): Promise<void> {
   const repo = await resolveRepository(ctx.cwd, signal);
   if (!repo || signal.aborted) return;
@@ -161,20 +169,23 @@ async function observe(ctx: Context, signal: AbortSignal, wake: (message: string
   try { sessionDir = ctx.sessionManager.getSessionDir?.(); } catch {}
   let initialSweep = true;
   let offlineRetrySeconds: number | undefined;
+  let slow = false;
   const render = (): void => {
     if (!ctx.hasUI) return;
     if (view.hidden) {
       ctx.ui.setWidget("dagu-status", undefined);
       return;
     }
-    const lines = offlineRetrySeconds !== undefined
-      ? renderOffline(ctx.ui.theme, offlineRetrySeconds)
-      : renderWidget([...runs.values()].map(run => {
-        const issue = issueNumber(run);
-        const slug = issue ? titles.get(issue) : undefined;
-        const activity = activities.get(topicFor(run));
-        return { run, ...(slug ? { slug } : {}), ...(activity ? { activity } : {}) };
-      }), ctx.ui.theme, view.expanded);
+    const runLines = renderWidget([...runs.values()].map(run => {
+      const issue = issueNumber(run);
+      const slug = issue ? titles.get(issue) : undefined;
+      const activity = activities.get(topicFor(run));
+      return { run, ...(slug ? { slug } : {}), ...(activity ? { activity } : {}) };
+    }), ctx.ui.theme, view.expanded);
+    const lines = offlineRetrySeconds === undefined ? runLines
+      : slow
+        ? [ctx.ui.theme.fg("dim", `dagu · lento · reintentando en ${offlineRetrySeconds}s`), ...(runLines ?? [])]
+        : renderOffline(ctx.ui.theme, offlineRetrySeconds);
     ctx.ui.setWidget("dagu-status", lines, { placement: "aboveEditor" });
   };
   view.render = render;
@@ -233,14 +244,7 @@ async function observe(ctx: Context, signal: AbortSignal, wake: (message: string
     try {
       const discovered = await discover(base, repo, roundSignal);
       offlineRetrySeconds = undefined;
-      const snapshots = await Promise.all(discovered.map(async summary => {
-        try {
-          return await runDetails(base, summary, roundSignal);
-        } catch {
-          const previous = runs.get(topicFor(summary));
-          return { ...previous, ...summary, ...(previous?.nodes ? { nodes: previous.nodes } : {}) };
-        }
-      }));
+      const snapshots = await Promise.all(discovered.map(summary => runDetails(base, summary, roundSignal)));
       const snapshotTopics = new Set<string>();
       for (const run of snapshots) snapshotTopics.add(topicFor(run));
       for (const topic of runs.keys()) {
@@ -289,15 +293,17 @@ async function observe(ctx: Context, signal: AbortSignal, wake: (message: string
       // Dagu 2.20.1 accepts 20 topics per SSE connection; 21 returns HTTP 503 `unable to open SSE stream`.
       const topics = [...runs.keys()];
       const streams: Promise<void>[] = [];
+      let streamFailure: unknown;
       for (let index = 0; index < topics.length; index += 20) {
         streams.push(streamTopics(base, topics.slice(index, index + 20), roundSignal, emit)
-          .catch(error => { round.abort(); throw error; }));
+          .catch(error => { streamFailure ??= error; round.abort(); throw error; }));
       }
       const results = await Promise.allSettled(streams);
-      if (results.some(result => result.status === "rejected")) throw new Error("Conexión SSE interrumpida");
-    } catch {
+      if (results.some(result => result.status === "rejected")) throw streamFailure;
+    } catch (error) {
       if (!signal.aborted && !refresh) {
         offlineRetrySeconds = backoff / 1000;
+        slow = isTimeout(error);
         render();
         await delay(backoff, undefined, { signal }).catch(() => {});
         backoff = Math.min(backoff * 2, 30_000);
