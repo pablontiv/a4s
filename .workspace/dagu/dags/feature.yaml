@@ -465,6 +465,9 @@ steps:
 
   - id: implement
     depends: recover_start_gate
+    preconditions:
+      - condition: "${steps.triage.outputs.POC}"
+        expected: "no"
     action: human.task
     with:
       prompt: "Deliver the files for issue #${ISSUE} inside ${WORKTREE} on ${BRANCH}, plus SUMMARY and a conventional MESSAGE. Dagu stages and commits the delivery. After conflict push-back, resolve the files listed in <git-dir>/dagu-feature/runs/${RUN}/conflict-files in place in this same worktree and branch; Dagu has prepared the new base and conflict markers. Git and Dagu-store access remains an advisory trust boundary."

@@ -1282,7 +1282,8 @@ for (const [name, definition] of definitions) {
   }, async (t) => {
     assert.match(daguAvailable.stdout, /2\.20\.1/);
     const fixture = await recoveryFixture();
-    const { root, home, env, state } = fixture;
+    const { root, home, port, env, until, state } = fixture;
+    const api = `http://127.0.0.1:${port}/api/v1`;
     try {
       for (const mode of ["healthy", "gate", "start_gate", "push"] as const) {
         await t.test(`integrated recovery ${mode}`, async () => {
@@ -1308,19 +1309,21 @@ for (const [name, definition] of definitions) {
             mkdirSync(dirname(pocDefinition), { recursive: true });
             writeFileSync(pocDefinition, "steps:\n  - id: experiment\n    run: echo isolated-poc\n");
             const source = readFileSync(definition, "utf8");
-            const triage = `  - id: triage\n    run: |\n      printf 'POC=${mode === "poc" ? "yes" : "no"}\\nQUESTION=runtime behavior\\nBASIS=regression test\\nREVIEW=fixture\\n' >> "$DAGU_OUTPUT_FILE"\n    outputs:\n      - name: POC\n      - name: QUESTION\n      - name: BASIS\n      - name: REVIEW\n`;
+            const triage = mode === "poc" ? extractStep(source, "triage") : `  - id: triage\n    run: |\n      printf 'POC=no\\nQUESTION=runtime behavior\\nBASIS=regression test\\nREVIEW=fixture\\n' >> "$DAGU_OUTPUT_FILE"\n    outputs:\n      - name: POC\n      - name: QUESTION\n      - name: BASIS\n      - name: REVIEW\n`;
             // Reviewer verification and implementation/merge are outside this routing test.
             // Keep the production start/close gates, conditional checkpoints and exit handler.
             const decision = mode === "poc" ? extractStep(source, "triage_decision")
               : "  - id: triage_decision\n    depends: triage\n    run: echo reviewed-implementation\n";
-            const implementation = `  - id: implement\n    depends: start_gate\n    run: ${mode === "implementation-blocked" ? 'printf "operator changes\\n" > "$PRIMARY/README.txt"' : "echo implementation"}\n  - id: await_merge\n    depends: implement\n    run: echo merged\n`;
+            const implementation = mode === "poc"
+              ? extractStep(source, "implement") + "  - id: await_merge\n    depends: implement\n    run: echo merged\n"
+              : `  - id: implement\n    depends: start_gate\n    run: ${mode === "implementation-blocked" ? 'printf "operator changes\\n" > "$PRIMARY/README.txt"' : "echo implementation"}\n  - id: await_merge\n    depends: implement\n    run: echo merged\n`;
             const script = [
               "type: graph\nshell: bash\nmax_active_steps: 1\n",
               `params:\n  - ISSUE: "189"\n  - PRIMARY: ${repo.primary}\n  - BRANCH: ${repo.branch}\n  - BASE_BRANCH: main\n  - PR_NUMBER: ""\n  - GATE: "true"\n  - REQUIRED_CHECK: validate\n  - OMP_SESSION_ID: close-owner\n`,
               `env:\n  - PATH: ${join(repo.root, "bin")}:${process.env.PATH}\n  - WORKTREE: ${repo.worktree}\n  - RUN: \${context.run.id}\n  - DAGU_FEATURE_BUNDLE: test\n`,
               source.slice(source.indexOf("  - DAGU_RESOURCE_GUARD: |"), source.indexOf("steps:\n")),
-              "steps:\n", triage, decision,
-              ...["detect_start_primary", "start_primary_unavailable", "start_gate"].map(id => extractStep(source, id)),
+              "steps:\n", ...(mode === "poc" ? [extractStep(source, "admit")] : []), triage, decision,
+              ...["detect_start_primary", "start_primary_unavailable", "start_gate", ...(mode === "poc" ? ["recover_start_gate"] : [])].map(id => extractStep(source, id)),
               implementation,
               ...["detect_close_primary", "close_primary_unavailable", "close_gate"].map(id => extractStep(source, id)),
               "handler_on:\n", source.slice(source.indexOf("  exit:\n")),
@@ -1334,6 +1337,28 @@ for (const [name, definition] of definitions) {
             }).trim();
             const id = `${mode}-${randomUUID()}`;
             dagu("enqueue", "--run-id", id, dag);
+            if (mode === "poc") {
+              await state(id, "waiting");
+              dagu("human-task", "complete", "feature", "--run-id", id, "--step", "triage",
+                "--input", "POC=yes", "--input", "QUESTION=runtime behavior", "--input", "BASIS=regression test");
+              const routed = await until("PoC parent finishes instead of waiting at implement", async () => {
+                const response = await fetch(`${api}/dag-runs/feature/${id}`);
+                if (!response.ok) return undefined;
+                const detail = (await response.json() as { dagRunDetails: LiveDetail }).dagRunDetails;
+                assert.notEqual(detail.nodes.find(node => node.step.name === "implement")?.statusLabel, "waiting",
+                  "POC=yes parent must skip implement");
+                return detail.statusLabel === "succeeded" ? detail : undefined;
+              });
+              assert.equal(routed.nodes.find(node => node.step.name === "implement")?.statusLabel, "skipped");
+              const replacement = `replacement-${randomUUID()}`;
+              dagu("enqueue", "--run-id", replacement, dag);
+              const admitted = await state(replacement, "waiting");
+              assert.equal(admitted.nodes.find(node => node.step.name === "admit")?.statusLabel, "succeeded");
+              assert.equal(admitted.nodes.find(node => node.step.name === "triage")?.statusLabel, "waiting");
+              dagu("human-task", "complete", "feature", "--run-id", replacement, "--step", "triage",
+                "--input", "POC=yes", "--input", "QUESTION=runtime behavior", "--input", "BASIS=regression test");
+              await state(replacement, "succeeded");
+            }
             if (mode === "implementation-blocked") {
               const waiting = await state(id, "waiting");
               assert.equal(waiting.nodes.find(node => node.step.name === "close_primary_unavailable")?.statusLabel, "waiting");

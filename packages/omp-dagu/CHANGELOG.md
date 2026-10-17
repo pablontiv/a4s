@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.21
+
+- Finish PoC-routed feature parents with implementation skipped so promoted runs can acquire the issue after terminal ownership handoff (#344).
+
 ## 0.3.20
 
 - Sign captured candidate commits according to repository Git signing configuration while retaining deterministic dates and identical-candidate reuse (#343).
