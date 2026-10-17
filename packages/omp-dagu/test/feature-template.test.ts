@@ -367,6 +367,47 @@ for (const [name, definition] of definitions) {
     });
   }
 
+  test(`${name} checkpoint leases preserve the PR head and push publishes only a fresh gated SHA`, () => {
+    const repo = repository();
+    try {
+      stubGh(repo, "", 1);
+      const remote = join(repo.root, "remote.git");
+      const ref = "refs/dagu/checkpoints/issue-189";
+      git(repo.worktree, "push", "origin", `HEAD:refs/heads/${repo.branch}`);
+      const original = git(remote, "rev-parse", `refs/heads/${repo.branch}`);
+      commit(repo, "README.txt", "candidate\n");
+      const candidate = git(repo.worktree, "rev-parse", "HEAD");
+      runScript(checkpointScript, repo);
+      assert.equal(git(remote, "rev-parse", ref), candidate);
+      assert.equal(readFileSync(join(repo.state, "checkpoint-sha"), "utf8"), `${candidate}\n`);
+      assert.equal(git(remote, "rev-parse", `refs/heads/${repo.branch}`), original);
+      const push = extractScript(definition, "  - id: push");
+      const attempt = () => spawnSync("bash", ["-c", push], { encoding: "utf8", env: featureScriptEnv(repo) });
+      assert.match(attempt().stderr, /no gated candidate/);
+      const gateScript = extractScript(definition, "  - id: gate");
+      const gateOptions = { encoding: "utf8", env: { ...featureScriptEnv(repo), GATE: "true" } } as const;
+      assert.equal(spawnSync("bash", ["-c", gateScript], gateOptions).status, 0);
+      commit(repo, "README.txt", "changed after gate\n");
+      const stale = attempt();
+      assert.equal(stale.status, 1);
+      assert.match(stale.stderr, /stale candidate.*revalidation required/);
+      assert.equal(git(remote, "rev-parse", `refs/heads/${repo.branch}`), original);
+      git(remote, "update-ref", ref, original);
+      const rejected = spawnSync("bash", ["-c", checkpointScript], { encoding: "utf8", env: featureScriptEnv(repo) });
+      assert.notEqual(rejected.status, 0);
+      assert.match(rejected.stderr, /stale info/);
+      assert.equal(git(remote, "rev-parse", ref), original);
+      assert.equal(readFileSync(join(repo.state, "checkpoint-sha"), "utf8"), `${candidate}\n`);
+      git(remote, "update-ref", ref, candidate);
+      runScript(checkpointScript, repo);
+      assert.equal(spawnSync("bash", ["-c", gateScript], gateOptions).status, 0);
+      runScript(push, repo);
+      assert.equal(git(remote, "rev-parse", `refs/heads/${repo.branch}`), git(repo.worktree, "rev-parse", "HEAD"));
+    } finally {
+      rmSync(repo.root, { recursive: true, force: true });
+    }
+  });
+
   for (const [kind, gate, statusLine] of [
     ["tracked", "printf 'changed\\n' >> README.txt", " M README.txt"],
     ["untracked", "touch generated.txt", "?? generated.txt"],
@@ -636,6 +677,8 @@ esac
       assert.match(output, new RegExp(`worktree ${repo.worktree.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
       assert.match(output, /Terminal failure outside recovery checkpoints/);
       assert.match(output, /available for operator recovery/);
+      assert.match(output, /Recovery: fetch refs\/dagu\/checkpoints/);
+      assert.match(output, /suffixed run ID/);
     } finally {
       rmSync(repo.root, { recursive: true, force: true });
     }
@@ -675,6 +718,7 @@ esac
       assert.equal(existsSync(repo.worktree), true);
       assert.match(output, /Unpublished work kept/);
       assert.match(output, /Terminal failure outside recovery checkpoints/);
+      assert.match(output, /Recovery: fetch refs\/dagu\/checkpoints/);
     } finally {
       rmSync(repo.root, { recursive: true, force: true });
     }
@@ -692,6 +736,27 @@ esac
     } finally {
       rmSync(repo.root, { recursive: true, force: true });
     }
+  });
+
+  test(`${name} checkpoint recovery retains the exact failed-gate candidate after exit`, () => {
+    const repo = repository();
+    try {
+      stubGh(repo, "", 1);
+      commit(repo, "README.txt", "recoverable candidate\n");
+      const head = git(repo.worktree, "rev-parse", "HEAD");
+      runScript(checkpointScript, repo);
+      const failed = spawnSync("bash", ["-c", gateScript], {
+        encoding: "utf8", env: { ...featureScriptEnv(repo), GATE: "false" },
+      });
+      assert.notEqual(failed.status, 0);
+      runScript(exitScript, repo);
+      assert.equal(existsSync(repo.worktree), false);
+      const recovery = join(repo.root, "recovery");
+      execFileSync("git", ["clone", join(repo.root, "remote.git"), recovery], { stdio: "pipe" });
+      git(recovery, "fetch", "origin", "refs/dagu/checkpoints/issue-189");
+      assert.equal(git(recovery, "rev-parse", "FETCH_HEAD"), head);
+      git(recovery, "cat-file", "-e", `${head}^{commit}`);
+    } finally { rmSync(repo.root, { recursive: true, force: true }); }
   });
 
   test(`${name} exit cleans a published head`, () => {
@@ -1167,11 +1232,19 @@ async function runRecovery(fixture: RecoveryFixture, definition: string, mode: R
     if (mode === "start_gate") git(repo.primary, "remote", "set-url", "origin", join(repo.root, "unavailable.git"));
     const bin = join(repo.root, "bin");
     mkdirSync(bin, { recursive: true });
-    writeFileSync(join(bin, "gh"), `#!/bin/sh\nprintf '%s\\n' "$*" >> '${repo.root}/gh.log'\nprintf '{"number":189,"url":"https://example.test/pr/189"}\\n'\n`);
+    writeFileSync(join(bin, "gh"), `#!/bin/sh
+printf '%s\\n' "$*" >> '${repo.root}/gh.log'
+case "$*" in
+  *"--jq .state"*) printf 'OPEN\\n' ;;
+  *"--jq .headRefName"*) printf '%s\\n' '${repo.branch}' ;;
+  *"--jq .headRefOid"*) git -C '${repo.worktree}' rev-parse HEAD ;;
+  *) printf '{"number":189,"url":"https://example.test/pr/189"}\\n' ;;
+esac
+`);
     chmodSync(join(bin, "gh"), 0o755);
     if (mode === "push") {
       const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
-      writeFileSync(join(bin, "git"), `#!/bin/sh\ncase " $* " in *" push "*)\nif ! test -f '${repo.root}/allow-push'; then echo 'push: simulated remote access failure' >&2; exit 1; fi\n;;\nesac\nexec '${realGit}' "$@"\n`);
+      writeFileSync(join(bin, "git"), `#!/bin/sh\ncase " $* " in *" push "*refs/heads/*)\nif ! test -f '${repo.root}/allow-push'; then echo 'push: simulated remote access failure' >&2; exit 1; fi\n;;\nesac\nexec '${realGit}' "$@"\n`);
       chmodSync(join(bin, "git"), 0o755);
     }
     const source = readFileSync(definition, "utf8");

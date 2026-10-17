@@ -681,6 +681,16 @@ steps:
       else
         printf 'complete\n' > "$STATE/dependency-action"
       fi
+      sha=$(git -C "$WORKTREE" rev-parse HEAD)
+      ref="refs/dagu/checkpoints/issue-$ISSUE"
+      if test -f "$STATE/checkpoint-sha"; then
+        expected=$(cat "$STATE/checkpoint-sha")
+      else
+        expected=$(git -C "$WORKTREE" ls-remote origin "$ref" | cut -f1)
+      fi
+      git -C "$WORKTREE" push "--force-with-lease=$ref:$expected" origin "$sha:$ref"
+      printf '%s\n' "$sha" > "$STATE/checkpoint-sha"
+      printf 'checkpoint_sha=%s\n' "$sha"
 
   - id: dependency_review
     depends: checkpoint_push
@@ -840,12 +850,18 @@ steps:
       set -euo pipefail
       umask 0022
       STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")
+      test -s "$STATE/gate.json" || { echo "push: no gated candidate; run gate first" >&2; exit 1; }
+      gated=$(jq -r .sha "$STATE/gate.json")
+      candidate=$(git -C "$WORKTREE" rev-parse HEAD)
+      test "$candidate" = "$gated" || { printf 'push: stale candidate HEAD=%s gated=%s; revalidation required\n' "$candidate" "$gated" >&2; exit 1; }
       sha=$(jq -r .sha "$STATE/candidate.json")
       test "$(git -C "$WORKTREE" branch --show-current)" = "$BRANCH"
       test "$(git -C "$WORKTREE" rev-parse HEAD)" = "$sha"
       test -z "$(git -C "$WORKTREE" status --porcelain)"
       jq -e --arg sha "$sha" --arg gate "$GATE" '.sha == $sha and .gate == $gate' "$STATE/gate.json" >/dev/null
-      git -C "$WORKTREE" push --force-with-lease --set-upstream origin "$sha:refs/heads/$BRANCH"
+      remote_ref="refs/heads/$BRANCH"
+      expected=$(git -C "$WORKTREE" ls-remote origin "$remote_ref" | cut -f1)
+      git -C "$WORKTREE" push "--force-with-lease=$remote_ref:$expected" --set-upstream origin "$sha:$remote_ref"
 
   - id: recover_push
     depends: push
@@ -870,11 +886,16 @@ steps:
       test "$(git rev-parse HEAD)" = "$sha"
       test -z "$(git status --porcelain)"
       jq -e --arg sha "$sha" --arg gate "$GATE" '.sha == $sha and .gate == $gate' "$STATE/gate.json" >/dev/null
+      test "$(git ls-remote origin "refs/heads/$BRANCH" | cut -f1)" = "$sha"
       if test -n "$PR_NUMBER"; then
         test "$(gh pr view "$PR_NUMBER" --json state --jq .state)" = OPEN
         test "$(gh pr view "$PR_NUMBER" --json headRefName --jq .headRefName)" = "$BRANCH"
+        test "$(gh pr view "$PR_NUMBER" --json headRefOid --jq .headRefOid)" = "$sha"
         gh pr view "$PR_NUMBER" --json number,url,headRefOid
       elif gh pr view "$BRANCH" --json number >/dev/null 2>&1; then
+        test "$(gh pr view "$BRANCH" --json state --jq .state)" = OPEN
+        test "$(gh pr view "$BRANCH" --json headRefName --jq .headRefName)" = "$BRANCH"
+        test "$(gh pr view "$BRANCH" --json headRefOid --jq .headRefOid)" = "$sha"
         gh pr view "$BRANCH" --json number,url,headRefOid
       else
         gh pr create --base "$BASE_BRANCH" --head "$BRANCH" --fill --body "Closes #${ISSUE}"
@@ -1030,6 +1051,12 @@ steps:
           fail "remote branch $BRANCH deletion failed, expected removed"
         remote=deleted
       fi
+      checkpoint="refs/dagu/checkpoints/issue-$ISSUE"
+      checkpoint_sha=$(git -C "$PRIMARY" ls-remote origin "$checkpoint" | cut -f1)
+      if test -n "$checkpoint_sha"; then
+        git -C "$PRIMARY" push "--force-with-lease=$checkpoint:$checkpoint_sha" origin ":$checkpoint" ||
+          fail "checkpoint $checkpoint deletion failed"
+      fi
       git -C "$PRIMARY" fetch --prune origin ||
         fail "origin final prune failed, expected success"
       worktree_list=$(git -C "$PRIMARY" worktree list --porcelain) ||
@@ -1113,6 +1140,13 @@ handler_on:
         head=$(git -C "$PRIMARY" rev-parse "refs/heads/$BRANCH")
         if git -C "$PRIMARY" fetch --prune origin; then
           pr_ref=${PR_NUMBER:-$BRANCH}
+          checkpoint="refs/dagu/checkpoints/issue-$ISSUE"
+          checkpoint_sha=$(git -C "$PRIMARY" ls-remote origin "$checkpoint" | cut -f1)
+          if test "$checkpoint_sha" = "$head" &&
+             git -C "$PRIMARY" fetch origin "$checkpoint" &&
+             test "$(git -C "$PRIMARY" rev-parse FETCH_HEAD)" = "$head"; then
+            published=true
+          fi
           if git -C "$PRIMARY" show-ref --verify --quiet "refs/remotes/origin/$BRANCH" &&
              git -C "$PRIMARY" merge-base --is-ancestor "$head" "origin/$BRANCH"; then
             published=true
@@ -1149,4 +1183,5 @@ handler_on:
       else
         printf 'Unpublished work kept: branch %s; worktree %s\n' "$BRANCH" "$WORKTREE"
         printf 'Terminal failure outside recovery checkpoints: inspect step logs; preserved branch %s and worktree %s are available for operator recovery.\n' "$BRANCH" "$WORKTREE"
+        printf 'Recovery: fetch refs/dagu/checkpoints/issue-%s from origin, then re-enqueue this issue with a suffixed run ID.\n' "$ISSUE"
       fi
