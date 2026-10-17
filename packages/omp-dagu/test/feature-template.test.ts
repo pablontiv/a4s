@@ -455,6 +455,7 @@ for (const [name, definition] of definitions) {
       const argsFile = join(repo.root, "merge-args");
       writeFileSync(executable, `#!/bin/sh
 case "$*" in
+  "pr view ${repo.branch} --json headRefOid --jq .headRefOid") printf '${sha}\\n' ;;
   "pr view ${repo.branch} --json state,mergeStateStatus,autoMergeRequest,mergeCommit,headRefOid")
     ${"ghError" in scenario ? "printf 'gh failure\\n' >&2; exit 17" : `printf '%s\\n' '${JSON.stringify({
       state: "state" in scenario ? scenario.state : "OPEN",
@@ -498,6 +499,57 @@ esac
       rmSync(repo.root, { recursive: true, force: true });
     }
   });
+  }
+
+  for (const converges of [true, false]) {
+    test(`${name} auto_merge ${converges ? "waits for the pushed head" : "reports expected and last observed heads on expiry"}`, () => {
+      const repo = repository();
+      try {
+        const sha = git(repo.worktree, "rev-parse", "HEAD");
+        recordCandidate(repo);
+        runScript(extractScript(definition, "  - id: gate"), repo);
+        const oldSha = "b".repeat(40);
+        const bin = join(repo.root, "bin");
+        mkdirSync(bin, { recursive: true });
+        const reads = join(repo.root, "head-reads");
+        const sleeps = join(repo.root, "sleeps");
+        const merged = join(repo.root, "merged");
+        writeFileSync(join(bin, "gh"), `#!/bin/sh
+case "$*" in
+  "pr view ${repo.branch} --json headRefOid --jq .headRefOid")
+    n=0; test ! -f "${reads}" || n=$(cat "${reads}")
+    n=$((n + 1)); printf '%s' "$n" > "${reads}"
+    if ${converges ? "true" : "false"} && test "$n" -ge 3; then
+      printf '${sha}\\n'
+    else
+      printf '${oldSha}\\n'
+    fi ;;
+  "pr view ${repo.branch} --json state,mergeStateStatus,autoMergeRequest,mergeCommit,headRefOid")
+    printf '%s\\n' '${JSON.stringify({ state: "OPEN", mergeStateStatus: "BLOCKED", autoMergeRequest: null, mergeCommit: null, headRefOid: sha })}' ;;
+  "pr view ${repo.branch} --json number --jq .number") printf '190\\n' ;;
+  "pr merge "*) printf '%s\\n' "$*" > "${merged}" ;;
+  *) exit 1 ;;
+esac
+`);
+        writeFileSync(join(bin, "sleep"), `#!/bin/sh\nprintf '%s\\n' "$*" >> "${sleeps}"\n`);
+        chmodSync(join(bin, "gh"), 0o755);
+        chmodSync(join(bin, "sleep"), 0o755);
+        const result = spawnSync("bash", ["-c", autoMergeScript], {
+          encoding: "utf8", env: featureScriptEnv(repo),
+        });
+        assert.equal(readFileSync(reads, "utf8"), converges ? "3" : "13");
+        assert.deepEqual(readFileSync(sleeps, "utf8").trim().split("\n"), Array(converges ? 2 : 12).fill("5"));
+        if (converges) {
+          assert.equal(result.status, 0, result.stderr);
+          assert.match(readFileSync(merged, "utf8"), new RegExp(`--auto --squash --match-head-commit ${sha}`));
+        } else {
+          assert.notEqual(result.status, 0);
+          assert.match(result.stderr, new RegExp(`auto_merge: PR head did not converge after 60s: expected ${sha}, last observed ${oldSha}`));
+        }
+      } finally {
+        rmSync(repo.root, { recursive: true, force: true });
+      }
+    });
   }
 
   test(`${name} close_gate reports a PRIMARY outside BASE_BRANCH`, () => {

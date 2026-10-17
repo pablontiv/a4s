@@ -661,6 +661,17 @@ steps:
       test -z "$(git status --porcelain)"
       jq -e --arg sha "$sha" --arg gate "$GATE" '.sha == $sha and .gate == $gate' "$STATE/gate.json" >/dev/null
       pr_ref=${PR_NUMBER:-$BRANCH}
+      for ((attempt = 0; attempt <= 12; attempt++)); do
+        observed_sha=$(gh pr view "$pr_ref" --json headRefOid --jq .headRefOid)
+        if test "$observed_sha" = "$sha"; then
+          break
+        fi
+        if test "$attempt" -eq 12; then
+          printf 'auto_merge: PR head did not converge after 60s: expected %s, last observed %s\n' "$sha" "$observed_sha" >&2
+          exit 1
+        fi
+        sleep 5
+      done
       observation=$(gh pr view "$pr_ref" --json state,mergeStateStatus,autoMergeRequest,mergeCommit,headRefOid)
       test "$(jq -r '.headRefOid' <<< "$observation")" = "$sha"
       merge_body=$(printf 'Closes #%s\n\n%s' "$ISSUE" "$(git log -1 --format=%b "$sha")")
