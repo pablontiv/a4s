@@ -190,7 +190,7 @@ export class Transitions {
         if (!node.step.humanTask || node.statusLabel !== "waiting") continue;
         const step = node.step.id ?? node.step.name;
         const iteration = node.approvalIteration ?? 0;
-        const cause = step.endsWith("_primary_unavailable") && node.step.humanTask.prompt
+        const cause = (step.endsWith("_primary_unavailable") || step.startsWith("recover_")) && node.step.humanTask.prompt
           ? ` cause=${plain(node.step.humanTask.prompt)}` : "";
         notice(JSON.stringify([key, step, iteration]),
           `[DAGU STATE] run=${plain(run.dagRunId)} status=waiting step=${plain(step)}${identity}${bundleNotice} iteration=${iteration}${cause}`);

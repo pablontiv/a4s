@@ -12,7 +12,9 @@ flowchart LR
     T[triage<br/>human.task<br/>coordinator reviewer] --> TD[triage_decision]
     TD -->|POC=yes: enqueue and finish| P[poc]
     TD -->|POC=no + REVIEW| A[start_gate]
-    A --> B[implement<br/>human.task<br/>issue subagent]
+    A --> AS[recover_start_gate]
+    AS -->|healthy: skipped| B[implement<br/>human.task<br/>issue subagent]
+    AS -->|operator repair: push-back| A
     B --> CP[capture<br/>Dagu commit] --> C[checkpoint_push]
     C --> N[dependency_review]
     N -->|new dependencies: push-back| T
@@ -20,8 +22,12 @@ flowchart LR
     D --> R[conflict_review<br/>human.task]
     R -->|conflict: push-back| B
     R -->|clean rebase| E[gate]
-    E --> F[push]
-    F --> G[pr]
+    E --> ER[recover_gate]
+    ER -->|code failure: push-back| B
+    ER -->|healthy: skipped| F[push]
+    F --> FR[recover_push]
+    FR -->|operator repair: push-back| F
+    FR -->|healthy: skipped| G[pr]
     G --> I[auto_merge]
     I --> J[await_merge<br/>human.task<br/>queue slot released]
     J -->|MERGED: complete| K[close_gate]
@@ -239,10 +245,10 @@ Use `close_primary_unavailable` for closing, or DAG `poc` and
 unavailable primary waits again, while a clean primary skips the checkpoint and
 continues in the same run. Cleaning alone leaves it Waiting. The DAG owns worktree
 creation/removal and BASE_SHA capture. `await_merge` remains reconciler-owned.
-PRIMARY must still be the main clone, not a linked worktree. Fetch failures and
-ff-only/divergence failures remain terminal with diagnostics: the operator restores
-remote access or reconciles commits preserving their work, then uses terminal-run
-recovery below. The coordinator leaves commit repair to the operator.
+PRIMARY must still be the main clone, not a linked worktree. Feature `start_gate`
+fetch and ff-only failures wait at `recover_start_gate`: the operator restores
+remote access or reconciles commits preserving their work, then pushes back to
+retry that step. PoC `base` and feature `close_gate` command failures remain terminal.
 
 Dagu snapshots the definition when you enqueue. Later edits to the file do not affect runs that already exist.
 
@@ -275,16 +281,36 @@ Literal removal calls pass for terminal/unowned resources while PRIMARY remains
 protected. An interrupted process can leave a resource lock; the operator
 inspects the recorded owner and process before recovering that lock.
 
-A failed or aborted run is terminal. If its head has not crossed the `push`
-publication boundary, `handler_on.exit` keeps the local branch and worktree and
-prints both recovery locations. Recover directly in that worktree, then push the
-kept branch and enqueue a new run with a suffixed ID
-(`<repo>-issue-<n>-v2`). If the worktree must be recreated, preserve the kept
-commit first with `git branch <branch> <sha>`. Once `push` has
-published the head, or GitHub reports its PR merged with that exact head SHA,
-the exit handler may remove the local worktree and branch. Restore a published
-but unmerged branch with `git fetch origin && git branch <branch> origin/<branch>`
-before reenqueuing. Pass `PR_NUMBER` when a PR already exists for the branch.
+`start_gate`, `gate` and `push` retain failures in this run at
+`recover_start_gate`, `recover_gate` and `recover_push`. Healthy commands skip
+their checkpoint. Inspect the named command's logs before moving recovery.
+Read `dagu status --run-id <id> feature` immediately before every transition;
+use its run-wide `push-back iteration` (default `0` when absent):
+
+```sh
+dagu human-task push-back feature --run-id <id> \
+  --step <recover_start_gate|recover_gate|recover_push> --expected-iteration <observed-iteration>
+```
+
+`recover_gate` returns to `Waiting implement` with iteration incremented, where
+the implementation subagent repairs code/tests in the existing worktree.
+Infrastructure recovery stays operator-owned: after fixing the cause,
+`recover_start_gate` retries `start_gate` and `recover_push` retries `push`.
+Completing a recovery form bypasses its failed command; use push-back to rerun it.
+The coordinator receives notices with the checkpoint, run ID and diagnostic prompt.
+The wait handler's dependency/conflict dispatcher also reads the current iteration
+before each transition.
+
+Failures outside these checkpoints and aborted runs remain terminal. If the head
+has not crossed the `push` publication boundary, `handler_on.exit` keeps the local
+branch and worktree and prints both recovery locations. Inspect the terminal step
+logs and recover directly in that worktree, then enqueue a new run with a suffixed
+ID (`<repo>-issue-<n>-v2`). If the worktree must be recreated, preserve the kept
+commit first with `git branch <branch> <sha>`. Once `push` has published the head,
+or GitHub reports its PR merged with that exact head SHA, the exit handler may
+remove the local worktree and branch. Restore a published but unmerged branch with
+`git fetch origin && git branch <branch> origin/<branch>` before reenqueuing.
+Pass `PR_NUMBER` when a PR already exists for the branch.
 
 A failed run can leave its PR's auto-merge armed. Before reenqueuing, read
 `gh pr view <pr> --json state`: `MERGED` means the issue's delivery is complete.
@@ -342,7 +368,7 @@ The `@a4s/omp-dagu` status extension delivers hidden model context for every wai
 - On a `triage` notice, the coordinator obtains the guard generation marker and launches `task agent=triage-reviewer` itself with that marker and the fixed prompt, naming the subagent `TriageReview<ISSUE>` (or `TriageReview<ISSUE>v<N>` for a retry). Several `triage-reviewer` tasks may share one batched `task` call; each task includes its own run's generation marker. The coordinator completes `triage` with that allocated reviewer ID. A `dependency_review` push-back produces a new `triage` notice and the coordinator repeats this flow for the new generation.
 - At `run_poc`, the coordinator launches the PoC subagent as `Poc<ISSUE>`.
 - On an `implement` notice, the coordinator launches one level-1 implementation subagent named `Implement<ISSUE>` for that issue's worktree, with the contract in **Implement**. The result auto-delivers to the coordinator, which reviews the diff before completing `implement`.
-- On a `failed` or `aborted` notice, inspect the terminal run with `dagu status --run-id <id> feature`, including the named step logs, then apply the terminal-run recovery above: preserve or restore the branch as required, recover the worktree, and enqueue the suffixed replacement run.
+- On a recovery notice, inspect the failed command logs, then use the iteration-protected push-back above. Gate recovery returns to the implementation subagent; start/push infrastructure repair belongs to the operator. On a `failed` or `aborted` notice outside these checkpoints, inspect the terminal logs and preserved resources under the terminal contract above.
 - A retried subagent appends `v<N>` to its base name, for example `Implement182v2`.
 - For every issue in the fixed batch, keep one todo for the agent action at the `human.task` where its run is waiting: triage review, PoC execution, implementation, or recovery. Update that todo when the run moves to another human task. The package widget shows the active step plus live activity: the last non-empty Dagu log line for a running command, or `<tool> <intention> (<age>s)` from the newest `toolCall` in `TriageReview<ISSUE>`, `Poc<ISSUE>` or `Implement<ISSUE>` while its human task waits. Intention comes from `i`, then `title`, then the principal argument; the task name is omitted. It refreshes activity about every two seconds and leaves the line unchanged when no source is available. The `Workflows` HUD folds to three completion-ordered tree rows and expands to eight; `/workflows` toggles, `expand` and `collapse` set the fold, and `hide` and `show` control visibility across session switches.
 - Keep `task.maxRecursionDepth: 1`; every implementation and triage-reviewer subagent remains at level 1 and appears in the main view.
@@ -529,7 +555,8 @@ Give `Implement<ISSUE>` the exact `WORKTREE` path and `BRANCH`, plus this contra
    ```
 
 The run resumes through the queue: `capture` → `checkpoint_push` →
-`dependency_review` → `rebase` → `conflict_review` → `gate` → `push` → `pr` → `auto_merge`. The
+`dependency_review` → `rebase` → `conflict_review` → `gate` → `recover_gate` → `push` →
+`recover_push` → `pr` → `auto_merge`. Successful commands skip recovery. The
 dependency checkpoint automatically completes or returns to triage. A clean
 rebase makes the wait handler complete `conflict_review`; a conflicting rebase
 records the conflict paths, preserves the delivery with conflict markers, and

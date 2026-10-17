@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.16
+
+- Keep start, gate and push failures in the same feature run with recovery checkpoints, iteration-protected push-back and coordinator notices (#260).
+
 ## 0.3.15
 
 - Protect active feature/PoC resources and the primary checkout in OMP bash calls; fail closed with ownership diagnostics when history is unavailable (#215).
