@@ -891,8 +891,12 @@ test("real Dagu retries rebase after a six-second index lock", {
     assert.equal(readFileSync(join(repo.state, "conflict-action"), "utf8"), "complete\n");
   } finally {
     clearTimeout(unlock);
-    service.kill("SIGTERM");
-    await new Promise<void>(resolve => service.once("exit", () => resolve()));
+    if (service.exitCode === null && service.signalCode === null) {
+      await new Promise<void>(resolve => {
+        service.once("exit", () => resolve());
+        service.kill("SIGTERM");
+      });
+    }
     rmSync(repo.root, { recursive: true, force: true });
   }
 });
