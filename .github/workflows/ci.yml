@@ -83,6 +83,26 @@ jobs:
           mv package-lock.ci.json package-lock.json
           npm ci
           git checkout -- package-lock.json packages
+      - name: Install pinned Dagu
+        if: matrix.workspace.name == '@a4s/omp-dagu'
+        run: |
+          version=$(node -p "require('./packages/omp-dagu/package.json').daguFeature.dagu")
+          asset="dagu_${version}_linux_amd64.tar.gz"
+          url="https://github.com/dagu-org/dagu/releases/download/v${version}"
+          mkdir -p "$RUNNER_TEMP/dagu-install" "$HOME/.local/bin"
+          cd "$RUNNER_TEMP/dagu-install"
+          curl --fail --location --show-error --silent "$url/$asset" -o "$asset"
+          curl --fail --location --show-error --silent "$url/checksums.txt" -o checksums.txt
+          echo "Asset: $url/$asset"
+          awk -v asset="$asset" '$2 == asset { print; found=1 } END { if (!found) exit 1 }' checksums.txt | sha256sum --check --strict
+          tar -xzf "$asset" dagu
+          install -m 0755 dagu "$HOME/.local/bin/dagu"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Check pinned Dagu
+        if: matrix.workspace.name == '@a4s/omp-dagu'
+        run: |
+          command -v dagu
+          dagu version
       - run: npm test --workspace "${{ matrix.workspace.name }}"
       - name: Typecheck
         if: matrix.workspace.typecheck
