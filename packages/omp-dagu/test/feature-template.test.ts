@@ -106,7 +106,7 @@ function stubGh(repo: Repository, stdout: string, status: number, stderr = ""): 
   chmodSync(executable, 0o755);
 }
 
-function stubSuccessfulCloseGateGh(repo: Repository): void {
+function stubSuccessfulCloseGateGh(repo: Repository, files = "README.txt"): void {
   const head = git(repo.worktree, "rev-parse", "HEAD");
   const bin = join(repo.root, "bin");
   mkdirSync(bin, { recursive: true });
@@ -119,6 +119,7 @@ case "$*" in
   "pr view 190 --repo ${repo.root}/remote.git --json state --jq .state") printf 'MERGED\\n' ;;
   "pr view 190 --repo ${repo.root}/remote.git --json headRefOid --jq .headRefOid") printf '${head}\\n' ;;
   "pr checks 190 --repo ${repo.root}/remote.git --required --json name,state --jq "*) printf 'SUCCESS\\n' ;;
+  "pr diff 190 --repo ${repo.root}/remote.git --name-only") printf '%s\\n' ${JSON.stringify(files)} ;;
   *) printf 'unexpected gh invocation: %s\\n' "$*" >&2; exit 1 ;;
 esac
 `,
@@ -831,7 +832,8 @@ for (const [name, definition] of [
           env: { ...featureScriptEnv(repo), WORKTREE: managed, DAGU_FEATURE_BUNDLE: "test" },
         });
         assert.equal(result.status, 1);
-        assert.ok(result.stderr.includes(`${gate}: ${failure}`), result.stderr);
+        const diagnostic = gate === "base" && failure === "ff-only" ? "cause=primary_ahead" : `${gate}: ${failure}`;
+        assert.ok(result.stderr.includes(diagnostic), result.stderr);
         assert.match(result.stderr, /restore origin access|reconcile primary/);
         assert.equal(git(repo.primary, "rev-parse", "HEAD"), head);
       } finally {
@@ -1381,7 +1383,8 @@ for (const [name, definition] of definitions) {
             transitions.observe({ ...done, statusLabel: "running" }, { baseline: true });
             assert.deepEqual(transitions.observe(done), {
               notification: { message: "dagu · feature #189 succeeded", type: "info" },
-              wakeMessage: `[DAGU STATE] run=${id} status=succeeded issue=189 bundle=unstamped extension=${BUNDLE_VERSION} compat=unstamped`,
+              wakeMessage: `[DAGU STATE] run=${id} status=succeeded issue=189 bundle=unstamped extension=${BUNDLE_VERSION} main=unknown compat=stale`,
+              abortMessage: "Restart the OMP session to load main, then run the bootstrap re-seal (dagu-feature-bootstrap.yaml) and adopt its stamped renders before resuming.",
             });
             if (mode === "poc") {
               assert.match(dagu("history", "poc", "--run-id", `poc-${id}`), new RegExp(`poc-${id}`));
@@ -1468,3 +1471,164 @@ test("concurrent recovery fixtures keep distinct run identities", {
     await Promise.all([...active].map(fixture => fixture.close()));
   }
 });
+
+for (const [name, definition] of definitions) {
+  test(`${name} real Dagu checks primary freshness before admission and enqueues bootstrap after merge`, {
+    skip: daguAvailable.status !== 0 || !/2\.20\.1/.test(daguAvailable.stdout) ? "Dagu 2.20.1 binary required for live integration" : false,
+    timeout: 115_000,
+  }, async (t) => {
+    const root = mkdtempSync(join(tmpdir(), "omp-dagu-freshness-"));
+    const home = join(root, "dagu-home");
+    mkdirSync(join(home, "dags"), { recursive: true });
+    const listener = createServer();
+    await new Promise<void>(resolve => listener.listen(0, "127.0.0.1", resolve));
+    const address = listener.address();
+    assert.ok(address && typeof address !== "string");
+    const port = address.port;
+    await new Promise<void>(resolve => listener.close(() => resolve()));
+    writeFileSync(join(home, "config.yaml"), `host: 127.0.0.1\nport: ${port}\nauth:\n  mode: none\ncoordinator:\n  enabled: false\nscheduler:\n  port: 0\n`);
+    const env = { ...process.env, DAGU_HOME: home, DAGU_COORDINATOR_ENABLED: "false" };
+    const binary = execFileSync("which", ["dagu"], { encoding: "utf8" }).trim();
+    let serviceLog = "";
+    const service = spawn(binary, ["start-all", "--host", "127.0.0.1", "--port", String(port)], {
+      cwd: root, env, stdio: ["ignore", "pipe", "pipe"],
+    });
+    service.stdout.on("data", data => { serviceLog += data; });
+    service.stderr.on("data", data => { serviceLog += data; });
+    const api = `http://127.0.0.1:${port}/api/v1`;
+    async function until<T>(description: string, probe: () => Promise<T | undefined>): Promise<T> {
+      const deadline = Date.now() + 30_000;
+      while (Date.now() < deadline) {
+        const value = await probe();
+        if (value !== undefined) return value;
+        await delay(100);
+      }
+      throw new Error(`Timed out: ${description}\n${serviceLog}`);
+    }
+    const source = readFileSync(definition, "utf8");
+    async function execute(repo: Repository, step: string) {
+      const id = `freshness-${randomUUID()}`;
+      const file = join(home, "dags", "probe.yaml");
+      const scriptEnv = { ...featureScriptEnv(repo), RUN: step === "close_gate" ? "test-run" : id };
+      writeFileSync(file, [
+        "type: graph\nshell: bash\nenv:\n",
+        ...Object.entries(scriptEnv).filter((entry): entry is [string, string] => entry[1] !== undefined)
+          .map(([key, value]) => `  - ${key}: ${JSON.stringify(value)}\n`),
+        source.slice(source.indexOf("  - DAGU_RESOURCE_GUARD: |"), source.indexOf("steps:\n")),
+        "steps:\n", extractStep(source, step).replace(/^    depends:.*\n/m, ""),
+      ].join(""));
+      execFileSync(binary, ["enqueue", "--run-id", id, file], { cwd: root, env });
+      const result = await until(`${id} terminal`, async () => {
+        const response = await fetch(`${api}/dag-runs/probe/${id}`);
+        if (!response.ok) return undefined;
+        const run = (await response.json() as { dagRunDetails: { statusLabel: string; nodes: Array<{ statusLabel: string; stdout?: string; stderr?: string }> } }).dagRunDetails;
+        return ["succeeded", "failed"].includes(run.statusLabel) ? run : undefined;
+      });
+      const node = result.nodes[0]!;
+      const stdout = node.stdout ? readFileSync(node.stdout, "utf8") : "";
+      const stderr = node.stderr ? readFileSync(node.stderr, "utf8") : "";
+      return { id, status: result.statusLabel, stdout, stderr };
+    }
+    try {
+      await until("isolated Dagu ready", async () => {
+        try { return (await fetch(`${api}/dag-runs`)).ok ? true : undefined; } catch { return undefined; }
+      });
+      for (const scenario of ["equal", "behind", "fast-forward", "ahead", "version"] as const) {
+        const repo = repository();
+        try {
+          const manifest = join(repo.primary, "packages/omp-dagu/package.json");
+          mkdirSync(dirname(manifest), { recursive: true });
+          writeFileSync(manifest, JSON.stringify({ version: BUNDLE_VERSION }));
+          git(repo.primary, "add", ".");
+          git(repo.primary, "commit", "-m", "install bundle manifest");
+          git(repo.primary, "push", "origin", "main");
+          git(repo.worktree, "merge", "--ff-only", "main");
+          if (scenario === "behind" || scenario === "fast-forward") {
+            commit(repo, "upstream.txt", "origin advanced\n");
+            git(repo.worktree, "push", "origin", "HEAD:main");
+            if (scenario === "behind") writeFileSync(join(repo.primary, "README.txt"), "operator changes\n");
+          } else if (scenario === "ahead") {
+            writeFileSync(join(repo.primary, "ahead.txt"), "local commit\n");
+            git(repo.primary, "add", ".");
+            git(repo.primary, "commit", "-m", "unpublished main");
+          } else if (scenario === "version") {
+            writeFileSync(manifest, JSON.stringify({ version: "0.3.8" }));
+          }
+          const result = await execute(repo, "admit");
+          const cause = { behind: "primary_behind", ahead: "primary_ahead", version: "version_stale" }[scenario as "behind" | "ahead" | "version"];
+          if (cause) {
+            assert.equal(result.status, "failed", JSON.stringify(result));
+            assert.match(result.stderr, new RegExp(`cause=${cause} observed_sha=[a-f0-9]{40} expected_sha=[a-f0-9]{40} observed_version=\\S+ expected_version=${BUNDLE_VERSION.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+            assert.equal(existsSync(join(repo.primary, ".git", "dagu-feature", "owners", "issue-189")), false);
+          } else {
+            assert.equal(result.status, "succeeded", JSON.stringify(result));
+            assert.equal(git(repo.primary, "rev-parse", "HEAD"), git(repo.primary, "rev-parse", "origin/main"));
+            assert.equal(readFileSync(join(repo.primary, ".git", "dagu-feature", "owners", "issue-189"), "utf8"), `${result.id}\t${repo.branch}\n`);
+          }
+          t.diagnostic(`${scenario}: ${result.id} ${result.status} ${result.stderr.trim()}`);
+        } finally { rmSync(repo.root, { recursive: true, force: true }); }
+      }
+      for (const changed of ["packages/omp-dagu/skills/dagu-feature/feature.yaml", "packages/omp-dagu/CHANGELOG.md", "README.txt"]) {
+        const repo = repository();
+        try {
+          commit(repo, "packages/omp-dagu/package.json", JSON.stringify({ version: BUNDLE_VERSION }));
+          commit(repo, changed, "merged change\n");
+          git(repo.primary, "merge", "--ff-only", repo.branch);
+          git(repo.primary, "push", "origin", "main");
+          stubSuccessfulCloseGateGh(repo, changed);
+          const log = join(repo.root, "bootstrap.args");
+          const stub = join(repo.root, "bin", "dagu");
+          writeFileSync(stub, `#!/bin/sh\ncase "$1" in\n  history) printf '[]\\n' ;;\n  enqueue) printf '%s\\n' "$@" > ${JSON.stringify(log)} ;;\n  *) exit 1 ;;\nesac\n`);
+          chmodSync(stub, 0o755);
+          const result = await execute(repo, "close_gate");
+          assert.equal(result.status, "succeeded", JSON.stringify(result));
+          if (changed.startsWith("packages/omp-dagu/")) {
+            const skill = join(repo.primary, "packages/omp-dagu/skills/dagu-feature");
+            assert.deepEqual(readFileSync(log, "utf8").trim().split("\n"), [
+              "enqueue", "--run-id", `bootstrap-a4s-v${BUNDLE_VERSION.replace(/\./g, "-")}`,
+              join(skill, "dagu-feature-bootstrap.yaml"), "--", `PRIMARY=${repo.primary}`, `SKILL_DIR=${skill}`,
+            ]);
+          } else {
+            assert.match(result.stdout, /cleanup worktree=.*remote=absent/);
+          }
+          t.diagnostic(`close_gate ${changed}: ${result.id} ${result.status}`);
+        } finally { rmSync(repo.root, { recursive: true, force: true }); }
+      }
+    } finally {
+      service.kill("SIGTERM");
+      if (service.exitCode === null) await new Promise<void>(resolve => service.once("exit", () => resolve()));
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+}
+
+for (const [name, definition] of [
+  ["PoC template", fileURLToPath(new URL("../skills/dagu-feature/poc.yaml", import.meta.url))],
+  ["PoC rendered DAG", fileURLToPath(new URL("../../../.workspace/dagu/dags/poc.yaml", import.meta.url))],
+] as const) {
+  test(`${name} base compares the primary manifest with origin before recording its base`, () => {
+    const repo = repository();
+    try {
+      const manifest = join(repo.primary, "packages/omp-dagu/package.json");
+      mkdirSync(dirname(manifest), { recursive: true });
+      writeFileSync(manifest, JSON.stringify({ version: BUNDLE_VERSION }));
+      git(repo.primary, "add", ".");
+      git(repo.primary, "commit", "-m", "bundle manifest");
+      git(repo.primary, "push", "origin", "main");
+      const state = join(repo.primary, ".git/poc/runs/test-run");
+      mkdirSync(state, { recursive: true });
+      const output = join(repo.root, "base.outputs");
+      const script = extractScript(definition, "  - id: base");
+      const env = { ...featureScriptEnv(repo), DAGU_FEATURE_BUNDLE: "test", DAGU_OUTPUT_FILE: output };
+      writeFileSync(manifest, JSON.stringify({ version: "0.3.8" }));
+      const stale = spawnSync("bash", ["-c", script], { env, encoding: "utf8" });
+      assert.equal(stale.status, 1);
+      assert.match(stale.stderr, /cause=version_stale.*observed_version=0\.3\.8 expected_version=/);
+      writeFileSync(manifest, JSON.stringify({ version: BUNDLE_VERSION }));
+      const equal = spawnSync("bash", ["-c", script], { env, encoding: "utf8" });
+      assert.equal(equal.status, 0, equal.stderr);
+      assert.equal(readFileSync(join(state, "base.sha"), "utf8").trim(), git(repo.primary, "rev-parse", "origin/main"));
+      assert.match(readFileSync(output, "utf8"), /BASE_SHA=[a-f0-9]{40}/);
+    } finally { rmSync(repo.root, { recursive: true, force: true }); }
+  });
+}

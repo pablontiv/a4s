@@ -113,7 +113,7 @@ test("Dagu isolated primary checkpoints release the queue and rewind the same ru
       const sha = git(primary, "rev-parse", "HEAD");
       if (phase === "close") git(primary, "worktree", "add", "-b", branch, worktree, "origin/main");
       const gh = join(bin, "gh");
-      writeFileSync(gh, `#!/bin/sh\ncase "$*" in\n  *"--json number"*) echo 228 ;;\n  *"--json state"*) echo MERGED ;;\n  *"--json headRefOid"*) echo ${sha} ;;\n  *"--required"*) echo SUCCESS ;;\n  *) echo "unexpected gh $*" >&2; exit 1 ;;\nesac\n`);
+      writeFileSync(gh, `#!/bin/sh\ncase "$*" in\n  *"--json number"*) echo 228 ;;\n  *"--json state"*) echo MERGED ;;\n  *"--json headRefOid"*) echo ${sha} ;;\n  *"--required"*) echo SUCCESS ;;\n  "pr diff 228 --repo ${remote} --name-only") echo tracked.txt ;;\n  *) echo "unexpected gh $*" >&2; exit 1 ;;\nesac\n`);
       chmodSync(gh, 0o755);
       if (blocked === "dirty") writeFileSync(join(primary, "tracked.txt"), "operator changes\n");
       else if (blocked === "branch") git(primary, "switch", "-c", "operator");

@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 
-export type Compatibility = "ok" | "incompatible" | "unstamped";
+export type Compatibility = "ok" | "stale" | "incompatible" | "unstamped";
 
 export interface BundleStamp {
   version: string;
@@ -39,8 +39,8 @@ export function classifyCompatibility(
   const bundle = parseVersion(bundleVersion);
   const extension = parseVersion(extensionVersion);
   if (!bundle || !extension || bundle[0] !== extension[0]) return "incompatible";
-  if (bundle[0] === 0 && bundle[1] !== extension[1]) return "incompatible";
-  return "ok";
+  if (bundle[1] !== extension[1]) return "incompatible";
+  return bundleVersion === extensionVersion ? "ok" : "stale";
 }
 
 export function bundleVersionFromLabels(labels: readonly string[] | undefined): string | undefined {

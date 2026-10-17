@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.42
+
+- Require the primary checkout and package version to match origin before feature/PoC admission, with cause, SHA and version diagnostics (#347).
+- Compare loaded extension, stamped bundle and primary main versions in notices; abort stale turns with restart/re-seal instructions (#347).
+- Enqueue the versioned bootstrap automatically after merging skill or changelog changes so adoption re-seals the rendered DAGs (#347).
+
 ## 0.3.40
 
 - Reconcile concurrent a4s bundle releases during rebase through an explicit repository adoption resolver; preserve functional conflicts and renew candidate/gate evidence before publication (#339).

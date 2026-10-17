@@ -54,6 +54,7 @@ for (const stage of ["discovery", "details", "headers"] as const) {
       extension({ registerTool() {}, registerCommand() {}, sendMessage() {}, on(event, handler) { handlers[event] = handler; } });
       const ctx = {
         cwd: process.cwd(), hasUI: true, agent: { kind: "sub" }, isIdle: () => true,
+        abort() {},
         sessionManager: { getSessionId: () => "timeout-test" },
         ui: {
           theme: { fg: (_: string, text: string) => text, bold: (text: string) => text, tree: { branch: "├─", last: "└─" } },

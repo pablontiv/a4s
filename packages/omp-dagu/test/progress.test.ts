@@ -1,5 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { BUNDLE_VERSION } from "../src/bundle.ts";
 import { currentStep, renderOffline, renderRun, renderWidget, runLabel, Transitions } from "../src/status/progress.ts";
 import type { RunDetails } from "../src/status/progress.ts";
 
@@ -205,4 +209,35 @@ for (const step of ["start_gate", "gate", "push"]) {
 test("bundle compatibility remains visible in targeted notices", () => {
   const candidate = { ...waitingAt("feature", "implement"), labels: ["dagu-feature-bundle=0.2.0"] };
   assert.ok(new Transitions("session-a").observe(candidate).wakeMessage?.includes("compat=incompatible"));
+});
+
+test("notices compare extension, bundle and main on each opening and request stale aborts", () => {
+  const primary = mkdtempSync(join(tmpdir(), "omp-dagu-main-"));
+  const manifest = join(primary, "packages/omp-dagu/package.json");
+  mkdirSync(join(primary, "packages/omp-dagu"), { recursive: true });
+  const transitions = new Transitions("session-a");
+  const candidate = {
+    ...waitingAt("feature", "implement"),
+    params: `ISSUE=176 OMP_SESSION_ID=session-a PRIMARY=${primary}`,
+    labels: [`dagu-feature-bundle=${BUNDLE_VERSION}`],
+  };
+  try {
+    writeFileSync(manifest, JSON.stringify({ version: BUNDLE_VERSION }));
+    const equal = transitions.observe(candidate);
+    assert.ok(equal.wakeMessage?.includes(`bundle=${BUNDLE_VERSION} extension=${BUNDLE_VERSION} main=${BUNDLE_VERSION} compat=ok`));
+    assert.deepEqual(Object.keys(equal), ["wakeMessage"]);
+    writeFileSync(manifest, JSON.stringify({ version: "0.3.8" }));
+    candidate.nodes![0]!.approvalIteration = 1;
+    const staleMain = transitions.observe(candidate);
+    assert.ok(staleMain.wakeMessage?.includes(`extension=${BUNDLE_VERSION} main=0.3.8 compat=stale`));
+    assert.match(staleMain.abortMessage!, /Restart.*session.*bootstrap re-seal/);
+    writeFileSync(manifest, JSON.stringify({ version: BUNDLE_VERSION }));
+    candidate.labels = ["dagu-feature-bundle=0.3.8"];
+    candidate.nodes![0]!.approvalIteration = 2;
+    const staleBundle = transitions.observe(candidate);
+    assert.ok(staleBundle.wakeMessage?.includes(`bundle=0.3.8 extension=${BUNDLE_VERSION} main=${BUNDLE_VERSION} compat=stale`));
+    assert.match(staleBundle.abortMessage!, /Restart.*session.*bootstrap re-seal/);
+  } finally {
+    rmSync(primary, { recursive: true, force: true });
+  }
 });

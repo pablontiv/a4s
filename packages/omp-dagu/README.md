@@ -106,9 +106,22 @@ La extensión observa los runs del repositorio mediante REST y SSE para el widge
 La herramienta `dagu_session_id` devuelve el ID persistente únicamente a la sesión principal. El coordinador lo pasa como `OMP_SESSION_ID` al encolar. Todo nodo con metadatos `humanTask` en waiting de `feature`, `poc` y `discovery` despierta al propietario, incluso con status global running. El succeeded final también despierta; feature y discovery conservan failed/aborted. Los avisos incluyen la compatibilidad:
 
 ```text
-[DAGU STATE] run=<run-id> status=waiting step=<step> <issue=<issue>|dag=<dag>> bundle=<version|unstamped> extension=<version> compat=<ok|incompatible|unstamped> iteration=<approvalIteration>
-[DAGU STATE] run=<run-id> status=succeeded <issue=<issue>|dag=<dag>> bundle=<version|unstamped> extension=<version> compat=<ok|incompatible|unstamped>
+[DAGU STATE] run=<run-id> status=waiting step=<step> <issue=<issue>|dag=<dag>> bundle=<version|unstamped> extension=<version> main=<version|unknown> compat=<ok|stale|incompatible|unstamped> iteration=<approvalIteration>
+[DAGU STATE] run=<run-id> status=succeeded <issue=<issue>|dag=<dag>> bundle=<version|unstamped> extension=<version> main=<version|unknown> compat=<ok|stale|incompatible|unstamped>
 ```
+
+El primario se mantiene exactamente en `origin/$BASE_BRANCH`: `admit` y PoC
+`base` hacen fetch y fast-forward del primario limpio antes de comparar HEAD y
+la versión del manifiesto con origin. Si siguen distintos, fallan con
+`cause=primary_behind|primary_ahead|version_stale`, SHAs y versiones observadas
+y esperadas; `admit` lo hace antes de tomar el lock.
+
+La extensión cargada, el bundle sellado y `main=` leído en cada aviso desde
+`<PRIMARY>/packages/omp-dagu/package.json` deben tener exactamente la misma
+versión. Una diferencia produce `compat=stale` y `ctx.abort()` interrumpe el
+turno con instrucciones de reiniciar la sesión OMP y re-sellar los renders.
+El reinicio carga la versión de main desde disco; cambiar el manifiesto no
+recarga módulos de una sesión ya abierta.
 
 Los checkpoints de disponibilidad añaden `cause=<prompt resuelto>` con `primary dirty: <archivos>` o `primary on <rama>, expected <base>`. Conservan el mismo run en Waiting y liberan la cola. El operador restaura PRIMARY limpio en BASE_BRANCH respetando sus cambios, consulta `dagu status --run-id <id> feature` y ejecuta `dagu human-task push-back feature --run-id <id> --step start_primary_unavailable --expected-iteration <iteración observada>` (para cierre: `close_primary_unavailable`; para PoC: DAG `poc`, paso `base_primary_unavailable`). El detector comprueba otra vez; limpiar por sí solo mantiene Waiting. El DAG sigue creando y retirando worktrees.
 
@@ -243,9 +256,24 @@ Todo cambio en esas cinco plantillas o en `SKILL.md` exige una versión del
 paquete mayor que la de la base del PR (`git merge-base origin/main HEAD`) y
 una sección `## <versión>` en `CHANGELOG.md`; `npm test` lo comprueba,
 incluyendo cambios locales rastreados y obteniendo main y su historia en CI
-shallow. En 0.x, subir el minor indica ruptura de compatibilidad. Después del
-merge, el operador ejecuta bootstrap para sellar los renders con la versión y
-la identidad real del source y del run de bootstrap.
+shallow. En 0.x, subir el minor indica ruptura de compatibilidad. Tras un merge
+que toca `packages/omp-dagu/skills/**` o `packages/omp-dagu/CHANGELOG.md`,
+`close_gate` encola automáticamente el bootstrap del primario:
+
+```sh
+skill_dir="$PRIMARY/packages/omp-dagu/skills/dagu-feature"
+version=$(jq -r .version "$PRIMARY/packages/omp-dagu/package.json")
+dagu enqueue --run-id "bootstrap-a4s-v${version//./-}" "$skill_dir/dagu-feature-bootstrap.yaml" -- \
+  PRIMARY="$PRIMARY" SKILL_DIR="$skill_dir"
+```
+
+Este comando también sirve para recuperar el re-sello. El operador reinicia OMP
+tras el merge del paquete, completa `answers` con los valores instalados y
+comprueba `render`/`confirm`. El bootstrap deja los renders sellados en staging
+Git; una issue de adopción los entrega mediante el ciclo normal. Sus cabeceras y
+labels quedan en la versión de main con el SHA real del source y el ID del
+bootstrap; una sesión nueva y los renders adoptados muestran las tres versiones
+iguales y `compat=ok`.
 
 ## Discovery
 

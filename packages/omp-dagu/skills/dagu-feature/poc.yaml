@@ -152,9 +152,33 @@ steps:
       test "$primary_root" = "$primary_path" || { printf 'base: PRIMARY %s resolves to %s, repository root is %s\n' "$PRIMARY" "$primary_path" "$primary_root" >&2; exit 1; }
       test "$(git -C "$PRIMARY" rev-parse --absolute-git-dir)" = "$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-common-dir)"
       test "$(git -C "$PRIMARY" symbolic-ref --short HEAD)" = "$BASE_BRANCH"
-      test -z "$(git -C "$PRIMARY" status --porcelain --untracked-files=all)"
+      primary_status=$(git -C "$PRIMARY" status --porcelain --untracked-files=all)
       git -C "$PRIMARY" fetch origin || { printf 'base: fetch origin failed; restore origin access and recover this run\n' >&2; exit 1; }
-      git -C "$PRIMARY" merge --ff-only "origin/$BASE_BRANCH" || { printf 'base: ff-only failed; reconcile primary with origin/%s preserving commits, then recover this run\n' "$BASE_BRANCH" >&2; exit 1; }
+      if [[ -z "$primary_status" ]]; then
+        git -C "$PRIMARY" merge --ff-only "origin/$BASE_BRANCH" || true
+      fi
+      observed_sha=$(git -C "$PRIMARY" rev-parse HEAD)
+      expected_sha=$(git -C "$PRIMARY" rev-parse "origin/$BASE_BRANCH")
+      observed_version=not-applicable
+      expected_version=not-applicable
+      manifest=packages/omp-dagu/package.json
+      if [[ -e "$PRIMARY/$manifest" ]] || git -C "$PRIMARY" cat-file -e "origin/$BASE_BRANCH:$manifest" 2>/dev/null; then
+        observed_version=$(jq -er '.version | select(type == "string" and length > 0)' "$PRIMARY/$manifest" 2>/dev/null) || observed_version=unavailable
+        expected_version=$(git -C "$PRIMARY" show "origin/$BASE_BRANCH:$manifest" | jq -er '.version | select(type == "string" and length > 0)') || expected_version=unavailable
+      fi
+      cause=
+      if [[ "$observed_sha" != "$expected_sha" ]]; then
+        cause=primary_ahead
+        if git -C "$PRIMARY" merge-base --is-ancestor "$observed_sha" "$expected_sha"; then cause=primary_behind; fi
+      elif [[ "$observed_version" != "$expected_version" || "$observed_version" == unavailable ]]; then
+        cause=version_stale
+      fi
+      if [[ -n "$cause" ]]; then
+        printf 'base: cause=%s observed_sha=%s expected_sha=%s observed_version=%s expected_version=%s; reconcile primary preserving commits\n' \
+          "$cause" "$observed_sha" "$expected_sha" "$observed_version" "$expected_version" >&2
+        exit 1
+      fi
+      test -z "$primary_status"
       STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "poc/runs/$RUN")
       git -C "$PRIMARY" rev-parse HEAD > "$STATE/base.sha"
       printf 'BASE_SHA=%s\n' "$(cat "$STATE/base.sha")" >> "$DAGU_OUTPUT_FILE"

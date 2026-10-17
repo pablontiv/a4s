@@ -143,6 +143,39 @@ steps:
   - id: admit
     run: |
       set -euo pipefail
+      primary_path=$(cd "$PRIMARY" && pwd -P)
+      [[ "$(cd "$(git -C "$PRIMARY" rev-parse --show-toplevel)" && pwd -P)" == "$primary_path" &&
+         "$(git -C "$PRIMARY" rev-parse --absolute-git-dir)" == "$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-common-dir)" ]] ||
+        { echo 'dagu-feature: PRIMARY must be the main checkout' >&2; exit 1; }
+      if [[ -e "$WORKTREE" && "$(cd "$WORKTREE" && pwd -P)" == "$primary_path" ]]; then
+        echo "dagu-feature: protected primary or unmanaged target $WORKTREE" >&2; exit 1
+      fi
+      git -C "$PRIMARY" fetch origin
+      if [[ "$(git -C "$PRIMARY" branch --show-current)" == "$BASE_BRANCH" ]] &&
+         [[ -z "$(git -C "$PRIMARY" status --porcelain --untracked-files=all)" ]]; then
+        git -C "$PRIMARY" merge --ff-only "origin/$BASE_BRANCH" || true
+      fi
+      observed_sha=$(git -C "$PRIMARY" rev-parse HEAD)
+      expected_sha=$(git -C "$PRIMARY" rev-parse "origin/$BASE_BRANCH")
+      observed_version=not-applicable
+      expected_version=not-applicable
+      manifest=packages/omp-dagu/package.json
+      if [[ -e "$PRIMARY/$manifest" ]] || git -C "$PRIMARY" cat-file -e "origin/$BASE_BRANCH:$manifest" 2>/dev/null; then
+        observed_version=$(jq -er '.version | select(type == "string" and length > 0)' "$PRIMARY/$manifest" 2>/dev/null) || observed_version=unavailable
+        expected_version=$(git -C "$PRIMARY" show "origin/$BASE_BRANCH:$manifest" | jq -er '.version | select(type == "string" and length > 0)') || expected_version=unavailable
+      fi
+      cause=
+      if [[ "$observed_sha" != "$expected_sha" ]]; then
+        cause=primary_ahead
+        if git -C "$PRIMARY" merge-base --is-ancestor "$observed_sha" "$expected_sha"; then cause=primary_behind; fi
+      elif [[ "$observed_version" != "$expected_version" || "$observed_version" == unavailable ]]; then
+        cause=version_stale
+      fi
+      if [[ -n "$cause" ]]; then
+        printf 'admit: cause=%s observed_sha=%s expected_sha=%s observed_version=%s expected_version=%s\n' \
+          "$cause" "$observed_sha" "$expected_sha" "$observed_version" "$expected_version" >&2
+        exit 1
+      fi
       eval "$DAGU_RESOURCE_GUARD"
       resource_lock claim
 
@@ -1023,6 +1056,17 @@ steps:
         fail "PRIMARY $PRIMARY final HEAD lookup failed, expected $origin_base_sha"
       [[ "$base_sha" == "$origin_base_sha" ]] ||
         fail "PRIMARY $PRIMARY HEAD=$base_sha, expected $origin_base_sha"
+      merged_files=$(gh pr diff "$pr" --repo "$repo" --name-only) ||
+        fail "PR #$pr changed-file lookup failed, expected merged diff"
+      if grep -Eq '^packages/omp-dagu/(skills/|CHANGELOG\.md$)' <<<"$merged_files"; then
+        skill_dir="$PRIMARY/packages/omp-dagu/skills/dagu-feature"
+        version=$(jq -er '.version | select(type == "string" and length > 0)' "$PRIMARY/packages/omp-dagu/package.json")
+        bootstrap_run="bootstrap-a4s-v${version//./-}"
+        dagu enqueue --run-id "$bootstrap_run" "$skill_dir/dagu-feature-bootstrap.yaml" -- \
+          PRIMARY="$PRIMARY" SKILL_DIR="$skill_dir" ||
+          fail "bootstrap $bootstrap_run enqueue failed, expected re-seal queued"
+        printf 'bootstrap=%s version=%s\n' "$bootstrap_run" "$version"
+      fi
       printf 'pr=%s\ntested_sha=%s\nbase_sha=%s\ncleanup worktree=%s branch=%s remote=%s\n' \
         "$pr" "$tested_sha" "$base_sha" "$WORKTREE" "$BRANCH" "$remote"
 
