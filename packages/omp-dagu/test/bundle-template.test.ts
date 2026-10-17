@@ -43,4 +43,8 @@ test("bootstrap detects source compatibility and renders and confirms all stamps
   assert.match(bootstrap, /Dagu-Feature-Bundle: %s/);
   assert.match(bootstrap, /Dagu-Feature-Source: %s@%s/);
   assert.match(bootstrap, /Dagu-Feature-Bootstrap: %s/);
+  assert.match(bootstrap, /CURRENT_REBASE_RESOLVER/);
+  assert.match(bootstrap, /REBASE_RESOLVER: \$\{steps.answers.outputs.REBASE_RESOLVER\}/);
+  assert.match(bootstrap, /--arg resolver "\$REBASE_RESOLVER"/);
+  assert.ok(bootstrap.includes('gsub(\\"__REBASE_RESOLVER__\\"; \\$resolver | tojson)'));
 });

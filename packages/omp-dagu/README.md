@@ -218,6 +218,21 @@ que aplica el bootstrap.
 
 Para la adopción de a4s, `TEST_PATHS` es
 `(^|/)(test|tests)/|\.test\.(ts|cjs)$`.
+El formulario de bootstrap también transporta `REBASE_RESOLVER` (vacío para
+recuperación manual). a4s declara
+`node packages/omp-dagu/bin/dagu-bundle-rebase.mjs`, ejecutado en el worktree
+cuando Git detiene el rebase por conflictos, con base, upstream y candidato
+verificados en `DAGU_REBASE_BASE`, `DAGU_REBASE_UPSTREAM` y
+`DAGU_REBASE_CANDIDATE`. El comando stagea metadatos inequívocos: manifiesto,
+entrada workspace del lock, literal histórico de identidad y nuevo bloque del
+CHANGELOG. Calcula el parche consecutivo sobre la base actual y conserva una
+intención explícita compatible de major/minor. Sale `0` con índice completamente
+resuelto, `2` con conflictos que debe resolver `implement`; otros códigos fallan
+el paso. Se conservan los diagnósticos de Git y los conflictos funcionales,
+incluidos los de esos mismos archivos. Antes del gate se archiva la evidencia
+del SHA anterior y se actualizan candidato, base y patch; gate y push acreditan
+el SHA normalizado. `package.json` es la autoridad única de la identidad exportada.
+
 
 Los cuatro renders de a4s adoptan el bundle `0.3.8` desde
 `pablontiv/a4s@fe5d444e9c9133d5bac3d2aeef054fee56d01fdb`, mediante

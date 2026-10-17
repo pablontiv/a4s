@@ -95,9 +95,11 @@ steps:
       current_gate=not-configured
       current_check=not-configured
       current_tests=not-configured
+      current_resolver=""
       if test -f "$installed_feature"; then
         current_gate=$(read_default "$installed_feature" GATE)
         current_check=$(read_default "$installed_feature" REQUIRED_CHECK)
+        current_resolver=$(read_default "$installed_feature" REBASE_RESOLVER)
       fi
       if test -f "$installed_poc"; then
         current_tests=$(read_default "$installed_poc" TEST_PATHS)
@@ -123,6 +125,7 @@ steps:
         printf 'CURRENT_GATE=%s\n' "${current_gate:-not-configured}"
         printf 'CURRENT_REQUIRED_CHECK=%s\n' "${current_check:-not-configured}"
         printf 'CURRENT_TEST_PATHS=%s\n' "${current_tests:-not-configured}"
+        printf 'CURRENT_REBASE_RESOLVER=%s\n' "$current_resolver"
         printf 'CURRENT_FEATURE_STAMP=%s\n' "$(read_stamp "$installed_feature")"
         printf 'CURRENT_POC_STAMP=%s\n' "$(read_stamp "$installed_poc")"
         printf 'CURRENT_DISCOVERY_STAMP=%s\n' "$(read_stamp "$installed_discovery")"
@@ -143,6 +146,7 @@ steps:
       - name: CURRENT_GATE
       - name: CURRENT_REQUIRED_CHECK
       - name: CURRENT_TEST_PATHS
+      - name: CURRENT_REBASE_RESOLVER
       - name: CURRENT_FEATURE_STAMP
       - name: CURRENT_POC_STAMP
       - name: CURRENT_DISCOVERY_STAMP
@@ -165,6 +169,8 @@ steps:
         Checks on the last merged PR: ${steps.detect.outputs.RECENT_CHECKS}.
         TEST_PATHS: Bash ERE matching this repository's test paths
         (current: ${steps.detect.outputs.CURRENT_TEST_PATHS}; for a4s: (^|/)(test|tests)/|\.test\.(ts|cjs)$).
+        REBASE_RESOLVER: repository command run in the conflicted worktree, or empty
+        (current: ${steps.detect.outputs.CURRENT_REBASE_RESOLVER}; for a4s: node packages/omp-dagu/bin/dagu-bundle-rebase.mjs).
       form:
         type: object
         additionalProperties: false
@@ -178,7 +184,9 @@ steps:
           TEST_PATHS:
             type: string
             minLength: 1
-        required: [GATE, REQUIRED_CHECK, TEST_PATHS]
+          REBASE_RESOLVER:
+            type: string
+        required: [GATE, REQUIRED_CHECK, TEST_PATHS, REBASE_RESOLVER]
 
   - id: worktrees
     depends: answers
@@ -199,6 +207,7 @@ steps:
       - BASE_BRANCH: ${steps.detect.outputs.BASE_BRANCH}
       - STAGE: ${steps.detect.outputs.STAGE}
       - TEST_PATHS: ${steps.answers.outputs.TEST_PATHS}
+      - REBASE_RESOLVER: ${steps.answers.outputs.REBASE_RESOLVER}
       - BUNDLE_NAME: ${steps.detect.outputs.BUNDLE_NAME}
       - BUNDLE_VERSION: ${steps.detect.outputs.BUNDLE_VERSION}
       - DAGU_VERSION: ${steps.detect.outputs.DAGU_VERSION}
@@ -219,12 +228,14 @@ steps:
       jq -nr --rawfile template "$SKILL_DIR/feature.yaml" \
         --arg repo "$REPO" --arg base "$BASE_BRANCH" \
         --arg gate "$GATE" --arg check "$REQUIRED_CHECK" \
+        --arg resolver "$REBASE_RESOLVER" \
         --arg stamp "$stamp" --arg version "$BUNDLE_VERSION" --arg identity "$identity" \
         "\$template
           | $render_common
           | gsub(\"TEMPLATE_REPO\"; \$repo)
           | gsub(\"TEMPLATE_BASE_BRANCH\"; \$base | tojson)
           | gsub(\"__GATE__\"; \$gate | tojson)
+          | gsub(\"__REBASE_RESOLVER__\"; \$resolver | tojson)
           | gsub(\"__REQUIRED_CHECK__\"; \$check | tojson)" > "$STAGE"
       jq -nr --rawfile template "$SKILL_DIR/poc.yaml" \
         --arg repo "$REPO" --arg base "$BASE_BRANCH" \
