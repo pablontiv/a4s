@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -361,6 +362,45 @@ for (const [name, definition] of definitions) {
     }
   });
 
+  test(`${name} rebase retries a held index lock without changing the conflict action`, () => {
+    const repo = repository();
+    try {
+      commit(repo, "feature.txt", "feature\n");
+      writeFileSync(join(repo.primary, "upstream.txt"), "upstream\n");
+      git(repo.primary, "add", ".");
+      git(repo.primary, "commit", "-m", "upstream");
+      git(repo.primary, "push", "origin", "main");
+      writeFileSync(join(repo.state, "conflict-action"), "preserved\n");
+      writeFileSync(git(repo.worktree, "rev-parse", "--git-path", "index.lock"), "");
+      const result = spawnSync("bash", ["-c", extractScript(definition, "  - id: rebase")], {
+        encoding: "utf8", env: featureScriptEnv(repo),
+      });
+      assert.equal(result.status, 75, result.stderr);
+      assert.ok(result.stderr.includes(`rebase: index.lock held in ${repo.worktree}`));
+      assert.equal(readFileSync(join(repo.state, "conflict-action"), "utf8"), "preserved\n");
+      assert.match(readFileSync(definition, "utf8"), /- id: rebase\n    depends: dependency_review\n    retry_policy:\n      limit: 3\n      interval_sec: 5\n      exit_code: \[75\]/);
+    } finally {
+      rmSync(repo.root, { recursive: true, force: true });
+    }
+  });
+
+  test(`${name} rebase records a real conflict and rewinds`, () => {
+    const repo = repository();
+    try {
+      commit(repo, "README.txt", "feature\n");
+      writeFileSync(join(repo.primary, "README.txt"), "upstream\n");
+      git(repo.primary, "add", ".");
+      git(repo.primary, "commit", "-m", "upstream");
+      git(repo.primary, "push", "origin", "main");
+      const output = runScript(extractScript(definition, "  - id: rebase"), repo);
+      assert.match(output, /conflict_files=README.txt/);
+      assert.equal(readFileSync(join(repo.state, "conflict-action"), "utf8"), "rewind\n");
+      assert.equal(git(repo.worktree, "status", "--porcelain"), "M README.txt");
+      assert.match(readFileSync(join(repo.worktree, "README.txt"), "utf8"), /<<<<<<<[\s\S]*upstream[\s\S]*=======[\s\S]*feature[\s\S]*>>>>>>>/);
+    } finally {
+      rmSync(repo.root, { recursive: true, force: true });
+    }
+  });
   test(`${name} start_gate creates and reuses a worktree through a symlinked primary`, () => {
     const repo = repository();
     try {
@@ -708,6 +748,88 @@ function extractStep(source: string, id: string): string {
 }
 
 const daguAvailable = spawnSync("dagu", ["version"], { encoding: "utf8" });
+test("real Dagu retries rebase after a six-second index lock", {
+  skip: daguAvailable.status !== 0 || !/2\.20\.1/.test(daguAvailable.stdout),
+  timeout: 150_000,
+}, async () => {
+  const repo = repository();
+  const home = join(repo.root, "dagu-home");
+  mkdirSync(join(home, "dags"), { recursive: true });
+  const listener = createServer();
+  await new Promise<void>(resolve => listener.listen(0, "127.0.0.1", resolve));
+  const address = listener.address();
+  assert.ok(address && typeof address !== "string");
+  const port = address.port;
+  await new Promise<void>(resolve => listener.close(() => resolve()));
+  writeFileSync(join(home, "config.yaml"), `host: 127.0.0.1\nport: ${port}\nauth:\n  mode: none\ncoordinator:\n  enabled: false\n`);
+  const env = { ...process.env, ...featureScriptEnv(repo), DAGU_HOME: home, DAGU_COORDINATOR_ENABLED: "false" };
+  let serviceLog = "";
+  const service = spawn("dagu", ["start-all", "--host", "127.0.0.1", "--port", String(port)], {
+    cwd: repo.root, env, stdio: ["ignore", "pipe", "pipe"],
+  });
+  service.stdout.on("data", data => { serviceLog += data; });
+  service.stderr.on("data", data => { serviceLog += data; });
+  const id = `lock-retry-${randomUUID()}`;
+  async function until<T>(description: string, probe: () => Promise<T | undefined>): Promise<T> {
+    const deadline = Date.now() + 60_000;
+    while (Date.now() < deadline) {
+      const value = await probe();
+      if (value !== undefined) return value;
+      await delay(150);
+    }
+    throw new Error(`Timed out: ${description}\n${serviceLog}`);
+  }
+  let unlock: NodeJS.Timeout | undefined;
+  try {
+    commit(repo, "feature.txt", "feature\n");
+    writeFileSync(join(repo.primary, "upstream.txt"), "upstream\n");
+    git(repo.primary, "add", ".");
+    git(repo.primary, "commit", "-m", "upstream");
+    git(repo.primary, "push", "origin", "main");
+    const lock = git(repo.worktree, "rev-parse", "--git-path", "index.lock");
+    writeFileSync(lock, "");
+    const source = readFileSync(definitions[0][1], "utf8");
+    const step = extractStep(source, "rebase").replace("    depends: dependency_review\n", "");
+    const file = join(home, "dags", "lock-retry.yaml");
+    const dagEnv = Object.entries(featureScriptEnv(repo)).map(([key, value]) => `  ${key}: ${JSON.stringify(value ?? "")}`).join("\n");
+    writeFileSync(file, `name: lock-retry\nenv:\n${dagEnv}\nsteps:\n${step}`);
+    const api = `http://127.0.0.1:${port}/api/v1`;
+    await until("isolated Dagu ready", async () => {
+      try { return (await fetch(`${api}/dag-runs`)).ok ? true : undefined; } catch { return undefined; }
+    });
+    execFileSync("dagu", ["enqueue", "--run-id", id, file], { env });
+    // Real Dagu retry scheduling crosses a process boundary and requires platform time.
+    unlock = setTimeout(() => rmSync(lock, { force: true }), 6000);
+    let succeeded = false;
+    let evidence = "";
+    for (let i = 0; i < 400; i++) {
+      const response = await fetch(`${api}/dag-runs/lock-retry/${id}`);
+      if (response.ok) {
+        const run = (await response.json() as { dagRunDetails: {
+          statusLabel: string;
+          nodes: Array<{ statusLabel: string; stderr?: string }>;
+        } }).dagRunDetails;
+        assert.notEqual(run.statusLabel, "failed", JSON.stringify(run));
+        if (run.statusLabel === "succeeded") {
+          assert.equal(run.nodes[0]!.statusLabel, "succeeded");
+          evidence = readFileSync(run.nodes[0]!.stderr!, "utf8");
+          succeeded = true;
+          break;
+        }
+      }
+      await delay(150);
+    }
+    assert.ok(succeeded, "isolated retry run did not succeed");
+    assert.ok(evidence.includes(`rebase: index.lock held in ${repo.worktree}`), evidence);
+    assert.equal(readFileSync(join(repo.state, "conflict-action"), "utf8"), "complete\n");
+  } finally {
+    clearTimeout(unlock);
+    service.kill("SIGTERM");
+    await new Promise<void>(resolve => service.once("exit", () => resolve()));
+    rmSync(repo.root, { recursive: true, force: true });
+  }
+});
+
 for (const [name, definition] of definitions) {
   test(`${name} real Dagu closes implementation runs and succeeds after enqueuing a PoC`, {
     skip: daguAvailable.status !== 0 || !/2\.20\.1/.test(daguAvailable.stdout) ? "Dagu 2.20.1 binary required for live integration" : false,
@@ -799,7 +921,7 @@ for (const [name, definition] of definitions) {
             const dagu = (...args: string[]) => execFileSync("dagu", args, {
               cwd: root, env: runEnv, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
             }).trim();
-            const id = mode;
+            const id = `${mode}-${randomUUID()}`;
             dagu("enqueue", "--run-id", id, dag);
             if (mode === "implementation-blocked") {
               const waiting = await state(id, "waiting");

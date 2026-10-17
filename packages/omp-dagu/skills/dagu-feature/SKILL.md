@@ -534,6 +534,12 @@ to Git and the Dagu store**. The contract and workflow checks establish the
 candidate identity; they are not a sandbox against a process that can rewrite
 the repository or its run state.
 
+The `rebase` step reports `rebase: index.lock held in <worktree>` and exits 75
+when Git fails while the worktree index lock is held. Dagu retries that exit code
+up to three times at five-second intervals, preserving `conflict-action`.
+Only an active rebase with unresolved files enters conflict recovery; other Git
+failures retain Git's stderr and fail the step.
+
 ## Reconcile `await_merge`
 
 Remote observation belongs to the scheduled [`reconcile`](reconcile.yaml) DAG, a separate process from the implementing agent, which does not wait on hosted CI. The reconciler holds no repository queue slot: it uses its own local queue with concurrency one. It runs every minute with `overlap_policy: skip` and an empty `catchup_window`.

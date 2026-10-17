@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.13
+
+- Distinguish active rebase conflicts from other Git failures and retry a held worktree index lock up to three times at five-second intervals in both feature DAGs (#214).
+- Document bounded index-lock retries and cover lock preservation and real conflict rewind behavior with an isolated, readiness-checked Dagu run (#214).
+
 ## 0.3.12
 
 - Version the global Dagu base configuration with seven-day history retention and document the history/retry consequences for older runs (#252).
