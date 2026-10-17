@@ -376,6 +376,8 @@ steps:
 
   - id: start_gate
     depends: start_primary_unavailable
+    continue_on:
+      failure: true
     env:
       - POC: ${steps.triage.outputs.POC}
     preconditions:
@@ -431,8 +433,20 @@ steps:
       printf 'issue=%s\nbranch=%s\nworktree=%s\nbase_sha=%s\n' \
         "$ISSUE" "$BRANCH" "$WORKTREE" "$(git -C "$WORKTREE" rev-parse HEAD)"
 
-  - id: implement
+  - id: recover_start_gate
     depends: start_gate
+    continue_on: skipped
+    preconditions:
+      - condition: "${start_gate.exit_code}"
+        expected: "re:^[1-9][0-9]*$"
+    action: human.task
+    with:
+      prompt: "start_gate failed. Inspect its logs, restore remote access or reconcile PRIMARY preserving operator commits, then push back with the observed run-wide iteration to retry start_gate in this run."
+      push_back:
+        rewind_to: start_gate
+
+  - id: implement
+    depends: recover_start_gate
     action: human.task
     with:
       prompt: "Deliver the files for issue #${ISSUE} inside ${WORKTREE} on ${BRANCH}, plus SUMMARY and a conventional MESSAGE. Dagu stages and commits the delivery. After conflict push-back, resolve the files listed in <git-dir>/dagu-feature/runs/${RUN}/conflict-files in place in this same worktree and branch; Dagu has prepared the new base and conflict markers. Git and Dagu-store access remains an advisory trust boundary."
@@ -687,6 +701,8 @@ steps:
 
   - id: gate
     depends: conflict_review
+    continue_on:
+      failure: true
     retry_policy:
       limit: 1
       interval_sec: 5
@@ -716,8 +732,22 @@ steps:
       jq -nc --arg sha "$sha" --arg gate "$GATE" '{sha:$sha,gate:$gate}' > "$STATE/gate.json"
       printf 'tested_sha=%s\n' "$sha"
 
-  - id: push
+  - id: recover_gate
     depends: gate
+    continue_on: skipped
+    preconditions:
+      - condition: "${gate.exit_code}"
+        expected: "re:^[1-9][0-9]*$"
+    action: human.task
+    with:
+      prompt: "gate failed. Inspect the gate logs; push back with the observed run-wide iteration to return to implement and repair the candidate in the same worktree."
+      push_back:
+        rewind_to: implement
+
+  - id: push
+    depends: recover_gate
+    continue_on:
+      failure: true
     run: |
       set -euo pipefail
       umask 0022
@@ -729,8 +759,20 @@ steps:
       jq -e --arg sha "$sha" --arg gate "$GATE" '.sha == $sha and .gate == $gate' "$STATE/gate.json" >/dev/null
       git -C "$WORKTREE" push --force-with-lease --set-upstream origin "$sha:refs/heads/$BRANCH"
 
-  - id: pr
+  - id: recover_push
     depends: push
+    continue_on: skipped
+    preconditions:
+      - condition: "${push.exit_code}"
+        expected: "re:^[1-9][0-9]*$"
+    action: human.task
+    with:
+      prompt: "push failed. Inspect its logs and restore remote access or permissions, then push back with the observed run-wide iteration to retry push in this run."
+      push_back:
+        rewind_to: push
+
+  - id: pr
+    depends: recover_push
     run: |
       set -euo pipefail
       cd "$WORKTREE"
@@ -947,8 +989,8 @@ handler_on:
             for attempt in $(seq 1 60); do
               STATUS=$(dagu status feature --run-id "$RUN")
               if grep -q "^Waiting -" <<<"$STATUS"; then
+                ITERATION=$(sed -nE "s/.*push-back iteration: ([0-9]+).*/\1/p" <<<"$STATUS" | head -1)
                 if [[ "$(cat "$STATE/$ACTION")" == rewind ]]; then
-                  ITERATION=$(sed -nE "s/.*push-back iteration: ([0-9]+).*/\1/p" <<<"$STATUS" | head -1)
                   dagu human-task push-back feature --run-id "$RUN" --step "$STEP" --expected-iteration "${ITERATION:-0}"
                 else
                   dagu human-task complete feature --run-id "$RUN" --step "$STEP"
@@ -1007,5 +1049,5 @@ handler_on:
         fi
       else
         printf 'Unpublished work kept: branch %s; worktree %s\n' "$BRANCH" "$WORKTREE"
-        printf 'Recovery: push %s from %s, then re-enqueue this issue with a suffixed run ID.\n' "$BRANCH" "$WORKTREE"
+        printf 'Terminal failure outside recovery checkpoints: inspect step logs; preserved branch %s and worktree %s are available for operator recovery.\n' "$BRANCH" "$WORKTREE"
       fi

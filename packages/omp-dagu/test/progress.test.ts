@@ -108,7 +108,7 @@ const waitingAt = (name: string, step: string, iteration = 0): RunDetails => ({
 test("all human checkpoints wake the owner once per DAG, run, step and iteration", () => {
   const transitions = new Transitions("session-a");
   for (const [name, steps] of [
-    ["feature", ["triage", "implement", "dependency_review", "conflict_review", "await_merge", "start_primary_unavailable", "close_primary_unavailable"]],
+    ["feature", ["triage", "implement", "dependency_review", "conflict_review", "await_merge", "start_primary_unavailable", "close_primary_unavailable", "recover_start_gate", "recover_gate", "recover_push"]],
     ["poc", ["run_poc", "decide", "base_primary_unavailable"]],
     ["discovery", ["discover", "validate", "consolidate", "approve"]],
   ] as const) {
@@ -187,6 +187,20 @@ test("primary availability notices preserve the concrete sanitized cause", () =>
   candidate.nodes![0]!.step.humanTask = { prompt: "primary dirty: tracked.txt\nRestore clean main." };
   assert.ok(new Transitions("session-a").observe(candidate).wakeMessage?.includes("cause=primary dirty: tracked.txt Restore clean main."));
 });
+
+for (const step of ["start_gate", "gate", "push"]) {
+  test(`${step} recovery notice names the failed command and sanitized cause`, () => {
+    const transitions = new Transitions("session-a");
+    const candidate = waitingAt("feature", `recover_${step}`, 2);
+    candidate.nodes![0]!.step.humanTask = { prompt: `${step} failed.\nInspect logs.` };
+    const message = transitions.observe(candidate).wakeMessage!;
+    assert.ok(message.includes(`step=recover_${step} issue=176`), message);
+    assert.ok(message.endsWith(`iteration=2 cause=${step} failed. Inspect logs.`), message);
+    assert.deepEqual(transitions.observe(candidate), {});
+    const repaired = waitingAt("feature", "implement", 3);
+    assert.ok(transitions.observe(repaired).wakeMessage?.includes("step=implement"));
+  });
+}
 
 test("bundle compatibility remains visible in targeted notices", () => {
   const candidate = { ...waitingAt("feature", "implement"), labels: ["dagu-feature-bundle=0.2.0"] };
