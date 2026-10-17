@@ -13,7 +13,7 @@ flowchart LR
     TD -->|POC=yes: enqueue and finish| P[poc]
     TD -->|POC=no + REVIEW| A[start_gate]
     A --> B[implement<br/>human.task<br/>issue subagent]
-    B --> C[checkpoint_push]
+    B --> CP[capture<br/>Dagu commit] --> C[checkpoint_push]
     C --> N[dependency_review]
     N -->|new dependencies: push-back| T
     N -->|reviewed dependencies| D[rebase]
@@ -81,7 +81,7 @@ The bootstrap renders the repository DAG templates when a repository adopts the 
 | `__PRIMARY__` | Default clone path in `poc.yaml` | repository clone | repository clone |
 | `__TEST_PATHS__` | Bash ERE for repository test paths; every `*.md` also belongs to cutover | `_test\.go$\|^tests/` | `(^\|/)tests/` |
 
-The DAG's fixed invariants: `PRIMARY` is the repository clone, its main working tree, on `BASE_BRANCH` and clean; the run's worktree is always `$PRIMARY/.workspace/worktrees/issue-<n>`, ignored by git; the gate runs with `umask 0022` and without `GH_TOKEN`/`GITHUB_TOKEN`; auto-merge is bound to the tested SHA with `--match-head-commit`; and the queue has concurrency one per repository. `checkpoint_push` is the publication boundary. On exit, the handler removes a worktree and local branch only after fetching and confirming that its head is contained by `origin/$BRANCH` or `origin/$BASE_BRANCH`, or that GitHub, queried from the `PRIMARY` clone, reports a merged PR with that exact head SHA; otherwise it retains both.
+The DAG's fixed invariants: `PRIMARY` is the repository clone, its main working tree, on `BASE_BRANCH` and clean; the run's worktree is always `$PRIMARY/.workspace/worktrees/issue-<n>`, ignored by git; the gate runs with `umask 0022` and without `GH_TOKEN`/`GITHUB_TOKEN`; auto-merge is bound to the tested SHA with `--match-head-commit`; and the queue has concurrency one per repository. `push` is the publication boundary after current-candidate verification. On exit, the handler removes a clean, owned worktree and local branch only after fetching and confirming that its head is contained by `origin/$BRANCH` or `origin/$BASE_BRANCH`, or that GitHub, queried from the `PRIMARY` clone, reports a merged PR with that exact head SHA. Uncaptured files and conflict resolutions remain in their worktree for recovery even when HEAD is on the base.
 
 ## Adopt in a repository
 
@@ -133,7 +133,7 @@ write CI; an initial adoption adds the workflow that publishes
 
 ### 2. Adoption issue
 
-Open an issue in the repository to adopt the lifecycle. Enqueue it as described below, but pass the staged file (`$(git rev-parse --git-path dagu-feature/feature.yaml)`) instead of `.workspace/dagu/dags/feature.yaml`, which does not exist yet. In `implement`, make a single commit that:
+Open an issue in the repository to adopt the lifecycle. Enqueue it as described below, but pass the staged file (`$(git rev-parse --git-path dagu-feature/feature.yaml)`) instead of `.workspace/dagu/dags/feature.yaml`, which does not exist yet. In `implement`, deliver files for Dagu to capture in one commit that:
 
 - copies the three staged files to `.workspace/dagu/dags/feature.yaml`, `.workspace/dagu/dags/poc.yaml` and `.workspace/dagu/dags/discovery.yaml`;
 - adds the CI job that publishes `REQUIRED_CHECK`, if none exists yet.
@@ -239,12 +239,12 @@ Dagu snapshots the definition when you enqueue. Later edits to the file do not a
 
 **One run per lifecycle.** Continue each run through its own checkpoints and push-backs. A feature whose triage chooses PoC ends after enqueueing `poc`; a successful PoC may enqueue a fresh feature run for the cutover.
 
-A failed or aborted run is terminal. If its head has not crossed the `checkpoint_push`
+A failed or aborted run is terminal. If its head has not crossed the `push`
 publication boundary, `handler_on.exit` keeps the local branch and worktree and
 prints both recovery locations. Recover directly in that worktree, then push the
 kept branch and enqueue a new run with a suffixed ID
 (`<repo>-issue-<n>-v2`). If the worktree must be recreated, preserve the kept
-commit first with `git branch <branch> <sha>`. Once `checkpoint_push` has
+commit first with `git branch <branch> <sha>`. Once `push` has
 published the head, or GitHub reports its PR merged with that exact head SHA,
 the exit handler may remove the local worktree and branch. Restore a published
 but unmerged branch with `git fetch origin && git branch <branch> origin/<branch>`
@@ -252,8 +252,8 @@ before reenqueuing. Pass `PR_NUMBER` when a PR already exists for the branch.
 
 A failed run can leave its PR's auto-merge armed. Before reenqueuing, read
 `gh pr view <pr> --json state`: `MERGED` means the issue's delivery is complete.
-Otherwise the replacement run's `checkpoint_push` can trigger that merge before
-its later `push`, which may fail with `stale info` after branch deletion.
+Otherwise the replacement run's `push` can trigger that merge; the current
+candidate must complete its local gate before that publication.
 
 Inspect a run with `dagu status --run-id <id> feature`. Step logs are listed under each step.
 
@@ -365,9 +365,9 @@ malformed or mismatched transcript fails the step closed. `POC=yes` publishes
 with ISSUE and QUESTION, and ends the feature run.
 
 `checkpoint_push` compares dependency relationships and package/app directories
-against the merge base of `HEAD` and `origin/$BASE_BRANCH`, using the PoC-proven
+against the recorded candidate base, using the PoC-proven
 manifest extractor. A dependency relationship is the pair of its manifest path
-(the consumer package) and dependency identity. Every pair in `HEAD` but not in
+(the consumer package) and dependency identity. Every pair in the candidate but not in
 the base requests `dependency_review`, including an existing repository
 dependency added to a second package; an unchanged pair does not. Completing
 triage records that exact relationship set as reviewed, and changing it again
@@ -476,25 +476,28 @@ Give `Implement<ISSUE>` the exact `WORKTREE` path and `BRANCH`, plus this contra
   part and add test cases rather than rewriting shared fixtures.
 
 1. Work only in `WORKTREE` on `BRANCH`; never touch the primary checkout.
-2. Leave exactly **one** conventional commit on `BRANCH`, rebased onto `origin/$BASE_BRANCH`,
-   with conflicts resolved and a clean worktree. Squash multiple commits before
-   completing the checkpoint.
-3. After a conflict push-back, read the paths from
-   `<git-dir>/dagu-feature/runs/<RUN>/conflict-files`, rebase the single commit
-   onto `origin/$BASE_BRANCH`, resolve those paths, and leave the worktree clean.
+2. Deliver modified, added, deleted, renamed and binary files inside the assigned
+   worktree, with a summary and a conventional commit message. Dagu's `capture`
+   validates canonical PRIMARY/worktree, branch and run/session ownership, stages
+   the delivery and generates the single candidate commit over the recorded base.
+3. After a conflict push-back, resolve the files listed in
+   `<git-dir>/dagu-feature/runs/<RUN>/conflict-files` in place. Dagu keeps the same
+   run and branch, prepares the updated base and leaves conflict markers for the
+   implementer; the next capture commits the resolved files.
 4. Optionally run the gate yourself first, from the worktree.
 5. Complete the checkpoint:
 
    ```sh
-   dagu human-task complete --run-id <id> --step implement feature
+   dagu human-task complete --run-id <id> --step implement \
+     --input SUMMARY='<change summary>' --input MESSAGE='<conventional message>' feature
    ```
 
-The run resumes through the queue: `checkpoint_push` → `dependency_review` →
-`rebase` → `conflict_review` → `gate` → `push` → `pr` → `auto_merge`. The
+The run resumes through the queue: `capture` → `checkpoint_push` →
+`dependency_review` → `rebase` → `conflict_review` → `gate` → `push` → `pr` → `auto_merge`. The
 dependency checkpoint automatically completes or returns to triage. A clean
 rebase makes the wait handler complete `conflict_review`; a conflicting rebase
-records the conflict paths, aborts to a clean worktree, and pushes back to
-`implement`. After `auto_merge` requests guarded auto-merge for the tested SHA,
+records the conflict paths, preserves the delivery with conflict markers, and
+pushes back to `implement`. After `auto_merge` requests guarded auto-merge for the tested SHA,
 the run waits at `await_merge` and releases the repository queue slot. GitHub
 merges only after the required check succeeds. `pr` creates the PR with `--fill`
 and the body `Closes #<issue>`, so the commit message becomes the PR title.
@@ -505,6 +508,22 @@ command from scratch. If that attempt fails, Dagu retries it once after five
 seconds. The retry therefore repeats setup such as `npm ci`; only after a
 successful gate does the step check that the worktree is clean and record the
 tested SHA.
+
+Per-run state under `<git-dir>/dagu-feature/runs/<RUN>` records `identity`,
+`base`, `diff.patch` (full binary patch), `candidate.json` (SHA, tree, message,
+summary and capture iteration), and `gate.json` (tested SHA and exact GATE).
+Identical captures reuse the SHA and commit count; author/committer dates are
+fixed from the run ID and capture iteration. Corrections create a new single
+commit over the base. Corrections and rebases archive earlier candidate/diff/gate
+records under `historical/<SHA>/`; all declared local checks belong in GATE and
+run again for the current SHA. `push` and `auto_merge` require current evidence
+and a clean worktree. `checkpoint_push` performs the dependency comparison
+locally; `push` is the publication boundary after the gate.
+
+This division of responsibility is **advisory while the TUI has direct access
+to Git and the Dagu store**. The contract and workflow checks establish the
+candidate identity; they are not a sandbox against a process that can rewrite
+the repository or its run state.
 
 ## Reconcile `await_merge`
 

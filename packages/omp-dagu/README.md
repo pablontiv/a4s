@@ -180,6 +180,30 @@ valores actuales mostrados por `answers`, abre el issue de adopción y encola el
 `Dagu-Feature-Bundle`, `Dagu-Feature-Source` y `Dagu-Feature-Bootstrap` que
 imprime `confirm`.
 
+## Entrega y candidato de feature
+
+`implement` entrega archivos dentro del worktree asignado (modificados, nuevos,
+borrados, renombrados y binarios), más `SUMMARY` y `MESSAGE` convencional en el
+formulario. Dagu valida PRIMARY/worktree canónicos, rama y propietario run/sesión,
+rechaza escapes externos por symlink conservando la entrega, y hace staging y
+commit con un índice privado. El acceso directo de la TUI a Git y al store de
+Dagu hace esta separación **advisory**, no una barrera de seguridad.
+
+El estado por run (`<git-dir>/dagu-feature/runs/<RUN>`) conserva `base`, el patch
+binario `diff.patch` y `candidate.json` con SHA, árbol, resumen, mensaje e
+iteración. Repetir la captura recupera el mismo SHA y número de commits; las
+fechas Git se derivan del run y la iteración. Una corrección sustituye el
+candidato por un único commit sobre la base y archiva la evidencia anterior en
+`historical/<SHA>/`. Tras un conflicto Dagu prepara la base nueva y deja los
+archivos para resolver en el mismo worktree y rama; el implementador entrega
+esos archivos resueltos y Dagu los captura.
+
+`checkpoint_push` compara dependencias localmente. `gate` ejecuta todas las
+verificaciones declaradas en `GATE` y registra su comando y SHA en `gate.json`.
+Una corrección o rebase exige renovar esa evidencia; `push` publica únicamente
+el candidato actual con evidencia vigente y worktree limpio. `auto_merge` vuelve
+a comprobar ese vínculo antes de solicitar la fusión del SHA probado.
+
 ## Desarrollo
 
 ```sh

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.11
+
+- Capture implementer-delivered files in Dagu with canonical run/worktree ownership, confined paths, a binary patch, deterministic single-commit candidates and SHA-bound gate evidence. Preserve conflict deliveries in the same run/branch, archive replaced evidence, and publish only the currently verified candidate (#278).
+
 ## 0.3.10
 
 - Distinguish slow REST/SSE timeouts from unavailable Dagu connections, retaining known workflow rows during timeouts and restoring the normal widget after recovery (#248).
