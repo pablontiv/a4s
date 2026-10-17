@@ -7,8 +7,8 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 const bundle = "packages/omp-dagu";
-const templates = ["feature.yaml", "poc.yaml", "reconcile.yaml", "discovery.yaml", "dagu-feature-bootstrap.yaml", "SKILL.md"]
-  .map((name) => `${bundle}/skills/dagu-feature/${name}`);
+const skills = `${bundle}/skills`;
+const fixturePaths = [`${skills}/dagu-feature/feature.yaml`, `${skills}/discovery/SKILL.md`];
 const git = (root: string, ...args: string[]): string => execFileSync("git", args, {
   cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
 }).trim();
@@ -26,7 +26,10 @@ function mergeBase(root: string): string {
 
 function checkBundleVersion(root: string): void {
   const base = mergeBase(root);
-  const changed = git(root, "diff", "--name-only", base, "--", ...templates).split("\n").filter(Boolean);
+  const changed = [...new Set([
+    ...git(root, "diff", "--name-only", "-z", base, "--", skills).split("\0"),
+    ...git(root, "ls-files", "--others", "--exclude-standard", "-z", "--", skills).split("\0"),
+  ].filter(Boolean))];
   if (!changed.length) return;
   const previous: string = JSON.parse(git(root, "show", `${base}:${bundle}/package.json`)).version;
   const current: string = JSON.parse(readFileSync(join(root, bundle, "package.json"), "utf8")).version;
@@ -56,7 +59,7 @@ function fixture(): { root: string; put: (path: string, text: string) => void; c
   const commit = (): void => { git(root, "add", "."); git(root, "commit", "-m", "fixture"); };
   put(`${bundle}/package.json`, JSON.stringify({ version: "0.2.0" }));
   put(`${bundle}/CHANGELOG.md`, "## 0.2.0\n");
-  for (const path of templates) put(path, "original\n");
+  for (const path of fixturePaths) put(path, "original\n");
   commit();
   git(root, "update-ref", "refs/remotes/origin/main", "HEAD");
   return { root, put, commit };
@@ -66,7 +69,7 @@ test("template changes require a greater bundle version and its release heading"
   const { root, put, commit } = fixture();
   try {
     checkBundleVersion(root);
-    for (const path of templates) {
+    for (const path of fixturePaths) {
       put(path, "changed\n");
       assert.throws(() => checkBundleVersion(root), (error: unknown) => {
         assert.ok(error instanceof Error);
@@ -76,7 +79,7 @@ test("template changes require a greater bundle version and its release heading"
       });
       put(path, "original\n");
     }
-    put(templates[0]!, "changed\n");
+    put(fixturePaths[0]!, "changed\n");
     for (const version of ["0.1.9", "0.2.0"]) {
       put(`${bundle}/package.json`, JSON.stringify({ version }));
       assert.throws(() => checkBundleVersion(root), /base version 0.2.0/);
@@ -90,12 +93,30 @@ test("template changes require a greater bundle version and its release heading"
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test("recursive skill additions and deletions require a versioned release locally and after commit", () => {
+  for (const operation of ["add", "delete"] as const) {
+    const { root, put, commit } = fixture();
+    try {
+      const path = operation === "add" ? `${skills}/foo/nested/x.md` : fixturePaths[1]!;
+      if (operation === "add") put(path, "new skill\n");
+      else rmSync(join(root, path));
+      assert.throws(() => checkBundleVersion(root), /base version 0.2.0/);
+      commit();
+      assert.throws(() => checkBundleVersion(root), /base version 0.2.0/);
+      put(`${bundle}/package.json`, JSON.stringify({ version: "0.2.1" }));
+      assert.throws(() => checkBundleVersion(root), /CHANGELOG.md section ## 0.2.1/);
+      put(`${bundle}/CHANGELOG.md`, "## 0.2.1\n\n## 0.2.0\n");
+      checkBundleVersion(root);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  }
+});
+
 test("shallow CI checkout fetches main and ancestry to resolve the PR merge base", () => {
   const { root, put, commit } = fixture();
   const checkout = mkdtempSync(join(tmpdir(), "dagu-bundle-checkout-"));
   try {
     git(root, "checkout", "-b", "feature");
-    put(templates[0]!, "changed\n");
+    put(fixturePaths[0]!, "changed\n");
     commit();
     git(checkout, "clone", "--depth=1", "--branch=feature", `file://${root}`, ".");
     assert.throws(() => checkBundleVersion(checkout), /base version 0.2.0/);
