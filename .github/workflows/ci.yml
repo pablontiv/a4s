@@ -83,6 +83,34 @@ jobs:
           mv package-lock.ci.json package-lock.json
           npm ci
           git checkout -- package-lock.json packages
+      - name: Install pinned Dagu
+        if: matrix.workspace.name == '@a4s/omp-dagu'
+        run: |
+          version=$(node -p "require('./packages/omp-dagu/package.json').daguFeature.dagu")
+          asset="dagu_${version}_linux_amd64.tar.gz"
+          url="https://github.com/dagu-org/dagu/releases/download/v${version}"
+          mkdir -p "$RUNNER_TEMP/dagu-install" "$RUNNER_TEMP/dagu-bin"
+          cd "$RUNNER_TEMP/dagu-install"
+          echo "Asset: $url/$asset"
+          curl --fail --location --show-error --silent "$url/$asset" -o "$asset"
+          curl --fail --location --show-error --silent "$url/checksums.txt" -o checksums.txt
+          awk -v asset="$asset" '$2 == asset { print; found=1 } END { if (!found) { print "Missing checksum for " asset > "/dev/stderr"; exit 1 } }' checksums.txt > checksum.txt
+          cat checksum.txt
+          sha256sum --check --strict checksum.txt
+          tar -xzf "$asset" dagu
+          install -m 0755 dagu "$RUNNER_TEMP/dagu-bin/dagu"
+          echo "$RUNNER_TEMP/dagu-bin" >> "$GITHUB_PATH"
+      - name: Check pinned Dagu
+        if: matrix.workspace.name == '@a4s/omp-dagu'
+        run: |
+          version=$(node -p "require('./packages/omp-dagu/package.json').daguFeature.dagu")
+          command -v dagu
+          actual=$(dagu version)
+          echo "$actual"
+          if [[ "$actual" != "$version" ]]; then
+            echo "::error::Expected dagu version $version; received $actual"
+            exit 1
+          fi
       - run: npm test --workspace "${{ matrix.workspace.name }}"
       - name: Typecheck
         if: matrix.workspace.typecheck
