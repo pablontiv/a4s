@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.16
+
+- Detect a loaded extension differing from the run PRIMARY manifest on every notice, abort the turn and persistently block tools until the OMP session restarts (#258).
+
 ## 0.3.15
 
 - Protect active feature/PoC resources and the primary checkout in OMP bash calls; fail closed with ownership diagnostics when history is unavailable (#215).

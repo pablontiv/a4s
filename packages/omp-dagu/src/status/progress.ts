@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { runPrimary } from "../triage/primary.ts";
 import {
   BUNDLE_VERSION,
   bundleVersionFromLabels,
@@ -33,6 +36,17 @@ export function runParam(run: RunDetails, name: string): string | undefined {
   return run.params?.match(new RegExp(
     `(?:^|[\\s"{,])${escaped}(?:["']?\\s*[:=]\\s*["']?)([^\\s"',}]+)(?=$|[\\s"',}])`,
   ))?.[1];
+}
+
+/** Read the run's installed bundle afresh for every delivered notice. */
+export function extensionNotice(message: string, run: RunDetails): { message: string; stale: boolean } {
+  try {
+    const installed = JSON.parse(readFileSync(join(runPrimary(run), "packages/omp-dagu/package.json"), "utf8")).version;
+    if (typeof installed === "string" && installed !== BUNDLE_VERSION) {
+      return { message: `${message} stale_extension=${BUNDLE_VERSION} installed=${plain(installed)}`, stale: true };
+    }
+  } catch { /* Missing or unreadable manifests provide no version to compare. */ }
+  return { message, stale: false };
 }
 
 export function issueNumber(run: RunDetails): string | undefined {

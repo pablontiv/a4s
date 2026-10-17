@@ -77,6 +77,13 @@ has a shallow checkout. In 0.x, a minor bump marks a compatibility break.
 After merge, the operator runs bootstrap to apply the new version and real
 source/bootstrap identity to installed renders.
 
+Each notice also compares the loaded extension version exactly with the package
+manifest on disk in the run's PRIMARY. When `stale_extension=<loaded>
+installed=<disk>` appears, restart the OMP session to load the new bundle.
+The stale session aborts its current turn and persistently blocks tool calls
+with `stale extension`; cancellation need not make the host idle synchronously.
+This check is independent of the DAG's `compat=` classification.
+
 ## Template parameters
 
 The bootstrap renders the repository DAG templates when a repository adopts the lifecycle:

@@ -37,6 +37,7 @@ export async function liveWatcher(binary = "dagu"): Promise<string[]> {
   const received: string[] = [];
   const ctx = {
     cwd: process.cwd(), hasUI: false, isIdle: () => false, agent: { kind: "main" as const },
+    abort() {},
     sessionManager: { getSessionId: () => "smoke-owner" }, ui: {
       theme: { fg: (_color: string, text: string) => text, bold: (text: string) => text, tree: { branch: "├─", last: "└─" } },
       setWidget() {}, notify() {},

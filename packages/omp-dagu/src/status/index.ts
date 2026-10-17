@@ -1,7 +1,7 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { activityTarget, readActivity } from "./activity.ts";
 import { ghIssueTitleResolver, IssueTitles } from "./issue-title.ts";
-import { isActive, issueNumber, renderOffline, renderWidget, runParam, TOGGLE_COMMAND, topicFor, Transitions } from "./progress.ts";
+import { extensionNotice, isActive, issueNumber, renderOffline, renderWidget, runParam, TOGGLE_COMMAND, topicFor, Transitions } from "./progress.ts";
 import type { RunDetails, WidgetTheme } from "./progress.ts";
 import { resolveRepository } from "./repository.ts";
 import { SSEParser } from "./sse.ts";
@@ -15,6 +15,7 @@ interface Context {
   cwd: string;
   hasUI: boolean;
   isIdle(): boolean;
+  abort(): void;
   agent: { kind: "main" | "sub" };
   sessionManager: { getSessionId(): string; getSessionDir?(): string };
   ui: {
@@ -46,6 +47,7 @@ interface CustomMessage {
 }
 interface ExtensionAPI {
   on(event: "session_start" | "session_switch" | "session_shutdown" | "agent_end", handler: (event: unknown, ctx: Context) => void): void;
+  on(event: "tool_call", handler: (event: unknown, ctx: Context) => { block: true; reason: string } | undefined): void;
   registerTool(tool: SessionIdTool): void;
   registerCommand(name: string, options: {
     description?: string;
@@ -120,7 +122,7 @@ async function streamTopics(base: string, topics: string[], signal: AbortSignal,
   }
 }
 
-async function watchNotices(base: string, repo: string, ctx: Context, signal: AbortSignal, wake: (message: string) => void): Promise<void> {
+async function watchNotices(base: string, repo: string, ctx: Context, signal: AbortSignal, wake: (message: string, run: RunDetails) => void): Promise<void> {
   const transitions = new Transitions(ctx.sessionManager.getSessionId());
   const ledger = new EventLog();
   const tracked = new Map<string, RunDetails>();
@@ -139,7 +141,7 @@ async function watchNotices(base: string, repo: string, ctx: Context, signal: Ab
           const run = await runDetails(base, summary, signal);
           for (const snapshot of await ledger.read(base, run, signal)) {
             const effects = transitions.observe(snapshot, { baseline });
-            for (const message of effects.wakeMessages ?? (effects.wakeMessage ? [effects.wakeMessage] : [])) wake(message);
+            for (const message of effects.wakeMessages ?? (effects.wakeMessage ? [effects.wakeMessage] : [])) wake(message, run);
             if (snapshot.statusLabel === "succeeded") {
               completed.add(topic);
               tracked.delete(topic);
@@ -161,7 +163,7 @@ function isTimeout(error: unknown): boolean {
     || (failure.cause !== error && isTimeout(failure.cause));
 }
 
-async function observe(ctx: Context, signal: AbortSignal, wake: (message: string) => void, view: WidgetView): Promise<void> {
+async function observe(ctx: Context, signal: AbortSignal, wake: (message: string, run: RunDetails) => void, view: WidgetView): Promise<void> {
   const repo = await resolveRepository(ctx.cwd, signal);
   if (!repo || signal.aborted) return;
   const base = (process.env.DAGU_URL || "http://127.0.0.1:8080").replace(/\/+$/, "");
@@ -231,7 +233,7 @@ async function observe(ctx: Context, signal: AbortSignal, wake: (message: string
     if (effects.notification && ctx.hasUI) {
       ctx.ui.notify(effects.notification.message, effects.notification.type);
     }
-    if (effects.wakeMessage) wake(effects.wakeMessage);
+    if (effects.wakeMessage) wake(effects.wakeMessage, run);
     const key = topicFor(run);
     if (isActive(run)) {
       runs.set(key, run);
@@ -331,6 +333,9 @@ async function observe(ctx: Context, signal: AbortSignal, wake: (message: string
 export default function daguStatus(pi: ExtensionAPI): void {
   let controller: AbortController | undefined;
   let activeContext: Context | undefined;
+  const staleSessions = new Set<string>();
+  pi.on("tool_call", (_event, ctx) => staleSessions.has(ctx.sessionManager.getSessionId())
+    ? { block: true, reason: "stale extension" } : undefined);
   const view: WidgetView = { expanded: false, hidden: false };
   const modes: Record<string, (view: WidgetView) => void> = {
     "": view => { view.hidden ? (view.hidden = false) : (view.expanded = !view.expanded); },
@@ -401,13 +406,16 @@ export default function daguStatus(pi: ExtensionAPI): void {
     controller = new AbortController();
     // Every detached promise has an error boundary; shutdown aborts fetches and sleeps.
     const session = ctx.sessionManager.getSessionId();
-    void observe(ctx, controller.signal, message => {
+    void observe(ctx, controller.signal, (message, run) => {
       if (controller?.signal.aborted || activeContext !== ctx
         || ctx.sessionManager.getSessionId() !== session) return;
+      const notice = extensionNotice(message, run);
+      if (notice.stale) staleSessions.add(session);
       let queue = queues.get(session);
       if (!queue) { queue = { messages: [], claimed: false }; queues.set(session, queue); }
-      queue.messages.push(message);
+      queue.messages.push(notice.message);
       pump();
+      if (notice.stale) ctx.abort();
     }, view).catch(() => {});
   };
   pi.on("session_start", start);

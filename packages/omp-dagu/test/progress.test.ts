@@ -1,5 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { BUNDLE_VERSION } from "../src/bundle.ts";
+import { extensionNotice } from "../src/status/progress.ts";
 import { currentStep, renderOffline, renderRun, renderWidget, runLabel, Transitions } from "../src/status/progress.ts";
 import type { RunDetails } from "../src/status/progress.ts";
 
@@ -191,4 +196,20 @@ test("primary availability notices preserve the concrete sanitized cause", () =>
 test("bundle compatibility remains visible in targeted notices", () => {
   const candidate = { ...waitingAt("feature", "implement"), labels: ["dagu-feature-bundle=0.2.0"] };
   assert.ok(new Transitions("session-a").observe(candidate).wakeMessage?.includes("compat=incompatible"));
+});
+
+test("notices compare the run PRIMARY manifest exactly on every wake", () => {
+  const primary = mkdtempSync(join(tmpdir(), "dagu-progress-"));
+  const manifest = join(primary, "packages/omp-dagu/package.json");
+  mkdirSync(join(primary, "packages/omp-dagu"), { recursive: true });
+  const candidate = { ...run, params: `PRIMARY=${primary}` };
+  const message = "[DAGU STATE] compat=ok";
+  try {
+    writeFileSync(manifest, JSON.stringify({ version: BUNDLE_VERSION }));
+    assert.deepEqual(extensionNotice(message, candidate), { message, stale: false });
+    writeFileSync(manifest, JSON.stringify({ version: `${BUNDLE_VERSION}+changed` }));
+    assert.deepEqual(extensionNotice(message, candidate), {
+      message: `${message} stale_extension=${BUNDLE_VERSION} installed=${BUNDLE_VERSION}+changed`, stale: true,
+    });
+  } finally { rmSync(primary, { recursive: true, force: true }); }
 });

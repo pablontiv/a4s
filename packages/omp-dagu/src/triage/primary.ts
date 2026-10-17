@@ -20,6 +20,12 @@ async function mainWorktree(cwd: string): Promise<string> {
   return realpath(top);
 }
 
+export function runPrimary(run: RunDetails): string {
+  const primary = runParam(run, "PRIMARY");
+  if (!primary) throw new Error("Run PRIMARY is missing");
+  return primary;
+}
+
 // Keep identical to triage_decision's encode_relative and canonical PRIMARY lookup.
 export function encodePrimary(primary: string, home: string, tmp: string): string {
   for (const [root, prefix] of [[tmp, "-tmp"], [home, "-"]] as const) {
@@ -39,8 +45,7 @@ export async function primarySessionDecision(event: Event, ctx: SessionContext):
     const response = await fetch(`${base}/api/v1/dag-runs/${encodeURIComponent(completion.dag)}/${encodeURIComponent(completion.run)}`, { signal: AbortSignal.timeout(5000) });
     if (!response.ok) throw new Error(`Dagu HTTP ${response.status}`);
     const body = await response.json() as { dagRunDetails: RunDetails };
-    const primary = runParam(body.dagRunDetails, "PRIMARY");
-    if (!primary) throw new Error("Run PRIMARY is missing");
+    const primary = runPrimary(body.dagRunDetails);
     expected = await realpath(primary);
     const [primaryRepo, sessionRepo, home, tmp] = await Promise.all([
       mainWorktree(expected), mainWorktree(ctx.cwd), realpath(homedir()), realpath(process.env.TMPDIR || "/tmp"),
