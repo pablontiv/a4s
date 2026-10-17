@@ -29,6 +29,10 @@ const REVIEW_POLICIES: Record<string, ReviewPolicy> = {
     fallbackRoles: ["@task", "@slow", "@default"],
     excludeTaskFamily: false,
   },
+  "plan-reviewer": {
+    fallbackRoles: ["@task", "@slow", "@default"],
+    excludeTaskFamily: false,
+  },
   "security-reviewer": {
     fallbackRoles: ["@slow", "@default"],
     excludeTaskFamily: true,

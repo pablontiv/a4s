@@ -9,7 +9,7 @@ const skill = (name: string): string => readFileSync(
 );
 
 test("all distributed DAG templates carry bundle stamp and label placeholders", () => {
-  for (const name of ["feature.yaml", "poc.yaml", "discovery.yaml", "reconcile.yaml"]) {
+  for (const name of ["feature.yaml", "poc.yaml", "discovery.yaml", "planning.yaml", "reconcile.yaml"]) {
     const contents = skill(name);
     assert.equal(contents.split("\n", 1)[0], "# dagu-feature-bundle: __DAGU_FEATURE_STAMP__", name);
     assert.match(contents, name === "discovery.yaml"
@@ -28,6 +28,9 @@ test("interactive repository DAG identity steps print the rendered bundle identi
   assert.match(poc, /- id: base[\s\S]*?printf '%s\\n' "\$DAGU_FEATURE_BUNDLE"/);
   assert.match(discovery, /- DAGU_FEATURE_BUNDLE: "__DAGU_FEATURE_IDENTITY__"/);
   assert.match(discovery, /- id: snapshot[\s\S]*?printf '%s\\n' "\$DAGU_FEATURE_BUNDLE"/);
+  const planning = skill("planning.yaml");
+  assert.match(planning, /- DAGU_FEATURE_BUNDLE: "__DAGU_FEATURE_IDENTITY__"/);
+  assert.match(planning, /- id: init[\s\S]*?printf '%s\\n' "\$DAGU_FEATURE_BUNDLE"/);
 });
 
 test("bootstrap detects source compatibility and renders and confirms all stamps", () => {
@@ -38,6 +41,8 @@ test("bootstrap detects source compatibility and renders and confirms all stamps
   assert.match(bootstrap, /CURRENT_FEATURE_STAMP/);
   assert.match(bootstrap, /CURRENT_POC_STAMP/);
   assert.match(bootstrap, /CURRENT_DISCOVERY_STAMP/);
+  assert.match(bootstrap, /CURRENT_PLANNING_STAMP/);
+  assert.match(bootstrap, /\$SKILL_DIR\/planning\.yaml/);
   assert.match(bootstrap, /\$SKILL_DIR\/reconcile\.yaml/);
   assert.match(bootstrap, /\$SKILL_DIR\/discovery\.yaml/);
   assert.match(bootstrap, /Dagu-Feature-Bundle: %s/);
