@@ -312,6 +312,12 @@ remove the local worktree and branch. Restore a published but unmerged branch wi
 `git fetch origin && git branch <branch> origin/<branch>` before reenqueuing.
 Pass `PR_NUMBER` when a PR already exists for the branch.
 
+Reenqueue a retained candidate with the same ISSUE, BRANCH and OMP_SESSION_ID.
+Admission durably records the terminal previous owner in the replacement run's
+`previous-owner` state; `start_gate` validates and transfers the worktree owner
+and run identity while preserving HEAD and files. Repeating `start_gate` reuses
+that identity. Ownership refusals print the resource and observed/expected identity.
+
 A failed run can leave its PR's auto-merge armed. Before reenqueuing, read
 `gh pr view <pr> --json state`: `MERGED` means the issue's delivery is complete.
 Otherwise the replacement run's `push` can trigger that merge; the current

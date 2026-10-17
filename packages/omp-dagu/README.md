@@ -117,6 +117,11 @@ aislamiento del sistema operativo: no interpreta expansiones del shell,
 scripts externos, comandos construidos dinámicamente ni otras herramientas.
 
 `admit` registra el propietario `(PRIMARY canónico, ISSUE)` en los metadatos Git.
+Para recuperar un candidato retenido de un run terminal, reencola con ID sufijado
+y los mismos ISSUE, BRANCH y OMP_SESSION_ID. `admit` conserva `previous-owner`
+en el estado del nuevo run; `start_gate` valida y transfiere ambas identidades,
+conservando HEAD y archivos. Sus reintentos reutilizan la identidad adoptada.
+
 Admisión, creación y cleanup se serializan mediante un directorio-lock por issue,
 retenido hasta terminar cada operación. El mismo run reutiliza la rama y el
 worktree, incluidos commits y archivos existentes; un segundo propietario activo
