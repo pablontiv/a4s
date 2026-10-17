@@ -43,8 +43,100 @@ env:
   - WORKTREE: ${PRIMARY}/.workspace/worktrees/issue-${ISSUE}
   - RUN: ${context.run.id}
   - DAGU_FEATURE_BUNDLE: "dagu-feature-bundle=0.3.8 source=pablontiv/a4s@fe5d444e9c9133d5bac3d2aeef054fee56d01fdb bootstrap=bootstrap-a4s-v0-3-8"
+  - DAGU_RESOURCE_GUARD: |
+      resource_lock() {
+        local operation=$1 primary root expected actual common key attempt owner run status candidate branch issue
+        primary=$(cd "$PRIMARY" && pwd -P)
+        root=$(cd "$(git -C "$PRIMARY" rev-parse --show-toplevel)" && pwd -P)
+        [[ "$root" == "$primary" ]] || { echo 'dagu-feature: PRIMARY must be the main checkout' >&2; exit 1; }
+        [[ "$(git -C "$primary" rev-parse --absolute-git-dir)" == "$(git -C "$primary" rev-parse --path-format=absolute --git-common-dir)" ]] ||
+          { echo 'dagu-feature: PRIMARY must be the main checkout' >&2; exit 1; }
+        [[ "$RUN" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || { echo 'dagu-feature: invalid run identity' >&2; exit 1; }
+        [[ "$ISSUE" =~ ^[1-9][0-9]*$ && "$BRANCH" == dagu/* ]] ||
+          { echo 'dagu-feature: invalid resource identity' >&2; exit 1; }
+        expected="$primary/.workspace/worktrees/issue-$ISSUE"
+        if [[ -e "$WORKTREE" && "$(cd "$WORKTREE" && pwd -P)" == "$primary" ]]; then
+          echo "dagu-feature: protected primary or unmanaged target $WORKTREE" >&2; exit 1
+        fi
+        mkdir -p "$primary/.workspace/worktrees"
+        actual="$(cd "$(dirname "$WORKTREE")" && pwd -P)/$(basename "$WORKTREE")"
+        if [[ -e "$WORKTREE" ]]; then actual=$(cd "$WORKTREE" && pwd -P); fi
+        [[ "$actual" == "$expected" && "$actual" != "$primary" && "$BRANCH" != "$(git -C "$primary" branch --show-current)" ]] ||
+          { printf 'dagu-feature: protected primary or unmanaged target %s %s\n' "$WORKTREE" "$BRANCH" >&2; exit 1; }
+        common=$(git -C "$primary" rev-parse --absolute-git-dir)
+        key="$common/dagu-feature/owners/issue-$ISSUE"
+        mkdir -p "$(dirname "$key")"
+        attempt=0
+        until mkdir "$key.lock" 2>/dev/null; do
+          attempt=$((attempt + 1))
+          [[ "$attempt" -lt 100 ]] || { echo "dagu-feature: ownership lock unavailable $key.lock" >&2; exit 1; }
+          sleep 0.1
+        done
+        RESOURCE_LOCK="$key.lock"
+        trap 'rm -f "$RESOURCE_LOCK/history" "$RESOURCE_LOCK/rows" "$RESOURCE_LOCK/owner" "$RESOURCE_LOCK/owner-history"; rmdir "$RESOURCE_LOCK"' EXIT
+        if [[ -e "$WORKTREE" ]]; then
+          [[ "$(git -C "$WORKTREE" rev-parse --path-format=absolute --git-common-dir)" == "$(git -C "$primary" rev-parse --absolute-git-dir)" &&
+             "$(git -C "$WORKTREE" branch --show-current)" == "$BRANCH" &&
+             "$(cd "$(git -C "$WORKTREE" rev-parse --show-toplevel)" && pwd -P)" == "$expected" ]] ||
+            { echo 'dagu-feature: candidate worktree identity mismatch; preserved' >&2; exit 1; }
+        fi
+        if ! dagu history feature --format json --from 1970-01-01 --status queued,running,waiting --limit 1000 > "$key.lock/history"; then
+          echo 'dagu-feature: feature ownership history read failed' >&2; exit 1
+        fi
+        if ! jq -er 'if type == "array" and length < 1000 then . else error("ownership history incomplete: expected array below 1000 rows") end | .[] |
+          if (.params|type) != "string" then error("params must be a string") else . end |
+          def p($k): (try (.params|capture("(^| )"+$k+"=(?<v>.*?)(?= [A-Z_]+=|$)").v | if startswith("\"") or startswith("\u0027") then .[1:-1] else . end) catch "") // "";
+          [.dagRunId, (.status|ascii_downcase), p("PRIMARY"), p("BRANCH"), p("ISSUE")] | @tsv' \
+          "$key.lock/history" > "$key.lock/rows"; then
+          # jq -e returns 4 for an empty, valid history.
+          jq -e 'type == "array" and length == 0' "$key.lock/history" >/dev/null ||
+            { echo 'dagu-feature: malformed ownership history' >&2; exit 1; }
+        fi
+        owner=
+        if [[ -f "$key" ]]; then IFS=$'\t' read -r owner branch < "$key"; fi
+        if [[ -n "$owner" && "$branch" != "$BRANCH" ]]; then
+          echo 'dagu-feature: retained candidate branch mismatch; preserved' >&2; exit 1
+        fi
+        if [[ -n "$owner" && "$owner" != "$RUN" ]]; then
+          if ! dagu history feature --format json --from 1970-01-01 --run-id "$owner" --limit 1000 > "$key.lock/owner-history"; then
+            echo "dagu-feature: recorded owner $owner history read failed" >&2; exit 1
+          fi
+          status=$(jq -er --arg run "$owner" '[.[] | select(.dagRunId == $run)] | if length == 1 then .[0].status | ascii_downcase else error("recorded owner missing or ambiguous") end' "$key.lock/owner-history") ||
+            { echo "dagu-feature: cannot verify recorded owner $owner" >&2; exit 1; }
+          case "$status" in
+            succeeded|failed|aborted|rejected|partially_succeeded) ;;
+            queued|running|waiting) printf 'dagu-feature: %s belongs to active run %s (%s)\n' "$expected" "$owner" "$status" >&2; exit 1 ;;
+            *) printf 'dagu-feature: cannot verify recorded owner %s (%s)\n' "$owner" "$status" >&2; exit 1 ;;
+          esac
+        fi
+        while IFS=$'\t' read -r run status candidate branch issue; do
+          [[ -n "$candidate" && -d "$candidate" ]] || continue
+          candidate=$(cd "$candidate" && pwd -P)
+          [[ "$candidate" == "$primary" && ( "$issue" == "$ISSUE" || "$branch" == "$BRANCH" ) ]] || continue
+          if [[ "$run" != "$RUN" && ( "$status" == running || "$status" == waiting || ( "$status" == queued && ( ( -n "$owner" && "$owner" != "$RUN" ) || ( -z "$owner" && "$operation" == cleanup ) ) ) ) ]]; then
+            printf 'dagu-feature: %s belongs to active run %s (%s)\n' "$expected" "$run" "$status" >&2; exit 1
+          fi
+        done < "$key.lock/rows"
+        if [[ "$operation" == cleanup && -n "$owner" && "$owner" != "$RUN" ]]; then
+          printf 'dagu-feature: %s now belongs to run %s; cleanup rejected\n' "$expected" "$owner" >&2; exit 1
+        fi
+        RESOURCE_PREVIOUS_OWNER=$owner
+        if [[ "$operation" == claim ]]; then
+          printf '%s\t%s\n' "$RUN" "$BRANCH" > "$key.lock/owner"
+          mv "$key.lock/owner" "$key"
+        fi
+        rm "$key.lock/history" "$key.lock/rows"
+        PRIMARY=$primary WORKTREE=$expected
+      }
 steps:
+  - id: admit
+    run: |
+      set -euo pipefail
+      eval "$DAGU_RESOURCE_GUARD"
+      resource_lock claim
+
   - id: triage
+    depends: admit
     action: human.task
     with:
       prompt: >-
@@ -292,6 +384,8 @@ steps:
     run: |
       set -euo pipefail
       printf '%s\n' "$DAGU_FEATURE_BUNDLE"
+      eval "$DAGU_RESOURCE_GUARD"
+      resource_lock claim
       umask 0022
       test -n "$PRIMARY"
       test -n "$GATE" && test -n "$REQUIRED_CHECK"
@@ -309,7 +403,6 @@ steps:
         worktree_root=$(cd "$(git -C "$WORKTREE" rev-parse --show-toplevel)" && pwd -P)
         test "$worktree_root" = "$worktree_path" || { printf 'start_gate: WORKTREE %s resolves to %s, repository root is %s\n' "$WORKTREE" "$worktree_path" "$worktree_root" >&2; exit 1; }
         test "$(git -C "$WORKTREE" branch --show-current)" = "$BRANCH"
-        test -z "$(git -C "$WORKTREE" status --porcelain)"
       elif git -C "$PRIMARY" show-ref --verify --quiet "refs/heads/$BRANCH"; then
         git -C "$PRIMARY" worktree add "$WORKTREE" "$BRANCH"
       else
@@ -317,11 +410,19 @@ steps:
         git -C "$PRIMARY" worktree add -b "$BRANCH" "$WORKTREE" "origin/$BASE_BRANCH"
       fi
       STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")
+      previous_owner=$RESOURCE_PREVIOUS_OWNER
       owner=$(git -C "$WORKTREE" rev-parse --path-format=absolute --git-path dagu-feature-owner)
       identity=$(jq -nc --arg primary "$primary_path" --arg worktree "$(cd "$WORKTREE" && pwd -P)" \
         --arg branch "$BRANCH" --arg run "$RUN" --arg session "$OMP_SESSION_ID" \
         '{primary:$primary,worktree:$worktree,branch:$branch,run:$run,session:$session}')
-      if test -f "$owner"; then test "$(cat "$owner")" = "$identity"; fi
+      if test -f "$owner"; then
+        if [[ -n "$previous_owner" && "$previous_owner" != "$RUN" ]]; then
+          jq -e --argjson expected "$identity" --arg previous "$previous_owner" \
+            '.primary == $expected.primary and .worktree == $expected.worktree and .branch == $expected.branch and .run == $previous' "$owner" >/dev/null
+        else
+          test "$(cat "$owner")" = "$identity"
+        fi
+      fi
       if test -f "$STATE/identity"; then test "$(cat "$STATE/identity")" = "$identity"; fi
       mkdir -p "$STATE"
       printf '%s\n' "$identity" > "$owner"
@@ -734,6 +835,8 @@ steps:
       set -euo pipefail
       umask 0022
       fail() { printf 'close_gate: %s\n' "$*" >&2; exit 1; }
+      eval "$DAGU_RESOURCE_GUARD"
+      resource_lock cleanup
       repo=$(git -C "$PRIMARY" remote get-url origin) ||
         fail "PRIMARY $PRIMARY origin lookup failed, expected repository"
       pr_ref=${PR_NUMBER:-$BRANCH}
@@ -746,10 +849,11 @@ steps:
       [[ "$state" == MERGED ]] || fail "PR #$pr state=$state, expected MERGED"
       tested_sha=$(gh pr view "$pr" --repo "$repo" --json headRefOid --jq .headRefOid) ||
         fail "PR #$pr headRefOid lookup failed, expected tested SHA"
-      branch_sha=$(git -C "$PRIMARY" rev-parse "refs/heads/$BRANCH") ||
-        fail "local branch $BRANCH lookup failed, expected $tested_sha"
-      [[ "$branch_sha" == "$tested_sha" ]] ||
-        fail "local branch $BRANCH SHA=$branch_sha, expected $tested_sha"
+      if git -C "$PRIMARY" show-ref --verify --quiet "refs/heads/$BRANCH"; then
+        branch_sha=$(git -C "$PRIMARY" rev-parse "refs/heads/$BRANCH")
+        [[ "$branch_sha" == "$tested_sha" ]] ||
+          fail "local branch $BRANCH SHA=$branch_sha, expected $tested_sha"
+      fi
       check_state=$(gh pr checks "$pr" --repo "$repo" --required --json name,state \
         --jq 'map(select(.name == env.REQUIRED_CHECK)) | if length == 0 then "MISSING" else .[0].state end') ||
         fail "required check $REQUIRED_CHECK lookup failed, expected SUCCESS"
@@ -776,14 +880,18 @@ steps:
         fail "origin/$BASE_BRANCH lookup failed, expected commit SHA"
       [[ "$base_sha" == "$origin_base_sha" ]] ||
         fail "PRIMARY $PRIMARY HEAD=$base_sha, expected $origin_base_sha"
-      worktree_real=$(cd "$WORKTREE" && pwd -P) ||
-        fail "worktree $WORKTREE canonicalization failed, expected directory"
-      git -C "$PRIMARY" worktree remove "$worktree_real" ||
-        fail "worktree $WORKTREE removal failed, expected removed"
+      worktree_real=$WORKTREE
+      if [[ -e "$WORKTREE" ]]; then
+        worktree_real=$(cd "$WORKTREE" && pwd -P)
+        git -C "$PRIMARY" worktree remove "$worktree_real" ||
+          fail "worktree $WORKTREE removal failed, expected removed"
+      fi
       git -C "$PRIMARY" worktree prune ||
         fail "worktree prune failed, expected success"
-      git -C "$PRIMARY" branch -D "$BRANCH" ||
-        fail "local branch $BRANCH removal failed, expected removed"
+      if git -C "$PRIMARY" show-ref --verify --quiet "refs/heads/$BRANCH"; then
+        git -C "$PRIMARY" branch -D "$BRANCH" ||
+          fail "local branch $BRANCH removal failed, expected removed"
+      fi
       git -C "$PRIMARY" fetch --prune origin ||
         fail "origin prune failed, expected success"
       remote=absent
@@ -857,6 +965,8 @@ handler_on:
   exit:
     run: |
       set -euo pipefail
+      eval "$DAGU_RESOURCE_GUARD"
+      resource_lock cleanup
       published=false
       if git -C "$PRIMARY" show-ref --verify --quiet "refs/heads/$BRANCH"; then
         head=$(git -C "$PRIMARY" rev-parse "refs/heads/$BRANCH")
@@ -892,7 +1002,9 @@ handler_on:
           git -C "$PRIMARY" worktree remove --force "$WORKTREE"
         fi
         git -C "$PRIMARY" worktree prune
-        git -C "$PRIMARY" branch -D "$BRANCH"
+        if git -C "$PRIMARY" show-ref --verify --quiet "refs/heads/$BRANCH"; then
+          git -C "$PRIMARY" branch -D "$BRANCH"
+        fi
       else
         printf 'Unpublished work kept: branch %s; worktree %s\n' "$BRANCH" "$WORKTREE"
         printf 'Recovery: push %s from %s, then re-enqueue this issue with a suffixed run ID.\n' "$BRANCH" "$WORKTREE"

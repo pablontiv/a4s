@@ -248,6 +248,33 @@ Dagu snapshots the definition when you enqueue. Later edits to the file do not a
 
 **One run per lifecycle.** Continue each run through its own checkpoints and push-backs. A feature whose triage chooses PoC ends after enqueueing `poc`; a successful PoC may enqueue a fresh feature run for the cutover.
 
+**Resource ownership.** `admit` atomically records `(canonical PRIMARY, ISSUE)`
+in the main Git directory before triage. Creation and cleanup take the same
+per-issue lock: the owning run reuses its branch/worktree, including existing
+commits and files; a terminal handoff validates that candidate before retaining
+it for the replacement run. A second active claimant is rejected with its owner
+and status. PoC creation and cleanup serialize by run and validate their
+`poc/<run>` branch and `poc-<run>` worktree.
+
+The OMP guard intercepts literal `bash` tool calls removing managed resources
+with `git worktree remove`, recursive `rm`, or `git branch -d`/`-D`. Canonical
+paths, `cwd`, literal `cd` and `git -C` resolve the target repository. A resource
+owned by a `queued`, `running` or `waiting` run yields
+`dagu-feature: <path|branch> belongs to active run <run-id> (<status>)`;
+unreadable history fails closed with a diagnostic. PRIMARY and its branch are
+always protected. This guard is tool-call interception, not OS isolation: shell
+expansions, dynamically constructed commands, external scripts and other tools
+are outside its interpretation.
+
+Authorized `close_gate` and `handler_on.exit` run in Dagu, check canonical
+identity, managed target and ownership, then apply the publication/recovery
+contract. Repeated local cleanup converges. For a terminal or unowned resource,
+inspect its history, HEAD and files, preserve the candidate commits, then recover
+through the lifecycle or let the operator remove that specific resource.
+Literal removal calls pass for terminal/unowned resources while PRIMARY remains
+protected. An interrupted process can leave a resource lock; the operator
+inspects the recorded owner and process before recovering that lock.
+
 A failed or aborted run is terminal. If its head has not crossed the `push`
 publication boundary, `handler_on.exit` keeps the local branch and worktree and
 prints both recovery locations. Recover directly in that worktree, then push the

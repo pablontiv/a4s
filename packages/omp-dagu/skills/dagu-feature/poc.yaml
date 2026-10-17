@@ -31,6 +31,41 @@ env:
   - RUN: ${context.run.id}
   - WORKTREE: ${PRIMARY}/.workspace/worktrees/poc-${RUN}
   - DAGU_FEATURE_BUNDLE: "__DAGU_FEATURE_IDENTITY__"
+  - DAGU_RESOURCE_GUARD: |
+      resource_lock() {
+        local primary common expected actual attempt
+        primary=$(cd "$PRIMARY" && pwd -P)
+        common=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-common-dir)
+        [[ "$(git -C "$PRIMARY" rev-parse --absolute-git-dir)" == "$common" &&
+           "$(cd "$(git -C "$PRIMARY" rev-parse --show-toplevel)" && pwd -P)" == "$primary" &&
+           "$RUN" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] ||
+          { echo 'dagu-feature: PRIMARY must be the main checkout; valid run required' >&2; exit 1; }
+        expected="$primary/.workspace/worktrees/poc-$RUN"
+        if [[ -e "$WORKTREE" && "$(cd "$WORKTREE" && pwd -P)" == "$primary" ]]; then
+          echo "dagu-feature: protected primary or unmanaged target $WORKTREE" >&2; exit 1
+        fi
+        mkdir -p "$primary/.workspace/worktrees"
+        actual="$(cd "$(dirname "$WORKTREE")" && pwd -P)/$(basename "$WORKTREE")"
+        if [[ -e "$WORKTREE" ]]; then actual=$(cd "$WORKTREE" && pwd -P); fi
+        [[ "$actual" == "$expected" && "$actual" != "$primary" ]] ||
+          { echo "dagu-feature: protected primary or unmanaged target $WORKTREE" >&2; exit 1; }
+        RESOURCE_LOCK="$common/poc/resource-$RUN.lock"
+        mkdir -p "$(dirname "$RESOURCE_LOCK")"
+        attempt=0
+        until mkdir "$RESOURCE_LOCK" 2>/dev/null; do
+          attempt=$((attempt + 1))
+          [[ "$attempt" -lt 100 ]] || { echo "dagu-feature: ownership lock unavailable $RESOURCE_LOCK" >&2; exit 1; }
+          sleep 0.1
+        done
+        trap 'rmdir "$RESOURCE_LOCK"' EXIT
+        if [[ -e "$WORKTREE" ]]; then
+          [[ "$(git -C "$WORKTREE" rev-parse --path-format=absolute --git-common-dir)" == "$common" &&
+             "$(git -C "$WORKTREE" branch --show-current)" == "poc/$RUN" &&
+             "$(cd "$(git -C "$WORKTREE" rev-parse --show-toplevel)" && pwd -P)" == "$expected" ]] ||
+            { echo 'dagu-feature: candidate worktree identity mismatch; preserved' >&2; exit 1; }
+        fi
+        PRIMARY=$primary WORKTREE=$expected
+      }
 steps:
   - id: record
     run: |
@@ -130,9 +165,17 @@ steps:
     depends: base
     run: |
       set -euo pipefail
+      eval "$DAGU_RESOURCE_GUARD"
+      resource_lock
       STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "poc/runs/$RUN")
       git -C "$PRIMARY" check-ignore -q "$WORKTREE"
-      git -C "$PRIMARY" worktree add -b "poc/$RUN" "$WORKTREE" "$(cat "$STATE/base.sha")"
+      if [[ -e "$WORKTREE" ]]; then
+        printf 'Reusing %s\n' "$WORKTREE"
+      elif git -C "$PRIMARY" show-ref --verify --quiet "refs/heads/poc/$RUN"; then
+        git -C "$PRIMARY" worktree add "$WORKTREE" "poc/$RUN"
+      else
+        git -C "$PRIMARY" worktree add -b "poc/$RUN" "$WORKTREE" "$(cat "$STATE/base.sha")"
+      fi
       RESULT=$(git -C "$WORKTREE" rev-parse --path-format=absolute --git-path poc/result.md)
       mkdir -p "$(dirname "$RESULT")"
       printf '%s\n' "$RESULT" > "$STATE/result.path"
@@ -328,6 +371,8 @@ handler_on:
   exit:
     run: |
       set -euo pipefail
+      eval "$DAGU_RESOURCE_GUARD"
+      resource_lock
       [[ "$RUN" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]
       WT="$PRIMARY/.workspace/worktrees/poc-$RUN"
       BRANCH="poc/$RUN"

@@ -18,6 +18,7 @@ async function port(): Promise<number> {
 
 export async function liveWatcher(binary = "dagu"): Promise<string[]> {
   const root = mkdtempSync(join(tmpdir(), "omp-dagu-notices-"));
+  const runId = `fast-push-back-${root.slice(root.lastIndexOf("-") + 1)}`;
   const home = join(root, "dagu");
   mkdirSync(join(home, "dags"), { recursive: true });
   const httpPort = await port();
@@ -65,16 +66,16 @@ export async function liveWatcher(binary = "dagu"): Promise<string[]> {
     handlers.session_start!(null, ctx);
     // Finish the startup baseline before enqueueing this run.
     await delay(1250);
-    dagu("enqueue", "--run-id", "fast-push-back", "feature");
+    dagu("enqueue", "--run-id", runId, "feature");
     for (const iteration of [0, 1]) for (const step of ["a", "b", "c"]) {
       await until(`${step}/${iteration} waiting`, async () => {
-        const response = await fetch(`${base}/api/v1/dag-runs/feature/fast-push-back`);
+        const response = await fetch(`${base}/api/v1/dag-runs/feature/${runId}`);
         if (!response.ok) return false;
         const { dagRunDetails: run } = await response.json() as { dagRunDetails: { nodes: Array<{ step: { name: string }; statusLabel: string; approvalIteration?: number }> } };
         return run.nodes.some(node => node.step.name === step && node.statusLabel === "waiting" && (node.approvalIteration ?? 0) === iteration);
       });
-      if (iteration === 0 && step === "c") dagu("human-task", "push-back", "feature", "--run-id", "fast-push-back", "--step", step, "--expected-iteration", "0");
-      else dagu("human-task", "complete", "feature", "--run-id", "fast-push-back", "--step", step);
+      if (iteration === 0 && step === "c") dagu("human-task", "push-back", "feature", "--run-id", runId, "--step", step, "--expected-iteration", "0");
+      else dagu("human-task", "complete", "feature", "--run-id", runId, "--step", step);
     }
     await until("seven notices", async () => received.length >= 7);
     await delay(1250);

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.15
+
+- Protect active feature/PoC resources and the primary checkout in OMP bash calls; fail closed with ownership diagnostics when history is unavailable (#215).
+- Serialize feature admission, retry and terminal handoff by canonical primary/issue; preserve existing candidate commits/files and make authorized feature/PoC cleanup identity-checked and locally idempotent (#215).
+- Give real Dagu integration fixtures random-suffixed run IDs to isolate Dagu 2.20.1's global run sockets across concurrent worktree gates (#215).
+
 ## 0.3.14
 
 - Poll the PR head every five seconds for up to sixty seconds before requesting guarded auto-merge; on expiry report the expected and last observed SHAs (#257).

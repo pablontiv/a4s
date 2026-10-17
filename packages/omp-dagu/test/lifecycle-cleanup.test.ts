@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
+import { stubHistory, withResourceGuard } from "./resource-fixtures.ts";
 
 const featureDefinitions = [
   ["template", fileURLToPath(new URL("../skills/dagu-feature/feature.yaml", import.meta.url))],
@@ -23,7 +24,7 @@ function extractScript(definition: string, marker: string, after = 0): string {
   assert.notEqual(runIndex, -1, `missing run block after ${marker}`);
   let end = runIndex + 1;
   while (end < lines.length && (lines[end]!.startsWith("      ") || lines[end] === "")) end++;
-  return lines.slice(runIndex + 1, end).map((line) => line.slice(6)).join("\n");
+  return withResourceGuard(lines.slice(runIndex + 1, end).map((line) => line.slice(6)).join("\n"), definition);
 }
 
 function git(cwd: string, ...args: string[]): string {
@@ -53,6 +54,7 @@ function repository(branch = "dagu/issue-209", worktreeName = "issue-209"): Repo
   writeFileSync(join(primary, ".git", "info", "exclude"), "/.workspace/worktrees/\n");
   mkdirSync(join(primary, ".workspace", "worktrees"), { recursive: true });
   git(primary, "worktree", "add", "-b", branch, worktree, "origin/main");
+  stubHistory(root);
   return { root, outside, primary, remote, worktree, branch };
 }
 
@@ -76,7 +78,7 @@ function squashMerge(repo: Repo, deleteRemote: boolean): string {
 
 function stubGh(repo: Repo, tested: string): void {
   const bin = join(repo.root, "bin");
-  mkdirSync(bin);
+  mkdirSync(bin, { recursive: true });
   const executable = join(bin, "gh");
   writeFileSync(executable, `#!/bin/sh
 case " $* " in *" --repo "*) ;; *)
@@ -146,6 +148,9 @@ for (const [name, definition] of featureDefinitions) {
     try {
       const tested = squashMerge(repo, true);
       stubGh(repo, tested);
+      const other = join(repo.primary, ".workspace", "worktrees", "issue-210");
+      git(repo.primary, "worktree", "add", "-b", "dagu/issue-210", other, "origin/main");
+      const otherHead = git(other, "rev-parse", "HEAD");
       const result = run(closeGate, repo);
       assert.equal(result.status, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
       assert.equal(existsSync(repo.worktree), false);
@@ -153,6 +158,12 @@ for (const [name, definition] of featureDefinitions) {
       assert.equal(hasRef(repo.primary, `refs/remotes/origin/${repo.branch}`), false);
       assert.equal(git(repo.primary, "rev-parse", "HEAD"), git(repo.primary, "rev-parse", "origin/main"));
       assert.match(result.stdout, /cleanup worktree=.* branch=dagu\/issue-209 remote=absent/);
+      const repeated = run(closeGate, repo);
+      assert.equal(repeated.status, 0, repeated.stderr);
+      const exit = extractScript(definition, "  exit:");
+      assert.equal(run(exit, repo).status, 0);
+      assert.equal(git(other, "rev-parse", "HEAD"), otherHead);
+      assert.equal(hasRef(repo.primary, "refs/heads/dagu/issue-210"), true);
     } finally { rmSync(repo.root, { recursive: true, force: true }); }
   });
 
@@ -248,7 +259,7 @@ for (const [name, definition] of pocDefinitions) {
   test(`${name} PoC cleanup fails when branch deletion leaves the branch`, () => {
     const repo = repository("poc/test-run", "poc-test-run");
     try {
-      mkdirSync(join(repo.root, "bin"));
+      mkdirSync(join(repo.root, "bin"), { recursive: true });
       stubGitNoop(repo, "branch");
       const result = run(exit, repo);
       assert.notEqual(result.status, 0);
@@ -270,6 +281,36 @@ for (const [name, definition] of pocDefinitions) {
       assert.equal(result.status, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
       assert.equal(existsSync(repo.worktree), false);
       assert.equal(hasRef(repo.primary, "refs/heads/poc/test-run"), false);
+      const repeated = run(exit, linkedRepo);
+      assert.equal(repeated.status, 0, repeated.stderr);
+    } finally { rmSync(repo.root, { recursive: true, force: true }); }
+  });
+}
+
+for (const [name, definition] of [...featureDefinitions, ...pocDefinitions]) {
+  const isPoc = definition.endsWith("/poc.yaml");
+  test(`${name} ${isPoc ? "PoC" : "feature"} authorized cleanup protects the primary and its canonical aliases`, () => {
+    const repo = isPoc ? repository("poc/test-run", "poc-test-run") : repository();
+    try {
+      const alias = join(repo.root, "primary-alias");
+      symlinkSync(repo.primary, alias, "dir");
+      const snapshot = () => JSON.stringify([
+        git(repo.primary, "worktree", "list", "--porcelain"),
+        git(repo.primary, "show-ref"),
+        git(repo.primary, "rev-parse", "HEAD"),
+        git(repo.primary, "branch", "--show-current"),
+        readFileSync(join(repo.primary, "value.txt"), "utf8"),
+      ]);
+      const before = snapshot();
+      for (const marker of isPoc ? ["  exit:"] : ["  - id: close_gate", "  exit:"]) {
+        for (const target of [repo.primary, alias]) {
+          const result = run(extractScript(definition, marker), repo, { WORKTREE: target });
+          assert.equal(result.status, 1);
+          assert.match(result.stderr, /protected primary or unmanaged target/);
+          assert.equal(snapshot(), before);
+          assert.equal(existsSync(repo.primary), true);
+        }
+      }
     } finally { rmSync(repo.root, { recursive: true, force: true }); }
   });
 }
