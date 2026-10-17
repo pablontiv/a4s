@@ -22,6 +22,7 @@ test("CLI reports stamped repositories and the reconciler as compatible", () => 
     writeFileSync(join(repo, ".workspace", "dagu", "dags", "feature.yaml"), stamp);
     writeFileSync(join(repo, ".workspace", "dagu", "dags", "poc.yaml"), stamp);
     writeFileSync(join(repo, ".workspace", "dagu", "dags", "discovery.yaml"), stamp);
+    writeFileSync(join(repo, ".workspace", "dagu", "dags", "planning.yaml"), stamp);
     writeFileSync(join(daguHome, "dags", "reconcile.yaml"), stamp);
     const dagu = join(bin, "dagu");
     writeFileSync(dagu, "#!/bin/sh\nprintf '2.20.1\\n'\n");
@@ -34,6 +35,7 @@ test("CLI reports stamped repositories and the reconciler as compatible", () => 
     assert.match(result.stdout, /feature\.yaml .*version=0\.3\.0 .*compat=ok/);
     assert.match(result.stdout, /poc\.yaml .*version=0\.3\.0 .*compat=ok/);
     assert.match(result.stdout, /discovery\.yaml .*version=0\.3\.0 .*compat=ok/);
+    assert.match(result.stdout, /planning\.yaml .*version=0\.3\.0 .*compat=ok/);
     assert.match(result.stdout, /reconcile\.yaml .*version=0\.3\.0 .*compat=ok/);
     assert.match(result.stdout, /dagu version="2\.20\.1" required=2\.20\.1 compat=ok/);
   } finally {
@@ -54,6 +56,7 @@ test("CLI exits nonzero for unstamped repository DAGs", () => {
     writeFileSync(join(repo, ".workspace", "dagu", "dags", "feature.yaml"), "labels:\n");
     writeFileSync(join(repo, ".workspace", "dagu", "dags", "poc.yaml"), "labels:\n");
     writeFileSync(join(repo, ".workspace", "dagu", "dags", "discovery.yaml"), "labels:\n");
+    writeFileSync(join(repo, ".workspace", "dagu", "dags", "planning.yaml"), "labels:\n");
     writeFileSync(join(daguHome, "dags", "reconcile.yaml"), stamp);
     const dagu = join(bin, "dagu");
     writeFileSync(dagu, "#!/bin/sh\nprintf '2.20.1\\n'\n");
@@ -66,6 +69,7 @@ test("CLI exits nonzero for unstamped repository DAGs", () => {
     assert.match(result.stdout, /feature\.yaml .*stamp=unstamped compat=unstamped/);
     assert.match(result.stdout, /poc\.yaml .*stamp=unstamped compat=unstamped/);
     assert.match(result.stdout, /discovery\.yaml .*stamp=unstamped compat=unstamped/);
+    assert.match(result.stdout, /planning\.yaml .*stamp=unstamped compat=unstamped/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

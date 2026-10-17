@@ -18,6 +18,7 @@ steps:
       test -f "$SKILL_DIR/feature.yaml"
       test -f "$SKILL_DIR/poc.yaml"
       test -f "$SKILL_DIR/discovery.yaml"
+      test -f "$SKILL_DIR/planning.yaml"
       test -f "$SKILL_DIR/reconcile.yaml"
       package_dir=$(cd "$SKILL_DIR/../.." && pwd -P)
       package_json="$package_dir/package.json"
@@ -92,6 +93,7 @@ steps:
       installed_feature="$PRIMARY/.workspace/dagu/dags/feature.yaml"
       installed_poc="$PRIMARY/.workspace/dagu/dags/poc.yaml"
       installed_discovery="$PRIMARY/.workspace/dagu/dags/discovery.yaml"
+      installed_planning="$PRIMARY/.workspace/dagu/dags/planning.yaml"
       current_gate=not-configured
       current_check=not-configured
       current_tests=not-configured
@@ -126,6 +128,7 @@ steps:
         printf 'CURRENT_FEATURE_STAMP=%s\n' "$(read_stamp "$installed_feature")"
         printf 'CURRENT_POC_STAMP=%s\n' "$(read_stamp "$installed_poc")"
         printf 'CURRENT_DISCOVERY_STAMP=%s\n' "$(read_stamp "$installed_discovery")"
+        printf 'CURRENT_PLANNING_STAMP=%s\n' "$(read_stamp "$installed_planning")"
       } >> "$DAGU_OUTPUT_FILE"
     outputs:
       - name: REPO
@@ -146,6 +149,7 @@ steps:
       - name: CURRENT_FEATURE_STAMP
       - name: CURRENT_POC_STAMP
       - name: CURRENT_DISCOVERY_STAMP
+      - name: CURRENT_PLANNING_STAMP
 
   - id: answers
     depends: detect
@@ -157,6 +161,7 @@ steps:
         Current feature stamp: ${steps.detect.outputs.CURRENT_FEATURE_STAMP}.
         Current poc stamp: ${steps.detect.outputs.CURRENT_POC_STAMP}.
         Current discovery stamp: ${steps.detect.outputs.CURRENT_DISCOVERY_STAMP}.
+        Current planning stamp: ${steps.detect.outputs.CURRENT_PLANNING_STAMP}.
         GATE: local gate command run in the issue worktree with bash -euo pipefail -c
         (current: ${steps.detect.outputs.CURRENT_GATE}).
         REQUIRED_CHECK: GitHub check the default branch will require (strict)
@@ -243,11 +248,15 @@ steps:
           | $render_common
           | gsub(\"TEMPLATE_DAGU_FEATURE_VERSION\"; \$version)
           | gsub(\"TEMPLATE_REPO\"; \$repo)" > "$(dirname "$STAGE")/discovery.yaml"
+      jq -nr --rawfile template "$SKILL_DIR/planning.yaml" \
+        --arg repo "$REPO" \
+        --arg stamp "$stamp" --arg version "$BUNDLE_VERSION" --arg identity "$identity" \
+        "\$template | $render_common | gsub(\"TEMPLATE_REPO\"; \$repo)" > "$(dirname "$STAGE")/planning.yaml"
       jq -nr --rawfile template "$SKILL_DIR/reconcile.yaml" \
         --arg stamp "$stamp" --arg version "$BUNDLE_VERSION" --arg identity "$identity" \
         "\$template | $render_common" > "$(dirname "$STAGE")/reconcile.yaml"
       for rendered in "$STAGE" "$(dirname "$STAGE")/poc.yaml" \
-        "$(dirname "$STAGE")/discovery.yaml" "$(dirname "$STAGE")/reconcile.yaml"; do
+        "$(dirname "$STAGE")/discovery.yaml" "$(dirname "$STAGE")/planning.yaml" "$(dirname "$STAGE")/reconcile.yaml"; do
         if grep -En 'TEMPLATE_[A-Z_]+|__[A-Z_]*__' "$rendered"; then exit 1; fi
         dagu validate "$rendered"
       done
@@ -349,6 +358,7 @@ steps:
       dagu validate "$STAGE"
       dagu validate "$(dirname "$STAGE")/poc.yaml"
       dagu validate "$(dirname "$STAGE")/discovery.yaml"
+      dagu validate "$(dirname "$STAGE")/planning.yaml"
       destination="${DAGU_HOME:-$HOME/.dagu}/dags/reconcile.yaml"
       cmp "$(dirname "$STAGE")/reconcile.yaml" "$destination"
       dagu validate "$destination"

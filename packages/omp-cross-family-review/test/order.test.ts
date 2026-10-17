@@ -107,6 +107,13 @@ test("triage-reviewer compares candidates only with the parent", () => {
   );
 });
 
+test("plan-reviewer selects a model outside the parent family", () => {
+  assert.deepEqual(
+    spawn({ agent: "plan-reviewer", patterns: ["@slow"] }, { models: facade() })?.model,
+    ["@task", "@slow", "@default"],
+  );
+});
+
 test("reviewer excludes only the parent family when task is unresolved", () => {
   const models = facade();
   models.resolve = (spec) => spec === "@task" ? undefined : specs[spec];

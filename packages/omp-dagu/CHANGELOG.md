@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.16
+
+- Add the new planning DAG: independently reviewed, operator-approved plans become idempotent issues and feature/PoC runs, with durable validation feedback, bootstrap adoption, and planning status notices. This wave uses the required patch release rather than a minor bump (#292).
+
 ## 0.3.15
 
 - Protect active feature/PoC resources and the primary checkout in OMP bash calls; fail closed with ownership diagnostics when history is unavailable (#215).
