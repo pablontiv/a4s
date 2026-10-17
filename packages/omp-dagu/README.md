@@ -25,6 +25,14 @@ primario y pueden quedar colgando. Volver a enlazarlos es configuración del
 operador: el coordinador propone los comandos de instalación anteriores y el
 operador los ejecuta.
 
+## Retención del historial global
+
+[`dagu/base.yaml`](dagu/base.yaml) versiona `hist_retention_days: 7` para
+`$DAGU_HOME/base.yaml` (por defecto `~/.dagu/base.yaml`). El operador instala
+esta configuración global. Tras la limpieza de Dagu, los runs de más de siete
+días dejan de estar disponibles para `dagu history` y `dagu retry`; conserva
+fuera del historial la evidencia que necesites durante más tiempo.
+
 ## Estado, progreso y despertar dirigido
 
 La extensión observa los runs del repositorio mediante REST y SSE para el widget y un ledger durable de eventos para los avisos humanos y el éxito. Con UI muestra una línea por run en `aboveEditor` y conserva los toasts terminales. El despertar también funciona con `hasUI=false`. Resuelve el repositorio desde `origin`, incluso en linked worktrees, y descubre runs de las últimas 48 horas con `workspace=<repo>`, incluidos los que finalizaron entre barridos.

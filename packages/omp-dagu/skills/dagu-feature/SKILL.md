@@ -39,6 +39,15 @@ flowchart LR
 
 This skill does not install Dagu, and it carries no logic specific to any repository. Everything that varies between repositories is a DAG param.
 
+## Global history retention
+
+The versioned global configuration in [`../../dagu/base.yaml`](../../dagu/base.yaml)
+sets `hist_retention_days: 7`. The operator installs it as
+`$DAGU_HOME/base.yaml` (default `~/.dagu/base.yaml`). After Dagu's retention
+cleanup, runs older than seven days are no longer queryable through
+`dagu history` or available for `dagu retry`. Preserve evidence needed for
+longer outside the run history; recovering that work requires a new run.
+
 ## Bundle identity and compatibility
 
 Every rendered DAG starts with

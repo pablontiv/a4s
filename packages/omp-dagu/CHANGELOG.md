@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.12
+
+- Version the global Dagu base configuration with seven-day history retention and document the history/retry consequences for older runs (#252).
+
 ## 0.3.11
 
 - Capture implementer-delivered files in Dagu with canonical run/worktree ownership, confined paths, a binary patch, deterministic single-commit candidates and SHA-bound gate evidence. Preserve conflict deliveries in the same run/branch, archive replaced evidence, and publish only the currently verified candidate (#278).
