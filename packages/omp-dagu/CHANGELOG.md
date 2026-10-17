@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.16
+
+- Share ownership-checked, integration-proven, idempotent feature cleanup across close and exit; retain dirty or uncertain resources with durable evidence and report interrupted cleanup phases in the reconciler (#281).
+
 ## 0.3.15
 
 - Protect active feature/PoC resources and the primary checkout in OMP bash calls; fail closed with ownership diagnostics when history is unavailable (#215).

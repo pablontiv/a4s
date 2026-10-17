@@ -90,7 +90,9 @@ The bootstrap renders the repository DAG templates when a repository adopts the 
 | `__PRIMARY__` | Default clone path in `poc.yaml` | repository clone | repository clone |
 | `__TEST_PATHS__` | Bash ERE for repository test paths; every `*.md` also belongs to cutover | `_test\.go$\|^tests/` | `(^\|/)tests/` |
 
-The DAG's fixed invariants: `PRIMARY` is the repository clone, its main working tree, on `BASE_BRANCH` and clean; the run's worktree is always `$PRIMARY/.workspace/worktrees/issue-<n>`, ignored by git; the gate runs with `umask 0022` and without `GH_TOKEN`/`GITHUB_TOKEN`; auto-merge is bound to the tested SHA with `--match-head-commit`; and the queue has concurrency one per repository. `push` is the publication boundary after current-candidate verification. On exit, the handler removes a clean, owned worktree and local branch only after fetching and confirming that its head is contained by `origin/$BRANCH` or `origin/$BASE_BRANCH`, or that GitHub, queried from the `PRIMARY` clone, reports a merged PR with that exact head SHA. Uncaptured files and conflict resolutions remain in their worktree for recovery even when HEAD is on the base.
+The DAG's fixed invariants: `PRIMARY` is the repository clone, its main working tree, on `BASE_BRANCH` and clean; the run's worktree is always `$PRIMARY/.workspace/worktrees/issue-<n>`, ignored by git; the gate runs with `umask 0022` and without `GH_TOKEN`/`GITHUB_TOKEN`; auto-merge is bound to the tested SHA with `--match-head-commit`; and the queue has concurrency one per repository. `start_gate` registers the canonical PRIMARY, worktree, branch and owning run in Git metadata. Both cleanup entry points share the same script. They refresh the remote base and require either candidate ancestry in that base or a MERGED PR whose head equals the recorded tested candidate and whose effective merge SHA is an ancestor of the refreshed base. `cleanup-proof.json` records candidate, base, squash SHA and proof. Ordinary `git worktree remove` protects local files; a dirty worktree is retained. Local branch deletion compares the candidate atomically; remote deletion at merged close uses an exact-SHA lease.
+
+`push` remains the publication boundary after current-candidate verification. Uncaptured files and conflict resolutions remain in their worktree for recovery even when HEAD is on the base.
 
 ## Adopt in a repository
 
@@ -267,7 +269,7 @@ expansions, dynamically constructed commands, external scripts and other tools
 are outside its interpretation.
 
 Authorized `close_gate` and `handler_on.exit` run in Dagu, check canonical
-identity, managed target and ownership, then apply the publication/recovery
+identity, managed target and ownership, then apply the integration/recovery
 contract. Repeated local cleanup converges. For a terminal or unowned resource,
 inspect its history, HEAD and files, preserve the candidate commits, then recover
 through the lifecycle or let the operator remove that specific resource.
@@ -275,16 +277,17 @@ Literal removal calls pass for terminal/unowned resources while PRIMARY remains
 protected. An interrupted process can leave a resource lock; the operator
 inspects the recorded owner and process before recovering that lock.
 
-A failed or aborted run is terminal. If its head has not crossed the `push`
-publication boundary, `handler_on.exit` keeps the local branch and worktree and
-prints both recovery locations. Recover directly in that worktree, then push the
-kept branch and enqueue a new run with a suffixed ID
-(`<repo>-issue-<n>-v2`). If the worktree must be recreated, preserve the kept
-commit first with `git branch <branch> <sha>`. Once `push` has
-published the head, or GitHub reports its PR merged with that exact head SHA,
-the exit handler may remove the local worktree and branch. Restore a published
-but unmerged branch with `git fetch origin && git branch <branch> origin/<branch>`
-before reenqueuing. Pass `PR_NUMBER` when a PR already exists for the branch.
+A failed or aborted run is terminal. `handler_on.exit` retains unintegrated work,
+including a published branch, and prints its branch, worktree and evidence path.
+Inspect `<git-dir>/dagu-feature/runs/<RUN>/resource.json`, `tested-sha`,
+`cleanup-head`, `cleanup-proof.json`, `cleanup-phase` and `cleanup-diagnostic`.
+Recovery preserves those records and local changes. Restore origin access or
+resolve the reported integration/ownership discrepancy, then repeat the run's
+cleanup script with its original params. Already removed resources complete
+idempotently; a changed owner or SHA preserves the resource and flags the mismatch.
+When continuing implementation in a new suffixed run, explicitly transfer the
+resource registration to that run after confirming its owner and SHA; `start_gate`
+then adopts the retained clean worktree. Pass `PR_NUMBER` for an existing PR.
 
 A failed run can leave its PR's auto-merge armed. Before reenqueuing, read
 `gh pr view <pr> --json state`: `MERGED` means the issue's delivery is complete.
@@ -577,6 +580,14 @@ Historical `PRIMARY` paths that are missing as directories are skipped with `SKI
 
 An unowned resource fails the tick with `LEFTOVER <repo> worktree=<path|none> branch=<branch|none> last_run=<id|none> last_status=<status|none>`. The reconciler only reports it; the operator decides whether to recover or remove it. A managed feature resource is owned by the matching `BRANCH` or `issue-<ISSUE>` worktree, and a PoC resource by its `poc/<run>` branch or `poc-<run>` worktree. Other local branches are outside this check.
 
+An interrupted feature cleanup also emits
+`CLEANUP_RESIDUAL run=<id> worktree=<path> branch=<ref> last_phase=<phase> evidence=<state-dir>`.
+The durable phase survives removal of the worktree, so a remaining local branch
+or unfinished remote cleanup remains diagnosable. The reconciler reports this
+even with an active neighbouring run and leaves every resource unchanged.
+Repeat cleanup using the original run's registration and refreshed integration
+proof; preserve changed ownership, SHAs and dirty files for recovery.
+
 PoC history rows remain associated with their `dagRunId` even when optional `BRANCH` or `ISSUE` params are missing. Active PoC runs own their canonical worktree and branch; terminal runs are reported with that run ID and status.
 
 `tick` and `leftovers` both depend on `discover`, so waiting feature runs are reconciled independently of leftover detection. A leftover or detection error still makes the overall DAG `Failed`, including when no feature runs are waiting. `discover` passes each waiting feature run to the local `reconcile-run` sub-DAG through `tick` with `max_concurrent: 1`. A precondition skips only this fan-out when `discover` found no waiting runs. `observe` reads the waiting step and push-back iteration from `dagu status`, resolves the repository from `PRIMARY`, and reads the PR with `gh pr view` (or the issue for other waiting steps). It publishes the observation as step outputs.
@@ -596,4 +607,4 @@ The `orphan` step selects `triage` or `implement` observations whose issue is `C
 
 ## Finish
 
-After `close_gate`, the run is `Succeeded`. The closing contract is a merged PR, a clean primary checkout exactly at `origin/$BASE_BRANCH`, no run worktree, and no local or remote run branch; `close_gate` performs and verifies every part of that contract and prints the cleanup result. `handler_on.exit` covers terminal runs that did not complete `close_gate`, retaining unpublished work and removing published work according to its recovery rules. The turn status reports under Done the run ID, the PR, the tested SHA, and the `base_sha` printed by `close_gate`.
+After `close_gate`, the run is `Succeeded`. The closing contract is a merged PR, a clean primary checkout exactly at `origin/$BASE_BRANCH`, no run worktree, and no local or remote run branch; `close_gate` performs and verifies every part of that contract and prints the cleanup result. `handler_on.exit` applies the same ownership, integration and clean-state checks to terminal runs, preserving resources with durable diagnostics whenever proof is uncertain. The turn status reports under Done the run ID, the PR, the tested SHA, and the `base_sha` printed by `close_gate`.

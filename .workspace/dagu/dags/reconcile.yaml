@@ -96,6 +96,17 @@ steps:
           continue
         fi
         managed_root=$(git -C "$primary" rev-parse --show-toplevel)
+        state_root=$(git -C "$primary" rev-parse --path-format=absolute --git-path dagu-feature/runs)
+        for cleanup_state in "$state_root"/*/cleanup-phase; do
+          [[ -f "$cleanup_state" ]] || continue
+          phase=$(cat "$cleanup_state")
+          [[ "$phase" != complete ]] || continue
+          resource="${cleanup_state%/*}/resource.json"
+          [[ -f "$resource" ]] || continue
+          jq -r --arg phase "$phase" --arg evidence "${cleanup_state%/*}" \
+            '"CLEANUP_RESIDUAL run=\(.run) worktree=\(.worktree) branch=\(.branch) last_phase=\($phase) evidence=\($evidence) recovery=repeat-owned-integration-check"' \
+            "$resource" >> "$TMP/leftovers"
+        done
         : >"$TMP/worktree-branches"
         worktree=
         branch=

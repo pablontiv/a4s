@@ -113,11 +113,22 @@ test("Dagu isolated primary checkpoints release the queue and rewind the same ru
       const sha = git(primary, "rev-parse", "HEAD");
       if (phase === "close") git(primary, "worktree", "add", "-b", branch, worktree, "origin/main");
       const gh = join(bin, "gh");
-      writeFileSync(gh, `#!/bin/sh\ncase "$*" in\n  *"--json number"*) echo 228 ;;\n  *"--json state"*) echo MERGED ;;\n  *"--json headRefOid"*) echo ${sha} ;;\n  *"--required"*) echo SUCCESS ;;\n  *) echo "unexpected gh $*" >&2; exit 1 ;;\nesac\n`);
+      writeFileSync(gh, `#!/bin/sh\ncase "$*" in\n  *"--json number,state,headRefOid,mergeCommit"*) printf '%s\\n' '${JSON.stringify({ number: 228, state: "MERGED", headRefOid: sha, mergeCommit: { oid: sha } })}' ;;\n  *"--required"*) echo SUCCESS ;;\n  *) echo "unexpected gh $*" >&2; exit 1 ;;\nesac\n`);
       chmodSync(gh, 0o755);
       if (blocked === "dirty") writeFileSync(join(primary, "tracked.txt"), "operator changes\n");
       else if (blocked === "branch") git(primary, "switch", "-c", "operator");
       const name = phase === "base" ? "poc" : "feature";
+      if (phase === "close") {
+        const state = git(primary, "rev-parse", "--path-format=absolute", "--git-path", `dagu-feature/runs/${id}`);
+        const resource = JSON.stringify({ run: id, primary, branch, worktree });
+        mkdirSync(state, { recursive: true });
+        writeFileSync(join(state, "resource.json"), resource);
+        writeFileSync(join(state, "tested-sha"), sha + "\n");
+        const hash = execFileSync("git", ["hash-object", "--stdin"], { input: branch, encoding: "utf8" }).trim();
+        const resources = git(primary, "rev-parse", "--path-format=absolute", "--git-path", "dagu-feature/resources");
+        mkdirSync(resources, { recursive: true });
+        writeFileSync(join(resources, `${hash}.json`), resource);
+      }
       const checkpoint = `${phase}_primary_unavailable`;
       const detector = `detect_${phase}_primary`;
       const gate = phase === "base" ? "base" : `${phase}_gate`;
