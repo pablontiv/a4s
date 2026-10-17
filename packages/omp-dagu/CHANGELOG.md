@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.19
+
+- Give each live recovery fixture a UUID-suffixed run identity and exercise concurrent, isolated Dagu services through their own checkpoints, iterations, candidate SHAs and teardown (#340).
+- Document Dagu 2.20.1's host-global control socket identity and the per-fixture recovery ID pattern (#340).
+
 ## 0.3.18
 
 - Preserve the terminal resource owner's provenance between admission and worktree adoption, with identity diagnostics and real-Dagu reenqueue coverage (#338).

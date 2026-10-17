@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -1024,156 +1024,234 @@ test("real Dagu retries rebase after a six-second index lock", {
   }
 });
 
+type LiveDetail = Omit<RunDetails, "nodes"> & {
+  nodes: Array<{ step: { name: string }; statusLabel: string; stdout?: string; stderr?: string }>;
+  onExit?: { statusLabel: string };
+};
+
+type RecoveryFixture = {
+  suffix: string;
+  root: string;
+  home: string;
+  port: number;
+  env: NodeJS.ProcessEnv;
+  until: <T>(description: string, probe: () => Promise<T | undefined>) => Promise<T>;
+  state: (id: string, expected: string) => Promise<LiveDetail>;
+  close: () => Promise<void>;
+};
+
+async function recoveryFixture(): Promise<RecoveryFixture> {
+  const suffix = randomUUID();
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "omp-dagu-triage-close-")));
+  const home = join(root, "dagu-home");
+  mkdirSync(join(home, "dags"), { recursive: true });
+  const listener = createServer();
+  await new Promise<void>(resolve => listener.listen(0, "127.0.0.1", resolve));
+  const address = listener.address();
+  assert.ok(address && typeof address !== "string");
+  const port = address.port;
+  await new Promise<void>((resolve, reject) => listener.close(error => error ? reject(error) : resolve()));
+  const env = { ...process.env, DAGU_HOME: home, DAGU_COORDINATOR_ENABLED: "false" };
+  writeFileSync(join(home, "config.yaml"), `host: 127.0.0.1\nport: ${port}\nauth:\n  mode: none\ncoordinator:\n  enabled: false\nscheduler:\n  port: 0\n`);
+  let serviceLog = "";
+  const service = spawn("dagu", ["start-all", "--host", "127.0.0.1", "--port", String(port)], {
+    cwd: root, env, stdio: ["ignore", "pipe", "pipe"],
+  });
+  service.stdout.on("data", data => { serviceLog += data; });
+  service.stderr.on("data", data => { serviceLog += data; });
+  const api = `http://127.0.0.1:${port}/api/v1`;
+  async function until<T>(description: string, probe: () => Promise<T | undefined>): Promise<T> {
+    const deadline = Date.now() + 60_000;
+    while (Date.now() < deadline) {
+      const value = await probe();
+      if (value !== undefined) return value;
+      await delay(150);
+    }
+    throw new Error(`Timed out: ${description}\n${serviceLog}`);
+  }
+  async function state(id: string, expected: string): Promise<LiveDetail> {
+    return until(`${id} ${expected}`, async () => {
+      const response = await fetch(`${api}/dag-runs/feature/${id}`);
+      if (!response.ok) return undefined;
+      const run = (await response.json() as { dagRunDetails: LiveDetail }).dagRunDetails;
+      assert.equal(run.name, "feature");
+      assert.equal(run.dagRunId, id);
+      if (["failed", "aborted"].includes(run.statusLabel)) {
+        const logs = run.nodes.filter(node => node.stderr).map(node => `${node.step.name}: ${readFileSync(node.stderr!, "utf8")}`).join("\n");
+        const log = (run as LiveDetail & { log?: string }).log;
+        throw new Error(`${JSON.stringify(run)}\n${logs}\n${log && existsSync(log) ? readFileSync(log, "utf8") : ""}\n${serviceLog}`);
+      }
+      return run.statusLabel === expected ? run : undefined;
+    });
+  }
+  async function close(): Promise<void> {
+    if (service.exitCode === null && service.signalCode === null) {
+      await new Promise<void>(resolve => {
+        service.once("exit", () => resolve());
+        service.kill("SIGTERM");
+      });
+    }
+    rmSync(root, { recursive: true, force: true });
+  }
+  try {
+    await until("isolated Dagu ready", async () => {
+      try { return (await fetch(`${api}/dag-runs`)).ok ? true : undefined; } catch { return undefined; }
+    });
+    return { suffix, root, home, port, env, until, state, close };
+  } catch (error) {
+    await close();
+    throw error;
+  }
+}
+
+type RecoveryMode = "healthy" | "gate" | "start_gate" | "push";
+type RecoveryResult = {
+  dag: string;
+  id: string;
+  checkpoints: Array<{ step: string; iteration: number }>;
+  iteration: number;
+  candidateSHA: string;
+  socket: string;
+  repositoryRoot: string;
+};
+
+async function runRecovery(fixture: RecoveryFixture, definition: string, mode: RecoveryMode): Promise<RecoveryResult> {
+  const { suffix, root, home, env, until, state } = fixture;
+  const id = `recovery-${mode}-${suffix}`;
+  const repo = repository();
+  repo.state = join(repo.primary, ".git", "dagu-feature", "runs", id);
+  const checkpoints: Array<{ step: string; iteration: number }> = [];
+  try {
+    git(repo.primary, "worktree", "remove", repo.worktree);
+    git(repo.primary, "branch", "-D", repo.branch);
+    repo.worktree = join(repo.primary, ".workspace", "worktrees", "issue-189");
+    writeFileSync(join(repo.primary, ".git", "info", "exclude"), "/.workspace/\n");
+    const remote = git(repo.primary, "remote", "get-url", "origin");
+    if (mode === "start_gate") git(repo.primary, "remote", "set-url", "origin", join(repo.root, "unavailable.git"));
+    const bin = join(repo.root, "bin");
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(join(bin, "gh"), `#!/bin/sh\nprintf '%s\\n' "$*" >> '${repo.root}/gh.log'\nprintf '{"number":189,"url":"https://example.test/pr/189"}\\n'\n`);
+    chmodSync(join(bin, "gh"), 0o755);
+    if (mode === "push") {
+      const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+      writeFileSync(join(bin, "git"), `#!/bin/sh\ncase " $* " in *" push "*)\nif ! test -f '${repo.root}/allow-push'; then echo 'push: simulated remote access failure' >&2; exit 1; fi\n;;\nesac\nexec '${realGit}' "$@"\n`);
+      chmodSync(join(bin, "git"), 0o755);
+    }
+    const source = readFileSync(definition, "utf8");
+    const script = [
+      "type: graph\nshell: bash\nmax_active_steps: 1\n",
+      `params:\n  - ISSUE: "189"\n  - PRIMARY: ${repo.primary}\n  - BRANCH: ${repo.branch}\n  - BASE_BRANCH: main\n  - PR_NUMBER: ""\n  - GATE: test -f required.txt\n  - REQUIRED_CHECK: validate\n  - OMP_SESSION_ID: recovery-owner\n`,
+      `env:\n  - PATH: ${bin}:${process.env.PATH}\n  - WORKTREE: ${repo.worktree}\n  - RUN: \${context.run.id}\n  - DAGU_FEATURE_BUNDLE: test\n`,
+      source.slice(source.indexOf("  - DAGU_RESOURCE_GUARD: |"), source.indexOf("steps:\n")),
+      "steps:\n",
+      `  - id: triage\n    run: |\n      mkdir -p "$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")"\n      echo POC=no >> "$DAGU_OUTPUT_FILE"\n    outputs:\n      - name: POC\n`,
+      "  - id: triage_decision\n    depends: triage\n    run: echo reviewed\n",
+      ...["detect_start_primary", "start_primary_unavailable", "start_gate", "recover_start_gate", "implement",
+        "capture", "checkpoint_push", "dependency_review", "rebase", "conflict_review", "gate", "recover_gate", "push", "recover_push", "pr"]
+        .map(step => extractStep(source, step)),
+      "  - id: await_merge\n    depends: pr\n    action: human.task\n    with:\n      prompt: Isolated merge boundary\n",
+      source.slice(source.indexOf("handler_on:\n"), source.indexOf("  exit:\n")),
+    ].join("");
+    rmSync(join(repo.root, "bin", "dagu"));
+    const dag = join(home, "dags", "feature.yaml");
+    writeFileSync(dag, script);
+    const dagu = (...args: string[]) => execFileSync("dagu", args, {
+      cwd: root, env: { ...env, PATH: `${bin}:${process.env.PATH}` }, encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    }).trim();
+    const iteration = () => Number(dagu("status", "feature", "--run-id", id).match(/push-back iteration: (\d+)/)?.[1] ?? 0);
+    async function waiting(step: string): Promise<LiveDetail> {
+      const run = await until(`${id} waiting ${step}`, async () => {
+        const run = await state(id, "waiting");
+        return run.nodes.some(node => node.step.name === step && node.statusLabel === "waiting") ? run : undefined;
+      });
+      checkpoints.push({ step, iteration: iteration() });
+      return run;
+    }
+    function transition(step: string, pushBack = false): void {
+      const observed = iteration();
+      dagu("human-task", pushBack ? "push-back" : "complete", "feature", "--run-id", id, "--step", step,
+        ...(pushBack ? ["--expected-iteration", String(observed)] : []),
+        ...(!pushBack && step === "implement" ? ["--input", "SUMMARY=Recovery candidate", "--input", "MESSAGE=fix: recover candidate"] : []));
+    }
+    const candidate = () => JSON.parse(readFileSync(join(repo.state, "candidate.json"), "utf8")) as { sha: string };
+    dagu("validate", dag);
+    dagu("enqueue", "--run-id", id, dag);
+    if (mode === "start_gate") {
+      const run = await waiting("recover_start_gate");
+      assert.equal(run.nodes.find(node => node.step.name === "start_gate")?.statusLabel, "failed");
+      assert.match(new Transitions("recovery-owner").observe(run).wakeMessage ?? "", /step=recover_start_gate.*cause=start_gate failed/);
+      git(repo.primary, "remote", "set-url", "origin", remote);
+      transition("recover_start_gate", true);
+    }
+    await waiting("implement");
+    const delivery = mode === "gate" ? "candidate.txt" : "required.txt";
+    writeFileSync(join(repo.worktree, delivery), `candidate ${id}\n`);
+    const before = iteration();
+    assert.equal(before, mode === "start_gate" ? 1 : 0);
+    transition("implement");
+    let previousCandidate: string | undefined;
+    if (mode === "gate") {
+      const failed = await waiting("recover_gate");
+      assert.equal(failed.nodes.find(node => node.step.name === "gate")?.statusLabel, "failed");
+      const notice = new Transitions("recovery-owner").observe(failed).wakeMessage;
+      assert.match(notice ?? "", /step=recover_gate.*cause=gate failed/);
+      previousCandidate = candidate().sha;
+      transition("recover_gate", true);
+      await waiting("implement");
+      assert.equal(iteration(), before + 1);
+      assert.equal(git(repo.worktree, "rev-parse", "HEAD"), previousCandidate);
+      writeFileSync(join(repo.worktree, "required.txt"), "fixed\n");
+      transition("implement");
+    } else if (mode === "push") {
+      const failed = await waiting("recover_push");
+      assert.equal(failed.nodes.find(node => node.step.name === "push")?.statusLabel, "failed");
+      assert.match(new Transitions("recovery-owner").observe(failed).wakeMessage ?? "", /step=recover_push.*cause=push failed/);
+      previousCandidate = candidate().sha;
+      writeFileSync(join(repo.root, "allow-push"), "");
+      transition("recover_push", true);
+    }
+    const done = await waiting("await_merge");
+    for (const step of ["start_gate", "gate", "push"]) {
+      assert.equal(done.nodes.find(node => node.step.name === step)?.statusLabel, "succeeded");
+      assert.equal(done.nodes.find(node => node.step.name === `recover_${step}`)?.statusLabel, "skipped");
+    }
+    const candidateSHA = candidate().sha;
+    assert.equal(git(repo.worktree, "rev-parse", "HEAD"), candidateSHA);
+    assert.equal(git(repo.primary, "rev-parse", `origin/${repo.branch}`), candidateSHA);
+    assert.equal(JSON.parse(readFileSync(join(repo.state, "gate.json"), "utf8")).sha, candidateSHA);
+    assert.equal(git(repo.worktree, "show", `${candidateSHA}:${delivery}`), `candidate ${id}`);
+    if (mode === "gate") {
+      assert.notEqual(candidateSHA, previousCandidate);
+      assert.equal(JSON.parse(readFileSync(join(repo.state, "historical", previousCandidate!, "candidate.json"), "utf8")).sha, previousCandidate);
+    } else if (mode === "push") assert.equal(candidateSHA, previousCandidate);
+    const finalIteration = iteration();
+    assert.equal(finalIteration, mode === "healthy" ? 0 : 1);
+    assert.equal(git(repo.worktree, "branch", "--show-current"), repo.branch);
+    assert.equal(git(repo.worktree, "status", "--porcelain"), "");
+    assert.match(readFileSync(join(repo.root, "gh.log"), "utf8"), /pr view/);
+    return {
+      dag: done.name, id: done.dagRunId, checkpoints, iteration: finalIteration, candidateSHA,
+      socket: `/tmp/@dagu_feature_${createHash("md5").update(`feature${id}`).digest("hex").slice(0, 6)}.sock`,
+      repositoryRoot: repo.root,
+    };
+  } finally {
+    rmSync(repo.root, { recursive: true, force: true });
+  }
+}
+
 for (const [name, definition] of definitions) {
   test(`${name} real Dagu closes implementation runs and succeeds after enqueuing a PoC`, {
     skip: daguAvailable.status !== 0 || !/2\.20\.1/.test(daguAvailable.stdout) ? "Dagu 2.20.1 binary required for live integration" : false,
     timeout: 360_000,
   }, async (t) => {
     assert.match(daguAvailable.stdout, /2\.20\.1/);
-    const root = realpathSync(mkdtempSync(join(tmpdir(), "omp-dagu-triage-close-")));
-    const home = join(root, "dagu-home");
-    mkdirSync(join(home, "dags"), { recursive: true });
-    const listener = createServer();
-    await new Promise<void>(resolve => listener.listen(0, "127.0.0.1", resolve));
-    const address = listener.address();
-    assert.ok(address && typeof address !== "string");
-    const port = address.port;
-    await new Promise<void>((resolve, reject) => listener.close(error => error ? reject(error) : resolve()));
-    const env = { ...process.env, DAGU_HOME: home, DAGU_COORDINATOR_ENABLED: "false" };
-    writeFileSync(join(home, "config.yaml"), `host: 127.0.0.1\nport: ${port}\nauth:\n  mode: none\ncoordinator:\n  enabled: false\nscheduler:\n  port: 0\n`);
-    let serviceLog = "";
-    const service = spawn("dagu", ["start-all", "--host", "127.0.0.1", "--port", String(port)], {
-      cwd: root, env, stdio: ["ignore", "pipe", "pipe"],
-    });
-    service.stdout.on("data", data => { serviceLog += data; });
-    service.stderr.on("data", data => { serviceLog += data; });
-    const api = `http://127.0.0.1:${port}/api/v1`;
-    type Detail = Omit<RunDetails, "nodes"> & {
-      nodes: Array<{ step: { name: string }; statusLabel: string; stdout?: string; stderr?: string }>;
-      onExit?: { statusLabel: string };
-    };
-    async function until<T>(description: string, probe: () => Promise<T | undefined>): Promise<T> {
-      const deadline = Date.now() + 60_000;
-      while (Date.now() < deadline) {
-        const value = await probe();
-        if (value !== undefined) return value;
-        await delay(150);
-      }
-      throw new Error(`Timed out: ${description}\n${serviceLog}`);
-    }
-    async function state(id: string, expected: string): Promise<Detail> {
-      return until(`${id} ${expected}`, async () => {
-        const response = await fetch(`${api}/dag-runs/feature/${id}`);
-        if (!response.ok) return undefined;
-        const run = (await response.json() as { dagRunDetails: Detail }).dagRunDetails;
-        if (["failed", "aborted"].includes(run.statusLabel!)) {
-          const logs = run.nodes.filter(node => node.stderr).map(node => `${node.step.name}: ${readFileSync(node.stderr!, "utf8")}`).join("\n");
-          const log = (run as Detail & { log?: string }).log;
-          throw new Error(`${JSON.stringify(run)}\n${logs}\n${log && existsSync(log) ? readFileSync(log, "utf8") : ""}\n${serviceLog}`);
-        }
-        return run.statusLabel === expected ? run : undefined;
-      });
-    }
+    const fixture = await recoveryFixture();
+    const { root, home, env, state } = fixture;
     try {
-      await until("isolated Dagu ready", async () => {
-        try { return (await fetch(`${api}/dag-runs`)).ok ? true : undefined; } catch { return undefined; }
-      });
       for (const mode of ["healthy", "gate", "start_gate", "push"] as const) {
         await t.test(`integrated recovery ${mode}`, async () => {
-          const repo = repository();
-          try {
-            git(repo.primary, "worktree", "remove", repo.worktree);
-            git(repo.primary, "branch", "-D", repo.branch);
-            repo.worktree = join(repo.primary, ".workspace", "worktrees", "issue-189");
-            writeFileSync(join(repo.primary, ".git", "info", "exclude"), "/.workspace/\n");
-            const remote = git(repo.primary, "remote", "get-url", "origin");
-            if (mode === "start_gate") git(repo.primary, "remote", "set-url", "origin", join(repo.root, "unavailable.git"));
-            const bin = join(repo.root, "bin");
-            mkdirSync(bin, { recursive: true });
-            writeFileSync(join(bin, "gh"), `#!/bin/sh\nprintf '%s\\n' "$*" >> '${repo.root}/gh.log'\nprintf '{"number":189,"url":"https://example.test/pr/189"}\\n'\n`);
-            chmodSync(join(bin, "gh"), 0o755);
-            if (mode === "push") {
-              const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
-              writeFileSync(join(bin, "git"), `#!/bin/sh\ncase " $* " in *" push "*)\nif ! test -f '${repo.root}/allow-push'; then echo 'push: simulated remote access failure' >&2; exit 1; fi\n;;\nesac\nexec '${realGit}' "$@"\n`);
-              chmodSync(join(bin, "git"), 0o755);
-            }
-            const source = readFileSync(definition, "utf8");
-            const id = `recovery-${mode}`;
-            const script = [
-              "type: graph\nshell: bash\nmax_active_steps: 1\n",
-              `params:\n  - ISSUE: "189"\n  - PRIMARY: ${repo.primary}\n  - BRANCH: ${repo.branch}\n  - BASE_BRANCH: main\n  - PR_NUMBER: ""\n  - GATE: test -f required.txt\n  - REQUIRED_CHECK: validate\n  - OMP_SESSION_ID: recovery-owner\n`,
-              `env:\n  - PATH: ${bin}:${process.env.PATH}\n  - WORKTREE: ${repo.worktree}\n  - RUN: \${context.run.id}\n  - DAGU_FEATURE_BUNDLE: test\n`,
-              source.slice(source.indexOf("  - DAGU_RESOURCE_GUARD: |"), source.indexOf("steps:\n")),
-              "steps:\n",
-              `  - id: triage\n    run: |\n      mkdir -p "$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")"\n      echo POC=no >> "$DAGU_OUTPUT_FILE"\n    outputs:\n      - name: POC\n`,
-              "  - id: triage_decision\n    depends: triage\n    run: echo reviewed\n",
-              ...["detect_start_primary", "start_primary_unavailable", "start_gate", "recover_start_gate", "implement",
-                "capture", "checkpoint_push", "dependency_review", "rebase", "conflict_review", "gate", "recover_gate", "push", "recover_push", "pr"]
-                .map(step => extractStep(source, step)),
-              "  - id: await_merge\n    depends: pr\n    action: human.task\n    with:\n      prompt: Isolated merge boundary\n",
-              source.slice(source.indexOf("handler_on:\n"), source.indexOf("  exit:\n")),
-            ].join("");
-            rmSync(join(repo.root, "bin", "dagu"));
-            const dag = join(home, "dags", "feature.yaml");
-            writeFileSync(dag, script);
-            const dagu = (...args: string[]) => execFileSync("dagu", args, {
-              cwd: root, env: { ...env, PATH: `${bin}:${process.env.PATH}` }, encoding: "utf8",
-              stdio: ["ignore", "pipe", "pipe"],
-            }).trim();
-            const iteration = () => Number(dagu("status", "feature", "--run-id", id).match(/push-back iteration: (\d+)/)?.[1] ?? 0);
-            async function waiting(step: string): Promise<Detail> {
-              return until(`${id} waiting ${step}`, async () => {
-                const run = await state(id, "waiting");
-                return run.nodes.some(node => node.step.name === step && node.statusLabel === "waiting") ? run : undefined;
-              });
-            }
-            function transition(step: string, pushBack = false): void {
-              const observed = iteration();
-              dagu("human-task", pushBack ? "push-back" : "complete", "feature", "--run-id", id, "--step", step,
-                ...(pushBack ? ["--expected-iteration", String(observed)] : []),
-                ...(!pushBack && step === "implement" ? ["--input", "SUMMARY=Recovery candidate", "--input", "MESSAGE=fix: recover candidate"] : []));
-            }
-            dagu("validate", dag);
-            dagu("enqueue", "--run-id", id, dag);
-            if (mode === "start_gate") {
-              const run = await waiting("recover_start_gate");
-              assert.equal(run.nodes.find(node => node.step.name === "start_gate")?.statusLabel, "failed");
-              assert.match(new Transitions("recovery-owner").observe(run).wakeMessage ?? "", /step=recover_start_gate.*cause=start_gate failed/);
-              git(repo.primary, "remote", "set-url", "origin", remote);
-              transition("recover_start_gate", true);
-            }
-            await waiting("implement");
-            writeFileSync(join(repo.worktree, mode === "gate" ? "candidate.txt" : "required.txt"), "candidate\n");
-            const before = iteration();
-            transition("implement");
-            if (mode === "gate") {
-              const failed = await waiting("recover_gate");
-              assert.equal(failed.nodes.find(node => node.step.name === "gate")?.statusLabel, "failed");
-              const notice = new Transitions("recovery-owner").observe(failed).wakeMessage;
-              assert.match(notice ?? "", /step=recover_gate.*cause=gate failed/);
-              transition("recover_gate", true);
-              await waiting("implement");
-              assert.equal(iteration(), before + 1);
-              writeFileSync(join(repo.worktree, "required.txt"), "fixed\n");
-              transition("implement");
-            } else if (mode === "push") {
-              const failed = await waiting("recover_push");
-              assert.equal(failed.nodes.find(node => node.step.name === "push")?.statusLabel, "failed");
-              assert.match(new Transitions("recovery-owner").observe(failed).wakeMessage ?? "", /step=recover_push.*cause=push failed/);
-              writeFileSync(join(repo.root, "allow-push"), "");
-              transition("recover_push", true);
-            }
-            const done = await waiting("await_merge");
-            for (const step of ["start_gate", "gate", "push"]) {
-              assert.equal(done.nodes.find(node => node.step.name === step)?.statusLabel, "succeeded");
-              assert.equal(done.nodes.find(node => node.step.name === `recover_${step}`)?.statusLabel, "skipped");
-            }
-            assert.equal(git(repo.worktree, "branch", "--show-current"), repo.branch);
-            assert.equal(git(repo.worktree, "status", "--porcelain"), "");
-            assert.match(readFileSync(join(repo.root, "gh.log"), "utf8"), /pr view/);
-          } finally {
-            rmSync(repo.root, { recursive: true, force: true });
-          }
+          await runRecovery(fixture, definition, mode);
         });
       }
       for (const mode of ["poc", "implementation-ready", "implementation-blocked"] as const) {
@@ -1254,12 +1332,79 @@ for (const [name, definition] of definitions) {
         });
       }
     } finally {
-      service.kill("SIGTERM");
-      await new Promise<void>(resolve => {
-        if (service.exitCode !== null) resolve();
-        else service.once("exit", () => resolve());
-      });
-      rmSync(root, { recursive: true, force: true });
+      await fixture.close();
     }
   });
 }
+
+test("concurrent recovery fixtures keep distinct run identities", {
+  skip: daguAvailable.status !== 0 || !/2\.20\.1/.test(daguAvailable.stdout) ? "Dagu 2.20.1 binary required for live integration" : false,
+  timeout: 360_000,
+}, async (t) => {
+  const active = new Set<RecoveryFixture>();
+  try {
+    const started = await Promise.allSettled(definitions.map(async () => {
+      const fixture = await recoveryFixture();
+      active.add(fixture);
+      return fixture;
+    }));
+    for (const result of started) {
+      if (result.status === "rejected") throw result.reason;
+    }
+    const [first, second] = [...active];
+    assert.ok(first && second);
+    assert.notEqual(first.home, second.home);
+    assert.notEqual(first.port, second.port);
+    assert.notEqual(first.suffix, second.suffix);
+    let lastId = "";
+    for (const mode of ["healthy", "gate", "start_gate", "push"] as const) {
+      const runs: PromiseSettledResult<RecoveryResult>[] = await Promise.allSettled([
+        runRecovery(first, definitions[0][1], mode),
+        runRecovery(second, definitions[1][1], mode),
+      ]);
+      const [left, right] = runs.map(result => {
+        if (result.status === "rejected") throw result.reason;
+        return result.value;
+      });
+      assert.ok(left && right);
+      assert.equal(left.dag, "feature");
+      assert.equal(right.dag, "feature");
+      assert.notEqual(`${left.dag}/${left.id}`, `${right.dag}/${right.id}`);
+      assert.notEqual(left.socket, right.socket);
+      assert.notEqual(left.candidateSHA, right.candidateSHA);
+      const expected = mode === "healthy"
+        ? [{ step: "implement", iteration: 0 }, { step: "await_merge", iteration: 0 }]
+        : mode === "start_gate"
+          ? [{ step: "recover_start_gate", iteration: 0 }, { step: "implement", iteration: 1 }, { step: "await_merge", iteration: 1 }]
+          : [
+            { step: "implement", iteration: 0 }, { step: `recover_${mode}`, iteration: 0 },
+            ...(mode === "gate" ? [{ step: "implement", iteration: 1 }] : []),
+            { step: "await_merge", iteration: 1 },
+          ];
+      const outcomes: Array<[RecoveryFixture, RecoveryResult]> = [[first, left], [second, right]];
+      for (const [fixture, result] of outcomes) {
+        assert.equal(result.id, `recovery-${mode}-${fixture.suffix}`);
+        assert.deepEqual(result.checkpoints, expected);
+        assert.equal(result.iteration, mode === "healthy" ? 0 : 1);
+        assert.equal(existsSync(result.repositoryRoot), false);
+        t.diagnostic(JSON.stringify({ home: fixture.home, port: fixture.port, ...result }));
+      }
+      lastId = right.id;
+    }
+    await first.close();
+    active.delete(first);
+    assert.equal(existsSync(first.root), false);
+    assert.equal(existsSync(second.home), true);
+    const surviving = await second.state(lastId, "waiting");
+    assert.equal(surviving.nodes.find(node => node.step.name === "await_merge")?.statusLabel, "waiting");
+    execFileSync("dagu", ["human-task", "complete", "feature", "--run-id", lastId, "--step", "await_merge"], {
+      cwd: second.root, env: second.env, stdio: ["ignore", "pipe", "pipe"],
+    });
+    await second.state(lastId, "succeeded");
+    await second.close();
+    active.delete(second);
+    assert.equal(existsSync(second.root), false);
+  } finally {
+    await Promise.all([...active].map(fixture => fixture.close()));
+  }
+});
