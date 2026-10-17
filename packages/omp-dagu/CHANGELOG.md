@@ -3,6 +3,7 @@
 ## 0.3.10
 
 - Distinguish slow REST/SSE timeouts from unavailable Dagu connections, retaining known workflow rows during timeouts and restoring the normal widget after recovery (#248).
+- Require a version bump and matching release heading for every recursively discovered skill addition, modification or deletion, including local changes (#267).
 - Make feature auto-merge idempotent for the verified head, merging CLEAN PRs immediately with the tested body and preserving guarded auto-merge for pending checks in the template and installed render (#242).
 
 ## 0.3.9
