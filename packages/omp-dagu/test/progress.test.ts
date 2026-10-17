@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { currentStep, renderOffline, renderRun, renderWidget, runLabel, Transitions } from "../src/status/progress.ts";
+import { currentStep, renderOffline, renderRun, renderWidget, resolveRunPrimary, runLabel, Transitions } from "../src/status/progress.ts";
 import type { RunDetails } from "../src/status/progress.ts";
 
 const labels = ["workspace=a4s", "dagu-feature-bundle=0.3.1"];
@@ -191,4 +191,15 @@ test("primary availability notices preserve the concrete sanitized cause", () =>
 test("bundle compatibility remains visible in targeted notices", () => {
   const candidate = { ...waitingAt("feature", "implement"), labels: ["dagu-feature-bundle=0.2.0"] };
   assert.ok(new Transitions("session-a").observe(candidate).wakeMessage?.includes("compat=incompatible"));
+});
+
+test("runtime primary resolves the enqueued adoption spec including spaces and Unicode", async t => {
+  const primary = "/tmp/Repo con espacio/ñ";
+  const fetch = t.mock.method(globalThis, "fetch", async (url: string | URL | Request) => {
+    assert.equal(String(url), "http://dagu/api/v1/dag-runs/feature/run-274/spec");
+    return new Response(JSON.stringify({ spec: `env:\n  - PRIMARY: ${JSON.stringify(primary)}\n` }));
+  });
+  assert.equal(await resolveRunPrimary("http://dagu", { ...run, dagRunId: "run-274", params: "ISSUE=274" }, new AbortController().signal), primary);
+  assert.equal(await resolveRunPrimary("http://dagu", run, new AbortController().signal), "/tmp/a4s");
+  assert.equal(fetch.mock.callCount(), 1);
 });

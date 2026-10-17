@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.16
+
+- Bind gate, required check and canonical primary at adoption, derive feature branches, reject policy run overrides before repository writes, and resolve runtime consumers from the enqueued policy snapshot (#274).
+
 ## 0.3.15
 
 - Protect active feature/PoC resources and the primary checkout in OMP bash calls; fail closed with ownership diagnostics when history is unavailable (#215).

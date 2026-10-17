@@ -19,8 +19,8 @@ test("CLI reports stamped repositories and the reconciler as compatible", () => 
     mkdirSync(join(daguHome, "dags"), { recursive: true });
     mkdirSync(bin);
     spawnSync("git", ["init", "-b", "main", repo], { encoding: "utf8" });
-    writeFileSync(join(repo, ".workspace", "dagu", "dags", "feature.yaml"), stamp);
-    writeFileSync(join(repo, ".workspace", "dagu", "dags", "poc.yaml"), stamp);
+    writeFileSync(join(repo, ".workspace", "dagu", "dags", "feature.yaml"), `${stamp}env:\n  - PRIMARY: "/canonical/repo"\n  - GATE: "npm test"\n  - REQUIRED_CHECK: "validate"\n`);
+    writeFileSync(join(repo, ".workspace", "dagu", "dags", "poc.yaml"), `${stamp}env:\n  - PRIMARY: "/canonical/repo"\n`);
     writeFileSync(join(repo, ".workspace", "dagu", "dags", "discovery.yaml"), stamp);
     writeFileSync(join(daguHome, "dags", "reconcile.yaml"), stamp);
     const dagu = join(bin, "dagu");
@@ -36,6 +36,8 @@ test("CLI reports stamped repositories and the reconciler as compatible", () => 
     assert.match(result.stdout, /discovery\.yaml .*version=0\.3\.0 .*compat=ok/);
     assert.match(result.stdout, /reconcile\.yaml .*version=0\.3\.0 .*compat=ok/);
     assert.match(result.stdout, /dagu version="2\.20\.1" required=2\.20\.1 compat=ok/);
+    assert.match(result.stdout, /feature.yaml policy PRIMARY="\/canonical\/repo" GATE="npm test" REQUIRED_CHECK="validate" BRANCH=dagu\/issue-\$\{ISSUE\}/);
+    assert.match(result.stdout, /poc.yaml policy PRIMARY="\/canonical\/repo"/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

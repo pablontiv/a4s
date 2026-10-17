@@ -37,7 +37,7 @@ flowchart LR
 - `git`, `gh` authenticated with push and PR rights, `curl`, `jq`.
 - The tools the repository's gate command needs.
 
-This skill does not install Dagu, and it carries no logic specific to any repository. Everything that varies between repositories is a DAG param.
+This skill does not install Dagu, and it carries no logic specific to any repository. Bootstrap renders repository policy; run parameters carry operational issue inputs.
 
 ## Global history retention
 
@@ -85,9 +85,9 @@ The bootstrap renders the repository DAG templates when a repository adopts the 
 |---|---|---|---|
 | `TEMPLATE_REPO` | Repository name, used in `labels: [workspace=<repo>]` and `queue: <repo>` | `rootline` | `homeserver` |
 | `TEMPLATE_BASE_BRANCH` | Default of `BASE_BRANCH`, the default branch. The DAG uses `origin/$BASE_BRANCH` as the source ref. | `master` | `main` |
-| `__GATE__` | Default of `GATE`, the local gate command, run with `bash -euo pipefail -c` in the worktree | `just check && just test` | `make hook-validate` |
-| `__REQUIRED_CHECK__` | Default of `REQUIRED_CHECK`, the GitHub check that must be required on the default branch | `candidate` | `validate` |
-| `__PRIMARY__` | Default clone path in `poc.yaml` | repository clone | repository clone |
+| `__GATE__` | Adoption-fixed `GATE`, the local gate command, run with `bash -euo pipefail -c` in the worktree | `just check && just test` | `make hook-validate` |
+| `__REQUIRED_CHECK__` | Adoption-fixed `REQUIRED_CHECK`, the GitHub check required on the default branch | `candidate` | `validate` |
+| `__PRIMARY__` | Canonical main-clone path fixed in feature and PoC renders | repository clone | repository clone |
 | `__TEST_PATHS__` | Bash ERE for repository test paths; every `*.md` also belongs to cutover | `_test\.go$\|^tests/` | `(^\|/)tests/` |
 
 The DAG's fixed invariants: `PRIMARY` is the repository clone, its main working tree, on `BASE_BRANCH` and clean; the run's worktree is always `$PRIMARY/.workspace/worktrees/issue-<n>`, ignored by git; the gate runs with `umask 0022` and without `GH_TOKEN`/`GITHUB_TOKEN`; auto-merge is bound to the tested SHA with `--match-head-commit`; and the queue has concurrency one per repository. `push` is the publication boundary after current-candidate verification. On exit, the handler removes a clean, owned worktree and local branch only after fetching and confirming that its head is contained by `origin/$BRANCH` or `origin/$BASE_BRANCH`, or that GitHub, queried from the `PRIMARY` clone, reports a merged PR with that exact head SHA. Uncaptured files and conflict resolutions remain in their worktree for recovery even when HEAD is on the base.
@@ -201,14 +201,11 @@ Preconditions: run from the repository clone, its main working tree, clean and o
 ```sh
 repo=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
 repo_name=${repo##*/}
-primary=$(git rev-parse --show-toplevel)
 issue_snapshot=$(gh issue list --repo "$repo" --state open --limit 1000 \
   --json number --jq '.[].number')
 for n in $issue_snapshot; do
   dagu enqueue --run-id "$repo_name-issue-$n" .workspace/dagu/dags/feature.yaml -- \
     ISSUE="$n" \
-    PRIMARY="$primary" \
-    BRANCH="dagu/issue-$n" \
     PR_NUMBER="" \
     OMP_SESSION_ID="<value returned by dagu_session_id>"
 done
@@ -216,7 +213,7 @@ done
 
 `issue_snapshot` is the fixed batch for this coordinator turn. Call `dagu_session_id` in the main session before enqueueing and use its returned value for every run. End the turn immediately after the enqueue loop; the status extension resumes coordination with targeted notices.
 
-Set `PR_NUMBER` only to adopt an existing open PR whose head branch is `BRANCH`. `OMP_SESSION_ID` targets the persistent main OMP session that enqueued the run. `BASE_BRANCH`, `GATE` and `REQUIRED_CHECK` take their defaults from the versioned file. Pass them only to override them for this run.
+Set `PR_NUMBER` only to adopt an existing open PR whose head is `dagu/issue-<ISSUE>`. `OMP_SESSION_ID` targets the persistent main OMP session that enqueued the run. `BASE_BRANCH` defaults to the versioned file. Bootstrap fixes `GATE`, `REQUIRED_CHECK` and canonical `PRIMARY` at adoption; the DAG derives `BRANCH=dagu/issue-$ISSUE`. Admission rejects each of those four names as run parameters, naming it before repository state changes. Change adoption policy through bootstrap and version the resulting renders.
 
 Before `start_gate` and `close_gate`, the DAG detects whether PRIMARY is clean and on
 `BASE_BRANCH`. An unavailable primary pauses the same run at
@@ -425,7 +422,7 @@ step waiting; inspect its log and apply the same iteration-protected transition.
 
 ```sh
 dagu enqueue --run-id "<repo>-poc-<id>" .workspace/dagu/dags/poc.yaml -- \
-  PRIMARY="$(git rev-parse --show-toplevel)" QUESTION="<behavior to prove>"
+  QUESTION="<behavior to prove>" OMP_SESSION_ID="<value returned by dagu_session_id>"
 ```
 
 ISSUE is optional. Without it, QUESTION is required and `record` creates the issue
@@ -482,7 +479,7 @@ first-line marker to be PASS/scope:OK with a normalized question matching the
 latest triage question (or the question body for an issue created by record)
 and nonempty required sections outside fences.
 It verifies Después del PASS in the body and enqueues the absolute feature
-DAG with ISSUE, PRIMARY, BRANCH, BASE_BRANCH and POC_BASIS pointing to the PASS;
+DAG with ISSUE, BASE_BRANCH and POC_BASIS pointing to the PASS;
 the PoC run and promoted `feature-<RUN>` run retain the original run's
 `OMP_SESSION_ID`, so the same coordinating OMP session receives the promoted run's notices. Its human triage cites that URL as BASIS and still requires
 REVIEW for POC=no.

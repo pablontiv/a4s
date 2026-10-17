@@ -3,7 +3,7 @@ import { realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { promisify } from "node:util";
-import { runParam } from "../status/progress.ts";
+import { resolveRunPrimary } from "../status/progress.ts";
 import type { RunDetails } from "../status/progress.ts";
 import { target } from "./guard.ts";
 import type { CallDecision, Event } from "./guard.ts";
@@ -39,7 +39,7 @@ export async function primarySessionDecision(event: Event, ctx: SessionContext):
     const response = await fetch(`${base}/api/v1/dag-runs/${encodeURIComponent(completion.dag)}/${encodeURIComponent(completion.run)}`, { signal: AbortSignal.timeout(5000) });
     if (!response.ok) throw new Error(`Dagu HTTP ${response.status}`);
     const body = await response.json() as { dagRunDetails: RunDetails };
-    const primary = runParam(body.dagRunDetails, "PRIMARY");
+    const primary = await resolveRunPrimary(base, body.dagRunDetails, AbortSignal.timeout(5000));
     if (!primary) throw new Error("Run PRIMARY is missing");
     expected = await realpath(primary);
     const [primaryRepo, sessionRepo, home, tmp] = await Promise.all([

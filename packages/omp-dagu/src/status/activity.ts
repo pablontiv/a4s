@@ -1,7 +1,7 @@
 import { open, readdir, realpath, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { currentNode, issueNumber, runParam, topicFor } from "./progress.ts";
+import { currentNode, issueNumber, resolveRunPrimary, runParam, topicFor } from "./progress.ts";
 import type { RunDetails } from "./progress.ts";
 
 const TRANSCRIPT_TAIL_BYTES = 256 * 1024;
@@ -108,11 +108,13 @@ async function newestFile(directory: string, names: string[], accepts: (name: st
 }
 
 async function locateTranscript(
+  base: string,
+  signal: AbortSignal,
   run: RunDetails,
   agentName: string,
   preferredSessionDir?: string,
 ): Promise<string | undefined> {
-  const primary = runParam(run, "PRIMARY");
+  const primary = await resolveRunPrimary(base, run, signal);
   const sessionId = runParam(run, "OMP_SESSION_ID");
   if (!primary || !sessionId) return undefined;
   const sessionDir = preferredSessionDir || await defaultSessionDir(primary);
@@ -159,12 +161,13 @@ function principalArgument(args: Record<string, unknown>): string | undefined {
 }
 
 async function agentActivity(
+  base: string,
   run: RunDetails,
   agentName: string,
   options: ActivityOptions,
   signal: AbortSignal,
 ): Promise<string | undefined> {
-  const transcript = await locateTranscript(run, agentName, options.sessionDir);
+  const transcript = await locateTranscript(base, signal, run, agentName, options.sessionDir);
   if (!transcript) return undefined;
   const transcriptText = await completeTranscript(transcript, signal);
   let lineEnd = transcriptText.length;
@@ -207,7 +210,7 @@ export async function readActivity(
   try {
     return target.kind === "command"
       ? await commandActivity(base, run, target.step, signal)
-      : await agentActivity(run, target.agentName!, options, signal);
+      : await agentActivity(base, run, target.agentName!, options, signal);
   } catch {
     return undefined;
   }

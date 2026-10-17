@@ -9,37 +9,31 @@ shell: bash
 max_active_steps: 1
 max_clean_up_time_sec: 120
 params:
-  - name: ISSUE
-    type: string
-    required: true
-    pattern: '^[1-9][0-9]*$'
-  - name: PR_NUMBER
-    type: string
-    default: ""
-  - name: PRIMARY
-    type: string
-    required: true
-  - name: BRANCH
-    type: string
-    required: true
-    pattern: '^[A-Za-z0-9][A-Za-z0-9._/-]*$'
-  - name: BASE_BRANCH
-    type: string
-    default: TEMPLATE_BASE_BRANCH
-    pattern: '^[A-Za-z0-9][A-Za-z0-9._/-]*$'
-  - name: GATE
-    type: string
-    default: __GATE__
-  - name: REQUIRED_CHECK
-    type: string
-    default: __REQUIRED_CHECK__
-  - name: OMP_SESSION_ID
-    type: string
-    default: ""
-  - name: POC_BASIS
-    type: string
-    default: ""
+  type: object
+  additionalProperties: true
+  required: [ISSUE]
+  properties:
+    ISSUE:
+      type: string
+      pattern: '^[1-9][0-9]*$'
+    PR_NUMBER:
+      type: string
+      default: ""
+    BASE_BRANCH:
+      type: string
+      default: TEMPLATE_BASE_BRANCH
+      pattern: '^[A-Za-z0-9][A-Za-z0-9._/-]*$'
+    OMP_SESSION_ID:
+      type: string
+      default: ""
+    POC_BASIS:
+      type: string
+      default: ""
 env:
+  - PRIMARY: __PRIMARY__
+  - BRANCH: dagu/issue-${ISSUE}
+  - GATE: __GATE__
+  - REQUIRED_CHECK: __REQUIRED_CHECK__
   - WORKTREE: ${PRIMARY}/.workspace/worktrees/issue-${ISSUE}
   - RUN: ${context.run.id}
   - DAGU_FEATURE_BUNDLE: "__DAGU_FEATURE_IDENTITY__"
@@ -130,10 +124,21 @@ env:
       }
 steps:
   - id: admit
+    depends: admission
     run: |
       set -euo pipefail
       eval "$DAGU_RESOURCE_GUARD"
       resource_lock claim
+
+  - id: admission
+    run: |
+      set -euo pipefail
+      rejected=$(jq -er 'keys[] | select(. == "GATE" or . == "REQUIRED_CHECK" or . == "PRIMARY" or . == "BRANCH")' <<<"$DAGU_PARAMS_JSON") || [[ $? == 4 ]]
+      if [[ -n "$rejected" ]]; then
+        printf 'admission rejected run parameter: %s\n' "$rejected" >&2
+        printf 'adopted policy PRIMARY=%q GATE=%q REQUIRED_CHECK=%q BRANCH=%q\n' "$PRIMARY" "$GATE" "$REQUIRED_CHECK" "$BRANCH" >&2
+        exit 1
+      fi
 
   - id: triage
     depends: admit
@@ -337,7 +342,7 @@ steps:
       gh issue comment "$ISSUE" --body-file "$STATE/triage.md"
       if [[ "$POC" == yes ]]; then
         dagu enqueue --run-id "poc-$RUN" "$PRIMARY/.workspace/dagu/dags/poc.yaml" -- \
-          ISSUE="$ISSUE" QUESTION="$QUESTION" PRIMARY="$PRIMARY" BASE_BRANCH="$BASE_BRANCH" \
+          ISSUE="$ISSUE" QUESTION="$QUESTION" BASE_BRANCH="$BASE_BRANCH" \
           OMP_SESSION_ID="$OMP_SESSION_ID"
       fi
 
@@ -965,6 +970,7 @@ handler_on:
   exit:
     run: |
       set -euo pipefail
+      if jq -e 'has("GATE") or has("REQUIRED_CHECK") or has("PRIMARY") or has("BRANCH")' <<<"${DAGU_PARAMS_JSON:-"{}"}" >/dev/null; then exit 0; fi
       eval "$DAGU_RESOURCE_GUARD"
       resource_lock cleanup
       published=false

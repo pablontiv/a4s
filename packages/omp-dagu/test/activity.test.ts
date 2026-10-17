@@ -178,3 +178,17 @@ test("activity text replaces controls and truncates the widget payload", () => {
   assert.equal(result.length, ACTIVITY_MAX_LENGTH);
   assert.equal(result.endsWith("…"), true);
 });
+
+test("agent activity resolves PRIMARY from the enqueued adoption spec", async t => {
+  const fixture = await transcriptFixture({
+    "Implement182.jsonl": `${message("2026-10-15T16:00:06Z", "bash", { i: "Reading rendered policy" })}\n`,
+  });
+  t.mock.method(globalThis, "fetch", async () => new Response(JSON.stringify({
+    spec: `env:\n  - PRIMARY: ${JSON.stringify(fixture.root)}\n`,
+  })));
+  try {
+    assert.equal(await activity({ ...agentRun, params: "ISSUE=182 OMP_SESSION_ID=session-main" }, fixture.sessionDir), "bash Reading rendered policy (6s)");
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
+  }
+});
