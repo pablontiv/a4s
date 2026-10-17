@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -108,6 +108,24 @@ function addWorktree(repo: Repository, name: string, branch: string): string {
 for (const [name, definition] of definitions) {
   const script = extractScript(definition, "  - id: leftovers");
 
+  test(`${name} canonical primary aliases share feature and PoC ownership`, () => {
+    const repo = repository();
+    try {
+      const alias = join(repo.root, "primary alias");
+      symlinkSync(repo.primary, alias);
+      addWorktree(repo, "issue-215", "dagu/issue-215");
+      addWorktree(repo, "poc-experiment", "poc/experiment");
+      const result = runScript(script, repo, [
+        { name: "feature", dagRunId: "terminal", status: "succeeded", startedAt: "2026-10-15T18:00:00Z", params: params(repo.primary, { issue: "215", branch: "dagu/issue-215" }) },
+        { name: "feature", dagRunId: "owner", status: "waiting", startedAt: "2026-10-16T18:00:00Z", params: params(alias, { issue: "215", branch: "dagu/issue-215" }) },
+      ], [
+        { name: "poc", dagRunId: "experiment", status: "waiting", startedAt: "2026-10-16T18:00:00Z", params: params(alias, {}) },
+      ]);
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.stderr, "");
+    } finally { rmSync(repo.root, { recursive: true, force: true }); }
+  });
+
   test(`${name} skips missing primaries and still reports a real leftover`, () => {
     const repo = repository();
     try {
@@ -205,10 +223,11 @@ esac
 `);
       chmodSync(join(repo.bin, "gh"), 0o755);
       const env = { ...childEnv(repo), DAGU_HOME: home };
-      const result = spawnSync(realDagu, ["start", "--run-id", "leftover-proof", dag], {
+      const runId = `leftover-proof-${repo.root.slice(repo.root.lastIndexOf("-") + 1)}`;
+      const result = spawnSync(realDagu, ["start", "--run-id", runId, dag], {
         cwd: repo.root, env, encoding: "utf8", timeout: 15_000,
       });
-      const status = spawnSync(realDagu, ["status", "--run-id", "leftover-proof", dag], {
+      const status = spawnSync(realDagu, ["status", "--run-id", runId, dag], {
         cwd: repo.root, env, encoding: "utf8", timeout: 3_000,
       });
       const evidence = `${result.stdout}${result.stderr}\n${status.stdout}${status.stderr}`;

@@ -35,7 +35,7 @@ steps:
       jq -s '
         def param($key):
           .params as $params
-          | (try ($params | capture("(^| )" + $key + "=(?<value>[^ ]*)($| )").value) catch "") // "";
+          | (try ($params | capture("(^| )" + $key + "=(?<value>.*?)(?= [A-Z_]+=|$)").value | if startswith("\"") or startswith("\u0027") then .[1:-1] else . end) catch "") // "";
         [(.[][]) | {
           kind: .name,
           run: .dagRunId,
@@ -48,6 +48,14 @@ steps:
         | sort_by(.time)
         | reverse
       ' "$TMP/feature.json" "$TMP/poc.json" >"$TMP/runs.json"
+      while IFS= read -r primary; do
+        [[ -d "$primary" ]] || continue
+        canonical=$(cd "$primary" && pwd -P)
+        jq --arg source "$primary" --arg canonical "$canonical" \
+          'map(if .primary == $source then .primary = $canonical else . end)' \
+          "$TMP/runs.json" > "$TMP/canonical.json"
+        mv "$TMP/canonical.json" "$TMP/runs.json"
+      done < <(jq -r '[.[].primary | select(length > 0)] | unique[]' "$TMP/runs.json")
       : >"$TMP/leftovers"
 
       inspect_resource() {

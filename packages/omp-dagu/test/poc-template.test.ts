@@ -4,6 +4,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
+import { withResourceGuard } from "./resource-fixtures.ts";
 
 for (const [name, definition] of [
   ["template", new URL("../skills/dagu-feature/poc.yaml", import.meta.url)],
@@ -35,7 +37,7 @@ for (const [name, definition] of [
         assert.ok(start > 0);
         let end = start;
         while (end < source.length && (source[end]!.startsWith("      ") || source[end] === "")) end++;
-        return source.slice(start, end).map(line => line.slice(6)).join("\n");
+        return withResourceGuard(source.slice(start, end).map(line => line.slice(6)).join("\n"), fileURLToPath(definition));
       };
       for (const id of ["base", "worktree"]) {
         const result = spawnSync("bash", ["-c", script(id)], {

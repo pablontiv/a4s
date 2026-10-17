@@ -155,15 +155,15 @@ test("eval argv and nested shell strings are guarded and run unchanged with expl
   const guard = new TriageGuard(); reviewer(guard);
   assert.equal(guard.toolCall(call(`sh -c '${command("run-136", "--input REVIEW=Review136")}'`)), undefined);
 });
-test("session_start and native new/resume session_switch reset all state", () => {
+test("session_start and native new/resume session_switch reset all state", async () => {
   const handlers: Record<string, Function> = {};
   extension({ on(name: string, handler: Function) { handlers[name] = handler; } });
   for (const event of [{ name: "session_start", data: {} }, { name: "session_switch", data: { reason: "new" } }, { name: "session_switch", data: { reason: "resume" } }]) {
-    const request = blocked(handlers.tool_call!(call()));
-    handlers.tool_call!({ toolName: "task", toolCallId: "review", input: { agent: "triage-reviewer", name: "Review136", task: request } });
+    const request = blocked(await handlers.tool_call!(call()));
+    await handlers.tool_call!({ toolName: "task", toolCallId: "review", input: { agent: "triage-reviewer", name: "Review136", task: request } });
     handlers.tool_result!({ toolName: "task", toolCallId: "review", input: {}, details: { results: [{ index: 0, id: "Review136", agent: "triage-reviewer", exitCode: 0, output: output() }] } });
-    assert.equal(handlers.tool_call!(approved()), undefined);
-    handlers[event.name]!(event.data); blocked(handlers.tool_call!(approved()));
+    assert.equal(await handlers.tool_call!(approved()), undefined);
+    handlers[event.name]!(event.data); blocked(await handlers.tool_call!(approved()));
   }
 });
 

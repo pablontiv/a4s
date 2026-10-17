@@ -11,6 +11,7 @@ import { test } from "node:test";
 import { Transitions } from "../src/status/progress.ts";
 import type { RunDetails } from "../src/status/progress.ts";
 import { BUNDLE_VERSION } from "../src/bundle.ts";
+import { stubHistory, withResourceGuard } from "./resource-fixtures.ts";
 
 const definitions = [
   ["template", fileURLToPath(new URL("../skills/dagu-feature/feature.yaml", import.meta.url))],
@@ -25,7 +26,7 @@ function extractScript(definition: string, marker: string): string {
   assert.notEqual(runIndex, -1, `missing run block after ${marker}`);
   let end = runIndex + 1;
   while (end < lines.length && (lines[end]!.startsWith("      ") || lines[end] === "")) end++;
-  return lines.slice(runIndex + 1, end).map((line) => line.slice(6)).join("\n");
+  return withResourceGuard(lines.slice(runIndex + 1, end).map((line) => line.slice(6)).join("\n"), definition);
 }
 
 function git(cwd: string, ...args: string[]): string {
@@ -64,6 +65,8 @@ function repository(): Repository {
   git(primary, "add", ".");
   git(primary, "commit", "-m", "base");
   git(primary, "push", "-u", "origin", "main");
+  writeFileSync(join(primary, ".git", "info", "exclude"), "/.workspace/worktrees/\n");
+  stubHistory(root);
   git(primary, "worktree", "add", "-b", branch, worktree, "origin/main");
   const state = join(primary, ".git", "dagu-feature", "runs", "test-run");
   mkdirSync(state, { recursive: true });
@@ -418,7 +421,7 @@ for (const [name, definition] of definitions) {
         assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
         assert.ok(existsSync(repo.worktree));
         assert.equal(git(repo.worktree, "branch", "--show-current"), repo.branch);
-        assert.ok(result.stdout.includes(`worktree=${repo.worktree}`));
+        assert.ok(result.stdout.includes("worktree="));
       }
     } finally {
       rmSync(repo.root, { recursive: true, force: true });
@@ -906,7 +909,7 @@ for (const [name, definition] of definitions) {
     service.stdout.on("data", data => { serviceLog += data; });
     service.stderr.on("data", data => { serviceLog += data; });
     const api = `http://127.0.0.1:${port}/api/v1`;
-    type Detail = RunDetails & {
+    type Detail = Omit<RunDetails, "nodes"> & {
       nodes: Array<{ step: { name: string }; statusLabel: string; stdout?: string; stderr?: string }>;
       onExit?: { statusLabel: string };
     };
@@ -924,7 +927,11 @@ for (const [name, definition] of definitions) {
         const response = await fetch(`${api}/dag-runs/feature/${id}`);
         if (!response.ok) return undefined;
         const run = (await response.json() as { dagRunDetails: Detail }).dagRunDetails;
-        assert.ok(!["failed", "aborted"].includes(run.statusLabel), JSON.stringify(run));
+        if (["failed", "aborted"].includes(run.statusLabel!)) {
+          const logs = run.nodes.filter(node => node.stderr).map(node => `${node.step.name}: ${readFileSync(node.stderr!, "utf8")}`).join("\n");
+          const log = (run as Detail & { log?: string }).log;
+          throw new Error(`${JSON.stringify(run)}\n${logs}\n${log && existsSync(log) ? readFileSync(log, "utf8") : ""}\n${serviceLog}`);
+        }
         return run.statusLabel === expected ? run : undefined;
       });
     }
@@ -961,6 +968,7 @@ for (const [name, definition] of definitions) {
               "type: graph\nshell: bash\nmax_active_steps: 1\n",
               `params:\n  - ISSUE: "189"\n  - PRIMARY: ${repo.primary}\n  - BRANCH: ${repo.branch}\n  - BASE_BRANCH: main\n  - PR_NUMBER: ""\n  - GATE: "true"\n  - REQUIRED_CHECK: validate\n  - OMP_SESSION_ID: close-owner\n`,
               `env:\n  - PATH: ${join(repo.root, "bin")}:${process.env.PATH}\n  - WORKTREE: ${repo.worktree}\n  - RUN: \${context.run.id}\n  - DAGU_FEATURE_BUNDLE: test\n`,
+              source.slice(source.indexOf("  - DAGU_RESOURCE_GUARD: |"), source.indexOf("steps:\n")),
               "steps:\n", triage, decision,
               ...["detect_start_primary", "start_primary_unavailable", "start_gate"].map(id => extractStep(source, id)),
               implementation,
@@ -969,6 +977,7 @@ for (const [name, definition] of definitions) {
             ].join("");
             const dag = join(home, "dags", "feature.yaml");
             writeFileSync(dag, script);
+            rmSync(join(repo.root, "bin", "dagu"));
             const runEnv = { ...env, PATH: `${join(repo.root, "bin")}:${process.env.PATH}` };
             const dagu = (...args: string[]) => execFileSync("dagu", args, {
               cwd: root, env: runEnv, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],

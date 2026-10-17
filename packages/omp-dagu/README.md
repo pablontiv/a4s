@@ -98,6 +98,42 @@ transcript o campos inválidos hacen fallar el step sin efectos externos.
 
 Con `@a4s/omp-cross-family-review` cargado, `triage-reviewer` conserva la selección cross-family; `reviewer` sigue disponible para code review.
 
+## Protección de recursos del ciclo
+
+El guard OMP intercepta llamadas de la herramienta `bash` con `git worktree
+remove`, `rm -r`/`rm -rf` y `git branch -d`/`-D`. Resuelve `cwd`, `cd`,
+`git -C`, rutas absolutas/relativas y symlinks; consulta las histories JSON de
+`feature` y `poc` con sus parámetros string. Para recursos de runs `queued`,
+`running` o `waiting`, bloquea la llamada completa antes de ejecutarla:
+
+```text
+dagu-feature: <ruta|rama> belongs to active run <run-id> (<status>)
+```
+
+El checkout primario y su rama permanecen protegidos incluso sin propietario.
+Una lectura de ownership fallida rechaza la eliminación gestionada con su causa.
+Es una intercepción de comandos literales de `bash` en OMP, no una frontera de
+aislamiento del sistema operativo: no interpreta expansiones del shell,
+scripts externos, comandos construidos dinámicamente ni otras herramientas.
+
+`admit` registra el propietario `(PRIMARY canónico, ISSUE)` en los metadatos Git.
+Admisión, creación y cleanup se serializan mediante un directorio-lock por issue,
+retenido hasta terminar cada operación. El mismo run reutiliza la rama y el
+worktree, incluidos commits y archivos existentes; un segundo propietario activo
+recibe un diagnóstico. Un traspaso terminal valida y conserva el candidato y su
+rama. Un lock que permanece tras terminar el proceso requiere inspección del
+operador antes de recuperarlo.
+
+`close_gate` y `handler_on.exit` ejecutan fuera de las tool calls del coordinador:
+comprueban identidad canónica, ubicación gestionada y propietario antes de borrar.
+La repetición converge localmente, incluido un cierre parcialmente completado.
+Para un recurso terminal, leer primero `dagu status --run-id <id> feature`
+(o `poc`), inspeccionar el HEAD y los archivos retenidos, conservar/publicar los
+commits necesarios y recuperar mediante el mismo ciclo o un run con sufijo.
+Cuando el operador decide retirar un recurso terminal o sin dueño, las llamadas
+literales de eliminación quedan disponibles; el primario sigue protegido.
+
+
 ## Skill dagu-feature
 
 OMP resuelve `skill://dagu-feature` y sus plantillas desde `skills/dagu-feature/` dentro del paquete. `SKILL.md`, `feature.yaml`, `poc.yaml`, `discovery.yaml`, `reconcile.yaml` y `dagu-feature-bootstrap.yaml` permanecen juntos para conservar sus enlaces relativos y las rutas `$SKILL_DIR/<archivo>` del bootstrap.
