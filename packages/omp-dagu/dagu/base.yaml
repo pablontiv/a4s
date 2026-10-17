@@ -1,1 +1,9 @@
+# Station defaults inherited by every DAG; individual DAGs may override them.
+type: graph
+overlap_policy: skip
+log_output: separate
 hist_retention_days: 7
+max_clean_up_time_sec: 5
+max_active_steps: 10
+max_output_size: 1048576
+catchup_window: "6h"
