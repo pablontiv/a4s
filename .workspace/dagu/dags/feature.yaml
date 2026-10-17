@@ -557,7 +557,9 @@ steps:
       seed=$(printf '%s:%s' "$RUN" "$iteration" | cksum)
       epoch=$((1700000000 + ${seed%% *} % 100000000))
       export GIT_AUTHOR_DATE="@$epoch +0000" GIT_COMMITTER_DATE="@$epoch +0000"
-      sha=$(printf '%s\n' "$MESSAGE" | git commit-tree "$tree" -p "$base")
+      signing=()
+      if test "$(git config --bool --get commit.gpgsign || test "$?" -eq 1)" = true; then signing=(-S); fi
+      sha=$(printf '%s\n' "$MESSAGE" | git commit-tree "${signing[@]}" "$tree" -p "$base")
       git diff --binary --full-index "$base" "$sha" > "$scratch/diff.patch"
       jq -nc --arg base "$base" --arg sha "$sha" --arg tree "$tree" --arg message "$MESSAGE" \
         --arg summary "$SUMMARY" --argjson iteration "$iteration" \

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.20
+
+- Sign captured candidate commits according to repository Git signing configuration while retaining deterministic dates and identical-candidate reuse (#343).
+
 ## 0.3.19
 
 - Give each live recovery fixture a UUID-suffixed run identity and exercise concurrent, isolated Dagu services through their own checkpoints, iterations, candidate SHAs and teardown (#340).

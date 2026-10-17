@@ -582,8 +582,11 @@ Per-run state under `<git-dir>/dagu-feature/runs/<RUN>` records `identity`,
 `base`, `diff.patch` (full binary patch), `candidate.json` (SHA, tree, message,
 summary and capture iteration), and `gate.json` (tested SHA and exact GATE).
 Identical captures reuse the SHA and commit count; author/committer dates are
-fixed from the run ID and capture iteration. Corrections create a new single
-commit over the base. Corrections and rebases archive earlier candidate/diff/gate
+fixed from the run ID and capture iteration. Capture signs new commits when Git's
+repository configuration enables `commit.gpgsign`, using `gpg.format` and
+`user.signingkey`. Identical candidates are reused by tree, parent and message,
+including signed candidates. Corrections create a new single commit over the base.
+Corrections and rebases archive earlier candidate/diff/gate
 records under `historical/<SHA>/`; all declared local checks belong in GATE and
 run again for the current SHA. `push` and `auto_merge` require current evidence
 and a clean worktree. `checkpoint_push` performs the dependency comparison
