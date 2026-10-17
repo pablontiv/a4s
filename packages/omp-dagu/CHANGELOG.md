@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.16
+
+- Allow operators to decline a PoC at run_poc with a reason, recording one issue comment and cleaning up without a verdict or feature promotion (#263).
+
 ## 0.3.15
 
 - Protect active feature/PoC resources and the primary checkout in OMP bash calls; fail closed with ownership diagnostics when history is unavailable (#215).
