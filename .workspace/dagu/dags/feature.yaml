@@ -316,6 +316,17 @@ steps:
         git -C "$PRIMARY" rev-parse --verify "origin/$BASE_BRANCH^{commit}" >/dev/null
         git -C "$PRIMARY" worktree add -b "$BRANCH" "$WORKTREE" "origin/$BASE_BRANCH"
       fi
+      STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")
+      owner=$(git -C "$WORKTREE" rev-parse --path-format=absolute --git-path dagu-feature-owner)
+      identity=$(jq -nc --arg primary "$primary_path" --arg worktree "$(cd "$WORKTREE" && pwd -P)" \
+        --arg branch "$BRANCH" --arg run "$RUN" --arg session "$OMP_SESSION_ID" \
+        '{primary:$primary,worktree:$worktree,branch:$branch,run:$run,session:$session}')
+      if test -f "$owner"; then test "$(cat "$owner")" = "$identity"; fi
+      if test -f "$STATE/identity"; then test "$(cat "$STATE/identity")" = "$identity"; fi
+      mkdir -p "$STATE"
+      printf '%s\n' "$identity" > "$owner"
+      printf '%s\n' "$identity" > "$STATE/identity"
+      if ! test -f "$STATE/base"; then git -C "$WORKTREE" rev-parse HEAD > "$STATE/base"; fi
       printf 'issue=%s\nbranch=%s\nworktree=%s\nbase_sha=%s\n' \
         "$ISSUE" "$BRANCH" "$WORKTREE" "$(git -C "$WORKTREE" rev-parse HEAD)"
 
@@ -323,17 +334,125 @@ steps:
     depends: start_gate
     action: human.task
     with:
-      prompt: "Implement issue #${ISSUE} in ${WORKTREE}. Leave one commit on ${BRANCH} rebased onto origin/${BASE_BRANCH}, with conflicts resolved, and a clean worktree. After a conflict push-back, the files are listed in <git-dir>/dagu-feature/runs/${RUN}/conflict-files."
+      prompt: "Deliver the files for issue #${ISSUE} inside ${WORKTREE} on ${BRANCH}, plus SUMMARY and a conventional MESSAGE. Dagu stages and commits the delivery. After conflict push-back, resolve the files listed in <git-dir>/dagu-feature/runs/${RUN}/conflict-files in place in this same worktree and branch; Dagu has prepared the new base and conflict markers. Git and Dagu-store access remains an advisory trust boundary."
+      form:
+        type: object
+        properties:
+          SUMMARY:
+            type: string
+            minLength: 1
+          MESSAGE:
+            type: string
+            minLength: 1
+        required: [SUMMARY, MESSAGE]
+
+  - id: capture
+    depends: implement
+    env:
+      - SUMMARY: ${steps.implement.outputs.SUMMARY}
+      - MESSAGE: ${steps.implement.outputs.MESSAGE}
+    run: |
+      set -euo pipefail
+      umask 0022
+      fail() { printf 'capture: %s\n' "$*" >&2; exit 1; }
+      primary=$(cd "$PRIMARY" && pwd -P)
+      worktree=$(cd "$WORKTREE" && pwd -P)
+      test "$primary" = "$(cd "$(git -C "$PRIMARY" rev-parse --show-toplevel)" && pwd -P)"
+      test "$(git -C "$PRIMARY" rev-parse --absolute-git-dir)" = "$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-common-dir)"
+      test "$worktree" = "$primary/.workspace/worktrees/issue-$ISSUE" || fail "worktree outside assigned path"
+      test "$worktree" = "$(cd "$(git -C "$WORKTREE" rev-parse --show-toplevel)" && pwd -P)"
+      test "$(git -C "$WORKTREE" rev-parse --path-format=absolute --git-common-dir)" = "$(git -C "$PRIMARY" rev-parse --absolute-git-dir)"
+      test "$(git -C "$WORKTREE" branch --show-current)" = "$BRANCH" || fail "branch mismatch"
+      STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")
+      identity=$(jq -nc --arg primary "$primary" --arg worktree "$worktree" \
+        --arg branch "$BRANCH" --arg run "$RUN" --arg session "$OMP_SESSION_ID" \
+        '{primary:$primary,worktree:$worktree,branch:$branch,run:$run,session:$session}')
+      test "$(cat "$STATE/identity")" = "$identity" || fail "run identity mismatch"
+      test "$(cat "$(git -C "$WORKTREE" rev-parse --path-format=absolute --git-path dagu-feature-owner)")" = "$identity" || fail "worktree owner mismatch"
+      test -n "$SUMMARY" && test -n "$MESSAGE"
+      cd "$WORKTREE"
+      base=$(cat "$STATE/base")
+      head=$(git rev-parse HEAD)
+      expected=$base
+      if test -f "$STATE/candidate.json"; then expected=$(jq -r .sha "$STATE/candidate.json"); fi
+      test "$head" = "$expected" || fail "HEAD differs from Dagu candidate"
+      # Resolve every changed path and symlink lexically and physically, including dangling links.
+      confined() {
+        local path=$1 part resolved=$worktree links=0
+        while test -n "$path"; do
+          part=${path%%/*}
+          if [[ "$path" == */* ]]; then path=${path#*/}; else path=; fi
+          case "$part" in
+            ''|.) continue ;;
+            ..) resolved=${resolved%/*} ;;
+            *)
+              resolved="$resolved/$part"
+              if test -L "$resolved"; then
+                links=$((links + 1))
+                test "$links" -le 40 || fail "symlink cycle"
+                target=$(readlink "$resolved")
+                resolved=${resolved%/*}
+                if [[ "$target" == /* ]]; then
+                  case "$target/" in "$worktree/"*) target=${target#"$worktree/"}; resolved=$worktree ;; *) fail "path escapes worktree: $1" ;; esac
+                fi
+                path="$target${path:+/$path}"
+              fi ;;
+          esac
+          case "$resolved/" in "$worktree/"*|/) ;; *) fail "path escapes worktree: $1" ;; esac
+        done
+        case "$resolved/" in "$worktree/"*) ;; *) fail "path escapes worktree: $1" ;; esac
+      }
+      scratch=$(mktemp -d)
+      trap 'rm -rf "$scratch"' EXIT
+      git diff --name-only --no-renames -z "$base" > "$scratch/paths"
+      git ls-files --others --exclude-standard -z >> "$scratch/paths"
+      while IFS= read -r -d '' path; do confined "$path"; done < "$scratch/paths"
+      # Stage through a private index: rejection leaves the delivered files and real index intact.
+      export GIT_INDEX_FILE="$scratch/index"
+      git read-tree "$head"
+      git add -A -- .
+      tree=$(git write-tree)
+      iteration=0
+      if test -f "$STATE/candidate.json"; then
+        if jq -e --arg tree "$tree" --arg message "$MESSAGE" --arg base "$base" \
+          '.tree == $tree and .message == $message and .base == $base' "$STATE/candidate.json" >/dev/null; then
+          printf 'candidate_sha=%s\n' "$head"
+          exit 0
+        fi
+        iteration=$(( $(jq -r .iteration "$STATE/candidate.json") + 1 ))
+      fi
+      seed=$(printf '%s:%s' "$RUN" "$iteration" | cksum)
+      epoch=$((1700000000 + ${seed%% *} % 100000000))
+      export GIT_AUTHOR_DATE="@$epoch +0000" GIT_COMMITTER_DATE="@$epoch +0000"
+      sha=$(printf '%s\n' "$MESSAGE" | git commit-tree "$tree" -p "$base")
+      git diff --binary --full-index "$base" "$sha" > "$scratch/diff.patch"
+      jq -nc --arg base "$base" --arg sha "$sha" --arg tree "$tree" --arg message "$MESSAGE" \
+        --arg summary "$SUMMARY" --argjson iteration "$iteration" \
+        '{base:$base,sha:$sha,tree:$tree,message:$message,summary:$summary,iteration:$iteration}' > "$scratch/candidate.json"
+      git update-ref "refs/heads/$BRANCH" "$sha" "$head"
+      unset GIT_INDEX_FILE
+      git read-tree "$tree"
+      if test -f "$STATE/candidate.json"; then
+        old=$(jq -r .sha "$STATE/candidate.json")
+        mkdir -p "$STATE/historical/$old"
+        for artifact in candidate.json diff.patch gate.json; do
+          if test -f "$STATE/$artifact"; then mv "$STATE/$artifact" "$STATE/historical/$old/"; fi
+        done
+      fi
+      mv "$scratch/candidate.json" "$scratch/diff.patch" "$STATE/"
+      printf 'candidate_sha=%s\n' "$sha"
 
   - id: checkpoint_push
-    depends: implement
+    depends: capture
     run: |
       set -euo pipefail
       umask 0022
       test "$(git -C "$WORKTREE" branch --show-current)" = "$BRANCH"
       test -z "$(git -C "$WORKTREE" status --porcelain)"
       STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")
-      repo=$WORKTREE base=$(git -C "$WORKTREE" merge-base HEAD "origin/$BASE_BRANCH") head=HEAD
+      head=$(jq -r .sha "$STATE/candidate.json")
+      test "$(git -C "$WORKTREE" rev-parse HEAD)" = "$head"
+      repo=$WORKTREE base=$(cat "$STATE/base")
       blob() { git -C "$repo" show "$1:$2" 2>/dev/null || true; }
       extract() {
         jq -Rrs --arg path "$1" '
@@ -388,8 +507,6 @@ steps:
       else
         printf 'complete\n' > "$STATE/dependency-action"
       fi
-      git -C "$WORKTREE" push --force-with-lease --set-upstream origin "HEAD:$BRANCH"
-      printf 'checkpoint_sha=%s\n' "$(git -C "$WORKTREE" rev-parse HEAD)"
 
   - id: dependency_review
     depends: checkpoint_push
@@ -408,14 +525,37 @@ steps:
       test -z "$(git -C "$WORKTREE" status --porcelain)"
       git -C "$WORKTREE" fetch origin
       STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")
+      before=$(jq -r .sha "$STATE/candidate.json")
+      test "$(git -C "$WORKTREE" rev-parse HEAD)" = "$before"
       if git -C "$WORKTREE" rebase "origin/$BASE_BRANCH"; then
         printf 'complete\n' > "$STATE/conflict-action"
         test "$(git -C "$WORKTREE" rev-list --count "origin/$BASE_BRANCH..HEAD")" -eq 1
-        printf 'rebased_sha=%s\n' "$(git -C "$WORKTREE" rev-parse HEAD)"
+        after=$(git -C "$WORKTREE" rev-parse HEAD)
+        if [[ "$before" != "$after" ]]; then
+          mkdir -p "$STATE/historical/$before"
+          for artifact in candidate.json diff.patch gate.json; do
+            if test -f "$STATE/$artifact"; then mv "$STATE/$artifact" "$STATE/historical/$before/"; fi
+          done
+          git -C "$WORKTREE" rev-parse "origin/$BASE_BRANCH" > "$STATE/base"
+          jq --arg sha "$after" --arg base "$(cat "$STATE/base")" \
+            --arg tree "$(git -C "$WORKTREE" rev-parse 'HEAD^{tree}')" \
+            '.sha=$sha | .base=$base | .tree=$tree' "$STATE/historical/$before/candidate.json" > "$STATE/candidate.json"
+          git -C "$WORKTREE" diff --binary --full-index "$(cat "$STATE/base")" "$after" > "$STATE/diff.patch"
+        fi
+        printf 'rebased_sha=%s\n' "$after"
       else
         git -C "$WORKTREE" diff --name-only --diff-filter=U > "$STATE/conflict-files"
-        git -C "$WORKTREE" rebase --abort
-        test -z "$(git -C "$WORKTREE" status --porcelain)"
+        # Keep the resolved/nonconflicting delivery and conflict markers for implement.
+        git -C "$WORKTREE" rebase --quit
+        git -C "$WORKTREE" symbolic-ref HEAD "refs/heads/$BRANCH"
+        base=$(git -C "$WORKTREE" rev-parse "origin/$BASE_BRANCH")
+        git -C "$WORKTREE" update-ref "refs/heads/$BRANCH" "$base" "$before"
+        git -C "$WORKTREE" read-tree "$base"
+        mkdir -p "$STATE/historical/$before"
+        for artifact in candidate.json diff.patch gate.json; do
+          if test -f "$STATE/$artifact"; then mv "$STATE/$artifact" "$STATE/historical/$before/"; fi
+        done
+        printf '%s\n' "$base" > "$STATE/base"
         test -s "$STATE/conflict-files"
         printf 'rewind\n' > "$STATE/conflict-action"
         sed 's/^/conflict_files=/' "$STATE/conflict-files"
@@ -439,6 +579,16 @@ steps:
       set -euo pipefail
       umask 0022
       cd "$WORKTREE"
+      STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")
+      sha=$(jq -r .sha "$STATE/candidate.json")
+      test "$(git rev-parse HEAD)" = "$sha"
+      test "$(git branch --show-current)" = "$BRANCH"
+      test -z "$(git status --porcelain)"
+      if test -f "$STATE/gate.json"; then
+        prior=$(jq -r .sha "$STATE/gate.json")
+        mkdir -p "$STATE/historical/$prior"
+        mv "$STATE/gate.json" "$STATE/historical/$prior/gate.json"
+      fi
       env -u GH_TOKEN -u GITHUB_TOKEN bash -euo pipefail -c "$GATE"
       status=$(git status --porcelain)
       if [[ -n "$status" ]]; then
@@ -447,20 +597,34 @@ steps:
         git diff --stat >&2
         exit 1
       fi
-      printf 'tested_sha=%s\n' "$(git rev-parse HEAD)"
+      test "$(git rev-parse HEAD)" = "$sha"
+      jq -nc --arg sha "$sha" --arg gate "$GATE" '{sha:$sha,gate:$gate}' > "$STATE/gate.json"
+      printf 'tested_sha=%s\n' "$sha"
 
   - id: push
     depends: gate
     run: |
       set -euo pipefail
       umask 0022
-      git -C "$WORKTREE" push --force-with-lease --set-upstream origin "HEAD:$BRANCH"
+      STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")
+      sha=$(jq -r .sha "$STATE/candidate.json")
+      test "$(git -C "$WORKTREE" branch --show-current)" = "$BRANCH"
+      test "$(git -C "$WORKTREE" rev-parse HEAD)" = "$sha"
+      test -z "$(git -C "$WORKTREE" status --porcelain)"
+      jq -e --arg sha "$sha" --arg gate "$GATE" '.sha == $sha and .gate == $gate' "$STATE/gate.json" >/dev/null
+      git -C "$WORKTREE" push --force-with-lease --set-upstream origin "$sha:refs/heads/$BRANCH"
 
   - id: pr
     depends: push
     run: |
       set -euo pipefail
       cd "$WORKTREE"
+      STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")
+      sha=$(jq -r .sha "$STATE/candidate.json")
+      test "$(git branch --show-current)" = "$BRANCH"
+      test "$(git rev-parse HEAD)" = "$sha"
+      test -z "$(git status --porcelain)"
+      jq -e --arg sha "$sha" --arg gate "$GATE" '.sha == $sha and .gate == $gate' "$STATE/gate.json" >/dev/null
       if test -n "$PR_NUMBER"; then
         test "$(gh pr view "$PR_NUMBER" --json state --jq .state)" = OPEN
         test "$(gh pr view "$PR_NUMBER" --json headRefName --jq .headRefName)" = "$BRANCH"
@@ -476,7 +640,12 @@ steps:
     run: |
       set -euo pipefail
       cd "$WORKTREE"
-      sha=$(git rev-parse HEAD)
+      STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")
+      sha=$(jq -r .sha "$STATE/candidate.json")
+      test "$(git branch --show-current)" = "$BRANCH"
+      test "$(git rev-parse HEAD)" = "$sha"
+      test -z "$(git status --porcelain)"
+      jq -e --arg sha "$sha" --arg gate "$GATE" '.sha == $sha and .gate == $gate' "$STATE/gate.json" >/dev/null
       pr_ref=${PR_NUMBER:-$BRANCH}
       observation=$(gh pr view "$pr_ref" --json state,mergeStateStatus,autoMergeRequest,mergeCommit,headRefOid)
       test "$(jq -r '.headRefOid' <<< "$observation")" = "$sha"
@@ -681,6 +850,18 @@ handler_on:
           fi
         fi
       fi
+      # Uncaptured files, including conflict resolutions, are unpublished delivery.
+      if test -e "$WORKTREE"; then
+        STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")
+        owner=$(git -C "$WORKTREE" rev-parse --path-format=absolute --git-path dagu-feature-owner)
+        if ! status=$(git -C "$WORKTREE" status --porcelain) ||
+           [[ -n "$status" ]] ||
+           [[ "$(git -C "$WORKTREE" branch --show-current)" != "$BRANCH" ]] ||
+           [[ "$(cd "$WORKTREE" && pwd -P)" != "$(cd "$PRIMARY" && pwd -P)/.workspace/worktrees/issue-$ISSUE" ]] ||
+           ! cmp -s "$STATE/identity" "$owner"; then
+          published=false
+        fi
+      fi
       if [[ "$published" == true ]]; then
         if test -e "$WORKTREE"; then
           git -C "$PRIMARY" worktree remove --force "$WORKTREE"
@@ -691,4 +872,3 @@ handler_on:
         printf 'Unpublished work kept: branch %s; worktree %s\n' "$BRANCH" "$WORKTREE"
         printf 'Recovery: push %s from %s, then re-enqueue this issue with a suffixed run ID.\n' "$BRANCH" "$WORKTREE"
       fi
-

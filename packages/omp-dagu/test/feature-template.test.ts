@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -47,13 +47,14 @@ function repository(): Repository {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "omp-dagu-feature-")));
   const primary = join(root, "primary");
   const remote = join(root, "remote.git");
-  const worktree = join(root, "worktree");
+  const worktree = join(primary, ".workspace", "worktrees", "issue-189");
   const branch = "dagu/issue-189";
   execFileSync("git", ["init", "--bare", "-b", "main", remote]);
   execFileSync("git", ["init", "-b", "main", primary]);
   git(primary, "config", "user.name", "Feature Test");
   git(primary, "config", "user.email", "feature-test@example.com");
   git(primary, "remote", "add", "origin", remote);
+  writeFileSync(join(primary, ".git", "info", "exclude"), "/.workspace/\n");
   mkdirSync(join(primary, "packages", "first"), { recursive: true });
   mkdirSync(join(primary, "packages", "second"), { recursive: true });
   writeFileSync(join(primary, "packages", "first", "package.json"), '{"dependencies":{"shared":"1.0.0"}}\n');
@@ -65,7 +66,20 @@ function repository(): Repository {
   git(primary, "worktree", "add", "-b", branch, worktree, "origin/main");
   const state = join(primary, ".git", "dagu-feature", "runs", "test-run");
   mkdirSync(state, { recursive: true });
+  const identity = JSON.stringify({ primary, worktree, branch, run: "test-run", session: "" }) + "\n";
+  writeFileSync(join(state, "identity"), identity);
+  writeFileSync(git(worktree, "rev-parse", "--path-format=absolute", "--git-path", "dagu-feature-owner"), identity);
+  writeFileSync(join(state, "base"), git(worktree, "rev-parse", "HEAD") + "\n");
+  recordCandidate({ root, primary, worktree, branch, state });
   return { root, primary, worktree, branch, state };
+}
+
+function recordCandidate(repo: Repository): void {
+  const sha = git(repo.worktree, "rev-parse", "HEAD");
+  writeFileSync(join(repo.state, "candidate.json"), JSON.stringify({
+    sha, base: readFileSync(join(repo.state, "base"), "utf8").trim(),
+    tree: git(repo.worktree, "rev-parse", "HEAD^{tree}"), message: "base", iteration: -1,
+  }) + "\n");
 }
 
 function commit(repo: Repository, path: string, content: string): void {
@@ -74,6 +88,7 @@ function commit(repo: Repository, path: string, content: string): void {
   writeFileSync(target, content);
   git(repo.worktree, "add", path);
   git(repo.worktree, "commit", "-m", "feature change");
+  recordCandidate(repo);
 }
 
 function stubGh(repo: Repository, stdout: string, status: number, stderr = ""): void {
@@ -117,11 +132,13 @@ function featureScriptEnv(repo: Repository): NodeJS.ProcessEnv {
     WORKTREE: repo.worktree,
     BRANCH: repo.branch,
     BASE_BRANCH: "main",
-    GATE: "npm test",
+    GATE: "true",
     REQUIRED_CHECK: "validate",
     OMP_SESSION_ID: "",
     POC_BASIS: "",
     RUN: "test-run",
+    SUMMARY: "Delivered files",
+    MESSAGE: "feat: delivered change",
   };
 }
 
@@ -132,11 +149,11 @@ function runFailingCloseGate(script: string, repo: Repository) {
   });
 }
 
-function runScript(script: string, repo: Repository): string {
+function runScript(script: string, repo: Repository, env: NodeJS.ProcessEnv = {}): string {
   const result = spawnSync("bash", ["-c", script], {
     encoding: "utf8",
     cwd: repo.root,
-    env: featureScriptEnv(repo),
+    env: { ...featureScriptEnv(repo), ...env },
   });
   assert.equal(result.status, 0, `script failed\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
   return `${result.stdout}${result.stderr}`;
@@ -147,6 +164,168 @@ for (const [name, definition] of definitions) {
   const checkpointScript = extractScript(definition, "  - id: checkpoint_push");
   const closeGateScript = extractScript(definition, "  - id: close_gate");
   const autoMergeScript = extractScript(definition, "  - id: auto_merge");
+
+  const captureScript = extractScript(definition, "  - id: capture");
+  const gateScript = extractScript(definition, "  - id: gate");
+  const pushScript = extractScript(definition, "  - id: push");
+
+  test(`${name} terminal cleanup retains an uncaptured delivery whose HEAD is on the base`, () => {
+    const repo = repository();
+    try {
+      writeFileSync(join(repo.worktree, "delivery"), "keep this\n");
+      symlinkSync(join(repo.root, "outside"), join(repo.worktree, "escape"));
+      const before = git(repo.worktree, "rev-parse", "HEAD");
+      const rejected = spawnSync("bash", ["-c", captureScript], { encoding: "utf8", env: featureScriptEnv(repo) });
+      assert.notEqual(rejected.status, 0);
+      assert.match(runScript(exitScript, repo), /Unpublished work kept/);
+      assert.equal(git(repo.worktree, "rev-parse", "HEAD"), before);
+      assert.equal(readFileSync(join(repo.worktree, "delivery"), "utf8"), "keep this\n");
+      assert.equal(hasRef(repo.primary, `refs/heads/${repo.branch}`), true);
+    } finally { rmSync(repo.root, { recursive: true, force: true }); }
+  });
+
+  test(`${name} captures every file kind exactly and repeats with the same candidate`, () => {
+    const repo = repository();
+    try {
+      const base = git(repo.worktree, "rev-parse", "HEAD");
+      renameSync(join(repo.worktree, "README.txt"), join(repo.worktree, "renamed.txt"));
+      rmSync(join(repo.worktree, "packages/first/package.json"));
+      writeFileSync(join(repo.worktree, "packages/second/package.json"), '{"name":"changed"}\n');
+      const binary = Buffer.from([0, 255, 1, 10, 0, 128]);
+      writeFileSync(join(repo.worktree, "new binary\nfile"), binary);
+      writeFileSync(join(repo.worktree, "executable"), "#!/bin/sh\nexit 0\n");
+      chmodSync(join(repo.worktree, "executable"), 0o755);
+      symlinkSync("renamed.txt", join(repo.worktree, "internal-link"));
+      runScript(captureScript, repo);
+      const sha = git(repo.worktree, "rev-parse", "HEAD");
+      const candidate = JSON.parse(readFileSync(join(repo.state, "candidate.json"), "utf8"));
+      assert.equal(candidate.sha, sha);
+      assert.equal(candidate.base, base);
+      assert.equal(candidate.summary, "Delivered files");
+      assert.equal(candidate.message, "feat: delivered change");
+      assert.equal(git(repo.worktree, "rev-list", "--count", `${base}..HEAD`), "1");
+      assert.equal(git(repo.worktree, "status", "--porcelain"), "");
+      assert.deepEqual(execFileSync("git", ["-C", repo.worktree, "show", `${sha}:new binary\nfile`]), binary);
+      assert.equal(git(repo.worktree, "show", `${sha}:packages/second/package.json`), '{"name":"changed"}');
+      assert.equal(git(repo.worktree, "show", `${sha}:renamed.txt`), "base");
+      assert.equal(git(repo.worktree, "show", `${sha}:internal-link`), "renamed.txt");
+      assert.match(git(repo.worktree, "ls-tree", sha, "executable"), /^100755 /);
+      const changes = git(repo.worktree, "diff", "--name-status", "-M", base, sha);
+      assert.match(changes, /R100\s+README.txt\s+renamed.txt/);
+      assert.match(changes, /D\s+packages\/first\/package.json/);
+      assert.match(readFileSync(join(repo.state, "diff.patch"), "utf8"), /GIT binary patch/);
+      runScript(checkpointScript, repo);
+      const count = git(repo.worktree, "rev-list", "--count", "HEAD");
+      const date = git(repo.worktree, "show", "-s", "--format=%at:%ct", sha);
+      assert.match(runScript(captureScript, repo), new RegExp(`candidate_sha=${sha}`));
+      assert.equal(git(repo.worktree, "rev-list", "--count", "HEAD"), count);
+      assert.equal(git(repo.worktree, "show", "-s", "--format=%at:%ct", sha), date);
+      runScript(gateScript, repo);
+      runScript(pushScript, repo);
+      assert.equal(git(repo.primary, "rev-parse", `origin/${repo.branch}`), sha);
+    } finally { rmSync(repo.root, { recursive: true, force: true }); }
+  });
+
+  for (const rejection of ["external worktree", "other run", "owner", "branch", "linked primary", "symlink", "dangling symlink", "directory symlink"] as const) {
+    test(`${name} rejects ${rejection} while preserving deliveries, refs and both run states`, () => {
+      const repo = repository();
+      try {
+        writeFileSync(join(repo.worktree, "delivery"), "keep this\n");
+        git(repo.worktree, "add", "delivery");
+        const other = join(repo.primary, ".workspace/worktrees/issue-190");
+        git(repo.primary, "worktree", "add", "-b", "dagu/issue-190", other, "origin/main");
+        writeFileSync(join(other, "other-delivery"), "keep other\n");
+        const otherState = join(dirname(repo.state), "other-run");
+        mkdirSync(otherState);
+        writeFileSync(join(otherState, "identity"), "other owner\n");
+        const env = featureScriptEnv(repo);
+        if (rejection === "external worktree") env.WORKTREE = other;
+        if (rejection === "other run") env.RUN = "other-run";
+        if (rejection === "owner") env.OMP_SESSION_ID = "different-session";
+        if (rejection === "branch") env.BRANCH = "dagu/issue-190";
+        if (rejection === "linked primary") env.PRIMARY = repo.worktree;
+        if (rejection === "symlink") symlinkSync(join(other, "other-delivery"), join(repo.worktree, "escape"));
+        if (rejection === "dangling symlink") symlinkSync("../../../../outside/missing", join(repo.worktree, "escape"));
+        if (rejection === "directory symlink") symlinkSync(other, join(repo.worktree, "escape"), "dir");
+        const snapshot = () => ({
+          refs: git(repo.primary, "show-ref"),
+          delivery: readFileSync(join(repo.worktree, "delivery"), "utf8"),
+          other: readFileSync(join(other, "other-delivery"), "utf8"),
+          index: readFileSync(git(repo.worktree, "rev-parse", "--path-format=absolute", "--git-path", "index")).toString("base64"),
+          states: readdirSync(dirname(repo.state), { recursive: true, withFileTypes: true })
+            .filter(entry => entry.isFile()).map(entry => [join(entry.parentPath, entry.name), readFileSync(join(entry.parentPath, entry.name), "utf8")]),
+        });
+        const before = snapshot();
+        const result = spawnSync("bash", ["-c", captureScript], { encoding: "utf8", env });
+        assert.notEqual(result.status, 0, result.stdout);
+        assert.deepEqual(snapshot(), before);
+      } finally { rmSync(repo.root, { recursive: true, force: true }); }
+    });
+  }
+
+  test(`${name} corrections replace one candidate and require current SHA evidence for publication`, () => {
+    const repo = repository();
+    try {
+      writeFileSync(join(repo.worktree, "README.txt"), "first\n");
+      runScript(captureScript, repo);
+      const first = git(repo.worktree, "rev-parse", "HEAD");
+      runScript(gateScript, repo);
+      const evidence = readFileSync(join(repo.state, "gate.json"), "utf8");
+      writeFileSync(join(repo.worktree, "README.txt"), "corrected\n");
+      runScript(captureScript, repo);
+      const second = git(repo.worktree, "rev-parse", "HEAD");
+      assert.notEqual(first, second);
+      assert.equal(git(repo.worktree, "rev-list", "--count", "origin/main..HEAD"), "1");
+      assert.equal(readFileSync(join(repo.state, "historical", first, "gate.json"), "utf8"), evidence);
+      writeFileSync(join(repo.state, "gate.json"), evidence);
+      const refused = spawnSync("bash", ["-c", pushScript], { encoding: "utf8", env: featureScriptEnv(repo) });
+      assert.notEqual(refused.status, 0);
+      assert.equal(hasRef(repo.primary, `refs/remotes/origin/${repo.branch}`), false);
+      runScript(gateScript, repo);
+      runScript(pushScript, repo);
+      assert.equal(git(repo.primary, "rev-parse", `origin/${repo.branch}`), second);
+      const evidenceNow = readFileSync(join(repo.state, "gate.json"), "utf8");
+      runScript(captureScript, repo);
+      assert.equal(git(repo.worktree, "rev-parse", "HEAD"), second);
+      assert.equal(readFileSync(join(repo.state, "gate.json"), "utf8"), evidenceNow);
+    } finally { rmSync(repo.root, { recursive: true, force: true }); }
+  });
+
+  for (const conflict of [false, true]) {
+    test(`${name} ${conflict ? "conflict correction stays in the same run and branch" : "clean rebase renews candidate evidence"}`, () => {
+      const repo = repository();
+      try {
+        writeFileSync(join(repo.worktree, "README.txt"), "feature\n");
+        writeFileSync(join(repo.worktree, "other-feature-file"), "preserved delivery\n");
+        runScript(captureScript, repo);
+        const first = git(repo.worktree, "rev-parse", "HEAD");
+        runScript(gateScript, repo);
+        writeFileSync(join(repo.primary, conflict ? "README.txt" : "upstream"), "upstream\n");
+        git(repo.primary, "add", ".");
+        git(repo.primary, "commit", "-m", "upstream change");
+        git(repo.primary, "push", "origin", "main");
+        const base = git(repo.primary, "rev-parse", "HEAD");
+        runScript(extractScript(definition, "  - id: rebase"), repo);
+        assert.equal(readFileSync(join(repo.state, "base"), "utf8").trim(), base);
+        assert.ok(existsSync(join(repo.state, "historical", first, "gate.json")));
+        if (conflict) {
+          assert.equal(readFileSync(join(repo.state, "conflict-action"), "utf8"), "rewind\n");
+          assert.match(readFileSync(join(repo.worktree, "README.txt"), "utf8"), /<<<<<<< HEAD/);
+          writeFileSync(join(repo.worktree, "README.txt"), "resolved delivery\n");
+          runScript(captureScript, repo);
+          assert.equal(git(repo.worktree, "show", "HEAD:README.txt"), "resolved delivery");
+        }
+        assert.equal(git(repo.worktree, "branch", "--show-current"), repo.branch);
+        assert.equal(git(repo.worktree, "rev-list", "--count", `${base}..HEAD`), "1");
+        assert.equal(git(repo.worktree, "status", "--porcelain"), "");
+        assert.equal(git(repo.worktree, "show", "HEAD:other-feature-file"), "preserved delivery");
+        const result = spawnSync("bash", ["-c", pushScript], { encoding: "utf8", env: featureScriptEnv(repo) });
+        assert.notEqual(result.status, 0);
+        runScript(gateScript, repo);
+        runScript(pushScript, repo);
+      } finally { rmSync(repo.root, { recursive: true, force: true }); }
+    });
+  }
 
   for (const [kind, gate, statusLine] of [
     ["tracked", "printf 'changed\\n' >> README.txt", " M README.txt"],
@@ -228,6 +407,8 @@ for (const [name, definition] of definitions) {
       const commitBody = `Tested body, not the PR description.\nA second line with "quotes" and $variables.\n\n${trailers}`;
       git(repo.worktree, "commit", "--allow-empty", "-m", "feat: tested change", "-m", commitBody);
       const sha = git(repo.worktree, "rev-parse", "HEAD");
+      recordCandidate(repo);
+      runScript(extractScript(definition, "  - id: gate"), repo);
       const bin = join(repo.root, "bin");
       mkdirSync(bin, { recursive: true });
       const executable = join(bin, "gh");
