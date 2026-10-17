@@ -398,6 +398,13 @@ steps:
       test -z "$(git -C "$PRIMARY" status --porcelain)"
       git -C "$PRIMARY" fetch origin || { printf 'start_gate: fetch origin failed; restore origin access and recover this run\n' >&2; exit 1; }
       git -C "$PRIMARY" merge --ff-only "origin/$BASE_BRANCH" || { printf 'start_gate: ff-only failed; reconcile primary with origin/%s preserving commits, then recover this run\n' "$BASE_BRANCH" >&2; exit 1; }
+      STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")
+      OWNER=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/resources/$(printf '%s' "$BRANCH" | git hash-object --stdin).json")
+      mkdir -p "$STATE" "${OWNER%/*}"
+      if [[ -f "$OWNER" ]]; then
+        test "$(jq -r .run "$OWNER")" = "$RUN" ||
+          { printf 'start_gate: branch %s belongs to another run; recovery requires explicit ownership transfer: %s\n' "$BRANCH" "$OWNER" >&2; exit 1; }
+      fi
       if test -e "$WORKTREE"; then
         worktree_path=$(cd "$WORKTREE" && pwd -P)
         worktree_root=$(cd "$(git -C "$WORKTREE" rev-parse --show-toplevel)" && pwd -P)
@@ -428,6 +435,10 @@ steps:
       printf '%s\n' "$identity" > "$owner"
       printf '%s\n' "$identity" > "$STATE/identity"
       if ! test -f "$STATE/base"; then git -C "$WORKTREE" rev-parse HEAD > "$STATE/base"; fi
+      worktree_path=$(cd "$WORKTREE" && pwd -P)
+      jq -n --arg run "$RUN" --arg primary "$primary_path" --arg branch "$BRANCH" --arg worktree "$worktree_path" \
+        '{run:$run,primary:$primary,branch:$branch,worktree:$worktree}' > "$STATE/resource.json"
+      cp "$STATE/resource.json" "$OWNER"
       printf 'issue=%s\nbranch=%s\nworktree=%s\nbase_sha=%s\n' \
         "$ISSUE" "$BRANCH" "$WORKTREE" "$(git -C "$WORKTREE" rev-parse HEAD)"
 
@@ -715,6 +726,7 @@ steps:
       test "$(git rev-parse HEAD)" = "$sha"
       jq -nc --arg sha "$sha" --arg gate "$GATE" '{sha:$sha,gate:$gate}' > "$STATE/gate.json"
       printf 'tested_sha=%s\n' "$sha"
+      git rev-parse HEAD > "$STATE/tested-sha"
 
   - id: push
     depends: gate
@@ -831,103 +843,152 @@ steps:
 
   - id: close_gate
     depends: [await_merge, close_primary_unavailable]
-    run: |
+    env:
+      - CLEANUP_CLOSE: "true"
+    run: &feature_cleanup |
       set -euo pipefail
       umask 0022
-      fail() { printf 'close_gate: %s\n' "$*" >&2; exit 1; }
       eval "$DAGU_RESOURCE_GUARD"
       resource_lock cleanup
-      repo=$(git -C "$PRIMARY" remote get-url origin) ||
-        fail "PRIMARY $PRIMARY origin lookup failed, expected repository"
-      pr_ref=${PR_NUMBER:-$BRANCH}
-      if ! pr=$(gh pr view "$pr_ref" --repo "$repo" --json number --jq .number); then
-        fail "PR lookup for $pr_ref failed, expected PR number"
+      MODE=${CLEANUP_CLOSE:-false}
+      STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")
+      mkdir -p "$STATE"
+      [[ "$MODE" != true ]] || printf 'true\n' > "$STATE/cleanup-close"
+      [[ ! -f "$STATE/cleanup-close" ]] || MODE=true
+      [[ -f "$STATE/cleanup-phase" ]] || printf 'identify\n' > "$STATE/cleanup-phase"
+      phase=identify
+      diagnostic() {
+        printf 'cleanup: run=%s phase=%s preserved: %s; branch %s; worktree %s; evidence=%s\n' \
+          "$RUN" "$phase" "$*" "$BRANCH" "$WORKTREE" "$STATE" >&2
+        printf '%s\n' "$*" > "$STATE/cleanup-diagnostic"
+        printf 'Recovery: preserve branch %s and worktree %s; inspect %s before a suffixed run ID.\n' "$BRANCH" "$WORKTREE" "$STATE" >&2
+        [[ "${CLEANUP_CLOSE:-false}" != true ]] || exit 1
+        exit 0
+      }
+      record() { phase=$1; printf '%s\n' "$phase" > "$STATE/cleanup-phase"; }
+      primary=$(cd "$PRIMARY" && pwd -P) || diagnostic "PRIMARY unavailable"
+      [[ "$(git -C "$PRIMARY" rev-parse --absolute-git-dir)" == "$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-common-dir)" ]] ||
+        diagnostic "PRIMARY is not the main worktree"
+      if [[ ! -f "$STATE/resource.json" ]]; then
+        diagnostic "resource registration missing"
       fi
-      [[ -n "$pr" ]] || fail "PR lookup for $pr_ref returned empty, expected PR number"
-      state=$(gh pr view "$pr" --repo "$repo" --json state --jq .state) ||
-        fail "PR #$pr state lookup failed, expected MERGED"
-      [[ "$state" == MERGED ]] || fail "PR #$pr state=$state, expected MERGED"
-      tested_sha=$(gh pr view "$pr" --repo "$repo" --json headRefOid --jq .headRefOid) ||
-        fail "PR #$pr headRefOid lookup failed, expected tested SHA"
-      if git -C "$PRIMARY" show-ref --verify --quiet "refs/heads/$BRANCH"; then
-        branch_sha=$(git -C "$PRIMARY" rev-parse "refs/heads/$BRANCH")
-        [[ "$branch_sha" == "$tested_sha" ]] ||
-          fail "local branch $BRANCH SHA=$branch_sha, expected $tested_sha"
-      fi
-      check_state=$(gh pr checks "$pr" --repo "$repo" --required --json name,state \
-        --jq 'map(select(.name == env.REQUIRED_CHECK)) | if length == 0 then "MISSING" else .[0].state end') ||
-        fail "required check $REQUIRED_CHECK lookup failed, expected SUCCESS"
-      [[ "$check_state" == SUCCESS ]] ||
-        fail "required check $REQUIRED_CHECK state=$check_state, expected SUCCESS"
-      primary_branch=$(git -C "$PRIMARY" branch --show-current) ||
-        fail "PRIMARY $PRIMARY branch lookup failed, expected $BASE_BRANCH"
-      [[ "$primary_branch" == "$BASE_BRANCH" ]] ||
-        fail "PRIMARY $PRIMARY on branch $primary_branch, expected $BASE_BRANCH"
-      primary_status=$(git -C "$PRIMARY" status --porcelain) ||
-        fail "PRIMARY $PRIMARY status lookup failed, expected clean"
-      if [[ -n "$primary_status" ]]; then
-        printf 'close_gate: PRIMARY %s has local changes, expected clean\n' "$PRIMARY" >&2
-        printf '%s\n' "$primary_status" >&2
-        exit 1
-      fi
-      git -C "$PRIMARY" fetch origin ||
-        fail "PRIMARY $PRIMARY fetch origin failed, expected success"
-      git -C "$PRIMARY" merge --ff-only "origin/$BASE_BRANCH" ||
-        fail "PRIMARY $PRIMARY ff-only merge failed, expected origin/$BASE_BRANCH"
-      base_sha=$(git -C "$PRIMARY" rev-parse HEAD) ||
-        fail "PRIMARY $PRIMARY HEAD lookup failed, expected origin/$BASE_BRANCH"
-      origin_base_sha=$(git -C "$PRIMARY" rev-parse "origin/$BASE_BRANCH") ||
-        fail "origin/$BASE_BRANCH lookup failed, expected commit SHA"
-      [[ "$base_sha" == "$origin_base_sha" ]] ||
-        fail "PRIMARY $PRIMARY HEAD=$base_sha, expected $origin_base_sha"
-      worktree_real=$WORKTREE
+      OWNER=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/resources/$(printf '%s' "$BRANCH" | git hash-object --stdin).json")
+      owned() {
+        jq -e --arg run "$RUN" --arg primary "$primary" --arg branch "$BRANCH" --arg worktree "$worktree_real" \
+          '.run == $run and .primary == $primary and .branch == $branch and .worktree == $worktree' "$STATE/resource.json" >/dev/null &&
+        [[ -f "$OWNER" ]] && cmp -s "$STATE/resource.json" "$OWNER"
+      }
+      worktree_real=$(jq -er .worktree "$STATE/resource.json") || diagnostic "invalid resource registration"
+      owned || diagnostic "resource owner or identity changed"
       if [[ -e "$WORKTREE" ]]; then
-        worktree_real=$(cd "$WORKTREE" && pwd -P)
-        git -C "$PRIMARY" worktree remove "$worktree_real" ||
-          fail "worktree $WORKTREE removal failed, expected removed"
+        [[ "$(cd "$WORKTREE" && pwd -P)" == "$worktree_real" ]] || diagnostic "canonical worktree changed"
       fi
-      git -C "$PRIMARY" worktree prune ||
-        fail "worktree prune failed, expected success"
+      head=$(git -C "$PRIMARY" rev-parse --verify "refs/heads/$BRANCH" 2>/dev/null || true)
+      if [[ -f "$STATE/cleanup-head" ]]; then
+        candidate=$(cat "$STATE/cleanup-head")
+        [[ -z "$head" || "$head" == "$candidate" ]] || diagnostic "branch SHA changed: $head expected $candidate"
+      elif [[ -n "$head" ]]; then
+        candidate=$head
+        printf '%s\n' "$candidate" > "$STATE/cleanup-head"
+      else
+        diagnostic "candidate SHA unavailable"
+      fi
+      [[ "$candidate" =~ ^[0-9a-f]{40}$ ]] || diagnostic "invalid candidate SHA"
+      repo=$(git -C "$PRIMARY" remote get-url origin) || diagnostic "origin lookup failed"
+      git -C "$PRIMARY" fetch --prune origin || diagnostic "remote base refresh failed"
+      base_sha=$(git -C "$PRIMARY" rev-parse --verify "origin/$BASE_BRANCH^{commit}") || diagnostic "remote base unavailable"
+      proof=ancestor
+      squash_sha=
+      pr=
+      if [[ "$MODE" == true ]] || ! git -C "$PRIMARY" merge-base --is-ancestor "$candidate" "$base_sha"; then
+        pr=$(gh pr view "${PR_NUMBER:-$BRANCH}" --repo "$repo" --json number,state,headRefOid,mergeCommit) ||
+          diagnostic "PR integration query failed"
+        [[ "$(jq -r '.state // empty' <<<"$pr")" == MERGED ]] || diagnostic "PR is not MERGED; publication alone is not integration"
+        [[ "$(jq -r '.headRefOid // empty' <<<"$pr")" == "$candidate" ]] || diagnostic "PR head SHA differs from candidate $candidate"
+        tested=$(cat "$STATE/tested-sha" 2>/dev/null || true)
+        [[ "$tested" == "$candidate" ]] || diagnostic "tested candidate SHA differs: $tested expected $candidate"
+        if ! git -C "$PRIMARY" merge-base --is-ancestor "$candidate" "$base_sha"; then
+          squash_sha=$(jq -r '.mergeCommit.oid // empty' <<<"$pr")
+          [[ "$squash_sha" =~ ^[0-9a-f]{40}$ ]] &&
+            git -C "$PRIMARY" merge-base --is-ancestor "$squash_sha" "$base_sha" ||
+            diagnostic "squash SHA is not confirmed in refreshed base: $squash_sha"
+          proof=squash
+        fi
+      fi
+      jq -n --arg candidate "$candidate" --arg base "$base_sha" --arg squash "$squash_sha" --arg proof "$proof" \
+        '{candidate:$candidate,base:$base,squash:$squash,proof:$proof}' > "$STATE/cleanup-proof.json"
+      record integrated
+      if [[ "$MODE" == true ]]; then
+        pr_number=$(jq -er .number <<<"$pr") || diagnostic "PR number unavailable"
+        check_state=$(gh pr checks "$pr_number" --repo "$repo" --required --json name,state \
+          --jq 'map(select(.name == env.REQUIRED_CHECK)) | if length == 0 then "MISSING" else .[0].state end') ||
+          diagnostic "required check $REQUIRED_CHECK lookup failed"
+        [[ "$check_state" == SUCCESS ]] || diagnostic "required check $REQUIRED_CHECK state=$check_state, expected SUCCESS"
+        primary_branch=$(git -C "$PRIMARY" branch --show-current)
+        [[ "$primary_branch" == "$BASE_BRANCH" ]] ||
+          diagnostic "close_gate: PRIMARY $PRIMARY on branch $primary_branch, expected $BASE_BRANCH"
+        primary_status=$(git -C "$PRIMARY" status --porcelain)
+        [[ -z "$primary_status" ]] ||
+          diagnostic "close_gate: PRIMARY $PRIMARY has local changes, expected clean: $primary_status"
+        remote_head=$(git -C "$PRIMARY" ls-remote --heads origin "refs/heads/$BRANCH") || diagnostic "remote branch query failed"
+        [[ -z "$remote_head" || "$remote_head" == "$candidate"$'\t'"refs/heads/$BRANCH" ]] ||
+          diagnostic "remote branch SHA changed: $remote_head"
+        git -C "$PRIMARY" merge --ff-only "origin/$BASE_BRANCH" || diagnostic "PRIMARY ff-only failed"
+      fi
+      owned || diagnostic "resource owner changed before worktree removal"
+      if [[ -e "$worktree_real" ]]; then
+        [[ "$(git -C "$worktree_real" rev-parse --show-toplevel)" == "$worktree_real" &&
+           "$(git -C "$worktree_real" branch --show-current)" == "$BRANCH" &&
+           "$(git -C "$worktree_real" rev-parse HEAD)" == "$candidate" ]] ||
+          diagnostic "worktree identity or SHA changed"
+        [[ -z "$(git -C "$worktree_real" status --porcelain --untracked-files=all)" ]] ||
+          diagnostic "dirty worktree; files retained"
+        record removing-worktree
+        git -C "$PRIMARY" worktree remove "$worktree_real" || diagnostic "safe worktree removal failed"
+      fi
+      worktree_list=$(git -C "$PRIMARY" worktree list --porcelain)
+      if [[ -e "$worktree_real" ]] || grep -Fqx "worktree $worktree_real" <<<"$worktree_list"; then
+        diagnostic "close_gate: worktree $worktree_real remains, expected removed"
+      fi
+      record worktree-removed
+      owned || diagnostic "resource owner changed before branch removal"
+      head=$(git -C "$PRIMARY" rev-parse --verify "refs/heads/$BRANCH" 2>/dev/null || true)
+      if [[ -n "$head" ]]; then
+        [[ "$head" == "$candidate" ]] || diagnostic "branch SHA changed: $head expected $candidate"
+        worktree_list=$(git -C "$PRIMARY" worktree list --porcelain)
+        if grep -Fqx "branch refs/heads/$BRANCH" <<<"$worktree_list"; then
+          diagnostic "branch is now checked out by another worktree"
+        fi
+        # Delete only the ref whose value was checked, including squash candidates.
+        git -C "$PRIMARY" update-ref -d "refs/heads/$BRANCH" "$candidate" || diagnostic "local branch removal failed"
+      fi
       if git -C "$PRIMARY" show-ref --verify --quiet "refs/heads/$BRANCH"; then
-        git -C "$PRIMARY" branch -D "$BRANCH" ||
-          fail "local branch $BRANCH removal failed, expected removed"
+        diagnostic "close_gate: local branch $BRANCH remains, expected removed"
       fi
-      git -C "$PRIMARY" fetch --prune origin ||
-        fail "origin prune failed, expected success"
+      record branch-removed
       remote=absent
-      if git -C "$PRIMARY" show-ref --verify --quiet "refs/remotes/origin/$BRANCH"; then
-        git -C "$PRIMARY" push origin --delete "$BRANCH" ||
-          fail "remote branch $BRANCH deletion failed, expected removed"
-        remote=deleted
+      if [[ "$MODE" == true ]]; then
+        owned || diagnostic "resource owner changed before remote removal"
+        remote_head=$(git -C "$PRIMARY" ls-remote --heads origin "refs/heads/$BRANCH") || diagnostic "remote branch query failed"
+        if [[ -n "$remote_head" ]]; then
+          [[ "$remote_head" == "$candidate"$'\t'"refs/heads/$BRANCH" ]] || diagnostic "remote branch SHA changed: $remote_head"
+          git -C "$PRIMARY" push --force-with-lease="refs/heads/$BRANCH:$candidate" origin ":refs/heads/$BRANCH" ||
+            diagnostic "remote branch deletion failed"
+          remote=deleted
+        fi
+        remote_head=$(git -C "$PRIMARY" ls-remote --heads origin "refs/heads/$BRANCH") || diagnostic "final remote branch query failed"
+        [[ -z "$remote_head" ]] ||
+          diagnostic "close_gate: remote branch $BRANCH remains, expected removed"
+        git -C "$PRIMARY" fetch --prune origin || diagnostic "final remote refresh failed"
+        [[ "$(git -C "$PRIMARY" branch --show-current)" == "$BASE_BRANCH" &&
+           -z "$(git -C "$PRIMARY" status --porcelain)" &&
+           "$(git -C "$PRIMARY" rev-parse HEAD)" == "$(git -C "$PRIMARY" rev-parse "origin/$BASE_BRANCH")" ]] ||
+          diagnostic "PRIMARY must be clean on refreshed base"
       fi
-      git -C "$PRIMARY" fetch --prune origin ||
-        fail "origin final prune failed, expected success"
-      worktree_list=$(git -C "$PRIMARY" worktree list --porcelain) ||
-        fail "worktree list failed, expected readable"
-      if [[ -e "$WORKTREE" || -e "$worktree_real" ]] ||
-         grep -Fqx "worktree $WORKTREE" <<<"$worktree_list" ||
-         grep -Fqx "worktree $worktree_real" <<<"$worktree_list"; then
-        fail "worktree $WORKTREE remains, expected removed"
-      fi
-      if git -C "$PRIMARY" show-ref --verify --quiet "refs/heads/$BRANCH"; then
-        fail "local branch $BRANCH remains, expected removed"
-      fi
-      if git -C "$PRIMARY" show-ref --verify --quiet "refs/remotes/origin/$BRANCH"; then
-        fail "remote branch $BRANCH remains, expected removed"
-      fi
-      primary_branch=$(git -C "$PRIMARY" branch --show-current) ||
-        fail "PRIMARY $PRIMARY final branch lookup failed, expected $BASE_BRANCH"
-      [[ "$primary_branch" == "$BASE_BRANCH" ]] ||
-        fail "PRIMARY $PRIMARY on branch $primary_branch, expected $BASE_BRANCH"
-      primary_status=$(git -C "$PRIMARY" status --porcelain) ||
-        fail "PRIMARY $PRIMARY final status lookup failed, expected clean"
-      [[ -z "$primary_status" ]] || fail "PRIMARY $PRIMARY has local changes, expected clean"
-      base_sha=$(git -C "$PRIMARY" rev-parse HEAD) ||
-        fail "PRIMARY $PRIMARY final HEAD lookup failed, expected $origin_base_sha"
-      [[ "$base_sha" == "$origin_base_sha" ]] ||
-        fail "PRIMARY $PRIMARY HEAD=$base_sha, expected $origin_base_sha"
-      printf 'pr=%s\ntested_sha=%s\nbase_sha=%s\ncleanup worktree=%s branch=%s remote=%s\n' \
-        "$pr" "$tested_sha" "$base_sha" "$WORKTREE" "$BRANCH" "$remote"
+      record complete
+      rm -f "$STATE/cleanup-diagnostic"
+      printf 'tested_sha=%s\nbase_sha=%s\ncleanup worktree=%s branch=%s remote=%s proof=%s run=%s\n' \
+        "$candidate" "$base_sha" "$WORKTREE" "$BRANCH" "$remote" "$proof" "$RUN"
 
 handler_on:
   wait:
@@ -963,49 +1024,4 @@ handler_on:
         fi
       done
   exit:
-    run: |
-      set -euo pipefail
-      eval "$DAGU_RESOURCE_GUARD"
-      resource_lock cleanup
-      published=false
-      if git -C "$PRIMARY" show-ref --verify --quiet "refs/heads/$BRANCH"; then
-        head=$(git -C "$PRIMARY" rev-parse "refs/heads/$BRANCH")
-        if git -C "$PRIMARY" fetch --prune origin; then
-          pr_ref=${PR_NUMBER:-$BRANCH}
-          if git -C "$PRIMARY" show-ref --verify --quiet "refs/remotes/origin/$BRANCH" &&
-             git -C "$PRIMARY" merge-base --is-ancestor "$head" "origin/$BRANCH"; then
-            published=true
-          elif git -C "$PRIMARY" show-ref --verify --quiet "refs/remotes/origin/$BASE_BRANCH" &&
-               git -C "$PRIMARY" merge-base --is-ancestor "$head" "origin/$BASE_BRANCH"; then
-            published=true
-          elif pr=$(gh pr view "$pr_ref" --repo "$(git -C "$PRIMARY" remote get-url origin)" --json state,headRefOid) &&
-               [[ "$(jq -r '.state // empty' <<<"$pr")" == MERGED ]] &&
-               [[ "$(jq -r '.headRefOid // empty' <<<"$pr")" == "$head" ]]; then
-            published=true
-          fi
-        fi
-      fi
-      # Uncaptured files, including conflict resolutions, are unpublished delivery.
-      if test -e "$WORKTREE"; then
-        STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")
-        owner=$(git -C "$WORKTREE" rev-parse --path-format=absolute --git-path dagu-feature-owner)
-        if ! status=$(git -C "$WORKTREE" status --porcelain) ||
-           [[ -n "$status" ]] ||
-           [[ "$(git -C "$WORKTREE" branch --show-current)" != "$BRANCH" ]] ||
-           [[ "$(cd "$WORKTREE" && pwd -P)" != "$(cd "$PRIMARY" && pwd -P)/.workspace/worktrees/issue-$ISSUE" ]] ||
-           ! cmp -s "$STATE/identity" "$owner"; then
-          published=false
-        fi
-      fi
-      if [[ "$published" == true ]]; then
-        if test -e "$WORKTREE"; then
-          git -C "$PRIMARY" worktree remove --force "$WORKTREE"
-        fi
-        git -C "$PRIMARY" worktree prune
-        if git -C "$PRIMARY" show-ref --verify --quiet "refs/heads/$BRANCH"; then
-          git -C "$PRIMARY" branch -D "$BRANCH"
-        fi
-      else
-        printf 'Unpublished work kept: branch %s; worktree %s\n' "$BRANCH" "$WORKTREE"
-        printf 'Recovery: push %s from %s, then re-enqueue this issue with a suffixed run ID.\n' "$BRANCH" "$WORKTREE"
-      fi
+    run: *feature_cleanup
