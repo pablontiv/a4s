@@ -73,6 +73,9 @@ steps:
       read_default() {
         local file=$1 wanted=$2 raw
         raw=$(awk -v wanted="$wanted" '
+          index($0, "  - " wanted ": ") == 1 { sub("^  - " wanted ": ", ""); print; exit }
+          $0 == "    " wanted ":" { found=1; next }
+          found && /^      default: / { sub(/^      default: /, ""); print; exit }
           $0 == "  - name: " wanted { found=1; next }
           found && /^    default: / { sub(/^    default: /, ""); print; exit }
           found && /^  - name: / { exit }
@@ -208,6 +211,7 @@ steps:
       set -euo pipefail
       umask 0022
       test -n "${DAG_RUN_ID:-}"
+      PRIMARY=$(cd "$PRIMARY" && pwd -P)
       mkdir -p "$(dirname "$STAGE")"
       source="$SOURCE_NWO@$SOURCE_SHA"
       identity="dagu-feature-bundle=$BUNDLE_VERSION source=$source bootstrap=$DAG_RUN_ID"
@@ -219,11 +223,13 @@ steps:
       jq -nr --rawfile template "$SKILL_DIR/feature.yaml" \
         --arg repo "$REPO" --arg base "$BASE_BRANCH" \
         --arg gate "$GATE" --arg check "$REQUIRED_CHECK" \
+        --arg primary "$PRIMARY" \
         --arg stamp "$stamp" --arg version "$BUNDLE_VERSION" --arg identity "$identity" \
         "\$template
           | $render_common
           | gsub(\"TEMPLATE_REPO\"; \$repo)
           | gsub(\"TEMPLATE_BASE_BRANCH\"; \$base | tojson)
+          | gsub(\"__PRIMARY__\"; \$primary | tojson)
           | gsub(\"__GATE__\"; \$gate | tojson)
           | gsub(\"__REQUIRED_CHECK__\"; \$check | tojson)" > "$STAGE"
       jq -nr --rawfile template "$SKILL_DIR/poc.yaml" \

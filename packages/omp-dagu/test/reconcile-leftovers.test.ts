@@ -359,3 +359,23 @@ esac
     }
   });
 }
+
+for (const [name, definition] of definitions) {
+  test(`${name} reconciles adoption-fixed primary from each enqueued snapshot`, () => {
+    const repo = repository();
+    try {
+      addWorktree(repo, "issue-274", "dagu/issue-274");
+      writeFileSync(join(repo.root, "spec.json"), JSON.stringify({ spec: `env:\n  - PRIMARY: ${JSON.stringify(repo.primary)}\n` }));
+      writeFileSync(join(repo.bin, "curl"), '#!/bin/sh\ncat "$HOME/spec.json"\n');
+      chmodSync(join(repo.bin, "curl"), 0o755);
+      const history: HistoryRun[] = [{ name: "feature", dagRunId: "run-274", status: "waiting", startedAt: "2026-10-16T00:00:00Z", params: "ISSUE=274 PR_NUMBER=275 OMP_SESSION_ID=owner" }];
+      const leftovers = runScript(extractScript(definition, "  - id: leftovers"), repo, history, []);
+      assert.equal(leftovers.status, 0, leftovers.stdout + leftovers.stderr);
+      const discovered = runScript(extractScript(definition, "  - id: discover"), repo, history, []);
+      assert.equal(discovered.status, 0, discovered.stdout + discovered.stderr);
+      assert.deepEqual(JSON.parse(discovered.stdout), [{ RUN: "run-274", ISSUE: "274", PRIMARY: repo.primary, BRANCH: "dagu/issue-274", PR_NUMBER: "275" }]);
+    } finally {
+      rmSync(repo.root, { recursive: true, force: true });
+    }
+  });
+}

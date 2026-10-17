@@ -257,8 +257,7 @@ exit 1
     assert.doesNotMatch(result.stdout, /43/);
     const invocation = readFileSync(log, "utf8");
     assert.match(invocation, /--run-id repo-issue-42/);
-    assert.match(invocation, /ISSUE=42/);
-    assert.match(invocation, /BRANCH=dagu\/issue-42/);
+    assert.match(invocation, /-- ISSUE=42 PR_NUMBER= OMP_SESSION_ID=session\n$/);
     assert.equal(readFileSync(join(root, "lenses", "0", "findings.jsonl"), "utf8"), readFileSync(join(outDir, "findings-0.jsonl"), "utf8"));
   } finally {
     rmSync(root, { recursive: true, force: true });

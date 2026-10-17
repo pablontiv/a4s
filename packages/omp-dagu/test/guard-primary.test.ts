@@ -49,6 +49,13 @@ test("primary guard rejects foreign repositories and transcript namespaces, pres
   await handlers.tool_call!({ toolName: "task", toolCallId: "review", input: { agent: "triage-reviewer", task: request.reason } });
   handlers.tool_result!({ toolName: "task", toolCallId: "review", input: {}, details: { results: [{ index: 0, id: "Review236", agent: "triage-reviewer", exitCode: 0, output: JSON.stringify({ poc: "no", behavior: "proven", question: "", reason: "existing behavior" }) }] } });
   assert.equal(await handlers.tool_call!({ ...event, input: { command: `${event.input.command} --input REVIEW=Review236` } }, { cwd: primary, sessionManager: { getSessionDir: () => session(primary) } }), undefined);
+  globalThis.fetch = async url => new Response(JSON.stringify(String(url).endsWith("/spec")
+    ? { spec: `env:\n  - PRIMARY: ${JSON.stringify(primary)}\n` }
+    : { dagRunDetails: { name: "feature", dagRunId: "run-236", params: "ISSUE=236" } }));
+  assert.equal(await primarySessionDecision(event, { cwd: primary, sessionManager: { getSessionDir: () => session(primary) } }), undefined);
+  const renderedMismatch = await primarySessionDecision(event, { cwd: foreign, sessionManager: { getSessionDir: () => session(foreign) } });
+  assert.ok(renderedMismatch && "block" in renderedMismatch);
+  assert.match(renderedMismatch.reason, /TRIAGE_PRIMARY_MISMATCH/);
   globalThis.fetch = async () => { throw new Error("offline"); };
   const failed = await primarySessionDecision(event, { cwd: primary, sessionManager: { getSessionDir: () => session(primary) } });
   assert.ok(failed && "block" in failed);

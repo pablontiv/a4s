@@ -35,6 +35,21 @@ export function runParam(run: RunDetails, name: string): string | undefined {
   ))?.[1];
 }
 
+/** Rendered policy comes from the enqueued snapshot, never the current DAG file. */
+export async function resolveRunPrimary(base: string, run: RunDetails, signal: AbortSignal): Promise<string | undefined> {
+  const historical = runParam(run, "PRIMARY");
+  if (historical) return historical;
+  const response = await fetch(`${base}/api/v1/dag-runs/${encodeURIComponent(run.name)}/${encodeURIComponent(run.dagRunId)}/spec`, {
+    signal: AbortSignal.any([signal, AbortSignal.timeout(5000)]),
+  });
+  if (!response.ok) throw new Error(`Dagu spec HTTP ${response.status}`);
+  const { spec } = await response.json() as { spec: string };
+  const literal = /^  - PRIMARY: (.+)$/m.exec(spec)?.[1];
+  if (!literal) return undefined;
+  const primary: unknown = JSON.parse(literal);
+  return typeof primary === "string" ? primary : undefined;
+}
+
 export function issueNumber(run: RunDetails): string | undefined {
   const issue = runParam(run, "ISSUE");
   return issue && /^\d+$/.test(issue) ? issue : undefined;

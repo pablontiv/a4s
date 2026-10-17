@@ -10,10 +10,11 @@ shell: bash
 steps:
   - id: discover
     run: |
+      set -euo pipefail
       dagu history feature --status waiting --format json --limit 500 | jq -c '
         def param($key):
           .params as $params
-          | try ($params | capture("(^| )" + $key + "=(?<value>[^ ]*)($| )").value) catch "";
+          | (try ($params | capture("(^| )" + $key + "=(?<value>[^ ]*)($| )").value) catch "") // "";
         [.[] | {
           RUN: .dagRunId,
           ISSUE: param("ISSUE"),
@@ -21,7 +22,15 @@ steps:
           BRANCH: param("BRANCH"),
           PR_NUMBER: param("PR_NUMBER")
         }]
-      '
+      ' | jq -c '.[]' | while IFS= read -r row; do
+        if [[ "$(jq -r .PRIMARY <<<"$row")" == "" ]]; then
+          run=$(jq -r .RUN <<<"$row")
+          primary=$(curl -fsS "http://127.0.0.1:${DAGU_PORT:-8080}/api/v1/dag-runs/feature/$run/spec" |
+            jq -er '.spec | split("\n")[] | select(startswith("  - PRIMARY: ")) | ltrimstr("  - PRIMARY: ") | fromjson')
+          row=$(jq -c --arg primary "$primary" '.PRIMARY = $primary | .BRANCH = ("dagu/issue-" + .ISSUE)' <<<"$row")
+        fi
+        printf '%s\n' "$row"
+      done | jq -sc '.'
     output: RUNS
 
   - id: leftovers
@@ -32,6 +41,17 @@ steps:
       trap 'rm -rf "$TMP"' EXIT
       dagu history feature --format json --limit 1000 >"$TMP/feature.json"
       dagu history poc --format json --limit 1000 >"$TMP/poc.json"
+      for kind in feature poc; do
+        jq -c '.[]' "$TMP/$kind.json" | while IFS= read -r row; do
+          if ! jq -e '.params // "" | test("(^| )PRIMARY=")' <<<"$row" >/dev/null; then
+            run=$(jq -r .dagRunId <<<"$row")
+            primary=$(curl -fsS "http://127.0.0.1:${DAGU_PORT:-8080}/api/v1/dag-runs/$kind/$run/spec" |
+              jq -er '.spec | split("\n")[] | select(startswith("  - PRIMARY: ")) | ltrimstr("  - PRIMARY: ") | fromjson')
+            row=$(jq -c --arg primary "$primary" '.primary = $primary' <<<"$row")
+          fi
+          printf '%s\n' "$row"
+        done | jq -s '.' >"$TMP/$kind-resolved.json"
+      done
       jq -s '
         def param($key):
           .params as $params
@@ -40,14 +60,14 @@ steps:
           kind: .name,
           run: .dagRunId,
           status: (.status | ascii_downcase),
-          primary: param("PRIMARY"),
-          branch: param("BRANCH"),
+          primary: (.primary // param("PRIMARY")),
+          branch: (param("BRANCH") as $branch | if $branch == "" and .name == "feature" then "dagu/issue-" + param("ISSUE") else $branch end),
           issue: param("ISSUE"),
           time: (.startedAt // .finishedAt // "")
         }]
         | sort_by(.time)
         | reverse
-      ' "$TMP/feature.json" "$TMP/poc.json" >"$TMP/runs.json"
+      ' "$TMP/feature-resolved.json" "$TMP/poc-resolved.json" >"$TMP/runs.json"
       while IFS= read -r primary; do
         [[ -d "$primary" ]] || continue
         canonical=$(cd "$primary" && pwd -P)
@@ -218,4 +238,3 @@ steps:
       - condition: "${steps.observe.outputs.observation}"
         expected: "re:^(triage|implement) issue=CLOSED "
     run: echo "ORPHAN ${steps.observe.outputs.repo}#${steps.observe.outputs.issue} ${steps.observe.outputs.run} ${steps.observe.outputs.observation}"
-

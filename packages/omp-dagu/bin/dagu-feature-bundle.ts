@@ -43,6 +43,12 @@ function inspectStamp(label: string, path: string): boolean {
   console.log(
     `${label} path=${path} version=${stamp.version} source=${stamp.source} bootstrap=${stamp.bootstrap} compat=${compat}`,
   );
+  if (label === "feature.yaml" || label === "poc.yaml") {
+    const source = readFileSync(path, "utf8");
+    const policy = ["PRIMARY", ...(label === "feature.yaml" ? ["GATE", "REQUIRED_CHECK"] : [])]
+      .map(name => `${name}=${source.match(new RegExp(`^  - ${name}: (.+)$`, "m"))?.[1] ?? "unset"}`);
+    console.log(`${label} policy ${policy.join(" ")}${label === "feature.yaml" ? " BRANCH=dagu/issue-${ISSUE}" : ""}`);
+  }
   return compat === "ok";
 }
 
