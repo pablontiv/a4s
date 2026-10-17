@@ -3,21 +3,33 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
-import { isMap, parseDocument } from "yaml";
+import { isMap, isSeq, parseDocument } from "yaml";
 import { REQUIRED_DAGU_VERSION } from "../src/bundle.ts";
 
-function main(): void {
+async function main(): Promise<void> {
   const { values } = parseArgs({ options: {
     "dagu-home": { type: "string" },
     "launch-agent": { type: "string" },
     "log-dir": { type: "string" },
     check: { type: "boolean", default: false },
+    apply: { type: "boolean", default: false },
+    "admission-close": { type: "string" },
+    "admission-open": { type: "string" },
+    "restart-command": { type: "string" },
+    "timeout-seconds": { type: "string", default: "600" },
     help: { type: "boolean", default: false },
   } });
   if (values.help) {
-    console.log("dagu-station-install [--dagu-home DIR] [--launch-agent FILE] [--log-dir DIR] [--check]\nDefaults: DAGU_HOME or ~/.dagu; plist staged at <dagu-home>/LaunchAgent.plist; logs at <dagu-home>/logs/service.\n--check compares desired files without installing. Service activation belongs to the operator.");
+    console.log("dagu-station-install [--dagu-home DIR] [--launch-agent FILE] [--log-dir DIR] [--check | --apply --admission-close CMD --admission-open CMD --restart-command CMD] [--timeout-seconds 600]\nDefaults: DAGU_HOME or ~/.dagu; plist staged at <dagu-home>/LaunchAgent.plist; logs at <dagu-home>/logs/service.\n--check compares desired files without installing. Default installation defers activation. --apply closes admission, drains running and queued runs, requests TERM restart, verifies capacity, then reopens admission. Service hooks belong to the operator.");
     return;
+  }
+  const timeout = Number(values["timeout-seconds"]) * 1000;
+  if (!Number.isFinite(timeout) || timeout <= 0) throw new Error("timeout-seconds must be positive");
+  if (values.check && values.apply) throw new Error("--check and --apply are mutually exclusive");
+  if (values.apply && (!values["admission-close"] || !values["admission-open"] || !values["restart-command"])) {
+    throw new Error("--apply requires admission-close, admission-open and restart-command");
   }
   const version = execFileSync("dagu", ["version"], { encoding: "utf8" }).trim();
   if (version !== REQUIRED_DAGU_VERSION) {
@@ -33,10 +45,31 @@ function main(): void {
   if (config.errors.length) throw new Error(`config.yaml: ${config.errors.map(String).join("; ")}`);
   if (!isMap(config.contents)) throw new Error("config.yaml must contain a YAML mapping");
   const managed = parseDocument(template("config.yaml")).toJS() as Record<string, unknown>;
-  // Merge owned leaves rather than replacing sections: queues.config and sibling keys stay intact.
+  const queueDefaults = parseDocument(template("config.yaml")).getIn(["queues", "config"], true);
+  if (!isSeq(queueDefaults)) throw new Error("Managed config requires queues.config");
+  const queues = queueDefaults.toJSON() as { name: string; max_concurrency: number }[];
+  for (const queue of queues) {
+    if (typeof queue.name !== "string" || !Number.isSafeInteger(queue.max_concurrency) || queue.max_concurrency < 1) {
+      throw new Error("Managed queues require a name and positive integer max_concurrency");
+    }
+  }
+  // Merge owned leaves and named queues while retaining foreign queues and sibling keys.
   function merge(leaves: Record<string, unknown>, path: string[] = []): void {
     for (const [key, value] of Object.entries(leaves)) {
       const next = [...path, key];
+      if (next.join(".") === "queues.config") {
+        const current = config.getIn(next, true);
+        if (current !== undefined && !isSeq(current)) throw new Error("queues.config must be a sequence");
+        const merged = (current?.toJSON() ?? []) as Record<string, unknown>[];
+        if (merged.some(queue => !queue || typeof queue.name !== "string")) throw new Error("queues must have names");
+        for (const queue of queues) {
+          const index = merged.findIndex(item => item.name === queue.name);
+          if (index < 0) merged.push(queue);
+          else merged[index] = { ...merged[index], ...queue };
+        }
+        config.setIn(next, merged);
+        continue;
+      }
       if (value !== null && typeof value === "object" && !Array.isArray(value)) {
         const current = config.getIn(next, true);
         if (current !== undefined && !isMap(current)) {
@@ -57,6 +90,9 @@ function main(): void {
       "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;", "'": "&apos;",
     })[character]!));
   const stage = mkdtempSync(join(tmpdir(), "dagu-station-install-"));
+  const lock = join(home, ".station-install.lock");
+  let locked = false;
+  let admissionClosed = false;
   try {
     const base = template("base.yaml");
     writeFileSync(join(stage, "base.yaml"), base);
@@ -71,6 +107,11 @@ function main(): void {
     if (process.platform === "darwin") {
       writeFileSync(join(stage, "LaunchAgent.plist"), plist);
       execFileSync("plutil", ["-lint", join(stage, "LaunchAgent.plist")], { stdio: "pipe" });
+    }
+    if (!values.check) {
+      mkdirSync(home, { recursive: true });
+      mkdirSync(lock);
+      locked = true;
     }
     const files = [
       { destination: join(home, "base.yaml"), content: base },
@@ -99,12 +140,80 @@ function main(): void {
     if (!values.check) mkdirSync(logDir, { recursive: true });
     process.exitCode = drift ? 1 : 0;
     console.log(`dagu=${version} launch-agent=${launchAgent}; activation is operator-owned`);
+    if (!values.apply) return;
+    const stationEnv = { ...env, DAGU_HOME: home };
+    const dagu = (...args: string[]): string => execFileSync(binary, args, { env: stationEnv, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout }).trim();
+    const hook = (command: string): void => {
+      execFileSync("/bin/sh", ["-eu", "-c", command], { env: { ...stationEnv, DAGU_RESTART_SIGNAL: "TERM" }, stdio: "inherit", timeout });
+    };
+    type Run = { dagRunId: string; status: string };
+    const history = (status?: string): Run[] => {
+      const rows: unknown = JSON.parse(dagu("history", ...(status ? ["--status", status] : []), "--format", "json", "--limit", status ? "1" : "1000"));
+      if (!Array.isArray(rows) || rows.some(row => typeof row?.dagRunId !== "string" || typeof row?.status !== "string")) {
+        throw new Error("Unexpected Dagu history response");
+      }
+      return rows;
+    };
+    const until = async (description: string, probe: () => boolean): Promise<void> => {
+      const deadline = Date.now() + timeout;
+      while (!probe()) {
+        if (Date.now() >= deadline) throw new Error(`Timed out: ${description}`);
+        await delay(250);
+      }
+    };
+    admissionClosed = true;
+    hook(values["admission-close"]!);
+    await until("station drained (running=0 queued=0)", () => history("running").length === 0 && history("queued").length === 0);
+    console.log("drained running=0 queued=0; requesting TERM restart");
+    hook(values["restart-command"]!);
+    // Admission remains closed while capacity N is verified with N+1 barrier runs.
+    for (const queue of queues) {
+      const id = `station-${process.pid}-${Date.now()}`;
+      const dag = join(home, "dags", `${id}.yaml`);
+      const release = join(lock, `${id}.release`);
+      mkdirSync(join(home, "dags"), { recursive: true });
+      writeFileSync(dag, `queue: ${JSON.stringify(queue.name)}\nmax_active_runs: ${queue.max_concurrency + 1}\nsteps:\n  - run: |\n      while [ ! -f '${release.replaceAll("'", "'\\''")}' ]; do sleep 0.2; done\n`);
+      const ids = new Set<string>();
+      let succeeded = false;
+      try {
+        for (let index = 0; index <= queue.max_concurrency; index++) {
+          const runId = `${id}-${index}`;
+          dagu("enqueue", "--run-id", runId, dag);
+          ids.add(runId);
+        }
+        await until(`queue ${queue.name} concurrency=${queue.max_concurrency}`, () => {
+          const rows = history().filter(row => ids.has(row.dagRunId));
+          if (rows.some(row => ["failed", "aborted", "succeeded"].includes(row.status))) throw new Error("Concurrency probe ended before barrier release");
+          return rows.filter(row => row.status === "running").length === queue.max_concurrency
+            && rows.filter(row => row.status === "queued").length === 1;
+        });
+        writeFileSync(release, "release\n");
+        await until(`queue ${queue.name} probe succeeded`, () => {
+          const rows = history().filter(row => ids.has(row.dagRunId));
+          if (rows.some(row => ["failed", "aborted"].includes(row.status))) throw new Error("Concurrency probe failed");
+          return rows.filter(row => row.status === "succeeded").length === ids.size;
+        });
+        succeeded = true;
+        console.log(`verified next enqueue queue=${queue.name} max_concurrency=${queue.max_concurrency} succeeded=${ids.size}`);
+      } finally {
+        writeFileSync(release, "release\n");
+        if (succeeded) rmSync(dag);
+      }
+    }
+    hook(values["admission-open"]!);
+    admissionClosed = false;
+    console.log("applied station configuration; admission reopened");
   } finally {
     rmSync(stage, { recursive: true, force: true });
+    if (admissionClosed) {
+      console.error(`Admission remains closed: inspect the service and probe runs, then run the admission-open hook explicitly. Recovery files: ${lock}`);
+    } else if (locked) {
+      rmSync(lock, { recursive: true, force: true });
+    }
   }
 }
 
-try { main(); }
+try { await main(); }
 catch (error) {
   console.error(error instanceof Error ? error.message : String(error));
   process.exitCode = 1;
