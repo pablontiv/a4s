@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.14
+
+- Poll the PR head every five seconds for up to sixty seconds before requesting guarded auto-merge; on expiry report the expected and last observed SHAs (#257).
+
 ## 0.3.13
 
 - Distinguish active rebase conflicts from other Git failures and retry a held worktree index lock up to three times at five-second intervals in both feature DAGs (#214).
