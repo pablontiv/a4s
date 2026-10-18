@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.66
+
+- Enforce compatible, determinate deployment identities before enqueue, including internal feature/PoC/discovery promotions; capture canonical SHA-256 fingerprints, immutable admission snapshots and append-only categorized run observations (#277).
+- Verify rendered templates through ordered literal matching so large lifecycle DAGs remain admissible without exceeding the JavaScript regular-expression size limit (#277).
+- Run admission CLI integration coverage when Dagu 2.20.1 is available, with explicit skips on runners without that binary (#277).
+
 ## 0.3.58
 
 - Apply station defaults through coordinated admission, running/queued drain, TERM restart and next-enqueue concurrency verification; preserve admission closure and recovery barriers on failure (#255).

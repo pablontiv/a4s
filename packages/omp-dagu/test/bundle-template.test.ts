@@ -48,3 +48,13 @@ test("bootstrap detects source compatibility and renders and confirms all stamps
   assert.match(bootstrap, /--arg resolver "\$REBASE_RESOLVER"/);
   assert.ok(bootstrap.includes('gsub(\\"__REBASE_RESOLVER__\\"; \\$resolver | tojson)'));
 });
+
+test("distributed promotions enqueue through the admission CLI", () => {
+  for (const name of ["feature.yaml", "poc.yaml", "discovery.yaml"]) {
+    assert.match(skill(name), /dagu-feature-bundle enqueue --run-id/);
+    const adopted = readFileSync(fileURLToPath(new URL(`../../../.workspace/dagu/dags/${name}`, import.meta.url)), "utf8");
+    assert.match(adopted, /dagu-feature-bundle enqueue --run-id/);
+  }
+  assert.match(skill("SKILL.md"), /DAGU_ADMISSION_REJECTED/);
+  assert.match(skill("SKILL.md"), /deploymentFingerprint/);
+});

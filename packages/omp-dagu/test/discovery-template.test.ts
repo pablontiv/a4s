@@ -229,10 +229,15 @@ test("dispose skips existing run ids and enqueues eligible new issues", () => {
 set -euo pipefail
 if [[ "$1" == status && "$*" == *"repo-issue-41"* ]]; then exit 0; fi
 if [[ "$1" == status ]]; then exit 1; fi
-if [[ "$1" == enqueue ]]; then printf '%s\\n' "$*" >> "$FAKE_DAGU_LOG"; exit 0; fi
 exit 1
 `);
     chmodSync(join(bin, "dagu"), 0o755);
+    writeFileSync(join(bin, "dagu-feature-bundle"), `#!/bin/bash
+set -euo pipefail
+test "$1" = enqueue
+printf 'admission %s\\n' "$*" >> "$FAKE_DAGU_LOG"
+`);
+    chmodSync(join(bin, "dagu-feature-bundle"), 0o755);
     jsonl(join(outDir, "issues.jsonl"), [
       { unit: "unit-existing", number: 41, url: "https://example.test/41", reused: true },
       { unit: "unit-new", number: 42, url: "https://example.test/42", reused: false },
@@ -256,6 +261,7 @@ exit 1
     assert.match(result.stdout, /enqueued=repo-issue-42 issue=42/);
     assert.doesNotMatch(result.stdout, /43/);
     const invocation = readFileSync(log, "utf8");
+    assert.match(invocation, /^admission enqueue /);
     assert.match(invocation, /--run-id repo-issue-42/);
     assert.match(invocation, /ISSUE=42/);
     assert.match(invocation, /BRANCH=dagu\/issue-42/);
