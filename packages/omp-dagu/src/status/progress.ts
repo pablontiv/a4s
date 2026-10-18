@@ -14,6 +14,7 @@ export interface RunDetails {
   labels?: string[];
   params?: string;
   nodes?: RunNode[];
+  scopeFailureCause?: string;
 }
 
 export interface RunNode {
@@ -206,8 +207,9 @@ export class Transitions {
         if (!node.step.humanTask || node.statusLabel !== "waiting") continue;
         const step = node.step.id ?? node.step.name;
         const iteration = node.approvalIteration ?? 0;
-        const cause = (step.endsWith("_primary_unavailable") || step.startsWith("recover_")) && node.step.humanTask.prompt
-          ? ` cause=${plain(node.step.humanTask.prompt)}` : "";
+        const causeText = (step.endsWith("_primary_unavailable") || step.startsWith("recover_")) ? node.step.humanTask.prompt
+          : run.name === "poc" && step === "run_poc" && iteration > 0 ? run.scopeFailureCause : undefined;
+        const cause = causeText ? ` cause=${plain(causeText)}` : "";
         notice(JSON.stringify([key, step, iteration]),
           `[DAGU STATE] run=${plain(run.dagRunId)} status=waiting step=${plain(step)}${identity}${bundleNotice} iteration=${iteration}${cause}`);
       }

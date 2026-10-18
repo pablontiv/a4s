@@ -219,6 +219,8 @@ steps:
 
   - id: scope_gate
     depends: run_poc
+    continue_on:
+      failure: true
     run: |
       set -euo pipefail
       STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "poc/runs/$RUN")
@@ -231,24 +233,41 @@ steps:
       git -C "$WORKTREE" ls-files --others --exclude-standard -z > "$STATE/untracked.paths"
       while IFS= read -r -d '' path; do
         if [[ "$path" == *.md || "$path" =~ $TEST_PATHS ]]; then
-          printf 'Cutover path: %s\n' "$path" >&2
+          printf 'Cutover path: %s\n' "$path" | tee "$STATE/scope-errors" >&2
           exit 1
         fi
       done < <(cat "$STATE/tracked.paths" "$STATE/untracked.paths")
-      jq -eRs -L "$STATE" --rawfile question "$STATE/question.txt" '
+      jq -rRs -L "$STATE" --rawfile question "$STATE/question.txt" '
         include "sections";
         . as $result |
-        (split("\n")[0] | test("^VERDICT: (PASS|FAIL|INCONCLUSIVE)\\r?$")) and
-        (["## Pregunta", "## Proposición demostrada", "## Ruta ejercitada", "## Comandos y salida"] |
-          all(.[]; . as $heading | ($result|section($heading)|norm|length) > 0)) and
-        ((section("## Pregunta")|norm) == ($question|norm)) and
-        (if (split("\n")[0]|rtrimstr("\r")) == "VERDICT: PASS" then
-          (section("## Después del PASS")|norm|length) > 0 else true end)
-      ' "$STATE/result.md" >/dev/null
+        [
+          (if (split("\n")[0] | test("^VERDICT: (PASS|FAIL|INCONCLUSIVE)\\r?$")) then empty else "Invalid VERDICT line: expected VERDICT: PASS|FAIL|INCONCLUSIVE" end),
+          (["## Pregunta", "## Proposición demostrada", "## Ruta ejercitada", "## Comandos y salida"][] |
+            . as $heading | if ($result|section($heading)|norm|length) > 0 then empty else "Missing or empty required section: \($heading)" end),
+          (if (section("## Pregunta")|norm) == ($question|norm) then empty else "## Pregunta differs from QUESTION (normalized): result=\(section("## Pregunta")|norm|tojson) QUESTION=\($question|norm|tojson)" end),
+          (if (split("\n")[0]|rtrimstr("\r")) == "VERDICT: PASS" and (section("## Después del PASS")|norm|length) == 0 then "Missing or empty ## Después del PASS for PASS" else empty end)
+        ] | .[]
+      ' "$STATE/result.md" > "$STATE/scope-errors"
+      if [[ -s "$STATE/scope-errors" ]]; then
+        cat "$STATE/scope-errors" >&2
+        exit 1
+      fi
       printf 'OK\n' > "$STATE/scope"
 
-  - id: publish
+  - id: fix_result
     depends: scope_gate
+    continue_on: skipped
+    preconditions:
+      - condition: "${scope_gate.exit_code}"
+        expected: "re:^[1-9][0-9]*$"
+    action: human.task
+    with:
+      prompt: "Correct result.md using scope_gate stderr, then rerun the experiment in the same worktree."
+      push_back:
+        rewind_to: run_poc
+
+  - id: publish
+    depends: fix_result
     run: &publish |
       set -euo pipefail
       STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "poc/runs/$RUN")
@@ -388,6 +407,28 @@ steps:
       fi
 
 handler_on:
+  wait:
+    run: |
+      set -euo pipefail
+      if [[ ",$DAG_WAITING_STEPS," == *,fix_result,* ]]; then
+        STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "poc/runs/$RUN")
+        # Dagu persists Waiting only after onWait exits.
+        nohup bash -c '
+          set -euo pipefail
+          RUN=$1
+          for attempt in $(seq 1 60); do
+            STATUS=$(dagu status poc --run-id "$RUN")
+            if grep -q "^Waiting -" <<<"$STATUS"; then
+              ITERATION=$(sed -nE "s/.*push-back iteration: ([0-9]+).*/\1/p" <<<"$STATUS" | head -1)
+              dagu human-task push-back poc --run-id "$RUN" --step fix_result --expected-iteration "${ITERATION:-0}"
+              exit 0
+            fi
+            sleep 1
+          done
+          printf "fix_result transition did not reach Waiting; inspect this checkpoint.\n" >&2
+          exit 1
+        ' _ "$RUN" </dev/null > "$STATE/scope-transition.log" 2>&1 &
+      fi
   failure:
     env:
       - PUBLICATION_FAILURE: "yes"
