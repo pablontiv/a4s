@@ -216,11 +216,35 @@ steps:
         and ## Después del PASS for PASS. Record references or digests of every executed
         release/image in Ruta ejercitada. Keep tests and Markdown in the cutover.
         An empty diff is valid. Complete only after recording observed evidence.
+      form:
+        type: object
+        properties:
+          decline:
+            type: string
+            default: ""
+
+  - id: decline
+    depends: run_poc
+    continue_on: skipped
+    preconditions:
+      - condition: "${steps.run_poc.outputs.decline}"
+        expected: "re:.+"
+    env:
+      - DECLINE: ${steps.run_poc.outputs.decline}
+    run: |
+      set -euo pipefail
+      STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "poc/runs/$RUN")
+      gh issue comment "$(cat "$STATE/issue.number")" --repo "$(cat "$STATE/repo")" \
+        --body "PoC declined by operator: $DECLINE"
 
   - id: scope_gate
     depends: run_poc
     continue_on:
       failure: true
+      skipped: true
+    preconditions:
+      - condition: "${steps.run_poc.outputs.decline}"
+        expected: "re:^$"
     run: |
       set -euo pipefail
       STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "poc/runs/$RUN")
@@ -260,6 +284,8 @@ steps:
     preconditions:
       - condition: "${scope_gate.exit_code}"
         expected: "re:^[1-9][0-9]*$"
+      - condition: "${steps.run_poc.outputs.decline}"
+        expected: "re:^$"
     action: human.task
     with:
       prompt: "Correct result.md using scope_gate stderr, then rerun the experiment in the same worktree."
@@ -268,6 +294,10 @@ steps:
 
   - id: publish
     depends: fix_result
+    continue_on: skipped
+    preconditions:
+      - condition: "${steps.run_poc.outputs.decline}"
+        expected: "re:^$"
     run: &publish |
       set -euo pipefail
       STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "poc/runs/$RUN")
@@ -341,6 +371,10 @@ steps:
 
   - id: decide
     depends: publish
+    continue_on: skipped
+    preconditions:
+      - condition: "${steps.run_poc.outputs.decline}"
+        expected: "re:^$"
     action: human.task
     with:
       prompt: >-
@@ -359,6 +393,10 @@ steps:
 
   - id: dispose
     depends: decide
+    continue_on: skipped
+    preconditions:
+      - condition: "${steps.run_poc.outputs.decline}"
+        expected: "re:^$"
     env:
       - PROMOTE: ${steps.decide.outputs.promote}
     run: |
