@@ -506,7 +506,7 @@ steps:
         expected: "no"
     action: human.task
     with:
-      prompt: "Deliver the files for issue #${ISSUE} inside ${WORKTREE} on ${BRANCH}, plus SUMMARY and a conventional MESSAGE. Dagu stages and commits the delivery. After conflict push-back, resolve the files listed in <git-dir>/dagu-feature/runs/${RUN}/conflict-files in place in this same worktree and branch; Dagu has prepared the new base and conflict markers. Git and Dagu-store access remains an advisory trust boundary."
+      prompt: "Launch a distinct implementer with FEATURE_IMPLEMENT RUN=${RUN} in its task assignment. Deliver the files for issue #${ISSUE} inside ${WORKTREE} on ${BRANCH}, plus SUMMARY, conventional MESSAGE and allocated IMPLEMENTER id. Dagu stages and commits the delivery. After conflict or quality push-back, read the findings in <git-dir>/dagu-feature/runs/${RUN}/quality.json and conflict-files, and correct this same worktree. Git and Dagu-store access remains an advisory trust boundary."
       form:
         type: object
         properties:
@@ -516,13 +516,17 @@ steps:
           MESSAGE:
             type: string
             minLength: 1
-        required: [SUMMARY, MESSAGE]
+          IMPLEMENTER:
+            type: string
+            pattern: '^[A-Za-z0-9][A-Za-z0-9._-]*$'
+        required: [SUMMARY, MESSAGE, IMPLEMENTER]
 
   - id: capture
     depends: implement
     env:
       - SUMMARY: ${steps.implement.outputs.SUMMARY}
       - MESSAGE: ${steps.implement.outputs.MESSAGE}
+      - IMPLEMENTER: ${steps.implement.outputs.IMPLEMENTER}
     run: |
       set -euo pipefail
       umask 0022
@@ -541,7 +545,7 @@ steps:
         '{primary:$primary,worktree:$worktree,branch:$branch,run:$run,session:$session}')
       test "$(cat "$STATE/identity")" = "$identity" || fail "run identity mismatch"
       test "$(cat "$(git -C "$WORKTREE" rev-parse --path-format=absolute --git-path dagu-feature-owner)")" = "$identity" || fail "worktree owner mismatch"
-      test -n "$SUMMARY" && test -n "$MESSAGE"
+      test -n "$SUMMARY" && test -n "$MESSAGE" && test -n "$IMPLEMENTER"
       cd "$WORKTREE"
       base=$(cat "$STATE/base")
       head=$(git rev-parse HEAD)
@@ -586,8 +590,8 @@ steps:
       tree=$(git write-tree)
       iteration=0
       if test -f "$STATE/candidate.json"; then
-        if jq -e --arg tree "$tree" --arg message "$MESSAGE" --arg base "$base" \
-          '.tree == $tree and .message == $message and .base == $base' "$STATE/candidate.json" >/dev/null; then
+        if jq -e --arg tree "$tree" --arg message "$MESSAGE" --arg base "$base" --arg implementer "$IMPLEMENTER" \
+          '.tree == $tree and .message == $message and .base == $base and .implementer == $implementer' "$STATE/candidate.json" >/dev/null; then
           printf 'candidate_sha=%s\n' "$head"
           exit 0
         fi
@@ -601,15 +605,15 @@ steps:
       sha=$(printf '%s\n' "$MESSAGE" | git commit-tree "${signing[@]}" "$tree" -p "$base")
       git diff --binary --full-index "$base" "$sha" > "$scratch/diff.patch"
       jq -nc --arg base "$base" --arg sha "$sha" --arg tree "$tree" --arg message "$MESSAGE" \
-        --arg summary "$SUMMARY" --argjson iteration "$iteration" \
-        '{base:$base,sha:$sha,tree:$tree,message:$message,summary:$summary,iteration:$iteration}' > "$scratch/candidate.json"
+        --arg summary "$SUMMARY" --arg implementer "$IMPLEMENTER" --argjson iteration "$iteration" \
+        '{base:$base,sha:$sha,tree:$tree,message:$message,summary:$summary,implementer:$implementer,iteration:$iteration}' > "$scratch/candidate.json"
       git update-ref "refs/heads/$BRANCH" "$sha" "$head"
       unset GIT_INDEX_FILE
       git read-tree "$tree"
       if test -f "$STATE/candidate.json"; then
         old=$(jq -r .sha "$STATE/candidate.json")
         mkdir -p "$STATE/historical/$old"
-        for artifact in candidate.json diff.patch gate.json; do
+        for artifact in candidate.json diff.patch gate.json quality-request.json quality.json quality-admitted.sha256; do
           if test -f "$STATE/$artifact"; then mv "$STATE/$artifact" "$STATE/historical/$old/"; fi
         done
       fi
@@ -760,7 +764,7 @@ steps:
         after=$(git -C "$WORKTREE" rev-parse HEAD)
         if [[ "$before" != "$after" ]]; then
           mkdir -p "$STATE/historical/$before"
-          for artifact in candidate.json diff.patch gate.json; do
+          for artifact in candidate.json diff.patch gate.json quality-request.json quality.json quality-admitted.sha256; do
             if test -f "$STATE/$artifact"; then mv "$STATE/$artifact" "$STATE/historical/$before/"; fi
           done
           git -C "$WORKTREE" rev-parse "origin/$BASE_BRANCH" > "$STATE/base"
@@ -779,7 +783,7 @@ steps:
         git -C "$WORKTREE" update-ref "refs/heads/$BRANCH" "$base" "$before"
         git -C "$WORKTREE" read-tree "$base"
         mkdir -p "$STATE/historical/$before"
-        for artifact in candidate.json diff.patch gate.json; do
+        for artifact in candidate.json diff.patch gate.json quality-request.json quality.json quality-admitted.sha256; do
           if test -f "$STATE/$artifact"; then mv "$STATE/$artifact" "$STATE/historical/$before/"; fi
         done
         printf '%s\n' "$base" > "$STATE/base"
@@ -842,8 +846,88 @@ steps:
       push_back:
         rewind_to: implement
 
-  - id: push
+  - id: quality_prepare
     depends: recover_gate
+    run: |
+      set -euo pipefail
+      umask 0022
+      STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")
+      rest=$(curl -fsS "http://127.0.0.1:${DAGU_PORT:-8080}/api/v1/dag-runs/feature/$RUN")
+      cutoff=$(jq -er '[.dagRunDetails.nodes[] | select(.step.id == "implement")] | select(length == 1) | .[0].startedAt | select(type == "string" and length > 0)' <<< "$rest")
+      jq -n --arg repo "$(cd "$PRIMARY" && pwd -P)" --arg worktree "$(cd "$WORKTREE" && pwd -P)" --arg run "$RUN" --arg session "$OMP_SESSION_ID" \
+        --arg cutoff "$cutoff" --slurpfile candidate "$STATE/candidate.json" \
+        '{repo:$repo,worktree:$worktree,run:$run,session:$session,sha:$candidate[0].sha,iteration:$candidate[0].iteration,
+          implementer:$candidate[0].implementer,implementStartedAt:$cutoff,attempt:(now | tostring)}' > "$STATE/quality-request.json"
+      cat "$STATE/quality-request.json"
+      jq -r '"FEATURE_QUALITY RUN=\(.run) SHA=\(.sha) ITERATION=\(.iteration) ATTEMPT=\(.attempt) ROLE=qa",
+        "FEATURE_QUALITY RUN=\(.run) SHA=\(.sha) ITERATION=\(.iteration) ATTEMPT=\(.attempt) ROLE=reviewer"' "$STATE/quality-request.json"
+
+  - id: quality_review
+    depends: quality_prepare
+    action: human.task
+    with:
+      prompt: "Read quality_prepare's current request and markers. Launch task agent=qa and task agent=reviewer as two named subagents, distinct from IMPLEMENTER. Each assignment includes its exact FEATURE_QUALITY marker, repo/run/iteration/attempt/SHA, read-only worktree ${WORKTREE}, targeted QA commands and structured verdict contract from SKILL.md. Each reads git -C ${WORKTREE} rev-parse HEAD. Complete with QA and REVIEW allocated ids. The OMP extension verifies effective JSONL identities and provenance; fabricated reports, ineligible fallback and indeterminate identity block locally. QA/reviewer FAIL returns to implement with findings."
+      form:
+        type: object
+        properties:
+          QA:
+            type: string
+            pattern: '^[A-Za-z0-9][A-Za-z0-9._-]*$'
+          REVIEW:
+            type: string
+            pattern: '^[A-Za-z0-9][A-Za-z0-9._-]*$'
+        required: [QA, REVIEW]
+
+  - id: quality_admit
+    depends: quality_review
+    env:
+      - QA: ${steps.quality_review.outputs.QA}
+      - REVIEW: ${steps.quality_review.outputs.REVIEW}
+    run: |
+      set -euo pipefail
+      STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")
+      fail() { printf 'quality_admit: %s; local candidate retained\n' "$*" >&2; exit 1; }
+      sha=$(jq -r .sha "$STATE/candidate.json")
+      test "$(git -C "$WORKTREE" rev-parse HEAD)" = "$sha" || fail "candidate changed"
+      test -z "$(git -C "$WORKTREE" status --porcelain)" || fail "worktree changed"
+      jq -e --arg qa "$QA" --arg review "$REVIEW" --arg repo "$(cd "$PRIMARY" && pwd -P)" --arg run "$RUN" --arg session "$OMP_SESSION_ID" --slurpfile request "$STATE/quality-request.json" \
+        --slurpfile candidate "$STATE/candidate.json" --slurpfile gate "$STATE/gate.json" '
+        . as $e | $request[0] as $r | $candidate[0] as $c |
+        .repo == $repo and .run == $run and .session == $session and .repo == $r.repo and .worktree == $r.worktree and .run == $r.run and .sha == $c.sha and .sha == $r.sha and
+        .sha == $gate[0].sha and .iteration == $r.iteration and .iteration == $c.iteration and
+        .attempt == $r.attempt and .session == $r.session and
+        .implementer.subagent == $c.implementer and (.implementer.family | type == "string" and length > 0) and
+        (.verdicts | length == 2) and
+        ([.verdicts[].subagent, .implementer.subagent] | unique | length == 3) and
+        .verdicts[0].subagent == $qa and .verdicts[0].role == "qa" and
+        .verdicts[1].subagent == $review and .verdicts[1].role == "reviewer" and
+        ([.verdicts[] | .repo == $e.repo and .run == $e.run and .sha == $e.sha and
+          .iteration == $e.iteration and .attempt == $e.attempt and .parentSession == $e.implementer.parentSession and
+          (.invocation | type == "string" and length > 0) and (.childSession | type == "string" and length > 0) and
+          (.model.family | type == "string" and length > 0) and .model.family != $e.implementer.family and
+          (.verdict == "PASS" or .verdict == "FAIL") and (.findings | type == "array")] | all) and
+        .action == (if ([.verdicts[].verdict] | all(. == "PASS")) then "complete" else "rewind" end)
+        ' "$STATE/quality.json" >/dev/null || fail "missing, stale or malformed effective verdict evidence"
+      while IFS=$'\t' read -r transcript digest event provider model; do
+        actual=$(shasum -a 256 "$transcript")
+        test "${actual%% *}" = "$digest" || fail "transcript changed: $transcript"
+        jq -se --arg event "$event" --arg provider "$provider" --arg model "$model" \
+          '[.[] | select(.id == $event and .message.role == "assistant" and .message.provider == $provider and .message.model == $model)] | length == 1' "$transcript" >/dev/null || fail "runtime model provenance mismatch"
+      done < <(jq -r '.verdicts[] | [.transcript,.digest,.event,.model.provider,.model.id] | @tsv' "$STATE/quality.json")
+      shasum -a 256 "$STATE/quality.json" > "$STATE/quality-admitted.sha256"
+      jq -r .action "$STATE/quality.json" > "$STATE/quality-action"
+      jq '{sha,action,verdicts:[.verdicts[] | {role,verdict,findings,subagent,model,attempts,fallbacks}]}' "$STATE/quality.json"
+
+  - id: quality_transition
+    depends: quality_admit
+    action: human.task
+    with:
+      prompt: "Effective QA/reviewer verdicts are in quality.json. The wait handler completes two PASS or pushes back to implement at the observed iteration with both independent findings preserved."
+      push_back:
+        rewind_to: implement
+
+  - id: push
+    depends: quality_transition
     continue_on:
       failure: true
     run: |
@@ -859,6 +943,9 @@ steps:
       test "$(git -C "$WORKTREE" rev-parse HEAD)" = "$sha"
       test -z "$(git -C "$WORKTREE" status --porcelain)"
       jq -e --arg sha "$sha" --arg gate "$GATE" '.sha == $sha and .gate == $gate' "$STATE/gate.json" >/dev/null
+      shasum -a 256 -c "$STATE/quality-admitted.sha256" >/dev/null
+      jq -e --arg sha "$sha" --slurpfile request "$STATE/quality-request.json" \
+        '.sha == $sha and .attempt == $request[0].attempt and .action == "complete" and ([.verdicts[].verdict] | length == 2 and all(. == "PASS"))' "$STATE/quality.json" >/dev/null
       remote_ref="refs/heads/$BRANCH"
       expected=$(git -C "$WORKTREE" ls-remote origin "$remote_ref" | cut -f1)
       git -C "$WORKTREE" push "--force-with-lease=$remote_ref:$expected" --set-upstream origin "$sha:$remote_ref"
@@ -912,6 +999,9 @@ steps:
       test "$(git rev-parse HEAD)" = "$sha"
       test -z "$(git status --porcelain)"
       jq -e --arg sha "$sha" --arg gate "$GATE" '.sha == $sha and .gate == $gate' "$STATE/gate.json" >/dev/null
+      shasum -a 256 -c "$STATE/quality-admitted.sha256" >/dev/null
+      jq -e --arg sha "$sha" --slurpfile request "$STATE/quality-request.json" \
+        '.sha == $sha and .attempt == $request[0].attempt and .action == "complete" and ([.verdicts[].verdict] | length == 2 and all(. == "PASS"))' "$STATE/quality.json" >/dev/null
       pr_ref=${PR_NUMBER:-$BRANCH}
       for ((attempt = 0; attempt <= 12; attempt++)); do
         observed_sha=$(gh pr view "$pr_ref" --json headRefOid --jq .headRefOid)
@@ -1104,7 +1194,8 @@ handler_on:
       printf 'waiting_steps=%s issue=%s branch=%s worktree=%s\n' "$DAG_WAITING_STEPS" "$ISSUE" "$BRANCH" "$WORKTREE"
       for SPEC in \
         "dependency_review dependency-action dependency-transition.log" \
-        "conflict_review conflict-action conflict-transition.log"; do
+        "conflict_review conflict-action conflict-transition.log" \
+        "quality_transition quality-action quality-transition.log"; do
         read -r STEP ACTION LOG <<<"$SPEC"
         if [[ ",$DAG_WAITING_STEPS," == *,"$STEP",* ]]; then
           STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")

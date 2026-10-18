@@ -8,6 +8,8 @@ import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { qualityFixture } from "./quality-fixtures.ts";
+import { verifyQuality } from "../src/triage/quality.ts";
 
 const resolver = fileURLToPath(new URL("../bin/dagu-bundle-rebase.mjs", import.meta.url));
 const template = fileURLToPath(new URL("../skills/dagu-feature/feature.yaml", import.meta.url));
@@ -93,7 +95,7 @@ function fixture(upstream = "0.3.18", proposed = "0.3.18", mode = "clean", legac
   put(state, "identity", identity + "\n");
   writeFileSync(git(worktree, "rev-parse", "--path-format=absolute", "--git-path", "dagu-feature-owner"), identity + "\n");
   put(state, "base", base + "\n");
-  put(state, "candidate.json", JSON.stringify({ sha: before, base, tree: git(worktree, "rev-parse", "HEAD^{tree}"), iteration: 0, message: "feat: candidate B", summary: "Candidate B" }) + "\n");
+  put(state, "candidate.json", JSON.stringify({ sha: before, base, tree: git(worktree, "rev-parse", "HEAD^{tree}"), iteration: 0, message: "feat: candidate B", summary: "Candidate B", implementer: "ImplementTest" }) + "\n");
   put(state, "diff.patch", git(worktree, "diff", "--binary", base, before) + "\n");
   put(state, "gate.json", JSON.stringify({ sha: before, gate: "old gate" }) + "\n");
   const env = { HOME: process.env.HOME, PATH: process.env.PATH, PRIMARY: primary, WORKTREE: worktree, BRANCH: branch, BASE_BRANCH: "main", RUN: "bundle-test", OMP_SESSION_ID: "", REBASE_RESOLVER: `node ${JSON.stringify(resolver)}`, GATE: "true" };
@@ -219,7 +221,9 @@ test("isolated Dagu rebases colliding candidates before gate and publishes the n
   put(home, "dags/feature.yaml", `type: graph\nshell: bash\nenv:\n${Object.entries({ ...repo.env, PATH: env.PATH }).map(([key, value]) => `  ${key}: ${JSON.stringify(value)}`).join("\n")}\nsteps:\n` +
     step(source, "rebase").replace("    depends: dependency_review\n", "") +
     step(source, "gate").replace("    depends: conflict_review", "    depends: rebase") +
-    step(source, "push").replace("    depends: recover_gate", "    depends: gate"));
+    "  - id: quality_review\n    depends: gate\n    action: human.task\n    with:\n      prompt: Admit independent verdict evidence for the normalized candidate.\n" +
+    step(source, "quality_admit").replace("    env:\n      - QA: ${steps.quality_review.outputs.QA}\n      - REVIEW: ${steps.quality_review.outputs.REVIEW}\n", "    env:\n      - QA: QATest\n      - REVIEW: ReviewTest\n") +
+    step(source, "push").replace("    depends: quality_transition", "    depends: quality_admit"));
   let serviceLog = "";
   const service = spawn("dagu", ["start-all", "--host", "127.0.0.1", "--port", String(port)], { cwd: repo.root, env, stdio: ["ignore", "pipe", "pipe"] });
   service.stdout.on("data", data => { serviceLog += data; }); service.stderr.on("data", data => { serviceLog += data; });
@@ -236,6 +240,20 @@ test("isolated Dagu rebases colliding candidates before gate and publishes the n
     assert.ok(text(dirname(staged), "feature.yaml").includes(`default: ${JSON.stringify(repo.env.REBASE_RESOLVER)}`));
     command("validate", staged); command("validate", rendered); command("validate", file);
     command("enqueue", "--run-id", id, "feature");
+    await until("normalized candidate awaiting independent verdicts", async () => {
+      const response = await fetch(`${api}/dag-runs/feature/${id}`);
+      if (!response.ok) return undefined;
+      const run = (await response.json() as { dagRunDetails: { statusLabel: string } }).dagRunDetails;
+      assert.notEqual(run.statusLabel, "failed");
+      return run.statusLabel === "waiting" ? true : undefined;
+    });
+    const candidate = json(repo.state, "candidate.json");
+    const evidence = qualityFixture(repo, "PASS", {
+      repo: repo.primary, worktree: repo.worktree, run: "bundle-test", sha: candidate.sha, iteration: candidate.iteration,
+      implementer: "ImplementTest", session: "", attempt: new Date().toISOString(), implementStartedAt: "2026-10-16T00:00:00Z",
+    });
+    writeFileSync(join(repo.state, "quality.json"), JSON.stringify(verifyQuality(evidence.parent, evidence.request, "QATest", "ReviewTest", evidence.models)));
+    command("human-task", "complete", "feature", "--run-id", id, "--step", "quality_review");
     const details = await until("normalized rebase/gate/push", async () => {
       const response = await fetch(`${api}/dag-runs/feature/${id}`); if (!response.ok) return undefined;
       const run = (await response.json() as { dagRunDetails: { statusLabel: string; nodes: Array<{ statusLabel: string; stdout?: string; stderr?: string }> } }).dagRunDetails;

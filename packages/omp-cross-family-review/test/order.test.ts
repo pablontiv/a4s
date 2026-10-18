@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import crossFamilyReview from "../src/index.ts";
+import crossFamilyReview, { bindQualityImplementer } from "../src/index.ts";
 import { orderReviewModels } from "../src/order.ts";
 import type {
   FamilyReference,
@@ -39,7 +39,7 @@ function parentReference(models: Models): FamilyReference[] {
 }
 
 type SpawnHandler = (
-  event: { agent: string; patterns: readonly string[] },
+  event: { agent: string; patterns: readonly string[]; spawnKey?: string },
   ctx: { models: Models },
 ) => ReviewModels | undefined;
 
@@ -64,9 +64,8 @@ test("reviewer swaps a task-family primary and omits the task fallback", () => {
       models: facade(),
     }),
     {
-      model: ["gemini", "gpt", "@slow", "@default"],
-      note:
-        "fallback cross-family vs anthropic/opus and @task openai/gpt; primary swapped because it shares an excluded family",
+      model: ["gemini"],
+      note: "strict cross-family eligibility; effective transcript identity must pass the publication gate",
     },
   );
 });
@@ -76,16 +75,14 @@ test("reviewer keeps a primary outside the parent and task families", () => {
     spawn({ agent: "reviewer", patterns: ["gemini", "gpt"] }, {
       models: facade(),
     })?.model,
-    ["gemini", "gpt", "@slow", "@default"],
+    ["gemini"],
   );
 });
 
-test("reviewer keeps the configured primary when every candidate family is excluded", () => {
-  assert.deepEqual(
-    spawn({ agent: "reviewer", patterns: ["gpt"] }, { models: facade() })
-      ?.model,
-    ["gpt", "@slow", "@default"],
-  );
+test("reviewer blocks exhaustion with attempted candidates and excluded families", () => {
+  const result = spawn({ agent: "reviewer", patterns: ["gpt"] }, { models: facade() });
+  assert.equal(result?.block, true);
+  assert.match(result?.reason ?? "", /EXHAUSTED.*gpt.*@slow.*anthropic.*openai/);
 });
 
 test("security-reviewer excludes both the parent and task families", () => {
@@ -113,9 +110,8 @@ test("reviewer excludes only the parent family when task is unresolved", () => {
   assert.deepEqual(
     spawn({ agent: "reviewer", patterns: ["opus", "gpt"] }, { models }),
     {
-      model: ["gpt", "opus", "@slow"],
-      note:
-        "fallback cross-family vs anthropic/opus; primary swapped because it shares an excluded family",
+      model: ["gpt"],
+      note: "strict cross-family eligibility; effective transcript identity must pass the publication gate",
     },
   );
 });
@@ -172,8 +168,8 @@ test("returns undefined without a parent, patterns, or a resolved primary", () =
     undefined,
   );
   assert.equal(
-    spawn({ agent: "reviewer", patterns: ["gpt"] }, { models: noParent }),
-    undefined,
+    spawn({ agent: "reviewer", patterns: ["gpt"] }, { models: noParent })?.block,
+    true,
   );
 });
 
@@ -184,4 +180,25 @@ test("ignores agents outside the review policy", () => {
       undefined,
     );
   }
+});
+
+test("QA has strict eligibility and blocks indeterminate identity", () => {
+  assert.deepEqual(spawn({ agent: "qa", patterns: ["gpt", "gemini"] }, { models: facade() })?.model, ["gemini"]);
+  assert.equal(orderReviewModels([], roles, facade(), [], true)?.block, true);
+  const models = facade();
+  models.family = () => "";
+  assert.equal(orderReviewModels(["gpt"], roles, models, parentReference(models), true)?.block, true);
+});
+
+test("quality routing compares only the runtime-effective implementer", () => {
+  for (const agent of ["qa", "reviewer"]) {
+    bindQualityImplementer(agent, gpt);
+    const result = spawn({ agent, spawnKey: agent, patterns: ["gpt", "opus", "gemini"] }, { models: facade() });
+    assert.deepEqual(result?.model, ["opus", "gemini", "@slow"]);
+  }
+});
+
+test("strict eligibility resolves alternatives when a primary is unavailable", () => {
+  assert.deepEqual(orderReviewModels(["missing", "gemini", "gpt"], roles, facade(),
+    [{ model: opus }], true)?.model, ["gemini", "gpt"]);
 });

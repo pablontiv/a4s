@@ -393,8 +393,9 @@ imprime `confirm`.
 ## Entrega y candidato de feature
 
 `implement` entrega archivos dentro del worktree asignado (modificados, nuevos,
-borrados, renombrados y binarios), más `SUMMARY` y `MESSAGE` convencional en el
-formulario. Dagu valida PRIMARY/worktree canónicos, rama y propietario run/sesión,
+borrados, renombrados y binarios), más `SUMMARY`, `MESSAGE` convencional e
+`IMPLEMENTER` (id asignado del subagente cuya tarea incluye `FEATURE_IMPLEMENT RUN=<run>`).
+Dagu valida PRIMARY/worktree canónicos, rama y propietario run/sesión,
 rechaza escapes externos por symlink conservando la entrega, y hace staging y
 commit con un índice privado. El acceso directo de la TUI a Git y al store de
 Dagu hace esta separación **advisory**, no una barrera de seguridad.
@@ -411,7 +412,30 @@ esos archivos resueltos y Dagu los captura.
 `checkpoint_push` compara dependencias y conserva el candidato en
 `refs/dagu/checkpoints/issue-N` con lease explícito, manteniendo el head del PR.
 `gate` ejecuta todas las verificaciones declaradas en `GATE` y registra su comando
-y SHA en `gate.json`. Una corrección o rebase exige renovar esa evidencia;
+y SHA en `gate.json`. Una corrección o rebase exige renovar esa evidencia.
+Después, `quality_prepare` genera una solicitud SHA/run/iteración/intento y
+`quality_review` espera dos subagentes distintos del implementador: `qa` y
+`reviewer`. Cada tarea recibe su marcador exacto y el contrato estructurado de
+[SKILL.md](skills/dagu-feature/SKILL.md#effective-qa-and-review); el coordinador
+completa con sus ids `QA` y `REVIEW`. QA ejecuta los comandos de aceptación
+indicados; reviewer inspecciona independientemente el mismo SHA local.
+
+El guard contrasta los JSONL efectivos con la sesión padre e invocación `task`,
+el id/rol, run, iteración, intento, SHA leído y contenido del veredicto. Atribuye
+proveedor/modelo a cada mensaje que emite el resultado y compara con el
+implementador efectivo mediante `ctx.models.family`, conservando intentos,
+errores y `resolvedModelIsFallback`. La integración estricta con
+`omp-cross-family-review` selecciona otra familia para ambos roles; pueden
+compartir familia entre sí. Modelo indeterminado, agotamiento o fallback efectivo
+de la familia del implementador bloquean con diagnóstico y conservan el candidato.
+
+`quality.json` contiene dos veredictos independientes con procedencia y hashes
+de transcript; `quality_admit` los valida y `quality_transition` hace push-back
+a `implement` con la iteración observada y hallazgos ante FAIL. Dos PASS vigentes
+permiten publicar. La secuencia gate → QA/review → admisión precede a cada
+actualización de la rama del PR, también tras correcciones y rebases; se renuevan
+ambas evidencias para el nuevo candidato/intento. `auto_merge` comprueba ese SHA.
+Este control es **advisory mientras la TUI tenga acceso al store de Dagu**.
 `push` publica el SHA validado explícito con lease de la rama y worktree limpio.
 `pr` reutiliza el PR abierto y verifica rama y SHA; `auto_merge` comprueba el
 mismo SHA antes de solicitar su fusión. La salida reconoce el checkpoint exacto
@@ -423,6 +447,7 @@ git branch dagu/issue-N FETCH_HEAD
 ```
 
 El cierre tras merge retira también el checkpoint durable con lease.
+
 
 ## Desarrollo
 

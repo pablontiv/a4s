@@ -24,7 +24,12 @@ flowchart LR
     R -->|clean rebase| E[gate]
     E --> ER[recover_gate]
     ER -->|code failure: push-back| B
-    ER -->|healthy: skipped| F[push]
+    ER -->|healthy: skipped| Q[quality_prepare<br/>current SHA request]
+    Q --> QR[quality_review<br/>independent QA + reviewer]
+    QR --> V[quality_admit<br/>runtime provenance]
+    V --> QT[quality_transition]
+    QT -->|FAIL findings: push-back| B
+    QT -->|two current PASS| F[push]
     F --> FR[recover_push]
     FR -->|operator repair: push-back| F
     FR -->|healthy: skipped| G[pr]
@@ -622,6 +627,8 @@ experiments can wait concurrently.
 When `start_gate` succeeds, the run enters `Waiting` at `implement`, and the queue slot is released.
 
 Give `Implement<ISSUE>` the exact `WORKTREE` path and `BRANCH`, plus this contract:
+Include `FEATURE_IMPLEMENT RUN=<run-id>` in the implementer's task assignment,
+and retain its allocated id as `IMPLEMENTER` in the completion form.
 
 - Leave real-`DAGU_HOME` `dagu human-task` transitions, pushes, PR creation and
   GitHub comments to the coordinator and DAG. Leave `omp plugin link` and
@@ -645,12 +652,14 @@ Give `Implement<ISSUE>` the exact `WORKTREE` path and `BRANCH`, plus this contra
 
    ```sh
    dagu human-task complete --run-id <id> --step implement \
-     --input SUMMARY='<change summary>' --input MESSAGE='<conventional message>' feature
+     --input SUMMARY='<change summary>' --input MESSAGE='<conventional message>' \
+     --input IMPLEMENTER='<allocated implementer id>' feature
    ```
 
 The run resumes through the queue: `capture` → `checkpoint_push` →
-`dependency_review` → `rebase` → `conflict_review` → `gate` → `recover_gate` → `push` →
-`recover_push` → `pr` → `auto_merge`. Successful commands skip recovery. The
+`dependency_review` → `rebase` → `conflict_review` → `gate` → `recover_gate` → `quality_prepare` →
+`quality_review` → `quality_admit` → `quality_transition` → `push` → `recover_push` →
+`pr` → `auto_merge`. Successful commands skip recovery. The
 dependency checkpoint automatically completes or returns to triage. A clean
 rebase makes the wait handler complete `conflict_review`; a conflicting rebase
 records the conflict paths, preserves the delivery with conflict markers, and
@@ -668,17 +677,72 @@ tested SHA.
 
 Per-run state under `<git-dir>/dagu-feature/runs/<RUN>` records `identity`,
 `base`, `diff.patch` (full binary patch), `candidate.json` (SHA, tree, message,
-summary and capture iteration), and `gate.json` (tested SHA and exact GATE).
+summary, implementer id and capture iteration), and `gate.json` (tested SHA and exact GATE).
 Identical captures reuse the SHA and commit count; author/committer dates are
 fixed from the run ID and capture iteration. Capture signs new commits when Git's
 repository configuration enables `commit.gpgsign`, using `gpg.format` and
 `user.signingkey`. Identical candidates are reused by tree, parent and message,
 including signed candidates. Corrections create a new single commit over the base.
 Corrections and rebases archive earlier candidate/diff/gate
-records under `historical/<SHA>/`; all declared local checks belong in GATE and
+and quality records under `historical/<SHA>/`; all declared local checks belong in GATE and
 run again for the current SHA. `push` and `auto_merge` require current evidence
 and a clean worktree. `checkpoint_push` performs the dependency comparison
-locally; `push` is the publication boundary after the gate.
+locally; `push` is the publication boundary after the gate and both effective PASS.
+The same sequence runs for the initial candidate, every correction and every rebase.
+
+### Effective QA and review
+
+`quality_prepare` writes `quality-request.json` with canonical repo/worktree, run,
+capture iteration, current SHA, parent session, implementer id, implement cutoff
+and a fresh attempt timestamp (Unix seconds, including the fractional part). Read that file and the two exact role markers in
+the step log. Launch two named `task` subagents, `agent=qa` and `agent=reviewer`,
+each with its exact marker in its task assignment. Give QA the issue's targeted
+acceptance commands and require the exact commands/results in its findings;
+reviewer independently inspects the same candidate and acceptance. Both run
+`git -C "<worktree>" rev-parse HEAD` before inspecting it and keep the worktree clean.
+The extension supplies a structured output schema. Each returns:
+
+```json
+{"repo":"<canonical PRIMARY>","run":"<run-id>","iteration":0,"attempt":"<request timestamp>","sha":"<full SHA>","role":"qa","verdict":"PASS","findings":["<observed command/result or review finding>"]}
+```
+
+Use `role=reviewer` for review and `verdict=FAIL` with actionable findings on
+rejection. Complete only after both finish:
+
+```sh
+dagu human-task complete feature --run-id <id> --step quality_review \
+  --input QA=<allocated QA id> --input REVIEW=<allocated reviewer id>
+```
+
+The OMP guard reads the raw child JSONL under the coordinator's session
+directory, correlating child id/session, exact parent transcript, parent `task`
+invocation, run/iteration/attempt/role assignment and candidate SHA read through
+a correlated Git tool result. It attributes the verdict to the emitting
+assistant message's provider/model, resolves that exact catalog identity and
+compares families using `ctx.models.family`. The implementer's effective final
+response, rather than its requested role model, is the reference. QA and reviewer
+are distinct from each other and the implementer; their families may match each other.
+Observed assistant attempts/errors and runtime `resolvedModelIsFallback` changes
+are retained with each verdict. Markdown reports and requested models establish
+neither identity nor admission.
+
+The `omp-cross-family-review` integration strictly selects QA/reviewer candidates
+outside that effective implementer family. Configured candidates plus `@slow`,
+`@default` and `@task` are deduplicated by resolved provider/id. Exhaustion,
+indeterminate identity and a same-family effective fallback block with diagnostics
+and preserve the local candidate. Enable the cross-family extension for its
+dispatch hook; the Dagu guard also filters model candidates at the `task` boundary.
+
+`quality.json` persists two independent, fully bound verdicts and their runtime
+evidence. `quality_admit` checks request/candidate/gate bindings, both allocated
+ids, roles, families, transcript digests and effective response events, then seals
+the admitted receipt in `quality-admitted.sha256` before dispatching
+`quality_transition`. Two current PASS complete it; either FAIL
+pushes it back to `implement` in the same run using the observed run-wide
+`--expected-iteration`. Both sets of findings remain in `quality.json` and the
+transition log. A changed SHA or a fresh gate attempt requires new QA and review
+evidence. `push` and guarded `auto_merge` consume only that admitted SHA.
+
 
 This division of responsibility is **advisory while the TUI has direct access
 to Git and the Dagu store**. The contract and workflow checks establish the

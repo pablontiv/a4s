@@ -1,8 +1,25 @@
 # OMP Cross-family Review
 
-Extensión de OMP que prioriza modelos de familias distintas a las referencias de cada subagente de revisión. Para `reviewer` y `security-reviewer`, que revisan código escrito por `task`, excluye tanto la familia del modelo actual de la sesión como la de `@task`. Para `triage-reviewer`, que revisa la decisión de triage del padre, excluye solo la familia del modelo actual. El agente dedicado de triage se distribuye con `@a4s/omp-dagu`; `reviewer` conserva su uso para code review.
+Extensión de OMP que compara familias mediante la API canónica `ctx.models.family`.
+`qa` y `reviewer` usan elegibilidad estricta: conservan solo modelos de familias
+admitidas y bloquean con candidatos/causa cuando faltan alternativas o identidad.
+En el gate de `dagu-feature`, el guard acredita el implementador efectivo desde
+su JSONL y vincula esa referencia al nombre del subagente antes del dispatch.
+QA y reviewer pueden compartir familia; cada uno debe diferir del implementador.
 
-Conserva el modelo principal si pertenece a una familia no excluida; si comparte una familia excluida, promueve el primer candidato que califica. Ordena los demás candidatos que califican antes de los de familias excluidas y deduplica por proveedor/modelo conservando los specs originales (incluidos aliases y sufijos de thinking). `reviewer` y `security-reviewer` incorporan los fallbacks `@slow` y `@default`; `triage-reviewer` incorpora `@task`, `@slow` y `@default`. Sin padre o modelo principal resoluble, mantiene la selección existente. Si `@task` no resuelve, los revisores de código excluyen solo la familia del padre.
+Los candidatos se resuelven y deduplican por proveedor/id conservando specs,
+aliases y thinking. El gate examina los candidatos solicitados y los roles
+`@slow`, `@default`, `@task`; usa esa misma política estricta en el límite `task`.
+Fuera de ese gate, QA/reviewer comparan con el modelo padre y `@task`.
+`security-reviewer` conserva el orden preferente frente a padre y `@task`;
+`triage-reviewer` conserva el orden preferente frente al padre y los roles
+`@task`, `@slow`, `@default`.
+
+La selección es preventiva; la admisión exige los proveedores/modelos de los
+mensajes efectivos que emitieron los veredictos. El guard de `omp-dagu` valida
+procedencia, SHA y familias y registra los fallbacks reales. Un fallback efectivo
+de la familia del implementador bloquea aunque la selección inicial calificase.
+El acceso de la TUI al store de Dagu hace este control advisory.
 
 ## Instalación global
 
