@@ -362,10 +362,35 @@ La extensión despierta `OMP_SESSION_ID` en las esperas `discover`, `validate`,
 La versión de `package.json` identifica el bundle completo. Cada DAG generado
 lleva en la primera línea el sello con versión, repositorio y SHA fuente, run de
 bootstrap y versión de Dagu, además de la etiqueta
-`dagu-feature-bundle=<version>`. La extensión compara esa etiqueta con su propia
-versión: exige el mismo major y, mientras sea `0`, también el mismo minor. Un
-DAG sin etiqueta queda `unstamped`; una versión fuera de la regla queda
-`incompatible`. Ambos estados se muestran como advertencia en el aviso `[DAGU STATE]` y no bloquean runs.
+`dagu-feature-bundle=<version>`. La admisión exige el mismo major y, mientras
+sea `0`, también el mismo minor entre paquete, DAG, reconciliador y extensión.
+Identidades ilegibles, sellos/labels ambiguos, versiones incompatibles o renders
+que no corresponden a su commit fuente se rechazan antes de crear el run, con
+diagnóstico `DAGU_ADMISSION_REJECTED` y acción bootstrap/adopción/recarga.
+
+El guard de OMP transforma `dagu enqueue` en bash al CLI del paquete, después
+del cual el shell resuelve sus argumentos efectivos. Las promociones internas
+usan `dagu-feature-bundle enqueue`: instalar ese binario en el `PATH` del servicio.
+Fuera de OMP, usar explícitamente
+`node /real/checkout/packages/omp-dagu/bin/dagu-feature-bundle.ts enqueue --run-id <id> <dag.yaml> -- PRIMARY=<repo> ISSUE=<n>`.
+`admit` reserva un ID de verificación y escribe el recibo sin crear un run.
+
+Cada admisión guarda `sourceVersion`, `deploymentFingerprint` (SHA-256 de JSON
+canónico con claves ordenadas) y `runReceipt` en
+`$(git rev-parse --path-format=absolute --git-path dagu-feature/runs/<run>)/receipt.json`
+(0600). La base `initial` conserva identidades/versiones/rutas/orígenes/digests,
+relaciones fuente-render, DAG exacto, runtime/modelos, ejecución y estado externo;
+los datos dinámicos pendientes tienen estado y causa explícitos. El CLI encola
+los bytes admitidos, no una ruta de despliegue mutable.
+
+El observador de estado agrega hechos REST/transiciones e incidentes de error o
+timeout con DAG/run/intento. `dagu-feature-bundle observe <run> '<JSON>'` permite
+agregar hechos resueltos por runtime/modelos (`dag`, `run`, `attempt`, `category`,
+`kind`, `data`); las categorías son `deployment`, `runtimeAndModels`, `execution`
+y `eventsAndExternalState`. Los nuevos hechos completan los pendientes sin
+alterar el snapshot ni la huella inicial; un redeploy solo rige nuevas admisiones.
+Recargar OMP tras cambiar la extensión: un digest cargado distinto del instalado
+se rechaza hasta la recarga.
 
 Para inspeccionar uno o más clones, el reconciliador instalado y la versión
 exacta de Dagu requerida:
