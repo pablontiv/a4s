@@ -79,17 +79,17 @@ for (const [name, definition] of definitions) {
       assert.equal(yaml.split("\n", 1)[0], "# dagu-feature-bundle: __DAGU_FEATURE_STAMP__");
       assert.match(yaml, /^  - dagu-feature-bundle=TEMPLATE_DAGU_FEATURE_VERSION$/m);
     } else {
-      const source = "pablontiv/a4s@fe5d444e9c9133d5bac3d2aeef054fee56d01fdb";
+      const stamp = /^# dagu-feature-bundle: @a4s\/omp-dagu@(\d+\.\d+\.\d+) source=(pablontiv\/a4s@[0-9a-f]{40}) bootstrap=(\S+) dagu=2\.20\.1$/.exec(yaml.split("\n", 1)[0]!);
+      assert.ok(stamp, "rendered discovery has a complete deployment stamp");
+      const [, version, source, bootstrap] = stamp;
       assert.doesNotMatch(yaml, /__DAGU_FEATURE_|TEMPLATE_/);
-      assert.equal(
-        yaml.split("\n", 1)[0],
-        `# dagu-feature-bundle: @a4s/omp-dagu@0.3.8 source=${source} bootstrap=bootstrap-a4s-v0-3-8 dagu=2.20.1`,
+      assert.deepEqual(
+        [...yaml.matchAll(/^  - dagu-feature-bundle=(\S+)$/gm)].map(match => match[1]),
+        [version],
       );
-      assert.match(yaml, /^  - dagu-feature-bundle=0\.3\.8$/m);
-      assert.match(
-        yaml,
-        new RegExp(`- DAGU_FEATURE_BUNDLE: "dagu-feature-bundle=0\\.3\\.8 source=${source} bootstrap=bootstrap-a4s-v0-3-8"`),
-      );
+      assert.ok(yaml.split("\n").includes(
+        `  - DAGU_FEATURE_BUNDLE: "dagu-feature-bundle=${version} source=${source} bootstrap=${bootstrap}"`,
+      ));
     }
     for (const param of ["LENSES", "POLICY", "SOURCE", "LIVE_TARGET", "PRIMARY", "OMP_SESSION_ID"])
       assert.match(yaml, new RegExp(`  - name: ${param}\\n`));

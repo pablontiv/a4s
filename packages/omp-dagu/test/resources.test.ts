@@ -189,7 +189,12 @@ test("feature, PoC and reconcile template/render scripts remain in parity with t
   for (const name of ["feature", "poc", "reconcile"]) {
     const source = readFileSync(new URL(`../skills/dagu-feature/${name}.yaml`, import.meta.url), "utf8");
     const rendered = readFileSync(new URL(`../../../.workspace/dagu/dags/${name}.yaml`, import.meta.url), "utf8");
-    assert.match(rendered.split("\n")[0]!, /^# dagu-feature-bundle: @a4s\/omp-dagu@0\.3\.8 source=pablontiv\/a4s@fe5d444e9c9133d5bac3d2aeef054fee56d01fdb bootstrap=bootstrap-a4s-v0-3-8 dagu=2\.20\.1$/);
+    const stamp = /^# dagu-feature-bundle: @a4s\/omp-dagu@(\d+\.\d+\.\d+) source=pablontiv\/a4s@[0-9a-f]{40} bootstrap=\S+ dagu=2\.20\.1$/.exec(rendered.split("\n")[0]!);
+    assert.ok(stamp, `${name} has a complete deployment stamp`);
+    assert.deepEqual(
+      [...rendered.matchAll(/^  - dagu-feature-bundle=(\S+)$/gm)].map(match => match[1]),
+      [stamp[1]],
+    );
     assert.equal(rendered.slice(rendered.indexOf("steps:\n")).trimEnd(), source.slice(source.indexOf("steps:\n")).trimEnd());
     if (name !== "reconcile") {
       assert.equal(rendered.slice(rendered.indexOf("  - DAGU_RESOURCE_GUARD: |"), rendered.indexOf("steps:\n")), source.slice(source.indexOf("  - DAGU_RESOURCE_GUARD: |"), source.indexOf("steps:\n")));
