@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.64
+
+- Classify required CI for the current PR head as PENDING, PASS, CODE_FAIL, TRANSIENT, BLOCKED or STALE_SHA, retaining SHA/check/log diagnostics and bounded deterministic infrastructure retries (#226).
+- Keep paired root checkpoints for CODE_FAIL → implement and BEHIND/DIRTY → rebase in the same run/worktree/PR, guard transitions by the observed iteration and reauthorize CI after asynchronous completion (#226).
+- Deliver candidate-failure and diagnosed-wait evidence to the owning coordinator session and document the two return paths (#226).
+- Parse both root waiting-step tree connectors independently of the service locale, with bytewise-locale coverage for the complete CI reconciliation scenarios (#226).
+
 ## 0.3.58
 
 - Apply station defaults through coordinated admission, running/queued drain, TERM restart and next-enqueue concurrency verification; preserve admission closure and recovery barriers on failure (#255).

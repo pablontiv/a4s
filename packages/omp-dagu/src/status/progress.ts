@@ -172,6 +172,15 @@ export interface TransitionEffects {
   abortMessage?: string;
 }
 
+export interface CiDiagnostic {
+  iteration: number;
+  sha: string;
+  class: string;
+  check: string;
+  log: string;
+  cause: string;
+}
+
 interface State {
   status: string;
   step: string | undefined;
@@ -183,7 +192,7 @@ export class Transitions {
 
   constructor(private readonly sessionId?: string) {}
 
-  observe(run: RunDetails, options: { baseline?: boolean; slug?: string; checkpoints?: boolean } = {}): TransitionEffects {
+  observe(run: RunDetails, options: { baseline?: boolean; slug?: string; checkpoints?: boolean; ciDiagnostic?: CiDiagnostic } = {}): TransitionEffects {
     const key = topicFor(run);
     const previous = this.states.get(key);
     const terminalStep = run.nodes?.find(node => node.statusLabel === run.statusLabel)?.step.name;
@@ -206,9 +215,15 @@ export class Transitions {
         if (!node.step.humanTask || node.statusLabel !== "waiting") continue;
         const step = node.step.id ?? node.step.name;
         const iteration = node.approvalIteration ?? 0;
+        const ci = options.ciDiagnostic;
+        const returned = step === "implement" && ci?.class === "CODE_FAIL" && ci.iteration + 1 === iteration;
+        const diagnosed = ["await_ci", "await_merge"].includes(step) && ci?.class === "BLOCKED" && ci.iteration === iteration;
+        const ciCause = returned || diagnosed
+          ? ` ci=${plain(ci!.class)} sha=${plain(ci!.sha)} check=${plain(ci!.check)} cause=${plain(ci!.cause)} logs=${plain(ci!.log)}` : "";
         const cause = (step.endsWith("_primary_unavailable") || step.startsWith("recover_")) && node.step.humanTask.prompt
-          ? ` cause=${plain(node.step.humanTask.prompt)}` : "";
-        notice(JSON.stringify([key, step, iteration]),
+          ? ` cause=${plain(node.step.humanTask.prompt)}` : ciCause;
+        const noticeKey = diagnosed ? [key, step, "ci", ci!.sha, iteration, ci!.cause] : [key, step, iteration];
+        notice(JSON.stringify(noticeKey),
           `[DAGU STATE] run=${plain(run.dagRunId)} status=waiting step=${plain(step)}${identity}${bundleNotice} iteration=${iteration}${cause}`);
       }
       if (run.statusLabel === "succeeded") {
