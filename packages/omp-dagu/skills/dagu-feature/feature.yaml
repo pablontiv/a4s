@@ -36,6 +36,10 @@ params:
   - name: REQUIRED_CHECK
     type: string
     default: __REQUIRED_CHECK__
+  - name: VALIDATION
+    type: string
+    default: __VALIDATION__
+    enum: [__VALIDATION__]
   - name: OMP_SESSION_ID
     type: string
     default: ""
@@ -609,7 +613,7 @@ steps:
       if test -f "$STATE/candidate.json"; then
         old=$(jq -r .sha "$STATE/candidate.json")
         mkdir -p "$STATE/historical/$old"
-        for artifact in candidate.json diff.patch gate.json; do
+        for artifact in candidate.json diff.patch gate.json validation.json; do
           if test -f "$STATE/$artifact"; then mv "$STATE/$artifact" "$STATE/historical/$old/"; fi
         done
       fi
@@ -760,7 +764,7 @@ steps:
         after=$(git -C "$WORKTREE" rev-parse HEAD)
         if [[ "$before" != "$after" ]]; then
           mkdir -p "$STATE/historical/$before"
-          for artifact in candidate.json diff.patch gate.json; do
+          for artifact in candidate.json diff.patch gate.json validation.json; do
             if test -f "$STATE/$artifact"; then mv "$STATE/$artifact" "$STATE/historical/$before/"; fi
           done
           git -C "$WORKTREE" rev-parse "origin/$BASE_BRANCH" > "$STATE/base"
@@ -779,7 +783,7 @@ steps:
         git -C "$WORKTREE" update-ref "refs/heads/$BRANCH" "$base" "$before"
         git -C "$WORKTREE" read-tree "$base"
         mkdir -p "$STATE/historical/$before"
-        for artifact in candidate.json diff.patch gate.json; do
+        for artifact in candidate.json diff.patch gate.json validation.json; do
           if test -f "$STATE/$artifact"; then mv "$STATE/$artifact" "$STATE/historical/$before/"; fi
         done
         printf '%s\n' "$base" > "$STATE/base"
@@ -828,7 +832,9 @@ steps:
       fi
       test "$(git rev-parse HEAD)" = "$sha"
       jq -nc --arg sha "$sha" --arg gate "$GATE" '{sha:$sha,gate:$gate}' > "$STATE/gate.json"
-      printf 'tested_sha=%s\n' "$sha"
+      printf 'tested_sha=%s\n' "$sha" | tee -a "${DAGU_OUTPUT_FILE:-/dev/null}"
+    outputs:
+      - name: tested_sha
 
   - id: recover_gate
     depends: gate
@@ -842,10 +848,61 @@ steps:
       push_back:
         rewind_to: implement
 
-  - id: push
+  - id: validation
     depends: recover_gate
+    preconditions:
+      - condition: "${gate.exit_code}"
+        expected: "0"
+      - condition: "${steps.triage.outputs.POC}"
+        expected: "no"
+      - condition: '${VALIDATION}'
+        expected: 're:.+'
+    continue_on:
+      skipped: true
+    action: human.task
+    with:
+      prompt: |-
+        Repository: ${PRIMARY}
+        Run: ${RUN}; step: validation
+        Tested SHA: ${steps.gate.outputs.tested_sha}
+        Repository procedure:
+        ${VALIDATION}
+        Approve only this tested SHA after executing the procedure.
+        To reject, push back validation with --expected-iteration from current
+        dagu status and --input REASON='<operator reason>'; this rewinds to implement.
+        Dagu records an operator-attributed decision, not authenticated identity.
+      form:
+        type: object
+        additionalProperties: false
+        properties:
+          APPROVED:
+            type: string
+            enum: ['yes']
+          TESTED_SHA:
+            type: string
+            pattern: '^[a-f0-9]{40}$'
+        required: [APPROVED, TESTED_SHA]
+      push_back:
+        rewind_to: implement
+        form:
+          type: object
+          additionalProperties: false
+          properties:
+            REASON:
+              type: string
+              minLength: 1
+          required: [REASON]
+
+  - id: push
+    depends: validation
     continue_on:
       failure: true
+    preconditions:
+      - condition: "${steps.triage.outputs.POC}"
+        expected: "no"
+    env:
+      - APPROVED: ${steps.validation.outputs.APPROVED}
+      - TESTED_SHA: ${steps.validation.outputs.TESTED_SHA}
     run: |
       set -euo pipefail
       umask 0022
@@ -859,6 +916,15 @@ steps:
       test "$(git -C "$WORKTREE" rev-parse HEAD)" = "$sha"
       test -z "$(git -C "$WORKTREE" status --porcelain)"
       jq -e --arg sha "$sha" --arg gate "$GATE" '.sha == $sha and .gate == $gate' "$STATE/gate.json" >/dev/null
+      if [[ -n "${VALIDATION:-}" ]]; then
+        test "$APPROVED" = yes
+        if [[ "$TESTED_SHA" != "$sha" ]]; then
+          printf 'validation: approval SHA %s differs from tested candidate %s; return through gate and validation\n' "$TESTED_SHA" "$sha" >&2
+          exit 1
+        fi
+        jq -nc --arg sha "$sha" --arg procedure "$VALIDATION" \
+          '{sha:$sha,procedure:$procedure,approved:"yes"}' > "$STATE/validation.json"
+      fi
       remote_ref="refs/heads/$BRANCH"
       expected=$(git -C "$WORKTREE" ls-remote origin "$remote_ref" | cut -f1)
       git -C "$WORKTREE" push "--force-with-lease=$remote_ref:$expected" --set-upstream origin "$sha:$remote_ref"
