@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.89
+
+- Admission accepts lifecycle renders sealed at any patch release of the package's major/minor, so package patch merges no longer require re-sealing adopted DAGs; a different minor is still rejected.
+
 ## 0.3.88
 
 - Resolve quality guard and resource ownership PRIMARY through the adopted run snapshot, with historical parameter compatibility (#387).
