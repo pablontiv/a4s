@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.88
+
+- Resolve quality guard and resource ownership PRIMARY through the adopted run snapshot, with historical parameter compatibility (#387).
+- Accept repeated session initialization for an identical agent/task identity after plugin reloads, preserving the first invocation timestamp for freshness checks (#387).
+
 ## 0.3.87
 
 - Keep `npm test` in-process with an explicit shared opt-in gate for real Dagu commands; run isolated Dagu integrations through `npm run test:live` and the pinned-runtime CI job.

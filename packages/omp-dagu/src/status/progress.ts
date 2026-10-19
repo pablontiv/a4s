@@ -36,6 +36,9 @@ const plain = (text: string): string => text.replace(/[\x00-\x1f\x7f-\x9f]/g, " 
 
 export function runParam(run: RunDetails, name: string): string | undefined {
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // Dagu CLI history delimits values by the next parameter, so paths may contain spaces.
+  const cli = run.params?.match(new RegExp(`(?:^| )${escaped}=(.*?)(?= [A-Z_]+=|$)`))?.[1];
+  if (cli !== undefined) return cli.replace(/^(['"])(.*)\1$/, "$2");
   return run.params?.match(new RegExp(
     `(?:^|[\\s"{,])${escaped}(?:["']?\\s*[:=]\\s*["']?)([^\\s"',}]+)(?=$|[\\s"',}])`,
   ))?.[1];

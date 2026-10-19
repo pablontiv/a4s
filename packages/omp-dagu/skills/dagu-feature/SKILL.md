@@ -709,10 +709,11 @@ and retain its allocated id as `IMPLEMENTER` in the completion form.
 
 Each correction after a quality push-back requires a newly allocated implementer
 subagent named `Implement<ISSUE>v<N>`, with a fresh name for each attempt, like
-QA/reviewer retries. A fresh subagent keeps one `session_init` in its transcript:
-reviving a parked subagent appends a second `session_init`, which the guard
-rejects as `ambiguous session identity`. Supply the new allocated id as
-`IMPLEMENTER` when completing the corrected delivery.
+QA/reviewer retries. The guard accepts repeated `session_init` rows for an
+identical agent and task, including plugin reloads, and uses the first init
+timestamp to verify invocation freshness. Each transcript must retain one
+agent/task identity. Supply the new allocated id as `IMPLEMENTER` when
+completing the corrected delivery.
 
 - Leave real-`DAGU_HOME` `dagu human-task` transitions, pushes, PR creation and
   GitHub comments to the coordinator and DAG. Leave `omp plugin link` and
