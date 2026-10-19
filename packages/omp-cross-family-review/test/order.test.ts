@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import crossFamilyReview, { bindQualityImplementer } from "../src/index.ts";
+import type * as CrossFamilyModule from "../src/index.ts";
 import { orderReviewModels } from "../src/order.ts";
 import type {
   FamilyReference,
@@ -196,6 +197,17 @@ test("quality routing compares only the runtime-effective implementer", () => {
     const result = spawn({ agent, spawnKey: agent, patterns: ["gpt", "opus", "gemini"] }, { models: facade() });
     assert.deepEqual(result?.model, ["opus", "gemini", "@slow"]);
   }
+});
+
+test("quality bindings reach the hook from a separately loaded module instance", async () => {
+  // OMP loads each extension graph with its own query tag, so @a4s/omp-dagu binds
+  // through a different instance of this module than the registered hook; a
+  // dynamic import with a distinct query reproduces that loading boundary.
+  const binder: typeof CrossFamilyModule = await import(`../src/index.ts?instance=${Date.now()}`);
+  assert.notEqual(binder.bindQualityImplementer, bindQualityImplementer);
+  binder.bindQualityImplementer("SeparateQA", gpt);
+  const result = spawn({ agent: "qa", spawnKey: "SeparateQA", patterns: ["gpt", "opus"] }, { models: facade() });
+  assert.deepEqual(result?.model, ["opus", "@slow"]);
 });
 
 test("strict eligibility resolves alternatives when a primary is unavailable", () => {
