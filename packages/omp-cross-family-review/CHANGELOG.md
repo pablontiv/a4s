@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.1
+
+- Apply parent-relative cross-family model selection to the structured planning reviewer (#292).
+
 ## Unreleased
 
 - Share quality implementer bindings across module instances so the spawn hook sees bindings made by `@a4s/omp-dagu`, which OMP loads as a separate extension graph (#374).

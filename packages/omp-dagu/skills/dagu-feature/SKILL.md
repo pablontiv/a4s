@@ -185,7 +185,7 @@ linked observations, never by rewriting admission history. A new deployment
 applies only to new run IDs.
 
 Changing any distributed template (`feature.yaml`, `poc.yaml`, `discovery.yaml`,
-`reconcile.yaml`, or `dagu-feature-bootstrap.yaml`) or this `SKILL.md` requires
+`planning.yaml`, `reconcile.yaml`, or `dagu-feature-bootstrap.yaml`) or this `SKILL.md` requires
 a package version greater than the PR merge-base version on `origin/main` and
 a matching `## <version>` section in `CHANGELOG.md`. `npm test` enforces this
 for committed and local tracked changes, fetching main and ancestry when CI
@@ -247,10 +247,10 @@ The steps:
 | `detect` | Checks `git`, `gh` (authenticated), `jq` and the exact required `dagu version`; reads package/version, source commit and source `origin`; fetches and requires that clean package commit on the remote default branch; reads repository settings and the installed DAG values and stamps. |
 | `answers` | `human.task` that shows the current stamp, `GATE`, `REQUIRED_CHECK`, `TEST_PATHS` and `REBASE_RESOLVER`, then asks for those four values. Select the test-path ERE and resolver from the repository's actual conventions. |
 | `worktrees` | Makes git ignore `.workspace/worktrees/`. When nothing ignores it yet, appends `/.workspace/worktrees/` to the clone's `info/exclude`, so the primary stays clean without a commit. |
-| `render` | Writes stamped and validated `feature.yaml`, `poc.yaml`, `discovery.yaml`, and `reconcile.yaml` under `<git-dir>/dagu-feature/`, keeping PRIMARY clean. Discovery receives the coordinating workspace label and derives the diagnosed repository from its `PRIMARY`. |
+| `render` | Writes stamped and validated `feature.yaml`, `poc.yaml`, `discovery.yaml`, `planning.yaml`, and `reconcile.yaml` under `<git-dir>/dagu-feature/`, keeping PRIMARY clean. Discovery and planning receive the coordinating workspace label and resolve the target repository from `PRIMARY`. |
 | `reconcile` | Idempotently installs the stamped staged `reconcile.yaml` to `$DAGU_HOME/dags/reconcile.yaml` (`DAGU_HOME` defaults to `~/.dagu`) and validates it. One user-level DAG serves every adopting repository. |
 | `github` | Enables auto-merge and squash merge, and adds `REQUIRED_CHECK` as a strict required status check on the default branch. It keeps the existing contexts and every other protection setting. When it has to recreate the protection, it reads the protection back and fails if any other setting changed. |
-| `confirm` | Reads settings back, validates the three staged repository DAGs, compares the installed reconciler with its stamped render, and prints the bundle identity plus the three adoption commit trailers. |
+| `confirm` | Reads settings back, validates the four staged repository DAGs, compares the installed reconciler with its stamped render, and prints the bundle identity plus the three adoption commit trailers. |
 
 Answer the form after `detect` succeeds, reusing the current values shown in its
 prompt during an upgrade. Choose `GATE` from the repository's documented local
@@ -265,7 +265,7 @@ dagu human-task complete --run-id "bootstrap-<repo>-v<version-with-hyphens>" --s
 
 The bootstrap is done when the run is `Succeeded`. To adopt or upgrade, open a
 self-contained adoption issue and enqueue the staged `feature.yaml` for that
-issue. The adoption commit copies all three staged repository DAGs and includes the exact three
+issue. The adoption commit copies all four staged repository DAGs and includes the exact three
 trailers printed by `confirm`: `Dagu-Feature-Bundle`,
 `Dagu-Feature-Source`, and `Dagu-Feature-Bootstrap`. The bootstrap does not
 write CI; an initial adoption adds the workflow that publishes
@@ -275,10 +275,14 @@ write CI; an initial adoption adds the workflow that publishes
 
 Open an issue in the repository to adopt the lifecycle. Enqueue it as described below, but pass the staged file (`$(git rev-parse --git-path dagu-feature/feature.yaml)`) instead of `.workspace/dagu/dags/feature.yaml`, which does not exist yet. In `implement`, deliver files for Dagu to capture in one commit that:
 
-- copies the three staged files to `.workspace/dagu/dags/feature.yaml`, `.workspace/dagu/dags/poc.yaml` and `.workspace/dagu/dags/discovery.yaml`;
+- copies the four staged files to `.workspace/dagu/dags/feature.yaml`, `.workspace/dagu/dags/poc.yaml`, `.workspace/dagu/dags/discovery.yaml` and `.workspace/dagu/dags/planning.yaml`;
 - adds the CI job that publishes `REQUIRED_CHECK`, if none exists yet.
 
 Once that run is `Succeeded`, every later issue enqueues `.workspace/dagu/dags/feature.yaml` from the primary checkout.
+
+## Planning
+
+Use [dagu-planning](../dagu-planning/SKILL.md) to convert a locally approved OMP plan into reviewed issues. Bootstrap stages `planning.yaml` as the fourth repository DAG. It waits at `plan`, `review` and `approve`; invalid units or a review requesting changes rewind to `plan` with the observed run-wide iteration. Only operator approval authorizes materialization and feature/PoC enqueueing.
 
 ## Descubrimiento continuo
 
@@ -511,7 +515,7 @@ Keep recovery inside Dagu's lifecycle.
 Issue every `dagu human-task complete` in its own `bash` call: the triage guard
 blocks the entire command containing the completion.
 
-The `@a4s/omp-dagu` status extension delivers hidden model context for every waiting human task in `feature`, `poc` and `discovery`, and for final `succeeded`. Waiting notices have the form `[DAGU STATE] run=<id> status=waiting step=<step> <issue=<issue>|dag=<dag>> bundle=<version|unstamped> extension=<version> main=<version|unknown|n/a> compat=<ok|stale|incompatible|unstamped> iteration=<approvalIteration>`. Success uses `status=succeeded` with run identity and bundle fields; feature/discovery failures and aborts include their terminal step. The persisted Dagu event log recovers openings missed by SSE; deduplication uses DAG, run, step and approval iteration (omitted means zero), or run/status for success. An owner-session FIFO starts one autonomous turn at a time while idle and delivers asides during an active turn. The initial sweep is a silent baseline. Notices start or continue coordinator turns without rendering in chat and report run state rather than user instructions.
+The `@a4s/omp-dagu` status extension delivers hidden model context for every waiting human task in `feature`, `poc`, `discovery` and `planning`, and for final `succeeded`. Waiting notices have the form `[DAGU STATE] run=<id> status=waiting step=<step> <issue=<issue>|dag=<dag>> bundle=<version|unstamped> extension=<version> main=<version|unknown|n/a> compat=<ok|stale|incompatible|unstamped> iteration=<approvalIteration>`. Success uses `status=succeeded` with run identity and bundle fields; feature/discovery/planning failures and aborts include their terminal step. The persisted Dagu event log recovers openings missed by SSE; deduplication uses DAG, run, step and approval iteration (omitted means zero), or run/status for success. An owner-session FIFO starts one autonomous turn at a time while idle and delivers asides during an active turn. The initial sweep is a silent baseline. Notices start or continue coordinator turns without rendering in chat and report run state rather than user instructions.
 
 - On a `triage` notice, the coordinator obtains the guard generation marker and launches `task agent=triage-reviewer` itself with that marker and the fixed prompt, naming the subagent `TriageReview<ISSUE>` (or `TriageReview<ISSUE>v<N>` for a retry). Several `triage-reviewer` tasks may share one batched `task` call; each task includes its own run's generation marker. The coordinator completes `triage` with that allocated reviewer ID. A `dependency_review` push-back produces a new `triage` notice and the coordinator repeats this flow for the new generation.
 - At `run_poc`, the coordinator launches the PoC subagent as `Poc<ISSUE>`.
