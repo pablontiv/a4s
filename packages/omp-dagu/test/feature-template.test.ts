@@ -8,6 +8,7 @@ import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
+import crossFamilyReview from "@a4s/omp-cross-family-review";
 import { Transitions } from "../src/status/progress.ts";
 import type { RunDetails } from "../src/status/progress.ts";
 import { BUNDLE_VERSION } from "../src/bundle.ts";
@@ -314,11 +315,19 @@ test("quality completion hook validates provenance and persists independent evid
     } })));
     const ctx = { cwd: repo.primary, sessionManager: { getSessionDir: () => dirname(fixture.parent) }, models: fixture.models };
     const routed = await qualityDecision({ toolName: "task", toolCallId: "quality-spawn", input: {
-      tasks: [{ name: "NewQA", agent: "qa", model: ["openai-codex/effective", "anthropic/alternate"],
-        task: qualityMarker(fixture.request, "qa") }],
+      tasks: [{ name: "NewQA", agent: "qa", task: qualityMarker(fixture.request, "qa") }],
     } }, ctx);
     assert.ok(routed && "input" in routed);
-    assert.deepEqual(routed.input.tasks[0].model, ["anthropic/alternate"]);
+    assert.equal("model" in routed.input.tasks[0], false);
+    assert.ok(routed.input.tasks[0].outputSchema);
+    let spawnHook: ((event: { agent: string; patterns: string[]; spawnKey?: string }, ctx: { models: unknown }) => { model?: string[] } | undefined) | undefined;
+    crossFamilyReview({ on: (_event: string, handler: typeof spawnHook) => { spawnHook = handler; } } as never);
+    // The coordinator shares the reviewer's family, so only the bound implementer
+    // admits that family; OMP keys a nested, renamed async spawn as `parent.name-N`.
+    const coordinator = { ...fixture.models, current: () => ({ provider: "anthropic", id: "alternate", lineage: "canonical-anthropic" }) };
+    const selected = spawnHook!({ agent: "qa", spawnKey: "Parent.NewQA-2", patterns: ["openai-codex/effective", "anthropic/alternate"] }, { models: coordinator });
+    assert.deepEqual(selected?.model?.[0], "anthropic/alternate");
+    assert.ok(selected?.model?.every(spec => fixture.models.resolve(spec)?.provider !== "openai-codex"));
     const event = { toolName: "bash", toolCallId: "complete-quality", input: {
       command: "dagu human-task complete feature --run-id test-run --step quality_review --input QA=QATest --input REVIEW=ReviewTest",
     } };
