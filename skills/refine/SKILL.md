@@ -7,7 +7,7 @@ description: Refine a supplied need into an evidence-backed ticket and offer imm
 
 Turn one need into a well-founded ticket. Investigate the need, surface material inconsistencies, resolve them with the user, stage one temporary canonical ticket, and offer to materialize it immediately.
 
-Run only when the user explicitly invokes `/refine` with a need.
+Run when the user explicitly invokes `/refine` with a need, or when the `sprint-retrospective` skill supplies a process incident (including a report from another session) with its evidence as the need.
 
 ## Boundaries
 

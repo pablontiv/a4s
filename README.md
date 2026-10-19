@@ -18,14 +18,19 @@ Los plugins de Claude están publicados en [`.claude-plugin/marketplace.json`](.
 
 Los agentes para Pi, Claude y Superpowers están en [`agents/`](agents/).
 
-## Refine
+## Ceremonias del sprint
 
-- Skill: [`skills/refine/SKILL.md`](skills/refine/SKILL.md)
-- Configuración: [`.workspace/config/refine.json`](.workspace/config/refine.json)
+Una sesión coordinadora es un sprint. Cada responsabilidad tiene su skill:
 
-## Sprint
+| Responsabilidad | Skill | Responsable |
+|---|---|---|
+| Refinement: una necesidad o un incidente se convierte en un ticket | [`skills/refine/SKILL.md`](skills/refine/SKILL.md) (configuración: [`.workspace/config/refine.json`](.workspace/config/refine.json)) | La sesión investiga; el operador responde y acepta |
+| Sprint Planning: objetivo, checks, orden y encolado en Dagu | [`skills/sprint-planning/SKILL.md`](skills/sprint-planning/SKILL.md) | La sesión propone; el operador confirma |
+| Definition of Done: decide con evidencia si un issue está hecho | [`skills/definition-of-done/SKILL.md`](skills/definition-of-done/SKILL.md) | La sesión |
+| Sprint Review: checks y Definition of Done al final del sprint | [`skills/sprint-review/SKILL.md`](skills/sprint-review/SKILL.md) | La sesión ejecuta; el operador acepta o cambia el objetivo |
+| Sprint Retrospective: incidentes y reportes de otras sesiones entran por `refine` | [`skills/sprint-retrospective/SKILL.md`](skills/sprint-retrospective/SKILL.md) | La sesión propone; el operador confirma |
 
-- Skill: [`skills/sprint/SKILL.md`](skills/sprint/SKILL.md): una sesión es un sprint. Sprint Planning ordena los issues de la sesión (Sprint Goal) o de todo el backlog (Product Goal) contra un objetivo confirmado por el operador y verificado con checks de sí o no, y encola el Sprint Backlog en Dagu. Define la Definition of Done, el Sprint Review, la Retrospective y la entrada de reportes de otras sesiones por `refine`. La sesión decide el orden; Dagu ejecuta la cola.
+La sesión decide el orden; Dagu ejecuta la cola.
 
 ## Skills de coste
 
