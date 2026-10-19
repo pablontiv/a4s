@@ -1,4 +1,4 @@
-import { readFileSync, statSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   BUNDLE_VERSION,
@@ -80,23 +80,18 @@ export function runBundleState(run: RunDetails): {
   let mainVersion = "unknown";
   let mainApplicable = true;
   if (primary) {
-    const manifestPath = join(primary, "packages/omp-dagu/package.json");
     try {
-      statSync(manifestPath);
+      const manifest: unknown = JSON.parse(readFileSync(join(primary, "packages/omp-dagu/package.json"), "utf8"));
+      if (manifest && typeof manifest === "object" && "version" in manifest
+        && typeof manifest.version === "string" && parseVersion(manifest.version)) {
+        mainVersion = manifest.version;
+      }
     } catch (error) {
+      // An absent manifest marks a consumer repository; any other failure cannot establish exact version equality.
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
         mainApplicable = false;
         mainVersion = "n/a";
       }
-    }
-    if (mainApplicable) {
-      try {
-        const manifest: unknown = JSON.parse(readFileSync(manifestPath, "utf8"));
-        if (manifest && typeof manifest === "object" && "version" in manifest
-          && typeof manifest.version === "string" && parseVersion(manifest.version)) {
-          mainVersion = manifest.version;
-        }
-      } catch { /* An unreadable primary manifest cannot establish exact version equality. */ }
     }
   }
   const compatibility = classifyCompatibility(version, BUNDLE_VERSION);
