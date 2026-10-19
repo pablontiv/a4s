@@ -21,12 +21,15 @@
   },
   "pi": {
     "extensions": [
-      "./src/index.ts"
+      "./src/reloadable.ts"
     ]
   },
   "scripts": {
     "test": "tsx --test test/*.test.ts",
     "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@a4s/omp-hot-reload": "0.1.0"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",

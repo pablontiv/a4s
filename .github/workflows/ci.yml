@@ -33,15 +33,14 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          all='["context-expert","orca-omp-integration","omp-dagu","synagent","synagent-bus","omp-cross-family-review","pi-tool-row-presentation"]'
-          # Paths under packages/<dir> select that workspace; any other path selects all.
-          # No @a4s/* workspace depends on another, so no transitive closure is needed.
+          all='["context-expert","orca-omp-integration","omp-dagu","synagent","synagent-bus","omp-cross-family-review","pi-tool-row-presentation","omp-hot-reload"]'
+          # Paths under packages/<dir> select that workspace; shared helper changes select all consumers.
           if [[ "$EVENT_NAME" == pull_request ]]; then
             files=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files" --paginate --jq '.[].filename') \
               || files=$(git diff --name-only HEAD^1 HEAD)
             names=$(printf '%s\n' "$files" | jq -Rsc --argjson all "$all" '
               split("\n") | map(select(length > 0)) |
-              if any(.[]; startswith("packages/") | not) then $all
+              if any(.[]; (startswith("packages/") | not) or startswith("packages/omp-hot-reload/")) then $all
               else map(if startswith("packages/synagent/core/") then "synagent"
                 elif startswith("packages/synagent/bus/") then "synagent-bus"
                 else split("/")[1] end) | unique end')
@@ -49,7 +48,7 @@ jobs:
             names=$all
           fi
           # @a4s/pi-tool-row-presentation typechecks against @pablontiv/pion, which CI does not install.
-          workspaces=$(jq -cn --argjson names "$names" '$names | map({name: ("@a4s/" + .), typecheck: (. == "context-expert" or . == "orca-omp-integration" or . == "omp-dagu" or . == "synagent" or . == "synagent-bus")})')
+          workspaces=$(jq -cn --argjson names "$names" '$names | map({name: ("@a4s/" + .), typecheck: (. == "omp-hot-reload" or . == "context-expert" or . == "orca-omp-integration" or . == "omp-dagu" or . == "synagent" or . == "synagent-bus")})')
           echo "workspaces=$workspaces" >> "$GITHUB_OUTPUT"
   test:
     needs: changes
