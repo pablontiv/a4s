@@ -37,7 +37,11 @@ flowchart LR
     FR -->|healthy: skipped| G[pr]
     G --> I[auto_merge]
     I --> J[await_merge<br/>human.task<br/>queue slot released]
-    J -->|MERGED: complete| K[close_gate]
+    I --> CI[await_ci<br/>human.task<br/>queue slot released]
+    CI -->|CODE_FAIL: push-back| B
+    CI -->|MERGED + PASS: complete| V[authorize_ci]
+    J -->|MERGED + PASS: complete| V
+    V --> K[close_gate]
     J -->|BEHIND or DIRTY: push-back| D
     K --> L[handler_on.exit cleanup]
 ```
@@ -377,7 +381,7 @@ Use `close_primary_unavailable` for closing, or DAG `poc` and
 `base_primary_unavailable` for a PoC. Push-back rewinds to the detector; a still
 unavailable primary waits again, while a clean primary skips the checkpoint and
 continues in the same run. Cleaning alone leaves it Waiting. The DAG owns worktree
-creation/removal and BASE_SHA capture. `await_merge` remains reconciler-owned.
+creation/removal and BASE_SHA capture. `await_ci` and `await_merge` remain reconciler-owned.
 PRIMARY must still be the main clone, not a linked worktree. Feature `start_gate`
 fetch and ff-only failures wait at `recover_start_gate`: the operator restores
 remote access or reconciles commits preserving their work, then pushes back to
@@ -538,7 +542,7 @@ A turn started by a `[DAGU STATE]` notice that only advances checkpoints complet
 |---|---|
 | Done | What this turn did, per run: run ID and issue, checkpoints completed, PR, tested SHA, verdict or comment URLs. |
 | Pending | What remains, per run: the current step and state (`queued`, `running`, `waiting <step>`) and who moves it next: this session, a subagent, the scheduled reconciler, or the operator. |
-| Blockers and decisions | Failed steps, `unreconciled` and `ORPHAN` observations, push-backs, and every choice that belongs to the operator, each with its evidence (log path, comment URL, observation). |
+| Blockers and decisions | Failed steps, `BLOCKED` and `ORPHAN` observations, push-backs, and every choice that belongs to the operator, each with its evidence (log path, comment URL, observation). |
 | Proposals | For each blocker or decision: the recommended action with the exact command or input that applies it, and the alternative with its tradeoff. |
 
 Every emitted report contains all four sections; a section with no entries says `none`. A turn that reaches a human task owned by the operator emits the report because it requires an operator decision.
@@ -747,7 +751,7 @@ dependency checkpoint automatically completes or returns to triage. A clean
 rebase makes the wait handler complete `conflict_review`; a conflicting rebase
 records the conflict paths, preserves the delivery with conflict markers, and
 pushes back to `implement`. After `auto_merge` requests guarded auto-merge for the tested SHA,
-the run waits at `await_merge` and releases the repository queue slot. GitHub
+the run waits at `await_ci` and `await_merge`, releasing the repository queue slot. GitHub
 merges only after the required check succeeds. `pr` creates the PR with `--fill`
 and the body `Closes #<issue>`, so the commit message becomes the PR title.
 Write it in the repository's commit convention.
@@ -981,18 +985,41 @@ PoC history rows remain associated with their `dagRunId` even when optional `BRA
 
 `tick` and `leftovers` both depend on `discover`, so waiting feature runs are reconciled independently of leftover detection. A leftover or detection error still makes the overall DAG `Failed`, including when no feature runs are waiting. `discover` passes each waiting feature run to the local `reconcile-run` sub-DAG through `tick` with `max_concurrent: 1`. A precondition skips only this fan-out when `discover` found no waiting runs. `observe` reads the waiting step and push-back iteration from `dagu status`, resolves the repository from `PRIMARY`, and reads the PR with `gh pr view` (or the issue for other waiting steps). It publishes the observation as step outputs.
 
-The scheduled DAG owns `await_merge` transitions. Each row is a step depending on `observe`, selected by a precondition on its `observation` output:
+The scheduled DAG owns the paired root checkpoints `await_ci` (rewind to
+`implement`) and `await_merge` (rewind to `rebase`). Both open after `auto_merge`
+and release the repository queue slot. Keeping both destinations open lets a
+later CI failure or merge conflict select its own static ancestor without
+changing run, branch, worktree or PR. Each tick reobserves `Waiting`, the current
+run-wide push-back iteration (default `0`), PR head SHA and all published required
+checks. Check-runs and legacy statuses are queried through the current commit
+endpoint; conclusions alone do not identify a failure's cause.
 
-| Step | Observation precondition | Transition |
-|---|---|---|
-| `complete` | `await_merge MERGED/…` | Completes the checkpoint. `close_gate` verifies the merged head, successful required check and tested SHA, fast-forwards the clean primary checkout to `origin/$BASE_BRANCH`, removes and verifies the run worktree, and removes and verifies both local and remote run branches. |
-| `push_back` | `await_merge OPEN/` with `BEHIND` or `DIRTY` | Pushes back with the observed `--expected-iteration`. A PR born `DIRTY` reaches `await_merge`; the same run resumes at `rebase`, continues through `conflict_review`, reruns the gate, pushes the tested SHA, and requests guarded auto-merge again. |
-| `keep_waiting` | `await_merge OPEN/` with `CLEAN`, `BLOCKED`, `UNSTABLE` or `UNKNOWN`, and auto-merge active | Records that the PR remains waiting for a later tick while GitHub waits for the required check to succeed. `UNSTABLE` can include a pending or failing non-required check. |
-| `unreconciled` | `await_merge CLOSED/…`; `OPEN/` with `DRAFT` or `HAS_HOOKS`; or `OPEN/` with `CLEAN`, `BLOCKED`, `UNSTABLE` or `UNKNOWN` and auto-merge inactive | Fails the sub-run with the observation on stderr while the feature run remains waiting. The sub-run logs provide the failure evidence. |
+| Classification | Evidence and transition |
+|---|---|
+| `PENDING` | Required checks queued, running or not yet published: reobserve next tick. |
+| `PASS` | Every required check succeeded, was neutral or was skipped for this head: continue merge observation. `MERGED` completes one waiting checkpoint per tick. |
+| `CODE_FAIL` | Check output or Actions logs show a candidate test, assertion, build, TypeScript or lint failure: push back `await_ci` to `implement` with the observed `--expected-iteration`. |
+| `TRANSIENT` | Logs identify runner loss, action download, network or HTTP infrastructure failure: rerun the failed Actions jobs deterministically, with at most two requests per head and 60/120-second backoff. The per-head budget survives ticks and changing check order; exhausted or unavailable reruns become diagnosed `BLOCKED`. |
+| `BLOCKED` | Lookup/permission failure, protection/operator action, inactive auto-merge, closed PR or unproven failure cause: preserve the wait and deliver the cause to the owner session. |
+| `STALE_SHA` | Checks belong to another SHA, or the head moved during observation: discard that signal and query the current head next tick. |
 
-`observe` reads `push-back iteration: <n>` from the status output, defaulting to `0` when that line is absent. The value is the run-wide counter shared by all `human.task` steps, and every push-back increments it. The expected-iteration guard makes a stale observation fail with a conflict while preserving the checkpoint.
+`OPEN/BEHIND` and `OPEN/DIRTY` retain priority for the `await_merge → rebase`
+return. A transition rereads `Waiting`, checkpoint, iteration and head immediately
+before its side effect. Dagu atomically rejects stale push-back iterations.
+Completion has no expected-iteration flag; after both checkpoints complete,
+`authorize_ci` rereads all required checks through the published candidate's SHA
+and fails closed before closing if that SHA or its successful checks changed.
 
-The `orphan` step selects `triage` or `implement` observations whose issue is `CLOSED`. It reports `ORPHAN <repo>#<issue> <run> <step> issue=CLOSED closed_at=<timestamp>` and leaves the run unchanged. Inspect the scheduled `reconcile` history and its sub-run logs for transitions, unreconciled states, and orphan reports.
+Evidence is stored under `<git-dir>/dagu-feature/runs/<RUN>/ci-observation.json`,
+binding repository, run, PR, worktree, checkpoint, iteration, SHA, check, cause
+and a bounded log excerpt. `ci-return.json` preserves CODE_FAIL evidence across
+the rewind. The owning OMP session's new `Waiting implement` notice includes
+that SHA/check/log excerpt; diagnosed waits also send a deduplicated cause.
+The coordinator delegates the correction in the same worktree and single PR.
+`close_gate` then verifies the merged candidate, fast-forwards clean PRIMARY
+and removes the managed worktree and branches.
+
+The `orphan` step selects `triage` or `implement` observations whose issue is `CLOSED`. It reports `ORPHAN <repo>#<issue> <run> <step> issue=CLOSED closed_at=<timestamp>` and leaves the run unchanged. Inspect the scheduled `reconcile` history and its sub-run logs for classifications, transitions, diagnosed waits and orphan reports.
 
 ## Finish
 

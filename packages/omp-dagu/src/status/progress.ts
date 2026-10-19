@@ -183,6 +183,15 @@ export interface TransitionEffects {
   warningMessage?: string;
 }
 
+export interface CiDiagnostic {
+  iteration: number;
+  sha: string;
+  class: string;
+  check: string;
+  log: string;
+  cause: string;
+}
+
 interface State {
   status: string;
   step: string | undefined;
@@ -194,7 +203,7 @@ export class Transitions {
 
   constructor(private readonly sessionId?: string) {}
 
-  observe(run: RunDetails, options: { baseline?: boolean; slug?: string; checkpoints?: boolean } = {}): TransitionEffects {
+  observe(run: RunDetails, options: { baseline?: boolean; slug?: string; checkpoints?: boolean; ciDiagnostic?: CiDiagnostic } = {}): TransitionEffects {
     const key = topicFor(run);
     const previous = this.states.get(key);
     const terminalStep = run.nodes?.find(node => node.statusLabel === run.statusLabel)?.step.name;
@@ -217,9 +226,14 @@ export class Transitions {
         if (!node.step.humanTask || node.statusLabel !== "waiting") continue;
         const step = node.step.id ?? node.step.name;
         const iteration = node.approvalIteration ?? 0;
+        const ci = options.ciDiagnostic;
+        const returned = step === "implement" && ci?.class === "CODE_FAIL" && ci.iteration + 1 === iteration;
+        const diagnosed = ["await_ci", "await_merge"].includes(step) && ci?.class === "BLOCKED" && ci.iteration === iteration;
+        const ciCause = returned || diagnosed
+          ? ` ci=${plain(ci!.class)} sha=${plain(ci!.sha)} check=${plain(ci!.check)} cause=${plain(ci!.cause)} logs=${plain(ci!.log)}` : "";
         const causeText = (step.endsWith("_primary_unavailable") || step.startsWith("recover_")) ? node.step.humanTask.prompt
           : run.name === "poc" && step === "run_poc" && iteration > 0 ? run.scopeFailureCause : undefined;
-        const cause = causeText ? ` cause=${plain(causeText)}` : "";
+        const cause = causeText ? ` cause=${plain(causeText)}` : ciCause;
         const validation = run.name === "feature" && step === "validation";
         const prompt = node.step.humanTask.prompt ?? "";
         const sha = prompt.match(/Tested SHA: ([a-f0-9]{40})\b/)?.[1];
@@ -229,7 +243,8 @@ export class Transitions {
             + `Approve: dagu human-task complete feature --run-id ${quote(run.dagRunId)} --step validation --input APPROVED=yes --input TESTED_SHA=${quote(sha ?? "<tested-sha unavailable; inspect dagu status>")}\n`
             + `Push back: dagu human-task push-back feature --run-id ${quote(run.dagRunId)} --step validation --expected-iteration ${iteration} --input REASON='<operator reason>'`
           : "";
-        notice(JSON.stringify([key, step, iteration]),
+        const noticeKey = diagnosed ? [key, step, "ci", ci!.sha, iteration, ci!.cause] : [key, step, iteration];
+        notice(JSON.stringify(noticeKey),
           `[DAGU STATE] run=${plain(run.dagRunId)} status=waiting step=${plain(step)}${identity}${bundleNotice} iteration=${iteration}${cause}${validationNotice}`);
       }
       if (run.statusLabel === "succeeded") {
