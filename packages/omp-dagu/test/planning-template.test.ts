@@ -1,3 +1,4 @@
+import { liveDagu } from "./fixtures/live-dagu.ts";
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
@@ -200,9 +201,8 @@ async function port(): Promise<number> {
   await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
   return address.port;
 }
-const version = spawnSync("dagu", ["version"], { encoding: "utf8" });
 test("isolated real Dagu rewinds invalid plans and revise findings, then approves and disposes", {
-  skip: version.status !== 0 || version.stdout.trim() !== "2.20.1" ? "Dagu 2.20.1 required" : false,
+  ...liveDagu,
   timeout: 240_000,
 }, async () => {
   const realDagu = execFileSync("which", ["dagu"], { encoding: "utf8" }).trim();

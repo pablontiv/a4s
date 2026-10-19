@@ -1,3 +1,4 @@
+import { liveDagu } from "./fixtures/live-dagu.ts";
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -194,9 +195,8 @@ test("feature render keeps the repository resolver and all step bodies in templa
   for (const id of ["rebase", "conflict_review", "gate", "push"]) assert.equal(step(source, id), step(render, id));
 });
 
-const dagu = spawnSync("dagu", ["version"], { encoding: "utf8" });
 test("isolated Dagu rebases colliding candidates before gate and publishes the normalized SHA", {
-  skip: dagu.status !== 0 || !/2\.20\.1/.test(dagu.stdout) ? "Dagu 2.20.1 binary required" : false,
+  ...liveDagu,
   timeout: 150_000,
 }, async () => {
   const repo = fixture();

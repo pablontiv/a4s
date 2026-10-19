@@ -6,7 +6,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { admissionFixture, isolatedDagu } from "./fixtures/admission.ts";
+import { admissionFixture } from "./fixtures/admission.ts";
+import { liveDagu } from "./fixtures/live-dagu.ts";
 
 import { BUNDLE_VERSION } from "../src/bundle.ts";
 const cli = fileURLToPath(new URL("../bin/dagu-feature-bundle.ts", import.meta.url));
@@ -79,7 +80,7 @@ test("CLI exits nonzero for unstamped repository DAGs", () => {
   }
 });
 
-test("admission rejects adopted policy parameters before reserving a receipt", isolatedDagu, () => {
+test("admission rejects adopted policy parameters before reserving a receipt", liveDagu, () => {
   const fixture = admissionFixture();
   try {
     for (const parameter of ["GATE=true", "REBASE_RESOLVER=true", "REQUIRED_CHECK=arbitrary", "PRIMARY=/foreign/clone", "BRANCH=off-pattern"]) {
@@ -100,7 +101,7 @@ test("admission rejects adopted policy parameters before reserving a receipt", i
   } finally { fixture.dispose(); }
 });
 
-test("admission rejects package 0.3.1 / DAG 0.2.0 before Dagu creates a run", isolatedDagu, () => {
+test("admission rejects package 0.3.1 / DAG 0.2.0 before Dagu creates a run", liveDagu, () => {
   const fixture = admissionFixture();
   try {
     fixture.render("feature.yaml", fixture.dag, "0.2.0");
@@ -114,7 +115,7 @@ test("admission rejects package 0.3.1 / DAG 0.2.0 before Dagu creates a run", is
   } finally { fixture.dispose(); }
 });
 
-test("admission requires exact bundle versions across patch releases", isolatedDagu, () => {
+test("admission requires exact bundle versions across patch releases", liveDagu, () => {
   const fixture = admissionFixture();
   try {
     for (const version of ["0.3.0", "0.3.2"]) {
@@ -126,7 +127,7 @@ test("admission requires exact bundle versions across patch releases", isolatedD
   } finally { fixture.dispose(); }
 });
 
-test("compatible admission enqueues exact bytes and keeps historical receipt across redeployment", isolatedDagu, () => {
+test("compatible admission enqueues exact bytes and keeps historical receipt across redeployment", liveDagu, () => {
   const fixture = admissionFixture();
   const run = `compatible-${randomUUID()}`;
   const redeployedRun = `after-redeploy-${randomUUID()}`;
@@ -169,7 +170,7 @@ test("compatible admission enqueues exact bytes and keeps historical receipt acr
   } finally { fixture.dispose(); }
 });
 
-test("admission rejects unreadable, ambiguous, forged render and stale loaded identities", isolatedDagu, () => {
+test("admission rejects unreadable, ambiguous, forged render and stale loaded identities", liveDagu, () => {
   const fixture = admissionFixture();
   try {
     rmSync(join(fixture.home, "dags", "reconcile.yaml"));

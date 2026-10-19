@@ -1,3 +1,4 @@
+import { liveDagu } from "./fixtures/live-dagu.ts";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -83,9 +84,8 @@ test("feature render preserves the adopted configuration and matches its templat
   assert.equal(rendered, expected);
 });
 
-const daguAvailable = spawnSync("dagu", ["version"], { encoding: "utf8" });
 test("bootstrap renders optional validation as the sole adopted value", {
-  skip: daguAvailable.status !== 0 || !/2\.20\.1/.test(daguAvailable.stdout) ? "Dagu 2.20.1 binary required for live integration" : false,
+  ...liveDagu,
 }, () => {
   const bootstrap = skill("dagu-feature-bootstrap.yaml");
   assert.match(bootstrap, /VALIDATION:\n            type: string\n            default: ""/);

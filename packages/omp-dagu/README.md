@@ -554,6 +554,20 @@ npm test --workspace @a4s/omp-dagu
 npm run typecheck --workspace @a4s/omp-dagu
 ```
 
+`npm test` (también desde la raíz) ejecuta las pruebas en proceso, sin invocar
+el binario Dagu ni arrancar sus servicios. Los casos reales usan exclusivamente
+el comando explícito:
+
+```sh
+npm run test:live --workspace @a4s/omp-dagu
+```
+
+Este script activa `A4S_LIVE_DAGU=1` y ejecuta `test/live/*.test.ts` y los casos
+reales protegidos que comparten archivo con pruebas en proceso en `test/`.
+El gate compartido consulta `dagu version` únicamente con esa variable activa
+y exige el pin `daguFeature.dagu` de `package.json`. El comando predeterminado
+fija la variable a `0`, incluso si el entorno del llamador la tenía activa.
+
 Las pruebas vivas usan Dagu 2.20.1 del `PATH`, un `DAGU_HOME` temporal y un
 puerto HTTP propio por fixture. Además, cada instancia genera un único
 `randomUUID()` y deriva los IDs `recovery-<healthy|gate|start_gate|push>-<uuid>`,
@@ -575,18 +589,18 @@ cerrar uno, el otro completa normalmente su run. La cola operativa por
 repositorio conserva su concurrencia de uno.
 
 Las integraciones reales requieren `dagu` en `PATH` con la versión indicada por
-`daguFeature.dagu` en `package.json`. Comprueba `command -v dagu` y `dagu version`
-antes de ejecutarlas localmente; los guards locales de disponibilidad omiten los
-casos protegidos cuando falta el runtime. Los fixtures usan homes temporales y
+`daguFeature.dagu` en `package.json`. El gate compartido omite los casos reales
+si falta ese runtime o su versión difiere. Los fixtures usan homes temporales y
 puertos propios, independientes del servicio de la estación.
 
 La matriz de CI instala Dagu únicamente para `@a4s/omp-dagu`: descarga el tarball
 oficial Linux amd64 y `checksums.txt` de la release fijada, registra y verifica
 SHA-256, e instala el ejecutable en un directorio temporal publicado en
 `GITHUB_PATH`. Un paso posterior registra la ruta y exige que `dagu version`
-coincida exactamente con el pin antes de ejecutar el comando de tests habitual.
+coincida exactamente con el pin. Tras `npm test`, ejecuta
+`npm run test:live --workspace @a4s/omp-dagu` con ese runtime.
 Los fallos de descarga, checksum o versión detienen el job y se reflejan en
-`validate`; las integraciones vivas aplicables se ejecutan con ese runtime.
+`validate`.
 
 El gate completo del repositorio es:
 

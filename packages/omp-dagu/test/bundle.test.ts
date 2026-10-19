@@ -3,7 +3,8 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { deploymentFingerprint, observeRunReceipt } from "../src/admission.ts";
 import { admissionDecision } from "../src/triage/guard.ts";
-import { admissionFixture, isolatedDagu } from "./fixtures/admission.ts";
+import { admissionFixture } from "./fixtures/admission.ts";
+import { liveDagu } from "./fixtures/live-dagu.ts";
 import {
   BUNDLE_NAME,
   BUNDLE_VERSION,
@@ -17,7 +18,7 @@ test("package metadata is the bundle compatibility authority", () => {
   assert.equal(BUNDLE_NAME, "@a4s/omp-dagu");
   const manifest = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
   assert.equal(BUNDLE_VERSION, manifest.version);
-  assert.equal(BUNDLE_VERSION, "0.3.86");
+  assert.equal(BUNDLE_VERSION, "0.3.87");
   assert.equal(REQUIRED_DAGU_VERSION, "2.20.1");
 });
 
@@ -63,7 +64,7 @@ test("admission hook preserves effective shell arguments and requires bash for e
   assert.ok(blocked && "block" in blocked);
 });
 
-test("runtime observations and incident snapshots link the admitted run and preserve initial identities", isolatedDagu, () => {
+test("runtime observations and incident snapshots link the admitted run and preserve initial identities", liveDagu, () => {
   const fixture = admissionFixture();
   try {
     const admitted = fixture.command("admit", "observed");

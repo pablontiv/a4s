@@ -16,6 +16,7 @@ import { stubHistory, withResourceGuard } from "./resource-fixtures.ts";
 import { inspectVerdict, qualityDecision, qualityMarker, verifyQuality } from "../src/triage/quality.ts";
 import type { QualityRequest, TranscriptRow } from "../src/triage/quality.ts";
 import { qualityFixture } from "./quality-fixtures.ts";
+import { liveDagu, liveDaguVersion } from "./fixtures/live-dagu.ts";
 
 const definitions = [
   ["template", fileURLToPath(new URL("../skills/dagu-feature/feature.yaml", import.meta.url))],
@@ -1295,10 +1296,9 @@ function extractStep(source: string, id: string): string {
   return source.slice(start, end < 0 ? source.length : end).split("\nhandler_on:")[0]! + "\n";
 }
 
-const daguAvailable = spawnSync("dagu", ["version"], { encoding: "utf8" });
 for (const [name, definition] of definitions) {
   test(`${name} real Dagu reenqueue adopts retained worktree from terminal owner`, {
-    skip: daguAvailable.status !== 0 || !/2\.20\.1/.test(daguAvailable.stdout) ? "Dagu 2.20.1 binary required for live integration" : false,
+    ...liveDagu,
     timeout: 115_000,
   }, async (t) => {
     const repo = repository();
@@ -1412,7 +1412,7 @@ for (const [name, definition] of definitions) {
       const evidence = [...failed.nodes, ...adopted.nodes].filter(node => ["admit", "start_gate", "capture"].includes(node.step.name))
         .map(node => ({ step: node.step.name, status: node.statusLabel,
           stdout: node.stdout && readFileSync(node.stdout, "utf8"), stderr: node.stderr && readFileSync(node.stderr, "utf8") }));
-      t.diagnostic(`Dagu ${daguAvailable.stdout.trim()}; runs=${first}:failed/capture,${second}:waiting/implement; HEAD=${head}; owner=${valid.trim()}; logs=${JSON.stringify(evidence)}; onExit=${failed.onExit?.stdout ? readFileSync(failed.onExit.stdout, "utf8") : JSON.stringify(failed.onExit)}`);
+      t.diagnostic(`Dagu ${liveDaguVersion}; runs=${first}:failed/capture,${second}:waiting/implement; HEAD=${head}; owner=${valid.trim()}; logs=${JSON.stringify(evidence)}; onExit=${failed.onExit?.stdout ? readFileSync(failed.onExit.stdout, "utf8") : JSON.stringify(failed.onExit)}`);
     } finally {
       service.kill("SIGTERM");
       await new Promise<void>(resolve => service.once("exit", () => resolve()));
@@ -1421,7 +1421,7 @@ for (const [name, definition] of definitions) {
   });
 }
 test("real Dagu retries rebase after a six-second index lock", {
-  skip: daguAvailable.status !== 0 || !/2\.20\.1/.test(daguAvailable.stdout),
+  ...liveDagu,
   timeout: 150_000,
 }, async () => {
   const repo = repository();
@@ -1746,10 +1746,10 @@ esac
 
 for (const [name, definition] of definitions) {
   test(`${name} real Dagu closes implementation runs and succeeds after enqueuing a PoC`, {
-    skip: daguAvailable.status !== 0 || !/2\.20\.1/.test(daguAvailable.stdout) ? "Dagu 2.20.1 binary required for live integration" : false,
+    ...liveDagu,
     timeout: 360_000,
   }, async (t) => {
-    assert.match(daguAvailable.stdout, /2\.20\.1/);
+    assert.match(liveDaguVersion, /2\.20\.1/);
     const fixture = await recoveryFixture();
     const { root, home, port, env, until, state } = fixture;
     const api = `http://127.0.0.1:${port}/api/v1`;
@@ -1874,7 +1874,7 @@ for (const [name, definition] of definitions) {
 }
 
 test("concurrent recovery fixtures keep distinct run identities", {
-  skip: daguAvailable.status !== 0 || !/2\.20\.1/.test(daguAvailable.stdout) ? "Dagu 2.20.1 binary required for live integration" : false,
+  ...liveDagu,
   timeout: 360_000,
 }, async (t) => {
   const active = new Set<RecoveryFixture>();
@@ -1949,7 +1949,7 @@ test("concurrent recovery fixtures keep distinct run identities", {
 
 for (const [name, definition] of definitions) {
   test(`${name} real Dagu checks primary freshness before admission and enqueues bootstrap after merge`, {
-    skip: daguAvailable.status !== 0 || !/2\.20\.1/.test(daguAvailable.stdout) ? "Dagu 2.20.1 binary required for live integration" : false,
+    ...liveDagu,
     timeout: 115_000,
   }, async (t) => {
     const root = mkdtempSync(join(tmpdir(), "omp-dagu-freshness-"));
@@ -2076,7 +2076,7 @@ for (const [name, definition] of definitions) {
     }
   });
   test(`${name} optional validation uses native skip, SHA approval and iterative rejection`, {
-    skip: daguAvailable.status !== 0 || !/2\.20\.1/.test(daguAvailable.stdout) ? "Dagu 2.20.1 binary required for live integration" : false,
+    ...liveDagu,
     timeout: 180_000,
   }, async () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), "omp-dagu-validation-")));
@@ -2254,7 +2254,7 @@ for (const [name, definition] of [
 
 for (const [name, definition] of definitions) {
   test(`${name} isolated Dagu rejects FAIL then gates corrections and rebases before PR-head updates`, {
-    skip: daguAvailable.status !== 0 || !/2\.20\.1/.test(daguAvailable.stdout) ? "Dagu 2.20.1 binary required" : false,
+    ...liveDagu,
     timeout: 180_000,
   }, async () => {
     const repo = repository();
@@ -2371,7 +2371,7 @@ for (const [name, definition] of definitions) {
   });
 }
 
-test("adopted policy rejects run overrides before repository writes and admits operational inputs", { skip: daguAvailable.status !== 0 }, async () => {
+test("adopted policy rejects run overrides before repository writes and admits operational inputs", liveDagu, async () => {
   const repo = repository();
   const home = join(repo.root, "dagu-home");
   const stage = join(repo.root, "staged", "feature.yaml");
