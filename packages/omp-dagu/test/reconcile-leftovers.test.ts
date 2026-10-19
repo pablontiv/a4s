@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
+import { liveDagu } from "./fixtures/live-dagu.ts";
 
 const definitions = [
   ["template", fileURLToPath(new URL("../skills/dagu-feature/reconcile.yaml", import.meta.url))],
@@ -211,15 +212,10 @@ for (const [name, definition] of definitions) {
     }
   });
 
-  test(`${name} runs tick despite leftovers and finishes Failed in real Dagu`, { timeout: 20_000 }, (t) => {
-    const lookup = spawnSync("bash", ["-c", "command -v dagu"], { encoding: "utf8" });
-    if (lookup.status !== 0) {
-      t.skip("dagu is required for the local DAG integration proof");
-      return;
-    }
+  test(`${name} runs tick despite leftovers and finishes Failed in real Dagu`, { ...liveDagu, timeout: 20_000 }, (t) => {
     const repo = repository();
     try {
-      const realDagu = lookup.stdout.trim();
+      const realDagu = execFileSync("which", ["dagu"], { encoding: "utf8" }).trim();
       const home = join(repo.root, "dagu");
       mkdirSync(join(home, "dags"), { recursive: true });
       const dag = join(home, "dags", "reconcile.yaml");
