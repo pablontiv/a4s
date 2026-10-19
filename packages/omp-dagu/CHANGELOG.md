@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.87
+
+- Keep `npm test` in-process with an explicit shared opt-in gate for real Dagu commands; run isolated Dagu integrations through `npm run test:live` and the pinned-runtime CI job.
+
 ## 0.3.86
 
 - Repair isolated lifecycle integration fixtures to use canonical admission paths, adopted policy environments and each Dagu service's API port, preserving retained-worktree adoption, PoC routing and ownership-checked cleanup.

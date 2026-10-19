@@ -1,3 +1,4 @@
+import { liveDagu, liveDaguVersion } from "./fixtures/live-dagu.ts";
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
@@ -19,10 +20,9 @@ const definitions = [
   ["render", "../../../.workspace/dagu/dags/"],
 ] as const;
 
-const daguAvailable = spawnSync("dagu", ["version"], { encoding: "utf8" });
 
 test("CI scripts preserve template/render parity and Dagu accepts materialized templates and renders", {
-  skip: daguAvailable.status !== 0 || !/2\.20\.1/.test(daguAvailable.stdout) ? "Dagu 2.20.1 binary required for live integration" : false,
+  ...liveDagu,
 }, () => {
   const root = mkdtempSync(join(tmpdir(), "omp-ci226-validate-"));
   try {
@@ -301,7 +301,7 @@ for (const [name, base] of definitions) {
 }
 
 test("Dagu 2.20.1: paired root waits return to implement/rebase and release the queue", {
-  skip: daguAvailable.status !== 0 || !/2\.20\.1/.test(daguAvailable.stdout) ? "Dagu 2.20.1 binary required for live integration" : false,
+  ...liveDagu,
   timeout: 120_000,
 }, async t => {
   const f = fixture();
@@ -401,7 +401,7 @@ test("Dagu 2.20.1: paired root waits return to implement/rebase and release the 
     assert.equal(history.length, 1);
     assert.equal(history[0].dagRunId, "ci226");
     assert.equal(git(f.primary, "ls-remote", "origin", "refs/heads/main").split(/\s/)[0], f.base);
-    t.diagnostic(JSON.stringify({ version: daguAvailable.stdout.trim(), home, port, run: "ci226", worktree: f.worktree, pr: 77, a, b, iterations: [0, 1, 2], result: "succeeded", queue: "released" }));
+    t.diagnostic(JSON.stringify({ version: liveDaguVersion, home, port, run: "ci226", worktree: f.worktree, pr: 77, a, b, iterations: [0, 1, 2], result: "succeeded", queue: "released" }));
   } finally {
     service.kill("SIGTERM");
     await new Promise<void>(resolve => service.exitCode !== null ? resolve() : service.once("exit", () => resolve()));

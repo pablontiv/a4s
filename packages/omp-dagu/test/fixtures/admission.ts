@@ -1,16 +1,8 @@
-import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-
-const daguAvailable = spawnSync("dagu", ["version"], { encoding: "utf8" });
-export const isolatedDagu = {
-  skip: daguAvailable.status !== 0 || !/^2\.20\.1\s*$/.test(daguAvailable.stdout)
-    ? "Dagu 2.20.1 binary required for live integration"
-    : false,
-};
 
 export function admissionFixture() {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "dagu-admission-")));
@@ -53,6 +45,5 @@ export function admissionFixture() {
     else process.env.DAGU_HOME = previousDaguHome;
     rmSync(root, { recursive: true, force: true });
   };
-  assert.match(execFileSync("dagu", ["version"], { encoding: "utf8" }), /^2\.20\.1\n$/);
   return { root, packageDir, home, dag, cli, command, receipt, observe, render, dispose };
 }

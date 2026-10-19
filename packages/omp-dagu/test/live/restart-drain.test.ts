@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer as createHttpServer } from "node:http";
@@ -10,13 +10,8 @@ import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-const installer = fileURLToPath(new URL("../bin/dagu-station-install.ts", import.meta.url));
-const daguAvailable = spawnSync("dagu", ["version"], { encoding: "utf8" });
-const isolatedDagu = {
-  skip: daguAvailable.status !== 0 || !/^2\.20\.1\s*$/.test(daguAvailable.stdout)
-    ? "Dagu 2.20.1 binary required for live integration"
-    : false,
-};
+import { liveDagu } from "../fixtures/live-dagu.ts";
+const installer = fileURLToPath(new URL("../../bin/dagu-station-install.ts", import.meta.url));
 async function freePort(): Promise<number> {
   const server = createServer();
   const listening = once(server, "listening");
@@ -42,7 +37,7 @@ async function until(probe: () => boolean | Promise<boolean>): Promise<void> {
   }
 }
 
-test("drain preserves existing runs; TERM restart stub activates capacity 2 on next enqueue", { ...isolatedDagu, timeout: 150_000 }, async () => {
+test("drain preserves existing runs; TERM restart stub activates capacity 2 on next enqueue", { ...liveDagu, timeout: 150_000 }, async () => {
   const home = mkdtempSync(join(tmpdir(), "dagu-restart-drain-"));
   const port = await freePort();
   // Preserve a private listener across reconciliation of the station's port defaults.
@@ -136,7 +131,7 @@ test("drain preserves existing runs; TERM restart stub activates capacity 2 on n
   }
 });
 
-test("failed admission closure retains recovery state and keeps restart/open behind the drain", isolatedDagu, () => {
+test("failed admission closure retains recovery state and keeps restart/open behind the drain", liveDagu, () => {
   const home = mkdtempSync(join(tmpdir(), "dagu-restart-closed-"));
   try {
     const result = execFileSync(process.execPath, [installer, "--dagu-home", home, "--apply", "--admission-close", "exit 17", "--admission-open", "echo reopened", "--restart-command", "echo restarted"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });

@@ -1,21 +1,17 @@
 import assert from "node:assert/strict";
-import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
-import { Transitions } from "../src/status/progress.ts";
-import type { RunDetails } from "../src/status/progress.ts";
+import { Transitions } from "../../src/status/progress.ts";
+import type { RunDetails } from "../../src/status/progress.ts";
 
-const daguAvailable = spawnSync("dagu", ["version"], { encoding: "utf8" });
-const requiredDaguVersion: string = JSON.parse(
-  readFileSync(new URL("../package.json", import.meta.url), "utf8"),
-).daguFeature.dagu;
-const foundDaguVersion = daguAvailable.status === 0 ? daguAvailable.stdout.trim() : "unavailable";
-const feature = readFileSync(new URL("../../../.workspace/dagu/dags/feature.yaml", import.meta.url), "utf8");
-const poc = readFileSync(new URL("../../../.workspace/dagu/dags/poc.yaml", import.meta.url), "utf8");
+import { liveDagu, liveDaguVersion } from "../fixtures/live-dagu.ts";
+const feature = readFileSync(new URL("../../../../.workspace/dagu/dags/feature.yaml", import.meta.url), "utf8");
+const poc = readFileSync(new URL("../../../../.workspace/dagu/dags/poc.yaml", import.meta.url), "utf8");
 function step(source: string, id: string): string {
   const start = source.indexOf(`  - id: ${id}\n`);
   assert.ok(start >= 0, id);
@@ -32,9 +28,7 @@ async function port(): Promise<number> {
 }
 
 test("Dagu isolated primary checkpoints release the queue and rewind the same run through real gates", {
-  skip: foundDaguVersion !== requiredDaguVersion
-    ? `dagu ${requiredDaguVersion} required for live integration; found ${foundDaguVersion}`
-    : false,
+  ...liveDagu,
   timeout: 360_000,
 }, async () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "omp-dagu-primary-")));
@@ -85,7 +79,7 @@ test("Dagu isolated primary checkpoints release the queue and rewind the same ru
     await until("isolated server ready", async () => {
       try { return (await fetch(`${api}/dag-runs`)).ok ? true : undefined; } catch { return undefined; }
     });
-    console.log(`LIVE dagu=${daguAvailable.stdout.trim()} DAGU_HOME=${home} port=${servicePort}`);
+    console.log(`LIVE dagu=${liveDaguVersion} DAGU_HOME=${home} port=${servicePort}`);
     const sentinel = join(home, "dags", "sentinel.yaml");
     writeFileSync(sentinel, "queue: primary228\ntype: graph\nsteps:\n  - id: sentinel\n    run: echo queue-slot-released\n");
     for (const [phase, blocked] of [

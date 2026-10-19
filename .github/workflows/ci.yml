@@ -111,6 +111,9 @@ jobs:
             exit 1
           fi
       - run: npm test --workspace "${{ matrix.workspace.name }}"
+      - name: Live Dagu tests
+        if: matrix.workspace.name == '@a4s/omp-dagu'
+        run: npm run test:live --workspace @a4s/omp-dagu
       - name: Typecheck
         if: matrix.workspace.typecheck
         run: npm run typecheck --workspace "${{ matrix.workspace.name }}"
