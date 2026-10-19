@@ -158,8 +158,8 @@ La extensión observa los runs del repositorio mediante REST y SSE para el widge
 La herramienta `dagu_session_id` devuelve el ID persistente únicamente a la sesión principal. El coordinador lo pasa como `OMP_SESSION_ID` al encolar. Todo nodo con metadatos `humanTask` en waiting de `feature`, `poc` y `discovery` despierta al propietario, incluso con status global running. El succeeded final también despierta; feature y discovery conservan failed/aborted. Los avisos incluyen la compatibilidad:
 
 ```text
-[DAGU STATE] run=<run-id> status=waiting step=<step> <issue=<issue>|dag=<dag>> bundle=<version|unstamped> extension=<version> main=<version|unknown> compat=<ok|stale|incompatible|unstamped> iteration=<approvalIteration>
-[DAGU STATE] run=<run-id> status=succeeded <issue=<issue>|dag=<dag>> bundle=<version|unstamped> extension=<version> main=<version|unknown> compat=<ok|stale|incompatible|unstamped>
+[DAGU STATE] run=<run-id> status=waiting step=<step> <issue=<issue>|dag=<dag>> bundle=<version|unstamped> extension=<version> main=<version|unknown|n/a> compat=<ok|stale|incompatible|unstamped> iteration=<approvalIteration>
+[DAGU STATE] run=<run-id> status=succeeded <issue=<issue>|dag=<dag>> bundle=<version|unstamped> extension=<version> main=<version|unknown|n/a> compat=<ok|stale|incompatible|unstamped>
 ```
 
 El primario se mantiene exactamente en `origin/$BASE_BRANCH`: `admit` y PoC
@@ -168,12 +168,16 @@ la versión del manifiesto con origin. Si siguen distintos, fallan con
 `cause=primary_behind|primary_ahead|version_stale`, SHAs y versiones observadas
 y esperadas; `admit` lo hace antes de tomar el lock.
 
-La extensión cargada, el bundle sellado y `main=` leído en cada aviso desde
-`<PRIMARY>/packages/omp-dagu/package.json` deben tener exactamente la misma
-versión. Una diferencia produce `compat=stale` y `ctx.abort()` interrumpe el
-turno con instrucciones de reiniciar la sesión OMP y re-sellar los renders.
-El reinicio carga la versión de main desde disco; cambiar el manifiesto no
-recarga módulos de una sesión ya abierta.
+En los avisos, bundle y extensión con el mismo major/minor son `compat=ok`,
+incluida una diferencia de patch; distinto major/minor da `incompatible` y una
+etiqueta ausente da `unstamped`. Se compara además la extensión con `main=`
+solo cuando PRIMARY distribuye `packages/omp-dagu/package.json`: una versión
+distinta da `stale`; un manifiesto ilegible o inválido da `main=unknown` y `stale`.
+Los repositorios consumidores sin ese manifiesto muestran `main=n/a`.
+Un aviso stale emite una notificación `warning` con instrucciones de reiniciar
+OMP y re-sellar los renders, mientras el coordinador continúa el turno.
+El reinicio carga la versión de main desde disco. La admisión sigue exigiendo
+versiones exactamente iguales, incluido el patch.
 
 Los checkpoints de disponibilidad añaden `cause=<prompt resuelto>` con `primary dirty: <archivos>` o `primary on <rama>, expected <base>`. Conservan el mismo run en Waiting y liberan la cola. El operador restaura PRIMARY limpio en BASE_BRANCH respetando sus cambios, consulta `dagu status --run-id <id> feature` y ejecuta `dagu human-task push-back feature --run-id <id> --step start_primary_unavailable --expected-iteration <iteración observada>` (para cierre: `close_primary_unavailable`; para PoC: DAG `poc`, paso `base_primary_unavailable`). El detector comprueba otra vez; limpiar por sí solo mantiene Waiting. El DAG sigue creando y retirando worktrees.
 

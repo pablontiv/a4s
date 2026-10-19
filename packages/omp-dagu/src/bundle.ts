@@ -40,7 +40,7 @@ export function classifyCompatibility(
   const extension = parseVersion(extensionVersion);
   if (!bundle || !extension || bundle[0] !== extension[0]) return "incompatible";
   if (bundle[1] !== extension[1]) return "incompatible";
-  return bundleVersion === extensionVersion ? "ok" : "stale";
+  return "ok";
 }
 
 export function bundleVersionFromLabels(labels: readonly string[] | undefined): string | undefined {

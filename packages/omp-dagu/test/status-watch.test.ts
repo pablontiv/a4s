@@ -8,15 +8,18 @@ import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
 import extension from "../src/status/index.ts";
 
-for (const stale of [undefined, "main", "bundle"] as const) for (const idle of [true, false]) test(`watcher delivers five owner notices exactly once with receiver idle=${idle}, stale=${stale}`, { timeout: 15_000 }, async () => {
+for (const drift of [undefined, "main", "bundle", "invalid JSON", "unreadable manifest"] as const) for (const idle of [true, false]) test(`watcher delivers five owner notices and keeps the turn running with receiver idle=${idle}, drift=${drift}`, { timeout: 15_000 }, async () => {
   const primary = mkdtempSync(join(tmpdir(), "omp-dagu-notice-"));
   mkdirSync(join(primary, "packages/omp-dagu"), { recursive: true });
-  writeFileSync(join(primary, "packages/omp-dagu/package.json"), JSON.stringify({ version: stale === "main" ? "0.3.8" : BUNDLE_VERSION }));
+  const manifest = join(primary, "packages/omp-dagu/package.json");
+  if (drift === "unreadable manifest") mkdirSync(manifest);
+  else writeFileSync(manifest, drift === "invalid JSON" ? "{" : JSON.stringify({ version: drift === "main" ? "0.3.8" : BUNDLE_VERSION }));
+  const stale = drift === "main" || drift === "invalid JSON" || drift === "unreadable manifest";
   let aborts = 0;
-  const instructions: string[] = [];
+  const instructions: { message: string; type: string }[] = [];
   let ready = false;
   const runs = Array.from({ length: 5 }, (_, n) => ({
-    name: "feature", dagRunId: `burst-${n}`, statusLabel: "waiting", labels: ["workspace=a4s", `dagu-feature-bundle=${stale === "bundle" ? "0.3.8" : BUNDLE_VERSION}`],
+    name: "feature", dagRunId: `burst-${n}`, statusLabel: "waiting", labels: ["workspace=a4s", `dagu-feature-bundle=${drift === "bundle" ? "0.3.8" : BUNDLE_VERSION}`],
     params: `OMP_SESSION_ID=owner PRIMARY=${primary}`, nodes: [{ step: { id: "triage", name: "triage", humanTask: {} }, statusLabel: "waiting" }],
   }));
   const requests: string[] = [];
@@ -56,7 +59,7 @@ for (const stale of [undefined, "main", "bundle"] as const) for (const idle of [
     abort() { aborts++; },
     sessionManager: { getSessionId: () => "owner" }, ui: {
       theme: { fg: (_color: string, text: string) => text, bold: (text: string) => text, tree: { branch: "├─", last: "└─" } },
-      setWidget() {}, notify(message: string) { instructions.push(message); },
+      setWidget() {}, notify(message: string, type: "info" | "warning" | "error") { instructions.push({ message, type }); },
     },
   };
   extension({
@@ -88,12 +91,16 @@ for (const stale of [undefined, "main", "bundle"] as const) for (const idle of [
     } else await until(() => received.length === 5);
     await delay(1200); // A second head sweep replays the same ledger IDs.
     assert.deepEqual(received.map(message => message.match(/run=(\S+)/)?.[1]), runs.map(run => run.dagRunId));
-    assert.equal(aborts, stale ? 5 : 0);
+    assert.equal(aborts, 0);
     assert.equal(instructions.length, stale ? 5 : 0);
     for (const message of received) {
-      assert.ok(message.includes(`main=${stale === "main" ? "0.3.8" : BUNDLE_VERSION} compat=${stale ? "stale" : "ok"}`), message);
+      const mainVersion = drift === "main" ? "0.3.8" : stale ? "unknown" : BUNDLE_VERSION;
+      assert.ok(message.includes(`main=${mainVersion} compat=${stale ? "stale" : "ok"}`), message);
     }
-    for (const instruction of instructions) assert.match(instruction, /Restart.*session.*bootstrap re-seal/);
+    for (const instruction of instructions) {
+      assert.equal(instruction.type, "warning");
+      assert.match(instruction.message, /Restart.*session.*bootstrap re-seal/);
+    }
   } finally {
     handlers.session_shutdown!(null, ctx);
     if (previous === undefined) delete process.env.DAGU_URL; else process.env.DAGU_URL = previous;

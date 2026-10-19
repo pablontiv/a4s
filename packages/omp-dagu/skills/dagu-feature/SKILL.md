@@ -125,18 +125,27 @@ with `cause=version_stale`. Diagnostics include observed/expected SHAs and
 versions. Repositories distributing `packages/omp-dagu/package.json` must keep
 that manifest identical in version to origin.
 
-The loaded extension, stamped DAG bundle and primary main package version must
-match exactly. `[DAGU STATE]` prints `extension=`, `bundle=`, `main=` and
-`compat=ok|stale|incompatible|unstamped`. Patch differences are `stale`; the
-compatibility classifier reserves `incompatible` for major/minor differences
-and `unstamped` for a missing label. A notice with differing primary, extension
-or bundle versions is stale and aborts the current OMP turn. Restart the OMP
-session to load the primary's merged package, then finish the bootstrap re-seal
-and adopt its stamped renders before resuming coordination.
+Admission requires the loaded extension and stamped DAG bundle to have exactly
+the same version, including patch. Run notices classify bundle versus extension
+by major/minor: equal major/minor is `ok` even when the patch differs, different
+major/minor is `incompatible`, and a missing bundle label is `unstamped`.
 
-Admission requires matching major versions and, for major `0`, matching minor
-versions across the package, rendered DAG, installed reconciler and loaded
-extensions. The coordinating extension rewrites literal `dagu enqueue` bash
+Notices also compare the loaded extension against primary main when
+`PRIMARY/packages/omp-dagu/package.json` exists. `stale` means this applicable
+main version differs from the loaded extension, or its manifest is unreadable
+or invalid. Consumer repositories without that manifest report `main=n/a`;
+an unreadable or invalid manifest reports `main=unknown`. Without PRIMARY,
+notices report `main=unknown` and classify only bundle versus extension.
+`[DAGU STATE]` prints `bundle=`, `extension=`, `main=<version|unknown|n/a>` and
+`compat=ok|stale|incompatible|unstamped`.
+
+A stale notice raises a `warning` notification with restart/re-seal instructions
+while the coordinator keeps working in the current turn. The operator restarts
+OMP to load the deployed package, finishes the bootstrap re-seal and adopts its
+stamped renders.
+
+Admission requires exact versions across the package, rendered DAG, installed
+reconciler and loaded extensions. The coordinating extension rewrites literal `dagu enqueue` bash
 calls to the package's admission CLI, preserving shell argument expansion;
 internal promotions invoke `dagu-feature-bundle enqueue` directly. Bootstrap is
 the deployment procedure and remains available to repair an installation.
@@ -311,7 +320,7 @@ siguiente ejecución, `temporal-<lente>.jsonl` distingue `nuevo`, `persistente`,
 La extensión despierta la sesión `OMP_SESSION_ID` en cada espera con:
 
 ```text
-[DAGU STATE] run=<id> status=waiting step=<discover|validate|consolidate|approve> dag=discovery bundle=<version|unstamped> extension=<version> main=<version|unknown> compat=<ok|stale|incompatible|unstamped>
+[DAGU STATE] run=<id> status=waiting step=<discover|validate|consolidate|approve> dag=discovery bundle=<version|unstamped> extension=<version> main=<version|unknown|n/a> compat=<ok|stale|incompatible|unstamped>
 ```
 
 ## Enqueue an issue
@@ -494,7 +503,7 @@ Keep recovery inside Dagu's lifecycle.
 Issue every `dagu human-task complete` in its own `bash` call: the triage guard
 blocks the entire command containing the completion.
 
-The `@a4s/omp-dagu` status extension delivers hidden model context for every waiting human task in `feature`, `poc` and `discovery`, and for final `succeeded`. Waiting notices have the form `[DAGU STATE] run=<id> status=waiting step=<step> <issue=<issue>|dag=<dag>> bundle=<version|unstamped> extension=<version> main=<version|unknown> compat=<ok|stale|incompatible|unstamped> iteration=<approvalIteration>`. Success uses `status=succeeded` with run identity and bundle fields; feature/discovery failures and aborts include their terminal step. The persisted Dagu event log recovers openings missed by SSE; deduplication uses DAG, run, step and approval iteration (omitted means zero), or run/status for success. An owner-session FIFO starts one autonomous turn at a time while idle and delivers asides during an active turn. The initial sweep is a silent baseline. Notices start or continue coordinator turns without rendering in chat and report run state rather than user instructions.
+The `@a4s/omp-dagu` status extension delivers hidden model context for every waiting human task in `feature`, `poc` and `discovery`, and for final `succeeded`. Waiting notices have the form `[DAGU STATE] run=<id> status=waiting step=<step> <issue=<issue>|dag=<dag>> bundle=<version|unstamped> extension=<version> main=<version|unknown|n/a> compat=<ok|stale|incompatible|unstamped> iteration=<approvalIteration>`. Success uses `status=succeeded` with run identity and bundle fields; feature/discovery failures and aborts include their terminal step. The persisted Dagu event log recovers openings missed by SSE; deduplication uses DAG, run, step and approval iteration (omitted means zero), or run/status for success. An owner-session FIFO starts one autonomous turn at a time while idle and delivers asides during an active turn. The initial sweep is a silent baseline. Notices start or continue coordinator turns without rendering in chat and report run state rather than user instructions.
 
 - On a `triage` notice, the coordinator obtains the guard generation marker and launches `task agent=triage-reviewer` itself with that marker and the fixed prompt, naming the subagent `TriageReview<ISSUE>` (or `TriageReview<ISSUE>v<N>` for a retry). Several `triage-reviewer` tasks may share one batched `task` call; each task includes its own run's generation marker. The coordinator completes `triage` with that allocated reviewer ID. A `dependency_review` push-back produces a new `triage` notice and the coordinator repeats this flow for the new generation.
 - At `run_poc`, the coordinator launches the PoC subagent as `Poc<ISSUE>`.
@@ -503,7 +512,7 @@ The `@a4s/omp-dagu` status extension delivers hidden model context for every wai
 - A retried subagent appends `v<N>` to its base name, for example `Implement182v2`.
 - For every issue in the fixed batch, keep one todo for the agent action at the `human.task` where its run is waiting: triage review, PoC execution, implementation, or recovery. Update that todo when the run moves to another human task. The package widget shows the active step plus live activity: the last non-empty Dagu log line for a running command, or `<tool> <intention> (<age>s)` from the newest `toolCall` in `TriageReview<ISSUE>`, `Poc<ISSUE>` or `Implement<ISSUE>` while its human task waits. Intention comes from `i`, then `title`, then the principal argument; the task name is omitted. It refreshes activity about every two seconds and leaves the line unchanged when no source is available. The `Workflows` HUD folds to three completion-ordered tree rows and expands to eight; `/workflows` toggles, `expand` and `collapse` set the fold, and `hide` and `show` control visibility across session switches.
 - Keep `task.maxRecursionDepth: 1`; every implementation and triage-reviewer subagent remains at level 1 and appears in the main view.
-- A notice whose `compat` is not `ok` goes under **Blockers and decisions**. Stale notices abort the current turn: the operator restarts OMP to load main and completes the queued bootstrap plus adoption re-seal. Put the exact recovery enqueue command above under **Proposals** when bootstrap still needs enqueueing. Complete `answers` with the installed values and use the staged `feature.yaml` for the adoption issue.
+- A notice whose `compat` is `stale`, `incompatible` or `unstamped` goes under **Blockers and decisions**. A stale notice raises a `warning` notification while the coordinator keeps working; the operator restarts OMP to load main and completes the queued bootstrap plus adoption re-seal. Put the exact recovery enqueue command above under **Proposals** when bootstrap still needs enqueueing. Complete `answers` with the installed values and use the staged `feature.yaml` for the adoption issue. Admission continues to require exact bundle and extension versions, including patch.
 
 ## Turn status
 

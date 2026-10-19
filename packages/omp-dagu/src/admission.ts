@@ -77,7 +77,7 @@ export function receiptPath(cwd: string, run: string): string {
 function checkRender(path: string, name: string, sourceRoot: string, prefix: string) {
   const contents = readFileSync(path, "utf8");
   const stamp = parseBundleStamp(contents);
-  if (!stamp || classifyCompatibility(stamp.version) !== "ok") throw new Error(`${name} observed=${stamp?.version ?? "indeterminate"} expected compatible with package=${BUNDLE_VERSION} (same major; major 0: same minor)`);
+  if (!stamp || stamp.version !== BUNDLE_VERSION || classifyCompatibility(stamp.version) !== "ok") throw new Error(`${name} observed=${stamp?.version ?? "indeterminate"} expected compatible with package=${BUNDLE_VERSION} (same major; major 0: same minor)`);
   if (stamp.dagu !== REQUIRED_DAGU_VERSION) throw new Error(`${name} dagu=${stamp.dagu} expected=${REQUIRED_DAGU_VERSION}`);
   const source = /^(.+)@([a-f0-9]{40})$/.exec(stamp.source);
   const labels = [...contents.matchAll(/^\s+- dagu-feature-bundle=(\S+)\s*$/gm)];

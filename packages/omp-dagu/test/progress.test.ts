@@ -211,7 +211,7 @@ test("bundle compatibility remains visible in targeted notices", () => {
   assert.ok(new Transitions("session-a").observe(candidate).wakeMessage?.includes("compat=incompatible"));
 });
 
-test("notices compare extension, bundle and main on each opening and request stale aborts", () => {
+test("notices refresh main on each opening and warn once per stale notice batch", () => {
   const primary = mkdtempSync(join(tmpdir(), "omp-dagu-main-"));
   const manifest = join(primary, "packages/omp-dagu/package.json");
   mkdirSync(join(primary, "packages/omp-dagu"), { recursive: true });
@@ -230,17 +230,68 @@ test("notices compare extension, bundle and main on each opening and request sta
     candidate.nodes![0]!.approvalIteration = 1;
     const staleMain = transitions.observe(candidate);
     assert.ok(staleMain.wakeMessage?.includes(`extension=${BUNDLE_VERSION} main=0.3.8 compat=stale`));
-    assert.match(staleMain.abortMessage!, /Restart.*session.*bootstrap re-seal/);
+    assert.match(staleMain.warningMessage!, /Restart.*session.*bootstrap re-seal/);
+    assert.deepEqual(transitions.observe(candidate), {});
     writeFileSync(manifest, JSON.stringify({ version: BUNDLE_VERSION }));
     candidate.labels = ["dagu-feature-bundle=0.3.8"];
     candidate.nodes![0]!.approvalIteration = 2;
-    const staleBundle = transitions.observe(candidate);
-    assert.ok(staleBundle.wakeMessage?.includes(`bundle=0.3.8 extension=${BUNDLE_VERSION} main=${BUNDLE_VERSION} compat=stale`));
-    assert.match(staleBundle.abortMessage!, /Restart.*session.*bootstrap re-seal/);
+    const compatibleBundle = transitions.observe(candidate);
+    assert.ok(compatibleBundle.wakeMessage?.includes(`bundle=0.3.8 extension=${BUNDLE_VERSION} main=${BUNDLE_VERSION} compat=ok`));
+    assert.equal(compatibleBundle.warningMessage, undefined);
+    writeFileSync(manifest, JSON.stringify({ version: "0.3.8" }));
+    candidate.nodes = [...waitingAt("feature", "triage").nodes!, ...waitingAt("feature", "implement", 3).nodes!];
+    const batch = transitions.observe(candidate);
+    assert.equal(batch.wakeMessages?.length, 2);
+    assert.match(batch.warningMessage!, /Restart.*session.*bootstrap re-seal/);
+    assert.deepEqual(transitions.observe(candidate), {});
   } finally {
     rmSync(primary, { recursive: true, force: true });
   }
 });
+
+for (const scenario of [
+  "consumer equal", "consumer patch", "consumer minor", "consumer major", "consumer unstamped",
+  "all equal", "primary patch", "primary minor", "primary unstamped", "main mismatch",
+  "invalid JSON", "unreadable manifest", "invalid version", "missing version",
+] as const) {
+  test(`notices classify ${scenario} and warn for stale main`, () => {
+    const primary = mkdtempSync(join(tmpdir(), "omp-dagu-compat-"));
+    const manifest = join(primary, "packages/omp-dagu/package.json");
+    const consumer = scenario.startsWith("consumer");
+    const stale = ["main mismatch", "invalid JSON", "unreadable manifest", "invalid version", "missing version"].includes(scenario);
+    const [major, minor, patch] = BUNDLE_VERSION.split(".").map(Number);
+    const version = scenario.endsWith("patch") ? `${major}.${minor}.${patch! + 1}`
+      : scenario.endsWith("minor") ? `${major}.${minor! + 1}.0`
+      : scenario.endsWith("major") ? `${major! + 1}.${minor}.0`
+      : scenario.endsWith("unstamped") ? undefined : BUNDLE_VERSION;
+    const mainVersion = consumer ? "n/a" : scenario === "main mismatch" ? "0.3.8"
+      : stale ? "unknown" : BUNDLE_VERSION;
+    const compat = stale ? "stale" : version === undefined ? "unstamped"
+      : scenario.endsWith("minor") || scenario.endsWith("major") ? "incompatible" : "ok";
+    try {
+      if (!consumer) {
+        mkdirSync(join(primary, "packages/omp-dagu"), { recursive: true });
+        if (scenario === "unreadable manifest") mkdirSync(manifest);
+        else writeFileSync(manifest, scenario === "invalid JSON" ? "{"
+          : scenario === "missing version" ? "{}"
+          : JSON.stringify({ version: scenario === "invalid version" ? "n/a" : mainVersion }));
+      }
+      const candidate = {
+        ...waitingAt("feature", "implement"),
+        params: `ISSUE=176 OMP_SESSION_ID=session-a PRIMARY=${primary}`,
+        labels: version === undefined ? [] : [`dagu-feature-bundle=${version}`],
+      };
+      const transitions = new Transitions("session-a");
+      const effects = transitions.observe(candidate);
+      assert.ok(effects.wakeMessage?.includes(`bundle=${version ?? "unstamped"} extension=${BUNDLE_VERSION} main=${mainVersion} compat=${compat}`), effects.wakeMessage ?? "Expected a waiting notice");
+      if (stale) assert.match(effects.warningMessage!, /Restart.*session.*bootstrap re-seal/);
+      else assert.equal(effects.warningMessage, undefined);
+      assert.deepEqual(transitions.observe(candidate), {});
+    } finally {
+      rmSync(primary, { recursive: true, force: true });
+    }
+  });
+}
 
 test("rewound PoC notice includes the first scope failure diagnostic", () => {
   const effects = new Transitions("owner").observe({
