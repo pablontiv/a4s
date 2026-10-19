@@ -64,7 +64,7 @@ export async function readOwners(): Promise<Owner[]> {
     for (const row of rows) {
       if (typeof row.params !== "string" || typeof row.dagRunId !== "string" || typeof row.status !== "string") throw new Error(`Malformed ${kind} history row`);
       const params = Object.fromEntries([...row.params.matchAll(/(?:^| )([A-Z_]+)=(.*?)(?= [A-Z_]+=|$)/g)].map(match => [match[1]!, match[2]!.replace(/^(['"])(.*)\1$/, "$2")]));
-      const primary = params.PRIMARY ?? await resolveRunPrimary(
+      const primary = await resolveRunPrimary(
         (process.env.DAGU_URL || "http://127.0.0.1:8080").replace(/\/+$/, ""),
         { name: kind, dagRunId: row.dagRunId, statusLabel: row.status, params: row.params },
         AbortSignal.timeout(10000),

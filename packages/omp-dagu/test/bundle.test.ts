@@ -18,7 +18,7 @@ test("package metadata is the bundle compatibility authority", () => {
   assert.equal(BUNDLE_NAME, "@a4s/omp-dagu");
   const manifest = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
   assert.equal(BUNDLE_VERSION, manifest.version);
-  assert.equal(BUNDLE_VERSION, "0.3.87");
+  assert.equal(BUNDLE_VERSION, "0.3.88");
   assert.equal(REQUIRED_DAGU_VERSION, "2.20.1");
 });
 

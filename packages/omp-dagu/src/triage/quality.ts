@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { readFileSync, readdirSync, realpathSync, writeFileSync, renameSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { bindQualityImplementer, orderReviewModels } from "@a4s/omp-cross-family-review";
-import { runParam } from "../status/progress.ts";
+import { resolveRunPrimary, runParam } from "../status/progress.ts";
 import type { CallDecision, Event } from "./guard.ts";
 import type { SessionContext } from "./primary.ts";
 
@@ -103,9 +103,10 @@ function transcript(parent: string, id: string, marker: string, agent: string | 
   const child = rows(path, contents);
   const sessions = child.filter(row => row.type === "session");
   const inits = child.filter(row => row.type === "session_init");
-  requireValue(sessions.length === 1 && inits.length === 1, "ambiguous session identity");
+  const init = inits[0];
+  requireValue(sessions.length === 1 && init &&
+    inits.every(row => row.agent === init.agent && row.task === init.task), "ambiguous session identity");
   const session = sessions[0]!;
-  const init = inits[0]!;
   requireValue(session.parentSession === parent && session.id, "wrong parent session");
   requireValue(!agent || init.agent === agent, `wrong agent for ${agent}`);
   requireValue(init.task?.includes(marker), "wrong run, iteration, SHA or role assignment");
@@ -209,10 +210,15 @@ async function load(run: string, ctx: QualityContext) {
   requireValue(response.ok, `Dagu HTTP ${response.status}`);
   const details = object(object(await response.json()).dagRunDetails);
   const params = optionalString(details.params);
-  const parameter = (name: string) => runParam({ name: "feature", dagRunId: run, statusLabel: "waiting", ...(params === undefined ? {} : { params }) }, name);
+  const runDetails = { name: "feature", dagRunId: run, statusLabel: "waiting",
+    ...(params === undefined ? {} : { params }),
+    ...(details.resolvedPrimary === undefined ? {} : { resolvedPrimary: optionalString(details.resolvedPrimary)! }) };
+  const parameter = (name: string) => runParam(runDetails, name);
   const implementation = Array.isArray(details.nodes) ? details.nodes.map(object).filter(node => object(node.step).id === "implement") : [];
   requireValue(implementation.length === 1, "ambiguous implement checkpoint");
-  const primary = realpathSync(parameter("PRIMARY")!);
+  const resolvedPrimary = await resolveRunPrimary(base, runDetails, AbortSignal.timeout(5000));
+  requireValue(resolvedPrimary, "Run PRIMARY is missing");
+  const primary = realpathSync(resolvedPrimary);
   const state = execFileSync("git", ["-C", primary, "rev-parse", "--path-format=absolute", "--git-path", `dagu-feature/runs/${run}`], { encoding: "utf8" }).trim();
   const raw = json(join(state, "quality-request.json"));
   for (const key of ["repo", "worktree", "run", "sha", "attempt", "implementer", "session", "implementStartedAt"]) requireValue(typeof raw[key] === "string", `invalid quality request ${key}`);
