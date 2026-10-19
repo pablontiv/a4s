@@ -18,14 +18,19 @@ Los plugins de Claude están publicados en [`.claude-plugin/marketplace.json`](.
 
 Los agentes para Pi, Claude y Superpowers están en [`agents/`](agents/).
 
-## Refine
+## Sprint responsibilities
 
-- Skill: [`skills/refine/SKILL.md`](skills/refine/SKILL.md)
-- Configuración: [`.workspace/config/refine.json`](.workspace/config/refine.json)
+A coordinating session is a sprint. Responsibilities and approvals are explicit:
 
-## Sprint
+| Responsibility | Skill | Owner |
+|---|---|---|
+| Refine a need, report, or incident into 1..N self-contained units | [`skills/refine/SKILL.md`](skills/refine/SKILL.md) (configuration: [`.workspace/config/refine.json`](.workspace/config/refine.json)) | The session investigates; the operator answers and accepts the refinement |
+| Import units, validate them, obtain independent review, and create approved issues | [`backlog-breakdown`](packages/omp-dagu/skills/backlog-breakdown/SKILL.md) | The backend runs checks and `plan-reviewer`; the operator approves issue creation |
+| Sprint Planning: select the goal, yes/no goal checks, Definition of Done, rank and enqueue new work | [`skills/sprint-planning/SKILL.md`](skills/sprint-planning/SKILL.md) | The session proposes; the operator confirms |
+| Sprint Review: evaluate goal checks and Definition of Done against evidence | [`skills/sprint-review/SKILL.md`](skills/sprint-review/SKILL.md) | The session evaluates; the operator accepts or changes the goal |
+| Sprint Retrospective: inspect the process and route authorized reports through refine | [`skills/sprint-retrospective/SKILL.md`](skills/sprint-retrospective/SKILL.md) | The session proposes; the operator authorizes action |
 
-- Skill: [`skills/sprint/SKILL.md`](skills/sprint/SKILL.md): una sesión es un sprint. Sprint Planning ordena los issues de la sesión (Sprint Goal) o de todo el backlog (Product Goal) contra un objetivo confirmado por el operador y verificado con checks de sí o no, y encola el Sprint Backlog en Dagu. Define la Definition of Done, el Sprint Review, la Retrospective y la entrada de reportes de otras sesiones por `refine`. La sesión decide el orden; Dagu ejecuta la cola.
+Sprint Planning alone ranks and enqueues new work; Dagu executes it. Discovery and refinement feed the shared breakdown backend, which creates issues rather than scheduling them. Reports and FYI messages alone do not authorize action. Definition of Done and yes/no goal checks are sprint content, not a separate skill or new lifecycle gate. Feature completion evidence establishes what merged and was cleaned up; Sprint Review uses that evidence to evaluate the agreed goal.
 
 ## Skills de coste
 
@@ -49,9 +54,10 @@ Los renders `feature`, `poc`, `discovery` y `reconcile` adoptan
 `node packages/omp-dagu/bin/dagu-feature-bundle.ts .`.
 
 ```sh
-n=<issue>
-dagu enqueue --run-id "a4s-issue-$n" .workspace/dagu/dags/feature.yaml -- \
-  ISSUE="$n" PRIMARY="$(git rev-parse --show-toplevel)" BRANCH="dagu/issue-$n"
+n=<issue-selected-in-sprint-planning>
+node packages/omp-dagu/bin/dagu-feature-bundle.ts enqueue \
+  --run-id "a4s-issue-$n" .workspace/dagu/dags/feature.yaml -- \
+  ISSUE="$n" OMP_SESSION_ID="<value-returned-by-dagu_session_id>"
 ```
 
 El checkpoint `implement`, la reconciliación de `await_merge` y la recuperación de fallos siguen [`packages/omp-dagu/skills/dagu-feature/SKILL.md`](packages/omp-dagu/skills/dagu-feature/SKILL.md).

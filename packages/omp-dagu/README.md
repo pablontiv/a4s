@@ -1,6 +1,6 @@
 # OMP Dagu
 
-Paquete OMP para operar el ciclo de issues de Dagu: distribuye el widget de progreso, el guard de triage, los agentes `triage-reviewer` y `plan-reviewer`, y los skills `dagu-feature`, `dagu-planning` y `discovery` con sus plantillas. Requiere Node.js >=22.19.0 y Dagu 2.20.1 con autenticación local `none`.
+OMP package for the Dagu issue lifecycle: progress widget, triage guard, `triage-reviewer` and `plan-reviewer` agents, and the `dagu-feature`, `backlog-breakdown`, and `discovery` skills and templates. Requires Node.js >=22.19.0 and Dagu 2.20.1 with local authentication `none`.
 
 ## Instalación
 
@@ -300,14 +300,9 @@ literales de eliminación quedan disponibles; el primario sigue protegido.
 
 ## Skill dagu-feature
 
-OMP resuelve `skill://dagu-feature` y sus plantillas desde `skills/dagu-feature/` dentro del paquete. `SKILL.md`, `feature.yaml`, `poc.yaml`, `discovery.yaml`, `reconcile.yaml` y `dagu-feature-bootstrap.yaml` permanecen juntos para conservar sus enlaces relativos y las rutas `$SKILL_DIR/<archivo>` del bootstrap.
+OMP resolves `skill://dagu-feature` and its templates from the package's `skills/dagu-feature/`. `SKILL.md`, `feature.yaml`, `poc.yaml`, `discovery.yaml`, `planning.yaml`, `reconcile.yaml`, and `dagu-feature-bootstrap.yaml` stay together for relative links and bootstrap's `$SKILL_DIR/<file>` paths.
 
-`skill://dagu-feature` es la única guía de coordinación de issues con subagentes.
-En a4s hay dos copias de cada DAG del ciclo: la plantilla distribuida
-`packages/omp-dagu/skills/dagu-feature/<dag>.yaml` y la renderizada
-`.workspace/dagu/dags/<dag>.yaml`. Al cambiar el ciclo, mantener ambas copias
-coherentes, conservando en el render los parámetros y la identidad del bundle
-que aplica el bootstrap.
+`dagu-feature` coordinates issue execution with subagents; `backlog-breakdown` owns issue creation and session-level Sprint Planning owns new-work selection. Distributed templates and adopted `.workspace/dagu/dags/<dag>.yaml` renders have separate publication stages: template changes ship in the package PR; the operator subsequently bootstraps and adopts stamped renders. Documentation of the new contract does not establish deployment to a primary checkout or consumer repository.
 
 Para la adopción de a4s, `TEST_PATHS` es
 `(^|/)(test|tests)/|\.test\.(ts|cjs)$`.
@@ -357,46 +352,35 @@ iguales y `compat=ok`.
 
 ## Discovery
 
-El bootstrap renderiza `.workspace/dagu/dags/discovery.yaml`. Su label
-`workspace=<repo>` corresponde al workspace coordinador que recibe los avisos
-OMP; `PRIMARY` puede apuntar a otro repositorio adoptado, cuyo slug y rama por
-defecto se derivan en el run.
+Bootstrap renders `.workspace/dagu/dags/discovery.yaml`. Its `workspace=<repo>` label identifies the coordinating workspace; `PRIMARY` selects the adopted repository to inspect.
 
 ```sh
-dagu enqueue --run-id "discovery-<id>" .workspace/dagu/dags/discovery.yaml -- \
-  LENSES="0,1,2" POLICY="defecto" SOURCE="<origen>" LIVE_TARGET="" \
-  PRIMARY="/ruta/al/repo" OMP_SESSION_ID="<dagu_session_id>"
+node packages/omp-dagu/bin/dagu-feature-bundle.ts enqueue \
+  --run-id "discovery-<id>" .workspace/dagu/dags/discovery.yaml -- \
+  LENSES="0,1,2" SOURCE="<request-context>" LIVE_TARGET="" \
+  PRIMARY="/absolute/path/to/repository" OMP_SESSION_ID="<dagu_session_id>"
 ```
 
-`snapshot` imprime el out-dir persistente fuera del repositorio. En `discover`
-se escribe un `findings-<lente>.jsonl` por lente; en `validate`,
-`verdicts.jsonl`; y en `consolidate`, `units.jsonl`. Los validadores jq fallan
-cerrados después de cada espera. `approve` usa el formulario `APPROVED=all` o
-una lista de ids separada por comas y permite push-back a `consolidate`; hasta
-esa aprobación no hay escrituras en GitHub.
+`snapshot` prints the persistent output directory. The coordinator supplies per-lens findings at `discover`, independent verdicts at `validate`, and consolidated units at `consolidate`. Deterministic checks validate these artifacts. Discovery hands off absolute `breakdown-units.jsonl` to `planning.yaml`, using rows `{id,title,dag:"feature",labels:[classification],body,source:"discovery",findings}`. Classification labels come from the discovery schema; the body retains the discovery marker and provenance.
 
-`materialize` reutiliza issues por el marcador
-`<!-- discovery-unit: <id> -->` y registra el resultado en `issues.jsonl`.
-`dispose` aplica `POLICY`, omite run ids de `feature` existentes y conserva por
-lente el último `findings.jsonl` y `temporal.jsonl`, de modo que la próxima
-ejecución calcula `nuevo`, `persistente`, `resuelto` o `regresion`.
+The shared backend owns independent plan review, operator approval, and issue creation. Discovery preserves per-lens findings and temporal history for subsequent runs and records the backend run ID. It does not schedule new feature/PoC work.
 
-La extensión despierta `OMP_SESSION_ID` en las esperas `discover`, `validate`,
-`consolidate` y `approve` con
-`[DAGU STATE] run=<id> status=waiting step=<paso> dag=discovery bundle=<version|unstamped> extension=<version> compat=<ok|incompatible|unstamped> iteration=<n>`.
+## Backlog breakdown and sprint ownership
 
-## Planning
-
-El cuarto DAG de repositorio, `planning.yaml`, convierte el plan aprobado localmente en OMP en issues autocontenidos, tras revisión independiente y aprobación explícita del operador. El skill [dagu-planning](skills/dagu-planning/SKILL.md) documenta el flujo completo. Bootstrap detecta, sella, renderiza y valida los cuatro DAGs; el commit de adopción copia `feature.yaml`, `poc.yaml`, `discovery.yaml` y `planning.yaml` al repositorio.
+[`backlog-breakdown`](skills/backlog-breakdown/SKILL.md) operates `planning.yaml`, the single issue-creation backend for refinement and discovery. Refinement owns corrections to its source units; explicit push-back reimports the corrected source.
 
 ```sh
-dagu enqueue --run-id "<repo>-planning-<slug>" .workspace/dagu/dags/planning.yaml -- \
-  SOURCE="<solicitud>" PRIMARY="/ruta/al/clon-principal" OMP_SESSION_ID="<dagu_session_id>"
+node packages/omp-dagu/bin/dagu-feature-bundle.ts enqueue \
+  --run-id "<repo>-breakdown-<slug>" .workspace/dagu/dags/planning.yaml -- \
+  UNITS_FROM="/absolute/path/to/units.jsonl" SOURCE=refine \
+  PRIMARY="/absolute/path/to/primary" OMP_SESSION_ID="<dagu_session_id>"
 ```
 
-`init` conserva `source.md` en `$DAGU_HOME/data/planning/<owner>__<repo>/<run>/`. `plan` recibe `plan.md` y `units.jsonl`; los checks deterministas validan las unidades y la identidad/generación del transcript `plan-reviewer`, cuyo modelo selecciona `omp-cross-family-review`. `review` se completa con `REVIEW=<id asignado>`; un `revise` o un plan inválido devuelve el mismo run a `plan`, con hallazgos en `findings.md` e iteración incrementada. El widget muestra `plan` y los avisos cubren `plan`, `review` y `approve`.
+`init` initializes durable run artifacts; `import_units` imports the required absolute `UNITS_FROM`; `check_plan` validates units; `review` requests an independent `plan-reviewer`; and `check_review` validates that review. The operator approves all or selected unit IDs at `approve`. `materialize` creates or reuses issues by `<!-- breakdown-unit: <run>/<id> -->`, recording `issues.jsonl`. Source and findings are provenance preserved in issue bodies. Before explicit push-back from `review` or `approve`, inspect the current run-wide iteration; the rewind returns to `import_units`.
 
-Solo el operador autoriza `APPROVED=all` o ids concretos en `approve`; el CLI de tareas humanas no autentica al operador. Después, `materialize` crea o reutiliza issues por `<!-- planning-unit: <run>/<id> -->` y registra `issues.jsonl`. `dispose` encola feature o PoC según la unidad, con run IDs estables y preservando `OMP_SESSION_ID`. Antes de cada push-back manual se consulta la iteración run-wide actual. Registrar el primer run post-merge y sus logs de validación, revisión, materialización y disposición en el issue de entrega.
+Sprint Planning in the coordinating session alone selects, ranks, and enqueues new work. Definition of Done and yes/no sprint-goal checks are planning/review content. A completed feature run proves its merged candidate and verified cleanup; it does not by itself prove the sprint goal. Review evaluates that evidence without adding a lifecycle gate. Reports enter refinement only with operator authorization; an FYI is not authorization.
+
+PoC requires an existing `ISSUE`. `QUESTION` is optional when the issue supplies `## PoC`. The feature-to-PoC and successful-PoC-to-feature continuations remain lifecycle transitions, preserving the coordinating session rather than selecting new backlog work. Human approval checkpoints retain their existing owners.
 
 ### Versión, sello y compatibilidad
 

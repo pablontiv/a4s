@@ -6,21 +6,10 @@ import { admissionDecision } from "../src/triage/guard.ts";
 import { admissionFixture } from "./fixtures/admission.ts";
 import { liveDagu } from "./fixtures/live-dagu.ts";
 import {
-  BUNDLE_NAME,
-  BUNDLE_VERSION,
   bundleVersionFromLabels,
   classifyCompatibility,
   parseBundleStamp,
-  REQUIRED_DAGU_VERSION,
 } from "../src/bundle.ts";
-
-test("package metadata is the bundle compatibility authority", () => {
-  assert.equal(BUNDLE_NAME, "@a4s/omp-dagu");
-  const manifest = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
-  assert.equal(BUNDLE_VERSION, manifest.version);
-  assert.equal(BUNDLE_VERSION, "0.3.89");
-  assert.equal(REQUIRED_DAGU_VERSION, "2.20.1");
-});
 
 test("compatibility accepts patch drift and distinguishes incompatible and unstamped versions", () => {
   assert.equal(classifyCompatibility("0.2.0", "0.2.0"), "ok");

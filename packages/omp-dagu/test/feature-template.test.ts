@@ -2455,7 +2455,7 @@ test("adopted policy rejects run overrides before repository writes and admits o
     for (const [file, value] of Object.entries({ "issue.number": "274", repo: "fixture/repo", verdict: "PASS", scope: "OK", created: "" })) writeFileSync(join(pocState, file), value);
     const result = "<!-- poc-verdict:PASS scope:OK run:promote-policy attempt:1 base:" + "1".repeat(40) + " -->\n" +
       ["Pregunta", "Proposición demostrada", "Ruta ejercitada", "Comandos y salida", "Después del PASS"].map(heading => `## ${heading}\npolicy proof\n`).join("\n");
-    writeFileSync(join(repo.root, "issue.json"), JSON.stringify({ body: "policy proof\n\n## Después del PASS\nversioned policy\n" }));
+    writeFileSync(join(repo.root, "issue.json"), JSON.stringify({ body: "## PoC\npolicy proof\n\n## Después del PASS\nversioned policy\n" }));
     writeFileSync(join(repo.root, "comments.json"), JSON.stringify([[{ body: result, html_url: "https://example.test/pass" }]]));
     const bin = join(repo.root, "promotion-bin");
     mkdirSync(bin);

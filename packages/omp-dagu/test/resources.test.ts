@@ -221,23 +221,6 @@ for (const path of ["../skills/dagu-feature/poc.yaml", "../../../.workspace/dagu
   });
 }
 
-test("feature, PoC and reconcile template/render scripts remain in parity with the installed stamp", () => {
-  for (const name of ["feature", "poc", "reconcile"]) {
-    const source = readFileSync(new URL(`../skills/dagu-feature/${name}.yaml`, import.meta.url), "utf8");
-    const rendered = readFileSync(new URL(`../../../.workspace/dagu/dags/${name}.yaml`, import.meta.url), "utf8");
-    const stamp = /^# dagu-feature-bundle: @a4s\/omp-dagu@(\d+\.\d+\.\d+) source=pablontiv\/a4s@[0-9a-f]{40} bootstrap=\S+ dagu=2\.20\.1$/.exec(rendered.split("\n")[0]!);
-    assert.ok(stamp, `${name} has a complete deployment stamp`);
-    assert.deepEqual(
-      [...rendered.matchAll(/^  - dagu-feature-bundle=(\S+)$/gm)].map(match => match[1]),
-      [stamp[1]],
-    );
-    assert.equal(rendered.slice(rendered.indexOf("steps:\n")).trimEnd(), source.slice(source.indexOf("steps:\n")).trimEnd());
-    if (name !== "reconcile") {
-      assert.equal(rendered.slice(rendered.indexOf("  - DAGU_RESOURCE_GUARD: |"), rendered.indexOf("steps:\n")), source.slice(source.indexOf("  - DAGU_RESOURCE_GUARD: |"), source.indexOf("steps:\n")));
-    }
-  }
-});
-
 for (const definition of [...definitions, ...["../skills/dagu-feature/poc.yaml", "../../../.workspace/dagu/dags/poc.yaml"].map(path => fileURLToPath(new URL(path, import.meta.url)))]) {
   test(`${definition} primary-target rejection preserves a primary without a managed directory`, t => {
     const repo = fixture(); t.after(() => rmSync(repo.root, { recursive: true, force: true }));
