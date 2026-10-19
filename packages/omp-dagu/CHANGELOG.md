@@ -3,6 +3,7 @@
 ## 0.3.89
 
 - Admission accepts lifecycle renders sealed at any patch release of the package's major/minor, so package patch merges no longer require re-sealing adopted DAGs; a different minor is still rejected.
+- Admission also accepts a render that matches the installed checkout's template, since versioned renders are updated with their templates in the same PR.
 
 ## 0.3.88
 

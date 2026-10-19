@@ -85,23 +85,29 @@ function checkRender(path: string, name: string, sourceRoot: string, prefix: str
   const expectedSource = git(sourceRoot, "remote", "get-url", "origin").replace(/\.git\/?$/, "").replace(/\/$/, "").split(/[/:]/).slice(-2).join("/");
   if (source[1] !== expectedSource) throw new Error(`${name} origin=${source[1]} expected=${expectedSource}`);
   const templatePath = `${prefix}skills/dagu-feature/${name}`;
-  const template = execFileSync("git", ["-C", sourceRoot, "show", `${source[2]}:${templatePath}`], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
   const declared = manifestVersion(git(sourceRoot, "show", `${source[2]}:${prefix}package.json`));
   if (declared !== stamp.version) throw new Error(`${name} declared=${stamp.version} source package=${declared} expected identical provenance`);
+  // Versioned renders follow their templates in the same PR, so the installed checkout's template is also a valid source.
+  for (const commit of [source[2], git(sourceRoot, "rev-parse", "HEAD")]) {
+    const template = execFileSync("git", ["-C", sourceRoot, "show", `${commit}:${templatePath}`], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    if (isRender(contents, template)) return { ...identity(path, stamp.version, stamp.source), stamp, sourceTemplate: { path: templatePath, commit, digest: sha256(template) }, relationship: "verified-source-render", snapshot: contents };
+  }
+  throw new Error(`${name} digest=${sha256(contents)} expected a render of ${stamp.source}:${templatePath} or of the installed checkout`);
+}
+
+function isRender(contents: string, template: string): boolean {
   const literals = template.trimEnd().split(/__[A-Z_]+__|TEMPLATE_[A-Z_]+/);
   let remaining = contents;
-  let matches = remaining.startsWith(literals[0]!);
+  if (!remaining.startsWith(literals[0]!)) return false;
   remaining = remaining.slice(literals[0]!.length);
   for (const literal of literals.slice(1, -1)) {
     const offset = remaining.indexOf(literal);
-    if (offset < 0) { matches = false; break; }
+    if (offset < 0) return false;
     remaining = remaining.slice(offset + literal.length);
   }
   const suffix = literals.at(-1)!;
   const suffixOffset = remaining.lastIndexOf(suffix);
-  matches &&= literals.length === 1 ? remaining.trim() === "" : suffixOffset >= 0 && remaining.slice(suffixOffset + suffix.length).trim() === "";
-  if (!matches) throw new Error(`${name} digest=${sha256(contents)} expected a render of ${stamp.source}:${templatePath}`);
-  return { ...identity(path, stamp.version, stamp.source), stamp, sourceTemplate: { path: templatePath, commit: source[2], digest: sha256(template) }, relationship: "verified-source-render", snapshot: contents };
+  return literals.length === 1 ? remaining.trim() === "" : suffixOffset >= 0 && remaining.slice(suffixOffset + suffix.length).trim() === "";
 }
 
 export function admit(options: AdmissionOptions, persist = true): { path: string; receipt: Receipt } {
