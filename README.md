@@ -23,9 +23,9 @@ Los agentes para Pi, Claude y Superpowers están en [`agents/`](agents/).
 - Skill: [`skills/refine/SKILL.md`](skills/refine/SKILL.md)
 - Configuración: [`.workspace/config/refine.json`](.workspace/config/refine.json)
 
-## Priorización de issues
+## Sprint Planning
 
-- Skill: [`skills/issue-prioritization/SKILL.md`](skills/issue-prioritization/SKILL.md): ordena los issues de una sesión o de todo el backlog contra un objetivo confirmado por el operador y verificado con checks de sí o no. La sesión decide el orden; Dagu ejecuta la cola.
+- Skill: [`skills/sprint-planning/SKILL.md`](skills/sprint-planning/SKILL.md): una sesión es un sprint. Ordena los issues de la sesión (Sprint Goal) o de todo el backlog (Product Goal) contra un objetivo confirmado por el operador y verificado con checks de sí o no, encola el Sprint Backlog en Dagu y cierra con un Sprint Review. La sesión decide el orden; Dagu ejecuta la cola.
 
 ## Skills de coste
 
