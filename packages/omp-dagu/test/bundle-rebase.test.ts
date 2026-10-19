@@ -1,4 +1,4 @@
-import { liveDagu } from "./fixtures/live-dagu.ts";
+import { liveDagu, liveDaguVersion } from "./fixtures/live-dagu.ts";
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -270,7 +270,7 @@ test("isolated Dagu rebases colliding candidates before gate and publishes the n
     assert.match(details.logs, /bundle-rebase: 0\.3\.17 \/ 0\.3\.18 \/ 0\.3\.18 -> 0\.3\.19/);
     assert.ok(details.logs.includes(`tested_sha=${sha}`));
     const status = command("status", "--run-id", id, "feature");
-    console.log(`LIVE bundle-rebase DAGU_HOME=${home} port=${port} run=${id}\n${dagu.stdout.trim()}\ndagu validate ${staged}\ndagu validate ${rendered}\ndagu validate ${file}\ndagu enqueue --run-id ${id} feature\ndagu status --run-id ${id} feature\n${status}\noriginal_sha=${repo.before} normalized_sha=${sha}\n${details.logs}`);
+    console.log(`LIVE bundle-rebase DAGU_HOME=${home} port=${port} run=${id}\n${liveDaguVersion}\ndagu validate ${staged}\ndagu validate ${rendered}\ndagu validate ${file}\ndagu enqueue --run-id ${id} feature\ndagu status --run-id ${id} feature\n${status}\noriginal_sha=${repo.before} normalized_sha=${sha}\n${details.logs}`);
   } finally {
     if (service.exitCode === null && service.signalCode === null) await new Promise<void>(resolve => { service.once("exit", () => resolve()); service.kill("SIGTERM"); });
     rmSync(repo.root, { recursive: true, force: true });
