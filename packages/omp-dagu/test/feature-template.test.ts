@@ -322,7 +322,10 @@ test("quality completion hook validates provenance and persists independent evid
     assert.ok(routed.input.tasks[0].outputSchema);
     let spawnHook: ((event: { agent: string; patterns: string[]; spawnKey?: string }, ctx: { models: unknown }) => { model?: string[] } | undefined) | undefined;
     crossFamilyReview({ on: (_event: string, handler: typeof spawnHook) => { spawnHook = handler; } } as never);
-    const selected = spawnHook!({ agent: "qa", spawnKey: "NewQA", patterns: ["openai-codex/effective", "anthropic/alternate"] }, { models: fixture.models });
+    // The coordinator shares the reviewer's family, so only the bound implementer
+    // admits that family; OMP keys a nested, renamed async spawn as `parent.name-N`.
+    const coordinator = { ...fixture.models, current: () => ({ provider: "anthropic", id: "alternate", lineage: "canonical-anthropic" }) };
+    const selected = spawnHook!({ agent: "qa", spawnKey: "Parent.NewQA-2", patterns: ["openai-codex/effective", "anthropic/alternate"] }, { models: coordinator });
     assert.deepEqual(selected?.model?.[0], "anthropic/alternate");
     assert.ok(selected?.model?.every(spec => fixture.models.resolve(spec)?.provider !== "openai-codex"));
     const event = { toolName: "bash", toolCallId: "complete-quality", input: {
