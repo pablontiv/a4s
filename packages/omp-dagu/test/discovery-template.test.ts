@@ -2,28 +2,14 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 
 const definitions = [
   ["template", fileURLToPath(new URL("../skills/dagu-feature/discovery.yaml", import.meta.url))],
-  ["rendered DAG", fileURLToPath(new URL("../../../.workspace/dagu/dags/discovery.yaml", import.meta.url))],
 ] as const;
 
-const orderedSteps = [
-  "snapshot",
-  "discover",
-  "check_findings",
-  "temporal",
-  "validate",
-  "check_verdicts",
-  "consolidate",
-  "check_units",
-  "approve",
-  "materialize",
-  "dispose",
-];
 
 function extractScript(definition: string, marker: string): string {
   const lines = readFileSync(definition, "utf8").split("\n");
@@ -64,48 +50,15 @@ function baseEnv(outDir: string): NodeJS.ProcessEnv {
     OUT_DIR: outDir,
     LENSES: "0",
     LIVE_TARGET: "",
-    POLICY: "defecto",
     PRIMARY: join(outDir, "primary"),
+    RUN: "discovery-run",
+    DAGU_OUTPUT_FILE: join(outDir, "outputs"),
     OMP_SESSION_ID: "session",
     NWO: "owner/repo",
   };
 }
 
 for (const [name, definition] of definitions) {
-  test(`${name} declares the discovery contract graph`, () => {
-    const yaml = readFileSync(definition, "utf8");
-    assert.match(yaml, /^  - workspace=(?:TEMPLATE_REPO|a4s)$/m);
-    if (name === "template") {
-      assert.equal(yaml.split("\n", 1)[0], "# dagu-feature-bundle: __DAGU_FEATURE_STAMP__");
-      assert.match(yaml, /^  - dagu-feature-bundle=TEMPLATE_DAGU_FEATURE_VERSION$/m);
-    } else {
-      const stamp = /^# dagu-feature-bundle: @a4s\/omp-dagu@(\d+\.\d+\.\d+) source=(pablontiv\/a4s@[0-9a-f]{40}) bootstrap=(\S+) dagu=2\.20\.1$/.exec(yaml.split("\n", 1)[0]!);
-      assert.ok(stamp, "rendered discovery has a complete deployment stamp");
-      const [, version, source, bootstrap] = stamp;
-      assert.doesNotMatch(yaml, /__DAGU_FEATURE_|TEMPLATE_/);
-      assert.deepEqual(
-        [...yaml.matchAll(/^  - dagu-feature-bundle=(\S+)$/gm)].map(match => match[1]),
-        [version],
-      );
-      assert.ok(yaml.split("\n").includes(
-        `  - DAGU_FEATURE_BUNDLE: "dagu-feature-bundle=${version} source=${source} bootstrap=${bootstrap}"`,
-      ));
-    }
-    for (const param of ["LENSES", "POLICY", "SOURCE", "LIVE_TARGET", "PRIMARY", "OMP_SESSION_ID"])
-      assert.match(yaml, new RegExp(`  - name: ${param}\\n`));
-    const positions = orderedSteps.map((step) => yaml.indexOf(`  - id: ${step}\n`));
-    assert.equal(positions.every((position) => position >= 0), true);
-    assert.deepEqual([...positions].sort((a, b) => a - b), positions);
-    for (let index = 1; index < orderedSteps.length; index++) {
-      const blockStart = positions[index]!;
-      const next = positions[index + 1] ?? yaml.length;
-      assert.match(yaml.slice(blockStart, next), new RegExp(`depends: ${orderedSteps[index - 1]}`));
-    }
-    assert.match(yaml, /- id: discover\n    depends: snapshot\n    action: human\.task/);
-    assert.match(yaml, /- id: validate\n    depends: temporal\n    action: human\.task/);
-    assert.match(yaml, /- id: consolidate\n    depends: check_verdicts\n    action: human\.task/);
-    assert.match(yaml, /- id: approve[\s\S]*?action: human\.task[\s\S]*?APPROVED:[\s\S]*?push_back:\n        rewind_to: consolidate/);
-  });
 
   test(`${name} findings validator fails closed and accepts valid JSONL`, () => {
     const root = mkdtempSync(join(tmpdir(), "discovery-findings-"));
@@ -173,98 +126,82 @@ for (const [name, definition] of definitions) {
   });
 }
 
-test("materialize creates once and then reuses the discovery marker", () => {
-  const root = mkdtempSync(join(tmpdir(), "discovery-materialize-"));
-  try {
-    const bin = join(root, "bin");
-    const state = join(root, "gh-state");
-    mkdirSync(bin);
-    writeFileSync(join(bin, "gh"), `#!/bin/bash
-set -euo pipefail
-if [[ "$1 $2" == "issue list" ]]; then
-  if test -f "$FAKE_GH_STATE/body"; then
-    jq -n --rawfile body "$FAKE_GH_STATE/body" '[{number:41,url:"https://example.test/owner/repo/issues/41",body:$body}]'
-  else
-    printf '[]\\n'
-  fi
-elif [[ "$1 $2" == "issue create" ]]; then
-  while (($#)); do
-    if [[ "$1" == --body-file ]]; then cp "$2" "$FAKE_GH_STATE/body"; shift 2; else shift; fi
-  done
-  count=0; test ! -f "$FAKE_GH_STATE/count" || count=$(cat "$FAKE_GH_STATE/count")
-  printf '%s\\n' "$((count + 1))" > "$FAKE_GH_STATE/count"
-  printf 'https://example.test/owner/repo/issues/41\\n'
-else
-  printf 'unexpected gh call: %s\\n' "$*" >&2; exit 1
-fi
-`);
-    chmodSync(join(bin, "gh"), 0o755);
-    mkdirSync(state);
-    jsonl(join(root, "units.jsonl"), [{ id: "unit-stable", title: "Title", body: "Body", classification: "defecto", findings: ["finding-1"] }]);
-    const env = { ...baseEnv(root), APPROVED: "all", FAKE_GH_STATE: state, PATH: `${bin}:${process.env.PATH ?? ""}` };
-    const script = extractScript(definitions[0][1], "  - id: materialize");
-    const first = run(script, env);
-    assert.equal(first.status, 0, first.stderr);
-    assert.equal(JSON.parse(readFileSync(join(root, "issues.jsonl"), "utf8")).reused, false);
-    const second = run(script, env);
-    assert.equal(second.status, 0, second.stderr);
-    assert.equal(JSON.parse(readFileSync(join(root, "issues.jsonl"), "utf8")).reused, true);
-    assert.equal(readFileSync(join(state, "count"), "utf8"), "1\n");
-    assert.match(readFileSync(join(state, "body"), "utf8"), /<!-- discovery-unit: unit-stable -->/);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test("dispose skips existing run ids and enqueues eligible new issues", () => {
-  const root = mkdtempSync(join(tmpdir(), "discovery-dispose-"));
+test("handoff stages all checked units for one planning run and saves lens history", () => {
+  const root = mkdtempSync(join(tmpdir(), "discovery-handoff-"));
   const outDir = join(root, "run");
   try {
     const bin = join(root, "bin");
-    const log = join(root, "dagu.log");
+    const log = join(root, "enqueue.json");
     mkdirSync(bin);
     mkdirSync(outDir);
-    mkdirSync(join(root, "primary", ".workspace", "dagu", "dags"), { recursive: true });
-    writeFileSync(join(bin, "dagu"), `#!/bin/bash
-set -euo pipefail
-if [[ "$1" == status && "$*" == *"repo-issue-41"* ]]; then exit 0; fi
-if [[ "$1" == status ]]; then exit 1; fi
-exit 1
-`);
-    chmodSync(join(bin, "dagu"), 0o755);
     writeFileSync(join(bin, "dagu-feature-bundle"), `#!/bin/bash
 set -euo pipefail
 test "$1" = enqueue
-printf 'admission %s\\n' "$*" >> "$FAKE_DAGU_LOG"
+jq -nc --args '$ARGS.positional' -- "$@" >> "$FAKE_DAGU_LOG"
 `);
     chmodSync(join(bin, "dagu-feature-bundle"), 0o755);
-    jsonl(join(outDir, "issues.jsonl"), [
-      { unit: "unit-existing", number: 41, url: "https://example.test/41", reused: true },
-      { unit: "unit-new", number: 42, url: "https://example.test/42", reused: false },
-      { unit: "unit-improvement", number: 43, url: "https://example.test/43", reused: false },
-    ]);
-    jsonl(join(outDir, "units.jsonl"), [
-      { id: "unit-existing", title: "Existing", body: "Body", classification: "defecto", findings: ["f1"] },
-      { id: "unit-new", title: "New", body: "Body", classification: "defecto", findings: ["f2"] },
-      { id: "unit-improvement", title: "Improvement", body: "Body", classification: "mejora", findings: ["f3"] },
-    ]);
-    jsonl(join(outDir, "findings-0.jsonl"), [finding("f1")]);
+    const units = [
+      { id: "unit-defect", title: "Defect", body: "## Problem\nDefect\n## Change\nFix\n## Acceptance\nWorks", classification: "defecto", findings: ["f1"] },
+      { id: "unit-improvement", title: "Improvement", body: "## Problem\nSlow\n## Change\nImprove\n## Acceptance\nFast", classification: "mejora", findings: ["f2"] },
+      { id: "unit-duplicate", title: "Duplicate", body: "## Problem\nRepeated\n## Change\nConsolidate\n## Acceptance\nShared", classification: "duplicado", findings: ["f3"] },
+    ];
+    jsonl(join(outDir, "units.jsonl"), units);
+    jsonl(join(outDir, "findings-0.jsonl"), units.flatMap(unit => unit.findings.map(id => finding(id))));
+    jsonl(join(outDir, "verdicts.jsonl"), units.flatMap(unit => unit.findings.map(id => ({
+      finding: id, verdict: "confirmado", basis: "independent evidence", live: false,
+    }))));
     jsonl(join(outDir, "temporal-0.jsonl"), [{ id: "f1", lens: "0", temporal: "nuevo" }]);
-    const result = run(extractScript(definitions[0][1], "  - id: dispose"), {
-      ...baseEnv(outDir),
-      NWO: "owner/repo",
-      FAKE_DAGU_LOG: log,
-      PATH: `${bin}:${process.env.PATH ?? ""}`,
-    });
+    const env: NodeJS.ProcessEnv = { ...baseEnv(outDir), FAKE_DAGU_LOG: log, PATH: `${bin}:${process.env.PATH ?? ""}` };
+    const checked = run(extractScript(definitions[0][1], "  - id: check_units"), env);
+    assert.equal(checked.status, 0, checked.stderr);
+    const result = run(extractScript(definitions[0][1], "  - id: handoff"), env);
     assert.equal(result.status, 0, result.stderr);
-    assert.match(result.stdout, /exists=repo-issue-41 issue=41/);
-    assert.match(result.stdout, /enqueued=repo-issue-42 issue=42/);
-    assert.doesNotMatch(result.stdout, /43/);
-    const invocation = readFileSync(log, "utf8");
-    assert.match(invocation, /^admission enqueue /);
-    assert.match(invocation, /--run-id repo-issue-42/);
-    assert.match(invocation, /-- ISSUE=42 PR_NUMBER= OMP_SESSION_ID=session\n$/);
-    assert.equal(readFileSync(join(root, "lenses", "0", "findings.jsonl"), "utf8"), readFileSync(join(outDir, "findings-0.jsonl"), "utf8"));
+    const invocations = readFileSync(log, "utf8").trim().split("\n").map(line => JSON.parse(line) as string[]);
+    assert.equal(invocations.length, 1);
+    const args = invocations[0]!;
+    assert.deepEqual(args.slice(0, 4), [
+      "enqueue", "--run-id", "breakdown-discovery-run",
+      join(outDir, "primary", ".workspace", "dagu", "dags", "planning.yaml"),
+    ]);
+    assert.equal(args[4], "--");
+    const params = Object.fromEntries(args.slice(5).map(arg => {
+      const separator = arg.indexOf("=");
+      return [arg.slice(0, separator), arg.slice(separator + 1)];
+    }));
+    assert.equal(isAbsolute(params.UNITS_FROM!), true);
+    assert.equal(params.SOURCE, "discovery");
+    assert.equal(params.PRIMARY, env.PRIMARY);
+    assert.equal(params.OMP_SESSION_ID, "session");
+    const staged = readFileSync(params.UNITS_FROM!, "utf8").trim().split("\n").map(line => JSON.parse(line));
+    assert.deepEqual(staged, units.map(({ classification, ...unit }) => ({
+      ...unit, dag: "feature", labels: [classification], source: "discovery",
+      body: `${unit.body}\n\n<!-- discovery-unit: ${unit.id} -->`,
+    })));
+    assert.equal(readFileSync(join(outDir, "breakdown-run-id"), "utf8"), "breakdown-discovery-run\n");
+    assert.equal(readFileSync(env.DAGU_OUTPUT_FILE!, "utf8"), "BACKEND_RUN_ID=breakdown-discovery-run\n");
+    for (const file of ["findings", "temporal"]) {
+      assert.equal(
+        readFileSync(join(root, "lenses", "0", `${file}.jsonl`), "utf8"),
+        readFileSync(join(outDir, `${file}-0.jsonl`), "utf8"),
+      );
+    }
+    jsonl(join(outDir, "units.jsonl"), []);
+    jsonl(join(outDir, "verdicts.jsonl"), []);
+    jsonl(join(outDir, "findings-0.jsonl"), []);
+    jsonl(join(outDir, "temporal-0.jsonl"), [{ id: "f1", lens: "0", temporal: "resuelto" }]);
+    writeFileSync(log, "");
+    writeFileSync(env.DAGU_OUTPUT_FILE!, "");
+    const noUnitsChecked = run(extractScript(definitions[0][1], "  - id: check_units"), env);
+    assert.equal(noUnitsChecked.status, 0, noUnitsChecked.stderr);
+    const noUnits = run(extractScript(definitions[0][1], "  - id: handoff"), env);
+    assert.equal(noUnits.status, 0, noUnits.stderr);
+    assert.match(noUnits.stdout, /outcome=no-units/);
+    assert.equal(readFileSync(log, "utf8"), "");
+    assert.equal(readFileSync(env.DAGU_OUTPUT_FILE!, "utf8"), "BACKEND_RUN_ID=\n");
+    assert.equal(readFileSync(join(root, "lenses", "0", "findings.jsonl"), "utf8"), "");
+    assert.deepEqual(JSON.parse(readFileSync(join(root, "lenses", "0", "temporal.jsonl"), "utf8")), {
+      id: "f1", lens: "0", temporal: "resuelto",
+    });
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

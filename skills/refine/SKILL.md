@@ -1,94 +1,55 @@
 ---
 name: refine
-description: Refine a supplied need into an evidence-backed ticket and offer immediate materialization in the configured destination.
+description: Refine one authorized need, report, or process incident into evidence-backed, independently acceptable backlog units and hand them to backlog-breakdown after operator acceptance.
 ---
 
 # Refine
 
-Turn one need into a well-founded ticket. Investigate the need, surface material inconsistencies, resolve them with the user, stage one temporary canonical ticket, and offer to materialize it immediately.
+Turn one supplied need into 1..N independently acceptable units. Investigate the need, resolve material inconsistencies with the operator, stage the exact proposal, and use `backlog-breakdown` for independent review, approval, and issue creation.
 
-Run when the user explicitly invokes `/refine` with a need, or when the `sprint-retrospective` skill supplies a process incident (including a report from another session) with its evidence as the need.
+Run when the operator explicitly invokes `/refine` with a need, report, or process incident, or explicitly authorizes another skill to hand that input to refinement. An external FYI report is evidence: its arrival alone authorizes neither refinement nor publication. A backlog design or a prior discussion of possible work likewise requires explicit authorization to refine and acceptance of the exact resulting proposal.
 
 ## Boundaries
 
 The invocation authorizes:
 
-- investigating the supplied need;
+- investigating the supplied need and its independently acceptable outcomes;
 - asking refinement questions;
-- bootstrapping the ticket destination when it is not configured;
 - keeping a temporary evidence inventory;
-- staging one temporary ticket;
-- offering immediate materialization.
+- staging 1..N temporary backlog units;
+- offering the exact proposal for acceptance.
 
-It does not authorize:
+Issue creation proceeds only after the operator accepts that proposal, through `backlog-breakdown` and its independent review and approval gate. Implementation and scheduling are separate decisions: `sprint-planning` alone ranks and enqueues new feature/PoC work.
 
-- implementing the resulting work;
-- changing project content other than the destination bootstrap;
-- starting any downstream process;
-- materializing a ticket before the user accepts the exact proposal;
-- preserving a draft for a later session.
+Keep project content unchanged during refinement. Temporary evidence and units belong outside the repository. End the interaction after the accepted units are materialized, rejected, or abandoned; retain staged inputs while an active backend review needs them.
 
-Stop after the ticket is materialized, rejected, or lost with the session.
+## Prerequisites and optional template
 
-## Workspace configuration
+Use the adopted planning backend at `<PRIMARY>/.workspace/dagu/dags/planning.yaml` and the `backlog-breakdown` skill. `planning.yaml` retains its filename and DAG name `planning`; it is the backlog-breakdown backend. Establish the primary checkout and check that adopted file before offering publication. If adoption is missing, report that prerequisite and keep the proposal temporary until the operator chooses adoption or rejection.
 
-Store this skill's durable configuration under:
+The optional workspace configuration is:
 
 ```text
 .workspace/config/refine.json
 ```
 
-For now, the configuration owns only the materialization destination and an optional template reference:
-
 ```json
 {
-  "destination": {
-    "adapter": "<adapter>",
-    "target": "<target>"
-  },
   "template": null
 }
 ```
 
-Do not store credentials. Do not add workflow, readiness, implementation, review, or delivery policy to this file.
+`template` is either `null` or a readable repository-relative or absolute template path. Resolve it when rendering each unit's `body`; a configured unreadable template is an error. Missing configuration uses the built-in body contract below. This file contains only the template reference; backlog-breakdown derives the target repository from `PRIMARY`.
 
-### First-use bootstrap
+## Phase 1: establish the supplied need and unit boundaries
 
-When the configuration or destination is missing:
+Read the full input and identify its problem, desired outcome, and scope. A need may describe incorrect behavior, a new outcome, concrete technical work, or uncertainty requiring investigation. Treat a proposed mechanism as a hypothesis until evidence supports it.
 
-1. Ask for the destination adapter and target.
-2. Ask for an optional workspace template only when the user wants one.
-3. Persist only those values in `.workspace/config/refine.json`.
-4. Continue refining the original need in the same invocation.
+One supplied need, report, or incident can require several units. Combine work that shares an observable outcome, causal uncertainty, and acceptance boundary, or has no independent value. Split work that can be accepted separately, serves different outcomes, or needs materially different investigations.
 
-Ask all bootstrap questions in one response. Bootstrap configures the destination; it does not refine the need, so it does not count toward the three-round limit.
+Investigate every in-scope unit needed to satisfy the supplied need. Explain each proposed boundary and preserve dependencies explicitly in the proposal. Resolve a material ambiguity about the supplied scope within the question rounds; the number of units follows from evidence and acceptance boundaries rather than a one-ticket limit.
 
-## Phase 1: identify the needs
-
-Read the full input and extract every distinct need it contains. A need may describe:
-
-- incorrect observable behavior;
-- a new desired outcome;
-- concrete technical work;
-- an uncertainty that requires investigation.
-
-Treat a proposed mechanism as a hypothesis until evidence supports it.
-
-### Relate or separate
-
-Needs are related when they share the same observable outcome, causal uncertainty, and acceptance boundary, or when none of them would be useful independently. Combine related needs into one candidate.
-
-Needs are independent when they can be accepted separately, serve different outcomes, or require materially different investigations.
-
-When the input contains several independent candidates, do not investigate all of them. Present a short proposal for each candidate containing:
-
-- the need;
-- why it is independent;
-- the investigation that would be required.
-
-Ask the user to select one. Refine exactly one candidate per invocation. Candidate selection counts as a refinement round when it requires a question.
-
-## Phase 2: investigate the selected need
+## Phase 2: investigate the supplied need
 
 Investigate enough to compare five surfaces. Record what each surface establishes in the evidence inventory (see "Evidence inventory") as you go, not at the end.
 
@@ -172,13 +133,13 @@ Research both the problem and possible solutions. Solution research informs ques
 
 ### Evidence inventory
 
-Keep the intermediate evidence outside the conversation so it survives context compaction. Create the inventory when investigation starts, next to the draft location described in Phase 8 and under the same isolation and cleanup rules:
+Keep intermediate evidence outside the conversation so it survives context compaction. Create the inventory when investigation starts, in the isolated temporary staging directory described in Phase 8:
 
 ```text
-<system-temporary-storage>/refine/<repository-id>/<session-id>/evidence--<draftId>.md
+<absolute-staging-directory>/evidence.md
 ```
 
-Assign the `draftId` when creating the inventory; Phase 7 reuses it. For each of the five surfaces, record:
+Assign a stable refinement identity and stable unit IDs when creating the inventory. For each of the five surfaces, record:
 
 - the sources read, as checkable references;
 - the local sources enumerated and which were read or skipped, with the reason;
@@ -205,7 +166,7 @@ Verify facts with available evidence instead of asking the user. Do not ask a qu
 
 ## Phase 4: refinement rounds
 
-Use at most three question rounds across the entire invocation. Candidate-selection questions count toward this total, leaving only the remaining rounds for later refinement. Bootstrap questions do not count.
+Use at most three question rounds across the entire invocation and all its units. Scope or unit-boundary questions count toward this total.
 
 For each round:
 
@@ -220,11 +181,11 @@ Defer a question to a later round only when it depends on an earlier answer or o
 
 An answer that directs the investigation instead of answering the question, such as pointing at sources to read or a reference to use, is a correction. Apply it to the research, update the inventory, and re-ask any question it left unanswered in the next round. Do not force it into an answer to the question asked.
 
-After the third round, ask no more skill-initiated refinement questions. Before turning remaining uncertainty into a spike, resolve every part that available research can still resolve. Only uncertainty that requires user intent or evidence that cannot be gathered in this invocation becomes the subject of a spike ticket.
+After the third round, ask no more skill-initiated refinement questions. Resolve everything available research can still resolve. Only uncertainty requiring user intent or evidence unavailable in this invocation becomes a spike unit; independently understood outcomes can still become feature units.
 
-## Phase 5: classify the ticket
+## Phase 5: classify each unit
 
-Always produce a ticket proposal.
+Produce an exact proposal covering the supplied need. Classify each independently acceptable unit using its evidence.
 
 ### Evidence gate
 
@@ -286,7 +247,7 @@ Do not convert an implementation preference into a technical task.
 
 ### Spike
 
-Use `spike` when material uncertainty prevents a sufficiently defined defect, story, or technical task. For feasibility, uncertainty is material when implementation depends on unexercised external or runtime behavior that can change the implementation path. Reuse of behavior already demonstrated by a PASS or merged PR proceeds directly; bug reproduction is defect investigation. Record the question and evidence through `dagu-feature` triage and its PoC lifecycle.
+Use `spike` when material uncertainty prevents a sufficiently defined defect, story, or technical task. For feasibility, uncertainty is material when implementation depends on unexercised external or runtime behavior that can change the implementation path. Reuse of behavior already demonstrated by a PASS or merged PR proceeds directly; bug reproduction is defect investigation. A spike maps to `dag: poc` with an explicit `question`. The resulting existing issue can later enter the PoC lifecycle through sprint planning, preserving feature/PoC continuations.
 
 Include:
 
@@ -301,178 +262,119 @@ Include:
 
 A spike produces usable knowledge, not production implementation.
 
-## Phase 6: resolve the materialization template
+## Phase 6: resolve each unit's body template
 
-Resolve the template before the final proposal, using the first available source in this order:
+Read the selected template before closing question rounds. Use the first available source:
 
 1. the template referenced by `.workspace/config/refine.json`;
-2. a compatible template provided by the repository;
-3. the configured adapter's default template.
+2. a compatible repository template, selected by classification when unambiguous;
+3. the built-in body contract below.
 
-Do not merge templates. A configured template that cannot be read is an error, not permission to silently fall back.
+Use one template per unit. Preserve its meaning and satisfy the backend's required sections. Resolve material template ambiguity within the available question rounds.
 
-When several repository templates are available, select by ticket type when unambiguous. Resolve any material ambiguity within the available refinement rounds.
+For `dag: feature`, the body contains `## Problem`, `## Change`, and `## Acceptance`. State evidence, scope, exclusions, and observable acceptance criteria in the relevant sections; add context or dependency sections when needed.
 
-Read the selected template before closing the question rounds so required information can be gathered during refinement.
+For `dag: poc`, the body contains `## PoC`, `## Verdict`, and `## After PASS`. State the question, minimal experiment against the real target, expected evidence and PASS/failure decision criteria, and the continuation enabled by PASS. A spike produces usable knowledge rather than production implementation.
 
-## Phase 7: create the canonical ticket
+## Phase 7: build canonical backlog units
 
-Create a destination-independent JSON object with these base fields:
-
-```json
-{
-  "schemaVersion": 1,
-  "draftId": "<stable unique id>",
-  "slug": "<readable-kebab-case-title>",
-  "type": "defect | story | technical-task | spike",
-  "title": "<title>",
-  "need": "<selected need>",
-  "problem": "<evidence-backed problem>",
-  "evidence": [
-    {
-      "claim": "<verified claim>",
-      "source": "<checkable local or online reference>"
-    }
-  ],
-  "research": {
-    "problemPatterns": [],
-    "solutionOptions": []
-  },
-  "decisions": [
-    {
-      "question": "<material question>",
-      "answer": "<user decision>"
-    }
-  ],
-  "expectedOutcome": "<observable outcome>",
-  "scope": {
-    "included": [],
-    "excluded": []
-  },
-  "acceptanceCriteria": [],
-  "unknowns": []
-}
-```
-
-Add type-specific fields only when relevant. A spike adds:
+The canonical artifact is UTF-8 `units.jsonl`, one JSON object per line:
 
 ```json
-{
-  "spike": {
-    "researchQuestion": "<question>",
-    "optionsToEvaluate": [],
-    "expectedEvidence": [],
-    "decisionEnabled": "<decision>",
-    "exitCriteria": []
-  }
-}
+{"id":"incident-observability","title":"Failed transitions lack a run reference","dag":"feature","labels":["defecto"],"body":"## Problem\nOperators cannot identify which transition failed from the current incident evidence.\n\n## Change\nExpose the failed transition and its run reference in the existing status surface.\n\n## Acceptance\nA failed transition is identifiable from the status surface with its run reference.","source":"refine"}
 ```
 
-`draftId` is the stable identity of the refinement. Derive `slug` from the current title. Preserve `draftId` across user corrections, but regenerate the slug when the title changes materially. Never rely on the slug alone for uniqueness.
+Required fields are `id`, `title`, `dag`, `labels`, and `body`. IDs are unique kebab-case within the refinement. `dag` is `feature` for a defect, story, or technical task, and `poc` for a spike. `labels` is an array of nonempty labels supported by the target repository. Map the evidence-backed classification to its existing label vocabulary; for example, the adopted discovery vocabulary uses `defecto`, `mejora`, and `duplicado`. Keep classification explicit in the body when no corresponding label exists. Every PoC also requires a nonempty `question`.
 
-## Phase 8: stage the temporary draft
+Set `source` to `refine`. Optional `findings` is an array of unique, nonempty finding IDs. Preserve source report references, verified evidence, operator decisions, and related issues in each body. Keep full investigation detail in `evidence.md`; each issue body remains self-contained after temporary files are removed.
 
-Write the canonical JSON to system-provided temporary storage outside the repository. Isolate it by repository, session, and draft identity. Use the equivalent of:
+State each unit's full problem, scope, and observable acceptance. Declare known dependencies and umbrella/sub-issue relationships explicitly in the proposal and body. Once issue identifiers exist, the coordinator records the corresponding GitHub relationships. Keep stable unit IDs across corrections and retain the refinement identity in the source context.
 
-```text
-<system-temporary-storage>/refine/<repository-id>/<session-id>/<slug>--<draftId>.json
+## Phase 8: stage absolute inputs
+
+Create private, session-isolated temporary storage outside the repository. These commands create the directory and print the absolute handoff path; run them in the coordinating shell and retain `REFINE_STAGE` for this invocation:
+
+```sh
+umask 077
+export REFINE_STAGE="$(mktemp -d "${TMPDIR:-/tmp}/refine.XXXXXXXX")"
+export REFINE_STAGE="$(cd "$REFINE_STAGE" && pwd -P)"
+printf 'UNITS_FROM=%s/units.jsonl\n' "$REFINE_STAGE"
 ```
 
-Requirements:
+Write the exact proposal's JSONL rows to `$REFINE_STAGE/units.jsonl`. Store the evidence inventory as `$REFINE_STAGE/evidence.md`. Optional neighboring `source.md` records the supplied input, stable refinement identity, source references, and decisions; optional `plan.md` explains the decomposition and dependencies. Both are context, not additional backend requirements.
 
-- only the current user can read or write the draft;
-- concurrent sessions cannot overwrite one another;
-- the draft never enters project storage;
-- the draft is not a durable backlog;
-- a later session does not discover or resume it.
-
-The evidence inventory from Phase 2 lives in the same directory under the same requirements. Delete it together with the draft after materialization, rejection, or normal session closure; keep it across corrected proposals, updating it as Phase 10 requires.
-
-Delete the draft after successful materialization, rejection, replacement by a corrected proposal, or normal session closure. An interrupted environment may retain temporary bytes until its own cleanup, but the draft remains functionally unavailable to later sessions.
+Only the current user may read or write these files. Concurrent sessions use distinct directories. Keep the directory available while backlog-breakdown imports or reviews it, including correction cycles. Temporary input is session-scoped rather than a durable backlog; later sessions use published issue identifiers as their record.
 
 ## Phase 9: present the exact proposal
 
-Render the canonical ticket through the resolved template and destination adapter. Present:
+Present all units together, showing for each:
 
-```text
-Draft: <slug>
-Type: <type>
-Destination: <configured destination>
-Template source: workspace | repository | adapter
+- stable ID, title, classification, DAG, labels, and any PoC question;
+- complete exact issue body, including scope, evidence, and acceptance;
+- dependencies, provenance, and the reason for its independent acceptance boundary.
 
-<exact rendered ticket>
-```
+Show the absolute `UNITS_FROM` path, `SOURCE=refine`, target repository, template source, and adopted `planning.yaml` path. Offer to submit exactly this proposal to `backlog-breakdown` for review, approval, and issue creation. Acceptance covers these units and their content; a change in scope or content requires a replacement proposal.
 
-Always offer to materialize that exact proposal immediately.
-
-Do not create a separate publish or materialize command. Materialization is the continuation of the same `/refine` interaction.
-
-## Phase 10: handle the user's response
+## Phase 10: handle the operator's response
 
 ### Accept
 
-When the user accepts the exact proposal:
+After the operator accepts the exact proposal:
 
-1. Materialize exactly the rendered ticket in the configured destination.
-2. Verify that the destination returns an identifier.
-3. Delete the temporary JSON and the evidence inventory.
-4. Return the identifier or locator.
-5. Stop.
+1. Invoke the `backlog-breakdown` skill with the staged absolute `UNITS_FROM`, `SOURCE=refine`, established absolute `PRIMARY`, and the coordinating `OMP_SESSION_ID`. Read and follow that skill's actual enqueue and human-task commands; it owns the backend invocation, review, approval, and issue creation.
+2. Keep staged inputs available. The backend deterministically imports them, validates them with `check_plan`, obtains independent `plan-reviewer` review, and waits for operator approval before materialization. Refinement acceptance starts that review; it is not a substitute for the backend's approval.
+3. If review requests correction, edit the upstream staged units, verify any new facts, and present the complete corrected proposal for acceptance. Only after the upstream correction is accepted does the coordinator rewind to `import_units`. This ensures the next import contains the corrected proposal. Invalid or revise review cannot materialize, even if someone completes the approval form.
+4. Let backlog-breakdown create and verify issues and return its `issues.jsonl` mapping. Preserve its issue identifiers and `<!-- breakdown-unit: RUN/id -->` lineage markers. Scheduling new feature/PoC runs belongs to `sprint-planning`.
+5. Return the verified issue identifiers/locators and any declared relationships. Remove the temporary staging directory after the backend has finished using it.
+
+The exact handoff is the invocation of `backlog-breakdown` with those values, not a second implementation of its backend commands. The adopted planning DAG is required; backlog-breakdown owns all issue creation for refined work.
+
+For the accepted proposal, backlog-breakdown performs this executable enqueue operation using its allocated `BREAKDOWN_RUN_ID`, the established primary checkout and coordinating session. These variables are real values obtained by that skill, not new refine configuration:
+
+```sh
+: "${PRIMARY:?Absolute primary checkout required}"
+: "${OMP_SESSION_ID:?Coordinating session ID required}"
+: "${BREAKDOWN_RUN_ID:?Backlog-breakdown run ID required}"
+: "${REFINE_STAGE:?Absolute staging directory required}"
+test -r "$PRIMARY/.workspace/dagu/dags/planning.yaml"
+test -r "$REFINE_STAGE/units.jsonl"
+dagu-feature-bundle enqueue --run-id "$BREAKDOWN_RUN_ID" "$PRIMARY/.workspace/dagu/dags/planning.yaml" -- \
+  UNITS_FROM="$REFINE_STAGE/units.jsonl" PRIMARY="$PRIMARY" SOURCE=refine OMP_SESSION_ID="$OMP_SESSION_ID"
+```
+
+Follow backlog-breakdown's review, approval, and correction commands for that run.
 
 ### Correct
 
-When the user supplies corrections:
+When the operator corrects the proposal:
 
-1. Invalidate and delete the previous temporary JSON.
-2. Apply the corrections to the selected need.
-3. Verify any new factual claim.
-4. Repeat affected research when the correction changes evidence or scope, and update the evidence inventory.
-5. Preserve the `draftId`.
-6. Generate a new slug when appropriate.
-7. Write a new temporary JSON.
-8. Present a complete replacement proposal.
-9. Offer immediate materialization again.
+1. Invalidate the previous proposal.
+2. Apply corrections to the supplied need and affected units.
+3. Verify new factual claims, repeat affected research, and update the evidence inventory.
+4. Preserve the refinement identity and stable IDs of unchanged units.
+5. Rewrite the upstream `units.jsonl` and any affected neighboring context.
+6. Present the complete replacement proposal and offer the same review/approval handoff.
 
-User corrections are not skill-initiated question rounds. After three refinement rounds, any new material uncertainty introduced by a correction is represented in a spike rather than opening another question round.
-
-Do not preserve superseded proposals.
+Operator corrections are not skill-initiated question rounds. After three rounds, represent material uncertainty that research cannot resolve as a spike unit rather than starting another round.
 
 ### Reject or leave
 
-When the user rejects the proposal, declines immediate materialization, or ends the session:
-
-1. Delete or abandon the temporary JSON and evidence inventory according to the environment's session cleanup.
-2. Do not create a durable record.
-3. Do not offer future resumption.
-4. Stop.
-
-## Adapter contract
-
-The configured destination adapter may only:
-
-1. identify the destination;
-2. provide its default template;
-3. render the canonical ticket;
-4. create one record;
-5. return and verify its identifier.
-
-It must not change the ticket's meaning, add scope, invent metadata, create extra records, or start downstream work.
+If the operator rejects or abandons the proposal before backend submission, remove its temporary files and end the interaction. If a backend run is already active, coordinate its rejection through backlog-breakdown before removing inputs it still needs. Normal session cleanup removes staged inputs once they are no longer in use.
 
 ## Final quality check
 
-Before staging the JSON, verify internally that:
+Before staging, verify internally that:
 
-- exactly one selected need is being refined;
-- the ticket type follows from the evidence;
-- the evidence gate in Phase 5 was satisfied before the type was named;
-- authoritative references and their divergences are stated in the evidence;
-- assumptions and unknowns are explicit;
-- the title describes the problem or outcome;
-- scope and exclusions do not conflict;
-- acceptance criteria are observable;
-- user decisions are preserved;
-- both problem and solution research are represented;
-- unnecessary implementation detail is absent;
-- the resolved template is satisfied.
+- the proposal covers the one supplied, authorized need;
+- every unit has an independent acceptance boundary and evidence-backed classification;
+- the evidence gate was satisfied before classification;
+- authoritative references, divergences, assumptions, and unknowns are explicit;
+- every title describes a problem or outcome;
+- scope, exclusions, dependencies, and acceptance criteria are consistent;
+- operator decisions and source provenance are preserved;
+- problem and solution research are represented;
+- each body satisfies its template and backend section contract;
+- units satisfy the shared JSONL schema and PoCs include `question`;
+- the absolute staged input and adopted backend are ready for the accepted handoff.
 
-If these checks cannot support a concrete type, produce a spike. Always continue to an exact ticket proposal and offer immediate materialization.
+When evidence cannot support a concrete implementation outcome, propose a spike for that uncertainty. Continue to the exact multi-unit proposal and offer the backlog-breakdown handoff.

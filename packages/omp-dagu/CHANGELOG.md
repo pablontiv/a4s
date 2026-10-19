@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.90
+
+- Consolidate issue creation in backlog breakdown: import staged units, validate and independently review them, then materialize the operator-approved subset.
+- Route refined needs and discovery findings through the same breakdown backend; run PoCs against existing issues and retain feature/PoC continuations.
+- Separate Sprint Planning, Sprint Review and Sprint Retrospective, with completion checks in planning and evidence-bearing reports refined into backlog units.
+- Admit the planning backend through the distributed bundle CLI.
+
 ## 0.3.89
 
 - Admission accepts lifecycle renders sealed at any patch release of the package's major/minor, so package patch merges no longer require re-sealing adopted DAGs; a different minor is still rejected.

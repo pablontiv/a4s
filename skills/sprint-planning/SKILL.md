@@ -32,6 +32,21 @@ Convert the goal into 3–5 checks. Each check is one command with an expected r
 
 Run every check and record its output. The operator confirms the checks together with the goal. The `sprint-review` skill re-runs the same checks at the end of the sprint.
 
+### Definition of Done
+
+Keep goal completion and issue completion separate. The goal is met when its agreed checks answer yes; that alone does not establish that an issue meets its acceptance criteria. For each issue, record yes/no against its acceptance criteria and the delivery evidence required by its existing feature or PoC lifecycle:
+
+| Work | Completion evidence |
+|---|---|
+| Feature | Acceptance results, the run's local gate and current QA/reviewer PASS verdicts, merged PR, required CI evidence from `authorize_ci`, closed issue, and successful run with reconciled worktree/branch cleanup |
+| PoC | The published verdict and findings answering the issue's question, successful PoC run and reconciled worktree/branch cleanup, and the lifecycle's issue disposition |
+| PoC PASS with promotion | Also track the promoted feature continuation against the feature evidence; distinguish a completed experiment from unfinished promoted delivery |
+| PoC PASS without promotion | The completed experiment needs no feature implementation to count as a completed PoC |
+| PoC FAIL | The published verdict explains the failed experiment; the required existing issue's disposition remains unchanged |
+| PoC INCONCLUSIVE | The published findings record the unresolved question and the operator's choice of iteration or completion with promote=no; an inconclusive result is not a PASS |
+
+Use the existing run artifacts and issue/PR evidence; record their provenance and current lifecycle state. A missing condition is a no with the responsible next action, not a reason to invent another delivery gate.
+
 ## 3. Rank
 
 Collect the open issues with `gh issue list --state open`. Put each issue in the first class it fits:
@@ -53,12 +68,13 @@ In the product scope, an issue that no check and no evidence reaches is P3. Repo
 
 ## 4. Sprint Backlog and enqueue
 
-Show the order as one table: position, issue, class, evidence, the check it turns to "yes". After the operator confirms, enqueue the issues in Dagu in that order with the `dagu-feature` skill. P3 issues are not enqueued.
+Show the order as one table: position, issue, class, evidence, the check it supports (or its stated contribution). After the operator confirms, the responsible session enqueues the issues in Dagu in that order with the `dagu-feature` skill. P3 issues are not enqueued. This is the sole ranking and new-issue enqueue path; Dagu executes the supplied order. Existing feature and PoC continuations keep their lifecycle behavior.
+
+Needs, reports and incidents that are not yet actionable issues go through `refine`, then `backlog-breakdown` for reviewed issue materialization. Bring the resulting issues back here for ranking and enqueue.
 
 ## Rules
 
-- Answer "what blocks?" with the check output. Each blocker names its failing check, its cause and its fix.
-- A new process step (seal, checkpoint, gate, approval) enters only with a check that shows it keeps the goal's checks at "yes".
-- When a P0 breaks the Dagu cycle itself, fix it with a direct PR and merge; the cycle cannot repair itself.
+- Answer "what blocks?" with the check output. Each blocker names its failing check, the evidenced cause or unresolved question, and the responsible next action.
+- Use the existing delivery lifecycle and its evidence for recovery; the responsible session acts within the operator's authorization.
 - Attribute each run to the session in its `OMP_SESSION_ID` parameter. A run whose owner session is not alive is a station failure.
 - Re-rank when a check changes its answer or the operator changes the goal; an order written in an earlier session is not reused without re-running the checks.

@@ -288,73 +288,57 @@ Open an issue in the repository to adopt the lifecycle. Enqueue it as described 
 
 Once that run is `Succeeded`, every later issue enqueues `.workspace/dagu/dags/feature.yaml` from the primary checkout.
 
-## Planning
+## Backlog breakdown
 
-Use [dagu-planning](../dagu-planning/SKILL.md) to convert a locally approved OMP plan into reviewed issues. Bootstrap stages `planning.yaml` as the fourth repository DAG. It waits at `plan`, `review` and `approve`; invalid units or a review requesting changes rewind to `plan` with the observed run-wide iteration. Only operator approval authorizes materialization and feature/PoC enqueueing.
-
-## Descubrimiento continuo
-
-`discovery` diagnostica cualquier repositorio adoptado desde un snapshot de su rama
-por defecto y materializa unidades de trabajo aprobadas como issues. El label
-`workspace=<repo>` identifica el workspace coordinador que recibe los avisos OMP;
-el repositorio diagnosticado se resuelve en tiempo de ejecución desde `PRIMARY`.
+Use [backlog-breakdown](../backlog-breakdown/SKILL.md) as the single issue-creation backend for refinement and discovery. Bootstrap stages `planning.yaml` as the fourth repository DAG. Enqueue it with required absolute `UNITS_FROM`, `PRIMARY`, and `OMP_SESSION_ID`; `SOURCE` is `refine`, `discovery`, or `plan`.
 
 ```sh
-dagu enqueue --run-id "discovery-<id>" .workspace/dagu/dags/discovery.yaml -- \
-  LENSES="0,1,2" POLICY="defecto" SOURCE="<origen de la solicitud>" \
-  LIVE_TARGET="" PRIMARY="/ruta/al/repo" \
-  OMP_SESSION_ID="<valor devuelto por dagu_session_id>"
+node packages/omp-dagu/bin/dagu-feature-bundle.ts enqueue \
+  --run-id "<repo>-breakdown-<slug>" .workspace/dagu/dags/planning.yaml -- \
+  UNITS_FROM="/absolute/path/to/units.jsonl" SOURCE=refine \
+  PRIMARY="/absolute/path/to/primary" OMP_SESSION_ID="<dagu_session_id>"
 ```
 
-`snapshot` imprime `out_dir`, `sha` y `snapshot`. El out-dir es
-`${DAGU_HOME:-$HOME/.dagu}/data/discovery/<owner>__<repo>/<run-id>/`; el
-worktree detached que contiene queda en `snapshot/` y es de solo lectura.
-Cada espera tiene un único artefacto a cargo del coordinador:
+The steps are `init`, `import_units`, `check_plan`, `review`, `check_review`, `approve`, and `materialize`. Independent `plan-reviewer` evidence precedes operator approval. Only the operator authorizes all or selected IDs at `approve`; `materialize` creates or reuses issues by `<!-- breakdown-unit: <run>/<id> -->`. Corrections remain in the upstream refinement source. After correcting it, explicitly push back from `review` or `approve` with the observed run-wide iteration to reimport at `import_units`.
 
-| `human.task` | Archivo que debe escribir |
+Sprint Planning in the session alone ranks and enqueues new work. Breakdown creates issues; lifecycle continuations between feature and PoC remain intact.
+
+## Continuous discovery
+
+Discovery diagnoses an adopted repository from a default-branch snapshot. The `workspace=<repo>` label identifies the coordinating workspace; `PRIMARY` selects the repository to inspect.
+
+```sh
+node packages/omp-dagu/bin/dagu-feature-bundle.ts enqueue \
+  --run-id "discovery-<id>" .workspace/dagu/dags/discovery.yaml -- \
+  LENSES="0,1,2" SOURCE="<request-context>" LIVE_TARGET="" \
+  PRIMARY="/absolute/path/to/repository" OMP_SESSION_ID="<dagu_session_id>"
+```
+
+`snapshot` prints `out_dir`, `sha`, and `snapshot`. The persistent directory is `${DAGU_HOME:-$HOME/.dagu}/data/discovery/<owner>__<repo>/<run-id>/`; its detached `snapshot/` worktree is read-only.
+
+| `human.task` | Coordinator artifact |
 |---|---|
-| `discover` | Un `findings-<lente>.jsonl` por lente solicitada; ejecuta una subagente por lente, máximo 8. |
-| `validate` | `verdicts.jsonl`, con un veredicto independiente por hallazgo actual. Si `LIVE_TARGET` está definido, la validación en vivo es solo lectura. |
-| `consolidate` | `units.jsonl`, con cada hallazgo confirmado asignado exactamente a una unidad autocontenida y con linaje. |
-| `approve` | No escribe archivo: completa el formulario `APPROVED=all` o una lista de ids de unidad separada por comas. |
+| `discover` | One `findings-<lens>.jsonl` per requested lens; one subagent per lens, at most eight |
+| `validate` | Independent `verdicts.jsonl`; optional `LIVE_TARGET` inspection is read-only |
+| `consolidate` | `units.jsonl`, assigning each confirmed finding to a self-contained unit with lineage |
 
-Completa cada espera con `dagu human-task complete discovery --run-id <id>
---step <paso>`; para `approve`, agrega `--input APPROVED=all`. Para corregir la
-consolidación, devuelve `approve` con `dagu human-task push-back discovery
---run-id <id> --step approve --expected-iteration <n>`. Los pasos deterministas
-validan todos los JSONL y fallan cerrados antes de continuar.
+Complete each wait with `dagu human-task complete discovery --run-id <id> --step <step>`. Deterministic checks validate the artifacts. Discovery stages absolute `breakdown-units.jsonl` with rows `{id,title,dag:"feature",labels:[classification],body,source:"discovery",findings}` and hands it to `planning.yaml`. Labels use the discovery schema's classification values; the issue body preserves discovery identity and provenance. Independent review, operator approval, and materialization belong to that backend.
 
-No se escribe en GitHub antes de `approve`. `materialize` busca primero el
-marcador `<!-- discovery-unit: <id> -->` entre todos los issues: crea una vez y
-registra `reused: true` al repetir. `dispose` aplica `POLICY`, evita run ids de
-`feature` existentes y actualiza el historial aceptado de cada lente. En la
-siguiente ejecución, `temporal-<lente>.jsonl` distingue `nuevo`, `persistente`,
-`resuelto` y `regresion`.
+Discovery records its backend run ID and retains per-lens findings and temporal history so subsequent runs distinguish new, persistent, resolved, and regressed findings. Sprint Planning selects and enqueues the resulting backlog work.
 
-La extensión despierta la sesión `OMP_SESSION_ID` en cada espera con:
-
-```text
-[DAGU STATE] run=<id> status=waiting step=<discover|validate|consolidate|approve> dag=discovery bundle=<version|unstamped> extension=<version> main=<version|unknown|n/a> compat=<ok|stale|incompatible|unstamped>
-```
 
 ## Enqueue an issue
 
 Preconditions: run from the repository clone, its main working tree, clean and on `BASE_BRANCH`. That clone is the only `PRIMARY`. The DAG creates the run's worktree at `$PRIMARY/.workspace/worktrees/issue-<n>`. Dagu scopes run IDs to the DAG name `feature`, and every adopting repository shares that name, so prefix the run ID with the repository:
 
 ```sh
-repo=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
-repo_name=${repo##*/}
-issue_snapshot=$(gh issue list --repo "$repo" --state open --limit 1000 \
-  --json number --jq '.[].number')
-for n in $issue_snapshot; do
-  dagu enqueue --run-id "$repo_name-issue-$n" .workspace/dagu/dags/feature.yaml -- \
-    ISSUE="$n" \
-    PR_NUMBER="" \
-    OMP_SESSION_ID="<value returned by dagu_session_id>"
-done
+n=<issue-selected-in-sprint-planning>
+node packages/omp-dagu/bin/dagu-feature-bundle.ts enqueue \
+  --run-id "<repo>-issue-$n" .workspace/dagu/dags/feature.yaml -- \
+  ISSUE="$n" OMP_SESSION_ID="<value returned by dagu_session_id>"
 ```
 
-`issue_snapshot` is the fixed batch for this coordinator turn. Call `dagu_session_id` in the main session before enqueueing and use its returned value for every run. End the turn immediately after the enqueue loop; the status extension resumes coordination with targeted notices.
+Call `dagu_session_id` in the main session before enqueueing. Enqueue only the issues selected and ranked by Sprint Planning, preserving that order. The status extension resumes coordination with targeted notices.
 
 Set `PR_NUMBER` only to adopt an existing open PR whose head is `dagu/issue-<ISSUE>`. `OMP_SESSION_ID` targets the persistent main OMP session that enqueued the run. `BASE_BRANCH` defaults to the versioned file. Bootstrap fixes `GATE`, `REBASE_RESOLVER`, `REQUIRED_CHECK` and canonical `PRIMARY` at adoption; the DAG derives `BRANCH=dagu/issue-$ISSUE`. Admission rejects each of those five names as run parameters, naming it before repository state changes. Change adoption policy through bootstrap and version the resulting renders.
 
@@ -607,21 +591,23 @@ step waiting; inspect its log and apply the same iteration-protected transition.
 ## Feasibility PoC
 
 ```sh
-dagu enqueue --run-id "<repo>-poc-<id>" .workspace/dagu/dags/poc.yaml -- \
-  QUESTION="<behavior to prove>" OMP_SESSION_ID="<value returned by dagu_session_id>"
+node packages/omp-dagu/bin/dagu-feature-bundle.ts enqueue \
+  --run-id "<repo>-poc-<id>" .workspace/dagu/dags/poc.yaml -- \
+  ISSUE="<existing-issue-number>" QUESTION="<behavior to prove>" \
+  OMP_SESSION_ID="<value returned by dagu_session_id>"
 ```
 
-ISSUE is optional. Without it, QUESTION is required and `record` creates the issue
-before any experiment, with the question as its body. With ISSUE, provide the
-precise QUESTION (otherwise the body is used for execution only). Promotion of a
-preexisting issue requires triage: its current question comes from `## Pregunta`
-in the latest first-line `poc-triage:yes` comment. An explicit PoC without triage
-still publishes its verdict but cannot promote. For an issue created by record,
-the question comes from its body if no triage comment exists. Triage comments
-own question binding while the body retains issue scope. `base` requires clean PRIMARY on BASE_BRANCH, fetches and
-fast-forwards it, and records BASE_SHA. `worktree` creates
-`poc/<RUN>` at `.workspace/worktrees/poc-<RUN>` from that SHA. Never push that
-branch. Git metadata under PRIMARY stores per-RUN state and published evidence.
+`ISSUE` is required. `QUESTION` is optional when the issue contains a nonempty
+`## PoC` section. Promotion binds the question to the latest first-line
+`poc-triage:yes` comment's `## Pregunta`, falling back to `## PoC` when there is
+no triage question. The issue body retains the implementation scope. A successful
+PoC can continue into feature for the same issue; this is a lifecycle continuation,
+not new backlog selection.
+
+`base` requires clean PRIMARY on BASE_BRANCH, fetches and fast-forwards it, and
+records BASE_SHA. `worktree` creates `poc/<RUN>` at
+`.workspace/worktrees/poc-<RUN>` from that SHA. The experiment branch remains
+local. Git metadata under PRIMARY stores per-RUN state and published evidence.
 
 At `run_poc`, execute minimal real-target commands in that worktree. Record the
 result outside its diff at `git rev-parse --git-path poc/result.md`:
@@ -1022,3 +1008,5 @@ The `orphan` step selects `triage` or `implement` observations whose issue is `C
 ## Finish
 
 After `close_gate`, the run is `Succeeded`. The closing contract is a merged PR, a clean primary checkout exactly at `origin/$BASE_BRANCH`, no run worktree, and no local or remote run branch; `close_gate` performs and verifies every part of that contract and prints the cleanup result. `handler_on.exit` applies the same ownership, integration and clean-state checks to terminal runs, preserving resources with durable diagnostics whenever proof is uncertain. The turn status reports under Done the run ID, the PR, the tested SHA, and the `base_sha` printed by `close_gate`.
+
+Lifecycle completion evidence is distinct from sprint-goal evaluation. Sprint Planning defines Definition of Done and yes/no goal checks as content; Sprint Review evaluates those against the recorded outcomes. The existing lifecycle checkpoints establish candidate, merge, and cleanup evidence rather than adding a sprint-goal gate.

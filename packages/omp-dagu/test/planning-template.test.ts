@@ -1,44 +1,46 @@
-import { liveDagu } from "./fixtures/live-dagu.ts";
 import assert from "node:assert/strict";
-import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { createServer } from "node:net";
+import { spawnSync, type SpawnSyncReturns } from "node:child_process";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
+import { parse } from "yaml";
 
-const template = readFileSync(new URL("../skills/dagu-feature/planning.yaml", import.meta.url), "utf8");
-const rendered = readFileSync(new URL("../../../.workspace/dagu/dags/planning.yaml", import.meta.url), "utf8");
-function script(source: string, id: string): string {
-  const lines = source.split("\n");
-  const start = lines.indexOf(`  - id: ${id}`);
-  assert.ok(start >= 0, id);
-  const run = lines.indexOf("    run: |", start);
-  assert.ok(run > start, id);
-  let end = run + 1;
-  while (end < lines.length && (lines[end]!.startsWith("      ") || lines[end] === "")) end++;
-  return lines.slice(run + 1, end).map(line => line.slice(6)).join("\n");
+const definition = parse(readFileSync(new URL("../skills/dagu-feature/planning.yaml", import.meta.url), "utf8"));
+function script(id: string): string {
+  const step = definition.steps.find((step: { id: string }) => step.id === id);
+  assert.equal(typeof step?.run, "string", `${id} exposes an executable backend operation`);
+  return step.run;
 }
 function jsonl(file: string, rows: unknown[]): void {
   writeFileSync(file, rows.map(row => JSON.stringify(row)).join("\n") + "\n");
 }
 function unit(id = "unit-feature", dag = "feature"): Record<string, unknown> {
   return { id, title: `Deliver ${id}`, dag, labels: ["change"], ...(dag === "poc" ? { question: "Can the real target perform the operation?" } : {}),
-    body: dag === "poc" ? "## PoC\nReal target question\n## Veredicto\nRecord observed output\n## Después del PASS\nRetain capability" : "## Problema\nFull problem\n## Cambio\nComplete scope\n## Aceptación\nRun npm test and observe result" };
+    body: dag === "poc" ? "## PoC\nReal target question\n## Verdict\nRecord observed output\n## After PASS\nRetain capability" : "## Problem\nFull problem\n## Change\nComplete scope\n## Acceptance\nRun npm test and observe result" };
 }
 function executable(file: string, body: string): void { writeFileSync(file, body); chmodSync(file, 0o755); }
-function fixture(realDagu = "") {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), "planning-")));
-  const bin = join(root, "bin"), out = join(root, "out"), primary = join(root, "primary");
+interface Fixture {
+  root: string;
+  bin: string;
+  out: string;
+  upstream: string;
+  env: NodeJS.ProcessEnv;
+  run(id: string, extra?: NodeJS.ProcessEnv): SpawnSyncReturns<string>;
+  importRows(rows: unknown[]): SpawnSyncReturns<string>;
+  close(): void;
+}
+function fixture(): Fixture {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "breakdown-")));
+  const bin = join(root, "bin"), out = join(root, "out"), primary = join(root, "primary"), upstream = join(root, "upstream.jsonl");
   for (const dir of [bin, out, primary, join(root, "tmp")]) mkdirSync(dir);
-  writeFileSync(join(out, "plan.md"), "Approved local plan\n");
   writeFileSync(join(root, "issues.json"), "[]\n");
   executable(join(bin, "gh"), `#!/bin/bash
 set -euo pipefail
 FAKE_STATE=${JSON.stringify(root)}
-if [[ "$1 $2" == "repo view" ]]; then echo owner/repo
-elif [[ "$1" == api ]]; then jq -c '[.]' "$FAKE_STATE/issues.json"
+if [[ "$1" == api ]]; then
+  [[ "$*" == *--paginate* && "$*" == *--slurp* ]]
+  jq -c '[.[0:1], .[1:]]' "$FAKE_STATE/issues.json"
 elif [[ "$1 $2" == "issue create" ]]; then
   printf '%s\\n' "$*" >> "$FAKE_STATE/github.log"
   while (($#)); do
@@ -51,98 +53,103 @@ elif [[ "$1 $2" == "issue create" ]]; then
   echo "$url"
 else echo "Unexpected gh $*" >&2; exit 1; fi
 `);
-  executable(join(bin, "dagu"), `#!/bin/bash
-set -euo pipefail
-FAKE_STATE=${JSON.stringify(root)}
-REAL_DAGU=${JSON.stringify(realDagu)}
-if [[ "$1" == status && "$*" == *planning* ]]; then
-  if test -n "${"$"}{REAL_DAGU:-}"; then exec "$REAL_DAGU" "$@"; fi
-  echo 'Running -'; echo "push-back iteration: ${"$"}{FAKE_ITERATION:-0}"
-elif [[ "$1" == status ]]; then test -f "$FAKE_STATE/$3.enqueued"
-elif [[ "$1" == enqueue && "$*" != *planning.yaml* ]]; then
-  printf '%s\\n' "$*" >> "$FAKE_STATE/enqueues.log"
-  touch "$FAKE_STATE/$3.enqueued"
-elif test -n "${"$"}{REAL_DAGU:-}"; then exec "$REAL_DAGU" "$@"
-else echo "Unexpected dagu $*" >&2; exit 1; fi
-`);
-  executable(join(bin, "dagu-feature-bundle"), '#!/bin/bash\nexec dagu "$@"\n');
-  const env = { ...process.env, HOME: root, TMPDIR: join(root, "tmp"), PRIMARY: primary, OUT_DIR: out, NWO: "owner/repo", RUN: "repo-planning-test", SOURCE: "Operator request", OMP_SESSION_ID: "owner-session", DAGU_OUTPUT_FILE: join(root, "outputs"), FAKE_STATE: root, PATH: `${bin}:${process.env.PATH}` };
-  return { root, bin, out, primary, env, run: (body: string, extra: NodeJS.ProcessEnv = {}) => spawnSync("bash", ["-c", body], { env: { ...env, ...extra }, encoding: "utf8" }), close: () => rmSync(root, { recursive: true, force: true }) };
+  executable(join(bin, "dagu"), '#!/bin/bash\nset -euo pipefail\n[[ "$1" == status ]]\nprintf "Waiting -\\npush-back iteration: %s\\n" "${FAKE_ITERATION:-0}"\n');
+  executable(join(bin, "curl"), '#!/bin/sh\nprintf \'%s\\n\' \'{"dagRunDetails":{"nodes":[{"step":{"id":"review"},"startedAt":"2026-10-17T00:00:01Z"}]}}\'\n');
+  const env = { ...process.env, HOME: root, TMPDIR: join(root, "tmp"), PRIMARY: primary, OUT_DIR: out, UNITS_FROM: upstream, NWO: "owner/repo", RUN: "repo-breakdown-test", SOURCE: "plan", OMP_SESSION_ID: "owner-session", DAGU_OUTPUT_FILE: join(root, "outputs"), PATH: `${bin}:${process.env.PATH}` };
+  const run = (id: string, extra: NodeJS.ProcessEnv = {}) => spawnSync("bash", ["-c", script(id)], { env: { ...env, ...extra }, encoding: "utf8" });
+  const importRows = (rows: unknown[]) => { jsonl(upstream, rows); return run("import_units"); };
+  return { root, bin, out, upstream, env, run, importRows, close: () => rmSync(root, { recursive: true, force: true }) };
 }
-
-for (const [name, source] of [["template", template], ["render", rendered]] as const) {
-  test(`${name} carries the planning graph, bundle stamp and approval boundary`, () => {
-    const ids = [...source.matchAll(/^  - id: (\w+)$/gm)].map(match => match[1]);
-    assert.deepEqual(ids, ["init", "plan", "check_plan", "review", "check_review", "approve", "materialize", "dispose"]);
-    assert.match(source, /^# dagu-feature-bundle: /);
-    for (const step of ["plan", "review", "approve"]) assert.match(source, new RegExp(`- id: ${step}\\n[\\s\\S]*?action: human\\.task`));
-    for (const step of ["init", "check_plan", "check_review"]) assert.doesNotMatch(script(source, step), /gh issue create|dagu enqueue/);
-    assert.match(source, /rewind_to: plan/);
-  });
-  test(`${name} validates every planning unit rule with line-local diagnostics`, () => {
-    const f = fixture();
-    try {
-      const cases: Array<[Record<string, unknown>, string]> = [
-        [{ ...unit(), id: "Bad ID" }, "kebab-id"], [{ ...unit(), title: " " }, "title"],
-        [{ ...unit(), dag: "other" }, "dag"], [{ ...unit("probe", "poc"), question: undefined }, "poc-question"],
-        ...["depends", "blocks", "blocked_by"].map(key => [{ ...unit(), [key]: [] }, "self-contained"] as [Record<string, unknown>, string]),
-        [{ ...unit(), body: "## Problema\nMissing sections" }, "required-sections"],
-        [{ ...unit("probe", "poc"), body: "## PoC\nMissing sections" }, "required-sections"],
-        [{ ...unit(), labels: "change" }, "labels"],
-        [{ ...unit(), id: null }, "kebab-id"], [{ ...unit(), title: 7 }, "title"],
-        [{ ...unit("probe", "poc"), question: null }, "poc-question"],
-        [{ ...unit(), body: null }, "body"], [{ ...unit(), labels: [7] }, "labels"],
-      ];
-      for (const [row, rule] of cases) {
-        jsonl(join(f.out, "units.jsonl"), [unit("first"), row]);
-        const result = f.run(script(source, "check_plan"));
-        assert.notEqual(result.status, 0, rule);
-        assert.match(result.stderr, new RegExp(`units\\.jsonl:2: rule=${rule}`));
-        assert.ok(existsSync(join(f.out, "review-rewind")));
-      }
-      jsonl(join(f.out, "units.jsonl"), [unit(), unit()]);
-      assert.match(f.run(script(source, "check_plan")).stderr, /units\.jsonl:2: rule=unique-id/);
-      writeFileSync(join(f.out, "units.jsonl"), "{invalid}\n");
-      assert.match(f.run(script(source, "check_plan")).stderr, /units\.jsonl:1: rule=json-object/);
-      jsonl(join(f.out, "units.jsonl"), [unit(), unit("probe", "poc")]);
-      const accepted = f.run(script(source, "check_plan"));
-      assert.equal(accepted.status, 0, accepted.stderr);
-      assert.equal(existsSync(join(f.out, "review-rewind")), false);
-    } finally { f.close(); }
-  });
-}
-
-test("planning render retains adoption identity and exactly renders the template", () => {
-  const stamp = rendered.split("\n")[0]!.replace("# dagu-feature-bundle: ", "");
-  const version = rendered.match(/dagu-feature-bundle=(\d+\.\d+\.\d+)/)![1]!;
-  const identity = rendered.match(/- DAGU_FEATURE_BUNDLE: "([^"]+)"/)![1]!;
-  assert.equal(rendered, template.replaceAll("__DAGU_FEATURE_STAMP__", stamp).replaceAll("__DAGU_FEATURE_VERSION__", version).replaceAll("__DAGU_FEATURE_IDENTITY__", identity).replaceAll("TEMPLATE_REPO", "a4s"));
-});
-
-interface PlanningArtifacts {
-  root: string;
-  out: string;
-  env: NodeJS.ProcessEnv;
-}
-function transcript(f: PlanningArtifacts, data: unknown = { verdict: "accept", findings: [] }, extra: { parent?: string; timestamp?: string; agent?: string; marker?: string; last?: unknown } = {}) {
+function successful(result: SpawnSyncReturns<string>): void { assert.equal(result.status, 0, result.stderr); }
+function transcript(f: Fixture, data: unknown = { verdict: "accept", findings: [] }, extra: { parent?: string; timestamp?: string; agent?: string; marker?: string; last?: unknown } = {}) {
   const sessions = join(f.root, ".omp", "agent", "sessions", "-primary", "date_owner-session");
   mkdirSync(sessions, { recursive: true });
-  const marker = `PLAN_REVIEW AGENT=plan-reviewer DAG=planning RUN=${f.env.RUN} ITERATION=0 END`;
-  writeFileSync(join(f.out, "generation"), marker + "\n");
   jsonl(join(sessions, "PlanReviewTest.jsonl"), [
     { type: "session", parentSession: extra.parent ?? `${sessions}.jsonl` },
-    { type: "session_init", agent: extra.agent ?? "plan-reviewer", task: extra.marker ?? marker, timestamp: extra.timestamp ?? "2026-10-17T00:00:01.001Z" },
+    { type: "session_init", agent: extra.agent ?? "plan-reviewer", task: extra.marker ?? readFileSync(join(f.out, "generation"), "utf8").trim(), timestamp: extra.timestamp ?? "2026-10-17T00:00:01.001Z" },
     { type: "message", message: { role: "toolResult", toolName: "yield", details: { data } } },
     ...(extra.last === undefined ? [] : [{ type: "message", message: { role: "toolResult", toolName: "yield", details: { data: extra.last } } }]),
   ]);
 }
+function accepted(f: Fixture, rows: unknown[] = [unit()]): void {
+  successful(f.importRows(rows)); successful(f.run("check_plan")); transcript(f);
+  successful(f.run("check_review", { REVIEW: "PlanReviewTest" }));
+}
 
-test("review verifier binds parent, generation, agent, cutoff and the last structured yield", () => {
+test("import consumes only an explicit absolute upstream JSONL snapshot and reimports corrected units", () => {
   const f = fixture();
   try {
-    executable(join(f.bin, "curl"), '#!/bin/sh\nprintf \'%s\\n\' \'{"dagRunDetails":{"nodes":[{"step":{"id":"review"},"startedAt":"2026-10-17T00:00:01Z"}]}}\'\n');
-    const check = () => f.run(script(template, "check_review"), { REVIEW: "PlanReviewTest" });
-    assert.notEqual(check().status, 0, "a unique reviewer transcript is required");
+    writeFileSync(join(f.root, "source.md"), "Original need\n");
+    writeFileSync(join(f.root, "plan.md"), "Approved local context\n");
+    successful(f.importRows([unit()]));
+    assert.equal(readFileSync(join(f.out, "units.jsonl"), "utf8"), readFileSync(f.upstream, "utf8"));
+    assert.equal(readFileSync(join(f.out, "source.md"), "utf8"), "Original need\n");
+    assert.equal(readFileSync(join(f.out, "plan.md"), "utf8"), "Approved local context\n");
+    writeFileSync(join(f.root, "source.md"), "Corrected need\n");
+    writeFileSync(join(f.root, "plan.md"), "Corrected local context\n");
+    jsonl(f.upstream, [unit("corrected")]);
+    assert.equal(JSON.parse(readFileSync(join(f.out, "units.jsonl"), "utf8")).id, "unit-feature");
+    successful(f.run("import_units")); successful(f.run("check_plan"));
+    assert.equal(JSON.parse(readFileSync(join(f.out, "units.jsonl"), "utf8")).id, "corrected");
+    assert.equal(readFileSync(join(f.out, "source.md"), "utf8"), "Corrected need\n");
+    assert.equal(readFileSync(join(f.out, "plan.md"), "utf8"), "Corrected local context\n");
+    rmSync(join(f.root, "source.md")); rmSync(join(f.root, "plan.md"));
+    successful(f.run("import_units", { SOURCE: "refine" }));
+    assert.equal(readFileSync(join(f.out, "source.md"), "utf8"), "refine\n");
+    assert.throws(() => readFileSync(join(f.out, "plan.md")), { code: "ENOENT" });
+    for (const UNITS_FROM of ["relative.jsonl", join(f.root, "missing.jsonl")]) {
+      assert.notEqual(f.run("import_units", { UNITS_FROM }).status, 0);
+      assert.match(f.run("check_plan").stderr, /rule=import-units/);
+      assert.notEqual(f.run("materialize", { APPROVED: "all" }).status, 0);
+    }
+    writeFileSync(f.upstream, "");
+    assert.notEqual(f.run("import_units").status, 0);
+    assert.notEqual(f.run("import_units", { SOURCE: "unknown" }).status, 0);
+  } finally { f.close(); }
+});
+
+test("unit validation reports line-local schema, standalone acceptance and provenance errors", () => {
+  const f = fixture();
+  try {
+    const cases: Array<[Record<string, unknown>, string]> = [
+      [{ ...unit(), id: "Bad ID" }, "kebab-id"], [{ ...unit(), title: " " }, "title"],
+      [{ ...unit(), dag: "other" }, "dag"], [{ ...unit("probe", "poc"), question: undefined }, "poc-question"],
+      ...["depends", "blocks", "blocked_by"].map(key => [{ ...unit(), [key]: [] }, "self-contained"] as [Record<string, unknown>, string]),
+      [{ ...unit(), body: "## Problem\nMissing sections" }, "required-sections"],
+      [{ ...unit("probe", "poc"), body: "## PoC\nMissing sections" }, "required-sections"],
+      [{ ...unit(), labels: "change" }, "labels"], [{ ...unit(), labels: [7] }, "labels"],
+      [{ ...unit(), id: null }, "kebab-id"], [{ ...unit(), title: 7 }, "title"],
+      [{ ...unit("probe", "poc"), question: null }, "poc-question"], [{ ...unit(), body: null }, "body"],
+      [{ ...unit(), source: "unknown" }, "source"], [{ ...unit(), source: null }, "source"],
+      [{ ...unit(), findings: "f1" }, "findings"], [{ ...unit(), findings: [""] }, "findings"],
+      [{ ...unit(), findings: [7] }, "findings"], [{ ...unit(), findings: ["f1", "f1"] }, "unique-findings"],
+    ];
+    for (const [row, rule] of cases) {
+      successful(f.importRows([unit("first"), row]));
+      const result = f.run("check_plan");
+      assert.notEqual(result.status, 0, rule);
+      assert.match(result.stderr, new RegExp(`units\\.jsonl:2: rule=${rule}`));
+      assert.match(readFileSync(join(f.out, "findings.md"), "utf8"), new RegExp(rule));
+    }
+    successful(f.importRows([unit(), unit()]));
+    assert.match(f.run("check_plan").stderr, /units\.jsonl:2: rule=unique-id/);
+    writeFileSync(f.upstream, "{invalid}\n"); successful(f.run("import_units"));
+    assert.match(f.run("check_plan").stderr, /units\.jsonl:1: rule=json-object/);
+    for (const source of ["refine", "discovery", "plan"]) {
+      successful(f.importRows([{ ...unit(), source, findings: ["f1"] }, unit("probe", "poc")]));
+      successful(f.run("check_plan"));
+    }
+    successful(f.importRows([{ ...unit(), body: "## Problema\nProblem\n## Cambio\nScope\n## Aceptación\nTest" }]));
+    successful(f.run("check_plan"));
+  } finally { f.close(); }
+});
+
+test("review binds parent, generation, agent, cutoff and final structured verdict before publication", () => {
+  const f = fixture();
+  try {
+    successful(f.importRows([unit()])); successful(f.run("check_plan"));
+    const check = () => f.run("check_review", { REVIEW: "PlanReviewTest" });
+    assert.notEqual(check().status, 0);
     for (const extra of [
       { parent: "/foreign/session.jsonl" }, { timestamp: "2026-10-17T00:00:00Z" },
       { timestamp: "2026-10-17T00:00:01Z" }, { agent: "worker" }, { marker: "wrong-generation" },
@@ -150,145 +157,85 @@ test("review verifier binds parent, generation, agent, cutoff and the last struc
     ]) {
       transcript(f, undefined, extra);
       assert.notEqual(check().status, 0, JSON.stringify(extra));
+      assert.notEqual(f.run("materialize", { APPROVED: "all" }).status, 0);
     }
-    transcript(f);
-    const accepted = check();
-    assert.equal(accepted.status, 0, accepted.stderr);
+    transcript(f); successful(check());
     assert.deepEqual(JSON.parse(readFileSync(join(f.out, "review-0.json"), "utf8")), { verdict: "accept", findings: [] });
-    assert.notEqual(f.run(script(template, "check_review"), { REVIEW: "PlanReviewTest", FAKE_ITERATION: "1" }).status, 0);
-    const duplicateSession = join(f.root, ".omp", "agent", "sessions", "-primary", "other_owner-session");
-    mkdirSync(duplicateSession);
-    writeFileSync(join(duplicateSession, "PlanReviewTest.jsonl"), "{}\n");
-    assert.notEqual(check().status, 0, "ambiguous reviewer paths fail closed");
-    rmSync(duplicateSession, { recursive: true });
-    transcript(f, { verdict: "revise", findings: [] });
-    assert.notEqual(check().status, 0);
-    transcript(f, { verdict: "revise", findings: [{ unit: "unit-feature", severity: "blocker", text: "Add an exact test command" }] });
-    const revised = check();
-    assert.equal(revised.status, 0, revised.stderr);
-    assert.ok(existsSync(join(f.out, "approve-rewind")));
-    assert.match(readFileSync(join(f.out, "findings.md"), "utf8"), /Add an exact test command/);
+    assert.notEqual(f.run("check_review", { REVIEW: "PlanReviewTest", FAKE_ITERATION: "1" }).status, 0);
+    const duplicate = join(f.root, ".omp", "agent", "sessions", "-primary", "other_owner-session");
+    mkdirSync(duplicate); writeFileSync(join(duplicate, "PlanReviewTest.jsonl"), "{}\n");
+    assert.notEqual(check().status, 0); rmSync(duplicate, { recursive: true });
+    for (const data of [
+      { verdict: "revise", findings: [] },
+      { verdict: "accept", findings: [{ unit: "unit-feature", severity: "blocker", text: "Missing evidence" }] },
+      { verdict: "accept", findings: [{ unit: "unit-feature", severity: "unknown", text: "Missing evidence" }] },
+    ]) { transcript(f, data); assert.notEqual(check().status, 0); }
+    transcript(f, { verdict: "revise", findings: [{ unit: "unit-feature", severity: "blocker", text: "Add exact test command" }] });
+    successful(check());
+    assert.match(readFileSync(join(f.out, "findings.md"), "utf8"), /Add exact test command/);
+    assert.notEqual(f.run("materialize", { APPROVED: "all" }).status, 0, "completing approval cannot bypass revise");
+    assert.deepEqual(JSON.parse(readFileSync(join(f.root, "issues.json"), "utf8")), []);
+    accepted(f, [unit("corrected")]); successful(f.run("materialize", { APPROVED: "corrected" }));
   } finally { f.close(); }
 });
 
-test("approved materialization preserves labels and run markers and reuses issues and feature/PoC runs", () => {
+test("publication requires review of the unchanged snapshot and the current generation", () => {
   const f = fixture();
   try {
-    jsonl(join(f.out, "units.jsonl"), [unit(), unit("probe", "poc")]);
-    const materialize = () => f.run(script(template, "materialize"), { APPROVED: "all" });
-    assert.equal(materialize().status, 0);
-    assert.equal(f.run(script(template, "dispose")).status, 0);
-    const issues = JSON.parse(readFileSync(join(f.root, "issues.json"), "utf8"));
-    assert.equal(issues.length, 2);
-    assert.match(issues[0].body, /<!-- planning-unit: repo-planning-test\/unit-feature -->/);
-    assert.match(readFileSync(join(f.root, "github.log"), "utf8"), /--label change/);
-    assert.equal(materialize().status, 0);
-    const rows = readFileSync(join(f.out, "issues.jsonl"), "utf8").trim().split("\n").map(row => JSON.parse(row));
-    assert.equal(rows.every(row => row.reused), true);
-    assert.equal(f.run(script(template, "dispose")).status, 0);
-    const enqueues = readFileSync(join(f.root, "enqueues.log"), "utf8").trim().split("\n");
-    assert.equal(enqueues.length, 2);
-    assert.match(enqueues[0]!, /--run-id repo-issue-41 .*feature.yaml -- ISSUE=41 OMP_SESSION_ID=owner-session PR_NUMBER=$/);
-    assert.match(enqueues[1]!, /--run-id repo-poc-42 .*poc.yaml -- ISSUE=42 OMP_SESSION_ID=owner-session QUESTION=Can the real target/);
-    assert.equal(readFileSync(join(f.root, "github.log"), "utf8").trim().split("\n").length, 2);
+    accepted(f);
+    assert.notEqual(f.run("materialize", { APPROVED: "all", FAKE_ITERATION: "1" }).status, 0);
+    jsonl(join(f.out, "units.jsonl"), [unit("tampered")]);
+    assert.notEqual(f.run("materialize", { APPROVED: "all" }).status, 0);
+    assert.notEqual(f.run("check_review", { REVIEW: "PlanReviewTest" }).status, 0);
+    assert.deepEqual(JSON.parse(readFileSync(join(f.root, "issues.json"), "utf8")), []);
+    accepted(f); successful(f.run("import_units"));
+    assert.notEqual(f.run("materialize", { APPROVED: "all" }).status, 0, "explicit reimport requires fresh review");
   } finally { f.close(); }
 });
 
-async function port(): Promise<number> {
-  const server = createServer();
-  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
-  const address = server.address(); assert.ok(address && typeof address !== "string");
-  await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
-  return address.port;
-}
-test("isolated real Dagu rewinds invalid plans and revise findings, then approves and disposes", {
-  ...liveDagu,
-  timeout: 240_000,
-}, async () => {
-  const realDagu = execFileSync("which", ["dagu"], { encoding: "utf8" }).trim();
-  const f = fixture(realDagu);
-  const home = join(f.root, "dagu-home"); mkdirSync(join(home, "dags"), { recursive: true });
-  const httpPort = await port(), schedulerPort = await port();
-  const env = { ...f.env, DAGU_HOME: home, DAGU_PORT: String(httpPort), DAGU_HOST: "127.0.0.1", DAGU_COORDINATOR_ENABLED: "false" };
-  writeFileSync(join(home, "config.yaml"), `host: 127.0.0.1\nport: ${httpPort}\nauth:\n  mode: none\ncoordinator:\n  enabled: false\nscheduler:\n  port: ${schedulerPort}\n`);
-  execFileSync("git", ["init", "-b", "main", f.primary], { encoding: "utf8" });
-  const definition = join(home, "dags", "planning.yaml");
-  writeFileSync(definition, rendered.replace("env:\n", `env:\n  - HOME: ${JSON.stringify(f.root)}\n  - TMPDIR: ${JSON.stringify(join(f.root, "tmp"))}\n  - DAGU_PORT: "${httpPort}"\n`));
-  const service = spawn(realDagu, ["start-all", "--host", "127.0.0.1", "--port", String(httpPort)], { env, cwd: f.root, stdio: ["ignore", "pipe", "pipe"] });
-  let log = ""; service.stdout.on("data", value => { log += value; }); service.stderr.on("data", value => { log += value; });
-  const dagu = (...args: string[]) => execFileSync(realDagu, args, { env, cwd: f.root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
-  const runId = f.env.RUN;
-  const out = join(home, "data", "planning", "owner__repo", runId);
-  type Details = { statusLabel: string; nodes: Array<{ statusLabel: string; stderr?: string; step: { id: string; name: string; humanTask?: { prompt?: string } } }> };
-  async function until<T>(label: string, probe: () => Promise<T | undefined>): Promise<T> {
-    const deadline = Date.now() + 60_000;
-    while (Date.now() < deadline) { const result = await probe(); if (result !== undefined) return result; await delay(150); }
-    const current = await detail();
-    const paths = [
-      ...current?.nodes.map(node => node.stderr).filter((path): path is string => !!path) ?? [],
-      join(out, "review-transition.log"), join(out, "approve-transition.log"),
-    ];
-    const diagnostics = paths.filter(path => existsSync(path)).map(path => `${path}:\n${readFileSync(path, "utf8")}`).join("\n");
-    throw new Error(`Timed out ${label}\n${JSON.stringify(current)}\n${diagnostics}\n${log}`);
-  }
-  async function detail(): Promise<Details | undefined> {
-    try { const response = await fetch(`http://127.0.0.1:${httpPort}/api/v1/dag-runs/planning/${runId}`); return response.ok ? (await response.json() as { dagRunDetails: Details }).dagRunDetails : undefined; } catch { return undefined; }
-  }
-  async function waiting(step: string, iteration: number): Promise<Details> {
-    return until(`${step} iteration=${iteration}`, async () => {
-      const d = await detail();
-      if (d?.statusLabel === "failed") throw new Error(JSON.stringify(d) + "\n" + log);
-      if (d?.statusLabel !== "waiting" || !d.nodes.some(n => (n.step.id ?? n.step.name) === step && n.statusLabel === "waiting")) return undefined;
-      const status = dagu("status", "planning", "--run-id", runId);
-      return Number(status.match(/push-back iteration: (\d+)/)?.[1] ?? 0) === iteration ? d : undefined;
-    });
-  }
+test("operator subset approval preserves labels, paginated idempotence, markers and finding lineage", () => {
+  const f = fixture();
   try {
-    await until("server ready", async () => { try { return (await fetch(`http://127.0.0.1:${httpPort}/api/v1/dag-runs`)).ok ? true : undefined; } catch { return undefined; } });
-    dagu("validate", definition);
-    dagu("enqueue", "--run-id", runId, definition, "--", "SOURCE=Operator request", `PRIMARY=${f.primary}`, "OMP_SESSION_ID=owner-session");
-    await waiting("plan", 0);
-    writeFileSync(join(out, "plan.md"), "Approved local plan\n");
-    const invalids = [ { ...unit("probe", "poc"), question: undefined }, { ...unit(), depends: [] }, { ...unit(), body: "Missing sections" } ];
-    for (let i = 0; i < invalids.length; i++) {
-      jsonl(join(out, "units.jsonl"), [invalids[i]]);
-      dagu("human-task", "complete", "planning", "--run-id", runId, "--step", "plan");
-      const d = await waiting("plan", i + 1);
-      const findings = readFileSync(join(out, "findings.md"), "utf8").trim();
-      assert.match(findings, /units\.jsonl:1: rule=/);
-      assert.ok(d.nodes.find(n => (n.step.id ?? n.step.name) === "plan")?.step.humanTask?.prompt?.includes(findings), JSON.stringify(d));
+    accepted(f, [unit(), { ...unit("probe", "poc"), source: "discovery", findings: ["bug-1", "bug-2"], body: unit("probe", "poc").body + "\n<!-- discovery-unit: probe -->" }]);
+    for (const APPROVED of ["", "missing", "unit-feature,unit-feature", ",unit-feature", "unit-feature,", "unit-feature,,probe"]) {
+      assert.notEqual(f.run("materialize", { APPROVED }).status, 0, APPROVED);
     }
-    jsonl(join(out, "units.jsonl"), [unit(), unit("probe", "poc")]);
-    dagu("human-task", "complete", "planning", "--run-id", runId, "--step", "plan");
-    await waiting("review", 3);
-    assert.equal(existsSync(join(f.root, "github.log")), false);
-    assert.equal(existsSync(join(f.root, "enqueues.log")), false);
-    function liveTranscript(verdict: "accept" | "revise") {
-      const sessions = join(f.root, ".omp", "agent", "sessions", "-primary", "date_owner-session"); mkdirSync(sessions, { recursive: true });
-      jsonl(join(sessions, "PlanReviewLive.jsonl"), [
-        { type: "session", parentSession: `${sessions}.jsonl` },
-        { type: "session_init", agent: "plan-reviewer", task: readFileSync(join(out, "generation"), "utf8").trim(), timestamp: new Date(Date.now() + 100).toISOString() },
-        { type: "message", message: { role: "toolResult", toolName: "yield", details: { data: { verdict, findings: verdict === "revise" ? [{ unit: "unit-feature", severity: "blocker", text: "Use an exact test command" }] : [] } } } },
-      ]);
-    }
-    liveTranscript("revise");
-    dagu("human-task", "complete", "planning", "--run-id", runId, "--step", "review", "--input", "REVIEW=PlanReviewLive");
-    const revised = await waiting("plan", 4);
-    assert.ok(revised.nodes.find(n => (n.step.id ?? n.step.name) === "plan")?.step.humanTask?.prompt?.includes("Use an exact test command"));
-    dagu("human-task", "complete", "planning", "--run-id", runId, "--step", "plan");
-    await waiting("review", 4);
-    liveTranscript("accept");
-    dagu("human-task", "complete", "planning", "--run-id", runId, "--step", "review", "--input", "REVIEW=PlanReviewLive");
-    await waiting("approve", 4);
-    assert.equal(existsSync(join(f.root, "github.log")), false);
-    assert.equal(existsSync(join(f.root, "enqueues.log")), false);
-    dagu("human-task", "complete", "planning", "--run-id", runId, "--step", "approve", "--input", "APPROVED=all");
-    await until("succeeded", async () => { const d = await detail(); if (d?.statusLabel === "failed") throw new Error(JSON.stringify(d)); return d?.statusLabel === "succeeded" ? d : undefined; });
-    assert.equal(JSON.parse(readFileSync(join(f.root, "issues.json"), "utf8")).length, 2);
-    assert.equal(readFileSync(join(f.root, "enqueues.log"), "utf8").trim().split("\n").length, 2);
-  } finally {
-    service.kill("SIGTERM");
-    await new Promise<void>(resolve => { if (service.exitCode !== null) resolve(); else service.once("exit", () => resolve()); });
-    f.close();
-  }
+    successful(f.run("materialize", { APPROVED: "probe" }));
+    let issues = JSON.parse(readFileSync(join(f.root, "issues.json"), "utf8"));
+    assert.equal(issues.length, 1); assert.equal(issues[0].title, "Deliver probe");
+    assert.match(issues[0].body, /<!-- breakdown-unit: repo-breakdown-test\/probe -->/);
+    assert.match(issues[0].body, /<!-- discovery-unit: probe -->/);
+    assert.match(issues[0].body, /Breakdown source: discovery/);
+    assert.match(issues[0].body, /Finding lineage: bug-1, bug-2/);
+    successful(f.run("materialize", { APPROVED: "all" }));
+    successful(f.run("materialize", { APPROVED: "all" }));
+    issues = JSON.parse(readFileSync(join(f.root, "issues.json"), "utf8"));
+    assert.equal(issues.length, 2);
+    assert.match(issues[1].body, /Breakdown source: plan/);
+    const rows = readFileSync(join(f.out, "issues.jsonl"), "utf8").trim().split("\n").map(row => JSON.parse(row));
+    assert.deepEqual(rows.map(row => [row.id, row.reused]), [["unit-feature", true], ["probe", true]]);
+    assert.ok(rows.every(row => Number.isInteger(row.number) && row.url.endsWith(`/${row.number}`)));
+    const creates = readFileSync(join(f.root, "github.log"), "utf8").trim().split("\n");
+    assert.equal(creates.length, 2); assert.ok(creates.every(line => line.includes("--label change")));
+    writeFileSync(join(f.root, "issues.json"), JSON.stringify([...issues, issues[0]]));
+    assert.match(f.run("materialize", { APPROVED: "probe" }).stderr, /rule=unique-issue-marker unit=probe/);
+  } finally { f.close(); }
+});
+
+test("discovery source identity reuses a persistent unit across distinct backend runs", () => {
+  const f = fixture();
+  try {
+    const row = { ...unit("persistent-finding"), source: "discovery", findings: ["persistent-finding"],
+      body: unit().body + "\n<!-- discovery-unit: persistent-finding -->" };
+    accepted(f, [row]); successful(f.run("materialize", { APPROVED: "all" }));
+    const first = JSON.parse(readFileSync(join(f.out, "issues.jsonl"), "utf8"));
+    f.env.RUN = "second-breakdown-run";
+    accepted(f, [row]); successful(f.run("materialize", { APPROVED: "all" }));
+    const second = JSON.parse(readFileSync(join(f.out, "issues.jsonl"), "utf8"));
+    assert.equal(second.reused, true);
+    assert.equal(second.number, first.number);
+    assert.equal(second.url, first.url);
+    assert.equal(JSON.parse(readFileSync(join(f.root, "issues.json"), "utf8")).length, 1);
+    assert.equal(readFileSync(join(f.root, "github.log"), "utf8").trim().split("\n").length, 1);
+  } finally { f.close(); }
 });

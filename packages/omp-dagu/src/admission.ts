@@ -114,7 +114,7 @@ export function admit(options: AdmissionOptions, persist = true): { path: string
   try {
     const dagPath = realpathSync(resolve(options.cwd, options.dag));
     const name = basename(dagPath);
-    if (!["feature.yaml", "poc.yaml", "discovery.yaml", "reconcile.yaml"].includes(name)) throw new Error(`DAG=${name} expected a distributed lifecycle DAG`);
+    if (!["feature.yaml", "poc.yaml", "discovery.yaml", "planning.yaml", "reconcile.yaml"].includes(name)) throw new Error(`DAG=${name} expected a distributed lifecycle DAG`);
     let primaryParam = options.params.find(param => param.startsWith("PRIMARY="))?.slice(8);
     if (name === "feature.yaml" || name === "poc.yaml") {
       const snapshot = readFileSync(dagPath, "utf8");

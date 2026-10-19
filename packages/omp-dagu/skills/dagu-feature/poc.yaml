@@ -14,7 +14,7 @@ params:
   properties:
     ISSUE:
       type: string
-      default: ""
+      minLength: 1
     QUESTION:
       type: string
       default: ""
@@ -27,6 +27,7 @@ params:
     TEST_PATHS:
       type: string
       default: __TEST_PATHS__
+  required: [ISSUE]
 env:
   - PRIMARY: __PRIMARY__
   - RUN: ${context.run.id}
@@ -83,6 +84,7 @@ steps:
     run: |
       set -euo pipefail
       [[ "$RUN" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]
+      [[ "$ISSUE" =~ ^[1-9][0-9]*$ ]]
       cd "$PRIMARY"
       STATE=$(git rev-parse --path-format=absolute --git-path "poc/runs/$RUN")
       mkdir -p "$STATE"
@@ -107,19 +109,10 @@ steps:
         capture("^<!-- poc-verdict:(?<verdict>PASS|FAIL|INCONCLUSIVE) scope:(?<scope>OK|FAIL) run:(?<run>[^\\s]+) attempt:(?<attempt>[1-9][0-9]*) base:(?<base>[^\\s]+) -->$");
       JQ
       gh repo view --json nameWithOwner --jq .nameWithOwner > "$STATE/repo"
-      if [[ -z "$ISSUE" ]]; then
-        test -n "$QUESTION"
-        TITLE=$(jq -nr --arg q "$QUESTION" '$q|gsub("\\s+";" ")|"PoC: " + .|.[0:200]')
-        printf '%s\n' "$QUESTION" > "$STATE/issue-body.txt"
-        URL=$(gh issue create --repo "$(cat "$STATE/repo")" --title "$TITLE" --body-file "$STATE/issue-body.txt")
-        ISSUE=${URL##*/}
-        touch "$STATE/created"
-      fi
-      [[ "$ISSUE" =~ ^[1-9][0-9]*$ ]]
       printf '%s\n' "$ISSUE" > "$STATE/issue.number"
       gh issue view "$ISSUE" --repo "$(cat "$STATE/repo")" --json body > "$STATE/record-body.json"
       if [[ -z "$QUESTION" ]]; then
-        QUESTION=$(jq -r .body "$STATE/record-body.json")
+        QUESTION=$(jq -er -L "$STATE" 'include "sections"; .body | section("## PoC") | select(norm | length > 0)' "$STATE/record-body.json")
       fi
       test -n "$QUESTION"
       printf '%s\n' "$QUESTION" > "$STATE/question.txt"
@@ -422,9 +415,7 @@ steps:
         test "$(cat "$STATE/scope")" = OK
         gh issue view "$ISSUE" --repo "$REPO" --json body > "$STATE/current-body.json"
         gh api --paginate --slurp "repos/$REPO/issues/$ISSUE/comments?per_page=100" > "$STATE/pages.json"
-        CREATED=no
-        if test -f "$STATE/created"; then CREATED=yes; fi
-        jq -er -L "$STATE" --arg created "$CREATED" --slurpfile issue "$STATE/current-body.json" '
+        jq -er -L "$STATE" --slurpfile issue "$STATE/current-body.json" '
           include "sections";
           [ .[][] ] as $comments |
           [$comments[] | . as $c | (.body|marker) as $m | {comment:$c,marker:$m}] |
@@ -437,8 +428,7 @@ steps:
            else $last.comment.body end) as $result |
           [$comments[] | select(.body|split("\n")[0]|test("^<!-- poc-triage:yes run:[^\\s]+ -->$"))] as $triages |
           (if ($triages|length) > 0 then $triages[-1].body|section("## Pregunta")|norm
-           elif $created == "yes" then $issue[0].body|split("\n\n## Después del PASS\n")[0]|norm
-           else "" end) as $question |
+           else $issue[0].body|section("## PoC")|norm end) as $question |
           if $last.marker.verdict == "PASS" and $last.marker.scope == "OK"
             and ($result|marker) == $last.marker
             and $question != "" and $question == ($result|section("## Pregunta")|norm)
@@ -451,8 +441,6 @@ steps:
           ISSUE="$ISSUE" \
           BASE_BRANCH="$BASE_BRANCH" OMP_SESSION_ID="$OMP_SESSION_ID" \
           POC_BASIS="$(cat "$STATE/promotion.url")"
-      elif [[ "$VERDICT" == FAIL && -f "$STATE/created" ]]; then
-        gh issue close "$ISSUE" --repo "$REPO" --reason 'not planned' --comment "VERDICT: FAIL; run:$RUN. $(cat "$STATE/comment.url")"
       else
         test "$PROMOTE" = no
       fi
