@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -13,7 +13,7 @@ import { Transitions } from "../src/status/progress.ts";
 import type { RunDetails } from "../src/status/progress.ts";
 import { BUNDLE_VERSION } from "../src/bundle.ts";
 import { stubHistory, withResourceGuard } from "./resource-fixtures.ts";
-import { qualityDecision, qualityMarker, verifyQuality } from "../src/triage/quality.ts";
+import { inspectVerdict, qualityDecision, qualityMarker, verifyQuality } from "../src/triage/quality.ts";
 import type { QualityRequest, TranscriptRow } from "../src/triage/quality.ts";
 import { qualityFixture } from "./quality-fixtures.ts";
 
@@ -305,6 +305,123 @@ test("effective quality attributes structured yield to its emitting message", ()
   } finally { rmSync(repo.root, { recursive: true, force: true }); }
 });
 
+for (const format of ["single", "batch"] as const) {
+  test(`quality ${format} assignments produce admitted raw-JSON verdicts and inspected byte seals`, async t => {
+    const repo = repository();
+    try {
+      const fixture = qualityFixture(repo);
+      t.mock.method(globalThis, "fetch", async () => new Response(JSON.stringify({ dagRunDetails: {
+        params: `PRIMARY=${repo.primary} ISSUE=189 OMP_SESSION_ID=parent-id`,
+        nodes: [{ step: { id: "implement" }, startedAt: fixture.request.implementStartedAt }],
+      } })));
+      const ctx = { cwd: repo.primary, sessionManager: { getSessionDir: () => dirname(fixture.parent) }, models: fixture.models };
+      for (const [role, name] of [["qa", "QATest"], ["reviewer", "ReviewTest"]] as const) {
+        const task = { name, agent: role, task: qualityMarker(fixture.request, role) };
+        const routed = await qualityDecision({ toolName: "task", toolCallId: `spawn-${name}`,
+          input: format === "single" ? task : { tasks: [task] } }, ctx);
+        assert.ok(routed && "input" in routed);
+        const assigned = format === "single" ? routed.input : routed.input.tasks[0];
+        assert.ok(assigned.outputSchema);
+        const lines = (assigned.task as string).split("\n");
+        const command = lines.find(line => line.startsWith("git -C "))!;
+        const report = JSON.parse(lines.find(line => line.startsWith("{"))!);
+        report.findings = ["Acceptance checked ✓"];
+        const sha = execFileSync("bash", ["-c", command], { encoding: "utf8" }).trim();
+        assert.equal(sha, fixture.request.sha);
+        changeTranscript(fixture.parent, rows => {
+          for (const row of rows) {
+            const content = row.message?.content;
+            if (!Array.isArray(content)) continue;
+            for (const call of content) {
+              const tasks = call.arguments?.tasks as { name: string; task: string }[] | undefined;
+              const invoked = tasks?.find(item => item.name === name);
+              if (invoked) invoked.task = assigned.task;
+            }
+          }
+        });
+        changeTranscript(fixture.paths[role]!, rows => {
+          rows[1]!.task = assigned.task;
+          rows[3]!.message!.content = [{ type: "toolCall", id: `sha-${name}`, name: "bash", arguments: { command } }];
+          rows[4]!.message!.content = sha;
+          rows.at(-1)!.message!.content = JSON.stringify(report);
+        });
+        const verdict = inspectVerdict(fixture.parent, fixture.request, role, name, fixture.models);
+        const inspected = readFileSync(fixture.paths[role]!);
+        assert.equal(verdict.verdict, "PASS");
+        assert.deepEqual(verdict.findings, ["Acceptance checked ✓"]);
+        assert.equal(verdict.bytes, inspected.length);
+        assert.equal(verdict.digest, createHash("sha256").update(inspected).digest("hex"));
+      }
+      assert.equal(verifyQuality(fixture.parent, fixture.request, "QATest", "ReviewTest", fixture.models).action, "complete");
+    } finally { rmSync(repo.root, { recursive: true, force: true }); }
+  });
+}
+
+test("template quality admission accepts appended session_exit rows on sealed transcripts", () => {
+  const repo = repository();
+  try {
+    const definition = definitions[0][1];
+    runScript(extractScript(definition, "  - id: gate"), repo);
+    const fixture = admitQuality(repo, definition);
+    for (const role of ["qa", "reviewer"]) appendFileSync(fixture.paths[role]!,
+      JSON.stringify({ type: "custom", customType: "session_exit", data: { reason: "dispose" } }) + "\n");
+    runScript(extractScript(definition, "  - id: quality_admit"), repo,
+      { QA: "QATest", REVIEW: "ReviewTest", OMP_SESSION_ID: "parent-id" });
+    assert.equal(readFileSync(join(repo.state, "quality-action"), "utf8"), "complete\n");
+  } finally { rmSync(repo.root, { recursive: true, force: true }); }
+});
+
+test("template quality admission checks provenance on the sealed prefix after duplicate event appends", () => {
+  const repo = repository();
+  try {
+    const definition = definitions[0][1];
+    runScript(extractScript(definition, "  - id: gate"), repo);
+    const fixture = admitQuality(repo, definition);
+    for (const verdict of fixture.evidence.verdicts) {
+      const duplicate = readFileSync(verdict.transcript, "utf8").split("\n")
+        .find(line => line && JSON.parse(line).id === verdict.event);
+      assert.ok(duplicate);
+      appendFileSync(verdict.transcript, duplicate + "\n");
+    }
+    runScript(extractScript(definition, "  - id: quality_admit"), repo,
+      { QA: "QATest", REVIEW: "ReviewTest", OMP_SESSION_ID: "parent-id" });
+    assert.equal(readFileSync(join(repo.state, "quality-action"), "utf8"), "complete\n");
+  } finally { rmSync(repo.root, { recursive: true, force: true }); }
+});
+
+test("template quality admission rejects truncated inspected transcripts", () => {
+  const repo = repository();
+  try {
+    const definition = definitions[0][1];
+    runScript(extractScript(definition, "  - id: gate"), repo);
+    const fixture = admitQuality(repo, definition);
+    const inspected = readFileSync(fixture.paths.qa!);
+    writeFileSync(fixture.paths.qa!, inspected.subarray(0, inspected.length - 1));
+    const result = spawnSync("bash", ["-c", extractScript(definition, "  - id: quality_admit")], {
+      encoding: "utf8", env: { ...featureScriptEnv(repo), QA: "QATest", REVIEW: "ReviewTest", OMP_SESSION_ID: "parent-id" },
+    });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /transcript changed/);
+  } finally { rmSync(repo.root, { recursive: true, force: true }); }
+});
+
+test("template quality preparation fails before writing a request for a missing worktree", () => {
+  const repo = repository();
+  try {
+    const bin = join(repo.root, "bin");
+    const curl = join(bin, "curl");
+    writeFileSync(curl, "#!/bin/sh\nprintf '%s\\n' '{\"dagRunDetails\":{\"nodes\":[{\"step\":{\"id\":\"implement\"},\"startedAt\":\"2026-10-16T00:00:00Z\"}]}}'\n");
+    chmodSync(curl, 0o755);
+    const missing = join(repo.root, "missing-worktree");
+    const result = spawnSync("bash", ["-c", extractScript(definitions[0][1], "  - id: quality_prepare")], {
+      encoding: "utf8", env: { ...featureScriptEnv(repo), WORKTREE: missing, OMP_SESSION_ID: "parent-id" },
+    });
+    assert.notEqual(result.status, 0);
+    assert.ok(result.stderr.includes(missing));
+    assert.equal(existsSync(join(repo.state, "quality-request.json")), false);
+  } finally { rmSync(repo.root, { recursive: true, force: true }); }
+});
+
 test("quality completion hook validates provenance and persists independent evidence", async t => {
   const repo = repository();
   try {
@@ -407,7 +524,7 @@ for (const [name, definition] of definitions) {
     try {
       runScript(gateScript, repo);
       const fixture = admitQuality(repo, definition);
-      changeTranscript(fixture.paths.qa!, rows => { rows.at(-1)!.message!.model = "tampered"; });
+      changeTranscript(fixture.paths.qa!, rows => { rows.at(-1)!.message!.model = "tampered!"; });
       const result = spawnSync("bash", ["-c", extractScript(definition, "  - id: quality_admit")], {
         encoding: "utf8", env: { ...featureScriptEnv(repo), QA: "QATest", REVIEW: "ReviewTest", OMP_SESSION_ID: "parent-id" },
       });

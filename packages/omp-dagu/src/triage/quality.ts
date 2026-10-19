@@ -56,8 +56,8 @@ function optionalString(value: unknown): string | undefined {
   return value;
 }
 function json(path: string): Record<string, unknown> { return object(JSON.parse(readFileSync(path, "utf8"))); }
-function rows(path: string): TranscriptRow[] {
-  return readFileSync(path, "utf8").split("\n").filter(Boolean).map(line => {
+function rows(path: string, contents = readFileSync(path)): TranscriptRow[] {
+  return contents.toString("utf8").split("\n").filter(Boolean).map(line => {
     const row = object(JSON.parse(line));
     let message: Message | undefined;
     if (row.message !== undefined) {
@@ -99,7 +99,8 @@ function transcript(parent: string, id: string, marker: string, agent: string | 
   requireValue(/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(id), "invalid subagent id");
   const path = join(parent.slice(0, -6), `${id}.jsonl`);
   requireValue(realpathSync(path) === path, "transcript must be a canonical regular path");
-  const child = rows(path);
+  const contents = readFileSync(path);
+  const child = rows(path, contents);
   const sessions = child.filter(row => row.type === "session");
   const inits = child.filter(row => row.type === "session_init");
   requireValue(sessions.length === 1 && inits.length === 1, "ambiguous session identity");
@@ -122,7 +123,7 @@ function transcript(parent: string, id: string, marker: string, agent: string | 
   });
   requireValue(invocations.length === 1 && invocations[0]!.id && invocations[0]!.timestamp, "missing or ambiguous parent task invocation");
   requireValue(Date.parse(invocations[0]!.timestamp) <= Date.parse(init.timestamp), "invocation occurs after child start");
-  return { path, child, session: session.id, invocation: invocations[0]!.id };
+  return { path, contents, child, session: session.id, invocation: invocations[0]!.id };
 }
 function effective(child: TranscriptRow[], models: Models) {
   const assistants = child.filter((row): row is TranscriptRow & { message: Message } => row.type === "message" && row.message?.role === "assistant");
@@ -190,7 +191,7 @@ export function inspectVerdict(parent: string, request: QualityRequest, role: "q
   return { repo: request.repo, run: request.run, sha: request.sha, iteration: request.iteration, attempt: request.attempt,
     role, verdict, findings, subagent: id, childSession: source.session, parentSession: parent, invocation: source.invocation,
     event: response.id, model: identity(response, models), attempts: evidence.attempts, fallbacks: evidence.fallbacks,
-    transcript: source.path, digest: createHash("sha256").update(readFileSync(source.path)).digest("hex") };
+    transcript: source.path, bytes: source.contents.length, digest: createHash("sha256").update(source.contents).digest("hex") };
 }
 export function verifyQuality(parent: string, request: QualityRequest, qa: string, reviewer: string, models: Models) {
   requireValue(new Set([request.implementer, qa, reviewer]).size === 3, "implementer, QA and reviewer must be distinct subagents");
@@ -258,7 +259,14 @@ export async function qualityDecision(event: Event, ctx: QualityContext): Promis
           [{ label: "effective implementer", model: effectiveModel }], true);
         requireValue(eligible?.model?.length, eligible?.reason ?? "no eligible quality model");
         bindQualityImplementer(task.name, effectiveModel);
-        revised[index] = { ...task, outputSchema: VERDICT_SCHEMA };
+        const contract = [
+          "Quality verdict contract: Before inspecting the candidate and before your verdict, run this standalone bash command, with nothing chained and with cwd omitted:",
+          `git -C "${request.worktree}" rev-parse HEAD`,
+          "Your final message is ONLY one raw JSON object. Preserve these literal repo/run/sha/iteration/attempt/role values from quality-request.json (repo is the canonical primary path). iteration is a number; attempt is a string. Set verdict to PASS or FAIL and findings to a string[] of observed commands/results or actionable findings:",
+          JSON.stringify({ repo: request.repo, run: request.run, sha: request.sha, iteration: request.iteration,
+            attempt: request.attempt, role, verdict: "PASS", findings: [] }),
+        ].join("\n");
+        revised[index] = { ...task, task: `${task.task ?? ""}\n\n${contract}`, outputSchema: VERDICT_SCHEMA };
       }
       return { input: Array.isArray(event.input.tasks) ? { ...event.input, tasks: revised } : revised[0]! };
     }

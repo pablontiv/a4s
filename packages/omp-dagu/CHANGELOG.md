@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.77
+
+- Supply QA/reviewer assignments with literal raw-JSON verdict bindings and the standalone candidate-SHA command, and document fresh names for every attempted invocation (#379).
+- Seal the inspected transcript prefix and evaluate runtime provenance on those same bytes so appended rows remain admissible while changed or truncated evidence fails; stop quality preparation before writing a request when the worktree is missing (#379).
+- Require a newly allocated `Implement<ISSUE>v<N>` subagent for each quality push-back correction, preserving a single `session_init` and unambiguous session identity like QA/reviewer retries (#379).
+
 ## 0.3.76
 
 - Enforce compatible, determinate deployment identities before enqueue, including internal feature/PoC/discovery promotions; capture canonical SHA-256 fingerprints, immutable admission snapshots and append-only categorized run observations (#277).
