@@ -1316,7 +1316,7 @@ for (const [name, definition] of definitions) {
     const port = address.port;
     await new Promise<void>(resolve => listener.close(() => resolve()));
     writeFileSync(join(home, "config.yaml"), `host: 127.0.0.1\nport: ${port}\nauth:\n  mode: none\ncoordinator:\n  enabled: false\nscheduler:\n  port: 0\n`);
-    const env: NodeJS.ProcessEnv = { ...process.env, ...featureScriptEnv(repo), DAGU_HOME: home, DAGU_COORDINATOR_ENABLED: "false", OMP_SESSION_ID: "retained-owner" };
+    const env: NodeJS.ProcessEnv = { ...process.env, ...featureScriptEnv(repo), DAGU_HOME: home, DAGU_PORT: String(port), DAGU_COORDINATOR_ENABLED: "false", OMP_SESSION_ID: "retained-owner" };
     let serviceLog = "";
     const service = spawn("dagu", ["start-all", "--host", "127.0.0.1", "--port", String(port)], {
       cwd: repo.root, env, stdio: ["ignore", "pipe", "pipe"],
@@ -1534,7 +1534,7 @@ async function recoveryFixture(): Promise<RecoveryFixture> {
   assert.ok(address && typeof address !== "string");
   const port = address.port;
   await new Promise<void>((resolve, reject) => listener.close(error => error ? reject(error) : resolve()));
-  const env = { ...process.env, DAGU_PARAMS_JSON: "{}", DAGU_HOME: home, DAGU_COORDINATOR_ENABLED: "false" };
+  const env = { ...process.env, DAGU_PARAMS_JSON: "{}", DAGU_HOME: home, DAGU_PORT: String(port), DAGU_COORDINATOR_ENABLED: "false" };
   writeFileSync(join(home, "config.yaml"), `host: 127.0.0.1\nport: ${port}\nauth:\n  mode: none\ncoordinator:\n  enabled: false\nscheduler:\n  port: 0\n`);
   let serviceLog = "";
   const service = spawn("dagu", ["start-all", "--host", "127.0.0.1", "--port", String(port)], {
@@ -2371,18 +2371,34 @@ for (const [name, definition] of definitions) {
   });
 }
 
-test("adopted policy rejects run overrides before repository writes and admits operational inputs", { skip: daguAvailable.status !== 0 }, () => {
+test("adopted policy rejects run overrides before repository writes and admits operational inputs", { skip: daguAvailable.status !== 0 }, async () => {
   const repo = repository();
   const home = join(repo.root, "dagu-home");
   const stage = join(repo.root, "staged", "feature.yaml");
   const skillDir = fileURLToPath(new URL("../skills/dagu-feature/", import.meta.url));
+  const listener = createServer();
+  await new Promise<void>(resolve => listener.listen(0, "127.0.0.1", resolve));
+  const address = listener.address();
+  assert.ok(address && typeof address !== "string");
+  const port = address.port;
+  await new Promise<void>(resolve => listener.close(() => resolve()));
   const env = {
-    ...process.env, DAGU_PARAMS_JSON: "{}", DAGU_HOME: home, PRIMARY: repo.primary, SKILL_DIR: skillDir,
+    ...process.env, DAGU_PARAMS_JSON: "{}", DAGU_HOME: home, DAGU_PORT: String(port), PRIMARY: repo.primary, SKILL_DIR: skillDir,
     GATE: "printf adopted-gate", REQUIRED_CHECK: "adopted-check", REPO: "fixture", BASE_BRANCH: "main",
     REBASE_RESOLVER: "printf adopted-resolver",
     STAGE: stage, TEST_PATHS: "test/", BUNDLE_NAME: "@a4s/omp-dagu", BUNDLE_VERSION,
     DAGU_VERSION: "2.20.1", SOURCE_NWO: "fixture/repo", SOURCE_SHA: "1".repeat(40), DAG_RUN_ID: "bootstrap-fixture",
   };
+  mkdirSync(join(home, "dags"), { recursive: true });
+  writeFileSync(join(home, "config.yaml"), `host: 127.0.0.1\nport: ${port}\nauth:\n  mode: none\ncoordinator:\n  enabled: false\n`);
+  // Standalone starts still run the exit ownership guard, which reads enqueued
+  // policy snapshots through the API. Serve them without consuming the queue.
+  const service = spawn("dagu", ["server", "--host", "127.0.0.1", "--port", String(port)], {
+    cwd: repo.root, env, stdio: ["ignore", "pipe", "pipe"],
+  });
+  let serviceLog = "";
+  service.stdout.on("data", data => { serviceLog += data; });
+  service.stderr.on("data", data => { serviceLog += data; });
   const snapshot = (): string => {
     const hash = createHash("sha256");
     const visit = (directory: string): void => {
@@ -2398,6 +2414,14 @@ test("adopted policy rejects run overrides before repository writes and admits o
     return hash.digest("hex");
   };
   try {
+    const deadline = Date.now() + 30_000;
+    let ready = false;
+    while (Date.now() < deadline) {
+      try { ready = (await fetch(`http://127.0.0.1:${port}/api/v1/dag-runs`)).ok; } catch {}
+      if (ready) break;
+      await delay(150);
+    }
+    assert.ok(ready, `isolated Dagu API ready\n${serviceLog}`);
     const rendered = spawnSync("bash", ["-c", extractScript(join(skillDir, "dagu-feature-bootstrap.yaml"), "  - id: render")], { encoding: "utf8", env });
     assert.equal(rendered.status, 0, rendered.stdout + rendered.stderr);
     for (const name of ["feature", "poc"]) {
@@ -2411,11 +2435,11 @@ test("adopted policy rejects run overrides before repository writes and admits o
         assert.equal(snapshot(), before, `${name} ${parameter} changed repository state`);
       }
     }
-    const enqueued = spawnSync("dagu", ["enqueue", "--run-id", "operational-queued", stage, "--", "ISSUE=274", "PR_NUMBER=275", "OMP_SESSION_ID=owner-session"], { encoding: "utf8", env, timeout: 30_000 });
-    assert.equal(enqueued.status, 0, enqueued.stdout + enqueued.stderr);
     const accepted = spawnSync("dagu", ["start", "--only", "admission", "--run-id", "operational", stage, "--", "ISSUE=274", "PR_NUMBER=275", "OMP_SESSION_ID=owner-session"], { encoding: "utf8", env, timeout: 30_000 });
     assert.equal(accepted.status, 0, accepted.stdout + accepted.stderr);
     assert.match(accepted.stdout, /admission.*succeeded/);
+    const enqueued = spawnSync("dagu", ["enqueue", "--run-id", "operational-queued", stage, "--", "ISSUE=274", "PR_NUMBER=275", "OMP_SESSION_ID=owner-session"], { encoding: "utf8", env, timeout: 30_000 });
+    assert.equal(enqueued.status, 0, enqueued.stdout + enqueued.stderr);
     const adopted = readFileSync(stage, "utf8");
     assert.match(adopted, /- GATE: "printf adopted-gate"/);
     assert.match(adopted, /- REBASE_RESOLVER: "printf adopted-resolver"/);
@@ -2453,6 +2477,11 @@ test("adopted policy rejects run overrides before repository writes and admits o
     assert.ok(promotedRun);
     assert.equal(promotedRun.params, "BASE_BRANCH=main ISSUE=274 OMP_SESSION_ID=owner-session POC_BASIS=https://example.test/pass PR_NUMBER= VALIDATION=");
   } finally {
+    service.kill("SIGTERM");
+    await new Promise<void>(resolve => {
+      if (service.exitCode !== null || service.signalCode !== null) resolve();
+      else service.once("exit", () => resolve());
+    });
     rmSync(repo.root, { recursive: true, force: true });
   }
 });

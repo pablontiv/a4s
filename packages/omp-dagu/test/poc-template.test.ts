@@ -253,7 +253,7 @@ esac
     for (const mode of ["decline", "pass"]) {
       writeFileSync(env.COMMENTS, "");
       const id = `test-${mode}-${randomUUID()}`;
-      dagu("enqueue", "--run-id", id, definition, "--", "ISSUE=263", "QUESTION=question", `PRIMARY=${primary}`);
+      dagu("enqueue", "--run-id", id, definition, "--", "ISSUE=263", "QUESTION=question");
       await state(id, "run_poc");
       const worktree = join(primary, ".workspace", "worktrees", `poc-${id}`);
       if (mode === "decline") {

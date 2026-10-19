@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,7 +13,7 @@ export const isolatedDagu = {
 };
 
 export function admissionFixture() {
-  const root = mkdtempSync(join(tmpdir(), "dagu-admission-"));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "dagu-admission-")));
   const packageDir = join(root, "package");
   const home = join(root, "dagu-home");
   mkdirSync(packageDir);

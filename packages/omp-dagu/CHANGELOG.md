@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.86
+
+- Repair isolated lifecycle integration fixtures to use canonical admission paths, adopted policy environments and each Dagu service's API port, preserving retained-worktree adoption, PoC routing and ownership-checked cleanup.
+
 ## 0.3.85
 
 - Bind gate, required check, rebase resolver and canonical primary at adoption, derive feature branches, reject policy run overrides before repository writes, and resolve runtime consumers from the enqueued policy snapshot (#274).
