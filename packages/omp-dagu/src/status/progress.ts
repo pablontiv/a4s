@@ -220,8 +220,17 @@ export class Transitions {
         const causeText = (step.endsWith("_primary_unavailable") || step.startsWith("recover_")) ? node.step.humanTask.prompt
           : run.name === "poc" && step === "run_poc" && iteration > 0 ? run.scopeFailureCause : undefined;
         const cause = causeText ? ` cause=${plain(causeText)}` : "";
+        const validation = run.name === "feature" && step === "validation";
+        const prompt = node.step.humanTask.prompt ?? "";
+        const sha = prompt.match(/Tested SHA: ([a-f0-9]{40})\b/)?.[1];
+        const quote = (value: string): string => `'${value.replace(/'/g, "'\\''")}'`;
+        const validationNotice = validation
+          ? ` repo=${plain(run.labels?.find(label => label.startsWith("workspace="))?.slice(10) ?? runParam(run, "PRIMARY") ?? "unknown")}\n${prompt}\n`
+            + `Approve: dagu human-task complete feature --run-id ${quote(run.dagRunId)} --step validation --input APPROVED=yes --input TESTED_SHA=${quote(sha ?? "<tested-sha unavailable; inspect dagu status>")}\n`
+            + `Push back: dagu human-task push-back feature --run-id ${quote(run.dagRunId)} --step validation --expected-iteration ${iteration} --input REASON='<operator reason>'`
+          : "";
         notice(JSON.stringify([key, step, iteration]),
-          `[DAGU STATE] run=${plain(run.dagRunId)} status=waiting step=${plain(step)}${identity}${bundleNotice} iteration=${iteration}${cause}`);
+          `[DAGU STATE] run=${plain(run.dagRunId)} status=waiting step=${plain(step)}${identity}${bundleNotice} iteration=${iteration}${cause}${validationNotice}`);
       }
       if (run.statusLabel === "succeeded") {
         notice(JSON.stringify([key, "succeeded"]),

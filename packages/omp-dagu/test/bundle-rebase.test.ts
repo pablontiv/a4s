@@ -218,12 +218,15 @@ test("isolated Dagu rebases colliding candidates before gate and publishes the n
     BUNDLE_VERSION: "0.3.18", DAGU_VERSION: "2.20.1", SOURCE_NWO: "fixture/repository",
     SOURCE_SHA: repo.before, DAG_RUN_ID: "fixture-bootstrap",
   };
-  put(home, "dags/feature.yaml", `type: graph\nshell: bash\nenv:\n${Object.entries({ ...repo.env, PATH: env.PATH }).map(([key, value]) => `  ${key}: ${JSON.stringify(value)}`).join("\n")}\nsteps:\n` +
-    step(source, "rebase").replace("    depends: dependency_review\n", "") +
+  put(home, "dags/feature.yaml", `type: graph\nshell: bash\nenv:\n${Object.entries({ ...repo.env, VALIDATION: "", PATH: env.PATH }).map(([key, value]) => `  ${key}: ${JSON.stringify(value)}`).join("\n")}\nsteps:\n` +
+    "  - id: triage\n    run: echo POC=no >> \"$DAGU_OUTPUT_FILE\"\n    outputs:\n      - name: POC\n" +
+    "  - id: implement\n    depends: triage\n    run: echo fixture-candidate-ready\n" +
+    step(source, "rebase").replace("    depends: dependency_review", "    depends: implement") +
     step(source, "gate").replace("    depends: conflict_review", "    depends: rebase") +
     "  - id: quality_review\n    depends: gate\n    action: human.task\n    with:\n      prompt: Admit independent verdict evidence for the normalized candidate.\n" +
     step(source, "quality_admit").replace("    env:\n      - QA: ${steps.quality_review.outputs.QA}\n      - REVIEW: ${steps.quality_review.outputs.REVIEW}\n", "    env:\n      - QA: QATest\n      - REVIEW: ReviewTest\n") +
-    step(source, "push").replace("    depends: quality_transition", "    depends: quality_admit"));
+    step(source, "validation").replace("    depends: quality_transition", "    depends: quality_admit") +
+    step(source, "push"));
   let serviceLog = "";
   const service = spawn("dagu", ["start-all", "--host", "127.0.0.1", "--port", String(port)], { cwd: repo.root, env, stdio: ["ignore", "pipe", "pipe"] });
   service.stdout.on("data", data => { serviceLog += data; }); service.stderr.on("data", data => { serviceLog += data; });

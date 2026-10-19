@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.83
+
+- Add an adoption-fixed optional repository validation checkpoint between gate and push, with tested-SHA approval, reason-bearing iterative push-back, visible operator notices and isolated smoke guidance (#276).
+
 ## 0.3.82
 
 - Add the new planning DAG: independently reviewed, operator-approved plans become idempotent issues and feature/PoC runs, with durable validation feedback, bootstrap adoption, and planning status notices (#292).
