@@ -46,7 +46,13 @@ export function admissionFixture() {
   const command = (subcommand: string, run: string, env: NodeJS.ProcessEnv = {}) => spawnSync(process.execPath, [cli, subcommand, "--run-id", run, dag, "--", `PRIMARY=${packageDir}`, "ISSUE=277", "BRANCH=dagu/issue-277"], { cwd: packageDir, env: { ...process.env, DAGU_HOME: home, ...env }, encoding: "utf8", timeout: 30000 });
   const receipt = (run: string): string => join(packageDir, ".git", "dagu-feature", "runs", run, "receipt.json");
   const observe = (run: string, observation: object) => spawnSync(process.execPath, [cli, "observe", run, JSON.stringify(observation)], { cwd: packageDir, env: { ...process.env, DAGU_HOME: home }, encoding: "utf8" });
-  const dispose = (): void => rmSync(root, { recursive: true, force: true });
+  const previousDaguHome = process.env.DAGU_HOME;
+  process.env.DAGU_HOME = home;
+  const dispose = (): void => {
+    if (previousDaguHome === undefined) delete process.env.DAGU_HOME;
+    else process.env.DAGU_HOME = previousDaguHome;
+    rmSync(root, { recursive: true, force: true });
+  };
   assert.match(execFileSync("dagu", ["version"], { encoding: "utf8" }), /^2\.20\.1\n$/);
   return { root, packageDir, home, dag, cli, command, receipt, observe, render, dispose };
 }
