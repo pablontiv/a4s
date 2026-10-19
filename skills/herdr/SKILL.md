@@ -26,7 +26,7 @@ Vocabulary: **space = `workspace`** (1:1 per repo, labeled by repo). **tab = one
 
 **Invariant: “one agent per tab” means that an ordinary Herdr peer worker does not recursively delegate. A workflow such as Roadmap may own a bounded Superpowers controller under ADR 0043; only that controller dispatches subagents, and its children never delegate.** This applies identically to both authorized kinds, `--kind claude` and `--kind pi`; native Claude features and Pi provider/model routing do not create an exception. Delegation and parallelism create another peer tab. A workflow with N independent child-runs therefore fans out to N peer tabs, not N subagents.
 
-**Roles** (canonical; do not reintroduce *mensajero*, *supervisor*, *minion*, or *coordinador* as role labels): **Human Operator** — the owner. **Mission Control** — the relay session between the Human Operator and Project Orchestrators (e.g. `w4R:p1`). **Project Orchestrator** — the session that drives this skill for one repo; it dispatches and stays thin. **Worker** — the agent executing one work unit in one peer tab. **Verifier** — an independent review agent, itself run as its own peer tab, not a synchronous check inside the Worker's tab. **Mission** — the Bead that owns the durable work unit.
+**Roles** (canonical; do not reintroduce *mensajero*, *supervisor*, *minion*, or *coordinador* as role labels): **Human Operator** — the owner. **Mission Control** — the relay session between the Human Operator and Project Orchestrators; it is always the pane labeled `mc` (designated by label, never a hardcoded pane id). **Project Orchestrator** — the session that drives this skill for one repo; it dispatches and stays thin. **Worker** — the agent executing one work unit in one peer tab. **Verifier** — an independent review agent, itself run as its own peer tab, not a synchronous check inside the Worker's tab. **Mission** — the Bead that owns the durable work unit.
 
 **Ownership iron: 1 Project Orchestrator = 1 repo; 1 Worker = 1 feature.** A Project Orchestrator coordinates only its own repo: it does not implement, review-as-worker, or land work in a foreign repo. Work for another repo goes to that repo's Project Orchestrator (via Mission Control), not to a tab opened here. A Worker owns one feature or single responsibility (one feat branch, one Verifier review, one PoC); more scope means more Workers, i.e. N Beads / N peer tabs. The Project Orchestrator never absorbs Worker work as its own hands-on implementation.
 
@@ -224,6 +224,75 @@ Los directorios usan modo `0700`. Los archivos usan modo `0600`. El lock del tic
 
 Create panes only when the user explicitly asks for a split view inside one session. Pass `--no-focus` for background setup so you do not steal the user's focus.
 
+## Jev decision contract
+
+**Every decision is made by Jev, not by the agent's own reasoning and not by defaulting the choice back to the Human Operator.** A "decision" is any non-mechanical choice with consequences: workspace/role alignment, reaper disposition, routing, label conventions, teardown-or-keep, and any operator-facing option. Jev is `jev-1.13.0` via TypeSafe (`@a4s/typesafe`; `POST https://api.typesafe.ai/v1/systemone`, key from `TYPESAFE_API_KEY`/auth.json), consumed as typed Choice/Noul/Score judgments.
+
+**Iterate a minimum of 3 passes, each with more/better context.** The count is not the point — the *added context* is. Re-asking the same state three times is a contract violation. Each pass:
+
+1. Sends the decision as typed question(s) over the current `state`.
+2. **Also asks Jev to judge its own context** — a meta-question such as `context_sufficient` (noul: "is this state sufficient to decide safely?") plus what is missing. This is the same move the Pi compaction extension makes (Jev judges keep/truncate/drop over the session state); here Jev judges decision-context sufficiency.
+3. Uses that meta-judgment to add exactly the missing context in the next pass — never blind repetition.
+
+**Jev resolves; the Human Operator is the last resort, not the default.** The goal is to remove the human-in-the-loop bottleneck: decisions are automatic unless genuinely irreconcilable. Accept the verdict once it is **stable across the last passes**, confidence is high (≥0.8), and Jev judged the context sufficient.
+
+- **Insufficient context is not escalation.** When Jev judges the context insufficient, the agent's job is to *go get the missing context itself* — query Herdr/bd, read artifacts, run Backscroll — and run more Jev passes (beyond the ≥3 minimum) until it resolves. Do not bounce a "need more context" back to the human.
+- **Escalate to the Human Operator only when irreconcilable:** Jev's verdict stays unstable or contradictory across passes despite added context, the only missing context is something exclusively the human knows, or the options are a pure value/authority call Jev has no basis to settle. Then, and only then, emit `ATTENTION REQUIRED` with the full per-pass evidence.
+
+**A Jev verdict authorizes intent, not a destructive act.** Teardown and other external destructive effects still require the explicit, bounded operator authorization the Safety section demands; Jev deciding "teardown" does not bypass it.
+
+**Record every decision**: persist the verdict and the pass trail (engram + the governing Bead's notes) so a fresh session reconstructs it without the transcript.
+
+## Mission Control pane contract
+
+Every pane carries a mandatory `label` set **at creation**; an unlabeled pane is a contract violation. The label is the only handle used to designate a role — never a hardcoded pane id.
+
+### Unique-MC invariant
+
+Exactly one pane labeled `mc` exists at any time — it is THE canonical Mission Control. This is an invariant, not a preference:
+
+- `count == 1` → healthy.
+- `count == 0` → no Mission Control; create the single `mc` pane before relaying.
+- `count > 1` → **ATTENTION REQUIRED to the Human Operator. Never auto-resolve.** Do not close, merge, or pick a winner. Report every candidate with its `pane_id`, creation `timestamp`, and `cwd`, and stop until the operator designates the survivor.
+
+### Label convention (mandatory at creation)
+
+| Label | Role | Cardinality |
+|---|---|---|
+| `mc` | Mission Control | exactly one, globally |
+| `<repo>-orch` | Project Orchestrator | one per repo with active workers |
+| `<bead-id>` | Worker | one per Bead |
+| `<bead-id>-w<N>` | fan-out Worker | one per fan-out child (`-w1`, `-w2`, …) |
+| `<bead-id>-ver` | Verifier | one per Bead under verification |
+| `shell` | ad-hoc / operator scratch | unconstrained |
+
+A worker or orchestrator pane created without a label matching this convention is orphaned by definition and cannot be reconciled to a Bead.
+
+### Bead→pane metadata (canonical)
+
+At dispatch time the Project Orchestrator records the pane binding in the Bead's `bd` notes, one canonical line:
+
+```
+worker=<name> pane=<pane-id> tab=<tab-id> kind=<kind> model=<route>
+```
+
+This is the authoritative Bead↔pane linkage. A worker pane with no such note on any open Bead is an orphan (reaper candidate); a Bead note pointing at a dead pane is a stale binding to reconcile.
+
+### `mc_recover` — deterministic Mission Control recovery
+
+Run this whenever Mission Control state is uncertain (session start, after a crash, or before relaying). It is read-only up to the point where a decision is forced to the operator:
+
+```bash
+# 1. Enumerate mc-labeled panes across all workspaces
+herdr tab list --all            # inspect label="mc" rows; collect pane_id + cwd
+herdr pane list --workspace <id> # per-workspace pane_id/label/cwd/created-at as needed
+```
+
+1. **Count `mc` panes.**
+2. `== 1` → adopt it as Mission Control; done.
+3. `== 0` → create exactly one pane labeled `mc` in the mission-control workspace; that pane becomes Mission Control.
+4. `> 1` → **halt.** Emit `ATTENTION REQUIRED verdict=blocked` listing every candidate's `pane_id` + `timestamp` + `cwd`. Do not auto-resolve; wait for the operator to designate the survivor, then the non-survivors are closed only on that explicit instruction.
+
 ## Discover the live CLI
 
 The installed binary is authoritative for syntax. A group alone lists its subcommands; a leaf `--help` lists that command's flags:
@@ -282,6 +351,7 @@ Build a precise layout by splitting a specific returned pane id with an explicit
 - 1 Project Orchestrator = 1 repo; 1 Worker = 1 feature. Never work or land changes in a foreign repo from this session.
 - Vendor repos are `pablontiv` forks: PRs and merges target `pablontiv/<repo>` only, never upstream; verify remotes and base before `gh pr create`/merge.
 - Self-check model/route (`PI_MODEL`/`PI_PROVIDER`, Pi metadata, `herdr agent get`) before any quota/budget action; never emit `BUDGET_EXCEEDED` for a route you are not on.
+- Exactly one pane labeled `mc` exists at any time; `count > 1` is ATTENTION REQUIRED to the operator — report each candidate's pane_id/timestamp/cwd and never auto-resolve. Every pane carries a convention label at creation (see Mission Control pane contract).
 - An ordinary Herdr peer worker does not recursively delegate. A workflow such as Roadmap may own a bounded Superpowers controller under ADR 0043; only that controller dispatches subagents, and its children never delegate.
 - Never create, move, relabel or close an mc pane/tab/workspace from a Worker or the reconciler; MC creation/promotion needs an incumbent-MC handshake, and any relocation carries a handover artifact and preserves the incumbent MC.
 - Worker escalation has one route: `metadata.orchestrator_target`, stamped with `correlation_id` before start/prompt (dispatch fails closed without a valid PO target). A Worker never asks the Human Operator or Mission Control; every blocker/question is a correlated `ATTENTION REQUIRED` through `helper/escalation.py`; a failed delivery leaves evidence on the Bead, emits `ATTENTION DELIVERY_FAILED` to the same target if possible, and stops, with no fallback to Human/MC.
