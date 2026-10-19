@@ -28,7 +28,7 @@ function fixture() {
   history("feature", []); history("poc", []);
   const worktree = join(primary, ".workspace", "worktrees", "issue-215"), branch = "dagu/issue-215";
   const row = (run: string, status: string, kind = "feature") => ({ name: kind, dagRunId: run, status, params: `PRIMARY=${primary} ISSUE=215 BRANCH=${kind === "feature" ? branch : ""}` });
-  const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, PRIMARY: primary, WORKTREE: worktree, BRANCH: branch, ISSUE: "215", RUN: "owner", OMP_SESSION_ID: "resource-test-session", BASE_BRANCH: "main", GATE: "true", REQUIRED_CHECK: "validate", DAGU_FEATURE_BUNDLE: "test" };
+  const env = { ...process.env, DAGU_PARAMS_JSON: "{}", PATH: `${bin}:${process.env.PATH}`, PRIMARY: primary, WORKTREE: worktree, BRANCH: branch, ISSUE: "215", RUN: "owner", OMP_SESSION_ID: "resource-test-session", BASE_BRANCH: "main", GATE: "true", REQUIRED_CHECK: "validate", DAGU_FEATURE_BUNDLE: "test" };
   return { root, primary, branch, worktree, git, history, row, env };
 }
 function script(definition: string, marker: string) {
@@ -88,6 +88,23 @@ test("OMP bash resource guard protects feature and PoC owners in every active st
   assert.equal(snapshot(), before);
 });
 
+test("resource ownership resolves the enqueued adoption snapshot and derived feature branch", async t => {
+  const repo = fixture(), previousPath = process.env.PATH;
+  process.env.PATH = repo.env.PATH;
+  t.after(() => { process.env.PATH = previousPath; rmSync(repo.root, { recursive: true, force: true }); });
+  repo.git(repo.primary, "worktree", "add", "-b", repo.branch, repo.worktree, "origin/main");
+  repo.history("feature", [{ ...repo.row("adopted-owner", "waiting"), params: "ISSUE=215 OMP_SESSION_ID=owner-session" }]);
+  t.mock.method(globalThis, "fetch", async (url: string | URL | Request) => {
+    assert.equal(new URL(String(url)).pathname, "/api/v1/dag-runs/feature/adopted-owner/spec");
+    return Response.json({ spec: `env:\n  - PRIMARY: ${JSON.stringify(repo.primary)}\n` });
+  });
+  for (const command of ["git branch -D dagu/issue-215", `git worktree remove '${repo.worktree}'`]) {
+    const decision = await resourceDecision({ toolName: "bash", toolCallId: command, input: { command } }, repo.primary);
+    assert.ok(decision && "block" in decision);
+    assert.match(decision.reason, /belongs to active run adopted-owner \(waiting\)/);
+  }
+});
+
 test("terminal/unowned resources pass, ordinary paths keep behavior, history failures diagnose managed deletion", async t => {
   const repo = fixture(), previousPath = process.env.PATH; process.env.PATH = repo.env.PATH;
   t.after(() => { process.env.PATH = previousPath; rmSync(repo.root, { recursive: true, force: true }); });
@@ -114,6 +131,19 @@ test("terminal/unowned resources pass, ordinary paths keep behavior, history fai
 });
 
 for (const definition of definitions) {
+  test(`${definition} admission protects a feature owner resolved from its adopted snapshot`, t => {
+    const repo = fixture(); t.after(() => rmSync(repo.root, { recursive: true, force: true }));
+    repo.history("feature", [{ ...repo.row("adopted-owner", "waiting"), params: "ISSUE=215 OMP_SESSION_ID=owner-session" }]);
+    const snapshot = join(repo.root, "snapshot.json");
+    writeFileSync(snapshot, JSON.stringify({ spec: `env:\n  - PRIMARY: ${JSON.stringify(repo.primary)}\n` }));
+    const curl = join(repo.root, "bin", "curl");
+    writeFileSync(curl, `#!/bin/sh\ncat '${snapshot}'\n`);
+    chmodSync(curl, 0o755);
+    const result = spawnSync("bash", ["-c", script(definition, "  - id: admit")], { env: { ...repo.env, RUN: "requesting-run" }, encoding: "utf8" });
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(result.stderr, /belongs to active run adopted-owner \(waiting\)/);
+  });
+
   test(`${definition} admission/creation retries preserve candidate data, serialize claimants and transfer terminal ownership`, async t => {
     const repo = fixture(); t.after(() => rmSync(repo.root, { recursive: true, force: true }));
     const create = script(definition, "  - id: start_gate");

@@ -55,8 +55,7 @@ flowchart LR
 - `git`, `gh` authenticated with push and PR rights, `curl`, `jq`.
 - The tools the repository's gate command needs.
 
-Install the Dagu binary separately at the version pinned in `../../package.json`.
-Everything that varies between repositories is a DAG param.
+This skill does not install Dagu, and it carries no logic specific to any repository. Bootstrap renders repository policy; run parameters carry operational issue inputs.
 
 ## Global station installation
 
@@ -98,6 +97,7 @@ safe point after reviewing active runs, use `launchctl bootout
 Observe `launchctl print "gui/$(id -u)/local.dagu.server"` (`state = running`),
 `curl -fsS http://127.0.0.1:8080/api/v1/health` (`healthy`) and the installer's
 `--check` before repository bootstrap.
+This skill does not install Dagu, and it carries no logic specific to any repository. Bootstrap renders repository policy; run parameters carry operational issue inputs.
 
 ## Global history retention
 
@@ -166,7 +166,7 @@ For an operator outside OMP, use the same boundary explicitly:
 
 ```sh
 node /real/checkout/packages/omp-dagu/bin/dagu-feature-bundle.ts enqueue \
-  --run-id <repo>-issue-<n> .workspace/dagu/dags/feature.yaml -- ISSUE=<n> PRIMARY=<primary>
+  --run-id <repo>-issue-<n> .workspace/dagu/dags/feature.yaml -- ISSUE=<n> OMP_SESSION_ID=<session>
 ```
 
 `admit` accepts the same arguments, reserves the run ID and emits its receipt
@@ -219,11 +219,11 @@ The bootstrap renders the repository DAG templates when a repository adopts the 
 |---|---|---|---|
 | `TEMPLATE_REPO` | Repository name, used in `labels: [workspace=<repo>]` and `queue: <repo>` | `rootline` | `homeserver` |
 | `TEMPLATE_BASE_BRANCH` | Default of `BASE_BRANCH`, the default branch. The DAG uses `origin/$BASE_BRANCH` as the source ref. | `master` | `main` |
-| `__GATE__` | Default of `GATE`, the local gate command, run with `bash -euo pipefail -c` in the worktree | `just check && just test` | `make hook-validate` |
-| `__REBASE_RESOLVER__` | Default of `REBASE_RESOLVER`, repository conflict-resolution command; empty selects manual conflict recovery | `""` | `""` |
-| `__REQUIRED_CHECK__` | Default of `REQUIRED_CHECK`, the GitHub check that must be required on the default branch | `candidate` | `validate` |
+| `__GATE__` | Adoption-fixed `GATE`, the local gate command, run with `bash -euo pipefail -c` in the worktree | `just check && just test` | `make hook-validate` |
+| `__REBASE_RESOLVER__` | Adoption-fixed `REBASE_RESOLVER`, repository conflict-resolution command; empty selects manual conflict recovery | `""` | `""` |
+| `__REQUIRED_CHECK__` | Adoption-fixed `REQUIRED_CHECK`, the GitHub check required on the default branch | `candidate` | `validate` |
 | `__VALIDATION__` | Optional repository procedure after gate, fixed by adoption; empty skips the checkpoint | `""` | `""` |
-| `__PRIMARY__` | Default clone path in `poc.yaml` | repository clone | repository clone |
+| `__PRIMARY__` | Canonical main-clone path fixed in feature and PoC renders | repository clone | repository clone |
 | `__TEST_PATHS__` | Bash ERE for repository test paths; every `*.md` also belongs to cutover | `_test\.go$\|^tests/` | `(^\|/)tests/` |
 
 The DAG's fixed invariants: `PRIMARY` is the repository clone, its main working tree, on `BASE_BRANCH` and clean; the run's worktree is always `$PRIMARY/.workspace/worktrees/issue-<n>`, ignored by git; the gate runs with `umask 0022` and without `GH_TOKEN`/`GITHUB_TOKEN`; auto-merge is bound to the tested SHA with `--match-head-commit`; and the queue has concurrency one per repository. `start_gate` registers the canonical PRIMARY, worktree, branch and owning run in Git metadata. Both cleanup entry points share the same script. They refresh the remote base and require either candidate ancestry in that base or a MERGED PR whose head equals the recorded tested candidate and whose effective merge SHA is an ancestor of the refreshed base. `cleanup-proof.json` records candidate, base, squash SHA and proof. Ordinary `git worktree remove` protects local files; a dirty worktree is retained. Local branch deletion compares the candidate atomically; remote deletion at merged close uses an exact-SHA lease.
@@ -344,14 +344,11 @@ Preconditions: run from the repository clone, its main working tree, clean and o
 ```sh
 repo=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
 repo_name=${repo##*/}
-primary=$(git rev-parse --show-toplevel)
 issue_snapshot=$(gh issue list --repo "$repo" --state open --limit 1000 \
   --json number --jq '.[].number')
 for n in $issue_snapshot; do
   dagu enqueue --run-id "$repo_name-issue-$n" .workspace/dagu/dags/feature.yaml -- \
     ISSUE="$n" \
-    PRIMARY="$primary" \
-    BRANCH="dagu/issue-$n" \
     PR_NUMBER="" \
     OMP_SESSION_ID="<value returned by dagu_session_id>"
 done
@@ -359,7 +356,7 @@ done
 
 `issue_snapshot` is the fixed batch for this coordinator turn. Call `dagu_session_id` in the main session before enqueueing and use its returned value for every run. End the turn immediately after the enqueue loop; the status extension resumes coordination with targeted notices.
 
-Set `PR_NUMBER` only to adopt an existing open PR whose head branch is `BRANCH`. `OMP_SESSION_ID` targets the persistent main OMP session that enqueued the run. `BASE_BRANCH`, `GATE` and `REQUIRED_CHECK` take their defaults from the versioned file. Pass them only to override them for this run.
+Set `PR_NUMBER` only to adopt an existing open PR whose head is `dagu/issue-<ISSUE>`. `OMP_SESSION_ID` targets the persistent main OMP session that enqueued the run. `BASE_BRANCH` defaults to the versioned file. Bootstrap fixes `GATE`, `REBASE_RESOLVER`, `REQUIRED_CHECK` and canonical `PRIMARY` at adoption; the DAG derives `BRANCH=dagu/issue-$ISSUE`. Admission rejects each of those five names as run parameters, naming it before repository state changes. Change adoption policy through bootstrap and version the resulting renders.
 
 Before `start_gate` and `close_gate`, the DAG detects whether PRIMARY is clean and on
 `BASE_BRANCH`. An unavailable primary pauses the same run at
@@ -611,7 +608,7 @@ step waiting; inspect its log and apply the same iteration-protected transition.
 
 ```sh
 dagu enqueue --run-id "<repo>-poc-<id>" .workspace/dagu/dags/poc.yaml -- \
-  PRIMARY="$(git rev-parse --show-toplevel)" QUESTION="<behavior to prove>"
+  QUESTION="<behavior to prove>" OMP_SESSION_ID="<value returned by dagu_session_id>"
 ```
 
 ISSUE is optional. Without it, QUESTION is required and `record` creates the issue
@@ -687,7 +684,7 @@ first-line marker to be PASS/scope:OK with a normalized question matching the
 latest triage question (or the question body for an issue created by record)
 and nonempty required sections outside fences.
 It verifies Después del PASS in the body and enqueues the absolute feature
-DAG with ISSUE, PRIMARY, BRANCH, BASE_BRANCH and POC_BASIS pointing to the PASS;
+DAG with ISSUE, BASE_BRANCH and POC_BASIS pointing to the PASS;
 the PoC run and promoted `feature-<RUN>` run retain the original run's
 `OMP_SESSION_ID`, so the same coordinating OMP session receives the promoted run's notices. Its human triage cites that URL as BASIS and still requires
 REVIEW for POC=no.

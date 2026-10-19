@@ -46,7 +46,7 @@ test("drain preserves existing runs; TERM restart stub activates capacity 2 on n
   const home = mkdtempSync(join(tmpdir(), "dagu-restart-drain-"));
   const port = await freePort();
   // Preserve a private listener across reconciliation of the station's port defaults.
-  const env = { ...process.env, DAGU_HOME: home, DAGU_COORDINATOR_ENABLED: "false", DAGU_PORT: String(port) };
+  const env = { ...process.env, DAGU_PARAMS_JSON: "{}", DAGU_HOME: home, DAGU_COORDINATOR_ENABLED: "false", DAGU_PORT: String(port) };
   const id = `drain-${process.pid}-${Date.now()}`;
   const release = join(home, "release-old");
   const closed = join(home, "closed");

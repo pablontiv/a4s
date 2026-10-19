@@ -203,6 +203,8 @@ interrupciones, incluso entre worktree y rama. El operador resuelve el
 diagnóstico conservando cambios y evidencia; la recuperación y transferencia
 explícita de propiedad se describen en `skills/dagu-feature/SKILL.md`.
 
+La adopción fija `GATE`, `REBASE_RESOLVER`, `REQUIRED_CHECK` y el `PRIMARY` canónico en los renders de feature/PoC. Feature deriva `BRANCH=dagu/issue-$ISSUE`. La primera admisión rechaza esos cinco nombres como parámetros antes de modificar el repositorio. Encola feature con `ISSUE`, `PR_NUMBER` opcional y `OMP_SESSION_ID`; `BASE_BRANCH` conserva su default. Bootstrap declara los cambios de política. La promoción PoC usa el mismo contrato y conserva la sesión. Los consumidores consultan el spec encolado para resolver PRIMARY, incluido el historial del reconciliador.
+
 Los avisos se entregan ocultos con `customType: "dagu-state"`, `display: false` y `deliverAs: "aside"`. Solo el agente main con el `OMP_SESSION_ID` exacto recibe avisos; ISSUE es opcional. Se aceptan params CLI y JSON. Una FIFO por sesión reclama sincrónicamente un único turno autónomo cuando está idle y continúa tras `agent_end`; durante un turno activo entrega los avisos como asides en orden.
 
 El primer barrido establece una línea base silenciosa. Después, el lector consulta `/api/v1/event-logs` DEFAULT de Dagu 2.20.1, con `paginationMode=cursor`, agota las páginas y emite en orden persistido. Cada ronda vuelve a la cabecera para observar ingestión eventual, incluido el succeeded que aún no sea visible al finalizar el run. Un HTTP 400 con cursor reinicia el recorrido conservando deduplicación. Los IDs de eventos y las claves `(dagName, dagRunId, step_id, approval_iteration)` evitan duplicados; una iteración omitida es cero. El éxito se deduplica por run/status. SSE actualiza el widget; el ledger recupera las aperturas rápidas omitidas por snapshots. El estado de entrega dura durante esa observación de sesión; reiniciar o cambiar sesión establece una nueva línea base.
@@ -411,7 +413,7 @@ El guard de OMP transforma `dagu enqueue` en bash al CLI del paquete, después
 del cual el shell resuelve sus argumentos efectivos. Las promociones internas
 usan `dagu-feature-bundle enqueue`: instalar ese binario en el `PATH` del servicio.
 Fuera de OMP, usar explícitamente
-`node /real/checkout/packages/omp-dagu/bin/dagu-feature-bundle.ts enqueue --run-id <id> <dag.yaml> -- PRIMARY=<repo> ISSUE=<n>`.
+`node /real/checkout/packages/omp-dagu/bin/dagu-feature-bundle.ts enqueue --run-id <id> <repo>/.workspace/dagu/dags/feature.yaml -- ISSUE=<n> OMP_SESSION_ID=<session>`.
 `admit` reserva un ID de verificación y escribe el recibo sin crear un run.
 
 Cada admisión guarda `sourceVersion`, `deploymentFingerprint` (SHA-256 de JSON

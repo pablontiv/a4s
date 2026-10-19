@@ -25,7 +25,7 @@ function fixture() {
     root, home, agent,
     run(extra: string[] = [], env: NodeJS.ProcessEnv = {}) {
       return spawnSync(process.execPath, [cli, "--launch-agent", agent, ...extra], {
-        encoding: "utf8", env: { ...process.env, DAGU_HOME: home, ...env },
+        encoding: "utf8", env: { ...process.env, DAGU_PARAMS_JSON: "{}", DAGU_HOME: home, ...env },
       });
     },
     dispose() { rmSync(root, { recursive: true, force: true }); },

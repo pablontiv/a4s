@@ -9,44 +9,36 @@ shell: bash
 max_active_steps: 1
 max_clean_up_time_sec: 120
 params:
-  - name: ISSUE
-    type: string
-    required: true
-    pattern: '^[1-9][0-9]*$'
-  - name: PR_NUMBER
-    type: string
-    default: ""
-  - name: PRIMARY
-    type: string
-    required: true
-  - name: BRANCH
-    type: string
-    required: true
-    pattern: '^[A-Za-z0-9][A-Za-z0-9._/-]*$'
-  - name: BASE_BRANCH
-    type: string
-    default: TEMPLATE_BASE_BRANCH
-    pattern: '^[A-Za-z0-9][A-Za-z0-9._/-]*$'
-  - name: GATE
-    type: string
-    default: __GATE__
-  - name: REBASE_RESOLVER
-    type: string
-    default: __REBASE_RESOLVER__
-  - name: REQUIRED_CHECK
-    type: string
-    default: __REQUIRED_CHECK__
-  - name: VALIDATION
-    type: string
-    default: __VALIDATION__
-    enum: [__VALIDATION__]
-  - name: OMP_SESSION_ID
-    type: string
-    default: ""
-  - name: POC_BASIS
-    type: string
-    default: ""
+  type: object
+  additionalProperties: true
+  required: [ISSUE]
+  properties:
+    ISSUE:
+      type: string
+      pattern: '^[1-9][0-9]*$'
+    PR_NUMBER:
+      type: string
+      default: ""
+    BASE_BRANCH:
+      type: string
+      default: TEMPLATE_BASE_BRANCH
+      pattern: '^[A-Za-z0-9][A-Za-z0-9._/-]*$'
+    VALIDATION:
+      type: string
+      default: __VALIDATION__
+      enum: [__VALIDATION__]
+    OMP_SESSION_ID:
+      type: string
+      default: ""
+    POC_BASIS:
+      type: string
+      default: ""
 env:
+  - PRIMARY: __PRIMARY__
+  - BRANCH: dagu/issue-${ISSUE}
+  - GATE: __GATE__
+  - REBASE_RESOLVER: __REBASE_RESOLVER__
+  - REQUIRED_CHECK: __REQUIRED_CHECK__
   - WORKTREE: ${PRIMARY}/.workspace/worktrees/issue-${ISSUE}
   - RUN: ${context.run.id}
   - DAGU_FEATURE_BUNDLE: "__DAGU_FEATURE_IDENTITY__"
@@ -93,7 +85,9 @@ env:
         if ! jq -er 'if type == "array" and length < 1000 then . else error("ownership history incomplete: expected array below 1000 rows") end | .[] |
           if (.params|type) != "string" then error("params must be a string") else . end |
           def p($k): (try (.params|capture("(^| )"+$k+"=(?<v>.*?)(?= [A-Z_]+=|$)").v | if startswith("\"") or startswith("\u0027") then .[1:-1] else . end) catch "") // "";
-          [.dagRunId, (.status|ascii_downcase), p("PRIMARY"), p("BRANCH"), p("ISSUE")] | @tsv' \
+          [.dagRunId, (.status|ascii_downcase), (p("PRIMARY") | if . == "" then "@snapshot" else . end),
+           (p("BRANCH") as $branch | if $branch == "" then "dagu/issue-" + p("ISSUE") else $branch end),
+           (p("ISSUE") | if . == "" then "-" else . end)] | @tsv' \
           "$key.lock/history" > "$key.lock/rows"; then
           # jq -e returns 4 for an empty, valid history.
           jq -e 'type == "array" and length == 0' "$key.lock/history" >/dev/null ||
@@ -117,6 +111,11 @@ env:
           esac
         fi
         while IFS=$'\t' read -r run status candidate branch issue; do
+          if [[ "$candidate" == @snapshot ]]; then
+            candidate=$(curl -fsS "http://127.0.0.1:${DAGU_PORT:-8080}/api/v1/dag-runs/feature/$(jq -nr --arg run "$run" '$run|@uri')/spec" |
+              jq -er '.spec | split("\n")[] | select(startswith("  - PRIMARY: ")) | ltrimstr("  - PRIMARY: ") | fromjson') ||
+              { printf 'dagu-feature: cannot resolve adopted primary for run %s\n' "$run" >&2; exit 1; }
+          fi
           [[ -n "$candidate" && -d "$candidate" ]] || continue
           candidate=$(cd "$candidate" && pwd -P)
           [[ "$candidate" == "$primary" && ( "$issue" == "$ISSUE" || "$branch" == "$BRANCH" ) ]] || continue
@@ -145,6 +144,7 @@ env:
       }
 steps:
   - id: admit
+    depends: admission
     run: |
       set -euo pipefail
       primary_path=$(cd "$PRIMARY" && pwd -P)
@@ -182,6 +182,16 @@ steps:
       fi
       eval "$DAGU_RESOURCE_GUARD"
       resource_lock claim
+
+  - id: admission
+    run: |
+      set -euo pipefail
+      rejected=$(jq -er 'keys[] | select(. == "GATE" or . == "REBASE_RESOLVER" or . == "REQUIRED_CHECK" or . == "PRIMARY" or . == "BRANCH")' <<<"$DAGU_PARAMS_JSON") || [[ $? == 4 ]]
+      if [[ -n "$rejected" ]]; then
+        printf 'admission rejected run parameter: %s\n' "$rejected" >&2
+        printf 'adopted policy PRIMARY=%q GATE=%q REBASE_RESOLVER=%q REQUIRED_CHECK=%q BRANCH=%q\n' "$PRIMARY" "$GATE" "${REBASE_RESOLVER:-}" "$REQUIRED_CHECK" "$BRANCH" >&2
+        exit 1
+      fi
 
   - id: triage
     depends: admit
@@ -385,7 +395,7 @@ steps:
       gh issue comment "$ISSUE" --body-file "$STATE/triage.md"
       if [[ "$POC" == yes ]]; then
         dagu-feature-bundle enqueue --run-id "poc-$RUN" "$PRIMARY/.workspace/dagu/dags/poc.yaml" -- \
-          ISSUE="$ISSUE" QUESTION="$QUESTION" PRIMARY="$PRIMARY" BASE_BRANCH="$BASE_BRANCH" \
+          ISSUE="$ISSUE" QUESTION="$QUESTION" BASE_BRANCH="$BASE_BRANCH" \
           OMP_SESSION_ID="$OMP_SESSION_ID"
       fi
 
@@ -1197,6 +1207,7 @@ steps:
       - CLEANUP_CLOSE: "true"
     run: &feature_cleanup |
       set -euo pipefail
+      if jq -e 'has("GATE") or has("REBASE_RESOLVER") or has("REQUIRED_CHECK") or has("PRIMARY") or has("BRANCH")' <<<"${DAGU_PARAMS_JSON:-"{}"}" >/dev/null; then exit 0; fi
       umask 0022
       eval "$DAGU_RESOURCE_GUARD"
       resource_lock cleanup

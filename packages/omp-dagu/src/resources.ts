@@ -3,6 +3,7 @@ import { realpath, stat } from "node:fs/promises";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import type { CallDecision, Event } from "./triage/guard.ts";
+import { resolveRunPrimary } from "./status/progress.ts";
 
 const exec = promisify(execFile);
 const active: Record<string, true> = { queued: true, running: true, waiting: true };
@@ -63,8 +64,13 @@ export async function readOwners(): Promise<Owner[]> {
     for (const row of rows) {
       if (typeof row.params !== "string" || typeof row.dagRunId !== "string" || typeof row.status !== "string") throw new Error(`Malformed ${kind} history row`);
       const params = Object.fromEntries([...row.params.matchAll(/(?:^| )([A-Z_]+)=(.*?)(?= [A-Z_]+=|$)/g)].map(match => [match[1]!, match[2]!.replace(/^(['"])(.*)\1$/, "$2")]));
-      if (!params.PRIMARY) continue;
-      owners.push({ kind, run: row.dagRunId, status: row.status.toLowerCase(), primary: await canonical(resolve(params.PRIMARY)), branch: params.BRANCH ?? "", issue: params.ISSUE ?? "" });
+      const primary = params.PRIMARY ?? await resolveRunPrimary(
+        (process.env.DAGU_URL || "http://127.0.0.1:8080").replace(/\/+$/, ""),
+        { name: kind, dagRunId: row.dagRunId, statusLabel: row.status, params: row.params },
+        AbortSignal.timeout(10000),
+      );
+      if (!primary) continue;
+      owners.push({ kind, run: row.dagRunId, status: row.status.toLowerCase(), primary: await canonical(resolve(primary)), branch: params.BRANCH ?? (kind === "feature" ? `dagu/issue-${params.ISSUE}` : ""), issue: params.ISSUE ?? "" });
     }
   }
   return owners;

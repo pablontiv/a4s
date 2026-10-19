@@ -88,7 +88,7 @@ test("runtime observations and incident snapshots link the admitted run and pres
     assert.equal(recovered.runReceipt.observations.at(-1).kind, "incident:cursor-reset");
     assert.deepEqual(recovered.initial, before.initial);
     fixture.render("feature.yaml", fixture.dag, "0.2.0");
-    const rejected = admissionDecision({ toolName: "bash", toolCallId: "incompatible", input: { command: `dagu enqueue --run-id blocked ${fixture.dag} -- PRIMARY=${fixture.packageDir} ISSUE=277 BRANCH=dagu/issue-277` } }, undefined, fixture.packageDir);
+    const rejected = admissionDecision({ toolName: "bash", toolCallId: "incompatible", input: { command: `dagu enqueue --run-id blocked ${fixture.dag} -- ISSUE=277` } }, undefined, fixture.packageDir);
     assert.ok(rejected && "block" in rejected);
     assert.match(rejected.reason, /DAGU_ADMISSION_REJECTED.*observed=0.2.0/);
   } finally { fixture.dispose(); }

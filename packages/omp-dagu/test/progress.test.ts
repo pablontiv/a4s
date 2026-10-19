@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BUNDLE_VERSION } from "../src/bundle.ts";
-import { currentStep, renderOffline, renderRun, renderWidget, runLabel, Transitions } from "../src/status/progress.ts";
+import { currentStep, renderOffline, renderRun, renderWidget, resolveRunPrimary, runLabel, Transitions } from "../src/status/progress.ts";
 import type { RunDetails } from "../src/status/progress.ts";
 
 const labels = ["workspace=a4s", "dagu-feature-bundle=0.3.1"];
@@ -218,7 +218,8 @@ test("notices refresh main on each opening and warn once per stale notice batch"
   const transitions = new Transitions("session-a");
   const candidate = {
     ...waitingAt("feature", "implement"),
-    params: `ISSUE=176 OMP_SESSION_ID=session-a PRIMARY=${primary}`,
+    params: "ISSUE=176 OMP_SESSION_ID=session-a",
+    resolvedPrimary: primary,
     labels: [`dagu-feature-bundle=${BUNDLE_VERSION}`],
   };
   try {
@@ -334,4 +335,15 @@ test("validation notice carries the operator procedure, SHA and iteration-bound 
   assert.ok(notice.includes(`dagu human-task complete feature --run-id 'repo-validation' --step validation --input APPROVED=yes --input TESTED_SHA='${sha}'`));
   assert.ok(notice.includes("--expected-iteration 3 --input REASON='<operator reason>'"));
   assert.equal(transitions.observe(waiting).wakeMessage, undefined);
+});
+
+test("runtime primary resolves the enqueued adoption spec including spaces and Unicode", async t => {
+  const primary = "/tmp/Repo con espacio/ñ";
+  const fetch = t.mock.method(globalThis, "fetch", async (url: string | URL | Request) => {
+    assert.equal(String(url), "http://dagu/api/v1/dag-runs/feature/run-274/spec");
+    return new Response(JSON.stringify({ spec: `env:\n  - PRIMARY: ${JSON.stringify(primary)}\n` }));
+  });
+  assert.equal(await resolveRunPrimary("http://dagu", { ...run, dagRunId: "run-274", params: "ISSUE=274" }, new AbortController().signal), primary);
+  assert.equal(await resolveRunPrimary("http://dagu", run, new AbortController().signal), "/tmp/a4s");
+  assert.equal(fetch.mock.callCount(), 1);
 });

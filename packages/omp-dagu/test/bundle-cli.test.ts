@@ -22,8 +22,8 @@ test("CLI reports stamped repositories and the reconciler as compatible", () => 
     mkdirSync(join(daguHome, "dags"), { recursive: true });
     mkdirSync(bin);
     spawnSync("git", ["init", "-b", "main", repo], { encoding: "utf8" });
-    writeFileSync(join(repo, ".workspace", "dagu", "dags", "feature.yaml"), stamp);
-    writeFileSync(join(repo, ".workspace", "dagu", "dags", "poc.yaml"), stamp);
+    writeFileSync(join(repo, ".workspace", "dagu", "dags", "feature.yaml"), `${stamp}env:\n  - PRIMARY: "/canonical/repo"\n  - GATE: "npm test"\n  - REQUIRED_CHECK: "validate"\n`);
+    writeFileSync(join(repo, ".workspace", "dagu", "dags", "poc.yaml"), `${stamp}env:\n  - PRIMARY: "/canonical/repo"\n`);
     writeFileSync(join(repo, ".workspace", "dagu", "dags", "discovery.yaml"), stamp);
     writeFileSync(join(repo, ".workspace", "dagu", "dags", "planning.yaml"), stamp);
     writeFileSync(join(daguHome, "dags", "reconcile.yaml"), stamp);
@@ -32,7 +32,7 @@ test("CLI reports stamped repositories and the reconciler as compatible", () => 
     chmodSync(dagu, 0o755);
     const result = spawnSync(process.execPath, [cli, repo], {
       encoding: "utf8",
-      env: { ...process.env, DAGU_HOME: daguHome, PATH: `${bin}:${process.env.PATH ?? ""}` },
+      env: { ...process.env, DAGU_PARAMS_JSON: "{}", DAGU_HOME: daguHome, PATH: `${bin}:${process.env.PATH ?? ""}` },
     });
     assert.equal(result.status, 0, result.stderr);
     for (const name of ["feature", "poc", "discovery", "planning", "reconcile"]) {
@@ -40,6 +40,8 @@ test("CLI reports stamped repositories and the reconciler as compatible", () => 
     }
     assert.equal((result.stdout.match(/compat=ok/g) ?? []).length, 6);
     assert.match(result.stdout, /dagu version="2\.20\.1" required=2\.20\.1 compat=ok/);
+    assert.match(result.stdout, /feature.yaml policy PRIMARY="\/canonical\/repo" GATE="npm test" REQUIRED_CHECK="validate" BRANCH=dagu\/issue-\$\{ISSUE\}/);
+    assert.match(result.stdout, /poc.yaml policy PRIMARY="\/canonical\/repo"/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -65,7 +67,7 @@ test("CLI exits nonzero for unstamped repository DAGs", () => {
     chmodSync(dagu, 0o755);
     const result = spawnSync(process.execPath, [cli, repo], {
       encoding: "utf8",
-      env: { ...process.env, DAGU_HOME: daguHome, PATH: `${bin}:${process.env.PATH ?? ""}` },
+      env: { ...process.env, DAGU_PARAMS_JSON: "{}", DAGU_HOME: daguHome, PATH: `${bin}:${process.env.PATH ?? ""}` },
     });
     assert.equal(result.status, 1);
     assert.match(result.stdout, /feature\.yaml .*stamp=unstamped compat=unstamped/);
@@ -75,6 +77,27 @@ test("CLI exits nonzero for unstamped repository DAGs", () => {
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("admission rejects adopted policy parameters before reserving a receipt", isolatedDagu, () => {
+  const fixture = admissionFixture();
+  try {
+    for (const parameter of ["GATE=true", "REBASE_RESOLVER=true", "REQUIRED_CHECK=arbitrary", "PRIMARY=/foreign/clone", "BRANCH=off-pattern"]) {
+      const field = parameter.slice(0, parameter.indexOf("="));
+      const run = `rejected-${field.toLowerCase()}`;
+      const result = fixture.command("enqueue", run, {}, [parameter]);
+      assert.notEqual(result.status, 0);
+      assert.ok(result.stderr.includes(`admission rejected run parameter: ${field}`), result.stderr);
+      assert.ok(result.stderr.includes(`"PRIMARY":${JSON.stringify(fixture.packageDir)}`), result.stderr);
+      assert.match(result.stderr, /"BRANCH":"dagu\/issue-277"/);
+      assert.equal(existsSync(join(fixture.packageDir, ".git", "dagu-feature", "runs", run)), false);
+    }
+    const accepted = fixture.command("admit", "operational-policy", {}, ["PR_NUMBER=327", "OMP_SESSION_ID=owner-session"]);
+    assert.equal(accepted.status, 0, accepted.stderr);
+    const receipt = JSON.parse(readFileSync(fixture.receipt("operational-policy"), "utf8"));
+    assert.equal(receipt.initial.execution.primary, fixture.packageDir);
+    assert.deepEqual(receipt.initial.execution.parameters, ["ISSUE=277", "PR_NUMBER=327", "OMP_SESSION_ID=owner-session"]);
+  } finally { fixture.dispose(); }
 });
 
 test("admission rejects package 0.3.1 / DAG 0.2.0 before Dagu creates a run", isolatedDagu, () => {

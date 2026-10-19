@@ -23,6 +23,7 @@ for (const stage of ["discovery", "details", "headers"] as const) {
       const run = { name: "feature", dagRunId: "slow-run", statusLabel: "running", labels: ["workspace=a4s"], nodes: [] };
       t.mock.method(globalThis, "fetch", async (input: string | URL, init: RequestInit) => {
         const path = new URL(input).pathname;
+        if (path.endsWith("/spec")) return Response.json({ spec: "env: []\n" });
         const kind = path.endsWith("/dag-runs") ? "discovery" : path.includes("/dag-runs/") ? "details" : "headers";
         if (kind === "discovery") discoveries++;
         if (kind === stage) {

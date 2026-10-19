@@ -23,7 +23,7 @@ export async function liveWatcher(binary = "dagu"): Promise<string[]> {
   mkdirSync(join(home, "dags"), { recursive: true });
   const httpPort = await port();
   const schedulerPort = await port();
-  const env = { ...process.env, DAGU_HOME: home, DAGU_COORDINATOR_ENABLED: "false" };
+  const env = { ...process.env, DAGU_PARAMS_JSON: "{}", DAGU_HOME: home, DAGU_COORDINATOR_ENABLED: "false" };
   const dagu = (...args: string[]) => execFileSync(binary, args, { env, encoding: "utf8" }).trim();
   writeFileSync(join(home, "config.yaml"), `host: 127.0.0.1\nport: ${httpPort}\nauth:\n  mode: none\ncoordinator:\n  enabled: false\nscheduler:\n  port: ${schedulerPort}\nevent_store:\n  enabled: true\n  retention_days: 1\n`);
   writeFileSync(join(home, "dags", "feature.yaml"), `type: graph\nlabels: [workspace=a4s]\nparams:\n  - OMP_SESSION_ID: smoke-owner\nsteps:\n  - id: a\n    action: human.task\n    with:\n      prompt: Approve a\n  - id: b\n    depends: a\n    action: human.task\n    with:\n      prompt: Approve b\n  - id: c\n    depends: b\n    action: human.task\n    with:\n      prompt: Approve c\n      push_back:\n        rewind_to: a\n  - id: done\n    depends: c\n    run: echo done\n`);

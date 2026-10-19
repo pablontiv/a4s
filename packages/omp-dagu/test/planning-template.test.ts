@@ -187,8 +187,8 @@ test("approved materialization preserves labels and run markers and reuses issue
     assert.equal(f.run(script(template, "dispose")).status, 0);
     const enqueues = readFileSync(join(f.root, "enqueues.log"), "utf8").trim().split("\n");
     assert.equal(enqueues.length, 2);
-    assert.match(enqueues[0]!, /--run-id repo-issue-41 .*feature.yaml -- ISSUE=41 .*BRANCH=dagu\/issue-41 PR_NUMBER=/);
-    assert.match(enqueues[1]!, /--run-id repo-poc-42 .*poc.yaml -- ISSUE=42 .*OMP_SESSION_ID=owner-session QUESTION=Can the real target/);
+    assert.match(enqueues[0]!, /--run-id repo-issue-41 .*feature.yaml -- ISSUE=41 OMP_SESSION_ID=owner-session PR_NUMBER=$/);
+    assert.match(enqueues[1]!, /--run-id repo-poc-42 .*poc.yaml -- ISSUE=42 OMP_SESSION_ID=owner-session QUESTION=Can the real target/);
     assert.equal(readFileSync(join(f.root, "github.log"), "utf8").trim().split("\n").length, 2);
   } finally { f.close(); }
 });

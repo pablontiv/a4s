@@ -144,6 +144,7 @@ function featureScriptEnv(repo: Repository): NodeJS.ProcessEnv {
   return {
     HOME: process.env.HOME,
     PATH: `${join(repo.root, "bin")}:${process.env.PATH ?? ""}`,
+    DAGU_PARAMS_JSON: "{}",
     ISSUE: "189",
     PR_NUMBER: "",
     PRIMARY: repo.primary,
@@ -491,7 +492,7 @@ for (const [name, definition] of definitions) {
         const home = join(repo.root, "home");
         mkdirSync(home);
         const key = join(home, "signing-key");
-        execFileSync("ssh-keygen", ["-q", "-t", "ed25519", "-N", "", "-f", key], { env: { ...process.env, HOME: home } });
+        execFileSync("ssh-keygen", ["-q", "-t", "ed25519", "-N", "", "-f", key], { env: { ...process.env, DAGU_PARAMS_JSON: "{}", HOME: home } });
         const signers = join(home, "allowed-signers");
         writeFileSync(signers, `feature-test@example.com ${readFileSync(`${key}.pub`, "utf8")}`);
         git(repo.worktree, "config", "gpg.format", "ssh");
@@ -1354,10 +1355,10 @@ for (const [name, definition] of definitions) {
       const file = join(home, "dags", "feature.yaml");
       writeFileSync(file, [
         "type: graph\nshell: bash\nmax_active_steps: 1\n",
-        `params:\n  - ISSUE: "189"\n  - PRIMARY: ${repo.primary}\n  - BRANCH: ${repo.branch}\n  - BASE_BRANCH: main\n  - PR_NUMBER: ""\n  - GATE: "true"\n  - REQUIRED_CHECK: validate\n  - OMP_SESSION_ID: retained-owner\n`,
-        `env:\n  - PATH: ${env.PATH}\n  - WORKTREE: ${repo.worktree}\n  - RUN: \${context.run.id}\n  - DAGU_FEATURE_BUNDLE: test\n`,
+        `params:\n  - ISSUE: "189"\n  - BASE_BRANCH: main\n  - PR_NUMBER: ""\n  - OMP_SESSION_ID: retained-owner\n`,
+        `env:\n  - PRIMARY: ${JSON.stringify(repo.primary)}\n  - BRANCH: dagu/issue-\${ISSUE}\n  - GATE: "true"\n  - REQUIRED_CHECK: validate\n  - PATH: ${env.PATH}\n  - WORKTREE: ${repo.worktree}\n  - RUN: \${context.run.id}\n  - DAGU_FEATURE_BUNDLE: test\n`,
         source.slice(source.indexOf("  - DAGU_RESOURCE_GUARD: |"), source.indexOf("steps:\n")),
-        "steps:\n", extractStep(source, "admit"),
+        "steps:\n", extractStep(source, "admission"), extractStep(source, "admit"),
         "  - id: triage\n    depends: admit\n    run: echo POC=no >> \"$DAGU_OUTPUT_FILE\"\n    outputs:\n      - name: POC\n",
         "  - id: triage_decision\n    depends: triage\n    run: echo reviewed\n",
         ...["detect_start_primary", "start_primary_unavailable", "start_gate", "recover_start_gate", "implement", "capture"].map(id => extractStep(source, id)),
@@ -1533,7 +1534,7 @@ async function recoveryFixture(): Promise<RecoveryFixture> {
   assert.ok(address && typeof address !== "string");
   const port = address.port;
   await new Promise<void>((resolve, reject) => listener.close(error => error ? reject(error) : resolve()));
-  const env = { ...process.env, DAGU_HOME: home, DAGU_COORDINATOR_ENABLED: "false" };
+  const env = { ...process.env, DAGU_PARAMS_JSON: "{}", DAGU_HOME: home, DAGU_COORDINATOR_ENABLED: "false" };
   writeFileSync(join(home, "config.yaml"), `host: 127.0.0.1\nport: ${port}\nauth:\n  mode: none\ncoordinator:\n  enabled: false\nscheduler:\n  port: 0\n`);
   let serviceLog = "";
   const service = spawn("dagu", ["start-all", "--host", "127.0.0.1", "--port", String(port)], {
@@ -1631,8 +1632,8 @@ esac
     const source = readFileSync(definition, "utf8");
     const script = [
       "type: graph\nshell: bash\nmax_active_steps: 1\n",
-      `params:\n  - ISSUE: "189"\n  - PRIMARY: ${repo.primary}\n  - BRANCH: ${repo.branch}\n  - BASE_BRANCH: main\n  - PR_NUMBER: ""\n  - GATE: test -f required.txt\n  - REQUIRED_CHECK: validate\n  - VALIDATION: ""\n  - OMP_SESSION_ID: recovery-owner\n`,
-      `env:\n  - PATH: ${bin}:${process.env.PATH}\n  - WORKTREE: ${repo.worktree}\n  - RUN: \${context.run.id}\n  - DAGU_FEATURE_BUNDLE: test\n  - DAGU_PORT: "${fixture.port}"\n`,
+      `params:\n  - ISSUE: "189"\n  - BASE_BRANCH: main\n  - PR_NUMBER: ""\n  - VALIDATION: ""\n  - OMP_SESSION_ID: recovery-owner\n`,
+      `env:\n  - PRIMARY: ${JSON.stringify(repo.primary)}\n  - BRANCH: dagu/issue-\${ISSUE}\n  - GATE: test -f required.txt\n  - REQUIRED_CHECK: validate\n  - PATH: ${bin}:${process.env.PATH}\n  - WORKTREE: ${repo.worktree}\n  - RUN: \${context.run.id}\n  - DAGU_FEATURE_BUNDLE: test\n  - DAGU_PORT: "${fixture.port}"\n`,
       source.slice(source.indexOf("  - DAGU_RESOURCE_GUARD: |"), source.indexOf("steps:\n")),
       "steps:\n",
       `  - id: triage\n    run: |\n      mkdir -p "$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")"\n      echo POC=no >> "$DAGU_OUTPUT_FILE"\n    outputs:\n      - name: POC\n`,
@@ -1793,10 +1794,10 @@ for (const [name, definition] of definitions) {
               : `  - id: implement\n    depends: start_gate\n    run: |\n      git -C "$WORKTREE" rev-parse HEAD > "$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")/tested-sha"\n      ${mode === "implementation-blocked" ? 'printf "operator changes\\n" > "$PRIMARY/README.txt"' : "echo implementation"}\n  - id: await_merge\n    depends: implement\n    run: echo merged\n  - id: authorize_ci\n    depends: await_merge\n    run: echo authorized-candidate\n`;
             const script = [
               "type: graph\nshell: bash\nmax_active_steps: 1\n",
-              `params:\n  - ISSUE: "189"\n  - PRIMARY: ${repo.primary}\n  - BRANCH: ${repo.branch}\n  - BASE_BRANCH: main\n  - PR_NUMBER: ""\n  - GATE: "true"\n  - REQUIRED_CHECK: validate\n  - OMP_SESSION_ID: close-owner\n`,
-              `env:\n  - PATH: ${join(repo.root, "bin")}:${process.env.PATH}\n  - WORKTREE: ${repo.worktree}\n  - RUN: \${context.run.id}\n  - DAGU_FEATURE_BUNDLE: test\n`,
+              `params:\n  - ISSUE: "189"\n  - BASE_BRANCH: main\n  - PR_NUMBER: ""\n  - OMP_SESSION_ID: close-owner\n`,
+              `env:\n  - PRIMARY: ${JSON.stringify(repo.primary)}\n  - BRANCH: dagu/issue-\${ISSUE}\n  - GATE: "true"\n  - REQUIRED_CHECK: validate\n  - PATH: ${join(repo.root, "bin")}:${process.env.PATH}\n  - WORKTREE: ${repo.worktree}\n  - RUN: \${context.run.id}\n  - DAGU_FEATURE_BUNDLE: test\n`,
               source.slice(source.indexOf("  - DAGU_RESOURCE_GUARD: |"), source.indexOf("steps:\n")),
-              "steps:\n", ...(mode === "poc" ? [extractStep(source, "admit")] : []), triage, decision,
+              "steps:\n", ...(mode === "poc" ? ["admission", "admit"].map(id => extractStep(source, id)) : []), triage, decision,
               ...["detect_start_primary", "start_primary_unavailable", "start_gate", ...(mode === "poc" ? ["recover_start_gate"] : [])].map(id => extractStep(source, id)),
               implementation,
               ...["detect_close_primary", "close_primary_unavailable", "close_gate"].map(id => extractStep(source, id)),
@@ -1851,6 +1852,7 @@ for (const [name, definition] of definitions) {
             assert.equal(done.onExit?.statusLabel, "succeeded", JSON.stringify(done));
             assert.equal(existsSync(repo.worktree), false);
             assert.equal(hasRef(repo.primary, `refs/heads/${repo.branch}`), false);
+            done.resolvedPrimary = repo.primary;
             const transitions = new Transitions("close-owner");
             transitions.observe({ ...done, statusLabel: "running" }, { baseline: true });
             assert.deepEqual(transitions.observe(done), {
@@ -1960,7 +1962,7 @@ for (const [name, definition] of definitions) {
     const port = address.port;
     await new Promise<void>(resolve => listener.close(() => resolve()));
     writeFileSync(join(home, "config.yaml"), `host: 127.0.0.1\nport: ${port}\nauth:\n  mode: none\ncoordinator:\n  enabled: false\nscheduler:\n  port: 0\n`);
-    const env = { ...process.env, DAGU_HOME: home, DAGU_COORDINATOR_ENABLED: "false" };
+    const env = { ...process.env, DAGU_PARAMS_JSON: "{}", DAGU_HOME: home, DAGU_COORDINATOR_ENABLED: "false" };
     const binary = execFileSync("which", ["dagu"], { encoding: "utf8" }).trim();
     let serviceLog = "";
     const service = spawn(binary, ["start-all", "--host", "127.0.0.1", "--port", String(port)], {
@@ -2133,10 +2135,10 @@ for (const [name, definition] of definitions) {
           renameSync(oldState, repo.state);
           const procedure = ["declared", "wrong-sha", "poc"].includes(mode) ? "Run isolated smoke over the tested binary" : "";
           const source = readFileSync(definition, "utf8");
-          const validationParam = source.match(/  - name: VALIDATION\n[\s\S]*?(?=  - name:)/)![0]!
-            .replace(/    default: .+\n/, `    default: ${JSON.stringify(procedure)}\n`)
-            .replace(/    enum: .+\n/, `    enum: [${JSON.stringify(procedure)}]\n`);
-          const params = `params:\n${validationParam}`;
+          const validationParam = source.match(/    VALIDATION:\n[\s\S]*?(?=    OMP_SESSION_ID:)/)![0]!
+            .replace(/      default: .+\n/, `      default: ${JSON.stringify(procedure)}\n`)
+            .replace(/      enum: .+\n/, `      enum: [${JSON.stringify(procedure)}]\n`);
+          const params = `params:\n  type: object\n  properties:\n${validationParam}`;
           const gate = extractStep(source, "gate").replace("depends: conflict_review", "depends: implement")
             .replace(/    retry_policy:\n      limit: 1\n      interval_sec: 5\n/, "")
             .replace("    run: |", "    preconditions:\n      - condition: '${steps.triage.outputs.POC}'\n        expected: 'no'\n    run: |");
@@ -2271,7 +2273,7 @@ for (const [name, definition] of definitions) {
     const identity = JSON.stringify({ primary: repo.primary, worktree: repo.worktree, branch: repo.branch, run, session: "parent-id" }) + "\n";
     writeFileSync(join(state, "identity"), identity);
     writeFileSync(git(repo.worktree, "rev-parse", "--path-format=absolute", "--git-path", "dagu-feature-owner"), identity);
-    const env = { ...process.env, DAGU_HOME: home, DAGU_PORT: String(port), DAGU_COORDINATOR_ENABLED: "false" };
+    const env = { ...process.env, DAGU_PARAMS_JSON: "{}", DAGU_HOME: home, DAGU_PORT: String(port), DAGU_COORDINATOR_ENABLED: "false" };
     writeFileSync(join(home, "config.yaml"), `host: 127.0.0.1\nport: ${port}\nauth:\n  mode: none\ncoordinator:\n  enabled: false\n`);
     const source = readFileSync(definition, "utf8");
     const steps = ["implement", "capture", "rebase", "conflict_review", "gate", "recover_gate", "quality_prepare",
@@ -2368,3 +2370,89 @@ for (const [name, definition] of definitions) {
     }
   });
 }
+
+test("adopted policy rejects run overrides before repository writes and admits operational inputs", { skip: daguAvailable.status !== 0 }, () => {
+  const repo = repository();
+  const home = join(repo.root, "dagu-home");
+  const stage = join(repo.root, "staged", "feature.yaml");
+  const skillDir = fileURLToPath(new URL("../skills/dagu-feature/", import.meta.url));
+  const env = {
+    ...process.env, DAGU_PARAMS_JSON: "{}", DAGU_HOME: home, PRIMARY: repo.primary, SKILL_DIR: skillDir,
+    GATE: "printf adopted-gate", REQUIRED_CHECK: "adopted-check", REPO: "fixture", BASE_BRANCH: "main",
+    REBASE_RESOLVER: "printf adopted-resolver",
+    STAGE: stage, TEST_PATHS: "test/", BUNDLE_NAME: "@a4s/omp-dagu", BUNDLE_VERSION,
+    DAGU_VERSION: "2.20.1", SOURCE_NWO: "fixture/repo", SOURCE_SHA: "1".repeat(40), DAG_RUN_ID: "bootstrap-fixture",
+  };
+  const snapshot = (): string => {
+    const hash = createHash("sha256");
+    const visit = (directory: string): void => {
+      for (const entry of readdirSync(directory, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+        const path = join(directory, entry.name);
+        hash.update(path);
+        if (entry.isDirectory()) visit(path);
+        else if (entry.isFile()) hash.update(readFileSync(path));
+      }
+    };
+    visit(repo.primary);
+    visit(repo.worktree);
+    return hash.digest("hex");
+  };
+  try {
+    const rendered = spawnSync("bash", ["-c", extractScript(join(skillDir, "dagu-feature-bootstrap.yaml"), "  - id: render")], { encoding: "utf8", env });
+    assert.equal(rendered.status, 0, rendered.stdout + rendered.stderr);
+    for (const name of ["feature", "poc"]) {
+      const definition = join(repo.root, "staged", `${name}.yaml`);
+      for (const [parameter, value] of [["GATE", "true"], ["REBASE_RESOLVER", "true"], ["REQUIRED_CHECK", "arbitrary"], ["PRIMARY", "/foreign/clone"], ["BRANCH", "off-pattern"], ["GATE", ""], ["PRIMARY", repo.primary]] as const) {
+        const before = snapshot();
+        const result = spawnSync("dagu", ["start", "--run-id", `${name}-${parameter.toLowerCase()}-${value.length}`, definition, "--", "ISSUE=189", `${parameter}=${value}`], { encoding: "utf8", env, timeout: 30_000 });
+        assert.notEqual(result.status, 0, result.stdout);
+        assert.match(result.stdout + result.stderr, new RegExp(`admission rejected run parameter: ${parameter}`));
+        assert.match(result.stdout + result.stderr, /adopted policy PRIMARY=/);
+        assert.equal(snapshot(), before, `${name} ${parameter} changed repository state`);
+      }
+    }
+    const enqueued = spawnSync("dagu", ["enqueue", "--run-id", "operational-queued", stage, "--", "ISSUE=274", "PR_NUMBER=275", "OMP_SESSION_ID=owner-session"], { encoding: "utf8", env, timeout: 30_000 });
+    assert.equal(enqueued.status, 0, enqueued.stdout + enqueued.stderr);
+    const accepted = spawnSync("dagu", ["start", "--only", "admission", "--run-id", "operational", stage, "--", "ISSUE=274", "PR_NUMBER=275", "OMP_SESSION_ID=owner-session"], { encoding: "utf8", env, timeout: 30_000 });
+    assert.equal(accepted.status, 0, accepted.stdout + accepted.stderr);
+    assert.match(accepted.stdout, /admission.*succeeded/);
+    const adopted = readFileSync(stage, "utf8");
+    assert.match(adopted, /- GATE: "printf adopted-gate"/);
+    assert.match(adopted, /- REBASE_RESOLVER: "printf adopted-resolver"/);
+    assert.match(adopted, /- REQUIRED_CHECK: "adopted-check"/);
+    assert.ok(adopted.includes(`- PRIMARY: ${JSON.stringify(repo.primary)}`));
+    assert.match(adopted, /- BRANCH: dagu\/issue-\$\{ISSUE\}/);
+    const promotion = extractScript(join(skillDir, "poc.yaml"), "  - id: dispose");
+    assert.match(promotion, /ISSUE="\$ISSUE" \\\n\s+BASE_BRANCH="\$BASE_BRANCH" OMP_SESSION_ID="\$OMP_SESSION_ID"/);
+    const pocState = git(repo.primary, "rev-parse", "--path-format=absolute", "--git-path", "poc/runs/promote-policy");
+    mkdirSync(pocState, { recursive: true });
+    const record = extractScript(join(skillDir, "poc.yaml"), "  - id: record");
+    writeFileSync(join(pocState, "sections.jq"), record.split("<<'JQ'\n")[1]!.split("\nJQ")[0]!);
+    for (const [file, value] of Object.entries({ "issue.number": "274", repo: "fixture/repo", verdict: "PASS", scope: "OK", created: "" })) writeFileSync(join(pocState, file), value);
+    const result = "<!-- poc-verdict:PASS scope:OK run:promote-policy attempt:1 base:" + "1".repeat(40) + " -->\n" +
+      ["Pregunta", "Proposición demostrada", "Ruta ejercitada", "Comandos y salida", "Después del PASS"].map(heading => `## ${heading}\npolicy proof\n`).join("\n");
+    writeFileSync(join(repo.root, "issue.json"), JSON.stringify({ body: "policy proof\n\n## Después del PASS\nversioned policy\n" }));
+    writeFileSync(join(repo.root, "comments.json"), JSON.stringify([[{ body: result, html_url: "https://example.test/pass" }]]));
+    const bin = join(repo.root, "promotion-bin");
+    mkdirSync(bin);
+    writeFileSync(join(bin, "gh"), '#!/bin/sh\ncase "$1" in issue) cat "$POLICY_FIXTURE/issue.json";; api) cat "$POLICY_FIXTURE/comments.json";; *) exit 1;; esac\n');
+    chmodSync(join(bin, "gh"), 0o755);
+    writeFileSync(join(bin, "dagu-feature-bundle"), '#!/bin/sh\nexec dagu "$@"\n');
+    chmodSync(join(bin, "dagu-feature-bundle"), 0o755);
+    const adoptedDirectory = join(repo.primary, ".workspace", "dagu", "dags");
+    mkdirSync(adoptedDirectory, { recursive: true });
+    writeFileSync(join(adoptedDirectory, "feature.yaml"), adopted);
+    const promoted = spawnSync("bash", ["-c", promotion], { encoding: "utf8", env: {
+      ...env, RUN: "promote-policy", PROMOTE: "yes", OMP_SESSION_ID: "owner-session",
+      POLICY_FIXTURE: repo.root, PATH: `${bin}:${process.env.PATH}`,
+    } });
+    assert.equal(promoted.status, 0, promoted.stdout + promoted.stderr);
+    const history = spawnSync("dagu", ["history", "feature", "--format", "json", "--status", "queued"], { encoding: "utf8", env });
+    assert.equal(history.status, 0, history.stdout + history.stderr);
+    const promotedRun = (JSON.parse(history.stdout) as Array<{ dagRunId: string; params: string }>).find(run => run.dagRunId === "feature-promote-policy");
+    assert.ok(promotedRun);
+    assert.equal(promotedRun.params, "BASE_BRANCH=main ISSUE=274 OMP_SESSION_ID=owner-session POC_BASIS=https://example.test/pass PR_NUMBER= VALIDATION=");
+  } finally {
+    rmSync(repo.root, { recursive: true, force: true });
+  }
+});
