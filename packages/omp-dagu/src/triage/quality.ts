@@ -252,13 +252,13 @@ export async function qualityDecision(event: Event, ctx: QualityContext): Promis
         const role = task.agent === "qa" ? "qa" : task.agent === "reviewer" ? "reviewer" : "invalid";
         requireValue(role !== "invalid" && assignments[index]!.includes(qualityMarker(request, role)), "stale quality assignment or invalid role");
         requireValue(typeof task.name === "string", "explicit quality subagent name required");
-        const patterns = Array.isArray(task.model) ? task.model : [task.model ?? "@slow"];
-        requireValue(patterns.every((pattern): pattern is string => typeof pattern === "string"), "invalid model candidates");
-        const eligible = orderReviewModels(patterns, ["@slow", "@default", "@task"], models,
+        // OMP accepts `model` only on seance tasks; the cross-family spawn hook
+        // selects the child model from this binding, keyed by the task name.
+        const eligible = orderReviewModels(["@slow"], ["@slow", "@default", "@task"], models,
           [{ label: "effective implementer", model: effectiveModel }], true);
         requireValue(eligible?.model?.length, eligible?.reason ?? "no eligible quality model");
         bindQualityImplementer(task.name, effectiveModel);
-        revised[index] = { ...task, model: eligible.model, outputSchema: VERDICT_SCHEMA };
+        revised[index] = { ...task, outputSchema: VERDICT_SCHEMA };
       }
       return { input: Array.isArray(event.input.tasks) ? { ...event.input, tasks: revised } : revised[0]! };
     }
