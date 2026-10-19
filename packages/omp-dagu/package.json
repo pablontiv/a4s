@@ -1,6 +1,6 @@
 {
   "name": "@a4s/omp-dagu",
-  "version": "0.3.88",
+  "version": "0.3.89",
   "private": true,
   "license": "UNLICENSED",
   "repository": {
@@ -9,10 +9,16 @@
     "directory": "packages/omp-dagu"
   },
   "homepage": "https://github.com/pablontiv/a4s/tree/main/packages/omp-dagu#readme",
-  "bugs": { "url": "https://github.com/pablontiv/a4s/issues" },
+  "bugs": {
+    "url": "https://github.com/pablontiv/a4s/issues"
+  },
   "type": "module",
-  "engines": { "node": ">=22.19.0" },
-  "daguFeature": { "dagu": "2.20.1" },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "daguFeature": {
+    "dagu": "2.20.1"
+  },
   "exports": {
     "./status": "./src/status/index.ts",
     "./triage": "./src/triage/index.ts"
@@ -22,7 +28,10 @@
     "dagu-station-install": "./bin/dagu-station-install.ts"
   },
   "omp": {
-    "extensions": ["./src/status/reloadable.ts", "./src/triage/reloadable.ts"]
+    "extensions": [
+      "./src/status/reloadable.ts",
+      "./src/triage/reloadable.ts"
+    ]
   },
   "scripts": {
     "test": "A4S_LIVE_DAGU=0 tsx --test test/*.test.ts",

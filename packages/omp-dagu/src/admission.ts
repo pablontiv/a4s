@@ -77,7 +77,7 @@ export function receiptPath(cwd: string, run: string): string {
 function checkRender(path: string, name: string, sourceRoot: string, prefix: string) {
   const contents = readFileSync(path, "utf8");
   const stamp = parseBundleStamp(contents);
-  if (!stamp || stamp.version !== BUNDLE_VERSION || classifyCompatibility(stamp.version) !== "ok") throw new Error(`${name} observed=${stamp?.version ?? "indeterminate"} expected compatible with package=${BUNDLE_VERSION} (same major; major 0: same minor)`);
+  if (!stamp || classifyCompatibility(stamp.version) !== "ok") throw new Error(`${name} observed=${stamp?.version ?? "indeterminate"} expected compatible with package=${BUNDLE_VERSION} (same major; major 0: same minor)`);
   if (stamp.dagu !== REQUIRED_DAGU_VERSION) throw new Error(`${name} dagu=${stamp.dagu} expected=${REQUIRED_DAGU_VERSION}`);
   const source = /^(.+)@([a-f0-9]{40})$/.exec(stamp.source);
   const labels = [...contents.matchAll(/^\s+- dagu-feature-bundle=(\S+)\s*$/gm)];
@@ -85,23 +85,29 @@ function checkRender(path: string, name: string, sourceRoot: string, prefix: str
   const expectedSource = git(sourceRoot, "remote", "get-url", "origin").replace(/\.git\/?$/, "").replace(/\/$/, "").split(/[/:]/).slice(-2).join("/");
   if (source[1] !== expectedSource) throw new Error(`${name} origin=${source[1]} expected=${expectedSource}`);
   const templatePath = `${prefix}skills/dagu-feature/${name}`;
-  const template = execFileSync("git", ["-C", sourceRoot, "show", `${source[2]}:${templatePath}`], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
   const declared = manifestVersion(git(sourceRoot, "show", `${source[2]}:${prefix}package.json`));
   if (declared !== stamp.version) throw new Error(`${name} declared=${stamp.version} source package=${declared} expected identical provenance`);
+  // Versioned renders follow their templates in the same PR, so the installed checkout's template is also a valid source.
+  for (const commit of [source[2], git(sourceRoot, "rev-parse", "HEAD")]) {
+    const template = execFileSync("git", ["-C", sourceRoot, "show", `${commit}:${templatePath}`], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    if (isRender(contents, template)) return { ...identity(path, stamp.version, stamp.source), stamp, sourceTemplate: { path: templatePath, commit, digest: sha256(template) }, relationship: "verified-source-render", snapshot: contents };
+  }
+  throw new Error(`${name} digest=${sha256(contents)} expected a render of ${stamp.source}:${templatePath} or of the installed checkout`);
+}
+
+function isRender(contents: string, template: string): boolean {
   const literals = template.trimEnd().split(/__[A-Z_]+__|TEMPLATE_[A-Z_]+/);
   let remaining = contents;
-  let matches = remaining.startsWith(literals[0]!);
+  if (!remaining.startsWith(literals[0]!)) return false;
   remaining = remaining.slice(literals[0]!.length);
   for (const literal of literals.slice(1, -1)) {
     const offset = remaining.indexOf(literal);
-    if (offset < 0) { matches = false; break; }
+    if (offset < 0) return false;
     remaining = remaining.slice(offset + literal.length);
   }
   const suffix = literals.at(-1)!;
   const suffixOffset = remaining.lastIndexOf(suffix);
-  matches &&= literals.length === 1 ? remaining.trim() === "" : suffixOffset >= 0 && remaining.slice(suffixOffset + suffix.length).trim() === "";
-  if (!matches) throw new Error(`${name} digest=${sha256(contents)} expected a render of ${stamp.source}:${templatePath}`);
-  return { ...identity(path, stamp.version, stamp.source), stamp, sourceTemplate: { path: templatePath, commit: source[2], digest: sha256(template) }, relationship: "verified-source-render", snapshot: contents };
+  return literals.length === 1 ? remaining.trim() === "" : suffixOffset >= 0 && remaining.slice(suffixOffset + suffix.length).trim() === "";
 }
 
 export function admit(options: AdmissionOptions, persist = true): { path: string; receipt: Receipt } {

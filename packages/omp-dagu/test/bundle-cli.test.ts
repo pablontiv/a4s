@@ -115,16 +115,24 @@ test("admission rejects package 0.3.1 / DAG 0.2.0 before Dagu creates a run", li
   } finally { fixture.dispose(); }
 });
 
-test("admission requires exact bundle versions across patch releases", liveDagu, () => {
-  const fixture = admissionFixture();
-  try {
-    for (const version of ["0.3.0", "0.3.2"]) {
-      fixture.render("feature.yaml", fixture.dag, version);
-      const result = fixture.command("admit", `patch-${version.replaceAll(".", "-")}`);
-      assert.notEqual(result.status, 0);
-      assert.match(result.stderr, new RegExp(`DAGU_ADMISSION_REJECTED.*feature.yaml observed=${version.replaceAll(".", "\\.")}.*package=0\\.3\\.1`));
-    }
-  } finally { fixture.dispose(); }
+test("admission admits renders sealed at an earlier patch release and rejects another minor", liveDagu, () => {
+  for (const [version, admitted] of [["0.3.2", true], ["0.4.0", false]] as const) {
+    const fixture = admissionFixture();
+    try {
+      const manifestPath = join(fixture.packageDir, "package.json");
+      writeFileSync(manifestPath, JSON.stringify({ ...JSON.parse(readFileSync(manifestPath, "utf8")), version }));
+      spawnSync("git", ["-C", fixture.packageDir, "commit", "-qam", `package ${version}`], { encoding: "utf8" });
+      const run = `patch-${version.replaceAll(".", "-")}`;
+      const result = fixture.command("admit", run);
+      if (admitted) {
+        assert.equal(result.status, 0, result.stderr);
+        assert.equal(JSON.parse(readFileSync(fixture.receipt(run), "utf8")).initial.deployment.installedDAG.stamp.version, "0.3.1");
+      } else {
+        assert.notEqual(result.status, 0);
+        assert.match(result.stderr, new RegExp(`DAGU_ADMISSION_REJECTED.*feature.yaml observed=0\\.3\\.1.*package=${version.replaceAll(".", "\\.")}`));
+      }
+    } finally { fixture.dispose(); }
+  }
 });
 
 test("compatible admission enqueues exact bytes and keeps historical receipt across redeployment", liveDagu, () => {
