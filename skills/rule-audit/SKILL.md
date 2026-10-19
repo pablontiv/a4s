@@ -4,6 +4,7 @@ description: "Trigger: audita reglas, audit rules, audit AGENTS.md or CLAUDE.md,
 license: Apache-2.0
 metadata:
   author: "pablontiv"
+  updated: "2026-09-17"
   version: "1.1"
 ---
 

@@ -1,0 +1,14 @@
+{
+  "schema": "a4s.e2e-debug-diagnosis/v1",
+  "reproduced": true,
+  "primaryInfrastructureCause": "The candidate entrypoint validates and seals an existing inventory file. It does not create the inventory file. No authorized inventory producer created that file.",
+  "collectorError": "ENOENT: no such file or directory, open '/private/tmp/a4s-canary-758f136.6GGCuW/inventory/71788cde3c39060c27e4289983a044d2ca0f86c80ef8327f3a46cdfd809ece46.jsonl'",
+  "harnessInfrastructureError": "External Worker inventory final marker timed out after 30000 ms",
+  "causalEvidence": [
+    "The candidate entrypoint read and validated the host v2 file before it attempted to read the inventory file.",
+    "The candidate entrypoint returned ENOENT for the inventory file.",
+    "The harness timed out while it waited for the final marker.",
+    "The harness did not produce the inventory, witness, structural, semantic, or authenticated receipts."
+  ],
+  "independentFunctionalFailure": "The Orchestrator returned normally without the required explicit block for OPERATOR_AGREEMENT_OBSERVED."
+}

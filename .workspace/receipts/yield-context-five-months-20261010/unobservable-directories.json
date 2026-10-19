@@ -1,0 +1,7 @@
+[
+  {
+    "directory": "/home",
+    "reason": "Archived Linux paths resolve to the macOS auto_home autofs mount; git -C /home rev-parse repeatedly reached the 30-second timeout in the first five-month attempt. This is unobservable repository coverage, not zero delivery.",
+    "verification": "Observed child process git -C /home rev-parse --show-toplevel at 25 seconds; mount reports map auto_home on /System/Volumes/Data/home."
+  }
+]

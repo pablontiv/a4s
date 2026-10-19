@@ -227,14 +227,6 @@ def _apply_minimal_scoped_edit(change: ApprovedChange) -> tuple[str, ...]:
         if change.selected_route.effort is not None and _json_member_exists(text, ("agent", change.agent, "variant")):
             text = _replace_json_string_member(text, ("agent", change.agent, "variant"), change.selected_route.effort)
             fields.append(f"agent.{change.agent}.variant")
-    elif change.apply_target.format == "opencode-markdown":
-        text, changed = _replace_frontmatter_field(text, "model", change.selected_route.model)
-        if changed:
-            fields.append("frontmatter.model")
-        if change.selected_route.effort is not None:
-            text, changed = _replace_frontmatter_field(text, "variant", change.selected_route.effort)
-            if changed:
-                fields.append("frontmatter.variant")
     else:
         raise AssertionError(f"unsupported_apply_format:{change.apply_target.format}")
     target.write_text(text, encoding="utf-8")
@@ -247,8 +239,6 @@ def _validate_source(path: Path, source_format: str) -> None:
         value = json.loads(text)
         if not isinstance(value, dict):
             raise AssertionError("json_config_not_object")
-    elif source_format == "opencode-markdown":
-        _frontmatter_bounds(text)
     else:
         raise AssertionError(f"unsupported_apply_format:{source_format}")
 
@@ -263,10 +253,6 @@ def _verify_route(path: Path, source_format: str, agent: str, route: Route) -> N
         profile = json.loads(text)["agent"][agent]
         model = profile.get("model")
         effort = profile.get("variant")
-    elif source_format == "opencode-markdown":
-        metadata = _frontmatter_mapping(text)
-        model = metadata.get("model")
-        effort = metadata.get("variant")
     else:
         raise AssertionError(f"unsupported_apply_format:{source_format}")
     if model != route.model:
@@ -373,51 +359,3 @@ def _skip_json_container(text: str, index: int) -> int:
                     return index + 1
         index += 1
     raise AssertionError("json_container_unclosed")
-
-
-def _frontmatter_bounds(text: str) -> tuple[int, int, int]:
-    lines = text.splitlines(keepends=True)
-    if not lines or lines[0].strip() != "---":
-        raise AssertionError("markdown_frontmatter_missing")
-    offset = len(lines[0])
-    for line in lines[1:]:
-        if line.strip() == "---":
-            return len(lines[0]), offset, offset + len(line)
-        offset += len(line)
-    raise AssertionError("markdown_frontmatter_unclosed")
-
-
-def _frontmatter_mapping(text: str) -> dict[str, str]:
-    start, end, _body_start = _frontmatter_bounds(text)
-    result: dict[str, str] = {}
-    for line in text[start:end].splitlines():
-        if ":" in line:
-            key, value = line.split(":", 1)
-            result[key.strip()] = value.strip()
-    return result
-
-
-def _replace_frontmatter_field(text: str, field: str, replacement: str) -> tuple[str, bool]:
-    start, end, _body_start = _frontmatter_bounds(text)
-    index = start
-    while index < end:
-        line_end = text.find("\n", index, end)
-        if line_end == -1:
-            line_end = end
-            newline_end = end
-        else:
-            newline_end = line_end + 1
-        line = text[index:newline_end]
-        if line.startswith(f"{field}:"):
-            value_start = index + len(field) + 1
-            while value_start < line_end and text[value_start] in " \t":
-                value_start += 1
-            value_end = line_end
-            if value_end > value_start and text[value_end - 1] == "\r":
-                value_end -= 1
-            current = text[value_start:value_end]
-            if current == replacement:
-                return text, False
-            return text[:value_start] + replacement + text[value_end:], True
-        index = newline_end
-    raise AssertionError(f"frontmatter_field_missing:{field}")

@@ -1,0 +1,10 @@
+{
+  "id": "uncertain-candidate",
+  "text": "Potential convention: perhaps preserve validation evidence before completion.",
+  "expectedRule": true,
+  "expectedBoundary": { "start": 0, "end": 74 },
+  "visibility": { "choice": "hide", "confidence": 0.4 },
+  "candidateProbability": 0.82,
+  "generalityLevel": 2,
+  "authority": "team_convention"
+}

@@ -1,0 +1,23 @@
+{
+  "schema": "agent-behavior-doctor.pressure-scenarios/v1",
+  "scenarios": [
+    {
+      "id": "single-promise-gap",
+      "prompt": "Diagnose only this current-session evidence. Human: 'Proceed with the edit.' Assistant: 'I will edit config/project.yaml now.' The next assistant event contains no tool call and no explanation. The next human turn is: 'Why did you not start?' Jev is available in the environment but was not requested.",
+      "required": ["Verdict:", "Verified factors:", "Not established:", "promise"],
+      "forbidden": ["JEV SUPPORT:", "which session", "what symptom"]
+    },
+    {
+      "id": "cross-session-with-jev",
+      "prompt": "Use Jev support after primary analysis. Two independently supplied session records show the same sequence: an exact human instruction, an assistant promise to edit, no matching tool call, and a next human turn asking why work did not begin. Classify recurrence without exposing identifiers.",
+      "required": ["Verdict:", "Verified factors:", "Not established:", "PRIMARY", "CORROBORATIVE", "JEV SUPPORT"],
+      "forbidden": ["raw transcript", "which sessions should"]
+    },
+    {
+      "id": "requested-fix",
+      "prompt": "The primary evidence proves a stale instruction in config/project.yaml caused the promise/action gap. Diagnose it, then propose a correction because I explicitly request a fix. Put a line beginning with 'Target:' before describing the proposed change. Do not claim the file was edited.",
+      "required": ["Verdict:", "Verified factors:", "Not established:", "Target:", "config/project.yaml"],
+      "forbidden": ["I edited", "change applied"]
+    }
+  ]
+}

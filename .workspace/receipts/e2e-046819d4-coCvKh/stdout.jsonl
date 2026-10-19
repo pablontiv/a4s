@@ -1,0 +1,4 @@
+
+> a4s@0.0.0 eval:work-gates
+> tsx test/support/work-gate-live.ts --tier compliance --runs 1 --concurrency 1 --deadline-ms 300000 --model openai-codex/gpt-5.6-sol --variant candidate --results /Users/Shared/harness/a4s/.workspace/receipts/e2e-046819d4-coCvKh/compliance.jsonl --real-workers
+

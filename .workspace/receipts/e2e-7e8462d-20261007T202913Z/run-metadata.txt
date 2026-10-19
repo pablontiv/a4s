@@ -1,0 +1,13 @@
+candidate=7e8462d2ba0cd98668a95f2ab14d646705ad769f
+cwd=/private/tmp/a4s-canary-7e8462d.20261007T202913Z.Xyupug/worktree
+isolation_root=/private/tmp/a4s-canary-7e8462d.20261007T202913Z.Xyupug
+artifact_dir=/Users/Shared/harness/a4s/.workspace/receipts/e2e-7e8462d-20261007T202913Z
+opt_in=A4S_RUN_AGENT_E2E=1
+model=openai-codex/gpt-5.6-sol
+node=v22.19.0
+python=Python 3.11.15
+tarball_sha256=84e0596b6baf2d304349dc0702d0c80391f5bca54f44d9cfb0cadbe83dc69e36
+tarball_size=117125
+key_id=e2e-8fdfbb2aa90904d5
+attempt_limit=1
+external_collector_started=false

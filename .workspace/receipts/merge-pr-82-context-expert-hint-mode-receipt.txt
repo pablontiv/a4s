@@ -1,0 +1,111 @@
+RECIBO DE FUSION: PR #82 (Context Expert hint mode advisory)
+Fecha: 2026-10-08T04:25:49Z
+Repositorio: https://github.com/pablontiv/a4s
+PR: https://github.com/pablontiv/a4s/pull/82
+Base: main
+Rama head: fix/context-expert-hint-mode
+Base inicial: 8fc14d55121138215b1f6541528251f2a8e68774
+Candidato inicial: dc4a880da3ca29973f6b279a5fdb0133d30ac128
+Head actualizado: 6161bcd31aee4bc9acd3c1a32d37694485667b5d
+Metodo de fusion del PR: squash
+Commit de fusion: 8f8d49697ee1edde66e00b9bc0bdbf005e16d15c
+Actor de fusion: pablontiv
+
+CONTRATO
+[OK] trigger.mode=off no evalua ni actua.
+[OK] trigger.mode=hint muestra /compact y no inicia compactacion.
+[OK] trigger.mode=auto es el unico modo Context Expert que compacta automaticamente.
+
+VERIFICACION DEL CANDIDATO
+[OK] El worktree dedicado fue /Users/Shared/harness/a4s-hint-mode-fix.
+[OK] La rama fue fix/context-expert-hint-mode.
+[OK] El HEAD inicial fue dc4a880da3ca29973f6b279a5fdb0133d30ac128.
+[OK] El worktree estaba limpio antes de la publicacion inicial.
+[OK] git diff --check paso.
+[OK] La rama inicial se publico una sola vez.
+[OK] El diff inicial modifico 13 rutas de Context Expert y Pi Context Expert.
+
+EVIDENCIA ACEPTADA
+[OK] Reviewer final v4 aprobo el candidato con cero hallazgos.
+[OK] La validacion offline paso.
+[OK] Pi paso 203 tests, typecheck y 9 E2E offline.
+[OK] Context Expert paso 38 tests, typecheck, check-core y 5 E2E Claude offline.
+[OK] Context Expert 0.3.2 cargo en Claude TUI real mediante Herdr y coordinacion Synagent.
+[OK] El modo hint mostro /compact.
+[OK] El modo hint registro dispatchOutcome=not_dispatched y uiOutcome=hinted.
+[OK] El modo hint no despacho session.compact.
+[OK] Las compactaciones observadas tuvieron trigger=auto y pertenecieron al host nativo.
+[OK] El reviewer de evidencia headed emitio conditional_accept.
+[OK] El contrato del componente quedo aceptado.
+[OK] No se requirio otro intento headed.
+
+ACTUALIZACION CON SYNAGENT
+[OK] El operador autorizo fusionar main dentro de la rama.
+[OK] origin/main exacto fue 410fd0fdd15607a87a34be2088890f8829ca3e2e.
+[OK] El merge local se ejecuto una sola vez.
+[OK] No se uso rebase.
+[OK] No se uso force push.
+[OK] El commit de merge local fue 6161bcd31aee4bc9acd3c1a32d37694485667b5d.
+[OK] Sus padres fueron dc4a880da3ca29973f6b279a5fdb0133d30ac128 y 410fd0fdd15607a87a34be2088890f8829ca3e2e.
+[OK] El merge incorporo solo packages/synagent/core/adapters/claude/hooks/register.ts y packages/synagent/core/test/register.test.ts desde main.
+[OK] El hash SHA-256 del diff Synagent fue 26e0d0b756d3291cd058c7adcac36dc328a5c1ad0221da0997b8beb62efc3e8 antes y despues del merge.
+[OK] El hash SHA-256 del diff funcional Context Expert fue 3b22fa0fd9cb451eb9a1d166533554b71b7a7bb605ba85debbba0ffb5eae056d antes y despues del merge.
+[OK] El nuevo HEAD se publico una sola vez.
+
+PR Y CHECKS NUEVOS
+[OK] PR #82 estaba abierto antes de la fusion.
+[OK] La base fue main.
+[OK] El head fue fix/context-expert-hint-mode.
+[OK] El nuevo head OID fue 6161bcd31aee4bc9acd3c1a32d37694485667b5d.
+[OK] GitHub informo mergeable=MERGEABLE.
+[OK] GitHub informo mergeStateStatus=CLEAN.
+[OK] La proteccion exigio la lista no vacia con test (ubuntu-latest).
+[OK] El check requerido test (ubuntu-latest) paso en https://github.com/pablontiv/a4s/actions/runs/37727191999/job/113148494194.
+[OK] Analyze (actions) paso.
+[OK] Analyze (javascript-typescript) paso.
+[OK] Analyze (python) paso.
+[OK] Clasificar cambios paso.
+[OK] CodeQL paso.
+[OK] Probar runtime paso.
+[OK] Validar documentacion paso.
+
+FUSION E INTEGRACION
+[OK] GitHub fusiono PR #82 con el metodo squash permitido.
+[OK] PR #82 tiene estado MERGED.
+[OK] El commit de fusion es 8f8d49697ee1edde66e00b9bc0bdbf005e16d15c.
+[OK] El padre del commit de fusion es 410fd0fdd15607a87a34be2088890f8829ca3e2e.
+[OK] El arbol del commit de fusion y el arbol del head actualizado son 25f3e876df64642edc41e07c6560416b31934d42.
+[OK] El diff del commit de fusion coincide exactamente con el diff funcional del candidato inicial.
+[OK] El commit Synagent 410fd0fdd15607a87a34be2088890f8829ca3e2e es ancestro del commit de fusion.
+[OK] La API de GitHub informa verified=true y reason=valid para la firma del commit de fusion.
+[OK] Context Expert y Synagent estan integrados en main.
+
+SINCRONIZACION DEL CHECKOUT ESTABLE
+[OK] El checkout estable fue /Users/Shared/harness/a4s-main.
+[OK] git fetch origin termino correctamente.
+[OK] git pull --ff-only origin main termino correctamente.
+[OK] El segundo git fetch origin termino correctamente.
+[OK] El checkout estable esta limpio.
+[OK] HEAD == main == origin/main == 8f8d49697ee1edde66e00b9bc0bdbf005e16d15c.
+[OK] La ref remota main apunta a 8f8d49697ee1edde66e00b9bc0bdbf005e16d15c.
+
+CLEANUP
+[OK] No se ejecuto cleanup del worktree.
+[OK] No se elimino la rama local.
+[OK] El worktree candidato permanece presente y limpio en 6161bcd31aee4bc9acd3c1a32d37694485667b5d.
+[OK] La rama local permanece presente en 6161bcd31aee4bc9acd3c1a32d37694485667b5d.
+[OK] GitHub elimino automaticamente la rama remota.
+[OK] La rama remota no se recreo.
+
+GATE FINAL
+[OK] La evidencia del candidato se verifico.
+[OK] La evidencia de review se verifico.
+[OK] La identidad del PR se verifico.
+[OK] Los checks requeridos nuevos existieron y pasaron.
+[OK] La identidad de la fusion se verifico.
+[OK] La integracion de Context Expert se verifico.
+[OK] La integracion de Synagent se verifico.
+[OK] El checkout estable se sincronizo y verifico.
+[OK] El alcance de cleanup se respeto.
+Estado del recibo: DURABLE
+Ruta del recibo: /Users/Shared/harness/a4s/.workspace/receipts/merge-pr-82-context-expert-hint-mode-receipt.txt

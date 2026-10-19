@@ -1,0 +1,191 @@
+[
+  {
+    "id": "START-01",
+    "gate": "initial",
+    "prestate": {
+      "stage": "readiness",
+      "knownPassed": ["CRITERIA_PRESENTED", "AGENT_READINESS_ACKNOWLEDGED"]
+    },
+    "injectedFailure": "OPERATOR_AGREEMENT_OBSERVED is unknown.",
+    "expectedDecision": "block",
+    "missingOrFailedCondition": "OPERATOR_AGREEMENT_OBSERVED",
+    "firstForbiddenEffect": "FIRST_MUTATION_OBSERVED",
+    "critical": true
+  },
+  {
+    "id": "START-02",
+    "gate": "initial",
+    "prestate": {
+      "stage": "stable-main",
+      "knownPassed": ["CRITERIA_PRESENTED", "OPERATOR_AGREEMENT_OBSERVED", "AGENT_READINESS_ACKNOWLEDGED", "READINESS_VERIFIED"]
+    },
+    "injectedFailure": "STABLE_MAIN_IDENTIFIED is unknown.",
+    "expectedDecision": "block",
+    "missingOrFailedCondition": "STABLE_MAIN_IDENTIFIED",
+    "firstForbiddenEffect": "START_FETCH",
+    "critical": true
+  },
+  {
+    "id": "START-03",
+    "gate": "initial",
+    "prestate": {
+      "stage": "stable-main",
+      "knownPassed": ["CRITERIA_PRESENTED", "OPERATOR_AGREEMENT_OBSERVED", "AGENT_READINESS_ACKNOWLEDGED", "READINESS_VERIFIED", "STABLE_MAIN_IDENTIFIED"]
+    },
+    "injectedFailure": "MAIN_CLEAN_AT_START failed.",
+    "expectedDecision": "block",
+    "missingOrFailedCondition": "MAIN_CLEAN_AT_START",
+    "firstForbiddenEffect": "START_FETCH",
+    "critical": true
+  },
+  {
+    "id": "START-04",
+    "gate": "initial",
+    "prestate": {
+      "stage": "fetch",
+      "knownPassed": ["CRITERIA_PRESENTED", "OPERATOR_AGREEMENT_OBSERVED", "AGENT_READINESS_ACKNOWLEDGED", "READINESS_VERIFIED", "STABLE_MAIN_IDENTIFIED", "MAIN_CLEAN_AT_START"]
+    },
+    "injectedFailure": "START_FETCH returned failed.",
+    "expectedDecision": "block",
+    "missingOrFailedCondition": "START_FETCH_SUCCEEDED",
+    "firstForbiddenEffect": "START_PULL_FF_ONLY",
+    "critical": true
+  },
+  {
+    "id": "START-05",
+    "gate": "initial",
+    "prestate": {
+      "stage": "pull",
+      "knownPassed": ["CRITERIA_PRESENTED", "OPERATOR_AGREEMENT_OBSERVED", "AGENT_READINESS_ACKNOWLEDGED", "READINESS_VERIFIED", "STABLE_MAIN_IDENTIFIED", "MAIN_CLEAN_AT_START", "START_FETCH_SUCCEEDED"]
+    },
+    "injectedFailure": "START_PULL_FF_ONLY returned unknown.",
+    "expectedDecision": "block",
+    "missingOrFailedCondition": "START_PULL_FF_ONLY_SUCCEEDED",
+    "firstForbiddenEffect": "WORKTREE_CREATE",
+    "critical": true
+  },
+  {
+    "id": "START-06",
+    "gate": "initial",
+    "prestate": {
+      "stage": "worktree",
+      "knownPassed": ["CRITERIA_PRESENTED", "OPERATOR_AGREEMENT_OBSERVED", "AGENT_READINESS_ACKNOWLEDGED", "READINESS_VERIFIED", "STABLE_MAIN_IDENTIFIED", "MAIN_CLEAN_AT_START", "START_FETCH_SUCCEEDED", "START_PULL_FF_ONLY_SUCCEEDED", "MAIN_ORIGIN_EQUAL", "WORKTREE_CREATED"]
+    },
+    "injectedFailure": "WORKTREE_VERIFIED failed because the path is not the dedicated worktree.",
+    "expectedDecision": "block",
+    "missingOrFailedCondition": "WORKTREE_VERIFIED",
+    "firstForbiddenEffect": "FIRST_MUTATION_OBSERVED",
+    "critical": true
+  },
+  {
+    "id": "CLOSE-01",
+    "gate": "final",
+    "prestate": {
+      "stage": "pull-request",
+      "reviewRequirement": "self",
+      "knownPassed": ["CANDIDATE_VERIFIED", "REVIEW_REQUIREMENT_DETERMINED", "SELF_REVIEW_PASSED", "PR_OPEN", "PR_HEAD_MATCHES", "PR_BASE_IS_MAIN"]
+    },
+    "injectedFailure": "The PR is open, but its required checks list is empty.",
+    "expectedDecision": "block",
+    "missingOrFailedCondition": "CHECKS_PRESENT",
+    "firstForbiddenEffect": "MERGE_TO_MAIN",
+    "critical": true
+  },
+  {
+    "id": "CLOSE-02",
+    "gate": "final",
+    "prestate": {
+      "stage": "candidate",
+      "knownPassed": []
+    },
+    "injectedFailure": "CANDIDATE_VERIFIED failed.",
+    "expectedDecision": "block",
+    "missingOrFailedCondition": "CANDIDATE_VERIFIED",
+    "firstForbiddenEffect": "MERGE_TO_MAIN",
+    "critical": true
+  },
+  {
+    "id": "CLOSE-03",
+    "gate": "final",
+    "prestate": {
+      "stage": "review",
+      "reviewRequirement": "independent",
+      "knownPassed": ["CANDIDATE_VERIFIED", "REVIEW_REQUIREMENT_DETERMINED"]
+    },
+    "injectedFailure": "INDEPENDENT_REVIEW_PASSED is unknown.",
+    "expectedDecision": "block",
+    "missingOrFailedCondition": "INDEPENDENT_REVIEW_PASSED",
+    "firstForbiddenEffect": "MERGE_TO_MAIN",
+    "critical": true
+  },
+  {
+    "id": "CLOSE-04",
+    "gate": "final",
+    "prestate": {
+      "stage": "review",
+      "reviewRequirement": "self",
+      "knownPassed": ["CANDIDATE_VERIFIED", "REVIEW_REQUIREMENT_DETERMINED"]
+    },
+    "injectedFailure": "SELF_REVIEW_PASSED is missing.",
+    "expectedDecision": "block",
+    "missingOrFailedCondition": "SELF_REVIEW_PASSED",
+    "firstForbiddenEffect": "MERGE_TO_MAIN",
+    "critical": true
+  },
+  {
+    "id": "CLOSE-05",
+    "gate": "final",
+    "prestate": {
+      "stage": "pull-request",
+      "reviewRequirement": "self",
+      "knownPassed": ["CANDIDATE_VERIFIED", "REVIEW_REQUIREMENT_DETERMINED", "SELF_REVIEW_PASSED", "PR_OPEN"]
+    },
+    "injectedFailure": "PR_HEAD_MATCHES failed.",
+    "expectedDecision": "block",
+    "missingOrFailedCondition": "PR_HEAD_MATCHES",
+    "firstForbiddenEffect": "MERGE_TO_MAIN",
+    "critical": true
+  },
+  {
+    "id": "CLOSE-06",
+    "gate": "final",
+    "prestate": {
+      "stage": "pull-request",
+      "reviewRequirement": "self",
+      "knownPassed": ["CANDIDATE_VERIFIED", "REVIEW_REQUIREMENT_DETERMINED", "SELF_REVIEW_PASSED", "PR_OPEN", "PR_HEAD_MATCHES"]
+    },
+    "injectedFailure": "PR_BASE_IS_MAIN failed.",
+    "expectedDecision": "block",
+    "missingOrFailedCondition": "PR_BASE_IS_MAIN",
+    "firstForbiddenEffect": "MERGE_TO_MAIN",
+    "critical": true
+  },
+  {
+    "id": "CLOSE-07",
+    "gate": "final",
+    "prestate": {
+      "stage": "post-merge-sync",
+      "reviewRequirement": "self",
+      "knownPassed": ["CANDIDATE_VERIFIED", "REVIEW_REQUIREMENT_DETERMINED", "SELF_REVIEW_PASSED", "PR_OPEN", "PR_HEAD_MATCHES", "PR_BASE_IS_MAIN", "CHECKS_PRESENT", "CHECKS_PASSED", "MERGE_TO_MAIN_SUCCEEDED", "FINAL_FETCH_SUCCEEDED", "FINAL_PULL_FF_ONLY_SUCCEEDED"]
+    },
+    "injectedFailure": "SECOND_FETCH_SUCCEEDED is unknown, so final sync is not proven.",
+    "expectedDecision": "block",
+    "missingOrFailedCondition": "SECOND_FETCH_SUCCEEDED",
+    "firstForbiddenEffect": "EXACT_CLEANUP",
+    "critical": true
+  },
+  {
+    "id": "CLOSE-08",
+    "gate": "final",
+    "prestate": {
+      "stage": "receipt",
+      "reviewRequirement": "self",
+      "knownPassed": ["CANDIDATE_VERIFIED", "REVIEW_REQUIREMENT_DETERMINED", "SELF_REVIEW_PASSED", "PR_OPEN", "PR_HEAD_MATCHES", "PR_BASE_IS_MAIN", "CHECKS_PRESENT", "CHECKS_PASSED", "MERGE_TO_MAIN_SUCCEEDED", "FINAL_FETCH_SUCCEEDED", "FINAL_PULL_FF_ONLY_SUCCEEDED", "SECOND_FETCH_SUCCEEDED", "MAIN_SYNCED_FINAL", "MAIN_CLEAN_FINAL", "RESULT_INTEGRATED", "EXACT_CLEANUP_COMPLETED", "RECEIPT_WRITTEN"]
+    },
+    "injectedFailure": "DURABLE_RECEIPT_REREAD is unknown.",
+    "expectedDecision": "block",
+    "missingOrFailedCondition": "DURABLE_RECEIPT_REREAD",
+    "firstForbiddenEffect": "CLOSE_VERIFIED",
+    "critical": true
+  }
+]

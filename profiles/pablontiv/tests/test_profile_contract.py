@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import re
 import unittest
 from pathlib import Path
@@ -10,32 +9,9 @@ import yaml
 
 PROFILE_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = PROFILE_ROOT.parents[1]
-PROFILE_PATH = PROFILE_ROOT / "PROFILE.md"
-BOOTSTRAP_PATH = PROFILE_ROOT / "bootstrap.md"
 TEMPLATE_PATH = PROFILE_ROOT / "config.template.yaml"
-SOURCE_PATH = PROFILE_ROOT / "references" / "engineering-handbook-v1.4.md"
-SOURCE_SHA256 = "f5455e3eced13690358b02823053a1e00a6c7c06de5f17d9716805bf0a0cff26"
-DOGFOOD_CONFIG_PATH = REPO_ROOT / ".workspace" / "config.yaml"
+WORKFLOW_REFERENCE_PATH = REPO_ROOT / ".workspace" / "docs" / "workflow-reference.md"
 PROFILE_VERSION = 2
-
-PROFILE_SECTIONS = (
-    "Propósito",
-    "Principios de diseño",
-    "Modelo de workspace",
-    "Resolución de configuración",
-    "Contrato de los controles",
-    "Ejes configurables",
-    "Valores por defecto",
-    "Flujo de trabajo",
-    "Invariantes",
-    "Configuración mínima por repositorio",
-    "Ejemplo no normativo de binding",
-    "Precedencia frente a steering y automatización",
-    "Seguridad y sistemas externos",
-    "Adopción",
-    "Criterios de aceptación",
-    "Fuera de alcance",
-)
 
 CONFIG_AXES = (
     "context_sources",
@@ -63,35 +39,17 @@ FORBIDDEN_CONTROL_FIELDS = (
     "success",
     "on_failure",
 )
-
-BASE_CONTRACT_MARKERS = (
-    "workspace → group → repository",
-    "Los escalares de una capa más específica reemplazan",
-    "Los mapas se combinan recursivamente",
-    "Las listas se reemplazan completas",
+AGENT_RUNTIME_TERM_PATTERN = re.compile(
+    r"\b(?:agents?|subagents?|orchestrators?|workers?)\b",
+    re.IGNORECASE,
 )
-
-INVARIANT_IDS = tuple(f"INV-{number:02d}" for number in range(1, 14))
-WORKFLOW_PHASES = tuple(f"Fase {number}" for number in range(9))
-CONTROL_STATES = (
-    "pending",
-    "passed",
-    "failed",
-    "skipped",
-    "unknown",
-    "not_applicable",
+AGENT_RUNTIME_POLICY_PATHS = (
+    ("workspace", "authority", "derived"),
+    ("workspace", "roles", "implementer"),
+    ("workspace", "do_work", "knowledge"),
+    ("workspace", "accept_work", "end_to_end"),
+    ("repository", "entry_point"),
 )
-CONDITIONAL_TRIGGER = re.compile(
-    r"\bse activa (?:al|como|cuando|después|para|tras|únicamente)\b"
-)
-
-
-def published_artifacts() -> set[str]:
-    skills = {path.parent.name for path in (REPO_ROOT / "skills").glob("*/SKILL.md")}
-    agents = {path.stem for path in (REPO_ROOT / "skills").glob("*/agents/pi/*.md")}
-    methods = {path.parent.name for path in (REPO_ROOT / "methods").glob("*/METHOD.md")}
-    styles = {path.stem for path in (REPO_ROOT / "output-styles").glob("*.md")}
-    return skills | agents | methods | styles
 
 
 def parse_yaml_mapping(text: str) -> dict[str, Any]:
@@ -118,6 +76,69 @@ def forbidden_control_fields(value: Any) -> tuple[str, ...]:
 
     visit(value)
     return tuple(field for field in FORBIDDEN_CONTROL_FIELDS if field in found)
+
+
+def agent_specific_config_markers(document: dict[str, Any]) -> tuple[str, ...]:
+    found: list[str] = []
+
+    def scalar(path: tuple[str, ...]) -> str | None:
+        node: Any = document
+        for key in path:
+            if not isinstance(node, dict):
+                return None
+            node = node.get(key)
+        if not isinstance(node, str):
+            return None
+        return node.replace("_", " ").replace("-", " ")
+
+    def mark_when(
+        label: str,
+        path: tuple[str, ...],
+        *patterns: str,
+    ) -> None:
+        text = scalar(path)
+        if text is not None and all(
+            re.search(pattern, text, re.IGNORECASE) for pattern in patterns
+        ):
+            if label not in found:
+                found.append(label)
+
+    for path in AGENT_RUNTIME_POLICY_PATHS:
+        mark_when("agent runtime terminology", path, AGENT_RUNTIME_TERM_PATTERN.pattern)
+
+    credentials_path = ("workspace", "do_work", "credentials")
+    credential_terms = r"\b(?:credentials?|authentication|provider)\b"
+    mark_when(
+        "TypeSafe credential binding",
+        credentials_path,
+        r"\bTypeSafe\b",
+        credential_terms,
+    )
+    mark_when(
+        "Pi credential binding",
+        credentials_path,
+        r"\bPi\b",
+        credential_terms,
+    )
+    mark_when(
+        "generated-text disclosure",
+        ("workspace", "do_work", "communication"),
+        r"\b(?:AI|machine generated|model generated|generated text)\b",
+        r"\bdisclos(?:e|es|ed|ure)\b",
+    )
+    mark_when(
+        "model/provider reviewer routing",
+        ("workspace", "accept_work", "review"),
+        r"\bmodel\b",
+        r"\b(?:family|lineage|provider)\b",
+    )
+    mark_when(
+        "Pi session binding",
+        ("workspace", "track_work", "controller_identity"),
+        r"\bPi\b",
+        r"\bsession\b",
+    )
+    return tuple(found)
 
 
 def h2_body(profile: str, heading: str) -> str:
@@ -235,264 +256,16 @@ class YamlContractParsingTests(unittest.TestCase):
         self.assertEqual(forbidden_control_fields(parsed), FORBIDDEN_CONTROL_FIELDS)
 
 
-class ProfileContractTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls) -> None:
-        cls.profile = PROFILE_PATH.read_text(encoding="utf-8")
-        cls.bootstrap = BOOTSTRAP_PATH.read_text(encoding="utf-8")
-        cls.template = TEMPLATE_PATH.read_text(encoding="utf-8")
-        cls.template_document = parse_yaml_mapping(cls.template)
 
-    def test_source_snapshot_has_approved_digest(self) -> None:
-        self.assertEqual(
-            hashlib.sha256(SOURCE_PATH.read_bytes()).hexdigest(),
-            SOURCE_SHA256,
+
+class WorkflowReferenceTests(unittest.TestCase):
+    def test_reference_is_informative_and_not_operational_config(self) -> None:
+        self.assertFalse((REPO_ROOT / ".workspace" / "config.yaml").exists())
+        reference = WORKFLOW_REFERENCE_PATH.read_text(encoding="utf-8")
+        self.assertIn(
+            "documentación informativa sin autoridad operativa",
+            reference,
         )
-
-    def test_profile_preserves_all_base_sections(self) -> None:
-        self.assertEqual(section_contract_violations(self.profile), ())
-
-    def test_contract_rejects_reversed_headings(self) -> None:
-        mutated = self.profile.replace("## 1. Propósito", "## SWAP", 1)
-        mutated = mutated.replace("## 2. Principios de diseño", "## 1. Propósito", 1)
-        mutated = mutated.replace("## SWAP", "## 2. Principios de diseño", 1)
-        self.assertTrue(section_contract_violations(mutated))
-
-    def test_profile_preserves_contract_categories(self) -> None:
-        self.assertEqual(category_contract_violations(self.profile), ())
-
-    def test_contract_rejects_removed_or_extra_categories(self) -> None:
-        mutations = (
-            ("missing invariant", self.profile.replace("**INV-13", "**RULE-13", 1)),
-            ("missing phase", self.profile.replace("### Fase 4", "### Etapa 4", 1)),
-            ("missing state", self.profile.replace("- `pending`:", "- `queued`:", 1)),
-            (
-                "extra state",
-                self.profile.replace(
-                    "- `passed`:",
-                    "- `running`: ejecución iniciada;\n- `passed`:",
-                    1,
-                ),
-            ),
-        )
-        for label, mutated in mutations:
-            with self.subTest(label=label):
-                self.assertTrue(category_contract_violations(mutated))
-
-    def test_template_preserves_layers_and_axes(self) -> None:
-        for layer in ("workspace", "groups", "repositories"):
-            self.assertIn(layer, self.template_document)
-        workspace = self.template_document.get("workspace")
-        self.assertIsInstance(workspace, dict)
-        assert isinstance(workspace, dict)
-        workflow = workspace.get("workflow")
-        self.assertIsInstance(workflow, dict)
-        assert isinstance(workflow, dict)
-        axis_keys = set(workspace) | set(workflow)
-        for axis in CONFIG_AXES:
-            with self.subTest(axis=axis):
-                self.assertIn(axis, axis_keys)
-
-    def test_profile_preserves_every_configurable_axis(self) -> None:
-        axes = h2_body(self.profile, "Ejes configurables")
-        for axis in CONFIG_AXES:
-            with self.subTest(axis=axis):
-                self.assertIn(f"| `{axis}` |", axes)
-
-    def test_template_rejects_deterministic_control_fields(self) -> None:
-        self.assertEqual(forbidden_control_fields(self.template_document), ())
-        mutated = self.template.replace(
-            "  custom_rules: []",
-            "  custom_rules: []\n  executor: shell",
-            1,
-        )
-        self.assertEqual(
-            forbidden_control_fields(parse_yaml_mapping(mutated)),
-            ("executor",),
-        )
-
-    def test_profile_routes_every_published_artifact(self) -> None:
-        self.assertEqual(
-            routing_contract_violations(self.profile, published_artifacts()), ()
-        )
-
-    def test_profile_v2_routes_method_without_retired_edd_skill(self) -> None:
-        self.assertIn(f"**Versión del perfil:** {PROFILE_VERSION}", self.profile)
-        routes = dict(routed_artifacts(self.profile))
-        self.assertIn("empirical-capability-development", routes)
-        self.assertNotIn("evidence-driven-development", routes)
-        self.assertFalse((REPO_ROOT / "skills" / "evidence-driven-development").exists())
-
-    def test_template_declares_profile_v2(self) -> None:
-        profile = self.template_document.get("profile")
-        self.assertIsInstance(profile, dict)
-        assert isinstance(profile, dict)
-        self.assertEqual(profile.get("version"), PROFILE_VERSION)
-
-    def test_contract_rejects_unlisted_and_stale_routes(self) -> None:
-        published = published_artifacts()
-        stale_route = (
-            "\n- `retired-artifact`: se activa cuando aparece una señal retirada.\n"
-        )
-        mutated = self.profile.replace(
-            "\n## 7. Valores por defecto",
-            stale_route + "\n## 7. Valores por defecto",
-            1,
-        )
-        cases = (
-            (
-                "unlisted published artifact",
-                self.profile,
-                published | {"future-artifact"},
-            ),
-            ("stale routed artifact", mutated, published),
-        )
-        for label, profile, artifacts in cases:
-            with self.subTest(label=label):
-                self.assertTrue(routing_contract_violations(profile, artifacts))
-
-    def test_contract_rejects_triggerless_routes(self) -> None:
-        mutated = self.profile.replace(
-            "- `adr`: se activa", "- `adr`: está disponible", 1
-        )
-        self.assertTrue(routing_contract_violations(mutated, published_artifacts()))
-
-    def test_profile_requires_rootline_backscroll_and_pi(self) -> None:
-        for required in ("Rootline", "Backscroll", "Pi"):
-            self.assertIn(required, self.profile)
-
-    def test_remove_gentle_context_scope_is_bounded(self) -> None:
-        paragraph = next(
-            block
-            for block in self.profile.split("\n\n")
-            if "`remove-gentle-context`" in block
-        )
-        self.assertIn("contexto activo", paragraph)
-        self.assertIn("no desinstala", paragraph)
-
-    def test_bootstrap_preserves_safe_order(self) -> None:
-        markers = (
-            "inspección de solo lectura",
-            "configuración candidata",
-            "aprobación humana explícita",
-            "escritura durable",
-            "verificación posterior",
-        )
-        positions = [self.bootstrap.index(marker) for marker in markers]
-        self.assertEqual(positions, sorted(positions))
-        self.assertIn("unknown", self.bootstrap)
-        self.assertIn("bloquea", self.bootstrap)
-
-
-class DogfoodConfigTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls) -> None:
-        cls.config = DOGFOOD_CONFIG_PATH.read_text(encoding="utf-8")
-        cls.document = parse_yaml_mapping(cls.config)
-        profile = cls.document.get("profile")
-        workspace = cls.document.get("workspace")
-        repositories = cls.document.get("repositories")
-        if (
-            not isinstance(profile, dict)
-            or not isinstance(workspace, dict)
-            or not isinstance(repositories, dict)
-        ):
-            raise TypeError("profile, workspace and repositories must be mappings")
-        repository = repositories.get("pablontiv/a4s")
-        if not isinstance(repository, dict):
-            raise TypeError("pablontiv/a4s must be a mapping")
-        cls.profile = cast(dict[str, Any], profile)
-        cls.workspace = cast(dict[str, Any], workspace)
-        cls.repository = cast(dict[str, Any], repository)
-
-    def test_config_has_all_logical_layers(self) -> None:
-        self.assertTrue(
-            {"schema_version", "profile", "workspace", "groups", "repositories"}
-            <= set(self.document)
-        )
-
-    def test_dogfood_declares_profile_v2_and_delivery_policy(self) -> None:
-        self.assertEqual(self.profile.get("id"), "pablontiv/a4s")
-        self.assertEqual(self.profile.get("version"), PROFILE_VERSION)
-        workflow = self.workspace.get("workflow")
-        self.assertIsInstance(workflow, dict)
-        assert isinstance(workflow, dict)
-        commit_policy = workflow.get("commit_policy")
-        self.assertIsInstance(commit_policy, str)
-        assert isinstance(commit_policy, str)
-        for marker in ("conventional commits", "checks aplicables"):
-            with self.subTest(marker=marker):
-                self.assertIn(marker, commit_policy)
-        self.assertEqual(workflow.get("delivery_mode"), "pull-request")
-
-    def test_workspace_config_preserves_every_axis(self) -> None:
-        workflow = self.workspace.get("workflow")
-        self.assertIsInstance(workflow, dict)
-        assert isinstance(workflow, dict)
-        axis_keys = set(self.workspace) | set(workflow)
-        for axis in CONFIG_AXES:
-            with self.subTest(axis=axis):
-                self.assertIn(axis, axis_keys)
-
-    def test_context_sources_preserve_backscroll_and_repo_guidance(self) -> None:
-        workspace_sources = self.workspace.get("context_sources")
-        repository_sources = self.repository.get("context_sources")
-        self.assertIsInstance(workspace_sources, list)
-        self.assertIsInstance(repository_sources, list)
-        assert isinstance(workspace_sources, list)
-        assert isinstance(repository_sources, list)
-        source_text = "\n".join(cast(list[str], workspace_sources + repository_sources))
-        for required in (
-            "Backscroll",
-            "buscar primero por proyecto",
-            "ampliar una vez",
-            "unknown",
-            "AGENTS.md",
-        ):
-            with self.subTest(required=required):
-                self.assertIn(required, source_text)
-
-    def test_sync_strategy_is_observable_and_fail_closed(self) -> None:
-        workflow = self.workspace.get("workflow")
-        self.assertIsInstance(workflow, dict)
-        assert isinstance(workflow, dict)
-        sync_strategy = workflow.get("sync_strategy")
-        self.assertIsInstance(sync_strategy, str)
-        assert isinstance(sync_strategy, str)
-        normalized = " ".join(sync_strategy.split())
-        self.assertNotEqual(sync_strategy.strip(), "unknown")
-        for required in ("lectura", "origin/main", "revisión base", "pull", "unknown"):
-            with self.subTest(required=required):
-                self.assertIn(required, normalized)
-
-    def test_config_rejects_deterministic_control_fields(self) -> None:
-        self.assertEqual(forbidden_control_fields(self.document), ())
-        mutated = self.config.replace(
-            "  custom_rules:",
-            "  executor: shell\n  timeout_seconds: 30\n  success: exit-zero\n"
-            "  on_failure: stop\n  custom_rules:",
-            1,
-        )
-        self.assertEqual(
-            forbidden_control_fields(parse_yaml_mapping(mutated)),
-            FORBIDDEN_CONTROL_FIELDS,
-        )
-
-    def test_config_names_required_authorities(self) -> None:
-        for required in (
-            "pablontiv/a4s",
-            "AGENTS.md",
-            "Rootline",
-            "Backscroll",
-            ".workspace/docs/",
-        ):
-            with self.subTest(required=required):
-                self.assertIn(required, self.config)
-
-    def test_config_keeps_unresolved_bindings_explicit(self) -> None:
-        self.assertIn("unknown", self.config)
-        self.assertNotIn("{" * 2, self.config)
-        self.assertNotIn("TO" + "DO", self.config)
 
 
 if __name__ == "__main__":

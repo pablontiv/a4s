@@ -4,6 +4,7 @@ description: "Trigger: name a project, naming brief, nombrar proyecto, project n
 license: Apache-2.0
 metadata:
   author: "pablontiv"
+  updated: "2026-09-17"
   version: "1.0"
 ---
 

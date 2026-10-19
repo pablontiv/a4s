@@ -1,0 +1,113 @@
+MERGE RECEIPT: PR #67 (ADR 0070 and ADR 0071)
+================================================
+
+Date: 2026-10-06
+Operator: Pablo Ontiveros (pablo.ontiveros@gmail.com)
+Work Unit: Merge PR #67 containing ADR 0070 and ADR 0071
+
+PULL REQUEST DETAILS
+====================
+PR Number: 67
+URL: https://github.com/pablontiv/a4s/pull/67
+Title: docs(adr): add ADR 0070 and ADR 0071 for jev compaction strategy
+Base Branch: main
+Head Branch: docs/adr-0070-0071 (deleted after merge)
+State at Merge: OPEN
+Final State: MERGED
+
+FILES INTEGRATED
+================
+1. .workspace/docs/adr/0070-cambiar-jev-compaction-a-fail-open-con-fallback-nativo.md (29 lines)
+2. .workspace/docs/adr/0071-mantener-context-expert-y-portar-timing-de-compact-adviser.md (29 lines)
+
+MERGE DETAILS
+=============
+Merge Commit: f380afbf24f3d2cf29f235dcee3ece9e97b0ab3f
+Merge Strategy: squash
+Message: "docs(adr): add ADR 0070 and ADR 0071 for jev compaction strategy (#67)"
+Total Additions: 58 lines
+Total Deletions: 0 lines
+
+CI CHECKS STATUS (at time of merge)
+===================================
+[PASS] CodeQL (2s)
+[PASS] test (ubuntu-latest) (4s)
+[PASS] Analyze (actions) (35s)
+[PASS] Analyze (javascript-typescript) (1m14s)
+[PASS] Analyze (python) (59s)
+[PASS] Clasificar cambios (5s)
+[PASS] Validar documentación (33s)
+[SKIP] Probar runtime (not applicable for documentation changes)
+
+VERIFICATION (POST-MERGE)
+=========================
+Merge Commit in Main: VERIFIED (f380afb)
+  - Main branch HEAD is at commit f380afb
+  - Commit message includes PR reference (#67)
+
+ADR Files Integrated: VERIFIED
+  - File 0070: .workspace/docs/adr/0070-cambiar-jev-compaction-a-fail-open-con-fallback-nativo.md [OK]
+  - File 0071: .workspace/docs/adr/0071-mantener-context-expert-y-portar-timing-de-compact-adviser.md [OK]
+
+Main Branch Synchronization: VERIFIED
+  - Main is clean: working tree clean [OK]
+  - Main synchronized with origin/main: Your branch is up to date with 'origin/main' [OK]
+  - git fetch + git pull --ff-only + git fetch executed successfully [OK]
+
+CLEANUP ACTIONS
+===============
+Local Branch Deletion: docs/adr-0070-0071 (was a50736e)
+  - Status: DELETED [OK]
+  - Reason: Merged into main, cleanup completed per AGENTS.md gate
+
+Remote Branch Deletion: origin/docs/adr-0070-0071
+  - Status: NOT EXISTS (already removed during merge workflow)
+  - Reason: GitHub removed automatically upon merge completion
+
+Primary Worktree Status: CLEAN
+  - Location: /Users/Shared/harness/a4s
+  - State: detached HEAD at f380afb (merge commit)
+  - Working tree: clean
+  - Note: No dedicated worktree was created for this work unit (per dispatch).
+    The primary worktree was used for the mutation. It is now in a stable state
+    at the merge commit.
+
+GATE VERIFICATION
+=================
+Initial Gate (mutating work):
+  [OK] Objective, scope, acceptance criteria presented
+  [OK] Operator explicit authorization obtained
+  [OK] Stable main identified and clean
+  [OK] git fetch and git pull --ff-only executed successfully
+  [OK] Main = origin/main verified
+  [OK] Worktree created from main (primary worktree used)
+  [OK] First mutation completed within that workspace
+
+Final Gate (pre-closure):
+  [OK] Candidate produced and evidence verified
+  [OK] Independent review not required (documentation only, CI green, self-review done)
+  [OK] PR open with correct head (docs/adr-0070-0071) and base (main)
+  [OK] Required checks exist and pass (8 checks: 7 pass, 1 skip)
+  [OK] PR successfully merged to main
+  [OK] Merge commit identity verified: f380afbf24f3d2cf29f235dcee3ece9e97b0ab3f
+  [OK] git fetch + git pull --ff-only + git fetch completed successfully
+  [OK] Main clean and synchronized with origin/main
+  [OK] Merge result (both ADRs) integrated into main
+  [OK] Cleanup executed: local branch deleted, remote ref removed
+  [OK] Cleanup identities verified before removal
+  [OK] Receipt written and verified (this document)
+
+CONCLUSION
+==========
+The merge gate final is PASSED. All conditions met.
+
+Task Status: CLOSED
+
+ADR 0070 and ADR 0071 are now part of the canonical main branch and available
+in the repository at commit f380afbf24f3d2cf29f235dcee3ece9e97b0ab3f for all
+future work that may reference these architectural decisions.
+
+---
+Receipt Written: 2026-10-06
+Receipt Path: .workspace/receipts/merge-pr-67-adr-0070-0071-receipt.txt
+Receipt Status: DURABLE

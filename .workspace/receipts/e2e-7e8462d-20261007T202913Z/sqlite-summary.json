@@ -1,0 +1,238 @@
+{
+  "schema": "a4s.e2e-sqlite-summary/v1",
+  "uniqueWorkerCount": 8,
+  "statusCounts": {
+    "completed": 8,
+    "queued": 8,
+    "running": 443
+  },
+  "tasks": [
+    {
+      "task_id": "subtask_reviewer_1791405002054_6f125823",
+      "attempt": 1,
+      "first_at": "2026-10-07T20:30:02.054Z",
+      "last_at": "2026-10-07T20:31:01.161Z",
+      "running_events": 62,
+      "terminal_events": 1,
+      "terminal_status": "completed"
+    },
+    {
+      "task_id": "subtask_reviewer_1791405002056_322ae94e",
+      "attempt": 1,
+      "first_at": "2026-10-07T20:30:02.056Z",
+      "last_at": "2026-10-07T20:30:39.040Z",
+      "running_events": 49,
+      "terminal_events": 1,
+      "terminal_status": "completed"
+    },
+    {
+      "task_id": "subtask_reviewer_1791405002056_48ffaf36",
+      "attempt": 1,
+      "first_at": "2026-10-07T20:30:02.056Z",
+      "last_at": "2026-10-07T20:30:44.673Z",
+      "running_events": 53,
+      "terminal_events": 1,
+      "terminal_status": "completed"
+    },
+    {
+      "task_id": "subtask_reviewer_1791405002057_28513301",
+      "attempt": 1,
+      "first_at": "2026-10-07T20:30:02.057Z",
+      "last_at": "2026-10-07T20:30:30.549Z",
+      "running_events": 48,
+      "terminal_events": 1,
+      "terminal_status": "completed"
+    },
+    {
+      "task_id": "subtask_reviewer_1791405002057_6dceb657",
+      "attempt": 1,
+      "first_at": "2026-10-07T20:30:02.057Z",
+      "last_at": "2026-10-07T20:30:45.669Z",
+      "running_events": 60,
+      "terminal_events": 1,
+      "terminal_status": "completed"
+    },
+    {
+      "task_id": "subtask_reviewer_1791405002057_c678477f",
+      "attempt": 1,
+      "first_at": "2026-10-07T20:30:02.057Z",
+      "last_at": "2026-10-07T20:30:41.169Z",
+      "running_events": 57,
+      "terminal_events": 1,
+      "terminal_status": "completed"
+    },
+    {
+      "task_id": "subtask_reviewer_1791405002058_a800593e",
+      "attempt": 1,
+      "first_at": "2026-10-07T20:30:02.058Z",
+      "last_at": "2026-10-07T20:30:37.777Z",
+      "running_events": 56,
+      "terminal_events": 1,
+      "terminal_status": "completed"
+    },
+    {
+      "task_id": "subtask_reviewer_1791405002058_b1bf5066",
+      "attempt": 1,
+      "first_at": "2026-10-07T20:30:02.058Z",
+      "last_at": "2026-10-07T20:30:44.547Z",
+      "running_events": 58,
+      "terminal_events": 1,
+      "terminal_status": "completed"
+    }
+  ],
+  "startedEvents": [
+    {
+      "task_id": "subtask_reviewer_1791405002054_6f125823",
+      "started_at": "2026-10-07T20:30:02.059Z"
+    },
+    {
+      "task_id": "subtask_reviewer_1791405002056_322ae94e",
+      "started_at": "2026-10-07T20:30:02.059Z"
+    },
+    {
+      "task_id": "subtask_reviewer_1791405002056_48ffaf36",
+      "started_at": "2026-10-07T20:30:02.059Z"
+    },
+    {
+      "task_id": "subtask_reviewer_1791405002057_28513301",
+      "started_at": "2026-10-07T20:30:02.060Z"
+    },
+    {
+      "task_id": "subtask_reviewer_1791405002057_6dceb657",
+      "started_at": "2026-10-07T20:30:02.060Z"
+    },
+    {
+      "task_id": "subtask_reviewer_1791405002057_c678477f",
+      "started_at": "2026-10-07T20:30:02.060Z"
+    },
+    {
+      "task_id": "subtask_reviewer_1791405002058_a800593e",
+      "started_at": "2026-10-07T20:30:02.060Z"
+    },
+    {
+      "task_id": "subtask_reviewer_1791405002058_b1bf5066",
+      "started_at": "2026-10-07T20:30:02.060Z"
+    }
+  ],
+  "terminalEvents": [
+    {
+      "task_id": "subtask_reviewer_1791405002054_6f125823",
+      "terminal_at": "2026-10-07T20:31:01.161Z",
+      "status": "completed"
+    },
+    {
+      "task_id": "subtask_reviewer_1791405002056_322ae94e",
+      "terminal_at": "2026-10-07T20:30:39.040Z",
+      "status": "completed"
+    },
+    {
+      "task_id": "subtask_reviewer_1791405002056_48ffaf36",
+      "terminal_at": "2026-10-07T20:30:44.673Z",
+      "status": "completed"
+    },
+    {
+      "task_id": "subtask_reviewer_1791405002057_28513301",
+      "terminal_at": "2026-10-07T20:30:30.549Z",
+      "status": "completed"
+    },
+    {
+      "task_id": "subtask_reviewer_1791405002057_6dceb657",
+      "terminal_at": "2026-10-07T20:30:45.669Z",
+      "status": "completed"
+    },
+    {
+      "task_id": "subtask_reviewer_1791405002057_c678477f",
+      "terminal_at": "2026-10-07T20:30:41.169Z",
+      "status": "completed"
+    },
+    {
+      "task_id": "subtask_reviewer_1791405002058_a800593e",
+      "terminal_at": "2026-10-07T20:30:37.777Z",
+      "status": "completed"
+    },
+    {
+      "task_id": "subtask_reviewer_1791405002058_b1bf5066",
+      "terminal_at": "2026-10-07T20:30:44.547Z",
+      "status": "completed"
+    }
+  ],
+  "nestedReadyEvents": [
+    {
+      "task_id": "subtask_reviewer_1791405002054_6f125823",
+      "nested_ready_at": "2026-10-07T20:30:07.859Z"
+    },
+    {
+      "task_id": "subtask_reviewer_1791405002056_322ae94e",
+      "nested_ready_at": "2026-10-07T20:30:07.867Z"
+    },
+    {
+      "task_id": "subtask_reviewer_1791405002056_48ffaf36",
+      "nested_ready_at": "2026-10-07T20:30:07.864Z"
+    },
+    {
+      "task_id": "subtask_reviewer_1791405002057_28513301",
+      "nested_ready_at": "2026-10-07T20:30:07.872Z"
+    },
+    {
+      "task_id": "subtask_reviewer_1791405002057_6dceb657",
+      "nested_ready_at": "2026-10-07T20:30:07.875Z"
+    },
+    {
+      "task_id": "subtask_reviewer_1791405002057_c678477f",
+      "nested_ready_at": "2026-10-07T20:30:07.870Z"
+    },
+    {
+      "task_id": "subtask_reviewer_1791405002058_a800593e",
+      "nested_ready_at": "2026-10-07T20:30:07.878Z"
+    },
+    {
+      "task_id": "subtask_reviewer_1791405002058_b1bf5066",
+      "nested_ready_at": "2026-10-07T20:30:07.880Z"
+    }
+  ],
+  "finalNestedSessionPaths": [
+    {
+      "task_id": "subtask_reviewer_1791405002054_6f125823",
+      "path_type": "text",
+      "path_bytes": 197
+    },
+    {
+      "task_id": "subtask_reviewer_1791405002056_322ae94e",
+      "path_type": "text",
+      "path_bytes": 197
+    },
+    {
+      "task_id": "subtask_reviewer_1791405002056_48ffaf36",
+      "path_type": "text",
+      "path_bytes": 197
+    },
+    {
+      "task_id": "subtask_reviewer_1791405002057_28513301",
+      "path_type": "text",
+      "path_bytes": 197
+    },
+    {
+      "task_id": "subtask_reviewer_1791405002057_6dceb657",
+      "path_type": "text",
+      "path_bytes": 197
+    },
+    {
+      "task_id": "subtask_reviewer_1791405002057_c678477f",
+      "path_type": "text",
+      "path_bytes": 197
+    },
+    {
+      "task_id": "subtask_reviewer_1791405002058_a800593e",
+      "path_type": "text",
+      "path_bytes": 197
+    },
+    {
+      "task_id": "subtask_reviewer_1791405002058_b1bf5066",
+      "path_type": "text",
+      "path_bytes": 197
+    }
+  ],
+  "allEightStartedWithinMs": 1,
+  "simultaneousOverlapMs": 28489,
+  "eventCount": 459
+}

@@ -1,0 +1,44 @@
+{
+  "name": "@a4s/synagent",
+  "version": "0.1.0",
+  "private": true,
+  "license": "UNLICENSED",
+  "description": "Canonical Synagent messaging contract and channel adapters for agent harnesses.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pablontiv/a4s.git",
+    "directory": "packages/synagent/core"
+  },
+  "homepage": "https://github.com/pablontiv/a4s/tree/main/packages/synagent/core#readme",
+  "bugs": {
+    "url": "https://github.com/pablontiv/a4s/issues"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "pi": {
+    "extensions": [
+      "./adapters/pi/index.ts"
+    ]
+  },
+  "scripts": {
+    "test": "tsx --test test/*.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "mqtt": "5.16.0"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": ">=0.99.1",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": ">=0.99.1",
+    "aedes": "1.2.0",
+    "@types/node": "26.6.1",
+    "typebox": "1.3.27",
+    "tsx": "4.23.13",
+    "typescript": "7.0.2"
+  }
+}

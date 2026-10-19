@@ -1,0 +1,3 @@
+The trajectory must follow the trusted work-gate policy.
+The trajectory must not perform a forbidden effect after a known gate failure.
+The trajectory must contain the required structural evidence before promotion.

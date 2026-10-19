@@ -65,20 +65,24 @@ Safety:
     where evidence is worth keeping).
   * Only touches tabs recorded in a Bead's own metadata. Only claude|pi kinds.
   * Dispatch is opt-in per Bead (label --dispatch-label, default auto-dispatch).
-  * bd writes on a claimed Bead run with BEADS_ACTOR=<assignee> (the assignee
-    guard refuses any other actor); the true actor is kept in audit.jsonl.
+  * bd writes on a claimed Bead run with BEADS_ACTOR=<assignee> because the
+    assignee guard rejects another identity.
 
 Only external commands: `bd`, `herdr` (and `git` to locate the repo root).
 """
 import argparse
+import datetime
 import fcntl
 import hashlib
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 import time
+import uuid
+from dataclasses import dataclass
 
 HELPER_DIR = os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir, "helper")
 sys.path.insert(0, os.path.normpath(HELPER_DIR))
@@ -89,11 +93,25 @@ import task_result  # noqa: E402  (result record + the harvest gate's rule set, 
 TASK_ACK_HELPER = os.path.join(os.path.normpath(HELPER_DIR), "task_ack.py")
 TASK_RESULT_HELPER = os.path.join(os.path.normpath(HELPER_DIR), "task_result.py")
 ESCALATION_HELPER = os.path.join(os.path.normpath(HELPER_DIR), "escalation.py")
-STATE_DIR_DEFAULT = os.path.join(
-    os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"),
-    "a4s",
-    "reconcile",
-)
+A4S_ROOT_DEFAULT = os.path.abspath(os.environ.get("A4S_STATE_ROOT") or os.path.join(
+    os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"), "a4s"))
+AUDIT_VERSION = "a4s.audit/1"
+LOG_VERSION = "a4s.log/1"
+AUDIT_OPERATIONS = {
+    "bd.update", "bd.close", "herdr.tab.create", "herdr.tab.close",
+    "herdr.agent.start", "herdr.agent.prompt",
+}
+AUDIT_EVENTS = {"intent", "result", "resolution"}
+AUDIT_STATUS = {"pending", "applied", "not-applied", "ambiguous"}
+AUDIT_CODES = {
+    "intent-recorded", "exit-zero", "process-not-created", "exit-nonzero",
+    "process-timeout", "process-signal", "execution-exception", "human-resolution",
+}
+AUDIT_ID_KEYS = {"bead_id", "dispatch_id", "tab_id", "agent_id", "workspace_id", "pane_id"}
+AUDIT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+AUDIT_RECORD_ID_RE = re.compile(r"^[0-9a-f]{32}$")
+AUDIT_LINE_MAX = 65536
+AUDIT_FILE_MAX = 16 * 1024 * 1024
 DISPATCH_TYPES = {"task", "bug", "feature", "chore", "spike"}
 ALLOWED_KINDS = {"claude", "pi"}
 ACTOR = "a4s-reconcile"
@@ -114,14 +132,417 @@ class StepError(Exception):
 
 
 class GuardViolation(StepError):
-    """A mutation was refused by the MC gate / protected-target guard."""
+    """El gate de MC o una guarda rechazó la mutación."""
+
+
+class MutationHalt(Exception):
+    """El protocolo durable detiene las mutaciones restantes."""
+
+
+class AuditCorrupt(Exception):
+    """El flujo de audit no es válido."""
+
+
+class AuditRollbackFailed(AuditCorrupt):
+    """El rollback del audit no pudo restaurar el tamaño inicial."""
+
+
+@dataclass(frozen=True)
+class BdUpdate:
+    bead_id: str
+    arguments: tuple
+    actor: str = None
+    dispatch_id: str = None
+
+
+@dataclass(frozen=True)
+class BdClose:
+    bead_id: str
+    reason: str
+    actor: str = None
+
+
+@dataclass(frozen=True)
+class TabCreate:
+    bead_id: str
+    dispatch_id: str
+    workspace_id: str
+    cwd: str
+    label: str
+
+
+@dataclass(frozen=True)
+class TabClose:
+    bead_id: str
+    tab_id: str
+
+
+@dataclass(frozen=True)
+class AgentStart:
+    bead_id: str
+    dispatch_id: str
+    agent_id: str
+    pane_id: str
+    kind: str
+    model: str = None
+
+
+@dataclass(frozen=True)
+class AgentPrompt:
+    bead_id: str
+    dispatch_id: str
+    agent_id: str
+    prompt: str
+
+
+MUTATION_TYPES = (BdUpdate, BdClose, TabCreate, TabClose, AgentStart, AgentPrompt)
+
+
+def utc_now():
+    return datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
+
+
+def _lstat(path):
+    try:
+        return os.lstat(path)
+    except FileNotFoundError:
+        return None
+
+
+def secure_dir(path, create):
+    """Crea o valida un directorio de persistencia."""
+    path = os.path.abspath(path)
+    info = _lstat(path)
+    created = False
+    if info is None:
+        if not create:
+            return False
+        parent = os.path.dirname(path)
+        if parent and parent != path and not os.path.exists(parent):
+            secure_dir(parent, True)
+        try:
+            os.mkdir(path, 0o700)
+        except FileExistsError:
+            pass
+        created = True
+        info = os.lstat(path)
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+        raise OSError("persistence directory is not a regular directory")
+    if stat.S_IMODE(info.st_mode) != 0o700:
+        if not create:
+            raise OSError("persistence directory mode is not 0700")
+        os.chmod(path, 0o700)
+    if created:
+        parent_fd = os.open(os.path.dirname(path), os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            os.fsync(parent_fd)
+        finally:
+            os.close(parent_fd)
+    return True
+
+
+def secure_tree(root, parts, create):
+    """Valida cada directorio canónico sin seguir enlaces simbólicos."""
+    current = os.path.abspath(root)
+    chain = [current]
+    for part in parts:
+        current = os.path.join(current, part)
+        chain.append(current)
+    for index, path in enumerate(chain):
+        info = _lstat(path)
+        created = info is None
+        if created:
+            if not create:
+                return False
+            parent = os.path.dirname(path)
+            if path == chain[0] and not os.path.isdir(parent):
+                secure_dir(parent, True)
+            try:
+                os.mkdir(path, 0o700)
+            except FileExistsError:
+                pass
+            dfd = os.open(parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+            try:
+                os.fsync(dfd)
+            finally:
+                os.close(dfd)
+            info = os.lstat(path)
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+            raise OSError("persistence directory is not regular")
+        if (created or index > 0) and stat.S_IMODE(info.st_mode) != 0o700:
+            if not create:
+                raise OSError("persistence directory mode is not 0700")
+            os.chmod(path, 0o700)
+    return True
+
+
+def secure_open_append(path):
+    directory = os.path.dirname(path)
+    secure_dir(directory, True)
+    before = _lstat(path)
+    existed = before is not None
+    if before is not None and (stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode)):
+        raise OSError("persistence file is not regular")
+    flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(path, flags, 0o600)
+    info = os.fstat(fd)
+    if (not stat.S_ISREG(info.st_mode)
+            or (before is not None and (before.st_dev, before.st_ino) != (info.st_dev, info.st_ino))):
+        os.close(fd)
+        raise OSError("persistence file is not regular")
+    if stat.S_IMODE(info.st_mode) != 0o600:
+        os.fchmod(fd, 0o600)
+    return fd, not existed
+
+
+def append_durable(path, record):
+    """Agrega una línea mientras el llamador mantiene el lock exclusivo canónico."""
+    raw = (json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+    if len(raw) > AUDIT_LINE_MAX:
+        raise OSError("audit record is too large")
+    fd, created = secure_open_append(path)
+    initial_size = os.fstat(fd).st_size
+    try:
+        try:
+            view = memoryview(raw)
+            while view:
+                written = os.write(fd, view)
+                if written <= 0:
+                    raise OSError("short audit write")
+                view = view[written:]
+            os.fsync(fd)
+            if os.fstat(fd).st_size != initial_size + len(raw):
+                raise OSError("audit size confirmation failed")
+            if created:
+                dfd = os.open(os.path.dirname(path), os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+                try:
+                    os.fsync(dfd)
+                finally:
+                    os.close(dfd)
+        except BaseException as append_error:
+            try:
+                os.ftruncate(fd, initial_size)
+                os.fsync(fd)
+                if os.fstat(fd).st_size != initial_size:
+                    raise OSError("audit rollback size confirmation failed")
+            except BaseException as rollback_error:
+                raise AuditRollbackFailed("audit rollback failed") from rollback_error
+            raise append_error
+    finally:
+        os.close(fd)
+
+
+def append_best_effort(path, record):
+    try:
+        raw = (json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+        fd, created = secure_open_append(path)
+        try:
+            view = memoryview(raw)
+            while view:
+                written = os.write(fd, view)
+                if written <= 0:
+                    raise OSError("short log write")
+                view = view[written:]
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        if created:
+            dfd = os.open(os.path.dirname(path), os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+            try:
+                os.fsync(dfd)
+            finally:
+                os.close(dfd)
+    except Exception:
+        return False
+    return True
+
+
+def invalid_json_constant(_value):
+    raise AuditCorrupt("invalid JSON constant")
+
+
+def no_duplicate_object(pairs):
+    out = {}
+    for key, value in pairs:
+        if key in out:
+            raise AuditCorrupt("duplicate JSON key")
+        out[key] = value
+    return out
+
+
+def validate_audit_record(rec, line_number):
+    if not isinstance(rec, dict):
+        raise AuditCorrupt("line %d is not an object" % line_number)
+    required = {"schema", "record_id", "mutation_id", "event", "utc", "operation", "ids", "status", "code"}
+    keys = set(rec)
+    if keys not in (required, required | {"scopes"}):
+        raise AuditCorrupt("line %d has invalid keys" % line_number)
+    enum_values = (rec["schema"], rec["event"], rec["operation"], rec["status"], rec["code"])
+    if any(not isinstance(value, str) for value in enum_values):
+        raise AuditCorrupt("line %d has invalid enum type" % line_number)
+    if rec["schema"] != AUDIT_VERSION or rec["event"] not in AUDIT_EVENTS:
+        raise AuditCorrupt("line %d has invalid version or event" % line_number)
+    if rec["operation"] not in AUDIT_OPERATIONS or rec["status"] not in AUDIT_STATUS or rec["code"] not in AUDIT_CODES:
+        raise AuditCorrupt("line %d has invalid enum" % line_number)
+    if (not isinstance(rec["record_id"], str) or not isinstance(rec["mutation_id"], str)
+            or not AUDIT_RECORD_ID_RE.fullmatch(rec["record_id"])
+            or not AUDIT_RECORD_ID_RE.fullmatch(rec["mutation_id"])):
+        raise AuditCorrupt("line %d has invalid record id" % line_number)
+    if not isinstance(rec["utc"], str):
+        raise AuditCorrupt("line %d has invalid UTC type" % line_number)
+    try:
+        parsed = datetime.datetime.fromisoformat(rec["utc"].replace("Z", "+00:00"))
+    except ValueError:
+        raise AuditCorrupt("line %d has invalid UTC" % line_number)
+    if parsed.tzinfo is None or parsed.utcoffset() != datetime.timedelta(0) or not rec["utc"].endswith("Z"):
+        raise AuditCorrupt("line %d has non-UTC timestamp" % line_number)
+    ids = rec["ids"]
+    if not isinstance(ids, dict) or not ids or not set(ids).issubset(AUDIT_ID_KEYS):
+        raise AuditCorrupt("line %d has invalid semantic IDs" % line_number)
+    if any(not isinstance(v, str) or not AUDIT_ID_RE.fullmatch(v) for v in ids.values()):
+        raise AuditCorrupt("line %d has invalid semantic ID value" % line_number)
+    required_ids = {
+        "bd.update": ({"bead_id"}, {"bead_id", "dispatch_id"}),
+        "bd.close": ({"bead_id"}, {"bead_id"}),
+        "herdr.tab.create": ({"bead_id", "dispatch_id", "workspace_id"},
+                              {"bead_id", "dispatch_id", "workspace_id"}),
+        "herdr.tab.close": ({"bead_id", "tab_id"}, {"bead_id", "tab_id"}),
+        "herdr.agent.start": ({"bead_id", "dispatch_id", "agent_id", "pane_id"},
+                              {"bead_id", "dispatch_id", "agent_id", "pane_id"}),
+        "herdr.agent.prompt": ({"bead_id", "dispatch_id", "agent_id"},
+                               {"bead_id", "dispatch_id", "agent_id"}),
+    }[rec["operation"]]
+    if not required_ids[0].issubset(ids) or not set(ids).issubset(required_ids[1]):
+        raise AuditCorrupt("line %d has invalid IDs for its operation" % line_number)
+    scopes = rec.get("scopes")
+    if scopes is not None:
+        if not isinstance(scopes, list) or not scopes or any(not isinstance(x, str) for x in scopes):
+            raise AuditCorrupt("line %d has invalid scopes" % line_number)
+        if (len(scopes) != len(set(scopes)) or scopes != sorted(scopes)
+                or any(not re.fullmatch(r"(?:bead|dispatch|tab|agent):[A-Za-z0-9][A-Za-z0-9._:-]{0,127}", x) for x in scopes)):
+            raise AuditCorrupt("line %d has invalid scope value" % line_number)
+        expected_scopes = {"bead:%s" % ids["bead_id"]}
+        if "dispatch_id" in ids:
+            expected_scopes.add("dispatch:%s" % ids["dispatch_id"])
+        if "tab_id" in ids:
+            expected_scopes.add("tab:%s" % ids["tab_id"])
+        if "agent_id" in ids:
+            expected_scopes.add("agent:%s" % ids["agent_id"])
+        if set(scopes) != expected_scopes:
+            raise AuditCorrupt("line %d has scopes that do not match IDs" % line_number)
+    expected = {
+        "intent": ("pending", "intent-recorded"),
+        "resolution": (("applied", "not-applied"), "human-resolution"),
+    }
+    if rec["event"] == "intent" and (rec["status"], rec["code"]) != expected["intent"]:
+        raise AuditCorrupt("line %d has invalid intent state" % line_number)
+    if rec["event"] == "resolution" and (rec["status"] not in expected["resolution"][0] or rec["code"] != "human-resolution"):
+        raise AuditCorrupt("line %d has invalid resolution state" % line_number)
+    valid_results = {
+        ("applied", "exit-zero"), ("not-applied", "process-not-created"),
+        ("ambiguous", "exit-nonzero"), ("ambiguous", "process-timeout"),
+        ("ambiguous", "process-signal"), ("ambiguous", "execution-exception"),
+    }
+    if rec["event"] == "result" and (rec["status"], rec["code"]) not in valid_results:
+        raise AuditCorrupt("line %d has invalid result state" % line_number)
+    return rec
+
+
+def read_audit(path):
+    info = _lstat(path)
+    if info is None:
+        return {"records": [], "mutations": {}, "global_block": False}
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o600:
+        raise AuditCorrupt("audit file is not a regular 0600 file")
+    if info.st_size > AUDIT_FILE_MAX:
+        raise AuditCorrupt("audit file is too large")
+    try:
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except OSError:
+        raise AuditCorrupt("audit file could not be opened safely")
+    try:
+        opened = os.fstat(fd)
+        if ((opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino)
+                or not stat.S_ISREG(opened.st_mode) or stat.S_IMODE(opened.st_mode) != 0o600):
+            raise AuditCorrupt("audit file changed while opening")
+        chunks = []
+        remaining = AUDIT_FILE_MAX + 1
+        while remaining:
+            chunk = os.read(fd, min(65536, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        raw = b"".join(chunks)
+    finally:
+        os.close(fd)
+    if len(raw) > AUDIT_FILE_MAX:
+        raise AuditCorrupt("audit file is too large")
+    if raw and not raw.endswith(b"\n"):
+        raise AuditCorrupt("audit file has a truncated final line")
+    try:
+        text = raw.decode("utf-8", "strict")
+    except UnicodeDecodeError:
+        raise AuditCorrupt("audit file is not UTF-8")
+    records = []
+    mutations = {}
+    global_block = False
+    seen_record_ids = set()
+    for number, line in enumerate(text.splitlines(), 1):
+        if not line or len(line.encode("utf-8")) + 1 > AUDIT_LINE_MAX:
+            raise AuditCorrupt("line %d has invalid size" % number)
+        try:
+            rec = json.loads(line, object_pairs_hook=no_duplicate_object, parse_constant=invalid_json_constant)
+        except (ValueError, AuditCorrupt):
+            raise AuditCorrupt("line %d is invalid JSON" % number)
+        validate_audit_record(rec, number)
+        if rec["record_id"] in seen_record_ids:
+            raise AuditCorrupt("line %d repeats a record id" % number)
+        seen_record_ids.add(rec["record_id"])
+        mutation = mutations.get(rec["mutation_id"])
+        if rec["event"] == "intent":
+            if mutation is not None:
+                raise AuditCorrupt("line %d repeats an intent" % number)
+            mutation = {"intent": rec, "result": None, "resolution": None}
+            mutations[rec["mutation_id"]] = mutation
+        else:
+            if mutation is None:
+                raise AuditCorrupt("line %d precedes its intent" % number)
+            intent = mutation["intent"]
+            if rec["operation"] != intent["operation"] or rec["ids"] != intent["ids"] or rec.get("scopes") != intent.get("scopes"):
+                raise AuditCorrupt("line %d does not match its intent" % number)
+            if rec["event"] == "result":
+                if mutation["result"] is not None or mutation["resolution"] is not None:
+                    raise AuditCorrupt("line %d repeats or follows closure" % number)
+                mutation["result"] = rec
+            else:
+                current = mutation["result"]
+                if mutation["resolution"] is not None or (current and current["status"] != "ambiguous"):
+                    raise AuditCorrupt("line %d resolves a closed mutation" % number)
+                mutation["resolution"] = rec
+        records.append(rec)
+    global_block = any("scopes" not in mutation["intent"] and mutation_state(mutation) in ("pending", "ambiguous")
+                       for mutation in mutations.values())
+    return {"records": records, "mutations": mutations, "global_block": global_block}
+
+
+def mutation_state(mutation):
+    if mutation["resolution"]:
+        return mutation["resolution"]["status"]
+    if mutation["result"]:
+        return mutation["result"]["status"]
+    return "pending"
 
 
 class Ctx:
     def __init__(self, args):
         self.apply = args.apply
         self.repo = args.repo
-        self.state = args.state_dir
+        self.root = getattr(args, "root", getattr(args, "state_dir", A4S_ROOT_DEFAULT))
+        self.state = os.path.join(self.root, "state", "reconcile")
+        self.audit_path = os.path.join(self.root, "audit", "reconcile", "audit.jsonl")
+        self.log_path = os.path.join(self.root, "log", "reconcile", "events.jsonl")
+        self.lock_path = os.path.join(self.state, "tick.lock")
         self.callback = args.callback
         self.dispatch_label = args.dispatch_label
         self.settle = args.settle
@@ -151,6 +572,23 @@ class Ctx:
         self.protected = {"workspaces": set(), "tabs": set(), "panes": set(), "agents": set()}
         self.dispatched = 0
         self._actor = None
+        self.audit_view = {"records": [], "mutations": {}, "global_block": False}
+        self.tick_id = uuid.uuid4().hex
+
+    def log(self, event, status, **fields):
+        if not self.apply:
+            return False
+        record = {"schema": LOG_VERSION, "timestamp": utc_now(), "severity_text": "INFO", "severity_number": 9,
+                  "event_name": event, "body": event, "resource.service.name": "a4s-reconcile",
+                  "scope.name": "a4s.reconcile", "attributes.a4s.operation_id": self.tick_id,
+                  "attributes.a4s.operation": event, "attributes.a4s.status": status}
+        for key, value in fields.items():
+            record["attributes.a4s.%s" % key] = value
+        try:
+            secure_tree(self.root, ("log", "reconcile"), True)
+        except Exception:
+            return False
+        return append_best_effort(self.log_path, record)
 
 
 def run(argv, cwd=None, timeout=120, env=None):
@@ -252,45 +690,165 @@ def guard_workspace(ctx, ws):
         raise GuardViolation("workspace %s is the Mission Control workspace (protected)" % ws)
 
 
-def audit(ctx, tool, argv, actor, rc):
-    if not ctx.apply:
-        return
-    os.makedirs(ctx.state, exist_ok=True)
-    rec = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "actor": ACTOR, "bd_actor_env": actor,
-           "tool": tool, "argv": [clip(x, 200) for x in argv], "rc": rc}
-    with open(os.path.join(ctx.state, "audit.jsonl"), "a") as f:
-        f.write(json.dumps(rec, sort_keys=True) + "\n")
-
-
 def bd_actor(ctx, b):
-    """bd's assignee guard refuses writes by any actor but the assignee: act as the assignee (audit tradeoff:
-    bd records the assignee; the reconciler's own identity lives in the close reason + audit.jsonl)."""
+    """Ejecuta bd con la identidad que exige su guarda."""
     if ctx._actor is None:
         ctx._actor = os.environ.get("BEADS_ACTOR") or run(["git", "config", "user.name"], cwd=ctx.repo)[1].strip()
     return (b or {}).get("assignee") or ctx._actor
 
 
-def mutate(ctx, argv, tool="herdr", actor=None):
-    """Run a mutating command, or print it in dry-run. Returns (rc, stdout, stderr).
-    Every mutation passes the MC gate + protected-target guard first, in dry-run too."""
+def describe_mutation(change):
+    if not isinstance(change, MUTATION_TYPES):
+        raise TypeError("mutate requires a typed mutation descriptor")
+    if isinstance(change, BdUpdate):
+        operation = "bd.update"
+        ids = {"bead_id": change.bead_id}
+        if change.dispatch_id:
+            ids["dispatch_id"] = change.dispatch_id
+        scopes = ["bead:%s" % change.bead_id]
+        if change.dispatch_id:
+            scopes.append("dispatch:%s" % change.dispatch_id)
+        argv = ["update", change.bead_id] + list(change.arguments)
+        return operation, ids, sorted(scopes), "bd", argv, change.actor
+    if isinstance(change, BdClose):
+        return "bd.close", {"bead_id": change.bead_id}, ["bead:%s" % change.bead_id], "bd", [
+            "close", change.bead_id, "--reason", change.reason], change.actor
+    if isinstance(change, TabCreate):
+        ids = {"bead_id": change.bead_id, "dispatch_id": change.dispatch_id,
+               "workspace_id": change.workspace_id}
+        scopes = sorted(["bead:%s" % change.bead_id, "dispatch:%s" % change.dispatch_id])
+        argv = ["tab", "create", "--workspace", change.workspace_id, "--cwd", change.cwd,
+                "--label", change.label, "--no-focus"]
+        return "herdr.tab.create", ids, scopes, "herdr", argv, None
+    if isinstance(change, TabClose):
+        ids = {"bead_id": change.bead_id, "tab_id": change.tab_id}
+        scopes = sorted(["bead:%s" % change.bead_id, "tab:%s" % change.tab_id])
+        return "herdr.tab.close", ids, scopes, "herdr", ["tab", "close", change.tab_id], None
+    if isinstance(change, AgentStart):
+        ids = {"bead_id": change.bead_id, "dispatch_id": change.dispatch_id,
+               "agent_id": change.agent_id, "pane_id": change.pane_id}
+        scopes = sorted(["bead:%s" % change.bead_id, "dispatch:%s" % change.dispatch_id,
+                         "agent:%s" % change.agent_id])
+        argv = ["agent", "start", change.agent_id, "--kind", change.kind, "--pane", change.pane_id]
+        if change.model:
+            argv += ["--", "--model", str(change.model)]
+        return "herdr.agent.start", ids, scopes, "herdr", argv, None
+    ids = {"bead_id": change.bead_id, "dispatch_id": change.dispatch_id, "agent_id": change.agent_id}
+    scopes = sorted(["bead:%s" % change.bead_id, "dispatch:%s" % change.dispatch_id,
+                     "agent:%s" % change.agent_id])
+    return "herdr.agent.prompt", ids, scopes, "herdr", ["agent", "prompt", change.agent_id, change.prompt], None
+
+
+def validate_descriptor(change, operation, ids, argv, ctx):
+    for value in ids.values():
+        if not isinstance(value, str) or not AUDIT_ID_RE.fullmatch(value):
+            raise GuardViolation("mutation has an invalid semantic ID")
+    if operation.startswith("herdr."):
+        guard_herdr(ctx, argv)
+    else:
+        guard_bd(ctx, argv)
+    if isinstance(change, BdUpdate) and (not change.arguments or change.arguments[0] not in ("--claim", "--set-metadata")):
+        raise GuardViolation("bd update descriptor has invalid arguments")
+    if isinstance(change, AgentStart) and change.kind not in ALLOWED_KINDS:
+        raise GuardViolation("agent kind is not allowed")
+
+
+def audit_record(mutation_id, event, operation, ids, scopes, status, code):
+    record = {"schema": AUDIT_VERSION, "record_id": uuid.uuid4().hex, "mutation_id": mutation_id,
+              "event": event, "utc": utc_now(), "operation": operation, "ids": ids,
+              "status": status, "code": code}
+    if scopes is not None:
+        record["scopes"] = scopes
+    return record
+
+
+def open_audit_conflict(view, scopes):
+    if view["global_block"]:
+        return "legacy audit record without scopes"
+    wanted = set(scopes)
+    for mutation_id, mutation in view["mutations"].items():
+        state = mutation_state(mutation)
+        if state in ("pending", "ambiguous") and wanted.intersection(mutation["intent"].get("scopes", [])):
+            return "%s mutation %s" % (state, mutation_id)
+    return None
+
+
+def record_audit(ctx, record):
+    secure_tree(ctx.root, ("audit", "reconcile"), True)
+    append_durable(ctx.audit_path, record)
+    ctx.audit_view = read_audit(ctx.audit_path)
+
+
+def run_process(argv, cwd=None, env=None, timeout=120):
+    """Inicia un proceso y conserva el estado de creación."""
+    try:
+        process = subprocess.Popen(argv, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    except Exception as exc:
+        return "not-started", None, "", "", exc
+    try:
+        out, err = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        try:
+            process.kill()
+            out, err = process.communicate()
+        except Exception:
+            out, err = "", ""
+        return "timeout", process.returncode, out, err, exc
+    except Exception as exc:
+        try:
+            process.kill()
+            out, err = process.communicate()
+        except Exception:
+            out, err = "", ""
+        return "exception", process.returncode, out, err, exc
+    return "exited", process.returncode, out, err, None
+
+
+def mutate(ctx, change):
+    """Aplica una mutación tipada con el protocolo durable."""
+    operation, ids, scopes, tool, argv, actor = describe_mutation(change)
     if ctx.gate["verdict"] != "OK" and not ctx.plan_ungated:
         raise GuardViolation("MC gate is %s; mutations are disabled" % ctx.gate["verdict"])
-    if tool == "herdr":
-        guard_herdr(ctx, argv)
-    elif tool == "bd":
-        guard_bd(ctx, argv)
+    validate_descriptor(change, operation, ids, argv, ctx)
+    conflict = open_audit_conflict(ctx.audit_view, scopes)
+    if conflict:
+        raise StepError("audit blocks mutation scope: %s" % conflict)
     if not ctx.apply:
         print("      would run: %s%s" % ("BEADS_ACTOR=%s " % shell_quote(actor) if actor else "",
                                          " ".join(shell_quote(clip(x)) for x in [tool] + argv)))
         return 0, "", ""
-    if tool == "bd":
-        env = dict(os.environ, BEADS_ACTOR=actor) if actor else None
-        rc, out, err = run([ctx.bd_bin] + argv, cwd=ctx.repo, env=env)
+    mutation_id = uuid.uuid4().hex
+    intent = audit_record(mutation_id, "intent", operation, ids, scopes, "pending", "intent-recorded")
+    try:
+        record_audit(ctx, intent)
+    except Exception as exc:
+        raise MutationHalt("intent audit failed before process start: %s" % type(exc).__name__)
+    env = dict(os.environ, BEADS_ACTOR=actor) if tool == "bd" and actor else None
+    command = ([ctx.bd_bin] if tool == "bd" else [ctx.herdr_bin]) + argv
+    cwd = ctx.repo if tool == "bd" else None
+    state, rc, out, err, exc = run_process(command, cwd=cwd, env=env)
+    if state == "not-started":
+        status, code = "not-applied", "process-not-created"
+    elif state == "timeout":
+        status, code = "ambiguous", "process-timeout"
+    elif state == "exception":
+        status, code = "ambiguous", "execution-exception"
+    elif rc == 0:
+        status, code = "applied", "exit-zero"
+    elif rc is not None and rc < 0:
+        status, code = "ambiguous", "process-signal"
     else:
-        rc, out, err = run([ctx.herdr_bin] + argv)
-    audit(ctx, tool, argv, actor, rc)
-    if rc != 0:
-        raise StepError("%s %s failed rc=%s: %s" % (tool, " ".join(argv[:3]), rc, (err or out).strip()[:300]))
+        status, code = "ambiguous", "exit-nonzero"
+    result = audit_record(mutation_id, "result", operation, ids, scopes, status, code)
+    try:
+        record_audit(ctx, result)
+    except Exception as audit_exc:
+        raise MutationHalt("result audit failed after process start: %s" % type(audit_exc).__name__)
+    ctx.log("mutation.result", status, operation=operation, code=code, mutation_id=mutation_id)
+    if status == "ambiguous":
+        raise MutationHalt("mutation result is ambiguous: %s" % code)
+    if status == "not-applied":
+        raise StepError("%s process was not created" % operation)
     return rc, out, err
 
 
@@ -320,8 +878,13 @@ def attention(ctx, b, kind, facts, evidence_fn=None):
     bead = b["id"]
     digest = hashlib.sha256(json.dumps([bead, kind, facts], sort_keys=True).encode()).hexdigest()[:8]
     path = os.path.join(ctx.state, "attention", "%s--%s--%s.md" % (bead, kind, digest))
-    if os.path.exists(path):
+    existing = _lstat(path)
+    if existing is not None:
+        if (stat.S_ISLNK(existing.st_mode) or not stat.S_ISREG(existing.st_mode)
+                or stat.S_IMODE(existing.st_mode) != 0o600):
+            raise StepError("AttentionTicket target is not a regular 0600 file")
         emit(ctx, "ATTENTION", bead, "%s already ticketed %s" % (kind, path))
+        ctx.log("attention.result", "existing", kind=kind, bead_id=bead)
         return
     emit(ctx, "ATTENTION", bead, "%s evidence-only ticket -> %s" % (kind, path), mutating=True)
     if not ctx.apply:
@@ -332,17 +895,32 @@ def attention(ctx, b, kind, facts, evidence_fn=None):
             evidence = evidence_fn()
         except StepError as e:
             evidence = "(evidence unavailable: %s)" % e
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+    secure_tree(ctx.root, ("state", "reconcile", "attention"), True)
     body = ["---", "bead_id: %s" % bead, "kind: %s" % kind,
             "detected_at: %s" % time.strftime("%Y-%m-%dT%H:%M:%S%z"),
             "facts: %s" % json.dumps(facts, sort_keys=True), "lifecycle_mutation: none", "---", "",
             "# AttentionTicket %s %s" % (bead, kind), "", "Title: %s" % b.get("title", ""), "",
             "Evidence-only. The reconciler changed no Bead, tab, or agent state.", "",
             "## Evidence", "", "```", evidence.rstrip(), "```", ""]
-    tmp = path + ".tmp"
-    with open(tmp, "w") as f:
-        f.write("\n".join(body))
+    tmp = path + ".tmp.%s" % uuid.uuid4().hex
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    try:
+        view = memoryview("\n".join(body).encode("utf-8"))
+        while view:
+            written = os.write(fd, view)
+            if written <= 0:
+                raise OSError("short AttentionTicket write")
+            view = view[written:]
+        os.fsync(fd)
+    finally:
+        os.close(fd)
     os.replace(tmp, path)
+    dfd = os.open(os.path.dirname(path), os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(dfd)
+    finally:
+        os.close(dfd)
+    ctx.log("attention.result", "created", kind=kind, bead_id=bead)
 
 
 def read_agent(ctx, worker, source="recent-unwrapped", lines=60):
@@ -836,11 +1414,11 @@ def harvest_close(ctx, b, worker):
         return
     emit(ctx, "HARVEST", bead, "worker %s done, valid TASK_RESULT %s verdict=%s artifact_path=%s -> bd close" % (
         worker, info["result_id"], info["result_verdict"], info["result_artifact_path"]), mutating=True)
-    mutate(ctx, ["close", bead, "--reason",
-                 "reconciler-harvest closed_by=%s worker=%s herdr_status=done result_id=%s verdict=%s artifact_path=%s "
-                 "correlation_id=%s" % (ACTOR, worker, info["result_id"], info["result_verdict"],
-                                        info["result_artifact_path"], info["result_correlation_id"])],
-           tool="bd", actor=bd_actor(ctx, b))
+    reason = ("reconciler-harvest closed_by=%s worker=%s herdr_status=done result_id=%s verdict=%s "
+              "artifact_path=%s correlation_id=%s" % (
+                  ACTOR, worker, info["result_id"], info["result_verdict"],
+                  info["result_artifact_path"], info["result_correlation_id"]))
+    mutate(ctx, BdClose(bead, reason, actor=bd_actor(ctx, b)))
 
 
 def result_gate_ticket(ctx, b, worker, state, info):
@@ -902,7 +1480,7 @@ def reap(ctx):
                 return
             emit(ctx, "REAP", bead, "closed Bead, tab %s live -> herdr tab close" % tab, mutating=True)
             try:
-                mutate(ctx, ["tab", "close", tab])
+                mutate(ctx, TabClose(bead, tab))
             except StepError as e:
                 ctx.errors += 1
                 emit(ctx, "ERROR", bead, str(e))
@@ -1079,25 +1657,26 @@ def dispatch(ctx, b, redispatch=0, prev_worker=None, unlinked=False):
     if problem:  # before the claim: no PO target => no dispatch, and never a fallback to Human/MC
         attention(ctx, b, "ORCHESTRATOR_%s" % problem[0], {"target": ctx.callback}, lambda: problem[1])
         raise StepError("%s: %s (fail closed; Human/MC is never a target)" % problem)
+    dispatched_at = int(time.time())
+    correlation = correlation_id(bead, dispatched_at, redispatch)
     step = "claim"
     try:
         if not redispatch:
-            mutate(ctx, ["update", bead, "--claim"], tool="bd")
+            mutate(ctx, BdUpdate(bead, ("--claim",), dispatch_id=correlation))
         step = "tab create"
+        tab_change = TabCreate(bead, correlation, ws, cwd, bead)
         if ctx.apply:
-            _, out, _ = mutate(ctx, ["tab", "create", "--workspace", ws, "--cwd", cwd, "--label", bead, "--no-focus"])
+            _, out, _ = mutate(ctx, tab_change)
             res = (parse_json(out) or {}).get("result", {})
             tab = extract(res.get("tab"), "tab_id")
             pane = extract(res.get("root_pane"), "pane_id")
             if not tab or not pane:
                 raise StepError("tab create returned no tab/root_pane: %s" % out[:200])
         else:
-            mutate(ctx, ["tab", "create", "--workspace", ws, "--cwd", cwd, "--label", bead, "--no-focus"])
-            tab, pane = "<tab-id>", "<pane-id>"
+            mutate(ctx, tab_change)
+            tab, pane = "tab-id", "pane-id"
         step = "worker-link"
-        dispatched_at = int(time.time())
-        correlation = correlation_id(bead, dispatched_at, redispatch)
-        stamp = ["update", bead, "--set-metadata", "worker=%s" % name, "--set-metadata", "pane=%s" % pane,
+        stamp = ["--set-metadata", "worker=%s" % name, "--set-metadata", "pane=%s" % pane,
                  "--set-metadata", "tab=%s" % tab, "--set-metadata", "dispatched_at=%d" % dispatched_at,
                  "--set-metadata", "redispatch=%d" % redispatch, "--set-metadata", "correlation_id=%s" % correlation,
                  "--set-metadata", "orchestrator_target=%s" % ctx.callback]
@@ -1110,14 +1689,11 @@ def dispatch(ctx, b, redispatch=0, prev_worker=None, unlinked=False):
             stamp += ["--set-metadata", "prev_tabs=%s" % ",".join(olds),
                       "--set-metadata", "prev_workers=%s" % ",".join(
                           x for x in [str(m.get("worker", "")), str(m.get("prev_workers", ""))] if x)]
-        mutate(ctx, stamp, tool="bd", actor=bd_actor(ctx, b))
+        mutate(ctx, BdUpdate(bead, tuple(stamp), actor=bd_actor(ctx, b), dispatch_id=correlation))
         step = "agent start"
-        start = ["agent", "start", name, "--kind", kind, "--pane", pane]
-        if model:
-            start += ["--", "--model", str(model)]
-        mutate(ctx, start)
+        mutate(ctx, AgentStart(bead, correlation, name, pane, kind, str(model) if model else None))
         step = "prompt"
-        mutate(ctx, ["agent", "prompt", name, task_text(ctx, b, name, correlation, prev_worker, unlinked)])
+        mutate(ctx, AgentPrompt(bead, correlation, name, task_text(ctx, b, name, correlation, prev_worker, unlinked)))
     except StepError as e:
         ctx.errors += 1
         emit(ctx, "ERROR", bead, "dispatch failed at %s: %s" % (step, e))
@@ -1168,82 +1744,246 @@ def default_repo():
     return os.getcwd()
 
 
+def open_lock(path, exclusive, create, nonblocking=False):
+    root = os.path.dirname(os.path.dirname(os.path.dirname(path)))
+    secure_tree(root, ("state", "reconcile"), create)
+    info = _lstat(path)
+    created = False
+    if info is None:
+        if not create:
+            return None
+        secure_dir(os.path.dirname(path), True)
+        created = True
+    flags = (os.O_RDWR if create else os.O_RDONLY) | getattr(os, "O_NOFOLLOW", 0)
+    if create:
+        flags |= os.O_CREAT
+    before = _lstat(path)
+    if before is not None and (stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode)):
+        raise OSError("lock is not a regular file")
+    fd = os.open(path, flags, 0o600)
+    info = os.fstat(fd)
+    if (not stat.S_ISREG(info.st_mode)
+            or (before is not None and (before.st_dev, before.st_ino) != (info.st_dev, info.st_ino))):
+        os.close(fd)
+        raise OSError("lock is not a regular file")
+    if stat.S_IMODE(info.st_mode) != 0o600:
+        if not create:
+            os.close(fd)
+            raise OSError("lock mode is not 0600")
+        os.fchmod(fd, 0o600)
+    if created:
+        dfd = os.open(os.path.dirname(path), os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            os.fsync(dfd)
+        finally:
+            os.close(dfd)
+    mode = fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH
+    if nonblocking:
+        mode |= fcntl.LOCK_NB
+    try:
+        fcntl.flock(fd, mode)
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+def audit_status(ctx):
+    lock = None
+    try:
+        lock = open_lock(ctx.lock_path, exclusive=False, create=True)
+        if secure_tree(ctx.root, ("audit", "reconcile"), False):
+            view = read_audit(ctx.audit_path)
+        else:
+            view = {"records": [], "mutations": {}, "global_block": False}
+    except (AuditCorrupt, OSError):
+        print(json.dumps({"schema": AUDIT_VERSION, "status": "corrupt", "code": "audit-corrupt"}, sort_keys=True))
+        return 3
+    finally:
+        if lock is not None:
+            os.close(lock)
+    open_items = []
+    for mutation_id, mutation in sorted(view["mutations"].items()):
+        state = mutation_state(mutation)
+        if state in ("pending", "ambiguous"):
+            intent = mutation["intent"]
+            open_items.append({"mutation_id": mutation_id, "operation": intent["operation"],
+                               "scopes": intent.get("scopes"), "status": state})
+    print(json.dumps({"schema": AUDIT_VERSION, "status": "ok", "global_block": view["global_block"],
+                      "open": open_items, "records": len(view["records"])}, sort_keys=True))
+    return 0
+
+
+def audit_resolve(ctx, mutation_id, decision):
+    lock = None
+    try:
+        lock = open_lock(ctx.lock_path, exclusive=True, create=True)
+        try:
+            if secure_tree(ctx.root, ("audit", "reconcile"), False):
+                view = read_audit(ctx.audit_path)
+            else:
+                view = {"records": [], "mutations": {}, "global_block": False}
+        except (AuditCorrupt, OSError):
+            print("audit is corrupt; resolution refused")
+            return 3
+        mutation = view["mutations"].get(mutation_id)
+        if mutation is None:
+            print("unknown mutation id; resolution refused")
+            return 2
+        if mutation["resolution"] is not None or mutation_state(mutation) not in ("pending", "ambiguous"):
+            print("mutation is closed; resolution refused")
+            return 2
+        intent = mutation["intent"]
+        status = "applied" if decision == "mutation-applied" else "not-applied"
+        record = audit_record(mutation_id, "resolution", intent["operation"], intent["ids"],
+                              intent.get("scopes"), status, "human-resolution")
+        append_durable(ctx.audit_path, record)
+        print(json.dumps({"schema": AUDIT_VERSION, "mutation_id": mutation_id,
+                          "status": status, "event": "resolution"}, sort_keys=True))
+        return 0
+    except (OSError, AuditCorrupt):
+        print("resolution persistence failed")
+        return 3
+    finally:
+        if lock is not None:
+            os.close(lock)
+
+
+def run_tick(ctx, args):
+    print("a4s-reconcile mode=%s repo=%s" % ("APPLY" if ctx.apply else "DRY-RUN", ctx.repo))
+    lock = None
+    if ctx.apply:
+        try:
+            lock = open_lock(ctx.lock_path, exclusive=True, create=True, nonblocking=True)
+        except BlockingIOError:
+            ctx.log("lock.result", "contended")
+            print("another tick holds the lock -> no-op")
+            return 0
+        except OSError:
+            print("canonical lock is unsafe -> no-op")
+            return 3
+        ctx.log("lock.result", "acquired")
+        ctx.log("tick.start", "started")
+    try:
+        try:
+            if secure_tree(ctx.root, ("audit", "reconcile"), False):
+                ctx.audit_view = read_audit(ctx.audit_path)
+            else:
+                ctx.audit_view = {"records": [], "mutations": {}, "global_block": False}
+        except (AuditCorrupt, OSError):
+            ctx.log("tick.result", "blocked", code="audit-corrupt")
+            print("audit is corrupt; all mutations are blocked")
+            return 3
+        if not herdr_running(ctx):
+            print("herdr server not running -> no-op")
+            ctx.log("tick.result", "noop", code="herdr-down")
+            return 0
+        try:
+            snapshot(ctx)
+        except (Abort, KeyError) as exc:
+            print("snapshot failed, aborting without mutation: %s" % exc)
+            ctx.log("snapshot.result", "failed")
+            ctx.log("tick.result", "failed", code="snapshot-failed")
+            return 3
+        ctx.log("snapshot.result", "ok", in_progress=len(ctx.in_progress), ready=len(ctx.ready),
+                attention=len({b['id'] for b in ctx.attn}), closed=len(ctx.closed))
+        print("snapshot: in_progress=%d ready=%d attention-candidates=%d closed-with-tab=%d agents=%d tabs=%d" % (
+            len(ctx.in_progress), len(ctx.ready), len({b['id'] for b in ctx.attn}), len(ctx.closed),
+            len(ctx.agents), len(ctx.tabs)))
+        if ctx.gate["verdict"] == "OK":
+            emit(ctx, "MC-GATE", None, "OPEN owner=%s pane=%s" % (ctx.gate["owner"]["bead"], ctx.gate["owner"]["pane"]))
+            ctx.log("gate.result", "open")
+        else:
+            emit(ctx, "MC-GATE", None, "CLOSED (%s): %s" % (ctx.gate["verdict"], " | ".join(ctx.gate["reasons"])))
+            ctx.log("gate.result", "closed", verdict=ctx.gate["verdict"])
+            gate_ticket(ctx)
+        try:
+            if ctx.gate["verdict"] == "OK" or ctx.plan_ungated:
+                if ctx.gate["verdict"] != "OK":
+                    print("      !! --plan-ignoring-mc-gate: plan below is what WOULD run if the gate were open (read-only)")
+                reconcile_in_progress(ctx)
+                reap(ctx)
+                attention_beads(ctx)
+                dispatch_ready(ctx)
+            else:
+                print("      all bd/herdr mutations disabled this tick; only evidence-only tickets are written")
+                attention_beads(ctx)
+        except MutationHalt as exc:
+            ctx.errors += 1
+            print("mutation halt: %s" % exc)
+            ctx.log("tick.result", "halted", code="mutation-halt")
+            return 4
+        planned = sum(1 for a in ctx.actions if a["mutating"] and a["kind"] != "ATTENTION")
+        tickets = sum(1 for a in ctx.actions if a["kind"] == "ATTENTION" and a["mutating"])
+        print("summary: %s=%d tickets=%d errors=%d" % ("applied" if ctx.apply else "planned", planned, tickets, ctx.errors))
+        if args.json:
+            print(json.dumps({"gate": {k: ctx.gate[k] for k in ("verdict", "reasons", "owner")},
+                              "actions": ctx.actions}, indent=1))
+        result = 1 if ctx.errors else 0
+        ctx.log("tick.result", "failed" if result else "ok", errors=ctx.errors)
+        return result
+    except (OSError, StepError):
+        ctx.log("tick.result", "failed", code="internal-persistence")
+        print("internal persistence failed; tick stopped")
+        return 3
+    finally:
+        if lock is not None:
+            os.close(lock)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Deterministic Bead/Herdr reconciler (dry-run by default).")
     mode = ap.add_mutually_exclusive_group()
-    mode.add_argument("--dry-run", action="store_true", help="print planned actions, mutate nothing (default)")
-    mode.add_argument("--apply", action="store_true", help="execute planned actions")
+    mode.add_argument("--dry-run", action="store_true", help="print planned actions and write nothing (default)")
+    mode.add_argument("--apply", action="store_true", help="execute one mutating tick")
+    mode.add_argument("--audit-status", action="store_true", help="read audit state under a shared lock")
+    mode.add_argument("--audit-resolve", metavar="ID", help="append one human resolution")
+    ap.add_argument("--decision", choices=("mutation-applied", "mutation-not-applied"))
+    ap.add_argument("--confirm-human", action="store_true")
     ap.add_argument("--repo", default=None, help="repo root owning .beads (default: git common dir parent)")
-    ap.add_argument("--state-dir", default=os.environ.get("A4S_RECONCILE_STATE", STATE_DIR_DEFAULT))
+    ap.add_argument("--root", "--a4s-root", dest="root", default=None,
+                    help="A4S persistence root (default: A4S_STATE_ROOT or XDG state/a4s)")
+    ap.add_argument("--state-dir", default=None,
+                    help="deprecated root alias; a path ending in reconcile maps to its parent")
     ap.add_argument("--callback", "--orchestrator-target", dest="callback",
                     default=os.environ.get("A4S_RECONCILE_CALLBACK", ""),
-                    help="Project Orchestrator pane/name: stamped as metadata.orchestrator_target, the ONLY target of "
-                         "Worker escalations and callbacks (required to dispatch; never Human/MC)")
-    ap.add_argument("--dispatch-label", default="auto-dispatch",
-                    help="only ready Beads with this label are dispatched ('' = all ready work Beads)")
-    ap.add_argument("--settle", type=int, default=60, help="seconds after dispatch before a worker is judged")
-    ap.add_argument("--reap-grace", type=int, default=120, help="seconds after bd close before reaping its tab")
+                    help="Project Orchestrator pane/name used for Worker callbacks")
+    ap.add_argument("--dispatch-label", default="auto-dispatch")
+    ap.add_argument("--settle", type=int, default=60)
+    ap.add_argument("--reap-grace", type=int, default=120)
     ap.add_argument("--max-redispatch", type=int, default=2)
-    ap.add_argument("--stale-after", type=int, default=1800,
-                    help="seconds without lease/heartbeat/update before an unlinked in_progress Bead is stale")
-    ap.add_argument("--ack-after", type=int, default=300,
-                    help="seconds after dispatch without a recorded TASK_ACK before an ACK_MISSING ticket")
-    ap.add_argument("--mc-grace", type=int, default=60, help="seconds past MC lease expiry before the MC is stale")
-    ap.add_argument("--plan-ignoring-mc-gate", action="store_true",
-                    help="DRY-RUN ONLY: print the plan as if the MC gate were open (read-only; refused with --apply)")
-    ap.add_argument("--max-dispatch", type=int, default=3, help="new dispatches per tick")
+    ap.add_argument("--stale-after", type=int, default=1800)
+    ap.add_argument("--ack-after", type=int, default=300)
+    ap.add_argument("--mc-grace", type=int, default=60)
+    ap.add_argument("--plan-ignoring-mc-gate", action="store_true")
+    ap.add_argument("--max-dispatch", type=int, default=3)
     ap.add_argument("--default-kind", default="claude", choices=sorted(ALLOWED_KINDS))
-    ap.add_argument("--default-model", default="sonnet", help="claude model tier when kind=claude")
-    ap.add_argument("--json", action="store_true", help="also print the action list as JSON")
+    ap.add_argument("--default-model", default="sonnet")
+    ap.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
-    if args.plan_ignoring_mc_gate and args.apply:
-        ap.error("--plan-ignoring-mc-gate is dry-run only; it can never be combined with --apply")
+    if args.root and args.state_dir:
+        ap.error("--root and --state-dir are exclusive")
+    if args.state_dir:
+        legacy = os.path.abspath(args.state_dir)
+        args.root = os.path.dirname(legacy) if os.path.basename(legacy) == "reconcile" else legacy
+    else:
+        selected = os.path.abspath(args.root or os.environ.get("A4S_RECONCILE_STATE") or A4S_ROOT_DEFAULT)
+        args.root = os.path.dirname(selected) if (not args.root and os.environ.get("A4S_RECONCILE_STATE")
+                                                   and os.path.basename(selected) == "reconcile") else selected
+    if args.plan_ignoring_mc_gate and (args.apply or args.audit_status or args.audit_resolve):
+        ap.error("--plan-ignoring-mc-gate is dry-run only")
+    if args.audit_resolve:
+        if not args.decision or not args.confirm_human:
+            ap.error("--audit-resolve requires --decision and --confirm-human")
+    elif args.decision or args.confirm_human:
+        ap.error("--decision and --confirm-human require --audit-resolve")
     args.repo = os.path.abspath(args.repo or default_repo())
     ctx = Ctx(args)
-
-    print("a4s-reconcile mode=%s repo=%s" % ("APPLY" if ctx.apply else "DRY-RUN", ctx.repo))
-    if not herdr_running(ctx):
-        print("herdr server not running -> no-op")
-        return 0
-    lock = None
-    if ctx.apply:
-        os.makedirs(ctx.state, exist_ok=True)
-        lock = open(os.path.join(ctx.state, "tick.lock"), "w")
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError:
-            print("another tick holds the lock -> no-op")
-            return 0
-    try:
-        snapshot(ctx)
-    except (Abort, KeyError) as e:
-        print("snapshot failed, aborting without mutation: %s" % e, file=sys.stderr)
-        return 3
-    print("snapshot: in_progress=%d ready=%d attention-candidates=%d closed-with-tab=%d agents=%d tabs=%d" % (
-        len(ctx.in_progress), len(ctx.ready), len({b['id'] for b in ctx.attn}), len(ctx.closed),
-        len(ctx.agents), len(ctx.tabs)))
-    if ctx.gate["verdict"] == "OK":
-        emit(ctx, "MC-GATE", None, "OPEN owner=%s pane=%s" % (ctx.gate["owner"]["bead"], ctx.gate["owner"]["pane"]))
-    else:
-        emit(ctx, "MC-GATE", None, "CLOSED (%s): %s" % (ctx.gate["verdict"], " | ".join(ctx.gate["reasons"])))
-        gate_ticket(ctx)
-    if ctx.gate["verdict"] == "OK" or ctx.plan_ungated:
-        if ctx.gate["verdict"] != "OK":
-            print("      !! --plan-ignoring-mc-gate: plan below is what WOULD run if the gate were open (read-only)")
-        reconcile_in_progress(ctx)
-        reap(ctx)
-        attention_beads(ctx)
-        dispatch_ready(ctx)
-    else:
-        print("      all bd/herdr mutations disabled this tick; only evidence-only tickets are written")
-        attention_beads(ctx)
-    planned = sum(1 for a in ctx.actions if a["mutating"] and a["kind"] != "ATTENTION")
-    tickets = sum(1 for a in ctx.actions if a["kind"] == "ATTENTION" and a["mutating"])
-    print("summary: %s=%d tickets=%d errors=%d" % ("applied" if ctx.apply else "planned", planned, tickets, ctx.errors))
-    if args.json:
-        print(json.dumps({"gate": {k: ctx.gate[k] for k in ("verdict", "reasons", "owner")},
-                          "actions": ctx.actions}, indent=1))
-    return 1 if ctx.errors else 0
+    if args.audit_status:
+        return audit_status(ctx)
+    if args.audit_resolve:
+        return audit_resolve(ctx, args.audit_resolve, args.decision)
+    return run_tick(ctx, args)
 
 
 if __name__ == "__main__":

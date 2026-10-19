@@ -977,7 +977,9 @@ class EvaluatorContractTests(unittest.TestCase):
             fake_git_dir = self.root / "fake-git"
             fake_git_dir.mkdir()
             fake_git = fake_git_dir / "git"
-            fake_git.write_text("#!/usr/bin/env python3\nimport sys\nsys.stdout.buffer.write(b'?? src/\\xff.txt\\x00')\n", encoding="utf-8")
+            # Keep the stub independent of python3 being on PATH; the runner
+            # image may only expose `python` after setup-python.
+            fake_git.write_bytes(b"#!/bin/sh\nprintf '?? src/\xff.txt\\0'\n")
             fake_git.chmod(0o755)
             decode_result = runner.run(
                 ("git", "status", "--porcelain=v1", "-z", "--untracked-files=all"),

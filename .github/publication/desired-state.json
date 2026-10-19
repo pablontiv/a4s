@@ -1,0 +1,203 @@
+{
+  "schema": "a4s.github-publication/v1",
+  "api_version": "2026-03-10",
+  "repository": "pablontiv/a4s",
+  "mode": "prepare-only",
+  "target_visibility": "public",
+  "candidate_validation": {
+    "required": [
+      "test/ci-local.sh passes on the exact candidate commit.",
+      "An independent reviewer approves that same commit.",
+      "GitHub Actions billing evidence confirms affected jobs started with zero steps rather than reporting a code failure."
+    ],
+    "temporary_remote_ci_exception": {
+      "reason": "Repository Actions jobs cannot start while the account is blocked by billing or quota.",
+      "approved_substitute": "Exact-SHA local CI plus independent review.",
+      "limits": "A zero-step remote job is not a passing check. The exception authorizes publication validation only and does not weaken the nine checks configured for future main protection."
+    }
+  },
+  "publication_blocked_until": [
+    "Every Git ref selected for publication has passed secret and private-path review.",
+    "Open branches, pull requests, issues, discussions, Wiki pages, Projects, commit metadata, Actions logs and artifacts, and historical artifacts have been reviewed for public disclosure.",
+    "The exact origin/main candidate satisfies candidate_validation, including test/ci-local.sh and independent review.",
+    "The approved history-cleanup plan has completed, GitHub-managed PR references have been purged or explicitly accepted, and all retained refs point only to the rewritten history.",
+    "pablontiv is the only direct collaborator and there are no pending invitations, deploy keys, unapproved write-capable apps, or webhooks.",
+    "The operator has approved the exact SHA-256 digest of this manifest immediately before rollout."
+  ],
+  "requests": [
+    {
+      "phase": "pre-public",
+      "method": "PATCH",
+      "endpoint": "/repos/pablontiv/a4s",
+      "body": {
+        "has_issues": true,
+        "has_projects": false,
+        "has_wiki": false,
+        "has_discussions": false,
+        "has_pull_requests": true,
+        "pull_request_creation_policy": "collaborators_only",
+        "allow_squash_merge": true,
+        "allow_merge_commit": false,
+        "allow_rebase_merge": false,
+        "allow_auto_merge": false,
+        "delete_branch_on_merge": true,
+        "allow_update_branch": true,
+        "use_squash_pr_title_as_default": true,
+        "squash_merge_commit_title": "PR_TITLE",
+        "squash_merge_commit_message": "PR_BODY",
+        "web_commit_signoff_required": true
+      }
+    },
+    {
+      "phase": "pre-public",
+      "method": "PUT",
+      "endpoint": "/repos/pablontiv/a4s/actions/permissions",
+      "body": {
+        "enabled": true,
+        "allowed_actions": "selected",
+        "sha_pinning_required": true
+      }
+    },
+    {
+      "phase": "pre-public",
+      "method": "PUT",
+      "endpoint": "/repos/pablontiv/a4s/actions/permissions/selected-actions",
+      "body": {
+        "github_owned_allowed": true,
+        "verified_allowed": false,
+        "patterns_allowed": []
+      }
+    },
+    {
+      "phase": "pre-public",
+      "method": "PUT",
+      "endpoint": "/repos/pablontiv/a4s/actions/permissions/workflow",
+      "body": {
+        "default_workflow_permissions": "read",
+        "can_approve_pull_request_reviews": false
+      }
+    },
+    {
+      "phase": "pre-public",
+      "method": "PUT",
+      "endpoint": "/repos/pablontiv/a4s/immutable-releases",
+      "body": null
+    },
+    {
+      "phase": "pre-public",
+      "method": "PUT",
+      "endpoint": "/repos/pablontiv/a4s/branches/main/protection",
+      "body": {
+        "required_status_checks": {
+          "strict": true,
+          "checks": [
+            { "context": "test (ubuntu-latest)", "app_id": 15368 },
+            { "context": "test (macos-latest)", "app_id": 15368 },
+            { "context": "test (windows-latest)", "app_id": 15368 },
+            { "context": "test (ubuntu-latest, 3.11)", "app_id": 15368 },
+            { "context": "test (ubuntu-latest, 3.14)", "app_id": 15368 },
+            { "context": "test (macos-latest, 3.11)", "app_id": 15368 },
+            { "context": "test (macos-latest, 3.14)", "app_id": 15368 },
+            { "context": "test (windows-latest, 3.11)", "app_id": 15368 },
+            { "context": "test (windows-latest, 3.14)", "app_id": 15368 }
+          ]
+        },
+        "enforce_admins": true,
+        "required_pull_request_reviews": {
+          "dismiss_stale_reviews": true,
+          "require_code_owner_reviews": false,
+          "required_approving_review_count": 0,
+          "require_last_push_approval": false
+        },
+        "restrictions": null,
+        "required_linear_history": true,
+        "allow_force_pushes": false,
+        "allow_deletions": false,
+        "block_creations": false,
+        "required_conversation_resolution": true,
+        "lock_branch": false,
+        "allow_fork_syncing": true
+      }
+    },
+    {
+      "phase": "pre-public",
+      "method": "POST",
+      "endpoint": "/repos/pablontiv/a4s/branches/main/protection/required_signatures",
+      "body": null
+    },
+    {
+      "phase": "pre-public",
+      "method": "PUT",
+      "endpoint": "/repos/pablontiv/a4s/vulnerability-alerts",
+      "body": null
+    },
+    {
+      "phase": "pre-public",
+      "method": "PUT",
+      "endpoint": "/repos/pablontiv/a4s/automated-security-fixes",
+      "body": null
+    },
+    {
+      "phase": "publish",
+      "method": "PATCH",
+      "endpoint": "/repos/pablontiv/a4s",
+      "body": {
+        "visibility": "public"
+      }
+    },
+    {
+      "phase": "post-public",
+      "method": "PATCH",
+      "endpoint": "/repos/pablontiv/a4s",
+      "body": {
+        "security_and_analysis": {
+          "secret_scanning": { "status": "enabled" },
+          "secret_scanning_push_protection": { "status": "enabled" },
+          "secret_scanning_non_provider_patterns": { "status": "enabled" },
+          "secret_scanning_validity_checks": { "status": "enabled" }
+        }
+      }
+    },
+    {
+      "phase": "post-public",
+      "method": "PUT",
+      "endpoint": "/repos/pablontiv/a4s/private-vulnerability-reporting",
+      "body": null
+    },
+    {
+      "phase": "post-public",
+      "method": "PATCH",
+      "endpoint": "/repos/pablontiv/a4s/code-scanning/default-setup",
+      "body": {
+        "state": "configured",
+        "query_suite": "extended"
+      }
+    },
+    {
+      "phase": "post-public",
+      "method": "PUT",
+      "endpoint": "/repos/pablontiv/a4s/actions/permissions/fork-pr-contributor-approval",
+      "body": {
+        "approval_policy": "all_external_contributors"
+      }
+    }
+  ],
+  "manual_operations": [
+    {
+      "phase": "post-public",
+      "surface": "Settings > General > Features > Issues",
+      "action": "Select Collaborators only",
+      "verification": "A fresh settings read shows issue creation restricted to collaborators."
+    }
+  ],
+  "verification": [
+    "Visibility is public only after all preconditions and pre-public requests pass.",
+    "Issues and pull requests both show Collaborators only; pablontiv remains the sole collaborator.",
+    "Discussions, Projects, and Wiki are disabled.",
+    "Only squash merge is enabled and web commits require signoff.",
+    "main protection applies to administrators, requires all nine app-bound checks, signed commits, linear history, and resolved conversations, and rejects force pushes and deletion.",
+    "Actions permits only GitHub-owned actions pinned by full SHA and uses a read-only workflow token.",
+    "Secret scanning, push protection, non-provider patterns, validity checks, vulnerability alerts, security updates, private reporting, CodeQL extended setup, and immutable releases report enabled.",
+    "A failed request or mismatched reread stops rollout; there is no automatic retry."
+  ]
+}

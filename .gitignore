@@ -8,11 +8,47 @@
 .workspace/worktrees/
 node_modules/
 dist/
-artifacts/e0/
+artifacts/pi-context-expert-e2e/
+
+# Local environment and package-manager credentials
+.env
+.env.*
+!.env.example
+!.env.*.example
+.npmrc
+.pypirc
+.netrc
+.authinfo
+
+# Private keys and decrypted secret material
+*.agekey
+*.dec.*
+*.decrypted.*
+*.plaintext.*
+id_rsa
+id_rsa.*
+id_ed25519
+id_ed25519.*
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+credentials.json
+credentials.*.json
+service-account*.json
+
+# Operating-system metadata
+.DS_Store
+Thumbs.db
 
 # Python bytecode
 __pycache__/
 *.py[cod]
+
+# synagent bus: LevelDB persistence (default path when running the broker)
+packages/synagent/bus/mqtt-db/
 
 # Beads / Dolt files (added by bd init)
 .dolt/
@@ -20,3 +56,14 @@ __pycache__/
 .beads-credential-key
 .beads/proxieddb/
 *.gate.lock*
+
+# synagent adapter: deps instaladas por el marketplace (no versionar)
+packages/synagent/core/adapters/claude/node_modules/
+
+# Claude Code: andamiaje de tipos que el engine genera al cargar un plugin
+# (se reescribe en cada carga; no se versiona). Cubre el tsconfig de raíz del
+# plugin y la carpeta de tipos generada, para cualquier adaptador de plugin.
+packages/synagent/core/adapters/claude/.claude-plugin/types/
+packages/synagent/core/adapters/claude/tsconfig.json
+packages/*/adapters/*/tsconfig.json
+packages/*/adapters/*/.claude-plugin/types/

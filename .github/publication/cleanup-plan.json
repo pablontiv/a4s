@@ -1,0 +1,130 @@
+{
+  "schema": "a4s.github-history-cleanup/v1",
+  "repository": "pablontiv/a4s",
+  "mode": "prepare-only",
+  "observed_baseline": {
+    "main": "daa066707026d7b739764c2f64de6c055df4d7f5",
+    "ordinary_heads": {
+      "count": 40,
+      "canonical_listing_sha256": "b083548f9da467216531235a817e7de6e1cbffa591003d7289b9bd3d970d2ee7"
+    },
+    "tags": {
+      "count_including_peeled_refs": 4,
+      "canonical_listing_sha256": "9261da9f6919cbb2ab63f6368c82cb8cca421bb8654eba2d8223b129588c3771"
+    },
+    "github_managed_pull_refs": {
+      "count": 72,
+      "canonical_listing_sha256": "d8ae7b392cdc37d85d0ac88f177cb821241cf3232844402fe6d4b5bb7d36107c"
+    },
+    "dolt_refs": {
+      "count": 1,
+      "canonical_listing_sha256": "51f69f195989c03dde8fc9f10c4c3d9578ca72723dbe5a0eaac2203d6d7461d9"
+    },
+    "open_pull_requests": [],
+    "visibility": "private"
+  },
+  "retain_and_rewrite": [
+    "refs/heads/main",
+    "refs/tags/roadmap-v1",
+    "refs/tags/roadmap-v2"
+  ],
+  "delete": [
+    "refs/heads/__dolt_remote_info__",
+    "refs/heads/chore/explicit-main-sync-gate",
+    "refs/heads/chore/init-beads-backlog",
+    "refs/heads/docs/a4s-5p1-doctor-report",
+    "refs/heads/docs/a4s-80s-route-groups",
+    "refs/heads/docs/a4s-88b-cleanup-evidence",
+    "refs/heads/docs/config-canonical-authority",
+    "refs/heads/docs/consolidate-handbook",
+    "refs/heads/docs/herdr-callback-policy",
+    "refs/heads/docs/herdr-subagent-first",
+    "refs/heads/docs/kiro-crew-extension-strategy",
+    "refs/heads/docs/preserve-handbook-local-only",
+    "refs/heads/docs/roadmap-on-beads-design",
+    "refs/heads/docs/roadmap-release-install",
+    "refs/heads/docs/roadmap-session-fencing",
+    "refs/heads/feat/a4s-cxk-5-typesafe",
+    "refs/heads/feat/a4s-vb0-roadmap-canonical-evidence",
+    "refs/heads/feat/beads-autonomous-loop-pr",
+    "refs/heads/feat/ci-local-suite",
+    "refs/heads/feat/cost-analyzer-audit-report",
+    "refs/heads/feat/e0-attach-transport",
+    "refs/heads/feat/e1-inbound-input",
+    "refs/heads/feat/herdr-skill",
+    "refs/heads/feat/reconciler-t9p",
+    "refs/heads/feat/reconciler-ya4-9",
+    "refs/heads/feat/roadmap-v2-mechanism",
+    "refs/heads/feat/task-ack-protocol",
+    "refs/heads/feat/task-result-harvest-gate",
+    "refs/heads/feat/workspace-backlog-axes",
+    "refs/heads/fix/a4s-hwa-loop-turn-gate",
+    "refs/heads/fix/a4s-vb0-adr-0050",
+    "refs/heads/fix/auto-config-consent",
+    "refs/heads/fix/compaction-hint-readiness",
+    "refs/heads/fix/global-no-emoji-output",
+    "refs/heads/fix/roadmap-mechanical-retry",
+    "refs/heads/fix/roadmap-positive-actions",
+    "refs/heads/fix/roadmap-readiness-semantics",
+    "refs/heads/fix/source-repo-identity-emergency",
+    "refs/heads/revert/no-emoji-output-policy",
+    "refs/dolt/data"
+  ],
+  "pull_request_disposition": {
+    "closed_during_preparation": [6, 26, 29, 30],
+    "ported_before_close": [6, 26],
+    "closed_without_integration": [29, 30],
+    "current_bodies_scanned_and_sanitized": true,
+    "github_managed_refs_are_not_pushable": true,
+    "support_purge_candidates": [3, 5, 18, 19, 22, 23, 29, 30, 31, 36, 38, 40, 50, 62, 67],
+    "publication_gate": "Do not publish until GitHub Support confirms removal of sensitive cached views and pull-request references, or the operator explicitly accepts each remaining disclosure."
+  },
+  "rewrite": {
+    "tool": "git-filter-repo",
+    "scope": "Only the retained main branch and two retained tags.",
+    "blob_replacement_classes": [
+      "Machine-specific shared macOS root becomes a portable path placeholder.",
+      "Owner-specific macOS and Linux home roots become a home-directory placeholder.",
+      "The owner's personal email becomes the verified GitHub noreply address."
+    ],
+    "identity_rule": "Rewrite matching owner author, committer, and tagger email fields to 5173810+pablontiv@users.noreply.github.com; preserve names, dates, messages, and non-owner identities.",
+    "tag_rule": "Recreate roadmap-v1 and roadmap-v2 as rewritten annotated tags pointing only into rewritten history.",
+    "signature_rule": "Treat signatures invalidated by rewritten object IDs as historical and require signed commits for new work after protection is enabled."
+  },
+  "surface_audit": {
+    "actions": {
+      "runs_reviewed": 434,
+      "log_bytes_scanned": 34929537,
+      "artifacts": 0,
+      "sensitive_pattern_findings": 0
+    },
+    "issues": 0,
+    "wiki_repository_present": false,
+    "environments": 0,
+    "deployments": 0,
+    "actions_variables": 0,
+    "actions_secrets": 0,
+    "dependabot_secrets": 0,
+    "projects_v2": "unknown: current token lacks read:project; manual review remains mandatory"
+  },
+  "execution_controls": [
+    "Generate a separate execution envelope immediately before mutation. It must pin the exact source main SHA, this plan digest, every current ref listing digest, replacement payload digest, and expected rewritten refs.",
+    "Stop if any ref, pull request, tag, visibility setting, or source object differs from the approved execution envelope.",
+    "Create and verify the rewritten repository offline before any remote mutation.",
+    "Require test/ci-local.sh, sensitive-pattern scans, object reachability checks, and independent review on the exact rewritten candidate.",
+    "Obtain explicit operator approval of the execution-envelope SHA-256 digest.",
+    "Delete obsolete ordinary heads and refs/dolt/data, force-update only main and the two retained tags, then reread every advertised ref.",
+    "Never attempt to push, delete, or treat GitHub-managed refs/pull entries as cleaned; use GitHub Support where the data is sensitive.",
+    "Do not change visibility or apply desired-state.json as part of history cleanup.",
+    "Stop after any failed request or mismatched reread; do not retry automatically."
+  ],
+  "postconditions": [
+    "The remote advertises exactly one ordinary head: main.",
+    "The remote advertises exactly roadmap-v1 and roadmap-v2 as tags, both rooted in rewritten main history.",
+    "No refs/dolt entries remain.",
+    "All reachable rewritten blobs, commit metadata, commit messages, and tag metadata pass the approved sensitive-pattern scan.",
+    "The rewritten main tip preserves the canonical .workspace/config.yaml content and AGENTS.md authority pointer.",
+    "test/ci-local.sh passes on the exact rewritten main tip and an independent reviewer approves that SHA.",
+    "The repository remains private until pull-request purge and every desired-state.json precondition pass."
+  ]
+}

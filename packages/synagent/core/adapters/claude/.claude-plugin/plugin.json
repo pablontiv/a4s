@@ -1,0 +1,27 @@
+{
+  "name": "synagent-adapter-mqtt",
+  "version": "0.1.0",
+  "description": "Adaptador de canal de Claude para synagent (v1): JALAR por push vía bridge subproceso, ENVIAR por tool synagent_send al bus MQTT.",
+  "author": {
+    "name": "pablontiv"
+  },
+  "userConfig": {
+    "project": {
+      "type": "string",
+      "title": "Proyecto",
+      "description": "Token de proyecto (p. ej. 'a4s'). Opcional; por defecto se deriva del remoto origin del repo. La instancia NO es configurable: sale del id de sesión nativo (una por sesión)."
+    },
+    "global": {
+      "type": "boolean",
+      "title": "Global broadcast",
+      "description": "Suscribirse a mensajes broadcast globales (synagent/v1/all); activo por defecto.",
+      "default": true
+    },
+    "brokerUrl": {
+      "type": "string",
+      "title": "Broker URL",
+      "description": "URL del broker MQTT del bus synagent al que se conecta el adaptador.",
+      "default": "mqtt://127.0.0.1:1884"
+    }
+  }
+}

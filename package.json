@@ -1,25 +1,34 @@
 {
   "name": "a4s",
-  "version": "0.0.0-e0",
+  "version": "0.0.0",
   "private": true,
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pablontiv/a4s.git"
+  },
+  "homepage": "https://github.com/pablontiv/a4s#readme",
+  "bugs": {
+    "url": "https://github.com/pablontiv/a4s/issues"
+  },
   "type": "module",
   "workspaces": [
-    "packages/*"
+    "packages/*",
+    "packages/synagent/*"
   ],
   "engines": {
     "node": ">=22.19.0"
   },
   "scripts": {
-    "typecheck": "npm run typecheck:e0 && npm run typecheck --workspace @a4s/typesafe && npm run typecheck --workspace @a4s/pi-rule-compiler",
-    "typecheck:e0": "tsc --noEmit",
-    "test": "npm run test:e0 && npm test --workspace @a4s/typesafe && npm test --workspace @a4s/pi-rule-compiler",
-    "test:e0": "tsx --test test/*.test.ts",
-    "e0": "tsx src/e0/driver.ts",
-    "e0:report": "tsx src/e0/report.ts"
+    "typecheck": "npm run typecheck --workspace @a4s/pi-context-expert && npm run typecheck --workspace @a4s/pi-tool-row-presentation && npm run typecheck --workspace @a4s/synagent && npm run typecheck --workspace @a4s/synagent-bus && npm run typecheck --workspace @a4s/context-expert && tsc -p tsconfig.json",
+    "test:python": "python3 -m unittest discover -s evals/agentevals_veto/tests -t . -p 'test_*.py' -v && python3 -m unittest discover -s test -p 'test_worker_witness_sqlite.py' -v && python3 -m py_compile evals/agentevals_veto/adapter.py test/support/sqlite_worker_witness.py && node --check evals/agentevals_veto/pion_judge_bridge.mjs",
+    "test": "npm test --workspace @a4s/pi-context-expert && npm test --workspace @a4s/pi-tool-row-presentation && npm test --workspace @a4s/synagent && npm test --workspace @a4s/synagent-bus && npm test --workspace @a4s/context-expert && tsx --test test/work-gates.test.ts test/real-workers-structural.test.ts test/worker-witness.test.ts && npm run test:python",
+    "eval:work-gates": "tsx test/support/work-gate-live.ts",
+    "bus": "npm run bus --workspace @a4s/synagent-bus --"
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "0.84.4",
-    "@types/node": "26.4.1",
+    "@earendil-works/pi-coding-agent": ">=0.99.1",
+    "@types/node": "26.6.1",
     "tsx": "4.23.13",
     "typescript": "7.0.2"
   }

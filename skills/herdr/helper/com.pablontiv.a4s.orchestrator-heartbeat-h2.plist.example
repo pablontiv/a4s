@@ -31,8 +31,8 @@
   <key>ProcessType</key>
   <string>Background</string>
   <key>StandardOutPath</key>
-  <string>[REDACTED:home]/Library/Logs/a4s/a4s-heartbeat-h2.out.log</string>
+  <string>/dev/null</string>
   <key>StandardErrorPath</key>
-  <string>[REDACTED:home]/Library/Logs/a4s/a4s-heartbeat-h2.err.log</string>
+  <string>/dev/null</string>
 </dict>
 </plist>

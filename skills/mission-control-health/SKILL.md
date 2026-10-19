@@ -2,6 +2,7 @@
 name: mission-control-health
 metadata:
   author: pablontiv
+  updated: "2026-09-17"
 description: Use when Mission Control receipts stop turning into acknowledgements, when a scheduled observation may be failing, delivering, or being processed differently, or when the Operator needs a visible alert that does not depend on the Mission Control model. Reports schedule execution, receipt delivery, and processing separately from read-only records and never retries, pauses, or switches anything.
 ---
 

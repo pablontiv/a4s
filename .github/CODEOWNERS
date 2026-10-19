@@ -1,0 +1,9 @@
+# Default ownership for every tracked path.
+* @pablontiv
+
+# Security-sensitive repository controls.
+/.github/ @pablontiv
+/.gitignore @pablontiv
+/package.json @pablontiv
+/package-lock.json @pablontiv
+/NOTICE @pablontiv

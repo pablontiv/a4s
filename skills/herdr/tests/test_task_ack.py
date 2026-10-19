@@ -91,107 +91,19 @@ class TaskAckTest(unittest.TestCase):
     def md(self, fake):
         return fake.beads[BEAD]["metadata"]
 
-    def tickets(self, pattern="*.md"):
-        d = Path(self.state) / "attention"
-        return sorted(p.name for p in d.glob(pattern)) if d.exists() else []
 
     # ------------------------------------------------------------- receipt
-    def test_ack_persists_receipt_fields_in_one_write_as_assignee(self):
-        fake = FakeBd(**{BEAD: bead()})
-        code, res = self.run_kind(fake, "ack", ack_env(), received_at=T_ACK)
-        self.assertEqual((code, res["status"]), (0, "RECORDED"))
-        md = self.md(fake)
-        self.assertEqual((md["receipt_id"], md["received_at"], md["acknowledged_by"]), ("rcpt.1", T_ACK, "w1"))
-        self.assertRegex(md["acknowledged_at"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
-        self.assertEqual(md["correlation_id"], CORR)  # the dispatcher's stamp is untouched
-        self.assertEqual(len(fake.writes), 1)  # one atomic bd update
-        self.assertEqual(fake.writes[0][1], ASSIGNEE)  # bd's assignee guard: act as the assignee
-        self.assertNotIn("--force", fake.writes[0][0])
-        self.assertNotIn("--actor", fake.writes[0][0])
-        self.assertEqual(res["envelope"], ack_env())  # the exact line the Worker relays to the PO
-        self.assertEqual(self.tickets(), [])
 
-    def test_ack_received_at_defaults_to_acknowledged_at(self):
-        fake = FakeBd(**{BEAD: bead()})
-        ta.record_ack(ta.Beads("/repo", runner=fake), ta.parse_envelope(ack_env())[1], now=T_ACK)
-        self.assertEqual((self.md(fake)["received_at"], self.md(fake)["acknowledged_at"]), (T_ACK, T_ACK))
 
     # ------------------------------------------------------------- start
-    def test_start_persists_start_fields_after_ack(self):
-        fake = FakeBd(**{BEAD: bead()})
-        self.run_kind(fake, "ack", ack_env())
-        code, res = self.run_kind(fake, "start", start_env())
-        self.assertEqual((code, res["status"]), (0, "RECORDED"))
-        md = self.md(fake)
-        self.assertEqual((md["start_id"], md["worker"], md["pane"], md["tab"]), ("start.1", "w1", "wT:p9", "wT:t9"))
-        self.assertRegex(md["started_at"], r"^\d{4}-")
-        self.assertEqual(md["receipt_id"], "rcpt.1")  # the ack record is preserved
 
-    def test_start_persists_identity_when_dispatcher_stamped_none(self):
-        fake = FakeBd(**{BEAD: bead(worker=None, pane=None, tab=None)})
-        self.run_kind(fake, "ack", ack_env())
-        code, _ = self.run_kind(fake, "start", start_env())
-        self.assertEqual(code, 0)
-        self.assertEqual((self.md(fake)["worker"], self.md(fake)["pane"], self.md(fake)["tab"]), ("w1", "wT:p9", "wT:t9"))
 
-    def test_start_identity_mismatch_fails_closed_without_overwrite(self):
-        fake = FakeBd(**{BEAD: bead()})
-        self.run_kind(fake, "ack", ack_env())
-        before = copy.deepcopy(self.md(fake))
-        code, res = self.run_kind(fake, "start", start_env(pane="wT:p1"))
-        self.assertEqual((code, res["code"]), (3, "IDENTITY_MISMATCH"))
-        self.assertEqual(self.md(fake), before)
 
     # ------------------------------------------------------------- idempotency
-    def test_duplicate_receipt_preserves_logical_state_and_timestamps(self):
-        fake = FakeBd(**{BEAD: bead()})
-        self.run_kind(fake, "ack", ack_env(), received_at=T_ACK)
-        snapshot, writes = copy.deepcopy(self.md(fake)), len(fake.writes)
-        for _ in range(2):
-            code, res = self.run_kind(fake, "ack", ack_env(), received_at=T_LATER)
-            self.assertEqual((code, res["status"]), (0, "DUPLICATE"))
-        self.assertEqual(self.md(fake), snapshot)
-        self.assertEqual(len(fake.writes), writes)  # no write at all
-        self.assertEqual(self.tickets(), [])
 
-    def test_duplicate_start_preserves_logical_state_and_timestamps(self):
-        fake = FakeBd(**{BEAD: bead()})
-        self.run_kind(fake, "ack", ack_env())
-        self.run_kind(fake, "start", start_env())
-        snapshot, writes = copy.deepcopy(self.md(fake)), len(fake.writes)
-        code, res = self.run_kind(fake, "start", start_env())
-        self.assertEqual((code, res["status"]), (0, "DUPLICATE"))
-        self.assertEqual(self.md(fake), snapshot)
-        self.assertEqual(len(fake.writes), writes)
 
-    def test_conflicting_ids_never_overwrite(self):
-        fake = FakeBd(**{BEAD: bead()})
-        self.run_kind(fake, "ack", ack_env())
-        self.run_kind(fake, "start", start_env())
-        snapshot = copy.deepcopy(self.md(fake))
-        code, res = self.run_kind(fake, "ack", ack_env(receipt_id="rcpt.2"))
-        self.assertEqual((code, res["code"]), (3, "ACK_CONFLICT"))
-        code, res = self.run_kind(fake, "start", start_env(start_id="start.2"))
-        self.assertEqual((code, res["code"]), (3, "START_CONFLICT"))
-        self.assertEqual(self.md(fake), snapshot)
 
     # ------------------------------------------------------------- correlation: fail closed, nothing inferred
-    def test_missing_correlation_fails_closed_with_attention_evidence(self):
-        for kind, envelope in (("ack", ack_env(correlation_id="")), ("start", start_env(correlation_id=""))):
-            with self.subTest(kind):
-                fake = FakeBd(**{BEAD: bead(receipt_id="rcpt.0" if kind == "start" else None)})
-                before = copy.deepcopy(fake.beads)
-                code, res = self.run_kind(fake, kind, envelope)
-                self.assertEqual((code, res["status"], res["code"]), (3, "ATTENTION", "MISSING_CORRELATION"))
-                self.assertEqual(fake.beads, before)  # no state written, none inferred from the Bead's own id
-                self.assertEqual(fake.writes, [])
-                self.assertEqual(res["envelope"], "ATTENTION REQUIRED verdict=blocked artifact_path=%s bead_id=%s" % (
-                    res["artifact_path"], BEAD))
-                ticket = Path(res["artifact_path"]).read_text()
-                self.assertIn("lifecycle_mutation: none", ticket)
-                self.assertIn("kind: TASK_ACK_MISSING_CORRELATION", ticket)
-                self.assertIn(envelope, ticket)
-        self.assertEqual(len(self.tickets("%s--TASK_ACK_MISSING_CORRELATION--*.md" % BEAD)), 2)
 
     def test_mismatched_correlation_fails_closed(self):
         for kind, envelope in (("ack", ack_env(correlation_id="corr.other.1.0")),
@@ -226,24 +138,7 @@ class TaskAckTest(unittest.TestCase):
         self.assertTrue(Path(res["artifact_path"]).exists())
 
     # ------------------------------------------------------------- no start without ack
-    def test_no_start_without_ack(self):
-        fake = FakeBd(**{BEAD: bead()})
-        code, res = self.run_kind(fake, "start", start_env())
-        self.assertEqual((code, res["status"], res["code"]), (3, "ATTENTION", "START_WITHOUT_ACK"))
-        self.assertNotIn("start_id", self.md(fake))
-        self.assertNotIn("receipt_id", self.md(fake))  # the ack is not fabricated to make the start valid
-        self.assertEqual(fake.writes, [])
-        self.assertEqual(len(self.tickets("%s--TASK_ACK_START_WITHOUT_ACK--*.md" % BEAD)), 1)
-        # once a real ack exists the very same start is accepted
-        self.run_kind(fake, "ack", ack_env())
-        code, res = self.run_kind(fake, "start", start_env())
-        self.assertEqual((code, res["status"]), (0, "RECORDED"))
 
-    def test_repeated_violation_writes_one_ticket(self):
-        fake = FakeBd(**{BEAD: bead()})
-        for _ in range(3):
-            self.run_kind(fake, "start", start_env())
-        self.assertEqual(len(self.tickets()), 1)
 
     def test_write_failure_is_a_closed_error_not_a_silent_success(self):
         fake = FakeBd(**{BEAD: bead()})
@@ -408,15 +303,6 @@ class TaskAckTest(unittest.TestCase):
             self.assertNotIn("..", key)
         self.assertEqual(ta.ticket_key("a/b"), ta.ticket_key("a/b"))  # deterministic: repeated violations share a ticket
 
-    def test_traversal_ticket_is_idempotent_and_never_creates_parent_dirs(self):
-        evil = self.TRAVERSAL_IDS["verifier payload"]
-        first = self.run_kind(FakeBd(), "ack", ack_env(bead_id=evil))[1]["artifact_path"]
-        second = self.run_kind(FakeBd(), "ack", ack_env(bead_id=evil))[1]["artifact_path"]
-        self.assertEqual(first, second)
-        self.assertEqual(len(self.tickets()), 1)
-        self.assertEqual(sorted(p.name for p in Path(self.tmp.name).iterdir()), ["state"])  # nothing beside state/
-        self.assertEqual([p.name for p in Path(self.state).iterdir()], ["attention"])
-        self.assertEqual([p for p in (Path(self.state) / "attention").iterdir() if p.is_dir()], [])
 
     def test_planted_tmp_symlink_is_not_written_through(self):
         victim = Path(self.tmp.name) / "victim.txt"

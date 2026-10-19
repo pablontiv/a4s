@@ -1,0 +1,94 @@
+RECIBO DURABLE: despliegue de usuario Claude de Context Expert 0.3.2
+Generado: 2026-10-08T05:39:34Z
+Estado final: PASS
+
+ALCANCE
+[OK] El gate verificó el estado desplegado en modo de solo lectura.
+[OK] El gate no cambió código ni configuración funcional.
+[OK] El gate no cambió settings, caches, registros ni plugins.
+[OK] El gate no creó un PR vacío.
+[OK] El gate no ejecutó cleanup de worktree o rama.
+
+ESTADO DESPLEGADO
+[OK] El registro contiene una sola instalación de a4s-context-expert@a4s.
+[OK] La instalación tiene scope user.
+[OK] La instalación tiene version 0.3.2.
+[OK] La instalación está habilitada.
+[OK] La ruta instalada es /Users/pones/.claude/plugins/cache/a4s/a4s-context-expert/0.3.2.
+[OK] El registro vincula la instalación con 8f8d49697ee1edde66e00b9bc0bdbf005e16d15c.
+[OK] El marketplace a4s está en 8f8d49697ee1edde66e00b9bc0bdbf005e16d15c.
+[OK] Synagent usa la ruta inline /Users/Shared/harness/a4s-main/packages/synagent/core/adapters/claude.
+[OK] El identificador de Synagent es synagent-adapter-mqtt@inline.
+[OK] Context Expert no tiene un override triggerMode en el estado de usuario inspeccionado.
+[OK] El manifiesto de 0.3.2 define triggerMode=auto como valor predeterminado.
+[OK] El triggerMode efectivo es auto.
+[OK] La autenticación activa consta en la evidencia aceptada.
+
+PROVENIENCIA
+[OK] PR #81 corresponde a Synagent.
+[OK] PR #81 se fusionó como 410fd0fdd15607a87a34be2088890f8829ca3e2e.
+[OK] PR #82 corresponde a Context Expert.
+[OK] PR #82 se fusionó como 8f8d49697ee1edde66e00b9bc0bdbf005e16d15c.
+[OK] El commit de PR #81 es ancestro del commit de PR #82 y de main.
+[OK] El commit de PR #82 es main.
+[OK] Los receipts existentes confirman los checks requeridos, las firmas válidas y la integración.
+[OK] El receipt de PR #81 está en /Users/Shared/harness/a4s/.workspace/receipts/merge-pr-81-synagent-claude-2.1.292-receipt.txt.
+[OK] El receipt de PR #82 está en /Users/Shared/harness/a4s/.workspace/receipts/merge-pr-82-context-expert-hint-mode-receipt.txt.
+
+HASHES SHA-256
+settings.json: 098ea1ea45e37f7c5e341e9d11ef6c118e492e06ae36dc499cf7af694d87536e
+installed_plugins.json: 0be9a041c6ee2d3cd72e18910ad818d29792619e16397e7fb3649822e8b94dd7
+known_marketplaces.json: 928af43e6bd1ea20025d0e477429ea727a03e127654bdfad2a85668456abc612
+registro Synagent inline: 9a4d4f28545297ce1fcae1dbdd26a4df949469a1e47372363361a6b0fec094f9
+receipt PR #81: d021289e503d8584585275a58e61c3f1099748d8d00be95a31c2da8f4012c176
+receipt PR #82: 71dcf7db7cbea8b79481beb50bbc5d7b409f48d09688aac69896118bd67d215d
+arbol desplegado Context Expert 0.3.2 sin .in_use: ce0197d9958d3089139f4b5ee7340df92e8cac76c1f35657590bf49385844c5b
+arbol Synagent inline sin node_modules: b0917518932408c944a3761879daaf173c0f820f5a02fdbcaa6671dcac7c6b5d
+
+RESULTADO HERDR Y SYNAGENT
+[OK] Herdr inició una Claude TUI real.
+[OK] El runtime del intento cargó Context Expert desde 0.3.2 y no desde 0.3.0.
+[OK] El marcador .in_use del runtime registró PID 77301.
+[OK] Synagent entregó una instrucción, un ACK y un resultado.
+[OK] Herdr cerró y limpió el intento.
+Session ID: no está disponible en la evidencia retenida.
+Costo observado: USD 0.0113.
+
+TIMESTAMPS CONOCIDOS
+Instalación inicial registrada: 2026-10-05T09:16:59.692Z.
+Actualización registrada a 0.3.2: 2026-10-08T05:09:48.952Z.
+Modificación de installed_plugins.json: 2026-10-07T23:09:48-0600.
+Modificación del marcador .in_use del PID 77301: 2026-10-07T23:09:55-0600.
+Modificación del registro Synagent inline: 2026-10-07T23:28:45-0600.
+procStart registrado para PID 77301: Wed Oct 7 18:26:44 2026. El registro no codifica la zona horaria.
+Receipt de PR #81: 2026-10-08T00:58:16Z.
+Receipt de PR #82: 2026-10-08T04:25:49Z.
+Commit de PR #81: 2026-10-07T18:57:51-06:00.
+Commit de PR #82: 2026-10-07T22:25:16-06:00.
+Verificación final y generación de este receipt: 2026-10-08T05:39:34Z.
+
+SINCRONIZACIÓN FINAL
+[OK] git fetch origin terminó.
+[OK] git pull --ff-only origin main terminó con Already up to date.
+[OK] El segundo git fetch origin terminó.
+[OK] /Users/Shared/harness/a4s-main está limpio.
+[OK] HEAD == main == origin/main == 8f8d49697ee1edde66e00b9bc0bdbf005e16d15c.
+[OK] /Users/Shared/harness/a4s-claude-plugin-update está limpio.
+[OK] La rama ops/claude-context-expert-0.3.2 y main tienen conteo 0/0.
+[OK] La rama de despliegue no contiene un diff de código nuevo.
+
+RIESGOS Y LIMITACIONES
+[WARN] El Session ID exacto no quedó en la evidencia retenida disponible para este gate.
+[WARN] La evidencia de runtime, autenticación, review y validación strict se aceptó de la ejecución anterior. Este gate no repitió esas acciones.
+[WARN] Existen directorios de cache de versiones anteriores. El registro instalado selecciona solo 0.3.2 y el runtime observado cargó 0.3.2.
+[WARN] El timestamp procStart no contiene una zona horaria explícita.
+
+GATE FINAL
+[OK] El estado desplegado coincide con el estado aceptado.
+[OK] La proveniencia de PR #81 y PR #82 está verificada.
+[OK] Los receipts de PR #81 y PR #82 están verificados.
+[OK] No existe un diff de código nuevo para otro PR.
+[OK] main está limpio y sincronizado.
+[OK] El worktree de despliegue está limpio.
+[OK] El alcance autorizado se respetó.
+Resultado del gate: PASS

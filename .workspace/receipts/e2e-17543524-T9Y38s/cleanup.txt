@@ -1,0 +1,5 @@
+worktree_remove_exit=0
+root_remove_exit=0
+root_present=0
+worktree_registered=0
+verdict=PASS

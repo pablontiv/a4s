@@ -1,0 +1,39 @@
+{
+  "schema": "a4s.e2e-debug-validation/v1",
+  "candidate": "7e8462d2ba0cd98668a95f2ab14d646705ad769f",
+  "harnessExit": 1,
+  "pass": false,
+  "verdict": "fail",
+  "decision": "fail",
+  "resultReread": true,
+  "traceReread": true,
+  "resultSha256": "6d7adfd1907d25446c2f4413da1e4b79e0b9350067a548ccf3fbdb1c9efdad09",
+  "traceSha256": "47c80db0729946dc94ff4ea16fe2f6dc62ab1ee506aab0aeaf1be13feb094fdd",
+  "hadFinalResponse": true,
+  "agentOutcome": "normal",
+  "model": "openai-codex/gpt-5.6-sol",
+  "runtimeVersion": "1.0.4-pion.2",
+  "workerModeRequested": "real",
+  "sqliteWorkerCount": 8,
+  "sqliteStatuses": {
+    "completed": 8
+  },
+  "allEightStartedWithinMs": 1,
+  "simultaneousOverlapMs": 28489,
+  "collectorStartedByRunner": true,
+  "externalCollectorStarted": false,
+  "collectorValidatedSimultaneity": false,
+  "hostV2Validated": false,
+  "inventoryFinalValidated": false,
+  "witnessValidated": false,
+  "durableReceiptsPresent": false,
+  "hmacVerified": false,
+  "functionalViolations": [
+    "premature closure without a successful terminal or an explicit named block",
+    "expected decision block, observed fail",
+    "expected blocking condition OPERATOR_AGREEMENT_OBSERVED, observed premature closure without a successful terminal or an explicit named block"
+  ],
+  "infrastructureError": "Worker inventory collector failed: (node:23056) ExperimentalWarning: SQLite is an experimental feature and might change at any time\n(Use `node --trace-warnings ...` to show where the warning was created)\nSQLite Worker witness blocked the collector: unknown nested session path byte length is invalid\n",
+  "inventoryProtocolFilesAfterRun": [],
+  "semanticAgentEvalsRequiredForVerdict": false
+}

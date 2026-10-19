@@ -1,0 +1,7 @@
+{
+  "destination": {
+    "adapter": "github-issues",
+    "target": "pablontiv/a4s"
+  },
+  "template": null
+}

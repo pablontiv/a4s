@@ -1,0 +1,1 @@
+cwd=/private/tmp/a4s-canary-758f136.6GGCuW/worktree

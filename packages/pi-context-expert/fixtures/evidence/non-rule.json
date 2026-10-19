@@ -1,0 +1,10 @@
+{
+  "id": "non-rule",
+  "text": "The test command completed in 14 seconds on this machine.",
+  "expectedRule": false,
+  "expectedBoundary": null,
+  "visibility": { "choice": "full", "confidence": 1 },
+  "candidateProbability": 0.08,
+  "generalityLevel": 0,
+  "authority": "incidental"
+}

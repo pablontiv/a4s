@@ -1,0 +1,13 @@
+result_reread=PASS
+trace_reread=PASS
+collector_cjs=PASS
+host_v2_live_validation=FAIL
+final_inventory=FAIL
+structural=NOT_RUN
+witness=NOT_RUN
+agentevals=NOT_RUN
+hmac_result=ABSENT
+operator_agreement_oracle=FAIL
+secret_redaction=PASS
+cleanup=PASS
+overall_e2e=FAIL

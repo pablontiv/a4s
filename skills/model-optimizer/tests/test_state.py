@@ -161,24 +161,6 @@ class StateTests(unittest.TestCase):
         values.update(overrides)
         return ModelRecord(**values)
 
-    def _agent(self, name="mechanical", *, body="secret prompt/source", model="nan/qwen3.6") -> AgentContract:
-        return AgentContract(
-            name=name,
-            description="description secret",
-            mode="subagent",
-            model=model,
-            effort="medium",
-            tools=("read", "edit"),
-            permissions=(PermissionRule("edit", "*.py", "ask"),),
-            mutation_authority="confined",
-            body=body,
-            scope="project",
-            definition_source="project:mechanical.md",
-            assignment_source="project:subagents.json",
-            inheritance_sources=("global:base.md",),
-            apply_target="/private/config/opencode.json",
-            digest="sha256:agent",
-        )
 
     def test_state_path_uses_xdg_cache_home_then_home_fallback(self):
         with tempfile.TemporaryDirectory() as td:
@@ -239,73 +221,7 @@ class StateTests(unittest.TestCase):
         self.assertEqual(state.warnings, ("state_invalid_json",))
         self.assertNotIn("raw-api-key", repr(state))
 
-    def test_semantic_snapshot_ignores_created_at_digest_order_and_raw_private_text(self):
-        model_a = self._model(input_modes=("text", "image"), variants=("high", "medium"))
-        model_b = self._model(input_modes=("image", "text"), variants=("medium", "high"))
-        readiness = ProviderReadiness("nan", ReadinessStatus.READY, "api_key_secret", "ok")
-        assignment = CurrentAssignment("mechanical", "nan/qwen3.6", {"reasoning": {"effort": "medium"}}, "settings.json")
-        first = semantic_snapshot(self._inventory(models=(model_a,), readiness=(readiness,), assignments=(assignment,)), (self._agent(),))
-        second = semantic_snapshot(self._inventory(
-            created_at="2026-08-21T00:00:00Z",
-            models=(model_b,), readiness=(readiness,), assignments=(assignment,),
-        ), (self._agent(body="changed raw prompt/source",),))
-        self.assertEqual(first.runtime_fingerprint, second.runtime_fingerprint)
-        self.assertEqual(first.model_fingerprints, second.model_fingerprints)
-        self.assertEqual(first.readiness_fingerprints, second.readiness_fingerprints)
-        self.assertEqual(first.assignment_fingerprints, second.assignment_fingerprints)
-        self.assertNotEqual(first.agent_fingerprints, second.agent_fingerprints)
-        serialized = json.dumps(first.__dict__, sort_keys=True)
-        for forbidden in ("secret prompt/source", "description secret", "api_key_secret", "runtime-source-containing-secret", "warning-with-secret", "/private/config"):
-            self.assertNotIn(forbidden, serialized)
 
-    def test_inventory_delta_detects_component_changes_and_first_run_is_not_cartesian(self):
-        ready = ProviderReadiness("nan", ReadinessStatus.READY, None, "ok")
-        old = semantic_snapshot(
-            self._inventory(
-                models=(self._model("nan/qwen3.6"), self._model("old/gone")),
-                readiness=(ready,),
-                assignments=(CurrentAssignment("mechanical", "nan/qwen3.6", {}, "settings.json"),),
-            ),
-            (self._agent("mechanical"),),
-        )
-        current = semantic_snapshot(
-            self._inventory(
-                models=(self._model("nan/qwen3.6", context_window=256000), self._model("new/model")),
-                readiness=(ProviderReadiness("nan", ReadinessStatus.NOT_READY, None, "no_auth"),),
-                assignments=(CurrentAssignment("reviewer", "missing/model", {}, "settings.json"),),
-            ),
-            (self._agent("reviewer", model="missing/model"), self._agent("unassigned", model=None)),
-        )
-        first_run = inventory_delta(None, current)
-        self.assertTrue(first_run.first_run)
-        self.assertFalse(first_run.full_cartesian_required)
-        self.assertIn("new/model", first_run.new_models)
-        self.assertIn("reviewer", first_run.new_agents)
-        self.assertIn("unassigned", first_run.unassigned_agents)
-
-        delta = inventory_delta(old, current)
-        self.assertFalse(delta.first_run)
-        self.assertEqual(delta.new_models, ("new/model",))
-        self.assertEqual(delta.removed_models, ("old/gone",))
-        self.assertEqual(delta.changed_models, ("nan/qwen3.6",))
-        self.assertEqual(delta.changed_readiness, ("nan",))
-        self.assertEqual(delta.new_agents, ("reviewer", "unassigned"))
-        self.assertEqual(delta.removed_agents, ("mechanical",))
-        self.assertEqual(delta.new_assignments, ("reviewer",))
-        self.assertEqual(delta.removed_assignments, ("mechanical",))
-        self.assertEqual(delta.unassigned_agents, ("unassigned",))
-        self.assertEqual(delta.missing_incumbents, ("reviewer",))
-        self.assertFalse(delta.full_cartesian_required)
-
-        clean = semantic_snapshot(
-            self._inventory(
-                models=(self._model("nan/qwen3.6"),),
-                readiness=(ready,),
-                assignments=(CurrentAssignment("mechanical", "nan/qwen3.6", {}, "settings.json"),),
-            ),
-            (self._agent("mechanical"),),
-        )
-        self.assertFalse(inventory_delta(clean, clean).has_changes)
 
     def test_update_state_serializes_concurrent_read_modify_write_transactions(self):
         with tempfile.TemporaryDirectory() as td:

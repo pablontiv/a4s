@@ -21,6 +21,11 @@ workspace:
     delivery_mode: unknown
     delivery_gate: |
       Describir la aprobación y evidencia requeridas.
+    definition_of_ready: |
+      Describir qué debe declarar una task para ser ejecutable.
+    incomplete_task_policy: skip
+    failed_task_policy: skip
+    controller_identity: unknown
   pre_checks: []
   acceptance_checks: []
   review_checks: []
@@ -34,8 +39,10 @@ workspace:
   knowledge_policy: |
     Rootline gobierna ADRs, specs y planes bajo .workspace/docs/.
   cleanup_policy: |
-    Ofrecer cleanup; nunca eliminar automáticamente.
+    Tras integración verificada, eliminar obligatoriamente los recursos exactos y reproducibles-desechables de la task bajo guardas fail-closed; cualquier otro cleanup requiere autorización explícita.
   custom_rules: []
 
 groups: {}
+# Cada repo.path es el locator del repositorio de origen, nunca una ruta local.
+# El bootstrap descubre el checkout y lo verifica con `git remote get-url origin`.
 repositories: {}

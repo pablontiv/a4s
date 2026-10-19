@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "traceId": "0ef2cdce-994a-40b5-b8c8-24eac9496c8a",
+  "scenarioId": "START-01",
+  "runIndex": 1,
+  "shardIndex": 0,
+  "shardCount": 1,
+  "outcome": "normal",
+  "events": [],
+  "decision": "fail",
+  "reasons": [
+    {
+      "code": "unknown-reason"
+    },
+    {
+      "code": "unknown-reason"
+    },
+    {
+      "code": "unknown-reason"
+    },
+    {
+      "code": "unknown-reason"
+    }
+  ],
+  "infrastructureError": {
+    "category": "unknown",
+    "code": "infrastructure-error"
+  }
+}

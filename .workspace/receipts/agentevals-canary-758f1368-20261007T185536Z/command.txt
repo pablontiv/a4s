@@ -1,0 +1,8 @@
+cwd=/Users/Shared/harness/a4s-orchestrator-conformance-poc
+command=A4S_RUN_AGENT_E2E=1 HOME=<isolated-home> PI_CODING_AGENT_DIR=<isolated-agent-dir> PI_SKIP_VERSION_CHECK=1 PYTHONPATH=<candidate> <isolated-python-3.11> -c <single AgentEvals calibration invocation>
+factory=agentevals.trajectory.llm.create_async_trajectory_llm_as_judge
+bridge=node evals/agentevals_veto/pion_judge_bridge.mjs
+provider=openai-codex
+model=gpt-5.6-sol
+timeout_seconds=60
+attempt=1/1

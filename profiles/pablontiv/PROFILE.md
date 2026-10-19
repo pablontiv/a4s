@@ -43,7 +43,7 @@ Pi es el único runtime compatible en la versión 2. Rootline gobierna el Markdo
 La especialización usa este modelo conceptual:
 
 ```text
-engineering-handbook-v1.4.md
+.workspace/docs/references/engineering-handbook-v1.4.md
             → especialización
 profiles/pablontiv/PROFILE.md
             → adopción guiada
@@ -54,7 +54,7 @@ profiles/pablontiv/PROFILE.md
 
 La raíz `.workspace/docs/` es la autoridad final del conocimiento durable del workspace. `.workspace/worktrees/` es la raíz de aislamiento administrado solamente cuando la estrategia efectiva lo requiere.
 
-Cada repositorio administrado DEBE tener una identidad estable, una ruta física canónica y una entrada efectiva. Aliases, symlinks y worktrees derivados no crean identidades nuevas. Un repositorio no clasificado puede inspeccionarse en modo de solo lectura, pero no puede recibir mutaciones ni entregas.
+Cada repositorio administrado DEBE tener una identidad estable, un locator canónico del repositorio de origen y una entrada efectiva. `repo.path` guarda ese locator relocatable, nunca la ruta física de un checkout local. Pi descubre el checkout en runtime y verifica con `git remote get-url origin` que corresponde al origen configurado. Aliases, symlinks y worktrees derivados no crean identidades nuevas. Un repositorio no clasificado puede inspeccionarse en modo de solo lectura, pero no puede recibir mutaciones ni entregas.
 
 Un grupo comparte controles o defaults sin implicar equipo, ownership ni estructura organizacional. Las excepciones se declaran centralmente por identidad de repositorio.
 
@@ -79,7 +79,7 @@ La capa más específica prevalece únicamente en los campos que declara.
 
 Antes del trabajo mutante, Pi DEBE mostrar la vista efectiva con valores, origen `workspace`, `group` o `repository`, revisión de configuración, revisión observada del repositorio, warnings, conflictos y campos `unknown`. Una vista derivada nunca se convierte en autoridad editable.
 
-Un binding queda stale cuando cambian identidad, ruta, branch, proveedor, comando, precondición, revisión o vigencia. Si Pi no puede verificar identidad, `cwd`, interfaz, precondiciones y revisión aplicable, conserva `unknown` y no infiere un sustituto.
+Un binding queda stale cuando cambian identidad, locator de origen, branch, proveedor, comando, precondición o vigencia de forma que invalida el control. `verified_revision` registra la revisión del origen sobre la que se verificó el binding; no es una ruta local ni exige que todo HEAD posterior sea idéntico. Si Pi no puede descubrir el checkout, hacer coincidir su `origin`, verificar `cwd`, interfaz, precondiciones y revisión aplicable, conserva `unknown` y no infiere un sustituto.
 
 ## 5. Contrato de los controles
 
@@ -129,6 +129,10 @@ Cada repositorio recibe valores efectivos para todos estos ejes:
 | `pre_checks` | Controles previos a acceptance y entrega. |
 | `acceptance_checks` | Verificación trazable del spec aprobado. |
 | `review_checks` | Revisión humana, automática o independiente. |
+| `definition_of_ready` | Qué debe declarar una task para que un loop de backlog la ejecute. |
+| `incomplete_task_policy` | Qué hace un loop ante una task que no cumple `definition_of_ready`: `skip`, `stop` o `backfill`. |
+| `failed_task_policy` | Qué hace un loop cuando una task falla un gate o su implementación: `skip` o `stop`. |
+| `controller_identity` | Fuente de la identidad de sesión del controlador de un loop de backlog. |
 | `post_checks` | Postcondiciones después de integrar, publicar o desplegar. |
 | `monitoring` | Señales y periodo de observación. |
 | `external_effects` | Precondiciones, autorización y postcondiciones externas. |
@@ -148,8 +152,13 @@ Backscroll se consulta en fase 0 cuando trabajo previo puede afectar una feature
 La pertenencia al catálogo no activa una herramienta rutinariamente. Pi enruta cada artefacto solamente bajo su trigger real y no selecciona equivalentes cuando el artefacto oficial aplicable no está disponible:
 
 - `adr`: se activa después de una decisión significativa nueva o revocada, ante una corrección que invalida una decisión, o cuando se solicita registrar o recuperar un ADR.
+- `work-lifecycle`: se activa cuando hay que mover una unidad de trabajo por el ciclo de vida (admitir, elegir, definir, preparar, ejecutar, aceptar, entregar, cerrar); un solo skill con todo el flujo cuyos gates leen la política del config (ADR 0069 propuesto).
+- `roadmap`: se activa cuando el operador pide ver el backlog, roadmap o árbol por prioridades sin planificar, recomendar ni modificar nada.
+- `roadmap-legacy`: se activa cuando el operador solicita explícitamente el workflow completo anterior para planificar, alinear o ejecutar secuencialmente trabajo en Beads.
 - `context-save`: se activa para guardar, restaurar o listar estado estructurado entre sesiones; para conversaciones históricas se usa Backscroll.
+- `cost-analyzer`: se activa cuando el usuario pregunta por costo, tokens, outcomes por harness, extensión Pi, topología de agentes o subagentes.
 - `decision-calibrator`: se activa tras una corrección contradictoria, una pregunta repetida, recuperación de contexto, una tercera ronda sin nuevos unknowns decisivos o una elección de herramienta o arquitectura con costo operativo sostenido.
+- `agent-behavior-doctor`: se activa cuando un agente promete sin actuar, repite preguntas ya resueltas, se vuelve procedimentalmente lento o parece condicionado por memoria, auto-respuesta, compaction, skills o instrucciones en conflicto; diagnostica con evidencia y permanece read-only salvo petición explícita de corregir.
 - `empirical-capability-development`: se activa únicamente cuando el repositorio opta por el método y un `UNKNOWN` material bloquea una decisión con un probe disposable seguro disponible; fuera de ese caso no aplica.
 - `mission-control-health`: se activa para informar por separado la ejecución del schedule, la entrega de recibos y el procesamiento o acuse de Mission Control a partir de registros de solo lectura y emitir una alerta visible independiente del modelo; nunca reintenta, sondea, pausa, reinicia ni cambia proveedores o modelos.
 - `model-optimizer`: se activa al optimizar, asignar, validar o refrescar modelos y rutas de agentes cuando disponibilidad, autenticación, respuesta live, costo, cuota, cache, visión, esfuerzo o independencia importan. En este perfil solo se autorizan rutas del runtime Pi.
@@ -183,12 +192,16 @@ Los defaults priorizan seguridad:
 - `pre_checks`: `[]`; ausencia visible, no equivalente a validación.
 - `acceptance_checks`: obligatorios cuando existe un spec con criterios.
 - `review_checks`: al menos una revisión antes de entrega mutante.
+- `definition_of_ready`: el contrato de task del workflow de backlog activo; una task con label `legacy` requiere sólo descripción y criterios de aceptación.
+- `incomplete_task_policy`: `skip`; la task queda visible como hallazgo y el loop continúa con la siguiente ejecutable.
+- `failed_task_policy`: `skip`; el fallo queda registrado en la task, que se bloquea, y el loop continúa con la siguiente ejecutable.
+- `controller_identity`: `unknown`, por lo que un loop no adquiere tasks.
 - `post_checks`: `[]`; ausencia visible y conscientemente aceptada.
 - `monitoring`: deshabilitado o no aplicable hasta declaración.
 - `external_effects`: solo lectura hasta autorización explícita.
 - `credential_policy`: mecanismo autorizado sin persistir secretos.
 - `knowledge_policy`: Rootline gobierna ADRs, specs y planes bajo `.workspace/docs/`; ninguna clase se escribe en un repositorio hijo sin autorización explícita.
-- `cleanup_policy`: ofrecer cleanup, nunca eliminar automáticamente por decisión del agente.
+- `cleanup_policy`: después de integración verificada, eliminar obligatoriamente el worktree y las branches exactas de la task junto con outputs clasificados como reproducibles y desechables, sólo tras registrar evidencia durable y verificar identidad, ausencia de cambios no integrados y ausencia de retención; cualquier otro cleanup destructivo requiere autorización explícita.
 - `custom_rules`: `[]` salvo reglas adicionales aprobadas.
 
 Estos defaults no autorizan inferir comandos por la mera presencia de archivos.
@@ -242,7 +255,7 @@ Extraer decisiones, errores, fricciones y patrones; asignar una clase canónica 
 7. **INV-07 — Acceptance trazable:** criterios, pre-checks y review checks obligatorios se vinculan a resultados verificables antes de entregar.
 8. **INV-08 — Entrega autorizada:** ninguna entrega o mutación externa ocurre fuera del gate, modo y alcance declarados.
 9. **INV-09 — Conocimiento aprobado:** la aprobación durable se aplica por clase y no se amplía por inferencia.
-10. **INV-10 — Cleanup gobernado:** toda eliminación destructiva sigue política y autorización; nunca es automática por decisión del agente.
+10. **INV-10 — Cleanup gobernado:** el cleanup post-merge exacto y verificado de una task es obligatorio; toda otra eliminación destructiva sigue política y autorización explícita.
 11. **INV-11 — Fallo cerrado:** un control obligatorio `failed` o `unknown` no se trata como éxito.
 12. **INV-12 — Postcondición verificada:** finalizar un proceso no equivale a entrega verificada.
 13. **INV-13 — Secretos protegidos:** configuración, comandos, logs y evidencia no exponen ni persisten credenciales fuera del mecanismo autorizado.
@@ -255,7 +268,7 @@ Cada consumidor DEBE incluir una entrada central aunque herede todos sus control
 schema_version: workspace-control/v1
 repo:
   id: group/repository
-  path: /absolute/canonical/path
+  path: https://forge.example/group/repository.git
   group: group
   managed: true
   verified_revision: unknown
@@ -271,6 +284,11 @@ workflow:
   delivery_mode: unknown
   delivery_gate: |
     Describir aprobación y evidencia.
+  definition_of_ready: |
+    Describir qué debe declarar una task para ser ejecutable.
+  incomplete_task_policy: skip
+  failed_task_policy: skip
+  controller_identity: unknown
 pre_checks: []
 acceptance_checks: []
 review_checks: []
@@ -284,7 +302,7 @@ credential_policy: |
 knowledge_policy: |
   Rootline gobierna el conocimiento bajo .workspace/docs/.
 cleanup_policy: |
-  Ofrecer; nunca eliminar automáticamente.
+  Tras integración verificada, eliminar los recursos exactos y desechables de la task bajo guardas fail-closed; cualquier otro cleanup requiere autorización explícita.
 custom_rules: []
 ```
 
@@ -299,7 +317,7 @@ repositories:
   example/service:
     repo:
       id: example/service
-      path: /workspace/example/service
+      path: https://forge.example/example/service.git
       group: example
       managed: true
       verified_revision: abc123
@@ -363,7 +381,7 @@ El wizard operativo se encuentra en `bootstrap.md`. No existe CLI de bootstrap n
 
 Una adopción de este perfil es aceptable cuando demuestra que:
 
-1. inventaría cada repositorio físico una sola vez;
+1. inventaría cada repositorio de origen una sola vez y verifica cada checkout local contra su locator canónico;
 2. resuelve `workspace → group → repository` conservando el origen de cada valor;
 3. muestra revisión, warnings, conflictos y `unknown`;
 4. determina controles sin depender de navegar configuración autoritativa en repositorios hijos;

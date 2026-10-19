@@ -71,7 +71,7 @@ class FakeReplayAdapter:
             status,
             100,
             "",
-            ToolAudit(("bash",), (CommandAudit("python-unittest", exit_code, 10, "bwrap"),), (request.fixture.allowed_write_paths[0],) if request.fixture.allowed_write_paths else (), 0, ()),
+            ToolAudit(("bash",), (CommandAudit("python-unittest", exit_code, 10, "bwrap"),), (request.fixture.allowed_write_paths[0],) if request.fixture.allowed_write_paths else (), 0, ()), 
             0,
             0,
             0,

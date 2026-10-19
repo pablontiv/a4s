@@ -1,0 +1,59 @@
+Traceback (most recent call last):
+  File "/private/tmp/a4s-agentevals-canary-758f1368-20261007T185536Z/venv/lib/python3.11/site-packages/langchain_core/messages/utils.py", line 777, in _convert_to_message
+    msg_type = msg_kwargs.pop("role")
+               ^^^^^^^^^^^^^^^^^^^^^^
+KeyError: 'role'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/private/tmp/a4s-agentevals-canary-758f1368-20261007T185536Z/venv/lib/python3.11/site-packages/langchain_core/messages/utils.py", line 779, in _convert_to_message
+    msg_type = msg_kwargs.pop("type")
+               ^^^^^^^^^^^^^^^^^^^^^^
+KeyError: 'type'
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "<string>", line 54, in <module>
+  File "/Users/pones/.local/share/uv/python/cpython-3.11.15-macos-aarch64-none/lib/python3.11/asyncio/runners.py", line 190, in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+  File "/Users/pones/.local/share/uv/python/cpython-3.11.15-macos-aarch64-none/lib/python3.11/asyncio/runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/pones/.local/share/uv/python/cpython-3.11.15-macos-aarch64-none/lib/python3.11/asyncio/base_events.py", line 654, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "<string>", line 30, in main
+  File "/Users/pones/.local/share/uv/python/cpython-3.11.15-macos-aarch64-none/lib/python3.11/asyncio/tasks.py", line 489, in wait_for
+    return fut.result()
+           ^^^^^^^^^^^^
+  File "/private/tmp/a4s-agentevals-canary-758f1368-20261007T185536Z/venv/lib/python3.11/site-packages/agentevals/trajectory/llm.py", line 241, in _wrapped_evaluator
+    ) = _format_inputs(outputs, reference_outputs)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/private/tmp/a4s-agentevals-canary-758f1368-20261007T185536Z/venv/lib/python3.11/site-packages/agentevals/trajectory/llm.py", line 83, in _format_inputs
+    outputs = _normalize_to_openai_messages_list(outputs)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/private/tmp/a4s-agentevals-canary-758f1368-20261007T185536Z/venv/lib/python3.11/site-packages/agentevals/trajectory/utils.py", line 65, in _normalize_to_openai_messages_list
+    return [_convert_to_openai_message(message) for message in messages]  # type: ignore
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/private/tmp/a4s-agentevals-canary-758f1368-20261007T185536Z/venv/lib/python3.11/site-packages/agentevals/trajectory/utils.py", line 65, in <listcomp>
+    return [_convert_to_openai_message(message) for message in messages]  # type: ignore
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/private/tmp/a4s-agentevals-canary-758f1368-20261007T185536Z/venv/lib/python3.11/site-packages/agentevals/trajectory/utils.py", line 37, in _convert_to_openai_message
+    converted = convert_to_openai_messages([message])[0]  # type: ignore
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/private/tmp/a4s-agentevals-canary-758f1368-20261007T185536Z/venv/lib/python3.11/site-packages/langchain_core/messages/utils.py", line 1665, in convert_to_openai_messages
+    for i, message in enumerate(convert_to_messages(messages_)):
+                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/private/tmp/a4s-agentevals-canary-758f1368-20261007T185536Z/venv/lib/python3.11/site-packages/langchain_core/messages/utils.py", line 816, in convert_to_messages
+    return [_convert_to_message(m) for m in messages]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/private/tmp/a4s-agentevals-canary-758f1368-20261007T185536Z/venv/lib/python3.11/site-packages/langchain_core/messages/utils.py", line 816, in <listcomp>
+    return [_convert_to_message(m) for m in messages]
+            ^^^^^^^^^^^^^^^^^^^^^^
+  File "/private/tmp/a4s-agentevals-canary-758f1368-20261007T185536Z/venv/lib/python3.11/site-packages/langchain_core/messages/utils.py", line 787, in _convert_to_message
+    raise ValueError(msg) from e
+ValueError: Message dict must contain 'role' and 'content' keys, got {'schemaVersion': 1, 'traceId': 'd3fa291f-959b-49f2-89a3-7f29316cfb73', 'scenarioId': 'START-01', 'runIndex': 1, 'shardIndex': 0, 'shardCount': 1, 'outcome': 'normal', 'events': [], 'decision': 'fail', 'reasons': [{'code': 'unknown-reason'}, {'code': 'unknown-reason'}, {'code': 'unknown-reason'}, {'code': 'unknown-reason'}], 'infrastructureError': {'category': 'unknown', 'code': 'infrastructure-error'}, 'content': ''}
+For troubleshooting, visit: https://docs.langchain.com/oss/python/langchain/errors/MESSAGE_COERCION_FAILURE 
