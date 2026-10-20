@@ -1,6 +1,46 @@
 # OMP Dagu
 
-OMP package for the Dagu issue lifecycle: progress widget, triage guard, `triage-reviewer` and `plan-reviewer` agents, and the `dagu-feature`, `backlog-breakdown`, and `discovery` skills and templates. Requires Node.js >=22.19.0 and Dagu 2.20.1 with local authentication `none`.
+OMP package for the Dagu issue lifecycle: progress widget, triage guard, `triage-reviewer` and `plan-reviewer` agents, and the `dagu-feature`, `backlog-breakdown`, and `discovery` skills and templates. Requires Node.js >=22.19.0 and Dagu `2.20.1+a4s419.2` with local authentication `none`.
+
+## Runtime distribution
+
+`daguFeature.dagu` is the exact output required from `dagu version`, including
+the build metadata. `daguFeature.daguReleaseBaseUrl` selects the A4S prerelease
+`dagu-2.20.1-a4s419.2`. CI downloads the prebuilt Linux amd64 archive and verifies
+its entry in `checksums.txt` before extraction; the existing parallel live lanes
+use that same runtime. The release also supports Darwin arm64. Each archive
+contains the executable `dagu` at its root.
+
+The native source commit is `6a8870ca3b7dc11ed59b2ff927e53ed5e43e5406`, based on
+upstream `225d4ee26017f32391ba8d8119c37c392b839614` (Dagu 2.20.1).
+The A4S release tag identifies the distribution integration commit, not the
+native source commit. Release assets `source.patch`, `source.git.tar.gz` and
+`provenance.json` retain the patch, self-contained native Git source and build
+provenance. `checksums.txt` covers both runtime archives and source assets.
+Verify the downloaded assets with `sha256sum --check checksums.txt` (or
+`shasum -a 256 --check checksums.txt` on macOS).
+
+For a source rebuild, use Go 1.27.2 and the commands recorded in
+`provenance.json`. For example, to build Linux amd64:
+
+```sh
+tar -xzf source.git.tar.gz
+git clone source.git dagu-source
+cd dagu-source
+git checkout 6a8870ca3b7dc11ed59b2ff927e53ed5e43e5406
+env GOOS=linux GOARCH=amd64 CGO_ENABLED=0 GOMAXPROCS=2 \
+  go build -p 2 -ldflags '-X main.version=2.20.1+a4s419.2' -o dagu ./cmd
+```
+
+For Darwin arm64, build natively with `GOMAXPROCS=2 go build -p 1`
+and the same linker version flag (`CGO_ENABLED=1` in the release build).
+The resulting executable must report exactly `2.20.1+a4s419.2`.
+
+The initial #419 exception authorizes source-pin/CI distribution through a PR.
+Global installation, service restart and production queue resumption require
+separate operator authorization. Before switching a shared store to this runtime,
+quiesce every writer using that store, including workers and CLI processes;
+resume them together on the exact pinned version.
 
 ## Instalación
 
@@ -36,7 +76,7 @@ fuera del historial la evidencia que necesites durante más tiempo.
 
 a4s versiona `dagu/LaunchAgent.plist`, `dagu/base.yaml` y las hojas propias de
 `dagu/config.yaml`. Tras el merge, desde el clon primario limpio, el operador
-instala o actualiza la configuración con el binario Dagu 2.20.1 en `PATH`:
+instala o actualiza la configuración con el binario Dagu `2.20.1+a4s419.2` en `PATH`:
 
 ```sh
 package="$PWD/packages/omp-dagu"
@@ -95,7 +135,7 @@ parámetros `--launch-agent` y `--log-dir` de su instalación.
 El mismo instalador aplica los archivos versionados y por defecto **difiere el
 reinicio**, incluso si el historial parece inactivo. La aplicación con `--apply`
 mantiene la instalación idempotente del plist/base, la fusión por nombre de las
-colas y la comprobación aislada de Dagu 2.20.1. `--check` compara sin aplicar;
+colas y la comprobación aislada del runtime fijado. `--check` compara sin aplicar;
 `--check` y `--apply` son mutuamente excluyentes.
 
 Escribir el archivo no recarga la concurrencia del scheduler activo. Después del
@@ -552,7 +592,7 @@ El gate compartido consulta `dagu version` únicamente con esa variable activa
 y exige el pin `daguFeature.dagu` de `package.json`. El comando predeterminado
 fija la variable a `0`, incluso si el entorno del llamador la tenía activa.
 
-Las pruebas vivas usan Dagu 2.20.1 del `PATH`, un `DAGU_HOME` temporal y un
+Las pruebas vivas usan el runtime fijado del `PATH`, un `DAGU_HOME` temporal y un
 puerto HTTP propio por fixture. Además, cada instancia genera un único
 `randomUUID()` y deriva los IDs `recovery-<healthy|gate|start_gate|push>-<uuid>`,
 manteniendo el nombre de DAG `feature`. Enqueue, REST, status, completion,

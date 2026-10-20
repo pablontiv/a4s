@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.92
+
+- Pin Dagu 2.20.1+a4s419.2 for native lifecycle state transitions and distribute checksummed prebuilt runtimes from the A4S prerelease (#419).
+- Preserve exact runtime identity checks and document native source provenance, reproducible builds and separately authorized station deployment.
+
 ## 0.3.91
 
 - Complete the parent feature run successfully after triage delegates to PoC, skipping implementation quality preparation on that route.
