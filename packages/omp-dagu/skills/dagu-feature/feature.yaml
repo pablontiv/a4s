@@ -879,6 +879,9 @@ steps:
 
   - id: quality_prepare
     depends: recover_gate
+    preconditions:
+      - condition: "${steps.triage.outputs.POC}"
+        expected: "no"
     run: |
       set -euo pipefail
       umask 0022

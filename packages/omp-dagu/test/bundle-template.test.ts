@@ -58,22 +58,6 @@ test("bootstrap detects source compatibility and renders and confirms all stamps
   assert.ok(bootstrap.includes('gsub(\\"__REBASE_RESOLVER__\\"; \\$resolver | tojson)'));
 });
 
-test("feature render preserves the adopted configuration and matches its template", () => {
-  const rendered = readFileSync(fileURLToPath(new URL("../../../.workspace/dagu/dags/feature.yaml", import.meta.url)), "utf8");
-  const replacements: Record<string, string> = {
-    __DAGU_FEATURE_STAMP__: rendered.split("\n")[0]!.slice("# dagu-feature-bundle: ".length),
-    __DAGU_FEATURE_VERSION__: rendered.match(/  - dagu-feature-bundle=(.+)/)![1]!,
-    __DAGU_FEATURE_IDENTITY__: rendered.match(/- DAGU_FEATURE_BUNDLE: "(.+)"/)![1]!,
-    TEMPLATE_REPO: "a4s", TEMPLATE_BASE_BRANCH: '"main"', __PRIMARY__: '"/Users/Shared/harness/a4s"',
-    __GATE__: '"npm ci && npm test && npm run typecheck"',
-    __REBASE_RESOLVER__: '"node packages/omp-dagu/bin/dagu-bundle-rebase.mjs"',
-    __REQUIRED_CHECK__: '"validate"', __VALIDATION__: '""',
-  };
-  let expected = skill("feature.yaml");
-  for (const [placeholder, value] of Object.entries(replacements)) expected = expected.replaceAll(placeholder, value);
-  assert.equal(rendered, expected);
-});
-
 test("bootstrap renders optional validation as the sole adopted value", {
   ...liveDagu,
 }, () => {

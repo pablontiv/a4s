@@ -320,6 +320,7 @@ steps:
       VERDICT=$(head -n 1 "$STATE/result.md" 2>/dev/null | tr -d '\r' | cut -d ' ' -f 2 || true)
       case "$VERDICT" in PASS|FAIL|INCONCLUSIVE) ;; *) VERDICT=ORCHESTRATION_FAILURE ;; esac
       printf '%s\n' "$VERDICT" > "$STATE/verdict"
+      rm -f "$STATE/comment.url"
       : > "$STATE/full.patch"
       : > "$STATE/diffstat"
       if [[ -d "$WORKTREE" && "$BASE_SHA" != unknown ]]; then
@@ -484,7 +485,27 @@ handler_on:
       WT_REAL="$WT"
       if [[ -d "$WT" ]]; then
         WT_REAL=$(cd "$WT" && pwd -P)
-        git -C "$PRIMARY" worktree remove "$WT_REAL"
+        REMOVE_ARGS=()
+        if [[ -n "$(git -C "$WT_REAL" status --porcelain --untracked-files=all)" ]]; then
+          STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "poc/runs/$RUN")
+          BASE_SHA=$(cat "$STATE/base.sha" 2>/dev/null || printf unknown)
+          CURRENT_PATCH=$(mktemp)
+          trap 'rm -f "$CURRENT_PATCH"; rmdir "$RESOURCE_LOCK"' EXIT
+          if [[ -f "$STATE/full.patch" && -s "$STATE/comment.url" && "$BASE_SHA" != unknown ]] &&
+             git -C "$WT_REAL" diff --binary "$BASE_SHA" > "$CURRENT_PATCH"; then
+            while IFS= read -r -d '' path; do
+              (cd "$WT_REAL"; git diff --no-index --binary -- /dev/null "$path") >> "$CURRENT_PATCH" || test "$?" -eq 1
+            done < <(git -C "$WT_REAL" ls-files --others --exclude-standard -z)
+            if cmp -s "$CURRENT_PATCH" "$STATE/full.patch"; then
+              REMOVE_ARGS=(--force)
+            fi
+          fi
+          if [[ ${#REMOVE_ARGS[@]} -eq 0 ]]; then
+            printf 'cleanup retained: worktree %s has unpublished changes; evidence %s\n' "$WT" "$STATE" >&2
+            exit 1
+          fi
+        fi
+        git -C "$PRIMARY" worktree remove "${REMOVE_ARGS[@]}" "$WT_REAL"
       fi
       git -C "$PRIMARY" worktree prune
       if git -C "$PRIMARY" show-ref --verify --quiet "refs/heads/$BRANCH"; then

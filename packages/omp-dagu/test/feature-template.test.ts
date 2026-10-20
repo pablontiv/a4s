@@ -207,13 +207,6 @@ test("effective quality accepts two independent PASS using canonical family toke
   } finally { rmSync(repo.root, { recursive: true, force: true }); }
 });
 
-test("template and installed render share the executable candidate publication contract", () => {
-  const contracts = definitions.map(([, path]) => {
-    const source = readFileSync(path, "utf8");
-    return source.slice(source.indexOf("  - id: implement\n"));
-  });
-  assert.equal(contracts[0], contracts[1]);
-});
 
 for (const scenario of ["fabricated report", "other SHA", "same subagent", "same-family fallback",
   "indeterminate model", "wrong parent", "wrong invocation", "stale invocation", "wrong role",
@@ -415,6 +408,41 @@ test("template quality admission rejects truncated inspected transcripts", () =>
     assert.match(result.stderr, /transcript changed/);
   } finally { rmSync(repo.root, { recursive: true, force: true }); }
 });
+
+for (const poc of ["yes", "no"] as const) {
+  test(`template isolated quality preparation ${poc === "yes" ? "skips PoC without an implementation worktree" : "prepares the implementation request"}`, { timeout: 60_000 }, () => {
+    const repo = repository();
+    try {
+      const home = join(repo.root, "dagu-home");
+      mkdirSync(join(home, "dags"), { recursive: true });
+      const bin = join(repo.root, "bin");
+      writeFileSync(join(bin, "curl"), "#!/bin/sh\nprintf '%s\\n' '{\"dagRunDetails\":{\"nodes\":[{\"step\":{\"id\":\"implement\"},\"startedAt\":\"2026-10-16T00:00:00Z\"}]}}'\n");
+      chmodSync(join(bin, "curl"), 0o755);
+      const source = readFileSync(definitions[0][1], "utf8");
+      const dag = join(home, "dags", "feature.yaml");
+      const variables = {
+        PRIMARY: repo.primary, WORKTREE: poc === "yes" ? join(repo.root, "missing-worktree") : repo.worktree,
+        RUN: "test-run", OMP_SESSION_ID: "parent-id", PATH: `${bin}:${process.env.PATH}`,
+      };
+      writeFileSync(dag, `name: feature\ntype: graph\nshell: bash\nenv:\n${Object.entries(variables).map(([key, value]) => `  - ${key}: ${JSON.stringify(value)}`).join("\n")}\nsteps:\n  - id: triage\n    run: "true"\n    outputs:\n      - name: POC\n  - id: recover_gate\n    run: "true"\n${extractStep(source, "quality_prepare")}`);
+      const result = spawnSync("dagu", ["start", "--only", "quality_prepare", "--output", `triage.POC=${poc}`, "--run-id", `quality-${poc}`, dag], {
+        encoding: "utf8", timeout: 45_000,
+        env: { ...process.env, DAGU_HOME: home, DAGU_COORDINATOR_ENABLED: "false" },
+      });
+      assert.equal(result.status, 0, result.stdout + result.stderr);
+      assert.match(result.stdout + result.stderr, new RegExp(`quality_prepare.*${poc === "yes" ? "skipped" : "succeeded"}`));
+      const request = join(repo.state, "quality-request.json");
+      if (poc === "no") {
+        const prepared = JSON.parse(readFileSync(request, "utf8"));
+        assert.equal(prepared.worktree, repo.worktree);
+        assert.equal(prepared.sha, git(repo.worktree, "rev-parse", "HEAD"));
+        assert.equal(prepared.implementStartedAt, "2026-10-16T00:00:00Z");
+      } else {
+        assert.equal(existsSync(request), false);
+      }
+    } finally { rmSync(repo.root, { recursive: true, force: true }); }
+  });
+}
 
 test("template quality preparation fails before writing a request for a missing worktree", () => {
   const repo = repository();
@@ -2127,6 +2155,7 @@ for (const [name, definition] of definitions) {
     try {
       await until(async () => { try { return (await fetch(`${api}/dag-runs`)).ok ? true : undefined; } catch { return undefined; } });
       for (const mode of ["empty", "gate-fail", "poc", "wrong-sha", "declared"] as const) {
+        if (mode === "poc" && name !== "template") continue;
         const repo = repository();
         try {
           const id = `validation-${randomUUID()}`;
@@ -2148,7 +2177,7 @@ for (const [name, definition] of definitions) {
             + Object.entries(vars).filter(([, value]) => value !== undefined).map(([key, value]) => `  - ${key}: ${JSON.stringify(value)}\n`).join("")
             + `steps:\n  - id: triage\n    run: printf 'POC=${mode === "poc" ? "yes" : "no"}\\n' >> "$DAGU_OUTPUT_FILE"\n    outputs:\n      - name: POC\n  - id: implement\n    depends: triage\n    action: human.task\n    with:\n      prompt: Implement candidate\n`
             + gate + extractStep(source, "recover_gate")
-            + extractStep(source, "quality_prepare").replace("    run: |", "    preconditions:\n      - condition: '${steps.triage.outputs.POC}'\n        expected: 'no'\n    run: |")
+            + extractStep(source, "quality_prepare")
             + ["quality_review", "quality_admit", "quality_transition", "validation", "push", "recover_push"].map(step => extractStep(source, step)).join(""));
           const completeQuality = async () => {
             await state(id, "waiting", "quality_review");

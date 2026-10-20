@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.91
+
+- Complete the parent feature run successfully after triage delegates to PoC, skipping implementation quality preparation on that route.
+- Remove a dirty PoC worktree only when its current full patch exactly matches published evidence and a publication marker exists; retain the worktree and branch with an issue #398 diagnostic when that proof is missing or stale.
+
 ## 0.3.90
 
 - Consolidate issue creation in backlog breakdown: import staged units, validate and independently review them, then materialize the operator-approved subset.
