@@ -1,8 +1,8 @@
 # dagu-feature-bundle: @a4s/omp-dagu@0.3.91 source=pablontiv/a4s@dce8dfe52e2131b7dd7955e2dff0e67af7a487b4 bootstrap=bootstrap-a4s-v0-3-91 dagu=2.20.1
 labels:
-  - workspace=a4s
+  - workspace=a4s-v1
   - dagu-feature-bundle=0.3.91
-queue: a4s
+queue: a4s-v1
 type: graph
 dotenv: []
 shell: bash
@@ -21,7 +21,7 @@ params:
       default: ""
     BASE_BRANCH:
       type: string
-      default: "main"
+      default: "integration/v1"
       pattern: '^[A-Za-z0-9][A-Za-z0-9._/-]*$'
     VALIDATION:
       type: string
@@ -34,7 +34,7 @@ params:
       type: string
       default: ""
 env:
-  - PRIMARY: "/Users/Shared/harness/a4s"
+  - PRIMARY: "/Users/Shared/harness/a4s-v1"
   - BRANCH: dagu/issue-${ISSUE}
   - GATE: "npm ci && npm test && npm run typecheck"
   - REBASE_RESOLVER: "node packages/omp-dagu/bin/dagu-bundle-rebase.mjs"

@@ -1,8 +1,8 @@
 # dagu-feature-bundle: @a4s/omp-dagu@0.3.91 source=pablontiv/a4s@dce8dfe52e2131b7dd7955e2dff0e67af7a487b4 bootstrap=bootstrap-a4s-v0-3-91 dagu=2.20.1
 labels:
-  - workspace=a4s
+  - workspace=a4s-v1
   - dagu-feature-bundle=0.3.91
-queue: a4s
+queue: a4s-v1
 type: graph
 dotenv: []
 shell: bash
@@ -20,7 +20,7 @@ params:
       default: ""
     BASE_BRANCH:
       type: string
-      default: "main"
+      default: "integration/v1"
     OMP_SESSION_ID:
       type: string
       default: ""
@@ -29,7 +29,7 @@ params:
       default: "(^|/)(test|tests)/|\\.test\\.(ts|cjs)$"
   required: [ISSUE]
 env:
-  - PRIMARY: "/Users/Shared/harness/a4s"
+  - PRIMARY: "/Users/Shared/harness/a4s-v1"
   - RUN: ${context.run.id}
   - WORKTREE: ${PRIMARY}/.workspace/worktrees/poc-${RUN}
   - DAGU_FEATURE_BUNDLE: "dagu-feature-bundle=0.3.91 source=pablontiv/a4s@dce8dfe52e2131b7dd7955e2dff0e67af7a487b4 bootstrap=bootstrap-a4s-v0-3-91"

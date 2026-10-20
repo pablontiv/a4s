@@ -46,18 +46,34 @@ Sprint Planning alone ranks and enqueues new work; Dagu executes it. Discovery a
 
 ## Flujo de issues
 
-a4s usa su propio ciclo `dagu-feature`, versionado en [`.workspace/dagu/dags/feature.yaml`](.workspace/dagu/dags/feature.yaml). El gate local es `npm ci && npm test && npm run typecheck`, y `main` exige el check `validate` de [`.github/workflows/ci.yml`](.github/workflows/ci.yml). Cada issue se lleva con un run desde el clone (no desde un worktree), limpio y en `main`. El DAG crea el worktree del issue en `.workspace/worktrees/issue-<n>`:
+A4S runs the issue lifecycle through the versioned
+[feature DAG](.workspace/dagu/dags/feature.yaml). Each lane has an independent
+primary clone and owns its selected issues:
 
-Los renders `feature`, `poc`, `discovery` y `reconcile` adoptan
-`@a4s/omp-dagu@0.3.8`, source
-`pablontiv/a4s@fe5d444e9c9133d5bac3d2aeef054fee56d01fdb`, bootstrap
-`bootstrap-a4s-v0-3-8` y Dagu `2.20.1` (#271). Su identidad se consulta con
-`node packages/omp-dagu/bin/dagu-feature-bundle.ts .`.
+| Lane | Primary clone | Base branch | Dagu queue |
+|---|---|---|---|
+| main | `/Users/Shared/harness/a4s` | `main` | `a4s` |
+| v1 | `/Users/Shared/harness/a4s-v1` | `integration/v1` | `a4s-v1` |
+
+The local gate is `npm ci && npm test && npm run typecheck`; both branches use
+the `validate` check from [CI](.github/workflows/ci.yml). Start the coordinator
+inside its primary clone, clean and on its base branch. Dagu creates each issue
+worktree at `.workspace/worktrees/issue-<n>`. Select distinct issues for the two
+lanes because they share the GitHub origin and issue-numbered remote refs.
+
+The approved installed controller and scheduled reconciler remain shared.
+The lane configuration changes existing render placeholders; admission verifies
+their source-template provenance. Inspect the actual bundle stamp in each DAG.
+Discovery inspects GitHub's default branch; planning takes an explicit `PRIMARY`.
+
+From the v1 primary clone:
 
 ```sh
-n=<issue-selected-in-sprint-planning>
-node packages/omp-dagu/bin/dagu-feature-bundle.ts enqueue \
-  --run-id "a4s-issue-$n" .workspace/dagu/dags/feature.yaml -- \
+export DAGU_HOME=/Users/pones/.dagu
+CONTROLLER_CLI=/Users/pones/.omp/plugins/node_modules/@a4s/omp-dagu/bin/dagu-feature-bundle.ts
+n=<issue-selected-for-v1>
+node "$CONTROLLER_CLI" enqueue \
+  --run-id "a4s-v1-issue-$n" .workspace/dagu/dags/feature.yaml -- \
   ISSUE="$n" OMP_SESSION_ID="<value-returned-by-dagu_session_id>"
 ```
 
