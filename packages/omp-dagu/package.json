@@ -1,6 +1,6 @@
 {
   "name": "@a4s/omp-dagu",
-  "version": "0.3.91",
+  "version": "0.3.92",
   "private": true,
   "license": "UNLICENSED",
   "repository": {
@@ -17,7 +17,8 @@
     "node": ">=22.19.0"
   },
   "daguFeature": {
-    "dagu": "2.20.1"
+    "dagu": "2.20.1+a4s419.2",
+    "daguReleaseBaseUrl": "https://github.com/pablontiv/a4s/releases/download/dagu-2.20.1-a4s419.2"
   },
   "exports": {
     "./status": "./src/status/index.ts",

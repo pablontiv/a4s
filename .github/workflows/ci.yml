@@ -88,7 +88,7 @@ jobs:
         run: &install-pinned-dagu |
           version=$(node -p "require('./packages/omp-dagu/package.json').daguFeature.dagu")
           asset="dagu_${version}_linux_amd64.tar.gz"
-          url="https://github.com/dagu-org/dagu/releases/download/v${version}"
+          url=$(node -p "require('./packages/omp-dagu/package.json').daguFeature.daguReleaseBaseUrl")
           mkdir -p "$RUNNER_TEMP/dagu-install" "$RUNNER_TEMP/dagu-bin"
           cd "$RUNNER_TEMP/dagu-install"
           echo "Asset: $url/$asset"
