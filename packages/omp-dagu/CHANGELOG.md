@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.3.94
+
+- Validate implement completion against the current checkpoint cutoff and coordinator allocation using the same transcript and effective-model provenance required by quality review, including feature-last commands with spaced quoted inputs and reordered flags; stale deliveries retain Waiting implement with a fresh-task remedy.
+- Bind literal implement completion to Bash word-boundary comments and preserve quoted, escaped and embedded hashes; recognize one literal simple command and diagnose compound boundaries, expansion, redirection and incomplete quoting before provenance lookup.
+- Apply the same implementer provenance checks to native attached `-r<run-id>` completion arguments without consuming the following step flag.
+- Discover static JavaScript string and template command literals separately from shell parsing, including tagged templates and wrappers containing `#` comments; apply the same freshness/provenance check to the decoded shell command. Require one inspectable static call and reject ambiguous, dynamic or unsupported visible implement-completion intent before lookup, preserving Waiting implement against fresh decoys and stale actual commands.
+- Allow native quality-review push-back to implement in the same run and iteration history.
+- Run the native implement-guard and quality-review rewind regression in the canonical pinned-runtime live test suite.
+- Preserve the combined candidate's original merge-base during capture and handoff so all intended source changes reach the integration candidate (#375).
+- Materialize typed GitHub relationships separately from unit completeness, retaining independent completeness evidence (#442).
+- Bound planning preparation, record effort, and require independent plan review before operator approval (#445).
+- Clarify recovery delivery versus feature publication: recovery preserves retained evidence while feature publication follows its own candidate and quality boundaries (#450).
+- Read Dagu's structured native push-back counter in all three planning consumers, preserving the observed iteration across review and approval rewinds (#452).
+
 ## 0.3.93
 
 - Restore the official Dagu 2.20.1 runtime requirement and upstream release downloads, preserving manifest-derived fixtures, checksum verification and exact runtime/admission enforcement (#440).
