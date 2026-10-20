@@ -1,16 +1,19 @@
-# dagu-feature-bundle: @a4s/omp-dagu@0.3.8 source=pablontiv/a4s@fe5d444e9c9133d5bac3d2aeef054fee56d01fdb bootstrap=bootstrap-a4s-v0-3-8 dagu=2.20.1
+# dagu-feature-bundle: @a4s/omp-dagu@0.3.91 source=pablontiv/a4s@dce8dfe52e2131b7dd7955e2dff0e67af7a487b4 bootstrap=bootstrap-a4s-v0-3-91 dagu=2.20.1
 labels:
   - workspace=a4s
-  - dagu-feature-bundle=0.3.8
+  - dagu-feature-bundle=0.3.91
 queue: a4s
 type: graph
 dotenv: []
 shell: bash
 max_active_steps: 1
 params:
-  - name: SOURCE
+  - name: UNITS_FROM
     type: string
     required: true
+  - name: SOURCE
+    type: string
+    default: plan
   - name: PRIMARY
     type: string
     required: true
@@ -19,7 +22,7 @@ params:
     required: true
 env:
   - RUN: ${context.run.id}
-  - DAGU_FEATURE_BUNDLE: "dagu-feature-bundle=0.3.8 source=pablontiv/a4s@fe5d444e9c9133d5bac3d2aeef054fee56d01fdb bootstrap=bootstrap-a4s-v0-3-8"
+  - DAGU_FEATURE_BUNDLE: "dagu-feature-bundle=0.3.91 source=pablontiv/a4s@dce8dfe52e2131b7dd7955e2dff0e67af7a487b4 bootstrap=bootstrap-a4s-v0-3-91"
   - FEEDBACK: ""
 steps:
   - id: init
@@ -42,20 +45,36 @@ steps:
       - name: OUT_DIR
       - name: NWO
 
-  - id: plan
+  - id: import_units
     depends: init
-    action: human.task
-    with:
-      prompt: >-
-        Copia el plan aprobado localmente a ${steps.init.outputs.OUT_DIR}/plan.md
-        y escribe units.jsonl allí: {id,title,dag,question?,labels,body} por línea.
-        Cada unidad es autocontenida; feature requiere Problema, Cambio, Aceptación;
-        poc requiere PoC, Veredicto, Después del PASS y question.
-        Lee source.md y findings.md en ese directorio antes de corregir el plan.
-        Hallazgos de la revisión anterior: ${FEEDBACK}
+    continue_on:
+      failure: true
+    env:
+      - OUT_DIR: ${steps.init.outputs.OUT_DIR}
+    run: |
+      set -euo pipefail
+      rm -f "$OUT_DIR/validated-units.jsonl" "$OUT_DIR/reviewed-units.jsonl" "$OUT_DIR/review-accepted"
+      : > "$OUT_DIR/findings.md"
+      printf 'Import incomplete: correct UNITS_FROM before pushing back.\n' > "$OUT_DIR/import-error"
+      [[ "$UNITS_FROM" == /* ]]
+      [[ "$SOURCE" == refine || "$SOURCE" == discovery || "$SOURCE" == plan ]]
+      test -s "$UNITS_FROM"
+      cp "$UNITS_FROM" "$OUT_DIR/units.jsonl.tmp"
+      mv "$OUT_DIR/units.jsonl.tmp" "$OUT_DIR/units.jsonl"
+      source_dir=$(dirname "$UNITS_FROM")
+      printf '%s\n' "$SOURCE" > "$OUT_DIR/source.md.tmp"
+      if test -f "$source_dir/source.md"; then cp "$source_dir/source.md" "$OUT_DIR/source.md.tmp"; fi
+      mv "$OUT_DIR/source.md.tmp" "$OUT_DIR/source.md"
+      if test -f "$source_dir/plan.md"; then
+        cp "$source_dir/plan.md" "$OUT_DIR/plan.md.tmp"
+        mv "$OUT_DIR/plan.md.tmp" "$OUT_DIR/plan.md"
+      else
+        rm -f "$OUT_DIR/plan.md"
+      fi
+      rm "$OUT_DIR/import-error"
 
   - id: check_plan
-    depends: plan
+    depends: import_units
     continue_on:
       failure: true
     env:
@@ -63,17 +82,15 @@ steps:
     run: |
       set -euo pipefail
       : > "$OUT_DIR/findings.md"
-      rm -f "$OUT_DIR/review-rewind" "$OUT_DIR/approve-rewind"
       status=$(dagu status planning --run-id "$RUN")
       iteration=$(sed -nE 's/.*push-back iteration: ([0-9]+).*/\1/p' <<<"$status" | head -1)
       printf 'PLAN_REVIEW AGENT=plan-reviewer DAG=planning RUN=%s ITERATION=%s END\n' "$RUN" "${iteration:-0}" > "$OUT_DIR/generation"
       printf 'GENERATION=%s\n' "$(cat "$OUT_DIR/generation")" >> "$DAGU_OUTPUT_FILE"
       reject() {
         printf 'units.jsonl:%s: rule=%s\n' "$1" "$2" | tee "$OUT_DIR/findings.md" >&2
-        touch "$OUT_DIR/review-rewind"
         exit 1
       }
-      test -s "$OUT_DIR/plan.md" || reject 1 required-plan
+      test ! -f "$OUT_DIR/import-error" || reject 1 import-units
       file="$OUT_DIR/units.jsonl"
       test -s "$file" || reject 1 required-units
       line=0
@@ -93,13 +110,17 @@ steps:
           elif .dag == "poc" and (.question | nonempty | not) then "poc-question"
           elif (.labels | type != "array") then "labels"
           elif (.labels | all(nonempty) | not) then "labels"
+          elif has("source") and (.source != "refine" and .source != "discovery" and .source != "plan") then "source"
+          elif has("findings") and ((.findings | type != "array") or (.findings | all(nonempty) | not)) then "findings"
+          elif has("findings") and ((.findings | length) != (.findings | unique | length)) then "unique-findings"
           elif (.body | nonempty | not) then "body"
-          elif .dag == "feature" and (sections(["Problema","Cambio","Aceptación"]) | not) then "required-sections"
-          elif .dag == "poc" and (sections(["PoC","Veredicto","Después del PASS"]) | not) then "required-sections"
+          elif .dag == "feature" and (sections(["(Problema|Problem)","(Cambio|Change)","(Aceptación|Acceptance)"]) | not) then "required-sections"
+          elif .dag == "poc" and (sections(["PoC","(Veredicto|Verdict)","(Después del PASS|After PASS)"]) | not) then "required-sections"
           else "" end' <<<"$row")
         test -z "$rule" || reject "$line" "$rule"
         ids=$(jq -c --arg id "$(jq -r .id <<<"$row")" '. + [$id]' <<<"$ids")
       done < "$file"
+      cp "$file" "$OUT_DIR/validated-units.jsonl"
     outputs:
       - name: GENERATION
 
@@ -109,11 +130,13 @@ steps:
     with:
       prompt: >-
         ${steps.check_plan.outputs.GENERATION}.
-        Lanza task agent=plan-reviewer llamado PlanReview<RUN> (reintentos v<N>)
-        con ese marcador exacto, source.md, plan.md y units.jsonl de
-        ${steps.init.outputs.OUT_DIR}, los runs activos del workspace y los issues
-        abiertos. Completa REVIEW con el id asignado al subagente terminado.
-        Lee findings.md; el dispatcher devuelve automáticamente un plan inválido.
+        Launch task agent=plan-reviewer named PlanReview<RUN> (retries v<N>)
+        with this exact marker, source.md, units.jsonl and optional plan.md from
+        ${steps.init.outputs.OUT_DIR}, open issues and active workspace runs.
+        Complete REVIEW with the allocated id of the completed independent agent.
+        Read findings.md first. For invalid units, correct UNITS_FROM upstream,
+        then explicitly push back this task to import_units.
+        Correction context: ${FEEDBACK}
       form:
         type: object
         additionalProperties: false
@@ -123,7 +146,7 @@ steps:
             minLength: 1
         required: [REVIEW]
       push_back:
-        rewind_to: plan
+        rewind_to: import_units
         form:
           type: object
           additionalProperties: false
@@ -133,14 +156,18 @@ steps:
 
   - id: check_review
     depends: review
+    continue_on:
+      failure: true
     env:
       - OUT_DIR: ${steps.init.outputs.OUT_DIR}
       - REVIEW: ${steps.review.outputs.REVIEW}
     run: |
       set -euo pipefail
+      rm -f "$OUT_DIR/review-accepted" "$OUT_DIR/reviewed-units.jsonl"
+      trap 'printf "Review verification failed; inspect this step, correct upstream units or obtain a fresh reviewer, then push back explicitly.\n" >> "$OUT_DIR/findings.md"' ERR
       [[ "$REVIEW" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]
       test -n "$OMP_SESSION_ID"
-      test ! -f "$OUT_DIR/review-rewind"
+      cmp "$OUT_DIR/validated-units.jsonl" "$OUT_DIR/units.jsonl"
       rest=$(curl -fsS "http://127.0.0.1:${DAGU_PORT:-8080}/api/v1/dag-runs/planning/$RUN")
       cutoff=$(jq -er '[.dagRunDetails.nodes[]? | select(.step.id == "review")] | select(length == 1) | .[0].startedAt | select(type == "string" and length > 0)' <<<"$rest")
       status=$(dagu status planning --run-id "$RUN")
@@ -193,7 +220,9 @@ steps:
       mv "$OUT_DIR/review-$iteration.json.tmp" "$OUT_DIR/review-$iteration.json"
       if [[ "$(jq -r .verdict "$OUT_DIR/review-$iteration.json")" == revise ]]; then
         jq -r '.findings[] | "[\(.severity)] \(.unit): \(.text)"' "$OUT_DIR/review-$iteration.json" > "$OUT_DIR/findings.md"
-        touch "$OUT_DIR/approve-rewind"
+      else
+        cp "$OUT_DIR/units.jsonl" "$OUT_DIR/reviewed-units.jsonl"
+        printf '%s\n' "$marker" > "$OUT_DIR/review-accepted"
       fi
 
   - id: approve
@@ -201,10 +230,12 @@ steps:
     action: human.task
     with:
       prompt: >-
-        Revisa ${steps.init.outputs.OUT_DIR}/units.jsonl y review-<iteración>.json.
-        Lee findings.md: un revise vuelve automáticamente a plan con esos hallazgos.
-        Solo el operador autoriza APPROVED=all o una lista de ids separada por comas.
-        Ninguna escritura en GitHub ocurre antes de completar esta aprobación.
+        Read ${steps.init.outputs.OUT_DIR}/units.jsonl, review-<iteration>.json
+        and findings.md. An accepted independent review is required for publication.
+        For corrections, edit UNITS_FROM upstream through refine/the coordinator,
+        then explicitly push back to import_units for a fresh import and review.
+        Only the operator authorizes APPROVED=all or a comma-separated subset of ids.
+        GitHub issues are created only after this approval and an accepted review.
       form:
         type: object
         additionalProperties: false
@@ -214,7 +245,7 @@ steps:
             minLength: 1
         required: [APPROVED]
       push_back:
-        rewind_to: plan
+        rewind_to: import_units
         form:
           type: object
           additionalProperties: false
@@ -230,7 +261,13 @@ steps:
       - NWO: ${steps.init.outputs.NWO}
     run: |
       set -euo pipefail
-      test ! -f "$OUT_DIR/approve-rewind"
+      cmp "$OUT_DIR/reviewed-units.jsonl" "$OUT_DIR/units.jsonl"
+      cmp "$OUT_DIR/review-accepted" "$OUT_DIR/generation"
+      status=$(dagu status planning --run-id "$RUN")
+      iteration=$(sed -nE 's/.*push-back iteration: ([0-9]+).*/\1/p' <<<"$status" | head -1)
+      iteration=${iteration:-0}
+      test "$(cat "$OUT_DIR/review-accepted")" = "PLAN_REVIEW AGENT=plan-reviewer DAG=planning RUN=$RUN ITERATION=$iteration END"
+      jq -e '.verdict == "accept" and (.findings | all(.severity != "blocker"))' "$OUT_DIR/review-$iteration.json" >/dev/null
       units="$OUT_DIR/units.jsonl"
       issues="$OUT_DIR/issues.jsonl"
       if [[ "$APPROVED" == all ]]; then
@@ -250,8 +287,18 @@ steps:
       while IFS= read -r unit; do
         index=$((index + 1))
         id=$(jq -er '.id' <<<"$unit")
-        marker="<!-- planning-unit: $RUN/$id -->"
-        matches=$(jq -c --arg marker "$marker" '[.[] | select((.body // "") | contains($marker))]' <<<"$existing")
+        marker="<!-- breakdown-unit: $RUN/$id -->"
+        source_marker=""
+        if [[ "$(jq -r --arg source "$SOURCE" '.source // $source' <<<"$unit")" == discovery ]]; then
+          candidate="<!-- discovery-unit: $id -->"
+          if jq -e --arg marker "$candidate" '.body | contains($marker)' <<<"$unit" >/dev/null; then
+            source_marker=$candidate
+          fi
+        fi
+        matches=$(jq -c --arg marker "$marker" --arg source_marker "$source_marker" '
+          [.[] | select((.body // "") | contains($marker) or
+            ($source_marker != "" and contains($source_marker)))]
+        ' <<<"$existing")
         count=$(jq 'length' <<<"$matches")
         if test "$count" -gt 1; then
           printf 'issues.jsonl:1: rule=unique-issue-marker unit=%s\n' "$id" >&2
@@ -262,7 +309,11 @@ steps:
           reused=true
         else
           body_file="$OUT_DIR/issue-body-$index.md"
-          { jq -r '.body' <<<"$unit"; printf '\n\n%s\n' "$marker"; } > "$body_file"
+          {
+            jq -r '.body' <<<"$unit"
+            printf '\n\n%s\n' "$marker"
+            jq -r --arg source "$SOURCE" '"\nBreakdown source: " + (.source // $source), (if has("findings") then "Finding lineage: " + (.findings | join(", ")) else empty end)' <<<"$unit"
+          } > "$body_file"
           title=$(jq -er '.title' <<<"$unit")
           labels=()
           while IFS= read -r label; do labels+=(--label "$label"); done < <(jq -r '.labels[]' <<<"$unit")
@@ -276,55 +327,4 @@ steps:
       done < <(jq -c '.[]' "$OUT_DIR/approved-units.json")
       mv "$issues.tmp" "$issues"
 
-  - id: dispose
-    depends: materialize
-    env:
-      - OUT_DIR: ${steps.init.outputs.OUT_DIR}
-      - NWO: ${steps.init.outputs.NWO}
-    run: |
-      set -euo pipefail
-      repo=${NWO##*/}
-      jq -nc --slurpfile issues "$OUT_DIR/issues.jsonl" --slurpfile units "$OUT_DIR/units.jsonl" '
-        $issues[] as $issue | $units[] | select(.id == $issue.id) | . + {number:$issue.number}
-      ' | while IFS= read -r row; do
-        dag=$(jq -r .dag <<<"$row")
-        number=$(jq -r .number <<<"$row")
-        if [[ "$dag" == feature ]]; then run_id="$repo-issue-$number"; else run_id="$repo-poc-$number"; fi
-        if dagu status --run-id "$run_id" "$dag" >/dev/null 2>&1; then
-          printf 'exists=%s issue=%s\n' "$run_id" "$number"
-        else
-          args=(ISSUE="$number" OMP_SESSION_ID="$OMP_SESSION_ID")
-          if [[ "$dag" == feature ]]; then args+=(PR_NUMBER="")
-          else args+=(QUESTION="$(jq -r .question <<<"$row")"); fi
-          dagu-feature-bundle enqueue --run-id "$run_id" "$PRIMARY/.workspace/dagu/dags/$dag.yaml" -- "${args[@]}"
-          printf 'enqueued=%s issue=%s\n' "$run_id" "$number"
-        fi
-      done
 
-handler_on:
-  wait:
-    run: |
-      set -euo pipefail
-      # init outputs are not injected into handlers; derive the same durable namespace.
-      NWO=$(cd "$PRIMARY" && gh repo view --json nameWithOwner --jq .nameWithOwner)
-      OUT_DIR="${DAGU_HOME:-$HOME/.dagu}/data/planning/${NWO/\//__}/$RUN"
-      for STEP in review approve; do
-        if [[ ",$DAG_WAITING_STEPS," == *,"$STEP",* && -f "$OUT_DIR/$STEP-rewind" ]]; then
-          # Dagu persists Waiting only after onWait exits, as in feature dependency_review.
-          nohup bash -c '
-            set -euo pipefail
-            OUT_DIR=$1 RUN=$2 STEP=$3
-            for attempt in $(seq 1 60); do
-              STATUS=$(dagu status planning --run-id "$RUN")
-              if grep -q "^Waiting -" <<<"$STATUS"; then
-                ITERATION=$(sed -nE "s/.*push-back iteration: ([0-9]+).*/\1/p" <<<"$STATUS" | head -1)
-                dagu human-task push-back planning --run-id "$RUN" --step "$STEP" --expected-iteration "${ITERATION:-0}" --input "FEEDBACK=$(cat "$OUT_DIR/findings.md")"
-                exit 0
-              fi
-              sleep 1
-            done
-            printf "%s transition did not reach Waiting; inspect this checkpoint.\n" "$STEP" >&2
-            exit 1
-          ' _ "$OUT_DIR" "$RUN" "$STEP" </dev/null > "$OUT_DIR/$STEP-transition.log" 2>&1 &
-        fi
-      done
