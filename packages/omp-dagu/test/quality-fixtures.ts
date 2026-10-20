@@ -30,7 +30,7 @@ export function qualityFixture(repo: Repository, verdict: "PASS" | "FAIL" = "PAS
       attempt: request.attempt, role, verdict, findings: verdict === "FAIL" ? ["Fix acceptance regression"] : ["Acceptance checked"] };
     messages.push({ type: "message", timestamp: invoked, message: {
       role: "assistant", content: [{ type: "toolCall", id: `invoke-${id}`, name: "task",
-        arguments: { tasks: [{ name: id, agent, task: marker }] } }],
+        arguments: { tasks: [{ name: id, ...(role === "implementer" ? {} : { agent }), task: marker }] } }],
     } });
     const child: TranscriptRow[] = [
       { type: "session", id: `child-${id}`, parentSession: parent },

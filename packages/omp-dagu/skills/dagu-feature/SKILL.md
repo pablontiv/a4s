@@ -15,7 +15,7 @@ flowchart LR
     A --> AS[recover_start_gate]
     AS -->|healthy: skipped| B[implement<br/>human.task<br/>issue subagent]
     AS -->|operator repair: push-back| A
-    B --> CP[capture<br/>Dagu commit] --> C[checkpoint_push]
+    B --> CP[capture<br/>Dagu commit] --> C[checkpoint_push<br/>remote recovery ref]
     C --> N[dependency_review]
     N -->|new dependencies: push-back| T
     N -->|reviewed dependencies| D[rebase]
@@ -228,7 +228,7 @@ The bootstrap renders the repository DAG templates when a repository adopts the 
 
 The DAG's fixed invariants: `PRIMARY` is the repository clone, its main working tree, on `BASE_BRANCH` and clean; the run's worktree is always `$PRIMARY/.workspace/worktrees/issue-<n>`, ignored by git; the gate runs with `umask 0022` and without `GH_TOKEN`/`GITHUB_TOKEN`; auto-merge is bound to the tested SHA with `--match-head-commit`; and the queue has concurrency one per repository. `start_gate` registers the canonical PRIMARY, worktree, branch and owning run in Git metadata. Both cleanup entry points share the same script. They refresh the remote base and require either candidate ancestry in that base or a MERGED PR whose head equals the recorded tested candidate and whose effective merge SHA is an ancestor of the refreshed base. `cleanup-proof.json` records candidate, base, squash SHA and proof. Ordinary `git worktree remove` protects local files; a dirty worktree is retained. Local branch deletion compares the candidate atomically; remote deletion at merged close uses an exact-SHA lease.
 
-`push` remains the publication boundary after current-candidate verification. Uncaptured files and conflict resolutions remain in their worktree for recovery even when HEAD is on the base.
+`push` publishes the feature branch for PR delivery after current-candidate verification. Uncaptured files and conflict resolutions remain in their worktree for recovery even when HEAD is on the base.
 
 ## Adopt in a repository
 
@@ -439,15 +439,23 @@ Admission durably records the terminal previous owner in the replacement run's
 and run identity while preserving HEAD and files. Repeating `start_gate` reuses
 that identity. Ownership refusals print the resource and observed/expected identity.
 
+On initial adoption, `start_gate` records `initial-head` separately from `base`.
+`base` is the merge-base of the accepted worktree HEAD and fetched remote base.
+`capture` combines retained commits and delivered files in one candidate parented
+by `base`, and accepts `initial-head` until `candidate.json` records the candidate.
+Conflict rewind preserves delivered files and refreshes `base` and `initial-head`
+for recapture.
+
 A failed run can leave its PR's auto-merge armed. Before reenqueuing, read
 `gh pr view <pr> --json state`: `MERGED` means the issue's delivery is complete.
 Otherwise the replacement run's `push` can trigger that merge; the current
 candidate must complete its local gate before that publication.
 
-`checkpoint_push` also preserves the candidate in
-`refs/dagu/checkpoints/issue-N`, using an explicit lease against the previous
-checkpoint SHA recorded in `<git-dir>/dagu-feature/runs/<RUN>/checkpoint-sha`
-(or observed remotely for a replacement run). Checkpoint publication leaves the PR head and its
+`checkpoint_push` preserves the captured candidate before the gate and QA/review
+in the remote recovery ref `refs/dagu/checkpoints/issue-N`, using an explicit
+lease against the previous checkpoint SHA recorded in
+`<git-dir>/dagu-feature/runs/<RUN>/checkpoint-sha` (or observed remotely for a
+replacement run). This recovery transfer leaves the feature branch, PR head and
 auto-merge unchanged. To recover that checkpoint in a fresh clone:
 
 ```sh
@@ -714,6 +722,26 @@ timestamp to verify invocation freshness. Each transcript must retain one
 agent/task identity. Supply the new allocated id as `IMPLEMENTER` when
 completing the corrected delivery.
 
+At implement completion the extension resolves the current checkpoint's exact
+`startedAt` and coordinator transcript. The allocated `IMPLEMENTER` must have a
+unique parent task invocation with the exact `FEATURE_IMPLEMENT RUN=<run-id>`
+marker and one agent/task identity. A parent allocation with the default agent
+omitted correlates to runtime `agent=task`; explicit agents match their runtime
+identity. Its first `session_init` must be strictly
+after that cutoff, preserving milliseconds; identical later reload rows retain
+the original cutoff comparison. The same provenance and effective-model
+validator runs again for quality review. A rejection names the failed invariant,
+keeps `Waiting implement`, and requires a newly launched `Implement<ISSUE>v<N>`
+after the current cutoff. At `quality_review`, native push-back with the observed
+run-wide iteration rewinds to `implement` for that fresh delivery.
+Literal completion recognition preserves quoted input values and flag order:
+feature-first or feature-last, spaced SUMMARY and MESSAGE, equals flags, short
+run/quiet flags and backslash-newline continuations. It binds the IMPLEMENTER
+from one literal simple command. An unquoted `#` at a word boundary starts a
+comment; quoted, escaped and embedded hashes remain argument text. Compound
+command boundaries, expansion, redirection and incomplete quoting produce an
+`IMPLEMENT_BLOCKED` diagnostic for recognized feature implement completions.
+
 - Leave real-`DAGU_HOME` `dagu human-task` transitions, pushes, PR creation and
   GitHub comments to the coordinator and DAG. Leave `omp plugin link` and
   `~/.omp` configuration to the operator.
@@ -854,8 +882,8 @@ including signed candidates. Corrections create a new single commit over the bas
 Corrections and rebases archive earlier candidate/diff/gate
 and quality records under `historical/<SHA>/`; all declared local checks belong in GATE and
 run again for the current SHA. `push` and `auto_merge` require current evidence
-and a clean worktree. `checkpoint_push` performs the dependency comparison
-locally; `push` is the publication boundary after the gate and both effective PASS.
+and a clean worktree. `checkpoint_push` compares dependencies locally and transfers
+the remote recovery ref; `push` publishes the feature branch after the gate and both effective PASS.
 The same sequence runs for the initial candidate, every correction and every rebase.
 
 ### Effective QA and review
