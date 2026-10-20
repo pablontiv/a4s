@@ -393,6 +393,7 @@ test("Dagu 2.20.1: paired root waits return to implement/rebase and release the 
     transition(f, reconcile);
     await until("same feature succeeds", async () => {
       const response = await fetch(`${api}/dag-runs/feature/ci226`);
+      if (!response.ok) return undefined;
       const run = (await response.json() as { dagRunDetails: RunDetails }).dagRunDetails;
       assert.notEqual(run.statusLabel, "failed", JSON.stringify(run));
       return run.statusLabel === "succeeded" ? true : undefined;
