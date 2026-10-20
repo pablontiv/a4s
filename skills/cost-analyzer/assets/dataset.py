@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Canonical session ledger for Pi, Claude Code, and Codex."""
+"""Canonical session ledger for Pi, omp, Claude Code, and Codex."""
 from __future__ import annotations
 
 import datetime as dt
@@ -13,6 +13,7 @@ UTC = dt.timezone.utc
 PI_CUTOVER = dt.datetime(2026, 9, 4, 4, 43, 9, tzinfo=UTC)
 DEFAULT_ROOTS = {
     'pi': Path.home() / '.pi/agent/sessions',
+    'omp': Path.home() / '.omp/agent/sessions',
     'claude': Path.home() / '.claude/projects',
     'codex': Path.home() / '.codex',
 }
@@ -50,7 +51,7 @@ def classify_topology(evidence: TopologyEvidence, parseable: bool) -> tuple[Lite
 @dataclass(frozen=True)
 class SessionRecord:
     id: str | None
-    harness: Literal['pi', 'claude', 'codex']
+    harness: Literal['pi', 'omp', 'claude', 'codex']
     source_path: str
     schema_version: str
     started_at: dt.datetime | None
@@ -76,6 +77,7 @@ class SessionRecord:
     commit_coverage: Literal['observable', 'not-a-repo', 'no-timestamps', 'error'] = 'not-a-repo'
     prs: frozenset[int] = field(default_factory=frozenset)
     beads_closed: frozenset[str] = field(default_factory=frozenset)
+    parent_session_id: str | None = None
 
 
 def parse_timestamp(value: str | None) -> dt.datetime | None:
@@ -208,8 +210,8 @@ def extension_for_window(started_at: dt.datetime | None, ended_at: dt.datetime |
 
 
 def load_ledger(since: dt.date, until: dt.date | None = None, roots: Mapping[str, Path] = DEFAULT_ROOTS) -> list[SessionRecord]:
-    """Load every JSONL selected by mtime from the three source roots."""
-    parsers = {'pi': parse_pi_session, 'claude': parse_claude_session, 'codex': parse_codex_session}
+    """Load every JSONL selected by mtime from all source roots."""
+    parsers = {'pi': parse_pi_session, 'omp': parse_omp_session, 'claude': parse_claude_session, 'codex': parse_codex_session}
     records: list[SessionRecord] = []
     for harness, root in roots.items():
         parser = parsers[harness]
@@ -333,6 +335,80 @@ def parse_pi_session(path: Path) -> SessionRecord:
         delegation_degree=delegation_degree,
         has_intercom=has_intercom_flag,
         pi_extension=extension_for_window(started_at, ended_at),
+    )
+
+
+def parse_omp_session(path: Path) -> SessionRecord:
+    """Read omp turns and structural child links without mixing user usage."""
+    started_at = ended_at = None
+    session_id = cwd = model = provider = None
+    assistant_turns = spawn_calls = 0
+    input_tokens = output_tokens = cache_read_tokens = cache_write_tokens = 0
+    cost = 0.0
+    has_cost = has_intercom = False
+    parent_session_id = path.parent.name if path.parent.with_name(path.parent.name + '.jsonl').is_file() else None
+    has_children = any(path.with_suffix('').glob('*.jsonl'))
+    with path.open(errors='ignore') as source:
+        for line in source:
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if record.get('type') == 'session':
+                session_id = session_id or record.get('id')
+                cwd = cwd or record.get('cwd')
+                started_at = started_at or parse_timestamp(record.get('timestamp'))
+            if record.get('type') != 'message':
+                continue
+            ended_at = parse_timestamp(record.get('timestamp')) or ended_at
+            message = record.get('message') or {}
+            if not isinstance(message, dict) or message.get('role') != 'assistant':
+                continue
+            assistant_turns += 1
+            model = message.get('model') or model
+            provider = message.get('provider') or provider
+            usage = message.get('usage') or {}
+            input_tokens += usage.get('input', 0) or 0
+            output_tokens += usage.get('output', 0) or 0
+            cache_read_tokens += usage.get('cacheRead', 0) or 0
+            cache_write_tokens += usage.get('cacheWrite', 0) or 0
+            native_cost = usage.get('cost')
+            if isinstance(native_cost, dict) and native_cost.get('total') is not None:
+                has_cost = True
+                cost += native_cost['total']
+            for block in message.get('content') or []:
+                if not isinstance(block, dict) or block.get('type') != 'toolCall':
+                    continue
+                if block.get('name') == 'task':
+                    spawn_calls += 1
+                if block.get('name') == 'write':
+                    arguments = block.get('arguments') or {}
+                    if isinstance(arguments, str):
+                        try:
+                            arguments = json.loads(arguments)
+                        except json.JSONDecodeError:
+                            continue
+                    if isinstance(arguments, dict) and str(arguments.get('path') or '').startswith('agent://'):
+                        has_intercom = True
+    delegation = spawn_calls > 0 or has_children
+    degree = calculate_delegation_degree(spawn_calls, assistant_turns)
+    # agent:// addresses actors in the same session tree, not separate sessions.
+    evidence = TopologyEvidence(delegation=delegation)
+    topology, confidence = classify_topology(evidence, started_at is not None)
+    return SessionRecord(
+        id=session_id or path.stem, harness='omp', source_path=str(path),
+        schema_version='omp-jsonl-v1', started_at=started_at,
+        ended_at=ended_at or started_at, cwd=cwd, model=model, provider=provider,
+        input_tokens=input_tokens, output_tokens=output_tokens,
+        cache_read_tokens=cache_read_tokens, cache_write_tokens=cache_write_tokens,
+        cost_native_usd=cost if has_cost else None,
+        topology=topology if topology != 'unknown' else None,
+        observed_topology=topology, topology_confidence=confidence,
+        topology_evidence=evidence,
+        form=classify_pi_form(delegation, degree, False),
+        form_confidence='direct' if delegation else 'inferred',
+        delegation_degree=degree, has_intercom=has_intercom,
+        parent_session_id=parent_session_id,
     )
 
 

@@ -12,25 +12,9 @@ const LOG_FILE_NAME = 'operational.jsonl'
 const ERROR_PHASES = new Set([
   'arguments',
   'db.open',
-  'ensure',
-  'lock.acquire',
-  'lock.release',
-  'pane.close',
-  'pane.get',
-  'pane.open',
-  'pane.process_info',
   'port.listen',
-  'readiness.mqtt',
   'readiness.tcp',
-  'state.read',
-  'state.write',
   'shutdown',
-  'tab.close',
-  'tab.get',
-  'tab.rename',
-  'workspace.create',
-  'workspace.list',
-  'workspace.validate',
 ])
 const SEVERITY_NUMBER = Object.freeze({
   DEBUG: 5,
@@ -82,7 +66,7 @@ function tagOperationalError(error, code, { phase, retryable = false } = {}) {
   const target = error instanceof Error ? error : new Error('operational failure')
   for (const [name, value] of [
     ['a4sCode', code],
-    ['a4sPhase', ERROR_PHASES.has(phase) ? phase : 'ensure'],
+    ['a4sPhase', ERROR_PHASES.has(phase) ? phase : undefined],
     ['retryable', Boolean(retryable)],
   ]) {
     Object.defineProperty(target, name, { configurable: true, value, writable: true })

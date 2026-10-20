@@ -1,4 +1,0 @@
-Error: Pion host process 20425 has an invalid identity
-    at parseProcessIdentityFromPs (/private/tmp/a4s-e2e-dba1f6e0.20261007T175840Z.hXiF97/worktree/test/support/work-gate-live.ts:1865:46)
-    at Module.readProcessIdentity (/private/tmp/a4s-e2e-dba1f6e0.20261007T175840Z.hXiF97/worktree/test/support/work-gate-live.ts:1898:20)
-    at <anonymous> (/private/tmp/a4s-e2e-dba1f6e0.20261007T175840Z.hXiF97/inventory-collector.ts:61:35)

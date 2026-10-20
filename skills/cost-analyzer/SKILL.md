@@ -3,12 +3,12 @@ name: cost-analyzer
 metadata:
   author: pablontiv
   updated: "2026-10-06"
-description: Analiza un ledger canónico de sesiones Pi, Claude Code y Codex de TODAS LAS SESIONES (sin filtro de proyecto). Clasifica sesiones Pi en 4 formas de topología. Costo/cuota predicho por tokens (input/output/cacheRead/cacheWrite), no por forma. Use when the user asks about costo/tokens/outcomes por harness, topología de sesión, o eficiencia de delegación. Requiere `git`, opcionalmente `gh` y `bd`.
+description: Analiza un ledger canónico de sesiones Pi, omp, Claude Code y Codex de TODAS LAS SESIONES (sin filtro de proyecto). Clasifica sesiones Pi y omp en 4 formas de topología. Costo/cuota predicho por tokens (input/output/cacheRead/cacheWrite), no por forma. Use when the user asks about costo/tokens/outcomes por harness, topología de sesión, o eficiencia de delegación. Requiere `git`, opcionalmente `gh` y `bd`.
 ---
 
 ## What this skill answers
 
-El skill analiza sesiones de TODOS LOS PROYECTOS (Pi, Claude Code, Codex) y clasifica las sesiones Pi en 4 formas de topología independientes del costo. El costo/cuota se predice por tokens consumidos, no por forma.
+El skill analiza sesiones de TODOS LOS PROYECTOS (Pi, omp, Claude Code, Codex) y clasifica las sesiones Pi y omp en 4 formas de topología independientes del costo. El costo/cuota se predice por tokens consumidos, no por forma.
 
 ### 4-Form Topology Model (Pi only)
 
@@ -46,6 +46,7 @@ El método base del 18-sept está preservado en `assets/quad.py`. Classifier añ
 
 Busca recursivamente JSONL en todas las raíces (sin filtro de proyecto):
 - Pi: `~/.pi/agent/sessions/**/*.jsonl`
+- omp: `~/.omp/agent/sessions/**/*.jsonl`; hijos en `<session-stem>/<Agent>.jsonl`, cada uno con su propio registro y `parent_session_id` igual al stem del padre.
 - Claude: `~/.claude/projects/**/*.jsonl`
 - Codex: `~/.codex/**/*.jsonl`
 
@@ -70,19 +71,27 @@ Filtro por mtime del archivo: `os.path.getmtime(path)`, NO timestamp interno.
 
 **Nota**: Quitó heurístico de directorio (a4s, bead-hs, review, worktrees). No marca sesiones como orquestadas por ruta.
 
+### omp signals
+
+- Header: `type='session'` con `id`, `timestamp`, `cwd`. Solo mensajes `type='message'` con `message.role='assistant'` suman usage (`input`, `output`, `cacheRead`, `cacheWrite`) y costo nativo; modelo/provider provienen del mensaje.
+- Delegación: `toolCall` llamado `task` o hijos JSONL en `<session-stem>/`. `delegation_degree` usa llamadas `task` / turnos assistant, con el mismo umbral 0.8.
+- Coordinación: `toolCall` `write` con `arguments.path` comenzando por `agent://`, también cuando `arguments` es JSON serializado. `has_intercom` es ortogonal: mensajes entre actores del mismo árbol no son evidencia de sesiones separadas.
+- Attribution usa el vínculo estructural padre/hijo para omp (incluye orquestadores S2); los otros harnesses conservan la heurística temporal existente. Un hijo sin delegación conserva Form 1 / S1.
+- Las vistas harness, topology y delivery-efficiency incluyen omp; delivery-efficiency conserva la madurez de siete días. Para comparar con una auditoría de cuota que usa `input + cacheRead + cacheWrite`, sumar esos tres campos por turno/provider: las vistas generales incluyen además output y el modelo/provider de un registro es el último observado.
+
 ### Cost Model = TOKENS (No by Form)
 
 **Métrica principal**: Tokens consumidos por sesión (no costo por forma ni $/sesión por topología):
 
 ```
-Quota consumed = ∑(input_tokens + output_tokens + cache_read_tokens + cache_write_tokens)
+Tokens consumidos = ∑(input_tokens + output_tokens + cache_read_tokens + cache_write_tokens)
 ```
 
 Desglose por harness y modelo (ver `render_tokens_breakdown()` view).
 
 **cacheRead**: Cuenta contra cuota aunque costo en USD sea menor. Campo ortogonal en resultado.
 
-**Costo nativo** (Pi only): `usage.cost.total` para referencia histórica, pero NO es proxy de cuota. Usar tokens para predicción.
+**Costo nativo** (Pi y omp): `usage.cost.total` en USD de API, para referencia histórica y para `$orch / $S1_spawned` y CDPC. La cuota de una suscripción (p. ej. la ventana semanal de `openai-codex`) se mide con `skills/gpt-quota-audit`, que calibra % de ventana por token contra `usage_history`; las decisiones de routing por cuota usan esa medición.
 
 **Crítico**: Pi tiene dos serializaciones: `custom`/`custom_message` con `customType` y tool calls en `message.content[]`. Buscar `obj.type == 'tool'` retorna **cero** hits. Ignorar legacy `subagent`/`subagent_run` clasifica falsamente.
 
@@ -160,10 +169,10 @@ Divide por el cutover verificado `2026-09-04T04:43:09Z`: sesiones antes = `pi-su
 ## Hard Rules
 
 - **Nunca improvisar clasificador**. El método de 4 formas está en `dataset.py` (functions: `classify_pi_form`, `calculate_delegation_degree`). Si necesitas modificarlo, añade primero una prueba de regresión (`assets/test_quad.py`) contra un rango conocido.
-- **Alcance = TODAS LAS SESIONES**. No filtrar por proyecto ni por directorio. Busca recursivamente en todas las raíces (Pi, Claude, Codex).
+- **Alcance = TODAS LAS SESIONES**. No filtrar por proyecto ni por directorio. Busca recursivamente en todas las raíces (Pi, omp, Claude, Codex).
 - **Filtrar por mtime**, no por timestamp interno. Sesiones antiguas reabriertas/migradas después del cutoff SÍ cuentan.
 - **El filtro mtime es la ÚNICA fuente de rango válida**. No usar el timestamp del primer mensaje.
-- **Costo/Cuota = TOKENS, no Form**. Métrica: ∑(input + output + cacheRead + cacheWrite) por sesión. Usar `render_tokens_breakdown()` view, no $/form.
+- **Costo = TOKENS, no Form**. Métrica: ∑(input + output + cacheRead + cacheWrite) por sesión. Usar `render_tokens_breakdown()` view, no $/form. El % de cuota de suscripción sale de `skills/gpt-quota-audit`.
 - **intercom es ORTHOGONAL**. Presente en cualquier forma. Campo `has_intercom` independiente de `form`.
 - **delegation_degree para distinguir Form 2 vs 3**. Umbral: 0.8 (>= 80% = Form 3 Delegator-Pure, < 80% = Form 2 Orch-Hybrid).
 - **Reportar SIEMPRE el rango de fechas en el cuadro** (incluido en el header).

@@ -1,0 +1,12 @@
+# Owned leaves are merged into config.yaml; all other keys belong to their owners.
+auth:
+  mode: none
+queues:
+  enabled: true
+  config:
+    - name: a4s
+      max_concurrency: 2
+host: 127.0.0.1
+port: 8080
+coordinator:
+  enabled: true

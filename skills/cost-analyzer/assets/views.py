@@ -111,7 +111,7 @@ def render_harness_overview(summary: dict[str, HarnessSummary]) -> str:
     complete_coverage = bool(summary) and all(s.native_cost_sessions == s.sessions for s in summary.values())
     out = ['=== HARNESS OVERVIEW ===', '']
     out.append(f"{'harness':10s} {'sessions':>9s} {'native $':>10s} {'coverage':>10s} {'Git':>8s} {'tokens':>12s} {'SHAs':>7s} {'tok/SHA':>10s} {'PRs':>5s} {'beads':>6s}")
-    for harness in ('pi', 'claude', 'codex'):
+    for harness in ('pi', 'omp', 'claude', 'codex'):
         item = summary.get(harness)
         if not item:
             continue
@@ -142,7 +142,7 @@ def render_tokens_breakdown(summary: dict[str, HarnessSummary]) -> str:
         f"{'harness':10s} {'sessions':>9s} {'input':>12s} {'output':>12s} "
         f"{'cacheRead':>12s} {'cacheWrite':>12s} {'total':>12s} {'%cached':>8s}"
     )
-    for harness in ('pi', 'claude', 'codex'):
+    for harness in ('pi', 'omp', 'claude', 'codex'):
         item = summary.get(harness)
         if not item:
             continue

@@ -24,6 +24,7 @@ import datetime
 import collections
 import argparse
 from typing import Any
+from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -131,14 +132,18 @@ def _cwds_related(cwd_a: str | None, cwd_b: str | None) -> bool:
 
 
 def build_attribution_from_records(records: list[Any], buffer_minutes: int = 60) -> dict[str, dict[str, Any]]:
-    """Atribuye S1 a S3/S4 sin reabrir JSONL; consume SessionRecord canónicos."""
+    """Attribute omp children directly and retain proximity matching for other harnesses."""
     sessions: list[dict[str, Any]] = [dict(
         scenario=record.observed_topology, path=record.source_path,
+        id=record.id, harness=record.harness, parent_session_id=record.parent_session_id,
         t_start=record.started_at, t_end=record.ended_at, cwd=record.cwd,
         cost=record.cost_native_usd or 0.0,
         tok=record.input_tokens + record.output_tokens + record.cache_read_tokens + record.cache_write_tokens,
     ) for record in records]
-    orchestrators = [session for session in sessions if session['scenario'] in ('S3', 'S4') and session['t_start']]
+    orchestrators = [session for session in sessions if session['t_start'] and (
+        session['scenario'] in ('S3', 'S4')
+        or (session['harness'] == 'omp' and session['scenario'] == 'S2')
+    )]
     workers = [session for session in sessions if session['scenario'] == 'S1' and session['t_start']]
     result: dict[str, dict[str, Any]] = {}
     for orchestrator in orchestrators:
@@ -146,10 +151,20 @@ def build_attribution_from_records(records: list[Any], buffer_minutes: int = 60)
         entry = dict(orchestrator=orchestrator, scenario=orchestrator['scenario'], t_start=orchestrator['t_start'], t_end=orchestrator['t_end'], cost_orch=orchestrator['cost'], tok_orch=orchestrator['tok'], spawned_s1=[], spawned_paths=set(), n_spawned=0, cost_s1_spawned=0.0, tok_s1_spawned=0)
         limit = (orchestrator['t_end'] or orchestrator['t_start']) + datetime.timedelta(minutes=buffer_minutes)
         for worker in workers:
-            if not (orchestrator['t_start'] <= worker['t_start'] <= limit):
-                continue
-            if not _cwds_related(orchestrator['cwd'], worker['cwd']):
-                continue
+            if worker['harness'] == 'omp':
+                if orchestrator['harness'] != 'omp' or worker['parent_session_id'] not in (
+                    orchestrator['id'], Path(orchestrator['path']).stem,
+                ):
+                    continue
+                if Path(worker['path']).parent != Path(orchestrator['path']).with_suffix(''):
+                    continue
+            else:
+                if orchestrator['harness'] == 'omp':
+                    continue
+                if not (orchestrator['t_start'] <= worker['t_start'] <= limit):
+                    continue
+                if not _cwds_related(orchestrator['cwd'], worker['cwd']):
+                    continue
             entry['spawned_s1'].append(worker)
             entry['spawned_paths'].add(worker['path'])
             entry['cost_s1_spawned'] += worker['cost']
@@ -226,7 +241,7 @@ def format_attribution_report(cells: dict, attribution: dict) -> str:
     total_orch = len(attribution)
     with_spawned = sum(1 for a in attribution.values() if a['n_spawned'] > 0)
     total_s1_spawned = sum(a['n_spawned'] for a in attribution.values())
-    out.append(f'Total orquestadores (S3+S4): {total_orch}')
+    out.append(f'Total orquestadores: {total_orch}')
     out.append(f'Orquestadores que spawnearon ≥1 S1: {with_spawned} ({100*with_spawned/max(1,total_orch):.0f}%)')
     out.append(f'Total S1 spawneadas: {total_s1_spawned}')
 
@@ -249,7 +264,7 @@ def format_attribution_report(cells: dict, attribution: dict) -> str:
         d['tok_s1_spawned'] += a['tok_s1_spawned']
 
     out.append(f"{'escenario':10s} {'N_orch':>7s} {'con_spawn':>10s} {'S1_spawn':>10s} {'$orch':>10s} {'$S1_spawn':>11s} {'$total':>10s}")
-    for s in ['S3', 'S4']:
+    for s in ['S2', 'S3', 'S4']:
         d = by_scenario[s]
         if d['n_orch'] == 0:
             continue
@@ -284,7 +299,7 @@ def format_attribution_report(cells: dict, attribution: dict) -> str:
     out.append('=== RATIO ORQUESTADOR / TRABAJO ENTREGADO ===\n')
     out.append('(Si $orch >> $S1_spawned, el orquestador está quemando contexto sin entregar.)')
     out.append('')
-    for s in ['S3', 'S4']:
+    for s in ['S2', 'S3', 'S4']:
         d = by_scenario[s]
         if d['n_orch'] == 0:
             continue
@@ -328,7 +343,6 @@ if __name__ == '__main__':
     records = load_ledger(
         datetime.date.fromisoformat(args.since),
         datetime.date.fromisoformat(args.until) if args.until else None,
-        roots={'pi': __import__('pathlib').Path(quad.BASE)},
     )
     print(quad.format_table(cells))
     print()

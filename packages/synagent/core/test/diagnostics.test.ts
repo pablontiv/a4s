@@ -2,20 +2,33 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { test } from 'node:test'
+import { createRequire } from 'node:module'
+import { describe, test } from 'node:test'
 
-import {
+import * as canonical from '../diagnostics.ts'
+import * as claude from '../adapters/claude/diagnostics.ts'
+
+const bridge: typeof canonical = createRequire(import.meta.url)('../adapters/claude/bridge/diagnostics.cjs')
+
+function readJsonLines(file: string): Array<Record<string, unknown>> {
+  return fs.readFileSync(file, 'utf8').trim().split('\n').map(line => JSON.parse(line) as Record<string, unknown>)
+}
+
+for (const [name, implementation] of Object.entries({ canonical, claude, bridge })) {
+describe(`diagnostics parity: ${name}`, () => {
+const {
   classifyDiagnosticError,
   createDiagnostics,
   defaultDiagnosticRoot,
   DIAGNOSTIC_FILE_QUOTA_BYTES,
   DIAGNOSTIC_SCHEMA,
   digestIdentifier,
-} from '../diagnostics.ts'
+} = implementation
 
-function readJsonLines(file: string): Array<Record<string, unknown>> {
-  return fs.readFileSync(file, 'utf8').trim().split('\n').map(line => JSON.parse(line) as Record<string, unknown>)
-}
+test('diagnostics exposes the canonical runtime exports', () => {
+  assert.deepEqual(Object.keys(implementation).sort(), Object.keys(canonical).sort())
+  assert.equal(implementation.DIAGNOSTIC_SERVICE, canonical.DIAGNOSTIC_SERVICE)
+})
 
 test('diagnostics writes private JSONL with RCA fields and no sensitive input', t => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'synagent-pi-diagnostics-'))
@@ -45,7 +58,7 @@ test('diagnostics writes private JSONL with RCA fields and no sensitive input', 
     assert.equal(logger.record('synagent.pi.message.rejected', {
       operation: 'message.receive',
       messageId: rawMessage,
-      messageKind: 'notify',
+      messageKind: 'note.published',
       destinationScope: 'direct',
       queueDepth: 2,
       generation: 4,
@@ -274,3 +287,5 @@ test('diagnostic digests are deterministic and do not expose identifiers', () =>
   assert.equal(first.includes('same-message-id'), false)
   assert.match(first, /^[a-f0-9]{64}$/)
 })
+})
+}

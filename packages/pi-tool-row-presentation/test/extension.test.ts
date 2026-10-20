@@ -538,11 +538,14 @@ describe("package host dependencies", () => {
 			devDependencies?: Record<string, string>;
 		};
 		const version = "1.0.2-dev.40713b10ba6db5c6f083026e3367e2af72cea0ea";
-		assert.equal(manifest.dependencies?.["@earendil-works/pi-tui"], "1.0.4");
-		assert.equal(manifest.peerDependencies?.["@earendil-works/pi-coding-agent"], ">=1.0.3");
+		assert.equal(manifest.dependencies?.["@earendil-works/pi-tui"], undefined);
+		assert.equal(manifest.peerDependencies?.["@earendil-works/pi-tui"], "*");
+		assert.equal(manifest.peerDependencies?.["@earendil-works/pi-coding-agent"], "*");
 		assert.equal(manifest.peerDependencies?.["@pablontiv/pion"], `>=1.0.4 || ${version}`);
+		assert.equal(manifest.peerDependenciesMeta?.["@earendil-works/pi-tui"]?.optional, true);
 		assert.equal(manifest.peerDependenciesMeta?.["@earendil-works/pi-coding-agent"]?.optional, true);
 		assert.equal(manifest.peerDependenciesMeta?.["@pablontiv/pion"]?.optional, true);
+		assert.equal(manifest.devDependencies?.["@earendil-works/pi-tui"], "1.0.4");
 		assert.equal(manifest.devDependencies?.["@earendil-works/pi-coding-agent"], "1.0.3");
 		assert.equal(
 			manifest.devDependencies?.["@pablontiv/pion"],

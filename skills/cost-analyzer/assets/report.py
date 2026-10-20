@@ -132,7 +132,7 @@ def main():
         since = datetime.date.fromisoformat(args.since)
         until = datetime.date.fromisoformat(args.until) if args.until else None
         evaluation_date = datetime.date.fromisoformat(args.evaluation_date) if args.evaluation_date else datetime.datetime.now(datetime.UTC).date()
-        records = enrich_records(load_ledger(since, until, roots={'pi': quad.Path(quad.BASE)}))
+        records = enrich_records(load_ledger(since, until))
         rows = analyze_delivery_efficiency(records, evaluation_date)
         text = render_delivery_efficiency(rows, since, until, evaluation_date)
         if args.out:

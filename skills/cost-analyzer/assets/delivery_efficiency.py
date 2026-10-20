@@ -163,13 +163,13 @@ def analyze_delivery_efficiency(
     records: Iterable[SessionRecord], evaluation_date: dt.date,
 ) -> list[DeliveryCohort]:
     """Allocate durable production changes to homogeneous topology cohorts."""
-    pi_records = [record for record in records if record.harness == "pi"]
+    session_records = [record for record in records if record.harness in {"pi", "omp"}]
     evidence_cache: dict[tuple[Path, str], CommitEvidence] = {}
     observations: dict[tuple[Path, str], list[SessionRecord]] = defaultdict(list)
     evidence_by_record: dict[int, list[CommitEvidence]] = defaultdict(list)
     total_cost: dict[tuple[Path, str], float] = defaultdict(float)
 
-    for index, record in enumerate(pi_records):
+    for index, record in enumerate(session_records):
         repo = _repository_for(record.cwd)
         if repo is None:
             continue
@@ -209,7 +209,7 @@ def analyze_delivery_efficiency(
             unknown[target] += 1
 
     attributable: dict[tuple[Path, str], float] = defaultdict(float)
-    for index, record in enumerate(pi_records):
+    for index, record in enumerate(session_records):
         repo = _repository_for(record.cwd)
         if repo is None:
             continue

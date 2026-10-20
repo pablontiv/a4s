@@ -1,72 +1,36 @@
 import net from 'node:net'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { createRequire } from 'node:module'
 import { Check } from 'typebox/value'
+import type { MqttClient } from 'mqtt'
 
-import synagentPi, { createSynagentPi, type SynagentPiOptions } from '../adapters/pi/index.ts'
-import { serialize, type CanonicalMessage } from '../protocol.ts'
+import synagentPi, { createSynagentPi } from '../adapters/pi/index.ts'
+import {
+  parseDeadLetter,
+  serialize,
+  type CanonicalMessage,
+} from '../protocol.ts'
+import {
+  closeBroker,
+  closeServer,
+  connectClient,
+  createHarness as createAdapterHarness,
+  end,
+  message,
+  publish,
+  pendingEntryMessageId,
+  startBroker,
+  waitFor,
+} from './support/harness.ts'
 
 const require = createRequire(import.meta.url)
-const { Aedes } = require('aedes')
+const createHarness = createAdapterHarness.bind(undefined, createSynagentPi)
 const mqtt = require('mqtt')
-
-type EventName = 'session_start' | 'message_start' | 'agent_settled' | 'session_shutdown'
-type FakeEvent =
-  | { type: 'session_start' | 'agent_settled' | 'session_shutdown' }
-  | { type: 'message_start'; message: { role: 'user'; content: Array<{ type: 'text'; text: string }> } }
-type Handler = (event: FakeEvent, context: FakeContext) => void | Promise<void>
-type Command = { handler(args: string, context: FakeContext): void | Promise<void> }
-type Tool = {
-  execute(
-    id: string,
-    params: { to: string; body: string; kind?: string; reply_to?: string },
-    signal: undefined,
-    onUpdate: undefined,
-    context: FakeContext,
-  ): Promise<{ content: Array<{ type: 'text'; text: string }>; isError?: boolean }>
-}
-type Notification = { message: string; type: 'info' | 'warning' | 'error' | undefined }
-type Received = { text: string; options?: { deliverAs: 'steer' | 'followUp' } }
-type FakeContext = {
-  cwd: string
-  hasUI: boolean
-  isIdle(): boolean
-  isProjectTrusted(): boolean
-  sessionManager: { getBranch(): unknown[]; getSessionId(): string }
-  ui: {
-    confirm(title: string, message: string): Promise<boolean>
-    input(title: string, placeholder?: string): Promise<string | undefined>
-    notify(message: string, type?: Notification['type']): void
-    select(title: string, options: string[]): Promise<string | undefined>
-  }
-}
-
-interface StartedBroker {
-  broker: any
-  server: net.Server
-  url: string
-}
-
-async function startBroker(): Promise<StartedBroker> {
-  const broker = await Aedes.createBroker({})
-  const server = net.createServer(broker.handle)
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
-  const port = (server.address() as net.AddressInfo).port
-  return { broker, server, url: `mqtt://127.0.0.1:${port}` }
-}
-
-function connectClient(url: string, clientId: string): Promise<any> {
-  return new Promise((resolve, reject) => {
-    const client = mqtt.connect(url, { clientId, clean: true })
-    client.once('connect', () => resolve(client))
-    client.once('error', reject)
-  })
-}
 
 function subscribe(client: any, topic: string): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -74,81 +38,39 @@ function subscribe(client: any, topic: string): Promise<void> {
   })
 }
 
-function publish(client: any, topic: string, payload: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    client.publish(topic, payload, { qos: 1 }, (error: Error | null) => error ? reject(error) : resolve())
-  })
-}
-
-function end(client: any): Promise<void> {
-  // Force destroy the stream immediately and destroy the client
-  try {
-    client.stream?.destroy?.()
-  } catch {
-    // Ignore errors
-  }
-
-  // Attempt to end gracefully but don't wait for callback
-  try {
-    client.end(true, {})
-  } catch {
-    // Ignore errors
-  }
-
-  return Promise.resolve()
-}
-
-async function closeBroker(broker: any): Promise<void> {
-  try {
-    await new Promise<void>((resolve) => {
-      const timeout = setTimeout(() => {
-        resolve()
-      }, 2000)
-
-      broker.close(() => {
-        clearTimeout(timeout)
-        resolve()
-      })
-    })
-  } catch {
-    // Ignore errors
-  }
-}
-
-async function closeServer(server: any): Promise<void> {
-  try {
-    server.closeAllConnections?.()
-    await new Promise<void>((resolve) => {
-      const timeout = setTimeout(() => {
-        resolve()
-      }, 2000)
-
-      server.close(() => {
-        clearTimeout(timeout)
-        resolve()
-      })
-    })
-  } catch {
-    // Ignore errors
-  }
-}
-
-// Direcciones y topics v1 fijos usados por el harness (project=a4s, instance=pi-1).
-const DIRECT_TOPIC = 'synagent/v1/a4s/pi-1'
-const PROJECT_TOPIC = 'synagent/v1/a4s/all'
-const GLOBAL_TOPIC = 'synagent/v1/all'
+// Direcciones y topics v2 fijos usados por el harness (project=a4s, instance=pi-1).
+const DIRECT_TOPIC = 'synagent/v2/a4s/pi-1'
+const PROJECT_TOPIC = 'synagent/v2/a4s/all'
+const GLOBAL_TOPIC = 'synagent/v2/all'
 const LEGACY_TOPIC = 'a4s/inbox/pi'
 
-test('Pi adapter: v1 push bidireccional, broadcasts por defecto, orden y dedupe', async t => {
+
+test('Pi adapter: v2 push bidireccional, broadcasts por defecto, orden y dedupe', async t => {
   const { broker, server, url } = await startBroker()
   const subscriber = await connectClient(url, 'pi-adapter-test-subscriber')
   const publisher = await connectClient(url, 'pi-adapter-test-publisher')
+  const staleUnsubscriptions: string[] = []
+  broker.on('unsubscribe', topics => staleUnsubscriptions.push(...topics))
+  const seeded = await new Promise<MqttClient>((resolve, reject) => {
+    const client = mqtt.connect(url, {
+      clientId: 'a4s-pi-pi-1',
+      clean: false,
+      reconnectPeriod: 0,
+    })
+    client.once('connect', () => resolve(client))
+    client.once('error', reject)
+  })
+  await subscribe(seeded, DIRECT_TOPIC)
+  await end(seeded)
   const harness = createHarness({
     'a4s.synagent.broker-url': url,
-    'a4s.synagent.project': 'a4s',
     'a4s.synagent.default-peer': 'a4s/claude-1',
-  }, [], 'pi-1')
-  let restored: ReturnType<typeof createHarness> | undefined
+  }, [{
+    type: 'custom',
+    customType: 'synagent-state',
+    data: { topics: DIRECT_TOPIC },
+  }], 'pi-1')
+  let restored: typeof harness | undefined
   t.after(async () => {
     await restored?.shutdown()
     await harness.shutdown()
@@ -159,20 +81,36 @@ test('Pi adapter: v1 push bidireccional, broadcasts por defecto, orden y dedupe'
   })
 
   await harness.start()
-  // El cliente durable suscribe directo; el transient, ambos broadcasts v1 por defecto.
+  // El cliente durable suscribe directo; el transient, ambos broadcasts v2 por defecto.
   await waitFor(() =>
     harness.notifications.some(({ message }) => message.includes('subscribed to') && message.includes(DIRECT_TOPIC))
     && harness.notifications.some(({ message }) => message.includes('subscribed to') && message.includes(PROJECT_TOPIC))
     && harness.notifications.some(({ message }) => message.includes('subscribed to') && message.includes(GLOBAL_TOPIC)),
   )
+  assert.ok(harness.notifications.some(({ message }) => message.includes('filters=synagent/+/a4s/pi-1')))
+  assert.ok(harness.notifications.some(({ message }) =>
+    message.includes('filters=synagent/+/a4s/all, synagent/+/all')))
+  await waitFor(() => staleUnsubscriptions.includes(DIRECT_TOPIC))
   assert.ok(!harness.notifications.some(({ message }) =>
     message.includes('subscribed to') && message.includes(LEGACY_TOPIC),
   ))
 
+  const unknownVersionPayloads = [
+    ['synagent/v99/a4s/pi-1', message({ id: 'unknown-direct', to: 'a4s/pi-1' })],
+    ['synagent/v99/a4s/all', message({ id: 'unknown-project', to: 'a4s/all' })],
+    ['synagent/v99/all', message({ id: 'unknown-global', to: 'all' })],
+  ] as const
+  for (const [topic, unknown] of unknownVersionPayloads) {
+    await publish(publisher, topic, serialize(unknown))
+  }
+  await waitFor(() => harness.notifications.filter(({ message }) =>
+    message.includes('VERSION_UNSUPPORTED')).length === unknownVersionPayloads.length)
+  assert.equal(harness.received.length, 0)
+
   const outbound: CanonicalMessage[] = []
   subscriber.on('message', (_topic: string, payload: Buffer) => outbound.push(JSON.parse(payload.toString())))
-  await subscribe(subscriber, 'synagent/v1/a4s/claude-1')
-  await subscribe(subscriber, 'synagent/v1/a4s/bob')
+  await subscribe(subscriber, 'synagent/v2/a4s/claude-1')
+  await subscribe(subscriber, 'synagent/v2/a4s/bob')
 
   await harness.command('mq-send', 'hola desde pi')
   await harness.command('mq-send', 'bob: mensaje directo')
@@ -180,14 +118,14 @@ test('Pi adapter: v1 push bidireccional, broadcasts por defecto, orden y dedupe'
   assert.deepEqual(
     outbound.map(({ from, to, kind, body }) => ({ from, to, kind, body })),
     [
-      // default-peer ya es una dirección v1 completa; el token suelto `bob` se cualifica con el proyecto.
-      { from: 'a4s/pi-1', to: 'a4s/claude-1', kind: 'prompt', body: 'hola desde pi' },
-      { from: 'a4s/pi-1', to: 'a4s/bob', kind: 'prompt', body: 'mensaje directo' },
+      // default-peer ya es una dirección canónica completa; el token suelto `bob` se cualifica con el proyecto.
+      { from: 'a4s/pi-1', to: 'a4s/claude-1', kind: 'task.request', body: 'hola desde pi' },
+      { from: 'a4s/pi-1', to: 'a4s/bob', kind: 'task.request', body: 'mensaje directo' },
     ],
   )
 
   // Entrada directa: dedupe por id, filtro por identidad y rechazo de inválidos.
-  const incoming = message({ id: 'incoming-1', to: 'a4s/pi-1', kind: 'prompt', body: 'hola desde claude' })
+  const incoming = message({ id: 'incoming-1', to: 'a4s/pi-1', kind: 'task.request', body: 'hola desde claude' })
   await publish(publisher, DIRECT_TOPIC, serialize(incoming))
   await publish(publisher, DIRECT_TOPIC, serialize(incoming))
   await publish(publisher, DIRECT_TOPIC, serialize(message({ id: 'not-mine', to: 'a4s/other' })))
@@ -221,13 +159,20 @@ test('Pi adapter: v1 push bidireccional, broadcasts por defecto, orden y dedupe'
   await harness.settle()
 
   harness.idle = false
-  // steer a broadcast se rechaza en recepción (precisión F) y NO se entrega.
-  await publish(publisher, PROJECT_TOPIC, serialize(message({ id: 'steer-bcast', to: 'a4s/all', kind: 'steer', body: 'no' })))
+  // task.redirect a broadcast se rechaza; directo interrumpe el turno.
+  await publish(publisher, PROJECT_TOPIC, serialize(message({
+    id: 'redirect-bcast', to: 'a4s/all', kind: 'task.redirect', body: 'no',
+  })))
   await waitFor(() =>
-    harness.notifications.some(({ message, type }) => type === 'warning' && message.includes('rejected broadcast steer')),
+    harness.notifications.some(({ message, type }) =>
+      type === 'warning' && message.includes('rejected broadcast task.redirect')),
   )
-  await publish(publisher, DIRECT_TOPIC, serialize(message({ id: 'steer-1', to: 'a4s/pi-1', kind: 'steer', body: 'corrige' })))
-  await publish(publisher, DIRECT_TOPIC, serialize(message({ id: 'follow-1', to: 'a4s/pi-1', kind: 'notify', body: 'termina' })))
+  await publish(publisher, DIRECT_TOPIC, serialize(message({
+    id: 'redirect-1', to: 'a4s/pi-1', kind: 'task.redirect', body: 'corrige',
+  })))
+  await publish(publisher, DIRECT_TOPIC, serialize(message({
+    id: 'follow-1', to: 'a4s/pi-1', kind: 'note.published', body: 'termina',
+  })))
   await waitFor(() => harness.received.length === 4)
   await harness.confirmDelivery(3)
   await harness.settle()
@@ -266,15 +211,17 @@ test('Pi adapter: v1 push bidireccional, broadcasts por defecto, orden y dedupe'
 
   // Un new/fork cambia el id nativo: session_start re-resuelve la identidad y re-vincula MQTT.
   await harness.startSession('pi-2')
-  await waitFor(() => harness.notifications.some(({ message }) => message.includes('subscribed to') && message.includes('synagent/v1/a4s/pi-2')))
+  await waitFor(() => harness.notifications.some(({ message }) => message.includes('subscribed to') && message.includes('synagent/v2/a4s/pi-2')))
   assert.ok(harness.notifications.some(({ message }) => message.includes('Synagent identity a4s/pi-2')))
   await publish(publisher, DIRECT_TOPIC, serialize(message({ id: 'old-instance', to: 'a4s/pi-1' })))
-  await publish(publisher, 'synagent/v1/a4s/pi-2', serialize(message({ id: 'new-instance', to: 'a4s/pi-2' })))
+  await publish(publisher, 'synagent/v2/a4s/pi-2', serialize(message({ id: 'new-instance', to: 'a4s/pi-2' })))
   await waitFor(() => harness.received.length === 7)
   assert.match(harness.received[6]?.text ?? '', /id new-instance/)
-  // Dejamos la entrega de new-instance activa (sin confirmar): lo siguiente queda ENCOLADO, no entregado.
-  await publish(publisher, 'synagent/v1/a4s/pi-2', serialize(message({ id: 'queued-before-shutdown', to: 'a4s/pi-2' })))
-  await waitFor(() => harness.entries.some(entry => entry.data.id === 'queued-before-shutdown'))
+  // Dejamos new-instance activa (sin confirmar): lo siguiente queda encolado y ambos
+  // mensajes deben sobrevivir a la reanudación.
+  await publish(publisher, 'synagent/v2/a4s/pi-2', serialize(message({ id: 'queued-before-shutdown', to: 'a4s/pi-2' })))
+  await waitFor(() => harness.entries.some(entry =>
+    pendingEntryMessageId(entry) === 'queued-before-shutdown'))
 
   await harness.shutdown()
   await harness.shutdown()
@@ -282,28 +229,317 @@ test('Pi adapter: v1 push bidireccional, broadcasts por defecto, orden y dedupe'
   assert.equal(harness.received.length, 7)
   assert.deepEqual(
     harness.entries.filter(entry => entry.customType === 'synagent-delivered').map(entry => entry.data.id),
-    ['incoming-1', 'project-1', 'global-default', 'steer-1', 'follow-1', 'global-on', 'new-instance', 'queued-before-shutdown'],
+    ['incoming-1', 'project-1', 'global-default', 'redirect-1', 'follow-1', 'global-on'],
   )
 
-  // Reanudación durable: misma sesión → mismo clientId → recibe lo encolado offline (deduplicando).
-  await publish(publisher, 'synagent/v1/a4s/pi-2', serialize(message({ id: 'new-instance', to: 'a4s/pi-2' })))
-  await publish(publisher, 'synagent/v1/a4s/pi-2', serialize(message({ id: 'offline', to: 'a4s/pi-2' })))
+  // La misma sesión rehidrata primero los dos pendientes persistidos y después lo
+  // recibido offline; el reenvío durable de new-instance se descarta.
+  await publish(publisher, 'synagent/v2/a4s/pi-2', serialize(message({ id: 'new-instance', to: 'a4s/pi-2' })))
+  await publish(publisher, 'synagent/v2/a4s/pi-2', serialize(message({ id: 'offline', to: 'a4s/pi-2' })))
   restored = createHarness({
     'a4s.synagent.broker-url': url,
-    'a4s.synagent.project': 'a4s',
   }, harness.entries, 'pi-2')
   await restored.start()
-  await waitFor(() => restored?.notifications.some(({ message }) => message.includes('subscribed to') && message.includes('synagent/v1/a4s/pi-2')) ?? false)
   await waitFor(() => restored?.received.length === 1)
-  assert.match(restored.received[0]?.text ?? '', /id offline/)
+  assert.match(restored.received[0]?.text ?? '', /id new-instance/)
   await restored.confirmDelivery(0)
+  await restored.settle()
+  await waitFor(() => restored?.received.length === 2)
+  assert.match(restored.received[1]?.text ?? '', /id queued-before-shutdown/)
+  await restored.confirmDelivery(1)
+  await restored.settle()
+  await waitFor(() => restored?.received.length === 3)
+  assert.match(restored.received[2]?.text ?? '', /id offline/)
+  await restored.confirmDelivery(2)
   await restored.settle()
   await restored.shutdown()
 
-  await publish(publisher, 'synagent/v1/a4s/pi-2', serialize(message({ id: 'late', to: 'a4s/pi-2' })))
+  await publish(publisher, 'synagent/v2/a4s/pi-2', serialize(message({ id: 'late', to: 'a4s/pi-2' })))
   await new Promise(resolve => setTimeout(resolve, 75))
   assert.equal(harness.received.length, 7)
-  assert.equal(restored.received.length, 1)
+  assert.equal(restored.received.length, 3)
+})
+
+test('Pi adapter persists and lists DLQ failures, then reinjects a record exactly once', async t => {
+  const { broker, server, url } = await startBroker()
+  const observer = await connectClient(url, 'pi-adapter-dlq-observer')
+  const publisher = await connectClient(url, 'pi-adapter-dlq-publisher')
+  const sessionId = 'pi-dlq'
+  const topic = `synagent/v2/a4s/${sessionId}`
+  const dlqTopic = `synagent/v2/dlq/a4s/${sessionId}`
+  const observed: Array<{ topic: string; payload: string }> = []
+  observer.on('message', (receivedTopic, payload) => {
+    observed.push({ topic: receivedTopic, payload: payload.toString() })
+  })
+  await subscribe(observer, topic)
+  await subscribe(observer, dlqTopic)
+  const settings = { 'a4s.synagent.broker-url': url }
+  const harness = createHarness(settings, [], sessionId, 50)
+  let restored: typeof harness | undefined
+  t.after(async () => {
+    await restored?.shutdown()
+    await harness.shutdown()
+    await end(observer)
+    await end(publisher)
+    await closeServer(server)
+    await closeBroker(broker)
+  })
+
+  await harness.start()
+  await waitFor(() => harness.notifications.some(({ message }) =>
+    message.includes('subscribed to')
+    && message.includes(topic)
+    && message.includes(dlqTopic)))
+
+  const invalidJson = '  {"broken": '
+  const invalidMessage = '{"id":"invalid-envelope"}'
+  await publish(publisher, topic, invalidJson)
+  await publish(publisher, topic, invalidMessage)
+  await waitFor(() => observed.filter(({ topic: observedTopic }) => observedTopic === dlqTopic).length >= 2)
+  const firstRecords = observed
+    .filter(({ topic: observedTopic }) => observedTopic === dlqTopic)
+    .map(({ payload }) => parseDeadLetter(payload))
+  assert.deepEqual(firstRecords.map(({ payload, cause }) => ({ payload, cause })), [
+    { payload: invalidJson, cause: 'INVALID_JSON' },
+    { payload: invalidMessage, cause: 'INVALID_MESSAGE' },
+  ])
+
+  harness.failDelivery = true
+  const dispatchPayload = ` ${serialize(message({
+    id: 'dispatch-dlq',
+    to: `a4s/${sessionId}`,
+    body: 'dispatch must fail',
+  }))} `
+  await publish(publisher, topic, dispatchPayload)
+  await waitFor(() => observed.some(({ topic: observedTopic, payload }) =>
+    observedTopic === dlqTopic
+    && parseDeadLetter(payload).cause === 'DELIVERY_DISPATCH_FAILED'))
+  const dispatchRecord = observed
+    .filter(({ topic: observedTopic }) => observedTopic === dlqTopic)
+    .map(({ payload }) => parseDeadLetter(payload))
+    .find(({ cause }) => cause === 'DELIVERY_DISPATCH_FAILED')
+  assert.ok(dispatchRecord)
+  assert.equal(dispatchRecord.payload, dispatchPayload)
+  assert.equal(dispatchRecord.harness, 'pion')
+  assert.equal(harness.received.length, 0)
+
+  await harness.command('synagent', 'dlq')
+  const listing = harness.notifications.at(-1)?.message ?? ''
+  for (const cause of ['INVALID_JSON', 'INVALID_MESSAGE', 'DELIVERY_DISPATCH_FAILED']) {
+    assert.match(listing, new RegExp(`causa=${cause}`))
+  }
+
+  harness.failDelivery = false
+  await harness.command('synagent', `dlq retry ${dispatchRecord.id}`)
+  await waitFor(() => harness.received.length === 1)
+  await waitFor(() => observed.filter(({ topic: observedTopic, payload }) =>
+    observedTopic === topic && payload === dispatchPayload).length === 2)
+  assert.match(harness.received[0]?.text ?? '', /id dispatch-dlq/)
+  await harness.confirmDelivery(0)
+  await harness.settle()
+  await harness.command('synagent', `dlq retry ${dispatchRecord.id}`)
+  assert.match(harness.notifications.at(-1)?.message ?? '', /already retried/)
+  assert.equal(observed.filter(({ topic: observedTopic, payload }) =>
+    observedTopic === topic && payload === dispatchPayload).length, 2)
+
+  const timeoutPayload = serialize(message({
+    id: 'timeout-dlq',
+    to: `a4s/${sessionId}`,
+    body: 'delivery confirmation times out',
+  }))
+  await publish(publisher, topic, timeoutPayload)
+  await waitFor(() => observed.some(({ topic: observedTopic, payload }) =>
+    observedTopic === dlqTopic
+    && parseDeadLetter(payload).cause === 'DELIVERY_TIMEOUT'))
+  const timeoutRecord = observed
+    .filter(({ topic: observedTopic }) => observedTopic === dlqTopic)
+    .map(({ payload }) => parseDeadLetter(payload))
+    .find(({ cause }) => cause === 'DELIVERY_TIMEOUT')
+  assert.ok(timeoutRecord)
+  assert.equal(timeoutRecord.payload, timeoutPayload)
+  assert.equal(harness.received.length, 2)
+
+  await harness.command('synagent', 'resume')
+  await harness.shutdown()
+  restored = createHarness(settings, harness.entries, sessionId, 50)
+  await restored.start()
+  await waitFor(() => restored?.notifications.some(({ message }) =>
+    message.includes('subscribed to') && message.includes(dlqTopic)) ?? false)
+  await restored.command('synagent', 'dlq')
+  assert.match(restored.notifications.at(-1)?.message ?? '', new RegExp(dispatchRecord.id))
+  assert.match(restored.notifications.at(-1)?.message ?? '', /reintentado=/)
+  assert.equal(restored.received.length, 0)
+})
+
+test('Pi adapter publishes task events with frozen assistant completion text', async t => {
+  const { broker, server, url } = await startBroker()
+  const publisher = await connectClient(url, 'pi-result-publisher')
+  const stateRoot = mkdtempSync(join(tmpdir(), 'synagent-pi-result-'))
+  const topic = 'synagent/v2/a4s/pi-result'
+  const senderTopic = 'synagent/v2/a4s/claude-1'
+  const events: CanonicalMessage[] = []
+  publisher.on('message', (_topic: string, payload: Buffer) => {
+    events.push(JSON.parse(payload.toString()) as CanonicalMessage)
+  })
+  await subscribe(publisher, senderTopic)
+  const harness = createHarness({
+    'a4s.synagent.broker-url': url,
+  }, [], 'pi-result', undefined, process.cwd(), { env: { A4S_STATE_ROOT: stateRoot } })
+  t.after(async () => {
+    await harness.shutdown()
+    await end(publisher)
+    await closeServer(server)
+    await closeBroker(broker)
+    rmSync(stateRoot, { recursive: true, force: true })
+  })
+
+  await harness.start()
+  await waitFor(() => harness.notifications.some(({ message }) => message.includes(`subscribed to ${topic}`)))
+
+  await publish(publisher, topic, serialize(message({ id: 'result-tools', to: 'a4s/pi-result' })))
+  await waitFor(() => harness.received.length === 1)
+  await harness.confirmDelivery()
+  await waitFor(() => events.some(event =>
+    event.kind === 'task.delivered' && event.causation_id === 'result-tools'))
+  await harness.messageEnd('assistant', [
+    { type: 'text', text: 'PRE_TOOL_RESULT' },
+    { type: 'toolCall' },
+  ])
+  await harness.messageEnd('toolResult', [{ type: 'text', text: 'TOOL_ONE' }])
+  await harness.messageEnd('assistant', [{ type: 'toolCall' }])
+  await harness.messageEnd('toolResult', [{ type: 'text', text: 'TOOL_TWO' }])
+  await harness.messageEnd('assistant', '  FINAL_RESULT  \n')
+  await harness.settle()
+  await waitFor(() => events.some(event =>
+    event.kind === 'task.completed' && event.causation_id === 'result-tools'))
+
+  await publish(publisher, topic, serialize(message({ id: 'result-empty', to: 'a4s/pi-result' })))
+  await waitFor(() => harness.received.length === 2)
+  await harness.confirmDelivery()
+  await waitFor(() => events.some(event =>
+    event.kind === 'task.delivered' && event.causation_id === 'result-empty'))
+  await harness.messageEnd('assistant', [{ type: 'toolCall' }])
+  await harness.messageEnd('assistant', [{ type: 'text', text: ' \n ' }])
+  await harness.settle()
+  await waitFor(() => events.some(event =>
+    event.kind === 'task.completed' && event.causation_id === 'result-empty'))
+
+  await publish(publisher, topic, serialize(message({ id: 'result-frozen', to: 'a4s/pi-result' })))
+  await waitFor(() => harness.received.length === 3)
+  await harness.confirmDelivery()
+  await waitFor(() => events.some(event =>
+    event.kind === 'task.delivered' && event.causation_id === 'result-frozen'))
+  await harness.messageEnd('assistant', [
+    { type: 'text', text: 'PRE_TOOL_FROZEN' },
+    { type: 'toolCall' },
+  ])
+  await harness.messageEnd('toolResult', [{ type: 'text', text: 'TOOL_THREE' }])
+  await harness.messageEnd('assistant', [{ type: 'text', text: 'FINAL_FROZEN' }])
+  await harness.messageStart('separate user follow-up')
+  await harness.messageEnd('assistant', [{ type: 'text', text: 'USER_AFTER_FROZEN' }])
+  await harness.settle()
+  await waitFor(() => events.some(event =>
+    event.kind === 'task.completed' && event.causation_id === 'result-frozen'))
+  await harness.shutdown()
+
+  const settled = readFileSync(findOperationalLog(stateRoot), 'utf8')
+    .trim().split('\n')
+    .map(line => JSON.parse(line) as Record<string, unknown>)
+    .filter(record => record.event_name === 'synagent.pi.delivery.settled')
+  assert.deepEqual(settled.map(record => record['a4s.delivery.text']), [
+    '  FINAL_RESULT  \n',
+    undefined,
+    'FINAL_FROZEN',
+  ])
+  assert.deepEqual(events.map(({ kind, body, correlation_id, causation_id }) => ({
+    kind, body, correlation_id, causation_id,
+  })), [
+    {
+      kind: 'task.delivered', body: '', correlation_id: 'result-tools', causation_id: 'result-tools',
+    },
+    {
+      kind: 'task.completed',
+      body: '  FINAL_RESULT  \n',
+      correlation_id: 'result-tools',
+      causation_id: 'result-tools',
+    },
+    {
+      kind: 'task.delivered', body: '', correlation_id: 'result-empty', causation_id: 'result-empty',
+    },
+    {
+      kind: 'task.completed', body: '', correlation_id: 'result-empty', causation_id: 'result-empty',
+    },
+    {
+      kind: 'task.delivered', body: '', correlation_id: 'result-frozen', causation_id: 'result-frozen',
+    },
+    {
+      kind: 'task.completed',
+      body: 'FINAL_FROZEN',
+      correlation_id: 'result-frozen',
+      causation_id: 'result-frozen',
+    },
+  ])
+})
+
+test('Pi adapter mutual task requests terminate after delivered and completed events', async t => {
+  const { broker, server, url } = await startBroker()
+  const observer = await connectClient(url, 'pi-mutual-observer')
+  const messages: CanonicalMessage[] = []
+  observer.on('message', (_topic: string, payload: Buffer) => {
+    messages.push(JSON.parse(payload.toString()) as CanonicalMessage)
+  })
+  await subscribe(observer, 'synagent/#')
+  const a = createHarness({ 'a4s.synagent.broker-url': url }, [], 'mutual-a')
+  const b = createHarness({ 'a4s.synagent.broker-url': url }, [], 'mutual-b')
+  t.after(async () => {
+    await a.shutdown()
+    await b.shutdown()
+    await end(observer)
+    await closeServer(server)
+    await closeBroker(broker)
+  })
+
+  await Promise.all([a.start(), b.start()])
+  await waitFor(() =>
+    a.notifications.some(({ message }) => message.includes('synagent/v2/a4s/mutual-a'))
+    && b.notifications.some(({ message }) => message.includes('synagent/v2/a4s/mutual-b')))
+
+  const [sentA, sentB] = await Promise.all([
+    a.tool('synagent_send', { to: 'a4s/mutual-b', body: 'task from A' }),
+    b.tool('synagent_send', { to: 'a4s/mutual-a', body: 'task from B' }),
+  ])
+  assert.notEqual(sentA.isError, true)
+  assert.notEqual(sentB.isError, true)
+  await waitFor(() => a.received.length === 1 && b.received.length === 1)
+
+  await Promise.all([a.confirmDelivery(), b.confirmDelivery()])
+  await Promise.all([
+    a.messageEnd('assistant', 'completed by A'),
+    b.messageEnd('assistant', 'completed by B'),
+  ])
+  await Promise.all([a.settle(), b.settle()])
+  await waitFor(() => a.received.length === 2 && b.received.length === 2)
+
+  await Promise.all([a.confirmDelivery(), b.confirmDelivery()])
+  await Promise.all([
+    a.messageEnd('assistant', 'event observed by A'),
+    b.messageEnd('assistant', 'event observed by B'),
+  ])
+  await Promise.all([a.settle(), b.settle()])
+  await waitFor(() => messages.length === 6)
+
+  const commands = messages.filter(({ kind }) => kind === 'task.request')
+  const delivered = messages.filter(({ kind }) => kind === 'task.delivered')
+  const completed = messages.filter(({ kind }) => kind === 'task.completed')
+  assert.equal(commands.length, 2)
+  assert.equal(delivered.length, 2)
+  assert.equal(completed.length, 2)
+  assert.equal(messages.length, 6)
+  for (const event of [...delivered, ...completed]) {
+    const command = commands.find(({ id }) => id === event.causation_id)
+    assert.ok(command)
+    assert.equal(event.correlation_id, command.id)
+  }
 })
 
 test('Pi adapter gives concurrent sessions distinct durable MQTT identities', async t => {
@@ -311,11 +547,9 @@ test('Pi adapter gives concurrent sessions distinct durable MQTT identities', as
   const publisher = await connectClient(url, 'pi-adapter-multi-publisher')
   const first = createHarness({
     'a4s.synagent.broker-url': url,
-    'a4s.synagent.project': 'a4s',
   }, [], 'Session.One')
   const second = createHarness({
     'a4s.synagent.broker-url': url,
-    'a4s.synagent.project': 'a4s',
   }, [], 'Session.Two')
   t.after(async () => {
     await first.shutdown()
@@ -328,17 +562,17 @@ test('Pi adapter gives concurrent sessions distinct durable MQTT identities', as
   await first.start()
   await second.start()
   await waitFor(() =>
-    first.notifications.some(({ message }) => message.includes('subscribed to') && message.includes('synagent/v1/a4s/Session.One'))
-    && second.notifications.some(({ message }) => message.includes('subscribed to') && message.includes('synagent/v1/a4s/Session.Two')),
+    first.notifications.some(({ message }) => message.includes('subscribed to') && message.includes('synagent/v2/a4s/Session.One'))
+    && second.notifications.some(({ message }) => message.includes('subscribed to') && message.includes('synagent/v2/a4s/Session.Two')),
   )
-  await publish(publisher, 'synagent/v1/a4s/Session.One', serialize(message({ id: 'only-one', to: 'a4s/Session.One' })))
+  await publish(publisher, 'synagent/v2/a4s/Session.One', serialize(message({ id: 'only-one', to: 'a4s/Session.One' })))
   await waitFor(() => first.received.length === 1)
   await new Promise(resolve => setTimeout(resolve, 50))
   assert.equal(second.received.length, 0)
   await first.confirmDelivery(0)
   await first.settle()
 
-  await publish(publisher, 'synagent/v1/a4s/Session.Two', serialize(message({ id: 'only-two', to: 'a4s/Session.Two' })))
+  await publish(publisher, 'synagent/v2/a4s/Session.Two', serialize(message({ id: 'only-two', to: 'a4s/Session.Two' })))
   await waitFor(() => second.received.length === 1)
   assert.equal(first.received.length, 1)
   await second.confirmDelivery(0)
@@ -350,11 +584,9 @@ test('Pi adapter keeps session IDs X and t-X from colliding or evicting each oth
   const publisher = await connectClient(url, 'pi-adapter-collision-publisher')
   const first = createHarness({
     'a4s.synagent.broker-url': url,
-    'a4s.synagent.project': 'a4s',
   }, [], 'X')
   const second = createHarness({
     'a4s.synagent.broker-url': url,
-    'a4s.synagent.project': 'a4s',
   }, [], 't-X')
   t.after(async () => {
     await first.shutdown()
@@ -366,10 +598,10 @@ test('Pi adapter keeps session IDs X and t-X from colliding or evicting each oth
 
   await first.start()
   await second.start()
-  await waitFor(() => first.notifications.some(({ message }) => message.includes('subscribed to synagent/v1/a4s/X')))
-  await waitFor(() => second.notifications.some(({ message }) => message.includes('subscribed to synagent/v1/a4s/t-X')))
+  await waitFor(() => first.notifications.some(({ message }) => message.includes('subscribed to synagent/v2/a4s/X')))
+  await waitFor(() => second.notifications.some(({ message }) => message.includes('subscribed to synagent/v2/a4s/t-X')))
 
-  await publish(publisher, 'synagent/v1/a4s/t-X', serialize(message({ id: 'collision-direct', to: 'a4s/t-X' })))
+  await publish(publisher, 'synagent/v2/a4s/t-X', serialize(message({ id: 'collision-direct', to: 'a4s/t-X' })))
   await waitFor(() => second.received.some(({ text }) => text.includes('id collision-direct')))
   await publish(publisher, PROJECT_TOPIC, serialize(message({ id: 'collision-project', to: 'a4s/all' })))
   await waitFor(() => first.received.some(({ text }) => text.includes('id collision-project')))
@@ -380,7 +612,6 @@ test('Pi adapter reload/resume retains the same native session ID and correlatio
   const publisher = await connectClient(url, 'pi-adapter-reload-publisher')
   const first = createHarness({
     'a4s.synagent.broker-url': url,
-    'a4s.synagent.project': 'a4s',
   }, [], 'pi-reload')
   let reloaded: ReturnType<typeof createHarness> | undefined
   t.after(async () => {
@@ -392,9 +623,9 @@ test('Pi adapter reload/resume retains the same native session ID and correlatio
   })
 
   await first.start()
-  await waitFor(() => first.notifications.some(({ message }) => message.includes('subscribed to') && message.includes('synagent/v1/a4s/pi-reload')))
+  await waitFor(() => first.notifications.some(({ message }) => message.includes('subscribed to') && message.includes('synagent/v2/a4s/pi-reload')))
   assert.ok(first.notifications.some(({ message }) => message.includes('Synagent identity a4s/pi-reload')))
-  await publish(publisher, 'synagent/v1/a4s/pi-reload', serialize(message({ id: 'pre-reload', to: 'a4s/pi-reload' })))
+  await publish(publisher, 'synagent/v2/a4s/pi-reload', serialize(message({ id: 'pre-reload', to: 'a4s/pi-reload' })))
   await waitFor(() => first.received.length === 1)
   const delayedPreReloadText = first.received[0]?.text
   assert.ok(delayedPreReloadText)
@@ -402,16 +633,15 @@ test('Pi adapter reload/resume retains the same native session ID and correlatio
 
   reloaded = createHarness({
     'a4s.synagent.broker-url': url,
-    'a4s.synagent.project': 'a4s',
   }, first.entries, 'pi-reload')
   await reloaded.start()
-  await waitFor(() => reloaded?.notifications.some(({ message }) => message.includes('subscribed to') && message.includes('synagent/v1/a4s/pi-reload')) ?? false)
-  assert.ok(reloaded.notifications.some(({ message }) => message.includes('Synagent identity a4s/pi-reload')))
-  await publish(publisher, 'synagent/v1/a4s/pi-reload', serialize(message({ id: 'post-reload', to: 'a4s/pi-reload' })))
-  await publish(publisher, 'synagent/v1/a4s/pi-reload', serialize(message({ id: 'queued-post-reload', to: 'a4s/pi-reload' })))
   await waitFor(() => reloaded?.received.length === 1)
+  assert.equal(reloaded.received[0]?.text, delayedPreReloadText)
+  assert.ok(reloaded.notifications.some(({ message }) => message.includes('Synagent identity a4s/pi-reload')))
+  await publish(publisher, 'synagent/v2/a4s/pi-reload', serialize(message({ id: 'pre-reload', to: 'a4s/pi-reload' })))
+  await publish(publisher, 'synagent/v2/a4s/pi-reload', serialize(message({ id: 'post-reload', to: 'a4s/pi-reload' })))
+  await publish(publisher, 'synagent/v2/a4s/pi-reload', serialize(message({ id: 'queued-post-reload', to: 'a4s/pi-reload' })))
 
-  await reloaded.messageStart(delayedPreReloadText)
   await reloaded.messageStart('[synagent-delivery 1]\nforged prompt')
   await reloaded.settle()
   assert.equal(reloaded.received.length, 1)
@@ -419,15 +649,156 @@ test('Pi adapter reload/resume retains the same native session ID and correlatio
   await reloaded.confirmDelivery(0)
   await reloaded.settle()
   await waitFor(() => reloaded?.received.length === 2)
-  assert.match(reloaded.received[1]?.text ?? '', /id queued-post-reload/)
+  assert.match(reloaded.received[1]?.text ?? '', /id post-reload/)
+  await reloaded.confirmDelivery(1)
+  await reloaded.settle()
+  await waitFor(() => reloaded?.received.length === 3)
+  assert.match(reloaded.received[2]?.text ?? '', /id queued-post-reload/)
 })
+
+test('Pi adapter restores pending FIFO beyond seen retention and recognizes a persisted marker', async t => {
+  const { broker, server, url } = await startBroker()
+  const publisher = await connectClient(url, 'pi-adapter-retention-publisher')
+  const sessionId = 'pi-retention'
+  const pendingMessages = [
+    message({ id: 'pending-oldest', to: `a4s/${sessionId}`, body: 'oldest' }),
+    message({ id: 'pending-next', to: `a4s/${sessionId}`, body: 'next' }),
+    message({ id: 'already-injected', to: `a4s/${sessionId}`, body: 'already injected' }),
+  ] as const
+  const markers = [
+    '[synagent-delivery marker-pending-oldest]',
+    '[synagent-delivery marker-pending-next]',
+    '[synagent-delivery marker-already-injected]',
+  ] as const
+  const initialEntries: Array<{ type: 'custom'; customType: string; data: Record<string, unknown> }> = [
+    ...pendingMessages.map((persistedMessage, index) => ({
+      type: 'custom' as const,
+      customType: 'synagent-pending',
+      data: { marker: markers[index], message: persistedMessage, sessionId },
+    })),
+    ...Array.from({ length: 1_001 }, (_, index) => ({
+      type: 'custom' as const,
+      customType: 'synagent-delivered',
+      data: { id: `completed-${index}` },
+    })),
+  ]
+  const harness = createHarness({
+    'a4s.synagent.broker-url': url,
+  }, initialEntries, sessionId)
+  t.after(async () => {
+    await harness.shutdown()
+    await end(publisher)
+    await closeServer(server)
+    await closeBroker(broker)
+  })
+
+  harness.appendBranchUserMessage(`${markers[2]}\npreviously injected`)
+  await harness.start()
+  await waitFor(() => harness.received.length === 1)
+  assert.equal(harness.received[0]?.text.startsWith(`${markers[0]}\n`), true)
+  await harness.confirmDelivery(0)
+  await harness.settle()
+  await waitFor(() => harness.received.length === 2)
+  assert.equal(harness.received[1]?.text.startsWith(`${markers[1]}\n`), true)
+  await harness.confirmDelivery(1)
+  await harness.settle()
+
+  const topic = `synagent/v2/a4s/${sessionId}`
+  await waitFor(() => harness.notifications.some(({ message }) => message.includes(`subscribed to ${topic}`)))
+  await publish(publisher, topic, serialize(pendingMessages[1]))
+  await publish(publisher, topic, serialize(pendingMessages[2]))
+  await publish(publisher, topic, serialize(message({ id: 'retention-sentinel', to: `a4s/${sessionId}` })))
+  await waitFor(() => harness.received.length === 3)
+  assert.match(harness.received[2]?.text ?? '', /id retention-sentinel/)
+})
+
+test('Pi adapter retries persistence failures and restores dispatch failures only through DLQ retry', async t => {
+  const { broker, server, url } = await startBroker()
+  const publisher = await connectClient(url, 'pi-adapter-persistence-publisher')
+  const settings = { 'a4s.synagent.broker-url': url }
+  const sessionId = 'pi-persistence'
+  const topic = `synagent/v2/a4s/${sessionId}`
+  const first = createHarness(settings, [], sessionId)
+  let recovered: typeof first | undefined
+  let dispatchRecovered: typeof first | undefined
+  t.after(async () => {
+    await first.shutdown()
+    await recovered?.shutdown()
+    await dispatchRecovered?.shutdown()
+    await end(publisher)
+    await closeServer(server)
+    await closeBroker(broker)
+  })
+
+  first.failAppend('synagent-pending')
+  await first.start()
+  await waitFor(() => first.notifications.some(({ message }) => message.includes(`subscribed to ${topic}`)))
+  const persistedRetry = message({ id: 'persist-retry', to: `a4s/${sessionId}` })
+  await publish(publisher, topic, serialize(persistedRetry))
+  await waitFor(() => first.notifications.some(({ message }) =>
+    message.includes('pending delivery could not be persisted')))
+  assert.equal(first.received.length, 0)
+
+  first.failAppend('synagent-pending', false)
+  await publish(publisher, topic, serialize(persistedRetry))
+  await waitFor(() => first.received.length === 1)
+  const confirmedText = first.received[0]?.text
+  assert.ok(confirmedText)
+  first.appendBranchUserMessage(confirmedText)
+  first.failAppend('synagent-delivered')
+  await first.confirmDelivery(0)
+  await first.settle()
+  await first.shutdown()
+
+  recovered = createHarness(settings, first.entries, sessionId)
+  recovered.appendBranchUserMessage(confirmedText)
+  await recovered.start()
+  await waitFor(() => recovered?.notifications.some(({ message }) => message.includes(`subscribed to ${topic}`)) ?? false)
+  await publish(publisher, topic, serialize(persistedRetry))
+  const recoveredSentinel = message({ id: 'recovered-sentinel', to: `a4s/${sessionId}` })
+  await publish(publisher, topic, serialize(recoveredSentinel))
+  await waitFor(() => recovered?.received.length === 1)
+  assert.match(recovered.received[0]?.text ?? '', /id recovered-sentinel/)
+  await recovered.confirmDelivery(0)
+  await recovered.settle()
+
+  recovered.failDelivery = true
+  const dispatchRetry = message({ id: 'dispatch-retry', to: `a4s/${sessionId}` })
+  await publish(publisher, topic, serialize(dispatchRetry))
+  await waitFor(() => recovered?.notifications.some(({ message }) => message.includes('delivery failed')) ?? false)
+  recovered.failDelivery = false
+  const dispatchDeadLetter = recovered.entries.find(entry =>
+    entry.customType === 'synagent-dlq'
+    && entry.data.cause === 'DELIVERY_DISPATCH_FAILED'
+    && typeof entry.data.id === 'string')
+  assert.ok(dispatchDeadLetter)
+  const dispatchDeadLetterId = dispatchDeadLetter.data.id
+  assert.equal(typeof dispatchDeadLetterId, 'string')
+  await recovered.shutdown()
+
+  dispatchRecovered = createHarness({
+    ...settings,
+    'a4s.synagent.enabled': false,
+  }, recovered.entries, sessionId)
+  dispatchRecovered.appendBranchUserMessage(confirmedText)
+  await dispatchRecovered.start()
+  assert.equal(dispatchRecovered.received.length, 0)
+  await dispatchRecovered.command('synagent', 'enable')
+  await waitFor(() => dispatchRecovered?.notifications.some(({ message }) =>
+    message.includes('subscribed to') && message.includes(topic)) ?? false)
+  assert.equal(dispatchRecovered.received.length, 0)
+  await dispatchRecovered.command('synagent', `dlq retry ${dispatchDeadLetterId}`)
+  await waitFor(() => dispatchRecovered?.received.length === 1)
+  assert.match(dispatchRecovered.received[0]?.text ?? '', /id dispatch-retry/)
+})
+
+
 
 test('Pi adapter preserves FIFO across a late start and supports explicit recovery', async t => {
   const { broker, server, url } = await startBroker()
   const publisher = await connectClient(url, 'pi-adapter-timeout-publisher')
   const harness = createHarness({
     'a4s.synagent.broker-url': url,
-    'a4s.synagent.project': 'a4s',
   }, [], 'pi-timeout', 25)
   t.after(async () => {
     await harness.shutdown()
@@ -436,7 +807,7 @@ test('Pi adapter preserves FIFO across a late start and supports explicit recove
     await closeBroker(broker)
   })
 
-  const topic = 'synagent/v1/a4s/pi-timeout'
+  const topic = 'synagent/v2/a4s/pi-timeout'
   await harness.start()
   await waitFor(() => harness.notifications.some(({ message }) => message.includes('subscribed to') && message.includes(topic)))
   await publish(publisher, topic, serialize(message({ id: 'slow-start', to: 'a4s/pi-timeout' })))
@@ -468,7 +839,7 @@ test('Pi adapter preserves FIFO across a late start and supports explicit recove
   await harness.settle()
   harness.idle = false
   await publish(publisher, topic, serialize(message({
-    id: 'busy-without-settle', to: 'a4s/pi-timeout', kind: 'steer',
+    id: 'busy-without-settle', to: 'a4s/pi-timeout', kind: 'task.redirect',
   })))
   await publish(publisher, topic, serialize(message({ id: 'after-busy-timeout', to: 'a4s/pi-timeout' })))
   await harness.settle()
@@ -489,7 +860,6 @@ test('Pi adapter new/fork session_start re-resolves the native session ID and re
   const publisher = await connectClient(url, 'pi-adapter-restart-publisher')
   const harness = createHarness({
     'a4s.synagent.broker-url': url,
-    'a4s.synagent.project': 'a4s',
   }, [], 'pi-before', 25)
   t.after(async () => {
     await harness.shutdown()
@@ -498,13 +868,17 @@ test('Pi adapter new/fork session_start re-resolves the native session ID and re
     await closeBroker(broker)
   })
 
-  const before = 'synagent/v1/a4s/pi-before'
-  const after = 'synagent/v1/a4s/pi-after'
+  const before = 'synagent/v2/a4s/pi-before'
+  const after = 'synagent/v2/a4s/pi-after'
   await harness.start()
   await waitFor(() => harness.notifications.some(({ message }) => message.includes('subscribed to') && message.includes(before)))
   await publish(publisher, before, serialize(message({ id: 'active-before', to: 'a4s/pi-before' })))
+  await waitFor(() => harness.received.length === 1)
+  assert.match(harness.received[0]?.text ?? '', /id active-before/)
   await publish(publisher, before, serialize(message({ id: 'queued-before', to: 'a4s/pi-before' })))
-  await waitFor(() => harness.entries.some(entry => entry.data.id === 'queued-before'))
+  await publish(publisher, PROJECT_TOPIC, serialize(message({ id: 'project-before', to: 'a4s/all' })))
+  await waitFor(() => ['queued-before', 'project-before'].every(id =>
+    harness.entries.some(entry => pendingEntryMessageId(entry) === id)))
   assert.equal(harness.received.length, 1)
 
   await harness.startSession('pi-after')
@@ -513,70 +887,10 @@ test('Pi adapter new/fork session_start re-resolves the native session ID and re
   await publish(publisher, after, serialize(message({ id: 'current-after', to: 'a4s/pi-after' })))
   await waitFor(() => harness.received.length === 2)
   assert.match(harness.received[1]?.text ?? '', /id current-after/)
-  assert.ok(harness.received.every(({ text }) => !text.includes('id queued-before')))
+  assert.ok(harness.received.every(({ text }) =>
+    !text.includes('id queued-before') && !text.includes('id project-before')))
   await harness.confirmDelivery(1)
   await harness.settle()
-})
-
-test('Pi adapter cleans a durable subscription changed before its first SUBACK', async t => {
-  const { broker, server, url } = await startBroker()
-  const publisher = await connectClient(url, 'pi-adapter-suback-publisher')
-  let probe: any
-  let releaseSubscribe: (() => void) | undefined
-  let blocked = false
-  const oldTopic = 'synagent/v1/a4s/pi-old'
-  const newTopic = 'synagent/v1/next/pi-old'
-  broker.authorizeSubscribe = (_client: unknown, subscription: { topic: string }, callback: (error: Error | null, value?: unknown) => void) => {
-    if (!blocked && subscription.topic === oldTopic) {
-      blocked = true
-      releaseSubscribe = () => callback(null, subscription)
-      return
-    }
-    callback(null, subscription)
-  }
-  const harness = createHarness({
-    'a4s.synagent.broker-url': url,
-    'a4s.synagent.project': 'a4s',
-  }, [], 'pi-old')
-  t.after(async () => {
-    releaseSubscribe?.()
-    await harness.shutdown()
-    if (probe) await end(probe)
-    await end(publisher)
-    await closeServer(server)
-    await closeBroker(broker)
-  })
-
-  await harness.start()
-  await waitFor(() => releaseSubscribe !== undefined)
-  await harness.command('synagent', 'set project next')
-  releaseSubscribe?.()
-  releaseSubscribe = undefined
-  await waitFor(() => harness.notifications.some(({ message }) => message.includes('subscribed to') && message.includes(newTopic)))
-  await publish(publisher, oldTopic, serialize(message({ id: 'stale-topic', to: 'a4s/pi-old' })))
-  await publish(publisher, newTopic, serialize(message({ id: 'current-topic', to: 'next/pi-old' })))
-  await waitFor(() => harness.received.length === 1)
-  assert.match(harness.received[0]?.text ?? '', /id current-topic/)
-  await new Promise(resolve => setTimeout(resolve, 50))
-  assert.equal(harness.received.length, 1)
-
-  await harness.confirmDelivery(0)
-  await harness.settle()
-  await harness.shutdown()
-  await publish(publisher, oldTopic, serialize(message({ id: 'offline-stale-topic', to: 'a4s/pi-old' })))
-  const resumedTopics: string[] = []
-  probe = mqtt.connect(url, {
-    clean: false,
-    clientId: 'a4s-pi-pi-old',
-    reconnectPeriod: 0,
-  })
-  probe.on('message', (topic: string) => resumedTopics.push(topic))
-  await new Promise<void>((resolve, reject) => {
-    probe.once('connect', resolve)
-    probe.once('error', reject)
-  })
-  await new Promise(resolve => setTimeout(resolve, 75))
-  assert.deepEqual(resumedTopics, [])
 })
 
 test('Pi adapter uses session cwd origin and native mixed-case identity, ignores env, and exposes intent send', async t => {
@@ -605,18 +919,23 @@ test('Pi adapter uses session cwd origin and native mixed-case identity, ignores
   })
 
   await harness.start()
-  const directTopic = 'synagent/v1/Repo.Name/Native.Session-A'
+  const directTopic = 'synagent/v2/Repo.Name/Native.Session-A'
   await waitFor(() => harness.notifications.some(({ message }) => message.includes('subscribed to') && message.includes(directTopic)))
   assert.ok(![...harness.settingKeys].includes('a4s.synagent.instance'))
   assert.ok(harness.entries.every(entry => entry.customType !== 'synagent-instance'))
 
   const outbound: CanonicalMessage[] = []
   subscriber.on('message', (_topic: string, payload: Buffer) => outbound.push(JSON.parse(payload.toString())))
-  await subscribe(subscriber, 'synagent/v1/Repo.Name/Peer.Agent')
-  await subscribe(subscriber, 'synagent/v1/Repo.Name/all')
+  await subscribe(subscriber, 'synagent/v2/Repo.Name/Peer.Agent')
+  await subscribe(subscriber, 'synagent/v2/Repo.Name/all')
   const toolSchema = harness.toolSchemas.get('synagent_send')
   assert.ok(toolSchema)
-  assert.equal(Check(toolSchema, { to: 'Repo.Name/Peer.Agent', body: 'valid', kind: 'result' }), true)
+  assert.equal(Check(toolSchema, {
+    to: 'Repo.Name/Peer.Agent', body: 'valid', kind: 'task.request',
+  }), true)
+  assert.equal(Check(toolSchema, {
+    to: 'Repo.Name/Peer.Agent', body: 'invalid', kind: 'task.completed',
+  }), false)
   assert.equal(Check(toolSchema, { to: 'Repo.Name/Peer.Agent', body: 'invalid', kind: 'bogus' }), false)
 
   const invalid = await harness.tool('synagent_send', { to: 'not/an/address/at/all', body: 'invalid' })
@@ -624,20 +943,27 @@ test('Pi adapter uses session cwd origin and native mixed-case identity, ignores
   const sent = await harness.tool('synagent_send', {
     to: 'Repo.Name/Peer.Agent',
     body: 'intent message',
-    kind: 'result',
+    kind: 'task.request',
     reply_to: 'request-1',
+    correlation_id: 'root-1',
+    causation_id: 'cause-1',
   })
   assert.notEqual(sent.isError, true)
   assert.match(sent.content[0]?.text ?? '', /^Synagent message sent:/)
   await waitFor(() => outbound.length === 1)
+  const firstOutbound = outbound[0]
+  assert.ok(firstOutbound)
+  const { from, to, kind, body, reply_to, correlation_id, causation_id } = firstOutbound
   assert.deepEqual(
-    (({ from, to, kind, body, reply_to }) => ({ from, to, kind, body, reply_to }))(outbound[0] as CanonicalMessage),
+    { from, to, kind, body, reply_to, correlation_id, causation_id },
     {
       from: 'Repo.Name/Native.Session-A',
       to: 'Repo.Name/Peer.Agent',
-      kind: 'result',
+      kind: 'task.request',
       body: 'intent message',
       reply_to: 'request-1',
+      correlation_id: 'root-1',
+      causation_id: 'cause-1',
     },
   )
   const broadcast = await harness.tool('synagent_send', {
@@ -654,48 +980,7 @@ test('Pi adapter uses session cwd origin and native mixed-case identity, ignores
   assert.ok(harness.notifications.some(({ message, type }) => type === 'error' && message.includes('Unknown Synagent setting: instance')))
 })
 
-test('Pi adapter configured project wins over a conflicting session cwd origin', async t => {
-  const { broker, server, url } = await startBroker()
-  const publisher = await connectClient(url, 'pi-adapter-configured-project-publisher')
-  const cwd = mkdtempSync(join(tmpdir(), 'synagent-pi-configured-project-'))
-  execFileSync('git', ['init', '-q'], { cwd })
-  execFileSync('git', ['remote', 'add', 'origin', 'git@github.com:Example/Origin.Project.git'], { cwd })
-  const harness = createHarness({
-    'a4s.synagent.broker-url': url,
-    'a4s.synagent.project': 'Configured.Project',
-  }, [], 'Configured.Session', undefined, cwd)
-  t.after(async () => {
-    await harness.shutdown()
-    await end(publisher)
-    await closeServer(server)
-    await closeBroker(broker)
-    rmSync(cwd, { recursive: true, force: true })
-  })
-
-  await harness.start()
-  const configuredTopic = 'synagent/v1/Configured.Project/Configured.Session'
-  await waitFor(() => harness.notifications.some(({ message }) =>
-    message.includes('subscribed to') && message.includes(configuredTopic),
-  ))
-  assert.ok(harness.notifications.some(({ message }) =>
-    message.includes('Synagent identity Configured.Project/Configured.Session'),
-  ))
-
-  await publish(publisher, 'synagent/v1/Origin.Project/Configured.Session', serialize(message({
-    id: 'wrong-origin',
-    to: 'Origin.Project/Configured.Session',
-  })))
-  await publish(publisher, configuredTopic, serialize(message({
-    id: 'configured-project',
-    to: 'Configured.Project/Configured.Session',
-  })))
-  await waitFor(() => harness.received.length === 1)
-  assert.match(harness.received[0]?.text ?? '', /id configured-project/)
-  await new Promise(resolve => setTimeout(resolve, 50))
-  assert.equal(harness.received.length, 1)
-})
-
-test('Pi adapter unresolved project stays inactive and refuses all v1 send intent', async t => {
+test('Pi adapter unresolved project stays inactive and refuses all send intent', async t => {
   const { broker, server, url } = await startBroker()
   const publisher = await connectClient(url, 'pi-adapter-legacy-publisher')
   const observer = await connectClient(url, 'pi-adapter-legacy-observer')
@@ -715,9 +1000,9 @@ test('Pi adapter unresolved project stays inactive and refuses all v1 send inten
     rmSync(stateRoot, { recursive: true, force: true })
   })
 
-  const publishedV1: string[] = []
-  observer.on('message', (topic: string) => publishedV1.push(topic))
-  await subscribe(observer, 'synagent/v1/#')
+  const publishedCurrent: string[] = []
+  observer.on('message', (topic: string) => publishedCurrent.push(topic))
+  await subscribe(observer, 'synagent/v2/#')
   await harness.start()
   await waitFor(() => harness.notifications.some(({ message, type }) =>
     type === 'warning' && message.includes('identity unresolved') && message.includes('inactive'),
@@ -728,15 +1013,15 @@ test('Pi adapter unresolved project stays inactive and refuses all v1 send inten
 
   const toolResult = await harness.tool('synagent_send', { to: 'Some.Project/Peer.One', body: 'must not publish' })
   assert.equal(toolResult.isError, true)
-  assert.match(toolResult.content[0]?.text ?? '', /configure the project setting/)
+  assert.match(toolResult.content[0]?.text ?? '', /configure remote.origin.url/)
   await harness.command('synagent', 'status')
   assert.ok(harness.notifications.some(({ message }) =>
-    message.includes('inactive=true') && message.includes('/synagent set project'),
+    message.includes('inactive=true') && message.includes('remote.origin.url'),
   ))
   await harness.command('mq-send', 'must not publish either')
-  assert.ok(harness.notifications.some(({ message }) => message.includes('configure the project setting')))
+  assert.ok(harness.notifications.some(({ message }) => message.includes('configure remote.origin.url')))
   await new Promise(resolve => setTimeout(resolve, 50))
-  assert.deepEqual(publishedV1, [])
+  assert.deepEqual(publishedCurrent, [])
 
   await publish(publisher, LEGACY_TOPIC, serialize(message({ id: 'legacy-ignored', to: 'pi' })))
   await new Promise(resolve => setTimeout(resolve, 50))
@@ -770,7 +1055,6 @@ test('Pi adapter marks MQTT publish failures as tool errors', async t => {
   const { broker, server, url } = await startBroker()
   const harness = createHarness({
     'a4s.synagent.broker-url': url,
-    'a4s.synagent.project': 'a4s',
   }, [], 'publish-failure')
   t.after(async () => {
     await harness.shutdown()
@@ -792,27 +1076,30 @@ test('Pi adapter records focused RCA events without message or transport data', 
   const { broker, server, url } = await startBroker()
   const publisher = await connectClient(url, 'pi-logging-publisher')
   const stateRoot = mkdtempSync(join(tmpdir(), 'synagent-pi-logging-'))
+  const cwd = mkdtempSync(join(tmpdir(), 'synagent-pi-sensitive-origin-'))
+  execFileSync('git', ['init', '-q'], { cwd })
+  execFileSync('git', ['remote', 'add', 'origin', 'git@github.com:Example/Sensitive.Project.git'], { cwd })
   const sessionId = 'Raw.Session.Logging'
   const harness = createHarness({
     'a4s.synagent.broker-url': url,
-    'a4s.synagent.project': 'Sensitive.Project',
-  }, [], sessionId, 20, process.cwd(), { env: { A4S_STATE_ROOT: stateRoot } })
+  }, [], sessionId, 20, cwd, { env: { A4S_STATE_ROOT: stateRoot } })
   t.after(async () => {
     await harness.shutdown()
     await end(publisher)
     await closeServer(server)
     await closeBroker(broker)
     rmSync(stateRoot, { recursive: true, force: true })
+    rmSync(cwd, { recursive: true, force: true })
   })
 
-  const topic = 'synagent/v1/Sensitive.Project/Raw.Session.Logging'
+  const topic = 'synagent/v2/Sensitive.Project/Raw.Session.Logging'
   await harness.start()
   await waitFor(() => harness.notifications.some(({ message }) => message.includes('subscribed to') && message.includes(topic)))
 
   const sent = await harness.tool('synagent_send', {
     to: 'Sensitive.Project/Peer.Private',
     body: 'outbound prompt body private',
-    kind: 'notify',
+    kind: 'note.published',
   })
   assert.notEqual(sent.isError, true)
   const invalidSend = await harness.tool('synagent_send', {
@@ -908,7 +1195,6 @@ test('Pi adapter contains logger failure after publish, delivery and settlement'
   let loggerFails = false
   const harness = createHarness({
     'a4s.synagent.broker-url': url,
-    'a4s.synagent.project': 'a4s',
   }, [], 'best-effort-session', 100, process.cwd(), {
     env: { A4S_STATE_ROOT: stateRoot },
     now: () => {
@@ -924,7 +1210,7 @@ test('Pi adapter contains logger failure after publish, delivery and settlement'
     rmSync(stateRoot, { recursive: true, force: true })
   })
 
-  const topic = 'synagent/v1/a4s/best-effort-session'
+  const topic = 'synagent/v2/a4s/best-effort-session'
   await harness.start()
   await waitFor(() => harness.notifications.some(({ message }) => message.includes('subscribed to') && message.includes(topic)))
   loggerFails = true
@@ -937,7 +1223,7 @@ test('Pi adapter contains logger failure after publish, delivery and settlement'
   await publish(publisher, topic, serialize(first))
   await publish(publisher, topic, serialize(message({ id: 'best-effort-two', to: 'a4s/best-effort-session' })))
   await waitFor(() => harness.received.length === 1)
-  assert.equal(harness.entries.filter(entry => entry.data.id === 'best-effort-one').length, 1)
+  assert.equal(harness.entries.filter(entry => pendingEntryMessageId(entry) === 'best-effort-one').length, 1)
   await harness.confirmDelivery(0)
   await harness.settle()
   await waitFor(() => harness.received.length === 2)
@@ -951,7 +1237,6 @@ test('Pi adapter preserves shutdown rejection after logging and close', async t 
   const stateRoot = mkdtempSync(join(tmpdir(), 'synagent-pi-shutdown-reject-'))
   const harness = createHarness({
     'a4s.synagent.broker-url': url,
-    'a4s.synagent.project': 'a4s',
   }, [], 'shutdown-reject-session', undefined, process.cwd(), { env: { A4S_STATE_ROOT: stateRoot } })
   t.after(async () => {
     await harness.shutdown()
@@ -995,7 +1280,6 @@ test('Pi adapter records MQTT connection failure with stable taxonomy', async t 
   const port = await unusedPort()
   const harness = createHarness({
     'a4s.synagent.broker-url': `mqtt://127.0.0.1:${port}`,
-    'a4s.synagent.project': 'a4s',
   }, [], 'mqtt-failure-session', undefined, process.cwd(), { env: { A4S_STATE_ROOT: stateRoot } })
   t.after(async () => {
     await harness.shutdown()
@@ -1025,11 +1309,10 @@ test('Pi adapter stays disconnected when its enabled setting is false', async ()
   await harness.shutdown()
 })
 
-test('Pi adapter registers /synagent-settings without registerSetting and persists each scope', async t => {
+test('Pi adapter settings persist at user scope', async t => {
   const { broker, server, url } = await startBroker()
   const harness = createHarness({
     'a4s.synagent.broker-url': url,
-    'a4s.synagent.project': 'a4s',
   }, [], 'native-settings')
   t.after(async () => {
     await harness.shutdown()
@@ -1044,21 +1327,16 @@ test('Pi adapter registers /synagent-settings without registerSetting and persis
   harness.queueSelections('Global broadcast: true', 'false', 'Default peer: claude', 'Cancel')
   harness.queueInputs('a4s/New.Peer')
   await harness.command('synagent-settings', '')
+  assert.ok(harness.selectionOptions.some(options =>
+    options.includes('Global broadcast: true') && options.includes('Default peer: claude'),
+  ))
   await waitFor(() => harness.notifications.filter(({ message }) => message.includes('Synagent identity')).length > initialStarts)
   const afterGlobalEdit = harness.notifications.filter(({ message }) => message.includes('Synagent identity')).length
   assert.equal(afterGlobalEdit, initialStarts + 1)
   assert.deepEqual(JSON.parse(readFileSync(harness.globalSettingsPath, 'utf8')), {
     'broker-url': url,
-    project: 'a4s',
     global: false,
     'default-peer': 'a4s/New.Peer',
-  })
-
-  harness.queueSelections('Project: a4s', 'Enter token', 'Cancel')
-  harness.queueInputs('Native.Project')
-  await harness.command('synagent-settings', '')
-  assert.deepEqual(JSON.parse(readFileSync(harness.projectSettingsPath, 'utf8')), {
-    project: 'Native.Project',
   })
 
   harness.queueSelections('Reset a setting', 'default-peer', 'Cancel')
@@ -1071,7 +1349,6 @@ test('Pi adapter does not restart MQTT for default-peer and keeps /synagent set 
   const { broker, server, url } = await startBroker()
   const harness = createHarness({
     'a4s.synagent.broker-url': url,
-    'a4s.synagent.project': 'a4s',
   }, [], 'set-compatibility')
   t.after(async () => {
     await harness.shutdown()
@@ -1087,24 +1364,9 @@ test('Pi adapter does not restart MQTT for default-peer and keeps /synagent set 
   assert.equal(JSON.parse(readFileSync(harness.globalSettingsPath, 'utf8'))['default-peer'], 'a4s/Automation.Peer')
 })
 
-test('Pi adapter refuses project persistence for an untrusted project', async () => {
-  const harness = createHarness({
-    'a4s.synagent.enabled': false,
-    'a4s.synagent.project': 'Global.Project',
-  }, [], 'untrusted-settings', undefined, undefined, undefined, false)
-  await harness.start()
-  await harness.command('synagent', 'set project Untrusted.Project')
-  assert.ok(harness.notifications.some(({ message, type }) =>
-    type === 'error' && message.includes('trusted project'),
-  ))
-  assert.equal(existsSync(harness.projectSettingsPath), false)
-  await harness.shutdown()
-})
-
 test('Pi adapter rejects remote broker edits and keeps state after a write failure', async () => {
   const harness = createHarness({
     'a4s.synagent.enabled': false,
-    'a4s.synagent.project': 'a4s',
     'a4s.synagent.default-peer': 'Original.Peer',
   })
   await harness.start()
@@ -1123,171 +1385,133 @@ test('Pi adapter rejects remote broker edits and keeps state after a write failu
   await harness.shutdown()
 })
 
-function createHarness(
-  overrides: Record<string, unknown>,
-  initialEntries: Array<{ type: 'custom'; customType: string; data: Record<string, string> }> = [],
-  sessionId = `session-${Math.random().toString(36).slice(2)}`,
-  deliveryStartTimeoutMs?: number,
-  cwd?: string,
-  diagnostics?: SynagentPiOptions['diagnostics'],
-  trusted = true,
-) {
-  const events = new Map<EventName, Handler>()
-  const commands = new Map<string, Command>()
-  const tools = new Map<string, Tool>()
-  const notifications: Notification[] = []
-  const received: Received[] = []
-  const entries = initialEntries.map(entry => ({ ...entry, data: { ...entry.data } }))
-  const ownedDiagnosticsRoot = diagnostics ? undefined : mkdtempSync(join(tmpdir(), 'synagent-pi-test-log-'))
-  const effectiveDiagnostics = diagnostics ?? { env: { A4S_STATE_ROOT: ownedDiagnosticsRoot } }
-  const agentDir = mkdtempSync(join(tmpdir(), 'synagent-pi-agent-'))
-  const ownedCwd = cwd ? undefined : mkdtempSync(join(tmpdir(), 'synagent-pi-cwd-'))
-  const effectiveCwd = cwd ?? ownedCwd!
-  const globalSettingsPath = join(agentDir, 'synagent.json')
-  const initialSettings = Object.fromEntries(Object.entries(overrides).map(([key, value]) => [
-    key.replace(/^a4s\.synagent\./, ''),
-    value,
-  ]))
-  writeFileSync(globalSettingsPath, `${JSON.stringify(initialSettings, null, 2)}\n`, { mode: 0o600 })
-  const selections: string[] = []
-  const inputs: Array<string | undefined> = []
-  const confirmations: boolean[] = []
-  let idle = true
-  let failDelivery = false
-  let currentSessionId = sessionId
-
-  const createContext = (): FakeContext => ({
-    cwd: effectiveCwd,
-    hasUI: true,
-    isIdle: () => idle,
-    isProjectTrusted: () => trusted,
-    sessionManager: { getBranch: () => entries, getSessionId: () => currentSessionId },
-    ui: {
-      confirm: async () => confirmations.shift() ?? false,
-      input: async () => inputs.shift(),
-      notify: (message, type) => notifications.push({ message, type }),
-      select: async () => selections.shift(),
-    },
+test('Pi adapter expires and cancels queued requests without rehydrating them', async t => {
+  const { broker, server, url } = await startBroker()
+  const publisher = await connectClient(url, 'pi-deadline-publisher')
+  const events: CanonicalMessage[] = []
+  publisher.on('message', (_topic, payload) => events.push(JSON.parse(payload.toString()) as CanonicalMessage))
+  await subscribe(publisher, 'synagent/v2/a4s/sender')
+  const settings = { 'a4s.synagent.broker-url': url }
+  const sessionId = 'pi-deadlines'
+  const topic = `synagent/v2/a4s/${sessionId}`
+  const harness = createHarness(settings, [], sessionId)
+  let restored: typeof harness | undefined
+  t.after(async () => {
+    await restored?.shutdown()
+    await harness.shutdown()
+    await end(publisher)
+    await closeServer(server)
+    await closeBroker(broker)
   })
-  const api = {
-    registerCommand(name: string, command: Command) {
-      commands.set(name, command)
-    },
-    registerTool(tool: Tool & { name: string }) {
-      tools.set(tool.name, tool)
-    },
-    on(event: EventName, handler: Handler) {
-      events.set(event, handler)
-      return () => {}
-    },
-    appendEntry(customType: string, data: Record<string, string>) {
-      entries.push({ type: 'custom', customType, data })
-    },
-    sendUserMessage(text: string, options?: Received['options']) {
-      if (failDelivery) throw new Error('simulated delivery failure with private detail')
-      received.push({ text, ...(options ? { options } : {}) })
-    },
-  }
-  const adapter = createSynagentPi({
-    ...(deliveryStartTimeoutMs !== undefined ? { deliveryStartTimeoutMs } : {}),
-    diagnostics: effectiveDiagnostics,
+
+  harness.idle = false
+  await harness.start()
+  await waitFor(() => harness.notifications.some(({ message }) => message.includes(`subscribed to ${topic}`)))
+  await publish(publisher, topic, serialize(message({
+    id: 'expired-before-injection',
+    from: 'a4s/sender',
+    to: `a4s/${sessionId}`,
+    deadline: Date.now() - 1,
+  })))
+  await waitFor(() => events.some(event =>
+    event.kind === 'task.expired' && event.reply_to === 'expired-before-injection'))
+  const expired = events.find(event => event.kind === 'task.expired')
+  assert.ok(expired)
+  assert.equal(expired.to, 'a4s/sender')
+  assert.equal(expired.causation_id, 'expired-before-injection')
+  assert.equal(harness.received.length, 0)
+
+  await publish(publisher, topic, serialize(message({
+    id: 'cancel-before-injection',
+    from: 'a4s/sender',
+    to: `a4s/${sessionId}`,
+    deadline: Date.now() + 600_000,
+  })))
+  await waitFor(() => harness.entries.some(entry =>
+    pendingEntryMessageId(entry) === 'cancel-before-injection'))
+  await publish(publisher, topic, serialize(message({
+    id: 'cancel-command',
+    from: 'a4s/sender',
+    to: `a4s/${sessionId}`,
+    kind: 'task.cancel',
+    reply_to: 'cancel-before-injection',
+  })))
+  await waitFor(() => harness.entries.some(entry =>
+    entry.customType === 'synagent-delivered' && entry.data.id === 'cancel-before-injection'))
+  harness.idle = true
+  await harness.settle()
+  assert.equal(harness.received.length, 0)
+
+  await harness.shutdown()
+  restored = createHarness(settings, harness.entries, sessionId)
+  await restored.start()
+  await waitFor(() => restored?.notifications.some(({ message }) => message.includes(`subscribed to ${topic}`)) ?? false)
+  assert.equal(restored.received.length, 0)
+})
+
+test('Pi adapter derives deadlines from request-ttl and persists every request status', async t => {
+  const { broker, server, url } = await startBroker()
+  const peer = await connectClient(url, 'pi-request-registry-peer')
+  const outbound: CanonicalMessage[] = []
+  peer.on('message', (_topic, payload) => outbound.push(JSON.parse(payload.toString()) as CanonicalMessage))
+  await subscribe(peer, 'synagent/v2/a4s/peer')
+  const harness = createHarness({
+    'a4s.synagent.broker-url': url,
+    'a4s.synagent.request-ttl': 5,
+  }, [], 'pi-registry')
+  t.after(async () => {
+    await harness.shutdown()
+    await end(peer)
+    await closeServer(server)
+    await closeBroker(broker)
   })
-  adapter(api as never)
 
-  async function withAgentDir(action: () => void | Promise<void>): Promise<void> {
-    const previous = process.env.PI_CODING_AGENT_DIR
-    process.env.PI_CODING_AGENT_DIR = agentDir
-    try {
-      await action()
-    } finally {
-      if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR
-      else process.env.PI_CODING_AGENT_DIR = previous
-    }
-  }
+  await harness.start()
+  await waitFor(() => harness.notifications.some(({ message }) => message.includes('subscribed to')))
+  assert.doesNotMatch(JSON.stringify(harness.toolSchemas.get('synagent_send')), /deadline/)
 
-  return {
-    notifications,
-    received,
-    entries,
-    agentDir,
-    cwd: effectiveCwd,
-    globalSettingsPath,
-    projectSettingsPath: join(effectiveCwd, '.pi', 'synagent.json'),
-    settingKeys: ([] as string[])[Symbol.iterator](),
-    toolSchemas: { get: (name: string) => (tools.get(name) as any)?.parameters },
-    queueSelections(...values: string[]) { selections.push(...values) },
-    queueInputs(...values: Array<string | undefined>) { inputs.push(...values) },
-    queueConfirmations(...values: boolean[]) { confirmations.push(...values) },
-    get idle() { return idle },
-    set idle(value: boolean) { idle = value },
-    get failDelivery() { return failDelivery },
-    set failDelivery(value: boolean) { failDelivery = value },
-    async start() {
-      const handler = events.get('session_start')
-      assert.ok(handler)
-      await withAgentDir(() => handler({ type: 'session_start' }, createContext()))
-    },
-    async startSession(nextSessionId: string) {
-      currentSessionId = nextSessionId
-      const handler = events.get('session_start')
-      assert.ok(handler)
-      await withAgentDir(() => handler({ type: 'session_start' }, createContext()))
-    },
-    async messageStart(text: string) {
-      const messageStart = events.get('message_start')
-      assert.ok(messageStart)
-      await messageStart({
-        type: 'message_start',
-        message: { role: 'user', content: [{ type: 'text', text }] },
-      }, createContext())
-    },
-    async confirmDelivery(index = received.length - 1) {
-      const delivery = received[index]
-      assert.ok(delivery)
-      const messageStart = events.get('message_start')
-      assert.ok(messageStart)
-      await messageStart({
-        type: 'message_start',
-        message: { role: 'user', content: [{ type: 'text', text: delivery.text }] },
-      }, createContext())
-    },
-    async settle() {
-      const handler = events.get('agent_settled')
-      assert.ok(handler)
-      await handler({ type: 'agent_settled' }, createContext())
-    },
-    async shutdown() {
-      const handler = events.get('session_shutdown')
-      assert.ok(handler)
-      await handler({ type: 'session_shutdown' }, createContext())
-      if (ownedDiagnosticsRoot) rmSync(ownedDiagnosticsRoot, { recursive: true, force: true })
-      rmSync(agentDir, { recursive: true, force: true })
-      if (ownedCwd) rmSync(ownedCwd, { recursive: true, force: true })
-    },
-    async command(name: string, args: string) {
-      const command = commands.get(name)
-      assert.ok(command)
-      await command.handler(args, createContext())
-    },
-    async tool(name: string, params: { to: string; body: string; kind?: string; reply_to?: string }) {
-      const tool = tools.get(name)
-      assert.ok(tool)
-      return tool.execute('tool-call', params, undefined, undefined, createContext())
-    },
-  }
-}
+  await harness.tool('synagent_send', { to: 'a4s/peer', body: 'complete me' })
+  await harness.tool('synagent_send', { to: 'a4s/peer', body: 'expire me' })
+  await harness.tool('synagent_send', { to: 'a4s/peer', body: 'cancel me' })
+  await harness.tool('synagent_send', { to: 'a4s/peer', body: 'leave pending' })
+  await waitFor(() => outbound.filter(({ kind }) => kind === 'task.request').length === 4)
+  const requests = outbound.filter(({ kind }) => kind === 'task.request')
+  for (const request of requests) assert.equal(request.deadline, request.ts + 5000)
+  const [completedRequest, expiredRequest, cancelledRequest, pendingRequest] = requests
+  assert.ok(completedRequest && expiredRequest && cancelledRequest && pendingRequest)
 
-function message(overrides: Partial<CanonicalMessage> & { id: string; to: string }): CanonicalMessage {
-  return {
-    id: overrides.id,
-    from: overrides.from ?? 'a4s/claude-1',
-    to: overrides.to,
-    kind: overrides.kind ?? 'notify',
-    body: overrides.body ?? 'Done',
-    ts: overrides.ts ?? Date.now(),
-    ...(overrides.reply_to ? { reply_to: overrides.reply_to } : {}),
-  }
-}
+  await publish(peer, 'synagent/v2/a4s/pi-registry', serialize(message({
+    id: 'completed-event',
+    from: 'a4s/peer',
+    to: 'a4s/pi-registry',
+    kind: 'task.completed',
+    reply_to: completedRequest.id,
+    correlation_id: completedRequest.id,
+    causation_id: completedRequest.id,
+  })))
+  await publish(peer, 'synagent/v2/a4s/pi-registry', serialize(message({
+    id: 'expired-event',
+    from: 'a4s/peer',
+    to: 'a4s/pi-registry',
+    kind: 'task.expired',
+    reply_to: expiredRequest.id,
+    correlation_id: expiredRequest.id,
+    causation_id: expiredRequest.id,
+  })))
+  await waitFor(() => harness.entries.some(entry =>
+    entry.customType === 'synagent-request'
+    && entry.data.id === expiredRequest.id
+    && entry.data.status === 'expired'))
+  await harness.command('synagent', `cancel ${cancelledRequest.id}`)
+  await waitFor(() => outbound.some(event =>
+    event.kind === 'task.cancel' && event.reply_to === cancelledRequest.id))
+  await harness.command('synagent', 'pending')
+  const listing = harness.notifications.at(-1)?.message ?? ''
+  assert.match(listing, new RegExp(`${completedRequest.id} estado=completo`))
+  assert.match(listing, new RegExp(`${expiredRequest.id} estado=vencido`))
+  assert.match(listing, new RegExp(`${cancelledRequest.id} estado=cancelado`))
+  assert.match(listing, new RegExp(`${pendingRequest.id} estado=pendiente`))
+})
 
 function findOperationalLog(stateRoot: string): string {
   const harnessRoot = join(stateRoot, 'log', 'synagent', 'pi')
@@ -1304,10 +1528,3 @@ async function unusedPort(): Promise<number> {
   return port
 }
 
-async function waitFor(condition: () => boolean): Promise<void> {
-  const deadline = Date.now() + 3000
-  while (!condition()) {
-    if (Date.now() >= deadline) throw new Error('timed out waiting for condition')
-    await new Promise(resolve => setTimeout(resolve, 10))
-  }
-}

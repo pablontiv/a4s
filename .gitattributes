@@ -1,3 +1,0 @@
-* text=auto eol=lf
-skills/remove-gentle-context/tests/fixtures/declarative/json-surgery-crlf.json -text
-skills/remove-gentle-context/tests/fixtures/current-installer/gemini/GEMINI.md whitespace=-trailing-space
