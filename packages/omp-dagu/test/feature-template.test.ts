@@ -409,6 +409,49 @@ test("template quality admission rejects truncated inspected transcripts", () =>
   } finally { rmSync(repo.root, { recursive: true, force: true }); }
 });
 
+test("template isolated PoC parent succeeds after exactly one child enqueue across the complete implementation graph", { timeout: 60_000 }, () => {
+  const repo = repository();
+  git(repo.primary, "worktree", "remove", repo.worktree);
+  try {
+    const home = join(repo.root, "dagu-home");
+    mkdirSync(join(home, "dags"), { recursive: true });
+    const bin = join(repo.root, "bin");
+    const calls = join(repo.root, "external-calls");
+    writeFileSync(calls, "");
+    for (const command of ["gh", "dagu-feature-bundle"]) {
+      writeFileSync(join(bin, command), `#!/bin/bash\nprintf '%s\\n' ${JSON.stringify(command + " ")}"$*" >> ${JSON.stringify(calls)}\n`);
+      chmodSync(join(bin, command), 0o755);
+    }
+    const source = readFileSync(definitions[0][1], "utf8");
+    const dag = join(home, "dags", "feature.yaml");
+    const variables = {
+      PRIMARY: repo.primary, WORKTREE: repo.worktree, BRANCH: repo.branch,
+      RUN: "poc-parent", ISSUE: "189", BASE_BRANCH: "main", PR_NUMBER: "", VALIDATION: "",
+      OMP_SESSION_ID: "parent-id", PATH: `${bin}:${process.env.PATH}`, GATE: "true",
+      REQUIRED_CHECK: "validate", DAGU_FEATURE_BUNDLE: "test",
+    };
+    writeFileSync(dag, `name: feature\ntype: graph\nshell: bash\nmax_active_steps: 1\nenv:\n${Object.entries(variables).map(([key, value]) => `  - ${key}: ${JSON.stringify(value)}`).join("\n")}\n`
+      + source.slice(source.indexOf("  - DAGU_RESOURCE_GUARD: |"), source.indexOf("steps:\n"))
+      + `steps:\n  - id: triage\n    run: |\n      printf 'POC=yes\\nQUESTION=runtime behavior\\nBASIS=regression test\\nREVIEW=\\n' >> "$DAGU_OUTPUT_FILE"\n    outputs:\n      - name: POC\n      - name: QUESTION\n      - name: BASIS\n      - name: REVIEW\n`
+      + source.slice(source.indexOf("  - id: triage_decision\n")));
+    const env = { ...process.env, DAGU_HOME: home, DAGU_COORDINATOR_ENABLED: "false" };
+    const result = spawnSync("dagu", ["start", "--run-id", "poc-parent", dag], {
+      encoding: "utf8", timeout: 45_000, env,
+    });
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    for (const step of ["implement", "quality_prepare", "push", "pr", "auto_merge", "await_ci", "await_merge", "close_gate"]) {
+      assert.match(result.stdout + result.stderr, new RegExp(`${step}\\s+.*skipped`));
+    }
+    const status = spawnSync("dagu", ["status", dag, "--run-id", "poc-parent"], { encoding: "utf8", env });
+    assert.equal(status.status, 0, status.stdout + status.stderr);
+    assert.match(status.stdout, /Succeeded/);
+    assert.deepEqual(readFileSync(calls, "utf8").trim().split("\n"), [
+      `gh issue comment 189 --body-file ${join(repo.primary, ".git", "dagu-feature", "runs", "poc-parent", "triage.md")}`,
+      `dagu-feature-bundle enqueue --run-id poc-poc-parent ${repo.primary}/.workspace/dagu/dags/poc.yaml -- ISSUE=189 QUESTION=runtime behavior BASE_BRANCH=main OMP_SESSION_ID=parent-id`,
+    ]);
+  } finally { rmSync(repo.root, { recursive: true, force: true }); }
+});
+
 for (const poc of ["yes", "no"] as const) {
   test(`template isolated quality preparation ${poc === "yes" ? "skips PoC without an implementation worktree" : "prepares the implementation request"}`, { timeout: 60_000 }, () => {
     const repo = repository();

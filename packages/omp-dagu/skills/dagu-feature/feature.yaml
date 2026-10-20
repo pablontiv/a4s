@@ -1064,6 +1064,9 @@ steps:
 
   - id: pr
     depends: recover_push
+    preconditions:
+      - condition: "${steps.triage.outputs.POC}"
+        expected: "no"
     run: |
       set -euo pipefail
       cd "$WORKTREE"
