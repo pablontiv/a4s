@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.95
+
+- Share the canonical planning unit schema and complete deterministic JSONL diagnostics between upstream preparation and native `check_plan` through `dagu-feature-bundle validate-planning-units`, preserving exact validated input bytes and independent semantic review (#443).
+- Materialize explicitly approved existing-issue revisions and native blocked-by/sub-issue relationships in the existing planning backend. Preserve undeclared fields and existing edges; retain durable partial-progress mappings and grouped complete remote-state verification so retries converge without search-index freshness (#444).
+
 ## 0.3.94
 
 - Validate implement completion against the current checkpoint cutoff and coordinator allocation using the same transcript and effective-model provenance required by quality review, including feature-last commands with spaced quoted inputs and reordered flags; stale deliveries retain Waiting implement with a fresh-task remedy.

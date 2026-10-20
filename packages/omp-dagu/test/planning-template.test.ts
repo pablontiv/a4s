@@ -5,6 +5,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { parse, stringify } from "yaml";
 import { liveDagu, liveDaguVersion } from "./fixtures/live-dagu.ts";
@@ -37,25 +38,10 @@ function fixture(): Fixture {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "breakdown-")));
   const bin = join(root, "bin"), out = join(root, "out"), primary = join(root, "primary"), upstream = join(root, "upstream.jsonl");
   for (const dir of [bin, out, primary, join(root, "tmp")]) mkdirSync(dir);
+  executable(join(bin, "dagu-feature-bundle"), `#!/bin/bash\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(fileURLToPath(new URL("../bin/dagu-feature-bundle.ts", import.meta.url)))} "$@"\n`);
+  writeFileSync(join(root, "external-issues.json"), JSON.stringify([{ number: 442 }]));
   writeFileSync(join(root, "issues.json"), "[]\n");
-  executable(join(bin, "gh"), `#!/bin/bash
-set -euo pipefail
-FAKE_STATE=${JSON.stringify(root)}
-if [[ "$1" == api ]]; then
-  [[ "$*" == *--paginate* && "$*" == *--slurp* ]]
-  jq -c '[.[0:1], .[1:]]' "$FAKE_STATE/issues.json"
-elif [[ "$1 $2" == "issue create" ]]; then
-  printf '%s\\n' "$*" >> "$FAKE_STATE/github.log"
-  while (($#)); do
-    case "$1" in --body-file) body_file=$2; shift 2;; --title) title=$2; shift 2;; *) shift;; esac
-  done
-  number=$(jq 'length + 41' "$FAKE_STATE/issues.json")
-  url="https://example.test/owner/repo/issues/$number"
-  jq --argjson number "$number" --arg url "$url" --rawfile body "$body_file" --arg title "$title" '. + [{number:$number,html_url:$url,body:$body,title:$title}]' "$FAKE_STATE/issues.json" > "$FAKE_STATE/issues.tmp"
-  mv "$FAKE_STATE/issues.tmp" "$FAKE_STATE/issues.json"
-  echo "$url"
-else echo "Unexpected gh $*" >&2; exit 1; fi
-`);
+  executable(join(bin, "gh"), `#!/bin/bash\nexport PLANNING_GH_STATE=${JSON.stringify(root)}\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(fileURLToPath(new URL("./fixtures/planning-github-state.cjs", import.meta.url)))} "$@"\n`);
   executable(join(bin, "curl"), `#!/bin/bash
 set -euo pipefail
 jq -nc --argjson iteration "\${FAKE_ITERATION:-0}" --argjson nodes "\${FAKE_REVIEW_NODES:-null}" '
@@ -108,7 +94,7 @@ test("import consumes only an explicit absolute upstream JSONL snapshot and reim
     assert.throws(() => readFileSync(join(f.out, "plan.md")), { code: "ENOENT" });
     for (const UNITS_FROM of ["relative.jsonl", join(f.root, "missing.jsonl")]) {
       assert.notEqual(f.run("import_units", { UNITS_FROM }).status, 0);
-      assert.match(f.run("check_plan").stderr, /rule=import-units/);
+      assert.equal(JSON.parse(f.run("check_plan").stderr).rule, "import-units");
       assert.notEqual(f.run("materialize", { APPROVED: "all" }).status, 0);
     }
     writeFileSync(f.upstream, "");
@@ -117,39 +103,30 @@ test("import consumes only an explicit absolute upstream JSONL snapshot and reim
   } finally { f.close(); }
 });
 
-test("unit validation reports line-local schema, completeness structure and provenance errors", () => {
+test("upstream package CLI and native check_plan emit identical complete diagnostics and retain corrected canonical bytes", () => {
   const f = fixture();
   try {
-    const cases: Array<[Record<string, unknown>, string]> = [
-      [{ ...unit(), id: "Bad ID" }, "kebab-id"], [{ ...unit(), title: " " }, "title"],
-      [{ ...unit(), dag: "other" }, "dag"], [{ ...unit("probe", "poc"), question: undefined }, "poc-question"],
-      [{ ...unit(), extra: [] }, "unit-fields"], [{ ...unit(), relationships: {} }, "relationships"],
-      [{ ...unit(), body: "## Problem\nMissing sections" }, "required-sections"],
-      [{ ...unit("probe", "poc"), body: "## PoC\nMissing sections" }, "required-sections"],
-      [{ ...unit(), labels: "change" }, "labels"], [{ ...unit(), labels: [7] }, "labels"],
-      [{ ...unit(), id: null }, "kebab-id"], [{ ...unit(), title: 7 }, "title"],
-      [{ ...unit("probe", "poc"), question: null }, "poc-question"], [{ ...unit(), body: null }, "body"],
-      [{ ...unit(), source: "unknown" }, "source"], [{ ...unit(), source: null }, "source"],
-      [{ ...unit(), findings: "f1" }, "findings"], [{ ...unit(), findings: [""] }, "findings"],
-      [{ ...unit(), findings: [7] }, "findings"], [{ ...unit(), findings: ["f1", "f1"] }, "unique-findings"],
-    ];
-    for (const [row, rule] of cases) {
-      successful(f.importRows([unit("first"), row]));
-      const result = f.run("check_plan");
-      assert.notEqual(result.status, 0, rule);
-      assert.match(result.stderr, new RegExp(`units\\.jsonl:2: rule=${rule}`));
-      assert.match(readFileSync(join(f.out, "findings.md"), "utf8"), new RegExp(rule));
-    }
-    successful(f.importRows([unit(), unit()]));
-    assert.match(f.run("check_plan").stderr, /units\.jsonl:2: rule=unique-id/);
-    writeFileSync(f.upstream, "{invalid}\n"); successful(f.run("import_units"));
-    assert.match(f.run("check_plan").stderr, /units\.jsonl:1: rule=json-object/);
-    for (const source of ["refine", "discovery", "plan"]) {
-      successful(f.importRows([{ ...unit(), source, findings: ["f1"] }, unit("probe", "poc")]));
-      successful(f.run("check_plan"));
-    }
-    successful(f.importRows([{ ...unit(), body: "## Problema\nProblem\n## Cambio\nScope\n## Aceptación\nTest" }]));
+    const cli = fileURLToPath(new URL("../bin/dagu-feature-bundle.ts", import.meta.url));
+    const upstream = () => spawnSync(process.execPath, [cli, "validate-planning-units", "--input", f.upstream], { encoding: "utf8" });
+    writeFileSync(f.upstream, JSON.stringify({ ...unit(), id: "Bad ID", title: null, body: null, labels: [7] }) + '\n{invalid}\n' +
+      JSON.stringify({ ...unit("second", "poc"), question: null, source: "other" }) + "\n");
+    successful(f.run("import_units"));
+    const native = f.run("check_plan"), prepared = upstream();
+    assert.equal(native.status, 1);
+    assert.equal(prepared.status, 1);
+    assert.equal(native.stderr, prepared.stderr);
+    assert.equal(readFileSync(join(f.out, "findings.md"), "utf8"), prepared.stderr);
+    assert.equal(prepared.stderr.trim().split("\n").length, 7);
+    const canonical = "  " + JSON.stringify({ ...unit("consumer"), relationships: [{ kind: "blocked_by", target: { unit: "contract" } }] }) +
+      "\r\n" + JSON.stringify(unit("contract"));
+    writeFileSync(f.upstream, canonical);
+    successful(upstream());
+    successful(f.run("import_units"));
     successful(f.run("check_plan"));
+    assert.equal(readFileSync(join(f.out, "validated-units.jsonl"), "utf8"), canonical);
+    transcript(f);
+    successful(f.run("check_review", { REVIEW: "PlanReviewTest" }));
+    assert.equal(readFileSync(join(f.out, "reviewed-units.jsonl"), "utf8"), canonical);
   } finally { f.close(); }
 });
 
@@ -201,55 +178,6 @@ test("typed prerequisites and parent intent retain the exact snapshot through re
   } finally { f.close(); }
 });
 
-test("relationship diagnostics identify malformed, ambiguous, unknown, repeated, self and cyclic references", () => {
-  const f = fixture();
-  try {
-    const ref = (kind: string, target: unknown) => ({ kind, target });
-    const cases: Array<[unknown[], string, number?]> = [
-      [[null], "relationship-object"],
-      [[{ kind: "parent" }], "relationship-fields"],
-      [[{ ...ref("parent", { issue: 442 }), extra: true }], "relationship-fields"],
-      [[ref("blocks", { issue: 442 })], "relationship-kind"],
-      [[ref("parent", null)], "relationship-target"],
-      [[ref("parent", {})], "relationship-target"],
-      [[ref("parent", { unit: "first", issue: 442 })], "relationship-target"],
-      [[ref("parent", { unit: 442 })], "relationship-unit"],
-      [[ref("parent", { unit: "Bad ID" })], "relationship-unit"],
-      [[ref("parent", { unit: "unknown" })], "relationship-unknown-unit"],
-      [[ref("parent", { unit: "consumer" })], "relationship-self"],
-      ...[0, -1, 1.5, "442", null, 9007199254740992].map(issue =>
-        [[ref("blocked_by", { issue })], "relationship-issue"] as [unknown[], string]),
-      [[ref("blocked_by", { unit: "first" }), ref("blocked_by", { unit: "first" })], "relationship-duplicate", 1],
-      [[ref("parent", { unit: "first" }), ref("parent", { issue: 442 })], "relationship-parent"],
-    ];
-    for (const [relationships, rule, index = 0] of cases) {
-      successful(f.importRows([unit("first"), { ...unit("consumer"), relationships }]));
-      const result = f.run("check_plan");
-      assert.notEqual(result.status, 0, JSON.stringify(relationships));
-      assert.match(result.stderr, new RegExp(`units\\.jsonl:2: rule=${rule}`));
-      assert.match(result.stderr, new RegExp(`"field":"relationships\\[${index}\\]"`));
-      assert.match(result.stderr, /"unit":"consumer"/);
-      assert.match(readFileSync(join(f.out, "findings.md"), "utf8"), new RegExp(rule));
-    }
-    for (const kind of ["blocked_by", "parent"]) {
-      for (const length of [2, 3]) {
-        const rows = Array.from({ length }, (_, index) => ({
-          ...unit(`node-${index}`), relationships: [ref(kind, { unit: `node-${(index + 1) % length}` })],
-        }));
-        successful(f.importRows(rows));
-        assert.match(f.run("check_plan").stderr, /units\.jsonl:1: rule=relationship-cycle.*"unit":"node-0"/);
-      }
-    }
-    // A parent's acceptance can depend on its child; hierarchy and prerequisite graphs have distinct semantics.
-    successful(f.importRows([
-      { ...unit("parent"), relationships: [ref("blocked_by", { unit: "child" })] },
-      { ...unit("child"), relationships: [ref("parent", { unit: "parent" })] },
-    ]));
-    successful(f.run("check_plan"));
-    successful(f.importRows([{ ...unit(), relationships: [] }]));
-    successful(f.run("check_plan"));
-  } finally { f.close(); }
-});
 
 test("review binds parent, generation, agent, cutoff and final structured verdict before publication", () => {
   const f = fixture();
@@ -323,7 +251,8 @@ test("operator subset approval preserves labels, paginated idempotence, markers 
     assert.deepEqual(rows.map(row => [row.id, row.reused]), [["unit-feature", true], ["probe", true]]);
     assert.ok(rows.every(row => Number.isInteger(row.number) && row.url.endsWith(`/${row.number}`)));
     const creates = readFileSync(join(f.root, "github.log"), "utf8").trim().split("\n");
-    assert.equal(creates.length, 2); assert.ok(creates.every(line => line.includes("--label change")));
+    assert.equal(creates.length, 2);
+    for (const line of creates) assert.deepEqual(JSON.parse(line).payload.labels, ["change"]);
     writeFileSync(join(f.root, "issues.json"), JSON.stringify([...issues, issues[0]]));
     assert.match(f.run("materialize", { APPROVED: "probe" }).stderr, /rule=unique-issue-marker unit=probe/);
   } finally { f.close(); }

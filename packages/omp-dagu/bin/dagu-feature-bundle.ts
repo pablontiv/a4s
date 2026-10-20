@@ -4,6 +4,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { admit, appendObservation, enqueue, enqueueArguments, parseObservation, receiptPath } from "../src/admission.ts";
+import { validatePlanningUnitsCommand } from "../src/planning-validator.ts";
 import {
   BUNDLE_VERSION,
   classifyCompatibility,
@@ -64,6 +65,10 @@ function resolveRepository(argument: string): string | undefined {
 
 function main(): void {
   const [command, ...args] = process.argv.slice(2);
+  if (command === "validate-planning-units") {
+    process.exitCode = validatePlanningUnitsCommand(args);
+    return;
+  }
   if (command === "admit" || command === "enqueue") {
     try {
       if (command === "enqueue") process.exitCode = enqueue(args, process.cwd());
