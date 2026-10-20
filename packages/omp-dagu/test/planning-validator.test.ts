@@ -79,6 +79,32 @@ test("typed references diagnose malformed, unknown, duplicate, ambiguous and cyc
   assert.deepEqual(validate({ ...unit(), relationships: [ref("unknown", null)] }).map(row => row.rule), ["relationship-kind", "relationship-target"]);
 });
 
+test("numeric targets share graph identity only with a unique well-formed revision binding", () => {
+  const alpha = { ...unit("alpha"), revision: { issue: 7001, fields: [] } };
+  const beta = { ...unit("beta"), revision: { issue: 7002, fields: [] } };
+  assert.deepEqual(validate({ ...alpha, relationships: [ref("blocked_by", { issue: 7001 })] }).map(({ line, field, rule, observed }) => [line, field, rule, observed]),
+    [[1, "relationships[0].target.issue", "relationship-self", 7001]]);
+  for (const kind of ["blocked_by", "parent"]) {
+    assert.deepEqual(validate({ ...alpha, relationships: [ref(kind, { issue: 7002 })] }, { ...beta, relationships: [ref(kind, { issue: 7001 })] })
+      .map(({ line, field, rule, observed }) => [line, field, rule, observed]),
+    [[1, "relationships[0].target.issue", "relationship-cycle", 7002], [2, "relationships[0].target.issue", "relationship-cycle", 7001]]);
+  }
+  assert.deepEqual(validate({ ...alpha, relationships: [ref("blocked_by", { unit: "beta" }), ref("blocked_by", { issue: 7002 })] }, beta)
+    .map(({ line, field, rule, observed }) => [line, field, rule, observed]),
+  [[1, "relationships[1].target.issue", "relationship-duplicate", 7002]]);
+  assert.deepEqual(validate({ ...alpha, relationships: [ref("blocked_by", { issue: 7002 })] }, { ...beta, relationships: [ref("blocked_by", { unit: "alpha" })] })
+    .map(({ line, field, rule }) => [line, field, rule]),
+  [[1, "relationships[0].target.issue", "relationship-cycle"], [2, "relationships[0]", "relationship-cycle"]]);
+  assert.deepEqual(validate({ ...alpha, relationships: [ref("blocked_by", { issue: 7002 }), ref("blocked_by", { issue: 9999 })] },
+    { ...beta, relationships: [ref("parent", { issue: 7001 })] }), []);
+  assert.deepEqual(validate({ ...alpha, relationships: [ref("blocked_by", { issue: 7001 })] }, { ...beta, revision: alpha.revision })
+    .map(({ line, rule }) => [line, rule]), [[1, "revision-unique-issue"], [2, "revision-unique-issue"]]);
+  assert.deepEqual(validate({ ...alpha, revision: { issue: 7001, fields: ["question"] }, relationships: [ref("blocked_by", { issue: 7001 })] })
+    .map(row => row.rule), ["revision-field"]);
+  assert.deepEqual(validate({ ...alpha, relationships: [ref("blocked_by", { issue: 7001 })] }, { ...beta, id: "alpha" })
+    .map(row => row.rule), ["unique-id"]);
+});
+
 test("revision declares exact existing identity and unique explicit fields, including binding only", () => {
   for (const fields of [[], ["title"], ["body", "labels"], ["title", "body", "labels"]]) assert.deepEqual(validate({ ...unit(), revision: { issue: 444, fields } }), []);
   const cases: Array<[unknown, string]> = [

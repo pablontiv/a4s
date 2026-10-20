@@ -26,7 +26,7 @@ export interface PlanningDiagnostic {
 
 type ObjectValue = Record<string, unknown>;
 type Row = { line: number; value: ObjectValue };
-type Edge = { row: Row; field: string; kind: string; target: { unit: string } | { issue: number }; observed: unknown };
+type Edge = { row: Row; field: string; kind: string; target: { unit: string } | { issue: number }; observed: unknown; resolvedUnit?: string };
 const object = (value: unknown): value is ObjectValue => value !== null && typeof value === "object" && !Array.isArray(value);
 const nonempty = (value: unknown): value is string => typeof value === "string" && /\S/.test(value);
 const safeIssue = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value > 0;
@@ -41,6 +41,7 @@ export function validatePlanningUnits(input: string): PlanningDiagnostic[] {
   const diagnostics: PlanningDiagnostic[] = [];
   const edges: Edge[] = [];
   const ids = new Map<string, Row[]>(), issues = new Map<number, Row[]>();
+  const validRevisions = new Set<Row>();
   const add = (row: Row, field: string, rule: string, expected: unknown, observed: unknown): void => {
     diagnostics.push({ line: row.line, field, rule, expected, observed: observed === undefined ? missing : observed,
       ...(typeof row.value.id === "string" ? { unit: row.value.id } : {}) });
@@ -84,6 +85,7 @@ export function validatePlanningUnits(input: string): PlanningDiagnostic[] {
       const revision = value.revision;
       if (!object(revision)) add(row, "revision", "revision-object", { issue: "positive safe integer", fields: planningUnitSchema.revisionFields }, revision);
       else {
+        const before = diagnostics.length;
         if (!exactKeys(revision, ["issue", "fields"])) add(row, "revision", "revision-fields", ["issue", "fields"], Object.keys(revision).sort());
         if (Object.hasOwn(revision, "issue")) {
           if (!safeIssue(revision.issue)) add(row, "revision.issue", "revision-issue", "positive safe integer", revision.issue);
@@ -95,6 +97,7 @@ export function validatePlanningUnits(input: string): PlanningDiagnostic[] {
           const validFields = revision.fields.filter(field => member(planningUnitSchema.revisionFields, field));
           if (new Set(validFields).size !== validFields.length) add(row, "revision.fields", "revision-unique-fields", "unique declared fields", revision.fields);
         }
+        if (diagnostics.length === before) validRevisions.add(row);
       }
     }
     if (!Object.hasOwn(value, "relationships")) continue;
@@ -115,18 +118,32 @@ export function validatePlanningUnits(input: string): PlanningDiagnostic[] {
   }
   for (const matches of ids.values()) for (const row of matches.slice(1)) add(row, "id", "unique-id", "unique unit ID", row.value.id);
   for (const [issue, matches] of issues) if (matches.length > 1) for (const row of matches) add(row, "revision.issue", "revision-unique-issue", "one unit per existing issue identity", issue);
+  for (const edge of edges) {
+    if ("unit" in edge.target) edge.resolvedUnit = edge.target.unit;
+    else {
+      const matches = issues.get(edge.target.issue);
+      const bound = matches?.length === 1 ? matches[0] : undefined;
+      if (bound && validRevisions.has(bound) && id(bound.value.id) && ids.get(bound.value.id)?.length === 1) edge.resolvedUnit = bound.value.id;
+    }
+  }
   const graph: Edge[] = [];
   for (const edge of edges) {
     const { row, field, target, kind, observed } = edge;
     const sameRow = edges.filter(other => other.row === row);
     const previous = sameRow.slice(0, sameRow.indexOf(edge));
-    if (previous.some(other => other.kind === kind && ("unit" in target ? "unit" in other.target && other.target.unit === target.unit : "issue" in other.target && other.target.issue === target.issue))) add(row, field, "relationship-duplicate", "one occurrence per kind/target", observed);
+    const numericTarget = "issue" in target ? target.issue : undefined;
+    const numericIdentity = numericTarget !== undefined && edge.resolvedUnit !== undefined;
+    const referenceField = numericIdentity ? `${field}.target.issue` : field;
+    const referenceObserved = numericIdentity ? numericTarget : observed;
+    if (previous.some(other => other.kind === kind && (edge.resolvedUnit !== undefined && other.resolvedUnit !== undefined
+      ? other.resolvedUnit === edge.resolvedUnit
+      : "unit" in target ? "unit" in other.target && other.target.unit === target.unit : "issue" in other.target && other.target.issue === target.issue))) add(row, referenceField, "relationship-duplicate", "one occurrence per kind/target", referenceObserved);
     if (kind === "parent" && sameRow.filter(other => other.kind === "parent").length > 1) add(row, field, "relationship-parent", "at most one parent", observed);
-    if (!("unit" in target)) continue;
-    const matches = ids.get(target.unit);
-    if (!matches) add(row, field, "relationship-unknown-unit", "ID in this snapshot", target.unit);
-    else if (matches.length !== 1) add(row, field, "relationship-ambiguous-unit", "unambiguous ID in this snapshot", target.unit);
-    else if (target.unit === row.value.id) add(row, field, "relationship-self", "a different unit", target.unit);
+    if (edge.resolvedUnit === undefined) continue;
+    const matches = ids.get(edge.resolvedUnit);
+    if (!matches) add(row, field, "relationship-unknown-unit", "ID in this snapshot", edge.resolvedUnit);
+    else if (matches.length !== 1) add(row, field, "relationship-ambiguous-unit", "unambiguous ID in this snapshot", edge.resolvedUnit);
+    else if (edge.resolvedUnit === row.value.id) add(row, referenceField, "relationship-self", "a different unit", numericIdentity ? numericTarget : edge.resolvedUnit);
     else if (id(row.value.id) && ids.get(row.value.id)?.length === 1) graph.push(edge);
   }
   const reaches = (kind: string, start: string, goal: string): boolean => {
@@ -136,11 +153,14 @@ export function validatePlanningUnits(input: string): PlanningDiagnostic[] {
       if (current === goal) return true;
       if (seen.has(current)) continue;
       seen.add(current);
-      for (const edge of graph) if (edge.kind === kind && edge.row.value.id === current && "unit" in edge.target) pending.push(edge.target.unit);
+      for (const edge of graph) if (edge.kind === kind && edge.row.value.id === current) pending.push(edge.resolvedUnit!);
     }
     return false;
   };
-  for (const edge of graph) if ("unit" in edge.target && reaches(edge.kind, edge.target.unit, edge.row.value.id as string)) add(edge.row, edge.field, "relationship-cycle", `acyclic ${edge.kind} unit graph`, edge.observed);
+  for (const edge of graph) if (reaches(edge.kind, edge.resolvedUnit!, edge.row.value.id as string)) {
+    const numericIdentity = "issue" in edge.target;
+    add(edge.row, numericIdentity ? `${edge.field}.target.issue` : edge.field, "relationship-cycle", `acyclic ${edge.kind} unit graph`, "issue" in edge.target ? edge.target.issue : edge.observed);
+  }
   return diagnostics.sort((a, b) => a.line - b.line || compare(a.field, b.field) || compare(a.rule, b.rule));
 }
 
