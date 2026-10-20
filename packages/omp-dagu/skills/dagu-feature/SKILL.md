@@ -71,7 +71,7 @@ node "$package/bin/dagu-station-install.ts" \
   --log-dir "$HOME/Library/Logs/Dagu"
 ```
 
-The installer checks `dagu version` against `daguFeature.dagu` (`2.20.1+a4s419.2`), validates
+The installer checks `dagu version` against `daguFeature.dagu` (official `2.20.1`), validates
 a minimal DAG inheriting the versioned base in an isolated temporary home, and
 checks the rendered plist with `plutil` on macOS before installing. `cmp` and
 `install -m 0644` make repeated installs byte- and mtime-stable. `base.yaml` and
