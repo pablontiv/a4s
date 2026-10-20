@@ -33,7 +33,7 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          all='["context-expert","orca-omp-integration","omp-dagu","synagent","synagent-bus","omp-cross-family-review","pi-tool-row-presentation","omp-hot-reload"]'
+          all='["context-management","orca-omp-integration","omp-dagu","synagent","synagent-bus","omp-cross-family-review","pi-tool-row-presentation","omp-hot-reload"]'
           # Paths under packages/<dir> select that workspace; shared helper changes select all consumers.
           if [[ "$EVENT_NAME" == pull_request ]]; then
             files=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files" --paginate --jq '.[].filename') \
@@ -48,7 +48,7 @@ jobs:
             names=$all
           fi
           # @a4s/pi-tool-row-presentation typechecks against @pablontiv/pion, which CI does not install.
-          workspaces=$(jq -cn --argjson names "$names" '$names | map({name: ("@a4s/" + .), typecheck: (. == "omp-hot-reload" or . == "context-expert" or . == "orca-omp-integration" or . == "omp-dagu" or . == "synagent" or . == "synagent-bus")})')
+          workspaces=$(jq -cn --argjson names "$names" '$names | map({name: ("@a4s/" + .), typecheck: (. == "omp-hot-reload" or . == "context-management" or . == "orca-omp-integration" or . == "omp-dagu" or . == "synagent" or . == "synagent-bus")})')
           echo "workspaces=$workspaces" >> "$GITHUB_OUTPUT"
   test:
     needs: changes
@@ -71,7 +71,7 @@ jobs:
         name: Install without @pablontiv/pion
         run: |
           pion='@pablontiv/pion'
-          for manifest in packages/context-expert/package.json packages/pi-tool-row-presentation/package.json; do
+          for manifest in packages/pi-tool-row-presentation/package.json; do
             jq --arg p "$pion" 'del(.devDependencies[$p])' "$manifest" > "$manifest.ci"
             mv "$manifest.ci" "$manifest"
           done

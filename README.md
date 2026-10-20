@@ -1,10 +1,12 @@
 # A4S
 
-Repositorio reducido a las extensiones verificadas, los agentes y los skills distribuidos por sus paquetes.
+Repository of private libraries, verified extensions, agents and skills distributed through their packages.
+
+## Libraries
+
+- [`packages/context-management/`](packages/context-management/): private, host-neutral transcript compaction, Jev request/client and adaptive trigger APIs.
 
 ## Extensiones
-
-- [`packages/context-expert/`](packages/context-expert/): núcleo compartido y adaptadores de Context Expert para Pi/Pion y Claude.
 - [`packages/orca-omp-integration/`](packages/orca-omp-integration/): contratos de lifecycle y routing explícito de modelos para coordinadores OMP que usan workers de Orca.
 - [`packages/omp-cross-family-review/`](packages/omp-cross-family-review/): selección cross-family de modelos para subagentes revisores de OMP.
 - [`packages/omp-dagu/`](packages/omp-dagu/): widget, despertar dirigido de la sesión coordinadora y guard OMP para Dagu, agente `triage-reviewer` y skill `dagu-feature`.
