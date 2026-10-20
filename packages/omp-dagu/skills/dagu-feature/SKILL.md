@@ -370,7 +370,7 @@ retry that step. PoC `base` and feature `close_gate` command failures remain ter
 
 Dagu snapshots the definition when you enqueue. Later edits to the file do not affect runs that already exist.
 
-**One run per lifecycle.** Continue each run through its own checkpoints and push-backs. A feature whose triage chooses PoC ends after enqueueing `poc`; a successful PoC may enqueue a fresh feature run for the cutover.
+**One run per lifecycle.** Continue each run through its own checkpoints and push-backs. A feature whose triage chooses `POC=yes` skips implementation `quality_prepare` and completes successfully after enqueueing `poc`; a successful PoC may enqueue a fresh feature run for the cutover.
 
 **Resource ownership.** `admit` atomically records `(canonical PRIMARY, ISSUE)`
 in the main Git directory before triage. Creation and cleanup take the same
@@ -644,7 +644,8 @@ back `fix_result` with the current observed iteration.
 To decline before executing the experiment, complete `run_poc` with a nonempty
 reason. This posts exactly one `PoC declined by operator: <reason>` issue comment,
 skips verdict publication and `decide`/promotion, and ends successfully. The exit
-handler removes the PoC worktree and branch; no result file is required.
+handler removes a clean PoC worktree and branch; no result file is required.
+A dirty worktree follows the publication-checked retention contract below.
 
 ```sh
 dagu human-task complete poc --run-id <id> --step run_poc --input decline='no longer needed'
@@ -678,11 +679,23 @@ PASS with promote=no ends. FAIL closes only an issue created by record as
 `not planned`; preexisting issues stay open. For INCONCLUSIVE, the operator
 chooses iteration or completion with promote=no.
 
-On failure the handler publishes from per-RUN files before exit removes the
-dirty worktree and local branch idempotently. Missing results produce an
-orchestration-failure report, not a capacity verdict. Keep the issue/comment
-URLs as durable evidence. The queue slot is released at human tasks, so several
-experiments can wait concurrently.
+On failure the handler attempts publication from per-RUN files before exit
+cleanup. After validating the canonical managed worktree, branch and run
+ownership, cleanup removes a clean worktree normally. A dirty worktree is
+force-removed only when the current full binary patch (tracked changes against
+the recorded BASE_SHA plus nonignored untracked files) exactly matches the
+published `full.patch` and the publication marker `comment.url` is nonempty.
+Missing or stale publication evidence retains both the dirty worktree and its
+local branch and emits `cleanup retained: worktree <path> has unpublished changes; evidence <state-dir>`
+for recovery (#398). Successful worktree removal permits local branch deletion;
+repeated cleanup converges.
+
+Missing results produce an orchestration-failure report, not a capacity verdict.
+Issue disposition and published evidence record the experiment's outcome; they
+do not implement or merge the feature. Implementation belongs to the fresh
+feature continuation after PASS. Keep the issue/comment URLs as durable evidence.
+The queue slot is released at human tasks, so several experiments can wait
+concurrently.
 
 
 ## Implement
