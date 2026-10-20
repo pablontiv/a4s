@@ -577,14 +577,29 @@ Las integraciones reales requieren `dagu` en `PATH` con la versión indicada por
 si falta ese runtime o su versión difiere. Los fixtures usan homes temporales y
 puertos propios, independientes del servicio de la estación.
 
-La matriz de CI instala Dagu únicamente para `@a4s/omp-dagu`: descarga el tarball
-oficial Linux amd64 y `checksums.txt` de la release fijada, registra y verifica
-SHA-256, e instala el ejecutable en un directorio temporal publicado en
-`GITHUB_PATH`. Un paso posterior registra la ruta y exige que `dagu version`
-coincida exactamente con el pin. Tras `npm test`, ejecuta
-`npm run test:live --workspace @a4s/omp-dagu` con ese runtime.
-Los fallos de descarga, checksum o versión detienen el job y se reflejan en
-`validate`.
+CI starts the ordinary workspace tests/typechecks and an independent six-lane
+live matrix after workspace selection. The live matrix runs only when
+`@a4s/omp-dagu` is selected. The ordinary `@a4s/omp-dagu` fixture tests also
+require the pinned runtime. That workspace runner and all six live runners use
+Node 22 and share the same Dagu installation and version-check commands: download
+the pinned Linux amd64 release and `checksums.txt`, verify SHA-256, publish the
+temporary binary directory through `GITHUB_PATH`, and check the exact
+`dagu version` before testing. Other ordinary workspaces do not install Dagu.
+
+Five lanes partition `feature-template.test.ts` by native Node test-name patterns:
+template PoC closure, rendered-DAG PoC closure, concurrent recovery, validation
+and admission, and the exhaustive complement of those groups. Patterns include
+descendants; the complement automatically includes new feature cases. The sixth
+lane runs `test/live/*.test.ts` and the shared test files listed by `test:live`.
+Keep that explicit shared-file list aligned with the local script when adding
+coverage. The local `npm test` and `npm run test:live` interfaces are unchanged.
+
+The required `validate` check waits for workspace selection and both matrices.
+Every selected matrix must succeed, including all its lanes; failures and
+cancellations fail validation. A matrix may be skipped only when its workspaces
+were not selected. Runtime download, checksum and version failures also propagate
+to `validate`. The parallel layout targets five-minute required CI; actual
+GitHub Actions elapsed time, rather than local lane timings, determines that result.
 
 El gate completo del repositorio es:
 

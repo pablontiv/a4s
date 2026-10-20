@@ -67,7 +67,8 @@ jobs:
       # The @pablontiv/pion dev tarball (github.com/pablontiv/pi releases) is no
       # longer downloadable. Install without it, then restore the manifests that
       # the identity tests read.
-      - name: Install without @pablontiv/pion
+      - &install-dependencies
+        name: Install without @pablontiv/pion
         run: |
           pion='@pablontiv/pion'
           for manifest in packages/context-expert/package.json packages/pi-tool-row-presentation/package.json; do
@@ -84,7 +85,7 @@ jobs:
           git checkout -- package-lock.json packages
       - name: Install pinned Dagu
         if: matrix.workspace.name == '@a4s/omp-dagu'
-        run: |
+        run: &install-pinned-dagu |
           version=$(node -p "require('./packages/omp-dagu/package.json').daguFeature.dagu")
           asset="dagu_${version}_linux_amd64.tar.gz"
           url="https://github.com/dagu-org/dagu/releases/download/v${version}"
@@ -101,7 +102,7 @@ jobs:
           echo "$RUNNER_TEMP/dagu-bin" >> "$GITHUB_PATH"
       - name: Check pinned Dagu
         if: matrix.workspace.name == '@a4s/omp-dagu'
-        run: |
+        run: &check-pinned-dagu |
           version=$(node -p "require('./packages/omp-dagu/package.json').daguFeature.dagu")
           command -v dagu
           actual=$(dagu version)
@@ -111,20 +112,78 @@ jobs:
             exit 1
           fi
       - run: npm test --workspace "${{ matrix.workspace.name }}"
-      - name: Live Dagu tests
-        if: matrix.workspace.name == '@a4s/omp-dagu'
-        run: npm run test:live --workspace @a4s/omp-dagu
       - name: Typecheck
         if: matrix.workspace.typecheck
         run: npm run typecheck --workspace "${{ matrix.workspace.name }}"
+  live:
+    needs: changes
+    if: contains(fromJSON(needs.changes.outputs.workspaces).*.name, '@a4s/omp-dagu')
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        lane: [poc-template, poc-rendered, recovery, validation-admission, feature-remainder, other-live]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+      - *install-dependencies
+      - name: Install pinned Dagu
+        run: *install-pinned-dagu
+      - name: Check pinned Dagu
+        run: *check-pinned-dagu
+      - name: Live Dagu tests
+        working-directory: packages/omp-dagu
+        env:
+          A4S_LIVE_DAGU: "1"
+          LANE: ${{ matrix.lane }}
+        run: |
+          # Match complete top-level names and their descendants. Skipping the
+          # named groups retains new feature cases automatically in the remainder.
+          poc_template='template real Dagu closes implementation runs and succeeds after enqueuing a PoC'
+          poc_rendered='rendered DAG real Dagu closes implementation runs and succeeds after enqueuing a PoC'
+          recovery='concurrent recovery fixtures keep distinct run identities'
+          validation_admission='(?:template|rendered DAG) (?:optional validation uses native skip, SHA approval and iterative rejection|real Dagu checks primary freshness before admission and enqueues bootstrap after merge)'
+          feature_groups="(?:${poc_template}|${poc_rendered}|${recovery}|${validation_admission})"
+          case "$LANE" in
+            poc-template) pattern="^${poc_template}(?:$| )" ;;
+            poc-rendered) pattern="^${poc_rendered}(?:$| )" ;;
+            recovery) pattern="^${recovery}(?:$| )" ;;
+            validation-admission) pattern="^${validation_admission}(?:$| )" ;;
+            feature-remainder)
+              # Native exclusion also prevents file-parent selection from
+              # admitting the named groups or their descendants.
+              npx tsx --test --test-skip-pattern "^${feature_groups}(?:$| )" test/feature-template.test.ts
+              exit
+              ;;
+            other-live)
+              npx tsx --test test/live/*.test.ts test/bundle-cli.test.ts test/bundle-rebase.test.ts test/bundle-template.test.ts test/bundle.test.ts test/planning-template.test.ts test/reconcile-ci.test.ts test/reconcile-leftovers.test.ts
+              exit
+              ;;
+          esac
+          npx tsx --test --test-name-pattern "$pattern" test/feature-template.test.ts
   validate:
-    needs: [changes, test]
+    needs: [changes, test, live]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - env:
           CHANGES_RESULT: ${{ needs.changes.result }}
           TEST_RESULT: ${{ needs.test.result }}
+          LIVE_RESULT: ${{ needs.live.result }}
+          WORKSPACES: ${{ needs.changes.outputs.workspaces }}
         run: |
-          echo "changes=$CHANGES_RESULT test=$TEST_RESULT"
-          [[ "$CHANGES_RESULT" == success && ( "$TEST_RESULT" == success || "$TEST_RESULT" == skipped ) ]]
+          echo "changes=$CHANGES_RESULT test=$TEST_RESULT live=$LIVE_RESULT"
+          [[ "$CHANGES_RESULT" == success ]] || exit 1
+          if [[ "$WORKSPACES" == '[]' ]]; then
+            [[ "$TEST_RESULT" == skipped ]] || exit 1
+          else
+            [[ "$TEST_RESULT" == success ]] || exit 1
+          fi
+          if jq -e 'any(.[]; .name == "@a4s/omp-dagu")' <<< "$WORKSPACES" > /dev/null; then
+            [[ "$LIVE_RESULT" == success ]]
+          else
+            [[ "$LIVE_RESULT" == skipped ]]
+          fi
