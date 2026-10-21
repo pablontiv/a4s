@@ -10,6 +10,7 @@ import { parse } from "yaml";
 const definition = parse(readFileSync(new URL("../skills/dagu-feature/planning.yaml", import.meta.url), "utf8"));
 const materialize = definition.steps.find((step: { id: string }) => step.id === "materialize").run;
 const github = fileURLToPath(new URL("./fixtures/planning-github-state.cjs", import.meta.url));
+const cli = fileURLToPath(new URL("../bin/dagu-feature-bundle.ts", import.meta.url));
 type Row = Record<string, any>;
 function unit(id: string, extra: Row = {}): Row {
   return { id, title: `Deliver ${id}`, dag: "feature", labels: ["change"], body: "## Problem\nFull problem\n## Change\nComplete scope\n## Acceptance\nObserve native publication", ...extra };
@@ -24,9 +25,10 @@ function fixture(rows: Row[], initial: Row[] = []) {
   mkdirSync(bin); mkdirSync(out);
   writeFileSync(join(root, "issues.json"), JSON.stringify(initial));
   executable(join(bin, "gh"), `#!/bin/bash\nexport PLANNING_GH_STATE=${JSON.stringify(root)}\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(github)} "$@"\n`);
+  executable(join(bin, "dagu-feature-bundle"), `#!/bin/bash\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(cli)} "$@"\n`);
   executable(join(bin, "curl"), '#!/bin/bash\nprintf \'%s\\n\' \'{"dagRunDetails":{"nodes":[{"step":{"id":"review"},"approvalIteration":0}]}}\'\n');
   const snapshot = rows.map(row => JSON.stringify(row)).join("\n") + "\n";
-  for (const name of ["units.jsonl", "reviewed-units.jsonl"]) writeFileSync(join(out, name), snapshot);
+  for (const name of ["units.jsonl", "reviewed-units.jsonl", "validated-units.jsonl"]) writeFileSync(join(out, name), snapshot);
   const marker = "PLAN_REVIEW AGENT=plan-reviewer DAG=planning RUN=materialize-test ITERATION=0 END\n";
   for (const name of ["review-accepted", "generation"]) writeFileSync(join(out, name), marker);
   writeFileSync(join(out, "review-0.json"), JSON.stringify({ verdict: "accept", findings: [] }));
@@ -39,6 +41,7 @@ function fixture(rows: Row[], initial: Row[] = []) {
     state: (): Row => JSON.parse(readFileSync(join(out, `materialization-${env.RUN}-0.json`), "utf8")),
     mapping: (): Row[] => readFileSync(join(out, "issues.jsonl"), "utf8").trim().split("\n").filter(Boolean).map(line => JSON.parse(line)),
     mutations: (): Row[] => existsSync(join(root, "github.log")) ? readFileSync(join(root, "github.log"), "utf8").trim().split("\n").map(line => JSON.parse(line)) : [],
+    diagnostics: (): Row[] => readFileSync(join(out, "materialization-validation-findings.jsonl"), "utf8").trim().split("\n").filter(Boolean).map(line => JSON.parse(line)),
     close: () => rmSync(root, { recursive: true, force: true }),
   };
 }
@@ -161,20 +164,153 @@ test("approval closes unit references before creating, revising or adding edges"
 
 test("all identity ambiguity and conflicting parents fail preflight before any publication", () => {
   const marker = "<!-- breakdown-unit: materialize-test/consumer -->";
-  const cases: Array<{ rows: Row[]; issues: Row[]; rule: RegExp }> = [
+  const cases: Array<{ rows: Row[]; issues: Row[]; rule?: RegExp; diagnostic?: string }> = [
     { rows: [unit("new"), unit("consumer")], issues: [issue(51, { body: marker }), issue(52, { body: marker })], rule: /rule=unique-issue-marker unit=consumer/ },
     { rows: [unit("new"), unit("consumer", { revision: { issue: 52, fields: ["body"] } })], issues: [issue(51, { body: marker }), issue(52)], rule: /rule=ambiguous-issue-identity/ },
-    { rows: [unit("new"), unit("consumer", { revision: { issue: 51, fields: [] } }), unit("alias", { source: "discovery", body: `${unit("alias").body}\n<!-- discovery-unit: alias -->` })], issues: [issue(51, { body: "<!-- discovery-unit: alias -->" })], rule: /rule=duplicate-issue-identity/ },
+    { rows: [unit("new"), unit("consumer", { revision: { issue: 51, fields: [] } }), unit("alias", { source: "discovery", body: `${unit("alias").body}\n<!-- discovery-unit: alias -->` })], issues: [issue(51, { body: "<!-- discovery-unit: alias -->" })], diagnostic: "revision-unique-issue" },
     { rows: [unit("new"), unit("consumer", { revision: { issue: 51, fields: ["title"] }, relationships: [{ kind: "parent", target: { issue: 61 } }] })], issues: [issue(51, { parent: 71 }), issue(61)], rule: /rule=conflicting-parent/ },
-    { rows: [unit("consumer", { revision: { issue: 51, fields: [] }, relationships: [{ kind: "blocked_by", target: { issue: 51 } }] })], issues: [issue(51)], rule: /rule=relationship-self-identity/ },
+    { rows: [unit("consumer", { revision: { issue: 51, fields: [] }, relationships: [{ kind: "blocked_by", target: { issue: 51 } }] })], issues: [issue(51)], diagnostic: "relationship-self" },
   ];
   for (const sample of cases) {
     const f = fixture(sample.rows, sample.issues);
     try {
       failed(f.run(), sample.rule);
+      if (sample.diagnostic) assert.ok(f.diagnostics().some(diagnostic => diagnostic.rule === sample.diagnostic));
       assert.deepEqual(f.issues(), sample.issues);
       assert.deepEqual(f.mutations(), []);
       assert.match(readFileSync(join(f.out, "findings.md"), "utf8"), /Existing coordinator finding/);
+    } finally { f.close(); }
+  }
+});
+
+test("resolved marker and checkpoint identities reject per-kind cycles before creates or declared field revisions", () => {
+  const cases = [
+    { kind: "blocked_by", existingBeta: false, checkpoint: false },
+    { kind: "blocked_by", existingBeta: true, checkpoint: false },
+    { kind: "parent", existingBeta: false, checkpoint: false },
+    { kind: "parent", existingBeta: true, checkpoint: false },
+    { kind: "blocked_by", existingBeta: false, checkpoint: true },
+  ];
+  for (const sample of cases) {
+    const rows = [
+      unit("alpha", { relationships: [{ kind: sample.kind, target: { unit: "beta" } }] }),
+      unit("beta", { relationships: [{ kind: sample.kind, target: { issue: 51 } }] }),
+      unit("uncreated"),
+      unit("declared-patch", { revision: { issue: 61, fields: ["title"] } }),
+    ];
+    const alpha = issue(51, sample.checkpoint ? {} : { body: "<!-- breakdown-unit: materialize-test/alpha -->" });
+    const initial = [alpha, issue(61), ...(sample.existingBeta ? [issue(52, { body: "<!-- breakdown-unit: materialize-test/beta -->" })] : [])];
+    const f = fixture(rows, initial);
+    try {
+      successful(spawnSync(process.execPath, [cli, "validate-planning-units", "--input", join(f.out, "units.jsonl")], { encoding: "utf8" }));
+      const canonical = readFileSync(join(f.out, "units.jsonl"), "utf8");
+      if (sample.checkpoint) {
+        writeFileSync(join(f.out, "materialization-materialize-test-0-units.jsonl"), canonical);
+        writeFileSync(join(f.out, "materialization-materialize-test-0.json"), JSON.stringify({
+          scope: { run: f.env.RUN, repo: f.env.NWO, source: f.env.SOURCE, iteration: 0 },
+          units: { alpha: { id: "alpha", number: 51, url: "https://example.test/owner/repo/issues/51", origin: "marker", reused: true, fields: [], prestate: alpha,
+            intended: { title: alpha.title, body: alpha.body, labels: alpha.labels }, field_status: {}, status: "bound" } },
+          baseline: {}, edges: [], status: "preflight",
+        }));
+      }
+      failed(f.run());
+      assert.ok(f.diagnostics().some(diagnostic => diagnostic.rule === "relationship-cycle" && diagnostic.unit === "beta"));
+      assert.deepEqual(f.issues(), initial);
+      assert.deepEqual(f.mutations(), []);
+      assert.equal(f.state().status, "preflight");
+      for (const name of ["units.jsonl", "reviewed-units.jsonl", "validated-units.jsonl", "materialization-materialize-test-0-units.jsonl"]) {
+        assert.equal(readFileSync(join(f.out, name), "utf8"), canonical);
+      }
+      assert.deepEqual(JSON.parse(readFileSync(join(f.out, "approved-units.json"), "utf8")), rows);
+      assert.deepEqual(JSON.parse(readFileSync(join(f.out, "materialization-plan.json"), "utf8")).map((row: Row) => row.unit), rows);
+      assert.match(readFileSync(join(f.out, "findings.md"), "utf8"), /Existing coordinator finding/);
+    } finally { f.close(); }
+  }
+});
+
+test("resolved marker aliases share duplicate and self relationship diagnostics before publication", () => {
+  const cases = [
+    {
+      rows: [
+        unit("uncreated"),
+        unit("alpha", { revision: { issue: 51, fields: ["title"] }, relationships: [
+          { kind: "blocked_by", target: { unit: "beta" } }, { kind: "blocked_by", target: { issue: 71 } },
+        ] }),
+        unit("beta"),
+      ],
+      initial: [issue(51), issue(71, { body: "<!-- breakdown-unit: materialize-test/beta -->" })],
+      rule: "relationship-duplicate",
+    },
+    {
+      rows: [
+        unit("uncreated"),
+        unit("alpha", { relationships: [{ kind: "blocked_by", target: { issue: 51 } }] }),
+        unit("declared-patch", { revision: { issue: 61, fields: ["title"] } }),
+      ],
+      initial: [issue(51, { body: "<!-- breakdown-unit: materialize-test/alpha -->" }), issue(61)],
+      rule: "relationship-self",
+    },
+  ];
+  for (const sample of cases) {
+    const f = fixture(sample.rows, sample.initial);
+    try {
+      successful(spawnSync(process.execPath, [cli, "validate-planning-units", "--input", join(f.out, "units.jsonl")], { encoding: "utf8" }));
+      failed(f.run());
+      assert.ok(f.diagnostics().some(diagnostic => diagnostic.rule === sample.rule && diagnostic.unit === "alpha"));
+      assert.deepEqual(f.issues(), sample.initial);
+      assert.deepEqual(f.mutations(), []);
+      assert.equal(f.state().status, "preflight");
+    } finally { f.close(); }
+  }
+});
+
+test("resolved aliases preserve independent kinds, mixed-kind paths and opaque existing issue targets", () => {
+  const cases = [
+    {
+      alpha: [{ kind: "blocked_by", target: { unit: "beta" } }],
+      beta: [{ kind: "parent", target: { issue: 51 } }, { kind: "blocked_by", target: { issue: 71 } }],
+      expected: { alphaParent: null, alphaBlocked: [52], betaParent: 51, betaBlocked: [71] },
+    },
+    {
+      alpha: [{ kind: "parent", target: { unit: "beta" } }, { kind: "blocked_by", target: { issue: 52 } }],
+      beta: [],
+      expected: { alphaParent: 52, alphaBlocked: [52], betaParent: null, betaBlocked: [] },
+    },
+  ];
+  for (const sample of cases) {
+    const rows = [
+      unit("alpha", { relationships: sample.alpha }),
+      unit("beta", { relationships: sample.beta }),
+      unit("uncreated"),
+      unit("declared-patch", { revision: { issue: 61, fields: ["title"] } }),
+    ];
+    const alpha = issue(51, { body: "<!-- breakdown-unit: materialize-test/alpha -->" });
+    const beta = issue(52, { body: "<!-- breakdown-unit: materialize-test/beta -->" });
+    const f = fixture(rows, [alpha, beta, issue(61), issue(71)]);
+    try {
+      const canonical = readFileSync(join(f.out, "units.jsonl"), "utf8");
+      successful(f.run());
+      const by = Object.fromEntries(f.issues().map(row => [row.number, row]));
+      assert.equal(by[51].parent, sample.expected.alphaParent);
+      assert.deepEqual(by[51].blocked_by, sample.expected.alphaBlocked);
+      assert.equal(by[52].parent, sample.expected.betaParent);
+      assert.deepEqual(by[52].blocked_by, sample.expected.betaBlocked);
+      for (const original of [alpha, beta]) {
+        assert.deepEqual([by[original.number].title, by[original.number].body, by[original.number].labels], [original.title, original.body, original.labels]);
+      }
+      assert.deepEqual([by[61].title, by[61].body, by[61].labels], ["Deliver declared-patch", "Preserved body 61", ["existing"]]);
+      assert.equal(f.state().status, "verified");
+      assert.deepEqual(f.state().readback.diagnostics, []);
+      assert.deepEqual(f.state().units.alpha.fields, []);
+      assert.deepEqual(f.state().units.beta.fields, []);
+      assert.deepEqual(f.state().units["declared-patch"].fields, ["title"]);
+      for (const name of ["units.jsonl", "reviewed-units.jsonl", "validated-units.jsonl", "materialization-materialize-test-0-units.jsonl"]) {
+        assert.equal(readFileSync(join(f.out, name), "utf8"), canonical);
+      }
+      assert.deepEqual(JSON.parse(readFileSync(join(f.out, "approved-units.json"), "utf8")), rows);
+      const mutations = f.mutations().length;
+      successful(f.run());
+      assert.equal(f.mutations().length, mutations);
     } finally { f.close(); }
   }
 });

@@ -331,8 +331,18 @@ steps:
         ' >> "$OUT_DIR/materialization-plan.jsonl"
       done < <(jq -c . "$units")
       jq -s '.' "$OUT_DIR/materialization-plan.jsonl" > "$OUT_DIR/materialization-plan.json"
-      duplicate=$(jq -c '[.[] | select(.number != null)] | group_by(.number) | map(select(length > 1) | {number:.[0].number,units:map(.id)})' "$OUT_DIR/materialization-plan.json")
-      test "$duplicate" = '[]' || reject duplicate-issue-identity "$duplicate"
+      # Resolve aliases through the shared validator without changing reviewed bytes
+      # or turning implicit identity reuse into an approved field revision.
+      jq -c '.[] | .number as $number | .unit |
+        if $number != null and (has("revision") | not)
+        then . + {revision:{issue:$number,fields:[]}} else . end
+      ' "$OUT_DIR/materialization-plan.json" > "$OUT_DIR/materialization-validation-units.jsonl"
+      if ! dagu-feature-bundle validate-planning-units \
+        --input "$OUT_DIR/materialization-validation-units.jsonl" \
+        --findings "$OUT_DIR/materialization-validation-findings.jsonl"; then
+        cat "$OUT_DIR/materialization-validation-findings.jsonl" >> "$OUT_DIR/findings.md"
+        reject resolved-planning-units "see materialization-validation-findings.jsonl"
+      fi
       jq --slurpfile approved "$OUT_DIR/approved-units.json" '. as $plan | [$approved[0][] as $unit | $plan[] | select(.id == $unit.id)]' "$OUT_DIR/materialization-plan.json" > "$OUT_DIR/materialization-selected.json"
       jq '[.[] | .number, (.unit.relationships[]?.target.issue // empty)] | map(select(. != null)) | unique' "$OUT_DIR/materialization-selected.json" > "$OUT_DIR/materialization-numbers.json"
       # Grouped GraphQL reads include the complete preserved native graph. Every
@@ -393,8 +403,6 @@ steps:
          select($actual != null and $actual.database_id != $before[0][($parent|tostring)].database_id) | {unit:$unit.id,issue:$unit.number,expected:($before[0][($parent|tostring)] | if . == null then {unit:$target.unit,issue:$parent} else {database_id,repo,number} end),observed:$actual}]
       ' "$OUT_DIR/materialization-selected.json")
       test "$conflict" = '[]' || reject conflicting-parent "$conflict"
-      self=$(jq -c --slurpfile all "$OUT_DIR/materialization-plan.json" '[.[] | select(.number != null) | . as $unit | .unit.relationships[]? | .target as $target | (if $target.issue then $target.issue else ($all[0][] | select(.id == $target.unit) | .number) end) as $number | select($unit.number == $number) | {unit:$unit.id,kind:.kind,issue:$number}]' "$OUT_DIR/materialization-selected.json")
-      test "$self" = '[]' || reject relationship-self-identity "$self"
       # Preserve first-observed baselines across failures and expanded subset approvals.
       jq --slurpfile before "$OUT_DIR/materialization-before.json" '.baseline = ($before[0] * .baseline) | .status="publishing"' "$state" > "$state.tmp"; save
       while IFS= read -r item; do
