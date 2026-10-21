@@ -267,6 +267,28 @@ Workflows
 
 Las extensiones usan `fetch` y un parser SSE propios, sin dependencias runtime externas; el instalador de estación usa `yaml` para conservar la configuración compartida. La extensión solo observa y despierta; las acciones humanas y la reconciliación pertenecen a Dagu y al operador. Si la sesión de destino no está ejecutándose, no recibe aviso. Si el mismo ID de sesión está abierto a la vez en dos procesos OMP, ambos coinciden y ambos despiertan.
 
+### Status timeout fixture verification
+
+From `packages/omp-dagu`, run:
+
+```sh
+A4S_LIVE_DAGU=0 npx --no-install tsx --test test/status-timeout.test.ts
+```
+
+The six scenarios cover discovery, run details and SSE headers: an 8000 ms
+response succeeds, while a 15001 ms response is aborted by the client's
+15000 ms network deadline. The fixture resolves its workspace with the existing
+repository resolver before mocking time, using the same checkout cwd as the
+status observer. Its run labels therefore match both canonical origins such as
+`a4s` and issue-clone origins such as `issue-337`.
+
+Expected-request readiness has a separate 10000 ms real-time deadline, captured
+before Node's `setTimeout` mock is enabled. A missing request reports its phase,
+expected path, workspace, cwd and observed requests. The readiness timer is
+cleared on success or failure; session shutdown aborts pending fake fetches and
+closes the simulated SSE stream. Isolated verification of either origin should
+complete all six scenarios within a 30-second external process bound.
+
 ## Guard de triage y agente
 
 El paquete distribuye `triage-reviewer` con `structured: true`, el JSON Schema de la decisión, `tools: []`, `spawns: []` y modelo `@slow`.
