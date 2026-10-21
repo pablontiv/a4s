@@ -1,7 +1,7 @@
-# dagu-feature-bundle: @a4s/omp-dagu@0.3.97 source=pablontiv/a4s@cc1292aee13703ed6484ec903187b9c02a21cef0 bootstrap=bootstrap-a4s-v0-3-97 dagu=2.20.1
+# dagu-feature-bundle: @a4s/omp-dagu@0.3.98 source=pablontiv/a4s@62844e5b3cfb1a4e8cd7454282e9e0e6b3a35841 bootstrap=bootstrap-a4s-v0-3-98 dagu=2.20.1
 labels:
   - workspace=a4s
-  - dagu-feature-bundle=0.3.97
+  - dagu-feature-bundle=0.3.98
 queue: a4s
 type: graph
 dotenv: []
@@ -25,7 +25,7 @@ params:
     default: ""
 env:
   - RUN: ${context.run.id}
-  - DAGU_FEATURE_BUNDLE: "dagu-feature-bundle=0.3.97 source=pablontiv/a4s@cc1292aee13703ed6484ec903187b9c02a21cef0 bootstrap=bootstrap-a4s-v0-3-97"
+  - DAGU_FEATURE_BUNDLE: "dagu-feature-bundle=0.3.98 source=pablontiv/a4s@62844e5b3cfb1a4e8cd7454282e9e0e6b3a35841 bootstrap=bootstrap-a4s-v0-3-98"
 steps:
   - id: snapshot
     run: |
