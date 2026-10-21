@@ -539,6 +539,18 @@ git branch dagu/issue-N FETCH_HEAD
 
 El cierre tras merge retira también el checkpoint durable con lease.
 
+## Optional consumer blocker reporting
+
+Bootstrap offers optional `A4S_BLOCKER_REPORTING=ask|auto`. The
+`__A4S_BLOCKER_REPORTING__` placeholder fixes the choice in the installed
+`feature.yaml` environment; `read_default` recovers it on the next adoption.
+An empty response preserves the previous choice, defaulting to `ask` initially.
+`auto` requires explicit opt-in; `ask` requires consent before publication.
+Runtime parameters preserve this fixed policy. The
+[`Optional consumer blocker reporting`](skills/dagu-feature/SKILL.md#optional-consumer-blocker-reporting)
+procedure uses private files on the same host, the identified native A4S owner,
+scoped authorization, and a URL receipt verified and read by the consumer.
+
 ## Validación opcional del repositorio
 
 Bootstrap pregunta `VALIDATION` (opcional, vacía por defecto) y adopción fija
