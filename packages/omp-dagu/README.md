@@ -653,6 +653,15 @@ puerto HTTP propio por fixture. Además, cada instancia genera un único
 manteniendo el nombre de DAG `feature`. Enqueue, REST, status, completion,
 push-back y handlers comparten exactamente ese ID.
 
+When `test/live/poc-template.test.ts` fails, its fixture stops the server before
+preserving the original error, last HTTP URL/status/body, stdout/stderr, and only
+the isolated Dagu home's `data/` and `logs/`. It reports a unique private
+subdirectory under `A4S_DAGU_DIAGNOSTICS_DIR` (in CI:
+`${{ runner.temp }}/dagu-poc-diagnostics`; locally, the temporary directory
+`a4s-dagu-poc-diagnostics`), then removes the temporary runtime. Successful runs
+only clean up. Evidence-retention failures are reported without replacing the
+original error.
+
 En Unix, el socket de control de Dagu 2.20.1 pertenece al namespace global del
 host: [`sock.Addr`](https://github.com/dagu-org/dagu/blob/v2.20.1/internal/cmn/sock/addr.go)
 deriva `/tmp/@dagu_feature_<hash>.sock` de `(nombre del DAG, run-id)`, con los
