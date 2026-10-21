@@ -1,7 +1,7 @@
-# dagu-feature-bundle: @a4s/omp-dagu@0.3.95 source=pablontiv/a4s@fcacfb20bb3d8a8d9e8b735fec5d81bc27e76147 bootstrap=bootstrap-a4s-v0-3-95 dagu=2.20.1
+# dagu-feature-bundle: @a4s/omp-dagu@0.3.97 source=pablontiv/a4s@cc1292aee13703ed6484ec903187b9c02a21cef0 bootstrap=bootstrap-a4s-v0-3-97 dagu=2.20.1
 labels:
   - workspace=a4s
-  - dagu-feature-bundle=0.3.95
+  - dagu-feature-bundle=0.3.97
 queue: a4s
 type: graph
 dotenv: []
@@ -41,7 +41,7 @@ env:
   - REQUIRED_CHECK: "validate"
   - WORKTREE: ${PRIMARY}/.workspace/worktrees/issue-${ISSUE}
   - RUN: ${context.run.id}
-  - DAGU_FEATURE_BUNDLE: "dagu-feature-bundle=0.3.95 source=pablontiv/a4s@fcacfb20bb3d8a8d9e8b735fec5d81bc27e76147 bootstrap=bootstrap-a4s-v0-3-95"
+  - DAGU_FEATURE_BUNDLE: "dagu-feature-bundle=0.3.97 source=pablontiv/a4s@cc1292aee13703ed6484ec903187b9c02a21cef0 bootstrap=bootstrap-a4s-v0-3-97"
   - DAGU_RESOURCE_GUARD: |
       resource_lock() {
         local operation=$1 primary root expected actual common key attempt owner run status candidate branch issue
@@ -341,8 +341,10 @@ steps:
               | $base + $fraction - $offset
             ) catch null end;
           . as $rows
-          | ($rows | map(select(.type == "session")) | first) as $session
-          | ($rows | map(select(.type == "session_init")) | first) as $init
+          | ($rows | map(select(.type == "session"))) as $sessions
+          | ($rows | map(select(.type == "session_init"))) as $inits
+          | ($sessions | first) as $session
+          | ($inits | first) as $init
           | ($rows | map(select(.type == "message" and .message.role == "toolResult" and .message.toolName == "yield")) | last) as $yield
           | ($init.timestamp | rfc3339_epoch) as $started
           | ($cutoff | rfc3339_epoch) as $cutoff_epoch
@@ -355,6 +357,8 @@ steps:
                 poc: $yield.message.details.data.poc
               },
               checks: {
+                session_identity: (($sessions | length) == 1 and ($inits | length) >= 1
+                  and ($inits | all(.agent == $init.agent and .task == $init.task))),
                 parentSession: ($session.parentSession == $expected_parent),
                 agent: ($init.agent == "triage-reviewer"),
                 task: (($init.task // "") | contains("TRIAGE_REVIEW AGENT=triage-reviewer DAG=feature RUN=\($run) ")),
@@ -369,6 +373,7 @@ steps:
             "session_init.timestamp=\(.fields.timestamp // "<missing>")",
             "last_yield.details.data.poc=\(.fields.poc // "<missing>")",
             "cutoff=\($cutoff)",
+            "check.session_identity=\(if .checks.session_identity then "PASS" else "FAIL" end)",
             "check.parentSession=\(if .checks.parentSession then "PASS" else "FAIL" end)",
             "check.agent=\(if .checks.agent then "PASS" else "FAIL" end)",
             "check.task_run_marker=\(if .checks.task then "PASS" else "FAIL" end)",
