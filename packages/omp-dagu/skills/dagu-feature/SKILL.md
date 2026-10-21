@@ -454,6 +454,54 @@ node packages/omp-dagu/bin/dagu-feature-bundle.ts enqueue \
 
 Call `dagu_session_id` in the main session before enqueueing. Enqueue only the issues selected and ranked by Sprint Planning, preserving that order. The status extension resumes coordination with targeted notices.
 
+To advance an urgent queued `feature` or `poc` run within its repository queue:
+
+```sh
+node packages/omp-dagu/bin/dagu-feature-prioritize.ts feature <repo>-issue-<n>
+# Installed CLI: dagu-feature-prioritize poc <repo>-poc-<run>
+```
+
+Use the service's `DAGU_HOME` and `DAGU_URL` (default
+`http://127.0.0.1:8080`). The command requires the retained definition's explicit
+repository queue and native `maxConcurrency=1`. It reads native head-to-tail queue
+pages and captures every queued run's original ID, parameters and per-run
+`/api/v1/dag-runs/<dag>/<run>/spec` bytes before dequeue. It keeps the urgent run
+in place, then re-enqueues the other entries in their original relative order,
+including successors when the urgent run was in the middle. Native enqueue uses
+the captured definition and the existing admission's exact parameter argv. The
+retained definition's literal `env.PRIMARY` locates that immutable receipt. Before
+dequeue, its run identity, canonical primary, admitted snapshot and effective native
+parameters (including retained JSON-schema defaults) must agree. This continues
+the original admission unchanged even after deployment changes.
+Without a receipt, every declared named parameter must be guaranteed present
+(required or defaulted), and the native flattened text must identify each name
+exactly once. Values, including literal quotes, pass as original argv rather than
+being parsed again as shell text. Optional, additional, positional or ambiguous
+parameter text requires the original admission argv before any dequeue.
+
+Success prints `REQUEUED <dag> <run>` for each moved entry, then
+`PRIORITIZED <dag> <run> queue=<queue> moved=<n>`; `moved` counts all re-enqueued
+entries. An already-first run reports `moved=0`. A nonqueued run exits 1 with
+`NOT_QUEUED <dag> <run> status=<status>` and leaves the queue unchanged.
+
+`RECOVERY <path>` identifies a private, durable
+`$DAGU_HOME/data/prioritize/operation-*/recovery.json`, containing the complete
+original order, native parameters, retained YAML files and exact enqueue argument
+arrays. A failed dequeue triggers recovery of the removed entries in their
+original relative order; a failed enqueue reports `LOST <dag> <run>` with its
+original parameters, retained spec path and native recovery argv. If an error's
+effect cannot be observed, `LOST state=unconfirmed-*` explicitly marks that
+uncertainty. Inspect native state before manually running recovery argv, and use
+the same Dagu home. Successful recovery appends entries to the surviving queue:
+`INCOMPLETE` reports the observed effects rather than promising rollback.
+
+This is a sequence of native queue operations, not an atomic reorder. Coordinate
+with other operators and use an active blocker to keep the queue stable while
+moving entries. Scheduler consumption or concurrent enqueue can produce an
+`INCOMPLETE` result; interrupted commands retain their pre-dequeue recovery files
+for operator inspection. The command preserves the queue's concurrency settings
+and running runs.
+
 Set `PR_NUMBER` only to adopt an existing open PR whose head is `dagu/issue-<ISSUE>`. `OMP_SESSION_ID` targets the persistent main OMP session that enqueued the run. `BASE_BRANCH` defaults to the versioned file. Bootstrap fixes `GATE`, `REBASE_RESOLVER`, `REQUIRED_CHECK` and canonical `PRIMARY` at adoption; the DAG derives `BRANCH=dagu/issue-$ISSUE`. Admission rejects each of those five names as run parameters, naming it before repository state changes. Change adoption policy through bootstrap and version the resulting renders.
 
 Before `start_gate` and `close_gate`, the DAG detects whether PRIMARY is clean and on

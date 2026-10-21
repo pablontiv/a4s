@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.100
+
+- Add `dagu-feature-prioritize <feature|poc> <run-id>` to move a queued lifecycle run to the front of its concurrency-one repository queue while preserving all other relative order, original IDs, parameters and retained native definitions (#334).
+- Persist private recovery snapshots and exact native enqueue arguments before dequeue; resolve existing receipts from retained adopted policy, verify snapshot/parameter consistency including JSON-schema defaults, and report partial queue effects and recoverable `LOST` entries on operation failure (#334).
+
 ## 0.3.99
 
 - Report abandoned waiting feature, PoC and discovery human tasks through an independent read-only `UNOWNED` reconcile branch, using process-held OMP session locks and visible fail-closed liveness diagnostics (#301).
