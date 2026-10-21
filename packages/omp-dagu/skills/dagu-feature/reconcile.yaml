@@ -33,6 +33,72 @@ steps:
       done | jq -sc '.'
     output: RUNS
 
+  - id: unowned
+    depends: discover
+    run: |
+      set -euo pipefail
+      TMP=$(mktemp -d)
+      trap 'rm -rf "$TMP"' EXIT
+      failed=0
+      for kind in feature poc discovery; do
+        dagu history "$kind" --status waiting --format json --limit 500 >"$TMP/history"
+        jq -ce '
+          def param($key):
+            .params as $params
+            | (try ($params | capture("(^| )" + $key + "=(?<value>[^ ]*)($| )").value) catch "") // "";
+          if type != "array" then error("expected history array") else
+            map({run: .dagRunId, primary: param("PRIMARY"), owner: param("OMP_SESSION_ID"), since: .startedAt})
+          end
+        ' "$TMP/history" >"$TMP/rows"
+        jq -c '.[]' "$TMP/rows" >"$TMP/items"
+        while IFS= read -r row; do
+          run=$(jq -er '.run | select(type == "string" and length > 0)' <<<"$row")
+          primary=$(jq -r .primary <<<"$row")
+          if [[ -z "$primary" ]]; then
+            encoded_run=$(jq -rn --arg run "$run" '$run | @uri')
+            primary=$(curl -fsS "http://127.0.0.1:${DAGU_PORT:-8080}/api/v1/dag-runs/$kind/$encoded_run/spec" |
+              jq -er '.spec | split("\n") | map(select(startswith("  - PRIMARY: ")) | ltrimstr("  - PRIMARY: ") | fromjson) | if length == 1 then .[0] | select(type == "string" and length > 0) else error("expected one retained PRIMARY") end')
+          fi
+          owner=$(jq -r .owner <<<"$row")
+          since=$(jq -er '.since | select(type == "string" and length > 0)' <<<"$row")
+          dagu status --run-id "$run" "$kind" >"$TMP/status"
+          # Native human.task status includes a prompt beneath its waiting node.
+          jq -Rrse '
+            if startswith("Waiting") then
+              [match("(?:├─|└─)(?<step>[A-Za-z0-9_-]+) \\[waiting\\]\\n(?<details>(?:(?:│| )[^\\n]*\\n)*)"; "g")
+                | .captures | map({key: .name, value: .string}) | from_entries
+                | select(.details | contains("prompt:")) | .step]
+              | if length > 0 then .[] else error("waiting human.task prompt unavailable") end
+            else error("native run is not Waiting") end
+          ' "$TMP/status" >"$TMP/steps"
+          live=0
+          if [[ -n "$owner" ]]; then
+            rc=0
+            lsof -F pc "${OMP_SESSION_LOCKS:-$HOME/.omp/run/session-owners}/$owner.lock" >"$TMP/lsof" 2>"$TMP/error" || rc=$?
+            if [[ -s "$TMP/error" ]]; then
+              cat "$TMP/error" >&2
+              printf 'unowned: lsof diagnostic dag=%s run=%s owner=%s exit=%s\n' "$kind" "$run" "$owner" "$rc" >&2
+              failed=1
+              continue
+            elif [[ "$rc" == 0 ]] && jq -Rse 'split("\n") | map(select(length > 0)) | length > 0 and any(.[]; test("^p[1-9][0-9]*$")) and all(.[]; test("^(p[1-9][0-9]*|c.+|f.+)$"))' "$TMP/lsof" >/dev/null; then
+              live=1
+            elif [[ "$rc" != 1 || -s "$TMP/lsof" ]]; then
+              printf 'unowned: ambiguous lsof result dag=%s run=%s owner=%s exit=%s\n' "$kind" "$run" "$owner" "$rc" >&2
+              cat "$TMP/lsof" >&2
+              failed=1
+              continue
+            fi
+          fi
+          if [[ "$live" == 0 ]]; then
+            while IFS= read -r step; do
+              printf 'UNOWNED %s %s dag=%s step=%s owner=%s since=%s\n' "${primary##*/}" "$run" "$kind" "$step" "${owner:-none}" "$since" >&2
+            done <"$TMP/steps"
+            failed=1
+          fi
+        done <"$TMP/items"
+      done
+      exit "$failed"
+
   - id: leftovers
     depends: discover
     run: |

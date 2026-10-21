@@ -1110,6 +1110,26 @@ Remote observation belongs to the scheduled [`reconcile`](reconcile.yaml) DAG, a
 
 `discover` reads waiting `feature` runs across all repositories with `dagu history` and parses their named params. On every tick, `leftovers` also reads the complete `feature` and `poc` histories, collects each distinct `PRIMARY`, and compares its managed worktrees and local `dagu/*` branches with runs in `queued`, `running` or `waiting`. This check runs even when no feature run is waiting.
 
+`unowned` also depends directly on `discover`, independently of `leftovers` and
+`tick`. Each tick reads waiting `feature`, `poc` and `discovery` histories with
+`--limit 500`, parses named `PRIMARY` and `OMP_SESSION_ID` parameters, and reads
+native status for waiting human tasks. When adoption fixes `PRIMARY` in the
+environment instead of parameters, it resolves that value from the run's retained
+specification; unavailable or ambiguous retained identity fails visibly closed.
+A live owner has a process record from
+`lsof -F pc "$OMP_SESSION_LOCKS/<OMP_SESSION_ID>.lock"`; `OMP_SESSION_LOCKS`
+defaults to `$HOME/.omp/run/session-owners`. An empty owner is unowned. A clean
+`lsof` exit 1 with empty output establishes a dead owner; the existence of a
+lock file alone carries no liveness evidence. Diagnostics, permissions errors,
+missing commands, malformed output and ambiguous results visibly fail the
+branch closed. History and status errors also fail the branch.
+
+For each abandoned human task it writes
+`UNOWNED <repo> <run> dag=<dag> step=<step> owner=<session-id|none> since=<startedAt>`
+to stderr and exits 1. This observation preserves run, queue and human-task state;
+the operator chooses the recovery action. The independent existing reconcile
+branches continue to own their normal work.
+
 Historical `PRIMARY` paths that are missing as directories are skipped with `SKIP_PRIMARY <path> missing`. Existing directories are inspected normally; a Git failure remains visible and fails `leftovers`.
 
 An unowned resource fails the tick with `LEFTOVER <repo> worktree=<path|none> branch=<branch|none> last_run=<id|none> last_status=<status|none>`. The reconciler only reports it; the operator decides whether to recover or remove it. A managed feature resource is owned by the matching `BRANCH` or `issue-<ISSUE>` worktree, and a PoC resource by its `poc/<run>` branch or `poc-<run>` worktree. Other local branches are outside this check.

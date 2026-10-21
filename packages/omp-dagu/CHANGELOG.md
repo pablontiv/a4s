@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.99
+
+- Report abandoned waiting feature, PoC and discovery human tasks through an independent read-only `UNOWNED` reconcile branch, using process-held OMP session locks and visible fail-closed liveness diagnostics (#301).
+
 ## 0.3.98
 
 - Persist the optional consumer `A4S_BLOCKER_REPORTING=ask|auto` choice in adopted feature policy, preserving the installed choice on blank bootstrap upgrades and requiring explicit opt-in for automatic reports (#454).
