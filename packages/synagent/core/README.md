@@ -8,8 +8,8 @@ y el ADR 0066.
 
 ## Componentes
 
-1. **Bus** (`../bus/`): aplicación instalable separada
-   `@a4s/synagent-bus`, con broker MQTT Aedes y persistencia LevelDB. Los
+1. **Bus** ([`apps/message-bus`](../../../apps/message-bus/)): aplicación privada separada
+   `@a4s/message-bus`, con broker MQTT Aedes y persistencia LevelDB. Los
    bridges de Claude viven dentro de su propio plugin.
 2. **Adaptadores** (`adapters/<harness>/`): bordes finos que traducen el API de
    cada harness al contrato canónico. Incluye el plugin de Claude Code y
@@ -135,13 +135,12 @@ git remote add origin git@github.com:Example/Project.git
 
 ## Arrancar el bus
 
-Instálalo globalmente o ejecútalo desde el monorepo:
+Run the private broker from the repository root after installing dependencies:
 
 ```sh
-npm install --global @a4s/synagent-bus
-synagent-bus
-
-npm run bus -- 0 --db /tmp/synagent-dev-db
+npm run bus --workspace @a4s/message-bus -- 1884
+# Arguments are also forwarded by the root script:
+npm run bus -- 0 --db /tmp/a4s-message-bus-dev-db
 ```
 
 El default es `mqtt://127.0.0.1:1884`; el estado vive en la ruta de estado del
@@ -149,7 +148,7 @@ usuario para cada SO, no dentro del checkout. El proceso imprime
 `BROKER READY :<puerto>` cuando listener y LevelDB están realmente listos. El
 broker es una aplicación separada: ningún adaptador lo arranca. Su instalación
 y los overrides de estado se documentan en
-[`../bus/README.md`](../bus/README.md).
+[`apps/message-bus/README.md`](../../../apps/message-bus/README.md).
 
 ## Adaptador de Claude Code
 
@@ -194,7 +193,7 @@ claude plugin install synagent-adapter-mqtt@a4s
 
 La instalación provisiona `mqtt` desde el `package.json` del plugin. El broker
 no forma parte del plugin Claude: sigue siendo la aplicación separada
-`@a4s/synagent-bus`.
+`@a4s/message-bus`.
 
 ### Configuración (`userConfig`)
 
@@ -526,7 +525,7 @@ autenticación, autorización de topics y TLS antes de admitir URLs no locales.
 ```sh
 npm test --workspace @a4s/synagent
 npm run typecheck --workspace @a4s/synagent
-npm test --workspace @a4s/synagent-bus
+npm test --workspace @a4s/message-bus
 ```
 
 La comprobación viva de Claude Code requiere Claude Code con credenciales ya

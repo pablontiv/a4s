@@ -14,10 +14,10 @@ const { classifyError, createLogger, operationalError, tagOperationalError } = r
 
 function defaultDbDir({ platform = process.platform, env = process.env, home = os.homedir() } = {}) {
   if (platform === 'darwin') {
-    return path.join(home, 'Library', 'Application Support', 'a4s', 'synagent', 'mqtt-db')
+    return path.join(home, 'Library', 'Application Support', 'a4s', 'message-bus', 'mqtt-db')
   }
   const stateHome = env.XDG_STATE_HOME || path.join(home, '.local', 'state')
-  return path.join(stateHome, 'a4s', 'synagent', 'mqtt-db')
+  return path.join(stateHome, 'a4s', 'message-bus', 'mqtt-db')
 }
 
 function parseArgs(argv = process.argv.slice(2), env = process.env, options = {}) {
@@ -45,12 +45,12 @@ function parseArgs(argv = process.argv.slice(2), env = process.env, options = {}
   if (positional.length > 2) {
     throw operationalError(
       'A4S_BROKER_ARGUMENT_INVALID',
-      'usage: synagent-bus [port] [dbdir] [--db <dir>]',
+      'usage: message-bus [port] [dbdir] [--db <dir>]',
       { phase: 'arguments' },
     )
   }
 
-  const rawPort = positional[0] ?? env.SYNAGENT_PORT ?? '1884'
+  const rawPort = positional[0] ?? env.A4S_MESSAGE_BUS_PORT ?? '1884'
   if (!/^\d+$/.test(rawPort)) {
     throw operationalError('A4S_BROKER_PORT_INVALID', `invalid port: ${rawPort}`, { phase: 'arguments' })
   }
@@ -59,7 +59,7 @@ function parseArgs(argv = process.argv.slice(2), env = process.env, options = {}
     throw operationalError('A4S_BROKER_PORT_INVALID', `invalid port: ${rawPort}`, { phase: 'arguments' })
   }
 
-  const dbdir = path.resolve(flagDb || positional[1] || env.SYNAGENT_DB || defaultDbDir(options))
+  const dbdir = path.resolve(flagDb || positional[1] || env.A4S_MESSAGE_BUS_DB || defaultDbDir(options))
   return { port, dbdir }
 }
 
@@ -105,7 +105,7 @@ async function prepareDbDir(dbdir) {
 async function run(argv = process.argv.slice(2), env = process.env) {
   const logger = createLogger({
     env,
-    scopeName: 'a4s.synagent-bus.broker',
+    scopeName: 'a4s.message-bus.broker',
     harnessKind: 'mqtt-broker',
     harnessRole: 'broker',
   })
@@ -116,7 +116,7 @@ async function run(argv = process.argv.slice(2), env = process.env) {
   let port
 
   logger.info('broker.started', {
-    body: 'Synagent broker startup began',
+    body: 'Message bus startup began',
     protocol: { channel: 'jsonl_file', contaminated: false },
   })
 
@@ -125,7 +125,7 @@ async function run(argv = process.argv.slice(2), env = process.env) {
     closing = true
     if (signal) console.log(`[broker] closing on ${signal}`)
     logger.info('broker.shutdown', {
-      body: 'Synagent broker shutdown began',
+      body: 'Message bus shutdown began',
       attributes: { 'a4s.signal': signal || 'internal' },
       protocol: { channel: 'jsonl_file', contaminated: false },
       flushStatus: 'sync_requested',
@@ -149,7 +149,7 @@ async function run(argv = process.argv.slice(2), env = process.env) {
     } catch (error) {
       if (error.code === 'EADDRINUSE') {
         logger.info('broker.already_running', {
-          body: 'Synagent broker listener is already occupied',
+          body: 'Message bus listener is already occupied',
           attributes: { 'server.port': port },
           protocol: { channel: 'stdout', contaminated: false },
           flushStatus: 'sync_requested',
@@ -186,7 +186,7 @@ async function run(argv = process.argv.slice(2), env = process.env) {
       )
     }
     logger.info('broker.ready', {
-      body: 'Synagent broker is ready',
+      body: 'Message bus is ready',
       attributes: { 'server.port': address.port },
       protocol: { channel: 'stdout', contaminated: false },
       flushStatus: 'pending',
@@ -197,7 +197,7 @@ async function run(argv = process.argv.slice(2), env = process.env) {
       process.once(signal, () => {
         shutdown(signal).then(() => process.exit(0), error => {
           logger.error('broker.error', {
-            body: 'Synagent broker shutdown failed',
+            body: 'Message bus shutdown failed',
             error: classifyError(error, 'broker.shutdown', {
               code: 'A4S_BROKER_SHUTDOWN_FAILED',
               phase: 'shutdown',
@@ -214,7 +214,7 @@ async function run(argv = process.argv.slice(2), env = process.env) {
     return await new Promise(resolve => server.once('close', () => resolve(0)))
   } catch (error) {
     logger.error('broker.error', {
-      body: 'Synagent broker operation failed',
+      body: 'Message bus operation failed',
       error: classifyError(error, 'broker.runtime', {
         code: error?.a4sCode || 'A4S_BROKER_OPERATION_FAILED',
       }),
@@ -225,7 +225,7 @@ async function run(argv = process.argv.slice(2), env = process.env) {
       await shutdown()
     } catch (shutdownError) {
       logger.error('broker.error', {
-        body: 'Synagent broker cleanup failed',
+        body: 'Message bus cleanup failed',
         error: classifyError(shutdownError, 'broker.shutdown', {
           code: 'A4S_BROKER_SHUTDOWN_FAILED',
           phase: 'shutdown',

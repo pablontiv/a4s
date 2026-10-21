@@ -6,7 +6,7 @@ const fs = require('node:fs/promises')
 const os = require('node:os')
 const path = require('node:path')
 const { test } = require('node:test')
-const { classifyError, createLogger, defaultLogDir, SCHEMA } = require('../logging.cjs')
+const { classifyError, createLogger, defaultLogDir, defaultLogRoot, SCHEMA } = require('../logging.cjs')
 
 const REQUIRED_FIELDS = [
   'schema',
@@ -45,7 +45,7 @@ test('JSONL logger emits valid RCA records with required OTel-aligned fields', a
   await fs.chmod(existingFile, 0o666)
 
   const env = {
-    A4S_SYNAGENT_BUS_LOG_DIR: temp,
+    A4S_MESSAGE_BUS_LOG_DIR: temp,
     A4S_SERVICE_INSTANCE_ID: 'fixture-instance',
     A4S_OPERATION_ID: 'fixture-operation',
     A4S_CORRELATION_ID: 'fixture-correlation',
@@ -54,7 +54,7 @@ test('JSONL logger emits valid RCA records with required OTel-aligned fields', a
     env,
     hostname: 'fixture-host',
     now: () => new Date('2026-01-02T03:04:05.678Z'),
-    scopeName: 'a4s.synagent-bus.fixture',
+    scopeName: 'a4s.message-bus.fixture',
     harnessKind: 'test',
     harnessRole: 'fixture',
   })
@@ -78,7 +78,8 @@ test('JSONL logger emits valid RCA records with required OTel-aligned fields', a
   assert.equal(record.schema, SCHEMA)
   assert.equal(record.timestamp, '2026-01-02T03:04:05.678Z')
   assert.equal(record.event_name, 'fixture.failed')
-  assert.equal(record['resource.service.name'], '@a4s/synagent-bus')
+  assert.equal(record['resource.service.name'], '@a4s/message-bus')
+  assert.equal(record['scope.name'], 'a4s.message-bus.fixture')
   assert.equal(record['resource.service.instance.id'], 'fixture-instance')
   assert.equal(record['attributes.a4s.operation_id'], 'fixture-operation')
   assert.equal(record['attributes.a4s.correlation_id'], 'fixture-correlation')
@@ -99,7 +100,7 @@ test('instance identifiers cannot escape or collapse the configured log root', a
 
   for (const instanceId of dangerous) {
     const env = {
-      A4S_SYNAGENT_BUS_LOG_DIR: root,
+      A4S_MESSAGE_BUS_LOG_DIR: root,
       A4S_SERVICE_INSTANCE_ID: instanceId,
     }
     const directory = defaultLogDir({ env, instanceId })
@@ -127,7 +128,7 @@ test('logger rejects symlink and non-directory instance paths without fallback w
 
   await fs.symlink(outside, path.join(root, 'linked-instance'))
   let logger = createLogger({
-    env: { A4S_SYNAGENT_BUS_LOG_DIR: root, A4S_SERVICE_INSTANCE_ID: 'linked-instance' },
+    env: { A4S_MESSAGE_BUS_LOG_DIR: root, A4S_SERVICE_INSTANCE_ID: 'linked-instance' },
   })
   assert.equal(logger.info('fixture.must_drop'), false)
   logger.close()
@@ -135,7 +136,7 @@ test('logger rejects symlink and non-directory instance paths without fallback w
 
   await fs.writeFile(path.join(root, 'file-instance'), 'unchanged')
   logger = createLogger({
-    env: { A4S_SYNAGENT_BUS_LOG_DIR: root, A4S_SERVICE_INSTANCE_ID: 'file-instance' },
+    env: { A4S_MESSAGE_BUS_LOG_DIR: root, A4S_SERVICE_INSTANCE_ID: 'file-instance' },
   })
   assert.equal(logger.info('fixture.must_drop'), false)
   logger.close()
@@ -153,7 +154,7 @@ test('logger rejects symlink and non-regular log files', { skip: process.platfor
   await fs.symlink(outsideFile, path.join(linkedDir, 'operational.jsonl'))
 
   let logger = createLogger({
-    env: { A4S_SYNAGENT_BUS_LOG_DIR: root, A4S_SERVICE_INSTANCE_ID: 'linked-file' },
+    env: { A4S_MESSAGE_BUS_LOG_DIR: root, A4S_SERVICE_INSTANCE_ID: 'linked-file' },
   })
   assert.equal(logger.info('fixture.must_drop'), false)
   logger.close()
@@ -162,7 +163,7 @@ test('logger rejects symlink and non-regular log files', { skip: process.platfor
   const nonRegularDir = path.join(root, 'non-regular-file')
   await fs.mkdir(path.join(nonRegularDir, 'operational.jsonl'), { recursive: true })
   logger = createLogger({
-    env: { A4S_SYNAGENT_BUS_LOG_DIR: root, A4S_SERVICE_INSTANCE_ID: 'non-regular-file' },
+    env: { A4S_MESSAGE_BUS_LOG_DIR: root, A4S_SERVICE_INSTANCE_ID: 'non-regular-file' },
   })
   assert.equal(logger.info('fixture.must_drop'), false)
   logger.close()
@@ -183,7 +184,7 @@ test('logger writes no bytes when descriptor chmod cannot guarantee 0600', {
   fsSync.fchmodSync = () => { throw new Error('simulated fchmod failure') }
   try {
     const logger = createLogger({
-      env: { A4S_SYNAGENT_BUS_LOG_DIR: temp, A4S_SERVICE_INSTANCE_ID: 'fchmod-failure' },
+      env: { A4S_MESSAGE_BUS_LOG_DIR: temp, A4S_SERVICE_INSTANCE_ID: 'fchmod-failure' },
     })
     assert.equal(logger.info('fixture.must_drop'), false)
     logger.close()
@@ -191,4 +192,16 @@ test('logger writes no bytes when descriptor chmod cannot guarantee 0600', {
     fsSync.fchmodSync = originalFchmodSync
   }
   assert.equal((await fs.stat(file)).size, 0)
+})
+
+test('default log roots use message-bus and the canonical log override', () => {
+  assert.equal(
+    defaultLogRoot({ env: {}, home: '/home/tester' }),
+    '/home/tester/.local/state/a4s/log/message-bus',
+  )
+  assert.equal(
+    defaultLogRoot({ env: { XDG_STATE_HOME: '/state' }, home: '/home/tester' }),
+    '/state/a4s/log/message-bus',
+  )
+  assert.equal(defaultLogRoot({ env: { A4S_MESSAGE_BUS_LOG_DIR: '/private/logs' } }), '/private/logs')
 })

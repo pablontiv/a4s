@@ -16,7 +16,7 @@ const BROKER = path.join(__dirname, '..', 'broker.cjs')
 function loggingEnv(logRoot, instanceId) {
   return {
     ...process.env,
-    A4S_SYNAGENT_BUS_LOG_DIR: logRoot,
+    A4S_MESSAGE_BUS_LOG_DIR: logRoot,
     A4S_SERVICE_INSTANCE_ID: instanceId,
     A4S_OPERATION_ID: `${instanceId}-operation`,
     A4S_CORRELATION_ID: `${instanceId}-correlation`,
@@ -60,9 +60,9 @@ function outputAndExit(proc) {
   })
 }
 
-function connect(url, clientId) {
+function connect(url, clientId, options = {}) {
   return new Promise((resolve, reject) => {
-    const client = mqtt.connect(url, { clientId, clean: true, reconnectPeriod: 0 })
+    const client = mqtt.connect(url, { clientId, clean: true, reconnectPeriod: 0, ...options })
     client.once('connect', () => resolve(client))
     client.once('error', reject)
   })
@@ -73,8 +73,8 @@ function end(client) {
 }
 
 async function roundTrip(url, suffix) {
-  const subscriber = await connect(url, `synagent-bus-sub-${suffix}`)
-  const publisher = await connect(url, `synagent-bus-pub-${suffix}`)
+  const subscriber = await connect(url, `message-bus-sub-${suffix}`)
+  const publisher = await connect(url, `message-bus-pub-${suffix}`)
   try {
     await new Promise((resolve, reject) => subscriber.subscribe(
       'a4s/inbox/claude', { qos: 1 }, error => error ? reject(error) : resolve(),
@@ -98,7 +98,7 @@ async function roundTrip(url, suffix) {
 }
 
 async function startRealBroker(t, executable = process.execPath, leadingArgs = [BROKER]) {
-  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'synagent-bus-real-'))
+  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'message-bus-real-'))
   const db = path.join(temp, 'mqtt-db')
   const logRoot = path.join(temp, 'logs')
   const instanceId = 'broker-real-test'
@@ -124,21 +124,23 @@ async function startRealBroker(t, executable = process.execPath, leadingArgs = [
 test('database defaults and precedence are OS-aware', () => {
   assert.equal(
     defaultDbDir({ platform: 'darwin', env: {}, home: '/Users/tester' }),
-    '/Users/tester/Library/Application Support/a4s/synagent/mqtt-db',
+    '/Users/tester/Library/Application Support/a4s/message-bus/mqtt-db',
   )
   assert.equal(
     defaultDbDir({ platform: 'linux', env: {}, home: '/home/tester' }),
-    '/home/tester/.local/state/a4s/synagent/mqtt-db',
+    '/home/tester/.local/state/a4s/message-bus/mqtt-db',
   )
   assert.equal(
     defaultDbDir({ platform: 'linux', env: { XDG_STATE_HOME: '/state' }, home: '/home/tester' }),
-    '/state/a4s/synagent/mqtt-db',
+    '/state/a4s/message-bus/mqtt-db',
   )
 
   const options = { platform: 'linux', home: '/home/tester' }
-  assert.equal(parseArgs([], { SYNAGENT_DB: '/env' }, options).dbdir, '/env')
-  assert.equal(parseArgs(['1885', '/legacy'], { SYNAGENT_DB: '/env' }, options).dbdir, '/legacy')
-  assert.equal(parseArgs(['1885', '/legacy', '--db', '/flag'], { SYNAGENT_DB: '/env' }, options).dbdir, '/flag')
+  assert.equal(parseArgs([], { A4S_MESSAGE_BUS_DB: '/env' }, options).dbdir, '/env')
+  assert.equal(parseArgs(['1885', '/explicit'], { A4S_MESSAGE_BUS_DB: '/env' }, options).dbdir, '/explicit')
+  assert.equal(parseArgs(['1885', '/explicit', '--db', '/flag'], { A4S_MESSAGE_BUS_DB: '/env' }, options).dbdir, '/flag')
+  assert.equal(parseArgs([], { A4S_MESSAGE_BUS_PORT: '1885' }, options).port, 1885)
+  assert.equal(parseArgs(['1886'], { A4S_MESSAGE_BUS_PORT: '1885' }, options).port, 1886)
   assert.equal(parseArgs(['0'], {}, options).port, 0)
 })
 
@@ -161,6 +163,10 @@ test('real CLI uses an ephemeral port, durable LevelDB, and MQTT round-trip', as
     events.map(event => event.event_name),
     ['broker.started', 'broker.ready', 'broker.shutdown'],
   )
+  for (const event of events) {
+    assert.equal(event['resource.service.name'], '@a4s/message-bus')
+    assert.equal(event['scope.name'], 'a4s.message-bus.broker')
+  }
 })
 
 test('EADDRINUSE exits zero before creating or opening LevelDB', async t => {
@@ -168,7 +174,7 @@ test('EADDRINUSE exits zero before creating or opening LevelDB', async t => {
   await new Promise(resolve => listener.listen(0, '127.0.0.1', resolve))
   t.after(() => new Promise(resolve => listener.close(resolve)))
   const port = listener.address().port
-  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'synagent-bus-inuse-'))
+  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'message-bus-inuse-'))
   const db = path.join(temp, 'must-not-exist')
   t.after(() => fs.rm(temp, { recursive: true, force: true }))
 
@@ -185,7 +191,7 @@ test('EADDRINUSE exits zero before creating or opening LevelDB', async t => {
 })
 
 test('LevelDB initialization failure exits nonzero instead of degrading to memory', async t => {
-  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'synagent-bus-db-failure-'))
+  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'message-bus-db-failure-'))
   t.after(() => fs.rm(temp, { recursive: true, force: true }))
   const notDirectory = path.join(temp, 'file')
   await fs.writeFile(notDirectory, 'not a directory')
@@ -209,7 +215,7 @@ test('LevelDB initialization failure exits nonzero instead of degrading to memor
 })
 
 test('invalid broker port has a structured non-retryable taxonomy', async t => {
-  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'synagent-bus-invalid-port-'))
+  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'message-bus-invalid-port-'))
   t.after(() => fs.rm(temp, { recursive: true, force: true }))
   const instanceId = 'broker-invalid-port-test'
   const result = await outputAndExit(spawn(process.execPath, [BROKER, 'not-a-port'], {
@@ -227,7 +233,7 @@ test('invalid broker port has a structured non-retryable taxonomy', async t => {
 })
 
 test('npm tarball installs globally into an isolated prefix and its real bin works', { timeout: 120000 }, async t => {
-  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'synagent-bus-global-'))
+  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'message-bus-global-'))
   t.after(() => fs.rm(temp, { recursive: true, force: true }))
   const packageRoot = path.join(__dirname, '..')
 
@@ -242,11 +248,107 @@ test('npm tarball installs globally into an isolated prefix and its real bin wor
 
   const install = spawn('npm', ['install', '--global', '--prefix', prefix, '--ignore-scripts', tarball])
   assert.equal((await exited(install)).code, 0)
-  const bin = path.join(prefix, 'bin', 'synagent-bus')
+  const bin = path.join(prefix, 'bin', 'message-bus')
   assert.equal(existsSync(bin), true)
 
   const { proc, url } = await startRealBroker(t, bin, [])
   await roundTrip(url, 'global-bin')
   proc.kill('SIGTERM')
   assert.deepEqual(await exited(proc), { code: 0, signal: null })
+})
+
+test('canonical environment starts a real broker with isolated state and private logs', async t => {
+  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'message-bus-env-'))
+  const db = path.join(temp, 'state')
+  const logRoot = path.join(temp, 'logs')
+  const instanceId = 'canonical-env'
+  const proc = spawn(process.execPath, [BROKER], {
+    env: {
+      ...loggingEnv(logRoot, instanceId),
+      A4S_MESSAGE_BUS_PORT: '0',
+      A4S_MESSAGE_BUS_DB: db,
+    },
+  })
+  t.after(async () => {
+    if (proc.exitCode === null) {
+      const done = exited(proc)
+      proc.kill('SIGTERM')
+      await done
+    }
+    await fs.rm(temp, { recursive: true, force: true })
+  })
+  const match = await waitForOutput(proc, 'stdout', /BROKER READY :(\d+) db=(.+)/)
+  assert.equal(match[2], db)
+  await roundTrip(`mqtt://127.0.0.1:${match[1]}`, 'canonical-env')
+  const done = exited(proc)
+  proc.kill('SIGTERM')
+  assert.deepEqual(await done, { code: 0, signal: null })
+  const logFile = path.join(logRoot, instanceId, 'operational.jsonl')
+  const events = await readEvents(logFile)
+  assert.equal(events.find(event => event.event_name === 'broker.ready')['server.port'], Number(match[1]))
+  assert.equal((await fs.stat(logFile)).mode & 0o777, 0o600)
+})
+
+test('durable MQTT session delivers queued wire payload after broker restart on the same LevelDB', async t => {
+  const { proc, db, logFile, url } = await startRealBroker(t)
+  const clientId = 'message-bus-durable-subscriber'
+  const topic = 'synagent/v2/omp/durable-session'
+  const payload = Buffer.from(JSON.stringify({
+    id: 'durable-request',
+    from: 'omp/sender',
+    to: 'omp/durable-session',
+    kind: 'task.request',
+    body: 'durable payload',
+    ts: 1,
+    correlation_id: 'durable-request',
+    extension: { transparent: true },
+  }))
+  const subscriber = await connect(url, clientId, { clean: false })
+  await new Promise((resolve, reject) => subscriber.subscribe(
+    'synagent/+/omp/durable-session', { qos: 1 }, error => error ? reject(error) : resolve(),
+  ))
+  await end(subscriber)
+  const publisher = await connect(url, 'message-bus-durable-publisher')
+  await new Promise((resolve, reject) => publisher.publish(
+    topic, payload, { qos: 1 }, error => error ? reject(error) : resolve(),
+  ))
+  await end(publisher)
+  const stopped = exited(proc)
+  proc.kill('SIGTERM')
+  assert.deepEqual(await stopped, { code: 0, signal: null })
+
+  const restarted = spawn(process.execPath, [BROKER, '0', '--db', db], {
+    env: loggingEnv(path.dirname(path.dirname(logFile)), 'durable-restart'),
+  })
+  t.after(async () => {
+    if (restarted.exitCode === null) {
+      const done = exited(restarted)
+      restarted.kill('SIGTERM')
+      await done
+    }
+  })
+  const ready = await waitForOutput(restarted, 'stdout', /BROKER READY :(\d+) db=(.+)/)
+  assert.equal(ready[2], db)
+  const resumed = mqtt.connect(`mqtt://127.0.0.1:${ready[1]}`, {
+    clientId, clean: false, reconnectPeriod: 0,
+  })
+  t.after(() => end(resumed))
+  const received = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('durable delivery timed out')), 5000)
+    resumed.once('message', (receivedTopic, receivedPayload) => {
+      clearTimeout(timer)
+      resolve({ topic: receivedTopic, payload: receivedPayload })
+    })
+    resumed.once('error', error => { clearTimeout(timer); reject(error) })
+  })
+  const connack = await new Promise((resolve, reject) => {
+    resumed.once('connect', resolve)
+    resumed.once('error', reject)
+  })
+  assert.equal(connack.sessionPresent, true)
+  assert.deepEqual(await received, { topic, payload })
+  await end(resumed)
+  const done = exited(restarted)
+  restarted.kill('SIGTERM')
+  assert.deepEqual(await done, { code: 0, signal: null })
 })

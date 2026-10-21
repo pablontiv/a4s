@@ -12,7 +12,7 @@ Repository of private libraries, verified extensions, agents and skills distribu
 - [`packages/omp-dagu/`](packages/omp-dagu/): widget, despertar dirigido de la sesión coordinadora y guard OMP para Dagu, agente `triage-reviewer` y skill `dagu-feature`.
 - [`packages/pi-tool-row-presentation/`](packages/pi-tool-row-presentation/): presentación configurable de tool rows para Pi/Pion.
 - [`packages/synagent/core/`](packages/synagent/core/): adaptadores de mensajería Synagent para Pi, OMP y Claude.
-- [`packages/synagent/bus/`](packages/synagent/bus/): bus MQTT requerido por Synagent.
+- [`apps/message-bus/`](apps/message-bus/): private, independently started durable MQTT broker used by the messaging adapters.
 
 Los plugins de Claude están publicados en [`.claude-plugin/marketplace.json`](.claude-plugin/marketplace.json).
 
