@@ -135,9 +135,11 @@ jobs:
       - name: Check pinned Dagu
         run: *check-pinned-dagu
       - name: Live Dagu tests
+        id: live-tests
         working-directory: packages/omp-dagu
         env:
           A4S_LIVE_DAGU: "1"
+          A4S_DAGU_DIAGNOSTICS_DIR: ${{ runner.temp }}/dagu-poc-diagnostics
           LANE: ${{ matrix.lane }}
         run: |
           # Match complete top-level names and their descendants. Skipping the
@@ -164,6 +166,21 @@ jobs:
               ;;
           esac
           npx tsx --test --test-name-pattern "$pattern" test/feature-template.test.ts
+      - name: Check retained Dagu diagnostics
+        id: dagu-diagnostics
+        if: failure() && matrix.lane == 'other-live' && steps.live-tests.outcome == 'failure'
+        run: |
+          if [[ -d "$RUNNER_TEMP/dagu-poc-diagnostics" ]]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Upload retained Dagu diagnostics
+        if: failure() && matrix.lane == 'other-live' && steps.dagu-diagnostics.outputs.available == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dagu-poc-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.lane }}
+          path: ${{ runner.temp }}/dagu-poc-diagnostics
+          if-no-files-found: error
+          retention-days: 7
   validate:
     needs: [changes, test, live]
     if: always()

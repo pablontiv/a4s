@@ -1,13 +1,14 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { liveDagu } from "../fixtures/live-dagu.ts";
+import { PocDiagnostics } from "../fixtures/poc-diagnostics.ts";
 
 for (const definition of [
   new URL("../../skills/dagu-feature/poc.yaml", import.meta.url),
@@ -64,10 +65,9 @@ for (const definition of [
       "steps:\n", step("run_poc").replace("    depends: worktree\n", ""),
       step("scope_gate"), step("fix_result"), step("publish"), "handler_on:\n", wait,
     ].join(""));
-    let logs = "";
+    const diagnostics = new PocDiagnostics();
     const service = spawn("dagu", ["start-all", "--host", "127.0.0.1", "--port", String(port)], { env, stdio: ["ignore", "pipe", "pipe"] });
-    service.stdout.on("data", chunk => { logs += chunk; });
-    service.stderr.on("data", chunk => { logs += chunk; });
+    diagnostics.capture(service);
     const api = `http://127.0.0.1:${port}/api/v1`;
     const dagu = (...args: string[]) => execFileSync("dagu", args, { env, encoding: "utf8" });
     async function until(probe: () => Promise<boolean>) {
@@ -75,19 +75,20 @@ for (const definition of [
         if (await probe()) return;
         await delay(150);
       }
-      throw new Error(`Dagu timeout\n${logs}`);
+      throw new Error("Dagu timeout");
     }
     async function waiting(iteration: number) {
       await until(async () => {
-        const response = await fetch(`${api}/dag-runs/poc/scope-test`);
-        if (!response.ok) return false;
-        const { dagRunDetails: run } = await response.json() as { dagRunDetails: { statusLabel: string; nodes: Array<{ step: { name: string }; statusLabel: string; approvalIteration?: number }> } };
+        const run = await diagnostics.runDetails<{ statusLabel: string; nodes: Array<{ step: { name: string }; statusLabel: string; approvalIteration?: number }> }>(`${api}/dag-runs/poc/scope-test`, true);
+        if (!run) return false;
         assert.notEqual(run.statusLabel, "failed", JSON.stringify(run));
         return run.statusLabel === "waiting" && run.nodes.some(node => node.step.name === "run_poc" && node.statusLabel === "waiting" && (node.approvalIteration ?? 0) === iteration);
       });
     }
+    let failed = false;
+    let failure: unknown;
     try {
-      await until(async () => { try { return (await fetch(`${api}/dag-runs`)).ok; } catch { return false; } });
+      await until(async () => { try { return (await diagnostics.fetch(`${api}/dag-runs`)).ok; } catch { return false; } });
       dagu("enqueue", "--run-id", "scope-test", join(home, "dags", "poc.yaml"));
       await waiting(0);
       dagu("human-task", "complete", "poc", "--run-id", "scope-test", "--step", "run_poc");
@@ -100,17 +101,18 @@ for (const definition of [
       writeFileSync(resultPath, result("exact question"));
       dagu("human-task", "complete", "poc", "--run-id", "scope-test", "--step", "run_poc");
       await until(async () => {
-        const response = await fetch(`${api}/dag-runs/poc/scope-test`);
-        const { dagRunDetails: run } = await response.json() as { dagRunDetails: { statusLabel: string } };
+        const run = (await diagnostics.runDetails(`${api}/dag-runs/poc/scope-test`))!;
         assert.notEqual(run.statusLabel, "failed");
         return run.statusLabel === "succeeded";
       });
       assert.equal(readFileSync(join(state, "scope"), "utf8").trim(), "OK");
       assert.ok(readFileSync(join(state, "comment-2.txt"), "utf8").includes("scope:OK"));
+    } catch (error) {
+      failed = true;
+      failure = error;
+      throw error;
     } finally {
-      service.kill("SIGTERM");
-      await new Promise<void>(resolve => service.once("exit", () => resolve()));
-      rmSync(root, { recursive: true, force: true });
+      await diagnostics.finish(service, root, home, failure, failed);
     }
   });
 }
@@ -153,10 +155,9 @@ esac
 `);
   chmodSync(join(bin, "gh"), 0o755);
   writeFileSync(join(home, "config.yaml"), `host: 127.0.0.1\nport: ${port}\nauth:\n  mode: none\ncoordinator:\n  enabled: false\n`);
-  let logs = "";
+  const diagnostics = new PocDiagnostics();
   const service = spawn("dagu", ["start-all", "--host", "127.0.0.1", "--port", String(port)], { cwd: root, env, stdio: ["ignore", "pipe", "pipe"] });
-  service.stdout.on("data", data => { logs += data; });
-  service.stderr.on("data", data => { logs += data; });
+  diagnostics.capture(service);
   const api = `http://127.0.0.1:${port}/api/v1`;
   type Detail = { statusLabel: string; nodes: Array<{ statusLabel: string; stderr?: string; step: { name: string } }> };
   async function until<T>(probe: () => Promise<T | undefined>): Promise<T> {
@@ -166,19 +167,20 @@ esac
       if (result !== undefined) return result;
       await delay(150);
     }
-    throw new Error(`Dagu timeout\n${logs}`);
+    throw new Error("Dagu timeout");
   }
   async function state(id: string, step?: string): Promise<Detail> {
     return until(async () => {
-      const response = await fetch(`${api}/dag-runs/poc/${id}`);
-      if (!response.ok) return;
-      const run = (await response.json() as { dagRunDetails: Detail }).dagRunDetails;
+      const run = await diagnostics.runDetails<Detail>(`${api}/dag-runs/poc/${id}`, true);
+      if (!run) return;
       assert.notEqual(run.statusLabel, "failed", JSON.stringify(run.nodes.map(n => [n.step.name, n.statusLabel, n.stderr && readFileSync(n.stderr, "utf8")])));
       if (step ? run.nodes.some(n => n.step.name === step && n.statusLabel === "waiting") : run.statusLabel === "succeeded") return run;
     });
   }
+  let failed = false;
+  let failure: unknown;
   try {
-    await until(async () => { try { return (await fetch(`${api}/dag-runs`)).ok ? true : undefined; } catch { return; } });
+    await until(async () => { try { return (await diagnostics.fetch(`${api}/dag-runs`)).ok ? true : undefined; } catch { return; } });
     const primary = join(root, "primary");
     git("init", "--bare", "-b", "main", join(root, "remote.git"));
     git("init", "-b", "main", primary);
@@ -222,12 +224,14 @@ esac
         assert.match(comments, /^<!-- poc-verdict:PASS scope:OK /);
         assert.equal(run.nodes.find(n => n.step.name === "publish")?.statusLabel, "succeeded");
       }
-      const feature = await fetch(`${api}/dag-runs/feature/feature-${id}`);
+      const feature = await diagnostics.fetch(`${api}/dag-runs/feature/feature-${id}`);
       assert.equal(feature.status, 404);
     }
+  } catch (error) {
+    failed = true;
+    failure = error;
+    throw error;
   } finally {
-    service.kill("SIGTERM");
-    await new Promise<void>(resolve => service.once("exit", () => resolve()));
-    rmSync(root, { recursive: true, force: true });
+    await diagnostics.finish(service, root, home, failure, failed);
   }
 });
