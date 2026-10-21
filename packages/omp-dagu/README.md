@@ -224,15 +224,19 @@ la mera publicación y las consultas ambiguas conservan recursos y diagnóstico.
 El borrado de refs exige el mismo propietario y SHA; el remoto usa un lease.
 El cierre mergeado verifica además PRIMARY limpio exactamente en la base remota.
 
-La evidencia vive en `<git-dir>/dagu-feature/runs/<RUN>/`: `resource.json`,
-`tested-sha`, `cleanup-head`, `cleanup-proof.json`, `cleanup-phase` y
-`cleanup-diagnostic`. Repetir el script de cleanup con los params originales
-reconoce recursos ya retirados y comprueba otra vez integración y propiedad
-antes de cada retirada pendiente. El reconciler expone
-`CLEANUP_RESIDUAL run=… worktree=… branch=… last_phase=… evidence=…` para
-interrupciones, incluso entre worktree y rama. El operador resuelve el
-diagnóstico conservando cambios y evidencia; la recuperación y transferencia
-explícita de propiedad se describen en `skills/dagu-feature/SKILL.md`.
+Cleanup evidence lives in `<git-dir>/dagu-feature/runs/<RUN>/`: `resource.json`,
+`tested-sha`, `cleanup-head`, `cleanup-proof.json`, `cleanup-phase` and
+`cleanup-diagnostic`. Repeating the cleanup script with the original parameters
+recognizes resources already removed and rechecks integration and ownership
+before each pending removal. The operator resolves cleanup diagnostics while
+preserving changes and evidence; recovery and explicit ownership transfer are
+described in `skills/dagu-feature/SKILL.md`.
+
+Scheduled reconciliation discovers waiting feature runs and fans them out through
+`tick` to `reconcile-run`. It observes PR state and required CI checks for the
+current head, then completes or pushes back the paired `await_ci` and
+`await_merge` checkpoints using the observed iteration. Pending checks preserve
+the wait; ambiguous evidence remains visible for the owner to resolve.
 
 La adopción fija `GATE`, `REBASE_RESOLVER`, `REQUIRED_CHECK` y el `PRIMARY` canónico en los renders de feature/PoC. Feature deriva `BRANCH=dagu/issue-$ISSUE`. La primera admisión rechaza esos cinco nombres como parámetros antes de modificar el repositorio. Encola feature con `ISSUE`, `PR_NUMBER` opcional y `OMP_SESSION_ID`; `BASE_BRANCH` conserva su default. Bootstrap declara los cambios de política. La promoción PoC usa el mismo contrato y conserva la sesión. Los consumidores consultan el spec encolado para resolver PRIMARY, incluido el historial del reconciliador.
 
