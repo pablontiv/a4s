@@ -26,66 +26,41 @@ export function orderReviewModels(
   fallbackRoles: readonly string[],
   models: Models,
   excluded: readonly FamilyReference[],
-  strict = false,
-): ReviewModels | undefined {
-  const primary = patterns[0];
-  if (strict && (excluded.length === 0 || primary === undefined)) {
-    return { block: true, reason: "CROSS_FAMILY_INDETERMINATE: missing family reference or model candidates" };
+): ReviewModels {
+  const excludedFamilies = new Set(excluded.map(({ model }) => models.family(model)));
+  const candidates = [...patterns, ...fallbackRoles].map(spec => {
+    const model = models.resolve(spec);
+    const family = model ? models.family(model) : undefined;
+    return {
+      spec,
+      model: model ? { provider: model.provider, id: model.id } : undefined,
+      family,
+      cause: !model ? "unavailable" : !family ? "unresolved family"
+        : excludedFamilies.has(family) ? "excluded family" : "eligible",
+    };
+  });
+  const diagnostics = `excluded families ${JSON.stringify([...excludedFamilies])}; candidates ${JSON.stringify(candidates)}; an available model with a resolved family outside the excluded families is required`;
+  if (excluded.length === 0 || [...excludedFamilies].some(family => !family)) {
+    return {
+      block: true,
+      reason: `CROSS_FAMILY_INDETERMINATE: family reference unresolved; family cannot be verified; ${diagnostics}`,
+    };
   }
-  if (excluded.length === 0 || primary === undefined) return undefined;
-  const primaryModel = models.resolve(primary);
-  if (!primaryModel && !strict) return undefined;
-
-  const excludedFamilies = new Set(
-    excluded.map(({ model }) => models.family(model)),
-  );
-  if (strict && [...excludedFamilies].some(family => !family)) {
-    return { block: true, reason: "CROSS_FAMILY_INDETERMINATE: unresolved excluded family" };
-  }
-  const primaryQualifies = !!primaryModel && !!models.family(primaryModel) && !excludedFamilies.has(models.family(primaryModel));
   const seen = new Map<string, Set<string>>();
-  if (primaryModel) seen.set(primaryModel.provider, new Set([primaryModel.id]));
-  const qualifying: string[] = [];
-  const same: string[] = [];
-  const collect = (spec: string): void => {
-    const candidate = models.resolve(spec);
-    if (!candidate) return;
-    let ids = seen.get(candidate.provider);
-    if (ids?.has(candidate.id)) return;
+  const model: string[] = [];
+  for (const candidate of candidates) {
+    if (candidate.cause !== "eligible" || !candidate.model) continue;
+    let ids = seen.get(candidate.model.provider);
+    if (ids?.has(candidate.model.id)) continue;
     if (!ids) {
       ids = new Set();
-      seen.set(candidate.provider, ids);
+      seen.set(candidate.model.provider, ids);
     }
-    ids.add(candidate.id);
-    const family = models.family(candidate);
-    if (!family && strict) return;
-    (excludedFamilies.has(family) ? same : qualifying).push(spec);
-  };
-  for (let i = 1; i < patterns.length; i++) collect(patterns[i]!);
-  for (const role of fallbackRoles) collect(role);
-  if (strict) {
-    const model = [...(primaryQualifies ? [primary] : []), ...qualifying];
-    if (model.length === 0) return {
-      block: true,
-      reason: `CROSS_FAMILY_EXHAUSTED: attempted ${[...patterns, ...fallbackRoles].join(", ")}; excluded families ${[...excludedFamilies].join(", ")}; no eligible model; resolutions ${JSON.stringify([...patterns, ...fallbackRoles].map(spec => {
-        const candidate = models.resolve(spec);
-        return { spec, model: candidate, family: candidate ? models.family(candidate) : undefined, cause: candidate ? "excluded or indeterminate family" : "unavailable" };
-      }))}`,
-    };
-    return { model, note: "strict cross-family eligibility; effective transcript identity must pass the publication gate" };
+    ids.add(candidate.model.id);
+    model.push(candidate.spec);
   }
-
-  const swapped = !primaryQualifies && qualifying.length > 0;
-  const model = primaryQualifies
-    ? [primary, ...qualifying, ...same]
-    : swapped
-      ? [...qualifying, primary, ...same]
-      : [primary, ...same];
-  const references = excluded.map(({ label, model: reference }) =>
-    `${label ? `${label} ` : ""}${reference.provider}/${reference.id}`
-  ).join(" and ");
-  const note = `fallback cross-family vs ${references}${
-    swapped ? "; primary swapped because it shares an excluded family" : ""
-  }`;
-  return { model, note };
+  if (model.length === 0) {
+    return { block: true, reason: `CROSS_FAMILY_EXHAUSTED: ${diagnostics}` };
+  }
+  return { model, note: "strict cross-family eligibility; effective transcript identity must pass the publication gate" };
 }

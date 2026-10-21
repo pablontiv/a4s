@@ -1,35 +1,58 @@
 # OMP Cross-family Review
 
-Extensión de OMP que compara familias mediante la API canónica `ctx.models.family`.
-`qa` y `reviewer` usan elegibilidad estricta: conservan solo modelos de familias
-admitidas y bloquean con candidatos/causa cuando faltan alternativas o identidad.
-En el gate de `dagu-feature`, el guard acredita el implementador efectivo desde
-su JSONL y vincula esa referencia al nombre del subagente antes del dispatch.
-QA y reviewer pueden compartir familia; cada uno debe diferir del implementador.
+OMP extension selecting review models through the canonical `ctx.models.family`
+API. Every configured review agent requires an available candidate with a resolved
+family outside its excluded families. Missing parent identity or family blocks
+before child execution. Exhaustion reasons list the excluded families and every
+evaluated candidate's spec, provider/model identity, family and eligibility cause.
 
-Los candidatos se resuelven y deduplican por proveedor/id conservando specs,
-aliases y thinking. El gate examina los candidatos solicitados y los roles
-`@slow`, `@default`, `@task`; usa esa misma política estricta en el límite `task`.
-Fuera de ese gate, QA/reviewer comparan con el modelo padre y `@task`.
-`security-reviewer` conserva el orden preferente frente a padre y `@task`;
-`triage-reviewer` y `plan-reviewer` conservan el orden preferente frente al padre
-y los roles `@task`, `@slow`, `@default`. Los agentes dedicados de triage y
-planificación se distribuyen con `@a4s/omp-dagu`.
+| Agent | Excluded families | Additional candidates, in order |
+| --- | --- | --- |
+| `reviewer`, `qa`, `security-reviewer` | Parent and resolved `@task` | `@slow`, `@default` |
+| `triage-reviewer`, `plan-reviewer` | Parent | `@task`, `@slow`, `@default` |
 
-La selección es preventiva; la admisión exige los proveedores/modelos de los
-mensajes efectivos que emitieron los veredictos. El guard de `omp-dagu` valida
-procedencia, SHA y familias y registra los fallbacks reales. Un fallback efectivo
-de la familia del implementador bloquea aunque la selección inicial calificase.
-El acceso de la TUI al store de Dagu hace este control advisory.
+Eligible requested candidates precede eligible role fallbacks. Resolved
+provider/id pairs are deduplicated, preserving the first spec, aliases and thinking
+suffixes. The selection note is `strict cross-family eligibility; effective
+transcript identity must pass the publication gate`. Agents outside this table
+retain native selection behavior. Runtime quota fallback remains OMP-owned.
 
-## Instalación global
+## Feature quality integration
 
-Desde el clone principal de a4s en `main` (no desde un worktree de issue, que se elimina al cerrar el run):
+At the `dagu-feature` publication gate, `@a4s/omp-dagu` reads the effective
+implementer's JSONL identity and binds that reference to the allocated QA/reviewer
+name before dispatch. That reference replaces the parent/task references, with
+`@slow`, `@default`, `@task` as additional candidates. QA and reviewer may share
+a family; each must differ from the effective implementer.
+
+`orderReviewModels(patterns, fallbackRoles, models, excluded)` always returns
+strict eligibility or a block result. A resolved alternative can qualify even
+when the requested primary is unavailable. The Dagu guard separately validates
+effective verdict provider/model, provenance, SHA and family, and records actual
+fallbacks. An effective same-family fallback blocks publication even if the
+initial selection qualified. Direct TUI access to the Dagu store makes this an
+advisory control rather than a sandbox.
+
+## Installation
+
+From the primary a4s clone on `main` (issue worktrees are removed after delivery):
 
 ```sh
 omp plugin link "$(git rev-parse --show-toplevel)/packages/omp-cross-family-review"
 ```
 
-También se puede cargar el directorio con `omp -e /ruta/a/omp-cross-family-review`
-sin cambiar settings globales. El hook se ejecuta después de la selección inicial
-del agente.
+Load a directory for one process with `omp -e /path/to/omp-cross-family-review`
+without changing global settings. The hook runs after initial agent selection.
+
+## Verification
+
+```sh
+npm test --workspace @a4s/omp-cross-family-review
+```
+
+Issue #350 additionally exercised the maintained hook in a fresh OMP 18.12.5
+session with process-local candidate/role configuration restricted to the parent
+family. Both real `reviewer` and `triage-reviewer` tasks returned
+`CROSS_FAMILY_EXHAUSTED` errors naming `openai`, candidate identities and the
+missing eligibility condition before child execution. Unresolved-parent behavior
+is covered by unit tests; it was not observed in that live session.

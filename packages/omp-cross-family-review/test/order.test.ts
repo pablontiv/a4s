@@ -83,7 +83,10 @@ test("reviewer keeps a primary outside the parent and task families", () => {
 test("reviewer blocks exhaustion with attempted candidates and excluded families", () => {
   const result = spawn({ agent: "reviewer", patterns: ["gpt"] }, { models: facade() });
   assert.equal(result?.block, true);
-  assert.match(result?.reason ?? "", /EXHAUSTED.*gpt.*@slow.*anthropic.*openai/);
+  for (const detail of ["CROSS_FAMILY_EXHAUSTED", 'excluded families ["anthropic","openai"]',
+    '"spec":"gpt"', '"spec":"@slow"', '"spec":"@default"']) {
+    assert.ok(result?.reason?.includes(detail));
+  }
 });
 
 test("security-reviewer excludes both the parent and task families", () => {
@@ -92,7 +95,7 @@ test("security-reviewer excludes both the parent and task families", () => {
       { agent: "security-reviewer", patterns: ["gpt", "gemini"] },
       { models: facade() },
     )?.model,
-    ["gemini", "gpt", "@slow", "@default"],
+    ["gemini"],
   );
 });
 
@@ -101,14 +104,14 @@ test("triage-reviewer compares candidates only with the parent", () => {
     spawn({ agent: "triage-reviewer", patterns: ["@slow"] }, {
       models: facade(),
     })?.model,
-    ["@task", "@slow", "@default"],
+    ["@task"],
   );
 });
 
 test("plan-reviewer selects a model outside the parent family", () => {
   assert.deepEqual(
     spawn({ agent: "plan-reviewer", patterns: ["@slow"] }, { models: facade() })?.model,
-    ["@task", "@slow", "@default"],
+    ["@task"],
   );
 });
 
@@ -133,7 +136,7 @@ test("keeps a qualifying primary and its original thinking suffix", () => {
       models,
       parentReference(models),
     )?.model,
-    ["gpt:high", "gemini", "@slow", "@default"],
+    ["gpt:high", "gemini"],
   );
 });
 
@@ -146,7 +149,7 @@ test("deduplicates resolved provider/id pairs while preserving first specs", () 
       models,
       parentReference(models),
     )?.model,
-    ["gpt:high", "sonnet", "opus"],
+    ["gpt:high"],
   );
   models.resolve = (spec) =>
     spec === "other" ? { provider: "other", id: "gpt" } : specs[spec];
@@ -161,24 +164,52 @@ test("deduplicates resolved provider/id pairs while preserving first specs", () 
   );
 });
 
-test("returns undefined without a parent, patterns, or a resolved primary", () => {
-  const noParent = facade();
-  noParent.current = () => undefined;
-  assert.equal(
-    orderReviewModels(["gpt"], roles, noParent, parentReference(noParent)),
-    undefined,
-  );
-  const models = facade();
-  const excluded = parentReference(models);
-  assert.equal(orderReviewModels([], roles, models, excluded), undefined);
-  assert.equal(
-    orderReviewModels(["missing", "gpt"], roles, models, excluded),
-    undefined,
-  );
-  assert.equal(
-    spawn({ agent: "reviewer", patterns: ["gpt"] }, { models: noParent })?.block,
-    true,
-  );
+const configuredAgents = ["reviewer", "qa", "security-reviewer", "triage-reviewer", "plan-reviewer"];
+
+for (const agent of configuredAgents) {
+  test(`${agent} blocks when the parent model is unavailable`, () => {
+    const models = facade();
+    models.current = () => undefined;
+    const result = spawn({ agent, patterns: ["gemini"] }, { models });
+    assert.equal(result?.block, true);
+    assert.match(result?.reason ?? "", /parent model unresolved; parent family cannot be verified/);
+  });
+
+  test(`${agent} blocks an unresolved parent family`, () => {
+    const models = facade();
+    models.family = model => model === opus ? "" : model.provider;
+    const result = spawn({ agent, patterns: ["gemini"] }, { models });
+    assert.equal(result?.block, true);
+    assert.match(result?.reason ?? "", /INDETERMINATE.*family cannot be verified/);
+  });
+
+  test(`${agent} reports actual excluded families and every exhausted candidate`, () => {
+    const models = facade();
+    models.resolve = spec => spec === "unknown-family" ? { provider: "unknown", id: "opaque" }
+      : spec === "@task" ? opus : specs[spec];
+    models.family = model => model.provider === "unknown" ? "" : model.provider;
+    const result = spawn({ agent, patterns: ["opus", "missing", "unknown-family"] }, { models });
+    assert.equal(result?.block, true);
+    assert.match(result?.reason ?? "", /EXHAUSTED.*excluded families \["anthropic"\]/);
+    for (const spec of ["opus", "missing", "unknown-family", "@slow", "@default"]) {
+      assert.ok(result?.reason?.includes(`"spec":"${spec}"`));
+    }
+    assert.match(result?.reason ?? "", /"family":"anthropic","cause":"excluded family"/);
+    assert.match(result?.reason ?? "", /"spec":"missing","cause":"unavailable"/);
+    assert.match(result?.reason ?? "", /"family":"","cause":"unresolved family"/);
+    assert.match(result?.reason ?? "", /an available model with a resolved family outside the excluded families is required/);
+  });
+
+  test(`${agent} preserves eligible candidate order, aliases and thinking suffixes`, () => {
+    assert.deepEqual(spawn({ agent, patterns: ["gemini", "gpt:high", "gpt", "opus"] },
+      { models: facade() })?.model,
+    ["triage-reviewer", "plan-reviewer"].includes(agent) ? ["gemini", "gpt:high"] : ["gemini"]);
+  });
+}
+
+test("requires a resolved family reference and evaluates fallbacks with empty patterns", () => {
+  assert.equal(orderReviewModels(["gpt"], roles, facade(), []).block, true);
+  assert.deepEqual(orderReviewModels([], roles, facade(), [{ model: opus }]).model, ["@task"]);
 });
 
 test("ignores agents outside the review policy", () => {
@@ -190,13 +221,6 @@ test("ignores agents outside the review policy", () => {
   }
 });
 
-test("QA has strict eligibility and blocks indeterminate identity", () => {
-  assert.deepEqual(spawn({ agent: "qa", patterns: ["gpt", "gemini"] }, { models: facade() })?.model, ["gemini"]);
-  assert.equal(orderReviewModels([], roles, facade(), [], true)?.block, true);
-  const models = facade();
-  models.family = () => "";
-  assert.equal(orderReviewModels(["gpt"], roles, models, parentReference(models), true)?.block, true);
-});
 
 test("quality routing compares only the runtime-effective implementer", () => {
   for (const agent of ["qa", "reviewer"]) {
@@ -219,5 +243,20 @@ test("quality bindings reach the hook from a separately loaded module instance",
 
 test("strict eligibility resolves alternatives when a primary is unavailable", () => {
   assert.deepEqual(orderReviewModels(["missing", "gemini", "gpt"], roles, facade(),
-    [{ model: opus }], true)?.model, ["gemini", "gpt"]);
+    [{ model: opus }])?.model, ["gemini", "gpt"]);
+});
+
+test("candidate diagnostics contain model identity and family", () => {
+  const models = facade();
+  models.resolve = () => ({ ...opus, contextWindow: 100000 });
+  const result = orderReviewModels(["opus"], [], models, [{ model: opus }]);
+  assert.ok(result.reason?.includes('"model":{"provider":"anthropic","id":"opus"},"family":"anthropic"'));
+});
+
+test("selects a resolved alternative after candidates with unresolved family", () => {
+  const models = facade();
+  models.family = model => model === gpt ? "" : model.provider;
+  assert.deepEqual(orderReviewModels(["gpt", "gemini"], roles, models,
+    [{ model: opus }]).model, ["gemini"]);
+  assert.equal(orderReviewModels([], [], models, [{ model: opus }]).block, true);
 });

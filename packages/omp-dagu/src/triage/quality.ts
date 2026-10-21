@@ -396,7 +396,7 @@ export async function qualityDecision(event: Event, ctx: QualityContext): Promis
         // OMP accepts `model` only on seance tasks; the cross-family spawn hook
         // selects the child model from this binding, keyed by the task name.
         const eligible = orderReviewModels(["@slow"], ["@slow", "@default", "@task"], models,
-          [{ label: "effective implementer", model: effectiveModel }], true);
+          [{ label: "effective implementer", model: effectiveModel }]);
         requireValue(eligible?.model?.length, eligible?.reason ?? "no eligible quality model");
         bindQualityImplementer(task.name, effectiveModel);
         const contract = [

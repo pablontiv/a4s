@@ -20,19 +20,16 @@ interface ExtensionAPI {
 interface ReviewPolicy {
   fallbackRoles: readonly string[];
   excludeTaskFamily: boolean;
-  strict?: boolean;
 }
 
 const REVIEW_POLICIES: Record<string, ReviewPolicy> = {
   reviewer: {
     fallbackRoles: ["@slow", "@default"],
     excludeTaskFamily: true,
-    strict: true,
   },
   qa: {
     fallbackRoles: ["@slow", "@default"],
     excludeTaskFamily: true,
-    strict: true,
   },
   "triage-reviewer": {
     fallbackRoles: ["@task", "@slow", "@default"],
@@ -79,12 +76,13 @@ export default function crossFamilyReview(pi: ExtensionAPI): void {
     if (implementer && name) {
       qualityImplementers.delete(name);
       return orderReviewModels(event.patterns, ["@slow", "@default", "@task"], ctx.models,
-        [{ label: "effective implementer", model: implementer }], true);
+        [{ label: "effective implementer", model: implementer }]);
     }
     const parent = ctx.models.current();
-    if (!parent) return REVIEW_POLICIES[event.agent]?.strict
-      ? { block: true, reason: "CROSS_FAMILY_INDETERMINATE: parent model unavailable" }
-      : undefined;
+    if (!parent) return {
+      block: true,
+      reason: "CROSS_FAMILY_INDETERMINATE: parent model unresolved; parent family cannot be verified",
+    };
     const policy = REVIEW_POLICIES[event.agent]!;
     const task = policy.excludeTaskFamily
       ? ctx.models.resolve("@task")
@@ -97,7 +95,6 @@ export default function crossFamilyReview(pi: ExtensionAPI): void {
         { model: parent },
         ...(task ? [{ label: "@task", model: task }] : []),
       ],
-      policy.strict,
     );
   });
 }
