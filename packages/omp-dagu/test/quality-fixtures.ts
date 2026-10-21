@@ -4,6 +4,13 @@ import { join } from "node:path";
 import { qualityMarker } from "../src/triage/quality.ts";
 import type { QualityRequest, TranscriptRow } from "../src/triage/quality.ts";
 
+export function readQualityPolicies() {
+  return {
+    qa: { fallbackRoles: ["@slow", "@default"], excludeTaskFamily: true },
+    reviewer: { fallbackRoles: ["@slow", "@default"], excludeTaskFamily: true },
+  };
+}
+
 type Repository = { root: string; primary: string; worktree: string; state: string };
 export function qualityFixture(repo: Repository, verdict: "PASS" | "FAIL" = "PASS", current?: QualityRequest) {
   const candidate = JSON.parse(readFileSync(join(repo.state, "candidate.json"), "utf8"));

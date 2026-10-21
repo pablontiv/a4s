@@ -1,6 +1,6 @@
 {
   "name": "@a4s/omp-cross-family-review",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "license": "UNLICENSED",
   "repository": {
@@ -14,35 +14,37 @@
   },
   "type": "module",
   "engines": {
-    "node": ">=22.19.0"
+    "node": ">=22.19.0",
+    "bun": ">=1.3.14"
   },
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./settings": "./src/settings.ts"
   },
-  "pi": {
+  "omp": {
     "extensions": [
       "./src/reloadable.ts"
     ]
   },
   "scripts": {
-    "test": "tsx --test test/*.test.ts",
+    "test": "bun test test/*.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@a4s/omp-hot-reload": "0.1.0"
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "*"
+    "@oh-my-pi/pi-coding-agent": ">=18.12.5"
   },
   "peerDependenciesMeta": {
-    "@earendil-works/pi-coding-agent": {
+    "@oh-my-pi/pi-coding-agent": {
       "optional": true
     }
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "1.0.3",
+    "@oh-my-pi/pi-coding-agent": "18.12.5",
     "@types/node": "26.6.1",
-    "tsx": "4.23.13",
+    "bun": "1.4.2",
     "typescript": "7.0.2"
   }
 }

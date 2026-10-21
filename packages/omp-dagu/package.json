@@ -1,6 +1,6 @@
 {
   "name": "@a4s/omp-dagu",
-  "version": "0.3.100",
+  "version": "0.3.101",
   "private": true,
   "license": "UNLICENSED",
   "repository": {
@@ -21,7 +21,7 @@
   },
   "exports": {
     "./status": "./src/status/index.ts",
-    "./triage": "./src/triage/index.ts"
+    "./triage": "./src/triage/native.ts"
   },
   "bin": {
     "dagu-feature-bundle": "./bin/dagu-feature-bundle.ts",
@@ -40,7 +40,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@a4s/omp-cross-family-review": "0.2.0",
+    "@a4s/omp-cross-family-review": "0.3.0",
     "@a4s/omp-hot-reload": "0.1.0",
     "yaml": "2.9.0"
   },

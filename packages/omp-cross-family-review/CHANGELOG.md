@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.0
+
+- Register typed `crossFamilyReview.policies` with default `{}` and exact-name, two-field entries; consume effective native project/overlay/child settings and explicitly validate initial values before dispatch (#359).
+- Move all agent-name adoption to the repository's `.omp/config.yml`, preserving uniform strict eligibility, ordered configured fallbacks, aliases, thinking suffixes and provider/id deduplication.
+- Apply configured fallbacks to quality-bound implementer selection and the independent Dagu preflight, retaining transcript-family admission and native quota fallback.
+- Require the public OMP 18.12.5 settings SDK and Bun runtime; wire static native entrypoints separately from the Node-safe hook/binding API and exercise native registry/scopes in package tests.
+
 ## 0.2.0
 
 - Require strict cross-family eligibility for every configured review agent, including security, triage and planning reviewers; block unresolved parent identity/family and exhausted candidate chains with excluded families, evaluated identities/families and eligibility causes (#350).

@@ -1,58 +1,101 @@
 # OMP Cross-family Review
 
-OMP extension selecting review models through the canonical `ctx.models.family`
-API. Every configured review agent requires an available candidate with a resolved
-family outside its excluded families. Missing parent identity or family blocks
-before child execution. Exhaustion reasons list the excluded families and every
-evaluated candidate's spec, provider/model identity, family and eligibility cause.
+An OMP extension that enforces strict eligibility using the canonical
+`ctx.models.family` API. Every configured agent retains only candidates with a
+resolved identity and a family outside its references. Exhaustion or an
+indeterminate reference blocks the spawn with evaluated identities, families
+and causes. Native quota fallback remains owned by OMP.
 
-| Agent | Excluded families | Additional candidates, in order |
-| --- | --- | --- |
-| `reviewer`, `qa`, `security-reviewer` | Parent and resolved `@task` | `@slow`, `@default` |
-| `triage-reviewer`, `plan-reviewer` | Parent | `@task`, `@slow`, `@default` |
+## Configuration
 
-Eligible requested candidates precede eligible role fallbacks. Resolved
-provider/id pairs are deduplicated, preserving the first spec, aliases and thinking
-suffixes. The selection note is `strict cross-family eligibility; effective
-transcript identity must pass the publication gate`. Agents outside this table
-retain native selection behavior. Runtime quota fallback remains OMP-owned.
+Requires OMP 18.12.5 or later and Bun >=1.3.14. The package registers the public
+native setting `crossFamilyReview.policies`, a record keyed by **exact agent
+name**, with default `{}`. Each entry has exactly two required fields:
 
-## Feature quality integration
+- `fallbackRoles: string[]`: ordered model specs/roles appended after the native
+  candidates; aliases and thinking suffixes are preserved.
+- `excludeTaskFamily: boolean`: always exclude the parent family; additionally
+  exclude the resolved `@task` family when true.
 
-At the `dagu-feature` publication gate, `@a4s/omp-dagu` reads the effective
-implementer's JSONL identity and binds that reference to the allocated QA/reviewer
-name before dispatch. That reference replaces the parent/task references, with
-`@slow`, `@default`, `@task` as additional candidates. QA and reviewer may share
-a family; each must differ from the effective implementer.
+Declare adoption in the project's `.omp/config.yml`. a4s adopts:
 
-`orderReviewModels(patterns, fallbackRoles, models, excluded)` always returns
-strict eligibility or a block result. A resolved alternative can qualify even
-when the requested primary is unavailable. The Dagu guard separately validates
-effective verdict provider/model, provenance, SHA and family, and records actual
-fallbacks. An effective same-family fallback blocks publication even if the
-initial selection qualified. Direct TUI access to the Dagu store makes this an
-advisory control rather than a sandbox.
+```yaml
+crossFamilyReview:
+  policies:
+    reviewer:
+      fallbackRoles: ["@slow", "@default"]
+      excludeTaskFamily: true
+    qa:
+      fallbackRoles: ["@slow", "@default"]
+      excludeTaskFamily: true
+    security-reviewer:
+      fallbackRoles: ["@slow", "@default"]
+      excludeTaskFamily: true
+    triage-reviewer:
+      fallbackRoles: ["@task", "@slow", "@default"]
+      excludeTaskFamily: false
+    plan-reviewer:
+      fallbackRoles: ["@task", "@slow", "@default"]
+      excludeTaskFamily: false
+```
 
-## Installation
+Any custom agent can have its own entry. Unconfigured agents retain native OMP
+input unchanged. The package distributes the schema and algorithm; the project
+owns agent names and adoption. Native project/`--config` overlay precedence and
+child-session scope inheritance apply to both `task` and eval `agent()`.
+The active session is read through public `findScopedSettings(ctx.cwd)` and the
+registered setting handle, rather than an assumed context settings field.
+Late registration does not retroactively validate initial configuration, so
+consumption explicitly calls native `assertWritable` on the effective raw value
+and the handle value before model resolution or child dispatch. Invalid values
+block with `CROSS_FAMILY_CONFIG`; an unavailable session scope also blocks.
 
-From the primary a4s clone on `main` (issue worktrees are removed after delivery):
+## Selection and quality-bound review
+
+Native candidates precede the configured fallbacks. Eligible candidates retain
+that order and are deduplicated by resolved provider/id, preserving the first
+spec, alias or thinking suffix. Unresolved candidates cannot qualify; missing
+parent/required `@task` identities or reference families fail closed. A resolved
+alternative can qualify even when the original primary is unavailable. These
+rules are uniform for every configured name.
+
+For the Dagu feature quality gate, the guard binds the runtime-effective
+implementer from its JSONL to the allocated task name. That reference is
+authoritative in place of parent/`@task`; the agent's configured fallback list
+still applies. A quality-bound spawn requires an explicit policy. Dagu retains
+an independent strict preflight using the same effective configuration even
+when this extension is absent, and independently admits only actual verdict
+messages whose provider/model family differs from the implementer's. QA and
+reviewer may share a family. A same-family effective runtime fallback blocks
+publication even if initial selection qualified. TUI access to Dagu's store
+makes this control advisory, not a sandbox.
+
+## Installation and checks
+
+From the permanent primary checkout:
 
 ```sh
 omp plugin link "$(git rev-parse --show-toplevel)/packages/omp-cross-family-review"
 ```
 
-Load a directory for one process with `omp -e /path/to/omp-cross-family-review`
-without changing global settings. The hook runs after initial agent selection.
-
-## Verification
+Alternatively load the package directory with `omp -e /path/to/omp-cross-family-review`.
+The `omp.extensions` manifest loads the maintained reloadable runtime entrypoint,
+whose static public SDK imports share the host's active settings scope. The
+package root exports the host-neutral hook, ordering and implementer-binding
+APIs; the `./settings` subpath supplies the native reader for OMP integrations.
+Selection runs after native initial model selection. Project configuration is
+inherited by rebound child extension graphs; global model settings stay unchanged.
 
 ```sh
-npm test --workspace @a4s/omp-cross-family-review
+npm test -w @a4s/omp-cross-family-review
+npm run typecheck -w @a4s/omp-cross-family-review
 ```
 
-Issue #350 additionally exercised the maintained hook in a fresh OMP 18.12.5
-session with process-local candidate/role configuration restricted to the parent
-family. Both real `reviewer` and `triage-reviewer` tasks returned
-`CROSS_FAMILY_EXHAUSTED` errors naming `openai`, candidate identities and the
-missing eligibility condition before child execution. Unresolved-parent behavior
-is covered by unit tests; it was not observed in that live session.
+Tests run on the pinned development Bun runtime against the real public native
+settings registry/scopes, including malformed initial values loaded before
+extension registration. `npm install`/`npm ci` installs that runtime locally.
+
+Issue #350 exercised the maintained hook in a fresh OMP 18.12.5 session with
+process-local same-family candidates and roles. Real `reviewer` and
+`triage-reviewer` tasks returned `CROSS_FAMILY_EXHAUSTED` diagnostics before child
+execution. Unresolved-parent behavior is covered by unit tests.

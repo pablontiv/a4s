@@ -308,7 +308,20 @@ sesión padre, agente, marcador `DAG=feature RUN=<run>`, inicio posterior al
 `triage.startedAt` actual y `poc=no` en el último yield. REST, parámetros,
 transcript o campos inválidos hacen fallar el step sin efectos externos.
 
-With `@a4s/omp-cross-family-review` loaded, every configured review agent requires strict cross-family eligibility. `triage-reviewer` and `plan-reviewer` exclude the parent family; `reviewer`, `qa` and `security-reviewer` also exclude the resolved `@task` family. An unresolved parent identity/family or exhausted eligible candidate chain blocks dispatch with a reason. At the feature quality gate, the effective implementer binding supplies the excluded reference instead. The integration uses the uniformly strict four-argument `orderReviewModels` API; runtime quota fallback remains native OMP behavior.
+With `@a4s/omp-cross-family-review` loaded, the project's `.omp/config.yml`
+declares exact-name `crossFamilyReview.policies` entries. a4s configures
+`triage-reviewer` and `plan-reviewer` with `fallbackRoles: ["@task", "@slow", "@default"]`
+and `excludeTaskFamily: false` (parent-relative); `reviewer`, `qa` and
+`security-reviewer` use `["@slow", "@default"]` and `true` (parent plus task).
+Every configured policy is strict. Native project/overlay settings are inherited
+by child sessions on both `task` and eval `agent()`; malformed initial effective
+settings block before dispatch. Custom agent policies use the same two-field
+schema; the cross-family package owns the algorithm, not adoption names.
+An unresolved parent identity/family or exhausted eligible candidate chain blocks
+dispatch with diagnostics. At the feature quality gate, the effective implementer
+binding supplies the excluded reference. The independent preflight uses the same
+effective configured fallback policy and uniformly strict four-argument
+`orderReviewModels` API; runtime quota fallback remains native OMP behavior.
 
 ## Protección de recursos del ciclo
 
@@ -533,14 +546,21 @@ Después, `quality_prepare` genera una solicitud SHA/run/iteración/intento y
 completa con sus ids `QA` y `REVIEW`. QA ejecuta los comandos de aceptación
 indicados; reviewer inspecciona independientemente el mismo SHA local.
 
-El guard contrasta los JSONL efectivos con la sesión padre e invocación `task`,
-el id/rol, run, iteración, intento, SHA leído y contenido del veredicto. Atribuye
-proveedor/modelo a cada mensaje que emite el resultado y compara con el
-implementador efectivo mediante `ctx.models.family`, conservando intentos,
-errores y `resolvedModelIsFallback`. La integración estricta con
-`omp-cross-family-review` selecciona otra familia para ambos roles; pueden
-compartir familia entre sí. Modelo indeterminado, agotamiento o fallback efectivo
-de la familia del implementador bloquean con diagnóstico y conservan el candidato.
+The guard correlates effective JSONL with the parent session and `task`
+invocation, allocated id/role, run, iteration, attempt, read SHA and verdict.
+It attributes provider/model to the actual verdict message and compares it to
+the effective implementer using `ctx.models.family`, retaining attempts, errors
+and `resolvedModelIsFallback`. Its independent strict preflight reads the same
+effective `crossFamilyReview.policies` as the native spawn hook, including the
+configured fallback order; a quality role requires an explicit policy. The
+preflight remains active even without the cross-family extension: the maintained
+triage runtime statically wires the public native settings reader into its
+Node-safe guard. Missing native reader or malformed effective settings block
+quality dispatch before spawning. The hook binds
+the transcript-derived implementer as the authoritative reference instead of the
+parent/`@task`, on both native dispatch routes. QA/reviewer may share a family.
+Indeterminate identities, exhausted candidates or an effective runtime fallback
+in the implementer's family block with diagnostics and retain the candidate.
 
 `quality.json` contiene dos veredictos independientes con procedencia y hashes
 de transcript; `quality_admit` los valida y `quality_transition` hace push-back

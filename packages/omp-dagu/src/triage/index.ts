@@ -4,6 +4,7 @@ import { admissionDecision, TriageGuard } from "./guard.ts";
 import type { CallDecision, Event } from "./guard.ts";
 import { qualityDecision } from "./quality.ts";
 import type { QualityContext } from "./quality.ts";
+import type { ReviewPolicies } from "@a4s/omp-cross-family-review";
 export { REVIEW_PROMPT } from "./guard.ts";
 
 // Structural API keeps this OMP-only package independent of provider imports.
@@ -14,7 +15,7 @@ interface ExtensionAPI {
   on(event: "session_start" | "session_switch", handler: () => void): void;
 }
 
-export default function triageGuard(pi: ExtensionAPI): void {
+export default function triageGuard(pi: ExtensionAPI, readPolicies?: (cwd: string) => ReviewPolicies): void {
   let guard = new TriageGuard();
   pi.on("session_start", () => { guard = new TriageGuard(); });
   pi.on("session_switch", () => { guard = new TriageGuard(); });
@@ -23,7 +24,7 @@ export default function triageGuard(pi: ExtensionAPI): void {
     const admission = admissionDecision(event, transcriptRoot ? { transcriptRoot } : undefined, ctx?.cwd);
     if (admission) return admission;
     return await resourceDecision(event, ctx?.cwd ?? process.cwd())
-      ?? (ctx ? await qualityDecision(event, ctx) : undefined)
+      ?? (ctx ? await qualityDecision(event, ctx, readPolicies) : undefined)
       ?? (ctx ? await primarySessionDecision(event, ctx) : undefined)
       ?? guard.toolCall(event);
   });

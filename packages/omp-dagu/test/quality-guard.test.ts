@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 import { inspectImplementer, inspectVerdict, qualityDecision, qualityMarker } from "../src/triage/quality.ts";
 import type { TranscriptRow } from "../src/triage/quality.ts";
-import { qualityFixture } from "./quality-fixtures.ts";
+import { qualityFixture, readQualityPolicies } from "./quality-fixtures.ts";
 
 function fixture(t: test.TestContext) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "omp-quality-guard-")));
@@ -39,7 +39,7 @@ for (const primarySource of ["adopted env literal", "resolvedPrimary", "historic
     for (const [agent, name] of [["qa", "QATest"], ["reviewer", "ReviewTest"]] as const) {
       const decision = await qualityDecision({ toolName: "task", toolCallId: `spawn-${name}`, input: {
         agent, name, task: qualityMarker(f.request, agent),
-      } }, ctx);
+      } }, ctx, readQualityPolicies);
       assert.ok(decision && "input" in decision, JSON.stringify(decision));
       assert.ok(decision.input.outputSchema);
     }
@@ -55,6 +55,34 @@ for (const primarySource of ["adopted env literal", "resolvedPrimary", "historic
     assert.equal(evidence.action, "complete");
     assert.equal(evidence.verdicts.length, 2);
     assert.equal(requests.filter(url => url.endsWith("/spec")).length, primarySource === "adopted env literal" ? 3 : 0);
+  });
+}
+
+for (const scenario of ["configured fallback", "exhausted", "missing policy", "malformed initial config", "native reader unavailable"]) {
+  test(`quality preflight preserves independent safety with ${scenario}`, async t => {
+    const f = fixture(t);
+    t.mock.method(globalThis, "fetch", async () => Response.json({ dagRunDetails: {
+      params: `PRIMARY=${f.primary} ISSUE=189 OMP_SESSION_ID=parent-id`,
+      nodes: [{ step: { id: "implement" }, startedAt: f.request.implementStartedAt }],
+    } }));
+    const models = {
+      ...f.models,
+      resolve: (spec: string) => spec === "@custom" ? f.models.resolve("anthropic/alternate")
+        : ["@slow", "@default", "@task"].includes(spec) ? f.models.resolve("openai-codex/effective") : f.models.resolve(spec),
+    };
+    const decision = await qualityDecision({ toolName: "task", toolCallId: "policy-preflight", input: {
+      agent: "qa", name: "ConfiguredQuality359", task: qualityMarker(f.request, "qa"),
+    } }, { cwd: f.primary, sessionManager: { getSessionDir: () => dirname(f.parent) }, models }, scenario === "native reader unavailable" ? undefined : () => {
+      if (scenario === "malformed initial config") throw new Error("crossFamilyReview.policies: invalid policy");
+      return scenario === "missing policy" ? {} : {
+        qa: { fallbackRoles: scenario === "configured fallback" ? ["@custom"] : [], excludeTaskFamily: true },
+      };
+    });
+    if (scenario === "configured fallback") assert.ok(decision && "input" in decision);
+    else {
+      assert.ok(decision && "block" in decision && decision.block);
+      assert.match(decision.reason, /QUALITY_BLOCKED:.*(EXHAUSTED|requires a configured|invalid policy|settings reader required)/);
+    }
   });
 }
 
