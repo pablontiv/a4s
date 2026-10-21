@@ -292,6 +292,15 @@ Once that run is `Succeeded`, every later issue enqueues `.workspace/dagu/dags/f
 
 Use [backlog-breakdown](../backlog-breakdown/SKILL.md) as the single issue-creation backend for refinement and discovery. Bootstrap stages `planning.yaml` as the fourth repository DAG. Enqueue it with required absolute `UNITS_FROM`, `PRIMARY`, and `OMP_SESSION_ID`; `SOURCE` is `refine`, `discovery`, or `plan`.
 
+Validate canonical upstream units before enqueueing with the same command used by `check_plan`:
+
+```sh
+dagu-feature-bundle validate-planning-units --input "/absolute/path/to/units.jsonl" \
+  --snapshot "/absolute/path/to/validated-units.jsonl" --findings "/absolute/path/to/findings.md"
+```
+
+Diagnostics collect all independent mechanical failures as deterministic JSONL (`line`, `field`, `rule`, `expected`, `observed`). A valid snapshot retains exact input bytes; completeness and judgment remain the independent reviewer's responsibility. See backlog-breakdown for the structured `relationships` and explicit `revision: {issue, fields}` contract.
+
 ```sh
 node packages/omp-dagu/bin/dagu-feature-bundle.ts enqueue \
   --run-id "<repo>-breakdown-<slug>" .workspace/dagu/dags/planning.yaml -- \
@@ -299,7 +308,7 @@ node packages/omp-dagu/bin/dagu-feature-bundle.ts enqueue \
   PRIMARY="/absolute/path/to/primary" OMP_SESSION_ID="<dagu_session_id>"
 ```
 
-The steps are `init`, `import_units`, `check_plan`, `review`, `check_review`, `approve`, and `materialize`. Independent `plan-reviewer` evidence precedes operator approval. Only the operator authorizes all or selected IDs at `approve`; `materialize` creates or reuses issues by `<!-- breakdown-unit: <run>/<id> -->`. Corrections remain in the upstream refinement source. After correcting it, explicitly push back from `review` or `approve` with the observed run-wide iteration to reimport at `import_units`.
+The steps are `init`, `import_units`, `check_plan`, `review`, `check_review`, `approve`, and `materialize`. Independent `plan-reviewer` evidence precedes operator approval. Only the operator authorizes all or selected IDs at `approve`; approved subsets close every unit reference. `materialize` creates or reuses issue identities, revises only explicitly declared existing-issue fields, and applies native prerequisite/sub-issue relationships while preserving existing edges. Durable unit/field/edge progress and grouped complete remote readback accompany `issues.jsonl`; conflicting parents, ambiguous identities and mismatches fail with actionable findings. Corrections remain in the upstream refinement source. After correcting it, explicitly push back from `review` or `approve` with the observed run-wide iteration to reimport at `import_units`.
 
 Sprint Planning in the session alone ranks and enqueues new work. Breakdown creates issues; lifecycle continuations between feature and PoC remain intact.
 

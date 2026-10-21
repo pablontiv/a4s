@@ -30,6 +30,23 @@ Each relationship has exactly `kind` and `target`. `blocked_by` means the curren
 
 `units.jsonl` remains the single editable input. Import and validation retain its exact bytes; relationship fields are included in the same generation-bound independent review as every other field.
 
+Optional `revision` binds a unit to an existing issue in this repository:
+
+```json
+{"revision":{"issue":444,"fields":["title","body","labels"]}}
+```
+
+The object has exactly `issue` (a positive safe integer) and `fields` (unique names from `title`, `body`, `labels`). Values come from those fields at the canonical unit root. `fields: []` binds/reuses identity only. Only explicitly declared fields are revised; an explicit body revision is the exact root body, including its existing markers if they are intended. New units and marker-reused units retain their normal create/reuse behavior. Each existing issue identity belongs to one unit; duplicate bindings fail closed. Present the exact revision and relationship intent with the unit for review and operator approval.
+
+Run the existing package's canonical validator during upstream preparation:
+
+```sh
+dagu-feature-bundle validate-planning-units --input "/absolute/path/to/units.jsonl" \
+  --snapshot "/absolute/path/to/validated-units.jsonl" --findings "/absolute/path/to/findings.md"
+```
+
+Only `--input` is required and it must be absolute. The same command is used by native `check_plan`. It collects independent mechanical errors, including malformed JSON lines, as JSONL diagnostics with `line`, `field`, `rule`, `expected`, and `observed`, ordered by line, field, then rule. Missing values are explicit `{"missing":true}`. Stderr and optional findings contain identical diagnostics; any invalid input exits nonzero and clears the requested snapshot. Valid input yields an exact-byte snapshot, including whitespace and line endings. Input and output paths must be distinct. Correct only canonical `units.jsonl`; the snapshot is evidence. Mechanical validation establishes the schema and graph contract; the independent reviewer owns completeness, duplication, rationale and semantic judgment.
+
 Optional neighboring `source.md` and `plan.md` provide reviewer context. Import copies them alongside the unit snapshot. Each explicit reimport refreshes context from upstream; without a neighboring source file, `source.md` contains the run's `SOURCE`, and `plan.md` is present only when supplied upstream.
 
 Get the parent `OMP_SESSION_ID` from `dagu_session_id`. From the adopted repository's main clone, using the scheduler's `DAGU_HOME`:
@@ -39,7 +56,7 @@ dagu-feature-bundle enqueue --run-id "<repo>-breakdown-<slug>" "<main-clone>/.wo
   UNITS_FROM="<absolute-units.jsonl>" PRIMARY="<main-clone>" SOURCE=refine OMP_SESSION_ID="<session-id>"
 ```
 
-The installed filename and DAG name remain `planning.yaml` / `planning`. Its steps are `init → import_units → check_plan → review → check_review → approve → materialize`. `init` prints the bundle identity and `out_dir`: `${DAGU_HOME:-$HOME/.dagu}/data/planning/<owner>__<repo>/<run-id>/`. `import_units` makes a deterministic copy to `units.jsonl`. `check_plan` validates it and records line-local `units.jsonl:<line>: rule=<name>` diagnostics in `findings.md`. Inspect import/check errors at the waiting `review` checkpoint before requesting a reviewer.
+The installed filename and DAG name remain `planning.yaml` / `planning`. Its steps are `init → import_units → check_plan → review → check_review → approve → materialize`. `init` prints the bundle identity and `out_dir`: `${DAGU_HOME:-$HOME/.dagu}/data/planning/<owner>__<repo>/<run-id>/`. `import_units` makes a deterministic copy to `units.jsonl`. `check_plan` invokes the same package validator and records the complete structured diagnostics in `findings.md`. Inspect import/check errors at the waiting `review` checkpoint before requesting a reviewer.
 
 ## Independent review
 
@@ -74,4 +91,10 @@ Both rewind to `import_units`, re-copy the corrected upstream file, and require 
 
 ## Created backlog
 
-After accepted review and operator approval, `materialize` creates the approved issues with their labels and `<!-- breakdown-unit: <run-id>/<id> -->`. Relationship intent is retained explicitly in created issue bodies as `blocked_by` or `parent` with `unit:<id>` or `issue:#<number>` targets; this contract delivery records intent, while native GitHub relationship application is a separate capability. It records `{id,number,url,reused}` rows in `issues.jsonl`. Repeated materialization searches every issue page and reuses marker-bearing issues. Discovery-sourced bodies carrying `<!-- discovery-unit: <id> -->` also retain that stable identity across backend runs, so persistent discovery findings reuse the same issue. Duplicate marker matches fail closed. Inspect `issues.jsonl`, created issue bodies and step logs as durable evidence. The backend ends after issue creation; hand the resulting backlog to sprint-planning for prioritization and admission.
+After accepted review and operator approval, `materialize` creates approved new issues with their labels and `<!-- breakdown-unit: <run-id>/<id> -->`, reuses unambiguous marker identities, and applies only declared revisions. Discovery-sourced bodies carrying `<!-- discovery-unit: <id> -->` retain stable identity across backend runs. Full paginated repository issue reads and durable identity mappings resolve retries independently of GitHub search indexing. Ambiguous markers or conflicting identities fail closed before publication.
+
+Declared `blocked_by` and `parent` relationships become native GitHub dependency and sub-issue edges after all approved identities are resolved. Existing edges are preserved. A different existing parent is a diagnosed conflict; coordinator judgment resolves it. External targets authorize the declared edge, while field edits require their own explicitly approved revision unit.
+
+Native graph mappings retain GitHub's global issue identity together with repository and issue number. Existing cross-repository edges remain distinct from adopted-repository edges with the same issue number; a conflicting parent finding includes its repository identity. Canonical `{issue: N}` targets continue to name issues in the adopted repository.
+
+`issues.jsonl` records `{id,number,url,reused}`. Beside it, `materialization-<run>-<iteration>.json` retains scope, unit/field/edge mappings, baseline and intended state, pending/applied/verified progress, and grouped remote readback with structured mismatches. Its neighboring `-units.jsonl` is the exact reviewed snapshot binding recovery. Final verification groups every affected issue and both directions of its native relationships, following all connection pages. Only a complete title/body/labels/graph match is successful. Findings identify conflicts, inaccessible issues, failed commands and remote mismatches; successful partial effects remain durable so retrying the same reviewed publication converges. Inspect these artifacts and `findings.md`, then hand the verified backlog to sprint-planning for prioritization and admission.

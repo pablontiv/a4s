@@ -292,7 +292,7 @@ Required fields are `id`, `title`, `dag`, `labels`, and `body`. IDs are unique k
 
 Set `source` to `refine`. Optional `findings` is an array of unique, nonempty finding IDs. Preserve source report references, verified evidence, operator decisions, and related issues in each body. Keep full investigation detail in `evidence.md`; each issue body remains self-contained after temporary files are removed.
 
-State each unit's full problem, scope, and observable acceptance. Self-contained means understandable and reviewable on its own; declared prerequisites may govern delivery order. Use optional `relationships`, the backlog-breakdown/native planning representation: `[{"kind":"blocked_by","target":{"unit":"prerequisite-unit"}},{"kind":"parent","target":{"issue":442}}]`. Each entry has exactly `kind` and `target`; `blocked_by` makes the target a prerequisite of this unit, and `parent` makes this unit a sub-issue of the target. Each target has exactly `unit` (an exact same-snapshot kebab-case ID, including forward references) or `issue` (an existing positive safe-integer GitHub issue number in the target repository). Use at most one parent and unique kind/target pairs. Both local graphs must be acyclic individually. Explain prerequisite rationale and the umbrella's own observable outcome in the proposal/body. Existing issue identity and remote relationship evidence belong in the evidence inventory. The backend preserves reviewed relationship intent in created issue bodies; the coordinator records native GitHub relationships once issue identifiers exist. Keep stable unit IDs across corrections and retain the refinement identity in the source context.
+State each unit's full problem, scope, and observable acceptance. Self-contained means understandable and reviewable on its own; declared prerequisites may govern delivery order. Use optional `relationships`, the backlog-breakdown/native planning representation: `[{"kind":"blocked_by","target":{"unit":"prerequisite-unit"}},{"kind":"parent","target":{"issue":442}}]`. Each entry has exactly `kind` and `target`; `blocked_by` makes the target a prerequisite of this unit, and `parent` makes this unit a sub-issue of the target. Each target has exactly `unit` (an exact same-snapshot kebab-case ID, including forward references) or `issue` (an existing positive safe-integer GitHub issue number in the target repository). Use at most one parent and unique kind/target pairs. Both local graphs must be acyclic individually. Explain prerequisite rationale and the umbrella's own observable outcome in the proposal/body. Existing issue identity and remote relationship evidence belong in the evidence inventory. To revise an existing issue, declare `revision: {"issue":444,"fields":["title","body","labels"]}` with the exact selected fields and their values at the canonical root; `fields: []` binds identity only. The backend materializes the approved revisions and native relationships and retains complete verification evidence. Keep stable unit IDs across corrections and retain the refinement identity in the source context.
 
 ## Phase 8: stage absolute inputs
 
@@ -306,6 +306,15 @@ printf 'UNITS_FROM=%s/units.jsonl\n' "$REFINE_STAGE"
 ```
 
 Write the exact proposal's JSONL rows to `$REFINE_STAGE/units.jsonl`. Store the evidence inventory as `$REFINE_STAGE/evidence.md`. Optional neighboring `source.md` records the supplied input, stable refinement identity, source references, and decisions; optional `plan.md` explains the decomposition and dependencies. Both are context, not additional backend requirements.
+
+Run the package's shared mechanical validator before presenting the proposal:
+
+```sh
+dagu-feature-bundle validate-planning-units --input "$REFINE_STAGE/units.jsonl" \
+  --findings "$REFINE_STAGE/findings.md"
+```
+
+Resolve its complete structured line/field/rule/expected/observed diagnostics in canonical `units.jsonl`. Native `check_plan` invokes the same validator after import. Mechanical validity is separate from independent semantic review and explicit operator authorization.
 
 Only the current user may read or write these files. Concurrent sessions use distinct directories. Keep the directory available while backlog-breakdown imports or reviews it, including correction cycles. Temporary input is session-scoped rather than a durable backlog; later sessions use published issue identifiers as their record.
 

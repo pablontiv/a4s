@@ -397,6 +397,16 @@ The shared backend owns independent plan review, operator approval, and issue cr
 
 [`backlog-breakdown`](skills/backlog-breakdown/SKILL.md) operates `planning.yaml`, the single issue-creation backend for refinement and discovery. Refinement owns corrections to its source units; explicit push-back reimports the corrected source.
 
+Upstream preparation and native `check_plan` share the package's canonical schema and validator:
+
+```sh
+node packages/omp-dagu/bin/dagu-feature-bundle.ts validate-planning-units \
+  --input "/absolute/path/to/units.jsonl" --snapshot "/absolute/path/to/validated-units.jsonl" \
+  --findings "/absolute/path/to/findings.md"
+```
+
+Validation reports all independent mechanical failures as JSONL ordered by `line`, `field`, and `rule`, with `expected` and explicit `observed` values (`{"missing":true}` for missing fields). Invalid input exits nonzero; only valid input produces an exact-byte snapshot. The independent semantic reviewer still owns completeness, duplication and judgment.
+
 ```sh
 node packages/omp-dagu/bin/dagu-feature-bundle.ts enqueue \
   --run-id "<repo>-breakdown-<slug>" .workspace/dagu/dags/planning.yaml -- \
@@ -404,7 +414,7 @@ node packages/omp-dagu/bin/dagu-feature-bundle.ts enqueue \
   PRIMARY="/absolute/path/to/primary" OMP_SESSION_ID="<dagu_session_id>"
 ```
 
-`init` initializes durable run artifacts; `import_units` imports the required absolute `UNITS_FROM`; `check_plan` validates units; `review` requests an independent `plan-reviewer`; and `check_review` validates that review. The operator approves all or selected unit IDs at `approve`. `materialize` creates or reuses issues by `<!-- breakdown-unit: <run>/<id> -->`, recording `issues.jsonl`. Source and findings are provenance preserved in issue bodies. Before explicit push-back from `review` or `approve`, inspect the current run-wide iteration; the rewind returns to `import_units`.
+`init` initializes durable run artifacts; `import_units` imports the required absolute `UNITS_FROM`; `check_plan` validates units; `review` requests an independent `plan-reviewer`; and `check_review` validates that review. The operator approves all or selected unit IDs at `approve`, including every referenced same-snapshot target. `materialize` creates/reuses issues and records `issues.jsonl`. Optional `revision: {issue: 444, fields: ["title","body","labels"]}` applies only the listed fields from the canonical root; an empty list binds identity only. Marker reuse leaves existing fields unchanged. Typed relationships become native blocked-by and sub-issue edges, preserving existing edges and diagnosing a different existing parent. Durable `materialization-<run>-<iteration>.json` and its exact units snapshot retain mappings, partial progress, intended state and grouped complete remote verification; mismatches fail rather than publish a success. Source and findings remain provenance in new issue bodies. Before explicit push-back from `review` or `approve`, inspect the current run-wide iteration; the rewind returns to `import_units`.
 
 Sprint Planning in the coordinating session alone selects, ranks, and enqueues new work. Definition of Done and yes/no sprint-goal checks are planning/review content. A completed feature run proves its merged candidate and verified cleanup; it does not by itself prove the sprint goal. Review evaluates that evidence without adding a lifecycle gate. Reports enter refinement only with operator authorization; an FYI is not authorization.
 
