@@ -288,3 +288,50 @@ for (const [source, url] of yamlFiles) {
     });
   });
 }
+
+test("skill template enforces one invocation identity across refreshed session_init rows", async (t) => {
+  const script = verifierScript(yamlFiles[1][1]);
+  const fixtureRows = (name: string): readonly [string, string, string] => {
+    const rows = fixture(name).trim().split("\n");
+    const [session, init, yieldNo] = rows;
+    assert.equal(rows.length, 3);
+    assert.ok(session && init && yieldNo, `incomplete invocation fixture: ${name}`);
+    return [session, init, yieldNo];
+  };
+  const [session, init, yieldNo] = fixtureRows("generation-0.jsonl");
+  const refresh = JSON.stringify({ ...JSON.parse(init), timestamp: "2026-10-15T12:00:02Z" });
+  const refreshed = (name: string) => {
+    const [session, init, yieldNo] = fixtureRows(name);
+    const refresh = JSON.stringify({ ...JSON.parse(init), timestamp: "2026-10-15T12:00:02Z" });
+    return [session, init, refresh, yieldNo].join("\n");
+  };
+  for (const [name, content, accepted, check] of [
+    ["accepts consistent refreshed identity", [session, init, refresh, yieldNo].join("\n"), true, undefined],
+    ["rejects a changed refresh agent", [session, init,
+      JSON.stringify({ ...JSON.parse(refresh), agent: "task" }), yieldNo].join("\n"), false, /check\.session_identity=FAIL/],
+    ["rejects a changed refresh task", [session, init,
+      JSON.stringify({ ...JSON.parse(refresh), task: `${JSON.parse(init).task} Changed assignment.` }), yieldNo].join("\n"), false, /check\.session_identity=FAIL/],
+    ["requires a session_init", [session, yieldNo].join("\n"), false, /check\.session_identity=FAIL/],
+    ["requires a session", [init, refresh, yieldNo].join("\n"), false, /check\.session_identity=FAIL/],
+    ["rejects multiple sessions even with the same parent", [session, session, init, refresh, yieldNo].join("\n"), false, /check\.session_identity=FAIL/],
+    ["rejects a foreign parent after refresh", refreshed("other-session-parent.jsonl"), false, /check\.parentSession=FAIL/],
+    ["rejects a stale first init despite a fresh refresh", refreshed("stale.jsonl"), false, /check\.timestamp_after_cutoff=FAIL/],
+    ["rejects a refreshed identity bound to another run", refreshed("other-run.jsonl"), false, /check\.task_run_marker=FAIL/],
+    ["rejects an invalid last yield after refresh", [session, init, refresh, yieldNo,
+      JSON.stringify({ type: "message", message: { role: "toolResult", toolName: "yield", details: { data: {} } } })].join("\n"), false, /check\.last_yield_poc_no=FAIL/],
+  ] as const) {
+    await t.test(name, async () => {
+      clearTranscripts();
+      const transcript = writeTranscript(external, "TriageReview188", "generation-0.jsonl");
+      const parent = `${transcript.slice(0, transcript.lastIndexOf("/"))}.jsonl`;
+      writeFileSync(transcript, content.replaceAll("__PARENT__", parent) + "\n");
+      restBody = rest();
+      const result = await runBash(script, environment(external, "TriageReview188"));
+      if (accepted) pass(result);
+      else {
+        fail(result, check);
+        assert.match(result.stdout, /VERIFIER=FAIL/);
+      }
+    });
+  }
+});
