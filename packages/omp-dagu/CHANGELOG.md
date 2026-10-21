@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.102
+
+- Limit scheduled reconciliation to waiting feature discovery and PR/CI checkpoint transitions through `tick` and `reconcile-run`, preserving transition safety and lifecycle cleanup contracts.
+- Remove the unowned human-task and leftover-resource detectors and their monitoring documentation.
+
 ## 0.3.101
 
 - Read effective native `crossFamilyReview.policies` for the independent quality preflight and bound implementer dispatch instead of maintaining a second fixed fallback list; preserve transcript provenance, family admission and publication guards (#359).
