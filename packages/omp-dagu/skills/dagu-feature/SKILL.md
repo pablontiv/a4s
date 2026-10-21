@@ -75,10 +75,16 @@ The installer checks `dagu version` against `daguFeature.dagu` (official `2.20.1
 a minimal DAG inheriting the versioned base in an isolated temporary home, and
 checks the rendered plist with `plutil` on macOS before installing. `cmp` and
 `install -m 0644` make repeated installs byte- and mtime-stable. `base.yaml` and
-the rendered plist are fully owned; `config.yaml` merges only the leaves in the
+the rendered plist are fully owned. `config.yaml` merges the leaves in the
 versioned `dagu/config.yaml` (`auth.mode`, `queues.enabled`, `host`, `port`,
-`coordinator.enabled`). Other leaves, comments and `queues.config`, including
-other repositories' concurrency limits, remain owned by their original writers.
+`coordinator.enabled`) and merges `queues.config` entries by queue name.
+For matching names, template-owned fields replace installed values; additional
+queue metadata is retained. Missing template queues are added, while foreign
+queues and their concurrency limits are preserved. In particular, applying the
+bundled `a4s.max_concurrency=2` replaces an installed same-name capacity of `8`.
+That capacity consequence was established from source inspection in issue #449;
+the original report did not execute the installer or observe a production overwrite.
+Other configuration leaves and comments remain owned by their original writers.
 Foreign paths stay untouched during validation. The plist captures the
 operator's current `PATH` and resolved Dagu binary; use the same environment on
 updates. With a custom `DAGU_HOME`, the default plist destination is
