@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
+import { registerReviewHook } from "@a4s/omp-cross-family-review";
 import { inspectImplementer, inspectVerdict, qualityDecision, qualityMarker } from "../src/triage/quality.ts";
 import type { TranscriptRow } from "../src/triage/quality.ts";
 import { qualityFixture, readQualityPolicies } from "./quality-fixtures.ts";
@@ -19,6 +21,261 @@ function fixture(t: test.TestContext) {
   mkdirSync(state, { recursive: true });
   writeFileSync(join(state, "candidate.json"), JSON.stringify({ sha: "a".repeat(40), iteration: 0, implementer: "ImplementTest" }));
   return { ...qualityFixture({ root, primary, worktree, state }), primary, state };
+}
+
+function changeRows(path: string, change: (rows: TranscriptRow[]) => void) {
+  const rows: TranscriptRow[] = readFileSync(path, "utf8").trim().split("\n").map(line => JSON.parse(line));
+  change(rows);
+  writeFileSync(path, rows.map(row => JSON.stringify(row)).join("\n") + "\n");
+}
+
+function mixedFixture(t: test.TestContext) {
+  const first = fixture(t);
+  const second = fixture(t);
+  second.state = join(dirname(second.state), "other-run");
+  mkdirSync(second.state);
+  Object.assign(second.request, { run: "other-run", sha: "b".repeat(40), iteration: 2,
+    attempt: "1792112400.123456", implementer: "ImplementOther" });
+  writeFileSync(join(second.state, "quality-request.json"), JSON.stringify(second.request));
+  writeFileSync(join(second.state, "candidate.json"), JSON.stringify({
+    sha: second.request.sha, iteration: second.request.iteration, implementer: second.request.implementer,
+  }));
+  const names = { implementer: "ImplementOther", qa: "QAOther", reviewer: "ReviewOther" };
+  const parentRows: TranscriptRow[] = [];
+  for (const role of ["implementer", "qa", "reviewer"] as const) {
+    const name = names[role];
+    const marker = role === "implementer" ? `FEATURE_IMPLEMENT RUN=${second.request.run}` : qualityMarker(second.request, role);
+    const provider = role === "implementer" ? "anthropic" : "openai-codex";
+    const model = role === "implementer" ? "alternate" : "effective";
+    const path = join(first.parent.slice(0, -6), `${name}.jsonl`);
+    writeFileSync(path, readFileSync(second.paths[role]!));
+    changeRows(path, rows => {
+      rows[0]!.id = `child-${name}`;
+      rows[0]!.parentSession = first.parent;
+      rows[1]!.task = marker;
+      rows[1]!.timestamp = "2026-10-16T01:00:02Z";
+      rows[2]!.role = `subagent:${name}`;
+      rows[2]!.model = `${provider}/${model}`;
+      for (const row of rows) if (row.message?.role === "assistant") Object.assign(row.message, { provider, model });
+      rows[4]!.message!.content = second.request.sha;
+      rows.at(-1)!.message!.content = JSON.stringify({ repo: second.request.repo, run: second.request.run,
+        sha: second.request.sha, iteration: second.request.iteration, attempt: second.request.attempt,
+        role, verdict: "PASS", findings: ["Other candidate checked"] });
+    });
+    second.paths[role] = path;
+    parentRows.push({ type: "message", timestamp: "2026-10-16T01:00:01Z", message: {
+      role: "assistant", content: [{ type: "toolCall", id: `invoke-${name}`, name: "task",
+        arguments: { tasks: [{ name, agent: role === "implementer" ? "task" : role, task: marker }] } }],
+    } });
+  }
+  changeRows(first.parent, rows => { rows.push(...parentRows); });
+  second.parent = first.parent;
+  const all = [first, second];
+  t.mock.method(globalThis, "fetch", async (input: string | URL | Request) => {
+    const f = all.find(item => String(input).endsWith(`/${item.request.run}`));
+    assert.ok(f, `unexpected quality request ${input}`);
+    return Response.json({ dagRunDetails: {
+      resolvedPrimary: f.primary, params: "ISSUE=189 OMP_SESSION_ID=parent-id",
+      nodes: [{ step: { id: "implement" }, startedAt: f.request.implementStartedAt }],
+    } });
+  });
+  const models = { ...first.models, resolve: (spec: string) =>
+    first.models.resolve(spec === "@default" ? "openai-codex/effective" : spec) };
+  const ctx = { cwd: first.primary, sessionManager: { getSessionDir: () => dirname(first.parent) }, models };
+  const tasks = all.flatMap((f, index) => (["qa", "reviewer"] as const).map(agent => ({
+    name: index === 0 ? agent === "qa" ? "QABatch" : "ReviewBatch" : agent === "qa" ? "QAOtherBatch" : "ReviewOtherBatch",
+    agent, task: `${qualityMarker(f.request, agent)}\nInspect this candidate independently.`,
+  })));
+  return { first, second, all, ctx, tasks };
+}
+
+for (const reversed of [false, true]) {
+  test(`mixed-run quality batch binds every assignment independently (${reversed ? "reverse" : "forward"})`, async t => {
+    const f = mixedFixture(t);
+    const unrelated = { name: "Unrelated", agent: "task", task: "Inspect unrelated documentation", custom: "preserved" };
+    const tasks = reversed ? [...f.tasks].reverse() : f.tasks;
+    const input = { context: "Shared acceptance context", tasks: [unrelated, ...tasks], custom: "native batch" };
+    const decision = await qualityDecision({ toolName: "task", toolCallId: "mixed", input }, f.ctx, readQualityPolicies);
+    assert.ok(decision && "input" in decision, JSON.stringify(decision));
+    assert.equal(decision.input.context, input.context);
+    assert.equal(decision.input.custom, input.custom);
+    assert.deepEqual(decision.input.tasks[0], unrelated);
+    let hook: ((event: { agent: string; patterns: string[]; spawnKey: string }, ctx: unknown) => { model?: string[] }) | undefined;
+    registerReviewHook({ on: (_event: string, handler: typeof hook) => { hook = handler; } } as never, readQualityPolicies);
+    for (const task of decision.input.tasks.slice(1)) {
+      const source = f.all.find(item => task.task.includes(qualityMarker(item.request, task.agent)))!;
+      assert.ok(source);
+      assert.ok(task.outputSchema);
+      assert.ok(task.task.includes(`git -C "${source.request.worktree}" rev-parse HEAD`));
+      const contract = JSON.parse(task.task.split("\n").find((line: string) => line.startsWith("{"))!);
+      assert.deepEqual(contract, { repo: source.request.repo, run: source.request.run, sha: source.request.sha,
+        iteration: source.request.iteration, attempt: source.request.attempt, role: task.agent, verdict: "PASS", findings: [] });
+      const selected = hook!({ agent: task.agent, spawnKey: task.name, patterns: ["openai-codex/effective", "anthropic/alternate"] }, f.ctx);
+      assert.ok(selected.model?.length);
+      assert.ok(selected.model.every(spec => f.ctx.models.resolve(spec)?.provider === (source === f.first ? "anthropic" : "openai-codex")));
+    }
+    assert.deepEqual(input.tasks, [unrelated, ...tasks], "native input stays immutable");
+  });
+}
+
+test("same-run QA/reviewer batch and a shared single-task marker preserve context", async t => {
+  const f = mixedFixture(t);
+  const decision = await qualityDecision({ toolName: "task", toolCallId: "same-run", input: {
+    context: "Shared instructions", tasks: f.tasks.slice(0, 2),
+  } }, f.ctx, readQualityPolicies);
+  assert.ok(decision && "input" in decision);
+  assert.equal(decision.input.context, "Shared instructions");
+  assert.equal(decision.input.tasks.length, 2);
+  const single = await qualityDecision({ toolName: "task", toolCallId: "shared", input: {
+    context: qualityMarker(f.first.request, "qa"), agent: "qa", name: "SharedQA", task: "Run acceptance",
+  } }, f.ctx, readQualityPolicies);
+  assert.ok(single && "input" in single);
+  assert.equal(single.input.context, qualityMarker(f.first.request, "qa"));
+  assert.ok(single.input.task.startsWith("Run acceptance\n"));
+});
+
+for (const failure of [
+  "candidate", "repo", "worktree", "coordinator", "cutoff", "sha", "iteration", "attempt", "role",
+  "marker suffix", "ambiguous marker", "missing name", "invalid name", "duplicate name", "implementer name",
+  "stale implementer", "unknown implementer", "missing policy", "exhausted models", "prose marker",
+] as const) {
+  test(`mixed-run batch fails closed for one assignment: ${failure}`, async t => {
+    const f = mixedFixture(t);
+    const request = { ...f.second.request };
+    const tasks: Record<string, unknown>[] = f.tasks.map(task => ({ ...task, name: `${task.name}-${failure.replaceAll(" ", "-")}` }));
+    const target = tasks[2]!;
+    if (failure === "candidate") writeFileSync(join(f.second.state, "candidate.json"), JSON.stringify({ sha: "c".repeat(40), iteration: 2, implementer: request.implementer }));
+    if (failure === "repo") request.repo = f.first.primary;
+    if (failure === "worktree") request.worktree = f.first.request.worktree;
+    if (failure === "coordinator") request.session = "another-parent";
+    if (failure === "cutoff") request.implementStartedAt = "2026-10-15T00:00:00Z";
+    if (["repo", "worktree", "coordinator", "cutoff"].includes(failure)) writeFileSync(join(f.second.state, "quality-request.json"), JSON.stringify(request));
+    if (failure === "sha") target.task = qualityMarker({ ...request, sha: f.first.request.sha }, "qa");
+    if (failure === "iteration") target.task = qualityMarker({ ...request, iteration: 0 }, "qa");
+    if (failure === "attempt") target.task = qualityMarker({ ...request, attempt: f.first.request.attempt }, "qa");
+    if (failure === "role") target.agent = "task";
+    if (failure === "marker suffix") target.task = qualityMarker(request, "qa") + "-other";
+    if (failure === "ambiguous marker") target.task += `\n${qualityMarker(f.first.request, "qa")}`;
+    if (failure === "missing name") delete target.name;
+    if (failure === "invalid name") target.name = "../QA";
+    if (failure === "duplicate name") target.name = tasks[0]!.name;
+    if (failure === "implementer name") target.name = request.implementer;
+    if (failure === "stale implementer") changeRows(f.second.paths.implementer!, rows => { rows[1]!.timestamp = request.implementStartedAt; });
+    if (failure === "unknown implementer") changeRows(f.second.paths.implementer!, rows => { rows.at(-1)!.message!.model = "not-in-catalog"; });
+    if (failure === "prose marker") tasks.push({ name: "UnrelatedProse", agent: "task", task: "Explain the FEATURE_QUALITY RUN= marker in prose" });
+    const preserved = f.all.flatMap(item => ["candidate.json", "quality-request.json"].map(name => {
+      const path = join(item.state, name);
+      return { path, contents: readFileSync(path, "utf8") };
+    }));
+    const decision = await qualityDecision({ toolName: "task", toolCallId: "invalid-mixed", input: { tasks } }, f.ctx, () => ({
+      ...(failure === "missing policy" ? {} : readQualityPolicies()),
+      ...(failure === "exhausted models" ? { qa: { fallbackRoles: [], excludeTaskFamily: true } } : {}),
+    }));
+    // @slow is anthropic, so only the second run exhausts with no fallback.
+    assert.ok(decision && "block" in decision && decision.block, JSON.stringify(decision));
+    assert.match(decision.reason, /^QUALITY_BLOCKED:.*local candidate retained$/);
+    for (const entry of preserved) assert.equal(readFileSync(entry.path, "utf8"), entry.contents);
+    assert.equal(tasks[0]!.task, f.tasks[0]!.task);
+    let hook: ((event: { agent: string; patterns: string[]; spawnKey: string }, ctx: unknown) => { model?: string[] }) | undefined;
+    registerReviewHook({ on: (_event: string, handler: typeof hook) => { hook = handler; } } as never,
+      () => ({ qa: { ...readQualityPolicies().qa, excludeTaskFamily: false } }));
+    const models = { ...f.ctx.models, current: () => f.ctx.models.resolve("anthropic/alternate") };
+    const selected = hook!({ agent: "qa", spawnKey: tasks[0]!.name as string,
+      patterns: ["openai-codex/effective", "anthropic/alternate"] }, { ...f.ctx, models });
+    assert.ok(selected.model?.length);
+    assert.ok(selected.model.every(spec => models.resolve(spec)?.provider === "openai-codex"),
+      "a blocked batch must not install partial quality authorizations");
+  });
+}
+
+async function dispatchedFixture(t: test.TestContext) {
+  const f = mixedFixture(t);
+  const routed = await qualityDecision({ toolName: "task", toolCallId: "native-mixed", input: { tasks: f.tasks } }, f.ctx, readQualityPolicies);
+  assert.ok(routed && "input" in routed, JSON.stringify(routed));
+  const tasks = routed.input.tasks as { name: string; agent: "qa" | "reviewer"; task: string }[];
+  // Persist the native parent invocation and child outputs at the same boundary
+  // consumed by verdict admission. This fixture is not a live native dispatch.
+  changeRows(f.first.parent, rows => {
+    rows.splice(0, rows.length, rows[0]!, ...rows.filter(row => JSON.stringify(row).includes("FEATURE_IMPLEMENT RUN=")),
+      { type: "message", timestamp: "2026-10-16T01:00:01Z", message: {
+        role: "assistant", content: [{ type: "toolCall", name: "task", id: "native-mixed", arguments: { tasks } }],
+      } });
+  });
+  for (const task of tasks) {
+    const source = f.all.find(item => task.task.includes(qualityMarker(item.request, task.agent)))!;
+    const oldPath = source.paths[task.agent]!;
+    const path = join(f.first.parent.slice(0, -6), `${task.name}.jsonl`);
+    writeFileSync(path, readFileSync(oldPath));
+    source.paths[task.agent] = path;
+    changeRows(path, rows => {
+      rows[0]!.id = `child-${task.name}`;
+      rows[1]!.task = task.task;
+      rows[2]!.role = `subagent:${task.name}`;
+      const report = JSON.parse(task.task.split("\n").find(line => line.startsWith("{"))!);
+      rows.at(-1)!.message!.content = JSON.stringify({ ...report, findings: ["Bound candidate inspected"] });
+    });
+  }
+  const complete = (index: number, qa = tasks[index * 2]!.name, reviewer = tasks[index * 2 + 1]!.name) =>
+    qualityDecision({ toolName: "bash", toolCallId: `complete-${index}`, input: {
+      command: `dagu human-task complete feature --run-id ${f.all[index]!.request.run} --step quality_review --input QA=${qa} --input REVIEW=${reviewer}`,
+    } }, f.ctx);
+  return { ...f, tasks, complete };
+}
+
+test("mixed-run verdict admission consumes only each run's fully bound sealed evidence", async t => {
+  const f = await dispatchedFixture(t);
+  for (const index of [0, 1]) {
+    assert.equal(await f.complete(index), undefined);
+    const source = f.all[index]!;
+    const evidence = JSON.parse(readFileSync(join(source.state, "quality.json"), "utf8"));
+    assert.equal(evidence.action, "complete");
+    assert.equal(evidence.repo, source.request.repo);
+    assert.equal(evidence.run, source.request.run);
+    assert.equal(evidence.implementer.subagent, source.request.implementer);
+    for (const [offset, verdict] of evidence.verdicts.entries()) {
+      assert.equal(verdict.subagent, f.tasks[index * 2 + offset]!.name);
+      assert.equal(verdict.invocation, "native-mixed");
+      assert.equal(verdict.parentSession, f.first.parent);
+      assert.equal(verdict.run, source.request.run);
+      assert.equal(verdict.sha, source.request.sha);
+      assert.equal(verdict.iteration, source.request.iteration);
+      assert.equal(verdict.attempt, source.request.attempt);
+      assert.notEqual(verdict.model.family, evidence.implementer.family);
+      const contents = readFileSync(verdict.transcript);
+      assert.equal(verdict.bytes, contents.length);
+      assert.equal(verdict.digest, createHash("sha256").update(contents).digest("hex"));
+    }
+  }
+  const crossRun = await f.complete(1, f.tasks[0]!.name);
+  assert.ok(crossRun && "block" in crossRun && crossRun.block);
+  assert.match(crossRun.reason, /wrong run, iteration, SHA or role assignment/);
+});
+
+for (const failure of [
+  "repo", "run", "sha", "iteration", "attempt", "role", "wrong parent", "missing invocation", "ambiguous invocation",
+  "stale child", "uncorrelated SHA", "same-family response", "unknown model", "shared session", "shared child",
+] as const) {
+  test(`mixed-run verdict admission preserves per-assignment provenance: ${failure}`, async t => {
+    const f = await dispatchedFixture(t);
+    const target = f.second.paths.qa!;
+    if (["repo", "run", "sha", "iteration", "attempt", "role"].includes(failure)) changeRows(target, rows => {
+      const report = JSON.parse(rows.at(-1)!.message!.content as string);
+      report[failure] = failure === "iteration" ? 99 : "mismatched";
+      rows.at(-1)!.message!.content = JSON.stringify(report);
+    });
+    if (failure === "wrong parent") changeRows(target, rows => { rows[0]!.parentSession = "/other/parent.jsonl"; });
+    if (failure === "missing invocation") changeRows(f.first.parent, rows => { rows.pop(); });
+    if (failure === "ambiguous invocation") changeRows(f.first.parent, rows => { rows.push(rows.at(-1)!); });
+    if (failure === "stale child") changeRows(target, rows => { rows[1]!.timestamp = "2026-10-16T01:00:00Z"; });
+    if (failure === "uncorrelated SHA") changeRows(target, rows => { rows[4]!.message!.toolCallId = "unrelated"; });
+    if (failure === "same-family response") changeRows(target, rows => { Object.assign(rows.at(-1)!.message!, { provider: "anthropic", model: "alternate" }); });
+    if (failure === "unknown model") changeRows(target, rows => { rows.at(-1)!.message!.model = "unknown"; });
+    if (failure === "shared session") changeRows(target, rows => { rows[0]!.id = "child-ImplementOther"; });
+    const decision = await (failure === "shared child" ? f.complete(1, f.tasks[2]!.name, f.tasks[2]!.name) : f.complete(1));
+    assert.ok(decision && "block" in decision && decision.block, JSON.stringify(decision));
+    assert.match(decision.reason, /^QUALITY_BLOCKED:/);
+    if (failure !== "missing invocation" && failure !== "ambiguous invocation") assert.equal(await f.complete(0), undefined);
+  });
 }
 
 for (const primarySource of ["adopted env literal", "resolvedPrimary", "historical param"]) {

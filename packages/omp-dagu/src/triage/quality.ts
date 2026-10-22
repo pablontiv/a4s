@@ -379,25 +379,24 @@ export async function qualityDecision(
   try {
     requireValue(!implementCompletion || (!implementCompletion.syntax && implementCompletion.dag === "feature"),
       `one literal implement completion command required: ${implementCompletion?.syntax ?? "literal feature DAG required"}`);
-    const run = implementCompletion ? implementCompletion.run : completion ? /--run-id(?:\s+|=)([\w.-]+)/.exec(command!)?.[1] : /FEATURE_QUALITY RUN=([\w.-]+)/.exec(assignments.join("\n"))?.[1];
-    requireValue(run, "literal run id required");
-    const implementerId = implementCompletion?.implementer;
-    requireValue(!implementCompletion || implementerId, "complete with literal --input IMPLEMENTER=<id>");
-    const { request, parent, state, models } = await load(run, ctx, implementerId);
-    if (implementCompletion) {
-      inspectImplementer(parent, request, models);
-      return undefined;
-    }
-    if (!completion) {
-      const implementer = inspectImplementer(parent, request, models);
-      const effectiveModel = models.resolve(`${implementer.provider}/${implementer.id}`);
-      requireValue(effectiveModel && effectiveModel.provider === implementer.provider && effectiveModel.id === implementer.id, "effective implementer catalog identity unavailable");
+    if (!completion && !implementCompletion) {
+      const bindings: { name: string; model: Model }[] = [];
       const revised = [...tasks];
       for (const [index, task] of tasks.entries()) {
         if (!assignments[index]?.includes("FEATURE_QUALITY RUN=")) continue;
+        const assignment = assignments[index]!;
+        requireValue(assignment.split("FEATURE_QUALITY RUN=").length === 2, "one quality marker required per assignment");
+        const run = /FEATURE_QUALITY RUN=([\w.-]+)/.exec(assignment)?.[1];
+        requireValue(run, "literal run id required");
+        const { request, parent, models } = await load(run, ctx);
         const role = task.agent === "qa" ? "qa" : task.agent === "reviewer" ? "reviewer" : "invalid";
-        requireValue(role !== "invalid" && assignments[index]!.includes(qualityMarker(request, role)), "stale quality assignment or invalid role");
-        requireValue(typeof task.name === "string", "explicit quality subagent name required");
+        requireValue(role !== "invalid" && assigned(assignment, qualityMarker(request, role)), "stale quality assignment or invalid role");
+        requireValue(typeof task.name === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(task.name), "explicit quality subagent name required");
+        requireValue(task.name !== request.implementer && tasks.filter(other => other.name === task.name).length === 1,
+          "quality subagent names must be distinct");
+        const implementer = inspectImplementer(parent, request, models);
+        const effectiveModel = models.resolve(`${implementer.provider}/${implementer.id}`);
+        requireValue(effectiveModel && effectiveModel.provider === implementer.provider && effectiveModel.id === implementer.id, "effective implementer catalog identity unavailable");
         requireValue(readPolicies, "native cross-family settings reader required for quality dispatch");
         const policies = await readPolicies(ctx.cwd);
         const policy = Object.hasOwn(policies, role) ? policies[role] : undefined;
@@ -407,7 +406,7 @@ export async function qualityDecision(
         const eligible = orderReviewModels(["@slow"], policy.fallbackRoles, models,
           [{ label: "effective implementer", model: effectiveModel }]);
         requireValue(eligible.model?.length, eligible.reason ?? "no eligible quality model");
-        bindQualityImplementer(task.name, effectiveModel);
+        bindings.push({ name: task.name, model: effectiveModel });
         const contract = [
           "Quality verdict contract: Before inspecting the candidate and before your verdict, run this standalone bash command, with nothing chained and with cwd omitted:",
           `git -C "${request.worktree}" rev-parse HEAD`,
@@ -417,7 +416,17 @@ export async function qualityDecision(
         ].join("\n");
         revised[index] = { ...task, task: `${task.task ?? ""}\n\n${contract}`, outputSchema: VERDICT_SCHEMA };
       }
+      for (const binding of bindings) bindQualityImplementer(binding.name, binding.model);
       return { input: Array.isArray(event.input.tasks) ? { ...event.input, tasks: revised } : revised[0]! };
+    }
+    const run = implementCompletion ? implementCompletion.run : /--run-id(?:\s+|=)([\w.-]+)/.exec(command!)?.[1];
+    requireValue(run, "literal run id required");
+    const implementerId = implementCompletion?.implementer;
+    requireValue(!implementCompletion || implementerId, "complete with literal --input IMPLEMENTER=<id>");
+    const { request, parent, state, models } = await load(run, ctx, implementerId);
+    if (implementCompletion) {
+      inspectImplementer(parent, request, models);
+      return undefined;
     }
     const qa = /\bQA=([\w.-]+)/.exec(command!)?.[1];
     const reviewer = /\bREVIEW=([\w.-]+)/.exec(command!)?.[1];
