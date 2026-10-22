@@ -36,6 +36,7 @@ Sprint Planning alone ranks and enqueues new work; Dagu executes it. Discovery a
 
 - Auditoría de cuota: [`skills/gpt-quota-audit/SKILL.md`](skills/gpt-quota-audit/SKILL.md).
 - Análisis de coste y resultados: [`skills/cost-analyzer/SKILL.md`](skills/cost-analyzer/SKILL.md).
+- Rendimiento de agentes, tiempo activo y tokens por PR: [`skills/agent-throughput/SKILL.md`](skills/agent-throughput/SKILL.md).
 - Model routing review: [`skills/omp-model-routing-audit/SKILL.md`](skills/omp-model-routing-audit/SKILL.md). Manual catalog/quota/routing snapshots and comparisons, evidence-backed proposals, operator-approved configuration and actual new-agent verification; default collection performs no inference or assignment.
 
 ## Dagu feature
