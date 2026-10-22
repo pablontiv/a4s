@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.109
+
+- Run authorized feature triage and implementation/conflict resolution as Dagu command-owned native OMP jobs, retaining registered agents and complete role/model fallback routing (#513). Keep the existing coordinator-dispatched QA/reviewer human-task join, quality.json writer and quality admission operational; #514 owns wiring QA/reviewer role-job receipts and migrating quality templates/hooks.
+- Persist canonical claims, executor identity, per-DAGU_HOME capacity, worktree exclusion and duplicate suppression in SQLite. Bind each native step retry to its fresh start timestamp, preserving failed/interrupted receipts; retain native session/model/fallback evidence and linked admission observations.
+- Bind captured candidates to the admitted native implementer result digest/input HEAD for existing cross-family quality checks. Publish schemaVersion 1 receipts and QA/reviewer executor support for #514 and semantic-evidence consumer #517; retain operator validation.
+- Remove the superseded coordinator triage-completion guard and its unreachable tests; document same-command-step recovery and exercise quality stage progression offline and in pinned Dagu.
+- Preserve #543's triage contract in native role jobs: inject the shared decision schema, bind the exact job marker independently of agent name or criterion prose, and retain field/expected/observed diagnostics. The sealed current job receipt replaces coordinator-task lineage.
+- Bind triage jobs to immutable admission HEAD so unrelated PRIMARY fast-forwards preserve active work and redelivery identity. Retain implement-completion guards for in-flight human-task snapshots and exercise their explicit historical form in live Dagu.
+
 ## 0.3.108
 
 - Serialize the complete feature gate body per primary with an inherited kernel advisory lock, including human-task resumes, retries and reconciler BEHIND/DIRTY rebases, while retaining declared repository queue capacity (#537).

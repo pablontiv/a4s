@@ -9,11 +9,11 @@ Carry one GitHub issue from feasibility triage to a merged PR through durable Da
 
 ```mermaid
 flowchart LR
-    T[triage<br/>human.task<br/>coordinator reviewer] --> TD[triage_decision]
+    T[triage<br/>authorized OMP role job] --> TD[triage_decision]
     TD -->|POC=yes: enqueue and finish| P[poc]
     TD -->|POC=no + REVIEW| A[start_gate]
     A --> AS[recover_start_gate]
-    AS -->|healthy: skipped| B[implement<br/>human.task<br/>issue subagent]
+    AS -->|healthy: skipped| B[implement<br/>authorized OMP role job]
     AS -->|operator repair: push-back| A
     B --> CP[capture<br/>Dagu commit] --> C[checkpoint_push<br/>remote recovery ref]
     C --> N[dependency_review]
@@ -56,8 +56,81 @@ flowchart LR
 - Python 3 with standard-library `fcntl` on the Dagu service's `PATH`; bootstrap
   checks it before adoption. The feature gate uses a POSIX kernel advisory lock.
 - The tools the repository's gate command needs.
+- Bun and the installed OMP task runtime on the service's `PATH`, plus this
+  package's `dagu-role-jobs` executable. `OMP_ROLE_RUNTIME` may select the
+  canonical installed `@oh-my-pi/pi-coding-agent` package root.
 
 This skill does not install Dagu, and it carries no logic specific to any repository. Bootstrap renders repository policy; run parameters carry operational issue inputs.
+
+## Role-job receipt contract (schemaVersion 1)
+
+`dagu-role-jobs stage triage|implement` executes the template's command stages.
+It authorizes against the run's immutable admission receipt/snapshot, the current
+native running stage and ready dependencies, canonical worktree ownership,
+candidate SHA and iteration. `validation` remains an operator `human.task`.
+`quality_review` remains the coordinator-dispatched two-role `human.task` join:
+the existing quality guard writes `quality.json` and `quality_admit` admits it.
+The executor also supports QA/reviewer role jobs for #514 to wire together with
+their verdict consumer and quality templates/hooks.
+The registry maps `triage` to `triage-reviewer`, implementation/conflict resolution
+to `task`, and quality roles to `qa` and `reviewer`. Native `discoverAgents`,
+`Settings.loadReadOnly`, `resolveAgentModelSelection` and `runSubprocess` preserve
+the entire configured model array, pre-expansion named role, strict structured
+yield and session-scoped retry/fallback chain.
+
+Durable files live at
+`<git-common>/dagu-feature/runs/<run>/role-jobs/<id>/`. `id` is the SHA-256 of
+sorted-key canonical JSON of `binding`:
+
+```json
+{"repo":"<canonical PRIMARY>","worktree":"<canonical candidate>","lane":"feature","dag":"feature","run":"<parent run>","stage":"quality_review","role":"qa","sha":"<40 hex>","iteration":0,"attempt":"<quality-request attempt>"}
+```
+
+`role` is `triage|implement|conflict-resolution|qa|reviewer`. Non-quality
+`attempt` combines the native run-wide iteration and step `startedAt`; a retry
+of that same Dagu step has a fresh identity. Quality uses the current request's
+capture iteration and attempt. A changed candidate, iteration or attempt
+produces a distinct id and native session.
+
+`job.json` records `schemaVersion`, `id`, `binding`, canonical `directory`,
+`executor:{host,pid,processStartedAt}`, `readyAt`, `startedAt` and `state`.
+`result.json` adds terminal `state` (`completed|failed|interrupted`),
+`finishedAt`, measured `readyToStartMs`, native `output` or diagnosed `error`.
+When available, `native` contains `session`, canonical `transcript`, inspected
+`bytes`, prefix SHA-256 `digest`, emitting assistant `event`, actual `provider`
+and `model`, assistant `attempts`, model-change `fallbacks` with
+`resolvedModelIsFallback`, and `routing` (runtime version/executor digest,
+registered agent source/models, current overrides, resolved full patterns/role).
+`routing.json`, `assignment.json`, `native-result.json` and the native
+`<id>.jsonl` remain alongside it. A structured QA `verdict=FAIL` is a completed
+execution, not accepted quality. Command `IMPLEMENTER` and triage `REVIEW` outputs
+carry these ids. The current quality join uses coordinator-allocated QA/reviewer
+ids; #514 owns switching those roles to native job receipts, and #517 consumes
+the same semantic evidence. Native jobs have their actual session provenance.
+Linked `runtimeAndModels/role-job` observations extend the existing #277 receipt;
+its `initial` identity remains immutable.
+
+Capacity is explicitly **active role sessions launched by this boundary per
+canonical DAGU_HOME**, across processes, runs and repositories. The SQLite
+`$DAGU_HOME/role-jobs.sqlite` transaction owns claims and capacity. The first
+dispatch fixes `A4S_ROLE_JOB_CAPACITY` (positive integer, default `4`); subsequent
+dispatches require the same value. Change it only in a drained disposable/new
+capacity domain or through an operator-managed migration. This is independent
+of Dagu queue slots and OMP's process-local task/provider request semaphores;
+it is not a claim about other OMP sessions or host-wide provider concurrency.
+Mutating roles exclude other jobs on their actual candidate worktree, while
+read-only QA/reviewer jobs and unrelated worktrees share available capacity.
+
+Duplicate delivery observes the same live execution or persisted terminal result.
+Scheduler/launcher interruption preserves a living worker's ownership. Once its
+PID/start-time identity is absent, recovery records `interrupted`, preserves its
+session/artifacts, and releases that session's slot. It never silently starts
+another execution for that binding. The owner inspects retained worktree and
+child-command effects, then retries the same command step with
+`dagu retry --run-id <run> --step triage|implement --downstream feature`.
+The new step `startedAt` authorizes a fresh claim while preserving the old receipt.
+Foreign-host ownership stays uncertain/live. Operator recovery remains explicit.
+Database terminal results repair missing materialized result files on redelivery.
 
 ## Global station installation
 
@@ -663,20 +736,18 @@ the new definition. Record that run and the affected step logs in the issue.
 
 ### Coordinator flow
 
-Each run is coordinated from a session whose canonical main worktree is the
-run's `PRIMARY` and whose actual transcript directory belongs to
-`triage_decision`'s encoded `PRIMARY` namespace. A linked-worktree session
-matches when its transcripts belong to that primary namespace. On mismatch or
-check failure, the `POC=no` guard reports expected/observed primary and
-transcript directories, plus the failure cause when available, and keeps triage waiting.
-The guard and activity reader share effective agent-directory resolution:
-defined `OMP_PROFILE` (including empty) precedes `PI_PROFILE`; a trimmed named
-profile uses `<home>/<PI_CONFIG_DIR or .omp>/profiles/<profile>/agent`.
-Without a named profile, `PI_CODING_AGENT_DIR` overrides the default agent
-directory. Runtime session-directory errors fail closed with their actual cause.
+Each admitted run retains its coordinating OMP session and canonical `PRIMARY`.
+Open the coordinating session in that repository with `omp -p --cwd <primary>`
+or an Orca tab before enqueueing. The coordinator owns goal, priority, scope
+and exceptions. Dagu command steps start ready semantic jobs independently of
+coordinator turns. PoC execution and operator recovery/validation retain their
+own checkpoint authorities.
 
-The coordinator only drives Dagu checkpoints; subagents perform triage review,
-PoCs and implementation, rather than the coordinator implementing inline.
+The activity reader resolves the effective agent directory: defined `OMP_PROFILE`
+(including empty) precedes `PI_PROFILE`; a trimmed named profile uses
+`<home>/<PI_CONFIG_DIR or .omp>/profiles/<profile>/agent`. Without a named profile,
+`PI_CODING_AGENT_DIR` overrides the default agent directory.
+
 Coordinate only runs owned by this session. Before taking an issue that another
 live repository session could own, contact that session with `orca terminal send`
 and establish ownership. For waiting `poc-*` runs, inspect the issue state and
@@ -686,24 +757,20 @@ Worktrees belong to Dagu: `start_gate` creates or adopts
 `.workspace/worktrees/issue-<n>` and `dagu/issue-<n>`, and
 `close_gate`/`handler_on.exit` own their removal under the recovery contract above.
 The coordinator never creates them with `git worktree add` or `git branch`,
-including to get ahead while a run is blocked. Implementers start only when
-`implement` is waiting. If another session dirties PRIMARY, notify that session
+including to get ahead while a run is blocked. Implementers start when Dagu's
+`implement` command is running. If another session dirties PRIMARY, notify that session
 and wait for its clean confirmation, then resume the existing availability
 checkpoint; reenqueue only a terminal run under the recovery contract above.
 Keep recovery inside Dagu's lifecycle.
 
-Issue every `dagu human-task complete` in its own `bash` call: the triage guard
-blocks the entire command containing the completion.
-
 The `@a4s/omp-dagu` status extension delivers hidden model context for every waiting human task in `feature`, `poc`, `discovery` and `planning`, and for final `succeeded`. Waiting notices have the form `[DAGU STATE] run=<id> status=waiting step=<step> <issue=<issue>|dag=<dag>> bundle=<version|unstamped> extension=<version> main=<version|unknown|n/a> compat=<ok|stale|incompatible|unstamped> iteration=<approvalIteration>`. Success uses `status=succeeded` with run identity and bundle fields; feature/discovery/planning failures and aborts include their terminal step. The persisted Dagu event log recovers openings missed by SSE; deduplication uses DAG, run, step and approval iteration (omitted means zero), or run/status for success. An owner-session FIFO starts one autonomous turn at a time while idle and delivers asides during an active turn. The initial sweep is a silent baseline. Notices start or continue coordinator turns without rendering in chat and report run state rather than user instructions.
 
-- On a `triage` notice, the coordinator obtains the guard generation/request marker and launches a review `task` with that exact marker and the issue scope, naming the subagent `TriageReview<ISSUE>` (or `TriageReview<ISSUE>v<N>` for a retry). The distributed `triage-reviewer` supplies the PoC criterion; another agent may perform the review using the criterion in **Triage**. The guard injects the decision schema into any marker-bound task. Several reviews may share one batched `task` call; each assignment includes its own run's marker. The coordinator completes `triage` with the allocated reviewer ID. A `dependency_review` push-back produces a fresh triage generation.
+- `triage` and `implement` execute through the role-job boundary below; the coordinator dispatches QA/reviewer at `quality_review`.
 - At `run_poc`, the coordinator launches the PoC subagent as `Poc<ISSUE>`.
-- On an `implement` notice, the coordinator launches one level-1 implementation subagent named `Implement<ISSUE>` for that issue's worktree, with the contract in **Implement**. The result auto-delivers to the coordinator, which reviews the diff before completing `implement`.
-- On a recovery notice, inspect the failed command logs, then use the iteration-protected push-back above. Gate recovery returns to the implementation subagent; start/push infrastructure repair belongs to the operator. On a `failed` or `aborted` notice outside these checkpoints, inspect the terminal logs and preserved resources under the terminal contract above.
-- A retried subagent appends `v<N>` to its base name, for example `Implement182v2`.
-- For every issue in the fixed batch, keep one todo for the agent action at the `human.task` where its run is waiting: triage review, PoC execution, implementation, or recovery. Update that todo when the run moves to another human task. The package widget shows the active step plus live activity: the last non-empty Dagu log line for a running command, or `<tool> <intention> (<age>s)` from the newest `toolCall` in `TriageReview<ISSUE>`, `Poc<ISSUE>` or `Implement<ISSUE>` while its human task waits. Intention comes from `i`, then `title`, then the principal argument; the task name is omitted. It refreshes activity about every two seconds and leaves the line unchanged when no source is available. The `Workflows` HUD folds to three completion-ordered tree rows and expands to eight; `/workflows` toggles, `expand` and `collapse` set the fold, and `hide` and `show` control visibility across session switches.
-- Keep `task.maxRecursionDepth: 1`; every implementation and triage review subagent remains at level 1 and appears in the main view.
+- Recovery notices retain the failed command's logs and resources. The owner
+  inspects them and uses the iteration-protected checkpoint transition; operator
+  infrastructure repairs and declared validation remain operator-attributed.
+- The widget displays running semantic stages through their Dagu command logs.
 - A notice whose `compat` is `stale`, `incompatible` or `unstamped` goes under **Blockers and decisions**. A stale notice raises a `warning` notification while the coordinator keeps working; the operator restarts OMP to load main and completes the queued bootstrap plus adoption re-seal. Put the exact recovery enqueue command above under **Proposals** when bootstrap still needs enqueueing. Complete `answers` with the installed values and use the staged `feature.yaml` for the adoption issue. These notices are distinct from admission: provenance-verified requested DAG and installed reconciler stamps are independently compatible with the loaded package when valid semantic versions share major and minor, including patch drift; exact package identity, source provenance and native-version checks still apply.
 
 ## Turn status
@@ -721,68 +788,29 @@ Every emitted report contains all four sections; a section with no entries says 
 
 ## Triage
 
-`triage` is the first human task, completed by the session that enqueued the issue.
-A PoC is required when implementation depends on unexercised external or runtime
-behavior that can change the implementation path. Reusing demonstrated behavior
-proceeds directly. Bug reproduction is defect investigation.
+`triage` automatically runs the registered `triage-reviewer` against the issue
+body and comments. A PoC is required when implementation depends on unexercised
+external/runtime behavior that could change the implementation path; reuse of
+demonstrated behavior proceeds directly. Bug reproduction is defect investigation.
+The native structured result supplies `POC`, `QUESTION`, `BASIS` and `REVIEW`
+(the role-job id). Before the `POC=no` publication, `triage_decision` verifies
+the bound completed receipt, native session/model event, sealed transcript
+prefix and exact output. Verification reports the canonical primary, exact
+role-job receipt and native transcript paths; failures retain their cause and
+`VERIFIER=FAIL` before any state or publication effects.
+`POC=yes` publishes the question and enqueues the repository's `poc.yaml`.
+A dependency push-back changes the native iteration and authorizes a fresh
+attributable review.
 
-With OMP, load the `@a4s/omp-dagu` package directory so its distributed
-`triage-reviewer` agent and DAG progress widget are discovered. The coordinating
-session identified by `OMP_SESSION_ID` attempts the `POC=no` completion and
-receives `TRIAGE_REVIEW_REQUIRED` with the decision JSON Schema and this marker:
-
-```text
-TRIAGE_REVIEW DAG=<dag> RUN=<run> GENERATION=<n> REQUEST=<m>
-```
-
-Launch a `task` with the exact marker and issue scope in its assignment.
-Any agent can be bound; `triage-reviewer` already carries the PoC criterion
-above. Name the subagent `TriageReview<ISSUE>`; retries append `v<N>`.
-The guard supplies `outputSchema` and correlates the allocated task ID, batch
-index, generation and request across task results, waits and async completions.
-The output contains exactly `poc` (`yes` or `no`), `behavior`, `question` and
-`reason`, with nonempty text in the latter three fields. For `no`, describe the
-resolved question and evidence. Invalid bound output blocks completion with
-`TRIAGE_REVIEW_INVALID`, identifying the field and expected/observed values.
-
-A `no` authorizes the current generation with that allocated ID as `REVIEW`;
-a `yes` keeps triage waiting with its concrete runtime question. Another rejected
-completion emits a fresh request marker in the same generation. Use it in the
-next review assignment with corrected scope or new evidence. Only a result bound
-to the current request can authorize completion or report invalid output.
-An older result stays retired even while the current task is pending.
-
-When the coordinator selects an agent covered by
-`@a4s/omp-cross-family-review`'s `REVIEW_POLICIES` (including `triage-reviewer`),
-that agent's cross-family selection policy still applies at dispatch.
-
-```sh
-dagu human-task complete feature --run-id <id> --step triage \
-  --input POC=no --input 'QUESTION=<behavior>' \
-  --input 'BASIS=<prior PASS URL, merged PR URL, or reason>' \
-  --input 'REVIEW=<completed review task id supplied by the guard>'
-```
-
-For `POC=yes`, supply QUESTION and BASIS; REVIEW is optional. For `POC=no`,
-`triage_decision` resolves `REVIEW` as the simple JSONL file name of that
-subagent under the `OMP_SESSION_ID` coordinator session. Before writing state or
-publishing the `poc-triage:no` comment, it reads the run through Dagu REST and
-requires exactly one `triage.startedAt`, exactly one session with the expected
-parent, and one or more `session_init` rows sharing the same agent and identical
-task with the complete `TRIAGE_REVIEW DAG=feature RUN=<run> GENERATION=<n>
-REQUEST=<m>` marker. Native fallback refreshes preserve the first init's
-strictly-after-cutoff freshness check and `poc=no` in the final yield.
-A missing, ambiguous, stale, malformed or mismatched transcript fails the step
-closed. `POC=yes` publishes
-`<!-- poc-triage:yes run:<RUN> -->`, enqueues the absolute repository `poc.yaml`
-with ISSUE and QUESTION, and ends the feature run.
-The native verifier first finds exactly one coordinator file ending in
-`_${OMP_SESSION_ID}.jsonl` across `$HOME/.omp/agent/sessions/<encoded>` and
-`$HOME/.omp/profiles/*/agent/sessions/<encoded>`, using the existing home,
-temporary-root and absolute PRIMARY encodings. It then reads only the exact
-allocated `REVIEW.jsonl` under that parent's stem. Parent uniqueness is required
-even if only one parent has the requested child. Diagnostics list consulted
-directories, parent paths and match counts before any state or publication effects.
+The contract binds the exact `Authorized Dagu role job <id>.` assignment marker
+and sealed receipt, not the agent name or the PoC criterion's prose.
+`triage-reviewer` is the default registered routing/criterion provider.
+The executor supplies the canonical decision schema from `src/triage/schema.ts`,
+identical to the distributed agent definition, and the verifier reports invalid
+fields as `TRIAGE_REVIEW_INVALID: field=... expected=... observed=...`.
+The job id seals repository, run, SHA, iteration and native step attempt.
+This current authorized job receipt replaces coordinator-task parent/session
+namespace correlation; dependency rewinds and retries receive fresh identities.
 
 ## Recover a checkpoint after native stale-process repair
 
@@ -809,12 +837,14 @@ completed decision and captured candidate. For example, after feature
 `implement` completed and `capture` succeeded, retry `rebase`, not `start_gate`
 or `capture`.
 
+Feature `triage` and `implement` are command steps. After inspecting retained
+effects, retry that same step (`--step triage` or `--step implement`); its fresh
+native start timestamp permits recovery from failed/interrupted role jobs.
+
 | DAG | Failed Waiting checkpoint | Retry step |
 |---|---|---|
-| feature | triage | admit |
 | feature | start_primary_unavailable | detect_start_primary |
 | feature | recover_start_gate | start_gate |
-| feature | implement | start_gate |
 | feature | dependency_review | checkpoint_push |
 | feature | conflict_review | rebase |
 | feature | recover_gate | gate |
@@ -983,8 +1013,9 @@ and nonempty required sections outside fences.
 It verifies Después del PASS in the body and enqueues the absolute feature
 DAG with ISSUE, BASE_BRANCH and POC_BASIS pointing to the PASS;
 the PoC run and promoted `feature-<RUN>` run retain the original run's
-`OMP_SESSION_ID`, so the same coordinating OMP session receives the promoted run's notices. Its human triage cites that URL as BASIS and still requires
-REVIEW for POC=no.
+`OMP_SESSION_ID`, so the same coordinating OMP session receives the promoted run's
+notices. Its triage role job reads that PASS URL as review input and produces the
+durable REVIEW receipt for POC=no.
 PASS with promote=no ends. FAIL closes only an issue created by record as
 `not planned`; preexisting issues stay open. For INCONCLUSIVE, the operator
 chooses iteration or completion with promote=no.
@@ -1010,65 +1041,20 @@ concurrently.
 
 ## Implement
 
-When `start_gate` succeeds, the run enters `Waiting` at `implement`, and the queue slot is released.
+After `start_gate`, Dagu runs `dagu-role-jobs stage implement` using the
+registered `task` definition and its current role/model configuration. Its
+assignment includes `FEATURE_IMPLEMENT RUN=<run>`, the complete issue acceptance
+and assigned worktree. A retained nonempty `conflict-files` selects the
+`conflict-resolution` obligation, with the same registered implementer.
+The executor returns structured `summary` and conventional `message`; Dagu emits
+`SUMMARY`, `MESSAGE` and the role-job id as `IMPLEMENTER` for `capture`.
 
-Give `Implement<ISSUE>` the exact `WORKTREE` path and `BRANCH`, plus this contract:
-Include `FEATURE_IMPLEMENT RUN=<run-id>` in the implementer's task assignment,
-and retain its allocated id as `IMPLEMENTER` in the completion form.
-
-Each correction after a quality push-back requires a newly allocated implementer
-subagent named `Implement<ISSUE>v<N>`, with a fresh name for each attempt, like
-QA/reviewer retries. The guard accepts repeated `session_init` rows for an
-identical agent and task, including plugin reloads, and uses the first init
-timestamp to verify invocation freshness. Each transcript must retain one
-agent/task identity. Supply the new allocated id as `IMPLEMENTER` when
-completing the corrected delivery.
-
-At implement completion the extension resolves the current checkpoint's exact
-`startedAt` and coordinator transcript. The allocated `IMPLEMENTER` must have a
-unique parent task invocation with the exact `FEATURE_IMPLEMENT RUN=<run-id>`
-marker and one agent/task identity. A parent allocation with the default agent
-omitted correlates to runtime `agent=task`; explicit agents match their runtime
-identity. Its first `session_init` must be strictly
-after that cutoff, preserving milliseconds; identical later reload rows retain
-the original cutoff comparison. The same provenance and effective-model
-validator runs again for quality review. A rejection names the failed invariant,
-keeps `Waiting implement`, and requires a newly launched `Implement<ISSUE>v<N>`
-after the current cutoff. At `quality_review`, native push-back with the observed
-run-wide iteration rewinds to `implement` for that fresh delivery.
-Literal completion recognition preserves quoted input values and flag order:
-feature-first or feature-last, spaced SUMMARY and MESSAGE, equals flags, short
-run/quiet flags and backslash-newline continuations. It binds the IMPLEMENTER
-from one literal simple command. An unquoted `#` at a word boundary starts a
-comment; quoted, escaped and embedded hashes remain argument text. Compound
-command boundaries, expansion, redirection and incomplete quoting produce an
-`IMPLEMENT_BLOCKED` diagnostic for recognized feature implement completions.
-
-- Leave real-`DAGU_HOME` `dagu human-task` transitions, pushes, PR creation and
-  GitHub comments to the coordinator and DAG. Leave `omp plugin link` and
-  `~/.omp` configuration to the operator.
-- Own verification and the gate, following the steps below.
-- Run live Dagu tests with an isolated `DAGU_HOME` created by `mktemp -d`.
-- When siblings edit distinct parts of shared files, touch only the assigned
-  part and add test cases rather than rewriting shared fixtures.
-
-1. Work only in `WORKTREE` on `BRANCH`; never touch the primary checkout.
-2. Deliver modified, added, deleted, renamed and binary files inside the assigned
-   worktree, with a summary and a conventional commit message. Dagu's `capture`
-   validates canonical PRIMARY/worktree, branch and run/session ownership, stages
-   the delivery and generates the single candidate commit over the recorded base.
-3. After a conflict push-back, resolve the files listed in
-   `<git-dir>/dagu-feature/runs/<RUN>/conflict-files` in place. Dagu keeps the same
-   run and branch, prepares the updated base and leaves conflict markers for the
-   implementer; the next capture commits the resolved files.
-4. Optionally run the gate yourself first, from the worktree.
-5. Complete the checkpoint:
-
-   ```sh
-   dagu human-task complete --run-id <id> --step implement \
-     --input SUMMARY='<change summary>' --input MESSAGE='<conventional message>' \
-     --input IMPLEMENTER='<allocated implementer id>' feature
-   ```
+The role works only in its assigned worktree, resolves retained quality findings
+and conflict paths, and runs the issue's targeted tests. Its summary retains the
+exact commands/results. Dagu owns staging, commits and publication, and runs the
+complete configured gate. Operator configuration stays operator-owned.
+Every correction's run-wide iteration authorizes a fresh session. An interrupted
+job retains its artifacts and diagnosed outcome for owner-directed recovery.
 
 The run resumes through the queue: `capture` → `checkpoint_push` →
 `dependency_review` → `rebase` → `conflict_review` → `gate` → `recover_gate` → `quality_prepare` →
@@ -1208,13 +1194,16 @@ The same sequence runs for the initial candidate, every correction and every reb
 
 ### Effective QA and review
 
-`quality_prepare` writes `quality-request.json` with canonical repo/worktree, run,
-capture iteration, current SHA, parent session, implementer id, implement cutoff
-and a fresh attempt timestamp (Unix seconds, including the fractional part). Read that file and the two exact role markers in
-the step log. Launch two named `task` subagents, `agent=qa` and `agent=reviewer`,
-each with its exact marker in its task assignment. Each subagent name identifies
-exactly one attempted invocation; use a fresh `v<N>` suffix for an already-attempted
-name (for example `Review379v2`). Guard-blocked attempts count as invocations.
+`quality_prepare` binds the canonical repo/worktree, run, candidate SHA,
+capture iteration, implementer and fresh quality attempt in `quality-request.json`.
+`quality_review` is the existing human-task join. Launch named `task agent=qa`
+and `task agent=reviewer` subagents with their exact markers and issue acceptance.
+The guard inspects the implementer's actual effective model, retaining family
+exclusion for both reviewers. For a native implementer it verifies the admitted
+role-job observation, sealed result/transcript and capture's explicit
+`candidate.json.implementation` input HEAD/result digest. That link survives rebase;
+the request still binds the current candidate SHA and capture iteration.
+The coordinator `task` guard supports independently bound quality assignments:
 
 One native `task` invocation may contain QA/reviewer pairs for several independent
 current quality requests, in either order, alongside unmarked unrelated tasks.
@@ -1244,35 +1233,19 @@ canonical primary path from `quality-request.json`; `iteration` is a number,
 `attempt` is a string, `verdict` is `PASS` or `FAIL`, and `findings` is a string array:
 
 ```json
-{"repo":"<canonical PRIMARY>","run":"<run-id>","iteration":0,"attempt":"<request timestamp>","sha":"<full SHA>","role":"qa","verdict":"PASS","findings":["<observed command/result or review finding>"]}
+{"repo":"<canonical PRIMARY>","run":"<run-id>","iteration":0,"attempt":"<request timestamp>","sha":"<full SHA>","role":"qa","verdict":"PASS","findings":["<observed commands/results>"]}
 ```
 
-Use `role=reviewer` for review and `verdict=FAIL` with actionable findings on
-rejection. Complete only after both finish:
+Use `role=reviewer` for the other obligation. Complete the join after both finish:
 
 ```sh
-dagu human-task complete feature --run-id <id> --step quality_review \
+dagu human-task complete feature --run-id <run> --step quality_review \
   --input QA=<allocated QA id> --input REVIEW=<allocated reviewer id>
 ```
 
-The OMP guard reads the raw child JSONL under the coordinator's session
-directory, correlating child id/session, exact parent transcript, parent `task`
-invocation, run/iteration/attempt/role assignment and candidate SHA read through
-a correlated Git tool result. It attributes the verdict to the emitting
-assistant message's provider/model, resolves that exact catalog identity and
-compares families using `ctx.models.family`. The implementer's effective final
-response, rather than its requested role model, is the reference. QA and reviewer
-are distinct from each other and the implementer; their families may match each other.
-Observed assistant attempts/errors and runtime `resolvedModelIsFallback` changes
-are retained with each verdict. Markdown reports and requested models establish
-neither identity nor admission.
-
-The `omp-cross-family-review` integration strictly selects QA/reviewer candidates
-outside that effective implementer family. Configured candidates plus `@slow`,
-`@default` and `@task` are deduplicated by resolved provider/id. Exhaustion,
-indeterminate identity and a same-family effective fallback block with diagnostics
-and preserve the local candidate. Enable the cross-family extension for its
-dispatch hook; the Dagu guard also filters model candidates at the `task` boundary.
+The existing guard writes the two independently verified verdicts to `quality.json`.
+QA/reviewer role-job receipt admission and its template/hook migration belong to
+#514; #517 consumes the published native receipt for semantic evidence.
 
 `quality.json` persists two independent, fully bound verdicts and their runtime
 evidence. `quality_admit` checks request/candidate/gate bindings, both allocated
@@ -1290,8 +1263,8 @@ pushes it back to `implement` in the same run using the observed run-wide
 `--expected-iteration`. Both sets of findings remain in `quality.json` and the
 transition log. A changed SHA or a fresh gate attempt requires new QA and review
 evidence. `push` and guarded `auto_merge` consume only that admitted SHA.
-Deliver each quality push-back correction through a new implementer subagent
-named `Implement<ISSUE>v<N>`, following the fresh-session contract in **Implement**.
+Each quality push-back correction uses the fresh-session job identity described
+in **Implement**.
 
 
 This division of responsibility is **advisory while the TUI has direct access

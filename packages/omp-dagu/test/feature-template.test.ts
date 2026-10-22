@@ -17,11 +17,25 @@ import { inspectVerdict, qualityDecision, qualityMarker, verifyQuality } from ".
 import type { QualityRequest, TranscriptRow } from "../src/triage/quality.ts";
 import { qualityFixture, readQualityPolicies } from "./quality-fixtures.ts";
 import { liveDagu, liveDaguVersion } from "./fixtures/live-dagu.ts";
+import { roleAdmission, roleExecution } from "./role-job-fixtures.ts";
+import { jobId, type JobBinding } from "../src/role-jobs.ts";
+import { roleAssignment, runRoleJob } from "../src/role-dispatch.ts";
 
 const definitions = [
   ["template", fileURLToPath(new URL("../skills/dagu-feature/feature.yaml", import.meta.url))],
   ["rendered DAG", fileURLToPath(new URL("../../../.workspace/dagu/dags/feature.yaml", import.meta.url))],
 ] as const;
+const deliveryForm = `      form:
+        type: object
+        properties:
+          SUMMARY:
+            type: string
+          MESSAGE:
+            type: string
+          IMPLEMENTER:
+            type: string
+        required: [SUMMARY, MESSAGE, IMPLEMENTER]
+`;
 
 function extractScript(definition: string, marker: string): string {
   const lines = readFileSync(definition, "utf8").split("\n");
@@ -291,6 +305,74 @@ function admitQuality(repo: Repository, definition: string, verdict: "PASS" | "F
   runScript(extractScript(definition, "  - id: quality_admit"), repo, { QA: "QATest", REVIEW: "ReviewTest", OMP_SESSION_ID: "parent-id" });
   return { ...fixture, evidence };
 }
+
+test("template progresses native implementation through quality_prepare and coordinator join to admitted evidence", async t => {
+  const repo = repository();
+  try {
+    const definition = definitions[0][1];
+    const source = readFileSync(definition, "utf8");
+    assert.match(extractStep(source, "quality_review"), /action: human.task/);
+    const run = "test-run"; const home = join(repo.root, "dagu-home"); mkdirSync(home);
+    const startedAt = "2026-10-22T05:00:00Z";
+    const binding: JobBinding = { repo: repo.primary, worktree: repo.worktree, lane: "feature", dag: "feature",
+      run, stage: "implement", role: "implement", sha: git(repo.worktree, "rev-parse", "HEAD"), iteration: 0, attempt: `0:${startedAt}` };
+    const directory = join(repo.state, "role-jobs", jobId(binding));
+    const result = await runRoleJob({ home, capacity: 1, binding, directory, readyAt: startedAt,
+      assignment: roleAssignment(binding, "189", "Acceptance", repo.state), authorize: async () => {}, execute: roleExecution });
+    const receipt = roleAdmission(repo.primary, home, run, source);
+    receipt.runReceipt.observations.push({ at: startedAt, dag: "feature", run, attempt: 1,
+      category: "runtimeAndModels", kind: "role-job", data: { id: result.id, state: "completed", result: join(directory, "result.json") } });
+    writeFileSync(join(repo.state, "receipt.json"), JSON.stringify(receipt));
+    const identity = JSON.stringify({ primary: repo.primary, worktree: repo.worktree, branch: repo.branch, run, session: "parent-id" }) + "\n";
+    writeFileSync(join(repo.state, "identity"), identity);
+    writeFileSync(git(repo.worktree, "rev-parse", "--path-format=absolute", "--git-path", "dagu-feature-owner"), identity);
+    writeFileSync(join(repo.worktree, "README.txt"), "native delivery\n");
+    runScript(extractScript(definition, "  - id: capture"), repo, { IMPLEMENTER: result.id, OMP_SESSION_ID: "parent-id" });
+    runScript(extractScript(definition, "  - id: gate"), repo);
+    const details = { dagRunDetails: { params: `PRIMARY=${repo.primary} ISSUE=189 OMP_SESSION_ID=parent-id`,
+      nodes: [{ step: { id: "implement" }, startedAt }] } };
+    mkdirSync(join(repo.root, "bin"), { recursive: true });
+    const curl = join(repo.root, "bin", "curl");
+    writeFileSync(curl, `#!/bin/sh\nprintf '%s\\n' '${JSON.stringify(details)}'\n`); chmodSync(curl, 0o755);
+    runScript(extractScript(definition, "  - id: quality_prepare"), repo, { OMP_SESSION_ID: "parent-id" });
+    const request: QualityRequest = JSON.parse(readFileSync(join(repo.state, "quality-request.json"), "utf8"));
+    const fixture = qualityFixture(repo, "PASS", request);
+    t.mock.method(globalThis, "fetch", async () => new Response(JSON.stringify(details)));
+    const decision = await qualityDecision({ toolName: "bash", toolCallId: "join", input: {
+      command: `dagu human-task complete feature --run-id ${run} --step quality_review --input QA=QATest --input REVIEW=ReviewTest`,
+    } }, { cwd: repo.primary, sessionManager: { getSessionDir: () => dirname(fixture.parent) }, models: fixture.models });
+    assert.equal(decision, undefined);
+    runScript(extractScript(definition, "  - id: quality_admit"), repo, { QA: "QATest", REVIEW: "ReviewTest", OMP_SESSION_ID: "parent-id" });
+    assert.equal(readFileSync(join(repo.state, "quality-action"), "utf8"), "complete\n");
+    const candidate = JSON.parse(readFileSync(join(repo.state, "candidate.json"), "utf8"));
+    const verify = () => verifyQuality(fixture.parent, request, "QATest", "ReviewTest", fixture.models);
+    assert.throws(() => verifyQuality(fixture.parent, request, "QATest", "ReviewTest",
+      { ...fixture.models, family: () => "canonical-openai" }), /same-family effective/);
+    assert.equal(verify().implementer.family, "canonical-openai");
+    assert.equal(candidate.implementation.inputSha, binding.sha);
+    assert.notEqual(candidate.sha, binding.sha);
+    assert.equal("parentSession" in verify().implementer, false);
+    const resultPath = join(directory, "result.json");
+    const originalResult = readFileSync(resultPath);
+    appendFileSync(resultPath, " ");
+    assert.throws(() => runScript(extractScript(definition, "  - id: quality_admit"), repo,
+      { QA: "QATest", REVIEW: "ReviewTest", OMP_SESSION_ID: "parent-id" }), /native implementation receipt changed/);
+    writeFileSync(resultPath, originalResult);
+    for (const key of ["inputSha", "resultDigest"]) {
+      const altered = structuredClone(candidate); altered.implementation[key] = "b".repeat(key === "inputSha" ? 40 : 64);
+      writeFileSync(join(repo.state, "candidate.json"), JSON.stringify(altered));
+      assert.throws(verify, key === "inputSha" ? /sha mismatch/ : /receipt digest mismatch/);
+    }
+    for (const [key, value] of [["run", "another-run"], ["sha", "c".repeat(40)]] as const) {
+      const altered = structuredClone(result); altered.binding[key] = value; altered.id = jobId(altered.binding);
+      const bytes = JSON.stringify(altered);
+      writeFileSync(join(directory, "result.json"), bytes);
+      candidate.implementation.resultDigest = createHash("sha256").update(bytes).digest("hex");
+      writeFileSync(join(repo.state, "candidate.json"), JSON.stringify(candidate));
+      assert.throws(verify, new RegExp(`${key} mismatch`));
+    }
+  } finally { rmSync(repo.root, { recursive: true, force: true }); }
+});
 
 function changeTranscript(path: string, mutate: (rows: TranscriptRow[]) => void): void {
   const rows: TranscriptRow[] = readFileSync(path, "utf8").trim().split("\n").map(line => JSON.parse(line));
@@ -1535,7 +1617,9 @@ for (const [name, definition] of definitions) {
         "steps:\n", extractStep(source, "admission"), extractStep(source, "admit"),
         "  - id: triage\n    depends: admit\n    run: echo POC=no >> \"$DAGU_OUTPUT_FILE\"\n    outputs:\n      - name: POC\n",
         "  - id: triage_decision\n    depends: triage\n    run: echo reviewed\n",
-        ...["detect_start_primary", "start_primary_unavailable", "start_gate", "recover_start_gate", "implement", "capture"].map(id => extractStep(source, id)),
+        ...["detect_start_primary", "start_primary_unavailable", "start_gate", "recover_start_gate"].map(id => extractStep(source, id)),
+        "  - id: implement\n    depends: recover_start_gate\n    action: human.task\n    with:\n      prompt: Synthetic delivery actor for candidate-retention acceptance.\n" + deliveryForm,
+        extractStep(source, "capture"),
         "handler_on:\n  exit:\n    run: |\n" + extractScript(definition, "  exit:").split("\n").map(line => "      " + line).join("\n") + "\n",
       ].join(""));
       dagu("validate", file);
@@ -1680,7 +1764,9 @@ test("native terminal replacement captures retained and nonempty correction", {
       "steps:\n", extractStep(source, "admission"), extractStep(source, "admit"),
       "  - id: triage\n    depends: admit\n    run: echo POC=no >> \"$DAGU_OUTPUT_FILE\"\n    outputs:\n      - name: POC\n",
       "  - id: triage_decision\n    depends: triage\n    run: echo reviewed\n",
-      ...["detect_start_primary", "start_primary_unavailable", "start_gate", "recover_start_gate", "implement", "capture"].map(id => extractStep(source, id)),
+      ...["detect_start_primary", "start_primary_unavailable", "start_gate", "recover_start_gate"].map(id => extractStep(source, id)),
+      "  - id: implement\n    depends: recover_start_gate\n    action: human.task\n    with:\n      prompt: Synthetic delivery actor for recovery/rebase acceptance.\n" + deliveryForm,
+      extractStep(source, "capture"),
       "  - id: retain_candidate\n    depends: capture\n    run: test \"$RETAIN\" = no\n",
       "  - id: dependency_review\n    depends: retain_candidate\n    action: human.task\n    with:\n      prompt: Synthetic dependency reviewer releases captured candidate for rebase.\n",
       extractStep(source, "rebase"),
@@ -1975,7 +2061,9 @@ esac
       ...["detect_start_primary", "start_primary_unavailable", "start_gate", "recover_start_gate", "implement",
         "capture", "checkpoint_push", "dependency_review", "rebase", "conflict_review", "gate", "recover_gate",
         "quality_prepare", "quality_review", "quality_admit", "quality_transition", "validation", "push", "recover_push", "pr"]
-        .map(step => extractStep(source, step)),
+        .map(step => step === "implement"
+          ? "  - id: implement\n    depends: recover_start_gate\n    action: human.task\n    with:\n      prompt: Synthetic delivery actor for native recovery acceptance.\n" + deliveryForm
+          : extractStep(source, step)),
       "  - id: await_merge\n    depends: pr\n    action: human.task\n    with:\n      prompt: Isolated merge boundary\n",
       source.slice(source.indexOf("handler_on:\n"), source.indexOf("  exit:\n")),
     ].join("");
@@ -2118,7 +2206,9 @@ for (const [name, definition] of definitions) {
             mkdirSync(dirname(pocDefinition), { recursive: true });
             writeFileSync(pocDefinition, "steps:\n  - id: experiment\n    run: echo isolated-poc\n");
             const source = readFileSync(definition, "utf8");
-            const triage = mode === "poc" ? extractStep(source, "triage") : `  - id: triage\n    run: |\n      printf 'POC=no\\nQUESTION=runtime behavior\\nBASIS=regression test\\nREVIEW=fixture\\n' >> "$DAGU_OUTPUT_FILE"\n    outputs:\n      - name: POC\n      - name: QUESTION\n      - name: BASIS\n      - name: REVIEW\n`;
+            const triage = mode === "poc"
+              ? "  - id: triage\n    depends: admit\n    action: human.task\n    with:\n      prompt: Synthetic decision actor for PoC routing acceptance.\n      form:\n        type: object\n        properties:\n          POC:\n            type: string\n            enum: [yes, no]\n          QUESTION:\n            type: string\n          BASIS:\n            type: string\n        required: [POC, QUESTION, BASIS]\n"
+              : `  - id: triage\n    run: |\n      printf 'POC=no\\nQUESTION=runtime behavior\\nBASIS=regression test\\nREVIEW=fixture\\n' >> "$DAGU_OUTPUT_FILE"\n    outputs:\n      - name: POC\n      - name: QUESTION\n      - name: BASIS\n      - name: REVIEW\n`;
             // Reviewer verification and implementation/merge are outside this routing test.
             // Keep the production start/close gates, conditional checkpoints and exit handler.
             const decision = mode === "poc" ? extractStep(source, "triage_decision")
@@ -2484,7 +2574,8 @@ for (const [name, definition] of definitions) {
             + `steps:\n  - id: triage\n    run: printf 'POC=${mode === "poc" ? "yes" : "no"}\\n' >> "$DAGU_OUTPUT_FILE"\n    outputs:\n      - name: POC\n  - id: implement\n    depends: triage\n    action: human.task\n    with:\n      prompt: Implement candidate\n`
             + gate + extractStep(source, "recover_gate")
             + extractStep(source, "quality_prepare")
-            + ["quality_review", "quality_admit", "quality_transition", "validation", "push", "recover_push"].map(step => extractStep(source, step)).join(""));
+            + extractStep(source, "quality_review")
+            + ["quality_admit", "quality_transition", "validation", "push", "recover_push"].map(step => extractStep(source, step)).join(""));
           const completeQuality = async () => {
             await state(id, "waiting", "quality_review");
             const request: QualityRequest = JSON.parse(readFileSync(join(repo.state, "quality-request.json"), "utf8"));
@@ -2608,17 +2699,36 @@ for (const [name, definition] of definitions) {
     const identity = JSON.stringify({ primary: repo.primary, worktree: repo.worktree, branch: repo.branch, run, session: "parent-id" }) + "\n";
     writeFileSync(join(state, "identity"), identity);
     writeFileSync(git(repo.worktree, "rev-parse", "--path-format=absolute", "--git-path", "dagu-feature-owner"), identity);
-    const env = { ...process.env, DAGU_PARAMS_JSON: "{}", DAGU_HOME: home, DAGU_PORT: String(port), DAGU_COORDINATOR_ENABLED: "false" };
+    const fixtureBin = join(repo.root, "role-bin"); mkdirSync(fixtureBin);
+    const env = { ...process.env, PATH: `${fixtureBin}:${process.env.PATH}`, DAGU_PARAMS_JSON: "{}", DAGU_HOME: home, DAGU_PORT: String(port), DAGU_COORDINATOR_ENABLED: "false" };
     writeFileSync(join(home, "config.yaml"), `host: 127.0.0.1\nport: ${port}\nauth:\n  mode: none\ncoordinator:\n  enabled: false\n`);
     const source = readFileSync(definition, "utf8");
+    const commandImplementation = extractStep(source, "implement").includes("dagu-role-jobs stage implement");
+    const implementationReady = join(repo.root, "implementation-ready");
+    const executor = join(fixtureBin, "execute.ts");
+    writeFileSync(executor, `import {existsSync,rmSync} from "node:fs";
+import {setTimeout as delay} from "node:timers/promises";
+import {dispatchStage} from ${JSON.stringify(new URL("../src/role-dispatch.ts", import.meta.url).href)};
+import {roleExecution} from ${JSON.stringify(new URL("./role-job-fixtures.ts", import.meta.url).href)};
+await dispatchStage("implement",(name,value)=>require("node:fs").appendFileSync(process.env.DAGU_OUTPUT_FILE,name+"="+value+"\\n"),async(job,assignment)=>{
+  while(!existsSync(${JSON.stringify(implementationReady)})) await delay(100);
+  rmSync(${JSON.stringify(implementationReady)});
+  return roleExecution(job,assignment);
+});
+`);
+    writeFileSync(join(fixtureBin, "dagu-role-jobs"), `#!/bin/sh\nexec bun ${JSON.stringify(executor)} "$@"\n`);
+    chmodSync(join(fixtureBin, "dagu-role-jobs"), 0o755);
+    writeFileSync(join(fixtureBin, "gh"), '#!/bin/sh\nprintf \'{"title":"Fixture","body":"Acceptance","comments":[]}\\n\'\n');
+    chmodSync(join(fixtureBin, "gh"), 0o755);
     const steps = ["implement", "capture", "rebase", "conflict_review", "gate", "recover_gate", "quality_prepare",
       "quality_review", "quality_admit", "quality_transition", "validation", "push"].map(step =>
-      extractStep(source, step).replace("    depends: recover_start_gate\n", "    depends: triage\n").replace("    depends: dependency_review\n", "    depends: capture\n")).join("\n");
+      extractStep(source, step).replace("    depends: dependency_review\n", "    depends: capture\n")).join("\n");
     const dag = join(home, "dags", "feature.yaml");
-    writeFileSync(dag, `name: feature\ntype: graph\nshell: bash\nmax_active_steps: 1\nenv:\n${Object.entries({
-      ISSUE: "189", PRIMARY: repo.primary, WORKTREE: repo.worktree, BRANCH: repo.branch,
+    writeFileSync(dag, `name: feature\ntype: graph\nshell: bash\nmax_active_steps: 1\nparams:\n  - ISSUE: "189"\n  - OMP_SESSION_ID: parent-id\nenv:\n${Object.entries({
+      ISSUE: "189", PRIMARY: repo.primary, WORKTREE: repo.worktree, BRANCH: repo.branch, PATH: env.PATH,
       BASE_BRANCH: "main", GATE: "true", VALIDATION: "", OMP_SESSION_ID: "parent-id", RUN: "${context.run.id}", DAGU_PORT: String(port),
-    }).map(([key, value]) => `  - ${key}: ${JSON.stringify(value)}`).join("\n")}\nsteps:\n  - id: triage\n    run: echo POC=no >> "$DAGU_OUTPUT_FILE"\n    outputs:\n      - name: POC\n${steps}\n  - id: after_push\n    depends: push\n    action: human.task\n    with:\n      prompt: "Observe published candidate or rebase in this same run."\n      push_back:\n        rewind_to: rebase\nhandler_on:\n  wait:\n    run: |\n${extractScript(definition, "  wait:").split("\n").map(line => `      ${line}`).join("\n")}\n`);
+    }).map(([key, value]) => `  - ${key}: ${JSON.stringify(value)}`).join("\n")}\nsteps:\n  - id: triage\n    run: echo POC=no >> "$DAGU_OUTPUT_FILE"\n    outputs:\n      - name: POC\n  - id: recover_start_gate\n    depends: triage\n    run: "true"\n${steps}\n  - id: after_push\n    depends: push\n    action: human.task\n    with:\n      prompt: "Observe published candidate or rebase in this same run."\n      push_back:\n        rewind_to: rebase\nhandler_on:\n  wait:\n    run: |\n${extractScript(definition, "  wait:").split("\n").map(line => `      ${line}`).join("\n")}\n`);
+    writeFileSync(join(state, "receipt.json"), JSON.stringify(roleAdmission(repo.primary, home, run, readFileSync(dag, "utf8"))));
     let serviceLog = "";
     const service = spawn("dagu", ["start-all", "--host", "127.0.0.1", "--port", String(port)], {
       cwd: repo.root, env, stdio: ["ignore", "pipe", "pipe"],
@@ -2635,8 +2745,9 @@ for (const [name, definition] of definitions) {
           if (response.ok) {
             const detail = (await response.json() as { dagRunDetails: Detail }).dagRunDetails;
             assert.ok(!["failed", "aborted"].includes(detail.statusLabel), JSON.stringify(detail));
-            if (detail.statusLabel === "waiting" && detail.nodes.some(node => node.step.name === step && node.statusLabel === "waiting" &&
-              (iteration === undefined || (node.approvalIteration ?? 0) === iteration))) return detail;
+            const expected = commandImplementation && step === "implement" ? "running" : "waiting";
+            if (detail.statusLabel === expected && detail.nodes.some(node => node.step.name === step && node.statusLabel === expected &&
+              (expected === "running" || iteration === undefined || (node.approvalIteration ?? 0) === iteration))) return detail;
           }
         } catch (error) {
           if (!(error instanceof TypeError)) throw error;
@@ -2645,9 +2756,12 @@ for (const [name, definition] of definitions) {
       }
       throw new Error(`Timed out at ${step}\n${serviceLog}`);
     }
-    const completeImplementation = () => dagu("human-task", "complete", "feature", "--run-id", run,
-      "--step", "implement", "--input", "SUMMARY=Quality candidate", "--input", "MESSAGE=feat: quality candidate",
-      "--input", "IMPLEMENTER=ImplementTest");
+    const completeImplementation = () => {
+      if (commandImplementation) writeFileSync(implementationReady, "ready\n");
+      else dagu("human-task", "complete", "feature", "--run-id", run,
+        "--step", "implement", "--input", "SUMMARY=Quality candidate", "--input", "MESSAGE=feat: quality candidate",
+        "--input", "IMPLEMENTER=ImplementTest");
+    };
     const completeQuality = (verdict: "PASS" | "FAIL") => {
       const request: QualityRequest = JSON.parse(readFileSync(join(state, "quality-request.json"), "utf8"));
       const fixture = qualityFixture(repo, verdict, request);

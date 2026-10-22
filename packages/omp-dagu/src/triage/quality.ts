@@ -7,7 +7,8 @@ import type { ReviewPolicies } from "@a4s/omp-cross-family-review";
 import { shellWords } from "../resources.ts";
 import { resolveRunPrimary, runParam } from "../status/progress.ts";
 import type { CallDecision, Event } from "./guard.ts";
-import type { SessionContext } from "./primary.ts";
+import { verifyJobResult } from "../role-jobs.ts";
+import type { Receipt } from "../admission.ts";
 
 interface Model { provider: string; id: string }
 interface Models {
@@ -29,7 +30,11 @@ export interface TranscriptRow {
   parentSession?: string | undefined; agent?: string | undefined; task?: string | undefined;
   role?: string | undefined; model?: string | undefined; resolvedModelIsFallback?: boolean; message?: Message | undefined;
 }
-export interface QualityContext extends SessionContext { models?: Models }
+export interface QualityContext {
+  cwd: string;
+  sessionManager: { getSessionDir(): string };
+  models?: Models;
+}
 export interface QualityRequest {
   repo: string; worktree: string; run: string; sha: string; iteration: number; attempt: string;
   implementer: string; session: string; implementStartedAt: string;
@@ -152,6 +157,44 @@ function effective(child: TranscriptRow[], models: Models) {
   return { successful, attempts, fallbacks };
 }
 export function inspectImplementer(parent: string, request: QualityRequest, models: Models) {
+  if (/^[a-f0-9]{64}$/.test(request.implementer)) {
+    const state = execFileSync("git", ["-C", request.repo, "rev-parse", "--path-format=absolute", "--git-path",
+      `dagu-feature/runs/${request.run}`], { encoding: "utf8" }).trim();
+    const candidate = json(join(state, "candidate.json"));
+    const captured = object(candidate.implementation);
+    requireValue(candidate.sha === request.sha && candidate.iteration === request.iteration &&
+      candidate.implementer === request.implementer, "stale native implementer candidate");
+    const path = join(state, "role-jobs", request.implementer, "result.json");
+    requireValue(createHash("sha256").update(readFileSync(path)).digest("hex") === captured.resultDigest,
+      "native implementer receipt digest mismatch");
+    const result = verifyJobResult(path, { repo: request.repo, worktree: request.worktree, run: request.run,
+      lane: "feature", dag: "feature", stage: "implement", sha: String(captured.inputSha) });
+    requireValue(result.binding.role === "implement" || result.binding.role === "conflict-resolution",
+      "native implementer role mismatch");
+    const admission = JSON.parse(readFileSync(join(state, "receipt.json"), "utf8")) as Receipt;
+    requireValue(admission.schemaVersion === 1 && admission.runReceipt.dag === "feature" &&
+      admission.runReceipt.run === request.run && admission.initial.execution.primary === request.repo &&
+      admission.initial.execution.ompSession === request.session &&
+      admission.initial.execution.dagSnapshot.includes("dagu-role-jobs stage implement") &&
+      admission.runReceipt.observations.some(observation => {
+        if (observation.kind !== "role-job" || observation.run !== request.run || observation.dag !== "feature") return false;
+        const data = object(observation.data);
+        return data.id === result.id && data.state === "completed" && data.result === path;
+      }), "native implementer lacks admitted execution observation");
+    const native = result.native!;
+    const child = rows(native.transcript, readFileSync(native.transcript).subarray(0, native.bytes));
+    const inits = child.filter(row => row.type === "session_init");
+    requireValue(inits.length > 0 && inits.every(row => row.agent === "task" &&
+      assigned(row.task, `Authorized Dagu role job ${result.id}.`) &&
+      assigned(row.task, `FEATURE_IMPLEMENT RUN=${request.run}`)), "native implementer assignment mismatch");
+    const evidence = effective(child, models);
+    const final = evidence.successful.at(-1)!;
+    requireValue(final.id === native.event, "native implementer effective response mismatch");
+    return { ...identity(final, models), subagent: request.implementer, session: native.session,
+      coordinatorSession: parent, event: native.event, receipt: path, receiptDigest: captured.resultDigest,
+      transcript: native.transcript, bytes: native.bytes, digest: native.digest,
+      attempts: evidence.attempts, fallbacks: evidence.fallbacks };
+  }
   const source = transcript(parent, request.implementer, `FEATURE_IMPLEMENT RUN=${request.run}`, undefined, request.implementStartedAt);
   const evidence = effective(source.child, models);
   const final = evidence.successful.at(-1)!;
