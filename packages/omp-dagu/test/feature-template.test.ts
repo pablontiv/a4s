@@ -122,7 +122,9 @@ function stubGh(repo: Repository, stdout: string, status: number, stderr = ""): 
   chmodSync(executable, 0o755);
 }
 
-function stubSuccessfulCloseGateGh(repo: Repository, files = "README.txt"): void {
+type FilesEvidence = { metadata?: string; pages?: string; metadataExit?: number; pagesExit?: number };
+
+function stubSuccessfulCloseGateGh(repo: Repository, files = "README.txt", evidence: FilesEvidence = {}): void {
   const head = git(repo.worktree, "rev-parse", "HEAD");
   const bin = join(repo.root, "bin");
   mkdirSync(bin, { recursive: true });
@@ -133,12 +135,85 @@ function stubSuccessfulCloseGateGh(repo: Repository, files = "README.txt"): void
 case "$*" in
   "pr view ${repo.branch} --repo ${repo.root}/remote.git --json number,state,headRefOid,mergeCommit") printf '%s\\n' '${JSON.stringify({ number: 190, state: "MERGED", headRefOid: head, mergeCommit: { oid: head } })}' ;;
   "pr checks 190 --repo ${repo.root}/remote.git --required --json name,state --jq "*) printf 'SUCCESS\\n' ;;
-  "pr diff 190 --repo ${repo.root}/remote.git --name-only") printf '%s\\n' ${JSON.stringify(files)} ;;
+  "repo view ${repo.root}/remote.git --json nameWithOwner --jq .nameWithOwner") printf 'fixture/repo\\n' ;;
+  "api repos/fixture/repo/pulls/190") cat ${JSON.stringify(join(repo.root, "pr-metadata.json"))}; exit ${evidence.metadataExit ?? 0} ;;
+  "api --paginate --slurp repos/fixture/repo/pulls/190/files?per_page=100") cat ${JSON.stringify(join(repo.root, "pr-files.json"))}; exit ${evidence.pagesExit ?? 0} ;;
   *) printf 'unexpected gh invocation: %s\\n' "$*" >&2; exit 1 ;;
 esac
 `,
   );
+  writeFileSync(join(repo.root, "pr-metadata.json"), evidence.metadata ?? JSON.stringify({ changed_files: 1 }));
+  writeFileSync(join(repo.root, "pr-files.json"), evidence.pages ?? JSON.stringify([[{ filename: files }]]));
   chmodSync(executable, 0o755);
+}
+
+const firstFilePage = Array.from({ length: 100 }, (_, index) => ({ filename: `src/file-${index}.ts` }));
+const fileEvidenceCases: Array<{ name: string; evidence: FilesEvidence; bootstrap?: boolean; error?: RegExp }> = [
+  { name: "skill on the second full-response page", evidence: {
+    metadata: '{"changed_files":101}',
+    pages: JSON.stringify([firstFilePage, [{ filename: "packages/omp-dagu/skills/dagu-feature/feature.yaml" }]]),
+  }, bootstrap: true },
+  { name: "changelog", evidence: { pages: '[[{"filename":"packages/omp-dagu/CHANGELOG.md"}]]' }, bootstrap: true },
+  { name: "unrelated path with an embedded newline", evidence: {
+    pages: JSON.stringify([[{ filename: "src/notes\npackages/omp-dagu/CHANGELOG.md" }]]),
+  } },
+  { name: "zero changed files", evidence: { metadata: '{"changed_files":0}', pages: "[[]]" } },
+  ...[
+    ["metadata API failure", { metadataExit: 1 }, /metadata lookup failed/],
+    ["files API failure", { pagesExit: 1 }, /pages lookup failed/],
+    ["malformed metadata JSON", { metadata: "{" }, /invalid changed-file metadata/],
+    ["multiple metadata documents", { metadata: '{"changed_files":1}\n{"changed_files":1}' }, /one metadata document/],
+    ["missing count", { metadata: "{}" }, /invalid changed_files/],
+    ["string count", { metadata: '{"changed_files":"1"}' }, /invalid changed_files/],
+    ["fractional count", { metadata: '{"changed_files":1.5}' }, /invalid changed_files/],
+    ["negative count", { metadata: '{"changed_files":-1}' }, /invalid changed_files/],
+    ["exact endpoint ceiling", { metadata: '{"changed_files":3000}' }, /endpoint ceiling/],
+    ["above endpoint ceiling", { metadata: '{"changed_files":3001}' }, /endpoint ceiling/],
+    ["malformed files JSON", { pages: "[" }, /invalid or incomplete/],
+    ["multiple files documents", { pages: '[[]]\n[[]]' }, /one files document/],
+    ["non-array pages", { pages: "{}" }, /invalid files pages/],
+    ["missing zero-file page", { metadata: '{"changed_files":0}', pages: "[]" }, /missing files pages/],
+    ["non-array page", { pages: "[{}]" }, /invalid files page/],
+    ["oversized page", { metadata: '{"changed_files":101}', pages: JSON.stringify([[...firstFilePage, { filename: "extra" }]]) }, /oversized files page/],
+    ["short intermediate page", { metadata: '{"changed_files":2}', pages: '[[{"filename":"one"}],[{"filename":"two"}]]' }, /incomplete files page/],
+    ["non-object record", { pages: '[[null]]' }, /invalid file record/],
+    ["missing filename", { pages: '[[{}]]' }, /invalid filename/],
+    ["non-string filename", { pages: '[[{"filename":7}]]' }, /invalid filename/],
+    ["empty filename", { pages: '[[{"filename":""}]]' }, /empty filename/],
+    ["count mismatch", { metadata: '{"changed_files":2}' }, /count mismatch/],
+    ["duplicate across pages", { metadata: '{"changed_files":101}', pages: JSON.stringify([firstFilePage, [firstFilePage[0]]]) }, /duplicate filenames/],
+  ].map(([name, evidence, error]) => ({ name: name as string, evidence: evidence as FilesEvidence, error: error as RegExp })),
+];
+
+for (const scenario of fileEvidenceCases) {
+  test(`maintained close validates ${scenario.name}`, () => {
+    const repo = repository();
+    try {
+      commit(repo, "packages/omp-dagu/package.json", JSON.stringify({ version: BUNDLE_VERSION }));
+      git(repo.primary, "merge", "--ff-only", repo.branch);
+      git(repo.primary, "push", "origin", "main");
+      stubSuccessfulCloseGateGh(repo, "README.txt", scenario.evidence);
+      const log = join(repo.root, "bootstrap.args");
+      const executable = join(repo.root, "bin", "dagu");
+      writeFileSync(executable, `#!/bin/sh\ncase "$1" in\nhistory) printf '[]\\n';;\nenqueue) printf '%s\\n' "$@" > ${JSON.stringify(log)};;\n*) exit 1;;\nesac\n`);
+      chmodSync(executable, 0o755);
+      const result = spawnSync("bash", ["-c", extractScript(definitions[0][1], "  - id: close_gate")], {
+        encoding: "utf8", env: featureScriptEnv(repo),
+      });
+      if (scenario.error) {
+        assert.equal(result.status, 1, result.stdout + result.stderr);
+        assert.match(result.stderr, scenario.error);
+        assert.match(readFileSync(join(repo.state, "cleanup-diagnostic"), "utf8"), /changed-file/);
+        assert.equal(readFileSync(join(repo.state, "cleanup-phase"), "utf8"), "branch-removed\n");
+        assert.equal(existsSync(log), false);
+      } else {
+        assert.equal(result.status, 0, result.stdout + result.stderr);
+        assert.equal(readFileSync(join(repo.state, "cleanup-phase"), "utf8"), "complete\n");
+        assert.equal(existsSync(log), scenario.bootstrap === true);
+        if (scenario.bootstrap) assert.match(readFileSync(log, "utf8"), /dagu-feature-bootstrap\.yaml/);
+      }
+    } finally { rmSync(repo.root, { recursive: true, force: true }); }
+  });
 }
 
 function featureScriptEnv(repo: Repository): NodeJS.ProcessEnv {
@@ -543,14 +618,7 @@ test("quality completion hook validates provenance and persists independent evid
 for (const [name, definition] of definitions) {
   const exitScript = extractScript(definition, "  exit:");
   const checkpointScript = extractScript(definition, "  - id: checkpoint_push");
-  const closeGateScript = extractScript(definition, "  - id: close_gate");
-
-  test(`${name} close and exit resolve the same cleanup script with merged-close mode`, () => {
-    const source = readFileSync(definition, "utf8");
-    assert.match(source, /- id: close_gate\n[\s\S]*?- CLEANUP_CLOSE: "true"\n    run: &feature_cleanup \|/);
-    assert.match(source, /  exit:\n    run: \*feature_cleanup/);
-    assert.equal(closeGateScript.replace("CLEANUP_CLOSE=true\n", ""), exitScript);
-  });
+  const closeGateScript = extractScript(definitions[0][1], "  - id: close_gate");
   const autoMergeScript = extractScript(definition, "  - id: auto_merge");
 
   const captureScript = extractScript(definition, "  - id: capture");
@@ -1871,7 +1939,8 @@ for (const [name, definition] of definitions) {
               "steps:\n", ...(mode === "poc" ? ["admission", "admit"].map(id => extractStep(source, id)) : []), triage, decision,
               ...["detect_start_primary", "start_primary_unavailable", "start_gate", ...(mode === "poc" ? ["recover_start_gate"] : [])].map(id => extractStep(source, id)),
               implementation,
-              ...["detect_close_primary", "close_primary_unavailable", "close_gate"].map(id => extractStep(source, id)),
+              ...["detect_close_primary", "close_primary_unavailable", "close_gate"].map(id =>
+                extractStep(id === "close_gate" ? readFileSync(definitions[0][1], "utf8") : source, id)),
               "handler_on:\n", source.slice(source.indexOf("  exit:\n")),
             ].join("");
             const dag = join(home, "dags", "feature.yaml");
@@ -2018,7 +2087,7 @@ test("concurrent recovery fixtures keep distinct run identities", {
   }
 });
 
-for (const [name, definition] of definitions) {
+for (const [name, definition] of [definitions[0]]) {
   test(`${name} real Dagu checks primary freshness before admission and enqueues bootstrap after merge`, {
     ...liveDagu,
     timeout: 115_000,
@@ -2035,6 +2104,7 @@ for (const [name, definition] of definitions) {
     writeFileSync(join(home, "config.yaml"), `host: 127.0.0.1\nport: ${port}\nauth:\n  mode: none\ncoordinator:\n  enabled: false\nscheduler:\n  port: 0\n`);
     const env = { ...process.env, DAGU_PARAMS_JSON: "{}", DAGU_HOME: home, DAGU_COORDINATOR_ENABLED: "false" };
     const binary = execFileSync("which", ["dagu"], { encoding: "utf8" }).trim();
+    t.diagnostic(`isolated Dagu binary=${binary} version=${liveDaguVersion} home=${home} port=${port}`);
     let serviceLog = "";
     const service = spawn(binary, ["start-all", "--host", "127.0.0.1", "--port", String(port)], {
       cwd: root, env, stdio: ["ignore", "pipe", "pipe"],

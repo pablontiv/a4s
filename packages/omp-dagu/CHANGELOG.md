@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.105
+
+- Determine merged-PR bootstrap selection from paginated REST file metadata rather than textual diffs, allowing large diffs to close independently of GitHub's diff-size limit (#493).
+- Validate the reported changed-file count, original pages, file records and unique filenames before selecting skill or changelog changes. API failures, incomplete evidence and counts at or above the 3,000-file endpoint ceiling retain an explicit cleanup diagnostic.
+- Exercise the maintained close script with isolated multipage, malformed-evidence and bootstrap fixtures; deployed renders and historical run recovery remain separate delivery outcomes.
+
 ## 0.3.104
 
 - Observe a terminal Dagu run snapshot before consuming bundle-rebase fixture logs, preserving normalized-version, gate-SHA, publication evidence and failure diagnostics (#522).
