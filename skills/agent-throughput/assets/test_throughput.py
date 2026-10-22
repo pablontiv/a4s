@@ -299,6 +299,54 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(d['merged_prs'], 1)
         self.assertEqual(c['median_tokens_per_pr'], 110)
 
+    def rendered(self, report):
+        report.update(window={'since': '2026-10-15T00:00:00+00:00',
+                              'until': '2026-10-16T00:00:00+00:00',
+                              'timezone': 'UTC', 'cap_minutes': 30},
+                      parse_warnings={}, runtime_seconds=0, session_count=1)
+        return markdown(report)
+
+    def test_non_repo_source_is_na_with_complete_daily_counts(self):
+        names = ('/Users/Shared/dsprima', '(tmp/poc)', '(no repo)',
+                 '(chat without repo)', '(unknown cwd)')
+        sessions = [Session('omp', name, name, name,
+                            tokens=[Token(self.start, 1, 0, 0, 0)]) for name in names]
+        report = build_report(sessions, dict(zip(names, names)), {}, self.start,
+                              self.start + 86400, non_repos=set(names))
+        self.assertTrue(report['prs_complete'])
+        self.assertEqual(report['pr_unavailable'], {})
+        self.assertEqual({row['pr_source'] for row in report['projects']}, {'not_repository'})
+        rendered = self.rendered(report)
+        for name in names:
+            self.assertIn(f'| {name} | 0.00 | 0.00 | 0.00 | n/a | — | — |', rendered)
+            self.assertIn(f'- No PR source (not a repository): {name}', rendered)
+        self.assertIn('| 2026-10-15 | 0.00 | 0.00 | 0.00 | 0.00 | 0 |', rendered)
+
+    def test_failed_repo_source_is_unavailable_with_partial_daily_counts(self):
+        session = Session('omp', 'main', 'main', '/repo',
+                          tokens=[Token(self.start, 1, 0, 0, 0)])
+        report = build_report([session], {'/repo': 'owner/repo'}, {},
+                              self.start, self.start + 86400,
+                              pr_unavailable={'owner/repo': 'network unavailable'})
+        self.assertFalse(report['prs_complete'])
+        self.assertEqual(report['projects'][0]['pr_source'], 'unavailable')
+        rendered = self.rendered(report)
+        self.assertIn('| owner/repo | 0.00 | 0.00 | 0.00 | unavailable | — | — |', rendered)
+        self.assertIn('| 2026-10-15 | 0.00 | 0.00 | 0.00 | 0.00 | 0 known |', rendered)
+        self.assertIn('- PRs unavailable for owner/repo: network unavailable', rendered)
+
+    def test_coverage_rows_are_repositories_with_merged_prs(self):
+        sessions = [Session('omp', name, name, name,
+                            tokens=[Token(self.start, 1, 0, 0, 0)])
+                    for name in ('owner/repo', 'vendor/repo')]
+        report = build_report(sessions, {s.cwd: s.cwd for s in sessions},
+                              dict(self.prs, **{'vendor/repo': []}),
+                              self.start, self.start + 86400)
+        self.assertEqual([row['repo'] for row in report['attribution']], ['owner/repo'])
+        self.assertEqual({row['project']: row['merged_prs'] for row in report['projects']},
+                         {'owner/repo': 1, 'vendor/repo': 0})
+        self.assertTrue(report['prs_complete'])
+
     def test_wall_clock_union(self):
         self.assertEqual(union_seconds([(0, 10), (5, 15), (20, 30), (0, 4)]), 25)
 
@@ -340,7 +388,7 @@ class ReportTests(unittest.TestCase):
         report = json.loads(output.getvalue())
         self.assertEqual(len(report['days']), 1)
         self.assertEqual(report['days'][0]['day'], '2026-10-15')
-        self.assertFalse(report['prs_complete'])
+        self.assertTrue(report['prs_complete'])
 
     def test_pr_search_dates_cover_local_midnight_offsets(self):
         start = dt.datetime.fromisoformat('2026-10-15T00:00:00+02:00').timestamp()

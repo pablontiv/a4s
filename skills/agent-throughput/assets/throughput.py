@@ -436,14 +436,14 @@ def local_project_roots(sessions):
                    if not is_git and not root.startswith('(')]
         recovered = pool.map(lambda cwd: resolve_project_root(cwd, known_roots), pending)
         resolved.update(zip(pending, recovered))
-    return {cwd: root for cwd, (root, _) in resolved.items()}
+    return ({cwd: root for cwd, (root, _) in resolved.items()},
+            {root for root, is_git in resolved.values() if is_git})
 
 
 def resolve_projects(sessions):
-    roots = local_project_roots(sessions)
+    roots, git_roots = local_project_roots(sessions)
+    non_repos = set(roots.values()) - git_roots
     def github(root):
-        if root.startswith('('):
-            return root, None
         value, error = command(['gh', 'repo', 'view', '--json', 'nameWithOwner'], cwd=root)
         if not error:
             try:
@@ -451,16 +451,18 @@ def resolve_projects(sessions):
             except (ValueError, KeyError):
                 error = 'invalid gh repo response'
         return root, error
-    unique_roots = sorted(set(roots.values()))
+    unique_roots = sorted(git_roots)
     with ThreadPoolExecutor(max_workers=8) as pool:
         resolved = dict(zip(unique_roots, pool.map(github, unique_roots)))
-    projects = {cwd: resolved[root][0] for cwd, root in roots.items()}
-    repos = {name for name, error in resolved.values() if not error and not name.startswith('(')}
+    projects = {cwd: resolved[root][0] if root in resolved else root for cwd, root in roots.items()}
+    repos = {name for name, error in resolved.values() if not error}
     errors = {root: error for root, (_, error) in resolved.items() if error}
-    return projects, repos, errors
+    return projects, repos, errors, non_repos
 
 
 def fetch_prs(repos, since, until, skip=False):
+    if not repos:
+        return {}, {}
     if skip:
         return {}, {repo: 'skipped (--no-prs)' for repo in repos}
     author, error = command(['gh', 'api', 'user', '-q', '.login'])
@@ -526,7 +528,7 @@ def empty_metrics():
     return {'tokens': 0, 'tokens_excluding_cache_read': 0, 'agent_hours': 0}
 
 
-def build_report(sessions, projects, prs, since, until):
+def build_report(sessions, projects, prs, since, until, non_repos=(), pr_unavailable=None):
     project_rows, harness_rows, days = {}, {}, {}
     intervals = defaultdict(list)
     by_path = {s.path: s for s in sessions}
@@ -569,10 +571,12 @@ def build_report(sessions, projects, prs, since, until):
     coverage, top = [], []
     for project, p in project_rows.items():
         rows = list(pr_metrics.get(project, {}).values())
+        p['pr_source'] = 'not_repository' if project in non_repos else (
+            'available' if project in prs else 'unavailable')
         p['merged_prs'] = len(rows) if project in prs else None
         p['tokens_per_pr'] = p['tokens'] / len(rows) if rows else None
         p['hours_per_pr'] = p['agent_hours'] / len(rows) if rows else None
-        if project not in prs:
+        if not rows:
             continue
         token_rows = [r for r in rows if r['tokens'] > 0]
         time_rows = [r for r in rows if r['agent_hours'] > 0]
@@ -587,11 +591,16 @@ def build_report(sessions, projects, prs, since, until):
             days[dt.datetime.fromtimestamp(epoch(row['mergedAt'])).date().isoformat()]['merged_prs'] += 1
             top.append({'repo': project, 'number': row['number'], 'title': row['title'],
                         'tokens': row['tokens'], 'agent_hours': row['agent_hours']})
+    unavailable = pr_unavailable if pr_unavailable is not None else {
+        project: 'PR source unavailable' for project, row in project_rows.items()
+        if row['pr_source'] == 'unavailable'}
     return {'projects': [dict(project=name, **row) for name, row in sorted(project_rows.items(), key=lambda pair: -pair[1]['tokens'])],
             'attribution': sorted(coverage, key=lambda row: row['repo']),
             'top_prs': sorted(top, key=lambda row: -row['tokens'])[:20],
             'days': [dict(day=day, **row) for day, row in sorted(days.items())],
-            'harnesses': [dict(harness=name, **row) for name, row in sorted(harness_rows.items())]}
+            'harnesses': [dict(harness=name, **row) for name, row in sorted(harness_rows.items())],
+            'prs_complete': not unavailable, 'pr_unavailable': unavailable,
+            'non_repo_projects': sorted(non_repos)}
 
 
 def format_number(value, scale=1):
@@ -611,7 +620,8 @@ def markdown(report):
              'Tokens include all retained main/subagent usage; time includes main sessions only. No dollar costs.', '',
              '## Per project', '', table(['Project', 'Mtok', 'Mtok excl. cacheRead', 'Agent-h', 'Merged PRs', 'Mtok/PR', 'h/PR'],
              [[r['project'], format_number(r['tokens'], 1e6), format_number(r['tokens_excluding_cache_read'], 1e6),
-               format_number(r['agent_hours']), 'unavailable' if r['merged_prs'] is None else r['merged_prs'],
+               format_number(r['agent_hours']), 'n/a' if r['pr_source'] == 'not_repository' else (
+                   'unavailable' if r['merged_prs'] is None else r['merged_prs']),
                format_number(r['tokens_per_pr'], 1e6), format_number(r['hours_per_pr'])] for r in report['projects']]), '',
              '## PR attribution coverage', '',
              'Percentiles use PRs with positive attributed tokens / hours respectively; other PRs are not zero-cost observations.', '',
@@ -636,6 +646,8 @@ def markdown(report):
              'Merged PRs are restricted to the authenticated gh author and this window; sessions can span other PR lifetimes.']
     for name, reason in sorted(report['pr_unavailable'].items()):
         lines.append(f'- PRs unavailable for {name}: {reason}')
+    for name in report['non_repo_projects']:
+        lines.append(f'- No PR source (not a repository): {name}')
     for name, count in sorted(report['parse_warnings'].items()):
         lines.append(f'- {name}: {count}')
     lines.append(f"\nRuntime: {report['runtime_seconds']:.2f} s; parsed sessions: {report['session_count']}.")
@@ -677,18 +689,20 @@ def main(argv=None):
     warnings = defaultdict(int)
     sessions = collect_sessions(Path.home(), since, until, args.cap_minutes * 60, warnings)
     if args.no_prs:
-        roots = local_project_roots(sessions)
-        projects, repos, unavailable = roots, set(), {root: 'skipped (--no-prs)' for root in set(roots.values())}
+        roots, git_roots = local_project_roots(sessions)
+        projects, repos = roots, set()
+        non_repos = set(roots.values()) - git_roots
+        unavailable = {root: 'skipped (--no-prs)' for root in git_roots}
         prs = {}
     else:
-        projects, repos, unavailable = resolve_projects(sessions)
+        projects, repos, unavailable, non_repos = resolve_projects(sessions)
         prs, errors = fetch_prs(repos, since, until)
         unavailable.update(errors)
-    report = build_report(sessions, projects, prs, since, until)
+    report = build_report(sessions, projects, prs, since, until, non_repos, unavailable)
     report.update(window={'since': dt.datetime.fromtimestamp(since).astimezone().isoformat(),
                           'until': dt.datetime.fromtimestamp(until).astimezone().isoformat(),
                           'timezone': '/'.join(time.tzname), 'cap_minutes': args.cap_minutes},
-                  prs_complete=not args.no_prs and not unavailable, pr_unavailable=unavailable, parse_warnings=dict(warnings),
+                  parse_warnings=dict(warnings),
                   session_count=len(sessions), runtime_seconds=time.monotonic() - started)
     output = json.dumps(report, indent=2, ensure_ascii=False) + '\n' if args.json else markdown(report)
     if args.out:

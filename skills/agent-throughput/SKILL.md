@@ -16,7 +16,7 @@ description: Measure tokens per PR, agent time per project/day, throughput, and 
 - Attributed tokens and hours per PR, the top 20 PRs by attributed tokens, and per-repository attribution coverage and median/p90 distributions.
 - Tokens, agent-hours, wall-clock hours and merged PRs per local day, plus per-harness totals.
 
-Project tokens/PR uses **all observed project tokens / PRs merged in the window**, including unattributed usage. It is a window-level throughput ratio, not the complete lifetime cost of each PR. Individual PR estimates use only attributed events. A missing PR source is shown as unavailable, never as zero PRs. Daily PR counts are marked `known` when any project's PR source is unavailable.
+Project tokens/PR uses **all observed project tokens / PRs merged in the window**, including unattributed usage. It is a window-level throughput ratio, not the complete lifetime cost of each PR. Individual PR estimates use only attributed events. Projects without a local git repository show `n/a` for merged PRs and appear in the separate “No PR source (not a repository)” notes. A real repository whose GitHub identity or PR fetch fails shows `unavailable`. Daily PR counts are plain integers when all repository sources succeeded, and carry a `known` suffix when a repository source is unavailable or explicitly skipped.
 
 This complements `skills/cost-analyzer`, which handles session-level topology/cost rather than cross-project active-time and tokens-per-merged-PR accounting.
 
@@ -63,9 +63,9 @@ Every table's **Mtok** is total / 1,000,000; **Mtok excluding cacheRead** subtra
 3. Strip `/.workspace/worktrees/…`, `/.claude/worktrees/…`, and `/.orca/workspaces/…`. If cwd no longer exists, walk up to its nearest existing ancestor. Resolve its common repository with `git -C <dir> rev-parse --path-format=absolute --git-common-dir`, removing the final `/.git`. For example, a deleted `a4s/skills/roadmap/references` directory resolves through an existing ancestor inside a4s.
 4. Collect known repository roots from successful local git resolutions in this run, then recover the remaining paths. A deleted sibling clone whose basename starts with a known root's basename plus `-`, in the same parent directory, maps to that root (for example `a4s-main` and `a4s-mechanical-routing-read` → `a4s`). Prefer the longest matching root basename when names overlap. Existing sibling directories keep their own git identity.
 5. `~/.local/share/<name>/worktrees/…` maps to the known repository root whose basename is `<name>` when that basename identifies exactly one root (for example rootline's `issue-296` and `issue-297`). Ambiguous names retain ordinary ancestor/git resolution rather than selecting an arbitrary clone.
-6. Resolve each common root with `gh repo view --json nameWithOwner`. Different clones of the same GitHub repository merge into one project. If local git recovery fails, preserve the original stripped path; failed GitHub resolution preserves that local root and marks PRs unavailable. Missing cwd is `(unknown cwd)`; a subagent can inherit a retained main session's cwd.
+6. Resolve each verified git root with `gh repo view --json nameWithOwner`. Different clones of the same GitHub repository merge into one project. If local git recovery fails, preserve the original stripped path as a project with `n/a` PR metrics. Failed GitHub resolution preserves the verified local root with unavailable PR metrics. Special categories `(tmp/poc)`, `(no repo)`, `(chat without repo)` and `(unknown cwd)` also have `n/a` PR metrics. Missing cwd is `(unknown cwd)`; a subagent can inherit a retained main session's cwd.
 
-`--no-prs` skips **all gh calls**, including repository identity resolution. Projects then use local common-root paths, so distinct clones are not merged by GitHub identity.
+`--no-prs` skips **all gh calls**, including repository identity resolution. Projects then use local common-root paths, so distinct clones are not merged by GitHub identity. Verified git repositories have explicitly skipped, unavailable PR sources; non-repository projects retain `n/a` PR metrics. Only unavailable repository sources make daily PR counts partial.
 
 ## PR fetching and author filter
 
@@ -91,7 +91,7 @@ Map issues to merged PRs using both `closingIssuesReferences[].number` and `issu
 
 For each token event, use direct turn references; otherwise use the file's references **only when they map to exactly one PR**; otherwise try its main session's references with the same uniqueness rule. Time gaps carry the latest assistant references forward and then use the same fallback. Codex token-count records carry the current turn's latest tool references. Split tokens/hours evenly among all directly referenced matching PRs; repeated references count once.
 
-Every repository reports PRs, PRs with attributed tokens, **% tokens attributed**, **% hours attributed**, median/p90 Mtok/PR and h/PR. Coverage denominators include all observed repository tokens/time. Percentiles use PRs with positive attributed tokens and positive attributed hours respectively (linear interpolation); missing attribution is not an observed zero-cost PR. JSON preserves raw token/hour units; Markdown scales token fields to Mtok.
+The coverage table includes repositories with at least one merged PR in the window, reporting PRs, PRs with attributed tokens, **% tokens attributed**, **% hours attributed**, median/p90 Mtok/PR and h/PR. The project table also includes repositories with a successful zero-PR result. Coverage denominators include all observed repository tokens/time. Percentiles use PRs with positive attributed tokens and positive attributed hours respectively (linear interpolation); missing attribution is not an observed zero-cost PR. JSON preserves raw token/hour units and the project source status (`available`, `unavailable` or `not_repository`); Markdown scales token fields to Mtok.
 
 ## Limitations
 
