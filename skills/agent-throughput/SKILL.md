@@ -10,19 +10,21 @@ description: Measure tokens per PR, agent time per project/day, throughput, and 
 
 ## What it answers
 
-**Tokens per merged PR is the key unit.** For all projects represented in retained local sessions, report:
+**Tokens per merged PR is the key unit.** For all workspaces represented in retained local sessions, report:
 
-- Total tokens, tokens excluding cacheRead, active agent-hours, merged PRs, tokens/PR and hours/PR per project.
+- Total tokens, tokens excluding cacheRead, active agent-hours, member repositories, merged PRs, tokens/PR and hours/PR per workspace.
 - Attributed tokens and hours per PR, the top 20 PRs by attributed tokens, and per-repository attribution coverage and median/p90 distributions.
 - Tokens, agent-hours, wall-clock hours and merged PRs per local day, plus per-harness totals.
 
-Project tokens/PR uses **all observed project tokens / PRs merged in the window**, including unattributed usage. It is a window-level throughput ratio, not the complete lifetime cost of each PR. Individual PR estimates use only attributed events. Projects without a local git repository show `n/a` for merged PRs and appear in the separate “No PR source (not a repository)” notes. A real repository whose GitHub identity or PR fetch fails shows `unavailable`. Daily PR counts are plain integers when all repository sources succeeded, and carry a `known` suffix when a repository source is unavailable or explicitly skipped.
+Workspace tokens/PR uses **all observed workspace tokens / the union of member-repository PRs merged in the window**, including unattributed usage. It is a window-level throughput ratio, not the complete lifetime cost of each PR. Individual PR estimates use only attributed events. Workspaces without a supported PR source show `n/a` and appear in “No supported PR source” notes; this includes git repositories with no origin or a non-GitHub/non-Azure origin. If a supported member's provider CLI, authentication or fetch fails, its workspace shows `unavailable`, retaining known partial counts in JSON. Daily PR counts are plain integers when all supported sources succeeded, and carry a `known` suffix when a supported source is unavailable or explicitly skipped.
 
 This complements `skills/cost-analyzer`, which handles session-level topology/cost rather than cross-project active-time and tokens-per-merged-PR accounting.
 
 ## Data sources and fields
 
-Only Python 3's standard library is required. `git` resolves working trees; optional authenticated `gh` supplies GitHub repository identities, the current author, and merged PRs. The script reads local stores and GitHub metadata without changing either.
+Only Python 3's standard library is required. Local git markers and `commondir` resolve working trees; `git config` supplies the origin remote once per common directory. Optional authenticated `gh` supplies GitHub PRs; optional `az` with the Azure DevOps extension supplies Azure PRs and linked work items. Optional Orca supplies folder and git registrations through `orca repo list --json` (`result.repos[].{kind,path}`). The script reads local stores, registrations and provider metadata without changing them.
+
+Retained JSONL files are parsed in batches by up to four persistent Python worker processes. Attribution caches each session's reference fallback and repeated turn-reference sets; provider CLI calls use threads.
 
 | Harness | Store | Usage and event fields |
 | --- | --- | --- |
@@ -56,20 +58,25 @@ Codex reports cumulative usage. Subtract the previous counters, resetting to cur
 
 Every table's **Mtok** is total / 1,000,000; **Mtok excluding cacheRead** subtracts only cacheRead, retaining cacheWrite. These are token-volume metrics, not currency or billing estimates. The operator uses subscriptions.
 
-## Project mapping
+## Workspace and project mapping
 
-1. Cwds under `/tmp`, `/private/tmp`, `/var/folders` (also `/private/var/folders`), `~/.dagu/data`, or containing `.dagu-data`, map to `(tmp/poc)`.
-2. Cwd equal to `$HOME` or `/Users/Shared` maps to `(no repo)`: these are parents of many projects, not a project. Cwds under `/Documents/Codex/`, `.chatgpt-projects`, or `Application Support/Claude` map to `(chat without repo)`.
-3. Strip `/.workspace/worktrees/…`, `/.claude/worktrees/…`, and `/.orca/workspaces/…`. If cwd no longer exists, walk up to its nearest existing ancestor. Resolve its common repository with `git -C <dir> rev-parse --path-format=absolute --git-common-dir`, removing the final `/.git`. For example, a deleted `a4s/skills/roadmap/references` directory resolves through an existing ancestor inside a4s.
-4. Collect known repository roots from successful local git resolutions in this run, then recover the remaining paths. A deleted sibling clone whose basename starts with a known root's basename plus `-`, in the same parent directory, maps to that root (for example `a4s-main` and `a4s-mechanical-routing-read` → `a4s`). Prefer the longest matching root basename when names overlap. Existing sibling directories keep their own git identity.
-5. `~/.local/share/<name>/worktrees/…` maps to the known repository root whose basename is `<name>` when that basename identifies exactly one root (for example rootline's `issue-296` and `issue-297`). Ambiguous names retain ordinary ancestor/git resolution rather than selecting an arbitrary clone.
-6. Resolve each verified git root with `gh repo view --json nameWithOwner`. Different clones of the same GitHub repository merge into one project. If local git recovery fails, preserve the original stripped path as a project with `n/a` PR metrics. Failed GitHub resolution preserves the verified local root with unavailable PR metrics. Special categories `(tmp/poc)`, `(no repo)`, `(chat without repo)` and `(unknown cwd)` also have `n/a` PR metrics. Missing cwd is `(unknown cwd)`; a subagent can inherit a retained main session's cwd.
+The reporting unit is a **workspace**: a declared folder containing repositories, or a single repository. The project table's `Repos` column identifies its members with provider-qualified identities.
 
-`--no-prs` skips **all gh calls**, including repository identity resolution. Projects then use local common-root paths, so distinct clones are not merged by GitHub identity. Verified git repositories have explicitly skipped, unavailable PR sources; non-repository projects retain `n/a` PR metrics. Only unavailable repository sources make daily PR counts partial.
+1. Read Orca registrations with `repo list --json`, distinguishing `kind: folder` from `kind: git`. Merge folder registrations with repeatable `--workspace PATH` flags. If Orca is unavailable, report that limitation and use explicit folder declarations plus locally resolved git repositories. Parent directories become folder workspaces only through these declarations.
+2. Discover git markers (`.git` directory or file) at depths one and two below each declared folder. Resolve common git roots, including linked worktrees, and read each distinct common directory's **origin** remote. Normalize GitHub identities to `github:owner/repo` and Azure DevOps identities to `ado:org/project/repo`. GitHub HTTPS/SSH origins and Azure `dev.azure.com`, `org.visualstudio.com` (including `DefaultCollection`) and `ssh.dev.azure.com:v3/org/project/repo` origins are supported. URL-decode names and discard userinfo/credentials. Same-origin clones/worktrees merge case-insensitively, retaining deterministic Azure display casing.
+3. Sessions whose cwd is the declared folder itself, or is inside any member repository/worktree, roll up to that folder's row. The folder's merged PR count is the union of `(repository, PR number)` across all members, including members without sessions in the window. An individual repository outside a declared folder reports as itself. When declarations overlap, prefer the most deeply containing folder, with deterministic path order for otherwise equal ownership.
+4. Undeclared cwds under `/tmp`, `/private/tmp`, `/var/folders` (also `/private/var/folders`), `~/.dagu/data`, or containing `.dagu-data`, map to `(tmp/poc)`. `$HOME` and `/Users/Shared` map to `(no repo)` unless explicitly declared as folders; the same classification applies when ancestor walking discovers their git markers. A folder-cwd session belongs to its declared workspace and uses that workspace's member repositories for attribution. Cwds under `/Documents/Codex/`, `.chatgpt-projects`, or `Application Support/Claude` map to `(chat without repo)`. Missing cwd maps to `(unknown cwd)`; a subagent can inherit a retained main session's cwd.
+5. Strip `/.workspace/worktrees/…`, `/.claude/worktrees/…`, and `/.orca/workspaces/…`. Resolve existing or nearest existing ancestor directories by walking git markers and linked-worktree `commondir` files, removing the common root's final `/.git`. A deleted `a4s/skills/roadmap/references` directory can resolve through an existing ancestor inside a4s. Cache marker and origin resolution by directory; session parsing does not spawn per-session git/remote commands.
+6. Collect known common roots from sessions and registrations, then recover deleted sibling clones in the same parent when their basename starts with a known root basename plus `-` (for example `a4s-main` → `a4s`). Prefer the longest matching basename. Existing sibling directories retain their own git identity. `~/.local/share/<name>/worktrees/…` maps to a known root whose basename is `<name>` only when unique.
+7. If local git recovery fails, retain the stripped path with `n/a` PR metrics. A git member with no supported origin retains its local root as its identity and also has `n/a` metrics. Special categories have `n/a` metrics. A folder has an applicable PR denominator whenever at least one member has a GitHub/Azure origin; unsupported members contribute usage but not unavailable PR sources.
+
+`--no-prs` skips **all gh/az calls**. Origin identities and folder rollup still resolve locally, so same-remote clones merge normally. Supported provider sources are explicitly skipped/unavailable; unsupported origins, folders without supported members and non-repository workspaces retain `n/a`. Only unavailable supported sources make daily PR counts partial.
 
 ## PR fetching and author filter
 
-Resolve the authenticated author with `gh api user -q .login`. Fetch each repository in a thread pool (8 workers):
+Provider authentication, repository fetches and Azure work-item lookups use an eight-worker thread pool. Orca registration discovery overlaps local parsing.
+
+**GitHub:** resolve the authenticated author with `gh api user -q .login`, then fetch each GitHub origin:
 
 ```sh
 gh pr list -R OWNER/REPO --state merged \
@@ -78,7 +85,20 @@ gh pr list -R OWNER/REPO --state merged \
   --json number,title,author,createdAt,mergedAt,headRefName,closingIssuesReferences
 ```
 
-Apply the exact timestamp window and author filter again locally. Count only the authenticated author's PRs, so upstream/vendor changes and bots do not inflate throughput. The search uses inclusive UTC calendar dates derived from the window endpoints to cover local timezone offsets; exact local filtering supplies the requested boundaries. A full 1000-result response is reported as unavailable with an instruction to narrow the window. Missing gh, failed authentication, offline network and per-repo failures produce unavailable PR metrics rather than aborting local token/time accounting. A genuine successful empty response produces zero PRs and undefined per-PR ratios.
+Apply the exact timestamp window and case-insensitive author filter again locally. Count only the authenticated author's PRs, so upstream/vendor changes and bots do not inflate throughput. GitHub search uses inclusive UTC calendar dates derived from the window endpoints to cover local timezone offsets; exact local filtering supplies the requested boundaries.
+
+**Azure DevOps:** resolve the author with `az account show --query user.name -o tsv`, then:
+
+```sh
+az repos pr list --org https://dev.azure.com/ORG \
+  --project PROJECT --repository REPO --status completed --top 1000 -o json
+az repos pr work-item list --id PR_NUMBER --org https://dev.azure.com/ORG \
+  --query '[].id' -o json
+```
+
+Azure fields are `pullRequestId`, `status`, `createdBy.uniqueName`, `creationDate`, `closedDate`, `title` and `sourceRefName`. A merged PR has `status: completed`, `closedDate` inside the exact window and `createdBy.uniqueName` equal to the Azure account user, case-insensitively. Fetch linked work-item IDs for each selected PR in the shared thread pool. Normalize both providers to the same number/title/merge-time/branch/linked-issue representation.
+
+A full 1000-result response is unavailable with an instruction to narrow the window. Missing CLIs, failed authentication, offline network and per-repository failures produce unavailable metrics **only for affected provider repositories** rather than aborting local accounting. A successful empty response produces zero PRs and undefined per-PR ratios.
 
 ## PR attribution and coverage
 
@@ -86,20 +106,27 @@ Extract references from JSON-encoded **tool-call arguments**, and from OMP/Pi su
 
 - Issues: `issue-N`, `issue://N`, `issue://owner/repo/N`, `gh issue <verb> N`, `/issues/N`.
 - PRs: `gh pr <verb> N`, `pr://N`, `pr://owner/repo/N`, `/pull/N`.
+- Qualified member references: `gh issue/pr <verb> N -R owner/repo` (also `--repo`), `owner/repo#N`, full GitHub issue/PR URLs, `issue://owner/repo/N` and `pr://owner/repo/N`. Hash references may identify either a merged PR or an issue linked to one.
+- Azure PRs: `/pullrequest/N`, `az repos pr <verb> … --id N`; work items: `AB#N`, `/_workitems/edit/N`, `az boards work-item <verb> … --id N`. Full Azure PR URLs qualify the organization/project/repository; work-item URLs qualify their project (or repository when present). Azure command flags `--org`, `--project` and `--repository` narrow the scope when supplied.
+- PR sibling-clone paths such as `DSPRIMA.PlatformNG-pr213-host-qa` reference PR 213, qualified by repository basename. The basename must resolve uniquely among workspace members.
+- Source branches with `feature/`, `feat/`, `fix/`, `hotfix/`, `docs/` or `ci/` prefixes, optionally under `refs/heads/`, match the exact merged PR source branch. Azure `az repos pr create --source-branch …` also supplies a branch reference, with any supplied repository/project/organization qualification.
 
-Map issues to merged PRs using both `closingIssuesReferences[].number` and `issue-(\d+)` in `headRefName`. Direct PR references match the merged set. One issue can map to multiple PRs.
+Map GitHub issues to merged PRs using both `closingIssuesReferences[].number` and `issue-(\d+)` in `headRefName`. Azure work-item mapping uses linked work-item IDs, `issue-N` branches and a work-item number at the start of a branch component such as `feature/783-poster`. A source-branch reference first matches its exact PR branch; when that branch is absent from the merged set, a numeric branch component falls back to linked work-item mapping. Direct PR references match the merged set. One issue/work item can map to multiple PRs.
+
+Repository-cwd sessions resolve references within that repository; qualification must match it. For folder-cwd sessions, qualified references narrow member candidates, including Azure commands that supply only `--repository` or `--project`. An unqualified, basename-qualified or partially scoped reference is accepted only when exactly one matching member repository maps it to merged PRs; overlapping references across members remain unattributed. An ambiguous direct reference also remains unattributed when a unique file fallback exists.
 
 For each token event, use direct turn references; otherwise use the file's references **only when they map to exactly one PR**; otherwise try its main session's references with the same uniqueness rule. Time gaps carry the latest assistant references forward and then use the same fallback. Codex token-count records carry the current turn's latest tool references. Split tokens/hours evenly among all directly referenced matching PRs; repeated references count once.
 
-The coverage table includes repositories with at least one merged PR in the window, reporting PRs, PRs with attributed tokens, **% tokens attributed**, **% hours attributed**, median/p90 Mtok/PR and h/PR. The project table also includes repositories with a successful zero-PR result. Coverage denominators include all observed repository tokens/time. Percentiles use PRs with positive attributed tokens and positive attributed hours respectively (linear interpolation); missing attribution is not an observed zero-cost PR. JSON preserves raw token/hour units and the project source status (`available`, `unavailable` or `not_repository`); Markdown scales token fields to Mtok.
+The coverage table remains **per repository**, using provider-qualified names, for repositories with at least one merged PR in the window. It reports PRs, PRs with attributed tokens, **% tokens attributed**, **% hours attributed**, median/p90 Mtok/PR and h/PR. Repository coverage denominators include all observed usage in repository-cwd sessions and single-member folder sessions. In multi-member folder-cwd sessions, only repository-resolvable portions can enter repository denominators; ambiguous/unreferenced usage stays in workspace/day/harness totals. Thus repository coverage alone does not measure all folder-level attribution. The workspace table also includes successful zero-PR results. Percentiles use PRs with positive attributed tokens and positive attributed hours respectively (linear interpolation); missing attribution is not an observed zero-cost PR. JSON preserves raw token/hour units, member repositories, known partial merge counts, a `repositories` summary including zero-PR members, and source status (`available`, `unavailable` or `not_applicable`); Markdown scales tokens to Mtok.
 
 ## Limitations
 
 - **Raw session retention bounds usage coverage: tokens only exist while the JSONL files exist.** Backscroll `~/.backscroll.db` retains text and timestamps but has **no usage columns**, so it cannot recover token totals. Codex raw files expire sooner; comparisons across harnesses/dates can be biased by unequal retention.
-- Regex attribution is approximate, so **report coverage with every PR comparison**. References mention work, not causality. Repository-qualified references are interpreted by number in the session's mapped repository; cross-repository coordination can misattribute them. Human prose without a tool/task reference is not matched.
+- Regex attribution is approximate, so **report coverage with every PR comparison**. References mention work, not causality. Qualified references resolve only within the session repository or declared folder members; unqualified references in multi-repository folders require a unique repository match. Human prose without a tool/task reference is not matched.
 - Work may occur before or after the selected merge window, span several PRs, or produce no PR. Low coverage and window-level ratios are not proof of individual PR lifetime expenditure or agent quality.
 - Active time is observed wall time while the main session is working, not CPU time or human labor. The gap cap trades overcounting hung sessions for undercounting legitimate long operations. Agent-hours can exceed wall-clock hours because of concurrency.
-- Only projects present in retained, mtime-selected session files are queried. Missing/deleted projects, unavailable GitHub metadata and missing raw files limit all-project completeness; partial daily PR counts are explicitly marked.
+- Only workspaces present in retained, mtime-selected session files are reported; a declared folder's complete member set supplies its PR sources. Missing/deleted repositories, failed member discovery, unavailable provider metadata and missing raw files limit all-project completeness; partial daily PR counts are explicitly marked.
+- Azure linked work items reflect the PR's current associations, which may have changed since completion.
 
 ## Usage
 
@@ -112,6 +139,10 @@ python3 skills/agent-throughput/assets/throughput.py --days 30
 # Inclusive local start, exclusive local end: includes every event on October 15.
 python3 skills/agent-throughput/assets/throughput.py \
   --since 2026-10-15 --until 2026-10-16 --out /tmp/agent-throughput.md
+
+# Declare an additional multi-repository folder (repeat for several folders).
+python3 skills/agent-throughput/assets/throughput.py \
+  --days 30 --workspace /Users/Shared/dsprima --workspace /work/another-team
 
 # Local stores only, shorter gap cap, machine-readable raw token/hour units.
 python3 skills/agent-throughput/assets/throughput.py \
