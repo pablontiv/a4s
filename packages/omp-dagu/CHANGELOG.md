@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.110
+
+- Deliver later owner-session notices as asides at host step boundaries during a reserved autonomous turn, preserving FIFO order, one idle wake, session ownership and terminal delivery (#519).
+- Drain queued idle batches on the host's asynchronous `agent_start`, with asynchronous-admission regressions and an isolated OMP 18.12.6 smoke confirming ten notices across two runs in one autonomous agent invocation.
+
 ## 0.3.109
 
 - Run authorized feature triage and implementation/conflict resolution as Dagu command-owned native OMP jobs, retaining registered agents and complete role/model fallback routing (#513). Keep the existing coordinator-dispatched QA/reviewer human-task join, quality.json writer and quality admission operational; #514 owns wiring QA/reviewer role-job receipts and migrating quality templates/hooks.
