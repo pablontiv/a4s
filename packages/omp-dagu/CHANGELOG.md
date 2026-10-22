@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.114
+
+- Declare cancellation-only `CANCEL=yes` completions on distributed feature, PoC and discovery checkpoints, routing to native failure or active-gate abort before successors, recovery and promotion (#290).
+- Preserve native exit cleanup and unpublished candidates, suppress PoC failure publication on cancellation, and document new-snapshot compatibility and unresolved historical recovery.
+- Admit literal cancellation-only implement/quality completions through OMP's quality guard only for same-repository waiting snapshots that declare and route cancellation; normal delivery evidence remains required.
+- Exercise checkpoint cancellation against isolated pinned Dagu, real linked Git worktrees and an external-effect ledger.
+
 ## 0.3.112
 
 - Run the explicit QA/reviewer join as authorized native role jobs, independently of the coordinator, and admit their actual emitting sessions through sealed job receipts (#514).

@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { readFileSync, readdirSync, realpathSync, writeFileSync, renameSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { bindQualityImplementer, orderReviewModels } from "@a4s/omp-cross-family-review";
+import { parse } from "yaml";
 import type { ReviewPolicies } from "@a4s/omp-cross-family-review";
 import { shellWords } from "../resources.ts";
 import { resolveRunPrimary, runParam } from "../status/progress.ts";
@@ -346,14 +347,15 @@ interface ImplementCompletion {
   dag: string | undefined;
   run: string | undefined;
   implementer: string | undefined;
+  cancel?: boolean | undefined;
   syntax: string | undefined;
 }
-function literalImplementCompletion(text: string): ImplementCompletion | undefined {
+function literalImplementCompletion(text: string, checkpoint = "implement"): ImplementCompletion | undefined {
   let syntax: string | undefined;
   const words = shellWords(text, value => { syntax ??= value; });
   for (let i = 0; i < words.length; i++) {
     if (words[i] !== "human-task" || words[i + 1] !== "complete") continue;
-    let dag: string | undefined, run: string | undefined, step: string | undefined, implementer: string | undefined;
+    let dag: string | undefined, run: string | undefined, step: string | undefined, implementer: string | undefined, cancel = false, inputsJson = false;
     let positional = false;
     for (let j = i + 2; j < words.length && words[j] !== ";"; j++) {
       const word = words[j]!;
@@ -372,8 +374,11 @@ function literalImplementCompletion(text: string): ImplementCompletion | undefin
       if (flag === "--run-id" || flag === "-r") run = value;
       if (flag === "--step") step = value;
       if (flag === "--input") implementer = /^IMPLEMENTER=([\w.-]+)$/.exec(value ?? "")?.[1] ?? implementer;
+      if (flag === "--input" && value?.startsWith("CANCEL=")) cancel = value === "CANCEL=yes";
+      if (flag === "--inputs-json") inputsJson = true;
     }
-    if (step === "implement") return { dag, run: run && /^[\w.-]+$/.test(run) ? run : undefined, implementer, syntax };
+    if (step === checkpoint) return { dag, run: run && /^[\w.-]+$/.test(run) ? run : undefined, implementer, cancel,
+      syntax: syntax ?? (cancel && inputsJson ? "cancellation requires literal --input CANCEL=yes" : undefined) };
   }
   return undefined;
 }
@@ -383,7 +388,7 @@ function visibleImplementCompletion(text: string): boolean {
   return /\bhuman-task\b/.test(literal) && /\bcomplete\b/.test(literal) && /\bimplement\b/.test(literal);
 }
 
-function evalImplementCompletion(code: string): ImplementCompletion | undefined {
+function evalImplementCompletion(code: string, checkpoint = "implement"): ImplementCompletion | undefined {
   // Discover JS literals before shell parsing. In particular, # has no comment
   // meaning in the wrapper, and backticks delimit JS templates, not shell expansion.
   const literals: { value: string; template: boolean; escaped: boolean }[] = [];
@@ -421,7 +426,7 @@ function evalImplementCompletion(code: string): ImplementCompletion | undefined 
     literals.push({ value, template: char === "`", escaped });
     wrapper += "@";
   }
-  const candidates = literals.map(literal => literalImplementCompletion(literal.value)).filter(value => value !== undefined);
+  const candidates = literals.map(literal => literalImplementCompletion(literal.value, checkpoint)).filter(value => value !== undefined);
   const visible = visibleImplementCompletion(code) || literals.some(literal => visibleImplementCompletion(literal.value));
   if (!visible && candidates.length === 0) return undefined;
   // Only one static call/tag is inspectable. Extra literals, branches, operators
@@ -442,8 +447,41 @@ function evalImplementCompletion(code: string): ImplementCompletion | undefined 
   if (literals.length !== 1 || candidates.length !== 1) syntax ??= "one static JS command literal required";
   if (!call && !(tag && literals[0]?.template && !literals[0].escaped)) syntax ??= "unsupported JS command wrapper";
   const candidate = candidates[0];
-  return { dag: candidate?.dag, run: candidate?.run, implementer: candidate?.implementer,
+  return { dag: candidate?.dag, run: candidate?.run, implementer: candidate?.implementer, cancel: candidate?.cancel,
     syntax: syntax ?? candidate?.syntax ?? (candidate ? undefined : "uninspectable implement completion") };
+}
+
+async function admitCancellation(completion: ImplementCompletion, checkpoint: string, ctx: QualityContext): Promise<void> {
+  requireValue(!completion.syntax && completion.dag === "feature" && completion.run, "one literal feature cancellation command required");
+  const base = (process.env.DAGU_URL || `http://127.0.0.1:${process.env.DAGU_PORT || "8080"}`).replace(/\/+$/, "");
+  const endpoint = `${base}/api/v1/dag-runs/feature/${encodeURIComponent(completion.run)}`;
+  const response = await fetch(endpoint, { signal: AbortSignal.timeout(5000) });
+  requireValue(response.ok, `Dagu HTTP ${response.status}`);
+  const details = object(object(await response.json()).dagRunDetails);
+  requireValue(details.statusLabel === "waiting" && Array.isArray(details.nodes) && details.nodes.map(object).some(node =>
+    object(node.step).id === checkpoint && node.statusLabel === "waiting"), "cancellation target must be waiting");
+  const primary = await resolveRunPrimary(base, { name: "feature", dagRunId: completion.run, statusLabel: "waiting",
+    ...(typeof details.params === "string" ? { params: details.params } : {}),
+    ...(typeof details.resolvedPrimary === "string" ? { resolvedPrimary: details.resolvedPrimary } : {}) }, AbortSignal.timeout(5000));
+  requireValue(primary, "Run PRIMARY is missing");
+  const localPrimary = execFileSync("git", ["-C", ctx.cwd, "worktree", "list", "--porcelain"], { encoding: "utf8" }).split("\n")[0]?.slice("worktree ".length);
+  requireValue(localPrimary && realpathSync(localPrimary) === realpathSync(primary), "cancellation belongs to another repository");
+  const snapshot = await fetch(`${endpoint}/spec`, { signal: AbortSignal.timeout(5000) });
+  requireValue(snapshot.ok, `Dagu snapshot HTTP ${snapshot.status}`);
+  const source = object(parse(String(object(await snapshot.json()).spec)));
+  requireValue(Array.isArray(source.steps), "snapshot steps are missing");
+  const steps = source.steps.map(object);
+  const human = steps.find(step => step.id === checkpoint);
+  const gate = steps.find(step => step.id === `${checkpoint}_cancellation`);
+  requireValue(human?.action === "human.task" && object(object(object(human.with).form).properties).CANCEL, "snapshot must declare cancellation input");
+  const input = object(object(object(object(human.with).form).properties).CANCEL);
+  requireValue(Array.isArray(input.enum) && input.enum.includes("yes"), "snapshot cancellation input must accept yes");
+  const dependencies = Array.isArray(gate?.depends) ? gate.depends : [gate?.depends];
+  requireValue(gate && dependencies.length === 1 && dependencies[0] === checkpoint && typeof gate.run === "string" && gate.run.includes("exit 77") &&
+    Array.isArray(gate.env) && gate.env.map(object).some(value => value.CANCEL === `\${steps.${checkpoint}.outputs.CANCEL}`) &&
+    (gate.continue_on === undefined || gate.continue_on === "skipped"), "snapshot must route cancellation to its terminal failure gate");
+  requireValue(steps.filter(step => (Array.isArray(step.depends) ? step.depends : [step.depends]).includes(checkpoint)).every(step => step === gate),
+    "snapshot successors must depend on the cancellation gate");
 }
 
 export async function qualityDecision(
@@ -465,6 +503,12 @@ export async function qualityDecision(
   const assignments = tasks.map(task => `${event.input.context ?? ""}\n${task.task ?? ""}`);
   if (!completion && !implementCompletion && !assignments.some(assignment => assignment.includes("FEATURE_QUALITY RUN="))) return undefined;
   try {
+    const cancel = typeof rawCommand === "string" ? implementCompletion?.cancel ? implementCompletion
+      : event.toolName === "eval" ? evalImplementCompletion(rawCommand, "quality_review") : literalImplementCompletion(rawCommand, "quality_review") : undefined;
+    if (cancel?.cancel) {
+      await admitCancellation(cancel, implementCompletion?.cancel ? "implement" : "quality_review", ctx);
+      return undefined;
+    }
     requireValue(!implementCompletion || (!implementCompletion.syntax && implementCompletion.dag === "feature"),
       `one literal implement completion command required: ${implementCompletion?.syntax ?? "literal feature DAG required"}`);
     if (!completion && !implementCompletion) {

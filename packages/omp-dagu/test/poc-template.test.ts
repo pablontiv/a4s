@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { withResourceGuard } from "./resource-fixtures.ts";
+import "./waiting-cancellation.test.ts";
 
 for (const [name, definition] of [
   ["template", new URL("../skills/dagu-feature/poc.yaml", import.meta.url)],
@@ -254,6 +255,19 @@ for (const verdict of ["PASS", "FAIL"] as const) {
     }
   });
 }
+
+test("PoC cancelled failure handler preserves evidence without publishing a verdict", () => {
+  const fixture = pocFixture();
+  try {
+    mkdirSync(fixture.state, { recursive: true });
+    fixture.save("cancellation.json", '{"outcome":"cancelled","checkpoint":"run_poc"}\n');
+    const result = fixture.run("publish", { PUBLICATION_FAILURE: "yes" });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(readFileSync(fixture.calls, "utf8"), "");
+    assert.equal(readFileSync(fixture.enqueues, "utf8"), "");
+    assert.ok(existsSync(join(fixture.state, "cancellation.json")));
+  } finally { fixture.cleanup(); }
+});
 
 function pocExitScript(): string {
   const lines = readFileSync(template, "utf8").split("\n");

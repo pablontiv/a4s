@@ -266,9 +266,46 @@ steps:
       prompt: "start_gate: ${steps.detect_start_primary.outputs.reason}. Restore ${PRIMARY} to clean ${BASE_BRANCH}, preserving the operator's changes; then push back this checkpoint with the observed iteration to recheck in the same run. start_gate creates the worktree."
       push_back:
         rewind_to: detect_start_primary
+      form:
+        type: object
+        properties:
+          CANCEL: {type: string, enum: ['yes', 'no']}
+
+  - id: start_primary_unavailable_cancellation
+    depends: start_primary_unavailable
+    continue_on: skipped
+    preconditions:
+      - condition: "${steps.detect_start_primary.outputs.reason}"
+        expected: "re:^primary "
+    env:
+      - CANCEL: ${steps.start_primary_unavailable.outputs.CANCEL}
+      - CHECKPOINT: start_primary_unavailable
+    run: &cancellation_gate |
+      set -euo pipefail
+      if [[ "$CANCEL" == yes ]]; then
+        STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")
+        mkdir -p "$STATE"
+        terminal=${NATIVE_TERMINAL:-failed}
+        jq -n --arg run "$RUN" --arg checkpoint "$CHECKPOINT" --arg worktree "$WORKTREE" --arg native "$terminal" \
+          '{run:$run,checkpoint:$checkpoint,worktree:$worktree,outcome:"cancelled",nativeExpected:$native}' > "$STATE/cancellation.json"
+        printf 'Cancellation requested at %s; terminating before successors; evidence=%s\n' "$CHECKPOINT" "$STATE"
+        if [[ "$terminal" == aborted ]]; then
+          # A sibling human task may still wait. Stop only this resumed active,
+          # effect-free gate; a plain failure would leave the run Waiting.
+          dagu stop --run-id "$RUN" feature
+          sleep 30
+          printf 'Native stop did not terminate the active cancellation gate\n' >&2
+        fi
+        exit 77
+      fi
+      for field in ${REQUIRED_FIELDS:-}; do
+        value=${!field:-}
+        [[ -n "$value" && "$value" != '${steps.'* ]] ||
+          { printf 'Normal completion requires %s at %s\n' "$field" "$CHECKPOINT" >&2; exit 1; }
+      done
 
   - id: start_gate
-    depends: start_primary_unavailable
+    depends: start_primary_unavailable_cancellation
     continue_on:
       failure: true
     env:
@@ -364,9 +401,24 @@ steps:
       prompt: "start_gate failed. Inspect its logs, restore remote access or reconcile PRIMARY preserving operator commits, then push back with the observed run-wide iteration to retry start_gate in this run."
       push_back:
         rewind_to: start_gate
+      form:
+        type: object
+        properties:
+          CANCEL: {type: string, enum: ['yes', 'no']}
+
+  - id: recover_start_gate_cancellation
+    depends: recover_start_gate
+    continue_on: skipped
+    preconditions:
+      - condition: "${start_gate.exit_code}"
+        expected: "re:^[1-9][0-9]*$"
+    env:
+      - CANCEL: ${steps.recover_start_gate.outputs.CANCEL}
+      - CHECKPOINT: recover_start_gate
+    run: *cancellation_gate
 
   - id: implement
-    depends: recover_start_gate
+    depends: recover_start_gate_cancellation
     preconditions:
       - condition: "${steps.triage.outputs.POC}"
         expected: "no"
@@ -375,6 +427,7 @@ steps:
       - name: SUMMARY
       - name: MESSAGE
       - name: IMPLEMENTER
+
 
   - id: capture
     depends: implement
@@ -570,9 +623,20 @@ steps:
       prompt: "Dependency net checkpoint: the wait handler completes unchanged dependencies or pushes back to triage."
       push_back:
         rewind_to: triage
+      form:
+        type: object
+        properties:
+          CANCEL: {type: string, enum: ['yes', 'no']}
+
+  - id: dependency_review_cancellation
+    depends: dependency_review
+    env:
+      - CANCEL: ${steps.dependency_review.outputs.CANCEL}
+      - CHECKPOINT: dependency_review
+    run: *cancellation_gate
 
   - id: rebase
-    depends: dependency_review
+    depends: dependency_review_cancellation
     retry_policy:
       limit: 3
       interval_sec: 5
@@ -668,9 +732,20 @@ steps:
       prompt: "Rebase conflict checkpoint: the wait handler completes a clean rebase or pushes back to implement with the conflict files."
       push_back:
         rewind_to: implement
+      form:
+        type: object
+        properties:
+          CANCEL: {type: string, enum: ['yes', 'no']}
+
+  - id: conflict_review_cancellation
+    depends: conflict_review
+    env:
+      - CANCEL: ${steps.conflict_review.outputs.CANCEL}
+      - CHECKPOINT: conflict_review
+    run: *cancellation_gate
 
   - id: gate
-    depends: conflict_review
+    depends: conflict_review_cancellation
     continue_on:
       failure: true
     retry_policy:
@@ -748,9 +823,24 @@ steps:
       prompt: "gate failed. Inspect the gate logs; push back with the observed run-wide iteration to return to implement and repair the candidate in the same worktree."
       push_back:
         rewind_to: implement
+      form:
+        type: object
+        properties:
+          CANCEL: {type: string, enum: ['yes', 'no']}
+
+  - id: recover_gate_cancellation
+    depends: recover_gate
+    continue_on: skipped
+    preconditions:
+      - condition: "${gate.exit_code}"
+        expected: "re:^[1-9][0-9]*$"
+    env:
+      - CANCEL: ${steps.recover_gate.outputs.CANCEL}
+      - CHECKPOINT: recover_gate
+    run: *cancellation_gate
 
   - id: quality_prepare
-    depends: recover_gate
+    depends: recover_gate_cancellation
     preconditions:
       - condition: "${steps.triage.outputs.POC}"
         expected: "no"
@@ -844,9 +934,20 @@ steps:
       prompt: "Effective QA/reviewer verdicts are in quality.json. The wait handler completes two PASS or pushes back to implement at the observed iteration with both independent findings preserved."
       push_back:
         rewind_to: implement
+      form:
+        type: object
+        properties:
+          CANCEL: {type: string, enum: ['yes', 'no']}
+
+  - id: quality_transition_cancellation
+    depends: quality_transition
+    env:
+      - CANCEL: ${steps.quality_transition.outputs.CANCEL}
+      - CHECKPOINT: quality_transition
+    run: *cancellation_gate
 
   - id: validation
-    depends: quality_transition
+    depends: quality_transition_cancellation
     preconditions:
       - condition: "${gate.exit_code}"
         expected: "0"
@@ -872,13 +973,13 @@ steps:
         type: object
         additionalProperties: false
         properties:
+          CANCEL: {type: string, enum: ['yes', 'no']}
           APPROVED:
             type: string
             enum: ['yes']
           TESTED_SHA:
             type: string
             pattern: '^[a-f0-9]{40}$'
-        required: [APPROVED, TESTED_SHA]
       push_back:
         rewind_to: implement
         form:
@@ -890,8 +991,26 @@ steps:
               minLength: 1
           required: [REASON]
 
-  - id: push
+  - id: validation_cancellation
     depends: validation
+    continue_on: skipped
+    preconditions:
+      - condition: "${gate.exit_code}"
+        expected: "0"
+      - condition: "${steps.triage.outputs.POC}"
+        expected: "no"
+      - condition: '${VALIDATION}'
+        expected: 're:.+'
+    env:
+      - CANCEL: ${steps.validation.outputs.CANCEL}
+      - CHECKPOINT: validation
+      - REQUIRED_FIELDS: APPROVED TESTED_SHA
+      - APPROVED: ${steps.validation.outputs.APPROVED}
+      - TESTED_SHA: ${steps.validation.outputs.TESTED_SHA}
+    run: *cancellation_gate
+
+  - id: push
+    depends: validation_cancellation
     continue_on:
       failure: true
     preconditions:
@@ -940,9 +1059,24 @@ steps:
       prompt: "push failed. Inspect its logs and restore remote access or permissions, then push back with the observed run-wide iteration to retry push in this run."
       push_back:
         rewind_to: push
+      form:
+        type: object
+        properties:
+          CANCEL: {type: string, enum: ['yes', 'no']}
+
+  - id: recover_push_cancellation
+    depends: recover_push
+    continue_on: skipped
+    preconditions:
+      - condition: "${push.exit_code}"
+        expected: "re:^[1-9][0-9]*$"
+    env:
+      - CANCEL: ${steps.recover_push.outputs.CANCEL}
+      - CHECKPOINT: recover_push
+    run: *cancellation_gate
 
   - id: pr
-    depends: recover_push
+    depends: recover_push_cancellation
     preconditions:
       - condition: "${steps.triage.outputs.POC}"
         expected: "no"
@@ -1021,6 +1155,19 @@ steps:
       prompt: "The scheduled reconciler owns this CI checkpoint. Evidence of CODE_FAIL for the published SHA returns this same run to implement; the SHA, check and log excerpt are in <git-dir>/dagu-feature/runs/${RUN}/ci-return.json and the coordinator notice."
       push_back:
         rewind_to: implement
+      form:
+        type: object
+        properties:
+          CANCEL: {type: string, enum: ['yes', 'no']}
+
+  - id: await_ci_cancellation
+    depends: await_ci
+    signal_on_stop: SIGINT
+    env:
+      - CANCEL: ${steps.await_ci.outputs.CANCEL}
+      - CHECKPOINT: await_ci
+      - NATIVE_TERMINAL: aborted
+    run: *cancellation_gate
 
   - id: await_merge
     depends: auto_merge
@@ -1029,9 +1176,22 @@ steps:
       prompt: "The scheduled reconciler owns this merge checkpoint: BEHIND or DIRTY returns to rebase with the observed iteration. Both CI and merge checkpoints complete only after MERGED with successful checks for the published SHA."
       push_back:
         rewind_to: rebase
+      form:
+        type: object
+        properties:
+          CANCEL: {type: string, enum: ['yes', 'no']}
+
+  - id: await_merge_cancellation
+    depends: await_merge
+    signal_on_stop: SIGINT
+    env:
+      - CANCEL: ${steps.await_merge.outputs.CANCEL}
+      - CHECKPOINT: await_merge
+      - NATIVE_TERMINAL: aborted
+    run: *cancellation_gate
 
   - id: authorize_ci
-    depends: [await_ci, await_merge]
+    depends: [await_ci_cancellation, await_merge_cancellation]
     run: |
       set -euo pipefail
       repo=$(gh repo view "$(git -C "$PRIMARY" remote get-url origin)" --json nameWithOwner --jq .nameWithOwner)
@@ -1085,9 +1245,24 @@ steps:
       prompt: "close_gate: ${steps.detect_close_primary.outputs.reason}. Restore ${PRIMARY} to clean ${BASE_BRANCH}, preserving the operator's changes; then push back this checkpoint with the observed iteration to recheck in the same run. close_gate removes the worktree."
       push_back:
         rewind_to: detect_close_primary
+      form:
+        type: object
+        properties:
+          CANCEL: {type: string, enum: ['yes', 'no']}
+
+  - id: close_primary_unavailable_cancellation
+    depends: close_primary_unavailable
+    continue_on: skipped
+    preconditions:
+      - condition: "${steps.detect_close_primary.outputs.reason}"
+        expected: "re:^primary "
+    env:
+      - CANCEL: ${steps.close_primary_unavailable.outputs.CANCEL}
+      - CHECKPOINT: close_primary_unavailable
+    run: *cancellation_gate
 
   - id: close_gate
-    depends: [await_merge, close_primary_unavailable]
+    depends: [await_merge_cancellation, close_primary_unavailable_cancellation]
     env:
       - CLEANUP_CLOSE: "true"
     run: &feature_cleanup |

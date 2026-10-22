@@ -30,7 +30,27 @@ test("CI scripts preserve template/render parity and Dagu accepts materialized t
       const template = readFileSync(new URL(`../skills/dagu-feature/${file}`, import.meta.url), "utf8");
       const render = readFileSync(new URL(`../../../.workspace/dagu/dags/${file}`, import.meta.url), "utf8");
       for (const id of file === "feature.yaml" ? ["await_ci", "await_merge", "authorize_ci"] : ["observe", "transition"]) {
-        assert.equal(step(template, id), step(render, id), `${file}/${id}`);
+        if (file === "feature.yaml" && id !== "authorize_ci") {
+          // Bootstrap may retain the sealed snapshot or adopt the current template.
+          const checkpoint = step(template, id);
+          const form = "      form:\n        type: object\n        properties:\n          CANCEL: {type: string, enum: ['yes', 'no']}\n";
+          assert.ok(checkpoint.includes(form), `${id} cancellation form`);
+          assert.ok([checkpoint, checkpoint.replace(form, "")].includes(step(render, id)), `${file}/${id}`);
+          const gate = step(template, `${id}_cancellation`);
+          assert.ok(gate.includes(`    depends: ${id}\n`));
+          assert.ok(gate.includes(`      - CANCEL: \${steps.${id}.outputs.CANCEL}\n`));
+          assert.ok(gate.includes(`      - CHECKPOINT: ${id}\n`));
+          assert.ok(gate.includes("      - NATIVE_TERMINAL: aborted\n"));
+          assert.ok(gate.includes('if [[ "$CANCEL" == yes ]]; then'));
+        } else if (file === "feature.yaml") {
+          assert.ok(step(template, id).includes("    depends: [await_ci_cancellation, await_merge_cancellation]\n"));
+          assert.ok([step(template, id), step(template, id).replace(
+            "    depends: [await_ci_cancellation, await_merge_cancellation]\n",
+            "    depends: [await_ci, await_merge]\n",
+          )].includes(step(render, id)), `${file}/${id}`);
+        } else {
+          assert.equal(step(template, id), step(render, id), `${file}/${id}`);
+        }
       }
       const materialized = join(root, file);
       writeFileSync(materialized, template.replaceAll("__DAGU_FEATURE_VERSION__", BUNDLE_VERSION));
@@ -62,7 +82,9 @@ function step(source: string, id: string): string {
   const start = source.indexOf(`  - id: ${id}\n`);
   assert.ok(start >= 0, id);
   const end = source.indexOf("\n  - id:", start + 1);
-  return source.slice(start, end < 0 ? source.length : end).split("\nhandler_on:")[0]! + "\n";
+  const block = source.slice(start, end < 0 ? source.length : end).split("\nhandler_on:")[0]! + "\n";
+  return block.replace("    run: *cancellation_gate", () =>
+    source.match(/    run: &cancellation_gate \|[\s\S]*?(?=\n  - id:)/)![0]!.replace(" &cancellation_gate", ""));
 }
 function script(source: string, id: string): string {
   const block = step(source, id).split("    run: |\n")[1];
@@ -319,7 +341,7 @@ test("Dagu 2.20.1: paired root waits return to implement/rebase and release the 
   f.env.DAGU_HOME = home;
   writeFileSync(join(home, "config.yaml"), `auth:\n  mode: none\ncoordinator:\n  enabled: false\nqueues:\n  enabled: true\n  config:\n    - name: ci226\n      max_active_runs: 1\n`);
   const fixtureEnv = ["PATH", "CI_REMOTE", "CI_CONTROL", "CI_CALLS"].map(key => `  - ${key}: ${JSON.stringify(f.env[key])}\n`).join("");
-  const definition = `type: graph\nshell: bash\nmax_active_steps: 1\nqueue: ci226\nparams:\n  - ISSUE: "226"\n  - PRIMARY: ${f.primary}\n  - BRANCH: ${f.branch}\n  - PR_NUMBER: "77"\nenv:\n${fixtureEnv}  - WORKTREE: ${f.worktree}\n  - RUN: ci226\nsteps:\n  - id: implement\n    action: human.task\n    with:\n      prompt: Correct candidate\n  - id: rebase\n    depends: implement\n    run: echo rebased\n  - id: auto_merge\n    depends: rebase\n    run: echo observed-publication\n${step(feature, "await_ci")}${step(feature, "await_merge")}${step(feature, "authorize_ci")}`;
+  const definition = `type: graph\nshell: bash\nmax_active_steps: 1\nqueue: ci226\nparams:\n  - ISSUE: "226"\n  - PRIMARY: ${f.primary}\n  - BRANCH: ${f.branch}\n  - PR_NUMBER: "77"\nenv:\n${fixtureEnv}  - WORKTREE: ${f.worktree}\n  - RUN: ci226\nsteps:\n  - id: implement\n    action: human.task\n    with:\n      prompt: Correct candidate\n  - id: rebase\n    depends: implement\n    run: echo rebased\n  - id: auto_merge\n    depends: rebase\n    run: echo observed-publication\n${["await_ci", "await_ci_cancellation", "await_merge", "await_merge_cancellation", "authorize_ci"].map(id => step(feature, id)).join("")}`;
   const path = join(home, "dags/feature.yaml");
   writeFileSync(path, definition);
   writeFileSync(join(home, "dags/queue-probe.yaml"), "queue: ci226\nsteps:\n  - id: observed\n    run: echo queue-slot-released\n");

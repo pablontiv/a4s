@@ -840,6 +840,8 @@ or `capture`.
 Feature `triage` and `implement` are command steps. After inspecting retained
 effects, retry that same step (`--step triage` or `--step implement`); its fresh
 native start timestamp permits recovery from failed/interrupted role jobs.
+For `quality_review`, retry `quality_prepare` to bind a fresh quality attempt
+before dispatching the native QA/reviewer join.
 
 | DAG | Failed Waiting checkpoint | Retry step |
 |---|---|---|
@@ -848,7 +850,6 @@ native start timestamp permits recovery from failed/interrupted role jobs.
 | feature | dependency_review | checkpoint_push |
 | feature | conflict_review | rebase |
 | feature | recover_gate | gate |
-| feature | quality_review | quality_prepare |
 | feature | quality_transition | quality_admit |
 | feature | validation | quality_admit (reopens quality_transition first) |
 | feature | recover_push | push |
@@ -1330,6 +1331,80 @@ The coordinator delegates the correction in the same worktree and single PR.
 and removes the managed worktree and branches.
 
 The `orphan` step selects `triage` or `implement` observations whose issue is `CLOSED`. It reports `ORPHAN <repo>#<issue> <run> <step> issue=CLOSED closed_at=<timestamp>` and leaves the run unchanged. Inspect the scheduled `reconcile` history and its sub-run logs for classifications, transitions, diagnosed waits and orphan reports.
+
+## Cancel a waiting checkpoint
+
+Cancellation-capable feature, PoC and discovery snapshots declare `CANCEL`
+(`yes|no`) on every lifecycle human task and route each through an immediate
+`<step>_cancellation` gate. Verify those declarations and routes in the actual
+snapshot. The authorized coordinator/operator selects the actual waiting step,
+retaining its run ID and ownership:
+
+New feature snapshots dispatch `triage`, `implement` and `quality_review` as
+native role-job command stages, rather than waiting human tasks. This form
+procedure applies to their already-admitted human-task snapshots only when those
+snapshots declare the cancellation input and gate. The maintained isolated
+fixture exercises that snapshot contract alongside the current waiting
+checkpoints; it does not convert running role jobs into human tasks.
+
+```sh
+dagu status feature --run-id '<run>'
+dagu human-task complete feature --run-id '<run>' --step '<waiting-step>' --input CANCEL=yes
+# Use poc or discovery for those lifecycle DAGs.
+```
+
+OMP's quality guard admits literal cancellation-only implement/quality-review
+commands for the same repository only after verifying the waiting target and
+the original snapshot's declared cancellation route. Normal delivery quality
+evidence remains required.
+
+Cancellation needs only `CANCEL=yes`; SUMMARY, MESSAGE, IMPLEMENTER, QA,
+REVIEW, approval and promotion fields are unnecessary. Normal completions retain
+their existing fields; CANCEL may be omitted or set to `no`. Dagu 2.20.1 supports
+static forms, so supplied values retain their native type/enum/pattern/length
+validation and the cancellation gate enforces normal required fields before
+any successor. Missing normal fields fail that gate with `Normal completion
+requires <field>`, rather than completing delivery. Conditional form schemas
+are not supported by this pinned runtime.
+
+The immediate `<step>_cancellation` gate writes `cancellation.json` outside the
+editable worktree. Most gates exit 77, producing native **Failed**. Feature's
+parallel CI/merge cancellation gates instead request native stop from their
+resumed, effect-free interval, producing **Aborted** even while the sibling
+human task waits. Both routes execute `onExit`. The record's domain
+`outcome=cancelled` and `nativeExpected` explain the deliberate terminal state;
+there is no native status named cancelled. Every downstream effecting/recovery/
+promotion step remains unexecuted.
+The native terminal notification and ordinary terminal filtering remove the
+run from active widget/reconciler work.
+
+Confirm native terminal state and the actual `onExit` result with `dagu status`;
+inspect the gate and exit logs, `cancellation.json`, cleanup diagnostics, retained
+candidate/worktree paths and any external-effect ledger. CLI completion success
+only means resume was queued. Feature/PoC evidence lives under
+`<git-dir>/dagu-feature/runs/<run>` / `<git-dir>/poc/runs/<run>`, and discovery
+evidence under its snapshot output directory. PoC failure publication recognizes
+the cancellation record and exits without publishing a verdict or promoting.
+Cancellation withdraws future effects; already published effects stay historical.
+
+Exit cleanup retains ownership, candidate and audit evidence. Feature cleanup
+removes only registered, clean, integrated resources; an unpublished candidate
+or uncertain integration keeps its branch/worktree and durable recovery diagnostic.
+Preserve those resources, staged/unstaged/untracked files and candidate records
+for an authorized continuation/handoff. PoC cancellation retains unpublished
+commits and dirty work; a clean base-only worktree/branch is disposable. Discovery
+removes only its verified clean detached snapshot, retaining findings and evidence.
+
+Stored snapshots are immutable: normal bootstrap adoption enables this procedure
+for newly enqueued snapshots only. Inspect the original snapshot for its CANCEL
+field **and routing** before completing an older run. No universal safe procedure
+for arbitrary historical waiting snapshots has been demonstrated. In particular,
+original #382 `a4s-issue-382` and #383 `a4s-issue-383-v2` on immutable 0.3.77
+remain explicitly unresolved acceptance of #290, preserving their original owner,
+candidate, resources and audit history. This delivery neither recovers them nor
+authorizes their continuation. Active `dagu stop` is supported only after observing
+a resumed run inside a verified side-effect-free interval; arbitrary historical
+successors have no proven safe interval.
 
 ## Finish
 

@@ -49,10 +49,16 @@ for (const definition of [
     const env = { ...process.env, DAGU_PARAMS_JSON: "{}", DAGU_HOME: home, DAGU_COORDINATOR_ENABLED: "false", PATH: `${bin}:${process.env.PATH}` };
     writeFileSync(join(home, "config.yaml"), `host: 127.0.0.1\nport: ${port}\nauth:\n  mode: none\ncoordinator:\n  enabled: false\n`);
     const source = readFileSync(definition, "utf8");
-    const step = (id: string) => {
+    const step = (id: string): string => {
       const start = source.indexOf(`  - id: ${id}\n`);
       const end = source.indexOf("\n  - id:", start + 1);
-      return source.slice(start, end).split("\nhandler_on:")[0] + "\n";
+      let result = source.slice(start, end).split("\nhandler_on:")[0] + "\n";
+      if (result.includes("    run: *cancellation_gate")) {
+        result = result.replace("    run: *cancellation_gate", source.match(/    run: &cancellation_gate \|[\s\S]*?(?=\n  - id:)/)![0]!.replace(" &cancellation_gate", ""));
+      }
+      result = result.replace("    run: &cancellation_gate", "    run:");
+      if (result.includes("    action: human.task") && source.includes(`  - id: ${id}_cancellation\n`)) result += step(`${id}_cancellation`);
+      return result;
     };
     // Exercise production scope, publication and wait dispatcher against a seeded repository.
     const sections = source.match(/cat > "\$STATE\/sections.jq" <<'JQ'\n([\s\S]*?)\n      JQ/);
