@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.104
+
+- Observe a terminal Dagu run snapshot before consuming bundle-rebase fixture logs, preserving normalized-version, gate-SHA, publication evidence and failure diagnostics (#522).
+
 ## 0.3.103
 
 - Migrate the private reload helper to `@a4s/hot-reload` in `packages/hot-reload` and update every retained consumer, including the Dagu status and triage extension entrypoints (#421).
