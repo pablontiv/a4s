@@ -49,14 +49,14 @@ extensions:
   - /absolute/path/to/a4s/packages/orca-omp-integration
 ```
 
-Every new OMP session discovers the reloadable shim automatically. After editing an a4s extension implementation, `/reload-plugins` imports a fresh generation without restarting OMP and still runs the builtin refresh of skills, commands, agents, capabilities, and MCP. An idle session waits for the reload; during a turn it is deferred until the host becomes idle after `agent_end`. The old generation receives `session_shutdown` before the new generation receives `session_start`, with a 2000 ms limit per lifecycle handler. Import or factory failures report an error and retain the previous generation. Loading it globally is safe: both modules remain inert unless the session runs in an Orca pane with a bound orchestration Run.
+Every new OMP session discovers the reloadable shim automatically. The A4S wrapper intercepts `/reload-plugins` and imports a fresh wrapped implementation generation; native OMP separately refreshes its resource discovery. The wrapper implementation defers a busy-session request until idle after `agent_end`, shuts down the old generation before starting the new one (2000 ms per lifecycle handler), and retains the previous generation after import/factory failures. Issue #421 recorded real busy-turn deferral through `agent_end`, followed at idle by old-generation shutdown, new-generation start, and one new-generation callback; native idle reload and builtin skill rediscovery were separately observed. See the [helper verification record](../hot-reload/README.md#verification-recorded-for-issue-421) for the exact versioned, compositional, and source-selection evidence boundaries. Loading globally remains an operator action; both Orca modules are inert outside an Orca pane with a bound orchestration Run.
 
-This applies to the a4s extensions that declare a reloadable shim, not third-party extensions. Restart OMP to reload the shim or `@a4s/omp-hot-reload` helper itself. Removed commands and tools remain registered: commands warn that a restart is needed, and removed tools throw on execution. Description/schema changes and autocomplete entries for new commands also require a restart. Local modules created after startup and imports using bare specifiers are not refreshed.
+This applies to the a4s extensions that declare a reloadable shim, not third-party extensions. Restart OMP to reload the shim, package binding, or `@a4s/hot-reload` helper itself. Removed commands and tools remain registered: commands warn that a restart is needed, and removed tools throw on execution. Description/schema changes and autocomplete entries for new commands also require a restart. Local modules created after startup and imports using bare specifiers are not refreshed.
 
 For a one-off smoke run instead:
 
 ```sh
-omp -e packages/orca-omp-integration
+omp --no-extensions -e /absolute/path/to/candidate/packages/orca-omp-integration
 ```
 
 The CLI resolves from `ORCA_CLI_COMMAND`, then `orca-dev` in a development checkout, `orca-ide` on Linux outside a managed pane, and finally `orca`. Pass `cliPath` to either module to override it. The package also exports `createOrcaLifecycleGuard` and `createOrcaModelRouter`; each module file has its own default extension export.

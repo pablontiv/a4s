@@ -293,7 +293,7 @@ test("each lifecycle handler is bounded; timeout and rejection still allow the n
 });
 
 test("default importer reads rewritten modules from their real path", async t => {
-  const directory = await mkdtemp(join(tmpdir(), "omp-hot-reload-"));
+  const directory = await mkdtemp(join(tmpdir(), "a4s-hot-reload-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const file = join(directory, "implementation.mjs");
   const link = join(directory, "entry.mjs");

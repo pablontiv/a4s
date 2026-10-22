@@ -14,6 +14,12 @@ Repository of private libraries, verified extensions, agents and skills distribu
 - [`packages/synagent/core/`](packages/synagent/core/): adaptadores de mensajería Synagent para Pi, OMP y Claude.
 - [`apps/message-bus/`](apps/message-bus/): private, independently started durable MQTT broker used by the messaging adapters.
 
+The private shared [`@a4s/hot-reload`](packages/hot-reload/) workspace supplies
+the retained extensions' reloadable shims. Real busy-turn reload deferral through
+`agent_end`, native idle reload, and separate builtin resource rediscovery were
+observed for #421. See the [helper verification record](packages/hot-reload/README.md#verification-recorded-for-issue-421)
+for the exact versioned, compositional, and source-selection evidence boundaries.
+
 Los plugins de Claude están publicados en [`.claude-plugin/marketplace.json`](.claude-plugin/marketplace.json).
 
 ## Agentes

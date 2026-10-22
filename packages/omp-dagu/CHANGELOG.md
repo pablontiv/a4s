@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.103
+
+- Migrate the private reload helper to `@a4s/hot-reload` in `packages/hot-reload` and update every retained consumer, including the Dagu status and triage extension entrypoints (#421).
+- Preserve message-bus application workspaces, scripts, CI selection and locked dependencies alongside the canonical helper migration.
+
 ## 0.3.93
 
 - Restore the official Dagu 2.20.1 runtime requirement and upstream release downloads, preserving manifest-derived fixtures, checksum verification and exact runtime/admission enforcement (#440).
