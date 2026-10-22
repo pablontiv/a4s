@@ -53,6 +53,8 @@ flowchart LR
 - `dagu-feature-bundle` from this package on the Dagu service's `PATH`, so internal feature/PoC/discovery promotions pass the same admission boundary as the coordinator.
 - `DAGU_HOME` in your shell must point to the same home as that service. Read it from the service definition (macOS: `EnvironmentVariables.DAGU_HOME` in the LaunchAgent plist). If they differ, enqueue and complete commands land in a store the scheduler never reads, and the run stays `Queued`.
 - `git`, `gh` authenticated with push and PR rights, `curl`, `jq`.
+- Python 3 with standard-library `fcntl` on the Dagu service's `PATH`; bootstrap
+  checks it before adoption. The feature gate uses a POSIX kernel advisory lock.
 - The tools the repository's gate command needs.
 
 This skill does not install Dagu, and it carries no logic specific to any repository. Bootstrap renders repository policy; run parameters carry operational issue inputs.
@@ -340,7 +342,7 @@ The bootstrap renders the repository DAG templates when a repository adopts the 
 | `__PRIMARY__` | Canonical main-clone path fixed in feature and PoC renders | repository clone | repository clone |
 | `__TEST_PATHS__` | Bash ERE for repository test paths; every `*.md` also belongs to cutover | `_test\.go$\|^tests/` | `(^\|/)tests/` |
 
-The DAG's fixed invariants: `PRIMARY` is the repository clone, its main working tree, on `BASE_BRANCH` and clean; the run's worktree is always `$PRIMARY/.workspace/worktrees/issue-<n>`, ignored by git; the gate runs with `umask 0022` and without `GH_TOKEN`/`GITHUB_TOKEN`; auto-merge is bound to the tested SHA with `--match-head-commit`; and the queue has concurrency one per repository. `start_gate` registers the canonical PRIMARY, worktree, branch and owning run in Git metadata. Both cleanup entry points share the same script. They refresh the remote base and require either candidate ancestry in that base or a MERGED PR whose head equals the recorded tested candidate and whose effective merge SHA is an ancestor of the refreshed base. `cleanup-proof.json` records candidate, base, squash SHA and proof. Ordinary `git worktree remove` protects local files; a dirty worktree is retained. Local branch deletion compares the candidate atomically; remote deletion at merged close uses an exact-SHA lease.
+The DAG's fixed invariants: `PRIMARY` is the repository clone, its main working tree, on `BASE_BRANCH` and clean; the run's worktree is always `$PRIMARY/.workspace/worktrees/issue-<n>`, ignored by git; the gate runs with `umask 0022` and without `GH_TOKEN`/`GITHUB_TOKEN`; auto-merge is bound to the tested SHA with `--match-head-commit`; and gate bodies serialize per primary within the repository's declared queue capacity. `start_gate` registers the canonical PRIMARY, worktree, branch and owning run in Git metadata. Both cleanup entry points share the same script. They refresh the remote base and require either candidate ancestry in that base or a MERGED PR whose head equals the recorded tested candidate and whose effective merge SHA is an ancestor of the refreshed base. `cleanup-proof.json` records candidate, base, squash SHA and proof. Ordinary `git worktree remove` protects local files; a dirty worktree is retained. Local branch deletion compares the candidate atomically; remote deletion at merged close uses an exact-SHA lease.
 
 `push` publishes the feature branch for PR delivery after current-candidate verification. Uncaptured files and conflict resolutions remain in their worktree for recovery even when HEAD is on the base.
 
@@ -1086,6 +1088,24 @@ command from scratch. If that attempt fails, Dagu retries it once after five
 seconds. The retry therefore repeats setup such as `npm ci`; only after a
 successful gate does the step check that the worktree is clean and record the
 tested SHA.
+
+Before any candidate, branch or clean-state checks, `gate` acquires the per-primary
+kernel advisory lock at `<git-common-dir>/dagu-feature/gate.lock`. It holds an
+inheritable descriptor across `exec` into the complete Bash body, through GATE,
+post-checks and tested-SHA publication. Every entry path shares this boundary:
+human-task completion, conflict/recovery push-back, direct/ancestor/automatic
+retry and the reconciler's BEHIND/DIRTY rewind from `await_merge` to `rebase`.
+A waiter remains Running with its existing ticket and candidate. Its log prints
+`gate: waiting lock=... run=... pid=... holder={"run": "...", "pid": ...}`, then
+`gate: acquired` when admitted. The lock file's last holder JSON is diagnostic;
+kernel ownership determines entry. The stable lock inode stays in Git metadata.
+
+Success, failure, cancellation and process death close descriptors automatically;
+exclusion releases when the holder and all inheriting descendants have closed
+their copies. A surviving gate descendant therefore retains exclusion until it
+exits. Dagu retains its normal gate retry/recovery and cancellation semantics.
+Only gate bodies serialize: the repository queue keeps its declared capacity
+(`a4s=8`), and unrelated control, quality, push and CI-wait steps proceed.
 
 ### Optional repository validation
 

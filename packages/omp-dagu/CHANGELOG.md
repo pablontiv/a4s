@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.108
+
+- Serialize the complete feature gate body per primary with an inherited kernel advisory lock, including human-task resumes, retries and reconciler BEHIND/DIRTY rebases, while retaining declared repository queue capacity (#537).
+- Log waiting holder run/PID diagnostics and release exclusion with process/descendant descriptor lifetime, including failure, cancellation and holder death; validate Python 3/fcntl during adoption and cover native Dagu entry paths.
+
 ## 0.3.107
 
 - Bind triage review tasks by DAG/run/generation/request marker across agent types, accept results only for the current request, inject one canonical decision schema, and report invalid bound output with field/expected/observed diagnostics.
