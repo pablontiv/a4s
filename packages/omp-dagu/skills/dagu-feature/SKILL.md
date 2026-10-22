@@ -137,10 +137,16 @@ with `cause=version_stale`. Diagnostics include observed/expected SHAs and
 versions. Repositories distributing `packages/omp-dagu/package.json` must keep
 that manifest identical in version to origin.
 
-Admission requires the loaded extension and stamped DAG bundle to have exactly
-the same version, including patch. Run notices classify bundle versus extension
-by major/minor: equal major/minor is `ok` even when the patch differs, different
-major/minor is `incompatible`, and a missing bundle label is `unstamped`.
+Admission checks the provenance-verified requested DAG and installed reconciler
+independently against the loaded package. Their stamped versions are compatible
+when valid semantic versions share both major and minor; patch versions may
+differ. This applies to every major, including versions greater than zero
+([`checkRender`/`admit`](../../src/admission.ts),
+[`classifyCompatibility`](../../src/bundle.ts)).
+
+Run notices separately classify bundle versus extension: equal major/minor is
+`ok` even when the patch differs, different major/minor or malformed versions
+are `incompatible`, and a missing bundle label is `unstamped`.
 
 Notices also compare the loaded extension against primary main when
 `PRIMARY/packages/omp-dagu/package.json` exists. `stale` means this applicable
@@ -156,16 +162,25 @@ while the coordinator keeps working in the current turn. The operator restarts
 OMP to load the deployed package, finishes the bootstrap re-seal and adopts its
 stamped renders.
 
-Admission requires exact versions across the package, rendered DAG, installed
-reconciler and loaded extensions. The coordinating extension rewrites literal `dagu enqueue` bash
-calls to the package's admission CLI, preserving shell argument expansion;
-internal promotions invoke `dagu-feature-bundle enqueue` directly. Bootstrap is
-the deployment procedure and remains available to repair an installation.
+The loaded package version must exactly match its installed `package.json`.
+When a loaded-extension digest is supplied, it must match the current installed
+extension source digest. These package-identity checks are separate from render
+patch compatibility ([`admit`](../../src/admission.ts)).
 
-Before Dagu creates a run, admission verifies the unique header/label, required
-Dagu version, readable realpaths and SHA-256 identities, source commit/package
-version and source-to-render provenance. Incompatible or indeterminate identities
-exit nonzero with `DAGU_ADMISSION_REJECTED`, observed/expected components and the
+The coordinating extension rewrites literal `dagu enqueue` bash calls to the
+package's admission CLI, preserving shell argument expansion; internal promotions
+invoke `dagu-feature-bundle enqueue` directly. A fresh aligned bootstrap and
+adoption is an available deployment procedure and can repair an installation;
+provenance-verified compatible renders remain admissible across patch releases.
+
+Before Dagu creates a run, admission verifies the line-one stamp and unique
+matching bundle label, readable realpaths and SHA-256 identities, expected source
+origin and source-to-render provenance. Each stamp's version must exactly match
+the package manifest at its own source commit, and the render must match the
+template at that commit or in the installed checkout. The stamp's Dagu version
+and the native `dagu version` must each exactly match the package's required
+version. Incompatible or indeterminate identities exit nonzero with
+`DAGU_ADMISSION_REJECTED`, observed/expected components and the
 bootstrap/adopt/reload corrective action. Reload OMP after redeploying extensions.
 
 For an operator outside OMP, use the same boundary explicitly:
@@ -688,7 +703,7 @@ The `@a4s/omp-dagu` status extension delivers hidden model context for every wai
 - A retried subagent appends `v<N>` to its base name, for example `Implement182v2`.
 - For every issue in the fixed batch, keep one todo for the agent action at the `human.task` where its run is waiting: triage review, PoC execution, implementation, or recovery. Update that todo when the run moves to another human task. The package widget shows the active step plus live activity: the last non-empty Dagu log line for a running command, or `<tool> <intention> (<age>s)` from the newest `toolCall` in `TriageReview<ISSUE>`, `Poc<ISSUE>` or `Implement<ISSUE>` while its human task waits. Intention comes from `i`, then `title`, then the principal argument; the task name is omitted. It refreshes activity about every two seconds and leaves the line unchanged when no source is available. The `Workflows` HUD folds to three completion-ordered tree rows and expands to eight; `/workflows` toggles, `expand` and `collapse` set the fold, and `hide` and `show` control visibility across session switches.
 - Keep `task.maxRecursionDepth: 1`; every implementation and triage-reviewer subagent remains at level 1 and appears in the main view.
-- A notice whose `compat` is `stale`, `incompatible` or `unstamped` goes under **Blockers and decisions**. A stale notice raises a `warning` notification while the coordinator keeps working; the operator restarts OMP to load main and completes the queued bootstrap plus adoption re-seal. Put the exact recovery enqueue command above under **Proposals** when bootstrap still needs enqueueing. Complete `answers` with the installed values and use the staged `feature.yaml` for the adoption issue. Admission continues to require exact bundle and extension versions, including patch.
+- A notice whose `compat` is `stale`, `incompatible` or `unstamped` goes under **Blockers and decisions**. A stale notice raises a `warning` notification while the coordinator keeps working; the operator restarts OMP to load main and completes the queued bootstrap plus adoption re-seal. Put the exact recovery enqueue command above under **Proposals** when bootstrap still needs enqueueing. Complete `answers` with the installed values and use the staged `feature.yaml` for the adoption issue. These notices are distinct from admission: provenance-verified requested DAG and installed reconciler stamps are independently compatible with the loaded package when valid semantic versions share major and minor, including patch drift; exact package identity, source provenance and native-version checks still apply.
 
 ## Turn status
 
