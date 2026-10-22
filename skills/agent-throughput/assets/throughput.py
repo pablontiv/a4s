@@ -914,6 +914,28 @@ def union_seconds(intervals):
     return total
 
 
+def session_concurrency(intervals_by_session):
+    """Count distinct active sessions and exact half-open interval concurrency."""
+    endpoints = []
+    for intervals in intervals_by_session.values():
+        merged = []
+        for start, stop in sorted(intervals):
+            if stop <= start:
+                continue
+            if merged and start <= merged[-1][1]:
+                merged[-1] = (merged[-1][0], max(stop, merged[-1][1]))
+            else:
+                merged.append((start, stop))
+        for start, stop in merged:
+            endpoints.extend(((start, 1), (stop, -1)))
+    current = peak = 0
+    for _, change in sorted(endpoints):
+        current += change
+        peak = max(peak, current)
+    return sum(any(stop > start for start, stop in intervals)
+               for intervals in intervals_by_session.values()), peak
+
+
 def percentile(values, fraction):
     if not values:
         return None
@@ -935,17 +957,18 @@ def build_report(sessions, projects, prs, since, until, non_repos=(), pr_unavail
         project: set() if project in non_repos else {project} for project in projects.values()}
     session_repos = session_repos if session_repos is not None else {
         cwd: project if project not in non_repos else None for cwd, project in projects.items()}
-    intervals = defaultdict(list)
+    intervals = defaultdict(lambda: defaultdict(list))
     repo_totals = defaultdict(empty_metrics)
     by_path = {s.path: s for s in sessions}
     pr_metrics, maps = {}, {}
     for repo, rows in prs.items():
         maps[repo] = issue_pr_mapping(rows)
-        pr_metrics[repo] = {p['number']: dict(p, tokens=0, agent_hours=0) for p in rows}
+        pr_metrics[repo] = {p['number']: dict(p, tokens=0, agent_hours=0, refs_sources={})
+                            for p in rows}
     numbers = {repo: set(rows) for repo, rows in pr_metrics.items()}
     date = dt.datetime.fromtimestamp(since).date()
     while dt.datetime.combine(date, dt.time()).timestamp() < until:
-        days[date.isoformat()] = dict(empty_metrics(), merged_prs=0)
+        days[date.isoformat()] = dict(empty_metrics(), merged_prs=0, subagent_tokens=0)
         date += dt.timedelta(days=1)
     for session in sessions:
         if not session.tokens and not session.gaps:
@@ -956,39 +979,68 @@ def build_report(sessions, projects, prs, since, until, non_repos=(), pr_unavail
         main = by_path.get(session.main_path)
         repo = session_repos.get(session.cwd)
         members = {repo} if repo else workspace_repos.get(project, set())
-        fallback = workspace_attribution_weights((), session.refs, main.refs if main else (),
-                                                 members, maps, numbers)
+        fallback, fallback_mode, fallback_refs = {}, None, ()
+        for mode, refs in (('file_fallback', session.refs),
+                           ('main_fallback', main.refs if main else ())):
+            selected, ambiguous = workspace_reference_prs(refs, members, maps, numbers)
+            if len(selected) == 1 and not ambiguous:
+                fallback, fallback_mode, fallback_refs = {next(iter(selected)): 1}, mode, refs
+                break
         @lru_cache(maxsize=None)
         def weights_for(refs):
             selected, ambiguous = workspace_reference_prs(refs, members, maps, numbers)
             if selected:
-                return {key: 1 / len(selected) for key in selected}
-            return {} if ambiguous else fallback
+                weights, mode, source_refs = (
+                    {key: 1 / len(selected) for key in selected}, 'direct', refs)
+            elif ambiguous:
+                return {}
+            else:
+                weights, mode, source_refs = fallback, fallback_mode, fallback_refs
+            sources = {}
+            for key, weight in weights.items():
+                target, number = key
+                source = pr_metrics[target][number]['refs_sources'].setdefault(
+                    (session.path, mode),
+                    {'kind': mode, 'session_file': session.path, 'harness': session.harness,
+                     'reference_file': main.path if mode == 'main_fallback' else session.path,
+                     'references': set(), 'tokens': 0, 'agent_hours': 0})
+                if mode == 'direct' or not source['references']:
+                    source['references'].update(ref for ref in source_refs if key in
+                        workspace_reference_prs((ref,), members, maps, numbers)[0])
+                sources[key] = weight, source
+            return sources
         def attribute(refs, field, value):
             weights = weights_for(frozenset(refs))
             if len(members) == 1:
                 repo_totals[next(iter(members))][field] += value
             else:
-                for (target, _), weight in weights.items():
+                for (target, _), (weight, _) in weights.items():
                     repo_totals[target][field] += value * weight
-            for (target, number), weight in weights.items():
+            for (target, number), (weight, source) in weights.items():
                 pr_metrics[target][number][field] += value * weight
+                source[field] += value * weight
         for token in session.tokens:
             d = days[dt.datetime.fromtimestamp(token.timestamp).date().isoformat()]
             for target in (p, h, d):
                 target['tokens'] += token.total
                 target['tokens_excluding_cache_read'] += token.total - token.cache_read
+            if session.is_subagent:
+                d['subagent_tokens'] += token.total
             attribute(token.refs, 'tokens', token.total)
-        for gap in session.gaps:
+        for gap in (() if session.is_subagent else session.gaps):
             hours = (gap.end - gap.start) / 3600
             p['agent_hours'] += hours
             h['agent_hours'] += hours
             for day, start, stop in day_parts(gap.start, gap.end):
                 days[day]['agent_hours'] += (stop - start) / 3600
-                intervals[day].append((start, stop))
+                intervals[day][session.path].append((start, stop))
             attribute(gap.refs, 'agent_hours', hours)
     for day, d in days.items():
-        d['wall_hours'] = union_seconds(intervals[day]) / 3600
+        d['wall_hours'] = union_seconds(
+            interval for rows in intervals[day].values() for interval in rows) / 3600
+        d['active_main_sessions'], d['peak_concurrent_main_sessions'] = session_concurrency(intervals[day])
+        d['mean_concurrency'] = d['agent_hours'] / d['wall_hours'] if d['wall_hours'] else 0
+        d['subagent_token_share_percent'] = 100 * d['subagent_tokens'] / d['tokens'] if d['tokens'] else 0
     needed = {repo for project in project_rows for repo in workspace_repos.get(project, ())}
     pr_sources = set(needed if pr_sources is None else pr_sources)
     needed.intersection_update(pr_sources)
@@ -1006,7 +1058,7 @@ def build_report(sessions, projects, prs, since, until, non_repos=(), pr_unavail
         p['merged_prs'] = len(rows) if sources and complete else None
         p['tokens_per_pr'] = p['tokens'] / len(rows) if rows and complete else None
         p['hours_per_pr'] = p['agent_hours'] / len(rows) if rows and complete else None
-    coverage, top = [], []
+    coverage, all_prs = [], []
     for repo, metrics in pr_metrics.items():
         rows, totals = list(metrics.values()), repo_totals[repo]
         if not rows:
@@ -1022,11 +1074,13 @@ def build_report(sessions, projects, prs, since, until, non_repos=(), pr_unavail
                          'p90_hours_per_pr': percentile([r['agent_hours'] for r in time_rows], .9)})
         for row in rows:
             days[dt.datetime.fromtimestamp(epoch(row['mergedAt'])).date().isoformat()]['merged_prs'] += 1
-            top.append({'repo': repo, 'number': row['number'], 'title': row['title'],
-                        'tokens': row['tokens'], 'agent_hours': row['agent_hours']})
+            sources = []
+            for _, source in sorted(row['refs_sources'].items()):
+                sources.append(dict(source, references=sorted(source['references'], key=repr)))
+            all_prs.append(dict(row, repo=repo, refs_sources=sources))
     return {'projects': [dict(project=name, **row) for name, row in sorted(project_rows.items(), key=lambda pair: -pair[1]['tokens'])],
             'attribution': sorted(coverage, key=lambda row: row['repo']),
-            'top_prs': sorted(top, key=lambda row: -row['tokens'])[:20],
+            'prs': sorted(all_prs, key=lambda row: (row['repo'], row['number'])),
             'days': [dict(day=day, **row) for day, row in sorted(days.items())],
             'harnesses': [dict(harness=name, **row) for name, row in sorted(harness_rows.items())],
             'prs_complete': not unavailable, 'pr_unavailable': unavailable,
@@ -1070,10 +1124,15 @@ def markdown(report):
                      format_number(r['p90_hours_per_pr'])] for r in report['attribution']]), '',
              '## Top PRs by attributed tokens', '', table(['Repo', 'PR', 'Title', 'Mtok', 'h'],
                    [[r['repo'], r['number'], r['title'], format_number(r['tokens'], 1e6), format_number(r['agent_hours'])]
-                    for r in report['top_prs'] if r['tokens']]), '',
-             '## Per day', '', table(['Day', 'Mtok', 'Mtok excl. cacheRead', 'Agent-h', 'Wall-h', 'Merged PRs'],
+                    for r in sorted(report['prs'], key=lambda row: -row['tokens'])[:20] if r['tokens']]), '',
+             '## Per day', '', table(['Day', 'Mtok', 'Mtok excl. cacheRead', 'Agent-h', 'Wall-h',
+                                     'Active main sessions', 'Peak concurrent mains', 'Mean concurrency',
+                                     'Subagent token %', 'Merged PRs'],
                    [[r['day'], format_number(r['tokens'], 1e6), format_number(r['tokens_excluding_cache_read'], 1e6),
-                     format_number(r['agent_hours']), format_number(r['wall_hours']), r['merged_prs'] if report['prs_complete'] else f"{r['merged_prs']} known"]
+                     format_number(r['agent_hours']), format_number(r['wall_hours']),
+                     r['active_main_sessions'], r['peak_concurrent_main_sessions'],
+                     format_number(r['mean_concurrency']), format_number(r['subagent_token_share_percent']),
+                     r['merged_prs'] if report['prs_complete'] else f"{r['merged_prs']} known"]
                     for r in report['days']]), '',
              '## Per harness', '', table(['Harness', 'Mtok', 'Mtok excl. cacheRead', 'Agent-h'],
                    [[r['harness'], format_number(r['tokens'], 1e6), format_number(r['tokens_excluding_cache_read'], 1e6),

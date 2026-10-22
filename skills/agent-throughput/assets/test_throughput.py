@@ -16,7 +16,8 @@ from throughput import (ASK_TOOLS, Gap, Session, Token, attribution_weights,
                         remote_identity, repository_names, filter_azure_prs,
                         git_common_directory, origin_remote, local_project_roots, resolve_workspaces,
                         issue_pr_mapping, main, markdown, parse_claude,
-                        parse_codex, parse_pi, project_location, resolve_project_root, union_seconds)
+                        parse_codex, parse_pi, project_location, resolve_project_root,
+                        session_concurrency, union_seconds)
 
 
 EMPTY = frozenset()
@@ -324,6 +325,95 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(d['wall_hours'], 1.5)
         self.assertEqual(d['merged_prs'], 1)
         self.assertEqual(c['median_tokens_per_pr'], 110)
+        self.assertEqual(d['active_main_sessions'], 2)
+        self.assertEqual(d['peak_concurrent_main_sessions'], 2)
+        self.assertAlmostEqual(d['mean_concurrency'], 4 / 3)
+        self.assertEqual(d['subagent_token_share_percent'], 5)
+
+    def test_exact_concurrency_merges_self_overlap_and_orders_adjacent_endpoints(self):
+        self.assertEqual(session_concurrency({
+            'a': [(0, 10), (5, 15), (15, 20)],
+            'b': [(20, 30)], 'empty': [(8, 8)]}), (2, 1))
+        self.assertEqual(session_concurrency({
+            'a': [(0, 20)], 'b': [(5, 15)], 'c': [(10, 30)]}), (3, 3))
+
+    def test_daily_main_session_concurrency_splits_midnight(self):
+        midnight = dt.datetime(2026, 10, 16).timestamp()
+        sessions = [
+            Session('omp', 'a', 'a', '/repo',
+                    gaps=[Gap(midnight - 3600, midnight + 1800, 'active')]),
+            Session('claude', 'b', 'b', '/repo',
+                    gaps=[Gap(midnight - 1800, midnight, 'active')]),
+            Session('pi', 'c', 'c', '/repo',
+                    gaps=[Gap(midnight, midnight + 3600, 'active')]),
+            Session('omp', 'tokens-only', 'tokens-only', '/repo',
+                    tokens=[Token(midnight + 10, 60, 0, 0, 0)]),
+            Session('omp', 'worker', 'a', '/repo', True,
+                    tokens=[Token(midnight + 10, 20, 0, 0, 0)],
+                    gaps=[Gap(midnight - 3600, midnight + 3600, 'active')])]
+        report = build_report(sessions, {'/repo': 'owner/repo'}, self.prs,
+                              self.start, midnight + 86400)
+        first, second = report['days']
+        for day in (first, second):
+            self.assertEqual(day['active_main_sessions'], 2)
+            self.assertEqual(day['peak_concurrent_main_sessions'], 2)
+            self.assertEqual(day['agent_hours'], 1.5)
+            self.assertEqual(day['wall_hours'], 1)
+            self.assertEqual(day['mean_concurrency'], 1.5)
+        self.assertEqual(first['subagent_token_share_percent'], 0)
+        self.assertEqual(second['subagent_token_share_percent'], 25)
+        rendered = self.rendered(report)
+        self.assertIn('Active main sessions | Peak concurrent mains | Mean concurrency | Subagent token %', rendered)
+        self.assertIn('| 2026-10-16 | 0.00 | 0.00 | 1.50 | 1.00 | 2 | 2 | 1.50 | 25.00 | 0 |', rendered)
+
+    def test_json_exports_every_pr_including_unattributed_records(self):
+        prs = {'owner/repo': [dict(self.prs['owner/repo'][0], number=n, title=f'PR {n}')
+                              for n in range(1, 26)]}
+        session = Session('omp', 'main', 'main', '/repo',
+                          tokens=[Token(self.start + 10, 10, 0, 0, 0, extract_refs('pr://1'))])
+        report = json.loads(json.dumps(build_report(
+            [session], {'/repo': 'owner/repo'}, prs, self.start, self.start + 86400)))
+        self.assertEqual(len(report['prs']), 25)
+        self.assertEqual(len(report['prs']), sum(day['merged_prs'] for day in report['days']))
+        last = report['prs'][-1]
+        self.assertEqual(last['repo'], 'owner/repo')
+        self.assertEqual(last['number'], 25)
+        self.assertEqual(last['title'], 'PR 25')
+        self.assertEqual(last['headRefName'], 'issue-5')
+        self.assertEqual(last['mergedAt'], prs['owner/repo'][0]['mergedAt'])
+        self.assertEqual(last['tokens'], 0)
+        self.assertEqual(last['agent_hours'], 0)
+        self.assertEqual(last['refs_sources'], [])
+
+    def test_attribution_sources_preserve_direct_split_and_file_main_fallback(self):
+        refs = extract_refs('pr://1 pr://2')
+        first = extract_refs('pr://1')
+        parent = Session('omp', 'parent', 'parent', '/repo', refs=set(first))
+        direct = Session('omp', 'direct', 'direct', '/repo', refs=set(refs),
+                         tokens=[Token(self.start + 10, 100, 0, 0, 0, refs)],
+                         gaps=[Gap(self.start, self.start + 3600, 'active', refs)])
+        file_session = Session('pi', 'file', 'file', '/repo', refs=set(first),
+                               tokens=[Token(self.start + 10, 20, 0, 0, 0)])
+        worker = Session('omp', 'worker', 'parent', '/repo', True,
+                         tokens=[Token(self.start + 10, 30, 0, 0, 0)])
+        prs = {'owner/repo': [self.prs['owner/repo'][0],
+                             dict(self.prs['owner/repo'][0], number=2, headRefName='second')]}
+        report = json.loads(json.dumps(build_report(
+            [parent, direct, file_session, worker], {'/repo': 'owner/repo'}, prs,
+            self.start, self.start + 86400)))
+        one, two = report['prs']
+        self.assertEqual((one['tokens'], two['tokens']), (100, 50))
+        self.assertEqual((one['agent_hours'], two['agent_hours']), (.5, .5))
+        sources = {source['kind']: source for source in one['refs_sources']}
+        self.assertEqual(set(sources), {'direct', 'file_fallback', 'main_fallback'})
+        self.assertEqual(sources['direct']['references'], [['pr', 1]])
+        self.assertEqual(sources['direct']['tokens'], 50)
+        self.assertEqual(sources['direct']['agent_hours'], .5)
+        self.assertEqual(sources['file_fallback']['reference_file'], 'file')
+        self.assertEqual(sources['main_fallback']['reference_file'], 'parent')
+        self.assertEqual(sources['main_fallback']['session_file'], 'worker')
+        self.assertEqual(sources['main_fallback']['harness'], 'omp')
+        self.assertEqual(sum(source['tokens'] for source in one['refs_sources']), one['tokens'])
 
     def rendered(self, report):
         report.update(window={'since': '2026-10-15T00:00:00+00:00',
@@ -346,7 +436,7 @@ class ReportTests(unittest.TestCase):
         for name in names:
             self.assertIn(f'| {name} | n/a | 0.00 | 0.00 | 0.00 | n/a | — | — |', rendered)
             self.assertIn(f'- No supported PR source: {name}', rendered)
-        self.assertIn('| 2026-10-15 | 0.00 | 0.00 | 0.00 | 0.00 | 0 |', rendered)
+        self.assertIn('| 2026-10-15 | 0.00 | 0.00 | 0.00 | 0.00 | 0 | 0 | 0.00 | 0.00 | 0 |', rendered)
 
     def test_failed_repo_source_is_unavailable_with_partial_daily_counts(self):
         session = Session('omp', 'main', 'main', '/repo',
@@ -358,7 +448,7 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(report['projects'][0]['pr_source'], 'unavailable')
         rendered = self.rendered(report)
         self.assertIn('| owner/repo | owner/repo | 0.00 | 0.00 | 0.00 | unavailable | — | — |', rendered)
-        self.assertIn('| 2026-10-15 | 0.00 | 0.00 | 0.00 | 0.00 | 0 known |', rendered)
+        self.assertIn('| 2026-10-15 | 0.00 | 0.00 | 0.00 | 0.00 | 0 | 0 | 0.00 | 0.00 | 0 known |', rendered)
         self.assertIn('- PRs unavailable for owner/repo: network unavailable', rendered)
 
     def test_coverage_rows_are_repositories_with_merged_prs(self):
