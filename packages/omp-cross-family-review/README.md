@@ -23,10 +23,10 @@ Declare adoption in the project's `.omp/config.yml`. a4s adopts:
 crossFamilyReview:
   policies:
     reviewer:
-      fallbackRoles: ["@slow", "@default"]
+      fallbackRoles: ["@slow", "@default", "@task"]
       excludeTaskFamily: true
     qa:
-      fallbackRoles: ["@slow", "@default"]
+      fallbackRoles: ["@slow", "@default", "@task"]
       excludeTaskFamily: true
     security-reviewer:
       fallbackRoles: ["@slow", "@default"]
