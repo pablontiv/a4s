@@ -303,14 +303,21 @@ El paquete distribuye `triage-reviewer` con `structured: true`, el JSON Schema d
 
 La aprobación pertenece a un DAG, run y generación; se consume tras una completion exitosa y se conserva si la completion falla. Volver a triage exige otra revisión. El guard exige que la completion de triage esté sola en su tool call. `POC=yes` pasa directamente.
 
-El DAG aplica la misma autorización aunque el guard no esté cargado. Para
-`POC=no`, `REVIEW` es el nombre simple del subagente `TriageReview<ISSUE>` (o
-`TriageReview<ISSUE>v<N>` al reintentar) lanzado como `triage-reviewer` por la
-sesión coordinadora indicada por `OMP_SESSION_ID`. Antes de comentar el issue o
-copiar estado, `triage_decision` localiza un único transcript JSONL, comprueba su
-sesión padre, agente, marcador `DAG=feature RUN=<run>`, inicio posterior al
-`triage.startedAt` actual y `poc=no` en el último yield. REST, parámetros,
-transcript o campos inválidos hacen fallar el step sin efectos externos.
+The primary-session guard and activity reader share agent-directory resolution:
+defined `OMP_PROFILE` (including empty) takes precedence over `PI_PROFILE`.
+A named profile uses `<home>/<PI_CONFIG_DIR or .omp>/profiles/<profile>/agent`;
+without one, `PI_CODING_AGENT_DIR` takes precedence over the default agent directory.
+The guard retains the DAG's home, temporary-root and absolute PRIMARY encodings,
+and runtime session-directory failures block completion with their cause.
+
+For `POC=no`, the native `triage_decision` verifier searches for coordinator files
+ending in `_${OMP_SESSION_ID}.jsonl` in `$HOME/.omp/agent/sessions/<encoded>` and
+`$HOME/.omp/profiles/*/agent/sessions/<encoded>`. Exactly one parent is required,
+even when only one candidate contains the allocated `REVIEW` child. The verifier
+then reads that exact child's JSONL under the parent stem and checks its parent
+identity, agent, feature/RUN marker, start after the current `triage.startedAt`
+and last-yield `poc=no`. Rejections report consulted directories and match counts.
+Invalid REST, parameters, transcripts or fields fail before comments or state writes.
 
 With `@a4s/omp-cross-family-review` loaded, the project's `.omp/config.yml`
 declares exact-name `crossFamilyReview.policies` entries. a4s configures

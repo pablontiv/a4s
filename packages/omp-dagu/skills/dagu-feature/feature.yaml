@@ -231,8 +231,9 @@ steps:
     run: |
       set -euo pipefail
       verify_triage_reviewer() {
-        local canonical home tmp encoded sessions_dir transcript expected_parent
+        local canonical home tmp encoded sessions_dir transcript expected_parent parent
         local rest triage_count cutoff required
+        local -a session_dirs parents matches
         for required in PRIMARY OMP_SESSION_ID REVIEW RUN; do
           if [[ -z "${!required:-}" ]]; then
             printf 'check.params=FAIL name=%s\nVERIFIER=FAIL\n' "$required"
@@ -308,24 +309,37 @@ steps:
           encoded=${encoded//:/-}
           encoded="--${encoded}--"
         fi
-        sessions_dir="$HOME/.omp/agent/sessions/$encoded"
-        printf 'primary.canonical=%s\nprimary.encoded=%s\nsessions.dir=%s\n' \
-          "$canonical" "$encoded" "$sessions_dir"
-
         shopt -s nullglob
-        matches=("$sessions_dir"/*_"$OMP_SESSION_ID"/"$REVIEW".jsonl)
-        printf 'transcript.match_count=%d\n' "${#matches[@]}"
-        if [[ ${#matches[@]} -ne 1 ]]; then
-          printf 'session.parentSession=<unavailable>\n'
-          printf 'session_init.agent=<unavailable>\n'
-          printf 'session_init.task=<unavailable>\n'
-          printf 'session_init.timestamp=<unavailable>\n'
-          printf 'last_yield.details.data.poc=<unavailable>\n'
-          printf 'check.transcript_unique=FAIL\nVERIFIER=FAIL\n'
+        session_dirs=("$HOME/.omp/agent/sessions/$encoded")
+        for sessions_dir in "$HOME"/.omp/profiles/*/agent; do
+          [[ -d "$sessions_dir" ]] && session_dirs+=("$sessions_dir/sessions/$encoded")
+        done
+        printf 'primary.canonical=%s\nprimary.encoded=%s\n' "$canonical" "$encoded"
+        parents=()
+        for sessions_dir in "${session_dirs[@]}"; do
+          printf 'sessions.dir=%s\n' "$sessions_dir"
+          for parent in "$sessions_dir"/*_"$OMP_SESSION_ID".jsonl; do
+            [[ -f "$parent" ]] && parents+=("$parent")
+          done
+        done
+        printf 'parent.match_count=%d\n' "${#parents[@]}"
+        if [[ ${#parents[@]} -gt 0 ]]; then
+          for parent in "${parents[@]}"; do printf 'parent.path=%s\n' "$parent"; done
+        fi
+        if [[ ${#parents[@]} -ne 1 ]]; then
+          printf 'check.parent_unique=FAIL\nVERIFIER=FAIL\n'
           return 1
         fi
-        transcript=${matches[0]}
-        expected_parent="${transcript%/*}.jsonl"
+        expected_parent=${parents[0]}
+        printf 'check.parent_unique=PASS\n'
+        transcript="${expected_parent%.jsonl}/$REVIEW.jsonl"
+        matches=()
+        [[ -f "$transcript" ]] && matches+=("$transcript")
+        printf 'transcript.match_count=%d\n' "${#matches[@]}"
+        if [[ ${#matches[@]} -ne 1 ]]; then
+          printf 'transcript.path=%s\ncheck.transcript_unique=FAIL\nVERIFIER=FAIL\n' "$transcript"
+          return 1
+        fi
         printf 'transcript.path=%s\nexpected.parentSession=%s\ncheck.transcript_unique=PASS\n' \
           "$transcript" "$expected_parent"
 

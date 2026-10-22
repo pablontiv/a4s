@@ -3,6 +3,7 @@ import { realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { promisify } from "node:util";
+import { agentDirectory } from "../agent-directory.ts";
 import { resolveRunPrimary } from "../status/progress.ts";
 import type { RunDetails } from "../status/progress.ts";
 import { target } from "./guard.ts";
@@ -46,9 +47,9 @@ export async function primarySessionDecision(event: Event, ctx: SessionContext):
       mainWorktree(expected), mainWorktree(ctx.cwd), realpath(homedir()), realpath(process.env.TMPDIR || "/tmp"),
     ]);
     const sessionDir = resolve(ctx.sessionManager.getSessionDir());
-    const expectedDir = join(home, ".omp", "agent", "sessions", encodePrimary(expected, home, tmp));
+    const expectedDir = join(agentDirectory(home), "sessions", encodePrimary(expected, home, tmp));
     if (primaryRepo === sessionRepo && (sessionDir === expectedDir || sessionDir.startsWith(`${expectedDir}${sep}`))) return undefined;
-    return { block: true, reason: `TRIAGE_PRIMARY_MISMATCH: Expected primary ${expected}. Open the coordinator in that repository with omp -p --cwd '${expected.replace(/'/g, "'\\''")}' or an Orca tab there, then coordinate the run from that session. Session transcript directory ${sessionDir} is not ${expectedDir}, the default-profile transcript namespace that triage_decision verifies.` };
+    return { block: true, reason: `TRIAGE_PRIMARY_MISMATCH: Expected primary ${expected}. Open the coordinator in that repository with omp -p --cwd '${expected.replace(/'/g, "'\\''")}' or an Orca tab there, then coordinate the run from that session. Session transcript directory ${sessionDir} is not ${expectedDir}, the effective profile's transcript namespace.` };
   } catch (error) {
     return { block: true, reason: `TRIAGE_PRIMARY_CHECK_FAILED: Cannot verify session for ${expected}: ${error instanceof Error ? error.message : String(error)}. Open the coordinator in that primary repository (omp -p --cwd <primary> or an Orca tab there) and retry.` };
   }
