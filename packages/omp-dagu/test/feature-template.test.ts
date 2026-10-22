@@ -15,11 +15,11 @@ import { BUNDLE_VERSION } from "../src/bundle.ts";
 import { stubHistory, withResourceGuard } from "./resource-fixtures.ts";
 import { inspectVerdict, qualityDecision, qualityMarker, verifyQuality } from "../src/triage/quality.ts";
 import type { QualityRequest, TranscriptRow } from "../src/triage/quality.ts";
-import { qualityFixture, readQualityPolicies } from "./quality-fixtures.ts";
+import { nativeQualityFixture, qualityFixture, readQualityPolicies } from "./quality-fixtures.ts";
 import { liveDagu, liveDaguVersion } from "./fixtures/live-dagu.ts";
 import { roleAdmission, roleExecution } from "./role-job-fixtures.ts";
 import { jobId, type JobBinding } from "../src/role-jobs.ts";
-import { roleAssignment, runRoleJob } from "../src/role-dispatch.ts";
+import { admitQuality as admitNativeQuality, roleAssignment, runRoleJob } from "../src/role-dispatch.ts";
 
 const definitions = [
   ["template", fileURLToPath(new URL("../skills/dagu-feature/feature.yaml", import.meta.url))],
@@ -195,6 +195,47 @@ function runScript(script: string, repo: Repository, env: NodeJS.ProcessEnv = {}
 }
 
 
+for (const verdict of ["PASS", "FAIL"] as const) {
+  test(`native receipt admission writes the current ${verdict} two-role join`, async () => {
+    const repo = repository();
+    try {
+      runScript(extractScript(definitions[0][1], "  - id: capture"), repo);
+      runScript(extractScript(definitions[0][1], "  - id: gate"), repo);
+      const fixture = nativeQualityFixture(repo, verdict);
+      const initial = JSON.parse(readFileSync(join(repo.state, "receipt.json"), "utf8")).initial;
+      const evidence = await admitNativeQuality(repo.primary, fixture.request.run, fixture.ids.qa!, fixture.ids.reviewer!,
+        async () => ({ models: fixture.models, policies: readQualityPolicies() }));
+      assert.equal(evidence.action, verdict === "PASS" ? "complete" : "rewind");
+      assert.deepEqual(JSON.parse(readFileSync(join(repo.state, "quality.json"), "utf8")), JSON.parse(JSON.stringify(evidence)));
+      assert.deepEqual(JSON.parse(readFileSync(join(repo.state, "receipt.json"), "utf8")).initial, initial);
+      assert.ok("job" in evidence.verdicts[0]! && "job" in evidence.verdicts[1]!);
+      assert.equal(evidence.verdicts[0]!.job, fixture.ids.qa);
+      assert.equal(evidence.verdicts[1]!.job, fixture.ids.reviewer);
+      const changed = { ...fixture.request, attempt: "new-attempt" };
+      writeFileSync(join(repo.state, "quality-request.json"), JSON.stringify(changed));
+      await assert.rejects(admitNativeQuality(repo.primary, fixture.request.run, fixture.ids.qa!, fixture.ids.reviewer!,
+        async () => ({ models: fixture.models, policies: readQualityPolicies() })), /attempt mismatch/);
+    } finally { rmSync(repo.root, { recursive: true, force: true }); }
+  });
+}
+
+// Recovery/validation scenarios supply synthetic quality actors; native receipt
+// execution and admission have their own behavioral coverage and real smoke.
+const qualityActor = `  - id: quality_review
+    depends: quality_prepare
+    action: human.task
+    with:
+      prompt: Synthetic QA and reviewer join for checkpoint transition acceptance.
+      form:
+        type: object
+        properties:
+          QA:
+            type: string
+          REVIEW:
+            type: string
+        required: [QA, REVIEW]
+`;
+
 for (const live of [false, true]) {
   test(`retained candidate merge-base capture and version-anchor rebase${live ? " installed Dagu smoke" : ""}`, live ? liveDagu : {}, () => {
     const repo = repository();
@@ -306,12 +347,13 @@ function admitQuality(repo: Repository, definition: string, verdict: "PASS" | "F
   return { ...fixture, evidence };
 }
 
-test("template progresses native implementation through quality_prepare and coordinator join to admitted evidence", async t => {
+test("template progresses native implementation through quality_prepare with an explicit native quality join", async t => {
   const repo = repository();
   try {
     const definition = definitions[0][1];
     const source = readFileSync(definition, "utf8");
-    assert.match(extractStep(source, "quality_review"), /action: human.task/);
+    assert.match(extractStep(source, "quality_review"), /dagu-role-jobs stage quality_review/);
+    assert.match(extractStep(source, "quality_review"), /- name: QA[\s\S]*- name: REVIEW/);
     const run = "test-run"; const home = join(repo.root, "dagu-home"); mkdirSync(home);
     const startedAt = "2026-10-22T05:00:00Z";
     const binding: JobBinding = { repo: repo.primary, worktree: repo.worktree, lane: "feature", dag: "feature",
@@ -2063,7 +2105,7 @@ esac
         "quality_prepare", "quality_review", "quality_admit", "quality_transition", "validation", "push", "recover_push", "pr"]
         .map(step => step === "implement"
           ? "  - id: implement\n    depends: recover_start_gate\n    action: human.task\n    with:\n      prompt: Synthetic delivery actor for native recovery acceptance.\n" + deliveryForm
-          : extractStep(source, step)),
+          : step === "quality_review" ? qualityActor : extractStep(source, step)),
       "  - id: await_merge\n    depends: pr\n    action: human.task\n    with:\n      prompt: Isolated merge boundary\n",
       source.slice(source.indexOf("handler_on:\n"), source.indexOf("  exit:\n")),
     ].join("");
@@ -2574,7 +2616,7 @@ for (const [name, definition] of definitions) {
             + `steps:\n  - id: triage\n    run: printf 'POC=${mode === "poc" ? "yes" : "no"}\\n' >> "$DAGU_OUTPUT_FILE"\n    outputs:\n      - name: POC\n  - id: implement\n    depends: triage\n    action: human.task\n    with:\n      prompt: Implement candidate\n`
             + gate + extractStep(source, "recover_gate")
             + extractStep(source, "quality_prepare")
-            + extractStep(source, "quality_review")
+            + qualityActor
             + ["quality_admit", "quality_transition", "validation", "push", "recover_push"].map(step => extractStep(source, step)).join(""));
           const completeQuality = async () => {
             await state(id, "waiting", "quality_review");
@@ -2722,7 +2764,7 @@ await dispatchStage("implement",(name,value)=>require("node:fs").appendFileSync(
     chmodSync(join(fixtureBin, "gh"), 0o755);
     const steps = ["implement", "capture", "rebase", "conflict_review", "gate", "recover_gate", "quality_prepare",
       "quality_review", "quality_admit", "quality_transition", "validation", "push"].map(step =>
-      extractStep(source, step).replace("    depends: dependency_review\n", "    depends: capture\n")).join("\n");
+      (step === "quality_review" ? qualityActor : extractStep(source, step)).replace("    depends: dependency_review\n", "    depends: capture\n")).join("\n");
     const dag = join(home, "dags", "feature.yaml");
     writeFileSync(dag, `name: feature\ntype: graph\nshell: bash\nmax_active_steps: 1\nparams:\n  - ISSUE: "189"\n  - OMP_SESSION_ID: parent-id\nenv:\n${Object.entries({
       ISSUE: "189", PRIMARY: repo.primary, WORKTREE: repo.worktree, BRANCH: repo.branch, PATH: env.PATH,

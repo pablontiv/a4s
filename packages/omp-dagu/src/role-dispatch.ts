@@ -6,8 +6,9 @@ import { appendObservation, loadedExtensionDigest, type Receipt } from "./admiss
 import { BUNDLE_VERSION } from "./bundle.ts";
 import { runParam, type RunDetails } from "./status/progress.ts";
 import { atomicJson, jobId, RoleJobStore, verifyJobResult, type JobBinding, type JobResult } from "./role-jobs.ts";
-import { executeNativeJob, nativeEvidence } from "./role-runtime.ts";
+import { executeNativeJob, nativeEvidence, qualityRuntime } from "./role-runtime.ts";
 import { parseReview } from "./triage/schema.ts";
+import { verifyQuality, type QualityRequest } from "./triage/quality.ts";
 
 export interface RoleRunOptions {
   home: string; capacity: number; binding: JobBinding; directory: string; readyAt: string;
@@ -198,4 +199,26 @@ export function verifyTriageResult(primary: string, run: string, id: string): Jo
   const decision = parseReview(JSON.stringify(result.output));
   if (decision.poc !== "no") throw new Error("Triage role job requires a PoC");
   return result;
+}
+
+/** Rebuild quality evidence from authoritative native receipts at the admission boundary. */
+export async function admitQuality(primary: string, run: string, qa: string, reviewer: string,
+  runtime = qualityRuntime) {
+  primary = realpathSync(primary);
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(run) || ![qa, reviewer].every(id => /^[a-f0-9]{64}$/.test(id))) {
+    throw new Error("Quality admission requires literal run and authorized job ids");
+  }
+  const state = git(primary, "rev-parse", "--path-format=absolute", "--git-path", `dagu-feature/runs/${run}`);
+  const request = JSON.parse(readFileSync(join(state, "quality-request.json"), "utf8")) as QualityRequest;
+  const candidate = JSON.parse(readFileSync(join(state, "candidate.json"), "utf8"));
+  const gate = JSON.parse(readFileSync(join(state, "gate.json"), "utf8"));
+  if (request.repo !== primary || request.run !== run || request.sha !== candidate.sha || request.iteration !== candidate.iteration ||
+      request.implementer !== candidate.implementer || gate.sha !== request.sha ||
+      git(request.worktree, "rev-parse", "HEAD") !== request.sha || git(request.worktree, "status", "--porcelain")) {
+    throw new Error("Quality admission candidate/request/gate changed");
+  }
+  const { models } = await runtime(request.worktree);
+  const evidence = verifyQuality("", request, qa, reviewer, models);
+  atomicJson(join(state, "quality.json"), evidence);
+  return evidence;
 }

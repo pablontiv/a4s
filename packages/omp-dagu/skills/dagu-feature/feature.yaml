@@ -771,21 +771,12 @@ steps:
 
   - id: quality_review
     depends: quality_prepare
-    action: human.task
-    with:
-      push_back:
-        rewind_to: implement
-      prompt: "Read quality_prepare's current request and markers. Launch task agent=qa and task agent=reviewer as two named subagents, distinct from IMPLEMENTER. Each assignment includes its exact FEATURE_QUALITY marker, repo/run/iteration/attempt/SHA, read-only worktree ${WORKTREE}, targeted QA commands and structured verdict contract from SKILL.md. Each reads git -C ${WORKTREE} rev-parse HEAD. Complete with QA and REVIEW allocated ids. The OMP extension verifies effective JSONL identities and provenance; fabricated reports, ineligible fallback and indeterminate identity block locally. QA/reviewer FAIL returns to implement with findings."
-      form:
-        type: object
-        properties:
-          QA:
-            type: string
-            pattern: '^[A-Za-z0-9][A-Za-z0-9._-]*$'
-          REVIEW:
-            type: string
-            pattern: '^[A-Za-z0-9][A-Za-z0-9._-]*$'
-        required: [QA, REVIEW]
+    run: |
+      set -euo pipefail
+      dagu-role-jobs stage quality_review
+    outputs:
+      - name: QA
+      - name: REVIEW
 
   - id: quality_admit
     depends: quality_review
@@ -799,6 +790,9 @@ steps:
       sha=$(jq -r .sha "$STATE/candidate.json")
       test "$(git -C "$WORKTREE" rev-parse HEAD)" = "$sha" || fail "candidate changed"
       test -z "$(git -C "$WORKTREE" status --porcelain)" || fail "worktree changed"
+      if [[ "$QA" =~ ^[a-f0-9]{64}$ && "$REVIEW" =~ ^[a-f0-9]{64}$ ]]; then
+        dagu-role-jobs admit-quality
+      fi
       jq -e --arg qa "$QA" --arg review "$REVIEW" --arg repo "$(cd "$PRIMARY" && pwd -P)" --arg run "$RUN" --arg session "$OMP_SESSION_ID" --slurpfile request "$STATE/quality-request.json" \
         --slurpfile candidate "$STATE/candidate.json" --slurpfile gate "$STATE/gate.json" '
         . as $e | $request[0] as $r | $candidate[0] as $c |
@@ -812,8 +806,13 @@ steps:
         .verdicts[0].subagent == $qa and .verdicts[0].role == "qa" and
         .verdicts[1].subagent == $review and .verdicts[1].role == "reviewer" and
         ([.verdicts[] | .repo == $e.repo and .run == $e.run and .sha == $e.sha and
-          .iteration == $e.iteration and .attempt == $e.attempt and .parentSession == ($e.implementer.coordinatorSession // $e.implementer.parentSession) and
-          (.invocation | type == "string" and length > 0) and (.childSession | type == "string" and length > 0) and
+          .iteration == $e.iteration and .attempt == $e.attempt and
+          (if .job then .job == .subagent and .parentRun == $e.run and
+            .binding.lane == "feature" and .binding.dag == "feature" and .binding.stage == "quality_review" and
+            (.receiptDigest | type == "string" and length == 64)
+          else .parentSession == ($e.implementer.coordinatorSession // $e.implementer.parentSession) and
+            (.invocation | type == "string" and length > 0) end) and
+          (.childSession | type == "string" and length > 0) and
           (.model.family | type == "string" and length > 0) and .model.family != $e.implementer.family and
           (.verdict == "PASS" or .verdict == "FAIL") and (.findings | type == "array") and
           (.bytes | type == "number" and . > 0 and . == floor)] | all) and

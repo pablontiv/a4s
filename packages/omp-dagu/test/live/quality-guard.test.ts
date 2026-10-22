@@ -51,10 +51,7 @@ test("real Dagu implement guard and quality push-back", {
     if (previous === undefined) delete process.env.DAGU_URL; else process.env.DAGU_URL = previous;
   });
   const dag = join(home, "dags", "feature.yaml");
-  // The installed engine runs real human tasks; provider transcripts are explicit synthetic fixtures.
-  const template = readFileSync(new URL("../../skills/dagu-feature/feature.yaml", import.meta.url), "utf8");
-  // In-flight runs keep their admitted human-task snapshot (e.g. 0.3.108),
-  // even though newly admitted runs dispatch implement as a command stage.
+  // This admitted human-task snapshot exercises retained completion guards and rewind.
   const implementForm = `      form:
         type: object
         required: [SUMMARY, MESSAGE, IMPLEMENTER]
@@ -66,8 +63,22 @@ test("real Dagu implement guard and quality push-back", {
           IMPLEMENTER:
             type: string
 `;
-  const quality = template.slice(template.indexOf("  - id: quality_review\n"), template.indexOf("  - id: quality_admit\n"))
-    .replace("depends: quality_prepare", "depends: seal");
+  const quality = `  - id: quality_review
+    depends: seal
+    action: human.task
+    with:
+      prompt: Synthetic QA and reviewer join for retained checkpoint acceptance.
+      form:
+        type: object
+        properties:
+          QA:
+            type: string
+          REVIEW:
+            type: string
+        required: [QA, REVIEW]
+      push_back:
+        rewind_to: implement
+`;
   const sealed = join(root, "sealed.txt");
   writeFileSync(dag, `type: graph\nparams:\n  - ISSUE: "189"\n  - OMP_SESSION_ID: parent-id\n  - PRIMARY: ${JSON.stringify(f.primary)}\nsteps:\n  - id: implement\n    action: human.task\n    with:\n      prompt: Deliver fixture\n${implementForm}  - id: seal\n    depends: implement\n    env:\n      - SEALED: \${steps.implement.outputs.IMPLEMENTER}\n      - SUMMARY: \${steps.implement.outputs.SUMMARY}\n    run: |\n      printf 'SEALED=%s\\nSUMMARY=%s\\n' "$SEALED" "$SUMMARY" > '${sealed}'\n${quality}`);
   const cli = (...args: string[]) => execFileSync("dagu", args, { env, encoding: "utf8" });

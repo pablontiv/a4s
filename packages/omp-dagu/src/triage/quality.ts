@@ -204,9 +204,48 @@ export function inspectImplementer(parent: string, request: QualityRequest, mode
     parentSession: parent, invocation: source.invocation, event: final.id,
     attempts: evidence.attempts, fallbacks: evidence.fallbacks };
 }
+function nativeVerdict(request: QualityRequest, role: "qa" | "reviewer", id: string) {
+  const state = execFileSync("git", ["-C", request.repo, "rev-parse", "--path-format=absolute", "--git-path",
+    `dagu-feature/runs/${request.run}`], { encoding: "utf8" }).trim();
+  const path = join(state, "role-jobs", id, "result.json");
+  const result = verifyJobResult(path, { repo: request.repo, worktree: request.worktree, lane: "feature",
+    dag: "feature", run: request.run, stage: "quality_review", role, sha: request.sha,
+    iteration: request.iteration, attempt: request.attempt });
+  requireValue(result.id === id, "quality role-job id mismatch");
+  const job = json(join(state, "role-jobs", id, "job.json"));
+  requireValue(job.id === id && job.directory === join(state, "role-jobs", id) &&
+    JSON.stringify(job.binding) === JSON.stringify(result.binding) &&
+    JSON.stringify(job.executor) === JSON.stringify(result.executor), "quality authorized job receipt mismatch");
+  const admission = JSON.parse(readFileSync(join(state, "receipt.json"), "utf8")) as Receipt;
+  requireValue(admission.schemaVersion === 1 && admission.runReceipt.dag === "feature" &&
+    admission.runReceipt.run === request.run && admission.initial.execution.primary === request.repo &&
+    admission.initial.execution.ompSession === request.session &&
+    admission.initial.execution.dagSnapshot.includes("dagu-role-jobs stage quality_review") &&
+    admission.runReceipt.observations.some(observation => observation.category === "runtimeAndModels" &&
+      observation.kind === "role-job" && observation.run === request.run && observation.dag === "feature" &&
+      object(observation.data).id === id && object(observation.data).state === "completed" &&
+      object(observation.data).result === path &&
+      JSON.stringify(object(observation.data).native) === JSON.stringify(result.native)), "quality role job lacks admitted execution observation");
+  const native = result.native!;
+  requireValue(realpathSync(native.transcript) === join(state, "role-jobs", id, `${id}.jsonl`),
+    "quality native artifact path mismatch");
+  const contents = readFileSync(native.transcript).subarray(0, native.bytes);
+  const child = rows(native.transcript, contents);
+  const inits = child.filter(row => row.type === "session_init");
+  const cutoff = /^\d+(?:\.\d+)?$/.test(request.attempt) ? Number(request.attempt) * 1000 : Date.parse(request.attempt);
+  requireValue(inits.length > 0 && inits.every(row => row.agent === role &&
+    assigned(row.task, `Authorized Dagu role job ${id}.`) && assigned(row.task, qualityMarker(request, role)) &&
+    row.timestamp && Date.parse(row.timestamp) > cutoff), "native quality assignment/session freshness mismatch");
+  return { result, path, digest: createHash("sha256").update(readFileSync(path)).digest("hex"),
+    source: { path: native.transcript, contents, child, session: native.session } };
+}
 export function inspectVerdict(parent: string, request: QualityRequest, role: "qa" | "reviewer", id: string, models: Models) {
-  const source = transcript(parent, id, qualityMarker(request, role), role === "qa" ? "qa" : "reviewer", request.attempt);
+  const native = /^[a-f0-9]{64}$/.test(id) ? nativeVerdict(request, role, id) : undefined;
+  const source = native?.source ?? transcript(parent, id, qualityMarker(request, role), role, request.attempt);
   const evidence = effective(source.child, models);
+  if (native) {
+    requireValue(evidence.successful.at(-1)?.id === native.result.native!.event, "native verdict effective response mismatch");
+  }
   let report: Record<string, unknown> | undefined;
   let response: TranscriptRow | undefined;
   for (const row of evidence.successful) {
@@ -214,12 +253,13 @@ export function inspectVerdict(parent: string, request: QualityRequest, role: "q
     const yielded = Array.isArray(content) ? content.find(part => part.type === "toolCall" && part.name === "yield") : undefined;
     if (yielded) {
       const result = source.child.find(item => item.message?.role === "toolResult" && item.message.toolCallId === yielded.id && !item.message.isError);
-      if (result) { report = yielded.arguments; response = row; }
+      if (result) { report = native ? native.result.output : yielded.arguments; response = row; }
     } else if (row.message.stopReason === "stop") {
       try { report = object(JSON.parse(text(content))); response = row; } catch { /* A structured yield may precede final prose. */ }
     }
   }
   requireValue(report && response?.id, `missing runtime-authored structured verdict; attempts=${JSON.stringify(evidence.attempts)}`);
+  requireValue(Object.keys(report).sort().join(",") === "attempt,findings,iteration,repo,role,run,sha,verdict", "malformed verdict output");
   for (const key of ["repo", "run", "sha", "iteration", "attempt"] as const) requireValue(report[key] === request[key], `verdict ${key} mismatch`);
   const verdict = report.verdict;
   requireValue(report.role === role && (verdict === "PASS" || verdict === "FAIL"), "invalid verdict role/content");
@@ -241,7 +281,9 @@ export function inspectVerdict(parent: string, request: QualityRequest, role: "q
   });
   requireValue(shaRead, "missing correlated git rev-parse HEAD evidence for candidate SHA");
   return { repo: request.repo, run: request.run, sha: request.sha, iteration: request.iteration, attempt: request.attempt,
-    role, verdict, findings, subagent: id, childSession: source.session, parentSession: parent, invocation: source.invocation,
+    role, verdict, findings, subagent: id, childSession: source.session,
+    ...(native ? { job: id, receipt: native.path, receiptDigest: native.digest, binding: native.result.binding,
+      routing: native.result.native!.routing, parentRun: request.run } : { parentSession: parent, invocation: "invocation" in source ? source.invocation : undefined }),
     event: response.id, model: identity(response, models), attempts: evidence.attempts, fallbacks: evidence.fallbacks,
     transcript: source.path, bytes: source.contents.length, digest: createHash("sha256").update(source.contents).digest("hex") };
 }
@@ -255,7 +297,7 @@ export function verifyQuality(parent: string, request: QualityRequest, qa: strin
     `same-family effective ${verdict.role}: ${JSON.stringify({ implementer, model: verdict.model, attempts: verdict.attempts, fallbacks: verdict.fallbacks })}`);
   return { ...request, implementer, verdicts, action: verdicts.every(verdict => verdict.verdict === "PASS") ? "complete" : "rewind" };
 }
-async function load(run: string, ctx: QualityContext, implementer?: string) {
+async function load(run: string, ctx: QualityContext, implementer?: string, nativeQuality = false) {
   const base = (process.env.DAGU_URL || `http://127.0.0.1:${process.env.DAGU_PORT || "8080"}`).replace(/\/+$/, "");
   const response = await fetch(`${base}/api/v1/dag-runs/feature/${encodeURIComponent(run)}`, { signal: AbortSignal.timeout(5000) });
   requireValue(response.ok, `Dagu HTTP ${response.status}`);
@@ -289,12 +331,15 @@ async function load(run: string, ctx: QualityContext, implementer?: string) {
     requireValue(details.statusLabel === "waiting" && implementation[0]!.statusLabel === "waiting", "implement checkpoint is not Waiting");
   }
   requireValue(request.session === parameter("OMP_SESSION_ID"), "wrong coordinator session");
+  requireValue(ctx.models, "canonical ctx.models API unavailable");
+  if (/^[a-f0-9]{64}$/.test(request.implementer) && (implementer !== undefined || nativeQuality)) {
+    return { request, parent: "", state, models: ctx.models };
+  }
   const sessionDir = resolve(ctx.sessionManager.getSessionDir());
   const parents = readdirSync(sessionDir).filter(name => name.endsWith(`_${request.session}.jsonl`));
   requireValue(parents.length === 1, "missing or ambiguous coordinator transcript");
   const parent = join(sessionDir, parents[0]!);
   requireValue(rows(parent).some(row => row.type === "session" && row.id === request.session), "parent session identity mismatch");
-  requireValue(ctx.models, "canonical ctx.models API unavailable");
   return { request, parent, state, models: ctx.models };
 }
 interface ImplementCompletion {
@@ -466,13 +511,14 @@ export async function qualityDecision(
     requireValue(run, "literal run id required");
     const implementerId = implementCompletion?.implementer;
     requireValue(!implementCompletion || implementerId, "complete with literal --input IMPLEMENTER=<id>");
-    const { request, parent, state, models } = await load(run, ctx, implementerId);
+    const qa = /\bQA=([\w.-]+)/.exec(command!)?.[1];
+    const reviewer = /\bREVIEW=([\w.-]+)/.exec(command!)?.[1];
+    const nativeQuality = Boolean(qa && reviewer && [qa, reviewer].every(id => /^[a-f0-9]{64}$/.test(id)));
+    const { request, parent, state, models } = await load(run, ctx, implementerId, nativeQuality);
     if (implementCompletion) {
       inspectImplementer(parent, request, models);
       return undefined;
     }
-    const qa = /\bQA=([\w.-]+)/.exec(command!)?.[1];
-    const reviewer = /\bREVIEW=([\w.-]+)/.exec(command!)?.[1];
     requireValue(qa && reviewer, "complete with literal --input QA=<id> --input REVIEW=<id>");
     const evidence = verifyQuality(parent, request, qa, reviewer, models);
     const temporary = join(state, "quality.json.tmp");

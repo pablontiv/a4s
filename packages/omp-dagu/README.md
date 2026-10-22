@@ -295,14 +295,14 @@ complete all six scenarios within a 30-second external process bound.
 
 ## Trabajos semánticos Dagu → OMP
 
-Los comandos `dagu-role-jobs stage triage|implement` arrancan obligaciones
+Los comandos `dagu-role-jobs stage triage|implement|quality_review` arrancan obligaciones
 autorizadas sin un turno del coordinador. Reutilizan el registro nativo OMP,
 sus prompts, roles, arrays completos de modelos y fallback de sesión. Conflictos
 usa `task` con alcance sobre archivos retenidos; `validation` es decisión humana.
-`quality_review` conserva el join `human.task`: el coordinador lanza QA/reviewer,
-el guard escribe `quality.json` y `quality_admit` mantiene la admisión operativa.
-El executor también soporta QA/reviewer; #514 integrará sus recibos y migrará
-templates/hooks de calidad. El servicio requiere Bun y el runtime OMP instalado
+`quality_review` une explícitamente dos role-jobs nativos QA/reviewer.
+`quality_admit` consume sus recibos autoritativos con `dagu-role-jobs admit-quality`,
+escribe `quality.json` verificado y sella la admisión antes de la transición.
+El servicio requiere Bun y el runtime OMP instalado
 (`OMP_ROLE_RUNTIME` permite seleccionar su raíz).
 
 El contrato estable **schemaVersion 1** conserva
@@ -323,9 +323,9 @@ las evidencias, incluida la versión OMP y el hash de su ejecutor.
 `IMPLEMENTER` y el `REVIEW` de triage transportan ids de trabajo. La admisión
 actual enlaza el recibo nativo del implementer con el SHA/iteración del candidato
 mediante `candidate.json.implementation` (HEAD de entrada y digest del resultado).
-Conserva el modelo/familia efectivos; QA/reviewer siguen siendo subagentes del
-coordinador con proveniencia verificada. #514 integrará sus role-jobs y #517
-consume esta evidencia semántica. Un `verdict=FAIL` conserva ejecución completada,
+Conserva el modelo/familia efectivos; QA/reviewer tienen sesiones frescas distintas,
+enlazadas al trabajo autorizado y su evento emisor. #517 consume esta evidencia
+semántica. Un `verdict=FAIL` conserva ejecución completada,
 jamás aceptación de calidad. Las observaciones #277 mantienen el recibo inicial.
 [SKILL](skills/dagu-feature/SKILL.md#role-job-receipt-contract-schemaversion-1).
 
@@ -592,10 +592,11 @@ Cada obligación recibe el marcador SHA/run/iteración/intento exacto y el contr
 estructurado de [SKILL.md](skills/dagu-feature/SKILL.md#effective-qa-and-review).
 QA ejecuta la aceptación indicada y reviewer inspecciona el mismo candidato;
 sus resultados retienen los comandos, hallazgos y modelos realmente usados.
-La admisión separada (#514) consume los recibos del boundary y valida familias,
-fallbacks efectivos y evidencia del candidato; el recibo de ejecución por sí
-solo no publica ni acepta calidad. Hasta integrar ese consumidor, la admisión
-actual falla cerrada ante evidencia admitida ausente.
+La admisión consume los recibos del boundary y valida familias, fallbacks
+efectivos y evidencia del candidato. Exige bytes/digest del artefacto nativo,
+salida estructurada y bindings actuales por obligación; QA y reviewer pueden
+compartir familia entre sí, pero no con el implementer. Dos PASS avanzan el join;
+cualquier FAIL devuelve sus hallazgos al mismo ticket.
 
 `quality.json` contiene dos veredictos independientes con procedencia y hashes
 de transcript; `quality_admit` los valida y `quality_transition` hace push-back

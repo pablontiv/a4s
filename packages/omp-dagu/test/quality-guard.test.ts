@@ -6,9 +6,10 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { registerReviewHook } from "@a4s/omp-cross-family-review";
-import { inspectImplementer, inspectVerdict, qualityDecision, qualityMarker } from "../src/triage/quality.ts";
+import { inspectImplementer, inspectVerdict, qualityDecision, qualityMarker, verifyQuality } from "../src/triage/quality.ts";
 import type { TranscriptRow } from "../src/triage/quality.ts";
-import { qualityFixture, readQualityPolicies } from "./quality-fixtures.ts";
+import { nativeQualityFixture, qualityFixture, readQualityPolicies } from "./quality-fixtures.ts";
+import { nativeEvidence } from "../src/role-runtime.ts";
 
 function fixture(t: test.TestContext) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "omp-quality-guard-")));
@@ -670,3 +671,69 @@ test("other DAG implement completion preserves its own workflow without feature 
   assert.equal(fetchMock.mock.callCount(), 0);
 });
 
+function nativeFixture(t: test.TestContext, verdict: "PASS" | "FAIL" = "PASS") {
+  const base = fixture(t);
+  execFileSync("git", ["-C", base.primary, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test",
+    "-c", "commit.gpgsign=false", "commit", "--quiet", "--allow-empty", "-m", "fixture"]);
+  const repo = { root: dirname(dirname(base.parent)), primary: base.primary,
+    worktree: base.request.worktree, state: base.state };
+  return { ...nativeQualityFixture(repo, verdict), state: base.state };
+}
+
+for (const verdict of ["PASS", "FAIL"] as const) {
+  test(`authorized native quality ${verdict} joins without coordinator task lineage`, t => {
+    const f = nativeFixture(t, verdict);
+    writeFileSync(f.parent, JSON.stringify({ type: "session", id: f.request.session }) + "\n");
+    const evidence = verifyQuality("", f.request, f.ids.qa!, f.ids.reviewer!, f.models);
+    assert.equal(evidence.action, verdict === "PASS" ? "complete" : "rewind");
+    assert.ok(evidence.verdicts.every(result => result.verdict === verdict && "parentRun" in result && result.parentRun === f.request.run));
+    if (verdict === "FAIL") assert.ok(evidence.verdicts.every(result => result.findings.includes("Fix acceptance regression")));
+    assert.equal(new Set(evidence.verdicts.map(result => result.childSession)).size, 2);
+  });
+}
+
+for (const fault of ["role", "session", "job", "sha", "attempt", "transcript", "fallback", "malformed", "absent artifact", "mismatched artifact"]) {
+  test(`native quality rejects ${fault} before publication`, t => {
+    const f = nativeFixture(t);
+    const result = f.results.qa!;
+    const path = join(f.state, "role-jobs", f.ids.qa!, "result.json");
+    if (fault === "role") result.binding.role = "reviewer";
+    if (fault === "session") result.native!.session = "foreign-session";
+    if (fault === "job") result.id = f.ids.reviewer!;
+    if (fault === "sha") result.binding.sha = "b".repeat(40);
+    if (fault === "attempt") result.binding.attempt = "stale";
+    if (fault === "transcript") writeFileSync(result.native!.transcript, "{}\n");
+    if (fault === "absent artifact") rmSync(result.native!.transcript);
+    if (fault === "mismatched artifact") result.native!.transcript = f.results.reviewer!.native!.transcript;
+    if (fault === "fallback" || fault === "malformed") {
+      const rows = readFileSync(result.native!.transcript, "utf8").trim().split("\n").map(line => JSON.parse(line));
+      if (fault === "fallback") {
+        rows.splice(2, 0, { type: "model_change", resolvedModelIsFallback: true, model: "openai-codex/effective" });
+        for (const row of rows) if (row.message?.role === "assistant") Object.assign(row.message, { provider: "openai-codex", model: "effective" });
+      } else {
+        result.output = { ...result.output, findings: 42 };
+        rows.at(-1).message.details.data = result.output;
+      }
+      writeFileSync(result.native!.transcript, rows.map(row => JSON.stringify(row)).join("\n") + "\n");
+      result.native = nativeEvidence(result.native!.transcript, { fixture: true });
+      const receiptPath = join(f.state, "receipt.json");
+      const receipt = JSON.parse(readFileSync(receiptPath, "utf8"));
+      receipt.runReceipt.observations.find((row: { data: { id: string } }) => row.data.id === result.id).data.native = result.native;
+      writeFileSync(receiptPath, JSON.stringify(receipt));
+    }
+    writeFileSync(path, JSON.stringify(result));
+    assert.throws(() => verifyQuality("", f.request, f.ids.qa!, f.ids.reviewer!, f.models));
+  });
+}
+
+test("native quality remains ticket-bound and requires fresh candidate and attempt evidence", t => {
+  const first = nativeFixture(t);
+  const second = nativeFixture(t);
+  assert.throws(() => verifyQuality("", first.request, second.ids.qa!, first.ids.reviewer!, first.models));
+  for (const request of [{ ...first.request, sha: "c".repeat(40) },
+    { ...first.request, attempt: "2026-10-17T01:00:00Z" }, { ...first.request, iteration: 1 }]) {
+    assert.throws(() => verifyQuality("", request, first.ids.qa!, first.ids.reviewer!, first.models));
+  }
+  assert.doesNotThrow(() => verifyQuality("", first.request, first.ids.qa!, first.ids.reviewer!, first.models));
+  assert.doesNotThrow(() => verifyQuality("", second.request, second.ids.qa!, second.ids.reviewer!, second.models));
+});
