@@ -5,7 +5,6 @@ import type { CallDecision, Event } from "./guard.ts";
 import { qualityDecision } from "./quality.ts";
 import type { QualityContext } from "./quality.ts";
 import type { ReviewPolicies } from "@a4s/omp-cross-family-review";
-export { REVIEW_PROMPT } from "./guard.ts";
 
 // Structural API keeps this OMP-only package independent of provider imports.
 interface ExtensionAPI {

@@ -34,8 +34,12 @@ export async function primarySessionDecision(event: Event, ctx: SessionContext):
   const text = event.toolName === "bash" ? event.input.command : event.toolName === "eval" ? event.input.code : undefined;
   const completion = typeof text === "string" ? target(text) : undefined;
   if (!completion || completion.poc !== "no") return undefined;
-  let expected = "the run's PRIMARY";
+  let expected = "<unresolved run PRIMARY>";
+  let observedPrimary = ctx.cwd;
+  let sessionDir = "<unavailable session transcript directory>";
+  let expectedDir = "<unresolved PRIMARY transcript namespace>";
   try {
+    sessionDir = resolve(ctx.sessionManager.getSessionDir());
     const base = (process.env.DAGU_URL || "http://127.0.0.1:8080").replace(/\/+$/, "");
     const response = await fetch(`${base}/api/v1/dag-runs/${encodeURIComponent(completion.dag)}/${encodeURIComponent(completion.run)}`, { signal: AbortSignal.timeout(5000) });
     if (!response.ok) throw new Error(`Dagu HTTP ${response.status}`);
@@ -43,14 +47,13 @@ export async function primarySessionDecision(event: Event, ctx: SessionContext):
     const primary = await resolveRunPrimary(base, body.dagRunDetails, AbortSignal.timeout(5000));
     if (!primary) throw new Error("Run PRIMARY is missing");
     expected = await realpath(primary);
-    const [primaryRepo, sessionRepo, home, tmp] = await Promise.all([
-      mainWorktree(expected), mainWorktree(ctx.cwd), realpath(homedir()), realpath(process.env.TMPDIR || "/tmp"),
-    ]);
-    const sessionDir = resolve(ctx.sessionManager.getSessionDir());
-    const expectedDir = join(agentDirectory(home), "sessions", encodePrimary(expected, home, tmp));
+    const [home, tmp] = await Promise.all([realpath(homedir()), realpath(process.env.TMPDIR || "/tmp")]);
+    expectedDir = join(agentDirectory(home), "sessions", encodePrimary(expected, home, tmp));
+    const [primaryRepo, sessionRepo] = await Promise.all([mainWorktree(expected), mainWorktree(ctx.cwd)]);
+    observedPrimary = sessionRepo;
     if (primaryRepo === sessionRepo && (sessionDir === expectedDir || sessionDir.startsWith(`${expectedDir}${sep}`))) return undefined;
-    return { block: true, reason: `TRIAGE_PRIMARY_MISMATCH: Expected primary ${expected}. Open the coordinator in that repository with omp -p --cwd '${expected.replace(/'/g, "'\\''")}' or an Orca tab there, then coordinate the run from that session. Session transcript directory ${sessionDir} is not ${expectedDir}, the effective profile's transcript namespace.` };
+    return { block: true, reason: `TRIAGE_PRIMARY_MISMATCH: primary.expected=${expected} primary.observed=${observedPrimary}; transcriptDir.expected=${expectedDir} transcriptDir.observed=${sessionDir}. The coordinator must use the run PRIMARY's transcript namespace verified by triage_decision.` };
   } catch (error) {
-    return { block: true, reason: `TRIAGE_PRIMARY_CHECK_FAILED: Cannot verify session for ${expected}: ${error instanceof Error ? error.message : String(error)}. Open the coordinator in that primary repository (omp -p --cwd <primary> or an Orca tab there) and retry.` };
+    return { block: true, reason: `TRIAGE_PRIMARY_CHECK_FAILED: primary.expected=${expected} primary.observed=${observedPrimary}; transcriptDir.expected=${expectedDir} transcriptDir.observed=${sessionDir}; cause=${error instanceof Error ? error.message : String(error)}.` };
   }
 }

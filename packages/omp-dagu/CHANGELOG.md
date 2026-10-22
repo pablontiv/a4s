@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.107
+
+- Bind triage review tasks by DAG/run/generation/request marker across agent types, accept results only for the current request, inject one canonical decision schema, and report invalid bound output with field/expected/observed diagnostics.
+- Verify native triage evidence by exact parent, complete marker, strictly fresh timestamp and final `poc=no`, while retaining selected agents' cross-family dispatch policy.
+- Report primary and transcript namespace mismatches as expected/observed facts; document marker-based review and enforce distributed-agent schema identity.
+
 ## 0.3.106
 
 - Diagnose rejected automatic checkpoint transitions after native stale-process repair and document same-run checkpoint recovery for feature, PoC, discovery and planning (#524).

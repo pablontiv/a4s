@@ -375,8 +375,7 @@ steps:
                 session_identity: (($sessions | length) == 1 and ($inits | length) >= 1
                   and ($inits | all(.agent == $init.agent and .task == $init.task))),
                 parentSession: ($session.parentSession == $expected_parent),
-                agent: ($init.agent == "triage-reviewer"),
-                task: (($init.task // "") | contains("TRIAGE_REVIEW AGENT=triage-reviewer DAG=feature RUN=\($run) ")),
+                task: ([($init.task // "") | capture("(?:^|\\s)TRIAGE_REVIEW DAG=feature RUN=(?<run>[A-Za-z0-9_.-]+) GENERATION=[0-9]+ REQUEST=[0-9]+(?=\\s|$)"; "g") | .run] | index($run) != null),
                 timestamp: ($started != null and $cutoff_epoch != null and $started > $cutoff_epoch),
                 poc: ($yield.message.details.data.poc == "no")
               }
@@ -390,7 +389,6 @@ steps:
             "cutoff=\($cutoff)",
             "check.session_identity=\(if .checks.session_identity then "PASS" else "FAIL" end)",
             "check.parentSession=\(if .checks.parentSession then "PASS" else "FAIL" end)",
-            "check.agent=\(if .checks.agent then "PASS" else "FAIL" end)",
             "check.task_run_marker=\(if .checks.task then "PASS" else "FAIL" end)",
             "check.timestamp_after_cutoff=\(if .checks.timestamp then "PASS" else "FAIL" end)",
             "check.last_yield_poc_no=\(if .checks.poc then "PASS" else "FAIL" end)",

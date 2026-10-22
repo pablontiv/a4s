@@ -295,29 +295,58 @@ complete all six scenarios within a 30-second external process bound.
 
 ## Guard de triage y agente
 
-El paquete distribuye `triage-reviewer` con `structured: true`, el JSON Schema de la decisión, `tools: []`, `spawns: []` y modelo `@slow`.
+The package distributes `triage-reviewer` with `structured: true`, `tools: []`,
+`spawns: []` and model `@slow`. Its JSON Schema is checked against the single
+source in `src/triage/schema.ts`. The PoC criterion lives in the agent and skill:
+experiment when unexercised external/runtime behavior could change the
+implementation path; reproducing a bug is investigation.
 
-1. Intentar completar `triage` con `POC=no`. El guard responde `TRIAGE_REVIEW_REQUIRED` con el marcador de generación y la plantilla fija.
-2. Ejecutar `task agent=triage-reviewer` con el alcance, el marcador completo y la plantilla.
-3. Repetir la completion con el id asignado en `--input REVIEW=<id>` cuando la decisión sea `poc: "no"`. Una decisión `yes` mantiene triage en espera con la pregunta propuesta.
+1. Attempt to complete `triage` with `POC=no`. The guard responds with
+   `TRIAGE_REVIEW_REQUIRED`, the JSON Schema and the marker
+   `TRIAGE_REVIEW DAG=<dag> RUN=<run> GENERATION=<n> REQUEST=<m>`.
+2. Launch a review `task` with the scope and exact marker in its assignment.
+   Any agent can perform the review; `triage-reviewer` already carries the PoC
+   criterion. The guard injects `outputSchema` and correlates the batch index,
+   allocated ID, generation and request across synchronous results, waits and
+   asynchronous completions.
+3. Repeat the completion with the allocated ID in `--input REVIEW=<id>` when
+   the decision is `poc: "no"`. A `yes` decision keeps triage waiting with its
+   proposed runtime question.
 
-La aprobación pertenece a un DAG, run y generación; se consume tras una completion exitosa y se conserva si la completion falla. Volver a triage exige otra revisión. El guard exige que la completion de triage esté sola en su tool call. `POC=yes` pasa directamente.
+The decision contains exactly `poc` (`yes` or `no`), `behavior`, `question` and
+`reason`; the latter three contain nonempty text. For `no`, the question
+describes the resolved uncertainty and its evidence. Invalid output blocks
+completion with `TRIAGE_REVIEW_INVALID` and `field`, `expected`, `observed`.
+Approval belongs to a DAG, run, generation and request; a successful completion
+consumes it, while a failed completion preserves it. A new request replaces the
+previous request; only its bound result can authorize completion. A rejected
+completion emits a fresh request marker, so a pending older task's result
+cannot authorize that new request. Returning to triage
+requires another review. Submit each triage completion in its own tool call;
+`POC=yes` passes directly.
 
 The primary-session guard and activity reader share agent-directory resolution:
 defined `OMP_PROFILE` (including empty) takes precedence over `PI_PROFILE`.
 A named profile uses `<home>/<PI_CONFIG_DIR or .omp>/profiles/<profile>/agent`;
 without one, `PI_CODING_AGENT_DIR` takes precedence over the default agent directory.
 The guard retains the DAG's home, temporary-root and absolute PRIMARY encodings,
-and runtime session-directory failures block completion with their cause.
+and reports expected and observed primary paths and transcript directories on
+a mismatch. Runtime session-directory failures block completion with their cause.
 
-For `POC=no`, the native `triage_decision` verifier searches for coordinator files
-ending in `_${OMP_SESSION_ID}.jsonl` in `$HOME/.omp/agent/sessions/<encoded>` and
+The DAG applies the same authorization when the guard is not loaded. For
+`POC=no`, `REVIEW` is the simple subagent name `TriageReview<ISSUE>` (or
+`TriageReview<ISSUE>v<N>` for a retry), launched by the coordinator identified by
+`OMP_SESSION_ID`. The native `triage_decision` verifier searches for coordinator
+files ending in `_${OMP_SESSION_ID}.jsonl` in
+`$HOME/.omp/agent/sessions/<encoded>` and
 `$HOME/.omp/profiles/*/agent/sessions/<encoded>`. Exactly one parent is required,
 even when only one candidate contains the allocated `REVIEW` child. The verifier
-then reads that exact child's JSONL under the parent stem and checks its parent
-identity, agent, feature/RUN marker, start after the current `triage.startedAt`
-and last-yield `poc=no`. Rejections report consulted directories and match counts.
-Invalid REST, parameters, transcripts or fields fail before comments or state writes.
+then reads that exact child's JSONL under the parent stem and checks its exact
+parent session, complete marker
+`TRIAGE_REVIEW DAG=feature RUN=<run> GENERATION=<n> REQUEST=<m>`, start strictly
+after the current `triage.startedAt`, and `poc=no` in the last yield.
+Rejections report consulted directories and match counts. Invalid REST,
+parameters, transcripts or fields fail before comments or state writes.
 
 With `@a4s/omp-cross-family-review` loaded, the project's `.omp/config.yml`
 declares exact-name `crossFamilyReview.policies` entries. a4s configures

@@ -34,9 +34,9 @@ test("primary guard rejects foreign repositories and transcript namespaces, pres
   for (const [cwd, dir] of [[foreign, session(foreign)], [linked, session(linked)], [primary, session(foreign)], [primary, profileSession], [primary, `${session(primary)}-other`]]) {
     const decision = await primarySessionDecision(event, { cwd: cwd!, sessionManager: { getSessionDir: () => dir! } });
     assert.ok(decision && "block" in decision);
-    assert.ok(decision.reason.includes(primary));
-    assert.ok(decision.reason.includes(session(primary)));
-    assert.match(decision.reason, /omp -p --cwd/);
+    assert.ok(decision.reason.includes(`primary.expected=${primary}`));
+    assert.ok(decision.reason.includes(`transcriptDir.expected=${session(primary)}`));
+    assert.ok(decision.reason.includes(`transcriptDir.observed=${dir}`));
   }
   for (const cwd of [primary, alias, linked]) {
     assert.equal(await primarySessionDecision(event, { cwd, sessionManager: { getSessionDir: () => session(primary) } }), undefined);
@@ -47,7 +47,7 @@ test("primary guard rejects foreign repositories and transcript namespaces, pres
   const request = await handlers.tool_call!(event, { cwd: primary, sessionManager: { getSessionDir: () => session(primary) } });
   assert.match(request.reason, /TRIAGE_REVIEW_REQUIRED/);
   await handlers.tool_call!({ toolName: "task", toolCallId: "review", input: { agent: "triage-reviewer", task: request.reason } });
-  handlers.tool_result!({ toolName: "task", toolCallId: "review", input: {}, details: { results: [{ index: 0, id: "Review236", agent: "triage-reviewer", exitCode: 0, output: JSON.stringify({ poc: "no", behavior: "proven", question: "", reason: "existing behavior" }) }] } });
+  handlers.tool_result!({ toolName: "task", toolCallId: "review", input: {}, details: { results: [{ index: 0, id: "Review236", agent: "triage-reviewer", exitCode: 0, output: JSON.stringify({ poc: "no", behavior: "proven", question: "Already supported?", reason: "existing behavior" }) }] } });
   assert.equal(await handlers.tool_call!({ ...event, input: { command: `${event.input.command} --input REVIEW=Review236` } }, { cwd: primary, sessionManager: { getSessionDir: () => session(primary) } }), undefined);
   globalThis.fetch = async url => new Response(JSON.stringify(String(url).endsWith("/spec")
     ? { spec: `env:\n  - PRIMARY: ${JSON.stringify(primary)}\n` }
@@ -60,6 +60,11 @@ test("primary guard rejects foreign repositories and transcript namespaces, pres
   const failed = await primarySessionDecision(event, { cwd: primary, sessionManager: { getSessionDir: () => session(primary) } });
   assert.ok(failed && "block" in failed);
   assert.match(failed.reason, /TRIAGE_PRIMARY_CHECK_FAILED/);
+  assert.ok(failed.reason.includes(`primary.observed=${primary}`));
+  assert.ok(failed.reason.includes(`transcriptDir.observed=${session(primary)}`));
+  assert.match(failed.reason, /primary.expected=<unresolved run PRIMARY>/);
+  assert.match(failed.reason, /transcriptDir.expected=<unresolved PRIMARY transcript namespace>/);
+  assert.match(failed.reason, /cause=offline/);
   assert.equal(await primarySessionDecision({ ...event, input: { command: event.input.command.replace("POC=no", "POC=yes") } }, { cwd: foreign, sessionManager: { getSessionDir: () => session(foreign) } }), undefined);
 });
 
@@ -117,4 +122,22 @@ test("PRIMARY encoding follows the DAG home, temporary, and absolute namespaces"
   assert.equal(encodePrimary("/tmp", "/home/me", "/tmp"), "-tmp");
   assert.equal(encodePrimary("/tmp/a:b\\c", "/home/me", "/tmp"), "-tmp-a-b-c");
   assert.equal(encodePrimary("/other/repo", "/home/me", "/tmp"), "--other-repo--");
+});
+
+test("session directory failures return a fail-closed decision with the original cause and diagnostic fields", async () => {
+  const cwd = process.cwd();
+  for (const [getSessionDir, cause] of [
+    [() => { throw new Error("session directory unavailable"); }, /cause=session directory unavailable/],
+    [() => undefined as unknown as string, /cause=.*paths\[0\].*must be of type string.*undefined/],
+  ] as const) {
+    const decision = await primarySessionDecision(event, { cwd, sessionManager: { getSessionDir } });
+    assert.ok(decision && "block" in decision);
+    assert.equal(decision.block, true);
+    assert.match(decision.reason, /^TRIAGE_PRIMARY_CHECK_FAILED:/);
+    assert.match(decision.reason, cause);
+    assert.ok(decision.reason.includes(`primary.observed=${cwd}`));
+    assert.match(decision.reason, /primary.expected=<unresolved run PRIMARY>/);
+    assert.match(decision.reason, /transcriptDir.expected=<unresolved PRIMARY transcript namespace>/);
+    assert.match(decision.reason, /transcriptDir.observed=<unavailable session transcript directory>/);
+  }
 });
