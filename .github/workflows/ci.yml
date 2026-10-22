@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, integration/v1]
   pull_request:
-    branches: [main]
+    branches: [main, integration/v1]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -27,28 +27,16 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 2
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
       - id: workspaces
         env:
           GH_TOKEN: ${{ github.token }}
           EVENT_NAME: ${{ github.event_name }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          all='["context-expert","orca-omp-integration","omp-dagu","synagent","synagent-bus","omp-cross-family-review","pi-tool-row-presentation","omp-hot-reload"]'
-          # Paths under packages/<dir> select that workspace; shared helper changes select all consumers.
-          if [[ "$EVENT_NAME" == pull_request ]]; then
-            files=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files" --paginate --jq '.[].filename') \
-              || files=$(git diff --name-only HEAD^1 HEAD)
-            names=$(printf '%s\n' "$files" | jq -Rsc --argjson all "$all" '
-              split("\n") | map(select(length > 0)) |
-              if any(.[]; (startswith("packages/") | not) or startswith("packages/omp-hot-reload/")) then $all
-              else map(if startswith("packages/synagent/core/") then "synagent"
-                elif startswith("packages/synagent/bus/") then "synagent-bus"
-                else split("/")[1] end) | unique end')
-          else
-            names=$all
-          fi
-          # @a4s/pi-tool-row-presentation typechecks against @pablontiv/pion, which CI does not install.
-          workspaces=$(jq -cn --argjson names "$names" '$names | map({name: ("@a4s/" + .), typecheck: (. == "omp-hot-reload" or . == "context-expert" or . == "orca-omp-integration" or . == "omp-dagu" or . == "synagent" or . == "synagent-bus" or . == "omp-cross-family-review")})')
+          workspaces=$(node scripts/ci-workspaces.mjs changes)
           echo "workspaces=$workspaces" >> "$GITHUB_OUTPUT"
   test:
     needs: changes
@@ -111,7 +99,9 @@ jobs:
             echo "::error::Expected dagu version $version; received $actual"
             exit 1
           fi
-      - run: npm test --workspace "${{ matrix.workspace.name }}"
+      - name: Test
+        if: matrix.workspace.test
+        run: npm test --workspace "${{ matrix.workspace.name }}"
       - name: Typecheck
         if: matrix.workspace.typecheck
         run: npm run typecheck --workspace "${{ matrix.workspace.name }}"
@@ -186,21 +176,13 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
       - env:
           CHANGES_RESULT: ${{ needs.changes.result }}
           TEST_RESULT: ${{ needs.test.result }}
           LIVE_RESULT: ${{ needs.live.result }}
           WORKSPACES: ${{ needs.changes.outputs.workspaces }}
-        run: |
-          echo "changes=$CHANGES_RESULT test=$TEST_RESULT live=$LIVE_RESULT"
-          [[ "$CHANGES_RESULT" == success ]] || exit 1
-          if [[ "$WORKSPACES" == '[]' ]]; then
-            [[ "$TEST_RESULT" == skipped ]] || exit 1
-          else
-            [[ "$TEST_RESULT" == success ]] || exit 1
-          fi
-          if jq -e 'any(.[]; .name == "@a4s/omp-dagu")' <<< "$WORKSPACES" > /dev/null; then
-            [[ "$LIVE_RESULT" == success ]]
-          else
-            [[ "$LIVE_RESULT" == skipped ]]
-          fi
+        run: node scripts/ci-workspaces.mjs aggregate

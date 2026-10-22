@@ -79,6 +79,31 @@ npm test
 npm run typecheck
 ```
 
-CI typechecks `@a4s/omp-cross-family-review` when changes select that workspace, including package changes and CI-only changes.
+CI runs on pushes and pull requests targeting `main` and `integration/v1`, with
+one SHA-bound `validate` aggregate over changes, workspace checks and the six
+pinned-Dagu live partitions. The desired branch-protection policy is strict
+up-to-date checks with `validate` required on both branches; applying that policy
+and preserving existing protection settings belongs to deployment (#358).
+
+`scripts/ci-workspaces.mjs` discovers names and scripts from the checked-out
+root workspace patterns and manifests, including nested packages and declared
+apps. Pull requests select the longest owning workspace for both current and
+previous rename paths, then its transitive declared consumers. Root files,
+lockfiles, CI helpers, shared hot-reload changes and unmapped/deleted workspace
+roots select all current workspaces. Pushes select all workspaces. This retains
+`@a4s/omp-cross-family-review` typechecking and follows future moved/renamed
+manifests without inventing workspace names.
+
+Selected workspaces run their declared tests and typechecks under main's existing
+private-Pion policy: CI installs with the documented Pion-stripping alternative
+and `@a4s/pi-tool-row-presentation` runs its tests. Its typecheck requires the
+private pinned `@pablontiv/pion` release available to the full local gate.
+The `validate` aggregate requires successful selected checks and permits live
+tests to skip only when `@a4s/omp-dagu` is unaffected. Executable selector and
+aggregate fixtures, including proposed integration package/app names, run with:
+
+```sh
+A4S_LIVE_DAGU=0 npx tsx --test packages/omp-dagu/test/bundle-template.test.ts
+```
 
 La historia completa anterior a esta reducción queda en la rama `legacy`.
