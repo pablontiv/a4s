@@ -11,6 +11,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { liveDagu } from "../fixtures/live-dagu.ts";
+import { testRunId } from "../fixtures/run-id.ts";
 const installer = fileURLToPath(new URL("../../bin/dagu-station-install.ts", import.meta.url));
 async function freePort(): Promise<number> {
   const server = createServer();
@@ -42,7 +43,7 @@ test("drain preserves existing runs; TERM restart stub activates capacity 2 on n
   const port = await freePort();
   // Preserve a private listener across reconciliation of the station's port defaults.
   const env = { ...process.env, DAGU_PARAMS_JSON: "{}", DAGU_HOME: home, DAGU_COORDINATOR_ENABLED: "false", DAGU_PORT: String(port) };
-  const id = `drain-${process.pid}-${Date.now()}`;
+  const id = testRunId("drain");
   const release = join(home, "release-old");
   const closed = join(home, "closed");
   const opened = join(home, "opened");

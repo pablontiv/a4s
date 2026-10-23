@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { parse, stringify } from "yaml";
 import { liveDagu, liveDaguVersion } from "./fixtures/live-dagu.ts";
+import { testRunId } from "./fixtures/run-id.ts";
 
 const definition = parse(readFileSync(new URL("../skills/dagu-feature/planning.yaml", import.meta.url), "utf8"));
 function script(id: string): string {
@@ -50,7 +51,7 @@ jq -nc --argjson iteration "\${FAKE_ITERATION:-0}" --argjson nodes "\${FAKE_REVI
       (if $iteration == 0 then {} else {approvalIteration:$iteration} end)] end)}}
 '
 `);
-  const env = { ...process.env, HOME: root, TMPDIR: join(root, "tmp"), PRIMARY: primary, OUT_DIR: out, UNITS_FROM: upstream, NWO: "owner/repo", RUN: "repo-breakdown-test", SOURCE: "plan", OMP_SESSION_ID: "owner-session", DAGU_OUTPUT_FILE: join(root, "outputs"), PATH: `${bin}:${process.env.PATH}` };
+  const env = { ...process.env, HOME: root, TMPDIR: join(root, "tmp"), PRIMARY: primary, OUT_DIR: out, UNITS_FROM: upstream, NWO: "owner/repo", RUN: testRunId("repo-breakdown-test"), SOURCE: "plan", OMP_SESSION_ID: "owner-session", DAGU_OUTPUT_FILE: join(root, "outputs"), PATH: `${bin}:${process.env.PATH}` };
   const run = (id: string, extra: NodeJS.ProcessEnv = {}) => spawnSync("bash", ["-c", script(id)], { env: { ...env, ...extra }, encoding: "utf8" });
   const importRows = (rows: unknown[]) => { jsonl(upstream, rows); return run("import_units"); };
   return { root, bin, out, upstream, env, run, importRows, close: () => rmSync(root, { recursive: true, force: true }) };
@@ -243,7 +244,7 @@ test("operator subset approval preserves labels, paginated idempotence, markers 
     successful(f.run("materialize", { APPROVED: "probe" }));
     let issues = JSON.parse(readFileSync(join(f.root, "issues.json"), "utf8"));
     assert.equal(issues.length, 1); assert.equal(issues[0].title, "Deliver probe");
-    assert.match(issues[0].body, /<!-- breakdown-unit: repo-breakdown-test\/probe -->/);
+    assert.ok(issues[0].body.includes(`<!-- breakdown-unit: ${f.env.RUN}/probe -->`));
     assert.match(issues[0].body, /<!-- discovery-unit: probe -->/);
     assert.match(issues[0].body, /Breakdown source: discovery/);
     assert.match(issues[0].body, /Finding lineage: bug-1, bug-2/);

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { testRunId } from "../fixtures/run-id.ts";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -19,6 +19,7 @@ for (const definition of [
     timeout: 120_000,
   }, async () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), "omp-dagu-scope-")));
+    const id = testRunId("scope-test");
     const home = join(root, "home");
     const primary = join(root, "repo");
     const git = (...args: string[]) => execFileSync("git", args, { encoding: "utf8" }).trim();
@@ -27,7 +28,7 @@ for (const definition of [
     git("-C", primary, "config", "user.name", "test");
     git("-C", primary, "config", "user.email", "test@example.invalid");
     git("-C", primary, "commit", "--allow-empty", "-m", "seed");
-    const state = join(primary, ".git", "poc", "runs", "scope-test");
+    const state = join(primary, ".git", "poc", "runs", id);
     mkdirSync(state, { recursive: true });
     writeFileSync(join(state, "base.sha"), git("-C", primary, "rev-parse", "HEAD"));
     writeFileSync(join(state, "question.txt"), "exact question");
@@ -67,7 +68,7 @@ for (const definition of [
     const wait = source.slice(source.indexOf("  wait:\n"), source.indexOf("  failure:\n"));
     writeFileSync(join(home, "dags", "poc.yaml"), [
       "type: graph\nshell: bash\n",
-      `env:\n  - PRIMARY: ${primary}\n  - WORKTREE: ${primary}\n  - RUN: scope-test\n  - TEST_PATHS: '^tests/'\n`,
+      `env:\n  - PRIMARY: ${primary}\n  - WORKTREE: ${primary}\n  - RUN: ${id}\n  - TEST_PATHS: '^tests/'\n`,
       "steps:\n", step("run_poc").replace("    depends: worktree\n", ""),
       step("scope_gate"), step("fix_result"), step("publish"), "handler_on:\n", wait,
     ].join(""));
@@ -85,7 +86,7 @@ for (const definition of [
     }
     async function waiting(iteration: number) {
       await until(async () => {
-        const run = await diagnostics.runDetails<{ statusLabel: string; nodes: Array<{ step: { name: string }; statusLabel: string; approvalIteration?: number }> }>(`${api}/dag-runs/poc/scope-test`, true);
+        const run = await diagnostics.runDetails<{ statusLabel: string; nodes: Array<{ step: { name: string }; statusLabel: string; approvalIteration?: number }> }>(`${api}/dag-runs/poc/${id}`, true);
         if (!run) return false;
         assert.notEqual(run.statusLabel, "failed", JSON.stringify(run));
         return run.statusLabel === "waiting" && run.nodes.some(node => node.step.name === "run_poc" && node.statusLabel === "waiting" && (node.approvalIteration ?? 0) === iteration);
@@ -95,9 +96,9 @@ for (const definition of [
     let failure: unknown;
     try {
       await until(async () => { try { return (await diagnostics.fetch(`${api}/dag-runs`)).ok; } catch { return false; } });
-      dagu("enqueue", "--run-id", "scope-test", join(home, "dags", "poc.yaml"));
+      dagu("enqueue", "--run-id", id, join(home, "dags", "poc.yaml"));
       await waiting(0);
-      dagu("human-task", "complete", "poc", "--run-id", "scope-test", "--step", "run_poc");
+      dagu("human-task", "complete", "poc", "--run-id", id, "--step", "run_poc");
       await waiting(1);
       assert.equal(readFileSync(join(state, "scope-errors"), "utf8").trim(), '## Pregunta differs from QUESTION (normalized): result="wrong question" QUESTION="exact question"');
       const stderrLogs = readdirSync(join(home, "logs"), { recursive: true })
@@ -105,9 +106,9 @@ for (const definition of [
       assert.ok(stderrLogs.some(path => readFileSync(join(home, "logs", path), "utf8")
         .includes("## Pregunta differs from QUESTION (normalized)")), "scope diagnostic was emitted on stderr");
       writeFileSync(resultPath, result("exact question"));
-      dagu("human-task", "complete", "poc", "--run-id", "scope-test", "--step", "run_poc");
+      dagu("human-task", "complete", "poc", "--run-id", id, "--step", "run_poc");
       await until(async () => {
-        const run = (await diagnostics.runDetails(`${api}/dag-runs/poc/scope-test`))!;
+        const run = (await diagnostics.runDetails(`${api}/dag-runs/poc/${id}`))!;
         assert.notEqual(run.statusLabel, "failed");
         return run.statusLabel === "succeeded";
       });
@@ -204,7 +205,7 @@ esac
       .replaceAll("__PRIMARY__", primary).replaceAll("__TEST_PATHS__", "_test$"));
     for (const mode of ["decline", "pass"]) {
       writeFileSync(env.COMMENTS, "");
-      const id = `test-${mode}-${randomUUID()}`;
+      const id = testRunId(`test-${mode}`);
       dagu("enqueue", "--run-id", id, definition, "--", "ISSUE=263", "QUESTION=question");
       await state(id, "run_poc");
       const worktree = join(primary, ".workspace", "worktrees", `poc-${id}`);
