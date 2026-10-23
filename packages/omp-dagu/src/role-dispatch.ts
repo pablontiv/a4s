@@ -6,9 +6,8 @@ import { appendObservation, loadedExtensionDigest, type Receipt } from "./admiss
 import { BUNDLE_VERSION } from "./bundle.ts";
 import { runParam, type RunDetails } from "./status/progress.ts";
 import { atomicJson, jobId, RoleJobStore, verifyJobResult, type JobBinding, type JobResult } from "./role-jobs.ts";
-import { executeNativeJob, nativeEvidence, qualityRuntime } from "./role-runtime.ts";
+import { executeNativeJob, nativeEvidence } from "./role-runtime.ts";
 import { parseReview } from "./triage/schema.ts";
-import { verifyQuality, type QualityRequest } from "./triage/quality.ts";
 
 export interface RoleRunOptions {
   home: string; capacity: number; binding: JobBinding; directory: string; readyAt: string;
@@ -85,13 +84,10 @@ export function roleAssignment(binding: JobBinding, issue: string, body: string,
     "Review whether the issue's external/runtime behavior requires a new PoC. Reuse linked PASS evidence. Return the registered structured poc/behavior/question/reason object. The issue and comments above are the review input.";
   if (binding.role === "implement" || binding.role === "conflict-resolution") return scope +
     `FEATURE_IMPLEMENT RUN=${binding.run}\nImplement the issue completely in the assigned worktree. ` +
-    `Read ${state}/quality.json and ${state}/conflict-files when present; resolve the retained findings/conflicts in place. ` +
+    `Read ${state}/conflict-files when present; resolve the retained conflicts in place. ` +
     "Run the issue's targeted acceptance commands before reporting, retaining exact commands/results in summary; Dagu runs the full gate. " +
     "Return structured summary and conventional commit message as message. No commits, pushes or Dagu transitions.";
-  return scope + `FEATURE_QUALITY RUN=${binding.run} SHA=${binding.sha} ITERATION=${binding.iteration} ATTEMPT=${binding.attempt} ROLE=${binding.role}\n` +
-    `Read-only candidate. First and before your verdict, execute exactly git -C ${JSON.stringify(binding.worktree)} rev-parse HEAD. ` +
-    (binding.role === "qa" ? "Run the issue's targeted acceptance commands; report exact commands/results. " : "Independently review the candidate diff and acceptance; report actionable findings. ") +
-    "Return the bound repo/run/sha/iteration/attempt/role, verdict PASS|FAIL and findings string array through the supplied structured schema. A failed check remains FAIL.";
+  throw new Error(`Unsupported role ${binding.role}`);
 }
 
 /** Called as a Dagu command step, using the admitted snapshot as authority. */
@@ -101,7 +97,7 @@ export async function dispatchStage(stage: string, emit: (name: string, value: s
   const run = process.env.RUN || "";
   const issue = process.env.ISSUE || "";
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(run) || !/^[1-9][0-9]*$/.test(issue)) throw new Error("Role dispatch requires admitted RUN and ISSUE");
-  const dependencies: Record<string, string[]> = { triage: ["admit"], implement: ["recover_start_gate"], quality_review: ["quality_prepare"] };
+  const dependencies: Record<string, string[]> = { triage: ["admit"], implement: ["recover_start_gate"] };
   if (!dependencies[stage]) throw new Error(`Unsupported semantic stage ${stage}`);
   const common = git(primary, "rev-parse", "--path-format=absolute", "--git-common-dir");
   const state = join(common, "dagu-feature", "runs", run);
@@ -129,16 +125,10 @@ export async function dispatchStage(stage: string, emit: (name: string, value: s
   const sha = stage === "triage" ? receipt.initial.execution.head : git(worktree, "rev-parse", "HEAD");
   if (typeof sha !== "string" || !/^[a-f0-9]{40}$/.test(sha)) throw new Error("Role dispatch requires an admitted commit identity");
   // Native step startedAt changes on retry, but is stable for duplicate delivery.
-  let attempt = `${initial.iteration}:${node.startedAt}`;
-  let iteration = initial.iteration;
-  if (stage === "quality_review") {
-    const request = JSON.parse(readFileSync(join(state, "quality-request.json"), "utf8")) as JobBinding;
-    if (request.repo !== primary || request.worktree !== worktree || request.run !== run || request.sha !== sha) throw new Error("Current quality request identity mismatch");
-    attempt = request.attempt;
-    iteration = request.iteration;
-  }
+  const attempt = `${initial.iteration}:${node.startedAt}`;
+  const iteration = initial.iteration;
   const issueText = execFileSync("gh", ["issue", "view", issue, "--comments", "--json", "title,body,comments"], { cwd: primary, encoding: "utf8", maxBuffer: 4 * 1024 * 1024 });
-  const roles: JobBinding["role"][] = stage === "triage" ? ["triage"] : stage === "quality_review" ? ["qa", "reviewer"] :
+  const roles: JobBinding["role"][] = stage === "triage" ? ["triage"] :
     [existsSync(join(state, "conflict-action")) && readFileSync(join(state, "conflict-action"), "utf8").trim() === "rewind" &&
       existsSync(join(state, "conflict-files")) && readFileSync(join(state, "conflict-files"), "utf8").trim() ? "conflict-resolution" : "implement"];
   const results = await Promise.all(roles.map(async role => {
@@ -150,10 +140,6 @@ export async function dispatchStage(stage: string, emit: (name: string, value: s
         const currentNode = requireReadyStage(current, stage, dependencies[stage]!);
         if (currentNode.startedAt !== node.startedAt || current.iteration !== initial.iteration ||
             (stage !== "triage" && git(worktree, "rev-parse", "HEAD") !== sha)) throw new Error("Role-job current candidate/iteration/step attempt changed");
-        if (stage === "quality_review") {
-          const request = JSON.parse(readFileSync(join(state, "quality-request.json"), "utf8"));
-          if (request.attempt !== attempt || request.sha !== sha || request.iteration !== iteration) throw new Error("Role-job quality request changed");
-        }
       } });
     // Independent results append linked facts to #277's immutable initial receipt.
     for (let retry = 0;; retry++) {
@@ -177,9 +163,6 @@ export async function dispatchStage(stage: string, emit: (name: string, value: s
   } else if (stage === "implement") {
     const result = results[0]!;
     emit("SUMMARY", String(result.output!.summary)); emit("MESSAGE", String(result.output!.message)); emit("IMPLEMENTER", result.id);
-  } else {
-    emit("QA", results.find(result => result.binding.role === "qa")!.id);
-    emit("REVIEW", results.find(result => result.binding.role === "reviewer")!.id);
   }
 }
 
@@ -201,24 +184,3 @@ export function verifyTriageResult(primary: string, run: string, id: string): Jo
   return result;
 }
 
-/** Rebuild quality evidence from authoritative native receipts at the admission boundary. */
-export async function admitQuality(primary: string, run: string, qa: string, reviewer: string,
-  runtime = qualityRuntime) {
-  primary = realpathSync(primary);
-  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(run) || ![qa, reviewer].every(id => /^[a-f0-9]{64}$/.test(id))) {
-    throw new Error("Quality admission requires literal run and authorized job ids");
-  }
-  const state = git(primary, "rev-parse", "--path-format=absolute", "--git-path", `dagu-feature/runs/${run}`);
-  const request = JSON.parse(readFileSync(join(state, "quality-request.json"), "utf8")) as QualityRequest;
-  const candidate = JSON.parse(readFileSync(join(state, "candidate.json"), "utf8"));
-  const gate = JSON.parse(readFileSync(join(state, "gate.json"), "utf8"));
-  if (request.repo !== primary || request.run !== run || request.sha !== candidate.sha || request.iteration !== candidate.iteration ||
-      request.implementer !== candidate.implementer || gate.sha !== request.sha ||
-      git(request.worktree, "rev-parse", "HEAD") !== request.sha || git(request.worktree, "status", "--porcelain")) {
-    throw new Error("Quality admission candidate/request/gate changed");
-  }
-  const { models } = await runtime(request.worktree);
-  const evidence = verifyQuality("", request, qa, reviewer, models);
-  atomicJson(join(state, "quality.json"), evidence);
-  return evidence;
-}

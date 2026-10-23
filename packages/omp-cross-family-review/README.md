@@ -50,7 +50,7 @@ consumption explicitly calls native `assertWritable` on the effective raw value
 and the handle value before model resolution or child dispatch. Invalid values
 block with `CROSS_FAMILY_CONFIG`; an unavailable session scope also blocks.
 
-## Selection and quality-bound review
+## Parent-relative and task-relative selection
 
 Native candidates precede the configured fallbacks. Eligible candidates retain
 that order and are deduplicated by resolved provider/id, preserving the first
@@ -59,16 +59,10 @@ parent/required `@task` identities or reference families fail closed. A resolved
 alternative can qualify even when the original primary is unavailable. These
 rules are uniform for every configured name.
 
-For the Dagu feature quality gate, the guard binds the runtime-effective
-implementer from its JSONL to the allocated task name. That reference is
-authoritative in place of parent/`@task`; the agent's configured fallback list
-still applies. A quality-bound spawn requires an explicit policy. Dagu retains
-an independent strict preflight using the same effective configuration even
-when this extension is absent, and independently admits only actual verdict
-messages whose provider/model family differs from the implementer's. QA and
-reviewer may share a family. A same-family effective runtime fallback blocks
-publication even if initial selection qualified. TUI access to Dagu's store
-makes this control advisory, not a sandbox.
+Every configured agent excludes the resolved parent model family. When
+`excludeTaskFamily` is true, it also excludes the resolved `@task` model family;
+when false, selection is parent-relative only. The same configured fallback
+ordering and strict eligibility rules apply in both cases.
 
 ## Installation and checks
 
@@ -81,8 +75,8 @@ omp plugin link "$(git rev-parse --show-toplevel)/packages/omp-cross-family-revi
 Alternatively load the package directory with `omp -e /path/to/omp-cross-family-review`.
 The `omp.extensions` manifest loads the maintained reloadable runtime entrypoint,
 whose static public SDK imports share the host's active settings scope. The
-package root exports the host-neutral hook, ordering and implementer-binding
-APIs; the `./settings` subpath supplies the native reader for OMP integrations.
+package root exports the host-neutral hook and ordering APIs; the `./settings`
+subpath supplies the native reader for OMP integrations.
 Selection runs after native initial model selection. Project configuration is
 inherited by rebound child extension graphs; global model settings stay unchanged.
 

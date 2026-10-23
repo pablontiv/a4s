@@ -5,8 +5,6 @@ import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { atomicJson, type Job, type JobBinding, type NativeEvidence } from "./role-jobs.ts";
 import { REVIEW_SCHEMA } from "./triage/schema.ts";
-import { orderReviewModels, type ReviewPolicies } from "@a4s/omp-cross-family-review";
-import { inspectImplementer, type QualityRequest } from "./triage/quality.ts";
 
 interface Definition { name: string; source: string; model?: string[]; systemPrompt: string; tools?: string[] }
 interface Settings { [key: string]: unknown }
@@ -35,14 +33,9 @@ async function nativeModule<T>(root: string, relative: string): Promise<T> {
 }
 export function roleSchema(binding: JobBinding): Record<string, unknown> {
   if (binding.role === "triage") return REVIEW_SCHEMA;
-  if (binding.role === "implement" || binding.role === "conflict-resolution") return { type: "object", properties: {
+  return { type: "object", properties: {
     summary: { type: "string", minLength: 1 }, message: { type: "string", minLength: 1 },
   }, required: ["summary", "message"], additionalProperties: false };
-  const properties = Object.fromEntries(["repo", "run", "sha", "iteration", "attempt", "role"].map(key =>
-    [key, { const: binding[key as keyof JobBinding] }]));
-  return { type: "object", properties: { ...properties, verdict: { type: "string", enum: ["PASS", "FAIL"] },
-    findings: { type: "array", items: { type: "string" } } },
-    required: [...Object.keys(properties), "verdict", "findings"], additionalProperties: false };
 }
 export function nativeEvidence(transcript: string, routing: unknown): NativeEvidence {
   const bytes = readFileSync(transcript);
@@ -59,29 +52,6 @@ export function nativeEvidence(transcript: string, routing: unknown): NativeEvid
     fallbacks: rows.filter(row => row.type === "model_change").map(row => ({ event: row.id, timestamp: row.timestamp,
       model: row.model, resolvedModelIsFallback: row.resolvedModelIsFallback === true })) };
 }
-/** The same catalog-backed facade as extension ctx.models, without a coordinator. */
-export async function qualityRuntime(cwd: string) {
-  const root = ompRuntimeRoot();
-  const [{ Settings }, { discoverAuthStorage }, { ModelRegistry }, { createExtensionModelQuery }, registry] = await Promise.all([
-    nativeModule<{ Settings: { loadReadOnly(options: { cwd: string }): Promise<unknown> } }>(root, "config/settings.ts"),
-    nativeModule<{ discoverAuthStorage(): Promise<unknown> }>(root, "sdk.ts"),
-    nativeModule<{ ModelRegistry: new (auth: unknown, path: undefined, options: { settings: unknown }) => {
-      hydrateCredentialScopedModelCaches(): Promise<void>;
-    } }>(root, "config/model-registry.ts"),
-    nativeModule<{ createExtensionModelQuery(registry: unknown, settings: unknown, current: () => undefined): {
-      current(): { provider: string; id: string } | undefined; resolve(spec: string): { provider: string; id: string } | undefined;
-      family(model: { provider: string; id: string }): string;
-    } }>(root, "extensibility/extensions/model-api.ts"),
-    nativeModule<{ lookup(id: string): unknown; register(value: unknown): { get(settings: unknown): ReviewPolicies } }>(root, "config/registry.ts"),
-  ]);
-  const settings = await Settings.loadReadOnly({ cwd });
-  const catalog = new ModelRegistry(await discoverAuthStorage(), undefined, { settings });
-  await catalog.hydrateCredentialScopedModelCaches();
-  const models = createExtensionModelQuery(catalog, settings, () => undefined);
-  const policy = (registry.lookup("crossFamilyReview.policies") ??
-    registry.register({ id: "crossFamilyReview.policies", type: "record", default: {} })) as { get(settings: unknown): ReviewPolicies };
-  return { models, policies: policy.get(settings) };
-}
 export async function executeNativeJob(job: Job, assignment: string): Promise<{ output: Record<string, unknown>; native: NativeEvidence }> {
   const root = ompRuntimeRoot();
   const [{ Settings: NativeSettings }, { discoverAgents }, { cfgTaskAgentModelOverrides }, { resolveAgentModelSelection }, { runSubprocess }] = await Promise.all([
@@ -93,25 +63,12 @@ export async function executeNativeJob(job: Job, assignment: string): Promise<{ 
   ]);
   const settings = await NativeSettings.loadReadOnly({ cwd: job.binding.worktree });
   const { agents } = await discoverAgents(job.binding.worktree);
-  const name = job.binding.role === "triage" ? "triage-reviewer" :
-    ["implement", "conflict-resolution"].includes(job.binding.role) ? "task" : job.binding.role;
+  const name = job.binding.role === "triage" ? "triage-reviewer" : "task";
   const definition = agents.find(agent => agent.name === name);
   if (!definition) throw new Error(`Registered OMP agent ${name} is required`);
   const overrides = cfgTaskAgentModelOverrides.get(settings)[name];
   const selection = resolveAgentModelSelection({ settingsOverride: overrides, agentModel: definition.model, settings });
   if (!selection.patterns.length) throw new Error(`Registered role ${name} has no effective model routing`);
-  if (job.binding.role === "qa" || job.binding.role === "reviewer") {
-    const state = dirname(dirname(job.directory));
-    const request = JSON.parse(readFileSync(join(state, "quality-request.json"), "utf8")) as QualityRequest;
-    const { models, policies } = await qualityRuntime(job.binding.worktree);
-    const implementer = inspectImplementer("", request, models);
-    const effectiveModel = models.resolve(`${implementer.provider}/${implementer.id}`);
-    const policy = policies[job.binding.role];
-    if (!effectiveModel || !policy) throw new Error("Quality requires effective implementer and configured family policy");
-    const ordered = orderReviewModels(selection.patterns, policy.fallbackRoles, models, [{ model: effectiveModel }]);
-    if (!ordered.model?.length) throw new Error(ordered.reason ?? "No eligible quality model");
-    selection.patterns = ordered.model;
-  }
   const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as { version: string };
   const routing = { runtime: { root, version: manifest.version,
     executorDigest: createHash("sha256").update(readFileSync(join(root, "src/task/executor.ts"))).digest("hex") },

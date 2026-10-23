@@ -2,7 +2,7 @@
 import { execFileSync } from "node:child_process";
 import { appendFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
-import { admitQuality, dispatchStage, verifyTriageResult } from "../src/role-dispatch.ts";
+import { dispatchStage, verifyTriageResult } from "../src/role-dispatch.ts";
 
 try {
   const [command, stage] = process.argv.slice(2);
@@ -12,9 +12,6 @@ try {
       if (!process.env.DAGU_OUTPUT_FILE) throw new Error("Dagu output file is required");
       appendFileSync(process.env.DAGU_OUTPUT_FILE, line);
     });
-  } else if (command === "admit-quality" && !stage) {
-    const evidence = await admitQuality(process.env.PRIMARY || "", process.env.RUN || "", process.env.QA || "", process.env.REVIEW || "");
-    console.log(JSON.stringify(evidence));
   } else if (command === "verify-triage" && !stage) {
     const primary = realpathSync(process.env.PRIMARY || "");
     const run = process.env.RUN || "";
@@ -31,7 +28,7 @@ try {
     const output = (value: unknown) => String(value).replace(/[\r\n]+/g, " ");
     if (result.output?.poc !== process.env.POC || output(result.output?.question) !== process.env.QUESTION || output(result.output?.reason) !== process.env.BASIS) throw new Error("Triage outputs differ from the native role result");
     console.log(`VERIFIER=PASS role_job=${result.id} session=${result.native!.session}`);
-  } else throw new Error("Usage: dagu-role-jobs stage triage|implement|quality_review | verify-triage | admit-quality");
+  } else throw new Error("Usage: dagu-role-jobs stage triage|implement | verify-triage");
 } catch (error) {
   console.error(`DAGU_ROLE_JOB_BLOCKED: ${error instanceof Error ? error.message : String(error)}`);
   if (process.argv[2] === "verify-triage") console.error("VERIFIER=FAIL");

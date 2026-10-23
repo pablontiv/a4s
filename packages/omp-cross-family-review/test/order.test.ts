@@ -5,8 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Settings, withActiveSettings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { lookup } from "@oh-my-pi/pi-coding-agent/config/registry";
-import { registerReviewHook, bindQualityImplementer } from "../src/index.ts";
-import type * as CrossFamilyModule from "../src/index.ts";
+import { registerReviewHook } from "../src/index.ts";
 import { orderReviewModels } from "../src/order.ts";
 import type { Model, Models, ReviewModels } from "../src/order.ts";
 
@@ -174,30 +173,6 @@ test("malformed effective initial values block before model resolution or spawn"
     assert.equal(result?.block, true);
     assert.match(result?.reason ?? "", /^CROSS_FAMILY_CONFIG: crossFamilyReview.policies/);
   }
-});
-test("quality dispatch uses configured fallbacks and the authoritative implementer only", () => {
-  bindQualityImplementer("Quality359", gpt);
-  assert.deepEqual(spawn({ agent: "ordered", spawnKey: "Parent.Quality359-2", patterns: ["gpt"] })?.model, ["@custom"]);
-  // The binding is consumed once; ordinary dispatch again excludes the parent.
-  assert.deepEqual(spawn({ agent: "ordered", spawnKey: "Quality359", patterns: ["gpt"] })?.model, ["gpt", "@custom"]);
-});
-test("quality bindings require an explicit policy while ordinary agents remain native", () => {
-  bindQualityImplementer("UnconfiguredQuality359", gpt);
-  assert.match(spawn({ agent: "worker", spawnKey: "UnconfiguredQuality359", patterns: ["opus"] })?.reason ?? "", /requires a configured policy/);
-});
-test("quality routing compares only the runtime-effective implementer", () => {
-  for (const agent of ["qa", "reviewer"]) {
-    bindQualityImplementer(agent, gpt);
-    assert.deepEqual(spawn({ agent, spawnKey: agent, patterns: ["gpt", "opus", "gemini"] })?.model,
-      ["opus", "gemini", "@slow"]);
-  }
-});
-test("quality bindings reach separately loaded extension graphs", async () => {
-  // Intentional module-loading boundary: OMP imports each extension graph separately.
-  const binder: typeof CrossFamilyModule = await import(`../src/index.ts?instance=${Date.now()}`);
-  assert.notEqual(binder.bindQualityImplementer, bindQualityImplementer);
-  binder.bindQualityImplementer("SeparateQA359", gpt);
-  assert.deepEqual(spawn({ agent: "qa", spawnKey: "SeparateQA359", patterns: ["gpt", "opus"] })?.model, ["opus", "@slow"]);
 });
 test("candidate diagnostics contain model identity and family", () => {
   const models = facade();

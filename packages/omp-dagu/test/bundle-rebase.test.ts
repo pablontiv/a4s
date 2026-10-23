@@ -9,8 +9,6 @@ import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { qualityFixture } from "./quality-fixtures.ts";
-import { verifyQuality } from "../src/triage/quality.ts";
 
 const resolver = fileURLToPath(new URL("../bin/dagu-bundle-rebase.mjs", import.meta.url));
 const template = fileURLToPath(new URL("../skills/dagu-feature/feature.yaml", import.meta.url));
@@ -224,10 +222,7 @@ test("isolated Dagu rebases colliding candidates before gate and publishes the n
     "  - id: implement\n    depends: triage\n    run: echo fixture-candidate-ready\n" +
     step(source, "rebase").replace("    depends: dependency_review_cancellation", "    depends: implement") +
     step(source, "gate").replace("    depends: conflict_review_cancellation", "    depends: rebase") +
-    "  - id: quality_review\n    depends: gate\n    action: human.task\n    with:\n      prompt: Admit independent verdict evidence for the normalized candidate.\n" +
-    step(source, "quality_admit").replace("depends: quality_review_cancellation", "depends: quality_review").replace("    env:\n      - QA: ${steps.quality_review.outputs.QA}\n      - REVIEW: ${steps.quality_review.outputs.REVIEW}\n", "    env:\n      - QA: QATest\n      - REVIEW: ReviewTest\n") +
-    step(source, "validation").replace("    depends: quality_transition_cancellation", "    depends: quality_admit") +
-    step(source, "push"));
+    step(source, "push").replace("    depends: validation_cancellation", "    depends: gate"));
   let serviceLog = "";
   const service = spawn("dagu", ["start-all", "--host", "127.0.0.1", "--port", String(port)], { cwd: repo.root, env, stdio: ["ignore", "pipe", "pipe"] });
   service.stdout.on("data", data => { serviceLog += data; }); service.stderr.on("data", data => { serviceLog += data; });
@@ -243,20 +238,6 @@ test("isolated Dagu rebases colliding candidates before gate and publishes the n
     execFileSync("bash", ["-c", script(join(dirname(template), "dagu-feature-bootstrap.yaml"), "render")], { cwd: repo.root, env: adoptionEnv });
     command("validate", staged); command("validate", rendered); command("validate", file);
     command("enqueue", "--run-id", id, "feature");
-    await until("normalized candidate awaiting independent verdicts", async () => {
-      const response = await fetch(`${api}/dag-runs/feature/${id}`);
-      if (!response.ok) return undefined;
-      const run = (await response.json() as { dagRunDetails: { statusLabel: string } }).dagRunDetails;
-      assert.notEqual(run.statusLabel, "failed");
-      return run.statusLabel === "waiting" ? true : undefined;
-    });
-    const candidate = json(repo.state, "candidate.json");
-    const evidence = qualityFixture(repo, "PASS", {
-      repo: repo.primary, worktree: repo.worktree, run: id, sha: candidate.sha, iteration: candidate.iteration,
-      implementer: "ImplementTest", session: "", attempt: new Date().toISOString(), implementStartedAt: "2026-10-16T00:00:00Z",
-    });
-    writeFileSync(join(repo.state, "quality.json"), JSON.stringify(verifyQuality(evidence.parent, evidence.request, "QATest", "ReviewTest", evidence.models)));
-    command("human-task", "complete", "feature", "--run-id", id, "--step", "quality_review");
     const run = await until("normalized rebase/gate/push", async () => {
       const response = await fetch(`${api}/dag-runs/feature/${id}`); if (!response.ok) return undefined;
       const run = (await response.json() as { dagRunDetails: { statusLabel: string; nodes: Array<{ statusLabel: string; stdout?: string; stderr?: string }> } }).dagRunDetails;
