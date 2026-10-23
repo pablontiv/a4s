@@ -106,6 +106,17 @@ set rather than only a package directory.
    dagu-feature/feature.yaml`. Bootstrap also installs/validates the reconciler and
    may change GitHub settings. Deliver its four repository renders via the normal
    adoption issue/commit and retain the three emitted adoption trailers.
+   Supply the tested commit body explicitly when squash-merging so each emitted
+   trailer retains its complete value on one line:
+
+   ```sh
+   git show -s --format=%b "$HEAD_SHA" > "$ADOPTION_BODY"
+   gh pr merge "$PR" --squash --match-head-commit "$HEAD_SHA" \
+     --body-file "$ADOPTION_BODY"
+   ```
+
+   Confirm the merged commit's three values with
+   `git show -s --format=%B "$MERGE_SHA" | git interpret-trailers --parse`.
 6. **Fresh loading and proof:** bind CLI/reconciler/OMP to the same adopted source
    identity and restart OMP. Inspect all stamps and perform admission plus agreed
    live acceptance before reopening work. Changed `BUNDLE_NAME` follows this whole
