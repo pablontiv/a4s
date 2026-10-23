@@ -6,7 +6,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
-import { parse, stringify } from "yaml";
 import { Transitions } from "../../src/status/progress.ts";
 import type { RunDetails } from "../../src/status/progress.ts";
 
@@ -15,10 +14,14 @@ import { testRunId } from "../fixtures/run-id.ts";
 const feature = readFileSync(new URL("../../../../.workspace/dagu/dags/feature.yaml", import.meta.url), "utf8");
 const poc = readFileSync(new URL("../../../../.workspace/dagu/dags/poc.yaml", import.meta.url), "utf8");
 function step(source: string, id: string): string {
-  const selected = parse(source).steps.find((entry: { id: string }) => entry.id === id);
-  assert.ok(selected, id);
-  return stringify({ steps: [selected] }).slice("steps:\n".length)
-    .replace("await_merge_cancellation", "await_merge");
+  const start = source.indexOf(`  - id: ${id}\n`);
+  assert.ok(start >= 0, id);
+  const end = source.indexOf("\n  - id:", start + 1);
+  const block = source.slice(start, end < 0 ? source.length : end).split("\nhandler_on:")[0]! + "\n";
+  if (!block.includes("    run: *cancellation_gate")) return block;
+  const cancellation = source.match(/^    run: &cancellation_gate \|\n(?:^      .*\n|^\n)*/m);
+  assert.ok(cancellation, "materialized cancellation gate");
+  return block.replace("    run: *cancellation_gate\n", cancellation[0].replace("&cancellation_gate ", ""));
 }
 async function port(): Promise<number> {
   const server = createServer();
@@ -130,7 +133,7 @@ test("Dagu isolated primary checkpoints release the queue and rewind the same ru
       const gate = phase === "base" ? "base" : `${phase}_gate`;
       const source = phase === "base" ? poc : feature;
       const predecessor = phase === "start" ? `  - id: triage\n    run: |\n      echo 'POC=no' >> "$DAGU_OUTPUT_FILE"\n    outputs:\n      - name: POC\n  - id: triage_decision\n    depends: triage\n    run: echo triage-stub\n` : `  - id: ${phase === "base" ? "record" : "await_merge"}\n    run: |\n      mkdir -p "$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path poc/runs/$RUN)"\n`;
-      const closeAuthorization = phase === "close" ? "  - id: authorize_ci\n    depends: await_merge\n    run: echo authorized-candidate\n" : "";
+      const closeAuthorization = phase === "close" ? "  - id: await_merge_cancellation\n    depends: await_merge\n    run: echo retained-merge-checkpoint\n  - id: authorize_ci\n    depends: await_merge_cancellation\n    run: echo authorized-candidate\n" : "";
       const definition = join(home, "dags", `${name}.yaml`);
       const guard = source.slice(source.indexOf("  - DAGU_RESOURCE_GUARD: |"), source.indexOf("steps:\n"));
       writeFileSync(definition, `labels: [workspace=primary228, dagu-feature-bundle=0.2.0]\nqueue: primary228\ntype: graph\nshell: bash\nparams:\n  - BASE_BRANCH: main\n  - ISSUE: "228"\n  - PR_NUMBER: ""\n  - OMP_SESSION_ID: primary228-owner\nenv:\n  - PRIMARY: ${JSON.stringify(primary)}\n  - BRANCH: ${branch}\n  - GATE: "true"\n  - REQUIRED_CHECK: validate\n  - WORKTREE: ${worktree}\n  - RUN: \${context.run.id}\n  - DAGU_FEATURE_BUNDLE: test\n${guard}steps:\n${predecessor}${closeAuthorization}${step(source, detector)}${step(source, checkpoint)}${step(source, `${checkpoint}_cancellation`)}${step(source, gate)}${phase === "base" ? step(source, "worktree") : ""}  - id: after_gate\n    depends: ${phase === "base" ? "worktree" : gate}\n    run: echo SAME_RUN=\${context.run.id}\n`);
