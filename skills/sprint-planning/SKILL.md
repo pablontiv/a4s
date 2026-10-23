@@ -38,7 +38,7 @@ Keep goal completion and issue completion separate. The goal is met when its agr
 
 | Work | Completion evidence |
 |---|---|
-| Feature | Acceptance results, the run's local gate and current QA/reviewer PASS verdicts, merged PR, required CI evidence from `authorize_ci`, closed issue, and successful run with reconciled worktree/branch cleanup |
+| Feature | Acceptance results, the run's local gate (and any adopted operator validation), merged PR, required CI evidence from `authorize_ci`, closed issue, and successful run with reconciled worktree/branch cleanup |
 | PoC | The published verdict and findings answering the issue's question, successful PoC run and reconciled worktree/branch cleanup, and the lifecycle's issue disposition |
 | PoC PASS with promotion | Also track the promoted feature continuation against the feature evidence; distinguish a completed experiment from unfinished promoted delivery |
 | PoC PASS without promotion | The completed experiment needs no feature implementation to count as a completed PoC |

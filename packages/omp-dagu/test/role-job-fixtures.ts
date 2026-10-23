@@ -18,7 +18,7 @@ export function roleAdmission(primary: string, home: string, run: string, snapsh
 export async function roleExecution(job: Job, assignment: string) {
   const output = job.binding.role === "triage"
     ? { poc: "no", behavior: "demonstrated", question: "Existing behavior?", reason: "Prior PASS" }
-    : { summary: "Quality candidate", message: "feat: quality candidate" };
+    : { summary: "Gated candidate", message: "feat: gated candidate" };
   const rows = [{ type: "session", id: `native-${job.id}` },
     { type: "session_init", agent: job.binding.role === "triage" ? "triage-reviewer" : "task", task: assignment, timestamp: new Date().toISOString() },
     { type: "message", id: "response", message: { role: "assistant", provider: "openai-codex", model: "effective", stopReason: "toolUse",

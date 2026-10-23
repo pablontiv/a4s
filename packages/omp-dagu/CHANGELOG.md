@@ -1,10 +1,14 @@
 # Changelog
 
+## 0.3.119
+
+- Merge the quality-free 0.3.118 lifecycle from main into `integration/v1`, preserving paginated merged-PR metadata (#493), terminal-snapshot observation (#522), and the v1 package identities.
+
 ## 0.3.118
 
-- Carry the v1 lane's paginated, completeness-validated merged-PR file metadata into the current lifecycle template, preserving bootstrap selection for large diffs (#493).
-- Preserve terminal-snapshot observation before bundle-rebase fixture log consumption (#522) and the private `@a4s/hot-reload` package migration (#421).
-- Merge main into `integration/v1` and adopt the stamped 0.3.117 lifecycle renders with the independent v1 workspace, queue, base branch and primary clone; retain their cancellation gates in the isolated primary-availability fixture.
+- Publish each gated feature candidate through optional operator validation, push, PR and guarded auto-merge, then reconcile required CI and merge (#561).
+- Retain native triage and implementation jobs and their receipts; remove the mandatory QA/reviewer checkpoint, quality evidence sealing and quality-only fixtures.
+- Align waiting recovery, lifecycle documentation and sprint completion evidence with the local gate and optional adopted operator validation; match gate-selection fixtures to the package dependency graph.
 
 ## 0.3.117
 
