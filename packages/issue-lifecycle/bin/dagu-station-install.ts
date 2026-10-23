@@ -163,7 +163,7 @@ async function main(): Promise<void> {
     };
     admissionClosed = true;
     hook(values["admission-close"]!);
-    await until("station drained (running=0 queued=0)", () => history("running").length === 0 && history("queued").length === 0);
+    await until("station drained (running=0 queued=0)", () => history("running,queued").length === 0);
     console.log("drained running=0 queued=0; requesting TERM restart");
     hook(values["restart-command"]!);
     // Admission remains closed while capacity N is verified with N+1 barrier runs.

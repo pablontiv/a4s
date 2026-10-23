@@ -3,6 +3,7 @@
 ## 0.4.2
 
 - Sync main through `58182c90eb0add228c0cf76a01cb6a06ca98839e` into the renamed v1 lifecycle package, retaining v1-owned renders and the quality-free workflow (#432).
+- Observe running and queued station runs together before requesting a drained restart, preserving active work as queued runs begin execution.
 - Persist run-wide lifecycle escalation budgets across native retries, resumes and push-backs, with owner-targeted decision evidence, renewed windows, route changes and retained stop/onExit evidence (#558).
 - Fingerprint consecutive CI BLOCKED observations and send one owner decision request per fingerprint while reconciliation retains transition ownership.
 - Require a bound PoC target/access assessment before admission and an owner decision for unreachable targets or repeated access/scope INCONCLUSIVE results; render configurable escalation thresholds through bootstrap.
