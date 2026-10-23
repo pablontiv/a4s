@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.3
+
+- Accept an explicit bootstrap `BASE_BRANCH` for integration-lane adoption, verify that branch exists, and retain the GitHub default branch when omitted (#434).
+
 ## 0.4.2
 
 - Sync main through `58182c90eb0add228c0cf76a01cb6a06ca98839e` into the renamed v1 lifecycle package, retaining v1-owned renders and the quality-free workflow (#432).

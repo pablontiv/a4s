@@ -9,6 +9,9 @@ params:
   - name: SKILL_DIR
     type: string
     required: true
+  - name: BASE_BRANCH
+    type: string
+    default: ""
 steps:
   - id: detect
     run: |
@@ -63,7 +66,9 @@ steps:
       cd "$PRIMARY"
       repo=$(gh repo view --json name --jq .name)
       nwo=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
-      base=$(gh repo view --json defaultBranchRef --jq .defaultBranchRef.name)
+      base=${BASE_BRANCH:-$(gh repo view --json defaultBranchRef --jq .defaultBranchRef.name)}
+      git check-ref-format "refs/heads/$base"
+      gh api "repos/$nwo/branches/$base" >/dev/null
       if ! required=$(gh api "repos/$nwo/branches/$base/protection/required_status_checks" --jq '.contexts | join(",")' 2>/dev/null); then
         required=""
       fi

@@ -117,8 +117,13 @@ The authorized bootstrap command shape is:
 skill_dir="$SOURCE/packages/issue-lifecycle/skills/issue-execution"
 dagu enqueue --run-id "bootstrap-<repo>-v<version-with-hyphens>" \
   "$skill_dir/dagu-feature-bootstrap.yaml" -- \
-  PRIMARY="$PRIMARY" SKILL_DIR="$skill_dir"
+  PRIMARY="$PRIMARY" SKILL_DIR="$skill_dir" BASE_BRANCH="$BASE_BRANCH"
 ```
+
+`BASE_BRANCH` selects an existing integration branch explicitly; an empty or
+omitted value retains the GitHub default branch. Bootstrap checks and settings
+operations target the selected branch. Review its current protection before
+running the `github` step: adoption requires strict required checks.
 
 Run IDs use hyphens rather than dotted versions. Source `origin/HEAD` ancestry,
 source cleanliness, independent canonical PRIMARY and exact runtime checks are
