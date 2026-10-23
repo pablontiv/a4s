@@ -1,6 +1,6 @@
 # Issue lifecycle
 
-Private native OMP package `@a4s/issue-lifecycle`, currently `0.4.1`, for the Dagu
+Private native OMP package `@a4s/issue-lifecycle`, currently `0.5.0`, for the Dagu
 issue lifecycle. Requires Node.js >=22.19.0 and official Dagu `2.20.1` with local
 `auth.mode=none`. The package owns status observation/wakeup, admission/resource
 guards, `triage-reviewer`, `plan-reviewer` and all seven lifecycle workflow skills.
@@ -39,12 +39,40 @@ The seven skills are `issue-execution`, `repository-discovery`, `backlog-breakdo
 `skills/issue-execution/` for relative paths and bootstrap's SKILL_DIR bindings.
 
 The existing feature lifecycle publishes a gated candidate through
-`push → pr → auto_merge → await_ci → await_merge`. Triage review remains independent;
+`push → pr → code_scanning → auto_merge → await_ci → await_merge`. Triage review remains independent;
 optional operator validation is fixed at adoption (a4s currently uses an empty
 procedure). Sprint Planning alone selects/ranks/enqueues new work. Discovery and
 refinement feed `planning.yaml`, the shared issue-creation backend, which owns
 independent plan review and operator approval. Sprint Review evaluates goal
 checks from delivery evidence rather than adding a lifecycle checkpoint.
+
+### CodeQL merge gate
+
+`dagu-codeql` observes the current PR head's `CodeQL` check and paginated open
+alerts from `refs/pull/<PR>/head`. Bootstrap fixes
+`CODEQL_SECURITY_THRESHOLD=high_or_higher` and `CODEQL_ALERTS_THRESHOLD=errors`
+by default; blank answers preserve installed policy. Security and non-security
+thresholds use GitHub ruleset enum values. Enable CodeQL analysis and give the
+service permission to read code-scanning alerts before adoption.
+
+After publication, pending analysis releases the queue through the native
+CI/merge waits. The scheduled reconciler enables guarded squash auto-merge only
+when required CI and CodeQL pass for the head. Findings meeting either threshold
+return the same run to implementation through `await_ci`, including when GitHub
+reports ruleset merge state `BLOCKED`. Rule, severity, location and message remain
+in `<git-dir>/dagu-feature/runs/<RUN>/ci-return.json` and the implementation
+assignment requires that diagnostic. Permission failures and unexplained analysis
+failures stay diagnosed waits; changed heads require fresh evidence.
+
+The adopted candidate policy and latest analysis are retained in
+`codeql-policy.json` and `codeql-observation.json`; final authorization repeats
+the observation. Retained immutable workflows continue their original checks-only
+reconciliation until their publication supplies a candidate-bound CodeQL policy.
+Repository `code_scanning` enforcement is separately authorized and configured with
+matching thresholds. See the
+[execution contract](skills/issue-execution/SKILL.md#codeql-findings-and-merge-enforcement)
+for threshold choices, evidence and ownership.
+
 
 ```sh
 # Validate prepared units and retain the exact-byte valid snapshot:

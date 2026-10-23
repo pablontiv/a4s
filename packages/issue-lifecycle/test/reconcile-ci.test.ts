@@ -127,6 +127,7 @@ function fixture(run = "ci226"): Fixture {
   git(primary, "worktree", "add", "-b", branch, worktree, "origin/main");
   mkdirSync(bin);
   symlinkSync(fileURLToPath(new URL("../bin/dagu-pr-body.mjs", import.meta.url)), join(bin, "dagu-pr-body"));
+  symlinkSync(fileURLToPath(new URL("../bin/dagu-codeql.ts", import.meta.url)), join(bin, "dagu-codeql"));
   const control = join(root, "control.json");
   const calls = join(root, "calls.jsonl");
   writeFileSync(calls, "");
@@ -145,7 +146,7 @@ else if(a[0]==='pr'&&a[1]==='edit') { if(!c.prExists) process.exit(1); }
 else if(a[0]==='pr'&&a[1]==='view') {
  const fields=a[a.indexOf('--json')+1];
  if(fields==='number'&&!c.prExists) process.exit(1);
- if(a.includes('--jq')) emit(fields==='headRefOid'?head():fields==='number'?77:fields==='state'?c.prState:process.env.BRANCH);
+ if(a.includes('--jq')) emit(fields==='headRefOid'?head():fields==='number'?77:fields==='state'?c.prState:fields==='autoMergeRequest'?c.auto!==false:process.env.BRANCH);
  else emit({number:77,state:c.prState,mergeStateStatus:c.mergeState,autoMergeRequest:c.auto===false?null:{},headRefOid:head(),headRefName:process.env.BRANCH,statusCheckRollup:[]});
 } else if(a[0]==='pr'&&a[1]==='checks') {
  emit(c.required??[{name:'validate',state:c.pending?'IN_PROGRESS':c.conclusion.toUpperCase(),link:'https://github.com/example/repo/actions/runs/123/job/456'}]);
@@ -154,12 +155,13 @@ else if(a[0]==='pr'&&a[1]==='view') {
 } else if(a[0]==='api') {
  if(c.apiError) { console.error(c.apiError); process.exit(4); }
  const endpoint=a.at(-1);
- if(endpoint.endsWith('/check-runs')) emit([{check_runs:c.checks??[{id:456,name:'validate',head_sha:c.checksSha??head(),status:c.pending?'in_progress':'completed',conclusion:c.conclusion,details_url:'https://github.com/example/repo/actions/runs/123/job/456',output:{summary:c.summary??''}}]}]);
+ if(endpoint.includes('/check-runs')) emit([{check_runs:[...(c.checks??[{id:456,name:'validate',head_sha:c.checksSha??head(),status:c.pending?'in_progress':'completed',conclusion:c.conclusion,details_url:'https://github.com/example/repo/actions/runs/123/job/456',output:{summary:c.summary??''}}]),{id:457,name:'CodeQL',app:{slug:'github-advanced-security'},head_sha:head(),status:c.codeqlPending?'in_progress':'completed',conclusion:c.codeqlConclusion??'success'}]}]);
  else if(endpoint.endsWith('/status')) emit({sha:head(),statuses:c.statuses??[]});
+ else if(endpoint.includes('/code-scanning/alerts')) emit([c.alerts??[]]);
  else process.exit(91);
 } else if(a[0]==='run'&&a[1]==='view') emit(c.log);
 else if(a[0]==='run'&&a[1]==='rerun') { c.reruns=(c.reruns??0)+1; save(); }
-else if(a[0]==='pr'&&a[1]==='merge') { console.error('merge execution rejected by fixture'); process.exit(90); }
+else if(a[0]==='pr'&&a[1]==='merge') { c.auto=!a.includes('--disable-auto'); save(); }
 else { console.error('unexpected gh '+a.join(' ')); process.exit(92); }
 `);
   writeFileSync(join(bin, "dagu"), `#!/usr/bin/env node\n${common}
@@ -182,11 +184,14 @@ if(a[0]==='status') {
   chmodSync(join(bin, "dagu"), 0o755);
   const state = join(primary, ".git/dagu-feature/runs", run);
   mkdirSync(state, { recursive: true });
+  writeFileSync(join(state, "codeql-policy.json"), JSON.stringify({ sha: git(worktree, "rev-parse", "HEAD"), security: "high_or_higher", alerts: "errors" }));
   const identity = JSON.stringify({ primary, worktree, branch, run, session: "ci226-owner" }) + "\n";
   writeFileSync(join(state, "identity"), identity);
   writeFileSync(git(worktree, "rev-parse", "--path-format=absolute", "--git-path", "dagu-feature-owner"), identity);
   writeFileSync(join(state, "base"), git(primary, "rev-parse", "HEAD") + "\n");
   const env: NodeJS.ProcessEnv = { ...process.env, LC_ALL: "C", PATH: `${bin}:${process.env.PATH}`, PRIMARY: primary, WORKTREE: worktree, BRANCH: branch, ISSUE: "226", RUN: run, PR_NUMBER: "", BASE_BRANCH: "main", GATE: "true", OMP_SESSION_ID: "ci226-owner", CI_REMOTE: remote, CI_CONTROL: control, CI_CALLS: calls, DAGU_OUTPUT_FILE: join(root, "outputs") };
+  env.CODEQL_SECURITY_THRESHOLD = "high_or_higher";
+  env.CODEQL_ALERTS_THRESHOLD = "errors";
   env.IMPLEMENTER = "ImplementTest";
   delete env.DAGU_PARAMS_JSON;
   return { root, primary, remote, worktree, bin, branch, control, calls, state, env, base: git(primary, "rev-parse", "HEAD") };
@@ -216,7 +221,7 @@ function publish(f: Fixture, feature: string, value: string): string {
     const result = execute(f, feature, id);
     assert.equal(result.status, 0, result.stdout + result.stderr);
   }
-  for (const id of ["push", "pr"]) {
+  for (const id of ["push", "pr", "code_scanning"]) {
     const result = execute(f, feature, id);
     assert.equal(result.status, 0, result.stdout + result.stderr);
   }
@@ -227,6 +232,74 @@ for (const [name, base] of definitions) {
   const feature = readFileSync(name === "template"
     ? fileURLToPath(new URL(`${base}feature.yaml`, import.meta.url)) : renderedFeature, "utf8");
   const reconcile = readFileSync(fileURLToPath(new URL(`${base}reconcile.yaml`, import.meta.url)), "utf8");
+  test(`${name}: retained runs complete from checks and merge state under their original policy`, () => {
+    const f = fixture("retained-pre-codeql");
+    try {
+      git(f.worktree, "push", "origin", f.branch);
+      rmSync(join(f.state, "codeql-policy.json"));
+      update(f, { statusStep: "await_merge", prState: "MERGED", codeqlPending: true });
+      const merged = observe(f, reconcile);
+      assert.equal(merged.class, "PASS");
+      assert.equal(merged.action, "COMPLETE");
+      transition(f, reconcile);
+      assert.equal(JSON.parse(readFileSync(f.control, "utf8")).statusStep, "succeeded");
+      update(f, { statusStep: "await_ci", prState: "MERGED" });
+      assert.equal(observe(f, reconcile).action, "COMPLETE");
+      update(f, { statusStep: "await_merge", prState: "OPEN", auto: false });
+      const disabled = observe(f, reconcile);
+      assert.equal(disabled.class, "BLOCKED");
+      assert.equal(disabled.action, "WAIT");
+      update(f, { auto: true });
+      const waiting = observe(f, reconcile);
+      assert.equal(waiting.class, "PASS");
+      assert.equal(waiting.action, "WAIT");
+      const calls = readFileSync(f.calls, "utf8").trim().split("\n").map(line => JSON.parse(line));
+      assert.ok(calls.every(call => !call.args.some((arg: string) => arg.includes("/code-scanning/alerts"))));
+    } finally { rmSync(f.root, { recursive: true, force: true }); }
+  });
+
+  test(`${name}: CodeQL BLOCKED returns findings to implement and enables merge only after the fixed head passes`, () => {
+    const f = fixture("codeql570");
+    try {
+      update(f, { auto: false, codeqlPending: true });
+      const a = publish(f, feature, "candidate with finding");
+      assert.equal(observe(f, reconcile).class, "PENDING");
+      assert.equal(execute(f, feature, "auto_merge").status, 0);
+      assert.equal(JSON.parse(readFileSync(f.control, "utf8")).auto, false);
+      const finding = { number: 43, state: "open", tool: { name: "CodeQL" }, html_url: "https://github.com/example/repo/security/code-scanning/43",
+        rule: { id: "js/redos", security_severity_level: "high", severity: "warning" },
+        most_recent_instance: { ref: "refs/pull/77/head", commit_sha: a, location: { path: "src/server.ts", start_line: 4 },
+          message: { text: "Polynomial backtracking on user input" } } };
+      update(f, { auto: true, codeqlPending: false, alerts: [finding] });
+      const failed = observe(f, reconcile);
+      assert.equal(failed.class, "CODE_FAIL");
+      assert.equal(failed.action, "IMPLEMENT");
+      assert.equal(failed.step, "await_ci");
+      assert.match(failed.log, /js\/redos.*src\/server.ts:4.*Polynomial/);
+      transition(f, reconcile);
+      const retained = JSON.parse(readFileSync(join(f.state, "ci-return.json"), "utf8"));
+      assert.equal(retained.findings[0].rule, "js/redos");
+      assert.equal(JSON.parse(readFileSync(f.control, "utf8")).statusStep, "implement");
+      assert.equal(JSON.parse(readFileSync(f.control, "utf8")).auto, false);
+      const b = publish(f, feature, "fixed candidate");
+      update(f, { alerts: [], statusStep: "both" });
+      const passed = observe(f, reconcile);
+      assert.equal(passed.sha, b);
+      assert.equal(passed.class, "PASS");
+      assert.equal(passed.action, "MERGE");
+      transition(f, reconcile);
+      assert.equal(JSON.parse(readFileSync(f.control, "utf8")).auto, true);
+      const merge = readFileSync(f.calls, "utf8").trim().split("\n").map(line => JSON.parse(line))
+        .find(call => call.tool === "gh" && call.args.includes("--auto"));
+      assert.ok(merge.args.includes("--match-head-commit") && merge.args.includes(b));
+      assert.ok(merge.args.includes("--body") && merge.args.some((value: string) => value.startsWith("Closes #226")));
+      update(f, { prState: "MERGED" });
+      assert.equal(observe(f, reconcile).action, "COMPLETE");
+      transition(f, reconcile);
+      const authorized = execute(f, feature, "authorize_ci");
+      assert.equal(authorized.status, 0, authorized.stdout + authorized.stderr);
+    } finally { rmSync(f.root, { recursive: true, force: true }); }
+  });
   test(`${name}: A CODE_FAIL returns implement, B PASS uses the same PR and rejects late A`, async t => {
     const f = fixture();
     try {
@@ -346,7 +419,7 @@ test("template: consecutive BLOCKED ticks request one owner decision per fingerp
       assert.deepEqual(transitions.observe(waiting, { ciDiagnostic: repeated }), {});
     }
     assert.deepEqual(new Transitions("another-owner").observe(waiting, { ciDiagnostic: second }), {});
-    update(f, { auto: false });
+    update(f, { conclusion: "failure", log: "Approval required by another environment owner" });
     assert.equal(observe(f, reconcile).decisionRequest, undefined);
     const changedCause = observe(f, reconcile);
     assert.notEqual(changedCause.decisionRequest.id, second.decisionRequest.id);
@@ -355,6 +428,7 @@ test("template: consecutive BLOCKED ticks request one owner decision per fingerp
     git(f.worktree, "add", "candidate");
     git(f.worktree, "commit", "-m", "new head");
     git(f.worktree, "push", "origin", f.branch);
+    writeFileSync(join(f.state, "codeql-policy.json"), JSON.stringify({ sha: git(f.worktree, "rev-parse", "HEAD"), security: "high_or_higher", alerts: "errors" }));
     assert.equal(observe(f, reconcile).decisionRequest, undefined);
     const changedSha = observe(f, reconcile);
     assert.notEqual(changedSha.decisionRequest.id, changedCause.decisionRequest.id);
@@ -390,7 +464,7 @@ test("template: no-progress threshold is repository policy and non-BLOCKED ticks
     assert.equal(observe(f, reconcile).class, "BLOCKED");
     assert.equal(observe(f, reconcile).decisionRequest, undefined);
     assert.equal(observe(f, reconcile).decisionRequest.observations, 3);
-    update(f, { auto: false, conclusion: "cancelled", log: "Approval required" });
+    update(f, { auto: false, conclusion: "failure", log: "Approval required" });
     f.env.ESCALATION_CI_BLOCKED = "1";
     assert.equal(observe(f, reconcile).decisionRequest.observations, 1);
   } finally { rmSync(f.root, { recursive: true, force: true }); }
@@ -479,16 +553,19 @@ test("Dagu 2.20.1: paired root waits return to implement/rebase and release the 
     await waiting("implement", 0);
     dagu("human-task", "complete", "feature", "--run-id", id, "--step", "implement");
     await waiting("await_ci", 0);
-    update(f, { conclusion: "failure", log: "AssertionError: candidate test failed" });
+    update(f, { alerts: [{ number: 43, state: "open", tool: { name: "CodeQL" }, html_url: "https://github.com/example/repo/security/code-scanning/43",
+      rule: { id: "js/redos", security_severity_level: "high", severity: "warning" },
+      most_recent_instance: { state: "open", ref: "refs/pull/77/head", commit_sha: a, location: { path: "src/server.ts", start_line: 4 },
+        message: { text: "Polynomial backtracking on user input" } } }] });
     assert.equal(observe(f, reconcile).class, "CODE_FAIL");
     transition(f, reconcile);
     const returned = await waiting("implement", 1);
     const ciDiagnostic = await readCiDiagnostic(f.primary, id, true, new AbortController().signal);
     const wake = new Transitions("owner").observe({ ...returned, params: `${returned.params} OMP_SESSION_ID=owner` }, { ciDiagnostic: ciDiagnostic! }).wakeMessage!;
-    assert.ok(wake.includes("step=implement") && wake.includes(a) && wake.includes("AssertionError"), wake);
+    assert.ok(wake.includes("step=implement") && wake.includes(a) && wake.includes("js/redos"), wake);
     t.diagnostic(wake);
     const b = publish(f, feature, "candidate B");
-    update(f, { conclusion: "success", checksSha: a, log: "" });
+    update(f, { alerts: [], checksSha: a });
     dagu("human-task", "complete", "feature", "--run-id", id, "--step", "implement");
     await waiting("await_ci", 1);
     assert.equal(observe(f, reconcile).class, "STALE_SHA");

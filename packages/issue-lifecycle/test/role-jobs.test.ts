@@ -342,6 +342,10 @@ test("each required semantic stage has a registered role contract and Dagu consu
       assert.equal(schema.type, "object");
       const assignment = roleAssignment(binding, "513", "Actual issue acceptance", "/state");
       assert.ok(assignment.includes(jobId(binding))); assert.ok(assignment.includes("Actual issue acceptance"));
+      if (role !== "triage") {
+        assert.ok(assignment.includes("/state/ci-return.json"));
+        assert.ok(assignment.includes("CodeQL findings (rule, severity, location and message)"));
+      }
     }
     const dag = parse(readFileSync(new URL("../skills/issue-execution/feature.yaml", import.meta.url), "utf8"));
     for (const [stage, outputs] of [["triage", ["POC", "QUESTION", "BASIS", "REVIEW", "REQUIRED_TARGETS", "AUTHORIZED_TARGETS", "SCOPE_BASIS"]], ["implement", ["SUMMARY", "MESSAGE", "IMPLEMENTER"]]] as const) {

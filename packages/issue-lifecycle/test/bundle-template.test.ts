@@ -108,6 +108,43 @@ test("adopted blocker reporting policy rejects run input before effects", () => 
   assert.equal(accepted.status, 0, accepted.stderr);
 });
 
+test("bootstrap renders default, preserved and explicit CodeQL thresholds and rejects enqueue overrides", () => {
+  const bootstrap = skill("dagu-feature-bootstrap.yaml");
+  const script = bootstrap.split("  - id: render\n")[1]!.split("    run: |\n")[1]!.split("      for rendered in")[0]!
+    .split("\n").map(line => line.slice(6)).join("\n");
+  const admission = skill("feature.yaml").split("  - id: admission\n")[1]!.split("\n  - id: triage")[0]!
+    .split("    run: |\n")[1]!.split("\n").map(line => line.slice(6)).join("\n");
+  const root = mkdtempSync(join(tmpdir(), "a4s-codeql-policy-"));
+  try {
+    for (const [answer, installed, expected] of [
+      ["", "", "high_or_higher"], ["", "medium_or_higher", "medium_or_higher"], ["critical", "medium_or_higher", "critical"],
+    ]) {
+      const stage = join(root, "feature.yaml");
+      const result = spawnSync("bash", ["-c", script], { encoding: "utf8", env: {
+        ...process.env, PRIMARY: root, SKILL_DIR: fileURLToPath(new URL("../skills/issue-execution", import.meta.url)),
+        STAGE: stage, DAG_RUN_ID: "bootstrap-codeql", REPO: "fixture", BASE_BRANCH: "main",
+        GATE: "true", REQUIRED_CHECK: "validate", REBASE_RESOLVER: "", TEST_PATHS: "test",
+        BUNDLE_NAME: "@a4s/issue-lifecycle", BUNDLE_VERSION: "0.4.4", DAGU_VERSION: "2.20.1",
+        SOURCE_NWO: "example/repo", SOURCE_SHA: "a".repeat(40),
+        CODEQL_SECURITY_THRESHOLD: answer, CURRENT_CODEQL_SECURITY_THRESHOLD: installed,
+        CODEQL_ALERTS_THRESHOLD: "", CURRENT_CODEQL_ALERTS_THRESHOLD: "errors_and_warnings",
+      } });
+      assert.equal(result.status, 0, result.stderr);
+      const rendered = parse(readFileSync(stage, "utf8"));
+      assert.ok(rendered.env.some((entry: Record<string, string>) => entry.CODEQL_SECURITY_THRESHOLD === expected));
+      assert.ok(rendered.env.some((entry: Record<string, string>) => entry.CODEQL_ALERTS_THRESHOLD === "errors_and_warnings"));
+    }
+    for (const key of ["CODEQL_SECURITY_THRESHOLD", "CODEQL_ALERTS_THRESHOLD"]) {
+      const result = spawnSync("bash", ["-c", admission], { encoding: "utf8", env: {
+        ...process.env, DAGU_PARAMS_JSON: JSON.stringify({ [key]: "none" }),
+        PRIMARY: root, GATE: "true", REBASE_RESOLVER: "", REQUIRED_CHECK: "validate", BRANCH: "dagu/issue-570",
+      } });
+      assert.equal(result.status, 1, result.stdout + result.stderr);
+      assert.ok(result.stderr.includes(`admission rejected run parameter: ${key}`));
+    }
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 const ciScript = fileURLToPath(new URL("../../../scripts/ci-workspaces.mjs", import.meta.url));
 const ciWorkflow = parse(readFileSync(new URL("../../../.github/workflows/ci.yml", import.meta.url), "utf8"));
 type CiWorkspace = {

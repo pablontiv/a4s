@@ -81,7 +81,7 @@ steps:
       ITERATION=$(sed -nE 's/.*push-back iteration: ([0-9]+).*/\1/p' <<<"$STATUS" | head -1)
       ITERATION=${ITERATION:-0}
       STEP=$(LC_ALL=C sed -nE 's/^(├─|└─)([A-Za-z0-9_-]+) .*\[waiting\]$/\2/p' <<<"$STATUS" | head -1)
-      CLASS=PENDING ACTION=WAIT SHA= CHECK= LOG= CAUSE= PR= WORKTREE="$PRIMARY/.workspace/worktrees/issue-$ISSUE" RETRY_RUN=
+      CLASS=PENDING ACTION=WAIT SHA= CHECK= LOG= CAUSE= PR= WORKTREE="$PRIMARY/.workspace/worktrees/issue-$ISSUE" RETRY_RUN= FINDINGS='[]'
       OBSERVATION="$STEP"
       if [[ "$STATUS" != Waiting* ]]; then
         ACTION=NONE
@@ -152,6 +152,25 @@ steps:
               CLASS=PENDING CAUSE="Required checks not yet published"
             fi
           fi
+          # Observe code scanning independently: CodeQL findings can block a
+          # ruleset even when required-check lookup does not expose that rule.
+          policy="$STATE/codeql-policy.json"
+          # Retained runs use their original checks-only contract until publication
+          # explicitly supplies a candidate-bound CodeQL policy.
+          if [[ -f "$policy" ]]; then
+            if [[ "$(jq -r .sha "$policy")" != "$SHA" ]]; then
+              CLASS=STALE_SHA CHECK=CodeQL CAUSE="CodeQL policy belongs to another published candidate"
+            else
+              dagu-codeql "$REPO" "$PR" "$SHA" "$(jq -r .security "$policy")" "$(jq -r .alerts "$policy")" >"$STATE/codeql-observation.json"
+              codeql_class=$(jq -r .class "$STATE/codeql-observation.json")
+              if [[ "$codeql_class" != PASS ]]; then
+                CLASS=$codeql_class CHECK=CodeQL RETRY_RUN=
+                CAUSE=$(jq -r .cause "$STATE/codeql-observation.json")
+                FINDINGS=$(jq -c .findings "$STATE/codeql-observation.json")
+                LOG=$(jq -r '[.findings[] | "\(.rule) (\(.severity)) \(.path):\(.line): \(.message)"] | join("\n")' "$STATE/codeql-observation.json")
+              fi
+            fi
+          fi
           current=$(gh pr view "$PR" -R "$REPO" --json headRefOid --jq .headRefOid)
           if [[ "$current" != "$SHA" ]]; then
             CLASS=STALE_SHA CAUSE="Head moved from $SHA to $current; discard this observation"
@@ -163,7 +182,9 @@ steps:
             ACTION=RETRY
           elif [[ "$CLASS" == PASS && "$pr_state" == MERGED ]]; then
             ACTION=COMPLETE
-          elif [[ "$pr_state" != OPEN && "$pr_state" != MERGED ]] || [[ "$pr_state" == OPEN && ( "$auto" != true || "$merge_state" == DRAFT || "$merge_state" == HAS_HOOKS ) ]]; then
+          elif [[ -f "$policy" && "$CLASS" == PASS && "$pr_state" == OPEN && "$auto" != true && "$merge_state" != DRAFT && "$merge_state" != HAS_HOOKS ]]; then
+            ACTION=MERGE
+          elif [[ "$pr_state" != OPEN && "$pr_state" != MERGED ]] || [[ "$pr_state" == OPEN && ( ( ! -f "$policy" && "$auto" != true ) || "$merge_state" == DRAFT || "$merge_state" == HAS_HOOKS ) ]]; then
             CLASS=BLOCKED CAUSE="PR $pr_state/$merge_state auto-merge=$auto; operator action required"
           fi
           if [[ "$CLASS" == STALE_SHA ]]; then ACTION=WAIT; fi
@@ -181,8 +202,8 @@ steps:
       fi
       jq -n --arg repo "$REPO" --arg run "$RUN" --arg pr "$PR" --arg worktree "$WORKTREE" \
         --arg step "$STEP" --argjson iteration "$ITERATION" --arg sha "$SHA" --arg class "$CLASS" \
-        --arg action "$ACTION" --arg check "$CHECK" --arg log "${LOG:0:3000}" --arg cause "$CAUSE" --arg retry_run "$RETRY_RUN" \
-        '{repo:$repo,run:$run,pr:$pr,worktree:$worktree,step:$step,iteration:$iteration,sha:$sha,class:$class,action:$action,check:$check,log:$log,cause:$cause,retry_run:$retry_run}' >"$STATE/ci-observation.tmp"
+        --arg action "$ACTION" --arg check "$CHECK" --arg log "${LOG:0:3000}" --arg cause "$CAUSE" --arg retry_run "$RETRY_RUN" --argjson findings "$FINDINGS" \
+        '{repo:$repo,run:$run,pr:$pr,worktree:$worktree,step:$step,iteration:$iteration,sha:$sha,class:$class,action:$action,check:$check,log:$log,cause:$cause,retry_run:$retry_run,findings:$findings}' >"$STATE/ci-observation.tmp"
       mv "$STATE/ci-observation.tmp" "$STATE/ci-observation.json"
       python3 - "$STATE" "${CI_OBSERVATION_ID:?Missing reconcile tick identity}" "${ESCALATION_CI_BLOCKED:-2}" <<'PY'
       import fcntl, hashlib, json, os, pathlib, sys, tempfile
@@ -258,7 +279,16 @@ steps:
       }
       guard
       case "$action" in
+        MERGE)
+          worktree=$(jq -r .worktree "$file")
+          merge_body=$(printf 'Closes #%s\n\n%s' "$ISSUE" "$(git -C "$worktree" log -1 --format=%b "$sha")")
+          gh pr merge "$pr" -R "$repo" --auto --squash --match-head-commit "$sha" --body "$merge_body"
+          ;;
         IMPLEMENT|REBASE)
+          # A corrected head must wait for fresh analysis, not inherit auto-merge.
+          if [[ "$(gh pr view "$pr" -R "$repo" --json autoMergeRequest --jq '.autoMergeRequest != null')" == true ]]; then
+            gh pr merge "$pr" -R "$repo" --disable-auto
+          fi
           # The diagnostic is durable before the new implement opening reaches OMP.
           if [[ "$action" == IMPLEMENT ]]; then cp "$file" "$STATE/ci-return.json"; fi
           dagu human-task push-back feature --run-id "$RUN" --step "$step" --expected-iteration "$iteration"

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.0
+
+- Observe SHA-bound CodeQL checks and PR alerts after publication and during native reconciliation, returning threshold findings to implementation through the existing CI push-back route (#570).
+- Adopt configurable security and non-security alert thresholds through bootstrap; retain code-scanning policy per candidate, wait for analysis before merge, and include findings in implementation assignments.
+- Require an enabled CodeQL setup and the package's `dagu-codeql` CLI for newly adopted feature workflows; this new pre-merge analysis requirement changes the 0.x compatibility lane.
+- Preserve retained runs' checks-only reconciliation when their immutable workflow has not published a candidate-bound CodeQL policy.
+
 ## 0.4.3
 
 - Accept an explicit bootstrap `BASE_BRANCH` for integration-lane adoption, verify that branch exists, and retain the GitHub default branch when omitted (#434).
