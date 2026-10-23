@@ -162,8 +162,8 @@ const mainWorkspaces: CiWorkspace[] = [
   { dir: "packages/hot-reload", name: "@a4s/hot-reload" },
   { dir: "packages/orca-integration", name: "@a4s/orca-integration" },
   { dir: "packages/pi-tool-row-presentation", name: "@a4s/pi-tool-row-presentation" },
-  { dir: "packages/synagent/core", name: "@a4s/synagent" },
-  { dir: "packages/synagent/bus", name: "@a4s/synagent-bus" },
+  { dir: "packages/agent-messaging", name: "@a4s/agent-messaging" },
+  { dir: "apps/message-bus", name: "@a4s/message-bus" },
 ];
 const integrationWorkspaces: CiWorkspace[] = [
   { dir: "packages/review-routing", name: "@a4s/review-routing",
@@ -178,7 +178,7 @@ const integrationWorkspaces: CiWorkspace[] = [
 function ciFixture(workspaces: CiWorkspace[]) {
   const root = mkdtempSync(join(tmpdir(), "a4s-ci-workspaces-"));
   writeFileSync(join(root, "package.json"), JSON.stringify({
-    private: true, workspaces: ["packages/*", "packages/synagent/*", "packages/tools/*", "apps/*"],
+    private: true, workspaces: ["packages/*", "packages/tools/*", "apps/*"],
   }));
   for (const { dir, ...manifest } of workspaces) {
     mkdirSync(join(root, dir), { recursive: true });
@@ -206,12 +206,12 @@ test("CI selects checked-out main manifests, nested owners and declared routing 
     const cases: [unknown[], string[]][] = [
       [["packages/context-expert/src/index.ts"], ["@a4s/context-expert"]],
       [["packages/review-routing/src/settings.ts"], ["@a4s/review-routing"]],
-      [["packages/synagent/core/src/index.ts"], ["@a4s/synagent"]],
-      [[{ filename: "packages/synagent/bus/src/deleted.ts", status: "removed" }], ["@a4s/synagent-bus"]],
-      [[{ filename: "packages/synagent/core/src/new.ts", previous_filename: "packages/synagent/core/src/old.ts" }],
-        ["@a4s/synagent"]],
-      [[{ filename: "packages/synagent/bus/src/new.ts", previous_filename: "packages/synagent/core/src/old.ts" }],
-        ["@a4s/synagent", "@a4s/synagent-bus"]],
+      [["packages/agent-messaging/src/index.ts"], ["@a4s/agent-messaging"]],
+      [[{ filename: "apps/message-bus/src/deleted.ts", status: "removed" }], ["@a4s/message-bus"]],
+      [[{ filename: "packages/agent-messaging/src/new.ts", previous_filename: "packages/agent-messaging/src/old.ts" }],
+        ["@a4s/agent-messaging"]],
+      [[{ filename: "apps/message-bus/src/new.ts", previous_filename: "packages/agent-messaging/src/old.ts" }],
+        ["@a4s/agent-messaging", "@a4s/message-bus"]],
       [[], []],
     ];
     for (const [files, names] of cases) assert.deepEqual(fixture.select(files), ciJobs(...names), JSON.stringify(files));

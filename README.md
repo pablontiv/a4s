@@ -11,7 +11,7 @@ Repository of private libraries, verified extensions, agents and skills distribu
 - [`packages/review-routing/`](packages/review-routing/): strict cross-family model selection for OMP review subagents.
 - [`packages/omp-dagu/`](packages/omp-dagu/): widget, despertar dirigido de la sesión coordinadora y guard OMP para Dagu, agente `triage-reviewer` y skill `dagu-feature`.
 - [`packages/pi-tool-row-presentation/`](packages/pi-tool-row-presentation/): presentación configurable de tool rows para Pi/Pion.
-- [`packages/synagent/core/`](packages/synagent/core/): adaptadores de mensajería Synagent para Pi, OMP y Claude.
+- [`packages/agent-messaging/`](packages/agent-messaging/): canonical agent messaging protocol, MQTT transport and OMP session delivery.
 - [`apps/message-bus/`](apps/message-bus/): private, independently started durable MQTT broker used by the messaging adapters.
 
 The private shared [`@a4s/hot-reload`](packages/hot-reload/) workspace supplies
@@ -20,7 +20,6 @@ the retained extensions' reloadable shims. Real busy-turn reload deferral throug
 observed for #421. See the [helper verification record](packages/hot-reload/README.md#verification-recorded-for-issue-421)
 for the exact versioned, compositional, and source-selection evidence boundaries.
 
-Los plugins de Claude están publicados en [`.claude-plugin/marketplace.json`](.claude-plugin/marketplace.json).
 
 ## Agentes
 
