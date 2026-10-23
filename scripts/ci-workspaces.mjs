@@ -16,8 +16,7 @@ function discover() {
     workspaces.push({
       dir, name: manifest.name,
       test: Boolean(manifest.scripts?.test),
-      // Preserve main's documented private-Pion typecheck policy by manifest identity.
-      typecheck: Boolean(manifest.scripts?.typecheck) && manifest.name !== "@a4s/pi-tool-row-presentation",
+      typecheck: Boolean(manifest.scripts?.typecheck),
       dependencies: Object.keys({ ...manifest.dependencies, ...manifest.devDependencies,
         ...manifest.peerDependencies, ...manifest.optionalDependencies }),
     });

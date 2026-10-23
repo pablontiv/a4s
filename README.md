@@ -72,9 +72,11 @@ Status watcher unit tests own a temporary Git repository with an origin matching
 their fake Dagu workspace. They run with the checkout's existing origin and path,
 including local clones whose origin names differ from the fixture workspace.
 
-Node.js >=22.19.0 and access to all pinned dependencies, including the private
-Pion development release, are required for the full gate. See
+Node.js >=22.19.0 and access to the pinned registry dependencies are required.
+Root and CI run all eight workspace test suites and seven declared typechecks;
+the optional-host tool-row workspace is test-only because its renderer types
+belong to the consumer's Pion host. See
 [development prerequisites](docs/operations/private-install.md#prerequisites-and-development)
-for CI's bounded alternative and explicit live-Dagu testing. CI's SHA-bound
+for explicit live-Dagu testing. CI's SHA-bound
 `validate` aggregate targets `main` and `integration/v1`; deployment owns actual
 branch protection. Historical removed-host source is preserved in `legacy`.

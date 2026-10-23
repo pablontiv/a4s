@@ -8,9 +8,6 @@ and keep the checkout available for every source link.
 ## Prerequisites and development
 
 - Node.js >=22.19.0, npm workspaces and access to the lockfile's exact dependencies.
-- The private pinned `@pablontiv/pion` development tarball (release access or an
-  intact npm cache) for the full local typecheck. CI's documented Pion-stripping
-  installation is a different, bounded gate, not a full local substitute.
 - Native OMP for OMP integrations; review-routing requires OMP >=18.12.5 and
   Bun >=1.3.14. npm installs the pinned development Bun used by its tests.
 - Official Dagu 2.20.1 for lifecycle runtime; Git, authenticated `gh`, `jq`,
@@ -31,8 +28,10 @@ npm test
 npm run typecheck
 ```
 
-The root gate visits all eight workspaces. Lifecycle's default tests force
-`A4S_LIVE_DAGU=0`; selected real Dagu cases skip. Explicit live acceptance uses
+The root and CI gates run all eight workspace test suites and the seven declared
+typechecks. The tool-row workspace runs transpiled behavioral tests; its optional
+Pion host supplies the renderer types for host-side development. Lifecycle's
+default tests force `A4S_LIVE_DAGU=0`; selected real Dagu cases skip. Explicit live acceptance uses
 `npm run test:live --workspace @a4s/issue-lifecycle` with the exact pinned runtime.
 CI discovers current workspace manifests and transitive consumers, handles both
 sides of renames, and aggregates workspace checks plus six pinned-Dagu partitions
