@@ -68,7 +68,7 @@ In the product scope, an issue that no check and no evidence reaches is P3. Repo
 
 ## 4. Sprint Backlog and enqueue
 
-Show the order as one table: position, issue, class, evidence, the check it supports (or its stated contribution). After the operator confirms, the responsible session enqueues the issues in Dagu in that order with the `dagu-feature` skill. P3 issues are not enqueued. This is the sole ranking and new-issue enqueue path; Dagu executes the supplied order. Existing feature and PoC continuations keep their lifecycle behavior.
+Show the order as one table: position, issue, class, evidence, the check it supports (or its stated contribution). After the operator confirms, the responsible session enqueues the issues in Dagu in that order with the `issue-execution` skill. P3 issues are not enqueued. This is the sole ranking and new-issue enqueue path; Dagu executes the supplied order. Existing feature and PoC continuations keep their lifecycle behavior.
 
 Needs, reports and incidents that are not yet actionable issues go through `refine`, then `backlog-breakdown` for reviewed issue materialization. Bring the resulting issues back here for ranking and enqueue.
 

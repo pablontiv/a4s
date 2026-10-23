@@ -82,7 +82,7 @@ function aggregate() {
   const { CHANGES_RESULT: changes, TEST_RESULT: test, LIVE_RESULT: live } = process.env;
   console.log(`changes=${changes} test=${test} live=${live}`);
   if (changes !== "success" || test !== (workspaces.length ? "success" : "skipped")
-    || live !== (workspaces.some(workspace => workspace.name === "@a4s/omp-dagu") ? "success" : "skipped")) {
+    || live !== (workspaces.some(workspace => workspace.name === "@a4s/issue-lifecycle") ? "success" : "skipped")) {
     throw new Error("Required CI jobs did not complete successfully");
   }
 }

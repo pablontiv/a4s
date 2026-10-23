@@ -68,7 +68,7 @@ That is builtin resource rediscovery, not evidence of a module import.
 
 The actual native `Native421QA` task lifecycle emitted `agent=qa`,
 `agentSource=user`, and its exact `parentToolCallId`. **[INFERENCE]** The
-selected canonical definition is `packages/omp-dagu/agents/qa.md`: the exact
+selected canonical definition was the lifecycle package's then-present `agents/qa.md`: the exact
 tool-call identity correlates with the unique public resolver result under
 identical explicit roots and cwd. This is not a directly emitted selected
 `AgentDefinition` or `filePath`.

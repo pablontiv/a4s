@@ -9,7 +9,7 @@ Repository of private libraries, verified extensions, agents and skills distribu
 ## Extensiones
 - [`packages/orca-integration/`](packages/orca-integration/): worker lifecycle and explicit model-routing contracts for OMP coordinators using Orca workers.
 - [`packages/review-routing/`](packages/review-routing/): strict cross-family model selection for OMP review subagents.
-- [`packages/omp-dagu/`](packages/omp-dagu/): widget, despertar dirigido de la sesión coordinadora y guard OMP para Dagu, agente `triage-reviewer` y skill `dagu-feature`.
+- [`packages/issue-lifecycle/`](packages/issue-lifecycle/): widget, despertar dirigido de la sesión coordinadora y guard OMP para Dagu, agente `triage-reviewer` y skill `issue-execution`.
 - [`packages/pi-tool-row-presentation/`](packages/pi-tool-row-presentation/): presentación configurable de tool rows para Pi/Pion.
 - [`packages/agent-messaging/`](packages/agent-messaging/): canonical agent messaging protocol, MQTT transport and OMP session delivery.
 - [`apps/message-bus/`](apps/message-bus/): private, independently started durable MQTT broker used by the messaging adapters.
@@ -32,7 +32,7 @@ A coordinating session is a sprint. Responsibilities and approvals are explicit:
 | Responsibility | Skill | Owner |
 |---|---|---|
 | Refine a need, report, or incident into 1..N self-contained units | [`skills/refine/SKILL.md`](skills/refine/SKILL.md) (configuration: [`.workspace/config/refine.json`](.workspace/config/refine.json)) | The session investigates; the operator answers and accepts the refinement |
-| Import units, validate them, obtain independent review, and create approved issues | [`backlog-breakdown`](packages/omp-dagu/skills/backlog-breakdown/SKILL.md) | The backend runs checks and `plan-reviewer`; the operator approves issue creation |
+| Import units, validate them, obtain independent review, and create approved issues | [`backlog-breakdown`](packages/issue-lifecycle/skills/backlog-breakdown/SKILL.md) | The backend runs checks and `plan-reviewer`; the operator approves issue creation |
 | Sprint Planning: select the goal, yes/no goal checks, Definition of Done, rank and enqueue new work | [`skills/sprint-planning/SKILL.md`](skills/sprint-planning/SKILL.md) | The session proposes; the operator confirms |
 | Sprint Review: evaluate goal checks and Definition of Done against evidence | [`skills/sprint-review/SKILL.md`](skills/sprint-review/SKILL.md) | The session evaluates; the operator accepts or changes the goal |
 | Sprint Retrospective: inspect the process and route authorized reports through refine | [`skills/sprint-retrospective/SKILL.md`](skills/sprint-retrospective/SKILL.md) | The session proposes; the operator authorizes action |
@@ -48,9 +48,9 @@ Sprint Planning alone ranks and enqueues new work; Dagu executes it. Discovery a
 
 ## Dagu feature
 
-- Skill: [`packages/omp-dagu/skills/dagu-feature/SKILL.md`](packages/omp-dagu/skills/dagu-feature/SKILL.md): ciclo de issue con un DAG de Dagu propiedad del repo, con un solo run por issue.
-- Template: [`packages/omp-dagu/skills/dagu-feature/feature.yaml`](packages/omp-dagu/skills/dagu-feature/feature.yaml)
-- Bootstrap: [`packages/omp-dagu/skills/dagu-feature/dagu-feature-bootstrap.yaml`](packages/omp-dagu/skills/dagu-feature/dagu-feature-bootstrap.yaml)
+- Skill: [`packages/issue-lifecycle/skills/issue-execution/SKILL.md`](packages/issue-lifecycle/skills/issue-execution/SKILL.md): ciclo de issue con un DAG de Dagu propiedad del repo, con un solo run por issue.
+- Template: [`packages/issue-lifecycle/skills/issue-execution/feature.yaml`](packages/issue-lifecycle/skills/issue-execution/feature.yaml)
+- Bootstrap: [`packages/issue-lifecycle/skills/issue-execution/dagu-feature-bootstrap.yaml`](packages/issue-lifecycle/skills/issue-execution/dagu-feature-bootstrap.yaml)
 
 ## Flujo de issues
 
@@ -84,22 +84,26 @@ From the v1 primary clone:
 
 ```sh
 export DAGU_HOME=/Users/pones/.dagu
-CONTROLLER_CLI=/Users/pones/.omp/plugins/node_modules/@a4s/omp-dagu/bin/dagu-feature-bundle.ts
+CONTROLLER_CLI="$HOME/.omp/plugins/node_modules/@a4s/issue-lifecycle/bin/dagu-feature-bundle.ts"
 n=<issue-selected-for-v1>
 node "$CONTROLLER_CLI" enqueue \
   --run-id "a4s-v1-issue-$n" .workspace/dagu/dags/feature.yaml -- \
   ISSUE="$n" OMP_SESSION_ID="<value-returned-by-dagu_session_id>"
 ```
 
-El checkpoint `implement`, la reconciliación de `await_merge` y la recuperación de fallos siguen [`packages/omp-dagu/skills/dagu-feature/SKILL.md`](packages/omp-dagu/skills/dagu-feature/SKILL.md).
+El checkpoint `implement`, la reconciliación de `await_merge` y la recuperación de fallos siguen [`packages/issue-lifecycle/skills/issue-execution/SKILL.md`](packages/issue-lifecycle/skills/issue-execution/SKILL.md).
 
-Antes de actualizar la rama del PR, el candidato local pasa `GATE` y recibe
-dos PASS independientes de QA y reviewer, distintos del implementador y de otra
-familia efectiva (verificada en JSONL con `ctx.models.family`). Los veredictos
-están ligados a SHA/run/iteración/intento; un FAIL vuelve a `implement` con
-hallazgos y cada corrección o rebase renueva ambas evidencias. `auto_merge`
-permanece ligado al SHA admitido. El control es **advisory mientras la TUI tenga
-acceso al store de Dagu**; el protocolo ejecutable está en el skill.
+Each candidate passes `GATE` and the lane's optional adopted operator validation
+before push, PR and guarded auto-merge. CI and merge reconciliation remain bound
+to the current candidate SHA. The executable lifecycle is documented in the skill;
+operator validation remains an operator decision.
+
+The renamed candidate package remains separate from the installed controller.
+The committed v1 renders retain their original bootstrap stamps and have their
+package/skill paths migrated with #427; this is not a new bootstrap adoption.
+Fresh bootstrap renders, an identity-matched reconciler and CLI, and a new OMP
+process are required for renamed-bundle admission. Installed links and scheduled
+reconciliation change only through separately approved local adoption.
 
 ## Verificación
 
@@ -129,11 +133,11 @@ private-Pion policy: CI installs with the documented Pion-stripping alternative
 and `@a4s/pi-tool-row-presentation` runs its tests. Its typecheck requires the
 private pinned `@pablontiv/pion` release available to the full local gate.
 The `validate` aggregate requires successful selected checks and permits live
-tests to skip only when `@a4s/omp-dagu` is unaffected. Executable selector and
+tests to skip only when `@a4s/issue-lifecycle` is unaffected. Executable selector and
 aggregate fixtures, including proposed integration package/app names, run with:
 
 ```sh
-A4S_LIVE_DAGU=0 npx tsx --test packages/omp-dagu/test/bundle-template.test.ts
+A4S_LIVE_DAGU=0 npx tsx --test packages/issue-lifecycle/test/bundle-template.test.ts
 ```
 
 La historia completa anterior a esta reducción queda en la rama `legacy`.

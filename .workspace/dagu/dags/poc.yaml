@@ -1,4 +1,5 @@
 # dagu-feature-bundle: @a4s/omp-dagu@0.3.118 source=pablontiv/a4s@003bd8a994b617ab2dba4b0caa89d4789085268f bootstrap=bootstrap-a4s-v0-3-118 dagu=2.20.1
+# Package/skill paths migrated with #427; line 1 records the original bootstrap source.
 labels:
   - workspace=a4s-v1
   - dagu-feature-bundle=0.3.118
@@ -195,7 +196,7 @@ steps:
       expected_sha=$(git -C "$PRIMARY" rev-parse "origin/$BASE_BRANCH")
       observed_version=not-applicable
       expected_version=not-applicable
-      manifest=packages/omp-dagu/package.json
+      manifest=packages/issue-lifecycle/package.json
       if [[ -e "$PRIMARY/$manifest" ]] || git -C "$PRIMARY" cat-file -e "origin/$BASE_BRANCH:$manifest" 2>/dev/null; then
         observed_version=$(jq -er '.version | select(type == "string" and length > 0)' "$PRIMARY/$manifest" 2>/dev/null) || observed_version=unavailable
         expected_version=$(git -C "$PRIMARY" show "origin/$BASE_BRANCH:$manifest" | jq -er '.version | select(type == "string" and length > 0)') || expected_version=unavailable
