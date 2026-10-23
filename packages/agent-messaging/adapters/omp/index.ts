@@ -20,6 +20,7 @@ const OMP_HOST: AgentMessagingAdapterHost = {
   bindSettle(pi, release) {
     pi.on('agent_end', (event, ctx) => {
       if ('willContinue' in event && event.willContinue === true) return
+      if ('isTerminal' in event && event.isTerminal === false) return
       return release(ctx)
     })
   },

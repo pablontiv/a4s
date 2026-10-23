@@ -3,7 +3,6 @@ import { randomUUID } from 'node:crypto'
 
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent'
 import { connect, type MqttClient } from 'mqtt'
-import { Type } from 'typebox'
 
 import {
   classifyDiagnosticError,
@@ -195,20 +194,23 @@ function agentMessagingAdapter(
     description:
       'Send a task command or published note to another agent through AgentMessaging v2. '
       + 'Use only when the user asks to message another agent or project. The body must be self-contained.',
-    parameters: Type.Object({
-      to: Type.String({ description: 'Canonical address: <project>/<instance>, <project>/all, or all.' }),
-      body: Type.String({ description: 'Self-contained message body.' }),
-      kind: Type.Optional(Type.Union([
-        Type.Literal('task.request'),
-        Type.Literal('task.redirect'),
-        Type.Literal('task.cancel'),
-        Type.Literal('task.offer'),
-        Type.Literal('note.published'),
-      ], { description: 'Message kind; defaults to task.request.' })),
-      reply_to: Type.Optional(Type.String({ description: 'Message id being replied to or cancelled.' })),
-      correlation_id: Type.Optional(Type.String({ description: 'Root command id for this message chain.' })),
-      causation_id: Type.Optional(Type.String({ description: 'Message id that caused this message.' })),
-    }),
+    // Native OMP accepts plain JSON Schema; its TypeBox import shim returns callable schemas.
+    parameters: {
+      type: 'object',
+      properties: {
+        to: { type: 'string', description: 'Canonical address: <project>/<instance>, <project>/all, or all.' },
+        body: { type: 'string', description: 'Self-contained message body.' },
+        kind: {
+          type: 'string',
+          enum: [...AGENT_MESSAGING_SEND_KINDS],
+          description: 'Message kind; defaults to task.request.',
+        },
+        reply_to: { type: 'string', description: 'Message id being replied to or cancelled.' },
+        correlation_id: { type: 'string', description: 'Root command id for this message chain.' },
+        causation_id: { type: 'string', description: 'Message id that caused this message.' },
+      },
+      required: ['to', 'body'],
+    } as const,
     annotations: { openWorldHint: true },
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const result = await send(params, ctx)
@@ -450,7 +452,9 @@ function agentMessagingAdapter(
       deliveryResultCapture.reset()
       awaitingSettlement = false
     }
-    drainDeliveries(ctx)
+    // OMP notifies extensions before the owning prompt unwinds, so isIdle() can
+    // still be false. A terminal settle admits the next request via followUp.
+    drainDeliveries(ctx, true)
   }
 
   pi.on('session_shutdown', async (_event, ctx) => {
@@ -1313,7 +1317,7 @@ function agentMessagingAdapter(
     return acceptInbound(identity, message, { global: settings.global })
   }
 
-  function drainDeliveries(ctx: ExtensionContext): void {
+  function drainDeliveries(ctx: ExtensionContext, terminalSettle = false): void {
     if (!useCurrentContext(ctx) || awaitingSettlement) return
     while (queuedDeliveries.length > 0) {
       const queued = queuedDeliveries[0] as QueuedDelivery
@@ -1342,7 +1346,7 @@ function agentMessagingAdapter(
         continue
       }
       const wasIdle = ctx.isIdle()
-      if (queued.message.kind === 'task.request' && queued.message.deadline !== undefined && !wasIdle) return
+      if (queued.message.kind === 'task.request' && queued.message.deadline !== undefined && !wasIdle && !terminalSettle) return
       queuedDeliveries.shift()
       let mode: DeliveryMode = 'followUp'
       if (wasIdle) mode = 'idle'

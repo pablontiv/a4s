@@ -911,6 +911,10 @@ test('OMP session adapter uses session cwd origin and native mixed-case identity
   await subscribe(subscriber, 'synagent/v2/Repo.Name/all')
   const toolSchema = harness.toolSchemas.get('agent_messaging_send')
   assert.ok(toolSchema)
+  // Keep registration a plain wire schema, independent of OMP's TypeBox runtime shim.
+  assert.deepEqual(Object.keys(toolSchema).sort(), ['properties', 'required', 'type'])
+  assert.deepEqual(toolSchema, JSON.parse(JSON.stringify(toolSchema)))
+  assert.equal(Check(toolSchema, {}), false)
   assert.equal(Check(toolSchema, {
     to: 'Repo.Name/Peer.Agent', body: 'valid', kind: 'task.request',
   }), true)

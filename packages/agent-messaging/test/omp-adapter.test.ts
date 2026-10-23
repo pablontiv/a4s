@@ -74,7 +74,7 @@ test('omp adapter captures completion and releases only on terminal agent_end', 
   assert.equal(harness.received.length, 1)
   assert.equal(events.some(event => event.kind === 'task.completed'), false)
 
-  await harness.agentEnd({ type: 'agent_end', messages: [], willContinue: undefined })
+  await harness.agentEnd({ type: 'agent_end', messages: [], isTerminal: true, yielded: true })
   await waitFor(() => harness.received.length === 2)
   assert.match(harness.received[1]?.text ?? '', /id omp-second/)
   await waitFor(() => events.some(event =>
@@ -124,11 +124,22 @@ test('omp adapter holds deadline requests outside followUp and wakes on terminal
   harness.idle = true
   await harness.agentEnd({ type: 'agent_end', messages: [], willContinue: true })
   assert.equal(harness.received.length, 0)
-  await harness.agentEnd({ type: 'agent_end', messages: [], willContinue: undefined })
+  await harness.agentEnd({ type: 'agent_end', messages: [], isTerminal: false, yielded: true })
+  assert.equal(harness.received.length, 0)
+  // Native OMP's terminal extension notification precedes prompt unwind:
+  // isIdle remains false until after the handler returns.
+  harness.idle = false
+  await harness.agentEnd({ type: 'agent_end', messages: [], isTerminal: true, yielded: true })
   await waitFor(() => harness.received.length === 1)
   assert.match(harness.received[0]?.text ?? '', /id held-while-busy/)
+  assert.deepEqual(harness.received[0]?.options, { deliverAs: 'followUp' })
   await harness.confirmDelivery(0)
-  await harness.agentEnd({ type: 'agent_end', messages: [], willContinue: undefined })
+  await harness.messageEnd('assistant', 'QUEUED_FINAL')
+  await harness.agentEnd({ type: 'agent_end', messages: [], isTerminal: true, yielded: true })
+  await waitFor(() => events.some(event =>
+    event.kind === 'task.completed' && event.causation_id === 'held-while-busy'))
+  assert.equal(events.find(event =>
+    event.kind === 'task.completed' && event.causation_id === 'held-while-busy')?.body, 'QUEUED_FINAL')
 
   harness.idle = false
   await publish(publisher, topic, serialize(message({

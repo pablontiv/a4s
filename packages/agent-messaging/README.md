@@ -13,7 +13,7 @@ omp -e /absolute/path/to/a4s/packages/agent-messaging
 
 The extension derives its project from the session cwd's `remote.origin.url`, and uses the native persisted OMP session ID without rewriting it. A missing or invalid origin leaves messaging inactive and reports the remediation. Two sessions therefore have distinct canonical addresses even when they share a checkout.
 
-The model-facing tool is `agent_messaging_send`. Supply an explicit `to` address and `body`; `kind` defaults to `task.request`. Supported model-sendable kinds are exported as `AGENT_MESSAGING_SEND_KINDS`. Delivery/completion events and offer/claim coordination are adapter-owned operations, not extra model turns.
+The model-facing tool is `agent_messaging_send`, registered with a plain JSON Schema object for native OMP validation. Supply an explicit `to` address and `body`; `kind` defaults to `task.request`. Supported model-sendable kinds are exported as `AGENT_MESSAGING_SEND_KINDS`. Delivery/completion events and offer/claim coordination are adapter-owned operations, not extra model turns.
 
 Commands:
 
@@ -60,7 +60,7 @@ The existing broker agreement is unchanged: canonical v2 `id/from/to/kind/body/t
 
 Session recovery preserves the persisted entry identities `synagent-delivered`, `synagent-pending`, `synagent-request`, `synagent-offer`, `synagent-dlq`, `synagent-dlq-retry`, `synagent-state` and the `[synagent-delivery ...]` marker. Durable MQTT client IDs are preserved as transport state. These strings are technical persistence/wire contracts and allow pending delivery resume and duplicate suppression across the cutover.
 
-Busy requests with deadlines remain in the adapter queue until terminal `agent_end`; intermediate events with `willContinue` preserve the ordering barrier. Delivery confirmation, completion capture, DLQ and arbitration all use the shared session engine. A repeated persisted message ID opens one recipient turn.
+Busy requests with deadlines remain in the adapter queue until terminal `agent_end`; intermediate events with `willContinue: true` or `isTerminal: false` preserve the ordering barrier. A terminal notification releases the next request even when OMP's owning prompt has not yet unwound and `ctx.isIdle()` is still false; delivery then uses native `followUp`. Delivery confirmation, completion capture, DLQ and arbitration all use the shared session engine. A repeated persisted message ID opens one recipient turn.
 
 Diagnostics identify the service as `@a4s/agent-messaging`, with `a4s.agent-messaging.*` scope/event names. Private bounded JSONL files are under `$A4S_STATE_ROOT/log/agent-messaging/omp`, or `$XDG_STATE_HOME/a4s/log/agent-messaging/omp` (default `~/.local/state/a4s/...`). Diagnostic records exclude message bodies, broker URLs and raw session identifiers.
 
