@@ -1,4 +1,4 @@
-# dagu-feature-bundle: @a4s/issue-lifecycle@0.4.3 source=pablontiv/a4s@d939631cb5f2ebcd1f91ae0bbf2e5f6791b2f0ba bootstrap=a4s-v1-bootstrap-0-4-3 dagu=2.20.1
+# dagu-feature-bundle: @a4s/issue-lifecycle@0.4.3 source=pablontiv/a4s@cacf718df11d76f19fc6a6b2deaa27601ffaa770 bootstrap=bootstrap-a4s-v0-4-3 dagu=2.20.1
 labels:
   - workspace=a4s
   - dagu-feature-bundle=0.4.3
@@ -25,7 +25,7 @@ params:
     default: ""
 env:
   - RUN: ${context.run.id}
-  - DAGU_FEATURE_BUNDLE: "dagu-feature-bundle=0.4.3 source=pablontiv/a4s@d939631cb5f2ebcd1f91ae0bbf2e5f6791b2f0ba bootstrap=a4s-v1-bootstrap-0-4-3"
+  - DAGU_FEATURE_BUNDLE: "dagu-feature-bundle=0.4.3 source=pablontiv/a4s@cacf718df11d76f19fc6a6b2deaa27601ffaa770 bootstrap=bootstrap-a4s-v0-4-3"
 steps:
   - id: snapshot
     run: |
