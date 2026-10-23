@@ -1193,6 +1193,29 @@ and a clean worktree. `checkpoint_push` compares dependencies locally and transf
 the remote recovery ref; `push` publishes the feature branch after the gate and both effective PASS.
 The same sequence runs for the initial candidate, every correction and every rebase.
 
+### Dispose an inert historical quality wait
+
+Use this procedure from the run's owning OMP session when a historical run is
+Waiting at `quality_review` and cannot produce effective verdict evidence. The
+guard reads that run's stored `snapshot/feature.yaml`: its checkpoint must have
+no push-back or cancellation route, and `quality_admit` must retain the verified
+strict-shell, fail-closed QA/REVIEW identity binding. Its `quality.json`, if
+present, must name neither disposal identity. The 0.3.77 checkpoint shape is
+supported; current snapshots execute native quality role jobs.
+
+Submit this single literal bash command, replacing only the run ID:
+
+```sh
+dagu human-task complete feature --run-id <run> --step quality_review --input QA=dispose-inert-qa --input REVIEW=dispose-inert-review
+```
+
+Expect native **Failed** at `quality_admit`, with the exit handler reporting
+`Unpublished work kept`. Observe that branch, worktree and candidate are retained;
+this completion records disposal identities, not QA/reviewer approval. Then
+re-enqueue the issue through normal admission under a **new run ID**, adopting
+the retained candidate and completing fresh implementation, gate and quality
+evidence under that new run.
+
 ### Effective QA and review
 
 `quality_prepare` binds the canonical repo/worktree, run, candidate SHA,
