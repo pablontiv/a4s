@@ -44,6 +44,7 @@ Sprint Planning alone ranks and enqueues new work; Dagu executes it. Discovery a
 
 - Auditoría de cuota: [`skills/gpt-quota-audit/SKILL.md`](skills/gpt-quota-audit/SKILL.md).
 - Análisis de coste y resultados: [`skills/cost-analyzer/SKILL.md`](skills/cost-analyzer/SKILL.md).
+- Rendimiento de agentes, tiempo activo y tokens por PR: [`skills/agent-throughput/SKILL.md`](skills/agent-throughput/SKILL.md).
 - Model routing review: [`skills/omp-model-routing-audit/SKILL.md`](skills/omp-model-routing-audit/SKILL.md). Manual catalog/quota/routing snapshots and comparisons, evidence-backed proposals, operator-approved configuration and actual new-agent verification; default collection performs no inference or assignment.
 
 ## Dagu feature
@@ -68,6 +69,12 @@ the `validate` check from [CI](.github/workflows/ci.yml). Start the coordinator
 inside its primary clone, clean and on its base branch. Dagu creates each issue
 worktree at `.workspace/worktrees/issue-<n>`. Select distinct issues for the two
 lanes because they share the GitHub origin and issue-numbered remote refs.
+
+The repository adopts the `feature`, `poc`, `discovery` and `planning` renders.
+Their stamped headers and the adoption commit's `Dagu-Feature-Bundle`,
+`Dagu-Feature-Source` and `Dagu-Feature-Bootstrap` trailers record the current
+bundle, source and bootstrap identity. Bootstrap installs and validates the
+user-level reconciler.
 
 The approved installed controller and scheduled reconciler remain shared.
 The lane configuration changes existing render placeholders; admission verifies
@@ -101,6 +108,33 @@ acceso al store de Dagu**; el protocolo ejecutable está en el skill.
 npm ci
 npm test
 npm run typecheck
+```
+
+CI runs on pushes and pull requests targeting `main` and `integration/v1`, with
+one SHA-bound `validate` aggregate over changes, workspace checks and the six
+pinned-Dagu live partitions. The desired branch-protection policy is strict
+up-to-date checks with `validate` required on both branches; applying that policy
+and preserving existing protection settings belongs to deployment (#358).
+
+`scripts/ci-workspaces.mjs` discovers names and scripts from the checked-out
+root workspace patterns and manifests, including nested packages and declared
+apps. Pull requests select the longest owning workspace for both current and
+previous rename paths, then its transitive declared consumers. Root files,
+lockfiles, CI helpers, shared hot-reload changes and unmapped/deleted workspace
+roots select all current workspaces. Pushes select all workspaces. This retains
+`@a4s/omp-cross-family-review` typechecking and follows future moved/renamed
+manifests without inventing workspace names.
+
+Selected workspaces run their declared tests and typechecks under main's existing
+private-Pion policy: CI installs with the documented Pion-stripping alternative
+and `@a4s/pi-tool-row-presentation` runs its tests. Its typecheck requires the
+private pinned `@pablontiv/pion` release available to the full local gate.
+The `validate` aggregate requires successful selected checks and permits live
+tests to skip only when `@a4s/omp-dagu` is unaffected. Executable selector and
+aggregate fixtures, including proposed integration package/app names, run with:
+
+```sh
+A4S_LIVE_DAGU=0 npx tsx --test packages/omp-dagu/test/bundle-template.test.ts
 ```
 
 La historia completa anterior a esta reducción queda en la rama `legacy`.

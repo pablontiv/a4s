@@ -1,6 +1,6 @@
 # OMP Dagu
 
-OMP package for the Dagu issue lifecycle: progress widget, triage guard, `triage-reviewer` and `plan-reviewer` agents, and the `dagu-feature`, `backlog-breakdown`, and `discovery` skills and templates. Requires Node.js >=22.19.0 and official Dagu `2.20.1` with local authentication `none`.
+OMP package for the Dagu issue lifecycle: progress widget, admission and quality guards, `triage-reviewer` and `plan-reviewer` agents, and the `dagu-feature`, `backlog-breakdown`, and `discovery` skills and templates. Requires Node.js >=22.19.0 and official Dagu `2.20.1` with local authentication `none`.
 
 ## Runtime distribution
 
@@ -81,14 +81,17 @@ mismos parámetros y `PATH` conserva bytes y mtimes. El plist usa el binario
 resuelto en `PATH`, `start-all`, `KeepAlive`, `ProcessType=Interactive` y el
 `DAGU_HOME` elegido. El instalador también crea el directorio de logs.
 
-La base y el plist renderizado son propios completos. En `config.yaml` solo
-se gestionan `auth.mode=none`, `queues.enabled=true`, `host=127.0.0.1`,
-`port=8080`, `coordinator.enabled=true` y `queues.config` para `a4s` con
-`max_concurrency=2`. Las colas se fusionan por nombre, conservando sus demás
-claves y las colas ajenas: por ejemplo, `antojea-e2e: 4` y
-`antojea-e2e-device: 1` mantienen sus límites. Las demás claves y comentarios
-se conservan. La validación aislada comprueba los valores propios y mantiene
-intactas las rutas ajenas.
+The base and rendered plist are fully owned. In `config.yaml`, the installer
+manages `auth.mode=none`, `queues.enabled=true`, `host=127.0.0.1`,
+`port=8080`, `coordinator.enabled=true`, and the `a4s` entry in `queues.config`
+with `max_concurrency=2`. Queues are merged by name: template-owned fields replace
+installed values for the same named queue, while additional keys are retained.
+Missing template queues are added. For example, applying the template can replace
+`a4s.max_concurrency=8` with `2`, while foreign queues `antojea-e2e: 4` and
+`antojea-e2e-device: 1` retain their limits. The original report in #449 established
+this consequence through source inspection; it did not execute the installer or
+observe a production overwrite. Other keys and comments are preserved. Isolated
+validation checks the owned values and leaves foreign paths untouched.
 
 Para un ensayo aislado, usar `DAGU_HOME=$(mktemp -d)` y omitir `--launch-agent`:
 el plist se escribe por defecto en `$DAGU_HOME/LaunchAgent.plist` y los logs
@@ -221,19 +224,23 @@ la mera publicación y las consultas ambiguas conservan recursos y diagnóstico.
 El borrado de refs exige el mismo propietario y SHA; el remoto usa un lease.
 El cierre mergeado verifica además PRIMARY limpio exactamente en la base remota.
 
-La evidencia vive en `<git-dir>/dagu-feature/runs/<RUN>/`: `resource.json`,
-`tested-sha`, `cleanup-head`, `cleanup-proof.json`, `cleanup-phase` y
-`cleanup-diagnostic`. Repetir el script de cleanup con los params originales
-reconoce recursos ya retirados y comprueba otra vez integración y propiedad
-antes de cada retirada pendiente. El reconciler expone
-`CLEANUP_RESIDUAL run=… worktree=… branch=… last_phase=… evidence=…` para
-interrupciones, incluso entre worktree y rama. El operador resuelve el
-diagnóstico conservando cambios y evidencia; la recuperación y transferencia
-explícita de propiedad se describen en `skills/dagu-feature/SKILL.md`.
+Cleanup evidence lives in `<git-dir>/dagu-feature/runs/<RUN>/`: `resource.json`,
+`tested-sha`, `cleanup-head`, `cleanup-proof.json`, `cleanup-phase` and
+`cleanup-diagnostic`. Repeating the cleanup script with the original parameters
+recognizes resources already removed and rechecks integration and ownership
+before each pending removal. The operator resolves cleanup diagnostics while
+preserving changes and evidence; recovery and explicit ownership transfer are
+described in `skills/dagu-feature/SKILL.md`.
+
+Scheduled reconciliation discovers waiting feature runs and fans them out through
+`tick` to `reconcile-run`. It observes PR state and required CI checks for the
+current head, then completes or pushes back the paired `await_ci` and
+`await_merge` checkpoints using the observed iteration. Pending checks preserve
+the wait; ambiguous evidence remains visible for the owner to resolve.
 
 La adopción fija `GATE`, `REBASE_RESOLVER`, `REQUIRED_CHECK` y el `PRIMARY` canónico en los renders de feature/PoC. Feature deriva `BRANCH=dagu/issue-$ISSUE`. La primera admisión rechaza esos cinco nombres como parámetros antes de modificar el repositorio. Encola feature con `ISSUE`, `PR_NUMBER` opcional y `OMP_SESSION_ID`; `BASE_BRANCH` conserva su default. Bootstrap declara los cambios de política. La promoción PoC usa el mismo contrato y conserva la sesión. Los consumidores consultan el spec encolado para resolver PRIMARY, incluido el historial del reconciliador.
 
-Los avisos se entregan ocultos con `customType: "dagu-state"`, `display: false` y `deliverAs: "aside"`. Solo el agente main con el `OMP_SESSION_ID` exacto recibe avisos; ISSUE es opcional. Se aceptan params CLI y JSON. Una FIFO por sesión reclama sincrónicamente un único turno autónomo cuando está idle y continúa tras `agent_end`; durante un turno activo entrega los avisos como asides en orden.
+Los avisos se entregan ocultos con `customType: "dagu-state"`, `display: false` y `deliverAs: "aside"`. Solo el agente main con el `OMP_SESSION_ID` exacto recibe avisos; ISSUE es opcional. Se aceptan params CLI y JSON. Una FIFO por sesión reserva sincrónicamente un único despertar autónomo cuando está idle. La admisión del host es asíncrona: `agent_start` vuelve a drenar la FIFO y entrega el resto del lote como asides dentro de ese mismo turno autónomo. Durante el turno activo, los avisos posteriores siguen llegando en orden en los límites de paso soportados por el host; `agent_end` libera la reserva para el siguiente despertar idle.
 
 El primer barrido establece una línea base silenciosa. Después, el lector consulta `/api/v1/event-logs` DEFAULT de Dagu 2.20.1, con `paginationMode=cursor`, agota las páginas y emite en orden persistido. Cada ronda vuelve a la cabecera para observar ingestión eventual, incluido el succeeded que aún no sea visible al finalizar el run. Un HTTP 400 con cursor reinicia el recorrido conservando deduplicación. Los IDs de eventos y las claves `(dagName, dagRunId, step_id, approval_iteration)` evitan duplicados; una iteración omitida es cero. El éxito se deduplica por run/status. SSE actualiza el widget; el ledger recupera las aperturas rápidas omitidas por snapshots. El estado de entrega dura durante esa observación de sesión; reiniciar o cambiar sesión establece una nueva línea base.
 
@@ -241,7 +248,7 @@ El widget usa el mismo plegado que los HUD `TODO` y `Subagents` de OMP: título 
 
 ```text
 Workflows
- └─ feat #227 widget-plegable ▱▱▱▱▱▱ 0/1 implement waiting · eval Probe (2s)
+ └─ feat #227 widget-plegable ▱▱▱▱▱▱ 0/1 implement running · eval Probe (2s)
 ```
 
 Cada fila usa `<tipo> <identidad> <barra> <done>/<total> <paso> <estado>[ · <actividad>]`; la compatibilidad se informa solo en `[DAGU STATE]`.
@@ -249,7 +256,7 @@ Cada fila usa `<tipo> <identidad> <barra> <done>/<total> <paso> <estado>[ · <ac
 Si REST o las cabeceras SSE exceden su timeout, el widget conserva los runs conocidos y muestra `dagu · lento · reintentando en Ns`. Una conexión rechazada/reseteada o un HTTP 5xx muestra `dagu · sin conexión · reintentando en Ns`. Ambos estados usan el backoff existente (1–30 s); una ronda exitosa restaura la vista normal.
 
 - Un paso de comando `running` consulta cada dos segundos `GET /api/v1/dag-runs/{name}/{dagRunId}/steps/{step}/log?tail=3` y muestra su última línea no vacía.
-- Un `human.task` `triage`, `run_poc` o `implement` en `waiting` localiza la sesión coordinadora con `PRIMARY` y `OMP_SESSION_ID`, selecciona el transcript determinista `TriageReview<ISSUE>`, `Poc<ISSUE>` o `Implement<ISSUE>` y muestra `<herramienta> <intención> (<edad>s)`, sin nombre de tarea. La intención se toma de `i`, luego `title` y luego el argumento principal. Los reintentos `<Nombre>v<N>` son válidos y gana el archivo más reciente.
+- El `human.task` `run_poc` en `waiting` localiza la sesión coordinadora con `PRIMARY` y `OMP_SESSION_ID`, selecciona el transcript `Poc<ISSUE>` (incluidos reintentos `v<N>`) y muestra `<herramienta> <intención> (<edad>s)`. La intención se toma de `i`, luego `title` y luego el argumento principal; gana el archivo más reciente.
 - La lectura del transcript está acotada a sus últimos 256 KiB y descarta líneas parciales. Logs, herramientas e intenciones se sanean y truncan antes de renderizar. Sin log o transcript disponible, la línea conserva el estado sin actividad.
 
 SSE sigue aplicando inmediatamente las transiciones del run; el refresco periódico cubre actividad que SSE no emite por línea. Al cambiar de paso, terminar el run o recibir `session_shutdown`, se abortan la lectura y su temporizador. Las caídas de REST o SSE muestran una reconexión con backoff sin interrumpir la sesión.
@@ -257,33 +264,97 @@ SSE sigue aplicando inmediatamente las transiciones del run; el refresco periód
 ```text
 Workflows
  ├─ feat #182 actividad-real-del-step ▰▰▰▰▱▱ 4/6 gate running · > npm test
- ├─ feat #183 orden-del-widget ▰▱▱▱▱▱ 1/5 implement waiting · Implement183 · edit src/status/progress.ts (12s)
+ ├─ feat #183 orden-del-widget ▰▱▱▱▱▱ 1/5 implement running
  └─ feat #184 plegado-del-widget ▱▱▱▱▱▱ 0/5 triage running
  … 2 more — /workflows
 ```
 
 Las extensiones usan `fetch` y un parser SSE propios, sin dependencias runtime externas; el instalador de estación usa `yaml` para conservar la configuración compartida. La extensión solo observa y despierta; las acciones humanas y la reconciliación pertenecen a Dagu y al operador. Si la sesión de destino no está ejecutándose, no recibe aviso. Si el mismo ID de sesión está abierto a la vez en dos procesos OMP, ambos coinciden y ambos despiertan.
 
-## Guard de triage y agente
+### Status timeout fixture verification
 
-El paquete distribuye `triage-reviewer` con `structured: true`, el JSON Schema de la decisión, `tools: []`, `spawns: []` y modelo `@slow`.
+From `packages/omp-dagu`, run:
 
-1. Intentar completar `triage` con `POC=no`. El guard responde `TRIAGE_REVIEW_REQUIRED` con el marcador de generación y la plantilla fija.
-2. Ejecutar `task agent=triage-reviewer` con el alcance, el marcador completo y la plantilla.
-3. Repetir la completion con el id asignado en `--input REVIEW=<id>` cuando la decisión sea `poc: "no"`. Una decisión `yes` mantiene triage en espera con la pregunta propuesta.
+```sh
+A4S_LIVE_DAGU=0 npx --no-install tsx --test test/status-timeout.test.ts
+```
 
-La aprobación pertenece a un DAG, run y generación; se consume tras una completion exitosa y se conserva si la completion falla. Volver a triage exige otra revisión. El guard exige que la completion de triage esté sola en su tool call. `POC=yes` pasa directamente.
+The six scenarios cover discovery, run details and SSE headers: an 8000 ms
+response succeeds, while a 15001 ms response is aborted by the client's
+15000 ms network deadline. The fixture resolves its workspace with the existing
+repository resolver before mocking time, using the same checkout cwd as the
+status observer. Its run labels therefore match both canonical origins such as
+`a4s` and issue-clone origins such as `issue-337`.
 
-El DAG aplica la misma autorización aunque el guard no esté cargado. Para
-`POC=no`, `REVIEW` es el nombre simple del subagente `TriageReview<ISSUE>` (o
-`TriageReview<ISSUE>v<N>` al reintentar) lanzado como `triage-reviewer` por la
-sesión coordinadora indicada por `OMP_SESSION_ID`. Antes de comentar el issue o
-copiar estado, `triage_decision` localiza un único transcript JSONL, comprueba su
-sesión padre, agente, marcador `DAG=feature RUN=<run>`, inicio posterior al
-`triage.startedAt` actual y `poc=no` en el último yield. REST, parámetros,
-transcript o campos inválidos hacen fallar el step sin efectos externos.
+Expected-request readiness has a separate 10000 ms real-time deadline, captured
+before Node's `setTimeout` mock is enabled. A missing request reports its phase,
+expected path, workspace, cwd and observed requests. The readiness timer is
+cleared on success or failure; session shutdown aborts pending fake fetches and
+closes the simulated SSE stream. Isolated verification of either origin should
+complete all six scenarios within a 30-second external process bound.
 
-Con `@a4s/omp-cross-family-review` cargado, `triage-reviewer` conserva la selección cross-family; `reviewer` sigue disponible para code review.
+## Trabajos semánticos Dagu → OMP
+
+Los comandos `dagu-role-jobs stage triage|implement|quality_review` arrancan obligaciones
+autorizadas sin un turno del coordinador. Reutilizan el registro nativo OMP,
+sus prompts, roles, arrays completos de modelos y fallback de sesión. Conflictos
+usa `task` con alcance sobre archivos retenidos; `validation` es decisión humana.
+`quality_review` une explícitamente dos role-jobs nativos QA/reviewer.
+`quality_admit` consume sus recibos autoritativos con `dagu-role-jobs admit-quality`,
+escribe `quality.json` verificado y sella la admisión antes de la transición.
+El servicio requiere Bun y el runtime OMP instalado
+(`OMP_ROLE_RUNTIME` permite seleccionar su raíz).
+
+El contrato estable **schemaVersion 1** conserva
+`<git-common>/dagu-feature/runs/<run>/role-jobs/<id>/{job,result}.json` y los
+artefactos nativos. El id es SHA-256 del JSON canónico con claves ordenadas:
+
+```json
+{"repo":"<PRIMARY canónico>","worktree":"<worktree canónico>","lane":"feature","dag":"feature","run":"<run>","stage":"quality_review","role":"qa","sha":"<40 hex>","iteration":0,"attempt":"<intento actual>"}
+```
+
+`result.json` contiene `schemaVersion`, `id`, `binding`, identidad de ejecutor
+`{host,pid,processStartedAt}`, estado `completed|failed|interrupted`,
+`readyAt`, `startedAt`, `finishedAt`, `readyToStartMs`, `output` o `error`, y
+`native` cuando existe: sesión/transcript, sello de prefijo `bytes`/`digest`,
+evento emisor, proveedor/modelo efectivos, intentos, fallbacks y routing completo.
+`routing.json`, `assignment.json`, `native-result.json` y `<id>.jsonl` retienen
+las evidencias, incluida la versión OMP y el hash de su ejecutor.
+`IMPLEMENTER` y el `REVIEW` de triage transportan ids de trabajo. La admisión
+actual enlaza el recibo nativo del implementer con el SHA/iteración del candidato
+mediante `candidate.json.implementation` (HEAD de entrada y digest del resultado).
+Conserva el modelo/familia efectivos; QA/reviewer tienen sesiones frescas distintas,
+enlazadas al trabajo autorizado y su evento emisor. #517 consume esta evidencia
+semántica. Un `verdict=FAIL` conserva ejecución completada,
+jamás aceptación de calidad. Las observaciones #277 mantienen el recibo inicial.
+[SKILL](skills/dagu-feature/SKILL.md#role-job-receipt-contract-schemaversion-1).
+
+El verificador de triage informa el PRIMARY canónico, el recibo exacto del
+role-job y su transcript nativo. Los rechazos conservan la causa y
+`VERIFIER=FAIL` antes de escribir estado o publicar el comentario de triage.
+
+La revisión se vincula por el marcador exacto `Authorized Dagu role job <id>.`
+y el recibo sellado (repositorio, run, SHA, iteración e intento), no por el nombre
+del agente ni por el texto del criterio. `triage-reviewer` sigue siendo el agente
+registrado por defecto y conserva su criterio y routing OMP; el executor inyecta
+el esquema canónico de `src/triage/schema.ts`, idéntico al de su definición.
+El verificador valida todos sus campos y conserva diagnósticos
+`TRIAGE_REVIEW_INVALID: field=... expected=... observed=...`.
+El recibo de trabajo sustituye la correlación de tareas del coordinador:
+la revisión actual pertenece al paso nativo y a su intento autorizado.
+
+SQLite en `$DAGU_HOME/role-jobs.sqlite` serializa claims y recupera resultados
+entre procesos. Su capacidad es **sesiones activas de este boundary por
+DAGU_HOME canónico**, configurable con `A4S_ROLE_JOB_CAPACITY` (por defecto 4)
+y fijada en el primer claim; configuraciones posteriores deben coincidir.
+Es independiente de las colas Dagu y de los semáforos locales de OMP/proveedor,
+no un límite global de otras sesiones del host. Roles mutantes excluyen el
+worktree afectado; otras obligaciones avanzan dentro de su capacidad.
+La duplicación reutiliza la ejecución viva o el resultado durable. Reiniciar
+el scheduler conserva el trabajador vivo. Un propietario ausente se diagnostica
+`interrupted`, retiene evidencia y libera su plaza. Tras inspeccionar efectos,
+se reintenta el mismo paso con `dagu retry --run-id <run> --step triage|implement
+--downstream feature`: el nuevo `startedAt` nativo identifica el intento.
 
 ## Protección de recursos del ciclo
 
@@ -397,6 +468,16 @@ The shared backend owns independent plan review, operator approval, and issue cr
 
 [`backlog-breakdown`](skills/backlog-breakdown/SKILL.md) operates `planning.yaml`, the single issue-creation backend for refinement and discovery. Refinement owns corrections to its source units; explicit push-back reimports the corrected source.
 
+Upstream preparation and native `check_plan` share the package's canonical schema and validator:
+
+```sh
+node packages/omp-dagu/bin/dagu-feature-bundle.ts validate-planning-units \
+  --input "/absolute/path/to/units.jsonl" --snapshot "/absolute/path/to/validated-units.jsonl" \
+  --findings "/absolute/path/to/findings.md"
+```
+
+Validation reports all independent mechanical failures as JSONL ordered by `line`, `field`, and `rule`, with `expected` and explicit `observed` values (`{"missing":true}` for missing fields). Invalid input exits nonzero; only valid input produces an exact-byte snapshot. The independent semantic reviewer still owns completeness, duplication and judgment.
+
 ```sh
 node packages/omp-dagu/bin/dagu-feature-bundle.ts enqueue \
   --run-id "<repo>-breakdown-<slug>" .workspace/dagu/dags/planning.yaml -- \
@@ -404,7 +485,7 @@ node packages/omp-dagu/bin/dagu-feature-bundle.ts enqueue \
   PRIMARY="/absolute/path/to/primary" OMP_SESSION_ID="<dagu_session_id>"
 ```
 
-`init` initializes durable run artifacts; `import_units` imports the required absolute `UNITS_FROM`; `check_plan` validates units; `review` requests an independent `plan-reviewer`; and `check_review` validates that review. The operator approves all or selected unit IDs at `approve`. `materialize` creates or reuses issues by `<!-- breakdown-unit: <run>/<id> -->`, recording `issues.jsonl`. Source and findings are provenance preserved in issue bodies. Before explicit push-back from `review` or `approve`, inspect the current run-wide iteration; the rewind returns to `import_units`.
+`init` initializes durable run artifacts; `import_units` imports the required absolute `UNITS_FROM`; `check_plan` validates units; `review` requests an independent `plan-reviewer`; and `check_review` validates that review. The operator approves all or selected unit IDs at `approve`, including every referenced same-snapshot target. `materialize` creates/reuses issues and records `issues.jsonl`. Optional `revision: {issue: 444, fields: ["title","body","labels"]}` applies only the listed fields from the canonical root; an empty list binds identity only. Marker reuse leaves existing fields unchanged. Typed relationships become native blocked-by and sub-issue edges, preserving existing edges and diagnosing a different existing parent. Durable `materialization-<run>-<iteration>.json` and its exact units snapshot retain mappings, partial progress, intended state and grouped complete remote verification; mismatches fail rather than publish a success. Source and findings remain provenance in new issue bodies. Before explicit push-back from `review` or `approve`, inspect the current run-wide iteration; the rewind returns to `import_units`.
 
 Sprint Planning in the coordinating session alone selects, ranks, and enqueues new work. Definition of Done and yes/no sprint-goal checks are planning/review content. A completed feature run proves its merged candidate and verified cleanup; it does not by itself prove the sprint goal. Review evaluates that evidence without adding a lifecycle gate. Reports enter refinement only with operator authorization; an FYI is not authorization.
 
@@ -472,7 +553,7 @@ imprime `confirm`.
 
 `implement` entrega archivos dentro del worktree asignado (modificados, nuevos,
 borrados, renombrados y binarios), más `SUMMARY`, `MESSAGE` convencional e
-`IMPLEMENTER` (id asignado del subagente cuya tarea incluye `FEATURE_IMPLEMENT RUN=<run>`).
+`IMPLEMENTER` (id del trabajo nativo cuya asignación incluye `FEATURE_IMPLEMENT RUN=<run>`).
 Dagu valida PRIMARY/worktree canónicos, rama y propietario run/sesión,
 rechaza escapes externos por symlink conservando la entrega, y hace staging y
 commit con un índice privado. El acceso directo de la TUI a Git y al store de
@@ -491,21 +572,31 @@ esos archivos resueltos y Dagu los captura.
 `refs/dagu/checkpoints/issue-N` con lease explícito, manteniendo el head del PR.
 `gate` ejecuta todas las verificaciones declaradas en `GATE` y registra su comando
 y SHA en `gate.json`. Una corrección o rebase exige renovar esa evidencia.
-Después, `quality_prepare` genera una solicitud SHA/run/iteración/intento y
-`quality_review` espera dos subagentes distintos del implementador: `qa` y
-`reviewer`. Cada tarea recibe su marcador exacto y el contrato estructurado de
-[SKILL.md](skills/dagu-feature/SKILL.md#effective-qa-and-review); el coordinador
-completa con sus ids `QA` y `REVIEW`. QA ejecuta los comandos de aceptación
-indicados; reviewer inspecciona independientemente el mismo SHA local.
 
-El guard contrasta los JSONL efectivos con la sesión padre e invocación `task`,
-el id/rol, run, iteración, intento, SHA leído y contenido del veredicto. Atribuye
-proveedor/modelo a cada mensaje que emite el resultado y compara con el
-implementador efectivo mediante `ctx.models.family`, conservando intentos,
-errores y `resolvedModelIsFallback`. La integración estricta con
-`omp-cross-family-review` selecciona otra familia para ambos roles; pueden
-compartir familia entre sí. Modelo indeterminado, agotamiento o fallback efectivo
-de la familia del implementador bloquean con diagnóstico y conservan el candidato.
+El cuerpo completo de `gate` se serializa por PRIMARY con un lock advisory del
+kernel en `<git-common-dir>/dagu-feature/gate.lock`, antes de comprobar candidato,
+rama y limpieza y hasta publicar `gate.json`/SHA. Python 3 con `fcntl` debe estar
+en el PATH del servicio; bootstrap comprueba esa dependencia. El descriptor se
+hereda al ejecutar Bash y sus descendientes: la exclusión dura hasta que todos
+cierran sus copias, también tras error, cancelación o SIGKILL. El inode permanece
+estable; el JSON run/PID que contiene es diagnóstico, no autoridad de ownership.
+Un waiter sigue Running y conserva candidato y ticket; su log muestra
+`gate: waiting ... holder={"run": "...", "pid": ...}` y después `gate: acquired`.
+El mismo límite cubre completar human tasks, push-back, retries y el retorno
+BEHIND/DIRTY de `await_merge` a `rebase`. La capacidad declarada de la cola se
+conserva (`a4s=8`); pasos ajenos al gate siguen avanzando.
+
+Después, `quality_prepare` genera una solicitud SHA/run/iteración/intento y
+`quality_review` arranca `qa` y `reviewer` independientemente del coordinador.
+Cada obligación recibe el marcador SHA/run/iteración/intento exacto y el contrato
+estructurado de [SKILL.md](skills/dagu-feature/SKILL.md#effective-qa-and-review).
+QA ejecuta la aceptación indicada y reviewer inspecciona el mismo candidato;
+sus resultados retienen los comandos, hallazgos y modelos realmente usados.
+La admisión consume los recibos del boundary y valida familias, fallbacks
+efectivos y evidencia del candidato. Exige bytes/digest del artefacto nativo,
+salida estructurada y bindings actuales por obligación; QA y reviewer pueden
+compartir familia entre sí, pero no con el implementer. Dos PASS avanzan el join;
+cualquier FAIL devuelve sus hallazgos al mismo ticket.
 
 `quality.json` contiene dos veredictos independientes con procedencia y hashes
 de transcript; `quality_admit` los valida y `quality_transition` hace push-back
@@ -525,6 +616,18 @@ git branch dagu/issue-N FETCH_HEAD
 ```
 
 El cierre tras merge retira también el checkpoint durable con lease.
+
+## Optional consumer blocker reporting
+
+Bootstrap offers optional `A4S_BLOCKER_REPORTING=ask|auto`. The
+`__A4S_BLOCKER_REPORTING__` placeholder fixes the choice in the installed
+`feature.yaml` environment; `read_default` recovers it on the next adoption.
+An empty response preserves the previous choice, defaulting to `ask` initially.
+`auto` requires explicit opt-in; `ask` requires consent before publication.
+Runtime parameters preserve this fixed policy. The
+[`Optional consumer blocker reporting`](skills/dagu-feature/SKILL.md#optional-consumer-blocker-reporting)
+procedure uses private files on the same host, the identified native A4S owner,
+scoped authorization, and a URL receipt verified and read by the consumer.
 
 ## Validación opcional del repositorio
 
@@ -566,9 +669,9 @@ npm test --workspace @a4s/omp-dagu
 npm run typecheck --workspace @a4s/omp-dagu
 ```
 
-`npm test` (también desde la raíz) ejecuta las pruebas en proceso, sin invocar
-el binario Dagu ni arrancar sus servicios. Los casos reales usan exclusivamente
-el comando explícito:
+`npm test` (también desde la raíz) ejecuta las pruebas unitarias y fixtures
+aislados, incluidos algunos `dagu start` reales de templates. Las integraciones
+con servicios Dagu se activan con el comando explícito:
 
 ```sh
 npm run test:live --workspace @a4s/omp-dagu
@@ -580,11 +683,25 @@ El gate compartido consulta `dagu version` únicamente con esa variable activa
 y exige el pin `daguFeature.dagu` de `package.json`. El comando predeterminado
 fija la variable a `0`, incluso si el entorno del llamador la tenía activa.
 
-Las pruebas vivas usan el runtime fijado del `PATH`, un `DAGU_HOME` temporal y un
-puerto HTTP propio por fixture. Además, cada instancia genera un único
-`randomUUID()` y deriva los IDs `recovery-<healthy|gate|start_gate|push>-<uuid>`,
-manteniendo el nombre de DAG `feature`. Enqueue, REST, status, completion,
-push-back y handlers comparten exactamente ese ID.
+Las pruebas que ejecutan Dagu usan el runtime fijado del `PATH`, un `DAGU_HOME`
+temporal y, cuando arrancan un servicio, un puerto HTTP propio por fixture.
+Cada run real obtiene su identidad exclusivamente de
+`test/fixtures/run-id.ts`: asignar `const run = testRunId("case-name")` una vez
+y reutilizarlo en start/enqueue, REST, status, retry, completion, push-back,
+paths y assertions. Los runs hijos derivan su ID de ese valor (`poc-${run}`,
+`feature-${run}`). El helper combina un sufijo aleatorio compacto de 64 bits por
+ejecución del módulo con un contador por asignación, separando procesos y casos
+repetidos del mismo proceso y dejando espacio para prefijos en el límite de
+63 caracteres de Dagu.
+
+When `test/live/poc-template.test.ts` fails, its fixture stops the server before
+preserving the original error, last HTTP URL/status/body, stdout/stderr, and only
+the isolated Dagu home's `data/` and `logs/`. It reports a unique private
+subdirectory under `A4S_DAGU_DIAGNOSTICS_DIR` (in CI:
+`${{ runner.temp }}/dagu-poc-diagnostics`; locally, the temporary directory
+`a4s-dagu-poc-diagnostics`), then removes the temporary runtime. Successful runs
+only clean up. Evidence-retention failures are reported without replacing the
+original error.
 
 En Unix, el socket de control de Dagu 2.20.1 pertenece al namespace global del
 host: [`sock.Addr`](https://github.com/dagu-org/dagu/blob/v2.20.1/internal/cmn/sock/addr.go)
@@ -592,6 +709,13 @@ deriva `/tmp/@dagu_feature_<hash>.sock` de `(nombre del DAG, run-id)`, con los
 primeros seis caracteres de `md5(nombre + run-id)`. Los homes y puertos propios
 aíslan el store y HTTP; el sufijo por instancia separa las identidades de los
 sockets entre suites concurrentes.
+
+La regresión se comprueba mediante identidades únicas entre procesos y suites
+reales concurrentes. Dagu acepta IDs literales válidos: distinguir un literal de
+una variable con el mismo valor requeriría inspeccionar el código fuente, no
+un comportamiento observable por el consumidor. Por eso el helper es la única
+ruta de construcción de IDs reales en los fixtures; su contrato se prueba por
+comportamiento en `test/run-id.test.ts`.
 
 `concurrent recovery fixtures keep distinct run identities` ejecuta ambos
 fixtures simultáneamente para los cuatro modos, comprueba checkpoints,
@@ -635,4 +759,4 @@ El gate completo del repositorio es:
 npm ci && npm test && npm run typecheck
 ```
 
-Las pruebas cubren el parser SSE, progreso y actividad viva de comandos y subagentes, identidad y títulos de issues, resolución de repositorios/worktrees, transiciones y avisos del widget, la correlación nativa y el contrato estructurado del guard de triage, y la verificación fail-closed del transcript real ejecutada desde ambos DAG `feature.yaml`.
+Las pruebas cubren SSE, progreso, identidad de repositorios/worktrees, transiciones, trabajos semánticos multiproceso, capacidad compartida, recuperación y verificación fail-closed de resultados/transcripts nativos.

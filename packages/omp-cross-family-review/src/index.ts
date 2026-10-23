@@ -1,8 +1,11 @@
-// Why: no package-specific type import here. Pi and OMP expose extension
-// APIs under different package names; this hook uses OMP's models facade.
+// Host-neutral binding and hook API. Native OMP settings are wired statically
+// by the runtime entrypoint; the Dagu transcript guard can import this in Node.
 import { orderReviewModels } from "./order.ts";
 import type { Model, Models, ReviewModels } from "./order.ts";
+import type { ReviewPolicies } from "./settings.ts";
 export { orderReviewModels } from "./order.ts";
+export type { ReviewPolicies } from "./settings.ts";
+
 
 interface SpawnEvent {
   agent: string;
@@ -13,40 +16,10 @@ interface SpawnEvent {
 interface ExtensionAPI {
   on(
     event: "before_subagent_spawn",
-    handler: (event: SpawnEvent, ctx: { models: Models }) => ReviewModels | undefined,
+    handler: (event: SpawnEvent, ctx: { cwd: string; models: Models }) => ReviewModels | undefined,
   ): void;
 }
 
-interface ReviewPolicy {
-  fallbackRoles: readonly string[];
-  excludeTaskFamily: boolean;
-  strict?: boolean;
-}
-
-const REVIEW_POLICIES: Record<string, ReviewPolicy> = {
-  reviewer: {
-    fallbackRoles: ["@slow", "@default"],
-    excludeTaskFamily: true,
-    strict: true,
-  },
-  qa: {
-    fallbackRoles: ["@slow", "@default"],
-    excludeTaskFamily: true,
-    strict: true,
-  },
-  "triage-reviewer": {
-    fallbackRoles: ["@task", "@slow", "@default"],
-    excludeTaskFamily: false,
-  },
-  "plan-reviewer": {
-    fallbackRoles: ["@task", "@slow", "@default"],
-    excludeTaskFamily: false,
-  },
-  "security-reviewer": {
-    fallbackRoles: ["@slow", "@default"],
-    excludeTaskFamily: true,
-  },
-};
 
 // Bound by the feature gate after reading the implementer's runtime transcript,
 // keyed by the task name. Consumed once at dispatch, rather than inferring
@@ -71,33 +44,38 @@ function boundName(spawnKey: string): string | undefined {
   const local = spawnKey.slice(spawnKey.lastIndexOf(".") + 1);
   return [spawnKey, local, local.replace(/-\d+$/, "")].find(key => qualityImplementers.has(key));
 }
-export default function crossFamilyReview(pi: ExtensionAPI): void {
+export function registerReviewHook(
+  pi: ExtensionAPI,
+  readReviewPolicies: (cwd: string) => ReviewPolicies,
+): void {
   pi.on("before_subagent_spawn", (event, ctx) => {
-    if (!Object.hasOwn(REVIEW_POLICIES, event.agent)) return undefined;
-    const name = event.spawnKey ? boundName(event.spawnKey) : undefined;
-    const implementer = name ? qualityImplementers.get(name) : undefined;
-    if (implementer && name) {
-      qualityImplementers.delete(name);
-      return orderReviewModels(event.patterns, ["@slow", "@default", "@task"], ctx.models,
-        [{ label: "effective implementer", model: implementer }], true);
+    try {
+      const policies = readReviewPolicies(ctx.cwd);
+      const name = event.spawnKey ? boundName(event.spawnKey) : undefined;
+      const implementer = name ? qualityImplementers.get(name) : undefined;
+      const policy = Object.hasOwn(policies, event.agent) ? policies[event.agent] : undefined;
+      if (!policy) return implementer
+        ? { block: true, reason: `CROSS_FAMILY_INDETERMINATE: quality agent ${event.agent} requires a configured policy` }
+        : undefined;
+      if (implementer && name) {
+        qualityImplementers.delete(name);
+        return orderReviewModels(event.patterns, policy.fallbackRoles, ctx.models,
+          [{ label: "effective implementer", model: implementer }]);
+      }
+      const parent = ctx.models.current();
+      if (!parent) return {
+        block: true,
+        reason: "CROSS_FAMILY_INDETERMINATE: parent model unavailable; family cannot be verified",
+      };
+      const task = policy.excludeTaskFamily ? ctx.models.resolve("@task") : undefined;
+      if (policy.excludeTaskFamily && !task) return {
+        block: true,
+        reason: "CROSS_FAMILY_INDETERMINATE: @task model unavailable; family cannot be verified",
+      };
+      return orderReviewModels(event.patterns, policy.fallbackRoles, ctx.models,
+        [{ model: parent }, ...(task ? [{ label: "@task", model: task }] : [])]);
+    } catch (error) {
+      return { block: true, reason: `CROSS_FAMILY_CONFIG: ${error instanceof Error ? error.message : String(error)}` };
     }
-    const parent = ctx.models.current();
-    if (!parent) return REVIEW_POLICIES[event.agent]?.strict
-      ? { block: true, reason: "CROSS_FAMILY_INDETERMINATE: parent model unavailable" }
-      : undefined;
-    const policy = REVIEW_POLICIES[event.agent]!;
-    const task = policy.excludeTaskFamily
-      ? ctx.models.resolve("@task")
-      : undefined;
-    return orderReviewModels(
-      event.patterns,
-      policy.fallbackRoles,
-      ctx.models,
-      [
-        { model: parent },
-        ...(task ? [{ label: "@task", model: task }] : []),
-      ],
-      policy.strict,
-    );
   });
 }

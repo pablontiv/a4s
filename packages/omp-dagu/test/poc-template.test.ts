@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { withResourceGuard } from "./resource-fixtures.ts";
+import "./waiting-cancellation.test.ts";
 
 for (const [name, definition] of [
   ["template", new URL("../skills/dagu-feature/poc.yaml", import.meta.url)],
@@ -216,6 +217,56 @@ test("PoC failure publication and a negative decision preserve the existing issu
   } finally {
     fixture.cleanup();
   }
+});
+
+for (const verdict of ["PASS", "FAIL"] as const) {
+  test(`PoC decide recovery replays ${verdict} publication for the same run and attempt`, () => {
+    const fixture = pocFixture();
+    try {
+      const original = "## PoC\nCan the target run?\n";
+      fixture.body(original);
+      const record = fixture.run("record");
+      assert.equal(record.status, 0, record.stderr);
+      fixture.save("base.sha", "abc\n");
+      fixture.save("attempt", "3\n");
+      fixture.save("scope", "OK\n");
+      fixture.save("result.md", `VERDICT: ${verdict}\n\n## Después del PASS\nImplement the verified path.\n`);
+      let firstComment = "";
+      for (const publication of [1, 2]) {
+        const result = fixture.run("publish");
+        assert.equal(result.status, 0, result.stderr);
+        const comment = readFileSync(join(fixture.state, "comment-3.txt"), "utf8");
+        assert.equal(comment.split("\n")[0],
+          `<!-- poc-verdict:${verdict} scope:OK run:existing-issue attempt:3 base:abc -->`);
+        if (publication === 1) firstComment = comment;
+        else assert.equal(comment, firstComment);
+        const calls: string[][] = readFileSync(fixture.calls, "utf8").trim().split("\n").map(line => JSON.parse(line));
+        assert.equal(calls.filter(args => args[0] === "issue" && args[1] === "comment").length, publication);
+        assert.equal(calls.filter(args => args[0] === "issue" && args[1] === "edit").length, verdict === "PASS" ? publication : 0);
+        const body: string = JSON.parse(readFileSync(fixture.issue, "utf8")).body;
+        const expectedSections = verdict === "PASS" ? publication : 0;
+        assert.ok(body.startsWith(original));
+        assert.equal(body.split("\n## Después del PASS\n").length - 1, expectedSections);
+        assert.equal(body.split("Implement the verified path.").length - 1, expectedSections);
+        if (verdict === "FAIL") assert.equal(body, original);
+      }
+    } finally {
+      fixture.cleanup();
+    }
+  });
+}
+
+test("PoC cancelled failure handler preserves evidence without publishing a verdict", () => {
+  const fixture = pocFixture();
+  try {
+    mkdirSync(fixture.state, { recursive: true });
+    fixture.save("cancellation.json", '{"outcome":"cancelled","checkpoint":"run_poc"}\n');
+    const result = fixture.run("publish", { PUBLICATION_FAILURE: "yes" });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(readFileSync(fixture.calls, "utf8"), "");
+    assert.equal(readFileSync(fixture.enqueues, "utf8"), "");
+    assert.ok(existsSync(join(fixture.state, "cancellation.json")));
+  } finally { fixture.cleanup(); }
 });
 
 function pocExitScript(): string {

@@ -3,9 +3,13 @@ import { createHash } from "node:crypto";
 import { readFileSync, readdirSync, realpathSync, writeFileSync, renameSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { bindQualityImplementer, orderReviewModels } from "@a4s/omp-cross-family-review";
+import { parse } from "yaml";
+import type { ReviewPolicies } from "@a4s/omp-cross-family-review";
+import { shellWords } from "../resources.ts";
 import { resolveRunPrimary, runParam } from "../status/progress.ts";
 import type { CallDecision, Event } from "./guard.ts";
-import type { SessionContext } from "./primary.ts";
+import { verifyJobResult } from "../role-jobs.ts";
+import type { Receipt } from "../admission.ts";
 
 interface Model { provider: string; id: string }
 interface Models {
@@ -27,7 +31,11 @@ export interface TranscriptRow {
   parentSession?: string | undefined; agent?: string | undefined; task?: string | undefined;
   role?: string | undefined; model?: string | undefined; resolvedModelIsFallback?: boolean; message?: Message | undefined;
 }
-export interface QualityContext extends SessionContext { models?: Models }
+export interface QualityContext {
+  cwd: string;
+  sessionManager: { getSessionDir(): string; getSessionId?(): string };
+  models?: Models;
+}
 export interface QualityRequest {
   repo: string; worktree: string; run: string; sha: string; iteration: number; attempt: string;
   implementer: string; session: string; implementStartedAt: string;
@@ -95,6 +103,12 @@ function identity(row: TranscriptRow, models: Models) {
   requireValue(typeof family === "string" && family.length > 0, `indeterminate family ${provider}/${id}`);
   return { provider, id, family };
 }
+function assigned(task: string | undefined, marker: string): boolean {
+  if (task === undefined) return false;
+  const offset = task.indexOf(marker);
+  return offset >= 0 && (offset === 0 || /\s/.test(task[offset - 1]!)) &&
+    (offset + marker.length === task.length || /\s/.test(task[offset + marker.length]!));
+}
 function transcript(parent: string, id: string, marker: string, agent: string | undefined, cutoff: string) {
   requireValue(/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(id), "invalid subagent id");
   const path = join(parent.slice(0, -6), `${id}.jsonl`);
@@ -104,12 +118,12 @@ function transcript(parent: string, id: string, marker: string, agent: string | 
   const sessions = child.filter(row => row.type === "session");
   const inits = child.filter(row => row.type === "session_init");
   const init = inits[0];
-  requireValue(sessions.length === 1 && init &&
+  requireValue(sessions.length === 1 && init?.agent && init.task &&
     inits.every(row => row.agent === init.agent && row.task === init.task), "ambiguous session identity");
   const session = sessions[0]!;
   requireValue(session.parentSession === parent && session.id, "wrong parent session");
   requireValue(!agent || init.agent === agent, `wrong agent for ${agent}`);
-  requireValue(init.task?.includes(marker), "wrong run, iteration, SHA or role assignment");
+  requireValue(assigned(init.task, marker), "wrong run, iteration, SHA or role assignment");
   const cutoffTime = /^\d+(?:\.\d+)?$/.test(cutoff) ? Number(cutoff) * 1000 : Date.parse(cutoff);
   requireValue(init.timestamp && Date.parse(init.timestamp) > cutoffTime, "stale invocation");
   requireValue(child.some(row => row.type === "model_change" && row.role === `subagent:${id}`), "subagent id not attributed by runtime");
@@ -118,8 +132,8 @@ function transcript(parent: string, id: string, marker: string, agent: string | 
     if (row.message?.role !== "assistant" || !Array.isArray(content)) return [];
     return content.filter(part => part.type === "toolCall" && part.name === "task").flatMap(call => {
       const tasks = Array.isArray(call.arguments?.tasks) ? call.arguments.tasks : [call.arguments];
-      return tasks.map(object).filter(task => task.name === id && (!agent || task.agent === agent) &&
-        `${call.arguments?.context ?? ""}\n${task.task ?? ""}`.includes(marker)).map(() => ({ id: call.id, timestamp: row.timestamp }));
+      return tasks.map(object).filter(task => task.name === id && (task.agent === undefined ? "task" : task.agent) === init.agent &&
+        assigned(`${call.arguments?.context ?? ""}\n${task.task ?? ""}`, marker)).map(() => ({ id: call.id, timestamp: row.timestamp }));
     });
   });
   requireValue(invocations.length === 1 && invocations[0]!.id && invocations[0]!.timestamp, "missing or ambiguous parent task invocation");
@@ -144,6 +158,44 @@ function effective(child: TranscriptRow[], models: Models) {
   return { successful, attempts, fallbacks };
 }
 export function inspectImplementer(parent: string, request: QualityRequest, models: Models) {
+  if (/^[a-f0-9]{64}$/.test(request.implementer)) {
+    const state = execFileSync("git", ["-C", request.repo, "rev-parse", "--path-format=absolute", "--git-path",
+      `dagu-feature/runs/${request.run}`], { encoding: "utf8" }).trim();
+    const candidate = json(join(state, "candidate.json"));
+    const captured = object(candidate.implementation);
+    requireValue(candidate.sha === request.sha && candidate.iteration === request.iteration &&
+      candidate.implementer === request.implementer, "stale native implementer candidate");
+    const path = join(state, "role-jobs", request.implementer, "result.json");
+    requireValue(createHash("sha256").update(readFileSync(path)).digest("hex") === captured.resultDigest,
+      "native implementer receipt digest mismatch");
+    const result = verifyJobResult(path, { repo: request.repo, worktree: request.worktree, run: request.run,
+      lane: "feature", dag: "feature", stage: "implement", sha: String(captured.inputSha) });
+    requireValue(result.binding.role === "implement" || result.binding.role === "conflict-resolution",
+      "native implementer role mismatch");
+    const admission = JSON.parse(readFileSync(join(state, "receipt.json"), "utf8")) as Receipt;
+    requireValue(admission.schemaVersion === 1 && admission.runReceipt.dag === "feature" &&
+      admission.runReceipt.run === request.run && admission.initial.execution.primary === request.repo &&
+      admission.initial.execution.ompSession === request.session &&
+      admission.initial.execution.dagSnapshot.includes("dagu-role-jobs stage implement") &&
+      admission.runReceipt.observations.some(observation => {
+        if (observation.kind !== "role-job" || observation.run !== request.run || observation.dag !== "feature") return false;
+        const data = object(observation.data);
+        return data.id === result.id && data.state === "completed" && data.result === path;
+      }), "native implementer lacks admitted execution observation");
+    const native = result.native!;
+    const child = rows(native.transcript, readFileSync(native.transcript).subarray(0, native.bytes));
+    const inits = child.filter(row => row.type === "session_init");
+    requireValue(inits.length > 0 && inits.every(row => row.agent === "task" &&
+      assigned(row.task, `Authorized Dagu role job ${result.id}.`) &&
+      assigned(row.task, `FEATURE_IMPLEMENT RUN=${request.run}`)), "native implementer assignment mismatch");
+    const evidence = effective(child, models);
+    const final = evidence.successful.at(-1)!;
+    requireValue(final.id === native.event, "native implementer effective response mismatch");
+    return { ...identity(final, models), subagent: request.implementer, session: native.session,
+      coordinatorSession: parent, event: native.event, receipt: path, receiptDigest: captured.resultDigest,
+      transcript: native.transcript, bytes: native.bytes, digest: native.digest,
+      attempts: evidence.attempts, fallbacks: evidence.fallbacks };
+  }
   const source = transcript(parent, request.implementer, `FEATURE_IMPLEMENT RUN=${request.run}`, undefined, request.implementStartedAt);
   const evidence = effective(source.child, models);
   const final = evidence.successful.at(-1)!;
@@ -153,9 +205,48 @@ export function inspectImplementer(parent: string, request: QualityRequest, mode
     parentSession: parent, invocation: source.invocation, event: final.id,
     attempts: evidence.attempts, fallbacks: evidence.fallbacks };
 }
+function nativeVerdict(request: QualityRequest, role: "qa" | "reviewer", id: string) {
+  const state = execFileSync("git", ["-C", request.repo, "rev-parse", "--path-format=absolute", "--git-path",
+    `dagu-feature/runs/${request.run}`], { encoding: "utf8" }).trim();
+  const path = join(state, "role-jobs", id, "result.json");
+  const result = verifyJobResult(path, { repo: request.repo, worktree: request.worktree, lane: "feature",
+    dag: "feature", run: request.run, stage: "quality_review", role, sha: request.sha,
+    iteration: request.iteration, attempt: request.attempt });
+  requireValue(result.id === id, "quality role-job id mismatch");
+  const job = json(join(state, "role-jobs", id, "job.json"));
+  requireValue(job.id === id && job.directory === join(state, "role-jobs", id) &&
+    JSON.stringify(job.binding) === JSON.stringify(result.binding) &&
+    JSON.stringify(job.executor) === JSON.stringify(result.executor), "quality authorized job receipt mismatch");
+  const admission = JSON.parse(readFileSync(join(state, "receipt.json"), "utf8")) as Receipt;
+  requireValue(admission.schemaVersion === 1 && admission.runReceipt.dag === "feature" &&
+    admission.runReceipt.run === request.run && admission.initial.execution.primary === request.repo &&
+    admission.initial.execution.ompSession === request.session &&
+    admission.initial.execution.dagSnapshot.includes("dagu-role-jobs stage quality_review") &&
+    admission.runReceipt.observations.some(observation => observation.category === "runtimeAndModels" &&
+      observation.kind === "role-job" && observation.run === request.run && observation.dag === "feature" &&
+      object(observation.data).id === id && object(observation.data).state === "completed" &&
+      object(observation.data).result === path &&
+      JSON.stringify(object(observation.data).native) === JSON.stringify(result.native)), "quality role job lacks admitted execution observation");
+  const native = result.native!;
+  requireValue(realpathSync(native.transcript) === join(state, "role-jobs", id, `${id}.jsonl`),
+    "quality native artifact path mismatch");
+  const contents = readFileSync(native.transcript).subarray(0, native.bytes);
+  const child = rows(native.transcript, contents);
+  const inits = child.filter(row => row.type === "session_init");
+  const cutoff = /^\d+(?:\.\d+)?$/.test(request.attempt) ? Number(request.attempt) * 1000 : Date.parse(request.attempt);
+  requireValue(inits.length > 0 && inits.every(row => row.agent === role &&
+    assigned(row.task, `Authorized Dagu role job ${id}.`) && assigned(row.task, qualityMarker(request, role)) &&
+    row.timestamp && Date.parse(row.timestamp) > cutoff), "native quality assignment/session freshness mismatch");
+  return { result, path, digest: createHash("sha256").update(readFileSync(path)).digest("hex"),
+    source: { path: native.transcript, contents, child, session: native.session } };
+}
 export function inspectVerdict(parent: string, request: QualityRequest, role: "qa" | "reviewer", id: string, models: Models) {
-  const source = transcript(parent, id, qualityMarker(request, role), role === "qa" ? "qa" : "reviewer", request.attempt);
+  const native = /^[a-f0-9]{64}$/.test(id) ? nativeVerdict(request, role, id) : undefined;
+  const source = native?.source ?? transcript(parent, id, qualityMarker(request, role), role, request.attempt);
   const evidence = effective(source.child, models);
+  if (native) {
+    requireValue(evidence.successful.at(-1)?.id === native.result.native!.event, "native verdict effective response mismatch");
+  }
   let report: Record<string, unknown> | undefined;
   let response: TranscriptRow | undefined;
   for (const row of evidence.successful) {
@@ -163,12 +254,13 @@ export function inspectVerdict(parent: string, request: QualityRequest, role: "q
     const yielded = Array.isArray(content) ? content.find(part => part.type === "toolCall" && part.name === "yield") : undefined;
     if (yielded) {
       const result = source.child.find(item => item.message?.role === "toolResult" && item.message.toolCallId === yielded.id && !item.message.isError);
-      if (result) { report = yielded.arguments; response = row; }
+      if (result) { report = native ? native.result.output : yielded.arguments; response = row; }
     } else if (row.message.stopReason === "stop") {
       try { report = object(JSON.parse(text(content))); response = row; } catch { /* A structured yield may precede final prose. */ }
     }
   }
   requireValue(report && response?.id, `missing runtime-authored structured verdict; attempts=${JSON.stringify(evidence.attempts)}`);
+  requireValue(Object.keys(report).sort().join(",") === "attempt,findings,iteration,repo,role,run,sha,verdict", "malformed verdict output");
   for (const key of ["repo", "run", "sha", "iteration", "attempt"] as const) requireValue(report[key] === request[key], `verdict ${key} mismatch`);
   const verdict = report.verdict;
   requireValue(report.role === role && (verdict === "PASS" || verdict === "FAIL"), "invalid verdict role/content");
@@ -190,7 +282,9 @@ export function inspectVerdict(parent: string, request: QualityRequest, role: "q
   });
   requireValue(shaRead, "missing correlated git rev-parse HEAD evidence for candidate SHA");
   return { repo: request.repo, run: request.run, sha: request.sha, iteration: request.iteration, attempt: request.attempt,
-    role, verdict, findings, subagent: id, childSession: source.session, parentSession: parent, invocation: source.invocation,
+    role, verdict, findings, subagent: id, childSession: source.session,
+    ...(native ? { job: id, receipt: native.path, receiptDigest: native.digest, binding: native.result.binding,
+      routing: native.result.native!.routing, parentRun: request.run } : { parentSession: parent, invocation: "invocation" in source ? source.invocation : undefined }),
     event: response.id, model: identity(response, models), attempts: evidence.attempts, fallbacks: evidence.fallbacks,
     transcript: source.path, bytes: source.contents.length, digest: createHash("sha256").update(source.contents).digest("hex") };
 }
@@ -204,7 +298,7 @@ export function verifyQuality(parent: string, request: QualityRequest, qa: strin
     `same-family effective ${verdict.role}: ${JSON.stringify({ implementer, model: verdict.model, attempts: verdict.attempts, fallbacks: verdict.fallbacks })}`);
   return { ...request, implementer, verdicts, action: verdicts.every(verdict => verdict.verdict === "PASS") ? "complete" : "rewind" };
 }
-async function load(run: string, ctx: QualityContext) {
+async function loadRun(run: string) {
   const base = (process.env.DAGU_URL || `http://127.0.0.1:${process.env.DAGU_PORT || "8080"}`).replace(/\/+$/, "");
   const response = await fetch(`${base}/api/v1/dag-runs/feature/${encodeURIComponent(run)}`, { signal: AbortSignal.timeout(5000) });
   requireValue(response.ok, `Dagu HTTP ${response.status}`);
@@ -214,57 +308,317 @@ async function load(run: string, ctx: QualityContext) {
     ...(params === undefined ? {} : { params }),
     ...(details.resolvedPrimary === undefined ? {} : { resolvedPrimary: optionalString(details.resolvedPrimary)! }) };
   const parameter = (name: string) => runParam(runDetails, name);
-  const implementation = Array.isArray(details.nodes) ? details.nodes.map(object).filter(node => object(node.step).id === "implement") : [];
-  requireValue(implementation.length === 1, "ambiguous implement checkpoint");
   const resolvedPrimary = await resolveRunPrimary(base, runDetails, AbortSignal.timeout(5000));
   requireValue(resolvedPrimary, "Run PRIMARY is missing");
   const primary = realpathSync(resolvedPrimary);
   const state = execFileSync("git", ["-C", primary, "rev-parse", "--path-format=absolute", "--git-path", `dagu-feature/runs/${run}`], { encoding: "utf8" }).trim();
-  const raw = json(join(state, "quality-request.json"));
+  return { details, parameter, primary, state };
+}
+async function load(run: string, ctx: QualityContext, implementer?: string, nativeQuality = false) {
+  const { details, parameter, primary, state } = await loadRun(run);
+  const implementation = Array.isArray(details.nodes) ? details.nodes.map(object).filter(node => object(node.step).id === "implement") : [];
+  requireValue(implementation.length === 1, "ambiguous implement checkpoint");
+  const raw: Record<string, unknown> = implementer === undefined ? json(join(state, "quality-request.json")) : {
+    repo: primary, worktree: join(primary, ".workspace", "worktrees", `issue-${parameter("ISSUE")}`),
+    run, sha: "", iteration: 0, attempt: "", implementer, session: parameter("OMP_SESSION_ID"),
+    implementStartedAt: implementation[0]!.startedAt,
+  };
   for (const key of ["repo", "worktree", "run", "sha", "attempt", "implementer", "session", "implementStartedAt"]) requireValue(typeof raw[key] === "string", `invalid quality request ${key}`);
   requireValue(typeof raw.iteration === "number" && Number.isInteger(raw.iteration), "invalid candidate iteration");
   // Every field consumed below has been checked at this persisted-state boundary.
   const request = raw as unknown as QualityRequest;
-  const candidate = json(join(state, "candidate.json"));
-  requireValue(request.repo === primary && request.worktree === join(primary, ".workspace", "worktrees", `issue-${parameter("ISSUE")}`) &&
-    request.run === run && request.sha === candidate.sha && request.iteration === candidate.iteration && request.implementer === candidate.implementer, "stale quality request");
-  requireValue(request.implementStartedAt === implementation[0]!.startedAt, "implement invocation cutoff mismatch");
+  if (implementer === undefined) {
+    const candidate = json(join(state, "candidate.json"));
+    requireValue(request.repo === primary && request.worktree === join(primary, ".workspace", "worktrees", `issue-${parameter("ISSUE")}`) &&
+      request.run === run && request.sha === candidate.sha && request.iteration === candidate.iteration && request.implementer === candidate.implementer, "stale quality request");
+    requireValue(request.implementStartedAt === implementation[0]!.startedAt, "implement invocation cutoff mismatch");
+  } else {
+    requireValue(details.statusLabel === "waiting" && implementation[0]!.statusLabel === "waiting", "implement checkpoint is not Waiting");
+  }
   requireValue(request.session === parameter("OMP_SESSION_ID"), "wrong coordinator session");
+  requireValue(ctx.models, "canonical ctx.models API unavailable");
+  if (/^[a-f0-9]{64}$/.test(request.implementer) && (implementer !== undefined || nativeQuality)) {
+    return { request, parent: "", state, models: ctx.models };
+  }
   const sessionDir = resolve(ctx.sessionManager.getSessionDir());
   const parents = readdirSync(sessionDir).filter(name => name.endsWith(`_${request.session}.jsonl`));
   requireValue(parents.length === 1, "missing or ambiguous coordinator transcript");
   const parent = join(sessionDir, parents[0]!);
   requireValue(rows(parent).some(row => row.type === "session" && row.id === request.session), "parent session identity mismatch");
-  requireValue(ctx.models, "canonical ctx.models API unavailable");
   return { request, parent, state, models: ctx.models };
 }
-export async function qualityDecision(event: Event, ctx: QualityContext): Promise<CallDecision> {
+interface ImplementCompletion {
+  dag: string | undefined;
+  run: string | undefined;
+  implementer: string | undefined;
+  cancel?: boolean | undefined;
+  syntax: string | undefined;
+}
+function literalImplementCompletion(text: string, checkpoint = "implement"): ImplementCompletion | undefined {
+  let syntax: string | undefined;
+  const words = shellWords(text, value => { syntax ??= value; });
+  for (let i = 0; i < words.length; i++) {
+    if (words[i] !== "human-task" || words[i + 1] !== "complete") continue;
+    let dag: string | undefined, run: string | undefined, step: string | undefined, implementer: string | undefined, cancel = false, inputsJson = false;
+    let positional = false;
+    for (let j = i + 2; j < words.length && words[j] !== ";"; j++) {
+      const word = words[j]!;
+      if (word === "--") { positional = true; continue; }
+      if (positional || !word.startsWith("-")) { dag ??= word; continue; }
+      if (word.startsWith("-r") && word.length > 2) {
+        run = word.slice(word[2] === "=" ? 3 : 2);
+        continue;
+      }
+      const equals = word.indexOf("=");
+      const flag = equals < 0 ? word : word.slice(0, equals);
+      if (flag === "--quiet" || flag === "-q" || flag === "--cpu-profile" || flag === "--help" || flag === "-h") continue;
+      if (!["--run-id", "-r", "--step", "--input", "--inputs-json", "--config", "-c", "--dagu-home", "--context"].includes(flag)) continue;
+      // Quoted input values stay one word; only a positional argument names the DAG.
+      const value = equals < 0 ? (words[j + 1] === ";" ? undefined : words[++j]) : word.slice(equals + 1);
+      if (flag === "--run-id" || flag === "-r") run = value;
+      if (flag === "--step") step = value;
+      if (flag === "--input") implementer = /^IMPLEMENTER=([\w.-]+)$/.exec(value ?? "")?.[1] ?? implementer;
+      if (flag === "--input" && value?.startsWith("CANCEL=")) cancel = value === "CANCEL=yes";
+      if (flag === "--inputs-json") inputsJson = true;
+    }
+    if (step === checkpoint) return { dag, run: run && /^[\w.-]+$/.test(run) ? run : undefined, implementer, cancel,
+      syntax: syntax ?? (cancel && inputsJson ? "cancellation requires literal --input CANCEL=yes" : undefined) };
+  }
+  return undefined;
+}
+
+function visibleImplementCompletion(text: string): boolean {
+  const literal = text.replace(/\\\r?\n/g, "").replace(/["'`]/g, "");
+  return /\bhuman-task\b/.test(literal) && /\bcomplete\b/.test(literal) && /\bimplement\b/.test(literal);
+}
+
+function evalImplementCompletion(code: string, checkpoint = "implement"): ImplementCompletion | undefined {
+  // Discover JS literals before shell parsing. In particular, # has no comment
+  // meaning in the wrapper, and backticks delimit JS templates, not shell expansion.
+  const literals: { value: string; template: boolean; escaped: boolean }[] = [];
+  let wrapper = "", syntax: string | undefined;
+  for (let i = 0; i < code.length;) {
+    const char = code[i++]!;
+    if (char === "/" && (code[i] === "/" || code[i] === "*")) {
+      const line = code[i++] === "/";
+      const end = line ? code.indexOf("\n", i) : code.indexOf("*/", i);
+      if (end < 0) { if (!line) syntax ??= "unfinished JS comment"; i = code.length; }
+      else i = end + (line ? 1 : 2);
+      wrapper += " ";
+      continue;
+    }
+    if (char !== "'" && char !== '"' && char !== "`") { wrapper += char; continue; }
+    let value = "", closed = false, escaped = false;
+    while (i < code.length) {
+      const next = code[i++]!;
+      if (next === char) { closed = true; break; }
+      if (char === "`" && next === "$" && code[i] === "{") syntax ??= "dynamic JS template";
+      if (next !== "\\") {
+        if (char !== "`" && /[\r\n]/.test(next)) syntax ??= "multiline JS string";
+        value += next;
+        continue;
+      }
+      escaped = true;
+      const escape = code[i++];
+      if (escape === "\n") continue;
+      if (escape === "\r") { if (code[i] === "\n") i++; continue; }
+      const escapes: Record<string, string> = { n: "\n", r: "\r", t: "\t", b: "\b", f: "\f", v: "\v", "\\": "\\", "'": "'", '"': '"', "`": "`", "$": "$" };
+      if (escape !== undefined && escapes[escape] !== undefined) value += escapes[escape];
+      else { syntax ??= "unsupported JS escape"; value += escape ?? ""; }
+    }
+    if (!closed) syntax ??= "unfinished JS literal";
+    literals.push({ value, template: char === "`", escaped });
+    wrapper += "@";
+  }
+  const candidates = literals.map(literal => literalImplementCompletion(literal.value, checkpoint)).filter(value => value !== undefined);
+  const visible = visibleImplementCompletion(code) || literals.some(literal => visibleImplementCompletion(literal.value));
+  if (!visible && candidates.length === 0) return undefined;
+  // Only one static call/tag is inspectable. Extra literals, branches, operators
+  // and statements cannot let an inert fresh decoy authorize a different command.
+  wrapper = wrapper.trim().replace(/;$/, "").trim();
+  wrapper = wrapper.replace(/^(?:const|let|var)\s+[\w$]+\s*=\s*/, "");
+  while (wrapper.startsWith("(") && wrapper.endsWith(")")) {
+    let depth = 0, encloses = true;
+    for (let i = 0; i < wrapper.length - 1; i++) {
+      if (wrapper[i] === "(") depth++;
+      if (wrapper[i] === ")" && --depth === 0) { encloses = false; break; }
+    }
+    if (!encloses) break;
+    wrapper = wrapper.slice(1, -1).trim();
+  }
+  const call = /^(?:await\s+)?[\w$]+(?:\.[\w$]+)*\s*\(\s*@\s*\)$/.test(wrapper);
+  const tag = /^(?:await\s+)?[\w$]+(?:\.[\w$]+)*\s*@$/.test(wrapper);
+  if (literals.length !== 1 || candidates.length !== 1) syntax ??= "one static JS command literal required";
+  if (!call && !(tag && literals[0]?.template && !literals[0].escaped)) syntax ??= "unsupported JS command wrapper";
+  const candidate = candidates[0];
+  return { dag: candidate?.dag, run: candidate?.run, implementer: candidate?.implementer, cancel: candidate?.cancel,
+    syntax: syntax ?? candidate?.syntax ?? (candidate ? undefined : "uninspectable implement completion") };
+}
+const DISPOSAL_QA = "dispose-inert-qa";
+const DISPOSAL_REVIEW = "dispose-inert-review";
+
+// This deliberately recognizes the historical fail-closed shell prefix, rather
+// than inferring shell control flow from the presence of a jq predicate. Any
+// change before that rejection needs its own proof before disposal is admitted.
+const DISPOSAL_ADMIT_PREFIX = String.raw`set -euo pipefail
+STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")
+fail() { printf 'quality_admit: %s; local candidate retained\n' "$*" >&2; exit 1; }
+sha=$(jq -r .sha "$STATE/candidate.json")
+test "$(git -C "$WORKTREE" rev-parse HEAD)" = "$sha" || fail "candidate changed"
+test -z "$(git -C "$WORKTREE" status --porcelain)" || fail "worktree changed"
+jq -e --arg qa "$QA" --arg review "$REVIEW" --arg repo "$(cd "$PRIMARY" && pwd -P)" --arg run "$RUN" --arg session "$OMP_SESSION_ID" --slurpfile request "$STATE/quality-request.json" \
+  --slurpfile candidate "$STATE/candidate.json" --slurpfile gate "$STATE/gate.json" '
+  . as $e | $request[0] as $r | $candidate[0] as $c |
+  .repo == $repo and .run == $run and .session == $session and .repo == $r.repo and .worktree == $r.worktree and .run == $r.run and .sha == $c.sha and .sha == $r.sha and
+  .sha == $gate[0].sha and .iteration == $r.iteration and .iteration == $c.iteration and
+  .attempt == $r.attempt and .session == $r.session and
+  .implementer.subagent == $c.implementer and (.implementer.family | type == "string" and length > 0) and
+  (.verdicts | length == 2) and
+  ([.verdicts[].subagent, .implementer.subagent] | unique | length == 3) and
+  .verdicts[0].subagent == $qa and .verdicts[0].role == "qa" and
+  .verdicts[1].subagent == $review and .verdicts[1].role == "reviewer" and
+  ([.verdicts[] | .repo == $e.repo and .run == $e.run and .sha == $e.sha and
+    .iteration == $e.iteration and .attempt == $e.attempt and .parentSession == $e.implementer.parentSession and
+    (.invocation | type == "string" and length > 0) and (.childSession | type == "string" and length > 0) and
+    (.model.family | type == "string" and length > 0) and .model.family != $e.implementer.family and
+    (.verdict == "PASS" or .verdict == "FAIL") and (.findings | type == "array") and
+    (.bytes | type == "number" and . > 0 and . == floor)] | all) and
+  .action == (if ([.verdicts[].verdict] | all(. == "PASS")) then "complete" else "rewind" end)
+  ' "$STATE/quality.json" >/dev/null || fail "missing, stale or malformed effective verdict evidence"
+`;
+
+async function admitDisposal(run: string, ctx: QualityContext): Promise<void> {
+  const { details, parameter, state } = await loadRun(run);
+  const owner = parameter("OMP_SESSION_ID");
+  requireValue(owner && ctx.sessionManager.getSessionId?.() === owner, "disposal requires the run owner session");
+  const nodes = Array.isArray(details.nodes) ? details.nodes.map(object).filter(node => object(node.step).id === "quality_review") : [];
+  requireValue(details.statusLabel === "waiting" && nodes.length === 1 && nodes[0]!.statusLabel === "waiting",
+    "disposal requires Waiting quality_review");
+  const snapshot = object(parse(readFileSync(join(state, "snapshot", "feature.yaml"), "utf8")));
+  requireValue(Array.isArray(snapshot.steps), "disposal snapshot steps unavailable");
+  const steps = snapshot.steps.map(object);
+  const reviews = steps.filter(step => step.id === "quality_review");
+  requireValue(reviews.length === 1 && reviews[0]!.action === "human.task", "disposal snapshot quality_review is ambiguous");
+  const review = reviews[0]!;
+  requireValue(!Object.hasOwn(review, "push_back") && !Object.hasOwn(object(review.with), "push_back"),
+    "disposal snapshot quality_review has push_back");
+  requireValue(!steps.some(step => step.id === "quality_review_cancellation" ||
+    (step.id !== "quality_admit" && (step.depends === "quality_review" ||
+      (Array.isArray(step.depends) && step.depends.includes("quality_review"))))),
+    "disposal snapshot has another quality_review route (including cancellation)");
+  const admissions = steps.filter(step => step.id === "quality_admit");
+  requireValue(admissions.length === 1, "disposal snapshot quality_admit is ambiguous");
+  const admission = admissions[0]!;
+  requireValue(admission.depends === "quality_review" ||
+    (Array.isArray(admission.depends) && admission.depends.length === 1 && admission.depends[0] === "quality_review"),
+    "disposal snapshot quality_admit must depend only on quality_review");
+  requireValue(!Object.hasOwn(admission, "continue_on"), "disposal snapshot quality_admit has continue_on");
+  requireValue(Object.keys(admission).every(key => ["id", "depends", "env", "run"].includes(key)) &&
+    JSON.stringify(admission.env) === JSON.stringify([
+      { QA: "${steps.quality_review.outputs.QA}" }, { REVIEW: "${steps.quality_review.outputs.REVIEW}" },
+    ]) && typeof admission.run === "string" && admission.run.startsWith(DISPOSAL_ADMIT_PREFIX),
+    "disposal snapshot quality_admit lacks the verified fail-closed QA/REVIEW binding");
+  let quality: string;
+  try { quality = readFileSync(join(state, "quality.json"), "utf8"); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw error;
+  }
+  const evidence: unknown = JSON.parse(quality);
+  const namesDisposal = (value: unknown): boolean => value === DISPOSAL_QA || value === DISPOSAL_REVIEW ||
+    (Array.isArray(value) ? value.some(namesDisposal) :
+      value !== null && typeof value === "object" && Object.values(value).some(namesDisposal));
+  requireValue(!namesDisposal(evidence), "disposal identity is already named in quality.json");
+}
+
+async function admitCancellation(completion: ImplementCompletion, checkpoint: string, ctx: QualityContext): Promise<void> {
+  requireValue(!completion.syntax && completion.dag === "feature" && completion.run, "one literal feature cancellation command required");
+  const base = (process.env.DAGU_URL || `http://127.0.0.1:${process.env.DAGU_PORT || "8080"}`).replace(/\/+$/, "");
+  const endpoint = `${base}/api/v1/dag-runs/feature/${encodeURIComponent(completion.run)}`;
+  const response = await fetch(endpoint, { signal: AbortSignal.timeout(5000) });
+  requireValue(response.ok, `Dagu HTTP ${response.status}`);
+  const details = object(object(await response.json()).dagRunDetails);
+  requireValue(details.statusLabel === "waiting" && Array.isArray(details.nodes) && details.nodes.map(object).some(node =>
+    object(node.step).id === checkpoint && node.statusLabel === "waiting"), "cancellation target must be waiting");
+  const primary = await resolveRunPrimary(base, { name: "feature", dagRunId: completion.run, statusLabel: "waiting",
+    ...(typeof details.params === "string" ? { params: details.params } : {}),
+    ...(typeof details.resolvedPrimary === "string" ? { resolvedPrimary: details.resolvedPrimary } : {}) }, AbortSignal.timeout(5000));
+  requireValue(primary, "Run PRIMARY is missing");
+  const localPrimary = execFileSync("git", ["-C", ctx.cwd, "worktree", "list", "--porcelain"], { encoding: "utf8" }).split("\n")[0]?.slice("worktree ".length);
+  requireValue(localPrimary && realpathSync(localPrimary) === realpathSync(primary), "cancellation belongs to another repository");
+  const snapshot = await fetch(`${endpoint}/spec`, { signal: AbortSignal.timeout(5000) });
+  requireValue(snapshot.ok, `Dagu snapshot HTTP ${snapshot.status}`);
+  const source = object(parse(String(object(await snapshot.json()).spec)));
+  requireValue(Array.isArray(source.steps), "snapshot steps are missing");
+  const steps = source.steps.map(object);
+  const human = steps.find(step => step.id === checkpoint);
+  const gate = steps.find(step => step.id === `${checkpoint}_cancellation`);
+  requireValue(human?.action === "human.task" && object(object(object(human.with).form).properties).CANCEL, "snapshot must declare cancellation input");
+  const input = object(object(object(object(human.with).form).properties).CANCEL);
+  requireValue(Array.isArray(input.enum) && input.enum.includes("yes"), "snapshot cancellation input must accept yes");
+  const dependencies = Array.isArray(gate?.depends) ? gate.depends : [gate?.depends];
+  requireValue(gate && dependencies.length === 1 && dependencies[0] === checkpoint && typeof gate.run === "string" && gate.run.includes("exit 77") &&
+    Array.isArray(gate.env) && gate.env.map(object).some(value => value.CANCEL === `\${steps.${checkpoint}.outputs.CANCEL}`) &&
+    (gate.continue_on === undefined || gate.continue_on === "skipped"), "snapshot must route cancellation to its terminal failure gate");
+  requireValue(steps.filter(step => (Array.isArray(step.depends) ? step.depends : [step.depends]).includes(checkpoint)).every(step => step === gate),
+    "snapshot successors must depend on the cancellation gate");
+}
+
+export async function qualityDecision(
+  event: Event,
+  ctx: QualityContext,
+  readPolicies?: (cwd: string) => ReviewPolicies | Promise<ReviewPolicies>,
+): Promise<CallDecision> {
   const rawCommand: unknown = event.toolName === "bash" ? event.input.command : event.toolName === "eval" ? event.input.code : undefined;
-  const command = typeof rawCommand === "string" ? rawCommand.replace(/["']/g, "") : undefined;
+  const command = typeof rawCommand === "string" ? rawCommand.replace(/["'`]/g, "") : undefined;
+  let implementCompletion = typeof rawCommand === "string"
+    ? event.toolName === "eval" ? evalImplementCompletion(rawCommand) : literalImplementCompletion(rawCommand) : undefined;
+  if (implementCompletion?.dag && implementCompletion.dag !== "feature" && !implementCompletion.syntax) implementCompletion = undefined;
+  else if (!implementCompletion && typeof rawCommand === "string" && event.toolName === "bash" &&
+    visibleImplementCompletion(shellWords(rawCommand).join(" "))) {
+    implementCompletion = { dag: undefined, run: undefined, implementer: undefined, syntax: "uninspectable implement completion" };
+  }
   const completion = command !== undefined && /\bhuman-task\s+complete\b/.test(command) && /--step(?:\s+|=)quality_review\b/.test(command);
   const tasks = event.toolName === "task" ? (Array.isArray(event.input.tasks) ? event.input.tasks.map(object) : [object(event.input)]) : [];
   const assignments = tasks.map(task => `${event.input.context ?? ""}\n${task.task ?? ""}`);
-  if (!completion && !assignments.some(assignment => assignment.includes("FEATURE_QUALITY RUN="))) return undefined;
+  if (!completion && !implementCompletion && !assignments.some(assignment => assignment.includes("FEATURE_QUALITY RUN="))) return undefined;
   try {
-    const run = completion ? /--run-id(?:\s+|=)([\w.-]+)/.exec(command!)?.[1] : /FEATURE_QUALITY RUN=([\w.-]+)/.exec(assignments.join("\n"))?.[1];
-    requireValue(run, "literal run id required");
-    const { request, parent, state, models } = await load(run, ctx);
-    if (!completion) {
-      const implementer = inspectImplementer(parent, request, models);
-      const effectiveModel = models.resolve(`${implementer.provider}/${implementer.id}`);
-      requireValue(effectiveModel && effectiveModel.provider === implementer.provider && effectiveModel.id === implementer.id, "effective implementer catalog identity unavailable");
+    const cancel = typeof rawCommand === "string" ? implementCompletion?.cancel ? implementCompletion
+      : event.toolName === "eval" ? evalImplementCompletion(rawCommand, "quality_review") : literalImplementCompletion(rawCommand, "quality_review") : undefined;
+    if (cancel?.cancel) {
+      await admitCancellation(cancel, implementCompletion?.cancel ? "implement" : "quality_review", ctx);
+      return undefined;
+    }
+    requireValue(!implementCompletion || (!implementCompletion.syntax && implementCompletion.dag === "feature"),
+      `one literal implement completion command required: ${implementCompletion?.syntax ?? "literal feature DAG required"}`);
+    if (!completion && !implementCompletion) {
+      const bindings: { name: string; model: Model }[] = [];
       const revised = [...tasks];
       for (const [index, task] of tasks.entries()) {
         if (!assignments[index]?.includes("FEATURE_QUALITY RUN=")) continue;
+        const assignment = assignments[index]!;
+        requireValue(assignment.split("FEATURE_QUALITY RUN=").length === 2, "one quality marker required per assignment");
+        const run = /FEATURE_QUALITY RUN=([\w.-]+)/.exec(assignment)?.[1];
+        requireValue(run, "literal run id required");
+        const { request, parent, models } = await load(run, ctx);
         const role = task.agent === "qa" ? "qa" : task.agent === "reviewer" ? "reviewer" : "invalid";
-        requireValue(role !== "invalid" && assignments[index]!.includes(qualityMarker(request, role)), "stale quality assignment or invalid role");
-        requireValue(typeof task.name === "string", "explicit quality subagent name required");
-        // OMP accepts `model` only on seance tasks; the cross-family spawn hook
-        // selects the child model from this binding, keyed by the task name.
-        const eligible = orderReviewModels(["@slow"], ["@slow", "@default", "@task"], models,
-          [{ label: "effective implementer", model: effectiveModel }], true);
-        requireValue(eligible?.model?.length, eligible?.reason ?? "no eligible quality model");
-        bindQualityImplementer(task.name, effectiveModel);
+        requireValue(role !== "invalid" && assigned(assignment, qualityMarker(request, role)), "stale quality assignment or invalid role");
+        requireValue(typeof task.name === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(task.name), "explicit quality subagent name required");
+        requireValue(task.name !== request.implementer && tasks.filter(other => other.name === task.name).length === 1,
+          "quality subagent names must be distinct");
+        const implementer = inspectImplementer(parent, request, models);
+        const effectiveModel = models.resolve(`${implementer.provider}/${implementer.id}`);
+        requireValue(effectiveModel && effectiveModel.provider === implementer.provider && effectiveModel.id === implementer.id, "effective implementer catalog identity unavailable");
+        requireValue(readPolicies, "native cross-family settings reader required for quality dispatch");
+        const policies = await readPolicies(ctx.cwd);
+        const policy = Object.hasOwn(policies, role) ? policies[role] : undefined;
+        requireValue(policy, `quality agent ${role} requires a configured crossFamilyReview.policies entry`);
+        // Keep the independent strict preflight even without the extension.
+        // The spawn hook applies these same fallbacks to actual native candidates.
+        const eligible = orderReviewModels(["@slow"], policy.fallbackRoles, models,
+          [{ label: "effective implementer", model: effectiveModel }]);
+        requireValue(eligible.model?.length, eligible.reason ?? "no eligible quality model");
+        bindings.push({ name: task.name, model: effectiveModel });
         const contract = [
           "Quality verdict contract: Before inspecting the candidate and before your verdict, run this standalone bash command, with nothing chained and with cwd omitted:",
           `git -C "${request.worktree}" rev-parse HEAD`,
@@ -274,10 +628,31 @@ export async function qualityDecision(event: Event, ctx: QualityContext): Promis
         ].join("\n");
         revised[index] = { ...task, task: `${task.task ?? ""}\n\n${contract}`, outputSchema: VERDICT_SCHEMA };
       }
+      for (const binding of bindings) bindQualityImplementer(binding.name, binding.model);
       return { input: Array.isArray(event.input.tasks) ? { ...event.input, tasks: revised } : revised[0]! };
+    }
+    const run = implementCompletion ? implementCompletion.run : /--run-id(?:\s+|=)([\w.-]+)/.exec(command!)?.[1];
+    requireValue(run, "literal run id required");
+    const implementerId = implementCompletion?.implementer;
+    requireValue(!implementCompletion || implementerId, "complete with literal --input IMPLEMENTER=<id>");
+    if (completion && (command!.includes(DISPOSAL_QA) || command!.includes(DISPOSAL_REVIEW))) {
+      let syntax: string | undefined;
+      const words = shellWords(rawCommand as string, value => { syntax ??= value; });
+      const expected = ["dagu", "human-task", "complete", "feature", "--run-id", run, "--step", "quality_review",
+        "--input", `QA=${DISPOSAL_QA}`, "--input", `REVIEW=${DISPOSAL_REVIEW}`];
+      requireValue(event.toolName === "bash" && !syntax && JSON.stringify(words) === JSON.stringify(expected),
+        "disposal requires one literal dagu human-task complete feature command with the disposal inputs");
+      await admitDisposal(run, ctx);
+      return undefined;
     }
     const qa = /\bQA=([\w.-]+)/.exec(command!)?.[1];
     const reviewer = /\bREVIEW=([\w.-]+)/.exec(command!)?.[1];
+    const nativeQuality = Boolean(qa && reviewer && [qa, reviewer].every(id => /^[a-f0-9]{64}$/.test(id)));
+    const { request, parent, state, models } = await load(run, ctx, implementerId, nativeQuality);
+    if (implementCompletion) {
+      inspectImplementer(parent, request, models);
+      return undefined;
+    }
     requireValue(qa && reviewer, "complete with literal --input QA=<id> --input REVIEW=<id>");
     const evidence = verifyQuality(parent, request, qa, reviewer, models);
     const temporary = join(state, "quality.json.tmp");
@@ -285,6 +660,8 @@ export async function qualityDecision(event: Event, ctx: QualityContext): Promis
     renameSync(temporary, join(state, "quality.json"));
     return undefined;
   } catch (error) {
-    return { block: true, reason: `QUALITY_BLOCKED: ${error instanceof Error ? error.message : String(error)}; local candidate retained` };
+    return { block: true, reason: implementCompletion
+      ? `IMPLEMENT_BLOCKED: ${error instanceof Error ? error.message : String(error)}; launch a new Implement<issue>v<N> task with FEATURE_IMPLEMENT RUN=<run> after the current implement startedAt; keep Waiting implement`
+      : `QUALITY_BLOCKED: ${error instanceof Error ? error.message : String(error)}; local candidate retained` };
   }
 }

@@ -8,22 +8,44 @@ import { resolveRunPrimary } from "./status/progress.ts";
 const exec = promisify(execFile);
 const active: Record<string, true> = { queued: true, running: true, waiting: true };
 
-// Literal shell words, including quoted paths and command boundaries. This is a
-// tool-call guard, not a shell interpreter or an OS isolation boundary.
-export function shellWords(text: string): string[] {
+// Literal shell words, including quoted paths and command boundaries. Callers
+// requiring one literal command can observe syntax outside that contract.
+// This is a tool-call guard, not a shell interpreter or an OS isolation boundary.
+export function shellWords(text: string, onSyntax?: (syntax: string) => void): string[] {
   const words: string[] = [];
   let word = "", quote = "", present = false;
   for (let i = 0; i < text.length; i++) {
     const c = text[i]!;
-    if (c === "\\" && quote !== "'") { if (text[i + 1] !== "\n") word += text[++i] ?? ""; else i++; present = true; }
-    else if (quote) { if (c === quote) quote = ""; else word += c; present = true; }
-    else if (c === "'" || c === '"') { quote = c; present = true; }
-    else if (/\s|[;&|()]/.test(c)) {
+    if (c === "\\" && quote !== "'") {
+      const next = text[i + 1];
+      if (next === "\n") { i++; continue; }
+      if (next === undefined) onSyntax?.("unfinished escape");
+      if (quote === '"' && next !== undefined && !/[$`"\\]/.test(next)) word += c;
+      else word += text[++i] ?? "";
+      present = true;
+    } else if (quote) {
+      if (c === quote) quote = "";
+      else {
+        if (quote === '"' && /[$`]/.test(c)) onSyntax?.("shell expansion");
+        word += c;
+      }
+      present = true;
+    } else if (c === "'" || c === '"') { quote = c; present = true; }
+    else if (c === "#" && !present) {
+      while (i + 1 < text.length && text[i + 1] !== "\n") i++;
+    } else if (/[ \t\n;&|()]/.test(c)) {
       if (present) words.push(word);
       word = ""; present = false;
-      if (/[;&|()\n]/.test(c)) words.push(";");
-    } else { word += c; present = true; }
+      if (/[;&|()\n]/.test(c)) {
+        words.push(";");
+        if (c !== "\n" || /[^ \t\n]/.test(text.slice(i + 1))) onSyntax?.("command boundary");
+      }
+    } else {
+      if (/[$`<>*?[\]{}~]/.test(c)) onSyntax?.("shell expansion or redirection");
+      word += c; present = true;
+    }
   }
+  if (quote) onSyntax?.("unfinished quote");
   if (present) words.push(word);
   return words;
 }

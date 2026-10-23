@@ -1,0 +1,62 @@
+# quality_review and quality_admit copied from the a4s-issue-383-v2 0.3.77 snapshot.
+steps:
+  - id: quality_review
+    depends: quality_prepare
+    action: human.task
+    with:
+      prompt: "Read quality_prepare's current request and markers. Launch task agent=qa and task agent=reviewer as two named subagents, distinct from IMPLEMENTER. Each assignment includes its exact FEATURE_QUALITY marker, repo/run/iteration/attempt/SHA, read-only worktree ${WORKTREE}, targeted QA commands and structured verdict contract from SKILL.md. Each reads git -C ${WORKTREE} rev-parse HEAD. Complete with QA and REVIEW allocated ids. The OMP extension verifies effective JSONL identities and provenance; fabricated reports, ineligible fallback and indeterminate identity block locally. QA/reviewer FAIL returns to implement with findings."
+      form:
+        type: object
+        properties:
+          QA:
+            type: string
+            pattern: '^[A-Za-z0-9][A-Za-z0-9._-]*$'
+          REVIEW:
+            type: string
+            pattern: '^[A-Za-z0-9][A-Za-z0-9._-]*$'
+        required: [QA, REVIEW]
+
+  - id: quality_admit
+    depends: quality_review
+    env:
+      - QA: ${steps.quality_review.outputs.QA}
+      - REVIEW: ${steps.quality_review.outputs.REVIEW}
+    run: |
+      set -euo pipefail
+      STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")
+      fail() { printf 'quality_admit: %s; local candidate retained\n' "$*" >&2; exit 1; }
+      sha=$(jq -r .sha "$STATE/candidate.json")
+      test "$(git -C "$WORKTREE" rev-parse HEAD)" = "$sha" || fail "candidate changed"
+      test -z "$(git -C "$WORKTREE" status --porcelain)" || fail "worktree changed"
+      jq -e --arg qa "$QA" --arg review "$REVIEW" --arg repo "$(cd "$PRIMARY" && pwd -P)" --arg run "$RUN" --arg session "$OMP_SESSION_ID" --slurpfile request "$STATE/quality-request.json" \
+        --slurpfile candidate "$STATE/candidate.json" --slurpfile gate "$STATE/gate.json" '
+        . as $e | $request[0] as $r | $candidate[0] as $c |
+        .repo == $repo and .run == $run and .session == $session and .repo == $r.repo and .worktree == $r.worktree and .run == $r.run and .sha == $c.sha and .sha == $r.sha and
+        .sha == $gate[0].sha and .iteration == $r.iteration and .iteration == $c.iteration and
+        .attempt == $r.attempt and .session == $r.session and
+        .implementer.subagent == $c.implementer and (.implementer.family | type == "string" and length > 0) and
+        (.verdicts | length == 2) and
+        ([.verdicts[].subagent, .implementer.subagent] | unique | length == 3) and
+        .verdicts[0].subagent == $qa and .verdicts[0].role == "qa" and
+        .verdicts[1].subagent == $review and .verdicts[1].role == "reviewer" and
+        ([.verdicts[] | .repo == $e.repo and .run == $e.run and .sha == $e.sha and
+          .iteration == $e.iteration and .attempt == $e.attempt and .parentSession == $e.implementer.parentSession and
+          (.invocation | type == "string" and length > 0) and (.childSession | type == "string" and length > 0) and
+          (.model.family | type == "string" and length > 0) and .model.family != $e.implementer.family and
+          (.verdict == "PASS" or .verdict == "FAIL") and (.findings | type == "array") and
+          (.bytes | type == "number" and . > 0 and . == floor)] | all) and
+        .action == (if ([.verdicts[].verdict] | all(. == "PASS")) then "complete" else "rewind" end)
+        ' "$STATE/quality.json" >/dev/null || fail "missing, stale or malformed effective verdict evidence"
+      while IFS=$'\t' read -r transcript bytes digest event provider model; do
+        test "$(wc -c < "$transcript")" -ge "$bytes" || fail "transcript changed: $transcript"
+        # Preserve trailing newlines while capturing the exact inspected bytes once.
+        prefix=$(dd if="$transcript" bs="$bytes" count=1 2>/dev/null && printf '.')
+        prefix=${prefix%.}
+        actual=$(printf '%s' "$prefix" | shasum -a 256)
+        test "${actual%% *}" = "$digest" || fail "transcript changed: $transcript"
+        printf '%s' "$prefix" | jq -se --arg event "$event" --arg provider "$provider" --arg model "$model" \
+          '[.[] | select(.id == $event and .message.role == "assistant" and .message.provider == $provider and .message.model == $model)] | length == 1' >/dev/null || fail "runtime model provenance mismatch"
+      done < <(jq -r '.verdicts[] | [.transcript,.bytes,.digest,.event,.model.provider,.model.id] | @tsv' "$STATE/quality.json")
+      shasum -a 256 "$STATE/quality.json" > "$STATE/quality-admitted.sha256"
+      jq -r .action "$STATE/quality.json" > "$STATE/quality-action"
+      jq '{sha,action,verdicts:[.verdicts[] | {role,verdict,findings,subagent,model,attempts,fallbacks}]}' "$STATE/quality.json"

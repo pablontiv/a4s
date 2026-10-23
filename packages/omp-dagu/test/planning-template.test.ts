@@ -1,10 +1,15 @@
 import assert from "node:assert/strict";
-import { spawnSync, type SpawnSyncReturns } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync, spawn, spawnSync, type SpawnSyncReturns } from "node:child_process";
+import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { parse } from "yaml";
+import { parse, stringify } from "yaml";
+import { liveDagu, liveDaguVersion } from "./fixtures/live-dagu.ts";
+import { testRunId } from "./fixtures/run-id.ts";
 
 const definition = parse(readFileSync(new URL("../skills/dagu-feature/planning.yaml", import.meta.url), "utf8"));
 function script(id: string): string {
@@ -34,39 +39,32 @@ function fixture(): Fixture {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "breakdown-")));
   const bin = join(root, "bin"), out = join(root, "out"), primary = join(root, "primary"), upstream = join(root, "upstream.jsonl");
   for (const dir of [bin, out, primary, join(root, "tmp")]) mkdirSync(dir);
+  executable(join(bin, "dagu-feature-bundle"), `#!/bin/bash\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(fileURLToPath(new URL("../bin/dagu-feature-bundle.ts", import.meta.url)))} "$@"\n`);
+  writeFileSync(join(root, "external-issues.json"), JSON.stringify([{ number: 442 }]));
   writeFileSync(join(root, "issues.json"), "[]\n");
-  executable(join(bin, "gh"), `#!/bin/bash
+  executable(join(bin, "gh"), `#!/bin/bash\nexport PLANNING_GH_STATE=${JSON.stringify(root)}\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(fileURLToPath(new URL("./fixtures/planning-github-state.cjs", import.meta.url)))} "$@"\n`);
+  executable(join(bin, "curl"), `#!/bin/bash
 set -euo pipefail
-FAKE_STATE=${JSON.stringify(root)}
-if [[ "$1" == api ]]; then
-  [[ "$*" == *--paginate* && "$*" == *--slurp* ]]
-  jq -c '[.[0:1], .[1:]]' "$FAKE_STATE/issues.json"
-elif [[ "$1 $2" == "issue create" ]]; then
-  printf '%s\\n' "$*" >> "$FAKE_STATE/github.log"
-  while (($#)); do
-    case "$1" in --body-file) body_file=$2; shift 2;; --title) title=$2; shift 2;; *) shift;; esac
-  done
-  number=$(jq 'length + 41' "$FAKE_STATE/issues.json")
-  url="https://example.test/owner/repo/issues/$number"
-  jq --argjson number "$number" --arg url "$url" --rawfile body "$body_file" --arg title "$title" '. + [{number:$number,html_url:$url,body:$body,title:$title}]' "$FAKE_STATE/issues.json" > "$FAKE_STATE/issues.tmp"
-  mv "$FAKE_STATE/issues.tmp" "$FAKE_STATE/issues.json"
-  echo "$url"
-else echo "Unexpected gh $*" >&2; exit 1; fi
+jq -nc --argjson iteration "\${FAKE_ITERATION:-0}" --argjson nodes "\${FAKE_REVIEW_NODES:-null}" '
+  {dagRunDetails:{nodes:(if $nodes != null then $nodes else
+    [{step:{id:"review"},statusLabel:"succeeded",startedAt:"2026-10-17T00:00:01Z"} +
+      (if $iteration == 0 then {} else {approvalIteration:$iteration} end)] end)}}
+'
 `);
-  executable(join(bin, "dagu"), '#!/bin/bash\nset -euo pipefail\n[[ "$1" == status ]]\nprintf "Waiting -\\npush-back iteration: %s\\n" "${FAKE_ITERATION:-0}"\n');
-  executable(join(bin, "curl"), '#!/bin/sh\nprintf \'%s\\n\' \'{"dagRunDetails":{"nodes":[{"step":{"id":"review"},"startedAt":"2026-10-17T00:00:01Z"}]}}\'\n');
-  const env = { ...process.env, HOME: root, TMPDIR: join(root, "tmp"), PRIMARY: primary, OUT_DIR: out, UNITS_FROM: upstream, NWO: "owner/repo", RUN: "repo-breakdown-test", SOURCE: "plan", OMP_SESSION_ID: "owner-session", DAGU_OUTPUT_FILE: join(root, "outputs"), PATH: `${bin}:${process.env.PATH}` };
+  const env = { ...process.env, HOME: root, TMPDIR: join(root, "tmp"), PRIMARY: primary, OUT_DIR: out, UNITS_FROM: upstream, NWO: "owner/repo", RUN: testRunId("repo-breakdown-test"), SOURCE: "plan", OMP_SESSION_ID: "owner-session", DAGU_OUTPUT_FILE: join(root, "outputs"), PATH: `${bin}:${process.env.PATH}` };
   const run = (id: string, extra: NodeJS.ProcessEnv = {}) => spawnSync("bash", ["-c", script(id)], { env: { ...env, ...extra }, encoding: "utf8" });
   const importRows = (rows: unknown[]) => { jsonl(upstream, rows); return run("import_units"); };
   return { root, bin, out, upstream, env, run, importRows, close: () => rmSync(root, { recursive: true, force: true }) };
 }
 function successful(result: SpawnSyncReturns<string>): void { assert.equal(result.status, 0, result.stderr); }
-function transcript(f: Fixture, data: unknown = { verdict: "accept", findings: [] }, extra: { parent?: string; timestamp?: string; agent?: string; marker?: string; last?: unknown } = {}) {
+function transcript(f: Fixture, data: unknown = { verdict: "accept", findings: [] }, extra: { parent?: string; timestamp?: string; agent?: string; marker?: string; last?: unknown; sessions?: number; inits?: number; refresh?: { agent?: string; task?: string; timestamp?: string } } = {}) {
   const sessions = join(f.root, ".omp", "agent", "sessions", "-primary", "date_owner-session");
   mkdirSync(sessions, { recursive: true });
+  const init = { type: "session_init", agent: extra.agent ?? "plan-reviewer", task: extra.marker ?? readFileSync(join(f.out, "generation"), "utf8").trim(), timestamp: extra.timestamp ?? "2026-10-17T00:00:01.001Z" };
   jsonl(join(sessions, "PlanReviewTest.jsonl"), [
-    { type: "session", parentSession: extra.parent ?? `${sessions}.jsonl` },
-    { type: "session_init", agent: extra.agent ?? "plan-reviewer", task: extra.marker ?? readFileSync(join(f.out, "generation"), "utf8").trim(), timestamp: extra.timestamp ?? "2026-10-17T00:00:01.001Z" },
+    ...Array.from({ length: extra.sessions ?? 1 }, () => ({ type: "session", parentSession: extra.parent ?? `${sessions}.jsonl` })),
+    ...Array.from({ length: extra.inits ?? 1 }, () => init),
+    ...(extra.refresh ? [{ type: "model_change", resolvedModelIsFallback: true }, { ...init, ...extra.refresh }] : []),
     { type: "message", message: { role: "toolResult", toolName: "yield", details: { data } } },
     ...(extra.last === undefined ? [] : [{ type: "message", message: { role: "toolResult", toolName: "yield", details: { data: extra.last } } }]),
   ]);
@@ -99,7 +97,7 @@ test("import consumes only an explicit absolute upstream JSONL snapshot and reim
     assert.throws(() => readFileSync(join(f.out, "plan.md")), { code: "ENOENT" });
     for (const UNITS_FROM of ["relative.jsonl", join(f.root, "missing.jsonl")]) {
       assert.notEqual(f.run("import_units", { UNITS_FROM }).status, 0);
-      assert.match(f.run("check_plan").stderr, /rule=import-units/);
+      assert.equal(JSON.parse(f.run("check_plan").stderr).rule, "import-units");
       assert.notEqual(f.run("materialize", { APPROVED: "all" }).status, 0);
     }
     writeFileSync(f.upstream, "");
@@ -108,41 +106,81 @@ test("import consumes only an explicit absolute upstream JSONL snapshot and reim
   } finally { f.close(); }
 });
 
-test("unit validation reports line-local schema, standalone acceptance and provenance errors", () => {
+test("upstream package CLI and native check_plan emit identical complete diagnostics and retain corrected canonical bytes", () => {
   const f = fixture();
   try {
-    const cases: Array<[Record<string, unknown>, string]> = [
-      [{ ...unit(), id: "Bad ID" }, "kebab-id"], [{ ...unit(), title: " " }, "title"],
-      [{ ...unit(), dag: "other" }, "dag"], [{ ...unit("probe", "poc"), question: undefined }, "poc-question"],
-      ...["depends", "blocks", "blocked_by"].map(key => [{ ...unit(), [key]: [] }, "self-contained"] as [Record<string, unknown>, string]),
-      [{ ...unit(), body: "## Problem\nMissing sections" }, "required-sections"],
-      [{ ...unit("probe", "poc"), body: "## PoC\nMissing sections" }, "required-sections"],
-      [{ ...unit(), labels: "change" }, "labels"], [{ ...unit(), labels: [7] }, "labels"],
-      [{ ...unit(), id: null }, "kebab-id"], [{ ...unit(), title: 7 }, "title"],
-      [{ ...unit("probe", "poc"), question: null }, "poc-question"], [{ ...unit(), body: null }, "body"],
-      [{ ...unit(), source: "unknown" }, "source"], [{ ...unit(), source: null }, "source"],
-      [{ ...unit(), findings: "f1" }, "findings"], [{ ...unit(), findings: [""] }, "findings"],
-      [{ ...unit(), findings: [7] }, "findings"], [{ ...unit(), findings: ["f1", "f1"] }, "unique-findings"],
-    ];
-    for (const [row, rule] of cases) {
-      successful(f.importRows([unit("first"), row]));
-      const result = f.run("check_plan");
-      assert.notEqual(result.status, 0, rule);
-      assert.match(result.stderr, new RegExp(`units\\.jsonl:2: rule=${rule}`));
-      assert.match(readFileSync(join(f.out, "findings.md"), "utf8"), new RegExp(rule));
-    }
-    successful(f.importRows([unit(), unit()]));
-    assert.match(f.run("check_plan").stderr, /units\.jsonl:2: rule=unique-id/);
-    writeFileSync(f.upstream, "{invalid}\n"); successful(f.run("import_units"));
-    assert.match(f.run("check_plan").stderr, /units\.jsonl:1: rule=json-object/);
-    for (const source of ["refine", "discovery", "plan"]) {
-      successful(f.importRows([{ ...unit(), source, findings: ["f1"] }, unit("probe", "poc")]));
-      successful(f.run("check_plan"));
-    }
-    successful(f.importRows([{ ...unit(), body: "## Problema\nProblem\n## Cambio\nScope\n## Aceptación\nTest" }]));
+    const cli = fileURLToPath(new URL("../bin/dagu-feature-bundle.ts", import.meta.url));
+    const upstream = () => spawnSync(process.execPath, [cli, "validate-planning-units", "--input", f.upstream], { encoding: "utf8" });
+    writeFileSync(f.upstream, JSON.stringify({ ...unit(), id: "Bad ID", title: null, body: null, labels: [7] }) + '\n{invalid}\n' +
+      JSON.stringify({ ...unit("second", "poc"), question: null, source: "other" }) + "\n");
+    successful(f.run("import_units"));
+    const native = f.run("check_plan"), prepared = upstream();
+    assert.equal(native.status, 1);
+    assert.equal(prepared.status, 1);
+    assert.equal(native.stderr, prepared.stderr);
+    assert.equal(readFileSync(join(f.out, "findings.md"), "utf8"), prepared.stderr);
+    assert.equal(prepared.stderr.trim().split("\n").length, 7);
+    const canonical = "  " + JSON.stringify({ ...unit("consumer"), relationships: [{ kind: "blocked_by", target: { unit: "contract" } }] }) +
+      "\r\n" + JSON.stringify(unit("contract"));
+    writeFileSync(f.upstream, canonical);
+    successful(upstream());
+    successful(f.run("import_units"));
     successful(f.run("check_plan"));
+    assert.equal(readFileSync(join(f.out, "validated-units.jsonl"), "utf8"), canonical);
+    transcript(f);
+    successful(f.run("check_review", { REVIEW: "PlanReviewTest" }));
+    assert.equal(readFileSync(join(f.out, "reviewed-units.jsonl"), "utf8"), canonical);
   } finally { f.close(); }
 });
+
+test("all mechanical consumers require one review node and its valid structured native counter", () => {
+  const f = fixture();
+  try {
+    const review = { step: { id: "review" }, statusLabel: "succeeded", startedAt: "2026-10-17T00:00:01Z" };
+    const invalid = [
+      [], [review, review],
+      ...[null, -1, 1.5, "1", true].map(approvalIteration => [{ ...review, approvalIteration }]),
+    ];
+    for (const nodes of invalid) {
+      accepted(f);
+      for (const id of ["check_plan", "materialize", "check_review"]) {
+        assert.notEqual(f.run(id, { FAKE_REVIEW_NODES: JSON.stringify(nodes), REVIEW: "PlanReviewTest", APPROVED: "all" }).status, 0, `${id}: ${JSON.stringify(nodes)}`);
+      }
+    }
+    accepted(f);
+    successful(f.run("materialize", { APPROVED: "all" }));
+  } finally { f.close(); }
+});
+
+test("typed prerequisites and parent intent retain the exact snapshot through review and closed subset approval", () => {
+  const f = fixture();
+  try {
+    const rows = [
+      { ...unit("consumer"), relationships: [
+        { kind: "blocked_by", target: { unit: "contract" } },
+        { kind: "blocked_by", target: { issue: 442 } },
+        { kind: "parent", target: { unit: "umbrella" } },
+      ] },
+      unit("contract"), unit("umbrella"), unit("unrelated"),
+    ];
+    accepted(f, rows);
+    assert.equal(readFileSync(join(f.out, "reviewed-units.jsonl"), "utf8"), readFileSync(f.upstream, "utf8"));
+    for (const APPROVED of ["consumer", "consumer,contract", "consumer,umbrella"]) {
+      assert.match(f.run("materialize", { APPROVED }).stderr, /rule=approved-relationship-target/);
+      assert.deepEqual(JSON.parse(readFileSync(join(f.root, "issues.json"), "utf8")), []);
+    }
+    successful(f.run("materialize", { APPROVED: "consumer,contract,umbrella" }));
+    const issues = JSON.parse(readFileSync(join(f.root, "issues.json"), "utf8"));
+    assert.equal(issues.length, 3);
+    assert.match(issues[0].body, /Relationship intent: blocked_by unit:contract/);
+    assert.match(issues[0].body, /Relationship intent: blocked_by issue:#442/);
+    assert.match(issues[0].body, /Relationship intent: parent unit:umbrella/);
+    jsonl(join(f.out, "units.jsonl"), [{ ...rows[0], relationships: [{ kind: "blocked_by", target: { issue: 999 } }] }, ...rows.slice(1)]);
+    assert.notEqual(f.run("check_review", { REVIEW: "PlanReviewTest" }).status, 0);
+    assert.notEqual(f.run("materialize", { APPROVED: "all" }).status, 0);
+  } finally { f.close(); }
+});
+
 
 test("review binds parent, generation, agent, cutoff and final structured verdict before publication", () => {
   const f = fixture();
@@ -153,13 +191,16 @@ test("review binds parent, generation, agent, cutoff and final structured verdic
     for (const extra of [
       { parent: "/foreign/session.jsonl" }, { timestamp: "2026-10-17T00:00:00Z" },
       { timestamp: "2026-10-17T00:00:01Z" }, { agent: "worker" }, { marker: "wrong-generation" },
+      { sessions: 0 }, { sessions: 2 }, { inits: 0 },
+      { refresh: { agent: "worker" } }, { refresh: { task: "foreign task" } },
+      { timestamp: "2026-10-17T00:00:00Z", refresh: { timestamp: "2026-10-17T00:00:02Z" } },
       { last: "not-json" }, { last: { verdict: "accept" } },
     ]) {
       transcript(f, undefined, extra);
       assert.notEqual(check().status, 0, JSON.stringify(extra));
       assert.notEqual(f.run("materialize", { APPROVED: "all" }).status, 0);
     }
-    transcript(f); successful(check());
+    transcript(f, undefined, { refresh: { timestamp: "2026-10-17T00:00:02Z" } }); successful(check());
     assert.deepEqual(JSON.parse(readFileSync(join(f.out, "review-0.json"), "utf8")), { verdict: "accept", findings: [] });
     assert.notEqual(f.run("check_review", { REVIEW: "PlanReviewTest", FAKE_ITERATION: "1" }).status, 0);
     const duplicate = join(f.root, ".omp", "agent", "sessions", "-primary", "other_owner-session");
@@ -203,7 +244,7 @@ test("operator subset approval preserves labels, paginated idempotence, markers 
     successful(f.run("materialize", { APPROVED: "probe" }));
     let issues = JSON.parse(readFileSync(join(f.root, "issues.json"), "utf8"));
     assert.equal(issues.length, 1); assert.equal(issues[0].title, "Deliver probe");
-    assert.match(issues[0].body, /<!-- breakdown-unit: repo-breakdown-test\/probe -->/);
+    assert.ok(issues[0].body.includes(`<!-- breakdown-unit: ${f.env.RUN}/probe -->`));
     assert.match(issues[0].body, /<!-- discovery-unit: probe -->/);
     assert.match(issues[0].body, /Breakdown source: discovery/);
     assert.match(issues[0].body, /Finding lineage: bug-1, bug-2/);
@@ -216,7 +257,8 @@ test("operator subset approval preserves labels, paginated idempotence, markers 
     assert.deepEqual(rows.map(row => [row.id, row.reused]), [["unit-feature", true], ["probe", true]]);
     assert.ok(rows.every(row => Number.isInteger(row.number) && row.url.endsWith(`/${row.number}`)));
     const creates = readFileSync(join(f.root, "github.log"), "utf8").trim().split("\n");
-    assert.equal(creates.length, 2); assert.ok(creates.every(line => line.includes("--label change")));
+    assert.equal(creates.length, 2);
+    for (const line of creates) assert.deepEqual(JSON.parse(line).payload.labels, ["change"]);
     writeFileSync(join(f.root, "issues.json"), JSON.stringify([...issues, issues[0]]));
     assert.match(f.run("materialize", { APPROVED: "probe" }).stderr, /rule=unique-issue-marker unit=probe/);
   } finally { f.close(); }
@@ -238,4 +280,135 @@ test("discovery source identity reuses a persistent unit across distinct backend
     assert.equal(JSON.parse(readFileSync(join(f.root, "issues.json"), "utf8")).length, 1);
     assert.equal(readFileSync(join(f.root, "github.log"), "utf8").trim().split("\n").length, 1);
   } finally { f.close(); }
+});
+
+test("native planning push-back uses structured iteration across mechanical consumers", {
+  ...liveDagu,
+  timeout: 120_000,
+}, async t => {
+  const f = fixture();
+  const home = join(f.root, "dagu");
+  mkdirSync(join(home, "dags"), { recursive: true });
+  rmSync(join(f.bin, "curl"));
+  const port = async () => {
+    const server = createServer();
+    await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    assert.ok(address && typeof address !== "string");
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    return address.port;
+  };
+  const httpPort = await port(), schedulerPort = await port();
+  Object.assign(f.env, { DAGU_HOME: home, DAGU_PORT: String(httpPort), DAGU_COORDINATOR_ENABLED: "false" });
+  writeFileSync(join(home, "config.yaml"), `host: 127.0.0.1\nport: ${httpPort}\nauth:\n  mode: none\ncoordinator:\n  enabled: false\nscheduler:\n  port: ${schedulerPort}\n`);
+  jsonl(f.upstream, [{ ...unit("consumer"), relationships: [{ kind: "blocked_by", target: { unit: "contract" } }] }, unit("contract")]);
+  const native = structuredClone(definition);
+  native.labels = ["workspace=planning-regression"];
+  delete native.queue;
+  native.env = Object.entries(f.env).filter(([key]) => ["HOME", "TMPDIR", "PATH", "DAGU_HOME", "DAGU_PORT"].includes(key))
+    .map(([key, value]) => ({ [key]: value }));
+  native.env.push({ RUN: "${context.run.id}" }, { FEEDBACK: "" });
+  native.steps.find((step: { id: string }) => step.id === "init").run =
+    `printf 'OUT_DIR=%s\\nNWO=owner/repo\\n' '${f.out}' >> "$DAGU_OUTPUT_FILE"`;
+  const holds = ["check_plan", "check_review", "materialize"];
+  for (const id of holds) {
+    const step = native.steps.find((step: { id: string }) => step.id === id);
+    step.run = `while test -f '${f.root}/hold-${id}'; do sleep 0.05; done\n` + step.run;
+    writeFileSync(join(f.root, `hold-${id}`), "");
+  }
+  const path = join(home, "dags/planning.yaml");
+  writeFileSync(path, stringify(native));
+  let logs = "";
+  const service = spawn("dagu", ["start-all", "--host", "127.0.0.1", "--port", String(httpPort)], { env: f.env, stdio: ["ignore", "pipe", "pipe"] });
+  service.stdout.on("data", data => { logs += data; });
+  service.stderr.on("data", data => { logs += data; });
+  const api = `http://127.0.0.1:${httpPort}/api/v1`;
+  const dagu = (...args: string[]) => execFileSync("dagu", args, { env: f.env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  type Node = { step: { id: string; humanTask?: { prompt: string } }; statusLabel: string; startedAt: string; approvalIteration?: number };
+  type Run = { statusLabel: string; nodes: Node[] };
+  async function until<T>(description: string, probe: () => Promise<T | undefined>): Promise<T> {
+    const deadline = Date.now() + 30_000;
+    while (Date.now() < deadline) {
+      const result = await probe();
+      if (result !== undefined) return result;
+      await delay(50);
+    }
+    throw new Error(`Timed out ${description}\n${logs}`);
+  }
+  async function state(step: string, status: string): Promise<Run> {
+    return until(`${step} ${status}`, async () => {
+      const response = await fetch(`${api}/dag-runs/planning/${f.env.RUN}`);
+      if (!response.ok) return undefined;
+      const run = (await response.json() as { dagRunDetails: Run }).dagRunDetails;
+      assert.ok(!["failed", "aborted"].includes(run.statusLabel), JSON.stringify(run));
+      return run.nodes.some(node => node.step.id === step && node.statusLabel === status) ? run : undefined;
+    });
+  }
+  function reviewNode(run: Run): Node {
+    const matches = run.nodes.filter(node => node.step.id === "review");
+    assert.equal(matches.length, 1);
+    return matches[0]!;
+  }
+  function mechanical(run: Run, step: string, iteration: number): void {
+    assert.equal(run.nodes.find(node => node.step.id === step)?.statusLabel, "running");
+    const review = reviewNode(run);
+    assert.notEqual(review.statusLabel, "waiting");
+    assert.equal(review.approvalIteration ?? 0, iteration);
+  }
+  const marker = (iteration: number) => `PLAN_REVIEW AGENT=plan-reviewer DAG=planning RUN=${f.env.RUN} ITERATION=${iteration} END`;
+  try {
+    await until("loopback service", async () => {
+      try { return (await fetch(`${api}/dag-runs`)).ok ? true : undefined; } catch { return undefined; }
+    });
+    dagu("validate", path);
+    dagu("enqueue", "--run-id", f.env.RUN!, path, "--", `UNITS_FROM=${f.upstream}`, `PRIMARY=${f.env.PRIMARY}`, "SOURCE=refine", `OMP_SESSION_ID=${f.env.OMP_SESSION_ID}`);
+    const initial = await state("check_plan", "running");
+    mechanical(initial, "check_plan", 0);
+    assert.equal(Object.hasOwn(reviewNode(initial), "approvalIteration"), false, "present initial review node omits its zero counter");
+    rmSync(join(f.root, "hold-check_plan"));
+    const first = await state("review", "waiting");
+    assert.equal(readFileSync(join(f.out, "generation"), "utf8").trim(), marker(0));
+    assert.ok(reviewNode(first).step.humanTask?.prompt.includes(marker(0)));
+    writeFileSync(join(f.root, "hold-check_plan"), "");
+    dagu("human-task", "push-back", "planning", "--run-id", f.env.RUN!, "--step", "review", "--expected-iteration", "0", "--input", "FEEDBACK=Exercise the native next generation");
+    const reimport = await state("check_plan", "running");
+    mechanical(reimport, "check_plan", 1);
+    assert.equal(reviewNode(reimport).approvalIteration, 1);
+    rmSync(join(f.root, "hold-check_plan"));
+    const current = await state("review", "waiting");
+    assert.equal(readFileSync(join(f.out, "generation"), "utf8").trim(), marker(1));
+    assert.ok(reviewNode(current).step.humanTask?.prompt.includes(marker(1)));
+    assert.equal(readFileSync(join(f.out, "validated-units.jsonl"), "utf8"), readFileSync(f.upstream, "utf8"));
+    const cutoff = reviewNode(current).startedAt;
+    transcript(f, undefined, { timestamp: cutoff, refresh: { timestamp: new Date().toISOString() } });
+    dagu("human-task", "complete", "planning", "--run-id", f.env.RUN!, "--step", "review", "--input", "REVIEW=PlanReviewTest");
+    const verifying = await state("check_review", "running");
+    mechanical(verifying, "check_review", 1);
+    assert.notEqual(f.run("check_review", { REVIEW: "PlanReviewTest" }).status, 0, "current marker cannot admit a transcript at the current cutoff");
+    for (const extra of [{ parent: "/foreign/session.jsonl" }, { agent: "worker" }, { marker: marker(0) }]) {
+      transcript(f, undefined, { timestamp: new Date().toISOString(), ...extra });
+      assert.notEqual(f.run("check_review", { REVIEW: "PlanReviewTest" }).status, 0, "native generation preserves actor and provenance binding");
+    }
+    transcript(f, undefined, { timestamp: new Date().toISOString(), refresh: { timestamp: new Date().toISOString() } });
+    jsonl(join(f.out, "units.jsonl"), [unit("tampered")]);
+    assert.notEqual(f.run("check_review", { REVIEW: "PlanReviewTest" }).status, 0, "native generation preserves snapshot binding");
+    copyFileSync(f.upstream, join(f.out, "units.jsonl"));
+    rmSync(join(f.root, "hold-check_review"));
+    await state("approve", "waiting");
+    assert.deepEqual(JSON.parse(readFileSync(join(f.out, "review-1.json"), "utf8")), { verdict: "accept", findings: [] });
+    assert.equal(readFileSync(join(f.out, "review-accepted"), "utf8").trim(), marker(1));
+    assert.equal(readFileSync(join(f.out, "reviewed-units.jsonl"), "utf8"), readFileSync(f.upstream, "utf8"));
+    dagu("human-task", "complete", "planning", "--run-id", f.env.RUN!, "--step", "approve", "--input", "APPROVED=all");
+    const publishing = await state("materialize", "running");
+    mechanical(publishing, "materialize", 1);
+    rmSync(join(f.root, "hold-materialize"));
+    await state("materialize", "succeeded");
+    assert.deepEqual(readFileSync(join(f.out, "issues.jsonl"), "utf8").trim().split("\n").map(row => JSON.parse(row).id), ["consumer", "contract"]);
+    t.diagnostic(JSON.stringify({ version: liveDaguVersion, run: f.env.RUN, iteration: 1, consumers: holds, review: "review-1.json", sessionInits: 2, fixture: "real native runtime/push-back/approval/materialize; synthetic consistent fallback-refresh reviewer transcript and GitHub provider" }));
+  } finally {
+    for (const id of holds) rmSync(join(f.root, `hold-${id}`), { force: true });
+    service.kill("SIGTERM");
+    await new Promise<void>(resolve => service.exitCode !== null ? resolve() : service.once("exit", () => resolve()));
+    f.close();
+  }
 });

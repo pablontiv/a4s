@@ -50,7 +50,7 @@ interface CustomMessage {
   attribution?: string;
 }
 interface ExtensionAPI {
-  on(event: "session_start" | "session_switch" | "session_shutdown" | "agent_end", handler: (event: unknown, ctx: Context) => void): void;
+  on(event: "session_start" | "session_switch" | "session_shutdown" | "agent_start" | "agent_end", handler: (event: unknown, ctx: Context) => void): void;
   registerTool(tool: SessionIdTool): void;
   registerCommand(name: string, options: {
     description?: string;
@@ -392,10 +392,11 @@ export default function daguStatus(pi: ExtensionAPI): void {
     const ctx = activeContext;
     if (!ctx || ctx.agent.kind !== "main") return;
     const queue = queues.get(ctx.sessionManager.getSessionId());
-    if (!queue || queue.claimed) return;
+    if (!queue) return;
     while (queue.messages.length) {
       const idle = ctx.isIdle();
-      // Reserve the autonomous turn before sendMessage can start it.
+      if (idle && queue.claimed) break;
+      // Reserve only an idle wake; an active turn accepts asides while claimed.
       if (idle) queue.claimed = true;
       const message = queue.messages.shift()!;
       pi.sendMessage({
@@ -447,6 +448,8 @@ export default function daguStatus(pi: ExtensionAPI): void {
   pi.on("session_start", start);
   pi.on("session_switch", start);
   pi.on("session_shutdown", stop);
+  // Idle sendMessage admission is asynchronous; drain the batch once its turn starts.
+  pi.on("agent_start", pump);
   pi.on("agent_end", (_event, ctx) => {
     const queue = queues.get(ctx.sessionManager.getSessionId());
     if (queue) queue.claimed = false;

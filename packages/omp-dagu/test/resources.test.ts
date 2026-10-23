@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
-import { resourceDecision } from "../src/resources.ts";
+import { resourceDecision, shellWords } from "../src/resources.ts";
 import extension from "../src/triage/index.ts";
 import { withResourceGuard } from "./resource-fixtures.ts";
 
@@ -44,6 +44,32 @@ function script(definition: string, marker: string) {
   return withResourceGuard((marker === "  - id: close_gate" ? "CLEANUP_CLOSE=true\n" : "") +
     lines.slice(start + 1, end).map(line => line.slice(6)).join("\n"), definition);
 }
+
+test("shared shell words preserve Bash literal hashes, quoting and continuations", () => {
+  for (const text of [
+    "'quoted # text' \"double # text\" escaped\\#text foo#bar",
+    '"backslash\\#hash" \'single\\#hash\'',
+    "one \\\n two # ignored --input IMPLEMENTER=Other",
+    "'' \"\" # trailing comment",
+    "'single quoted \\\n continuation' \"double quoted \\\n continuation\"",
+  ]) {
+    const actual = execFileSync("bash", ["-c", `set -- ${text}\nprintf '%s\\0' "$@"`], { encoding: "utf8" }).split("\0").slice(0, -1);
+    assert.deepEqual(shellWords(text), actual, text);
+  }
+});
+
+test("resource guard honors comments and retains the following command boundary", async t => {
+  const repo = fixture(), previousPath = process.env.PATH;
+  process.env.PATH = repo.env.PATH;
+  t.after(() => { process.env.PATH = previousPath; rmSync(repo.root, { recursive: true, force: true }); });
+  repo.git(repo.primary, "worktree", "add", "-b", repo.branch, repo.worktree, "origin/main");
+  repo.history("feature", [repo.row("owner", "waiting")]);
+  const event = (command: string) => ({ toolName: "bash", toolCallId: "comment", input: { command } });
+  assert.equal(await resourceDecision(event("echo safe # git branch -D dagu/issue-215"), repo.primary), undefined);
+  const decision = await resourceDecision(event("echo safe # ignored\n git branch -D dagu/issue-215"), repo.primary);
+  assert.ok(decision && "block" in decision && decision.block);
+  assert.match(decision.reason!, /belongs to active run owner \(waiting\)/);
+});
 
 test("OMP bash resource guard protects feature and PoC owners in every active state and canonical alias", async t => {
   const repo = fixture(), previousPath = process.env.PATH;

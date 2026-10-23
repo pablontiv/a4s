@@ -1,19 +1,130 @@
 # Changelog
 
+## 0.3.118
+
+- Carry the v1 lane's paginated, completeness-validated merged-PR file metadata into the current lifecycle template, preserving bootstrap selection for large diffs (#493).
+- Preserve terminal-snapshot observation before bundle-rebase fixture log consumption (#522) and the private `@a4s/hot-reload` package migration (#421).
+- Merge main into `integration/v1` and adopt the stamped 0.3.117 lifecycle renders with the independent v1 workspace, queue, base branch and primary clone.
+
+## 0.3.117
+
+- Allocate real Dagu test run identities through one shared per-execution fixture helper, including child runs and lifecycle lookups, so concurrent suites keep host-global control sockets separate (#542).
+
+## 0.3.115
+
+- Admit the owner session's literal inert-quality disposal completion only for a stored historical snapshot with no checkpoint cancellation route and a verified fail-closed QA/REVIEW binding; preserve normal structured verdict admission (#545).
+- Document native failure at quality_admit, retained unpublished work and recovery under a fresh run ID.
+
+## 0.3.114
+
+- Declare cancellation-only `CANCEL=yes` completions on distributed feature, PoC and discovery checkpoints, routing to native failure or active-gate abort before successors, recovery and promotion (#290).
+- Preserve native exit cleanup and unpublished candidates, suppress PoC failure publication on cancellation, and document new-snapshot compatibility and unresolved historical recovery.
+- Admit literal cancellation-only implement/quality completions through OMP's quality guard only for same-repository waiting snapshots that declare and route cancellation; normal delivery evidence remains required.
+- Exercise checkpoint cancellation against isolated pinned Dagu, real linked Git worktrees and an external-effect ledger.
+
+## 0.3.112
+
+- Run the explicit QA/reviewer join as authorized native role jobs, independently of the coordinator, and admit their actual emitting sessions through sealed job receipts (#514).
+- Bind quality to the current repository/lane/candidate/capture iteration/attempt and registered role, retain effective models and fallback history, and enforce fresh distinct sessions and implementer-family exclusion before publication.
+- Preserve immutable admission identity with appended runtime observations and validate typed verdicts and transcript artifacts at the quality boundary.
+
+## 0.3.110
+
+- Deliver later owner-session notices as asides at host step boundaries during a reserved autonomous turn, preserving FIFO order, one idle wake, session ownership and terminal delivery (#519).
+- Drain queued idle batches on the host's asynchronous `agent_start`, with asynchronous-admission regressions and an isolated OMP 18.12.6 smoke confirming ten notices across two runs in one autonomous agent invocation.
+
+## 0.3.109
+
+- Run authorized feature triage and implementation/conflict resolution as Dagu command-owned native OMP jobs, retaining registered agents and complete role/model fallback routing (#513). Keep the existing coordinator-dispatched QA/reviewer human-task join, quality.json writer and quality admission operational; #514 owns wiring QA/reviewer role-job receipts and migrating quality templates/hooks.
+- Persist canonical claims, executor identity, per-DAGU_HOME capacity, worktree exclusion and duplicate suppression in SQLite. Bind each native step retry to its fresh start timestamp, preserving failed/interrupted receipts; retain native session/model/fallback evidence and linked admission observations.
+- Bind captured candidates to the admitted native implementer result digest/input HEAD for existing cross-family quality checks. Publish schemaVersion 1 receipts and QA/reviewer executor support for #514 and semantic-evidence consumer #517; retain operator validation.
+- Remove the superseded coordinator triage-completion guard and its unreachable tests; document same-command-step recovery and exercise quality stage progression offline and in pinned Dagu.
+- Preserve #543's triage contract in native role jobs: inject the shared decision schema, bind the exact job marker independently of agent name or criterion prose, and retain field/expected/observed diagnostics. The sealed current job receipt replaces coordinator-task lineage.
+- Bind triage jobs to immutable admission HEAD so unrelated PRIMARY fast-forwards preserve active work and redelivery identity. Retain implement-completion guards for in-flight human-task snapshots and exercise their explicit historical form in live Dagu.
+
+## 0.3.108
+
+- Serialize the complete feature gate body per primary with an inherited kernel advisory lock, including human-task resumes, retries and reconciler BEHIND/DIRTY rebases, while retaining declared repository queue capacity (#537).
+- Log waiting holder run/PID diagnostics and release exclusion with process/descendant descriptor lifetime, including failure, cancellation and holder death; validate Python 3/fcntl during adoption and cover native Dagu entry paths.
+
+## 0.3.107
+
+- Bind triage review tasks by DAG/run/generation/request marker across agent types, accept results only for the current request, inject one canonical decision schema, and report invalid bound output with field/expected/observed diagnostics.
+- Verify native triage evidence by exact parent, complete marker, strictly fresh timestamp and final `poc=no`, while retaining selected agents' cross-family dispatch policy.
+- Report primary and transcript namespace mismatches as expected/observed facts; document marker-based review and enforce distributed-agent schema identity.
+
+## 0.3.106
+
+- Diagnose rejected automatic checkpoint transitions after native stale-process repair and document same-run checkpoint recovery for feature, PoC, discovery and planning (#524).
+- Cover stale-process recovery at PoC `decide`, including repeat verdict comments, PASS body-section appends, and operator-reviewed publication replay precautions (#524).
+
 ## 0.3.105
 
-- Determine merged-PR bootstrap selection from paginated REST file metadata rather than textual diffs, allowing large diffs to close independently of GitHub's diff-size limit (#493).
-- Validate the reported changed-file count, original pages, file records and unique filenames before selecting skill or changelog changes. API failures, incomplete evidence and counts at or above the 3,000-file endpoint ceiling retain an explicit cleanup diagnostic.
-- Exercise the maintained close script with isolated multipage, malformed-evidence and bootstrap fixtures; deployed renders and historical run recovery remain separate delivery outcomes.
+- Support native task batches containing QA/reviewer assignments for independent current quality requests, binding each assignment's verdict contract and model eligibility to its own run and effective implementer (#495).
+- Validate every marked assignment before installing dispatch bindings; preserve exact markers, distinct names, request/candidate freshness and independent transcript-backed verdict admission. Unmarked tasks and shared batch context retain their native behavior.
 
 ## 0.3.104
 
-- Observe a terminal Dagu run snapshot before consuming bundle-rebase fixture logs, preserving normalized-version, gate-SHA, publication evidence and failure diagnostics (#522).
+- Align the distributed skill with the approved same-major-and-minor, patch-compatible admission contract for requested DAG and reconciler stamps, distinguishing exact package identity, source provenance, native-version checks and notice-only stale warnings while preserving immutable admission snapshots (#482).
 
 ## 0.3.103
 
-- Migrate the private reload helper to `@a4s/hot-reload` in `packages/hot-reload` and update every retained consumer, including the Dagu status and triage extension entrypoints (#421).
-- Preserve message-bus application workspaces, scripts, CI selection and locked dependencies alongside the canonical helper migration.
+- Share effective agent-directory resolution between activity and the primary-session guard, including named profiles and existing configuration-directory precedence (#356).
+- Resolve exactly one coordinator parent across default and named-profile session roots before verifying its allocated triage-reviewer child; report consulted paths and match counts on rejection.
+- Emit actionable parent-uniqueness failure markers for empty coordinator searches under Bash 3.2 nounset, while preserving named-profile verification and duplicate-parent rejection.
+
+## 0.3.102
+
+- Limit scheduled reconciliation to waiting feature discovery and PR/CI checkpoint transitions through `tick` and `reconcile-run`, preserving transition safety and lifecycle cleanup contracts.
+- Remove the unowned human-task and leftover-resource detectors and their monitoring documentation.
+
+## 0.3.101
+
+- Read effective native `crossFamilyReview.policies` for the independent quality preflight and bound implementer dispatch instead of maintaining a second fixed fallback list; preserve transcript provenance, family admission and publication guards (#359).
+- Document repository-owned adoption for code, QA, security, triage and planning review with cross-family 0.3.0.
+
+## 0.3.100
+
+- Add `dagu-feature-prioritize <feature|poc> <run-id>` to move a queued lifecycle run to the front of its concurrency-one repository queue while preserving all other relative order, original IDs, parameters and retained native definitions (#334).
+- Persist private recovery snapshots and exact native enqueue arguments before dequeue; resolve existing receipts from retained adopted policy, verify snapshot/parameter consistency including JSON-schema defaults, and report partial queue effects and recoverable `LOST` entries on operation failure (#334).
+
+## 0.3.99
+
+- Report abandoned waiting feature, PoC and discovery human tasks through an independent read-only `UNOWNED` reconcile branch, using process-held OMP session locks and visible fail-closed liveness diagnostics (#301).
+
+## 0.3.98
+
+- Persist the optional consumer `A4S_BLOCKER_REPORTING=ask|auto` choice in adopted feature policy, preserving the installed choice on blank bootstrap upgrades and requiring explicit opt-in for automatic reports (#454).
+- Define the same-host native A4S owner handoff with scoped authorization, private evidence payloads, verified blocking issue receipts and consumer readback, preserving consumer ownership and unrelated lifecycle state (#454).
+- Render and verify digit-bearing placeholders such as `__A4S_BLOCKER_REPORTING__` in admission fixtures and installed DAG source provenance (#454).
+
+## 0.3.97
+
+- Admit consistent native fallback `session_init` refreshes in planning review and feature triage: require one expected-parent session and one or more identical agent/task initializations, retain first-init freshness, and preserve generation and final structured-yield validation (#466).
+- Exercise refreshed planning review through native Dagu push-back, approval and materialization, with consumer-boundary regressions for transcript identity and verdict checks (#466).
+
+## 0.3.96
+
+- Align station-install skill and operating documentation with the existing queue-name merge contract: template-owned fields replace matching queue values (including `a4s.max_concurrency=8` to bundled `2`), while extra metadata and foreign queues retain their values. Classify the original report as source evidence, not an observed production overwrite (#449).
+
+## 0.3.95
+
+- Share the canonical planning unit schema and complete deterministic JSONL diagnostics between upstream preparation and native `check_plan` through `dagu-feature-bundle validate-planning-units`, preserving exact validated input bytes and independent semantic review (#443).
+- Materialize explicitly approved existing-issue revisions and native blocked-by/sub-issue relationships in the existing planning backend. Preserve undeclared fields and existing edges; retain durable partial-progress mappings and grouped complete remote-state verification so retries converge without search-index freshness (#444).
+
+## 0.3.94
+
+- Validate implement completion against the current checkpoint cutoff and coordinator allocation using the same transcript and effective-model provenance required by quality review, including feature-last commands with spaced quoted inputs and reordered flags; stale deliveries retain Waiting implement with a fresh-task remedy.
+- Bind literal implement completion to Bash word-boundary comments and preserve quoted, escaped and embedded hashes; recognize one literal simple command and diagnose compound boundaries, expansion, redirection and incomplete quoting before provenance lookup.
+- Apply the same implementer provenance checks to native attached `-r<run-id>` completion arguments without consuming the following step flag.
+- Discover static JavaScript string and template command literals separately from shell parsing, including tagged templates and wrappers containing `#` comments; apply the same freshness/provenance check to the decoded shell command. Require one inspectable static call and reject ambiguous, dynamic or unsupported visible implement-completion intent before lookup, preserving Waiting implement against fresh decoys and stale actual commands.
+- Allow native quality-review push-back to implement in the same run and iteration history.
+- Run the native implement-guard and quality-review rewind regression in the canonical pinned-runtime live test suite.
+- Preserve the combined candidate's original merge-base during capture and handoff so all intended source changes reach the integration candidate (#375).
+- Materialize typed GitHub relationships separately from unit completeness, retaining independent completeness evidence (#442).
+- Bound planning preparation, record effort, and require independent plan review before operator approval (#445).
+- Clarify recovery delivery versus feature publication: recovery preserves retained evidence while feature publication follows its own candidate and quality boundaries (#450).
+- Read Dagu's structured native push-back counter in all three planning consumers, preserving the observed iteration across review and approval rewinds (#452).
 
 ## 0.3.93
 

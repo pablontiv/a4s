@@ -1,7 +1,7 @@
-# dagu-feature-bundle: @a4s/omp-dagu@0.3.91 source=pablontiv/a4s@dce8dfe52e2131b7dd7955e2dff0e67af7a487b4 bootstrap=bootstrap-a4s-v0-3-91 dagu=2.20.1
+# dagu-feature-bundle: @a4s/omp-dagu@0.3.117 source=pablontiv/a4s@12918b32d9a8cc14d3665225baaf36f764ef4d8d bootstrap=bootstrap-a4s-v0-3-117 dagu=2.20.1
 labels:
   - workspace=a4s-v1
-  - dagu-feature-bundle=0.3.91
+  - dagu-feature-bundle=0.3.117
 queue: a4s-v1
 type: graph
 dotenv: []
@@ -39,9 +39,10 @@ env:
   - GATE: "npm ci && npm test && npm run typecheck"
   - REBASE_RESOLVER: "node packages/omp-dagu/bin/dagu-bundle-rebase.mjs"
   - REQUIRED_CHECK: "validate"
+  - A4S_BLOCKER_REPORTING: "ask"
   - WORKTREE: ${PRIMARY}/.workspace/worktrees/issue-${ISSUE}
   - RUN: ${context.run.id}
-  - DAGU_FEATURE_BUNDLE: "dagu-feature-bundle=0.3.91 source=pablontiv/a4s@dce8dfe52e2131b7dd7955e2dff0e67af7a487b4 bootstrap=bootstrap-a4s-v0-3-91"
+  - DAGU_FEATURE_BUNDLE: "dagu-feature-bundle=0.3.117 source=pablontiv/a4s@12918b32d9a8cc14d3665225baaf36f764ef4d8d bootstrap=bootstrap-a4s-v0-3-117"
   - DAGU_RESOURCE_GUARD: |
       resource_lock() {
         local operation=$1 primary root expected actual common key attempt owner run status candidate branch issue
@@ -186,7 +187,7 @@ steps:
   - id: admission
     run: |
       set -euo pipefail
-      rejected=$(jq -er 'keys[] | select(. == "GATE" or . == "REBASE_RESOLVER" or . == "REQUIRED_CHECK" or . == "PRIMARY" or . == "BRANCH")' <<<"$DAGU_PARAMS_JSON") || [[ $? == 4 ]]
+      rejected=$(jq -er 'keys[] | select(. == "GATE" or . == "REBASE_RESOLVER" or . == "REQUIRED_CHECK" or . == "PRIMARY" or . == "BRANCH" or . == "A4S_BLOCKER_REPORTING")' <<<"$DAGU_PARAMS_JSON") || [[ $? == 4 ]]
       if [[ -n "$rejected" ]]; then
         printf 'admission rejected run parameter: %s\n' "$rejected" >&2
         printf 'adopted policy PRIMARY=%q GATE=%q REBASE_RESOLVER=%q REQUIRED_CHECK=%q BRANCH=%q\n' "$PRIMARY" "$GATE" "${REBASE_RESOLVER:-}" "$REQUIRED_CHECK" "$BRANCH" >&2
@@ -195,30 +196,12 @@ steps:
 
   - id: triage
     depends: admit
-    action: human.task
-    with:
-      prompt: >-
-        A PoC is required when implementation depends on unexercised external or
-        runtime behavior that can change the implementation path. Reuse of demonstrated
-        behavior proceeds directly. Bug reproduction is not a PoC.
-        Provide POC=yes|no, QUESTION, BASIS (prior PASS/merged PR URL or reason),
-        and REVIEW (reviewer subagent output reference, required for POC=no).
-        For promotion cite this PASS URL as BASIS: ${POC_BASIS}.
-      form:
-        type: object
-        properties:
-          POC:
-            type: string
-            enum: ['yes', 'no']
-          QUESTION:
-            type: string
-            minLength: 1
-          BASIS:
-            type: string
-            minLength: 1
-          REVIEW:
-            type: string
-        required: [POC, QUESTION, BASIS]
+    run: dagu-role-jobs stage triage
+    outputs:
+      - name: POC
+      - name: QUESTION
+      - name: BASIS
+      - name: REVIEW
 
   - id: triage_decision
     depends: triage
@@ -229,157 +212,9 @@ steps:
       - REVIEW: ${steps.triage.outputs.REVIEW}
     run: |
       set -euo pipefail
-      verify_triage_reviewer() {
-        local canonical home tmp encoded sessions_dir transcript expected_parent
-        local rest triage_count cutoff required
-        for required in PRIMARY OMP_SESSION_ID REVIEW RUN; do
-          if [[ -z "${!required:-}" ]]; then
-            printf 'check.params=FAIL name=%s\nVERIFIER=FAIL\n' "$required"
-            return 1
-          fi
-        done
-        printf 'check.params=PASS\n'
-        case "$REVIEW" in
-          ''|.|..|*[!A-Za-z0-9._-]*)
-            printf 'check.review_name=FAIL value=%q\nVERIFIER=FAIL\n' "$REVIEW"
-            return 1
-            ;;
-          *) printf 'check.review_name=PASS\n' ;;
-        esac
 
-        printf 'rest.url=http://127.0.0.1:%s/api/v1/dag-runs/feature/%s\n' "${DAGU_PORT:-8080}" "$RUN"
-        if ! rest=$(curl -fsS "http://127.0.0.1:${DAGU_PORT:-8080}/api/v1/dag-runs/feature/$RUN"); then
-          printf 'check.rest=FAIL\nVERIFIER=FAIL\n'
-          return 1
-        fi
-        if ! triage_count=$(jq -er '[.dagRunDetails.nodes[]? | select(.step.id == "triage")] | length' <<<"$rest"); then
-          printf 'check.rest_json=FAIL\nVERIFIER=FAIL\n'
-          return 1
-        fi
-        printf 'triage.node_count=%s\n' "$triage_count"
-        if [[ "$triage_count" != 1 ]]; then
-          printf 'check.rest_triage_node=FAIL\nVERIFIER=FAIL\n'
-          return 1
-        fi
-        if ! cutoff=$(jq -er '[.dagRunDetails.nodes[]? | select(.step.id == "triage")][0].startedAt | select(type == "string" and length > 0)' <<<"$rest"); then
-          printf 'triage.startedAt=<missing>\ncheck.rest_triage_startedAt=FAIL\nVERIFIER=FAIL\n'
-          return 1
-        fi
-        printf 'triage.startedAt=%s\ncheck.rest_triage_node=PASS\n' "$cutoff"
-
-        if ! canonical=$(cd "$PRIMARY" 2>/dev/null && pwd -P); then
-          printf 'check.primary=FAIL value=%q\nVERIFIER=FAIL\n' "$PRIMARY"
-          return 1
-        fi
-        if ! home=$(cd "$HOME" 2>/dev/null && pwd -P); then
-          printf 'check.home=FAIL value=%q\nVERIFIER=FAIL\n' "$HOME"
-          return 1
-        fi
-        if ! tmp=$(cd "${TMPDIR:-/tmp}" 2>/dev/null && pwd -P); then
-          printf 'check.tmp=FAIL value=%q\nVERIFIER=FAIL\n' "${TMPDIR:-/tmp}"
-          return 1
-        fi
-        encode_relative() {
-          local prefix=$1 relative=$2 result
-          result=${relative//\//-}
-          result=${result//\\/-}
-          result=${result//:/-}
-          if [[ -z "$result" ]]; then
-            printf '%s' "$prefix"
-          elif [[ "$prefix" == *- ]]; then
-            printf '%s%s' "$prefix" "$result"
-          else
-            printf '%s-%s' "$prefix" "$result"
-          fi
-        }
-        if [[ "$canonical" == "$tmp" ]]; then
-          encoded=$(encode_relative -tmp '')
-        elif [[ "$canonical" == "$tmp/"* ]]; then
-          encoded=$(encode_relative -tmp "${canonical#"$tmp/"}")
-        elif [[ "$canonical" == "$home" ]]; then
-          encoded=$(encode_relative - '')
-        elif [[ "$canonical" == "$home/"* ]]; then
-          encoded=$(encode_relative - "${canonical#"$home/"}")
-        else
-          encoded=${canonical#/}
-          encoded=${encoded//\//-}
-          encoded=${encoded//\\/-}
-          encoded=${encoded//:/-}
-          encoded="--${encoded}--"
-        fi
-        sessions_dir="$HOME/.omp/agent/sessions/$encoded"
-        printf 'primary.canonical=%s\nprimary.encoded=%s\nsessions.dir=%s\n' \
-          "$canonical" "$encoded" "$sessions_dir"
-
-        shopt -s nullglob
-        matches=("$sessions_dir"/*_"$OMP_SESSION_ID"/"$REVIEW".jsonl)
-        printf 'transcript.match_count=%d\n' "${#matches[@]}"
-        if [[ ${#matches[@]} -ne 1 ]]; then
-          printf 'session.parentSession=<unavailable>\n'
-          printf 'session_init.agent=<unavailable>\n'
-          printf 'session_init.task=<unavailable>\n'
-          printf 'session_init.timestamp=<unavailable>\n'
-          printf 'last_yield.details.data.poc=<unavailable>\n'
-          printf 'check.transcript_unique=FAIL\nVERIFIER=FAIL\n'
-          return 1
-        fi
-        transcript=${matches[0]}
-        expected_parent="${transcript%/*}.jsonl"
-        printf 'transcript.path=%s\nexpected.parentSession=%s\ncheck.transcript_unique=PASS\n' \
-          "$transcript" "$expected_parent"
-
-        jq -ser --arg expected_parent "$expected_parent" --arg run "$RUN" --arg cutoff "$cutoff" '
-          def rfc3339_epoch:
-            if type != "string" then null
-            else try (
-              capture("^(?<base>[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2})(?:\\.(?<frac>[0-9]+))?(?<zone>Z|(?<sign>[+-])(?<hour>[0-9]{2}):(?<minute>[0-9]{2}))$")
-              | ((.base + "Z") | fromdateiso8601) as $base
-              | (("0." + (.frac // "0")) | tonumber) as $fraction
-              | (if .zone == "Z" then 0
-                 else (((.hour | tonumber) * 3600 + (.minute | tonumber) * 60) * (if .sign == "+" then 1 else -1 end))
-                 end) as $offset
-              | $base + $fraction - $offset
-            ) catch null end;
-          . as $rows
-          | ($rows | map(select(.type == "session")) | first) as $session
-          | ($rows | map(select(.type == "session_init")) | first) as $init
-          | ($rows | map(select(.type == "message" and .message.role == "toolResult" and .message.toolName == "yield")) | last) as $yield
-          | ($init.timestamp | rfc3339_epoch) as $started
-          | ($cutoff | rfc3339_epoch) as $cutoff_epoch
-          | {
-              fields: {
-                parentSession: $session.parentSession,
-                agent: $init.agent,
-                task: $init.task,
-                timestamp: $init.timestamp,
-                poc: $yield.message.details.data.poc
-              },
-              checks: {
-                parentSession: ($session.parentSession == $expected_parent),
-                agent: ($init.agent == "triage-reviewer"),
-                task: (($init.task // "") | contains("TRIAGE_REVIEW AGENT=triage-reviewer DAG=feature RUN=\($run) ")),
-                timestamp: ($started != null and $cutoff_epoch != null and $started > $cutoff_epoch),
-                poc: ($yield.message.details.data.poc == "no")
-              }
-            }
-          | .overall = ([.checks[]] | all)
-          | "session.parentSession=\(.fields.parentSession // "<missing>")",
-            "session_init.agent=\(.fields.agent // "<missing>")",
-            "session_init.task=\((.fields.task // "<missing>") | @json)",
-            "session_init.timestamp=\(.fields.timestamp // "<missing>")",
-            "last_yield.details.data.poc=\(.fields.poc // "<missing>")",
-            "cutoff=\($cutoff)",
-            "check.parentSession=\(if .checks.parentSession then "PASS" else "FAIL" end)",
-            "check.agent=\(if .checks.agent then "PASS" else "FAIL" end)",
-            "check.task_run_marker=\(if .checks.task then "PASS" else "FAIL" end)",
-            "check.timestamp_after_cutoff=\(if .checks.timestamp then "PASS" else "FAIL" end)",
-            "check.last_yield_poc_no=\(if .checks.poc then "PASS" else "FAIL" end)",
-            "VERIFIER=\(if .overall then "PASS" else "FAIL" end)",
-            (if .overall then empty else halt_error(1) end)
-        ' "$transcript"
-      }
       if [[ "$POC" == no ]]; then
-        verify_triage_reviewer
+        dagu-role-jobs verify-triage
       fi
 
       STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")
@@ -431,9 +266,46 @@ steps:
       prompt: "start_gate: ${steps.detect_start_primary.outputs.reason}. Restore ${PRIMARY} to clean ${BASE_BRANCH}, preserving the operator's changes; then push back this checkpoint with the observed iteration to recheck in the same run. start_gate creates the worktree."
       push_back:
         rewind_to: detect_start_primary
+      form:
+        type: object
+        properties:
+          CANCEL: {type: string, enum: ['yes', 'no']}
+
+  - id: start_primary_unavailable_cancellation
+    depends: start_primary_unavailable
+    continue_on: skipped
+    preconditions:
+      - condition: "${steps.detect_start_primary.outputs.reason}"
+        expected: "re:^primary "
+    env:
+      - CANCEL: ${steps.start_primary_unavailable.outputs.CANCEL}
+      - CHECKPOINT: start_primary_unavailable
+    run: &cancellation_gate |
+      set -euo pipefail
+      if [[ "$CANCEL" == yes ]]; then
+        STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")
+        mkdir -p "$STATE"
+        terminal=${NATIVE_TERMINAL:-failed}
+        jq -n --arg run "$RUN" --arg checkpoint "$CHECKPOINT" --arg worktree "$WORKTREE" --arg native "$terminal" \
+          '{run:$run,checkpoint:$checkpoint,worktree:$worktree,outcome:"cancelled",nativeExpected:$native}' > "$STATE/cancellation.json"
+        printf 'Cancellation requested at %s; terminating before successors; evidence=%s\n' "$CHECKPOINT" "$STATE"
+        if [[ "$terminal" == aborted ]]; then
+          # A sibling human task may still wait. Stop only this resumed active,
+          # effect-free gate; a plain failure would leave the run Waiting.
+          dagu stop --run-id "$RUN" feature
+          sleep 30
+          printf 'Native stop did not terminate the active cancellation gate\n' >&2
+        fi
+        exit 77
+      fi
+      for field in ${REQUIRED_FIELDS:-}; do
+        value=${!field:-}
+        [[ -n "$value" && "$value" != '${steps.'* ]] ||
+          { printf 'Normal completion requires %s at %s\n' "$field" "$CHECKPOINT" >&2; exit 1; }
+      done
 
   - id: start_gate
-    depends: start_primary_unavailable
+    depends: start_primary_unavailable_cancellation
     continue_on:
       failure: true
     env:
@@ -507,7 +379,10 @@ steps:
       mkdir -p "$STATE"
       printf '%s\n' "$identity" > "$owner"
       printf '%s\n' "$identity" > "$STATE/identity"
-      if ! test -f "$STATE/base"; then git -C "$WORKTREE" rev-parse HEAD > "$STATE/base"; fi
+      if ! test -f "$STATE/base"; then
+        git -C "$WORKTREE" rev-parse HEAD > "$STATE/initial-head"
+        git -C "$WORKTREE" merge-base HEAD "origin/$BASE_BRANCH" > "$STATE/base"
+      fi
       worktree_path=$(cd "$WORKTREE" && pwd -P)
       jq -n --arg run "$RUN" --arg primary "$primary_path" --arg branch "$BRANCH" --arg worktree "$worktree_path" \
         '{run:$run,primary:$primary,branch:$branch,worktree:$worktree}' > "$STATE/resource.json"
@@ -526,28 +401,33 @@ steps:
       prompt: "start_gate failed. Inspect its logs, restore remote access or reconcile PRIMARY preserving operator commits, then push back with the observed run-wide iteration to retry start_gate in this run."
       push_back:
         rewind_to: start_gate
-
-  - id: implement
-    depends: recover_start_gate
-    preconditions:
-      - condition: "${steps.triage.outputs.POC}"
-        expected: "no"
-    action: human.task
-    with:
-      prompt: "Launch a distinct implementer with FEATURE_IMPLEMENT RUN=${RUN} in its task assignment. Deliver the files for issue #${ISSUE} inside ${WORKTREE} on ${BRANCH}, plus SUMMARY, conventional MESSAGE and allocated IMPLEMENTER id. Dagu stages and commits the delivery. After conflict or quality push-back, read the findings in <git-dir>/dagu-feature/runs/${RUN}/quality.json and conflict-files, and correct this same worktree. Git and Dagu-store access remains an advisory trust boundary."
       form:
         type: object
         properties:
-          SUMMARY:
-            type: string
-            minLength: 1
-          MESSAGE:
-            type: string
-            minLength: 1
-          IMPLEMENTER:
-            type: string
-            pattern: '^[A-Za-z0-9][A-Za-z0-9._-]*$'
-        required: [SUMMARY, MESSAGE, IMPLEMENTER]
+          CANCEL: {type: string, enum: ['yes', 'no']}
+
+  - id: recover_start_gate_cancellation
+    depends: recover_start_gate
+    continue_on: skipped
+    preconditions:
+      - condition: "${start_gate.exit_code}"
+        expected: "re:^[1-9][0-9]*$"
+    env:
+      - CANCEL: ${steps.recover_start_gate.outputs.CANCEL}
+      - CHECKPOINT: recover_start_gate
+    run: *cancellation_gate
+
+  - id: implement
+    depends: recover_start_gate_cancellation
+    preconditions:
+      - condition: "${steps.triage.outputs.POC}"
+        expected: "no"
+    run: dagu-role-jobs stage implement
+    outputs:
+      - name: SUMMARY
+      - name: MESSAGE
+      - name: IMPLEMENTER
+
 
   - id: capture
     depends: implement
@@ -578,6 +458,7 @@ steps:
       base=$(cat "$STATE/base")
       head=$(git rev-parse HEAD)
       expected=$base
+      if test -f "$STATE/initial-head"; then expected=$(cat "$STATE/initial-head"); fi
       if test -f "$STATE/candidate.json"; then expected=$(jq -r .sha "$STATE/candidate.json"); fi
       test "$head" = "$expected" || fail "HEAD differs from Dagu candidate"
       # Resolve every changed path and symlink lexically and physically, including dangling links.
@@ -625,6 +506,17 @@ steps:
         fi
         iteration=$(( $(jq -r .iteration "$STATE/candidate.json") + 1 ))
       fi
+      implementation=null
+      if [[ "$IMPLEMENTER" =~ ^[a-f0-9]{64}$ ]]; then
+        result="$STATE/role-jobs/$IMPLEMENTER/result.json"
+        jq -e --arg repo "$primary" --arg worktree "$worktree" --arg run "$RUN" --arg head "$head" --arg id "$IMPLEMENTER" \
+          '.id == $id and .state == "completed" and .binding.repo == $repo and .binding.worktree == $worktree and
+           .binding.run == $run and .binding.stage == "implement" and .binding.sha == $head' "$result" >/dev/null ||
+          fail "implementation receipt differs from delivered HEAD"
+        digest=$(shasum -a 256 "$result")
+        implementation=$(jq -nc --arg inputSha "$head" --arg resultDigest "${digest%% *}" \
+          '{inputSha:$inputSha,resultDigest:$resultDigest}')
+      fi
       seed=$(printf '%s:%s' "$RUN" "$iteration" | cksum)
       epoch=$((1700000000 + ${seed%% *} % 100000000))
       export GIT_AUTHOR_DATE="@$epoch +0000" GIT_COMMITTER_DATE="@$epoch +0000"
@@ -633,8 +525,8 @@ steps:
       sha=$(printf '%s\n' "$MESSAGE" | git commit-tree "${signing[@]}" "$tree" -p "$base")
       git diff --binary --full-index "$base" "$sha" > "$scratch/diff.patch"
       jq -nc --arg base "$base" --arg sha "$sha" --arg tree "$tree" --arg message "$MESSAGE" \
-        --arg summary "$SUMMARY" --arg implementer "$IMPLEMENTER" --argjson iteration "$iteration" \
-        '{base:$base,sha:$sha,tree:$tree,message:$message,summary:$summary,implementer:$implementer,iteration:$iteration}' > "$scratch/candidate.json"
+        --arg summary "$SUMMARY" --arg implementer "$IMPLEMENTER" --argjson iteration "$iteration" --argjson implementation "$implementation" \
+        '{base:$base,sha:$sha,tree:$tree,message:$message,summary:$summary,implementer:$implementer,iteration:$iteration,implementation:$implementation}' > "$scratch/candidate.json"
       git update-ref "refs/heads/$BRANCH" "$sha" "$head"
       unset GIT_INDEX_FILE
       git read-tree "$tree"
@@ -731,9 +623,20 @@ steps:
       prompt: "Dependency net checkpoint: the wait handler completes unchanged dependencies or pushes back to triage."
       push_back:
         rewind_to: triage
+      form:
+        type: object
+        properties:
+          CANCEL: {type: string, enum: ['yes', 'no']}
+
+  - id: dependency_review_cancellation
+    depends: dependency_review
+    env:
+      - CANCEL: ${steps.dependency_review.outputs.CANCEL}
+      - CHECKPOINT: dependency_review
+    run: *cancellation_gate
 
   - id: rebase
-    depends: dependency_review
+    depends: dependency_review_cancellation
     retry_policy:
       limit: 3
       interval_sec: 5
@@ -815,6 +718,7 @@ steps:
           if test -f "$STATE/$artifact"; then mv "$STATE/$artifact" "$STATE/historical/$before/"; fi
         done
         printf '%s\n' "$base" > "$STATE/base"
+        git -C "$WORKTREE" rev-parse HEAD > "$STATE/initial-head"
         test -s "$STATE/conflict-files"
         printf 'rewind\n' > "$STATE/conflict-action"
         sed 's/^/conflict_files=/' "$STATE/conflict-files"
@@ -828,9 +732,20 @@ steps:
       prompt: "Rebase conflict checkpoint: the wait handler completes a clean rebase or pushes back to implement with the conflict files."
       push_back:
         rewind_to: implement
+      form:
+        type: object
+        properties:
+          CANCEL: {type: string, enum: ['yes', 'no']}
+
+  - id: conflict_review_cancellation
+    depends: conflict_review
+    env:
+      - CANCEL: ${steps.conflict_review.outputs.CANCEL}
+      - CHECKPOINT: conflict_review
+    run: *cancellation_gate
 
   - id: gate
-    depends: conflict_review
+    depends: conflict_review_cancellation
     continue_on:
       failure: true
     retry_policy:
@@ -839,6 +754,36 @@ steps:
     run: |
       set -euo pipefail
       umask 0022
+      lock="$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-common-dir)/dagu-feature/gate.lock"
+      mkdir -p "${lock%/*}"
+      # Keep the same process and an inheritable descriptor for the entire body.
+      exec python3 -c '
+      import fcntl
+      import json
+      import os
+      import sys
+      import time
+
+      path, run = sys.argv[1:3]
+      fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+      previous = None
+      while True:
+          try:
+              fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+              break
+          except BlockingIOError:
+              holder = os.pread(fd, 4096, 0).decode("utf-8", errors="replace") or "unknown"
+              if holder != previous:
+                  print(f"gate: waiting lock={path} run={run} pid={os.getpid()} holder={holder}", file=sys.stderr, flush=True)
+                  previous = holder
+              time.sleep(0.1)
+      owner = json.dumps({"run": run, "pid": os.getpid()})
+      os.ftruncate(fd, 0)
+      os.pwrite(fd, owner.encode(), 0)
+      os.set_inheritable(fd, True)
+      print(f"gate: acquired lock={path} holder={owner}", file=sys.stderr, flush=True)
+      os.execvp(sys.argv[3], sys.argv[3:])
+      ' "$lock" "$RUN" bash -euo pipefail -c "$(cat <<'GATE_BODY'
       cd "$WORKTREE"
       STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")
       sha=$(jq -r .sha "$STATE/candidate.json")
@@ -862,6 +807,8 @@ steps:
       jq -nc --arg sha "$sha" --arg gate "$GATE" '{sha:$sha,gate:$gate}' > "$STATE/gate.json"
       printf 'tested_sha=%s\n' "$sha" | tee -a "${DAGU_OUTPUT_FILE:-/dev/null}"
       git rev-parse HEAD > "$STATE/tested-sha"
+      GATE_BODY
+      )"
     outputs:
       - name: tested_sha
 
@@ -876,9 +823,24 @@ steps:
       prompt: "gate failed. Inspect the gate logs; push back with the observed run-wide iteration to return to implement and repair the candidate in the same worktree."
       push_back:
         rewind_to: implement
+      form:
+        type: object
+        properties:
+          CANCEL: {type: string, enum: ['yes', 'no']}
+
+  - id: recover_gate_cancellation
+    depends: recover_gate
+    continue_on: skipped
+    preconditions:
+      - condition: "${gate.exit_code}"
+        expected: "re:^[1-9][0-9]*$"
+    env:
+      - CANCEL: ${steps.recover_gate.outputs.CANCEL}
+      - CHECKPOINT: recover_gate
+    run: *cancellation_gate
 
   - id: quality_prepare
-    depends: recover_gate
+    depends: recover_gate_cancellation
     preconditions:
       - condition: "${steps.triage.outputs.POC}"
         expected: "no"
@@ -899,19 +861,12 @@ steps:
 
   - id: quality_review
     depends: quality_prepare
-    action: human.task
-    with:
-      prompt: "Read quality_prepare's current request and markers. Launch task agent=qa and task agent=reviewer as two named subagents, distinct from IMPLEMENTER. Each assignment includes its exact FEATURE_QUALITY marker, repo/run/iteration/attempt/SHA, read-only worktree ${WORKTREE}, targeted QA commands and structured verdict contract from SKILL.md. Each reads git -C ${WORKTREE} rev-parse HEAD. Complete with QA and REVIEW allocated ids. The OMP extension verifies effective JSONL identities and provenance; fabricated reports, ineligible fallback and indeterminate identity block locally. QA/reviewer FAIL returns to implement with findings."
-      form:
-        type: object
-        properties:
-          QA:
-            type: string
-            pattern: '^[A-Za-z0-9][A-Za-z0-9._-]*$'
-          REVIEW:
-            type: string
-            pattern: '^[A-Za-z0-9][A-Za-z0-9._-]*$'
-        required: [QA, REVIEW]
+    run: |
+      set -euo pipefail
+      dagu-role-jobs stage quality_review
+    outputs:
+      - name: QA
+      - name: REVIEW
 
   - id: quality_admit
     depends: quality_review
@@ -925,6 +880,9 @@ steps:
       sha=$(jq -r .sha "$STATE/candidate.json")
       test "$(git -C "$WORKTREE" rev-parse HEAD)" = "$sha" || fail "candidate changed"
       test -z "$(git -C "$WORKTREE" status --porcelain)" || fail "worktree changed"
+      if [[ "$QA" =~ ^[a-f0-9]{64}$ && "$REVIEW" =~ ^[a-f0-9]{64}$ ]]; then
+        dagu-role-jobs admit-quality
+      fi
       jq -e --arg qa "$QA" --arg review "$REVIEW" --arg repo "$(cd "$PRIMARY" && pwd -P)" --arg run "$RUN" --arg session "$OMP_SESSION_ID" --slurpfile request "$STATE/quality-request.json" \
         --slurpfile candidate "$STATE/candidate.json" --slurpfile gate "$STATE/gate.json" '
         . as $e | $request[0] as $r | $candidate[0] as $c |
@@ -932,18 +890,28 @@ steps:
         .sha == $gate[0].sha and .iteration == $r.iteration and .iteration == $c.iteration and
         .attempt == $r.attempt and .session == $r.session and
         .implementer.subagent == $c.implementer and (.implementer.family | type == "string" and length > 0) and
+        (if .implementer.receipt then .implementer.receiptDigest == $c.implementation.resultDigest else true end) and
         (.verdicts | length == 2) and
         ([.verdicts[].subagent, .implementer.subagent] | unique | length == 3) and
         .verdicts[0].subagent == $qa and .verdicts[0].role == "qa" and
         .verdicts[1].subagent == $review and .verdicts[1].role == "reviewer" and
         ([.verdicts[] | .repo == $e.repo and .run == $e.run and .sha == $e.sha and
-          .iteration == $e.iteration and .attempt == $e.attempt and .parentSession == $e.implementer.parentSession and
-          (.invocation | type == "string" and length > 0) and (.childSession | type == "string" and length > 0) and
+          .iteration == $e.iteration and .attempt == $e.attempt and
+          (if .job then .job == .subagent and .parentRun == $e.run and
+            .binding.lane == "feature" and .binding.dag == "feature" and .binding.stage == "quality_review" and
+            (.receiptDigest | type == "string" and length == 64)
+          else .parentSession == ($e.implementer.coordinatorSession // $e.implementer.parentSession) and
+            (.invocation | type == "string" and length > 0) end) and
+          (.childSession | type == "string" and length > 0) and
           (.model.family | type == "string" and length > 0) and .model.family != $e.implementer.family and
           (.verdict == "PASS" or .verdict == "FAIL") and (.findings | type == "array") and
           (.bytes | type == "number" and . > 0 and . == floor)] | all) and
         .action == (if ([.verdicts[].verdict] | all(. == "PASS")) then "complete" else "rewind" end)
         ' "$STATE/quality.json" >/dev/null || fail "missing, stale or malformed effective verdict evidence"
+      if result=$(jq -er '.implementer.receipt' "$STATE/quality.json"); then
+        digest=$(shasum -a 256 "$result")
+        test "${digest%% *}" = "$(jq -r '.implementer.receiptDigest' "$STATE/quality.json")" || fail "native implementation receipt changed"
+      fi
       while IFS=$'\t' read -r transcript bytes digest event provider model; do
         test "$(wc -c < "$transcript")" -ge "$bytes" || fail "transcript changed: $transcript"
         # Preserve trailing newlines while capturing the exact inspected bytes once.
@@ -953,7 +921,8 @@ steps:
         test "${actual%% *}" = "$digest" || fail "transcript changed: $transcript"
         printf '%s' "$prefix" | jq -se --arg event "$event" --arg provider "$provider" --arg model "$model" \
           '[.[] | select(.id == $event and .message.role == "assistant" and .message.provider == $provider and .message.model == $model)] | length == 1' >/dev/null || fail "runtime model provenance mismatch"
-      done < <(jq -r '.verdicts[] | [.transcript,.bytes,.digest,.event,.model.provider,.model.id] | @tsv' "$STATE/quality.json")
+      done < <(jq -r '(.verdicts[] | [.transcript,.bytes,.digest,.event,.model.provider,.model.id]),
+        (.implementer | select(.receipt) | [.transcript,.bytes,.digest,.event,.provider,.id]) | @tsv' "$STATE/quality.json")
       shasum -a 256 "$STATE/quality.json" > "$STATE/quality-admitted.sha256"
       jq -r .action "$STATE/quality.json" > "$STATE/quality-action"
       jq '{sha,action,verdicts:[.verdicts[] | {role,verdict,findings,subagent,model,attempts,fallbacks}]}' "$STATE/quality.json"
@@ -965,9 +934,20 @@ steps:
       prompt: "Effective QA/reviewer verdicts are in quality.json. The wait handler completes two PASS or pushes back to implement at the observed iteration with both independent findings preserved."
       push_back:
         rewind_to: implement
+      form:
+        type: object
+        properties:
+          CANCEL: {type: string, enum: ['yes', 'no']}
+
+  - id: quality_transition_cancellation
+    depends: quality_transition
+    env:
+      - CANCEL: ${steps.quality_transition.outputs.CANCEL}
+      - CHECKPOINT: quality_transition
+    run: *cancellation_gate
 
   - id: validation
-    depends: quality_transition
+    depends: quality_transition_cancellation
     preconditions:
       - condition: "${gate.exit_code}"
         expected: "0"
@@ -993,13 +973,13 @@ steps:
         type: object
         additionalProperties: false
         properties:
+          CANCEL: {type: string, enum: ['yes', 'no']}
           APPROVED:
             type: string
             enum: ['yes']
           TESTED_SHA:
             type: string
             pattern: '^[a-f0-9]{40}$'
-        required: [APPROVED, TESTED_SHA]
       push_back:
         rewind_to: implement
         form:
@@ -1011,8 +991,26 @@ steps:
               minLength: 1
           required: [REASON]
 
-  - id: push
+  - id: validation_cancellation
     depends: validation
+    continue_on: skipped
+    preconditions:
+      - condition: "${gate.exit_code}"
+        expected: "0"
+      - condition: "${steps.triage.outputs.POC}"
+        expected: "no"
+      - condition: '${VALIDATION}'
+        expected: 're:.+'
+    env:
+      - CANCEL: ${steps.validation.outputs.CANCEL}
+      - CHECKPOINT: validation
+      - REQUIRED_FIELDS: APPROVED TESTED_SHA
+      - APPROVED: ${steps.validation.outputs.APPROVED}
+      - TESTED_SHA: ${steps.validation.outputs.TESTED_SHA}
+    run: *cancellation_gate
+
+  - id: push
+    depends: validation_cancellation
     continue_on:
       failure: true
     preconditions:
@@ -1061,9 +1059,24 @@ steps:
       prompt: "push failed. Inspect its logs and restore remote access or permissions, then push back with the observed run-wide iteration to retry push in this run."
       push_back:
         rewind_to: push
+      form:
+        type: object
+        properties:
+          CANCEL: {type: string, enum: ['yes', 'no']}
+
+  - id: recover_push_cancellation
+    depends: recover_push
+    continue_on: skipped
+    preconditions:
+      - condition: "${push.exit_code}"
+        expected: "re:^[1-9][0-9]*$"
+    env:
+      - CANCEL: ${steps.recover_push.outputs.CANCEL}
+      - CHECKPOINT: recover_push
+    run: *cancellation_gate
 
   - id: pr
-    depends: recover_push
+    depends: recover_push_cancellation
     preconditions:
       - condition: "${steps.triage.outputs.POC}"
         expected: "no"
@@ -1142,6 +1155,19 @@ steps:
       prompt: "The scheduled reconciler owns this CI checkpoint. Evidence of CODE_FAIL for the published SHA returns this same run to implement; the SHA, check and log excerpt are in <git-dir>/dagu-feature/runs/${RUN}/ci-return.json and the coordinator notice."
       push_back:
         rewind_to: implement
+      form:
+        type: object
+        properties:
+          CANCEL: {type: string, enum: ['yes', 'no']}
+
+  - id: await_ci_cancellation
+    depends: await_ci
+    signal_on_stop: SIGINT
+    env:
+      - CANCEL: ${steps.await_ci.outputs.CANCEL}
+      - CHECKPOINT: await_ci
+      - NATIVE_TERMINAL: aborted
+    run: *cancellation_gate
 
   - id: await_merge
     depends: auto_merge
@@ -1150,9 +1176,22 @@ steps:
       prompt: "The scheduled reconciler owns this merge checkpoint: BEHIND or DIRTY returns to rebase with the observed iteration. Both CI and merge checkpoints complete only after MERGED with successful checks for the published SHA."
       push_back:
         rewind_to: rebase
+      form:
+        type: object
+        properties:
+          CANCEL: {type: string, enum: ['yes', 'no']}
+
+  - id: await_merge_cancellation
+    depends: await_merge
+    signal_on_stop: SIGINT
+    env:
+      - CANCEL: ${steps.await_merge.outputs.CANCEL}
+      - CHECKPOINT: await_merge
+      - NATIVE_TERMINAL: aborted
+    run: *cancellation_gate
 
   - id: authorize_ci
-    depends: [await_ci, await_merge]
+    depends: [await_ci_cancellation, await_merge_cancellation]
     run: |
       set -euo pipefail
       repo=$(gh repo view "$(git -C "$PRIMARY" remote get-url origin)" --json nameWithOwner --jq .nameWithOwner)
@@ -1206,9 +1245,24 @@ steps:
       prompt: "close_gate: ${steps.detect_close_primary.outputs.reason}. Restore ${PRIMARY} to clean ${BASE_BRANCH}, preserving the operator's changes; then push back this checkpoint with the observed iteration to recheck in the same run. close_gate removes the worktree."
       push_back:
         rewind_to: detect_close_primary
+      form:
+        type: object
+        properties:
+          CANCEL: {type: string, enum: ['yes', 'no']}
+
+  - id: close_primary_unavailable_cancellation
+    depends: close_primary_unavailable
+    continue_on: skipped
+    preconditions:
+      - condition: "${steps.detect_close_primary.outputs.reason}"
+        expected: "re:^primary "
+    env:
+      - CANCEL: ${steps.close_primary_unavailable.outputs.CANCEL}
+      - CHECKPOINT: close_primary_unavailable
+    run: *cancellation_gate
 
   - id: close_gate
-    depends: [await_merge, close_primary_unavailable]
+    depends: [await_merge_cancellation, close_primary_unavailable_cancellation]
     env:
       - CLEANUP_CLOSE: "true"
     run: &feature_cleanup |
@@ -1404,10 +1458,24 @@ handler_on:
               STATUS=$(dagu status feature --run-id "$RUN")
               if grep -q "^Waiting -" <<<"$STATUS"; then
                 ITERATION=$(sed -nE "s/.*push-back iteration: ([0-9]+).*/\1/p" <<<"$STATUS" | head -1)
+                transition=0
                 if [[ "$(cat "$STATE/$ACTION")" == rewind ]]; then
-                  dagu human-task push-back feature --run-id "$RUN" --step "$STEP" --expected-iteration "${ITERATION:-0}"
+                  dagu human-task push-back feature --run-id "$RUN" --step "$STEP" --expected-iteration "${ITERATION:-0}" || transition=$?
                 else
-                  dagu human-task complete feature --run-id "$RUN" --step "$STEP"
+                  dagu human-task complete feature --run-id "$RUN" --step "$STEP" || transition=$?
+                fi
+                if (( transition != 0 )); then
+                  STATUS=$(dagu status feature --run-id "$RUN")
+                  if grep -q "^Failed -" <<<"$STATUS" &&
+                     ATTEMPT=$(curl -fsS --max-time 10 --get "http://127.0.0.1:${DAGU_PORT:-8080}/api/v1/event-logs" --data-urlencode "dagName=feature" --data-urlencode "dagRunId=$RUN" --data-urlencode "paginationMode=cursor" --data-urlencode "limit=1" | jq -er ".entries[0] | select(.type == \"dag.run.failed\" and .data.dag_run_status.error == \"process terminated unexpectedly - stale local process detected\") | .attemptId"); then
+                    case "$STEP" in
+                      dependency_review) RETRY=checkpoint_push ;;
+                      conflict_review) RETRY=rebase ;;
+                      quality_transition) RETRY=quality_admit ;;
+                    esac
+                    printf "stale-process repair: run=%s attempt=%s step=%s; recover: dagu retry --run-id %s --step %s --downstream feature\n" "$RUN" "${ATTEMPT:-unknown}" "$STEP" "$RUN" "$RETRY" >&2
+                  fi
+                  exit "$transition"
                 fi
                 exit 0
               fi
