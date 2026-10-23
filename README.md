@@ -31,11 +31,11 @@ A coordinating session is a sprint. Responsibilities and approvals are explicit:
 
 | Responsibility | Skill | Owner |
 |---|---|---|
-| Refine a need, report, or incident into 1..N self-contained units | [`skills/refine/SKILL.md`](skills/refine/SKILL.md) (configuration: [`.workspace/config/refine.json`](.workspace/config/refine.json)) | The session investigates; the operator answers and accepts the refinement |
+| Refine a need, report, or incident into 1..N self-contained units | [`refine`](packages/issue-lifecycle/skills/refine/SKILL.md) (configuration: [`.workspace/config/refine.json`](.workspace/config/refine.json)) | The session investigates; the operator answers and accepts the refinement |
 | Import units, validate them, obtain independent review, and create approved issues | [`backlog-breakdown`](packages/issue-lifecycle/skills/backlog-breakdown/SKILL.md) | The backend runs checks and `plan-reviewer`; the operator approves issue creation |
-| Sprint Planning: select the goal, yes/no goal checks, Definition of Done, rank and enqueue new work | [`skills/sprint-planning/SKILL.md`](skills/sprint-planning/SKILL.md) | The session proposes; the operator confirms |
-| Sprint Review: evaluate goal checks and Definition of Done against evidence | [`skills/sprint-review/SKILL.md`](skills/sprint-review/SKILL.md) | The session evaluates; the operator accepts or changes the goal |
-| Sprint Retrospective: inspect the process and route authorized reports through refine | [`skills/sprint-retrospective/SKILL.md`](skills/sprint-retrospective/SKILL.md) | The session proposes; the operator authorizes action |
+| Sprint Planning: select the goal, yes/no goal checks, Definition of Done, rank and enqueue new work | [`sprint-planning`](packages/issue-lifecycle/skills/sprint-planning/SKILL.md) | The session proposes; the operator confirms |
+| Sprint Review: evaluate goal checks and Definition of Done against evidence | [`sprint-review`](packages/issue-lifecycle/skills/sprint-review/SKILL.md) | The session evaluates; the operator accepts or changes the goal |
+| Sprint Retrospective: inspect the process and route authorized reports through refine | [`sprint-retrospective`](packages/issue-lifecycle/skills/sprint-retrospective/SKILL.md) | The session proposes; the operator authorizes action |
 
 Sprint Planning alone ranks and enqueues new work; Dagu executes it. Discovery and refinement feed the shared breakdown backend, which creates issues rather than scheduling them. Reports and FYI messages alone do not authorize action. Definition of Done and yes/no goal checks are sprint content, not a separate skill or new lifecycle gate. Feature completion evidence establishes what merged and was cleaned up; Sprint Review uses that evidence to evaluate the agreed goal.
 
@@ -44,7 +44,7 @@ Sprint Planning alone ranks and enqueues new work; Dagu executes it. Discovery a
 - Auditoría de cuota: [`skills/gpt-quota-audit/SKILL.md`](skills/gpt-quota-audit/SKILL.md).
 - Análisis de coste y resultados: [`skills/cost-analyzer/SKILL.md`](skills/cost-analyzer/SKILL.md).
 - Rendimiento de agentes, tiempo activo y tokens por PR: [`skills/agent-throughput/SKILL.md`](skills/agent-throughput/SKILL.md).
-- Model routing review: [`skills/omp-model-routing-audit/SKILL.md`](skills/omp-model-routing-audit/SKILL.md). Manual catalog/quota/routing snapshots and comparisons, a per-role/per-model transcript scorecard, evidence-backed proposals, operator-approved configuration and actual new-agent verification; default collection performs no inference or assignment.
+- Model routing review: [`skills/model-routing-audit/SKILL.md`](skills/model-routing-audit/SKILL.md). Manual catalog/quota/routing snapshots and comparisons, a per-role/per-model transcript scorecard, evidence-backed proposals, operator-approved configuration and actual new-agent verification; default collection performs no inference or assignment.
 
 ## Dagu feature
 

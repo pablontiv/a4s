@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.1
+
+- Distribute all seven lifecycle workflow skills together: move refinement and the three sprint ceremonies into the lifecycle package, preserving their review, approval, handoff and Definition-of-Done boundaries (#428).
+- Rename the independent OMP routing utility to `model-routing-audit`, preserving its scripts and updating runnable examples and catalog links.
+- Record the #311 cutover source inventory and canonical destinations for pending ingestion; keep the optional refinement template configuration repository-owned.
+
 ## 0.4.0
 
 - Move the complete private lifecycle package to `@a4s/issue-lifecycle`, with `issue-execution` and `repository-discovery` skills, retaining the shared breakdown, discovery and refinement implementations (#427).

@@ -1,5 +1,5 @@
 ---
-name: omp-model-routing-audit
+name: model-routing-audit
 description: Manually review OMP subagent primary and ordered fallback routes using catalog, redacted quotas, routing configuration and optional bounded generation evidence; propose changes, obtain operator approval, and verify actual new spawns.
 ---
 
@@ -12,10 +12,10 @@ Use for a recurring **operator-requested** review of primary/fallback assignment
 Run from the exact directory where the relevant OMP session launches. Configuration reads reflect merged **cwd configuration**, not the resolved identity of an already running agent. Save evidence outside the repository diff, with operator-controlled access:
 
 ```sh
-out=$(mktemp -d /tmp/omp-model-routing-audit.XXXXXX)
-python3 skills/omp-model-routing-audit/scripts/audit.py --out "$out/snapshot.json"
+out=$(mktemp -d /tmp/model-routing-audit.XXXXXX)
+python3 skills/model-routing-audit/scripts/audit.py --out "$out/snapshot.json"
 # On a later manual review, supply the earlier complete snapshot:
-python3 skills/omp-model-routing-audit/scripts/audit.py \
+python3 skills/model-routing-audit/scripts/audit.py \
   --previous /path/to/previous-snapshot.json --out "$out/current.json"
 ```
 
@@ -34,7 +34,7 @@ omp config get retry.fallbackChains --json
 To demonstrate an unchanged baseline from a real saved snapshot **without polling changing quotas or timestamps**, use offline comparison:
 
 ```sh
-python3 skills/omp-model-routing-audit/scripts/audit.py \
+python3 skills/model-routing-audit/scripts/audit.py \
   --snapshot "$out/snapshot.json" --previous "$out/snapshot.json" \
   --out "$out/unchanged.json"
 ```
@@ -61,7 +61,7 @@ Only complete version-1 snapshots with the supported catalog/usage/routing shape
 Only after an explicit operator request, select exact chat selectors from the collected catalog:
 
 ```sh
-python3 skills/omp-model-routing-audit/scripts/audit.py \
+python3 skills/model-routing-audit/scripts/audit.py \
   --probe 'provider/model' --out "$out/probed.json"
 ```
 
@@ -90,11 +90,11 @@ Bench JSON records resolved targets and run statistics, not response text or ser
 Use this local, read-only evidence tool for step 3 of **Review evidence**. It uses Python 3.10+ standard library, up to eight parser processes, and no OMP inference, network calls or routing writes:
 
 ```sh
-python3 skills/omp-model-routing-audit/scripts/role_scorecard.py --days 7
-python3 skills/omp-model-routing-audit/scripts/role_scorecard.py \
+python3 skills/model-routing-audit/scripts/role_scorecard.py --days 7
+python3 skills/model-routing-audit/scripts/role_scorecard.py \
   --sessions ~/.omp/agent/sessions --since 2026-10-01T00:00:00Z --min-n 10 --json
 # Private excerpts belong outside the repository and sessions tree:
-python3 skills/omp-model-routing-audit/scripts/role_scorecard.py \
+python3 skills/model-routing-audit/scripts/role_scorecard.py \
   --days 7 --episodes-out /tmp/omp-role-episodes.jsonl
 ```
 
@@ -173,10 +173,10 @@ If readback, runtime identity, chain or role behavior differs, report the discre
 ## Targeted checks
 
 ```sh
-python3 skills/omp-model-routing-audit/scripts/audit.py --help
-python3 skills/omp-model-routing-audit/scripts/role_scorecard.py --help
-python3 -m unittest discover -s skills/omp-model-routing-audit/scripts -p "test_role_scorecard.py"
-python3 -m unittest discover -s skills/omp-model-routing-audit/scripts -p "test_*.py"
+python3 skills/model-routing-audit/scripts/audit.py --help
+python3 skills/model-routing-audit/scripts/role_scorecard.py --help
+python3 -m unittest discover -s skills/model-routing-audit/scripts -p "test_role_scorecard.py"
+python3 -m unittest discover -s skills/model-routing-audit/scripts -p "test_*.py"
 ```
 
 Tests use isolated synthetic snapshots, native bench-shaped results and local transcript trees, with offline comparisons and malformed/access boundary cases. Scorecard tests cover parent delivery joins (including nested and steered children), rework naming, infrastructure/fallback/verdict classification, active-time caps and window filtering. They perform no model inference, network access or configuration writes. A real default collection plus offline self-comparison demonstrates the installed read-only CLI integration; a scorecard smoke run demonstrates local transcript aggregation. Role-capability and fallback execution require the separate runtime evidence above.
