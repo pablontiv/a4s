@@ -141,7 +141,7 @@ async function refreshViaOidc(token: KiroStoredToken, registration: KiroDeviceRe
 
 /** Shell out to kiro-cli so it refreshes the shared token store itself. */
 async function refreshViaKiroCli(): Promise<void> {
-	const proc = Bun.spawn(["kiro-cli", "whoami"], { stdout: "ignore", stderr: "ignore" });
+	const proc = Bun.spawn(["kiro-cli", "whoami"], { env: process.env, stdout: "ignore", stderr: "ignore" });
 	const exitCode = await proc.exited;
 	if (exitCode !== 0) {
 		throw new Error(`kiro: kiro-cli whoami fallback exited ${exitCode}`);

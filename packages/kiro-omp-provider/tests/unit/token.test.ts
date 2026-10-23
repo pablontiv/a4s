@@ -12,9 +12,11 @@
 import { describe, expect, it, beforeAll, afterAll } from "bun:test";
 import { Database } from "bun:sqlite";
 import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { getKiroCredential, __resetRefreshInFlight, type KiroStoredToken } from "../../src/token";
 
-const TMP = "/tmp/kiro-token-test";
+const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "kiro-token-test-"));
 const DB_PATH = `${TMP}/data.sqlite3`;
 const BIN = `${TMP}/bin`;
 
@@ -44,7 +46,6 @@ function readRow(): KiroStoredToken {
 }
 
 beforeAll(() => {
-	fs.mkdirSync(TMP, { recursive: true });
 	fs.mkdirSync(BIN, { recursive: true });
 	// Fake kiro-cli: exits with the code in EXIT_FILE (default 0) and does NOT
 	// touch the store — what the real CLI does when the row is inside the
