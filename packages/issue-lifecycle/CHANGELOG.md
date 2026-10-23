@@ -3,6 +3,7 @@
 ## 0.4.3
 
 - Accept an explicit bootstrap `BASE_BRANCH` for integration-lane adoption, verify that branch exists, and retain the GitHub default branch when omitted (#434).
+- Fetch role-job issue titles, bodies and comments through GitHub CLI JSON mode, allowing native triage and implementation dispatch with current `gh` releases (#434).
 
 ## 0.4.2
 

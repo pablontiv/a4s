@@ -126,7 +126,7 @@ export async function dispatchStage(stage: string, emit: (name: string, value: s
   // Native step startedAt changes on retry, but is stable for duplicate delivery.
   const attempt = `${initial.iteration}:${node.startedAt}`;
   const iteration = initial.iteration;
-  const issueText = execFileSync("gh", ["issue", "view", issue, "--comments", "--json", "title,body,comments"], { cwd: primary, encoding: "utf8", maxBuffer: 4 * 1024 * 1024 });
+  const issueText = execFileSync("gh", ["issue", "view", issue, "--json", "title,body,comments"], { cwd: primary, encoding: "utf8", maxBuffer: 4 * 1024 * 1024 });
   const roles: JobBinding["role"][] = stage === "triage" ? ["triage"] :
     [existsSync(join(state, "conflict-action")) && readFileSync(join(state, "conflict-action"), "utf8").trim() === "rewind" &&
       existsSync(join(state, "conflict-files")) && readFileSync(join(state, "conflict-files"), "utf8").trim() ? "conflict-resolution" : "implement"];
