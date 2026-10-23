@@ -13,6 +13,25 @@ const skill = (name: string): string => readFileSync(
   "utf8",
 );
 
+test("bootstrap selects and verifies the explicit lane or the GitHub default", () => {
+  const bootstrap = skill("dagu-feature-bootstrap.yaml");
+  const selection = bootstrap.slice(bootstrap.indexOf("      base=${BASE_BRANCH:"),
+    bootstrap.indexOf("      if ! required=")).split("\n").map(line => line.slice(6)).join("\n");
+  for (const [requested, expected] of [["", "main"], ["integration/v1", "integration/v1"]]) {
+    const result = spawnSync("bash", ["-euc", `
+      gh() {
+        if test "$1" = repo; then printf 'main\\n';
+        else test "$2" = "repos/owner/repo/branches/$EXPECTED"; fi
+      }
+      nwo=owner/repo
+      ${selection}
+      printf '%s' "$base"
+    `], { encoding: "utf8", env: { ...process.env, BASE_BRANCH: requested, EXPECTED: expected } });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, expected);
+  }
+});
+
 test("bootstrap renders optional validation as the sole adopted value", {
   ...liveDagu,
 }, () => {
