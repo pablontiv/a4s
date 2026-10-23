@@ -149,21 +149,20 @@ test("shallow CI checkout fetches main and ancestry to resolve the PR merge base
   }
 });
 
-test("release guard follows the lifecycle contract across a package move on the declared integration base", () => {
+test("release guard follows the lifecycle contract across a package move on main", () => {
   const { root, put, commit } = fixture();
   try {
     const former = "packages/source-bundle";
     git(root, "mv", bundle, former);
     commit();
-    git(root, "update-ref", "refs/remotes/origin/integration/v1", "HEAD");
-    git(root, "update-ref", "-d", "refs/remotes/origin/main");
+    git(root, "update-ref", "refs/remotes/origin/main", "HEAD");
     git(root, "mv", former, bundle);
-    assert.throws(() => checkBundleVersion(root, "integration/v1"), /base version 0.2.0/);
+    assert.throws(() => checkBundleVersion(root), /base version 0.2.0/);
     put(`${bundle}/package.json`, JSON.stringify({ version: "0.3.0" }));
     put(`${bundle}/CHANGELOG.md`, "## 0.3.0\n");
-    checkBundleVersion(root, "integration/v1");
+    checkBundleVersion(root);
     commit();
-    checkBundleVersion(root, "integration/v1");
+    checkBundleVersion(root);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

@@ -8,7 +8,7 @@
     "url": "git+https://github.com/pablontiv/a4s.git",
     "directory": "packages/issue-lifecycle"
   },
-  "homepage": "https://github.com/pablontiv/a4s/tree/integration/v1/packages/issue-lifecycle#readme",
+  "homepage": "https://github.com/pablontiv/a4s/tree/main/packages/issue-lifecycle#readme",
   "bugs": {
     "url": "https://github.com/pablontiv/a4s/issues"
   },
@@ -18,7 +18,7 @@
   },
   "daguFeature": {
     "dagu": "2.20.1",
-    "integrationBase": "integration/v1"
+    "integrationBase": "main"
   },
   "exports": {
     "./status": "./src/status/index.ts",
