@@ -1,7 +1,7 @@
 import { liveDagu, liveDaguVersion } from "./fixtures/live-dagu.ts";
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -126,6 +126,7 @@ function fixture(run = "ci226"): Fixture {
   writeFileSync(join(primary, ".git/info/exclude"), "/.workspace/\n");
   git(primary, "worktree", "add", "-b", branch, worktree, "origin/main");
   mkdirSync(bin);
+  symlinkSync(fileURLToPath(new URL("../bin/dagu-pr-body.mjs", import.meta.url)), join(bin, "dagu-pr-body"));
   const control = join(root, "control.json");
   const calls = join(root, "calls.jsonl");
   writeFileSync(calls, "");
@@ -140,6 +141,7 @@ fs.appendFileSync(process.env.CI_CALLS,JSON.stringify({tool:process.argv[1].spli
   writeFileSync(join(bin, "gh"), `#!/usr/bin/env node\n${common}
 if(a[0]==='repo'&&a[1]==='view') emit('example/repo');
 else if(a[0]==='pr'&&a[1]==='create') { c.prExists=true; save(); emit('https://github.com/example/repo/pull/77'); }
+else if(a[0]==='pr'&&a[1]==='edit') { if(!c.prExists) process.exit(1); }
 else if(a[0]==='pr'&&a[1]==='view') {
  const fields=a[a.indexOf('--json')+1];
  if(fields==='number'&&!c.prExists) process.exit(1);

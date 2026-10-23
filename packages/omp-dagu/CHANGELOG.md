@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.120
+
+- Render concise feature PR descriptions from the implement summary, passing gate and optional operator validation; refresh existing PR bodies on every candidate (#571).
+- Share host-path rejection across feature PRs, PoC comments and the PR-body CI check. Require the repository PR template for Dagu and manual publication.
+
 ## 0.3.119
 
 - Persist run-wide lifecycle escalation budgets across native retries, resumes and push-backs, with owner-targeted decision evidence, renewed windows, route changes and retained stop/onExit evidence (#558).

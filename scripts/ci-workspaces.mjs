@@ -79,9 +79,10 @@ function aggregate() {
     && typeof workspace.test === "boolean" && typeof workspace.typecheck === "boolean")) {
     throw new Error("Expected a workspace matrix with name, test and typecheck");
   }
-  const { CHANGES_RESULT: changes, TEST_RESULT: test, LIVE_RESULT: live } = process.env;
-  console.log(`changes=${changes} test=${test} live=${live}`);
-  if (changes !== "success" || test !== (workspaces.length ? "success" : "skipped")
+  const { CHANGES_RESULT: changes, TEST_RESULT: test, LIVE_RESULT: live, PR_BODY_RESULT: prBody } = process.env;
+  console.log(`changes=${changes} test=${test} live=${live} pr-body=${prBody}`);
+  if (prBody !== (process.env.EVENT_NAME === "pull_request" ? "success" : "skipped")
+    || changes !== "success" || test !== (workspaces.length ? "success" : "skipped")
     || live !== (workspaces.some(workspace => workspace.name === "@a4s/omp-dagu") ? "success" : "skipped")) {
     throw new Error("Required CI jobs did not complete successfully");
   }

@@ -1,5 +1,6 @@
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 export function withResourceGuard(script: string, definition: string): string {
   const yaml = readFileSync(definition, "utf8");
@@ -11,6 +12,7 @@ export function withResourceGuard(script: string, definition: string): string {
 export function stubHistory(root: string): void {
   const bin = join(root, "bin");
   mkdirSync(bin, { recursive: true });
+  symlinkSync(fileURLToPath(new URL("../bin/dagu-pr-body.mjs", import.meta.url)), join(bin, "dagu-pr-body"));
   writeFileSync(join(bin, "dagu"), '#!/bin/sh\nif [ "$1" = history ]; then printf \'[]\\n\'; else echo "unexpected dagu $*" >&2; exit 1; fi\n');
   chmodSync(join(bin, "dagu"), 0o755);
 }

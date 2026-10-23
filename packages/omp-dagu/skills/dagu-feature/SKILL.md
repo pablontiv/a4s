@@ -46,6 +46,8 @@ flowchart LR
 - `dagu` on `PATH`, and a user-level service running `dagu start-all`. Check with `dagu version` and `launchctl list | grep -i dagu` (macOS) or `systemctl --user status` (Linux).
 - `@a4s/omp-dagu` loaded in the coordinating OMP session; its `dagu_session_id` tool identifies the session and its status extension delivers targeted checkpoint notices.
 - `dagu-feature-bundle` from this package on the Dagu service's `PATH`, so internal feature/PoC/discovery promotions pass the same admission boundary as the coordinator.
+- This package's `dagu-pr-body` executable on the Dagu service's `PATH` for
+  feature PR rendering and the shared publication path check.
 - `DAGU_HOME` in your shell must point to the same home as that service. Read it from the service definition (macOS: `EnvironmentVariables.DAGU_HOME` in the LaunchAgent plist). If they differ, enqueue and complete commands land in a store the scheduler never reads, and the run stays `Queued`.
 - `git`, `gh` authenticated with push and PR rights, `curl`, `jq`.
 - Python 3 with standard-library `fcntl` on the Dagu service's `PATH`; bootstrap
@@ -1052,9 +1054,26 @@ rebase makes the wait handler complete `conflict_review`; a conflicting rebase
 records the conflict paths, preserves the delivery with conflict markers, and
 pushes back to `implement`. After `auto_merge` requests guarded auto-merge for the tested SHA,
 the run waits at `await_ci` and `await_merge`, releasing the repository queue slot. GitHub
-merges only after the required check succeeds. `pr` creates the PR with `--fill`
-and the body `Closes #<issue>`, so the commit message becomes the PR title.
-Write it in the repository's commit convention.
+merges only after the required check succeeds. `pr` uses `--fill` for the title,
+so write the commit message in the repository's commit convention.
+
+Every PR, including syncs, adoptions and manual fixes outside Dagu, follows
+the repository's `.github/pull_request_template.md`: `Closes #<N>` or `Refs #<N>`,
+`## Summary` (at most five behavior-change bullets), `## Verification`
+(one command/result per line), and `## Risk` (compatibility/rollout notes or
+`None`). Bodies use repository-relative paths or placeholders only
+(`<primary>`, `<worktree>`, `~`, `$DAGU_HOME`); host absolute paths, usernames
+and private repository names stay private. Logs stay in run artifacts.
+
+`dagu-pr-body render` takes the first five nonempty implement SUMMARY lines,
+the exact gate command and PASS result from `gate.json`, and current operator
+validation from `validation.json` when present. Keep those summary lines concise
+and publication-safe; detailed evidence remains in the role-job artifacts.
+The `pr` step stores `pr-body.md` in the run artifacts, validates it, then uses
+`--body-file` to create or refresh the PR, including an explicitly supplied PR.
+The shared check rejects host paths before either PR publication or the PoC
+`publish` comment. CI validates PR structure and the same path rule on PR events,
+including description edits.
 
 The `gate` step changes to the worktree and executes the complete `GATE`
 command from scratch. If that attempt fails, Dagu retries it once after five
