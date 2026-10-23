@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.2
+
+- Sync main through `58182c90eb0add228c0cf76a01cb6a06ca98839e` into the renamed v1 lifecycle package, retaining v1-owned renders and the quality-free workflow (#432).
+- Port persistent owner escalation budgets, PoC target/access assessment and blocked-CI decisions from main (#558).
+- Port concise privacy-safe PR descriptions, shared publication validation and the PR-body CI check to the v1 package paths (#571).
+
 ## 0.4.1
 
 - Distribute all seven lifecycle workflow skills together: move refinement and the three sprint ceremonies into the lifecycle package, preserving their review, approval, handoff and Definition-of-Done boundaries (#428).

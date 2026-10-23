@@ -2,10 +2,11 @@ import { renderedPoc } from "../fixtures/rendered-feature.ts";
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { testRunId } from "../fixtures/run-id.ts";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { liveDagu } from "../fixtures/live-dagu.ts";
@@ -41,6 +42,7 @@ for (const definition of [
     writeFileSync(resultPath, result("wrong question"));
     const bin = join(root, "bin");
     mkdirSync(bin);
+    symlinkSync(fileURLToPath(new URL("../../bin/dagu-pr-body.mjs", import.meta.url)), join(bin, "dagu-pr-body"));
     writeFileSync(join(bin, "gh"), `#!/bin/sh\ncase "$*" in\n  "issue view "*) printf '{"body":"original scope"}\\n' ;;\n  *) printf 'https://example.invalid/comment\\n' ;;\nesac\n`, { mode: 0o755 });
     const listener = createServer();
     await new Promise<void>(resolve => listener.listen(0, "127.0.0.1", resolve));
@@ -181,8 +183,11 @@ esac
     return until(async () => {
       const run = await diagnostics.runDetails<Detail>(`${api}/dag-runs/poc/${id}`, true);
       if (!run) return;
-      assert.notEqual(run.statusLabel, "failed", JSON.stringify(run.nodes.map(n => [n.step.name, n.statusLabel, n.stderr && readFileSync(n.stderr, "utf8")])));
-      if (step ? run.nodes.some(n => n.step.name === step && n.statusLabel === "waiting") : run.statusLabel === "succeeded") return run;
+      if (run.statusLabel === "failed") {
+        assert.fail(JSON.stringify(run.nodes.filter(n => n.statusLabel === "failed")
+          .map(n => [n.step.name, n.stderr && existsSync(n.stderr) ? readFileSync(n.stderr, "utf8") : n.stderr])));
+      }
+      if (step ? run.statusLabel === "waiting" && run.nodes.some(n => n.step.name === step && n.statusLabel === "waiting") : run.statusLabel === "succeeded") return run;
     });
   }
   let failed = false;
@@ -203,11 +208,13 @@ esac
     writeFileSync(definition, readFileSync(new URL("../../skills/issue-execution/poc.yaml", import.meta.url), "utf8")
       .replaceAll("__DAGU_FEATURE_VERSION__", "0.3.11")
       .replaceAll("TEMPLATE_REPO", "decline263").replaceAll("TEMPLATE_BASE_BRANCH", "main")
-      .replaceAll("__PRIMARY__", primary).replaceAll("__TEST_PATHS__", "_test$"));
+      .replaceAll("__PRIMARY__", primary).replaceAll("__TEST_PATHS__", "_test$")
+      .replaceAll("__ESCALATION_POC_INCONCLUSIVE__", '"2"'));
     for (const mode of ["decline", "pass"]) {
       writeFileSync(env.COMMENTS, "");
       const id = testRunId(`test-${mode}`);
-      dagu("enqueue", "--run-id", id, definition, "--", "ISSUE=263", "QUESTION=question");
+      dagu("enqueue", "--run-id", id, definition, "--", "ISSUE=263", "QUESTION=question",
+        'REQUIRED_TARGETS=["local"]', 'AUTHORIZED_TARGETS=["local"]', "SCOPE_BASIS=isolated local fixture");
       await state(id, "run_poc");
       const worktree = join(primary, ".workspace", "worktrees", `poc-${id}`);
       if (mode === "decline") {

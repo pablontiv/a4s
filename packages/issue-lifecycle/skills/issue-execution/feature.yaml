@@ -40,6 +40,11 @@ env:
   - REBASE_RESOLVER: __REBASE_RESOLVER__
   - REQUIRED_CHECK: __REQUIRED_CHECK__
   - A4S_BLOCKER_REPORTING: __A4S_BLOCKER_REPORTING__
+  - ESCALATION_PUSHBACKS: __ESCALATION_PUSHBACKS__
+  - ESCALATION_FINDINGS: __ESCALATION_FINDINGS__
+  - ESCALATION_SECONDS: __ESCALATION_SECONDS__
+  - ESCALATION_POC_INCONCLUSIVE: __ESCALATION_POC_INCONCLUSIVE__
+  - ESCALATION_CI_BLOCKED: __ESCALATION_CI_BLOCKED__
   - WORKTREE: ${PRIMARY}/.workspace/worktrees/issue-${ISSUE}
   - RUN: ${context.run.id}
   - DAGU_FEATURE_BUNDLE: "__DAGU_FEATURE_IDENTITY__"
@@ -187,7 +192,7 @@ steps:
   - id: admission
     run: |
       set -euo pipefail
-      rejected=$(jq -er 'keys[] | select(. == "GATE" or . == "REBASE_RESOLVER" or . == "REQUIRED_CHECK" or . == "PRIMARY" or . == "BRANCH" or . == "A4S_BLOCKER_REPORTING")' <<<"$DAGU_PARAMS_JSON") || [[ $? == 4 ]]
+      rejected=$(jq -er 'keys[] | select(startswith("ESCALATION_") or . == "GATE" or . == "REBASE_RESOLVER" or . == "REQUIRED_CHECK" or . == "PRIMARY" or . == "BRANCH" or . == "A4S_BLOCKER_REPORTING")' <<<"$DAGU_PARAMS_JSON") || [[ $? == 4 ]]
       if [[ -n "$rejected" ]]; then
         printf 'admission rejected run parameter: %s\n' "$rejected" >&2
         printf 'adopted policy PRIMARY=%q GATE=%q REBASE_RESOLVER=%q REQUIRED_CHECK=%q BRANCH=%q\n' "$PRIMARY" "$GATE" "${REBASE_RESOLVER:-}" "$REQUIRED_CHECK" "$BRANCH" >&2
@@ -196,12 +201,18 @@ steps:
 
   - id: triage
     depends: admit
-    run: dagu-role-jobs stage triage
+    run: |
+      set -euo pipefail
+      dagu-feature-bundle escalation route
+      dagu-role-jobs stage triage
     outputs:
       - name: POC
       - name: QUESTION
       - name: BASIS
       - name: REVIEW
+      - name: REQUIRED_TARGETS
+      - name: AUTHORIZED_TARGETS
+      - name: SCOPE_BASIS
 
   - id: triage_decision
     depends: triage
@@ -228,11 +239,6 @@ steps:
       } > "$STATE/triage.md"
       cd "$PRIMARY"
       gh issue comment "$ISSUE" --body-file "$STATE/triage.md"
-      if [[ "$POC" == yes ]]; then
-        dagu-feature-bundle enqueue --run-id "poc-$RUN" "$PRIMARY/.workspace/dagu/dags/poc.yaml" -- \
-          ISSUE="$ISSUE" QUESTION="$QUESTION" BASE_BRANCH="$BASE_BRANCH" \
-          OMP_SESSION_ID="$OMP_SESSION_ID"
-      fi
 
   - id: detect_start_primary
     depends: triage_decision
@@ -303,6 +309,93 @@ steps:
         [[ -n "$value" && "$value" != '${steps.'* ]] ||
           { printf 'Normal completion requires %s at %s\n' "$field" "$CHECKPOINT" >&2; exit 1; }
       done
+  - id: poc_scope_prepare
+    depends: triage_decision
+    preconditions:
+      - condition: "${steps.triage.outputs.POC}"
+        expected: "yes"
+    env:
+      - QUESTION: ${steps.triage.outputs.QUESTION}
+      - REQUIRED_TARGETS: ${steps.triage.outputs.REQUIRED_TARGETS}
+      - AUTHORIZED_TARGETS: ${steps.triage.outputs.AUTHORIZED_TARGETS}
+      - SCOPE_BASIS: ${steps.triage.outputs.SCOPE_BASIS}
+    run: dagu-poc-scope assess
+    outputs:
+      - name: SCOPE_DECISION
+      - name: SCOPE_REQUEST
+      - name: SCOPE_REASON
+
+  - id: poc_scope_decision
+    depends: poc_scope_prepare
+    continue_on: skipped
+    preconditions:
+      - condition: "${steps.poc_scope_prepare.outputs.SCOPE_DECISION}"
+        expected: "yes"
+    action: human.task
+    with:
+      prompt: "PoC scope/access requires one owner decision before admission: ${steps.poc_scope_prepare.outputs.SCOPE_REASON}. Narrow the question to reachable targets, provide authorized access, or defer. Supply the effective question, target arrays and authorization basis."
+      form:
+        type: object
+        properties:
+          CANCEL: {type: string, enum: ['yes', 'no']}
+          ACTION: {type: string, enum: [narrow, provide-access, defer]}
+          QUESTION: {type: string}
+          REQUIRED_TARGETS: {type: string}
+          AUTHORIZED_TARGETS: {type: string}
+          BASIS: {type: string, minLength: 1}
+
+  - id: poc_scope_decision_cancellation
+    depends: poc_scope_decision
+    continue_on: skipped
+    preconditions:
+      - condition: "${steps.poc_scope_prepare.outputs.SCOPE_DECISION}"
+        expected: "yes"
+    env:
+      - CANCEL: ${steps.poc_scope_decision.outputs.CANCEL}
+      - CHECKPOINT: poc_scope_decision
+      - REQUIRED_FIELDS: ACTION BASIS
+      - ACTION: ${steps.poc_scope_decision.outputs.ACTION}
+      - BASIS: ${steps.poc_scope_decision.outputs.BASIS}
+    run: *cancellation_gate
+
+  - id: poc_scope_resolve
+    depends: poc_scope_decision_cancellation
+    continue_on: skipped
+    preconditions:
+      - condition: "${steps.triage.outputs.POC}"
+        expected: "yes"
+    env:
+      - SCOPE_REQUEST: ${steps.poc_scope_prepare.outputs.SCOPE_REQUEST}
+      - POC_SCOPE_ACTION: ${steps.poc_scope_decision.outputs.ACTION}
+      - POC_QUESTION: ${steps.poc_scope_decision.outputs.QUESTION}
+      - POC_REQUIRED_TARGETS: ${steps.poc_scope_decision.outputs.REQUIRED_TARGETS}
+      - POC_AUTHORIZED_TARGETS: ${steps.poc_scope_decision.outputs.AUTHORIZED_TARGETS}
+      - POC_SCOPE_BASIS: ${steps.poc_scope_decision.outputs.BASIS}
+    run: dagu-poc-scope decide
+    outputs:
+      - name: POC_QUESTION
+      - name: POC_REQUIRED_TARGETS
+      - name: POC_AUTHORIZED_TARGETS
+      - name: POC_SCOPE_BASIS
+
+  - id: poc_admit
+    depends: poc_scope_resolve
+    preconditions:
+      - condition: "${steps.triage.outputs.POC}"
+        expected: "yes"
+    env:
+      - QUESTION: ${steps.poc_scope_resolve.outputs.POC_QUESTION}
+      - REQUIRED_TARGETS: ${steps.poc_scope_resolve.outputs.POC_REQUIRED_TARGETS}
+      - AUTHORIZED_TARGETS: ${steps.poc_scope_resolve.outputs.POC_AUTHORIZED_TARGETS}
+      - SCOPE_BASIS: ${steps.poc_scope_resolve.outputs.POC_SCOPE_BASIS}
+      - SCOPE_REQUEST: ${steps.poc_scope_prepare.outputs.SCOPE_REQUEST}
+    run: |
+      set -euo pipefail
+      dagu-feature-bundle enqueue --run-id "poc-$RUN" "$PRIMARY/.workspace/dagu/dags/poc.yaml" -- \
+        ISSUE="$ISSUE" QUESTION="$QUESTION" BASE_BRANCH="$BASE_BRANCH" OMP_SESSION_ID="$OMP_SESSION_ID" \
+        REQUIRED_TARGETS="$REQUIRED_TARGETS" AUTHORIZED_TARGETS="$AUTHORIZED_TARGETS" \
+        SCOPE_BASIS="$SCOPE_BASIS" SCOPE_REQUEST="$SCOPE_REQUEST"
+
 
   - id: start_gate
     depends: start_primary_unavailable_cancellation
@@ -417,8 +510,70 @@ steps:
       - CHECKPOINT: recover_start_gate
     run: *cancellation_gate
 
-  - id: implement
+  - id: implement_budget
     depends: recover_start_gate_cancellation
+    preconditions:
+      - condition: "${steps.triage.outputs.POC}"
+        expected: "no"
+    run: dagu-feature-bundle escalation check
+    outputs:
+      - name: ESCALATE
+      - name: REQUEST
+
+  - id: escalation
+    depends: implement_budget
+    continue_on: skipped
+    preconditions:
+      - condition: "${steps.implement_budget.outputs.ESCALATE}"
+        expected: "yes"
+    action: human.task
+    with: &escalation_task
+      prompt: "Lifecycle budget exhausted. Inspect escalation.json in durable run state (run, iteration, SHA, findings, elapsed time and spend). Complete ACTION=continue to renew the budget or ACTION=stop to retain evidence and run onExit (native Failed/77). To change scope or delivery route, push back to triage with the observed --expected-iteration, REASON and DECIDED_BY. The owning OMP session receives the decision request."
+      push_back:
+        rewind_to: triage
+        form:
+          type: object
+          required: [REASON, DECIDED_BY]
+          properties:
+            REASON: {type: string, minLength: 1}
+            DECIDED_BY: {type: string, minLength: 1}
+      form:
+        type: object
+        properties:
+          CANCEL: {type: string, enum: ['yes', 'no']}
+          ACTION: {type: string, enum: [continue, stop]}
+          REASON: {type: string, minLength: 1}
+          DECIDED_BY: {type: string, minLength: 1}
+
+  - id: escalation_cancellation
+    depends: escalation
+    continue_on: skipped
+    preconditions:
+      - condition: "${steps.implement_budget.outputs.ESCALATE}"
+        expected: "yes"
+    env:
+      - CANCEL: ${steps.escalation.outputs.CANCEL}
+      - CHECKPOINT: escalation
+      - REQUIRED_FIELDS: ACTION REASON DECIDED_BY
+      - ACTION: ${steps.escalation.outputs.ACTION}
+      - REASON: ${steps.escalation.outputs.REASON}
+      - DECIDED_BY: ${steps.escalation.outputs.DECIDED_BY}
+    run: *cancellation_gate
+
+  - id: escalation_decision
+    depends: escalation_cancellation
+    continue_on: skipped
+    preconditions:
+      - condition: "${steps.implement_budget.outputs.ESCALATE}"
+        expected: "yes"
+    env:
+      - ACTION: ${steps.escalation.outputs.ACTION}
+      - REASON: ${steps.escalation.outputs.REASON}
+      - DECIDED_BY: ${steps.escalation.outputs.DECIDED_BY}
+    run: dagu-feature-bundle escalation decision
+
+  - id: implement
+    depends: escalation_decision
     preconditions:
       - condition: "${steps.triage.outputs.POC}"
         expected: "no"
@@ -635,12 +790,61 @@ steps:
       - CHECKPOINT: dependency_review
     run: *cancellation_gate
 
-  - id: rebase
+  - id: rebase_budget
     depends: dependency_review_cancellation
+    preconditions:
+      - condition: "${steps.triage.outputs.POC}"
+        expected: "no"
+    run: dagu-feature-bundle escalation check
+    outputs:
+      - name: ESCALATE
+      - name: REQUEST
+
+  - id: rebase_escalation
+    depends: rebase_budget
+    continue_on: skipped
+    preconditions:
+      - condition: "${steps.rebase_budget.outputs.ESCALATE}"
+        expected: "yes"
+    action: human.task
+    with: *escalation_task
+
+  - id: rebase_escalation_cancellation
+    depends: rebase_escalation
+    continue_on: skipped
+    preconditions:
+      - condition: "${steps.rebase_budget.outputs.ESCALATE}"
+        expected: "yes"
+    env:
+      - CANCEL: ${steps.rebase_escalation.outputs.CANCEL}
+      - CHECKPOINT: rebase_escalation
+      - REQUIRED_FIELDS: ACTION REASON DECIDED_BY
+      - ACTION: ${steps.rebase_escalation.outputs.ACTION}
+      - REASON: ${steps.rebase_escalation.outputs.REASON}
+      - DECIDED_BY: ${steps.rebase_escalation.outputs.DECIDED_BY}
+    run: *cancellation_gate
+
+  - id: rebase_escalation_decision
+    depends: rebase_escalation_cancellation
+    continue_on: skipped
+    preconditions:
+      - condition: "${steps.rebase_budget.outputs.ESCALATE}"
+        expected: "yes"
+    env:
+      - ACTION: ${steps.rebase_escalation.outputs.ACTION}
+      - REASON: ${steps.rebase_escalation.outputs.REASON}
+      - DECIDED_BY: ${steps.rebase_escalation.outputs.DECIDED_BY}
+    run: dagu-feature-bundle escalation decision
+
+  - id: rebase
+    depends: rebase_escalation_decision
     retry_policy:
       limit: 3
       interval_sec: 5
       exit_code: [75]
+    preconditions:
+      - condition: "${steps.triage.outputs.POC}"
+        expected: "no"
     run: |
       set -euo pipefail
       umask 0022
@@ -707,6 +911,7 @@ steps:
         printf 'rebased_sha=%s\n' "$after"
       else
         git -C "$WORKTREE" diff --name-only --diff-filter=U > "$STATE/conflict-files"
+        dagu-feature-bundle escalation finding conflict "$STATE/conflict-files"
         # Keep the resolved/nonconflicting delivery and conflict markers for implement.
         git -C "$WORKTREE" rebase --quit
         git -C "$WORKTREE" symbolic-ref HEAD "refs/heads/$BRANCH"
@@ -731,7 +936,7 @@ steps:
     with:
       prompt: "Rebase conflict checkpoint: the wait handler completes a clean rebase or pushes back to implement with the conflict files."
       push_back:
-        rewind_to: implement
+        rewind_to: implement_budget
       form:
         type: object
         properties:
@@ -795,7 +1000,12 @@ steps:
         mkdir -p "$STATE/historical/$prior"
         mv "$STATE/gate.json" "$STATE/historical/$prior/gate.json"
       fi
-      env -u GH_TOKEN -u GITHUB_TOKEN bash -euo pipefail -c "$GATE"
+      status=0
+      env -u GH_TOKEN -u GITHUB_TOKEN bash -euo pipefail -c "$GATE" 2>&1 | tee "$STATE/gate-output.log" || status=$?
+      if (( status != 0 )); then
+        dagu-feature-bundle escalation finding gate "$STATE/gate-output.log"
+        exit "$status"
+      fi
       status=$(git status --porcelain)
       if [[ -n "$status" ]]; then
         printf 'gate: worktree %s has changes after GATE:\n' "$WORKTREE" >&2
@@ -804,7 +1014,7 @@ steps:
         exit 1
       fi
       test "$(git rev-parse HEAD)" = "$sha"
-      jq -nc --arg sha "$sha" --arg gate "$GATE" '{sha:$sha,gate:$gate}' > "$STATE/gate.json"
+      jq -nc --arg sha "$sha" --arg gate "$GATE" '{sha:$sha,gate:$gate,result:"PASS"}' > "$STATE/gate.json"
       printf 'tested_sha=%s\n' "$sha" | tee -a "${DAGU_OUTPUT_FILE:-/dev/null}"
       git rev-parse HEAD > "$STATE/tested-sha"
       GATE_BODY
@@ -822,7 +1032,7 @@ steps:
     with:
       prompt: "gate failed. Inspect the gate logs; push back with the observed run-wide iteration to return to implement and repair the candidate in the same worktree."
       push_back:
-        rewind_to: implement
+        rewind_to: implement_budget
       form:
         type: object
         properties:
@@ -874,7 +1084,7 @@ steps:
             type: string
             pattern: '^[a-f0-9]{40}$'
       push_back:
-        rewind_to: implement
+        rewind_to: implement_budget
         form:
           type: object
           additionalProperties: false
@@ -980,18 +1190,22 @@ steps:
       test -z "$(git status --porcelain)"
       jq -e --arg sha "$sha" --arg gate "$GATE" '.sha == $sha and .gate == $gate' "$STATE/gate.json" >/dev/null
       test "$(git ls-remote origin "refs/heads/$BRANCH" | cut -f1)" = "$sha"
+      dagu-pr-body render "$STATE" "$ISSUE" > "$STATE/pr-body.md"
+      dagu-pr-body validate "$STATE/pr-body.md"
       if test -n "$PR_NUMBER"; then
         test "$(gh pr view "$PR_NUMBER" --json state --jq .state)" = OPEN
         test "$(gh pr view "$PR_NUMBER" --json headRefName --jq .headRefName)" = "$BRANCH"
         test "$(gh pr view "$PR_NUMBER" --json headRefOid --jq .headRefOid)" = "$sha"
+        gh pr edit "$PR_NUMBER" --body-file "$STATE/pr-body.md"
         gh pr view "$PR_NUMBER" --json number,url,headRefOid
       elif gh pr view "$BRANCH" --json number >/dev/null 2>&1; then
         test "$(gh pr view "$BRANCH" --json state --jq .state)" = OPEN
         test "$(gh pr view "$BRANCH" --json headRefName --jq .headRefName)" = "$BRANCH"
         test "$(gh pr view "$BRANCH" --json headRefOid --jq .headRefOid)" = "$sha"
+        gh pr edit "$BRANCH" --body-file "$STATE/pr-body.md"
         gh pr view "$BRANCH" --json number,url,headRefOid
       else
-        gh pr create --base "$BASE_BRANCH" --head "$BRANCH" --fill --body "Closes #${ISSUE}"
+        gh pr create --base "$BASE_BRANCH" --head "$BRANCH" --fill --body-file "$STATE/pr-body.md"
       fi
 
   - id: auto_merge
@@ -1041,7 +1255,7 @@ steps:
     with:
       prompt: "The scheduled reconciler owns this CI checkpoint. Evidence of CODE_FAIL for the published SHA returns this same run to implement; the SHA, check and log excerpt are in <git-dir>/dagu-feature/runs/${RUN}/ci-return.json and the coordinator notice."
       push_back:
-        rewind_to: implement
+        rewind_to: implement_budget
       form:
         type: object
         properties:
@@ -1062,7 +1276,7 @@ steps:
     with:
       prompt: "The scheduled reconciler owns this merge checkpoint: BEHIND or DIRTY returns to rebase with the observed iteration. Both CI and merge checkpoints complete only after MERGED with successful checks for the published SHA."
       push_back:
-        rewind_to: rebase
+        rewind_to: rebase_budget
       form:
         type: object
         properties:

@@ -5,6 +5,7 @@ on:
     branches: [main, integration/v1]
   pull_request:
     branches: [main, integration/v1]
+    types: [opened, synchronize, reopened, edited, ready_for_review]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -14,6 +15,16 @@ permissions:
   contents: read
 
 jobs:
+  pr-body:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: Validate PR body
+        run: node packages/issue-lifecycle/bin/dagu-pr-body.mjs event
   changes:
     runs-on: ubuntu-latest
     permissions:
@@ -135,9 +146,9 @@ jobs:
           # Match complete top-level names and their descendants. Skipping the
           # named groups retains new feature cases automatically in the remainder.
           poc_template='template real Dagu closes implementation runs and succeeds after enqueuing a PoC'
-          poc_rendered='rendered DAG real Dagu closes implementation runs and succeeds after enqueuing a PoC'
+          poc_rendered='rendered fixture real Dagu closes implementation runs and succeeds after enqueuing a PoC'
           recovery='concurrent recovery fixtures keep distinct run identities'
-          validation_admission='(?:template|rendered DAG) (?:optional validation uses native skip, SHA approval and iterative rejection|real Dagu checks primary freshness before admission and enqueues bootstrap after merge)'
+          validation_admission='(?:template|rendered fixture) (?:optional validation uses native skip, SHA approval and iterative rejection|real Dagu checks primary freshness before admission and enqueues bootstrap after merge)'
           feature_groups="(?:${poc_template}|${poc_rendered}|${recovery}|${validation_admission})"
           case "$LANE" in
             poc-template) pattern="^${poc_template}(?:$| )" ;;
@@ -151,7 +162,7 @@ jobs:
               exit
               ;;
             other-live)
-              npx tsx --test test/live/*.test.ts test/bundle-cli.test.ts test/bundle-rebase.test.ts test/bundle-template.test.ts test/bundle.test.ts test/planning-template.test.ts test/reconcile-ci.test.ts
+              npx tsx --test test/live/*.test.ts test/bundle-cli.test.ts test/bundle-rebase.test.ts test/bundle-template.test.ts test/bundle.test.ts test/escalation.test.ts test/planning-template.test.ts test/reconcile-ci.test.ts
               exit
               ;;
           esac
@@ -172,7 +183,7 @@ jobs:
           if-no-files-found: error
           retention-days: 7
   validate:
-    needs: [changes, test, live]
+    needs: [changes, test, live, pr-body]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -181,6 +192,8 @@ jobs:
         with:
           node-version: 22
       - env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BODY_RESULT: ${{ needs.pr-body.result }}
           CHANGES_RESULT: ${{ needs.changes.result }}
           TEST_RESULT: ${{ needs.test.result }}
           LIVE_RESULT: ${{ needs.live.result }}

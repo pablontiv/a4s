@@ -58,6 +58,9 @@ test("triage preserves PoC-required decisions and fails closed on identity chang
     assert.throws(() => verifyTriageResult(f.root, "fixture-run", f.id), /assignment identity/);
     f.rows[1]!.task = `Authorized Dagu role job ${f.id}.`;
     f.result.output!.poc = "yes";
+    f.result.output!.requiredTargets = ["linux-arm64"];
+    f.result.output!.authorizedTargets = ["linux-arm64"];
+    f.result.output!.scopeBasis = "Operator authorized local Linux";
     f.result.native = f.seal(); f.save();
     assert.throws(() => verifyTriageResult(f.root, "fixture-run", f.id), /requires a PoC/);
     writeFileSync(f.transcript, "changed prefix\n");

@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { BUNDLE_VERSION, classifyCompatibility, parseBundleStamp, REQUIRED_DAGU_VERSION } from "./bundle.ts";
 import type { RunDetails } from "./status/progress.ts";
 import { isRecord } from "./type-guard.ts";
+import { requirePocScope, scopeTargets } from "./poc-scope.ts";
 
 const packageRoot = fileURLToPath(new URL("../", import.meta.url));
 const correction = "Apply bootstrap from a clean compatible @a4s/issue-lifecycle checkout, adopt its stamped DAGs, install its reconciler and restart OMP to load both extension modules; retry with a new run ID.";
@@ -126,13 +127,22 @@ export function admit(options: AdmissionOptions, persist = true): { path: string
       const issue = options.params.find(param => param.startsWith("ISSUE="))?.slice(6);
       policy.BRANCH = name === "feature.yaml" ? `dagu/issue-${issue}` : `poc/${options.run}`;
       const rejected = options.params.map(param => param.slice(0, param.indexOf("=")))
-        .filter(field => ["PRIMARY", "BRANCH", "GATE", "REBASE_RESOLVER", "REQUIRED_CHECK", "A4S_BLOCKER_REPORTING"].includes(field));
+        .filter(field => field.startsWith("ESCALATION_") || ["PRIMARY", "BRANCH", "GATE", "REBASE_RESOLVER", "REQUIRED_CHECK", "A4S_BLOCKER_REPORTING"].includes(field));
       if (rejected.length) throw new Error(`admission rejected run parameter: ${rejected.join(", ")}; adopted policy ${JSON.stringify(policy)}`);
       if (typeof policy.PRIMARY !== "string" || !policy.PRIMARY) throw new Error(`${name} requires an adoption-fixed PRIMARY`);
       primaryParam = policy.PRIMARY;
     }
     const primary = realpathSync(resolve(options.cwd, primaryParam || "."));
     const repo = realpathSync(git(primary, "rev-parse", "--show-toplevel"));
+    if (name === "poc.yaml") {
+      const param = (key: string) => options.params.find(value => value.startsWith(`${key}=`))?.slice(key.length + 1) || "";
+      const literal = /^  - ESCALATION_POC_INCONCLUSIVE: (.+)$/m.exec(readFileSync(dagPath, "utf8"))?.[1];
+      const threshold = literal ? Number(JSON.parse(literal)) : 2;
+      requirePocScope(primary, { issue: param("ISSUE"), question: param("QUESTION"),
+        requiredTargets: scopeTargets(JSON.parse(param("REQUIRED_TARGETS") || "[]")),
+        authorizedTargets: scopeTargets(JSON.parse(param("AUTHORIZED_TARGETS") || "[]")), basis: param("SCOPE_BASIS") },
+      param("SCOPE_REQUEST") || undefined, threshold);
+    }
     const path = receiptPath(primary, options.run);
     const root = git(packageRoot, "rev-parse", "--show-toplevel");
     const prefix = git(packageRoot, "rev-parse", "--show-prefix");
@@ -154,6 +164,10 @@ export function admit(options: AdmissionOptions, persist = true): { path: string
       skill: identity(join(packageRoot, "skills", "issue-execution", "SKILL.md"), BUNDLE_VERSION, `${origin}@${commit}`),
       agents: tree(join(packageRoot, "agents")),
       cli: identity(join(packageRoot, "bin", "dagu-feature-bundle.ts"), BUNDLE_VERSION, `${origin}@${commit}`),
+      lifecycleHelpers: [
+        identity(join(packageRoot, "skills", "dagu-feature", "escalation.py"), BUNDLE_VERSION, `${origin}@${commit}`),
+        identity(join(packageRoot, "bin", "dagu-poc-scope.ts"), BUNDLE_VERSION, `${origin}@${commit}`),
+      ],
       relationships: { packageToExtension: "same-loaded-package", templateToPackage: "same-checkout", installedToSource: "verified-source-render", compatibility: "same-major; major-zero-same-minor" },
     };
     const daguVersion = execFileSync("dagu", ["version"], { encoding: "utf8" }).trim();

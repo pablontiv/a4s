@@ -221,7 +221,7 @@ test("isolated Dagu rebases colliding candidates before gate and publishes the n
   put(home, "dags/feature.yaml", `type: graph\nshell: bash\nenv:\n${Object.entries({ ...repo.env, VALIDATION: "", PATH: env.PATH }).map(([key, value]) => `  ${key}: ${JSON.stringify(value)}`).join("\n")}\nsteps:\n` +
     "  - id: triage\n    run: echo POC=no >> \"$DAGU_OUTPUT_FILE\"\n    outputs:\n      - name: POC\n" +
     "  - id: implement\n    depends: triage\n    run: echo fixture-candidate-ready\n" +
-    step(source, "rebase").replace("    depends: dependency_review_cancellation", "    depends: implement") +
+    step(source, "rebase").replace("    depends: rebase_escalation_decision", "    depends: implement") +
     step(source, "gate").replace("    depends: conflict_review_cancellation", "    depends: rebase") +
     step(source, "push").replace("    depends: validation_cancellation", "    depends: gate"));
   let serviceLog = "";
@@ -242,7 +242,7 @@ test("isolated Dagu rebases colliding candidates before gate and publishes the n
     const run = await until("normalized rebase/gate/push", async () => {
       const response = await fetch(`${api}/dag-runs/feature/${id}`); if (!response.ok) return undefined;
       const run = (await response.json() as { dagRunDetails: { statusLabel: string; nodes: Array<{ statusLabel: string; stdout?: string; stderr?: string }> } }).dagRunDetails;
-      return ["succeeded", "failed"].includes(run.statusLabel) ? run : undefined;
+      return ["succeeded", "failed", "aborted"].includes(run.statusLabel) ? run : undefined;
     });
     const logs = run.nodes.map(node => [node.stdout, node.stderr].filter(Boolean).map(path => readFileSync(path!, "utf8")).join("\n")).join("\n");
     assert.equal(run.statusLabel, "succeeded", logs + serviceLog);

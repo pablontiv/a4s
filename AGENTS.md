@@ -32,3 +32,7 @@ npm ci && npm test && npm run typecheck
 Trabajar en el worktree asignado y preservar los cambios del operador. Mantener instalaciones reproducibles con `npm ci` y actualizar el lockfile junto con cualquier cambio intencional de dependencias. Mantener el hook de Orca como delegación al bootstrap versionado.
 
 The operator uses OMP. Publishing, push, PR and Dagu human-task reconciliation require explicit assignment authority; the local gate alone grants none. Follow `packages/issue-lifecycle/skills/issue-execution/SKILL.md` from the primary clone as documented in `README.md`, and implement only in the assigned issue worktree. Local configuration, credentials and external services remain operator-owned.
+
+## Pull request descriptions
+
+Every PR, including syncs, adoptions and manual fixes outside Dagu, uses `.github/pull_request_template.md`: `Closes #<N>` or `Refs #<N>`, at most five Summary bullets, one command/result per Verification line, and Risk notes or `None`. Use repository-relative paths or placeholders (`<primary>`, `<worktree>`, `~`, `$DAGU_HOME`); keep host absolute paths, usernames and private repository names out of public bodies. Logs stay in run artifacts. CI validates the required structure and host-path rule on PR events, including body edits.

@@ -62,7 +62,7 @@ test("Dagu isolated primary checkpoints release the queue and rewind the same ru
     }
     throw new Error(`Timed out: ${description}\n${serviceLog}`);
   }
-  type Detail = Omit<RunDetails, "nodes"> & { nodes: Array<{ statusLabel: string; stderr?: string; step: { name: string; humanTask?: { prompt?: string } } }> };
+  type Detail = Omit<RunDetails, "nodes"> & { nodes: Array<{ statusLabel: string; approvalIteration?: number; stderr?: string; step: { name: string; humanTask?: { prompt?: string } } }> };
   async function detail(name: string, id: string): Promise<Detail | undefined> {
     try {
       const response = await fetch(`${api}/dag-runs/${name}/${id}`);
@@ -175,8 +175,9 @@ esac
       if (blocked === "branch") {
         dagu("human-task", "push-back", name, "--run-id", id, "--step", checkpoint, "--expected-iteration", "0");
         await until("premature push-back rechecks", async () => {
-          const status = dagu("status", "--run-id", id, name);
-          return /push-back iteration: 1/.test(status) && /Waiting/.test(status) ? true : undefined;
+          const run = await detail(name, id);
+          return run?.statusLabel === "waiting" && run.nodes.some(node =>
+            node.step.name === checkpoint && node.statusLabel === "waiting" && node.approvalIteration === 1) ? true : undefined;
         });
         iteration = 1;
         git(primary, "switch", "main");
