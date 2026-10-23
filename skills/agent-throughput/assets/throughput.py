@@ -40,6 +40,7 @@ GH_COMMAND = re.compile(r'\bgh\s+(issue|pr)\s+([^\n;|&]+)')
 GH_REPO = re.compile(r'(?:-R|--repo)(?:\s+|=)([\w.-]+/[\w.-]+)')
 AZURE_URL = re.compile(r'https?://(?:[^/\s"<>]+@)?(?:dev\.azure\.com/[^/\s"<>]+|'
                        r'[^/\s"<>]+\.visualstudio\.com)/[^\s"<>\\]+')
+AZURE_HOST_MARKER = re.compile(r'dev\.azure\.com|\.visualstudio\.com')
 AZ_COMMAND = re.compile(r'\baz\s+(repos\s+pr|boards\s+work-item)\s+([^\n;|&]+)')
 BRANCH_REFS = re.compile(r'(?<![\w./-])(?:refs/heads/)?'
                          r'((?:feature|feat|fix|hotfix|docs|ci)/[\w][\w./-]*)')
@@ -114,7 +115,7 @@ def extract_refs(text):
     if not any(marker in text for marker in REFERENCE_MARKERS):
         return frozenset()
     refs = set()
-    if 'dev.azure.com' in text or '.visualstudio.com' in text:
+    if AZURE_HOST_MARKER.search(text):
         def azure_reference(match):
             ref = azure_url_reference(match)
             if ref:
