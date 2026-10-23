@@ -22,11 +22,16 @@ import { getKiroCredential } from "./token";
 
 const KIRO_API = "kiro-streaming";
 const KIRO_PROVIDER = "kiro";
-/** Verified for an Enterprise IdC profile. Set via env for your account. */
-const KIRO_PROFILE_ARN =
-	process.env.KIRO_PROFILE_ARN ?? (() => {
+/** Verified for an Enterprise IdC profile. Set via env for your account.
+ * Resolved lazily so the extension still loads without KIRO_PROFILE_ARN;
+ * the error surfaces only when the kiro provider is actually used. */
+function getKiroProfileArn(): string {
+	const arn = process.env.KIRO_PROFILE_ARN;
+	if (!arn) {
 		throw new Error("KIRO_PROFILE_ARN no esta definido (ARN del perfil de CodeWhisperer/IdC)");
-	})();
+	}
+	return arn;
+}
 
 function zeroUsage(): Usage {
 	return {
@@ -111,7 +116,7 @@ async function runKiroTurn(
 			{
 				accessToken: credential.accessToken,
 				region: credential.region,
-				profileArn: KIRO_PROFILE_ARN,
+				profileArn: getKiroProfileArn(),
 				conversationState,
 				additionalModelRequestFields: wireEffort(model.id, options?.reasoning),
 				signal: options?.signal,
@@ -280,7 +285,7 @@ export default function kiroExtension(pi: ExtensionAPI): void {
 				const live = await fetchKiroModels({
 					accessToken: credential.accessToken,
 					region: credential.region,
-					profileArn: KIRO_PROFILE_ARN,
+					profileArn: getKiroProfileArn(),
 				});
 				return live.map(seedModelToConfig);
 			} catch {
