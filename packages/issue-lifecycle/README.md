@@ -66,8 +66,10 @@ failures stay diagnosed waits; changed heads require fresh evidence.
 
 The adopted candidate policy and latest analysis are retained in
 `codeql-policy.json` and `codeql-observation.json`; final authorization repeats
-the observation. Repository `code_scanning` enforcement is separately authorized
-and configured with matching thresholds. See the
+the observation. Retained immutable workflows continue their original checks-only
+reconciliation until their publication supplies a candidate-bound CodeQL policy.
+Repository `code_scanning` enforcement is separately authorized and configured with
+matching thresholds. See the
 [execution contract](skills/issue-execution/SKILL.md#codeql-findings-and-merge-enforcement)
 for threshold choices, evidence and ownership.
 

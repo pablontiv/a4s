@@ -155,18 +155,20 @@ steps:
           # Observe code scanning independently: CodeQL findings can block a
           # ruleset even when required-check lookup does not expose that rule.
           policy="$STATE/codeql-policy.json"
-          if [[ ! -f "$policy" ]]; then
-            CLASS=BLOCKED CHECK=CodeQL CAUSE="Candidate CodeQL policy unavailable; inspect publication evidence"
-          elif [[ "$(jq -r .sha "$policy")" != "$SHA" ]]; then
-            CLASS=STALE_SHA CHECK=CodeQL CAUSE="CodeQL policy belongs to another published candidate"
-          else
-            dagu-codeql "$REPO" "$PR" "$SHA" "$(jq -r .security "$policy")" "$(jq -r .alerts "$policy")" >"$STATE/codeql-observation.json"
-            codeql_class=$(jq -r .class "$STATE/codeql-observation.json")
-            if [[ "$codeql_class" != PASS ]]; then
-              CLASS=$codeql_class CHECK=CodeQL RETRY_RUN=
-              CAUSE=$(jq -r .cause "$STATE/codeql-observation.json")
-              FINDINGS=$(jq -c .findings "$STATE/codeql-observation.json")
-              LOG=$(jq -r '[.findings[] | "\(.rule) (\(.severity)) \(.path):\(.line): \(.message)"] | join("\n")' "$STATE/codeql-observation.json")
+          # Retained runs use their original checks-only contract until publication
+          # explicitly supplies a candidate-bound CodeQL policy.
+          if [[ -f "$policy" ]]; then
+            if [[ "$(jq -r .sha "$policy")" != "$SHA" ]]; then
+              CLASS=STALE_SHA CHECK=CodeQL CAUSE="CodeQL policy belongs to another published candidate"
+            else
+              dagu-codeql "$REPO" "$PR" "$SHA" "$(jq -r .security "$policy")" "$(jq -r .alerts "$policy")" >"$STATE/codeql-observation.json"
+              codeql_class=$(jq -r .class "$STATE/codeql-observation.json")
+              if [[ "$codeql_class" != PASS ]]; then
+                CLASS=$codeql_class CHECK=CodeQL RETRY_RUN=
+                CAUSE=$(jq -r .cause "$STATE/codeql-observation.json")
+                FINDINGS=$(jq -c .findings "$STATE/codeql-observation.json")
+                LOG=$(jq -r '[.findings[] | "\(.rule) (\(.severity)) \(.path):\(.line): \(.message)"] | join("\n")' "$STATE/codeql-observation.json")
+              fi
             fi
           fi
           current=$(gh pr view "$PR" -R "$REPO" --json headRefOid --jq .headRefOid)
@@ -180,9 +182,9 @@ steps:
             ACTION=RETRY
           elif [[ "$CLASS" == PASS && "$pr_state" == MERGED ]]; then
             ACTION=COMPLETE
-          elif [[ "$CLASS" == PASS && "$pr_state" == OPEN && "$auto" != true && "$merge_state" != DRAFT && "$merge_state" != HAS_HOOKS ]]; then
+          elif [[ -f "$policy" && "$CLASS" == PASS && "$pr_state" == OPEN && "$auto" != true && "$merge_state" != DRAFT && "$merge_state" != HAS_HOOKS ]]; then
             ACTION=MERGE
-          elif [[ "$pr_state" != OPEN && "$pr_state" != MERGED ]] || [[ "$pr_state" == OPEN && ( "$merge_state" == DRAFT || "$merge_state" == HAS_HOOKS ) ]]; then
+          elif [[ "$pr_state" != OPEN && "$pr_state" != MERGED ]] || [[ "$pr_state" == OPEN && ( ( ! -f "$policy" && "$auto" != true ) || "$merge_state" == DRAFT || "$merge_state" == HAS_HOOKS ) ]]; then
             CLASS=BLOCKED CAUSE="PR $pr_state/$merge_state auto-merge=$auto; operator action required"
           fi
           if [[ "$CLASS" == STALE_SHA ]]; then ACTION=WAIT; fi

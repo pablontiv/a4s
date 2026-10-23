@@ -232,6 +232,32 @@ for (const [name, base] of definitions) {
   const feature = readFileSync(name === "template"
     ? fileURLToPath(new URL(`${base}feature.yaml`, import.meta.url)) : renderedFeature, "utf8");
   const reconcile = readFileSync(fileURLToPath(new URL(`${base}reconcile.yaml`, import.meta.url)), "utf8");
+  test(`${name}: retained runs complete from checks and merge state under their original policy`, () => {
+    const f = fixture("retained-pre-codeql");
+    try {
+      git(f.worktree, "push", "origin", f.branch);
+      rmSync(join(f.state, "codeql-policy.json"));
+      update(f, { statusStep: "await_merge", prState: "MERGED", codeqlPending: true });
+      const merged = observe(f, reconcile);
+      assert.equal(merged.class, "PASS");
+      assert.equal(merged.action, "COMPLETE");
+      transition(f, reconcile);
+      assert.equal(JSON.parse(readFileSync(f.control, "utf8")).statusStep, "succeeded");
+      update(f, { statusStep: "await_ci", prState: "MERGED" });
+      assert.equal(observe(f, reconcile).action, "COMPLETE");
+      update(f, { statusStep: "await_merge", prState: "OPEN", auto: false });
+      const disabled = observe(f, reconcile);
+      assert.equal(disabled.class, "BLOCKED");
+      assert.equal(disabled.action, "WAIT");
+      update(f, { auto: true });
+      const waiting = observe(f, reconcile);
+      assert.equal(waiting.class, "PASS");
+      assert.equal(waiting.action, "WAIT");
+      const calls = readFileSync(f.calls, "utf8").trim().split("\n").map(line => JSON.parse(line));
+      assert.ok(calls.every(call => !call.args.some((arg: string) => arg.includes("/code-scanning/alerts"))));
+    } finally { rmSync(f.root, { recursive: true, force: true }); }
+  });
+
   test(`${name}: CodeQL BLOCKED returns findings to implement and enables merge only after the fixed head passes`, () => {
     const f = fixture("codeql570");
     try {
