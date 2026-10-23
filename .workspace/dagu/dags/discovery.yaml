@@ -1,7 +1,7 @@
-# dagu-feature-bundle: @a4s/omp-dagu@0.3.120 source=pablontiv/a4s@2e6ba63ae2ff1ae3f30beb24024d5c5157ce6e22 bootstrap=bootstrap-a4s-v0-3-120 dagu=2.20.1
+# dagu-feature-bundle: @a4s/issue-lifecycle@0.4.3 source=pablontiv/a4s@d939631cb5f2ebcd1f91ae0bbf2e5f6791b2f0ba bootstrap=a4s-v1-bootstrap-0-4-3 dagu=2.20.1
 labels:
   - workspace=a4s
-  - dagu-feature-bundle=0.3.120
+  - dagu-feature-bundle=0.4.3
 queue: a4s
 type: graph
 dotenv: []
@@ -25,7 +25,7 @@ params:
     default: ""
 env:
   - RUN: ${context.run.id}
-  - DAGU_FEATURE_BUNDLE: "dagu-feature-bundle=0.3.120 source=pablontiv/a4s@2e6ba63ae2ff1ae3f30beb24024d5c5157ce6e22 bootstrap=bootstrap-a4s-v0-3-120"
+  - DAGU_FEATURE_BUNDLE: "dagu-feature-bundle=0.4.3 source=pablontiv/a4s@d939631cb5f2ebcd1f91ae0bbf2e5f6791b2f0ba bootstrap=a4s-v1-bootstrap-0-4-3"
 steps:
   - id: snapshot
     run: |
@@ -88,7 +88,7 @@ steps:
       prompt: >-
         Ejecuta una subagente por lente solicitada (${LENSES}), con un máximo de 8.
         Diagnostica el snapshot de solo lectura ${steps.snapshot.outputs.SNAPSHOT},
-        aplica el contrato y la lente correspondiente de skills/discovery, y escribe
+        aplica el contrato y la lente correspondiente de skills/repository-discovery, y escribe
         exactamente un objeto JSON por línea en
         ${steps.snapshot.outputs.OUT_DIR}/findings-<lente>.jsonl. Un archivo vacío
         representa cero hallazgos. SOURCE=${SOURCE}.

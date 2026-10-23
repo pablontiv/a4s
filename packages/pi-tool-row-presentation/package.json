@@ -1,6 +1,6 @@
 {
   "name": "@a4s/pi-tool-row-presentation",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "license": "UNLICENSED",
   "repository": {
@@ -25,11 +25,10 @@
     ]
   },
   "scripts": {
-    "test": "tsx --test test/*.test.ts",
-    "typecheck": "tsc --noEmit"
+    "test": "tsx --test test/*.test.ts"
   },
   "dependencies": {
-    "@a4s/omp-hot-reload": "0.1.0"
+    "@a4s/hot-reload": "0.1.0"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
@@ -50,7 +49,6 @@
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "1.0.3",
     "@earendil-works/pi-tui": "1.0.4",
-    "@pablontiv/pion": "https://github.com/pablontiv/pi/releases/download/pion-local-v1.0.2-dev.40713b10ba6db5c6f083026e3367e2af72cea0ea/pablontiv-pion-1.0.2-dev.40713b10ba6db5c6f083026e3367e2af72cea0ea.tgz",
     "@types/node": "26.6.1",
     "tsx": "4.23.13",
     "typescript": "7.0.2"

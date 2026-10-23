@@ -24,7 +24,7 @@ jobs:
         with:
           node-version: 22
       - name: Validate PR body
-        run: node packages/omp-dagu/bin/dagu-pr-body.mjs event
+        run: node packages/issue-lifecycle/bin/dagu-pr-body.mjs event
   changes:
     runs-on: ubuntu-latest
     permissions:
@@ -63,29 +63,11 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      # The @pablontiv/pion dev tarball (github.com/pablontiv/pi releases) is no
-      # longer downloadable. Install without it, then restore the manifests that
-      # the identity tests read.
-      - &install-dependencies
-        name: Install without @pablontiv/pion
-        run: |
-          pion='@pablontiv/pion'
-          for manifest in packages/context-expert/package.json packages/pi-tool-row-presentation/package.json; do
-            jq --arg p "$pion" 'del(.devDependencies[$p])' "$manifest" > "$manifest.ci"
-            mv "$manifest.ci" "$manifest"
-          done
-          jq --arg p "$pion" '
-            del(.packages["node_modules/" + $p])
-            | .packages |= with_entries(
-                if .value.devDependencies then .value.devDependencies |= del(.[$p]) else . end)' \
-            package-lock.json > package-lock.ci.json
-          mv package-lock.ci.json package-lock.json
-          npm ci
-          git checkout -- package-lock.json packages
+      - run: npm ci
       - name: Install pinned Dagu
-        if: matrix.workspace.name == '@a4s/omp-dagu'
+        if: matrix.workspace.name == '@a4s/issue-lifecycle'
         run: &install-pinned-dagu |
-          version=$(node -p "require('./packages/omp-dagu/package.json').daguFeature.dagu")
+          version=$(node -p "require('./packages/issue-lifecycle/package.json').daguFeature.dagu")
           asset="dagu_${version}_linux_amd64.tar.gz"
           url="https://github.com/dagu-org/dagu/releases/download/v${version}"
           mkdir -p "$RUNNER_TEMP/dagu-install" "$RUNNER_TEMP/dagu-bin"
@@ -100,9 +82,9 @@ jobs:
           install -m 0755 dagu "$RUNNER_TEMP/dagu-bin/dagu"
           echo "$RUNNER_TEMP/dagu-bin" >> "$GITHUB_PATH"
       - name: Check pinned Dagu
-        if: matrix.workspace.name == '@a4s/omp-dagu'
+        if: matrix.workspace.name == '@a4s/issue-lifecycle'
         run: &check-pinned-dagu |
-          version=$(node -p "require('./packages/omp-dagu/package.json').daguFeature.dagu")
+          version=$(node -p "require('./packages/issue-lifecycle/package.json').daguFeature.dagu")
           command -v dagu
           actual=$(dagu version)
           echo "$actual"
@@ -118,7 +100,7 @@ jobs:
         run: npm run typecheck --workspace "${{ matrix.workspace.name }}"
   live:
     needs: changes
-    if: contains(fromJSON(needs.changes.outputs.workspaces).*.name, '@a4s/omp-dagu')
+    if: contains(fromJSON(needs.changes.outputs.workspaces).*.name, '@a4s/issue-lifecycle')
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -130,14 +112,14 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - *install-dependencies
+      - run: npm ci
       - name: Install pinned Dagu
         run: *install-pinned-dagu
       - name: Check pinned Dagu
         run: *check-pinned-dagu
       - name: Live Dagu tests
         id: live-tests
-        working-directory: packages/omp-dagu
+        working-directory: packages/issue-lifecycle
         env:
           A4S_LIVE_DAGU: "1"
           A4S_DAGU_DIAGNOSTICS_DIR: ${{ runner.temp }}/dagu-poc-diagnostics

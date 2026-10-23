@@ -1,7 +1,7 @@
-# dagu-feature-bundle: @a4s/omp-dagu@0.3.120 source=pablontiv/a4s@2e6ba63ae2ff1ae3f30beb24024d5c5157ce6e22 bootstrap=bootstrap-a4s-v0-3-120 dagu=2.20.1
+# dagu-feature-bundle: @a4s/issue-lifecycle@0.4.3 source=pablontiv/a4s@d939631cb5f2ebcd1f91ae0bbf2e5f6791b2f0ba bootstrap=a4s-v1-bootstrap-0-4-3 dagu=2.20.1
 labels:
   - workspace=a4s
-  - dagu-feature-bundle=0.3.120
+  - dagu-feature-bundle=0.4.3
 queue: a4s
 type: graph
 dotenv: []
@@ -21,7 +21,7 @@ params:
       default: ""
     BASE_BRANCH:
       type: string
-      default: "main"
+      default: "integration/v1"
       pattern: '^[A-Za-z0-9][A-Za-z0-9._/-]*$'
     VALIDATION:
       type: string
@@ -34,10 +34,10 @@ params:
       type: string
       default: ""
 env:
-  - PRIMARY: "/Users/Shared/harness/a4s"
+  - PRIMARY: "/Users/Shared/harness/a4s-v1"
   - BRANCH: dagu/issue-${ISSUE}
-  - GATE: "npm ci && npm test && npm run typecheck"
-  - REBASE_RESOLVER: "node packages/omp-dagu/bin/dagu-bundle-rebase.mjs"
+  - GATE: "npm test && npm run typecheck"
+  - REBASE_RESOLVER: "node packages/issue-lifecycle/bin/dagu-bundle-rebase.mjs"
   - REQUIRED_CHECK: "validate"
   - A4S_BLOCKER_REPORTING: "ask"
   - ESCALATION_PUSHBACKS: "3"
@@ -47,7 +47,7 @@ env:
   - ESCALATION_CI_BLOCKED: "2"
   - WORKTREE: ${PRIMARY}/.workspace/worktrees/issue-${ISSUE}
   - RUN: ${context.run.id}
-  - DAGU_FEATURE_BUNDLE: "dagu-feature-bundle=0.3.120 source=pablontiv/a4s@2e6ba63ae2ff1ae3f30beb24024d5c5157ce6e22 bootstrap=bootstrap-a4s-v0-3-120"
+  - DAGU_FEATURE_BUNDLE: "dagu-feature-bundle=0.4.3 source=pablontiv/a4s@d939631cb5f2ebcd1f91ae0bbf2e5f6791b2f0ba bootstrap=a4s-v1-bootstrap-0-4-3"
   - DAGU_RESOURCE_GUARD: |
       resource_lock() {
         local operation=$1 primary root expected actual common key attempt owner run status candidate branch issue
@@ -169,7 +169,7 @@ steps:
       expected_sha=$(git -C "$PRIMARY" rev-parse "origin/$BASE_BRANCH")
       observed_version=not-applicable
       expected_version=not-applicable
-      manifest=packages/omp-dagu/package.json
+      manifest=packages/issue-lifecycle/package.json
       if [[ -e "$PRIMARY/$manifest" ]] || git -C "$PRIMARY" cat-file -e "origin/$BASE_BRANCH:$manifest" 2>/dev/null; then
         observed_version=$(jq -er '.version | select(type == "string" and length > 0)' "$PRIMARY/$manifest" 2>/dev/null) || observed_version=unavailable
         expected_version=$(git -C "$PRIMARY" show "origin/$BASE_BRANCH:$manifest" | jq -er '.version | select(type == "string" and length > 0)') || expected_version=unavailable
@@ -1521,11 +1521,41 @@ steps:
         fi
       fi
       if [[ "$MODE" == true && ! -f "$STATE/bootstrap-enqueued" ]]; then
-        merged_files=$(gh pr diff "$pr_number" --repo "$repo" --name-only) ||
-          diagnostic "PR #$pr_number changed-file lookup failed, expected merged diff"
-        if grep -Eq '^packages/omp-dagu/(skills/|CHANGELOG\.md$)' <<<"$merged_files"; then
-          skill_dir="$PRIMARY/packages/omp-dagu/skills/dagu-feature"
-          version=$(jq -er '.version | select(type == "string" and length > 0)' "$PRIMARY/packages/omp-dagu/package.json")
+        api_repo=$(gh repo view "$repo" --json nameWithOwner --jq .nameWithOwner) ||
+          diagnostic "PR #$pr_number repository lookup failed"
+        metadata=$(gh api "repos/$api_repo/pulls/$pr_number") ||
+          diagnostic "PR #$pr_number changed-file metadata lookup failed"
+        count=$(jq -ers '
+          if length != 1 then error("expected one metadata document") else .[0] end |
+          if type != "object" then error("invalid PR metadata")
+          elif (.changed_files | type) != "number" then error("invalid changed_files")
+          elif .changed_files < 0 or .changed_files != (.changed_files | floor) then error("invalid changed_files")
+          elif .changed_files >= 3000 then error("changed_files reaches the 3000-file endpoint ceiling")
+          else .changed_files end
+        ' <<<"$metadata") || diagnostic "PR #$pr_number invalid changed-file metadata or endpoint ceiling"
+        pages=$(gh api --paginate --slurp "repos/$api_repo/pulls/$pr_number/files?per_page=100") ||
+          diagnostic "PR #$pr_number changed-file pages lookup failed"
+        bootstrap_needed=$(jq -ers --argjson count "$count" '
+          if length != 1 then error("expected one files document") else .[0] end |
+          if type != "array" then error("invalid files pages")
+          elif length == 0 then error("missing files pages")
+          elif any(.[]; type != "array") then error("invalid files page")
+          elif any(.[]; length > 100) then error("oversized files page")
+          elif any(.[0:-1][]; length != 100) then error("incomplete files page")
+          elif any(.[][]; type != "object") then error("invalid file record")
+          elif any(.[][]; (.filename | type) != "string") then error("invalid filename")
+          elif any(.[][]; .filename | length == 0) then error("empty filename")
+          else
+            [.[][] | .filename] as $files
+            | if ($files | length) != $count then error("changed-file count mismatch")
+              elif ($files | unique | length) != $count then error("duplicate filenames")
+              else any($files[]; test("^packages/issue-lifecycle/(skills/|CHANGELOG\\.md$)")) | tostring
+              end
+          end
+        ' <<<"$pages") || diagnostic "PR #$pr_number invalid or incomplete changed-file evidence"
+        if [[ "$bootstrap_needed" == true ]]; then
+          skill_dir="$PRIMARY/packages/issue-lifecycle/skills/issue-execution"
+          version=$(jq -er '.version | select(type == "string" and length > 0)' "$PRIMARY/packages/issue-lifecycle/package.json")
           bootstrap_run="bootstrap-a4s-v${version//./-}"
           dagu enqueue --run-id "$bootstrap_run" "$skill_dir/dagu-feature-bootstrap.yaml" -- \
             PRIMARY="$PRIMARY" SKILL_DIR="$skill_dir" ||
