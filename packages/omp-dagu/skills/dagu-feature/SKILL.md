@@ -24,12 +24,7 @@ flowchart LR
     R -->|clean rebase| E[gate]
     E --> ER[recover_gate]
     ER -->|code failure: push-back| B
-    ER -->|healthy: skipped| Q[quality_prepare<br/>current SHA request]
-    Q --> QR[quality_review<br/>independent QA + reviewer]
-    QR --> V[quality_admit<br/>runtime provenance]
-    V --> QT[quality_transition]
-    QT -->|FAIL findings: push-back| B
-    QT -->|two current PASS| RV[validation<br/>optional human.task]
+    ER -->|healthy: skipped| RV[validation<br/>optional human.task]
     RV -->|approve tested SHA or skip| F[push]
     RV -->|reason + observed iteration| B
     F --> FR[recover_push]
@@ -64,15 +59,12 @@ This skill does not install Dagu, and it carries no logic specific to any reposi
 
 ## Role-job receipt contract (schemaVersion 1)
 
-`dagu-role-jobs stage triage|implement|quality_review` executes the template's command stages.
+`dagu-role-jobs stage triage|implement` executes the template's command stages.
 It authorizes against the run's immutable admission receipt/snapshot, the current
 native running stage and ready dependencies, canonical worktree ownership,
 candidate SHA and iteration. `validation` remains an operator `human.task`.
-`quality_review` explicitly joins two authorized native jobs, QA and reviewer.
-`quality_admit` reconstructs `quality.json` from their authoritative receipts with
-`dagu-role-jobs admit-quality`, verifies the current evidence and seals it.
 The registry maps `triage` to `triage-reviewer`, implementation/conflict resolution
-to `task`, and quality roles to `qa` and `reviewer`. Native `discoverAgents`,
+to `task`. Native `discoverAgents`,
 `Settings.loadReadOnly`, `resolveAgentModelSelection` and `runSubprocess` preserve
 the entire configured model array, pre-expansion named role, strict structured
 yield and session-scoped retry/fallback chain.
@@ -82,14 +74,13 @@ Durable files live at
 sorted-key canonical JSON of `binding`:
 
 ```json
-{"repo":"<canonical PRIMARY>","worktree":"<canonical candidate>","lane":"feature","dag":"feature","run":"<parent run>","stage":"quality_review","role":"qa","sha":"<40 hex>","iteration":0,"attempt":"<quality-request attempt>"}
+{"repo":"<canonical PRIMARY>","worktree":"<canonical candidate>","lane":"feature","dag":"feature","run":"<parent run>","stage":"implement","role":"implement","sha":"<40 hex>","iteration":0,"attempt":"<iteration>:<step startedAt>"}
 ```
 
-`role` is `triage|implement|conflict-resolution|qa|reviewer`. Non-quality
+`role` is `triage|implement|conflict-resolution`. The
 `attempt` combines the native run-wide iteration and step `startedAt`; a retry
-of that same Dagu step has a fresh identity. Quality uses the current request's
-capture iteration and attempt. A changed candidate, iteration or attempt
-produces a distinct id and native session.
+of that same Dagu step has a fresh identity. A changed candidate, iteration or
+attempt produces a distinct id and native session.
 
 `job.json` records `schemaVersion`, `id`, `binding`, canonical `directory`,
 `executor:{host,pid,processStartedAt}`, `readyAt`, `startedAt` and `state`.
@@ -101,10 +92,8 @@ and `model`, assistant `attempts`, model-change `fallbacks` with
 `resolvedModelIsFallback`, and `routing` (runtime version/executor digest,
 registered agent source/models, current overrides, resolved full patterns/role).
 `routing.json`, `assignment.json`, `native-result.json` and the native
-`<id>.jsonl` remain alongside it. A structured QA `verdict=FAIL` is a completed
-execution, not accepted quality. Command `IMPLEMENTER` and triage `REVIEW` outputs
-carry these ids. The quality join emits QA and REVIEW job ids; admission verifies
-each job's actual session and emitting verdict. #517 consumes the same evidence.
+`<id>.jsonl` remain alongside it. Command `IMPLEMENTER` and triage `REVIEW` outputs
+carry these ids and retain the native session and emitting structured result.
 Linked `runtimeAndModels/role-job` observations extend the existing #277 receipt;
 its `initial` identity remains immutable.
 
@@ -117,7 +106,7 @@ capacity domain or through an operator-managed migration. This is independent
 of Dagu queue slots and OMP's process-local task/provider request semaphores;
 it is not a claim about other OMP sessions or host-wide provider concurrency.
 Mutating roles exclude other jobs on their actual candidate worktree, while
-read-only QA/reviewer jobs and unrelated worktrees share available capacity.
+unrelated worktrees share available capacity.
 
 Duplicate delivery observes the same live execution or persisted terminal result.
 Scheduler/launcher interruption preserves a living worker's ownership. Once its
@@ -620,7 +609,7 @@ retry that step. PoC `base` and feature `close_gate` command failures remain ter
 
 Dagu snapshots the definition when you enqueue. Later edits to the file do not affect runs that already exist.
 
-**One run per lifecycle.** Continue each run through its own checkpoints and push-backs. A feature whose triage chooses `POC=yes` skips implementation `quality_prepare` and completes successfully after enqueueing `poc`; a successful PoC may enqueue a fresh feature run for the cutover.
+**One run per lifecycle.** Continue each run through its own checkpoints and push-backs. A feature whose triage chooses `POC=yes` skips implementation and publication and completes successfully after enqueueing `poc`; a successful PoC may enqueue a fresh feature run for the cutover.
 
 **Resource ownership.** `admit` atomically records `(canonical PRIMARY, ISSUE)`
 in the main Git directory before triage. Creation and cleanup take the same
@@ -701,7 +690,7 @@ A failed run can leave its PR's auto-merge armed. Before reenqueuing, read
 Otherwise the replacement run's `push` can trigger that merge; the current
 candidate must complete its local gate before that publication.
 
-`checkpoint_push` preserves the captured candidate before the gate and QA/review
+`checkpoint_push` preserves the captured candidate before the gate and any optional operator validation
 in the remote recovery ref `refs/dagu/checkpoints/issue-N`, using an explicit
 lease against the previous checkpoint SHA recorded in
 `<git-dir>/dagu-feature/runs/<RUN>/checkpoint-sha` (or observed remotely for a
@@ -765,7 +754,7 @@ The `@a4s/omp-dagu` status extension delivers hidden model context for every wai
 
 An owner-session FIFO reserves exactly one autonomous wake while idle. Once the owner is active, later notices drain in FIFO order through the host's `aside` delivery at supported step boundaries, including during the reserved autonomous turn. The reservation gates idle wakes only and is released at `agent_end`; each session retains its own queue and reservation across session switches. Terminal notices use the same delivery path. The initial sweep is a silent baseline. Notices start or continue coordinator turns without rendering in chat and report run state rather than user instructions.
 
-- `triage`, `implement` and the explicit QA/reviewer join at `quality_review` execute through the role-job boundary below, without coordinator task calls.
+- `triage` and `implement` execute through the role-job boundary below, without coordinator task calls.
 - At `run_poc`, the coordinator launches the PoC subagent as `Poc<ISSUE>`.
 - Recovery notices retain the failed command's logs and resources. The owner
   inspects them and uses the iteration-protected checkpoint transition; operator
@@ -840,8 +829,6 @@ or `capture`.
 Feature `triage` and `implement` are command steps. After inspecting retained
 effects, retry that same step (`--step triage` or `--step implement`); its fresh
 native start timestamp permits recovery from failed/interrupted role jobs.
-For `quality_review`, retry `quality_prepare` to bind a fresh quality attempt
-before dispatching the native QA/reviewer join.
 
 | DAG | Failed Waiting checkpoint | Retry step |
 |---|---|---|
@@ -850,8 +837,7 @@ before dispatching the native QA/reviewer join.
 | feature | dependency_review | checkpoint_push |
 | feature | conflict_review | rebase |
 | feature | recover_gate | gate |
-| feature | quality_transition | quality_admit |
-| feature | validation | quality_admit (reopens quality_transition first) |
+| feature | validation | gate |
 | feature | recover_push | push |
 | feature | await_ci, await_merge | auto_merge |
 | feature | close_primary_unavailable | detect_close_primary |
@@ -1050,16 +1036,16 @@ and assigned worktree. A retained nonempty `conflict-files` selects the
 The executor returns structured `summary` and conventional `message`; Dagu emits
 `SUMMARY`, `MESSAGE` and the role-job id as `IMPLEMENTER` for `capture`.
 
-The role works only in its assigned worktree, resolves retained quality findings
-and conflict paths, and runs the issue's targeted tests. Its summary retains the
+The role works only in its assigned worktree, resolves retained conflict paths,
+and runs the issue's targeted tests. Its summary retains the
 exact commands/results. Dagu owns staging, commits and publication, and runs the
 complete configured gate. Operator configuration stays operator-owned.
 Every correction's run-wide iteration authorizes a fresh session. An interrupted
 job retains its artifacts and diagnosed outcome for owner-directed recovery.
 
 The run resumes through the queue: `capture` → `checkpoint_push` →
-`dependency_review` → `rebase` → `conflict_review` → `gate` → `recover_gate` → `quality_prepare` →
-`quality_review` → `quality_admit` → `quality_transition` → `validation` → `push` →
+`dependency_review` → `rebase` → `conflict_review` → `gate` → `recover_gate` →
+`validation` → `push` →
 `recover_push` → `pr` → `auto_merge`. Successful commands skip recovery. The
 dependency checkpoint automatically completes or returns to triage. A clean
 rebase makes the wait handler complete `conflict_review`; a conflicting rebase
@@ -1092,7 +1078,7 @@ exclusion releases when the holder and all inheriting descendants have closed
 their copies. A surviving gate descendant therefore retains exclusion until it
 exits. Dagu retains its normal gate retry/recovery and cancellation semantics.
 Only gate bodies serialize: the repository queue keeps its declared capacity
-(`a4s=8`), and unrelated control, quality, push and CI-wait steps proceed.
+(`a4s=8`), and unrelated control, push and CI-wait steps proceed.
 
 ### Optional repository validation
 
@@ -1186,95 +1172,13 @@ fixed from the run ID and capture iteration. Capture signs new commits when Git'
 repository configuration enables `commit.gpgsign`, using `gpg.format` and
 `user.signingkey`. Identical candidates are reused by tree, parent and message,
 including signed candidates. Corrections create a new single commit over the base.
-Corrections and rebases archive earlier candidate/diff/gate
-and quality records under `historical/<SHA>/`; all declared local checks belong in GATE and
-run again for the current SHA. `push` and `auto_merge` require current evidence
+Corrections and rebases archive earlier candidate/diff/gate/validation records
+under `historical/<SHA>/`; all declared local checks belong in GATE and
+run again for the current SHA. `push` and `auto_merge` require current gate evidence
 and a clean worktree. `checkpoint_push` compares dependencies locally and transfers
-the remote recovery ref; `push` publishes the feature branch after the gate and both effective PASS.
+the remote recovery ref; `push` publishes the feature branch after the gate and
+any adopted operator validation.
 The same sequence runs for the initial candidate, every correction and every rebase.
-
-### Dispose an inert historical quality wait
-
-Use this procedure from the run's owning OMP session when a historical run is
-Waiting at `quality_review` and cannot produce effective verdict evidence. The
-guard reads that run's stored `snapshot/feature.yaml`: its checkpoint must have
-no push-back or cancellation route, and `quality_admit` must retain the verified
-strict-shell, fail-closed QA/REVIEW identity binding. Its `quality.json`, if
-present, must name neither disposal identity. The 0.3.77 checkpoint shape is
-supported; current snapshots execute native quality role jobs.
-
-Submit this single literal bash command, replacing only the run ID:
-
-```sh
-dagu human-task complete feature --run-id <run> --step quality_review --input QA=dispose-inert-qa --input REVIEW=dispose-inert-review
-```
-
-Expect native **Failed** at `quality_admit`, with the exit handler reporting
-`Unpublished work kept`. Observe that branch, worktree and candidate are retained;
-this completion records disposal identities, not QA/reviewer approval. Then
-re-enqueue the issue through normal admission under a **new run ID**, adopting
-the retained candidate and completing fresh implementation, gate and quality
-evidence under that new run.
-
-### Effective QA and review
-
-`quality_prepare` binds the canonical repo/worktree, run, candidate SHA,
-capture iteration, implementer and fresh quality attempt in `quality-request.json`.
-`quality_review` runs the registered `qa` and `reviewer` roles as distinct fresh
-native sessions and emits their authorized job ids as QA and REVIEW. Each
-assignment has its own exact marker, job binding and issue acceptance. The same
-per-assignment checks apply independently across runs, candidate iterations and
-quality attempts; mixed-ticket evidence cannot satisfy another obligation.
-
-The executor uses the canonical OMP model catalog and configured quality
-fallbackRoles to exclude the implementer's effective family before launch.
-Admission checks every successful runtime response, including effective
-fallbacks, against that family. QA and reviewer may share a family with each
-other. Capture's explicit `candidate.json.implementation` input HEAD/result
-digest and admitted native observation identify the implementer across rebase.
-The current request still binds the current candidate SHA and capture iteration.
-
-Give QA the issue's targeted acceptance commands and require the exact commands/results
-in its findings; reviewer independently inspects the same candidate and acceptance.
-Both run `git -C "<worktree>" rev-parse HEAD` as a standalone bash command,
-with nothing chained and with `cwd` omitted, before inspecting the candidate and
-before the verdict, and keep the worktree clean.
-The executor supplies both a strict structured output schema and the literal
-binding contract in the assignment. Each role yields one object with `repo`, `run`,
-`sha`, `iteration`, `attempt` and `role` from the request/assignment. `repo` is the
-canonical primary path from `quality-request.json`; `iteration` is a number,
-`attempt` is a string, `verdict` is `PASS` or `FAIL`, and `findings` is a string array:
-
-```json
-{"repo":"<canonical PRIMARY>","run":"<run-id>","iteration":0,"attempt":"<request timestamp>","sha":"<full SHA>","role":"qa","verdict":"PASS","findings":["<observed commands/results>"]}
-```
-
-Use `role=reviewer` for the other obligation. Dagu joins both role jobs before
-`quality_admit` consumes their job ids. The native receipt, successful structured
-yield, canonical transcript artifact and inspected prefix must agree with the
-admitted runtime observation. Required artifacts are read and verified at this
-boundary. `quality.json` is written only after both independently bound reports
-and their effective identities pass; #517 consumes these published receipts.
-
-`quality.json` persists two independent, fully bound verdicts and their runtime
-evidence. `quality_admit` checks request/candidate/gate bindings, both allocated
-ids, roles, families, transcript prefix seals and effective response events, then
-seals the admitted receipt in `quality-admitted.sha256` before dispatching
-`quality_transition`. Each verdict records `bytes`, the transcript size at
-inspection, and `digest`, the SHA-256 of exactly those inspected bytes.
-Admission requires a current size of at least `bytes` and an identical digest
-for that prefix. Appended rows, including OMP's `session_exit`, are admitted;
-changing or truncating inspected bytes fails with `transcript changed`.
-The event/provider/model provenance check remains required and reads that same
-sealed prefix, so appended rows cannot alter the inspected provenance.
-Two current PASS complete it; either FAIL
-pushes it back to `implement` in the same run using the observed run-wide
-`--expected-iteration`. Both sets of findings remain in `quality.json` and the
-transition log. A changed SHA or a fresh gate attempt requires new QA and review
-evidence. `push` and guarded `auto_merge` consume only that admitted SHA.
-Each quality push-back correction uses the fresh-session job identity described
-in **Implement**.
-
 
 This division of responsibility is **advisory while the TUI has direct access
 to Git and the Dagu store**. The contract and workflow checks establish the
@@ -1363,7 +1267,7 @@ Cancellation-capable feature, PoC and discovery snapshots declare `CANCEL`
 snapshot. The authorized coordinator/operator selects the actual waiting step,
 retaining its run ID and ownership:
 
-New feature snapshots dispatch `triage`, `implement` and `quality_review` as
+New feature snapshots dispatch `triage` and `implement` as
 native role-job command stages, rather than waiting human tasks. This form
 procedure applies to their already-admitted human-task snapshots only when those
 snapshots declare the cancellation input and gate. The maintained isolated
@@ -1376,12 +1280,7 @@ dagu human-task complete feature --run-id '<run>' --step '<waiting-step>' --inpu
 # Use poc or discovery for those lifecycle DAGs.
 ```
 
-OMP's quality guard admits literal cancellation-only implement/quality-review
-commands for the same repository only after verifying the waiting target and
-the original snapshot's declared cancellation route. Normal delivery quality
-evidence remains required.
-
-Cancellation needs only `CANCEL=yes`; SUMMARY, MESSAGE, IMPLEMENTER, QA,
+Cancellation needs only `CANCEL=yes`; SUMMARY, MESSAGE, IMPLEMENTER,
 REVIEW, approval and promotion fields are unnecessary. Normal completions retain
 their existing fields; CANCEL may be omitted or set to `no`. Dagu 2.20.1 supports
 static forms, so supplied values retain their native type/enum/pattern/length

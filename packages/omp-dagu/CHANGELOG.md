@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.118
+
+- Publish each gated feature candidate through optional operator validation, push, PR and guarded auto-merge, then reconcile required CI and merge (#561).
+- Retain native triage and implementation jobs and their receipts; remove the mandatory QA/reviewer checkpoint, quality evidence sealing and quality-only fixtures.
+- Align waiting recovery, lifecycle documentation and sprint completion evidence with the local gate and optional adopted operator validation; match gate-selection fixtures to the package dependency graph.
+
 ## 0.3.117
 
 - Allocate real Dagu test run identities through one shared per-execution fixture helper, including child runs and lifecycle lookups, so concurrent suites keep host-global control sockets separate (#542).

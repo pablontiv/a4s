@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.1
+
+- Remove the feature quality implementer binding and shared registry; retain configured parent-relative and task-relative cross-family review selection (#561).
+- Document retained parent-relative and task-relative selection in the README (#561).
+
 ## 0.3.0
 
 - Register typed `crossFamilyReview.policies` with default `{}` and exact-name, two-field entries; consume effective native project/overlay/child settings and explicitly validate initial values before dispatch (#359).

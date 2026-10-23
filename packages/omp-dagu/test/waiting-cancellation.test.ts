@@ -1,11 +1,8 @@
 import assert from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { parse } from "yaml";
-import { qualityDecision } from "../src/triage/quality.ts";
 import { waitingSnapshot } from "./fixtures/waiting-snapshot.ts";
 
 type Step = { id: string; action?: string; depends?: string | string[]; run?: string; env?: Record<string, string>[]; continue_on?: unknown; preconditions?: unknown; with?: { form: { properties: Record<string, unknown> } } };
@@ -52,7 +49,6 @@ test("native feature role stages retain historical cancellation snapshot coverag
   for (const [id, fields] of [
     ["triage", ["POC", "QUESTION", "BASIS"]],
     ["implement", ["SUMMARY", "MESSAGE", "IMPLEMENTER"]],
-    ["quality_review", ["QA", "REVIEW"]],
   ] as const) {
     const native = current.steps.find((step: Step) => step.id === id);
     assert.match(native.run, new RegExp(`dagu-role-jobs stage ${id}`));
@@ -66,28 +62,3 @@ test("native feature role stages retain historical cancellation snapshot coverag
   }
 });
 
-for (const checkpoint of ["implement", "quality_review"]) {
-  test(`quality guard admits only declared ${checkpoint} cancellation without delivery evidence`, async t => {
-    const primary = mkdtempSync(join(tmpdir(), "dagu-cancel-guard-"));
-    t.after(() => rmSync(primary, { recursive: true, force: true }));
-    execFileSync("git", ["init", "-q", primary]);
-    const declared = waitingSnapshot(readFileSync(new URL("../skills/dagu-feature/feature.yaml", import.meta.url), "utf8"));
-    let spec = declared;
-    const details = { statusLabel: "waiting", params: `PRIMARY=${primary} ISSUE=290`, nodes: [{ step: { id: checkpoint }, statusLabel: "waiting" }] };
-    t.mock.method(globalThis, "fetch", async () => Response.json({ spec, dagRunDetails: details }));
-    const ctx = { cwd: primary, sessionManager: { getSessionDir: () => primary } };
-    const command = `dagu human-task complete feature --run-id cancel-test --step ${checkpoint} --input CANCEL=yes`;
-    assert.equal(await qualityDecision({ toolName: "bash", toolCallId: "cancel", input: { command } }, ctx), undefined);
-    assert.equal(await qualityDecision({ toolName: "eval", toolCallId: "cancel-eval", input: { code: `await bash(${JSON.stringify(command)})` } }, ctx), undefined);
-    const historical = parse(declared);
-    historical.steps = historical.steps.filter((step: Step) => step.id !== `${checkpoint}_cancellation`);
-    spec = JSON.stringify(historical);
-    const rejected = await qualityDecision({ toolName: "bash", toolCallId: "historical", input: { command } }, ctx);
-    assert.ok(rejected && "block" in rejected && rejected.block);
-    spec = declared;
-    for (const suffix of [" --input CANCEL=no", " --inputs-json='{\"CANCEL\":\"no\"}'", "; echo decoy"]) {
-      const normal = await qualityDecision({ toolName: "bash", toolCallId: "delivery", input: { command: command + suffix } }, ctx);
-      assert.ok(normal && "block" in normal && normal.block);
-    }
-  });
-}

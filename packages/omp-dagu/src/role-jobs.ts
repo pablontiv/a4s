@@ -5,7 +5,7 @@ import { hostname } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
-export type Role = "triage" | "implement" | "conflict-resolution" | "qa" | "reviewer";
+export type Role = "triage" | "implement" | "conflict-resolution";
 export interface JobBinding {
   repo: string; worktree: string; lane: string; dag: string; run: string;
   stage: string; role: Role; sha: string; iteration: number; attempt: string;
@@ -33,7 +33,7 @@ function stable(value: unknown): string {
 export function jobId(binding: JobBinding): string {
   if (realpathSync(binding.repo) !== binding.repo || realpathSync(binding.worktree) !== binding.worktree ||
       !/^[a-f0-9]{40}$/.test(binding.sha) || !Number.isSafeInteger(binding.iteration) || binding.iteration < 0 ||
-      !["triage", "implement", "conflict-resolution", "qa", "reviewer"].includes(binding.role) ||
+      !["triage", "implement", "conflict-resolution"].includes(binding.role) ||
       [binding.lane, binding.dag, binding.run, binding.stage, binding.attempt].some(value => !value || /[\r\n\0]/.test(value))) {
     throw new Error("Invalid canonical role-job binding");
   }

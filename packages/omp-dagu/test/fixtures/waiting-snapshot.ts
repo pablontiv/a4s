@@ -7,7 +7,6 @@ export function waitingSnapshot(template: string): string {
   for (const [id, fields] of [
     ["triage", ["POC", "QUESTION", "BASIS"]],
     ["implement", ["SUMMARY", "MESSAGE", "IMPLEMENTER"]],
-    ["quality_review", ["QA", "REVIEW"]],
   ] as const) {
     const index = source.steps.findIndex((step: { id: string }) => step.id === id);
     const original = source.steps[index];
