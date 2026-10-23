@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.4
+
+- Record every feature gate attempt in `gate.json` schema version 1, retaining epoch-millisecond phase starts/ends, exit codes and durations for lock wait, install, workspace tests/typechecks, post-checks and overhead (#608).
+- Observe npm lifecycle subprocesses around the unchanged declared `GATE`; preserve failed attempts and retries for structured reconciliation/report consumers.
+
 ## 0.5.3
 
 - Make the persisted SQLite policy the role-job capacity authority per canonical `DAGU_HOME`; `A4S_ROLE_JOB_CAPACITY` seeds only the first policy and conflicting later values produce dispatch diagnostics (#609).
