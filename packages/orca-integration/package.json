@@ -1,14 +1,14 @@
 {
-  "name": "@a4s/orca-omp-integration",
+  "name": "@a4s/orca-integration",
   "version": "0.1.0",
   "private": true,
   "license": "UNLICENSED",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/pablontiv/a4s.git",
-    "directory": "packages/orca-omp-integration"
+    "directory": "packages/orca-integration"
   },
-  "homepage": "https://github.com/pablontiv/a4s/tree/main/packages/orca-omp-integration#readme",
+  "homepage": "https://github.com/pablontiv/a4s/tree/main/packages/orca-integration#readme",
   "bugs": {
     "url": "https://github.com/pablontiv/a4s/issues"
   },

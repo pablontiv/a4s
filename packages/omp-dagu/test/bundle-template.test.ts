@@ -160,7 +160,7 @@ const mainWorkspaces: CiWorkspace[] = [
   { dir: "packages/omp-cross-family-review", name: "@a4s/omp-cross-family-review" },
   { dir: "packages/omp-dagu", name: "@a4s/omp-dagu", dependencies: { "@a4s/omp-cross-family-review": "*" } },
   { dir: "packages/hot-reload", name: "@a4s/hot-reload" },
-  { dir: "packages/orca-omp-integration", name: "@a4s/orca-omp-integration" },
+  { dir: "packages/orca-integration", name: "@a4s/orca-integration" },
   { dir: "packages/pi-tool-row-presentation", name: "@a4s/pi-tool-row-presentation" },
   { dir: "packages/synagent/core", name: "@a4s/synagent" },
   { dir: "packages/synagent/bus", name: "@a4s/synagent-bus" },
@@ -169,6 +169,8 @@ const integrationWorkspaces: CiWorkspace[] = [
   { dir: "packages/review-routing", name: "@a4s/review-routing",
     devDependencies: { "@oh-my-pi/pi-coding-agent": "18.12.5" } },
   { dir: "packages/agent-messaging", name: "@a4s/agent-messaging" },
+  { dir: "packages/orca-integration", name: "@a4s/orca-integration",
+    dependencies: { "@a4s/hot-reload": "0.1.0" } },
   { dir: "apps/message-bus", name: "@a4s/message-bus", dependencies: { "@a4s/agent-messaging": "*" } },
   { dir: "packages/omp-dagu", name: "@a4s/omp-dagu", devDependencies: { "@a4s/review-routing": "*" } },
 ];
@@ -225,6 +227,7 @@ test("CI selects future integration package/app names and both sides of package-
     const cases: [unknown[], string[]][] = [
       [["packages/review-routing/src/index.ts"], ["@a4s/review-routing", "@a4s/omp-dagu"]],
       [["packages/agent-messaging/src/index.ts"], ["@a4s/agent-messaging", "@a4s/message-bus"]],
+      [["packages/orca-integration/src/index.ts"], ["@a4s/orca-integration"]],
       [["apps/message-bus/src/index.ts"], ["@a4s/message-bus"]],
       [[{ filename: "apps/message-bus/src/new.ts", previous_filename: "packages/agent-messaging/src/old.ts" }],
         ["@a4s/agent-messaging", "@a4s/message-bus"]],

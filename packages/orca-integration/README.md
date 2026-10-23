@@ -1,5 +1,6 @@
-# A4S OMP–Orca Integration
+# A4S Orca Integration
 
+Private workspace `@a4s/orca-integration`, loaded from `packages/orca-integration`.
 OMP extension for two contracts at the OMP–Orca boundary:
 
 - worker lifecycle must be resolved before new orchestration work;
@@ -46,7 +47,7 @@ Add the package root to the user-level OMP `extensions` setting:
 
 ```yaml
 extensions:
-  - /absolute/path/to/a4s/packages/orca-omp-integration
+  - /absolute/path/to/a4s/packages/orca-integration
 ```
 
 Every new OMP session discovers the reloadable shim automatically. The A4S wrapper intercepts `/reload-plugins` and imports a fresh wrapped implementation generation; native OMP separately refreshes its resource discovery. The wrapper implementation defers a busy-session request until idle after `agent_end`, shuts down the old generation before starting the new one (2000 ms per lifecycle handler), and retains the previous generation after import/factory failures. Issue #421 recorded real busy-turn deferral through `agent_end`, followed at idle by old-generation shutdown, new-generation start, and one new-generation callback; native idle reload and builtin skill rediscovery were separately observed. See the [helper verification record](../hot-reload/README.md#verification-recorded-for-issue-421) for the exact versioned, compositional, and source-selection evidence boundaries. Loading globally remains an operator action; both Orca modules are inert outside an Orca pane with a bound orchestration Run.
@@ -56,7 +57,7 @@ This applies to the a4s extensions that declare a reloadable shim, not third-par
 For a one-off smoke run instead:
 
 ```sh
-omp --no-extensions -e /absolute/path/to/candidate/packages/orca-omp-integration
+omp --no-extensions -e /absolute/path/to/candidate/packages/orca-integration
 ```
 
 The CLI resolves from `ORCA_CLI_COMMAND`, then `orca-dev` in a development checkout, `orca-ide` on Linux outside a managed pane, and finally `orca`. Pass `cliPath` to either module to override it. The package also exports `createOrcaLifecycleGuard` and `createOrcaModelRouter`; each module file has its own default extension export.
@@ -64,7 +65,58 @@ The CLI resolves from `ORCA_CLI_COMMAND`, then `orca-dev` in a development check
 ## Development
 
 ```sh
-npm test --workspace @a4s/orca-omp-integration
-npm run typecheck --workspace @a4s/orca-omp-integration
+npm test --workspace @a4s/orca-integration
+npm run typecheck --workspace @a4s/orca-integration
 git diff --check
 ```
+
+## Issue #423 verification
+
+Runtime candidate: `dagu/issue-423` at
+`1fcb05d2c15519c476a0f12cceba5ab5a1e0482e`, in run
+`a4s-issue-423-s01a16671`. The extension entry, reloadable shim, lifecycle guard,
+model router and relative imports are unchanged by the relocation. The Pi-named
+host dependencies remain part of the package contract. CI discovers the canonical
+workspace from its manifest; its integration fixture covers selection of
+`@a4s/orca-integration`.
+
+### Targeted checks
+
+The implementation job reran these commands from the candidate root after
+reading the retained quality findings:
+
+| Command | Observed result |
+| --- | --- |
+| `npm test --workspace @a4s/orca-integration` | 21 passed, 0 failed |
+| `npm run typecheck --workspace @a4s/orca-integration` | `tsc --noEmit`, exit 0 |
+| `node_modules/.bin/tsx --test --test-name-pattern '^CI ' packages/omp-dagu/test/bundle-template.test.ts` | 6 passed, 0 failed |
+
+Dagu owns the full repository gate.
+
+### Native OMP–Orca smoke: PASS
+
+The [operator's issue evidence](https://github.com/pablontiv/a4s/issues/423#issuecomment-6357832625)
+reports all five smoke steps passing on the runtime candidate above. The invocation
+was `omp --no-extensions -e <worktree>/packages/orca-integration`, from an actual
+Orca coordinator pane bound to a disposable orchestration Run.
+
+| Acceptance observation | Operator-reported result |
+| --- | --- |
+| Resolve configured responsibility roles to concrete models | PASS: `@task` resolved to `cursor/composer-2.5`; `@slow` resolved to `anthropic/claude-opus-5` |
+| Reject a fresh `worker-start` without `--agent` / `--model` | PASS: blocked with the resolved-model hint |
+| Start a real disposable OMP worker with explicit agent and concrete model | PASS: `--agent omp --model cursor/composer-2.5`; Orca's `launch.requested.model` equaled `launch.effective.model` |
+| Guard new work while a reclaimable worker exists and resolve the worker through Orca's exact projected action | PASS: the guard named `["orchestration","worker-release","--dispatch",…]`; the exact returned argv was executed, leaving reclaimable count 0 |
+| Remain inert outside a bound Run | PASS: the router directive was absent; Orca fenced `worker-start` with `consumer_fenced` |
+
+The operator also reported 21/21 workspace tests passing, released or closed the
+disposable worker and probe terminals, and observed a clean candidate worktree.
+Authentication used a temporary agent directory; the production profile was not
+modified. The table records the operator's runtime evidence, rather than a smoke
+rerun by the Dagu implementation job.
+
+The earlier implementation attempts had been blocked by isolated authentication
+(`No API key found for openai.`) and missing sender-pane context
+(`no_active_sender_terminal`). The subsequent operator smoke supplies the
+real-pane evidence requested by the retained reviewer finding; those earlier
+attempts are not the current acceptance result.
+

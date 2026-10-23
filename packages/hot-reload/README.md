@@ -27,7 +27,7 @@ Native OMP's builtin `/reload-plugins` separately refreshes resource discovery;
 the wrapper leaves that builtin intact. Resource rediscovery is independent of
 implementation reload. Bare-specifier dependencies, newly introduced local
 modules, registered metadata/schema changes, and removed registrations require
-a restart as described by the [Orca consumer](../orca-omp-integration/README.md).
+a restart as described by the [Orca consumer](../orca-integration/README.md).
 
 ## Verification recorded for issue #421
 
