@@ -1,7 +1,7 @@
-# dagu-feature-bundle: @a4s/omp-dagu@0.3.118 source=pablontiv/a4s@003bd8a994b617ab2dba4b0caa89d4789085268f bootstrap=bootstrap-a4s-v0-3-118 dagu=2.20.1
+# dagu-feature-bundle: @a4s/omp-dagu@0.3.120 source=pablontiv/a4s@2e6ba63ae2ff1ae3f30beb24024d5c5157ce6e22 bootstrap=bootstrap-a4s-v0-3-120 dagu=2.20.1
 labels:
   - workspace=a4s
-  - dagu-feature-bundle=0.3.118
+  - dagu-feature-bundle=0.3.120
 queue: a4s
 type: graph
 dotenv: []
@@ -18,6 +18,18 @@ params:
     QUESTION:
       type: string
       default: ""
+    REQUIRED_TARGETS:
+      type: string
+      default: "[]"
+    AUTHORIZED_TARGETS:
+      type: string
+      default: "[]"
+    SCOPE_BASIS:
+      type: string
+      default: ""
+    SCOPE_REQUEST:
+      type: string
+      default: ""
     BASE_BRANCH:
       type: string
       default: "main"
@@ -32,7 +44,8 @@ env:
   - PRIMARY: "/Users/Shared/harness/a4s"
   - RUN: ${context.run.id}
   - WORKTREE: ${PRIMARY}/.workspace/worktrees/poc-${RUN}
-  - DAGU_FEATURE_BUNDLE: "dagu-feature-bundle=0.3.118 source=pablontiv/a4s@003bd8a994b617ab2dba4b0caa89d4789085268f bootstrap=bootstrap-a4s-v0-3-118"
+  - DAGU_FEATURE_BUNDLE: "dagu-feature-bundle=0.3.120 source=pablontiv/a4s@2e6ba63ae2ff1ae3f30beb24024d5c5157ce6e22 bootstrap=bootstrap-a4s-v0-3-120"
+  - ESCALATION_POC_INCONCLUSIVE: "2"
   - DAGU_RESOURCE_GUARD: |
       resource_lock() {
         local primary common expected actual attempt
@@ -72,12 +85,13 @@ steps:
   - id: admission
     run: |
       set -euo pipefail
-      rejected=$(jq -er 'keys[] | select(. == "GATE" or . == "REBASE_RESOLVER" or . == "REQUIRED_CHECK" or . == "PRIMARY" or . == "BRANCH")' <<<"$DAGU_PARAMS_JSON") || [[ $? == 4 ]]
+      rejected=$(jq -er 'keys[] | select(startswith("ESCALATION_") or . == "GATE" or . == "REBASE_RESOLVER" or . == "REQUIRED_CHECK" or . == "PRIMARY" or . == "BRANCH")' <<<"$DAGU_PARAMS_JSON") || [[ $? == 4 ]]
       if [[ -n "$rejected" ]]; then
         printf 'admission rejected run parameter: %s\n' "$rejected" >&2
         printf 'adopted policy PRIMARY=%q BRANCH=%q\n' "$PRIMARY" "poc/$RUN" >&2
         exit 1
       fi
+      dagu-poc-scope require
 
   - id: record
     depends: admission
@@ -249,6 +263,7 @@ steps:
         ## Pregunta, ## Proposición demostrada, ## Ruta ejercitada, ## Comandos y salida,
         and ## Después del PASS for PASS. Record references or digests of every executed
         release/image in Ruta ejercitada. Keep tests and Markdown in the cutover.
+        INCONCLUSIVE also requires ## Inconclusive cause containing exactly scope, access, or other.
         An empty diff is valid. Complete only after recording observed evidence.
       form:
         type: object
@@ -311,6 +326,7 @@ steps:
           (["## Pregunta", "## Proposición demostrada", "## Ruta ejercitada", "## Comandos y salida"][] |
             . as $heading | if ($result|section($heading)|norm|length) > 0 then empty else "Missing or empty required section: \($heading)" end),
           (if (section("## Pregunta")|norm) == ($question|norm) then empty else "## Pregunta differs from QUESTION (normalized): result=\(section("## Pregunta")|norm|tojson) QUESTION=\($question|norm|tojson)" end),
+          (if (split("\n")[0]|rtrimstr("\r")) == "VERDICT: INCONCLUSIVE" and ((section("## Inconclusive cause")|norm) | IN("scope", "access", "other") | not) then "INCONCLUSIVE requires ## Inconclusive cause with scope, access or other" else empty end),
           (if (split("\n")[0]|rtrimstr("\r")) == "VERDICT: PASS" and (section("## Después del PASS")|norm|length) == 0 then "Missing or empty ## Después del PASS for PASS" else empty end)
         ] | .[]
       ' "$STATE/result.md" > "$STATE/scope-errors"
@@ -361,7 +377,7 @@ steps:
       set -euo pipefail
       STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "poc/runs/$RUN")
       if [[ -f "$STATE/cancellation.json" ]]; then exit 0; fi
-      if jq -e 'has("GATE") or has("REBASE_RESOLVER") or has("REQUIRED_CHECK") or has("PRIMARY") or has("BRANCH")' <<<"${DAGU_PARAMS_JSON:-"{}"}" >/dev/null; then exit 0; fi
+      if jq -e 'has("GATE") or has("REBASE_RESOLVER") or has("REQUIRED_CHECK") or has("PRIMARY") or has("BRANCH") or any(keys[]; startswith("ESCALATION_"))' <<<"${DAGU_PARAMS_JSON:-"{}"}" >/dev/null; then exit 0; fi
       STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "poc/runs/$RUN")
       test -f "$STATE/issue.number" || exit 0
       REPO=$(cat "$STATE/repo")
@@ -400,6 +416,7 @@ steps:
         cat "$STATE/full.patch"
         printf '\n```\n</details>\n'
       } > "$STATE/comment-$ATTEMPT.txt"
+      dagu-pr-body check-paths "$STATE/comment-$ATTEMPT.txt"
       if ! URL=$(gh issue comment "$ISSUE" --repo "$REPO" --body-file "$STATE/comment-$ATTEMPT.txt" 2> "$STATE/publish.err"); then
         grep -Ei 'too long|maximum.*characters|body.*large' "$STATE/publish.err"
         jq -cn --arg run "$RUN" --argjson attempt "$ATTEMPT" --rawfile evidence "$STATE/comment-$ATTEMPT.txt" '
