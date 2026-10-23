@@ -213,7 +213,7 @@ for (const definition of definitions) {
       child.stderr.on("data", chunk => { error += chunk; }); child.on("close", code => resolve({ code, error }));
     });
     const outcomes = await Promise.all([launch(admit, "first"), launch(admit, "second")]);
-    assert.deepEqual(outcomes.map(r => r.code).sort(), [0, 1]);
+    assert.deepEqual(outcomes.map(r => r.code).sort(), [0, 1], JSON.stringify(outcomes));
     const winner = outcomes[0]!.code === 0 ? "first" : "second";
     assert.match(outcomes.find(r => r.code === 1)!.error, /belongs to active run .* \(queued\)/);
     const create = script(definition, "  - id: start_gate");
@@ -221,6 +221,7 @@ for (const definition of definitions) {
     assert.deepEqual(creations.map(r => r.code), [0, 0], JSON.stringify(creations));
     assert.equal(repo.git(repo.primary, "worktree", "list", "--porcelain").match(/worktree /g)?.length, 2);
     assert.equal(repo.git(repo.primary, "for-each-ref", "--format=%(refname)", "refs/heads/dagu/"), `refs/heads/${repo.branch}`);
+    assert.equal(readFileSync(join(repo.primary, ".git", "dagu-feature", "owners", "issue-215"), "utf8"), `${winner}\t${repo.branch}\n`);
   });
 }
 

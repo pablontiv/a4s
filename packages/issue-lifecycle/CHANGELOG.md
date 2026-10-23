@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.2
+
+- Acquire feature and PoC ownership directories through Python's atomic `os.mkdir` result, preserving exclusive ownership when a shell `mkdir` implementation reports success after a concurrent `EEXIST` (#626).
+- Verify the durable winning owner after concurrent admission and same-owner candidate creation.
+
 ## 0.5.1
 
 - Align station templates with the operator-approved a4s queue capacity of eight and thirty-day run history retention (#616).
