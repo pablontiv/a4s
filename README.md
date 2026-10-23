@@ -23,7 +23,7 @@ for the exact versioned, compositional, and source-selection evidence boundaries
 
 ## Agentes
 
-Los agentes para Pi, Claude y Superpowers están en [`agents/`](agents/).
+Los seis roles OMP (`explorer`, `judge`, `implementer`, `reviewer`, `debugger`, `generalist`) tienen una única fuente en [`.omp/agents/`](.omp/agents/). El [catálogo e instalación privada](agents/README.md) documenta su descubrimiento nativo.
 
 ## Sprint responsibilities
 
