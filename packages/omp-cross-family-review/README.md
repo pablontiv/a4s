@@ -1,35 +1,95 @@
 # OMP Cross-family Review
 
-Extensión de OMP que compara familias mediante la API canónica `ctx.models.family`.
-`qa` y `reviewer` usan elegibilidad estricta: conservan solo modelos de familias
-admitidas y bloquean con candidatos/causa cuando faltan alternativas o identidad.
-En el gate de `dagu-feature`, el guard acredita el implementador efectivo desde
-su JSONL y vincula esa referencia al nombre del subagente antes del dispatch.
-QA y reviewer pueden compartir familia; cada uno debe diferir del implementador.
+An OMP extension that enforces strict eligibility using the canonical
+`ctx.models.family` API. Every configured agent retains only candidates with a
+resolved identity and a family outside its references. Exhaustion or an
+indeterminate reference blocks the spawn with evaluated identities, families
+and causes. Native quota fallback remains owned by OMP.
 
-Los candidatos se resuelven y deduplican por proveedor/id conservando specs,
-aliases y thinking. El gate examina los candidatos solicitados y los roles
-`@slow`, `@default`, `@task`; usa esa misma política estricta en el límite `task`.
-Fuera de ese gate, QA/reviewer comparan con el modelo padre y `@task`.
-`security-reviewer` conserva el orden preferente frente a padre y `@task`;
-`triage-reviewer` y `plan-reviewer` conservan el orden preferente frente al padre
-y los roles `@task`, `@slow`, `@default`. Los agentes dedicados de triage y
-planificación se distribuyen con `@a4s/omp-dagu`.
+## Configuration
 
-La selección es preventiva; la admisión exige los proveedores/modelos de los
-mensajes efectivos que emitieron los veredictos. El guard de `omp-dagu` valida
-procedencia, SHA y familias y registra los fallbacks reales. Un fallback efectivo
-de la familia del implementador bloquea aunque la selección inicial calificase.
-El acceso de la TUI al store de Dagu hace este control advisory.
+Requires OMP 18.12.5 or later and Bun >=1.3.14. The package registers the public
+native setting `crossFamilyReview.policies`, a record keyed by **exact agent
+name**, with default `{}`. Each entry has exactly two required fields:
 
-## Instalación global
+- `fallbackRoles: string[]`: ordered model specs/roles appended after the native
+  candidates; aliases and thinking suffixes are preserved.
+- `excludeTaskFamily: boolean`: always exclude the parent family; additionally
+  exclude the resolved `@task` family when true.
 
-Desde el clone principal de a4s en `main` (no desde un worktree de issue, que se elimina al cerrar el run):
+Declare adoption in the project's `.omp/config.yml`. a4s adopts:
+
+```yaml
+crossFamilyReview:
+  policies:
+    reviewer:
+      fallbackRoles: ["@slow", "@default", "@task"]
+      excludeTaskFamily: true
+    qa:
+      fallbackRoles: ["@slow", "@default", "@task"]
+      excludeTaskFamily: true
+    security-reviewer:
+      fallbackRoles: ["@slow", "@default"]
+      excludeTaskFamily: true
+    triage-reviewer:
+      fallbackRoles: ["@task", "@slow", "@default"]
+      excludeTaskFamily: false
+    plan-reviewer:
+      fallbackRoles: ["@task", "@slow", "@default"]
+      excludeTaskFamily: false
+```
+
+Any custom agent can have its own entry. Unconfigured agents retain native OMP
+input unchanged. The package distributes the schema and algorithm; the project
+owns agent names and adoption. Native project/`--config` overlay precedence and
+child-session scope inheritance apply to both `task` and eval `agent()`.
+The active session is read through public `findScopedSettings(ctx.cwd)` and the
+registered setting handle, rather than an assumed context settings field.
+Late registration does not retroactively validate initial configuration, so
+consumption explicitly calls native `assertWritable` on the effective raw value
+and the handle value before model resolution or child dispatch. Invalid values
+block with `CROSS_FAMILY_CONFIG`; an unavailable session scope also blocks.
+
+## Parent-relative and task-relative selection
+
+Native candidates precede the configured fallbacks. Eligible candidates retain
+that order and are deduplicated by resolved provider/id, preserving the first
+spec, alias or thinking suffix. Unresolved candidates cannot qualify; missing
+parent/required `@task` identities or reference families fail closed. A resolved
+alternative can qualify even when the original primary is unavailable. These
+rules are uniform for every configured name.
+
+Every configured agent excludes the resolved parent model family. When
+`excludeTaskFamily` is true, it also excludes the resolved `@task` model family;
+when false, selection is parent-relative only. The same configured fallback
+ordering and strict eligibility rules apply in both cases.
+
+## Installation and checks
+
+From the permanent primary checkout:
 
 ```sh
 omp plugin link "$(git rev-parse --show-toplevel)/packages/omp-cross-family-review"
 ```
 
-También se puede cargar el directorio con `omp -e /ruta/a/omp-cross-family-review`
-sin cambiar settings globales. El hook se ejecuta después de la selección inicial
-del agente.
+Alternatively load the package directory with `omp -e /path/to/omp-cross-family-review`.
+The `omp.extensions` manifest loads the maintained reloadable runtime entrypoint,
+whose static public SDK imports share the host's active settings scope. The
+package root exports the host-neutral hook and ordering APIs; the `./settings`
+subpath supplies the native reader for OMP integrations.
+Selection runs after native initial model selection. Project configuration is
+inherited by rebound child extension graphs; global model settings stay unchanged.
+
+```sh
+npm test -w @a4s/omp-cross-family-review
+npm run typecheck -w @a4s/omp-cross-family-review
+```
+
+Tests run on the pinned development Bun runtime against the real public native
+settings registry/scopes, including malformed initial values loaded before
+extension registration. `npm install`/`npm ci` installs that runtime locally.
+
+Issue #350 exercised the maintained hook in a fresh OMP 18.12.5 session with
+process-local same-family candidates and roles. Real `reviewer` and
+`triage-reviewer` tasks returned `CROSS_FAMILY_EXHAUSTED` diagnostics before child
+execution. Unresolved-parent behavior is covered by unit tests.

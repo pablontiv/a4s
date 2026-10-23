@@ -1,246 +1,201 @@
-name: ci
+name: CI
 
 on:
   push:
-    branches:
-      - main
+    branches: [main, integration/v1]
   pull_request:
-  workflow_dispatch:
+    branches: [main, integration/v1]
+    types: [opened, synchronize, reopened, edited, ready_for_review]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
-concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
-  classify:
-    name: Clasificar cambios
+  pr-body:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
-    outputs:
-      docs_only: ${{ steps.changes.outputs.docs_only }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          fetch-depth: 0
-          persist-credentials: false
-      - name: Clasificar rutas modificadas
-        id: changes
+          node-version: 22
+      - name: Validate PR body
+        run: node packages/omp-dagu/bin/dagu-pr-body.mjs event
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      workspaces: ${{ steps.workspaces.outputs.workspaces }}
+    steps:
+      # pull_request checks out the merge commit: HEAD^1 is the base branch, so a
+      # depth of 2 is enough for the git fallback below.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - id: workspaces
         env:
+          GH_TOKEN: ${{ github.token }}
           EVENT_NAME: ${{ github.event_name }}
-          PR_BASE: ${{ github.event.pull_request.base.sha }}
-          PR_HEAD: ${{ github.event.pull_request.head.sha }}
-          PUSH_BASE: ${{ github.event.before }}
-          PUSH_HEAD: ${{ github.sha }}
-        shell: bash
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          set -eu
-          echo "docs_only=false" >> "$GITHUB_OUTPUT"
-
-          case "$EVENT_NAME" in
-            pull_request)
-              base="$PR_BASE"
-              head="$PR_HEAD"
-              ;;
-            push)
-              base="$PUSH_BASE"
-              head="$PUSH_HEAD"
-              if [[ -z "$base" || "$base" =~ ^0+$ ]]; then
-                echo "La base del push no está disponible; se ejecutará la suite runtime."
-                exit 0
-              fi
-              ;;
-            *)
-              echo "El evento no permite clasificar cambios; se ejecutará la suite runtime."
-              exit 0
-              ;;
-          esac
-
-          if ! git cat-file -e "$base^{commit}" || ! git cat-file -e "$head^{commit}"; then
-            echo "No se pueden comparar los commits; se ejecutará la suite runtime."
-            exit 0
-          fi
-
-          changed_paths="$RUNNER_TEMP/changed-paths"
-          if ! git diff --name-only -z "$base" "$head" > "$changed_paths"; then
-            echo "No se pudieron clasificar los cambios." >&2
+          workspaces=$(node scripts/ci-workspaces.mjs changes)
+          echo "workspaces=$workspaces" >> "$GITHUB_OUTPUT"
+  test:
+    needs: changes
+    if: needs.changes.outputs.workspaces != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        workspace: ${{ fromJSON(needs.changes.outputs.workspaces) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+      # The @pablontiv/pion dev tarball (github.com/pablontiv/pi releases) is no
+      # longer downloadable. Install without it, then restore the manifests that
+      # the identity tests read.
+      - &install-dependencies
+        name: Install without @pablontiv/pion
+        run: |
+          pion='@pablontiv/pion'
+          for manifest in packages/context-expert/package.json packages/pi-tool-row-presentation/package.json; do
+            jq --arg p "$pion" 'del(.devDependencies[$p])' "$manifest" > "$manifest.ci"
+            mv "$manifest.ci" "$manifest"
+          done
+          jq --arg p "$pion" '
+            del(.packages["node_modules/" + $p])
+            | .packages |= with_entries(
+                if .value.devDependencies then .value.devDependencies |= del(.[$p]) else . end)' \
+            package-lock.json > package-lock.ci.json
+          mv package-lock.ci.json package-lock.json
+          npm ci
+          git checkout -- package-lock.json packages
+      - name: Install pinned Dagu
+        if: matrix.workspace.name == '@a4s/omp-dagu'
+        run: &install-pinned-dagu |
+          version=$(node -p "require('./packages/omp-dagu/package.json').daguFeature.dagu")
+          asset="dagu_${version}_linux_amd64.tar.gz"
+          url="https://github.com/dagu-org/dagu/releases/download/v${version}"
+          mkdir -p "$RUNNER_TEMP/dagu-install" "$RUNNER_TEMP/dagu-bin"
+          cd "$RUNNER_TEMP/dagu-install"
+          echo "Asset: $url/$asset"
+          curl --fail --location --show-error --silent "$url/$asset" -o "$asset"
+          curl --fail --location --show-error --silent "$url/checksums.txt" -o checksums.txt
+          awk -v asset="$asset" '$2 == asset { print; found=1 } END { if (!found) { print "Missing checksum for " asset > "/dev/stderr"; exit 1 } }' checksums.txt > checksum.txt
+          cat checksum.txt
+          sha256sum --check --strict checksum.txt
+          tar -xzf "$asset" dagu
+          install -m 0755 dagu "$RUNNER_TEMP/dagu-bin/dagu"
+          echo "$RUNNER_TEMP/dagu-bin" >> "$GITHUB_PATH"
+      - name: Check pinned Dagu
+        if: matrix.workspace.name == '@a4s/omp-dagu'
+        run: &check-pinned-dagu |
+          version=$(node -p "require('./packages/omp-dagu/package.json').daguFeature.dagu")
+          command -v dagu
+          actual=$(dagu version)
+          echo "$actual"
+          if [[ "$actual" != "$version" ]]; then
+            echo "::error::Expected dagu version $version; received $actual"
             exit 1
           fi
-
-          mapfile -d '' -t paths < "$changed_paths"
-          echo "Rutas modificadas:"
-          if (( ${#paths[@]} == 0 )); then
-            echo "(ninguna)"
-            exit 0
-          fi
-
-          docs_only=true
-          for path in "${paths[@]}"; do
-            printf 'changed_path=%q\n' "$path"
-            if [[ "$path" != .workspace/docs/* ]]; then
-              docs_only=false
-            fi
-          done
-          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
-
-  docs:
-    name: Validar documentación
+      - name: Test
+        if: matrix.workspace.test
+        run: npm test --workspace "${{ matrix.workspace.name }}"
+      - name: Typecheck
+        if: matrix.workspace.typecheck
+        run: npm run typecheck --workspace "${{ matrix.workspace.name }}"
+  live:
+    needs: changes
+    if: contains(fromJSON(needs.changes.outputs.workspaces).*.name, '@a4s/omp-dagu')
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        lane: [poc-template, poc-rendered, recovery, validation-admission, feature-remainder, other-live]
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
-        with:
-          go-version: "1.27.1"
-      - name: Instalar Rootline fijado
-        run: >-
-          go install
-          github.com/pablontiv/rootline/cmd/rootline@14ee8aa4d5067c7ff6d0708d79e3aaebf27b7a56
-      - name: Validar documentación gobernada
-        run: rootline validate --all .workspace/docs -o json
-
-  runtime:
-    name: Probar runtime
-    needs: classify
-    if: always() && needs.classify.outputs.docs_only != 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
-        with:
-          node-version: "22.19.0"
+          node-version: 22
           cache: npm
-      - name: Install Node dependencies
-        run: npm ci
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
-        with:
-          python-version: "3.12"
-      - name: Install pinned Python test dependencies
+      - *install-dependencies
+      - name: Install pinned Dagu
+        run: *install-pinned-dagu
+      - name: Check pinned Dagu
+        run: *check-pinned-dagu
+      - name: Live Dagu tests
+        id: live-tests
+        working-directory: packages/omp-dagu
+        env:
+          A4S_LIVE_DAGU: "1"
+          A4S_DAGU_DIAGNOSTICS_DIR: ${{ runner.temp }}/dagu-poc-diagnostics
+          LANE: ${{ matrix.lane }}
         run: |
-          python -m pip install --disable-pip-version-check --no-deps -r requirements-test.txt
-          python -m pip install --disable-pip-version-check --require-hashes -r evals/agentevals_veto/requirements.txt
-      - name: Test runtime
-        run: npm test
-      - name: Typecheck runtime
-        run: npm run typecheck
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+          # Match complete top-level names and their descendants. Skipping the
+          # named groups retains new feature cases automatically in the remainder.
+          poc_template='template real Dagu closes implementation runs and succeeds after enqueuing a PoC'
+          poc_rendered='rendered fixture real Dagu closes implementation runs and succeeds after enqueuing a PoC'
+          recovery='concurrent recovery fixtures keep distinct run identities'
+          validation_admission='(?:template|rendered fixture) (?:optional validation uses native skip, SHA approval and iterative rejection|real Dagu checks primary freshness before admission and enqueues bootstrap after merge)'
+          feature_groups="(?:${poc_template}|${poc_rendered}|${recovery}|${validation_admission})"
+          case "$LANE" in
+            poc-template) pattern="^${poc_template}(?:$| )" ;;
+            poc-rendered) pattern="^${poc_rendered}(?:$| )" ;;
+            recovery) pattern="^${recovery}(?:$| )" ;;
+            validation-admission) pattern="^${validation_admission}(?:$| )" ;;
+            feature-remainder)
+              # Native exclusion also prevents file-parent selection from
+              # admitting the named groups or their descendants.
+              npx tsx --test --test-skip-pattern "^${feature_groups}(?:$| )" test/feature-template.test.ts
+              exit
+              ;;
+            other-live)
+              npx tsx --test test/live/*.test.ts test/bundle-cli.test.ts test/bundle-rebase.test.ts test/bundle-template.test.ts test/bundle.test.ts test/escalation.test.ts test/planning-template.test.ts test/reconcile-ci.test.ts
+              exit
+              ;;
+          esac
+          npx tsx --test --test-name-pattern "$pattern" test/feature-template.test.ts
+      - name: Check retained Dagu diagnostics
+        id: dagu-diagnostics
+        if: failure() && matrix.lane == 'other-live' && steps.live-tests.outcome == 'failure'
+        run: |
+          if [[ -d "$RUNNER_TEMP/dagu-poc-diagnostics" ]]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Upload retained Dagu diagnostics
+        if: failure() && matrix.lane == 'other-live' && steps.dagu-diagnostics.outputs.available == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          go-version: "1.27.1"
-      - name: Install pinned Rootline
-        run: >-
-          go install
-          github.com/pablontiv/rootline/cmd/rootline@14ee8aa4d5067c7ff6d0708d79e3aaebf27b7a56
-      - name: Test repository contract
-        run: >-
-          python -m unittest discover
-          -s test
-          -p "test_*.py"
-          -v
-      - name: Test profile contract
-        run: >-
-          python -m unittest discover
-          -s profiles/pablontiv/tests
-          -t profiles/pablontiv
-          -p "test_*.py"
-          -v
-      - name: Test ADR workspace
-        run: >-
-          python -m unittest discover
-          -s skills/adr/tests
-          -t skills/adr
-          -p "test_*.py"
-          -v
-      - name: Test GitHub communication style
-        run: >-
-          python -m unittest discover
-          -s skills/gh-communication-style/tests
-          -t skills/gh-communication-style
-          -p "test_*.py"
-          -v
-      - name: Validate governed knowledge
-        run: rootline validate --all profiles/pablontiv -o json
-      - name: Test agent behavior doctor
-        run: >-
-          python -m unittest discover
-          -s skills/agent-behavior-doctor/tests
-          -t skills/agent-behavior-doctor
-          -p "test_*.py"
-          -v
-      - name: Test systemic issue triage
-        run: >-
-          python -m unittest discover
-          -s skills/systemic-issue-triage/tests
-          -t skills/systemic-issue-triage
-          -p "test_*.py"
-          -v
-      - name: Test context-save
-        run: >-
-          python -m unittest discover
-          -s skills/context-save/tests
-          -t skills/context-save
-          -p "test_*.py"
-          -v
-      - name: Test sweep
-        run: >-
-          python -m unittest discover
-          -s skills/sweep/tests
-          -t skills/sweep
-          -p "test_*.py"
-          -v
-      - name: Test Mission Control health
-        run: >-
-          python -m unittest discover
-          -s skills/mission-control-health/tests
-          -t skills/mission-control-health
-          -p "test_*.py"
-          -v
-      - name: Test Herdr heartbeat H2 and reconciler
-        run: >-
-          python -m unittest discover
-          -s skills/herdr/tests
-          -t skills/herdr
-          -p "test_*.py"
-          -v
-      - name: Test sweep assets
-        run: sh skills/sweep/assets/test-assets.sh
-      - name: Test context cleanup
-        working-directory: skills/remove-gentle-context
-        run: python -m unittest discover -s tests -t . -v
-      - name: Compile context cleanup CLI
-        working-directory: skills/remove-gentle-context
-        run: python -m py_compile scripts/cleanup.py
-      - name: Check context cleanup CLI
-        working-directory: skills/remove-gentle-context
-        run: python scripts/cleanup.py --help
-
-  test:
-    name: test (ubuntu-latest)
-    needs:
-      - classify
-      - docs
-      - runtime
+          name: dagu-poc-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.lane }}
+          path: ${{ runner.temp }}/dagu-poc-diagnostics
+          if-no-files-found: error
+          retention-days: 7
+  validate:
+    needs: [changes, test, live, pr-body]
     if: always()
     runs-on: ubuntu-latest
-    timeout-minutes: 5
     steps:
-      - name: Comprobar resultados
-        env:
-          CLASSIFY_RESULT: ${{ needs.classify.result }}
-          DOCS_ONLY: ${{ needs.classify.outputs.docs_only }}
-          DOCS_RESULT: ${{ needs.docs.result }}
-          RUNTIME_RESULT: ${{ needs.runtime.result }}
-        run: |
-          test "$CLASSIFY_RESULT" = success
-          test "$DOCS_RESULT" = success
-          if [ "$DOCS_ONLY" = true ]; then
-            test "$RUNTIME_RESULT" = skipped
-          else
-            test "$RUNTIME_RESULT" = success
-          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BODY_RESULT: ${{ needs.pr-body.result }}
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          TEST_RESULT: ${{ needs.test.result }}
+          LIVE_RESULT: ${{ needs.live.result }}
+          WORKSPACES: ${{ needs.changes.outputs.workspaces }}
+        run: node scripts/ci-workspaces.mjs aggregate

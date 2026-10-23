@@ -36,7 +36,8 @@ Sprint Planning alone ranks and enqueues new work; Dagu executes it. Discovery a
 
 - Auditoría de cuota: [`skills/gpt-quota-audit/SKILL.md`](skills/gpt-quota-audit/SKILL.md).
 - Análisis de coste y resultados: [`skills/cost-analyzer/SKILL.md`](skills/cost-analyzer/SKILL.md).
-- Model routing review: [`skills/omp-model-routing-audit/SKILL.md`](skills/omp-model-routing-audit/SKILL.md). Manual catalog/quota/routing snapshots and comparisons, evidence-backed proposals, operator-approved configuration and actual new-agent verification; default collection performs no inference or assignment.
+- Rendimiento de agentes, tiempo activo y tokens por PR: [`skills/agent-throughput/SKILL.md`](skills/agent-throughput/SKILL.md).
+- Model routing review: [`skills/omp-model-routing-audit/SKILL.md`](skills/omp-model-routing-audit/SKILL.md). Manual catalog/quota/routing snapshots and comparisons, a per-role/per-model transcript scorecard, evidence-backed proposals, operator-approved configuration and actual new-agent verification; default collection performs no inference or assignment.
 
 ## Dagu feature
 
@@ -48,11 +49,11 @@ Sprint Planning alone ranks and enqueues new work; Dagu executes it. Discovery a
 
 a4s usa su propio ciclo `dagu-feature`, versionado en [`.workspace/dagu/dags/feature.yaml`](.workspace/dagu/dags/feature.yaml). El gate local es `npm ci && npm test && npm run typecheck`, y `main` exige el check `validate` de [`.github/workflows/ci.yml`](.github/workflows/ci.yml). Cada issue se lleva con un run desde el clone (no desde un worktree), limpio y en `main`. El DAG crea el worktree del issue en `.workspace/worktrees/issue-<n>`:
 
-Los renders `feature`, `poc`, `discovery` y `reconcile` adoptan
-`@a4s/omp-dagu@0.3.8`, source
-`pablontiv/a4s@fe5d444e9c9133d5bac3d2aeef054fee56d01fdb`, bootstrap
-`bootstrap-a4s-v0-3-8` y Dagu `2.20.1` (#271). Su identidad se consulta con
-`node packages/omp-dagu/bin/dagu-feature-bundle.ts .`.
+The repository adopts the `feature`, `poc`, `discovery` and `planning` renders.
+Their stamped headers and the adoption commit's `Dagu-Feature-Bundle`,
+`Dagu-Feature-Source` and `Dagu-Feature-Bootstrap` trailers record the current
+bundle, source and bootstrap identity. Bootstrap installs and validates the
+user-level reconciler.
 
 ```sh
 n=<issue-selected-in-sprint-planning>
@@ -77,6 +78,33 @@ acceso al store de Dagu**; el protocolo ejecutable está en el skill.
 npm ci
 npm test
 npm run typecheck
+```
+
+CI runs on pushes and pull requests targeting `main` and `integration/v1`, with
+one SHA-bound `validate` aggregate over changes, workspace checks and the six
+pinned-Dagu live partitions. The desired branch-protection policy is strict
+up-to-date checks with `validate` required on both branches; applying that policy
+and preserving existing protection settings belongs to deployment (#358).
+
+`scripts/ci-workspaces.mjs` discovers names and scripts from the checked-out
+root workspace patterns and manifests, including nested packages and declared
+apps. Pull requests select the longest owning workspace for both current and
+previous rename paths, then its transitive declared consumers. Root files,
+lockfiles, CI helpers, shared hot-reload changes and unmapped/deleted workspace
+roots select all current workspaces. Pushes select all workspaces. This retains
+`@a4s/omp-cross-family-review` typechecking and follows future moved/renamed
+manifests without inventing workspace names.
+
+Selected workspaces run their declared tests and typechecks under main's existing
+private-Pion policy: CI installs with the documented Pion-stripping alternative
+and `@a4s/pi-tool-row-presentation` runs its tests. Its typecheck requires the
+private pinned `@pablontiv/pion` release available to the full local gate.
+The `validate` aggregate requires successful selected checks and permits live
+tests to skip only when `@a4s/omp-dagu` is unaffected. Executable selector and
+aggregate fixtures, including proposed integration package/app names, run with:
+
+```sh
+A4S_LIVE_DAGU=0 npx tsx --test packages/omp-dagu/test/bundle-template.test.ts
 ```
 
 La historia completa anterior a esta reducción queda en la rama `legacy`.

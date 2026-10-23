@@ -1,7 +1,7 @@
 import { liveDagu, liveDaguVersion } from "./fixtures/live-dagu.ts";
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,10 +10,10 @@ import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { Transitions } from "../src/status/progress.ts";
 import type { RunDetails } from "../src/status/progress.ts";
-import { readCiDiagnostic } from "../src/status/repository.ts";
+import { readCiDiagnostic, readEscalationDiagnostic } from "../src/status/repository.ts";
 import { BUNDLE_VERSION } from "../src/bundle.ts";
-import { verifyQuality } from "../src/triage/quality.ts";
-import { qualityFixture } from "./quality-fixtures.ts";
+import { testRunId } from "./fixtures/run-id.ts";
+import { renderedFeature, renderedReconcile } from "./fixtures/rendered-feature.ts";
 
 const definitions = [
   ["template", "../skills/dagu-feature/"],
@@ -28,13 +28,31 @@ test("CI scripts preserve template/render parity and Dagu accepts materialized t
   try {
     for (const file of ["feature.yaml", "reconcile.yaml"]) {
       const template = readFileSync(new URL(`../skills/dagu-feature/${file}`, import.meta.url), "utf8");
-      const render = readFileSync(new URL(`../../../.workspace/dagu/dags/${file}`, import.meta.url), "utf8");
+      const rendered = file === "feature.yaml" ? renderedFeature : renderedReconcile;
+      const render = readFileSync(rendered, "utf8");
       for (const id of file === "feature.yaml" ? ["await_ci", "await_merge", "authorize_ci"] : ["observe", "transition"]) {
-        assert.equal(step(template, id), step(render, id), `${file}/${id}`);
+        if (file === "feature.yaml" && id !== "authorize_ci") {
+          // Compare the current bootstrap output with its source template.
+          const checkpoint = step(template, id);
+          const form = "      form:\n        type: object\n        properties:\n          CANCEL: {type: string, enum: ['yes', 'no']}\n";
+          assert.ok(checkpoint.includes(form), `${id} cancellation form`);
+          assert.equal(step(render, id), checkpoint, `${file}/${id}`);
+          const gate = step(template, `${id}_cancellation`);
+          assert.ok(gate.includes(`    depends: ${id}\n`));
+          assert.ok(gate.includes(`      - CANCEL: \${steps.${id}.outputs.CANCEL}\n`));
+          assert.ok(gate.includes(`      - CHECKPOINT: ${id}\n`));
+          assert.ok(gate.includes("      - NATIVE_TERMINAL: aborted\n"));
+          assert.ok(gate.includes('if [[ "$CANCEL" == yes ]]; then'));
+        } else if (file === "feature.yaml") {
+          assert.ok(step(template, id).includes("    depends: [await_ci_cancellation, await_merge_cancellation]\n"));
+          assert.equal(step(render, id), step(template, id), `${file}/${id}`);
+        } else {
+          assert.equal(step(template, id), step(render, id), `${file}/${id}`);
+        }
       }
       const materialized = join(root, file);
       writeFileSync(materialized, template.replaceAll("__DAGU_FEATURE_VERSION__", BUNDLE_VERSION));
-      for (const path of [materialized, fileURLToPath(new URL(`../../../.workspace/dagu/dags/${file}`, import.meta.url))]) {
+      for (const path of [materialized, rendered, fileURLToPath(new URL(`../../../.workspace/dagu/dags/${file}`, import.meta.url))]) {
         execFileSync("dagu", ["validate", path], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
       }
     }
@@ -62,7 +80,9 @@ function step(source: string, id: string): string {
   const start = source.indexOf(`  - id: ${id}\n`);
   assert.ok(start >= 0, id);
   const end = source.indexOf("\n  - id:", start + 1);
-  return source.slice(start, end < 0 ? source.length : end).split("\nhandler_on:")[0]! + "\n";
+  const block = source.slice(start, end < 0 ? source.length : end).split("\nhandler_on:")[0]! + "\n";
+  return block.replace("    run: *cancellation_gate", () =>
+    source.match(/    run: &cancellation_gate \|[\s\S]*?(?=\n  - id:)/)![0]!.replace(" &cancellation_gate", ""));
 }
 function script(source: string, id: string): string {
   const block = step(source, id).split("    run: |\n")[1];
@@ -87,7 +107,7 @@ interface Fixture {
   env: NodeJS.ProcessEnv;
   base: string;
 }
-function fixture(): Fixture {
+function fixture(run = "ci226"): Fixture {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "omp-ci226-")));
   const primary = join(root, "primary");
   const remote = join(root, "remote.git");
@@ -106,6 +126,7 @@ function fixture(): Fixture {
   writeFileSync(join(primary, ".git/info/exclude"), "/.workspace/\n");
   git(primary, "worktree", "add", "-b", branch, worktree, "origin/main");
   mkdirSync(bin);
+  symlinkSync(fileURLToPath(new URL("../bin/dagu-pr-body.mjs", import.meta.url)), join(bin, "dagu-pr-body"));
   const control = join(root, "control.json");
   const calls = join(root, "calls.jsonl");
   writeFileSync(calls, "");
@@ -120,6 +141,7 @@ fs.appendFileSync(process.env.CI_CALLS,JSON.stringify({tool:process.argv[1].spli
   writeFileSync(join(bin, "gh"), `#!/usr/bin/env node\n${common}
 if(a[0]==='repo'&&a[1]==='view') emit('example/repo');
 else if(a[0]==='pr'&&a[1]==='create') { c.prExists=true; save(); emit('https://github.com/example/repo/pull/77'); }
+else if(a[0]==='pr'&&a[1]==='edit') { if(!c.prExists) process.exit(1); }
 else if(a[0]==='pr'&&a[1]==='view') {
  const fields=a[a.indexOf('--json')+1];
  if(fields==='number'&&!c.prExists) process.exit(1);
@@ -158,16 +180,14 @@ if(a[0]==='status') {
 `);
   chmodSync(join(bin, "gh"), 0o755);
   chmodSync(join(bin, "dagu"), 0o755);
-  const state = join(primary, ".git/dagu-feature/runs/ci226");
+  const state = join(primary, ".git/dagu-feature/runs", run);
   mkdirSync(state, { recursive: true });
-  const identity = JSON.stringify({ primary, worktree, branch, run: "ci226", session: "ci226-owner" }) + "\n";
+  const identity = JSON.stringify({ primary, worktree, branch, run, session: "ci226-owner" }) + "\n";
   writeFileSync(join(state, "identity"), identity);
   writeFileSync(git(worktree, "rev-parse", "--path-format=absolute", "--git-path", "dagu-feature-owner"), identity);
   writeFileSync(join(state, "base"), git(primary, "rev-parse", "HEAD") + "\n");
-  const env: NodeJS.ProcessEnv = { ...process.env, LC_ALL: "C", PATH: `${bin}:${process.env.PATH}`, PRIMARY: primary, WORKTREE: worktree, BRANCH: branch, ISSUE: "226", RUN: "ci226", PR_NUMBER: "", BASE_BRANCH: "main", GATE: "true", OMP_SESSION_ID: "ci226-owner", CI_REMOTE: remote, CI_CONTROL: control, CI_CALLS: calls, DAGU_OUTPUT_FILE: join(root, "outputs") };
+  const env: NodeJS.ProcessEnv = { ...process.env, LC_ALL: "C", PATH: `${bin}:${process.env.PATH}`, PRIMARY: primary, WORKTREE: worktree, BRANCH: branch, ISSUE: "226", RUN: run, PR_NUMBER: "", BASE_BRANCH: "main", GATE: "true", OMP_SESSION_ID: "ci226-owner", CI_REMOTE: remote, CI_CONTROL: control, CI_CALLS: calls, DAGU_OUTPUT_FILE: join(root, "outputs") };
   env.IMPLEMENTER = "ImplementTest";
-  env.QA = "QATest";
-  env.REVIEW = "ReviewTest";
   delete env.DAGU_PARAMS_JSON;
   return { root, primary, remote, worktree, bin, branch, control, calls, state, env, base: git(primary, "rev-parse", "HEAD") };
 }
@@ -178,6 +198,7 @@ function execute(f: Fixture, source: string, id: string) {
   return spawnSync("bash", ["-c", script(source, id)], { env: f.env, cwd: f.root, encoding: "utf8" });
 }
 function observe(f: Fixture, source: string) {
+  f.env.CI_OBSERVATION_ID = String(Number(f.env.CI_OBSERVATION_ID ?? 0) + 1);
   const result = execute(f, source, "observe");
   assert.equal(result.status, 0, result.stdout + result.stderr);
   return JSON.parse(readFileSync(join(f.state, "ci-observation.json"), "utf8"));
@@ -195,16 +216,7 @@ function publish(f: Fixture, feature: string, value: string): string {
     const result = execute(f, feature, id);
     assert.equal(result.status, 0, result.stdout + result.stderr);
   }
-  const candidate = JSON.parse(readFileSync(join(f.state, "candidate.json"), "utf8"));
-  const quality = qualityFixture(f, "PASS", {
-    repo: f.primary, worktree: f.worktree, run: f.env.RUN!, sha: candidate.sha,
-    iteration: candidate.iteration, attempt: "2026-10-16T01:00:00Z",
-    implementer: f.env.IMPLEMENTER!, session: f.env.OMP_SESSION_ID!,
-    implementStartedAt: "2026-10-16T00:00:00Z",
-  });
-  const evidence = verifyQuality(quality.parent, quality.request, f.env.QA!, f.env.REVIEW!, quality.models);
-  writeFileSync(join(f.state, "quality.json"), JSON.stringify(evidence));
-  for (const id of ["quality_admit", "push", "pr"]) {
+  for (const id of ["push", "pr"]) {
     const result = execute(f, feature, id);
     assert.equal(result.status, 0, result.stdout + result.stderr);
   }
@@ -212,7 +224,8 @@ function publish(f: Fixture, feature: string, value: string): string {
 }
 
 for (const [name, base] of definitions) {
-  const feature = readFileSync(fileURLToPath(new URL(`${base}feature.yaml`, import.meta.url)), "utf8");
+  const feature = readFileSync(name === "template"
+    ? fileURLToPath(new URL(`${base}feature.yaml`, import.meta.url)) : renderedFeature, "utf8");
   const reconcile = readFileSync(fileURLToPath(new URL(`${base}reconcile.yaml`, import.meta.url)), "utf8");
   test(`${name}: A CODE_FAIL returns implement, B PASS uses the same PR and rejects late A`, async t => {
     const f = fixture();
@@ -300,11 +313,120 @@ for (const [name, base] of definitions) {
   });
 }
 
+test("template: consecutive BLOCKED ticks request one owner decision per fingerprint", async () => {
+  const reconcile = readFileSync(new URL("../skills/dagu-feature/reconcile.yaml", import.meta.url), "utf8");
+  const f = fixture("no-progress558");
+  try {
+    git(f.worktree, "push", "-u", "origin", f.branch);
+    update(f, { conclusion: "cancelled", log: "Approval required by environment owner" });
+    const waiting: RunDetails = {
+      name: "feature", dagRunId: f.env.RUN!, statusLabel: "waiting", params: "ISSUE=226 OMP_SESSION_ID=owner",
+      nodes: ["await_ci", "await_merge"].map(name => ({ step: { name, humanTask: {} }, statusLabel: "waiting", approvalIteration: 0 })),
+    };
+    const transitions = new Transitions("owner");
+    const first = observe(f, reconcile);
+    assert.equal(first.class, "BLOCKED");
+    assert.equal(first.decisionRequest, undefined);
+    transitions.observe(waiting, { ciDiagnostic: first });
+    const repeatedTick = execute(f, reconcile, "observe");
+    assert.equal(repeatedTick.status, 0, repeatedTick.stderr);
+    assert.equal(JSON.parse(readFileSync(join(f.state, "ci-no-progress.json"), "utf8")).observations, 1);
+    const second = observe(f, reconcile);
+    assert.equal(second.decisionRequest.observations, 2);
+    const signal = new AbortController().signal;
+    const diagnostic = await readCiDiagnostic(f.primary, f.env.RUN!, false, signal);
+    assert.deepEqual(diagnostic?.decisionRequest, second.decisionRequest);
+    const request = transitions.observe(waiting, { ciDiagnostic: diagnostic! });
+    assert.match(request.wakeMessage!, /\[DAGU DECISION\].*ci=BLOCKED.*check=validate.*Approval required/);
+    assert.match(request.wakeMessage!, /continue with a renewed budget; change scope or delivery route; stop/);
+    assert.equal(request.wakeMessages, undefined);
+    for (let tick = 0; tick < 2; tick++) {
+      const repeated = observe(f, reconcile);
+      assert.deepEqual(repeated.decisionRequest, second.decisionRequest);
+      assert.deepEqual(transitions.observe(waiting, { ciDiagnostic: repeated }), {});
+    }
+    assert.deepEqual(new Transitions("another-owner").observe(waiting, { ciDiagnostic: second }), {});
+    update(f, { auto: false });
+    assert.equal(observe(f, reconcile).decisionRequest, undefined);
+    const changedCause = observe(f, reconcile);
+    assert.notEqual(changedCause.decisionRequest.id, second.decisionRequest.id);
+    assert.match(JSON.stringify(transitions.observe(waiting, { ciDiagnostic: changedCause })), /DAGU DECISION/);
+    writeFileSync(join(f.worktree, "candidate"), "new head\n");
+    git(f.worktree, "add", "candidate");
+    git(f.worktree, "commit", "-m", "new head");
+    git(f.worktree, "push", "origin", f.branch);
+    assert.equal(observe(f, reconcile).decisionRequest, undefined);
+    const changedSha = observe(f, reconcile);
+    assert.notEqual(changedSha.decisionRequest.id, changedCause.decisionRequest.id);
+    assert.match(JSON.stringify(transitions.observe(waiting, { ciDiagnostic: changedSha })), /DAGU DECISION/);
+    assert.equal(Object.keys(JSON.parse(readFileSync(join(f.state, "ci-no-progress.json"), "utf8")).requests).length, 3);
+    update(f, { auto: true, conclusion: "success", log: "" });
+    assert.equal(observe(f, reconcile).class, "PASS");
+    update(f, { conclusion: "cancelled" });
+    assert.equal(observe(f, reconcile).decisionRequest, undefined);
+    transition(f, reconcile);
+    assert.equal(JSON.parse(readFileSync(f.control, "utf8")).iteration, 0);
+  } finally { rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test("template: no-progress threshold is repository policy and non-BLOCKED ticks reset the streak", () => {
+  const reconcile = readFileSync(new URL("../skills/dagu-feature/reconcile.yaml", import.meta.url), "utf8");
+  const f = fixture("policy558");
+  try {
+    git(f.worktree, "push", "-u", "origin", f.branch);
+    f.env.ESCALATION_CI_BLOCKED = "3";
+    update(f, { conclusion: "cancelled", log: "Approval required" });
+    assert.equal(observe(f, reconcile).decisionRequest, undefined);
+    update(f, { pending: true });
+    assert.equal(observe(f, reconcile).class, "PENDING");
+    update(f, { pending: false });
+    assert.equal(observe(f, reconcile).decisionRequest, undefined);
+    assert.equal(observe(f, reconcile).decisionRequest, undefined);
+    assert.equal(observe(f, reconcile).decisionRequest.observations, 3);
+    update(f, { conclusion: "timed_out", log: "Runner lost communication with the server" });
+    observe(f, reconcile);
+    const retryPath = join(f.state, `ci-retry-${git(f.worktree, "rev-parse", "HEAD")}.json`);
+    writeFileSync(retryPath, JSON.stringify({ attempts: 2, next_at: 0 }));
+    assert.equal(observe(f, reconcile).class, "BLOCKED");
+    assert.equal(observe(f, reconcile).decisionRequest, undefined);
+    assert.equal(observe(f, reconcile).decisionRequest.observations, 3);
+    update(f, { auto: false, conclusion: "cancelled", log: "Approval required" });
+    f.env.ESCALATION_CI_BLOCKED = "1";
+    assert.equal(observe(f, reconcile).decisionRequest.observations, 1);
+  } finally { rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test("escalation diagnostics target the owner with budget evidence and decision options", async () => {
+  const f = fixture("escalation558");
+  try {
+    writeFileSync(join(f.state, "escalation.json"), JSON.stringify({
+      schemaVersion: 1, run: f.env.RUN, findings: [], trigger: {
+        id: "budget558", reasons: ["repeated finding"], iteration: 3, sha: f.base,
+        latestFindings: [{ text: "Repeated documentation finding", fingerprint: "finding558", iteration: 3 }], elapsedSeconds: 7200,
+        spend: { state: "unknown", cause: "session attribution unavailable" },
+      },
+    }));
+    const diagnostic = await readEscalationDiagnostic(f.worktree, f.env.RUN!, new AbortController().signal);
+    assert.match(diagnostic!, /findings=Repeated documentation finding elapsedSeconds=7200 spend=unknown \(session attribution unavailable\)/);
+    for (const step of ["escalation", "rebase_escalation"]) {
+      const run: RunDetails = { name: "feature", dagRunId: f.env.RUN!, statusLabel: "waiting",
+        params: "OMP_SESSION_ID=owner", nodes: [{ step: { name: step, humanTask: {} }, statusLabel: "waiting", approvalIteration: 3 }] };
+      const transitions = new Transitions("owner");
+      const notice = transitions.observe(run, { escalationDiagnostic: diagnostic! }).wakeMessage!;
+      assert.match(notice, /escalation=budget558.*iteration=3.*repeated finding.*continue with a renewed budget/);
+      assert.deepEqual(transitions.observe(run, { escalationDiagnostic: diagnostic! }), {});
+      assert.deepEqual(new Transitions("other").observe(run, { escalationDiagnostic: diagnostic! }), {});
+    }
+  } finally { rmSync(f.root, { recursive: true, force: true }); }
+});
+
 test("Dagu 2.20.1: paired root waits return to implement/rebase and release the queue", {
   ...liveDagu,
   timeout: 120_000,
 }, async t => {
-  const f = fixture();
+  const id = testRunId("ci226");
+  const probeId = testRunId("queue-released");
+  const f = fixture(id);
   const feature = readFileSync(fileURLToPath(new URL("../skills/dagu-feature/feature.yaml", import.meta.url)), "utf8");
   const reconcile = readFileSync(fileURLToPath(new URL("../skills/dagu-feature/reconcile.yaml", import.meta.url)), "utf8");
   const home = join(f.root, "dagu-home");
@@ -319,7 +441,7 @@ test("Dagu 2.20.1: paired root waits return to implement/rebase and release the 
   f.env.DAGU_HOME = home;
   writeFileSync(join(home, "config.yaml"), `auth:\n  mode: none\ncoordinator:\n  enabled: false\nqueues:\n  enabled: true\n  config:\n    - name: ci226\n      max_active_runs: 1\n`);
   const fixtureEnv = ["PATH", "CI_REMOTE", "CI_CONTROL", "CI_CALLS"].map(key => `  - ${key}: ${JSON.stringify(f.env[key])}\n`).join("");
-  const definition = `type: graph\nshell: bash\nmax_active_steps: 1\nqueue: ci226\nparams:\n  - ISSUE: "226"\n  - PRIMARY: ${f.primary}\n  - BRANCH: ${f.branch}\n  - PR_NUMBER: "77"\nenv:\n${fixtureEnv}  - WORKTREE: ${f.worktree}\n  - RUN: ci226\nsteps:\n  - id: implement\n    action: human.task\n    with:\n      prompt: Correct candidate\n  - id: rebase\n    depends: implement\n    run: echo rebased\n  - id: auto_merge\n    depends: rebase\n    run: echo observed-publication\n${step(feature, "await_ci")}${step(feature, "await_merge")}${step(feature, "authorize_ci")}`;
+  const definition = `type: graph\nshell: bash\nmax_active_steps: 1\nqueue: ci226\nparams:\n  - ISSUE: "226"\n  - PRIMARY: ${f.primary}\n  - BRANCH: ${f.branch}\n  - PR_NUMBER: "77"\nenv:\n${fixtureEnv}  - WORKTREE: ${f.worktree}\n  - RUN: ${id}\nsteps:\n  - id: implement\n    action: human.task\n    with:\n      prompt: Correct candidate\n  - id: rebase\n    depends: implement\n    run: echo rebased\n  - id: auto_merge\n    depends: rebase\n    run: echo observed-publication\n${["await_ci", "await_ci_cancellation", "await_merge", "await_merge_cancellation", "authorize_ci"].map(id => step(feature, id).replace("rewind_to: implement_budget", "rewind_to: implement").replace("rewind_to: rebase_budget", "rewind_to: rebase")).join("")}`;
   const path = join(home, "dags/feature.yaml");
   writeFileSync(path, definition);
   writeFileSync(join(home, "dags/queue-probe.yaml"), "queue: ci226\nsteps:\n  - id: observed\n    run: echo queue-slot-released\n");
@@ -340,7 +462,7 @@ test("Dagu 2.20.1: paired root waits return to implement/rebase and release the 
   }
   async function waiting(stepId: string, iteration: number): Promise<RunDetails> {
     return until(`${stepId}/${iteration}`, async () => {
-      const response = await fetch(`${api}/dag-runs/feature/ci226`);
+      const response = await fetch(`${api}/dag-runs/feature/${id}`);
       if (!response.ok) return undefined;
       const run = (await response.json() as { dagRunDetails: RunDetails }).dagRunDetails;
       assert.ok(!["failed", "aborted"].includes(run.statusLabel), JSON.stringify(run));
@@ -353,34 +475,34 @@ test("Dagu 2.20.1: paired root waits return to implement/rebase and release the 
     });
     dagu("validate", path);
     const a = publish(f, feature, "candidate A");
-    dagu("enqueue", "--run-id", "ci226", path);
+    dagu("enqueue", "--run-id", id, path);
     await waiting("implement", 0);
-    dagu("human-task", "complete", "feature", "--run-id", "ci226", "--step", "implement");
+    dagu("human-task", "complete", "feature", "--run-id", id, "--step", "implement");
     await waiting("await_ci", 0);
     update(f, { conclusion: "failure", log: "AssertionError: candidate test failed" });
     assert.equal(observe(f, reconcile).class, "CODE_FAIL");
     transition(f, reconcile);
     const returned = await waiting("implement", 1);
-    const ciDiagnostic = await readCiDiagnostic(f.primary, "ci226", true, new AbortController().signal);
+    const ciDiagnostic = await readCiDiagnostic(f.primary, id, true, new AbortController().signal);
     const wake = new Transitions("owner").observe({ ...returned, params: `${returned.params} OMP_SESSION_ID=owner` }, { ciDiagnostic: ciDiagnostic! }).wakeMessage!;
     assert.ok(wake.includes("step=implement") && wake.includes(a) && wake.includes("AssertionError"), wake);
     t.diagnostic(wake);
     const b = publish(f, feature, "candidate B");
     update(f, { conclusion: "success", checksSha: a, log: "" });
-    dagu("human-task", "complete", "feature", "--run-id", "ci226", "--step", "implement");
+    dagu("human-task", "complete", "feature", "--run-id", id, "--step", "implement");
     await waiting("await_ci", 1);
     assert.equal(observe(f, reconcile).class, "STALE_SHA");
     update(f, { checksSha: b, mergeState: "BEHIND" });
     assert.equal(observe(f, reconcile).action, "REBASE");
     transition(f, reconcile);
     await waiting("await_merge", 2);
-    const stale = spawnSync("dagu", ["human-task", "push-back", "feature", "--run-id", "ci226", "--step", "await_merge", "--expected-iteration", "1"], { env: f.env, encoding: "utf8" });
+    const stale = spawnSync("dagu", ["human-task", "push-back", "feature", "--run-id", id, "--step", "await_merge", "--expected-iteration", "1"], { env: f.env, encoding: "utf8" });
     assert.equal(stale.status, 1);
     assert.match(stale.stderr, /iteration 2, not 1/);
     await waiting("await_merge", 2);
-    dagu("enqueue", "--run-id", "queue-released", "queue-probe");
+    dagu("enqueue", "--run-id", probeId, "queue-probe");
     await until("same queue progresses while paired tasks wait", async () => {
-      const response = await fetch(`${api}/dag-runs/queue-probe/queue-released`);
+      const response = await fetch(`${api}/dag-runs/queue-probe/${probeId}`);
       if (!response.ok) return undefined;
       const run = (await response.json() as { dagRunDetails: RunDetails }).dagRunDetails;
       return run.statusLabel === "succeeded" ? true : undefined;
@@ -392,7 +514,7 @@ test("Dagu 2.20.1: paired root waits return to implement/rebase and release the 
     observe(f, reconcile);
     transition(f, reconcile);
     await until("same feature succeeds", async () => {
-      const response = await fetch(`${api}/dag-runs/feature/ci226`);
+      const response = await fetch(`${api}/dag-runs/feature/${id}`);
       if (!response.ok) return undefined;
       const run = (await response.json() as { dagRunDetails: RunDetails }).dagRunDetails;
       assert.notEqual(run.statusLabel, "failed", JSON.stringify(run));
@@ -400,9 +522,9 @@ test("Dagu 2.20.1: paired root waits return to implement/rebase and release the 
     });
     const history = JSON.parse(dagu("history", "feature", "--format", "json"));
     assert.equal(history.length, 1);
-    assert.equal(history[0].dagRunId, "ci226");
+    assert.equal(history[0].dagRunId, id);
     assert.equal(git(f.primary, "ls-remote", "origin", "refs/heads/main").split(/\s/)[0], f.base);
-    t.diagnostic(JSON.stringify({ version: liveDaguVersion, home, port, run: "ci226", worktree: f.worktree, pr: 77, a, b, iterations: [0, 1, 2], result: "succeeded", queue: "released" }));
+    t.diagnostic(JSON.stringify({ version: liveDaguVersion, home, port, run: id, worktree: f.worktree, pr: 77, a, b, iterations: [0, 1, 2], result: "succeeded", queue: "released" }));
   } finally {
     service.kill("SIGTERM");
     await new Promise<void>(resolve => service.exitCode !== null ? resolve() : service.once("exit", () => resolve()));

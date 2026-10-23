@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import extension from "../../src/status/index.ts";
+import { testRunId } from "./run-id.ts";
 
 async function port(): Promise<number> {
   const server = createServer();
@@ -18,7 +19,7 @@ async function port(): Promise<number> {
 
 export async function liveWatcher(binary = "dagu"): Promise<string[]> {
   const root = mkdtempSync(join(tmpdir(), "omp-dagu-notices-"));
-  const runId = `fast-push-back-${root.slice(root.lastIndexOf("-") + 1)}`;
+  const runId = testRunId("fast-push-back");
   const home = join(root, "dagu");
   mkdirSync(join(home, "dags"), { recursive: true });
   const httpPort = await port();
@@ -72,8 +73,8 @@ export async function liveWatcher(binary = "dagu"): Promise<string[]> {
       await until(`${step}/${iteration} waiting`, async () => {
         const response = await fetch(`${base}/api/v1/dag-runs/feature/${runId}`);
         if (!response.ok) return false;
-        const { dagRunDetails: run } = await response.json() as { dagRunDetails: { nodes: Array<{ step: { name: string }; statusLabel: string; approvalIteration?: number }> } };
-        return run.nodes.some(node => node.step.name === step && node.statusLabel === "waiting" && (node.approvalIteration ?? 0) === iteration);
+        const { dagRunDetails: run } = await response.json() as { dagRunDetails: { statusLabel: string; nodes: Array<{ step: { name: string }; statusLabel: string; approvalIteration?: number }> } };
+        return run.statusLabel === "waiting" && run.nodes.some(node => node.step.name === step && node.statusLabel === "waiting" && (node.approvalIteration ?? 0) === iteration);
       });
       if (iteration === 0 && step === "c") dagu("human-task", "push-back", "feature", "--run-id", runId, "--step", step, "--expected-iteration", "0");
       else dagu("human-task", "complete", "feature", "--run-id", runId, "--step", step);

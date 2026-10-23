@@ -18,6 +18,18 @@ params:
     QUESTION:
       type: string
       default: ""
+    REQUIRED_TARGETS:
+      type: string
+      default: "[]"
+    AUTHORIZED_TARGETS:
+      type: string
+      default: "[]"
+    SCOPE_BASIS:
+      type: string
+      default: ""
+    SCOPE_REQUEST:
+      type: string
+      default: ""
     BASE_BRANCH:
       type: string
       default: TEMPLATE_BASE_BRANCH
@@ -33,6 +45,7 @@ env:
   - RUN: ${context.run.id}
   - WORKTREE: ${PRIMARY}/.workspace/worktrees/poc-${RUN}
   - DAGU_FEATURE_BUNDLE: "__DAGU_FEATURE_IDENTITY__"
+  - ESCALATION_POC_INCONCLUSIVE: __ESCALATION_POC_INCONCLUSIVE__
   - DAGU_RESOURCE_GUARD: |
       resource_lock() {
         local primary common expected actual attempt
@@ -72,12 +85,13 @@ steps:
   - id: admission
     run: |
       set -euo pipefail
-      rejected=$(jq -er 'keys[] | select(. == "GATE" or . == "REBASE_RESOLVER" or . == "REQUIRED_CHECK" or . == "PRIMARY" or . == "BRANCH")' <<<"$DAGU_PARAMS_JSON") || [[ $? == 4 ]]
+      rejected=$(jq -er 'keys[] | select(startswith("ESCALATION_") or . == "GATE" or . == "REBASE_RESOLVER" or . == "REQUIRED_CHECK" or . == "PRIMARY" or . == "BRANCH")' <<<"$DAGU_PARAMS_JSON") || [[ $? == 4 ]]
       if [[ -n "$rejected" ]]; then
         printf 'admission rejected run parameter: %s\n' "$rejected" >&2
         printf 'adopted policy PRIMARY=%q BRANCH=%q\n' "$PRIMARY" "poc/$RUN" >&2
         exit 1
       fi
+      dagu-poc-scope require
 
   - id: record
     depends: admission
@@ -146,9 +160,38 @@ steps:
       prompt: "base: ${steps.detect_base_primary.outputs.reason}. Restore ${PRIMARY} to clean ${BASE_BRANCH}, preserving the operator's changes; then push back this checkpoint with the observed iteration to recheck in the same run. The DAG records BASE_SHA and creates the worktree."
       push_back:
         rewind_to: detect_base_primary
+      form:
+        type: object
+        properties:
+          CANCEL: {type: string, enum: ['yes', 'no']}
+
+  - id: base_primary_unavailable_cancellation
+    depends: base_primary_unavailable
+    continue_on: skipped
+    preconditions:
+      - condition: "${steps.detect_base_primary.outputs.reason}"
+        expected: "re:^primary "
+    env:
+      - CANCEL: ${steps.base_primary_unavailable.outputs.CANCEL}
+      - CHECKPOINT: base_primary_unavailable
+    run: &cancellation_gate |
+      set -euo pipefail
+      if [[ "$CANCEL" == yes ]]; then
+        STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "poc/runs/$RUN")
+        mkdir -p "$STATE"
+        jq -n --arg run "$RUN" --arg checkpoint "$CHECKPOINT" --arg worktree "$WORKTREE" \
+          '{run:$run,checkpoint:$checkpoint,worktree:$worktree,outcome:"cancelled",nativeExpected:"failed"}' > "$STATE/cancellation.json"
+        printf 'Cancellation requested at %s; terminating before successors; evidence=%s\n' "$CHECKPOINT" "$STATE"
+        exit 77
+      fi
+      for field in ${REQUIRED_FIELDS:-}; do
+        value=${!field:-}
+        [[ -n "$value" && "$value" != '${steps.'* ]] ||
+          { printf 'Normal completion requires %s at %s\n' "$field" "$CHECKPOINT" >&2; exit 1; }
+      done
 
   - id: base
-    depends: base_primary_unavailable
+    depends: base_primary_unavailable_cancellation
     run: |
       set -euo pipefail
       printf '%s\n' "$DAGU_FEATURE_BUNDLE"
@@ -220,16 +263,25 @@ steps:
         ## Pregunta, ## Proposición demostrada, ## Ruta ejercitada, ## Comandos y salida,
         and ## Después del PASS for PASS. Record references or digests of every executed
         release/image in Ruta ejercitada. Keep tests and Markdown in the cutover.
+        INCONCLUSIVE also requires ## Inconclusive cause containing exactly scope, access, or other.
         An empty diff is valid. Complete only after recording observed evidence.
       form:
         type: object
         properties:
+          CANCEL: {type: string, enum: ['yes', 'no']}
           decline:
             type: string
             default: ""
 
-  - id: decline
+  - id: run_poc_cancellation
     depends: run_poc
+    env:
+      - CANCEL: ${steps.run_poc.outputs.CANCEL}
+      - CHECKPOINT: run_poc
+    run: *cancellation_gate
+
+  - id: decline
+    depends: run_poc_cancellation
     continue_on: skipped
     preconditions:
       - condition: "${steps.run_poc.outputs.decline}"
@@ -243,7 +295,7 @@ steps:
         --body "PoC declined by operator: $DECLINE"
 
   - id: scope_gate
-    depends: run_poc
+    depends: run_poc_cancellation
     continue_on:
       failure: true
       skipped: true
@@ -274,6 +326,7 @@ steps:
           (["## Pregunta", "## Proposición demostrada", "## Ruta ejercitada", "## Comandos y salida"][] |
             . as $heading | if ($result|section($heading)|norm|length) > 0 then empty else "Missing or empty required section: \($heading)" end),
           (if (section("## Pregunta")|norm) == ($question|norm) then empty else "## Pregunta differs from QUESTION (normalized): result=\(section("## Pregunta")|norm|tojson) QUESTION=\($question|norm|tojson)" end),
+          (if (split("\n")[0]|rtrimstr("\r")) == "VERDICT: INCONCLUSIVE" and ((section("## Inconclusive cause")|norm) | IN("scope", "access", "other") | not) then "INCONCLUSIVE requires ## Inconclusive cause with scope, access or other" else empty end),
           (if (split("\n")[0]|rtrimstr("\r")) == "VERDICT: PASS" and (section("## Después del PASS")|norm|length) == 0 then "Missing or empty ## Después del PASS for PASS" else empty end)
         ] | .[]
       ' "$STATE/result.md" > "$STATE/scope-errors"
@@ -296,16 +349,35 @@ steps:
       prompt: "Correct result.md using scope_gate stderr, then rerun the experiment in the same worktree."
       push_back:
         rewind_to: run_poc
+      form:
+        type: object
+        properties:
+          CANCEL: {type: string, enum: ['yes', 'no']}
+
+  - id: fix_result_cancellation
+    depends: fix_result
+    continue_on: skipped
+    preconditions:
+      - condition: "${scope_gate.exit_code}"
+        expected: "re:^[1-9][0-9]*$"
+      - condition: "${steps.run_poc.outputs.decline}"
+        expected: "re:^$"
+    env:
+      - CANCEL: ${steps.fix_result.outputs.CANCEL}
+      - CHECKPOINT: fix_result
+    run: *cancellation_gate
 
   - id: publish
-    depends: fix_result
+    depends: fix_result_cancellation
     continue_on: skipped
     preconditions:
       - condition: "${steps.run_poc.outputs.decline}"
         expected: "re:^$"
     run: &publish |
       set -euo pipefail
-      if jq -e 'has("GATE") or has("REBASE_RESOLVER") or has("REQUIRED_CHECK") or has("PRIMARY") or has("BRANCH")' <<<"${DAGU_PARAMS_JSON:-"{}"}" >/dev/null; then exit 0; fi
+      STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "poc/runs/$RUN")
+      if [[ -f "$STATE/cancellation.json" ]]; then exit 0; fi
+      if jq -e 'has("GATE") or has("REBASE_RESOLVER") or has("REQUIRED_CHECK") or has("PRIMARY") or has("BRANCH") or any(keys[]; startswith("ESCALATION_"))' <<<"${DAGU_PARAMS_JSON:-"{}"}" >/dev/null; then exit 0; fi
       STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "poc/runs/$RUN")
       test -f "$STATE/issue.number" || exit 0
       REPO=$(cat "$STATE/repo")
@@ -344,6 +416,7 @@ steps:
         cat "$STATE/full.patch"
         printf '\n```\n</details>\n'
       } > "$STATE/comment-$ATTEMPT.txt"
+      dagu-pr-body check-paths "$STATE/comment-$ATTEMPT.txt"
       if ! URL=$(gh issue comment "$ISSUE" --repo "$REPO" --body-file "$STATE/comment-$ATTEMPT.txt" 2> "$STATE/publish.err"); then
         grep -Ei 'too long|maximum.*characters|body.*large' "$STATE/publish.err"
         jq -cn --arg run "$RUN" --argjson attempt "$ATTEMPT" --rawfile evidence "$STATE/comment-$ATTEMPT.txt" '
@@ -391,15 +464,28 @@ steps:
       form:
         type: object
         properties:
+          CANCEL: {type: string, enum: ['yes', 'no']}
           promote:
             type: string
             enum: ['yes', 'no']
-        required: [promote]
       push_back:
         rewind_to: run_poc
 
-  - id: dispose
+  - id: decide_cancellation
     depends: decide
+    continue_on: skipped
+    preconditions:
+      - condition: "${steps.run_poc.outputs.decline}"
+        expected: "re:^$"
+    env:
+      - CANCEL: ${steps.decide.outputs.CANCEL}
+      - CHECKPOINT: decide
+      - REQUIRED_FIELDS: PROMOTE
+      - PROMOTE: ${steps.decide.outputs.promote}
+    run: *cancellation_gate
+
+  - id: dispose
+    depends: decide_cancellation
     continue_on: skipped
     preconditions:
       - condition: "${steps.run_poc.outputs.decline}"
@@ -460,7 +546,16 @@ handler_on:
             STATUS=$(dagu status poc --run-id "$RUN")
             if grep -q "^Waiting -" <<<"$STATUS"; then
               ITERATION=$(sed -nE "s/.*push-back iteration: ([0-9]+).*/\1/p" <<<"$STATUS" | head -1)
-              dagu human-task push-back poc --run-id "$RUN" --step fix_result --expected-iteration "${ITERATION:-0}"
+              transition=0
+              dagu human-task push-back poc --run-id "$RUN" --step fix_result --expected-iteration "${ITERATION:-0}" || transition=$?
+              if (( transition != 0 )); then
+                STATUS=$(dagu status poc --run-id "$RUN")
+                if grep -q "^Failed -" <<<"$STATUS" &&
+                   ATTEMPT=$(curl -fsS --max-time 10 --get "http://127.0.0.1:${DAGU_PORT:-8080}/api/v1/event-logs" --data-urlencode "dagName=poc" --data-urlencode "dagRunId=$RUN" --data-urlencode "paginationMode=cursor" --data-urlencode "limit=1" | jq -er ".entries[0] | select(.type == \"dag.run.failed\" and .data.dag_run_status.error == \"process terminated unexpectedly - stale local process detected\") | .attemptId"); then
+                  printf "stale-process repair: run=%s attempt=%s step=fix_result; recover: dagu retry --run-id %s --step scope_gate --downstream poc\n" "$RUN" "${ATTEMPT:-unknown}" "$RUN" >&2
+                fi
+                exit "$transition"
+              fi
               exit 0
             fi
             sleep 1
@@ -485,6 +580,17 @@ handler_on:
       WT_REAL="$WT"
       if [[ -d "$WT" ]]; then
         WT_REAL=$(cd "$WT" && pwd -P)
+        STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "poc/runs/$RUN")
+        BASE_SHA=$(cat "$STATE/base.sha" 2>/dev/null || printf unknown)
+        if [[ -f "$STATE/cancellation.json" ]] &&
+           { [[ "$BASE_SHA" == unknown ]] || ! git -C "$WT_REAL" merge-base --is-ancestor HEAD "$BASE_SHA"; }; then
+          printf 'cleanup retained: unpublished candidate %s; evidence %s\n' "$WT" "$STATE" >&2
+          exit 0
+        fi
+        if [[ -f "$STATE/cancellation.json" && -n "$(git -C "$WT_REAL" status --porcelain=v1 --untracked-files=all)" ]]; then
+          printf 'cleanup retained: dirty cancelled worktree %s; evidence %s\n' "$WT" "$STATE" >&2
+          exit 0
+        fi
         REMOVE_ARGS=()
         if [[ -n "$(git -C "$WT_REAL" status --porcelain --untracked-files=all)" ]]; then
           STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "poc/runs/$RUN")

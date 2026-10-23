@@ -4,6 +4,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "n
 import { join } from "node:path";
 import test from "node:test";
 import { admissionFixture } from "./fixtures/admission.ts";
+import { REQUIRED_DAGU_VERSION } from "../src/bundle.ts";
 
 test("planning CLI admission seals provenance and enqueue submits the admitted snapshot", () => {
   const fixture = admissionFixture();
@@ -19,7 +20,7 @@ test("planning CLI admission seals provenance and enqueue submits the admitted s
 const fs = require("node:fs");
 const args = process.argv.slice(2);
 if (args.length === 1 && args[0] === "version") {
-  console.log("2.20.1");
+  console.log(${JSON.stringify(REQUIRED_DAGU_VERSION)});
 } else if (args[0] === "enqueue") {
   fs.appendFileSync(process.env.ADMISSION_ENQUEUE_CALLS, JSON.stringify(args) + "\\n");
   console.log("fixture dagu enqueue reached");

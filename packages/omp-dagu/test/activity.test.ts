@@ -192,3 +192,28 @@ test("agent activity resolves PRIMARY from the enqueued adoption spec", async t 
     await rm(fixture.root, { recursive: true, force: true });
   }
 });
+
+test("agent activity discovers a named-profile transcript using its default session directory", async t => {
+  const keys = ["HOME", "OMP_PROFILE", "PI_PROFILE", "PI_CONFIG_DIR", "PI_CODING_AGENT_DIR"] as const;
+  const saved = Object.fromEntries(keys.map(key => [key, process.env[key]]));
+  t.after(() => {
+    for (const key of keys) {
+      if (saved[key] === undefined) delete process.env[key];
+      else process.env[key] = saved[key];
+    }
+  });
+  const home = await mkdtemp(path.join(os.tmpdir(), "activity-profile-"));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  for (const key of keys) delete process.env[key];
+  Object.assign(process.env, { HOME: home, OMP_PROFILE: "work" });
+  const primary = path.join(home, "repo");
+  await mkdir(primary);
+  const parent = path.join(home, ".omp", "profiles", "work", "agent", "sessions", "-repo", "stamp_session-main");
+  await mkdir(parent, { recursive: true });
+  await writeFile(`${parent}.jsonl`, "coordinator\n");
+  await writeFile(path.join(parent, "Implement182.jsonl"), `${message("2026-10-15T16:00:06Z", "read", { i: "Reading profile activity" })}\n`);
+  const run = { ...agentRun, params: `ISSUE=182 PRIMARY=${primary} OMP_SESSION_ID=session-main` };
+  const target = activityTarget(run);
+  assert.ok(target);
+  assert.equal(await readActivity("http://unused", run, target, { now: () => Date.parse("2026-10-15T16:00:12Z") }, new AbortController().signal), "read Reading profile activity (6s)");
+});

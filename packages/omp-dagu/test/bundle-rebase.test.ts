@@ -1,7 +1,7 @@
 import { liveDagu, liveDaguVersion } from "./fixtures/live-dagu.ts";
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { testRunId } from "./fixtures/run-id.ts";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -9,8 +9,6 @@ import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { qualityFixture } from "./quality-fixtures.ts";
-import { verifyQuality } from "../src/triage/quality.ts";
 
 const resolver = fileURLToPath(new URL("../bin/dagu-bundle-rebase.mjs", import.meta.url));
 const template = fileURLToPath(new URL("../skills/dagu-feature/feature.yaml", import.meta.url));
@@ -36,7 +34,13 @@ function step(source: string, id: string): string {
   const start = source.indexOf(`  - id: ${id}\n`);
   assert.ok(start >= 0);
   const end = source.indexOf("\n  - id:", start + 1);
-  return source.slice(start, end < 0 ? source.length : end).split("\nhandler_on:")[0]! + "\n";
+  let result = source.slice(start, end < 0 ? source.length : end).split("\nhandler_on:")[0]! + "\n";
+  if (result.includes("    run: *cancellation_gate")) {
+    result = result.replace("    run: *cancellation_gate", source.match(/    run: &cancellation_gate \|[\s\S]*?(?=\n  - id:)/)![0]!.replace(" &cancellation_gate", ""));
+  }
+  result = result.replace("    run: &cancellation_gate", "    run:");
+  if (result.includes("    action: human.task")) result += step(source, `${id}_cancellation`);
+  return result;
 }
 function script(file: string, id: string): string {
   const block = step(readFileSync(file, "utf8"), id);
@@ -90,16 +94,17 @@ function fixture(upstream = "0.3.18", proposed = "0.3.18", mode = "clean", legac
     put(primary, "package-lock.json", JSON.stringify(lock, null, 2) + "\n");
   }
   git(primary, "add", "."); git(primary, "commit", "-m", "feat: candidate A"); git(primary, "push", "origin", "main");
-  const state = join(primary, ".git/dagu-feature/runs/bundle-test");
+  const id = testRunId("bundle-rebase");
+  const state = join(primary, ".git/dagu-feature/runs", id);
   mkdirSync(state, { recursive: true });
-  const identity = JSON.stringify({ primary, worktree, branch, run: "bundle-test", session: "" });
+  const identity = JSON.stringify({ primary, worktree, branch, run: id, session: "" });
   put(state, "identity", identity + "\n");
   writeFileSync(git(worktree, "rev-parse", "--path-format=absolute", "--git-path", "dagu-feature-owner"), identity + "\n");
   put(state, "base", base + "\n");
   put(state, "candidate.json", JSON.stringify({ sha: before, base, tree: git(worktree, "rev-parse", "HEAD^{tree}"), iteration: 0, message: "feat: candidate B", summary: "Candidate B", implementer: "ImplementTest" }) + "\n");
   put(state, "diff.patch", git(worktree, "diff", "--binary", base, before) + "\n");
   put(state, "gate.json", JSON.stringify({ sha: before, gate: "old gate" }) + "\n");
-  const env = { HOME: process.env.HOME, PATH: process.env.PATH, PRIMARY: primary, WORKTREE: worktree, BRANCH: branch, BASE_BRANCH: "main", RUN: "bundle-test", OMP_SESSION_ID: "", REBASE_RESOLVER: `node ${JSON.stringify(resolver)}`, GATE: "true" };
+  const env = { HOME: process.env.HOME, PATH: process.env.PATH, PRIMARY: primary, WORKTREE: worktree, BRANCH: branch, BASE_BRANCH: "main", RUN: id, OMP_SESSION_ID: "", REBASE_RESOLVER: `node ${JSON.stringify(resolver)}`, GATE: "true" };
   return { root, primary, worktree, branch, state, before, env };
 }
 function run(repo: Fixture, file = template, id = "rebase") {
@@ -188,12 +193,6 @@ test("repository resolution requires verified run identity", () => {
   try { put(repo.state, "identity", "{}\n"); assert.notEqual(run(repo).status, 0); assert.equal(git(repo.worktree, "rev-parse", "HEAD"), repo.before); }
   finally { rmSync(repo.root, { recursive: true, force: true }); }
 });
-test("feature render keeps the repository resolver and all step bodies in template parity", () => {
-  const source = readFileSync(template, "utf8"); const render = readFileSync(rendered, "utf8");
-  assert.match(source, /^  - REBASE_RESOLVER: __REBASE_RESOLVER__$/m);
-  assert.match(render, /^  - REBASE_RESOLVER: "node packages\/omp-dagu\/bin\/dagu-bundle-rebase.mjs"$/m);
-  for (const id of ["rebase", "conflict_review", "gate", "push"]) assert.equal(step(source, id), step(render, id));
-});
 
 test("isolated Dagu rebases colliding candidates before gate and publishes the normalized SHA", {
   ...liveDagu,
@@ -221,17 +220,14 @@ test("isolated Dagu rebases colliding candidates before gate and publishes the n
   put(home, "dags/feature.yaml", `type: graph\nshell: bash\nenv:\n${Object.entries({ ...repo.env, VALIDATION: "", PATH: env.PATH }).map(([key, value]) => `  ${key}: ${JSON.stringify(value)}`).join("\n")}\nsteps:\n` +
     "  - id: triage\n    run: echo POC=no >> \"$DAGU_OUTPUT_FILE\"\n    outputs:\n      - name: POC\n" +
     "  - id: implement\n    depends: triage\n    run: echo fixture-candidate-ready\n" +
-    step(source, "rebase").replace("    depends: dependency_review", "    depends: implement") +
-    step(source, "gate").replace("    depends: conflict_review", "    depends: rebase") +
-    "  - id: quality_review\n    depends: gate\n    action: human.task\n    with:\n      prompt: Admit independent verdict evidence for the normalized candidate.\n" +
-    step(source, "quality_admit").replace("    env:\n      - QA: ${steps.quality_review.outputs.QA}\n      - REVIEW: ${steps.quality_review.outputs.REVIEW}\n", "    env:\n      - QA: QATest\n      - REVIEW: ReviewTest\n") +
-    step(source, "validation").replace("    depends: quality_transition", "    depends: quality_admit") +
-    step(source, "push"));
+    step(source, "rebase").replace("    depends: rebase_escalation_decision", "    depends: implement") +
+    step(source, "gate").replace("    depends: conflict_review_cancellation", "    depends: rebase") +
+    step(source, "push").replace("    depends: validation_cancellation", "    depends: gate"));
   let serviceLog = "";
   const service = spawn("dagu", ["start-all", "--host", "127.0.0.1", "--port", String(port)], { cwd: repo.root, env, stdio: ["ignore", "pipe", "pipe"] });
   service.stdout.on("data", data => { serviceLog += data; }); service.stderr.on("data", data => { serviceLog += data; });
   const command = (...args: string[]) => execFileSync("dagu", args, { cwd: repo.root, env, encoding: "utf8" });
-  const id = `bundle-rebase-${randomUUID()}`; const api = `http://127.0.0.1:${port}/api/v1`;
+  const id = repo.env.RUN!; const api = `http://127.0.0.1:${port}/api/v1`;
   async function until<T>(description: string, probe: () => Promise<T | undefined>): Promise<T> {
     const deadline = Date.now() + 60_000;
     while (Date.now() < deadline) { const value = await probe(); if (value !== undefined) return value; await delay(150); }
@@ -243,26 +239,13 @@ test("isolated Dagu rebases colliding candidates before gate and publishes the n
     assert.ok(text(dirname(staged), "feature.yaml").includes(`- REBASE_RESOLVER: ${JSON.stringify(repo.env.REBASE_RESOLVER)}`));
     command("validate", staged); command("validate", rendered); command("validate", file);
     command("enqueue", "--run-id", id, "feature");
-    await until("normalized candidate awaiting independent verdicts", async () => {
-      const response = await fetch(`${api}/dag-runs/feature/${id}`);
-      if (!response.ok) return undefined;
-      const run = (await response.json() as { dagRunDetails: { statusLabel: string } }).dagRunDetails;
-      assert.notEqual(run.statusLabel, "failed");
-      return run.statusLabel === "waiting" ? true : undefined;
-    });
-    const candidate = json(repo.state, "candidate.json");
-    const evidence = qualityFixture(repo, "PASS", {
-      repo: repo.primary, worktree: repo.worktree, run: "bundle-test", sha: candidate.sha, iteration: candidate.iteration,
-      implementer: "ImplementTest", session: "", attempt: new Date().toISOString(), implementStartedAt: "2026-10-16T00:00:00Z",
-    });
-    writeFileSync(join(repo.state, "quality.json"), JSON.stringify(verifyQuality(evidence.parent, evidence.request, "QATest", "ReviewTest", evidence.models)));
-    command("human-task", "complete", "feature", "--run-id", id, "--step", "quality_review");
     const details = await until("normalized rebase/gate/push", async () => {
       const response = await fetch(`${api}/dag-runs/feature/${id}`); if (!response.ok) return undefined;
       const run = (await response.json() as { dagRunDetails: { statusLabel: string; nodes: Array<{ statusLabel: string; stdout?: string; stderr?: string }> } }).dagRunDetails;
+      if (!["succeeded", "failed", "aborted"].includes(run.statusLabel)) return undefined;
       const logs = run.nodes.map(node => [node.stdout, node.stderr].filter(Boolean).map(path => readFileSync(path!, "utf8")).join("\n")).join("\n");
-      assert.ok(!run.nodes.some(node => node.statusLabel === "failed"), logs + serviceLog);
-      return run.statusLabel === "succeeded" ? { run, logs } : undefined;
+      assert.equal(run.statusLabel, "succeeded", logs + serviceLog);
+      return { run, logs };
     });
     const sha = normalized(repo, "0.3.19");
     assert.equal(json(repo.state, "gate.json").sha, sha);

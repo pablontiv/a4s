@@ -7,7 +7,7 @@ import { activityTarget, readActivity } from "./activity.ts";
 import { ghIssueTitleResolver, IssueTitles } from "./issue-title.ts";
 import { isActive, issueNumber, renderOffline, renderWidget, resolveRunPrimary, runParam, TOGGLE_COMMAND, topicFor, Transitions } from "./progress.ts";
 import type { RunDetails, WidgetTheme } from "./progress.ts";
-import { readCiDiagnostic, resolveRepository } from "./repository.ts";
+import { readCiDiagnostic, readEscalationDiagnostic, resolveRepository } from "./repository.ts";
 import { SSEParser } from "./sse.ts";
 import type { SSEEvent } from "./sse.ts";
 import { EventLog } from "./event-log.ts";
@@ -50,7 +50,7 @@ interface CustomMessage {
   attribution?: string;
 }
 interface ExtensionAPI {
-  on(event: "session_start" | "session_switch" | "session_shutdown" | "agent_end", handler: (event: unknown, ctx: Context) => void): void;
+  on(event: "session_start" | "session_switch" | "session_shutdown" | "agent_start" | "agent_end", handler: (event: unknown, ctx: Context) => void): void;
   registerTool(tool: SessionIdTool): void;
   registerCommand(name: string, options: {
     description?: string;
@@ -162,9 +162,13 @@ async function watchNotices(base: string, repo: string, ctx: Context, signal: Ab
           observeRunReceipt(run, primary || ctx.cwd);
           const ciDiagnostic = await readCiDiagnostic(primary, run.dagRunId,
             run.nodes?.some(node => node.statusLabel === "waiting" && (node.step.id ?? node.step.name) === "implement") ?? false, signal);
+          const escalationDiagnostic = run.nodes?.some(node => node.statusLabel === "waiting"
+            && ["escalation", "rebase_escalation"].includes(node.step.id ?? node.step.name))
+            ? await readEscalationDiagnostic(primary, run.dagRunId, signal) : undefined;
           for (const snapshot of [...await ledger.read(base, run, signal), run]) {
             if (snapshot !== run) observeRunReceipt(snapshot, primary || ctx.cwd, "persisted-transition");
-            const effects = transitions.observe(snapshot, { baseline, ...(ciDiagnostic ? { ciDiagnostic } : {}) });
+            const effects = transitions.observe(snapshot, { baseline, ...(ciDiagnostic ? { ciDiagnostic } : {}),
+              ...(escalationDiagnostic ? { escalationDiagnostic } : {}) });
             for (const message of effects.wakeMessages ?? (effects.wakeMessage ? [effects.wakeMessage] : [])) wake(message);
             if (effects.warningMessage) ctx.ui.notify(effects.warningMessage, "warning");
             if (snapshot.statusLabel === "succeeded") {
@@ -392,10 +396,11 @@ export default function daguStatus(pi: ExtensionAPI): void {
     const ctx = activeContext;
     if (!ctx || ctx.agent.kind !== "main") return;
     const queue = queues.get(ctx.sessionManager.getSessionId());
-    if (!queue || queue.claimed) return;
+    if (!queue) return;
     while (queue.messages.length) {
       const idle = ctx.isIdle();
-      // Reserve the autonomous turn before sendMessage can start it.
+      if (idle && queue.claimed) break;
+      // Reserve only an idle wake; an active turn accepts asides while claimed.
       if (idle) queue.claimed = true;
       const message = queue.messages.shift()!;
       pi.sendMessage({
@@ -447,6 +452,8 @@ export default function daguStatus(pi: ExtensionAPI): void {
   pi.on("session_start", start);
   pi.on("session_switch", start);
   pi.on("session_shutdown", stop);
+  // Idle sendMessage admission is asynchronous; drain the batch once its turn starts.
+  pi.on("agent_start", pump);
   pi.on("agent_end", (_event, ctx) => {
     const queue = queues.get(ctx.sessionManager.getSessionId());
     if (queue) queue.claimed = false;
