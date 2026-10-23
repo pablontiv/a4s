@@ -67,7 +67,7 @@ function resolveRepository(argument: string): string | undefined {
 function main(): void {
   const [command, ...args] = process.argv.slice(2);
   if (command === "escalation") {
-    const result = spawnSync("python3", [fileURLToPath(new URL("../skills/dagu-feature/escalation.py", import.meta.url)), ...args], { stdio: "inherit" });
+    const result = spawnSync("python3", [fileURLToPath(new URL("../skills/issue-execution/escalation.py", import.meta.url)), ...args], { stdio: "inherit" });
     process.exitCode = result.status ?? 1;
     return;
   }

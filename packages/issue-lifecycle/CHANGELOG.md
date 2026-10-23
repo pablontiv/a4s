@@ -3,8 +3,12 @@
 ## 0.4.2
 
 - Sync main through `58182c90eb0add228c0cf76a01cb6a06ca98839e` into the renamed v1 lifecycle package, retaining v1-owned renders and the quality-free workflow (#432).
-- Port persistent owner escalation budgets, PoC target/access assessment and blocked-CI decisions from main (#558).
-- Port concise privacy-safe PR descriptions, shared publication validation and the PR-body CI check to the v1 package paths (#571).
+- Persist run-wide lifecycle escalation budgets across native retries, resumes and push-backs, with owner-targeted decision evidence, renewed windows, route changes and retained stop/onExit evidence (#558).
+- Fingerprint consecutive CI BLOCKED observations and send one owner decision request per fingerprint while reconciliation retains transition ownership.
+- Require a bound PoC target/access assessment before admission and an owner decision for unreachable targets or repeated access/scope INCONCLUSIVE results; render configurable escalation thresholds through bootstrap.
+- Exercise disposable live-Dagu recovery and publication fixtures against the escalation-aware graph, render PoC budgets as valid YAML strings, and serialize concurrent role-store initialization through SQLite's busy timeout.
+- Render concise feature PR descriptions from the implement summary, passing gate and optional operator validation; refresh existing PR bodies on every candidate (#571).
+- Share host-path rejection across feature PRs, PoC comments and the PR-body CI check. Require the repository PR template for Dagu and manual publication.
 
 ## 0.4.1
 

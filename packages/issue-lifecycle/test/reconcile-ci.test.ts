@@ -314,7 +314,7 @@ for (const [name, base] of definitions) {
 }
 
 test("template: consecutive BLOCKED ticks request one owner decision per fingerprint", async () => {
-  const reconcile = readFileSync(new URL("../skills/dagu-feature/reconcile.yaml", import.meta.url), "utf8");
+  const reconcile = readFileSync(new URL("../skills/issue-execution/reconcile.yaml", import.meta.url), "utf8");
   const f = fixture("no-progress558");
   try {
     git(f.worktree, "push", "-u", "origin", f.branch);
@@ -370,7 +370,7 @@ test("template: consecutive BLOCKED ticks request one owner decision per fingerp
 });
 
 test("template: no-progress threshold is repository policy and non-BLOCKED ticks reset the streak", () => {
-  const reconcile = readFileSync(new URL("../skills/dagu-feature/reconcile.yaml", import.meta.url), "utf8");
+  const reconcile = readFileSync(new URL("../skills/issue-execution/reconcile.yaml", import.meta.url), "utf8");
   const f = fixture("policy558");
   try {
     git(f.worktree, "push", "-u", "origin", f.branch);

@@ -165,7 +165,7 @@ export function admit(options: AdmissionOptions, persist = true): { path: string
       agents: tree(join(packageRoot, "agents")),
       cli: identity(join(packageRoot, "bin", "dagu-feature-bundle.ts"), BUNDLE_VERSION, `${origin}@${commit}`),
       lifecycleHelpers: [
-        identity(join(packageRoot, "skills", "dagu-feature", "escalation.py"), BUNDLE_VERSION, `${origin}@${commit}`),
+        identity(join(packageRoot, "skills", "issue-execution", "escalation.py"), BUNDLE_VERSION, `${origin}@${commit}`),
         identity(join(packageRoot, "bin", "dagu-poc-scope.ts"), BUNDLE_VERSION, `${origin}@${commit}`),
       ],
       relationships: { packageToExtension: "same-loaded-package", templateToPackage: "same-checkout", installedToSource: "verified-source-render", compatibility: "same-major; major-zero-same-minor" },
