@@ -120,14 +120,14 @@ export function admit(options: AdmissionOptions, persist = true): { path: string
     if (name === "feature.yaml" || name === "poc.yaml") {
       const snapshot = readFileSync(dagPath, "utf8");
       const policy: Record<string, unknown> = {};
-      for (const field of ["PRIMARY", "GATE", "REBASE_RESOLVER", "REQUIRED_CHECK", "A4S_BLOCKER_REPORTING"]) {
+      for (const field of ["PRIMARY", "GATE", "REBASE_RESOLVER", "REQUIRED_CHECK", "A4S_BLOCKER_REPORTING", "CODEQL_SECURITY_THRESHOLD", "CODEQL_ALERTS_THRESHOLD"]) {
         const literal = new RegExp(`^  - ${field}: (.+)$`, "m").exec(snapshot)?.[1];
         if (literal) policy[field] = JSON.parse(literal);
       }
       const issue = options.params.find(param => param.startsWith("ISSUE="))?.slice(6);
       policy.BRANCH = name === "feature.yaml" ? `dagu/issue-${issue}` : `poc/${options.run}`;
       const rejected = options.params.map(param => param.slice(0, param.indexOf("=")))
-        .filter(field => field.startsWith("ESCALATION_") || ["PRIMARY", "BRANCH", "GATE", "REBASE_RESOLVER", "REQUIRED_CHECK", "A4S_BLOCKER_REPORTING"].includes(field));
+        .filter(field => field.startsWith("ESCALATION_") || ["PRIMARY", "BRANCH", "GATE", "REBASE_RESOLVER", "REQUIRED_CHECK", "A4S_BLOCKER_REPORTING", "CODEQL_SECURITY_THRESHOLD", "CODEQL_ALERTS_THRESHOLD"].includes(field));
       if (rejected.length) throw new Error(`admission rejected run parameter: ${rejected.join(", ")}; adopted policy ${JSON.stringify(policy)}`);
       if (typeof policy.PRIMARY !== "string" || !policy.PRIMARY) throw new Error(`${name} requires an adoption-fixed PRIMARY`);
       primaryParam = policy.PRIMARY;

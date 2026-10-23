@@ -112,6 +112,7 @@ function recordCandidate(repo: Repository): void {
     sha, base: readFileSync(join(repo.state, "base"), "utf8").trim(),
     tree: git(repo.worktree, "rev-parse", "HEAD^{tree}"), message: "base", iteration: -1, implementer: "ImplementTest",
   }) + "\n");
+  writeFileSync(join(repo.state, "codeql-observation.json"), JSON.stringify({ sha, class: "PASS" }));
 }
 
 function commit(repo: Repository, path: string, content: string): void {
@@ -498,7 +499,7 @@ printf '%s\\n' "dagu-feature-bundle $arguments" >> ${JSON.stringify(calls)}
       encoding: "utf8", timeout: 45_000, env,
     });
     assert.equal(result.status, 0, result.stdout + result.stderr);
-    for (const step of ["implement", "push", "pr", "auto_merge", "await_ci", "await_merge", "close_gate"]) {
+    for (const step of ["implement", "push", "pr", "code_scanning", "auto_merge", "await_ci", "await_merge", "close_gate"]) {
       assert.match(result.stdout + result.stderr, new RegExp(`${step}\\s+.*skipped`));
     }
     const status = spawnSync("dagu", ["status", dag, "--run-id", run], { encoding: "utf8", env });
@@ -962,7 +963,7 @@ for (const [name, definition] of definitions) {
     const source = readFileSync(definition, "utf8");
     for (const [step, dependency] of [
       ["recover_gate", "gate"], ["validation", "recover_gate_cancellation"],
-      ["push", "validation_cancellation"], ["pr", "recover_push_cancellation"], ["auto_merge", "pr"],
+      ["push", "validation_cancellation"], ["pr", "recover_push_cancellation"], ["code_scanning", "pr"], ["auto_merge", "code_scanning"],
     ]) assert.match(extractStep(source, step!), new RegExp(`depends: ${dependency}`));
     const publications = source.split("\n  - id:").filter(block => block.includes('push "--force-with-lease=$remote_ref:$expected" --set-upstream origin "$sha:$remote_ref"'));
     assert.equal(publications.length, 1);

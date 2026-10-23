@@ -30,7 +30,8 @@ flowchart LR
     F --> FR[recover_push]
     FR -->|operator repair: push-back| F
     FR -->|healthy: skipped| G[pr]
-    G --> I[auto_merge]
+    G --> CS[code_scanning<br/>SHA-bound CodeQL observation]
+    CS --> I[auto_merge<br/>defer until analysis passes]
     I --> J[await_merge<br/>human.task<br/>queue slot released]
     I --> CI[await_ci<br/>human.task<br/>queue slot released]
     CI -->|CODE_FAIL: push-back| B
@@ -48,6 +49,8 @@ flowchart LR
 - `dagu-feature-bundle` from this package on the Dagu service's `PATH`, so internal feature/PoC/discovery promotions pass the same admission boundary as the coordinator.
 - This package's `dagu-pr-body` executable on the Dagu service's `PATH` for
   feature PR rendering and the shared publication path check.
+- This package's `dagu-codeql` executable on the service's `PATH`, enabled CodeQL
+  analysis and GitHub permission to read code-scanning alerts and check runs.
 - `DAGU_HOME` in your shell must point to the same home as that service. Read it from the service definition (macOS: `EnvironmentVariables.DAGU_HOME` in the LaunchAgent plist). If they differ, enqueue and complete commands land in a store the scheduler never reads, and the run stays `Queued`.
 - `git`, `gh` authenticated with push and PR rights, `curl`, `jq`.
 - Python 3 with standard-library `fcntl` on the Dagu service's `PATH`; bootstrap
@@ -1320,13 +1323,50 @@ run-wide push-back iteration (default `0`), PR head SHA and all published requir
 checks. Check-runs and legacy statuses are queried through the current commit
 endpoint; conclusions alone do not identify a failure's cause.
 
+### CodeQL findings and merge enforcement
+
+After `pr`, `code_scanning` observes the current head's GitHub Advanced Security
+`CodeQL` check and paginated open CodeQL alerts on `refs/pull/<PR>/head`.
+The bootstrap answers `CODEQL_SECURITY_THRESHOLD` (default `high_or_higher`)
+and `CODEQL_ALERTS_THRESHOLD` (default `errors`) are adoption-fixed policy;
+blank answers preserve installed values. Security choices match GitHub rulesets:
+`none|critical|high_or_higher|medium_or_higher|all`; non-security choices are
+`none|errors|errors_and_warnings|all`. Security findings use their security
+severity; other findings use their error/warning/note level.
+
+`codeql-policy.json` binds those answers to the published candidate SHA.
+`codeql-observation.json` retains the check conclusion and threshold findings,
+including alert number, rule, severity, path, line, message and URL.
+Pending analysis opens the existing native waits and releases the repository
+queue. Once CodeQL and required CI pass, the scheduled reconciler enables guarded
+squash auto-merge. A ruleset-blocked PR with threshold findings is `CODE_FAIL`,
+not an owner escalation: `await_ci` pushes back to `implement_budget` with the
+observed iteration and persists findings in `ci-return.json`. Implementation
+assignments require reading that diagnostic; finding messages are untrusted data.
+The corrected head needs fresh analysis and gate evidence on the same PR/run.
+Before a CI or rebase push-back, reconciliation disables any existing auto-merge
+request so a replacement head must earn fresh CodeQL authorization.
+
+A successful check alone is insufficient: alerts are observed independently,
+bound to both PR ref and SHA. Permission failures and unsuccessful CodeQL checks
+without proven threshold findings remain diagnosed `BLOCKED`; unpublished
+analysis is `PENDING`, and stale alerts/checks are reobserved. Final CI
+authorization repeats the CodeQL observation before close.
+
+Repository enforcement is a separately authorized GitHub ruleset with a CodeQL
+`code_scanning` rule and matching thresholds. The real #570 PoC demonstrated
+default setup analyzing a PR into an exact-match non-default test branch and
+rejecting its high-severity finding. Source publication and bootstrap adoption
+are distinct from authorizing production rulesets.
+
+
 | Classification | Evidence and transition |
 |---|---|
-| `PENDING` | Required checks queued, running or not yet published: reobserve next tick. |
-| `PASS` | Every required check succeeded, was neutral or was skipped for this head: continue merge observation. `MERGED` completes one waiting checkpoint per tick. |
-| `CODE_FAIL` | Check output or Actions logs show a candidate test, assertion, build, TypeScript or lint failure: push back `await_ci` to `implement` with the observed `--expected-iteration`. |
+| `PENDING` | Required checks or CodeQL analysis queued, running or not yet published: reobserve next tick. |
+| `PASS` | Required checks succeeded, were neutral or skipped, and CodeQL passed without threshold findings for this head: enable guarded squash auto-merge if needed. `MERGED` completes one waiting checkpoint per tick. |
+| `CODE_FAIL` | Check output or Actions logs prove a candidate failure, or current-head CodeQL alerts meet adopted thresholds: push back `await_ci` to `implement` with findings and the observed `--expected-iteration`. |
 | `TRANSIENT` | Logs identify runner loss, action download, network or HTTP infrastructure failure: rerun the failed Actions jobs deterministically, with at most two requests per head and 60/120-second backoff. The per-head budget survives ticks and changing check order; exhausted or unavailable reruns become diagnosed `BLOCKED`. |
-| `BLOCKED` | Lookup/permission failure, protection/operator action, inactive auto-merge, closed PR or unproven failure cause: preserve the wait and deliver the cause to the owner session. |
+| `BLOCKED` | Lookup/permission failure, protection/operator action, closed PR or unproven failure cause: preserve the wait and deliver the cause to the owner session. |
 | `STALE_SHA` | Checks belong to another SHA, or the head moved during observation: discard that signal and query the current head next tick. |
 
 `OPEN/BEHIND` and `OPEN/DIRTY` retain priority for the `await_merge → rebase`
