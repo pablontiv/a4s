@@ -1,0 +1,20 @@
+{
+  "name": "@a4s/kiro-omp-provider",
+  "version": "0.1.0",
+  "private": true,
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pablontiv/a4s.git",
+    "directory": "packages/kiro-omp-provider"
+  },
+  "type": "module",
+  "engines": { "node": ">=22.19.0" },
+  "description": "Extension omp para Kiro (GenerateAssistantResponse + eventstream binario). Runtime: bun (bun:sqlite, Bun.spawn, bun:test) — migracion a node:test pendiente; sin script test hasta entonces.",
+  "scripts": {
+    "test:bun": "bun test tests/unit",
+    "test:integration:bun": "bun test tests/integration",
+    "poc": "bun run scripts/poc-chat.ts"
+  },
+  "devDependencies": {}
+}
