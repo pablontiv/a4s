@@ -38,7 +38,7 @@ async function until(probe: () => boolean | Promise<boolean>): Promise<void> {
   }
 }
 
-test("drain preserves existing runs; TERM restart stub activates capacity 2 on next enqueue", { ...liveDagu, timeout: 150_000 }, async () => {
+test("drain preserves existing runs; TERM restart stub activates capacity 8 on next enqueue", { ...liveDagu, timeout: 150_000 }, async () => {
   const home = mkdtempSync(join(tmpdir(), "dagu-restart-drain-"));
   const port = await freePort();
   // Preserve a private listener across reconciliation of the station's port defaults.
@@ -67,7 +67,7 @@ test("drain preserves existing runs; TERM restart stub activates capacity 2 on n
       assert.ok(existsSync(closed));
       assert.equal(rows().filter(row => ["running", "queued"].includes(row.status)).length, 0);
       assert.equal(rows().filter(row => row.dagRunId.startsWith(id) && row.status === "succeeded").length, 2);
-      assert.match(readFileSync(join(home, "config.yaml"), "utf8"), /max_concurrency: 2/);
+      assert.match(readFileSync(join(home, "config.yaml"), "utf8"), /max_concurrency: 8/);
       restarts++;
       service!.kill("SIGTERM");
       await exit(service!);
@@ -117,7 +117,7 @@ test("drain preserves existing runs; TERM restart stub activates capacity 2 on n
     assert.equal(await exit(applying), 0, `${output}\n${logs}`);
     assert.equal(restarts, 1);
     assert.ok(existsSync(opened));
-    assert.match(output, /verified next enqueue queue=a4s max_concurrency=2 succeeded=3/);
+    assert.match(output, /verified next enqueue queue=a4s max_concurrency=8 succeeded=9/);
     assert.equal(rows().find(row => row.dagRunId === `${id}-first`)!.startedAt, originalStartedAt);
     assert.equal(rows().find(row => row.dagRunId === `${id}-first`)!.status, "succeeded");
     assert.doesNotMatch(logs, /signal: killed/);
