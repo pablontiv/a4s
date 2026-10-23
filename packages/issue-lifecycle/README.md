@@ -27,8 +27,8 @@ A renamed package needs fresh bootstrap-generated renders, the matching
 reconciler/CLI binding and a new OMP process. Restart OMP after lifecycle
 redeployment; builtin resource rediscovery alone does not load newly introduced
 TypeScript modules. Source publication is distinct from installation/adoption.
-The runbook covers the baseline's retained stable-controller stamps and the
-isolated procedure required before integration/v1 is on origin's default branch.
+The runbook records main's adopted stable-controller identity, candidate isolation
+and the completed temporary-v1-lane retirement.
 
 ## Workflow and command entry points
 

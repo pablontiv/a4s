@@ -12,13 +12,12 @@ and acceptance outcomes.
 | Lane | Independent PRIMARY clone | Base branch | Declared queue |
 | --- | --- | --- | --- |
 | Main | `a4s` | `main` | `a4s` |
-| Temporary v1 | `a4s-v1` | `integration/v1` | `a4s-v1` |
 
 PRIMARY is a canonical independent clone: its Git dir equals its common Git dir.
 Issue worktrees are linked below that clone's `.workspace/worktrees/issue-N`.
-Start the coordinator in a clean PRIMARY on its declared base. Each lane owns
-selected, distinct issues; both clones share GitHub origin and issue-numbered
-remote branches/checkpoints. Keep one coordinating owner per canonical repo and
+Start the coordinator in a clean PRIMARY on its declared base. Main is the only
+active lane and owns its admitted issues and issue-numbered remote
+branches/checkpoints. Keep one coordinating owner per canonical repo and
 preserve the run's original owner. Cross-repository contact carries only its
 explicit request and return channel.
 
@@ -28,17 +27,15 @@ session ownership; any explicit transfer follows the execution skill. Queue
 capacity, semantic-job capacity and OMP's subagent semaphore are independent.
 The PRIMARY gate lock serializes the conflicting gate, not unrelated jobs.
 
-Retained main changes move **main forward into integration/v1** during v1 work.
-After final refresh and candidate proof, the authorized release integrates
-**integration/v1 into main**. These operations belong to the coordinating owner;
-this runbook does not authorize moving either branch or touching an active
-PRIMARY. The final refresh also reconciles newly delivered #311 sources.
+The temporary v1 integration lane completed its release into main and was retired
+under #438. Its final integration, run outcomes and preserved recovery evidence
+are recorded below.
 
 ### Stable controller versus candidate
 
-Both lanes use `@a4s/issue-lifecycle@0.4.3` for their adopted renders and
+The main lane uses `@a4s/issue-lifecycle@0.4.3` for its adopted renders and
 controller, and the shared scheduled reconciler uses the 0.4.3 installation.
-The main lane adopted this identity through `bootstrap-a4s-v0-4-3`.
+Main adopted this identity through `bootstrap-a4s-v0-4-3`.
 
 Runs admitted under pre-0.4 `@a4s/omp-dagu` receipts continue through executors
 pinned to each receipt's exact source commit. The station role-job launcher
@@ -252,11 +249,29 @@ reopening. Restoring a directory or a displayed version alone is not recovery.
 
 ## Post-release proof and temporary-lane retirement
 
-After final integration-to-main and authorized local v1 adoption, a separate
-post-release proof records actual deployed source, receipts, native tools,
-CI/merge behavior and operator acceptance. Candidate walkthroughs cannot supply
-this evidence. Retire a4s-v1 only after its owner confirms all active/queued/waiting
-runs, retained worktrees/candidates/checkpoints and session handoffs are resolved
-or explicitly preserved, final main integration is proved, and the shared
-reconciler/links no longer need that temporary lane. Queue/service/link/clone
-retirement is separately authorized operator work; no action here retires it.
+The release ([#435](https://github.com/pablontiv/a4s/issues/435)), local adoption
+([#436](https://github.com/pablontiv/a4s/issues/436)) and main-owned post-release
+proof ([#437](https://github.com/pablontiv/a4s/issues/437), run
+`a4s-issue-605-r1`, PR #611) completed before the separately authorized retirement
+in [#438](https://github.com/pablontiv/a4s/issues/438).
+
+The temporary `a4s-v1` lane is retired: its `integration/v1` protection and remote
+branch, clean linked worktree and independent PRIMARY clone were removed.
+Its final branch tree matched the v1.0.0 merge `cacf718` on main. All inventoried
+v1-owned runs were terminal; their immutable receipts, isolated-controller
+history, six local branches (including the operator-owned #506 branch) and
+original protection/configuration were preserved under
+`<DAGU_HOME>/backups/a4s-438/`. The final inventory and command evidence are in #438.
+
+The review requested a repo-owned retirement operation. #383 and #415 remain
+open, and the station installer only adds or updates queue entries, so the
+operator explicitly authorized direct retirement of these exact targets.
+Only the `a4s-v1` queue entry was removed from station `config.yaml`; every other
+byte was retained. Active-lane derived configuration was unchanged. The shared
+scheduler remained running, and the unused queue removal takes effect at the
+next drained restart. The station base and template contain no v1 queue entry.
+
+Read-only health and DAG-run API queries, `dagu status feature --run-id
+a4s-issue-605-r1`, reconciler history and the clean main PRIMARY were exercised
+after retirement. Main's queue/service, shared reconciler, links, historical run
+store and unrelated resources retain their existing ownership.

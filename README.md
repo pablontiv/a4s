@@ -14,9 +14,9 @@ workspaces, not public npm publication.
   candidate/receipt identity, semantic jobs, observation and advisory boundaries.
 - [Private installation and development](docs/operations/private-install.md):
   whole-package OMP loading/linking, independent skill/role installation and prerequisites.
-- [Lane deployment and recovery](docs/operations/deployment.md): independent
-  PRIMARY clones, stable controller/candidate segregation, adoption, rollback,
-  active-run ownership and temporary-lane retirement.
+- [Lane deployment and recovery](docs/operations/deployment.md): the main PRIMARY,
+  stable controller/candidate segregation, adoption, rollback, active-run ownership
+  and the completed temporary-v1-lane retirement.
 - [Dated v1 walkthrough](docs/operations/v1-walkthrough.md): exercised commands,
   native source selection and isolated bootstrap/admission evidence, not deployment.
 - [Agent operating contract](AGENTS.md).
@@ -53,10 +53,10 @@ A coordinating session is a sprint. `refine` investigates needs;
 assigned feature/PoC work. Goal checks and Definition of Done are ceremony
 content, not extra lifecycle checkpoints. Reports alone do not authorize action.
 
-Main uses the independent `a4s` clone, branch `main`, queue `a4s`; v1 uses
-`a4s-v1`, branch `integration/v1`, queue `a4s-v1`. They share GitHub origin and an
-approved installed controller/reconciler, not candidate runtime identity. The
-[operating runbook](docs/operations/deployment.md) owns commands and evidence
+Main is the only active lane: independent `a4s` clone, branch `main`, queue `a4s`,
+with the approved installed controller/reconciler. The temporary v1 lane was
+retired after release, adoption and post-release proof (#435–#438). The
+[operating runbook](docs/operations/deployment.md) records retirement and evidence
 boundaries. Native links, scheduler configuration, GitHub settings and release
 adoption remain separately authorized operator work.
 
@@ -77,6 +77,6 @@ Root and CI run all eight workspace test suites and seven declared typechecks;
 the optional-host tool-row workspace is test-only because its renderer types
 belong to the consumer's Pion host. See
 [development prerequisites](docs/operations/private-install.md#prerequisites-and-development)
-for explicit live-Dagu testing. CI's SHA-bound
-`validate` aggregate targets `main` and `integration/v1`; deployment owns actual
-branch protection. Historical removed-host source is preserved in `legacy`.
+for explicit live-Dagu testing. CI's SHA-bound `validate` aggregate validates
+pull requests to `main`; deployment owns actual branch protection.
+Historical removed-host source is preserved in `legacy`.
