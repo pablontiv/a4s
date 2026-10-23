@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
 import extension from "../src/status/index.ts";
+import { statusRepository } from "./fixtures/status-repository.ts";
 
 for (const failure of ["discover timeout", "details timeout", "headers timeout", "ECONNREFUSED", "ECONNRESET", "HTTP 503"]) {
   test(`widget retains known runs on ${failure} and recovers`, { timeout: 12_000 }, async () => {
@@ -12,7 +13,7 @@ for (const failure of ["discover timeout", "details timeout", "headers timeout",
     const run = { name: "feature", dagRunId: "known-run", statusLabel: "queued", labels: ["workspace=a4s"] };
     const handlers: Record<string, (event: unknown, context: typeof ctx) => void> = {};
     const ctx = {
-      cwd: process.cwd(), hasUI: true, isIdle: () => true, agent: { kind: "sub" as const },
+      cwd: statusRepository, hasUI: true, isIdle: () => true, agent: { kind: "sub" as const },
       abort() {},
       sessionManager: { getSessionId: () => "owner" },
       ui: {

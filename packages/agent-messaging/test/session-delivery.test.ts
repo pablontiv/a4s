@@ -375,7 +375,7 @@ test('OMP session adapter publishes task events with frozen assistant completion
   await subscribe(publisher, senderTopic)
   const harness = createHarness({
     'a4s.agent-messaging.broker-url': url,
-  }, [], 'omp-result', undefined, process.cwd(), { env: { A4S_STATE_ROOT: stateRoot } })
+  }, [], 'omp-result', undefined, undefined, { env: { A4S_STATE_ROOT: stateRoot } })
   t.after(async () => {
     await harness.shutdown()
     await end(publisher)
@@ -1174,7 +1174,7 @@ test('OMP session adapter contains logger failure after publish, delivery and se
   let loggerFails = false
   const harness = createHarness({
     'a4s.agent-messaging.broker-url': url,
-  }, [], 'best-effort-session', 100, process.cwd(), {
+  }, [], 'best-effort-session', 100, undefined, {
     env: { A4S_STATE_ROOT: stateRoot },
     now: () => {
       if (loggerFails) throw new Error('simulated clock failure')

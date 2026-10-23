@@ -68,6 +68,10 @@ npm test
 npm run typecheck
 ```
 
+Status watcher unit tests own a temporary Git repository with an origin matching
+their fake Dagu workspace. They run with the checkout's existing origin and path,
+including local clones whose origin names differ from the fixture workspace.
+
 Node.js >=22.19.0 and access to all pinned dependencies, including the private
 Pion development release, are required for the full gate. See
 [development prerequisites](docs/operations/private-install.md#prerequisites-and-development)

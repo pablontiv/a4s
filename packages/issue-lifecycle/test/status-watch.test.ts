@@ -8,6 +8,7 @@ import { BUNDLE_VERSION } from "../src/bundle.ts";
 import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
 import extension from "../src/status/index.ts";
+import { statusRepository } from "./fixtures/status-repository.ts";
 
 for (const drift of [undefined, "main", "bundle", "invalid JSON", "unreadable manifest"] as const) for (const idle of [true, false]) test(`watcher delivers five owner notices and keeps the turn running with receiver idle=${idle}, drift=${drift}`, { timeout: 15_000 }, async () => {
   const primary = mkdtempSync(join(tmpdir(), "omp-dagu-notice-"));
@@ -59,7 +60,7 @@ for (const drift of [undefined, "main", "bundle", "invalid JSON", "unreadable ma
   let autonomous = 0;
   const received: string[] = [];
   const ctx = {
-    cwd: process.cwd(), hasUI: false, isIdle: () => !busy, agent: { kind: "main" as const },
+    cwd: statusRepository, hasUI: false, isIdle: () => !busy, agent: { kind: "main" as const },
     abort() { aborts++; },
     sessionManager: { getSessionId: () => "owner" }, ui: {
       theme: { fg: (_color: string, text: string) => text, bold: (text: string) => text, tree: { branch: "├─", last: "└─" } },
@@ -155,7 +156,7 @@ for (const switchSession of [false, true]) test(`idle wake delivers later ticket
   const delivered: string[] = [];
   const handlers: Record<string, (event: unknown, context: typeof ctx) => void> = {};
   const ctx = {
-    cwd: process.cwd(), hasUI: false, isIdle: () => !busy, agent: { kind: "main" as const },
+    cwd: statusRepository, hasUI: false, isIdle: () => !busy, agent: { kind: "main" as const },
     sessionManager: { getSessionId: () => "owner" },
     ui: { theme: { fg: (_color: string, text: string) => text, bold: (text: string) => text, tree: { branch: "", last: "" } }, setWidget() {}, notify() {} },
   };
@@ -285,7 +286,7 @@ for (const scenario of [
   const received: { message: string; round: number }[] = [];
   let widget: string[] | undefined;
   const ctx = {
-    cwd: process.cwd(), hasUI: true, isIdle: () => false, agent: { kind: "main" as const },
+    cwd: statusRepository, hasUI: true, isIdle: () => false, agent: { kind: "main" as const },
     abort() {},
     sessionManager: { getSessionId: () => "owner" }, ui: {
       theme: { fg: (_color: string, text: string) => text, bold: (text: string) => text, tree: { branch: "├─", last: "└─" } },

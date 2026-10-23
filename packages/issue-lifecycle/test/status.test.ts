@@ -4,6 +4,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
 import extension from "../src/status/index.ts";
 import { BUNDLE_VERSION } from "../src/bundle.ts";
+import { statusRepository } from "./fixtures/status-repository.ts";
 
 interface Tool {
   name: string;
@@ -54,7 +55,7 @@ test("validation wait is displayed to the operator with current approval command
   const sha = "b".repeat(40);
   const run = {
     name: "feature", dagRunId: "validation-visible", statusLabel: "waiting",
-    labels: ["workspace=a4s", `dagu-feature-bundle=${BUNDLE_VERSION}`], params: `ISSUE=276 OMP_SESSION_ID=owner PRIMARY=${process.cwd()}`,
+    labels: ["workspace=a4s", `dagu-feature-bundle=${BUNDLE_VERSION}`], params: `ISSUE=276 OMP_SESSION_ID=owner PRIMARY=${statusRepository}`,
     nodes: [{ step: { id: "validation", name: "validation", humanTask: {
       prompt: `Repository: /repo\nTested SHA: ${sha}\nRepository procedure:\nIsolated smoke`,
     } }, statusLabel: "waiting", approvalIteration: 2 }],
@@ -82,7 +83,7 @@ test("validation wait is displayed to the operator with current approval command
   const messages: Array<{ display?: boolean; content?: string }> = [];
   const handlers: Record<string, (event: unknown, context: typeof ctx) => void> = {};
   const ctx = {
-    cwd: process.cwd(), hasUI: false, isIdle: () => false, agent: { kind: "main" as const },
+    cwd: statusRepository, hasUI: false, isIdle: () => false, agent: { kind: "main" as const },
     abort() { assert.fail("current validation notice must keep the owner session active"); },
     sessionManager: { getSessionId: () => "owner" },
     ui: { theme: { fg: (_color: string, text: string) => text, bold: (text: string) => text, tree: { branch: "", last: "" } }, setWidget() {}, notify() {} },
