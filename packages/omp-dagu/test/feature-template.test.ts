@@ -640,16 +640,13 @@ for (const [name, definition] of adoptedDefinitions) {
       assert.ok(result.stderr.includes(`rebase: index.lock held in ${repo.worktree}`));
       assert.equal(readFileSync(join(repo.state, "conflict-action"), "utf8"), "preserved\n");
       const source = readFileSync(definition, "utf8");
-      const dependency = name === "adopted DAG" ? "dependency_review_cancellation" : "rebase_escalation_decision";
-      assert.match(extractStep(source, "rebase"), new RegExp(`^    depends: ${dependency}$`, "m"));
+      assert.match(extractStep(source, "rebase"), /^    depends: rebase_escalation_decision$/m);
       assert.match(extractStep(source, "rebase"), /    retry_policy:\n      limit: 3\n      interval_sec: 5\n      exit_code: \[75\]/);
       assert.match(extractStep(source, "dependency_review_cancellation"), /^    depends: dependency_review$/m);
-      if (name !== "adopted DAG") {
-        const path = ["dependency_review_cancellation", "rebase_budget", "rebase_escalation",
-          "rebase_escalation_cancellation", "rebase_escalation_decision"];
-        for (let index = 1; index < path.length; index++) {
-          assert.match(extractStep(source, path[index]!), new RegExp(`^    depends: ${path[index - 1]}$`, "m"));
-        }
+      const path = ["dependency_review_cancellation", "rebase_budget", "rebase_escalation",
+        "rebase_escalation_cancellation", "rebase_escalation_decision"];
+      for (let index = 1; index < path.length; index++) {
+        assert.match(extractStep(source, path[index]!), new RegExp(`^    depends: ${path[index - 1]}$`, "m"));
       }
     } finally {
       rmSync(repo.root, { recursive: true, force: true });
