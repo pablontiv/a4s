@@ -2,7 +2,7 @@
 
 ## Alcance
 
-A4S es un monorepo npm privado con extensiones en `packages/`, agentes en `agents/` y skills en `skills/`. `README.md` describe sus componentes y `.workspace/dagu/dags/feature.yaml` define el ciclo de issues. Los cambios deben mantener los contratos de los hosts y las pruebas de los workspaces afectados.
+A4S es un monorepo npm privado con extensiones en `packages/`, agentes en `.omp/agents/` y skills en `skills/`. `README.md` describe sus componentes y `.workspace/dagu/dags/feature.yaml` define el ciclo de issues. Los cambios deben mantener los contratos de los hosts y las pruebas de los workspaces afectados.
 
 ## Prerrequisitos externos
 
