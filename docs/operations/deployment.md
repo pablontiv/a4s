@@ -36,17 +36,16 @@ PRIMARY. The final refresh also reconciles newly delivered #311 sources.
 
 ### Stable controller versus candidate
 
-The initial temporary lane operates through the approved installed stable
-controller/CLI and shared scheduled reconciler. Candidate source in
-`packages/issue-lifecycle` is evaluated separately. The baseline committed v1
-feature render still records `@a4s/omp-dagu@0.3.118`, source `003bd8a…`, and
-`bootstrap-a4s-v0-3-118`, with migrated package/skill paths and queue `a4s-v1`.
-That retained provenance is not a fresh renamed-bundle adoption.
+Both lanes use `@a4s/issue-lifecycle@0.4.3` for their adopted renders and
+controller, and the shared scheduled reconciler uses the 0.4.3 installation.
+The main lane adopted this identity through `bootstrap-a4s-v0-4-3`.
 
-The baseline candidate's `@a4s/issue-lifecycle@0.4.1` parser requires its own exact
-name. Therefore its CLI is not interchangeable with the stable controller on
-those old renders. Run inspection with the controller that owns the target;
-report incompatibility as deployment state rather than changing a stamp.
+Runs admitted under pre-0.4 `@a4s/omp-dagu` receipts continue through executors
+pinned to each receipt's exact source commit. The station role-job launcher
+selects the receipt-pinned executor and fails when that executor is missing.
+
+Inspect each run with its identity-matched controller; report incompatibility
+as deployment state rather than changing a stamp.
 Scheduled reconciliation is a shared resource: replacing it affects other lanes
 and active runs. A shared scheduler's actual home/config may differ from an
 unset shell's defaults. Capture its service environment before drawing conclusions.
