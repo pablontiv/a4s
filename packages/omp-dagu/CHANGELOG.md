@@ -4,7 +4,7 @@
 
 - Carry the v1 lane's paginated, completeness-validated merged-PR file metadata into the current lifecycle template, preserving bootstrap selection for large diffs (#493).
 - Preserve terminal-snapshot observation before bundle-rebase fixture log consumption (#522) and the private `@a4s/hot-reload` package migration (#421).
-- Merge main into `integration/v1` and adopt the stamped 0.3.117 lifecycle renders with the independent v1 workspace, queue, base branch and primary clone.
+- Merge main into `integration/v1` and adopt the stamped 0.3.117 lifecycle renders with the independent v1 workspace, queue, base branch and primary clone; retain their cancellation gates in the isolated primary-availability fixture.
 
 ## 0.3.117
 
