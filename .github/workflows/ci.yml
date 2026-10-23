@@ -63,25 +63,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      # The @pablontiv/pion dev tarball (github.com/pablontiv/pi releases) is no
-      # longer downloadable. Install without it, then restore the manifests that
-      # the identity tests read.
-      - &install-dependencies
-        name: Install without @pablontiv/pion
-        run: |
-          pion='@pablontiv/pion'
-          for manifest in packages/pi-tool-row-presentation/package.json; do
-            jq --arg p "$pion" 'del(.devDependencies[$p])' "$manifest" > "$manifest.ci"
-            mv "$manifest.ci" "$manifest"
-          done
-          jq --arg p "$pion" '
-            del(.packages["node_modules/" + $p])
-            | .packages |= with_entries(
-                if .value.devDependencies then .value.devDependencies |= del(.[$p]) else . end)' \
-            package-lock.json > package-lock.ci.json
-          mv package-lock.ci.json package-lock.json
-          npm ci
-          git checkout -- package-lock.json packages
+      - run: npm ci
       - name: Install pinned Dagu
         if: matrix.workspace.name == '@a4s/issue-lifecycle'
         run: &install-pinned-dagu |
@@ -130,7 +112,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - *install-dependencies
+      - run: npm ci
       - name: Install pinned Dagu
         run: *install-pinned-dagu
       - name: Check pinned Dagu

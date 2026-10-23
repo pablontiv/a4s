@@ -57,10 +57,14 @@ The extension checks legacy settings only when the new global file does not exis
 
 ```sh
 npm test --workspace @a4s/pi-tool-row-presentation
-npm run typecheck --workspace @a4s/pi-tool-row-presentation
 git diff --check
 ```
 
 The package declares Pi and Pion as optional peer hosts. A consumer does not need to install both hosts.
 
-The development dependency uses the immutable Pion snapshot for the final `renderRow()` contract.
+Development installs use the public Pi packages from the npm registry. Tests run
+with `tsx`, which erases the type-only Pion imports in the extension and fixtures.
+The final `renderRow()` types belong to the optional consumer-provided Pion host,
+so this workspace declares a test gate only. Root and CI typecheck the seven
+workspaces with declared typecheck scripts. The retained `tsconfig.json` supports
+host-side development when that host is available.

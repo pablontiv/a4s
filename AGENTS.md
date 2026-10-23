@@ -29,11 +29,12 @@ Run the full gate from the assigned worktree root after setup completes:
 npm ci && npm test && npm run typecheck
 ```
 
-Node.js >=22.19.0 and access to locked dependencies are required. The pinned
-private Pion release is a full-gate prerequisite; CI documents its different
-installation/typecheck scope in `.github/workflows/ci.yml`. Orca managed-worktree
-setup should run by default (`--setup run` when explicitly required). Its setup
-terminal can remain active after worktree creation returns; wait for it.
+Node.js >=22.19.0 and access to locked registry dependencies are required. Root
+and CI gates run all workspace tests and the seven declared workspace typechecks.
+The optional-host tool-row workspace is test-only; its renderer types come from
+the consumer's Pion host. Orca managed-worktree setup should run by default
+(`--setup run` when explicitly required). Its setup terminal can remain active
+after worktree creation returns; wait for it.
 Real integration acceptance requires the corresponding native hosts, broker,
 pinned Dagu and authorized model credentials; unit tests are a separate claim.
 

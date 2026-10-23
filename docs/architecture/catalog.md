@@ -19,7 +19,7 @@ See [private installation](../operations/private-install.md),
 | [`@a4s/context-management`](../../packages/context-management/README.md) | `packages/context-management`; host-neutral core library, detailed below | `tsx --test test/*.test.ts` and `tsc --noEmit -p tsconfig.json` |
 | [`@a4s/agent-messaging`](../../packages/agent-messaging/README.md) | `packages/agent-messaging`; protocol, MQTT transport, reloadable OMP adapter, shared delivery/recovery/arbitration, observer and diagnostics | Workspace tests/typecheck; explicit `verify:omp` requires authorized model authentication |
 | [`@a4s/message-bus`](../../apps/message-bus/README.md) | `apps/message-bus`; independently started loopback MQTT broker with durable LevelDB; `message-bus` bin | `node --test --test-concurrency=1 test/*.test.cjs`; syntax typecheck |
-| [`@a4s/pi-tool-row-presentation`](../../packages/pi-tool-row-presentation/README.md) | `packages/pi-tool-row-presentation`; retained Pi/Pion-specific tool-row presentation, with host-version limitations | Workspace tests; typecheck requires private pinned Pion dependency |
+| [`@a4s/pi-tool-row-presentation`](../../packages/pi-tool-row-presentation/README.md) | `packages/pi-tool-row-presentation`; retained Pi/Pion-specific tool-row presentation, with host-version limitations | Transpiled workspace behavioral tests; renderer types supplied by the optional consumer host |
 
 The MQTT adapter connects to a separately owned broker. It does not start the
 broker. The technical `synagent/v2/<to>` topic and persisted `synagent-*` entries

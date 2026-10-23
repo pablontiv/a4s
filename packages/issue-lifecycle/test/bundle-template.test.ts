@@ -126,7 +126,8 @@ const mainWorkspaces: CiWorkspace[] = [
   { dir: "packages/issue-lifecycle", name: "@a4s/issue-lifecycle" },
   { dir: "packages/hot-reload", name: "@a4s/hot-reload" },
   { dir: "packages/orca-integration", name: "@a4s/orca-integration" },
-  { dir: "packages/pi-tool-row-presentation", name: "@a4s/pi-tool-row-presentation" },
+  { dir: "packages/pi-tool-row-presentation", name: "@a4s/pi-tool-row-presentation",
+    scripts: { test: "tsx --test test/*.test.ts" } },
   { dir: "packages/agent-messaging", name: "@a4s/agent-messaging" },
   { dir: "apps/message-bus", name: "@a4s/message-bus" },
 ];
