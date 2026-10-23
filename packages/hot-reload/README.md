@@ -66,19 +66,13 @@ Separately, the active exercise's builtin catalog lacked the temporary
 `a4s-421-native-discovery` skill before reload and contained it afterwards.
 That is builtin resource rediscovery, not evidence of a module import.
 
-The actual native `Native421QA` task lifecycle emitted `agent=qa`,
-`agentSource=user`, and its exact `parentToolCallId`. **[INFERENCE]** The
-selected canonical definition was the lifecycle package's then-present `agents/qa.md`: the exact
-tool-call identity correlates with the unique public resolver result under
-identical explicit roots and cwd. This is not a directly emitted selected
-`AgentDefinition` or `filePath`.
 
 Direct internal source-object emission and a single combined
 changed-implementation/direct-entry/busy-turn invocation remain **UNOBSERVED**
 stronger variants, not additional acceptance requirements. Detailed commands,
 hashes and transcripts remain in private retained evidence. These bounded,
-compositionally observed scenarios do not constitute an overall quality,
-issue #418, or global integration PASS.
+compositionally observed scenarios do not constitute an overall
+issue #418 or global integration PASS.
 
 ## Development
 
@@ -89,3 +83,8 @@ npm run typecheck --workspace @a4s/hot-reload
 
 The root workspace scripts and CI dependency fan-out include this canonical
 package and all retained consumers. Distribution remains private/local.
+
+See the [source catalog](../../docs/architecture/catalog.md) and
+[private-install runbook](../../docs/operations/private-install.md) for ownership
+and the distinction between entry reinvocation, builtin resource rediscovery and
+loading newly introduced lifecycle modules in a new process.

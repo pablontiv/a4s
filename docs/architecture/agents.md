@@ -1,21 +1,21 @@
 # Native OMP agents
 
-A4S owns one canonical definition per retained generic role, directly in the native project discovery root [`.omp/agents/`](../.omp/agents/). Start OMP from this checkout and invoke the unprefixed name through `task`.
+A4S owns one canonical definition per retained generic role, directly in the native project discovery root [`.omp/agents/`](../../.omp/agents/). This reusable role catalog explains those sources; it is not a runtime provider. Start OMP from this checkout and invoke the unprefixed name through `task`.
 
 | Role | Specialization | Tool authority |
 |---|---|---|
-| [`explorer`](../.omp/agents/explorer.md) | Sourced facts, evidence, uncertainty | Read-only inspection |
-| [`judge`](../.omp/agents/judge.md) | Premises, conflicting evidence, proposed scope | Read-only assessment |
-| [`implementer`](../.omp/agents/implementer.md) | Authorized scoped changes and assigned validation | Read, edit, write, commands |
-| [`reviewer`](../.omp/agents/reviewer.md) | Candidate evaluation against explicit criteria | Read-only inspection/checks |
-| [`debugger`](../.omp/agents/debugger.md) | Reproduction and causal diagnosis; authorized fixes | Read, edit, write, commands |
-| [`generalist`](../.omp/agents/generalist.md) | Bounded work without a better specialization | Read, edit, write, commands |
+| [`explorer`](../../.omp/agents/explorer.md) | Sourced facts, evidence, uncertainty | Read-only inspection |
+| [`judge`](../../.omp/agents/judge.md) | Premises, conflicting evidence, proposed scope | Read-only assessment |
+| [`implementer`](../../.omp/agents/implementer.md) | Authorized scoped changes and assigned validation | Read, edit, write, commands |
+| [`reviewer`](../../.omp/agents/reviewer.md) | Candidate evaluation against explicit criteria | Read-only inspection/checks |
+| [`debugger`](../../.omp/agents/debugger.md) | Reproduction and causal diagnosis; authorized fixes | Read, edit, write, commands |
+| [`generalist`](../../.omp/agents/generalist.md) | Bounded work without a better specialization | Read, edit, write, commands |
 
 CSV `tools` frontmatter uses native OMP names, including `glob` for file discovery. Read-only roles constrain shell use to non-mutating inspection. Each role returns status, result, evidence and risks through its final response, or the caller's supplied structured schema. Mutating assignments include the exact existing targeted test command. Repository/operator policy remains authoritative; role definitions add neither project permission nor automatic lifecycle gates.
 
 OMP's native precedence is project `.omp/agents`, user `$PI_CODING_AGENT_DIR/agents` (normally `~/.omp/agent/agents`), extension-package agents, other plugin providers, then bundled definitions. A matching name is not provenance: record task `agentSource`, the child `session_init` and the selected prompt, tools and resolved model. Compare the prompt to the canonical definition to distinguish same-named sources. Restart OMP to select changed definitions.
 
-The lifecycle's `plan-reviewer` and `triage-reviewer` are owned by [`@a4s/issue-lifecycle`](../packages/issue-lifecycle/). Generic `reviewer` remains independent and serves [`gpt-quota-audit`](../skills/gpt-quota-audit/SKILL.md), which additionally requires an independently verified model outside the audited provider. The lifecycle owns its current admission contract.
+The lifecycle's `plan-reviewer` and `triage-reviewer` are owned by [`@a4s/issue-lifecycle`](../../packages/issue-lifecycle/). Generic `reviewer` remains independent and serves [`gpt-quota-audit`](../../skills/gpt-quota-audit/SKILL.md), which additionally requires an independently verified model outside the audited provider. The lifecycle owns its current admission contract.
 
 ## Private consumer installation
 
@@ -82,4 +82,4 @@ Consumer checks: `npm exec --workspace @a4s/issue-lifecycle -- tsx --test test/t
 
 ## Source preservation and ownership
 
-Removed-host source is recoverable through the `legacy` archive published for [#420](https://github.com/pablontiv/a4s/issues/420), commit `61322e4890cd33c43ed6685bf1fb3f869bf36749`. The native role cutover is [#429](https://github.com/pablontiv/a4s/issues/429). Historical design documents remain with their owning components. Imported material retains the [MIT license](../LICENSES/handbook-MIT.txt); consumers supply compatible tools and validate native execution semantics.
+Removed-host source is recoverable through the `legacy` archive published for [#420](https://github.com/pablontiv/a4s/issues/420), commit `61322e4890cd33c43ed6685bf1fb3f869bf36749`. The native role cutover is [#429](https://github.com/pablontiv/a4s/issues/429). Historical design documents remain with their owning components. Imported material retains the [MIT license](../../LICENSES/handbook-MIT.txt); consumers supply compatible tools and validate native execution semantics.
