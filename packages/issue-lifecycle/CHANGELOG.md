@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.1
+
+- Align station templates with the operator-approved a4s queue capacity of eight and thirty-day run history retention (#616).
+- Keep station installation, retention and drained-restart coverage aligned with the approved defaults.
+
 ## 0.5.0
 
 - Observe SHA-bound CodeQL checks and PR alerts after publication and during native reconciliation, returning threshold findings to implementation through the existing CI push-back route (#570).

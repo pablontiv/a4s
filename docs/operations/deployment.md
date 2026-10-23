@@ -156,10 +156,9 @@ the approved set; patch-compatible display alone is insufficient.
 
 `dagu-station-install.ts` owns base.yaml and rendered LaunchAgent bytes; it merges
 owned config leaves and queue entries by name. Its template sets loopback
-`127.0.0.1:8080`, `auth.mode=none`, queues/coordinator enabled and **a4s capacity 2**.
-Applying that template can replace an installed a4s capacity 8 with 2; foreign
-queue entries survive. Source inspection (#449) proved this consequence, not an
-observed production overwrite. Review intended capacity before applying.
+`127.0.0.1:8080`, `auth.mode=none`, queues/coordinator enabled and **a4s capacity 8**.
+Applying that template preserves the operator-approved a4s capacity; foreign
+queue entries survive. Review intended capacity before applying.
 
 By default installation writes files and defers restart. File bytes alone do not
 reload the active scheduler. An authorized initial install can use:
@@ -193,8 +192,8 @@ existing queued runs drain under the previous scheduler. The restart hook sends
 TERM to drained `start-all`, waits for replacement PID/readiness with the same
 home/config, then leaves admission closed. On launchd, the signal operation is
 `launchctl kill SIGTERM "gui/$(id -u)/local.dagu.server"`; readiness belongs in the
-operator hook. The installer then verifies two held running probes plus one
-queued in a4s and three successes before opening. A hook of `true` is valid only
+operator hook. The installer then verifies eight held running probes plus one
+queued in a4s and nine successes before opening. A hook of `true` is valid only
 in an isolated environment with no producers or schedules.
 
 The maintained proof is drained TERM restart, bounded to local Dagu 2.20.1
@@ -202,7 +201,7 @@ The maintained proof is drained TERM restart, bounded to local Dagu 2.20.1
 After a failure during closure, admission remains closed. Inspect service,
 history and output before recovery. Preserve `.station-install.lock` barriers
 until outstanding probes finish; remove the completed lock only after recovery.
-Seven-day global history retention comes from the installed base; retain durable
+Thirty-day global history retention comes from the installed base; retain durable
 acceptance evidence outside that cleanup window.
 
 ## Active runs and recovery

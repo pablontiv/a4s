@@ -51,7 +51,7 @@ test("station installer preserves foreign queues, comments and nested keys while
     assert.deepEqual(config.queues, { enabled: true, config: [
       { name: "antojea-e2e", max_concurrency: 4 },
       { name: "antojea-e2e-device", max_concurrency: 1 },
-      { name: "a4s", max_concurrency: 2 },
+      { name: "a4s", max_concurrency: 8 },
     ] });
     assert.deepEqual(config.auth, { mode: "none", basic: { username: "operator", password: "local-secret" } });
     assert.deepEqual(config.coordinator, { enabled: true, port: 50056 });
@@ -70,7 +70,7 @@ test("station installer check reports drift and preserves the installed bytes", 
   try {
     const initial = f.run();
     assert.equal(initial.status, 0, initial.stderr);
-    const custom = "hist_retention_days: 30\n";
+    const custom = "hist_retention_days: 60\n";
     writeFileSync(join(f.home, "base.yaml"), custom);
     const result = f.run(["--check"]);
     assert.equal(result.status, 1, result.stderr);
@@ -85,7 +85,7 @@ test("station installer reconciles existing managed capacity and preserves queue
     const result = f.run();
     assert.equal(result.status, 0, result.stderr);
     assert.deepEqual(parse(readFileSync(join(f.home, "config.yaml"), "utf8")).queues.config, [
-      { name: "a4s", max_concurrency: 2, scheduler: "operator-value" },
+      { name: "a4s", max_concurrency: 8, scheduler: "operator-value" },
     ]);
   } finally { f.dispose(); }
 });

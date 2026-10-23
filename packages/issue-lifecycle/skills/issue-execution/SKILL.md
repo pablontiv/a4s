@@ -147,10 +147,8 @@ versioned `dagu/config.yaml` (`auth.mode`, `queues.enabled`, `host`, `port`,
 `coordinator.enabled`) and merges `queues.config` entries by queue name.
 For matching names, template-owned fields replace installed values; additional
 queue metadata is retained. Missing template queues are added, while foreign
-queues and their concurrency limits are preserved. In particular, applying the
-bundled `a4s.max_concurrency=2` replaces an installed same-name capacity of `8`.
-That capacity consequence was established from source inspection in issue #449;
-the original report did not execute the installer or observe a production overwrite.
+queues and their concurrency limits are preserved. The bundled
+`a4s.max_concurrency=8` aligns the station with the operator-approved capacity.
 Other configuration leaves and comments remain owned by their original writers.
 Foreign paths stay untouched during validation. The plist captures the
 operator's current `PATH` and resolved Dagu binary; use the same environment on
@@ -175,9 +173,9 @@ This skill does not install Dagu, and it carries no logic specific to any reposi
 ## Global history retention
 
 The versioned global configuration in [`../../dagu/base.yaml`](../../dagu/base.yaml)
-sets `hist_retention_days: 7`. The operator installs it as
+sets `hist_retention_days: 30`. The operator installs it as
 `$DAGU_HOME/base.yaml` (default `~/.dagu/base.yaml`). After Dagu's retention
-cleanup, runs older than seven days are no longer queryable through
+cleanup, runs older than thirty days are no longer queryable through
 `dagu history` or available for `dagu retry`. Preserve evidence needed for
 longer outside the run history; recovering that work requires a new run.
 
