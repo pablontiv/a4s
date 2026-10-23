@@ -74,7 +74,8 @@ env:
         key="$common/dagu-feature/owners/issue-$ISSUE"
         mkdir -p "$(dirname "$key")"
         attempt=0
-        until mkdir "$key.lock" 2>/dev/null; do
+        # The syscall result must distinguish creation from a concurrent EEXIST.
+        until python3 -c 'import os, sys; os.mkdir(sys.argv[1])' "$key.lock" 2>/dev/null; do
           attempt=$((attempt + 1))
           [[ "$attempt" -lt 100 ]] || { echo "dagu-feature: ownership lock unavailable $key.lock" >&2; exit 1; }
           sleep 0.1

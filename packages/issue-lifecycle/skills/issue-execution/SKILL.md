@@ -54,7 +54,8 @@ flowchart LR
 - `DAGU_HOME` in your shell must point to the same home as that service. Read it from the service definition (macOS: `EnvironmentVariables.DAGU_HOME` in the LaunchAgent plist). If they differ, enqueue and complete commands land in a store the scheduler never reads, and the run stays `Queued`.
 - `git`, `gh` authenticated with push and PR rights, `curl`, `jq`.
 - Python 3 with standard-library `fcntl` on the Dagu service's `PATH`; bootstrap
-  checks it before adoption. The feature gate uses a POSIX kernel advisory lock.
+  checks it before adoption. Resource guards use atomic `os.mkdir` acquisition;
+  the feature gate uses a POSIX kernel advisory lock.
 - The tools the repository's gate command needs.
 - Bun and the installed OMP task runtime on the service's `PATH`, plus this
   package's `dagu-role-jobs` executable. `OMP_ROLE_RUNTIME` may select the

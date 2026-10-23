@@ -67,7 +67,8 @@ env:
         RESOURCE_LOCK="$common/poc/resource-$RUN.lock"
         mkdir -p "$(dirname "$RESOURCE_LOCK")"
         attempt=0
-        until mkdir "$RESOURCE_LOCK" 2>/dev/null; do
+        # The syscall result must distinguish creation from a concurrent EEXIST.
+        until python3 -c 'import os, sys; os.mkdir(sys.argv[1])' "$RESOURCE_LOCK" 2>/dev/null; do
           attempt=$((attempt + 1))
           [[ "$attempt" -lt 100 ]] || { echo "dagu-feature: ownership lock unavailable $RESOURCE_LOCK" >&2; exit 1; }
           sleep 0.1
