@@ -17,7 +17,7 @@ test("bootstrap selects and verifies the explicit lane or the GitHub default", (
   const bootstrap = skill("dagu-feature-bootstrap.yaml");
   const selection = bootstrap.slice(bootstrap.indexOf("      base=${BASE_BRANCH:"),
     bootstrap.indexOf("      if ! required=")).split("\n").map(line => line.slice(6)).join("\n");
-  for (const [requested, expected] of [["", "main"], ["integration/v1", "integration/v1"]]) {
+  for (const [requested, expected] of [["", "main"], ["release/candidate", "release/candidate"]]) {
     const result = spawnSync("bash", ["-euc", `
       gh() {
         if test "$1" = repo; then printf 'main\\n';
@@ -131,7 +131,7 @@ const mainWorkspaces: CiWorkspace[] = [
   { dir: "packages/agent-messaging", name: "@a4s/agent-messaging" },
   { dir: "apps/message-bus", name: "@a4s/message-bus" },
 ];
-const integrationWorkspaces: CiWorkspace[] = [
+const dependencyWorkspaces: CiWorkspace[] = [
   { dir: "packages/review-routing", name: "@a4s/review-routing",
     devDependencies: { "@oh-my-pi/pi-coding-agent": "18.12.5" } },
   { dir: "packages/agent-messaging", name: "@a4s/agent-messaging" },
@@ -187,8 +187,8 @@ test("CI selects checked-out main manifests, nested owners and declared routing 
   } finally { fixture.dispose(); }
 });
 
-test("CI selects future integration package/app names and both sides of package-to-app renames", () => {
-  const fixture = ciFixture(integrationWorkspaces);
+test("CI selects declared package/app consumers and both sides of package-to-app renames", () => {
+  const fixture = ciFixture(dependencyWorkspaces);
   try {
     const cases: [unknown[], string[]][] = [
       [["packages/review-routing/src/index.ts"], ["@a4s/review-routing", "@a4s/issue-lifecycle"]],
@@ -220,8 +220,9 @@ test("CI follows moved manifest identities, longest nested ownership and transit
   } finally { fixture.dispose(); }
 });
 
-test("CI broad changes and both configured branch events select all actual workspaces", () => {
-  for (const [branch, workspaces] of [["main", mainWorkspaces], ["integration/v1", integrationWorkspaces]] as const) {
+test("CI broad changes and main push/PR events select all actual workspaces", () => {
+  const branch = "main";
+  for (const workspaces of [mainWorkspaces, dependencyWorkspaces]) {
     const fixture = ciFixture(workspaces);
     try {
       const expected = ciJobs(...workspaces.map(workspace => workspace.name)).map(job =>
@@ -243,7 +244,7 @@ test("CI broad changes and both configured branch events select all actual works
 });
 
 test("CI workflow selector executes paginated rename records and the NUL-safe git fallback", () => {
-  const fixture = ciFixture(integrationWorkspaces);
+  const fixture = ciFixture(dependencyWorkspaces);
   try {
     mkdirSync(join(fixture.root, "scripts"));
     symlinkSync(ciScript, join(fixture.root, "scripts/ci-workspaces.mjs"));
