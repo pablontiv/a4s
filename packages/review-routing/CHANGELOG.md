@@ -19,6 +19,10 @@
 
 ## Unreleased
 
+- Rename the private package to `@a4s/review-routing` and move its reloadable entrypoint, public APIs, metadata and callers atomically (#422).
+- Share one-shot quality implementer bindings through `@a4s/review-routing/quality-implementers`, including the Dagu consumer and independently loaded extension graphs; retain current exact-name policies and strict family eligibility.
+- Verify 40 routing tests, 171 Dagu quality/CI-selection tests (2 live-Dagu skips) and both affected typechecks. Retain native OMP 18.12.6 hook-loading, indeterminate-parent blocking and cross-graph one-shot binding evidence with transcript locations in the README. Authenticated child execution and candidate-native reviewer/security-reviewer discovery remain blocked; the authorized implementation environment exposes no model API keys or auth/access tokens.
+
 - Share quality implementer bindings across module instances so the spawn hook sees bindings made by `@a4s/omp-dagu`, which OMP loads as a separate extension graph (#374).
 
 - Enforce strict QA/reviewer eligibility for the feature publication gate, using the runtime-effective implementer reference and blocking model exhaustion with diagnostics. Preserve canonical-family comparison, resolved-id deduplication and explicit fallback policy (#280).

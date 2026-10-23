@@ -1,4 +1,4 @@
-# OMP Cross-family Review
+# Review Routing
 
 An OMP extension that enforces strict eligibility using the canonical
 `ctx.models.family` API. Every configured agent retains only candidates with a
@@ -70,15 +70,22 @@ reviewer may share a family. A same-family effective runtime fallback blocks
 publication even if initial selection qualified. TUI access to Dagu's store
 makes this control advisory, not a sandbox.
 
+The private package `@a4s/review-routing` shares one process-global registry at
+`Symbol.for("@a4s/review-routing/quality-implementers")`. Binding callers and
+the reloadable hook consume the same one-shot binding across independently
+loaded extension graphs. The current dispatch names remain `reviewer`, `qa`,
+`triage-reviewer`, `plan-reviewer` and `security-reviewer`; the structured
+quality role `qa` is a separate lifecycle contract.
+
 ## Installation and checks
 
 From the permanent primary checkout:
 
 ```sh
-omp plugin link "$(git rev-parse --show-toplevel)/packages/omp-cross-family-review"
+omp plugin link "$(git rev-parse --show-toplevel)/packages/review-routing"
 ```
 
-Alternatively load the package directory with `omp -e /path/to/omp-cross-family-review`.
+Alternatively load the package directory with `omp -e /path/to/review-routing`.
 The `omp.extensions` manifest loads the maintained reloadable runtime entrypoint,
 whose static public SDK imports share the host's active settings scope. The
 package root exports the host-neutral hook, ordering and implementer-binding
@@ -87,8 +94,8 @@ Selection runs after native initial model selection. Project configuration is
 inherited by rebound child extension graphs; global model settings stay unchanged.
 
 ```sh
-npm test -w @a4s/omp-cross-family-review
-npm run typecheck -w @a4s/omp-cross-family-review
+npm test --workspace @a4s/review-routing
+npm run typecheck --workspace @a4s/review-routing
 ```
 
 Tests run on the pinned development Bun runtime against the real public native
@@ -99,3 +106,55 @@ Issue #350 exercised the maintained hook in a fresh OMP 18.12.5 session with
 process-local same-family candidates and roles. Real `reviewer` and
 `triage-reviewer` tasks returned `CROSS_FAMILY_EXHAUSTED` diagnostics before child
 execution. Unresolved-parent behavior is covered by unit tests.
+
+## Rename verification (#422)
+
+The candidate ran `npm test --workspace @a4s/review-routing` (40 pass,
+0 fail, Bun 1.4.2) and `npm run typecheck --workspace @a4s/review-routing`
+(exit 0). Dagu consumer/CI-selection checks ran with
+`node_modules/.bin/tsx --test packages/omp-dagu/test/quality-guard.test.ts packages/omp-dagu/test/bundle-template.test.ts`
+(171 pass, 2 live-Dagu skips, 0 fail), followed by
+`npm run typecheck --workspace @a4s/omp-dagu` (exit 0). CI continues to
+discover the canonical manifest and declared consumers, including its existing
+typecheck script.
+
+A fresh native OMP 18.12.6 SDK session loaded the candidate package roots with
+explicit-only extension discovery and temporary agent/config/session directories.
+All five named policies returned `CROSS_FAMILY_INDETERMINATE` when the parent
+model was unavailable. A separately imported binding caller supplied
+`Smoke422Quality`; the native reloadable hook consumed its canonical-registry
+binding once, reported `CROSS_FAMILY_EXHAUSTED` with excluded family `openai`,
+then returned the ordinary indeterminate-parent result on the next dispatch.
+The session JSONL persists the observation as `review-routing-422-smoke`.
+
+These are native hook observations, not successful child-task executions.
+The retained evidence is
+`.workspace/worktrees/smoke-422-HgRHaW/evidence.json` and the adjacent
+`sessions/2026-10-23T04-44-10-964Z_01a16712-d954-73ea-a130-0b0154848c20.jsonl`.
+The evidence JSON records the session's original temporary path; the adjacent
+JSONL is the retained transcript in this worktree.
+
+Native discovery selected candidate `packages/omp-dagu/agents/{qa,triage-reviewer,plan-reviewer}.md`
+with `agentSource=user` and canonical paths in the candidate checkout.
+`reviewer` and `security-reviewer` resolved to `agentSource=bundled`,
+`embedded:reviewer.md` and `embedded:security-reviewer.md`; these sources do
+not satisfy the requested candidate-definition proof.
+
+**Operational acceptance remains blocked.** The isolated catalog had zero
+authenticated models. A separate native CLI attempt with
+`omp --no-extensions -e <candidate>/packages/review-routing -e <candidate>/packages/omp-dagu --session-dir <temporary-sessions> --no-title --no-lsp --no-tools -p --model openai/gpt-5.2 "Reply only ROUTING422"`
+and temporary `PI_CODING_AGENT_DIR`/`PI_CODING_AGENT_SESSION_DIR` exited 1:
+`No API key found for openai`. Effective authenticated child-model selection
+and runtime response-family exclusions remain unproven. Resume with
+operator-authorized credentials and candidate-native definitions for all
+required roles, retaining persisted transcripts; production authentication and
+profiles were left intact. This partial smoke is not an acceptance PASS.
+
+The authorized implementation run `a4s-issue-422-s01a16671` repeated the four
+targeted commands above successfully (40 routing tests; 171 consumer/CI tests,
+2 live-Dagu skips; both typechecks exit 0). An environment-variable-name-only
+inspection found no `API_KEY`, `AUTH_TOKEN` or `ACCESS_TOKEN` suffixes.
+No authenticated retry was attempted without credentials. Resuming the smoke
+requires operator-authorized authentication in the isolated native scope and a
+decision on the candidate-native reviewer/security-reviewer definitions;
+installing different role definitions is outside this package-identity rename.

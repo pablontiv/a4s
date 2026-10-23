@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { atomicJson, type Job, type JobBinding, type NativeEvidence } from "./role-jobs.ts";
 import { REVIEW_SCHEMA } from "./triage/schema.ts";
-import { orderReviewModels, type ReviewPolicies } from "@a4s/omp-cross-family-review";
+import { orderReviewModels, type ReviewPolicies } from "@a4s/review-routing";
 import { inspectImplementer, type QualityRequest } from "./triage/quality.ts";
 
 interface Definition { name: string; source: string; model?: string[]; systemPrompt: string; tools?: string[] }

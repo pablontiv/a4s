@@ -3,7 +3,7 @@ import { admissionDecision } from "./guard.ts";
 import type { CallDecision, Event } from "./guard.ts";
 import { qualityDecision } from "./quality.ts";
 import type { QualityContext } from "./quality.ts";
-import type { ReviewPolicies } from "@a4s/omp-cross-family-review";
+import type { ReviewPolicies } from "@a4s/review-routing";
 
 // Structural API keeps this OMP-only package independent of provider imports.
 interface ExtensionAPI {
