@@ -1,6 +1,6 @@
 # Issue lifecycle
 
-Private OMP package `@a4s/issue-lifecycle` for the Dagu issue lifecycle: progress widget, admission and resource guards, `triage-reviewer` and `plan-reviewer` agents, and the `issue-execution`, `backlog-breakdown`, and `repository-discovery` skills and templates. Requires Node.js >=22.19.0 and official Dagu `2.20.1` with local authentication `none`.
+Private OMP package `@a4s/issue-lifecycle` for the Dagu issue lifecycle: progress widget, admission and resource guards, `triage-reviewer` and `plan-reviewer` agents, and all seven workflow skills listed below. Requires Node.js >=22.19.0 and official Dagu `2.20.1` with local authentication `none`.
 
 ## Runtime distribution
 
@@ -79,6 +79,67 @@ PI_CODING_AGENT_SESSION_DIR="$SMOKE_SESSIONS" \
 
 Provision only authorized authentication in that isolated profile. Retain smoke
 evidence outside the checkout, then remove the temporary directory after use.
+
+For native backlog-breakdown review admission, parent and child transcripts live
+under `$HOME/.omp/agent/sessions/<encoded-PRIMARY>/`. Use the same isolated
+`HOME` in the controller and OMP process, and set `SMOKE_SESSIONS` to that
+physical, canonical project directory so the verifier can bind the exact
+`parentSession` path. A primary below canonical `TMPDIR` encodes as `-tmp-`
+plus its relative path with path separators replaced by `-`, matching the
+existing `planning.yaml` verifier.
+
+## Workflow skill ownership
+
+Loading this whole package discovers the canonical sources in `skills/`:
+
+| Skill | Responsibility |
+|---|---|
+| [`issue-execution`](skills/issue-execution/SKILL.md) | Execute an authorized feature or PoC through its existing lifecycle |
+| [`repository-discovery`](skills/repository-discovery/SKILL.md) | Investigate repository evidence and prepare discovery units |
+| [`backlog-breakdown`](skills/backlog-breakdown/SKILL.md) | Validate prepared units, obtain independent review and operator approval, then materialize issues |
+| [`refine`](skills/refine/SKILL.md) | Investigate an authorized need and stage the exact proposal outside the repository |
+| [`sprint-planning`](skills/sprint-planning/SKILL.md) | Propose goal checks and Definition of Done; rank and enqueue after operator confirmation |
+| [`sprint-review`](skills/sprint-review/SKILL.md) | Evaluate goal checks separately from issue acceptance and delivery evidence |
+| [`sprint-retrospective`](skills/sprint-retrospective/SKILL.md) | Route operator-selected incidents through refinement in the owning repository |
+
+Refinement hands accepted `UNITS_FROM` and `SOURCE=refine` to the shared
+backlog-breakdown backend; backend publication has its own operator approval.
+The optional [`.workspace/config/refine.json`](../../.workspace/config/refine.json)
+template reference remains owned by the adopted repository. Sprint Planning
+alone ranks and enqueues new work; ceremony content uses existing lifecycle
+delivery evidence.
+
+Independent utilities remain at the repository root:
+[`model-routing-audit`](../../skills/model-routing-audit/SKILL.md) reviews OMP
+routes with manual proposal/approval and fresh-agent verification;
+[`gpt-quota-audit`](../../skills/gpt-quota-audit/SKILL.md) investigates OMP
+provider quota; [`cost-analyzer`](../../skills/cost-analyzer/SKILL.md) analyzes
+the cross-harness session ledger. Their relative scripts and assets travel with
+their skill directories. For isolated native discovery, add the candidate root
+`skills/` through temporary `skills.customDirectories` configuration as well as
+loading this package; `--skills` filters discovered names rather than loading paths.
+
+### #311 cutover source inventory
+
+At the #428 cutover, fetched `origin/main` was
+`2e6ba63ae2ff1ae3f30beb24024d5c5157ce6e22`; the adopted integration baseline
+was `c85c140`. The following intended #311 source paths have no delivered
+files in that main tree or the integration baseline. Each is **pending #311**,
+not a migrated source or a completed smoke:
+
+| Intended source path on main | Delivered source commit | Canonical v1 destination |
+|---|---|---|
+| `skills/dagu-reconcile-operations/` | Pending #311 | `packages/issue-lifecycle/skills/reconcile-operations/` (`reconcile-operations`) |
+| `skills/omp-session-token-accounting/` | Pending #311 | `skills/session-token-accounting/` (`session-token-accounting`) |
+| `skills/omp-structured-subagent-output/` | Pending #311 | `skills/structured-subagent-output/` (`structured-subagent-output`) |
+| `skills/ios-device-xcuitest-free-team/` | Pending #311 | `skills/ios-device-xcuitest-free-team/` (`ios-device-xcuitest-free-team`) |
+
+Inventory command at that source commit:
+`git ls-tree -r --name-only origin/main -- skills/dagu-reconcile-operations skills/omp-session-token-accounting skills/omp-structured-subagent-output skills/ios-device-xcuitest-free-team`.
+It returned no files. #311 retains ingestion, operational verification and its
+operator-owned managed-local cleanup. Its amended issue records these same v1
+destinations; completion of this distribution cutover is independent of that work.
+
 
 
 ## Retención del historial global
