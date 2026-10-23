@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { once } from "node:events";
 import { chmodSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 import { parse } from "yaml";
 import { jobId, RoleJobStore, verifyJobResult, type Job, type JobBinding, type JobResult } from "../src/role-jobs.ts";
@@ -40,6 +42,42 @@ test("duplicate delivery across database clients has one owner and one terminal 
     assert.throws(() => second.claim(f.binding, join(f.root, "moved"), readyAt, () => {}), /retained artifact directory/);
     assert.throws(() => second.finish(claim.job, completed(claim.job)), /active execution/);
   } finally { first.close(); second.close(); f.cleanup(); }
+});
+
+test("store initialization waits for another process's initial database transaction", async () => {
+  const f = fixture();
+  mkdirSync(f.home);
+  const initializing = new DatabaseSync(join(f.home, "role-jobs.sqlite"));
+  initializing.exec("CREATE TABLE seed (id INTEGER); BEGIN IMMEDIATE");
+  const module = new URL("../src/role-jobs.ts", import.meta.url).href;
+  const code = `import {RoleJobStore} from ${JSON.stringify(module)};
+process.stdout.write("opening\\n");
+const store = new RoleJobStore(${JSON.stringify(f.home)}, 2);
+store.close(); process.stdout.write("ready\\n");`;
+  const child = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "-e", code], { stdio: ["ignore", "pipe", "pipe"] });
+  let output = ""; let error = ""; let released = false;
+  let release: NodeJS.Timeout | undefined;
+  child.stdout.on("data", data => {
+    output += data;
+    if (output.includes("opening\n") && !release) {
+      // SQLite busy_timeout runs inside a separate native process, so real time
+      // holds the lock across its open; JavaScript fake timers cannot drive it.
+      release = setTimeout(() => { initializing.exec("COMMIT"); released = true; }, 100);
+    }
+  });
+  child.stderr.on("data", data => { error += data; });
+  try {
+    const [status] = await once(child, "exit");
+    assert.equal(status, 0, error);
+    assert.equal(released, true);
+    assert.equal(output, "opening\nready\n");
+    const store = new RoleJobStore(f.home, 2);
+    try { assert.equal(store.claim(f.binding, f.directory, readyAt, () => {}).kind, "claimed"); }
+    finally { store.close(); }
+  } finally {
+    clearTimeout(release);
+    initializing.close(); f.cleanup();
+  }
 });
 
 test("restart preserves live ownership and interrupted recovery requires a fresh attributable attempt", () => {
@@ -165,7 +203,7 @@ for (const terminal of ["failed", "interrupted"] as const) {
       const run = "dispatcher-retry";
       const state = join(f.repo, ".git", "dagu-feature", "runs", run); mkdirSync(state, { recursive: true });
       writeFileSync(join(state, "receipt.json"), JSON.stringify(roleAdmission(f.repo, f.home, run, "dagu-role-jobs stage triage")));
-      Object.assign(process.env, { PRIMARY: f.repo, DAGU_HOME: f.home, RUN: run, ISSUE: "189", PATH: `${bin}:${saved.PATH}`, A4S_ROLE_JOB_CAPACITY: "2" });
+      Object.assign(process.env, { PRIMARY: f.repo, DAGU_HOME: f.home, RUN: run, ISSUE: "189", PATH: `${bin}:${saved.PATH}`, A4S_ROLE_JOB_CAPACITY: "2", DAG_PUSHBACK_ITERATION: "0" });
       let startedAt = readyAt;
       const details = () => ({ dagRunDetails: { params: "ISSUE=189 OMP_SESSION_ID=parent-id", nodes: [
         { step: { id: "admit" }, statusLabel: "succeeded", startedAt: readyAt },
@@ -226,7 +264,7 @@ test("triage completes and redelivers the admitted identity while PRIMARY fast-f
     const run = "triage-moving-primary";
     const state = join(f.repo, ".git", "dagu-feature", "runs", run); mkdirSync(state, { recursive: true });
     writeFileSync(join(state, "receipt.json"), JSON.stringify(roleAdmission(f.repo, f.home, run, "dagu-role-jobs stage triage")));
-    Object.assign(process.env, { PRIMARY: f.repo, DAGU_HOME: f.home, RUN: run, ISSUE: "189", PATH: `${bin}:${saved.PATH}`, A4S_ROLE_JOB_CAPACITY: "2" });
+    Object.assign(process.env, { PRIMARY: f.repo, DAGU_HOME: f.home, RUN: run, ISSUE: "189", PATH: `${bin}:${saved.PATH}`, A4S_ROLE_JOB_CAPACITY: "2", DAG_PUSHBACK_ITERATION: "0" });
     globalThis.fetch = async () => new Response(JSON.stringify({ dagRunDetails: {
       params: "ISSUE=189 OMP_SESSION_ID=parent-id", nodes: [
         { step: { id: "admit" }, statusLabel: "succeeded", startedAt: readyAt },
@@ -306,9 +344,11 @@ test("each required semantic stage has a registered role contract and Dagu consu
       assert.ok(assignment.includes(jobId(binding))); assert.ok(assignment.includes("Actual issue acceptance"));
     }
     const dag = parse(readFileSync(new URL("../skills/dagu-feature/feature.yaml", import.meta.url), "utf8"));
-    for (const [stage, outputs] of [["triage", ["POC", "QUESTION", "BASIS", "REVIEW"]], ["implement", ["SUMMARY", "MESSAGE", "IMPLEMENTER"]]] as const) {
+    for (const [stage, outputs] of [["triage", ["POC", "QUESTION", "BASIS", "REVIEW", "REQUIRED_TARGETS", "AUTHORIZED_TARGETS", "SCOPE_BASIS"]], ["implement", ["SUMMARY", "MESSAGE", "IMPLEMENTER"]]] as const) {
       const node = dag.steps.find((step: { id: string }) => step.id === stage);
-      assert.equal(node.run, `dagu-role-jobs stage ${stage}`);
+      assert.equal(node.run, stage === "triage"
+        ? "set -euo pipefail\ndagu-feature-bundle escalation route\ndagu-role-jobs stage triage\n"
+        : "dagu-role-jobs stage implement");
       assert.deepEqual(node.outputs.map((output: { name: string }) => output.name), outputs);
     }
     assert.equal(dag.steps.find((step: { id: string }) => step.id === "validation").depends, "recover_gate_cancellation");

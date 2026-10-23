@@ -10,10 +10,10 @@ import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { Transitions } from "../src/status/progress.ts";
 import type { RunDetails } from "../src/status/progress.ts";
-import { readCiDiagnostic } from "../src/status/repository.ts";
+import { readCiDiagnostic, readEscalationDiagnostic } from "../src/status/repository.ts";
 import { BUNDLE_VERSION } from "../src/bundle.ts";
 import { testRunId } from "./fixtures/run-id.ts";
-import { renderedFeature } from "./fixtures/rendered-feature.ts";
+import { renderedFeature, renderedReconcile } from "./fixtures/rendered-feature.ts";
 
 const definitions = [
   ["template", "../skills/dagu-feature/"],
@@ -28,14 +28,15 @@ test("CI scripts preserve template/render parity and Dagu accepts materialized t
   try {
     for (const file of ["feature.yaml", "reconcile.yaml"]) {
       const template = readFileSync(new URL(`../skills/dagu-feature/${file}`, import.meta.url), "utf8");
-      const render = readFileSync(new URL(`../../../.workspace/dagu/dags/${file}`, import.meta.url), "utf8");
+      const rendered = file === "feature.yaml" ? renderedFeature : renderedReconcile;
+      const render = readFileSync(rendered, "utf8");
       for (const id of file === "feature.yaml" ? ["await_ci", "await_merge", "authorize_ci"] : ["observe", "transition"]) {
         if (file === "feature.yaml" && id !== "authorize_ci") {
-          // Bootstrap may retain the sealed snapshot or adopt the current template.
+          // Compare the current bootstrap output with its source template.
           const checkpoint = step(template, id);
           const form = "      form:\n        type: object\n        properties:\n          CANCEL: {type: string, enum: ['yes', 'no']}\n";
           assert.ok(checkpoint.includes(form), `${id} cancellation form`);
-          assert.ok([checkpoint, checkpoint.replace(form, "")].includes(step(render, id)), `${file}/${id}`);
+          assert.equal(step(render, id), checkpoint, `${file}/${id}`);
           const gate = step(template, `${id}_cancellation`);
           assert.ok(gate.includes(`    depends: ${id}\n`));
           assert.ok(gate.includes(`      - CANCEL: \${steps.${id}.outputs.CANCEL}\n`));
@@ -44,17 +45,14 @@ test("CI scripts preserve template/render parity and Dagu accepts materialized t
           assert.ok(gate.includes('if [[ "$CANCEL" == yes ]]; then'));
         } else if (file === "feature.yaml") {
           assert.ok(step(template, id).includes("    depends: [await_ci_cancellation, await_merge_cancellation]\n"));
-          assert.ok([step(template, id), step(template, id).replace(
-            "    depends: [await_ci_cancellation, await_merge_cancellation]\n",
-            "    depends: [await_ci, await_merge]\n",
-          )].includes(step(render, id)), `${file}/${id}`);
+          assert.equal(step(render, id), step(template, id), `${file}/${id}`);
         } else {
           assert.equal(step(template, id), step(render, id), `${file}/${id}`);
         }
       }
       const materialized = join(root, file);
       writeFileSync(materialized, template.replaceAll("__DAGU_FEATURE_VERSION__", BUNDLE_VERSION));
-      for (const path of [materialized, fileURLToPath(new URL(`../../../.workspace/dagu/dags/${file}`, import.meta.url))]) {
+      for (const path of [materialized, rendered, fileURLToPath(new URL(`../../../.workspace/dagu/dags/${file}`, import.meta.url))]) {
         execFileSync("dagu", ["validate", path], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
       }
     }
@@ -198,6 +196,7 @@ function execute(f: Fixture, source: string, id: string) {
   return spawnSync("bash", ["-c", script(source, id)], { env: f.env, cwd: f.root, encoding: "utf8" });
 }
 function observe(f: Fixture, source: string) {
+  f.env.CI_OBSERVATION_ID = String(Number(f.env.CI_OBSERVATION_ID ?? 0) + 1);
   const result = execute(f, source, "observe");
   assert.equal(result.status, 0, result.stdout + result.stderr);
   return JSON.parse(readFileSync(join(f.state, "ci-observation.json"), "utf8"));
@@ -312,6 +311,113 @@ for (const [name, base] of definitions) {
   });
 }
 
+test("template: consecutive BLOCKED ticks request one owner decision per fingerprint", async () => {
+  const reconcile = readFileSync(new URL("../skills/dagu-feature/reconcile.yaml", import.meta.url), "utf8");
+  const f = fixture("no-progress558");
+  try {
+    git(f.worktree, "push", "-u", "origin", f.branch);
+    update(f, { conclusion: "cancelled", log: "Approval required by environment owner" });
+    const waiting: RunDetails = {
+      name: "feature", dagRunId: f.env.RUN!, statusLabel: "waiting", params: "ISSUE=226 OMP_SESSION_ID=owner",
+      nodes: ["await_ci", "await_merge"].map(name => ({ step: { name, humanTask: {} }, statusLabel: "waiting", approvalIteration: 0 })),
+    };
+    const transitions = new Transitions("owner");
+    const first = observe(f, reconcile);
+    assert.equal(first.class, "BLOCKED");
+    assert.equal(first.decisionRequest, undefined);
+    transitions.observe(waiting, { ciDiagnostic: first });
+    const repeatedTick = execute(f, reconcile, "observe");
+    assert.equal(repeatedTick.status, 0, repeatedTick.stderr);
+    assert.equal(JSON.parse(readFileSync(join(f.state, "ci-no-progress.json"), "utf8")).observations, 1);
+    const second = observe(f, reconcile);
+    assert.equal(second.decisionRequest.observations, 2);
+    const signal = new AbortController().signal;
+    const diagnostic = await readCiDiagnostic(f.primary, f.env.RUN!, false, signal);
+    assert.deepEqual(diagnostic?.decisionRequest, second.decisionRequest);
+    const request = transitions.observe(waiting, { ciDiagnostic: diagnostic! });
+    assert.match(request.wakeMessage!, /\[DAGU DECISION\].*ci=BLOCKED.*check=validate.*Approval required/);
+    assert.match(request.wakeMessage!, /continue with a renewed budget; change scope or delivery route; stop/);
+    assert.equal(request.wakeMessages, undefined);
+    for (let tick = 0; tick < 2; tick++) {
+      const repeated = observe(f, reconcile);
+      assert.deepEqual(repeated.decisionRequest, second.decisionRequest);
+      assert.deepEqual(transitions.observe(waiting, { ciDiagnostic: repeated }), {});
+    }
+    assert.deepEqual(new Transitions("another-owner").observe(waiting, { ciDiagnostic: second }), {});
+    update(f, { auto: false });
+    assert.equal(observe(f, reconcile).decisionRequest, undefined);
+    const changedCause = observe(f, reconcile);
+    assert.notEqual(changedCause.decisionRequest.id, second.decisionRequest.id);
+    assert.match(JSON.stringify(transitions.observe(waiting, { ciDiagnostic: changedCause })), /DAGU DECISION/);
+    writeFileSync(join(f.worktree, "candidate"), "new head\n");
+    git(f.worktree, "add", "candidate");
+    git(f.worktree, "commit", "-m", "new head");
+    git(f.worktree, "push", "origin", f.branch);
+    assert.equal(observe(f, reconcile).decisionRequest, undefined);
+    const changedSha = observe(f, reconcile);
+    assert.notEqual(changedSha.decisionRequest.id, changedCause.decisionRequest.id);
+    assert.match(JSON.stringify(transitions.observe(waiting, { ciDiagnostic: changedSha })), /DAGU DECISION/);
+    assert.equal(Object.keys(JSON.parse(readFileSync(join(f.state, "ci-no-progress.json"), "utf8")).requests).length, 3);
+    update(f, { auto: true, conclusion: "success", log: "" });
+    assert.equal(observe(f, reconcile).class, "PASS");
+    update(f, { conclusion: "cancelled" });
+    assert.equal(observe(f, reconcile).decisionRequest, undefined);
+    transition(f, reconcile);
+    assert.equal(JSON.parse(readFileSync(f.control, "utf8")).iteration, 0);
+  } finally { rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test("template: no-progress threshold is repository policy and non-BLOCKED ticks reset the streak", () => {
+  const reconcile = readFileSync(new URL("../skills/dagu-feature/reconcile.yaml", import.meta.url), "utf8");
+  const f = fixture("policy558");
+  try {
+    git(f.worktree, "push", "-u", "origin", f.branch);
+    f.env.ESCALATION_CI_BLOCKED = "3";
+    update(f, { conclusion: "cancelled", log: "Approval required" });
+    assert.equal(observe(f, reconcile).decisionRequest, undefined);
+    update(f, { pending: true });
+    assert.equal(observe(f, reconcile).class, "PENDING");
+    update(f, { pending: false });
+    assert.equal(observe(f, reconcile).decisionRequest, undefined);
+    assert.equal(observe(f, reconcile).decisionRequest, undefined);
+    assert.equal(observe(f, reconcile).decisionRequest.observations, 3);
+    update(f, { conclusion: "timed_out", log: "Runner lost communication with the server" });
+    observe(f, reconcile);
+    const retryPath = join(f.state, `ci-retry-${git(f.worktree, "rev-parse", "HEAD")}.json`);
+    writeFileSync(retryPath, JSON.stringify({ attempts: 2, next_at: 0 }));
+    assert.equal(observe(f, reconcile).class, "BLOCKED");
+    assert.equal(observe(f, reconcile).decisionRequest, undefined);
+    assert.equal(observe(f, reconcile).decisionRequest.observations, 3);
+    update(f, { auto: false, conclusion: "cancelled", log: "Approval required" });
+    f.env.ESCALATION_CI_BLOCKED = "1";
+    assert.equal(observe(f, reconcile).decisionRequest.observations, 1);
+  } finally { rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test("escalation diagnostics target the owner with budget evidence and decision options", async () => {
+  const f = fixture("escalation558");
+  try {
+    writeFileSync(join(f.state, "escalation.json"), JSON.stringify({
+      schemaVersion: 1, run: f.env.RUN, findings: [], trigger: {
+        id: "budget558", reasons: ["repeated finding"], iteration: 3, sha: f.base,
+        latestFindings: [{ text: "Repeated documentation finding", fingerprint: "finding558", iteration: 3 }], elapsedSeconds: 7200,
+        spend: { state: "unknown", cause: "session attribution unavailable" },
+      },
+    }));
+    const diagnostic = await readEscalationDiagnostic(f.worktree, f.env.RUN!, new AbortController().signal);
+    assert.match(diagnostic!, /findings=Repeated documentation finding elapsedSeconds=7200 spend=unknown \(session attribution unavailable\)/);
+    for (const step of ["escalation", "rebase_escalation"]) {
+      const run: RunDetails = { name: "feature", dagRunId: f.env.RUN!, statusLabel: "waiting",
+        params: "OMP_SESSION_ID=owner", nodes: [{ step: { name: step, humanTask: {} }, statusLabel: "waiting", approvalIteration: 3 }] };
+      const transitions = new Transitions("owner");
+      const notice = transitions.observe(run, { escalationDiagnostic: diagnostic! }).wakeMessage!;
+      assert.match(notice, /escalation=budget558.*iteration=3.*repeated finding.*continue with a renewed budget/);
+      assert.deepEqual(transitions.observe(run, { escalationDiagnostic: diagnostic! }), {});
+      assert.deepEqual(new Transitions("other").observe(run, { escalationDiagnostic: diagnostic! }), {});
+    }
+  } finally { rmSync(f.root, { recursive: true, force: true }); }
+});
+
 test("Dagu 2.20.1: paired root waits return to implement/rebase and release the queue", {
   ...liveDagu,
   timeout: 120_000,
@@ -333,7 +439,7 @@ test("Dagu 2.20.1: paired root waits return to implement/rebase and release the 
   f.env.DAGU_HOME = home;
   writeFileSync(join(home, "config.yaml"), `auth:\n  mode: none\ncoordinator:\n  enabled: false\nqueues:\n  enabled: true\n  config:\n    - name: ci226\n      max_active_runs: 1\n`);
   const fixtureEnv = ["PATH", "CI_REMOTE", "CI_CONTROL", "CI_CALLS"].map(key => `  - ${key}: ${JSON.stringify(f.env[key])}\n`).join("");
-  const definition = `type: graph\nshell: bash\nmax_active_steps: 1\nqueue: ci226\nparams:\n  - ISSUE: "226"\n  - PRIMARY: ${f.primary}\n  - BRANCH: ${f.branch}\n  - PR_NUMBER: "77"\nenv:\n${fixtureEnv}  - WORKTREE: ${f.worktree}\n  - RUN: ${id}\nsteps:\n  - id: implement\n    action: human.task\n    with:\n      prompt: Correct candidate\n  - id: rebase\n    depends: implement\n    run: echo rebased\n  - id: auto_merge\n    depends: rebase\n    run: echo observed-publication\n${["await_ci", "await_ci_cancellation", "await_merge", "await_merge_cancellation", "authorize_ci"].map(id => step(feature, id)).join("")}`;
+  const definition = `type: graph\nshell: bash\nmax_active_steps: 1\nqueue: ci226\nparams:\n  - ISSUE: "226"\n  - PRIMARY: ${f.primary}\n  - BRANCH: ${f.branch}\n  - PR_NUMBER: "77"\nenv:\n${fixtureEnv}  - WORKTREE: ${f.worktree}\n  - RUN: ${id}\nsteps:\n  - id: implement\n    action: human.task\n    with:\n      prompt: Correct candidate\n  - id: rebase\n    depends: implement\n    run: echo rebased\n  - id: auto_merge\n    depends: rebase\n    run: echo observed-publication\n${["await_ci", "await_ci_cancellation", "await_merge", "await_merge_cancellation", "authorize_ci"].map(id => step(feature, id).replace("rewind_to: implement_budget", "rewind_to: implement").replace("rewind_to: rebase_budget", "rewind_to: rebase")).join("")}`;
   const path = join(home, "dags/feature.yaml");
   writeFileSync(path, definition);
   writeFileSync(join(home, "dags/queue-probe.yaml"), "queue: ci226\nsteps:\n  - id: observed\n    run: echo queue-slot-released\n");

@@ -49,6 +49,9 @@ steps:
 name: reconcile-run
 type: graph
 shell: bash
+env:
+  - CI_OBSERVATION_ID: ${context.run.id}
+  - ESCALATION_CI_BLOCKED: __ESCALATION_CI_BLOCKED__
 params:
   - name: RUN
     type: string
@@ -144,7 +147,7 @@ steps:
                 CLASS=BLOCKED CAUSE="Unproven cause for $CHECK ($result); inspect $link and resolve permissions, protection or operator action"
               fi
               break
-            done < <(jq -c 'sort_by(if .state == "SUCCESS" or .state == "NEUTRAL" or .state == "SKIPPED" then 2 elif .state == "IN_PROGRESS" or .state == "PENDING" or .state == "QUEUED" then 1 else 0 end)[]' "$TMP/required")
+            done < <(jq -c 'sort_by([(if .state == "SUCCESS" or .state == "NEUTRAL" or .state == "SKIPPED" then 2 elif .state == "IN_PROGRESS" or .state == "PENDING" or .state == "QUEUED" then 1 else 0 end), .name])[]' "$TMP/required")
             if [[ "$(jq length "$TMP/required")" == 0 ]]; then
               CLASS=PENDING CAUSE="Required checks not yet published"
             fi
@@ -164,6 +167,14 @@ steps:
             CLASS=BLOCKED CAUSE="PR $pr_state/$merge_state auto-merge=$auto; operator action required"
           fi
           if [[ "$CLASS" == STALE_SHA ]]; then ACTION=WAIT; fi
+          if [[ "$ACTION" == RETRY ]]; then
+            retry="$STATE/ci-retry-$SHA.json"
+            if [[ -z "$RETRY_RUN" ]] || { [[ -f "$retry" ]] &&
+              (( $(jq -r .attempts "$retry") >= 2 && $(date +%s) >= $(jq -r .next_at "$retry") )); }; then
+              CLASS=BLOCKED ACTION=WAIT
+              CAUSE+="; deterministic retry exhausted or no rerunnable Actions run; operator must restore infrastructure"
+            fi
+          fi
         fi
       elif [[ -n "$STEP" ]]; then
         OBSERVATION="$STEP issue=$(gh issue view "$ISSUE" -R "$REPO" --json state,closedAt --jq '"\(.state) closed_at=\(.closedAt // "")"')"
@@ -173,6 +184,44 @@ steps:
         --arg action "$ACTION" --arg check "$CHECK" --arg log "${LOG:0:3000}" --arg cause "$CAUSE" --arg retry_run "$RETRY_RUN" \
         '{repo:$repo,run:$run,pr:$pr,worktree:$worktree,step:$step,iteration:$iteration,sha:$sha,class:$class,action:$action,check:$check,log:$log,cause:$cause,retry_run:$retry_run}' >"$STATE/ci-observation.tmp"
       mv "$STATE/ci-observation.tmp" "$STATE/ci-observation.json"
+      python3 - "$STATE" "${CI_OBSERVATION_ID:?Missing reconcile tick identity}" "${ESCALATION_CI_BLOCKED:-2}" <<'PY'
+      import fcntl, hashlib, json, os, pathlib, sys, tempfile
+      root, observation_id, threshold = pathlib.Path(sys.argv[1]), sys.argv[2], int(sys.argv[3])
+      if threshold < 1:
+          raise ValueError("ESCALATION_CI_BLOCKED must be a positive integer")
+      def store(path, data):
+          fd, temporary = tempfile.mkstemp(dir=root)
+          try:
+              with os.fdopen(fd, "w") as output:
+                  json.dump(data, output, sort_keys=True)
+                  output.flush()
+                  os.fsync(output.fileno())
+              os.replace(temporary, path)
+          finally:
+              if os.path.exists(temporary):
+                  os.unlink(temporary)
+      with (root / "ci-no-progress.lock").open("a") as lock:
+          fcntl.flock(lock, fcntl.LOCK_EX)
+          file = root / "ci-observation.json"
+          observation = json.loads(file.read_text())
+          state_file = root / "ci-no-progress.json"
+          state = json.loads(state_file.read_text()) if state_file.exists() else {
+              "schemaVersion": 1, "run": observation["run"], "fingerprint": None,
+              "observations": 0, "observationId": None, "requests": {}}
+          blocked = observation["class"] == "BLOCKED" and observation["action"] == "WAIT"
+          fingerprint = hashlib.sha256(json.dumps(
+              [observation[key] for key in ("run", "sha", "check", "cause")],
+              separators=(",", ":")).encode()).hexdigest() if blocked else None
+          if state["observationId"] != observation_id or state["fingerprint"] != fingerprint:
+              state["observations"] = state["observations"] + 1 if fingerprint and state["fingerprint"] == fingerprint else int(blocked)
+              state["fingerprint"], state["observationId"] = fingerprint, observation_id
+          if blocked and state["observations"] >= threshold:
+              request = state["requests"].setdefault(fingerprint, {
+                  "id": fingerprint, "observations": state["observations"]})
+              observation["decisionRequest"] = request
+          store(state_file, state)
+          store(file, observation)
+      PY
       printf 'run=%s\nrepo=%s\nissue=%s\niteration=%s\nobservation=%s\nclassification=%s\n' \
         "$RUN" "$REPO" "$ISSUE" "$ITERATION" "$OBSERVATION" "$CLASS" | tee -a "$DAGU_OUTPUT_FILE"
       cat "$STATE/ci-observation.json"

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.119
+
+- Persist run-wide lifecycle escalation budgets across native retries, resumes and push-backs, with owner-targeted decision evidence, renewed windows, route changes and retained stop/onExit evidence (#558).
+- Fingerprint consecutive CI BLOCKED observations and send one owner decision request per fingerprint while reconciliation retains transition ownership.
+- Require a bound PoC target/access assessment before admission and an owner decision for unreachable targets or repeated access/scope INCONCLUSIVE results; render configurable escalation thresholds through bootstrap.
+- Exercise disposable live-Dagu recovery and publication fixtures against the escalation-aware graph, render PoC budgets as valid YAML strings, and serialize concurrent role-store initialization through SQLite's busy timeout.
+
 ## 0.3.118
 
 - Publish each gated feature candidate through optional operator validation, push, PR and guarded auto-merge, then reconcile required CI and merge (#561).

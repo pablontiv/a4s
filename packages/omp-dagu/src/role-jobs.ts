@@ -65,7 +65,9 @@ export class RoleJobStore {
     if (!Number.isSafeInteger(capacity) || capacity < 1) throw new Error("Role-job capacity must be a positive integer");
     mkdirSync(home, { recursive: true, mode: 0o700 });
     this.db = new DatabaseSync(join(realpathSync(home), "role-jobs.sqlite"));
-    this.db.exec("PRAGMA busy_timeout=30000; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS policy (id INTEGER PRIMARY KEY, capacity INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, document TEXT NOT NULL, result TEXT);");
+    // The default rollback journal lets concurrent first opens use busy_timeout;
+    // switching a live database to WAL can return SQLITE_BUSY immediately.
+    this.db.exec("PRAGMA busy_timeout=30000; PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS policy (id INTEGER PRIMARY KEY, capacity INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, document TEXT NOT NULL, result TEXT);");
     this.db.prepare("INSERT OR IGNORE INTO policy VALUES (1, ?)").run(capacity);
     const policy = this.db.prepare("SELECT capacity FROM policy WHERE id=1").get();
     if (policy?.capacity !== capacity) { this.db.close(); throw new Error("Role-job capacity differs from the persisted DAGU_HOME policy"); }

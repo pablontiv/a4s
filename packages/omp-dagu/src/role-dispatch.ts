@@ -70,8 +70,7 @@ async function stageState(run: string): Promise<StageState> {
   const response = await fetch(`${endpoint}/api/v1/dag-runs/feature/${encodeURIComponent(run)}`, { signal: AbortSignal.timeout(15000) });
   if (!response.ok) throw new Error(`Dagu role authorization HTTP ${response.status}`);
   const details = (await response.json() as { dagRunDetails: { nodes: NodeState[]; params: string } }).dagRunDetails;
-  const status = execFileSync("dagu", ["status", "feature", "--run-id", run], { encoding: "utf8" });
-  const iteration = Number(/push-back iteration: ([0-9]+)/.exec(status)?.[1] ?? "0");
+  const iteration = Number(process.env.DAG_PUSHBACK_ITERATION ?? "0");
   return { nodes: details.nodes, params: details.params, iteration };
 }
 export function roleAssignment(binding: JobBinding, issue: string, body: string, state: string): string {
@@ -81,7 +80,7 @@ export function roleAssignment(binding: JobBinding, issue: string, body: string,
     `Dagu owns commits, push, PRs and checkpoint transitions; deliver only your assigned local role result. ` +
     `Operator validation remains an operator decision. No task delegation or publication.\n`;
   if (binding.role === "triage") return scope +
-    "Review whether the issue's external/runtime behavior requires a new PoC. Reuse linked PASS evidence. Return the registered structured poc/behavior/question/reason object. The issue and comments above are the review input.";
+    "Review whether the issue's external/runtime behavior requires a new PoC. Reuse linked PASS evidence. Return the registered structured poc/behavior/question/reason object. For poc=yes also return requiredTargets and authorizedTargets as arrays of the same concrete target identifiers, and scopeBasis quoting the operator's actual execution-route authorization. An unknown route uses an empty authorizedTargets array; infer no access from the question itself. The issue and comments above are the review input.";
   if (binding.role === "implement" || binding.role === "conflict-resolution") return scope +
     `FEATURE_IMPLEMENT RUN=${binding.run}\nImplement the issue completely in the assigned worktree. ` +
     `Read ${state}/conflict-files when present; resolve the retained conflicts in place. ` +
@@ -97,7 +96,7 @@ export async function dispatchStage(stage: string, emit: (name: string, value: s
   const run = process.env.RUN || "";
   const issue = process.env.ISSUE || "";
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(run) || !/^[1-9][0-9]*$/.test(issue)) throw new Error("Role dispatch requires admitted RUN and ISSUE");
-  const dependencies: Record<string, string[]> = { triage: ["admit"], implement: ["recover_start_gate"] };
+  const dependencies: Record<string, string[]> = { triage: ["admit"], implement: ["recover_start_gate", "implement_budget", "escalation_decision"] };
   if (!dependencies[stage]) throw new Error(`Unsupported semantic stage ${stage}`);
   const common = git(primary, "rev-parse", "--path-format=absolute", "--git-common-dir");
   const state = join(common, "dagu-feature", "runs", run);
@@ -157,9 +156,12 @@ export async function dispatchStage(stage: string, emit: (name: string, value: s
   }));
   if (stage === "triage") {
     const result = results[0]!;
-    const output = result.output!;
-    emit("POC", String(output.poc)); emit("QUESTION", String(output.question));
-    emit("BASIS", String(output.reason)); emit("REVIEW", result.id);
+    const output = parseReview(JSON.stringify(result.output));
+    emit("POC", output.poc); emit("QUESTION", output.question);
+    emit("BASIS", output.reason); emit("REVIEW", result.id);
+    emit("REQUIRED_TARGETS", JSON.stringify(output.requiredTargets ?? []));
+    emit("AUTHORIZED_TARGETS", JSON.stringify(output.authorizedTargets ?? []));
+    emit("SCOPE_BASIS", output.scopeBasis ?? "No PoC required");
   } else if (stage === "implement") {
     const result = results[0]!;
     emit("SUMMARY", String(result.output!.summary)); emit("MESSAGE", String(result.output!.message)); emit("IMPLEMENTER", result.id);

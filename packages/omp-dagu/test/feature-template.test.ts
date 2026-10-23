@@ -341,10 +341,19 @@ test("template isolated PoC parent succeeds after exactly one child enqueue acro
     const bin = join(repo.root, "bin");
     const calls = join(repo.root, "external-calls");
     writeFileSync(calls, "");
-    for (const command of ["gh", "dagu-feature-bundle"]) {
-      writeFileSync(join(bin, command), `#!/bin/bash\nprintf '%s\\n' ${JSON.stringify(command + " ")}"$*" >> ${JSON.stringify(calls)}\n`);
-      chmodSync(join(bin, command), 0o755);
-    }
+    writeFileSync(join(bin, "gh"), `#!/bin/bash\nprintf '%s\\n' "gh $*" >> ${JSON.stringify(calls)}\n`);
+    writeFileSync(join(bin, "dagu-poc-scope"), `#!/bin/bash\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(fileURLToPath(new URL("../bin/dagu-poc-scope.ts", import.meta.url)))} "$@"\n`);
+    writeFileSync(join(bin, "dagu-feature-bundle"), `#!/bin/bash
+set -euo pipefail
+arguments="$*"
+while [[ $# -gt 0 && "$1" != -- ]]; do shift; done
+[[ "$1" == -- ]]
+shift
+for parameter in "$@"; do export "$parameter"; done
+dagu-poc-scope require
+printf '%s\\n' "dagu-feature-bundle $arguments" >> ${JSON.stringify(calls)}
+`);
+    for (const command of ["gh", "dagu-poc-scope", "dagu-feature-bundle"]) chmodSync(join(bin, command), 0o755);
     const source = readFileSync(definitions[0][1], "utf8");
     const dag = join(home, "dags", "feature.yaml");
     const variables = {
@@ -352,10 +361,11 @@ test("template isolated PoC parent succeeds after exactly one child enqueue acro
       RUN: run, ISSUE: "189", BASE_BRANCH: "main", PR_NUMBER: "", VALIDATION: "",
       OMP_SESSION_ID: "parent-id", PATH: `${bin}:${process.env.PATH}`, GATE: "true",
       REQUIRED_CHECK: "validate", DAGU_FEATURE_BUNDLE: "test",
+      ESCALATION_POC_INCONCLUSIVE: "2",
     };
     writeFileSync(dag, `name: feature\ntype: graph\nshell: bash\nmax_active_steps: 1\nenv:\n${Object.entries(variables).map(([key, value]) => `  - ${key}: ${JSON.stringify(value)}`).join("\n")}\n`
       + source.slice(source.indexOf("  - DAGU_RESOURCE_GUARD: |"), source.indexOf("steps:\n"))
-      + `steps:\n  - id: triage\n    run: |\n      printf 'POC=yes\\nQUESTION=runtime behavior\\nBASIS=regression test\\nREVIEW=\\n' >> "$DAGU_OUTPUT_FILE"\n    outputs:\n      - name: POC\n      - name: QUESTION\n      - name: BASIS\n      - name: REVIEW\n`
+      + `steps:\n  - id: triage\n    run: |\n      printf '%s\\n' 'POC=yes' 'QUESTION=runtime behavior' 'BASIS=regression test' 'REVIEW=' 'REQUIRED_TARGETS=["linux-arm64"]' 'AUTHORIZED_TARGETS=["linux-arm64"]' 'SCOPE_BASIS=regression test authorized linux-arm64' >> "$DAGU_OUTPUT_FILE"\n    outputs:\n      - name: POC\n      - name: QUESTION\n      - name: BASIS\n      - name: REVIEW\n      - name: REQUIRED_TARGETS\n      - name: AUTHORIZED_TARGETS\n      - name: SCOPE_BASIS\n`
       + source.slice(source.indexOf("  - id: triage_decision\n")));
     const env = { ...process.env, DAGU_HOME: home, DAGU_COORDINATOR_ENABLED: "false" };
     const result = spawnSync("dagu", ["start", "--run-id", run, dag], {
@@ -368,9 +378,16 @@ test("template isolated PoC parent succeeds after exactly one child enqueue acro
     const status = spawnSync("dagu", ["status", dag, "--run-id", run], { encoding: "utf8", env });
     assert.equal(status.status, 0, status.stdout + status.stderr);
     assert.match(status.stdout, /Succeeded/);
+    const scope = join(repo.primary, ".git", "poc", "scope", "189");
+    const requests = readdirSync(scope);
+    assert.equal(requests.length, 1);
+    const request = JSON.parse(readFileSync(join(scope, requests[0]!, "request.json"), "utf8"));
+    assert.equal(request.decisionRequired, false);
+    assert.deepEqual(request.input, { issue: "189", question: "runtime behavior", requiredTargets: ["linux-arm64"],
+      authorizedTargets: ["linux-arm64"], basis: "regression test authorized linux-arm64" });
     assert.deepEqual(readFileSync(calls, "utf8").trim().split("\n"), [
       `gh issue comment 189 --body-file ${join(repo.primary, ".git", "dagu-feature", "runs", run, "triage.md")}`,
-      `dagu-feature-bundle enqueue --run-id poc-${run} ${repo.primary}/.workspace/dagu/dags/poc.yaml -- ISSUE=189 QUESTION=runtime behavior BASE_BRANCH=main OMP_SESSION_ID=parent-id`,
+      `dagu-feature-bundle enqueue --run-id poc-${run} ${repo.primary}/.workspace/dagu/dags/poc.yaml -- ISSUE=189 QUESTION=runtime behavior BASE_BRANCH=main OMP_SESSION_ID=parent-id REQUIRED_TARGETS=["linux-arm64"] AUTHORIZED_TARGETS=["linux-arm64"] SCOPE_BASIS=regression test authorized linux-arm64 SCOPE_REQUEST=${request.id}`,
     ]);
   } finally { rmSync(repo.root, { recursive: true, force: true }); }
 });
@@ -567,7 +584,18 @@ for (const [name, definition] of adoptedDefinitions) {
       assert.equal(result.status, 75, result.stderr);
       assert.ok(result.stderr.includes(`rebase: index.lock held in ${repo.worktree}`));
       assert.equal(readFileSync(join(repo.state, "conflict-action"), "utf8"), "preserved\n");
-      assert.match(readFileSync(definition, "utf8"), /- id: rebase\n    depends: dependency_review(?:_cancellation)?\n    retry_policy:\n      limit: 3\n      interval_sec: 5\n      exit_code: \[75\]/);
+      const source = readFileSync(definition, "utf8");
+      const dependency = name === "adopted DAG" ? "dependency_review_cancellation" : "rebase_escalation_decision";
+      assert.match(extractStep(source, "rebase"), new RegExp(`^    depends: ${dependency}$`, "m"));
+      assert.match(extractStep(source, "rebase"), /    retry_policy:\n      limit: 3\n      interval_sec: 5\n      exit_code: \[75\]/);
+      assert.match(extractStep(source, "dependency_review_cancellation"), /^    depends: dependency_review$/m);
+      if (name !== "adopted DAG") {
+        const path = ["dependency_review_cancellation", "rebase_budget", "rebase_escalation",
+          "rebase_escalation_cancellation", "rebase_escalation_decision"];
+        for (let index = 1; index < path.length; index++) {
+          assert.match(extractStep(source, path[index]!), new RegExp(`^    depends: ${path[index - 1]}$`, "m"));
+        }
+      }
     } finally {
       rmSync(repo.root, { recursive: true, force: true });
     }
@@ -936,9 +964,16 @@ for (const [name, definition] of definitions) {
       assert.match(extractStep(source, step!), /continue_on:\n      failure: true/);
       const recovery = extractStep(source, `recover_${step}`);
       assert.ok(recovery.includes(`condition: "\${${step}.exit_code}"`));
-      assert.ok(recovery.includes(`rewind_to: ${step === "gate" ? "implement" : step}`));
+      const rewind = step === "gate" ? "implement_budget" : step;
+      assert.match(recovery, new RegExp(`^        rewind_to: ${rewind}$`, "m"));
       assert.match(recovery, /continue_on: skipped/);
-      assert.ok(extractStep(source, downstream!).includes(`depends: recover_${step}`));
+      const path = step === "start_gate"
+        ? ["recover_start_gate", "recover_start_gate_cancellation", "implement_budget", "escalation",
+          "escalation_cancellation", "escalation_decision", downstream]
+        : [`recover_${step}`, `recover_${step}_cancellation`, downstream];
+      for (let index = 1; index < path.length; index++) {
+        assert.match(extractStep(source, path[index]!), new RegExp(`^    depends: ${path[index - 1]}$`, "m"));
+      }
     });
   }
   for (const scenario of [
@@ -1387,7 +1422,7 @@ test("native terminal replacement captures retained and nonempty correction", {
       extractStep(source, "capture"),
       "  - id: retain_candidate\n    depends: capture\n    run: test \"$RETAIN\" = no\n",
       "  - id: dependency_review\n    depends: retain_candidate\n    action: human.task\n    with:\n      prompt: Synthetic dependency reviewer releases captured candidate for rebase.\n",
-      extractStep(source, "rebase").replace(/depends: dependency_review(?:_cancellation)?/, "depends: dependency_review"),
+      extractStep(source, "rebase").replace(/depends: (?:dependency_review(?:_cancellation)?|rebase_escalation_decision)/, "depends: dependency_review"),
       "handler_on:\n  exit:\n    run: |\n" + extractScript(definition, "  exit:").split("\n").map(line => "      " + line).join("\n") + "\n",
     ].join(""));
     dagu("validate", file);
@@ -1500,10 +1535,10 @@ test("real Dagu retries rebase after a six-second index lock", {
     const lock = git(repo.worktree, "rev-parse", "--git-path", "index.lock");
     writeFileSync(lock, "");
     const source = readFileSync(definitions[0][1], "utf8");
-    const step = extractStep(source, "rebase").replace(/    depends: dependency_review(?:_cancellation)?\n/, "");
+    const step = extractStep(source, "rebase").replace(/    depends: rebase_escalation_decision\n/, "");
     const file = join(home, "dags", "lock-retry.yaml");
     const dagEnv = Object.entries(featureScriptEnv(repo)).map(([key, value]) => `  ${key}: ${JSON.stringify(value ?? "")}`).join("\n");
-    writeFileSync(file, `name: lock-retry\nenv:\n${dagEnv}\nsteps:\n${step}`);
+    writeFileSync(file, `name: lock-retry\nenv:\n${dagEnv}\nsteps:\n  - id: triage\n    run: echo POC=no >> "$DAGU_OUTPUT_FILE"\n    outputs:\n      - name: POC\n${step.replace("    retry_policy:", "    depends: triage\n    retry_policy:")}`);
     const api = `http://127.0.0.1:${port}/api/v1`;
     await until("isolated Dagu ready", async () => {
       try { return (await fetch(`${api}/dag-runs`)).ok ? true : undefined; } catch { return undefined; }
@@ -1518,12 +1553,13 @@ test("real Dagu retries rebase after a six-second index lock", {
       if (response.ok) {
         const run = (await response.json() as { dagRunDetails: {
           statusLabel: string;
-          nodes: Array<{ statusLabel: string; stderr?: string }>;
+          nodes: Array<{ step: { name: string }; statusLabel: string; stderr?: string }>;
         } }).dagRunDetails;
         assert.notEqual(run.statusLabel, "failed", JSON.stringify(run));
         if (run.statusLabel === "succeeded") {
-          assert.equal(run.nodes[0]!.statusLabel, "succeeded");
-          evidence = readFileSync(run.nodes[0]!.stderr!, "utf8");
+          const rebase = run.nodes.find(node => node.step.name === "rebase")!;
+          assert.equal(rebase.statusLabel, "succeeded");
+          evidence = readFileSync(rebase.stderr!, "utf8");
           succeeded = true;
           break;
         }
@@ -1681,7 +1717,9 @@ esac
         "validation", "push", "recover_push", "pr"]
         .map(step => step === "implement"
           ? "  - id: implement\n    depends: recover_start_gate\n    action: human.task\n    with:\n      prompt: Synthetic delivery actor for native recovery acceptance.\n" + deliveryForm
-          : extractStep(source, step)),
+          : extractStep(source, step)
+            .replace("depends: rebase_escalation_decision", "depends: dependency_review_cancellation")
+            .replaceAll("rewind_to: implement_budget", "rewind_to: implement")),
       "  - id: await_merge\n    depends: pr\n    action: human.task\n    with:\n      prompt: Isolated merge boundary\n",
       source.slice(source.indexOf("handler_on:\n"), source.indexOf("  exit:\n")),
     ].join("");
@@ -1819,14 +1857,14 @@ for (const [name, definition] of definitions) {
             writeFileSync(pocDefinition, "steps:\n  - id: experiment\n    run: echo isolated-poc\n");
             const source = readFileSync(definition, "utf8");
             const triage = mode === "poc"
-              ? "  - id: triage\n    depends: admit\n    action: human.task\n    with:\n      prompt: Synthetic decision actor for PoC routing acceptance.\n      form:\n        type: object\n        properties:\n          POC:\n            type: string\n            enum: [yes, no]\n          QUESTION:\n            type: string\n          BASIS:\n            type: string\n        required: [POC, QUESTION, BASIS]\n"
+              ? "  - id: triage\n    depends: admit\n    action: human.task\n    with:\n      prompt: Synthetic decision actor for PoC routing acceptance.\n      form:\n        type: object\n        properties:\n          POC:\n            type: string\n            enum: [yes, no]\n          QUESTION:\n            type: string\n          BASIS:\n            type: string\n          REQUIRED_TARGETS:\n            type: string\n          AUTHORIZED_TARGETS:\n            type: string\n          SCOPE_BASIS:\n            type: string\n        required: [POC, QUESTION, BASIS, REQUIRED_TARGETS, AUTHORIZED_TARGETS, SCOPE_BASIS]\n"
               : `  - id: triage\n    run: |\n      printf 'POC=no\\nQUESTION=runtime behavior\\nBASIS=regression test\\nREVIEW=fixture\\n' >> "$DAGU_OUTPUT_FILE"\n    outputs:\n      - name: POC\n      - name: QUESTION\n      - name: BASIS\n      - name: REVIEW\n`;
             // Reviewer verification and implementation/merge are outside this routing test.
             // Keep the production start/close gates, conditional checkpoints and exit handler.
             const decision = mode === "poc" ? extractStep(source, "triage_decision")
               : "  - id: triage_decision\n    depends: triage\n    run: echo reviewed-implementation\n";
             const implementation = mode === "poc"
-              ? extractStep(source, "implement") + "  - id: await_merge\n    depends: implement\n    run: echo merged\n  - id: authorize_ci\n    depends: await_merge\n    run: echo authorized-candidate\n"
+              ? extractStep(source, "implement").replace("depends: escalation_decision", "depends: recover_start_gate_cancellation") + "  - id: await_merge\n    depends: implement\n    run: echo merged\n  - id: authorize_ci\n    depends: await_merge\n    run: echo authorized-candidate\n"
               : `  - id: implement\n    depends: start_gate\n    run: |\n      git -C "$WORKTREE" rev-parse HEAD > "$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")/tested-sha"\n      ${mode === "implementation-blocked" ? 'printf "operator changes\\n" > "$PRIMARY/README.txt"' : "echo implementation"}\n  - id: await_merge\n    depends: implement\n    run: echo merged\n  - id: authorize_ci\n    depends: await_merge\n    run: echo authorized-candidate\n`;
             const script = [
               "type: graph\nshell: bash\nmax_active_steps: 1\n",
@@ -1834,6 +1872,7 @@ for (const [name, definition] of definitions) {
               `env:\n  - PRIMARY: ${JSON.stringify(repo.primary)}\n  - BRANCH: dagu/issue-\${ISSUE}\n  - GATE: "true"\n  - REQUIRED_CHECK: validate\n  - PATH: ${join(repo.root, "bin")}:${process.env.PATH}\n  - WORKTREE: ${repo.worktree}\n  - RUN: \${context.run.id}\n  - DAGU_FEATURE_BUNDLE: test\n`,
               source.slice(source.indexOf("  - DAGU_RESOURCE_GUARD: |"), source.indexOf("steps:\n")),
               "steps:\n", ...(mode === "poc" ? ["admission", "admit"].map(id => extractStep(source, id)) : []), triage, decision,
+              ...(mode === "poc" ? ["poc_scope_prepare", "poc_scope_decision", "poc_scope_resolve", "poc_admit"].map(id => extractStep(source, id)) : []),
               ...["detect_start_primary", "start_primary_unavailable", "start_gate", ...(mode === "poc" ? ["recover_start_gate"] : [])].map(id => extractStep(source, id)),
               implementation,
               ...["detect_close_primary", "close_primary_unavailable", "close_gate"].map(id => extractStep(source, id).replace("await_merge_cancellation", "await_merge")),
@@ -1851,7 +1890,8 @@ for (const [name, definition] of definitions) {
             if (mode === "poc") {
               await state(id, "waiting");
               dagu("human-task", "complete", "feature", "--run-id", id, "--step", "triage",
-                "--input", "POC=yes", "--input", "QUESTION=runtime behavior", "--input", "BASIS=regression test");
+                "--input", "POC=yes", "--input", "QUESTION=runtime behavior", "--input", "BASIS=regression test",
+                "--input", 'REQUIRED_TARGETS=["local"]', "--input", 'AUTHORIZED_TARGETS=["local"]', "--input", "SCOPE_BASIS=isolated local fixture");
               const routed = await until("PoC parent finishes instead of waiting at implement", async () => {
                 const response = await fetch(`${api}/dag-runs/feature/${id}`);
                 if (!response.ok) return undefined;
@@ -1867,7 +1907,8 @@ for (const [name, definition] of definitions) {
               assert.equal(admitted.nodes.find(node => node.step.name === "admit")?.statusLabel, "succeeded");
               assert.equal(admitted.nodes.find(node => node.step.name === "triage")?.statusLabel, "waiting");
               dagu("human-task", "complete", "feature", "--run-id", replacement, "--step", "triage",
-                "--input", "POC=yes", "--input", "QUESTION=runtime behavior", "--input", "BASIS=regression test");
+                "--input", "POC=yes", "--input", "QUESTION=runtime behavior", "--input", "BASIS=regression test",
+                "--input", 'REQUIRED_TARGETS=["local"]', "--input", 'AUTHORIZED_TARGETS=["local"]', "--input", "SCOPE_BASIS=isolated local fixture");
               await state(replacement, "succeeded");
             }
             if (mode === "implementation-blocked") {
@@ -2187,8 +2228,9 @@ for (const [name, definition] of definitions) {
           writeFileSync(dag, `type: graph\nshell: bash\nmax_active_steps: 1\n${params}env:\n`
             + Object.entries(vars).filter(([, value]) => value !== undefined).map(([key, value]) => `  - ${key}: ${JSON.stringify(value)}\n`).join("")
             + `steps:\n  - id: triage\n    run: printf 'POC=${mode === "poc" ? "yes" : "no"}\\n' >> "$DAGU_OUTPUT_FILE"\n    outputs:\n      - name: POC\n  - id: implement\n    depends: triage\n    action: human.task\n    with:\n      prompt: Implement candidate\n`
-            + gate + extractStep(source, "recover_gate")
-            + ["validation", "push", "recover_push"].map(step => extractStep(source, step)).join(""));
+            + gate + extractStep(source, "recover_gate").replaceAll("rewind_to: implement_budget", "rewind_to: implement")
+            + ["validation", "push", "recover_push"].map(step => extractStep(source, step)
+              .replaceAll("rewind_to: implement_budget", "rewind_to: implement")).join(""));
           command("validate", dag);
           const overrideId = testRunId("override");
           const override = dagu("enqueue", "--run-id", overrideId, dag, "--", "VALIDATION=changed");
@@ -2322,10 +2364,10 @@ await dispatchStage("implement",(name,value)=>require("node:fs").appendFileSync(
     chmodSync(join(fixtureBin, "dagu-role-jobs"), 0o755);
     writeFileSync(join(fixtureBin, "gh"), '#!/bin/sh\nprintf \'{"title":"Fixture","body":"Acceptance","comments":[]}\\n\'\n');
     chmodSync(join(fixtureBin, "gh"), 0o755);
-    const steps = ["implement", "capture", "rebase", "conflict_review", "gate", "recover_gate",
+    const steps = ["implement_budget", "escalation", "escalation_decision", "implement", "capture", "rebase", "conflict_review", "gate", "recover_gate",
       "validation", "push"].map(step => extractStep(source, step)
-        .replace(/    depends: recover_start_gate(?:_cancellation)?\n/, "    depends: triage\n")
-        .replace(/    depends: dependency_review(?:_cancellation)?\n/, "    depends: capture\n")).join("\n");
+        .replace(/    depends: recover_start_gate_cancellation\n/, "    depends: recover_start_gate\n")
+        .replace(/    depends: rebase_escalation_decision\n/, "    depends: capture\n")).join("\n");
     const dag = join(home, "dags", "feature.yaml");
     writeFileSync(dag, `name: feature\ntype: graph\nshell: bash\nmax_active_steps: 1\nparams:\n  - ISSUE: "189"\n  - OMP_SESSION_ID: parent-id\nenv:\n${Object.entries({
       ISSUE: "189", PRIMARY: repo.primary, WORKTREE: repo.worktree, BRANCH: repo.branch, PATH: env.PATH,
@@ -2787,6 +2829,7 @@ test("real Dagu gate exclusion covers completion, retry, native rewind, BEHIND a
           + extractStep(source, "gate").replace(/depends: conflict_review(?:_cancellation)?/, "depends: conflict_review")
           + "  - id: rewind\n    depends: gate\n    preconditions:\n      - condition: '${CHECKPOINT}'\n        expected: rewind\n    action: human.task\n    with:\n      prompt: Disposable native rebase rewind\n      push_back:\n        rewind_to: rebase\n"
           + extractStep(source, "await_merge").replace("depends: auto_merge", "depends: gate")
+            .replace("rewind_to: rebase_budget", "rewind_to: rebase")
             .replace("    action: human.task", "    preconditions:\n      - condition: '${CHECKPOINT}'\n        expected: merge\n    action: human.task"));
         command("validate", dag);
         const checkpoint = entry === "native rewind" ? "rewind" : entry === "BEHIND" ? "merge" : "";
