@@ -6,9 +6,9 @@
 .superpowers/
 .worktrees/
 .workspace/worktrees/
+.workspace/*-smoke*/
 node_modules/
 dist/
-artifacts/pi-context-expert-e2e/
 
 # Local environment and package-manager credentials
 .env
@@ -47,8 +47,8 @@ Thumbs.db
 __pycache__/
 *.py[cod]
 
-# synagent bus: LevelDB persistence (default path when running the broker)
-packages/synagent/bus/mqtt-db/
+# message bus: LevelDB persistence for an explicit repository-local --db path
+apps/message-bus/mqtt-db/
 
 # Beads / Dolt files (added by bd init)
 .dolt/
@@ -57,14 +57,9 @@ packages/synagent/bus/mqtt-db/
 .beads/proxieddb/
 *.gate.lock*
 
-# synagent adapter: deps instaladas por el marketplace (no versionar)
-packages/synagent/core/adapters/claude/node_modules/
 
 # Claude Code: andamiaje de tipos que el engine genera al cargar un plugin
 # (se reescribe en cada carga; no se versiona). Cubre el tsconfig de raíz del
 # plugin y la carpeta de tipos generada, para cualquier adaptador de plugin.
-packages/synagent/core/adapters/claude/.claude-plugin/types/
-packages/synagent/core/adapters/claude/tsconfig.json
 packages/*/adapters/*/tsconfig.json
-!packages/context-expert/adapters/pi/tsconfig.json
 packages/*/adapters/*/.claude-plugin/types/

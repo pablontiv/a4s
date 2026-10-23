@@ -530,7 +530,7 @@ describe("tool row host contract", () => {
 });
 
 describe("package host dependencies", () => {
-	it("declares compatible optional peers and uses the approved Pion snapshot", () => {
+	it("declares compatible optional hosts and public Pi development dependencies", () => {
 		const manifest = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as {
 			dependencies?: Record<string, string>;
 			peerDependencies?: Record<string, string>;
@@ -547,9 +547,5 @@ describe("package host dependencies", () => {
 		assert.equal(manifest.peerDependenciesMeta?.["@pablontiv/pion"]?.optional, true);
 		assert.equal(manifest.devDependencies?.["@earendil-works/pi-tui"], "1.0.4");
 		assert.equal(manifest.devDependencies?.["@earendil-works/pi-coding-agent"], "1.0.3");
-		assert.equal(
-			manifest.devDependencies?.["@pablontiv/pion"],
-			`https://github.com/pablontiv/pi/releases/download/pion-local-v${version}/pablontiv-pion-${version}.tgz`,
-		);
 	});
 });

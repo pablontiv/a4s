@@ -356,9 +356,11 @@ def render(dataset, readings, provider, now, days, limit_id):
                      'task.maxConcurrency', 'retry.fallbackChains.*', 'retry.usageReservePct')]),
         '## Advisor panel template', table(['Decision', 'Opus verdict', 'Grok verdict'],
                                            [('Evidence-backed decision', 'Pending', 'Pending')]),
-        "Use completion(model='slow') and a reviewer agent with independently verified resolved models. "
+        "Use completion(model='slow') and native OMP task(agent='reviewer'), installed from "
+        'the canonical A4S .omp/agents/reviewer.md, with independently verified resolved models. '
         'Both must be outside the provider under audit; if a route resolves to that provider, '
-        'select an explicitly authorised independent route before calling it. Record model IDs, '
+        'select an explicitly authorised independent route before calling it. Record agentSource, '
+        'selected definition path and model IDs, '
         'verdict, strongest counterargument, risk, and confidence. This script makes no advisor calls '
         'and changes no configuration.']
     return '\n\n'.join(sections) + '\n'

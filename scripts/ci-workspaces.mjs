@@ -16,8 +16,7 @@ function discover() {
     workspaces.push({
       dir, name: manifest.name,
       test: Boolean(manifest.scripts?.test),
-      // Preserve main's documented private-Pion typecheck policy by manifest identity.
-      typecheck: Boolean(manifest.scripts?.typecheck) && manifest.name !== "@a4s/pi-tool-row-presentation",
+      typecheck: Boolean(manifest.scripts?.typecheck),
       dependencies: Object.keys({ ...manifest.dependencies, ...manifest.devDependencies,
         ...manifest.peerDependencies, ...manifest.optionalDependencies }),
     });
@@ -46,7 +45,7 @@ function select(files) {
     const owner = owners.find(workspace => path === workspace.dir || path.startsWith(`${workspace.dir}/`));
     if (owner) selected.add(owner.name);
     // Root/shared changes and deleted or moved workspace roots select existing manifests only.
-    if (!owner || owner.name === "@a4s/omp-hot-reload") all = true;
+    if (!owner || owner.name === "@a4s/hot-reload") all = true;
   }
   if (all) for (const workspace of workspaces) selected.add(workspace.name);
   let previous;
@@ -83,7 +82,7 @@ function aggregate() {
   console.log(`changes=${changes} test=${test} live=${live} pr-body=${prBody}`);
   if (prBody !== (process.env.EVENT_NAME === "pull_request" ? "success" : "skipped")
     || changes !== "success" || test !== (workspaces.length ? "success" : "skipped")
-    || live !== (workspaces.some(workspace => workspace.name === "@a4s/omp-dagu") ? "success" : "skipped")) {
+    || live !== (workspaces.some(workspace => workspace.name === "@a4s/issue-lifecycle") ? "success" : "skipped")) {
     throw new Error("Required CI jobs did not complete successfully");
   }
 }
