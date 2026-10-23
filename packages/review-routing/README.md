@@ -25,9 +25,6 @@ crossFamilyReview:
     reviewer:
       fallbackRoles: ["@slow", "@default", "@task"]
       excludeTaskFamily: true
-    qa:
-      fallbackRoles: ["@slow", "@default", "@task"]
-      excludeTaskFamily: true
     security-reviewer:
       fallbackRoles: ["@slow", "@default"]
       excludeTaskFamily: true
@@ -64,12 +61,6 @@ Every configured agent excludes the resolved parent model family. When
 when false, selection is parent-relative only. The same configured fallback
 ordering and strict eligibility rules apply in both cases.
 
-The private package `@a4s/review-routing` shares one process-global registry at
-`Symbol.for("@a4s/review-routing/quality-implementers")`. Binding callers and
-the reloadable hook consume the same one-shot binding across independently
-loaded extension graphs. The current dispatch names remain `reviewer`, `qa`,
-`triage-reviewer`, `plan-reviewer` and `security-reviewer`; the structured
-quality role `qa` is a separate lifecycle contract.
 
 ## Installation and checks
 
@@ -112,44 +103,14 @@ The surviving template suite now lives at
 `npm run typecheck --workspace @a4s/issue-lifecycle`. CI continues to discover the
 canonical manifest and declared consumers, including its existing typecheck script.
 
-A fresh native OMP 18.12.6 SDK session loaded the candidate package roots with
-explicit-only extension discovery and temporary agent/config/session directories.
-All five named policies returned `CROSS_FAMILY_INDETERMINATE` when the parent
-model was unavailable. A separately imported binding caller supplied
-`Smoke422Quality`; the native reloadable hook consumed its canonical-registry
-binding once, reported `CROSS_FAMILY_EXHAUSTED` with excluded family `openai`,
-then returned the ordinary indeterminate-parent result on the next dispatch.
-The session JSONL persists the observation as `review-routing-422-smoke`.
+The original #422 print-mode smoke established extension loading but did not
+complete a tool-bearing parent turn; its API snapshot alone did not prove native
+review dispatch. The later [#431 isolated native walkthrough](../../docs/operations/v1-walkthrough.md)
+completed a real `task(agent=reviewer)` and `wait`, selected the project definition,
+and matched its canonical body in the child `session_init`. That bounded proof
+does not establish every routing policy/fallback combination.
 
-These are native hook observations, not successful child-task executions.
-The retained evidence is
-`.workspace/worktrees/smoke-422-HgRHaW/evidence.json` and the adjacent
-`sessions/2026-10-23T04-44-10-964Z_01a16712-d954-73ea-a130-0b0154848c20.jsonl`.
-The evidence JSON records the session's original temporary path; the adjacent
-JSONL is the retained transcript in this worktree.
-
-Native discovery selected the lifecycle package's then-present `agents/qa.md`,
-`agents/triage-reviewer.md` and `agents/plan-reviewer.md` with `agentSource=user`
-and canonical paths in the candidate checkout.
-`reviewer` and `security-reviewer` resolved to `agentSource=bundled`,
-`embedded:reviewer.md` and `embedded:security-reviewer.md`; these sources do
-not satisfy the requested candidate-definition proof.
-
-**Operational acceptance remains blocked.** The isolated catalog had zero
-authenticated models. A separate native CLI attempt with
-`omp --no-extensions -e <candidate>/packages/review-routing -e <candidate>/packages/issue-lifecycle --session-dir <temporary-sessions> --no-title --no-lsp --no-tools -p --model openai/gpt-5.2 "Reply only ROUTING422"` (package path migrated here)
-and temporary `PI_CODING_AGENT_DIR`/`PI_CODING_AGENT_SESSION_DIR` exited 1:
-`No API key found for openai`. Effective authenticated child-model selection
-and runtime response-family exclusions remain unproven. Resume with
-operator-authorized credentials and candidate-native definitions for all
-required roles, retaining persisted transcripts; production authentication and
-profiles were left intact. This partial smoke is not an acceptance PASS.
-
-The authorized implementation run `a4s-issue-422-s01a16671` repeated the four
-targeted commands above successfully (40 routing tests; 171 consumer/CI tests,
-2 live-Dagu skips; both typechecks exit 0). An environment-variable-name-only
-inspection found no `API_KEY`, `AUTH_TOKEN` or `ACCESS_TOKEN` suffixes.
-No authenticated retry was attempted without credentials. Resuming the smoke
-requires operator-authorized authentication in the isolated native scope and a
-decision on the candidate-native reviewer/security-reviewer definitions;
-installing different role definitions is outside this package-identity rename.
+See [private installation](../../docs/operations/private-install.md) for loading the
+whole package and canonical definitions, and the [source catalog](../../docs/architecture/catalog.md)
+for ownership. This package routes reviewer models; definitions and lifecycle
+admission remain separately owned.

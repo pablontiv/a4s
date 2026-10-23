@@ -1,0 +1,247 @@
+# Lanes, deployment and coherent recovery
+
+These are reviewed operating procedures, not evidence that a service, link,
+branch protection or consumer adoption changed. The
+[dated walkthrough](v1-walkthrough.md) records only the observations exercised
+for #431. Source publication, private installation, initial lane adoption,
+post-release v1 adoption/proof and temporary-lane retirement have distinct owners
+and acceptance outcomes.
+
+## Repository lanes and ownership
+
+| Lane | Independent PRIMARY clone | Base branch | Declared queue |
+| --- | --- | --- | --- |
+| Main | `a4s` | `main` | `a4s` |
+| Temporary v1 | `a4s-v1` | `integration/v1` | `a4s-v1` |
+
+PRIMARY is a canonical independent clone: its Git dir equals its common Git dir.
+Issue worktrees are linked below that clone's `.workspace/worktrees/issue-N`.
+Start the coordinator in a clean PRIMARY on its declared base. Each lane owns
+selected, distinct issues; both clones share GitHub origin and issue-numbered
+remote branches/checkpoints. Keep one coordinating owner per canonical repo and
+preserve the run's original owner. Cross-repository contact carries only its
+explicit request and return channel.
+
+Pass the persistent main-session `dagu_session_id` as `OMP_SESSION_ID` when
+admitting work. A handoff preserves run, candidate, iteration, receipt and
+session ownership; any explicit transfer follows the execution skill. Queue
+capacity, semantic-job capacity and OMP's subagent semaphore are independent.
+The PRIMARY gate lock serializes the conflicting gate, not unrelated jobs.
+
+Retained main changes move **main forward into integration/v1** during v1 work.
+After final refresh and candidate proof, the authorized release integrates
+**integration/v1 into main**. These operations belong to the coordinating owner;
+this runbook does not authorize moving either branch or touching an active
+PRIMARY. The final refresh also reconciles newly delivered #311 sources.
+
+### Stable controller versus candidate
+
+The initial temporary lane operates through the approved installed stable
+controller/CLI and shared scheduled reconciler. Candidate source in
+`packages/issue-lifecycle` is evaluated separately. The baseline committed v1
+feature render still records `@a4s/omp-dagu@0.3.118`, source `003bd8a…`, and
+`bootstrap-a4s-v0-3-118`, with migrated package/skill paths and queue `a4s-v1`.
+That retained provenance is not a fresh renamed-bundle adoption.
+
+The baseline candidate's `@a4s/issue-lifecycle@0.4.1` parser requires its own exact
+name. Therefore its CLI is not interchangeable with the stable controller on
+those old renders. Run inspection with the controller that owns the target;
+report incompatibility as deployment state rather than changing a stamp.
+Scheduled reconciliation is a shared resource: replacing it affects other lanes
+and active runs. A shared scheduler's actual home/config may differ from an
+unset shell's defaults. Capture its service environment before drawing conclusions.
+
+The tree declares queues; it does not establish the deployed scheduler's effective
+concurrency or enforce every direct CLI/REST bypass. #335's revised actual-queue
+guard and lane mapping work must be assessed against delivered code and separate
+live evidence. #383's concurrency/restart PoC is not evidence that its acceptance
+value is installed. TUI/Git/Dagu-store access keeps these controls advisory,
+not process or OS isolation.
+
+For already adopted lane work, use the installed controller's **real source
+path**, selected Dagu home and assigned issue/session:
+
+```sh
+cd "$PRIMARY"
+node "$CONTROLLER_CLI" enqueue \
+  --run-id "<lane>-issue-<n>" .workspace/dagu/dags/feature.yaml -- \
+  ISSUE="<n>" OMP_SESSION_ID="<persistent-owner-session>"
+```
+
+`CONTROLLER_CLI` is the identity-matched `bin/dagu-feature-bundle.ts` in a durable
+source checkout. Node >=22.19 supports direct TypeScript here; use the real
+source path because Node rejects stripping TypeScript under `node_modules`.
+The admitted feature/PoC policy fixes PRIMARY, BRANCH, GATE, REBASE_RESOLVER,
+REQUIRED_CHECK and blocker-reporting policy; the CLI rejects overrides.
+
+## Identity and adoption
+
+Before any consequential change, obtain explicit authority for the target
+PRIMARY/lane, source SHA/package version, Dagu binary/version, scheduler home and
+URL, links, service hooks, reconciler replacement and repository settings. Record
+current stamps, adoption trailers, installed source/CLI/extension digests, active
+runs, queue configuration and pending human tasks. Preserve a coherent recovery
+set rather than only a package directory.
+
+1. **Source publication:** merge tested package source and its version/changelog
+   where required. Template/skill changes require a version above the merge base;
+   the release guard follows the manifest across moves. Publication alone changes
+   neither installed links nor adopted renders.
+2. **Private installation:** choose durable pinned source, install dependencies,
+   verify official Dagu 2.20.1 against upstream release checksums and exact version
+   output, and review operator-owned links/PATH/config. The official asset naming
+   is `dagu_2.20.1_<os>_<arch>.tar.gz`; CI validates upstream `checksums.txt` before
+   extraction. The maintained station installer checks the same manifest pin.
+3. **Initial stable-controller lane adoption:** preserve the approved controller
+   and shared reconciler while adopting the lane's independent PRIMARY/base/queue.
+   Review lane-specific rendered values and actual evidence independently of v1
+   package publication. Existing initial adoption does not prove new v1 identity.
+4. **Post-release v1 adoption:** from clean, approved source whose HEAD is an
+   ancestor of its fetched `origin/HEAD`, bootstrap with explicit canonical PRIMARY
+   and SKILL_DIR. Normal GitHub default remains main. An unmerged integration/v1
+   candidate needs an approved isolated source/controller origin; changing an
+   isolated bare remote's default is proof setup, not production adoption.
+5. **Consumer delivery:** inspect bootstrap `answers`, `render` and `confirm`.
+   The staging location is `git rev-parse --path-format=absolute --git-path
+   dagu-feature/feature.yaml`. Bootstrap also installs/validates the reconciler and
+   may change GitHub settings. Deliver its four repository renders via the normal
+   adoption issue/commit and retain the three emitted adoption trailers.
+6. **Fresh loading and proof:** bind CLI/reconciler/OMP to the same adopted source
+   identity and restart OMP. Inspect all stamps and perform admission plus agreed
+   live acceptance before reopening work. Changed `BUNDLE_NAME` follows this whole
+   procedure: fresh real renders and matching components establish compatibility.
+
+The authorized bootstrap command shape is:
+
+```sh
+skill_dir="$SOURCE/packages/issue-lifecycle/skills/issue-execution"
+dagu enqueue --run-id "bootstrap-<repo>-v<version-with-hyphens>" \
+  "$skill_dir/dagu-feature-bootstrap.yaml" -- \
+  PRIMARY="$PRIMARY" SKILL_DIR="$skill_dir"
+```
+
+Run IDs use hyphens rather than dotted versions. Source `origin/HEAD` ancestry,
+source cleanliness, independent canonical PRIMARY and exact runtime checks are
+real preconditions, not prompts that can be waived. #431's isolated partial
+bootstrap executes only detect/render/reconcile; GitHub mutation and adoption
+remain outside that proof.
+
+Inspect with the chosen identity-matched CLI:
+
+```sh
+dagu version
+dagu history reconcile --format json --limit 5
+node "$SOURCE/packages/issue-lifecycle/bin/dagu-feature-bundle.ts" "$PRIMARY"
+```
+
+The inspection reports name/version stamps and runtime compatibility. Admission
+adds verified source-render provenance, loaded-byte binding and an immutable
+snapshot; [architecture](../architecture/issue-lifecycle.md#compatibility-is-more-than-a-version-display)
+details the actual equalities. All newly admitted components should be pinned to
+the approved set; patch-compatible display alone is insufficient.
+
+## Station configuration and drained activation
+
+`dagu-station-install.ts` owns base.yaml and rendered LaunchAgent bytes; it merges
+owned config leaves and queue entries by name. Its template sets loopback
+`127.0.0.1:8080`, `auth.mode=none`, queues/coordinator enabled and **a4s capacity 2**.
+Applying that template can replace an installed a4s capacity 8 with 2; foreign
+queue entries survive. Source inspection (#449) proved this consequence, not an
+observed production overwrite. Review intended capacity before applying.
+
+By default installation writes files and defers restart. File bytes alone do not
+reload the active scheduler. An authorized initial install can use:
+
+```sh
+node "$SOURCE/packages/issue-lifecycle/bin/dagu-station-install.ts" \
+  --dagu-home "$DAGU_HOME" \
+  --launch-agent "$HOME/Library/LaunchAgents/local.dagu.server.plist" \
+  --log-dir "$HOME/Library/Logs/Dagu"
+```
+
+Use the same parameters with `--check` for byte-level drift (exit 0 unchanged,
+1 drift/version/validation failure); `--check` and `--apply` are exclusive.
+For an isolated install, set a fresh Dagu home and omit `--launch-agent` so both
+plist and logs stay there. Actual service activation belongs to the operator.
+
+For an active station, provision actual close/restart/open hooks:
+
+```sh
+node "$SOURCE/packages/issue-lifecycle/bin/dagu-station-install.ts" \
+  --dagu-home "$DAGU_HOME" --apply \
+  --admission-close "$CLOSE_ADMISSION" \
+  --restart-command "$RESTART_SERVICE" \
+  --admission-open "$OPEN_ADMISSION"
+```
+
+The close hook stops **all** producers, including sessions, CLI/API, automation
+and scheduled triggers, and holds exclusion until open. The installer lock only
+serializes installers. It waits for both queued and running history to empty;
+existing queued runs drain under the previous scheduler. The restart hook sends
+TERM to drained `start-all`, waits for replacement PID/readiness with the same
+home/config, then leaves admission closed. On launchd, the signal operation is
+`launchctl kill SIGTERM "gui/$(id -u)/local.dagu.server"`; readiness belongs in the
+operator hook. The installer then verifies two held running probes plus one
+queued in a4s and three successes before opening. A hook of `true` is valid only
+in an isolated environment with no producers or schedules.
+
+The maintained proof is drained TERM restart, bounded to local Dagu 2.20.1
+(#255); host restart/distributed-worker survival is a separate proposition.
+After a failure during closure, admission remains closed. Inspect service,
+history and output before recovery. Preserve `.station-install.lock` barriers
+until outstanding probes finish; remove the completed lock only after recovery.
+Seven-day global history retention comes from the installed base; retain durable
+acceptance evidence outside that cleanup window.
+
+## Active runs and recovery
+
+Read exact DAG/run status and approval iteration before any human-task action.
+The designated reconciler owns CI/merge observation and `await_ci`/`await_merge`
+transitions; retain pending runs and candidate SHA rather than duplicating polling.
+A dirty/wrong-branch PRIMARY remains waiting while queue capacity is released.
+Restore it clean on its declared base while preserving operator changes, then
+push back the exact availability checkpoint using its observed iteration (for
+example `start_primary_unavailable`, `close_primary_unavailable`, or PoC
+`base_primary_unavailable`). Cleaning alone does not resume a waiting task.
+
+Inspect `<git-dir>/dagu-feature/runs/<run>/` receipts, candidate, tested SHA,
+resource owner and cleanup proof before retry or transfer. Terminal recovery can
+reuse retained resources through a new suffixed run under the execution skill's
+ownership-transfer contract. Interrupted semantic jobs retain their native
+receipt/transcript; inspect side effects before retrying `triage` or `implement`.
+A stale lock is diagnostic evidence requiring operator inspection, not permission
+to discard a live owner. For a durable checkpoint in a separate clean recovery
+checkout, the skill uses:
+
+```sh
+git fetch origin refs/dagu/checkpoints/issue-N
+git branch dagu/issue-N FETCH_HEAD
+```
+
+Cleanup verifies candidate integration (including exact squash proof), canonical
+ownership, clean resources and base freshness before worktree/ref removal. Dirty
+resources, ambiguous GitHub responses and unproved integration retain diagnostics.
+
+### Rollback
+
+Obtain rollback authority for the same lanes and shared controller scope. Close
+admission and inventory active/snapshot-bound runs; drain or preserve them under
+their original controller contract before changing shared reconciliation. Restore
+the approved **coherent set**: source SHA and dependency lock, private package,
+source-generated adopted renders/trailers, scheduled reconciler, CLI/PATH binding,
+Dagu binary/home/config and OMP package links. Use the restored source's supported
+bootstrap/adoption path where regeneration is required, retaining real provenance.
+Restart the service only under the drained policy and restart OMP to load restored
+modules. Verify stamps, actual admission, readiness and agreed live behavior before
+reopening. Restoring a directory or a displayed version alone is not recovery.
+
+## Post-release proof and temporary-lane retirement
+
+After final integration-to-main and authorized local v1 adoption, a separate
+post-release proof records actual deployed source, receipts, native tools,
+CI/merge behavior and operator acceptance. Candidate walkthroughs cannot supply
+this evidence. Retire a4s-v1 only after its owner confirms all active/queued/waiting
+runs, retained worktrees/candidates/checkpoints and session handoffs are resolved
+or explicitly preserved, final main integration is proved, and the shared
+reconciler/links no longer need that temporary lane. Queue/service/link/clone
+retirement is separately authorized operator work; no action here retires it.

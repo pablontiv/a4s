@@ -1,37 +1,55 @@
-# A4S: contrato operativo
+# A4S operating contract
 
-## Alcance
+## Scope and resources
 
-A4S es un monorepo npm privado con extensiones en `packages/`, agentes en `.omp/agents/` y skills en `skills/`. `README.md` describe sus componentes y `.workspace/dagu/dags/feature.yaml` define el ciclo de issues. Los cambios deben mantener los contratos de los hosts y las pruebas de los workspaces afectados.
+A4S is a private npm monorepo with libraries/extensions in `packages/`, the
+independent broker in `apps/message-bus/`, native roles in `.omp/agents/`, package
+skills in `packages/issue-lifecycle/skills/`, and independent skills in `skills/`.
+Preserve each host's contracts and the affected workspaces' behavioral tests.
 
-## Prerrequisitos externos
+- [README](README.md): entry points and delivered components.
+- [Source catalog](docs/architecture/catalog.md): ownership and delivered/pending assets.
+- [Agent catalog](docs/architecture/agents.md): conceptual roles versus canonical runtime definitions.
+- [Lifecycle architecture](docs/architecture/issue-lifecycle.md): actual identity and advisory boundaries.
+- [Private installation](docs/operations/private-install.md): prerequisites, native loading and local development.
+- [Deployment/recovery](docs/operations/deployment.md): lanes, authorization, shared controller and active runs.
+- [Execution skill](packages/issue-lifecycle/skills/issue-execution/SKILL.md): executable feature/PoC contract.
 
-- Node.js `>=22.19.0` y npm con soporte para workspaces y `package-lock.json`.
-- Acceso a las dependencias fijadas por el lockfile, desde sus servidores o desde la caché local de npm. En particular, el tarball de desarrollo de `@pablontiv/pion` requiere acceso a los releases de `pablontiv/pi` o una copia íntegra en la caché de npm. Ese release no está disponible públicamente; su disponibilidad es un prerrequisito para la instalación y el gate completo. CI documenta su alternativa de instalación y ejecuta un subconjunto de typechecks en `.github/workflows/ci.yml`.
-- Orca instalado y en ejecución para crear worktrees administrados; su política de setup debe ser `run-by-default` para ejecutar automáticamente el hook heredado. Una invocación que requiera forzarlo puede usar `--setup run`.
-- Las integraciones reales requieren sus hosts y credenciales correspondientes (OMP/Orca, Pi/Pion o Claude); Synagent requiere su bus MQTT. El gate local comprueba el código y sus pruebas, no sustituye la verificación contra esos servicios.
+## Setup and checks
 
-## Setup y comandos soportados
-
-El `orca.yaml` raíz delega `scripts.setup` a `bash scripts/bootstrap.sh`. El script se sitúa en la raíz del checkout y ejecuta `npm ci`, respetando los manifests y el lockfile versionados. También puede ejecutarse manualmente desde cualquier directorio:
+Root `orca.yaml` delegates setup to the versioned bootstrap. From any directory:
 
 ```sh
 bash scripts/bootstrap.sh
 ```
 
-El gate completo, desde la raíz del worktree, es:
+Run the full gate from the assigned worktree root after setup completes:
 
 ```sh
 npm ci && npm test && npm run typecheck
 ```
 
-`npm test` y `npm run typecheck` recorren los workspaces declarados por los scripts raíz. Esperar a que termine el setup de Orca antes de iniciar estos checks: la creación del worktree puede retornar mientras la instalación sigue ejecutándose en su terminal de setup.
+Node.js >=22.19.0 and access to locked dependencies are required. The pinned
+private Pion release is a full-gate prerequisite; CI documents its different
+installation/typecheck scope in `.github/workflows/ci.yml`. Orca managed-worktree
+setup should run by default (`--setup run` when explicitly required). Its setup
+terminal can remain active after worktree creation returns; wait for it.
+Real integration acceptance requires the corresponding native hosts, broker,
+pinned Dagu and authorized model credentials; unit tests are a separate claim.
 
-## Límites operativos
+## Operational ownership
 
-Trabajar en el worktree asignado y preservar los cambios del operador. Mantener instalaciones reproducibles con `npm ci` y actualizar el lockfile junto con cualquier cambio intencional de dependencias. Mantener el hook de Orca como delegación al bootstrap versionado.
+Work in the assigned issue worktree and preserve operator changes. Keep `npm ci`
+reproducible; intentional dependency changes update manifests and lockfile
+together. Preserve the Orca hook's delegation to the repository bootstrap.
 
-The operator uses OMP. Publishing, push, PR and Dagu human-task reconciliation require explicit assignment authority; the local gate alone grants none. Follow `packages/issue-lifecycle/skills/issue-execution/SKILL.md` from the primary clone as documented in `README.md`, and implement only in the assigned issue worktree. Local configuration, credentials and external services remain operator-owned.
+The operator uses native OMP. Start coordination from the lane's clean independent
+PRIMARY on its base branch; implement only in the assigned worktree. Preserve the
+existing run/session owner, candidate and receipt through recovery. Publication,
+push, PR, merge, adoption, local links/service/configuration and Dagu human-task
+actions require explicit assignment authority; a local gate grants none.
+Scheduled CI/merge observation belongs to the designated reconciler. Credentials
+and external services remain operator-owned.
 
 ## Pull request descriptions
 
