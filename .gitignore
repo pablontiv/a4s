@@ -6,6 +6,7 @@
 .superpowers/
 .worktrees/
 .workspace/worktrees/
+.workspace/*-smoke*/
 node_modules/
 dist/
 
