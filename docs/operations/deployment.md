@@ -33,9 +33,9 @@ are recorded below.
 
 ### Stable controller versus candidate
 
-The main lane uses `@a4s/issue-lifecycle@0.5.0` for its adopted renders and
-controller, and the shared scheduled reconciler uses the 0.5.0 installation.
-Main adopted this identity through `bootstrap-a4s-v0-5-0`.
+The main lane uses `@a4s/issue-lifecycle@0.5.2` for its adopted renders and
+controller, and the shared scheduled reconciler uses the 0.5.2 installation.
+Main adopted this identity through `bootstrap-a4s-v0-5-2`.
 
 Runs admitted under pre-0.4 `@a4s/omp-dagu` receipts continue through executors
 pinned to each receipt's exact source commit. The station role-job launcher
