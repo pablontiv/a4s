@@ -980,6 +980,15 @@ records BASE_SHA. `worktree` creates `poc/<RUN>` at
 `.workspace/worktrees/poc-<RUN>` from that SHA. The experiment branch remains
 local. Git metadata under PRIMARY stores per-RUN state and published evidence.
 
+The experiment checkpoint displays the resolved question and absolute result path.
+Its `## Pregunta` must match the recorded `question.txt` after whitespace
+normalization. `## Ruta ejercitada` records minimal commands against the real
+target and references or digests of every executed release/image. Markdown
+(`*.md`) and paths matching adopted `TEST_PATHS` belong to implementation cutover.
+The scope gate queries origin for `refs/heads/poc/<RUN>`: a published branch
+fails with `rule=poc-branch-pushed`, branch and SHA; an inaccessible origin fails
+with `rule=remote-unreachable`. Both retain the existing result-correction loop.
+
 At `run_poc`, execute minimal real-target commands in that worktree. Record the
 result outside its diff at `git rev-parse --git-path poc/result.md`:
 

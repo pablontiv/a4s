@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.6
+
+- Bind PoC experiment prompts to the resolved question and result path, including issue-body question fallback (#352).
+- Enforce local-only PoC branches with explicit remote SHA and unreachable-origin diagnostics; align cutover evidence and promotion instructions with their gates.
+
 ## 0.5.5
 
 - Adopt a positive-integer `QUEUE_CONCURRENCY` bootstrap answer and stamp repository-owned capacity in feature, PoC and discovery renders (#383).

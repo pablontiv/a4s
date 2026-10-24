@@ -81,6 +81,8 @@ function pocFixture() {
   mkdirSync(bin);
   symlinkSync(fileURLToPath(new URL("../bin/dagu-pr-body.mjs", import.meta.url)), join(bin, "dagu-pr-body"));
   execFileSync("git", ["init", "-q", primary]);
+  execFileSync("git", ["init", "--bare", "-q", join(root, "origin.git")]);
+  execFileSync("git", ["-C", primary, "remote", "add", "origin", join(root, "origin.git")]);
   const state = join(primary, ".git", "poc", "runs", "existing-issue");
   const issue = join(root, "issue.json");
   const pages = join(root, "pages.json");
@@ -120,6 +122,7 @@ jq -nc --args '$ARGS.positional' -- "$@" >> "$FAKE_ENQUEUES"
     WORKTREE: join(root, "worktree"), RUN: "existing-issue", ISSUE: "41",
     QUESTION: "", BASE_BRANCH: "main", OMP_SESSION_ID: "same-session",
     FAKE_GH_CALLS: calls, FAKE_ISSUE: issue, FAKE_PAGES: pages, FAKE_ENQUEUES: enqueues,
+    DAGU_OUTPUT_FILE: join(root, "outputs"),
     PATH: `${bin}:${process.env.PATH ?? ""}`,
   };
   return {
@@ -141,6 +144,7 @@ test("PoC records an existing issue and reads only its PoC section when QUESTION
     assert.equal(result.status, 0, result.stderr);
     assert.equal(readFileSync(join(fixture.state, "issue.number"), "utf8"), "41\n");
     assert.equal(readFileSync(join(fixture.state, "question.txt"), "utf8").trim(), "Can the real target run?");
+    assert.match(readFileSync(join(fixture.root, "outputs"), "utf8"), /question<<QUESTION_\d+_\d+\nCan the real target run\?\nQUESTION_\d+_\d+\n/);
     assert.deepEqual(readFileSync(fixture.calls, "utf8").trim().split("\n").map(line => JSON.parse(line)), [
       ["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"],
       ["issue", "view", "41", "--repo", "owner/repo", "--json", "body"],
@@ -320,6 +324,27 @@ function cleanupFixture() {
       return spawnSync("git", ["-C", fixture.primary, "show-ref", "--verify", "--quiet", "refs/heads/poc/existing-issue"]).status === 0;
     },
   };
+}
+
+for (const mode of ["local", "pushed", "unreachable"] as const) {
+  test(`PoC scope gate checks the actual origin: ${mode}`, () => {
+    const fixture = cleanupFixture();
+    try {
+      const remote = join(fixture.root, "remote.git");
+      execFileSync("git", ["init", "--bare", "-q", remote]);
+      fixture.git("remote", "set-url", "origin", remote);
+      const resultPath = join(fixture.state, "input.md");
+      fixture.save("result.path", resultPath);
+      writeFileSync(resultPath, "VERDICT: PASS\n## Pregunta\nCan the real target run?\n## Proposición demostrada\nObserved target\n## Ruta ejercitada\nReal target release digest\n## Comandos y salida\ncommand: PASS\n## Después del PASS\nImplement verified route\n");
+      if (mode === "pushed") fixture.git("push", "origin", "poc/existing-issue");
+      if (mode === "unreachable") fixture.git("remote", "set-url", "origin", join(fixture.root, "missing.git"));
+      const result = fixture.run("scope_gate", { WORKTREE: fixture.worktree, TEST_PATHS: "^tests/" });
+      assert.equal(result.status, mode === "local" ? 0 : 1, result.stderr);
+      assert.equal(readFileSync(join(fixture.state, "scope"), "utf8").trim(), mode === "local" ? "OK" : "FAIL");
+      if (mode === "pushed") assert.equal(readFileSync(join(fixture.state, "scope-errors"), "utf8"), `rule=poc-branch-pushed branch=refs/heads/poc/existing-issue SHA=${fixture.git("rev-parse", "HEAD")}\n`);
+      if (mode === "unreachable") assert.equal(readFileSync(join(fixture.state, "scope-errors"), "utf8"), "rule=remote-unreachable branch=refs/heads/poc/existing-issue\n");
+    } finally { fixture.cleanup(); }
+  });
 }
 
 test("PoC publication checks both result prose and patch content before any GitHub mutation", () => {
