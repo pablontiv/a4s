@@ -38,6 +38,13 @@ The seven skills are `issue-execution`, `repository-discovery`, `backlog-breakdo
 `reconcile.yaml`, `dagu-feature-bootstrap.yaml` remain together under
 `skills/issue-execution/` for relative paths and bootstrap's SKILL_DIR bindings.
 
+Reconciler behavior tests use the maintained `skills/issue-execution/reconcile.yaml`
+directly, with throwaway materialization for native validation. From this package,
+run `A4S_LIVE_DAGU=0 npx tsx --test test/reconcile-ci.test.ts` for isolated script
+scenarios, or `A4S_LIVE_DAGU=1 npx tsx --test test/reconcile-ci.test.ts` to include
+official-Dagu validation and checkpoint/queue scenarios in isolated temporary homes.
+Repository-adopted DAGs remain deployment artifacts managed by bootstrap adoption.
+
 The existing feature lifecycle publishes a gated candidate through
 `push → pr → code_scanning → auto_merge → await_ci → await_merge`. Triage review remains independent;
 optional operator validation is fixed at adoption (a4s currently uses an empty
