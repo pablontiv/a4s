@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.5.7
+## 0.5.5
 
 - Adopt a positive-integer `QUEUE_CONCURRENCY` bootstrap answer and stamp repository-owned capacity in feature, PoC and discovery renders (#383).
 - Derive only that repository's named Dagu queue, retaining shared keys, comments, metadata and foreign queues. Restart the matching launchd scheduler only on changes; preserve waiting-task data and restore config atomically if restart fails.
