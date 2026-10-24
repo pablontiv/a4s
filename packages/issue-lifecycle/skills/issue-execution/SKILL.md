@@ -162,12 +162,11 @@ checks the rendered plist with `plutil` on macOS before installing. `cmp` and
 `install -m 0644` make repeated installs byte- and mtime-stable. `base.yaml` and
 the rendered plist are fully owned. `config.yaml` merges the leaves in the
 versioned `dagu/config.yaml` (`auth.mode`, `queues.enabled`, `host`, `port`,
-`coordinator.enabled`) and merges `queues.config` entries by queue name.
-For matching names, template-owned fields replace installed values; additional
-queue metadata is retained. Missing template queues are added, while foreign
-queues and their concurrency limits are preserved. The bundled
-`a4s.max_concurrency=8` aligns the station with the operator-approved capacity.
-Other configuration leaves and comments remain owned by their original writers.
+`coordinator.enabled`). Repository bootstrap derives each named `queues.config`
+entry from the repository's stamped capacity, preserving other queues, metadata,
+keys and comments. For a4s's first adoption, answer `QUEUE_CONCURRENCY=8` to
+preserve the operator-approved installed capacity. Subsequent blank answers keep
+the adopted stamp.
 Foreign paths stay untouched during validation. The plist captures the
 operator's current `PATH` and resolved Dagu binary; use the same environment on
 updates. With a custom `DAGU_HOME`, the default plist destination is
@@ -186,6 +185,11 @@ safe point after reviewing active runs, use `launchctl bootout
 Observe `launchctl print "gui/$(id -u)/local.dagu.server"` (`state = running`),
 `curl -fsS http://127.0.0.1:8080/api/v1/health` (`healthy`) and the installer's
 `--check` before repository bootstrap.
+For drained station activation, `--apply --repo-dag <render>` requires the stamped
+queue to match the bootstrap-derived config, plus explicit `--admission-close`,
+`--restart-command` and `--admission-open` hooks. It drains running/queued runs,
+requests TERM restart, verifies N running and one queued barrier run for stamped
+capacity N, then reopens admission.
 This skill does not install Dagu, and it carries no logic specific to any repository. Bootstrap renders repository policy; run parameters carry operational issue inputs.
 
 ## Global history retention
@@ -211,6 +215,23 @@ git log --format='%h %(trailers:key=Dagu-Feature-Bundle,valueonly)' -- .workspac
 git log -G '^# dagu-feature-bundle:' -p -- .workspace/dagu/dags
 backscroll search dagu-feature-bundle --all-projects
 ```
+
+Feature, PoC and discovery renders also carry
+`dagu-feature-queue-concurrency=<n>`. Bootstrap's optional `QUEUE_CONCURRENCY`
+answer accepts a positive integer; blank preserves matching current stamps
+(initial default 1). The repository owns this value and bootstrap derives its
+global queue entry in `$DAGU_HOME/config.yaml`. A changed entry requires the
+running launchd `local.dagu.server` to use `dagu start-all` with the same home,
+then runs `launchctl kickstart -k`. Identical entries keep bytes and service
+intact; persisted waiting human tasks remain available after restart. A failed
+restart atomically restores the prior config for retry. Bundle inspection and
+`queue-check <render>` classify global drift as
+`compat=incompatible action=re-run-bootstrap`; re-run bootstrap and adopt its
+renders. Station installation preserves repository limits.
+
+This Dagu run capacity is independent of semantic role-job capacity. The latter
+remains operator-changeable through `dagu-role-jobs capacity` under the persisted
+station policy.
 
 PRIMARY runs the default branch at exactly `origin/$BASE_BRANCH`. Feature
 `admit` fetches and fast-forwards a clean primary on that branch before claiming
@@ -415,6 +436,7 @@ The bootstrap renders the repository DAG templates when a repository adopts the 
 | Placeholder | Meaning | rootline | homeserver |
 |---|---|---|---|
 | `TEMPLATE_REPO` | Repository name, used in `labels: [workspace=<repo>]` and `queue: <repo>` | `rootline` | `homeserver` |
+| `TEMPLATE_QUEUE_CONCURRENCY` | Repository-owned positive integer from bootstrap's `QUEUE_CONCURRENCY`, versioned beside the bundle label | `1` | `1` |
 | `TEMPLATE_BASE_BRANCH` | Default of `BASE_BRANCH`, the default branch. The DAG uses `origin/$BASE_BRANCH` as the source ref. | `master` | `main` |
 | `__GATE__` | Adoption-fixed `GATE`, the local gate command, run with `bash -euo pipefail -c` in the worktree | `just check && just test` | `make hook-validate` |
 | `__REBASE_RESOLVER__` | Adoption-fixed `REBASE_RESOLVER`, repository conflict-resolution command; empty selects manual conflict recovery | `""` | `""` |

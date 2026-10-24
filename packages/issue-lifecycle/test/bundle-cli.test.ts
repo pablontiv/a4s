@@ -11,7 +11,7 @@ import { liveDagu } from "./fixtures/live-dagu.ts";
 
 import { BUNDLE_VERSION, REQUIRED_DAGU_VERSION } from "../src/bundle.ts";
 const cli = fileURLToPath(new URL("../bin/dagu-feature-bundle.ts", import.meta.url));
-const stamp = `# dagu-feature-bundle: @a4s/issue-lifecycle@${BUNDLE_VERSION} source=pablontiv/a4s@0123456789012345678901234567890123456789 bootstrap=bootstrap-probe dagu=${REQUIRED_DAGU_VERSION}\nlabels:\n  - dagu-feature-bundle=${BUNDLE_VERSION}\n`;
+const stamp = `# dagu-feature-bundle: @a4s/issue-lifecycle@${BUNDLE_VERSION} source=pablontiv/a4s@0123456789012345678901234567890123456789 bootstrap=bootstrap-probe dagu=${REQUIRED_DAGU_VERSION}\nqueue: fixture\nlabels:\n  - dagu-feature-bundle=${BUNDLE_VERSION}\n  - dagu-feature-queue-concurrency=6\n`;
 
 test("CLI reports stamped repositories and the reconciler as compatible", () => {
   const root = mkdtempSync(join(tmpdir(), "dagu-bundle-cli-"));
@@ -28,6 +28,7 @@ test("CLI reports stamped repositories and the reconciler as compatible", () => 
     writeFileSync(join(repo, ".workspace", "dagu", "dags", "discovery.yaml"), stamp);
     writeFileSync(join(repo, ".workspace", "dagu", "dags", "planning.yaml"), stamp);
     writeFileSync(join(daguHome, "dags", "reconcile.yaml"), stamp);
+    writeFileSync(join(daguHome, "config.yaml"), "queues:\n  enabled: true\n  config:\n    - name: fixture\n      max_concurrency: 6\n");
     const dagu = join(bin, "dagu");
     writeFileSync(dagu, `#!/bin/sh\nprintf '${REQUIRED_DAGU_VERSION}\\n'\n`);
     chmodSync(dagu, 0o755);
@@ -39,7 +40,7 @@ test("CLI reports stamped repositories and the reconciler as compatible", () => 
     for (const name of ["feature", "poc", "discovery", "planning", "reconcile"]) {
       assert.ok(result.stdout.includes(`${name}.yaml `), result.stdout);
     }
-    assert.equal((result.stdout.match(/compat=ok/g) ?? []).length, 6);
+    assert.equal((result.stdout.match(/compat=ok/g) ?? []).length, 9);
     assert.match(result.stdout, /feature.yaml policy PRIMARY="\/canonical\/repo" GATE="npm test" REQUIRED_CHECK="validate" BRANCH=dagu\/issue-\$\{ISSUE\}/);
     assert.match(result.stdout, /poc.yaml policy PRIMARY="\/canonical\/repo"/);
   } finally {

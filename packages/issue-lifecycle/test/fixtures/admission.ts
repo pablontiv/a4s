@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,6 +10,8 @@ export function admissionFixture() {
   const packageDir = join(root, "package");
   const home = join(root, "dagu-home");
   mkdirSync(packageDir);
+  mkdirSync(join(root, "node_modules"));
+  symlinkSync(fileURLToPath(new URL("./", import.meta.resolve("yaml/package.json"))), join(root, "node_modules", "yaml"));
   mkdirSync(join(home, "dags"), { recursive: true });
   for (const entry of ["src", "bin", "skills", "agents", "package.json"]) cpSync(fileURLToPath(new URL(`../../${entry}`, import.meta.url)), join(packageDir, entry), { recursive: true });
   const manifest = JSON.parse(readFileSync(join(packageDir, "package.json"), "utf8"));

@@ -2,6 +2,7 @@
 labels:
   - workspace=TEMPLATE_REPO
   - dagu-feature-bundle=TEMPLATE_DAGU_FEATURE_VERSION
+  - dagu-feature-queue-concurrency=TEMPLATE_QUEUE_CONCURRENCY
 queue: TEMPLATE_REPO
 type: graph
 dotenv: []
