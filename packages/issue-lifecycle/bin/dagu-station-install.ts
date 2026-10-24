@@ -5,8 +5,9 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
-import { isMap, isSeq, parseDocument } from "yaml";
+import { isMap, parseDocument } from "yaml";
 import { REQUIRED_DAGU_VERSION } from "../src/bundle.ts";
+import { queueCompatibility, stampedQueue } from "../src/queue.ts";
 
 async function main(): Promise<void> {
   const { values } = parseArgs({ options: {
@@ -18,11 +19,12 @@ async function main(): Promise<void> {
     "admission-close": { type: "string" },
     "admission-open": { type: "string" },
     "restart-command": { type: "string" },
+    "repo-dag": { type: "string" },
     "timeout-seconds": { type: "string", default: "600" },
     help: { type: "boolean", default: false },
   } });
   if (values.help) {
-    console.log("dagu-station-install [--dagu-home DIR] [--launch-agent FILE] [--log-dir DIR] [--check | --apply --admission-close CMD --admission-open CMD --restart-command CMD] [--timeout-seconds 600]\nDefaults: DAGU_HOME or ~/.dagu; plist staged at <dagu-home>/LaunchAgent.plist; logs at <dagu-home>/logs/service.\n--check compares desired files without installing. Default installation defers activation. --apply closes admission, drains running and queued runs, requests TERM restart, verifies capacity, then reopens admission. Service hooks belong to the operator.");
+    console.log("dagu-station-install [--dagu-home DIR] [--launch-agent FILE] [--log-dir DIR] [--check | --apply --repo-dag FILE --admission-close CMD --admission-open CMD --restart-command CMD] [--timeout-seconds 600]\nDefaults: DAGU_HOME or ~/.dagu; plist staged at <dagu-home>/LaunchAgent.plist; logs at <dagu-home>/logs/service.\n--check compares desired files without installing. Default installation defers activation. --apply closes admission, drains running and queued runs, requests TERM restart, verifies the repository's stamped capacity, then reopens admission. Service hooks belong to the operator.");
     return;
   }
   const timeout = Number(values["timeout-seconds"]) * 1000;
@@ -31,6 +33,7 @@ async function main(): Promise<void> {
   if (values.apply && (!values["admission-close"] || !values["admission-open"] || !values["restart-command"])) {
     throw new Error("--apply requires admission-close, admission-open and restart-command");
   }
+  if (values.apply && !values["repo-dag"]) throw new Error("--apply requires --repo-dag pointing to a repository's stamped render; reconcile it with bootstrap first");
   const version = execFileSync("dagu", ["version"], { encoding: "utf8" }).trim();
   if (version !== REQUIRED_DAGU_VERSION) {
     throw new Error(`dagu version=${JSON.stringify(version)} required=${REQUIRED_DAGU_VERSION}; install the expected binary on PATH`);
@@ -45,31 +48,15 @@ async function main(): Promise<void> {
   if (config.errors.length) throw new Error(`config.yaml: ${config.errors.map(String).join("; ")}`);
   if (!isMap(config.contents)) throw new Error("config.yaml must contain a YAML mapping");
   const managed = parseDocument(template("config.yaml")).toJS() as Record<string, unknown>;
-  const queueDefaults = parseDocument(template("config.yaml")).getIn(["queues", "config"], true);
-  if (!isSeq(queueDefaults)) throw new Error("Managed config requires queues.config");
-  const queues = queueDefaults.toJSON() as { name: string; max_concurrency: number }[];
+  const queues = values.apply ? [stampedQueue(readFileSync(resolve(values["repo-dag"]!), "utf8"))] : [];
   for (const queue of queues) {
-    if (typeof queue.name !== "string" || !Number.isSafeInteger(queue.max_concurrency) || queue.max_concurrency < 1) {
-      throw new Error("Managed queues require a name and positive integer max_concurrency");
-    }
+    const report = queueCompatibility(home, queue);
+    if (!report.endsWith("compat=ok")) throw new Error(report);
   }
-  // Merge owned leaves and named queues while retaining foreign queues and sibling keys.
+  // Shared defaults preserve repository-owned queue entries.
   function merge(leaves: Record<string, unknown>, path: string[] = []): void {
     for (const [key, value] of Object.entries(leaves)) {
       const next = [...path, key];
-      if (next.join(".") === "queues.config") {
-        const current = config.getIn(next, true);
-        if (current !== undefined && !isSeq(current)) throw new Error("queues.config must be a sequence");
-        const merged = (current?.toJSON() ?? []) as Record<string, unknown>[];
-        if (merged.some(queue => !queue || typeof queue.name !== "string")) throw new Error("queues must have names");
-        for (const queue of queues) {
-          const index = merged.findIndex(item => item.name === queue.name);
-          if (index < 0) merged.push(queue);
-          else merged[index] = { ...merged[index], ...queue };
-        }
-        config.setIn(next, merged);
-        continue;
-      }
       if (value !== null && typeof value === "object" && !Array.isArray(value)) {
         const current = config.getIn(next, true);
         if (current !== undefined && !isMap(current)) {

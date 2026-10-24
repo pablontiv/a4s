@@ -110,6 +110,30 @@ display classification, not proof of admission. Native semantic jobs support
 `dagu-role-jobs stage triage|implement`; resource recovery and exact receipt
 binding are detailed in the architecture and execution skill.
 
+## Repository-owned queue capacity
+
+Bootstrap's `QUEUE_CONCURRENCY` answer is a positive integer. Blank preserves the
+current `dagu-feature-queue-concurrency=<n>` label in the repository's feature,
+PoC and discovery renders; initial adoption defaults to 1. For a4s's first adoption,
+answer **8** to preserve the operator-approved installed capacity.
+
+The repository's adopted renders are the source of truth. Bootstrap derives its
+named `queues.config` entry in `$DAGU_HOME/config.yaml`, preserving other queues,
+metadata, shared keys and comments. An unchanged entry keeps bytes and scheduler
+intact. A changed entry requires the running launchd `local.dagu.server` to use
+`dagu start-all` and the same Dagu home, then requests `launchctl kickstart -k`.
+Waiting human tasks keep their persisted state. A failed restart atomically
+restores the previous config for retry.
+
+`dagu-feature-bundle <repo>` and `queue-check <render>` report queue drift as
+`compat=incompatible action=re-run-bootstrap`. Re-run bootstrap and adopt its
+stamped renders through a separate adoption PR. Station installation manages
+shared defaults and preserves repository queue limits; its drained activation
+requires `--apply --repo-dag <render>` and the existing operator-owned admission
+and restart hooks, and verifies that stamped capacity with N+1 barrier runs.
+Queue capacity counts Dagu runs; the independently managed role-job capacity
+counts semantic jobs and remains controlled by `dagu-role-jobs capacity`.
+
 ## Development and real-Dagu fixtures
 
 ```sh

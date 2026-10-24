@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.5
+
+- Adopt a positive-integer `QUEUE_CONCURRENCY` bootstrap answer and stamp repository-owned capacity in feature, PoC and discovery renders (#383).
+- Derive only that repository's named Dagu queue, retaining shared keys, comments, metadata and foreign queues. Restart the matching launchd scheduler only on changes; preserve waiting-task data and restore config atomically if restart fails.
+- Report installed queue drift through bundle compatibility, preserve repository queues during station installation, and verify the stamped capacity with `--apply --repo-dag`.
+
 ## 0.5.4
 
 - Record every feature gate attempt in `gate.json` schema version 1, retaining epoch-millisecond phase starts/ends, exit codes and durations for lock wait, install, workspace tests/typechecks, post-checks and overhead (#608).

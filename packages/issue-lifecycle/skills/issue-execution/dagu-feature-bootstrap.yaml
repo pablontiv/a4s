@@ -103,6 +103,8 @@ steps:
       installed_poc="$PRIMARY/.workspace/dagu/dags/poc.yaml"
       installed_discovery="$PRIMARY/.workspace/dagu/dags/discovery.yaml"
       installed_planning="$PRIMARY/.workspace/dagu/dags/planning.yaml"
+      current_queue_concurrency=$(node "$package_dir/bin/dagu-feature-bundle.ts" queue-default \
+        "$installed_feature" "$installed_poc" "$installed_discovery")
       current_gate=not-configured
       current_check=not-configured
       current_tests=not-configured
@@ -156,6 +158,7 @@ steps:
         printf 'CURRENT_A4S_BLOCKER_REPORTING=%s\n' "$current_blocker_reporting"
         printf 'CURRENT_CODEQL_SECURITY_THRESHOLD=%s\n' "${current_codeql_security:-high_or_higher}"
         printf 'CURRENT_CODEQL_ALERTS_THRESHOLD=%s\n' "${current_codeql_alerts:-errors}"
+        printf 'CURRENT_QUEUE_CONCURRENCY=%s\n' "$current_queue_concurrency"
         printf 'CURRENT_FEATURE_STAMP=%s\n' "$(read_stamp "$installed_feature")"
         printf 'CURRENT_POC_STAMP=%s\n' "$(read_stamp "$installed_poc")"
         printf 'CURRENT_DISCOVERY_STAMP=%s\n' "$(read_stamp "$installed_discovery")"
@@ -182,6 +185,7 @@ steps:
       - name: CURRENT_A4S_BLOCKER_REPORTING
       - name: CURRENT_CODEQL_SECURITY_THRESHOLD
       - name: CURRENT_CODEQL_ALERTS_THRESHOLD
+      - name: CURRENT_QUEUE_CONCURRENCY
       - name: CURRENT_FEATURE_STAMP
       - name: CURRENT_POC_STAMP
       - name: CURRENT_DISCOVERY_STAMP
@@ -222,6 +226,11 @@ steps:
         CODEQL_SECURITY_THRESHOLD: minimum security severity (current: ${steps.detect.outputs.CURRENT_CODEQL_SECURITY_THRESHOLD}; initial: high_or_higher).
         CODEQL_ALERTS_THRESHOLD: non-security findings (current: ${steps.detect.outputs.CURRENT_CODEQL_ALERTS_THRESHOLD}; initial: errors).
         Blank preserves installed thresholds. Enable CodeQL analysis for this repository before adoption.
+        QUEUE_CONCURRENCY: positive integer; blank keeps the current stamped value
+        (${steps.detect.outputs.CURRENT_QUEUE_CONCURRENCY}; initial: 1). For a4s, select 8
+        to preserve the operator-approved installed capacity on first adoption.
+        Bootstrap derives the repository's global queue and restarts its matching
+        launchd scheduler only when the entry changes; waiting human tasks persist.
         Escalation budgets: positive integers, blank preserves installed policy.
         Push-backs ${steps.detect.outputs.CURRENT_ESCALATION_PUSHBACKS} (initial 3);
         repeated findings ${steps.detect.outputs.CURRENT_ESCALATION_FINDINGS} (initial 2);
@@ -258,6 +267,10 @@ steps:
             type: string
             enum: ["", none, errors, errors_and_warnings, all]
             default: ""
+          QUEUE_CONCURRENCY:
+            type: string
+            default: ""
+            pattern: "^([1-9][0-9]*)?$"
           ESCALATION_PUSHBACKS: {type: string, pattern: '^$|^[1-9][0-9]*$', default: ""}
           ESCALATION_FINDINGS: {type: string, pattern: '^$|^[1-9][0-9]*$', default: ""}
           ESCALATION_SECONDS: {type: string, pattern: '^$|^[1-9][0-9]*$', default: ""}
@@ -292,6 +305,8 @@ steps:
       - CODEQL_ALERTS_THRESHOLD: ${steps.answers.outputs.CODEQL_ALERTS_THRESHOLD}
       - CURRENT_CODEQL_SECURITY_THRESHOLD: ${steps.detect.outputs.CURRENT_CODEQL_SECURITY_THRESHOLD}
       - CURRENT_CODEQL_ALERTS_THRESHOLD: ${steps.detect.outputs.CURRENT_CODEQL_ALERTS_THRESHOLD}
+      - QUEUE_CONCURRENCY: ${steps.answers.outputs.QUEUE_CONCURRENCY}
+      - CURRENT_QUEUE_CONCURRENCY: ${steps.detect.outputs.CURRENT_QUEUE_CONCURRENCY}
       - ESCALATION_PUSHBACKS: ${steps.answers.outputs.ESCALATION_PUSHBACKS}
       - ESCALATION_FINDINGS: ${steps.answers.outputs.ESCALATION_FINDINGS}
       - ESCALATION_SECONDS: ${steps.answers.outputs.ESCALATION_SECONDS}
@@ -312,6 +327,9 @@ steps:
       umask 0022
       test -n "${DAG_RUN_ID:-}"
       PRIMARY=$(cd "$PRIMARY" && pwd -P)
+      # Empty integer-text answers preserve the stamped repository policy.
+      export QUEUE_CONCURRENCY=${QUEUE_CONCURRENCY:-${CURRENT_QUEUE_CONCURRENCY:-1}}
+      node -e 'const v=process.env.QUEUE_CONCURRENCY; if (!/^[1-9][0-9]*$/.test(v) || !Number.isSafeInteger(Number(v))) process.exit(1)'
       A4S_BLOCKER_REPORTING=${A4S_BLOCKER_REPORTING:-${CURRENT_A4S_BLOCKER_REPORTING:-ask}}
       case "$A4S_BLOCKER_REPORTING" in ask|auto) ;; *) echo 'A4S_BLOCKER_REPORTING must be ask or auto' >&2; exit 1 ;; esac
       CODEQL_SECURITY_THRESHOLD=${CODEQL_SECURITY_THRESHOLD:-${CURRENT_CODEQL_SECURITY_THRESHOLD:-high_or_higher}}
@@ -333,6 +351,7 @@ steps:
         gsub("__DAGU_FEATURE_STAMP__"; $stamp)
         | gsub("__DAGU_FEATURE_VERSION__"; $version)
         | gsub("__DAGU_FEATURE_IDENTITY__"; $identity)
+        | gsub("TEMPLATE_QUEUE_CONCURRENCY"; env.QUEUE_CONCURRENCY)
         | gsub("__ESCALATION_PUSHBACKS__"; env.ESCALATION_PUSHBACKS | tojson)
         | gsub("__ESCALATION_FINDINGS__"; env.ESCALATION_FINDINGS | tojson)
         | gsub("__ESCALATION_SECONDS__"; env.ESCALATION_SECONDS | tojson)
@@ -403,7 +422,11 @@ steps:
         install -m 0644 "$rendered" "$destination"
       fi
       dagu validate "$destination"
+      queue_status=$(node "$SKILL_DIR/../../bin/dagu-feature-bundle.ts" queue-reconcile "$STAGE")
+      printf 'QUEUE_STATUS=%s\n' "$queue_status" >> "$DAGU_OUTPUT_FILE"
       printf 'reconcile=%s\n' "$destination"
+    outputs:
+      - name: QUEUE_STATUS
 
   - id: github
     depends: reconcile
@@ -476,6 +499,7 @@ steps:
       - DAGU_VERSION: ${steps.detect.outputs.DAGU_VERSION}
       - SOURCE_NWO: ${steps.detect.outputs.SOURCE_NWO}
       - SOURCE_SHA: ${steps.detect.outputs.SOURCE_SHA}
+      - QUEUE_STATUS: ${steps.reconcile.outputs.QUEUE_STATUS}
     run: |
       set -euo pipefail
       test "$(gh api "repos/$NWO" --jq '.allow_auto_merge and .allow_squash_merge')" = true
@@ -489,6 +513,8 @@ steps:
       destination="${DAGU_HOME:-$HOME/.dagu}/dags/reconcile.yaml"
       cmp "$(dirname "$STAGE")/reconcile.yaml" "$destination"
       dagu validate "$destination"
+      node "$SKILL_DIR/../../bin/dagu-feature-bundle.ts" queue-check "$STAGE"
+      printf '%s\n' "$QUEUE_STATUS"
       printf 'dagu-feature-bundle=%s source=%s@%s bootstrap=%s dagu=%s\n' \
         "$BUNDLE_VERSION" "$SOURCE_NWO" "$SOURCE_SHA" "$DAG_RUN_ID" "$DAGU_VERSION"
       printf 'Dagu-Feature-Bundle: %s\n' "$BUNDLE_VERSION"

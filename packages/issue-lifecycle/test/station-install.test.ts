@@ -29,3 +29,24 @@ test("station apply requires explicit admission and restart hooks before writing
     assert.equal(existsSync(join(f.home, "config.yaml")), false);
   } finally { f.dispose(); }
 });
+
+test("station apply binds probes to a stamped render and its derived installed queue", () => {
+  const f = fixture();
+  try {
+    const hooks = ["--apply", "--admission-close", "true", "--admission-open", "true", "--restart-command", "true"];
+    const missing = f.run(hooks);
+    assert.equal(missing.status, 1);
+    assert.match(missing.stderr, /requires --repo-dag/);
+    const bin = join(f.root, "bin");
+    mkdirSync(bin);
+    writeFileSync(join(bin, "dagu"), "#!/bin/sh\nprintf '2.20.1\\n'\n", { mode: 0o755 });
+    const render = join(f.root, "feature.yaml");
+    writeFileSync(render, "queue: example\nlabels: [dagu-feature-queue-concurrency=6]\n");
+    const original = "queues:\n  enabled: true\n  config:\n    - name: example\n      max_concurrency: 3\n";
+    writeFileSync(join(f.home, "config.yaml"), original);
+    const drift = f.run([...hooks, "--repo-dag", render], { PATH: `${bin}:${process.env.PATH}` });
+    assert.equal(drift.status, 1);
+    assert.match(drift.stderr, /queue=example max_concurrency=6 compat=incompatible action=re-run-bootstrap/);
+    assert.equal(readFileSync(join(f.home, "config.yaml"), "utf8"), original);
+  } finally { f.dispose(); }
+});

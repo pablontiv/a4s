@@ -7,6 +7,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { parse } from "yaml";
+import { stampedQueue } from "../src/queue.ts";
 
 const skill = (name: string): string => readFileSync(
   fileURLToPath(new URL(`../skills/issue-execution/${name}`, import.meta.url)),
@@ -49,6 +50,7 @@ test("bootstrap renders optional validation as the sole adopted value", {
           SKILL_DIR: fileURLToPath(new URL("../skills/issue-execution", import.meta.url)),
           STAGE: stage, REPO: "fixture", BASE_BRANCH: "main", PRIMARY: root,
           GATE: "true", REQUIRED_CHECK: "validate", TEST_PATHS: "^test/",
+          QUEUE_CONCURRENCY: "", CURRENT_QUEUE_CONCURRENCY: "8",
           REBASE_RESOLVER: "node packages/issue-lifecycle/bin/dagu-bundle-rebase.mjs",
           VALIDATION: validation, BUNDLE_NAME: "@a4s/issue-lifecycle", BUNDLE_VERSION: "0.3.14",
           DAGU_VERSION: "2.20.1", SOURCE_NWO: "owner/repo", SOURCE_SHA: "a".repeat(40),
@@ -58,6 +60,9 @@ test("bootstrap renders optional validation as the sole adopted value", {
       const output = readFileSync(stage, "utf8");
       assert.ok(output.includes(`default: ${JSON.stringify(validation)}\n      enum: [${JSON.stringify(validation)}]`));
       assert.ok(output.includes('- REBASE_RESOLVER: "node packages/issue-lifecycle/bin/dagu-bundle-rebase.mjs"'));
+      for (const name of ["feature", "poc", "discovery"]) {
+        assert.deepEqual(stampedQueue(readFileSync(join(root, `${name}.yaml`), "utf8")), { name: "fixture", max_concurrency: 8 });
+      }
     }
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
