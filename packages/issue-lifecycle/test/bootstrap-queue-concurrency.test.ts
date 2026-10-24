@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, fstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -22,6 +22,12 @@ function fixture() {
   return { home, dispose: () => rmSync(home, { recursive: true, force: true }) };
 }
 
+function fileMtime(path: string): number {
+  const fd = openSync(path, "r");
+  try { return fstatSync(fd).mtimeMs; }
+  finally { closeSync(fd); }
+}
+
 for (const scenario of ["add", "change", "identical"] as const) {
   test(`materialized bootstrap deployment: ${scenario} preserves foreign configuration and waiting data`, () => {
     const f = fixture();
@@ -36,7 +42,7 @@ for (const scenario of ["add", "change", "identical"] as const) {
       const initial = scenario === "add" ? original : deriveQueue(original, { ...queue, max_concurrency: scenario === "change" ? 2 : 8 }).content.replace("max_concurrency: " + (scenario === "change" ? 2 : 8), "metadata: retained\n      max_concurrency: " + (scenario === "change" ? 2 : 8));
       const config = join(f.home, "config.yaml");
       writeFileSync(config, initial);
-      const before = statSync(config).mtimeMs;
+      const before = fileMtime(config);
       mkdirSync(join(f.home, "data"));
       const waiting = join(f.home, "data", "waiting.json");
       writeFileSync(waiting, '{"status":"waiting","step":"approval"}\n');
@@ -66,7 +72,7 @@ printf '{"ProgramArguments":["/opt/bin/dagu","start-all"],"EnvironmentVariables"
       if (changed) assert.ok(commands.includes(`kickstart -k gui/${process.getuid!()}/local.dagu.server`));
       else {
         assert.equal(readFileSync(config, "utf8"), initial);
-        assert.equal(statSync(config).mtimeMs, before);
+        assert.equal(fileMtime(config), before);
       }
       assert.equal(readFileSync(waiting, "utf8"), '{"status":"waiting","step":"approval"}\n');
     } finally { f.dispose(); }
