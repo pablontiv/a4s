@@ -33,9 +33,9 @@ are recorded below.
 
 ### Stable controller versus candidate
 
-The main lane uses `@a4s/issue-lifecycle@0.5.0` for its adopted renders and
-controller, and the shared scheduled reconciler uses the 0.5.0 installation.
-Main adopted this identity through `bootstrap-a4s-v0-5-0`.
+The main lane uses `@a4s/issue-lifecycle@0.5.4` for its adopted renders and
+controller, and the shared scheduled reconciler uses the 0.5.4 installation.
+Main adopted this identity through `bootstrap-a4s-v0-5-4`.
 
 Runs admitted under pre-0.4 `@a4s/omp-dagu` receipts continue through executors
 pinned to each receipt's exact source commit. The station role-job launcher
@@ -310,3 +310,38 @@ Read-only health and DAG-run API queries, `dagu status feature --run-id
 a4s-issue-605-r1`, reconciler history and the clean main PRIMARY were exercised
 after retirement. Main's queue/service, shared reconciler, links, historical run
 store and unrelated resources retain their existing ownership.
+
+## Published-clone retirement
+
+The unused independent sibling clone `<harness>/a4s-published` was retired on
+2026-10-23 under [#625](https://github.com/pablontiv/a4s/issues/625), following
+main-only ownership in #612. The
+[target-specific operator authorization](https://github.com/pablontiv/a4s/issues/625#issuecomment-6375584111)
+covered only that clone. The [retirement evidence](retirement-625.json) retains
+the exact targeted commands, exit codes, outputs and reference-search tool calls
+with portable paths. `<harness>` denotes the parent directory of `<primary>`.
+
+Immediately before removal the clone was on `main` at
+`eb90e4341f06c56f8d91571fb1d00123eb94619f`, with a clean tree, no stashes, no
+unmerged local or remote branches and only its independent main worktree.
+Its revision was integrated into primary main. `lsof -nP +D` returned exit 1
+with empty stdout and stderr, establishing the required open-file check.
+The authorized operation was `rm -rf -- <harness>/a4s-published` (exit 0);
+both subsequent existence and symlink checks established removal.
+
+The reference inventory covered installed DAGs and native snapshots, user/system
+LaunchAgents, station and repository scripts, Orca registrations, shell/runtime
+configuration and operator documentation. No dependency on the clone was found.
+One broad snapshot search timed out; the narrower snapshot and executor-script
+searches completed, including native `dag.json` records. The existing scripts,
+operator wiki, installed DAGs, services, configuration and Orca registrations
+were intentionally unchanged. This section and the evidence file are historical
+retirement records, not runtime dependencies.
+
+After removal, primary remained clean on `main` at
+`4ef614d7b87a162c95c585da2c3cb85c5ea82986`. All 49 preexisting registered
+worktrees remained registered and each resolved its HEAD and common Git
+directory through the primary. Dagu 2.20.1 remained healthy and its LaunchAgent
+running. The 29 inventoried running/waiting runs, their owners and recovery
+resources were preserved. These are targeted station-retirement observations;
+the lifecycle full gate and operator validation remain separate decisions.

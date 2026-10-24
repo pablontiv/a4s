@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.5.4
+
+- Record every feature gate attempt in `gate.json` schema version 1, retaining epoch-millisecond phase starts/ends, exit codes and durations for lock wait, install, workspace tests/typechecks, post-checks and overhead (#608).
+- Observe npm lifecycle subprocesses around the unchanged declared `GATE`; preserve failed attempts and retries for structured reconciliation/report consumers.
+
+## 0.5.3
+
+- Make the persisted SQLite policy the role-job capacity authority per canonical `DAGU_HOME`; `A4S_ROLE_JOB_CAPACITY` seeds only the first policy and conflicting later values produce dispatch diagnostics (#609).
+- Add `DAGU_HOME=<station-home> dagu-role-jobs capacity <positive-integer>` with transactional previous/new/time history and JSON output. Increases admit waiting claims immediately; decreases preserve active jobs until the count falls below the new limit.
+- Document post-deployment operator change, conflicting-environment dispatch evidence and restoration through the same command; this does not claim station saturation.
+
 ## 0.5.2
 
 - Acquire feature and PoC ownership directories through Python's atomic `os.mkdir` result, preserving exclusive ownership when a shell `mkdir` implementation reports success after a concurrent `EEXIST` (#626).

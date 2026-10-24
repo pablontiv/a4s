@@ -962,6 +962,12 @@ steps:
     run: |
       set -euo pipefail
       umask 0022
+      A4S_GATE_STEP_STARTED_MS=$(python3 -c 'import time; print(time.time_ns() // 1000000)')
+      export A4S_GATE_STEP_STARTED_MS
+      STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")
+      A4S_GATE_HELPER=$(dagu-gate path)
+      A4S_GATE_JOURNAL=$(node "$A4S_GATE_HELPER" begin "$STATE")
+      export A4S_GATE_HELPER A4S_GATE_JOURNAL
       lock="$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-common-dir)/dagu-feature/gate.lock"
       mkdir -p "${lock%/*}"
       # Keep the same process and an inheritable descriptor for the entire body.
@@ -989,26 +995,29 @@ steps:
       os.ftruncate(fd, 0)
       os.pwrite(fd, owner.encode(), 0)
       os.set_inheritable(fd, True)
+      with open(os.environ["A4S_GATE_JOURNAL"], "a") as journal:
+          journal.write(json.dumps({"id": "lock_wait", "endedAt": time.time_ns() // 1000000, "exitCode": 0}) + "\n")
       print(f"gate: acquired lock={path} holder={owner}", file=sys.stderr, flush=True)
       os.execvp(sys.argv[3], sys.argv[3:])
       ' "$lock" "$RUN" bash -euo pipefail -c "$(cat <<'GATE_BODY'
+      trap 'status=$?; trap - EXIT; node "$A4S_GATE_HELPER" finish "$status" || { test "$status" != 0 || status=1; }; exit "$status"' EXIT
+      node "$A4S_GATE_HELPER" start pre_checks
       cd "$WORKTREE"
       STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")
       sha=$(jq -r .sha "$STATE/candidate.json")
       test "$(git rev-parse HEAD)" = "$sha"
       test "$(git branch --show-current)" = "$BRANCH"
       test -z "$(git status --porcelain)"
-      if test -f "$STATE/gate.json"; then
-        prior=$(jq -r .sha "$STATE/gate.json")
-        mkdir -p "$STATE/historical/$prior"
-        mv "$STATE/gate.json" "$STATE/historical/$prior/gate.json"
-      fi
+      node "$A4S_GATE_HELPER" end pre_checks 0
+      node "$A4S_GATE_HELPER" start command
       status=0
-      env -u GH_TOKEN -u GITHUB_TOKEN bash -euo pipefail -c "$GATE" 2>&1 | tee "$STATE/gate-output.log" || status=$?
+      env -u GH_TOKEN -u GITHUB_TOKEN NODE_OPTIONS="${NODE_OPTIONS:-} --require \"$A4S_GATE_HELPER\"" bash -euo pipefail -c "$GATE" 2>&1 | tee "$STATE/gate-output.log" || status=$?
+      node "$A4S_GATE_HELPER" end command "$status"
       if (( status != 0 )); then
         dagu-feature-bundle escalation finding gate "$STATE/gate-output.log"
         exit "$status"
       fi
+      node "$A4S_GATE_HELPER" start post_checks
       status=$(git status --porcelain)
       if [[ -n "$status" ]]; then
         printf 'gate: worktree %s has changes after GATE:\n' "$WORKTREE" >&2
@@ -1017,9 +1026,9 @@ steps:
         exit 1
       fi
       test "$(git rev-parse HEAD)" = "$sha"
-      jq -nc --arg sha "$sha" --arg gate "$GATE" '{sha:$sha,gate:$gate,result:"PASS"}' > "$STATE/gate.json"
       printf 'tested_sha=%s\n' "$sha" | tee -a "${DAGU_OUTPUT_FILE:-/dev/null}"
       git rev-parse HEAD > "$STATE/tested-sha"
+      node "$A4S_GATE_HELPER" end post_checks 0
       GATE_BODY
       )"
     outputs:
