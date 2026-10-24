@@ -132,6 +132,11 @@ steps:
       fi
       test -n "$QUESTION"
       printf '%s\n' "$QUESTION" > "$STATE/question.txt"
+      delimiter="QUESTION_${RANDOM}_${RANDOM}"
+      while [[ $'\n'"$QUESTION"$'\n' == *$'\n'"$delimiter"$'\n'* ]]; do delimiter="${delimiter}_"; done
+      { printf 'question<<%s\n' "$delimiter"; printf '%s\n' "$QUESTION"; printf '%s\n' "$delimiter"; } >> "$DAGU_OUTPUT_FILE"
+    outputs:
+      - name: question
 
   - id: detect_base_primary
     depends: record
@@ -254,6 +259,9 @@ steps:
       mkdir -p "$(dirname "$RESULT")"
       printf '%s\n' "$RESULT" > "$STATE/result.path"
       printf 'result=%s\n' "$RESULT"
+      printf 'resultpath=%s\n' "$RESULT" >> "$DAGU_OUTPUT_FILE"
+    outputs:
+      - name: resultpath
 
   - id: run_poc
     depends: worktree
@@ -261,10 +269,14 @@ steps:
     with:
       prompt: >-
         Execute minimal commands against the real target in ${WORKTREE}; never push poc/${RUN}.
-        Write git rev-parse --git-path poc/result.md with VERDICT: PASS|FAIL|INCONCLUSIVE,
+        Resolved question: ${steps.record.outputs.question}
+        Write the result to ${steps.worktree.outputs.resultpath} with VERDICT: PASS|FAIL|INCONCLUSIVE,
         ## Pregunta, ## Proposición demostrada, ## Ruta ejercitada, ## Comandos y salida,
-        and ## Después del PASS for PASS. Record references or digests of every executed
-        release/image in Ruta ejercitada. Keep tests and Markdown in the cutover.
+        and ## Después del PASS for PASS. ## Pregunta must equal question.txt after
+        normalizing whitespace; use the resolved question above, including issue-body fallback.
+        In ## Ruta ejercitada record the minimal commands, real target, and references or
+        digests of every executed release/image. Every *.md path and every path matching
+        TEST_PATHS=${TEST_PATHS} belongs to implementation cutover, not this PoC diff.
         INCONCLUSIVE also requires ## Inconclusive cause containing exactly scope, access, or other.
         An empty diff is valid. Complete only after recording observed evidence.
       form:
@@ -312,6 +324,16 @@ steps:
       printf '%s\n' "$((ATTEMPT + 1))" > "$STATE/attempt"
       RESULT=$(cat "$STATE/result.path")
       cp "$RESULT" "$STATE/result.md"
+      branch="refs/heads/poc/$RUN"
+      if ! remote=$(git -C "$WORKTREE" ls-remote origin "$branch" 2> "$STATE/remote.err"); then
+        printf 'rule=remote-unreachable branch=%s\n' "$branch" | tee "$STATE/scope-errors" >&2
+        cat "$STATE/remote.err" >&2
+        exit 1
+      fi
+      if [[ -n "$remote" ]]; then
+        printf 'rule=poc-branch-pushed branch=%s SHA=%s\n' "$branch" "${remote%%$'\t'*}" | tee "$STATE/scope-errors" >&2
+        exit 1
+      fi
       git -C "$WORKTREE" diff --name-only --no-renames -z "$(cat "$STATE/base.sha")" > "$STATE/tracked.paths"
       git -C "$WORKTREE" ls-files --others --exclude-standard -z > "$STATE/untracked.paths"
       while IFS= read -r -d '' path; do
@@ -460,9 +482,10 @@ steps:
     action: human.task
     with:
       prompt: >-
-        Review the published evidence. Push back with --expected-iteration to run_poc
-        to iterate; complete with promote=yes only for PASS, otherwise promote=no.
-        INCONCLUSIVE requires the operator to choose iteration or finish.
+        Review the published evidence. Complete the promote form with promote=yes
+        only for PASS; complete with promote=no to end without promotion.
+        To iterate, push back this decide checkpoint with the observed
+        --expected-iteration; it rewinds to run_poc. INCONCLUSIVE can iterate or end.
       form:
         type: object
         properties:

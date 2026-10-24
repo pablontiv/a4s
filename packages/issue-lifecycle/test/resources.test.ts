@@ -233,7 +233,7 @@ for (const path of ["../skills/issue-execution/poc.yaml", renderedPoc]) {
     mkdirSync(state, { recursive: true });
     writeFileSync(join(state, "base.sha"), repo.git(repo.primary, "rev-parse", "HEAD"));
     const worktree = join(repo.primary, ".workspace", "worktrees", "poc-owner");
-    const env = { ...repo.env, WORKTREE: worktree };
+    const env = { ...repo.env, WORKTREE: worktree, DAGU_OUTPUT_FILE: join(repo.root, "outputs") };
     const create = script(definition, "  - id: worktree");
     const launch = () => new Promise<{ code: number | null; error: string }>(resolve => {
       const child = spawn("bash", ["-c", create], { env }); let error = "";
