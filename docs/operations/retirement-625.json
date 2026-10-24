@@ -1,0 +1,1303 @@
+{
+  "issue": 625,
+  "run": "a4s-issue-625-s01a16985-r3",
+  "outcome": "PASS",
+  "observedOn": "2026-10-23",
+  "removedAt": "2026-10-23T22:23:52.918941+00:00",
+  "authorization": "https://github.com/pablontiv/a4s/issues/625#issuecomment-6375584111",
+  "scope": "Only the independent sibling clone <harness>/a4s-published was removed. No other station path was removed; services, configuration, run owners, receipts and preexisting resources were unchanged. The assigned worktree contains the requested retirement evidence and deployment-documentation update.",
+  "notation": {
+    "<primary>": "The canonical main clone a4s.",
+    "<harness>": "The parent directory of <primary>.",
+    "~": "The operator home.",
+    "<temporary>": "The station temporary directory.",
+    "<operator-wiki>": "The station operator documentation checkout.",
+    "commands": "argv, stdout and stderr are retained with portable path substitutions; relative search paths are relative to the assigned issue worktree. grep entries are exact tool calls, not shell grep commands."
+  },
+  "finalCloneInspection": {
+    "branch": "main",
+    "revision": "eb90e4341f06c56f8d91571fb1d00123eb94619f",
+    "clean": true,
+    "stashes": 0,
+    "unmergedLocalOrRemoteBranches": 0,
+    "worktrees": 1,
+    "linkedWorktrees": 0,
+    "independentGitDirectory": true,
+    "realpathMatchesAuthorizedTarget": true,
+    "openFiles": "lsof -nP +D returned exit 1 with empty stdout and stderr",
+    "revisionIntegratedIntoPrimaryMain": true
+  },
+  "referenceInventory": [
+    {
+      "surface": "Installed DAGs, base/config, installed LaunchAgent and user/system LaunchAgents/LaunchDaemons",
+      "references": [],
+      "disposition": "Unchanged; no dependency found."
+    },
+    {
+      "surface": "Repository source, maintained scripts/docs, adopted DAGs and preserved lifecycle snapshots",
+      "references": [],
+      "disposition": "Existing operational references unchanged; this retirement record and its deployment summary were added as requested evidence."
+    },
+    {
+      "surface": "Station personal scripts/bin, shell startup files, Dagu/executor scripts and selected runtime config",
+      "references": [],
+      "disposition": "Unchanged; missing ~/.zprofile explicitly reported. Broad snapshot search timed out; narrower lifecycle YAML, native dag.json and executor script searches completed."
+    },
+    {
+      "surface": "Operator wiki and harness documentation/scripts",
+      "references": [],
+      "disposition": "Unchanged; no dependency found."
+    },
+    {
+      "surface": "Orca repositories and worktree registrations",
+      "references": [],
+      "disposition": "10 repositories; 78 local worktrees, no omitted hosts and no truncation; 4 visible A4S worktrees. No registry mutation."
+    },
+    {
+      "surface": "Native active runs and persisted DAG definitions",
+      "references": [],
+      "disposition": "29 running/waiting runs returned across the complete date range below the 1000-record limit; their history parameters and October native DAG snapshots contain no clone reference. Original run owners/resources preserved."
+    },
+    {
+      "surface": "Retirement evidence introduced by this assignment",
+      "references": [
+        "docs/operations/retirement-625.json",
+        "docs/operations/deployment.md"
+      ],
+      "disposition": "Historical evidence of this authorized removal, not runtime dependencies."
+    }
+  ],
+  "referenceSearches": [
+    {
+      "tool": "grep",
+      "arguments": {
+        "pattern": "a4s-published",
+        "path": ".;~/Library/LaunchAgents",
+        "case": true,
+        "gitignore": false,
+        "skip": null
+      },
+      "output": "No matches found"
+    },
+    {
+      "tool": "grep",
+      "arguments": {
+        "pattern": "a4s-published",
+        "path": "~/.dagu/dags;~/.dagu/base.yaml;~/.dagu/config.yaml;~/.dagu/LaunchAgent.plist;~/Library/LaunchAgents;/Library/LaunchAgents;/Library/LaunchDaemons",
+        "case": true,
+        "gitignore": false,
+        "skip": null
+      },
+      "output": "No matches found"
+    },
+    {
+      "tool": "grep",
+      "arguments": {
+        "pattern": "a4s-published",
+        "path": "~/.local/bin;~/bin;<operator-wiki>;<harness>/rules.md;<harness>/MIGRATION_SYNTHESIS.md;<harness>/CLAUDE_AUTO_MEMORY_ARCHIVE.md;<harness>/opencode-extension-surface.md;<harness>/**/scripts/*;<harness>/**/docs/*.md;<harness>/**/docs/**/*.md",
+        "case": true,
+        "gitignore": true,
+        "skip": null
+      },
+      "output": "No matches found"
+    },
+    {
+      "tool": "grep",
+      "arguments": {
+        "pattern": "a4s-published",
+        "path": "scripts;docs;README.md;orca.yaml;.workspace/dagu;<primary>/scripts;<primary>/docs;<primary>/.workspace/dagu;~/.local/bin;~/bin;~/.zshrc;~/.zprofile;~/.bashrc;~/.bash_profile",
+        "case": true,
+        "gitignore": false,
+        "skip": null
+      },
+      "output": "No matches found\nSkipped missing paths: ~/.zprofile"
+    },
+    {
+      "tool": "grep",
+      "arguments": {
+        "pattern": "a4s-published",
+        "path": "~/scripts;~/.config/dagu;~/.config/dispatch-reconcile;~/.config/fish;~/.config/systemd;~/.config/agents;<operator-wiki>;<harness>/**/scripts/*",
+        "case": true,
+        "gitignore": false,
+        "skip": null
+      },
+      "output": "No matches found"
+    },
+    {
+      "tool": "grep",
+      "arguments": {
+        "pattern": "a4s-published",
+        "path": "~/.dagu/data/dag-runs/**/*.yaml;<primary>/.git/dagu-feature/runs/*/snapshot/*.yaml;<primary>/.git/poc/runs/*/snapshot/*.yaml;~/.dagu/executors/**/scripts/*",
+        "case": true,
+        "gitignore": false,
+        "skip": null
+      },
+      "output": "Grep timed out after 30s; narrow paths or pattern, or scope with `glob` first"
+    },
+    {
+      "tool": "grep",
+      "arguments": {
+        "pattern": "a4s-published",
+        "path": "<primary>/.git/dagu-feature/runs/*/snapshot/*.yaml",
+        "case": true,
+        "gitignore": false,
+        "skip": null
+      },
+      "output": "No matches found"
+    },
+    {
+      "tool": "grep",
+      "arguments": {
+        "pattern": "a4s-published",
+        "path": "~/.dagu/executors/*/scripts/*",
+        "case": true,
+        "gitignore": false,
+        "skip": null
+      },
+      "output": "No matches found"
+    },
+    {
+      "tool": "grep",
+      "arguments": {
+        "pattern": "a4s-published",
+        "path": "~/.dagu/data/dag-runs/feature/dag-runs/2026/10/*/*/*/dag.json;~/.dagu/data/dag-runs/planning/dag-runs/2026/10/*/*/*/dag.json;~/.dagu/data/dag-runs/poc/dag-runs/2026/10/*/*/*/dag.json;~/.dagu/data/dag-runs/dagu-feature-bootstrap/dag-runs/2026/10/*/*/*/dag.json;~/.dagu/data/dag-runs/pbprobe/dag-runs/2026/10/*/*/*/dag.json",
+        "case": true,
+        "gitignore": false,
+        "skip": null
+      },
+      "output": "No matches found"
+    },
+    {
+      "tool": "grep",
+      "arguments": {
+        "pattern": "a4s.published|a4s.?published",
+        "path": "scripts;docs;README.md;orca.yaml;.workspace/dagu;~/scripts;~/.local/bin;~/bin;~/.dagu/dags;~/Library/LaunchAgents;<operator-wiki>",
+        "case": false,
+        "gitignore": false,
+        "skip": null
+      },
+      "output": "No matches found"
+    }
+  ],
+  "preDeletionOrcaEvidence": {
+    "repoListCommand": "orca repo list --json",
+    "repositoryCount": 10,
+    "matchingReferences": [],
+    "worktreePsCommand": "orca worktree ps --json",
+    "totalCount": 78,
+    "truncated": false,
+    "hostScope": {
+      "hostIds": [
+        "local"
+      ],
+      "omittedHostIds": []
+    },
+    "a4sWorktreeListCommand": "orca worktree list --repo id:b030510a-51a7-45ab-b6b0-777a010b3942 --json",
+    "totalA4sVisibleWorktrees": 4,
+    "note": "Projected exact outputs from the same read-only queries after deletion are retained in commands; neither query mutates the registry."
+  },
+  "postDeletion": {
+    "targetRemoved": true,
+    "primaryBranch": "main",
+    "primaryRevision": "4ef614d7b87a162c95c585da2c3cb85c5ea82986",
+    "primaryClean": true,
+    "registeredWorktreesBefore": 49,
+    "registeredWorktreesAfter": 49,
+    "allPreexistingWorktreesRemainRegistered": true,
+    "allPreexistingWorktreesResolveToPrimaryGit": true,
+    "daguHealth": {
+      "status": "healthy",
+      "timestamp": "2026-10-23T16:24:02-06:00",
+      "uptime": 14717,
+      "version": "2.20.1"
+    },
+    "serviceRunning": true
+  },
+  "commands": [
+    {
+      "argv": [
+        "dagu",
+        "history",
+        "--dagu-home",
+        "~/.dagu",
+        "--from",
+        "1970-01-01",
+        "--status",
+        "running,queued,waiting,not_started",
+        "--limit",
+        "1000",
+        "--format",
+        "json"
+      ],
+      "exitCode": 0,
+      "stdout": "[\n  {\n    \"name\": \"planning\",\n    \"dagRunId\": \"a4s-breakdown-repository-versioning\",\n    \"status\": \"waiting\",\n    \"startedAt\": \"2026-10-23T16:21:38-06:00\",\n    \"finishedAt\": \"2026-10-23T16:21:39-06:00\",\n    \"duration\": \"1s\",\n    \"params\": \"UNITS_FROM=<temporary>/refine.yM4l4jNOe5/units.jsonl SOURCE=refine PRIMARY=<primary> OMP_SESSION_ID=01a1673e-0210-733f-9490-e1de067ebe53\",\n    \"labels\": [\n      \"workspace=a4s\",\n      \"dagu-feature-bundle=0.5.4\"\n    ],\n    \"workerId\": \"local\"\n  },\n  {\n    \"name\": \"poc\",\n    \"dagRunId\": \"poc-a4s-issue-621-s01a16985\",\n    \"status\": \"waiting\",\n    \"startedAt\": \"2026-10-23T22:20:45Z\",\n    \"finishedAt\": \"2026-10-23T22:20:47Z\",\n    \"duration\": \"2s\",\n    \"params\": \"AUTHORIZED_TARGETS=[\\\"#608 structured per-phase gate timing\\\",\\\"isolated worktrees: one per concurrent gate (n=1, 2, 3, 5)\\\",\\\"main sha 4ef614d7b87a162c95c585da2c3cb85c5ea82986 (or the single main sha recorded at poc start)\\\",\\\"station lock/queue configuration and host cpu/memory/load telemetry\\\",\\\"station:<primary> main-lane full gate (npm ci \\u0026\\u0026 npm test \\u0026\\u0026 npm run typecheck)\\\"] BASE_BRANCH=main ISSUE=621 OMP_SESSION_ID=01a16985-9817-770e-a9b5-430f64fa53ae QUESTION=At one recorded main SHA on the real station, do N = 1, 2, 3 and 5 concurrent full gates in independently owned worktrees show different completed-gate throughput, failure rate or retry count? Do the #608 per-phase timings (slot/lock wait, install, per-workspace tests, typecheck, post-gate checks) show real overlap and not serialization? Does the result support the one-heavy-slot direction in #606 or the five-concurrent-gate direction in #521/#515? What follows for #607? REQUIRED_TARGETS=[\\\"#608 structured per-phase gate timing\\\",\\\"isolated worktrees: one per concurrent gate (n=1, 2, 3, 5)\\\",\\\"main sha 4ef614d7b87a162c95c585da2c3cb85c5ea82986 (or the single main sha recorded at poc start)\\\",\\\"station lock/queue configuration and host cpu/memory/load telemetry\\\",\\\"station:<primary> main-lane full gate (npm ci \\u0026\\u0026 npm test \\u0026\\u0026 npm run typecheck)\\\"] SCOPE_BASIS=Operator-authorized roadmap (wave 2: #621 after #608 merged). Granted: disposable independent clones of \\u003cprimary\\u003e at one recorded main SHA under a temporary directory (one per concurrent gate, own node_modules), running the configured GATE concurrently at N=1,2,3,5; read-only lock/queue configuration and host CPU/memory/load telemetry. Not granted: git worktree add on \\u003cprimary\\u003e, scheduler/config/LaunchAgent changes, other runs. Clones are removed after evidence is recorded. SCOPE_REQUEST=02388a782ffba5fdd3eca81f55fa0ee0b1e110dbafd3461059b31af289782408 TEST_PATHS=(^|/)(test|tests)/|\\\\.test\\\\.(ts|cjs)$\",\n    \"labels\": [\n      \"workspace=a4s\",\n      \"dagu-feature-bundle=0.5.4\"\n    ],\n    \"workerId\": \"local\"\n  },\n  {\n    \"name\": \"feature\",\n    \"dagRunId\": \"a4s-issue-625-s01a16985-r3\",\n    \"status\": \"running\",\n    \"startedAt\": \"2026-10-23T22:19:38Z\",\n    \"duration\": \"2m18s\",\n    \"params\": \"BASE_BRANCH=main ISSUE=625 OMP_SESSION_ID=01a16985-9817-770e-a9b5-430f64fa53ae POC_BASIS= PR_NUMBER= VALIDATION=\",\n    \"labels\": [\n      \"workspace=a4s\",\n      \"dagu-feature-bundle=0.5.4\"\n    ],\n    \"workerId\": \"local\"\n  },\n  {\n    \"name\": \"dagu-feature-bootstrap\",\n    \"dagRunId\": \"bootstrap-a4s-v0-5-3\",\n    \"status\": \"waiting\",\n    \"startedAt\": \"2026-10-23T21:00:28Z\",\n    \"finishedAt\": \"2026-10-23T21:00:33Z\",\n    \"duration\": \"5s\",\n    \"params\": \"PRIMARY=<primary> SKILL_DIR=<primary>/packages/issue-lifecycle/skills/issue-execution BASE_BRANCH=\",\n    \"workerId\": \"local\"\n  },\n  {\n    \"name\": \"feature\",\n    \"dagRunId\": \"feature-poc-activities-issue-71-r2\",\n    \"status\": \"waiting\",\n    \"startedAt\": \"2026-10-23T18:57:03Z\",\n    \"finishedAt\": \"2026-10-23T19:00:26Z\",\n    \"duration\": \"3m23s\",\n    \"params\": \"BASE_BRANCH=main ISSUE=71 OMP_SESSION_ID=01a15cd2-3cc2-76c1-8396-afaaec8493bf POC_BASIS=https://github.com/pablontiv/activities/issues/71#issuecomment-6357830481 PR_NUMBER= VALIDATION=\",\n    \"labels\": [\n      \"workspace=activities\",\n      \"dagu-feature-bundle=0.3.101\"\n    ],\n    \"workerId\": \"local\"\n  },\n  {\n    \"name\": \"feature\",\n    \"dagRunId\": \"feature-poc-activities-issue-106-r2\",\n    \"status\": \"waiting\",\n    \"startedAt\": \"2026-10-23T04:04:50Z\",\n    \"finishedAt\": \"2026-10-23T04:07:51Z\",\n    \"duration\": \"3m1s\",\n    \"params\": \"BASE_BRANCH=main ISSUE=106 OMP_SESSION_ID=01a15cd2-3cc2-76c1-8396-afaaec8493bf POC_BASIS=https://github.com/pablontiv/activities/issues/106#issuecomment-6356884623 PR_NUMBER= VALIDATION=\",\n    \"labels\": [\n      \"workspace=activities\",\n      \"dagu-feature-bundle=0.3.101\"\n    ],\n    \"workerId\": \"local\"\n  },\n  {\n    \"name\": \"feature\",\n    \"dagRunId\": \"feature-poc-a4s-issue-335-s01a161ff\",\n    \"status\": \"waiting\",\n    \"startedAt\": \"2026-10-23T02:54:28Z\",\n    \"finishedAt\": \"2026-10-23T02:54:28Z\",\n    \"duration\": \"\\u003c 1s\",\n    \"params\": \"BASE_BRANCH=main ISSUE=335 OMP_SESSION_ID=01a161ff-437f-758e-a260-a808c3a381cb POC_BASIS=https://github.com/pablontiv/a4s/issues/335#issuecomment-6355253373 PR_NUMBER= VALIDATION=\",\n    \"labels\": [\n      \"workspace=a4s\",\n      \"dagu-feature-bundle=0.3.101\"\n    ],\n    \"workerId\": \"local\"\n  },\n  {\n    \"name\": \"feature\",\n    \"dagRunId\": \"feature-poc-a4s-issue-415-s01a161ff\",\n    \"status\": \"waiting\",\n    \"startedAt\": \"2026-10-23T01:23:31Z\",\n    \"finishedAt\": \"2026-10-23T01:23:35Z\",\n    \"duration\": \"4s\",\n    \"params\": \"BASE_BRANCH=main ISSUE=415 OMP_SESSION_ID=01a161ff-437f-758e-a260-a808c3a381cb POC_BASIS=https://github.com/pablontiv/a4s/issues/415#issuecomment-6355076385 PR_NUMBER= VALIDATION=\",\n    \"labels\": [\n      \"workspace=a4s\",\n      \"dagu-feature-bundle=0.3.101\"\n    ],\n    \"workerId\": \"local\"\n  },\n  {\n    \"name\": \"feature\",\n    \"dagRunId\": \"a4s-issue-383-s01a161ff-r3\",\n    \"status\": \"waiting\",\n    \"startedAt\": \"2026-10-23T03:09:12Z\",\n    \"finishedAt\": \"2026-10-23T03:09:12Z\",\n    \"duration\": \"\\u003c 1s\",\n    \"params\": \"BASE_BRANCH=main ISSUE=383 OMP_SESSION_ID=01a161ff-437f-758e-a260-a808c3a381cb POC_BASIS= PR_NUMBER= VALIDATION=\",\n    \"labels\": [\n      \"workspace=a4s\",\n      \"dagu-feature-bundle=0.3.101\"\n    ],\n    \"workerId\": \"local\"\n  },\n  {\n    \"name\": \"feature\",\n    \"dagRunId\": \"feature-poc-a4s-issue-517-s01a161ff\",\n    \"status\": \"waiting\",\n    \"startedAt\": \"2026-10-23T03:29:48Z\",\n    \"finishedAt\": \"2026-10-23T03:29:48Z\",\n    \"duration\": \"\\u003c 1s\",\n    \"params\": \"BASE_BRANCH=main ISSUE=517 OMP_SESSION_ID=01a161ff-437f-758e-a260-a808c3a381cb POC_BASIS=https://github.com/pablontiv/a4s/issues/517#issuecomment-6345286101 PR_NUMBER= VALIDATION=\",\n    \"labels\": [\n      \"workspace=a4s\",\n      \"dagu-feature-bundle=0.3.101\"\n    ],\n    \"workerId\": \"local\"\n  },\n  {\n    \"name\": \"feature\",\n    \"dagRunId\": \"a4s-issue-479-s01a161ff\",\n    \"status\": \"waiting\",\n    \"startedAt\": \"2026-10-22T09:55:20Z\",\n    \"finishedAt\": \"2026-10-22T10:00:57Z\",\n    \"duration\": \"5m37s\",\n    \"params\": \"BASE_BRANCH=main ISSUE=479 OMP_SESSION_ID=01a161ff-437f-758e-a260-a808c3a381cb POC_BASIS= PR_NUMBER= VALIDATION=\",\n    \"labels\": [\n      \"workspace=a4s\",\n      \"dagu-feature-bundle=0.3.101\"\n    ],\n    \"workerId\": \"local\"\n  },\n  {\n    \"name\": \"feature\",\n    \"dagRunId\": \"a4s-issue-411-s01a161ff\",\n    \"status\": \"waiting\",\n    \"startedAt\": \"2026-10-22T07:00:09Z\",\n    \"finishedAt\": \"2026-10-22T07:00:14Z\",\n    \"duration\": \"5s\",\n    \"params\": \"BASE_BRANCH=main ISSUE=411 OMP_SESSION_ID=01a161ff-437f-758e-a260-a808c3a381cb POC_BASIS= PR_NUMBER= VALIDATION=\",\n    \"labels\": [\n      \"workspace=a4s\",\n      \"dagu-feature-bundle=0.3.101\"\n    ],\n    \"workerId\": \"local\"\n  },\n  {\n    \"name\": \"feature\",\n    \"dagRunId\": \"a4s-issue-295-s01a161ff\",\n    \"status\": \"waiting\",\n    \"startedAt\": \"2026-10-22T08:52:26Z\",\n    \"finishedAt\": \"2026-10-22T08:57:32Z\",\n    \"duration\": \"5m6s\",\n    \"params\": \"BASE_BRANCH=main ISSUE=295 OMP_SESSION_ID=01a161ff-437f-758e-a260-a808c3a381cb POC_BASIS= PR_NUMBER= VALIDATION=\",\n    \"labels\": [\n      \"workspace=a4s\",\n      \"dagu-feature-bundle=0.3.101\"\n    ],\n    \"workerId\": \"local\"\n  },\n  {\n    \"name\": \"feature\",\n    \"dagRunId\": \"a4s-issue-483-s01a161ff\",\n    \"status\": \"waiting\",\n    \"startedAt\": \"2026-10-22T10:32:58Z\",\n    \"finishedAt\": \"2026-10-22T10:32:58Z\",\n    \"duration\": \"\\u003c 1s\",\n    \"params\": \"BASE_BRANCH=main ISSUE=483 OMP_SESSION_ID=01a161ff-437f-758e-a260-a808c3a381cb POC_BASIS= PR_NUMBER= VALIDATION=\",\n    \"labels\": [\n      \"workspace=a4s\",\n      \"dagu-feature-bundle=0.3.101\"\n    ],\n    \"workerId\": \"local\"\n  },\n  {\n    \"name\": \"feature\",\n    \"dagRunId\": \"a4s-issue-358-s01a161ff\",\n    \"status\": \"waiting\",\n    \"startedAt\": \"2026-10-22T09:12:25Z\",\n    \"finishedAt\": \"2026-10-22T09:17:29Z\",\n    \"duration\": \"5m4s\",\n    \"params\": \"BASE_BRANCH=main ISSUE=358 OMP_SESSION_ID=01a161ff-437f-758e-a260-a808c3a381cb POC_BASIS= PR_NUMBER= VALIDATION=\",\n    \"labels\": [\n      \"workspace=a4s\",\n      \"dagu-feature-bundle=0.3.101\"\n    ],\n    \"workerId\": \"local\"\n  },\n  {\n    \"name\": \"feature\",\n    \"dagRunId\": \"a4s-issue-478-s01a161ff\",\n    \"status\": \"waiting\",\n    \"startedAt\": \"2026-10-22T09:17:34Z\",\n    \"finishedAt\": \"2026-10-22T09:22:42Z\",\n    \"duration\": \"5m8s\",\n    \"params\": \"BASE_BRANCH=main ISSUE=478 OMP_SESSION_ID=01a161ff-437f-758e-a260-a808c3a381cb POC_BASIS= PR_NUMBER= VALIDATION=\",\n    \"labels\": [\n      \"workspace=a4s\",\n      \"dagu-feature-bundle=0.3.101\"\n    ],\n    \"workerId\": \"local\"\n  },\n  {\n    \"name\": \"planning\",\n    \"dagRunId\": \"a4s-breakdown-v1-coordination-20261021-01a15f8c\",\n    \"status\": \"waiting\",\n    \"startedAt\": \"2026-10-21T21:15:24Z\",\n    \"finishedAt\": \"2026-10-21T21:15:24Z\",\n    \"duration\": \"\\u003c 1s\",\n    \"params\": \"UNITS_FROM=<temporary>/a4s-coordinator-backlog-20261021/units.jsonl SOURCE=plan PRIMARY=<primary> OMP_SESSION_ID=01a15f8c-290a-7138-9b3c-565e1d536198\",\n    \"labels\": [\n      \"workspace=a4s\",\n      \"dagu-feature-bundle=0.3.101\"\n    ],\n    \"workerId\": \"local\"\n  },\n  {\n    \"name\": \"feature\",\n    \"dagRunId\": \"activities-issue-68\",\n    \"status\": \"waiting\",\n    \"startedAt\": \"2026-10-21T18:23:36Z\",\n    \"finishedAt\": \"2026-10-21T18:23:41Z\",\n    \"duration\": \"5s\",\n    \"params\": \"BASE_BRANCH=main ISSUE=68 OMP_SESSION_ID=01a15cd2-3cc2-76c1-8396-afaaec8493bf POC_BASIS= PR_NUMBER= VALIDATION=\",\n    \"labels\": [\n      \"workspace=activities\",\n      \"dagu-feature-bundle=0.3.94\"\n    ],\n    \"workerId\": \"local\"\n  },\n  {\n    \"name\": \"planning\",\n    \"dagRunId\": \"a4s-breakdown-v1-observability-20261021-01a15ed6\",\n    \"status\": \"waiting\",\n    \"startedAt\": \"2026-10-21T14:54:34Z\",\n    \"finishedAt\": \"2026-10-21T14:54:34Z\",\n    \"duration\": \"\\u003c 1s\",\n    \"params\": \"UNITS_FROM=<temporary>/a4s-observability-v1-20261021.nq5CDB/units.jsonl SOURCE=plan PRIMARY=<primary> OMP_SESSION_ID=01a15ed6-e61c-7687-a963-a900f164116a\",\n    \"labels\": [\n      \"workspace=a4s\",\n      \"dagu-feature-bundle=0.3.98\"\n    ],\n    \"workerId\": \"local\"\n  },\n  {\n    \"name\": \"feature\",\n    \"dagRunId\": \"a4s-issue-296-s01a15cd0\",\n    \"status\": \"waiting\",\n    \"startedAt\": \"2026-10-21T10:15:21Z\",\n    \"finishedAt\": \"2026-10-21T10:15:24Z\",\n    \"duration\": \"3s\",\n    \"params\": \"BASE_BRANCH=main ISSUE=296 OMP_SESSION_ID=01a15cd0-07ab-707b-8e2c-290af7a9610f POC_BASIS= PR_NUMBER= VALIDATION=\",\n    \"labels\": [\n      \"workspace=a4s\",\n      \"dagu-feature-bundle=0.3.97\"\n    ],\n    \"workerId\": \"local\"\n  },\n  {\n    \"name\": \"poc\",\n    \"dagRunId\": \"poc-activities-initial57-v2\",\n    \"status\": \"waiting\",\n    \"startedAt\": \"2026-10-21T07:14:05Z\",\n    \"finishedAt\": \"2026-10-21T07:14:08Z\",\n    \"duration\": \"3s\",\n    \"params\": \"BASE_BRANCH=main ISSUE=57 OMP_SESSION_ID= QUESTION=Can the existing Headroom iOS app and extension be distributed and installed through TestFlight under team 2AKTQB3Q23? TEST_PATHS=(^|/)[A-Za-z]*Tests/|Tests\\\\.swift$\",\n    \"labels\": [\n      \"workspace=activities\",\n      \"dagu-feature-bundle=0.3.94\"\n    ],\n    \"workerId\": \"local\"\n  },\n  {\n    \"name\": \"planning\",\n    \"dagRunId\": \"a4s-breakdown-native-init-s01a15cd0-v2\",\n    \"status\": \"waiting\",\n    \"startedAt\": \"2026-10-21T05:48:57Z\",\n    \"finishedAt\": \"2026-10-21T05:48:58Z\",\n    \"duration\": \"1s\",\n    \"params\": \"UNITS_FROM=~/.dagu/data/planning-inputs/a4s-native-init-consistency/units.jsonl SOURCE=refine PRIMARY=<primary> OMP_SESSION_ID=01a15cd0-07ab-707b-8e2c-290af7a9610f\",\n    \"labels\": [\n      \"workspace=a4s\",\n      \"dagu-feature-bundle=0.3.95\"\n    ],\n    \"workerId\": \"local\"\n  },\n  {\n    \"name\": \"feature\",\n    \"dagRunId\": \"feature-poc-a4s-route-a-issue-272-s01a15709\",\n    \"status\": \"waiting\",\n    \"startedAt\": \"2026-10-20T06:38:09Z\",\n    \"finishedAt\": \"2026-10-20T06:38:15Z\",\n    \"duration\": \"6s\",\n    \"params\": \"BASE_BRANCH=main ISSUE=272 OMP_SESSION_ID=01a15709-c144-7633-aa43-4e81e3843f7e POC_BASIS=https://github.com/pablontiv/a4s/issues/272#issuecomment-6284957548 PR_NUMBER= VALIDATION=\",\n    \"labels\": [\n      \"workspace=a4s\",\n      \"dagu-feature-bundle=0.3.91\"\n    ],\n    \"workerId\": \"local\"\n  },\n  {\n    \"name\": \"feature\",\n    \"dagRunId\": \"a4s-route-a-issue-294-s01a15709\",\n    \"status\": \"waiting\",\n    \"startedAt\": \"2026-10-20T06:28:08Z\",\n    \"finishedAt\": \"2026-10-20T06:28:11Z\",\n    \"duration\": \"3s\",\n    \"params\": \"BASE_BRANCH=main ISSUE=294 OMP_SESSION_ID=01a15709-c144-7633-aa43-4e81e3843f7e POC_BASIS= PR_NUMBER= VALIDATION=\",\n    \"labels\": [\n      \"workspace=a4s\",\n      \"dagu-feature-bundle=0.3.91\"\n    ],\n    \"workerId\": \"local\"\n  },\n  {\n    \"name\": \"feature\",\n    \"dagRunId\": \"feature-poc-a4s-route-a-issue-351-s01a15709\",\n    \"status\": \"waiting\",\n    \"startedAt\": \"2026-10-20T06:27:59Z\",\n    \"finishedAt\": \"2026-10-20T06:28:02Z\",\n    \"duration\": \"3s\",\n    \"params\": \"BASE_BRANCH=main ISSUE=351 OMP_SESSION_ID=01a15709-c144-7633-aa43-4e81e3843f7e POC_BASIS=https://github.com/pablontiv/a4s/issues/351#issuecomment-6284806759 PR_NUMBER= VALIDATION=\",\n    \"labels\": [\n      \"workspace=a4s\",\n      \"dagu-feature-bundle=0.3.91\"\n    ],\n    \"workerId\": \"local\"\n  },\n  {\n    \"name\": \"feature\",\n    \"dagRunId\": \"a4s-route-a-issue-355-s01a15709\",\n    \"status\": \"waiting\",\n    \"startedAt\": \"2026-10-20T16:16:31Z\",\n    \"finishedAt\": \"2026-10-20T16:16:31Z\",\n    \"duration\": \"\\u003c 1s\",\n    \"params\": \"BASE_BRANCH=main ISSUE=355 OMP_SESSION_ID=01a15709-c144-7633-aa43-4e81e3843f7e POC_BASIS= PR_NUMBER= VALIDATION=\",\n    \"labels\": [\n      \"workspace=a4s\",\n      \"dagu-feature-bundle=0.3.91\"\n    ],\n    \"workerId\": \"local\"\n  },\n  {\n    \"name\": \"feature\",\n    \"dagRunId\": \"a4s-route-a-issue-352-s01a15709\",\n    \"status\": \"waiting\",\n    \"startedAt\": \"2026-10-22T06:06:31Z\",\n    \"finishedAt\": \"2026-10-22T06:14:30Z\",\n    \"duration\": \"7m59s\",\n    \"params\": \"BASE_BRANCH=main ISSUE=352 OMP_SESSION_ID=01a15709-c144-7633-aa43-4e81e3843f7e POC_BASIS= PR_NUMBER= VALIDATION=\",\n    \"labels\": [\n      \"workspace=a4s\",\n      \"dagu-feature-bundle=0.3.91\"\n    ],\n    \"workerId\": \"local\"\n  },\n  {\n    \"name\": \"feature\",\n    \"dagRunId\": \"rootline-issue-362\",\n    \"status\": \"waiting\",\n    \"startedAt\": \"2026-10-15T19:35:00Z\",\n    \"finishedAt\": \"2026-10-15T19:35:00Z\",\n    \"duration\": \"\\u003c 1s\",\n    \"params\": \"ISSUE=362 PR_NUMBER= PRIMARY=<harness>/rootline BRANCH=dagu/issue-362 BASE_BRANCH=master GATE=just check \\u0026\\u0026 just test REQUIRED_CHECK=candidate OMP_SESSION_ID=01a14046-758c-762e-8e1f-334406123718 POC_BASIS=\",\n    \"labels\": [\n      \"workspace=rootline\"\n    ],\n    \"workerId\": \"local\"\n  },\n  {\n    \"name\": \"pbprobe\",\n    \"dagRunId\": \"pbprobe-180\",\n    \"status\": \"waiting\",\n    \"startedAt\": \"2026-10-15T09:14:42-06:00\",\n    \"finishedAt\": \"2026-10-15T09:14:42-06:00\",\n    \"duration\": \"\\u003c 1s\",\n    \"workerId\": \"local\"\n  }\n]\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "dagu",
+        "ps",
+        "--dagu-home",
+        "~/.dagu",
+        "--format",
+        "json"
+      ],
+      "exitCode": 0,
+      "stdout": "[\n  {\n    \"name\": \"feature\",\n    \"dagRunId\": \"a4s-issue-625-s01a16985-r3\",\n    \"attemptId\": \"6cc525\",\n    \"startedAt\": \"2026-10-23T22:19:38Z\",\n    \"group\": \"a4s\"\n  }\n]\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "<harness>/a4s-published",
+        "status",
+        "--porcelain=v1",
+        "--untracked-files=all"
+      ],
+      "exitCode": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "<harness>/a4s-published",
+        "branch",
+        "--show-current"
+      ],
+      "exitCode": 0,
+      "stdout": "main\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "<harness>/a4s-published",
+        "rev-parse",
+        "HEAD"
+      ],
+      "exitCode": 0,
+      "stdout": "eb90e4341f06c56f8d91571fb1d00123eb94619f\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "<harness>/a4s-published",
+        "stash",
+        "list"
+      ],
+      "exitCode": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "<harness>/a4s-published",
+        "branch",
+        "--all",
+        "--no-merged",
+        "main"
+      ],
+      "exitCode": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "<harness>/a4s-published",
+        "worktree",
+        "list",
+        "--porcelain"
+      ],
+      "exitCode": 0,
+      "stdout": "worktree <harness>/a4s-published\nHEAD eb90e4341f06c56f8d91571fb1d00123eb94619f\nbranch refs/heads/main\n\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "<harness>/a4s-published",
+        "rev-parse",
+        "--absolute-git-dir"
+      ],
+      "exitCode": 0,
+      "stdout": "<harness>/a4s-published/.git\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "<harness>/a4s-published",
+        "rev-parse",
+        "--path-format=absolute",
+        "--git-common-dir"
+      ],
+      "exitCode": 0,
+      "stdout": "<harness>/a4s-published/.git\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "<primary>",
+        "merge-base",
+        "--is-ancestor",
+        "eb90e4341f06c56f8d91571fb1d00123eb94619f",
+        "main"
+      ],
+      "exitCode": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "<primary>",
+        "status",
+        "--porcelain=v1",
+        "--untracked-files=all"
+      ],
+      "exitCode": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "<primary>",
+        "rev-parse",
+        "HEAD"
+      ],
+      "exitCode": 0,
+      "stdout": "4ef614d7b87a162c95c585da2c3cb85c5ea82986\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "<primary>",
+        "worktree",
+        "list",
+        "--porcelain"
+      ],
+      "exitCode": 0,
+      "stdout": "worktree <primary>\nHEAD 4ef614d7b87a162c95c585da2c3cb85c5ea82986\nbranch refs/heads/main\n\nworktree ~/.dagu/executors/issue-lifecycle-0.4.3-954370f7230a3d4c3f67eb918db9888785820e8d\nHEAD 954370f7230a3d4c3f67eb918db9888785820e8d\ndetached\n\nworktree ~/.dagu/executors/issue-lifecycle-0.5.0-2d104f3cd9f3bf6ec7f5cb48c0ccdfb28f2588f9\nHEAD 2d104f3cd9f3bf6ec7f5cb48c0ccdfb28f2588f9\ndetached\n\nworktree ~/.dagu/executors/issue-lifecycle-0.5.1-ad8539ce5a98ad471d55ea835cb5f1cfc040853b\nHEAD ad8539ce5a98ad471d55ea835cb5f1cfc040853b\ndetached\n\nworktree ~/.dagu/executors/issue-lifecycle-0.5.2-29bbcc2cbdfaede4438136c680012a161bbc35ca\nHEAD 29bbcc2cbdfaede4438136c680012a161bbc35ca\ndetached\n\nworktree ~/.dagu/executors/issue-lifecycle-0.5.2-a95a91fc6014636820ef542b927aa6ca66ecbb37\nHEAD a95a91fc6014636820ef542b927aa6ca66ecbb37\ndetached\n\nworktree ~/.dagu/executors/issue-lifecycle-0.5.2-e9cb0f337c57655542b9ceb4960adc8d5e47095c\nHEAD e9cb0f337c57655542b9ceb4960adc8d5e47095c\ndetached\n\nworktree ~/.dagu/executors/omp-dagu-0.3.101-04846df5940d65b8e230eafadff6621ae9186122\nHEAD 04846df5940d65b8e230eafadff6621ae9186122\ndetached\n\nworktree ~/.dagu/executors/omp-dagu-0.3.101-a4ddd5233bd13e454622472b18f785b9c241724f\nHEAD a4ddd5233bd13e454622472b18f785b9c241724f\ndetached\n\nworktree ~/.dagu/executors/omp-dagu-0.3.102\nHEAD 0fe47450f12c7e9cbc3fa6888860a3513ea1a7df\ndetached\n\nworktree ~/.dagu/executors/omp-dagu-0.3.103\nHEAD bafac290e2a44781bbdbdba7d5b99f9d97790074\ndetached\n\nworktree ~/.dagu/executors/omp-dagu-0.3.109\nHEAD 43423d1986c83a72526afc506de7e02ca653e422\ndetached\n\nworktree ~/.dagu/executors/omp-dagu-0.3.115\nHEAD 01beb02a5e35c352c3d6594497a713179254f63c\ndetached\n\nworktree ~/.dagu/executors/omp-dagu-0.3.117\nHEAD 2da4e7532a9107d29cb64e62904a9543de08de2a\ndetached\n\nworktree ~/.dagu/executors/omp-dagu-0.3.118\nHEAD e6ed98efc72c6ed984ed55787e309073def77c18\ndetached\n\nworktree ~/.dagu/executors/omp-dagu-0.3.120\nHEAD 58182c90eb0add228c0cf76a01cb6a06ca98839e\ndetached\n\nworktree ~/.dagu/executors/omp-dagu-0.3.91-8fc55e85d24128ce3add597d40e342eda8018b6e\nHEAD 8fc55e85d24128ce3add597d40e342eda8018b6e\ndetached\n\nworktree ~/.dagu/executors/omp-dagu-0.3.91-e81577fd98e68853c4bcdd598fa13ed78d497a6a\nHEAD e81577fd98e68853c4bcdd598fa13ed78d497a6a\ndetached\n\nworktree ~/.dagu/executors/omp-dagu-0.3.95\nHEAD 42adcbc5d2bd9c93a04e2b03369f1b60564caf79\ndetached\n\nworktree ~/.dagu/executors/omp-dagu-0.3.98\nHEAD 62844e5b3cfb1a4e8cd7454282e9e0e6b3a35841\ndetached\n\nworktree <harness>/a4s-adopt-0.5.1\nHEAD 4c93c1fb8230dc1b9c7a439c13e7db9ac2f63436\nbranch refs/heads/chore/issue-616-adopt-0.5.1\n\nworktree <harness>/a4s-issue-616\nHEAD f82a5044378c79c39d4d5a575d47d674449adb8b\nbranch refs/heads/fix/issue-616-station-templates\n\nworktree <harness>/a4s-pr-619\nHEAD bcb885e076003eb9cb891f4fb2434ae560166a2a\nbranch refs/heads/fix/pr-619\n\nworktree <primary>/.orca/workspaces/a4s/dagu-versioning-braindump\nHEAD 7d70e55847fc64c481f5b534ef50c9e96995ce4e\nbranch refs/heads/pablontiv/dagu-versioning-braindump\n\nworktree <primary>/.workspace/worktrees/a4s/fix-poc-ci-diagnostics\nHEAD f34dda6154dab699fdf8de7c81fe80e925ce538a\nbranch refs/heads/pablontiv/fix-poc-ci-diagnostics\n\nworktree <primary>/.workspace/worktrees/a4s/issue-419-runtime-migration\nHEAD 59dbe798172c88dc7714f140290d49a0e17caf48\nbranch refs/heads/pablontiv/issue-419-runtime-migration\n\nworktree <primary>/.workspace/worktrees/issue-272\nHEAD 8fc55e85d24128ce3add597d40e342eda8018b6e\nbranch refs/heads/dagu/issue-272\n\nworktree <primary>/.workspace/worktrees/issue-290\nHEAD 1570f6007416b6e1bdb461a30537a68584c3f08d\nbranch refs/heads/dagu/issue-290\n\nworktree <primary>/.workspace/worktrees/issue-294\nHEAD 8fc55e85d24128ce3add597d40e342eda8018b6e\nbranch refs/heads/dagu/issue-294\n\nworktree <primary>/.workspace/worktrees/issue-295\nHEAD 2398d21535544487bab5e560897736f2c0ffe54e\nbranch refs/heads/dagu/issue-295\n\nworktree <primary>/.workspace/worktrees/issue-296\nHEAD 62844e5b3cfb1a4e8cd7454282e9e0e6b3a35841\nbranch refs/heads/dagu/issue-296\n\nworktree <primary>/.workspace/worktrees/issue-309\nHEAD 45cd031e005852c9ac3cb7c32ac7e09f2135dcdf\nbranch refs/heads/dagu/issue-309\n\nworktree <primary>/.workspace/worktrees/issue-335\nHEAD 12918b32d9a8cc14d3665225baaf36f764ef4d8d\nbranch refs/heads/dagu/issue-335\n\nworktree <primary>/.workspace/worktrees/issue-351\nHEAD 8fc55e85d24128ce3add597d40e342eda8018b6e\nbranch refs/heads/dagu/issue-351\n\nworktree <primary>/.workspace/worktrees/issue-352\nHEAD 8140b02cbdfb2788b708777bf12b32807e96900e\nbranch refs/heads/dagu/issue-352\n\nworktree <primary>/.workspace/worktrees/issue-355\nHEAD c559eebb16561590cf1000f19e4045aef7f419bf\nbranch refs/heads/dagu/issue-355\n\nworktree <primary>/.workspace/worktrees/issue-357\nHEAD dea8f33dd21bf851c89629a356464374a1f4df43\nbranch refs/heads/dagu/issue-357\n\nworktree <primary>/.workspace/worktrees/issue-358\nHEAD 4f105216a6654d803e49146b74f3f3068ad3d6c6\nbranch refs/heads/dagu/issue-358\n\nworktree <primary>/.workspace/worktrees/issue-375\nHEAD 2f5b841f57a4b7740c087c3b0bb560bc9b87cee1\nbranch refs/heads/dagu/issue-375\n\nworktree <primary>/.workspace/worktrees/issue-383\nHEAD 12918b32d9a8cc14d3665225baaf36f764ef4d8d\nbranch refs/heads/dagu/issue-383\n\nworktree <primary>/.workspace/worktrees/issue-394\nHEAD c895cb23715baf2c84e8d0dc7bd7f7be163131e2\nbranch refs/heads/dagu/issue-394\n\nworktree <primary>/.workspace/worktrees/issue-411\nHEAD bafac290e2a44781bbdbdba7d5b99f9d97790074\nbranch refs/heads/dagu/issue-411\n\nworktree <primary>/.workspace/worktrees/issue-415\nHEAD 01beb02a5e35c352c3d6594497a713179254f63c\nbranch refs/heads/dagu/issue-415\n\nworktree <primary>/.workspace/worktrees/issue-478\nHEAD 5b36d3d6ea22960528f6da8e56870affdd9a2383\nbranch refs/heads/dagu/issue-478\n\nworktree <primary>/.workspace/worktrees/issue-479\nHEAD ae750ac6ef2c70d966580dca953b23a23850e5fe\nbranch refs/heads/dagu/issue-479\n\nworktree <primary>/.workspace/worktrees/issue-483\nHEAD d49f0b0fb691b247666208fc806fd32544e0cf01\nbranch refs/heads/dagu/issue-483\n\nworktree <primary>/.workspace/worktrees/issue-517\nHEAD 12918b32d9a8cc14d3665225baaf36f764ef4d8d\nbranch refs/heads/dagu/issue-517\n\nworktree <primary>/.workspace/worktrees/issue-625\nHEAD 4ef614d7b87a162c95c585da2c3cb85c5ea82986\nbranch refs/heads/dagu/issue-625\n\nworktree <primary>/.workspace/worktrees/poc-poc-a4s-issue-621-s01a16985\nHEAD 4ef614d7b87a162c95c585da2c3cb85c5ea82986\nbranch refs/heads/poc/poc-a4s-issue-621-s01a16985\n\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "lsof",
+        "-nP",
+        "+D",
+        "<harness>/a4s-published"
+      ],
+      "exitCode": 1,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "rm",
+        "-rf",
+        "--",
+        "<harness>/a4s-published"
+      ],
+      "exitCode": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "test",
+        "!",
+        "-e",
+        "<harness>/a4s-published"
+      ],
+      "exitCode": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "test",
+        "!",
+        "-L",
+        "<harness>/a4s-published"
+      ],
+      "exitCode": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "<primary>",
+        "status",
+        "--porcelain=v1",
+        "--untracked-files=all"
+      ],
+      "exitCode": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "<primary>",
+        "branch",
+        "--show-current"
+      ],
+      "exitCode": 0,
+      "stdout": "main\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "<primary>",
+        "rev-parse",
+        "HEAD"
+      ],
+      "exitCode": 0,
+      "stdout": "4ef614d7b87a162c95c585da2c3cb85c5ea82986\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "<primary>",
+        "worktree",
+        "list",
+        "--porcelain"
+      ],
+      "exitCode": 0,
+      "stdout": "worktree <primary>\nHEAD 4ef614d7b87a162c95c585da2c3cb85c5ea82986\nbranch refs/heads/main\n\nworktree ~/.dagu/executors/issue-lifecycle-0.4.3-954370f7230a3d4c3f67eb918db9888785820e8d\nHEAD 954370f7230a3d4c3f67eb918db9888785820e8d\ndetached\n\nworktree ~/.dagu/executors/issue-lifecycle-0.5.0-2d104f3cd9f3bf6ec7f5cb48c0ccdfb28f2588f9\nHEAD 2d104f3cd9f3bf6ec7f5cb48c0ccdfb28f2588f9\ndetached\n\nworktree ~/.dagu/executors/issue-lifecycle-0.5.1-ad8539ce5a98ad471d55ea835cb5f1cfc040853b\nHEAD ad8539ce5a98ad471d55ea835cb5f1cfc040853b\ndetached\n\nworktree ~/.dagu/executors/issue-lifecycle-0.5.2-29bbcc2cbdfaede4438136c680012a161bbc35ca\nHEAD 29bbcc2cbdfaede4438136c680012a161bbc35ca\ndetached\n\nworktree ~/.dagu/executors/issue-lifecycle-0.5.2-a95a91fc6014636820ef542b927aa6ca66ecbb37\nHEAD a95a91fc6014636820ef542b927aa6ca66ecbb37\ndetached\n\nworktree ~/.dagu/executors/issue-lifecycle-0.5.2-e9cb0f337c57655542b9ceb4960adc8d5e47095c\nHEAD e9cb0f337c57655542b9ceb4960adc8d5e47095c\ndetached\n\nworktree ~/.dagu/executors/omp-dagu-0.3.101-04846df5940d65b8e230eafadff6621ae9186122\nHEAD 04846df5940d65b8e230eafadff6621ae9186122\ndetached\n\nworktree ~/.dagu/executors/omp-dagu-0.3.101-a4ddd5233bd13e454622472b18f785b9c241724f\nHEAD a4ddd5233bd13e454622472b18f785b9c241724f\ndetached\n\nworktree ~/.dagu/executors/omp-dagu-0.3.102\nHEAD 0fe47450f12c7e9cbc3fa6888860a3513ea1a7df\ndetached\n\nworktree ~/.dagu/executors/omp-dagu-0.3.103\nHEAD bafac290e2a44781bbdbdba7d5b99f9d97790074\ndetached\n\nworktree ~/.dagu/executors/omp-dagu-0.3.109\nHEAD 43423d1986c83a72526afc506de7e02ca653e422\ndetached\n\nworktree ~/.dagu/executors/omp-dagu-0.3.115\nHEAD 01beb02a5e35c352c3d6594497a713179254f63c\ndetached\n\nworktree ~/.dagu/executors/omp-dagu-0.3.117\nHEAD 2da4e7532a9107d29cb64e62904a9543de08de2a\ndetached\n\nworktree ~/.dagu/executors/omp-dagu-0.3.118\nHEAD e6ed98efc72c6ed984ed55787e309073def77c18\ndetached\n\nworktree ~/.dagu/executors/omp-dagu-0.3.120\nHEAD 58182c90eb0add228c0cf76a01cb6a06ca98839e\ndetached\n\nworktree ~/.dagu/executors/omp-dagu-0.3.91-8fc55e85d24128ce3add597d40e342eda8018b6e\nHEAD 8fc55e85d24128ce3add597d40e342eda8018b6e\ndetached\n\nworktree ~/.dagu/executors/omp-dagu-0.3.91-e81577fd98e68853c4bcdd598fa13ed78d497a6a\nHEAD e81577fd98e68853c4bcdd598fa13ed78d497a6a\ndetached\n\nworktree ~/.dagu/executors/omp-dagu-0.3.95\nHEAD 42adcbc5d2bd9c93a04e2b03369f1b60564caf79\ndetached\n\nworktree ~/.dagu/executors/omp-dagu-0.3.98\nHEAD 62844e5b3cfb1a4e8cd7454282e9e0e6b3a35841\ndetached\n\nworktree <harness>/a4s-adopt-0.5.1\nHEAD 4c93c1fb8230dc1b9c7a439c13e7db9ac2f63436\nbranch refs/heads/chore/issue-616-adopt-0.5.1\n\nworktree <harness>/a4s-issue-616\nHEAD f82a5044378c79c39d4d5a575d47d674449adb8b\nbranch refs/heads/fix/issue-616-station-templates\n\nworktree <harness>/a4s-pr-619\nHEAD bcb885e076003eb9cb891f4fb2434ae560166a2a\nbranch refs/heads/fix/pr-619\n\nworktree <primary>/.orca/workspaces/a4s/dagu-versioning-braindump\nHEAD 7d70e55847fc64c481f5b534ef50c9e96995ce4e\nbranch refs/heads/pablontiv/dagu-versioning-braindump\n\nworktree <primary>/.workspace/worktrees/a4s/fix-poc-ci-diagnostics\nHEAD f34dda6154dab699fdf8de7c81fe80e925ce538a\nbranch refs/heads/pablontiv/fix-poc-ci-diagnostics\n\nworktree <primary>/.workspace/worktrees/a4s/issue-419-runtime-migration\nHEAD 59dbe798172c88dc7714f140290d49a0e17caf48\nbranch refs/heads/pablontiv/issue-419-runtime-migration\n\nworktree <primary>/.workspace/worktrees/issue-272\nHEAD 8fc55e85d24128ce3add597d40e342eda8018b6e\nbranch refs/heads/dagu/issue-272\n\nworktree <primary>/.workspace/worktrees/issue-290\nHEAD 1570f6007416b6e1bdb461a30537a68584c3f08d\nbranch refs/heads/dagu/issue-290\n\nworktree <primary>/.workspace/worktrees/issue-294\nHEAD 8fc55e85d24128ce3add597d40e342eda8018b6e\nbranch refs/heads/dagu/issue-294\n\nworktree <primary>/.workspace/worktrees/issue-295\nHEAD 2398d21535544487bab5e560897736f2c0ffe54e\nbranch refs/heads/dagu/issue-295\n\nworktree <primary>/.workspace/worktrees/issue-296\nHEAD 62844e5b3cfb1a4e8cd7454282e9e0e6b3a35841\nbranch refs/heads/dagu/issue-296\n\nworktree <primary>/.workspace/worktrees/issue-309\nHEAD 45cd031e005852c9ac3cb7c32ac7e09f2135dcdf\nbranch refs/heads/dagu/issue-309\n\nworktree <primary>/.workspace/worktrees/issue-335\nHEAD 12918b32d9a8cc14d3665225baaf36f764ef4d8d\nbranch refs/heads/dagu/issue-335\n\nworktree <primary>/.workspace/worktrees/issue-351\nHEAD 8fc55e85d24128ce3add597d40e342eda8018b6e\nbranch refs/heads/dagu/issue-351\n\nworktree <primary>/.workspace/worktrees/issue-352\nHEAD 8140b02cbdfb2788b708777bf12b32807e96900e\nbranch refs/heads/dagu/issue-352\n\nworktree <primary>/.workspace/worktrees/issue-355\nHEAD c559eebb16561590cf1000f19e4045aef7f419bf\nbranch refs/heads/dagu/issue-355\n\nworktree <primary>/.workspace/worktrees/issue-357\nHEAD dea8f33dd21bf851c89629a356464374a1f4df43\nbranch refs/heads/dagu/issue-357\n\nworktree <primary>/.workspace/worktrees/issue-358\nHEAD 4f105216a6654d803e49146b74f3f3068ad3d6c6\nbranch refs/heads/dagu/issue-358\n\nworktree <primary>/.workspace/worktrees/issue-375\nHEAD 2f5b841f57a4b7740c087c3b0bb560bc9b87cee1\nbranch refs/heads/dagu/issue-375\n\nworktree <primary>/.workspace/worktrees/issue-383\nHEAD 12918b32d9a8cc14d3665225baaf36f764ef4d8d\nbranch refs/heads/dagu/issue-383\n\nworktree <primary>/.workspace/worktrees/issue-394\nHEAD c895cb23715baf2c84e8d0dc7bd7f7be163131e2\nbranch refs/heads/dagu/issue-394\n\nworktree <primary>/.workspace/worktrees/issue-411\nHEAD bafac290e2a44781bbdbdba7d5b99f9d97790074\nbranch refs/heads/dagu/issue-411\n\nworktree <primary>/.workspace/worktrees/issue-415\nHEAD 01beb02a5e35c352c3d6594497a713179254f63c\nbranch refs/heads/dagu/issue-415\n\nworktree <primary>/.workspace/worktrees/issue-478\nHEAD 5b36d3d6ea22960528f6da8e56870affdd9a2383\nbranch refs/heads/dagu/issue-478\n\nworktree <primary>/.workspace/worktrees/issue-479\nHEAD ae750ac6ef2c70d966580dca953b23a23850e5fe\nbranch refs/heads/dagu/issue-479\n\nworktree <primary>/.workspace/worktrees/issue-483\nHEAD d49f0b0fb691b247666208fc806fd32544e0cf01\nbranch refs/heads/dagu/issue-483\n\nworktree <primary>/.workspace/worktrees/issue-517\nHEAD 12918b32d9a8cc14d3665225baaf36f764ef4d8d\nbranch refs/heads/dagu/issue-517\n\nworktree <primary>/.workspace/worktrees/issue-625\nHEAD 4ef614d7b87a162c95c585da2c3cb85c5ea82986\nbranch refs/heads/dagu/issue-625\n\nworktree <primary>/.workspace/worktrees/poc-poc-a4s-issue-621-s01a16985\nHEAD 4ef614d7b87a162c95c585da2c3cb85c5ea82986\nbranch refs/heads/poc/poc-a4s-issue-621-s01a16985\n\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "<primary>",
+        "rev-parse",
+        "--is-inside-work-tree",
+        "--path-format=absolute",
+        "--git-common-dir",
+        "HEAD"
+      ],
+      "exitCode": 0,
+      "stdout": "true\n<primary>/.git\n4ef614d7b87a162c95c585da2c3cb85c5ea82986\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "~/.dagu/executors/issue-lifecycle-0.4.3-954370f7230a3d4c3f67eb918db9888785820e8d",
+        "rev-parse",
+        "--is-inside-work-tree",
+        "--path-format=absolute",
+        "--git-common-dir",
+        "HEAD"
+      ],
+      "exitCode": 0,
+      "stdout": "true\n<primary>/.git\n954370f7230a3d4c3f67eb918db9888785820e8d\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "~/.dagu/executors/issue-lifecycle-0.5.0-2d104f3cd9f3bf6ec7f5cb48c0ccdfb28f2588f9",
+        "rev-parse",
+        "--is-inside-work-tree",
+        "--path-format=absolute",
+        "--git-common-dir",
+        "HEAD"
+      ],
+      "exitCode": 0,
+      "stdout": "true\n<primary>/.git\n2d104f3cd9f3bf6ec7f5cb48c0ccdfb28f2588f9\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "~/.dagu/executors/issue-lifecycle-0.5.1-ad8539ce5a98ad471d55ea835cb5f1cfc040853b",
+        "rev-parse",
+        "--is-inside-work-tree",
+        "--path-format=absolute",
+        "--git-common-dir",
+        "HEAD"
+      ],
+      "exitCode": 0,
+      "stdout": "true\n<primary>/.git\nad8539ce5a98ad471d55ea835cb5f1cfc040853b\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "~/.dagu/executors/issue-lifecycle-0.5.2-29bbcc2cbdfaede4438136c680012a161bbc35ca",
+        "rev-parse",
+        "--is-inside-work-tree",
+        "--path-format=absolute",
+        "--git-common-dir",
+        "HEAD"
+      ],
+      "exitCode": 0,
+      "stdout": "true\n<primary>/.git\n29bbcc2cbdfaede4438136c680012a161bbc35ca\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "~/.dagu/executors/issue-lifecycle-0.5.2-a95a91fc6014636820ef542b927aa6ca66ecbb37",
+        "rev-parse",
+        "--is-inside-work-tree",
+        "--path-format=absolute",
+        "--git-common-dir",
+        "HEAD"
+      ],
+      "exitCode": 0,
+      "stdout": "true\n<primary>/.git\na95a91fc6014636820ef542b927aa6ca66ecbb37\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "~/.dagu/executors/issue-lifecycle-0.5.2-e9cb0f337c57655542b9ceb4960adc8d5e47095c",
+        "rev-parse",
+        "--is-inside-work-tree",
+        "--path-format=absolute",
+        "--git-common-dir",
+        "HEAD"
+      ],
+      "exitCode": 0,
+      "stdout": "true\n<primary>/.git\ne9cb0f337c57655542b9ceb4960adc8d5e47095c\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "~/.dagu/executors/omp-dagu-0.3.101-04846df5940d65b8e230eafadff6621ae9186122",
+        "rev-parse",
+        "--is-inside-work-tree",
+        "--path-format=absolute",
+        "--git-common-dir",
+        "HEAD"
+      ],
+      "exitCode": 0,
+      "stdout": "true\n<primary>/.git\n04846df5940d65b8e230eafadff6621ae9186122\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "~/.dagu/executors/omp-dagu-0.3.101-a4ddd5233bd13e454622472b18f785b9c241724f",
+        "rev-parse",
+        "--is-inside-work-tree",
+        "--path-format=absolute",
+        "--git-common-dir",
+        "HEAD"
+      ],
+      "exitCode": 0,
+      "stdout": "true\n<primary>/.git\na4ddd5233bd13e454622472b18f785b9c241724f\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "~/.dagu/executors/omp-dagu-0.3.102",
+        "rev-parse",
+        "--is-inside-work-tree",
+        "--path-format=absolute",
+        "--git-common-dir",
+        "HEAD"
+      ],
+      "exitCode": 0,
+      "stdout": "true\n<primary>/.git\n0fe47450f12c7e9cbc3fa6888860a3513ea1a7df\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "~/.dagu/executors/omp-dagu-0.3.103",
+        "rev-parse",
+        "--is-inside-work-tree",
+        "--path-format=absolute",
+        "--git-common-dir",
+        "HEAD"
+      ],
+      "exitCode": 0,
+      "stdout": "true\n<primary>/.git\nbafac290e2a44781bbdbdba7d5b99f9d97790074\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "~/.dagu/executors/omp-dagu-0.3.109",
+        "rev-parse",
+        "--is-inside-work-tree",
+        "--path-format=absolute",
+        "--git-common-dir",
+        "HEAD"
+      ],
+      "exitCode": 0,
+      "stdout": "true\n<primary>/.git\n43423d1986c83a72526afc506de7e02ca653e422\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "~/.dagu/executors/omp-dagu-0.3.115",
+        "rev-parse",
+        "--is-inside-work-tree",
+        "--path-format=absolute",
+        "--git-common-dir",
+        "HEAD"
+      ],
+      "exitCode": 0,
+      "stdout": "true\n<primary>/.git\n01beb02a5e35c352c3d6594497a713179254f63c\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "~/.dagu/executors/omp-dagu-0.3.117",
+        "rev-parse",
+        "--is-inside-work-tree",
+        "--path-format=absolute",
+        "--git-common-dir",
+        "HEAD"
+      ],
+      "exitCode": 0,
+      "stdout": "true\n<primary>/.git\n2da4e7532a9107d29cb64e62904a9543de08de2a\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "~/.dagu/executors/omp-dagu-0.3.118",
+        "rev-parse",
+        "--is-inside-work-tree",
+        "--path-format=absolute",
+        "--git-common-dir",
+        "HEAD"
+      ],
+      "exitCode": 0,
+      "stdout": "true\n<primary>/.git\ne6ed98efc72c6ed984ed55787e309073def77c18\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "~/.dagu/executors/omp-dagu-0.3.120",
+        "rev-parse",
+        "--is-inside-work-tree",
+        "--path-format=absolute",
+        "--git-common-dir",
+        "HEAD"
+      ],
+      "exitCode": 0,
+      "stdout": "true\n<primary>/.git\n58182c90eb0add228c0cf76a01cb6a06ca98839e\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "~/.dagu/executors/omp-dagu-0.3.91-8fc55e85d24128ce3add597d40e342eda8018b6e",
+        "rev-parse",
+        "--is-inside-work-tree",
+        "--path-format=absolute",
+        "--git-common-dir",
+        "HEAD"
+      ],
+      "exitCode": 0,
+      "stdout": "true\n<primary>/.git\n8fc55e85d24128ce3add597d40e342eda8018b6e\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "~/.dagu/executors/omp-dagu-0.3.91-e81577fd98e68853c4bcdd598fa13ed78d497a6a",
+        "rev-parse",
+        "--is-inside-work-tree",
+        "--path-format=absolute",
+        "--git-common-dir",
+        "HEAD"
+      ],
+      "exitCode": 0,
+      "stdout": "true\n<primary>/.git\ne81577fd98e68853c4bcdd598fa13ed78d497a6a\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "~/.dagu/executors/omp-dagu-0.3.95",
+        "rev-parse",
+        "--is-inside-work-tree",
+        "--path-format=absolute",
+        "--git-common-dir",
+        "HEAD"
+      ],
+      "exitCode": 0,
+      "stdout": "true\n<primary>/.git\n42adcbc5d2bd9c93a04e2b03369f1b60564caf79\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "~/.dagu/executors/omp-dagu-0.3.98",
+        "rev-parse",
+        "--is-inside-work-tree",
+        "--path-format=absolute",
+        "--git-common-dir",
+        "HEAD"
+      ],
+      "exitCode": 0,
+      "stdout": "true\n<primary>/.git\n62844e5b3cfb1a4e8cd7454282e9e0e6b3a35841\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "<harness>/a4s-adopt-0.5.1",
+        "rev-parse",
+        "--is-inside-work-tree",
+        "--path-format=absolute",
+        "--git-common-dir",
+        "HEAD"
+      ],
+      "exitCode": 0,
+      "stdout": "true\n<primary>/.git\n4c93c1fb8230dc1b9c7a439c13e7db9ac2f63436\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "<harness>/a4s-issue-616",
+        "rev-parse",
+        "--is-inside-work-tree",
+        "--path-format=absolute",
+        "--git-common-dir",
+        "HEAD"
+      ],
+      "exitCode": 0,
+      "stdout": "true\n<primary>/.git\nf82a5044378c79c39d4d5a575d47d674449adb8b\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "<harness>/a4s-pr-619",
+        "rev-parse",
+        "--is-inside-work-tree",
+        "--path-format=absolute",
+        "--git-common-dir",
+        "HEAD"
+      ],
+      "exitCode": 0,
+      "stdout": "true\n<primary>/.git\nbcb885e076003eb9cb891f4fb2434ae560166a2a\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "<primary>/.orca/workspaces/a4s/dagu-versioning-braindump",
+        "rev-parse",
+        "--is-inside-work-tree",
+        "--path-format=absolute",
+        "--git-common-dir",
+        "HEAD"
+      ],
+      "exitCode": 0,
+      "stdout": "true\n<primary>/.git\n7d70e55847fc64c481f5b534ef50c9e96995ce4e\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "<primary>/.workspace/worktrees/a4s/fix-poc-ci-diagnostics",
+        "rev-parse",
+        "--is-inside-work-tree",
+        "--path-format=absolute",
+        "--git-common-dir",
+        "HEAD"
+      ],
+      "exitCode": 0,
+      "stdout": "true\n<primary>/.git\nf34dda6154dab699fdf8de7c81fe80e925ce538a\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "<primary>/.workspace/worktrees/a4s/issue-419-runtime-migration",
+        "rev-parse",
+        "--is-inside-work-tree",
+        "--path-format=absolute",
+        "--git-common-dir",
+        "HEAD"
+      ],
+      "exitCode": 0,
+      "stdout": "true\n<primary>/.git\n59dbe798172c88dc7714f140290d49a0e17caf48\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "<primary>/.workspace/worktrees/issue-272",
+        "rev-parse",
+        "--is-inside-work-tree",
+        "--path-format=absolute",
+        "--git-common-dir",
+        "HEAD"
+      ],
+      "exitCode": 0,
+      "stdout": "true\n<primary>/.git\n8fc55e85d24128ce3add597d40e342eda8018b6e\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "<primary>/.workspace/worktrees/issue-290",
+        "rev-parse",
+        "--is-inside-work-tree",
+        "--path-format=absolute",
+        "--git-common-dir",
+        "HEAD"
+      ],
+      "exitCode": 0,
+      "stdout": "true\n<primary>/.git\n1570f6007416b6e1bdb461a30537a68584c3f08d\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "<primary>/.workspace/worktrees/issue-294",
+        "rev-parse",
+        "--is-inside-work-tree",
+        "--path-format=absolute",
+        "--git-common-dir",
+        "HEAD"
+      ],
+      "exitCode": 0,
+      "stdout": "true\n<primary>/.git\n8fc55e85d24128ce3add597d40e342eda8018b6e\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "<primary>/.workspace/worktrees/issue-295",
+        "rev-parse",
+        "--is-inside-work-tree",
+        "--path-format=absolute",
+        "--git-common-dir",
+        "HEAD"
+      ],
+      "exitCode": 0,
+      "stdout": "true\n<primary>/.git\n2398d21535544487bab5e560897736f2c0ffe54e\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "<primary>/.workspace/worktrees/issue-296",
+        "rev-parse",
+        "--is-inside-work-tree",
+        "--path-format=absolute",
+        "--git-common-dir",
+        "HEAD"
+      ],
+      "exitCode": 0,
+      "stdout": "true\n<primary>/.git\n62844e5b3cfb1a4e8cd7454282e9e0e6b3a35841\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "<primary>/.workspace/worktrees/issue-309",
+        "rev-parse",
+        "--is-inside-work-tree",
+        "--path-format=absolute",
+        "--git-common-dir",
+        "HEAD"
+      ],
+      "exitCode": 0,
+      "stdout": "true\n<primary>/.git\n45cd031e005852c9ac3cb7c32ac7e09f2135dcdf\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "<primary>/.workspace/worktrees/issue-335",
+        "rev-parse",
+        "--is-inside-work-tree",
+        "--path-format=absolute",
+        "--git-common-dir",
+        "HEAD"
+      ],
+      "exitCode": 0,
+      "stdout": "true\n<primary>/.git\n12918b32d9a8cc14d3665225baaf36f764ef4d8d\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "<primary>/.workspace/worktrees/issue-351",
+        "rev-parse",
+        "--is-inside-work-tree",
+        "--path-format=absolute",
+        "--git-common-dir",
+        "HEAD"
+      ],
+      "exitCode": 0,
+      "stdout": "true\n<primary>/.git\n8fc55e85d24128ce3add597d40e342eda8018b6e\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "<primary>/.workspace/worktrees/issue-352",
+        "rev-parse",
+        "--is-inside-work-tree",
+        "--path-format=absolute",
+        "--git-common-dir",
+        "HEAD"
+      ],
+      "exitCode": 0,
+      "stdout": "true\n<primary>/.git\n8140b02cbdfb2788b708777bf12b32807e96900e\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "<primary>/.workspace/worktrees/issue-355",
+        "rev-parse",
+        "--is-inside-work-tree",
+        "--path-format=absolute",
+        "--git-common-dir",
+        "HEAD"
+      ],
+      "exitCode": 0,
+      "stdout": "true\n<primary>/.git\nc559eebb16561590cf1000f19e4045aef7f419bf\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "<primary>/.workspace/worktrees/issue-357",
+        "rev-parse",
+        "--is-inside-work-tree",
+        "--path-format=absolute",
+        "--git-common-dir",
+        "HEAD"
+      ],
+      "exitCode": 0,
+      "stdout": "true\n<primary>/.git\ndea8f33dd21bf851c89629a356464374a1f4df43\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "<primary>/.workspace/worktrees/issue-358",
+        "rev-parse",
+        "--is-inside-work-tree",
+        "--path-format=absolute",
+        "--git-common-dir",
+        "HEAD"
+      ],
+      "exitCode": 0,
+      "stdout": "true\n<primary>/.git\n4f105216a6654d803e49146b74f3f3068ad3d6c6\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "<primary>/.workspace/worktrees/issue-375",
+        "rev-parse",
+        "--is-inside-work-tree",
+        "--path-format=absolute",
+        "--git-common-dir",
+        "HEAD"
+      ],
+      "exitCode": 0,
+      "stdout": "true\n<primary>/.git\n2f5b841f57a4b7740c087c3b0bb560bc9b87cee1\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "<primary>/.workspace/worktrees/issue-383",
+        "rev-parse",
+        "--is-inside-work-tree",
+        "--path-format=absolute",
+        "--git-common-dir",
+        "HEAD"
+      ],
+      "exitCode": 0,
+      "stdout": "true\n<primary>/.git\n12918b32d9a8cc14d3665225baaf36f764ef4d8d\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "<primary>/.workspace/worktrees/issue-394",
+        "rev-parse",
+        "--is-inside-work-tree",
+        "--path-format=absolute",
+        "--git-common-dir",
+        "HEAD"
+      ],
+      "exitCode": 0,
+      "stdout": "true\n<primary>/.git\nc895cb23715baf2c84e8d0dc7bd7f7be163131e2\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "<primary>/.workspace/worktrees/issue-411",
+        "rev-parse",
+        "--is-inside-work-tree",
+        "--path-format=absolute",
+        "--git-common-dir",
+        "HEAD"
+      ],
+      "exitCode": 0,
+      "stdout": "true\n<primary>/.git\nbafac290e2a44781bbdbdba7d5b99f9d97790074\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "<primary>/.workspace/worktrees/issue-415",
+        "rev-parse",
+        "--is-inside-work-tree",
+        "--path-format=absolute",
+        "--git-common-dir",
+        "HEAD"
+      ],
+      "exitCode": 0,
+      "stdout": "true\n<primary>/.git\n01beb02a5e35c352c3d6594497a713179254f63c\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "<primary>/.workspace/worktrees/issue-478",
+        "rev-parse",
+        "--is-inside-work-tree",
+        "--path-format=absolute",
+        "--git-common-dir",
+        "HEAD"
+      ],
+      "exitCode": 0,
+      "stdout": "true\n<primary>/.git\n5b36d3d6ea22960528f6da8e56870affdd9a2383\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "<primary>/.workspace/worktrees/issue-479",
+        "rev-parse",
+        "--is-inside-work-tree",
+        "--path-format=absolute",
+        "--git-common-dir",
+        "HEAD"
+      ],
+      "exitCode": 0,
+      "stdout": "true\n<primary>/.git\nae750ac6ef2c70d966580dca953b23a23850e5fe\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "<primary>/.workspace/worktrees/issue-483",
+        "rev-parse",
+        "--is-inside-work-tree",
+        "--path-format=absolute",
+        "--git-common-dir",
+        "HEAD"
+      ],
+      "exitCode": 0,
+      "stdout": "true\n<primary>/.git\nd49f0b0fb691b247666208fc806fd32544e0cf01\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "<primary>/.workspace/worktrees/issue-517",
+        "rev-parse",
+        "--is-inside-work-tree",
+        "--path-format=absolute",
+        "--git-common-dir",
+        "HEAD"
+      ],
+      "exitCode": 0,
+      "stdout": "true\n<primary>/.git\n12918b32d9a8cc14d3665225baaf36f764ef4d8d\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "<primary>/.workspace/worktrees/issue-625",
+        "rev-parse",
+        "--is-inside-work-tree",
+        "--path-format=absolute",
+        "--git-common-dir",
+        "HEAD"
+      ],
+      "exitCode": 0,
+      "stdout": "true\n<primary>/.git\n4ef614d7b87a162c95c585da2c3cb85c5ea82986\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "<primary>/.workspace/worktrees/poc-poc-a4s-issue-621-s01a16985",
+        "rev-parse",
+        "--is-inside-work-tree",
+        "--path-format=absolute",
+        "--git-common-dir",
+        "HEAD"
+      ],
+      "exitCode": 0,
+      "stdout": "true\n<primary>/.git\n4ef614d7b87a162c95c585da2c3cb85c5ea82986\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "curl",
+        "-fsS",
+        "http://127.0.0.1:8080/api/v1/health"
+      ],
+      "exitCode": 0,
+      "stdout": "{\"status\":\"healthy\",\"timestamp\":\"2026-10-23T16:24:02-06:00\",\"uptime\":14717,\"version\":\"2.20.1\"}\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "bash",
+        "-o",
+        "pipefail",
+        "-c",
+        "orca repo list --json | jq '{ok, repositoryCount: (.result.repos | length), cloneReferences: [.. | strings | select(contains(\"a4s-published\"))]}'"
+      ],
+      "exitCode": 0,
+      "stdout": "{\n  \"ok\": true,\n  \"repositoryCount\": 10,\n  \"cloneReferences\": []\n}\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "bash",
+        "-o",
+        "pipefail",
+        "-c",
+        "orca worktree ps --json | jq '{ok, totalCount: .result.totalCount, truncated: .result.truncated, hostScope: .result.hostScope, cloneReferences: [.. | strings | select(contains(\"a4s-published\"))]}'"
+      ],
+      "exitCode": 0,
+      "stdout": "{\n  \"ok\": true,\n  \"totalCount\": 78,\n  \"truncated\": false,\n  \"hostScope\": {\n    \"hostIds\": [\n      \"local\"\n    ],\n    \"omittedHostIds\": []\n  },\n  \"cloneReferences\": []\n}\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "bash",
+        "-o",
+        "pipefail",
+        "-c",
+        "orca worktree list --repo id:b030510a-51a7-45ab-b6b0-777a010b3942 --json | jq '{ok, totalCount: .result.totalCount, truncated: .result.truncated, hostScope: .result.hostScope, paths: [.result.worktrees[].path], cloneReferences: [.. | strings | select(contains(\"a4s-published\"))]}'"
+      ],
+      "exitCode": 0,
+      "stdout": "{\n  \"ok\": true,\n  \"totalCount\": 4,\n  \"truncated\": false,\n  \"hostScope\": {\n    \"hostIds\": [\n      \"local\"\n    ],\n    \"omittedHostIds\": []\n  },\n  \"paths\": [\n    \"<primary>\",\n    \"<primary>/.orca/workspaces/a4s/dagu-versioning-braindump\",\n    \"<primary>/.workspace/worktrees/a4s/fix-poc-ci-diagnostics\",\n    \"<primary>/.workspace/worktrees/a4s/issue-419-runtime-migration\"\n  ],\n  \"cloneReferences\": []\n}\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "launchctl",
+        "print",
+        "gui/501/local.dagu.server"
+      ],
+      "exitCode": 0,
+      "stdout": "gui/501/local.dagu.server = {\n\tactive count = 1\n\tpath = ~/Library/LaunchAgents/local.dagu.server.plist\n\ttype = LaunchAgent\n\tstate = running\n\n\tprogram = ~/.local/bin/dagu\n\targuments = {\n\t\t~/.local/bin/dagu\n\t\tstart-all\n\t}\n\n\tworking directory = ~/.dagu\n\n\tstdout path = ~/Library/Logs/Dagu/dagu.out.log\n\tstderr path = ~/Library/Logs/Dagu/dagu.err.log\n\tinherited environment = {\n\t\tSSH_AUTH_SOCK => /var/run/com.apple.launchd.js9LaWZyx7/Listeners\n\t}\n\n\tdefault environment = {\n\t\tPATH => /usr/bin:/bin:/usr/sbin:/sbin\n\t}\n\n\tenvironment = {\n\t\tOSLogRateLimit => 64\n\t\tDAGU_PORT => 8080\n\t\tPATH => /Applications/Orca.app/Contents/Resources/bin:~/.grok/bin:~/.local/bin:~/.dotnet:~/.dotnet/tools:/opt/homebrew/bin:/opt/homebrew/sbin:~/.bun/bin:~/bin:/usr/local/bin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:/pkg/env/global/bin:~/.nvm/versions/node/v22.23.1/bin:~/.volta/bin:~/.asdf/shims:~/.fnm/aliases/default/bin:~/.local/share/mise/shims:~/Library/pnpm:~/.yarn/bin:/usr/local/sbin:/nix/var/nix/profiles/default/bin:~/.nix-profile/bin:~/.opencode/bin:~/.vite-plus/bin:~/.npm-global/bin:~/.local/share/pnpm\n\t\tDAGU_HOST => 127.0.0.1\n\t\tDAGU_HOME => ~/.dagu\n\t\tXPC_SERVICE_NAME => local.dagu.server\n\t}\n\n\tdomain = gui/501 [100020]\n\tasid = 100020\n\tminimum runtime = 10\n\texit timeout = 5\n\truns = 4\n\tpid = 71526\n\timmediate reason = inefficient\n\tforks = 352\n\texecs = 1\n\tinitialized = 1\n\ttrampolined = 1\n\tstarted suspended = 0\n\tproxy started suspended = 0\n\tchecked allocations = 0 (queried = 1)\n\tchecked allocations reason = no host\n\tchecked allocations flags = 0x0\n\tlast exit code = 0\n\n\tresource coalition = {\n\t\tID = 2380\n\t\ttype = resource\n\t\tstate = active\n\t\tactive count = 1\n\t\tname = local.dagu.server\n\t}\n\n\tjetsam coalition = {\n\t\tID = 2381\n\t\ttype = jetsam\n\t\tstate = active\n\t\tactive count = 1\n\t\tname = local.dagu.server\n\t}\n\n\tspawn type = interactive (4)\n\tjetsam priority = 40\n\tjetsam memory limit (active) = (unlimited)\n\tjetsam memory limit (inactive) = (unlimited)\n\tjetsamproperties category = daemon\n\tjetsam thread limit = 32\n\tcpumon = default\n\tjob state = running\n\tsanitizer flags = 0x0\n\n\tproperties = keepalive | runatload | inferred program\n}\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "plutil",
+        "-extract",
+        "EnvironmentVariables.DAGU_HOME",
+        "raw",
+        "-o",
+        "-",
+        "~/Library/LaunchAgents/local.dagu.server.plist"
+      ],
+      "exitCode": 0,
+      "stdout": "~/.dagu\n",
+      "stderr": ""
+    }
+  ],
+  "verificationBoundary": "These are the issue-targeted retirement acceptance commands. No application tests, full gate, commits, push, PR publication, Dagu transitions or operator-validation decision were performed."
+}
