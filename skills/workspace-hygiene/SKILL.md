@@ -7,7 +7,7 @@ description: "Audit and clean the current session's own repository: preserve liv
 
 Inventory the current session's own repository, preserve valuable work, and propose an explicit cleanup action table. Auditing is read-only; cleanup and publication require separate operator approval. A clean result is an observed outcome, not an assumption.
 
-Run when the user asks to audit or clean worktrees, branches, stashes or Orca contexts. For a multi-repository request, hand each foreign repository to its owning session through the current OrcaCLI's version-matched session handoff command. Its owner performs inventory, recovery and cleanup and returns evidence; this session operates only its own repository.
+Run only when the user asks to audit or clean worktrees, branches, stashes or Orca contexts of one or all repositories. For a multi-repository request, hand each foreign repository to its owning session through the current OrcaCLI's version-matched session handoff command. Its owner performs inventory, recovery and cleanup and returns evidence; this session operates only its own repository.
 
 ## Read-only inventory
 
