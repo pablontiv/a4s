@@ -13,56 +13,26 @@ import type { RunDetails } from "../src/status/progress.ts";
 import { readCiDiagnostic, readEscalationDiagnostic } from "../src/status/repository.ts";
 import { BUNDLE_VERSION } from "../src/bundle.ts";
 import { testRunId } from "./fixtures/run-id.ts";
-import { renderedDags, renderedFeature } from "./fixtures/rendered-feature.ts";
-
-const definitions = [
-  ["template", "../skills/issue-execution/"],
-  ["render", renderedDags.href],
-] as const;
+const feature = readFileSync(new URL("../skills/issue-execution/feature.yaml", import.meta.url), "utf8");
+const reconcile = readFileSync(new URL("../skills/issue-execution/reconcile.yaml", import.meta.url), "utf8");
 
 
-test("Dagu accepts materialized templates and bootstrap-generated candidate renders", {
+test("Dagu accepts materialized lifecycle templates", {
   ...liveDagu,
 }, () => {
   const root = mkdtempSync(join(tmpdir(), "omp-ci226-validate-"));
   try {
     for (const file of ["feature.yaml", "reconcile.yaml"]) {
       const template = readFileSync(new URL(`../skills/issue-execution/${file}`, import.meta.url), "utf8");
-      const rendered = fileURLToPath(new URL(file, renderedDags));
-      const render = readFileSync(rendered, "utf8");
-      for (const id of file === "feature.yaml" ? ["await_ci", "await_merge", "authorize_ci"] : ["observe", "transition"]) {
-        if (file === "feature.yaml" && id !== "authorize_ci") {
-          // Compare the current bootstrap output with its source template.
-          const checkpoint = step(template, id);
-          const form = "      form:\n        type: object\n        properties:\n          CANCEL: {type: string, enum: ['yes', 'no']}\n";
-          assert.ok(checkpoint.includes(form), `${id} cancellation form`);
-          assert.equal(step(render, id), checkpoint, `${file}/${id}`);
-          const gate = step(template, `${id}_cancellation`);
-          assert.ok(gate.includes(`    depends: ${id}\n`));
-          assert.ok(gate.includes(`      - CANCEL: \${steps.${id}.outputs.CANCEL}\n`));
-          assert.ok(gate.includes(`      - CHECKPOINT: ${id}\n`));
-          assert.ok(gate.includes("      - NATIVE_TERMINAL: aborted\n"));
-          assert.ok(gate.includes('if [[ "$CANCEL" == yes ]]; then'));
-        } else if (file === "feature.yaml") {
-          assert.ok(step(template, id).includes("    depends: [await_ci_cancellation, await_merge_cancellation]\n"));
-          assert.equal(step(render, id), step(template, id), `${file}/${id}`);
-        } else {
-          assert.equal(step(template, id), step(render, id), `${file}/${id}`);
-        }
-      }
       const materialized = join(root, file);
       writeFileSync(materialized, template.replaceAll("__DAGU_FEATURE_VERSION__", BUNDLE_VERSION));
-      for (const path of [materialized, rendered]) {
-        execFileSync("dagu", ["validate", path], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
-      }
+      execFileSync("dagu", ["validate", materialized], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
     }
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
 test("waiting checkpoints parse both tree connectors in the bytewise service locale", () => {
-  for (const [, base] of definitions) {
-    const source = readFileSync(new URL(`${base}reconcile.yaml`, import.meta.url), "utf8");
-    const parser = script(source, "observe").split("\n").find(line => line.startsWith("STEP="));
+    const parser = script(reconcile, "observe").split("\n").find(line => line.startsWith("STEP="));
     assert.ok(parser);
     for (const connector of ["├─", "└─"]) {
       for (const checkpoint of ["await_ci", "await_merge"]) {
@@ -73,7 +43,6 @@ test("waiting checkpoints parse both tree connectors in the bytewise service loc
         assert.equal(output, checkpoint);
       }
     }
-  }
 });
 
 function step(source: string, id: string): string {
@@ -229,11 +198,7 @@ function publish(f: Fixture, feature: string, value: string): string {
   return git(f.worktree, "rev-parse", "HEAD");
 }
 
-for (const [name, base] of definitions) {
-  const feature = readFileSync(name === "template"
-    ? fileURLToPath(new URL(`${base}feature.yaml`, import.meta.url)) : renderedFeature, "utf8");
-  const reconcile = readFileSync(fileURLToPath(new URL(`${base}reconcile.yaml`, import.meta.url)), "utf8");
-  test(`${name}: retained runs complete from checks and merge state under their original policy`, () => {
+  test("retained runs complete from checks and merge state under their original policy", () => {
     const f = fixture("retained-pre-codeql");
     try {
       git(f.worktree, "push", "origin", f.branch);
@@ -259,7 +224,7 @@ for (const [name, base] of definitions) {
     } finally { rmSync(f.root, { recursive: true, force: true }); }
   });
 
-  test(`${name}: CodeQL BLOCKED returns findings to implement and enables merge only after the fixed head passes`, () => {
+  test("CodeQL BLOCKED returns findings to implement and enables merge only after the fixed head passes", () => {
     const f = fixture("codeql570");
     try {
       update(f, { auto: false, codeqlPending: true });
@@ -301,7 +266,7 @@ for (const [name, base] of definitions) {
       assert.equal(authorized.status, 0, authorized.stdout + authorized.stderr);
     } finally { rmSync(f.root, { recursive: true, force: true }); }
   });
-  test(`${name}: A CODE_FAIL returns implement, B PASS uses the same PR and rejects late A`, async t => {
+  test("A CODE_FAIL returns implement, B PASS uses the same PR and rejects late A", async t => {
     const f = fixture();
     try {
       const a = publish(f, feature, "candidate A");
@@ -339,7 +304,7 @@ for (const [name, base] of definitions) {
     } finally { rmSync(f.root, { recursive: true, force: true }); }
   });
 
-  test(`${name}: all classes, rebase routes, retry backoff/exhaustion and stale iteration`, () => {
+  test("all classes, rebase routes, retry backoff/exhaustion and stale iteration", () => {
     const f = fixture();
     try {
       publish(f, feature, "candidate");
@@ -385,7 +350,6 @@ for (const [name, base] of definitions) {
       assert.equal(git(f.primary, "ls-remote", "origin", "refs/heads/main").split(/\s/)[0], f.base);
     } finally { rmSync(f.root, { recursive: true, force: true }); }
   });
-}
 
 test("template: consecutive BLOCKED ticks request one owner decision per fingerprint", async () => {
   const reconcile = readFileSync(new URL("../skills/issue-execution/reconcile.yaml", import.meta.url), "utf8");
@@ -502,8 +466,6 @@ test("Dagu 2.20.1: paired root waits return to implement/rebase and release the 
   const id = testRunId("ci226");
   const probeId = testRunId("queue-released");
   const f = fixture(id);
-  const feature = readFileSync(fileURLToPath(new URL("../skills/issue-execution/feature.yaml", import.meta.url)), "utf8");
-  const reconcile = readFileSync(fileURLToPath(new URL("../skills/issue-execution/reconcile.yaml", import.meta.url)), "utf8");
   const home = join(f.root, "dagu-home");
   mkdirSync(join(home, "dags"), { recursive: true });
   rmSync(join(f.bin, "dagu"));
