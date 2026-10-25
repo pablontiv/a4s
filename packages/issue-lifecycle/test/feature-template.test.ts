@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
-import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -16,7 +16,7 @@ import { liveDagu, liveDaguVersion } from "./fixtures/live-dagu.ts";
 import { roleAdmission, roleExecution } from "./role-job-fixtures.ts";
 import { jobId, type JobBinding } from "../src/role-jobs.ts";
 import { roleAssignment, runRoleJob } from "../src/role-dispatch.ts";
-import "./waiting-cancellation.test.ts";
+import { copyRepositorySeed, normalizedFixtureSnapshot, SEED_COMMIT_DATE, settleCopiedRepository } from "./fixtures/repository-seed.ts";
 import { testRunId } from "./fixtures/run-id.ts";
 import { renderedFeature, renderedPoc } from "./fixtures/rendered-feature.ts";
 
@@ -72,12 +72,14 @@ type Repository = {
   state: string;
 };
 
-function repository(run = "test-run"): Repository {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), "omp-dagu-feature-")));
+const FEATURE_SEED_RUN = "test-run";
+
+function buildFeatureSeed(root: string): void {
   const primary = join(root, "primary");
   const remote = join(root, "remote.git");
   const worktree = join(primary, ".workspace", "worktrees", "issue-189");
   const branch = "dagu/issue-189";
+  const run = FEATURE_SEED_RUN;
   execFileSync("git", ["init", "--bare", "-b", "main", remote]);
   execFileSync("git", ["init", "-b", "main", primary]);
   git(primary, "config", "user.name", "Feature Test");
@@ -90,7 +92,9 @@ function repository(run = "test-run"): Repository {
   writeFileSync(join(primary, "packages", "second", "package.json"), "{}\n");
   writeFileSync(join(primary, "README.txt"), "base\n");
   git(primary, "add", ".");
-  git(primary, "commit", "-m", "base");
+  execFileSync("git", ["-C", primary, "-c", "commit.gpgsign=false", "commit", "-m", "base"], {
+    env: { ...process.env, GIT_AUTHOR_DATE: SEED_COMMIT_DATE, GIT_COMMITTER_DATE: SEED_COMMIT_DATE },
+  });
   git(primary, "push", "-u", "origin", "main");
   writeFileSync(join(primary, ".git", "info", "exclude"), "/.workspace/worktrees/\n");
   stubHistory(root);
@@ -109,7 +113,48 @@ function repository(run = "test-run"): Repository {
   mkdirSync(resources, { recursive: true });
   writeFileSync(join(resources, `${hash}.json`), resource);
   writeFileSync(join(state, "tested-sha"), git(worktree, "rev-parse", "HEAD") + "\n");
-  return { root, primary, worktree, branch, state };
+}
+
+function retargetFeatureRun(root: string, from: string, to: string): void {
+  if (from === to) return;
+  const primary = join(root, "primary");
+  const runs = join(primary, ".git", "dagu-feature", "runs");
+  renameSync(join(runs, from), join(runs, to));
+  const needle = `"run":${JSON.stringify(from)}`;
+  const next = `"run":${JSON.stringify(to)}`;
+  const resources = join(primary, ".git", "dagu-feature", "resources");
+  const files = [
+    join(runs, to, "identity"),
+    join(runs, to, "resource.json"),
+    join(primary, ".git", "worktrees", "issue-189", "dagu-feature-owner"),
+    ...readdirSync(resources).map(name => join(resources, name)),
+  ];
+  for (const file of files) {
+    const text = readFileSync(file, "utf8");
+    assert.equal(text.includes(needle), true, file);
+    writeFileSync(file, text.replaceAll(needle, next));
+  }
+}
+
+function materializeFeature(run: string, fresh: boolean): Repository {
+  const root = fresh
+    ? realpathSync(mkdtempSync(join(tmpdir(), "omp-dagu-feature-")))
+    : copyRepositorySeed("feature", "omp-dagu-feature-", buildFeatureSeed);
+  if (fresh) buildFeatureSeed(root);
+  retargetFeatureRun(root, FEATURE_SEED_RUN, run);
+  const repo: Repository = {
+    root,
+    primary: join(root, "primary"),
+    worktree: join(root, "primary", ".workspace", "worktrees", "issue-189"),
+    branch: "dagu/issue-189",
+    state: join(root, "primary", ".git", "dagu-feature", "runs", run),
+  };
+  if (!fresh) settleCopiedRepository([repo.primary, repo.worktree]);
+  return repo;
+}
+
+function repository(run = "test-run"): Repository {
+  return materializeFeature(run, false);
 }
 
 function recordCandidate(repo: Repository): void {
@@ -3404,5 +3449,53 @@ test("real Dagu gate timing retains failed automatic retry and every npm phase i
   } finally {
     await runtime.close();
     rmSync(repo.root, { recursive: true, force: true });
+  }
+});
+
+function featureOwnership(repo: Repository): string[] {
+  const resources = join(repo.primary, ".git", "dagu-feature", "resources");
+  return [
+    join(repo.state, "identity"),
+    join(repo.state, "resource.json"),
+    join(repo.state, "candidate.json"),
+    join(repo.state, "base"),
+    join(repo.state, "tested-sha"),
+    join(repo.state, "codeql-observation.json"),
+    join(repo.primary, ".git", "worktrees", "issue-189", "dagu-feature-owner"),
+    ...readdirSync(resources).map(name => join(resources, name)),
+  ];
+}
+
+test("seeded feature repository matches a fresh fixture and stays isolated", () => {
+  const fresh = materializeFeature("test-run", true);
+  const copy = repository();
+  const other = repository("feature-isolated");
+  const again = repository();
+  const view = (repo: Repository, run: string) => normalizedFixtureSnapshot({
+    root: repo.root,
+    primary: repo.primary,
+    worktree: repo.worktree,
+    remote: join(repo.root, "remote.git"),
+    ownership: featureOwnership(repo),
+  }, [[run, "$RUN"]]);
+  try {
+    const baseline = view(fresh, "test-run");
+    assert.equal(view(copy, "test-run"), baseline);
+    assert.equal(view(other, "feature-isolated"), baseline);
+    assert.equal(view(again, "test-run"), baseline);
+    assert.equal(git(copy.primary, "config", "--get", "remote.origin.url"), join(copy.root, "remote.git"));
+    assert.equal(readlinkSync(join(copy.root, "bin", "dagu-pr-body")), readlinkSync(join(fresh.root, "bin", "dagu-pr-body")));
+    assert.notEqual(copy.root, other.root);
+    commit(copy, "README.txt", "mutated\n");
+    git(copy.primary, "config", "user.name", "Mutated Observer");
+    git(copy.worktree, "push", "origin", "HEAD:refs/heads/mutated-copy");
+    writeFileSync(join(copy.state, "resource.json"), "{\"run\":\"mutated\"}\n");
+    assert.equal(view(other, "feature-isolated"), baseline);
+    assert.equal(view(again, "test-run"), baseline);
+    assert.notEqual(view(copy, "test-run"), baseline);
+    assert.equal(readFileSync(join(other.worktree, "README.txt"), "utf8"), "base\n");
+    assert.equal(git(other.primary, "ls-remote", "origin", "refs/heads/mutated-copy"), "");
+  } finally {
+    for (const repo of [fresh, copy, other, again]) rmSync(repo.root, { recursive: true, force: true });
   }
 });
