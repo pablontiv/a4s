@@ -7,6 +7,7 @@ import {
   parseVersion,
 } from "../bundle.ts";
 import type { Compatibility } from "../bundle.ts";
+import type { StallNotice } from "../long-computation.ts";
 
 export interface RunDetails {
   name: string;
@@ -223,7 +224,7 @@ export class Transitions {
 
   constructor(private readonly sessionId?: string) {}
 
-  observe(run: RunDetails, options: { baseline?: boolean; slug?: string; checkpoints?: boolean; ciDiagnostic?: CiDiagnostic; escalationDiagnostic?: string } = {}): TransitionEffects {
+  observe(run: RunDetails, options: { baseline?: boolean; slug?: string; checkpoints?: boolean; ciDiagnostic?: CiDiagnostic; escalationDiagnostic?: string; stalls?: StallNotice[] } = {}): TransitionEffects {
     const key = topicFor(run);
     const previous = this.states.get(key);
     const terminalStep = run.nodes?.find(node => node.statusLabel === run.statusLabel)?.step.name;
@@ -241,6 +242,13 @@ export class Transitions {
       this.notices.add(id);
       if (!options.baseline && owned && supported) messages.push(text);
     };
+    for (const stall of options.stalls ?? []) {
+      if (runParam(run, "OMP_SESSION_ID") !== stall.session) continue;
+      const last = stall.progress.lastShard;
+      const range = last ? `${last.range.start}-${last.range.end}` : "none";
+      notice(JSON.stringify([key, "stall", stall.notifiedAt]),
+        `[DAGU STALL] run=${plain(run.dagRunId)}${identity}${bundleNotice} session=${plain(stall.session)} computation=${plain(stall.computation)} completed=${stall.progress.completed}/${stall.progress.total} lastShard=${last ? String(last.index) : "none"} range=${range} completedAt=${plain(last?.completedAt ?? "none")} directory=${plain(stall.directory)} options=continue; resize; stop. Completed shards are preserved.`);
+    }
     if (options.checkpoints !== false) {
       const ci = options.ciDiagnostic;
       if (ci?.class === "BLOCKED" && ci.decisionRequest && run.nodes?.some(node =>

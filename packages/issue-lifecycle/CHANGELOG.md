@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.16
+
+- Checkpoint long role-job and PoC computations by shard under the run evidence directory, resume from the last completed shard, and stall only after a configured multiple of the measured shard time with one owner notice and a continue, resize, or stop decision (#560).
+
 ## 0.5.15
 
 - Admit a feature run when the loaded extension serves the render's triage, implement and publication protocols, including a render one minor version behind (#562).
