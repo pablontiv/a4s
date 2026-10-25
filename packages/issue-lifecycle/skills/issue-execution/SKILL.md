@@ -207,10 +207,20 @@ This skill does not install Dagu, and it carries no logic specific to any reposi
 
 The versioned global configuration in [`../../dagu/base.yaml`](../../dagu/base.yaml)
 sets `hist_retention_days: 30`. The operator installs it as
-`$DAGU_HOME/base.yaml` (default `~/.dagu/base.yaml`). After Dagu's retention
-cleanup, runs older than thirty days are no longer queryable through
-`dagu history` or available for `dagu retry`. Preserve evidence needed for
-longer outside the run history; recovering that work requires a new run.
+`$DAGU_HOME/base.yaml` (default `~/.dagu/base.yaml`). Feature, PoC and
+planning inherit that horizon. After Dagu's retention cleanup, runs older
+than thirty days are no longer queryable through `dagu history` or available
+for `dagu retry`. Preserve evidence needed for longer outside the run
+history; recovering that work requires a new run.
+
+The reconcile root in [`reconcile.yaml`](reconcile.yaml) sets
+`hist_retention_runs: 1440`: about one day at one scheduled tick per minute.
+That count is the retention mode for the reconcile DAG. Dagu applies it after
+each new reconcile root is created and removes older terminal roots together
+with their `sub/` children, logs and artifacts. Active runs, non-final runs
+and a newer attempt that has no status yet stay. Adopt the rendered reconciler
+through the documented bootstrap. The first tick after that install applies
+the count. Protected roots stay; reaching the count leaves them in place.
 
 ## Bundle identity and compatibility
 
@@ -1453,7 +1463,7 @@ decision and terminates with native Failed/77 plus normal exit cleanup.
 
 ## Reconcile `await_merge`
 
-Remote observation belongs to the scheduled [`reconcile`](reconcile.yaml) DAG, a separate process from the implementing agent, which does not wait on hosted CI. The reconciler holds no repository queue slot: it uses its own local queue with concurrency one. It runs every minute with `overlap_policy: skip` and an empty `catchup_window`.
+Remote observation belongs to the scheduled [`reconcile`](reconcile.yaml) DAG, a separate process from the implementing agent, which does not wait on hosted CI. The reconciler holds no repository queue slot: it uses its own local queue with concurrency one. It runs every minute with `overlap_policy: skip` and an empty `catchup_window`. The root keeps `hist_retention_runs: 1440` (about one day); see [Global history retention](#global-history-retention).
 
 `discover` lists waiting `feature` runs from the local Dagu API
 (`GET /api/v1/dag-runs/feature` with `status=7` and `fromDate=0`), following

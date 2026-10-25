@@ -236,8 +236,17 @@ The maintained proof is drained TERM restart, bounded to local Dagu 2.20.1
 After a failure during closure, admission remains closed. Inspect service,
 history and output before recovery. Preserve `.station-install.lock` barriers
 until outstanding probes finish; remove the completed lock only after recovery.
-Thirty-day global history retention comes from the installed base; retain durable
-acceptance evidence outside that cleanup window.
+Thirty-day global history retention comes from the installed base
+(`packages/issue-lifecycle/dagu/base.yaml`, `hist_retention_days: 30`).
+Feature, PoC and planning runs inherit that horizon. The reconcile root
+declares `hist_retention_runs: 1440`, about one day at one tick per minute.
+Bootstrap adoption installs that rendered reconciler at
+`$DAGU_HOME/dags/reconcile.yaml`. The first tick after adoption applies the
+count and keeps active runs, non-final runs, and a newer attempt that has no
+status. Retain durable acceptance evidence outside either cleanup window.
+After that adoption, record the first tick's duration, whether the scheduler
+skipped ticks, reconcile history bytes before and after, and every older
+reconcile root that remains together with the protection that kept it.
 
 ## Active runs and recovery
 

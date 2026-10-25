@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.14
+
+- Keep about one day of reconcile history with `hist_retention_runs: 1440` on the reconcile root. Feature, PoC and planning still inherit `hist_retention_days: 30` from the installed base (#637).
+- Adopt the count through the documented bootstrap. The first tick after adoption applies Dagu's count cleanup and leaves active and non-final roots in place.
+
 ## 0.5.13
 
 - Classify a failed aggregate required check from the failed jobs of the same Actions run. A needed job's assertion failure returns `await_ci` to `implement`; runner, download, network and HTTP 5xx/429 failures stay transient; an aggregate failure with neither stays blocked (#546).
