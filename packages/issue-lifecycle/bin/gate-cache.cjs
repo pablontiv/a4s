@@ -494,7 +494,11 @@ function cacheDirectory(worktree) {
   const dir = path.join(common, 'dagu-feature', 'gate-cache');
   fs.mkdirSync(dir, { recursive: true });
   const config = path.join(dir, 'config.json');
-  if (!fs.existsSync(config)) fs.writeFileSync(config, `${JSON.stringify({ schemaVersion: 1, remote: false })}\n`);
+  try {
+    fs.writeFileSync(config, `${JSON.stringify({ schemaVersion: 1, remote: false })}\n`, { flag: 'wx' });
+  } catch (error) {
+    if (error.code !== 'EEXIST') throw error;
+  }
   return dir;
 }
 
