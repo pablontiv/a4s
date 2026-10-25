@@ -1455,14 +1455,42 @@ decision and terminates with native Failed/77 plus normal exit cleanup.
 
 Remote observation belongs to the scheduled [`reconcile`](reconcile.yaml) DAG, a separate process from the implementing agent, which does not wait on hosted CI. The reconciler holds no repository queue slot: it uses its own local queue with concurrency one. It runs every minute with `overlap_policy: skip` and an empty `catchup_window`.
 
-`discover` reads waiting `feature` runs across all repositories with `dagu history`
-and parses their named params. `tick` passes each waiting feature run to the local
-`reconcile-run` sub-DAG with `max_concurrent: 1`. A precondition skips the fan-out
-when discovery found no waiting runs.
+`discover` lists waiting `feature` runs from the local Dagu API
+(`GET /api/v1/dag-runs/feature` with `status=7` and `fromDate=0`), following
+`nextCursor` until the server sends no further page. `fromDate=0` keeps a Waiting
+run whose original creation is outside the history CLI's implicit 30-day window.
+`limit=100` is only the page size. A repeated cursor fails the tick instead of
+emitting a partial selection. Duplicate run ids are counted and skipped. Missing
+`PRIMARY` values still come from that run's spec. The repository is resolved once
+per distinct `PRIMARY` and passed to each child as `REPO`. Issue-state reads stay
+one call per non-PR run.
+
+`tick` passes each selected run to the local `reconcile-run` sub-DAG with
+`parallel.max_concurrent: 4`. That fan-out is observation capacity for independent
+runs and is distinct from repository queue capacity. A precondition skips the
+fan-out when discovery found no waiting runs. One slow observation occupies a
+single slot; the other slots continue.
+
+External `gh`, `curl`, `dagu` and `dagu-codeql` calls in discover, observe and
+transition use `RECONCILE_CALL_TIMEOUT_SECONDS` (default 8). Discover stops at
+`RECONCILE_DISCOVER_TIMEOUT_SECONDS` (default 20) and refuses a partial list.
+One observation stops at `RECONCILE_OBSERVE_TIMEOUT_SECONDS` (default 20),
+records `BLOCKED`, and does not retry that call. Transition calls stop at
+`RECONCILE_TRANSITION_TIMEOUT_SECONDS` (default 20).
+
+Conflicting transitions — the same run, or the same repository and PR — take
+sorted exclusive locks for the immediate Waiting, push-back iteration and head
+SHA checks and for the single side effect. A second decision waits, sees the
+updated state, and does not apply again. Independent runs keep separate locks.
+
+Discover, observe and transition each write one `reconcile-metric` JSON object
+to stderr with counts, skips and latency. The 30-minute under-load station proof
+for this one-minute schedule remains an operator acceptance run.
 
 `observe` reads the waiting step and push-back iteration from `dagu status`,
-resolves the repository from `PRIMARY`, and reads the PR with `gh pr view` (or
-the issue for other waiting steps). It publishes the observation as step outputs.
+uses the `REPO` resolved for that `PRIMARY` (or resolves it when the child is
+invoked directly), and reads the PR with `gh pr view` (or the issue for other
+waiting steps). It publishes the observation as step outputs.
 
 The scheduled DAG owns the paired root checkpoints `await_ci` (rewind to
 `implement`) and `await_merge` (rewind to `rebase`). Both open after `auto_merge`
