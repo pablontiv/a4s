@@ -413,6 +413,62 @@ steps:
         expected: "no"
     run: |
       set -euo pipefail
+      apply_promoted_poc_basis() {
+        [[ -n "${POC_BASIS:-}" ]] || return 0
+        [[ -n "$poc_carry_base" && -f "$poc_carry_patch" && "$poc_carry_digest" =~ ^[a-f0-9]{64}$ && -n "$poc_carry_run" ]] || {
+          printf 'start_gate: promoted PoC basis was not resolved\n' >&2
+          exit 1
+        }
+        patch_digest() {
+          local out digest
+          out=$(mktemp)
+          git -C "$WORKTREE" diff --binary "$poc_carry_base" > "$out"
+          while IFS= read -r -d '' path; do
+            (cd "$WORKTREE" && git diff --no-index --binary -- /dev/null "$path") >> "$out" || test "$?" -eq 1
+          done < <(git -C "$WORKTREE" ls-files --others --exclude-standard -z)
+          digest=$(shasum -a 256 "$out" | awk '{print $1}')
+          rm -f "$out"
+          printf '%s\n' "$digest"
+        }
+        if [[ -f "$STATE/poc-basis.json" ]]; then
+          recorded_basis=$(jq -er '.digest' "$STATE/poc-basis.json")
+          observed=$(patch_digest)
+          [[ "$recorded_basis" == "$poc_carry_digest" && "$observed" == "$poc_carry_digest" ]] || {
+            printf 'start_gate: feature worktree no longer matches PoC basis %s\n' "$poc_carry_digest" >&2
+            exit 1
+          }
+          printf 'poc_basis=applied digest=%s\n' "$poc_carry_digest"
+          return 0
+        fi
+        if [[ -n "$(git -C "$WORKTREE" status --porcelain --untracked-files=all)" ]]; then
+          observed=$(patch_digest)
+          [[ "$observed" == "$poc_carry_digest" ]] || {
+            printf 'start_gate: worktree changes are not the published PoC basis; preserved\n' >&2
+            exit 1
+          }
+        else
+          head_sha=$(git -C "$WORKTREE" rev-parse HEAD)
+          [[ "$head_sha" == "$poc_carry_base" ]] || {
+            printf 'start_gate: feature HEAD %s is not PoC base %s; preserved\n' "$head_sha" "$poc_carry_base" >&2
+            exit 1
+          }
+          if [[ -s "$poc_carry_patch" ]]; then
+            git -C "$WORKTREE" apply --binary --check "$poc_carry_patch" || {
+              printf 'start_gate: published PoC patch does not apply onto %s; preserved\n' "$poc_carry_base" >&2
+              exit 1
+            }
+            git -C "$WORKTREE" apply --binary "$poc_carry_patch"
+          fi
+          observed=$(patch_digest)
+          [[ "$observed" == "$poc_carry_digest" ]] || {
+            printf 'start_gate: applied worktree does not match PoC basis %s\n' "$poc_carry_digest" >&2
+            exit 1
+          }
+        fi
+        jq -n --arg pocRun "$poc_carry_run" --arg url "$POC_BASIS" --arg digest "$poc_carry_digest" --arg base "$poc_carry_base" \
+          '{schemaVersion:1,pocRun:$pocRun,url:$url,digest:$digest,base:$base,applied:true}' > "$STATE/poc-basis.json"
+        printf 'poc_basis=applied digest=%s\n' "$poc_carry_digest"
+      }
       printf '%s\n' "$DAGU_FEATURE_BUNDLE"
       eval "$DAGU_RESOURCE_GUARD"
       resource_lock claim
@@ -438,6 +494,40 @@ steps:
            (.run == $run or ($previous != "" and .run == $previous))' "$OWNER" >/dev/null ||
           { printf 'start_gate: resource ownership identity mismatch: %s; preserved\n' "$OWNER" >&2; exit 1; }
       fi
+      poc_carry_base=
+      poc_carry_patch=
+      poc_carry_digest=
+      poc_carry_run=
+      if [[ -n "${POC_BASIS:-}" ]]; then
+        [[ "$RUN" == feature-* ]] || { printf 'start_gate: POC_BASIS requires run id feature-<poc-run>\n' >&2; exit 1; }
+        poc_carry_run=${RUN#feature-}
+        [[ "$poc_carry_run" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || { printf 'start_gate: invalid promoted PoC run %s\n' "$poc_carry_run" >&2; exit 1; }
+        poc_state=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "poc/runs/$poc_carry_run")
+        [[ -f "$poc_state/full.patch" && -s "$poc_state/full.patch.sha256" && -s "$poc_state/comment.url" && -s "$poc_state/promotion.url" && -s "$poc_state/base.sha" ]] || {
+          printf 'start_gate: promoted PoC basis is incomplete for %s; evidence %s\n' "$poc_carry_run" "$poc_state" >&2
+          exit 1
+        }
+        poc_comment=$(tr -d '\r\n' < "$poc_state/comment.url")
+        poc_promotion=$(tr -d '\r\n' < "$poc_state/promotion.url")
+        [[ "$poc_comment" == "$POC_BASIS" && "$poc_promotion" == "$POC_BASIS" ]] || {
+          printf 'start_gate: POC_BASIS does not match the published PoC comment for %s\n' "$poc_carry_run" >&2
+          exit 1
+        }
+        poc_carry_base=$(tr -d '\r\n' < "$poc_state/base.sha")
+        [[ "$poc_carry_base" =~ ^[a-f0-9]{40}$ ]] || { printf 'start_gate: PoC base SHA is invalid for %s\n' "$poc_carry_run" >&2; exit 1; }
+        git -C "$PRIMARY" cat-file -e "${poc_carry_base}^{commit}" || { printf 'start_gate: PoC base %s is not in this repository\n' "$poc_carry_base" >&2; exit 1; }
+        git -C "$PRIMARY" merge-base --is-ancestor "$poc_carry_base" "origin/$BASE_BRANCH" || {
+          printf 'start_gate: PoC base %s is not an ancestor of origin/%s\n' "$poc_carry_base" "$BASE_BRANCH" >&2
+          exit 1
+        }
+        poc_carry_digest=$(tr -d '[:space:]' < "$poc_state/full.patch.sha256")
+        poc_observed=$(shasum -a 256 "$poc_state/full.patch" | awk '{print $1}')
+        [[ "$poc_carry_digest" =~ ^[a-f0-9]{64}$ && "$poc_observed" == "$poc_carry_digest" ]] || {
+          printf 'start_gate: full.patch digest mismatch for %s\n' "$poc_carry_run" >&2
+          exit 1
+        }
+        poc_carry_patch=$poc_state/full.patch
+      fi
       if test -e "$WORKTREE"; then
         worktree_path=$(cd "$WORKTREE" && pwd -P)
         worktree_root=$(cd "$(git -C "$WORKTREE" rev-parse --show-toplevel)" && pwd -P)
@@ -445,6 +535,8 @@ steps:
         test "$(git -C "$WORKTREE" branch --show-current)" = "$BRANCH"
       elif git -C "$PRIMARY" show-ref --verify --quiet "refs/heads/$BRANCH"; then
         git -C "$PRIMARY" worktree add "$WORKTREE" "$BRANCH"
+      elif [[ -n "$poc_carry_base" ]]; then
+        git -C "$PRIMARY" worktree add -b "$BRANCH" "$WORKTREE" "$poc_carry_base"
       else
         git -C "$PRIMARY" rev-parse --verify "origin/$BASE_BRANCH^{commit}" >/dev/null
         git -C "$PRIMARY" worktree add -b "$BRANCH" "$WORKTREE" "origin/$BASE_BRANCH"
@@ -485,6 +577,7 @@ steps:
       jq -n --arg run "$RUN" --arg primary "$primary_path" --arg branch "$BRANCH" --arg worktree "$worktree_path" \
         '{run:$run,primary:$primary,branch:$branch,worktree:$worktree}' > "$STATE/resource.json"
       cp "$STATE/resource.json" "$OWNER"
+      apply_promoted_poc_basis
       printf 'issue=%s\nbranch=%s\nworktree=%s\nbase_sha=%s\n' \
         "$ISSUE" "$BRANCH" "$WORKTREE" "$(git -C "$WORKTREE" rev-parse HEAD)"
 
@@ -649,6 +742,21 @@ steps:
       }
       scratch=$(mktemp -d)
       trap 'rm -rf "$scratch"' EXIT
+      poc_basis=null
+      if [[ -f "$STATE/poc-basis.json" ]]; then
+        basis_digest=$(jq -r 'if .schemaVersion == 1 and .applied == true and (.digest | test("^[a-f0-9]{64}$")) then .digest else "" end' "$STATE/poc-basis.json")
+        [[ -n "$basis_digest" ]] || fail "recorded PoC basis is invalid"
+        git diff --binary HEAD > "$scratch/basis.patch"
+        while IFS= read -r -d '' path; do
+          git diff --no-index --binary -- /dev/null "$path" >> "$scratch/basis.patch" || test "$?" -eq 1
+        done < <(git ls-files --others --exclude-standard -z)
+        observed_basis=$(shasum -a 256 "$scratch/basis.patch" | awk '{print $1}')
+        if [[ "$observed_basis" == "$basis_digest" ]]; then feature_delta=empty; else feature_delta=changed; fi
+        jq --arg featureDelta "$feature_delta" '.featureDelta = $featureDelta' "$STATE/poc-basis.json" > "$scratch/poc-basis.json"
+        mv "$scratch/poc-basis.json" "$STATE/poc-basis.json"
+        poc_basis=$(jq -c '{schemaVersion,pocRun,url,digest,base,applied,featureDelta}' "$STATE/poc-basis.json")
+        printf 'poc_basis=applied digest=%s feature_delta=%s\n' "$basis_digest" "$feature_delta"
+      fi
       git diff --name-only --no-renames -z "$base" > "$scratch/paths"
       git ls-files --others --exclude-standard -z >> "$scratch/paths"
       while IFS= read -r -d '' path; do confined "$path"; done < "$scratch/paths"
@@ -686,7 +794,9 @@ steps:
       git diff --binary --full-index "$base" "$sha" > "$scratch/diff.patch"
       jq -nc --arg base "$base" --arg sha "$sha" --arg tree "$tree" --arg message "$MESSAGE" \
         --arg summary "$SUMMARY" --arg implementer "$IMPLEMENTER" --argjson iteration "$iteration" --argjson implementation "$implementation" \
-        '{base:$base,sha:$sha,tree:$tree,message:$message,summary:$summary,implementer:$implementer,iteration:$iteration,implementation:$implementation}' > "$scratch/candidate.json"
+        --argjson pocBasis "$poc_basis" \
+        '{base:$base,sha:$sha,tree:$tree,message:$message,summary:$summary,implementer:$implementer,iteration:$iteration,implementation:$implementation}
+         + (if $pocBasis == null then {} else {pocBasis:$pocBasis} end)' > "$scratch/candidate.json"
       git update-ref "refs/heads/$BRANCH" "$sha" "$head"
       unset GIT_INDEX_FILE
       git read-tree "$tree"

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.9
+
+- Carry a promoted PoC candidate into the feature worktree before implement by applying the published `full.patch` and verifying its recorded SHA-256. An empty later feature diff still records that the basis was applied. A PoC without promotion still disposes a clean base-only worktree and branch (#642).
+
 ## 0.5.8
 
 - Exit every `dagu-role-jobs` terminal path so a native Python tool bridge listener cannot leave a BLOCKED or completed stage running (#639).
