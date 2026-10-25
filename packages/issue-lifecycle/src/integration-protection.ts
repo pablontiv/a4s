@@ -108,6 +108,7 @@ function requireRun(run: string): void {
 }
 
 function requireIssue(issue: string): void {
+  if (!issue) throw new Error("integration protection: missing ISSUE");
   if (!ISSUE.test(issue)) throw new Error(`integration protection: invalid issue: ${issue}`);
 }
 
@@ -330,7 +331,6 @@ function holdLine(record: IntegrationProtectionRecord, request: AdmitRequest, pa
 
 function admitLocked(request: AdmitRequest): AdmitResult {
   requireRun(request.run);
-  requireIssue(request.issue);
   const current = readRecord(request.primary);
   const removeHold = (): AdmitResult => {
     if (current?.held.some(held => held.run === request.run)) {
@@ -344,6 +344,7 @@ function admitLocked(request: AdmitRequest): AdmitResult {
   const own = new Set(changedPaths(request.worktree, identity.base, identity.sha));
   const intersection = current.paths.filter(path => own.has(path));
   if (!intersection.length) return removeHold();
+  requireIssue(request.issue);
   const noticeKey = [current.protectedRun, current.candidateSha, request.checkpoint, intersection.join(","), String(request.waiterPid ?? "")].join("\0");
   const previous = current.held.find(held => held.run === request.run);
   const entry: HeldRun = {

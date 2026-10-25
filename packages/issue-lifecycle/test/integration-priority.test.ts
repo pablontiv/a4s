@@ -216,6 +216,27 @@ test("operator release and abort release a held run without changing its candida
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test("admission without ISSUE proceeds when nothing is protected and a conflicting hold still names the issue", () => {
+  const { root, primary } = repository();
+  try {
+    const entry = lane(primary, "601", { [protectedPath]: "plain\n" });
+    const env = environment(primary, entry);
+    delete env.ISSUE;
+    const open = spawnSync(cli, ["admit", "--checkpoint", "gate", "--held-lock"], { encoding: "utf8", env });
+    assert.equal(open.status, 0, open.stderr);
+    const gate = spawnSync("bash", ["-c", extract("gate")], { encoding: "utf8", env });
+    assert.equal(gate.status, 0, gate.stderr);
+    const protectedLane = lane(primary, "290", { [protectedPath]: "protected\n" });
+    assert.equal(protect(primary, protectedLane, "protect #290").status, 0);
+    const held = spawnSync(cli, ["admit", "--checkpoint", "push"], { encoding: "utf8", env });
+    assert.equal(held.status, 1, held.stderr);
+    assert.match(held.stderr, /missing ISSUE/);
+    const named = invoke(primary, entry, ["admit", "--checkpoint", "push"]);
+    assert.equal(named.status, 86, named.stderr);
+    assert.match(named.stderr, /issue=601 .*protected_issue=290/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test("admission inside an already held gate lock does not take the lock again", async () => {
   const { root, primary } = repository();
   const entry = lane(primary, "290", { [protectedPath]: "protected\n" });

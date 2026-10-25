@@ -88,7 +88,7 @@ try {
     const waiter = process.env.A4S_INTEGRATION_WAITER;
     if (waiter !== undefined && !/^\d+$/.test(waiter)) throw new Error("integration protection: invalid waiter pid");
     const result = admit({
-      primary, worktree: env("WORKTREE"), run: env("RUN"), issue: env("ISSUE"),
+      primary, worktree: env("WORKTREE"), run: env("RUN"), issue: process.env.ISSUE ?? "",
       checkpoint: checkpoint satisfies IntegrationCheckpoint, heldLock: flags.has("held-lock"),
       ...(waiter !== undefined ? { waiterPid: Number(waiter) } : {}),
     });
