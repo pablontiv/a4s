@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.11
+
+- Bound each reconcile tick: page every Waiting feature run from the Unix epoch, observe independent runs concurrently, deadline external calls, and serialize conflicting transitions (#250).
+- Record discover, observation and transition counts, skips and latencies. The 30-minute under-load station proof stays an operator acceptance run.
+
 ## 0.5.10
 
 - Require the planning generation marker as the first line of the reviewer assignment `task` field, and name `session_init.task` plus the expected marker when `check_review` rejects a transcript (#647).

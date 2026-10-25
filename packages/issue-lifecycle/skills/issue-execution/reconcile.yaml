@@ -15,26 +15,118 @@ steps:
   - id: discover
     run: |
       set -euo pipefail
-      dagu history feature --status waiting --format json --limit 500 | jq -c '
+      # Page the local API from the Unix epoch. A creation-time window or a single
+      # response cap must not drop an active Waiting run. A repeated cursor fails
+      # closed instead of emitting a partial selection.
+      BOUND_STARTED_MS=$(python3 -c 'import time; print(time.time_ns() // 1000000)')
+      CALL_TIMEOUT=${RECONCILE_CALL_TIMEOUT_SECONDS:-8}
+      BOUND_BUDGET=${RECONCILE_DISCOVER_TIMEOUT_SECONDS:-20}
+      TMP=$(mktemp -d)
+      trap 'rm -rf "$TMP"' EXIT
+      : >"$TMP/calls"
+      : >"$TMP/cursors"
+      : >"$TMP/seen-runs"
+      : >"$TMP/primaries"
+      : >"$TMP/repos"
+      : >"$TMP/rows"
+      : >"$TMP/raw"
+      bounded() {
+        printf '1\n' >>"$TMP/calls"
+        local seconds rc=0
+        seconds=$(python3 -c 'import time,sys; left=float(sys.argv[1])-(time.time_ns()//1000000-int(sys.argv[2]))/1000.0; cap=float(sys.argv[3]); print("%.3f"%max(0.0,min(cap,left)))' "$BOUND_BUDGET" "$BOUND_STARTED_MS" "$CALL_TIMEOUT")
+        if ! python3 -c 'import sys; raise SystemExit(0 if float(sys.argv[1])>0 else 1)' "$seconds"; then
+          echo "discover: deadline exhausted before the waiting-run list was complete" >&2
+          printf '1\n' >>"$TMP/deadline"
+          return 124
+        fi
+        python3 - "$seconds" "$@" <<'PY' || rc=$?
+      import subprocess, sys
+      seconds = float(sys.argv[1])
+      try:
+          completed = subprocess.run(sys.argv[2:], timeout=seconds)
+      except subprocess.TimeoutExpired:
+          sys.stderr.write("discover deadline exceeded\n")
+          raise SystemExit(124)
+      raise SystemExit(completed.returncode)
+      PY
+        if [[ "$rc" -eq 124 ]]; then printf '1\n' >>"$TMP/deadline"; fi
+        return "$rc"
+      }
+      base="http://127.0.0.1:${DAGU_PORT:-8080}/api/v1/dag-runs/feature"
+      cursor=""
+      pages=0
+      while true; do
+        pages=$((pages + 1))
+        args=(--get --data-urlencode "status=7" --data-urlencode "fromDate=0" --data-urlencode "limit=100")
+        if [[ -n "$cursor" ]]; then args+=(--data-urlencode "cursor=$cursor"); fi
+        if ! bounded curl -fsS "${args[@]}" "$base" >"$TMP/page"; then
+          echo "discover: waiting-run page unavailable" >&2
+          exit 1
+        fi
+        jq -c '.dagRuns[]?' "$TMP/page" >>"$TMP/raw"
+        next=$(jq -r 'if .nextCursor == null then "" else (.nextCursor | tostring) end' "$TMP/page")
+        if [[ -z "$next" ]]; then break; fi
+        if [[ "$next" == "$cursor" ]] || grep -Fxq -- "$next" "$TMP/cursors"; then
+          echo "discover: cursor did not advance" >&2
+          exit 1
+        fi
+        printf '%s\n' "$next" >>"$TMP/cursors"
+        cursor=$next
+      done
+      input=0 selected=0 skipped=0 spec_lookups=0 repo_lookups=0
+      while IFS= read -r row; do
+        [[ -n "$row" ]] || continue
+        input=$((input + 1))
+        run=$(jq -r '.RUN // empty' <<<"$row")
+        if [[ -z "$run" ]] || grep -Fxq -- "$run" "$TMP/seen-runs"; then
+          skipped=$((skipped + 1))
+          continue
+        fi
+        printf '%s\n' "$run" >>"$TMP/seen-runs"
+        if [[ "$(jq -r '.PRIMARY // empty' <<<"$row")" == "" ]]; then
+          spec_lookups=$((spec_lookups + 1))
+          encoded=$(jq -nr --arg run "$run" '$run|@uri')
+          if ! primary=$(bounded curl -fsS "http://127.0.0.1:${DAGU_PORT:-8080}/api/v1/dag-runs/feature/$encoded/spec" | jq -er '.spec | split("\n")[] | select(startswith("  - PRIMARY: ")) | ltrimstr("  - PRIMARY: ") | fromjson'); then
+            echo "discover: spec unavailable for $run" >&2
+            exit 1
+          fi
+          row=$(jq -c --arg primary "$primary" '.PRIMARY = $primary | .BRANCH = ("dagu/issue-" + .ISSUE)' <<<"$row")
+        fi
+        primary=$(jq -r .PRIMARY <<<"$row")
+        if ! grep -Fxq -- "$primary" "$TMP/primaries"; then
+          printf '%s\n' "$primary" >>"$TMP/primaries"
+          origin=$(git -C "$primary" remote get-url origin)
+          repo_lookups=$((repo_lookups + 1))
+          if ! repo=$(bounded gh repo view "$origin" --json nameWithOwner --jq .nameWithOwner); then
+            echo "discover: repository lookup failed for $primary" >&2
+            exit 1
+          fi
+          jq -nc --arg primary "$primary" --arg repo "$repo" '{primary:$primary,repo:$repo}' >>"$TMP/repos"
+        fi
+        repo=$(jq -r --arg primary "$primary" 'select(.primary == $primary) | .repo' "$TMP/repos" | head -1)
+        jq -c --arg repo "$repo" '.REPO = $repo' <<<"$row" >>"$TMP/rows"
+        selected=$((selected + 1))
+      done < <(jq -c '
         def param($key):
           .params as $params
           | (try ($params | capture("(^| )" + $key + "=(?<value>[^ ]*)($| )").value) catch "") // "";
-        [.[] | {
+        select(.dagRunId != null) | {
           RUN: .dagRunId,
           ISSUE: param("ISSUE"),
           PRIMARY: param("PRIMARY"),
           BRANCH: param("BRANCH"),
           PR_NUMBER: param("PR_NUMBER")
-        }]
-      ' | jq -c '.[]' | while IFS= read -r row; do
-        if [[ "$(jq -r .PRIMARY <<<"$row")" == "" ]]; then
-          run=$(jq -r .RUN <<<"$row")
-          primary=$(curl -fsS "http://127.0.0.1:${DAGU_PORT:-8080}/api/v1/dag-runs/feature/$run/spec" |
-            jq -er '.spec | split("\n")[] | select(startswith("  - PRIMARY: ")) | ltrimstr("  - PRIMARY: ") | fromjson')
-          row=$(jq -c --arg primary "$primary" '.PRIMARY = $primary | .BRANCH = ("dagu/issue-" + .ISSUE)' <<<"$row")
-        fi
-        printf '%s\n' "$row"
-      done | jq -sc '.'
+        }
+      ' "$TMP/raw")
+      calls=$(wc -l <"$TMP/calls" | tr -d ' ')
+      latency=$(( $(python3 -c 'import time; print(time.time_ns() // 1000000)') - BOUND_STARTED_MS ))
+      printf 'reconcile-metric %s\n' "$(jq -nc \
+        --argjson pages "$pages" --argjson inputRuns "$input" --argjson selected "$selected" \
+        --argjson skipped "$skipped" --argjson repoLookups "$repo_lookups" --argjson specLookups "$spec_lookups" \
+        --argjson latencyMs "$latency" --argjson calls "$calls" \
+        --argjson callTimeoutSeconds "$CALL_TIMEOUT" --argjson discoverTimeoutSeconds "$BOUND_BUDGET" \
+        '{phase:"discover",pages:$pages,inputRuns:$inputRuns,selected:$selected,skipped:$skipped,repoLookups:$repoLookups,specLookups:$specLookups,calls:$calls,latencyMs:$latencyMs,callTimeoutSeconds:$callTimeoutSeconds,discoverTimeoutSeconds:$discoverTimeoutSeconds}')" >&2
+      jq -sc '.' "$TMP/rows"
     output: RUNS
 
   - id: tick
@@ -47,7 +139,8 @@ steps:
       dag: reconcile-run
     parallel:
       items: ${RUNS}
-      max_concurrent: 1
+      # Observation fan-out for independent runs. Distinct from repository queue capacity.
+      max_concurrent: 4
 
 ---
 name: reconcile-run
@@ -72,29 +165,74 @@ params:
   - name: PR_NUMBER
     type: string
     default: ""
+  - name: REPO
+    type: string
+    default: ""
 steps:
   - id: observe
     run: |
       set -euo pipefail
-      REPO=$(gh repo view "$(git -C "$PRIMARY" remote get-url origin)" --json nameWithOwner --jq .nameWithOwner)
+      BOUND_STARTED_MS=$(python3 -c 'import time; print(time.time_ns() // 1000000)')
+      CALL_TIMEOUT=${RECONCILE_CALL_TIMEOUT_SECONDS:-8}
+      BOUND_BUDGET=${RECONCILE_OBSERVE_TIMEOUT_SECONDS:-20}
       STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")
       mkdir -p "$STATE"
       TMP=$(mktemp -d)
       trap 'rm -rf "$TMP"' EXIT
-      STATUS=$(dagu status feature --run-id "$RUN")
+      : >"$TMP/calls"
+      bounded() {
+        printf '1\n' >>"$TMP/calls"
+        local seconds rc=0
+        seconds=$(python3 -c 'import time,sys; left=float(sys.argv[1])-(time.time_ns()//1000000-int(sys.argv[2]))/1000.0; cap=float(sys.argv[3]); print("%.3f"%max(0.0,min(cap,left)))' "$BOUND_BUDGET" "$BOUND_STARTED_MS" "$CALL_TIMEOUT")
+        if ! python3 -c 'import sys; raise SystemExit(0 if float(sys.argv[1])>0 else 1)' "$seconds"; then
+          echo "reconcile deadline exhausted before call" >&2
+          printf '1\n' >>"$TMP/deadline"
+          return 124
+        fi
+        python3 - "$seconds" "$@" <<'PY' || rc=$?
+      import subprocess, sys
+      seconds = float(sys.argv[1])
+      try:
+          completed = subprocess.run(sys.argv[2:], timeout=seconds)
+      except subprocess.TimeoutExpired:
+          sys.stderr.write("reconcile deadline exceeded\n")
+          raise SystemExit(124)
+      raise SystemExit(completed.returncode)
+      PY
+        if [[ "$rc" -eq 124 ]]; then printf '1\n' >>"$TMP/deadline"; fi
+        return "$rc"
+      }
+      skipped_repo=0
+      if [[ -n "${REPO:-}" ]]; then
+        skipped_repo=1
+      elif REPO=$(bounded gh repo view "$(git -C "$PRIMARY" remote get-url origin)" --json nameWithOwner --jq .nameWithOwner); then
+        :
+      else
+        REPO=""
+      fi
+      STATUS=""
+      if [[ -n "$REPO" ]] && STATUS=$(bounded dagu status feature --run-id "$RUN"); then
+        :
+      else
+        STATUS=""
+      fi
       ITERATION=$(sed -nE 's/.*push-back iteration: ([0-9]+).*/\1/p' <<<"$STATUS" | head -1)
       ITERATION=${ITERATION:-0}
       STEP=$(LC_ALL=C sed -nE 's/^(├─|└─)([A-Za-z0-9_-]+) .*\[waiting\]$/\2/p' <<<"$STATUS" | head -1)
       CLASS=PENDING ACTION=WAIT SHA= CHECK= LOG= CAUSE= PR= WORKTREE="$PRIMARY/.workspace/worktrees/issue-$ISSUE" RETRY_RUN= FINDINGS='[]'
       OBSERVATION="$STEP"
-      if [[ "$STATUS" != Waiting* ]]; then
+      if [[ -z "$REPO" || -z "$STATUS" ]]; then
+        CLASS=BLOCKED ACTION=WAIT
+        CAUSE="GitHub observation unavailable; check repository permissions and authentication"
+        OBSERVATION=UNAVAILABLE
+      elif [[ "$STATUS" != Waiting* ]]; then
         ACTION=NONE
         OBSERVATION=NOT_WAITING
       elif [[ "$STEP" == await_ci || "$STEP" == await_merge ]]; then
         pr_ref=${PR_NUMBER:-$BRANCH}
         CLASS=BLOCKED
         CAUSE="GitHub observation unavailable; check repository permissions and authentication"
-        if gh pr view "$pr_ref" -R "$REPO" --json number,state,mergeStateStatus,autoMergeRequest,headRefOid,statusCheckRollup >"$TMP/pr"; then
+        if bounded gh pr view "$pr_ref" -R "$REPO" --json number,state,mergeStateStatus,autoMergeRequest,headRefOid,statusCheckRollup >"$TMP/pr"; then
           PR=$(jq -r .number "$TMP/pr")
           SHA=$(jq -r .headRefOid "$TMP/pr")
           pr_state=$(jq -r .state "$TMP/pr")
@@ -104,11 +242,11 @@ steps:
           CLASS=PENDING CAUSE="Required checks not yet published"
           # gh exits 1 for failed checks and 8 for pending checks, with valid JSON.
           rc=0
-          gh pr checks "$PR" -R "$REPO" --required --json name,state,link >"$TMP/required" 2>"$TMP/error" || rc=$?
+          bounded gh pr checks "$PR" -R "$REPO" --required --json name,state,link >"$TMP/required" 2>"$TMP/error" || rc=$?
           if [[ "$rc" != 0 && "$rc" != 1 && "$rc" != 8 ]] || ! jq -e 'type == "array"' "$TMP/required" >/dev/null; then
             CLASS=BLOCKED CAUSE="Required-check lookup failed: $(cat "$TMP/error")"
-          elif ! gh api --paginate --slurp "repos/$REPO/commits/$SHA/check-runs" >"$TMP/runs" 2>"$TMP/error" ||
-               ! gh api "repos/$REPO/commits/$SHA/status" >"$TMP/statuses" 2>>"$TMP/error"; then
+          elif ! bounded gh api --paginate --slurp "repos/$REPO/commits/$SHA/check-runs" >"$TMP/runs" 2>"$TMP/error" ||
+               ! bounded gh api "repos/$REPO/commits/$SHA/status" >"$TMP/statuses" 2>>"$TMP/error"; then
             CLASS=BLOCKED CAUSE="SHA-bound checks unavailable: $(cat "$TMP/error")"
           else
             jq -s --arg sha "$SHA" '
@@ -138,7 +276,7 @@ steps:
               RETRY_RUN=
               if [[ "$link" =~ /actions/runs/([0-9]+) ]]; then
                 RETRY_RUN=${BASH_REMATCH[1]}
-                if [[ "$link" =~ /job/([0-9]+) ]] && gh run view "$RETRY_RUN" -R "$REPO" --job "${BASH_REMATCH[1]}" --log-failed >"$TMP/log" 2>"$TMP/error"; then
+                if [[ "$link" =~ /job/([0-9]+) ]] && bounded gh run view "$RETRY_RUN" -R "$REPO" --job "${BASH_REMATCH[1]}" --log-failed >"$TMP/log" 2>"$TMP/error"; then
                   LOG="$LOG $(head -c 16000 "$TMP/log")"
                 fi
               fi
@@ -170,18 +308,31 @@ steps:
             elif [[ "$(jq -r '.mode // "required"' "$policy")" != required ]]; then
               CLASS=BLOCKED CHECK=CodeQL CAUSE="Invalid code scanning policy mode"
             else
-              dagu-codeql "$REPO" "$PR" "$SHA" "$(jq -r .security "$policy")" "$(jq -r .alerts "$policy")" >"$STATE/codeql-observation.json"
-              codeql_class=$(jq -r .class "$STATE/codeql-observation.json")
-              if [[ "$codeql_class" != PASS ]]; then
-                CLASS=$codeql_class CHECK=CodeQL RETRY_RUN=
-                CAUSE=$(jq -r .cause "$STATE/codeql-observation.json")
-                FINDINGS=$(jq -c .findings "$STATE/codeql-observation.json")
-                LOG=$(jq -r '[.findings[] | "\(.rule) (\(.severity)) \(.path):\(.line): \(.message)"] | join("\n")' "$STATE/codeql-observation.json")
+              if bounded dagu-codeql "$REPO" "$PR" "$SHA" "$(jq -r .security "$policy")" "$(jq -r .alerts "$policy")" >"$STATE/codeql-observation.json"; then
+                codeql_class=$(jq -r .class "$STATE/codeql-observation.json")
+                if [[ "$codeql_class" != PASS ]]; then
+                  CLASS=$codeql_class CHECK=CodeQL RETRY_RUN=
+                  CAUSE=$(jq -r .cause "$STATE/codeql-observation.json")
+                  FINDINGS=$(jq -c .findings "$STATE/codeql-observation.json")
+                  LOG=$(jq -r '[.findings[] | "\(.rule) (\(.severity)) \(.path):\(.line): \(.message)"] | join("\n")' "$STATE/codeql-observation.json")
+                fi
+              else
+                CLASS=BLOCKED CHECK=CodeQL RETRY_RUN=
+                CAUSE="CodeQL observation unavailable before the observation deadline"
               fi
             fi
           fi
-          current=$(gh pr view "$PR" -R "$REPO" --json headRefOid --jq .headRefOid)
-          if [[ "$current" != "$SHA" ]]; then
+          current=""
+          if current=$(bounded gh pr view "$PR" -R "$REPO" --json headRefOid --jq .headRefOid); then
+            :
+          else
+            current=""
+            CLASS=BLOCKED ACTION=WAIT
+            CAUSE="GitHub observation unavailable; head could not be rechecked before transition"
+          fi
+          if [[ "$CLASS" == BLOCKED && "$ACTION" == WAIT && "$CAUSE" == "GitHub observation unavailable; head could not be rechecked before transition" ]]; then
+            :
+          elif [[ "$current" != "$SHA" ]]; then
             CLASS=STALE_SHA CAUSE="Head moved from $SHA to $current; discard this observation"
           elif [[ "$pr_state" == OPEN && ( "$merge_state" == BEHIND || "$merge_state" == DIRTY ) ]]; then
             ACTION=REBASE STEP=await_merge
@@ -207,8 +358,23 @@ steps:
           fi
         fi
       elif [[ -n "$STEP" ]]; then
-        OBSERVATION="$STEP issue=$(gh issue view "$ISSUE" -R "$REPO" --json state,closedAt --jq '"\(.state) closed_at=\(.closedAt // "")"')"
+        issue_state=""
+        if issue_state=$(bounded gh issue view "$ISSUE" -R "$REPO" --json state,closedAt --jq '"\(.state) closed_at=\(.closedAt // "")"'); then
+          OBSERVATION="$STEP issue=$issue_state"
+        else
+          CLASS=BLOCKED ACTION=WAIT
+          CAUSE="GitHub issue observation unavailable; check repository permissions and authentication"
+          OBSERVATION="$STEP issue=unavailable"
+        fi
       fi
+      calls=$(wc -l <"$TMP/calls" | tr -d ' ')
+      latency=$(( $(python3 -c 'import time; print(time.time_ns() // 1000000)') - BOUND_STARTED_MS ))
+      deadline=0
+      [[ -f "$TMP/deadline" ]] && deadline=1
+      printf 'reconcile-metric %s\n' "$(jq -nc --arg run "$RUN" --arg class "$CLASS" --arg action "$ACTION" \
+        --argjson calls "$calls" --argjson skippedRepoLookup "$skipped_repo" --argjson latencyMs "$latency" \
+        --argjson deadline "$deadline" --argjson callTimeoutSeconds "$CALL_TIMEOUT" --argjson observeTimeoutSeconds "$BOUND_BUDGET" \
+        '{phase:"observe",run:$run,class:$class,action:$action,calls:$calls,skippedRepoLookup:($skippedRepoLookup==1),latencyMs:$latencyMs,deadline:($deadline==1),callTimeoutSeconds:$callTimeoutSeconds,observeTimeoutSeconds:$observeTimeoutSeconds}')" >&2
       jq -n --arg repo "$REPO" --arg run "$RUN" --arg pr "$PR" --arg worktree "$WORKTREE" \
         --arg step "$STEP" --argjson iteration "$ITERATION" --arg sha "$SHA" --arg class "$CLASS" \
         --arg action "$ACTION" --arg check "$CHECK" --arg log "${LOG:0:3000}" --arg cause "$CAUSE" --arg retry_run "$RETRY_RUN" --argjson findings "$FINDINGS" \
@@ -270,42 +436,134 @@ steps:
       STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")
       file="$STATE/ci-observation.json"
       action=$(jq -r .action "$file")
-      [[ "$action" != NONE && "$action" != WAIT ]] || exit 0
+      if [[ "$action" == NONE || "$action" == WAIT ]]; then
+        printf 'reconcile-metric %s\n' "$(jq -nc --arg action "$action" --arg run "$RUN" '{phase:"transition",run:$run,action:$action,applied:false,cause:"no-side-effect",calls:0,latencyMs:0}')" >&2
+        exit 0
+      fi
+      repo=$(jq -r .repo "$file")
+      pr=$(jq -r .pr "$file")
+      common=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-common-dir)
+      mkdir -p "$STATE" "$common/dagu-feature/transition-locks"
+      locks="$STATE/transition.lock"
+      if [[ -n "$pr" && "$pr" != null ]]; then
+        key=$(printf '%s\n%s\n' "$repo" "$pr" | python3 -c 'import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())')
+        locks="$locks"$'\n'"$common/dagu-feature/transition-locks/$key.lock"
+      fi
+      export RECONCILE_LOCKS="$locks"
+      export RECONCILE_TRANSITION_STARTED_MS=$(python3 -c 'import time; print(time.time_ns() // 1000000)')
+      # Hold the run lock and, for a PR mutation, the shared PR lock across the
+      # immediate state/iteration/SHA guard and the single side effect.
+      exec python3 -c 'import fcntl, os, sys
+      paths = sorted({p for p in os.environ.get("RECONCILE_LOCKS", "").split("\n") if p})
+      for path in paths:
+          os.makedirs(os.path.dirname(path), exist_ok=True)
+          fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+          fcntl.flock(fd, fcntl.LOCK_EX)
+          os.set_inheritable(fd, True)
+      os.execvp(sys.argv[1], sys.argv[1:])' bash -euo pipefail -c "$(cat <<'TRANSITION_BODY'
+      set -euo pipefail
+      CALL_TIMEOUT=${RECONCILE_CALL_TIMEOUT_SECONDS:-8}
+      BOUND_BUDGET=${RECONCILE_TRANSITION_TIMEOUT_SECONDS:-20}
+      BOUND_STARTED_MS=$RECONCILE_TRANSITION_STARTED_MS
+      STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")
+      file="$STATE/ci-observation.json"
+      action=$(jq -r .action "$file")
       repo=$(jq -r .repo "$file")
       pr=$(jq -r .pr "$file")
       sha=$(jq -r .sha "$file")
       iteration=$(jq -r .iteration "$file")
       step=$(jq -r .step "$file")
+      TMP=$(mktemp -d)
+      emitted=0
+      : >"$TMP/calls"
+      cleanup() {
+        local status=$?
+        if [[ "$emitted" -eq 0 ]]; then
+          printf 'reconcile-metric %s\n' "$(jq -nc --arg action "$action" --arg run "$RUN" --argjson status "$status" '{phase:"transition",run:$run,action:$action,applied:false,cause:("exit-"+($status|tostring)),calls:0,latencyMs:0}')" >&2
+        fi
+        rm -rf "$TMP"
+        exit "$status"
+      }
+      trap cleanup EXIT
+      finish() {
+        local applied=$1 cause=$2 latency calls
+        emitted=1
+        latency=$(( $(python3 -c 'import time; print(time.time_ns() // 1000000)') - RECONCILE_TRANSITION_STARTED_MS ))
+        calls=$(wc -l <"$TMP/calls" | tr -d ' ')
+        printf 'reconcile-metric %s\n' "$(jq -nc --arg action "$action" --arg run "$RUN" --arg cause "$cause" --argjson applied "$applied" --argjson calls "$calls" --argjson latencyMs "$latency" '{phase:"transition",run:$run,action:$action,applied:($applied==1),cause:$cause,calls:$calls,latencyMs:$latencyMs}')" >&2
+      }
+      bounded() {
+        printf '1\n' >>"$TMP/calls"
+        local seconds rc=0
+        seconds=$(python3 -c 'import time,sys; left=float(sys.argv[1])-(time.time_ns()//1000000-int(sys.argv[2]))/1000.0; cap=float(sys.argv[3]); print("%.3f"%max(0.0,min(cap,left)))' "$BOUND_BUDGET" "$BOUND_STARTED_MS" "$CALL_TIMEOUT")
+        if ! python3 -c 'import sys; raise SystemExit(0 if float(sys.argv[1])>0 else 1)' "$seconds"; then
+          echo "transition deadline exhausted before call" >&2
+          return 124
+        fi
+        python3 - "$seconds" "$@" <<'PY' || rc=$?
+      import subprocess, sys
+      seconds = float(sys.argv[1])
+      try:
+          completed = subprocess.run(sys.argv[2:], timeout=seconds)
+      except subprocess.TimeoutExpired:
+          sys.stderr.write("transition deadline exceeded\n")
+          raise SystemExit(124)
+      raise SystemExit(completed.returncode)
+      PY
+        return "$rc"
+      }
+      if [[ "$action" == NONE || "$action" == WAIT ]]; then
+        finish 0 no-side-effect
+        exit 0
+      fi
       guard() {
-        local status current
-        status=$(dagu status feature --run-id "$RUN")
-        [[ "$status" == Waiting* ]] || { echo "Run is resuming; reobserve next tick"; return 1; }
+        local status current head_now
+        if ! status=$(bounded dagu status feature --run-id "$RUN"); then
+          echo "Run status unavailable before the transition deadline" >&2
+          finish 0 status-unavailable
+          exit 1
+        fi
+        [[ "$status" == Waiting* ]] || { echo "Run is resuming; reobserve next tick"; finish 0 not-waiting; exit 1; }
         current=$(sed -nE 's/.*push-back iteration: ([0-9]+).*/\1/p' <<<"$status" | head -1)
-        [[ "${current:-0}" == "$iteration" ]] || { echo "Stale iteration $iteration; current ${current:-0}" >&2; return 1; }
-        [[ "$status" == *"$step [waiting]"* ]] || { echo "Checkpoint $step is not waiting" >&2; return 1; }
-        [[ "$(gh pr view "$pr" -R "$repo" --json headRefOid --jq .headRefOid)" == "$sha" ]] ||
-          { echo "STALE_SHA: head changed before transition" >&2; return 1; }
+        [[ "${current:-0}" == "$iteration" ]] || { echo "Stale iteration $iteration; current ${current:-0}" >&2; finish 0 stale-iteration; exit 1; }
+        [[ "$status" == *"$step [waiting]"* ]] || { echo "Checkpoint $step is not waiting" >&2; finish 0 checkpoint; exit 1; }
+        if ! head_now=$(bounded gh pr view "$pr" -R "$repo" --json headRefOid --jq .headRefOid); then
+          echo "STALE_SHA: head could not be rechecked" >&2
+          finish 0 head-unavailable
+          exit 1
+        fi
+        [[ "$head_now" == "$sha" ]] || { echo "STALE_SHA: head changed before transition" >&2; finish 0 stale-sha; exit 1; }
       }
       guard
+      cause=applied
       case "$action" in
         MERGE)
           worktree=$(jq -r .worktree "$file")
           merge_body=$(printf 'Closes #%s\n\n%s' "$ISSUE" "$(git -C "$worktree" log -1 --format=%b "$sha")")
-          gh pr merge "$pr" -R "$repo" --auto --squash --match-head-commit "$sha" --body "$merge_body"
+          bounded gh pr merge "$pr" -R "$repo" --auto --squash --match-head-commit "$sha" --body "$merge_body"
+          cause=merge
           ;;
         IMPLEMENT|REBASE)
           # A corrected head must wait for fresh analysis, not inherit auto-merge.
-          if [[ "$(gh pr view "$pr" -R "$repo" --json autoMergeRequest --jq '.autoMergeRequest != null')" == true ]]; then
-            gh pr merge "$pr" -R "$repo" --disable-auto
+          auto_on=""
+          if ! auto_on=$(bounded gh pr view "$pr" -R "$repo" --json autoMergeRequest --jq '.autoMergeRequest != null'); then
+            echo "auto-merge state unavailable before transition" >&2
+            finish 0 auto-merge-unavailable
+            exit 1
+          fi
+          if [[ "$auto_on" == true ]]; then
+            bounded gh pr merge "$pr" -R "$repo" --disable-auto
           fi
           # The diagnostic is durable before the new implement opening reaches OMP.
           if [[ "$action" == IMPLEMENT ]]; then cp "$file" "$STATE/ci-return.json"; fi
-          dagu human-task push-back feature --run-id "$RUN" --step "$step" --expected-iteration "$iteration"
+          bounded dagu human-task push-back feature --run-id "$RUN" --step "$step" --expected-iteration "$iteration"
+          cause=push-back
           ;;
         COMPLETE)
           # complete has no expected-iteration flag. Reobserve before each async
           # resume; authorize_ci independently checks the published SHA afterwards.
-          dagu human-task complete feature --run-id "$RUN" --step "$step"
+          bounded dagu human-task complete feature --run-id "$RUN" --step "$step"
+          cause=complete
           ;;
         RETRY)
           check=$(jq -r .check "$file")
@@ -319,21 +577,27 @@ steps:
           now=$(date +%s)
           if (( now < next_at )); then
             printf 'TRANSIENT backoff: attempt=%s next_at=%s now=%s\n' "$attempts" "$next_at" "$now"
+            cause=backoff
           elif (( attempts >= 2 )) || [[ -z "$retry_run" ]]; then
             jq '.class="BLOCKED" | .action="WAIT" | .cause += "; deterministic retry exhausted or no rerunnable Actions run; operator must restore infrastructure"' "$file" >"$file.tmp"
             mv "$file.tmp" "$file"
             cat "$file"
+            cause=exhausted
           else
             # Persist the budget before the external request, including a failed request.
             attempts=$((attempts + 1))
             next_at=$((now + 60 * (1 << (attempts - 1))))
             jq -n --arg sha "$sha" --arg check "$check" --argjson attempts "$attempts" --argjson next_at "$next_at" \
               '{sha:$sha,check:$check,attempts:$attempts,next_at:$next_at}' >"$retry"
-            gh run rerun "$retry_run" -R "$repo" --failed
+            bounded gh run rerun "$retry_run" -R "$repo" --failed
             printf 'TRANSIENT rerun=%s attempt=%s next_at=%s\n' "$retry_run" "$attempts" "$next_at"
+            cause=rerun
           fi
           ;;
       esac
+      if [[ "$cause" == backoff || "$cause" == exhausted ]]; then finish 0 "$cause"; else finish 1 "$cause"; fi
+      TRANSITION_BODY
+      )"
 
   - id: orphan
     depends: observe

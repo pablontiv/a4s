@@ -40,9 +40,9 @@ The seven skills are `issue-execution`, `repository-discovery`, `backlog-breakdo
 
 Reconciler behavior tests use the maintained `skills/issue-execution/reconcile.yaml`
 directly, with throwaway materialization for native validation. From this package,
-run `A4S_LIVE_DAGU=0 npx tsx --test test/reconcile-ci.test.ts` for isolated script
-scenarios, or `A4S_LIVE_DAGU=1 npx tsx --test test/reconcile-ci.test.ts` to include
-official-Dagu validation and checkpoint/queue scenarios in isolated temporary homes.
+run `A4S_LIVE_DAGU=0 npx tsx --test test/reconcile-ci.test.ts test/reconcile-performance.test.ts`
+for isolated script scenarios, or `A4S_LIVE_DAGU=1 npx tsx --test test/reconcile-ci.test.ts test/reconcile-performance.test.ts`
+to include official-Dagu validation, bounded-tick checks and checkpoint/queue scenarios in isolated temporary homes.
 Repository-adopted DAGs remain deployment artifacts managed by bootstrap adoption.
 
 The existing feature lifecycle publishes a gated candidate through
