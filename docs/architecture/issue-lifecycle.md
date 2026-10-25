@@ -77,7 +77,8 @@ evidence. `checkpoint_push` leases `refs/dagu/checkpoints/issue-N`; publication
 uses the tested SHA and branch lease. PR creation/reuse and guarded auto-merge
 bind that same head. The scheduled reconciler observes required CI and merge at
 the current head/approval iteration, preserves pending waits, returns code failure
-to implementation and BEHIND/DIRTY to rebase.
+to implementation and BEHIND/DIRTY to rebase. `await_ci` and `await_merge` stay
+on child runs. Other waiting checkpoints are observed in the root tick.
 
 The gate has a PRIMARY-wide advisory `fcntl` lock held across its Bash descendants.
 Python 3 with `fcntl` is a service prerequisite. Unrelated lifecycle steps can

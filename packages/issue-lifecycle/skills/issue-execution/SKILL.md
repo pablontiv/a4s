@@ -1524,20 +1524,38 @@ run whose original creation is outside the history CLI's implicit 30-day window.
 `limit=100` is only the page size. A repeated cursor fails the tick instead of
 emitting a partial selection. Duplicate run ids are counted and skipped. Missing
 `PRIMARY` values still come from that run's spec. The repository is resolved once
-per distinct `PRIMARY` and passed to each child as `REPO`. Issue-state reads stay
-one call per non-PR run.
+per distinct `PRIMARY` and passed forward as `REPO`.
 
-`tick` passes each selected run to the local `reconcile-run` sub-DAG with
-`parallel.max_concurrent: 4`. That fan-out is observation capacity for independent
-runs and is distinct from repository queue capacity. A precondition skips the
-fan-out when discovery found no waiting runs. One slow observation occupies a
-single slot; the other slots continue.
+`classify` reads each selected run's waiting step from `dagu status`. Runs at
+`await_ci` or `await_merge` stay on the child fan-out, because that observation
+can apply a protected transition. Every other waiting run is observed in the
+root tick. Issue state is read once per repository: `gh api` pages
+`repos/<repo>/issues?state=all` with `per_page=100` until a short page, and a
+repeated page fails that repository's issue read instead of using a partial list.
+One repository's failure leaves the other repositories' observations in place.
+A run whose status or issue state cannot be read is `BLOCKED` and does not
+hide the rest of the tick.
 
-External `gh`, `curl`, `dagu` and `dagu-codeql` calls in discover, observe and
+A non-PR observation whose transition action is a side effect is handed to
+`act`, which runs `reconcile-run` for that run only. Closed `triage` and
+`implement` issues are reported from the root observation,
+`ORPHAN <repo>#<issue> <run> <step> issue=CLOSED closed_at=<timestamp>`, and
+the run is left unchanged. Open non-PR checkpoints stay in the root: the tick
+writes the same observation, escalation counter and no-side-effect transition
+record the child used to write, without a sub-run.
+
+`tick` passes the protected-checkpoint runs to the local `reconcile-run`
+sub-DAG with `parallel.max_concurrent: 4`. `act` uses the same limit for the
+rare non-PR side-effect run. That fan-out is observation capacity for
+independent runs and is distinct from repository queue capacity. A precondition
+skips each fan-out when its list is empty. One slow child occupies a single
+slot; the other slots continue.
+
+External `gh`, `curl`, `dagu` and `dagu-codeql` calls in discover, classify, observe and
 transition use `RECONCILE_CALL_TIMEOUT_SECONDS` (default 8). Discover stops at
 `RECONCILE_DISCOVER_TIMEOUT_SECONDS` (default 20) and refuses a partial list.
-One observation stops at `RECONCILE_OBSERVE_TIMEOUT_SECONDS` (default 20),
-records `BLOCKED`, and does not retry that call. Transition calls stop at
+One child observation, and each root status call or repository issue batch, stops at
+`RECONCILE_OBSERVE_TIMEOUT_SECONDS` (default 20), records `BLOCKED`, and does not retry that call. Transition calls stop at
 `RECONCILE_TRANSITION_TIMEOUT_SECONDS` (default 20).
 
 Conflicting transitions — the same run, or the same repository and PR — take
@@ -1545,14 +1563,15 @@ sorted exclusive locks for the immediate Waiting, push-back iteration and head
 SHA checks and for the single side effect. A second decision waits, sees the
 updated state, and does not apply again. Independent runs keep separate locks.
 
-Discover, observe and transition each write one `reconcile-metric` JSON object
-to stderr with counts, skips and latency. The 30-minute under-load station proof
+Discover, classify, observe and transition write `reconcile-metric` JSON
+objects to stderr with counts, skips and latency. The 30-minute under-load station proof
 for this one-minute schedule remains an operator acceptance run.
 
-`observe` reads the waiting step and push-back iteration from `dagu status`,
-uses the `REPO` resolved for that `PRIMARY` (or resolves it when the child is
-invoked directly), and reads the PR with `gh pr view` (or the issue for other
-waiting steps). It publishes the observation as step outputs.
+`observe`, on a `reconcile-run` child, reads the waiting step and push-back
+iteration from `dagu status`, uses the `REPO` resolved for that `PRIMARY` (or
+resolves it when the child is invoked directly), and reads the PR with
+`gh pr view`. It publishes the observation as step outputs. Non-PR issue state
+is recorded by `classify` before any child starts.
 
 The scheduled DAG owns the paired root checkpoints `await_ci` (rewind to
 `implement`) and `await_merge` (rewind to `rebase`). Both open after `auto_merge`
@@ -1649,7 +1668,7 @@ The coordinator delegates the correction in the same worktree and single PR.
 `close_gate` then verifies the merged candidate, fast-forwards clean PRIMARY
 and removes the managed worktree and branches.
 
-The `orphan` step selects `triage` or `implement` observations whose issue is `CLOSED`. It reports `ORPHAN <repo>#<issue> <run> <step> issue=CLOSED closed_at=<timestamp>` and leaves the run unchanged. Inspect the scheduled `reconcile` history and its sub-run logs for classifications, transitions, diagnosed waits and orphan reports.
+Closed `triage` or `implement` issues are reported by the root `classify` step as `ORPHAN <repo>#<issue> <run> <step> issue=CLOSED closed_at=<timestamp>`. The run is left unchanged. A `reconcile-run` child still has an `orphan` step for an observation that matches that same pattern. Inspect the scheduled `reconcile` history for root classifications and orphan reports, and its sub-run logs for protected-checkpoint transitions and diagnosed waits.
 
 ## Cancel a waiting checkpoint
 
