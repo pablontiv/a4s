@@ -188,6 +188,7 @@ for (const origin of ["backlog", "feature-triage"] as const) {
       writeFileSync(fixture.pages, JSON.stringify([comments]));
       fixture.save("verdict", "PASS\n");
       fixture.save("scope", "OK\n");
+      writeFileSync(join(fixture.state, "full.patch"), "published candidate\n");
       const promoted = fixture.run("dispose", { PROMOTE: "yes" });
       assert.equal(promoted.status, 0, promoted.stderr);
       const enqueues = readFileSync(fixture.enqueues, "utf8").trim().split("\n").map(line => JSON.parse(line));
@@ -197,6 +198,8 @@ for (const origin of ["backlog", "feature-triage"] as const) {
         "ISSUE=41", "BASE_BRANCH=main", "OMP_SESSION_ID=same-session",
         "POC_BASIS=https://example.test/comments/9",
       ]]);
+      const digest = execFileSync("shasum", ["-a", "256", join(fixture.state, "full.patch")], { encoding: "utf8" }).slice(0, 64);
+      assert.equal(readFileSync(join(fixture.state, "full.patch.sha256"), "utf8").trim(), digest);
     } finally {
       fixture.cleanup();
     }
@@ -313,6 +316,9 @@ function cleanupFixture() {
       const result = fixture.run("publish", { WORKTREE: worktree });
       assert.equal(result.status, 0, result.stderr);
       assert.ok(readFileSync(join(fixture.state, "comment.url"), "utf8").trim());
+      const patchPath = join(fixture.state, "full.patch");
+      const digest = execFileSync("shasum", ["-a", "256", patchPath], { encoding: "utf8" }).slice(0, 64);
+      assert.equal(readFileSync(`${patchPath}.sha256`, "utf8").trim(), digest);
     },
     exit() {
       return spawnSync("bash", ["-c", pocExitScript()], {
@@ -418,6 +424,25 @@ for (const evidence of ["mutated tracked", "mutated untracked", "new untracked",
     }
   });
 }
+
+test("PoC without promotion disposes a clean base-only worktree and branch", () => {
+  const fixture = cleanupFixture();
+  try {
+    fixture.save("verdict", "PASS\n");
+    assert.equal(execFileSync("git", ["-C", fixture.worktree, "status", "--porcelain", "--untracked-files=all"], { encoding: "utf8" }), "");
+    const disposed = fixture.run("dispose", { PROMOTE: "no" });
+    assert.equal(disposed.status, 0, disposed.stderr);
+    assert.equal(readFileSync(fixture.enqueues, "utf8"), "");
+    const result = fixture.exit();
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(existsSync(fixture.worktree), false);
+    assert.equal(fixture.branchExists(), false);
+    const repeated = fixture.exit();
+    assert.equal(repeated.status, 0, repeated.stderr);
+  } finally {
+    fixture.cleanup();
+  }
+});
 
 test("PoC clean cleanup requires no publication and is idempotent", () => {
   const fixture = cleanupFixture();

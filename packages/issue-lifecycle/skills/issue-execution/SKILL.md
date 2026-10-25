@@ -1080,7 +1080,8 @@ decide: first-line verdict/scope/run/attempt/base marker, result, diffstat, full
 binary patch including new files and artifact references in Ruta ejercitada.
 Oversized evidence uses linked base64 chunks preserving the entire result,
 diffstat and patch, with a marker-bearing preview bounded to 48,000 characters.
-PASS copies Después del PASS into the issue body.
+PASS copies Después del PASS into the issue body. Publication records
+`full.patch.sha256`, the SHA-256 of the `full.patch` bytes, including an empty patch.
 
 PASS with promote=yes reads all paginated comments and requires the latest valid
 first-line marker to be PASS/scope:OK with a normalized question matching the
@@ -1092,7 +1093,29 @@ the PoC run and promoted `feature-<RUN>` run retain the original run's
 `OMP_SESSION_ID`, so the same coordinating OMP session receives the promoted run's
 notices. Its triage role job reads that PASS URL as review input and produces the
 durable REVIEW receipt for POC=no.
-PASS with promote=no ends. FAIL closes only an issue created by record as
+
+`start_gate` of that `feature-<RUN>` run carries the PoC candidate before
+`implement`. It reads `<git-dir>/poc/runs/<RUN>/full.patch` and requires
+`comment.url` and `promotion.url` to equal `POC_BASIS`, plus `full.patch.sha256`
+to match those patch bytes. The recorded PoC `BASE_SHA` must still be an ancestor
+of `origin/$BASE_BRANCH`. A new feature branch starts at that SHA. The step
+applies `full.patch` — an empty patch is valid — and accepts the worktree only
+when a patch regenerated the same way hashes to the recorded digest. It writes
+`<git-dir>/dagu-feature/runs/feature-<RUN>/poc-basis.json` (`schemaVersion` 1,
+`pocRun`, `url`, `digest`, `base`, `applied`) and prints
+`poc_basis=applied digest=<sha256>`. Running `start_gate` again keeps a worktree
+that still matches. `capture` prints
+`poc_basis=applied digest=<sha256> feature_delta=empty` when the worktree still
+matches that digest, including when the PoC patch and any further feature edit
+are both empty, and stores the same fact on `candidate.json` as `pocBasis`.
+Any other edit records `feature_delta=changed`. The later rebase carries the
+candidate onto the current origin base. The implement assignment reads
+`poc-basis.json` and preserves the applied changes. Exit cleanup still removes
+the PoC worktree and local branch after publication; the patch kept in git
+metadata is what the feature run applies.
+
+PASS with promote=no does not enqueue a feature run and does not carry a
+candidate. FAIL closes only an issue created by record as
 `not planned`; preexisting issues stay open. For INCONCLUSIVE, the operator
 chooses iteration or completion with promote=no.
 
@@ -1105,12 +1128,14 @@ published `full.patch` and the publication marker `comment.url` is nonempty.
 Missing or stale publication evidence retains both the dirty worktree and its
 local branch and emits `cleanup retained: worktree <path> has unpublished changes; evidence <state-dir>`
 for recovery (#398). Successful worktree removal permits local branch deletion;
-repeated cleanup converges.
+repeated cleanup converges. `promote=no` leaves this disposal unchanged: a clean
+base-only worktree and its local branch are removed.
 
 Missing results produce an orchestration-failure report, not a capacity verdict.
 Issue disposition and published evidence record the experiment's outcome; they
-do not implement or merge the feature. Implementation belongs to the fresh
-feature continuation after PASS. Keep the issue/comment URLs as durable evidence.
+do not implement or merge the feature. Implementation belongs to the promoted
+feature continuation after PASS, whose worktree already contains the verified
+PoC candidate. Keep the issue/comment URLs as durable evidence.
 The queue slot is released at human tasks, so several experiments can wait
 concurrently.
 
@@ -1118,8 +1143,9 @@ concurrently.
 ## Implement
 
 After `start_gate`, Dagu runs `dagu-role-jobs stage implement` using the
-registered `task` definition and its current role/model configuration. Its
-assignment includes `FEATURE_IMPLEMENT RUN=<run>`, the complete issue acceptance
+registered `task` definition and its current role/model configuration. A promoted
+run already has the verified PoC candidate in that worktree; see Feasibility PoC.
+Its assignment includes `FEATURE_IMPLEMENT RUN=<run>`, the complete issue acceptance
 and assigned worktree. A retained nonempty `conflict-files` selects the
 `conflict-resolution` obligation, with the same registered implementer.
 The executor returns structured `summary` and conventional `message`; Dagu emits

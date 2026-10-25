@@ -120,6 +120,39 @@ function recordCandidate(repo: Repository): void {
   writeFileSync(join(repo.state, "codeql-observation.json"), JSON.stringify({ sha, class: "PASS" }));
 }
 
+function writePocBasis(repo: Repository, pocRun: string, mutate: (worktree: string) => void): { base: string; digest: string; patch: string } {
+  const base = git(repo.primary, "rev-parse", "HEAD");
+  const worktree = join(repo.primary, ".workspace", "worktrees", `poc-${pocRun}`);
+  git(repo.primary, "worktree", "add", "-b", `poc/${pocRun}`, worktree, base);
+  mutate(worktree);
+  const state = git(repo.primary, "rev-parse", "--path-format=absolute", "--git-path", `poc/runs/${pocRun}`);
+  mkdirSync(state, { recursive: true });
+  const patch = join(state, "full.patch");
+  execFileSync("bash", ["-c", `
+    set -euo pipefail
+    git -C "$WORKTREE" diff --binary "$BASE" > "$PATCH"
+    while IFS= read -r -d '' path; do
+      (cd "$WORKTREE"; git diff --no-index --binary -- /dev/null "$path") >> "$PATCH" || test "$?" -eq 1
+    done < <(git -C "$WORKTREE" ls-files --others --exclude-standard -z)
+    shasum -a 256 "$PATCH" | awk '{print $1}' > "$PATCH.sha256"
+  `], { env: { ...process.env, WORKTREE: worktree, BASE: base, PATCH: patch } });
+  const digest = readFileSync(`${patch}.sha256`, "utf8").trim();
+  writeFileSync(join(state, "comment.url"), "https://example.test/comments/9\n");
+  writeFileSync(join(state, "promotion.url"), "https://example.test/comments/9\n");
+  writeFileSync(join(state, "base.sha"), `${base}\n`);
+  git(repo.primary, "worktree", "remove", "--force", worktree);
+  git(repo.primary, "branch", "-D", `poc/${pocRun}`);
+  return { base, digest, patch };
+}
+
+function resetFeatureWorktree(repo: Repository): void {
+  if (existsSync(repo.worktree)) git(repo.primary, "worktree", "remove", "--force", repo.worktree);
+  if (hasRef(repo.primary, `refs/heads/${repo.branch}`)) git(repo.primary, "branch", "-D", repo.branch);
+  rmSync(join(repo.state, "base"), { force: true });
+  rmSync(join(repo.state, "candidate.json"), { force: true });
+  rmSync(join(repo.state, "initial-head"), { force: true });
+}
+
 function commit(repo: Repository, path: string, content: string): void {
   const target = join(repo.worktree, path);
   mkdirSync(dirname(target), { recursive: true });
@@ -758,12 +791,185 @@ for (const [name, definition] of definitions) {
         assert.ok(existsSync(repo.worktree));
         assert.equal(git(repo.worktree, "branch", "--show-current"), repo.branch);
         assert.ok(result.stdout.includes("worktree="));
+        assert.equal(existsSync(join(repo.state, "poc-basis.json")), false);
       }
     } finally {
       rmSync(repo.root, { recursive: true, force: true });
     }
   });
 
+  test(`${name} start_gate carries a promoted PoC candidate and capture records an empty feature delta`, () => {
+    const repo = repository("feature-carry");
+    try {
+      const basis = writePocBasis(repo, "carry", worktree => {
+        writeFileSync(join(worktree, "README.txt"), "poc candidate\n");
+        mkdirSync(join(worktree, "notes"), { recursive: true });
+        writeFileSync(join(worktree, "notes", "generated file.txt"), "artifact\n");
+        writeFileSync(join(worktree, "blob.bin"), Buffer.from([0, 1, 2, 255]));
+      });
+      writeFileSync(join(repo.primary, "upstream.txt"), "moved\n");
+      git(repo.primary, "add", "upstream.txt");
+      git(repo.primary, "commit", "-m", "move origin");
+      git(repo.primary, "push", "origin", "main");
+      resetFeatureWorktree(repo);
+      const script = extractScript(definition, "  - id: start_gate");
+      const env = { POC_BASIS: "https://example.test/comments/9", DAGU_FEATURE_BUNDLE: "test" };
+      const output = runScript(script, repo, env);
+      assert.equal(git(repo.worktree, "rev-parse", "HEAD"), basis.base);
+      assert.notEqual(basis.base, git(repo.primary, "rev-parse", "origin/main"));
+      assert.equal(readFileSync(join(repo.worktree, "README.txt"), "utf8"), "poc candidate\n");
+      assert.equal(readFileSync(join(repo.worktree, "notes", "generated file.txt"), "utf8"), "artifact\n");
+      assert.deepEqual(readFileSync(join(repo.worktree, "blob.bin")), Buffer.from([0, 1, 2, 255]));
+      const recorded = JSON.parse(readFileSync(join(repo.state, "poc-basis.json"), "utf8")) as { digest: string; applied: boolean; pocRun: string; base: string };
+      assert.equal(recorded.digest, basis.digest);
+      assert.equal(recorded.applied, true);
+      assert.equal(recorded.pocRun, "carry");
+      assert.equal(recorded.base, basis.base);
+      assert.match(output, new RegExp(`poc_basis=applied digest=${basis.digest}`));
+      const again = runScript(script, repo, env);
+      assert.match(again, new RegExp(`poc_basis=applied digest=${basis.digest}`));
+      assert.equal(readFileSync(join(repo.worktree, "README.txt"), "utf8"), "poc candidate\n");
+      const assignment = roleAssignment({
+        repo: repo.primary, worktree: repo.worktree, lane: "feature", dag: "feature", run: "feature-carry",
+        stage: "implement", role: "implement", sha: basis.base, iteration: 0, attempt: "0:test",
+      }, "189", "Acceptance", repo.state);
+      assert.match(assignment, /promoted PoC candidate is already applied/);
+      assert.match(assignment, /poc-basis\.json/);
+      const capture = extractScript(definition, "  - id: capture");
+      const captured = runScript(capture, repo);
+      assert.match(captured, new RegExp(`poc_basis=applied digest=${basis.digest} feature_delta=empty`));
+      const candidate = JSON.parse(readFileSync(join(repo.state, "candidate.json"), "utf8")) as { pocBasis: { digest: string; featureDelta: string } };
+      assert.equal(candidate.pocBasis.digest, basis.digest);
+      assert.equal(candidate.pocBasis.featureDelta, "empty");
+      assert.equal(git(repo.worktree, "show", "HEAD:README.txt"), "poc candidate");
+      assert.equal(git(repo.worktree, "show", "HEAD:notes/generated file.txt"), "artifact");
+      writeFileSync(join(repo.worktree, "more.txt"), "more\n");
+      const extended = runScript(capture, repo);
+      assert.match(extended, new RegExp(`poc_basis=applied digest=${basis.digest} feature_delta=changed`));
+      assert.equal(git(repo.worktree, "show", "HEAD:README.txt"), "poc candidate");
+      assert.equal(git(repo.worktree, "show", "HEAD:more.txt"), "more");
+      assert.deepEqual(execFileSync("git", ["-C", repo.worktree, "show", "HEAD:blob.bin"]), Buffer.from([0, 1, 2, 255]));
+      runScript(extractScript(definition, "  - id: rebase"), repo);
+      assert.equal(git(repo.worktree, "rev-parse", "HEAD^"), git(repo.primary, "rev-parse", "origin/main"));
+      assert.equal(git(repo.worktree, "show", "HEAD:README.txt"), "poc candidate");
+      assert.equal(git(repo.worktree, "show", "HEAD:upstream.txt"), "moved");
+      assert.equal(git(repo.worktree, "show", "HEAD:more.txt"), "more");
+    } finally {
+      rmSync(repo.root, { recursive: true, force: true });
+    }
+  });
+
+  test(`${name} capture shows an empty PoC basis when the feature diff is empty`, () => {
+    const repo = repository("feature-empty");
+    try {
+      const basis = writePocBasis(repo, "empty", () => {});
+      assert.equal(readFileSync(basis.patch, "utf8"), "");
+      resetFeatureWorktree(repo);
+      const output = runScript(extractScript(definition, "  - id: start_gate"), repo, {
+        POC_BASIS: "https://example.test/comments/9", DAGU_FEATURE_BUNDLE: "test",
+      });
+      assert.match(output, new RegExp(`poc_basis=applied digest=${basis.digest}`));
+      assert.equal(git(repo.worktree, "status", "--porcelain", "--untracked-files=all"), "");
+      assert.equal(git(repo.worktree, "rev-parse", "HEAD"), basis.base);
+      const captured = runScript(extractScript(definition, "  - id: capture"), repo);
+      assert.match(captured, new RegExp(`poc_basis=applied digest=${basis.digest} feature_delta=empty`));
+      assert.equal(readFileSync(join(repo.state, "diff.patch"), "utf8"), "");
+      const candidate = JSON.parse(readFileSync(join(repo.state, "candidate.json"), "utf8")) as { pocBasis: { applied: boolean; featureDelta: string; digest: string } };
+      assert.equal(candidate.pocBasis.applied, true);
+      assert.equal(candidate.pocBasis.featureDelta, "empty");
+      assert.equal(candidate.pocBasis.digest, basis.digest);
+      assert.equal(JSON.parse(readFileSync(join(repo.state, "poc-basis.json"), "utf8")).featureDelta, "empty");
+    } finally {
+      rmSync(repo.root, { recursive: true, force: true });
+    }
+  });
+
+  test(`${name} start_gate rejects a promoted basis whose patch digest, ancestry, or apply target does not match`, () => {
+    const mismatch = repository("feature-mismatch");
+    try {
+      const basis = writePocBasis(mismatch, "mismatch", worktree => writeFileSync(join(worktree, "README.txt"), "poc candidate\n"));
+      writeFileSync(basis.patch, `${readFileSync(basis.patch, "utf8")}\n`);
+      resetFeatureWorktree(mismatch);
+      const script = extractScript(definition, "  - id: start_gate");
+      const env = { POC_BASIS: "https://example.test/comments/9", DAGU_FEATURE_BUNDLE: "test" };
+      const rejected = spawnSync("bash", ["-c", script], { encoding: "utf8", env: { ...featureScriptEnv(mismatch), ...env } });
+      assert.notEqual(rejected.status, 0, rejected.stdout);
+      assert.match(rejected.stderr, /full.patch digest mismatch for mismatch/);
+      assert.equal(existsSync(mismatch.worktree), false);
+    } finally {
+      rmSync(mismatch.root, { recursive: true, force: true });
+    }
+
+    const diverged = repository("feature-diverged");
+    try {
+      git(diverged.primary, "checkout", "-b", "side");
+      writeFileSync(join(diverged.primary, "side.txt"), "side\n");
+      git(diverged.primary, "add", "side.txt");
+      git(diverged.primary, "commit", "-m", "side");
+      const side = git(diverged.primary, "rev-parse", "HEAD");
+      git(diverged.primary, "checkout", "main");
+      const state = git(diverged.primary, "rev-parse", "--path-format=absolute", "--git-path", "poc/runs/diverged");
+      mkdirSync(state, { recursive: true });
+      writeFileSync(join(state, "full.patch"), "");
+      writeFileSync(join(state, "full.patch.sha256"), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\n");
+      writeFileSync(join(state, "comment.url"), "https://example.test/comments/9\n");
+      writeFileSync(join(state, "promotion.url"), "https://example.test/comments/9\n");
+      writeFileSync(join(state, "base.sha"), `${side}\n`);
+      resetFeatureWorktree(diverged);
+      const rejected = spawnSync("bash", ["-c", extractScript(definition, "  - id: start_gate")], {
+        encoding: "utf8",
+        env: { ...featureScriptEnv(diverged), POC_BASIS: "https://example.test/comments/9", DAGU_FEATURE_BUNDLE: "test" },
+      });
+      assert.notEqual(rejected.status, 0, rejected.stdout);
+      assert.match(rejected.stderr, new RegExp(`PoC base ${side} is not an ancestor of origin/main`));
+      assert.equal(existsSync(diverged.worktree), false);
+    } finally {
+      rmSync(diverged.root, { recursive: true, force: true });
+    }
+
+    const preserved = repository("feature-preserved");
+    try {
+      const base = git(preserved.primary, "rev-parse", "HEAD");
+      const state = git(preserved.primary, "rev-parse", "--path-format=absolute", "--git-path", "poc/runs/preserved");
+      mkdirSync(state, { recursive: true });
+      const patch = [
+        "diff --git a/README.txt b/README.txt",
+        "index 1111111..2222222 100644",
+        "--- a/README.txt",
+        "+++ b/README.txt",
+        "@@ -1 +1 @@",
+        "-missing context",
+        "+poc candidate",
+        "",
+      ].join("\n");
+      writeFileSync(join(state, "full.patch"), patch);
+      writeFileSync(join(state, "full.patch.sha256"), `${createHash("sha256").update(patch).digest("hex")}\n`);
+      writeFileSync(join(state, "comment.url"), "https://example.test/comments/9\n");
+      writeFileSync(join(state, "promotion.url"), "https://example.test/comments/9\n");
+      writeFileSync(join(state, "base.sha"), `${base}\n`);
+      const rejected = spawnSync("bash", ["-c", extractScript(definition, "  - id: start_gate")], {
+        encoding: "utf8",
+        env: { ...featureScriptEnv(preserved), POC_BASIS: "https://example.test/comments/9", DAGU_FEATURE_BUNDLE: "test" },
+      });
+      assert.notEqual(rejected.status, 0, rejected.stdout);
+      assert.match(rejected.stderr, /published PoC patch does not apply/);
+      assert.equal(readFileSync(join(preserved.worktree, "README.txt"), "utf8"), "base\n");
+      assert.equal(git(preserved.worktree, "status", "--porcelain", "--untracked-files=all"), "");
+      assert.equal(existsSync(join(preserved.state, "poc-basis.json")), false);
+      writeFileSync(join(preserved.worktree, "README.txt"), "local edit\n");
+      const valid = writePocBasis(preserved, "preserved", worktree => writeFileSync(join(worktree, "README.txt"), "poc candidate\n"));
+      assert.equal(valid.base, base);
+      const dirty = spawnSync("bash", ["-c", extractScript(definition, "  - id: start_gate")], {
+        encoding: "utf8",
+        env: { ...featureScriptEnv(preserved), POC_BASIS: "https://example.test/comments/9", DAGU_FEATURE_BUNDLE: "test" },
+      });
+      assert.notEqual(dirty.status, 0, dirty.stdout);
+      assert.match(dirty.stderr, /worktree changes are not the published PoC basis; preserved/);
+      assert.equal(readFileSync(join(preserved.worktree, "README.txt"), "utf8"), "local edit\n");
+    } finally {
+      rmSync(preserved.root, { recursive: true, force: true });
+    }
+  });
 
   test(`${name} close_gate reports a PRIMARY outside BASE_BRANCH`, () => {
     const repo = repository();
