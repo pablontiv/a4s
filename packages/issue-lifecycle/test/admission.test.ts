@@ -4,7 +4,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "n
 import { join } from "node:path";
 import test from "node:test";
 import { admissionFixture } from "./fixtures/admission.ts";
-import { REQUIRED_DAGU_VERSION } from "../src/bundle.ts";
+import { lifecycleProtocolToken, REQUIRED_DAGU_VERSION } from "../src/bundle.ts";
 
 test("planning CLI admission seals provenance and enqueue submits the admitted snapshot", () => {
   const fixture = admissionFixture();
@@ -69,7 +69,7 @@ if (args.length === 1 && args[0] === "version") {
     assert.equal(enqueuedReceipt.runReceipt.observations[0].data.snapshot, snapshot);
 
     const rejectedRenders = [
-      { run: "planning-incompatible", contents: original.replaceAll("0.3.1", "0.2.0"), error: /planning.yaml observed=0\.2\.0/ },
+      { run: "planning-incompatible", contents: original.replace("triage=role-job/1", "triage=human-task/1"), error: /planning.yaml missing protocol triage=human-task\/1; served by bundle 0\.3\.108/ },
       { run: "planning-foreign-owner", contents: original.replaceAll("example/fixture@", "foreign/repository@"), error: /planning.yaml origin=foreign\/repository expected=example\/fixture/ },
       { run: "planning-false-version", contents: original.replaceAll("0.3.1", "0.3.2"), error: /planning.yaml declared=0\.3\.2 source package=0\.3\.1/ },
       { run: "planning-ambiguous-owner", contents: `${original}\n  - dagu-feature-bundle=0.3.1\n`, error: /source\/label ambiguous/ },
@@ -87,4 +87,61 @@ if (args.length === 1 && args[0] === "version") {
   } finally {
     fixture.dispose();
   }
+});
+
+test("admission admits a minor-behind served protocol and rejects a retired one before enqueue", () => {
+  const fixture = admissionFixture();
+  try {
+    const feature = readFileSync(fixture.dag, "utf8");
+    assert.match(feature.split("\n", 1)[0] ?? "", new RegExp(` protocols=${lifecycleProtocolToken()}$`));
+    const bin = join(fixture.root, "bin");
+    const calls = join(fixture.root, "enqueue-calls.jsonl");
+    mkdirSync(bin);
+    const dagu = join(bin, "dagu");
+    writeFileSync(dagu, `#!${process.execPath}
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+if (args.length === 1 && args[0] === "version") {
+  console.log(${JSON.stringify(REQUIRED_DAGU_VERSION)});
+} else if (args[0] === "enqueue") {
+  fs.appendFileSync(process.env.ADMISSION_ENQUEUE_CALLS, JSON.stringify(args) + "\\n");
+  console.log("fixture dagu enqueue reached");
+} else {
+  console.error("Unexpected fixture Dagu command: " + JSON.stringify(args));
+  process.exitCode = 1;
+}
+`);
+    chmodSync(dagu, 0o755);
+    const env = { PATH: `${bin}:${process.env.PATH ?? ""}`, ADMISSION_ENQUEUE_CALLS: calls };
+    const manifestPath = join(fixture.packageDir, "package.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    writeFileSync(manifestPath, JSON.stringify({ ...manifest, version: "0.4.0" }));
+    const committed = spawnSync("git", ["-C", fixture.packageDir, "commit", "-qam", "package 0.4.0"], { encoding: "utf8" });
+    assert.equal(committed.status, 0, committed.stderr);
+    const admitted = fixture.command("admit", "minor-behind", env);
+    assert.equal(admitted.status, 0, admitted.stderr);
+    const receipt = JSON.parse(readFileSync(fixture.receipt("minor-behind"), "utf8"));
+    assert.equal(receipt.sourceVersion.version, "0.4.0");
+    assert.equal(receipt.initial.deployment.installedDAG.stamp.version, "0.3.1");
+    assert.equal(receipt.initial.deployment.installedDAG.stamp.protocols.triage, "role-job/1");
+    assert.equal(receipt.initial.deployment.relationships.compatibility, "served-lifecycle-protocol");
+    assert.equal(receipt.initial.deployment.relationships.protocols, lifecycleProtocolToken());
+
+    const strip = (path: string): void => writeFileSync(path, readFileSync(path, "utf8").replace(/ protocols=\S+/, ""));
+    strip(fixture.dag);
+    strip(join(fixture.home, "dags", "reconcile.yaml"));
+    const legacy = fixture.command("admit", "legacy-served", env);
+    assert.equal(legacy.status, 0, legacy.stderr);
+    assert.equal(JSON.parse(readFileSync(fixture.receipt("legacy-served"), "utf8")).initial.deployment.installedDAG.stamp.protocols.implement, "role-job/1");
+
+    writeFileSync(fixture.dag, readFileSync(fixture.dag, "utf8").replace(
+      "  - id: triage\n    depends: admit\n    run: |\n      set -euo pipefail\n      dagu-feature-bundle escalation route\n      dagu-role-jobs stage triage\n",
+      "  - id: triage\n    depends: admit\n    action: human.task\n    with:\n      prompt: triage\n",
+    ));
+    const rejected = fixture.command("enqueue", "retired-triage", env);
+    assert.notEqual(rejected.status, 0);
+    assert.match(rejected.stderr, /DAGU_ADMISSION_REJECTED.*feature.yaml missing protocol triage=human-task\/1; served by bundle 0\.3\.108/);
+    assert.equal(existsSync(fixture.receipt("retired-triage")), false);
+    assert.equal(existsSync(calls), false);
+  } finally { fixture.dispose(); }
 });

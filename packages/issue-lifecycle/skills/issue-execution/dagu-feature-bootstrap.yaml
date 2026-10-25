@@ -367,7 +367,9 @@ steps:
       mkdir -p "$(dirname "$STAGE")"
       source="$SOURCE_NWO@$SOURCE_SHA"
       identity="dagu-feature-bundle=$BUNDLE_VERSION source=$source bootstrap=$DAG_RUN_ID"
-      stamp="$BUNDLE_NAME@$BUNDLE_VERSION source=$source bootstrap=$DAG_RUN_ID dagu=$DAGU_VERSION"
+      protocols=$(node "$SKILL_DIR/../../bin/dagu-feature-bundle.ts" protocols)
+      test -n "$protocols"
+      stamp="$BUNDLE_NAME@$BUNDLE_VERSION source=$source bootstrap=$DAG_RUN_ID dagu=$DAGU_VERSION protocols=$protocols"
       render_common='
         gsub("__DAGU_FEATURE_STAMP__"; $stamp)
         | gsub("__DAGU_FEATURE_VERSION__"; $version)

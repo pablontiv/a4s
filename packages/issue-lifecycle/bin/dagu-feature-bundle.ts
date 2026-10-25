@@ -10,6 +10,7 @@ import { planningReviewer, type TranscriptRow } from "../src/transcript-identity
 import {
   BUNDLE_VERSION,
   classifyCompatibility,
+  lifecycleProtocolToken,
   parseBundleStamp,
   REQUIRED_DAGU_VERSION,
 } from "../src/bundle.ts";
@@ -88,6 +89,10 @@ function main(): void {
       console.error(error instanceof Error ? error.message : String(error));
       process.exitCode = 1;
     }
+    return;
+  }
+  if (command === "protocols") {
+    console.log(lifecycleProtocolToken());
     return;
   }
   if (command === "queue-default" || command === "queue-reconcile" || command === "queue-check") {

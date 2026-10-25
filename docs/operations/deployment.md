@@ -182,10 +182,10 @@ node "$SOURCE/packages/issue-lifecycle/bin/dagu-feature-bundle.ts" "$PRIMARY"
 ```
 
 The inspection reports name/version stamps and runtime compatibility. Admission
-adds verified source-render provenance, loaded-byte binding and an immutable
-snapshot; [architecture](../architecture/issue-lifecycle.md#compatibility-is-more-than-a-version-display)
-details the actual equalities. All newly admitted components should be pinned to
-the approved set; patch-compatible display alone is insufficient.
+adds served lifecycle-protocol checks, verified source-render provenance,
+loaded-byte binding and an immutable snapshot;
+[architecture](../architecture/issue-lifecycle.md#compatibility-is-more-than-a-version-display)
+details the actual equalities. Version-distance display alone is not admission.
 
 ## Station configuration and drained activation
 

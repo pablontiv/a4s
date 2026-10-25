@@ -29,8 +29,10 @@ commands. `confirm` emits `Dagu-Feature-Bundle`, `Dagu-Feature-Source` and
 ### Compatibility is more than a version display
 
 [`src/bundle.ts`](../../packages/issue-lifecycle/src/bundle.ts) parses only the
-manifest's exact package name in a first-line stamp. Its current compatibility
-classifier requires equal major **and minor**, allowing patch differences.
+manifest's exact package name in a first-line stamp. Status notices still
+classify version distance (equal major and minor, patch allowed). That display
+is not admission. Admission compares the stamp's `triage`, `implement` and
+`publication` protocol ids with the contracts the loaded extension serves.
 The inspection CLI reports those stamps and exact runtime output; it does not
 prove render provenance or successful enqueue.
 
@@ -38,9 +40,12 @@ prove render provenance or successful enqueue.
 checks a single matching label, source owner/repository, the declared version at
 the stamped source commit, and that the render matches that source template or
 the installed checkout's template. It checks both the requested DAG and installed
-reconciler. Installed package version equals the loaded version exactly; a supplied
-loaded-extension digest must match current source bytes; Dagu output equals the
-manifest pin exactly. Thus patch-compatible stamps alone are not admission proof.
+reconciler. A served protocol admits a render a minor or patch behind the loaded
+package. A protocol the extension does not serve fails before run creation and
+names that protocol plus the bundle version that serves it. Installed package
+version equals the loaded version exactly; a supplied loaded-extension digest
+must match current source bytes; Dagu output equals the manifest pin exactly.
+Protocol-compatible stamps alone are not admission proof.
 The feature/PoC first steps independently fetch/fast-forward clean PRIMARY and
 require its HEAD and manifest version to equal the selected remote base exactly.
 

@@ -4,7 +4,18 @@ import { mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync,
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { BUNDLE_VERSION, classifyCompatibility, parseBundleStamp, REQUIRED_DAGU_VERSION } from "./bundle.ts";
+import {
+  BUNDLE_NAME,
+  BUNDLE_VERSION,
+  formatProtocolRejection,
+  inferLifecycleProtocols,
+  lifecycleProtocolToken,
+  missingLifecycleProtocols,
+  parseBundleStamp,
+  REQUIRED_DAGU_VERSION,
+  type BundleStamp,
+  type LifecycleProtocols,
+} from "./bundle.ts";
 import type { RunDetails } from "./status/progress.ts";
 import { isRecord } from "./type-guard.ts";
 import { requirePocScope, scopeTargets } from "./poc-scope.ts";
@@ -75,11 +86,19 @@ export function receiptPath(cwd: string, run: string): string {
   if (!/^[\w-]+$/.test(run)) throw new Error(`run=${run} expected an explicit Dagu run ID containing letters, numbers, underscores or hyphens`);
   return join(git(cwd, "rev-parse", "--path-format=absolute", "--git-path", `dagu-feature/runs/${run}`), "receipt.json");
 }
+function servedProtocols(name: string, contents: string, stamp: BundleStamp): LifecycleProtocols {
+  const declared = stamp.protocols ?? inferLifecycleProtocols(name, contents);
+  const missing = missingLifecycleProtocols(declared);
+  if (missing.length) throw new Error(formatProtocolRejection(name, missing));
+  return declared as LifecycleProtocols;
+}
+
 function checkRender(path: string, name: string, sourceRoot: string, prefix: string) {
   const contents = readFileSync(path, "utf8");
   const stamp = parseBundleStamp(contents);
-  if (!stamp || classifyCompatibility(stamp.version) !== "ok") throw new Error(`${name} observed=${stamp?.version ?? "indeterminate"} expected compatible with package=${BUNDLE_VERSION} (same major; major 0: same minor)`);
+  if (!stamp) throw new Error(`${name} observed=indeterminate expected a ${BUNDLE_NAME} lifecycle stamp`);
   if (stamp.dagu !== REQUIRED_DAGU_VERSION) throw new Error(`${name} dagu=${stamp.dagu} expected=${REQUIRED_DAGU_VERSION}`);
+  const protocols = servedProtocols(name, contents, stamp);
   const source = /^(.+)@([a-f0-9]{40})$/.exec(stamp.source);
   const labels = [...contents.matchAll(/^\s+- dagu-feature-bundle=(\S+)\s*$/gm)];
   if (!source || labels.length !== 1 || labels[0]?.[1] !== stamp.version) throw new Error(`${name} source/label ambiguous observed=${stamp.source} labels=${labels.map(label => label[1])} expected one matching bundle label and owner/repo@sha40`);
@@ -91,7 +110,7 @@ function checkRender(path: string, name: string, sourceRoot: string, prefix: str
   // Versioned renders follow their templates in the same PR, so the installed checkout's template is also a valid source.
   for (const commit of [source[2], git(sourceRoot, "rev-parse", "HEAD")]) {
     const template = execFileSync("git", ["-C", sourceRoot, "show", `${commit}:${templatePath}`], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
-    if (isRender(contents, template)) return { ...identity(path, stamp.version, stamp.source), stamp, sourceTemplate: { path: templatePath, commit, digest: sha256(template) }, relationship: "verified-source-render", snapshot: contents };
+    if (isRender(contents, template)) return { ...identity(path, stamp.version, stamp.source), stamp: { ...stamp, protocols }, sourceTemplate: { path: templatePath, commit, digest: sha256(template) }, relationship: "verified-source-render", snapshot: contents };
   }
   throw new Error(`${name} digest=${sha256(contents)} expected a render of ${stamp.source}:${templatePath} or of the installed checkout`);
 }
@@ -168,7 +187,7 @@ export function admit(options: AdmissionOptions, persist = true): { path: string
         identity(join(packageRoot, "skills", "issue-execution", "escalation.py"), BUNDLE_VERSION, `${origin}@${commit}`),
         identity(join(packageRoot, "bin", "dagu-poc-scope.ts"), BUNDLE_VERSION, `${origin}@${commit}`),
       ],
-      relationships: { packageToExtension: "same-loaded-package", templateToPackage: "same-checkout", installedToSource: "verified-source-render", compatibility: "same-major; major-zero-same-minor" },
+      relationships: { packageToExtension: "same-loaded-package", templateToPackage: "same-checkout", installedToSource: "verified-source-render", compatibility: "served-lifecycle-protocol", protocols: lifecycleProtocolToken(installedDAG.stamp.protocols) },
     };
     const daguVersion = execFileSync("dagu", ["version"], { encoding: "utf8" }).trim();
     if (daguVersion !== REQUIRED_DAGU_VERSION) throw new Error(`Dagu observed=${daguVersion} expected=${REQUIRED_DAGU_VERSION}`);
