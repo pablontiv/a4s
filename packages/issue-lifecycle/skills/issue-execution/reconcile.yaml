@@ -5,6 +5,7 @@ labels:
 schedule: "* * * * *"
 catchup_window: ""
 overlap_policy: skip
+hist_retention_runs: 1440
 type: graph
 shell: bash
 steps:
