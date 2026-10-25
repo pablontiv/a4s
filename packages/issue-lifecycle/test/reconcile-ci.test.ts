@@ -101,6 +101,7 @@ function fixture(run = "ci226"): Fixture {
   symlinkSync(fileURLToPath(new URL("../bin/dagu-pr-body.mjs", import.meta.url)), join(bin, "dagu-pr-body"));
   symlinkSync(fileURLToPath(new URL("../bin/dagu-codeql.ts", import.meta.url)), join(bin, "dagu-codeql"));
   symlinkSync(fileURLToPath(new URL("../bin/dagu-gate.cjs", import.meta.url)), join(bin, "dagu-gate"));
+  symlinkSync(fileURLToPath(new URL("../bin/dagu-feature-protect.ts", import.meta.url)), join(bin, "dagu-feature-protect"));
   const control = join(root, "control.json");
   const calls = join(root, "calls.jsonl");
   writeFileSync(calls, "");
