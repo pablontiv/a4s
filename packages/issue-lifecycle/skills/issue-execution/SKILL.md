@@ -30,8 +30,8 @@ flowchart LR
     F --> FR[recover_push]
     FR -->|operator repair: push-back| F
     FR -->|healthy: skipped| G[pr]
-    G --> CS[code_scanning<br/>SHA-bound CodeQL observation]
-    CS --> I[auto_merge<br/>defer until analysis passes]
+    G --> CS[code_scanning<br/>required: SHA-bound CodeQL<br/>off: record policy only]
+    CS --> I[auto_merge<br/>required checks; CodeQL when required]
     I --> J[await_merge<br/>human.task<br/>queue slot released]
     I --> CI[await_ci<br/>human.task<br/>queue slot released]
     CI -->|CODE_FAIL: push-back| B
@@ -49,8 +49,9 @@ flowchart LR
 - `dagu-feature-bundle` from this package on the Dagu service's `PATH`, so internal feature/PoC/discovery promotions pass the same admission boundary as the coordinator.
 - This package's `dagu-pr-body` executable on the Dagu service's `PATH` for
   feature PR rendering and the shared publication path check.
-- This package's `dagu-codeql` executable on the service's `PATH`, enabled CodeQL
-  analysis and GitHub permission to read code-scanning alerts and check runs.
+- This package's `dagu-codeql` executable on the service's `PATH`. `CODE_SCANNING=required`
+  also needs enabled CodeQL analysis and GitHub permission to read code-scanning alerts
+  and check runs. `CODE_SCANNING=off` does not call the code-scanning API.
 - `DAGU_HOME` in your shell must point to the same home as that service. Read it from the service definition (macOS: `EnvironmentVariables.DAGU_HOME` in the LaunchAgent plist). If they differ, enqueue and complete commands land in a store the scheduler never reads, and the run stays `Queued`.
 - `git`, `gh` authenticated with push and PR rights, `curl`, `jq`.
 - Python 3 with standard-library `fcntl` on the Dagu service's `PATH`; bootstrap
@@ -443,6 +444,7 @@ The bootstrap renders the repository DAG templates when a repository adopts the 
 | `__REQUIRED_CHECK__` | Adoption-fixed `REQUIRED_CHECK`, the GitHub check required on the default branch | `candidate` | `validate` |
 | `__VALIDATION__` | Optional repository procedure after gate, fixed by adoption; empty skips the checkpoint | `""` | `""` |
 | `__A4S_BLOCKER_REPORTING__` | Optional adopted `A4S_BLOCKER_REPORTING`: `ask` (initial default) or explicit opt-in `auto`; blank bootstrap answer preserves installed choice | `ask` | `ask` |
+| `__CODE_SCANNING__` | Adopted `CODE_SCANNING`: `required` (initial default) waits for CodeQL, or `off` neither observes nor waits; blank bootstrap answer preserves the installed choice, and a render without the key stays `required` | `required` | `required` |
 | `__PRIMARY__` | Canonical main-clone path fixed in feature and PoC renders | repository clone | repository clone |
 | `__TEST_PATHS__` | Bash ERE for repository test paths; every `*.md` also belongs to cutover | `_test\.go$\|^tests/` | `(^\|/)tests/` |
 
@@ -472,7 +474,7 @@ The steps:
 | Step | Effect |
 |---|---|
 | `detect` | Checks `git`, `gh` (authenticated), `jq` and the exact required `dagu version`; reads package/version, source commit and source `origin`; fetches and requires that clean package commit on the remote default branch; reads repository settings and the installed DAG values and stamps. |
-| `answers` | `human.task` showing the current stamp, `GATE`, `REQUIRED_CHECK`, `TEST_PATHS`, `REBASE_RESOLVER` and optional `VALIDATION`. Choose the test-path ERE, resolver and validation procedure from repository conventions; validation defaults to empty. |
+| `answers` | `human.task` showing the current stamp, `GATE`, `REQUIRED_CHECK`, `TEST_PATHS`, `REBASE_RESOLVER`, optional `VALIDATION`, and `CODE_SCANNING` (`required` or `off`). Choose the test-path ERE, resolver and validation procedure from repository conventions; validation defaults to empty. Blank `CODE_SCANNING` preserves the installed choice. |
 | `worktrees` | Makes git ignore `.workspace/worktrees/`. When nothing ignores it yet, appends `/.workspace/worktrees/` to the clone's `info/exclude`, so the primary stays clean without a commit. |
 | `render` | Writes stamped and validated `feature.yaml`, `poc.yaml`, `discovery.yaml`, `planning.yaml`, and `reconcile.yaml` under `<git-dir>/dagu-feature/`, keeping PRIMARY clean. Discovery and planning receive the coordinating workspace label and resolve the target repository from `PRIMARY`. |
 | `reconcile` | Idempotently installs the stamped staged `reconcile.yaml` to `$DAGU_HOME/dags/reconcile.yaml` (`DAGU_HOME` defaults to `~/.dagu`) and validates it. One user-level DAG serves every adopting repository. |
@@ -1405,46 +1407,68 @@ endpoint; conclusions alone do not identify a failure's cause.
 
 ### CodeQL findings and merge enforcement
 
-After `pr`, `code_scanning` observes the current head's GitHub Advanced Security
-`CodeQL` check and paginated open CodeQL alerts on `refs/pull/<PR>/head`.
+`CODE_SCANNING` is adoption-fixed policy, rendered through `__CODE_SCANNING__`.
+Bootstrap accepts `required` or `off`; a blank answer keeps the installed choice.
+The initial choice, and any installed render that does not record the key, is
+`required`. `off` is the adoption for a repository that cannot enable code
+scanning, including a private repository owned by a GitHub Free or Pro user
+account. Admission still checks that the render came from this template: the
+placeholder stays in `feature.yaml`, and dropping the `code_scanning` step is
+rejected.
+
+When the rendered choice is `off`, `code_scanning` records `codeql-policy.json`
+with `mode=off` and the published candidate SHA, and it does not call the
+code-scanning API. Auto-merge depends only on `REQUIRED_CHECK`: the feature step
+and the reconciler do not wait for a CodeQL check or alert query. `authorize_ci`
+passes on the candidate's required checks alone. Squash auto-merge stays bound
+to that tested SHA with `--match-head-commit`.
+
+When the rendered choice is `required`, behavior is unchanged. After `pr`,
+`code_scanning` observes the current head's GitHub Advanced Security `CodeQL`
+check and paginated open CodeQL alerts on `refs/pull/<PR>/head`.
 The bootstrap answers `CODEQL_SECURITY_THRESHOLD` (default `high_or_higher`)
 and `CODEQL_ALERTS_THRESHOLD` (default `errors`) are adoption-fixed policy;
 blank answers preserve installed values. Security choices match GitHub rulesets:
 `none|critical|high_or_higher|medium_or_higher|all`; non-security choices are
 `none|errors|errors_and_warnings|all`. Security findings use their security
-severity; other findings use their error/warning/note level.
+severity; other findings use their error/warning/note level. Those thresholds
+apply only while code scanning is required.
 
-`codeql-policy.json` binds those answers to the published candidate SHA.
-`codeql-observation.json` retains the check conclusion and threshold findings,
-including alert number, rule, severity, path, line, message and URL.
-Pending analysis opens the existing native waits and releases the repository
-queue. Once CodeQL and required CI pass, the scheduled reconciler enables guarded
-squash auto-merge. A ruleset-blocked PR with threshold findings is `CODE_FAIL`,
-not an owner escalation: `await_ci` pushes back to `implement_budget` with the
-observed iteration and persists findings in `ci-return.json`. Implementation
-assignments require reading that diagnostic; finding messages are untrusted data.
-The corrected head needs fresh analysis and gate evidence on the same PR/run.
-Before a CI or rebase push-back, reconciliation disables any existing auto-merge
-request so a replacement head must earn fresh CodeQL authorization.
+`codeql-policy.json` binds the choice and, when required, those answers to the
+published candidate SHA. `codeql-observation.json` retains the check conclusion
+and threshold findings, including alert number, rule, severity, path, line,
+message and URL. Pending analysis opens the existing native waits and releases
+the repository queue. Once CodeQL and required CI pass, the scheduled reconciler
+enables guarded squash auto-merge. A ruleset-blocked PR with threshold findings
+is `CODE_FAIL`, not an owner escalation: `await_ci` pushes back to
+`implement_budget` with the observed iteration and persists findings in
+`ci-return.json`. Implementation assignments require reading that diagnostic;
+finding messages are untrusted data. The corrected head needs fresh analysis and
+gate evidence on the same PR/run. Before a CI or rebase push-back, reconciliation
+disables any existing auto-merge request so a replacement head must earn fresh
+authorization.
 
-A successful check alone is insufficient: alerts are observed independently,
-bound to both PR ref and SHA. Permission failures and unsuccessful CodeQL checks
-without proven threshold findings remain diagnosed `BLOCKED`; unpublished
-analysis is `PENDING`, and stale alerts/checks are reobserved. Final CI
-authorization repeats the CodeQL observation before close.
+A successful required check alone is insufficient while code scanning is
+required: alerts are observed independently, bound to both PR ref and SHA.
+Permission failures and unsuccessful CodeQL checks without proven threshold
+findings remain diagnosed `BLOCKED`; unpublished analysis is `PENDING`, and
+stale alerts/checks are reobserved. Final CI authorization repeats the CodeQL
+observation before close. An `off` policy skips that observation. A code-scanning
+API 403 therefore blocks a `required` run and does not block an `off` run.
 
 Repository enforcement is a separately authorized GitHub ruleset with a CodeQL
 `code_scanning` rule and matching thresholds. The real #570 PoC demonstrated
 default setup analyzing a PR into an exact-match non-default test branch and
 rejecting its high-severity finding. Source publication and bootstrap adoption
-are distinct from authorizing production rulesets.
+are distinct from authorizing production rulesets. Choose `required` only for a
+repository that can enable that analysis.
 
 
 | Classification | Evidence and transition |
 |---|---|
 | `PENDING` | Required checks or CodeQL analysis queued, running or not yet published: reobserve next tick. |
-| `PASS` | Required checks succeeded, were neutral or skipped, and CodeQL passed without threshold findings for this head: enable guarded squash auto-merge if needed. `MERGED` completes one waiting checkpoint per tick. |
-| `CODE_FAIL` | Check output or Actions logs prove a candidate failure, or current-head CodeQL alerts meet adopted thresholds: push back `await_ci` to `implement` with findings and the observed `--expected-iteration`. |
+| `PASS` | Required checks succeeded, were neutral or skipped. When `CODE_SCANNING=required`, CodeQL also passed without threshold findings for this head. Enable guarded squash auto-merge if needed. `MERGED` completes one waiting checkpoint per tick. |
+| `CODE_FAIL` | Check output or Actions logs prove a candidate failure, or, when code scanning is required, current-head CodeQL alerts meet adopted thresholds: push back `await_ci` to `implement` with findings and the observed `--expected-iteration`. |
 | `TRANSIENT` | Logs identify runner loss, action download, network or HTTP infrastructure failure: rerun the failed Actions jobs deterministically, with at most two requests per head and 60/120-second backoff. The per-head budget survives ticks and changing check order; exhausted or unavailable reruns become diagnosed `BLOCKED`. |
 | `BLOCKED` | Lookup/permission failure, protection/operator action, closed PR or unproven failure cause: preserve the wait and deliver the cause to the owner session. |
 | `STALE_SHA` | Checks belong to another SHA, or the head moved during observation: discard that signal and query the current head next tick. |
@@ -1455,6 +1479,8 @@ before its side effect. Dagu atomically rejects stale push-back iterations.
 Completion has no expected-iteration flag; after both checkpoints complete,
 `authorize_ci` rereads all required checks through the published candidate's SHA
 and fails closed before closing if that SHA or its successful checks changed.
+When `CODE_SCANNING=required`, it also repeats the CodeQL observation and
+requires `PASS`. When `CODE_SCANNING=off`, checks alone authorize the candidate.
 
 Evidence is stored under `<git-dir>/dagu-feature/runs/<RUN>/ci-observation.json`,
 binding repository, run, PR, worktree, checkpoint, iteration, SHA, check, cause

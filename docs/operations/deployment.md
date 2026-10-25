@@ -238,7 +238,10 @@ resources, ambiguous GitHub responses and unproved integration retain diagnostic
 Production ruleset `25743985` enforces CodeQL on the default branch (`main`)
 with security threshold `high_or_higher`, other-alert threshold `errors` and
 no bypass actors. These match the adopted `CODEQL_SECURITY_THRESHOLD` and
-`CODEQL_ALERTS_THRESHOLD` policy. Repository enforcement and controller adoption
+`CODEQL_ALERTS_THRESHOLD` policy. This repository's adopted `CODE_SCANNING`
+choice stays `required`. A consumer that cannot enable code scanning, including
+a private Free/Pro user repository, adopts `off` instead: that render does not
+observe or wait for CodeQL. Repository enforcement and controller adoption
 are separate operations requiring their respective authorization.
 
 After PR publication, `code_scanning` records `codeql-policy.json` and

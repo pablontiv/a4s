@@ -1,7 +1,7 @@
 import { liveDagu, liveDaguVersion } from "./fixtures/live-dagu.ts";
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,7 +11,10 @@ import { test } from "node:test";
 import { Transitions } from "../src/status/progress.ts";
 import type { RunDetails } from "../src/status/progress.ts";
 import { readCiDiagnostic, readEscalationDiagnostic } from "../src/status/repository.ts";
-import { BUNDLE_VERSION } from "../src/bundle.ts";
+import { BUNDLE_VERSION, REQUIRED_DAGU_VERSION } from "../src/bundle.ts";
+import { admissionFixture } from "./fixtures/admission.ts";
+import { bootstrapRender } from "./fixtures/bootstrap-render.ts";
+import { withResourceGuard } from "./resource-fixtures.ts";
 import { testRunId } from "./fixtures/run-id.ts";
 const feature = readFileSync(new URL("../skills/issue-execution/feature.yaml", import.meta.url), "utf8");
 const reconcile = readFileSync(new URL("../skills/issue-execution/reconcile.yaml", import.meta.url), "utf8");
@@ -117,9 +120,13 @@ else if(a[0]==='pr'&&a[1]==='view') {
  const fields=a[a.indexOf('--json')+1];
  if(fields==='number'&&!c.prExists) process.exit(1);
  if(a.includes('--jq')) emit(fields==='headRefOid'?head():fields==='number'?77:fields==='state'?c.prState:fields==='autoMergeRequest'?c.auto!==false:process.env.BRANCH);
- else emit({number:77,state:c.prState,mergeStateStatus:c.mergeState,autoMergeRequest:c.auto===false?null:{},headRefOid:head(),headRefName:process.env.BRANCH,statusCheckRollup:[]});
+ else emit({number:77,state:c.prState,mergeStateStatus:c.mergeState,autoMergeRequest:c.auto===false?null:{},headRefOid:head(),headRefName:process.env.BRANCH,statusCheckRollup:[],mergeCommit:c.mergeOid?{oid:c.mergeOid}:null});
 } else if(a[0]==='pr'&&a[1]==='checks') {
- emit(c.required??[{name:'validate',state:c.pending?'IN_PROGRESS':c.conclusion.toUpperCase(),link:'https://github.com/example/repo/actions/runs/123/job/456'}]);
+ const payload=c.required??[{name:'validate',state:c.pending?'IN_PROGRESS':c.conclusion.toUpperCase(),link:'https://github.com/example/repo/actions/runs/123/job/456'}];
+ if(a.includes('--jq')) {
+  const row=payload.find(x=>x.name===(process.env.REQUIRED_CHECK||'validate'));
+  emit(row?row.state:'MISSING');
+ } else emit(payload);
  if(c.pending) process.exit(8);
  if(c.conclusion!=='success') process.exit(1);
 } else if(a[0]==='api') {
@@ -127,7 +134,10 @@ else if(a[0]==='pr'&&a[1]==='view') {
  const endpoint=a.at(-1);
  if(endpoint.includes('/check-runs')) emit([{check_runs:[...(c.checks??[{id:456,name:'validate',head_sha:c.checksSha??head(),status:c.pending?'in_progress':'completed',conclusion:c.conclusion,details_url:'https://github.com/example/repo/actions/runs/123/job/456',output:{summary:c.summary??''}}]),{id:457,name:'CodeQL',app:{slug:'github-advanced-security'},head_sha:head(),status:c.codeqlPending?'in_progress':'completed',conclusion:c.codeqlConclusion??'success'}]}]);
  else if(endpoint.endsWith('/status')) emit({sha:head(),statuses:c.statuses??[]});
- else if(endpoint.includes('/code-scanning/alerts')) emit([c.alerts??[]]);
+ else if(endpoint.includes('/code-scanning/alerts')) {
+  if(c.codeScanningStatus===403) { console.error('HTTP 403: Code scanning is not enabled for this repository'); process.exit(1); }
+  emit([c.alerts??[]]);
+ }
  else process.exit(91);
 } else if(a[0]==='run'&&a[1]==='view') emit(c.log);
 else if(a[0]==='run'&&a[1]==='rerun') { c.reruns=(c.reruns??0)+1; save(); }
@@ -141,7 +151,8 @@ if(a[0]==='status') {
   for(const s of c.statusStep==='both'?['await_ci','await_merge']:[c.statusStep]) emit('├─'+s+' [waiting]');
   emit('│ └─push-back iteration: '+c.iteration);
  }
-} else if(a[0]==='human-task') {
+} else if(a[0]==='history') emit([]);
+else if(a[0]==='human-task') {
  const s=a[a.indexOf('--step')+1];
  if(a[1]==='push-back') {
   if(Number(a[a.indexOf('--expected-iteration')+1])!==c.iteration) { console.error('stale iteration'); process.exit(1); }
@@ -568,6 +579,118 @@ test("Dagu 2.20.1: paired root waits return to implement/rebase and release the 
   } finally {
     service.kill("SIGTERM");
     await new Promise<void>(resolve => service.exitCode !== null ? resolve() : service.once("exit", () => resolve()));
+    rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
+function ghCalls(f: Fixture) {
+  return readFileSync(f.calls, "utf8").trim().split("\n").filter(Boolean).map(line => JSON.parse(line) as { tool: string; args: string[] });
+}
+function scanningCalls(f: Fixture) {
+  return ghCalls(f).filter(call => call.args.some(arg => arg.includes("/code-scanning/alerts")));
+}
+
+test("required code scanning stays blocked when the code-scanning API returns 403", () => {
+  const f = fixture("code-scanning-required-403");
+  try {
+    f.env.CODE_SCANNING = "required";
+    update(f, { auto: false, codeScanningStatus: 403 });
+    const sha = publish(f, feature, "required candidate");
+    const observation = JSON.parse(readFileSync(join(f.state, "codeql-observation.json"), "utf8"));
+    assert.equal(observation.class, "BLOCKED");
+    assert.match(observation.cause, /403/);
+    assert.equal(execute(f, feature, "auto_merge").status, 0);
+    assert.equal(JSON.parse(readFileSync(f.control, "utf8")).auto, false);
+    const blocked = observe(f, reconcile);
+    assert.equal(blocked.class, "BLOCKED");
+    assert.equal(blocked.action, "WAIT");
+    assert.match(blocked.cause, /403/);
+    const rejected = execute(f, feature, "authorize_ci");
+    assert.notEqual(rejected.status, 0);
+    assert.ok(scanningCalls(f).length > 0);
+    assert.equal(JSON.parse(readFileSync(join(f.state, "codeql-policy.json"), "utf8")).sha, sha);
+  } finally { rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test("off code scanning admits and reaches the close success contract when the API returns 403", () => {
+  const admitted = admissionFixture();
+  const f = fixture("code-scanning-off-403");
+  try {
+    const sourceSha = execFileSync("git", ["-C", admitted.packageDir, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+    const directory = mkdtempSync(join(f.root, "off-render-"));
+    bootstrapRender({
+      packageDir: admitted.packageDir, directory, primary: admitted.packageDir, version: "0.3.1",
+      sourceNwo: "example/fixture", sourceSha, codeScanning: "off",
+    });
+    writeFileSync(admitted.dag, readFileSync(join(directory, "feature.yaml")));
+    const bin = join(admitted.root, "dagu-bin");
+    mkdirSync(bin);
+    writeFileSync(join(bin, "dagu"), `#!/bin/sh\nif [ "$1" = version ]; then printf '%s\\n' ${JSON.stringify(REQUIRED_DAGU_VERSION)}; exit 0; fi\nprintf 'unexpected dagu %s\\n' "$*" >&2\nexit 1\n`);
+    chmodSync(join(bin, "dagu"), 0o755);
+    const result = admitted.command("admit", "code-scanning-off", { PATH: `${bin}:${process.env.PATH ?? ""}` });
+    assert.equal(result.status, 0, result.stderr);
+    const snapshot = JSON.parse(readFileSync(admitted.receipt("code-scanning-off"), "utf8")).initial.execution.dagSnapshot as string;
+    assert.match(snapshot, /CODE_SCANNING: "off"/);
+    assert.match(snapshot, /id: code_scanning/);
+    writeFileSync(admitted.dag, snapshot.replace(/  - id: code_scanning[\s\S]*?\n  - id: auto_merge/, "  - id: auto_merge"));
+    const tampered = admitted.command("admit", "code-scanning-removed", { PATH: `${bin}:${process.env.PATH ?? ""}` });
+    assert.notEqual(tampered.status, 0);
+    assert.match(tampered.stderr, /DAGU_ADMISSION_REJECTED/);
+    writeFileSync(admitted.dag, snapshot);
+
+    f.env.CODE_SCANNING = "off";
+    f.env.REQUIRED_CHECK = "validate";
+    update(f, { auto: false, codeScanningStatus: 403, mergeState: "BLOCKED" });
+    const sha = publish(f, feature, "off candidate");
+    assert.deepEqual(scanningCalls(f), []);
+    const policy = JSON.parse(readFileSync(join(f.state, "codeql-policy.json"), "utf8"));
+    assert.equal(policy.mode, "off");
+    assert.equal(policy.sha, sha);
+    assert.equal(existsSync(join(f.state, "codeql-observation.json")), false);
+    const merged = execute(f, feature, "auto_merge");
+    assert.equal(merged.status, 0, merged.stdout + merged.stderr);
+    const merge = ghCalls(f).find(call => call.tool === "gh" && call.args[0] === "pr" && call.args[1] === "merge");
+    assert.ok(merge);
+    assert.ok(merge.args.includes("--match-head-commit") && merge.args.includes(sha));
+    assert.equal(observe(f, reconcile).class, "PASS");
+    assert.deepEqual(scanningCalls(f), []);
+    const squashBody = readFileSync(join(f.worktree, "candidate"), "utf8");
+    writeFileSync(join(f.primary, "candidate"), squashBody);
+    git(f.primary, "add", "candidate");
+    git(f.primary, "commit", "-m", "squash off candidate");
+    git(f.primary, "push", "origin", "main");
+    const squash = git(f.primary, "rev-parse", "HEAD");
+    update(f, { prState: "MERGED", mergeOid: squash });
+    assert.equal(observe(f, reconcile).action, "COMPLETE");
+    transition(f, reconcile);
+    const authorized = execute(f, feature, "authorize_ci");
+    assert.equal(authorized.status, 0, authorized.stdout + authorized.stderr);
+    assert.match(authorized.stdout, new RegExp(`authorized_sha=${sha}`));
+    assert.deepEqual(scanningCalls(f), []);
+    const primary = realpathSync(f.primary);
+    const worktree = realpathSync(f.worktree);
+    const resource = JSON.stringify({ run: f.env.RUN, primary, branch: f.branch, worktree });
+    writeFileSync(join(f.state, "resource.json"), resource);
+    const hash = execFileSync("git", ["hash-object", "--stdin"], { input: f.branch, encoding: "utf8" }).trim();
+    const owner = git(f.primary, "rev-parse", "--path-format=absolute", "--git-path", `dagu-feature/resources/${hash}.json`);
+    mkdirSync(join(owner, ".."), { recursive: true });
+    writeFileSync(owner, resource);
+    writeFileSync(join(f.state, "tested-sha"), `${sha}\n`);
+    writeFileSync(join(f.state, "bootstrap-enqueued"), "not-a-lifecycle-package\n");
+    const lines = feature.split("\n");
+    const anchor = lines.indexOf("    run: &feature_cleanup |");
+    let end = anchor + 1;
+    while (end < lines.length && (lines[end]!.startsWith("      ") || lines[end] === "")) end++;
+    const closeGate = withResourceGuard(`CLEANUP_CLOSE=true\n${lines.slice(anchor + 1, end).map(line => line.slice(6)).join("\n")}`, fileURLToPath(new URL("../skills/issue-execution/feature.yaml", import.meta.url)));
+    const closed = spawnSync("bash", ["-c", closeGate], { env: f.env, cwd: f.root, encoding: "utf8" });
+    assert.equal(closed.status, 0, closed.stdout + closed.stderr);
+    assert.match(closed.stdout, new RegExp(`tested_sha=${sha}`));
+    assert.match(closed.stdout, /proof=squash/);
+    assert.equal(readFileSync(join(f.state, "cleanup-phase"), "utf8"), "complete\n");
+    assert.equal(existsSync(f.worktree), false);
+    assert.deepEqual(scanningCalls(f), []);
+  } finally {
+    admitted.dispose();
     rmSync(f.root, { recursive: true, force: true });
   }
 });
