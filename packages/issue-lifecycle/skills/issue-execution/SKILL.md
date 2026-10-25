@@ -535,9 +535,17 @@ Diagnostics collect all independent mechanical failures as deterministic JSONL (
 
 Planning review requires exactly one session with the expected coordinator parent
 and one or more `session_init` rows sharing the `plan-reviewer` agent and identical
-task. Native fallback refreshes retain that identity; freshness is measured from
-the first init, strictly after the review cutoff. The exact run/generation marker
-and the final structured yield bind the accepted review to publication.
+task. The exact generation marker is the first line of the reviewer assignment's
+`task` field. `check_review` reads that line from `session_init.task`; placing the
+marker only in the shared `context` field loses the iteration. Native fallback
+refreshes retain that identity; freshness is measured from the first init, strictly
+after the review cutoff. The marker and the final structured yield bind the accepted
+review to publication. A missing marker is reported as absent from `session_init.task`,
+together with the expected marker. `review-<iteration>.json` keeps `verdict` and
+`findings` and records `reviewer` from the same transcript derivation as native role
+evidence: agent name, session id, provider and model of the final assistant message,
+and ordered `model_change` entries with `resolvedModelIsFallback`.
+`session_init.resolvedModel` is not the effective model.
 
 ```sh
 node packages/issue-lifecycle/bin/dagu-feature-bundle.ts enqueue \

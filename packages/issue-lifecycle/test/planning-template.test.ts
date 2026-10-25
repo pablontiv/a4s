@@ -8,6 +8,8 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { parse, stringify } from "yaml";
+import { nativeEvidence } from "../src/role-runtime.ts";
+import { planningReviewer } from "../src/transcript-identity.ts";
 import { liveDagu, liveDaguVersion } from "./fixtures/live-dagu.ts";
 import { testRunId } from "./fixtures/run-id.ts";
 
@@ -57,14 +59,17 @@ jq -nc --argjson iteration "\${FAKE_ITERATION:-0}" --argjson nodes "\${FAKE_REVI
   return { root, bin, out, upstream, env, run, importRows, close: () => rmSync(root, { recursive: true, force: true }) };
 }
 function successful(result: SpawnSyncReturns<string>): void { assert.equal(result.status, 0, result.stderr); }
-function transcript(f: Fixture, data: unknown = { verdict: "accept", findings: [] }, extra: { parent?: string; timestamp?: string; agent?: string; marker?: string; last?: unknown; sessions?: number; inits?: number; refresh?: { agent?: string; task?: string; timestamp?: string } } = {}) {
+function transcript(f: Fixture, data: unknown = { verdict: "accept", findings: [] }, extra: { parent?: string; timestamp?: string; agent?: string; marker?: string; last?: unknown; sessions?: number; inits?: number; session?: string; provider?: string; model?: string; resolvedModel?: string; changes?: { id?: string; timestamp?: string; model?: string; resolvedModelIsFallback: boolean }[]; refresh?: { agent?: string; task?: string; timestamp?: string } } = {}) {
   const sessions = join(f.root, ".omp", "agent", "sessions", "-primary", "date_owner-session");
   mkdirSync(sessions, { recursive: true });
-  const init = { type: "session_init", agent: extra.agent ?? "plan-reviewer", task: extra.marker ?? readFileSync(join(f.out, "generation"), "utf8").trim(), timestamp: extra.timestamp ?? "2026-10-17T00:00:01.001Z" };
+  const init = { type: "session_init", agent: extra.agent ?? "plan-reviewer", task: extra.marker ?? readFileSync(join(f.out, "generation"), "utf8").trim(), timestamp: extra.timestamp ?? "2026-10-17T00:00:01.001Z", ...(extra.resolvedModel ? { resolvedModel: extra.resolvedModel } : {}) };
+  const changes = extra.changes ?? (extra.refresh ? [{ resolvedModelIsFallback: true }] : []);
   jsonl(join(sessions, "PlanReviewTest.jsonl"), [
-    ...Array.from({ length: extra.sessions ?? 1 }, () => ({ type: "session", parentSession: extra.parent ?? `${sessions}.jsonl` })),
+    ...Array.from({ length: extra.sessions ?? 1 }, () => ({ type: "session", id: extra.session ?? "reviewer-session", parentSession: extra.parent ?? `${sessions}.jsonl` })),
     ...Array.from({ length: extra.inits ?? 1 }, () => init),
-    ...(extra.refresh ? [{ type: "model_change", resolvedModelIsFallback: true }, { ...init, ...extra.refresh }] : []),
+    ...changes.map(change => ({ type: "model_change", ...change })),
+    ...(extra.refresh ? [{ ...init, ...extra.refresh }] : []),
+    { type: "message", id: "assistant-final", message: { role: "assistant", provider: extra.provider ?? "fixture-provider", model: extra.model ?? "fixture-model", stopReason: "stop" } },
     { type: "message", message: { role: "toolResult", toolName: "yield", details: { data } } },
     ...(extra.last === undefined ? [] : [{ type: "message", message: { role: "toolResult", toolName: "yield", details: { data: extra.last } } }]),
   ]);
@@ -197,11 +202,20 @@ test("review binds parent, generation, agent, cutoff and final structured verdic
       { last: "not-json" }, { last: { verdict: "accept" } },
     ]) {
       transcript(f, undefined, extra);
-      assert.notEqual(check().status, 0, JSON.stringify(extra));
+      const result = check();
+      assert.notEqual(result.status, 0, JSON.stringify(extra));
+      if (extra.marker === "wrong-generation") {
+        const expected = readFileSync(join(f.out, "generation"), "utf8").trim();
+        assert.match(result.stderr, /session_init\.task/);
+        assert.ok(result.stderr.includes(expected), result.stderr);
+      }
       assert.notEqual(f.run("materialize", { APPROVED: "all" }).status, 0);
     }
     transcript(f, undefined, { refresh: { timestamp: "2026-10-17T00:00:02Z" } }); successful(check());
-    assert.deepEqual(JSON.parse(readFileSync(join(f.out, "review-0.json"), "utf8")), { verdict: "accept", findings: [] });
+    assert.deepEqual(JSON.parse(readFileSync(join(f.out, "review-0.json"), "utf8")), {
+      verdict: "accept", findings: [],
+      reviewer: { agent: "plan-reviewer", session: "reviewer-session", provider: "fixture-provider", model: "fixture-model", fallbacks: [{ resolvedModelIsFallback: true }] },
+    });
     assert.notEqual(f.run("check_review", { REVIEW: "PlanReviewTest", FAKE_ITERATION: "1" }).status, 0);
     const duplicate = join(f.root, ".omp", "agent", "sessions", "-primary", "other_owner-session");
     mkdirSync(duplicate); writeFileSync(join(duplicate, "PlanReviewTest.jsonl"), "{}\n");
@@ -217,6 +231,40 @@ test("review binds parent, generation, agent, cutoff and final structured verdic
     assert.notEqual(f.run("materialize", { APPROVED: "all" }).status, 0, "completing approval cannot bypass revise");
     assert.deepEqual(JSON.parse(readFileSync(join(f.root, "issues.json"), "utf8")), []);
     accepted(f, [unit("corrected")]); successful(f.run("materialize", { APPROVED: "corrected" }));
+  } finally { f.close(); }
+});
+
+test("accepted review records the final assistant model rather than session_init.resolvedModel", () => {
+  const f = fixture();
+  try {
+    const findings = [{ unit: "unit-feature", severity: "concern", text: "Note the fallback" }];
+    successful(f.importRows([unit()])); successful(f.run("check_plan"));
+    transcript(f, { verdict: "accept", findings }, {
+      resolvedModel: "xai-oauth/grok-4.7",
+      session: "reviewer-session-648",
+      provider: "openai-codex",
+      model: "gpt-6.1-sol",
+      changes: [{ id: "fallback-1", timestamp: "2026-10-23T22:38:42Z", model: "openai-codex/gpt-6.1-sol", resolvedModelIsFallback: true }],
+    });
+    successful(f.run("check_review", { REVIEW: "PlanReviewTest" }));
+    const review = JSON.parse(readFileSync(join(f.out, "review-0.json"), "utf8"));
+    const transcriptPath = join(f.root, ".omp", "agent", "sessions", "-primary", "date_owner-session", "PlanReviewTest.jsonl");
+    const rows = readFileSync(transcriptPath, "utf8").trim().split("\n").map(line => JSON.parse(line));
+    const reviewer = planningReviewer(rows);
+    const native = nativeEvidence(transcriptPath, { agent: "plan-reviewer" });
+    assert.equal(review.verdict, "accept");
+    assert.deepEqual(review.findings, findings);
+    assert.equal(review.reviewer.provider, "openai-codex");
+    assert.equal(review.reviewer.model, "gpt-6.1-sol");
+    assert.equal(review.reviewer.session, "reviewer-session-648");
+    assert.equal(review.reviewer.agent, "plan-reviewer");
+    assert.deepEqual(review.reviewer.fallbacks, [{ event: "fallback-1", timestamp: "2026-10-23T22:38:42Z", model: "openai-codex/gpt-6.1-sol", resolvedModelIsFallback: true }]);
+    assert.deepEqual(review.reviewer, reviewer);
+    assert.equal(native.provider, reviewer.provider);
+    assert.equal(native.model, reviewer.model);
+    assert.equal(native.session, reviewer.session);
+    assert.deepEqual(native.fallbacks, reviewer.fallbacks);
+    assert.equal(rows.find((row: { type?: string }) => row.type === "session_init").resolvedModel, "xai-oauth/grok-4.7");
   } finally { f.close(); }
 });
 
@@ -395,7 +443,10 @@ test("native planning push-back uses structured iteration across mechanical cons
     copyFileSync(f.upstream, join(f.out, "units.jsonl"));
     rmSync(join(f.root, "hold-check_review"));
     await state("approve", "waiting");
-    assert.deepEqual(JSON.parse(readFileSync(join(f.out, "review-1.json"), "utf8")), { verdict: "accept", findings: [] });
+    assert.deepEqual(JSON.parse(readFileSync(join(f.out, "review-1.json"), "utf8")), {
+      verdict: "accept", findings: [],
+      reviewer: { agent: "plan-reviewer", session: "reviewer-session", provider: "fixture-provider", model: "fixture-model", fallbacks: [{ resolvedModelIsFallback: true }] },
+    });
     assert.equal(readFileSync(join(f.out, "review-accepted"), "utf8").trim(), marker(1));
     assert.equal(readFileSync(join(f.out, "reviewed-units.jsonl"), "utf8"), readFileSync(f.upstream, "utf8"));
     dagu("human-task", "complete", "planning", "--run-id", f.env.RUN!, "--step", "approve", "--input", "APPROVED=all");

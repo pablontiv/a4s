@@ -52,6 +52,38 @@ actions require explicit assignment authority; a local gate grants none.
 Scheduled CI/merge observation belongs to the designated reconciler. Credentials
 and external services remain operator-owned.
 
+## Versioned source and configuration
+
+Git versions source and configuration. That is content written through a pull
+request, or generated deterministically from a versioned revision and declared
+inputs so that regenerating it yields identical bytes. Changes to it land through
+a commit, such as a version bump or an adoption.
+
+Runtime state is written by a running process and carries per-execution data:
+run identifiers, timestamps, process IDs, attempt counters, or observed external
+state such as PR heads and check results. It lives under `.git/dagu-feature/runs/`
+or `$DAGU_HOME`. Do not commit it.
+
+Classify a file in three steps:
+
+1. Identify its producer (a person through a pull request, a generator such as the
+   bootstrap render step, or a running process such as a DAG step or observer) and
+   the producer's declared inputs.
+2. If a generator produces it, regenerate it twice at the same revision with
+   identical declared inputs. Identical bytes make it configuration. A render that
+   changes only because a declared input changed (bundle version, repository, queue)
+   is still configuration.
+3. A file whose content records an execution (run identifiers, timestamps, process
+   IDs, attempt counters, or observed external state) is runtime state, regardless
+   of format or how often it changed.
+
+Hand-written test fixtures, and a pull-request document that quotes a finished
+operation, stay source: their producer is the pull request. A process-owned
+receipt, observation or status log is runtime state even when a broad commit
+tracked it. Adopted lifecycle renders, and hand-written manifests such as
+`package.json` and `.workspace/config/refine.json`, are configuration.
+[Deployment](docs/operations/deployment.md) states the same rule beside adoption.
+
 ## Pull request descriptions
 
 Every PR, including syncs, adoptions and manual fixes outside Dagu, uses `.github/pull_request_template.md`: `Closes #<N>` or `Refs #<N>`, at most five Summary bullets, one command/result per Verification line, and Risk notes or `None`. Use repository-relative paths or placeholders (`<primary>`, `<worktree>`, `~`, `$DAGU_HOME`); keep host absolute paths, usernames and private repository names out of public bodies. Logs stay in run artifacts. CI validates the required structure and host-path rule on PR events, including body edits.
