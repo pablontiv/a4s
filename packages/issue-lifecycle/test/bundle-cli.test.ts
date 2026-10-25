@@ -101,36 +101,32 @@ test("admission rejects adopted policy parameters before reserving a receipt", l
   } finally { fixture.dispose(); }
 });
 
-test("admission rejects package 0.3.1 / DAG 0.2.0 before Dagu creates a run", liveDagu, () => {
+test("admission rejects an unserved lifecycle protocol before Dagu creates a run", liveDagu, () => {
   const fixture = admissionFixture();
   try {
     const run = testRunId("incompatible");
-    fixture.render("feature.yaml", fixture.dag, "0.2.0");
+    writeFileSync(fixture.dag, readFileSync(fixture.dag, "utf8").replace("triage=role-job/1", "triage=marker-agent/1"));
     const result = fixture.command("enqueue", run);
     assert.notEqual(result.status, 0);
-    assert.match(result.stderr, /DAGU_ADMISSION_REJECTED.*feature.yaml observed=0.2.0.*package=0.3.1/);
+    assert.match(result.stderr, /DAGU_ADMISSION_REJECTED.*feature.yaml missing protocol triage=marker-agent\/1; served by bundle 0\.3\.102/);
     assert.equal(existsSync(fixture.receipt(run)), false);
     const history = spawnSync("dagu", ["history", "feature", "--format", "json"], { env: { ...process.env, DAGU_HOME: fixture.home }, encoding: "utf8" });
     assert.doesNotMatch(history.stdout, /incompatible/);
   } finally { fixture.dispose(); }
 });
 
-test("admission admits renders sealed at an earlier patch release and rejects another minor", liveDagu, () => {
-  for (const [version, admitted] of [["0.3.2", true], ["0.4.0", false]] as const) {
+test("admission admits renders sealed at an earlier patch or minor when protocols match", liveDagu, () => {
+  for (const version of ["0.3.2", "0.4.0"]) {
     const fixture = admissionFixture();
     try {
       const manifestPath = join(fixture.packageDir, "package.json");
       writeFileSync(manifestPath, JSON.stringify({ ...JSON.parse(readFileSync(manifestPath, "utf8")), version }));
       spawnSync("git", ["-C", fixture.packageDir, "commit", "-qam", `package ${version}`], { encoding: "utf8" });
-      const run = `patch-${version.replaceAll(".", "-")}`;
+      const run = `protocol-${version.replaceAll(".", "-")}`;
       const result = fixture.command("admit", run);
-      if (admitted) {
-        assert.equal(result.status, 0, result.stderr);
-        assert.equal(JSON.parse(readFileSync(fixture.receipt(run), "utf8")).initial.deployment.installedDAG.stamp.version, "0.3.1");
-      } else {
-        assert.notEqual(result.status, 0);
-        assert.match(result.stderr, new RegExp(`DAGU_ADMISSION_REJECTED.*feature.yaml observed=0\\.3\\.1.*package=${version.replaceAll(".", "\\.")}`));
-      }
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(JSON.parse(readFileSync(fixture.receipt(run), "utf8")).initial.deployment.installedDAG.stamp.version, "0.3.1");
+      assert.equal(JSON.parse(readFileSync(fixture.receipt(run), "utf8")).initial.deployment.relationships.compatibility, "served-lifecycle-protocol");
     } finally { fixture.dispose(); }
   }
 });

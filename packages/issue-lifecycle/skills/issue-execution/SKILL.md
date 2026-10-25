@@ -225,7 +225,7 @@ the count. Protected roots stay; reaching the count leaves them in place.
 ## Bundle identity and compatibility
 
 Every rendered DAG starts with
-`# dagu-feature-bundle: @a4s/issue-lifecycle@<version> source=<owner/name>@<sha40> bootstrap=<run> dagu=<version>`
+`# dagu-feature-bundle: @a4s/issue-lifecycle@<version> source=<owner/name>@<sha40> bootstrap=<run> dagu=<version> protocols=triage=<id>,implement=<id>,publication=<id>`
 and carries the label `dagu-feature-bundle=<version>`. `start_gate` and PoC
 `base` print the same bundle, source and bootstrap identity into the run log.
 Identify an installed bundle directly from that header and label, from repository
@@ -263,15 +263,26 @@ versions. Repositories distributing `packages/issue-lifecycle/package.json` must
 that manifest identical in version to origin.
 
 Admission checks the provenance-verified requested DAG and installed reconciler
-independently against the loaded package. Their stamped versions are compatible
-when valid semantic versions share both major and minor; patch versions may
-differ. This applies to every major, including versions greater than zero
+independently against the loaded package. The criterion is the lifecycle
+protocol the extension serves, not bundle version or digest distance
 ([`checkRender`/`admit`](../../src/admission.ts),
-[`classifyCompatibility`](../../src/bundle.ts)).
+[`missingLifecycleProtocols`](../../src/bundle.ts)). Each render declares
+`triage`, `implement` and `publication` protocol ids. Admission succeeds when
+every declared id is served, including when the render is a minor or patch
+behind the loaded package. A protocol this extension does not serve fails
+before run creation. The diagnostic names the missing protocol and the bundle
+version that serves it (`missing protocol triage=marker-agent/1; served by
+bundle 0.3.102`). Re-adoption is required only for a protocol change. Stamps that predate
+`protocols=` use the served contract when the snapshot has no retired triage
+marker. A feature snapshot must also show role-job triage, role-job implement
+and pull-request publication. `TRIAGE_REVIEW AGENT=` (`marker-agent/1`, bundle
+0.3.102) and coordinator human-task triage (`human-task/1`, bundle 0.3.108)
+are not served.
 
-Run notices separately classify bundle versus extension: equal major/minor is
-`ok` even when the patch differs, different major/minor or malformed versions
-are `incompatible`, and a missing bundle label is `unstamped`.
+Run notices separately classify bundle versus extension by version distance:
+equal major/minor is `ok` even when the patch differs, different major/minor or
+malformed versions are `incompatible`, and a missing bundle label is
+`unstamped`. That display is not the admission decision.
 
 Notices also compare the loaded extension against primary main when
 `PRIMARY/packages/issue-lifecycle/package.json` exists. `stale` means this applicable
@@ -289,14 +300,15 @@ stamped renders.
 
 The loaded package version must exactly match its installed `package.json`.
 When a loaded-extension digest is supplied, it must match the current installed
-extension source digest. These package-identity checks are separate from render
-patch compatibility ([`admit`](../../src/admission.ts)).
+extension source digest. These package-identity checks are separate from served-protocol admission
+([`admit`](../../src/admission.ts)).
 
 The coordinating extension rewrites literal `dagu enqueue` bash calls to the
 package's admission CLI, preserving shell argument expansion; internal promotions
 invoke `dagu-feature-bundle enqueue` directly. A fresh aligned bootstrap and
 adoption is an available deployment procedure and can repair an installation;
-provenance-verified compatible renders remain admissible across patch releases.
+provenance-verified renders remain admissible while their checkpoint protocols
+are served, including across minor and patch releases.
 
 Before Dagu creates a run, admission verifies the line-one stamp and unique
 matching bundle label, readable realpaths and SHA-256 identities, expected source
@@ -342,7 +354,9 @@ a package version greater than the PR merge-base version and a matching
 `## <version>` section in `CHANGELOG.md`. The guard identifies the lifecycle
 manifest across directory moves using `GITHUB_BASE_REF` or the declared
 `daguFeature.integrationBase`; shallow CI fetches that base and ancestry.
-In 0.x, a minor bump marks a compatibility break.
+A greater package version records the template change. Version distance alone
+does not make a served protocol inadmissible; re-adopt only when a checkpoint
+protocol changes.
 After a merge touching `packages/issue-lifecycle/skills/**` or
 `packages/issue-lifecycle/CHANGELOG.md`, `close_gate` enqueues the primary's bootstrap
 with run ID `bootstrap-a4s-v<version-with-hyphens>`, `PRIMARY` and `SKILL_DIR`.
@@ -834,7 +848,7 @@ An owner-session FIFO reserves exactly one autonomous wake while idle. Once the 
   inspects them and uses the iteration-protected checkpoint transition; operator
   infrastructure repairs and declared validation remain operator-attributed.
 - The widget displays running semantic stages through their Dagu command logs.
-- A notice whose `compat` is `stale`, `incompatible` or `unstamped` goes under **Blockers and decisions**. A stale notice raises a `warning` notification while the coordinator keeps working; the operator restarts OMP to load main and completes the queued bootstrap plus adoption re-seal. Put the exact recovery enqueue command above under **Proposals** when bootstrap still needs enqueueing. Complete `answers` with the installed values and use the staged `feature.yaml` for the adoption issue. These notices are distinct from admission: provenance-verified requested DAG and installed reconciler stamps are independently compatible with the loaded package when valid semantic versions share major and minor, including patch drift; exact package identity, source provenance and native-version checks still apply.
+- A notice whose `compat` is `stale`, `incompatible` or `unstamped` goes under **Blockers and decisions**. A stale notice raises a `warning` notification while the coordinator keeps working; the operator restarts OMP to load main and completes the queued bootstrap plus adoption re-seal. Put the exact recovery enqueue command above under **Proposals** when bootstrap still needs enqueueing. Complete `answers` with the installed values and use the staged `feature.yaml` for the adoption issue. These notices are distinct from admission: provenance-verified requested DAG and installed reconciler stamps are admissible when the loaded extension serves their declared triage, implement and publication protocols, including minor and patch drift. Exact package identity, source provenance and native-version checks still apply. An unserved protocol is rejected before run creation and is not `compat=ok`.
 
 ## Turn status
 

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.15
+
+- Admit a feature run when the loaded extension serves the render's triage, implement and publication protocols, including a render one minor version behind (#562).
+- Reject an unserved checkpoint protocol before run creation, naming the missing protocol and the bundle version that serves it. The 0.3.102 `TRIAGE_REVIEW AGENT=` marker and the 0.3.108 human-task triage guard are not served.
+
 ## 0.5.14
 
 - Keep about one day of reconcile history with `hist_retention_runs: 1440` on the reconcile root. Feature, PoC and planning still inherit `hist_retention_days: 30` from the installed base (#637).

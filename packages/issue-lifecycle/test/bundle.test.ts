@@ -1,13 +1,21 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { readFileSync, writeFileSync } from "node:fs";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { deploymentFingerprint, observeRunReceipt } from "../src/admission.ts";
 import { admissionDecision } from "../src/triage/guard.ts";
 import { admissionFixture } from "./fixtures/admission.ts";
 import { liveDagu } from "./fixtures/live-dagu.ts";
 import {
+  BUNDLE_VERSION,
   bundleVersionFromLabels,
   classifyCompatibility,
+  formatProtocolRejection,
+  inferLifecycleProtocols,
+  lifecycleProtocolToken,
+  LIFECYCLE_PROTOCOLS,
+  missingLifecycleProtocols,
   parseBundleStamp,
 } from "../src/bundle.ts";
 
@@ -20,6 +28,31 @@ test("compatibility accepts patch drift and distinguishes incompatible and unsta
   assert.equal(classifyCompatibility(undefined, "0.2.0"), "unstamped");
   assert.equal(classifyCompatibility("1.9.0", "1.2.0"), "incompatible");
   assert.equal(classifyCompatibility("not-semver", "0.2.0"), "incompatible");
+});
+
+test("admission uses served checkpoint protocols instead of version distance", () => {
+  assert.equal(classifyCompatibility("0.4.0", "0.5.0"), "incompatible");
+  assert.deepEqual(missingLifecycleProtocols(LIFECYCLE_PROTOCOLS), []);
+  assert.deepEqual(missingLifecycleProtocols({ ...LIFECYCLE_PROTOCOLS, triage: "role-job/1" }), []);
+  const retired = missingLifecycleProtocols({ ...LIFECYCLE_PROTOCOLS, triage: "marker-agent/1" });
+  assert.equal(formatProtocolRejection("feature.yaml", retired), "feature.yaml missing protocol triage=marker-agent/1; served by bundle 0.3.102");
+  const humanTask = missingLifecycleProtocols({ ...LIFECYCLE_PROTOCOLS, triage: "human-task/1" });
+  assert.equal(formatProtocolRejection("feature.yaml", humanTask), "feature.yaml missing protocol triage=human-task/1; served by bundle 0.3.108");
+  const unknown = missingLifecycleProtocols({ ...LIFECYCLE_PROTOCOLS, publication: "legacy/1" });
+  assert.equal(formatProtocolRejection("feature.yaml", unknown), `feature.yaml missing protocol publication=legacy/1; bundle ${BUNDLE_VERSION} serves publication=${LIFECYCLE_PROTOCOLS.publication}`);
+  const feature = readFileSync(fileURLToPath(new URL("../skills/issue-execution/feature.yaml", import.meta.url)), "utf8");
+  assert.deepEqual(inferLifecycleProtocols("feature.yaml", feature), LIFECYCLE_PROTOCOLS);
+  const legacyHumanTask = feature.replace(
+    "  - id: triage\n    depends: admit\n    run: |\n      set -euo pipefail\n      dagu-feature-bundle escalation route\n      dagu-role-jobs stage triage\n",
+    "  - id: triage\n    depends: admit\n    action: human.task\n    with:\n      prompt: triage\n",
+  );
+  assert.equal(inferLifecycleProtocols("feature.yaml", legacyHumanTask).triage, "human-task/1");
+  assert.equal(inferLifecycleProtocols("feature.yaml", feature.replace("dagu-role-jobs verify-triage", "TRIAGE_REVIEW AGENT=triage-reviewer")).triage, "marker-agent/1");
+  assert.deepEqual(inferLifecycleProtocols("reconcile.yaml", "steps:\n"), LIFECYCLE_PROTOCOLS);
+  const cli = fileURLToPath(new URL("../bin/dagu-feature-bundle.ts", import.meta.url));
+  const printed = spawnSync(process.execPath, [cli, "protocols"], { encoding: "utf8" });
+  assert.equal(printed.status, 0, printed.stderr);
+  assert.equal(printed.stdout, `${lifecycleProtocolToken()}\n`);
 });
 
 test("labels and exact line-one stamps are parsed", () => {
@@ -36,6 +69,13 @@ test("labels and exact line-one stamps are parsed", () => {
       dagu: "2.20.1",
     },
   );
+  assert.deepEqual(
+    parseBundleStamp(
+      `# dagu-feature-bundle: @a4s/issue-lifecycle@0.4.0 source=pablontiv/a4s@0123456789012345678901234567890123456789 bootstrap=bootstrap-a4s-0.4.0 dagu=2.20.1 protocols=${lifecycleProtocolToken()}\n`,
+    )?.protocols,
+    LIFECYCLE_PROTOCOLS,
+  );
+  assert.equal(parseBundleStamp("# dagu-feature-bundle: @a4s/issue-lifecycle@0.4.0 source=pablontiv/a4s@0123456789012345678901234567890123456789 bootstrap=bootstrap-a4s-0.4.0 dagu=2.20.1 protocols=triage=role-job/1\n"), undefined);
   assert.equal(parseBundleStamp("labels:\n# dagu-feature-bundle: @a4s/issue-lifecycle@0.2.0 source=x@y bootstrap=z dagu=2.20.1\n"), undefined);
 });
 
@@ -78,9 +118,9 @@ test("runtime observations and incident snapshots link the admitted run and pres
     assert.equal(recovered.runReceipt.observations.at(-2).kind, "incident:observer-restart");
     assert.equal(recovered.runReceipt.observations.at(-1).kind, "incident:cursor-reset");
     assert.deepEqual(recovered.initial, before.initial);
-    fixture.render("feature.yaml", fixture.dag, "0.2.0");
+    writeFileSync(fixture.dag, readFileSync(fixture.dag, "utf8").replace("triage=role-job/1", "triage=marker-agent/1"));
     const rejected = admissionDecision({ toolName: "bash", toolCallId: "incompatible", input: { command: `dagu enqueue --run-id blocked ${fixture.dag} -- ISSUE=277` } }, undefined, fixture.packageDir);
     assert.ok(rejected && "block" in rejected);
-    assert.match(rejected.reason, /DAGU_ADMISSION_REJECTED.*observed=0.2.0/);
+    assert.match(rejected.reason, /DAGU_ADMISSION_REJECTED.*missing protocol triage=marker-agent\/1; served by bundle 0\.3\.102/);
   } finally { fixture.dispose(); }
 });
