@@ -88,6 +88,7 @@ export async function proveLongComputation(root: string): Promise<ScenarioEviden
       notifyStall: notice => { notices.push(notice); }, authorize: async () => {},
       execute: async (job, assignment) => {
         await waitFor("stall notice", () => notices.length === 1);
+        if (!workerAlive(directory)) throw new Error("stall was reported after the worker exited");
         runCli(["computation", "decide", "--dir", directory, "--decision", "stop"]);
         await waitFor("stopped computation", () => {
           try { return JSON.parse(readFileSync(join(directory, "state.json"), "utf8")).state === "stopped"; } catch { return false; }

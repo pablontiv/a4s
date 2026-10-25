@@ -24,7 +24,7 @@ test("pinned Dagu runs the checkpoint scenario in an isolated home", { ...liveDa
   const port = address.port;
   await new Promise<void>(resolve => listener.close(() => resolve()));
   const tsx = import.meta.resolve("tsx");
-  const runner = join(root, "run-scenario.ts");
+  const runner = join(root, "run-scenario.mts");
   writeFileSync(runner, `import { proveLongComputation } from ${JSON.stringify(fileURLToPath(new URL("../long-computation-scenario.ts", import.meta.url)))};\nawait proveLongComputation(${JSON.stringify(scenario)});\n`);
   const command = join(root, "run-scenario.sh");
   writeFileSync(command, `#!/bin/bash\nset -euo pipefail\nexec ${JSON.stringify(process.execPath)} --import ${JSON.stringify(tsx)} ${JSON.stringify(runner)}\n`, { mode: 0o700 });

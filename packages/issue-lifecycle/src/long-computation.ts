@@ -1,6 +1,7 @@
 import { execFileSync, spawn } from "node:child_process";
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
+import { clearInterval, setInterval } from "node:timers";
 import { setTimeout as delay } from "node:timers/promises";
 import { atomicJson } from "./role-jobs.ts";
 
@@ -506,6 +507,17 @@ export function stopWorker(directory: string): void {
     if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
   }
 }
+function holdUntilAbort(signal: AbortSignal): Promise<never> {
+  return new Promise((_resolve, reject) => {
+    const timer = setInterval(() => undefined, 1_000);
+    const fail = (): void => {
+      clearInterval(timer);
+      reject(new Error("aborted"));
+    };
+    if (signal.aborted) fail();
+    else signal.addEventListener("abort", fail, { once: true });
+  });
+}
 function writeWorker(directory: string): void {
   const processStartedAt = processStart(process.pid);
   if (!processStartedAt) throw new Error("Computation worker could not record its process start");
@@ -618,7 +630,8 @@ export async function computationCommand(args: string[], options: { script: stri
     closeSync(log);
     if (!child.pid) throw new Error("Computation worker failed to start");
     const pid = child.pid;
-    for (let attempt = 0; attempt < 50 && readWorker(dir)?.pid !== pid; attempt += 1) await delay(20);
+    for (let attempt = 0; attempt < 50 && (readWorker(dir)?.pid !== pid || !workerAlive(dir)); attempt += 1) await delay(20);
+    await delay(50);
     if (readWorker(dir)?.pid !== pid || !workerAlive(dir)) throw new Error(`Computation worker failed to start; see ${join(dir, "worker.log")}`);
     console.log(JSON.stringify({ state: "running", worker: readWorker(dir) }));
     return;
@@ -634,12 +647,7 @@ export async function computationCommand(args: string[], options: { script: stri
   if (delayMs === undefined && !commandText) throw new Error("computation run requires --delay-ms or --command");
   if (delayMs !== undefined && commandText) throw new Error("computation run accepts either --delay-ms or --command");
   const result = await runShards(dir, async (shard, signal) => {
-    if (stallShard === shard.index) {
-      await new Promise<never>((_resolve, reject) => {
-        if (signal.aborted) reject(new Error("aborted"));
-        else signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
-      });
-    }
+    if (stallShard === shard.index) await holdUntilAbort(signal);
     if (delayMs !== undefined) {
       await delay(delayMs, undefined, { signal });
       return `shard ${shard.index} complete\n`;
