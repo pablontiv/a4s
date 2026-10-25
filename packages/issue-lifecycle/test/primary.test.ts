@@ -1,0 +1,249 @@
+import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import test from "node:test";
+import { fileURLToPath } from "node:url";
+import { REQUIRED_DAGU_VERSION } from "../src/bundle.ts";
+import {
+  HOST_PRIMARY_REFERENCE,
+  bindSnapshotPrimary,
+  primaryFromSpec,
+  resolveHostPrimary,
+  resolvePrimaryBinding,
+} from "../src/primary.ts";
+import { resourceDecision } from "../src/resources.ts";
+import { admissionFixture } from "./fixtures/admission.ts";
+import { bootstrapRender } from "./fixtures/bootstrap-render.ts";
+
+const packageDir = fileURLToPath(new URL("../", import.meta.url));
+const readRepo = (path: string): string => readFileSync(fileURLToPath(new URL(path, import.meta.url)), "utf8");
+const feature = readRepo("../skills/issue-execution/feature.yaml");
+const reconcile = readRepo("../skills/issue-execution/reconcile.yaml");
+const adoptedFeature = readRepo("../../../.workspace/dagu/dags/feature.yaml");
+const adoptedPoc = readRepo("../../../.workspace/dagu/dags/poc.yaml");
+const adoptedReconcile = readRepo("../../../.workspace/dagu/dags/reconcile.yaml");
+
+function extractFunction(source: string, name: string): string {
+  const start = source.indexOf(`${name}() {`);
+  assert.ok(start >= 0, name);
+  let depth = 0;
+  let quote = "";
+  for (let index = start; index < source.length; index++) {
+    const char = source[index]!;
+    if (quote) {
+      if (char === "\\" && quote !== "'") { index++; continue; }
+      if (char === quote) quote = "";
+      continue;
+    }
+    if (char === "'" || char === '"') { quote = char; continue; }
+    if (char === "{") depth++;
+    else if (char === "}") {
+      depth--;
+      if (depth === 0) return source.slice(start, index + 1);
+    }
+  }
+  throw new Error(`unclosed ${name}`);
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+test("bootstrap renders the same host PRIMARY on a Mac path and a Linux path", () => {
+  const root = mkdtempSync(join(tmpdir(), "a4s-primary-render-"));
+  try {
+    const render = (primary: string, directory: string): void => {
+      bootstrapRender({
+        packageDir, directory, primary, version: "0.5.17",
+        sourceNwo: "fixture/repo", sourceSha: "a".repeat(40),
+      });
+    };
+    const macPrimary = join(root, "Users", "Shared", "harness", "a4s");
+    const linuxPrimary = join(root, "home", "box", "src", "a4s");
+    const mac = join(root, "mac-out");
+    const linux = join(root, "linux-out");
+    mkdirSync(macPrimary, { recursive: true });
+    mkdirSync(linuxPrimary, { recursive: true });
+    mkdirSync(mac);
+    mkdirSync(linux);
+    render(macPrimary, mac);
+    render(linuxPrimary, linux);
+    for (const name of ["feature.yaml", "poc.yaml"]) {
+      const left = readFileSync(join(mac, name), "utf8");
+      const right = readFileSync(join(linux, name), "utf8");
+      assert.equal(left, right);
+      assert.match(left, /PRIMARY: "\$\{A4S_PRIMARY\}"/);
+      assert.equal(left.includes("__PRIMARY__"), false);
+      assert.equal(left.includes(macPrimary), false);
+      assert.equal(left.includes(linuxPrimary), false);
+      assert.equal(left.includes("/Users/Shared/harness/a4s"), false);
+    }
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("host PRIMARY resolves workspace file, then A4S_PRIMARY, then the station file", () => {
+  const root = mkdtempSync(join(tmpdir(), "a4s-primary-host-"));
+  const workspace = join(root, "primaries");
+  mkdirSync(workspace);
+  writeFileSync(join(workspace, "a4s"), "/home/box/src/a4s\n");
+  writeFileSync(join(root, "a4s-primary"), "/station/shared\n");
+  try {
+    const env = { DAGU_HOME: root, A4S_PRIMARY: "/station/env" };
+    assert.equal(resolveHostPrimary({ workspace: "a4s", env }), "/home/box/src/a4s");
+    assert.equal(resolveHostPrimary({ workspace: "other", env }), "/station/env");
+    assert.equal(resolveHostPrimary({ env: { DAGU_HOME: root } }), "/station/shared");
+    assert.equal(resolvePrimaryBinding("/already/recorded", { env }), "/already/recorded");
+    assert.equal(resolvePrimaryBinding(HOST_PRIMARY_REFERENCE, { env }), "/station/env");
+    assert.throws(() => resolveHostPrimary({ env: { DAGU_HOME: join(root, "missing") } }), /PRIMARY host binding is unset/);
+    assert.throws(() => resolveHostPrimary({ env: { ...env, A4S_PRIMARY: "relative" } }), /A4S_PRIMARY must be an absolute/);
+    writeFileSync(join(root, "a4s-primary"), "relative\n");
+    assert.throws(() => resolveHostPrimary({ env: { DAGU_HOME: root } }), /must contain one absolute path/);
+    assert.throws(() => resolvePrimaryBinding("${OTHER}", { env }), /PRIMARY binding must be an absolute path/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("spec recovery keeps a recorded path and resolves the host reference", () => {
+  const root = mkdtempSync(join(tmpdir(), "a4s-primary-spec-"));
+  try {
+    const recorded = "/tmp/Repo con espacio/ñ";
+    assert.equal(primaryFromSpec(`env:\n  - PRIMARY: ${JSON.stringify(recorded)}\n`), recorded);
+    const spec = `labels:\n  - workspace=a4s\nenv:\n  - PRIMARY: "${HOST_PRIMARY_REFERENCE}"\n`;
+    writeFileSync(join(root, "a4s-primary"), "/home/box/src/a4s\n");
+    assert.equal(primaryFromSpec(spec, { DAGU_HOME: root }), "/home/box/src/a4s");
+    const bound = bindSnapshotPrimary(spec, "/home/box/src/a4s");
+    assert.match(bound, /PRIMARY: "\/home\/box\/src\/a4s"/);
+    assert.equal(bound.includes(HOST_PRIMARY_REFERENCE), false);
+    const legacy = `env:\n  - PRIMARY: "/already"\n`;
+    assert.equal(bindSnapshotPrimary(legacy, "/other"), legacy);
+    assert.throws(() => primaryFromSpec("env:\n  - PRIMARY: not-json\n"), SyntaxError);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("feature, reconcile and adopted renders share the shell PRIMARY contract", () => {
+  const binding = extractFunction(feature, "resolve_primary_binding");
+  assert.equal(extractFunction(reconcile, "resolve_primary_binding"), binding);
+  assert.equal(extractFunction(adoptedFeature, "resolve_primary_binding"), binding);
+  assert.equal(extractFunction(adoptedReconcile, "resolve_primary_binding"), binding);
+  const root = mkdtempSync(join(tmpdir(), "a4s-primary-shell-"));
+  mkdirSync(join(root, "primaries"));
+  writeFileSync(join(root, "primaries", "a4s"), "/home/box/src/a4s\n");
+  writeFileSync(join(root, "a4s-primary"), "/station/shared\n");
+  const run = (value: string, workspace: string, env: NodeJS.ProcessEnv) => spawnSync("bash", ["-c", `${binding}\nresolve_primary_binding ${shellQuote(value)} ${shellQuote(workspace)}`], {
+    encoding: "utf8",
+    env: { PATH: process.env.PATH, HOME: root, ...env },
+  });
+  try {
+    const specific = run(HOST_PRIMARY_REFERENCE, "a4s", { DAGU_HOME: root, A4S_PRIMARY: "/station/env" });
+    assert.equal(specific.status, 0, specific.stderr);
+    assert.equal(specific.stdout, "/home/box/src/a4s\n");
+    const fromEnv = run(HOST_PRIMARY_REFERENCE, "", { DAGU_HOME: root, A4S_PRIMARY: "/station/env" });
+    assert.equal(fromEnv.status, 0, fromEnv.stderr);
+    assert.equal(fromEnv.stdout, "/station/env\n");
+    const shared = run(HOST_PRIMARY_REFERENCE, "missing", { DAGU_HOME: root });
+    assert.equal(shared.status, 0, shared.stderr);
+    assert.equal(shared.stdout, "/station/shared\n");
+    const recorded = run("/tmp/Repo con espacio/ñ", "", {});
+    assert.equal(recorded.status, 0, recorded.stderr);
+    assert.equal(recorded.stdout, "/tmp/Repo con espacio/ñ\n");
+    const missing = run(HOST_PRIMARY_REFERENCE, "", { DAGU_HOME: join(root, "absent") });
+    assert.equal(missing.status, 1);
+    const relative = run("relative/checkout", "", {});
+    assert.equal(relative.status, 1);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("adopted feature and poc renders do not advertise a foreign absolute PRIMARY", () => {
+  for (const text of [adoptedFeature, adoptedPoc]) {
+    assert.equal(text.includes("/Users/Shared/harness/a4s"), false);
+    assert.match(text, /PRIMARY: "\$\{A4S_PRIMARY\}"/);
+  }
+});
+
+test("feature admission rejects an A4S_PRIMARY run parameter", () => {
+  const admission = feature.split("  - id: admission\n")[1]!.split("\n  - id: triage")[0]!;
+  const script = admission.split("    run: |\n")[1]!.split("\n").map(line => line.slice(6)).join("\n");
+  const result = spawnSync("bash", ["-c", script], { encoding: "utf8", env: {
+    ...process.env,
+    DAGU_PARAMS_JSON: JSON.stringify({ A4S_PRIMARY: "/foreign" }),
+    PRIMARY: "/consumer", GATE: "true", REBASE_RESOLVER: "", REQUIRED_CHECK: "validate",
+    BRANCH: "dagu/issue-659", CODE_SCANNING: "required",
+  } });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /admission rejected run parameter: A4S_PRIMARY/);
+});
+
+test("enqueue records the resolved checkout and leaves the durable render portable", () => {
+  const fixture = admissionFixture();
+  const bin = join(fixture.root, "bin");
+  mkdirSync(bin);
+  const dagu = join(bin, "dagu");
+  writeFileSync(dagu, `#!${process.execPath}
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+if (args.length === 1 && args[0] === "version") console.log(${JSON.stringify(REQUIRED_DAGU_VERSION)});
+else if (args[0] === "enqueue") console.log("fixture enqueue");
+else { console.error("unexpected " + JSON.stringify(args)); process.exitCode = 1; }
+`);
+  chmodSync(dagu, 0o755);
+  try {
+    const durable = readFileSync(fixture.dag, "utf8");
+    assert.match(durable, /PRIMARY: "\$\{A4S_PRIMARY\}"/);
+    assert.equal(durable.includes(fixture.packageDir), false);
+    const admitted = fixture.command("admit", "primary-bound", { PATH: `${bin}:${process.env.PATH ?? ""}` });
+    assert.equal(admitted.status, 0, admitted.stderr);
+    const receipt = JSON.parse(readFileSync(fixture.receipt("primary-bound"), "utf8"));
+    assert.equal(receipt.initial.execution.primary, fixture.packageDir);
+    const snapshot = receipt.initial.execution.dagSnapshot as string;
+    assert.equal(/^  - PRIMARY: (.+)$/m.exec(snapshot)?.[1], JSON.stringify(fixture.packageDir));
+    assert.equal(readFileSync(fixture.dag, "utf8"), durable);
+    const enqueued = fixture.command("enqueue", "primary-enqueued", { PATH: `${bin}:${process.env.PATH ?? ""}` });
+    assert.equal(enqueued.status, 0, enqueued.stderr);
+    assert.equal(readFileSync(join(fixture.receipt("primary-enqueued"), "..", "snapshot", "feature.yaml"), "utf8"), JSON.parse(readFileSync(fixture.receipt("primary-enqueued"), "utf8")).initial.execution.dagSnapshot);
+  } finally { fixture.dispose(); }
+});
+
+test("resource guard protects only the checkout the host binding names", async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "a4s-primary-guard-")));
+  const primary = join(root, "primary");
+  const scratch = join(root, "scratch");
+  const bin = join(root, "bin");
+  const previousPath = process.env.PATH;
+  const previousPrimary = process.env.A4S_PRIMARY;
+  const previousHome = process.env.DAGU_HOME;
+  const git = (cwd: string, ...args: string[]) => {
+    const result = spawnSync("git", ["-C", cwd, ...args], { encoding: "utf8" });
+    assert.equal(result.status, 0, result.stderr);
+  };
+  try {
+    mkdirSync(bin);
+    writeFileSync(join(bin, "dagu"), "#!/bin/sh\nprintf '[]\\n'\n");
+    chmodSync(join(bin, "dagu"), 0o755);
+    process.env.PATH = `${bin}:${previousPath ?? ""}`;
+    process.env.A4S_PRIMARY = primary;
+    process.env.DAGU_HOME = root;
+    for (const repo of [primary, scratch]) {
+      git(".", "init", "-q", "-b", "main", repo);
+      git(repo, "config", "user.name", "Test");
+      git(repo, "config", "user.email", "test@example.com");
+      writeFileSync(join(repo, "value"), "base\n");
+      git(repo, "add", ".");
+      git(repo, "commit", "-qm", "base");
+      const dags = join(repo, ".workspace", "dagu", "dags");
+      mkdirSync(dags, { recursive: true });
+      writeFileSync(join(dags, "feature.yaml"), `labels:\n  - workspace=a4s\nenv:\n  - PRIMARY: "${HOST_PRIMARY_REFERENCE}"\n`);
+    }
+    const event = (command: string) => ({ toolName: "bash", toolCallId: command, input: { command } });
+    const reason = (await resourceDecision(event(`rm -rf '${primary}'`), scratch) as { reason?: string }).reason ?? "";
+    assert.match(reason, /protected primary/);
+    assert.equal(await resourceDecision(event(`rm -rf '${scratch}'`), primary), undefined);
+  } finally {
+    process.env.PATH = previousPath;
+    if (previousPrimary === undefined) delete process.env.A4S_PRIMARY;
+    else process.env.A4S_PRIMARY = previousPrimary;
+    if (previousHome === undefined) delete process.env.DAGU_HOME;
+    else process.env.DAGU_HOME = previousHome;
+    rmSync(root, { recursive: true, force: true });
+  }
+});

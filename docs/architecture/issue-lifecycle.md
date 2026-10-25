@@ -14,8 +14,10 @@ Distributed templates live together with `SKILL.md` under
 `packages/issue-lifecycle/skills/issue-execution/`. Adopted consumer renders live
 under `.workspace/dagu/dags/`; the scheduled reconciler is installed separately
 at `$DAGU_HOME/dags/reconcile.yaml`. A package PR publishes source; bootstrap and
-an adoption commit deliver consumer renders. Existing runs retain their admitted
-snapshots and receipt identities.
+an adoption commit deliver consumer renders. Feature and PoC `PRIMARY` in those
+renders is the host reference `"${A4S_PRIMARY}"`, resolved from the scheduler
+environment or station files under `$DAGU_HOME`, not from a path baked in at
+adoption. Existing runs retain their admitted snapshots and receipt identities.
 
 Bootstrap requires a clean source package, fetches its origin, resolves
 `origin/HEAD`, verifies source HEAD ancestry and exact Dagu output, and checks

@@ -6,6 +6,7 @@ import { join, resolve } from "node:path";
 import { parse } from "yaml";
 import { receiptPath } from "../src/admission.ts";
 import { REQUIRED_DAGU_VERSION } from "../src/bundle.ts";
+import { HOST_PRIMARY_REFERENCE, resolveHostPrimary, workspaceLabel } from "../src/primary.ts";
 import { isRecord } from "../src/type-guard.ts";
 
 interface Run { name: string; dagRunId: string; statusLabel: string; params?: string }
@@ -75,7 +76,8 @@ function originalParams(entry: Run, source: string): string[] {
   }
   const policy = Array.isArray(definition.env) ? definition.env.filter(value => isRecord(value) && "PRIMARY" in value) : [];
   if (policy.length > 1) throw new Error("Ambiguous retained PRIMARY; nothing dequeued");
-  const primary = policy.length ? policy[0]!.PRIMARY : defaults.get("PRIMARY");
+  let primary = policy.length ? policy[0]!.PRIMARY : defaults.get("PRIMARY");
+  if (primary === HOST_PRIMARY_REFERENCE) primary = resolveHostPrimary({ workspace: workspaceLabel(source) });
   if (primary !== undefined && (typeof primary !== "string" || !primary.startsWith("/") || primary.includes("$"))) throw new Error("Retained PRIMARY must be a literal absolute path; nothing dequeued");
   if (typeof primary === "string") {
     const path = receiptPath(primary, entry.dagRunId);

@@ -3,6 +3,7 @@ import { readFile, realpath, stat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import type { CallDecision, Event } from "./triage/guard.ts";
+import { HOST_PRIMARY_REFERENCE, resolveHostPrimary, workspaceLabel } from "./primary.ts";
 import { resolveRunPrimary } from "./status/progress.ts";
 
 const exec = promisify(execFile);
@@ -75,8 +76,9 @@ async function primaryAt(path: string): Promise<string> {
   if (!primary) throw new Error(`Cannot locate primary for ${path}`);
   return canonical(primary);
 }
-// Adopted feature/PoC renders name one canonical PRIMARY. Another clone of those
-// files is not that checkout and stays outside primary protection.
+// Adopted feature/PoC renders name one canonical PRIMARY, either as a recorded
+// absolute path or as the host reference resolved from this station. Another
+// clone of those files is not that checkout and stays outside primary protection.
 async function adoptedPrimary(primary: string): Promise<boolean> {
   for (const name of ["feature.yaml", "poc.yaml"]) {
     let text: string;
@@ -89,9 +91,15 @@ async function adoptedPrimary(primary: string): Promise<boolean> {
     if (!literal) continue;
     try {
       const recorded: unknown = JSON.parse(literal);
-      if (typeof recorded === "string" && isAbsolute(recorded) && await canonical(recorded) === primary) return true;
+      if (typeof recorded !== "string") continue;
+      const path = recorded === HOST_PRIMARY_REFERENCE
+        ? resolveHostPrimary({ workspace: workspaceLabel(text) })
+        : recorded;
+      if (typeof path === "string" && isAbsolute(path) && !path.includes("$") && await canonical(path) === primary) return true;
     } catch (error) {
-      if (!(error instanceof SyntaxError)) throw error;
+      if (error instanceof SyntaxError) continue;
+      if (error instanceof Error && error.message.startsWith("PRIMARY host binding is unset")) continue;
+      throw error;
     }
   }
   return false;

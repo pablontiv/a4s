@@ -38,15 +38,21 @@ export function admissionFixture() {
   render("feature.yaml", dag);
   render("reconcile.yaml", join(home, "dags", "reconcile.yaml"));
   writeFileSync(join(home, "config.yaml"), "coordinator:\n  enabled: false\n");
+  // The durable render keeps `"${A4S_PRIMARY}"`. This home is the station that resolves it.
+  writeFileSync(join(home, "a4s-primary"), `${packageDir}\n`);
   const cli = join(packageDir, "bin", "dagu-feature-bundle.ts");
-  const command = (subcommand: string, run: string, env: NodeJS.ProcessEnv = {}, params: string[] = []) => spawnSync(process.execPath, [cli, subcommand, "--run-id", run, dag, "--", "ISSUE=277", ...params], { cwd: packageDir, env: { ...process.env, DAGU_HOME: home, ...env }, encoding: "utf8", timeout: 30000 });
+  const command = (subcommand: string, run: string, env: NodeJS.ProcessEnv = {}, params: string[] = []) => spawnSync(process.execPath, [cli, subcommand, "--run-id", run, dag, "--", "ISSUE=277", ...params], { cwd: packageDir, env: { ...process.env, DAGU_HOME: home, A4S_PRIMARY: packageDir, ...env }, encoding: "utf8", timeout: 30000 });
   const receipt = (run: string): string => join(packageDir, ".git", "dagu-feature", "runs", run, "receipt.json");
-  const observe = (run: string, observation: object) => spawnSync(process.execPath, [cli, "observe", run, JSON.stringify(observation)], { cwd: packageDir, env: { ...process.env, DAGU_HOME: home }, encoding: "utf8" });
+  const observe = (run: string, observation: object) => spawnSync(process.execPath, [cli, "observe", run, JSON.stringify(observation)], { cwd: packageDir, env: { ...process.env, DAGU_HOME: home, A4S_PRIMARY: packageDir }, encoding: "utf8" });
   const previousDaguHome = process.env.DAGU_HOME;
+  const previousPrimary = process.env.A4S_PRIMARY;
   process.env.DAGU_HOME = home;
+  process.env.A4S_PRIMARY = packageDir;
   const dispose = (): void => {
     if (previousDaguHome === undefined) delete process.env.DAGU_HOME;
     else process.env.DAGU_HOME = previousDaguHome;
+    if (previousPrimary === undefined) delete process.env.A4S_PRIMARY;
+    else process.env.A4S_PRIMARY = previousPrimary;
     rmSync(root, { recursive: true, force: true });
   };
   return { root, packageDir, home, dag, cli, command, receipt, observe, render, dispose };

@@ -11,6 +11,27 @@ steps:
   - id: discover
     run: |
       set -euo pipefail
+      resolve_primary_binding() {
+        local value=$1 workspace=$2 home sentinel
+        sentinel='${A4S_'"PRIMARY}"
+        if [[ "$value" != "$sentinel" ]]; then
+          [[ "$value" == /* && "$value" != *'$'* && "$value" != *[[:space:]] && "$value" != [[:space:]]* ]] || return 1
+          printf '%s\n' "$value"
+          return 0
+        fi
+        home=${DAGU_HOME:-$HOME/.dagu}
+        if [[ "$workspace" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ && -f "$home/primaries/$workspace" ]]; then
+          value=$(tr -d '\r\n' < "$home/primaries/$workspace")
+        elif [[ -n ${A4S_PRIMARY:-} ]]; then
+          value=$A4S_PRIMARY
+        elif [[ -f "$home/a4s-primary" ]]; then
+          value=$(tr -d '\r\n' < "$home/a4s-primary")
+        else
+          return 1
+        fi
+        [[ "$value" == /* && "$value" != *'$'* && "$value" != *[[:space:]] && "$value" != [[:space:]]* ]] || return 1
+        printf '%s\n' "$value"
+      }
       dagu history feature --status waiting --format json --limit 500 | jq -c '
         def param($key):
           .params as $params
@@ -25,8 +46,10 @@ steps:
       ' | jq -c '.[]' | while IFS= read -r row; do
         if [[ "$(jq -r .PRIMARY <<<"$row")" == "" ]]; then
           run=$(jq -r .RUN <<<"$row")
-          primary=$(curl -fsS "http://127.0.0.1:${DAGU_PORT:-8080}/api/v1/dag-runs/feature/$run/spec" |
-            jq -er '.spec | split("\n")[] | select(startswith("  - PRIMARY: ")) | ltrimstr("  - PRIMARY: ") | fromjson')
+          spec=$(curl -fsS "http://127.0.0.1:${DAGU_PORT:-8080}/api/v1/dag-runs/feature/$run/spec")
+          primary=$(jq -er '.spec | split("\n")[] | select(startswith("  - PRIMARY: ")) | ltrimstr("  - PRIMARY: ") | fromjson' <<<"$spec")
+          workspace=$(jq -r '[.spec | split("\n")[] | select(startswith("  - workspace=")) | ltrimstr("  - workspace=")] | first // ""' <<<"$spec")
+          primary=$(resolve_primary_binding "$primary" "$workspace")
           row=$(jq -c --arg primary "$primary" '.PRIMARY = $primary | .BRANCH = ("dagu/issue-" + .ISSUE)' <<<"$row")
         fi
         printf '%s\n' "$row"

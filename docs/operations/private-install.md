@@ -54,7 +54,11 @@ agents and package skills together. Root utility skills and generic native
 roles have separate installation below. `--no-extensions` suppresses ambient
 extension registration; it does not disable native agent or skill discovery.
 `DAGU_URL` is the actual server root (default `http://127.0.0.1:8080`), and
-`DAGU_HOME` must identify that controller's store/config.
+`DAGU_HOME` must identify that controller's store/config. The scheduler
+environment sets `A4S_PRIMARY` to that station's main checkout so feature and
+PoC renders can resolve `PRIMARY` without a machine path in the bundle. A
+per-checkout file `$DAGU_HOME/primaries/<workspace>` or the single-checkout
+file `$DAGU_HOME/a4s-primary` is the same binding when the variable is unset.
 
 For an expressly authorized persistent user installation, from the durable
 selected checkout:

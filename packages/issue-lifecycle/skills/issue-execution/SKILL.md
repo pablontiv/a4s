@@ -481,8 +481,20 @@ The bootstrap renders the repository DAG templates when a repository adopts the 
 | `__VALIDATION__` | Optional repository procedure after gate, fixed by adoption; empty skips the checkpoint | `""` | `""` |
 | `__A4S_BLOCKER_REPORTING__` | Optional adopted `A4S_BLOCKER_REPORTING`: `ask` (initial default) or explicit opt-in `auto`; blank bootstrap answer preserves installed choice | `ask` | `ask` |
 | `__CODE_SCANNING__` | Adopted `CODE_SCANNING`: `required` (initial default) waits for CodeQL, or `off` neither observes nor waits; blank bootstrap answer preserves the installed choice, and a render without the key stays `required` | `required` | `required` |
-| `__PRIMARY__` | Canonical main-clone path fixed in feature and PoC renders | repository clone | repository clone |
+| `__PRIMARY__` | Host reference `"${A4S_PRIMARY}"` written into feature and PoC renders. Not a machine path. See [PRIMARY host binding](#primary-host-binding) | `"${A4S_PRIMARY}"` | `"${A4S_PRIMARY}"` |
 | `__TEST_PATHS__` | Bash ERE for repository test paths; every `*.md` also belongs to cutover | `_test\.go$\|^tests/` | `(^\|/)tests/` |
+
+### PRIMARY host binding
+
+Feature and PoC renders bind `PRIMARY` to `"${A4S_PRIMARY}"`. Bootstrap substitutes `__PRIMARY__` with that reference and does not record the adopting checkout's absolute path, so one bundle runs on every station. Dagu expands `${A4S_PRIMARY}` from the scheduler process environment when it loads a durable render. `dagu-feature-bundle enqueue` resolves the same reference and records the absolute path in the admitted snapshot, which is the spec later readers use.
+
+Resolution order for the host reference:
+
+1. `$DAGU_HOME/primaries/<workspace>` when that file exists. `<workspace>` is the render's `workspace=` label. The file contains one absolute path. Use this when one scheduler serves more than one checkout.
+2. `A4S_PRIMARY` in the process environment. This is the station checkout. The scheduler environment must set it when durable renders are started directly.
+3. `$DAGU_HOME/a4s-primary`, one absolute path. `DAGU_HOME` defaults to `~/.dagu`.
+
+A JSON absolute path already recorded in a render or run spec stays that checkout. The resolved path is the main checkout, not a linked worktree. Worktrees stay `$PRIMARY/.workspace/worktrees/...`.
 
 The DAG's fixed invariants: `PRIMARY` is the repository clone, its main working tree, on `BASE_BRANCH` and clean; the run's worktree is always `$PRIMARY/.workspace/worktrees/issue-<n>`, ignored by git; the gate runs with `umask 0022` and without `GH_TOKEN`/`GITHUB_TOKEN`; auto-merge is bound to the tested SHA with `--match-head-commit`; and gate bodies serialize per primary within the repository's declared queue capacity. `start_gate` registers the canonical PRIMARY, worktree, branch and owning run in Git metadata. Both cleanup entry points share the same script. They refresh the remote base and require either candidate ancestry in that base or a MERGED PR whose head equals the recorded tested candidate and whose effective merge SHA is an ancestor of the refreshed base. `cleanup-proof.json` records candidate, base, squash SHA and proof. Ordinary `git worktree remove` protects local files; a dirty worktree is retained. Local branch deletion compares the candidate atomically; remote deletion at merged close uses an exact-SHA lease.
 
@@ -512,7 +524,7 @@ The steps:
 | `detect` | Checks `git`, `gh` (authenticated), `jq`, Python's `fcntl`, the exact required `dagu version`, and every package executable a rendered DAG invokes (`dagu-codeql`, `dagu-feature-bundle`, `dagu-feature-protect`, `dagu-gate`, `dagu-poc-scope`, `dagu-pr-body`, `dagu-role-jobs`, `dagu-stale-recovery`). A missing command fails with `bootstrap detect: required command not found: <name>`. It then reads package/version, source commit and source `origin`; fetches and requires that clean package commit on the remote default branch; reads repository settings and the installed DAG values and stamps. |
 | `answers` | `human.task` showing the current stamp, `GATE`, `REQUIRED_CHECK`, `TEST_PATHS`, `REBASE_RESOLVER`, optional `VALIDATION`, and `CODE_SCANNING` (`required` or `off`). Choose the test-path ERE, resolver and validation procedure from repository conventions; validation defaults to empty. Blank `CODE_SCANNING` preserves the installed choice. |
 | `worktrees` | Makes git ignore `.workspace/worktrees/`. When nothing ignores it yet, appends `/.workspace/worktrees/` to the clone's `info/exclude`, so the primary stays clean without a commit. |
-| `render` | Writes stamped and validated `feature.yaml`, `poc.yaml`, `discovery.yaml`, `planning.yaml`, and `reconcile.yaml` under `<git-dir>/dagu-feature/`, keeping PRIMARY clean. Discovery and planning receive the coordinating workspace label and resolve the target repository from `PRIMARY`. |
+| `render` | Writes stamped and validated `feature.yaml`, `poc.yaml`, `discovery.yaml`, `planning.yaml`, and `reconcile.yaml` under `<git-dir>/dagu-feature/`, keeping PRIMARY clean. Feature and PoC `PRIMARY` is the host reference `"${A4S_PRIMARY}"`, not this checkout's absolute path. Discovery and planning receive the coordinating workspace label and resolve the target repository from the `PRIMARY` parameter. |
 | `reconcile` | Idempotently installs the stamped staged `reconcile.yaml` to `$DAGU_HOME/dags/reconcile.yaml` (`DAGU_HOME` defaults to `~/.dagu`) and validates it. One user-level DAG serves every adopting repository. |
 | `github` | Enables auto-merge and squash merge, and adds `REQUIRED_CHECK` as a strict required status check on the default branch. It keeps the existing contexts and every other protection setting. When it has to recreate the protection, it reads the protection back and fails if any other setting changed. |
 | `confirm` | Reads settings back, validates the four staged repository DAGs, compares the installed reconciler with its stamped render, and prints the bundle identity plus the three adoption commit trailers. |

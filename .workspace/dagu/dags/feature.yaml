@@ -34,7 +34,7 @@ params:
       type: string
       default: ""
 env:
-  - PRIMARY: "/Users/Shared/harness/a4s"
+  - PRIMARY: "${A4S_PRIMARY}"
   - BRANCH: dagu/issue-${ISSUE}
   - GATE: "npm test && npm run typecheck"
   - REBASE_RESOLVER: "node packages/issue-lifecycle/bin/dagu-bundle-rebase.mjs"
@@ -51,6 +51,27 @@ env:
   - RUN: ${context.run.id}
   - DAGU_FEATURE_BUNDLE: "dagu-feature-bundle=0.5.4 source=pablontiv/a4s@0789baf07ddf0110dc296c9bc43e50ad6921ffc2 bootstrap=bootstrap-a4s-v0-5-4"
   - DAGU_RESOURCE_GUARD: |
+      resolve_primary_binding() {
+        local value=$1 workspace=$2 home sentinel
+        sentinel='${A4S_'"PRIMARY}"
+        if [[ "$value" != "$sentinel" ]]; then
+          [[ "$value" == /* && "$value" != *'$'* && "$value" != *[[:space:]] && "$value" != [[:space:]]* ]] || return 1
+          printf '%s\n' "$value"
+          return 0
+        fi
+        home=${DAGU_HOME:-$HOME/.dagu}
+        if [[ "$workspace" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ && -f "$home/primaries/$workspace" ]]; then
+          value=$(tr -d '\r\n' < "$home/primaries/$workspace")
+        elif [[ -n ${A4S_PRIMARY:-} ]]; then
+          value=$A4S_PRIMARY
+        elif [[ -f "$home/a4s-primary" ]]; then
+          value=$(tr -d '\r\n' < "$home/a4s-primary")
+        else
+          return 1
+        fi
+        [[ "$value" == /* && "$value" != *'$'* && "$value" != *[[:space:]] && "$value" != [[:space:]]* ]] || return 1
+        printf '%s\n' "$value"
+      }
       resource_lock() {
         local operation=$1 primary root expected actual common key attempt owner run status candidate branch issue
         primary=$(cd "$PRIMARY" && pwd -P)
@@ -121,8 +142,12 @@ env:
         fi
         while IFS=$'\t' read -r run status candidate branch issue; do
           if [[ "$candidate" == @snapshot ]]; then
-            candidate=$(curl -fsS "http://127.0.0.1:${DAGU_PORT:-8080}/api/v1/dag-runs/feature/$(jq -nr --arg run "$run" '$run|@uri')/spec" |
-              jq -er '.spec | split("\n")[] | select(startswith("  - PRIMARY: ")) | ltrimstr("  - PRIMARY: ") | fromjson') ||
+            spec=$(curl -fsS "http://127.0.0.1:${DAGU_PORT:-8080}/api/v1/dag-runs/feature/$(jq -nr --arg run "$run" '$run|@uri')/spec") ||
+              { printf 'dagu-feature: cannot resolve adopted primary for run %s\n' "$run" >&2; exit 1; }
+            candidate=$(jq -er '.spec | split("\n")[] | select(startswith("  - PRIMARY: ")) | ltrimstr("  - PRIMARY: ") | fromjson' <<<"$spec") ||
+              { printf 'dagu-feature: cannot resolve adopted primary for run %s\n' "$run" >&2; exit 1; }
+            workspace=$(jq -r '[.spec | split("\n")[] | select(startswith("  - workspace=")) | ltrimstr("  - workspace=")] | first // ""' <<<"$spec")
+            candidate=$(resolve_primary_binding "$candidate" "$workspace") ||
               { printf 'dagu-feature: cannot resolve adopted primary for run %s\n' "$run" >&2; exit 1; }
           fi
           [[ -n "$candidate" && -d "$candidate" ]] || continue
@@ -195,7 +220,7 @@ steps:
   - id: admission
     run: |
       set -euo pipefail
-      rejected=$(jq -er 'keys[] | select(startswith("ESCALATION_") or startswith("CODEQL_") or . == "GATE" or . == "REBASE_RESOLVER" or . == "REQUIRED_CHECK" or . == "PRIMARY" or . == "BRANCH" or . == "A4S_BLOCKER_REPORTING")' <<<"$DAGU_PARAMS_JSON") || [[ $? == 4 ]]
+      rejected=$(jq -er 'keys[] | select(startswith("ESCALATION_") or startswith("CODEQL_") or . == "GATE" or . == "REBASE_RESOLVER" or . == "REQUIRED_CHECK" or . == "PRIMARY" or . == "A4S_PRIMARY" or . == "BRANCH" or . == "A4S_BLOCKER_REPORTING")' <<<"$DAGU_PARAMS_JSON") || [[ $? == 4 ]]
       if [[ -n "$rejected" ]]; then
         printf 'admission rejected run parameter: %s\n' "$rejected" >&2
         printf 'adopted policy PRIMARY=%q GATE=%q REBASE_RESOLVER=%q REQUIRED_CHECK=%q BRANCH=%q\n' "$PRIMARY" "$GATE" "${REBASE_RESOLVER:-}" "$REQUIRED_CHECK" "$BRANCH" >&2
@@ -1401,7 +1426,7 @@ steps:
       - CLEANUP_CLOSE: "true"
     run: &feature_cleanup |
       set -euo pipefail
-      if jq -e 'has("GATE") or has("REBASE_RESOLVER") or has("REQUIRED_CHECK") or has("PRIMARY") or has("BRANCH")' <<<"${DAGU_PARAMS_JSON:-"{}"}" >/dev/null; then exit 0; fi
+      if jq -e 'has("GATE") or has("REBASE_RESOLVER") or has("REQUIRED_CHECK") or has("PRIMARY") or has("A4S_PRIMARY") or has("BRANCH")' <<<"${DAGU_PARAMS_JSON:-"{}"}" >/dev/null; then exit 0; fi
       umask 0022
       eval "$DAGU_RESOURCE_GUARD"
       resource_lock cleanup
