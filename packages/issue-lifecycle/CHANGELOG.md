@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.18
+
+- Record an explicit operator integration protection for one candidate: its run, issue, changed paths, decision and provenance. Capture and a clean rebase refresh the protected paths (#559).
+- Hold gate admission, push and auto-merge when another candidate's paths intersect that set, at a visible `integration_hold` checkpoint that names the protecting run. Disjoint candidates proceed. A run with no issue proceeds while nothing is protected. `close_gate`, terminal exit (including abort) and an explicit operator release let the held run continue with the same candidate, run id and iteration.
+- Report the active protection and the runs it holds in the owning session's `[DAGU STATE]`. The record survives scheduler and OMP restarts.
+
 ## 0.5.17
 
 - Observe non-PR waiting runs in the reconcile root. Keep `dag.run` children for `await_ci` and `await_merge`, read issue state once per repository with full pagination, and report closed `triage` or `implement` issues from that root observation (#636).

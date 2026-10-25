@@ -338,6 +338,21 @@ test("validation notice carries the operator procedure, SHA and iteration-bound 
   assert.equal(transitions.observe(waiting).wakeMessage, undefined);
 });
 
+test("integration protection is shown to the owning session, including the silent baseline, and again when held runs change", () => {
+  const transitions = new Transitions("session-a");
+  const candidate: RunDetails = {
+    ...run, dagRunId: "owned-run", params: "ISSUE=290 OMP_SESSION_ID=session-a", statusLabel: "running",
+    nodes: [{ step: { name: "gate" }, statusLabel: "running" }],
+  };
+  const protection = { protectedRun: "feature-290", issue: "290", held: ["feature-548"], recordedAt: "2026-10-25T00:00:00.000Z" };
+  const first = transitions.observe(candidate, { baseline: true, integrationProtection: protection }).wakeMessage;
+  assert.match(first ?? "", /\[DAGU STATE\] integration-protection protected_run=feature-290 issue=290 held=feature-548/);
+  assert.equal(transitions.observe(candidate, { integrationProtection: protection }).wakeMessage, undefined);
+  const changed = transitions.observe(candidate, { integrationProtection: { ...protection, held: [] } }).wakeMessage;
+  assert.match(changed ?? "", /held=none/);
+  assert.equal(new Transitions("other").observe(candidate, { integrationProtection: protection }).wakeMessage, undefined);
+});
+
 test("runtime primary resolves the enqueued adoption spec including spaces and Unicode", async t => {
   const primary = "/tmp/Repo con espacio/ñ";
   const fetch = t.mock.method(globalThis, "fetch", async (url: string | URL | Request) => {

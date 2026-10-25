@@ -224,7 +224,11 @@ export class Transitions {
 
   constructor(private readonly sessionId?: string) {}
 
-  observe(run: RunDetails, options: { baseline?: boolean; slug?: string; checkpoints?: boolean; ciDiagnostic?: CiDiagnostic; escalationDiagnostic?: string; stalls?: StallNotice[] } = {}): TransitionEffects {
+  observe(run: RunDetails, options: {
+    baseline?: boolean; slug?: string; checkpoints?: boolean; ciDiagnostic?: CiDiagnostic; escalationDiagnostic?: string;
+    stalls?: StallNotice[];
+    integrationProtection?: { protectedRun: string; issue: string; held: readonly string[]; recordedAt: string };
+  } = {}): TransitionEffects {
     const key = topicFor(run);
     const previous = this.states.get(key);
     const terminalStep = run.nodes?.find(node => node.statusLabel === run.statusLabel)?.step.name;
@@ -237,10 +241,10 @@ export class Transitions {
     const identity = issue ? ` issue=${issue}` : ` dag=${plain(run.name)}`;
     const bundleNotice = ` bundle=${plain(bundle.displayVersion)} extension=${bundle.extensionVersion} main=${plain(bundle.mainVersion)} compat=${bundle.compat}`;
     const messages: string[] = [];
-    const notice = (id: string, text: string): void => {
+    const notice = (id: string, text: string, durable = false): void => {
       if (this.notices.has(id)) return;
       this.notices.add(id);
-      if (!options.baseline && owned && supported) messages.push(text);
+      if ((durable || !options.baseline) && owned && supported) messages.push(text);
     };
     for (const stall of options.stalls ?? []) {
       if (runParam(run, "OMP_SESSION_ID") !== stall.session) continue;
@@ -250,6 +254,13 @@ export class Transitions {
         `[DAGU STALL] run=${plain(run.dagRunId)}${identity}${bundleNotice} session=${plain(stall.session)} computation=${plain(stall.computation)} completed=${stall.progress.completed}/${stall.progress.total} lastShard=${last ? String(last.index) : "none"} range=${range} completedAt=${plain(last?.completedAt ?? "none")} directory=${plain(stall.directory)} options=continue; resize; stop. Completed shards are preserved.`);
     }
     if (options.checkpoints !== false) {
+      const protection = options.integrationProtection;
+      if (protection && owned && supported) {
+        const held = protection.held.length ? protection.held.map(plain).join(",") : "none";
+        notice(JSON.stringify(["integration-protection", protection.protectedRun, protection.recordedAt, held]),
+          `[DAGU STATE] integration-protection protected_run=${plain(protection.protectedRun)} issue=${plain(protection.issue)} held=${held}`,
+          true);
+      }
       const ci = options.ciDiagnostic;
       if (ci?.class === "BLOCKED" && ci.decisionRequest && run.nodes?.some(node =>
         node.statusLabel === "waiting" && ["await_ci", "await_merge"].includes(node.step.id ?? node.step.name)

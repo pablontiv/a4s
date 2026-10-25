@@ -144,6 +144,10 @@ exec ${JSON.stringify(realGit)} "$@"
 }
 
 function run(script: string, repo: Repo, extra: Record<string, string> = {}) {
+  const bin = join(repo.root, "bin");
+  mkdirSync(bin, { recursive: true });
+  const protect = join(bin, "dagu-feature-protect");
+  if (!existsSync(protect)) symlinkSync(fileURLToPath(new URL("../bin/dagu-feature-protect.ts", import.meta.url)), protect);
   return spawnSync("bash", ["-c", script], {
     cwd: repo.outside,
     encoding: "utf8",

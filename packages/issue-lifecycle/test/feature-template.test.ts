@@ -22,6 +22,7 @@ import { renderedFeature, renderedPoc } from "./fixtures/rendered-feature.ts";
 
 const timingBin = mkdtempSync(join(tmpdir(), "a4s-gate-cli-"));
 symlinkSync(fileURLToPath(new URL("../bin/dagu-gate.cjs", import.meta.url)), join(timingBin, "dagu-gate"));
+symlinkSync(fileURLToPath(new URL("../bin/dagu-feature-protect.ts", import.meta.url)), join(timingBin, "dagu-feature-protect"));
 process.env.PATH = `${timingBin}:${process.env.PATH ?? ""}`;
 after(() => rmSync(timingBin, { recursive: true, force: true }));
 

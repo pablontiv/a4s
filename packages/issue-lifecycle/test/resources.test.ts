@@ -23,6 +23,7 @@ function fixture() {
   git(primary, "remote", "add", "origin", remote); git(primary, "push", "-qu", "origin", "main");
   writeFileSync(join(primary, ".git", "info", "exclude"), "/.workspace/\n");
   const bin = join(root, "bin"); mkdirSync(bin);
+  symlinkSync(fileURLToPath(new URL("../bin/dagu-feature-protect.ts", import.meta.url)), join(bin, "dagu-feature-protect"));
   writeFileSync(join(bin, "dagu"), `#!/bin/sh\nif [ -f '${root}/fail' ]; then echo 'history unavailable' >&2; exit 2; fi\ncat '${root}/'"$2"'.json'\n`);
   chmodSync(join(bin, "dagu"), 0o755);
   const history = (kind: string, rows: unknown[]) => writeFileSync(join(root, `${kind}.json`), JSON.stringify(rows));
