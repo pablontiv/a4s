@@ -7,6 +7,7 @@ import {
   parseVersion,
 } from "../bundle.ts";
 import type { Compatibility } from "../bundle.ts";
+import { primaryFromSpec } from "../primary.ts";
 import type { StallNotice } from "../long-computation.ts";
 
 export interface RunDetails {
@@ -54,10 +55,7 @@ export async function resolveRunPrimary(base: string, run: RunDetails, signal: A
   });
   if (!response.ok) throw new Error(`Dagu spec HTTP ${response.status}`);
   const { spec } = await response.json() as { spec: string };
-  const literal = /^  - PRIMARY: (.+)$/m.exec(spec)?.[1];
-  if (!literal) return undefined;
-  const primary: unknown = JSON.parse(literal);
-  return typeof primary === "string" ? primary : undefined;
+  return primaryFromSpec(spec);
 }
 
 export function issueNumber(run: RunDetails): string | undefined {

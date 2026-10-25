@@ -19,6 +19,7 @@ import {
 import type { RunDetails } from "./status/progress.ts";
 import { isRecord } from "./type-guard.ts";
 import { requirePocScope, scopeTargets } from "./poc-scope.ts";
+import { HOST_PRIMARY_REFERENCE, bindSnapshotPrimary, resolvePrimaryBinding, workspaceLabel } from "./primary.ts";
 
 const packageRoot = fileURLToPath(new URL("../", import.meta.url));
 const correction = "Apply bootstrap from a clean compatible @a4s/issue-lifecycle checkout, adopt its stamped DAGs, install its reconciler and restart OMP to load both extension modules; retry with a new run ID.";
@@ -136,6 +137,7 @@ export function admit(options: AdmissionOptions, persist = true): { path: string
     const name = basename(dagPath);
     if (!["feature.yaml", "poc.yaml", "discovery.yaml", "planning.yaml", "reconcile.yaml"].includes(name)) throw new Error(`DAG=${name} expected a distributed lifecycle DAG`);
     let primaryParam = options.params.find(param => param.startsWith("PRIMARY="))?.slice(8);
+    let executionSnapshot: string | undefined;
     if (name === "feature.yaml" || name === "poc.yaml") {
       const snapshot = readFileSync(dagPath, "utf8");
       const policy: Record<string, unknown> = {};
@@ -145,11 +147,18 @@ export function admit(options: AdmissionOptions, persist = true): { path: string
       }
       const issue = options.params.find(param => param.startsWith("ISSUE="))?.slice(6);
       policy.BRANCH = name === "feature.yaml" ? `dagu/issue-${issue}` : `poc/${options.run}`;
-      const rejected = options.params.map(param => param.slice(0, param.indexOf("=")))
-        .filter(field => field.startsWith("ESCALATION_") || ["PRIMARY", "BRANCH", "GATE", "REBASE_RESOLVER", "REQUIRED_CHECK", "A4S_BLOCKER_REPORTING", "CODEQL_SECURITY_THRESHOLD", "CODEQL_ALERTS_THRESHOLD", "CODE_SCANNING"].includes(field));
-      if (rejected.length) throw new Error(`admission rejected run parameter: ${rejected.join(", ")}; adopted policy ${JSON.stringify(policy)}`);
       if (typeof policy.PRIMARY !== "string" || !policy.PRIMARY) throw new Error(`${name} requires an adoption-fixed PRIMARY`);
-      primaryParam = policy.PRIMARY;
+      const bound = resolvePrimaryBinding(policy.PRIMARY, { workspace: workspaceLabel(snapshot) });
+      let resolved = bound;
+      if (policy.PRIMARY === HOST_PRIMARY_REFERENCE) {
+        resolved = realpathSync(bound);
+        executionSnapshot = bindSnapshotPrimary(snapshot, resolved);
+      }
+      policy.PRIMARY = resolved;
+      primaryParam = resolved;
+      const rejected = options.params.map(param => param.slice(0, param.indexOf("=")))
+        .filter(field => field.startsWith("ESCALATION_") || ["PRIMARY", "A4S_PRIMARY", "BRANCH", "GATE", "REBASE_RESOLVER", "REQUIRED_CHECK", "A4S_BLOCKER_REPORTING", "CODEQL_SECURITY_THRESHOLD", "CODEQL_ALERTS_THRESHOLD", "CODE_SCANNING"].includes(field));
+      if (rejected.length) throw new Error(`admission rejected run parameter: ${rejected.join(", ")}; adopted policy ${JSON.stringify(policy)}`);
     }
     const primary = realpathSync(resolve(options.cwd, primaryParam || "."));
     const repo = realpathSync(git(primary, "rev-parse", "--show-toplevel"));
@@ -206,7 +215,7 @@ export function admit(options: AdmissionOptions, persist = true): { path: string
       initial: {
         admittedAt: new Date().toISOString(), deployment,
         runtimeAndModels: { ...fields("omp systemPromptDigest profile roles roleMapHash requestedRole resolvedModel fallback resolvedModelIsFallback crossFamilyDecision serverPid serverPpid serverStartedAt", "not exposed at admission; append a linked runtime observation when resolved"), node: { version: process.version, path: realpathSync(process.execPath) }, dagu: { version: daguVersion, path: realpathSync(execFileSync("/bin/sh", ["-c", "command -v dagu"], { encoding: "utf8" }).trim()) }, daguHome, endpoint: process.env.DAGU_URL || "http://127.0.0.1:8080", admissionPid: process.pid, admissionPpid: process.ppid, config, transcriptRoot: options.session?.transcriptRoot ?? pending("operator CLI has no OMP session context"), model: options.session?.model ?? pending("OMP model not exposed to CLI") },
-        execution: { ...fields("base owner refs step approvalIteration sourceSession destinationSession triageGeneration triageMarker", "not yet resolved at admission"), repo, primary, head: git(primary, "rev-parse", "HEAD"), branch: git(primary, "branch", "--show-current"), worktree: repo, dirty, diffDigest: sha256(diff), parameters: options.params, ompSession: options.params.find(param => param.startsWith("OMP_SESSION_ID="))?.slice(15) ?? pending("OMP_SESSION_ID not supplied"), dagSnapshot: installedDAG.snapshot },
+        execution: { ...fields("base owner refs step approvalIteration sourceSession destinationSession triageGeneration triageMarker", "not yet resolved at admission"), repo, primary, head: git(primary, "rev-parse", "HEAD"), branch: git(primary, "branch", "--show-current"), worktree: repo, dirty, diffDigest: sha256(diff), parameters: options.params, ompSession: options.params.find(param => param.startsWith("OMP_SESSION_ID="))?.slice(15) ?? pending("OMP_SESSION_ID not supplied"), dagSnapshot: executionSnapshot ?? installedDAG.snapshot },
         eventsAndExternalState: fields("eventIds cursor source transition destination delivery trigger queue reconcile merge checks configuration locks lockOwner restarts activeRuns exit signal latency errors incidents", "not observed before enqueue; linked observations append without replacing initial state"),
       },
       runReceipt: { dag: name.replace(/\.yaml$/, ""), run: options.run, attempt: 1, observations: [] },

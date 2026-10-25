@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.19
+
+- Bind feature and PoC `PRIMARY` to the host reference `"${A4S_PRIMARY}"` instead of a machine path. Enqueue, spec recovery and the resource guard resolve `$DAGU_HOME/primaries/<workspace>`, then `A4S_PRIMARY`, then `$DAGU_HOME/a4s-primary`. An admitted snapshot records that absolute main checkout (#659).
+
 ## 0.5.18
 
 - Record an explicit operator integration protection for one candidate: its run, issue, changed paths, decision and provenance. Capture and a clean rebase refresh the protected paths (#559).

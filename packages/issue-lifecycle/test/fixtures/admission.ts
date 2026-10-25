@@ -39,7 +39,7 @@ export function admissionFixture() {
   render("reconcile.yaml", join(home, "dags", "reconcile.yaml"));
   writeFileSync(join(home, "config.yaml"), "coordinator:\n  enabled: false\n");
   const cli = join(packageDir, "bin", "dagu-feature-bundle.ts");
-  const command = (subcommand: string, run: string, env: NodeJS.ProcessEnv = {}, params: string[] = []) => spawnSync(process.execPath, [cli, subcommand, "--run-id", run, dag, "--", "ISSUE=277", ...params], { cwd: packageDir, env: { ...process.env, DAGU_HOME: home, ...env }, encoding: "utf8", timeout: 30000 });
+  const command = (subcommand: string, run: string, env: NodeJS.ProcessEnv = {}, params: string[] = []) => spawnSync(process.execPath, [cli, subcommand, "--run-id", run, dag, "--", "ISSUE=277", ...params], { cwd: packageDir, env: { ...process.env, DAGU_HOME: home, A4S_PRIMARY: packageDir, ...env }, encoding: "utf8", timeout: 30000 });
   const receipt = (run: string): string => join(packageDir, ".git", "dagu-feature", "runs", run, "receipt.json");
   const observe = (run: string, observation: object) => spawnSync(process.execPath, [cli, "observe", run, JSON.stringify(observation)], { cwd: packageDir, env: { ...process.env, DAGU_HOME: home }, encoding: "utf8" });
   const previousDaguHome = process.env.DAGU_HOME;

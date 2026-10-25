@@ -69,6 +69,11 @@ source checkout. Node >=22.19 supports direct TypeScript here; use the real
 source path because Node rejects stripping TypeScript under `node_modules`.
 The admitted feature/PoC policy fixes PRIMARY, BRANCH, GATE, REBASE_RESOLVER,
 REQUIRED_CHECK and blocker-reporting policy; the CLI rejects overrides.
+Feature and PoC renders bind `PRIMARY` to the host reference `"${A4S_PRIMARY}"`.
+Enqueue resolves it from `$DAGU_HOME/primaries/<workspace>`, then `A4S_PRIMARY`,
+then `$DAGU_HOME/a4s-primary`, and the admitted snapshot records that absolute
+main checkout. The scheduler environment sets `A4S_PRIMARY` when a durable
+render is started directly. A linked worktree is not a primary.
 
 ## Versioned source, configuration and runtime state
 

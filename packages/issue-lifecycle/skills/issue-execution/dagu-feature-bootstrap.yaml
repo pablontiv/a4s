@@ -383,7 +383,7 @@ steps:
       jq -nr --rawfile template "$SKILL_DIR/feature.yaml" \
         --arg repo "$REPO" --arg base "$BASE_BRANCH" \
         --arg gate "$GATE" --arg check "$REQUIRED_CHECK" \
-        --arg resolver "$REBASE_RESOLVER" --arg primary "$PRIMARY" \
+        --arg resolver "$REBASE_RESOLVER" \
         --arg validation "${VALIDATION:-}" \
         --arg blocker_reporting "$A4S_BLOCKER_REPORTING" \
         --arg codeql_security "$CODEQL_SECURITY_THRESHOLD" --arg codeql_alerts "$CODEQL_ALERTS_THRESHOLD" \
@@ -393,7 +393,7 @@ steps:
           | $render_common
           | gsub(\"TEMPLATE_REPO\"; \$repo)
           | gsub(\"TEMPLATE_BASE_BRANCH\"; \$base | tojson)
-          | gsub(\"__PRIMARY__\"; \$primary | tojson)
+          | gsub(\"__PRIMARY__\"; \"\${A4S_PRIMARY}\" | tojson)
           | gsub(\"__GATE__\"; \$gate | tojson)
           | gsub(\"__REBASE_RESOLVER__\"; \$resolver | tojson)
           | gsub(\"__REQUIRED_CHECK__\"; \$check | tojson)
@@ -404,13 +404,13 @@ steps:
           | gsub(\"__A4S_BLOCKER_REPORTING__\"; \$blocker_reporting | tojson)" > "$STAGE"
       jq -nr --rawfile template "$SKILL_DIR/poc.yaml" \
         --arg repo "$REPO" --arg base "$BASE_BRANCH" \
-        --arg primary "$PRIMARY" --arg tests "$TEST_PATHS" \
+        --arg tests "$TEST_PATHS" \
         --arg stamp "$stamp" --arg version "$BUNDLE_VERSION" --arg identity "$identity" \
         "\$template
           | $render_common
           | gsub(\"TEMPLATE_REPO\"; \$repo)
           | gsub(\"TEMPLATE_BASE_BRANCH\"; \$base | tojson)
-          | gsub(\"__PRIMARY__\"; \$primary | tojson)
+          | gsub(\"__PRIMARY__\"; \"\${A4S_PRIMARY}\" | tojson)
           | gsub(\"__TEST_PATHS__\"; \$tests | tojson)" > "$(dirname "$STAGE")/poc.yaml"
       jq -nr --rawfile template "$SKILL_DIR/discovery.yaml" \
         --arg repo "$REPO" \
