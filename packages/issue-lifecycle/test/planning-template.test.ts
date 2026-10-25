@@ -443,7 +443,10 @@ test("native planning push-back uses structured iteration across mechanical cons
     copyFileSync(f.upstream, join(f.out, "units.jsonl"));
     rmSync(join(f.root, "hold-check_review"));
     await state("approve", "waiting");
-    assert.deepEqual(JSON.parse(readFileSync(join(f.out, "review-1.json"), "utf8")), { verdict: "accept", findings: [] });
+    assert.deepEqual(JSON.parse(readFileSync(join(f.out, "review-1.json"), "utf8")), {
+      verdict: "accept", findings: [],
+      reviewer: { agent: "plan-reviewer", session: "reviewer-session", provider: "fixture-provider", model: "fixture-model", fallbacks: [{ resolvedModelIsFallback: true }] },
+    });
     assert.equal(readFileSync(join(f.out, "review-accepted"), "utf8").trim(), marker(1));
     assert.equal(readFileSync(join(f.out, "reviewed-units.jsonl"), "utf8"), readFileSync(f.upstream, "utf8"));
     dagu("human-task", "complete", "planning", "--run-id", f.env.RUN!, "--step", "approve", "--input", "APPROVED=all");
