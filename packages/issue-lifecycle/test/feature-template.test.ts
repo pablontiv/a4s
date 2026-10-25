@@ -6,6 +6,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { after, test } from "node:test";
 import { Transitions } from "../src/status/progress.ts";
@@ -3497,5 +3498,215 @@ test("seeded feature repository matches a fresh fixture and stays isolated", () 
     assert.equal(git(other.primary, "ls-remote", "origin", "refs/heads/mutated-copy"), "");
   } finally {
     for (const repo of [fresh, copy, other, again]) rmSync(repo.root, { recursive: true, force: true });
+  }
+});
+
+type CacheGatePhase = GatePhase & { cache?: string; classification?: string; reason?: string; cacheKey?: string };
+
+function writeGateCachePackage(root: string, directory: string, manifest: unknown, files: Record<string, string>): void {
+  const packageDir = join(root, directory);
+  mkdirSync(packageDir, { recursive: true });
+  writeFileSync(join(packageDir, "package.json"), `${JSON.stringify(manifest, null, 2)}\n`);
+  for (const [name, text] of Object.entries(files)) {
+    const target = join(packageDir, name);
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, text);
+  }
+}
+
+function writeGateCacheFixture(worktree: string): void {
+  rmSync(join(worktree, "packages", "first"), { recursive: true, force: true });
+  rmSync(join(worktree, "packages", "second"), { recursive: true, force: true });
+  writeGateCachePackage(worktree, ".", {
+    name: "gate-cache-fixture", private: true, workspaces: ["packages/*"],
+    scripts: { test: "npm test --workspaces --if-present", typecheck: "npm run typecheck --workspaces --if-present" },
+  }, { ".gitignore": "node_modules/\n" });
+  writeFileSync(join(worktree, "package-lock.json"), `${JSON.stringify({ name: "gate-cache-fixture", lockfileVersion: 3, packages: {} }, null, 2)}\n`);
+  mkdirSync(join(worktree, "scripts"), { recursive: true });
+  writeFileSync(join(worktree, "scripts", "gate-asset.txt"), "asset\n");
+  writeGateCachePackage(worktree, "packages/lib", {
+    name: "lib", version: "1.0.0",
+    scripts: { test: "node --test test/*.test.js", typecheck: "node --check src/lib.js" },
+  }, {
+    "tsconfig.json": `${JSON.stringify({ include: ["src/**/*.js", "test/**/*.js"] })}\n`,
+    "src/lib.js": "module.exports = { value: 1 };\n",
+    "test/lib.test.js": "const test = require('node:test');\nconst lib = require('../src/lib.js');\ntest('value', () => { if (lib.value !== 1) throw new Error('value'); });\n",
+    "test/git-state.test.js": readFileSync(new URL("./fixtures/gate-cache-git-state.js", import.meta.url), "utf8"),
+  });
+  writeGateCachePackage(worktree, "packages/app", {
+    name: "app", version: "1.0.0", dependencies: { lib: "1.0.0" },
+    scripts: { test: "node --test test/app.test.js", typecheck: "node --check src/app.js" },
+  }, {
+    "tsconfig.json": `${JSON.stringify({ include: ["src/**/*.js"] })}\n`,
+    "src/app.js": "module.exports = { name: 'app' };\n",
+    "test/app.test.js": [
+      "const test = require('node:test');",
+      "const fs = require('node:fs');",
+      "const path = require('node:path');",
+      "test('reads the shared asset and probe', () => {",
+      "  const asset = fs.readFileSync(path.join(__dirname, '../../../scripts/gate-asset.txt'), 'utf8');",
+      "  if (!asset || !process.env.A4S_CACHE_PROBE) throw new Error('asset');",
+      "  void process.env.ORCA_SESSION;",
+      "  void process.env.PI_CODING_AGENT_DIR;",
+      "});",
+      "",
+    ].join("\n"),
+  });
+  writeGateCachePackage(worktree, "packages/other", {
+    name: "other", version: "1.0.0",
+    scripts: { test: "node --test test/other.test.js", typecheck: "node --check src/other.js" },
+  }, {
+    "tsconfig.json": `${JSON.stringify({ include: ["src/**/*.js"] })}\n`,
+    "src/other.js": "module.exports = { name: 'other' };\n",
+    "test/other.test.js": "const test = require('node:test');\ntest('stable', () => {});\n",
+  });
+}
+
+test("gate cache reuses passes across linked worktrees and invalidates each input class", { timeout: 180_000 }, () => {
+  const repo = repository("gate-cache-a");
+  const requireCache = createRequire(import.meta.url);
+  const { lookup, cacheDirectory } = requireCache("../bin/gate-cache.cjs") as {
+    lookup: (cacheDir: string, key: string) => { result?: string } | undefined;
+    cacheDirectory: (worktree: string) => string;
+  };
+  try {
+    writeGateCacheFixture(repo.worktree);
+    git(repo.worktree, "add", "-A");
+    git(repo.worktree, "commit", "-m", "test: gate cache fixture");
+    recordCandidate(repo);
+    const baseSha = git(repo.worktree, "rev-parse", "HEAD");
+    const script = extractScript(definitions[0]![1], "  - id: gate");
+    const gateEnv = {
+      ...featureScriptEnv(repo),
+      GATE: "npm test && npm run typecheck",
+      A4S_CACHE_PROBE: "one",
+      ORCA_SESSION: "agent-a",
+      PI_CODING_AGENT_DIR: "/tmp/agent-a",
+      npm_config_package_lock: "false",
+      npm_config_update_notifier: "false",
+      npm_config_fund: "false",
+      npm_config_audit: "false",
+    };
+    const restoreBase = (): void => {
+      git(repo.worktree, "reset", "--hard", baseSha);
+      recordCandidate(repo);
+    };
+    const commitChange = (message: string): void => {
+      git(repo.worktree, "add", "-A");
+      git(repo.worktree, "commit", "-m", message);
+      recordCandidate(repo);
+    };
+    const run = (env: NodeJS.ProcessEnv) => spawnSync("bash", ["-c", script], { env, encoding: "utf8" });
+    const leaves = (state: string): CacheGatePhase[] => {
+      const evidence: GateEvidence = JSON.parse(readFileSync(join(state, "gate.json"), "utf8"));
+      return evidence.attempts.at(-1)!.phases.filter(phase => phase.workspace?.startsWith("packages/")) as CacheGatePhase[];
+    };
+    const task = (phases: CacheGatePhase[], workspace: string, name: string, classification = "cached"): CacheGatePhase => {
+      const found = phases.find(phase => phase.workspace === workspace && phase.name === name && phase.classification === classification);
+      assert.ok(found, phases.map(phase => `${phase.workspace} ${phase.name} ${phase.classification ?? "-"} ${phase.cache ?? "-"} ${phase.exitCode}`).join("\n"));
+      return found;
+    };
+    const assertStatus = (phases: CacheGatePhase[], expected: Array<[string, string, string, string]>): void => {
+      for (const [workspace, name, classification, cache] of expected) {
+        const found = task(phases, workspace, name, classification);
+        assert.equal(found.cache, cache, `${workspace} ${name} ${classification}`);
+        assert.equal(found.exitCode, 0, found.reason ?? "");
+      }
+    };
+    const cachedTasks: Array<[string, string, string]> = [
+      ["packages/lib", "tests", "cached"],
+      ["packages/lib", "typecheck", "cached"],
+      ["packages/app", "tests", "cached"],
+      ["packages/app", "typecheck", "cached"],
+      ["packages/other", "tests", "cached"],
+      ["packages/other", "typecheck", "cached"],
+    ];
+    const coldExpected: Array<[string, string, string, string]> = [
+      ...cachedTasks.map(([workspace, name, classification]) => [workspace, name, classification, "miss"] as [string, string, string, string]),
+      ["packages/lib", "tests", "always", "executed"],
+    ];
+    const cold = run(gateEnv);
+    assert.equal(cold.status, 0, cold.stdout + cold.stderr);
+    assert.match(cold.stdout, /tested_sha=/);
+    const coldPhases = leaves(repo.state);
+    assertStatus(coldPhases, coldExpected);
+    assert.match(task(coldPhases, "packages/lib", "tests", "always").reason ?? "", /git-state/);
+    assert.equal(JSON.parse(readFileSync(join(cacheDirectory(repo.worktree), "config.json"), "utf8")).remote, false);
+    const stored = task(coldPhases, "packages/app", "tests").cacheKey!;
+    assert.equal(lookup(cacheDirectory(repo.worktree), stored)?.result, "PASS");
+
+    const other = join(repo.primary, ".workspace", "worktrees", "issue-190");
+    git(repo.primary, "worktree", "add", "-b", "dagu/issue-190", other, baseSha);
+    const secondState = join(repo.primary, ".git", "dagu-feature", "runs", "gate-cache-b");
+    mkdirSync(secondState, { recursive: true });
+    writeFileSync(join(secondState, "candidate.json"), readFileSync(join(repo.state, "candidate.json")));
+    const warm = run({
+      ...gateEnv, WORKTREE: other, BRANCH: "dagu/issue-190", RUN: "gate-cache-b",
+      ORCA_SESSION: "agent-b", PI_CODING_AGENT_DIR: "/tmp/agent-b",
+    });
+    assert.equal(warm.status, 0, warm.stdout + warm.stderr);
+    const warmPhases = leaves(secondState);
+    assertStatus(warmPhases, cachedTasks.map(([workspace, name, classification]) => [workspace, name, classification, "hit"] as [string, string, string, string]).concat([["packages/lib", "tests", "always", "executed"]]));
+    for (const [workspace, name, classification] of cachedTasks) {
+      assert.equal(task(warmPhases, workspace, name, classification).cacheKey, task(coldPhases, workspace, name, classification).cacheKey);
+    }
+
+    const expectMisses = (misses: Array<[string, string, string]>): void => {
+      const result = run(gateEnv);
+      assert.equal(result.status, 0, result.stdout + result.stderr);
+      const phases = leaves(repo.state);
+      assertStatus(phases, cachedTasks.map(([workspace, name, classification]) => {
+        const miss = misses.some(([itemWorkspace, itemName, itemClassification]) => itemWorkspace === workspace && itemName === name && itemClassification === classification);
+        return [workspace, name, classification, miss ? "miss" : "hit"] as [string, string, string, string];
+      }).concat([["packages/lib", "tests", "always", "executed"]]));
+      restoreBase();
+    };
+    writeFileSync(join(repo.worktree, "packages/lib/src/lib.js"), "module.exports = { value: 1 };\n// source revision\n");
+    commitChange("test: source revision");
+    expectMisses([["packages/lib", "tests", "cached"], ["packages/lib", "typecheck", "cached"], ["packages/app", "tests", "cached"], ["packages/app", "typecheck", "cached"]]);
+    writeFileSync(join(repo.worktree, "packages/lib/test/lib.test.js"), `${readFileSync(join(repo.worktree, "packages/lib/test/lib.test.js"), "utf8")}// test revision\n`);
+    commitChange("test: test revision");
+    expectMisses([["packages/lib", "tests", "cached"], ["packages/lib", "typecheck", "cached"]]);
+    writeFileSync(join(repo.worktree, "package-lock.json"), `${readFileSync(join(repo.worktree, "package-lock.json"), "utf8")}\n`);
+    commitChange("test: lockfile revision");
+    expectMisses(cachedTasks);
+    const appManifest = join(repo.worktree, "packages/app/package.json");
+    writeFileSync(appManifest, readFileSync(appManifest, "utf8").replace('"lib": "1.0.0"', '"lib": "1.0.1"'));
+    commitChange("test: dependency revision");
+    expectMisses([["packages/app", "tests", "cached"], ["packages/app", "typecheck", "cached"]]);
+    writeFileSync(join(repo.worktree, "scripts/gate-asset.txt"), "changed\n");
+    commitChange("test: root asset revision");
+    expectMisses([["packages/app", "tests", "cached"]]);
+    const probe = run({ ...gateEnv, A4S_CACHE_PROBE: "two" });
+    assert.equal(probe.status, 0, probe.stdout + probe.stderr);
+    assertStatus(leaves(repo.state), cachedTasks.map(([workspace, name, classification]) => [workspace, name, classification, workspace === "packages/app" && name === "tests" ? "miss" : "hit"] as [string, string, string, string]).concat([["packages/lib", "tests", "always", "executed"]]));
+    const tool = run({ ...gateEnv, A4S_GATE_CACHE_TOOL: "v2" });
+    assert.equal(tool.status, 0, tool.stdout + tool.stderr);
+    assertStatus(leaves(repo.state), coldExpected);
+
+    const failingTest = join(repo.worktree, "packages/app/test/app.test.js");
+    writeFileSync(failingTest, "const test = require('node:test');\ntest('fails closed', () => { throw new Error('gate cache failure'); });\n");
+    commitChange("test: failing app check");
+    for (const attempt of [1, 2]) {
+      const failed = run(gateEnv);
+      assert.notEqual(failed.status, 0, failed.stdout + failed.stderr);
+      const failedTask = task(leaves(repo.state), "packages/app", "tests");
+      assert.equal(failedTask.cache, "miss", `attempt ${attempt}`);
+      assert.notEqual(failedTask.exitCode, 0);
+      assert.equal(lookup(cacheDirectory(repo.worktree), failedTask.cacheKey!), undefined);
+    }
+    writeFileSync(failingTest, `${readFileSync(join(repo.worktree, "packages/app/test/app.test.js"), "utf8").replace("throw new Error('gate cache failure');", "if (!process.env.A4S_CACHE_PROBE) throw new Error('probe');")}// corrected\n`);
+    commitChange("test: corrected app check");
+    const corrected = run(gateEnv);
+    assert.equal(corrected.status, 0, corrected.stdout + corrected.stderr);
+    const correctedTask = task(leaves(repo.state), "packages/app", "tests");
+    assert.equal(correctedTask.cache, "miss");
+    assert.equal(lookup(cacheDirectory(repo.worktree), correctedTask.cacheKey!)?.result, "PASS");
+    const reused = run(gateEnv);
+    assert.equal(reused.status, 0, reused.stdout + reused.stderr);
+    assert.equal(task(leaves(repo.state), "packages/app", "tests").cache, "hit");
+    assert.equal(task(leaves(repo.state), "packages/lib", "tests", "always").cache, "executed");
+  } finally {
+    rmSync(repo.root, { recursive: true, force: true });
   }
 });

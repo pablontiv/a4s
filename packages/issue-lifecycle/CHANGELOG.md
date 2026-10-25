@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.21
+
+- Reuse successful gate test and typecheck results across linked worktrees from a station-local content-addressed cache. Git-state checks, including `bundle-version.test.ts`, run on every gate and are not stored. A failing task is never reused as a pass. The declared `GATE` command and `tested_sha` publication stay unchanged, and CI still runs the full uncached suite (#632).
+
 ## 0.5.20
 
 - Build feature and cleanup test repositories from one immutable seed per fixture family. Each test gets a private copy with linked-worktree metadata and ownership paths rewritten (#633).
