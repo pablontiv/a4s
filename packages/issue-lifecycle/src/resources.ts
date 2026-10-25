@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
-import { realpath, stat } from "node:fs/promises";
-import { basename, dirname, join, resolve, sep } from "node:path";
+import { readFile, realpath, stat } from "node:fs/promises";
+import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import type { CallDecision, Event } from "./triage/guard.ts";
 import { resolveRunPrimary } from "./status/progress.ts";
@@ -75,6 +75,27 @@ async function primaryAt(path: string): Promise<string> {
   if (!primary) throw new Error(`Cannot locate primary for ${path}`);
   return canonical(primary);
 }
+// Adopted feature/PoC renders name one canonical PRIMARY. Another clone of those
+// files is not that checkout and stays outside primary protection.
+async function adoptedPrimary(primary: string): Promise<boolean> {
+  for (const name of ["feature.yaml", "poc.yaml"]) {
+    let text: string;
+    try { text = await readFile(join(primary, ".workspace", "dagu", "dags", name), "utf8"); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw error;
+    }
+    const literal = /^  - PRIMARY: (.+)$/m.exec(text)?.[1];
+    if (!literal) continue;
+    try {
+      const recorded: unknown = JSON.parse(literal);
+      if (typeof recorded === "string" && isAbsolute(recorded) && await canonical(recorded) === primary) return true;
+    } catch (error) {
+      if (!(error instanceof SyntaxError)) throw error;
+    }
+  }
+  return false;
+}
 interface Owner { kind: string; run: string; status: string; primary: string; branch: string; issue: string }
 export async function readOwners(): Promise<Owner[]> {
   const owners: Owner[] = [];
@@ -128,8 +149,20 @@ export async function resourceDecision(event: Event, cwd: string): Promise<CallD
         let primary: string;
         try { primary = await primaryAt(branch ? repo : path!); }
         catch { primary = await primaryAt(repo); }
-        if (branch ? target === await git(primary, "branch", "--show-current") : contains(path!, primary)) {
-          return { block: true, reason: `dagu-feature: ${path ?? target} is the protected primary checkout` };
+        const removesOwnPrimary = branch
+          ? target === await git(primary, "branch", "--show-current")
+          : contains(path!, primary);
+        // Only a lifecycle primary is protected: an active admitted run's canonical
+        // PRIMARY, or this checkout's adopted feature/PoC render. An independent
+        // clone is its own git primary and stays removable.
+        if (removesOwnPrimary) {
+          try {
+            const known = await adoptedPrimary(primary) || (owners ??= await readOwners()).some(owner =>
+              !!active[owner.status] && (owner.primary === primary || (!branch && contains(path!, owner.primary))));
+            if (known) return { block: true, reason: `dagu-feature: ${path ?? target} is the protected primary checkout` };
+          } catch (error) {
+            return { block: true, reason: `dagu-feature: cannot verify ownership of ${target}: ${error instanceof Error ? error.message : String(error)}` };
+          }
         }
         const root = join(primary, ".workspace", "worktrees");
         managed ||= !!path && (contains(root, path) || contains(path, root));

@@ -132,6 +132,59 @@ test("resource ownership resolves the enqueued adoption snapshot and derived fea
   }
 });
 
+test("resource guard allows independent clone removal and keeps admitted and adopted primaries", async t => {
+  const repo = fixture(), previousPath = process.env.PATH;
+  process.env.PATH = repo.env.PATH;
+  t.after(() => { process.env.PATH = previousPath; rmSync(repo.root, { recursive: true, force: true }); });
+  const scratch = join(repo.root, "scratch clone");
+  execFileSync("git", ["init", "-q", "-b", "main", scratch]);
+  repo.git(scratch, "config", "user.name", "Test"); repo.git(scratch, "config", "user.email", "test@example.com");
+  writeFileSync(join(scratch, "value"), "scratch\n");
+  repo.git(scratch, "add", "."); repo.git(scratch, "commit", "-qm", "scratch");
+  const event = (command: string) => ({ toolName: "bash", toolCallId: command, input: { command } });
+  const reason = async (command: string, cwd = repo.primary) =>
+    (await resourceDecision(event(command), cwd) as { reason?: string }).reason ?? "";
+  t.mock.method(globalThis, "fetch", async () => Response.json({ spec: `env:\n  - PRIMARY: ${JSON.stringify(repo.primary)}\n` }));
+
+  assert.equal(await resourceDecision(event(`rm -rf '${scratch}'`), repo.primary), undefined);
+  assert.equal(await resourceDecision(event(`git -C '${scratch}' branch -D main`), repo.primary), undefined);
+
+  repo.history("feature", [repo.row("owner", "running")]);
+  assert.equal(await resourceDecision(event(`rm -rf '${scratch}'`), repo.primary), undefined);
+  assert.equal(await resourceDecision(event(`git -C '${scratch}' branch -D main`), scratch), undefined);
+  assert.match(await reason(`rm -rf '${repo.primary}'`, scratch), /protected primary/);
+  assert.match(await reason(`rm -rf '${repo.root}'`, scratch), /protected primary/);
+  assert.match(await reason("git branch -D main", repo.primary), /protected primary/);
+
+  repo.history("feature", [{ ...repo.row("adopted-owner", "waiting"), params: "ISSUE=215 OMP_SESSION_ID=owner-session" }]);
+  assert.match(await reason(`rm -rf '${repo.primary}'`, scratch), /protected primary/);
+  assert.equal(await resourceDecision(event(`rm -rf '${scratch}'`), scratch), undefined);
+
+  repo.history("feature", []);
+  const adopted = join(repo.primary, ".workspace", "dagu", "dags");
+  mkdirSync(adopted, { recursive: true });
+  writeFileSync(join(adopted, "feature.yaml"), `env:\n  - PRIMARY: ${JSON.stringify(repo.primary)}\n`);
+  assert.match(await reason(`rm -rf '${repo.primary}'`, scratch), /protected primary/);
+  assert.equal(await resourceDecision(event(`rm -rf '${scratch}'`), scratch), undefined);
+
+  const carried = join(scratch, ".workspace", "dagu", "dags");
+  mkdirSync(carried, { recursive: true });
+  writeFileSync(join(carried, "feature.yaml"), `env:\n  - PRIMARY: ${JSON.stringify(repo.primary)}\n`);
+  assert.equal(await resourceDecision(event(`rm -rf '${scratch}'`), scratch), undefined);
+  writeFileSync(join(carried, "poc.yaml"), `env:\n  - PRIMARY: ${JSON.stringify(scratch)}\n`);
+  assert.match(await reason(`rm -rf '${scratch}'`, repo.primary), /protected primary/);
+  writeFileSync(join(carried, "feature.yaml"), "env:\n  - PRIMARY: not-json\n");
+  writeFileSync(join(carried, "poc.yaml"), "env:\n  - PRIMARY: not-json\n");
+  assert.equal(await resourceDecision(event(`rm -rf '${scratch}'`), scratch), undefined);
+
+  repo.git(repo.primary, "worktree", "add", "-b", repo.branch, repo.worktree, "origin/main");
+  repo.history("feature", [repo.row("owner", "waiting")]);
+  assert.match(await reason(`rm -rf '${repo.worktree}'`), /belongs to active run owner \(waiting\)/);
+
+  writeFileSync(join(repo.root, "fail"), "fail");
+  assert.match(await reason(`rm -rf '${scratch}'`, scratch), /cannot verify ownership.*history unavailable/s);
+});
+
 test("terminal/unowned resources pass, ordinary paths keep behavior, history failures diagnose managed deletion", async t => {
   const repo = fixture(), previousPath = process.env.PATH; process.env.PATH = repo.env.PATH;
   t.after(() => { process.env.PATH = previousPath; rmSync(repo.root, { recursive: true, force: true }); });
