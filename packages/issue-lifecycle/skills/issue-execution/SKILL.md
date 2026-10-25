@@ -56,12 +56,14 @@ flowchart LR
   service's `PATH`. Feature renders call `dagu-gate` for the gate helper, and
   feature/PoC renders call `dagu-poc-scope`. Bootstrap `detect` verifies every
   package executable a rendered DAG invokes (`dagu-codeql`, `dagu-feature-bundle`,
-  `dagu-gate`, `dagu-poc-scope`, `dagu-pr-body`, `dagu-role-jobs`, and
-  `dagu-stale-recovery`) and fails with
+  `dagu-feature-protect`, `dagu-gate`, `dagu-poc-scope`, `dagu-pr-body`,
+  `dagu-role-jobs`, and `dagu-stale-recovery`) and fails with
   `bootstrap detect: required command not found: <name>` when one is missing.
 - This package's `dagu-stale-recovery` executable on that same `PATH`. The
   scheduled reconciler uses it to recover feature runs failed by Dagu's
   stale-process repair.
+- This package's `dagu-feature-protect` executable on that same `PATH`. Feature
+  renders use it to record and consult operator integration protection.
 - `DAGU_HOME` in your shell must point to the same home as that service. Read it from the service definition (macOS: `EnvironmentVariables.DAGU_HOME` in the LaunchAgent plist). If they differ, enqueue and complete commands land in a store the scheduler never reads, and the run stays `Queued`.
 - `git`, `gh` authenticated with push and PR rights, `curl`, `jq`.
 - Python 3 with standard-library `fcntl` on the Dagu service's `PATH`; bootstrap
@@ -507,7 +509,7 @@ The steps:
 
 | Step | Effect |
 |---|---|
-| `detect` | Checks `git`, `gh` (authenticated), `jq`, Python's `fcntl`, the exact required `dagu version`, and every package executable a rendered DAG invokes (`dagu-codeql`, `dagu-feature-bundle`, `dagu-gate`, `dagu-poc-scope`, `dagu-pr-body`, `dagu-role-jobs`, `dagu-stale-recovery`). A missing command fails with `bootstrap detect: required command not found: <name>`. It then reads package/version, source commit and source `origin`; fetches and requires that clean package commit on the remote default branch; reads repository settings and the installed DAG values and stamps. |
+| `detect` | Checks `git`, `gh` (authenticated), `jq`, Python's `fcntl`, the exact required `dagu version`, and every package executable a rendered DAG invokes (`dagu-codeql`, `dagu-feature-bundle`, `dagu-feature-protect`, `dagu-gate`, `dagu-poc-scope`, `dagu-pr-body`, `dagu-role-jobs`, `dagu-stale-recovery`). A missing command fails with `bootstrap detect: required command not found: <name>`. It then reads package/version, source commit and source `origin`; fetches and requires that clean package commit on the remote default branch; reads repository settings and the installed DAG values and stamps. |
 | `answers` | `human.task` showing the current stamp, `GATE`, `REQUIRED_CHECK`, `TEST_PATHS`, `REBASE_RESOLVER`, optional `VALIDATION`, and `CODE_SCANNING` (`required` or `off`). Choose the test-path ERE, resolver and validation procedure from repository conventions; validation defaults to empty. Blank `CODE_SCANNING` preserves the installed choice. |
 | `worktrees` | Makes git ignore `.workspace/worktrees/`. When nothing ignores it yet, appends `/.workspace/worktrees/` to the clone's `info/exclude`, so the primary stays clean without a commit. |
 | `render` | Writes stamped and validated `feature.yaml`, `poc.yaml`, `discovery.yaml`, `planning.yaml`, and `reconcile.yaml` under `<git-dir>/dagu-feature/`, keeping PRIMARY clean. Discovery and planning receive the coordinating workspace label and resolve the target repository from `PRIMARY`. |
@@ -1281,6 +1283,45 @@ their copies. A surviving gate descendant therefore retains exclusion until it
 exits. Dagu retains its normal gate retry/recovery and cancellation semantics.
 Only gate bodies serialize: the repository queue keeps its declared capacity
 (`a4s=8`), and unrelated control, push and CI-wait steps proceed.
+
+### Integration protection
+
+Operator priority for integration order is a durable per-repository record. It
+is not `dagu-feature-prioritize`, which reorders queued tickets. Create it only
+with an explicit decision, from the protected run's primary, worktree, run and
+issue:
+
+```sh
+dagu-feature-protect protect --decision '<operator decision>'
+```
+
+The record stores the protected run and issue, that candidate's changed paths,
+the decision text, and provenance: the time, the command, and `OMP_SESSION_ID`
+when it is set. `capture` and a clean rebase refresh the path set from the
+current candidate. A second active protection is refused until this one is
+released. The file is `<git-common-dir>/dagu-feature/integration-protection.json`,
+so it survives scheduler and OMP restarts.
+
+Gate admission consults the record inside the per-primary gate lock, then
+releases that lock while a conflicting run waits. `push` and `auto_merge`
+consult it under the same lock and release the lock before the remote
+mutation. A candidate whose changed paths intersect the protected paths waits
+at the visible checkpoint `integration_hold`, which names the protecting run
+and issue. A candidate with no path in common proceeds. The waiter keeps its
+run id, candidate and iteration; it does not open a new ticket or rewind.
+
+The protection releases when the protected run reaches `close_gate`, when its
+exit handler runs for a terminal state (including abort), or by an explicit
+operator release:
+
+```sh
+dagu-feature-protect release --decision '<operator release>'
+```
+
+Waiting runs then continue through gate, push or auto-merge. The owning
+session's `[DAGU STATE]` includes
+`integration-protection protected_run=<run> issue=<issue> held=<runs|none>`,
+including after a restart.
 
 ### Structured gate timing
 

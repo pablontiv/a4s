@@ -4,8 +4,8 @@
 OMP package. Its manifest owns `BUNDLE_NAME`, `BUNDLE_VERSION` (currently `0.4.1`)
 and the exact Dagu pin (`2.20.1`). The package distributes two reloadable extension
 entries, two specialized agents, the [seven workflow skills](catalog.md#lifecycle-skills),
-and `dagu-feature-bundle`, `dagu-feature-prioritize`, `dagu-role-jobs` and
-`dagu-station-install`. Technical DAG names remain `feature`, `poc`, `discovery`,
+and `dagu-feature-bundle`, `dagu-feature-prioritize`, `dagu-feature-protect`,
+`dagu-role-jobs` and `dagu-station-install`. Technical DAG names remain `feature`, `poc`, `discovery`,
 `planning` and `reconcile`; `planning.yaml` is the breakdown backend.
 
 ## Delivery and provenance
@@ -84,6 +84,14 @@ The gate has a PRIMARY-wide advisory `fcntl` lock held across its Bash descendan
 Python 3 with `fcntl` is a service prerequisite. Unrelated lifecycle steps can
 advance under their queue capacity. Optional operator validation remains a
 repository adoption decision; a4s currently adopts an empty procedure.
+
+An explicit operator decision can protect one candidate's integration order.
+`dagu-feature-protect` stores that run, issue, changed paths, decision and
+provenance in Git metadata. Gate admission, push and auto-merge of another run
+wait only when their changed paths intersect; disjoint candidates proceed. The
+record releases at `close_gate`, terminal exit or operator release, and the
+owning session's `[DAGU STATE]` shows the protection and the runs it holds.
+This is independent of `dagu-feature-prioritize`, which reorders queued tickets.
 
 ## Native semantic jobs and capacity
 
