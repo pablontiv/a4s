@@ -1272,8 +1272,9 @@ The shared check rejects host paths before either PR publication or the PoC
 `publish` comment. CI validates PR structure and the same path rule on PR events,
 including description edits.
 
-The `gate` step changes to the worktree and executes the complete `GATE`
-command from scratch. If that attempt fails, Dagu retries it once after five
+The `gate` step changes to the worktree and invokes the complete `GATE`
+command. Cached tasks may reuse a station-local pass, recorded on the attempt's
+phases. If that attempt fails, Dagu retries it once after five
 seconds. The retry therefore repeats setup such as `npm ci`; only after a
 successful gate does the step check that the worktree is clean and record the
 tested SHA.
@@ -1337,11 +1338,27 @@ including after a restart.
 
 ### Structured gate timing
 
-The installed `dagu-gate` helper wraps the declared `GATE` without replacing,
-splitting or selecting its commands. Its Node preload observes `npm ci` and npm
-test/typecheck lifecycle shells, including each workspace in a root dispatcher.
-The original child process, arguments, exit status and output remain unchanged.
-Non-npm gates retain a `command` phase for the complete declared command.
+The installed `dagu-gate` helper keeps the declared `GATE` string unchanged.
+Its Node preload observes `npm ci` and npm test/typecheck lifecycle shells,
+including each workspace in a root dispatcher. Non-npm gates retain a `command`
+phase for the complete declared command.
+
+Successful test and typecheck tasks are stored in the station-local cache at
+`<git-common-dir>/dagu-feature/gate-cache`. Remote caching is disabled. A later
+gate in a linked worktree reuses a stored pass when the cache key matches, and
+prints `gate-cache hit` instead of running that task again. The key covers the
+workspace sources and tests, the lockfile, the workspace dependency graph, root
+assets those tests read, the environment variables those tests read, and the
+installed `node` and `npm` identity (`process.version`, the Node executable,
+and `npm -v`). Session variables named `ORCA_*`, `PI_*`, `OMP_*`, or `CURSOR_*`
+are not part of the key. A failing task is not stored. Planted or remote cache
+entries are not treated as passes.
+
+A test is classified `always` when it runs Git and reads merge-base, the index
+or untracked files, and `GITHUB_BASE_REF` or the integration base.
+`packages/issue-lifecycle/test/bundle-version.test.ts` is always executed and
+is never stored. Its workspace's other tests remain cacheable. CI does not load
+this preload, so the uncached suite stays the deterministic confirmation.
 
 `<git-common-dir>/dagu-feature/runs/<RUN>/gate.json` has `schemaVersion: 1`,
 the current `sha`, exact `gate`, latest `result` (`RUNNING|PASS|FAIL`), and
@@ -1350,7 +1367,11 @@ native run-wide `iteration`, `startedAt`, `endedAt`, `durationMs`, `exitCode`,
 `result` and `phases`. Times are Unix epoch milliseconds; durations are
 milliseconds. Each phase contains `name`, `startedAt`, `endedAt`, `durationMs`
 and `exitCode`, with `workspace` (repository-relative directory) and `command`
-when observed for an npm lifecycle. Names are `lock_wait`, `pre_checks`,
+when observed for an npm lifecycle. Cached and always-executed `tests` and
+`typecheck` phases also include `cache` (`hit`, `miss`, or `executed`),
+`classification` (`cached` or `always`), `reason`, and `cacheKey` for a cached
+task. `hit` reused a stored pass, `miss` executed a cached task, and `executed`
+ran a check that is never stored. Names are `lock_wait`, `pre_checks`,
 `install`, `tests`, `typecheck`, `command`, `post_checks` and `overhead`.
 Leaf workspace phases replace aggregate npm dispatcher intervals; uncovered
 time is explicitly `overhead`. Sequential commands have non-overlapping

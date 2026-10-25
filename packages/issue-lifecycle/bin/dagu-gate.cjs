@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { constants } = require('node:os');
+const gateCache = require('./gate-cache.cjs');
 
 const journal = process.env.A4S_GATE_JOURNAL;
 function emit(event) {
@@ -19,7 +20,8 @@ function end(id, code, signal) {
 const npmCli = process.argv[1] && /npm(?:-cli)?\.js$/.test(fs.realpathSync(process.argv[1]));
 
 // npm's lifecycle shell is the workspace boundary, independent of its log format.
-// Observe the original spawn and return its original ChildProcess unchanged.
+// A cache hit replaces that shell with a successful no-op. Misses and always-run
+// checks keep the original child process, arguments, and exit status.
 if (require.main !== module && journal && npmCli) {
   if (process.argv[2] === 'ci') {
     const id = start('install', { command: 'npm ci' });
@@ -27,21 +29,66 @@ if (require.main !== module && journal && npmCli) {
   }
   const childProcess = require('node:child_process');
   const original = childProcess.spawn;
+  const settle = (id, plan, code, signal, settled) => {
+    if (settled.done) return;
+    settled.done = true;
+    end(id, code, signal);
+    if (!plan.key || plan.cache !== 'miss') return;
+    if ((code ?? 1) === 0 && !signal) gateCache.storePass(plan.cacheDir, plan.record);
+    else gateCache.forget(plan.cacheDir, plan.key);
+  };
   childProcess.spawn = function (...args) {
     const options = args[2] ?? (Array.isArray(args[1]) ? {} : args[1]) ?? {};
     const event = options.env?.npm_lifecycle_event;
     const name = event === 'test' ? 'tests' : event === 'typecheck' ? 'typecheck' : undefined;
     if (!name) return Reflect.apply(original, this, args);
     const cwd = String(options.cwd ?? process.cwd());
-    const workspace = path.relative(process.env.WORKTREE, cwd) || '.';
-    const id = start(name, { workspace, command: options.env.npm_lifecycle_script });
+    const workspace = path.relative(process.env.WORKTREE || '', cwd) || '.';
+    let plan;
     try {
-      const child = Reflect.apply(original, this, args);
-      child.once('exit', (code, signal) => end(id, code, signal));
-      child.once('error', () => end(id, 1));
+      plan = gateCache.plan({
+        worktree: process.env.WORKTREE, primary: process.env.PRIMARY, cwd, task: name,
+        script: options.env.npm_lifecycle_script, env: options.env,
+      });
+    } catch (error) {
+      process.stderr.write(`gate-cache planner error: ${error.message}\n`);
+      plan = { action: 'passthrough' };
+    }
+    if (plan.action === 'split') {
+      const planFile = path.join(require('node:os').tmpdir(), `a4s-gate-${randomUUID()}.json`);
+      fs.writeFileSync(planFile, `${JSON.stringify({ ...plan, journal })}\n`, { mode: 0o600 });
+      const childEnv = { ...options.env, npm_lifecycle_event: '', A4S_GATE_JOURNAL: journal };
+      let child;
+      try {
+        child = Reflect.apply(original, this, [process.execPath, [path.join(__dirname, 'gate-cache-run.cjs'), planFile], { ...options, env: childEnv }]);
+      } catch (error) {
+        fs.rmSync(planFile, { force: true });
+        throw error;
+      }
+      const cleanup = () => fs.rmSync(planFile, { force: true });
+      child.once('exit', cleanup);
+      child.once('error', cleanup);
+      return child;
+    }
+    const details = plan.action === 'observed' ? {
+      cache: plan.cache, classification: plan.classification, reason: plan.reason,
+      ...(plan.key ? { cacheKey: plan.key } : {}),
+    } : {};
+    const id = start(name, { workspace: plan.workspace || workspace, command: options.env.npm_lifecycle_script, ...details });
+    const launch = plan.cache === 'hit'
+      ? [process.execPath, ['-e', 'process.stderr.write("gate-cache hit " + (process.env.A4S_GATE_CACHE_HIT || "") + "\\n"); process.exit(0);'], {
+        ...options,
+        env: { ...options.env, npm_lifecycle_event: '', A4S_GATE_CACHE_HIT: `${plan.workspace} ${plan.task}` },
+      }]
+      : args;
+    const settled = { done: false };
+    try {
+      const child = Reflect.apply(original, this, launch);
+      child.once('exit', (code, signal) => settle(id, plan, code, signal, settled));
+      child.once('error', () => settle(id, plan, 1, undefined, settled));
       return child;
     } catch (error) {
-      end(id, 1);
+      settle(id, plan, 1, undefined, settled);
       throw error;
     }
   };
