@@ -276,8 +276,20 @@ steps:
               RETRY_RUN=
               if [[ "$link" =~ /actions/runs/([0-9]+) ]]; then
                 RETRY_RUN=${BASH_REMATCH[1]}
-                if [[ "$link" =~ /job/([0-9]+) ]] && bounded gh run view "$RETRY_RUN" -R "$REPO" --job "${BASH_REMATCH[1]}" --log-failed >"$TMP/log" 2>"$TMP/error"; then
-                  LOG="$LOG $(head -c 16000 "$TMP/log")"
+                job_id=
+                if [[ "$link" =~ /job/([0-9]+) ]]; then job_id=${BASH_REMATCH[1]}; fi
+                : >"$TMP/failed-logs"
+                if [[ -n "$job_id" ]] && bounded gh run view "$RETRY_RUN" -R "$REPO" --job "$job_id" --log-failed >"$TMP/job-log" 2>"$TMP/error"; then
+                  cat "$TMP/job-log" >>"$TMP/failed-logs"
+                fi
+                # An aggregate required check fails in its own job with only a summary.
+                # Candidate and infrastructure evidence is in the failed needed jobs of
+                # this same Actions run and SHA. Transient evidence still wins below.
+                if bounded gh run view "$RETRY_RUN" -R "$REPO" --log-failed >"$TMP/run-log" 2>"$TMP/error"; then
+                  cat "$TMP/run-log" >>"$TMP/failed-logs"
+                fi
+                if [[ -s "$TMP/failed-logs" ]]; then
+                  LOG="$LOG $(head -c 16000 "$TMP/failed-logs")"
                 fi
               fi
               # Conclusions alone never establish who caused a failure.

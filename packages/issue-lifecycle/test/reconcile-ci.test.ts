@@ -139,7 +139,10 @@ else if(a[0]==='pr'&&a[1]==='view') {
   emit([c.alerts??[]]);
  }
  else process.exit(91);
-} else if(a[0]==='run'&&a[1]==='view') emit(c.log);
+} else if(a[0]==='run'&&a[1]==='view') {
+ const job=a.includes('--job');
+ emit(job ? (c.jobLog??c.log) : (c.runLog??c.log));
+}
 else if(a[0]==='run'&&a[1]==='rerun') { c.reruns=(c.reruns??0)+1; save(); }
 else if(a[0]==='pr'&&a[1]==='merge') { c.auto=!a.includes('--disable-auto'); save(); }
 else { console.error('unexpected gh '+a.join(' ')); process.exit(92); }
@@ -312,6 +315,54 @@ function publish(f: Fixture, feature: string, value: string): string {
       assert.equal(git(f.primary, "ls-remote", "origin", "refs/heads/main").split(/\s/)[0], f.base);
       assert.equal(git(f.worktree, "rev-list", "--merges", "HEAD").length, 0);
       t.diagnostic(JSON.stringify({ run: "ci226", worktree: f.worktree, pr: 77, transitions: [failed, late, passed], notice }));
+    } finally { rmSync(f.root, { recursive: true, force: true }); }
+  });
+
+  test("a failed aggregate required check is classified from the failed needed jobs of the same run", () => {
+    const f = fixture("aggregate546");
+    const summary = "changes=success test=success live=failure\nRequired CI jobs did not complete successfully";
+    try {
+      const sha = publish(f, feature, "aggregate candidate");
+      update(f, { conclusion: "failure", summary, log: "", jobLog: summary, runLog: "live (other-live)\tnot ok 46 - real Dagu implement guard\nAssertionError: expected implement push-back" });
+      const failed = observe(f, reconcile);
+      assert.equal(failed.class, "CODE_FAIL");
+      assert.equal(failed.action, "IMPLEMENT");
+      assert.equal(failed.step, "await_ci");
+      assert.equal(failed.check, "validate");
+      assert.equal(failed.sha, sha);
+      assert.equal(failed.retry_run, "123");
+      assert.match(failed.cause, /Candidate failure in validate \(FAILURE\)/);
+      assert.match(failed.log, /AssertionError: expected implement push-back/);
+      const views = ghCalls(f).filter(call => call.tool === "gh" && call.args[0] === "run" && call.args[1] === "view");
+      assert.ok(views.some(call => call.args.includes("--job") && call.args.includes("--log-failed") && call.args.includes("123")));
+      assert.ok(views.some(call => call.args.includes("--log-failed") && !call.args.includes("--job") && call.args.includes("123")));
+      transition(f, reconcile);
+      const control = JSON.parse(readFileSync(f.control, "utf8"));
+      assert.equal(control.statusStep, "implement");
+      assert.equal(control.iteration, failed.iteration + 1);
+      const push = ghCalls(f).filter(call => call.tool === "dagu" && call.args[1] === "push-back").at(-1);
+      assert.ok(push);
+      assert.equal(push.args[push.args.indexOf("--step") + 1], "await_ci");
+      assert.equal(push.args[push.args.indexOf("--expected-iteration") + 1], String(failed.iteration));
+
+      update(f, { statusStep: "both", jobLog: summary, runLog: "test\tRunner lost communication with the server" });
+      const transient = observe(f, reconcile);
+      assert.equal(transient.class, "TRANSIENT");
+      assert.equal(transient.action, "RETRY");
+      assert.equal(transient.sha, sha);
+      assert.match(transition(f, reconcile), /rerun=123 attempt=1/);
+
+      update(f, { jobLog: "AssertionError: candidate test failed", runLog: "live\tHTTP 429" });
+      const precedence = observe(f, reconcile);
+      assert.equal(precedence.class, "TRANSIENT");
+      assert.equal(precedence.action, "RETRY");
+
+      update(f, { jobLog: summary, runLog: "live (other-live)\tProcess completed with exit code 1." });
+      const blocked = observe(f, reconcile);
+      assert.equal(blocked.class, "BLOCKED");
+      assert.equal(blocked.action, "WAIT");
+      assert.match(blocked.cause, /Unproven cause for validate \(FAILURE\)/);
+      assert.equal(JSON.parse(readFileSync(f.control, "utf8")).statusStep, "both");
     } finally { rmSync(f.root, { recursive: true, force: true }); }
   });
 

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.13
+
+- Classify a failed aggregate required check from the failed jobs of the same Actions run. A needed job's assertion failure returns `await_ci` to `implement`; runner, download, network and HTTP 5xx/429 failures stay transient; an aggregate failure with neither stays blocked (#546).
+
 ## 0.5.12
 
 - Protect only lifecycle primaries in the OMP resource guard: the canonical PRIMARY of an active admitted run, including a primary resolved from its adopted snapshot, and a checkout whose adopted feature or PoC render names itself. Recursive removal of an independent clone that matches neither is allowed (#643).
