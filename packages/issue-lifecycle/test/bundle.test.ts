@@ -93,6 +93,19 @@ test("admission hook preserves effective shell arguments and requires bash for e
   assert.ok(blocked && "block" in blocked);
 });
 
+test("retired triage protocol is rejected after the isolated home resolves PRIMARY", () => {
+  const fixture = admissionFixture();
+  try {
+    const durable = readFileSync(fixture.dag, "utf8");
+    assert.match(durable, /PRIMARY: "\$\{A4S_PRIMARY\}"/);
+    assert.equal(durable.includes(fixture.packageDir), false);
+    writeFileSync(fixture.dag, durable.replace("triage=role-job/1", "triage=marker-agent/1"));
+    const rejected = admissionDecision({ toolName: "bash", toolCallId: "incompatible", input: { command: `dagu enqueue --run-id blocked ${fixture.dag} -- ISSUE=277` } }, undefined, fixture.packageDir);
+    assert.ok(rejected && "block" in rejected);
+    assert.match(rejected.reason, /DAGU_ADMISSION_REJECTED.*missing protocol triage=marker-agent\/1; served by bundle 0\.3\.102/);
+  } finally { fixture.dispose(); }
+});
+
 test("runtime observations and incident snapshots link the admitted run and preserve initial identities", liveDagu, () => {
   const fixture = admissionFixture();
   try {
