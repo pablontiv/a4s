@@ -8,6 +8,10 @@ overlap_policy: skip
 type: graph
 shell: bash
 steps:
+  - id: recover_stale
+    run: |
+      set -euo pipefail
+      dagu-stale-recovery recover-scheduled
   - id: discover
     run: |
       set -euo pipefail

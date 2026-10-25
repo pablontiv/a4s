@@ -1,11 +1,11 @@
 #!/usr/bin/env bun
 import { execFileSync } from "node:child_process";
-import { appendFileSync, realpathSync } from "node:fs";
+import { appendFileSync, realpathSync, writeSync } from "node:fs";
 import { join } from "node:path";
 import { dispatchStage, verifyTriageResult } from "../src/role-dispatch.ts";
 import { RoleJobStore } from "../src/role-jobs.ts";
 
-try {
+async function main(): Promise<void> {
   const [command, stage, ...extra] = process.argv.slice(2);
   if (extra.length) throw new Error("Unexpected role-job command arguments");
   if (command === "stage" && stage) {
@@ -39,8 +39,17 @@ try {
     try { console.log(JSON.stringify({ home, ...store.changeCapacity(capacity) })); }
     finally { store.close(); }
   } else throw new Error("Usage: dagu-role-jobs stage triage|implement | verify-triage | capacity <positive-integer>");
+}
+
+try {
+  await main();
+  // The in-process native session can leave its Python tool bridge listening on
+  // 127.0.0.1. Setting exitCode does not finish the Dagu step while that handle
+  // is open, on BLOCKED, on success, or on any other terminal path.
+  process.exit(0);
 } catch (error) {
-  console.error(`DAGU_ROLE_JOB_BLOCKED: ${error instanceof Error ? error.message : String(error)}`);
-  if (process.argv[2] === "verify-triage") console.error("VERIFIER=FAIL");
-  process.exitCode = 1;
+  const message = error instanceof Error ? error.message : String(error);
+  writeSync(2, `DAGU_ROLE_JOB_BLOCKED: ${message}\n`);
+  if (process.argv[2] === "verify-triage") writeSync(2, "VERIFIER=FAIL\n");
+  process.exit(1);
 }
