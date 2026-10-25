@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.12
+
+- Protect only lifecycle primaries in the OMP resource guard: the canonical PRIMARY of an active admitted run, including a primary resolved from its adopted snapshot, and a checkout whose adopted feature or PoC render names itself. Recursive removal of an independent clone that matches neither is allowed (#643).
+
 ## 0.5.11
 
 - Bound each reconcile tick: page every Waiting feature run from the Unix epoch, observe independent runs concurrently, deadline external calls, and serialize conflicting transitions (#250).
