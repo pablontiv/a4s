@@ -617,3 +617,15 @@ test("adoption escalation thresholds are immutable in PoC admission", () => {
       params: ["ISSUE=41", "ESCALATION_SECONDS=999999"] }), /admission rejected run parameter: ESCALATION_SECONDS/);
   } finally { fixture.cleanup(); }
 });
+
+test("run_poc states the sample-first sharded checkpoint contract", () => {
+  const source = readFileSync(new URL("../skills/issue-execution/poc.yaml", import.meta.url), "utf8");
+  const start = source.indexOf("  - id: run_poc\n");
+  const step = source.slice(start, source.indexOf("  - id: run_poc_cancellation\n", start));
+  for (const phrase of [
+    "bounded representative sample", "measured throughput", "projected duration",
+    "durable shard checkpoints", "index, range and completion time", "last completed shard",
+    "configured multiple of the measured shard time", "owning OMP session",
+    "continue, resize, or stop", "Completed shards stay preserved.",
+  ]) assert.ok(step.includes(phrase), phrase);
+});

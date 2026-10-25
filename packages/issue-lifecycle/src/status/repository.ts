@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
-import { basename, dirname } from "node:path";
+import { basename, dirname, join } from "node:path";
+import { parseStallNotice, type StallNotice } from "../long-computation.ts";
 import { promisify } from "node:util";
 import type { CiDiagnostic } from "./progress.ts";
 
@@ -45,6 +46,32 @@ export async function readCiDiagnostic(primary: string | undefined, run: string,
     return data as unknown as CiDiagnostic;
   } catch {
     return undefined;
+  }
+}
+
+/** Stall notices are appended by the role-job watchdog for the owning session. */
+export async function readStallNotices(primary: string | undefined, run: string, signal: AbortSignal): Promise<StallNotice[]> {
+  if (!primary || !run || run.length > 200 || /[\s\0/\\]/.test(run)) return [];
+  try {
+    const { stdout } = await exec("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+      { cwd: primary, signal, timeout: 5000 });
+    const root = stdout.trim();
+    const notices: StallNotice[] = [];
+    for (const relative of [`dagu-feature/runs/${run}/stall-notices.jsonl`, `poc/runs/${run}/stall-notices.jsonl`]) {
+      try {
+        const text = await readFile(join(root, relative), "utf8");
+        for (const line of text.split("\n")) {
+          if (!line) continue;
+          try {
+            const notice = parseStallNotice(JSON.parse(line));
+            if (notice) notices.push(notice);
+          } catch { /* Ignore a torn final line. */ }
+        }
+      } catch { /* This run has no stall evidence in that lane. */ }
+    }
+    return notices;
+  } catch {
+    return [];
   }
 }
 

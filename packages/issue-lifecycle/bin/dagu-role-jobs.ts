@@ -2,11 +2,18 @@
 import { execFileSync } from "node:child_process";
 import { appendFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { computationCommand } from "../src/long-computation.ts";
 import { dispatchStage, verifyTriageResult } from "../src/role-dispatch.ts";
 import { RoleJobStore } from "../src/role-jobs.ts";
 
 async function main(): Promise<void> {
   const [command, stage, ...extra] = process.argv.slice(2);
+  if (command === "computation") {
+    if (!stage) throw new Error("Usage: dagu-role-jobs stage triage|implement | verify-triage | capacity <positive-integer> | computation sample|open|run|supervise|decide");
+    await computationCommand([stage, ...extra], { script: fileURLToPath(import.meta.url) });
+    return;
+  }
   if (extra.length) throw new Error("Unexpected role-job command arguments");
   if (command === "stage" && stage) {
     await dispatchStage(stage, (name, value) => {
@@ -38,7 +45,7 @@ async function main(): Promise<void> {
     const store = new RoleJobStore(home, Number(process.env.A4S_ROLE_JOB_CAPACITY || "4"));
     try { console.log(JSON.stringify({ home, ...store.changeCapacity(capacity) })); }
     finally { store.close(); }
-  } else throw new Error("Usage: dagu-role-jobs stage triage|implement | verify-triage | capacity <positive-integer>");
+  } else throw new Error("Usage: dagu-role-jobs stage triage|implement | verify-triage | capacity <positive-integer> | computation sample|open|run|supervise|decide");
 }
 
 try {

@@ -12,6 +12,7 @@ import { jobId, RoleJobStore, verifyJobResult, type Job, type JobBinding, type J
 import { nativeEvidence, roleSchema } from "../src/role-runtime.ts";
 import { dispatchStage, requireReadyStage, roleAssignment, runRoleJob } from "../src/role-dispatch.ts";
 import { roleAdmission, roleExecution } from "./role-job-fixtures.ts";
+import "./long-computation.suite.ts";
 
 function fixture() {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "a4s-role-jobs-")));

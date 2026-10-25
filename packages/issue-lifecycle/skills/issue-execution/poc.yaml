@@ -279,6 +279,12 @@ steps:
         TEST_PATHS=${TEST_PATHS} belongs to implementation cutover, not this PoC diff.
         INCONCLUSIVE also requires ## Inconclusive cause containing exactly scope, access, or other.
         An empty diff is valid. Complete only after recording observed evidence.
+        Long computation contract: before a long computation, run a bounded representative sample and record measured throughput and the projected duration.
+        Run the full computation as a background job with durable shard checkpoints under the run evidence directory (<git-dir>/dagu-feature/runs/<run>/computations/<id>/, or <git-dir>/poc/runs/<run>/computations/<id>/ for run_poc).
+        Each shard records its index, range and completion time.
+        Resume from the last completed shard after interruption.
+        When no new shard completes within the configured multiple of the measured shard time, the role-job executor reports one stall to the owning OMP session with the last progress and waits for continue, resize, or stop.
+        Completed shards stay preserved.
       form:
         type: object
         properties:

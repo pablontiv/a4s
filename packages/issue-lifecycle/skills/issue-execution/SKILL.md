@@ -1057,8 +1057,9 @@ The scope gate queries origin for `refs/heads/poc/<RUN>`: a published branch
 fails with `rule=poc-branch-pushed`, branch and SHA; an inaccessible origin fails
 with `rule=remote-unreachable`. Both retain the existing result-correction loop.
 
-At `run_poc`, execute minimal real-target commands in that worktree. Record the
-result outside its diff at `git rev-parse --git-path poc/result.md`:
+At `run_poc`, execute minimal real-target commands in that worktree. A long
+computation follows the sample-first shard contract below before the full run.
+Record the result outside its diff at `git rev-parse --git-path poc/result.md`:
 
 ```text
 VERDICT: PASS
@@ -1187,6 +1188,43 @@ The role works only in its assigned worktree, resolves retained conflict paths,
 and runs the issue's targeted tests. Its summary retains the
 exact commands/results. Dagu owns staging, commits and publication, and runs the
 complete configured gate. Operator configuration stays operator-owned.
+
+### Long computations
+
+A long computation in `run_poc` or in the implement assignment does not use a
+fixed command deadline. Before the full run, record a bounded representative sample
+with `dagu-role-jobs computation sample`: measured throughput and the projected duration,
+including the measured shard time. Open the plan with
+`dagu-role-jobs computation open` under the run evidence directory
+(`<git-dir>/dagu-feature/runs/<run>/computations/<id>/`, or
+`<git-dir>/poc/runs/<run>/computations/<id>/` for `run_poc`). The stall multiple
+is the configured multiple of that measured shard time.
+
+Run the full computation as a background job (`computation run --background`)
+with durable shard checkpoints. Each completed shard writes `shards/<index>.json`
+with its index, range and completion time, plus the shard output. An interruption
+leaves those files in place. Starting the worker again resumes from the last completed shard;
+`resume.json` records that next index. Do not delete completed
+shard output.
+
+While the role job runs, the executor's stall watchdog polls those checkpoints.
+When no new shard completes within the configured multiple of the measured shard time,
+it writes one stall notice to `<run evidence>/stall-notices.jsonl` and
+reports that notice to the owning OMP session with the last progress. Completed shards stay preserved.
+The watchdog waits for continue, resize, or stop:
+
+```sh
+dagu-role-jobs computation decide --dir <run-evidence>/computations/<id> --decision continue
+dagu-role-jobs computation decide --dir <run-evidence>/computations/<id> --decision resize --stall-multiple <positive-number>
+dagu-role-jobs computation decide --dir <run-evidence>/computations/<id> --decision stop
+```
+
+`continue` keeps the same shard plan and starts a new wait from the decision.
+`resize` changes only the stall multiple. `stop` stops the background worker and
+leaves completed shards on disk. A later stall is a new notice; one episode
+produces one notice. The status extension delivers `[DAGU STALL]` to the session
+named on the run.
+
 Every correction's run-wide iteration authorizes a fresh session. An interrupted
 job retains its artifacts and diagnosed outcome for owner-directed recovery.
 
