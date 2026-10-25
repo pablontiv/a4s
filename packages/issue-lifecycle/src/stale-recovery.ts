@@ -12,6 +12,10 @@ export const STALE_RECOVERY_BUDGET = 1;
  * column of the manual table in skills/issue-execution/SKILL.md.
  */
 export const FEATURE_CHECKPOINT_RETRY: Readonly<Record<string, string>> = {
+  // Immutable pre-role-job snapshots still have these human-task checkpoints.
+  triage: "admit",
+  implement: "start_gate",
+  quality_review: "quality_prepare",
   start_primary_unavailable: "detect_start_primary",
   recover_start_gate: "start_gate",
   dependency_review: "checkpoint_push",
@@ -24,12 +28,14 @@ export const FEATURE_CHECKPOINT_RETRY: Readonly<Record<string, string>> = {
   close_primary_unavailable: "detect_close_primary",
 };
 
-const COMMAND_SELF_RETRY = new Set(["triage", "implement"]);
 const COMPLETED = new Set(["succeeded", "skipped", "partially_succeeded"]);
 const STATUS_EVENTS = new Set([
   "dag.run.queued", "dag.run.running", "dag.run.waiting", "dag.run.succeeded",
   "dag.run.partially_succeeded", "dag.run.failed", "dag.run.aborted", "dag.run.rejected",
 ]);
+// The observed scheduler race overwrites a wait/resume in less than a second.
+// Do not treat a later, unrelated stale-process failure as that race.
+const STALE_REPAIR_WINDOW_MS = 5_000;
 const NODE_STATUS = ["not_started", "running", "failed", "aborted", "succeeded", "skipped", "partially_succeeded", "waiting", "rejected", "retrying"] as const;
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const STEP = /^[A-Za-z0-9_]+$/;
@@ -162,6 +168,8 @@ function decideRun(run: string, events: readonly AdminEvent[], ledger: RecoveryL
   if (!failed || failed.type !== "dag.run.failed" || runError(failed) !== STALE_PROCESS_ERROR) return undefined;
   if (!previous || (previous.type !== "dag.run.waiting" && previous.type !== "dag.run.queued")) return undefined;
   if (failed.source_service !== "scheduler" || !failed.source_instance || !previous.source_instance || failed.source_instance === previous.source_instance) return undefined;
+  const elapsed = Date.parse(stamp(failed)) - Date.parse(stamp(previous));
+  if (!Number.isFinite(elapsed) || elapsed < 0 || elapsed > STALE_REPAIR_WINDOW_MS) return undefined;
   const plan = previous.type === "dag.run.waiting" ? planWaiting(nodesOf(previous)) : planQueued(nodesOf(previous));
   if (!plan) return undefined;
   if (plan.action === "manual") return { action: "manual", run, attempt, checkpoint: plan.checkpoint };
@@ -193,7 +201,8 @@ function planWaiting(nodes: readonly DagNodeSnapshot[]): { action: "retry"; chec
 function planQueued(nodes: readonly DagNodeSnapshot[]): { action: "retry"; checkpoint: string; step: string } | { action: "manual"; checkpoint: string } | undefined {
   const pending = firstPending(nodes);
   if (!pending) return undefined;
-  if (FEATURE_HUMAN_TASKS.has(pending)) {
+  if (FEATURE_HUMAN_TASKS.has(pending) || pending === "quality_review" ||
+      nodes.some(node => stepId(node) === pending && nodeStatus(node.status) === "waiting")) {
     const step = retryStep(pending);
     return step && knownStep(step) ? { action: "retry", checkpoint: pending, step } : { action: "manual", checkpoint: pending };
   }
@@ -201,26 +210,22 @@ function planQueued(nodes: readonly DagNodeSnapshot[]): { action: "retry"; check
 }
 
 function firstPending(nodes: readonly DagNodeSnapshot[]): string | undefined {
-  const status = new Map<string, string>();
+  // The event carries the immutable snapshot's declaration order. Never add
+  // steps from the currently installed template: older snapshots may not have
+  // those steps, and completed checkpoint outputs must remain preserved.
   for (const node of nodes) {
-    const id = stepId(node);
-    if (id) status.set(id, nodeStatus(node.status));
-  }
-  for (const id of FEATURE_STEP_ORDER) {
-    const state = status.get(id) ?? "not_started";
-    if (!COMPLETED.has(state)) return id;
+    if (!COMPLETED.has(nodeStatus(node.status))) return stepId(node) || undefined;
   }
   return undefined;
 }
 
 function retryStep(id: string): string | undefined {
   if (Object.hasOwn(FEATURE_CHECKPOINT_RETRY, id)) return FEATURE_CHECKPOINT_RETRY[id];
-  if (COMMAND_SELF_RETRY.has(id)) return id;
   return undefined;
 }
 
 function knownStep(step: string): boolean {
-  return STEP.test(step) && FEATURE_STEP_ORDER.includes(step);
+  return STEP.test(step) && (FEATURE_STEP_ORDER.includes(step) || Object.values(FEATURE_CHECKPOINT_RETRY).includes(step));
 }
 
 function orderSteps(ids: readonly string[]): string[] {
@@ -246,7 +251,13 @@ function latestAttempt(events: readonly AdminEvent[]): string | undefined {
 }
 
 function stamp(event: AdminEvent): string {
-  return event.occurred_at || event.recorded_at || "";
+  const value = event.occurred_at || event.recorded_at || "";
+  const millis = Date.parse(value);
+  if (!Number.isFinite(millis)) return "";
+  // Dagu writes RFC3339Nano: fractions may be absent or have varying widths.
+  // Normalize before comparing, retaining sub-millisecond event ordering.
+  const fraction = /\.(\d+)(?:Z|[+-]\d{2}:\d{2})$/.exec(value)?.[1] ?? "";
+  return new Date(millis).toISOString().replace(/\.\d{3}Z$/, `.${fraction.padEnd(9, "0")}Z`);
 }
 
 function runError(event: AdminEvent): string {
