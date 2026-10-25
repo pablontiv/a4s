@@ -4,7 +4,7 @@ import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import type { CallDecision, Event } from "./triage/guard.ts";
 import { HOST_PRIMARY_REFERENCE, resolveHostPrimary, workspaceLabel } from "./primary.ts";
-import { resolveRunPrimary } from "./status/progress.ts";
+import { resolveRunPrimary } from "./run-primary.ts";
 
 const exec = promisify(execFile);
 const active: Record<string, true> = { queued: true, running: true, waiting: true };

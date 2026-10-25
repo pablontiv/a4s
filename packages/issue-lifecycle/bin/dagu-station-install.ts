@@ -8,6 +8,7 @@ import { parseArgs } from "node:util";
 import { isMap, parseDocument } from "yaml";
 import { REQUIRED_DAGU_VERSION } from "../src/bundle.ts";
 import { queueCompatibility, stampedQueue } from "../src/queue.ts";
+import { stationExecutors } from "../src/station-executors.ts";
 
 async function main(): Promise<void> {
   const { values } = parseArgs({ options: {
@@ -21,10 +22,17 @@ async function main(): Promise<void> {
     "restart-command": { type: "string" },
     "repo-dag": { type: "string" },
     "timeout-seconds": { type: "string", default: "600" },
+    "executor-action": { type: "string" },
+    source: { type: "string" },
+    commit: { type: "string" },
+    executor: { type: "string" },
+    "launcher-dir": { type: "string" },
+    evidence: { type: "string" },
     help: { type: "boolean", default: false },
   } });
   if (values.help) {
     console.log("dagu-station-install [--dagu-home DIR] [--launch-agent FILE] [--log-dir DIR] [--check | --apply --repo-dag FILE --admission-close CMD --admission-open CMD --restart-command CMD] [--timeout-seconds 600]\nDefaults: DAGU_HOME or ~/.dagu; plist staged at <dagu-home>/LaunchAgent.plist; logs at <dagu-home>/logs/service.\n--check compares desired files without installing. Default installation defers activation. --apply closes admission, drains running and queued runs, requests TERM restart, verifies the repository's stamped capacity, then reopens admission. Service hooks belong to the operator.");
+    console.log("Executor operations: --executor-action install|inventory|migrate|prune --evidence FILE [--source REPO --commit SHA --launcher-dir DIR | --executor PATH --source REPO --admission-close CMD --admission-open CMD]. Operations write a new JSON evidence receipt and do not change station configuration or restart services.");
     return;
   }
   const timeout = Number(values["timeout-seconds"]) * 1000;
@@ -40,6 +48,21 @@ async function main(): Promise<void> {
   }
   const binary = resolve(execFileSync("which", ["dagu"], { encoding: "utf8" }).trim());
   const home = resolve(values["dagu-home"] || process.env.DAGU_HOME || join(homedir(), ".dagu"));
+  if (values["executor-action"]) {
+    if (values.check || values.apply) throw new Error("Executor operations cannot be combined with --check or --apply");
+    if (!values.evidence) throw new Error("Executor operations require --evidence FILE");
+    mkdirSync(home, { recursive: true });
+    await stationExecutors({
+      action: values["executor-action"], home, evidence: values.evidence,
+      ...(values.source === undefined ? {} : { source: values.source }),
+      ...(values.commit === undefined ? {} : { commit: values.commit }),
+      ...(values.executor === undefined ? {} : { executor: values.executor }),
+      ...(values["launcher-dir"] === undefined ? {} : { launcherDir: values["launcher-dir"] }),
+      ...(values["admission-close"] === undefined ? {} : { admissionClose: values["admission-close"] }),
+      ...(values["admission-open"] === undefined ? {} : { admissionOpen: values["admission-open"] }),
+    });
+    return;
+  }
   const launchAgent = resolve(values["launch-agent"] || join(home, "LaunchAgent.plist"));
   const logDir = resolve(values["log-dir"] || join(home, "logs", "service"));
   const template = (name: string): string => readFileSync(new URL(`../dagu/${name}`, import.meta.url), "utf8");

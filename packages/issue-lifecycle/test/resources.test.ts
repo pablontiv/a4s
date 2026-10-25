@@ -30,7 +30,7 @@ function fixture() {
   history("feature", []); history("poc", []);
   const worktree = join(primary, ".workspace", "worktrees", "issue-215"), branch = "dagu/issue-215";
   const row = (run: string, status: string, kind = "feature") => ({ name: kind, dagRunId: run, status, params: `PRIMARY=${primary} ISSUE=215 BRANCH=${kind === "feature" ? branch : ""}` });
-  const env = { ...process.env, DAGU_PARAMS_JSON: "{}", PATH: `${bin}:${process.env.PATH}`, PRIMARY: primary, WORKTREE: worktree, BRANCH: branch, ISSUE: "215", RUN: "owner", OMP_SESSION_ID: "resource-test-session", BASE_BRANCH: "main", GATE: "true", REQUIRED_CHECK: "validate", DAGU_FEATURE_BUNDLE: "test" };
+  const env = { ...process.env, DAGU_PARAMS_JSON: "{}", POC_BASIS: "", PATH: `${bin}:${process.env.PATH}`, PRIMARY: primary, WORKTREE: worktree, BRANCH: branch, ISSUE: "215", RUN: "owner", OMP_SESSION_ID: "resource-test-session", BASE_BRANCH: "main", GATE: "true", REQUIRED_CHECK: "validate", DAGU_FEATURE_BUNDLE: "test" };
   return { root, primary, branch, worktree, git, history, row, env };
 }
 function script(definition: string, marker: string) {

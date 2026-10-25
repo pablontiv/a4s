@@ -37,9 +37,98 @@ The main lane uses `@a4s/issue-lifecycle@0.5.4` for its adopted renders and
 controller, and the shared scheduled reconciler uses the 0.5.4 installation.
 Main adopted this identity through `bootstrap-a4s-v0-5-4`.
 
-Runs admitted under pre-0.4 `@a4s/omp-dagu` receipts continue through executors
-pinned to each receipt's exact source commit. The station role-job launcher
-selects the receipt-pinned executor and fails when that executor is missing.
+Station role jobs select executors by the unchanged receipt's exact bundle version
+and source commit, not the active installation. New installs are independent
+clones under `$DAGU_HOME/executors/<package>-<version>-<sha40>`, with their own
+`.git` and objects; they are not development-clone worktrees. The station shim
+uses the active pin when there is no `RUN`, and otherwise requires `PRIMARY` and
+the run's immutable receipt. Missing pins fail closed.
+
+Pre-0.4 `@a4s/omp-dagu` bundles without a role-jobs entrypoint remain retained and
+explicitly unsupported by this launcher. The #623 PASS demonstrated the
+0.5.16 bundle on the dogfood station, not repair of historical missing entrypoints,
+missing pins, or safe termination of old waiting runs (#610). Never substitute
+the active bundle for an unsupported historical receipt.
+
+### Independent station executors and reference-based retention
+
+Installation, migration, retention and launcher replacement require explicit
+operator authority for the selected station; a feature-role assignment or PR
+does not grant it. Use its actual service `DAGU_HOME`. After publishing a bundle
+that includes the maintained dispatcher, install the exact recorded revision:
+
+```sh
+node packages/issue-lifecycle/bin/dagu-station-install.ts \
+  --executor-action install --source "$PRIMARY" --commit "<sha40>" \
+  --launcher-dir "$HOME/.local/bin" --evidence "<evidence>/install.json"
+```
+
+The source is an available local repository containing that commit. The installer
+clones with `--no-local`, fetches/checks out the exact commit detached, and runs
+`npm ci --ignore-scripts --no-audit --no-fund`. Git objects are not borrowed from
+PRIMARY. Keep a working Bun on the service PATH: the shim invokes Bun directly,
+not the npm-installed Bun shebang. This operation changes only executor storage,
+its active pin and the explicitly selected `dagu-role-jobs` shim; it does not
+restart services or adopt repository renders. Repeating it preserves the shim's
+bytes and mtime when unchanged.
+
+First inventory all non-terminal run references, including old waiting snapshots:
+
+```sh
+node packages/issue-lifecycle/bin/dagu-station-install.ts \
+  --executor-action inventory --source "$PRIMARY" \
+  --evidence "<evidence>/inventory.json"
+```
+
+Each fresh evidence file records the exact command, run/DAG/PRIMARY identities,
+required versions/commits, executor paths, bundle and entrypoint SHA-256 digests,
+and before/after worktree porcelain. Missing resolution is explicit. History is
+queried from the Unix epoch; malformed, inaccessible or limit-truncated history
+fails closed. Keep these runtime receipts outside versioned source and attach the
+authorized station's evidence to #623; local behavioral tests are not that proof.
+
+Migrate one registered executor at a time, only at a quiescent station with
+operator-provided admission hooks. Waiting/not-started references stay retained:
+
+```sh
+node packages/issue-lifecycle/bin/dagu-station-install.ts \
+  --executor-action migrate --source "$PRIMARY" --executor "<executor-path>" \
+  --admission-close "<close-admission-command>" \
+  --admission-open "<open-admission-command>" \
+  --evidence "<evidence>/migration.json"
+```
+
+Migration stages and installs an independent clone, compares exact identities and
+bundle/entrypoint digests before changing registration, and replaces the old
+worktree at the same path. Git removes only that executor's old registration.
+Every observed run must still resolve its original bundle after the operation.
+A historical pin without a role-jobs entrypoint can migrate only with unchanged
+bundle identity and unchanged entrypoint absence: its launcher rejection remains
+explicit, not repaired or replaced. Pins with unresolved bundle identity are
+retained without migration. On failure, admission stays closed for explicit
+operator recovery; do not interpret a failed command as permission to resume.
+No historical run is resumed, stopped or ended.
+
+Removal uses the same maintained path and hooks, explicitly selecting one old
+executor rather than an age cutoff:
+
+```sh
+node packages/issue-lifecycle/bin/dagu-station-install.ts \
+  --executor-action prune --source "$PRIMARY" --executor "<old-executor-path>" \
+  --admission-close "<close-admission-command>" \
+  --admission-open "<open-admission-command>" \
+  --evidence "<evidence>/retention.json"
+```
+
+Install an active independent pin before pruning. Active and referenced pins are
+retained regardless of age. Unresolved references block removal. Dirty/ignored
+operator files, named branches, symlinks, foreign worktrees and paths outside the
+direct executor namespace are retained. Development worktrees are not candidates.
+An unreferenced detached executor can be removed whether it is an independent
+clone or an old registered worktree of the specified source repository.
+After each authorized station operation, preserve the JSON evidence and verify
+the actual launcher, retained run bundle resolution and development-worktree
+usability. This operator acceptance remains separate from source publication.
 
 Inspect each run with its identity-matched controller; report incompatibility
 as deployment state rather than changing a stamp.

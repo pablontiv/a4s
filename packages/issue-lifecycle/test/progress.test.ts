@@ -4,7 +4,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BUNDLE_VERSION } from "../src/bundle.ts";
-import { currentStep, renderOffline, renderRun, renderWidget, resolveRunPrimary, runLabel, Transitions } from "../src/status/progress.ts";
+import { currentStep, renderOffline, renderRun, renderWidget, runLabel, Transitions } from "../src/status/progress.ts";
+import { resolveRunPrimary } from "../src/run-primary.ts";
 import type { RunDetails } from "../src/status/progress.ts";
 
 const labels = ["workspace=a4s", "dagu-feature-bundle=0.3.1"];
@@ -362,4 +363,26 @@ test("runtime primary resolves the enqueued adoption spec including spaces and U
   assert.equal(await resolveRunPrimary("http://dagu", { ...run, dagRunId: "run-274", params: "ISSUE=274" }, new AbortController().signal), primary);
   assert.equal(await resolveRunPrimary("http://dagu", run, new AbortController().signal), "/tmp/a4s");
   assert.equal(fetch.mock.callCount(), 1);
+});
+
+test("runtime primary resolves the enqueued host binding through its workspace mapping", async t => {
+  const home = mkdtempSync(join(tmpdir(), "run-primary-"));
+  const primary = join(home, "Repo con espacio", "ñ");
+  const previous = { DAGU_HOME: process.env.DAGU_HOME, A4S_PRIMARY: process.env.A4S_PRIMARY };
+  process.env.DAGU_HOME = home;
+  process.env.A4S_PRIMARY = join(home, "fallback");
+  t.after(() => {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    rmSync(home, { recursive: true, force: true });
+  });
+  mkdirSync(join(home, "primaries"));
+  writeFileSync(join(home, "primaries", "a4s"), `${primary}\n`);
+  t.mock.method(globalThis, "fetch", async () => new Response(JSON.stringify({
+    spec: 'env:\n  - PRIMARY: "${A4S_PRIMARY}"\nlabels:\n  - workspace=a4s\n',
+  })));
+  assert.equal(await resolveRunPrimary("http://dagu", { ...run, params: "ISSUE=623" }, new AbortController().signal), primary);
+  assert.equal(await resolveRunPrimary("http://dagu", { ...run, resolvedPrimary: "/recorded/primary" }, new AbortController().signal), "/recorded/primary");
 });

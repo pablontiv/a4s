@@ -2,7 +2,8 @@ import { open, readdir, realpath, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { agentDirectory } from "../agent-directory.ts";
-import { currentNode, issueNumber, resolveRunPrimary, runParam, topicFor } from "./progress.ts";
+import { currentNode, issueNumber, topicFor } from "./progress.ts";
+import { resolveRunPrimary, runParam } from "../run-primary.ts";
 import type { RunDetails } from "./progress.ts";
 
 const TRANSCRIPT_TAIL_BYTES = 256 * 1024;
