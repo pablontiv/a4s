@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { execFileSync } from "node:child_process";
-import { appendFileSync, realpathSync, writeSync } from "node:fs";
+import { appendFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { dispatchStage, verifyTriageResult } from "../src/role-dispatch.ts";
 import { RoleJobStore } from "../src/role-jobs.ts";
@@ -49,7 +49,7 @@ try {
   process.exit(0);
 } catch (error) {
   const message = error instanceof Error ? error.message : String(error);
-  writeSync(2, `DAGU_ROLE_JOB_BLOCKED: ${message}\n`);
-  if (process.argv[2] === "verify-triage") writeSync(2, "VERIFIER=FAIL\n");
+  console.error(`DAGU_ROLE_JOB_BLOCKED: ${message}`);
+  if (process.argv[2] === "verify-triage") console.error("VERIFIER=FAIL");
   process.exit(1);
 }

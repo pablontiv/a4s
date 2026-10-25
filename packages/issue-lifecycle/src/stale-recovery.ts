@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 /** Official Dagu 2.20.1 scheduler text for a stale local-process repair. */
@@ -100,13 +100,31 @@ export function recoveryLog(decision: RecoveryDecision): string {
   return `stale-process recovery: run=${decision.run} attempt=${decision.attempt} checkpoint=${decision.checkpoint} step=${decision.step} command=${decision.command}`;
 }
 
+function errorCode(error: unknown): string | undefined {
+  return error && typeof error === "object" && "code" in error && typeof error.code === "string" ? error.code : undefined;
+}
+
+/** Read admin JSONL without a check-then-read race. A missing directory or a vanished file is no signal. */
 export function readAdminEvents(directory: string): AdminEvent[] {
-  if (!existsSync(directory)) return [];
+  let names: string[];
+  try {
+    names = readdirSync(directory);
+  } catch (error) {
+    if (errorCode(error) === "ENOENT") return [];
+    throw error;
+  }
   const events: AdminEvent[] = [];
-  for (const name of readdirSync(directory).filter(entry => entry.endsWith(".jsonl")).sort()) {
-    const path = join(directory, name);
-    if (!statSync(path).isFile()) continue;
-    for (const line of readFileSync(path, "utf8").split("\n")) {
+  for (const name of names.filter(entry => entry.endsWith(".jsonl")).sort()) {
+    let text: string;
+    try {
+      text = readFileSync(join(directory, name), "utf8");
+    } catch (error) {
+      const code = errorCode(error);
+      // ENOENT: the file disappeared. EISDIR/ENOTDIR: the name is not a readable file.
+      if (code === "ENOENT" || code === "EISDIR" || code === "ENOTDIR") continue;
+      throw error;
+    }
+    for (const line of text.split("\n")) {
       const trimmed = line.trim();
       if (!trimmed) continue;
       try {
