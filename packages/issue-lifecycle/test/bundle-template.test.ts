@@ -133,13 +133,45 @@ test("bootstrap renders default, preserved and explicit CodeQL thresholds and re
         SOURCE_NWO: "example/repo", SOURCE_SHA: "a".repeat(40),
         CODEQL_SECURITY_THRESHOLD: answer, CURRENT_CODEQL_SECURITY_THRESHOLD: installed,
         CODEQL_ALERTS_THRESHOLD: "", CURRENT_CODEQL_ALERTS_THRESHOLD: "errors_and_warnings",
+        CODE_SCANNING: "", CURRENT_CODE_SCANNING: "",
       } });
       assert.equal(result.status, 0, result.stderr);
       const rendered = parse(readFileSync(stage, "utf8"));
       assert.ok(rendered.env.some((entry: Record<string, string>) => entry.CODEQL_SECURITY_THRESHOLD === expected));
       assert.ok(rendered.env.some((entry: Record<string, string>) => entry.CODEQL_ALERTS_THRESHOLD === "errors_and_warnings"));
+      assert.ok(rendered.env.some((entry: Record<string, string>) => entry.CODE_SCANNING === "required"));
     }
-    for (const key of ["CODEQL_SECURITY_THRESHOLD", "CODEQL_ALERTS_THRESHOLD"]) {
+    for (const [answer, installed, expected] of [
+      ["", "", "required"], ["", "off", "off"], ["required", "off", "required"], ["off", "required", "off"],
+    ] as const) {
+      const stage = join(root, "feature.yaml");
+      const result = spawnSync("bash", ["-c", script], { encoding: "utf8", env: {
+        ...process.env, PRIMARY: root, SKILL_DIR: fileURLToPath(new URL("../skills/issue-execution", import.meta.url)),
+        STAGE: stage, DAG_RUN_ID: "bootstrap-codeql", REPO: "fixture", BASE_BRANCH: "main",
+        GATE: "true", REQUIRED_CHECK: "validate", REBASE_RESOLVER: "", TEST_PATHS: "test",
+        BUNDLE_NAME: "@a4s/issue-lifecycle", BUNDLE_VERSION: "0.4.4", DAGU_VERSION: "2.20.1",
+        SOURCE_NWO: "example/repo", SOURCE_SHA: "a".repeat(40),
+        CODEQL_SECURITY_THRESHOLD: "", CURRENT_CODEQL_SECURITY_THRESHOLD: "high_or_higher",
+        CODEQL_ALERTS_THRESHOLD: "", CURRENT_CODEQL_ALERTS_THRESHOLD: "errors",
+        CODE_SCANNING: answer, CURRENT_CODE_SCANNING: installed,
+      } });
+      assert.equal(result.status, 0, result.stderr);
+      const rendered = parse(readFileSync(stage, "utf8"));
+      assert.ok(rendered.env.some((entry: Record<string, string>) => entry.CODE_SCANNING === expected));
+    }
+    const rejectedChoice = spawnSync("bash", ["-c", script], { encoding: "utf8", env: {
+      ...process.env, PRIMARY: root, SKILL_DIR: fileURLToPath(new URL("../skills/issue-execution", import.meta.url)),
+      STAGE: join(root, "feature.yaml"), DAG_RUN_ID: "bootstrap-codeql", REPO: "fixture", BASE_BRANCH: "main",
+      GATE: "true", REQUIRED_CHECK: "validate", REBASE_RESOLVER: "", TEST_PATHS: "test",
+      BUNDLE_NAME: "@a4s/issue-lifecycle", BUNDLE_VERSION: "0.4.4", DAGU_VERSION: "2.20.1",
+      SOURCE_NWO: "example/repo", SOURCE_SHA: "a".repeat(40),
+      CODE_SCANNING: "sometimes",
+    } });
+    assert.notEqual(rejectedChoice.status, 0);
+    assert.match(rejectedChoice.stderr, /CODE_SCANNING must be required or off/);
+    const form = parse(skill("dagu-feature-bootstrap.yaml")).steps.find((step: { id: string }) => step.id === "answers").with.form;
+    assert.deepEqual(form.properties.CODE_SCANNING, { type: "string", enum: ["", "required", "off"], default: "" });
+    for (const key of ["CODEQL_SECURITY_THRESHOLD", "CODEQL_ALERTS_THRESHOLD", "CODE_SCANNING"]) {
       const result = spawnSync("bash", ["-c", admission], { encoding: "utf8", env: {
         ...process.env, DAGU_PARAMS_JSON: JSON.stringify({ [key]: "none" }),
         PRIMARY: root, GATE: "true", REBASE_RESOLVER: "", REQUIRED_CHECK: "validate", BRANCH: "dagu/issue-570",

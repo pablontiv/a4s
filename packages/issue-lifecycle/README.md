@@ -55,21 +55,29 @@ checks from delivery evidence rather than adding a lifecycle checkpoint.
 
 ### CodeQL merge gate
 
-`dagu-codeql` observes the current PR head's `CodeQL` check and paginated open
-alerts from `refs/pull/<PR>/head`. Bootstrap fixes
+`CODE_SCANNING` is `required` or `off`. Blank bootstrap answers keep the
+installed choice; the initial choice is `required`. `off` neither observes nor
+waits for CodeQL, so auto-merge and `authorize_ci` depend only on
+`REQUIRED_CHECK`. Use it for repositories that cannot enable code scanning,
+including private Free/Pro user repositories.
+
+When `required`, `dagu-codeql` observes the current PR head's `CodeQL` check and
+paginated open alerts from `refs/pull/<PR>/head`. Bootstrap fixes
 `CODEQL_SECURITY_THRESHOLD=high_or_higher` and `CODEQL_ALERTS_THRESHOLD=errors`
 by default; blank answers preserve installed policy. Security and non-security
 thresholds use GitHub ruleset enum values. Enable CodeQL analysis and give the
-service permission to read code-scanning alerts before adoption.
+service permission to read code-scanning alerts before that adoption.
 
-After publication, pending analysis releases the queue through the native
+After publication, pending required analysis releases the queue through the native
 CI/merge waits. The scheduled reconciler enables guarded squash auto-merge only
-when required CI and CodeQL pass for the head. Findings meeting either threshold
-return the same run to implementation through `await_ci`, including when GitHub
-reports ruleset merge state `BLOCKED`. Rule, severity, location and message remain
+when required CI passes and, if code scanning is required, CodeQL passes for the
+head. Findings meeting either threshold return the same run to implementation
+through `await_ci`, including when GitHub reports ruleset merge state `BLOCKED`.
+Rule, severity, location and message remain
 in `<git-dir>/dagu-feature/runs/<RUN>/ci-return.json` and the implementation
 assignment requires that diagnostic. Permission failures and unexplained analysis
-failures stay diagnosed waits; changed heads require fresh evidence.
+failures stay diagnosed waits; changed heads require fresh evidence. An `off`
+policy does not query the code-scanning API, so an HTTP 403 does not block the run.
 
 The adopted candidate policy and latest analysis are retained in
 `codeql-policy.json` and `codeql-observation.json`; final authorization repeats

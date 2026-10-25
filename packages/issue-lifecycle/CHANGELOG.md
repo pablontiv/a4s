@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.7
+
+- Adopt `CODE_SCANNING=required|off` per repository. Blank keeps the installed choice; `off` does not observe or wait for CodeQL, so auto-merge and final CI authorization depend only on the required check (#641).
+
 ## 0.5.6
 
 - Bind PoC experiment prompts to the resolved question and result path, including issue-body question fallback (#352).

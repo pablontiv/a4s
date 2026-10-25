@@ -156,10 +156,15 @@ steps:
           # ruleset even when required-check lookup does not expose that rule.
           policy="$STATE/codeql-policy.json"
           # Retained runs use their original checks-only contract until publication
-          # explicitly supplies a candidate-bound CodeQL policy.
+          # explicitly supplies a candidate-bound CodeQL policy. mode=off keeps
+          # that checks-only contract even after publication.
           if [[ -f "$policy" ]]; then
             if [[ "$(jq -r .sha "$policy")" != "$SHA" ]]; then
               CLASS=STALE_SHA CHECK=CodeQL CAUSE="CodeQL policy belongs to another published candidate"
+            elif [[ "$(jq -r '.mode // "required"' "$policy")" == off ]]; then
+              :
+            elif [[ "$(jq -r '.mode // "required"' "$policy")" != required ]]; then
+              CLASS=BLOCKED CHECK=CodeQL CAUSE="Invalid code scanning policy mode"
             else
               dagu-codeql "$REPO" "$PR" "$SHA" "$(jq -r .security "$policy")" "$(jq -r .alerts "$policy")" >"$STATE/codeql-observation.json"
               codeql_class=$(jq -r .class "$STATE/codeql-observation.json")

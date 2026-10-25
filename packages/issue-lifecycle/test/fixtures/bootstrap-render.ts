@@ -9,6 +9,7 @@ export function bootstrapRender(options: {
   version: string;
   sourceNwo: string;
   sourceSha: string;
+  codeScanning?: string;
 }): void {
   const skill = join(options.packageDir, "skills", "issue-execution");
   const manifest = JSON.parse(readFileSync(join(options.packageDir, "package.json"), "utf8"));
@@ -24,6 +25,7 @@ export function bootstrapRender(options: {
       STAGE: join(options.directory, "feature.yaml"), DAG_RUN_ID: "bootstrap-fixture",
       REPO: "fixture", BASE_BRANCH: "main", GATE: "true", REQUIRED_CHECK: "validate",
       REBASE_RESOLVER: "true", VALIDATION: "", TEST_PATHS: "test", A4S_BLOCKER_REPORTING: "ask",
+      ...(options.codeScanning !== undefined ? { CODE_SCANNING: options.codeScanning } : {}),
       BUNDLE_NAME: manifest.name, BUNDLE_VERSION: options.version,
       DAGU_VERSION: manifest.daguFeature.dagu, SOURCE_NWO: options.sourceNwo, SOURCE_SHA: options.sourceSha,
     },

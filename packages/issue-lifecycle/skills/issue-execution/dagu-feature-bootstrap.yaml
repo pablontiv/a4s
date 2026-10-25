@@ -113,6 +113,7 @@ steps:
       current_blocker_reporting=ask
       current_codeql_security=high_or_higher
       current_codeql_alerts=errors
+      current_code_scanning=required
       if test -f "$installed_feature"; then
         current_gate=$(read_default "$installed_feature" GATE)
         current_check=$(read_default "$installed_feature" REQUIRED_CHECK)
@@ -122,6 +123,8 @@ steps:
         current_blocker_reporting=${current_blocker_reporting:-ask}
         current_codeql_security=$(read_default "$installed_feature" CODEQL_SECURITY_THRESHOLD)
         current_codeql_alerts=$(read_default "$installed_feature" CODEQL_ALERTS_THRESHOLD)
+        current_code_scanning=$(read_default "$installed_feature" CODE_SCANNING)
+        current_code_scanning=${current_code_scanning:-required}
       fi
       if test -f "$installed_poc"; then
         current_tests=$(read_default "$installed_poc" TEST_PATHS)
@@ -158,6 +161,7 @@ steps:
         printf 'CURRENT_A4S_BLOCKER_REPORTING=%s\n' "$current_blocker_reporting"
         printf 'CURRENT_CODEQL_SECURITY_THRESHOLD=%s\n' "${current_codeql_security:-high_or_higher}"
         printf 'CURRENT_CODEQL_ALERTS_THRESHOLD=%s\n' "${current_codeql_alerts:-errors}"
+        printf 'CURRENT_CODE_SCANNING=%s\n' "$current_code_scanning"
         printf 'CURRENT_QUEUE_CONCURRENCY=%s\n' "$current_queue_concurrency"
         printf 'CURRENT_FEATURE_STAMP=%s\n' "$(read_stamp "$installed_feature")"
         printf 'CURRENT_POC_STAMP=%s\n' "$(read_stamp "$installed_poc")"
@@ -185,6 +189,7 @@ steps:
       - name: CURRENT_A4S_BLOCKER_REPORTING
       - name: CURRENT_CODEQL_SECURITY_THRESHOLD
       - name: CURRENT_CODEQL_ALERTS_THRESHOLD
+      - name: CURRENT_CODE_SCANNING
       - name: CURRENT_QUEUE_CONCURRENCY
       - name: CURRENT_FEATURE_STAMP
       - name: CURRENT_POC_STAMP
@@ -223,9 +228,15 @@ steps:
         A4S_BLOCKER_REPORTING: ask requires consent before publishing a blocker;
         auto explicitly authorizes scoped A4S blocker reporting to the identified native owner.
         Empty preserves the installed choice (current: ${steps.detect.outputs.CURRENT_A4S_BLOCKER_REPORTING}; initial: ask).
-        CODEQL_SECURITY_THRESHOLD: minimum security severity (current: ${steps.detect.outputs.CURRENT_CODEQL_SECURITY_THRESHOLD}; initial: high_or_higher).
-        CODEQL_ALERTS_THRESHOLD: non-security findings (current: ${steps.detect.outputs.CURRENT_CODEQL_ALERTS_THRESHOLD}; initial: errors).
-        Blank preserves installed thresholds. Enable CodeQL analysis for this repository before adoption.
+        CODE_SCANNING: required waits for CodeQL before merge; off neither observes nor waits for CodeQL
+        (current: ${steps.detect.outputs.CURRENT_CODE_SCANNING}; initial: required).
+        Blank preserves the installed choice. Choose off when this repository cannot enable code scanning,
+        including a private repository on a GitHub Free or Pro user account.
+        CODEQL_SECURITY_THRESHOLD: minimum security severity used when code scanning is required
+        (current: ${steps.detect.outputs.CURRENT_CODEQL_SECURITY_THRESHOLD}; initial: high_or_higher).
+        CODEQL_ALERTS_THRESHOLD: non-security findings used when code scanning is required
+        (current: ${steps.detect.outputs.CURRENT_CODEQL_ALERTS_THRESHOLD}; initial: errors).
+        Blank preserves installed thresholds. required needs CodeQL analysis and permission to read code-scanning alerts.
         QUEUE_CONCURRENCY: positive integer; blank keeps the current stamped value
         (${steps.detect.outputs.CURRENT_QUEUE_CONCURRENCY}; initial: 1). For a4s, select 8
         to preserve the operator-approved installed capacity on first adoption.
@@ -258,6 +269,10 @@ steps:
           A4S_BLOCKER_REPORTING:
             type: string
             enum: ["", ask, auto]
+            default: ""
+          CODE_SCANNING:
+            type: string
+            enum: ["", required, "off"]
             default: ""
           CODEQL_SECURITY_THRESHOLD:
             type: string
@@ -305,6 +320,8 @@ steps:
       - CODEQL_ALERTS_THRESHOLD: ${steps.answers.outputs.CODEQL_ALERTS_THRESHOLD}
       - CURRENT_CODEQL_SECURITY_THRESHOLD: ${steps.detect.outputs.CURRENT_CODEQL_SECURITY_THRESHOLD}
       - CURRENT_CODEQL_ALERTS_THRESHOLD: ${steps.detect.outputs.CURRENT_CODEQL_ALERTS_THRESHOLD}
+      - CODE_SCANNING: ${steps.answers.outputs.CODE_SCANNING}
+      - CURRENT_CODE_SCANNING: ${steps.detect.outputs.CURRENT_CODE_SCANNING}
       - QUEUE_CONCURRENCY: ${steps.answers.outputs.QUEUE_CONCURRENCY}
       - CURRENT_QUEUE_CONCURRENCY: ${steps.detect.outputs.CURRENT_QUEUE_CONCURRENCY}
       - ESCALATION_PUSHBACKS: ${steps.answers.outputs.ESCALATION_PUSHBACKS}
@@ -336,6 +353,8 @@ steps:
       CODEQL_ALERTS_THRESHOLD=${CODEQL_ALERTS_THRESHOLD:-${CURRENT_CODEQL_ALERTS_THRESHOLD:-errors}}
       case "$CODEQL_SECURITY_THRESHOLD" in none|critical|high_or_higher|medium_or_higher|all) ;; *) echo 'Invalid CodeQL security threshold' >&2; exit 1 ;; esac
       case "$CODEQL_ALERTS_THRESHOLD" in none|errors|errors_and_warnings|all) ;; *) echo 'Invalid CodeQL alerts threshold' >&2; exit 1 ;; esac
+      CODE_SCANNING=${CODE_SCANNING:-${CURRENT_CODE_SCANNING:-required}}
+      case "$CODE_SCANNING" in required|off) ;; *) echo 'CODE_SCANNING must be required or off' >&2; exit 1 ;; esac
       for entry in PUSHBACKS:3 FINDINGS:2 SECONDS:3600 CI_BLOCKED:2 POC_INCONCLUSIVE:2; do
         key="ESCALATION_${entry%:*}"
         current="CURRENT_$key"
@@ -364,6 +383,7 @@ steps:
         --arg validation "${VALIDATION:-}" \
         --arg blocker_reporting "$A4S_BLOCKER_REPORTING" \
         --arg codeql_security "$CODEQL_SECURITY_THRESHOLD" --arg codeql_alerts "$CODEQL_ALERTS_THRESHOLD" \
+        --arg code_scanning "$CODE_SCANNING" \
         --arg stamp "$stamp" --arg version "$BUNDLE_VERSION" --arg identity "$identity" \
         "\$template
           | $render_common
@@ -375,6 +395,7 @@ steps:
           | gsub(\"__REQUIRED_CHECK__\"; \$check | tojson)
           | gsub(\"__CODEQL_SECURITY_THRESHOLD__\"; \$codeql_security | tojson)
           | gsub(\"__CODEQL_ALERTS_THRESHOLD__\"; \$codeql_alerts | tojson)
+          | gsub(\"__CODE_SCANNING__\"; \$code_scanning | tojson)
           | gsub(\"__VALIDATION__\"; \$validation | tojson)
           | gsub(\"__A4S_BLOCKER_REPORTING__\"; \$blocker_reporting | tojson)" > "$STAGE"
       jq -nr --rawfile template "$SKILL_DIR/poc.yaml" \
