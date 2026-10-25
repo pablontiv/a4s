@@ -42,6 +42,13 @@ for (const kind of ["feature", "poc", "discovery"]) {
   });
 }
 
+test("feature and PoC suites leave cancellation scenarios registered once", () => {
+  for (const file of ["feature-template.test.ts", "poc-template.test.ts"]) {
+    const source = readFileSync(new URL(`./${file}`, import.meta.url), "utf8");
+    assert.equal(source.includes("waiting-cancellation.test.ts"), false, `${file} re-registers cancellation scenarios`);
+  }
+});
+
 test("native feature role stages retain historical cancellation snapshot coverage", () => {
   const template = readFileSync(new URL("../skills/issue-execution/feature.yaml", import.meta.url), "utf8");
   const current = parse(template);

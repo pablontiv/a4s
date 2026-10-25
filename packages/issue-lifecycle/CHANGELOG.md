@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.20
+
+- Build feature and cleanup test repositories from one immutable seed per fixture family. Each test gets a private copy with linked-worktree metadata and ownership paths rewritten (#633).
+- Register waiting-cancellation scenarios once through the test glob. The live lane runs that file directly, so feature and PoC cancellation coverage stays in both modes.
+
 ## 0.5.19
 
 - Bind feature and PoC `PRIMARY` to the host reference `"${A4S_PRIMARY}"` instead of a machine path. Enqueue, spec recovery and the resource guard resolve `$DAGU_HOME/primaries/<workspace>`, then `A4S_PRIMARY`, then `$DAGU_HOME/a4s-primary`. An admitted snapshot records that absolute main checkout (#659).

@@ -1,7 +1,8 @@
 import { renderedFeature, renderedPoc } from "./fixtures/rendered-feature.ts";
+import { copyRepositorySeed, normalizedFixtureSnapshot, SEED_COMMIT_DATE, settleCopiedRepository } from "./fixtures/repository-seed.ts";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -39,8 +40,8 @@ function hasRef(cwd: string, ref: string): boolean {
 }
 
 type Repo = { root: string; outside: string; primary: string; remote: string; worktree: string; branch: string };
-function repository(branch = "dagu/issue-209", worktreeName = "issue-209"): Repo {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), "omp-dagu-cleanup-")));
+
+function buildCleanupSeed(root: string, branch: string, worktreeName: string): void {
   const outside = join(root, "dagu-run-root");
   const primary = join(root, "primary");
   const remote = join(root, "remote.git");
@@ -53,14 +54,37 @@ function repository(branch = "dagu/issue-209", worktreeName = "issue-209"): Repo
   git(primary, "remote", "add", "origin", remote);
   writeFileSync(join(primary, "value.txt"), "base\n");
   git(primary, "add", ".");
-  git(primary, "commit", "-m", "base");
+  execFileSync("git", ["-C", primary, "-c", "commit.gpgsign=false", "commit", "-m", "base"], {
+    env: { ...process.env, GIT_AUTHOR_DATE: SEED_COMMIT_DATE, GIT_COMMITTER_DATE: SEED_COMMIT_DATE },
+  });
   git(primary, "push", "-u", "origin", "main");
   writeFileSync(join(primary, ".git", "info", "exclude"), "/.workspace/worktrees/\n");
   mkdirSync(join(primary, ".workspace", "worktrees"), { recursive: true });
   git(primary, "worktree", "add", "-b", branch, worktree, "origin/main");
   stubHistory(root);
   register({ root, outside, primary, remote, worktree, branch });
-  return { root, outside, primary, remote, worktree, branch };
+}
+
+function materializeCleanup(branch: string, worktreeName: string, fresh: boolean): Repo {
+  const root = fresh
+    ? realpathSync(mkdtempSync(join(tmpdir(), "omp-dagu-cleanup-")))
+    : copyRepositorySeed(`cleanup:${branch}:${worktreeName}`, "omp-dagu-cleanup-", seed => buildCleanupSeed(seed, branch, worktreeName));
+  if (fresh) buildCleanupSeed(root, branch, worktreeName);
+  const primary = join(root, "primary");
+  const repo: Repo = {
+    root,
+    outside: join(root, "dagu-run-root"),
+    primary,
+    remote: join(root, "remote.git"),
+    worktree: join(primary, ".workspace", "worktrees", worktreeName),
+    branch,
+  };
+  if (!fresh) settleCopiedRepository([repo.primary, repo.worktree]);
+  return repo;
+}
+
+function repository(branch = "dagu/issue-209", worktreeName = "issue-209"): Repo {
+  return materializeCleanup(branch, worktreeName, false);
 }
 
 function state(repo: Repo): string {
@@ -489,5 +513,43 @@ for (const kind of ["feature", "poc"]) {
       assert.ok(existsSync(join(evidence, "cancellation.json")));
       assert.equal(readFileSync(join(evidence, "candidate.json"), "utf8"), record);
     } finally { rmSync(repo.root, { recursive: true, force: true }); }
+  });
+}
+
+for (const [branch, worktreeName] of [["dagu/issue-209", "issue-209"], ["poc/test-run", "poc-test-run"]] as const) {
+  test(`seeded cleanup repository matches a fresh ${worktreeName} fixture and stays isolated`, () => {
+    const fresh = materializeCleanup(branch, worktreeName, true);
+    const copy = repository(branch, worktreeName);
+    const other = repository(branch, worktreeName);
+    const again = repository(branch, worktreeName);
+    const view = (repo: Repo) => normalizedFixtureSnapshot({
+      root: repo.root,
+      primary: repo.primary,
+      worktree: repo.worktree,
+      remote: repo.remote,
+      ownership: [join(state(repo), "resource.json"), owner(repo)],
+    });
+    try {
+      const baseline = view(fresh);
+      assert.equal(view(copy), baseline);
+      assert.equal(view(other), baseline);
+      assert.equal(view(again), baseline);
+      assert.equal(git(copy.primary, "config", "--get", "remote.origin.url"), copy.remote);
+      assert.equal(readlinkSync(join(copy.root, "bin", "dagu-pr-body")), readlinkSync(join(fresh.root, "bin", "dagu-pr-body")));
+      assert.notEqual(copy.root, other.root);
+      writeFileSync(join(copy.worktree, "value.txt"), "mutated\n");
+      git(copy.worktree, "add", "value.txt");
+      git(copy.worktree, "commit", "-m", "mutate");
+      git(copy.primary, "config", "user.name", "Mutated Observer");
+      git(copy.worktree, "push", "origin", "HEAD:refs/heads/mutated-copy");
+      writeFileSync(owner(copy), "{\"run\":\"mutated\"}\n");
+      assert.equal(view(other), baseline);
+      assert.equal(view(again), baseline);
+      assert.notEqual(view(copy), baseline);
+      assert.equal(readFileSync(join(other.worktree, "value.txt"), "utf8"), "base\n");
+      assert.equal(git(other.primary, "ls-remote", "origin", "refs/heads/mutated-copy"), "");
+    } finally {
+      for (const repo of [fresh, copy, other, again]) rmSync(repo.root, { recursive: true, force: true });
+    }
   });
 }

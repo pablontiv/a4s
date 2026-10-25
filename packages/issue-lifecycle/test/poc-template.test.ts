@@ -10,7 +10,6 @@ import { withResourceGuard } from "./resource-fixtures.ts";
 import { approvedPocScope, assessPocScope, decidePocScope, inconclusiveCause, requirePocScope, type PocScopeInput } from "../src/poc-scope.ts";
 import { admit } from "../src/admission.ts";
 import { parseReview } from "../src/triage/schema.ts";
-import "./waiting-cancellation.test.ts";
 
 for (const [name, definition] of [
   ["template", new URL("../skills/issue-execution/poc.yaml", import.meta.url)],
