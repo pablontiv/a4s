@@ -16,7 +16,9 @@ steps:
   - id: detect
     run: |
       set -euo pipefail
-      for tool in git gh jq dagu python3 dagu-codeql; do command -v "$tool" >/dev/null; done
+      for tool in git gh jq dagu python3 dagu-codeql dagu-feature-bundle dagu-gate dagu-poc-scope dagu-pr-body dagu-role-jobs dagu-stale-recovery; do
+        command -v "$tool" >/dev/null || { printf 'bootstrap detect: required command not found: %s\n' "$tool" >&2; exit 1; }
+      done
       python3 -c 'import fcntl'
       gh auth status >/dev/null
       test -f "$SKILL_DIR/feature.yaml"

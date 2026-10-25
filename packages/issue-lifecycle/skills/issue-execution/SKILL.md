@@ -52,6 +52,16 @@ flowchart LR
 - This package's `dagu-codeql` executable on the service's `PATH`. `CODE_SCANNING=required`
   also needs enabled CodeQL analysis and GitHub permission to read code-scanning alerts
   and check runs. `CODE_SCANNING=off` does not call the code-scanning API.
+- This package's `dagu-gate` and `dagu-poc-scope` executables on the Dagu
+  service's `PATH`. Feature renders call `dagu-gate` for the gate helper, and
+  feature/PoC renders call `dagu-poc-scope`. Bootstrap `detect` verifies every
+  package executable a rendered DAG invokes (`dagu-codeql`, `dagu-feature-bundle`,
+  `dagu-gate`, `dagu-poc-scope`, `dagu-pr-body`, `dagu-role-jobs`, and
+  `dagu-stale-recovery`) and fails with
+  `bootstrap detect: required command not found: <name>` when one is missing.
+- This package's `dagu-stale-recovery` executable on that same `PATH`. The
+  scheduled reconciler uses it to recover feature runs failed by Dagu's
+  stale-process repair.
 - `DAGU_HOME` in your shell must point to the same home as that service. Read it from the service definition (macOS: `EnvironmentVariables.DAGU_HOME` in the LaunchAgent plist). If they differ, enqueue and complete commands land in a store the scheduler never reads, and the run stays `Queued`.
 - `git`, `gh` authenticated with push and PR rights, `curl`, `jq`.
 - Python 3 with standard-library `fcntl` on the Dagu service's `PATH`; bootstrap
@@ -473,7 +483,7 @@ The steps:
 
 | Step | Effect |
 |---|---|
-| `detect` | Checks `git`, `gh` (authenticated), `jq` and the exact required `dagu version`; reads package/version, source commit and source `origin`; fetches and requires that clean package commit on the remote default branch; reads repository settings and the installed DAG values and stamps. |
+| `detect` | Checks `git`, `gh` (authenticated), `jq`, Python's `fcntl`, the exact required `dagu version`, and every package executable a rendered DAG invokes (`dagu-codeql`, `dagu-feature-bundle`, `dagu-gate`, `dagu-poc-scope`, `dagu-pr-body`, `dagu-role-jobs`, `dagu-stale-recovery`). A missing command fails with `bootstrap detect: required command not found: <name>`. It then reads package/version, source commit and source `origin`; fetches and requires that clean package commit on the remote default branch; reads repository settings and the installed DAG values and stamps. |
 | `answers` | `human.task` showing the current stamp, `GATE`, `REQUIRED_CHECK`, `TEST_PATHS`, `REBASE_RESOLVER`, optional `VALIDATION`, and `CODE_SCANNING` (`required` or `off`). Choose the test-path ERE, resolver and validation procedure from repository conventions; validation defaults to empty. Blank `CODE_SCANNING` preserves the installed choice. |
 | `worktrees` | Makes git ignore `.workspace/worktrees/`. When nothing ignores it yet, appends `/.workspace/worktrees/` to the clone's `info/exclude`, so the primary stays clean without a commit. |
 | `render` | Writes stamped and validated `feature.yaml`, `poc.yaml`, `discovery.yaml`, `planning.yaml`, and `reconcile.yaml` under `<git-dir>/dagu-feature/`, keeping PRIMARY clean. Discovery and planning receive the coordinating workspace label and resolve the target repository from `PRIMARY`. |
@@ -937,8 +947,32 @@ After retry, observe the same run returning to the intended checkpoint in
 Waiting before completing or pushing it back. Automatic feature checkpoint and
 PoC `fix_result` dispatchers reread rejected transitions, retain the native error
 and emit a nonzero diagnostic with the run, attempt, checkpoint and retry command.
-The operator owns this retry; scheduled reconciliation keeps its existing
-CI/merge responsibility.
+They do not run `dagu retry`.
+
+The scheduled `reconcile` DAG runs `dagu-stale-recovery recover-scheduled` on
+each tick. It reads `$DAGU_HOME/logs/admin/events/*.jsonl` and recovers one
+feature run when all of the following hold:
+
+- the latest attempt's latest status event is `dag.run.failed` with error
+  `process terminated unexpectedly - stale local process detected`;
+- that event's `source_service` is `scheduler` and its `source_instance` differs
+  from the previous status event for the same attempt;
+- the previous status event is `dag.run.waiting` or `dag.run.queued`.
+
+A Waiting checkpoint uses the retry step in the table above. `await_ci` and
+`await_merge` both retry `auto_merge`. `triage` and `implement` retry themselves
+when they are the waiting step. A Queued resume retries the first feature step
+that is not succeeded or skipped; a pending human-task checkpoint still uses
+the table, because that checkpoint is not itself retryable. The command is
+`dagu retry --run-id <run> --step <step> --downstream feature`. The same line is
+written to stderr with the run, attempt, checkpoint, step and command, and
+appended to `$DAGU_HOME/stale-recovery.json`.
+
+Recovery is one automatic retry per run attempt. A repeated failure of that
+attempt is logged and not retried. Any other failure stays Failed. Checkpoints
+absent from the table, an exhausted budget, and every non-matching failure use
+the manual table above. PoC, discovery and planning runs are not recovered
+automatically. Scheduled reconciliation keeps its CI and merge responsibility.
 
 `checkpoint_push` compares dependency relationships and package/app directories
 against the recorded candidate base, using the PoC-proven

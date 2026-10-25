@@ -1,6 +1,6 @@
 {
   "name": "@a4s/issue-lifecycle",
-  "version": "0.5.7",
+  "version": "0.5.8",
   "private": true,
   "license": "UNLICENSED",
   "repository": {
@@ -31,6 +31,7 @@
     "dagu-feature-prioritize": "./bin/dagu-feature-prioritize.ts",
     "dagu-pr-body": "./bin/dagu-pr-body.mjs",
     "dagu-role-jobs": "./bin/dagu-role-jobs.ts",
+    "dagu-stale-recovery": "./bin/dagu-stale-recovery.ts",
     "dagu-poc-scope": "./bin/dagu-poc-scope.ts",
     "dagu-station-install": "./bin/dagu-station-install.ts"
   },

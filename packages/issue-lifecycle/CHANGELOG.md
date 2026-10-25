@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.8
+
+- Exit every `dagu-role-jobs` terminal path so a native Python tool bridge listener cannot leave a BLOCKED or completed stage running (#639).
+- Verify every package executable a rendered lifecycle DAG calls, including `dagu-gate`, during bootstrap `detect` before adoption (#644).
+- Recover feature runs that Dagu failed with its stale-process signature from the scheduled reconciler, once per attempt, and keep the manual retry table as the fallback (#553).
+
 ## 0.5.7
 
 - Adopt `CODE_SCANNING=required|off` per repository. Blank keeps the installed choice; `off` does not observe or wait for CodeQL, so auto-merge and final CI authorization depend only on the required check (#641).
