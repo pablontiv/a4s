@@ -6,6 +6,7 @@ import { basename, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { admit, appendObservation, enqueue, enqueueArguments, parseObservation, receiptPath } from "../src/admission.ts";
 import { validatePlanningUnitsCommand } from "../src/planning-validator.ts";
+import { planningReviewer, type TranscriptRow } from "../src/transcript-identity.ts";
 import {
   BUNDLE_VERSION,
   classifyCompatibility,
@@ -74,6 +75,19 @@ function main(): void {
   }
   if (command === "validate-planning-units") {
     process.exitCode = validatePlanningUnitsCommand(args);
+    return;
+  }
+  if (command === "planning-reviewer-identity") {
+    try {
+      const file = args[0] === "--transcript" ? args[1] : undefined;
+      if (!file) throw new Error("Usage: planning-reviewer-identity --transcript <jsonl>");
+      const text = readFileSync(file, "utf8").trim();
+      const rows = text ? text.split("\n").map(line => JSON.parse(line) as TranscriptRow) : [];
+      console.log(JSON.stringify(planningReviewer(rows)));
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exitCode = 1;
+    }
     return;
   }
   if (command === "queue-default" || command === "queue-reconcile" || command === "queue-check") {

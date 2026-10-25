@@ -70,6 +70,41 @@ source path because Node rejects stripping TypeScript under `node_modules`.
 The admitted feature/PoC policy fixes PRIMARY, BRANCH, GATE, REBASE_RESOLVER,
 REQUIRED_CHECK and blocker-reporting policy; the CLI rejects overrides.
 
+## Versioned source, configuration and runtime state
+
+Git versions source and configuration. That is content written through a pull
+request, or generated deterministically from a versioned revision and declared
+inputs so that regenerating it yields identical bytes. Changes to it land through
+a commit, such as a version bump or an adoption.
+
+Runtime state is written by a running process and carries per-execution data:
+run identifiers, timestamps, process IDs, attempt counters, or observed external
+state such as PR heads and check results. It lives under `.git/dagu-feature/runs/`
+or `$DAGU_HOME`. Adoption copies only the staged repository renders. It does not
+version receipts, observations or scheduler data.
+
+Classify a file in three steps:
+
+1. Identify its producer (a person through a pull request, a generator such as the
+   bootstrap render step, or a running process such as a DAG step or observer) and
+   the producer's declared inputs.
+2. If a generator produces it, regenerate it twice at the same revision with
+   identical declared inputs. Identical bytes make it configuration. A render that
+   changes only because a declared input changed (bundle version, repository, queue)
+   is still configuration. The bootstrap run id in a stamp is a declared input, so
+   the adopted feature, PoC, discovery and planning renders stay configuration.
+3. A file whose content records an execution (run identifiers, timestamps, process
+   IDs, attempt counters, or observed external state) is runtime state, regardless
+   of format or how often it changed.
+
+Hand-written test fixtures, and a pull-request document that quotes a finished
+operation, stay source. A process-owned receipt (`receipt.json` with `admittedAt`,
+`admissionPid`, `observerPid`, `dagRunId`, `finishedAt`), `ci-observation.json`,
+`status.jsonl`, or `$DAGU_HOME/data/**` is runtime state. Move a tracked file in
+that class to `.git/dagu-feature/runs/` or `$DAGU_HOME` and remove it from the
+repository in the same change. `package.json` and `.workspace/config/refine.json`
+are configuration even though they are JSON.
+
 ## Identity and adoption
 
 Before any consequential change, obtain explicit authority for the target

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.10
+
+- Require the planning generation marker as the first line of the reviewer assignment `task` field, and name `session_init.task` plus the expected marker when `check_review` rejects a transcript (#647).
+- Record the planning reviewer's effective agent, session, provider, model and ordered `model_change` fallbacks on `review-<iteration>.json` from the same transcript identity as native role evidence (#648).
+
 ## 0.5.9
 
 - Carry a promoted PoC candidate into the feature worktree before implement by applying the published `full.patch` and verifying its recorded SHA-256. An empty later feature diff still records that the basis was applied. A PoC without promotion still disposes a clean base-only worktree and branch (#642).

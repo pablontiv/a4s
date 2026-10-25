@@ -4,16 +4,13 @@ import { existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { atomicJson, type Job, type JobBinding, type NativeEvidence } from "./role-jobs.ts";
+import { effectiveTranscriptIdentity, type TranscriptRow } from "./transcript-identity.ts";
 import { REVIEW_SCHEMA } from "./triage/schema.ts";
 
 interface Definition { name: string; source: string; model?: string[]; systemPrompt: string; tools?: string[] }
 interface Settings { [key: string]: unknown }
 interface Selection { patterns: string[]; role?: string }
 interface NativeResult { exitCode: number; output: string; error?: string; aborted?: boolean; [key: string]: unknown }
-interface Row {
-  type?: string; id?: string; timestamp?: string; model?: string; resolvedModelIsFallback?: boolean;
-  message?: { role?: string; provider?: string; model?: string; stopReason?: string; content?: unknown; errorMessage?: string };
-}
 /** Resolve the installed runtime, not an independent model/client implementation. */
 export function ompRuntimeRoot(): string {
   let root = process.env.OMP_ROLE_RUNTIME ? realpathSync(process.env.OMP_ROLE_RUNTIME) :
@@ -39,18 +36,12 @@ export function roleSchema(binding: JobBinding): Record<string, unknown> {
 }
 export function nativeEvidence(transcript: string, routing: unknown): NativeEvidence {
   const bytes = readFileSync(transcript);
-  const rows = bytes.toString("utf8").trim().split("\n").map(line => JSON.parse(line) as Row);
-  const sessions = rows.filter(row => row.type === "session");
-  const assistants = rows.filter(row => row.type === "message" && row.message?.role === "assistant");
-  const final = assistants.filter(row => row.message?.stopReason === "stop" || row.message?.stopReason === "toolUse").at(-1);
-  if (sessions.length !== 1 || !sessions[0]?.id || !final?.id || !final.message?.provider || !final.message.model) throw new Error("Missing native session/effective assistant identity");
-  return { session: sessions[0].id, transcript, bytes: bytes.length,
-    digest: createHash("sha256").update(bytes).digest("hex"), event: final.id,
-    provider: final.message.provider, model: final.message.model, routing,
-    attempts: assistants.map(row => ({ event: row.id, timestamp: row.timestamp, provider: row.message?.provider,
-      model: row.message?.model, stopReason: row.message?.stopReason, error: row.message?.errorMessage })),
-    fallbacks: rows.filter(row => row.type === "model_change").map(row => ({ event: row.id, timestamp: row.timestamp,
-      model: row.model, resolvedModelIsFallback: row.resolvedModelIsFallback === true })) };
+  const rows = bytes.toString("utf8").trim().split("\n").map(line => JSON.parse(line) as TranscriptRow);
+  const identity = effectiveTranscriptIdentity(rows);
+  return { session: identity.session, transcript, bytes: bytes.length,
+    digest: createHash("sha256").update(bytes).digest("hex"), event: identity.event,
+    provider: identity.provider, model: identity.model, routing,
+    attempts: identity.attempts, fallbacks: identity.fallbacks };
 }
 export async function executeNativeJob(job: Job, assignment: string): Promise<{ output: Record<string, unknown>; native: NativeEvidence }> {
   const root = ompRuntimeRoot();
