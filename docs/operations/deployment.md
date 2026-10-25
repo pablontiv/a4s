@@ -252,7 +252,9 @@ reconcile root that remains together with the protection that kept it.
 
 Read exact DAG/run status and approval iteration before any human-task action.
 The designated reconciler owns CI/merge observation and `await_ci`/`await_merge`
-transitions; retain pending runs and candidate SHA rather than duplicating polling.
+transitions. Those two checkpoints remain child runs. Other waiting checkpoints
+are observed in the root tick, with one paginated issue-state read per
+repository. Retain pending runs and candidate SHA rather than duplicating polling.
 A dirty/wrong-branch PRIMARY remains waiting while queue capacity is released.
 Restore it clean on its declared base while preserving operator changes, then
 push back the exact availability checkpoint using its observed iteration (for

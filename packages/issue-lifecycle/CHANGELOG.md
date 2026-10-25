@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.17
+
+- Observe non-PR waiting runs in the reconcile root. Keep `dag.run` children for `await_ci` and `await_merge`, read issue state once per repository with full pagination, and report closed `triage` or `implement` issues from that root observation (#636).
+
 ## 0.5.16
 
 - Checkpoint long role-job and PoC computations by shard under the run evidence directory, resume from the last completed shard, and stall only after a configured multiple of the measured shard time with one owner notice and a continue, resize, or stop decision (#560).
