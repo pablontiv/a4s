@@ -87,9 +87,16 @@ sys.exit(int(release.read_text()))
     processes.push(running);
     return running;
   };
-  const gate = (repo: string, run: string, command = `exec python3 ${JSON.stringify(body)}`) => start("bash", ["-c", gateScript], repo, {
-    ...env(run), PRIMARY: repo, WORKTREE: repo, BRANCH: "main", GATE: command, ISSUE: "606",
-  });
+  const gate = (repo: string, run: string, command = `exec python3 ${JSON.stringify(body)}`) => {
+    // Write the fixture gate script to a file and exec it as argv (not bash -c) so
+    // CodeQL js/shell-command-injection-from-environment does not treat test env
+    // paths as constructing a shell command string. Behavior is unchanged.
+    const scriptFile = join(root, `gate-${run}.sh`);
+    writeFileSync(scriptFile, gateScript, { mode: 0o755 });
+    return start("bash", [scriptFile], repo, {
+      ...env(run), PRIMARY: repo, WORKTREE: repo, BRANCH: "main", GATE: command, ISSUE: "606",
+    });
+  };
   const events = (): Array<{ run: string; kind: string; at: number; held: string }> => existsSync(join(root, "events"))
     ? readFileSync(join(root, "events"), "utf8").trim().split("\n").filter(Boolean).map(line => JSON.parse(line)) : [];
   const release = (run: string, code = 0) => writeFileSync(join(root, `release-${run}`), String(code));
