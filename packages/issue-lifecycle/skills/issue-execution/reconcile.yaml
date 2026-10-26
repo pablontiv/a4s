@@ -465,9 +465,12 @@ steps:
         --argjson actions "$action_runs" --argjson orphans "$orphans" --argjson failures "$failures" \
         --argjson repos "$repos" --argjson pages "$pages" \
         '{phase:"classify",inputRuns:$input,prRuns:$pr,actions:$actions,orphans:$orphans,failures:$failures,issueRepos:$repos,issuePages:$pages}')" >&2
-      printf 'children=%s\n' "$(jq -sc '.' "$TMP/children")"
-      printf 'actions=%s\n' "$(jq -sc '.' "$TMP/actions")"
-      printf 'failures=%s\n' "$(jq -sc '.' "$TMP/failures")"
+      # Dagu 2.20.1 reads declared outputs only from this file. Stdout is the step log.
+      {
+        printf 'children=%s\n' "$(jq -sc '.' "$TMP/children")"
+        printf 'actions=%s\n' "$(jq -sc '.' "$TMP/actions")"
+        printf 'failures=%s\n' "$(jq -sc '.' "$TMP/failures")"
+      } | tee -a "${DAGU_OUTPUT_FILE:?Missing Dagu output file}"
     outputs:
       - name: children
       - name: actions

@@ -47,6 +47,28 @@ function outputMap(stdout: string): Record<string, string> {
   }
   return outputs;
 }
+// Mirrors Dagu 2.20.1 parseDeclaredStepOutputs for single-line name=value records.
+function parseDeclaredStepOutputs(text: string, names: readonly string[]): Record<string, string> {
+  const normalized = text.replaceAll("\r\n", "\n").replaceAll("\r", "\n");
+  if (normalized === "") throw new Error(`declared step output "${names[0]}" was not emitted`);
+  let lines = normalized.split("\n");
+  if (lines.length > 1 && lines.at(-1) === "") lines = lines.slice(0, -1);
+  const values: Record<string, string> = {};
+  for (const [index, line] of lines.entries()) {
+    if (line === "") throw new Error(`empty line at line ${index + 1} is not a valid step output record`);
+    const equalsAt = line.indexOf("=");
+    if (equalsAt < 0) throw new Error(`invalid step output record at line ${index + 1}`);
+    const name = line.slice(0, equalsAt);
+    if (name === "") throw new Error(`missing output name at line ${index + 1}`);
+    if (!names.includes(name)) throw new Error(`undeclared step output "${name}"`);
+    if (Object.hasOwn(values, name)) throw new Error(`duplicate step output "${name}"`);
+    values[name] = line.slice(equalsAt + 1);
+  }
+  for (const name of names) {
+    if (!Object.hasOwn(values, name)) throw new Error(`declared step output "${name}" was not emitted`);
+  }
+  return values;
+}
 function runBash(source: string, env: NodeJS.ProcessEnv): Promise<{ status: number | null; stdout: string; stderr: string }> {
   const started = performance.now();
   return new Promise(resolve => {
@@ -256,6 +278,7 @@ test("root classification matches child observation for protected and non-PR run
     CI_OBSERVATION_ID: "tick-equiv",
     ESCALATION_CI_BLOCKED: "2",
     TMPDIR: root,
+    DAGU_OUTPUT_FILE: join(root, "classify.output"),
   };
   try {
     writeFileSync(control, JSON.stringify({ runs: Object.fromEntries(runs.map(run => [run.run, run])), issues: issuesFor(runs), failRepos: ["example/beta"], effects: [] }));
@@ -270,6 +293,10 @@ test("root classification matches child observation for protected and non-PR run
     const classified = await runBash(script("classify"), { ...baseEnv, RUNS: JSON.stringify(runs.map(run => row(primary, run))) });
     assert.equal(classified.status, 0, classified.stderr);
     const outputs = outputMap(classified.stdout);
+    const emitted = parseDeclaredStepOutputs(readFileSync(join(root, "classify.output"), "utf8"), ["children", "actions", "failures"]);
+    assert.equal(emitted.children, outputs.children);
+    assert.equal(emitted.actions, outputs.actions);
+    assert.equal(emitted.failures, outputs.failures);
     const children = JSON.parse(outputs.children || "[]") as Array<{ RUN: string }>;
     const actions = JSON.parse(outputs.actions || "[]") as unknown[];
     const failures = JSON.parse(outputs.failures || "[]") as Array<{ run: string }>;
@@ -342,6 +369,7 @@ test("a repeated issue page is not treated as a partial closed or open state", a
     const result = await runBash(script("classify"), {
       ...process.env, PATH: `${bin}:${process.env.PATH}`, CI_CONTROL: control, CI_CALLS: calls,
       CI_OBSERVATION_ID: "tick-stuck", ESCALATION_CI_BLOCKED: "2", RUNS: JSON.stringify([row(primary, run)]),
+      DAGU_OUTPUT_FILE: join(root, "classify.output"),
     });
     assert.equal(result.status, 0, result.stderr);
     const observation = readJson(git(primary, "rev-parse", "--path-format=absolute", "--git-path", "dagu-feature/runs/stuck/ci-observation.json")) as { class: string; action: string };
@@ -349,6 +377,47 @@ test("a repeated issue page is not treated as a partial closed or open state", a
     assert.equal(observation.action, "WAIT");
     assert.equal(outputMap(result.stdout).children, "[]");
     assert.match(result.stderr, /issue page did not advance/);
+    const emitted = parseDeclaredStepOutputs(readFileSync(join(root, "classify.output"), "utf8"), ["children", "actions", "failures"]);
+    assert.equal(emitted.children, "[]");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("empty discovery emits declared classify outputs through the Dagu output file", async () => {
+  const declared = ((classify?.outputs as Array<{ name?: string }> | undefined) ?? []).map(item => item.name);
+  assert.deepEqual(declared, ["children", "actions", "failures"]);
+  assert.match(script("classify"), /tee -a "\$\{DAGU_OUTPUT_FILE:\?/);
+  assert.throws(
+    () => parseDeclaredStepOutputs("", ["children", "actions", "failures"]),
+    /declared step output "children" was not emitted/,
+  );
+  const root = mkdtempSync(join(tmpdir(), "reconcile-classify-empty-"));
+  const output = join(root, "classify.output");
+  writeFileSync(output, "");
+  try {
+    const result = await runBash(script("classify"), {
+      ...process.env,
+      CI_OBSERVATION_ID: "tick-empty",
+      ESCALATION_CI_BLOCKED: "2",
+      RUNS: "[]",
+      DAGU_OUTPUT_FILE: output,
+      TMPDIR: root,
+    });
+    assert.equal(result.status, 0, result.stderr);
+    const emitted = parseDeclaredStepOutputs(readFileSync(output, "utf8"), ["children", "actions", "failures"]);
+    assert.deepEqual(emitted, { children: "[]", actions: "[]", failures: "[]" });
+    assert.equal(outputMap(result.stdout).children, "[]");
+    const fanout = (tick?.preconditions as Array<{ expected?: string }> | undefined)?.[0]?.expected;
+    assert.equal(fanout, "re:^\\[.+\\]$");
+    assert.equal((act?.preconditions as Array<{ expected?: string }> | undefined)?.[0]?.expected, fanout);
+    assert.doesNotMatch(emitted.children, /^\[.+\]$/);
+    assert.doesNotMatch(emitted.actions, /^\[.+\]$/);
+    const summary = metrics(result.stderr).find(item => item.phase === "classify");
+    assert.equal(summary?.inputRuns, 0);
+    assert.equal(summary?.prRuns, 0);
+    assert.equal(summary?.actions, 0);
+    assert.equal(summary?.failures, 0);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -419,6 +488,7 @@ test("benchmark ticks keep protected children and cut persisted bytes by at leas
       const result = await runBash(script("classify"), {
         ...process.env, PATH: `${bin}:${process.env.PATH}`, CI_CONTROL: control, CI_CALLS: calls,
         CI_OBSERVATION_ID: `tick-${tickNumber}`, ESCALATION_CI_BLOCKED: "2", RUNS: runsJson,
+        DAGU_OUTPUT_FILE: join(root, `classify-${tickNumber}.output`),
       });
       assert.equal(result.status, 0, result.stderr);
       const outputs = outputMap(result.stdout);

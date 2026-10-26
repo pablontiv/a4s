@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.25
+
+- Write reconcile `classify` outputs `children`, `actions` and `failures` to `$DAGU_OUTPUT_FILE`. Dagu 2.20.1 reads declared outputs only from that file, so stdout lines such as `children=[]` failed every tick with `declared step output "children" was not emitted` and stopped `tick` and `act`. An empty discovery list now publishes `[]` and the tick continues with no fan-out.
+
 ## 0.5.24
 
 - Serialize feature gate bodies and root/issue-lifecycle full-suite scripts across clones and agent sessions with one station-wide fcntl slot at `$DAGU_HOME/a4s/heavy-slot.lock` (default `~/.dagu`). Export `A4S_HEAVY_SLOT_HELD=1` for nested-script re-entry, retain holder diagnostics and inherited-descriptor release on exit, failure, cancellation and SIGKILL, and leave targeted tests and Dagu queue capacities unchanged (#606).
