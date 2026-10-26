@@ -83,6 +83,30 @@ function readRegistration(dbPath = KIRO_CLI_DB): KiroDeviceRegistration | null {
 	}
 }
 
+/**
+ * Read the CodeWhisperer profile ARN from kiro-cli's state table.
+ * Falls back to KIRO_PROFILE_ARN env var if not in sqlite (e.g. standalone use without kiro-cli).
+ */
+export function getKiroProfileArn(dbPath = KIRO_CLI_DB): string {
+	if (fs.existsSync(dbPath)) {
+		const db = new Database(dbPath, { readonly: true });
+		try {
+			const row = db.query("SELECT json_extract(value, '$.arn') as arn FROM state WHERE key = 'api.codewhisperer.profile'").get() as
+				| { arn: string }
+				| undefined;
+			if (row?.arn) return row.arn;
+		} finally {
+			db.close();
+		}
+	}
+	// Fallback for standalone use without kiro-cli
+	const arn = process.env.KIRO_PROFILE_ARN;
+	if (!arn) {
+		throw new Error("kiro: profile ARN not found in kiro-cli store and KIRO_PROFILE_ARN not set. Run `kiro-cli login` first.");
+	}
+	return arn;
+}
+
 function isExpiring(token: KiroStoredToken, now = Date.now()): boolean {
 	const expiresAt = Date.parse(token.expires_at);
 	if (!Number.isFinite(expiresAt)) return true;

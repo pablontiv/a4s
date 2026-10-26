@@ -7,11 +7,9 @@
  */
 import { generateAssistantResponse } from "../src/client";
 import { buildConversationState } from "../src/conversation";
-import { getKiroCredential } from "../src/token";
+import { getKiroCredential, getKiroProfileArn } from "../src/token";
 
-const PROFILE_ARN = process.env.KIRO_PROFILE_ARN ?? (() => {
-	throw new Error("KIRO_PROFILE_ARN no esta definido (ARN del perfil de CodeWhisperer/IdC)");
-})();
+const PROFILE_ARN = getKiroProfileArn();
 
 const args = process.argv.slice(2);
 let model = "claude-haiku-4.5";

@@ -12,10 +12,17 @@
 import { describe, expect, it } from "bun:test";
 import { generateAssistantResponse } from "../../src/client";
 import { buildConversationState } from "../../src/conversation";
-import { getKiroCredential, type KiroCredential } from "../../src/token";
+import { getKiroCredential, getKiroProfileArn, type KiroCredential } from "../../src/token";
 
 const MODEL = "claude-haiku-4.5";
-const PROFILE_ARN = process.env.KIRO_PROFILE_ARN ?? "";
+
+function profileArnOrNull(): string | null {
+	try {
+		return getKiroProfileArn();
+	} catch {
+		return null;
+	}
+}
 
 async function credentialOrNull(): Promise<KiroCredential | null> {
 	try {
@@ -30,8 +37,9 @@ describe("kiro integration dispatch", () => {
 		"client-level: GenerateAssistantResponse returns model text via live endpoint",
 		async () => {
 			const credential = await credentialOrNull();
-			if (!credential || !PROFILE_ARN) {
-				console.warn("skip: no kiro-cli credential or KIRO_PROFILE_ARN (login/env required)");
+			const profileArn = profileArnOrNull();
+			if (!credential || !profileArn) {
+				console.warn("skip: no kiro-cli credential or profile ARN (run kiro-cli login)");
 				return;
 			}
 			const conversationState = buildConversationState(
@@ -41,7 +49,7 @@ describe("kiro integration dispatch", () => {
 			const events = await generateAssistantResponse({
 				accessToken: credential.accessToken,
 				region: credential.region,
-				profileArn: PROFILE_ARN,
+				profileArn,
 				conversationState,
 			});
 			expect(events.length).toBeGreaterThan(0);

@@ -18,20 +18,10 @@ import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream"
 import { streamAssistantResponse, type KiroEvent } from "./client";
 import { buildConversationState } from "./conversation";
 import { KIRO_SEED_MODELS, fetchKiroModels } from "./models";
-import { getKiroCredential } from "./token";
+import { getKiroCredential, getKiroProfileArn } from "./token";
 
 const KIRO_API = "kiro-streaming";
 const KIRO_PROVIDER = "kiro";
-/** Verified for an Enterprise IdC profile. Set via env for your account.
- * Resolved lazily so the extension still loads without KIRO_PROFILE_ARN;
- * the error surfaces only when the kiro provider is actually used. */
-function getKiroProfileArn(): string {
-	const arn = process.env.KIRO_PROFILE_ARN;
-	if (!arn) {
-		throw new Error("KIRO_PROFILE_ARN no esta definido (ARN del perfil de CodeWhisperer/IdC)");
-	}
-	return arn;
-}
 
 function zeroUsage(): Usage {
 	return {
