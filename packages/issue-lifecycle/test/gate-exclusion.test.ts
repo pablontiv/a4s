@@ -76,6 +76,7 @@ sys.exit(int(release.read_text()))
   };
   const start = (command: string, args: string[], cwd: string, extra: NodeJS.ProcessEnv = {}): Running => {
     let log = "";
+    // Keep spawn argv-only (no shell:true / bash -c) so fixture env paths stay out of a shell command string.
     const child = spawn(command, args, { cwd, env: { ...env("script"), ...extra }, detached: true, stdio: ["ignore", "pipe", "pipe"] });
     child.stdout!.on("data", data => { log += data; });
     child.stderr!.on("data", data => { log += data; });
