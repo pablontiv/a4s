@@ -95,6 +95,29 @@ record releases at `close_gate`, terminal exit or operator release, and the
 owning session's `[DAGU STATE]` shows the protection and the runs it holds.
 This is independent of `dagu-feature-prioritize`, which reorders queued tickets.
 
+### Station-wide heavy-test slot
+
+One POSIX `fcntl` slot at `$DAGU_HOME/a4s/heavy-slot.lock` serializes feature
+gate bodies across independent clones and worktrees, plus root `npm test` and
+`@a4s/issue-lifecycle`'s `test`/`test:live` scripts launched outside Dagu.
+All station sessions must use the service's canonical `DAGU_HOME` (default
+`~/.dagu`); the path does not depend on a repository's Git directory.
+The shared `bin/heavy-slot.py` helper prints waiting diagnostics with the holder,
+retains an inheritable descriptor through the command, and exports
+`A4S_HEAVY_SLOT_HELD=1` so nested test scripts do not reacquire the slot.
+The marker is inherited ownership, not an operator bypass.
+
+Success, failure, cancellation and SIGKILL release kernel ownership when all
+inheriting descriptors close; surviving descendants keep exclusion. The stable
+lock inode is not removed. Single-file `tsx --test` runs and light-workspace
+tests remain unslotted. Integration protection uses a separate short-lived
+per-repository admission lock and releases the station slot while a gate waits
+on protection. Dagu queue capacity stays `a4s=8` on main, foreign queues are
+unchanged, and unrelated lifecycle steps proceed. Deployment acceptance still
+requires operator-observed primary/authorized-clone full-gate windows and an
+agent-session root test waiting behind a gate.
+
+
 ## Native semantic jobs and capacity
 
 `dagu-role-jobs stage triage|implement` executes authorized obligations using

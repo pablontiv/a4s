@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.24
+
+- Serialize feature gate bodies and root/issue-lifecycle full-suite scripts across clones and agent sessions with one station-wide fcntl slot at `$DAGU_HOME/a4s/heavy-slot.lock` (default `~/.dagu`). Export `A4S_HEAVY_SLOT_HELD=1` for nested-script re-entry, retain holder diagnostics and inherited-descriptor release on exit, failure, cancellation and SIGKILL, and leave targeted tests and Dagu queue capacities unchanged (#606).
+- Keep the slot regression fixtures compatible with the package's existing TypeScript library target instead of requiring `Promise.withResolvers` (#606).
+- Read native gate-test logs through the same descriptor used to inspect their file type, avoiding a path-based check/read race (#606).
+- Run the gate-exclusion fixture script via a file argv instead of `bash -c`, keeping behavior identical while clearing CodeQL `js/shell-command-injection-from-environment` on the test spawn (#606).
+
 ## 0.5.23
 
 - Restore legacy feature human-task recovery targets and select Queued successors from the original attempt's node order, preserving completed decisions across bundle changes. Exercise automatic reconciliation on pinned Dagu 2.20.1, with per-attempt budget and non-stale failure coverage (#553).

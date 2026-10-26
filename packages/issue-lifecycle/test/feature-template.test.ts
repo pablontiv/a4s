@@ -319,6 +319,7 @@ for (const scenario of fileEvidenceCases) {
 function featureScriptEnv(repo: Repository): NodeJS.ProcessEnv {
   return {
     HOME: process.env.HOME,
+    DAGU_HOME: join(repo.root, "dagu-home"),
     PATH: `${join(repo.root, "bin")}:${process.env.PATH ?? ""}`,
     DAGU_PARAMS_JSON: "{}",
     ISSUE: "189",
@@ -3123,7 +3124,7 @@ sys.exit(int(release.read_text()))
   const events = (): GateEvent[] => existsSync(eventsFile)
     ? readFileSync(eventsFile, "utf8").trim().split("\n").filter(Boolean).map(line => JSON.parse(line) as GateEvent) : [];
   const release = (run: string, code = 0) => writeFileSync(join(first.root, `release-${run}`), String(code));
-  const lock = join(first.primary, ".git", "dagu-feature", "gate.lock");
+  const lock = join(first.root, "dagu-home", "a4s", "heavy-slot.lock");
   return { first, second, firstRun, secondRun, gate, events, release, lock };
 }
 
@@ -3238,7 +3239,7 @@ test("real Dagu gate exclusion covers completion, retry, native rewind, BEHIND a
       let retry: ChildProcess | undefined;
       let retryExit: Promise<number | null> | undefined;
       try {
-        const vars = { PRIMARY: first.primary, WORKTREE: "${TREE}", BRANCH: "${FEATURE_BRANCH}", RUN: "${context.run.id}", GATE: gate, PATH: process.env.PATH };
+        const vars = { PRIMARY: first.primary, WORKTREE: "${TREE}", BRANCH: "${FEATURE_BRANCH}", RUN: "${context.run.id}", GATE: gate, PATH: process.env.PATH, DAGU_HOME: join(first.root, "dagu-home"), A4S_HEAVY_SLOT_HELD: "" };
         writeFileSync(dag, "type: graph\nshell: bash\nqueue: a4s\nparams:\n  - TREE: ''\n  - FEATURE_BRANCH: ''\n  - CHECKPOINT: ''\nenv:\n"
           + Object.entries(vars).map(([key, value]) => `  - ${key}: ${JSON.stringify(value)}\n`).join("")
           + "steps:\n  - id: admission\n    action: human.task\n    with:\n      prompt: Admit disposable gate candidate\n"

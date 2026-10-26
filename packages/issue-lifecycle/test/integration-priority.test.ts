@@ -75,6 +75,7 @@ function lane(primary: string, issue: string, files: Record<string, string>): La
 function environment(primary: string, entry: Lane, gate = "true"): NodeJS.ProcessEnv {
   return {
     ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}`, PRIMARY: primary, WORKTREE: entry.worktree,
+    DAGU_HOME: join(dirname(primary), "dagu-home"), A4S_HEAVY_SLOT_HELD: "",
     BRANCH: entry.branch, RUN: entry.run, ISSUE: entry.issue, BASE_BRANCH: "main", GATE: gate,
     OMP_SESSION_ID: "owner-session", A4S_INTEGRATION_POLL_SEC: "0.05",
   };
@@ -337,7 +338,7 @@ test("feature hooks name protection, refresh and release", () => {
     const parsed = spawnSync("bash", ["-n"], { input: extract(id), encoding: "utf8" });
     assert.equal(parsed.status, 0, `${id}: ${parsed.stderr}`);
   }
-  assert.match(source, /dagu-feature-protect admit --checkpoint gate --held-lock/);
+  assert.match(source, /dagu-feature-protect admit --checkpoint gate \|\|/);
   assert.match(source, /dagu-feature-protect admit --checkpoint push/);
   assert.match(source, /dagu-feature-protect admit --checkpoint auto_merge/);
   assert.match(source, /dagu-feature-protect refresh/);

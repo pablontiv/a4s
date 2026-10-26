@@ -129,7 +129,9 @@ function tokens(text) {
 }
 
 function stripAssignments(script) {
-  let rest = script.trim();
+  // The production full-suite wrapper is transparent to task classification.
+  // Gate execution already holds its slot, including when a cached task splits.
+  let rest = script.trim().replace(/^python3 bin\/heavy-slot\.py env\s+/, '');
   const env = {};
   while (/^[A-Za-z_][A-Za-z0-9_]*=\S*\s+/.test(rest)) {
     const match = /^([A-Za-z_][A-Za-z0-9_]*)=(\S*)\s+/.exec(rest);
