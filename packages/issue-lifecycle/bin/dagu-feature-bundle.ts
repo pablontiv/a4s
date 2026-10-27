@@ -12,6 +12,15 @@ import { BUNDLE_VERSION, lifecycleProtocolToken, REQUIRED_DAGU_VERSION } from ".
 import { dagName, materializeInstalled } from "../src/materialize.ts";
 import { currentQueueConcurrency, queueCompatibility, queueFromAnswersFile, reconcileQueue } from "../src/queue.ts";
 
+function readIfPresent(path: string): string | undefined {
+  try {
+    return readFileSync(path, "utf8");
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return undefined;
+    throw error;
+  }
+}
+
 function git(path: string, ...args: string[]): string {
   return execFileSync("git", ["-C", path, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 }
@@ -102,7 +111,7 @@ function main(): void {
         if (!file || !dest) throw new Error("install-reconciler requires <answers> <reconcile.yaml>");
         const text = materializeInstalled(dagName("reconcile.yaml"), readAnswersFile(file));
         mkdirSync(dirname(dest), { recursive: true });
-        if (!existsSync(dest) || readFileSync(dest, "utf8") !== text) writeFileSync(dest, text);
+        if (readIfPresent(dest) !== text) writeFileSync(dest, text);
         console.log(`reconcile=${dest}`);
       }
     } catch (error) {

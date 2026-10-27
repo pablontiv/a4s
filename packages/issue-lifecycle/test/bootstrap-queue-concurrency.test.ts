@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { closeSync, fstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, fstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -137,6 +137,32 @@ test("bundle compatibility reports installed capacity drift through the actual C
         assert.match(bundle.stdout, /answers path=\.workspace\/dagu\/answers\.json .*lane=a4s .*queue=a4s max_concurrency=8 compat=incompatible action=re-run-bootstrap/);
       }
     }
+  } finally { f.dispose(); }
+});
+
+test("install-reconciler creates a missing station DAG and leaves identical bytes untouched", () => {
+  const f = fixture();
+  try {
+    const answers = join(f.home, "answers.json");
+    const dest = join(f.home, "dags", "reconcile.yaml");
+    writeFileSync(answers, answersText());
+    const created = spawnSync(process.execPath, [cli, "install-reconciler", answers, dest], { encoding: "utf8" });
+    assert.equal(created.status, 0, created.stderr);
+    assert.match(created.stdout, new RegExp(`^reconcile=${dest}\\n$`));
+    const bytes = readFileSync(dest, "utf8");
+    assert.match(bytes, /dagu-feature-queue-concurrency=8/);
+    const stamped = new Date(Date.now() - 60_000);
+    utimesSync(dest, stamped, stamped);
+    const mtime = fileMtime(dest);
+    const again = spawnSync(process.execPath, [cli, "install-reconciler", answers, dest], { encoding: "utf8" });
+    assert.equal(again.status, 0, again.stderr);
+    assert.equal(readFileSync(dest, "utf8"), bytes);
+    assert.equal(fileMtime(dest), mtime);
+    writeFileSync(answers, answersText(4));
+    const replaced = spawnSync(process.execPath, [cli, "install-reconciler", answers, dest], { encoding: "utf8" });
+    assert.equal(replaced.status, 0, replaced.stderr);
+    assert.match(readFileSync(dest, "utf8"), /dagu-feature-queue-concurrency=4/);
+    assert.notEqual(fileMtime(dest), mtime);
   } finally { f.dispose(); }
 });
 
