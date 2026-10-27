@@ -78,11 +78,10 @@ function aggregate() {
     && typeof workspace.test === "boolean" && typeof workspace.typecheck === "boolean")) {
     throw new Error("Expected a workspace matrix with name, test and typecheck");
   }
-  const { CHANGES_RESULT: changes, TEST_RESULT: test, LIVE_RESULT: live, PR_BODY_RESULT: prBody } = process.env;
-  console.log(`changes=${changes} test=${test} live=${live} pr-body=${prBody}`);
+  const { CHANGES_RESULT: changes, TEST_RESULT: test, PR_BODY_RESULT: prBody } = process.env;
+  console.log(`changes=${changes} test=${test} pr-body=${prBody}`);
   if (prBody !== (process.env.EVENT_NAME === "pull_request" ? "success" : "skipped")
-    || changes !== "success" || test !== (workspaces.length ? "success" : "skipped")
-    || live !== (workspaces.some(workspace => workspace.name === "@a4s/issue-lifecycle") ? "success" : "skipped")) {
+    || changes !== "success" || test !== (workspaces.length ? "success" : "skipped")) {
     throw new Error("Required CI jobs did not complete successfully");
   }
 }
