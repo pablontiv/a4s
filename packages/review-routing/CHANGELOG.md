@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Use root Node and shared TypeScript tooling, retaining this package's native host/Bun contracts; document their manifest fields rather than copying version numbers.
+
 ## 0.3.1
 
 - Remove the feature quality implementer binding and shared registry; retain configured parent-relative and task-relative cross-family review selection (#561).

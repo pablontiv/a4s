@@ -13,9 +13,6 @@
     "url": "https://github.com/pablontiv/a4s/issues"
   },
   "type": "module",
-  "engines": {
-    "node": ">=22.19.0"
-  },
   "exports": {
     ".": "./src/index.ts"
   },
@@ -28,7 +25,7 @@
     "test": "tsx --test test/*.test.ts"
   },
   "dependencies": {
-    "@a4s/hot-reload": "0.1.0"
+    "@a4s/hot-reload": "*"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
@@ -45,12 +42,5 @@
     "@pablontiv/pion": {
       "optional": true
     }
-  },
-  "devDependencies": {
-    "@earendil-works/pi-coding-agent": "1.0.3",
-    "@earendil-works/pi-tui": "1.0.4",
-    "@types/node": "26.6.1",
-    "tsx": "4.23.13",
-    "typescript": "7.0.2"
   }
 }

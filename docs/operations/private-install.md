@@ -7,10 +7,13 @@ and keep the checkout available for every source link.
 
 ## Prerequisites and development
 
-- Node.js >=22.19.0, npm workspaces and access to the lockfile's exact dependencies.
-- Native OMP for OMP integrations; review-routing requires OMP >=18.12.5 and
-  Bun >=1.3.14. npm installs the pinned development Bun used by its tests.
-- Official Dagu 2.20.1 for lifecycle runtime; Git, authenticated `gh`, `jq`,
+- Node.js as pinned in root `package.json` `engines.node`, npm workspaces and
+  access to the lockfile's exact dependencies, including for standalone consumers.
+- Native OMP for OMP integrations; review-routing's host compatibility and Bun
+  requirement are in its manifest's `peerDependencies` and `engines.bun`.
+  npm installs its `devDependencies.bun` pin for tests.
+- Official Dagu from `packages/issue-lifecycle/package.json` `daguFeature.dagu`
+  for lifecycle runtime; Git, authenticated `gh`, `jq`,
   Python 3 with `fcntl`, and Bash for bootstrap/execution. Semantic role jobs
   also require Bun and the installed OMP runtime.
 - Orca installed/running and a bound coordinator pane for Orca integration's
@@ -126,7 +129,7 @@ installed skill invocations.
 Create the temporary profile and sessions outside the repository. Copy only the
 existing config and symlink its authorized authentication database; credentials
 remain in place. Adjust routes only inside the temporary copy to tool-capable,
-authorized models. In print mode OMP 18.12.6 needs `task,wait` for asynchronous
+authorized models. In the observed print-mode OMP runtime, `task,wait` was needed for asynchronous
 child completion; `cursor/*` routes do not run tools in this environment.
 
 ```sh

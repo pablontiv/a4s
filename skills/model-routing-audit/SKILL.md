@@ -5,7 +5,7 @@ description: Manually review OMP subagent primary and ordered fallback routes us
 
 # OMP model routing audit
 
-Use for a recurring **operator-requested** review of primary/fallback assignments, or when models, access or provider capacity change. Each invocation collects evidence and proposes a decision; the operator controls recurrence and assignment. The collector uses Python 3.10+ standard library and the installed OMP CLI (native contract inspected with OMP 18.12.3).
+Use for a recurring **operator-requested** review of primary/fallback assignments, or when models, access or provider capacity change. Each invocation collects evidence and proposes a decision; the operator controls recurrence and assignment. The collector uses Python 3.10+ standard library and the installed OMP CLI; the native contract was inspected against the then-installed host.
 
 ## Collect and compare
 

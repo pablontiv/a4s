@@ -1,8 +1,8 @@
 # Issue lifecycle architecture
 
 [`@a4s/issue-lifecycle`](../../packages/issue-lifecycle/README.md) is a private
-OMP package. Its manifest owns `BUNDLE_NAME`, `BUNDLE_VERSION` (currently `0.4.1`)
-and the exact Dagu pin (`2.20.1`). The package distributes two reloadable extension
+OMP package. Its manifest owns `BUNDLE_NAME`, `BUNDLE_VERSION`
+and the exact Dagu pin (`daguFeature.dagu`). The package distributes two reloadable extension
 entries, two specialized agents, the [seven workflow skills](catalog.md#lifecycle-skills),
 and `dagu-feature-bundle`, `dagu-feature-prioritize`, `dagu-feature-protect`,
 `dagu-role-jobs` and `dagu-station-install`. Technical DAG names remain `feature`, `poc`, `discovery`,
@@ -150,7 +150,7 @@ identifies a new attempt.
 ## Observation, notifications and boundaries
 
 The status extension resolves the repository from origin (including worktrees),
-uses REST/SSE for progress, and the Dagu 2.20.1 cursor event ledger for durable
+uses REST/SSE for progress, and the pinned Dagu runtime's cursor event ledger for durable
 human-task/success notifications. It discovers the last 48 hours with workspace
 labels. `dagu_session_id` returns the persistent main-session owner; pass it as
 `OMP_SESSION_ID`. Notifications target only that session and work headlessly.

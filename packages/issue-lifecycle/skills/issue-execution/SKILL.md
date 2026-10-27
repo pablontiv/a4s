@@ -159,7 +159,8 @@ Database terminal results repair missing materialized result files on redelivery
 
 a4s owns the macOS service template and shared defaults in `../../dagu/`.
 From a clean primary checkout after merge, the operator creates or updates the
-installation with Node.js >=22.19.0 and the expected `dagu` on `PATH`:
+installation with the Node.js requirement in root `package.json` `engines.node`
+and the manifest-pinned `dagu` on `PATH`:
 
 ```sh
 package="$PWD/packages/issue-lifecycle"
@@ -169,7 +170,7 @@ node "$package/bin/dagu-station-install.ts" \
   --log-dir "$HOME/Library/Logs/Dagu"
 ```
 
-The installer checks `dagu version` against `daguFeature.dagu` (official `2.20.1`), validates
+The installer checks `dagu version` against the package's `daguFeature.dagu`, validates
 a minimal DAG inheriting the versioned base in an isolated temporary home, and
 checks the rendered plist with `plutil` on macOS before installing. `cmp` and
 `install -m 0644` make repeated installs byte- and mtime-stable. `base.yaml` and
@@ -294,13 +295,13 @@ protocol the extension serves, not bundle version or digest distance
 every declared id is served, including when the render is a minor or patch
 behind the loaded package. A protocol this extension does not serve fails
 before run creation. The diagnostic names the missing protocol and the bundle
-version that serves it (`missing protocol triage=marker-agent/1; served by
-bundle 0.3.102`). Re-adoption is required only for a protocol change. Stamps that predate
-`protocols=` use the served contract when the snapshot has no retired triage
-marker. A feature snapshot must also show role-job triage, role-job implement
-and pull-request publication. `TRIAGE_REVIEW AGENT=` (`marker-agent/1`, bundle
-0.3.102) and coordinator human-task triage (`human-task/1`, bundle 0.3.108)
-are not served.
+version that serves it. The historical bundle identities for retired protocols
+are recorded once in `src/bundle.ts` `RETIRED_PROTOCOL_BUNDLES`. Re-adoption is
+required only for a protocol change. Stamps that predate `protocols=` use the
+served contract when the snapshot has no retired triage marker. A feature
+snapshot must also show role-job triage, role-job implement and pull-request
+publication. `TRIAGE_REVIEW AGENT=` (`marker-agent/1`) and coordinator human-task
+triage (`human-task/1`) are not served.
 
 Run notices separately classify bundle versus extension by version distance:
 equal major/minor is `ok` even when the patch differs, different major/minor or
@@ -529,9 +530,8 @@ Adoption runs through two DAGs. [`dagu-feature-bootstrap.yaml`](dagu-feature-boo
 
 Enqueue the bootstrap from the repository clone, not from a linked worktree. Use
 `enqueue`, not `start`: the run executes only if the user-level scheduler reads
-the same `DAGU_HOME` you do. Dagu run IDs reject periods, so replace the bundle
-version's periods with hyphens: `bootstrap-backscroll-v0-2-0` for version
-`0.2.0`.
+the same `DAGU_HOME` you do. Dagu run IDs reject periods, so use the package
+manifest's `version` with its periods replaced by hyphens.
 
 ```sh
 dagu enqueue --run-id "bootstrap-<repo>-v<version-with-hyphens>" <skill-dir>/dagu-feature-bootstrap.yaml -- \
@@ -926,10 +926,12 @@ namespace correlation; dependency rewinds and retries receive fresh identities.
 
 ## Recover a checkpoint after native stale-process repair
 
-On official Dagu 2.20.1, a run can become `Failed` with
-`process terminated unexpectedly - stale local process detected` while its
-checkpoint was `Waiting` or its resume was `Queued`. Read `dagu status --run-id
-<run> <dag>` and correlate the admin events in
+On an earlier official Dagu release, a scheduler overwrite was observed to mark a
+`Waiting` checkpoint or `Queued` resume `Failed` with
+`process terminated unexpectedly - stale local process detected`. The pinned
+runtime retains that error text for stale local-process repair; this does not
+establish that the earlier checkpoint-overwrite race still occurs. Read `dagu status
+--run-id <run> <dag>` and correlate the admin events in
 `$DAGU_HOME/logs/admin/events/*.jsonl`: `dag.run.failed` from the scheduler
 (`start-all`) follows `dag.run.waiting` or `dag.run.queued` for the **same
 attempt_id**, DAG and run. Preserve those events as evidence.
@@ -1446,7 +1448,7 @@ dagu human-task complete feature --run-id '<run>' --step validation \
 ```
 
 Push accepts the submitted SHA only when it matches current candidate and gate
-evidence, then records `validation.json` with SHA and procedure. Dagu 2.20.1
+evidence, then records `validation.json` with SHA and procedure. The pinned Dagu runtime's
 forms are static: a well-formed different SHA completes the human task but fails
 the push step before publication, retaining the run at `recover_push` for inspection.
 A changed candidate requires a new gate and validation. On rejection, read
@@ -1604,7 +1606,7 @@ To change scope or delivery route, push back the decision task to its declared
 the budget before reassessing the issue. The change-route record names that
 mechanism, run, iteration and owner session; native OS attribution is advisory,
 not authenticated identity. Native task audit history retains the supplied
-push-back inputs. Completion has no `--expected-iteration` flag on Dagu 2.20.1;
+push-back inputs. Completion has no `--expected-iteration` flag on the pinned Dagu runtime;
 push-back retains its atomic stale-iteration rejection.
 
 For CI no-progress, the second consecutive identical BLOCKED
@@ -1806,7 +1808,7 @@ dagu human-task complete feature --run-id '<run>' --step '<waiting-step>' --inpu
 
 Cancellation needs only `CANCEL=yes`; SUMMARY, MESSAGE, IMPLEMENTER,
 REVIEW, approval and promotion fields are unnecessary. Normal completions retain
-their existing fields; CANCEL may be omitted or set to `no`. Dagu 2.20.1 supports
+their existing fields; CANCEL may be omitted or set to `no`. The pinned Dagu runtime supports
 static forms, so supplied values retain their native type/enum/pattern/length
 validation and the cancellation gate enforces normal required fields before
 any successor. Missing normal fields fail that gate with `Normal completion
@@ -1845,7 +1847,7 @@ Stored snapshots are immutable: normal bootstrap adoption enables this procedure
 for newly enqueued snapshots only. Inspect the original snapshot for its CANCEL
 field **and routing** before completing an older run. No universal safe procedure
 for arbitrary historical waiting snapshots has been demonstrated. In particular,
-original #382 `a4s-issue-382` and #383 `a4s-issue-383-v2` on immutable 0.3.77
+original #382 `a4s-issue-382` and #383 `a4s-issue-383-v2` on their immutable historical bundle
 remain explicitly unresolved acceptance of #290, preserving their original owner,
 candidate, resources and audit history. This delivery neither recovers them nor
 authorizes their continuation. Active `dagu stop` is supported only after observing

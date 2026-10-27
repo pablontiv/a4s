@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { parse } from "yaml";
 import { stampedQueue } from "../src/queue.ts";
+import { BUNDLE_NAME, BUNDLE_VERSION, REQUIRED_DAGU_VERSION } from "../src/bundle.ts";
 
 const skill = (name: string): string => readFileSync(
   fileURLToPath(new URL(`../skills/issue-execution/${name}`, import.meta.url)),
@@ -52,8 +53,8 @@ test("bootstrap renders optional validation as the sole adopted value", {
           GATE: "true", REQUIRED_CHECK: "validate", TEST_PATHS: "^test/",
           QUEUE_CONCURRENCY: "", CURRENT_QUEUE_CONCURRENCY: "8",
           REBASE_RESOLVER: "node packages/issue-lifecycle/bin/dagu-bundle-rebase.mjs",
-          VALIDATION: validation, BUNDLE_NAME: "@a4s/issue-lifecycle", BUNDLE_VERSION: "0.3.14",
-          DAGU_VERSION: "2.20.1", SOURCE_NWO: "owner/repo", SOURCE_SHA: "a".repeat(40),
+          VALIDATION: validation, BUNDLE_NAME, BUNDLE_VERSION,
+          DAGU_VERSION: REQUIRED_DAGU_VERSION, SOURCE_NWO: "owner/repo", SOURCE_SHA: "a".repeat(40),
         },
       });
       assert.equal(result.status, 0, result.stdout + result.stderr);
@@ -83,7 +84,7 @@ test("bootstrap preserves the installed blocker reporting choice and accepts exp
         SKILL_DIR: fileURLToPath(new URL("../skills/issue-execution", import.meta.url)),
         STAGE: stage, PRIMARY: root, REPO: "fixture", BASE_BRANCH: "main",
         GATE: "true", REQUIRED_CHECK: "validate", TEST_PATHS: "^test/", REBASE_RESOLVER: "",
-        BUNDLE_NAME: "@a4s/issue-lifecycle", BUNDLE_VERSION: "0.3.98", DAGU_VERSION: "2.20.1",
+        BUNDLE_NAME, BUNDLE_VERSION, DAGU_VERSION: REQUIRED_DAGU_VERSION,
         SOURCE_NWO: "owner/repo", SOURCE_SHA: "a".repeat(40),
         A4S_BLOCKER_REPORTING: answer, CURRENT_A4S_BLOCKER_REPORTING: installed,
       } });
@@ -129,7 +130,7 @@ test("bootstrap renders default, preserved and explicit CodeQL thresholds and re
         ...process.env, PRIMARY: root, SKILL_DIR: fileURLToPath(new URL("../skills/issue-execution", import.meta.url)),
         STAGE: stage, DAG_RUN_ID: "bootstrap-codeql", REPO: "fixture", BASE_BRANCH: "main",
         GATE: "true", REQUIRED_CHECK: "validate", REBASE_RESOLVER: "", TEST_PATHS: "test",
-        BUNDLE_NAME: "@a4s/issue-lifecycle", BUNDLE_VERSION: "0.4.4", DAGU_VERSION: "2.20.1",
+        BUNDLE_NAME, BUNDLE_VERSION, DAGU_VERSION: REQUIRED_DAGU_VERSION,
         SOURCE_NWO: "example/repo", SOURCE_SHA: "a".repeat(40),
         CODEQL_SECURITY_THRESHOLD: answer, CURRENT_CODEQL_SECURITY_THRESHOLD: installed,
         CODEQL_ALERTS_THRESHOLD: "", CURRENT_CODEQL_ALERTS_THRESHOLD: "errors_and_warnings",
@@ -149,7 +150,7 @@ test("bootstrap renders default, preserved and explicit CodeQL thresholds and re
         ...process.env, PRIMARY: root, SKILL_DIR: fileURLToPath(new URL("../skills/issue-execution", import.meta.url)),
         STAGE: stage, DAG_RUN_ID: "bootstrap-codeql", REPO: "fixture", BASE_BRANCH: "main",
         GATE: "true", REQUIRED_CHECK: "validate", REBASE_RESOLVER: "", TEST_PATHS: "test",
-        BUNDLE_NAME: "@a4s/issue-lifecycle", BUNDLE_VERSION: "0.4.4", DAGU_VERSION: "2.20.1",
+        BUNDLE_NAME, BUNDLE_VERSION, DAGU_VERSION: REQUIRED_DAGU_VERSION,
         SOURCE_NWO: "example/repo", SOURCE_SHA: "a".repeat(40),
         CODEQL_SECURITY_THRESHOLD: "", CURRENT_CODEQL_SECURITY_THRESHOLD: "high_or_higher",
         CODEQL_ALERTS_THRESHOLD: "", CURRENT_CODEQL_ALERTS_THRESHOLD: "errors",
@@ -163,7 +164,7 @@ test("bootstrap renders default, preserved and explicit CodeQL thresholds and re
       ...process.env, PRIMARY: root, SKILL_DIR: fileURLToPath(new URL("../skills/issue-execution", import.meta.url)),
       STAGE: join(root, "feature.yaml"), DAG_RUN_ID: "bootstrap-codeql", REPO: "fixture", BASE_BRANCH: "main",
       GATE: "true", REQUIRED_CHECK: "validate", REBASE_RESOLVER: "", TEST_PATHS: "test",
-      BUNDLE_NAME: "@a4s/issue-lifecycle", BUNDLE_VERSION: "0.4.4", DAGU_VERSION: "2.20.1",
+      BUNDLE_NAME, BUNDLE_VERSION, DAGU_VERSION: REQUIRED_DAGU_VERSION,
       SOURCE_NWO: "example/repo", SOURCE_SHA: "a".repeat(40),
       CODE_SCANNING: "sometimes",
     } });
@@ -194,6 +195,16 @@ type CiWorkspace = {
   optionalDependencies?: Record<string, string>;
 };
 const ciJobs = (...names: string[]) => names.sort().map(name => ({ name, test: true, typecheck: true }));
+
+test("CI derives every Node setup from the root runtime manifest", () => {
+  const jobs = Object.values(ciWorkflow.jobs) as { steps: { uses?: string; with?: Record<string, unknown> }[] }[];
+  const setups = jobs.flatMap(job => job.steps).filter(step => step.uses?.startsWith("actions/setup-node@"));
+  assert.ok(setups.length > 0);
+  for (const setup of setups) {
+    assert.equal(setup.with?.["node-version-file"], "package.json");
+    assert.equal(setup.with?.["node-version"], undefined);
+  }
+});
 const mainWorkspaces: CiWorkspace[] = [
   { dir: "packages/context-expert", name: "@a4s/context-expert" },
   { dir: "packages/review-routing", name: "@a4s/review-routing" },
@@ -207,10 +218,10 @@ const mainWorkspaces: CiWorkspace[] = [
 ];
 const dependencyWorkspaces: CiWorkspace[] = [
   { dir: "packages/review-routing", name: "@a4s/review-routing",
-    devDependencies: { "@oh-my-pi/pi-coding-agent": "18.12.5" } },
+    devDependencies: { "@oh-my-pi/pi-coding-agent": "*" } },
   { dir: "packages/agent-messaging", name: "@a4s/agent-messaging" },
   { dir: "packages/orca-integration", name: "@a4s/orca-integration",
-    dependencies: { "@a4s/hot-reload": "0.1.0" } },
+    dependencies: { "@a4s/hot-reload": "*" } },
   { dir: "apps/message-bus", name: "@a4s/message-bus", dependencies: { "@a4s/agent-messaging": "*" } },
   { dir: "packages/issue-lifecycle", name: "@a4s/issue-lifecycle", devDependencies: { "@a4s/review-routing": "*" } },
 ];

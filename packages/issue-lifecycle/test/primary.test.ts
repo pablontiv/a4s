@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { REQUIRED_DAGU_VERSION } from "../src/bundle.ts";
+import { BUNDLE_VERSION, REQUIRED_DAGU_VERSION } from "../src/bundle.ts";
 import {
   HOST_PRIMARY_REFERENCE,
   bindSnapshotPrimary,
@@ -56,7 +56,7 @@ test("bootstrap renders the same host PRIMARY on a Mac path and a Linux path", (
   try {
     const render = (primary: string, directory: string): void => {
       bootstrapRender({
-        packageDir, directory, primary, version: "0.5.17",
+        packageDir, directory, primary, version: BUNDLE_VERSION,
         sourceNwo: "fixture/repo", sourceSha: "a".repeat(40),
       });
     };

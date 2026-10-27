@@ -68,7 +68,7 @@ dagu human-task complete planning --run-id <run> --step review --input REVIEW=<a
 
 The verifier binds the unique transcript to the parent session, reviewer agent, run/generation and review start time. It checks the last structured yield and stores `review-<iteration>.json` with `verdict`, `findings`, and the `reviewer` identity above. `findings.md` explains revisions or verification failures. Inspect `check_review` logs as well. A missing generation marker is reported as absent from the reviewer's `session_init.task`, together with the expected marker. A failed or `revise` review remains at `approve` for explicit correction; only an accepted review of the unchanged imported units can publish.
 
-`check_plan`, `check_review` and `materialize` bind the same canonical native review iteration: `approvalIteration` on the unique `review` node in `/api/v1/dag-runs/planning/<run>`. On official Dagu 2.20.1, an omitted counter on that present node means initial iteration zero; a native push-back advances it even while mechanical steps run and review is not waiting. The current REST review start time remains the independent transcript-freshness cutoff.
+`check_plan`, `check_review` and `materialize` bind the same canonical native review iteration: `approvalIteration` on the unique `review` node in `/api/v1/dag-runs/planning/<run>`. On the manifest-pinned official Dagu runtime, an omitted counter on that present node means initial iteration zero; a native push-back advances it even while mechanical steps run and review is not waiting. The current REST review start time remains the independent transcript-freshness cutoff.
 
 ## Approval and corrections
 

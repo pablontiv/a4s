@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Use root Node and shared development-tool requirements and workspace-local hot-reload identity; remove duplicated host-version text without changing CLI model-override routing.
+
 ## 0.1.0
 
 - Establish the canonical private workspace `@a4s/orca-integration` at `packages/orca-integration` (#423), updating package metadata, loader examples, root scripts, workspace lock metadata and CI selection coverage together.

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.26
+
+- Require the official Dagu release pinned in `daguFeature.dagu`, update current installation and checkpoint guidance, and derive runtime-version fixtures from that pin. Keep earlier station and drained-restart proofs bounded to the versions they exercised.
+- Exercise the pinned runtime's stale-process error, SSE topic boundary, CLI run history/status and persisted run records in an isolated live compatibility test. Include native escalation/restart coverage in the live acceptance command.
+- Keep Node and shared development-tool pins only in the root manifest, reference canonical fields in maintained documentation and fixtures, and guard tracked source against copied pins. Workspace-local dependencies use the workspace package identity rather than repeating its version.
+
 ## 0.5.25
 
 - Write reconcile `classify` outputs `children`, `actions` and `failures` to `$DAGU_OUTPUT_FILE`. Dagu 2.20.1 reads declared outputs only from that file, so stdout lines such as `children=[]` failed every tick with `declared step output "children" was not emitted` and stopped `tick` and `act`. An empty discovery list now publishes `[]` and the tick continues with no fan-out.

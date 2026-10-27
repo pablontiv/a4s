@@ -343,7 +343,7 @@ async function observe(ctx: Context, signal: AbortSignal, wake: (message: string
         render();
         backoff = 1000;
       };
-      // Dagu 2.20.1 accepts 20 topics per SSE connection; 21 returns HTTP 503 `unable to open SSE stream`.
+      // The pinned Dagu runtime accepts 20 topics per SSE connection; 21 returns HTTP 503 `unable to open SSE stream`.
       const topics = [...runs.keys()];
       const streams: Promise<void>[] = [];
       let streamFailure: unknown;

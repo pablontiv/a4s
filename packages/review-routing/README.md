@@ -8,7 +8,9 @@ and causes. Native quota fallback remains owned by OMP.
 
 ## Configuration
 
-Requires OMP 18.12.5 or later and Bun >=1.3.14. The package registers the public
+Host compatibility is pinned in `package.json` `peerDependencies`, the Bun
+requirement in `engines.bun`, and the test runtime in `devDependencies.bun`.
+Standalone consumers use the Node.js requirement in root `package.json` `engines.node`. The package registers the public
 native setting `crossFamilyReview.policies`, a record keyed by **exact agent
 name**, with default `{}`. Each entry has exactly two required fields:
 
@@ -87,7 +89,7 @@ Tests run on the pinned development Bun runtime against the real public native
 settings registry/scopes, including malformed initial values loaded before
 extension registration. `npm install`/`npm ci` installs that runtime locally.
 
-Issue #350 exercised the maintained hook in a fresh OMP 18.12.5 session with
+Issue #350 exercised the maintained hook in a fresh session of the then-installed OMP with
 process-local same-family candidates and roles. Real `reviewer` and
 `triage-reviewer` tasks returned `CROSS_FAMILY_EXHAUSTED` diagnostics before child
 execution. Unresolved-parent behavior is covered by unit tests.
@@ -95,7 +97,7 @@ execution. Unresolved-parent behavior is covered by unit tests.
 ## Rename verification (#422)
 
 The candidate ran `npm test --workspace @a4s/review-routing` (40 pass,
-0 fail, Bun 1.4.2) and `npm run typecheck --workspace @a4s/review-routing`
+0 fail on its manifest-pinned development Bun) and `npm run typecheck --workspace @a4s/review-routing`
 (exit 0). Dagu consumer/CI-selection checks passed 171 tests, with two live-Dagu
 skips and zero failures, followed by the lifecycle workspace's typecheck (exit 0).
 The surviving template suite now lives at

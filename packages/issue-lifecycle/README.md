@@ -1,8 +1,9 @@
 # Issue lifecycle
 
-Private native OMP package `@a4s/issue-lifecycle`, currently `0.5.0`, for the Dagu
-issue lifecycle. Requires Node.js >=22.19.0 and official Dagu `2.20.1` with local
-`auth.mode=none`. The package owns status observation/wakeup, admission/resource
+Private native OMP package `@a4s/issue-lifecycle` for the Dagu
+issue lifecycle. The Node.js requirement is root `package.json` `engines.node`;
+the exact official Dagu release is this package's `daguFeature.dagu`, with local
+`auth.mode=none`. Standalone consumers use the same root Node pin. The package owns status observation/wakeup, admission/resource
 guards, `triage-reviewer`, `plan-reviewer` and all seven lifecycle workflow skills.
 
 ## Consolidated documentation
@@ -157,13 +158,15 @@ npm run test:live --workspace @a4s/issue-lifecycle
 The default script forces `A4S_LIVE_DAGU=0` even if the caller exports 1.
 `test:live` activates `test/live/*.test.ts` and guarded real-Dagu cases in retained
 unit files. The shared live gate inspects `dagu version` only when activated and
-requires the manifest pin. Tests cover progress/SSE, resource identity, planning,
-transitions, semantic multiprocess capacity/recovery and native receipt verification.
+requires the manifest pin. Tests cover progress/SSE (including the 20-topic
+connection boundary), CLI history/status and persisted run records, native
+stale-process repair text, resource identity, planning, transitions, semantic
+multiprocess capacity/recovery, escalation across restart and native receipt verification.
 
 Real fixtures use temporary Dagu homes and distinct HTTP ports. Every run identity
 comes from `test/fixtures/run-id.ts` and is reused across CLI, REST, status,
 recovery and assertions. Its per-process random suffix and counter also isolate
-the host-global Unix control sockets: Dagu 2.20.1 derives
+the host-global Unix control sockets: the pinned Dagu runtime derives
 `/tmp/@dagu_<name>_<hash>.sock` from name/run identity, not Dagu home alone.
 Concurrent recovery fixtures preserve separate checkpoints, SHA/iterations and
 owned cleanup; closing one leaves the other able to finish.

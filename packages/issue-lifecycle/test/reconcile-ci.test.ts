@@ -522,7 +522,7 @@ test("escalation diagnostics target the owner with budget evidence and decision 
   } finally { rmSync(f.root, { recursive: true, force: true }); }
 });
 
-test("Dagu 2.20.1: paired root waits return to implement/rebase and release the queue", {
+test(`Dagu ${REQUIRED_DAGU_VERSION}: paired root waits return to implement/rebase and release the queue`, {
   ...liveDagu,
   timeout: 120_000,
 }, async t => {

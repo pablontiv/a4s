@@ -8,6 +8,7 @@ import { test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { parse } from "yaml";
 import { liveDagu, liveDaguVersion } from "./fixtures/live-dagu.ts";
+import { REQUIRED_DAGU_VERSION } from "../src/bundle.ts";
 
 const packageRoot = fileURLToPath(new URL("../", import.meta.url));
 const sourceRoot = fileURLToPath(new URL("../../../", import.meta.url));
@@ -206,7 +207,7 @@ test("targeted commands do not acquire the station slot", { timeout: 30_000 }, a
 test("real Dagu preserves eight-slot and foreign queue capacity while cross-clone gates wait", { ...liveDagu, timeout: 60_000 }, async t => {
   const f = fixture();
   try {
-    assert.equal(liveDaguVersion, "2.20.1");
+    assert.equal(liveDaguVersion, REQUIRED_DAGU_VERSION);
     mkdirSync(f.home, { recursive: true });
     const config = "queues:\n  enabled: true\n  config:\n    - name: a4s\n      max_concurrency: 8\n    - name: foreign\n      max_concurrency: 3\n";
     writeFileSync(join(f.home, "config.yaml"), config);

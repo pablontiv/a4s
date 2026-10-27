@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Use root Node and shared development-tool requirements; keep the package version only in its manifest and reference runtime verification without duplicating host pins.
+
 ## 0.1.0
 
 - Establish the canonical private/local `@a4s/hot-reload` package at `packages/hot-reload`, preserving `hotReload` and its generation/lifecycle implementation (#421).
