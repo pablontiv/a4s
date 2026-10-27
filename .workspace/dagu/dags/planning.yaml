@@ -1,7 +1,7 @@
-# dagu-feature-bundle: @a4s/issue-lifecycle@0.5.4 source=pablontiv/a4s@0789baf07ddf0110dc296c9bc43e50ad6921ffc2 bootstrap=bootstrap-a4s-v0-5-4 dagu=2.20.1
+# dagu-feature-bundle: @a4s/issue-lifecycle@0.5.26 source=pablontiv/a4s@47db2453f9b929667adf6f71a924cfba7a233b21 bootstrap=bootstrap-a4s-v0-5-26 dagu=2.23.0 protocols=triage=role-job/1,implement=role-job/1,publication=pr-checkpoint/1
 labels:
   - workspace=a4s
-  - dagu-feature-bundle=0.5.4
+  - dagu-feature-bundle=0.5.26
 queue: a4s
 type: graph
 dotenv: []
@@ -22,7 +22,7 @@ params:
     required: true
 env:
   - RUN: ${context.run.id}
-  - DAGU_FEATURE_BUNDLE: "dagu-feature-bundle=0.5.4 source=pablontiv/a4s@0789baf07ddf0110dc296c9bc43e50ad6921ffc2 bootstrap=bootstrap-a4s-v0-5-4"
+  - DAGU_FEATURE_BUNDLE: "dagu-feature-bundle=0.5.26 source=pablontiv/a4s@47db2453f9b929667adf6f71a924cfba7a233b21 bootstrap=bootstrap-a4s-v0-5-26"
   - FEEDBACK: ""
 steps:
   - id: init
@@ -101,9 +101,12 @@ steps:
     with:
       prompt: >-
         ${steps.check_plan.outputs.GENERATION}.
-        Launch task agent=plan-reviewer named PlanReview<RUN> (retries v<N>)
-        with this exact marker, source.md, units.jsonl and optional plan.md from
-        ${steps.init.outputs.OUT_DIR}, open issues and active workspace runs.
+        Launch task agent=plan-reviewer named PlanReview<RUN> (retries v<N>).
+        Put this exact generation marker on the first line of that assignment's
+        task field, the field check_review reads from session_init.task.
+        Do not put the marker only in the shared context field.
+        Also pass source.md, units.jsonl and optional plan.md from
+        ${steps.init.outputs.OUT_DIR}, plus open issues and active workspace runs.
         Complete REVIEW with the allocated id of the completed independent agent.
         Read findings.md first. For invalid units, correct UNITS_FROM upstream,
         then explicitly push back this task to import_units.
@@ -178,7 +181,7 @@ steps:
         if ($sessions | length) != 1 or ($inits | length) < 1 then error("ambiguous transcript")
         elif $sessions[0].parentSession != $parent or $inits[0].agent != "plan-reviewer" then error("foreign transcript")
         elif ($inits | all(.agent == $inits[0].agent and .task == $inits[0].task) | not) then error("mixed init identity")
-        elif (($inits[0].task // "") | contains($marker) | not) then error("generation marker")
+        elif (($inits[0].task // "") | split("\n")[0]) != $marker then error("generation marker missing from reviewer session_init.task; expected " + $marker)
         elif ($inits[0].timestamp | epoch) <= ($cutoff | epoch) then error("stale transcript")
         elif ($data | type) != "object" then error("last yield")
         elif ($data.verdict != "accept" and $data.verdict != "revise") or ($data.findings | type) != "array" then error("review schema")
@@ -187,7 +190,10 @@ steps:
         elif $data.verdict == "accept" and ($data.findings | any(.severity == "blocker")) then error("accept has blocker")
         else $data end
       ' "$transcript" > "$OUT_DIR/review-$iteration.json.tmp"
-      mv "$OUT_DIR/review-$iteration.json.tmp" "$OUT_DIR/review-$iteration.json"
+      reviewer=$(dagu-feature-bundle planning-reviewer-identity --transcript "$transcript")
+      jq --argjson reviewer "$reviewer" '. + {reviewer: $reviewer}' "$OUT_DIR/review-$iteration.json.tmp" > "$OUT_DIR/review-$iteration.json.merged"
+      mv "$OUT_DIR/review-$iteration.json.merged" "$OUT_DIR/review-$iteration.json"
+      rm -f "$OUT_DIR/review-$iteration.json.tmp"
       if [[ "$(jq -r .verdict "$OUT_DIR/review-$iteration.json")" == revise ]]; then
         jq -r '.findings[] | "[\(.severity)] \(.unit): \(.text)"' "$OUT_DIR/review-$iteration.json" > "$OUT_DIR/findings.md"
       else

@@ -1,7 +1,8 @@
-# dagu-feature-bundle: @a4s/issue-lifecycle@0.5.4 source=pablontiv/a4s@0789baf07ddf0110dc296c9bc43e50ad6921ffc2 bootstrap=bootstrap-a4s-v0-5-4 dagu=2.20.1
+# dagu-feature-bundle: @a4s/issue-lifecycle@0.5.26 source=pablontiv/a4s@47db2453f9b929667adf6f71a924cfba7a233b21 bootstrap=bootstrap-a4s-v0-5-26 dagu=2.23.0 protocols=triage=role-job/1,implement=role-job/1,publication=pr-checkpoint/1
 labels:
   - workspace=a4s
-  - dagu-feature-bundle=0.5.4
+  - dagu-feature-bundle=0.5.26
+  - dagu-feature-queue-concurrency=8
 queue: a4s
 type: graph
 dotenv: []
@@ -25,7 +26,7 @@ params:
     default: ""
 env:
   - RUN: ${context.run.id}
-  - DAGU_FEATURE_BUNDLE: "dagu-feature-bundle=0.5.4 source=pablontiv/a4s@0789baf07ddf0110dc296c9bc43e50ad6921ffc2 bootstrap=bootstrap-a4s-v0-5-4"
+  - DAGU_FEATURE_BUNDLE: "dagu-feature-bundle=0.5.26 source=pablontiv/a4s@47db2453f9b929667adf6f71a924cfba7a233b21 bootstrap=bootstrap-a4s-v0-5-26"
 steps:
   - id: snapshot
     run: |
