@@ -1,7 +1,8 @@
-# dagu-feature-bundle: @a4s/issue-lifecycle@0.5.4 source=pablontiv/a4s@0789baf07ddf0110dc296c9bc43e50ad6921ffc2 bootstrap=bootstrap-a4s-v0-5-4 dagu=2.20.1
+# dagu-feature-bundle: @a4s/issue-lifecycle@0.5.26 source=pablontiv/a4s@47db2453f9b929667adf6f71a924cfba7a233b21 bootstrap=bootstrap-a4s-v0-5-26 dagu=2.23.0 protocols=triage=role-job/1,implement=role-job/1,publication=pr-checkpoint/1
 labels:
   - workspace=a4s
-  - dagu-feature-bundle=0.5.4
+  - dagu-feature-bundle=0.5.26
+  - dagu-feature-queue-concurrency=8
 queue: a4s
 type: graph
 dotenv: []
@@ -41,6 +42,7 @@ env:
   - REQUIRED_CHECK: "validate"
   - CODEQL_SECURITY_THRESHOLD: "high_or_higher"
   - CODEQL_ALERTS_THRESHOLD: "errors"
+  - CODE_SCANNING: "required"
   - A4S_BLOCKER_REPORTING: "ask"
   - ESCALATION_PUSHBACKS: "3"
   - ESCALATION_FINDINGS: "2"
@@ -49,7 +51,7 @@ env:
   - ESCALATION_CI_BLOCKED: "2"
   - WORKTREE: ${PRIMARY}/.workspace/worktrees/issue-${ISSUE}
   - RUN: ${context.run.id}
-  - DAGU_FEATURE_BUNDLE: "dagu-feature-bundle=0.5.4 source=pablontiv/a4s@0789baf07ddf0110dc296c9bc43e50ad6921ffc2 bootstrap=bootstrap-a4s-v0-5-4"
+  - DAGU_FEATURE_BUNDLE: "dagu-feature-bundle=0.5.26 source=pablontiv/a4s@47db2453f9b929667adf6f71a924cfba7a233b21 bootstrap=bootstrap-a4s-v0-5-26"
   - DAGU_RESOURCE_GUARD: |
       resolve_primary_binding() {
         local value=$1 workspace=$2 home sentinel
@@ -220,10 +222,10 @@ steps:
   - id: admission
     run: |
       set -euo pipefail
-      rejected=$(jq -er 'keys[] | select(startswith("ESCALATION_") or startswith("CODEQL_") or . == "GATE" or . == "REBASE_RESOLVER" or . == "REQUIRED_CHECK" or . == "PRIMARY" or . == "A4S_PRIMARY" or . == "BRANCH" or . == "A4S_BLOCKER_REPORTING")' <<<"$DAGU_PARAMS_JSON") || [[ $? == 4 ]]
+      rejected=$(jq -er 'keys[] | select(startswith("ESCALATION_") or startswith("CODEQL_") or . == "GATE" or . == "REBASE_RESOLVER" or . == "REQUIRED_CHECK" or . == "PRIMARY" or . == "A4S_PRIMARY" or . == "BRANCH" or . == "A4S_BLOCKER_REPORTING" or . == "CODE_SCANNING")' <<<"$DAGU_PARAMS_JSON") || [[ $? == 4 ]]
       if [[ -n "$rejected" ]]; then
         printf 'admission rejected run parameter: %s\n' "$rejected" >&2
-        printf 'adopted policy PRIMARY=%q GATE=%q REBASE_RESOLVER=%q REQUIRED_CHECK=%q BRANCH=%q\n' "$PRIMARY" "$GATE" "${REBASE_RESOLVER:-}" "$REQUIRED_CHECK" "$BRANCH" >&2
+        printf 'adopted policy PRIMARY=%q GATE=%q REBASE_RESOLVER=%q REQUIRED_CHECK=%q BRANCH=%q CODE_SCANNING=%q\n' "$PRIMARY" "$GATE" "${REBASE_RESOLVER:-}" "$REQUIRED_CHECK" "$BRANCH" "${CODE_SCANNING:-}" >&2
         exit 1
       fi
 
@@ -436,6 +438,62 @@ steps:
         expected: "no"
     run: |
       set -euo pipefail
+      apply_promoted_poc_basis() {
+        [[ -n "${POC_BASIS:-}" ]] || return 0
+        [[ -n "$poc_carry_base" && -f "$poc_carry_patch" && "$poc_carry_digest" =~ ^[a-f0-9]{64}$ && -n "$poc_carry_run" ]] || {
+          printf 'start_gate: promoted PoC basis was not resolved\n' >&2
+          exit 1
+        }
+        patch_digest() {
+          local out digest
+          out=$(mktemp)
+          git -C "$WORKTREE" diff --binary "$poc_carry_base" > "$out"
+          while IFS= read -r -d '' path; do
+            (cd "$WORKTREE" && git diff --no-index --binary -- /dev/null "$path") >> "$out" || test "$?" -eq 1
+          done < <(git -C "$WORKTREE" ls-files --others --exclude-standard -z)
+          digest=$(shasum -a 256 "$out" | awk '{print $1}')
+          rm -f "$out"
+          printf '%s\n' "$digest"
+        }
+        if [[ -f "$STATE/poc-basis.json" ]]; then
+          recorded_basis=$(jq -er '.digest' "$STATE/poc-basis.json")
+          observed=$(patch_digest)
+          [[ "$recorded_basis" == "$poc_carry_digest" && "$observed" == "$poc_carry_digest" ]] || {
+            printf 'start_gate: feature worktree no longer matches PoC basis %s\n' "$poc_carry_digest" >&2
+            exit 1
+          }
+          printf 'poc_basis=applied digest=%s\n' "$poc_carry_digest"
+          return 0
+        fi
+        if [[ -n "$(git -C "$WORKTREE" status --porcelain --untracked-files=all)" ]]; then
+          observed=$(patch_digest)
+          [[ "$observed" == "$poc_carry_digest" ]] || {
+            printf 'start_gate: worktree changes are not the published PoC basis; preserved\n' >&2
+            exit 1
+          }
+        else
+          head_sha=$(git -C "$WORKTREE" rev-parse HEAD)
+          [[ "$head_sha" == "$poc_carry_base" ]] || {
+            printf 'start_gate: feature HEAD %s is not PoC base %s; preserved\n' "$head_sha" "$poc_carry_base" >&2
+            exit 1
+          }
+          if [[ -s "$poc_carry_patch" ]]; then
+            git -C "$WORKTREE" apply --binary --check "$poc_carry_patch" || {
+              printf 'start_gate: published PoC patch does not apply onto %s; preserved\n' "$poc_carry_base" >&2
+              exit 1
+            }
+            git -C "$WORKTREE" apply --binary "$poc_carry_patch"
+          fi
+          observed=$(patch_digest)
+          [[ "$observed" == "$poc_carry_digest" ]] || {
+            printf 'start_gate: applied worktree does not match PoC basis %s\n' "$poc_carry_digest" >&2
+            exit 1
+          }
+        fi
+        jq -n --arg pocRun "$poc_carry_run" --arg url "$POC_BASIS" --arg digest "$poc_carry_digest" --arg base "$poc_carry_base" \
+          '{schemaVersion:1,pocRun:$pocRun,url:$url,digest:$digest,base:$base,applied:true}' > "$STATE/poc-basis.json"
+        printf 'poc_basis=applied digest=%s\n' "$poc_carry_digest"
+      }
       printf '%s\n' "$DAGU_FEATURE_BUNDLE"
       eval "$DAGU_RESOURCE_GUARD"
       resource_lock claim
@@ -461,6 +519,40 @@ steps:
            (.run == $run or ($previous != "" and .run == $previous))' "$OWNER" >/dev/null ||
           { printf 'start_gate: resource ownership identity mismatch: %s; preserved\n' "$OWNER" >&2; exit 1; }
       fi
+      poc_carry_base=
+      poc_carry_patch=
+      poc_carry_digest=
+      poc_carry_run=
+      if [[ -n "${POC_BASIS:-}" ]]; then
+        [[ "$RUN" == feature-* ]] || { printf 'start_gate: POC_BASIS requires run id feature-<poc-run>\n' >&2; exit 1; }
+        poc_carry_run=${RUN#feature-}
+        [[ "$poc_carry_run" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || { printf 'start_gate: invalid promoted PoC run %s\n' "$poc_carry_run" >&2; exit 1; }
+        poc_state=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "poc/runs/$poc_carry_run")
+        [[ -f "$poc_state/full.patch" && -s "$poc_state/full.patch.sha256" && -s "$poc_state/comment.url" && -s "$poc_state/promotion.url" && -s "$poc_state/base.sha" ]] || {
+          printf 'start_gate: promoted PoC basis is incomplete for %s; evidence %s\n' "$poc_carry_run" "$poc_state" >&2
+          exit 1
+        }
+        poc_comment=$(tr -d '\r\n' < "$poc_state/comment.url")
+        poc_promotion=$(tr -d '\r\n' < "$poc_state/promotion.url")
+        [[ "$poc_comment" == "$POC_BASIS" && "$poc_promotion" == "$POC_BASIS" ]] || {
+          printf 'start_gate: POC_BASIS does not match the published PoC comment for %s\n' "$poc_carry_run" >&2
+          exit 1
+        }
+        poc_carry_base=$(tr -d '\r\n' < "$poc_state/base.sha")
+        [[ "$poc_carry_base" =~ ^[a-f0-9]{40}$ ]] || { printf 'start_gate: PoC base SHA is invalid for %s\n' "$poc_carry_run" >&2; exit 1; }
+        git -C "$PRIMARY" cat-file -e "${poc_carry_base}^{commit}" || { printf 'start_gate: PoC base %s is not in this repository\n' "$poc_carry_base" >&2; exit 1; }
+        git -C "$PRIMARY" merge-base --is-ancestor "$poc_carry_base" "origin/$BASE_BRANCH" || {
+          printf 'start_gate: PoC base %s is not an ancestor of origin/%s\n' "$poc_carry_base" "$BASE_BRANCH" >&2
+          exit 1
+        }
+        poc_carry_digest=$(tr -d '[:space:]' < "$poc_state/full.patch.sha256")
+        poc_observed=$(shasum -a 256 "$poc_state/full.patch" | awk '{print $1}')
+        [[ "$poc_carry_digest" =~ ^[a-f0-9]{64}$ && "$poc_observed" == "$poc_carry_digest" ]] || {
+          printf 'start_gate: full.patch digest mismatch for %s\n' "$poc_carry_run" >&2
+          exit 1
+        }
+        poc_carry_patch=$poc_state/full.patch
+      fi
       if test -e "$WORKTREE"; then
         worktree_path=$(cd "$WORKTREE" && pwd -P)
         worktree_root=$(cd "$(git -C "$WORKTREE" rev-parse --show-toplevel)" && pwd -P)
@@ -468,6 +560,8 @@ steps:
         test "$(git -C "$WORKTREE" branch --show-current)" = "$BRANCH"
       elif git -C "$PRIMARY" show-ref --verify --quiet "refs/heads/$BRANCH"; then
         git -C "$PRIMARY" worktree add "$WORKTREE" "$BRANCH"
+      elif [[ -n "$poc_carry_base" ]]; then
+        git -C "$PRIMARY" worktree add -b "$BRANCH" "$WORKTREE" "$poc_carry_base"
       else
         git -C "$PRIMARY" rev-parse --verify "origin/$BASE_BRANCH^{commit}" >/dev/null
         git -C "$PRIMARY" worktree add -b "$BRANCH" "$WORKTREE" "origin/$BASE_BRANCH"
@@ -508,6 +602,7 @@ steps:
       jq -n --arg run "$RUN" --arg primary "$primary_path" --arg branch "$BRANCH" --arg worktree "$worktree_path" \
         '{run:$run,primary:$primary,branch:$branch,worktree:$worktree}' > "$STATE/resource.json"
       cp "$STATE/resource.json" "$OWNER"
+      apply_promoted_poc_basis
       printf 'issue=%s\nbranch=%s\nworktree=%s\nbase_sha=%s\n' \
         "$ISSUE" "$BRANCH" "$WORKTREE" "$(git -C "$WORKTREE" rev-parse HEAD)"
 
@@ -672,6 +767,21 @@ steps:
       }
       scratch=$(mktemp -d)
       trap 'rm -rf "$scratch"' EXIT
+      poc_basis=null
+      if [[ -f "$STATE/poc-basis.json" ]]; then
+        basis_digest=$(jq -r 'if .schemaVersion == 1 and .applied == true and (.digest | test("^[a-f0-9]{64}$")) then .digest else "" end' "$STATE/poc-basis.json")
+        [[ -n "$basis_digest" ]] || fail "recorded PoC basis is invalid"
+        git diff --binary HEAD > "$scratch/basis.patch"
+        while IFS= read -r -d '' path; do
+          git diff --no-index --binary -- /dev/null "$path" >> "$scratch/basis.patch" || test "$?" -eq 1
+        done < <(git ls-files --others --exclude-standard -z)
+        observed_basis=$(shasum -a 256 "$scratch/basis.patch" | awk '{print $1}')
+        if [[ "$observed_basis" == "$basis_digest" ]]; then feature_delta=empty; else feature_delta=changed; fi
+        jq --arg featureDelta "$feature_delta" '.featureDelta = $featureDelta' "$STATE/poc-basis.json" > "$scratch/poc-basis.json"
+        mv "$scratch/poc-basis.json" "$STATE/poc-basis.json"
+        poc_basis=$(jq -c '{schemaVersion,pocRun,url,digest,base,applied,featureDelta}' "$STATE/poc-basis.json")
+        printf 'poc_basis=applied digest=%s feature_delta=%s\n' "$basis_digest" "$feature_delta"
+      fi
       git diff --name-only --no-renames -z "$base" > "$scratch/paths"
       git ls-files --others --exclude-standard -z >> "$scratch/paths"
       while IFS= read -r -d '' path; do confined "$path"; done < "$scratch/paths"
@@ -709,7 +819,9 @@ steps:
       git diff --binary --full-index "$base" "$sha" > "$scratch/diff.patch"
       jq -nc --arg base "$base" --arg sha "$sha" --arg tree "$tree" --arg message "$MESSAGE" \
         --arg summary "$SUMMARY" --arg implementer "$IMPLEMENTER" --argjson iteration "$iteration" --argjson implementation "$implementation" \
-        '{base:$base,sha:$sha,tree:$tree,message:$message,summary:$summary,implementer:$implementer,iteration:$iteration,implementation:$implementation}' > "$scratch/candidate.json"
+        --argjson pocBasis "$poc_basis" \
+        '{base:$base,sha:$sha,tree:$tree,message:$message,summary:$summary,implementer:$implementer,iteration:$iteration,implementation:$implementation}
+         + (if $pocBasis == null then {} else {pocBasis:$pocBasis} end)' > "$scratch/candidate.json"
       git update-ref "refs/heads/$BRANCH" "$sha" "$head"
       unset GIT_INDEX_FILE
       git read-tree "$tree"
@@ -721,6 +833,7 @@ steps:
         done
       fi
       mv "$scratch/candidate.json" "$scratch/diff.patch" "$STATE/"
+      dagu-feature-protect refresh
       printf 'candidate_sha=%s\n' "$sha"
 
   - id: checkpoint_push
@@ -936,6 +1049,7 @@ steps:
             '.sha=$sha | .base=$base | .tree=$tree' "$STATE/historical/$before/candidate.json" > "$STATE/candidate.json"
           git -C "$WORKTREE" diff --binary --full-index "$(cat "$STATE/base")" "$after" > "$STATE/diff.patch"
         fi
+        dagu-feature-protect refresh
         printf 'rebased_sha=%s\n' "$after"
       else
         git -C "$WORKTREE" diff --name-only --diff-filter=U > "$STATE/conflict-files"
@@ -993,38 +1107,14 @@ steps:
       A4S_GATE_HELPER=$(dagu-gate path)
       A4S_GATE_JOURNAL=$(node "$A4S_GATE_HELPER" begin "$STATE")
       export A4S_GATE_HELPER A4S_GATE_JOURNAL
-      lock="$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-common-dir)/dagu-feature/gate.lock"
-      mkdir -p "${lock%/*}"
-      # Keep the same process and an inheritable descriptor for the entire body.
-      exec python3 -c '
-      import fcntl
-      import json
-      import os
-      import sys
-      import time
-
-      path, run = sys.argv[1:3]
-      fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
-      previous = None
-      while True:
-          try:
-              fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-              break
-          except BlockingIOError:
-              holder = os.pread(fd, 4096, 0).decode("utf-8", errors="replace") or "unknown"
-              if holder != previous:
-                  print(f"gate: waiting lock={path} run={run} pid={os.getpid()} holder={holder}", file=sys.stderr, flush=True)
-                  previous = holder
-              time.sleep(0.1)
-      owner = json.dumps({"run": run, "pid": os.getpid()})
-      os.ftruncate(fd, 0)
-      os.pwrite(fd, owner.encode(), 0)
-      os.set_inheritable(fd, True)
-      with open(os.environ["A4S_GATE_JOURNAL"], "a") as journal:
-          journal.write(json.dumps({"id": "lock_wait", "endedAt": time.time_ns() // 1000000, "exitCode": 0}) + "\n")
-      print(f"gate: acquired lock={path} holder={owner}", file=sys.stderr, flush=True)
-      os.execvp(sys.argv[3], sys.argv[3:])
-      ' "$lock" "$RUN" bash -euo pipefail -c "$(cat <<'GATE_BODY'
+      # The helper shares one host-path slot with shell-launched full suites.
+      # Exit 86 releases the slot while integration protection waits.
+      export A4S_INTEGRATION_WAITER=$$
+      exec python3 "$(dirname "$A4S_GATE_HELPER")/heavy-slot.py" --gate "$RUN" bash -euo pipefail -c "$(cat <<'GATE_BODY'
+      admit_status=0
+      dagu-feature-protect admit --checkpoint gate || admit_status=$?
+      if [[ "$admit_status" -eq 86 ]]; then exit 86; fi
+      if [[ "$admit_status" -ne 0 ]]; then exit "$admit_status"; fi
       trap 'status=$?; trap - EXIT; node "$A4S_GATE_HELPER" finish "$status" || { test "$status" != 0 || status=1; }; exit "$status"' EXIT
       node "$A4S_GATE_HELPER" start pre_checks
       cd "$WORKTREE"
@@ -1162,6 +1252,14 @@ steps:
     run: |
       set -euo pipefail
       umask 0022
+      export A4S_INTEGRATION_WAITER=$$
+      while true; do
+        integration_status=0
+        dagu-feature-protect admit --checkpoint push || integration_status=$?
+        if [[ "$integration_status" -eq 0 ]]; then break; fi
+        if [[ "$integration_status" -ne 86 ]]; then exit "$integration_status"; fi
+        sleep "${A4S_INTEGRATION_POLL_SEC:-1}"
+      done
       STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")
       test -s "$STATE/gate.json" || { echo "push: no gated candidate; run gate first" >&2; exit 1; }
       gated=$(jq -r .sha "$STATE/gate.json")
@@ -1250,24 +1348,44 @@ steps:
     run: |
       set -euo pipefail
       STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")
-      repo=$(gh repo view "$(git -C "$PRIMARY" remote get-url origin)" --json nameWithOwner --jq .nameWithOwner)
-      pr=$(gh pr view "${PR_NUMBER:-$BRANCH}" -R "$repo" --json number --jq .number)
       sha=$(jq -r .sha "$STATE/candidate.json")
-      jq -n --arg sha "$sha" --arg security "$CODEQL_SECURITY_THRESHOLD" --arg alerts "$CODEQL_ALERTS_THRESHOLD" \
-        '{sha:$sha,security:$security,alerts:$alerts}' >"$STATE/codeql-policy.json"
-      dagu-codeql "$repo" "$pr" "$sha" "$CODEQL_SECURITY_THRESHOLD" "$CODEQL_ALERTS_THRESHOLD" >"$STATE/codeql-observation.json"
-      cat "$STATE/codeql-observation.json"
+      case "${CODE_SCANNING:-required}" in
+        off)
+          # Adopted off policy records the candidate and does not call CodeQL.
+          jq -n --arg sha "$sha" --arg security "${CODEQL_SECURITY_THRESHOLD:-}" --arg alerts "${CODEQL_ALERTS_THRESHOLD:-}" \
+            '{sha:$sha,mode:"off",security:$security,alerts:$alerts}' >"$STATE/codeql-policy.json"
+          ;;
+        required)
+          repo=$(gh repo view "$(git -C "$PRIMARY" remote get-url origin)" --json nameWithOwner --jq .nameWithOwner)
+          pr=$(gh pr view "${PR_NUMBER:-$BRANCH}" -R "$repo" --json number --jq .number)
+          jq -n --arg sha "$sha" --arg security "$CODEQL_SECURITY_THRESHOLD" --arg alerts "$CODEQL_ALERTS_THRESHOLD" \
+            '{sha:$sha,mode:"required",security:$security,alerts:$alerts}' >"$STATE/codeql-policy.json"
+          dagu-codeql "$repo" "$pr" "$sha" "$CODEQL_SECURITY_THRESHOLD" "$CODEQL_ALERTS_THRESHOLD" >"$STATE/codeql-observation.json"
+          cat "$STATE/codeql-observation.json"
+          ;;
+        *) printf 'Invalid CODE_SCANNING policy: %s\n' "${CODE_SCANNING:-}" >&2; exit 1 ;;
+      esac
 
   - id: auto_merge
     depends: code_scanning
     run: |
       set -euo pipefail
+      export A4S_INTEGRATION_WAITER=$$
+      while true; do
+        integration_status=0
+        dagu-feature-protect admit --checkpoint auto_merge || integration_status=$?
+        if [[ "$integration_status" -eq 0 ]]; then break; fi
+        if [[ "$integration_status" -ne 86 ]]; then exit "$integration_status"; fi
+        sleep "${A4S_INTEGRATION_POLL_SEC:-1}"
+      done
       cd "$WORKTREE"
       STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")
       sha=$(jq -r .sha "$STATE/candidate.json")
-      # A pending analysis releases the queue to the native CI/merge checkpoints.
-      # The reconciler enables merge only after current-head CodeQL and CI pass.
-      if ! jq -e --arg sha "$sha" '.sha == $sha and .class == "PASS"' "$STATE/codeql-observation.json" >/dev/null; then exit 0; fi
+      # Pending required analysis releases the queue. The reconciler enables merge
+      # after current-head CodeQL and required checks pass. Off does not wait for
+      # CodeQL: GitHub merge state follows REQUIRED_CHECK, still bound to this SHA.
+      if [[ "${CODE_SCANNING:-required}" != off ]] &&
+         ! jq -e --arg sha "$sha" '.sha == $sha and .class == "PASS"' "$STATE/codeql-observation.json" >/dev/null; then exit 0; fi
       test "$(git branch --show-current)" = "$BRANCH"
       test "$(git rev-parse HEAD)" = "$sha"
       test -z "$(git status --porcelain)"
@@ -1369,8 +1487,10 @@ steps:
       ' || { echo "STALE_SHA or unsuccessful required checks for $sha" >&2; exit 1; }
       policy="$STATE/codeql-policy.json"
       test "$(jq -r .sha "$policy")" = "$sha"
-      codeql=$(dagu-codeql "$repo" "$(gh pr view "$pr_ref" -R "$repo" --json number --jq .number)" "$sha" "$(jq -r .security "$policy")" "$(jq -r .alerts "$policy")")
-      jq -e '.class == "PASS"' <<<"$codeql"
+      if [[ "$(jq -r '.mode // "required"' "$policy")" != off ]]; then
+        codeql=$(dagu-codeql "$repo" "$(gh pr view "$pr_ref" -R "$repo" --json number --jq .number)" "$sha" "$(jq -r .security "$policy")" "$(jq -r .alerts "$policy")")
+        jq -e '.class == "PASS"' <<<"$codeql"
+      fi
       [[ "$(gh pr view "$pr_ref" -R "$repo" --json headRefOid --jq .headRefOid)" == "$sha" ]] ||
         { echo "STALE_SHA during CI authorization" >&2; exit 1; }
       printf 'authorized_sha=%s\n' "$sha"
@@ -1435,6 +1555,11 @@ steps:
       mkdir -p "$STATE"
       [[ "$MODE" != true ]] || printf 'true\n' > "$STATE/cleanup-close"
       [[ ! -f "$STATE/cleanup-close" ]] || MODE=true
+      if [[ "$MODE" == true ]]; then
+        dagu-feature-protect release-auto --reason close_gate
+      else
+        dagu-feature-protect release-auto --reason terminal
+      fi
       [[ -f "$STATE/cleanup-phase" ]] || printf 'identify\n' > "$STATE/cleanup-phase"
       phase=identify
       diagnostic() {

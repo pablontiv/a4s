@@ -1,7 +1,8 @@
-# dagu-feature-bundle: @a4s/issue-lifecycle@0.5.4 source=pablontiv/a4s@0789baf07ddf0110dc296c9bc43e50ad6921ffc2 bootstrap=bootstrap-a4s-v0-5-4 dagu=2.20.1
+# dagu-feature-bundle: @a4s/issue-lifecycle@0.5.26 source=pablontiv/a4s@47db2453f9b929667adf6f71a924cfba7a233b21 bootstrap=bootstrap-a4s-v0-5-26 dagu=2.23.0 protocols=triage=role-job/1,implement=role-job/1,publication=pr-checkpoint/1
 labels:
   - workspace=a4s
-  - dagu-feature-bundle=0.5.4
+  - dagu-feature-bundle=0.5.26
+  - dagu-feature-queue-concurrency=8
 queue: a4s
 type: graph
 dotenv: []
@@ -44,7 +45,7 @@ env:
   - PRIMARY: "${A4S_PRIMARY}"
   - RUN: ${context.run.id}
   - WORKTREE: ${PRIMARY}/.workspace/worktrees/poc-${RUN}
-  - DAGU_FEATURE_BUNDLE: "dagu-feature-bundle=0.5.4 source=pablontiv/a4s@0789baf07ddf0110dc296c9bc43e50ad6921ffc2 bootstrap=bootstrap-a4s-v0-5-4"
+  - DAGU_FEATURE_BUNDLE: "dagu-feature-bundle=0.5.26 source=pablontiv/a4s@47db2453f9b929667adf6f71a924cfba7a233b21 bootstrap=bootstrap-a4s-v0-5-26"
   - ESCALATION_POC_INCONCLUSIVE: "2"
   - DAGU_RESOURCE_GUARD: |
       resource_lock() {
@@ -131,6 +132,11 @@ steps:
       fi
       test -n "$QUESTION"
       printf '%s\n' "$QUESTION" > "$STATE/question.txt"
+      delimiter="QUESTION_${RANDOM}_${RANDOM}"
+      while [[ $'\n'"$QUESTION"$'\n' == *$'\n'"$delimiter"$'\n'* ]]; do delimiter="${delimiter}_"; done
+      { printf 'question<<%s\n' "$delimiter"; printf '%s\n' "$QUESTION"; printf '%s\n' "$delimiter"; } >> "$DAGU_OUTPUT_FILE"
+    outputs:
+      - name: question
 
   - id: detect_base_primary
     depends: record
@@ -253,6 +259,9 @@ steps:
       mkdir -p "$(dirname "$RESULT")"
       printf '%s\n' "$RESULT" > "$STATE/result.path"
       printf 'result=%s\n' "$RESULT"
+      printf 'resultpath=%s\n' "$RESULT" >> "$DAGU_OUTPUT_FILE"
+    outputs:
+      - name: resultpath
 
   - id: run_poc
     depends: worktree
@@ -260,12 +269,22 @@ steps:
     with:
       prompt: >-
         Execute minimal commands against the real target in ${WORKTREE}; never push poc/${RUN}.
-        Write git rev-parse --git-path poc/result.md with VERDICT: PASS|FAIL|INCONCLUSIVE,
+        Resolved question: ${steps.record.outputs.question}
+        Write the result to ${steps.worktree.outputs.resultpath} with VERDICT: PASS|FAIL|INCONCLUSIVE,
         ## Pregunta, ## Proposición demostrada, ## Ruta ejercitada, ## Comandos y salida,
-        and ## Después del PASS for PASS. Record references or digests of every executed
-        release/image in Ruta ejercitada. Keep tests and Markdown in the cutover.
+        and ## Después del PASS for PASS. ## Pregunta must equal question.txt after
+        normalizing whitespace; use the resolved question above, including issue-body fallback.
+        In ## Ruta ejercitada record the minimal commands, real target, and references or
+        digests of every executed release/image. Every *.md path and every path matching
+        TEST_PATHS=${TEST_PATHS} belongs to implementation cutover, not this PoC diff.
         INCONCLUSIVE also requires ## Inconclusive cause containing exactly scope, access, or other.
         An empty diff is valid. Complete only after recording observed evidence.
+        Long computation contract: before a long computation, run a bounded representative sample and record measured throughput and the projected duration.
+        Run the full computation as a background job with durable shard checkpoints under the run evidence directory (<git-dir>/dagu-feature/runs/<run>/computations/<id>/, or <git-dir>/poc/runs/<run>/computations/<id>/ for run_poc).
+        Each shard records its index, range and completion time.
+        Resume from the last completed shard after interruption.
+        When no new shard completes within the configured multiple of the measured shard time, the role-job executor reports one stall to the owning OMP session with the last progress and waits for continue, resize, or stop.
+        Completed shards stay preserved.
       form:
         type: object
         properties:
@@ -311,6 +330,16 @@ steps:
       printf '%s\n' "$((ATTEMPT + 1))" > "$STATE/attempt"
       RESULT=$(cat "$STATE/result.path")
       cp "$RESULT" "$STATE/result.md"
+      branch="refs/heads/poc/$RUN"
+      if ! remote=$(git -C "$WORKTREE" ls-remote origin "$branch" 2> "$STATE/remote.err"); then
+        printf 'rule=remote-unreachable branch=%s\n' "$branch" | tee "$STATE/scope-errors" >&2
+        cat "$STATE/remote.err" >&2
+        exit 1
+      fi
+      if [[ -n "$remote" ]]; then
+        printf 'rule=poc-branch-pushed branch=%s SHA=%s\n' "$branch" "${remote%%$'\t'*}" | tee "$STATE/scope-errors" >&2
+        exit 1
+      fi
       git -C "$WORKTREE" diff --name-only --no-renames -z "$(cat "$STATE/base.sha")" > "$STATE/tracked.paths"
       git -C "$WORKTREE" ls-files --others --exclude-standard -z > "$STATE/untracked.paths"
       while IFS= read -r -d '' path; do
@@ -404,6 +433,7 @@ steps:
           (cd "$WORKTREE"; git diff --no-index --stat -- /dev/null "$path") >> "$STATE/diffstat" || test "$?" -eq 1
         done < <(git -C "$WORKTREE" ls-files --others --exclude-standard -z)
       fi
+      shasum -a 256 "$STATE/full.patch" | awk '{print $1}' > "$STATE/full.patch.sha256"
       {
         printf '<!-- poc-verdict:%s scope:%s run:%s attempt:%s base:%s -->\n\n' "$VERDICT" "$SCOPE" "$RUN" "$ATTEMPT" "$BASE_SHA"
         if [[ -f "$STATE/result.md" ]]; then cat "$STATE/result.md"; else printf 'Orchestration failure before a capacity verdict.\n'; fi
@@ -459,9 +489,10 @@ steps:
     action: human.task
     with:
       prompt: >-
-        Review the published evidence. Push back with --expected-iteration to run_poc
-        to iterate; complete with promote=yes only for PASS, otherwise promote=no.
-        INCONCLUSIVE requires the operator to choose iteration or finish.
+        Review the published evidence. Complete the promote form with promote=yes
+        only for PASS; complete with promote=no to end without promotion.
+        To iterate, push back this decide checkpoint with the observed
+        --expected-iteration; it rewinds to run_poc. INCONCLUSIVE can iterate or end.
       form:
         type: object
         properties:
@@ -525,6 +556,9 @@ steps:
             and ($issue[0].body|section("## Después del PASS")|norm|length) > 0
           then $last.comment.html_url else error("Latest verdict is not a current, complete PASS") end
         ' "$STATE/pages.json" > "$STATE/promotion.url"
+        if [[ -f "$STATE/full.patch" && ! -s "$STATE/full.patch.sha256" ]]; then
+          shasum -a 256 "$STATE/full.patch" | awk '{print $1}' > "$STATE/full.patch.sha256"
+        fi
         dagu-feature-bundle enqueue --run-id "feature-$RUN" "$PRIMARY/.workspace/dagu/dags/feature.yaml" -- \
           ISSUE="$ISSUE" \
           BASE_BRANCH="$BASE_BRANCH" OMP_SESSION_ID="$OMP_SESSION_ID" \
