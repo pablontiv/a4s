@@ -362,36 +362,34 @@ test("CI workflow selector executes paginated rename records and the NUL-safe gi
 test("CI validate executes the real aggregate and requires all selected job outcomes", () => {
   const root = dirname(dirname(ciScript));
   const aggregate = ciWorkflow.jobs.validate.steps.find((step: { run?: string }) => step.run).run;
-  const run = (workspaces: string, changes: string, tests: string, live: string,
+  const run = (workspaces: string, changes: string, tests: string,
     prBody = "success", event = "pull_request") =>
     spawnSync("bash", ["-euo", "pipefail", "-c", aggregate], { cwd: root, encoding: "utf8", env: {
-      ...process.env, WORKSPACES: workspaces, CHANGES_RESULT: changes, TEST_RESULT: tests, LIVE_RESULT: live,
+      ...process.env, WORKSPACES: workspaces, CHANGES_RESULT: changes, TEST_RESULT: tests,
       PR_BODY_RESULT: prBody, EVENT_NAME: event,
     } });
   const dagu = JSON.stringify(ciJobs("@a4s/issue-lifecycle", "@a4s/review-routing"));
   const app = JSON.stringify(ciJobs("@a4s/message-bus"));
-  for (const [matrix, tests, live] of [[dagu, "success", "success"], [app, "success", "skipped"], ["[]", "skipped", "skipped"]]) {
-    const result = run(matrix!, "success", tests!, live!);
+  for (const [matrix, tests] of [[dagu, "success"], [app, "success"], ["[]", "skipped"]]) {
+    const result = run(matrix!, "success", tests!);
     assert.equal(result.status, 0, result.stdout + result.stderr);
   }
   for (const outcome of ["failure", "cancelled", "skipped", ""]) {
-    assert.equal(run(dagu, "success", outcome, "success").status, 1, `test=${outcome}`);
-    assert.equal(run(dagu, "success", "success", outcome).status, 1, `live=${outcome}`);
-    assert.equal(run(dagu, outcome, "success", "success").status, 1, `changes=${outcome}`);
+    assert.equal(run(dagu, "success", outcome).status, 1, `test=${outcome}`);
+    assert.equal(run(dagu, outcome, "success").status, 1, `changes=${outcome}`);
   }
   for (const outcome of ["failure", "cancelled", "success", ""]) {
-    assert.equal(run(app, "success", "success", outcome).status, 1, `unaffected live=${outcome}`);
-    assert.equal(run("[]", "success", outcome, "skipped").status, 1, `empty test=${outcome}`);
+    assert.equal(run("[]", "success", outcome).status, 1, `empty test=${outcome}`);
   }
-  assert.equal(run(dagu, "success", "success", "success", "skipped", "push").status, 0);
+  assert.equal(run(dagu, "success", "success", "skipped", "push").status, 0);
   for (const outcome of ["failure", "cancelled", "skipped", ""]) {
-    assert.equal(run(dagu, "success", "success", "success", outcome).status, 1, `pr-body=${outcome}`);
+    assert.equal(run(dagu, "success", "success", outcome).status, 1, `pr-body=${outcome}`);
   }
   for (const outcome of ["failure", "cancelled", "success", ""]) {
-    assert.equal(run(dagu, "success", "success", "success", outcome, "push").status, 1, `push pr-body=${outcome}`);
+    assert.equal(run(dagu, "success", "success", outcome, "push").status, 1, `push pr-body=${outcome}`);
   }
   for (const matrix of ["", "null", "{}", "broken", '[{"name":"@a4s/issue-lifecycle"}]',
     '[{"name":"@a4s/issue-lifecycle","test":"true","typecheck":true}]']) {
-    assert.equal(run(matrix, "success", "success", "success").status, 1, `matrix=${matrix}`);
+    assert.equal(run(matrix, "success", "success").status, 1, `matrix=${matrix}`);
   }
 });

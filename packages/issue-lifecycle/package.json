@@ -40,7 +40,7 @@
     ]
   },
   "scripts": {
-    "test": "python3 bin/heavy-slot.py env A4S_LIVE_DAGU=0 tsx --test test/*.test.ts",
+    "test": "python3 bin/heavy-slot.py tsx --test test/*.test.ts test/live/*.test.ts",
     "test:live": "python3 bin/heavy-slot.py env A4S_LIVE_DAGU=1 tsx --test test/live/*.test.ts test/bundle-cli.test.ts test/bundle-rebase.test.ts test/bundle-template.test.ts test/bundle.test.ts test/escalation.test.ts test/feature-template.test.ts test/gate-exclusion.test.ts test/waiting-cancellation.test.ts test/planning-template.test.ts test/reconcile-ci.test.ts test/reconcile-performance.test.ts",
     "typecheck": "tsc --noEmit"
   },

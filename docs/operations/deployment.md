@@ -211,13 +211,15 @@ set rather than only a package directory.
 
 1. **Source publication:** merge tested package source and its version/changelog
    where required. Template/skill changes require a version above the merge base;
-   the release guard follows the manifest across moves. Publication alone changes
-   neither installed links nor adopted renders.
+   the release guard follows the manifest across moves. Before a package release,
+   run live Dagu integration on the station with `A4S_LIVE_DAGU=1 npm test` and
+   the manifest-pinned binary on `PATH`; CI runs unit tests and typechecks without
+   Dagu. Publication alone changes neither installed links nor adopted renders.
 2. **Private installation:** choose durable pinned source, install dependencies,
    verify official Dagu against `packages/issue-lifecycle/package.json`
    `daguFeature.dagu`, upstream release checksums and exact version output, and
    review operator-owned links/PATH/config. Official asset names are
-   `dagu_<daguFeature.dagu>_<os>_<arch>.tar.gz`; CI validates upstream
+   `dagu_<daguFeature.dagu>_<os>_<arch>.tar.gz`; verify upstream
    `checksums.txt` before extraction. The station installer checks the same pin.
 3. **Initial stable-controller lane adoption:** preserve the approved controller
    and shared reconciler while adopting the lane's independent PRIMARY/base/queue.

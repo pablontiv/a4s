@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Run CI unit tests and typechecks without installing Dagu; gate all real-Dagu tests behind `A4S_LIVE_DAGU=1` and run live integration on the station with `A4S_LIVE_DAGU=1 npm test` before a package release (#683).
+
 ## 0.5.26
 
 - Require the official Dagu release pinned in `daguFeature.dagu`, update current installation and checkpoint guidance, and derive runtime-version fixtures from that pin. Keep earlier station and drained-restart proofs bounded to the versions they exercised.

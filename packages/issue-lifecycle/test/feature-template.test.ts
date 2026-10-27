@@ -545,7 +545,7 @@ test("template captures native implementation and publishes the gated candidate"
   } finally { rmSync(repo.root, { recursive: true, force: true }); }
 });
 
-test("template isolated PoC parent succeeds after exactly one child enqueue across the complete implementation graph", { timeout: 60_000 }, () => {
+test("template isolated PoC parent succeeds after exactly one child enqueue across the complete implementation graph", { ...liveDagu, timeout: 60_000 }, () => {
   const run = testRunId("poc-parent");
   const repo = repository(run);
   git(repo.primary, "worktree", "remove", repo.worktree);

@@ -151,13 +151,14 @@ npm run typecheck --workspace @a4s/issue-lifecycle
 npm exec --workspace @a4s/issue-lifecycle -- tsx --test \
   test/planning-template.test.ts test/discovery-contract.test.ts \
   test/bundle-template.test.ts test/admission.test.ts
-# Explicit live acceptance, with the pinned binary in PATH:
-npm run test:live --workspace @a4s/issue-lifecycle
+# Before a package release, run live integration on the station with its pinned binary in PATH:
+A4S_LIVE_DAGU=1 npm test
 ```
 
-The default script forces `A4S_LIVE_DAGU=0` even if the caller exports 1.
-`test:live` activates `test/live/*.test.ts` and guarded real-Dagu cases in retained
-unit files. The shared live gate inspects `dagu version` only when activated and
+CI and default tests need no Dagu binary: real-Dagu cases skip unless
+`A4S_LIVE_DAGU=1`. That opt-in includes `test/live/*.test.ts` and guarded
+real-Dagu cases in retained unit files; `test:live` remains a focused live command.
+The shared live gate inspects `dagu version` only when activated and
 requires the manifest pin. Tests cover progress/SSE (including the 20-topic
 connection boundary), CLI history/status and persisted run records, native
 stale-process repair text, resource identity, planning, transitions, semantic
@@ -173,7 +174,7 @@ owned cleanup; closing one leaves the other able to finish.
 
 Failed live PoC fixtures stop their service before preserving the original error,
 last HTTP evidence, stdout/stderr and only isolated `data/`/`logs/` under
-`A4S_DAGU_DIAGNOSTICS_DIR` (CI uses runner-temp storage). Successful fixtures
+`A4S_DAGU_DIAGNOSTICS_DIR` when configured on the station. Successful fixtures
 clean their owned temporary state. Retention failure does not replace the
 original error. This diagnostic evidence is not a production-store snapshot.
 

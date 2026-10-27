@@ -64,108 +64,14 @@ jobs:
           node-version-file: package.json
           cache: npm
       - run: npm ci
-      - name: Install pinned Dagu
-        if: matrix.workspace.name == '@a4s/issue-lifecycle'
-        run: &install-pinned-dagu |
-          version=$(node -p "require('./packages/issue-lifecycle/package.json').daguFeature.dagu")
-          asset="dagu_${version}_linux_amd64.tar.gz"
-          url="https://github.com/dagu-org/dagu/releases/download/v${version}"
-          mkdir -p "$RUNNER_TEMP/dagu-install" "$RUNNER_TEMP/dagu-bin"
-          cd "$RUNNER_TEMP/dagu-install"
-          echo "Asset: $url/$asset"
-          curl --fail --location --show-error --silent "$url/$asset" -o "$asset"
-          curl --fail --location --show-error --silent "$url/checksums.txt" -o checksums.txt
-          awk -v asset="$asset" '$2 == asset { print; found=1 } END { if (!found) { print "Missing checksum for " asset > "/dev/stderr"; exit 1 } }' checksums.txt > checksum.txt
-          cat checksum.txt
-          sha256sum --check --strict checksum.txt
-          tar -xzf "$asset" dagu
-          install -m 0755 dagu "$RUNNER_TEMP/dagu-bin/dagu"
-          echo "$RUNNER_TEMP/dagu-bin" >> "$GITHUB_PATH"
-      - name: Check pinned Dagu
-        if: matrix.workspace.name == '@a4s/issue-lifecycle'
-        run: &check-pinned-dagu |
-          version=$(node -p "require('./packages/issue-lifecycle/package.json').daguFeature.dagu")
-          command -v dagu
-          actual=$(dagu version)
-          echo "$actual"
-          if [[ "$actual" != "$version" ]]; then
-            echo "::error::Expected dagu version $version; received $actual"
-            exit 1
-          fi
       - name: Test
         if: matrix.workspace.test
         run: npm test --workspace "${{ matrix.workspace.name }}"
       - name: Typecheck
         if: matrix.workspace.typecheck
         run: npm run typecheck --workspace "${{ matrix.workspace.name }}"
-  live:
-    needs: changes
-    if: contains(fromJSON(needs.changes.outputs.workspaces).*.name, '@a4s/issue-lifecycle')
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        lane: [poc-template, poc-rendered, recovery, validation-admission, feature-remainder, other-live]
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
-        with:
-          node-version-file: package.json
-          cache: npm
-      - run: npm ci
-      - name: Install pinned Dagu
-        run: *install-pinned-dagu
-      - name: Check pinned Dagu
-        run: *check-pinned-dagu
-      - name: Live Dagu tests
-        id: live-tests
-        working-directory: packages/issue-lifecycle
-        env:
-          A4S_LIVE_DAGU: "1"
-          A4S_DAGU_DIAGNOSTICS_DIR: ${{ runner.temp }}/dagu-poc-diagnostics
-          LANE: ${{ matrix.lane }}
-        run: |
-          # Match complete top-level names and their descendants. Skipping the
-          # named groups retains new feature cases automatically in the remainder.
-          poc_template='template real Dagu closes implementation runs and succeeds after enqueuing a PoC'
-          poc_rendered='rendered fixture real Dagu closes implementation runs and succeeds after enqueuing a PoC'
-          recovery='concurrent recovery fixtures keep distinct run identities'
-          validation_admission='(?:template|rendered fixture) (?:optional validation uses native skip, SHA approval and iterative rejection|real Dagu checks primary freshness before admission and enqueues bootstrap after merge)'
-          feature_groups="(?:${poc_template}|${poc_rendered}|${recovery}|${validation_admission})"
-          case "$LANE" in
-            poc-template) pattern="^${poc_template}(?:$| )" ;;
-            poc-rendered) pattern="^${poc_rendered}(?:$| )" ;;
-            recovery) pattern="^${recovery}(?:$| )" ;;
-            validation-admission) pattern="^${validation_admission}(?:$| )" ;;
-            feature-remainder)
-              # Native exclusion also prevents file-parent selection from
-              # admitting the named groups or their descendants.
-              npx tsx --test --test-skip-pattern "^${feature_groups}(?:$| )" test/feature-template.test.ts
-              exit
-              ;;
-            other-live)
-              npx tsx --test test/live/*.test.ts test/bundle-cli.test.ts test/bundle-rebase.test.ts test/bundle-template.test.ts test/bundle.test.ts test/escalation.test.ts test/planning-template.test.ts test/reconcile-ci.test.ts
-              exit
-              ;;
-          esac
-          npx tsx --test --test-name-pattern "$pattern" test/feature-template.test.ts
-      - name: Check retained Dagu diagnostics
-        id: dagu-diagnostics
-        if: failure() && matrix.lane == 'other-live' && steps.live-tests.outcome == 'failure'
-        run: |
-          if [[ -d "$RUNNER_TEMP/dagu-poc-diagnostics" ]]; then
-            echo "available=true" >> "$GITHUB_OUTPUT"
-          fi
-      - name: Upload retained Dagu diagnostics
-        if: failure() && matrix.lane == 'other-live' && steps.dagu-diagnostics.outputs.available == 'true'
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
-        with:
-          name: dagu-poc-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.lane }}
-          path: ${{ runner.temp }}/dagu-poc-diagnostics
-          if-no-files-found: error
-          retention-days: 7
   validate:
-    needs: [changes, test, live, pr-body]
+    needs: [changes, test, pr-body]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -178,6 +84,5 @@ jobs:
           PR_BODY_RESULT: ${{ needs.pr-body.result }}
           CHANGES_RESULT: ${{ needs.changes.result }}
           TEST_RESULT: ${{ needs.test.result }}
-          LIVE_RESULT: ${{ needs.live.result }}
           WORKSPACES: ${{ needs.changes.outputs.workspaces }}
         run: node scripts/ci-workspaces.mjs aggregate
