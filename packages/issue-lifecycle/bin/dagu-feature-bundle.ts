@@ -1,20 +1,16 @@
 #!/usr/bin/env node
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { admit, appendObservation, enqueue, enqueueArguments, parseObservation, receiptPath } from "../src/admission.ts";
+import { ANSWERS_PATH, answersFromEnvironment, readAnswersFile, readCommittedAnswers, serializeAnswers } from "../src/answers.ts";
 import { validatePlanningUnitsCommand } from "../src/planning-validator.ts";
 import { planningReviewer, type TranscriptRow } from "../src/transcript-identity.ts";
-import {
-  BUNDLE_VERSION,
-  classifyCompatibility,
-  lifecycleProtocolToken,
-  parseBundleStamp,
-  REQUIRED_DAGU_VERSION,
-} from "../src/bundle.ts";
-import { currentQueueConcurrency, queueCompatibility, reconcileQueue, stampedQueue } from "../src/queue.ts";
+import { BUNDLE_VERSION, lifecycleProtocolToken, REQUIRED_DAGU_VERSION } from "../src/bundle.ts";
+import { dagName, materializeInstalled } from "../src/materialize.ts";
+import { currentQueueConcurrency, queueCompatibility, queueFromAnswersFile, reconcileQueue } from "../src/queue.ts";
 
 function git(path: string, ...args: string[]): string {
   return execFileSync("git", ["-C", path, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
@@ -35,27 +31,19 @@ function repositoryName(path: string): string {
   }
 }
 
-function inspectStamp(label: string, path: string): boolean {
-  if (!existsSync(path)) {
-    console.log(`${label} path=${path} stamp=unstamped compat=unstamped`);
+function inspectAnswers(repo: string): boolean {
+  const path = join(repo, ANSWERS_PATH);
+  try {
+    const loaded = readCommittedAnswers(repo);
+    const queue = queueFromAnswersFile(path);
+    const report = queueCompatibility(process.env.DAGU_HOME || join(homedir(), ".dagu"), queue);
+    console.log(`answers path=${ANSWERS_PATH} schema=${loaded.answers.schemaVersion} digest=${loaded.digest} lane=${loaded.answers.lane} base=${loaded.answers.baseBranch} ${report}`);
+    console.log(`answers policy gate=${JSON.stringify(loaded.answers.gate)} requiredCheck=${JSON.stringify(loaded.answers.requiredCheck)} testPaths=${JSON.stringify(loaded.answers.testPaths)}`);
+    return report.endsWith("compat=ok");
+  } catch (error) {
+    console.log(`answers path=${path} compat=invalid cause=${JSON.stringify(error instanceof Error ? error.message : String(error))}`);
     return false;
   }
-  const stamp = parseBundleStamp(readFileSync(path, "utf8"));
-  if (!stamp) {
-    console.log(`${label} path=${path} stamp=unstamped compat=unstamped`);
-    return false;
-  }
-  const compat = classifyCompatibility(stamp.version, BUNDLE_VERSION);
-  console.log(
-    `${label} path=${path} version=${stamp.version} source=${stamp.source} bootstrap=${stamp.bootstrap} compat=${compat}`,
-  );
-  if (label === "feature.yaml" || label === "poc.yaml") {
-    const source = readFileSync(path, "utf8");
-    const policy = ["PRIMARY", ...(label === "feature.yaml" ? ["GATE", "REQUIRED_CHECK"] : [])]
-      .map(name => `${name}=${source.match(new RegExp(`^  - ${name}: (.+)$`, "m"))?.[1] ?? "unset"}`);
-    console.log(`${label} policy ${policy.join(" ")}${label === "feature.yaml" ? " BRANCH=dagu/issue-${ISSUE}" : ""}`);
-  }
-  return compat === "ok";
 }
 
 function resolveRepository(argument: string): string | undefined {
@@ -95,12 +83,40 @@ function main(): void {
     console.log(lifecycleProtocolToken());
     return;
   }
+  if (command === "write-answers" || command === "answers-check" || command === "install-reconciler") {
+    try {
+      if (command === "write-answers") {
+        const dest = args[0];
+        if (!dest) throw new Error("write-answers requires the consumer answers path");
+        const answers = answersFromEnvironment(process.env);
+        mkdirSync(dirname(dest), { recursive: true });
+        writeFileSync(dest, serializeAnswers(answers));
+        console.log(`answers=${dest} schema=${answers.schemaVersion}`);
+      } else if (command === "answers-check") {
+        const file = args[0];
+        if (!file) throw new Error("answers-check requires the consumer answers path");
+        const answers = readAnswersFile(file);
+        console.log(`answers=${file} schema=${answers.schemaVersion} lane=${answers.lane} queue=${answers.queueConcurrency}`);
+      } else {
+        const [file, dest] = args;
+        if (!file || !dest) throw new Error("install-reconciler requires <answers> <reconcile.yaml>");
+        const text = materializeInstalled(dagName("reconcile.yaml"), readAnswersFile(file));
+        mkdirSync(dirname(dest), { recursive: true });
+        if (!existsSync(dest) || readFileSync(dest, "utf8") !== text) writeFileSync(dest, text);
+        console.log(`reconcile=${dest}`);
+      }
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exitCode = 1;
+    }
+    return;
+  }
   if (command === "queue-default" || command === "queue-reconcile" || command === "queue-check") {
     try {
       if (command === "queue-default") console.log(currentQueueConcurrency(args));
       else {
-        if (args.length !== 1) throw new Error(`${command} requires one rendered repository DAG`);
-        const queue = stampedQueue(readFileSync(args[0]!, "utf8"));
+        if (args.length !== 1) throw new Error(`${command} requires one answers file`);
+        const queue = queueFromAnswersFile(args[0]!);
         const home = process.env.DAGU_HOME || join(homedir(), ".dagu");
         if (command === "queue-reconcile") console.log(reconcileQueue(home, queue));
         else {
@@ -149,26 +165,17 @@ for (const argument of argumentsOrCwd) {
     continue;
   }
   console.log(`repo=${repositoryName(path)} path=${path} bundle=${BUNDLE_VERSION}`);
-  const dags = join(path, ".workspace", "dagu", "dags");
-  for (const name of ["feature.yaml", "poc.yaml", "discovery.yaml"]) {
-    try {
-      const queue = stampedQueue(readFileSync(join(dags, name), "utf8"));
-      const report = queueCompatibility(process.env.DAGU_HOME || join(homedir(), ".dagu"), queue);
-      console.log(`${name} ${report}`);
-      ok = report.endsWith("compat=ok") && ok;
-    } catch (error) {
-      console.log(`${name} queue compat=incompatible action=re-run-bootstrap cause=${JSON.stringify(String(error))}`);
-      ok = false;
-    }
-  }
-  ok = inspectStamp("feature.yaml", join(dags, "feature.yaml")) && ok;
-  ok = inspectStamp("poc.yaml", join(dags, "poc.yaml")) && ok;
-  ok = inspectStamp("discovery.yaml", join(dags, "discovery.yaml")) && ok;
-  ok = inspectStamp("planning.yaml", join(dags, "planning.yaml")) && ok;
+  ok = inspectAnswers(path) && ok;
 }
 
 const daguHome = process.env.DAGU_HOME || join(homedir(), ".dagu");
-ok = inspectStamp("reconcile.yaml", join(daguHome, "dags", "reconcile.yaml")) && ok;
+const reconciler = join(daguHome, "dags", "reconcile.yaml");
+if (!existsSync(reconciler)) {
+  console.log(`reconcile.yaml path=${reconciler} installed=absent`);
+  ok = false;
+} else {
+  console.log(`reconcile.yaml path=${reconciler} installed=yes`);
+}
 const dagu = spawnSync("dagu", ["version"], { encoding: "utf8" });
 const daguOk = dagu.status === 0
   && dagu.stdout === `${REQUIRED_DAGU_VERSION}\n`

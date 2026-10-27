@@ -7,7 +7,6 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { parse } from "yaml";
-import { stampedQueue } from "../src/queue.ts";
 import { BUNDLE_NAME, BUNDLE_VERSION, REQUIRED_DAGU_VERSION } from "../src/bundle.ts";
 
 const skill = (name: string): string => readFileSync(
@@ -58,12 +57,11 @@ test("bootstrap renders optional validation as the sole adopted value", {
         },
       });
       assert.equal(result.status, 0, result.stdout + result.stderr);
-      const output = readFileSync(stage, "utf8");
-      assert.ok(output.includes(`default: ${JSON.stringify(validation)}\n      enum: [${JSON.stringify(validation)}]`));
-      assert.ok(output.includes('- REBASE_RESOLVER: "node packages/issue-lifecycle/bin/dagu-bundle-rebase.mjs"'));
-      for (const name of ["feature", "poc", "discovery"]) {
-        assert.deepEqual(stampedQueue(readFileSync(join(root, `${name}.yaml`), "utf8")), { name: "fixture", max_concurrency: 8 });
-      }
+      const answers = JSON.parse(readFileSync(stage, "utf8")) as { validation: string; rebaseResolver: string; queueConcurrency: number; lane: string };
+      assert.equal(answers.validation, validation);
+      assert.equal(answers.rebaseResolver, "node packages/issue-lifecycle/bin/dagu-bundle-rebase.mjs");
+      assert.equal(answers.queueConcurrency, 8);
+      assert.equal(answers.lane, "fixture");
     }
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
@@ -72,10 +70,8 @@ test("bootstrap preserves the installed blocker reporting choice and accepts exp
   const bootstrap = skill("dagu-feature-bootstrap.yaml");
   const render = bootstrap.split("  - id: render\n")[1]!.split("\n  - id: reconcile")[0]!;
   const script = render.split("    run: |\n")[1]!.split("\n").map(line => line.slice(6)).join("\n");
-  const detect = bootstrap.split("      read_default() {")[1]!.split("      read_stamp() {")[0]!;
-  const readDefault = "read_default() {" + detect.split("\n").map(line => line.startsWith("      ") ? line.slice(6) : line).join("\n");
   const root = mkdtempSync(join(tmpdir(), "omp-dagu-blocker-policy-"));
-  const stage = join(root, "feature.yaml");
+  const stage = join(root, "answers.json");
   let installed = "";
   try {
     for (const [answer, expected] of [["", "ask"], ["auto", "auto"], ["", "auto"], ["ask", "ask"], ["", "ask"]]) {
@@ -89,9 +85,7 @@ test("bootstrap preserves the installed blocker reporting choice and accepts exp
         A4S_BLOCKER_REPORTING: answer, CURRENT_A4S_BLOCKER_REPORTING: installed,
       } });
       assert.equal(result.status, 0, result.stdout + result.stderr);
-      const readback = spawnSync("bash", ["-c", `${readDefault}\nread_default "$1" A4S_BLOCKER_REPORTING`, "read-policy", stage], { encoding: "utf8" });
-      assert.equal(readback.status, 0, readback.stderr);
-      installed = readback.stdout.trim();
+      installed = JSON.parse(readFileSync(stage, "utf8")).blockerReporting;
       assert.equal(installed, expected);
     }
   } finally { rmSync(root, { recursive: true, force: true }); }
@@ -116,8 +110,8 @@ test("adopted blocker reporting policy rejects run input before effects", () => 
 
 test("bootstrap renders default, preserved and explicit CodeQL thresholds and rejects enqueue overrides", () => {
   const bootstrap = skill("dagu-feature-bootstrap.yaml");
-  const script = bootstrap.split("  - id: render\n")[1]!.split("    run: |\n")[1]!.split("      for rendered in")[0]!
-    .split("\n").map(line => line.slice(6)).join("\n");
+  const script = bootstrap.split("  - id: render\n")[1]!.split("\n  - id: reconcile")[0]!
+    .split("    run: |\n")[1]!.split("\n").map(line => line.slice(6)).join("\n");
   const admission = skill("feature.yaml").split("  - id: admission\n")[1]!.split("\n  - id: triage")[0]!
     .split("    run: |\n")[1]!.split("\n").map(line => line.slice(6)).join("\n");
   const root = mkdtempSync(join(tmpdir(), "a4s-codeql-policy-"));
@@ -125,7 +119,7 @@ test("bootstrap renders default, preserved and explicit CodeQL thresholds and re
     for (const [answer, installed, expected] of [
       ["", "", "high_or_higher"], ["", "medium_or_higher", "medium_or_higher"], ["critical", "medium_or_higher", "critical"],
     ]) {
-      const stage = join(root, "feature.yaml");
+      const stage = join(root, "answers.json");
       const result = spawnSync("bash", ["-c", script], { encoding: "utf8", env: {
         ...process.env, PRIMARY: root, SKILL_DIR: fileURLToPath(new URL("../skills/issue-execution", import.meta.url)),
         STAGE: stage, DAG_RUN_ID: "bootstrap-codeql", REPO: "fixture", BASE_BRANCH: "main",
@@ -137,15 +131,15 @@ test("bootstrap renders default, preserved and explicit CodeQL thresholds and re
         CODE_SCANNING: "", CURRENT_CODE_SCANNING: "",
       } });
       assert.equal(result.status, 0, result.stderr);
-      const rendered = parse(readFileSync(stage, "utf8"));
-      assert.ok(rendered.env.some((entry: Record<string, string>) => entry.CODEQL_SECURITY_THRESHOLD === expected));
-      assert.ok(rendered.env.some((entry: Record<string, string>) => entry.CODEQL_ALERTS_THRESHOLD === "errors_and_warnings"));
-      assert.ok(rendered.env.some((entry: Record<string, string>) => entry.CODE_SCANNING === "required"));
+      const answers = JSON.parse(readFileSync(stage, "utf8"));
+      assert.equal(answers.codeqlSecurityThreshold, expected);
+      assert.equal(answers.codeqlAlertsThreshold, "errors_and_warnings");
+      assert.equal(answers.codeScanning, "required");
     }
     for (const [answer, installed, expected] of [
       ["", "", "required"], ["", "off", "off"], ["required", "off", "required"], ["off", "required", "off"],
     ] as const) {
-      const stage = join(root, "feature.yaml");
+      const stage = join(root, "answers.json");
       const result = spawnSync("bash", ["-c", script], { encoding: "utf8", env: {
         ...process.env, PRIMARY: root, SKILL_DIR: fileURLToPath(new URL("../skills/issue-execution", import.meta.url)),
         STAGE: stage, DAG_RUN_ID: "bootstrap-codeql", REPO: "fixture", BASE_BRANCH: "main",
@@ -157,12 +151,11 @@ test("bootstrap renders default, preserved and explicit CodeQL thresholds and re
         CODE_SCANNING: answer, CURRENT_CODE_SCANNING: installed,
       } });
       assert.equal(result.status, 0, result.stderr);
-      const rendered = parse(readFileSync(stage, "utf8"));
-      assert.ok(rendered.env.some((entry: Record<string, string>) => entry.CODE_SCANNING === expected));
+      assert.equal(JSON.parse(readFileSync(stage, "utf8")).codeScanning, expected);
     }
     const rejectedChoice = spawnSync("bash", ["-c", script], { encoding: "utf8", env: {
       ...process.env, PRIMARY: root, SKILL_DIR: fileURLToPath(new URL("../skills/issue-execution", import.meta.url)),
-      STAGE: join(root, "feature.yaml"), DAG_RUN_ID: "bootstrap-codeql", REPO: "fixture", BASE_BRANCH: "main",
+      STAGE: join(root, "answers.json"), DAG_RUN_ID: "bootstrap-codeql", REPO: "fixture", BASE_BRANCH: "main",
       GATE: "true", REQUIRED_CHECK: "validate", REBASE_RESOLVER: "", TEST_PATHS: "test",
       BUNDLE_NAME, BUNDLE_VERSION, DAGU_VERSION: REQUIRED_DAGU_VERSION,
       SOURCE_NWO: "example/repo", SOURCE_SHA: "a".repeat(40),

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+## 0.5.27
+
+- Consumers version `.workspace/dagu/answers.json` (schema 1, independent of the package version). Admission materializes feature, PoC, discovery and planning DAGs from the installed package templates, resolves PRIMARY, and records the answers digest with the per-run snapshot. A package or Dagu release that does not change answers no longer needs a consumer adoption commit (#684, #354, #678, #680).
 - Run CI unit tests and typechecks without installing Dagu; gate all real-Dagu tests behind `A4S_LIVE_DAGU=1` and run live integration on the station with `A4S_LIVE_DAGU=1 npm test` before a package release (#683).
 
 ## 0.5.26

@@ -29,7 +29,7 @@ Mechanical preparation uses supported role-scoped lower effort: an `AgentDefinit
 
 ## Prerequisites and optional template
 
-Use the adopted planning backend at `<PRIMARY>/.workspace/dagu/dags/planning.yaml` and the `backlog-breakdown` skill. `planning.yaml` retains its filename and DAG name `planning`; it is the backlog-breakdown backend. Establish the primary checkout and check that adopted file before offering publication. If adoption is missing, report that prerequisite and keep the proposal temporary until the operator chooses adoption or rejection.
+Use the planning backend named `planning` and the `backlog-breakdown` skill. Admission materializes it from the installed package template using `<PRIMARY>/.workspace/dagu/answers.json`. Establish the primary checkout and check that answers file before offering publication. If the answers file is missing, report that prerequisite and keep the proposal temporary until the operator commits it or rejects the proposal.
 
 The optional workspace configuration is:
 
@@ -340,7 +340,7 @@ After the operator accepts the exact proposal:
 4. Let backlog-breakdown create and verify issues and return its `issues.jsonl` mapping. Preserve its issue identifiers and `<!-- breakdown-unit: RUN/id -->` lineage markers. Scheduling new feature/PoC runs belongs to `sprint-planning`.
 5. Return the verified issue identifiers/locators and any declared relationships. Remove the temporary staging directory after the backend has finished using it.
 
-The exact handoff is the invocation of `backlog-breakdown` with those values, not a second implementation of its backend commands. The adopted planning DAG is required; backlog-breakdown owns all issue creation for refined work.
+The exact handoff is the invocation of `backlog-breakdown` with those values, not a second implementation of its backend commands. The committed answers file is required; backlog-breakdown owns all issue creation for refined work.
 
 For the accepted proposal, backlog-breakdown performs this executable enqueue operation using its allocated `BREAKDOWN_RUN_ID`, the established primary checkout and coordinating session. These variables are real values obtained by that skill, not new refine configuration:
 
@@ -349,9 +349,9 @@ For the accepted proposal, backlog-breakdown performs this executable enqueue op
 : "${OMP_SESSION_ID:?Coordinating session ID required}"
 : "${BREAKDOWN_RUN_ID:?Backlog-breakdown run ID required}"
 : "${REFINE_STAGE:?Absolute staging directory required}"
-test -r "$PRIMARY/.workspace/dagu/dags/planning.yaml"
+test -r "$PRIMARY/.workspace/dagu/answers.json"
 test -r "$REFINE_STAGE/units.jsonl"
-dagu-feature-bundle enqueue --run-id "$BREAKDOWN_RUN_ID" "$PRIMARY/.workspace/dagu/dags/planning.yaml" -- \
+dagu-feature-bundle enqueue --run-id "$BREAKDOWN_RUN_ID" planning -- \
   UNITS_FROM="$REFINE_STAGE/units.jsonl" PRIMARY="$PRIMARY" SOURCE=refine OMP_SESSION_ID="$OMP_SESSION_ID"
 ```
 

@@ -294,7 +294,7 @@ export class Transitions {
     if (messages.length === 1) effects.wakeMessage = messages[0]!;
     else if (messages.length) effects.wakeMessages = messages;
     if (messages.length && bundle.compat === "stale") {
-      effects.warningMessage = "Restart OMP to load the adopted @a4s/issue-lifecycle modules, then run its bootstrap (dagu-feature-bootstrap.yaml) and adopt freshly generated stamped renders.";
+      effects.warningMessage = "Restart OMP to load the installed @a4s/issue-lifecycle modules. In-flight runs keep their admitted snapshots; new runs materialize from the installed templates and the committed answers file.";
     }
     return effects;
   }

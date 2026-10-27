@@ -8,8 +8,29 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { withResourceGuard } from "./resource-fixtures.ts";
 import { approvedPocScope, assessPocScope, decidePocScope, inconclusiveCause, requirePocScope, type PocScopeInput } from "../src/poc-scope.ts";
+import { exampleAnswers, serializeAnswers } from "../src/answers.ts";
 import { admit } from "../src/admission.ts";
 import { parseReview } from "../src/triage/schema.ts";
+
+function withConsumerAnswers(primary: string, home: string, run: () => void): void {
+  const answers = join(primary, ".workspace", "dagu", "answers.json");
+  mkdirSync(join(answers, ".."), { recursive: true });
+  writeFileSync(answers, serializeAnswers(exampleAnswers({ lane: "poc-fixture" })));
+  execFileSync("git", ["-C", primary, "add", ".workspace/dagu/answers.json"], { stdio: "pipe" });
+  execFileSync("git", ["-C", primary, "-c", "user.name=PoC test", "-c", "user.email=poc@example.invalid", "commit", "-qm", "answers"], { stdio: "pipe" });
+  mkdirSync(home, { recursive: true });
+  const previousPrimary = process.env.A4S_PRIMARY;
+  const previousHome = process.env.DAGU_HOME;
+  process.env.A4S_PRIMARY = primary;
+  process.env.DAGU_HOME = home;
+  try { run(); }
+  finally {
+    if (previousPrimary === undefined) delete process.env.A4S_PRIMARY;
+    else process.env.A4S_PRIMARY = previousPrimary;
+    if (previousHome === undefined) delete process.env.DAGU_HOME;
+    else process.env.DAGU_HOME = previousHome;
+  }
+}
 
 for (const [name, definition] of [
   ["template", new URL("../skills/issue-execution/poc.yaml", import.meta.url)],
@@ -472,11 +493,13 @@ test("triage compares concrete required targets with the operator-authorized rou
     assert.match(first.reason, /windows-x64/);
     assert.throws(() => requirePocScope(fixture.primary, input, first.id), /POC_SCOPE_DECISION_REQUIRED/);
     const dag = join(fixture.root, "poc.yaml");
-    writeFileSync(dag, `env:\n  - PRIMARY: ${JSON.stringify(fixture.primary)}\n  - ESCALATION_POC_INCONCLUSIVE: "2"\n`);
-    assert.throws(() => admit({ cwd: fixture.primary, dag, run: "scope-blocked", params: [
-      "ISSUE=41", `QUESTION=${input.question}`, `REQUIRED_TARGETS=${JSON.stringify(input.requiredTargets)}`,
-      `AUTHORIZED_TARGETS=${JSON.stringify(input.authorizedTargets)}`, `SCOPE_BASIS=${input.basis}`,
-    ] }), /POC_SCOPE_DECISION_REQUIRED/, "direct bundle admission enforces the same boundary before enqueue");
+    writeFileSync(dag, "name: poc\n");
+    withConsumerAnswers(fixture.primary, join(fixture.root, "dagu-home"), () => {
+      assert.throws(() => admit({ cwd: fixture.primary, dag, run: "scope-blocked", params: [
+        "ISSUE=41", `QUESTION=${input.question}`, `REQUIRED_TARGETS=${JSON.stringify(input.requiredTargets)}`,
+        `AUTHORIZED_TARGETS=${JSON.stringify(input.authorizedTargets)}`, `SCOPE_BASIS=${input.basis}`,
+      ] }), /POC_SCOPE_DECISION_REQUIRED/, "direct bundle admission enforces the same boundary before enqueue");
+    });
     const narrowed = { ...input, question: "Can native Linux arm64 run?", requiredTargets: ["linux-arm64"] };
     const decision = decidePocScope(fixture.primary, "41", first.id, "narrow", narrowed, "operator:fixture", "Narrowed to the authorized target");
     assert.equal(decision.actor, "operator:fixture");
@@ -611,9 +634,11 @@ test("adoption escalation thresholds are immutable in PoC admission", () => {
     assert.equal(result.status, 1);
     assert.match(result.stderr, /admission rejected run parameter: ESCALATION_POC_INCONCLUSIVE/);
     const dag = join(fixture.root, "poc.yaml");
-    writeFileSync(dag, `env:\n  - PRIMARY: ${JSON.stringify(fixture.primary)}\n`);
-    assert.throws(() => admit({ cwd: fixture.primary, dag, run: "scope-overridden",
-      params: ["ISSUE=41", "ESCALATION_SECONDS=999999"] }), /admission rejected run parameter: ESCALATION_SECONDS/);
+    writeFileSync(dag, "name: poc\n");
+    withConsumerAnswers(fixture.primary, join(fixture.root, "dagu-home"), () => {
+      assert.throws(() => admit({ cwd: fixture.primary, dag, run: "scope-overridden",
+        params: ["ISSUE=41", "ESCALATION_SECONDS=999999"] }), /admission rejected run parameter: ESCALATION_SECONDS/);
+    });
   } finally { fixture.cleanup(); }
 });
 

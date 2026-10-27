@@ -44,11 +44,11 @@ directly, with throwaway materialization for native validation. From this packag
 run `A4S_LIVE_DAGU=0 npx tsx --test test/reconcile-ci.test.ts test/reconcile-performance.test.ts`
 for isolated script scenarios, or `A4S_LIVE_DAGU=1 npx tsx --test test/reconcile-ci.test.ts test/reconcile-performance.test.ts`
 to include official-Dagu validation, bounded-tick checks and checkpoint/queue scenarios in isolated temporary homes.
-Repository-adopted DAGs remain deployment artifacts managed by bootstrap adoption.
+The consumer answers file is `.workspace/dagu/answers.json`. Admission materializes DAGs from the installed templates.
 
 The existing feature lifecycle publishes a gated candidate through
 `push → pr → code_scanning → auto_merge → await_ci → await_merge`. Triage review remains independent;
-optional operator validation is fixed at adoption (a4s currently uses an empty
+optional operator validation is fixed in the answers file (a4s currently uses an empty
 procedure). Sprint Planning alone selects/ranks/enqueues new work. Discovery and
 refinement feed `planning.yaml`, the shared issue-creation backend, which owns
 independent plan review and operator approval. Sprint Review evaluates goal
@@ -95,9 +95,9 @@ for threshold choices, evidence and ownership.
 node packages/issue-lifecycle/bin/dagu-feature-bundle.ts validate-planning-units \
   --input <absolute-units.jsonl> --snapshot <absolute-validated-units.jsonl> \
   --findings <absolute-findings.md>
-# Enqueue the adopted breakdown backend under its owning controller:
+# Enqueue the breakdown backend under its owning controller:
 node "$CONTROLLER_CLI" enqueue --run-id "<repo>-breakdown-<slug>" \
-  .workspace/dagu/dags/planning.yaml -- \
+  planning -- \
   UNITS_FROM="<absolute-units.jsonl>" SOURCE=refine \
   PRIMARY="<absolute-independent-primary>" OMP_SESSION_ID="<persistent-session>"
 ```
@@ -121,25 +121,24 @@ binding are detailed in the architecture and execution skill.
 
 ## Repository-owned queue capacity
 
-Bootstrap's `QUEUE_CONCURRENCY` answer is a positive integer. Blank preserves the
-current `dagu-feature-queue-concurrency=<n>` label in the repository's feature,
-PoC and discovery renders; initial adoption defaults to 1. For a4s's first adoption,
-answer **8** to preserve the operator-approved installed capacity.
+Bootstrap's `QUEUE_CONCURRENCY` answer is a positive integer. Blank preserves
+`queueConcurrency` in `.workspace/dagu/answers.json`; the initial value is 1.
+a4s commits **8**, the operator-approved installed capacity.
 
-The repository's adopted renders are the source of truth. Bootstrap derives its
-named `queues.config` entry in `$DAGU_HOME/config.yaml`, preserving other queues,
+The answers file is the source of truth. Bootstrap derives its named
+`queues.config` entry in `$DAGU_HOME/config.yaml`, preserving other queues,
 metadata, shared keys and comments. An unchanged entry keeps bytes and scheduler
 intact. A changed entry requires the running launchd `local.dagu.server` to use
 `dagu start-all` and the same Dagu home, then requests `launchctl kickstart -k`.
 Waiting human tasks keep their persisted state. A failed restart atomically
 restores the previous config for retry.
 
-`dagu-feature-bundle <repo>` and `queue-check <render>` report queue drift as
-`compat=incompatible action=re-run-bootstrap`. Re-run bootstrap and adopt its
-stamped renders through a separate adoption PR. Station installation manages
-shared defaults and preserves repository queue limits; its drained activation
-requires `--apply --repo-dag <render>` and the existing operator-owned admission
-and restart hooks, and verifies that stamped capacity with N+1 barrier runs.
+`dagu-feature-bundle <repo>` and `queue-check <answers.json>` report queue drift as
+`compat=incompatible action=re-run-bootstrap`. Re-run bootstrap when the answers
+file should change. Station installation manages shared defaults and preserves
+repository queue limits; its drained activation requires
+`--apply --repo-dag <answers.json>` and the existing operator-owned admission
+and restart hooks, and verifies that capacity with N+1 barrier runs.
 Queue capacity counts Dagu runs; the independently managed role-job capacity
 counts semantic jobs and remains controlled by `dagu-role-jobs capacity`.
 

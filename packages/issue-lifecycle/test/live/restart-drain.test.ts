@@ -12,6 +12,7 @@ import { fileURLToPath } from "node:url";
 
 import { liveDagu } from "../fixtures/live-dagu.ts";
 import { testRunId } from "../fixtures/run-id.ts";
+import { exampleAnswers, serializeAnswers } from "../../src/answers.ts";
 import { deriveQueue } from "../../src/queue.ts";
 const installer = fileURLToPath(new URL("../../bin/dagu-station-install.ts", import.meta.url));
 async function freePort(): Promise<number> {
@@ -89,7 +90,7 @@ test("drain preserves existing runs; TERM restart stub activates capacity 8 on n
     const originalStartedAt = rows().find(row => row.dagRunId === `${id}-first`)!.startedAt;
     assert.ok(rows().some(row => row.dagRunId === `${id}-second` && row.status === "queued"));
     const repoDag = join(home, "repo.yaml");
-    writeFileSync(repoDag, "queue: a4s\nlabels: [dagu-feature-queue-concurrency=8]\n");
+    writeFileSync(repoDag, serializeAnswers(exampleAnswers({ lane: "a4s", queueConcurrency: 8 })));
     // Derivation changes disk while the old scheduler still runs at capacity one.
     writeFileSync(join(home, "config.yaml"), deriveQueue(readFileSync(join(home, "config.yaml"), "utf8"), { name: "a4s", max_concurrency: 8 }).content);
     const listening = once(restart, "listening");
@@ -140,7 +141,7 @@ test("drain preserves existing runs; TERM restart stub activates capacity 8 on n
 test("failed admission closure retains recovery state and keeps restart/open behind the drain", liveDagu, () => {
   const home = mkdtempSync(join(tmpdir(), "dagu-restart-closed-"));
   const repoDag = join(home, "repo.yaml");
-  writeFileSync(repoDag, "queue: a4s\nlabels: [dagu-feature-queue-concurrency=8]\n");
+  writeFileSync(repoDag, serializeAnswers(exampleAnswers({ lane: "a4s", queueConcurrency: 8 })));
   writeFileSync(join(home, "config.yaml"), "queues:\n  enabled: true\n  config:\n    - name: a4s\n      max_concurrency: 8\n");
   try {
     const result = execFileSync(process.execPath, [installer, "--dagu-home", home, "--apply", "--repo-dag", repoDag, "--admission-close", "exit 17", "--admission-open", "echo reopened", "--restart-command", "echo restarted"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });

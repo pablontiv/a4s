@@ -1,28 +1,31 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  BUNDLE_NAME,
+  ANSWERS_PATH,
+  POLICY_PARAMETERS,
+  readCommittedAnswers,
+  type LifecycleAnswers,
+} from "./answers.ts";
+import {
   BUNDLE_VERSION,
   formatProtocolRejection,
   inferLifecycleProtocols,
   lifecycleProtocolToken,
   missingLifecycleProtocols,
-  parseBundleStamp,
   REQUIRED_DAGU_VERSION,
-  type BundleStamp,
-  type LifecycleProtocols,
 } from "./bundle.ts";
+import { dagName, materializeDag, packageIdentity } from "./materialize.ts";
 import type { RunDetails } from "./status/progress.ts";
 import { isRecord } from "./type-guard.ts";
 import { requirePocScope, scopeTargets } from "./poc-scope.ts";
-import { HOST_PRIMARY_REFERENCE, bindSnapshotPrimary, resolvePrimaryBinding, workspaceLabel } from "./primary.ts";
+import { HOST_PRIMARY_REFERENCE, bindSnapshotPrimary, resolvePrimaryBinding } from "./primary.ts";
 
 const packageRoot = fileURLToPath(new URL("../", import.meta.url));
-const correction = "Apply bootstrap from a clean compatible @a4s/issue-lifecycle checkout, adopt its stamped DAGs, install its reconciler and restart OMP to load both extension modules; retry with a new run ID.";
+const correction = "Commit .workspace/dagu/answers.json in the consumer repository. Admission materializes the DAG from the installed package templates and resolves PRIMARY before enqueue; retry with a new run ID.";
 export function canonical(value: unknown): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
   if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
@@ -87,106 +90,134 @@ export function receiptPath(cwd: string, run: string): string {
   if (!/^[\w-]+$/.test(run)) throw new Error(`run=${run} expected an explicit Dagu run ID containing letters, numbers, underscores or hyphens`);
   return join(git(cwd, "rev-parse", "--path-format=absolute", "--git-path", `dagu-feature/runs/${run}`), "receipt.json");
 }
-function servedProtocols(name: string, contents: string, stamp: BundleStamp): LifecycleProtocols {
-  const declared = stamp.protocols ?? inferLifecycleProtocols(name, contents);
-  const missing = missingLifecycleProtocols(declared);
-  if (missing.length) throw new Error(formatProtocolRejection(name, missing));
-  return declared as LifecycleProtocols;
+function existingAncestor(path: string): string {
+  let current = path;
+  const seen = new Set<string>();
+  while (!seen.has(current)) {
+    seen.add(current);
+    if (existsSync(current)) return current;
+    const parent = dirname(current);
+    if (parent === current) return path;
+    current = parent;
+  }
+  return path;
 }
 
-function checkRender(path: string, name: string, sourceRoot: string, prefix: string) {
-  const contents = readFileSync(path, "utf8");
-  const stamp = parseBundleStamp(contents);
-  if (!stamp) throw new Error(`${name} observed=indeterminate expected a ${BUNDLE_NAME} lifecycle stamp`);
-  if (stamp.dagu !== REQUIRED_DAGU_VERSION) throw new Error(`${name} dagu=${stamp.dagu} expected=${REQUIRED_DAGU_VERSION}`);
-  const protocols = servedProtocols(name, contents, stamp);
-  const source = /^(.+)@([a-f0-9]{40})$/.exec(stamp.source);
-  const labels = [...contents.matchAll(/^\s+- dagu-feature-bundle=(\S+)\s*$/gm)];
-  if (!source || labels.length !== 1 || labels[0]?.[1] !== stamp.version) throw new Error(`${name} source/label ambiguous observed=${stamp.source} labels=${labels.map(label => label[1])} expected one matching bundle label and owner/repo@sha40`);
-  const expectedSource = git(sourceRoot, "remote", "get-url", "origin").replace(/\.git\/?$/, "").replace(/\/$/, "").split(/[/:]/).slice(-2).join("/");
-  if (source[1] !== expectedSource) throw new Error(`${name} origin=${source[1]} expected=${expectedSource}`);
-  const templatePath = `${prefix}skills/issue-execution/${name}`;
-  const declared = manifestVersion(git(sourceRoot, "show", `${source[2]}:${prefix}package.json`));
-  if (declared !== stamp.version) throw new Error(`${name} declared=${stamp.version} source package=${declared} expected identical provenance`);
-  // Versioned renders follow their templates in the same PR, so the installed checkout's template is also a valid source.
-  for (const commit of [source[2], git(sourceRoot, "rev-parse", "HEAD")]) {
-    const template = execFileSync("git", ["-C", sourceRoot, "show", `${commit}:${templatePath}`], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
-    if (isRender(contents, template)) return { ...identity(path, stamp.version, stamp.source), stamp: { ...stamp, protocols }, sourceTemplate: { path: templatePath, commit, digest: sha256(template) }, relationship: "verified-source-render", snapshot: contents };
-  }
-  throw new Error(`${name} digest=${sha256(contents)} expected a render of ${stamp.source}:${templatePath} or of the installed checkout`);
+function gitRoot(start: string): string | undefined {
+  try { return git(start, "rev-parse", "--show-toplevel"); }
+  catch { return undefined; }
 }
 
-function isRender(contents: string, template: string): boolean {
-  const literals = template.trimEnd().split(/__[A-Z0-9_]+__|TEMPLATE_[A-Z_]+/);
-  let remaining = contents;
-  if (!remaining.startsWith(literals[0]!)) return false;
-  remaining = remaining.slice(literals[0]!.length);
-  for (const literal of literals.slice(1, -1)) {
-    const offset = remaining.indexOf(literal);
-    if (offset < 0) return false;
-    remaining = remaining.slice(offset + literal.length);
+/** The consumer checkout is the DAG path's repository, or the process cwd for a bare DAG name. */
+function consumerRoot(cwd: string, dag: string): string {
+  const resolved = resolve(cwd, dag);
+  const starts = dag.includes("/") || dag.endsWith(".yaml") ? [existingAncestor(resolved), cwd] : [cwd];
+  for (const start of starts) {
+    const root = gitRoot(start);
+    if (root) return root;
   }
-  const suffix = literals.at(-1)!;
-  const suffixOffset = remaining.lastIndexOf(suffix);
-  return literals.length === 1 ? remaining.trim() === "" : suffixOffset >= 0 && remaining.slice(suffixOffset + suffix.length).trim() === "";
+  throw new Error(`admission requires a consumer git checkout containing committed ${ANSWERS_PATH}`);
+}
+
+function policyRecord(answers: LifecycleAnswers, primary: string, branch: string): Record<string, unknown> {
+  return {
+    PRIMARY: primary, BRANCH: branch, LANE: answers.lane, GATE: answers.gate,
+    REBASE_RESOLVER: answers.rebaseResolver, REQUIRED_CHECK: answers.requiredCheck,
+    TEST_PATHS: answers.testPaths, VALIDATION: answers.validation,
+    A4S_BLOCKER_REPORTING: answers.blockerReporting, CODE_SCANNING: answers.codeScanning,
+    CODEQL_SECURITY_THRESHOLD: answers.codeqlSecurityThreshold, CODEQL_ALERTS_THRESHOLD: answers.codeqlAlertsThreshold,
+    QUEUE_CONCURRENCY: answers.queueConcurrency,
+    ESCALATION_PUSHBACKS: answers.escalation.pushbacks, ESCALATION_FINDINGS: answers.escalation.findings,
+    ESCALATION_SECONDS: answers.escalation.seconds, ESCALATION_CI_BLOCKED: answers.escalation.ciBlocked,
+    ESCALATION_POC_INCONCLUSIVE: answers.escalation.pocInconclusive,
+  };
 }
 
 export function admit(options: AdmissionOptions, persist = true): { path: string; receipt: Receipt } {
   try {
-    const dagPath = realpathSync(resolve(options.cwd, options.dag));
-    const name = basename(dagPath);
-    if (!["feature.yaml", "poc.yaml", "discovery.yaml", "planning.yaml", "reconcile.yaml"].includes(name)) throw new Error(`DAG=${name} expected a distributed lifecycle DAG`);
+    const name = dagName(options.dag);
+    const hintedRoot = realpathSync(consumerRoot(options.cwd, options.dag));
+    const hinted = readCommittedAnswers(hintedRoot);
     let primaryParam = options.params.find(param => param.startsWith("PRIMARY="))?.slice(8);
+    let answers = hinted.answers;
+    let answersCommit = hinted.commit;
+    let answersDigest = hinted.digest;
     let executionSnapshot: string | undefined;
     if (name === "feature.yaml" || name === "poc.yaml") {
-      const snapshot = readFileSync(dagPath, "utf8");
-      const policy: Record<string, unknown> = {};
-      for (const field of ["PRIMARY", "GATE", "REBASE_RESOLVER", "REQUIRED_CHECK", "A4S_BLOCKER_REPORTING", "CODEQL_SECURITY_THRESHOLD", "CODEQL_ALERTS_THRESHOLD", "CODE_SCANNING"]) {
-        const literal = new RegExp(`^  - ${field}: (.+)$`, "m").exec(snapshot)?.[1];
-        if (literal) policy[field] = JSON.parse(literal);
+      const bound = resolvePrimaryBinding(HOST_PRIMARY_REFERENCE, { workspace: answers.lane });
+      const resolved = realpathSync(bound);
+      const primaryRepo = realpathSync(git(resolved, "rev-parse", "--show-toplevel"));
+      if (primaryRepo !== hintedRoot) {
+        const canonical = readCommittedAnswers(primaryRepo);
+        const again = realpathSync(resolvePrimaryBinding(HOST_PRIMARY_REFERENCE, { workspace: canonical.answers.lane }));
+        if (realpathSync(git(again, "rev-parse", "--show-toplevel")) !== primaryRepo) {
+          throw new Error(`answers lane=${canonical.answers.lane} resolved PRIMARY ${again}, which is not the consumer checkout ${primaryRepo}`);
+        }
+        answers = canonical.answers;
+        answersCommit = canonical.commit;
+        answersDigest = canonical.digest;
       }
       const issue = options.params.find(param => param.startsWith("ISSUE="))?.slice(6);
-      policy.BRANCH = name === "feature.yaml" ? `dagu/issue-${issue}` : `poc/${options.run}`;
-      if (typeof policy.PRIMARY !== "string" || !policy.PRIMARY) throw new Error(`${name} requires an adoption-fixed PRIMARY`);
-      const bound = resolvePrimaryBinding(policy.PRIMARY, { workspace: workspaceLabel(snapshot) });
-      let resolved = bound;
-      if (policy.PRIMARY === HOST_PRIMARY_REFERENCE) {
-        resolved = realpathSync(bound);
-        executionSnapshot = bindSnapshotPrimary(snapshot, resolved);
-      }
-      policy.PRIMARY = resolved;
+      const branch = name === "feature.yaml" ? `dagu/issue-${issue}` : `poc/${options.run}`;
+      const policy = policyRecord(answers, resolved, branch);
       primaryParam = resolved;
       const rejected = options.params.map(param => param.slice(0, param.indexOf("=")))
-        .filter(field => field.startsWith("ESCALATION_") || ["PRIMARY", "A4S_PRIMARY", "BRANCH", "GATE", "REBASE_RESOLVER", "REQUIRED_CHECK", "A4S_BLOCKER_REPORTING", "CODEQL_SECURITY_THRESHOLD", "CODEQL_ALERTS_THRESHOLD", "CODE_SCANNING"].includes(field));
+        .filter(field => field.startsWith("ESCALATION_") || (POLICY_PARAMETERS as readonly string[]).includes(field));
       if (rejected.length) throw new Error(`admission rejected run parameter: ${rejected.join(", ")}; adopted policy ${JSON.stringify(policy)}`);
     }
     const primary = realpathSync(resolve(options.cwd, primaryParam || "."));
     const repo = realpathSync(git(primary, "rev-parse", "--show-toplevel"));
+    if (name !== "feature.yaml" && name !== "poc.yaml" && hintedRoot !== repo) {
+      const canonical = readCommittedAnswers(repo);
+      answers = canonical.answers;
+      answersCommit = canonical.commit;
+      answersDigest = canonical.digest;
+    }
     if (name === "poc.yaml") {
       const param = (key: string) => options.params.find(value => value.startsWith(`${key}=`))?.slice(key.length + 1) || "";
-      const literal = /^  - ESCALATION_POC_INCONCLUSIVE: (.+)$/m.exec(readFileSync(dagPath, "utf8"))?.[1];
-      const threshold = literal ? Number(JSON.parse(literal)) : 2;
       requirePocScope(primary, { issue: param("ISSUE"), question: param("QUESTION"),
         requiredTargets: scopeTargets(JSON.parse(param("REQUIRED_TARGETS") || "[]")),
         authorizedTargets: scopeTargets(JSON.parse(param("AUTHORIZED_TARGETS") || "[]")), basis: param("SCOPE_BASIS") },
-      param("SCOPE_REQUEST") || undefined, threshold);
+      param("SCOPE_REQUEST") || undefined, answers.escalation.pocInconclusive);
     }
     const path = receiptPath(primary, options.run);
-    const root = git(packageRoot, "rev-parse", "--show-toplevel");
-    const prefix = git(packageRoot, "rev-parse", "--show-prefix");
-    const commit = git(packageRoot, "rev-parse", "HEAD");
-    const origin = git(packageRoot, "remote", "get-url", "origin");
+    const installed = packageIdentity(packageRoot);
+    const commit = installed.commit;
+    const origin = installed.origin;
     const daguHome = realpathSync(process.env.DAGU_HOME || join(homedir(), ".dagu"));
-    const installedDAG = checkRender(dagPath, name, root, prefix);
-    const reconciler = checkRender(join(daguHome, "dags", "reconcile.yaml"), "reconcile.yaml", root, prefix);
+    const templateFile = join(packageRoot, "skills", "issue-execution", name);
+    const templateText = readFileSync(templateFile, "utf8");
+    const generated = materializeDag(packageRoot, name, answers, installed);
+    const declared = inferLifecycleProtocols(name, generated);
+    const missing = missingLifecycleProtocols(declared);
+    if (missing.length) throw new Error(formatProtocolRejection(name, missing));
+    if (name === "feature.yaml" || name === "poc.yaml") executionSnapshot = bindSnapshotPrimary(generated, primary);
+    const snapshot = executionSnapshot ?? generated;
+    const reconcilerPath = join(daguHome, "dags", "reconcile.yaml");
+    let installedReconciler: Record<string, unknown>;
+    try {
+      installedReconciler = { relationship: "station-installed", canonicalPath: realpathSync(reconcilerPath), digest: sha256(readFileSync(reconcilerPath)) };
+    } catch (error) {
+      if (!isRecord(error) || error.code !== "ENOENT") throw error;
+      installedReconciler = { state: "absent", cause: "station reconciler is not installed; bootstrap installs it from the package template without a consumer DAG" };
+    }
     const installedPackageVersion = manifestVersion(readFileSync(join(packageRoot, "package.json"), "utf8"));
     if (installedPackageVersion !== BUNDLE_VERSION) throw new Error(`loaded package version=${BUNDLE_VERSION} installed package version=${installedPackageVersion}; restart OMP after redeployment`);
-    const sourceTemplate = identity(join(packageRoot, "skills", "issue-execution", name), BUNDLE_VERSION, `${origin}@${commit}`);
+    const sourceTemplate = identity(templateFile, BUNDLE_VERSION, `${origin}@${commit}`);
     const extensionFiles = tree(join(packageRoot, "src"));
     if (options.session?.extensionDigest && options.session.extensionDigest !== deploymentFingerprint(extensionFiles)) throw new Error(`loaded extension digest=${options.session.extensionDigest} expected current installed=${deploymentFingerprint(extensionFiles)}; restart OMP after redeployment`);
+    const generatedDigest = sha256(snapshot);
+    const installedDAG = {
+      relationship: "materialized-from-answers", version: BUNDLE_VERSION, canonicalPath: realpathSync(templateFile),
+      origin: `${origin}@${commit}`, digest: sha256(templateText),
+      template: { path: `skills/issue-execution/${name}`, commit, digest: sha256(templateText) },
+      answersDigest, generatedDigest, dagu: REQUIRED_DAGU_VERSION, snapshot: generated,
+    };
     const deployment = {
       package: identity(join(packageRoot, "package.json"), BUNDLE_VERSION, `${origin}@${commit}`),
-      sourceTemplate, installedDAG, installedReconciler: reconciler,
+      sourceTemplate, installedDAG, installedReconciler,
+      answers: { path: ANSWERS_PATH, schemaVersion: answers.schemaVersion, commit: answersCommit, digest: answersDigest },
+      generatedDagDigest: generatedDigest,
       loadedExtension: { version: BUNDLE_VERSION, canonicalPath: realpathSync(join(packageRoot, "src", "triage", "index.ts")), origin: `${origin}@${commit}`, digest: deploymentFingerprint(extensionFiles), files: extensionFiles, status: identity(join(packageRoot, "src", "status", "index.ts"), BUNDLE_VERSION, `${origin}@${commit}`) },
       bootstrap: identity(join(packageRoot, "skills", "issue-execution", "dagu-feature-bootstrap.yaml"), BUNDLE_VERSION, `${origin}@${commit}`),
       skill: identity(join(packageRoot, "skills", "issue-execution", "SKILL.md"), BUNDLE_VERSION, `${origin}@${commit}`),
@@ -196,7 +227,7 @@ export function admit(options: AdmissionOptions, persist = true): { path: string
         identity(join(packageRoot, "skills", "issue-execution", "escalation.py"), BUNDLE_VERSION, `${origin}@${commit}`),
         identity(join(packageRoot, "bin", "dagu-poc-scope.ts"), BUNDLE_VERSION, `${origin}@${commit}`),
       ],
-      relationships: { packageToExtension: "same-loaded-package", templateToPackage: "same-checkout", installedToSource: "verified-source-render", compatibility: "served-lifecycle-protocol", protocols: lifecycleProtocolToken(installedDAG.stamp.protocols) },
+      relationships: { packageToExtension: "same-loaded-package", templateToPackage: "same-checkout", installedToSource: "materialized-from-answers", compatibility: "installed-template", protocols: lifecycleProtocolToken() },
     };
     const daguVersion = execFileSync("dagu", ["version"], { encoding: "utf8" }).trim();
     if (daguVersion !== REQUIRED_DAGU_VERSION) throw new Error(`Dagu observed=${daguVersion} expected=${REQUIRED_DAGU_VERSION}`);

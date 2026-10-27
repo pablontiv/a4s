@@ -5,7 +5,7 @@ description: Adopt and operate the repo-owned Dagu issue lifecycle DAG (worktree
 
 # Dagu feature lifecycle
 
-Carry one GitHub issue from feasibility triage to a merged PR through durable Dagu runs. The repository owns `.workspace/dagu/dags/feature.yaml` and `.workspace/dagu/dags/poc.yaml`, rendered from this skill. A user-level Dagu service runs them in the same repository queue.
+Carry one GitHub issue from feasibility triage to a merged PR through durable Dagu runs. The repository owns `.workspace/dagu/answers.json`. Admission materializes `feature` and `poc` from this skill's installed templates. A user-level Dagu service runs them in the same repository queue.
 
 ```mermaid
 flowchart LR
@@ -177,10 +177,9 @@ checks the rendered plist with `plutil` on macOS before installing. `cmp` and
 the rendered plist are fully owned. `config.yaml` merges the leaves in the
 versioned `dagu/config.yaml` (`auth.mode`, `queues.enabled`, `host`, `port`,
 `coordinator.enabled`). Repository bootstrap derives each named `queues.config`
-entry from the repository's stamped capacity, preserving other queues, metadata,
-keys and comments. For a4s's first adoption, answer `QUEUE_CONCURRENCY=8` to
-preserve the operator-approved installed capacity. Subsequent blank answers keep
-the adopted stamp.
+entry from the committed answers file, preserving other queues, metadata,
+keys and comments. For a4s, `queueConcurrency` is 8, the operator-approved
+installed capacity. A blank bootstrap answer keeps that committed value.
 Foreign paths stay untouched during validation. The plist captures the
 operator's current `PATH` and resolved Dagu binary; use the same environment on
 updates. With a custom `DAGU_HOME`, the default plist destination is
@@ -199,11 +198,11 @@ safe point after reviewing active runs, use `launchctl bootout
 Observe `launchctl print "gui/$(id -u)/local.dagu.server"` (`state = running`),
 `curl -fsS http://127.0.0.1:8080/api/v1/health` (`healthy`) and the installer's
 `--check` before repository bootstrap.
-For drained station activation, `--apply --repo-dag <render>` requires the stamped
-queue to match the bootstrap-derived config, plus explicit `--admission-close`,
+For drained station activation, `--apply --repo-dag <answers.json>` requires the
+answers-file queue to match the installed config, plus explicit `--admission-close`,
 `--restart-command` and `--admission-open` hooks. It drains running/queued runs,
-requests TERM restart, verifies N running and one queued barrier run for stamped
-capacity N, then reopens admission.
+requests TERM restart, verifies N running and one queued barrier run for capacity
+N, then reopens admission.
 This skill does not install Dagu, and it carries no logic specific to any repository. Bootstrap renders repository policy; run parameters carry operational issue inputs.
 
 Station executor installation is a separate explicit operation:
@@ -248,31 +247,27 @@ the count. Protected roots stay; reaching the count leaves them in place.
 
 ## Bundle identity and compatibility
 
-Every rendered DAG starts with
-`# dagu-feature-bundle: @a4s/issue-lifecycle@<version> source=<owner/name>@<sha40> bootstrap=<run> dagu=<version> protocols=triage=<id>,implement=<id>,publication=<id>`
-and carries the label `dagu-feature-bundle=<version>`. `start_gate` and PoC
-`base` print the same bundle, source and bootstrap identity into the run log.
-Identify an installed bundle directly from that header and label, from repository
-history, or across indexed session history:
+The consumer policy is `.workspace/dagu/answers.json`. Schema version 1 is
+independent of the package version. Unknown fields and run-time policy overrides
+are rejected. Admission fills the installed template, so a generated snapshot
+carries `dagu-feature-bundle=<version>` and
+`dagu-feature-bundle=<version> source=<owner/name>@<sha40>`. That identity is
+the admitting package, not a consumer stamp. In-flight runs keep the snapshot
+they were admitted with.
 
-```sh
-git log --format='%h %(trailers:key=Dagu-Feature-Bundle,valueonly)' -- .workspace/dagu/dags
-git log -G '^# dagu-feature-bundle:' -p -- .workspace/dagu/dags
-backscroll search dagu-feature-bundle --all-projects
-```
-
-Feature, PoC and discovery renders also carry
-`dagu-feature-queue-concurrency=<n>`. Bootstrap's optional `QUEUE_CONCURRENCY`
-answer accepts a positive integer; blank preserves matching current stamps
-(initial default 1). The repository owns this value and bootstrap derives its
-global queue entry in `$DAGU_HOME/config.yaml`. A changed entry requires the
-running launchd `local.dagu.server` to use `dagu start-all` with the same home,
-then runs `launchctl kickstart -k`. Identical entries keep bytes and service
-intact; persisted waiting human tasks remain available after restart. A failed
-restart atomically restores the prior config for retry. Bundle inspection and
-`queue-check <render>` classify global drift as
-`compat=incompatible action=re-run-bootstrap`; re-run bootstrap and adopt its
-renders. Station installation preserves repository limits.
+Feature, PoC and discovery snapshots also carry
+`dagu-feature-queue-concurrency=<n>` as a reflection of `queueConcurrency`.
+Bootstrap's optional `QUEUE_CONCURRENCY` answer accepts a positive integer;
+blank preserves the committed answers value (initial default 1). The repository
+owns this value and bootstrap derives its global queue entry in
+`$DAGU_HOME/config.yaml`. A changed entry requires the running launchd
+`local.dagu.server` to use `dagu start-all` with the same home, then runs
+`launchctl kickstart -k`. Identical entries keep bytes and service intact;
+persisted waiting human tasks remain available after restart. A failed restart
+atomically restores the prior config for retry. Bundle inspection and
+`queue-check <answers.json>` classify global drift as
+`compat=incompatible action=re-run-bootstrap`. Station installation preserves
+repository limits.
 
 This Dagu run capacity is independent of semantic role-job capacity. The latter
 remains operator-changeable through `dagu-role-jobs capacity` under the persisted
@@ -286,22 +281,20 @@ with `cause=version_stale`. Diagnostics include observed/expected SHAs and
 versions. Repositories distributing `packages/issue-lifecycle/package.json` must keep
 that manifest identical in version to origin.
 
-Admission checks the provenance-verified requested DAG and installed reconciler
-independently against the loaded package. The criterion is the lifecycle
-protocol the extension serves, not bundle version or digest distance
-([`checkRender`/`admit`](../../src/admission.ts),
-[`missingLifecycleProtocols`](../../src/bundle.ts)). Each render declares
-`triage`, `implement` and `publication` protocol ids. Admission succeeds when
-every declared id is served, including when the render is a minor or patch
-behind the loaded package. A protocol this extension does not serve fails
-before run creation. The diagnostic names the missing protocol and the bundle
-version that serves it. The historical bundle identities for retired protocols
-are recorded once in `src/bundle.ts` `RETIRED_PROTOCOL_BUNDLES`. Re-adoption is
-required only for a protocol change. Stamps that predate `protocols=` use the
-served contract when the snapshot has no retired triage marker. A feature
-snapshot must also show role-job triage, role-job implement and pull-request
-publication. `TRIAGE_REVIEW AGENT=` (`marker-agent/1`) and coordinator human-task
-triage (`human-task/1`) are not served.
+Admission materializes the requested DAG from the installed package templates
+and resolves PRIMARY before enqueue ([`admit`](../../src/admission.ts),
+[`missingLifecycleProtocols`](../../src/bundle.ts)). The criterion is the
+lifecycle protocol the extension serves. Admission succeeds when the installed
+template's inferred `triage`, `implement` and `publication` ids are served. A
+protocol this extension does not serve fails before run creation. The diagnostic
+names the missing protocol and the bundle version that serves it. The historical
+bundle identities for retired protocols are recorded once in `src/bundle.ts`
+`RETIRED_PROTOCOL_BUNDLES`. A feature snapshot must show role-job triage,
+role-job implement and pull-request publication. `TRIAGE_REVIEW AGENT=`
+(`marker-agent/1`) and coordinator human-task triage (`human-task/1`) are not
+served. A package release with unchanged answers does not require a consumer
+commit. The receipt records the answers digest, package version and commit,
+template identity, Dagu runtime and generated DAG digest.
 
 Run notices separately classify bundle versus extension by version distance:
 equal major/minor is `ok` even when the patch differs, different major/minor or
@@ -334,21 +327,19 @@ adoption is an available deployment procedure and can repair an installation;
 provenance-verified renders remain admissible while their checkpoint protocols
 are served, including across minor and patch releases.
 
-Before Dagu creates a run, admission verifies the line-one stamp and unique
-matching bundle label, readable realpaths and SHA-256 identities, expected source
-origin and source-to-render provenance. Each stamp's version must exactly match
-the package manifest at its own source commit, and the render must match the
-template at that commit or in the installed checkout. The stamp's Dagu version
-and the native `dagu version` must each exactly match the package's required
-version. Incompatible or indeterminate identities exit nonzero with
-`DAGU_ADMISSION_REJECTED`, observed/expected components and the
-bootstrap/adopt/reload corrective action. Reload OMP after redeploying extensions.
+Before Dagu creates a run, admission reads the committed answers file, materializes
+the requested DAG from the installed package templates, and resolves PRIMARY.
+The receipt records the answers digest, package version and commit, template
+identity, Dagu runtime and generated DAG digest. The native `dagu version` must
+exactly match the package's required version. Missing or invalid answers, policy
+overrides and unserved protocols exit nonzero with `DAGU_ADMISSION_REJECTED`
+and the corrective action. Reload OMP after redeploying extensions.
 
 For an operator outside OMP, use the same boundary explicitly:
 
 ```sh
 node /real/checkout/packages/issue-lifecycle/bin/dagu-feature-bundle.ts enqueue \
-  --run-id <repo>-issue-<n> .workspace/dagu/dags/feature.yaml -- ISSUE=<n> OMP_SESSION_ID=<session>
+  --run-id <repo>-issue-<n> feature -- ISSUE=<n> OMP_SESSION_ID=<session>
 ```
 
 `admit` accepts the same arguments, reserves the run ID and emits its receipt
@@ -406,9 +397,8 @@ each new use as pending until those reads and the published issue are observed.
 
 ### Policy and defect scope
 
-Read `A4S_BLOCKER_REPORTING` from the consumer's actual installed feature policy
-in `.workspace/dagu/dags/feature.yaml`, using bootstrap's `read_default`
-(`CURRENT_A4S_BLOCKER_REPORTING`, fallback `ask`). The optional bootstrap answer
+Read `blockerReporting` from the consumer's committed
+`.workspace/dagu/answers.json` (`ask` when the file is absent). The optional bootstrap answer
 accepts `ask|auto`; blank preserves the installed choice, and first adoption
 defaults to `ask`. `auto` requires explicit operator opt-in. Choosing `ask` opts
 out of automatic publication: obtain explicit permission for this report before
@@ -416,7 +406,7 @@ any consequential reporting action. Record permission provenance in the existing
 run coordination state. An unreadable or indeterminate policy waits for explicit
 permission rather than supplying automatic authority.
 
-Compare the observed failure with the stamped bundle/source/bootstrap identity,
+Compare the observed failure with the admitting package version, source commit and answers digest,
 loaded extension and Dagu version described above. Report an A4S-owned defect
 when evidence identifies the distributed workflow, bootstrap, extension or native
 coordination as the cause. Consumer application failures stay with the consumer
@@ -542,13 +532,13 @@ The steps:
 
 | Step | Effect |
 |---|---|
-| `detect` | Checks `git`, `gh` (authenticated), `jq`, Python's `fcntl`, the exact required `dagu version`, and every package executable a rendered DAG invokes (`dagu-codeql`, `dagu-feature-bundle`, `dagu-feature-protect`, `dagu-gate`, `dagu-poc-scope`, `dagu-pr-body`, `dagu-role-jobs`, `dagu-stale-recovery`). A missing command fails with `bootstrap detect: required command not found: <name>`. It then reads package/version, source commit and source `origin`; fetches and requires that clean package commit on the remote default branch; reads repository settings and the installed DAG values and stamps. |
-| `answers` | `human.task` showing the current stamp, `GATE`, `REQUIRED_CHECK`, `TEST_PATHS`, `REBASE_RESOLVER`, optional `VALIDATION`, and `CODE_SCANNING` (`required` or `off`). Choose the test-path ERE, resolver and validation procedure from repository conventions; validation defaults to empty. Blank `CODE_SCANNING` preserves the installed choice. |
+| `detect` | Checks `git`, `gh` (authenticated), `jq`, Python's `fcntl`, the exact required `dagu version`, and every package executable a rendered DAG invokes (`dagu-codeql`, `dagu-feature-bundle`, `dagu-feature-protect`, `dagu-gate`, `dagu-poc-scope`, `dagu-pr-body`, `dagu-role-jobs`, `dagu-stale-recovery`). A missing command fails with `bootstrap detect: required command not found: <name>`. It then reads package/version, source commit and source `origin`; fetches and requires that clean package commit on the remote default branch; reads repository settings and the committed answers file. |
+| `answers` | `human.task` showing the committed policy, `GATE`, `REQUIRED_CHECK`, `TEST_PATHS`, `REBASE_RESOLVER`, optional `VALIDATION`, and `CODE_SCANNING` (`required` or `off`). Choose the test-path ERE, resolver and validation procedure from repository conventions; validation defaults to empty. Blank `CODE_SCANNING` preserves the committed choice. |
 | `worktrees` | Makes git ignore `.workspace/worktrees/`. When nothing ignores it yet, appends `/.workspace/worktrees/` to the clone's `info/exclude`, so the primary stays clean without a commit. |
-| `render` | Writes stamped and validated `feature.yaml`, `poc.yaml`, `discovery.yaml`, `planning.yaml`, and `reconcile.yaml` under `<git-dir>/dagu-feature/`, keeping PRIMARY clean. Feature and PoC `PRIMARY` is the host reference `"${A4S_PRIMARY}"`, not this checkout's absolute path. Discovery and planning receive the coordinating workspace label and resolve the target repository from the `PRIMARY` parameter. |
-| `reconcile` | Idempotently installs the stamped staged `reconcile.yaml` to `$DAGU_HOME/dags/reconcile.yaml` (`DAGU_HOME` defaults to `~/.dagu`) and validates it. One user-level DAG serves every adopting repository. |
+| `render` | Writes and validates `.workspace/dagu/answers.json` in PRIMARY. Unchanged bytes leave the checkout clean. Feature and PoC `PRIMARY` is resolved at admission from `"${A4S_PRIMARY}"`, not baked into the answers file. |
+| `reconcile` | Installs `reconcile.yaml` from the package template to `$DAGU_HOME/dags/reconcile.yaml` (`DAGU_HOME` defaults to `~/.dagu`), validates it, and reconciles the answers-file queue. One user-level DAG serves every repository on the station. |
 | `github` | Enables auto-merge and squash merge, and adds `REQUIRED_CHECK` as a strict required status check on the default branch. It keeps the existing contexts and every other protection setting. When it has to recreate the protection, it reads the protection back and fails if any other setting changed. |
-| `confirm` | Reads settings back, validates the four staged repository DAGs, compares the installed reconciler with its stamped render, and prints the bundle identity plus the three adoption commit trailers. |
+| `confirm` | Reads settings back, checks the answers file, reinstalls and validates the station reconciler, and checks queue compatibility. |
 
 Answer the form after `detect` succeeds, reusing the current values shown in its
 prompt during an upgrade. Choose `GATE` from the repository's documented local
@@ -562,22 +552,11 @@ dagu human-task complete --run-id "bootstrap-<repo>-v<version-with-hyphens>" --s
   --input VALIDATION='' dagu-feature-bootstrap
 ```
 
-The bootstrap is done when the run is `Succeeded`. To adopt or upgrade, open a
-self-contained adoption issue and enqueue the staged `feature.yaml` for that
-issue. The adoption commit copies all four staged repository DAGs and includes the exact three
-trailers printed by `confirm`: `Dagu-Feature-Bundle`,
-`Dagu-Feature-Source`, and `Dagu-Feature-Bootstrap`. The bootstrap does not
-write CI; an initial adoption adds the workflow that publishes
-`REQUIRED_CHECK` when needed.
+The bootstrap is done when the run is `Succeeded`. Commit `.workspace/dagu/answers.json` when the file changed. A later package release with the same answers does not need that commit. The bootstrap does not write CI; an initial adoption adds the workflow that publishes `REQUIRED_CHECK` when needed.
 
-### 2. Adoption issue
+### 2. First answers commit
 
-Open an issue in the repository to adopt the lifecycle. Enqueue it as described below, but pass the staged file (`$(git rev-parse --git-path dagu-feature/feature.yaml)`) instead of `.workspace/dagu/dags/feature.yaml`, which does not exist yet. In `implement`, deliver files for Dagu to capture in one commit that:
-
-- copies the four staged files to `.workspace/dagu/dags/feature.yaml`, `.workspace/dagu/dags/poc.yaml`, `.workspace/dagu/dags/discovery.yaml` and `.workspace/dagu/dags/planning.yaml`;
-- adds the CI job that publishes `REQUIRED_CHECK`, if none exists yet.
-
-Once that run is `Succeeded`, every later issue enqueues `.workspace/dagu/dags/feature.yaml` from the primary checkout.
+Open an issue when the repository does not yet have `.workspace/dagu/answers.json`. Enqueue `feature` after that file is committed. In `implement`, deliver the answers file and the CI job that publishes `REQUIRED_CHECK`, if none exists yet. Later issues enqueue `feature` from the primary checkout. Admission materializes the DAG; the consumer does not copy package templates.
 
 ## Backlog breakdown
 
@@ -608,7 +587,7 @@ and ordered `model_change` entries with `resolvedModelIsFallback`.
 
 ```sh
 node packages/issue-lifecycle/bin/dagu-feature-bundle.ts enqueue \
-  --run-id "<repo>-breakdown-<slug>" .workspace/dagu/dags/planning.yaml -- \
+  --run-id "<repo>-breakdown-<slug>" planning -- \
   UNITS_FROM="/absolute/path/to/units.jsonl" SOURCE=refine \
   PRIMARY="/absolute/path/to/primary" OMP_SESSION_ID="<dagu_session_id>"
 ```
@@ -623,7 +602,7 @@ Discovery diagnoses an adopted repository from a default-branch snapshot. The `w
 
 ```sh
 node packages/issue-lifecycle/bin/dagu-feature-bundle.ts enqueue \
-  --run-id "discovery-<id>" .workspace/dagu/dags/discovery.yaml -- \
+  --run-id "discovery-<id>" discovery -- \
   LENSES="0,1,2" SOURCE="<request-context>" LIVE_TARGET="" \
   PRIMARY="/absolute/path/to/repository" OMP_SESSION_ID="<dagu_session_id>"
 ```
@@ -648,7 +627,7 @@ Preconditions: run from the repository clone, its main working tree, clean and o
 ```sh
 n=<issue-selected-in-sprint-planning>
 node packages/issue-lifecycle/bin/dagu-feature-bundle.ts enqueue \
-  --run-id "<repo>-issue-$n" .workspace/dagu/dags/feature.yaml -- \
+  --run-id "<repo>-issue-$n" feature -- \
   ISSUE="$n" OMP_SESSION_ID="<value returned by dagu_session_id>"
 ```
 
@@ -1075,7 +1054,7 @@ step waiting; inspect its log and apply the same iteration-protected transition.
 
 ```sh
 node packages/issue-lifecycle/bin/dagu-feature-bundle.ts enqueue \
-  --run-id "<repo>-poc-<id>" .workspace/dagu/dags/poc.yaml -- \
+  --run-id "<repo>-poc-<id>" poc -- \
   ISSUE="<existing-issue-number>" QUESTION="<behavior to prove>" \
   OMP_SESSION_ID="<value returned by dagu_session_id>"
 ```

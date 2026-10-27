@@ -1,4 +1,3 @@
-# dagu-feature-bundle: __DAGU_FEATURE_STAMP__
 labels:
   - workspace=TEMPLATE_REPO
   - dagu-feature-bundle=__DAGU_FEATURE_VERSION__

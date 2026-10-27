@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "lane": "a4s",
+  "baseBranch": "main",
+  "queueConcurrency": 8,
+  "gate": "npm test && npm run typecheck",
+  "requiredCheck": "validate",
+  "testPaths": "(^|/)(test|tests)/|\\.test\\.(ts|cjs)$",
+  "rebaseResolver": "node packages/issue-lifecycle/bin/dagu-bundle-rebase.mjs",
+  "validation": "",
+  "blockerReporting": "ask",
+  "codeScanning": "required",
+  "codeqlSecurityThreshold": "high_or_higher",
+  "codeqlAlertsThreshold": "errors",
+  "escalation": {
+    "pushbacks": 3,
+    "findings": 2,
+    "seconds": 3600,
+    "ciBlocked": 2,
+    "pocInconclusive": 2
+  }
+}

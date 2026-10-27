@@ -11,7 +11,9 @@ import { fileURLToPath } from "node:url";
 import { after, test } from "node:test";
 import { Transitions } from "../src/status/progress.ts";
 import type { RunDetails } from "../src/status/progress.ts";
+import { readAnswersFile } from "../src/answers.ts";
 import { BUNDLE_VERSION, REQUIRED_DAGU_VERSION } from "../src/bundle.ts";
+import { materializeDag } from "../src/materialize.ts";
 import { stubHistory, withResourceGuard } from "./resource-fixtures.ts";
 import { liveDagu, liveDaguVersion } from "./fixtures/live-dagu.ts";
 import { roleAdmission, roleExecution } from "./role-job-fixtures.ts";
@@ -2842,7 +2844,8 @@ await dispatchStage("implement",(name,value)=>require("node:fs").appendFileSync(
 test("adopted policy rejects run overrides before repository writes and admits operational inputs", liveDagu, async () => {
   const repo = repository();
   const home = join(repo.root, "dagu-home");
-  const stage = join(repo.root, "staged", "feature.yaml");
+  const stage = join(repo.root, "staged", "answers.json");
+  const packageDir = fileURLToPath(new URL("../", import.meta.url));
   const skillDir = fileURLToPath(new URL("../skills/issue-execution/", import.meta.url));
   const listener = createServer();
   await new Promise<void>(resolve => listener.listen(0, "127.0.0.1", resolve));
@@ -2892,6 +2895,10 @@ test("adopted policy rejects run overrides before repository writes and admits o
     assert.ok(ready, `isolated Dagu API ready\n${serviceLog}`);
     const rendered = spawnSync("bash", ["-c", extractScript(join(skillDir, "dagu-feature-bootstrap.yaml"), "  - id: render")], { encoding: "utf8", env });
     assert.equal(rendered.status, 0, rendered.stdout + rendered.stderr);
+    const answers = readAnswersFile(stage);
+    for (const name of ["feature.yaml", "poc.yaml"] as const) {
+      writeFileSync(join(repo.root, "staged", name), materializeDag(packageDir, name, answers, { version: BUNDLE_VERSION, source: `fixture/repo@${"1".repeat(40)}` }));
+    }
     for (const name of ["feature", "poc"]) {
       const definition = join(repo.root, "staged", `${name}.yaml`);
       for (const [parameter, value] of [["GATE", "true"], ["REBASE_RESOLVER", "true"], ["REQUIRED_CHECK", "arbitrary"], ["PRIMARY", "/foreign/clone"], ["BRANCH", "off-pattern"], ["GATE", ""], ["PRIMARY", repo.primary]] as const) {
@@ -2903,12 +2910,13 @@ test("adopted policy rejects run overrides before repository writes and admits o
         assert.equal(snapshot(), before, `${name} ${parameter} changed repository state`);
       }
     }
-    const accepted = spawnSync("dagu", ["start", "--only", "admission", "--run-id", testRunId("operational"), stage, "--", "ISSUE=274", "PR_NUMBER=275", "OMP_SESSION_ID=owner-session"], { encoding: "utf8", env, timeout: 30_000 });
+    const featureDefinition = join(repo.root, "staged", "feature.yaml");
+    const accepted = spawnSync("dagu", ["start", "--only", "admission", "--run-id", testRunId("operational"), featureDefinition, "--", "ISSUE=274", "PR_NUMBER=275", "OMP_SESSION_ID=owner-session"], { encoding: "utf8", env, timeout: 30_000 });
     assert.equal(accepted.status, 0, accepted.stdout + accepted.stderr);
     assert.match(accepted.stdout, /admission.*succeeded/);
-    const enqueued = spawnSync("dagu", ["enqueue", "--run-id", testRunId("operational-queued"), stage, "--", "ISSUE=274", "PR_NUMBER=275", "OMP_SESSION_ID=owner-session"], { encoding: "utf8", env, timeout: 30_000 });
+    const enqueued = spawnSync("dagu", ["enqueue", "--run-id", testRunId("operational-queued"), featureDefinition, "--", "ISSUE=274", "PR_NUMBER=275", "OMP_SESSION_ID=owner-session"], { encoding: "utf8", env, timeout: 30_000 });
     assert.equal(enqueued.status, 0, enqueued.stdout + enqueued.stderr);
-    const adopted = readFileSync(stage, "utf8");
+    const adopted = readFileSync(join(repo.root, "staged", "feature.yaml"), "utf8");
     assert.match(adopted, /- GATE: "printf adopted-gate"/);
     assert.match(adopted, /- REBASE_RESOLVER: "printf adopted-resolver"/);
     assert.match(adopted, /- REQUIRED_CHECK: "adopted-check"/);

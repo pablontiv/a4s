@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { fixture } from "./fixtures/station.ts";
+import { exampleAnswers, serializeAnswers } from "../src/answers.ts";
 import { REQUIRED_DAGU_VERSION } from "../src/bundle.ts";
 
 test("station installer reports version mismatch before replacing existing configuration", () => {
@@ -43,8 +44,8 @@ test("station apply binds probes to a stamped render and its derived installed q
     const bin = join(f.root, "bin");
     mkdirSync(bin);
     writeFileSync(join(bin, "dagu"), `#!/bin/sh\nprintf '${REQUIRED_DAGU_VERSION}\\n'\n`, { mode: 0o755 });
-    const render = join(f.root, "feature.yaml");
-    writeFileSync(render, "queue: example\nlabels: [dagu-feature-queue-concurrency=6]\n");
+    const render = join(f.root, "answers.json");
+    writeFileSync(render, serializeAnswers(exampleAnswers({ lane: "example", queueConcurrency: 6 })));
     const original = "queues:\n  enabled: true\n  config:\n    - name: example\n      max_concurrency: 3\n";
     writeFileSync(join(f.home, "config.yaml"), original);
     const drift = f.run([...hooks, "--repo-dag", render], { PATH: `${bin}:${process.env.PATH}` });
