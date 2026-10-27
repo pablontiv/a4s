@@ -2,7 +2,7 @@
 """Comparación observacional: pi-subagents-j0k3r vs pi-subagents.
 
 Frontera verificada: 2026-09-04T04:43:09Z. Una advertencia intercom
-registró que el runtime global cambió de j0k3r a pi-subagents 0.64.0
+registró que el runtime global cambió de j0k3r a pi-subagents
 mientras una sesión seguía abierta. Las sesiones que cruzan esa frontera
 se etiquetan mixed/unknown y se excluyen de la comparación principal.
 

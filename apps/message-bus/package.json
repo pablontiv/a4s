@@ -13,9 +13,6 @@
   "bugs": {
     "url": "https://github.com/pablontiv/a4s/issues"
   },
-  "engines": {
-    "node": ">=22.19.0"
-  },
   "bin": {
     "message-bus": "./broker.cjs"
   },
@@ -32,8 +29,5 @@
     "aedes": "1.2.0",
     "aedes-persistence-level": "9.2.0",
     "classic-level": "3.0.0"
-  },
-  "devDependencies": {
-    "mqtt": "5.16.0"
   }
 }

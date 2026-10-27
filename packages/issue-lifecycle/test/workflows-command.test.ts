@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
 import extension from "../src/status/index.ts";
+import { BUNDLE_VERSION } from "../src/bundle.ts";
 
 type Handler = (args: string, ctx: unknown) => Promise<void>;
 type Widget = string[] | undefined;
@@ -20,7 +21,7 @@ const theme = {
 
 const run = (issue: number) => ({
   name: "feature", dagRunId: `widget-issue-${issue}`, statusLabel: "waiting", params: `ISSUE=${issue}`,
-  labels: ["workspace=widget", "dagu-feature-bundle=0.3.0"],
+  labels: ["workspace=widget", `dagu-feature-bundle=${BUNDLE_VERSION}`],
   nodes: [{ step: { name: "triage" }, statusLabel: "succeeded" }, { step: { name: "implement" }, statusLabel: "waiting" }],
 });
 

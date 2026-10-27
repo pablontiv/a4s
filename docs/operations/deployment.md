@@ -33,9 +33,9 @@ are recorded below.
 
 ### Stable controller versus candidate
 
-The main lane uses `@a4s/issue-lifecycle@0.5.4` for its adopted renders and
-controller, and the shared scheduled reconciler uses the 0.5.4 installation.
-Main adopted this identity through `bootstrap-a4s-v0-5-4`.
+The main lane's adopted renders and shared scheduled reconciler retain the
+controller identity recorded by their bootstrap adoption. Read those receipts
+for the installed version; the source package's current version is in its manifest.
 
 Station role jobs select executors by the unchanged receipt's exact bundle version
 and source commit, not the active installation. New installs are independent
@@ -44,10 +44,10 @@ clones under `$DAGU_HOME/executors/<package>-<version>-<sha40>`, with their own
 uses the active pin when there is no `RUN`, and otherwise requires `PRIMARY` and
 the run's immutable receipt. Missing pins fail closed.
 
-Pre-0.4 `@a4s/omp-dagu` bundles without a role-jobs entrypoint remain retained and
+Older `@a4s/omp-dagu` bundles without a role-jobs entrypoint remain retained and
 explicitly unsupported by this launcher. The #623 PASS demonstrated the
-0.5.16 bundle on the dogfood station, not repair of historical missing entrypoints,
-missing pins, or safe termination of old waiting runs (#610). Never substitute
+then-installed bundle and Dagu runtime, not the current manifest-pin upgrade,
+repair of historical missing entrypoints, missing pins, or safe termination of old waiting runs (#610). Never substitute
 the active bundle for an unsupported historical receipt.
 
 ### Independent station executors and reference-based retention
@@ -154,8 +154,9 @@ node "$CONTROLLER_CLI" enqueue \
 ```
 
 `CONTROLLER_CLI` is the identity-matched `bin/dagu-feature-bundle.ts` in a durable
-source checkout. Node >=22.19 supports direct TypeScript here; use the real
-source path because Node rejects stripping TypeScript under `node_modules`.
+source checkout. The Node requirement in root `package.json` `engines.node`
+supports direct TypeScript here; use the real source path because Node rejects
+stripping TypeScript under `node_modules`.
 The admitted feature/PoC policy fixes PRIMARY, BRANCH, GATE, REBASE_RESOLVER,
 REQUIRED_CHECK and blocker-reporting policy; the CLI rejects overrides.
 Feature and PoC renders bind `PRIMARY` to the host reference `"${A4S_PRIMARY}"`.
@@ -213,10 +214,11 @@ set rather than only a package directory.
    the release guard follows the manifest across moves. Publication alone changes
    neither installed links nor adopted renders.
 2. **Private installation:** choose durable pinned source, install dependencies,
-   verify official Dagu 2.20.1 against upstream release checksums and exact version
-   output, and review operator-owned links/PATH/config. The official asset naming
-   is `dagu_2.20.1_<os>_<arch>.tar.gz`; CI validates upstream `checksums.txt` before
-   extraction. The maintained station installer checks the same manifest pin.
+   verify official Dagu against `packages/issue-lifecycle/package.json`
+   `daguFeature.dagu`, upstream release checksums and exact version output, and
+   review operator-owned links/PATH/config. Official asset names are
+   `dagu_<daguFeature.dagu>_<os>_<arch>.tar.gz`; CI validates upstream
+   `checksums.txt` before extraction. The station installer checks the same pin.
 3. **Initial stable-controller lane adoption:** preserve the approved controller
    and shared reconciler while adopting the lane's independent PRIMARY/base/queue.
    Review lane-specific rendered values and actual evidence independently of v1
@@ -325,8 +327,8 @@ operator hook. The installer then verifies eight held running probes plus one
 queued in a4s and nine successes before opening. A hook of `true` is valid only
 in an isolated environment with no producers or schedules.
 
-The maintained proof is drained TERM restart, bounded to local Dagu 2.20.1
-(#255); host restart/distributed-worker survival is a separate proposition.
+The drained TERM restart proof in #255 ran on the then-installed Dagu release;
+it does not establish the current manifest pin, host restart or distributed-worker survival.
 After a failure during closure, admission remains closed. Inspect service,
 history and output before recovery. Preserve `.station-install.lock` barriers
 until outstanding probes finish; remove the completed lock only after recovery.
@@ -435,7 +437,7 @@ in [#438](https://github.com/pablontiv/a4s/issues/438).
 
 The temporary `a4s-v1` lane is retired: its `integration/v1` protection and remote
 branch, clean linked worktree and independent PRIMARY clone were removed.
-Its final branch tree matched the v1.0.0 merge `cacf718` on main. All inventoried
+Its final branch tree matched the v1 release merge `cacf718` on main. All inventoried
 v1-owned runs were terminal; their immutable receipts, isolated-controller
 history, six local branches (including the operator-owned #506 branch) and
 original protection/configuration were preserved under
@@ -484,7 +486,7 @@ retirement records, not runtime dependencies.
 After removal, primary remained clean on `main` at
 `4ef614d7b87a162c95c585da2c3cb85c5ea82986`. All 49 preexisting registered
 worktrees remained registered and each resolved its HEAD and common Git
-directory through the primary. Dagu 2.20.1 remained healthy and its LaunchAgent
+directory through the primary. The then-installed Dagu remained healthy and its LaunchAgent
 running. The 29 inventoried running/waiting runs, their owners and recovery
 resources were preserved. These are targeted station-retirement observations;
 the lifecycle full gate and operator validation remain separate decisions.

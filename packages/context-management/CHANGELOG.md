@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Use root Node and shared development-tool requirements, including in standalone consumer guidance.
 - Move the reusable Context Expert core to the private
   `@a4s/context-management` library in `packages/context-management`.
 - Retain public transformation, state/message, request/client, neutral binding

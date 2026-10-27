@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { parse } from "yaml";
+import { BUNDLE_VERSION } from "../src/bundle.ts";
 import {
   appendStallNotice, LONG_COMPUTATION_CONTRACT, nextShard, openComputation, readCompleted, readManifest, recordSample,
   runShards, superviseComputation, writeDecision,
@@ -154,7 +155,7 @@ test("the status watcher reads one stall notice for the owning session", async (
     const notices = await readStallNotices(root, run, AbortSignal.timeout(5_000));
     assert.equal(notices.length, 1);
     assert.equal(notices[0]!.progress.lastShard?.index, 1);
-    const runDetails = { name: "feature", dagRunId: run, statusLabel: "running", params: "ISSUE=560 OMP_SESSION_ID=owner", labels: ["dagu-feature-bundle=0.5.16"], nodes: [{ step: { name: "implement" }, statusLabel: "running" }] };
+    const runDetails = { name: "feature", dagRunId: run, statusLabel: "running", params: "ISSUE=560 OMP_SESSION_ID=owner", labels: [`dagu-feature-bundle=${BUNDLE_VERSION}`], nodes: [{ step: { name: "implement" }, statusLabel: "running" }] };
     const transitions = new Transitions("owner");
     const effects = transitions.observe(runDetails, { stalls: notices });
     assert.match(effects.wakeMessage ?? "", /\[DAGU STALL\]/);

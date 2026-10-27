@@ -7,8 +7,8 @@ repository and its private installations.
 
 ## Run locally
 
-Requires Node.js 22.19 or later and the repository's installed dependencies. From
-the repository root:
+Requires the Node.js version pinned in root `package.json` `engines.node` and the
+repository's installed dependencies, including standalone installs. From the repository root:
 
 ```sh
 npm run bus --workspace @a4s/message-bus -- 0 --db /tmp/a4s-message-bus-dev-db

@@ -11,6 +11,7 @@ import { test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { liveDagu } from "../fixtures/live-dagu.ts";
 import { PocDiagnostics } from "../fixtures/poc-diagnostics.ts";
+import { BUNDLE_VERSION } from "../../src/bundle.ts";
 
 for (const definition of [
   new URL("../../skills/issue-execution/poc.yaml", import.meta.url),
@@ -208,7 +209,7 @@ esac
     git("-C", primary, "push", "origin", "main");
     const definition = join(home, "dags", "poc.yaml");
     writeFileSync(definition, readFileSync(new URL("../../skills/issue-execution/poc.yaml", import.meta.url), "utf8")
-      .replaceAll("__DAGU_FEATURE_VERSION__", "0.3.11")
+      .replaceAll("__DAGU_FEATURE_VERSION__", BUNDLE_VERSION)
       .replaceAll("TEMPLATE_REPO", "decline263").replaceAll("TEMPLATE_BASE_BRANCH", "main")
       .replaceAll("__PRIMARY__", primary).replaceAll("__TEST_PATHS__", "_test$")
       .replaceAll("__ESCALATION_POC_INCONCLUSIVE__", '"2"'));

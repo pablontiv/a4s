@@ -4,7 +4,8 @@ Private A4S messaging for native OMP sessions. The package owns the canonical pr
 
 ## Load and operate
 
-From a checkout with dependencies installed, start the broker separately and load this package root:
+Use the Node.js requirement in root `package.json` `engines.node`, including
+standalone consumers. From a checkout with dependencies installed, start the broker separately and load this package root:
 
 ```sh
 npm start --workspace @a4s/message-bus

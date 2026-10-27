@@ -47,7 +47,7 @@ function outputMap(stdout: string): Record<string, string> {
   }
   return outputs;
 }
-// Mirrors Dagu 2.20.1 parseDeclaredStepOutputs for single-line name=value records.
+// Mirrors the pinned Dagu runtime's parseDeclaredStepOutputs for single-line name=value records.
 function parseDeclaredStepOutputs(text: string, names: readonly string[]): Record<string, string> {
   const normalized = text.replaceAll("\r\n", "\n").replaceAll("\r", "\n");
   if (normalized === "") throw new Error(`declared step output "${names[0]}" was not emitted`);

@@ -73,7 +73,12 @@ Status watcher unit tests own a temporary Git repository with an origin matching
 their fake Dagu workspace. They run with the checkout's existing origin and path,
 including local clones whose origin names differ from the fixture workspace.
 
-Node.js >=22.19.0 and access to the pinned registry dependencies are required.
+The Node.js requirement is pinned in root `package.json` `engines.node`; registry
+access to the locked dependencies is required. Shared development tools are
+declared once in root `devDependencies` and resolved by workspace scripts.
+The lifecycle's `test/version-pins.test.ts` rejects copied Dagu, Node and shared
+development-tool versions in tracked source; manifests own compatibility ranges,
+and historical evidence and adopted DAG stamps remain unchanged.
 Root and CI run all eight workspace test suites and seven declared typechecks;
 the optional-host tool-row workspace is test-only because its renderer types
 belong to the consumer's Pion host. See

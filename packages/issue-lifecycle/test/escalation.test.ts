@@ -14,6 +14,7 @@ import { liveDagu } from "./fixtures/live-dagu.ts";
 import { testRunId } from "./fixtures/run-id.ts";
 import { readEscalationDiagnostic } from "../src/status/repository.ts";
 import { Transitions, type RunDetails } from "../src/status/progress.ts";
+import { REQUIRED_DAGU_VERSION } from "../src/bundle.ts";
 
 const execute = promisify(execFile);
 const helper = fileURLToPath(new URL("../skills/issue-execution/escalation.py", import.meta.url));
@@ -126,7 +127,7 @@ test("repair paths enter budget boundaries while preserving native static destin
   assert.match(steps.get("rebase")!.run!, /escalation finding conflict/);
 });
 
-test("Dagu 2.20.1 escalation persists through restart, rejects stale push-back, renews, changes route and stops with onExit", {
+test(`Dagu ${REQUIRED_DAGU_VERSION} escalation persists through restart, rejects stale push-back, renews, changes route and stops with onExit`, {
   ...liveDagu, timeout: 180_000,
 }, async t => {
   const root = mkdtempSync(join(tmpdir(), "escalation558-live-"));
@@ -227,7 +228,7 @@ test("Dagu 2.20.1 escalation persists through restart, rejects stale push-back, 
     await human("push-back", "recover_gate", iteration);
   }
   try {
-    assert.equal(dagu("version").trim(), "2.20.1");
+    assert.equal(dagu("version").trim(), REQUIRED_DAGU_VERSION);
     dagu("validate", path);
     await start();
     dagu("enqueue", "--run-id", id, path);

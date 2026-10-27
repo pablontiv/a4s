@@ -2,7 +2,8 @@
 
 Private, host-neutral TypeScript library for Jev-scored transcript compaction and
 adaptive trigger decisions. The package's public entrypoint is `core/index.ts`;
-consumers use a TypeScript-aware runtime such as `tsx` and Node.js >=22.19.0.
+consumers use a TypeScript-aware runtime such as `tsx` and the Node.js requirement
+in the repository root `package.json` `engines.node`, including standalone installs.
 Distribution stays local to this repository and its private consumers.
 
 ## Public API
@@ -114,8 +115,6 @@ scoring used the explicit deterministic asker rather than an external model.
 The retained transformation/request/state implementation derives from
 [`fast-jev-compaction`](https://github.com/tamaratran/fast-jev-compaction).
 Trigger timing and bounded conversation derive from
-[`compact-adviser`](https://github.com/kunchenguid/compact-adviser.git), tag
-`compact-adviser-v0.1.12`, commit
-`ef216af7cb639947bb4642fdf063117f12a91fc6`. A4S adds adaptive policy bands and a
-deterministic ceiling. Both upstream MIT licenses, source records and derived
-paths are preserved in [`NOTICE`](./NOTICE).
+[`compact-adviser`](https://github.com/kunchenguid/compact-adviser.git). A4S adds
+adaptive policy bands and a deterministic ceiling. The exact upstream source
+revisions, both MIT licenses and derived paths are preserved in [`NOTICE`](./NOTICE).

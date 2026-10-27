@@ -13,8 +13,8 @@ export type LifecycleProtocols = Record<LifecycleCheckpoint, string>;
 
 /**
  * Checkpoint contracts this extension no longer executes, and the bundle that does.
- * `marker-agent/1` is the 0.3.102 `TRIAGE_REVIEW AGENT=` verifier.
- * `human-task/1` is the 0.3.108 coordinator human-task triage completion guard.
+ * `marker-agent/1` is the retired `TRIAGE_REVIEW AGENT=` verifier.
+ * `human-task/1` is the retired coordinator human-task triage completion guard.
  */
 export const RETIRED_PROTOCOL_BUNDLES: Readonly<Record<string, string>> = {
   "triage=marker-agent/1": "0.3.102",

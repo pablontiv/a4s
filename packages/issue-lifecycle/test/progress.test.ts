@@ -8,10 +8,10 @@ import { currentStep, renderOffline, renderRun, renderWidget, runLabel, Transiti
 import { resolveRunPrimary } from "../src/run-primary.ts";
 import type { RunDetails } from "../src/status/progress.ts";
 
-const labels = ["workspace=a4s", "dagu-feature-bundle=0.3.1"];
+const labels = ["workspace=a4s", `dagu-feature-bundle=${BUNDLE_VERSION}`];
 const run: RunDetails = {
   name: "feature", dagRunId: "a4s-issue-157", statusLabel: "running", params: "ISSUE=157 PRIMARY=/tmp/a4s",
-  labels: ["workspace=a4s", "dagu-feature-bundle=0.3.1"],
+  labels,
   nodes: [
     { step: { name: "triage" }, statusLabel: "succeeded" },
     { step: { name: "optional" }, statusLabel: "skipped" },

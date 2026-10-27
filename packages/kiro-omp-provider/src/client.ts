@@ -137,6 +137,7 @@ async function doRequest(options: KiroGenerateOptions, extra?: { timeoutMs?: num
 		"x-amzn-kiro-agent-mode": options.agentMode ?? "vibe",
 		"x-amzn-kiro-profile-arn": options.profileArn,
 		"x-amzn-codewhisperer-optout": "true",
+		// External API client identity, not this package's version or a development-tool pin.
 		"User-Agent": "kiro-cli/2.21.0 linux/x86_64",
 	};
 	const timeoutMs = extra?.timeoutMs ?? 30_000;

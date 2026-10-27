@@ -530,22 +530,26 @@ describe("tool row host contract", () => {
 });
 
 describe("package host dependencies", () => {
-	it("declares compatible optional hosts and public Pi development dependencies", () => {
+	it("declares compatible optional hosts and uses shared public Pi development dependencies", () => {
 		const manifest = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as {
 			dependencies?: Record<string, string>;
 			peerDependencies?: Record<string, string>;
 			peerDependenciesMeta?: Record<string, { optional?: boolean }>;
 			devDependencies?: Record<string, string>;
 		};
-		const version = "1.0.2-dev.40713b10ba6db5c6f083026e3367e2af72cea0ea";
+		const root = JSON.parse(readFileSync(new URL("../../../package.json", import.meta.url), "utf8")) as {
+			devDependencies: Record<string, string>;
+		};
 		assert.equal(manifest.dependencies?.["@earendil-works/pi-tui"], undefined);
 		assert.equal(manifest.peerDependencies?.["@earendil-works/pi-tui"], "*");
 		assert.equal(manifest.peerDependencies?.["@earendil-works/pi-coding-agent"], "*");
-		assert.equal(manifest.peerDependencies?.["@pablontiv/pion"], `>=1.0.4 || ${version}`);
+		assert.match(manifest.peerDependencies?.["@pablontiv/pion"] ?? "", /^>=\d+\.\d+\.\d+ \|\| \d+\.\d+\.\d+-dev\.[a-f0-9]+$/);
 		assert.equal(manifest.peerDependenciesMeta?.["@earendil-works/pi-tui"]?.optional, true);
 		assert.equal(manifest.peerDependenciesMeta?.["@earendil-works/pi-coding-agent"]?.optional, true);
 		assert.equal(manifest.peerDependenciesMeta?.["@pablontiv/pion"]?.optional, true);
-		assert.equal(manifest.devDependencies?.["@earendil-works/pi-tui"], "1.0.4");
-		assert.equal(manifest.devDependencies?.["@earendil-works/pi-coding-agent"], "1.0.3");
+		for (const dependency of ["@earendil-works/pi-tui", "@earendil-works/pi-coding-agent"]) {
+			assert.equal(manifest.devDependencies?.[dependency], undefined);
+			assert.match(root.devDependencies[dependency] ?? "", /^\d+\.\d+\.\d+$/);
+		}
 	});
 });

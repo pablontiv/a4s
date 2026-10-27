@@ -9,7 +9,6 @@
     "directory": "packages/kiro-omp-provider"
   },
   "type": "module",
-  "engines": { "node": ">=22.19.0" },
   "description": "Extension omp para Kiro (GenerateAssistantResponse + eventstream binario). Runtime: bun (bun:sqlite, Bun.spawn, bun:test) — migracion a node:test pendiente; sin script test hasta entonces.",
   "scripts": {
     "test:bun": "bun test tests/unit",

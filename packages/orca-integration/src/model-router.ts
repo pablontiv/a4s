@@ -241,7 +241,7 @@ function renderRoutingDirective(routes: readonly ResolvedOrcaModelRoute[]): stri
     'Every fresh Orca worker MUST name both --agent and --model. Never inherit an Orca agent default.',
     'OMP resolved each responsibility role through its current configured model candidates. Pass the concrete result shown:',
     rows,
-    'OMP 18.10.3 treats a CLI model override as the child default role, so runtime retries use retry.fallbackChains.default.',
+    'OMP treats a CLI model override as the child default role, so runtime retries use retry.fallbackChains.default.',
     'After worker-start, verify launch.requested.model and launch.effective.model equal the selected concrete model.',
     'A reused --terminal keeps its existing model; reuse it only when that effective route still matches the task.',
   ].join('\n')

@@ -1,6 +1,7 @@
 # A4S Hot Reload
 
-Private workspace package `@a4s/hot-reload`, version `0.1.0`. Retained A4S
+Private workspace package `@a4s/hot-reload`; its version is in `package.json`.
+Use the Node.js requirement in the repository root `package.json` `engines.node`. Retained A4S
 extension shims import `hotReload` from this package. The implementation and its
 generation/lifecycle behavior are preserved by the package-identity cutover.
 
@@ -34,7 +35,7 @@ a restart as described by the [Orca consumer](../orca-integration/README.md).
 Runtime observations for [issue #421](https://github.com/pablontiv/a4s/issues/421)
 cover separate scenarios; they are not one combined invocation.
 
-The retained 2026-10-20 native OMP 18.12.3 ACP/RPC idle exercise recorded
+The retained 2026-10-20 native OMP ACP/RPC idle exercise recorded
 fresh generation B import, A `session_shutdown` before B `session_start`,
 exactly one B callback per subsequent probe, and retention of B after a
 throwing import. ACP materialized the session and RPC exercised the wrapper
@@ -43,7 +44,7 @@ processes exited 0. These observations are reused from prior native quality
 findings and durable issue evidence; the historical raw summary is no longer
 available for fresh inspection.
 
-On 2026-10-21, native OMP 18.12.5 recorded `/reload-plugins` arriving while
+On 2026-10-21, the then-installed native OMP recorded `/reload-plugins` arriving while
 a real model turn waited in a real tool (`idle=false`). Reload remained
 deferred through tool release and genuine `agent_end`; only afterwards,
 at idle, did A shut down and B start. The subsequent probe had one B callback.
@@ -52,7 +53,7 @@ and lifecycle events. This run used the unchanged candidate `hotReload` and
 actual unchanged Orca factory through a temporary generation-instrumentation
 wrapper, not `reloadable.ts` as its direct entry.
 
-A separate native OMP 18.12.5 unchanged-entry idle exercise statically
+A separate unchanged-entry native OMP idle exercise statically
 imported and invoked the physical candidate Orca `src/reloadable.ts` default
 export. It recorded the returned entry, eight host event registrations,
 genuine `session_start`, and wrapper input callbacks for `/reload-plugins`

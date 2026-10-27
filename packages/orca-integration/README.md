@@ -35,7 +35,7 @@ The routing module uses OMP model roles rather than maintaining a second model t
 
 Before every coordinator turn it resolves those aliases through OMP's `ctx.models.resolve()` API. That API expands the role's configured candidate list and returns the first currently available model. Fresh OMP workers receive that concrete `provider/id`, so Orca can record and verify the requested and effective launch model.
 
-OMP 18.10.3 rewrites any CLI `--model` override into the child session's `default` role. Therefore provider retries inside the worker use `retry.fallbackChains.default`, not the originating role's runtime chain. This is an explicit compatibility choice: role-specific model selection is preserved; role-specific runtime retry identity is not. The router blocks `@role` values on fresh OMP starts so the coordinator cannot accidentally assume otherwise.
+The supported OMP host rewrites any CLI `--model` override into the child session's `default` role. Therefore provider retries inside the worker use `retry.fallbackChains.default`, not the originating role's runtime chain. This is an explicit compatibility choice: role-specific model selection is preserved; role-specific runtime retry identity is not. The router blocks `@role` values on fresh OMP starts so the coordinator cannot accidentally assume otherwise.
 
 It also blocks fresh `worker-start` calls missing either `--agent` or `--model`, and concrete OMP model specs that do not resolve through the current OMP registry. `--terminal` reuse remains unchanged because reused terminals keep their existing model.
 
@@ -43,7 +43,8 @@ The extension does not infer task responsibility by parsing shell text. The coor
 
 ## Install globally
 
-Add the package root to the user-level OMP `extensions` setting:
+Use the Node.js requirement in root `package.json` `engines.node`, including
+standalone consumers. Add the package root to the user-level OMP `extensions` setting:
 
 ```yaml
 extensions:

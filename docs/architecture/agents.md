@@ -61,7 +61,7 @@ In the temporary config, `disabledProviders: ["claude-plugins"]` excludes market
 
 ## Native verification for #429
 
-OMP **18.12.6** completed all six roles in the candidate checkout and again in an isolated private project using the installation above. Each parent task transcript recorded **`agentSource=project`**. Each child's persisted `session_init` contained the corresponding canonical `.omp/agents/<role>.md` body as the exact role-prompt prefix, together with its tool list and resolved model. For the private project, all six installed links resolved to those same canonical files. These are actual child executions, not name-only discovery.
+The then-installed OMP runtime completed all six roles in the candidate checkout and again in an isolated private project using the installation above. Each parent task transcript recorded **`agentSource=project`**. Each child's persisted `session_init` contained the corresponding canonical `.omp/agents/<role>.md` body as the exact role-prompt prefix, together with its tool list and resolved model. For the private project, all six installed links resolved to those same canonical files. These are actual child executions, not name-only discovery.
 
 | Role | Repository child init ID | Private child init ID | Observed tools and bounded outcome |
 |---|---|---|---|

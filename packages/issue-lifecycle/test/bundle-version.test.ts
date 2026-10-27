@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { REQUIRED_DAGU_VERSION } from "../src/bundle.ts";
 
 const bundle = "packages/issue-lifecycle";
 const skills = `${bundle}/skills`;
@@ -72,7 +73,7 @@ function fixture(): { root: string; put: (path: string, text: string) => void; c
   git(root, "config", "user.email", "bundle@example.test");
   const commit = (): void => { git(root, "add", "."); git(root, "commit", "-m", "fixture"); };
   put(`${bundle}/package.json`, JSON.stringify({
-    name: "@a4s/issue-lifecycle", version: "0.2.0", daguFeature: { dagu: "2.20.1" },
+    name: "@a4s/issue-lifecycle", version: "0.2.0", daguFeature: { dagu: REQUIRED_DAGU_VERSION },
     bin: { "dagu-feature-bundle": "./bin/dagu-feature-bundle.ts" },
   }));
   put(`${bundle}/CHANGELOG.md`, "## 0.2.0\n");

@@ -10,6 +10,7 @@ import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { REQUIRED_DAGU_VERSION } from "../src/bundle.ts";
 
 const protectBin = mkdtempSync(join(tmpdir(), "a4s-protect-bin-"));
 symlinkSync(fileURLToPath(new URL("../bin/dagu-feature-protect.ts", import.meta.url)), join(protectBin, "dagu-feature-protect"));
@@ -217,7 +218,7 @@ test("isolated Dagu rebases colliding candidates before gate and publishes the n
     ...env, STAGE: staged, SKILL_DIR: dirname(template), REPO: "fixture", BASE_BRANCH: "main",
     GATE: repo.env.GATE, REQUIRED_CHECK: "validate", TEST_PATHS: "(^|/)test/",
     REBASE_RESOLVER: repo.env.REBASE_RESOLVER, BUNDLE_NAME: "@a4s/issue-lifecycle",
-    BUNDLE_VERSION: "0.3.18", DAGU_VERSION: "2.20.1", SOURCE_NWO: "fixture/repository",
+    BUNDLE_VERSION: "0.3.18", DAGU_VERSION: REQUIRED_DAGU_VERSION, SOURCE_NWO: "fixture/repository",
     SOURCE_SHA: repo.before, DAG_RUN_ID: "fixture-bootstrap",
   };
   put(home, "dags/feature.yaml", `type: graph\nshell: bash\nenv:\n${Object.entries({ ...repo.env, VALIDATION: "", PATH: env.PATH }).map(([key, value]) => `  ${key}: ${JSON.stringify(value)}`).join("\n")}\nsteps:\n` +

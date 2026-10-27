@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 import { after, test } from "node:test";
 import { Transitions } from "../src/status/progress.ts";
 import type { RunDetails } from "../src/status/progress.ts";
-import { BUNDLE_VERSION } from "../src/bundle.ts";
+import { BUNDLE_VERSION, REQUIRED_DAGU_VERSION } from "../src/bundle.ts";
 import { stubHistory, withResourceGuard } from "./resource-fixtures.ts";
 import { liveDagu, liveDaguVersion } from "./fixtures/live-dagu.ts";
 import { roleAdmission, roleExecution } from "./role-job-fixtures.ts";
@@ -2201,7 +2201,7 @@ for (const [name, definition] of definitions) {
     ...liveDagu,
     timeout: 360_000,
   }, async (t) => {
-    assert.match(liveDaguVersion, /2\.20\.1/);
+    assert.equal(liveDaguVersion, REQUIRED_DAGU_VERSION);
     const fixture = await recoveryFixture();
     const { root, home, port, env, until, state } = fixture;
     const api = `http://127.0.0.1:${port}/api/v1`;
@@ -2855,7 +2855,7 @@ test("adopted policy rejects run overrides before repository writes and admits o
     GATE: "printf adopted-gate", REQUIRED_CHECK: "adopted-check", REPO: "fixture", BASE_BRANCH: "main",
     REBASE_RESOLVER: "printf adopted-resolver",
     STAGE: stage, TEST_PATHS: "test/", BUNDLE_NAME: "@a4s/issue-lifecycle", BUNDLE_VERSION,
-    DAGU_VERSION: "2.20.1", SOURCE_NWO: "fixture/repo", SOURCE_SHA: "1".repeat(40), DAG_RUN_ID: "bootstrap-fixture",
+    DAGU_VERSION: REQUIRED_DAGU_VERSION, SOURCE_NWO: "fixture/repo", SOURCE_SHA: "1".repeat(40), DAG_RUN_ID: "bootstrap-fixture",
   };
   mkdirSync(join(home, "dags"), { recursive: true });
   writeFileSync(join(home, "config.yaml"), `host: 127.0.0.1\nport: ${port}\nauth:\n  mode: none\ncoordinator:\n  enabled: false\n`);
@@ -3005,7 +3005,7 @@ test("real Dagu automatically recovers a stale Failed feature in one reconcile t
   ...liveDagu,
   timeout: 120_000,
 }, async t => {
-  assert.equal(liveDaguVersion, "2.20.1");
+  assert.equal(liveDaguVersion, REQUIRED_DAGU_VERSION);
   const fixture = await recoveryFixture();
   try {
     const id = `stale-recovery-${fixture.suffix}`;
@@ -3027,7 +3027,7 @@ test("real Dagu automatically recovers a stale Failed feature in one reconcile t
     const statusFile = join(store, statusPath);
     const snapshot = JSON.parse(readFileSync(statusFile, "utf8").trim().split("\n").at(-1)!);
     snapshot.status = 2;
-    snapshot.error = "process terminated unexpectedly - stale local process detected";
+    snapshot.error = STALE_PROCESS_ERROR;
     for (const node of snapshot.nodes) if (node.status === 7 || node.status === 0) node.status = 2;
     appendFileSync(statusFile, JSON.stringify(snapshot) + "\n");
     // Only the external scheduler overwrite is injected. Detection, budgeting,

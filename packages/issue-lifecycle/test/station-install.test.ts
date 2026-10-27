@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { fixture } from "./fixtures/station.ts";
+import { REQUIRED_DAGU_VERSION } from "../src/bundle.ts";
 
 test("station installer reports version mismatch before replacing existing configuration", () => {
   const f = fixture();
@@ -17,7 +18,7 @@ test("station installer reports version mismatch before replacing existing confi
     writeFileSync(join(f.home, "config.yaml"), original);
     const result = f.run([], { PATH: `${bin}:${process.env.PATH}` });
     assert.equal(result.status, 1);
-    assert.match(result.stderr, /dagu version="2\.19\.0" required=2\.20\.1/);
+    assert.ok(result.stderr.includes(`dagu version="2.19.0" required=${REQUIRED_DAGU_VERSION}`), result.stderr);
     assert.equal(readFileSync(join(f.home, "config.yaml"), "utf8"), original);
   } finally { f.dispose(); }
 });
@@ -41,7 +42,7 @@ test("station apply binds probes to a stamped render and its derived installed q
     assert.match(missing.stderr, /requires --repo-dag/);
     const bin = join(f.root, "bin");
     mkdirSync(bin);
-    writeFileSync(join(bin, "dagu"), "#!/bin/sh\nprintf '2.20.1\\n'\n", { mode: 0o755 });
+    writeFileSync(join(bin, "dagu"), `#!/bin/sh\nprintf '${REQUIRED_DAGU_VERSION}\\n'\n`, { mode: 0o755 });
     const render = join(f.root, "feature.yaml");
     writeFileSync(render, "queue: example\nlabels: [dagu-feature-queue-concurrency=6]\n");
     const original = "queues:\n  enabled: true\n  config:\n    - name: example\n      max_concurrency: 3\n";
@@ -62,7 +63,7 @@ function executorsFixture() {
   const history = join(f.root, "history.json");
   const calls = join(f.root, "calls");
   writeFileSync(history, "[]");
-  writeFileSync(join(bin, "dagu"), `#!/bin/sh\nif [ "$1" = version ]; then echo 2.20.1; else printf '%s\\n' "$*" >> '${calls}'; cat '${history}'; fi\n`, { mode: 0o755 });
+  writeFileSync(join(bin, "dagu"), `#!/bin/sh\nif [ "$1" = version ]; then echo ${REQUIRED_DAGU_VERSION}; else printf '%s\\n' "$*" >> '${calls}'; cat '${history}'; fi\n`, { mode: 0o755 });
   writeFileSync(join(bin, "npm"), `#!/bin/sh\nprintf '%s\\n' "$*" >> '${calls}'\n`, { mode: 0o755 });
   // Exercise the real TypeScript dispatcher with Node's native TS support;
   // production uses Bun. Only the interpreter name differs in this fixture.
@@ -82,7 +83,7 @@ function executorsFixture() {
   writeFileSync(join(source, "package.json"), '{"private":true,"type":"module"}\n');
   writeFileSync(join(pkg, "bin/dagu-role-jobs.ts"), `import { BUNDLE_VERSION } from "../src/bundle.ts";\nconsole.log(JSON.stringify({ version: BUNDLE_VERSION, args: process.argv.slice(2) }));\n`);
   function release(version: string) {
-    writeFileSync(join(pkg, "package.json"), JSON.stringify({ name: "@a4s/issue-lifecycle", version, type: "module", daguFeature: { dagu: "2.20.1" } }));
+    writeFileSync(join(pkg, "package.json"), JSON.stringify({ name: "@a4s/issue-lifecycle", version, type: "module", daguFeature: { dagu: REQUIRED_DAGU_VERSION } }));
     git("add", "."); git("commit", "-qm", `Release ${version}`);
     return git("rev-parse", "HEAD");
   }
@@ -277,7 +278,7 @@ test("historical entrypoint absence survives independent migration and only unre
   try {
     assert.equal(f.install().status, 0);
     f.git("rm", "packages/issue-lifecycle/bin/dagu-role-jobs.ts");
-    writeFileSync(join(f.source, "packages/issue-lifecycle/package.json"), JSON.stringify({ name: "@a4s/issue-lifecycle", version: "0.3.98", type: "module", daguFeature: { dagu: "2.20.1" } }));
+    writeFileSync(join(f.source, "packages/issue-lifecycle/package.json"), JSON.stringify({ name: "@a4s/issue-lifecycle", version: "0.3.98", type: "module", daguFeature: { dagu: REQUIRED_DAGU_VERSION } }));
     f.git("add", "."); f.git("commit", "-qm", "Historical bundle without role-jobs");
     const commit = f.git("rev-parse", "HEAD");
     const path = f.executor("0.3.98", commit);

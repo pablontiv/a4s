@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Use root Node and shared development-tool requirements, workspace-local hot-reload identity and the broker workspace's Aedes dependency for tests; retain the messaging runtime and protocol contracts.
 - Move the private canonical package to `@a4s/agent-messaging` at `packages/agent-messaging`, retaining OMP reloadable loading, protocol, MQTT, shared session delivery/recovery/settings/arbitration, observer and canonical diagnostics.
 - Publish the clean public surface `agent_messaging_send`, `/agent-messaging`, `/agent-messaging-settings`, `createAgentMessagingOmp`, `createAgentMessagingAdapter`, `AgentMessaging*` types and `AGENT_MESSAGING_*` constants; retain the functional `/mq-send` debug command.
 - Read `agent-messaging.json` in the OMP agent directory and use `A4S_AGENT_MESSAGING_BROKER_URL` / `A4S_AGENT_MESSAGING_REQUEST_TTL`. Shorthand sends require an explicitly configured canonical peer. The README describes the one-time operator migration of local settings, extension lists, commands and prompts.

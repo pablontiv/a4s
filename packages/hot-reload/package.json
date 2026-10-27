@@ -9,15 +9,9 @@
     "directory": "packages/hot-reload"
   },
   "type": "module",
-  "engines": { "node": ">=22.19.0" },
   "exports": { ".": "./src/index.ts" },
   "scripts": {
     "test": "tsx --test test/*.test.ts",
     "typecheck": "tsc --noEmit"
-  },
-  "devDependencies": {
-    "@types/node": "26.6.1",
-    "tsx": "4.23.13",
-    "typescript": "7.0.2"
   }
 }

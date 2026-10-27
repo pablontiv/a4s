@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
-/** Official Dagu 2.20.1 scheduler text for a stale local-process repair. */
+/** Manifest-pinned official Dagu scheduler text for a stale local-process repair. */
 export const STALE_PROCESS_ERROR = "process terminated unexpectedly - stale local process detected";
 
 /** One automatic retry for a run attempt. A repeated observation is reported, not retried. */
@@ -33,7 +33,7 @@ const STATUS_EVENTS = new Set([
   "dag.run.queued", "dag.run.running", "dag.run.waiting", "dag.run.succeeded",
   "dag.run.partially_succeeded", "dag.run.failed", "dag.run.aborted", "dag.run.rejected",
 ]);
-// The observed scheduler race overwrites a wait/resume in less than a second.
+// The historical scheduler race overwrote a wait/resume in less than a second.
 // Do not treat a later, unrelated stale-process failure as that race.
 const STALE_REPAIR_WINDOW_MS = 5_000;
 const NODE_STATUS = ["not_started", "running", "failed", "aborted", "succeeded", "skipped", "partially_succeeded", "waiting", "rejected", "retrying"] as const;

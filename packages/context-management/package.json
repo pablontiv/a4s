@@ -14,19 +14,11 @@
     "url": "https://github.com/pablontiv/a4s/issues"
   },
   "type": "module",
-  "engines": {
-    "node": ">=22.19.0"
-  },
   "exports": {
     ".": "./core/index.ts"
   },
   "scripts": {
     "test": "tsx --test test/*.test.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json"
-  },
-  "devDependencies": {
-    "@types/node": "26.6.1",
-    "tsx": "4.23.13",
-    "typescript": "7.0.2"
   }
 }
