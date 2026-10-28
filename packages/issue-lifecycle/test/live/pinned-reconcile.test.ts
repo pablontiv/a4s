@@ -94,6 +94,15 @@ test("a B-pinned live tick dispatches A and B and leaves an unavailable artifact
       assert.ok(output.includes(`a4s-run run=${run} artifact=${artifactToken(tuple)} command=reconcile inspect`), output);
       assert.ok(output.includes(`a4s-run run=${run} artifact=${artifactToken(tuple)} command=reconcile finish`), output);
     }
+    for (const phase of ["inspect", "finish"]) {
+      assert.ok(output.includes(`a4s-run run=pinned-b artifact=${artifactToken(b)} command=reconcile ${phase} dispatch=in-process`), output);
+      assert.ok(!output.includes(`a4s-run run=pinned-a artifact=${artifactToken(a)} command=reconcile ${phase} dispatch=in-process`), output);
+    }
+    const classification = output.split("\n").filter(line => line.startsWith("reconcile-metric "))
+      .map(line => JSON.parse(line.slice("reconcile-metric ".length)) as Record<string, unknown>)
+      .find(metric => metric.phase === "classify");
+    assert.equal(classification?.artifactVerifications, 3);
+    assert.equal(classification?.inProcessActions, 2);
     assert.match(output, /reconcile-failure run=pinned-missing status=1/);
     assert.equal(readFileSync(join(stateFor("pinned-missing"), "receipt.json"), "utf8"), missingReceipt);
     assert.deepEqual(readdirSync(stateFor("pinned-missing")), ["receipt.json"]);

@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
-import { spawn, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:http";
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import test from "node:test";
-import { admissionFixture, compiledArtifact } from "./fixtures/admission.ts";
+import { admissionFixture, compiledA4sBin, compiledArtifact } from "./fixtures/admission.ts";
+import { makeArchive } from "./fixtures/artifact.ts";
 import { roleAdmission } from "./role-job-fixtures.ts";
 import { artifactToken, type ArtifactTuple } from "../src/release.ts";
 import { runMutationDecision } from "../src/triage/run-guard.ts";
@@ -12,6 +13,7 @@ import { receiptCompatibility, recordRunObservation } from "../src/status/receip
 import { renderWidget, type RunDetails } from "../src/status/progress.ts";
 import { protectionPath, readProtection } from "../src/integration-protection.ts";
 import { roleRuntimeFixture } from "./fixtures/role-runtime.ts";
+import { RunArtifactScope } from "../src/run-artifact.ts";
 
 function save(f: ReturnType<typeof admissionFixture>, run: string, artifact: ArtifactTuple): void {
   const receipt = roleAdmission(f.packageDir, f.home, run, 'env: []\nsteps:\n  - run: \'"$A4S_BIN" role-jobs stage triage\'\n', artifact);
@@ -179,4 +181,80 @@ test("release-independent HUD and plugin mutations dispatch A while B is install
     if (server.listening) { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); }
     f.dispose();
   }
+});
+
+test("tick verification shares artifact evidence but rechecks every receipt and expires with the tick", async () => {
+  const f = admissionFixture();
+  try {
+    const tuple = compiledArtifact(f.home);
+    save(f, "first", tuple); save(f, "second", tuple);
+    const scope = new RunArtifactScope();
+    const first = await scope.verify(f.packageDir, "first");
+    const second = await scope.verify(f.packageDir, "second");
+    assert.equal(first.cached, second.cached);
+    assert.equal(scope.artifactVerifications, 1);
+    const receipt = JSON.parse(readFileSync(f.receipt("second"), "utf8"));
+    receipt.contracts.roleJobStore = 999;
+    writeFileSync(f.receipt("second"), JSON.stringify(receipt));
+    await assert.rejects(scope.verify(f.packageDir, "second"), /Unsupported receipt.*job-store/);
+    assert.equal(scope.artifactVerifications, 1);
+    assert.equal((await scope.verify(f.packageDir, "first")).cached, first.cached);
+    writeFileSync(join(first.cached.directory, "identity.json"), "{}\n");
+    await assert.rejects(new RunArtifactScope().verify(f.packageDir, "first"), /Modified artifact payload/);
+    assert.deepEqual(readdirSync(dirname(f.receipt("first"))), ["receipt.json"]);
+    assert.deepEqual(readdirSync(dirname(f.receipt("second"))), ["receipt.json"]);
+  } finally { f.dispose(); }
+});
+
+test("native classification rechecks changed receipts before writing and restores station context", () => {
+  const f = admissionFixture();
+  try {
+    const tuple = compiledArtifact(f.home), executable = join(f.home, "cache/a4s", tuple.version, "a4s");
+    save(f, "changed", tuple); save(f, "compatible", tuple);
+    const bin = join(f.root, "tick-bin"); mkdirSync(bin);
+    writeFileSync(join(bin, "dagu"), "#!/bin/sh\nprintf 'Waiting\\n├─triage [waiting]\\n'\n", { mode: 0o755 });
+    writeFileSync(join(bin, "gh"), `#!/usr/bin/env node
+const fs = require("node:fs");
+if (process.env.RUN !== "station-sentinel") process.exit(92);
+const receipt = JSON.parse(fs.readFileSync(process.env.CHANGED_RECEIPT, "utf8"));
+receipt.contracts.roleJobStore = 999;
+fs.writeFileSync(process.env.CHANGED_RECEIPT, JSON.stringify(receipt));
+console.log(JSON.stringify([{ number: 189, state: "open" }, { number: 190, state: "open" }]));
+`, { mode: 0o755 });
+    const output = join(f.root, "classify.output");
+    const result = spawnSync(executable, ["reconcile", "classify", output], { encoding: "utf8", env: { ...process.env,
+      PATH: `${bin}:${process.env.PATH}`, DAGU_HOME: f.home, A4S_ARTIFACT: artifactToken(tuple), RUN: "station-sentinel",
+      CHANGED_RECEIPT: f.receipt("changed"), CI_OBSERVATION_ID: "receipt-recheck",
+      RUNS: JSON.stringify(["changed", "compatible"].map((run, index) => ({ RUN: run, PRIMARY: f.packageDir, ISSUE: String(189 + index), REPO: "example/repo" }))),
+    } });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stderr, /reconcile-failure run=changed status=1 cause=.*Unsupported receipt.*job-store/);
+    assert.match(readFileSync(output, "utf8"), /failures=\[\{"run":"changed"/);
+    assert.deepEqual(readdirSync(dirname(f.receipt("changed"))), ["receipt.json"]);
+    assert.ok(existsSync(join(dirname(f.receipt("compatible")), "ci-observation.json")));
+    assert.match(result.stderr, /"artifactVerifications":1,"inProcessActions":3/);
+  } finally { f.dispose(); }
+});
+
+test("matching version and commit cannot authorize different executable bytes in process", () => {
+  const f = admissionFixture();
+  try {
+    const executable = compiledA4sBin();
+    const declared = JSON.parse(execFileSync(executable, ["version"], { encoding: "utf8" }));
+    const release = makeArchive(f.releases, declared.version, declared.commit);
+    const tuple = { version: release.version, commit: release.commit, digest: release.digest };
+    const directory = join(f.home, "cache/a4s", tuple.version); mkdirSync(directory, { recursive: true });
+    execFileSync("tar", ["-xzf", join(f.releases, release.archive), "-C", directory]);
+    copyFileSync(join(f.releases, release.archive), join(directory, "verified-archive.tar.gz"));
+    writeFileSync(join(directory, "artifact.json"), JSON.stringify({ ...tuple, verifiedAt: new Date().toISOString() }));
+    save(f, "different-bytes", tuple);
+    const result = spawnSync(executable, ["reconcile", "classify", join(f.root, "classify.output")], { encoding: "utf8", env: { ...process.env,
+      DAGU_HOME: f.home, A4S_ARTIFACT: artifactToken(tuple), CI_OBSERVATION_ID: "byte-identity",
+      RUNS: JSON.stringify([{ RUN: "different-bytes", PRIMARY: f.packageDir, ISSUE: "189", REPO: "example/repo" }]),
+    } });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stderr, /reconcile-failure run=different-bytes status=1 cause=.*status 91/);
+    assert.match(result.stderr, /"artifactVerifications":1,"inProcessActions":0/);
+    assert.deepEqual(readdirSync(dirname(f.receipt("different-bytes"))), ["receipt.json"]);
+  } finally { f.dispose(); }
 });

@@ -68,8 +68,8 @@ Python helpers. Legacy CLI aliases, station installation/executor code, service
 configuration templates and automatic checkout bootstrap/re-seal MUST NOT be
 release execution paths. Packaged skills MUST describe the new boundary.
 
-`a4s` MUST embed its version, commit and explicit supported dispatch,
-receipt-schema, checkpoint-protocol and role-job-store versions. `identity.json` MUST declare the
+`a4s` MUST embed its version, commit and explicit supported receipt-schema,
+checkpoint-protocol and role-job-store versions. `identity.json` MUST declare the
 same identity and support information for inspection without executing the
 binary. Support MUST be explicit versions/protocol IDs, not a SemVer-distance
 heuristic. Both identity declarations MUST NOT contain the archive digest: that
@@ -94,10 +94,10 @@ tooling is not an instruction to ship development wrappers in the release.
   `executable.ts`, `file-lock.ts`, `identity.ts`, `integration-protection.ts`, `long-computation.ts`,
   `materialize.ts`, `planning-validator.ts`, `poc-scope.ts`, `primary.ts`,
   `queue.ts`, `receipt-version.ts`, `release.ts`, `resources.ts`, `role-dispatch.ts`, `role-jobs.ts`, `role-runtime.ts`,
-  `reconcile-run.ts`, `run-artifact.ts`, `run-primary.ts`, `stale-recovery.ts`, `transcript-identity.ts`, `type-guard.ts`.
+  `run-primary.ts`, `stale-recovery.ts`, `transcript-identity.ts`, `type-guard.ts`.
 - `src/status/`: `activity.ts`, `event-log.ts`, `index.ts`, `issue-title.ts`,
-  `progress.ts`, `receipt.ts`, `reloadable.ts`, `repository.ts`, `sse.ts`.
-  `src/triage/`: `guard.ts`, `index.ts`, `native.ts`, `reloadable.ts`, `run-guard.ts`, `schema.ts`.
+  `progress.ts`, `reloadable.ts`, `repository.ts`, `sse.ts`.
+  `src/triage/`: `guard.ts`, `index.ts`, `native.ts`, `reloadable.ts`, `schema.ts`.
 - `extensions/` does **not** exist. The two extension entries are
   `src/status/reloadable.ts` and `src/triage/reloadable.ts`, as declared in
   `package.json`.
@@ -235,7 +235,7 @@ snapshot. Every engine invocation, including self-spawn and successor admission,
 MUST use `"$A4S_BIN" <subcommand>`, not ambient legacy commands, `PATH` lookup or
 an interpreter pointed at source. The engine MUST enqueue the exact admitted
 snapshot bytes. The receipt MUST record the resolved tuple, the artifact's
-supported contract versions, the actual dispatch/receipt/protocol/job-store versions used,
+supported contract versions, the actual receipt/protocol/job-store versions used,
 and consumer config commit/digest as distinct identity facts.
 
 This replaces checkout identity and installed-template materialization at
@@ -274,11 +274,10 @@ missing parent cache content, with nothing enqueued on failure.
 
 ## Compatibility and a shared station (I6)
 
-Artifact SemVer, dispatch protocol, config schema, receipt schema, checkpoint
-protocols and job-store contract are separate version axes. Every artifact MUST
-explicitly declare its dispatch boundary, which receipt schemas it reads and
-writes, which protocol IDs it serves at each checkpoint, and which role-job-store
-versions it supports. Receipts MUST preserve
+Artifact SemVer, config schema, receipt schema, checkpoint protocols and job-store
+contract are separate version axes. Every artifact MUST explicitly declare which
+receipt schemas it reads and writes, which protocol IDs it serves at each
+checkpoint, and which role-job-store versions it supports. Receipts MUST preserve
 that declaration as well as the selected versions; unknown or missing declarations
 are not compatibility.
 
@@ -288,8 +287,8 @@ and 2 in `packages/issue-lifecycle/src/receipt-version.ts`; version 1 read suppo
 preserves historical reporting, not permission to continue legacy runs. This read
 compatibility neither waives I1 nor supplies missing artifact identity.
 
-The artifact contract uses dispatch protocol `a4s-run/1`, config schema 1, receipt
-schema 2, role-job-store contract 1, and checkpoint protocols `triage=role-job/1`,
+The artifact contract uses config schema 1, receipt schema 2, role-job-store
+contract 1, and checkpoint protocols `triage=role-job/1`,
 `implement=role-job/1`, `publication=pr-checkpoint/1`. A receipt lacking the full
 artifact tuple or required contract declarations MUST be rejected even if its
 numeric schema version is otherwise supported. Legacy receipts MUST NOT be
@@ -301,16 +300,6 @@ job-store version or artifact/receipt identity mismatch. Read-only observation
 MAY report an unsupported record, but MUST NOT interpret it as permission for a
 state-changing action. Unsupported data MUST NOT trigger an implicit migration.
 
-Dispatch support is declared as `support.dispatch` in `a4s version` and
-`identity.json`, preserved in `artifactSupport.dispatch`, and selected in
-`contracts.dispatch` in each receipt. The minimum dispatchable artifact is
-v0.7.0, shipping #713's receipt-bound `run` boundary. Earlier artifacts, including
-v0.6.0, do not declare `a4s-run/1` and are unsupported even when their other
-contracts match. Reject them before invocation with the missing boundary named;
-never probe an older executable by trial, add a fallback, infer support from
-SemVer, or upgrade a historical receipt. #714 requires no nonterminal pre-#713
-runs or open role jobs at cutover.
-
 All versions MUST use the same `$DAGU_HOME/role-jobs.sqlite` and v1 job/result
 JSON documents, preserving canonical bindings, claims and the shared capacity
 policy. There MUST NOT be a per-artifact store, capacity domain or incompatible
@@ -320,7 +309,7 @@ schema migration. Store v1 and document v1 are established at
 
 Two cached releases MAY serve different live runs concurrently. Each run and its
 children remain bound to their own tuple, while both releases honor that same
-store contract. The OMP plugin MUST use declared dispatch/receipt/protocol compatibility
+store contract. The OMP plugin MUST use declared receipt/protocol compatibility
 and dispatch mutations through the run's artifact; equality with the plugin's
 package version is not authority to execute a run. Existing exact-version role
 dispatch at `packages/issue-lifecycle/src/role-dispatch.ts:143` is replaced by this
@@ -341,6 +330,18 @@ replace the run's artifact. Missing artifacts or unsupported receipts MUST leave
 the affected run untouched and report the failure; other compatible runs MAY
 still be dispatched. The baseline scheduled ambient recovery call is
 `packages/issue-lifecycle/skills/issue-execution/reconcile.yaml:14`.
+
+The boundary MAY execute package-independent inspect/finish actions in-process
+only when the run's exact tuple equals the reconciler's operator pin, the
+embedded identity matches, and the executing binary is the verified cached
+executable or has identical verified executable bytes. Version/commit equality
+alone MUST NOT authorize this optimization. Foreign tuples or different bytes
+MUST still invoke the run's own cached executable. The boundary MUST re-read and
+authorize each receipt before every action, bind the run's environment for the
+action, and restore the station environment afterward. Full cache verification
+MAY be shared by exact tuple within one tick; it MUST NOT persist across ticks or
+plugin actions. This is a verified same-artifact dispatch, not substitution by
+the reconciler's release.
 
 The operator owns the schedule, queue configuration, service installation and
 cutover. a4s MUST only check/report station readiness; it MUST NOT write Dagu's

@@ -20,16 +20,17 @@ test("reconcile timing, hashing and bounded commands preserve their outputs and 
   const now = run(["reconcile", "now"]);
   assert.equal(now.status, 0, now.stderr);
   assert.ok(Math.abs(Date.now() - Number(now.stdout)) < 1000);
-  const remaining = run(["reconcile", "remaining", "10", String(Date.now()), "2"]);
-  assert.equal(remaining.stdout, "2.000\n");
-  assert.equal(run(["reconcile", "positive", "0"]).status, 1);
-  assert.equal(run(["reconcile", "positive", "0.001"]).status, 0);
+  const exhausted = run(["reconcile", "bounded", "discover", "10", String(Date.now() - 11_000), "2", process.execPath, "-e", 'console.log("unexpected");process.exit(99)']);
+  assert.equal(exhausted.status, 124, exhausted.stderr);
+  assert.equal(exhausted.stdout, "");
+  assert.equal(exhausted.stderr, "discover deadline exceeded\n");
   const hashed = spawnSync(process.execPath, [...prefix, "reconcile", "sha256"], { input: "repo\n123\n", encoding: "utf8" });
   assert.equal(hashed.stdout, `${createHash("sha256").update("repo\n123\n").digest("hex")}\n`);
-  const completed = run(["reconcile", "bounded", "transition", "3", process.execPath, "-e", 'console.log("called");process.exit(7)']);
+  const completed = run(["reconcile", "bounded", "transition", "3", String(Date.now()), "3", process.execPath, "-e", 'console.log("called");process.exit(7)']);
   assert.equal(completed.status, 7, completed.stderr);
   assert.equal(completed.stdout, "called\n");
-  const expired = run(["reconcile", "bounded", "discover", "0.05", process.execPath, "-e", "setTimeout(()=>{},10000)"]);
+  // A fake clock cannot exercise the subprocess helper's real OS timeout.
+  const expired = run(["reconcile", "bounded", "discover", "3", String(Date.now()), "0.05", process.execPath, "-e", "setTimeout(()=>{},10000)"]);
   assert.equal(expired.status, 124, expired.stderr);
   assert.equal(expired.stderr, "discover deadline exceeded\n");
 });

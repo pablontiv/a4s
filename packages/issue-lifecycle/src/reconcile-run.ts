@@ -3,10 +3,11 @@ import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseAllDocuments } from "yaml";
 import { packageRoot } from "./executable.ts";
-import { executingRunArtifact } from "./run-artifact.ts";
+import { executingRunArtifact, runArtifactState } from "./run-artifact.ts";
 import { writeAtomicJson } from "./atomic-json.ts";
+import { recordNoProgress } from "./ci-no-progress.ts";
 
-interface Routed {
+export interface Routed {
   run: string; issue: string; primary: string; branch: string; pr: string; repo: string; step: string; iteration: number;
   class: string; action: string; observation: string; cause: string; route: string; worktree: string;
   calls: number; skipped: number; started: number; deadline: number;
@@ -47,27 +48,24 @@ export function inspectRun(row: Record<string, string>): Routed {
   else if (!step) item.route = "root";
   return item;
 }
-export function finishRun(item: Routed, issue: { state: string; closed_at?: string | null } | null): void {
+export function finishRun(item: Routed, issue: { state: string; closed_at?: string | null } | null): string {
   requireRun();
   if (item.run !== process.env.RUN || item.primary !== process.env.PRIMARY) throw new Error("Reconcile routed run/receipt identity mismatch");
   if (item.route === "issue") {
     if (issue) item.observation = `${item.step} issue=${issue.state.toUpperCase()} closed_at=${issue.closed_at || ""}`;
     else Object.assign(item, { class: "BLOCKED", action: "WAIT", cause: "GitHub issue observation unavailable; check repository permissions and authentication", observation: `${item.step} issue=unavailable` });
   }
-  // Derive the destination afresh; the pinned classifier cannot choose a write path.
-  const result = spawnSync("git", ["-C", item.primary, "rev-parse", "--path-format=absolute", "--git-path", `dagu-feature/runs/${item.run}`], { encoding: "utf8" });
-  if (result.status !== 0) throw new Error("Run state path unavailable");
-  const state = result.stdout.trim();
+  // The freshly verified boundary derives this path, never the routed payload.
+  const state = runArtifactState();
   mkdirSync(state, { recursive: true });
   writeAtomicJson(join(state, "ci-observation.json"), { repo: item.repo, run: item.run, pr: "", worktree: item.worktree,
     step: item.step, iteration: item.iteration, sha: "", class: item.class, action: item.action, check: "", log: "", cause: item.cause, retry_run: "", findings: [] });
-  const noProgress = spawnSync(process.env.A4S_BIN!, ["reconcile", "ci-no-progress", state, process.env.CI_OBSERVATION_ID!, process.env.ESCALATION_CI_BLOCKED || "2"], { stdio: "inherit" });
-  if (noProgress.status !== 0) throw new Error("Run no-progress observation failed");
+  recordNoProgress(state, process.env.CI_OBSERVATION_ID!, process.env.ESCALATION_CI_BLOCKED || "2");
   console.error(`reconcile-metric ${JSON.stringify({ phase: "observe", run: item.run, class: item.class, action: item.action, calls: item.calls,
     skippedRepoLookup: item.skipped === 1, latencyMs: Date.now() - item.started, deadline: item.deadline === 1,
     callTimeoutSeconds: Number(process.env.RECONCILE_CALL_TIMEOUT_SECONDS || 8), observeTimeoutSeconds: Number(process.env.RECONCILE_OBSERVE_TIMEOUT_SECONDS || 20) })}`);
   console.error(`reconcile-metric ${JSON.stringify({ phase: "transition", run: item.run, action: item.action, applied: false, cause: "no-side-effect", calls: 0, latencyMs: 0 })}`);
-  if (/^(triage|implement) issue=CLOSED /.test(item.observation)) console.log(`ORPHAN ${item.repo}#${item.issue} ${item.run} ${item.observation}`);
+  return /^(triage|implement) issue=CLOSED /.test(item.observation) ? `ORPHAN ${item.repo}#${item.issue} ${item.run} ${item.observation}` : "";
 }
 export function executeStep(name: string): void {
   requireRun();

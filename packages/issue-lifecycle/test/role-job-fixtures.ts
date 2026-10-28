@@ -1,13 +1,19 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { BUNDLE_VERSION } from "../src/bundle.ts";
 import type { Receipt } from "../src/admission.ts";
 import { nativeEvidence } from "../src/role-runtime.ts";
 import type { Job } from "../src/role-jobs.ts";
 import { fixtureArtifact } from "./fixtures/artifact.ts";
 import { identity } from "../src/identity.ts";
 import { USED_CONTRACTS } from "../src/artifact-receipt.ts";
-import type { ArtifactTuple } from "../src/release.ts";
+<<<<<<< Updated upstream
+
+export function roleAdmission(primary: string, home: string, run: string, snapshot: string): Receipt {
+  const { version, commit, digest } = fixtureArtifact(home);
+=======
+import { artifactToken, type ArtifactTuple } from "../src/release.ts";
 import { compiledArtifact } from "./fixtures/admission.ts";
 import { packageDirectory } from "./fixtures/artifact.ts";
 import { exampleConfig } from "../src/config.ts";
@@ -40,13 +46,14 @@ export function reconcileEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv 
     mkdirSync(state, { recursive: true });
     writeFileSync(path, JSON.stringify(roleAdmission(primary, home, row.RUN, snapshot, artifact)));
   }
-  return { ...env, DAGU_HOME: home };
+  return { A4S_ARTIFACT: artifactToken(artifact), ...env, DAGU_HOME: home };
 }
 
 export function roleAdmission(primary: string, home: string, run: string, snapshot: string, artifact?: ArtifactTuple): Receipt {
   const { version, commit, digest } = artifact ?? fixtureArtifact(home);
+>>>>>>> Stashed changes
   return { schemaVersion: 2, artifact: { version, commit, digest }, artifactSupport: identity.support, contracts: USED_CONTRACTS,
-    sourceVersion: { version, commit, origin: "fixture/repo" },
+    sourceVersion: { version: BUNDLE_VERSION, commit, origin: "fixture/repo" },
     deploymentFingerprint: "fixture", initial: { admittedAt: new Date().toISOString(),
       deployment: { config: { schemaVersion: 1, commit: "b".repeat(40), digest: "c".repeat(64) } }, runtimeAndModels: { daguHome: home },
       execution: { primary, head: execFileSync("git", ["-C", primary, "rev-parse", "HEAD"], { encoding: "utf8" }).trim(),

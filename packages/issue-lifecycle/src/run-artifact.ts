@@ -7,7 +7,8 @@ import { receiptArtifact, assertExecutingArtifact } from "./artifact-receipt.ts"
 import { artifactToken, parseArtifact, sameArtifact } from "./release.ts";
 import { compiled } from "./executable.ts";
 import { isRecord } from "./type-guard.ts";
-import type { CachedArtifact } from "./artifact-cache.ts";
+import { fileDigest, inspectArtifact, type CachedArtifact } from "./artifact-cache.ts";
+import { identity } from "./identity.ts";
 import type { Receipt } from "./admission.ts";
 
 const NATIVE_FLAGS: Record<string, "value" | "boolean"> = {
@@ -17,17 +18,55 @@ const NATIVE_FLAGS: Record<string, "value" | "boolean"> = {
 };
 let bound: VerifiedRun | undefined;
 export function executingRunArtifact(): boolean { return bound !== undefined; }
+export function runArtifactState(): string {
+  if (!bound) throw new Error("Run state requires a verified receipt-bound dispatch");
+  return bound.state;
+}
 export interface VerifiedRun { primary: string; home: string; state: string; path: string; receipt: Receipt; cached: CachedArtifact }
-export async function verifiedRun(primary: string, run: string): Promise<VerifiedRun> {
+export async function verifiedRun(primary: string, run: string, inspect = inspectArtifact): Promise<VerifiedRun> {
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(run)) throw new Error("Run artifact requires an unambiguous run ID");
   primary = realpathSync(primary);
   const home = realpathSync(process.env.DAGU_HOME || join(homedir(), ".dagu"));
   const state = execFileSync("git", ["-C", primary, "rev-parse", "--path-format=absolute", "--git-path", `dagu-feature/runs/${run}`], { encoding: "utf8" }).trim();
   const path = join(state, "receipt.json");
-  const { receipt: value, cached } = await receiptArtifact(home, path);
+  const { receipt: value, cached } = await receiptArtifact(home, path, inspect);
   const receipt = value as unknown as Receipt;
   if (receipt.runReceipt?.run !== run || receipt.initial.execution.primary !== primary || receipt.initial.runtimeAndModels.daguHome !== home) throw new Error(`Run receipt location/identity mismatch: ${path}`);
   return { primary, home, state, path, receipt, cached };
+}
+
+/** Verification lives for one tick, never across ticks or plugin actions. */
+export class RunArtifactScope {
+  readonly #artifacts = new Map<string, Promise<CachedArtifact>>();
+  #executableDigest: Promise<string> | undefined;
+  get artifactVerifications(): number { return this.#artifacts.size; }
+  verify(primary: string, run: string): Promise<VerifiedRun> {
+    return verifiedRun(primary, run, (home, tuple) => {
+      const key = `${home}/${artifactToken(tuple)}`;
+      let cached = this.#artifacts.get(key);
+      if (!cached) { cached = inspectArtifact(home, tuple); this.#artifacts.set(key, cached); }
+      return cached;
+    });
+  }
+  // These package-independent actions read no implementation assets outside the
+  // executable. Other run commands continue through their cached process.
+  async locally<T>(context: VerifiedRun, phase: "inspect" | "finish", execute: () => T): Promise<{ local: true; value: T } | { local: false }> {
+    const { cached } = context;
+    const pin = process.env.A4S_ARTIFACT;
+    if (!compiled || !pin || !sameArtifact(parseArtifact(pin), cached.record) ||
+        identity.version !== cached.record.version || identity.commit !== cached.record.commit) return { local: false };
+    // An identity string is not byte identity. Only the exact pinned tuple and
+    // its verified executable bytes authorize running this process's code.
+    if (realpathSync(process.execPath) !== cached.executable &&
+        await (this.#executableDigest ??= fileDigest(process.execPath)) !== cached.executableDigest) return { local: false };
+    const nextEnvironment = environment(context), previous = bound, previousEnvironment = process.env;
+    bound = context;
+    process.env = nextEnvironment;
+    try {
+      console.error(`a4s-run run=${context.receipt.runReceipt.run} artifact=${artifactToken(cached.record)} command=reconcile ${phase} dispatch=in-process`);
+      return { local: true, value: execute() };
+    } finally { bound = previous; process.env = previousEnvironment; }
+  }
 }
 function environment(context: VerifiedRun): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env, PRIMARY: context.primary, RUN: context.receipt.runReceipt.run,
