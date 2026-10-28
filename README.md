@@ -28,6 +28,8 @@ workspaces, not public npm publication.
   spike #691 decision, descartar.
 - [Harness² vs issue-lifecycle](docs/architecture/harness2-issue-lifecycle.md):
   spike #692 decision, descartar.
+- [1Password Agents](docs/architecture/onepassword-agents.md):
+  spike #693 decision, descartar.
 
 ## Delivered components
 
