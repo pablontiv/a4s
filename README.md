@@ -24,6 +24,14 @@ workspaces, not public npm publication.
   spike #688 decision, descartar.
 - [Tern meta-harness](docs/architecture/tern-meta-harness.md):
   spike #690 decision, descartar.
+- [AGENTS.md TLDR per turn](docs/architecture/agents-tldr-per-turn.md):
+  spike #691 decision, descartar.
+- [Harness² vs issue-lifecycle](docs/architecture/harness2-issue-lifecycle.md):
+  spike #692 decision, descartar.
+- [1Password Agents](docs/architecture/onepassword-agents.md):
+  spike #693 decision, descartar.
+- [LayerFS and git worktrees](docs/architecture/layerfs-worktrees.md):
+  spike #694 decision, descartar.
 
 ## Delivered components
 

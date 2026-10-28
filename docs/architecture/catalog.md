@@ -52,12 +52,16 @@ single `planning.yaml` breakdown backend. That backend creates issues after
 review and approval; it does not schedule the sprint. Definition of Done and
 yes/no goal checks are ceremony content. Sprint Review evaluates a goal rather
 than adding a feature checkpoint. An FYI is not authorization.
+Spike #692 compared Harness² with these loops and discarded adoption; see
+[Harness² vs issue-lifecycle](harness2-issue-lifecycle.md).
 
 Package agents are [`plan-reviewer`](../../packages/issue-lifecycle/agents/plan-reviewer.md)
 and [`triage-reviewer`](../../packages/issue-lifecycle/agents/triage-reviewer.md).
 The six independent generic native roles and their installation are in
 [the agent catalog](agents.md). Each role has one canonical `.omp/agents/<role>.md`
 definition; the catalog is explanatory, not another runtime provider.
+Spike #691 discarded a trailing per-turn TLDR in the operating contract; see
+[AGENTS.md TLDR per turn](agents-tldr-per-turn.md).
 
 ## Independent repository skills
 
@@ -75,6 +79,12 @@ native skill root, or configure `skills.customDirectories`; see
 | [`skills/workspace-hygiene/`](../../skills/workspace-hygiene/SKILL.md) | Opt-in repository inventory, classification, approved preservation/publication and cleanup of worktrees, branches, stashes and Orca contexts; foreign repositories remain under their owning sessions |
 | [`skills/sandbox-threat-model/`](../../skills/sandbox-threat-model/SKILL.md) | Classify execution controls as prompt, advisory, or enforced before calling one a sandbox; #689 decision is skill, with no mantis product install and no CI gate |
 | [`skills/hitl-escalation/`](../../skills/hitl-escalation/SKILL.md) | Classify a human contact as continue, notify, or decide from the adopted escalation budgets; #695 decision is skill, with no HumanLayer install |
+
+Spike #693 compared 1Password for Agents with operator-owned credentials and
+discarded product adoption and a secret-injection skill; see
+[1Password Agents](onepassword-agents.md).
+Spike #694 compared LayerFS workspaces with Dagu issue worktrees and discarded
+adoption; see [LayerFS and worktrees](layerfs-worktrees.md).
 
 ### Conditional #311 ingestion
 

@@ -158,4 +158,6 @@ resolved model and actual tool results. The
 [walkthrough evidence](v1-walkthrough.md) separates this from deployment.
 After retaining redacted evidence, stop owned temporary processes and remove
 `SMOKE_ROOT`. Production configuration, credentials, links and services remain
-operator-owned throughout.
+operator-owned throughout. Spike #693 compared 1Password for Agents with this
+rule and discarded product adoption and a secret-injection skill; see
+[1Password Agents](../architecture/onepassword-agents.md).

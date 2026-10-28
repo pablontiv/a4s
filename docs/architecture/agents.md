@@ -13,6 +13,10 @@ A4S owns one canonical definition per retained generic role, directly in the nat
 
 CSV `tools` frontmatter uses native OMP names, including `glob` for file discovery. Read-only roles constrain shell use to non-mutating inspection. Each role returns status, result, evidence and risks through its final response, or the caller's supplied structured schema. Mutating assignments include the exact existing targeted test command. Repository/operator policy remains authoritative; role definitions add neither project permission nor automatic lifecycle gates.
 
+Spike #691 discarded a trailing Goal/Done/Next/Needs-you block in `AGENTS.md`.
+That return contract is the short status. See
+[AGENTS.md TLDR per turn](agents-tldr-per-turn.md).
+
 OMP's native precedence is project `.omp/agents`, user `$PI_CODING_AGENT_DIR/agents` (normally `~/.omp/agent/agents`), extension-package agents, other plugin providers, then bundled definitions. A matching name is not provenance: record task `agentSource`, the child `session_init` and the selected prompt, tools and resolved model. Compare the prompt to the canonical definition to distinguish same-named sources. Restart OMP to select changed definitions.
 
 The lifecycle's `plan-reviewer` and `triage-reviewer` are owned by [`@a4s/issue-lifecycle`](../../packages/issue-lifecycle/). Generic `reviewer` remains independent and serves [`gpt-quota-audit`](../../skills/gpt-quota-audit/SKILL.md), which additionally requires an independently verified model outside the audited provider. The lifecycle owns its current admission contract.
