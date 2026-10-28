@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { roleAdmission } from "./role-job-fixtures.ts";
+import { compiledArtifact } from "./fixtures/admission.ts";
 
 const cli = fileURLToPath(new URL("../bin/dagu-role-jobs.ts", import.meta.url));
 const readyAt = "2026-10-22T05:00:00.000Z";
@@ -58,7 +59,7 @@ async function stage(root: string, result: "blocked" | "completed"): Promise<{ c
   const common = execFileSync("git", ["-C", repo, "rev-parse", "--path-format=absolute", "--git-common-dir"], { encoding: "utf8" }).trim();
   const state = join(common, "dagu-feature", "runs", run);
   mkdirSync(state, { recursive: true });
-  writeFileSync(join(state, "receipt.json"), JSON.stringify(roleAdmission(repo, home, run, "dagu-role-jobs stage implement")));
+  writeFileSync(join(state, "receipt.json"), JSON.stringify(roleAdmission(repo, home, run, '"$A4S_BIN" role-jobs stage implement', compiledArtifact(home))));
   writeFileSync(join(state, "identity"), JSON.stringify({ primary: repo, worktree: repo, run, session: "parent-id" }));
   const output = join(root, "outputs");
   writeFileSync(output, "");

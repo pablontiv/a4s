@@ -19,6 +19,7 @@ export interface RunDetails {
   resolvedPrimary?: string;
   nodes?: RunNode[];
   scopeFailureCause?: string;
+  artifactError?: string;
   receiptEvent?: { id: string; type: string; source: string; cursorReset: boolean };
 }
 
@@ -118,7 +119,8 @@ export function renderRun(run: RunDetails, slug?: string, activity?: string): st
   const step = currentStep(run);
   const type = plain(workflowTypes[run.name] ?? run.name);
   const status = `${type} ${identity(run, slug)} ${bar} ${done}/${total}${step ? ` ${plain(step)}` : ""} ${plain(run.statusLabel)}`;
-  return activity ? `${status} · ${plain(activity)}` : status;
+  const compatibility = run.artifactError ? `${status} [unsupported: ${plain(run.artifactError)}]` : status;
+  return activity ? `${compatibility} · ${plain(activity)}` : compatibility;
 }
 
 export interface WidgetRun {

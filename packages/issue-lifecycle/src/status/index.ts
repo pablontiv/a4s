@@ -1,4 +1,4 @@
-import { observeRunReceipt } from "../admission.ts";
+import { recordRunObservation, receiptCompatibility } from "./receipt.ts";
 import { setTimeout as delay } from "node:timers/promises";
 import { execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
@@ -102,6 +102,10 @@ async function runDetails(base: string, summary: RunDetails, signal: AbortSignal
   const details = { ...summary, ...payload.dagRunDetails };
   const primary = await resolveRunPrimary(base, details, signal);
   if (primary) details.resolvedPrimary = primary;
+  if (primary) {
+    const unsupported = receiptCompatibility(primary, details);
+    if (unsupported) details.artifactError = unsupported;
+  }
   if (details.name === "poc" && primary && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(details.dagRunId)
     && details.nodes?.some(node => node.step.name === "run_poc"
       && node.statusLabel === "waiting" && (node.approvalIteration ?? 0) > 0)) {
@@ -161,7 +165,8 @@ async function watchNotices(base: string, repo: string, ctx: Context, signal: Ab
           const run = await runDetails(base, summary, signal);
           const primary = run.resolvedPrimary ?? runParam(run, "PRIMARY");
           if (primary) summary.resolvedPrimary = primary;
-          observeRunReceipt(run, primary || ctx.cwd);
+          try { await recordRunObservation(run, primary || ctx.cwd); }
+          catch (error) { console.warn("DAGU_RECEIPT_OBSERVATION_REJECTED", error); }
           const ciDiagnostic = await readCiDiagnostic(primary, run.dagRunId,
             run.nodes?.some(node => node.statusLabel === "waiting" && (node.step.id ?? node.step.name) === "implement") ?? false, signal);
           const escalationDiagnostic = run.nodes?.some(node => node.statusLabel === "waiting"
@@ -170,7 +175,10 @@ async function watchNotices(base: string, repo: string, ctx: Context, signal: Ab
           const stalls = await readStallNotices(primary, run.dagRunId, signal);
           const integrationProtection = primary ? readActiveProtection(primary) : undefined;
           for (const snapshot of [...await ledger.read(base, run, signal), run]) {
-            if (snapshot !== run) observeRunReceipt(snapshot, primary || ctx.cwd, "persisted-transition");
+            if (snapshot !== run) {
+              try { await recordRunObservation(snapshot, primary || ctx.cwd, "persisted-transition"); }
+              catch (error) { console.warn("DAGU_RECEIPT_OBSERVATION_REJECTED", error); }
+            }
             const effects = transitions.observe(snapshot, { baseline, ...(ciDiagnostic ? { ciDiagnostic } : {}),
               ...(escalationDiagnostic ? { escalationDiagnostic } : {}), ...(stalls.length ? { stalls } : {}),
               ...(integrationProtection ? { integrationProtection } : {}) });
@@ -182,7 +190,7 @@ async function watchNotices(base: string, repo: string, ctx: Context, signal: Ab
             }
           }
         } catch (error) {
-          try { observeRunReceipt(summary, summary.resolvedPrimary ?? runParam(summary, "PRIMARY") ?? ctx.cwd, "observation-error", error instanceof Error ? error.message : String(error)); }
+          try { await recordRunObservation(summary, summary.resolvedPrimary ?? runParam(summary, "PRIMARY") ?? ctx.cwd, "observation-error", error instanceof Error ? error.message : String(error)); }
           catch (receiptError) { console.warn("DAGU_RECEIPT_OBSERVATION_FAILED", receiptError); }
         }
       }

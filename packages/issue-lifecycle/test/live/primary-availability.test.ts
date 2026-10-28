@@ -13,7 +13,8 @@ import { BUNDLE_VERSION } from "../../src/bundle.ts";
 
 import { liveDagu, liveDaguVersion } from "../fixtures/live-dagu.ts";
 import { testRunId } from "../fixtures/run-id.ts";
-import { a4sBin } from "../fixtures/a4s.ts";
+import { compiledA4sBin } from "../fixtures/admission.ts";
+const a4sBin = compiledA4sBin();
 const feature = readFileSync(new URL(renderedFeature, import.meta.url), "utf8");
 const poc = readFileSync(new URL(renderedPoc, import.meta.url), "utf8");
 function step(source: string, id: string): string {
@@ -148,7 +149,7 @@ esac
       const closeAuthorization = phase === "close" ? "  - id: await_merge_cancellation\n    depends: await_merge\n    run: echo retained-merge-checkpoint\n  - id: authorize_ci\n    depends: await_merge_cancellation\n    run: echo authorized-candidate\n" : "";
       const definition = join(home, "dags", `${name}.yaml`);
       const guard = source.slice(source.indexOf("  - DAGU_RESOURCE_GUARD: |"), source.indexOf("steps:\n"));
-      writeFileSync(definition, `labels: [workspace=primary228, dagu-feature-bundle=${BUNDLE_VERSION}]\nqueue: primary228\ntype: graph\nshell: bash\nparams:\n  - ISSUE: "228"\n  - PR_NUMBER: ""\n  - OMP_SESSION_ID: primary228-owner\nenv:\n  - PRIMARY: ${JSON.stringify(primary)}\n  - BASE_BRANCH: main\n  - BRANCH: ${branch}\n  - GATE: "true"\n  - REQUIRED_CHECK: validate\n  - WORKTREE: ${worktree}\n  - RUN: \${context.run.id}\n  - DAGU_FEATURE_BUNDLE: test\n${guard}steps:\n${predecessor}${closeAuthorization}${step(source, detector)}${step(source, checkpoint)}${step(source, `${checkpoint}_cancellation`)}${step(source, gate)}${phase === "base" ? step(source, "worktree") : ""}  - id: after_gate\n    depends: ${phase === "base" ? "worktree" : gate}\n    run: echo SAME_RUN=\${context.run.id}\n`);
+      writeFileSync(definition, `labels: [workspace=primary228, dagu-feature-bundle=${BUNDLE_VERSION}]\nqueue: primary228\ntype: graph\nshell: bash\nparams:\n  - ISSUE: "228"\n  - PR_NUMBER: ""\n  - OMP_SESSION_ID: primary228-owner\nenv:\n  - A4S_BIN: ${JSON.stringify(a4sBin)}\n  - PRIMARY: ${JSON.stringify(primary)}\n  - BASE_BRANCH: main\n  - BRANCH: ${branch}\n  - GATE: "true"\n  - REQUIRED_CHECK: validate\n  - WORKTREE: ${worktree}\n  - RUN: \${context.run.id}\n  - DAGU_FEATURE_BUNDLE: test\n${guard}steps:\n${predecessor}${closeAuthorization}${step(source, detector)}${step(source, checkpoint)}${step(source, `${checkpoint}_cancellation`)}${step(source, gate)}${phase === "base" ? step(source, "worktree") : ""}  - id: after_gate\n    depends: ${phase === "base" ? "worktree" : gate}\n    run: echo SAME_RUN=\${context.run.id}\n`);
       console.log(`$ DAGU_HOME=${home} dagu validate ${definition}\n${dagu("validate", definition)}`);
       console.log(`$ DAGU_HOME=${home} dagu enqueue --run-id ${id} ${definition}\n${dagu("enqueue", "--run-id", id, definition)}`);
       if (blocked === "clean") {

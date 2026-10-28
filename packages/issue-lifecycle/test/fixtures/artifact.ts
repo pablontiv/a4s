@@ -18,7 +18,8 @@ export function makeArchive(directory: string, version = "0.6.0", commit = "a".r
     writeFileSync(join(stage, "identity.json"), JSON.stringify(declared));
     writeFileSync(join(stage, "a4s"), `#!/bin/sh\n[ "$1" = version ] || exit 91\nprintf '%s\\n' '${JSON.stringify(declared)}'\n`);
     chmodSync(join(stage, "a4s"), 0o755);
-    writeFileSync(join(stage, "package.json"), JSON.stringify({ name: "@a4s/issue-lifecycle", version, repository: { type: "git", url: `git+https://github.com/${repository}.git` } }));
+    writeFileSync(join(stage, "package.json"), JSON.stringify({ name: "@a4s/issue-lifecycle", version, repository: { type: "git", url: `git+https://github.com/${repository}.git` },
+      omp: { extensions: ["./src/status/reloadable.ts", "./src/triage/reloadable.ts"] } }));
     for (const entry of ["agents", "skills"]) cpSync(join(packageDirectory, entry), join(stage, entry), { recursive: true });
     mkdirSync(join(stage, "bin"));
     for (const entry of ["gate-cache.cjs", "dagu-gate.cjs", "gate-cache-run.cjs"]) copyFileSync(join(packageDirectory, "bin", entry), join(stage, "bin", entry));

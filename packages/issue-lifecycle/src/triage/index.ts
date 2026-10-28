@@ -1,5 +1,6 @@
 import { resourceDecision } from "../resources.ts";
 import { admissionDecision } from "./guard.ts";
+import { runMutationDecision } from "./run-guard.ts";
 import type { CallDecision, Event } from "./guard.ts";
 interface GuardContext {
   cwd: string;
@@ -16,6 +17,8 @@ export default function triageGuard(pi: ExtensionAPI): void {
     const transcriptRoot = ctx?.sessionManager?.getSessionDir();
     const admission = admissionDecision(event, transcriptRoot ? { transcriptRoot } : undefined, ctx?.cwd);
     if (admission) return admission;
+    const mutation = await runMutationDecision(event, ctx?.cwd);
+    if (mutation) return mutation;
     return await resourceDecision(event, ctx?.cwd ?? process.cwd());
   });
 }

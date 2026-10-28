@@ -23,7 +23,9 @@ import { copyRepositorySeed, normalizedFixtureSnapshot, SEED_COMMIT_DATE, settle
 import { testRunId } from "./fixtures/run-id.ts";
 import { renderedFeature, renderedPoc } from "./fixtures/rendered-feature.ts";
 import { readAdminEvents, STALE_PROCESS_ERROR } from "../src/stale-recovery.ts";
-import { a4sBin } from "./fixtures/a4s.ts";
+import { compiledA4sBin, compiledArtifact } from "./fixtures/admission.ts";
+
+const a4sBin = compiledA4sBin();
 
 const definitions = [
   ["template", fileURLToPath(new URL("../skills/issue-execution/feature.yaml", import.meta.url))],
@@ -1586,7 +1588,7 @@ for (const [name, definition] of definitions) {
       writeFileSync(file, [
         "type: graph\nshell: bash\nmax_active_steps: 1\n",
         `params:\n  - ISSUE: "189"\n  - PR_NUMBER: ""\n  - OMP_SESSION_ID: retained-owner\n`,
-        `env:\n  - PRIMARY: ${JSON.stringify(repo.primary)}\n  - BASE_BRANCH: main\n  - BRANCH: dagu/issue-\${ISSUE}\n  - GATE: "true"\n  - REQUIRED_CHECK: validate\n  - PATH: ${env.PATH}\n  - WORKTREE: ${repo.worktree}\n  - RUN: \${context.run.id}\n  - DAGU_FEATURE_BUNDLE: test\n`,
+        `env:\n  - A4S_BIN: ${JSON.stringify(a4sBin)}\n  - PRIMARY: ${JSON.stringify(repo.primary)}\n  - BASE_BRANCH: main\n  - BRANCH: dagu/issue-\${ISSUE}\n  - GATE: "true"\n  - REQUIRED_CHECK: validate\n  - PATH: ${env.PATH}\n  - WORKTREE: ${repo.worktree}\n  - RUN: \${context.run.id}\n  - DAGU_FEATURE_BUNDLE: test\n`,
         source.slice(source.indexOf("  - DAGU_RESOURCE_GUARD: |"), source.indexOf("steps:\n")),
         "steps:\n", extractStep(source, "admission"), extractStep(source, "admit"),
         "  - id: triage\n    depends: admit\n    run: echo POC=no >> \"$DAGU_OUTPUT_FILE\"\n    outputs:\n      - name: POC\n",
@@ -1733,7 +1735,7 @@ test("native terminal replacement captures retained and nonempty correction", {
     writeFileSync(file, [
       "type: graph\nshell: bash\nmax_active_steps: 1\n",
       `params:\n  - ISSUE: "189"\n  - PR_NUMBER: ""\n  - OMP_SESSION_ID: retained-owner\n  - RETAIN: "no"\n`,
-      `env:\n  - PRIMARY: ${JSON.stringify(repo.primary)}\n  - BASE_BRANCH: main\n  - BRANCH: dagu/issue-\${ISSUE}\n  - GATE: "true"\n  - REQUIRED_CHECK: validate\n  - PATH: ${env.PATH}\n  - WORKTREE: ${repo.worktree}\n  - RUN: \${context.run.id}\n  - DAGU_FEATURE_BUNDLE: test\n  - REBASE_RESOLVER: ${JSON.stringify(resolverCommand)}\n`,
+      `env:\n  - A4S_BIN: ${JSON.stringify(a4sBin)}\n  - PRIMARY: ${JSON.stringify(repo.primary)}\n  - BASE_BRANCH: main\n  - BRANCH: dagu/issue-\${ISSUE}\n  - GATE: "true"\n  - REQUIRED_CHECK: validate\n  - PATH: ${env.PATH}\n  - WORKTREE: ${repo.worktree}\n  - RUN: \${context.run.id}\n  - DAGU_FEATURE_BUNDLE: test\n  - REBASE_RESOLVER: ${JSON.stringify(resolverCommand)}\n`,
       source.slice(source.indexOf("  - DAGU_RESOURCE_GUARD: |"), source.indexOf("steps:\n")),
       "steps:\n", extractStep(source, "admission"), extractStep(source, "admit"),
       "  - id: triage\n    depends: admit\n    run: echo POC=no >> \"$DAGU_OUTPUT_FILE\"\n    outputs:\n      - name: POC\n",
@@ -2031,7 +2033,7 @@ esac
     const script = [
       "type: graph\nshell: bash\nmax_active_steps: 1\n",
       `params:\n  - ISSUE: "189"\n  - PR_NUMBER: ""\n  - OMP_SESSION_ID: recovery-owner\n`,
-      `env:\n  - PRIMARY: ${JSON.stringify(repo.primary)}\n  - BASE_BRANCH: main\n  - VALIDATION: ""\n  - BRANCH: dagu/issue-\${ISSUE}\n  - GATE: test -f required.txt\n  - REQUIRED_CHECK: validate\n  - PATH: ${bin}:${process.env.PATH}\n  - WORKTREE: ${repo.worktree}\n  - RUN: \${context.run.id}\n  - DAGU_FEATURE_BUNDLE: test\n  - DAGU_PORT: "${fixture.port}"\n`,
+      `env:\n  - A4S_BIN: ${JSON.stringify(a4sBin)}\n  - PRIMARY: ${JSON.stringify(repo.primary)}\n  - BASE_BRANCH: main\n  - VALIDATION: ""\n  - BRANCH: dagu/issue-\${ISSUE}\n  - GATE: test -f required.txt\n  - REQUIRED_CHECK: validate\n  - PATH: ${bin}:${process.env.PATH}\n  - WORKTREE: ${repo.worktree}\n  - RUN: \${context.run.id}\n  - DAGU_FEATURE_BUNDLE: test\n  - DAGU_PORT: "${fixture.port}"\n`,
       source.slice(source.indexOf("  - DAGU_RESOURCE_GUARD: |"), source.indexOf("steps:\n")),
       "steps:\n",
       `  - id: triage\n    run: |\n      mkdir -p "$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")"\n      echo POC=no >> "$DAGU_OUTPUT_FILE"\n    outputs:\n      - name: POC\n`,
@@ -2663,7 +2665,7 @@ for (const [name, definition] of definitions) {
     const source = readFileSync(definition, "utf8");
     const commandImplementation = extractStep(source, "implement").includes('"$A4S_BIN" role-jobs stage implement');
     const implementationReady = join(repo.root, "implementation-ready");
-    const executor = join(fixtureBin, "execute.ts");
+    const executor = join(fixtureBin, "execute.mts");
     writeFileSync(executor, `import {appendFileSync,existsSync,rmSync} from "node:fs";
 import {setTimeout as delay} from "node:timers/promises";
 import {dispatchStage} from ${JSON.stringify(new URL("../src/role-dispatch.ts", import.meta.url).href)};
@@ -2941,10 +2943,15 @@ test("real Dagu automatically recovers a stale Failed feature in one reconcile t
   timeout: 120_000,
 }, async t => {
   const fixture = await recoveryFixture();
+  const id = `stale-recovery-${fixture.suffix}`;
+  const repo = repository(id);
   try {
-    const id = `stale-recovery-${fixture.suffix}`;
     const file = join(fixture.home, "dags", "feature.yaml");
-    writeFileSync(file, "name: feature\ntype: graph\nshell: bash\nparams:\n  - RETAINED: original\nsteps:\n  - id: start_gate\n    run: echo retained-predecessor\n  - id: implement\n    depends: start_gate\n    action: human.task\n    with:\n      prompt: Recover this checkpoint in the same run\n");
+    const artifact = compiledArtifact(fixture.home);
+    const binary = join(fixture.home, "cache", "a4s", artifact.version, "a4s");
+    const admittedSpec = `name: feature\ntype: graph\nshell: bash\nenv:\n  - PRIMARY: ${JSON.stringify(repo.primary)}\n  - A4S_BIN: ${JSON.stringify(binary)}\nparams:\n  - RETAINED: original\nsteps:\n  - id: start_gate\n    run: echo retained-predecessor\n  - id: implement\n    depends: start_gate\n    action: human.task\n    with:\n      prompt: Recover this checkpoint in the same run\n`;
+    writeFileSync(file, admittedSpec);
+    writeFileSync(join(repo.state, "receipt.json"), JSON.stringify(roleAdmission(repo.primary, fixture.home, id, admittedSpec, artifact)));
     const started = spawnSync("dagu", ["start", "--run-id", id, file], { env: fixture.env, encoding: "utf8" });
     assert.equal(started.status, 0, started.stderr);
     await fixture.state(id, "waiting");
@@ -2980,7 +2987,7 @@ test("real Dagu automatically recovers a stale Failed feature in one reconcile t
     assert.equal(before.dagRunId, id);
     const script = extractScript(fileURLToPath(new URL("../skills/issue-execution/reconcile.yaml", import.meta.url)), "  - id: recover_stale");
     const tick = join(fixture.home, "dags", "recovery-tick.yaml");
-    writeFileSync(tick, `name: recovery-tick\nshell: bash\nsteps:\n  - id: recover_stale\n    run: |\n${script.split("\n").map(line => `      ${line}`).join("\n")}\n`);
+    writeFileSync(tick, `name: recovery-tick\nshell: bash\nenv:\n  - A4S_BIN: ${JSON.stringify(binary)}\nsteps:\n  - id: recover_stale\n    run: |\n${script.split("\n").map(line => `      ${line}`).join("\n")}\n`);
     const retried = spawn("dagu", ["start", "--run-id", `tick-${fixture.suffix}`, tick], {
       env: fixture.env, stdio: ["ignore", "pipe", "pipe"],
     });
@@ -3007,7 +3014,10 @@ test("real Dagu automatically recovers a stale Failed feature in one reconcile t
     const after = JSON.parse(readFileSync(statusFile, "utf8").trim().split("\n").at(-1)!);
     assert.deepEqual(after.params, snapshot.params);
     t.diagnostic(`Dagu ${liveDaguVersion}; one native reconcile recovery step; injected scheduler overwrite only; same run=${id}; attempt=${waitingEvent.attempt_id}; step=start_gate; restored implement=waiting; parameters preserved; retries=1`);
-  } finally { await fixture.close(); }
+  } finally {
+    await fixture.close();
+    rmSync(repo.root, { recursive: true, force: true });
+  }
 });
 
 type GateEvent = { kind: "START" | "END"; run: string; at: number; pid: number };
@@ -3171,7 +3181,7 @@ test("real Dagu gate exclusion covers completion, retry, native rewind, BEHIND a
       let retry: ChildProcess | undefined;
       let retryExit: Promise<number | null> | undefined;
       try {
-        const vars = { PRIMARY: first.primary, WORKTREE: "${TREE}", BRANCH: "${FEATURE_BRANCH}", RUN: "${context.run.id}", GATE: gate, PATH: process.env.PATH, DAGU_HOME: join(first.root, "dagu-home"), A4S_HEAVY_SLOT_HELD: "" };
+        const vars = { A4S_BIN: a4sBin, PRIMARY: first.primary, WORKTREE: "${TREE}", BRANCH: "${FEATURE_BRANCH}", RUN: "${context.run.id}", GATE: gate, PATH: process.env.PATH, DAGU_HOME: join(first.root, "dagu-home"), A4S_HEAVY_SLOT_HELD: "" };
         writeFileSync(dag, "type: graph\nshell: bash\nqueue: a4s\nparams:\n  - TREE: ''\n  - FEATURE_BRANCH: ''\n  - CHECKPOINT: ''\nenv:\n"
           + Object.entries(vars).map(([key, value]) => `  - ${key}: ${JSON.stringify(value)}\n`).join("")
           + "steps:\n  - id: admission\n    action: human.task\n    with:\n      prompt: Admit disposable gate candidate\n"

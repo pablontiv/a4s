@@ -12,7 +12,9 @@ import { nativeEvidence } from "../src/role-runtime.ts";
 import { planningReviewer } from "../src/transcript-identity.ts";
 import { liveDagu, liveDaguVersion } from "./fixtures/live-dagu.ts";
 import { testRunId } from "./fixtures/run-id.ts";
-import { a4sBin } from "./fixtures/a4s.ts";
+import { compiledA4sBin } from "./fixtures/admission.ts";
+
+const a4sBin = compiledA4sBin();
 
 const definition = parse(readFileSync(new URL("../skills/issue-execution/planning.yaml", import.meta.url), "utf8"));
 function script(id: string): string {
@@ -353,7 +355,7 @@ test("native planning push-back uses structured iteration across mechanical cons
   const native = structuredClone(definition);
   native.labels = ["workspace=planning-regression"];
   delete native.queue;
-  native.env = Object.entries(f.env).filter(([key]) => ["HOME", "TMPDIR", "PATH", "DAGU_HOME", "DAGU_PORT", "PRIMARY"].includes(key))
+  native.env = Object.entries(f.env).filter(([key]) => ["A4S_BIN", "HOME", "TMPDIR", "PATH", "DAGU_HOME", "DAGU_PORT", "PRIMARY"].includes(key))
     .map(([key, value]) => ({ [key]: value }));
   native.env.push({ RUN: "${context.run.id}" }, { FEEDBACK: "" });
   native.steps.find((step: { id: string }) => step.id === "init").run =

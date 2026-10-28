@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.7.0
+
+- Breaking: the station reconciler is operator-pinned to an exact cached release and dispatches every per-run action through that run's own cached `a4s` (receipt tuple verified against the cache); the OMP plugin loads from an extracted release directory and dispatches run mutations through the run's artifact under declared receipt/protocol compatibility. Artifacts without the dispatch boundary (0.6.0) are reported unsupported and left untouched (#713).
+
 ## 0.6.0
 
 - Breaking: the engine ships as one compiled `a4s` executable in versioned GitHub releases (`a4s-v<version>-<os>-<arch>.tar.gz` + `.sha256`, moving major tag `v0`). Consumers select it with committed `uses: a4s@v0` or an exact `a4s@v<x.y.z>` in `config.json`; root admission resolves once, verifies and caches the archive under `$DAGU_HOME/cache/a4s/<version>/`, and hands off to `a4s admit --artifact '<version>@<commit>#<digest>'`. Snapshots bind `A4S_BIN`; receipts record the artifact tuple and contract versions; successors bind to the parent's artifact. Station install/executor commands, checkout stamps and re-seal, legacy `dagu-*` bin registrations and the Python runtime helpers are removed (#712).

@@ -125,7 +125,11 @@ function layout(directory: string, files: Set<string>, tuple: ArtifactTuple): Ar
   if (!isDeepStrictEqual(declared, executable) || !isRecord(declared) || declared.version !== tuple.version || declared.commit !== tuple.commit || !isRecord(declared.support) || "digest" in declared) throw new Error(`Artifact embedded identity mismatch: expected ${artifactToken(tuple)}`);
   const manifest = json(join(directory, "package.json"));
   if (!isRecord(manifest) || manifest.name !== "@a4s/issue-lifecycle" || manifest.version !== tuple.version) throw new Error("Artifact package manifest identity mismatch");
+  if (!isRecord(manifest.omp) || !Array.isArray(manifest.omp.extensions) ||
+      !isDeepStrictEqual(manifest.omp.extensions, ["./src/status/reloadable.ts", "./src/triage/reloadable.ts"]) ||
+      manifest.omp.extensions.some(path => typeof path !== "string" || !files.has(path.slice(2)))) throw new Error("Artifact OMP extension metadata does not name the shipped extension entries");
   const support = declared.support;
+  if (support.dispatch !== identity.support.dispatch) throw new Error(`Unsupported artifact dispatch boundary: required ${identity.support.dispatch}; declared=${JSON.stringify(support.dispatch) ?? "missing"}`);
   if (!Array.isArray(support.configSchemas) || !support.configSchemas.includes(1) || !isRecord(support.receiptSchemas) || !Array.isArray(support.receiptSchemas.read) || !support.receiptSchemas.read.includes(2) || support.receiptSchemas.write !== 2 || !Array.isArray(support.roleJobStores) || !support.roleJobStores.includes(1) || !isDeepStrictEqual(support.protocols, identity.support.protocols)) throw new Error("Artifact declares unsupported config/receipt/protocol/job-store contracts");
   return declared as unknown as ArtifactIdentity;
 }

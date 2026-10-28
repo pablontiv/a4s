@@ -8,6 +8,7 @@ import {
   type IntegrationCheckpoint,
   type ReleaseReason,
 } from "../integration-protection.ts";
+import { executingRunArtifact } from "../run-artifact.ts";
 
 const BOOLEAN = new Set(["held-lock"]);
 const ALLOWED: Record<string, readonly string[]> = {
@@ -70,7 +71,8 @@ try {
   } else if (action === "refresh") {
     refreshProtectedPaths(primary, env("WORKTREE"), env("RUN"));
   } else if (action === "release") {
-    const record = releaseProtection(primary, { reason: "operator", decision: text(flags, "decision") });
+    const record = releaseProtection(primary, { reason: "operator", decision: text(flags, "decision"),
+      ...(executingRunArtifact() ? { run: env("RUN") } : {}) });
     if (record) console.error(`integration protection: released protected_run=${record.protectedRun} reason=operator`);
     else console.error("integration protection: no active protection");
   } else if (action === "release-auto") {

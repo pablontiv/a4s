@@ -50,6 +50,21 @@ flowchart LR
   release root loaded/linked as the OMP package. Snapshots bind the selected
   cached executable as absolute `A4S_BIN`; engine calls use
   `"$A4S_BIN" <subcommand>`, never ambient legacy commands or checkout code.
+- The scheduled reconciler is separately pinned to an exact verified release.
+  The operator obtains its tuple with `a4s reconcile cache --release a4s@vX.Y.Z`
+  and prints its DAG with `a4s reconcile render --artifact '<version>@<commit>#<digest>'`.
+  These commands never install station DAGs or restart Dagu. Only the operator
+  installs the printed DAG and enables scheduling; see
+  [pinning and plugin cutover](../../../../docs/operations/deployment.md#pin-the-station-reconciler-and-release-plugin).
+- For an existing run, use `a4s run --primary <canonical-primary> --run <id> -- <command>`.
+  It requires declared dispatch protocol `a4s-run/1`, verifies schema/protocol/store
+  contracts and the exact cached tuple, then invokes that run's executable, irrespective of the plugin
+  or reconciler version. The OMP mutation guard applies this boundary to literal
+  triage/protection/role commands; HUD writes use it too. Unsupported runs may
+  be displayed but cannot be mutated. Never substitute the plugin's engine or
+  change receipt declarations to make an action pass. A tick logs
+  `reconcile-failure run=<id> status=1 cause=<diagnostic>` and continues other
+  compatible runs. Restore a missing exact artifact under operator authority.
 - `CODE_SCANNING=required` needs enabled CodeQL analysis and permission to read
   code-scanning alerts and check runs; `off` does not call that API.
 - `DAGU_HOME` in your shell must point to the same home as that service. Read it from the service definition (macOS: `EnvironmentVariables.DAGU_HOME` in the LaunchAgent plist). If they differ, enqueue and complete commands land in a store the scheduler never reads, and the run stays `Queued`.
@@ -80,10 +95,11 @@ This skill does not install Dagu and contains no repository-specific service log
 
 ## Role-job receipt contract (schemaVersion 1)
 
-`a4s role-jobs stage triage|implement` executes the template's command stages.
-It authorizes against the run's immutable admission receipt/snapshot, the current
-native running stage and ready dependencies, canonical worktree ownership,
-candidate SHA and iteration. `validation` remains an operator `human.task`.
+`a4s role-jobs stage triage|implement` resolves the run's artifact before executing
+the template's command stages. It authorizes against the immutable admission
+receipt/snapshot, current native running stage and ready dependencies, canonical
+worktree ownership, candidate SHA and iteration. Release-version equality is not
+required; supported declared contracts are. `validation` remains an operator `human.task`.
 The registry maps `triage` to `triage-reviewer`, implementation/conflict resolution
 to `task`. Native `discoverAgents`,
 `Settings.loadReadOnly`, `resolveAgentModelSelection` and `runSubprocess` preserve

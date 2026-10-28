@@ -3,6 +3,12 @@ import { createHash } from "node:crypto";
 import { closeSync, existsSync, readFileSync } from "node:fs";
 import { constants } from "node:os";
 import { join } from "node:path";
+import { homedir } from "node:os";
+import { inspectArtifact, ensureArtifact } from "./artifact-cache.ts";
+import { artifactToken, parseArtifact, resolveRelease } from "./release.ts";
+import { exampleConfig } from "./config.ts";
+import { materializeDag } from "./materialize.ts";
+import { inspectRun, finishRun, executeStep } from "./reconcile-run.ts";
 import { writeAtomicJson } from "./atomic-json.ts";
 import { acquireLock, openLock, withFileLock } from "./file-lock.ts";
 
@@ -14,8 +20,27 @@ interface NoProgress {
   schemaVersion: 1; run: string; fingerprint: string | null; observations: number; observationId: string | null;
   requests: Record<string, { id: string; observations: number }>;
 }
-export function main(argv: string[]): void {
+export async function main(argv: string[]): Promise<void> {
   const [mode, ...args] = argv;
+  if (mode === "cache" && args.length === 2 && args[0] === "--release") {
+    if (!/^a4s@v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(args[1]!)) throw new Error("Pinned reconciliation requires an exact release a4s@vX.Y.Z, never a moving ref");
+    const release = resolveRelease(args[1]!);
+    const cached = await ensureArtifact(process.env.DAGU_HOME || join(homedir(), ".dagu"), release);
+    console.log(artifactToken(cached.record));
+    return;
+  }
+  if (mode === "render" && args.length === 2 && args[0] === "--artifact") {
+    const tuple = parseArtifact(args[1]);
+    const cached = await inspectArtifact(process.env.DAGU_HOME || join(homedir(), ".dagu"), tuple);
+    const dag = materializeDag(cached.directory, "reconcile.yaml", exampleConfig(), {
+      version: tuple.version, source: artifactToken(tuple), executable: cached.executable,
+    }).replace(/^env:\n/gm, `env:\n  - A4S_ARTIFACT: ${JSON.stringify(artifactToken(tuple))}\n`);
+    process.stdout.write(dag);
+    return;
+  }
+  if (mode === "inspect" && args.length === 1) { console.log(JSON.stringify(inspectRun(JSON.parse(args[0]!)))); return; }
+  if (mode === "finish" && args.length === 2) { finishRun(JSON.parse(args[0]!), JSON.parse(args[1]!)); return; }
+  if (mode === "step" && args.length === 1) { executeStep(args[0]!); return; }
   if (mode === "now" && !args.length) { console.log(Date.now()); return; }
   if (mode === "remaining" && args.length === 3) {
     const [budget, started, cap] = args.map(Number);
@@ -89,5 +114,5 @@ export function main(argv: string[]): void {
     } finally { for (const fd of descriptors) closeSync(fd); }
     return;
   }
-  throw new Error("Usage: a4s reconcile now | remaining <budget-seconds> <started-ms> <cap-seconds> | positive <seconds> | bounded <phase> <seconds> <command> [args...] | sha256 | ci-no-progress <state> <observation-id> <threshold> | lock <command> [args...]");
+  throw new Error("Usage: a4s reconcile cache --release a4s@vX.Y.Z | render --artifact <version>@<commit>#<digest> | inspect <row> | finish <row> <issue> | step observe|transition | now | remaining <budget-seconds> <started-ms> <cap-seconds> | positive <seconds> | bounded <phase> <seconds> <command> [args...] | sha256 | ci-no-progress <state> <observation-id> <threshold> | lock <command> [args...]");
 }

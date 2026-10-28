@@ -6,8 +6,8 @@ import { artifactToken, parseArtifact, sameArtifact, type ArtifactTuple } from "
 import { assertReceiptVersion } from "./receipt-version.ts";
 import { inspectArtifact, type CachedArtifact } from "./artifact-cache.ts";
 
-export interface UsedContracts { config: 1; receipt: 2; roleJobStore: 1; protocols: ArtifactIdentity["support"]["protocols"] }
-export const USED_CONTRACTS: UsedContracts = { config: 1, receipt: 2, roleJobStore: 1, protocols: identity.support.protocols };
+export interface UsedContracts { dispatch: ArtifactIdentity["support"]["dispatch"]; config: 1; receipt: 2; roleJobStore: 1; protocols: ArtifactIdentity["support"]["protocols"] }
+export const USED_CONTRACTS: UsedContracts = { dispatch: identity.support.dispatch, config: 1, receipt: 2, roleJobStore: 1, protocols: identity.support.protocols };
 export interface ArtifactReceiptFields {
   artifact: ArtifactTuple;
   artifactSupport: ArtifactIdentity["support"];
@@ -21,6 +21,7 @@ export function assertArtifactReceipt(value: unknown, path: string): asserts val
   const artifact = parseArtifact(`${value.artifact.version}@${value.artifact.commit}#${value.artifact.digest}`);
   const support = value.artifactSupport;
   const used = value.contracts;
+  if (support.dispatch !== identity.support.dispatch || used.dispatch !== identity.support.dispatch) throw new Error(`Unsupported receipt dispatch boundary: required ${identity.support.dispatch}; declared=${JSON.stringify(support.dispatch) ?? "missing"}, selected=${JSON.stringify(used.dispatch) ?? "missing"}: ${path}`);
   if (used.config !== 1 || used.receipt !== 2 || used.roleJobStore !== 1 || !isDeepStrictEqual(used.protocols, identity.support.protocols) ||
       !Array.isArray(support.configSchemas) || !support.configSchemas.includes(1) || !isRecord(support.receiptSchemas) || !Array.isArray(support.receiptSchemas.read) || !support.receiptSchemas.read.includes(2) || support.receiptSchemas.write !== 2 || !Array.isArray(support.roleJobStores) || !support.roleJobStores.includes(1) || !isDeepStrictEqual(support.protocols, used.protocols)) throw new Error(`Unsupported receipt config/receipt/protocol/job-store contracts: ${path}`);
   if (!isRecord(value.sourceVersion) || value.sourceVersion.version !== artifact.version || value.sourceVersion.commit !== artifact.commit) throw new Error(`Receipt artifact/source identity mismatch: ${path}`);

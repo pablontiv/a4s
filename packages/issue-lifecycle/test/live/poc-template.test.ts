@@ -11,7 +11,9 @@ import { setTimeout as delay } from "node:timers/promises";
 import { liveDagu } from "../fixtures/live-dagu.ts";
 import { PocDiagnostics } from "../fixtures/poc-diagnostics.ts";
 import { BUNDLE_VERSION } from "../../src/bundle.ts";
-import { a4sBin } from "../fixtures/a4s.ts";
+import { compiledA4sBin } from "../fixtures/admission.ts";
+
+const a4sBin = compiledA4sBin();
 
 for (const definition of [
   new URL("../../skills/issue-execution/poc.yaml", import.meta.url),
@@ -208,6 +210,7 @@ esac
     git("-C", primary, "push", "origin", "main");
     const definition = join(home, "dags", "poc.yaml");
     writeFileSync(definition, readFileSync(new URL("../../skills/issue-execution/poc.yaml", import.meta.url), "utf8")
+      .replace(/^env:\n/m, `env:\n  - A4S_BIN: ${JSON.stringify(a4sBin)}\n`)
       .replaceAll("__DAGU_FEATURE_VERSION__", BUNDLE_VERSION)
       .replaceAll("TEMPLATE_REPO", "decline263").replaceAll("TEMPLATE_BASE_BRANCH", "main")
       .replaceAll("__PRIMARY__", primary).replaceAll("__TEST_PATHS__", "_test$")

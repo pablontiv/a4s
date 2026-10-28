@@ -145,10 +145,9 @@ plugin links, queue configuration, reconciler and repository settings.
    Review `.workspace/dagu/config.json`, remove retired `queueConcurrency`, and
    commit changed policy before feature admission. Reader and config migrate
    together: old schema-1 readers reject the new `uses` field.
-5. **Pin reconciliation.** The operator provisions the scheduled reconciler from
-   a verified cache entry and pins its `A4S_BIN` to that same absolute executable.
-   Bootstrap never writes `$DAGU_HOME/dags/` or installs a checkout reconciler.
-   Retain this entry until the operator deliberately replaces that pin.
+5. **Pin reconciliation.** Follow [the exact-release procedure below](#pin-the-station-reconciler-and-release-plugin).
+   Bootstrap and `reconcile render` never write `$DAGU_HOME/dags/`. Retain the
+   pinned cache entry until the operator deliberately replaces that pin.
 6. **Remove obsolete deployment bindings.** Once no references remain, remove
    old installed source checkouts, executor launchers/plugin links and checkout
    entries in the service PATH. Preserve unrelated operator files and development
@@ -187,6 +186,81 @@ Admission records config commit/digest separately from artifact identity and
 supported/used contract versions, and enqueues exact immutable snapshot bytes.
 A later release needs no consumer commit when moving-major policy stays the same;
 already admitted runs and their successors stay on their original artifact.
+
+### Pin the station reconciler and release plugin
+
+These steps are the separately authorized operator cutover (#714), **not** a4s
+side effects. Use the drained station policy above, its canonical `DAGU_HOME`,
+the selected platform's verified extracted release root, and an exact published
+`VERSION` (for example `0.7.0` only after that release has actually been published).
+Never use `v0`, a checkout path or PATH as the scheduled executable selection.
+
+The minimum dispatchable release is v0.7.0, which ships #713. Its capability is
+identified by `a4s version` declaring `support.dispatch: "a4s-run/1"` (not by
+a SemVer comparison). v0.6.0 predates that boundary and cannot dispatch runs after this
+cutover. Confirm zero nonterminal pre-#713 runs and zero open role jobs before
+installing either consumer. Historical receipts remain read-only; a missing
+dispatch declaration is reported as unsupported, never repaired or substituted.
+
+```sh
+export DAGU_HOME="<canonical-station-home>"
+RELEASE_ROOT="<absolute-verified-extracted-release-root>"
+VERSION="<exact-published-X.Y.Z>"
+
+# Cache only: verifies the tagged platform archive and embedded identity.
+ARTIFACT="$("$RELEASE_ROOT/a4s" reconcile cache --release "a4s@v$VERSION")"
+"$DAGU_HOME/cache/a4s/$VERSION/a4s" version
+
+# Read-only rendering: output goes to an operator-owned staging file.
+STAGED="$(mktemp)"
+"$RELEASE_ROOT/a4s" reconcile render --artifact "$ARTIFACT" > "$STAGED"
+dagu validate "$STAGED"
+# Review both A4S_BIN/A4S_ARTIFACT bindings and the minute schedule.
+# Only the operator installs the reviewed bytes:
+install -m 0644 "$STAGED" "$DAGU_HOME/dags/reconcile.yaml"
+rm "$STAGED"
+
+# Link the entire verified release, not packages/issue-lifecycle in PRIMARY.
+omp plugin link "$RELEASE_ROOT"
+```
+
+Before installing, preserve/resolve an existing operator DAG under station
+policy. `reconcile cache` writes only the artifact cache, refuses nonexact refs,
+and never repairs a conflicting final entry. `render` requires the verified
+entry, rechecks retained archive, all extracted payloads and embedded identity,
+and prints YAML only; it does not create `$DAGU_HOME/dags/`. The emitted schedule
+is once per minute with overlap skipped. The operator confirms the existing
+scheduler is enabled, or activates it under the drained service policy; a4s
+does not activate/restart the service. An initial manual `dagu start` of the
+installed file plus scheduled history demonstrates activation separately from
+successful rendering.
+
+For the service user's persistent OMP installation, replace the existing
+`@a4s/issue-lifecycle` registration rather than registering a second copy. The
+plugin manager/link must make
+`~/.omp/plugins/node_modules/@a4s/issue-lifecycle` resolve to `RELEASE_ROOT`,
+not PRIMARY's `packages/issue-lifecycle`. Update the corresponding
+`~/.omp/plugins/omp-plugins.lock.json` managed entry to the release's actual
+`package.json` version and release-directory source/link; do not retain the
+old `0.5.25` checkout record or alter unrelated plugin entries. Use the installed
+OMP plugin manager's link/replacement operation to maintain its lock schema.
+Retain the selected version, commit, archive digest, resolved link and lock
+entry as operator evidence. A new OMP process must load both extension entries,
+agents and skills from that root; refresh alone is not module-load evidence.
+The packaged extensions select adjacent `RELEASE_ROOT/a4s`, then each run's
+receipt-bound cache for mutations.
+
+Admission can reopen only after read-only readiness, manual/scheduled tick
+history and plugin-load evidence agree with the selected station tuple.
+Retain cache entries for all referenced runs/open role jobs and the reconciler.
+A mixed-version station is supported when declared receipt/protocol/store
+contracts agree: the reconciler's pin is never substituted for a run's tuple.
+An unavailable/unsupported run logs
+`reconcile-failure run=<id> status=1 cause=<diagnostic>`, is left untouched, and
+does not prevent compatible runs from proceeding. Restore its exact verified
+artifact or resolve that run explicitly; never rewrite its receipt or silently
+upgrade it.
+
 
 
 ## Operator-owned station configuration and readiness

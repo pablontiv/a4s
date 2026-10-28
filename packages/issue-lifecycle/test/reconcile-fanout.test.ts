@@ -7,6 +7,7 @@ import { performance } from "node:perf_hooks";
 import test from "node:test";
 import { parseAllDocuments } from "yaml";
 import { compiledA4sBin } from "./fixtures/admission.ts";
+import { reconcileEnvironment } from "./role-job-fixtures.ts";
 
 const a4sBin = compiledA4sBin();
 
@@ -73,6 +74,7 @@ function parseDeclaredStepOutputs(text: string, names: readonly string[]): Recor
   return values;
 }
 function runBash(source: string, env: NodeJS.ProcessEnv): Promise<{ status: number | null; stdout: string; stderr: string }> {
+  env = reconcileEnvironment(env);
   const started = performance.now();
   return new Promise(resolve => {
     const child = spawn("bash", ["-c", source], { env: { A4S_BIN: a4sBin, ...env } });
