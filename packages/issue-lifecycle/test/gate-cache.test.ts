@@ -4,9 +4,14 @@ import { createRequire } from "node:module";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import test, { mock } from "node:test";
 
 const require = createRequire(import.meta.url);
+const childProcess = require("node:child_process");
+const realSpawnSync = childProcess.spawnSync;
+// Fingerprinting must not launch npm merely to learn its version.
+const spawnMock = mock.method(childProcess, "spawnSync", (file: string, args: string[], options: object) =>
+  file === "npm" ? { status: 0, stdout: "fixture-npm\n" } : realSpawnSync(file, args, options));
 const {
   cacheDirectory, classifyTestSource, describeTask, forget, lookup, plan, storePass,
 } = require("../bin/gate-cache.cjs") as {
@@ -24,9 +29,10 @@ const {
   };
   storePass: (cacheDir: string, record: { key: string; result: string; exitCode: number; remote?: boolean; schemaVersion?: number; task?: object }) => void;
 };
+spawnMock.mock.restore();
 
-const bundleVersion = readFileSync(new URL("./bundle-version.test.ts", import.meta.url), "utf8");
-const featureTemplate = readFileSync(new URL("./feature-template.test.ts", import.meta.url), "utf8");
+const bundleVersion = readFileSync(new URL("./live/bundle-version.test.ts", import.meta.url), "utf8");
+const featureTemplate = readFileSync(new URL("./live/feature-template.test.ts", import.meta.url), "utf8");
 
 test("gate cache classifies git-state checks as always executed", () => {
   const gitState = classifyTestSource(bundleVersion);

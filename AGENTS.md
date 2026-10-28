@@ -36,6 +36,12 @@ The optional-host tool-row workspace is test-only; its renderer types come from
 the consumer's Pion host. Orca managed-worktree setup should run by default
 (`--setup run` when explicitly required). Its setup terminal can remain active
 after worktree creation returns; wait for it.
+Default workspace scripts preload `scripts/test-no-spawn.mjs` and select only
+top-level tests, excluding `test/live/`. They exercise logic in-process, allowing
+only direct `git`/`tar` child commands; the default gate is unslotted. Native CLI,
+YAML, compiled-release, OS-lock and timing scenarios require explicit workspace
+`test:live` (or lifecycle `test:compiled`) commands and isolated temporary state.
+
 Real integration acceptance requires the corresponding native hosts, broker,
 pinned Dagu and authorized model credentials; unit tests are a separate claim.
 

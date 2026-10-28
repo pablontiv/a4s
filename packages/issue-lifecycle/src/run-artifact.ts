@@ -39,12 +39,13 @@ export async function verifiedRun(primary: string, run: string, inspect = inspec
 export class RunArtifactScope {
   readonly #artifacts = new Map<string, Promise<CachedArtifact>>();
   #executableDigest: Promise<string> | undefined;
+  constructor(private readonly inspect = inspectArtifact) {}
   get artifactVerifications(): number { return this.#artifacts.size; }
   verify(primary: string, run: string): Promise<VerifiedRun> {
     return verifiedRun(primary, run, (home, tuple) => {
       const key = `${home}/${artifactToken(tuple)}`;
       let cached = this.#artifacts.get(key);
-      if (!cached) { cached = inspectArtifact(home, tuple); this.#artifacts.set(key, cached); }
+      if (!cached) { cached = this.inspect(home, tuple); this.#artifacts.set(key, cached); }
       return cached;
     });
   }

@@ -12,10 +12,10 @@ interface NoProgress {
   schemaVersion: 1; run: string; fingerprint: string | null; observations: number; observationId: string | null;
   requests: Record<string, { id: string; observations: number }>;
 }
-export function recordNoProgress(root: string, observationId: string, rawThreshold: string): void {
+export function recordNoProgress(root: string, observationId: string, rawThreshold: string, lock = withFileLock): void {
   const threshold = Number(rawThreshold);
   if (!Number.isInteger(threshold) || threshold < 1) throw new Error("ESCALATION_CI_BLOCKED must be a positive integer");
-  withFileLock(join(root, "ci-no-progress.lock"), () => {
+  lock(join(root, "ci-no-progress.lock"), () => {
     const file = join(root, "ci-observation.json");
     const observation: Observation = JSON.parse(readFileSync(file, "utf8"));
     const stateFile = join(root, "ci-no-progress.json");

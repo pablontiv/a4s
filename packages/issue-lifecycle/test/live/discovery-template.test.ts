@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 
 const definitions = [
-  ["template", fileURLToPath(new URL("../skills/issue-execution/discovery.yaml", import.meta.url))],
+  ["template", fileURLToPath(new URL("../../skills/issue-execution/discovery.yaml", import.meta.url))],
 ] as const;
 
 

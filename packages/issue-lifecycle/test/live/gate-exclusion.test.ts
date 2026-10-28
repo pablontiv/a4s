@@ -7,14 +7,14 @@ import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { parse } from "yaml";
-import { liveDagu, liveDaguVersion } from "./fixtures/live-dagu.ts";
-import { compiledA4sBin } from "./fixtures/admission.ts";
-import { roleAdmission } from "./role-job-fixtures.ts";
+import { liveDagu, liveDaguVersion } from "../fixtures/live-dagu.ts";
+import { compiledA4sBin } from "../fixtures/admission.ts";
+import { roleAdmission } from "../role-job-fixtures.ts";
 
 const a4sBin = compiledA4sBin();
 
-const packageRoot = fileURLToPath(new URL("../", import.meta.url));
-const sourceRoot = fileURLToPath(new URL("../../../", import.meta.url));
+const packageRoot = fileURLToPath(new URL("../../", import.meta.url));
+const sourceRoot = fileURLToPath(new URL("../../../../", import.meta.url));
 const template = parse(readFileSync(join(packageRoot, "skills/issue-execution/feature.yaml"), "utf8"));
 const gateScript: string = template.steps.find((step: { id: string }) => step.id === "gate").run;
 const npmCli = realpathSync(execFileSync("which", ["npm"], { encoding: "utf8" }).trim());

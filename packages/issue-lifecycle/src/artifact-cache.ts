@@ -13,6 +13,12 @@ const EVIDENCE = "verified-archive.tar.gz";
 const RECORD = "artifact.json";
 export interface ArtifactRecord extends ArtifactTuple { verifiedAt: string }
 export interface CachedArtifact { directory: string; executable: string; executableDigest: string; identity: ArtifactIdentity; record: ArtifactRecord }
+export interface ArtifactDependencies {
+  github?: (args: string[]) => string;
+  download?: (args: string[]) => void;
+  executableIdentity?: (executable: string) => unknown;
+  withFileLock?: typeof withFileLockAsync;
+}
 export function cachePath(home: string, tuple: ArtifactTuple): string {
   parseArtifact(artifactToken(tuple));
   return join(resolve(home), "cache", "a4s", tuple.version);
@@ -121,10 +127,12 @@ const REQUIRED = ["a4s", "identity.json", "package.json", "bin/dagu-gate.cjs", "
   ...["backlog-breakdown", "issue-execution", "refine", "repository-discovery", "sprint-planning", "sprint-retrospective", "sprint-review"].map(name => `skills/${name}/SKILL.md`),
   "skills/repository-discovery/CONTRACT.md", "skills/repository-discovery/METHOD.md",
   ...["0-cobertura-funcional", "1-limites-de-confianza", "2-integridad-y-ciclo-de-vida-de-datos", "3-resiliencia-y-concurrencia", "4-cadena-de-suministro-y-publicacion"].map(name => `skills/repository-discovery/lenses/${name}.md`)];
-function layout(directory: string, files: Set<string>, tuple: ArtifactTuple): ArtifactIdentity {
+function layout(directory: string, files: Set<string>, tuple: ArtifactTuple, dependencies: ArtifactDependencies): ArtifactIdentity {
   for (const path of REQUIRED) if (!files.has(path)) throw new Error(`Incomplete a4s artifact: missing ${path}`);
   const declared = json(join(directory, "identity.json"));
-  const executable = JSON.parse(execFileSync(join(directory, "a4s"), ["version"], { encoding: "utf8", timeout: 30000 }));
+  const executable = dependencies.executableIdentity
+    ? dependencies.executableIdentity(join(directory, "a4s"))
+    : JSON.parse(execFileSync(join(directory, "a4s"), ["version"], { encoding: "utf8", timeout: 30000 }));
   if (!isDeepStrictEqual(declared, executable) || !isRecord(declared) || declared.version !== tuple.version || declared.commit !== tuple.commit || !isRecord(declared.support) || "digest" in declared) throw new Error(`Artifact embedded identity mismatch: expected ${artifactToken(tuple)}`);
   const manifest = json(join(directory, "package.json"));
   if (!isRecord(manifest) || manifest.name !== "@a4s/issue-lifecycle" || manifest.version !== tuple.version) throw new Error("Artifact package manifest identity mismatch");
@@ -146,7 +154,7 @@ function entryFiles(directory: string, prefix = ""): string[] {
 }
 /** Re-derive payload evidence from the retained, checksum-verified archive, never
  * from a newly generated manifest of the current extracted files. */
-export async function inspectArtifact(home: string, tuple: ArtifactTuple): Promise<CachedArtifact> {
+export async function inspectArtifact(home: string, tuple: ArtifactTuple, dependencies: ArtifactDependencies = {}): Promise<CachedArtifact> {
   const directory = cachePath(home, tuple);
   if (!lstatSync(directory).isDirectory() || realpathSync(directory) !== directory) throw new Error(`Artifact cache must be a real directory: ${directory}`);
   const record = json(join(directory, RECORD));
@@ -158,27 +166,29 @@ export async function inspectArtifact(home: string, tuple: ArtifactTuple): Promi
   if (await fileDigest(archive) !== tuple.digest) throw new Error(`Modified verified archive for ${artifactToken(tuple)}`);
   const { files, executableDigest } = await archiveFiles(archive, directory, false);
   for (const name of entryFiles(directory)) if (name !== RECORD && name !== EVIDENCE && !files.has(name)) throw new Error(`Unexpected artifact payload ${name}`);
-  const declared = layout(directory, files, tuple);
+  const declared = layout(directory, files, tuple, dependencies);
   return { directory, executable: join(directory, "a4s"), executableDigest, identity: declared, record: record as unknown as ArtifactRecord };
 }
-export async function ensureArtifact(home: string, release: ResolvedRelease): Promise<CachedArtifact> {
-  return withFileLockAsync(artifactLock(home, release), async () => {
+export async function ensureArtifact(home: string, release: ResolvedRelease, dependencies: ArtifactDependencies = {}): Promise<CachedArtifact> {
+  return (dependencies.withFileLock ?? withFileLockAsync)(artifactLock(home, release), async () => {
     const directory = cachePath(home, release);
-    if (existsSync(directory) || (() => { try { lstatSync(directory); return true; } catch { return false; } })()) return inspectArtifact(home, release);
+    if (existsSync(directory) || (() => { try { lstatSync(directory); return true; } catch { return false; } })()) return inspectArtifact(home, release, dependencies);
     mkdirSync(dirname(directory), { recursive: true });
     const stage = mkdtempSync(join(dirname(directory), `.${release.version}-`));
     try {
       const archive = archiveName(release.version);
       if (release.archive !== archive) throw new Error("Resolved archive does not match the native platform");
-      const checksum = github(["release", "download", `v${release.version}`, "--repo", release.repository, "--pattern", `${archive}.sha256`, "--output", "-"]);
+      const checksum = (dependencies.github ?? github)(["release", "download", `v${release.version}`, "--repo", release.repository, "--pattern", `${archive}.sha256`, "--output", "-"]);
       if (checksumDigest(checksum, archive) !== release.digest) throw new Error("Exact release checksum changed after resolution");
       const downloaded = join(stage, archive);
-      execFileSync("gh", ["release", "download", `v${release.version}`, "--repo", release.repository, "--pattern", archive, "--output", downloaded], { stdio: ["ignore", "pipe", "pipe"] });
+      const downloadArgs = ["release", "download", `v${release.version}`, "--repo", release.repository, "--pattern", archive, "--output", downloaded];
+      if (dependencies.download) dependencies.download(downloadArgs);
+      else execFileSync("gh", downloadArgs, { stdio: ["ignore", "pipe", "pipe"] });
       regular(downloaded);
       if (await fileDigest(downloaded) !== release.digest) throw new Error(`Archive SHA-256 mismatch: ${archive}`);
       renameSync(downloaded, join(stage, EVIDENCE));
       const { files, executableDigest } = await archiveFiles(join(stage, EVIDENCE), stage, true);
-      const declared = layout(stage, files, release);
+      const declared = layout(stage, files, release, dependencies);
       const record: ArtifactRecord = { version: release.version, commit: release.commit, digest: release.digest, verifiedAt: new Date().toISOString() };
       writeFileSync(join(stage, RECORD), `${JSON.stringify(record, null, 2)}\n`, { flag: "wx", mode: 0o600 });
       renameSync(stage, directory);

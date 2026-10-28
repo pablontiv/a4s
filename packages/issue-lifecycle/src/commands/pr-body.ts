@@ -57,23 +57,28 @@ function render(state: string, issue: string): string {
   return body;
 }
 
-export function main(argv: string[]): void {
+export function main(argv: string[], io = {
+  write: (value: string) => { process.stdout.write(value); },
+  log: (value: string) => { console.log(value); },
+  error: (value: string) => { console.error(value); },
+  fail: () => { process.exitCode = 1; },
+}): void {
 try {
   const [command, file, issue] = argv;
   switch (command) {
-    case "render": process.stdout.write(render(file!, issue!)); break;
+    case "render": io.write(render(file!, issue!)); break;
     case "check-paths": checkPaths(readFileSync(file!, "utf8")); break;
     case "validate": validate(readFileSync(file!, "utf8")); break;
     case "event": {
       const event = JSON.parse(readFileSync((file ?? process.env.GITHUB_EVENT_PATH)!, "utf8"));
       validate(event.pull_request?.body ?? "");
-      console.log("PR body: PASS");
+      io.log("PR body: PASS");
       break;
     }
     default: throw new Error("Usage: dagu-pr-body render <state> <issue> | check-paths <file> | validate <file> | event [event.json]");
   }
 } catch (error) {
-  console.error(`PR body: ${error instanceof Error ? error.message : String(error)}`);
-  process.exitCode = 1;
+  io.error(`PR body: ${error instanceof Error ? error.message : String(error)}`);
+  io.fail();
 }
 }

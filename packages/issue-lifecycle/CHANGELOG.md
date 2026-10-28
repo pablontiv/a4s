@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Make the default workspace test gate in-process and enforce its no-subprocess contract with a shared spawn guard (only direct `git`/`tar` allowed). Preserve real CLI, compiled-release, YAML, Dagu, OS-lock and timing assertions in explicit `test:live`/`test:compiled` lanes; remove the heavy-slot wrapper and forced serial execution from default suites (#683).
+
 ## 0.7.1
 
 - `capture` reads the implement summary and commit message from the verified role-job receipt instead of the single-line Dagu outputs, so candidates, commits and rendered PR bodies keep their line structure (#724).

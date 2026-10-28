@@ -167,7 +167,7 @@ test("release guard follows the lifecycle contract across a package move on main
 });
 
 test("repository template diff has a versioned bundle release", () => {
-  const manifest = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
-  checkBundleVersion(fileURLToPath(new URL("../../..", import.meta.url)),
+  const manifest = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8"));
+  checkBundleVersion(fileURLToPath(new URL("../../../..", import.meta.url)),
     process.env.GITHUB_BASE_REF || manifest.daguFeature.integrationBase);
 });

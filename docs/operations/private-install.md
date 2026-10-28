@@ -39,10 +39,16 @@ npm run typecheck
 
 The root and CI gates run all eight workspace test suites and the seven declared
 typechecks. The tool-row workspace runs transpiled behavioral tests; its optional
-Pion host supplies the renderer types for host-side development. CI and default
-tests need no Dagu binary; real Dagu cases skip unless `A4S_LIVE_DAGU=1`.
-Before a package release, run live Dagu integration on the station with
-`A4S_LIVE_DAGU=1 npm test` and a supported Dagu runtime on `PATH`.
+Pion host supplies the renderer types for host-side development. Default tests
+select only top-level test files and preload `scripts/test-no-spawn.mjs`, which
+rejects child commands other than direct `git`/`tar`; they do not run native CLIs,
+YAML shell steps, builds or timing acceptance. `test/live/` is never selected by
+`npm test`, even with `A4S_LIVE_DAGU=1`.
+Before a package release, run
+`DAGU_HOME="$(mktemp -d)" A4S_GATE_JOURNAL= npm run test:live --workspace @a4s/issue-lifecycle`
+with a supported Dagu runtime on `PATH`. That command sets the live opt-in,
+omits the spawn guard and retains the heavy slot. Messaging and message-bus
+also expose explicit `test:live` scripts for their real CLI scenarios.
 CI discovers current workspace manifests and transitive consumers, handles both
 sides of renames, and aggregates workspace checks and PR-body validation into
 `validate` for `main`.

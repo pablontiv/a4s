@@ -1,13 +1,10 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { validatePlanningUnits } from "../src/planning-validator.ts";
+import { validatePlanningUnits, validatePlanningUnitsCommand } from "../src/planning-validator.ts";
 
-const cli = fileURLToPath(new URL("../bin/dagu-feature-bundle.ts", import.meta.url));
 function unit(id = "change", dag = "feature"): Record<string, unknown> {
   return { id, title: "Deliver result", dag, labels: [], ...(dag === "poc" ? { question: "Does the real target support this?" } : {}),
     body: dag === "poc" ? "## PoC\nQuestion\n## Verdict\nEvidence\n## After PASS\nDelivery" : "## Problem\nProblem\n## Change\nScope\n## Acceptance\nRun npm test" };
@@ -120,7 +117,16 @@ test("revision declares exact existing identity and unique explicit fields, incl
 test("existing package CLI snapshots exact canonical bytes only when valid and emits the complete findings surface", () => {
   const root = mkdtempSync(join(tmpdir(), "planning-validator-"));
   const input = join(root, "units.jsonl"), snapshot = join(root, "snapshot.jsonl"), findings = join(root, "findings.md");
-  const run = (...args: string[]) => spawnSync(process.execPath, [cli, "validate-planning-units", ...args], { encoding: "utf8" });
+  const run = (...args: string[]) => {
+    let stderr = "";
+    const write = process.stderr.write;
+    process.stderr.write = ((chunk: string | Uint8Array) => {
+      stderr += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
+      return true;
+    }) as typeof process.stderr.write;
+    try { return { status: validatePlanningUnitsCommand(args), stderr }; }
+    finally { process.stderr.write = write; }
+  };
   try {
     const canonical = "  " + JSON.stringify(unit()) + "\r\n" + JSON.stringify(unit("second"));
     writeFileSync(input, canonical);

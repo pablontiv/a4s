@@ -111,8 +111,8 @@ tooling is not an instruction to ship development wrappers in the release.
   `lenses/{0-cobertura-funcional,1-limites-de-confianza,2-integridad-y-ciclo-de-vida-de-datos,3-resiliencia-y-concurrencia,4-cadena-de-suministro-y-publicacion}.md`.
 
 The gate preload and its two CommonJS dependencies remain real Node files.
-Python heavy-slot is retained only for npm development tooling; release templates
-invoke `"$A4S_BIN" heavy-slot`.
+Python heavy-slot is retained only for opt-in npm live/compiled testing, not the
+guarded default lane; release templates invoke `"$A4S_BIN" heavy-slot`.
 
 ## Committed consumer configuration
 

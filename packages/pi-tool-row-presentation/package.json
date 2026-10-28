@@ -22,7 +22,7 @@
     ]
   },
   "scripts": {
-    "test": "tsx --test test/*.test.ts"
+    "test": "tsx --import ../../scripts/test-no-spawn.mjs --test test/*.test.ts"
   },
   "dependencies": {
     "@a4s/hot-reload": "*"

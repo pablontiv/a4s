@@ -1,17 +1,17 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { testRunId } from "./fixtures/run-id.ts";
+import { testRunId } from "../fixtures/run-id.ts";
 import { chmodSync, closeSync, existsSync, fstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { admissionFixture } from "./fixtures/admission.ts";
-import { liveDagu } from "./fixtures/live-dagu.ts";
+import { admissionFixture } from "../fixtures/admission.ts";
+import { liveDagu } from "../fixtures/live-dagu.ts";
 
-import { exampleConfig, serializeConfig } from "../src/config.ts";
-import { BUNDLE_VERSION } from "../src/bundle.ts";
-const cli = fileURLToPath(new URL("../bin/dagu-feature-bundle.ts", import.meta.url));
+import { exampleConfig, serializeConfig } from "../../src/config.ts";
+import { BUNDLE_VERSION } from "../../src/bundle.ts";
+const cli = fileURLToPath(new URL("../../bin/dagu-feature-bundle.ts", import.meta.url));
 
 function commitConfig(repo: string, text?: string): void {
   mkdirSync(join(repo, ".workspace", "dagu"), { recursive: true });

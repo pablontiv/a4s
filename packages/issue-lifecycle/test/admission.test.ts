@@ -3,7 +3,8 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import test from "node:test";
-import { admissionFixture } from "./fixtures/admission.ts";
+import { inProcessAdmissionFixture as admissionFixture } from "./fixtures/compiled-admission.ts";
+import { runA4s } from "./fixtures/compiled-cli.ts";
 import { CONFIG_PATH, POLICY_PARAMETERS } from "../src/config.ts";
 import { admit, appendObservation, enqueueArguments, preflightAdmission } from "../src/admission.ts";
 import { assertArtifactReceipt, assertExecutingArtifact } from "../src/artifact-receipt.ts";
@@ -11,7 +12,7 @@ import { roleAdmission } from "./role-job-fixtures.ts";
 import { identity } from "../src/identity.ts";
 
 const inputs = { dag: "feature", run: "admission", params: ["ISSUE=277", "OMP_SESSION_ID=owner-session"] };
-test("admission validates the owner and committed policy before creating any engine state", () => {
+test("admission validates the owner and committed policy before creating any engine state", async () => {
   const fixture = admissionFixture();
   try {
     for (const field of POLICY_PARAMETERS) {
@@ -26,7 +27,7 @@ test("admission validates the owner and committed policy before creating any eng
     assert.equal(existsSync(join(fixture.home, "cache")), false);
     assert.equal(existsSync(join(fixture.home, "role-jobs.sqlite")), false);
     // The public CLI performs the same preflight before contacting GitHub.
-    const rejected = spawnSync(process.execPath, [fixture.cli, "admit", "--run-id", inputs.run, "feature", "--", "ISSUE=277"], { cwd: fixture.packageDir, env: { ...process.env, DAGU_HOME: fixture.home, A4S_PRIMARY: fixture.packageDir }, encoding: "utf8" });
+    const rejected = await runA4s(["admit", "--run-id", inputs.run, "feature", "--", "ISSUE=277"], { cwd: fixture.packageDir });
     assert.notEqual(rejected.status, 0);
     assert.match(rejected.stderr, /OMP_SESSION_ID/);
     assert.equal(existsSync(fixture.receipt(inputs.run)), false);
@@ -63,7 +64,7 @@ test("explicit handoff rejects an executable identity mismatch before any receip
 test("hard cutover rejects missing tuples, declarations, and unsupported contracts", () => {
   const fixture = admissionFixture();
   try {
-    const valid = roleAdmission(fixture.packageDir, fixture.home, "bound", '"$A4S_BIN" role-jobs stage triage');
+    const valid = roleAdmission(fixture.packageDir, fixture.home, "bound", '"$A4S_BIN" role-jobs stage triage', { version: identity.version, commit: "a".repeat(40), digest: "b".repeat(64) });
     assertArtifactReceipt(valid, "fixture");
     const clone = () => JSON.parse(JSON.stringify(valid));
     for (const field of ["artifact", "artifactSupport", "contracts"]) {
@@ -87,7 +88,7 @@ test("read-only observations retain both legacy records and full immutable artif
   try {
     for (const schema of [1, 2] as const) {
       const run = `observe-${schema}`;
-      const receipt = roleAdmission(fixture.packageDir, fixture.home, run, '"$A4S_BIN" role-jobs stage triage');
+      const receipt = roleAdmission(fixture.packageDir, fixture.home, run, '"$A4S_BIN" role-jobs stage triage', { version: identity.version, commit: "a".repeat(40), digest: "b".repeat(64) });
       receipt.schemaVersion = schema;
       if (schema === 1) { delete receipt.artifact; delete receipt.artifactSupport; delete receipt.contracts; }
       const path = fixture.receipt(run);

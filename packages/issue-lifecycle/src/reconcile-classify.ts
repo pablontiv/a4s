@@ -6,11 +6,25 @@ import { isRecord } from "./type-guard.ts";
 
 type Issue = { number: number; state: string; closed_at?: string | null };
 
+export interface ClassifyDependencies {
+  scope?: Pick<RunArtifactScope, "verify" | "locally" | "artifactVerifications">;
+  inspect?: typeof inspectRun;
+  finish?: typeof finishRun;
+  invoke?: typeof invokeRun;
+  now?: () => number;
+  requestIssues?: (repo: string, page: number, timeout: number) => { status: number | null; stdout: string; stderr?: string };
+}
+
 /** Station-wide batching never supplies the implementation of a foreign run. */
-export async function classifyRuns(outputsFile: string): Promise<void> {
+export async function classifyRuns(outputsFile: string, dependencies: ClassifyDependencies = {}): Promise<void> {
   const rows: unknown = JSON.parse(process.env.RUNS || "[]");
   if (!Array.isArray(rows)) throw new Error("classify: discovery output is not a JSON array");
-  const scope = new RunArtifactScope();
+  const scope = dependencies.scope ?? new RunArtifactScope();
+  const inspect = dependencies.inspect ?? inspectRun, finish = dependencies.finish ?? finishRun;
+  const invoke = dependencies.invoke ?? invokeRun, now = dependencies.now ?? Date.now;
+  const requestIssues = dependencies.requestIssues ?? ((repo: string, page: number, timeout: number) =>
+    spawnSync("gh", ["api", "--method", "GET", "-H", "Accept: application/vnd.github+json", `repos/${repo}/issues?state=all&per_page=100&page=${page}`],
+      { encoding: "utf8", timeout, killSignal: "SIGKILL" }));
   const routed: Routed[] = [], children: Record<string, string>[] = [];
   const failures: { run: string; cause: string }[] = [];
   const repositories = new Set<string>();
@@ -24,7 +38,7 @@ export async function classifyRuns(outputsFile: string): Promise<void> {
   async function action<T>(context: VerifiedRun, phase: "inspect" | "finish", args: () => string[], execute: () => T): Promise<T | string> {
     const local = await scope.locally(context, phase, execute);
     if (local.local) { inProcessActions++; return local.value; }
-    const result = await invokeRun(context.primary, context.receipt.runReceipt.run, ["reconcile", phase, ...args()], { context, capture: true });
+    const result = await invoke(context.primary, context.receipt.runReceipt.run, ["reconcile", phase, ...args()], { context, capture: true });
     process.stderr.write(result.stderr);
     if (result.status !== 0) throw new Error(`Run artifact exited with status ${result.status}`);
     return result.stdout.trimEnd();
@@ -39,7 +53,7 @@ export async function classifyRuns(outputsFile: string): Promise<void> {
     const row = value as Record<string, string>;
     try {
       const context = await scope.verify(row.PRIMARY!, row.RUN!);
-      const inspected = await action(context, "inspect", () => [JSON.stringify(row)], () => inspectRun(row));
+      const inspected = await action(context, "inspect", () => [JSON.stringify(row)], () => inspect(row));
       const item: Routed = typeof inspected === "string" ? JSON.parse(inspected) : inspected;
       routed.push(item);
       if (item.route === "child") children.push({ RUN: row.RUN!, ISSUE: row.ISSUE || "", PRIMARY: row.PRIMARY!,
@@ -51,14 +65,13 @@ export async function classifyRuns(outputsFile: string): Promise<void> {
   const budget = Number(process.env.RECONCILE_OBSERVE_TIMEOUT_SECONDS || 20);
   const cap = Number(process.env.RECONCILE_CALL_TIMEOUT_SECONDS || 8);
   for (const repo of [...repositories].sort()) {
-    const started = Date.now(), seen = new Set<string>(), collected: Issue[] = [];
+    const started = now(), seen = new Set<string>(), collected: Issue[] = [];
     for (let page = 1; page <= 1000; page++) {
       pages++;
-      const timeout = Math.min(cap, budget - (Date.now() - started) / 1000) * 1000;
+      const timeout = Math.min(cap, budget - (now() - started) / 1000) * 1000;
       if (timeout <= 0) { console.error("classify: deadline exhausted before call"); break; }
       if (!Number.isFinite(timeout)) throw new Error("Invalid reconcile call timeout");
-      const result = spawnSync("gh", ["api", "--method", "GET", "-H", "Accept: application/vnd.github+json", `repos/${repo}/issues?state=all&per_page=100&page=${page}`],
-        { encoding: "utf8", timeout: Math.max(1, Math.ceil(timeout)), killSignal: "SIGKILL" });
+      const result = requestIssues(repo, page, Math.max(1, Math.ceil(timeout)));
       process.stderr.write(result.stderr || "");
       if (result.status !== 0) break;
       let batch: unknown;
@@ -81,7 +94,7 @@ export async function classifyRuns(outputsFile: string): Promise<void> {
       // Re-read each receipt before its write action; only cache verification is
       // memoized. A changed/unsupported receipt cannot inherit an earlier check.
       const context = await scope.verify(item.primary, item.run);
-      const result = await action(context, "finish", () => [JSON.stringify(item), JSON.stringify(issue)], () => finishRun(item, issue));
+      const result = await action(context, "finish", () => [JSON.stringify(item), JSON.stringify(issue)], () => finish(item, issue));
       if (result.startsWith("ORPHAN")) orphans++;
       if (result) console.log(result);
     } catch (error) { fail(item.run, "observation", error); }

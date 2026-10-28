@@ -83,8 +83,29 @@ npm ci
 npm test
 npm run typecheck
 ```
+`npm test` and CI run only each workspace's top-level `test/*.test.ts`
+(`*.test.cjs` for message-bus), never `test/live/`. Every default test script
+preloads `scripts/test-no-spawn.mjs`: tests execute logic in-process and may
+spawn only direct `git`/`tar`, not CLIs, shells, Dagu, GitHub or compiled builds.
+The guard names the offending test file. Default suites need neither the
+station heavy slot nor forced serial test-file execution.
 
-Status watcher unit tests own a temporary Git repository with an origin matching
+Native CLI, YAML, OS-lock, compiled-artifact and timing scenarios are opt-in:
+
+```sh
+DAGU_HOME="$(mktemp -d)" A4S_GATE_JOURNAL= npm run test:live --workspace @a4s/issue-lifecycle
+npm run test:live --workspace @a4s/agent-messaging
+npm run test:live --workspace @a4s/message-bus
+```
+
+Live scripts select only `test/live/` and omit the spawn guard. The lifecycle
+script sets `A4S_LIVE_DAGU=1` and retains heavy-slot serialization; setting that
+variable on `npm test` never changes its lane. Release-archive acceptance uses
+the lifecycle's separate `test:compiled` command. The optional Bun-only Kiro
+provider has no default `test` script and remains outside the root gate.
+
+
+Live status-watcher tests own a temporary Git repository with an origin matching
 their fake Dagu workspace. They run with the checkout's existing origin and path,
 including local clones whose origin names differ from the fixture workspace.
 

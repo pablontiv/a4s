@@ -9,7 +9,7 @@ import { readProtection } from "../integration-protection.ts";
 const quote = (word: string): string => `'${word.replace(/'/g, "'\\''")}'`;
 /** Resolve literal tool mutations before shell execution. This is not a sandbox:
  * scripts must use the same receipt-bound CLI rather than an ambient Dagu call. */
-export async function runMutationDecision(event: Event, cwd = process.cwd()): Promise<CallDecision> {
+export async function runMutationDecision(event: Event, cwd = process.cwd(), verify = verifiedRun): Promise<CallDecision> {
   const field = event.toolName === "bash" ? "command" : event.toolName === "eval" ? "code" : undefined;
   const text = field ? event.input[field] : undefined;
   if (typeof text !== "string" || !/(?:\bdagu[\s"']+(?:human-task|retry|stop)\b|(?:\ba4s|\$\{?A4S_BIN\}?)[\s"']+(?:run|protect|role-jobs|observe|escalation|codeql|poc-scope)\b)/.test(text)) return undefined;
@@ -50,7 +50,7 @@ export async function runMutationDecision(event: Event, cwd = process.cwd()): Pr
       primary = /^worktree (.+)$/m.exec(list)?.[1];
     }
     if (!primary) throw new Error("Run mutation requires an admitted PRIMARY");
-    const context = await verifiedRun(primary, run);
+    const context = await verify(primary, run);
     const prefix = assignments.filter(value => !/^(?:PRIMARY|RUN|A4S_BIN|A4S_ARTIFACT)=/.test(value)).map(value => {
       const at = value.indexOf("="); return `${value.slice(0, at)}=${quote(value.slice(at + 1))}`;
     });

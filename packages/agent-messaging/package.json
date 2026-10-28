@@ -22,7 +22,8 @@
   "scripts": {
     "observer": "tsx observer-cli.ts",
     "verify:omp": "tsx scripts/verify-omp.ts",
-    "test": "tsx --test test/*.test.ts",
+    "test": "tsx --import ../../scripts/test-no-spawn.mjs --test test/*.test.ts",
+    "test:live": "tsx --test test/live/*.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

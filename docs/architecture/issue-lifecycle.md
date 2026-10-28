@@ -138,14 +138,18 @@ This is independent of `a4s prioritize`, which reorders queued tickets.
 ### Station-wide heavy-test slot
 
 One POSIX `fcntl` slot at `$DAGU_HOME/a4s/heavy-slot.lock` serializes feature
-gate bodies across independent clones and worktrees, plus root `npm test` and
-`@a4s/issue-lifecycle`'s `test`/`test:live` scripts launched outside Dagu.
-All station sessions must use the service's canonical `DAGU_HOME` (default
-`~/.dagu`); the path does not depend on a repository's Git directory.
+gate bodies across independent clones and worktrees, plus
+`@a4s/issue-lifecycle`'s opt-in `test:live`/`test:compiled` scripts launched
+outside Dagu. Default root/workspace `npm test` scripts are unslotted: they
+select only top-level tests and enforce in-process execution with the shared
+spawn guard (direct `git`/`tar` excepted). Test files no longer need forced
+serial execution to protect a real runtime.
+Station gate sessions use the service's canonical `DAGU_HOME` (default
+`~/.dagu`); live test fixtures instead own isolated temporary homes.
 The release engine's `a4s heavy-slot` retains an inheritable descriptor through
-the command and exports `A4S_HEAVY_SLOT_HELD=1` so nested test scripts do not
-reacquire the slot. Source npm scripts retain `bin/heavy-slot.py` for Node
-development. The marker is inherited ownership, not an operator bypass.
+the command and exports `A4S_HEAVY_SLOT_HELD=1` so nested heavy scripts do not
+reacquire the slot. Source live/compiled scripts retain `bin/heavy-slot.py`.
+The marker is inherited ownership, not an operator bypass.
 
 Success, failure, cancellation and SIGKILL release kernel ownership when all
 inheriting descriptors close; surviving descendants keep exclusion. The stable
@@ -153,9 +157,9 @@ lock inode is not removed. Single-file `tsx --test` runs and light-workspace
 tests remain unslotted. Integration protection uses a separate short-lived
 per-repository admission lock and releases the station slot while a gate waits
 on protection. Dagu queue capacity is station-operator configuration, unrelated
-to consumer config; unrelated lifecycle steps proceed. Deployment acceptance still
-requires operator-observed primary/authorized-clone full-gate windows and an
-agent-session root test waiting behind a gate.
+to consumer config; unrelated lifecycle steps proceed. Deployment acceptance
+still requires operator-observed primary/authorized-clone native gate windows;
+the lightweight default test lane is not evidence of heavy-slot exclusion.
 
 
 ## Native semantic jobs and capacity
