@@ -7,6 +7,7 @@ import { performance } from "node:perf_hooks";
 import test from "node:test";
 import { parseAllDocuments } from "yaml";
 import { compiledA4sBin } from "./fixtures/admission.ts";
+import { reconcileEnvironment } from "./role-job-fixtures.ts";
 
 const a4sBin = compiledA4sBin();
 
@@ -73,6 +74,7 @@ function parseDeclaredStepOutputs(text: string, names: readonly string[]): Recor
   return values;
 }
 function runBash(source: string, env: NodeJS.ProcessEnv): Promise<{ status: number | null; stdout: string; stderr: string }> {
+  env = reconcileEnvironment(env);
   const started = performance.now();
   return new Promise(resolve => {
     const child = spawn("bash", ["-c", source], { env: { A4S_BIN: a4sBin, ...env } });
@@ -346,6 +348,8 @@ test("root classification matches child observation for protected and non-PR run
     assert.equal(summary?.failures, 1);
     assert.equal(summary?.issueRepos, 2);
     assert.ok(Number(summary?.issuePages) >= 2);
+    assert.equal(summary?.artifactVerifications, 1);
+    assert.equal(summary?.inProcessActions, 22);
     const open = readJson(git(primary, "rev-parse", "--path-format=absolute", "--git-path", "dagu-feature/runs/open-implement/ci-observation.json")) as { action: string; class: string };
     const unavailable = readJson(git(primary, "rev-parse", "--path-format=absolute", "--git-path", "dagu-feature/runs/status-down/ci-observation.json")) as { class: string; action: string; observation?: string };
     const beta = readJson(git(primary, "rev-parse", "--path-format=absolute", "--git-path", "dagu-feature/runs/beta-down/ci-observation.json")) as { class: string; action: string };
@@ -503,6 +507,8 @@ test("benchmark ticks keep protected children and cut persisted bytes by at leas
       assert.equal(orphanLines.length, 2);
       const summary = metrics(result.stderr).find(item => item.phase === "classify");
       assert.equal(summary?.issueRepos, 1);
+      assert.equal(summary?.artifactVerifications, 1);
+      assert.equal(summary?.inProcessActions, 38);
       assert.equal(summary?.issuePages, 2);
       const ghCalls = readFileSync(calls, "utf8").trim().split("\n").filter(Boolean).map(line => JSON.parse(line) as { tool: string; args: string[] });
       assert.equal(ghCalls.filter(call => call.tool === "gh" && call.args[0] === "issue").length, 0);

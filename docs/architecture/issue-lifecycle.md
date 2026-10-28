@@ -48,10 +48,40 @@ restarts Dagu. `a4s queue <config>` performs only reads and HTTP GETs.
 
 ### Compatibility is more than a version display
 
-Explicit supported receipt-schema, checkpoint-protocol and role-job-store
-versions are declared by both the executable and `identity.json`. Admission
+Explicit supported dispatch (`a4s-run/1`), receipt-schema, checkpoint-protocol and
+role-job-store versions are declared by both the executable and `identity.json`. Admission
 requires supported contracts, not a SemVer-distance guess. Status version-distance
 labels remain presentation only, not authorization.
+
+The scheduled reconciler has an independent exact artifact pin. Its read-only
+`reconcile render --artifact '<version>@<commit>#<digest>'` interface verifies
+the cache exactly as admission does and prints that artifact's DAG with absolute
+`A4S_BIN` and tuple binding. `reconcile cache --release a4s@vX.Y.Z` populates a
+missing exact release using the normal verification path. Neither installs DAGs
+or changes station configuration; installation/scheduling are operator actions.
+
+Station-wide listing and scheduling use the pinned binary. Stale recovery,
+per-run classification/CI observations/no-progress tracking, transition shell
+logic, escalation, integration protection, successors and semantic role jobs
+execute through `a4s run --primary <primary> --run <id> -- <action>`. That boundary
+requires dispatch protocol `a4s-run/1` and checks declared config/receipt/protocol/
+job-store contracts, canonical receipt location and runtime home,
+archive/metadata/payload integrity, and the
+receipt/cache/embedded identity tuple before invoking the cached executable.
+The selected engine rechecks its tuple and executable location; its own shipped
+template supplies the per-run reconcile implementation.
+
+The release archive is also the complete OMP plugin root. Its manifest points to
+shipped extension entries; extensions select adjacent `a4s` for admission and
+station work, then receipt-bound artifacts for run mutations. Tool triage,
+protection, role dispatch and HUD receipt appends cannot use plugin-version
+equality or its own implementation to mutate another release's run. Read-only HUD
+rows may display unsupported receipts with a diagnostic. Mutation rejection is
+explicit (`A4S_RUN_UNSUPPORTED`); ticks emit the stable
+`reconcile-failure run=<id> status=1 cause=<diagnostic>` without touching the run
+and continue compatible peers. Missing artifacts never trigger an implicit
+upgrade, repair, receipt migration or station change.
+
 
 [`src/admission.ts`](../../packages/issue-lifecycle/src/admission.ts) validates
 exactly one persistent owner session before cache writes, receipts, enqueue or

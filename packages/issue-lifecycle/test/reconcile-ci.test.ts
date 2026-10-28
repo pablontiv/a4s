@@ -12,13 +12,13 @@ import { Transitions } from "../src/status/progress.ts";
 import type { RunDetails } from "../src/status/progress.ts";
 import { readCiDiagnostic, readEscalationDiagnostic } from "../src/status/repository.ts";
 import { BUNDLE_VERSION } from "../src/bundle.ts";
-import { admissionFixture } from "./fixtures/admission.ts";
+import { admissionFixture, compiledA4sBin, compiledArtifact } from "./fixtures/admission.ts";
 import { withResourceGuard } from "./resource-fixtures.ts";
 import { testRunId } from "./fixtures/run-id.ts";
-import { a4sBin } from "./fixtures/a4s.ts";
-import { roleAdmission } from "./role-job-fixtures.ts";
+import { reconcileSnapshot, roleAdmission } from "./role-job-fixtures.ts";
 const feature = readFileSync(new URL("../skills/issue-execution/feature.yaml", import.meta.url), "utf8");
 const reconcile = readFileSync(new URL("../skills/issue-execution/reconcile.yaml", import.meta.url), "utf8");
+const a4sBin = compiledA4sBin();
 
 
 test("Dagu accepts materialized lifecycle templates", {
@@ -80,7 +80,7 @@ interface Fixture {
   env: NodeJS.ProcessEnv;
   base: string;
 }
-function fixture(run = "ci226"): Fixture {
+function fixture(run = "ci226", ciBlocked = 2): Fixture {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "omp-ci226-")));
   const primary = join(root, "primary");
   const remote = join(root, "remote.git");
@@ -175,7 +175,8 @@ else if(a[0]==='human-task') {
   env.CODEQL_SECURITY_THRESHOLD = "high_or_higher";
   env.CODEQL_ALERTS_THRESHOLD = "errors";
   env.IMPLEMENTER = "ImplementTest";
-  writeFileSync(join(state, "receipt.json"), JSON.stringify(roleAdmission(primary, env.DAGU_HOME!, run, feature)));
+  const artifact = compiledArtifact(env.DAGU_HOME!);
+  writeFileSync(join(state, "receipt.json"), JSON.stringify(roleAdmission(primary, env.DAGU_HOME!, run, reconcileSnapshot(artifact, ciBlocked), artifact)));
   delete env.DAGU_PARAMS_JSON;
   return { root, primary, remote, worktree, bin, branch, control, calls, state, env, base: git(primary, "rev-parse", "HEAD") };
 }
@@ -469,12 +470,11 @@ test("template: consecutive BLOCKED ticks request one owner decision per fingerp
   } finally { rmSync(f.root, { recursive: true, force: true }); }
 });
 
-test("template: no-progress threshold is repository policy and non-BLOCKED ticks reset the streak", () => {
+test("template: admitted no-progress policy ignores station overrides and non-BLOCKED ticks reset the streak", () => {
   const reconcile = readFileSync(new URL("../skills/issue-execution/reconcile.yaml", import.meta.url), "utf8");
-  const f = fixture("policy558");
+  const f = fixture("policy558", 3);
   try {
     git(f.worktree, "push", "-u", "origin", f.branch);
-    f.env.ESCALATION_CI_BLOCKED = "3";
     update(f, { conclusion: "cancelled", log: "Approval required" });
     assert.equal(observe(f, reconcile).decisionRequest, undefined);
     update(f, { pending: true });
@@ -492,7 +492,9 @@ test("template: no-progress threshold is repository policy and non-BLOCKED ticks
     assert.equal(observe(f, reconcile).decisionRequest.observations, 3);
     update(f, { auto: false, conclusion: "failure", log: "Approval required" });
     f.env.ESCALATION_CI_BLOCKED = "1";
-    assert.equal(observe(f, reconcile).decisionRequest.observations, 1);
+    assert.equal(observe(f, reconcile).decisionRequest, undefined);
+    assert.equal(observe(f, reconcile).decisionRequest, undefined);
+    assert.equal(observe(f, reconcile).decisionRequest.observations, 3);
   } finally { rmSync(f.root, { recursive: true, force: true }); }
 });
 

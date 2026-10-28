@@ -20,7 +20,7 @@ const manifest = JSON.parse(readFileSync(new URL("../package.json", import.meta.
 const execute = promisify(execFile);
 const sourceArgs = ["--import", "tsx", cli];
 const helpCommands = ["gate", "pr-body", "codeql", "poc-scope", "protect", "role-jobs", "admit", "enqueue", "queue", "observe", "escalation", "stale-recovery", "prioritize", "reconcile", "planning"];
-const support = { configSchemas: [1], receiptSchemas: { read: [1, 2], write: 2 }, roleJobStores: [1],
+const support = { dispatch: "a4s-run/1", configSchemas: [1], receiptSchemas: { read: [1, 2], write: 2 }, roleJobStores: [1],
   protocols: { triage: "role-job/1", implement: "role-job/1", publication: "pr-checkpoint/1" } } as const;
 
 function source(args: string[], env = process.env) {
@@ -139,9 +139,12 @@ test("release archives and the compiled engine work from an extracted root", {
     const supervised = await execute(executable, ["role-jobs", "computation", "supervise", "--dir", computation], { cwd: extracted, env });
     assert.equal(JSON.parse(supervised.stdout).state, "completed");
     assert.ok(existsSync(join(computation, "shards/1.json")));
-    assert.equal(run(["reconcile", "positive", "0"]).status, 1);
-    assert.equal(run(["reconcile", "positive", "1"]).status, 0);
-    const bounded = run(["reconcile", "bounded", "observe", "0.05", process.execPath, "-e", "setTimeout(()=>{},10000)"]);
+    const exhausted = run(["reconcile", "bounded", "observe", "0", String(Date.now()), "1", process.execPath, "-e", "process.exit(99)"]);
+    assert.equal(exhausted.status, 124, exhausted.stderr);
+    assert.equal(exhausted.stdout, "");
+    assert.equal(run(["reconcile", "bounded", "observe", "10", String(Date.now()), "1", process.execPath, "-e", "process.exit(0)"]).status, 0);
+    // A fake clock cannot exercise the compiled child's real OS timeout.
+    const bounded = run(["reconcile", "bounded", "observe", "3", String(Date.now()), "0.05", process.execPath, "-e", "setTimeout(()=>{},10000)"]);
     assert.equal(bounded.status, 124, bounded.stderr);
     assert.equal(bounded.stderr, "reconcile deadline exceeded\n");
     const gate = join(extracted, "bin/dagu-gate.cjs");
@@ -154,7 +157,9 @@ test("release archives and the compiled engine work from an extracted root", {
     assert.equal(preload.status, 0, preload.stderr);
     assert.equal(JSON.parse(preload.stdout).loaded, true);
     assert.equal(JSON.parse(preload.stdout).bun, undefined);
-    for (const entry of ["src/status/reloadable.ts", "src/triage/reloadable.ts"]) {
+    const plugin = JSON.parse(readFileSync(join(extracted, "package.json"), "utf8"));
+    assert.deepEqual(plugin.omp.extensions, ["./src/status/reloadable.ts", "./src/triage/reloadable.ts"]);
+    for (const entry of plugin.omp.extensions) {
       const imported = spawnSync("node", ["--input-type=module", "-e", `const extension = await import(${JSON.stringify(pathToFileURL(join(extracted, entry)).href)}); if (typeof extension.default !== "function") process.exit(1);`], { cwd: extracted, env, encoding: "utf8" });
       assert.equal(imported.status, 0, imported.stderr);
     }
@@ -172,7 +177,7 @@ test("release archives and the compiled engine work from an extracted root", {
     copyFileSync(archive, join(cached, "verified-archive.tar.gz"));
     writeFileSync(join(cached, "artifact.json"), JSON.stringify({ ...artifact, verifiedAt: new Date().toISOString() }));
     const receipt: Receipt = { schemaVersion: 2, artifact, artifactSupport: support,
-      contracts: { config: 1, receipt: 2, roleJobStore: 1, protocols: support.protocols },
+      contracts: { dispatch: support.dispatch, config: 1, receipt: 2, roleJobStore: 1, protocols: support.protocols },
       sourceVersion: { version: artifact.version, commit: artifact.commit, origin: "fixture/repo" }, deploymentFingerprint: "compiled-smoke",
       initial: { admittedAt: new Date().toISOString(), deployment: { config: { schemaVersion: 1, commit: expectedCommit, digest: "c".repeat(64) } },
         runtimeAndModels: { daguHome: home }, execution: { primary,

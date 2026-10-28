@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7,6 +7,7 @@ import { after } from "node:test";
 import { CONFIG_PATH, exampleConfig, serializeConfig, type LifecycleConfig } from "../../src/config.ts";
 import { archiveName, nativePlatform } from "../../src/release.ts";
 import { installGithubFixture, packageDirectory, repository, writeReleaseDirectory } from "./artifact.ts";
+import { checksumDigest, type ArtifactTuple } from "../../src/release.ts";
 
 let compiledDirectory: string | undefined;
 let installedDirectory: string | undefined;
@@ -28,9 +29,41 @@ export function compiledA4sBin(): string {
   }
   return join(installedDirectory, "a4s");
 }
+/** A genuine compiled release cache for timing and cross-release dispatch tests. */
+const testReleases = new Map<string, string>();
+export function compiledArtifact(home: string, version?: string, commit?: string): ArtifactTuple {
+  let releases = compiledRelease();
+  if (version) {
+    const key = `${version}@${commit}`;
+    let directory = testReleases.get(key);
+    if (!directory) {
+      directory = mkdtempSync(join(tmpdir(), "a4s-versioned-build-"));
+      execFileSync(process.execPath, ["scripts/build-a4s.mjs", "--target", `bun-${nativePlatform()}`, "--outdir", directory,
+        "--test-version", version, "--test-commit", commit!], { cwd: resolve(packageDirectory, "../.."), env: { ...process.env, A4S_LIVE_DAGU: "1" }, stdio: "pipe", timeout: 120000 });
+      testReleases.set(key, directory);
+    }
+    releases = directory;
+  } else version = JSON.parse(readFileSync(join(packageDirectory, "package.json"), "utf8")).version;
+  const archive = archiveName(version!);
+  const directory = join(home, "cache", "a4s", version!);
+  mkdirSync(directory, { recursive: true });
+  const record = join(directory, "artifact.json");
+  if (existsSync(record)) {
+    const existing: ArtifactTuple = JSON.parse(readFileSync(record, "utf8"));
+    const expected = commit ?? execFileSync("git", ["rev-parse", "HEAD"], { cwd: packageDirectory, encoding: "utf8" }).trim();
+    if (existing.version === version && existing.commit === expected) return existing;
+  }
+  execFileSync("tar", ["-xzf", join(releases, archive), "-C", directory]);
+  const declared = JSON.parse(readFileSync(join(directory, "identity.json"), "utf8"));
+  const tuple: ArtifactTuple = { version: version!, commit: declared.commit, digest: checksumDigest(readFileSync(join(releases, `${archive}.sha256`), "utf8"), archive) };
+  cpSync(join(releases, archive), join(directory, "verified-archive.tar.gz"));
+  writeFileSync(join(directory, "artifact.json"), JSON.stringify({ ...tuple, verifiedAt: new Date().toISOString() }));
+  return tuple;
+}
 after(() => {
   if (installedDirectory) rmSync(installedDirectory, { recursive: true, force: true });
   if (compiledDirectory) rmSync(compiledDirectory, { recursive: true, force: true });
+  for (const directory of testReleases.values()) rmSync(directory, { recursive: true, force: true });
 });
 export function admissionFixture() {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "dagu-admission-")));

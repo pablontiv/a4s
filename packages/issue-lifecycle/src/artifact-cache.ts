@@ -12,13 +12,13 @@ import { isRecord } from "./type-guard.ts";
 const EVIDENCE = "verified-archive.tar.gz";
 const RECORD = "artifact.json";
 export interface ArtifactRecord extends ArtifactTuple { verifiedAt: string }
-export interface CachedArtifact { directory: string; executable: string; identity: ArtifactIdentity; record: ArtifactRecord }
+export interface CachedArtifact { directory: string; executable: string; executableDigest: string; identity: ArtifactIdentity; record: ArtifactRecord }
 export function cachePath(home: string, tuple: ArtifactTuple): string {
   parseArtifact(artifactToken(tuple));
   return join(resolve(home), "cache", "a4s", tuple.version);
 }
 export function artifactLock(home: string, tuple: ArtifactTuple): string { return `${cachePath(home, tuple)}.lock`; }
-async function fileDigest(path: string): Promise<string> {
+export async function fileDigest(path: string): Promise<string> {
   const hash = createHash("sha256");
   for await (const chunk of createReadStream(path)) hash.update(chunk);
   return hash.digest("hex");
@@ -31,7 +31,7 @@ function json(path: string): unknown { regular(path); return JSON.parse(readFile
 /** The release format is deliberately ustar, with only regular files/directories.
  * No links, extended headers or special files can redirect extraction. Headers
  * and payload are streamed; the executable is never buffered in memory. */
-async function archiveFiles(archive: string, directory: string, extract: boolean): Promise<Set<string>> {
+async function archiveFiles(archive: string, directory: string, extract: boolean): Promise<{ files: Set<string>; executableDigest: string }> {
   const stream = createReadStream(archive).pipe(createGunzip());
   const iterator = stream[Symbol.asyncIterator]();
   let chunk: Buffer = Buffer.alloc(0);
@@ -53,6 +53,7 @@ async function archiveFiles(archive: string, directory: string, extract: boolean
   const names = new Set<string>();
   const files = new Set<string>();
   const header = Buffer.alloc(512);
+  let executableDigest = "";
   try {
     for (;;) {
       let copied = 0;
@@ -92,7 +93,7 @@ async function archiveFiles(archive: string, directory: string, extract: boolean
       }
       if (type !== "0" && type !== "") throw new Error(`Unsupported tar entry type for ${name}; only regular files and directories are allowed`);
       files.add(name);
-      const expected = extract ? undefined : createHash("sha256");
+      const expected = !extract || name === "a4s" ? createHash("sha256") : undefined;
       let fd: number | undefined;
       if (extract) { mkdirSync(dirname(path), { recursive: true }); fd = openSync(path, "wx", 0o600); }
       else regular(path);
@@ -106,11 +107,13 @@ async function archiveFiles(archive: string, directory: string, extract: boolean
         });
       } finally { if (fd !== undefined) closeSync(fd); }
       if (extract) chmodSync(path, name === "a4s" ? 0o755 : 0o644);
-      else if (await fileDigest(path) !== expected!.digest("hex")) throw new Error(`Modified artifact payload ${name}`);
+      const digest = expected?.digest("hex");
+      if (!extract && await fileDigest(path) !== digest) throw new Error(`Modified artifact payload ${name}`);
+      if (name === "a4s") executableDigest = digest!;
       await consume((512 - size % 512) % 512);
     }
   } finally { stream.destroy(); }
-  return files;
+  return { files, executableDigest };
 }
 const REQUIRED = ["a4s", "identity.json", "package.json", "bin/dagu-gate.cjs", "bin/gate-cache.cjs", "bin/gate-cache-run.cjs",
   "src/status/reloadable.ts", "src/status/index.ts", "src/triage/reloadable.ts", "src/triage/native.ts", "agents/plan-reviewer.md", "agents/triage-reviewer.md",
@@ -125,7 +128,11 @@ function layout(directory: string, files: Set<string>, tuple: ArtifactTuple): Ar
   if (!isDeepStrictEqual(declared, executable) || !isRecord(declared) || declared.version !== tuple.version || declared.commit !== tuple.commit || !isRecord(declared.support) || "digest" in declared) throw new Error(`Artifact embedded identity mismatch: expected ${artifactToken(tuple)}`);
   const manifest = json(join(directory, "package.json"));
   if (!isRecord(manifest) || manifest.name !== "@a4s/issue-lifecycle" || manifest.version !== tuple.version) throw new Error("Artifact package manifest identity mismatch");
+  if (!isRecord(manifest.omp) || !Array.isArray(manifest.omp.extensions) ||
+      !isDeepStrictEqual(manifest.omp.extensions, ["./src/status/reloadable.ts", "./src/triage/reloadable.ts"]) ||
+      manifest.omp.extensions.some(path => typeof path !== "string" || !files.has(path.slice(2)))) throw new Error("Artifact OMP extension metadata does not name the shipped extension entries");
   const support = declared.support;
+  if (support.dispatch !== identity.support.dispatch) throw new Error(`Unsupported artifact dispatch boundary: required ${identity.support.dispatch}; declared=${JSON.stringify(support.dispatch) ?? "missing"}`);
   if (!Array.isArray(support.configSchemas) || !support.configSchemas.includes(1) || !isRecord(support.receiptSchemas) || !Array.isArray(support.receiptSchemas.read) || !support.receiptSchemas.read.includes(2) || support.receiptSchemas.write !== 2 || !Array.isArray(support.roleJobStores) || !support.roleJobStores.includes(1) || !isDeepStrictEqual(support.protocols, identity.support.protocols)) throw new Error("Artifact declares unsupported config/receipt/protocol/job-store contracts");
   return declared as unknown as ArtifactIdentity;
 }
@@ -149,10 +156,10 @@ export async function inspectArtifact(home: string, tuple: ArtifactTuple): Promi
   const archive = join(directory, EVIDENCE);
   regular(archive);
   if (await fileDigest(archive) !== tuple.digest) throw new Error(`Modified verified archive for ${artifactToken(tuple)}`);
-  const files = await archiveFiles(archive, directory, false);
+  const { files, executableDigest } = await archiveFiles(archive, directory, false);
   for (const name of entryFiles(directory)) if (name !== RECORD && name !== EVIDENCE && !files.has(name)) throw new Error(`Unexpected artifact payload ${name}`);
   const declared = layout(directory, files, tuple);
-  return { directory, executable: join(directory, "a4s"), identity: declared, record: record as unknown as ArtifactRecord };
+  return { directory, executable: join(directory, "a4s"), executableDigest, identity: declared, record: record as unknown as ArtifactRecord };
 }
 export async function ensureArtifact(home: string, release: ResolvedRelease): Promise<CachedArtifact> {
   return withFileLockAsync(artifactLock(home, release), async () => {
@@ -170,12 +177,12 @@ export async function ensureArtifact(home: string, release: ResolvedRelease): Pr
       regular(downloaded);
       if (await fileDigest(downloaded) !== release.digest) throw new Error(`Archive SHA-256 mismatch: ${archive}`);
       renameSync(downloaded, join(stage, EVIDENCE));
-      const files = await archiveFiles(join(stage, EVIDENCE), stage, true);
+      const { files, executableDigest } = await archiveFiles(join(stage, EVIDENCE), stage, true);
       const declared = layout(stage, files, release);
       const record: ArtifactRecord = { version: release.version, commit: release.commit, digest: release.digest, verifiedAt: new Date().toISOString() };
       writeFileSync(join(stage, RECORD), `${JSON.stringify(record, null, 2)}\n`, { flag: "wx", mode: 0o600 });
       renameSync(stage, directory);
-      return { directory, executable: join(directory, "a4s"), identity: declared, record };
+      return { directory, executable: join(directory, "a4s"), executableDigest, identity: declared, record };
     } finally { rmSync(stage, { recursive: true, force: true }); }
   });
 }

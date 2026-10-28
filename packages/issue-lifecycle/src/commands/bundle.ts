@@ -2,13 +2,32 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
-import { appendObservation, enqueue, parseObservation, receiptPath } from "../admission.ts";
+import { appendObservation, enqueue, parseObservation, receiptPath, observeRunReceipt } from "../admission.ts";
 import { CONFIG_PATH, configFromEnvironment, readConfigFile, readCommittedConfig, serializeConfig } from "../config.ts";
 import { validatePlanningUnitsCommand } from "../planning-validator.ts";
 import { planningReviewer, type TranscriptRow } from "../transcript-identity.ts";
 import { BUNDLE_VERSION, lifecycleProtocolToken } from "../bundle.ts";
 import { queueReadiness, stationReadiness } from "../queue.ts";
 import { main as escalation } from "../escalation.ts";
+import { executingRunArtifact, invokeRun } from "../run-artifact.ts";
+import type { RunDetails } from "../status/progress.ts";
+import { isRecord } from "../type-guard.ts";
+
+interface RuntimeObservation {
+  run: RunDetails;
+  kind: string;
+  error?: string;
+  observer: { observerPid: number; observerPpid: number; loadedExtensionDigest: string };
+}
+function runtimeObservation(input: string): RuntimeObservation {
+  const value: unknown = JSON.parse(input);
+  if (!isRecord(value) || !isRecord(value.run) || !isRecord(value.observer)
+    || typeof value.run.dagRunId !== "string" || typeof value.run.name !== "string" || typeof value.run.statusLabel !== "string"
+    || typeof value.kind !== "string" || (value.error !== undefined && typeof value.error !== "string")
+    || typeof value.observer.observerPid !== "number" || typeof value.observer.observerPpid !== "number"
+    || typeof value.observer.loadedExtensionDigest !== "string") throw new Error("Invalid runtime observation");
+  return value as unknown as RuntimeObservation;
+}
 
 
 function git(path: string, ...args: string[]): string {
@@ -127,8 +146,21 @@ export async function main(argv: string[]): Promise<void> {
   if (command === "observe") {
     try {
       const [run, input] = args;
+      const runtime = run === "runtime" ? runtimeObservation(input || "{}") : undefined;
+      const selectedRun = runtime?.run.dagRunId ?? run;
+      if (!selectedRun) throw new Error("Receipt observation requires an admitted run");
+      if (!executingRunArtifact()) {
+        process.exitCode = (await invokeRun(process.env.PRIMARY || process.cwd(), selectedRun, ["observe", ...args])).status;
+        return;
+      }
+      if (selectedRun !== process.env.RUN) throw new Error("Observation run differs from the dispatched receipt");
+      if (runtime) {
+        observeRunReceipt(runtime.run, process.env.PRIMARY!, runtime.kind, runtime.error, runtime.observer);
+        return;
+      }
       if (!run || !input) throw new Error("Usage: observe <run> '<JSON observation with dag/run/attempt/category/kind/data>'");
       const observation = parseObservation(JSON.parse(input));
+      if (observation.run !== run) throw new Error("Observation names another run");
       appendObservation(receiptPath(process.cwd(), run), observation);
     } catch (error) {
       console.error(error instanceof Error ? error.message : String(error));

@@ -10,8 +10,9 @@ import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { parseAllDocuments } from "yaml";
-import { BUNDLE_VERSION } from "../src/bundle.ts";
-import { compiledA4sBin } from "./fixtures/admission.ts";
+import { compiledA4sBin, compiledArtifact } from "./fixtures/admission.ts";
+import { reconcileEnvironment } from "./role-job-fixtures.ts";
+import { artifactToken } from "../src/release.ts";
 
 const a4sBin = compiledA4sBin();
 
@@ -55,6 +56,7 @@ function initPrimary(root: string, name: string): string {
 }
 interface RunResult { status: number | null; stdout: string; stderr: string; started: number; ended: number }
 function runBash(source: string, env: NodeJS.ProcessEnv): Promise<RunResult> {
+  env = reconcileEnvironment(env);
   const started = performance.now();
   return new Promise(resolve => {
     const child = spawn("bash", ["-c", source], { env: { A4S_BIN: a4sBin, ...env } });
@@ -492,9 +494,10 @@ test("Dagu validates the reconciler and isolated ticks stay inside the minute", 
   const bin = join(root, "bin");
   mkdirSync(join(home, "dags"), { recursive: true });
   mkdirSync(bin);
-  const source = reconcile
-    .replaceAll("__DAGU_FEATURE_VERSION__", BUNDLE_VERSION)
-    .replaceAll("__ESCALATION_CI_BLOCKED__", "2");
+  const artifact = compiledArtifact(home);
+  const source = execFileSync(a4sBin, ["reconcile", "render", "--artifact", artifactToken(artifact)], {
+    env: { ...process.env, DAGU_HOME: home }, encoding: "utf8",
+  });
   const materialized = join(home, "dags", "reconcile.yaml");
   writeFileSync(materialized, source);
   writeFileSync(join(home, "config.yaml"), "auth:\n  mode: none\ncoordinator:\n  enabled: false\n");

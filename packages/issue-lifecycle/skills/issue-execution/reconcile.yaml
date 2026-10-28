@@ -56,14 +56,8 @@ steps:
       : >"$TMP/raw"
       bounded() {
         printf '1\n' >>"$TMP/calls"
-        local seconds rc=0
-        seconds=$("$A4S_BIN" reconcile remaining "$BOUND_BUDGET" "$BOUND_STARTED_MS" "$CALL_TIMEOUT")
-        if ! "$A4S_BIN" reconcile positive "$seconds"; then
-          echo "discover: deadline exhausted before the waiting-run list was complete" >&2
-          printf '1\n' >>"$TMP/deadline"
-          return 124
-        fi
-        "$A4S_BIN" reconcile bounded discover "$seconds" "$@" || rc=$?
+        local rc=0
+        "$A4S_BIN" reconcile bounded discover "$BOUND_BUDGET" "$BOUND_STARTED_MS" "$CALL_TIMEOUT" "$@" || rc=$?
         if [[ "$rc" -eq 124 ]]; then printf '1\n' >>"$TMP/deadline"; fi
         return "$rc"
       }
@@ -158,263 +152,11 @@ steps:
     run: |
       set -euo pipefail
       : "${CI_OBSERVATION_ID:?Missing reconcile tick identity}"
-      CALL_TIMEOUT=${RECONCILE_CALL_TIMEOUT_SECONDS:-8}
-      OBSERVE_BUDGET=${RECONCILE_OBSERVE_TIMEOUT_SECONDS:-20}
-      THRESHOLD=${ESCALATION_CI_BLOCKED:-2}
       TMP=$(mktemp -d)
       trap 'rm -rf "$TMP"' EXIT
-      : >"$TMP/children"
-      : >"$TMP/actions"
-      : >"$TMP/failures"
-      : >"$TMP/routed"
-      : >"$TMP/repos-needed"
-      pages=0
-      repos=0
-      orphans=0
-      failures=0
-      bounded() {
-        local budget=$1 started=$2
-        shift 2
-        local seconds rc=0
-        seconds=$("$A4S_BIN" reconcile remaining "$budget" "$started" "$CALL_TIMEOUT")
-        if ! "$A4S_BIN" reconcile positive "$seconds"; then
-          echo "classify: deadline exhausted before call" >&2
-          return 124
-        fi
-        "$A4S_BIN" reconcile bounded classify "$seconds" "$@" || rc=$?
-        return "$rc"
-      }
-      fail_run() {
-        local run=$1 cause=$2
-        failures=$((failures + 1))
-        jq -nc --arg run "$run" --arg cause "$cause" '{run:$run,cause:$cause}' >>"$TMP/failures"
-        printf 'reconcile-failure run=%s cause=%s\n' "$run" "$cause" >&2
-      }
-      persist() {
-        local state=$1
-        jq -n --arg repo "$REPO" --arg run "$RUN" --arg pr "$PR" --arg worktree "$WORKTREE" \
-          --arg step "$STEP" --argjson iteration "$ITERATION" --arg sha "$SHA" --arg class "$CLASS" \
-          --arg action "$ACTION" --arg check "$CHECK" --arg log "${LOG:0:3000}" --arg cause "$CAUSE" \
-          --arg retry_run "$RETRY_RUN" --argjson findings "$FINDINGS" \
-          '{repo:$repo,run:$run,pr:$pr,worktree:$worktree,step:$step,iteration:$iteration,sha:$sha,class:$class,action:$action,check:$check,log:$log,cause:$cause,retry_run:$retry_run,findings:$findings}' >"$state/ci-observation.tmp"
-        mv "$state/ci-observation.tmp" "$state/ci-observation.json"
-        "$A4S_BIN" reconcile ci-no-progress "$state" "$CI_OBSERVATION_ID" "$THRESHOLD"
-      }
-      finish_root() {
-        local calls=$1 skipped=$2 latency=$3 deadline=$4
-        printf 'reconcile-metric %s\n' "$(jq -nc --arg run "$RUN" --arg class "$CLASS" --arg action "$ACTION" \
-          --argjson calls "$calls" --argjson skippedRepoLookup "$skipped" --argjson latencyMs "$latency" \
-          --argjson deadline "$deadline" --argjson callTimeoutSeconds "$CALL_TIMEOUT" --argjson observeTimeoutSeconds "$OBSERVE_BUDGET" \
-          '{phase:"observe",run:$run,class:$class,action:$action,calls:$calls,skippedRepoLookup:($skippedRepoLookup==1),latencyMs:$latencyMs,deadline:($deadline==1),callTimeoutSeconds:$callTimeoutSeconds,observeTimeoutSeconds:$observeTimeoutSeconds}')" >&2
-        if [[ "$ACTION" == NONE || "$ACTION" == WAIT ]]; then
-          printf 'reconcile-metric %s\n' "$(jq -nc --arg action "$ACTION" --arg run "$RUN" '{phase:"transition",run:$run,action:$action,applied:false,cause:"no-side-effect",calls:0,latencyMs:0}')" >&2
-        fi
-        if [[ "$OBSERVATION" =~ ^(triage|implement)\ issue=CLOSED\  ]]; then
-          orphans=$((orphans + 1))
-          echo "ORPHAN ${REPO}#${ISSUE} ${RUN} ${OBSERVATION}"
-        fi
-      }
-      runs_json=${RUNS:-[]}
-      if ! jq -e 'type == "array"' <<<"$runs_json" >/dev/null; then
-        echo "classify: discovery output is not a JSON array" >&2
-        exit 1
-      fi
-      input=0
-      while IFS= read -r row; do
-        [[ -n "$row" ]] || continue
-        input=$((input + 1))
-        RUN=$(jq -r '.RUN // empty' <<<"$row")
-        ISSUE=$(jq -r '.ISSUE // empty' <<<"$row")
-        PRIMARY=$(jq -r '.PRIMARY // empty' <<<"$row")
-        BRANCH=$(jq -r '.BRANCH // empty' <<<"$row")
-        PR_NUMBER=$(jq -r '.PR_NUMBER // empty' <<<"$row")
-        REPO=$(jq -r '.REPO // empty' <<<"$row")
-        if [[ -z "$RUN" || -z "$PRIMARY" ]]; then
-          fail_run "${RUN:-unknown}" "discovery row missing RUN or PRIMARY"
-          continue
-        fi
-        if ! STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN" 2>"$TMP/git.err"); then
-          fail_run "$RUN" "run state path unavailable"
-          continue
-        fi
-        if ! mkdir -p "$STATE"; then
-          fail_run "$RUN" "run state directory unavailable"
-          continue
-        fi
-        started=$("$A4S_BIN" reconcile now)
-        skipped_repo=0
-        calls=0
-        deadline=0
-        if [[ -n "$REPO" ]]; then
-          skipped_repo=1
-        else
-          origin=""
-          if origin=$(git -C "$PRIMARY" remote get-url origin 2>/dev/null); then
-            calls=$((calls + 1))
-            repo_rc=0
-            REPO=$(bounded "$OBSERVE_BUDGET" "$started" gh repo view "$origin" --json nameWithOwner --jq .nameWithOwner) || repo_rc=$?
-            if [[ "$repo_rc" -ne 0 ]]; then
-              [[ "$repo_rc" -eq 124 ]] && deadline=1
-              REPO=""
-            fi
-          else
-            REPO=""
-          fi
-        fi
-        STATUS=""
-        calls=$((calls + 1))
-        status_rc=0
-        STATUS=$(bounded "$OBSERVE_BUDGET" "$started" dagu status feature --run-id "$RUN") || status_rc=$?
-        if [[ "$status_rc" -ne 0 ]]; then
-          [[ "$status_rc" -eq 124 ]] && deadline=1
-          STATUS=""
-        fi
-        ITERATION=$(sed -nE 's/.*push-back iteration: ([0-9]+).*/\1/p' <<<"$STATUS" | head -1)
-        ITERATION=${ITERATION:-0}
-        STEP=$(LC_ALL=C sed -nE 's/^(├─|└─)([A-Za-z0-9_-]+) .*\[waiting\]$/\2/p' <<<"$STATUS" | head -1)
-        CLASS=PENDING ACTION=WAIT SHA= CHECK= LOG= CAUSE= PR= WORKTREE="$PRIMARY/.workspace/worktrees/issue-$ISSUE" RETRY_RUN= FINDINGS='[]'
-        OBSERVATION="$STEP"
-        route=issue
-        if [[ -z "$REPO" || -z "$STATUS" ]]; then
-          CLASS=BLOCKED ACTION=WAIT
-          CAUSE="GitHub observation unavailable; check repository permissions and authentication"
-          OBSERVATION=UNAVAILABLE
-          route=root
-        elif [[ "$STATUS" != Waiting* ]]; then
-          ACTION=NONE
-          OBSERVATION=NOT_WAITING
-          route=root
-        elif [[ "$STEP" == await_ci || "$STEP" == await_merge ]]; then
-          route=child
-        elif [[ -z "$STEP" ]]; then
-          route=root
-        fi
-        jq -nc --arg run "$RUN" --arg issue "$ISSUE" --arg primary "$PRIMARY" --arg branch "$BRANCH" \
-          --arg pr "$PR_NUMBER" --arg repo "$REPO" --arg step "$STEP" --argjson iteration "$ITERATION" \
-          --arg class "$CLASS" --arg action "$ACTION" --arg observation "$OBSERVATION" --arg cause "$CAUSE" \
-          --arg route "$route" --arg state "$STATE" --arg worktree "$WORKTREE" --argjson calls "$calls" \
-          --argjson skipped "$skipped_repo" --argjson started "$started" --argjson deadline "$deadline" \
-          '{run:$run,issue:$issue,primary:$primary,branch:$branch,pr:$pr,repo:$repo,step:$step,iteration:$iteration,class:$class,action:$action,observation:$observation,cause:$cause,route:$route,state:$state,worktree:$worktree,calls:$calls,skipped:$skipped,started:$started,deadline:$deadline}' >>"$TMP/routed"
-        if [[ "$route" == child ]]; then
-          jq -c '{RUN,ISSUE,PRIMARY,BRANCH,PR_NUMBER,REPO}' <<<"$row" >>"$TMP/children"
-        elif [[ "$route" == issue && -n "$REPO" ]]; then
-          printf '%s\n' "$REPO" >>"$TMP/repos-needed"
-        fi
-      done < <(jq -c '.[]' <<<"$runs_json")
-      if [[ -s "$TMP/repos-needed" ]]; then
-        while IFS= read -r repo; do
-          [[ -n "$repo" ]] || continue
-          repos=$((repos + 1))
-          safe=${repo//\//_}
-          started=$("$A4S_BIN" reconcile now)
-          : >"$TMP/seen-$safe"
-          : >"$TMP/issues-$safe"
-          page=1
-          ok=1
-          while true; do
-            pages=$((pages + 1))
-            if ! bounded "$OBSERVE_BUDGET" "$started" gh api --method GET -H "Accept: application/vnd.github+json" "repos/$repo/issues?state=all&per_page=100&page=$page" >"$TMP/issue-page"; then
-              ok=0
-              break
-            fi
-            if ! jq -e 'type == "array"' "$TMP/issue-page" >/dev/null; then
-              ok=0
-              break
-            fi
-            count=$(jq 'length' "$TMP/issue-page")
-            if [[ "$count" -eq 0 ]]; then
-              break
-            fi
-            fp=$(jq -c '.[0].number' "$TMP/issue-page")
-            if grep -Fxq -- "$fp" "$TMP/seen-$safe"; then
-              echo "classify: issue page did not advance for $repo" >&2
-              ok=0
-              break
-            fi
-            printf '%s\n' "$fp" >>"$TMP/seen-$safe"
-            jq -c '.[] | {number, state, closed_at}' "$TMP/issue-page" >>"$TMP/issues-$safe"
-            if [[ "$count" -lt 100 ]]; then
-              break
-            fi
-            page=$((page + 1))
-            if [[ "$page" -gt 1000 ]]; then
-              echo "classify: issue pages did not terminate for $repo" >&2
-              ok=0
-              break
-            fi
-          done
-          if [[ "$ok" -ne 1 ]]; then
-            rm -f "$TMP/issues-$safe"
-            printf 'failed\n' >"$TMP/repo-state-$safe"
-          else
-            printf 'ok\n' >"$TMP/repo-state-$safe"
-          fi
-        done < <(sort -u "$TMP/repos-needed")
-      fi
-      while IFS= read -r item; do
-        [[ -n "$item" ]] || continue
-        route=$(jq -r .route <<<"$item")
-        [[ "$route" == child ]] && continue
-        RUN=$(jq -r .run <<<"$item")
-        ISSUE=$(jq -r .issue <<<"$item")
-        PRIMARY=$(jq -r .primary <<<"$item")
-        REPO=$(jq -r .repo <<<"$item")
-        STEP=$(jq -r .step <<<"$item")
-        ITERATION=$(jq -r .iteration <<<"$item")
-        CLASS=$(jq -r .class <<<"$item")
-        ACTION=$(jq -r .action <<<"$item")
-        OBSERVATION=$(jq -r .observation <<<"$item")
-        CAUSE=$(jq -r .cause <<<"$item")
-        STATE=$(jq -r .state <<<"$item")
-        WORKTREE=$(jq -r .worktree <<<"$item")
-        calls=$(jq -r .calls <<<"$item")
-        skipped_repo=$(jq -r .skipped <<<"$item")
-        started=$(jq -r .started <<<"$item")
-        deadline=$(jq -r .deadline <<<"$item")
-        SHA= CHECK= LOG= PR= RETRY_RUN= FINDINGS='[]'
-        if [[ "$route" == issue ]]; then
-          safe=${REPO//\//_}
-          issue_state=""
-          if [[ -f "$TMP/repo-state-$safe" && "$(cat "$TMP/repo-state-$safe")" == ok ]]; then
-            issue_state=$(jq -r --arg n "$ISSUE" 'select((.number|tostring) == $n) | "\(.state | ascii_upcase) closed_at=\(.closed_at // "")"' "$TMP/issues-$safe" | head -1 || true)
-            if [[ -n "$issue_state" ]]; then
-              OBSERVATION="$STEP issue=$issue_state"
-            else
-              CLASS=BLOCKED ACTION=WAIT
-              CAUSE="GitHub issue observation unavailable; check repository permissions and authentication"
-              OBSERVATION="$STEP issue=unavailable"
-            fi
-          else
-            CLASS=BLOCKED ACTION=WAIT
-            CAUSE="GitHub issue observation unavailable; check repository permissions and authentication"
-            OBSERVATION="$STEP issue=unavailable"
-          fi
-        fi
-        latency=$(( $("$A4S_BIN" reconcile now) - started ))
-        if [[ "$ACTION" != NONE && "$ACTION" != WAIT ]]; then
-          jq -nc --arg RUN "$RUN" --arg ISSUE "$ISSUE" --arg PRIMARY "$PRIMARY" --arg BRANCH "$(jq -r .branch <<<"$item")" \
-            --arg PR_NUMBER "$(jq -r .pr <<<"$item")" --arg REPO "$REPO" \
-            '{RUN:$RUN,ISSUE:$ISSUE,PRIMARY:$PRIMARY,BRANCH:$BRANCH,PR_NUMBER:$PR_NUMBER,REPO:$REPO}' >>"$TMP/actions"
-          continue
-        fi
-        if ! persist "$STATE"; then
-          fail_run "$RUN" "observation persist failed"
-          continue
-        fi
-        finish_root "$calls" "$skipped_repo" "$latency" "$deadline"
-      done < "$TMP/routed"
-      pr_runs=$(wc -l <"$TMP/children" | tr -d ' ')
-      action_runs=$(wc -l <"$TMP/actions" | tr -d ' ')
-      printf 'reconcile-metric %s\n' "$(jq -nc --argjson input "$input" --argjson pr "$pr_runs" \
-        --argjson actions "$action_runs" --argjson orphans "$orphans" --argjson failures "$failures" \
-        --argjson repos "$repos" --argjson pages "$pages" \
-        '{phase:"classify",inputRuns:$input,prRuns:$pr,actions:$actions,orphans:$orphans,failures:$failures,issueRepos:$repos,issuePages:$pages}')" >&2
+      "$A4S_BIN" reconcile classify "$TMP/outputs"
       # Dagu reads declared outputs only from this file. Stdout is the step log.
-      {
-        printf 'children=%s\n' "$(jq -sc '.' "$TMP/children")"
-        printf 'actions=%s\n' "$(jq -sc '.' "$TMP/actions")"
-        printf 'failures=%s\n' "$(jq -sc '.' "$TMP/failures")"
-      } | tee -a "${DAGU_OUTPUT_FILE:?Missing Dagu output file}"
+      tee -a "${DAGU_OUTPUT_FILE:?Missing Dagu output file}" <"$TMP/outputs"
     outputs:
       - name: children
       - name: actions
@@ -475,6 +217,8 @@ steps:
   - id: observe
     run: |
       set -euo pipefail
+      exec "$A4S_BIN" run --primary "$PRIMARY" --run "$RUN" -- reconcile step observe
+      # Receipt-bound implementation.
       BOUND_STARTED_MS=$("$A4S_BIN" reconcile now)
       CALL_TIMEOUT=${RECONCILE_CALL_TIMEOUT_SECONDS:-8}
       BOUND_BUDGET=${RECONCILE_OBSERVE_TIMEOUT_SECONDS:-20}
@@ -485,14 +229,8 @@ steps:
       : >"$TMP/calls"
       bounded() {
         printf '1\n' >>"$TMP/calls"
-        local seconds rc=0
-        seconds=$("$A4S_BIN" reconcile remaining "$BOUND_BUDGET" "$BOUND_STARTED_MS" "$CALL_TIMEOUT")
-        if ! "$A4S_BIN" reconcile positive "$seconds"; then
-          echo "reconcile deadline exhausted before call" >&2
-          printf '1\n' >>"$TMP/deadline"
-          return 124
-        fi
-        "$A4S_BIN" reconcile bounded observe "$seconds" "$@" || rc=$?
+        local rc=0
+        "$A4S_BIN" reconcile bounded observe "$BOUND_BUDGET" "$BOUND_STARTED_MS" "$CALL_TIMEOUT" "$@" || rc=$?
         if [[ "$rc" -eq 124 ]]; then printf '1\n' >>"$TMP/deadline"; fi
         return "$rc"
       }
@@ -702,6 +440,8 @@ steps:
     depends: observe
     run: |
       set -euo pipefail
+      exec "$A4S_BIN" run --primary "$PRIMARY" --run "$RUN" -- reconcile step transition
+      # Receipt-bound implementation.
       STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")
       file="$STATE/ci-observation.json"
       action=$(jq -r .action "$file")
@@ -756,13 +496,8 @@ steps:
       }
       bounded() {
         printf '1\n' >>"$TMP/calls"
-        local seconds rc=0
-        seconds=$("$A4S_BIN" reconcile remaining "$BOUND_BUDGET" "$BOUND_STARTED_MS" "$CALL_TIMEOUT")
-        if ! "$A4S_BIN" reconcile positive "$seconds"; then
-          echo "transition deadline exhausted before call" >&2
-          return 124
-        fi
-        "$A4S_BIN" reconcile bounded transition "$seconds" "$@" || rc=$?
+        local rc=0
+        "$A4S_BIN" reconcile bounded transition "$BOUND_BUDGET" "$BOUND_STARTED_MS" "$CALL_TIMEOUT" "$@" || rc=$?
         return "$rc"
       }
       if [[ "$action" == NONE || "$action" == WAIT ]]; then

@@ -8,8 +8,10 @@ import { test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { parse } from "yaml";
 import { liveDagu, liveDaguVersion } from "./fixtures/live-dagu.ts";
-import { a4sBin } from "./fixtures/a4s.ts";
+import { compiledA4sBin } from "./fixtures/admission.ts";
 import { roleAdmission } from "./role-job-fixtures.ts";
+
+const a4sBin = compiledA4sBin();
 
 const packageRoot = fileURLToPath(new URL("../", import.meta.url));
 const sourceRoot = fileURLToPath(new URL("../../../", import.meta.url));
@@ -211,7 +213,7 @@ test("real Dagu preserves eight-slot and foreign queue capacity while cross-clon
     const config = "queues:\n  enabled: true\n  config:\n    - name: a4s\n      max_concurrency: 8\n    - name: foreign\n      max_concurrency: 3\n";
     writeFileSync(join(f.home, "config.yaml"), config);
     const dag = join(f.root, "gates.yaml");
-    const vars = { PATH: f.env("holder").PATH, DAGU_HOME: f.home, PRIMARY: "${REPO}", WORKTREE: "${REPO}", BRANCH: "main", RUN: "${ID}", GATE: `exec python3 ${JSON.stringify(f.body)}`, ISSUE: "606" };
+    const vars = { A4S_BIN: a4sBin, PATH: f.env("holder").PATH, DAGU_HOME: f.home, PRIMARY: "${REPO}", WORKTREE: "${REPO}", BRANCH: "main", RUN: "${ID}", GATE: `exec python3 ${JSON.stringify(f.body)}`, ISSUE: "606" };
     writeFileSync(dag, `queue: a4s\nshell: bash\nparams:\n  - REPO: ''\n  - ID: ''\nenv:\n${Object.entries(vars).map(([key, value]) => `  - ${key}: ${JSON.stringify(value)}\n`).join("")}steps:\n  - id: gate\n    run: |\n${gateScript.split("\n").map(line => `      ${line}\n`).join("")}    outputs:\n      - name: tested_sha\n`);
     const holder = f.start("dagu", ["start", "--run-id", "holder", dag, "--", `REPO=${f.primary}`, "ID=holder"], f.root);
     await until("native holder starts", () => f.events().some(row => row.run === "holder"));

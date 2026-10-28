@@ -96,6 +96,27 @@ reconciler pinned to a verified cache entry, then remove obsolete installed sour
 checkouts, launchers/plugin links and service PATH entries once unreferenced.
 Restart OMP to load the release plugin; service activation belongs exclusively
 to the operator. Follow the complete [cutover procedure](deployment.md#identity-and-adoption).
+For exact commands, including cache population, stdout-only DAG rendering and
+operator installation/scheduling, use
+[pinned reconciliation and release plugin cutover](deployment.md#pin-the-station-reconciler-and-release-plugin).
+`omp plugin link` must replace the old lifecycle checkout registration: the
+service user's `~/.omp/plugins/node_modules/@a4s/issue-lifecycle` must resolve to
+the verified extracted release root, and its managed `omp-plugins.lock.json`
+entry must record that release's actual manifest version and directory source,
+not `0.5.25` or PRIMARY's package directory. Preserve unrelated entries and let
+the installed plugin manager maintain its lock schema. Restart OMP and retain
+resolved-path, lock-entry and whole-package load evidence; no such station
+changes are performed by the engine.
+
+Both manifest extension paths (`./src/status/reloadable.ts` and
+`./src/triage/reloadable.ts`) ship in the archive and select adjacent `a4s`.
+For existing-run mutations the plugin requires declared dispatch protocol
+`a4s-run/1`, checks receipt/config, checkpoint-protocol and role-job-store
+compatibility and dispatches the run's cached executable, not the plugin's version.
+HUD rows can show both releases
+and flag unsupported receipts read-only; triage, protection, role dispatch and
+HUD receipt writes reject unsupported/missing artifacts before mutation.
+
 Other source-linked packages keep their selected checkout available; never use
 a soon-to-be-deleted issue worktree. Native resource refresh alone does not prove
 changed module bytes loaded; see [hot-reload limitations](../../packages/hot-reload/README.md).

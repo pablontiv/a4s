@@ -6,6 +6,10 @@ import {
   decideStaleRecoveries, emptyLedger, readAdminEvents, recoveryLog,
   type RecoveryLedger,
 } from "../stale-recovery.ts";
+import { invokeRun, executingRunArtifact } from "../run-artifact.ts";
+import { primaryFromSpec } from "../primary.ts";
+import { STALE_PROCESS_ERROR } from "../stale-recovery.ts";
+import { withFileLock } from "../file-lock.ts";
 
 function stationHome(): string {
   return process.env.DAGU_HOME || join(homedir(), ".dagu");
@@ -38,37 +42,61 @@ function featureFailed(run: string): boolean {
   return false;
 }
 
-function run(argv: string[]): void {
-  const [command, ...extra] = argv;
-  if (command !== "recover-scheduled" || extra.length) throw new Error("Usage: dagu-stale-recovery recover-scheduled");
+async function run(argv: string[]): Promise<void> {
+  const [command, selected, ...extra] = argv;
   const home = stationHome();
-  const ledgerPath = join(home, "stale-recovery.json");
-  const ledger = loadLedger(ledgerPath);
-  const decisions = decideStaleRecoveries(readAdminEvents(join(home, "logs", "admin", "events")), ledger);
-  for (const decision of decisions) {
-    if (decision.action !== "retry") {
-      log(recoveryLog(decision));
-      continue;
+  const events = readAdminEvents(join(home, "logs", "admin", "events"));
+  if (command === "recover-scheduled" && !selected && !extra.length) {
+    // Listing is station-wide. Planning, status checks, ledger writes and retries
+    // belong to each run's artifact, including its own checkpoint vocabulary.
+    const runs = new Set(events.filter(event => event.dag_name === "feature" && event.type === "dag.run.failed" &&
+      event.data?.dag_run_status?.error?.includes(STALE_PROCESS_ERROR)).map(event => event.dag_run_id).filter((id): id is string => Boolean(id)));
+    for (const id of runs) {
+      try {
+        const base = (process.env.DAGU_URL || `http://127.0.0.1:${process.env.DAGU_PORT || "8080"}`).replace(/\/+$/, "");
+        const response = await fetch(`${base}/api/v1/dag-runs/feature/${encodeURIComponent(id)}/spec`, { signal: AbortSignal.timeout(5000) });
+        if (!response.ok) throw new Error(`Dagu spec HTTP ${response.status}`);
+        const { spec } = await response.json() as { spec: string };
+        const primary = primaryFromSpec(spec);
+        if (!primary) throw new Error("Admitted PRIMARY unavailable");
+        const result = await invokeRun(primary, id, ["stale-recovery", "recover-run", id]);
+        if (result.status !== 0) throw new Error(`run artifact exited ${result.status}`);
+      } catch (error) {
+        log(`reconcile-failure run=${id} status=1 cause=${JSON.stringify(error instanceof Error ? error.message : String(error))}`);
+      }
     }
-    if (!featureFailed(decision.run)) continue;
-    ledger.recoveries.push({
-      run: decision.run, attempt: decision.attempt, step: decision.step,
-      command: decision.command, at: new Date().toISOString(),
-    });
-    mkdirSync(home, { recursive: true });
-    storeLedger(ledgerPath, ledger);
-    log(recoveryLog(decision));
-    const retried = spawnSync("dagu", ["retry", "--run-id", decision.run, "--step", decision.step, "--downstream", "feature"], { stdio: "inherit" });
-    if (retried.status !== 0) {
-      log(`stale-process recovery failed: run=${decision.run} attempt=${decision.attempt} step=${decision.step} exit=${retried.status ?? retried.error?.message ?? "signal"}`);
-      process.exitCode = 1;
-    }
+    return;
   }
+  if (command !== "recover-run" || !selected || extra.length || selected !== process.env.RUN || !executingRunArtifact()) throw new Error("Usage: a4s stale-recovery recover-scheduled | recover-run <receipt-bound-run>");
+  const ledgerPath = join(home, "stale-recovery.json");
+  withFileLock(`${ledgerPath}.lock`, () => {
+    const ledger = loadLedger(ledgerPath);
+    const decisions = decideStaleRecoveries(events.filter(event => event.dag_run_id === selected), ledger);
+    for (const decision of decisions) {
+      if (decision.action !== "retry") {
+        log(recoveryLog(decision));
+        continue;
+      }
+      if (!featureFailed(decision.run)) continue;
+      ledger.recoveries.push({
+        run: decision.run, attempt: decision.attempt, step: decision.step,
+        command: decision.command, at: new Date().toISOString(),
+      });
+      mkdirSync(home, { recursive: true });
+      storeLedger(ledgerPath, ledger);
+      log(recoveryLog(decision));
+      const retried = spawnSync("dagu", ["retry", "--run-id", decision.run, "--step", decision.step, "--downstream", "feature"], { stdio: "inherit" });
+      if (retried.status !== 0) {
+        log(`stale-process recovery failed: run=${decision.run} attempt=${decision.attempt} step=${decision.step} exit=${retried.status ?? retried.error?.message ?? "signal"}`);
+        process.exitCode = 1;
+      }
+    }
+  });
 }
 
-export function main(argv: string[]): void {
+export async function main(argv: string[]): Promise<void> {
 try {
-  run(argv);
+  await run(argv);
 } catch (error) {
   log(error instanceof Error ? error.message : String(error));
   process.exit(1);

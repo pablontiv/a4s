@@ -74,6 +74,10 @@ test("hard cutover rejects missing tuples, declarations, and unsupported contrac
     assert.throws(() => assertArtifactReceipt(legacy, "fixture"), /cutover/);
     const unsupported = clone(); unsupported.contracts.protocols.triage = "retired/1";
     assert.throws(() => assertArtifactReceipt(unsupported, "fixture"), /protocol|contract/);
+    const noBoundary = clone(); delete noBoundary.artifactSupport.dispatch; delete noBoundary.contracts.dispatch;
+    assert.throws(() => assertArtifactReceipt(noBoundary, "fixture"), /dispatch boundary: required a4s-run\/1.*missing/);
+    const futureBoundary = clone(); futureBoundary.artifactSupport.dispatch = "a4s-run/2";
+    assert.throws(() => assertArtifactReceipt(futureBoundary, "fixture"), /dispatch boundary: required a4s-run\/1.*a4s-run\/2/);
     const config = clone(); delete config.initial.deployment.config.digest;
     assert.throws(() => assertArtifactReceipt(config, "fixture"), /config/);
   } finally { fixture.dispose(); }

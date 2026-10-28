@@ -4,6 +4,7 @@ declare const A4S_BUILD_VERSION: string;
 declare const A4S_BUILD_COMMIT: string;
 
 export const ARTIFACT_SUPPORT = {
+  dispatch: "a4s-run/1",
   configSchemas: [1],
   receiptSchemas: { read: [1, 2], write: 2 },
   roleJobStores: [1],

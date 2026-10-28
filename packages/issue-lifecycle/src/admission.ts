@@ -273,13 +273,14 @@ export async function enqueue(args: string[], cwd: string): Promise<number> {
   } catch (error) { throw new Error(`DAGU_ADMISSION_REJECTED: ${error instanceof Error ? error.message : String(error)}`); }
 }
 /** Append runtime facts; initial identities are never recalculated for an old run. */
-export function observeRunReceipt(run: RunDetails, cwd: string, kind = "runtime", error?: string): void {
+export function observeRunReceipt(run: RunDetails, cwd: string, kind = "runtime", error?: string,
+  observer = { observerPid: process.pid, observerPpid: process.ppid, loadedExtensionDigest }): void {
   let path: string;
   try { path = receiptPath(cwd, run.dagRunId); } catch { return; }
   let receipt: Receipt;
   try { receipt = readReceipt(path); }
   catch (error) { if (isRecord(error) && error.code === "ENOENT") return; throw error; }
-  const data = { source: "dagu-rest-and-persisted-events", observerPid: process.pid, observerPpid: process.ppid, loadedExtensionDigest, run, ...(error ? { error } : {}) };
+  const data = { source: "dagu-rest-and-persisted-events", ...observer, run, ...(error ? { error } : {}) };
   const incident = error || run.receiptEvent?.cursorReset || ["failed", "aborted", "cancelled"].includes(run.statusLabel);
   const resolvedKind = run.receiptEvent?.cursorReset ? "incident:cursor-reset" : incident ? `incident:${kind}` : kind;
   const prior = receipt.runReceipt.observations.at(-1);
@@ -294,6 +295,6 @@ export function observeRunReceipt(run: RunDetails, cwd: string, kind = "runtime"
     const observation = receipt.runReceipt.observations[index]!;
     if (isRecord(observation.data) && typeof observation.data.observerPid === "number") { lastObserver = observation; break; }
   }
-  if (lastObserver && isRecord(lastObserver.data) && lastObserver.data.observerPid !== process.pid) appendObservation(path, { dag: run.name, run: run.dagRunId, attempt, category: "eventsAndExternalState", kind: "incident:observer-restart", data });
+  if (lastObserver && isRecord(lastObserver.data) && lastObserver.data.observerPid !== observer.observerPid) appendObservation(path, { dag: run.name, run: run.dagRunId, attempt, category: "eventsAndExternalState", kind: "incident:observer-restart", data });
   appendObservation(path, { dag: run.name, run: run.dagRunId, attempt, category: "eventsAndExternalState", kind: resolvedKind, data });
 }

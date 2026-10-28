@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { createServer } from "node:http";
+import { compiledArtifact } from "./fixtures/admission.ts";
+import { roleAdmission } from "./role-job-fixtures.ts";
 import {
   decideStaleRecoveries, emptyLedger, FEATURE_CHECKPOINT_RETRY, FEATURE_HUMAN_TASKS, FEATURE_STEP_ORDER,
   STALE_PROCESS_ERROR, type AdminEvent, type DagNodeSnapshot,
@@ -40,10 +43,16 @@ function queuedThrough(step: string): DagNodeSnapshot[] {
   return FEATURE_STEP_ORDER.map((id, index) => node(id, index < cutoff ? 4 : undefined));
 }
 
-function recover(home: string, bin: string, calls: string) {
-  return spawnSync(process.execPath, ["--import", import.meta.resolve("tsx"), cli, "recover-scheduled"], {
-    encoding: "utf8",
-    env: { ...process.env, DAGU_HOME: home, PATH: `${bin}:${process.env.PATH ?? ""}`, DAGU_CALLS: calls },
+async function recover(home: string, bin: string, calls: string, url: string) {
+  return await new Promise<{ status: number | null; stderr: string }>((resolve, reject) => {
+    const child = spawn(process.execPath, ["--import", import.meta.resolve("tsx"), cli, "recover-scheduled"], {
+      env: { ...process.env, DAGU_HOME: home, DAGU_URL: url, PATH: `${bin}:${process.env.PATH ?? ""}`, DAGU_CALLS: calls },
+    });
+    let stderr = "";
+    child.stderr.on("data", chunk => { stderr += chunk; });
+    child.stdout.resume();
+    child.once("error", reject);
+    child.once("close", status => resolve({ status, stderr }));
   });
 }
 
@@ -54,8 +63,16 @@ function retryCommands(calls: string): string[] {
     .map(args => args.join(" "));
 }
 
-test("scheduled recovery retries stale Waiting, Queued and await_ci runs and ignores other failures", () => {
+test("scheduled recovery retries stale Waiting, Queued and await_ci runs and ignores other failures", async () => {
   const root = mkdtempSync(join(tmpdir(), "a4s-stale-recovery-"));
+  const primary = join(root, "primary");
+  execFileSync("git", ["init", "-q", primary]);
+  execFileSync("git", ["-C", primary, "-c", "user.name=Stale test", "-c", "user.email=stale@example.test", "commit", "--allow-empty", "-qm", "seed"]);
+  const server = createServer((_request, response) => response.end(JSON.stringify({ spec: `env:\n  - PRIMARY: ${JSON.stringify(primary)}\n` })));
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  const url = `http://127.0.0.1:${address.port}`;
   try {
     const home = join(root, "dagu");
     const bin = join(root, "bin");
@@ -86,7 +103,13 @@ process.exit(91);
       ...pair("poc-stale", "fff666", "dag.run.waiting", [node("fix_result", 7)]).map(entry => ({ ...entry, dag_name: "poc" })),
     ];
     writeFileSync(join(home, "logs", "admin", "events", "20261022.jsonl"), events.map(entry => JSON.stringify(entry)).join("\n") + "\n");
-    const first = recover(home, bin, calls);
+    const artifact = compiledArtifact(home);
+    for (const run of ["waiting-conflict", "queued-gate", "await-ci", "still-running"]) {
+      const state = join(primary, ".git/dagu-feature/runs", run);
+      mkdirSync(state, { recursive: true });
+      writeFileSync(join(state, "receipt.json"), JSON.stringify(roleAdmission(primary, home, run, "env: []", artifact)));
+    }
+    const first = await recover(home, bin, calls, url);
     assert.equal(first.status, 0, first.stderr);
     assert.deepEqual(retryCommands(calls).sort(), [
       "retry --run-id await-ci --step auto_merge --downstream feature",
@@ -101,7 +124,7 @@ process.exit(91);
     assert.doesNotMatch(first.stderr, /poc-stale/);
     const ledger = JSON.parse(readFileSync(join(home, "stale-recovery.json"), "utf8")) as { recoveries: Array<{ run: string; attempt: string }> };
     assert.deepEqual(ledger.recoveries.map(record => record.run).sort(), ["await-ci", "queued-gate", "waiting-conflict"]);
-    const second = recover(home, bin, calls);
+    const second = await recover(home, bin, calls, url);
     assert.equal(second.status, 0, second.stderr);
     assert.match(second.stderr, /stale-process recovery budget: run=waiting-conflict attempt=aaa111 step=rebase command=dagu retry --run-id waiting-conflict --step rebase --downstream feature; not retried/);
     assert.match(second.stderr, /stale-process recovery budget: run=await-ci attempt=ccc333 step=auto_merge/);
@@ -112,7 +135,7 @@ process.exit(91);
       .map((entry, index) => ({ ...entry, occurred_at: `2026-10-22T06:08:${15 + index}.000Z` }));
     const eventFile = join(home, "logs", "admin", "events", "20261022.jsonl");
     writeFileSync(eventFile, [...events, ...repeated].map(entry => JSON.stringify(entry)).join("\n") + "\n");
-    const exhausted = recover(home, bin, calls);
+    const exhausted = await recover(home, bin, calls, url);
     assert.equal(exhausted.status, 0, exhausted.stderr);
     assert.match(exhausted.stderr, /budget: run=waiting-conflict attempt=aaa111 step=gate .*not retried/);
     assert.equal(retryCommands(calls).length, 3);
@@ -121,11 +144,15 @@ process.exit(91);
     const nextAttempt = pair("waiting-conflict", "new111", "dag.run.waiting", [node("conflict_review", 7)])
       .map((entry, index) => ({ ...entry, occurred_at: `2026-10-22T06:08:${17 + index}.000Z` }));
     writeFileSync(eventFile, [...events, ...repeated, ...nextAttempt].map(entry => JSON.stringify(entry)).join("\n") + "\n");
-    const next = recover(home, bin, calls);
+    const next = await recover(home, bin, calls, url);
     assert.equal(next.status, 0, next.stderr);
     assert.match(next.stderr, /recovery: run=waiting-conflict attempt=new111 checkpoint=conflict_review step=rebase/);
     assert.equal(retryCommands(calls).length, 4);
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("stale-process recovery follows the SKILL table and refuses non-stale or same-writer failures", () => {

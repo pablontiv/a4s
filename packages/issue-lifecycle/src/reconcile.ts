@@ -1,33 +1,46 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { closeSync, existsSync, readFileSync } from "node:fs";
+import { closeSync, readFileSync } from "node:fs";
 import { constants } from "node:os";
 import { join } from "node:path";
-import { writeAtomicJson } from "./atomic-json.ts";
-import { acquireLock, openLock, withFileLock } from "./file-lock.ts";
+import { homedir } from "node:os";
+import { inspectArtifact, ensureArtifact } from "./artifact-cache.ts";
+import { artifactToken, parseArtifact, resolveRelease } from "./release.ts";
+import { exampleConfig } from "./config.ts";
+import { materializeDag } from "./materialize.ts";
+import { inspectRun, finishRun, executeStep } from "./reconcile-run.ts";
+import { acquireLock, openLock } from "./file-lock.ts";
+import { recordNoProgress } from "./ci-no-progress.ts";
+import { classifyRuns } from "./reconcile-classify.ts";
 
-interface Observation {
-  run: string; sha: string; check: string; cause: string; class: string; action: string;
-  decisionRequest?: { id: string; observations: number };
-}
-interface NoProgress {
-  schemaVersion: 1; run: string; fingerprint: string | null; observations: number; observationId: string | null;
-  requests: Record<string, { id: string; observations: number }>;
-}
-export function main(argv: string[]): void {
+export async function main(argv: string[]): Promise<void> {
   const [mode, ...args] = argv;
-  if (mode === "now" && !args.length) { console.log(Date.now()); return; }
-  if (mode === "remaining" && args.length === 3) {
-    const [budget, started, cap] = args.map(Number);
-    console.log(Math.max(0, Math.min(cap!, budget! - (Date.now() - started!) / 1000)).toFixed(3));
+  if (mode === "cache" && args.length === 2 && args[0] === "--release") {
+    if (!/^a4s@v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(args[1]!)) throw new Error("Pinned reconciliation requires an exact release a4s@vX.Y.Z, never a moving ref");
+    const release = resolveRelease(args[1]!);
+    const cached = await ensureArtifact(process.env.DAGU_HOME || join(homedir(), ".dagu"), release);
+    console.log(artifactToken(cached.record));
     return;
   }
-  if (mode === "positive" && args.length === 1) { process.exitCode = Number(args[0]) > 0 ? 0 : 1; return; }
+  if (mode === "render" && args.length === 2 && args[0] === "--artifact") {
+    const tuple = parseArtifact(args[1]);
+    const cached = await inspectArtifact(process.env.DAGU_HOME || join(homedir(), ".dagu"), tuple);
+    const dag = materializeDag(cached.directory, "reconcile.yaml", exampleConfig(), {
+      version: tuple.version, source: artifactToken(tuple), executable: cached.executable,
+    }).replace(/^env:\n/gm, `env:\n  - A4S_ARTIFACT: ${JSON.stringify(artifactToken(tuple))}\n`);
+    process.stdout.write(dag);
+    return;
+  }
+  if (mode === "classify" && args.length === 1) { await classifyRuns(args[0]!); return; }
+  if (mode === "inspect" && args.length === 1) { console.log(JSON.stringify(inspectRun(JSON.parse(args[0]!)))); return; }
+  if (mode === "finish" && args.length === 2) { const result = finishRun(JSON.parse(args[0]!), JSON.parse(args[1]!)); if (result) console.log(result); return; }
+  if (mode === "step" && args.length === 1) { executeStep(args[0]!); return; }
+  if (mode === "now" && !args.length) { console.log(Date.now()); return; }
   if (mode === "sha256" && !args.length) { console.log(createHash("sha256").update(readFileSync(0)).digest("hex")); return; }
-  if (mode === "bounded" && args.length >= 3) {
-    const [phase, seconds, command, ...rest] = args;
+  if (mode === "bounded" && args.length >= 5) {
+    const [phase, budget, started, cap, command, ...rest] = args;
     const label = phase === "observe" ? "reconcile" : phase;
-    const timeout = Number(seconds) * 1000;
+    const timeout = Math.min(Number(cap), Number(budget) - (Date.now() - Number(started)) / 1000) * 1000;
     if (!Number.isFinite(timeout)) throw new Error("Invalid reconcile call timeout");
     if (timeout <= 0) { console.error(`${label} deadline exceeded`); process.exitCode = 124; return; }
     const child = spawnSync(command!, rest, { stdio: "inherit", timeout: Math.max(1, Math.ceil(timeout)), killSignal: "SIGKILL" });
@@ -38,33 +51,7 @@ export function main(argv: string[]): void {
     return;
   }
   if (mode === "ci-no-progress" && args.length === 3) {
-    const [root, observationId, rawThreshold] = args;
-    const threshold = Number(rawThreshold);
-    if (!Number.isInteger(threshold) || threshold < 1) throw new Error("ESCALATION_CI_BLOCKED must be a positive integer");
-    withFileLock(join(root!, "ci-no-progress.lock"), () => {
-      const file = join(root!, "ci-observation.json");
-      const observation: Observation = JSON.parse(readFileSync(file, "utf8"));
-      const stateFile = join(root!, "ci-no-progress.json");
-      const state: NoProgress = existsSync(stateFile) ? JSON.parse(readFileSync(stateFile, "utf8")) : {
-        schemaVersion: 1, run: observation.run, fingerprint: null, observations: 0, observationId: null, requests: {},
-      };
-      const blocked = observation.class === "BLOCKED" && observation.action === "WAIT";
-      // Python json.dumps(..., separators=(",", ":")) escapes non-ASCII; preserve
-      // those bytes so an existing run retains its fingerprint across cutover.
-      const compact = JSON.stringify([observation.run, observation.sha, observation.check, observation.cause])
-        .replace(/[\u007f-\uffff]/g, char => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`);
-      const fingerprint = blocked ? createHash("sha256").update(compact).digest("hex") : null;
-      if (state.observationId !== observationId || state.fingerprint !== fingerprint) {
-        state.observations = fingerprint && state.fingerprint === fingerprint ? state.observations + 1 : Number(blocked);
-        state.fingerprint = fingerprint;
-        state.observationId = observationId!;
-      }
-      if (blocked && state.observations >= threshold) {
-        observation.decisionRequest = state.requests[fingerprint!] ??= { id: fingerprint!, observations: state.observations };
-      }
-      writeAtomicJson(stateFile, state);
-      writeAtomicJson(file, observation);
-    });
+    recordNoProgress(args[0]!, args[1]!, args[2]!);
     return;
   }
   if (mode === "lock" && args.length) {
@@ -89,5 +76,5 @@ export function main(argv: string[]): void {
     } finally { for (const fd of descriptors) closeSync(fd); }
     return;
   }
-  throw new Error("Usage: a4s reconcile now | remaining <budget-seconds> <started-ms> <cap-seconds> | positive <seconds> | bounded <phase> <seconds> <command> [args...] | sha256 | ci-no-progress <state> <observation-id> <threshold> | lock <command> [args...]");
+  throw new Error("Usage: a4s reconcile cache --release a4s@vX.Y.Z | render --artifact <version>@<commit>#<digest> | classify <outputs-file> | inspect <row> | finish <row> <issue> | step observe|transition | now | bounded <phase> <budget-seconds> <started-ms> <cap-seconds> <command> [args...] | sha256 | ci-no-progress <state> <observation-id> <threshold> | lock <command> [args...]");
 }

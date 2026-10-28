@@ -37,9 +37,66 @@ record top-level `artifact`, `artifactSupport` and actually used `contracts`;
 successors additionally record `parent` (`receipt`, `dag`, `run`, `artifact`).
 Consumer config identity is separate at `initial.deployment.config`.
 
+### Pinned reconciler and release plugin
+
+Station reconciliation has its own **exact** release pin, independent of consumer
+`uses`. The operator first runs
+`<absolute-release-root>/a4s reconcile cache --release a4s@vX.Y.Z`, which verifies
+and caches that exact release and prints `<version>@<commit>#<digest>`. Then
+`<absolute-release-root>/a4s reconcile render --artifact '<version>@<commit>#<digest>'`
+reverifies the retained archive, extracted assets, metadata and embedded identity,
+and prints the selected release's `reconcile.yaml`. Both DAG documents bind
+absolute cached `A4S_BIN` and exact `A4S_ARTIFACT`. Rendering never creates or
+changes station DAGs or configuration. Moving refs such as `v0`, unverified and
+conflicting entries are rejected. Installation and scheduling are separate,
+authorized operator steps; see [deployment](../../docs/operations/deployment.md#pin-the-station-reconciler-and-release-plugin).
+
+The pinned release lists runs and schedules the tick. Every per-run action crosses
+the receipt-bound dispatch boundary. Foreign artifacts are invoked with
+`a4s run --primary <canonical-primary> --run <id> -- <command> [args...]`.
+The boundary reads the immutable receipt, requires declared dispatch protocol
+`a4s-run/1`, checks config/receipt, checkpoint protocols and role-job-store
+compatibility, and verifies its exact cache tuple and identity. The selected
+engine rechecks the handoff before any action. Observation, no-progress
+accounting, stale recovery, transitions, escalation, protection, successors and
+role jobs therefore do not borrow the reconciler's release. CI/merge shell
+implementations also come from the run artifact's shipped template.
+
+Root classification runs in the pinned executable, not a per-row shell/jq loop.
+Within one tick, cache/archive verification is shared by exact tuple, while each
+receipt is re-read before every action. Only package-independent inspect/finish
+actions whose tuple equals the reconciler's exact pin **and whose executable
+bytes match** may execute in-process under that run's receipt-bound environment.
+That binding is restored after each action; no verification survives the tick.
+Different tuples or bytes still invoke their own cached process. The classify
+metric reports `artifactVerifications` and `inProcessActions` to expose this cost
+without changing the bounded observation, pagination or no-progress semantics.
+Shell observation/transition calls use one deadline-aware subprocess helper per
+external call, rather than separate remaining-time and positive-time processes.
+The helper computes the remaining original budget immediately before spawning;
+startup overhead never grants a fresh budget or changes the per-call cap.
+
+An unavailable/unsupported run is untouched and produces
+`reconcile-failure run=<id> status=1 cause=<diagnostic>`; compatible runs continue.
+Do not edit old receipts or substitute a newer binary to recover one. Restore
+its exact verified artifact or resolve the incompatible run under operator
+authority. No automatic installation, cache repair or station restart occurs.
+
+The extracted archive root is directly loadable with `omp -e <release-root>` or
+`omp plugin link <release-root>`; its manifest names the two shipped reloadable
+extension entries, agents and skills. Packaged extensions select the adjacent
+`a4s` for station/admission commands, not PATH or a checkout. HUD observations,
+triage/native transitions, protection and role dispatch resolve the run's
+artifact instead. Plugin version equality is not an authorization rule.
+Unsupported receipts remain visible in the read-only HUD, flagged unsupported,
+but mutations are rejected with `A4S_RUN_UNSUPPORTED`. Tool mutations must use
+one literal Bash command with an explicit run and PRIMARY (or the bound
+checkout); compound/expanded mutation commands are rejected before execution.
+
+
 Every command below preserves its existing arguments, environment variables,
-stdout and exit status. `planning` and `reconcile` have utility modes, not a
-second scheduler or a replacement shell-step implementation.
+stdout and exit status. `planning` and `reconcile` provide engine utility and
+receipt-bound dispatch modes, not a second scheduler.
 
 | Existing command | Executable command |
 | --- | --- |
@@ -60,9 +117,7 @@ second scheduler or a replacement shell-step implementation.
 | `dagu-feature-bundle planning-reviewer-identity <args>` | `a4s planning planning-reviewer-identity <args>` |
 | `python3 bin/heavy-slot.py [--gate <run>] <command> [args...]` | `a4s heavy-slot [--gate <run>] <command> [args...]` |
 | Inline reconcile millisecond clock | `a4s reconcile now` |
-| Inline reconcile remaining call budget | `a4s reconcile remaining <budget-seconds> <started-ms> <cap-seconds>` |
-| Inline reconcile positive-time test | `a4s reconcile positive <seconds>` |
-| Inline reconcile subprocess timeout | `a4s reconcile bounded <discover\|classify\|observe\|transition> <seconds> <command> [args...]` |
+| Inline reconcile subprocess deadline and call cap | `a4s reconcile bounded <discover\|observe\|transition> <budget-seconds> <started-ms> <cap-seconds> <command> [args...]` |
 | Inline reconcile stdin SHA-256 | `a4s reconcile sha256` |
 | Inline reconcile CI-no-progress accounting | `a4s reconcile ci-no-progress <state-directory> <observation-id> <threshold>` |
 | Inline reconcile sorted transition locks | `a4s reconcile lock <command> [args...]` |
@@ -172,9 +227,10 @@ checks readiness, but does not install DAGs or alter the station.
 
 Reconciler behavior tests use the maintained `skills/issue-execution/reconcile.yaml`
 directly, with throwaway materialization for native validation. From this package,
-run `A4S_LIVE_DAGU=0 npx tsx --test test/reconcile-ci.test.ts test/reconcile-performance.test.ts`
-for isolated script scenarios, or `A4S_LIVE_DAGU=1 npx tsx --test test/reconcile-ci.test.ts test/reconcile-performance.test.ts`
-to include official-Dagu validation, bounded-tick checks and checkpoint/queue scenarios in isolated temporary homes.
+run `A4S_LIVE_DAGU=0 npx tsx --test --test-concurrency=1 test/reconcile-ci.test.ts test/reconcile-performance.test.ts`
+for isolated script scenarios, or `A4S_LIVE_DAGU=1 npx tsx --test --test-concurrency=1 test/reconcile-ci.test.ts test/reconcile-performance.test.ts test/live/pinned-reconcile.test.ts`
+to include official-Dagu validation, mixed-release dispatch, bounded-tick checks
+and checkpoint/queue scenarios in isolated temporary homes.
 The deadline/performance and fanout scenarios build and run the real release
 executable, so source-loader startup cannot consume the measured operation budget.
 They also accept `A4S_RELEASE_DIR` to reuse an existing release build; their
