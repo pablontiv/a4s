@@ -37,8 +37,6 @@ record top-level `artifact`, `artifactSupport` and actually used `contracts`;
 successors additionally record `parent` (`receipt`, `dag`, `run`, `artifact`).
 Consumer config identity is separate at `initial.deployment.config`.
 
-<<<<<<< Updated upstream
-=======
 ### Pinned reconciler and release plugin
 
 Station reconciliation has its own **exact** release pin, independent of consumer
@@ -96,10 +94,9 @@ one literal Bash command with an explicit run and PRIMARY (or the bound
 checkout); compound/expanded mutation commands are rejected before execution.
 
 
->>>>>>> Stashed changes
 Every command below preserves its existing arguments, environment variables,
-stdout and exit status. `planning` and `reconcile` have utility modes, not a
-second scheduler or a replacement shell-step implementation.
+stdout and exit status. `planning` and `reconcile` provide engine utility and
+receipt-bound dispatch modes, not a second scheduler.
 
 | Existing command | Executable command |
 | --- | --- |
@@ -230,9 +227,10 @@ checks readiness, but does not install DAGs or alter the station.
 
 Reconciler behavior tests use the maintained `skills/issue-execution/reconcile.yaml`
 directly, with throwaway materialization for native validation. From this package,
-run `A4S_LIVE_DAGU=0 npx tsx --test test/reconcile-ci.test.ts test/reconcile-performance.test.ts`
-for isolated script scenarios, or `A4S_LIVE_DAGU=1 npx tsx --test test/reconcile-ci.test.ts test/reconcile-performance.test.ts`
-to include official-Dagu validation, bounded-tick checks and checkpoint/queue scenarios in isolated temporary homes.
+run `A4S_LIVE_DAGU=0 npx tsx --test --test-concurrency=1 test/reconcile-ci.test.ts test/reconcile-performance.test.ts`
+for isolated script scenarios, or `A4S_LIVE_DAGU=1 npx tsx --test --test-concurrency=1 test/reconcile-ci.test.ts test/reconcile-performance.test.ts test/live/pinned-reconcile.test.ts`
+to include official-Dagu validation, mixed-release dispatch, bounded-tick checks
+and checkpoint/queue scenarios in isolated temporary homes.
 The deadline/performance and fanout scenarios build and run the real release
 executable, so source-loader startup cannot consume the measured operation budget.
 They also accept `A4S_RELEASE_DIR` to reuse an existing release build; their

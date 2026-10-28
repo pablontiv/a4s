@@ -3,21 +3,6 @@ import { createHash } from "node:crypto";
 import { closeSync, readFileSync } from "node:fs";
 import { constants } from "node:os";
 import { join } from "node:path";
-<<<<<<< Updated upstream
-import { writeAtomicJson } from "./atomic-json.ts";
-import { acquireLock, openLock, withFileLock } from "./file-lock.ts";
-
-interface Observation {
-  run: string; sha: string; check: string; cause: string; class: string; action: string;
-  decisionRequest?: { id: string; observations: number };
-}
-interface NoProgress {
-  schemaVersion: 1; run: string; fingerprint: string | null; observations: number; observationId: string | null;
-  requests: Record<string, { id: string; observations: number }>;
-}
-export function main(argv: string[]): void {
-  const [mode, ...args] = argv;
-=======
 import { homedir } from "node:os";
 import { inspectArtifact, ensureArtifact } from "./artifact-cache.ts";
 import { artifactToken, parseArtifact, resolveRelease } from "./release.ts";
@@ -50,7 +35,6 @@ export async function main(argv: string[]): Promise<void> {
   if (mode === "inspect" && args.length === 1) { console.log(JSON.stringify(inspectRun(JSON.parse(args[0]!)))); return; }
   if (mode === "finish" && args.length === 2) { const result = finishRun(JSON.parse(args[0]!), JSON.parse(args[1]!)); if (result) console.log(result); return; }
   if (mode === "step" && args.length === 1) { executeStep(args[0]!); return; }
->>>>>>> Stashed changes
   if (mode === "now" && !args.length) { console.log(Date.now()); return; }
   if (mode === "sha256" && !args.length) { console.log(createHash("sha256").update(readFileSync(0)).digest("hex")); return; }
   if (mode === "bounded" && args.length >= 5) {
@@ -92,9 +76,5 @@ export async function main(argv: string[]): Promise<void> {
     } finally { for (const fd of descriptors) closeSync(fd); }
     return;
   }
-<<<<<<< Updated upstream
-  throw new Error("Usage: a4s reconcile now | remaining <budget-seconds> <started-ms> <cap-seconds> | positive <seconds> | bounded <phase> <seconds> <command> [args...] | sha256 | ci-no-progress <state> <observation-id> <threshold> | lock <command> [args...]");
-=======
   throw new Error("Usage: a4s reconcile cache --release a4s@vX.Y.Z | render --artifact <version>@<commit>#<digest> | classify <outputs-file> | inspect <row> | finish <row> <issue> | step observe|transition | now | bounded <phase> <budget-seconds> <started-ms> <cap-seconds> <command> [args...] | sha256 | ci-no-progress <state> <observation-id> <threshold> | lock <command> [args...]");
->>>>>>> Stashed changes
 }

@@ -2,19 +2,30 @@
 import { pathToFileURL } from "node:url";
 import { compiled, runGate } from "./executable.ts";
 import { identity } from "./identity.ts";
+import { executeNative, main as runArtifact } from "./run-artifact.ts";
 
-const usage = "Usage: a4s <gate|pr-body|codeql|poc-scope|protect|role-jobs|admit|enqueue|queue|observe|escalation|stale-recovery|prioritize|reconcile|planning|heavy-slot|config|version> [args...]";
+const usage = "Usage: a4s <gate|pr-body|codeql|poc-scope|protect|role-jobs|admit|enqueue|queue|observe|escalation|stale-recovery|prioritize|reconcile|run|planning|heavy-slot|config|version> [args...]";
 // Command imports are an intentional loading boundary: admission reads the
 // package's filesystem closure at import time. `version` must remain an embedded
 // identity query without opening SQLite, role runtimes or release asset files.
 
 export async function main(argv: string[]): Promise<void> {
   const [command, ...args] = argv;
+  if (command === "run") {
+    try { await runArtifact(args, main); }
+    catch (error) {
+      const run = args[args.indexOf("--run") + 1] || "unknown";
+      console.error(`reconcile-failure run=${run} status=1 cause=${JSON.stringify(error instanceof Error ? error.message : String(error))}`);
+      process.exitCode = 1;
+    }
+    return;
+  }
   switch (command) {
     case "version":
       if (args.length) throw new Error("Usage: a4s version");
       console.log(JSON.stringify(identity));
       return;
+    case "native": return executeNative(args);
     case "gate": return runGate(args);
     case "pr-body": return (await import("./commands/pr-body.ts")).main(args);
     case "codeql": return (await import("./commands/codeql.ts")).main(args);
