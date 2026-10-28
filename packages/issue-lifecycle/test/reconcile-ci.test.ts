@@ -11,7 +11,7 @@ import { test } from "node:test";
 import { Transitions } from "../src/status/progress.ts";
 import type { RunDetails } from "../src/status/progress.ts";
 import { readCiDiagnostic, readEscalationDiagnostic } from "../src/status/repository.ts";
-import { BUNDLE_VERSION, REQUIRED_DAGU_VERSION } from "../src/bundle.ts";
+import { BUNDLE_VERSION } from "../src/bundle.ts";
 import { admissionFixture } from "./fixtures/admission.ts";
 import { withResourceGuard } from "./resource-fixtures.ts";
 import { testRunId } from "./fixtures/run-id.ts";
@@ -521,7 +521,7 @@ test("escalation diagnostics target the owner with budget evidence and decision 
   } finally { rmSync(f.root, { recursive: true, force: true }); }
 });
 
-test(`Dagu ${REQUIRED_DAGU_VERSION}: paired root waits return to implement/rebase and release the queue`, {
+test(`Dagu ${liveDaguVersion}: paired root waits return to implement/rebase and release the queue`, {
   ...liveDagu,
   timeout: 120_000,
 }, async t => {
@@ -670,7 +670,7 @@ test("off code scanning admits and reaches the close success contract when the A
     admitted.writeAnswers({ codeScanning: "off" });
     const bin = join(admitted.root, "dagu-bin");
     mkdirSync(bin);
-    writeFileSync(join(bin, "dagu"), `#!/bin/sh\nif [ "$1" = version ]; then printf '%s\\n' ${JSON.stringify(REQUIRED_DAGU_VERSION)}; exit 0; fi\nprintf 'unexpected dagu %s\\n' "$*" >&2\nexit 1\n`);
+    writeFileSync(join(bin, "dagu"), `#!/bin/sh\nif [ "$1" = version ]; then printf '%s\\n' '2.24.0'; exit 0; fi\nprintf 'unexpected dagu %s\\n' "$*" >&2\nexit 1\n`);
     chmodSync(join(bin, "dagu"), 0o755);
     const result = admitted.command("admit", "code-scanning-off", { PATH: `${bin}:${process.env.PATH ?? ""}` });
     assert.equal(result.status, 0, result.stderr);

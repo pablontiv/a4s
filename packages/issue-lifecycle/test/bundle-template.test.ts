@@ -7,7 +7,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { parse } from "yaml";
-import { BUNDLE_NAME, BUNDLE_VERSION, REQUIRED_DAGU_VERSION } from "../src/bundle.ts";
+import { BUNDLE_NAME, BUNDLE_VERSION } from "../src/bundle.ts";
 
 const skill = (name: string): string => readFileSync(
   fileURLToPath(new URL(`../skills/issue-execution/${name}`, import.meta.url)),
@@ -53,7 +53,7 @@ test("bootstrap renders optional validation as the sole adopted value", {
           QUEUE_CONCURRENCY: "", CURRENT_QUEUE_CONCURRENCY: "8",
           REBASE_RESOLVER: "node packages/issue-lifecycle/bin/dagu-bundle-rebase.mjs",
           VALIDATION: validation, BUNDLE_NAME, BUNDLE_VERSION,
-          DAGU_VERSION: REQUIRED_DAGU_VERSION, SOURCE_NWO: "owner/repo", SOURCE_SHA: "a".repeat(40),
+          DAGU_VERSION: "2.24.0", SOURCE_NWO: "owner/repo", SOURCE_SHA: "a".repeat(40),
         },
       });
       assert.equal(result.status, 0, result.stdout + result.stderr);
@@ -80,7 +80,7 @@ test("bootstrap preserves the installed blocker reporting choice and accepts exp
         SKILL_DIR: fileURLToPath(new URL("../skills/issue-execution", import.meta.url)),
         STAGE: stage, PRIMARY: root, REPO: "fixture", BASE_BRANCH: "main",
         GATE: "true", REQUIRED_CHECK: "validate", TEST_PATHS: "^test/", REBASE_RESOLVER: "",
-        BUNDLE_NAME, BUNDLE_VERSION, DAGU_VERSION: REQUIRED_DAGU_VERSION,
+        BUNDLE_NAME, BUNDLE_VERSION, DAGU_VERSION: "2.24.0",
         SOURCE_NWO: "owner/repo", SOURCE_SHA: "a".repeat(40),
         A4S_BLOCKER_REPORTING: answer, CURRENT_A4S_BLOCKER_REPORTING: installed,
       } });
@@ -124,7 +124,7 @@ test("bootstrap renders default, preserved and explicit CodeQL thresholds and re
         ...process.env, PRIMARY: root, SKILL_DIR: fileURLToPath(new URL("../skills/issue-execution", import.meta.url)),
         STAGE: stage, DAG_RUN_ID: "bootstrap-codeql", REPO: "fixture", BASE_BRANCH: "main",
         GATE: "true", REQUIRED_CHECK: "validate", REBASE_RESOLVER: "", TEST_PATHS: "test",
-        BUNDLE_NAME, BUNDLE_VERSION, DAGU_VERSION: REQUIRED_DAGU_VERSION,
+        BUNDLE_NAME, BUNDLE_VERSION, DAGU_VERSION: "2.24.0",
         SOURCE_NWO: "example/repo", SOURCE_SHA: "a".repeat(40),
         CODEQL_SECURITY_THRESHOLD: answer, CURRENT_CODEQL_SECURITY_THRESHOLD: installed,
         CODEQL_ALERTS_THRESHOLD: "", CURRENT_CODEQL_ALERTS_THRESHOLD: "errors_and_warnings",
@@ -144,7 +144,7 @@ test("bootstrap renders default, preserved and explicit CodeQL thresholds and re
         ...process.env, PRIMARY: root, SKILL_DIR: fileURLToPath(new URL("../skills/issue-execution", import.meta.url)),
         STAGE: stage, DAG_RUN_ID: "bootstrap-codeql", REPO: "fixture", BASE_BRANCH: "main",
         GATE: "true", REQUIRED_CHECK: "validate", REBASE_RESOLVER: "", TEST_PATHS: "test",
-        BUNDLE_NAME, BUNDLE_VERSION, DAGU_VERSION: REQUIRED_DAGU_VERSION,
+        BUNDLE_NAME, BUNDLE_VERSION, DAGU_VERSION: "2.24.0",
         SOURCE_NWO: "example/repo", SOURCE_SHA: "a".repeat(40),
         CODEQL_SECURITY_THRESHOLD: "", CURRENT_CODEQL_SECURITY_THRESHOLD: "high_or_higher",
         CODEQL_ALERTS_THRESHOLD: "", CURRENT_CODEQL_ALERTS_THRESHOLD: "errors",
@@ -157,7 +157,7 @@ test("bootstrap renders default, preserved and explicit CodeQL thresholds and re
       ...process.env, PRIMARY: root, SKILL_DIR: fileURLToPath(new URL("../skills/issue-execution", import.meta.url)),
       STAGE: join(root, "answers.json"), DAG_RUN_ID: "bootstrap-codeql", REPO: "fixture", BASE_BRANCH: "main",
       GATE: "true", REQUIRED_CHECK: "validate", REBASE_RESOLVER: "", TEST_PATHS: "test",
-      BUNDLE_NAME, BUNDLE_VERSION, DAGU_VERSION: REQUIRED_DAGU_VERSION,
+      BUNDLE_NAME, BUNDLE_VERSION, DAGU_VERSION: "2.24.0",
       SOURCE_NWO: "example/repo", SOURCE_SHA: "a".repeat(40),
       CODE_SCANNING: "sometimes",
     } });

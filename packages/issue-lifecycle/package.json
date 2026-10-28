@@ -1,6 +1,6 @@
 {
   "name": "@a4s/issue-lifecycle",
-  "version": "0.5.27",
+  "version": "0.5.28",
   "private": true,
   "license": "UNLICENSED",
   "repository": {
@@ -14,7 +14,6 @@
   },
   "type": "module",
   "daguFeature": {
-    "dagu": "2.23.0",
     "integrationBase": "main"
   },
   "exports": {

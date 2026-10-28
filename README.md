@@ -30,8 +30,6 @@ workspaces, not public npm publication.
   spike #692 decision, descartar.
 - [1Password Agents](docs/architecture/onepassword-agents.md):
   spike #693 decision, descartar.
-- [LayerFS and git worktrees](docs/architecture/layerfs-worktrees.md):
-  spike #694 decision, descartar.
 
 ## Delivered components
 
@@ -50,9 +48,8 @@ Independent root skills are [model-routing-audit](skills/model-routing-audit/SKI
 [gpt-quota-audit](skills/gpt-quota-audit/SKILL.md),
 [cost-analyzer](skills/cost-analyzer/SKILL.md),
 [agent-throughput](skills/agent-throughput/SKILL.md),
-[workspace-hygiene](skills/workspace-hygiene/SKILL.md),
-[sandbox-threat-model](skills/sandbox-threat-model/SKILL.md) and
-[hitl-escalation](skills/hitl-escalation/SKILL.md). Their full directories stay
+[workspace-hygiene](skills/workspace-hygiene/SKILL.md) and
+[sandbox-threat-model](skills/sandbox-threat-model/SKILL.md). Their full directories stay
 with their owning scripts/assets and can be installed in private consumers.
 The [catalog](docs/architecture/catalog.md#conditional-311-ingestion) distinguishes
 pending incoming skills from available functionality.

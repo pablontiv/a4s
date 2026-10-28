@@ -4,7 +4,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "n
 import { join } from "node:path";
 import test from "node:test";
 import { admissionFixture } from "./fixtures/admission.ts";
-import { lifecycleProtocolToken, REQUIRED_DAGU_VERSION } from "../src/bundle.ts";
+import { lifecycleProtocolToken } from "../src/bundle.ts";
 import { ANSWERS_PATH } from "../src/answers.ts";
 
 function fakeDagu(bin: string, calls: string): void {
@@ -14,7 +14,7 @@ function fakeDagu(bin: string, calls: string): void {
 const fs = require("node:fs");
 const args = process.argv.slice(2);
 if (args.length === 1 && args[0] === "version") {
-  console.log(${JSON.stringify(REQUIRED_DAGU_VERSION)});
+  console.log("2.24.0");
 } else if (args[0] === "enqueue") {
   fs.appendFileSync(process.env.ADMISSION_ENQUEUE_CALLS, JSON.stringify(args) + "\\n");
   console.log("fixture dagu enqueue reached");
@@ -61,6 +61,8 @@ test("planning CLI admission materializes the installed template and enqueue sub
     assert.equal(receipt.initial.deployment.installedDAG.relationship, "materialized-from-answers");
     assert.equal(receipt.initial.deployment.installedDAG.version, "0.3.1");
     assert.equal(receipt.initial.deployment.installedDAG.template.path, "skills/issue-execution/planning.yaml");
+    assert.equal(receipt.initial.deployment.installedDAG.dagu, "2.24.0");
+    assert.equal(receipt.initial.runtimeAndModels.dagu.version, "2.24.0");
     assert.equal(receipt.initial.deployment.answers.path, ANSWERS_PATH);
     assert.equal(receipt.initial.deployment.answers.schemaVersion, 1);
     assert.match(receipt.initial.deployment.answers.digest, /^[a-f0-9]{64}$/);

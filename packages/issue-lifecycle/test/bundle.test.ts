@@ -10,7 +10,6 @@ import { admissionFixture } from "./fixtures/admission.ts";
 import { liveDagu } from "./fixtures/live-dagu.ts";
 import {
   BUNDLE_VERSION,
-  REQUIRED_DAGU_VERSION,
   RETIRED_PROTOCOL_BUNDLES,
   bundleVersionFromLabels,
   classifyCompatibility,
@@ -63,23 +62,23 @@ test("labels and exact line-one stamps are parsed", () => {
   assert.equal(bundleVersionFromLabels(["workspace=a4s"]), undefined);
   assert.deepEqual(
     parseBundleStamp(
-      `# dagu-feature-bundle: @a4s/issue-lifecycle@0.2.0 source=pablontiv/a4s@0123456789012345678901234567890123456789 bootstrap=bootstrap-a4s-0.2.0 dagu=${REQUIRED_DAGU_VERSION}\nlabels:\n`,
+      `# dagu-feature-bundle: @a4s/issue-lifecycle@0.2.0 source=pablontiv/a4s@0123456789012345678901234567890123456789 bootstrap=bootstrap-a4s-0.2.0 dagu=2.24.0\nlabels:\n`,
     ),
     {
       version: "0.2.0",
       source: "pablontiv/a4s@0123456789012345678901234567890123456789",
       bootstrap: "bootstrap-a4s-0.2.0",
-      dagu: REQUIRED_DAGU_VERSION,
+      dagu: "2.24.0",
     },
   );
   assert.deepEqual(
     parseBundleStamp(
-      `# dagu-feature-bundle: @a4s/issue-lifecycle@0.4.0 source=pablontiv/a4s@0123456789012345678901234567890123456789 bootstrap=bootstrap-a4s-0.4.0 dagu=${REQUIRED_DAGU_VERSION} protocols=${lifecycleProtocolToken()}\n`,
+      `# dagu-feature-bundle: @a4s/issue-lifecycle@0.4.0 source=pablontiv/a4s@0123456789012345678901234567890123456789 bootstrap=bootstrap-a4s-0.4.0 dagu=2.24.0 protocols=${lifecycleProtocolToken()}\n`,
     )?.protocols,
     LIFECYCLE_PROTOCOLS,
   );
-  assert.equal(parseBundleStamp(`# dagu-feature-bundle: @a4s/issue-lifecycle@0.4.0 source=pablontiv/a4s@0123456789012345678901234567890123456789 bootstrap=bootstrap-a4s-0.4.0 dagu=${REQUIRED_DAGU_VERSION} protocols=triage=role-job/1\n`), undefined);
-  assert.equal(parseBundleStamp(`labels:\n# dagu-feature-bundle: @a4s/issue-lifecycle@0.2.0 source=x@y bootstrap=z dagu=${REQUIRED_DAGU_VERSION}\n`), undefined);
+  assert.equal(parseBundleStamp(`# dagu-feature-bundle: @a4s/issue-lifecycle@0.4.0 source=pablontiv/a4s@0123456789012345678901234567890123456789 bootstrap=bootstrap-a4s-0.4.0 dagu=2.24.0 protocols=triage=role-job/1\n`), undefined);
+  assert.equal(parseBundleStamp(`labels:\n# dagu-feature-bundle: @a4s/issue-lifecycle@0.2.0 source=x@y bootstrap=z dagu=2.24.0\n`), undefined);
 });
 
 test("deployment fingerprints are key-order independent and detect effective identity changes", () => {

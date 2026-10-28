@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
-/** Manifest-pinned official Dagu scheduler text for a stale local-process repair. */
+/** Official Dagu scheduler text for a stale local-process repair. */
 export const STALE_PROCESS_ERROR = "process terminated unexpectedly - stale local process detected";
 
 /** One automatic retry for a run attempt. A repeated observation is reported, not retried. */

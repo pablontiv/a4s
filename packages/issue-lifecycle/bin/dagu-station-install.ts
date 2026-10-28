@@ -6,7 +6,6 @@ import { dirname, join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import { isMap, parseDocument } from "yaml";
-import { REQUIRED_DAGU_VERSION } from "../src/bundle.ts";
 import { queueCompatibility, queueFromAnswersFile } from "../src/queue.ts";
 import { stationExecutors } from "../src/station-executors.ts";
 
@@ -43,9 +42,6 @@ async function main(): Promise<void> {
   }
   if (values.apply && !values["repo-dag"]) throw new Error("--apply requires --repo-dag pointing at the consumer answers file; bootstrap writes .workspace/dagu/answers.json");
   const version = execFileSync("dagu", ["version"], { encoding: "utf8" }).trim();
-  if (version !== REQUIRED_DAGU_VERSION) {
-    throw new Error(`dagu version=${JSON.stringify(version)} required=${REQUIRED_DAGU_VERSION}; install the expected binary on PATH`);
-  }
   const binary = resolve(execFileSync("which", ["dagu"], { encoding: "utf8" }).trim());
   const home = resolve(values["dagu-home"] || process.env.DAGU_HOME || join(homedir(), ".dagu"));
   if (values["executor-action"]) {

@@ -12,8 +12,7 @@ and keep the checkout available for every source link.
 - Native OMP for OMP integrations; review-routing's host compatibility and Bun
   requirement are in its manifest's `peerDependencies` and `engines.bun`.
   npm installs its `devDependencies.bun` pin for tests.
-- Official Dagu from `packages/issue-lifecycle/package.json` `daguFeature.dagu`
-  for lifecycle runtime; Git, authenticated `gh`, `jq`,
+- Official Dagu 2.23.0 or newer for lifecycle runtime; Git, authenticated `gh`, `jq`,
   Python 3 with `fcntl`, and Bash for bootstrap/execution. Semantic role jobs
   also require Bun and the installed OMP runtime.
 - Orca installed/running and a bound coordinator pane for Orca integration's
@@ -36,7 +35,7 @@ typechecks. The tool-row workspace runs transpiled behavioral tests; its optiona
 Pion host supplies the renderer types for host-side development. CI and default
 tests need no Dagu binary; real Dagu cases skip unless `A4S_LIVE_DAGU=1`.
 Before a package release, run live Dagu integration on the station with
-`A4S_LIVE_DAGU=1 npm test` and the manifest-pinned runtime on `PATH`.
+`A4S_LIVE_DAGU=1 npm test` and a supported Dagu runtime on `PATH`.
 CI discovers current workspace manifests and transitive consumers, handles both
 sides of renames, and aggregates workspace checks and PR-body validation into
 `validate` for `main`.
@@ -109,7 +108,7 @@ its native project skill root without moving them into the lifecycle package:
 A4S_ROOT=<absolute-pinned-source-checkout>
 CONSUMER=<absolute-private-consumer-checkout>
 mkdir -p "$CONSUMER/.omp/skills"
-for skill in model-routing-audit gpt-quota-audit cost-analyzer agent-throughput workspace-hygiene sandbox-threat-model hitl-escalation; do
+for skill in model-routing-audit gpt-quota-audit cost-analyzer agent-throughput workspace-hygiene sandbox-threat-model; do
   ln -s "$A4S_ROOT/skills/$skill" "$CONSUMER/.omp/skills/$skill"
 done
 ```

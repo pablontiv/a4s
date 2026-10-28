@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { BUNDLE_VERSION, REQUIRED_DAGU_VERSION } from "../src/bundle.ts";
+import { BUNDLE_VERSION } from "../src/bundle.ts";
 import {
   HOST_PRIMARY_REFERENCE,
   bindSnapshotPrimary,
@@ -178,7 +178,7 @@ test("enqueue records the resolved checkout and leaves the durable render portab
   writeFileSync(dagu, `#!${process.execPath}
 const fs = require("node:fs");
 const args = process.argv.slice(2);
-if (args.length === 1 && args[0] === "version") console.log(${JSON.stringify(REQUIRED_DAGU_VERSION)});
+if (args.length === 1 && args[0] === "version") console.log("2.24.0");
 else if (args[0] === "enqueue") console.log("fixture enqueue");
 else { console.error("unexpected " + JSON.stringify(args)); process.exitCode = 1; }
 `);

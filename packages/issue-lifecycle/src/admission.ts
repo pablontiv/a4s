@@ -16,7 +16,6 @@ import {
   inferLifecycleProtocols,
   lifecycleProtocolToken,
   missingLifecycleProtocols,
-  REQUIRED_DAGU_VERSION,
 } from "./bundle.ts";
 import { dagName, materializeDag, packageIdentity } from "./materialize.ts";
 import type { RunDetails } from "./status/progress.ts";
@@ -207,11 +206,12 @@ export function admit(options: AdmissionOptions, persist = true): { path: string
     const extensionFiles = tree(join(packageRoot, "src"));
     if (options.session?.extensionDigest && options.session.extensionDigest !== deploymentFingerprint(extensionFiles)) throw new Error(`loaded extension digest=${options.session.extensionDigest} expected current installed=${deploymentFingerprint(extensionFiles)}; restart OMP after redeployment`);
     const generatedDigest = sha256(snapshot);
+    const daguVersion = execFileSync("dagu", ["version"], { encoding: "utf8" }).trim();
     const installedDAG = {
       relationship: "materialized-from-answers", version: BUNDLE_VERSION, canonicalPath: realpathSync(templateFile),
       origin: `${origin}@${commit}`, digest: sha256(templateText),
       template: { path: `skills/issue-execution/${name}`, commit, digest: sha256(templateText) },
-      answersDigest, generatedDigest, dagu: REQUIRED_DAGU_VERSION, snapshot: generated,
+      answersDigest, generatedDigest, dagu: daguVersion, snapshot: generated,
     };
     const deployment = {
       package: identity(join(packageRoot, "package.json"), BUNDLE_VERSION, `${origin}@${commit}`),
@@ -229,8 +229,6 @@ export function admit(options: AdmissionOptions, persist = true): { path: string
       ],
       relationships: { packageToExtension: "same-loaded-package", templateToPackage: "same-checkout", installedToSource: "materialized-from-answers", compatibility: "installed-template", protocols: lifecycleProtocolToken() },
     };
-    const daguVersion = execFileSync("dagu", ["version"], { encoding: "utf8" }).trim();
-    if (daguVersion !== REQUIRED_DAGU_VERSION) throw new Error(`Dagu observed=${daguVersion} expected=${REQUIRED_DAGU_VERSION}`);
     const diff = git(primary, "diff", "HEAD", "--binary");
     const dirty = git(primary, "status", "--porcelain", "--untracked-files=all");
     const config: Record<string, unknown> = {};

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.5.28
+
+- Remove the exact Dagu runtime pin from bootstrap, admission, bundle inspection, prioritization and station installation. Record the observed runtime version in admission receipts; document Dagu 2.23.0 or newer and keep the minimum check only in live-test fixtures (#705).
+
 ## 0.5.27
 
 - Consumers version `.workspace/dagu/answers.json` (schema 1, independent of the package version). Admission materializes feature, PoC, discovery and planning DAGs from the installed package templates, resolves PRIMARY, and records the answers digest with the per-run snapshot. A package or Dagu release that does not change answers no longer needs a consumer adoption commit (#684, #354, #678, #680).

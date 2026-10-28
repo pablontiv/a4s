@@ -464,7 +464,7 @@ steps:
         --argjson actions "$action_runs" --argjson orphans "$orphans" --argjson failures "$failures" \
         --argjson repos "$repos" --argjson pages "$pages" \
         '{phase:"classify",inputRuns:$input,prRuns:$pr,actions:$actions,orphans:$orphans,failures:$failures,issueRepos:$repos,issuePages:$pages}')" >&2
-      # The pinned Dagu runtime reads declared outputs only from this file. Stdout is the step log.
+      # Dagu reads declared outputs only from this file. Stdout is the step log.
       {
         printf 'children=%s\n' "$(jq -sc '.' "$TMP/children")"
         printf 'actions=%s\n' "$(jq -sc '.' "$TMP/actions")"

@@ -160,7 +160,7 @@ Database terminal results repair missing materialized result files on redelivery
 a4s owns the macOS service template and shared defaults in `../../dagu/`.
 From a clean primary checkout after merge, the operator creates or updates the
 installation with the Node.js requirement in root `package.json` `engines.node`
-and the manifest-pinned `dagu` on `PATH`:
+and official Dagu 2.23.0 or newer on `PATH`:
 
 ```sh
 package="$PWD/packages/issue-lifecycle"
@@ -170,8 +170,8 @@ node "$package/bin/dagu-station-install.ts" \
   --log-dir "$HOME/Library/Logs/Dagu"
 ```
 
-The installer checks `dagu version` against the package's `daguFeature.dagu`, validates
-a minimal DAG inheriting the versioned base in an isolated temporary home, and
+The installer reports the observed `dagu version` without an exact version check,
+validates a minimal DAG inheriting the versioned base in an isolated temporary home, and
 checks the rendered plist with `plutil` on macOS before installing. `cmp` and
 `install -m 0644` make repeated installs byte- and mtime-stable. `base.yaml` and
 the rendered plist are fully owned. `config.yaml` merges the leaves in the
@@ -186,7 +186,7 @@ updates. With a custom `DAGU_HOME`, the default plist destination is
 `$DAGU_HOME/LaunchAgent.plist`, so a temporary-home install stays isolated.
 
 Repeat the same command with `--check` to compare all three desired files:
-exit 0 means byte-identical, exit 1 reports drift or a validation/version error.
+exit 0 means byte-identical, exit 1 reports drift or a validation error.
 `cmp "$package/dagu/base.yaml" "$DAGU_HOME/base.yaml"` also compares the base
 directly. Config is a merge and plist is a render, rather than raw template copies.
 
@@ -532,7 +532,7 @@ The steps:
 
 | Step | Effect |
 |---|---|
-| `detect` | Checks `git`, `gh` (authenticated), `jq`, Python's `fcntl`, the exact required `dagu version`, and every package executable a rendered DAG invokes (`dagu-codeql`, `dagu-feature-bundle`, `dagu-feature-protect`, `dagu-gate`, `dagu-poc-scope`, `dagu-pr-body`, `dagu-role-jobs`, `dagu-stale-recovery`). A missing command fails with `bootstrap detect: required command not found: <name>`. It then reads package/version, source commit and source `origin`; fetches and requires that clean package commit on the remote default branch; reads repository settings and the committed answers file. |
+| `detect` | Checks `git`, `gh` (authenticated), `jq`, Python's `fcntl`, observes `dagu version`, and checks every package executable a rendered DAG invokes (`dagu-codeql`, `dagu-feature-bundle`, `dagu-feature-protect`, `dagu-gate`, `dagu-poc-scope`, `dagu-pr-body`, `dagu-role-jobs`, `dagu-stale-recovery`). A missing command fails with `bootstrap detect: required command not found: <name>`. It then reads package/version, source commit and source `origin`; fetches and requires that clean package commit on the remote default branch; reads repository settings and the committed answers file. |
 | `answers` | `human.task` showing the committed policy, `GATE`, `REQUIRED_CHECK`, `TEST_PATHS`, `REBASE_RESOLVER`, optional `VALIDATION`, and `CODE_SCANNING` (`required` or `off`). Choose the test-path ERE, resolver and validation procedure from repository conventions; validation defaults to empty. Blank `CODE_SCANNING` preserves the committed choice. |
 | `worktrees` | Makes git ignore `.workspace/worktrees/`. When nothing ignores it yet, appends `/.workspace/worktrees/` to the clone's `info/exclude`, so the primary stays clean without a commit. |
 | `render` | Writes and validates `.workspace/dagu/answers.json` in PRIMARY. Unchanged bytes leave the checkout clean. Feature and PoC `PRIMARY` is resolved at admission from `"${A4S_PRIMARY}"`, not baked into the answers file. |
@@ -1427,7 +1427,7 @@ dagu human-task complete feature --run-id '<run>' --step validation \
 ```
 
 Push accepts the submitted SHA only when it matches current candidate and gate
-evidence, then records `validation.json` with SHA and procedure. The pinned Dagu runtime's
+evidence, then records `validation.json` with SHA and procedure. Dagu's
 forms are static: a well-formed different SHA completes the human task but fails
 the push step before publication, retaining the run at `recover_push` for inspection.
 A changed candidate requires a new gate and validation. On rejection, read
@@ -1585,7 +1585,7 @@ To change scope or delivery route, push back the decision task to its declared
 the budget before reassessing the issue. The change-route record names that
 mechanism, run, iteration and owner session; native OS attribution is advisory,
 not authenticated identity. Native task audit history retains the supplied
-push-back inputs. Completion has no `--expected-iteration` flag on the pinned Dagu runtime;
+push-back inputs. Completion has no `--expected-iteration` flag on the supported Dagu runtime;
 push-back retains its atomic stale-iteration rejection.
 
 For CI no-progress, the second consecutive identical BLOCKED
@@ -1787,12 +1787,12 @@ dagu human-task complete feature --run-id '<run>' --step '<waiting-step>' --inpu
 
 Cancellation needs only `CANCEL=yes`; SUMMARY, MESSAGE, IMPLEMENTER,
 REVIEW, approval and promotion fields are unnecessary. Normal completions retain
-their existing fields; CANCEL may be omitted or set to `no`. The pinned Dagu runtime supports
+their existing fields; CANCEL may be omitted or set to `no`. Dagu supports
 static forms, so supplied values retain their native type/enum/pattern/length
 validation and the cancellation gate enforces normal required fields before
 any successor. Missing normal fields fail that gate with `Normal completion
 requires <field>`, rather than completing delivery. Conditional form schemas
-are not supported by this pinned runtime.
+are not supported by this runtime.
 
 The immediate `<step>_cancellation` gate writes `cancellation.json` outside the
 editable worktree. Most gates exit 77, producing native **Failed**. Feature's

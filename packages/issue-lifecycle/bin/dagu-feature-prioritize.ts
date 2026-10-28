@@ -5,7 +5,6 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { parse } from "yaml";
 import { receiptPath } from "../src/admission.ts";
-import { REQUIRED_DAGU_VERSION } from "../src/bundle.ts";
 import { HOST_PRIMARY_REFERENCE, resolveHostPrimary, workspaceLabel } from "../src/primary.ts";
 import { isRecord } from "../src/type-guard.ts";
 
@@ -147,8 +146,6 @@ async function main(): Promise<void> {
   const index = before.findIndex(entry => key(entry) === key(target));
   if (index < 0) throw new Error(`NOT_QUEUED ${dag} ${id} status=not-in-repository-queue`);
   if (index === 0) { console.log(`PRIORITIZED ${dag} ${id} queue=${queue} moved=0`); return; }
-  const version = execFileSync("dagu", ["version"], { encoding: "utf8" }).trim();
-  if (version !== REQUIRED_DAGU_VERSION) throw new Error(`Dagu observed=${version} expected=${REQUIRED_DAGU_VERSION}`);
   const parent = join(home, "data", "prioritize");
   mkdirSync(parent, { recursive: true, mode: 0o700 });
   const recovery = mkdtempSync(join(parent, "operation-"));

@@ -31,7 +31,6 @@ steps:
       test -f "$package_json"
       bundle_name=$(jq -er '.name | select(type == "string" and length > 0)' "$package_json")
       bundle_version=$(jq -er '.version | select(type == "string" and length > 0)' "$package_json")
-      required_dagu=$(jq -er '.daguFeature.dagu | select(type == "string" and length > 0)' "$package_json")
       source_root=$(git -C "$SKILL_DIR" rev-parse --show-toplevel)
       package_prefix=$(git -C "$package_dir" rev-parse --show-prefix)
       test -z "$(git -C "$source_root" status --porcelain --untracked-files=all -- "${package_prefix%/}")"
@@ -54,15 +53,7 @@ steps:
       source_owner=${source_owner_path##*/}
       test -n "$source_owner" && test -n "$source_repo"
       source_nwo="$source_owner/$source_repo"
-      version_tmp=$(mktemp -d)
-      trap 'rm -rf "$version_tmp"' EXIT
-      if ! dagu version >"$version_tmp/stdout" 2>"$version_tmp/stderr"; then
-        cat "$version_tmp/stderr" >&2
-        exit 1
-      fi
-      printf '%s\n' "$required_dagu" >"$version_tmp/expected"
-      cmp "$version_tmp/expected" "$version_tmp/stdout"
-      test ! -s "$version_tmp/stderr"
+      dagu_version=$(dagu version)
       test "$(git -C "$PRIMARY" rev-parse --show-toplevel)" = "$PRIMARY"
       test "$(git -C "$PRIMARY" rev-parse --absolute-git-dir)" = "$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-common-dir)"
       cd "$PRIMARY"
@@ -120,8 +111,7 @@ steps:
         printf 'STAGE=%s\n' "$answers_file"
         printf 'BUNDLE_NAME=%s\n' "$bundle_name"
         printf 'BUNDLE_VERSION=%s\n' "$bundle_version"
-        printf 'REQUIRED_DAGU=%s\n' "$required_dagu"
-        printf 'DAGU_VERSION=%s\n' "$required_dagu"
+        printf 'DAGU_VERSION=%s\n' "$dagu_version"
         printf 'SOURCE_NWO=%s\n' "$source_nwo"
         printf 'SOURCE_SHA=%s\n' "$source_sha"
         printf 'CURRENT_GATE=%s\n' "${current_gate:-not-configured}"
@@ -144,7 +134,6 @@ steps:
       - name: STAGE
       - name: BUNDLE_NAME
       - name: BUNDLE_VERSION
-      - name: REQUIRED_DAGU
       - name: DAGU_VERSION
       - name: SOURCE_NWO
       - name: SOURCE_SHA

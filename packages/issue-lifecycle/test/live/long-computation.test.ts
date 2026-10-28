@@ -11,7 +11,7 @@ import { liveDagu } from "../fixtures/live-dagu.ts";
 import { PocDiagnostics } from "../fixtures/poc-diagnostics.ts";
 import { testRunId } from "../fixtures/run-id.ts";
 
-test("pinned Dagu runs the checkpoint scenario in an isolated home", { ...liveDagu, timeout: 120_000 }, async () => {
+test("Dagu runs the checkpoint scenario in an isolated home", { ...liveDagu, timeout: 120_000 }, async () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "a4s-live-computation-")));
   const home = join(root, "dagu-home");
   const scenario = join(root, "scenario");
