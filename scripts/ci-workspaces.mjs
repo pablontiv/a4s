@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, globSync, readFileSync } from "node:fs";
+import { availableParallelism } from "node:os";
 import { join } from "node:path";
 
 function discover() {
@@ -71,13 +72,55 @@ function changedFiles() {
   return diff.stdout.split("\0").filter(Boolean);
 }
 
-function aggregate() {
+function selectedWorkspaces() {
   const workspaces = JSON.parse(process.env.WORKSPACES ?? "");
   if (!Array.isArray(workspaces) || !workspaces.every(workspace => workspace
     && typeof workspace.name === "string" && workspace.name.length > 0
     && typeof workspace.test === "boolean" && typeof workspace.typecheck === "boolean")) {
     throw new Error("Expected a workspace matrix with name, test and typecheck");
   }
+  return workspaces;
+}
+
+function npm(args) {
+  return new Promise(resolve => {
+    const output = [];
+    const child = spawn("npm", args, { stdio: ["ignore", "pipe", "pipe"] });
+    child.stdout.on("data", chunk => output.push(chunk));
+    child.stderr.on("data", chunk => output.push(chunk));
+    child.on("error", error => resolve({ status: 1, output: String(error) }));
+    child.on("close", status => resolve({ status: status ?? 1, output: Buffer.concat(output).toString() }));
+  });
+}
+
+// One install serves every selected workspace: run their tests and typechecks
+// concurrently, print each command's output as one group, and fail on any failure.
+async function run() {
+  const commands = selectedWorkspaces().flatMap(({ name, test, typecheck }) => [
+    ...(test ? [["test", "--workspace", name]] : []),
+    ...(typecheck ? [["run", "typecheck", "--workspace", name]] : []),
+  ]);
+  const failed = [];
+  let next = 0;
+  const worker = async () => {
+    while (next < commands.length) {
+      const args = commands[next++];
+      const started = Date.now();
+      const { status, output } = await npm(args);
+      const label = `npm ${args.join(" ")}`;
+      console.log(`::group::${label} (${status === 0 ? "passed" : "FAILED"} in ${Math.round((Date.now() - started) / 1000)} s)`);
+      process.stdout.write(output);
+      console.log("::endgroup::");
+      if (status !== 0) failed.push(label);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(availableParallelism(), commands.length) }, worker));
+  for (const label of failed) console.log(`::error::${label} failed`);
+  if (failed.length) throw new Error(`${failed.length} of ${commands.length} workspace commands failed`);
+}
+
+function aggregate() {
+  const workspaces = selectedWorkspaces();
   const { CHANGES_RESULT: changes, TEST_RESULT: test, PR_BODY_RESULT: prBody } = process.env;
   console.log(`changes=${changes} test=${test} pr-body=${prBody}`);
   if (prBody !== (process.env.EVENT_NAME === "pull_request" ? "success" : "skipped")
@@ -90,8 +133,9 @@ try {
   switch (process.argv[2]) {
     case "changes": console.log(JSON.stringify(select(changedFiles()))); break;
     case "select": console.log(JSON.stringify(select(JSON.parse(readFileSync(0, "utf8"))))); break;
+    case "run": await run(); break;
     case "aggregate": aggregate(); break;
-    default: throw new Error("Usage: node scripts/ci-workspaces.mjs changes|select|aggregate");
+    default: throw new Error("Usage: node scripts/ci-workspaces.mjs changes|select|run|aggregate");
   }
 } catch (error) {
   console.error(error.message);
