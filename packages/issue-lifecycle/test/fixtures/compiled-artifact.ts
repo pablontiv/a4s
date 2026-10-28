@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { gzipSync } from "node:zlib";
 import { identity } from "../../src/identity.ts";
@@ -75,7 +75,7 @@ export function artifactDependencies(releases: string, calls: string[][] = []): 
 export function inProcessArtifact(home: string, version = identity.version, commit = "a".repeat(40)): ArtifactTuple {
   const directory = cachePath(home, { version, commit, digest: "0".repeat(64) });
   const record = join(directory, "artifact.json");
-  if (existsSync(record)) return JSON.parse(readFileSync(record, "utf8")) as ArtifactTuple;
+  try { return JSON.parse(readFileSync(record, "utf8")) as ArtifactTuple; } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
   const entries = artifactEntries(version, commit);
   const bytes = archiveBytes(entries);
   const tuple = { version, commit, digest: createHash("sha256").update(bytes).digest("hex") };
