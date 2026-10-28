@@ -783,6 +783,21 @@ steps:
       git read-tree "$head"
       git add -A -- .
       tree=$(git write-tree)
+      implementation=null
+      if [[ "$IMPLEMENTER" =~ ^[a-f0-9]{64}$ ]]; then
+        result="$STATE/role-jobs/$IMPLEMENTER/result.json"
+        jq -e --arg repo "$primary" --arg worktree "$worktree" --arg run "$RUN" --arg head "$head" --arg id "$IMPLEMENTER" \
+          '.id == $id and .state == "completed" and .binding.repo == $repo and .binding.worktree == $worktree and
+           .binding.run == $run and .binding.stage == "implement" and .binding.sha == $head and
+           (.output.summary | type == "string" and test("\\S")) and (.output.message | type == "string" and test("\\S"))' "$result" >/dev/null ||
+          fail "implementation receipt differs from delivered HEAD"
+        # Dagu outputs are single-line; the verified receipt keeps the multi-line summary and commit message.
+        SUMMARY=$(jq -r .output.summary "$result")
+        MESSAGE=$(jq -r .output.message "$result")
+        digest=$(shasum -a 256 "$result")
+        implementation=$(jq -nc --arg inputSha "$head" --arg resultDigest "${digest%% *}" \
+          '{inputSha:$inputSha,resultDigest:$resultDigest}')
+      fi
       iteration=0
       if test -f "$STATE/candidate.json"; then
         if jq -e --arg tree "$tree" --arg message "$MESSAGE" --arg base "$base" --arg implementer "$IMPLEMENTER" \
@@ -791,17 +806,6 @@ steps:
           exit 0
         fi
         iteration=$(( $(jq -r .iteration "$STATE/candidate.json") + 1 ))
-      fi
-      implementation=null
-      if [[ "$IMPLEMENTER" =~ ^[a-f0-9]{64}$ ]]; then
-        result="$STATE/role-jobs/$IMPLEMENTER/result.json"
-        jq -e --arg repo "$primary" --arg worktree "$worktree" --arg run "$RUN" --arg head "$head" --arg id "$IMPLEMENTER" \
-          '.id == $id and .state == "completed" and .binding.repo == $repo and .binding.worktree == $worktree and
-           .binding.run == $run and .binding.stage == "implement" and .binding.sha == $head' "$result" >/dev/null ||
-          fail "implementation receipt differs from delivered HEAD"
-        digest=$(shasum -a 256 "$result")
-        implementation=$(jq -nc --arg inputSha "$head" --arg resultDigest "${digest%% *}" \
-          '{inputSha:$inputSha,resultDigest:$resultDigest}')
       fi
       seed=$(printf '%s:%s' "$RUN" "$iteration" | cksum)
       epoch=$((1700000000 + ${seed%% *} % 100000000))

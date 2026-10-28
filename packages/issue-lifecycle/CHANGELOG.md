@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.7.1
+
+- `capture` reads the implement summary and commit message from the verified role-job receipt instead of the single-line Dagu outputs, so candidates, commits and rendered PR bodies keep their line structure (#724).
+
 ## 0.7.0
 
 - Breaking: the station reconciler is operator-pinned to an exact cached release and dispatches every per-run action through that run's own cached `a4s` (receipt tuple verified against the cache); the OMP plugin loads from an extracted release directory and dispatches run mutations through the run's artifact under declared receipt/protocol compatibility. Artifacts without the dispatch boundary (0.6.0) are reported unsupported and left untouched (#713).
