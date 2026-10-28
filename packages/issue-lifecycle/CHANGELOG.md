@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.5.30
+
+- Protect an idle PRIMARY when it holds a committed `.workspace/dagu/config.json` and its canonical path equals the resolved host PRIMARY binding; render-based detection is removed (#707).
+
 ## 0.5.29
 
 - Rename the committed lifecycle policy to `.workspace/dagu/config.json` without an old-path alias. New admission receipts use schema 2 and `configDigest`; readers retain schema 1 support for already-admitted runs and reject unsupported versions before effects (#706).
