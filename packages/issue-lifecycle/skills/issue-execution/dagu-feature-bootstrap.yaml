@@ -6,61 +6,27 @@ params:
   - name: PRIMARY
     type: string
     required: true
-  - name: SKILL_DIR
-    type: string
-    required: true
   - name: BASE_BRANCH
     type: string
     default: ""
+  - name: A4S_BIN
+    type: string
+    default: a4s
 steps:
   - id: detect
     run: |
       set -euo pipefail
-      for tool in git gh jq dagu python3 dagu-codeql dagu-feature-bundle dagu-feature-protect dagu-gate dagu-poc-scope dagu-pr-body dagu-role-jobs dagu-stale-recovery; do
+      for tool in git gh jq dagu "$A4S_BIN"; do
         command -v "$tool" >/dev/null || { printf 'bootstrap detect: required command not found: %s\n' "$tool" >&2; exit 1; }
       done
-      python3 -c 'import fcntl'
-      dagu-role-jobs detect
+      "$A4S_BIN" role-jobs detect
       gh auth status >/dev/null
-      test -f "$SKILL_DIR/feature.yaml"
-      test -f "$SKILL_DIR/poc.yaml"
-      test -f "$SKILL_DIR/discovery.yaml"
-      test -f "$SKILL_DIR/planning.yaml"
-      test -f "$SKILL_DIR/reconcile.yaml"
-      package_dir=$(cd "$SKILL_DIR/../.." && pwd -P)
-      package_json="$package_dir/package.json"
-      test -f "$package_json"
-      bundle_name=$(jq -er '.name | select(type == "string" and length > 0)' "$package_json")
-      bundle_version=$(jq -er '.version | select(type == "string" and length > 0)' "$package_json")
-      source_root=$(git -C "$SKILL_DIR" rev-parse --show-toplevel)
-      package_prefix=$(git -C "$package_dir" rev-parse --show-prefix)
-      test -z "$(git -C "$source_root" status --porcelain --untracked-files=all -- "${package_prefix%/}")"
-      source_sha=$(git -C "$source_root" rev-parse HEAD)
-      test "${#source_sha}" = 40
-      git -C "$source_root" fetch origin
-      git -C "$source_root" remote set-head origin -a >/dev/null
-      source_default=$(git -C "$source_root" symbolic-ref --quiet refs/remotes/origin/HEAD)
-      git -C "$source_root" merge-base --is-ancestor "$source_sha" "$source_default"
-      source_url=$(git -C "$source_root" remote get-url origin)
-      source_path=${source_url#git@*:}
-      source_path=${source_path#http://*/}
-      source_path=${source_path#https://*/}
-      source_path=${source_path#ssh://*/}
-      source_path=${source_path#file://}
-      source_path=${source_path%.git}
-      source_path=${source_path%/}
-      source_repo=${source_path##*/}
-      source_owner_path=${source_path%/*}
-      source_owner=${source_owner_path##*/}
-      test -n "$source_owner" && test -n "$source_repo"
-      source_nwo="$source_owner/$source_repo"
-      dagu_version=$(dagu version)
       test "$(git -C "$PRIMARY" rev-parse --show-toplevel)" = "$PRIMARY"
       test "$(git -C "$PRIMARY" rev-parse --absolute-git-dir)" = "$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-common-dir)"
       cd "$PRIMARY"
       repo=$(gh repo view --json name --jq .name)
       nwo=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
-      node "$SKILL_DIR/../../bin/dagu-feature-bundle.ts" readiness --lane "$repo"
+      "$A4S_BIN" queue --lane "$repo"
       base=${BASE_BRANCH:-$(gh repo view --json defaultBranchRef --jq .defaultBranchRef.name)}
       git check-ref-format "refs/heads/$base"
       gh api "repos/$nwo/branches/$base" >/dev/null
@@ -73,6 +39,7 @@ steps:
         checks=$(gh pr checks "$last_pr" --json name --jq '[.[].name] | unique | join(",")' 2>/dev/null || true)
       fi
       config_file="$(pwd -P)/.workspace/dagu/config.json"
+      current_uses=a4s@v0
       current_gate=not-configured
       current_check=not-configured
       current_tests=not-configured
@@ -83,6 +50,7 @@ steps:
       current_codeql_alerts=errors
       current_code_scanning=required
       if test -f "$config_file"; then
+        current_uses=$(jq -er '.uses' "$config_file")
         current_gate=$(jq -er '.gate' "$config_file")
         current_check=$(jq -er '.requiredCheck' "$config_file")
         current_resolver=$(jq -er '.rebaseResolver' "$config_file")
@@ -109,11 +77,7 @@ steps:
         printf 'REQUIRED_NOW=%s\n' "${required:-none}"
         printf 'RECENT_CHECKS=%s\n' "${checks:-none}"
         printf 'STAGE=%s\n' "$config_file"
-        printf 'BUNDLE_NAME=%s\n' "$bundle_name"
-        printf 'BUNDLE_VERSION=%s\n' "$bundle_version"
-        printf 'DAGU_VERSION=%s\n' "$dagu_version"
-        printf 'SOURCE_NWO=%s\n' "$source_nwo"
-        printf 'SOURCE_SHA=%s\n' "$source_sha"
+        printf 'CURRENT_USES=%s\n' "$current_uses"
         printf 'CURRENT_GATE=%s\n' "${current_gate:-not-configured}"
         printf 'CURRENT_REQUIRED_CHECK=%s\n' "${current_check:-not-configured}"
         printf 'CURRENT_TEST_PATHS=%s\n' "${current_tests:-not-configured}"
@@ -131,11 +95,7 @@ steps:
       - name: REQUIRED_NOW
       - name: RECENT_CHECKS
       - name: STAGE
-      - name: BUNDLE_NAME
-      - name: BUNDLE_VERSION
-      - name: DAGU_VERSION
-      - name: SOURCE_NWO
-      - name: SOURCE_SHA
+      - name: CURRENT_USES
       - name: CURRENT_GATE
       - name: CURRENT_REQUIRED_CHECK
       - name: CURRENT_TEST_PATHS
@@ -161,6 +121,9 @@ steps:
         Bootstrap writes one config file at .workspace/dagu/config.json.
         Its schema version is independent of the package version. Package releases
         do not require a new consumer commit when this config stays the same.
+        USES: a4s@v<major> or exact a4s@v<x.y.z>; blank preserves the committed
+        selection (current: ${steps.detect.outputs.CURRENT_USES}; initial: a4s@v0).
+        Selection resolves a published release, not a checkout or branch.
         GATE: local gate command run in the issue worktree with bash -euo pipefail -c
         (current: ${steps.detect.outputs.CURRENT_GATE}).
         REQUIRED_CHECK: GitHub check the default branch will require (strict)
@@ -199,6 +162,10 @@ steps:
         type: object
         additionalProperties: false
         properties:
+          USES:
+            type: string
+            pattern: '^$|^a4s@v(0|[1-9][0-9]*)(\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*))?$'
+            default: ""
           GATE:
             type: string
             minLength: 1
@@ -246,9 +213,11 @@ steps:
       fi
       git -C "$PRIMARY" check-ignore -q "$PRIMARY/.workspace/worktrees/issue-1"
 
-  - id: render
+  - id: write_config
     depends: worktrees
     env:
+      - USES: ${steps.config.outputs.USES}
+      - CURRENT_USES: ${steps.detect.outputs.CURRENT_USES}
       - GATE: ${steps.config.outputs.GATE}
       - REQUIRED_CHECK: ${steps.config.outputs.REQUIRED_CHECK}
       - REPO: ${steps.detect.outputs.REPO}
@@ -275,16 +244,12 @@ steps:
       - CURRENT_ESCALATION_SECONDS: ${steps.detect.outputs.CURRENT_ESCALATION_SECONDS}
       - CURRENT_ESCALATION_CI_BLOCKED: ${steps.detect.outputs.CURRENT_ESCALATION_CI_BLOCKED}
       - CURRENT_ESCALATION_POC_INCONCLUSIVE: ${steps.detect.outputs.CURRENT_ESCALATION_POC_INCONCLUSIVE}
-      - BUNDLE_NAME: ${steps.detect.outputs.BUNDLE_NAME}
-      - BUNDLE_VERSION: ${steps.detect.outputs.BUNDLE_VERSION}
-      - DAGU_VERSION: ${steps.detect.outputs.DAGU_VERSION}
-      - SOURCE_NWO: ${steps.detect.outputs.SOURCE_NWO}
-      - SOURCE_SHA: ${steps.detect.outputs.SOURCE_SHA}
     run: |
       set -euo pipefail
       umask 0022
       test -n "${DAG_RUN_ID:-}"
       PRIMARY=$(cd "$PRIMARY" && pwd -P)
+      export USES="${USES:-${CURRENT_USES:-a4s@v0}}"
       A4S_BLOCKER_REPORTING=${A4S_BLOCKER_REPORTING:-${CURRENT_A4S_BLOCKER_REPORTING:-ask}}
       case "$A4S_BLOCKER_REPORTING" in ask|auto) ;; *) echo 'A4S_BLOCKER_REPORTING must be ask or auto' >&2; exit 1 ;; esac
       CODEQL_SECURITY_THRESHOLD=${CODEQL_SECURITY_THRESHOLD:-${CURRENT_CODEQL_SECURITY_THRESHOLD:-high_or_higher}}
@@ -303,24 +268,20 @@ steps:
       mkdir -p "$(dirname "$STAGE")"
       export A4S_BLOCKER_REPORTING CODEQL_SECURITY_THRESHOLD CODEQL_ALERTS_THRESHOLD CODE_SCANNING
       export VALIDATION="${VALIDATION-}" REBASE_RESOLVER="${REBASE_RESOLVER-}"
-      node "$SKILL_DIR/../../bin/dagu-feature-bundle.ts" write-config "$STAGE"
-      node "$SKILL_DIR/../../bin/dagu-feature-bundle.ts" config-check "$STAGE"
+      "$A4S_BIN" config write "$STAGE"
+      "$A4S_BIN" config check "$STAGE"
       printf 'config=%s\n' "$STAGE"
 
-  - id: reconcile
-    depends: render
+  - id: readiness
+    depends: write_config
     env:
       - STAGE: ${steps.detect.outputs.STAGE}
     run: |
       set -euo pipefail
-      node "$SKILL_DIR/../../bin/dagu-feature-bundle.ts" readiness "$STAGE"
-      destination="${DAGU_HOME:-$HOME/.dagu}/dags/reconcile.yaml"
-      node "$SKILL_DIR/../../bin/dagu-feature-bundle.ts" install-reconciler "$STAGE" "$destination"
-      dagu validate "$destination"
-      printf 'reconcile=%s\n' "$destination"
+      "$A4S_BIN" queue "$STAGE"
 
   - id: github
-    depends: reconcile
+    depends: readiness
     env:
       - REQUIRED_CHECK: ${steps.config.outputs.REQUIRED_CHECK}
       - NWO: ${steps.detect.outputs.NWO}
@@ -392,12 +353,8 @@ steps:
       test "$(gh api "repos/$NWO/branches/$BASE_BRANCH/protection/required_status_checks" \
         --jq '.strict and (.contexts | index(env.REQUIRED_CHECK) != null)')" = true
       git -C "$PRIMARY" check-ignore -q "$PRIMARY/.workspace/worktrees/issue-1"
-      node "$SKILL_DIR/../../bin/dagu-feature-bundle.ts" config-check "$STAGE"
-      destination="${DAGU_HOME:-$HOME/.dagu}/dags/reconcile.yaml"
-      node "$SKILL_DIR/../../bin/dagu-feature-bundle.ts" install-reconciler "$STAGE" "$destination"
-      dagu validate "$destination"
-      node "$SKILL_DIR/../../bin/dagu-feature-bundle.ts" readiness "$STAGE"
+      "$A4S_BIN" config check "$STAGE"
+      "$A4S_BIN" queue "$STAGE"
       printf 'config=%s\n' "$STAGE"
-      printf 'reconcile=%s\n' "$destination"
       printf 'scheduler=ok\nrepo=%s\nbase_branch=%s\nrequired_check=%s\nstage=%s\n' \
         "$NWO" "$BASE_BRANCH" "$REQUIRED_CHECK" "$STAGE"

@@ -2,9 +2,9 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { appendObservation, loadedExtensionDigest, type Receipt } from "./admission.ts";
-import { assertReceiptVersion } from "./receipt-version.ts";
-import { BUNDLE_VERSION } from "./bundle.ts";
+import { appendObservation, type Receipt } from "./admission.ts";
+import { assertExecutingArtifact, receiptArtifact } from "./artifact-receipt.ts";
+import { compiled } from "./executable.ts";
 import type { RunDetails } from "./status/progress.ts";
 import { runParam } from "./run-primary.ts";
 import { LONG_COMPUTATION_CONTRACT, superviseRunComputations, type StallNotice } from "./long-computation.ts";
@@ -133,16 +133,15 @@ export async function dispatchStage(stage: string, emit: (name: string, value: s
   const common = git(primary, "rev-parse", "--path-format=absolute", "--git-common-dir");
   const state = join(common, "dagu-feature", "runs", run);
   const receiptPath = join(state, "receipt.json");
-  const receipt = JSON.parse(readFileSync(receiptPath, "utf8")) as Receipt;
-  // Read version 1 for already-admitted role jobs; only admission creates version 2 receipts.
-  assertReceiptVersion(receipt, receiptPath);
   const home = realpathSync(process.env.DAGU_HOME || "");
+  const { receipt: verified } = await receiptArtifact(home, receiptPath);
+  if (compiled) assertExecutingArtifact(verified.artifact);
+  const receipt = verified as unknown as Receipt;
   if (receipt.runReceipt.dag !== "feature" || receipt.runReceipt.run !== run ||
       receipt.initial.execution.primary !== primary || receipt.initial.runtimeAndModels.daguHome !== home ||
-      !receipt.initial.execution.dagSnapshot.includes(`dagu-role-jobs stage ${stage}`)) throw new Error("Role dispatch is not authorized by this admitted run snapshot");
-  const extension = receipt.initial.deployment.loadedExtension as { digest?: string };
-  if (receipt.sourceVersion.version !== BUNDLE_VERSION || extension?.digest !== loadedExtensionDigest ||
-      !(receipt.initial.execution.parameters as string[]).includes(`ISSUE=${issue}`)) throw new Error("Role executor/issue differs from the admitted deployment");
+      !receipt.initial.execution.dagSnapshot.includes(`"$A4S_BIN" role-jobs stage ${stage}`)) throw new Error("Role dispatch is not authorized by this admitted run snapshot");
+  if (!Array.isArray(receipt.initial.execution.parameters) ||
+      !receipt.initial.execution.parameters.includes(`ISSUE=${issue}`)) throw new Error("Role issue differs from the admitted snapshot");
   const session = requireOwnerSession(receipt.initial.execution.ompSession);
   const initial = await stageState(run);
   const node = requireReadyStage(initial, stage, dependencies[stage]!);

@@ -14,9 +14,13 @@ import { liveDagu, liveDaguVersion } from "./fixtures/live-dagu.ts";
 import { testRunId } from "./fixtures/run-id.ts";
 import { readEscalationDiagnostic } from "../src/status/repository.ts";
 import { Transitions, type RunDetails } from "../src/status/progress.ts";
+import { a4sBin } from "./fixtures/a4s.ts";
+import { roleAdmission } from "./role-job-fixtures.ts";
 
 const execute = promisify(execFile);
-const helper = fileURLToPath(new URL("../skills/issue-execution/escalation.py", import.meta.url));
+const helper = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
+const helperArgs = ["--import", "tsx", helper, "escalation"];
+const helperShell = '"$A4S_BIN" escalation';
 const feature = readFileSync(new URL("../skills/issue-execution/feature.yaml", import.meta.url), "utf8");
 interface FixtureStep {
   id: string;
@@ -32,6 +36,7 @@ interface FixtureDag { steps: FixtureStep[] }
 function repository(root: string): string {
   const primary = join(root, "primary");
   execFileSync("git", ["init", "-b", "main", primary], { stdio: "pipe" });
+  execFileSync("git", ["-C", primary, "-c", "user.name=Escalation test", "-c", "user.email=escalation@example.invalid", "commit", "--allow-empty", "-qm", "seed"], { stdio: "pipe" });
   return primary;
 }
 
@@ -40,15 +45,17 @@ test("durable budget uses native iterations and retry-safe finding occurrences, 
   const primary = repository(root);
   const state = join(primary, ".git/dagu-feature/runs/budget558");
   mkdirSync(state, { recursive: true });
+  const home = join(root, "dagu-home");
+  writeFileSync(join(state, "receipt.json"), JSON.stringify(roleAdmission(primary, home, "budget558", feature)));
   const server = createServer((_request, response) => response.end(JSON.stringify({ dagRunDetails: { startedAt: new Date().toISOString(),
     nodes: [{ pushBackHistory: [{ iteration: Number(env.DAG_PUSHBACK_ITERATION), by: "operator", byId: "os:test" }] }] } })));
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
   const address = server.address();
   assert.ok(address && typeof address === "object");
-  const env = { ...process.env, PRIMARY: primary, RUN: "budget558", OMP_SESSION_ID: "owner",
+  const env = { ...process.env, PRIMARY: primary, RUN: "budget558", OMP_SESSION_ID: "owner", DAGU_HOME: home,
     DAGU_URL: `http://127.0.0.1:${address.port}`, DAGU_OUTPUT_FILE: join(root, "outputs"), ESCALATION_SECONDS: "3600", DAG_PUSHBACK_ITERATION: "0" };
-  const run = (...args: string[]) => execute("python3", [helper, ...args], { env });
+  const run = (...args: string[]) => execute(process.execPath, [...helperArgs, ...args], { env });
   const budget = () => JSON.parse(readFileSync(join(state, "escalation.json"), "utf8"));
   const iteration = (value: number) => { env.DAG_PUSHBACK_ITERATION = String(value); };
   const finding = join(root, "finding");
@@ -66,11 +73,11 @@ test("durable budget uses native iterations and retry-safe finding occurrences, 
     const request = budget().trigger.id;
     await run("check");
     assert.equal(budget().trigger.id, request);
-    await execute("python3", [helper, "decision"], { env: { ...env, ACTION: "continue", REASON: "Authorized repair", DECIDED_BY: "operator" } });
+    await execute(process.execPath, [...helperArgs, "decision"], { env: { ...env, ACTION: "continue", REASON: "Authorized repair", DECIDED_BY: "operator" } });
     assert.equal(budget().trigger, null);
     assert.equal(budget().windowIteration, 1);
     assert.equal(budget().decisions[0].provenance.attributedTo, "operator");
-    await execute("python3", [helper, "decision"], { env: { ...env, ACTION: "continue", REASON: "Authorized repair", DECIDED_BY: "operator" } });
+    await execute(process.execPath, [...helperArgs, "decision"], { env: { ...env, ACTION: "continue", REASON: "Authorized repair", DECIDED_BY: "operator" } });
     assert.equal(budget().decisions.length, 1);
     iteration(4);
     await run("check");
@@ -100,7 +107,7 @@ test("durable budget uses native iterations and retry-safe finding occurrences, 
     writeFileSync(join(state, "escalation.json"), JSON.stringify(old));
     await run("check");
     assert.deepEqual(budget().trigger.reasons, ["elapsed budget exhausted"]);
-    await assert.rejects(execute("python3", [helper, "decision"], { env: { ...env, ACTION: "stop", REASON: "Defer", DECIDED_BY: "operator" } }), error => error instanceof Error && "code" in error && error.code === 77);
+    await assert.rejects(execute(process.execPath, [...helperArgs, "decision"], { env: { ...env, ACTION: "stop", REASON: "Defer", DECIDED_BY: "operator" } }), error => error instanceof Error && "code" in error && error.code === 77);
     assert.equal(budget().stopped, true);
     await assert.rejects(run("check"), error => error instanceof Error && "code" in error && error.code === 77);
   } finally {
@@ -111,27 +118,35 @@ test("durable budget uses native iterations and retry-safe finding occurrences, 
   }
 });
 
-test("escalation reads admitted receipt versions 1 and 2 and rejects unsupported versions before budget effects", () => {
+test("escalation requires an artifact-bound receipt and rejects legacy or unsupported receipts before budget effects", () => {
   const root = mkdtempSync(join(tmpdir(), "escalation-receipt-version-"));
   const primary = repository(root);
   const state = join(primary, ".git/dagu-feature/runs/versions");
   mkdirSync(state, { recursive: true });
   const receipt = join(state, "receipt.json");
-  const env = { ...process.env, PRIMARY: primary, RUN: "versions", OMP_SESSION_ID: "owner", DAG_PUSHBACK_ITERATION: "0", DAGU_OUTPUT_FILE: join(root, "outputs") };
+  const home = join(root, "dagu-home");
+  const admitted = roleAdmission(primary, home, "versions", feature);
+  const env = { ...process.env, PRIMARY: primary, RUN: "versions", OMP_SESSION_ID: "owner", DAGU_HOME: home, DAG_PUSHBACK_ITERATION: "0", DAGU_OUTPUT_FILE: join(root, "outputs") };
   try {
-    for (const schemaVersion of [1, 2, 3, "2", null]) {
-      const bytes = JSON.stringify({ schemaVersion, initial: { admittedAt: new Date().toISOString() } });
+    for (const schemaVersion of [2, 1, 3, "2", null]) {
+      const bytes = JSON.stringify({ ...admitted, schemaVersion });
       writeFileSync(receipt, bytes);
       const before = existsSync(join(state, "escalation.json")) ? readFileSync(join(state, "escalation.json"), "utf8") : undefined;
-      const result = spawnSync("python3", [helper, "check"], { env, encoding: "utf8" });
-      if (schemaVersion === 1 || schemaVersion === 2) assert.equal(result.status, 0, result.stderr);
+      const result = spawnSync(process.execPath, [...helperArgs, "check"], { env, encoding: "utf8" });
+      if (schemaVersion === 2) assert.equal(result.status, 0, result.stderr);
       else {
         assert.notEqual(result.status, 0);
-        assert.match(result.stderr, /Unsupported admission receipt schemaVersion=/);
+        assert.match(result.stderr, schemaVersion === 1 ? /legacy runs cannot cross the hard cutover/ : /Unsupported admission receipt schemaVersion=/);
         assert.equal(readFileSync(join(state, "escalation.json"), "utf8"), before);
       }
       assert.equal(readFileSync(receipt, "utf8"), bytes);
     }
+    const before = readFileSync(join(state, "escalation.json"), "utf8");
+    rmSync(receipt);
+    const missing = spawnSync(process.execPath, [...helperArgs, "check"], { env, encoding: "utf8" });
+    assert.notEqual(missing.status, 0);
+    assert.match(missing.stderr, /ENOENT/);
+    assert.equal(readFileSync(join(state, "escalation.json"), "utf8"), before);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -169,27 +184,29 @@ test(`Dagu ${liveDaguVersion} escalation persists through restart, rejects stale
   assert.notEqual(port, 8080);
   const id = testRunId("escalation558");
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("DAGU_")));
-  Object.assign(env, { DAGU_HOME: home, DAGU_COORDINATOR_ENABLED: "false", DAGU_URL: `http://127.0.0.1:${port}` });
+  Object.assign(env, { A4S_BIN: a4sBin, DAGU_HOME: home, DAGU_COORDINATOR_ENABLED: "false", DAGU_URL: `http://127.0.0.1:${port}` });
   writeFileSync(join(home, "config.yaml"), `host: 127.0.0.1\nport: ${port}\nauth:\n  mode: none\ncoordinator:\n  enabled: false\nscheduler:\n  port: 0\n`);
   const original: FixtureDag = YAML.parse(feature);
   const selected = original.steps.filter(step => ["implement_budget", "escalation", "escalation_cancellation", "escalation_decision"].includes(step.id));
   selected[0]!.depends = "triage";
   delete selected[0]!.preconditions;
-  for (const step of selected) if (step.run) step.run = step.run.replace("dagu-feature-bundle escalation", `python3 '${helper}'`);
   const evidence = join(root, "gate-output.log");
   const definition = {
     type: "graph", shell: "bash", max_active_steps: 1,
-    env: [{ PRIMARY: primary }, { RUN: "${context.run.id}" }, { DAGU_URL: env.DAGU_URL }, { PATH: process.env.PATH }, { OMP_SESSION_ID: "owner" },
+    env: [{ A4S_BIN: a4sBin }, { PRIMARY: primary }, { RUN: "${context.run.id}" }, { DAGU_URL: env.DAGU_URL }, { PATH: process.env.PATH }, { OMP_SESSION_ID: "owner" },
       { ESCALATION_PUSHBACKS: "3" }, { ESCALATION_FINDINGS: "2" }, { ESCALATION_SECONDS: "3600" }],
     steps: [
-      { id: "triage", run: `python3 '${helper}' route` }, ...selected,
+      { id: "triage", run: `${helperShell} route` }, ...selected,
       { id: "implement", depends: "escalation_decision", action: "human.task", with: { prompt: "Isolated implementation" } },
-      { id: "gate", depends: "implement", run: `python3 '${helper}' finding gate '${evidence}'` },
+      { id: "gate", depends: "implement", run: `${helperShell} finding gate '${evidence}'` },
       { id: "recover_gate", depends: "gate", action: "human.task", with: { prompt: "Isolated gate failure return", push_back: { rewind_to: "implement_budget" } } },
     ], handler_on: { exit: { run: `printf executed > '${root}/onExit'` } },
   };
   const path = join(home, "dags/feature.yaml");
   writeFileSync(path, YAML.stringify(definition));
+  const receipt = roleAdmission(primary, home, id, readFileSync(path, "utf8"));
+  mkdirSync(join(primary, ".git/dagu-feature/runs", id), { recursive: true });
+  writeFileSync(join(primary, ".git/dagu-feature/runs", id, "receipt.json"), JSON.stringify(receipt));
   const state = join(primary, ".git/dagu-feature/runs", id, "escalation.json");
   const budget = () => JSON.parse(readFileSync(state, "utf8"));
   let service: ChildProcess | undefined;

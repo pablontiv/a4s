@@ -63,7 +63,7 @@ env:
         mkdir -p "$(dirname "$RESOURCE_LOCK")"
         attempt=0
         # The syscall result must distinguish creation from a concurrent EEXIST.
-        until python3 -c 'import os, sys; os.mkdir(sys.argv[1])' "$RESOURCE_LOCK" 2>/dev/null; do
+        until mkdir "$RESOURCE_LOCK" 2>/dev/null; do
           attempt=$((attempt + 1))
           [[ "$attempt" -lt 100 ]] || { echo "dagu-feature: ownership lock unavailable $RESOURCE_LOCK" >&2; exit 1; }
           sleep 0.1
@@ -87,7 +87,7 @@ steps:
         printf 'adopted policy PRIMARY=%q BRANCH=%q\n' "$PRIMARY" "poc/$RUN" >&2
         exit 1
       fi
-      dagu-poc-scope require
+      "$A4S_BIN" poc-scope require
 
   - id: record
     depends: admission
@@ -441,7 +441,7 @@ steps:
         cat "$STATE/full.patch"
         printf '\n```\n</details>\n'
       } > "$STATE/comment-$ATTEMPT.txt"
-      dagu-pr-body check-paths "$STATE/comment-$ATTEMPT.txt"
+      "$A4S_BIN" pr-body check-paths "$STATE/comment-$ATTEMPT.txt"
       if ! URL=$(gh issue comment "$ISSUE" --repo "$REPO" --body-file "$STATE/comment-$ATTEMPT.txt" 2> "$STATE/publish.err"); then
         grep -Ei 'too long|maximum.*characters|body.*large' "$STATE/publish.err"
         jq -cn --arg run "$RUN" --argjson attempt "$ATTEMPT" --rawfile evidence "$STATE/comment-$ATTEMPT.txt" '
@@ -553,7 +553,8 @@ steps:
         if [[ -f "$STATE/full.patch" && ! -s "$STATE/full.patch.sha256" ]]; then
           shasum -a 256 "$STATE/full.patch" | awk '{print $1}' > "$STATE/full.patch.sha256"
         fi
-        dagu-feature-bundle enqueue --run-id "feature-$RUN" "$PRIMARY/.workspace/dagu/dags/feature.yaml" -- \
+        parent_receipt=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN/receipt.json")
+        "$A4S_BIN" enqueue --parent "$parent_receipt" --run-id "feature-$RUN" "$PRIMARY/.workspace/dagu/dags/feature.yaml" -- \
           ISSUE="$ISSUE" \
           OMP_SESSION_ID="$OMP_SESSION_ID" \
           POC_BASIS="$(cat "$STATE/promotion.url")"

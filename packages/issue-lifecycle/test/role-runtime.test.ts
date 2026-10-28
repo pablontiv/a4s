@@ -58,15 +58,15 @@ for (const absent of ["triage-reviewer", "task"]) {
       const runtime = roleRuntimeFixture(root, ["triage-reviewer", "task"].filter(name => name !== absent));
       const bin = join(root, "bin");
       mkdirSync(bin);
-      for (const tool of ["git", "gh", "jq", "dagu", "python3", "dagu-codeql", "dagu-feature-bundle", "dagu-feature-protect", "dagu-gate", "dagu-poc-scope", "dagu-pr-body", "dagu-stale-recovery"]) {
+      for (const tool of ["git", "gh", "jq", "dagu"]) {
         writeFileSync(join(bin, tool), "#!/bin/sh\nexit 0\n");
         chmodSync(join(bin, tool), 0o755);
       }
-      writeFileSync(join(bin, "dagu-role-jobs"), `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} --import ${JSON.stringify(import.meta.resolve("tsx"))} ${JSON.stringify(cli)} "$@"\n`);
-      chmodSync(join(bin, "dagu-role-jobs"), 0o755);
+      writeFileSync(join(bin, "a4s"), `#!/bin/sh\nshift\nexec ${JSON.stringify(process.execPath)} --import ${JSON.stringify(import.meta.resolve("tsx"))} ${JSON.stringify(cli)} "$@"\n`);
+      chmodSync(join(bin, "a4s"), 0o755);
       const spec = parse(readFileSync(bootstrap, "utf8")) as { steps: Array<{ id: string; run: string }> };
       const script = spec.steps.find(step => step.id === "detect")!.run;
-      const result = spawnSync("bash", ["-c", script], { encoding: "utf8", env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, PRIMARY: root, DAGU_OMP_ROLE_RUNTIME: runtime } });
+      const result = spawnSync("bash", ["-c", script], { encoding: "utf8", env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, A4S_BIN: join(bin, "a4s"), PRIMARY: root, DAGU_OMP_ROLE_RUNTIME: runtime } });
       assert.notEqual(result.status, 0);
       assert.ok(result.stderr.includes(`bootstrap detect: Registered OMP agent ${absent} is required but was not discoverable from ${root}`), result.stderr);
       assert.match(result.stderr, /omp plugin link <package-directory>/);

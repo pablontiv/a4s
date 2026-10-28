@@ -35,164 +35,54 @@ The temporary v1 integration lane completed its release into main and was retire
 under #438. Its final integration, run outcomes and preserved recovery evidence
 are recorded below.
 
-### Stable controller versus candidate
+### Release controller versus candidate
 
-The main lane's adopted renders and shared scheduled reconciler retain the
-controller identity recorded by their bootstrap adoption. Read those receipts
-for the installed version; the source package's current version is in its manifest.
+The [artifact contract](../architecture/artifact-contract.md) is normative.
+Only immutable tagged releases supply the engine. Each platform archive contains
+one compiled `a4s`, identity, gate preload files and complete OMP assets. A
+consumer commits `.workspace/dagu/config.json` with required `uses`:
+`a4s@v0` follows a published moving major; `a4s@v0.6.1` pins an exact release
+(example, not an availability claim). Branches, paths, URLs and ranges are rejected.
 
-Station role jobs select executors by the unchanged receipt's exact bundle version
-and source commit, not the active installation. New installs are independent
-clones under `$DAGU_HOME/executors/<package>-<version>-<sha40>`, with their own
-`.git` and objects; they are not development-clone worktrees. The station shim
-uses the active pin when there is no `RUN`, and otherwise requires `PRIMARY` and
-the run's immutable receipt. Missing pins fail closed.
+Root admission resolves that selection once, verifies the exact archive's SHA-256
+before extraction and atomically publishes `$DAGU_HOME/cache/a4s/<version>/`.
+The cached executable receives
+`admit --artifact '<version>@<commit>#<digest>'`, checks its embedded identity
+and verified cache metadata, and does not resolve `uses` or hand off again.
+Snapshots use only their absolute cached `A4S_BIN` for every engine command.
+Candidate worktrees never supply controller code.
 
-Older `@a4s/omp-dagu` bundles without a role-jobs entrypoint remain retained and
-explicitly unsupported by this launcher. The #623 PASS demonstrated the
-then-installed bundle and Dagu runtime, not the current manifest-pin upgrade,
-repair of historical missing entrypoints, missing pins, or safe termination of old waiting runs (#610). Never substitute
-the active bundle for an unsupported historical receipt.
+Feature → PoC, PoC → feature and discovery → planning retain and verify the
+parent receipt's artifact tuple even when child policy selects a newer release.
+Missing, corrupt or unsupported parent artifacts fail closed. Child policy is
+still independently read from consumer HEAD. Retain cache entries referenced by
+any nonterminal/recoverable run, open role job or pinned station reconciler.
+Incomplete reference discovery prevents removal; age alone never authorizes it.
+Cache population is runtime state, not installation or station configuration.
 
-### Independent station executors and reference-based retention
+The native role runtime remains operator-supplied. Set
+`DAGU_OMP_ROLE_RUNTIME` to the absolute installed `@oh-my-pi/pi-coding-agent`
+package root for both service and bootstrap. Dagu filters `OMP_ROLE_RUNTIME`;
+a compiled `omp` executable is not a package root. Link the extracted release
+root for the service user so native discovery finds `triage-reviewer` and `task`.
+From PRIMARY with that environment, `a4s role-jobs detect` checks discovery
+without launching a role. Changing service environment is an operator action.
 
-Installation, migration, retention and launcher replacement require explicit
-operator authority for the selected station; a feature-role assignment or PR
-does not grant it. Use its actual service `DAGU_HOME`. After publishing a bundle
-that includes the maintained dispatcher, install the exact recorded revision:
-
-```sh
-node packages/issue-lifecycle/bin/dagu-station-install.ts \
-  --executor-action install --source "$PRIMARY" --commit "<sha40>" \
-  --launcher-dir "$HOME/.local/bin" --evidence "<evidence>/install.json"
-```
-
-The source is an available local repository containing that commit. The installer
-clones with `--no-local`, fetches/checks out the exact commit detached, and runs
-`npm ci --ignore-scripts --no-audit --no-fund`. Git objects are not borrowed from
-PRIMARY. Keep a working Bun on the service PATH: the shim invokes Bun directly,
-not the npm-installed Bun shebang. This operation changes only executor storage,
-its active pin and the explicitly selected `dagu-role-jobs` shim; it does not
-restart services or adopt repository renders. Repeating it preserves the shim's
-bytes and mtime when unchanged.
-
-The role runtime is a separate installed `@oh-my-pi/pi-coding-agent` package,
-selected only by the absolute `DAGU_OMP_ROLE_RUNTIME` in the service environment.
-Set that variable for shell bootstrap too; `OMP_ROLE_RUNTIME` is filtered from
-Dagu 2.24.0 steps and is no longer read. A compiled `omp` on PATH is not a package
-root and is never used for fallback discovery. Persistently link
-`@a4s/issue-lifecycle` with `omp plugin link <package-directory>` for the service
-user so `triage-reviewer` and the runtime's `task` are discoverable from PRIMARY
-and candidate worktrees. With PRIMARY and the same environment, run
-`dagu-role-jobs detect` to inspect the root and both native agent sources without
-launching a role. Bootstrap runs this check before adoption and names the missing
-setting/agent on failure. Any service environment change or activation is an
-explicit operator action; this runtime check never writes station configuration
-or restarts a service.
-
-First inventory all non-terminal run references, including old waiting snapshots:
-
-```sh
-node packages/issue-lifecycle/bin/dagu-station-install.ts \
-  --executor-action inventory --source "$PRIMARY" \
-  --evidence "<evidence>/inventory.json"
-```
-
-Each fresh evidence file records the exact command, run/DAG/PRIMARY identities,
-required versions/commits, executor paths, bundle and entrypoint SHA-256 digests,
-and before/after worktree porcelain. Missing resolution is explicit. History is
-queried from the Unix epoch; malformed, inaccessible or limit-truncated history
-fails closed. Keep these runtime receipts outside versioned source and attach the
-authorized station's evidence to #623; local behavioral tests are not that proof.
-
-Migrate one registered executor at a time, only at a quiescent station with
-operator-provided admission hooks. Waiting/not-started references stay retained:
-
-```sh
-node packages/issue-lifecycle/bin/dagu-station-install.ts \
-  --executor-action migrate --source "$PRIMARY" --executor "<executor-path>" \
-  --admission-close "<close-admission-command>" \
-  --admission-open "<open-admission-command>" \
-  --evidence "<evidence>/migration.json"
-```
-
-Migration stages and installs an independent clone, compares exact identities and
-bundle/entrypoint digests before changing registration, and replaces the old
-worktree at the same path. Git removes only that executor's old registration.
-Every observed run must still resolve its original bundle after the operation.
-A historical pin without a role-jobs entrypoint can migrate only with unchanged
-bundle identity and unchanged entrypoint absence: its launcher rejection remains
-explicit, not repaired or replaced. Pins with unresolved bundle identity are
-retained without migration. On failure, admission stays closed for explicit
-operator recovery; do not interpret a failed command as permission to resume.
-No historical run is resumed, stopped or ended.
-
-Removal uses the same maintained path and hooks, explicitly selecting one old
-executor rather than an age cutoff:
-
-```sh
-node packages/issue-lifecycle/bin/dagu-station-install.ts \
-  --executor-action prune --source "$PRIMARY" --executor "<old-executor-path>" \
-  --admission-close "<close-admission-command>" \
-  --admission-open "<open-admission-command>" \
-  --evidence "<evidence>/retention.json"
-```
-
-Install an active independent pin before pruning. Active and referenced pins are
-retained regardless of age. Unresolved references block removal. Dirty/ignored
-operator files, named branches, symlinks, foreign worktrees and paths outside the
-direct executor namespace are retained. Development worktrees are not candidates.
-An unreferenced detached executor can be removed whether it is an independent
-clone or an old registered worktree of the specified source repository.
-After each authorized station operation, preserve the JSON evidence and verify
-the actual launcher, retained run bundle resolution and development-worktree
-usability. This operator acceptance remains separate from source publication.
-
-Inspect each run with its identity-matched controller; report incompatibility
-as deployment state. The consumer config file stays the committed policy.
-Scheduled reconciliation is a shared resource: replacing it affects other lanes
-and active runs. A shared scheduler's actual home/config may differ from an
-unset shell's defaults. Capture its service environment before drawing conclusions.
-
-The tree declares queues; it does not establish the deployed scheduler's effective
-concurrency or enforce every direct CLI/REST bypass. #335's revised actual-queue
-guard and lane mapping work must be assessed against delivered code and separate
-live evidence. #383's concurrency/restart PoC is not evidence that its acceptance
-value is installed. TUI/Git/Dagu-store access keeps these controls advisory,
-not process or OS isolation.
-
-For lane work, use the installed controller's **real source path**, selected
-Dagu home and assigned issue/session. The DAG argument names the lifecycle
-(`feature`, `poc`, `discovery` or `planning`). Admission reads the committed
-config file and materializes that DAG from the installed package templates.
+For lane work, use the initial installed release executable, actual Dagu home
+and persistent owner; it selects and hands off to the configured cached release:
 
 ```sh
 cd "$PRIMARY"
-node "$CONTROLLER_CLI" enqueue \
-  --run-id "<lane>-issue-<n>" feature -- \
+a4s enqueue --run-id "<lane>-issue-<n>" feature -- \
   ISSUE="<n>" OMP_SESSION_ID="<persistent-owner-session>"
 ```
 
-`CONTROLLER_CLI` is the identity-matched `bin/dagu-feature-bundle.ts` in a durable
-source checkout. The Node requirement in root `package.json` `engines.node`
-supports direct TypeScript here; use the real source path because Node rejects
-stripping TypeScript under `node_modules`.
-The admitted feature/PoC policy fixes PRIMARY, BRANCH, GATE, REBASE_RESOLVER,
-REQUIRED_CHECK, test paths, validation, blocker reporting, code scanning,
-thresholds, escalation budgets, queue concurrency and lane. The CLI rejects
-those overrides. `BASE_BRANCH` remains a per-run parameter. Feature and PoC
-materialization binds `PRIMARY` to the host reference `"${A4S_PRIMARY}"`.
-Admission resolves it from `$DAGU_HOME/primaries/<lane>`, then `A4S_PRIMARY`,
-then `$DAGU_HOME/a4s-primary`, and the admitted snapshot records that absolute
-main checkout. A linked worktree is not a primary.
+The CLI rejects policy overrides, including base branch, gate, validation and
+queue capacity. PRIMARY resolves from `$DAGU_HOME/primaries/<lane>`, then
+`A4S_PRIMARY`, then `$DAGU_HOME/a4s-primary`. It must be a canonical independent
+clone. The resource guard protects the bound PRIMARY only when its config is
+committed at HEAD; an identical-config unbound clone is not protected.
 
-The OMP resource guard uses that same resolution order and the committed config's
-`lane` to protect an idle PRIMARY. Protection requires
-`.workspace/dagu/config.json` committed at `HEAD` and canonical (`realpath`) equality
-with the bound main checkout. It does not depend on rendered DAGs. Copying the
-committed config into another clone does not protect that clone; binding a
-checkout without committed policy does not adopt it. Active feature/PoC run
-ownership remains independently protected.
 
 ## Versioned source, configuration and runtime state
 
@@ -210,7 +100,7 @@ receipts, observations, generated snapshots or scheduler data.
 Classify a file in three steps:
 
 1. Identify its producer (a person through a pull request, a generator such as the
-   bootstrap render step, or a running process such as a DAG step or observer) and
+   bootstrap config-authoring step, or a running process such as a DAG step or observer) and
    the producer's declared inputs.
 2. If a generator produces it, regenerate it twice at the same revision with
    identical declared inputs. Identical bytes make it configuration. A render that
@@ -231,100 +121,91 @@ are configuration even though they are JSON.
 
 ## Identity and adoption
 
-Before any consequential change, obtain explicit authority for the target
-PRIMARY/lane, source SHA/package version, Dagu binary/version, scheduler home and
-URL, links, service hooks, reconciler replacement and repository settings. Record
-the committed config file, installed source/CLI/extension digests, active
-runs, queue configuration and pending human tasks. Preserve a coherent recovery
-set rather than only a package directory.
+Source delivery is not station activation. Operator authority must identify the
+target PRIMARY/lane, release version/commit/archive digest, Dagu home/endpoint,
+plugin links, queue configuration, reconciler and repository settings.
 
-1. **Source publication:** merge tested package source and its version/changelog
-   where required. Template/skill changes require a version above the merge base;
-   the release guard follows the manifest across moves. Before a package release,
-   run live Dagu integration on the station with `A4S_LIVE_DAGU=1 npm test` and
-   supported Dagu binary on `PATH`; CI runs unit tests and typechecks without
-   Dagu. Publication alone changes neither installed links nor the consumer config file.
-2. **Private installation:** choose durable pinned source, install dependencies,
-   choose an official Dagu release (minimum 2.23.0), and review operator-owned
-   links/PATH/config. Official asset names are
-   `dagu_<version>_<os>_<arch>.tar.gz`; verify the asset against the official
-   release's `checksums.txt` for the version being installed before extraction.
-   Confirm `dagu version` reports that installed version; the station installer
-   reports the observed version without enforcing an exact pin.
-3. **Initial stable-controller lane adoption:** preserve the approved controller
-   and shared reconciler while adopting the lane's independent PRIMARY/base/queue.
-   Review lane-specific rendered values and actual evidence independently of v1
-   package publication. Existing initial adoption does not prove new v1 identity.
-4. **Post-release v1 adoption:** from clean, approved source whose HEAD is an
-   ancestor of its fetched `origin/HEAD`, bootstrap with explicit canonical PRIMARY
-   and SKILL_DIR. Normal GitHub default remains main. An unmerged integration/v1
-   candidate needs an approved isolated source/controller origin; changing an
-   isolated bare remote's default is proof setup, not production adoption.
-5. **Consumer delivery:** inspect bootstrap `config`, `render` and `confirm`.
-   Bootstrap writes `.workspace/dagu/config.json`, installs and validates the
-   station reconciler, and may change GitHub settings. Commit the config file
-   when its bytes change. A package or Dagu release that leaves that config
-   unchanged needs no consumer pull request. In-flight runs keep the snapshots
-   and executors they were admitted with.
-6. **Fresh loading and proof:** bind CLI/reconciler/OMP to the same installed source
-   identity and restart OMP. Inspect the config file and perform admission plus agreed
-   live acceptance before reopening work. Changed `BUNDLE_NAME` follows this whole
-   procedure with matching installed components.
+1. **Close admission and drain.** Inventory all runs, including queued, waiting
+   and recoverable runs, and role jobs. Cutover requires **zero nonterminal runs
+   and zero open role jobs**. Never rewrite legacy receipts/snapshots or silently
+   substitute a new engine for them. Resolve uncertain references before cutover.
+2. **Install an initial release.** Obtain the exact platform
+   `a4s-v<version>-<os>-<arch>.tar.gz` and matching `.sha256` from the tagged
+   GitHub release, verify SHA-256 before extraction, then install the extracted
+   root at an operator-owned stable location. Put that release's `a4s` on PATH
+   for initial admission and load/link its whole root as the OMP plugin. Do not
+   install a checkout or point the service at a source interpreter.
+3. **Provision the station explicitly.** Keep `DAGU_OMP_ROLE_RUNTIME` and native
+   OMP role definitions. Configure Dagu's loopback API, coordinator and named
+   queues with operator-chosen `max_concurrency`. Preserve the canonical home
+   and PRIMARY binding. Any service activation/restart is performed by the
+   operator under the station's drained policy, never by a4s.
+4. **Author and commit consumer policy.** Bootstrap defaults `uses` to `a4s@v0`,
+   preserves an existing selection on blank input, and accepts an exact release.
+   Review `.workspace/dagu/config.json`, remove retired `queueConcurrency`, and
+   commit changed policy before feature admission. Reader and config migrate
+   together: old schema-1 readers reject the new `uses` field.
+5. **Pin reconciliation.** The operator provisions the scheduled reconciler from
+   a verified cache entry and pins its `A4S_BIN` to that same absolute executable.
+   Bootstrap never writes `$DAGU_HOME/dags/` or installs a checkout reconciler.
+   Retain this entry until the operator deliberately replaces that pin.
+6. **Remove obsolete deployment bindings.** Once no references remain, remove
+   old installed source checkouts, executor launchers/plugin links and checkout
+   entries in the service PATH. Preserve unrelated operator files and development
+   checkouts. Do not retain compatibility aliases.
+7. **Load and accept.** Restart OMP to load the release plugin. Retain identity,
+   readiness, exact receipt/snapshot tuple and agreed live acceptance evidence
+   before reopening admission. A source test is not proof of station cutover.
 
-The authorized bootstrap command shape is:
+The adoption DAG is a source/operator asset, not an installed engine checkout.
+Enqueue its reviewed file with the initial release executable explicitly selected:
 
 ```sh
-skill_dir="$SOURCE/packages/issue-lifecycle/skills/issue-execution"
-dagu enqueue --run-id "bootstrap-<repo>-v<version-with-hyphens>" \
-  "$skill_dir/dagu-feature-bootstrap.yaml" -- \
-  PRIMARY="$PRIMARY" SKILL_DIR="$skill_dir" BASE_BRANCH="$BASE_BRANCH"
+dagu enqueue --run-id "bootstrap-<repo>-<id>" \
+  "<reviewed-bootstrap-file>" -- \
+  PRIMARY="$PRIMARY" A4S_BIN="<absolute-release-root>/a4s" \
+  BASE_BRANCH="$BASE_BRANCH"
 ```
 
-`BASE_BRANCH` selects an existing integration branch explicitly; an empty or
-omitted value retains the GitHub default branch. Bootstrap checks and settings
-operations target the selected branch. Review its current protection before
-running the `github` step: adoption requires strict required checks.
+An empty `BASE_BRANCH` selects the GitHub default; an explicit branch must exist.
+`detect` checks tools, canonical PRIMARY, role discovery and read-only readiness.
+`config` obtains policy; `worktrees` ignores managed issue worktrees locally;
+`write_config` authors and validates config; `readiness` checks the station.
+The authorized `github` step can change merge settings and branch protection;
+`confirm` rechecks them and policy/readiness. No step renders/installs DAG files,
+copies an engine, modifies station configuration or activates services.
 
-Run IDs use hyphens rather than dotted versions. Source `origin/HEAD` ancestry,
-source cleanliness, independent canonical PRIMARY and exact runtime checks are
-real preconditions, not prompts that can be waived. #431's isolated partial
-bootstrap executes only detect/render/reconcile; GitHub mutation and adoption
-remain outside that proof.
-
-Inspect with the chosen identity-matched CLI:
+Inspect with the installed release:
 
 ```sh
-dagu version
+a4s version
+a4s queue "$PRIMARY/.workspace/dagu/config.json"
 dagu history reconcile --format json --limit 5
-node "$SOURCE/packages/issue-lifecycle/bin/dagu-feature-bundle.ts" "$PRIMARY"
 ```
 
-The inspection reports the committed config file and runtime compatibility. Admission
-materializes the installed template, checks lifecycle protocols, binds PRIMARY,
-and writes an immutable snapshot and receipt;
-[architecture](../architecture/issue-lifecycle.md#compatibility-is-more-than-a-version-display)
-details the actual equalities. Version-distance display alone is not admission.
+Admission records config commit/digest separately from artifact identity and
+supported/used contract versions, and enqueues exact immutable snapshot bytes.
+A later release needs no consumer commit when moving-major policy stays the same;
+already admitted runs and their successors stay on their original artifact.
+
 
 ## Operator-owned station configuration and readiness
 
 The station operator owns Dagu's configuration, capacity, service unit and
 activation. a4s never writes `$DAGU_HOME/config.yaml`, `base.yaml`, launchd or
-systemd units, and never restarts Dagu. `dagu-station-install.ts` supports only
-the explicit executor operations above; its config-install and drained-apply
-modes have been removed.
+systemd units, and never restarts Dagu.
 
 Provide an unauthenticated loopback API, queues/coordinator enabled, and the
 consumer lane's named global queue in station config. Its `max_concurrency` is
 chosen by the operator, not committed consumer config. Ensure the service's own
-PATH resolves `bash`, `git`, `gh`, `jq`, `node`, `bun`, `python3`, `omp`, `dagu`.
+PATH resolves `bash`, `git`, `gh`, `jq`, `node`, `omp`, and `dagu`. Engine helpers
+use the snapshot's absolute `A4S_BIN`; Bun and Python are not release runtime dependencies.
 Use the service's actual home and endpoint for read-only diagnostics:
 
 ```sh
-node "$SOURCE/packages/issue-lifecycle/bin/dagu-feature-bundle.ts" readiness \
-  "$PRIMARY/.workspace/dagu/config.json"
+a4s queue "$PRIMARY/.workspace/dagu/config.json"
 # Before initial adoption:
-node "$SOURCE/packages/issue-lifecycle/bin/dagu-feature-bundle.ts" readiness \
-  --lane a4s
+a4s queue --lane a4s
 ```
 
 Exit 1 reports missing/invalid lane queues in config or the running API,
@@ -337,17 +218,13 @@ When readiness fails, request station-operator correction; bootstrap cannot
 repair or reload station configuration. Operator-led service changes must
 preserve active/waiting runs and follow that station's safe activation policy.
 
-Thirty-day global history retention comes from the installed base
-(`packages/issue-lifecycle/dagu/base.yaml`, `hist_retention_days: 30`).
-Feature, PoC and planning runs inherit that horizon. The reconcile root
+History retention is operator policy in `$DAGU_HOME/base.yaml`; the retained
+source example uses `hist_retention_days: 30`. The release's reconcile root
 declares `hist_retention_runs: 1440`, about one day at one tick per minute.
-Bootstrap installs the station reconciler at
-`$DAGU_HOME/dags/reconcile.yaml` from the installed package template. The first tick after that install applies the
-count and keeps active runs, non-final runs, and a newer attempt that has no
-status. Retain durable acceptance evidence outside either cleanup window.
-After that adoption, record the first tick's duration, whether the scheduler
-skipped ticks, reconcile history bytes before and after, and every older
-reconcile root that remains together with the protection that kept it.
+The operator installs its pinned snapshot; bootstrap does not. The first tick
+applies that count while retaining active/non-final roots. Retain durable
+acceptance evidence outside both cleanup windows. Record first-tick duration,
+skipped ticks and history bytes when accepting the operator's new reconciler.
 
 ## Active runs and recovery
 
@@ -421,16 +298,14 @@ dismissal; test-only location alone does not authorize dismissal.
 
 ### Rollback
 
-Obtain rollback authority for the same lanes and shared controller scope. Close
-admission and inventory active/snapshot-bound runs; drain or preserve them under
-their original controller contract before changing shared reconciliation. Restore
-the approved **coherent set**: source SHA and dependency lock, private package,
-committed config file, scheduled reconciler, CLI/PATH binding,
-Dagu binary/home/config and OMP package links. Use the restored source's supported
-bootstrap path where regeneration is required, retaining real provenance.
-Restart the service only under the drained policy and restart OMP to load restored
-modules. Verify the config file, actual admission, readiness and agreed live behavior before
-reopening. Restoring a directory or a displayed version alone is not recovery.
+Obtain rollback authority for the same lanes and shared reconciler. Close
+admission and establish zero nonterminal runs and zero open role jobs before
+changing engines. Restore the approved release/plugin root, committed config,
+verified artifact cache tuple, pinned reconciler, Dagu binary/home/config and
+service environment as a coherent set. Never overwrite a conflicting cache entry
+or rewrite receipts to disguise an upgrade. Any necessary service activation
+belongs to the operator. Restart OMP, retain readiness and agreed admission/live
+evidence, then reopen. Restoring a directory or displayed version is not recovery.
 
 ## Post-release proof and temporary-lane retirement
 
@@ -449,7 +324,7 @@ original protection/configuration were preserved under
 `<DAGU_HOME>/backups/a4s-438/`. The final inventory and command evidence are in #438.
 
 The review requested a repo-owned retirement operation. #383 and #415 remain
-open, and the station installer only adds or updates queue entries, so the
+open, and the tooling then in use did not remove queues, so the
 operator explicitly authorized direct retirement of these exact targets.
 Only the `a4s-v1` queue entry was removed from station `config.yaml`; every other
 byte was retained. Active-lane derived configuration was unchanged. The shared

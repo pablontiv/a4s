@@ -3,29 +3,20 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
-import {
-  CONFIG_PATH,
-  POLICY_PARAMETERS,
-  readCommittedConfig,
-} from "./config.ts";
-import {
-  BUNDLE_VERSION,
-  formatProtocolRejection,
-  inferLifecycleProtocols,
-  lifecycleProtocolToken,
-  missingLifecycleProtocols,
-} from "./bundle.ts";
-import { dagName, materializeDag, packageIdentity } from "./materialize.ts";
+import { CONFIG_PATH, POLICY_PARAMETERS, readCommittedConfig, type CommittedConfig } from "./config.ts";
+import { dagName, materializeDag, type LifecycleDag } from "./materialize.ts";
 import type { RunDetails } from "./status/progress.ts";
 import { isRecord } from "./type-guard.ts";
 import { requirePocScope, scopeTargets } from "./poc-scope.ts";
 import { HOST_PRIMARY_REFERENCE, bindSnapshotPrimary, resolvePrimaryBinding } from "./primary.ts";
 import { assertReceiptVersion } from "./receipt-version.ts";
 import { requireOwnerSession } from "./owner-session.ts";
+import { packageRoot } from "./executable.ts";
+import { artifactToken, parseArtifact, releaseRepository, resolveRelease, sameArtifact } from "./release.ts";
+import { artifactLock, ensureArtifact, inspectArtifact, type CachedArtifact } from "./artifact-cache.ts";
+import { assertArtifactReceipt, assertExecutingArtifact, receiptArtifact, USED_CONTRACTS, type ArtifactReceiptFields } from "./artifact-receipt.ts";
+import { withFileLockAsync } from "./file-lock.ts";
 
-const packageRoot = fileURLToPath(new URL("../", import.meta.url));
-const correction = "Commit .workspace/dagu/config.json in the consumer repository. Admission materializes the DAG from the installed package templates and resolves PRIMARY before enqueue; retry with a new run ID.";
 export function canonical(value: unknown): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
   if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
@@ -36,10 +27,6 @@ export function deploymentFingerprint(components: unknown): string { return sha2
 function git(cwd: string, ...args: string[]): string { return execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim(); }
 function pending(cause: string): { state: "pending"; cause: string } { return { state: "pending", cause }; }
 function fields(names: string, cause: string): Record<string, unknown> { return Object.fromEntries(names.split(" ").map(name => [name, pending(cause)])); }
-function identity(path: string, version: string, origin: string) {
-  const canonicalPath = realpathSync(path);
-  return { version, canonicalPath, origin, digest: sha256(readFileSync(canonicalPath)) };
-}
 function tree(path: string): Record<string, string> {
   return Object.fromEntries(readdirSync(path, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name)).flatMap(entry => {
     const child = join(path, entry.name);
@@ -47,27 +34,29 @@ function tree(path: string): Record<string, string> {
   }));
 }
 export const loadedExtensionDigest = deploymentFingerprint(tree(join(packageRoot, "src")));
-export interface AdmissionOptions { cwd: string; dag: string; run: string; params: string[]; session?: { transcriptRoot?: string; model?: unknown; extensionDigest?: string } }
+export interface AdmissionOptions {
+  cwd: string; dag: string; run: string; params: string[]; artifact?: string; parent?: string;
+  session?: { transcriptRoot?: string; model?: unknown; extensionDigest?: string };
+}
 export interface Receipt {
   schemaVersion: 1 | 2;
+  artifact?: ArtifactReceiptFields["artifact"];
+  artifactSupport?: ArtifactReceiptFields["artifactSupport"];
+  contracts?: ArtifactReceiptFields["contracts"];
+  parent?: ArtifactReceiptFields["parent"];
   sourceVersion: { version: string; commit: string; origin: string };
   deploymentFingerprint: string;
   initial: { admittedAt: string; deployment: Record<string, unknown>; runtimeAndModels: Record<string, unknown>; execution: Record<string, unknown> & { dagSnapshot: string }; eventsAndExternalState: Record<string, unknown> };
   runReceipt: { dag: string; run: string; attempt: number; observations: Observation[] };
 }
 export interface Observation { at: string; dag: string; run: string; attempt: number; category: "deployment" | "runtimeAndModels" | "execution" | "eventsAndExternalState"; kind: string; data: unknown }
-
-function manifestVersion(contents: string): string {
-  const value: unknown = JSON.parse(contents);
-  if (!isRecord(value) || typeof value.version !== "string") throw new Error("Package identity requires a declared version");
-  return value.version;
-}
 export function parseObservation(value: unknown): Omit<Observation, "at"> {
   if (!isRecord(value) || typeof value.dag !== "string" || typeof value.run !== "string" || typeof value.attempt !== "number" || !Number.isSafeInteger(value.attempt) || value.attempt < 1 || typeof value.kind !== "string") throw new Error("Observation requires DAG, run, positive integer attempt and kind");
   const category = value.category;
   if (category !== "deployment" && category !== "runtimeAndModels" && category !== "execution" && category !== "eventsAndExternalState") throw new Error("Observation requires a receipt category");
   return { dag: value.dag, run: value.run, attempt: value.attempt, category, kind: value.kind, data: value.data };
 }
+/** Observation can report legacy records; it grants no permission to execute them. */
 function readReceipt(path: string): Receipt {
   const value: unknown = JSON.parse(readFileSync(path, "utf8"));
   assertReceiptVersion(value, path);
@@ -78,14 +67,11 @@ function readReceipt(path: string): Receipt {
   if (!isRecord(source) || typeof source.version !== "string" || typeof source.commit !== "string" || typeof source.origin !== "string") throw new Error(`Invalid receipt sourceVersion: ${path}`);
   if (!isRecord(initial) || typeof initial.admittedAt !== "string" || !isRecord(initial.deployment) || !isRecord(initial.runtimeAndModels) || !isRecord(initial.execution) || typeof initial.execution.dagSnapshot !== "string" || !isRecord(initial.eventsAndExternalState)) throw new Error(`Invalid receipt initial snapshot: ${path}`);
   if (!isRecord(run) || typeof run.dag !== "string" || typeof run.run !== "string" || typeof run.attempt !== "number" || !Array.isArray(run.observations)) throw new Error(`Invalid runReceipt: ${path}`);
-  return {
-    schemaVersion: value.schemaVersion, sourceVersion: { version: source.version, commit: source.commit, origin: source.origin }, deploymentFingerprint: value.deploymentFingerprint,
-    initial: { admittedAt: initial.admittedAt, deployment: initial.deployment, runtimeAndModels: initial.runtimeAndModels, execution: { ...initial.execution, dagSnapshot: initial.execution.dagSnapshot }, eventsAndExternalState: initial.eventsAndExternalState },
-    runReceipt: { dag: run.dag, run: run.run, attempt: run.attempt, observations: run.observations.map((entry: unknown) => {
-      if (!isRecord(entry) || typeof entry.at !== "string") throw new Error(`Invalid receipt observation timestamp: ${path}`);
-      return { at: entry.at, ...parseObservation(entry) };
-    }) },
-  };
+  for (const entry of run.observations) {
+    if (!isRecord(entry) || typeof entry.at !== "string") throw new Error(`Invalid receipt observation timestamp: ${path}`);
+    parseObservation(entry);
+  }
+  return value as unknown as Receipt;
 }
 export function receiptPath(cwd: string, run: string): string {
   if (!/^[\w-]+$/.test(run)) throw new Error(`run=${run} expected an explicit Dagu run ID containing letters, numbers, underscores or hyphens`);
@@ -93,155 +79,127 @@ export function receiptPath(cwd: string, run: string): string {
 }
 function existingAncestor(path: string): string {
   let current = path;
-  const seen = new Set<string>();
-  while (!seen.has(current)) {
-    seen.add(current);
+  for (;;) {
     if (existsSync(current)) return current;
     const parent = dirname(current);
     if (parent === current) return path;
     current = parent;
   }
-  return path;
 }
-
-function gitRoot(start: string): string | undefined {
-  try { return git(start, "rev-parse", "--show-toplevel"); }
-  catch { return undefined; }
-}
-
-/** The consumer checkout is the DAG path's repository, or the process cwd for a bare DAG name. */
 function consumerRoot(cwd: string, dag: string): string {
-  const resolved = resolve(cwd, dag);
-  const starts = dag.includes("/") || dag.endsWith(".yaml") ? [existingAncestor(resolved), cwd] : [cwd];
+  const starts = dag.includes("/") || dag.endsWith(".yaml") ? [existingAncestor(resolve(cwd, dag)), cwd] : [cwd];
   for (const start of starts) {
-    const root = gitRoot(start);
-    if (root) return root;
+    try { return git(start, "rev-parse", "--show-toplevel"); } catch { /* Try the caller's checkout. */ }
   }
   throw new Error(`admission requires a consumer git checkout containing committed ${CONFIG_PATH}`);
 }
-
-export function admit(options: AdmissionOptions, persist = true): { path: string; receipt: Receipt } {
-  try {
-    const name = dagName(options.dag);
-    const rejected = options.params.map(param => param.split("=", 1)[0]!)
-      .filter(field => field.startsWith("ESCALATION_") || field.startsWith("CODEQL_") || (POLICY_PARAMETERS as readonly string[]).includes(field));
-    if (rejected.length) throw new Error(`admission rejected run parameter: ${rejected.join(", ")}; policy comes only from committed ${CONFIG_PATH}`);
-    const owners = options.params.filter(param => param.startsWith("OMP_SESSION_ID="));
-    const owner = requireOwnerSession(owners.length === 1 ? owners[0]!.slice(15) : undefined);
-    const hintedRoot = realpathSync(consumerRoot(options.cwd, options.dag));
-    const hinted = readCommittedConfig(hintedRoot);
-    let config = hinted.config;
-    let configCommit = hinted.commit;
-    let configDigest = hinted.digest;
-    const resolved = realpathSync(resolvePrimaryBinding(HOST_PRIMARY_REFERENCE, { workspace: config.lane }));
-    const primaryRepo = realpathSync(git(resolved, "rev-parse", "--show-toplevel"));
-    if (primaryRepo !== hintedRoot) {
-      const canonical = readCommittedConfig(primaryRepo);
-      const again = realpathSync(resolvePrimaryBinding(HOST_PRIMARY_REFERENCE, { workspace: canonical.config.lane }));
-      if (realpathSync(git(again, "rev-parse", "--show-toplevel")) !== primaryRepo) {
-        throw new Error(`config lane=${canonical.config.lane} resolved PRIMARY ${again}, which is not the consumer checkout ${primaryRepo}`);
-      }
-      config = canonical.config;
-      configCommit = canonical.commit;
-      configDigest = canonical.digest;
-    }
-    const primary = resolved;
-    const repo = primaryRepo;
-    if (name === "poc.yaml") {
-      const param = (key: string) => options.params.find(value => value.startsWith(`${key}=`))?.slice(key.length + 1) || "";
-      requirePocScope(primary, { issue: param("ISSUE"), question: param("QUESTION"),
-        requiredTargets: scopeTargets(JSON.parse(param("REQUIRED_TARGETS") || "[]")),
-        authorizedTargets: scopeTargets(JSON.parse(param("AUTHORIZED_TARGETS") || "[]")), basis: param("SCOPE_BASIS") },
-      param("SCOPE_REQUEST") || undefined, config.escalation.pocInconclusive);
-    }
-    const path = receiptPath(primary, options.run);
-    const installed = packageIdentity(packageRoot);
-    const commit = installed.commit;
-    const origin = installed.origin;
-    const daguHome = realpathSync(process.env.DAGU_HOME || join(homedir(), ".dagu"));
-    const templateFile = join(packageRoot, "skills", "issue-execution", name);
-    const templateText = readFileSync(templateFile, "utf8");
-    const generated = materializeDag(packageRoot, name, config, installed);
-    const declared = inferLifecycleProtocols(name, generated);
-    const missing = missingLifecycleProtocols(declared);
-    if (missing.length) throw new Error(formatProtocolRejection(name, missing));
-    const snapshot = name === "reconcile.yaml" ? generated : bindSnapshotPrimary(generated, primary);
-    const reconcilerPath = join(daguHome, "dags", "reconcile.yaml");
-    let installedReconciler: Record<string, unknown>;
-    try {
-      installedReconciler = { relationship: "station-installed", canonicalPath: realpathSync(reconcilerPath), digest: sha256(readFileSync(reconcilerPath)) };
-    } catch (error) {
-      if (!isRecord(error) || error.code !== "ENOENT") throw error;
-      installedReconciler = { state: "absent", cause: "station reconciler is not installed; bootstrap installs it from the package template without a consumer DAG" };
-    }
-    const installedPackageVersion = manifestVersion(readFileSync(join(packageRoot, "package.json"), "utf8"));
-    if (installedPackageVersion !== BUNDLE_VERSION) throw new Error(`loaded package version=${BUNDLE_VERSION} installed package version=${installedPackageVersion}; restart OMP after redeployment`);
-    const sourceTemplate = identity(templateFile, BUNDLE_VERSION, `${origin}@${commit}`);
-    const extensionFiles = tree(join(packageRoot, "src"));
-    if (options.session?.extensionDigest && options.session.extensionDigest !== deploymentFingerprint(extensionFiles)) throw new Error(`loaded extension digest=${options.session.extensionDigest} expected current installed=${deploymentFingerprint(extensionFiles)}; restart OMP after redeployment`);
-    const generatedDigest = sha256(snapshot);
-    const daguVersion = execFileSync("dagu", ["version"], { encoding: "utf8" }).trim();
-    const installedDAG = {
-      relationship: "materialized-from-config", version: BUNDLE_VERSION, canonicalPath: realpathSync(templateFile),
-      origin: `${origin}@${commit}`, digest: sha256(templateText),
-      template: { path: `skills/issue-execution/${name}`, commit, digest: sha256(templateText) },
-      configDigest, generatedDigest, dagu: daguVersion, snapshot: generated,
-    };
-    const deployment = {
-      package: identity(join(packageRoot, "package.json"), BUNDLE_VERSION, `${origin}@${commit}`),
-      sourceTemplate, installedDAG, installedReconciler,
-      config: { path: CONFIG_PATH, schemaVersion: config.schemaVersion, commit: configCommit, digest: configDigest },
-      generatedDagDigest: generatedDigest,
-      loadedExtension: { version: BUNDLE_VERSION, canonicalPath: realpathSync(join(packageRoot, "src", "triage", "index.ts")), origin: `${origin}@${commit}`, digest: deploymentFingerprint(extensionFiles), files: extensionFiles, status: identity(join(packageRoot, "src", "status", "index.ts"), BUNDLE_VERSION, `${origin}@${commit}`) },
-      bootstrap: identity(join(packageRoot, "skills", "issue-execution", "dagu-feature-bootstrap.yaml"), BUNDLE_VERSION, `${origin}@${commit}`),
-      skill: identity(join(packageRoot, "skills", "issue-execution", "SKILL.md"), BUNDLE_VERSION, `${origin}@${commit}`),
-      agents: tree(join(packageRoot, "agents")),
-      cli: identity(join(packageRoot, "bin", "dagu-feature-bundle.ts"), BUNDLE_VERSION, `${origin}@${commit}`),
-      lifecycleHelpers: [
-        identity(join(packageRoot, "skills", "issue-execution", "escalation.py"), BUNDLE_VERSION, `${origin}@${commit}`),
-        identity(join(packageRoot, "bin", "dagu-poc-scope.ts"), BUNDLE_VERSION, `${origin}@${commit}`),
-      ],
-      relationships: { packageToExtension: "same-loaded-package", templateToPackage: "same-checkout", installedToSource: "materialized-from-config", compatibility: "installed-template", protocols: lifecycleProtocolToken() },
-    };
-    const diff = git(primary, "diff", "HEAD", "--binary");
-    const dirty = git(primary, "status", "--porcelain", "--untracked-files=all");
-    const runtimeConfig: Record<string, unknown> = {};
-    for (const candidate of [join(daguHome, "config.yaml"), join(primary, ".omp", "settings.json"), join(homedir(), ".omp", "agent", "settings.json")]) {
-      try { runtimeConfig[candidate] = sha256(readFileSync(candidate)); }
-      catch (error) {
-        if (!isRecord(error) || error.code !== "ENOENT") throw error;
-        runtimeConfig[candidate] = { state: "unavailable", cause: "file not present" };
-      }
-    }
-    const receipt: Receipt = {
-      schemaVersion: 2, sourceVersion: { version: BUNDLE_VERSION, commit, origin }, deploymentFingerprint: deploymentFingerprint(deployment),
-      initial: {
-        admittedAt: new Date().toISOString(), deployment,
-        runtimeAndModels: { ...fields("omp systemPromptDigest profile roles roleMapHash requestedRole resolvedModel fallback resolvedModelIsFallback crossFamilyDecision serverPid serverPpid serverStartedAt", "not exposed at admission; append a linked runtime observation when resolved"), node: { version: process.version, path: realpathSync(process.execPath) }, dagu: { version: daguVersion, path: realpathSync(execFileSync("/bin/sh", ["-c", "command -v dagu"], { encoding: "utf8" }).trim()) }, daguHome, endpoint: process.env.DAGU_URL || "http://127.0.0.1:8080", admissionPid: process.pid, admissionPpid: process.ppid, config: runtimeConfig, transcriptRoot: options.session?.transcriptRoot ?? pending("operator CLI has no OMP session context"), model: options.session?.model ?? pending("OMP model not exposed to CLI") },
-        execution: { ...fields("base owner refs step approvalIteration sourceSession destinationSession triageGeneration triageMarker", "not yet resolved at admission"), repo, primary, head: git(primary, "rev-parse", "HEAD"), branch: git(primary, "branch", "--show-current"), worktree: repo, dirty, diffDigest: sha256(diff), parameters: options.params, ompSession: owner, dagSnapshot: snapshot },
-        eventsAndExternalState: fields("eventIds cursor source transition destination delivery trigger queue reconcile merge checks configuration locks lockOwner restarts activeRuns exit signal latency errors incidents", "not observed before enqueue; linked observations append without replacing initial state"),
-      },
-      runReceipt: { dag: name.replace(/\.yaml$/, ""), run: options.run, attempt: 1, observations: [] },
-    };
-    if (persist) {
-      mkdirSync(dirname(path), { recursive: true });
-      try { writeFileSync(path, `${JSON.stringify(receipt, null, 2)}\n`, { flag: "wx", mode: 0o600 }); }
-      catch (error) {
-        if (!isRecord(error) || error.code !== "EEXIST") throw error;
-        throw new Error(`run=${options.run} already has an immutable admission receipt; choose a new run ID`);
-      }
-    } else {
-      try { readFileSync(path); }
-      catch (error) {
-        if (isRecord(error) && error.code === "ENOENT") return { path, receipt };
-        throw error;
-      }
-      throw new Error(`run=${options.run} already has an immutable admission receipt; choose a new run ID`);
-    }
-    return { path, receipt };
-  } catch (error) { throw new Error(`DAGU_ADMISSION_REJECTED: ${error instanceof Error ? error.message : String(error)}. ${correction}`); }
+/** Side-effect-free validation also used by the OMP shell interception boundary. */
+export function preflightAdmission(options: AdmissionOptions): AdmissionContext {
+  const name = dagName(options.dag);
+  const rejected = options.params.map(param => param.split("=", 1)[0]!)
+    .filter(field => field.startsWith("ESCALATION_") || field.startsWith("CODEQL_") || (POLICY_PARAMETERS as readonly string[]).includes(field));
+  if (rejected.length) throw new Error(`admission rejected run parameter: ${rejected.join(", ")}; policy comes only from committed ${CONFIG_PATH}`);
+  const owners = options.params.filter(param => param.startsWith("OMP_SESSION_ID="));
+  const owner = requireOwnerSession(owners.length === 1 ? owners[0]!.slice(15) : undefined);
+  const hintedRoot = realpathSync(consumerRoot(options.cwd, options.dag));
+  let committed = readCommittedConfig(hintedRoot);
+  const primary = realpathSync(resolvePrimaryBinding(HOST_PRIMARY_REFERENCE, { workspace: committed.config.lane }));
+  const repo = realpathSync(git(primary, "rev-parse", "--show-toplevel"));
+  if (repo !== hintedRoot) {
+    committed = readCommittedConfig(repo);
+    const again = realpathSync(resolvePrimaryBinding(HOST_PRIMARY_REFERENCE, { workspace: committed.config.lane }));
+    if (realpathSync(git(again, "rev-parse", "--show-toplevel")) !== repo) throw new Error(`config lane=${committed.config.lane} does not resolve to consumer checkout ${repo}`);
+  }
+  receiptPath(primary, options.run);
+  if (name === "poc.yaml") {
+    const param = (key: string) => options.params.find(value => value.startsWith(`${key}=`))?.slice(key.length + 1) || "";
+    requirePocScope(primary, { issue: param("ISSUE"), question: param("QUESTION"),
+      requiredTargets: scopeTargets(JSON.parse(param("REQUIRED_TARGETS") || "[]")),
+      authorizedTargets: scopeTargets(JSON.parse(param("AUTHORIZED_TARGETS") || "[]")), basis: param("SCOPE_BASIS") },
+    param("SCOPE_REQUEST") || undefined, committed.config.escalation.pocInconclusive);
+  }
+  return { name, owner, primary, repo, committed };
 }
-
+export interface AdmissionContext { name: LifecycleDag; owner: string; primary: string; repo: string; committed: CommittedConfig }
+async function selectParent(options: AdmissionOptions, context: AdmissionContext, home: string): Promise<ArtifactReceiptFields["parent"]> {
+  if (!options.parent) return undefined;
+  const path = realpathSync(resolve(options.cwd, options.parent));
+  const { receipt } = await receiptArtifact(home, path);
+  const run = receipt.runReceipt;
+  const initial = receipt.initial;
+  if (!isRecord(run) || typeof run.dag !== "string" || typeof run.run !== "string" || !isRecord(initial) || !isRecord(initial.execution) || initial.execution.primary !== context.primary || initial.execution.ompSession !== context.owner || realpathSync(receiptPath(context.primary, run.run)) !== path) throw new Error("Invalid parent receipt lineage/owner/consumer");
+  const transitions: Record<string, string> = { feature: "poc.yaml", poc: "feature.yaml", discovery: "planning.yaml" };
+  if (transitions[run.dag] !== context.name || run.run === options.run) throw new Error(`Invalid successor transition ${run.dag} -> ${context.name}`);
+  if (options.artifact && !sameArtifact(parseArtifact(options.artifact), receipt.artifact)) throw new Error("Child artifact differs from parent receipt");
+  return { receipt: path, dag: run.dag, run: run.run, artifact: receipt.artifact };
+}
+function createReceipt(options: AdmissionOptions, context: AdmissionContext, cached: CachedArtifact, parent: ArtifactReceiptFields["parent"], persist: boolean): { path: string; receipt: Receipt } {
+  const { name, owner, primary, repo, committed } = context;
+  const path = receiptPath(primary, options.run);
+  const { version, commit } = cached.record;
+  const origin = `https://github.com/${releaseRepository()}`;
+  const daguHome = realpathSync(process.env.DAGU_HOME || join(homedir(), ".dagu"));
+  const templateFile = join(cached.directory, "skills", "issue-execution", name);
+  const templateText = readFileSync(templateFile, "utf8");
+  const generated = materializeDag(cached.directory, name, committed.config, { version, source: `${origin}@${commit}`, executable: cached.executable });
+  const snapshot = name === "reconcile.yaml" ? generated : bindSnapshotPrimary(generated, primary);
+  const generatedDigest = sha256(snapshot);
+  const daguVersion = execFileSync("dagu", ["version"], { encoding: "utf8" }).trim();
+  const deployment = {
+    artifact: cached.record,
+    sourceTemplate: { version, canonicalPath: templateFile, origin, digest: sha256(templateText) },
+    installedDAG: { relationship: "materialized-from-cache", version, canonicalPath: templateFile, origin, digest: sha256(templateText),
+      template: { path: `skills/issue-execution/${name}`, commit, digest: sha256(templateText) }, configDigest: committed.digest, generatedDigest, dagu: daguVersion, snapshot: generated },
+    config: { path: CONFIG_PATH, schemaVersion: committed.config.schemaVersion, uses: committed.config.uses, commit: committed.commit, digest: committed.digest },
+    generatedDagDigest: generatedDigest,
+    relationships: { templateToArtifact: "verified-cache", protocols: USED_CONTRACTS.protocols },
+  };
+  const diff = git(primary, "diff", "HEAD", "--binary");
+  const receipt: Receipt = {
+    schemaVersion: 2, artifact: { version, commit, digest: cached.record.digest }, artifactSupport: cached.identity.support, contracts: USED_CONTRACTS,
+    ...(parent ? { parent } : {}), sourceVersion: { version, commit, origin }, deploymentFingerprint: deploymentFingerprint(deployment),
+    initial: {
+      admittedAt: new Date().toISOString(), deployment,
+      runtimeAndModels: { ...fields("omp systemPromptDigest profile roles roleMapHash requestedRole resolvedModel fallback resolvedModelIsFallback crossFamilyDecision", "not exposed at admission; append linked runtime observations"),
+        node: { version: process.version, path: realpathSync(process.execPath) }, dagu: { version: daguVersion }, daguHome,
+        roleJobStore: join(daguHome, "role-jobs.sqlite"), admissionPid: process.pid, admissionPpid: process.ppid,
+        transcriptRoot: options.session?.transcriptRoot ?? pending("operator CLI has no OMP session context"), model: options.session?.model ?? pending("not exposed at admission") },
+      execution: { ...fields("base owner refs step approvalIteration sourceSession destinationSession triageGeneration triageMarker", "not yet resolved at admission"), repo, primary,
+        head: git(primary, "rev-parse", "HEAD"), branch: git(primary, "branch", "--show-current"), worktree: repo,
+        dirty: git(primary, "status", "--porcelain", "--untracked-files=all"), diffDigest: sha256(diff), parameters: options.params, ompSession: owner, dagSnapshot: snapshot },
+      eventsAndExternalState: fields("eventIds cursor source transition destination delivery trigger queue reconcile merge checks configuration locks lockOwner restarts activeRuns exit signal latency errors incidents", "not observed before enqueue"),
+    }, runReceipt: { dag: name.replace(/\.yaml$/, ""), run: options.run, attempt: 1, observations: [] },
+  };
+  assertArtifactReceipt(receipt, path);
+  if (!persist) {
+    if (existsSync(path)) throw new Error(`run=${options.run} already has an immutable admission receipt; choose a new run ID`);
+    return { path, receipt };
+  }
+  mkdirSync(dirname(path), { recursive: true });
+  try { writeFileSync(path, `${JSON.stringify(receipt, null, 2)}\n`, { flag: "wx", mode: 0o600 }); }
+  catch (error) {
+    if (!isRecord(error) || error.code !== "EEXIST") throw error;
+    throw new Error(`run=${options.run} already has an immutable admission receipt; choose a new run ID`);
+  }
+  return { path, receipt };
+}
+async function selectedAdmission<T>(options: AdmissionOptions, persist: boolean, use: (admission: { path: string; receipt: Receipt }) => T): Promise<T> {
+  const context = preflightAdmission(options);
+  const home = realpathSync(process.env.DAGU_HOME || join(homedir(), ".dagu"));
+  const parent = await selectParent(options, context, home);
+  const tuple = options.artifact ? parseArtifact(options.artifact) : parent?.artifact;
+  if (!tuple) throw new Error("Admission requires a resolved --artifact handoff or --parent receipt");
+  assertExecutingArtifact(tuple);
+  return withFileLockAsync(artifactLock(home, tuple), async () => {
+    const cached = await inspectArtifact(home, tuple);
+    if (realpathSync(process.execPath) !== cached.executable) throw new Error(`Admission must execute the cached artifact ${cached.executable}`);
+    return use(createReceipt(options, context, cached, parent, persist));
+  });
+}
+/** Internal explicit-artifact admission. Root CLI admission always hands off first. */
+export async function admit(options: AdmissionOptions, persist = true): Promise<{ path: string; receipt: Receipt }> {
+  return selectedAdmission(options, persist, result => result);
+}
 export function appendObservation(path: string, observation: Omit<Observation, "at">): void {
   assertReceiptVersion(JSON.parse(readFileSync(path, "utf8")), path);
   const lock = `${path}.lock`;
@@ -255,16 +213,23 @@ export function appendObservation(path: string, observation: Omit<Observation, "
     renameSync(temp, path);
   } finally { rmSync(lock, { recursive: true }); }
 }
-
 export function enqueueArguments(args: string[], cwd: string): AdmissionOptions {
   const separator = args.indexOf("--");
   const flags = separator < 0 ? args : args.slice(0, separator);
-  let run = ""; let dag = "";
+  let run = ""; let dag = ""; let artifact: string | undefined; let parent: string | undefined;
+  const seen = new Set<string>();
   for (let index = 0; index < flags.length; index++) {
     const arg = flags[index]!;
-    if (arg === "--run-id") run = flags[++index] || "";
-    else if (arg.startsWith("--run-id=")) run = arg.slice(9);
-    else if (arg.startsWith("-")) throw new Error(`Unsupported admission flag ${arg}; use --run-id <id> <DAG> -- PARAM=value`);
+    const key = arg.split("=", 1)[0]!;
+    if (["--run-id", "--artifact", "--parent"].includes(key)) {
+      if (seen.has(key)) throw new Error(`Duplicate admission flag ${key}`);
+      seen.add(key);
+      const value = arg.includes("=") ? arg.slice(key.length + 1) : flags[++index] || "";
+      if (!value || value.startsWith("--")) throw new Error(`Missing admission flag value ${key}`);
+      if (key === "--run-id") run = value;
+      else if (key === "--artifact") { parseArtifact(value); artifact = value; }
+      else parent = value;
+    } else if (arg.startsWith("-")) throw new Error(`Unsupported admission flag ${arg}; use --run-id <id> [--artifact <tuple> | --parent <receipt>] <DAG> -- PARAM=value`);
     else if (dag) throw new Error("Ambiguous DAG identity; provide exactly one DAG path");
     else dag = arg;
   }
@@ -279,33 +244,41 @@ export function enqueueArguments(args: string[], cwd: string): AdmissionOptions 
     if (!isRecord(value) || (value.transcriptRoot !== undefined && typeof value.transcriptRoot !== "string") || (value.extensionDigest !== undefined && typeof value.extensionDigest !== "string")) throw new Error("Indeterminate loaded session identity");
     session = { ...(typeof value.transcriptRoot === "string" ? { transcriptRoot: value.transcriptRoot } : {}), ...(typeof value.extensionDigest === "string" ? { extensionDigest: value.extensionDigest } : {}), ...(value.model !== undefined ? { model: value.model } : {}) };
   }
-  return { cwd, dag, run, params, ...(session ? { session } : {}) };
+  return { cwd, dag, run, params, ...(artifact ? { artifact } : {}), ...(parent ? { parent } : {}), ...(session ? { session } : {}) };
 }
-export function enqueue(args: string[], cwd: string): number {
-  const options = enqueueArguments(args, cwd);
-  const { path, receipt } = admit(options);
-  // Enqueue the exact admitted bytes, not a mutable deployment path.
-  const snapshot = join(dirname(path), "snapshot", `${receipt.runReceipt.dag}.yaml`);
-  mkdirSync(dirname(snapshot));
-  writeFileSync(snapshot, receipt.initial.execution.dagSnapshot, { flag: "wx", mode: 0o600 });
-  const result = spawnSync("dagu", ["enqueue", "--run-id", options.run, snapshot, "--", ...options.params], { stdio: "inherit" });
-  appendObservation(path, { dag: receipt.runReceipt.dag, run: options.run, attempt: 1, category: "eventsAndExternalState", kind: result.status === 0 ? "enqueued" : "incident", data: { exit: result.status, signal: result.signal, error: result.error?.message, originalDag: resolve(cwd, options.dag), snapshot, latency: Date.now() - Date.parse(receipt.initial.admittedAt) } });
-  console.log(`receipt=${path} sourceVersion=${receipt.sourceVersion.version} deploymentFingerprint=${receipt.deploymentFingerprint}`);
-  return result.status ?? 1;
+/** Root CLI: resolve once, publish/check cache, then replace this process. Child
+ * CLI: inherit from the parent receipt, never resolve or download anything. */
+export async function enqueue(args: string[], cwd: string): Promise<number> {
+  try {
+    const options = enqueueArguments(args, cwd);
+    const context = preflightAdmission(options);
+    if (!options.artifact && !options.parent) {
+      const home = realpathSync(process.env.DAGU_HOME || join(homedir(), ".dagu"));
+      const release = resolveRelease(context.committed.config.uses);
+      const cached = await ensureArtifact(home, release);
+      const env = Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined));
+      if (!process.execve) throw new Error("a4s admission requires a runtime with execve support");
+      process.execve(cached.executable, [cached.executable, "admit", "--artifact", artifactToken(release), ...args], env);
+      throw new Error("a4s handoff did not replace the caller process");
+    }
+    return await selectedAdmission(options, true, ({ path, receipt }) => {
+      const snapshot = join(dirname(path), "snapshot", `${receipt.runReceipt.dag}.yaml`);
+      mkdirSync(dirname(snapshot));
+      writeFileSync(snapshot, receipt.initial.execution.dagSnapshot, { flag: "wx", mode: 0o600 });
+      const result = spawnSync("dagu", ["enqueue", "--run-id", options.run, snapshot, "--", ...options.params], { stdio: "inherit" });
+      appendObservation(path, { dag: receipt.runReceipt.dag, run: options.run, attempt: 1, category: "eventsAndExternalState", kind: result.status === 0 ? "enqueued" : "incident", data: { exit: result.status, signal: result.signal, error: result.error?.message, originalDag: resolve(cwd, options.dag), snapshot, latency: Date.now() - Date.parse(receipt.initial.admittedAt) } });
+      console.log(`receipt=${path} sourceVersion=${receipt.sourceVersion.version} deploymentFingerprint=${receipt.deploymentFingerprint}`);
+      return result.status ?? 1;
+    });
+  } catch (error) { throw new Error(`DAGU_ADMISSION_REJECTED: ${error instanceof Error ? error.message : String(error)}`); }
 }
-
 /** Append runtime facts; initial identities are never recalculated for an old run. */
 export function observeRunReceipt(run: RunDetails, cwd: string, kind = "runtime", error?: string): void {
-  const primary = cwd;
   let path: string;
-  try { path = receiptPath(primary, run.dagRunId); }
-  catch { return; } // Non-adopted repositories have no receipt namespace.
+  try { path = receiptPath(cwd, run.dagRunId); } catch { return; }
   let receipt: Receipt;
   try { receipt = readReceipt(path); }
-  catch (error) {
-    if (isRecord(error) && error.code === "ENOENT") return;
-    throw error;
-  }
+  catch (error) { if (isRecord(error) && error.code === "ENOENT") return; throw error; }
   const data = { source: "dagu-rest-and-persisted-events", observerPid: process.pid, observerPpid: process.ppid, loadedExtensionDigest, run, ...(error ? { error } : {}) };
   const incident = error || run.receiptEvent?.cursorReset || ["failed", "aborted", "cancelled"].includes(run.statusLabel);
   const resolvedKind = run.receiptEvent?.cursorReset ? "incident:cursor-reset" : incident ? `incident:${kind}` : kind;
@@ -319,13 +292,8 @@ export function observeRunReceipt(run: RunDetails, cwd: string, kind = "runtime"
   let lastObserver: Observation | undefined;
   for (let index = receipt.runReceipt.observations.length - 1; index >= 0; index--) {
     const observation = receipt.runReceipt.observations[index]!;
-    if (isRecord(observation.data) && typeof observation.data.observerPid === "number") {
-      lastObserver = observation;
-      break;
-    }
+    if (isRecord(observation.data) && typeof observation.data.observerPid === "number") { lastObserver = observation; break; }
   }
-  if (lastObserver && isRecord(lastObserver.data) && lastObserver.data.observerPid !== process.pid) {
-    appendObservation(path, { dag: run.name, run: run.dagRunId, attempt, category: "eventsAndExternalState", kind: "incident:observer-restart", data });
-  }
+  if (lastObserver && isRecord(lastObserver.data) && lastObserver.data.observerPid !== process.pid) appendObservation(path, { dag: run.name, run: run.dagRunId, attempt, category: "eventsAndExternalState", kind: "incident:observer-restart", data });
   appendObservation(path, { dag: run.name, run: run.dagRunId, attempt, category: "eventsAndExternalState", kind: resolvedKind, data });
 }

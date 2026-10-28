@@ -9,6 +9,7 @@ import { verifyTriageResult } from "../src/role-dispatch.ts";
 import { atomicJson, executorIdentity, jobId, type JobBinding, type JobResult } from "../src/role-jobs.ts";
 import { nativeEvidence, roleSchema } from "../src/role-runtime.ts";
 import { REVIEW_SCHEMA } from "../src/triage/schema.ts";
+import { a4sBin } from "./fixtures/a4s.ts";
 
 function fixture() {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "omp-dagu-triage-role-")));
@@ -151,10 +152,6 @@ test("triage command retains receipt diagnostics and rejects stale native iterat
 test("template verifies the exact role receipt before state or publication effects", () => {
   const f = fixture();
   try {
-    const bin = join(f.root, "bin");
-    mkdirSync(bin);
-    writeFileSync(join(bin, "dagu-role-jobs"), '#!/bin/sh\nexec "$TEST_NODE" --import "$TEST_TSX" "$TEST_CLI" "$@"\n');
-    chmodSync(join(bin, "dagu-role-jobs"), 0o755);
     const yaml = readFileSync(new URL("../skills/issue-execution/feature.yaml", import.meta.url), "utf8");
     const step = yaml.split("  - id: triage_decision\n")[1]!.split("\n  - id: detect_start_primary\n")[0]!;
     const script = step.split("    run: |\n")[1]!.split("\n").map(line => line.startsWith("      ") ? line.slice(6) : line).join("\n");
@@ -162,10 +159,8 @@ test("template verifies the exact role receipt before state or publication effec
     const triage = join(f.root, ".git", "dagu-feature", "runs", "fixture-run", "triage.md");
     writeFileSync(triage, "Retained prior triage evidence\n");
     const result = spawnSync("bash", ["-c", script], { encoding: "utf8", env: {
-      ...process.env, PATH: `${bin}:${process.env.PATH}`, PRIMARY: f.root, RUN: "fixture-run",
+      ...process.env, A4S_BIN: a4sBin, PRIMARY: f.root, RUN: "fixture-run",
       REVIEW: f.id, POC: "no", QUESTION: "Already proven runtime?", BASIS: "PoC PASS",
-      TEST_NODE: process.execPath, TEST_TSX: import.meta.resolve("tsx"),
-      TEST_CLI: fileURLToPath(new URL("../bin/dagu-role-jobs.ts", import.meta.url)),
     } });
     assert.equal(result.status, 1, result.stderr);
     assert.ok(result.stdout.includes(`result.path=${f.path}\n`));

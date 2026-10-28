@@ -2,16 +2,16 @@ import { renderedPoc } from "../fixtures/rendered-feature.ts";
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { testRunId } from "../fixtures/run-id.ts";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { liveDagu } from "../fixtures/live-dagu.ts";
 import { PocDiagnostics } from "../fixtures/poc-diagnostics.ts";
 import { BUNDLE_VERSION } from "../../src/bundle.ts";
+import { a4sBin } from "../fixtures/a4s.ts";
 
 for (const definition of [
   new URL("../../skills/issue-execution/poc.yaml", import.meta.url),
@@ -45,7 +45,6 @@ for (const definition of [
     writeFileSync(resultPath, result("wrong question"));
     const bin = join(root, "bin");
     mkdirSync(bin);
-    symlinkSync(fileURLToPath(new URL("../../bin/dagu-pr-body.mjs", import.meta.url)), join(bin, "dagu-pr-body"));
     writeFileSync(join(bin, "gh"), `#!/bin/sh\ncase "$*" in\n  "issue view "*) printf '{"body":"original scope"}\\n' ;;\n  *) printf 'https://example.invalid/comment\\n' ;;\nesac\n`, { mode: 0o755 });
     const listener = createServer();
     await new Promise<void>(resolve => listener.listen(0, "127.0.0.1", resolve));
@@ -53,7 +52,7 @@ for (const definition of [
     assert.ok(address && typeof address !== "string");
     const port = address.port;
     await new Promise<void>(resolve => listener.close(() => resolve()));
-    const env = { ...process.env, DAGU_PARAMS_JSON: "{}", DAGU_HOME: home, DAGU_COORDINATOR_ENABLED: "false", PATH: `${bin}:${process.env.PATH}` };
+    const env = { ...process.env, A4S_BIN: a4sBin, DAGU_PARAMS_JSON: "{}", DAGU_HOME: home, DAGU_COORDINATOR_ENABLED: "false", PATH: `${bin}:${process.env.PATH}` };
     writeFileSync(join(home, "config.yaml"), `host: 127.0.0.1\nport: ${port}\nauth:\n  mode: none\ncoordinator:\n  enabled: false\n`);
     const source = readFileSync(definition, "utf8");
     const step = (id: string): string => {
@@ -74,7 +73,7 @@ for (const definition of [
     const wait = source.slice(source.indexOf("  wait:\n"), source.indexOf("  failure:\n"));
     writeFileSync(join(home, "dags", "poc.yaml"), [
       "type: graph\nshell: bash\n",
-      `env:\n  - PRIMARY: ${primary}\n  - WORKTREE: ${primary}\n  - RUN: ${id}\n  - TEST_PATHS: '^tests/'\n`,
+      `env:\n  - A4S_BIN: ${JSON.stringify(a4sBin)}\n  - PRIMARY: ${primary}\n  - WORKTREE: ${primary}\n  - RUN: ${id}\n  - TEST_PATHS: '^tests/'\n`,
       "steps:\n", step("run_poc").replace("    depends: worktree\n", "").replaceAll("${steps.record.outputs.question}", "exact question").replaceAll("${steps.worktree.outputs.resultpath}", resultPath),
       step("scope_gate"), step("fix_result"), step("publish"), "handler_on:\n", wait,
     ].join(""));
@@ -142,7 +141,7 @@ test("real Dagu completes declined PoCs and preserves PASS publication", { ...li
   assert.ok(address && typeof address !== "string");
   const port = address.port;
   await new Promise<void>(resolve => socket.close(() => resolve()));
-  const env = { ...process.env, DAGU_HOME: home, DAGU_HOST: "127.0.0.1", DAGU_PORT: String(port), DAGU_COORDINATOR_ENABLED: "false", PATH: `${bin}:${process.env.PATH}`, COMMENTS: join(root, "comments") };
+  const env = { ...process.env, A4S_BIN: a4sBin, DAGU_HOME: home, DAGU_HOST: "127.0.0.1", DAGU_PORT: String(port), DAGU_COORDINATOR_ENABLED: "false", PATH: `${bin}:${process.env.PATH}`, COMMENTS: join(root, "comments") };
   const command = (exe: string, args: string[], cwd = root) => execFileSync(exe, args, { cwd, env, encoding: "utf8" }).trim();
   const git = (...args: string[]) => command("git", args);
   const dagu = (...args: string[]) => command("dagu", args);

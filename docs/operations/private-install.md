@@ -2,8 +2,9 @@
 
 The [source catalog](../architecture/catalog.md) identifies owners and host
 qualifiers. npm package names are private workspace identities. The public GitHub
-repository does not imply public npm publication. Select a pinned source revision
-and keep the checkout available for every source link.
+repository does not imply public npm publication. Non-lifecycle source-linked
+packages need a durable pinned checkout. The deployed lifecycle engine and plugin
+instead come from a verified tagged release, never an installed source checkout.
 
 ## Prerequisites and development
 
@@ -12,15 +13,15 @@ and keep the checkout available for every source link.
 - Native OMP for OMP integrations; review-routing's host compatibility and Bun
   requirement are in its manifest's `peerDependencies` and `engines.bun`.
   npm installs its `devDependencies.bun` pin for tests.
-- Official Dagu 2.23.0 or newer for lifecycle runtime; Git, authenticated `gh`, `jq`,
-  Python 3 with `fcntl`, and Bash for bootstrap/execution. Semantic role jobs
-  also require Bun and the installed OMP package root selected explicitly by
-  `DAGU_OMP_ROLE_RUNTIME` in the service environment (and shell bootstrap).
-  `OMP_ROLE_RUNTIME` is not supported: Dagu 2.24.0 filters it from steps.
-  Link the lifecycle package for the service user so native `triage-reviewer`
-  and `task` discovery works independently of the coordinating session;
-  bootstrap's `dagu-role-jobs detect` checks both before adoption. See
-  [runtime deployment](deployment.md#independent-station-executors-and-reference-based-retention).
+- Official Dagu 2.23.0 or newer for lifecycle runtime; Git, authenticated `gh`,
+  `jq`, Bash and Node for the real gate preload. Install a verified platform
+  release `a4s` for initial admission and link/load its complete extracted root.
+  Python `fcntl` is required only by Node/tsx development tests, not the engine.
+- Semantic role jobs require Bun and the native OMP package root selected by
+  `DAGU_OMP_ROLE_RUNTIME` in service and bootstrap environments. Keep that variable
+  during cutover; `OMP_ROLE_RUNTIME` is filtered by Dagu. The service user's plugin
+  registration must discover `triage-reviewer` and `task`; `a4s role-jobs detect`
+  checks both without launching a role. See [cutover](deployment.md#identity-and-adoption).
 - Orca installed/running and a bound coordinator pane for Orca integration's
   actual worker lifecycle proof. Configure managed-worktree setup to run the
   repository hook and wait for its installation before checking code.
@@ -48,13 +49,14 @@ sides of renames, and aggregates workspace checks and PR-body validation into
 
 ## Whole-package OMP loading
 
-Run from the intended consumer checkout. Replace placeholders with absolute,
-canonical directories from the selected source revision:
+Run from the intended consumer checkout. The lifecycle package root is the
+verified extracted release directory, containing `a4s`, `identity.json`,
+`package.json`, `src/`, `agents/` and `skills/`:
 
 ```sh
 omp --no-extensions \
-  -e <absolute-package-directory>/packages/issue-lifecycle \
-  -e <absolute-package-directory>/packages/review-routing
+  -e <absolute-release-root> \
+  -e <absolute-source-checkout>/packages/review-routing
 ```
 
 More generally, `omp -e <absolute-package-directory>` is the supported one-off
@@ -68,33 +70,35 @@ environment sets `A4S_PRIMARY` to that station's main checkout so lifecycle
 renders can resolve `PRIMARY` without a machine path in the bundle. A
 per-checkout file `$DAGU_HOME/primaries/<workspace>` or the single-checkout
 file `$DAGU_HOME/a4s-primary` is the same binding when the variable is unset.
-Consumer policy, including base branch, comes only from committed
-`.workspace/dagu/config.json`; admission requires a valid persistent owner.
-The station operator owns queue capacity, config, service environment and
-activation. a4s does not write station config/units or restart Dagu. Inspect
-without changing the station with `dagu-feature-bundle readiness --lane <lane>`
-before initial adoption, or `dagu-feature-bundle readiness
-<primary>/.workspace/dagu/config.json` afterwards. Bootstrap reports missing
-queues, endpoint/auth and service-environment failures instead of repairing them.
+Consumer policy comes only from committed `.workspace/dagu/config.json`,
+including required `uses: a4s@v<major>` or exact `a4s@v<x.y.z>` (default `a4s@v0`).
+Initial admission resolves once, verifies and caches the exact release at
+`$DAGU_HOME/cache/a4s/<version>/`, then hands off with
+`admit --artifact '<version>@<commit>#<digest>'`. Snapshots bind absolute
+`A4S_BIN`; successors verify the parent receipt's tuple even if `uses` changes.
+Missing/corrupt artifacts fail closed, never falling back to source.
 
-For an expressly authorized persistent user installation, from the durable
-selected checkout:
+The operator owns queue capacity in Dagu config, service environment and
+activation. a4s never writes station configuration/service units or restarts
+Dagu. `a4s queue --lane <lane>` checks initial readiness; afterwards use
+`a4s queue <primary>/.workspace/dagu/config.json`. Bootstrap authors policy and
+checks readiness, not DAG installation or service repair.
+
+For an authorized persistent lifecycle installation:
 
 ```sh
-omp plugin link <absolute-package-directory>
-# For example, link the whole packages/issue-lifecycle directory, not src/status.
+omp plugin link <absolute-release-root>
 ```
 
-Link each desired extension package separately. Linked sources remain on disk;
-use stable pinned source, not a soon-to-be-deleted issue worktree. Operator-owned
-plugin registrations, service PATH, environment and model settings change only
-under their own authorization. Re-link moved package roots deliberately and
-restart OMP after lifecycle redeployment. Native `/reload-plugins` refreshes
-builtin resources. The A4S hot-reload wrapper refreshes supported existing
-implementation generations and defers busy reload through `agent_end`; changed
-shims/helpers/package bindings, new TypeScript modules, bare dependencies and
-registration/schema changes require restart. Discovery refresh is not proof that
-new module bytes loaded. See the [bounded helper evidence](../../packages/hot-reload/README.md).
+Before cutover, close admission and establish zero nonterminal runs and zero
+open role jobs. Keep `DAGU_OMP_ROLE_RUNTIME`, provision named Dagu queues and a
+reconciler pinned to a verified cache entry, then remove obsolete installed source
+checkouts, launchers/plugin links and service PATH entries once unreferenced.
+Restart OMP to load the release plugin; service activation belongs exclusively
+to the operator. Follow the complete [cutover procedure](deployment.md#identity-and-adoption).
+Other source-linked packages keep their selected checkout available; never use
+a soon-to-be-deleted issue worktree. Native resource refresh alone does not prove
+changed module bytes loaded; see [hot-reload limitations](../../packages/hot-reload/README.md).
 
 For the host-neutral Context Management library, a private TypeScript-aware
 consumer can use `npm install <absolute-package-directory>/packages/context-management`

@@ -26,11 +26,7 @@ export function queueReadiness(home: string, lane: string): string {
   }
 }
 
-const serviceTools = [
-  "bash", "git", "gh", "jq", "node", "bun", "python3", "omp", "dagu",
-  "dagu-codeql", "dagu-feature-bundle", "dagu-feature-protect", "dagu-gate", "dagu-poc-scope",
-  "dagu-pr-body", "dagu-role-jobs", "dagu-stale-recovery",
-];
+const serviceTools = ["bash", "git", "gh", "jq", "node", "omp", "dagu"];
 function missingTools(path: string): string[] {
   const directories = path.split(delimiter);
   return serviceTools.filter(tool => !directories.some(directory => {

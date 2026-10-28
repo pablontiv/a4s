@@ -14,7 +14,7 @@ steps:
   - id: recover_stale
     run: |
       set -euo pipefail
-      dagu-stale-recovery recover-scheduled
+      "$A4S_BIN" stale-recovery recover-scheduled
   - id: discover
     run: |
       set -euo pipefail
@@ -42,7 +42,7 @@ steps:
       # Page the local API from the Unix epoch. A creation-time window or a single
       # response cap must not drop an active Waiting run. A repeated cursor fails
       # closed instead of emitting a partial selection.
-      BOUND_STARTED_MS=$(python3 -c 'import time; print(time.time_ns() // 1000000)')
+      BOUND_STARTED_MS=$("$A4S_BIN" reconcile now)
       CALL_TIMEOUT=${RECONCILE_CALL_TIMEOUT_SECONDS:-8}
       BOUND_BUDGET=${RECONCILE_DISCOVER_TIMEOUT_SECONDS:-20}
       TMP=$(mktemp -d)
@@ -57,22 +57,13 @@ steps:
       bounded() {
         printf '1\n' >>"$TMP/calls"
         local seconds rc=0
-        seconds=$(python3 -c 'import time,sys; left=float(sys.argv[1])-(time.time_ns()//1000000-int(sys.argv[2]))/1000.0; cap=float(sys.argv[3]); print("%.3f"%max(0.0,min(cap,left)))' "$BOUND_BUDGET" "$BOUND_STARTED_MS" "$CALL_TIMEOUT")
-        if ! python3 -c 'import sys; raise SystemExit(0 if float(sys.argv[1])>0 else 1)' "$seconds"; then
+        seconds=$("$A4S_BIN" reconcile remaining "$BOUND_BUDGET" "$BOUND_STARTED_MS" "$CALL_TIMEOUT")
+        if ! "$A4S_BIN" reconcile positive "$seconds"; then
           echo "discover: deadline exhausted before the waiting-run list was complete" >&2
           printf '1\n' >>"$TMP/deadline"
           return 124
         fi
-        python3 - "$seconds" "$@" <<'PY' || rc=$?
-      import subprocess, sys
-      seconds = float(sys.argv[1])
-      try:
-          completed = subprocess.run(sys.argv[2:], timeout=seconds)
-      except subprocess.TimeoutExpired:
-          sys.stderr.write("discover deadline exceeded\n")
-          raise SystemExit(124)
-      raise SystemExit(completed.returncode)
-      PY
+        "$A4S_BIN" reconcile bounded discover "$seconds" "$@" || rc=$?
         if [[ "$rc" -eq 124 ]]; then printf '1\n' >>"$TMP/deadline"; fi
         return "$rc"
       }
@@ -152,7 +143,7 @@ steps:
         }
       ' "$TMP/raw")
       calls=$(wc -l <"$TMP/calls" | tr -d ' ')
-      latency=$(( $(python3 -c 'import time; print(time.time_ns() // 1000000)') - BOUND_STARTED_MS ))
+      latency=$(( $("$A4S_BIN" reconcile now) - BOUND_STARTED_MS ))
       printf 'reconcile-metric %s\n' "$(jq -nc \
         --argjson pages "$pages" --argjson inputRuns "$input" --argjson selected "$selected" \
         --argjson skipped "$skipped" --argjson repoLookups "$repo_lookups" --argjson specLookups "$spec_lookups" \
@@ -185,21 +176,12 @@ steps:
         local budget=$1 started=$2
         shift 2
         local seconds rc=0
-        seconds=$(python3 -c 'import time,sys; left=float(sys.argv[1])-(time.time_ns()//1000000-int(sys.argv[2]))/1000.0; cap=float(sys.argv[3]); print("%.3f"%max(0.0,min(cap,left)))' "$budget" "$started" "$CALL_TIMEOUT")
-        if ! python3 -c 'import sys; raise SystemExit(0 if float(sys.argv[1])>0 else 1)' "$seconds"; then
+        seconds=$("$A4S_BIN" reconcile remaining "$budget" "$started" "$CALL_TIMEOUT")
+        if ! "$A4S_BIN" reconcile positive "$seconds"; then
           echo "classify: deadline exhausted before call" >&2
           return 124
         fi
-        python3 - "$seconds" "$@" <<'PY' || rc=$?
-      import subprocess, sys
-      seconds = float(sys.argv[1])
-      try:
-          completed = subprocess.run(sys.argv[2:], timeout=seconds)
-      except subprocess.TimeoutExpired:
-          sys.stderr.write("classify deadline exceeded\n")
-          raise SystemExit(124)
-      raise SystemExit(completed.returncode)
-      PY
+        "$A4S_BIN" reconcile bounded classify "$seconds" "$@" || rc=$?
         return "$rc"
       }
       fail_run() {
@@ -216,44 +198,7 @@ steps:
           --arg retry_run "$RETRY_RUN" --argjson findings "$FINDINGS" \
           '{repo:$repo,run:$run,pr:$pr,worktree:$worktree,step:$step,iteration:$iteration,sha:$sha,class:$class,action:$action,check:$check,log:$log,cause:$cause,retry_run:$retry_run,findings:$findings}' >"$state/ci-observation.tmp"
         mv "$state/ci-observation.tmp" "$state/ci-observation.json"
-        python3 - "$state" "$CI_OBSERVATION_ID" "$THRESHOLD" <<'PY'
-      import fcntl, hashlib, json, os, pathlib, sys, tempfile
-      root, observation_id, threshold = pathlib.Path(sys.argv[1]), sys.argv[2], int(sys.argv[3])
-      if threshold < 1:
-          raise ValueError("ESCALATION_CI_BLOCKED must be a positive integer")
-      def store(path, data):
-          fd, temporary = tempfile.mkstemp(dir=root)
-          try:
-              with os.fdopen(fd, "w") as output:
-                  json.dump(data, output, sort_keys=True)
-                  output.flush()
-                  os.fsync(output.fileno())
-              os.replace(temporary, path)
-          finally:
-              if os.path.exists(temporary):
-                  os.unlink(temporary)
-      with (root / "ci-no-progress.lock").open("a") as lock:
-          fcntl.flock(lock, fcntl.LOCK_EX)
-          file = root / "ci-observation.json"
-          observation = json.loads(file.read_text())
-          state_file = root / "ci-no-progress.json"
-          state = json.loads(state_file.read_text()) if state_file.exists() else {
-              "schemaVersion": 1, "run": observation["run"], "fingerprint": None,
-              "observations": 0, "observationId": None, "requests": {}}
-          blocked = observation["class"] == "BLOCKED" and observation["action"] == "WAIT"
-          fingerprint = hashlib.sha256(json.dumps(
-              [observation[key] for key in ("run", "sha", "check", "cause")],
-              separators=(",", ":")).encode()).hexdigest() if blocked else None
-          if state["observationId"] != observation_id or state["fingerprint"] != fingerprint:
-              state["observations"] = state["observations"] + 1 if fingerprint and state["fingerprint"] == fingerprint else int(blocked)
-              state["fingerprint"], state["observationId"] = fingerprint, observation_id
-          if blocked and state["observations"] >= threshold:
-              request = state["requests"].setdefault(fingerprint, {
-                  "id": fingerprint, "observations": state["observations"]})
-              observation["decisionRequest"] = request
-          store(state_file, state)
-          store(file, observation)
-      PY
+        "$A4S_BIN" reconcile ci-no-progress "$state" "$CI_OBSERVATION_ID" "$THRESHOLD"
       }
       finish_root() {
         local calls=$1 skipped=$2 latency=$3 deadline=$4
@@ -296,7 +241,7 @@ steps:
           fail_run "$RUN" "run state directory unavailable"
           continue
         fi
-        started=$(python3 -c 'import time; print(time.time_ns() // 1000000)')
+        started=$("$A4S_BIN" reconcile now)
         skipped_repo=0
         calls=0
         deadline=0
@@ -361,7 +306,7 @@ steps:
           [[ -n "$repo" ]] || continue
           repos=$((repos + 1))
           safe=${repo//\//_}
-          started=$(python3 -c 'import time; print(time.time_ns() // 1000000)')
+          started=$("$A4S_BIN" reconcile now)
           : >"$TMP/seen-$safe"
           : >"$TMP/issues-$safe"
           page=1
@@ -445,7 +390,7 @@ steps:
             OBSERVATION="$STEP issue=unavailable"
           fi
         fi
-        latency=$(( $(python3 -c 'import time; print(time.time_ns() // 1000000)') - started ))
+        latency=$(( $("$A4S_BIN" reconcile now) - started ))
         if [[ "$ACTION" != NONE && "$ACTION" != WAIT ]]; then
           jq -nc --arg RUN "$RUN" --arg ISSUE "$ISSUE" --arg PRIMARY "$PRIMARY" --arg BRANCH "$(jq -r .branch <<<"$item")" \
             --arg PR_NUMBER "$(jq -r .pr <<<"$item")" --arg REPO "$REPO" \
@@ -530,7 +475,7 @@ steps:
   - id: observe
     run: |
       set -euo pipefail
-      BOUND_STARTED_MS=$(python3 -c 'import time; print(time.time_ns() // 1000000)')
+      BOUND_STARTED_MS=$("$A4S_BIN" reconcile now)
       CALL_TIMEOUT=${RECONCILE_CALL_TIMEOUT_SECONDS:-8}
       BOUND_BUDGET=${RECONCILE_OBSERVE_TIMEOUT_SECONDS:-20}
       STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")
@@ -541,22 +486,13 @@ steps:
       bounded() {
         printf '1\n' >>"$TMP/calls"
         local seconds rc=0
-        seconds=$(python3 -c 'import time,sys; left=float(sys.argv[1])-(time.time_ns()//1000000-int(sys.argv[2]))/1000.0; cap=float(sys.argv[3]); print("%.3f"%max(0.0,min(cap,left)))' "$BOUND_BUDGET" "$BOUND_STARTED_MS" "$CALL_TIMEOUT")
-        if ! python3 -c 'import sys; raise SystemExit(0 if float(sys.argv[1])>0 else 1)' "$seconds"; then
+        seconds=$("$A4S_BIN" reconcile remaining "$BOUND_BUDGET" "$BOUND_STARTED_MS" "$CALL_TIMEOUT")
+        if ! "$A4S_BIN" reconcile positive "$seconds"; then
           echo "reconcile deadline exhausted before call" >&2
           printf '1\n' >>"$TMP/deadline"
           return 124
         fi
-        python3 - "$seconds" "$@" <<'PY' || rc=$?
-      import subprocess, sys
-      seconds = float(sys.argv[1])
-      try:
-          completed = subprocess.run(sys.argv[2:], timeout=seconds)
-      except subprocess.TimeoutExpired:
-          sys.stderr.write("reconcile deadline exceeded\n")
-          raise SystemExit(124)
-      raise SystemExit(completed.returncode)
-      PY
+        "$A4S_BIN" reconcile bounded observe "$seconds" "$@" || rc=$?
         if [[ "$rc" -eq 124 ]]; then printf '1\n' >>"$TMP/deadline"; fi
         return "$rc"
       }
@@ -678,7 +614,7 @@ steps:
             elif [[ "$(jq -r '.mode // "required"' "$policy")" != required ]]; then
               CLASS=BLOCKED CHECK=CodeQL CAUSE="Invalid code scanning policy mode"
             else
-              if bounded dagu-codeql "$REPO" "$PR" "$SHA" "$(jq -r .security "$policy")" "$(jq -r .alerts "$policy")" >"$STATE/codeql-observation.json"; then
+              if bounded "$A4S_BIN" codeql "$REPO" "$PR" "$SHA" "$(jq -r .security "$policy")" "$(jq -r .alerts "$policy")" >"$STATE/codeql-observation.json"; then
                 codeql_class=$(jq -r .class "$STATE/codeql-observation.json")
                 if [[ "$codeql_class" != PASS ]]; then
                   CLASS=$codeql_class CHECK=CodeQL RETRY_RUN=
@@ -738,7 +674,7 @@ steps:
         fi
       fi
       calls=$(wc -l <"$TMP/calls" | tr -d ' ')
-      latency=$(( $(python3 -c 'import time; print(time.time_ns() // 1000000)') - BOUND_STARTED_MS ))
+      latency=$(( $("$A4S_BIN" reconcile now) - BOUND_STARTED_MS ))
       deadline=0
       [[ -f "$TMP/deadline" ]] && deadline=1
       printf 'reconcile-metric %s\n' "$(jq -nc --arg run "$RUN" --arg class "$CLASS" --arg action "$ACTION" \
@@ -750,44 +686,7 @@ steps:
         --arg action "$ACTION" --arg check "$CHECK" --arg log "${LOG:0:3000}" --arg cause "$CAUSE" --arg retry_run "$RETRY_RUN" --argjson findings "$FINDINGS" \
         '{repo:$repo,run:$run,pr:$pr,worktree:$worktree,step:$step,iteration:$iteration,sha:$sha,class:$class,action:$action,check:$check,log:$log,cause:$cause,retry_run:$retry_run,findings:$findings}' >"$STATE/ci-observation.tmp"
       mv "$STATE/ci-observation.tmp" "$STATE/ci-observation.json"
-      python3 - "$STATE" "${CI_OBSERVATION_ID:?Missing reconcile tick identity}" "${ESCALATION_CI_BLOCKED:-2}" <<'PY'
-      import fcntl, hashlib, json, os, pathlib, sys, tempfile
-      root, observation_id, threshold = pathlib.Path(sys.argv[1]), sys.argv[2], int(sys.argv[3])
-      if threshold < 1:
-          raise ValueError("ESCALATION_CI_BLOCKED must be a positive integer")
-      def store(path, data):
-          fd, temporary = tempfile.mkstemp(dir=root)
-          try:
-              with os.fdopen(fd, "w") as output:
-                  json.dump(data, output, sort_keys=True)
-                  output.flush()
-                  os.fsync(output.fileno())
-              os.replace(temporary, path)
-          finally:
-              if os.path.exists(temporary):
-                  os.unlink(temporary)
-      with (root / "ci-no-progress.lock").open("a") as lock:
-          fcntl.flock(lock, fcntl.LOCK_EX)
-          file = root / "ci-observation.json"
-          observation = json.loads(file.read_text())
-          state_file = root / "ci-no-progress.json"
-          state = json.loads(state_file.read_text()) if state_file.exists() else {
-              "schemaVersion": 1, "run": observation["run"], "fingerprint": None,
-              "observations": 0, "observationId": None, "requests": {}}
-          blocked = observation["class"] == "BLOCKED" and observation["action"] == "WAIT"
-          fingerprint = hashlib.sha256(json.dumps(
-              [observation[key] for key in ("run", "sha", "check", "cause")],
-              separators=(",", ":")).encode()).hexdigest() if blocked else None
-          if state["observationId"] != observation_id or state["fingerprint"] != fingerprint:
-              state["observations"] = state["observations"] + 1 if fingerprint and state["fingerprint"] == fingerprint else int(blocked)
-              state["fingerprint"], state["observationId"] = fingerprint, observation_id
-          if blocked and state["observations"] >= threshold:
-              request = state["requests"].setdefault(fingerprint, {
-                  "id": fingerprint, "observations": state["observations"]})
-              observation["decisionRequest"] = request
-          store(state_file, state)
-          store(file, observation)
-      PY
+      "$A4S_BIN" reconcile ci-no-progress "$STATE" "${CI_OBSERVATION_ID:?Missing reconcile tick identity}" "${ESCALATION_CI_BLOCKED:-2}"
       printf 'run=%s\nrepo=%s\nissue=%s\niteration=%s\nobservation=%s\nclassification=%s\n' \
         "$RUN" "$REPO" "$ISSUE" "$ITERATION" "$OBSERVATION" "$CLASS" | tee -a "$DAGU_OUTPUT_FILE"
       cat "$STATE/ci-observation.json"
@@ -816,21 +715,14 @@ steps:
       mkdir -p "$STATE" "$common/dagu-feature/transition-locks"
       locks="$STATE/transition.lock"
       if [[ -n "$pr" && "$pr" != null ]]; then
-        key=$(printf '%s\n%s\n' "$repo" "$pr" | python3 -c 'import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())')
+        key=$(printf '%s\n%s\n' "$repo" "$pr" | "$A4S_BIN" reconcile sha256)
         locks="$locks"$'\n'"$common/dagu-feature/transition-locks/$key.lock"
       fi
       export RECONCILE_LOCKS="$locks"
-      export RECONCILE_TRANSITION_STARTED_MS=$(python3 -c 'import time; print(time.time_ns() // 1000000)')
+      export RECONCILE_TRANSITION_STARTED_MS=$("$A4S_BIN" reconcile now)
       # Hold the run lock and, for a PR mutation, the shared PR lock across the
       # immediate state/iteration/SHA guard and the single side effect.
-      exec python3 -c 'import fcntl, os, sys
-      paths = sorted({p for p in os.environ.get("RECONCILE_LOCKS", "").split("\n") if p})
-      for path in paths:
-          os.makedirs(os.path.dirname(path), exist_ok=True)
-          fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
-          fcntl.flock(fd, fcntl.LOCK_EX)
-          os.set_inheritable(fd, True)
-      os.execvp(sys.argv[1], sys.argv[1:])' bash -euo pipefail -c "$(cat <<'TRANSITION_BODY'
+      exec "$A4S_BIN" reconcile lock bash -euo pipefail -c "$(cat <<'TRANSITION_BODY'
       set -euo pipefail
       CALL_TIMEOUT=${RECONCILE_CALL_TIMEOUT_SECONDS:-8}
       BOUND_BUDGET=${RECONCILE_TRANSITION_TIMEOUT_SECONDS:-20}
@@ -858,28 +750,19 @@ steps:
       finish() {
         local applied=$1 cause=$2 latency calls
         emitted=1
-        latency=$(( $(python3 -c 'import time; print(time.time_ns() // 1000000)') - RECONCILE_TRANSITION_STARTED_MS ))
+        latency=$(( $("$A4S_BIN" reconcile now) - RECONCILE_TRANSITION_STARTED_MS ))
         calls=$(wc -l <"$TMP/calls" | tr -d ' ')
         printf 'reconcile-metric %s\n' "$(jq -nc --arg action "$action" --arg run "$RUN" --arg cause "$cause" --argjson applied "$applied" --argjson calls "$calls" --argjson latencyMs "$latency" '{phase:"transition",run:$run,action:$action,applied:($applied==1),cause:$cause,calls:$calls,latencyMs:$latencyMs}')" >&2
       }
       bounded() {
         printf '1\n' >>"$TMP/calls"
         local seconds rc=0
-        seconds=$(python3 -c 'import time,sys; left=float(sys.argv[1])-(time.time_ns()//1000000-int(sys.argv[2]))/1000.0; cap=float(sys.argv[3]); print("%.3f"%max(0.0,min(cap,left)))' "$BOUND_BUDGET" "$BOUND_STARTED_MS" "$CALL_TIMEOUT")
-        if ! python3 -c 'import sys; raise SystemExit(0 if float(sys.argv[1])>0 else 1)' "$seconds"; then
+        seconds=$("$A4S_BIN" reconcile remaining "$BOUND_BUDGET" "$BOUND_STARTED_MS" "$CALL_TIMEOUT")
+        if ! "$A4S_BIN" reconcile positive "$seconds"; then
           echo "transition deadline exhausted before call" >&2
           return 124
         fi
-        python3 - "$seconds" "$@" <<'PY' || rc=$?
-      import subprocess, sys
-      seconds = float(sys.argv[1])
-      try:
-          completed = subprocess.run(sys.argv[2:], timeout=seconds)
-      except subprocess.TimeoutExpired:
-          sys.stderr.write("transition deadline exceeded\n")
-          raise SystemExit(124)
-      raise SystemExit(completed.returncode)
-      PY
+        "$A4S_BIN" reconcile bounded transition "$seconds" "$@" || rc=$?
         return "$rc"
       }
       if [[ "$action" == NONE || "$action" == WAIT ]]; then

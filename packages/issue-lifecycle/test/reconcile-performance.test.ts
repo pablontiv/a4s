@@ -11,6 +11,9 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { parseAllDocuments } from "yaml";
 import { BUNDLE_VERSION } from "../src/bundle.ts";
+import { compiledA4sBin } from "./fixtures/admission.ts";
+
+const a4sBin = compiledA4sBin();
 
 const reconcile = readFileSync(new URL("../skills/issue-execution/reconcile.yaml", import.meta.url), "utf8");
 const documents = parseAllDocuments(reconcile).map(document => document.toJS() as Record<string, unknown>);
@@ -54,7 +57,7 @@ interface RunResult { status: number | null; stdout: string; stderr: string; sta
 function runBash(source: string, env: NodeJS.ProcessEnv): Promise<RunResult> {
   const started = performance.now();
   return new Promise(resolve => {
-    const child = spawn("bash", ["-c", source], { env });
+    const child = spawn("bash", ["-c", source], { env: { A4S_BIN: a4sBin, ...env } });
     let stdout = "", stderr = "";
     child.stdout.on("data", chunk => { stdout += chunk; });
     child.stderr.on("data", chunk => { stderr += chunk; });
@@ -495,13 +498,10 @@ test("Dagu validates the reconciler and isolated ticks stay inside the minute", 
   const materialized = join(home, "dags", "reconcile.yaml");
   writeFileSync(materialized, source);
   writeFileSync(join(home, "config.yaml"), "auth:\n  mode: none\ncoordinator:\n  enabled: false\n");
-  const cli = fileURLToPath(new URL("../bin/dagu-stale-recovery.ts", import.meta.url));
-  const tsxLoader = fileURLToPath(import.meta.resolve("tsx"));
-  writeFileSync(join(bin, "dagu-stale-recovery"), `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} --import ${JSON.stringify(tsxLoader)} ${JSON.stringify(cli)} "$@"\n`, { mode: 0o755 });
   const listener = createServer();
   const port = await listen(listener);
   await new Promise<void>((resolve, reject) => listener.close(error => error ? reject(error) : resolve()));
-  const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, DAGU_HOME: home, DAGU_PORT: String(port) };
+  const env = { ...process.env, A4S_BIN: a4sBin, PATH: `${bin}:${process.env.PATH}`, DAGU_HOME: home, DAGU_PORT: String(port) };
   let server: ReturnType<typeof spawn> | undefined;
   let scheduler: ReturnType<typeof spawn> | undefined;
   let logs = "";

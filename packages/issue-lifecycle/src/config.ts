@@ -9,6 +9,7 @@ export const CONFIG_PATH = ".workspace/dagu/config.json";
 
 const LANE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const BRANCH = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
+const USES = /^a4s@v(0|[1-9]\d*)(?:\.(0|[1-9]\d*)\.(0|[1-9]\d*))?$/;
 const BLOCKER = ["ask", "auto"] as const;
 const SCANNING = ["required", "off"] as const;
 const SECURITY = ["none", "critical", "high_or_higher", "medium_or_higher", "all"] as const;
@@ -29,6 +30,7 @@ export interface EscalationBudgets {
 
 export interface LifecycleConfig {
   schemaVersion: 1;
+  uses: string;
   lane: string;
   baseBranch: string;
   gate: string;
@@ -48,6 +50,7 @@ export const POLICY_PARAMETERS = [
   "PRIMARY", "A4S_PRIMARY", "BRANCH", "BASE_BRANCH", "GATE", "REBASE_RESOLVER", "REQUIRED_CHECK",
   "A4S_BLOCKER_REPORTING", "CODEQL_SECURITY_THRESHOLD", "CODEQL_ALERTS_THRESHOLD",
   "CODE_SCANNING", "TEST_PATHS", "VALIDATION", "QUEUE_CONCURRENCY", "LANE", "REPO",
+  "USES", "A4S_BIN", "A4S_ARTIFACT",
 ] as const;
 
 export interface CommittedConfig {
@@ -105,6 +108,10 @@ function choice<T extends string>(value: unknown, label: string, allowed: readon
   return value as T;
 }
 
+export function parseUses(value: unknown): string {
+  return text(value, "config uses (expected a4s@v<major> or a4s@v<major>.<minor>.<patch>)", USES);
+}
+
 export function parseConfig(value: unknown): LifecycleConfig {
   const source = record(value, "config file");
   const schemaVersion = take(source, "schemaVersion", "config file");
@@ -114,6 +121,7 @@ export function parseConfig(value: unknown): LifecycleConfig {
   const escalationSource = record(take(source, "escalation", "config file"), "config escalation");
   const config: LifecycleConfig = {
     schemaVersion: CONFIG_SCHEMA_VERSION,
+    uses: parseUses(take(source, "uses", "config file")),
     lane: text(take(source, "lane", "config file"), "config lane", LANE),
     baseBranch: text(take(source, "baseBranch", "config file"), "config baseBranch", BRANCH),
     gate: text(take(source, "gate", "config file"), "config gate"),
@@ -145,6 +153,7 @@ export function serializeConfig(config: LifecycleConfig): string {
 export function exampleConfig(overrides: Partial<LifecycleConfig> = {}): LifecycleConfig {
   return parseConfig({
     schemaVersion: CONFIG_SCHEMA_VERSION,
+    uses: overrides.uses ?? "a4s@v0",
     lane: overrides.lane ?? "fixture",
     baseBranch: overrides.baseBranch ?? "main",
     gate: overrides.gate ?? "true",
@@ -182,6 +191,7 @@ export function configFromEnvironment(env: NodeJS.ProcessEnv): LifecycleConfig {
   };
   return parseConfig({
     schemaVersion: CONFIG_SCHEMA_VERSION,
+    uses: env.USES ?? "a4s@v0",
     lane: required("REPO"),
     baseBranch: required("BASE_BRANCH"),
     gate: required("GATE"),

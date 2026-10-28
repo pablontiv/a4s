@@ -58,7 +58,7 @@ test("native feature role stages retain historical cancellation snapshot coverag
     ["implement", ["SUMMARY", "MESSAGE", "IMPLEMENTER"]],
   ] as const) {
     const native = current.steps.find((step: Step) => step.id === id);
-    assert.match(native.run, new RegExp(`dagu-role-jobs stage ${id}`));
+    assert.match(native.run, new RegExp(`"\\$A4S_BIN" role-jobs stage ${id}`));
     const checkpoint = historical.steps.find((step: Step) => step.id === id);
     assert.equal(checkpoint.action, "human.task");
     assert.deepEqual(checkpoint.with.form.properties.CANCEL, { type: "string", enum: ["yes", "no"] });

@@ -9,67 +9,39 @@ import { parse } from "yaml";
 
 const packageDir = fileURLToPath(new URL("../", import.meta.url));
 const skillDir = join(packageDir, "skills", "issue-execution");
-const renders = ["feature.yaml", "poc.yaml", "discovery.yaml", "planning.yaml", "reconcile.yaml"];
-
-function packageBins(): string[] {
-  return Object.keys(JSON.parse(readFileSync(join(packageDir, "package.json"), "utf8")).bin as Record<string, string>);
-}
-
-/** Package executables invoked by a rendered lifecycle DAG, ignoring stamps and comments. */
-export function renderPackageBins(sources: ReadonlyMap<string, string>, bins: readonly string[]): string[] {
-  const called = new Set<string>();
-  for (const source of sources.values()) {
-    const lines = source.split("\n").filter(line => !line.trimStart().startsWith("#") && !bins.some(bin => line.includes(`${bin}=`)));
-    const text = lines.join("\n");
-    for (const bin of bins) {
-      if (new RegExp(`(?:^|[^A-Za-z0-9_-])${bin}(?:[^A-Za-z0-9_-]|$)`, "m").test(text)) called.add(bin);
-    }
-  }
-  return [...called].sort();
-}
-
-export function unverifiedRenderBins(called: readonly string[], verified: readonly string[]): string[] {
-  const have = new Set(verified);
-  return called.filter(bin => !have.has(bin));
-}
-
 function bootstrap(): { steps: Array<{ id: string; run?: string }> } {
-  return parse(readFileSync(join(skillDir, "dagu-feature-bootstrap.yaml"), "utf8")) as { steps: Array<{ id: string; run?: string }> };
+  return parse(readFileSync(join(skillDir, "dagu-feature-bootstrap.yaml"), "utf8"));
 }
 
-function detectTools(script: string): string[] {
-  const match = /for tool in ([^;\n]+); do/.exec(script);
-  assert.ok(match?.[1], "detect must name the commands it verifies");
-  return match[1].trim().split(/\s+/);
-}
-
-test("bootstrap detect verifies every package executable a rendered DAG calls", () => {
-  const bins = packageBins();
-  const sources = new Map(renders.map(name => [name, readFileSync(join(skillDir, name), "utf8")]));
-  const called = renderPackageBins(sources, bins);
-  const script = bootstrap().steps.find(step => step.id === "detect")?.run ?? "";
-  const tools = detectTools(script);
-  assert.ok(called.includes("dagu-gate"));
-  assert.ok(called.includes("dagu-stale-recovery"));
-  assert.deepEqual(unverifiedRenderBins(called, tools), []);
-  assert.deepEqual(unverifiedRenderBins(["dagu-gate"], tools.filter(tool => tool !== "dagu-gate")), ["dagu-gate"]);
-  const requirements = readFileSync(join(skillDir, "SKILL.md"), "utf8").split("## Requirements\n")[1]?.split("\n## ")[0] ?? "";
-  for (const bin of called) assert.match(requirements, new RegExp(`\`${bin}\``));
-  assert.match(script, /bootstrap detect: required command not found: %s/);
+test("bootstrap checks one release executable and never installs station assets", () => {
+  const bins = JSON.parse(readFileSync(join(packageDir, "package.json"), "utf8")).bin;
+  assert.deepEqual(bins, { a4s: "./src/cli.ts" });
+  const spec = bootstrap();
+  assert.deepEqual(spec.steps.map(step => step.id), ["detect", "config", "worktrees", "write_config", "readiness", "github", "confirm"]);
+  const detect = spec.steps.find(step => step.id === "detect")!.run!;
+  assert.match(detect, /for tool in git gh jq dagu "\$A4S_BIN"; do/);
+  assert.match(detect, /"\$A4S_BIN" role-jobs detect/);
+  const scripts = spec.steps.map(step => step.run ?? "").join("\n");
+  assert.doesNotMatch(scripts, /install-reconciler|seal-checkout|SOURCE_SHA|SOURCE_NWO|SKILL_DIR|\$DAGU_HOME\/dags|dagu validate/);
+  for (const id of ["readiness", "confirm"]) {
+    assert.match(spec.steps.find(step => step.id === id)!.run!, /"\$A4S_BIN" queue "\$STAGE"/);
+  }
 });
 
-test("bootstrap detect fails with the missing render executable's name", () => {
+test("bootstrap detect fails with the missing release executable's path", () => {
   const root = mkdtempSync(join(tmpdir(), "a4s-detect-"));
   try {
     const bin = join(root, "bin");
     mkdirSync(bin);
-    const script = bootstrap().steps.find(step => step.id === "detect")?.run ?? "";
-    for (const tool of detectTools(script).filter(tool => tool !== "dagu-gate")) {
+    for (const tool of ["git", "gh", "jq", "dagu"]) {
       writeFileSync(join(bin, tool), "#!/bin/sh\nexit 0\n");
       chmodSync(join(bin, tool), 0o755);
     }
-    const result = spawnSync("bash", ["-c", script], { encoding: "utf8", env: { PATH: `${bin}:/usr/bin:/bin` } });
-    assert.notEqual(result.status, 0, result.stderr);
-    assert.match(result.stderr, /bootstrap detect: required command not found: dagu-gate/, result.stderr);
+    const missing = join(root, "missing-a4s");
+    const result = spawnSync("bash", ["-c", bootstrap().steps.find(step => step.id === "detect")!.run!], {
+      encoding: "utf8", env: { PATH: `${bin}:/usr/bin:/bin`, A4S_BIN: missing },
+    });
+    assert.notEqual(result.status, 0);
+    assert.ok(result.stderr.includes(`bootstrap detect: required command not found: ${missing}`), result.stderr);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

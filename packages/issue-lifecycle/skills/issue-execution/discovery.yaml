@@ -335,7 +335,8 @@ steps:
       backend_run_id=""
       if test -s "$units"; then
         backend_run_id="breakdown-$RUN"
-        dagu-feature-bundle enqueue --run-id "$backend_run_id" "$PRIMARY/.workspace/dagu/dags/planning.yaml" -- \
+        parent_receipt=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN/receipt.json")
+        "$A4S_BIN" enqueue --parent "$parent_receipt" --run-id "$backend_run_id" "$PRIMARY/.workspace/dagu/dags/planning.yaml" -- \
           UNITS_FROM="$units" SOURCE=discovery \
           OMP_SESSION_ID="$OMP_SESSION_ID"
       else

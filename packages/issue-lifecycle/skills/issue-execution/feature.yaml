@@ -90,7 +90,7 @@ env:
         mkdir -p "$(dirname "$key")"
         attempt=0
         # The syscall result must distinguish creation from a concurrent EEXIST.
-        until python3 -c 'import os, sys; os.mkdir(sys.argv[1])' "$key.lock" 2>/dev/null; do
+        until mkdir "$key.lock" 2>/dev/null; do
           attempt=$((attempt + 1))
           [[ "$attempt" -lt 100 ]] || { echo "dagu-feature: ownership lock unavailable $key.lock" >&2; exit 1; }
           sleep 0.1
@@ -225,8 +225,8 @@ steps:
     depends: admit
     run: |
       set -euo pipefail
-      dagu-feature-bundle escalation route
-      dagu-role-jobs stage triage
+      "$A4S_BIN" escalation route
+      "$A4S_BIN" role-jobs stage triage
     outputs:
       - name: POC
       - name: QUESTION
@@ -247,7 +247,7 @@ steps:
       set -euo pipefail
 
       if [[ "$POC" == no ]]; then
-        dagu-role-jobs verify-triage
+        "$A4S_BIN" role-jobs verify-triage
       fi
 
       STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")
@@ -341,7 +341,7 @@ steps:
       - REQUIRED_TARGETS: ${steps.triage.outputs.REQUIRED_TARGETS}
       - AUTHORIZED_TARGETS: ${steps.triage.outputs.AUTHORIZED_TARGETS}
       - SCOPE_BASIS: ${steps.triage.outputs.SCOPE_BASIS}
-    run: dagu-poc-scope assess
+    run: '"$A4S_BIN" poc-scope assess'
     outputs:
       - name: SCOPE_DECISION
       - name: SCOPE_REQUEST
@@ -393,7 +393,7 @@ steps:
       - POC_REQUIRED_TARGETS: ${steps.poc_scope_decision.outputs.REQUIRED_TARGETS}
       - POC_AUTHORIZED_TARGETS: ${steps.poc_scope_decision.outputs.AUTHORIZED_TARGETS}
       - POC_SCOPE_BASIS: ${steps.poc_scope_decision.outputs.BASIS}
-    run: dagu-poc-scope decide
+    run: '"$A4S_BIN" poc-scope decide'
     outputs:
       - name: POC_QUESTION
       - name: POC_REQUIRED_TARGETS
@@ -413,7 +413,8 @@ steps:
       - SCOPE_REQUEST: ${steps.poc_scope_prepare.outputs.SCOPE_REQUEST}
     run: |
       set -euo pipefail
-      dagu-feature-bundle enqueue --run-id "poc-$RUN" "$PRIMARY/.workspace/dagu/dags/poc.yaml" -- \
+      parent_receipt=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN/receipt.json")
+      "$A4S_BIN" enqueue --parent "$parent_receipt" --run-id "poc-$RUN" "$PRIMARY/.workspace/dagu/dags/poc.yaml" -- \
         ISSUE="$ISSUE" QUESTION="$QUESTION" OMP_SESSION_ID="$OMP_SESSION_ID" \
         REQUIRED_TARGETS="$REQUIRED_TARGETS" AUTHORIZED_TARGETS="$AUTHORIZED_TARGETS" \
         SCOPE_BASIS="$SCOPE_BASIS" SCOPE_REQUEST="$SCOPE_REQUEST"
@@ -630,7 +631,7 @@ steps:
     preconditions:
       - condition: "${steps.triage.outputs.POC}"
         expected: "no"
-    run: dagu-feature-bundle escalation check
+    run: '"$A4S_BIN" escalation check'
     outputs:
       - name: ESCALATE
       - name: REQUEST
@@ -685,14 +686,14 @@ steps:
       - ACTION: ${steps.escalation.outputs.ACTION}
       - REASON: ${steps.escalation.outputs.REASON}
       - DECIDED_BY: ${steps.escalation.outputs.DECIDED_BY}
-    run: dagu-feature-bundle escalation decision
+    run: '"$A4S_BIN" escalation decision'
 
   - id: implement
     depends: escalation_decision
     preconditions:
       - condition: "${steps.triage.outputs.POC}"
         expected: "no"
-    run: dagu-role-jobs stage implement
+    run: '"$A4S_BIN" role-jobs stage implement'
     outputs:
       - name: SUMMARY
       - name: MESSAGE
@@ -825,7 +826,7 @@ steps:
         done
       fi
       mv "$scratch/candidate.json" "$scratch/diff.patch" "$STATE/"
-      dagu-feature-protect refresh
+      "$A4S_BIN" protect refresh
       printf 'candidate_sha=%s\n' "$sha"
 
   - id: checkpoint_push
@@ -928,7 +929,7 @@ steps:
     preconditions:
       - condition: "${steps.triage.outputs.POC}"
         expected: "no"
-    run: dagu-feature-bundle escalation check
+    run: '"$A4S_BIN" escalation check'
     outputs:
       - name: ESCALATE
       - name: REQUEST
@@ -967,7 +968,7 @@ steps:
       - ACTION: ${steps.rebase_escalation.outputs.ACTION}
       - REASON: ${steps.rebase_escalation.outputs.REASON}
       - DECIDED_BY: ${steps.rebase_escalation.outputs.DECIDED_BY}
-    run: dagu-feature-bundle escalation decision
+    run: '"$A4S_BIN" escalation decision'
 
   - id: rebase
     depends: rebase_escalation_decision
@@ -1041,11 +1042,11 @@ steps:
             '.sha=$sha | .base=$base | .tree=$tree' "$STATE/historical/$before/candidate.json" > "$STATE/candidate.json"
           git -C "$WORKTREE" diff --binary --full-index "$(cat "$STATE/base")" "$after" > "$STATE/diff.patch"
         fi
-        dagu-feature-protect refresh
+        "$A4S_BIN" protect refresh
         printf 'rebased_sha=%s\n' "$after"
       else
         git -C "$WORKTREE" diff --name-only --diff-filter=U > "$STATE/conflict-files"
-        dagu-feature-bundle escalation finding conflict "$STATE/conflict-files"
+        "$A4S_BIN" escalation finding conflict "$STATE/conflict-files"
         # Keep the resolved/nonconflicting delivery and conflict markers for implement.
         git -C "$WORKTREE" rebase --quit
         git -C "$WORKTREE" symbolic-ref HEAD "refs/heads/$BRANCH"
@@ -1093,38 +1094,38 @@ steps:
     run: |
       set -euo pipefail
       umask 0022
-      A4S_GATE_STEP_STARTED_MS=$(python3 -c 'import time; print(time.time_ns() // 1000000)')
+      A4S_GATE_STEP_STARTED_MS=$("$A4S_BIN" reconcile now)
       export A4S_GATE_STEP_STARTED_MS
       STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")
-      A4S_GATE_HELPER=$(dagu-gate path)
-      A4S_GATE_JOURNAL=$(node "$A4S_GATE_HELPER" begin "$STATE")
+      A4S_GATE_HELPER=$("$A4S_BIN" gate path)
+      A4S_GATE_JOURNAL=$("$A4S_BIN" gate begin "$STATE")
       export A4S_GATE_HELPER A4S_GATE_JOURNAL
       # The helper shares one host-path slot with shell-launched full suites.
       # Exit 86 releases the slot while integration protection waits.
       export A4S_INTEGRATION_WAITER=$$
-      exec python3 "$(dirname "$A4S_GATE_HELPER")/heavy-slot.py" --gate "$RUN" bash -euo pipefail -c "$(cat <<'GATE_BODY'
+      exec "$A4S_BIN" heavy-slot --gate "$RUN" bash -euo pipefail -c "$(cat <<'GATE_BODY'
       admit_status=0
-      dagu-feature-protect admit --checkpoint gate || admit_status=$?
+      "$A4S_BIN" protect admit --checkpoint gate || admit_status=$?
       if [[ "$admit_status" -eq 86 ]]; then exit 86; fi
       if [[ "$admit_status" -ne 0 ]]; then exit "$admit_status"; fi
-      trap 'status=$?; trap - EXIT; node "$A4S_GATE_HELPER" finish "$status" || { test "$status" != 0 || status=1; }; exit "$status"' EXIT
-      node "$A4S_GATE_HELPER" start pre_checks
+      trap 'status=$?; trap - EXIT; "$A4S_BIN" gate finish "$status" || { test "$status" != 0 || status=1; }; exit "$status"' EXIT
+      "$A4S_BIN" gate start pre_checks
       cd "$WORKTREE"
       STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")
       sha=$(jq -r .sha "$STATE/candidate.json")
       test "$(git rev-parse HEAD)" = "$sha"
       test "$(git branch --show-current)" = "$BRANCH"
       test -z "$(git status --porcelain)"
-      node "$A4S_GATE_HELPER" end pre_checks 0
-      node "$A4S_GATE_HELPER" start command
+      "$A4S_BIN" gate end pre_checks 0
+      "$A4S_BIN" gate start command
       status=0
       env -u GH_TOKEN -u GITHUB_TOKEN NODE_OPTIONS="${NODE_OPTIONS:-} --require \"$A4S_GATE_HELPER\"" bash -euo pipefail -c "$GATE" 2>&1 | tee "$STATE/gate-output.log" || status=$?
-      node "$A4S_GATE_HELPER" end command "$status"
+      "$A4S_BIN" gate end command "$status"
       if (( status != 0 )); then
-        dagu-feature-bundle escalation finding gate "$STATE/gate-output.log"
+        "$A4S_BIN" escalation finding gate "$STATE/gate-output.log"
         exit "$status"
       fi
-      node "$A4S_GATE_HELPER" start post_checks
+      "$A4S_BIN" gate start post_checks
       status=$(git status --porcelain)
       if [[ -n "$status" ]]; then
         printf 'gate: worktree %s has changes after GATE:\n' "$WORKTREE" >&2
@@ -1135,7 +1136,7 @@ steps:
       test "$(git rev-parse HEAD)" = "$sha"
       printf 'tested_sha=%s\n' "$sha" | tee -a "${DAGU_OUTPUT_FILE:-/dev/null}"
       git rev-parse HEAD > "$STATE/tested-sha"
-      node "$A4S_GATE_HELPER" end post_checks 0
+      "$A4S_BIN" gate end post_checks 0
       GATE_BODY
       )"
     outputs:
@@ -1247,7 +1248,7 @@ steps:
       export A4S_INTEGRATION_WAITER=$$
       while true; do
         integration_status=0
-        dagu-feature-protect admit --checkpoint push || integration_status=$?
+        "$A4S_BIN" protect admit --checkpoint push || integration_status=$?
         if [[ "$integration_status" -eq 0 ]]; then break; fi
         if [[ "$integration_status" -ne 86 ]]; then exit "$integration_status"; fi
         sleep "${A4S_INTEGRATION_POLL_SEC:-1}"
@@ -1317,8 +1318,8 @@ steps:
       test -z "$(git status --porcelain)"
       jq -e --arg sha "$sha" --arg gate "$GATE" '.sha == $sha and .gate == $gate' "$STATE/gate.json" >/dev/null
       test "$(git ls-remote origin "refs/heads/$BRANCH" | cut -f1)" = "$sha"
-      dagu-pr-body render "$STATE" "$ISSUE" > "$STATE/pr-body.md"
-      dagu-pr-body validate "$STATE/pr-body.md"
+      "$A4S_BIN" pr-body render "$STATE" "$ISSUE" > "$STATE/pr-body.md"
+      "$A4S_BIN" pr-body validate "$STATE/pr-body.md"
       if test -n "$PR_NUMBER"; then
         test "$(gh pr view "$PR_NUMBER" --json state --jq .state)" = OPEN
         test "$(gh pr view "$PR_NUMBER" --json headRefName --jq .headRefName)" = "$BRANCH"
@@ -1352,7 +1353,7 @@ steps:
           pr=$(gh pr view "${PR_NUMBER:-$BRANCH}" -R "$repo" --json number --jq .number)
           jq -n --arg sha "$sha" --arg security "$CODEQL_SECURITY_THRESHOLD" --arg alerts "$CODEQL_ALERTS_THRESHOLD" \
             '{sha:$sha,mode:"required",security:$security,alerts:$alerts}' >"$STATE/codeql-policy.json"
-          dagu-codeql "$repo" "$pr" "$sha" "$CODEQL_SECURITY_THRESHOLD" "$CODEQL_ALERTS_THRESHOLD" >"$STATE/codeql-observation.json"
+          "$A4S_BIN" codeql "$repo" "$pr" "$sha" "$CODEQL_SECURITY_THRESHOLD" "$CODEQL_ALERTS_THRESHOLD" >"$STATE/codeql-observation.json"
           cat "$STATE/codeql-observation.json"
           ;;
         *) printf 'Invalid CODE_SCANNING policy: %s\n' "${CODE_SCANNING:-}" >&2; exit 1 ;;
@@ -1365,7 +1366,7 @@ steps:
       export A4S_INTEGRATION_WAITER=$$
       while true; do
         integration_status=0
-        dagu-feature-protect admit --checkpoint auto_merge || integration_status=$?
+        "$A4S_BIN" protect admit --checkpoint auto_merge || integration_status=$?
         if [[ "$integration_status" -eq 0 ]]; then break; fi
         if [[ "$integration_status" -ne 86 ]]; then exit "$integration_status"; fi
         sleep "${A4S_INTEGRATION_POLL_SEC:-1}"
@@ -1480,7 +1481,7 @@ steps:
       policy="$STATE/codeql-policy.json"
       test "$(jq -r .sha "$policy")" = "$sha"
       if [[ "$(jq -r '.mode // "required"' "$policy")" != off ]]; then
-        codeql=$(dagu-codeql "$repo" "$(gh pr view "$pr_ref" -R "$repo" --json number --jq .number)" "$sha" "$(jq -r .security "$policy")" "$(jq -r .alerts "$policy")")
+        codeql=$("$A4S_BIN" codeql "$repo" "$(gh pr view "$pr_ref" -R "$repo" --json number --jq .number)" "$sha" "$(jq -r .security "$policy")" "$(jq -r .alerts "$policy")")
         jq -e '.class == "PASS"' <<<"$codeql"
       fi
       [[ "$(gh pr view "$pr_ref" -R "$repo" --json headRefOid --jq .headRefOid)" == "$sha" ]] ||
@@ -1548,9 +1549,9 @@ steps:
       [[ "$MODE" != true ]] || printf 'true\n' > "$STATE/cleanup-close"
       [[ ! -f "$STATE/cleanup-close" ]] || MODE=true
       if [[ "$MODE" == true ]]; then
-        dagu-feature-protect release-auto --reason close_gate
+        "$A4S_BIN" protect release-auto --reason close_gate
       else
-        dagu-feature-protect release-auto --reason terminal
+        "$A4S_BIN" protect release-auto --reason terminal
       fi
       [[ -f "$STATE/cleanup-phase" ]] || printf 'identify\n' > "$STATE/cleanup-phase"
       phase=identify
@@ -1693,50 +1694,6 @@ steps:
             diagnostic "checkpoint SHA changed: $checkpoint_sha expected $expected_checkpoint"
           git -C "$PRIMARY" push "--force-with-lease=$checkpoint:$expected_checkpoint" origin ":$checkpoint" ||
             diagnostic "checkpoint $checkpoint deletion failed"
-        fi
-      fi
-      if [[ "$MODE" == true && ! -f "$STATE/bootstrap-enqueued" ]]; then
-        api_repo=$(gh repo view "$repo" --json nameWithOwner --jq .nameWithOwner) ||
-          diagnostic "PR #$pr_number repository lookup failed"
-        metadata=$(gh api "repos/$api_repo/pulls/$pr_number") ||
-          diagnostic "PR #$pr_number changed-file metadata lookup failed"
-        count=$(jq -ers '
-          if length != 1 then error("expected one metadata document") else .[0] end |
-          if type != "object" then error("invalid PR metadata")
-          elif (.changed_files | type) != "number" then error("invalid changed_files")
-          elif .changed_files < 0 or .changed_files != (.changed_files | floor) then error("invalid changed_files")
-          elif .changed_files >= 3000 then error("changed_files reaches the 3000-file endpoint ceiling")
-          else .changed_files end
-        ' <<<"$metadata") || diagnostic "PR #$pr_number invalid changed-file metadata or endpoint ceiling"
-        pages=$(gh api --paginate --slurp "repos/$api_repo/pulls/$pr_number/files?per_page=100") ||
-          diagnostic "PR #$pr_number changed-file pages lookup failed"
-        bootstrap_needed=$(jq -ers --argjson count "$count" '
-          if length != 1 then error("expected one files document") else .[0] end |
-          if type != "array" then error("invalid files pages")
-          elif length == 0 then error("missing files pages")
-          elif any(.[]; type != "array") then error("invalid files page")
-          elif any(.[]; length > 100) then error("oversized files page")
-          elif any(.[0:-1][]; length != 100) then error("incomplete files page")
-          elif any(.[][]; type != "object") then error("invalid file record")
-          elif any(.[][]; (.filename | type) != "string") then error("invalid filename")
-          elif any(.[][]; .filename | length == 0) then error("empty filename")
-          else
-            [.[][] | .filename] as $files
-            | if ($files | length) != $count then error("changed-file count mismatch")
-              elif ($files | unique | length) != $count then error("duplicate filenames")
-              else any($files[]; test("^packages/issue-lifecycle/(skills/|CHANGELOG\\.md$)")) | tostring
-              end
-          end
-        ' <<<"$pages") || diagnostic "PR #$pr_number invalid or incomplete changed-file evidence"
-        if [[ "$bootstrap_needed" == true ]]; then
-          skill_dir="$PRIMARY/packages/issue-lifecycle/skills/issue-execution"
-          version=$(jq -er '.version | select(type == "string" and length > 0)' "$PRIMARY/packages/issue-lifecycle/package.json")
-          bootstrap_run="bootstrap-a4s-v${version//./-}"
-          dagu enqueue --run-id "$bootstrap_run" "$skill_dir/dagu-feature-bootstrap.yaml" -- \
-            PRIMARY="$PRIMARY" SKILL_DIR="$skill_dir" ||
-            diagnostic "bootstrap $bootstrap_run enqueue failed, expected re-seal queued"
-          printf '%s\n' "$bootstrap_run" > "$STATE/bootstrap-enqueued"
-          printf 'bootstrap=%s version=%s\n' "$bootstrap_run" "$version"
         fi
       fi
       record complete

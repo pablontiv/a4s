@@ -456,8 +456,8 @@ test("each required semantic stage has a registered role contract and Dagu consu
     for (const [stage, outputs] of [["triage", ["POC", "QUESTION", "BASIS", "REVIEW", "REQUIRED_TARGETS", "AUTHORIZED_TARGETS", "SCOPE_BASIS"]], ["implement", ["SUMMARY", "MESSAGE", "IMPLEMENTER"]]] as const) {
       const node = dag.steps.find((step: { id: string }) => step.id === stage);
       assert.equal(node.run, stage === "triage"
-        ? "set -euo pipefail\ndagu-feature-bundle escalation route\ndagu-role-jobs stage triage\n"
-        : "dagu-role-jobs stage implement");
+        ? 'set -euo pipefail\n"$A4S_BIN" escalation route\n"$A4S_BIN" role-jobs stage triage\n'
+        : '"$A4S_BIN" role-jobs stage implement');
       assert.deepEqual(node.outputs.map((output: { name: string }) => output.name), outputs);
     }
     assert.equal(dag.steps.find((step: { id: string }) => step.id === "validation").depends, "recover_gate_cancellation");

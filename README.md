@@ -65,12 +65,16 @@ A coordinating session is a sprint. `refine` investigates needs;
 assigned feature/PoC work. Goal checks and Definition of Done are ceremony
 content, not extra lifecycle checkpoints. Reports alone do not authorize action.
 
-Main is the only active lane: independent `a4s` clone, branch `main`, queue `a4s`,
-with the approved installed controller/reconciler. The temporary v1 lane was
-retired after release, adoption and post-release proof (#435–#438). The
-[operating runbook](docs/operations/deployment.md) records retirement and evidence
-boundaries. Native links, scheduler configuration, GitHub settings and release
-adoption remain separately authorized operator work.
+Main is the only active lane: independent `a4s` clone, branch `main`, queue `a4s`.
+The temporary v1 lane was retired after release and proof (#435–#438).
+The [operating runbook](docs/operations/deployment.md) separates historical
+station evidence from the release cutover. Consumer config selects `uses`; root
+admission verifies a release into `$DAGU_HOME/cache/a4s/<version>/` and hands off
+to its compiled executable. Successors keep the parent's artifact tuple. a4s
+never writes station config or restarts services. Initial release/plugin
+installation, runtime environment, Dagu queue capacity and pinned reconciler are
+operator work; drain all nonterminal runs/open role jobs before removing old
+installed checkouts and their service PATH entries.
 
 ## Development
 
@@ -89,7 +93,7 @@ access to the locked dependencies is required. Shared development tools are
 declared once in root `devDependencies` and resolved by workspace scripts.
 The lifecycle's `test/version-pins.test.ts` rejects copied Dagu, Node and shared
 development-tool versions in tracked source; manifests own compatibility ranges,
-and historical evidence and adopted DAG stamps remain unchanged.
+and protected historical evidence remains unchanged.
 Root and CI run all eight workspace test suites and seven declared typechecks;
 the optional-host tool-row workspace is test-only because its renderer types
 belong to the consumer's Pion host. See

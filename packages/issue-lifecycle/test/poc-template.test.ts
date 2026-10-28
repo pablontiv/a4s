@@ -9,8 +9,9 @@ import { fileURLToPath } from "node:url";
 import { withResourceGuard } from "./resource-fixtures.ts";
 import { approvedPocScope, assessPocScope, decidePocScope, inconclusiveCause, requirePocScope, type PocScopeInput } from "../src/poc-scope.ts";
 import { exampleConfig, serializeConfig } from "../src/config.ts";
-import { admit } from "../src/admission.ts";
+import { preflightAdmission } from "../src/admission.ts";
 import { parseReview } from "../src/triage/schema.ts";
+import { a4sBin } from "./fixtures/a4s.ts";
 
 function withConsumerConfig(primary: string, home: string, run: () => void): void {
   const config = join(primary, ".workspace", "dagu", "config.json");
@@ -99,7 +100,6 @@ function pocFixture() {
   const bin = join(root, "bin");
   mkdirSync(primary);
   mkdirSync(bin);
-  symlinkSync(fileURLToPath(new URL("../bin/dagu-pr-body.mjs", import.meta.url)), join(bin, "dagu-pr-body"));
   execFileSync("git", ["init", "-q", primary]);
   execFileSync("git", ["init", "--bare", "-q", join(root, "origin.git")]);
   execFileSync("git", ["-C", primary, "remote", "add", "origin", join(root, "origin.git")]);
@@ -131,14 +131,18 @@ case "$1 $2" in
   *) printf 'unexpected gh call: %s\\n' "$*" >&2; exit 1 ;;
 esac
 `);
-  writeFileSync(join(bin, "dagu-feature-bundle"), `#!/bin/bash
+  writeFileSync(join(bin, "a4s"), `#!/bin/bash
 set -euo pipefail
-jq -nc --args '$ARGS.positional' -- "$@" >> "$FAKE_ENQUEUES"
+if [[ "$1" == enqueue ]]; then
+  jq -nc --args '$ARGS.positional' -- "$@" >> "$FAKE_ENQUEUES"
+else
+  exec ${JSON.stringify(a4sBin)} "$@"
+fi
 `);
   chmodSync(join(bin, "gh"), 0o755);
-  chmodSync(join(bin, "dagu-feature-bundle"), 0o755);
+  chmodSync(join(bin, "a4s"), 0o755);
   const env = {
-    ...process.env, DAGU_PARAMS_JSON: "{}", PRIMARY: primary,
+    ...process.env, A4S_BIN: join(bin, "a4s"), DAGU_PARAMS_JSON: "{}", PRIMARY: primary,
     WORKTREE: join(root, "worktree"), RUN: "existing-issue", ISSUE: "41",
     QUESTION: "", BASE_BRANCH: "main", OMP_SESSION_ID: "same-session",
     FAKE_GH_CALLS: calls, FAKE_ISSUE: issue, FAKE_PAGES: pages, FAKE_ENQUEUES: enqueues,
@@ -213,7 +217,8 @@ for (const origin of ["backlog", "feature-triage"] as const) {
       assert.equal(promoted.status, 0, promoted.stderr);
       const enqueues = readFileSync(fixture.enqueues, "utf8").trim().split("\n").map(line => JSON.parse(line));
       assert.deepEqual(enqueues, [[
-        "enqueue", "--run-id", "feature-existing-issue",
+        "enqueue", "--parent", join(fixture.primary, ".git", "dagu-feature", "runs", "existing-issue", "receipt.json"),
+        "--run-id", "feature-existing-issue",
         join(fixture.primary, ".workspace", "dagu", "dags", "feature.yaml"), "--",
         "ISSUE=41", "OMP_SESSION_ID=same-session",
         "POC_BASIS=https://example.test/comments/9",
@@ -495,7 +500,7 @@ test("triage compares concrete required targets with the operator-authorized rou
     const dag = join(fixture.root, "poc.yaml");
     writeFileSync(dag, "name: poc\n");
     withConsumerConfig(fixture.primary, join(fixture.root, "dagu-home"), () => {
-      assert.throws(() => admit({ cwd: fixture.primary, dag, run: "scope-blocked", params: [
+      assert.throws(() => preflightAdmission({ cwd: fixture.primary, dag, run: "scope-blocked", params: [
         "ISSUE=41", "OMP_SESSION_ID=owner-session", `QUESTION=${input.question}`, `REQUIRED_TARGETS=${JSON.stringify(input.requiredTargets)}`,
         `AUTHORIZED_TARGETS=${JSON.stringify(input.authorizedTargets)}`, `SCOPE_BASIS=${input.basis}`,
       ] }), /POC_SCOPE_DECISION_REQUIRED/, "direct bundle admission enforces the same boundary before enqueue");
@@ -636,7 +641,7 @@ test("adoption escalation thresholds are immutable in PoC admission", () => {
     const dag = join(fixture.root, "poc.yaml");
     writeFileSync(dag, "name: poc\n");
     withConsumerConfig(fixture.primary, join(fixture.root, "dagu-home"), () => {
-      assert.throws(() => admit({ cwd: fixture.primary, dag, run: "scope-overridden",
+      assert.throws(() => preflightAdmission({ cwd: fixture.primary, dag, run: "scope-overridden",
         params: ["ISSUE=41", "ESCALATION_SECONDS=999999"] }), /admission rejected run parameter: ESCALATION_SECONDS/);
     });
   } finally { fixture.cleanup(); }

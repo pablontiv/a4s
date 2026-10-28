@@ -9,6 +9,9 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import type { Receipt } from "../src/admission.ts";
+import { fixtureArtifact } from "./fixtures/artifact.ts";
+import { identity } from "../src/identity.ts";
+import { USED_CONTRACTS } from "../src/artifact-receipt.ts";
 
 const command = fileURLToPath(new URL("../bin/dagu-feature-prioritize.ts", import.meta.url));
 const execute = promisify(execFile);
@@ -20,6 +23,8 @@ async function fixture(ids: string[], options: { waiting?: boolean; failure?: st
   const bin = join(root, "bin");
   mkdirSync(bin);
   execFileSync("git", ["init", "-q", root]);
+  const admitted = options.admitted !== false;
+  const { version, commit, digest } = fixtureArtifact(root);
   const params = ["ISSUE=334", 'OMP_SESSION_ID=literal "quoted value" {"key":"value"}'];
   // Adopted feature/PoC definitions carry JSON-schema params and a literal
   // env.PRIMARY policy; receipt argv omits sourced defaults and policy fields.
@@ -28,16 +33,16 @@ async function fixture(ids: string[], options: { waiting?: boolean; failure?: st
     params: `BASE_BRANCH=main ISSUE=334 ${params[1]}${options.ambiguous ? " OMP_SESSION_ID=ambiguous" : ""}`,
     spec: `name: ${i % 2 === 0 ? "feature" : "poc"}\nqueue: repo\nparams:\n  type: object\n  additionalProperties: true\n  required: [ISSUE]\n  properties:\n    ISSUE:\n      type: string\n    BASE_BRANCH:\n      type: string\n      default: main\n    OMP_SESSION_ID:\n      type: string\n      default: ""\nenv:\n  - PRIMARY: ${JSON.stringify(root)}\nsteps:\n  - name: retained_${id}\n    command: echo original-${id}\n`,
   }));
-  if (options.admitted) for (const entry of entries) {
+  if (admitted) for (const entry of entries) {
     const path = join(root, ".git", "dagu-feature", "runs", entry.dagRunId, "receipt.json");
     mkdirSync(dirname(path), { recursive: true });
     const receipt: Receipt = {
-      schemaVersion: 1,
-      sourceVersion: { version: "0.3.98", commit: "62844e5b3cfb1a4e8cd7454282e9e0e6b3a35841", origin: "https://github.com/pablontiv/a4s.git" },
+      schemaVersion: 2, artifact: { version, commit, digest }, artifactSupport: identity.support, contracts: USED_CONTRACTS,
+      sourceVersion: { version, commit, origin: "https://github.com/pablontiv/a4s.git" },
       deploymentFingerprint: "original-deployment",
       initial: {
         admittedAt: "2026-10-21T10:30:57.000Z",
-        deployment: { installedDAG: { snapshot: entry.spec, relationship: "verified-source-render" } },
+        deployment: { installedDAG: { snapshot: entry.spec, relationship: "materialized-from-cache" }, config: { schemaVersion: 1, commit: "b".repeat(40), digest: "c".repeat(64) } },
         runtimeAndModels: {},
         execution: { primary: options.mismatch === "primary" ? "/different-primary" : realpathSync(root), repo: realpathSync(root), parameters: options.mismatch === "params" ? ["ISSUE=999"] : params, dagSnapshot: options.mismatch === "spec" ? `${entry.spec}# different snapshot\n` : entry.spec },
         eventsAndExternalState: {},
@@ -79,7 +84,7 @@ if (args[0] === 'dequeue') {
  assert.equal(args[args.indexOf('--queue') + 1], 'repo');
  const snapshot = args[args.indexOf('--run-id') + 2];
  assert.equal(fs.readFileSync(snapshot, 'utf8'), entry.spec);
- if (${Boolean(options.admitted)}) assert.deepEqual(args.slice(args.indexOf('--') + 1), ${JSON.stringify(params)});
+ if (${admitted}) assert.deepEqual(args.slice(args.indexOf('--') + 1), ${JSON.stringify(params)});
  else assert.equal(args.slice(args.indexOf('--') + 1).join(' '), entry.params);
  state.queue.push(id); entry.statusLabel = 'queued'; save();
 } else { console.error('unexpected command'); process.exit(20); }
@@ -144,7 +149,7 @@ test("prioritize continues adopted JSON-schema/env PRIMARY snapshots with origin
 });
 
 test("prioritize accepts receipt version 2 and rejects unsupported versions without dequeuing", async () => {
-  for (const schemaVersion of [2, 3, "2", null]) {
+  for (const schemaVersion of [1, 2, 3, "2", null]) {
     const f = await fixture(["a", "b", "u"], { admitted: true });
     try {
       for (const entry of f.initial.entries) {
@@ -158,7 +163,7 @@ test("prioritize accepts receipt version 2 and rejects unsupported versions with
         assert.deepEqual(f.state().queue, ["u", "a", "b"]);
       } else {
         assert.notEqual(result.status, 0);
-        assert.match(result.stderr, /Unsupported admission receipt schemaVersion=/);
+        assert.match(result.stderr, /Unsupported admission receipt schemaVersion=|hard cutover/);
         assert.deepEqual(f.state(), f.initial);
         assert.equal(existsSync(join(f.root, "data", "prioritize")), false);
       }
@@ -238,12 +243,12 @@ test("prioritize requires repository concurrency one before mutation", async () 
   } finally { f.close(); }
 });
 
-test("prioritize requires lossless original argv before dequeue for ambiguous native parameter text", async () => {
-  const f = await fixture(["a", "b", "u"], { ambiguous: true });
+test("prioritize rejects a missing artifact-bound receipt before dequeue", async () => {
+  const f = await fixture(["a", "b", "u"], { admitted: false, ambiguous: true });
   try {
     const result = await f.invoke();
     assert.equal(result.status, 1);
-    assert.match(result.stderr, /original admission parameter argv required; nothing dequeued/);
+    assert.match(result.stderr, /Missing artifact-bound admission receipt.*nothing dequeued/);
     assert.deepEqual(f.state(), f.initial);
   } finally { f.close(); }
 });

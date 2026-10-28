@@ -6,11 +6,11 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { parse } from "yaml";
+import { a4sBin } from "./fixtures/a4s.ts";
 
 const definition = parse(readFileSync(new URL("../skills/issue-execution/planning.yaml", import.meta.url), "utf8"));
 const materialize = definition.steps.find((step: { id: string }) => step.id === "materialize").run;
 const github = fileURLToPath(new URL("./fixtures/planning-github-state.cjs", import.meta.url));
-const cli = fileURLToPath(new URL("../bin/dagu-feature-bundle.ts", import.meta.url));
 type Row = Record<string, any>;
 function unit(id: string, extra: Row = {}): Row {
   return { id, title: `Deliver ${id}`, dag: "feature", labels: ["change"], body: "## Problem\nFull problem\n## Change\nComplete scope\n## Acceptance\nObserve native publication", ...extra };
@@ -25,7 +25,6 @@ function fixture(rows: Row[], initial: Row[] = []) {
   mkdirSync(bin); mkdirSync(out);
   writeFileSync(join(root, "issues.json"), JSON.stringify(initial));
   executable(join(bin, "gh"), `#!/bin/bash\nexport PLANNING_GH_STATE=${JSON.stringify(root)}\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(github)} "$@"\n`);
-  executable(join(bin, "dagu-feature-bundle"), `#!/bin/bash\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(cli)} "$@"\n`);
   executable(join(bin, "curl"), '#!/bin/bash\nprintf \'%s\\n\' \'{"dagRunDetails":{"nodes":[{"step":{"id":"review"},"approvalIteration":0}]}}\'\n');
   const snapshot = rows.map(row => JSON.stringify(row)).join("\n") + "\n";
   for (const name of ["units.jsonl", "reviewed-units.jsonl", "validated-units.jsonl"]) writeFileSync(join(out, name), snapshot);
@@ -33,7 +32,7 @@ function fixture(rows: Row[], initial: Row[] = []) {
   for (const name of ["review-accepted", "generation"]) writeFileSync(join(out, name), marker);
   writeFileSync(join(out, "review-0.json"), JSON.stringify({ verdict: "accept", findings: [] }));
   writeFileSync(join(out, "findings.md"), "Existing coordinator finding\n");
-  const env = { ...process.env, OUT_DIR: out, SOURCE: "plan", RUN: "materialize-test", APPROVED: "all", NWO: "owner/repo", PATH: `${bin}:${process.env.PATH}` };
+  const env = { ...process.env, A4S_BIN: a4sBin, OUT_DIR: out, SOURCE: "plan", RUN: "materialize-test", APPROVED: "all", NWO: "owner/repo", PATH: `${bin}:${process.env.PATH}` };
   return {
     root, out, env,
     run: (extra: NodeJS.ProcessEnv = {}) => spawnSync("/bin/bash", ["-c", materialize], { env: { ...env, ...extra }, encoding: "utf8" }),
@@ -202,7 +201,7 @@ test("resolved marker and checkpoint identities reject per-kind cycles before cr
     const initial = [alpha, issue(61), ...(sample.existingBeta ? [issue(52, { body: "<!-- breakdown-unit: materialize-test/beta -->" })] : [])];
     const f = fixture(rows, initial);
     try {
-      successful(spawnSync(process.execPath, [cli, "validate-planning-units", "--input", join(f.out, "units.jsonl")], { encoding: "utf8" }));
+      successful(spawnSync(a4sBin, ["planning", "validate-planning-units", "--input", join(f.out, "units.jsonl")], { encoding: "utf8" }));
       const canonical = readFileSync(join(f.out, "units.jsonl"), "utf8");
       if (sample.checkpoint) {
         writeFileSync(join(f.out, "materialization-materialize-test-0-units.jsonl"), canonical);
@@ -254,7 +253,7 @@ test("resolved marker aliases share duplicate and self relationship diagnostics 
   for (const sample of cases) {
     const f = fixture(sample.rows, sample.initial);
     try {
-      successful(spawnSync(process.execPath, [cli, "validate-planning-units", "--input", join(f.out, "units.jsonl")], { encoding: "utf8" }));
+      successful(spawnSync(a4sBin, ["planning", "validate-planning-units", "--input", join(f.out, "units.jsonl")], { encoding: "utf8" }));
       failed(f.run());
       assert.ok(f.diagnostics().some(diagnostic => diagnostic.rule === sample.rule && diagnostic.unit === "alpha"));
       assert.deepEqual(f.issues(), sample.initial);
