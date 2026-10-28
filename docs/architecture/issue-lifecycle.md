@@ -7,6 +7,8 @@ entries, two specialized agents, the [seven workflow skills](catalog.md#lifecycl
 and `dagu-feature-bundle`, `dagu-feature-prioritize`, `dagu-feature-protect`,
 `dagu-role-jobs` and `dagu-station-install`. Technical DAG names remain `feature`, `poc`, `discovery`,
 `planning` and `reconcile`; `planning.yaml` is the breakdown backend.
+Spike #692 compared Harness² with these loops and discarded adoption; see
+[Harness² vs issue-lifecycle](harness2-issue-lifecycle.md).
 
 ## Delivery and provenance
 
