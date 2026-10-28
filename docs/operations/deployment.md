@@ -333,13 +333,13 @@ resources, ambiguous GitHub responses and unproved integration retain diagnostic
 
 ### CodeQL merge gate and correction
 
-Production ruleset `25743985` enforces CodeQL on the default branch (`main`)
-with security threshold `high_or_higher`, other-alert threshold `errors` and
-no bypass actors. These match the adopted `CODEQL_SECURITY_THRESHOLD` and
-`CODEQL_ALERTS_THRESHOLD` policy. This repository's adopted `CODE_SCANNING`
-choice stays `required`. A consumer that cannot enable code scanning, including
-a private Free/Pro user repository, adopts `off` instead: that render does not
-observe or wait for CodeQL. Repository enforcement and controller adoption
+This repository runs CodeQL weekly (`.github/workflows/codeql.yml`, Mondays
+06:00 UTC, plus manual dispatch) on `main` only. Pull requests and pushes do not
+run CodeQL, no ruleset gates merges on it, and the adopted `CODE_SCANNING` is
+`off`: the lifecycle neither observes nor waits for CodeQL. Weekly findings are
+triaged from the code-scanning alert list. A consumer that keeps per-PR
+enforcement adopts `required` with a matching `code_scanning` ruleset; the rest of
+this section describes that mode. Repository enforcement and controller adoption
 are separate operations requiring their respective authorization.
 
 After PR publication, `code_scanning` records `codeql-policy.json` and

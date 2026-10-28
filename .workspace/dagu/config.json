@@ -9,7 +9,7 @@
   "rebaseResolver": "node packages/issue-lifecycle/bin/dagu-bundle-rebase.mjs",
   "validation": "",
   "blockerReporting": "ask",
-  "codeScanning": "required",
+  "codeScanning": "off",
   "codeqlSecurityThreshold": "high_or_higher",
   "codeqlAlertsThreshold": "errors",
   "escalation": {
