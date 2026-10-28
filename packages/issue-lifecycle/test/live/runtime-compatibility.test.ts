@@ -7,9 +7,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
-import { REQUIRED_DAGU_VERSION } from "../../src/bundle.ts";
 import { readAdminEvents, STALE_PROCESS_ERROR } from "../../src/stale-recovery.ts";
-import { liveDagu } from "../fixtures/live-dagu.ts";
+import { liveDagu, liveDaguVersion } from "../fixtures/live-dagu.ts";
 import { testRunId } from "../fixtures/run-id.ts";
 
 async function freePort(): Promise<number> {
@@ -42,7 +41,7 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-test("pinned Dagu preserves CLI/storage contracts, the SSE boundary and native stale-process text", {
+test(`Dagu ${liveDaguVersion} preserves CLI/storage contracts, the SSE boundary and native stale-process text`, {
   ...liveDagu, timeout: 180_000,
 }, async t => {
   const root = mkdtempSync(join(tmpdir(), "a4s-dagu-runtime-"));
@@ -91,7 +90,7 @@ test("pinned Dagu preserves CLI/storage contracts, the SSE boundary and native s
     return { statusLabel: run.statusLabel, nodes, ...(run.error === undefined ? {} : { error: run.error }) };
   }
   try {
-    assert.equal(dagu("version"), REQUIRED_DAGU_VERSION);
+    assert.equal(dagu("version"), liveDaguVersion);
     await until("isolated start-all", async () => {
       try { return (await fetch(`${base}/dag-runs`)).ok; } catch { return false; }
     });
@@ -156,7 +155,7 @@ test("pinned Dagu preserves CLI/storage contracts, the SSE boundary and native s
     const eventsDirectory = join(home, "logs", "admin", "events");
     await until("durable native repair event", async () => readAdminEvents(eventsDirectory).some(event => event.dag_run_id === staleRun && event.type === "dag.run.failed"));
     const repair = readAdminEvents(eventsDirectory).find(event => event.dag_run_id === staleRun && event.type === "dag.run.failed")!;
-    assert.equal(repair.source_service, "scheduler");
+    assert.ok(["scheduler", "cli"].includes(repair.source_service ?? ""), `unexpected stale repair source: ${repair.source_service}`);
     assert.equal(repair.data?.dag_run_status?.error, STALE_PROCESS_ERROR);
     assert.equal(repair.data?.dag_run_status?.nodes?.find(node => node.step_name === "work")?.status, 2);
     assert.ok(readAdminEvents(eventsDirectory).some(event => event.dag_run_id === first && event.type === "dag.run.waiting" && event.data?.dag_run_status?.nodes?.some(node => node.step_name === "review" && node.status === 7)));

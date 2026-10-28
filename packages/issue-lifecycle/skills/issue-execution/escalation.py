@@ -68,7 +68,7 @@ def main():
     root.mkdir(parents=True, exist_ok=True)
     with (root / 'escalation.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        # Pinned Dagu injects the current node's run-wide rewind iteration.
+        # Dagu injects the current node's run-wide rewind iteration.
         # CLI status renders it only for waiting human tasks, not running commands.
         iteration = int(os.environ.get('DAG_PUSHBACK_ITERATION', '0'))
         if iteration < 0:

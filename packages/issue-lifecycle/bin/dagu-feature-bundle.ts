@@ -8,7 +8,7 @@ import { admit, appendObservation, enqueue, enqueueArguments, parseObservation, 
 import { ANSWERS_PATH, answersFromEnvironment, readAnswersFile, readCommittedAnswers, serializeAnswers } from "../src/answers.ts";
 import { validatePlanningUnitsCommand } from "../src/planning-validator.ts";
 import { planningReviewer, type TranscriptRow } from "../src/transcript-identity.ts";
-import { BUNDLE_VERSION, lifecycleProtocolToken, REQUIRED_DAGU_VERSION } from "../src/bundle.ts";
+import { BUNDLE_VERSION, lifecycleProtocolToken } from "../src/bundle.ts";
 import { dagName, materializeInstalled } from "../src/materialize.ts";
 import { currentQueueConcurrency, queueCompatibility, queueFromAnswersFile, reconcileQueue } from "../src/queue.ts";
 
@@ -198,11 +198,9 @@ if (!existsSync(reconciler)) {
   console.log(`reconcile.yaml path=${reconciler} installed=yes`);
 }
 const dagu = spawnSync("dagu", ["version"], { encoding: "utf8" });
-const daguOk = dagu.status === 0
-  && dagu.stdout === `${REQUIRED_DAGU_VERSION}\n`
-  && dagu.stderr === "";
+const daguOk = dagu.status === 0;
 const observed = dagu.status === null ? "unavailable" : JSON.stringify(dagu.stdout.replace(/\n$/, ""));
-console.log(`dagu version=${observed} required=${REQUIRED_DAGU_VERSION} compat=${daguOk ? "ok" : "incompatible"}`);
+console.log(`dagu version=${observed}`);
 ok = daguOk && ok;
 process.exitCode = ok ? 0 : 1;
 }

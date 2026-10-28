@@ -10,7 +10,6 @@ import { admissionFixture } from "./fixtures/admission.ts";
 import { liveDagu } from "./fixtures/live-dagu.ts";
 
 import { exampleAnswers, serializeAnswers } from "../src/answers.ts";
-import { REQUIRED_DAGU_VERSION } from "../src/bundle.ts";
 const cli = fileURLToPath(new URL("../bin/dagu-feature-bundle.ts", import.meta.url));
 
 function commitAnswers(repo: string, text?: string): void {
@@ -41,7 +40,7 @@ test("CLI reports committed answers and the reconciler as compatible", () => {
     writeFileSync(join(daguHome, "dags", "reconcile.yaml"), "steps:\n  - run: true\n");
     writeFileSync(join(daguHome, "config.yaml"), "queues:\n  enabled: true\n  config:\n    - name: fixture\n      max_concurrency: 6\n");
     const dagu = join(bin, "dagu");
-    writeFileSync(dagu, `#!/bin/sh\nprintf '${REQUIRED_DAGU_VERSION}\\n'\n`);
+    writeFileSync(dagu, "#!/bin/sh\nprintf '2.24.0\\n'\n");
     chmodSync(dagu, 0o755);
     const result = spawnSync(process.execPath, [cli, repo], {
       encoding: "utf8",
@@ -51,7 +50,8 @@ test("CLI reports committed answers and the reconciler as compatible", () => {
     assert.match(result.stdout, /answers path=\.workspace\/dagu\/answers\.json schema=1 .*lane=fixture .*queue=fixture max_concurrency=6 compat=ok/);
     assert.match(result.stdout, /answers policy gate="npm test" requiredCheck="validate"/);
     assert.match(result.stdout, /reconcile\.yaml path=.* installed=yes/);
-    assert.match(result.stdout, /dagu version=.* compat=ok/);
+    assert.match(result.stdout, /dagu version="2\.24\.0"/);
+    assert.doesNotMatch(result.stdout, /dagu version=.*(?:required=|compat=)/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -68,7 +68,7 @@ test("CLI exits nonzero when committed answers are missing", () => {
     commitAnswers(repo);
     writeFileSync(join(daguHome, "dags", "reconcile.yaml"), "steps:\n  - run: true\n");
     const dagu = join(bin, "dagu");
-    writeFileSync(dagu, `#!/bin/sh\nprintf '${REQUIRED_DAGU_VERSION}\\n'\n`);
+    writeFileSync(dagu, "#!/bin/sh\nprintf '2.24.0\\n'\n");
     chmodSync(dagu, 0o755);
     const result = spawnSync(process.execPath, [cli, repo], {
       encoding: "utf8",
@@ -185,7 +185,7 @@ test("compatible admission enqueues exact bytes and keeps historical receipt acr
 test("admission ignores a missing reconciler and a forged consumer file, and rejects a stale loaded identity", liveDagu, () => {
   const fixture = admissionFixture();
   try {
-    rmSync(join(fixture.home, "dags", "reconcile.yaml"));
+    assert.equal(existsSync(join(fixture.home, "dags", "reconcile.yaml")), false);
     const absentRun = testRunId("reconciler-absent");
     const absent = fixture.command("enqueue", absentRun);
     assert.equal(absent.status, 0, absent.stderr);

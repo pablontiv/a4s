@@ -1,8 +1,9 @@
 # Issue lifecycle architecture
 
 [`@a4s/issue-lifecycle`](../../packages/issue-lifecycle/README.md) is a private
-OMP package. Its manifest owns `BUNDLE_NAME`, `BUNDLE_VERSION`
-and the exact Dagu pin (`daguFeature.dagu`). The package distributes two reloadable extension
+OMP package. Its manifest owns `BUNDLE_NAME` and `BUNDLE_VERSION`.
+The runtime requires Dagu 2.23.0 or newer without an exact version pin; admission
+records the observed `dagu version` output. The package distributes two reloadable extension
 entries, two specialized agents, the [seven workflow skills](catalog.md#lifecycle-skills),
 and `dagu-feature-bundle`, `dagu-feature-prioritize`, `dagu-feature-protect`,
 `dagu-role-jobs` and `dagu-station-install`. Technical DAG names remain `feature`, `poc`, `discovery`,
@@ -25,7 +26,7 @@ resolves it from `$DAGU_HOME/primaries/<lane>`, then `A4S_PRIMARY`, then
 Existing runs retain their admitted snapshots and receipt identities.
 
 Bootstrap requires a clean source package, fetches its origin, resolves
-`origin/HEAD`, verifies source HEAD ancestry and exact Dagu output, and checks
+`origin/HEAD`, verifies source HEAD ancestry and observes `dagu version`, and checks
 that PRIMARY is an independent clone rather than a linked worktree. It writes
 `.workspace/dagu/answers.json` in PRIMARY. Its `reconcile` step installs the
 user-level reconciler from the installed template; `github` can change repository
@@ -153,7 +154,7 @@ identifies a new attempt.
 ## Observation, notifications and boundaries
 
 The status extension resolves the repository from origin (including worktrees),
-uses REST/SSE for progress, and the pinned Dagu runtime's cursor event ledger for durable
+uses REST/SSE for progress, and Dagu's cursor event ledger for durable
 human-task/success notifications. It discovers the last 48 hours with workspace
 labels. `dagu_session_id` returns the persistent main-session owner; pass it as
 `OMP_SESSION_ID`. Notifications target only that session and work headlessly.

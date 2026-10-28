@@ -5,7 +5,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { REQUIRED_DAGU_VERSION } from "../src/bundle.ts";
 
 const bundle = "packages/issue-lifecycle";
 const skills = `${bundle}/skills`;
@@ -31,7 +30,7 @@ function baselineBundle(root: string, base: string): { path: string; version: st
     .split("\0").filter(path => path.endsWith("/package.json"));
   const bundles = manifests.flatMap(path => {
     const manifest = JSON.parse(git(root, "show", `${base}:${path}`));
-    return typeof manifest.daguFeature?.dagu === "string" && manifest.bin?.["dagu-feature-bundle"]
+    return typeof manifest.bin?.["dagu-feature-bundle"] === "string"
       ? [{ path: path.slice(0, -"/package.json".length), version: manifest.version as string }] : [];
   });
   assert.equal(bundles.length, 1, `Expected one lifecycle bundle at integration base ${base}`);
@@ -73,7 +72,7 @@ function fixture(): { root: string; put: (path: string, text: string) => void; c
   git(root, "config", "user.email", "bundle@example.test");
   const commit = (): void => { git(root, "add", "."); git(root, "commit", "-m", "fixture"); };
   put(`${bundle}/package.json`, JSON.stringify({
-    name: "@a4s/issue-lifecycle", version: "0.2.0", daguFeature: { dagu: REQUIRED_DAGU_VERSION },
+    name: "@a4s/issue-lifecycle", version: "0.2.0",
     bin: { "dagu-feature-bundle": "./bin/dagu-feature-bundle.ts" },
   }));
   put(`${bundle}/CHANGELOG.md`, "## 0.2.0\n");

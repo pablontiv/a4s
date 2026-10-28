@@ -480,7 +480,7 @@ test("transient reruns and conflicting transitions apply once while independent 
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test("pinned Dagu validates the reconciler and isolated ticks stay inside the minute", {
+test("Dagu validates the reconciler and isolated ticks stay inside the minute", {
   ...liveDagu,
   timeout: 240_000,
 }, async t => {

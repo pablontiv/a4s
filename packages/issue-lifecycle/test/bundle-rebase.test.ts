@@ -10,7 +10,7 @@ import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { REQUIRED_DAGU_VERSION } from "../src/bundle.ts";
+import { readAnswersFile } from "../src/answers.ts";
 
 const protectBin = mkdtempSync(join(tmpdir(), "a4s-protect-bin-"));
 symlinkSync(fileURLToPath(new URL("../bin/dagu-feature-protect.ts", import.meta.url)), join(protectBin, "dagu-feature-protect"));
@@ -213,12 +213,12 @@ test("isolated Dagu rebases colliding candidates before gate and publishes the n
   repo.env.GATE = `gh repo view >/dev/null && node -e 'const fs=require("fs"); const p=JSON.parse(fs.readFileSync("${manifest}")); if(p.version!=="0.3.19") process.exit(1)'`;
   const source = readFileSync(template, "utf8");
   const file = join(home, "dags/feature.yaml");
-  const staged = join(repo.root, "staged/feature.yaml");
+  const staged = join(repo.root, "staged/answers.json");
   const adoptionEnv = {
     ...env, STAGE: staged, SKILL_DIR: dirname(template), REPO: "fixture", BASE_BRANCH: "main",
     GATE: repo.env.GATE, REQUIRED_CHECK: "validate", TEST_PATHS: "(^|/)test/",
     REBASE_RESOLVER: repo.env.REBASE_RESOLVER, BUNDLE_NAME: "@a4s/issue-lifecycle",
-    BUNDLE_VERSION: "0.3.18", DAGU_VERSION: REQUIRED_DAGU_VERSION, SOURCE_NWO: "fixture/repository",
+    BUNDLE_VERSION: "0.3.18", DAGU_VERSION: "2.24.0", SOURCE_NWO: "fixture/repository",
     SOURCE_SHA: repo.before, DAG_RUN_ID: "fixture-bootstrap",
   };
   put(home, "dags/feature.yaml", `type: graph\nshell: bash\nenv:\n${Object.entries({ ...repo.env, VALIDATION: "", PATH: env.PATH }).map(([key, value]) => `  ${key}: ${JSON.stringify(value)}`).join("\n")}\nsteps:\n` +
@@ -240,7 +240,8 @@ test("isolated Dagu rebases colliding candidates before gate and publishes the n
   try {
     await until("Dagu ready", async () => { try { return (await fetch(`${api}/dag-runs`)).ok ? true : undefined; } catch { return undefined; } });
     execFileSync("bash", ["-c", script(join(dirname(template), "dagu-feature-bootstrap.yaml"), "render")], { cwd: repo.root, env: adoptionEnv });
-    command("validate", staged); command("validate", rendered); command("validate", file);
+    assert.equal(readAnswersFile(staged).gate, repo.env.GATE);
+    command("validate", rendered); command("validate", file);
     command("enqueue", "--run-id", id, "feature");
     const run = await until("normalized rebase/gate/push", async () => {
       const response = await fetch(`${api}/dag-runs/feature/${id}`); if (!response.ok) return undefined;
@@ -256,7 +257,7 @@ test("isolated Dagu rebases colliding candidates before gate and publishes the n
     assert.match(logs, /bundle-rebase: 0\.3\.17 \/ 0\.3\.18 \/ 0\.3\.18 -> 0\.3\.19/);
     assert.ok(logs.includes(`tested_sha=${sha}`));
     const status = command("status", "--run-id", id, "feature");
-    console.log(`LIVE bundle-rebase DAGU_HOME=${home} port=${port} run=${id}\n${liveDaguVersion}\ndagu validate ${staged}\ndagu validate ${rendered}\ndagu validate ${file}\ndagu enqueue --run-id ${id} feature\ndagu status --run-id ${id} feature\n${status}\noriginal_sha=${repo.before} normalized_sha=${sha}\n${logs}`);
+    console.log(`LIVE bundle-rebase DAGU_HOME=${home} port=${port} run=${id}\n${liveDaguVersion}\nanswers=${staged}\ndagu validate ${rendered}\ndagu validate ${file}\ndagu enqueue --run-id ${id} feature\ndagu status --run-id ${id} feature\n${status}\noriginal_sha=${repo.before} normalized_sha=${sha}\n${logs}`);
   } finally {
     if (service.exitCode === null && service.signalCode === null) await new Promise<void>(resolve => { service.once("exit", () => resolve()); service.kill("SIGTERM"); });
     rmSync(repo.root, { recursive: true, force: true });

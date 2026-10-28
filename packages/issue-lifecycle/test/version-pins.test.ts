@@ -25,13 +25,10 @@ function versions(text: string): string[] {
 
 const rootManifest = manifest("package.json");
 const development = object(rootManifest.devDependencies);
-const dagu = object(manifest(lifecyclePath).daguFeature).dagu;
 const node = object(rootManifest.engines).node;
-assert.equal(typeof dagu, "string");
 assert.equal(typeof node, "string");
 const pins = new Map<string, string>();
 for (const [field, value] of [
-  [`${lifecyclePath} daguFeature.dagu`, dagu],
   ["package.json engines.node", node],
   ...Object.entries(development).map(([name, value]) => [`package.json devDependencies.${name}`, value]),
 ]) {
@@ -69,7 +66,6 @@ function outsidePinFields(path: string, text: string): string {
     // Other runtimes retain their declaring package's independent contract.
     delete engines.bun;
   }
-  if (path === lifecyclePath) delete object(value.daguFeature).dagu;
   return JSON.stringify(value);
 }
 
@@ -95,10 +91,10 @@ test("version guard permits only canonical manifest fields and historical artifa
   assert.ok(historical("docs/operations/v1-walkthrough.md"));
   assert.equal(historical(".workspace/dagu/answers.json"), false);
   assert.equal(historical("packages/issue-lifecycle/skills/issue-execution/reconcile.yaml"), false);
-  assert.deepEqual(copies(outsidePinFields("package.json", JSON.stringify({ ...rootManifest, copiedRuntime: dagu }))), [String(dagu)]);
+  assert.deepEqual(copies(outsidePinFields("package.json", JSON.stringify({ ...rootManifest, copiedRuntime: node }))), versions(String(node)));
 });
 
-test("tracked source derives Dagu, Node and shared development versions from their canonical manifests", () => {
+test("tracked source derives Node and shared development versions from their canonical manifests", () => {
   const paths = execFileSync("git", ["ls-files", "--cached", "--others", "--exclude-standard", "-z"], {
     cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
   }).split("\0").filter(Boolean);

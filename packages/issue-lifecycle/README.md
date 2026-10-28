@@ -2,7 +2,7 @@
 
 Private native OMP package `@a4s/issue-lifecycle` for the Dagu
 issue lifecycle. The Node.js requirement is root `package.json` `engines.node`;
-the exact official Dagu release is this package's `daguFeature.dagu`, with local
+the runtime requires official Dagu 2.23.0 or newer, with local
 `auth.mode=none`. Standalone consumers use the same root Node pin. The package owns status observation/wakeup, admission/resource
 guards, `triage-reviewer`, `plan-reviewer` and all seven lifecycle workflow skills.
 
@@ -166,7 +166,7 @@ multiprocess capacity/recovery, escalation across restart and native receipt ver
 Real fixtures use temporary Dagu homes and distinct HTTP ports. Every run identity
 comes from `test/fixtures/run-id.ts` and is reused across CLI, REST, status,
 recovery and assertions. Its per-process random suffix and counter also isolate
-the host-global Unix control sockets: the pinned Dagu runtime derives
+the host-global Unix control sockets: Dagu derives
 `/tmp/@dagu_<name>_<hash>.sock` from name/run identity, not Dagu home alone.
 Concurrent recovery fixtures preserve separate checkpoints, SHA/iterations and
 owned cleanup; closing one leaves the other able to finish.

@@ -8,7 +8,6 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { REQUIRED_DAGU_VERSION } from "../src/bundle.ts";
 import type { Receipt } from "../src/admission.ts";
 
 const command = fileURLToPath(new URL("../bin/dagu-feature-prioritize.ts", import.meta.url));
@@ -57,7 +56,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const assert = require('node:assert/strict');
 const args = process.argv.slice(2);
-if (args[0] === 'version') { console.log(${JSON.stringify(REQUIRED_DAGU_VERSION)}); process.exit(0); }
+if (args[0] === 'version') { console.log("2.24.0"); process.exit(0); }
 const state = JSON.parse(fs.readFileSync(process.env.STATE, 'utf8'));
 state.calls.push(args);
 const save = () => fs.writeFileSync(process.env.STATE, JSON.stringify(state));

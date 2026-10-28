@@ -32,7 +32,6 @@ export interface BundleStamp {
 interface PackageManifest {
   name: string;
   version: string;
-  daguFeature: { dagu: string };
 }
 
 const manifest = JSON.parse(
@@ -41,7 +40,6 @@ const manifest = JSON.parse(
 
 export const BUNDLE_NAME = manifest.name;
 export const BUNDLE_VERSION = manifest.version;
-export const REQUIRED_DAGU_VERSION = manifest.daguFeature.dagu;
 
 const SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 const PROTOCOL_ID = /[a-z0-9][a-z0-9./-]*/;
