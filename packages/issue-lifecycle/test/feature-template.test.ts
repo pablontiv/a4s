@@ -480,13 +480,21 @@ test("template captures native implementation and publishes the gated candidate"
     writeFileSync(join(repo.state, "identity"), identity);
     writeFileSync(git(repo.worktree, "rev-parse", "--path-format=absolute", "--git-path", "dagu-feature-owner"), identity);
     writeFileSync(join(repo.worktree, "README.txt"), "native delivery\n");
-    runScript(extractScript(definition, "  - id: capture"), repo, { IMPLEMENTER: result.id, OMP_SESSION_ID: "parent-id" });
+    // Dagu outputs flatten newlines; capture must take the multi-line text from the verified receipt.
+    const resultFile = join(directory, "result.json");
+    const output = { summary: "Deliver native change\n\nRan: npm test", message: "feat: deliver native change\n\nBody line" };
+    writeFileSync(resultFile, JSON.stringify({ ...JSON.parse(readFileSync(resultFile, "utf8")), output }));
+    runScript(extractScript(definition, "  - id: capture"), repo, { IMPLEMENTER: result.id, OMP_SESSION_ID: "parent-id",
+      SUMMARY: "Deliver native change  Ran: npm test", MESSAGE: "feat: deliver native change  Body line" });
     runScript(extractScript(definition, "  - id: gate"), repo);
     runScript(extractScript(definition, "  - id: push"), repo);
     const candidate = JSON.parse(readFileSync(join(repo.state, "candidate.json"), "utf8"));
     assert.equal(git(repo.primary, "ls-remote", "origin", `refs/heads/${repo.branch}`).split(/\s/)[0], candidate.sha);
     assert.equal(candidate.implementation.inputSha, binding.sha);
     assert.notEqual(candidate.sha, binding.sha);
+    assert.equal(candidate.summary, output.summary);
+    assert.equal(candidate.message, output.message);
+    assert.equal(git(repo.worktree, "log", "-1", "--format=%B", candidate.sha), output.message);
   } finally { rmSync(repo.root, { recursive: true, force: true }); }
 });
 
