@@ -6,11 +6,11 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { parse } from "yaml";
-import { a4sBin } from "./fixtures/a4s.ts";
+import { a4sBin } from "../fixtures/a4s.ts";
 
-const definition = parse(readFileSync(new URL("../skills/issue-execution/planning.yaml", import.meta.url), "utf8"));
+const definition = parse(readFileSync(new URL("../../skills/issue-execution/planning.yaml", import.meta.url), "utf8"));
 const materialize = definition.steps.find((step: { id: string }) => step.id === "materialize").run;
-const github = fileURLToPath(new URL("./fixtures/planning-github-state.cjs", import.meta.url));
+const github = fileURLToPath(new URL("../fixtures/planning-github-state.cjs", import.meta.url));
 type Row = Record<string, any>;
 function unit(id: string, extra: Row = {}): Row {
   return { id, title: `Deliver ${id}`, dag: "feature", labels: ["change"], body: "## Problem\nFull problem\n## Change\nComplete scope\n## Acceptance\nObserve native publication", ...extra };

@@ -10,8 +10,23 @@ import { isRecord } from "../type-guard.ts";
 
 interface Run { name: string; dagRunId: string; statusLabel: string; params?: string }
 interface Captured { run: Run; spec: string; args: string[]; snapshot: string }
-const base = (process.env.DAGU_URL || "http://127.0.0.1:8080").replace(/\/+$/, "");
-const home = resolve(process.env.DAGU_HOME || join(homedir(), ".dagu"));
+interface PrioritizeDependencies {
+  env?: NodeJS.ProcessEnv;
+  fetch?: typeof fetch;
+  spawnSync?: typeof spawnSync;
+  receiptArtifact?: typeof receiptArtifact;
+  log?: (message: string) => void;
+  error?: (message: string) => void;
+}
+function createCommand(deps: PrioritizeDependencies) {
+const env = deps.env ?? process.env;
+const fetch = deps.fetch ?? globalThis.fetch;
+const execute = deps.spawnSync ?? spawnSync;
+const verifyReceipt = deps.receiptArtifact ?? receiptArtifact;
+const log = deps.log ?? console.log;
+const reportError = deps.error ?? console.error;
+const base = (env.DAGU_URL || "http://127.0.0.1:8080").replace(/\/+$/, "");
+const home = resolve(env.DAGU_HOME || join(homedir(), ".dagu"));
 
 async function get(path: string): Promise<Record<string, unknown>> {
   const response = await fetch(`${base}/api/v1/${path}`, { signal: AbortSignal.timeout(10000) });
@@ -51,7 +66,7 @@ async function items(queue: string): Promise<Run[]> {
 const key = (entry: Run) => JSON.stringify([entry.name, entry.dagRunId]);
 const order = (entries: Run[]) => JSON.stringify(entries.map(key));
 function native(args: string[]): void {
-  const result = spawnSync("dagu", args, { encoding: "utf8" });
+  const result = execute("dagu", args, { encoding: "utf8" });
   if (result.status !== 0) throw new Error(`dagu ${args[0]}: ${result.error?.message || result.stderr.trim() || `exit=${result.status} signal=${result.signal}`}`);
 }
 async function originalParams(entry: Run, source: string): Promise<string[]> {
@@ -83,7 +98,7 @@ async function originalParams(entry: Run, source: string): Promise<string[]> {
     if (existsSync(path)) {
       // Continue the admitted snapshot, including its original argv and sourced
       // defaults. Current deployment identity is deliberately not recalculated.
-      const { receipt } = await receiptArtifact(home, path);
+      const { receipt } = await verifyReceipt(home, path);
       if (!isRecord(receipt.runReceipt) || receipt.runReceipt.dag !== entry.name || receipt.runReceipt.run !== entry.dagRunId || !isRecord(receipt.initial) || !isRecord(receipt.initial.execution)) throw new Error(`Invalid original admission receipt: ${path}; nothing dequeued`);
       const execution = receipt.initial.execution;
       if (execution.primary !== realpathSync(primary) || execution.dagSnapshot !== source) throw new Error(`Original admission snapshot/PRIMARY mismatch: ${path}; nothing dequeued`);
@@ -117,10 +132,10 @@ async function present(entry: Run): Promise<boolean> {
   return true;
 }
 function lost(entry: Captured, recovery: string, state: string): void {
-  console.error(`LOST ${entry.run.name} ${entry.run.dagRunId} state=${state} params=${JSON.stringify(entry.run.params ?? "")} spec=${JSON.stringify(entry.snapshot)} recovery=${JSON.stringify(join(recovery, "recovery.json"))} argv=${JSON.stringify(["dagu", ...entry.args])}`);
+  reportError(`LOST ${entry.run.name} ${entry.run.dagRunId} state=${state} params=${JSON.stringify(entry.run.params ?? "")} spec=${JSON.stringify(entry.snapshot)} recovery=${JSON.stringify(join(recovery, "recovery.json"))} argv=${JSON.stringify(["dagu", ...entry.args])}`);
 }
 
-export async function main(argv: string[]): Promise<void> {
+return async function main(argv: string[]): Promise<void> {
   const [dag, id, extra] = argv;
   if ((dag !== "feature" && dag !== "poc") || !id || extra) throw new Error("Usage: dagu-feature-prioritize <feature|poc> <run-id>");
   const target = await details({ name: dag, dagRunId: id, statusLabel: "" });
@@ -134,7 +149,7 @@ export async function main(argv: string[]): Promise<void> {
   const before = await items(queue);
   const index = before.findIndex(entry => key(entry) === key(target));
   if (index < 0) throw new Error(`NOT_QUEUED ${dag} ${id} status=not-in-repository-queue`);
-  if (index === 0) { console.log(`PRIORITIZED ${dag} ${id} queue=${queue} moved=0`); return; }
+  if (index === 0) { log(`PRIORITIZED ${dag} ${id} queue=${queue} moved=0`); return; }
   // Validate every receipt before creating recovery state or mutating the queue.
   const prepared: { run: Run; spec: string; params: string[] }[] = [];
   for (const entry of before) {
@@ -153,7 +168,7 @@ export async function main(argv: string[]): Promise<void> {
     return { run, spec, snapshot, args };
   });
   writeFileSync(join(recovery, "recovery.json"), `${JSON.stringify({ queue, endpoint: base, home, target, order: before, entries: captured }, null, 2)}\n`, { mode: 0o600, flag: "wx", flush: true });
-  console.error(`RECOVERY ${join(recovery, "recovery.json")}`);
+  reportError(`RECOVERY ${join(recovery, "recovery.json")}`);
   // Capture every queued snapshot before the first dequeue. Both sides of the
   // target move: leaving successors in place would rotate A,B,U,C to U,C,A,B.
   if (order(await items(queue)) !== order(before) || (await details(target)).statusLabel !== "queued") throw new Error(`QUEUE_CHANGED; nothing dequeued recovery=${recovery}`);
@@ -178,14 +193,14 @@ export async function main(argv: string[]): Promise<void> {
   for (const entry of removed) {
     try {
       native(entry.args);
-      console.log(`REQUEUED ${entry.run.name} ${entry.run.dagRunId}`);
+      log(`REQUEUED ${entry.run.name} ${entry.run.dagRunId}`);
     } catch (error) {
       requeueFailed = true;
       try {
-        if (await present(entry.run)) console.error(`PRESENT ${entry.run.name} ${entry.run.dagRunId}; enqueue returned an error; inspect native state`);
+        if (await present(entry.run)) reportError(`PRESENT ${entry.run.name} ${entry.run.dagRunId}; enqueue returned an error; inspect native state`);
         else lost(entry, recovery, "missing");
       } catch { lost(entry, recovery, "unconfirmed-enqueue"); }
-      console.error(error instanceof Error ? error.message : String(error));
+      reportError(error instanceof Error ? error.message : String(error));
     }
   }
   if (failure || requeueFailed) {
@@ -196,5 +211,9 @@ export async function main(argv: string[]): Promise<void> {
   const after = await items(queue);
   const expected = [target, ...before.filter(entry => key(entry) !== key(target))];
   if (order(after) !== order(expected)) throw new Error(`INCOMPLETE ${dag} ${id} queue=${queue} observed=${order(after)} expected=${order(expected)} recovery=${recovery}; scheduler or another operator changed the queue`);
-  console.log(`PRIORITIZED ${dag} ${id} queue=${queue} moved=${removed.length}`);
+  log(`PRIORITIZED ${dag} ${id} queue=${queue} moved=${removed.length}`);
+};
+}
+export async function main(argv: string[], deps: PrioritizeDependencies = {}): Promise<void> {
+  await createCommand(deps)(argv);
 }

@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { parse } from "yaml";
@@ -21,27 +20,11 @@ for (const kind of ["feature", "poc", "discovery"]) {
       assert.match(gate.run!, /exit 77/);
       const successors = source.steps.filter(step => (Array.isArray(step.depends) ? step.depends : [step.depends]).includes(checkpoint.id));
       assert.deepEqual(successors.map(step => step.id), [gate.id], `${checkpoint.id} has one guarded outgoing edge`);
-      const environment: NodeJS.ProcessEnv = { ...process.env, ...Object.assign({}, ...gate.env ?? []), CANCEL: "no" };
-      const required = (environment.REQUIRED_FIELDS ?? "").split(" ").filter(Boolean);
-      for (const field of required) environment[field] = "normal";
-      const normal = spawnSync("bash", ["-c", gate.run!], { encoding: "utf8", env: environment });
-      assert.equal(normal.status, 0, normal.stderr);
-      assert.equal(normal.stdout, "");
-      for (const field of required) {
-        const missing = spawnSync("bash", ["-c", gate.run!], { encoding: "utf8", env: { ...environment, [field]: "" } });
-        assert.equal(missing.status, 1);
-        assert.match(missing.stderr, new RegExp(`Normal completion requires ${field}`));
-      }
     }
     assert.ok(source.handler_on.exit.run);
-    for (const handler of [source.handler_on.exit, source.handler_on.failure]) if (handler) {
-      const syntax = spawnSync("bash", ["-n", "-c", handler.run], { encoding: "utf8" });
-      assert.equal(syntax.status, 0, syntax.stderr);
-    }
     if (kind === "poc") assert.match(source.handler_on.failure!.run, /cancellation\.json/);
   });
 }
-
 test("feature and PoC suites leave cancellation scenarios registered once", () => {
   for (const file of ["feature-template.test.ts", "poc-template.test.ts"]) {
     const source = readFileSync(new URL(`./${file}`, import.meta.url), "utf8");
@@ -68,4 +51,3 @@ test("native feature role stages retain historical cancellation snapshot coverag
     assert.match(gate.run, /exit 77/);
   }
 });
-

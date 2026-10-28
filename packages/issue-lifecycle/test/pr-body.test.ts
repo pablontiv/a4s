@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,10 +6,19 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
 
-const cli = fileURLToPath(new URL("../bin/dagu-pr-body.mjs", import.meta.url));
+import { main } from "../src/commands/pr-body.ts";
 const template = readFileSync(new URL("../../../.github/pull_request_template.md", import.meta.url), "utf8");
 const body = template.replace("Closes #<N>\n", "Closes #571\n");
-const run = (...args: string[]) => spawnSync(process.execPath, [cli, ...args], { encoding: "utf8" });
+function run(...args: string[]) {
+  const result = { status: 0, stdout: "", stderr: "" };
+  main(args, {
+    write: value => { result.stdout += value; },
+    log: value => { result.stdout += `${value}\n`; },
+    error: value => { result.stderr += `${value}\n`; },
+    fail: () => { result.status = 1; },
+  });
+  return result;
+}
 
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), "pr-body-"));

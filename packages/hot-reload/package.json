@@ -11,7 +11,7 @@
   "type": "module",
   "exports": { ".": "./src/index.ts" },
   "scripts": {
-    "test": "tsx --test test/*.test.ts",
+    "test": "tsx --import ../../scripts/test-no-spawn.mjs --test test/*.test.ts",
     "typecheck": "tsc --noEmit"
   }
 }

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { PocDiagnostics } from "./fixtures/poc-diagnostics.ts";
+import { PassThrough } from "node:stream";
 
 for (const scenario of [
   { status: 200, body: '{"message":"no details"}', message: /lacks valid dagRunDetails/ },
@@ -48,9 +49,20 @@ for (const outcome of ["failure", "success", "retention failure"] as const) {
     const base = join(outer, "artifacts");
     if (outcome === "retention failure") writeFileSync(base, "not a directory");
     const diagnostics = new PocDiagnostics();
-    const service = spawn(process.execPath, ["-e", `process.stdout.write('server output'); process.stderr.write('server error'); process.on('SIGTERM', () => { require('node:fs').writeFileSync(${JSON.stringify(join(home, "data", "settled"))}, 'settled before copy'); process.exit(0); }); setInterval(() => {}, 1000);`], { stdio: ["ignore", "pipe", "pipe"] });
+    const service = new ChildProcess();
+    service.stdout = new PassThrough();
+    service.stderr = new PassThrough();
+    t.mock.method(service, "kill", (signal?: NodeJS.Signals | number) => {
+      assert.equal(signal, "SIGTERM");
+      queueMicrotask(() => {
+        writeFileSync(join(home, "data", "settled"), "settled before copy");
+        service.emit("close", 0, null);
+      });
+      return true;
+    });
     diagnostics.capture(service);
-    await once(service.stderr, "data");
+    service.stdout.emit("data", Buffer.from("server output"));
+    service.stderr.emit("data", Buffer.from("server error"));
     const primary = new TypeError("original assertion failure");
     const server = createServer((_request, response) => { response.writeHead(502); response.end("retained HTTP body"); });
     server.listen(0, "127.0.0.1");

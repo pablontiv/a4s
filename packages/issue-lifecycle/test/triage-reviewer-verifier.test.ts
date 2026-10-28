@@ -1,38 +1,13 @@
 import assert from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { execFileSync } from "node:child_process";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { test } from "node:test";
-import { fileURLToPath } from "node:url";
-import { verifyTriageResult } from "../src/role-dispatch.ts";
-import { atomicJson, executorIdentity, jobId, type JobBinding, type JobResult } from "../src/role-jobs.ts";
-import { nativeEvidence, roleSchema } from "../src/role-runtime.ts";
+import { dispatchStage, verifyTriageResult } from "../src/role-dispatch.ts";
+import { roleSchema } from "../src/role-runtime.ts";
 import { REVIEW_SCHEMA } from "../src/triage/schema.ts";
-import { a4sBin } from "./fixtures/a4s.ts";
+import { fixture } from "./fixtures/planning-triage.ts";
+import { main as roleJobs } from "../src/commands/role-jobs.ts";
 
-function fixture() {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), "omp-dagu-triage-role-")));
-  execFileSync("git", ["init", "--quiet", root]);
-  const binding: JobBinding = { repo: root, worktree: root, lane: "feature", dag: "feature", run: "fixture-run", stage: "triage", role: "triage", sha: "a".repeat(40), iteration: 0, attempt: "0" };
-  const id = jobId(binding);
-  const directory = join(root, ".git", "dagu-feature", "runs", binding.run, "role-jobs", id);
-  mkdirSync(directory, { recursive: true });
-  const transcript = join(directory, `${id}.jsonl`);
-  const output = { poc: "no", behavior: "demonstrated", question: "Already proven runtime?", reason: "PoC PASS" };
-  const rows = [{ type: "session", id: "native-triage" }, { type: "session_init", agent: "triage-reviewer", task: `Authorized Dagu role job ${id}.` },
-    { type: "message", id: "response", message: { role: "assistant", provider: "actual-provider", model: "actual-model", stopReason: "toolUse", content: [{ type: "toolCall", id: "yield-1", name: "yield", arguments: { data: output } }] } },
-    { type: "message", id: "outcome", message: { role: "toolResult", toolCallId: "yield-1", toolName: "yield", details: { status: "success", data: output } } }];
-  const seal = () => {
-    writeFileSync(transcript, rows.map(row => JSON.stringify(row)).join("\n") + "\n");
-    return nativeEvidence(transcript, { agent: "triage-reviewer", patterns: ["@slow", "provider/fallback"] });
-  };
-  const result: JobResult = { schemaVersion: 1, id, binding, executor: executorIdentity(), state: "completed", readyAt: new Date().toISOString(), startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(), readyToStartMs: 0, output, native: seal() };
-  const path = join(directory, "result.json");
-  const save = () => atomicJson(path, result);
-  save();
-  return { root, id, path, result, transcript, rows, seal, save, cleanup: () => rmSync(root, { recursive: true, force: true }) };
-}
 
 test("triage verifies bound native execution and sealed structured decision", () => {
   const f = fixture();
@@ -118,53 +93,54 @@ test("bound triage output retains field expected observed diagnostics", () => {
   }
 });
 
-test("triage command retains receipt diagnostics and rejects stale native iterations", () => {
+test("triage command retains receipt diagnostics and rejects stale native iterations", async () => {
   const f = fixture();
   try {
-    const bin = join(f.root, "bin");
-    mkdirSync(bin);
-    writeFileSync(join(bin, "dagu"), '#!/bin/sh\nprintf "push-back iteration: %s\\n" "${TEST_ITERATION:-0}"\n');
-    chmodSync(join(bin, "dagu"), 0o755);
-    const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, PRIMARY: f.root,
-      RUN: "fixture-run", REVIEW: f.id, POC: "no", QUESTION: String(f.result.output!.question),
-      BASIS: String(f.result.output!.reason) };
-    const cli = fileURLToPath(new URL("../bin/dagu-role-jobs.ts", import.meta.url));
-    const verify = (overrides: NodeJS.ProcessEnv = {}) => spawnSync(process.execPath,
-      ["--import", import.meta.resolve("tsx"), cli, "verify-triage"], { env: { ...env, ...overrides }, encoding: "utf8" });
-    const success = verify();
+    const env = { PRIMARY: f.root, RUN: "fixture-run", REVIEW: f.id, POC: "no",
+      QUESTION: String(f.result.output!.question), BASIS: String(f.result.output!.reason) };
+    const verify = async (iteration = 0) => {
+      const saved = Object.fromEntries(Object.keys(env).map(key => [key, process.env[key]]));
+      Object.assign(process.env, env);
+      let stdout = "", stderr = "", status: number | undefined;
+      try {
+        await roleJobs(["verify-triage"], {
+          log: (...values: unknown[]) => { stdout += `${values.join(" ")}\n`; },
+          error: (...values: unknown[]) => { stderr += `${values.join(" ")}\n`; },
+          exit: (code: number) => { status = code; },
+        }, {
+          dispatchStage,
+          execFileSync: ((file: string, args: string[], options: object) => {
+            if (file === "dagu") {
+              assert.deepEqual(args, ["status", "feature", "--run-id", "fixture-run"]);
+              return `push-back iteration: ${iteration}\n`;
+            }
+            assert.equal(file, "git");
+            return execFileSync(file, args, options);
+          }) as typeof execFileSync,
+        });
+        return { stdout, stderr, status };
+      } finally {
+        for (const [key, value] of Object.entries(saved)) {
+          if (value === undefined) delete process.env[key];
+          else process.env[key] = value;
+        }
+      }
+    };
+    const success = await verify();
     assert.equal(success.status, 0, success.stderr);
     assert.ok(success.stdout.includes(`primary.canonical=${f.root}\n`));
     assert.ok(success.stdout.includes(`result.path=${f.path}\n`));
     assert.ok(success.stdout.includes(`transcript.path=${f.transcript}\n`));
     assert.match(success.stdout, /VERIFIER=PASS role_job=/);
-    const stale = verify({ TEST_ITERATION: "1" });
+    const stale = await verify(1);
     assert.equal(stale.status, 1);
     assert.match(stale.stderr, /another native iteration[\s\S]*VERIFIER=FAIL/);
     assert.ok(stale.stdout.includes(`result.path=${f.path}\n`));
     rmSync(f.path);
-    const missing = verify();
+    const missing = await verify();
     assert.equal(missing.status, 1);
     assert.ok(missing.stdout.includes(`result.path=${f.path}\n`));
     assert.match(missing.stderr, /ENOENT[\s\S]*VERIFIER=FAIL/);
   } finally { f.cleanup(); }
 });
 
-test("template verifies the exact role receipt before state or publication effects", () => {
-  const f = fixture();
-  try {
-    const yaml = readFileSync(new URL("../skills/issue-execution/feature.yaml", import.meta.url), "utf8");
-    const step = yaml.split("  - id: triage_decision\n")[1]!.split("\n  - id: detect_start_primary\n")[0]!;
-    const script = step.split("    run: |\n")[1]!.split("\n").map(line => line.startsWith("      ") ? line.slice(6) : line).join("\n");
-    writeFileSync(f.transcript, "invalid transcript prefix\n");
-    const triage = join(f.root, ".git", "dagu-feature", "runs", "fixture-run", "triage.md");
-    writeFileSync(triage, "Retained prior triage evidence\n");
-    const result = spawnSync("bash", ["-c", script], { encoding: "utf8", env: {
-      ...process.env, A4S_BIN: a4sBin, PRIMARY: f.root, RUN: "fixture-run",
-      REVIEW: f.id, POC: "no", QUESTION: "Already proven runtime?", BASIS: "PoC PASS",
-    } });
-    assert.equal(result.status, 1, result.stderr);
-    assert.ok(result.stdout.includes(`result.path=${f.path}\n`));
-    assert.match(result.stderr, /transcript changed[\s\S]*VERIFIER=FAIL/);
-    assert.equal(readFileSync(triage, "utf8"), "Retained prior triage evidence\n");
-  } finally { f.cleanup(); }
-});

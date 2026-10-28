@@ -8,6 +8,7 @@ import { resolveHostPrimary } from "./primary.ts";
 import { resolveRunPrimary } from "./run-primary.ts";
 
 const exec = promisify(execFile);
+export type ResourceExecutor = (file: string, args: string[], options: { maxBuffer: number; timeout: number }) => Promise<{ stdout: string }>;
 const active: Record<string, true> = { queued: true, running: true, waiting: true };
 
 // Literal shell words, including quoted paths and command boundaries. Callers
@@ -92,10 +93,10 @@ async function adoptedPrimary(primary: string): Promise<boolean> {
   }
 }
 interface Owner { kind: string; run: string; status: string; primary: string; branch: string; issue: string }
-export async function readOwners(): Promise<Owner[]> {
+export async function readOwners(execute: ResourceExecutor = exec): Promise<Owner[]> {
   const owners: Owner[] = [];
   for (const kind of ["feature", "poc"]) {
-    const { stdout } = await exec("dagu", ["history", kind, "--format", "json", "--from", "1970-01-01", "--status", "queued,running,waiting", "--limit", "1000"], { maxBuffer: 64 * 1024 * 1024, timeout: 10000 });
+    const { stdout } = await execute("dagu", ["history", kind, "--format", "json", "--from", "1970-01-01", "--status", "queued,running,waiting", "--limit", "1000"], { maxBuffer: 64 * 1024 * 1024, timeout: 10000 });
     const rows: unknown = JSON.parse(stdout);
     if (!Array.isArray(rows)) throw new Error(`${kind} history is not an array`);
     if (rows.length >= 1000) throw new Error(`${kind} active history reached the 1000-row limit; ownership is incomplete`);
@@ -115,7 +116,7 @@ export async function readOwners(): Promise<Owner[]> {
 }
 const contains = (parent: string, child: string) => child === parent || child.startsWith(parent === sep ? sep : parent + sep);
 
-export async function resourceDecision(event: Event, cwd: string): Promise<CallDecision> {
+export async function resourceDecision(event: Event, cwd: string, execute: ResourceExecutor = exec): Promise<CallDecision> {
   if (event.toolName !== "bash" || typeof event.input.command !== "string") return undefined;
   const words = shellWords(event.input.command);
   let directory = resolve(cwd, typeof event.input.cwd === "string" ? event.input.cwd : ".");
@@ -152,7 +153,7 @@ export async function resourceDecision(event: Event, cwd: string): Promise<CallD
         // An independent clone is its own git primary and stays removable.
         if (removesOwnPrimary) {
           try {
-            const known = await adoptedPrimary(primary) || (owners ??= await readOwners()).some(owner =>
+            const known = await adoptedPrimary(primary) || (owners ??= await readOwners(execute)).some(owner =>
               !!active[owner.status] && (owner.primary === primary || (!branch && contains(path!, owner.primary))));
             if (known) return { block: true, reason: `dagu-feature: ${path ?? target} is the protected primary checkout` };
           } catch (error) {
@@ -162,7 +163,7 @@ export async function resourceDecision(event: Event, cwd: string): Promise<CallD
         const root = join(primary, ".workspace", "worktrees");
         managed ||= !!path && (contains(root, path) || contains(path, root));
         if (!managed) continue;
-        owners ??= await readOwners();
+        owners ??= await readOwners(execute);
         const branches: string[] = [];
         if (path) {
           for (const entry of (await git(primary, "worktree", "list", "--porcelain")).split("\n\n")) {

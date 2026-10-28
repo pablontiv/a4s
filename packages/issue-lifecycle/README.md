@@ -141,13 +141,13 @@ the archive. Bun's virtual filesystem is not a Node preload location.
 `src/file-lock.ts` uses libc `flock` through `bun:ffi` on Linux and macOS:
 blocking exclusive locks, nonblocking exclusive attempts, explicit unlock, and
 descriptor-close release all use the original lock files. Node/tsx development
-and tests use Python's standard-library `fcntl.flock` on an inherited duplicate
-of the open descriptor; the parent's open file description retains the kernel
-lock after the helper exits. This development branch needs `python3`, but the
-released Bun engine never invokes it. `bin/heavy-slot.py` remains necessary for
-source npm test scripts, not release execution. Release archives contain the
-compiled engine, real gate preload files, identity and complete OMP assets;
-they contain neither source executors nor Python helpers.
+and live tests use Python's standard-library `fcntl.flock` on an inherited
+duplicate of the open descriptor; the parent's open file description retains
+the kernel lock after the helper exits. This development branch needs `python3`,
+but the released Bun engine never invokes it. `bin/heavy-slot.py` remains for
+the opt-in `test:live` and `test:compiled` lanes, not default tests. Release
+archives contain the compiled engine, real gate preload files, identity and
+complete OMP assets; they contain neither source executors nor Python helpers.
 Reconcile acquires unique lock paths in Python-compatible Unicode code-point
 order before launching the child, including when paths contain non-BMP text.
 
@@ -225,16 +225,15 @@ The seven skills are `issue-execution`, `repository-discovery`, `backlog-breakdo
 `dagu-feature-bootstrap.yaml` is the source adoption DAG; it authors policy and
 checks readiness, but does not install DAGs or alter the station.
 
-Reconciler behavior tests use the maintained `skills/issue-execution/reconcile.yaml`
-directly, with throwaway materialization for native validation. From this package,
-run `A4S_LIVE_DAGU=0 npx tsx --test --test-concurrency=1 test/reconcile-ci.test.ts test/reconcile-performance.test.ts`
-for isolated script scenarios, or `A4S_LIVE_DAGU=1 npx tsx --test --test-concurrency=1 test/reconcile-ci.test.ts test/reconcile-performance.test.ts test/live/pinned-reconcile.test.ts`
-to include official-Dagu validation, mixed-release dispatch, bounded-tick checks
-and checkpoint/queue scenarios in isolated temporary homes.
-The deadline/performance and fanout scenarios build and run the real release
-executable, so source-loader startup cannot consume the measured operation budget.
-They also accept `A4S_RELEASE_DIR` to reuse an existing release build; their
-deadlines and assertions are unchanged.
+Default reconciler tests exercise classification, pagination, budgets and run
+decisions in-process with injected dependencies. The preserved YAML/bash,
+compiled-artifact, fanout, timing and official-Dagu scenarios live under
+`test/live/`. From the repository root, run
+`npm run test:live --workspace @a4s/issue-lifecycle` with an isolated temporary
+`DAGU_HOME` to include native validation, mixed-release dispatch, bounded-tick
+checks and checkpoint/queue scenarios. Deadline/performance scenarios still
+build and run the real release executable so source-loader startup cannot consume
+the measured operation budget; `A4S_RELEASE_DIR` can reuse an existing build.
 The consumer config file is `.workspace/dagu/config.json`. Admission materializes DAGs from the selected verified release.
 
 The OMP resource guard protects an idle PRIMARY when its policy is committed at
@@ -348,26 +347,40 @@ registrations are removed. Source wrappers remain for Node/tsx development,
 direct CI PR-body validation and the real Node gate preload, not as deployment
 aliases or ambient commands used by release snapshots.
 
-## Development and real-Dagu fixtures
+## Development and test lanes
 
 ```sh
 npm test --workspace @a4s/issue-lifecycle
 npm run typecheck --workspace @a4s/issue-lifecycle
-npm exec --workspace @a4s/issue-lifecycle -- tsx --test \
-  test/planning-template.test.ts test/discovery-contract.test.ts \
-  test/bundle-template.test.ts test/admission.test.ts
-# Before a package release, run live integration on the station with its pinned binary in PATH:
-A4S_LIVE_DAGU=1 npm test
+# Focus a default-lane file without bypassing the spawn guard:
+npm exec --workspace @a4s/issue-lifecycle -- tsx \
+  --import ../../scripts/test-no-spawn.mjs --test test/planning-validator.test.ts
+# Before release, run native integration with a supported Dagu runtime on PATH:
+DAGU_HOME="$(mktemp -d)" A4S_GATE_JOURNAL= npm run test:live --workspace @a4s/issue-lifecycle
+# Release packaging and extracted-engine acceptance remain separately opt-in:
+DAGU_HOME="$(mktemp -d)" A4S_GATE_JOURNAL= npm run test:compiled --workspace @a4s/issue-lifecycle
 ```
 
-CI and default tests need no Dagu binary: real-Dagu cases skip unless
-`A4S_LIVE_DAGU=1`. That opt-in includes `test/live/*.test.ts` and guarded
-real-Dagu cases in retained unit files; `test:live` remains a focused live command.
-The shared live gate inspects `dagu version` only when activated and
-requires the manifest pin. Tests cover progress/SSE (including the 20-topic
-connection boundary), CLI history/status and persisted run records, native
-stale-process repair text, resource identity, planning, transitions, semantic
-multiprocess capacity/recovery, escalation across restart and native receipt verification.
+`npm test` (also the local feature gate and CI lane) selects only
+`test/*.test.ts`, never `test/live/`. It runs module/CLI logic in-process with
+fake process, GitHub, Dagu and station dependencies. The shared
+`scripts/test-no-spawn.mjs` preload patches every `node:child_process` entry point,
+including promisified execution, and throws with the test filename on forbidden
+commands. Only direct `git` against temporary repositories and `tar` used by the
+archive implementation are allowed; shell execution is forbidden. Setting
+`A4S_LIVE_DAGU=1` does not add live tests to the default lane.
+
+`npm run test:live` selects only `test/live/*.test.ts`, sets `A4S_LIVE_DAGU=1`,
+and does not load the spawn guard. It preserves real CLI, compiled release,
+YAML step-script, multiprocess/OS-lock and timing coverage: feature/PoC,
+planning/discovery, admission/cache, reconciler dispatch/fanout/performance,
+status/SSE/recovery, resource/protection/readiness, role jobs and escalation.
+The shared live gate checks the supported Dagu minimum only when activated.
+The compiled-smoke lane enables its release-specific assertions separately.
+Default scripts no longer acquire the heavy slot or force serial test-file
+execution: Node isolates files, and their fixtures do not use station state.
+Native live/compiled lanes retain the station-wide heavy-slot wrapper.
+
 
 Real fixtures use temporary Dagu homes and distinct HTTP ports. Every run identity
 comes from `test/fixtures/run-id.ts` and is reused across CLI, REST, status,
@@ -384,7 +397,7 @@ clean their owned temporary state. Retention failure does not replace the
 original error. This diagnostic evidence is not a production-store snapshot.
 
 For network deadlines, from this workspace run
-`A4S_LIVE_DAGU=0 npx --no-install tsx --test test/status-timeout.test.ts`.
+`npx --no-install tsx --import ../../scripts/test-no-spawn.mjs --test test/status-timeout.test.ts`.
 Six scenarios cover discovery, detail and SSE-header deadlines: 8000 ms succeeds,
 15001 ms aborts against 15000 ms network timeout. Request readiness has a separate
 10000 ms real-time bound captured before mocked timers. The fixture uses the

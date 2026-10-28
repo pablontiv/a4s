@@ -5,6 +5,7 @@ import { execFileSync } from 'node:child_process'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { after } from 'node:test'
 import { Aedes } from 'aedes'
 import { connect } from 'mqtt'
 import type { MqttClient } from 'mqtt'
@@ -140,6 +141,11 @@ export async function closeServer(server: net.Server): Promise<void> {
   }
 }
 
+let seededCwd: string | undefined
+after(() => {
+  if (seededCwd) rmSync(seededCwd, { recursive: true, force: true })
+})
+
 export function createHarness(
   adapterFactory: AdapterFactory,
   overrides: Record<string, unknown>,
@@ -161,12 +167,12 @@ export function createHarness(
   const ownedDiagnosticsRoot = diagnostics ? undefined : mkdtempSync(join(tmpdir(), 'synagent-test-log-'))
   const effectiveDiagnostics = diagnostics ?? { env: { A4S_STATE_ROOT: ownedDiagnosticsRoot } }
   const agentDir = mkdtempSync(join(tmpdir(), 'synagent-agent-'))
-  const ownedCwd = cwd ? undefined : mkdtempSync(join(tmpdir(), 'synagent-cwd-'))
-  const effectiveCwd = cwd ?? ownedCwd!
-  if (ownedCwd) {
-    execFileSync('git', ['init', '-q'], { cwd: effectiveCwd })
-    execFileSync('git', ['remote', 'add', 'origin', 'git@github.com:pablontiv/a4s.git'], { cwd: effectiveCwd })
+  if (!cwd && !seededCwd) {
+    seededCwd = mkdtempSync(join(tmpdir(), 'synagent-cwd-'))
+    execFileSync('git', ['init', '-q'], { cwd: seededCwd })
+    execFileSync('git', ['remote', 'add', 'origin', 'git@github.com:pablontiv/a4s.git'], { cwd: seededCwd })
   }
+  const effectiveCwd = cwd ?? seededCwd!
   const globalSettingsPath = join(agentDir, 'agent-messaging.json')
   const initialSettings = Object.fromEntries(Object.entries(overrides).map(([key, value]) => [
     key.replace(/^a4s\.agent-messaging\./, ''),
@@ -308,7 +314,6 @@ export function createHarness(
       await emit('session_shutdown', { type: 'session_shutdown' })
       if (ownedDiagnosticsRoot) rmSync(ownedDiagnosticsRoot, { recursive: true, force: true })
       rmSync(agentDir, { recursive: true, force: true })
-      if (ownedCwd) rmSync(ownedCwd, { recursive: true, force: true })
     },
     async command(name: string, args: string) {
       const command = commands.get(name)

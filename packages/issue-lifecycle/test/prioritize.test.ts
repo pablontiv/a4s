@@ -1,30 +1,25 @@
 import assert from "node:assert/strict";
-import { execFile, execFileSync } from "node:child_process";
-import { once } from "node:events";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { createServer } from "node:http";
+import { execFileSync, type spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
 import type { Receipt } from "../src/admission.ts";
-import { fixtureArtifact } from "./fixtures/artifact.ts";
+import { inProcessArtifact } from "./fixtures/compiled-artifact.ts";
 import { identity } from "../src/identity.ts";
 import { USED_CONTRACTS } from "../src/artifact-receipt.ts";
 
-const command = fileURLToPath(new URL("../bin/dagu-feature-prioritize.ts", import.meta.url));
-const execute = promisify(execFile);
+import { main } from "../src/commands/prioritize.ts";
+import { roleReceiptArtifact } from "./fixtures/rolejobs-cli.ts";
 interface Entry { name: string; dagRunId: string; statusLabel: string; params: string; spec: string }
 interface State { entries: Entry[]; queue: string[]; calls: string[][]; failure?: string; concurrency: number }
 
 async function fixture(ids: string[], options: { waiting?: boolean; failure?: string; concurrency?: number; admitted?: boolean; ambiguous?: boolean; mismatch?: "params" | "spec" | "primary" } = {}) {
   const root = mkdtempSync(join(tmpdir(), "prioritize-"));
-  const bin = join(root, "bin");
-  mkdirSync(bin);
+  const requests: string[] = [];
   execFileSync("git", ["init", "-q", root]);
   const admitted = options.admitted !== false;
-  const { version, commit, digest } = fixtureArtifact(root);
+  const { version, commit, digest } = inProcessArtifact(root);
   const params = ["ISSUE=334", 'OMP_SESSION_ID=literal "quoted value" {"key":"value"}'];
   // Adopted feature/PoC definitions carry JSON-schema params and a literal
   // env.PRIMARY policy; receipt argv omits sourced defaults and policy fields.
@@ -56,79 +51,75 @@ async function fixture(ids: string[], options: { waiting?: boolean; failure?: st
   writeFileSync(statePath, JSON.stringify(initial));
   // Current deployment is deliberately unrelated to retained per-run exports.
   writeFileSync(join(root, "feature.yaml"), "name: feature\nqueue: changed\nsteps:\n  - command: echo CHANGED\n");
-  writeFileSync(join(bin, "dagu"), `#!/usr/bin/env node
-const fs = require('node:fs');
-const path = require('node:path');
-const assert = require('node:assert/strict');
-const args = process.argv.slice(2);
-if (args[0] === 'version') { console.log("2.24.0"); process.exit(0); }
-const state = JSON.parse(fs.readFileSync(process.env.STATE, 'utf8'));
-state.calls.push(args);
-const save = () => fs.writeFileSync(process.env.STATE, JSON.stringify(state));
-if (args[0] === 'dequeue') {
- const dir = path.join(process.env.DAGU_HOME, 'data', 'prioritize');
- const recovery = JSON.parse(fs.readFileSync(path.join(dir, fs.readdirSync(dir)[0], 'recovery.json'), 'utf8'));
- assert.deepEqual(recovery.order.map(e => e.dagRunId), ${JSON.stringify(initial.queue)});
- for (const entry of recovery.entries) assert.equal(fs.readFileSync(entry.snapshot, 'utf8'), entry.spec);
- const id = args[2].split(':').at(-1);
- if (state.failure === 'dequeue-' + id) { save(); process.exit(17); }
- state.queue = state.queue.filter(value => value !== id);
- state.entries.find(e => e.dagRunId === id).statusLabel = 'hidden';
- save();
- if (state.failure === 'after-dequeue-' + id) process.exit(18);
-} else if (args[0] === 'enqueue') {
- const id = args[args.indexOf('--run-id') + 1];
- if (state.failure === 'enqueue-' + id) { save(); console.error('controlled enqueue failure'); process.exit(19); }
- const entry = state.entries.find(e => e.dagRunId === id);
- assert.equal(args[args.indexOf('--name') + 1], entry.name);
- assert.equal(args[args.indexOf('--queue') + 1], 'repo');
- const snapshot = args[args.indexOf('--run-id') + 2];
- assert.equal(fs.readFileSync(snapshot, 'utf8'), entry.spec);
- if (${admitted}) assert.deepEqual(args.slice(args.indexOf('--') + 1), ${JSON.stringify(params)});
- else assert.equal(args.slice(args.indexOf('--') + 1).join(' '), entry.params);
- state.queue.push(id); entry.statusLabel = 'queued'; save();
-} else { console.error('unexpected command'); process.exit(20); }
-`);
-  chmodSync(join(bin, "dagu"), 0o755);
-  const requests: string[] = [];
   const state = () => JSON.parse(readFileSync(statePath, "utf8")) as State;
-  const server = createServer((request, response) => {
-    const url = new URL(request.url!, "http://localhost");
+  const native = ((_binary: string, args: string[]) => {
+    const value = state();
+    value.calls.push(args);
+    let status = 0; let stderr = "";
+    const save = () => writeFileSync(statePath, JSON.stringify(value));
+    if (args[0] === "dequeue") {
+      const dir = join(root, "data", "prioritize");
+      const recovery = JSON.parse(readFileSync(join(dir, readdirSync(dir)[0]!, "recovery.json"), "utf8"));
+      assert.deepEqual(recovery.order.map((entry: Entry) => entry.dagRunId), initial.queue);
+      for (const entry of recovery.entries) assert.equal(readFileSync(entry.snapshot, "utf8"), entry.spec);
+      const id = args[2]!.split(":").at(-1)!;
+      if (value.failure === `dequeue-${id}`) status = 17;
+      else {
+        value.queue = value.queue.filter(item => item !== id);
+        value.entries.find(entry => entry.dagRunId === id)!.statusLabel = "hidden";
+        if (value.failure === `after-dequeue-${id}`) status = 18;
+      }
+    } else if (args[0] === "enqueue") {
+      const id = args[args.indexOf("--run-id") + 1]!;
+      if (value.failure === `enqueue-${id}`) { status = 19; stderr = "controlled enqueue failure\n"; }
+      else {
+        const entry = value.entries.find(entry => entry.dagRunId === id)!;
+        assert.equal(args[args.indexOf("--name") + 1], entry.name);
+        assert.equal(args[args.indexOf("--queue") + 1], "repo");
+        assert.equal(readFileSync(args[args.indexOf("--run-id") + 2]!, "utf8"), entry.spec);
+        if (admitted) assert.deepEqual(args.slice(args.indexOf("--") + 1), params);
+        else assert.equal(args.slice(args.indexOf("--") + 1).join(" "), entry.params);
+        value.queue.push(id); entry.statusLabel = "queued";
+      }
+    } else { status = 20; stderr = "unexpected command\n"; }
+    save();
+    return { status, stderr, stdout: "", signal: null };
+  }) as typeof spawnSync;
+  const request: typeof fetch = async input => {
+    const url = new URL(String(input));
     requests.push(url.pathname);
     const value = state();
     let body: unknown;
     if (url.pathname === "/api/v1/queues/repo") body = { name: "repo", maxConcurrency: value.concurrency };
     else if (url.pathname === "/api/v1/queues/repo/items") {
-      // Multiple pages exercise native head-to-tail cursor capture.
       const offset = Number(url.searchParams.get("cursor") || 0);
-      body = { items: value.queue.slice(offset, offset + 2).map(id => value.entries.find(e => e.dagRunId === id)), ...(offset + 2 < value.queue.length ? { nextCursor: String(offset + 2) } : {}) };
+      body = { items: value.queue.slice(offset, offset + 2).map(id => value.entries.find(entry => entry.dagRunId === id)), ...(offset + 2 < value.queue.length ? { nextCursor: String(offset + 2) } : {}) };
     } else {
       const match = /^\/api\/v1\/dag-runs\/([^/]+)\/([^/]+)(\/spec)?$/.exec(url.pathname);
-      const entry = match && value.entries.find(e => e.name === match[1] && e.dagRunId === match[2] && e.statusLabel !== "hidden");
+      const entry = match && value.entries.find(entry => entry.name === match[1] && entry.dagRunId === match[2] && entry.statusLabel !== "hidden");
       if (entry) body = match![3] ? { spec: entry.spec } : { dagRunDetails: entry };
     }
-    if (!body) { response.statusCode = 404; body = { message: "not found" }; }
-    response.setHeader("content-type", "application/json");
-    response.end(JSON.stringify(body));
-  });
-  server.listen(0, "127.0.0.1");
-  await once(server, "listening");
-  const { port } = server.address() as { port: number };
+    return new Response(JSON.stringify(body ?? { message: "not found" }), { status: body ? 200 : 404 });
+  };
   const target = entries.find(entry => entry.dagRunId === "u")!;
   return {
     root, initial, state, requests,
     async invoke() {
+      const result = { status: 0, stdout: "", stderr: "" };
       try {
-        const { stdout, stderr } = await execute(process.execPath, [command, target.name, "u"], {
-          cwd: root, env: { ...process.env, DAGU_HOME: root, DAGU_URL: `http://127.0.0.1:${port}`, STATE: statePath, PATH: `${bin}:${process.env.PATH}` },
+        await main([target.name, "u"], {
+          env: { ...process.env, DAGU_HOME: root, DAGU_URL: "http://fixture" },
+          fetch: request, spawnSync: native, receiptArtifact: roleReceiptArtifact,
+          log: message => { result.stdout += `${message}\n`; },
+          error: message => { result.stderr += `${message}\n`; },
         });
-        return { status: 0, stdout, stderr };
       } catch (error) {
-        const result = error as { code: number; stdout: string; stderr: string };
-        return { status: Number(result.code), stdout: result.stdout, stderr: result.stderr };
+        result.status = 1;
+        result.stderr += `${error instanceof Error ? error.message : String(error)}\n`;
       }
+      return result;
     },
-    close() { server.closeAllConnections(); server.close(); rmSync(root, { recursive: true, force: true }); },
+    close() { rmSync(root, { recursive: true, force: true }); },
   };
 }
 

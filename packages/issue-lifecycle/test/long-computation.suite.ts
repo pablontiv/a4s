@@ -14,7 +14,6 @@ import { roleAssignment } from "../src/role-dispatch.ts";
 import { readStallNotices } from "../src/status/repository.ts";
 import { Transitions } from "../src/status/progress.ts";
 import type { JobBinding } from "../src/role-jobs.ts";
-import { proveLongComputation } from "./long-computation-scenario.ts";
 
 const phrases = [
   "bounded representative sample",
@@ -103,19 +102,6 @@ test("a stall produces one owner notice and a stop or resize keeps completed sha
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test("the role-job executor resumes at shard 2 and reports one stall to the owner", async () => {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), "a4s-computation-scenario-")));
-  try {
-    const evidence = await proveLongComputation(root);
-    assert.equal(evidence.resumeIndex, 2);
-    assert.match(evidence.shardOutput, /"index": 1/);
-    assert.equal(evidence.notice.progress.lastShard?.index, 1);
-    assert.ok(evidence.commands.some(command => command.includes("computation sample")));
-    assert.ok(evidence.commands.some(command => command.includes("computation open")));
-    assert.ok(evidence.commands.some(command => command.includes("computation run") && command.includes("--background")));
-    assert.ok(evidence.commands.some(command => command.includes("--decision stop")));
-  } finally { rmSync(root, { recursive: true, force: true }); }
-});
 
 test("implement and run_poc assignments and the skill state the long-computation contract", () => {
   const repo = realpathSync(mkdtempSync(join(tmpdir(), "a4s-assignment-")));

@@ -1,5 +1,5 @@
-import { renderedFeature, renderedPoc } from "./fixtures/rendered-feature.ts";
-import { copyRepositorySeed, normalizedFixtureSnapshot, SEED_COMMIT_DATE, settleCopiedRepository } from "./fixtures/repository-seed.ts";
+import { renderedFeature, renderedPoc } from "../fixtures/rendered-feature.ts";
+import { copyRepositorySeed, normalizedFixtureSnapshot, SEED_COMMIT_DATE, settleCopiedRepository } from "../fixtures/repository-seed.ts";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -7,15 +7,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
-import { stubHistory, withResourceGuard } from "./resource-fixtures.ts";
-import { a4sBin } from "./fixtures/a4s.ts";
+import { stubHistory, withResourceGuard } from "../resource-fixtures.ts";
+import { a4sBin } from "../fixtures/a4s.ts";
 
 const featureDefinitions = [
-  ["template", fileURLToPath(new URL("../skills/issue-execution/feature.yaml", import.meta.url))],
+  ["template", fileURLToPath(new URL("../../skills/issue-execution/feature.yaml", import.meta.url))],
   ["rendered DAG", fileURLToPath(new URL(renderedFeature, import.meta.url))],
 ] as const;
 const pocDefinitions = [
-  ["template", fileURLToPath(new URL("../skills/issue-execution/poc.yaml", import.meta.url))],
+  ["template", fileURLToPath(new URL("../../skills/issue-execution/poc.yaml", import.meta.url))],
   ["rendered DAG", fileURLToPath(new URL(renderedPoc, import.meta.url))],
 ] as const;
 
@@ -486,7 +486,7 @@ for (const [name, definition] of [...featureDefinitions, ...pocDefinitions]) {
 for (const kind of ["feature", "poc"]) {
   test(`${kind} cancelled exit retains unpublished commits and staged, unstaged and untracked recovery`, () => {
     const repo = kind === "feature" ? repository() : repository("poc/test-run", "poc-test-run");
-    const definition = fileURLToPath(new URL(`../skills/issue-execution/${kind}.yaml`, import.meta.url));
+    const definition = fileURLToPath(new URL(`../../skills/issue-execution/${kind}.yaml`, import.meta.url));
     try {
       const evidence = kind === "feature" ? state(repo) : join(repo.primary, ".git", "poc", "runs", "test-run");
       mkdirSync(evidence, { recursive: true });

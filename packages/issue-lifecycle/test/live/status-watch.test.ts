@@ -4,11 +4,11 @@ import { createServer } from "node:http";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { BUNDLE_VERSION } from "../src/bundle.ts";
+import { BUNDLE_VERSION } from "../../src/bundle.ts";
 import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
-import extension from "../src/status/index.ts";
-import { statusRepository } from "./fixtures/status-repository.ts";
+import extension from "../../src/status/index.ts";
+import { statusRepository } from "../fixtures/status-repository.ts";
 
 for (const drift of [undefined, "main", "bundle", "invalid JSON", "unreadable manifest"] as const) for (const idle of [true, false]) test(`watcher delivers five owner notices and keeps the turn running with receiver idle=${idle}, drift=${drift}`, { timeout: 15_000 }, async () => {
   const primary = mkdtempSync(join(tmpdir(), "omp-dagu-notice-"));
