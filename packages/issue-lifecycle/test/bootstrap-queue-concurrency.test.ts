@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { closeSync, fstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { closeSync, fstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -163,6 +163,7 @@ test("install-reconciler creates a missing station DAG and leaves identical byte
     assert.equal(replaced.status, 0, replaced.stderr);
     assert.match(readFileSync(dest, "utf8"), /dagu-feature-queue-concurrency=4/);
     assert.notEqual(fileMtime(dest), mtime);
+    assert.equal(readdirSync(join(f.home, "dags")).some(name => name.startsWith(".reconcile-")), false);
   } finally { f.dispose(); }
 });
 

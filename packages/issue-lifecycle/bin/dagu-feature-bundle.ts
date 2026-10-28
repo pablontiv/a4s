@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,6 +18,18 @@ function readIfPresent(path: string): string | undefined {
   } catch (error) {
     if (error instanceof Error && "code" in error && error.code === "ENOENT") return undefined;
     throw error;
+  }
+}
+
+function replaceIfChanged(dest: string, text: string): void {
+  if (readIfPresent(dest) === text) return;
+  const stage = mkdtempSync(join(dirname(dest), ".reconcile-"));
+  try {
+    const temporary = join(stage, basename(dest));
+    writeFileSync(temporary, text);
+    renameSync(temporary, dest);
+  } finally {
+    rmSync(stage, { recursive: true, force: true });
   }
 }
 
@@ -111,7 +123,7 @@ function main(): void {
         if (!file || !dest) throw new Error("install-reconciler requires <answers> <reconcile.yaml>");
         const text = materializeInstalled(dagName("reconcile.yaml"), readAnswersFile(file));
         mkdirSync(dirname(dest), { recursive: true });
-        if (readIfPresent(dest) !== text) writeFileSync(dest, text);
+        replaceIfChanged(dest, text);
         console.log(`reconcile=${dest}`);
       }
     } catch (error) {
