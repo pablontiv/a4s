@@ -26,6 +26,8 @@ workspaces, not public npm publication.
   spike #690 decision, descartar.
 - [AGENTS.md TLDR per turn](docs/architecture/agents-tldr-per-turn.md):
   spike #691 decision, descartar.
+- [Harness² vs issue-lifecycle](docs/architecture/harness2-issue-lifecycle.md):
+  spike #692 decision, descartar.
 
 ## Delivered components
 

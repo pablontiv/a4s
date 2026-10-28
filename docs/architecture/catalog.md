@@ -52,6 +52,8 @@ single `planning.yaml` breakdown backend. That backend creates issues after
 review and approval; it does not schedule the sprint. Definition of Done and
 yes/no goal checks are ceremony content. Sprint Review evaluates a goal rather
 than adding a feature checkpoint. An FYI is not authorization.
+Spike #692 compared Harness² with these loops and discarded adoption; see
+[Harness² vs issue-lifecycle](harness2-issue-lifecycle.md).
 
 Package agents are [`plan-reviewer`](../../packages/issue-lifecycle/agents/plan-reviewer.md)
 and [`triage-reviewer`](../../packages/issue-lifecycle/agents/triage-reviewer.md).
