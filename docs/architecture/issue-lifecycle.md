@@ -175,7 +175,12 @@ activity comes from a bounded log tail; PoC human-task activity comes from a
 bounded owning transcript tail. Input is sanitized before display.
 
 The OMP resource guard intercepts literal destructive Bash calls and checks
-active feature/PoC ownership. Primary resources stay protected. It does not
+active feature/PoC ownership. An idle PRIMARY is also protected when it holds
+`.workspace/dagu/config.json` committed at `HEAD` and its canonical path matches
+the host PRIMARY resolver, using the committed `lane` for the workspace binding.
+The resolver checks `$DAGU_HOME/primaries/<lane>`, `A4S_PRIMARY`, then
+`$DAGU_HOME/a4s-primary`. Rendered DAGs do not establish adoption; identical
+committed policy in an unbound clone does not protect it. The guard does not
 sandbox shell expansion, external scripts, dynamic commands or other tools.
 Dagu's private-index commit, gate lock and resource records are cooperative
 contracts: TUI access to Git and the Dagu store makes the boundary advisory.
