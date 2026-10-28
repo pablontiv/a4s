@@ -175,8 +175,13 @@ The opt-in `npm run test:compiled --workspace @a4s/issue-lifecycle` builds both
 targets, checks archive contents and reproducibility, and exercises the extracted
 Linux engine, real Node gate preload, OMP entry loading and flock interoperation.
 Set `A4S_RELEASE_DIR` to an existing build directory to reuse its first build.
-Run tests with `node_modules/.bin` and the official `dagu` on `PATH`, and a fresh
-temporary `DAGU_HOME`; none of these commands changes the station service.
+Run tests with `node_modules/.bin` and the official `dagu` on `PATH`. The test
+preload automatically isolates `HOME` and `DAGU_HOME`; none of these commands
+changes the station service. The native wrapper retains only the inherited
+station-wide orchestration lock (see [test lanes](#development-and-test-lanes)).
+For compiled tests, isolated `HOME` may relocate Bun's cache unless
+`BUN_INSTALL` or `BUN_INSTALL_CACHE_DIR` is explicitly configured.
+`A4S_RELEASE_DIR` remains available to reuse an existing build.
 
 ## Consolidated documentation
 
@@ -229,9 +234,9 @@ Default reconciler tests exercise classification, pagination, budgets and run
 decisions in-process with injected dependencies. The preserved YAML/bash,
 compiled-artifact, fanout, timing and official-Dagu scenarios live under
 `test/live/`. From the repository root, run
-`npm run test:live --workspace @a4s/issue-lifecycle` with an isolated temporary
-`DAGU_HOME` to include native validation, mixed-release dispatch, bounded-tick
-checks and checkpoint/queue scenarios. Deadline/performance scenarios still
+`npm run test:live --workspace @a4s/issue-lifecycle` to include native validation,
+mixed-release dispatch, bounded-tick checks and checkpoint/queue scenarios.
+The test preload automatically isolates `DAGU_HOME`. Deadline/performance scenarios still
 build and run the real release executable so source-loader startup cannot consume
 the measured operation budget; `A4S_RELEASE_DIR` can reuse an existing build.
 The consumer config file is `.workspace/dagu/config.json`. Admission materializes DAGs from the selected verified release.
@@ -352,14 +357,22 @@ aliases or ambient commands used by release snapshots.
 ```sh
 npm test --workspace @a4s/issue-lifecycle
 npm run typecheck --workspace @a4s/issue-lifecycle
-# Focus a default-lane file without bypassing the spawn guard:
+# Focus a default-lane file without bypassing home isolation or the spawn guard:
 npm exec --workspace @a4s/issue-lifecycle -- tsx \
+  --import ./test/fixtures/dagu-home.mjs \
   --import ../../scripts/test-no-spawn.mjs --test test/planning-validator.test.ts
 # Before release, run native integration with a supported Dagu runtime on PATH:
-DAGU_HOME="$(mktemp -d)" A4S_GATE_JOURNAL= npm run test:live --workspace @a4s/issue-lifecycle
+A4S_GATE_JOURNAL= npm run test:live --workspace @a4s/issue-lifecycle
 # Release packaging and extracted-engine acceptance remain separately opt-in:
-DAGU_HOME="$(mktemp -d)" A4S_GATE_JOURNAL= npm run test:compiled --workspace @a4s/issue-lifecycle
+A4S_GATE_JOURNAL= npm run test:compiled --workspace @a4s/issue-lifecycle
 ```
+
+All three lifecycle test lanes load `test/fixtures/dagu-home.mjs` before test
+modules. It replaces inherited `HOME` and `DAGU_HOME` with a fresh private
+temporary directory for each test process and removes that directory on exit.
+Fixtures and subprocesses use isolated homes rather than the ambient station's
+artifact cache, including children that omit `DAGU_HOME` and fall back to
+`~/.dagu`. Callers need not set temporary homes.
 
 `npm test` (also the local feature gate and CI lane) selects only
 `test/*.test.ts`, never `test/live/`. It runs module/CLI logic in-process with
@@ -379,8 +392,13 @@ The shared live gate checks the supported Dagu minimum only when activated.
 The compiled-smoke lane enables its release-specific assertions separately.
 Default scripts no longer acquire the heavy slot or force serial test-file
 execution: Node isolates files, and their fixtures do not use station state.
-Native live/compiled lanes retain the station-wide heavy-slot wrapper.
-
+Native live/compiled lanes retain `bin/heavy-slot.py`: before the test preload
+runs, this wrapper acquires the inherited station-wide
+`$DAGU_HOME/a4s/heavy-slot.lock` (default home `~/.dagu`). Keep the service's
+canonical home in the invoking shell so concurrent native runs share that lock;
+do not set a temporary home around the npm command. This orchestration lock is
+the single explicit exception outside the isolated test process, not permission
+for tests, fixtures or subprocesses to access the station's artifact cache.
 
 Real fixtures use temporary Dagu homes and distinct HTTP ports. Every run identity
 comes from `test/fixtures/run-id.ts` and is reused across CLI, REST, status,
@@ -397,7 +415,7 @@ clean their owned temporary state. Retention failure does not replace the
 original error. This diagnostic evidence is not a production-store snapshot.
 
 For network deadlines, from this workspace run
-`npx --no-install tsx --import ../../scripts/test-no-spawn.mjs --test test/status-timeout.test.ts`.
+`npx --no-install tsx --import ./test/fixtures/dagu-home.mjs --import ../../scripts/test-no-spawn.mjs --test test/status-timeout.test.ts`.
 Six scenarios cover discovery, detail and SSE-header deadlines: 8000 ms succeeds,
 15001 ms aborts against 15000 ms network timeout. Request readiness has a separate
 10000 ms real-time bound captured before mocked timers. The fixture uses the

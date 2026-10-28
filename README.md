@@ -93,7 +93,7 @@ station heavy slot nor forced serial test-file execution.
 Native CLI, YAML, OS-lock, compiled-artifact and timing scenarios are opt-in:
 
 ```sh
-DAGU_HOME="$(mktemp -d)" A4S_GATE_JOURNAL= npm run test:live --workspace @a4s/issue-lifecycle
+A4S_GATE_JOURNAL= npm run test:live --workspace @a4s/issue-lifecycle
 npm run test:live --workspace @a4s/agent-messaging
 npm run test:live --workspace @a4s/message-bus
 ```
@@ -103,6 +103,11 @@ script sets `A4S_LIVE_DAGU=1` and retains heavy-slot serialization; setting that
 variable on `npm test` never changes its lane. Release-archive acceptance uses
 the lifecycle's separate `test:compiled` command. The optional Bun-only Kiro
 provider has no default `test` script and remains outside the root gate.
+All lifecycle test lanes automatically isolate `HOME` and `DAGU_HOME` in a
+temporary directory per test process. Keep the service's canonical `DAGU_HOME`
+in the invoking shell: the native wrapper acquires the inherited station-wide
+heavy-slot lock before isolation. That orchestration lock is the single explicit
+exception; test processes, fixtures and subprocess artifact caches stay isolated.
 
 
 Live status-watcher tests own a temporary Git repository with an origin matching

@@ -82,7 +82,19 @@ The command shape was the example above, with `--cwd` set to the candidate or pr
 
 Two runtime observations informed the successful commands: Codex runs could produce empty thinking streams and reach the time limit; and on this OMP version, asynchronous task completion requires exposing `wait` to the print-mode parent. With only `--tools task`, some parents returned a pending result and disposed their child. The maintained recipe therefore uses `--tools task,wait` and waits for the actual result.
 
-Consumer checks: `npm exec --workspace @a4s/issue-lifecycle -- tsx --test test/triage-reviewer-verifier.test.ts` (**7 pass**); `npm test --workspace @a4s/review-routing` (**36 pass**); `python3 -m pytest skills/gpt-quota-audit/scripts -q` in an isolated pytest environment (**17 pass**). Root `npm test` passed (**654 pass, 28 existing skips, 0 fail**) and `npm run typecheck` passed across all eight workspaces. Native source files are unversioned root resources; package manifests and lockfile remain unchanged.
+Historical consumer checks: the lifecycle's `test/triage-reviewer-verifier.test.ts` (**7 pass**); `npm test --workspace @a4s/review-routing` (**36 pass**); `python3 -m pytest skills/gpt-quota-audit/scripts -q` in an isolated pytest environment (**17 pass**). Root `npm test` passed (**654 pass, 28 existing skips, 0 fail**) and `npm run typecheck` passed across all eight workspaces. Native source files are unversioned root resources; package manifests and lockfile remain unchanged.
+
+The current safe focused lifecycle command from the repository root is:
+
+```sh
+npm exec --workspace @a4s/issue-lifecycle -- tsx \
+  --import ./test/fixtures/dagu-home.mjs \
+  --import ../../scripts/test-no-spawn.mjs --test test/triage-reviewer-verifier.test.ts
+```
+
+This updated command preserves home isolation and the default spawn guard; it
+has not been rerun for this documentation update. The counts above remain
+historical evidence, not results for the updated command.
 
 ## Source preservation and ownership
 
