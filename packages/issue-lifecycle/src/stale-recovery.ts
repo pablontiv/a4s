@@ -1,5 +1,6 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { packageRoot } from "./executable.ts";
 
 /** Official Dagu scheduler text for a stale local-process repair. */
 export const STALE_PROCESS_ERROR = "process terminated unexpectedly - stale local process detected";
@@ -40,7 +41,7 @@ const NODE_STATUS = ["not_started", "running", "failed", "aborted", "succeeded",
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const STEP = /^[A-Za-z0-9_]+$/;
 
-const FEATURE_TEMPLATE = readFileSync(new URL("../skills/issue-execution/feature.yaml", import.meta.url), "utf8");
+const FEATURE_TEMPLATE = readFileSync(join(packageRoot, "skills/issue-execution/feature.yaml"), "utf8");
 
 export const FEATURE_STEP_ORDER: readonly string[] = [...FEATURE_TEMPLATE.matchAll(/^  - id: ([A-Za-z0-9_]+)$/gm)].map(match => match[1]!);
 

@@ -136,9 +136,9 @@ test("stale-process recovery follows the SKILL table and refuses non-stale or sa
     for (const checkpoint of row[1]!.split(",").map(part => part.trim())) fromSkill[checkpoint] = step;
   }
   assert.deepEqual(fromSkill, FEATURE_CHECKPOINT_RETRY);
-  assert.match(skill, /dagu-stale-recovery recover-scheduled/);
+  assert.match(skill, /a4s stale-recovery recover-scheduled/);
   assert.match(skill, /manual table above/);
-  assert.match(readFileSync(new URL("../skills/issue-execution/reconcile.yaml", import.meta.url), "utf8"), /dagu-stale-recovery recover-scheduled/);
+  assert.match(readFileSync(new URL("../skills/issue-execution/reconcile.yaml", import.meta.url), "utf8"), /"\$A4S_BIN" stale-recovery recover-scheduled/);
   assert.ok(FEATURE_HUMAN_TASKS.has("escalation"));
   assert.equal(Object.hasOwn(FEATURE_CHECKPOINT_RETRY, "escalation"), false);
 

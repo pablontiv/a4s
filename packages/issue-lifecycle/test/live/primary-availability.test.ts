@@ -13,6 +13,7 @@ import { BUNDLE_VERSION } from "../../src/bundle.ts";
 
 import { liveDagu, liveDaguVersion } from "../fixtures/live-dagu.ts";
 import { testRunId } from "../fixtures/run-id.ts";
+import { a4sBin } from "../fixtures/a4s.ts";
 const feature = readFileSync(new URL(renderedFeature, import.meta.url), "utf8");
 const poc = readFileSync(new URL(renderedPoc, import.meta.url), "utf8");
 function step(source: string, id: string): string {
@@ -44,7 +45,7 @@ test("Dagu isolated primary checkpoints release the queue and rewind the same ru
   mkdirSync(join(home, "dags"), { recursive: true });
   mkdirSync(bin);
   const servicePort = await port();
-  const env = { ...process.env, DAGU_PARAMS_JSON: "{}", DAGU_HOME: home, DAGU_COORDINATOR_ENABLED: "false", DAGU_HOST: "127.0.0.1", DAGU_PORT: String(servicePort), PATH: `${bin}:${process.env.PATH}` };
+  const env = { ...process.env, A4S_BIN: a4sBin, DAGU_PARAMS_JSON: "{}", DAGU_HOME: home, DAGU_COORDINATOR_ENABLED: "false", DAGU_HOST: "127.0.0.1", DAGU_PORT: String(servicePort), PATH: `${bin}:${process.env.PATH}` };
   const command = (executable: string, args: string[], cwd = root) => execFileSync(executable, args, { cwd, env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
   const dagu = (...args: string[]) => command("dagu", args);
   const git = (cwd: string, ...args: string[]) => command("git", ["-C", cwd, ...args]);

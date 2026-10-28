@@ -8,15 +8,21 @@ See [private installation](../operations/private-install.md),
 [deployment and recovery](../operations/deployment.md) and the
 [dated walkthrough](../operations/v1-walkthrough.md).
 
-The [versioned artifact contract](artifact-contract.md) specifies the #698 target
-release, cache, engine-handoff and successor boundaries. It does not assert that
-the station cutover has been activated.
+The [versioned artifact contract](artifact-contract.md) defines release → verified
+`$DAGU_HOME/cache/a4s/<version>/` → explicit tuple handoff to the compiled `a4s`.
+Committed `.workspace/dagu/config.json` selects `uses: a4s@v<major>` or an exact
+`a4s@v<x.y.z>`. Successors retain the parent receipt's artifact rather than
+resolving the moving alias again. Release roots carry both OMP entries, agents
+and seven skills; installed source checkouts are not engine execution paths.
+This does not assert that the operator's drained station cutover has occurred.
+Queue capacity, service configuration and activation remain operator-owned:
+a4s neither writes station configuration nor restarts Dagu.
 
 ## Components and ownership
 
 | Delivered owner | Public surface and responsibility | Existing checks |
 | --- | --- | --- |
-| [`@a4s/issue-lifecycle`](../../packages/issue-lifecycle/README.md) | `packages/issue-lifecycle`; OMP status and triage/resource-guard extensions, package agents, seven skills, bootstrap and Dagu CLIs | `test/*.test.ts`, opt-in `test/live/*.test.ts`; [architecture](issue-lifecycle.md) |
+| [`@a4s/issue-lifecycle`](../../packages/issue-lifecycle/README.md) | `packages/issue-lifecycle`; compiled release engine, OMP status and triage/resource-guard extensions, package agents, seven skills and policy-authoring bootstrap | `test/*.test.ts`, opt-in `test/live/*.test.ts`; [architecture](issue-lifecycle.md) |
 | [`@a4s/review-routing`](../../packages/review-routing/README.md) | `packages/review-routing`; strict cross-family candidate selection, native `crossFamilyReview.policies` keyed by exact dispatch name; root hook/ordering APIs and `./settings` reader | `test/order.test.ts` under pinned Bun; workspace test/typecheck |
 | [`@a4s/hot-reload`](../../packages/hot-reload/README.md) | `packages/hot-reload`; shared `hotReload` generation/lifecycle helper for retained reloadable shims | Workspace tests/typecheck; bounded native #421 evidence in its README |
 | [`@a4s/orca-integration`](../../packages/orca-integration/README.md) | `packages/orca-integration`; reclaimable-worker lifecycle guard and explicit concrete model routing for a bound Orca coordinator; exported guard/router factories | `test/lifecycle-guard.test.ts`, `test/model-router.test.ts`, `test/orca-cli.test.ts` |

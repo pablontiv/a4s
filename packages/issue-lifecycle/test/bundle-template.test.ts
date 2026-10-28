@@ -1,4 +1,3 @@
-import { liveDagu } from "./fixtures/live-dagu.ts";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -7,12 +6,43 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { parse } from "yaml";
-import { BUNDLE_NAME, BUNDLE_VERSION } from "../src/bundle.ts";
 
 const skill = (name: string): string => readFileSync(
   fileURLToPath(new URL(`../skills/issue-execution/${name}`, import.meta.url)),
   "utf8",
 );
+
+function bootstrapStep(id: string): string {
+  return parse(skill("dagu-feature-bootstrap.yaml")).steps.find((step: { id: string }) => step.id === id).run;
+}
+
+function bootstrapExecutable(root: string): string {
+  const launcher = join(root, "a4s");
+  writeFileSync(launcher, `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} --import ${JSON.stringify(import.meta.resolve("tsx"))} ${JSON.stringify(fileURLToPath(new URL("../src/cli.ts", import.meta.url)))} "$@"\n`, { mode: 0o755 });
+  return launcher;
+}
+
+test("bootstrap defaults, preserves and explicitly selects release uses without authoring DAGs", () => {
+  const root = mkdtempSync(join(tmpdir(), "a4s-bootstrap-uses-"));
+  try {
+    const stage = join(root, ".workspace/dagu/config.json");
+    for (const [answer, installed, expected] of [
+      ["", "", "a4s@v0"], ["", "a4s@v1.2.3", "a4s@v1.2.3"],
+      ["a4s@v2", "a4s@v1.2.3", "a4s@v2"], ["a4s@v2.3.4", "", "a4s@v2.3.4"],
+    ]) {
+      const result = spawnSync("bash", ["-c", bootstrapStep("write_config")], { encoding: "utf8", env: {
+        ...process.env, PRIMARY: root, STAGE: stage, A4S_BIN: bootstrapExecutable(root), DAG_RUN_ID: "bootstrap-uses",
+        REPO: "fixture", BASE_BRANCH: "main", GATE: "true", REQUIRED_CHECK: "validate",
+        TEST_PATHS: "^test/", REBASE_RESOLVER: "", USES: answer, CURRENT_USES: installed,
+      } });
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(JSON.parse(readFileSync(stage, "utf8")).uses, expected);
+    }
+    const tree = spawnSync("find", [join(root, ".workspace"), "-type", "f"], { encoding: "utf8" });
+    assert.equal(tree.status, 0, tree.stderr);
+    assert.deepEqual(tree.stdout.trim().split("\n"), [stage]);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
 
 test("bootstrap selects and verifies the explicit lane or the GitHub default", () => {
   const bootstrap = skill("dagu-feature-bootstrap.yaml");
@@ -33,12 +63,8 @@ test("bootstrap selects and verifies the explicit lane or the GitHub default", (
   }
 });
 
-test("bootstrap renders optional validation as the sole adopted value", {
-  ...liveDagu,
-}, () => {
-  const bootstrap = skill("dagu-feature-bootstrap.yaml");
-  const render = bootstrap.split("  - id: render\n")[1]!.split("\n  - id: reconcile")[0]!;
-  const script = render.split("    run: |\n")[1]!.split("\n").map(line => line.slice(6)).join("\n");
+test("bootstrap writes optional validation as the sole adopted value", () => {
+  const script = bootstrapStep("write_config");
   const root = mkdtempSync(join(tmpdir(), "omp-dagu-bootstrap-validation-"));
   try {
     for (const validation of ["", "Run smoke\nKeep 'quotes', $HOME and backslashes \\\\ literal"]) {
@@ -47,12 +73,11 @@ test("bootstrap renders optional validation as the sole adopted value", {
         encoding: "utf8",
         env: {
           ...process.env, DAGU_HOME: join(root, "home"), DAG_RUN_ID: "bootstrap-test",
-          SKILL_DIR: fileURLToPath(new URL("../skills/issue-execution", import.meta.url)),
+          A4S_BIN: bootstrapExecutable(root),
           STAGE: stage, REPO: "fixture", BASE_BRANCH: "main", PRIMARY: root,
           GATE: "true", REQUIRED_CHECK: "validate", TEST_PATHS: "^test/",
           REBASE_RESOLVER: "node packages/issue-lifecycle/bin/dagu-bundle-rebase.mjs",
-          VALIDATION: validation, BUNDLE_NAME, BUNDLE_VERSION,
-          DAGU_VERSION: "2.24.0", SOURCE_NWO: "owner/repo", SOURCE_SHA: "a".repeat(40),
+          VALIDATION: validation,
         },
       });
       assert.equal(result.status, 0, result.stdout + result.stderr);
@@ -64,10 +89,8 @@ test("bootstrap renders optional validation as the sole adopted value", {
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test("bootstrap preserves the installed blocker reporting choice and accepts explicit changes", liveDagu, () => {
-  const bootstrap = skill("dagu-feature-bootstrap.yaml");
-  const render = bootstrap.split("  - id: render\n")[1]!.split("\n  - id: reconcile")[0]!;
-  const script = render.split("    run: |\n")[1]!.split("\n").map(line => line.slice(6)).join("\n");
+test("bootstrap preserves the installed blocker reporting choice and accepts explicit changes", () => {
+  const script = bootstrapStep("write_config");
   const root = mkdtempSync(join(tmpdir(), "omp-dagu-blocker-policy-"));
   const stage = join(root, "config.json");
   let installed = "";
@@ -75,11 +98,9 @@ test("bootstrap preserves the installed blocker reporting choice and accepts exp
     for (const [answer, expected] of [["", "ask"], ["auto", "auto"], ["", "auto"], ["ask", "ask"], ["", "ask"]]) {
       const result = spawnSync("bash", ["-c", script], { encoding: "utf8", env: {
         ...process.env, DAGU_HOME: join(root, "home"), DAG_RUN_ID: "bootstrap-policy",
-        SKILL_DIR: fileURLToPath(new URL("../skills/issue-execution", import.meta.url)),
+        A4S_BIN: bootstrapExecutable(root),
         STAGE: stage, PRIMARY: root, REPO: "fixture", BASE_BRANCH: "main",
         GATE: "true", REQUIRED_CHECK: "validate", TEST_PATHS: "^test/", REBASE_RESOLVER: "",
-        BUNDLE_NAME, BUNDLE_VERSION, DAGU_VERSION: "2.24.0",
-        SOURCE_NWO: "owner/repo", SOURCE_SHA: "a".repeat(40),
         A4S_BLOCKER_REPORTING: answer, CURRENT_A4S_BLOCKER_REPORTING: installed,
       } });
       assert.equal(result.status, 0, result.stdout + result.stderr);
@@ -106,10 +127,8 @@ test("adopted blocker reporting policy rejects run input before effects", () => 
   assert.equal(accepted.status, 0, accepted.stderr);
 });
 
-test("bootstrap renders default, preserved and explicit CodeQL thresholds and rejects enqueue overrides", () => {
-  const bootstrap = skill("dagu-feature-bootstrap.yaml");
-  const script = bootstrap.split("  - id: render\n")[1]!.split("\n  - id: reconcile")[0]!
-    .split("    run: |\n")[1]!.split("\n").map(line => line.slice(6)).join("\n");
+test("bootstrap writes default, preserved and explicit CodeQL thresholds and rejects enqueue overrides", () => {
+  const script = bootstrapStep("write_config");
   const admission = skill("feature.yaml").split("  - id: admission\n")[1]!.split("\n  - id: triage")[0]!
     .split("    run: |\n")[1]!.split("\n").map(line => line.slice(6)).join("\n");
   const root = mkdtempSync(join(tmpdir(), "a4s-codeql-policy-"));
@@ -119,11 +138,9 @@ test("bootstrap renders default, preserved and explicit CodeQL thresholds and re
     ]) {
       const stage = join(root, "config.json");
       const result = spawnSync("bash", ["-c", script], { encoding: "utf8", env: {
-        ...process.env, PRIMARY: root, SKILL_DIR: fileURLToPath(new URL("../skills/issue-execution", import.meta.url)),
+        ...process.env, PRIMARY: root, A4S_BIN: bootstrapExecutable(root),
         STAGE: stage, DAG_RUN_ID: "bootstrap-codeql", REPO: "fixture", BASE_BRANCH: "main",
         GATE: "true", REQUIRED_CHECK: "validate", REBASE_RESOLVER: "", TEST_PATHS: "test",
-        BUNDLE_NAME, BUNDLE_VERSION, DAGU_VERSION: "2.24.0",
-        SOURCE_NWO: "example/repo", SOURCE_SHA: "a".repeat(40),
         CODEQL_SECURITY_THRESHOLD: answer, CURRENT_CODEQL_SECURITY_THRESHOLD: installed,
         CODEQL_ALERTS_THRESHOLD: "", CURRENT_CODEQL_ALERTS_THRESHOLD: "errors_and_warnings",
         CODE_SCANNING: "", CURRENT_CODE_SCANNING: "",
@@ -139,11 +156,9 @@ test("bootstrap renders default, preserved and explicit CodeQL thresholds and re
     ] as const) {
       const stage = join(root, "config.json");
       const result = spawnSync("bash", ["-c", script], { encoding: "utf8", env: {
-        ...process.env, PRIMARY: root, SKILL_DIR: fileURLToPath(new URL("../skills/issue-execution", import.meta.url)),
+        ...process.env, PRIMARY: root, A4S_BIN: bootstrapExecutable(root),
         STAGE: stage, DAG_RUN_ID: "bootstrap-codeql", REPO: "fixture", BASE_BRANCH: "main",
         GATE: "true", REQUIRED_CHECK: "validate", REBASE_RESOLVER: "", TEST_PATHS: "test",
-        BUNDLE_NAME, BUNDLE_VERSION, DAGU_VERSION: "2.24.0",
-        SOURCE_NWO: "example/repo", SOURCE_SHA: "a".repeat(40),
         CODEQL_SECURITY_THRESHOLD: "", CURRENT_CODEQL_SECURITY_THRESHOLD: "high_or_higher",
         CODEQL_ALERTS_THRESHOLD: "", CURRENT_CODEQL_ALERTS_THRESHOLD: "errors",
         CODE_SCANNING: answer, CURRENT_CODE_SCANNING: installed,
@@ -152,11 +167,9 @@ test("bootstrap renders default, preserved and explicit CodeQL thresholds and re
       assert.equal(JSON.parse(readFileSync(stage, "utf8")).codeScanning, expected);
     }
     const rejectedChoice = spawnSync("bash", ["-c", script], { encoding: "utf8", env: {
-      ...process.env, PRIMARY: root, SKILL_DIR: fileURLToPath(new URL("../skills/issue-execution", import.meta.url)),
+      ...process.env, PRIMARY: root, A4S_BIN: bootstrapExecutable(root),
       STAGE: join(root, "config.json"), DAG_RUN_ID: "bootstrap-codeql", REPO: "fixture", BASE_BRANCH: "main",
       GATE: "true", REQUIRED_CHECK: "validate", REBASE_RESOLVER: "", TEST_PATHS: "test",
-      BUNDLE_NAME, BUNDLE_VERSION, DAGU_VERSION: "2.24.0",
-      SOURCE_NWO: "example/repo", SOURCE_SHA: "a".repeat(40),
       CODE_SCANNING: "sometimes",
     } });
     assert.notEqual(rejectedChoice.status, 0);

@@ -1,8 +1,9 @@
 import { spawnSync } from "node:child_process";
-import { closeSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { isRecord } from "./type-guard.ts";
 import { requireOwnerSession } from "./owner-session.ts";
+import { withFileLock } from "./file-lock.ts";
 
 /** Visible checkpoint named in gate, push and auto-merge logs and [DAGU STATE]. */
 export const INTEGRATION_HOLD_CHECKPOINT = "integration_hold";
@@ -235,19 +236,6 @@ function writeRecord(primary: string, record: IntegrationProtectionRecord): void
   renameSync(temporary, file);
 }
 
-function withFileLock<T>(file: string, body: () => T): T {
-  mkdirSync(dirname(file), { recursive: true });
-  const fd = openSync(file, "a+", 0o600);
-  try {
-    const locked = spawnSync("python3", ["-c", "import fcntl; fcntl.flock(3, fcntl.LOCK_EX)"], {
-      stdio: ["ignore", "pipe", "pipe", fd],
-    });
-    if (locked.status !== 0) throw new Error(locked.stderr.toString().trim() || "integration protection: lock failed");
-    return body();
-  } finally {
-    closeSync(fd);
-  }
-}
 
 function withProtectionLock<T>(primary: string, body: () => T): T {
   return withFileLock(lockPath(primary, "integration-protection.lock"), body);

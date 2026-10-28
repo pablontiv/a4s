@@ -9,6 +9,7 @@ import { test } from "node:test";
 import { resourceDecision, shellWords } from "../src/resources.ts";
 import extension from "../src/triage/index.ts";
 import { withResourceGuard } from "./resource-fixtures.ts";
+import { a4sBin } from "./fixtures/a4s.ts";
 
 const definitions = ["../skills/issue-execution/feature.yaml", renderedFeature].map(path => fileURLToPath(new URL(path, import.meta.url)));
 function fixture() {
@@ -23,14 +24,13 @@ function fixture() {
   git(primary, "remote", "add", "origin", remote); git(primary, "push", "-qu", "origin", "main");
   writeFileSync(join(primary, ".git", "info", "exclude"), "/.workspace/\n");
   const bin = join(root, "bin"); mkdirSync(bin);
-  symlinkSync(fileURLToPath(new URL("../bin/dagu-feature-protect.ts", import.meta.url)), join(bin, "dagu-feature-protect"));
   writeFileSync(join(bin, "dagu"), `#!/bin/sh\nif [ -f '${root}/fail' ]; then echo 'history unavailable' >&2; exit 2; fi\ncat '${root}/'"$2"'.json'\n`);
   chmodSync(join(bin, "dagu"), 0o755);
   const history = (kind: string, rows: unknown[]) => writeFileSync(join(root, `${kind}.json`), JSON.stringify(rows));
   history("feature", []); history("poc", []);
   const worktree = join(primary, ".workspace", "worktrees", "issue-215"), branch = "dagu/issue-215";
   const row = (run: string, status: string, kind = "feature") => ({ name: kind, dagRunId: run, status, params: `PRIMARY=${primary} ISSUE=215 BRANCH=${kind === "feature" ? branch : ""}` });
-  const env = { ...process.env, DAGU_PARAMS_JSON: "{}", POC_BASIS: "", PATH: `${bin}:${process.env.PATH}`, PRIMARY: primary, WORKTREE: worktree, BRANCH: branch, ISSUE: "215", RUN: "owner", OMP_SESSION_ID: "resource-test-session", BASE_BRANCH: "main", GATE: "true", REQUIRED_CHECK: "validate", DAGU_FEATURE_BUNDLE: "test" };
+  const env = { ...process.env, A4S_BIN: a4sBin, DAGU_PARAMS_JSON: "{}", POC_BASIS: "", PATH: `${bin}:${process.env.PATH}`, PRIMARY: primary, WORKTREE: worktree, BRANCH: branch, ISSUE: "215", RUN: "owner", OMP_SESSION_ID: "resource-test-session", BASE_BRANCH: "main", GATE: "true", REQUIRED_CHECK: "validate", DAGU_FEATURE_BUNDLE: "test" };
   return { root, primary, branch, worktree, git, history, row, env };
 }
 function script(definition: string, marker: string) {

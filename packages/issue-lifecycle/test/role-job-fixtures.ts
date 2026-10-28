@@ -2,16 +2,21 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { BUNDLE_VERSION } from "../src/bundle.ts";
-import { loadedExtensionDigest, type Receipt } from "../src/admission.ts";
+import type { Receipt } from "../src/admission.ts";
 import { nativeEvidence } from "../src/role-runtime.ts";
 import type { Job } from "../src/role-jobs.ts";
+import { fixtureArtifact } from "./fixtures/artifact.ts";
+import { identity } from "../src/identity.ts";
+import { USED_CONTRACTS } from "../src/artifact-receipt.ts";
 
 export function roleAdmission(primary: string, home: string, run: string, snapshot: string): Receipt {
-  return { schemaVersion: 1, sourceVersion: { version: BUNDLE_VERSION, commit: "a".repeat(40), origin: "fixture/repo" },
+  const { version, commit, digest } = fixtureArtifact(home);
+  return { schemaVersion: 2, artifact: { version, commit, digest }, artifactSupport: identity.support, contracts: USED_CONTRACTS,
+    sourceVersion: { version: BUNDLE_VERSION, commit, origin: "fixture/repo" },
     deploymentFingerprint: "fixture", initial: { admittedAt: new Date().toISOString(),
-      deployment: { loadedExtension: { digest: loadedExtensionDigest } }, runtimeAndModels: { daguHome: home },
+      deployment: { config: { schemaVersion: 1, commit: "b".repeat(40), digest: "c".repeat(64) } }, runtimeAndModels: { daguHome: home },
       execution: { primary, head: execFileSync("git", ["-C", primary, "rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
-        ompSession: "parent-id", parameters: ["ISSUE=189"], dagSnapshot: snapshot }, eventsAndExternalState: {} },
+        ompSession: "parent-id", parameters: ["ISSUE=189"], dagSnapshot: snapshot.replaceAll("dagu-role-jobs", '"$A4S_BIN" role-jobs') }, eventsAndExternalState: {} },
     runReceipt: { dag: "feature", run, attempt: 1, observations: [] } };
 }
 

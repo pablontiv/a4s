@@ -6,6 +6,123 @@ the runtime requires official Dagu 2.23.0 or newer, with local
 `auth.mode=none`. Standalone consumers use the same root Node pin. The package owns status observation/wakeup, admission/resource
 guards, `triage-reviewer`, `plan-reviewer` and all seven lifecycle workflow skills.
 
+## Versioned executable and release builds
+
+The release engine is one Bun-compiled `a4s` executable. Repository tools and
+tests continue to use Node/tsx; deployed engine execution never uses a source
+checkout. A published release is verified into
+`$DAGU_HOME/cache/a4s/<version>/` before admission hands off to that executable.
+Committed `.workspace/dagu/config.json` requires `uses`: `a4s@v0` follows the
+published major alias and `a4s@v0.6.1` pins an exact release (example only).
+Branches, paths, URLs and version ranges are not selections.
+
+Root admission resolves once to `(version, commit, archive SHA-256)` and executes
+the cached engine with `admit --artifact '<version>@<commit>#<digest>'`.
+The selected engine verifies that tuple without resolving again, materializes
+its own five templates, and binds every engine call to the absolute `A4S_BIN`.
+Feature → PoC, PoC → feature and discovery → planning inherit and verify the
+parent receipt's tuple even if committed `uses` changes. Missing or corrupt
+parent artifacts fail closed; they never select a replacement release.
+
+Each cache entry retains `verified-archive.tar.gz`. Every reuse rehashes that
+archive and streams its tar entries to compare every extracted payload file;
+changed cache metadata cannot bless changed contents. `artifact.json` contains
+only `version`, `commit`, `digest` and `verifiedAt`. Cache publication is atomic,
+and corrupt/conflicting final entries fail closed. Retain referenced artifacts
+for nonterminal/recoverable runs, open role jobs and the pinned reconciler;
+uncertain reference discovery prevents pruning.
+
+Both CLI `admit` and `enqueue` submit the exact admitted snapshot bytes. Receipts
+record top-level `artifact`, `artifactSupport` and actually used `contracts`;
+successors additionally record `parent` (`receipt`, `dag`, `run`, `artifact`).
+Consumer config identity is separate at `initial.deployment.config`.
+
+Every command below preserves its existing arguments, environment variables,
+stdout and exit status. `planning` and `reconcile` have utility modes, not a
+second scheduler or a replacement shell-step implementation.
+
+| Existing command | Executable command |
+| --- | --- |
+| `dagu-gate <args>` / `node bin/dagu-gate.cjs <args>` | `a4s gate <args>` |
+| `dagu-pr-body <args>` / `node bin/dagu-pr-body.mjs <args>` | `a4s pr-body <args>` |
+| `dagu-codeql <args>` | `a4s codeql <args>` |
+| `dagu-poc-scope <args>` | `a4s poc-scope <args>` |
+| `dagu-feature-protect <args>` | `a4s protect <args>` |
+| `dagu-role-jobs <args>` | `a4s role-jobs <args>` |
+| `dagu-feature-bundle admit <args>` | `a4s admit <args>` |
+| `dagu-feature-bundle enqueue <args>` | `a4s enqueue <args>` |
+| `dagu-feature-bundle readiness <args>` | `a4s queue <args>` |
+| `dagu-feature-bundle observe <args>` | `a4s observe <args>` |
+| `dagu-feature-bundle escalation <args>` / `python3 escalation.py <args>` | `a4s escalation <args>` |
+| `dagu-stale-recovery <args>` | `a4s stale-recovery <args>` |
+| `dagu-feature-prioritize <args>` | `a4s prioritize <args>` |
+| `dagu-feature-bundle validate-planning-units <args>` | `a4s planning validate-planning-units <args>` |
+| `dagu-feature-bundle planning-reviewer-identity <args>` | `a4s planning planning-reviewer-identity <args>` |
+| `python3 bin/heavy-slot.py [--gate <run>] <command> [args...]` | `a4s heavy-slot [--gate <run>] <command> [args...]` |
+| Inline reconcile millisecond clock | `a4s reconcile now` |
+| Inline reconcile remaining call budget | `a4s reconcile remaining <budget-seconds> <started-ms> <cap-seconds>` |
+| Inline reconcile positive-time test | `a4s reconcile positive <seconds>` |
+| Inline reconcile subprocess timeout | `a4s reconcile bounded <discover\|classify\|observe\|transition> <seconds> <command> [args...]` |
+| Inline reconcile stdin SHA-256 | `a4s reconcile sha256` |
+| Inline reconcile CI-no-progress accounting | `a4s reconcile ci-no-progress <state-directory> <observation-id> <threshold>` |
+| Inline reconcile sorted transition locks | `a4s reconcile lock <command> [args...]` |
+
+`a4s version` prints JSON with `version`, `commit` and `support`.
+`src/identity.ts` exports that same identity and the explicit support declaration:
+config schemas `[1]`, receipt reads `[1, 2]` and writes `2`, role-job stores `[1]`,
+and protocols `triage=role-job/1`, `implement=role-job/1`,
+`publication=pr-checkpoint/1`. Source/tsx execution uses the explicit commit
+marker `unbuilt`; it is not a release identity. The builder injects the package
+version and full `git rev-parse HEAD` commit using Bun `--define`. `identity.json`
+is the same declaration, without an archive digest.
+
+All engine/sibling self-spawns go through `src/executable.ts`: a compiled engine
+runs `process.execPath <subcommand>`, a release OMP extension selects its adjacent
+`a4s`, and Node/tsx selects the existing source entry with an absolute tsx loader.
+The gate command is different by contract: it launches real `node` with the
+adjacent real filesystem `bin/dagu-gate.cjs`, whose two CJS siblings also ship in
+the archive. Bun's virtual filesystem is not a Node preload location.
+
+`src/file-lock.ts` uses libc `flock` through `bun:ffi` on Linux and macOS:
+blocking exclusive locks, nonblocking exclusive attempts, explicit unlock, and
+descriptor-close release all use the original lock files. Node/tsx development
+and tests use Python's standard-library `fcntl.flock` on an inherited duplicate
+of the open descriptor; the parent's open file description retains the kernel
+lock after the helper exits. This development branch needs `python3`, but the
+released Bun engine never invokes it. `bin/heavy-slot.py` remains necessary for
+source npm test scripts, not release execution. Release archives contain the
+compiled engine, real gate preload files, identity and complete OMP assets;
+they contain neither source executors nor Python helpers.
+Reconcile acquires unique lock paths in Python-compatible Unicode code-point
+order before launching the child, including when paths contain non-BMP text.
+
+From the monorepo root, using the locked Bun dependency and GNU tar:
+
+```sh
+npm ci
+node node_modules/bun/install.js
+npm run build:a4s
+# Or select one target/output directory:
+npm run build:a4s -- --target bun-linux-x64 --outdir dist
+```
+
+The default build cross-compiles `bun-linux-x64` and `bun-darwin-arm64` and writes
+`dist/a4s-v<version>-<os>-<arch>.tar.gz` plus `.tar.gz.sha256`.
+It uses `--compile --compile-autoload-package-json`, disables dotenv/bunfig
+autoload, bundles the OMP extension dependency closure, sorts archive entries,
+fixes permissions/mtime/uid/gid, and uses deterministic gzip headers.
+The checksum line is `<64 lowercase hex>  <archive filename>`.
+The release workflow accepts only version-tag pushes matching the package
+version, refuses an existing GitHub release/assets, publishes both archives and
+checksums, then moves the corresponding major tag.
+
+The opt-in `npm run test:compiled --workspace @a4s/issue-lifecycle` builds both
+targets, checks archive contents and reproducibility, and exercises the extracted
+Linux engine, real Node gate preload, OMP entry loading and flock interoperation.
+Set `A4S_RELEASE_DIR` to an existing build directory to reuse its first build.
+Run tests with `node_modules/.bin` and the official `dagu` on `PATH`, and a fresh
+temporary `DAGU_HOME`; none of these commands changes the station service.
+
 ## Consolidated documentation
 
 - [Source catalog and workflow ownership](../../docs/architecture/catalog.md#lifecycle-skills).
@@ -30,31 +147,39 @@ Headless Dagu role jobs also require Bun on the service PATH and
 Dagu 2.24.0 preserves this `DAGU_*` variable but filters `OMP_ROLE_RUNTIME`;
 there is no PATH-based runtime fallback. Link this whole package for the Dagu
 service user so native discovery can find `triage-reviewer` alongside `task`.
-Bootstrap's `dagu-role-jobs detect` checks that same root and both agents from
+Bootstrap's `a4s role-jobs detect` checks that same root and both agents from
 PRIMARY before adoption, without launching a role. Service environment changes
-and activation remain separate operator actions.
+and activation remain separate operator actions. Load/link the extracted release
+root, not `src/status` alone; restart OMP when switching release packages.
 
-A renamed package needs fresh bootstrap-generated renders, the matching
-reconciler/CLI binding and a new OMP process. Restart OMP after lifecycle
-redeployment; builtin resource rediscovery alone does not load newly introduced
-TypeScript modules. Source publication is distinct from installation/adoption.
-The runbook records main's adopted stable-controller identity, candidate isolation
-and the completed temporary-v1-lane retirement.
+Before cutover, the operator closes admission and establishes **zero nonterminal
+runs and zero open role jobs**. Install a verified release `a4s` for initial
+admission and its release-root OMP plugin, retain `DAGU_OMP_ROLE_RUNTIME`, configure
+queue capacity in Dagu, and explicitly pin the station reconciler to a verified
+cache entry. Remove obsolete installed source checkouts, legacy launchers and
+service PATH entries only after references are cleared. a4s never writes station
+configuration/service units or restarts Dagu. See the
+[operator cutover](../../docs/operations/deployment.md#identity-and-adoption).
 
 ## Workflow and command entry points
 
 The seven skills are `issue-execution`, `repository-discovery`, `backlog-breakdown`,
 `refine`, `sprint-planning`, `sprint-review` and `sprint-retrospective`.
 `SKILL.md` and `feature.yaml`, `poc.yaml`, `discovery.yaml`, `planning.yaml`,
-`reconcile.yaml`, `dagu-feature-bootstrap.yaml` remain together under
-`skills/issue-execution/` for relative paths and bootstrap's SKILL_DIR bindings.
+`reconcile.yaml` are release assets under `skills/issue-execution/`.
+`dagu-feature-bootstrap.yaml` is the source adoption DAG; it authors policy and
+checks readiness, but does not install DAGs or alter the station.
 
 Reconciler behavior tests use the maintained `skills/issue-execution/reconcile.yaml`
 directly, with throwaway materialization for native validation. From this package,
 run `A4S_LIVE_DAGU=0 npx tsx --test test/reconcile-ci.test.ts test/reconcile-performance.test.ts`
 for isolated script scenarios, or `A4S_LIVE_DAGU=1 npx tsx --test test/reconcile-ci.test.ts test/reconcile-performance.test.ts`
 to include official-Dagu validation, bounded-tick checks and checkpoint/queue scenarios in isolated temporary homes.
-The consumer config file is `.workspace/dagu/config.json`. Admission materializes DAGs from the installed templates.
+The deadline/performance and fanout scenarios build and run the real release
+executable, so source-loader startup cannot consume the measured operation budget.
+They also accept `A4S_RELEASE_DIR` to reuse an existing release build; their
+deadlines and assertions are unchanged.
+The consumer config file is `.workspace/dagu/config.json`. Admission materializes DAGs from the selected verified release.
 
 The OMP resource guard protects an idle PRIMARY when its policy is committed at
 `HEAD` and its canonical path matches the host binding. It resolves
@@ -79,7 +204,7 @@ waits for CodeQL, so auto-merge and `authorize_ci` depend only on
 `REQUIRED_CHECK`. Use it for repositories that cannot enable code scanning,
 including private Free/Pro user repositories.
 
-When `required`, `dagu-codeql` observes the current PR head's `CodeQL` check and
+When `required`, `a4s codeql` observes the current PR head's `CodeQL` check and
 paginated open alerts from `refs/pull/<PR>/head`. Bootstrap fixes
 `CODEQL_SECURITY_THRESHOLD=high_or_higher` and `CODEQL_ALERTS_THRESHOLD=errors`
 by default; blank inputs preserve installed policy. Security and non-security
@@ -109,11 +234,11 @@ for threshold choices, evidence and ownership.
 
 ```sh
 # Validate prepared units and retain the exact-byte valid snapshot:
-node packages/issue-lifecycle/bin/dagu-feature-bundle.ts validate-planning-units \
+a4s planning validate-planning-units \
   --input <absolute-units.jsonl> --snapshot <absolute-validated-units.jsonl> \
   --findings <absolute-findings.md>
 # Enqueue the breakdown backend under its owning controller:
-node "$CONTROLLER_CLI" enqueue --run-id "<repo>-breakdown-<slug>" \
+a4s enqueue --run-id "<repo>-breakdown-<slug>" \
   planning -- \
   UNITS_FROM="<absolute-units.jsonl>" SOURCE=refine \
   OMP_SESSION_ID="<persistent-session>"
@@ -133,7 +258,7 @@ coordinating session rather than selecting new backlog work.
 `dagu_session_id` provides the persistent owner. `/workflows` toggles progress;
 `expand`, `collapse`, `hide`, `show` set presentation. Status compatibility is a
 display classification, not proof of admission. Native semantic jobs support
-`dagu-role-jobs stage triage|implement`; resource recovery and exact receipt
+`a4s role-jobs stage triage|implement`; resource recovery and exact receipt
 binding are detailed in the architecture and execution skill.
 
 ## Station-owned queue capacity and readiness
@@ -146,10 +271,9 @@ Admission rejects policy overrides and requires a valid persistent
 Successor runs carry operational inputs and the same owner, never policy.
 
 ```sh
-node packages/issue-lifecycle/bin/dagu-feature-bundle.ts readiness \
-  .workspace/dagu/config.json
+a4s queue .workspace/dagu/config.json
 # Before first adoption, select the station lane to inspect:
-node packages/issue-lifecycle/bin/dagu-feature-bundle.ts readiness --lane a4s
+a4s queue --lane a4s
 ```
 
 Readiness exits 0 only when the named global queue exists in station config and
@@ -162,10 +286,11 @@ Dagu home. Bootstrap checks readiness but never repairs station configuration,
 installs a service unit or restarts Dagu. Resolve failures with the station
 operator; the API must be unauthenticated and loopback-only.
 
-`dagu-station-install` now manages explicit executor operations only. It does
-not install station configuration or offer service activation modes.
 Dagu run capacity remains separate from the semantic-job capacity controlled by
-`dagu-role-jobs capacity`.
+`a4s role-jobs capacity`. The manifest registers only `a4s`; legacy `dagu-*`
+registrations are removed. Source wrappers remain for Node/tsx development,
+direct CI PR-body validation and the real Node gate preload, not as deployment
+aliases or ambient commands used by release snapshots.
 
 ## Development and real-Dagu fixtures
 

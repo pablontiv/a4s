@@ -10,6 +10,7 @@ import {
   configFromEnvironment,
   exampleConfig,
   parseConfig,
+  parseUses,
   readCommittedConfig,
   serializeConfig,
 } from "../src/config.ts";
@@ -27,6 +28,18 @@ test("config schema rejects unknown fields, bad versions and non-integers", () =
   assert.throws(() => parseConfig({ ...valid, lane: "" }), /config lane is invalid/);
   assert.equal(serializeConfig(valid).endsWith("\n"), true);
   assert.deepEqual(parseConfig(JSON.parse(serializeConfig(valid))), valid);
+});
+
+test("uses accepts only qualified moving majors and exact release tags", () => {
+  for (const value of ["a4s@v0", "a4s@v123", "a4s@v0.6.0", "a4s@v10.20.30"]) {
+    assert.equal(parseUses(value), value);
+    assert.equal(parseConfig({ ...exampleConfig(), uses: value }).uses, value);
+  }
+  for (const value of [undefined, "", "v0", "0.6.0", "a4s@0.6.0", "a4s@main", "a4s@v0.6", "a4s@v01", "a4s@v1.02.3", "a4s@v1.2.3-beta", "a4s@^v1.2.3", "./a4s@v0", "https://example.test/a4s@v0", "a4s@v0 "]) {
+    assert.throws(() => parseConfig({ ...exampleConfig(), uses: value }), /uses.*invalid/);
+  }
+  const { uses: _uses, ...missing } = exampleConfig();
+  assert.throws(() => parseConfig(missing), /missing.*uses/);
 });
 
 test("bootstrap environment becomes the strict config document", () => {

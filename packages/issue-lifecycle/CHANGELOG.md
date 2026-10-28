@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.6.0
+
+- Breaking: the engine ships as one compiled `a4s` executable in versioned GitHub releases (`a4s-v<version>-<os>-<arch>.tar.gz` + `.sha256`, moving major tag `v0`). Consumers select it with committed `uses: a4s@v0` or an exact `a4s@v<x.y.z>` in `config.json`; root admission resolves once, verifies and caches the archive under `$DAGU_HOME/cache/a4s/<version>/`, and hands off to `a4s admit --artifact '<version>@<commit>#<digest>'`. Snapshots bind `A4S_BIN`; receipts record the artifact tuple and contract versions; successors bind to the parent's artifact. Station install/executor commands, checkout stamps and re-seal, legacy `dagu-*` bin registrations and the Python runtime helpers are removed (#712).
+
 ## 0.5.32
 
 - Consumer policy comes only from committed `config.json`: admission rejects policy parameters (including `BASE_BRANCH`), templates bind policy as fixed environment, and successors stop forwarding `BASE_BRANCH`/`PRIMARY`. Owner-session validation runs before any admission side effect. `queueConcurrency`, queue repair and station config/service install modes are removed; `dagu-feature-bundle readiness` checks the station read-only (#708).

@@ -1,23 +1,19 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { pathsFromNameStatus, readActiveProtection } from "../src/integration-protection.ts";
+import { a4sBin } from "./fixtures/a4s.ts";
 
-const cli = fileURLToPath(new URL("../bin/dagu-feature-protect.ts", import.meta.url));
 const featureYaml = fileURLToPath(new URL("../skills/issue-execution/feature.yaml", import.meta.url));
 const skill = fileURLToPath(new URL("../skills/issue-execution/SKILL.md", import.meta.url));
 const protectedPath = "packages/issue-lifecycle/skills/issue-execution/SKILL.md";
 const disjointPath = "packages/issue-lifecycle/skills/issue-execution/feature.yaml";
 const addedPath = "packages/issue-lifecycle/skills/issue-execution/notes.txt";
-
-const bin = mkdtempSync(join(tmpdir(), "a4s-integration-bin-"));
-symlinkSync(fileURLToPath(new URL("../bin/dagu-gate.cjs", import.meta.url)), join(bin, "dagu-gate"));
-symlinkSync(cli, join(bin, "dagu-feature-protect"));
 
 function git(cwd: string, ...args: string[]): string {
   return spawnSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).stdout.trim();
@@ -74,7 +70,7 @@ function lane(primary: string, issue: string, files: Record<string, string>): La
 
 function environment(primary: string, entry: Lane, gate = "true"): NodeJS.ProcessEnv {
   return {
-    ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}`, PRIMARY: primary, WORKTREE: entry.worktree,
+    ...process.env, A4S_BIN: a4sBin, PRIMARY: primary, WORKTREE: entry.worktree,
     DAGU_HOME: join(dirname(primary), "dagu-home"), A4S_HEAVY_SLOT_HELD: "",
     BRANCH: entry.branch, RUN: entry.run, ISSUE: entry.issue, BASE_BRANCH: "main", GATE: gate,
     OMP_SESSION_ID: "owner-session", A4S_INTEGRATION_POLL_SEC: "0.05",
@@ -82,11 +78,11 @@ function environment(primary: string, entry: Lane, gate = "true"): NodeJS.Proces
 }
 
 function protect(primary: string, entry: Lane, decision: string) {
-  return spawnSync(cli, ["protect", "--decision", decision], { encoding: "utf8", env: environment(primary, entry) });
+  return spawnSync(a4sBin, ["protect", "protect", "--decision", decision], { encoding: "utf8", env: environment(primary, entry) });
 }
 
 function invoke(primary: string, entry: Lane, args: string[], env: NodeJS.ProcessEnv = {}) {
-  return spawnSync(cli, args, { encoding: "utf8", env: { ...environment(primary, entry), ...env } });
+  return spawnSync(a4sBin, ["protect", ...args], { encoding: "utf8", env: { ...environment(primary, entry), ...env } });
 }
 
 function candidateText(entry: Lane): string {
@@ -198,7 +194,7 @@ test("operator release and abort release a held run without changing its candida
     const before = candidateText(conflicting);
     assert.equal(protect(primary, protectedLane, "protect #290").status, 0);
     assert.equal(invoke(primary, conflicting, ["admit", "--checkpoint", "auto_merge"]).status, 86);
-    const released = spawnSync(cli, ["release", "--decision", "operator release"], {
+    const released = spawnSync(a4sBin, ["protect", "release", "--decision", "operator release"], {
       encoding: "utf8", env: { ...environment(primary, conflicting), RUN: "" },
     });
     assert.equal(released.status, 0, released.stderr);
@@ -223,13 +219,13 @@ test("admission without ISSUE proceeds when nothing is protected and a conflicti
     const entry = lane(primary, "601", { [protectedPath]: "plain\n" });
     const env = environment(primary, entry);
     delete env.ISSUE;
-    const open = spawnSync(cli, ["admit", "--checkpoint", "gate", "--held-lock"], { encoding: "utf8", env });
+    const open = spawnSync(a4sBin, ["protect", "admit", "--checkpoint", "gate", "--held-lock"], { encoding: "utf8", env });
     assert.equal(open.status, 0, open.stderr);
     const gate = spawnSync("bash", ["-c", extract("gate")], { encoding: "utf8", env });
     assert.equal(gate.status, 0, gate.stderr);
     const protectedLane = lane(primary, "290", { [protectedPath]: "protected\n" });
     assert.equal(protect(primary, protectedLane, "protect #290").status, 0);
-    const held = spawnSync(cli, ["admit", "--checkpoint", "push"], { encoding: "utf8", env });
+    const held = spawnSync(a4sBin, ["protect", "admit", "--checkpoint", "push"], { encoding: "utf8", env });
     assert.equal(held.status, 1, held.stderr);
     assert.match(held.stderr, /missing ISSUE/);
     const named = invoke(primary, entry, ["admit", "--checkpoint", "push"]);
@@ -338,14 +334,14 @@ test("feature hooks name protection, refresh and release", () => {
     const parsed = spawnSync("bash", ["-n"], { input: extract(id), encoding: "utf8" });
     assert.equal(parsed.status, 0, `${id}: ${parsed.stderr}`);
   }
-  assert.match(source, /dagu-feature-protect admit --checkpoint gate \|\|/);
-  assert.match(source, /dagu-feature-protect admit --checkpoint push/);
-  assert.match(source, /dagu-feature-protect admit --checkpoint auto_merge/);
-  assert.match(source, /dagu-feature-protect refresh/);
-  assert.match(source, /dagu-feature-protect release-auto --reason close_gate/);
-  assert.match(source, /dagu-feature-protect release-auto --reason terminal/);
+  assert.match(source, /"\$A4S_BIN" protect admit --checkpoint gate \|\|/);
+  assert.match(source, /"\$A4S_BIN" protect admit --checkpoint push/);
+  assert.match(source, /"\$A4S_BIN" protect admit --checkpoint auto_merge/);
+  assert.match(source, /"\$A4S_BIN" protect refresh/);
+  assert.match(source, /"\$A4S_BIN" protect release-auto --reason close_gate/);
+  assert.match(source, /"\$A4S_BIN" protect release-auto --reason terminal/);
   const documented = readFileSync(skill, "utf8");
-  assert.match(documented, /dagu-feature-protect protect --decision/);
-  assert.match(documented, /dagu-feature-protect release --decision/);
+  assert.match(documented, /a4s protect protect --decision/);
+  assert.match(documented, /a4s protect release --decision/);
   assert.match(documented, /integration_hold/);
 });

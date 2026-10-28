@@ -10,6 +10,7 @@ import { admissionFixture } from "./fixtures/admission.ts";
 import { liveDagu } from "./fixtures/live-dagu.ts";
 
 import { exampleConfig, serializeConfig } from "../src/config.ts";
+import { BUNDLE_VERSION } from "../src/bundle.ts";
 const cli = fileURLToPath(new URL("../bin/dagu-feature-bundle.ts", import.meta.url));
 
 function commitConfig(repo: string, text?: string): void {
@@ -101,40 +102,20 @@ test("admission rejects adopted policy parameters before reserving a receipt", l
   } finally { fixture.dispose(); }
 });
 
-test("admission rejects an unserved lifecycle protocol before Dagu creates a run", liveDagu, () => {
+test("admission rejects modified cached payload before Dagu creates a run", liveDagu, () => {
   const fixture = admissionFixture();
   try {
-    const run = testRunId("incompatible");
-    const template = join(fixture.packageDir, "skills", "issue-execution", "feature.yaml");
-    writeFileSync(template, `${readFileSync(template, "utf8")}\n# TRIAGE_REVIEW AGENT=retired\n`);
+    const admitted = fixture.command("admit", "verified-cache");
+    assert.equal(admitted.status, 0, admitted.stderr);
+    const receipt = JSON.parse(readFileSync(fixture.receipt("verified-cache"), "utf8"));
+    const template = join(fixture.home, "cache", "a4s", receipt.artifact.version, "skills", "issue-execution", "feature.yaml");
+    writeFileSync(template, `${readFileSync(template, "utf8")}\n# modified payload\n`);
+    const run = testRunId("corrupt-cache");
     const result = fixture.command("enqueue", run);
     assert.notEqual(result.status, 0);
-    assert.match(result.stderr, /DAGU_ADMISSION_REJECTED.*feature.yaml missing protocol triage=marker-agent\/1; served by bundle 0\.3\.102/);
+    assert.match(result.stderr, /Modified artifact payload/);
     assert.equal(existsSync(fixture.receipt(run)), false);
-    const history = spawnSync("dagu", ["history", "feature", "--format", "json"], { env: { ...process.env, DAGU_HOME: fixture.home }, encoding: "utf8" });
-    assert.doesNotMatch(history.stdout, /incompatible/);
   } finally { fixture.dispose(); }
-});
-
-test("admission admits a package release when the config file is unchanged", liveDagu, () => {
-  for (const version of ["0.3.2", "0.4.0"]) {
-    const fixture = admissionFixture();
-    try {
-      const before = fixture.command("admit", "config-before");
-      assert.equal(before.status, 0, before.stderr);
-      const digest = JSON.parse(readFileSync(fixture.receipt("config-before"), "utf8")).initial.deployment.config.digest;
-      const manifestPath = join(fixture.packageDir, "package.json");
-      writeFileSync(manifestPath, JSON.stringify({ ...JSON.parse(readFileSync(manifestPath, "utf8")), version }));
-      spawnSync("git", ["-C", fixture.packageDir, "commit", "-qam", `package ${version}`], { encoding: "utf8" });
-      const run = `protocol-${version.replaceAll(".", "-")}`;
-      const result = fixture.command("admit", run);
-      assert.equal(result.status, 0, result.stderr);
-      const receipt = JSON.parse(readFileSync(fixture.receipt(run), "utf8"));
-      assert.equal(receipt.initial.deployment.installedDAG.version, version);
-      assert.equal(receipt.initial.deployment.config.digest, digest);
-      assert.equal(receipt.initial.deployment.relationships.compatibility, "installed-template");
-    } finally { fixture.dispose(); }
-  }
 });
 
 test("compatible admission enqueues exact bytes and keeps historical receipt across redeployment", liveDagu, () => {
@@ -146,7 +127,7 @@ test("compatible admission enqueues exact bytes and keeps historical receipt acr
     assert.equal(result.status, 0, result.stderr);
     const path = fixture.receipt(run);
     const initialReceipt = JSON.parse(readFileSync(path, "utf8"));
-    assert.equal(initialReceipt.sourceVersion.version, "0.3.1");
+    assert.equal(initialReceipt.sourceVersion.version, BUNDLE_VERSION);
     assert.match(initialReceipt.deploymentFingerprint, /^[a-f0-9]{64}$/);
     assert.deepEqual(Object.keys(initialReceipt.initial).sort(), ["admittedAt", "deployment", "eventsAndExternalState", "execution", "runtimeAndModels"]);
     assert.equal(initialReceipt.initial.runtimeAndModels.resolvedModel.state, "pending");
@@ -164,11 +145,11 @@ test("compatible admission enqueues exact bytes and keeps historical receipt acr
     const invalid = fixture.observe(run, { ...event, run: "other-run" });
     assert.notEqual(invalid.status, 0);
     const oldBytes = readFileSync(path, "utf8");
-    writeFileSync(join(fixture.packageDir, "agents", "triage-reviewer.md"), "Changed effective agent instructions\n");
+    writeFileSync(join(fixture.packageDir, "unrelated-checkout-file"), "This cannot change the cached artifact\n");
     const next = fixture.command("enqueue", redeployedRun);
     assert.equal(next.status, 0, next.stderr);
     const nextReceipt = JSON.parse(readFileSync(fixture.receipt(redeployedRun), "utf8"));
-    assert.notEqual(nextReceipt.deploymentFingerprint, initialReceipt.deploymentFingerprint);
+    assert.equal(nextReceipt.deploymentFingerprint, initialReceipt.deploymentFingerprint);
     assert.equal(readFileSync(path, "utf8"), oldBytes);
     const duplicate = fixture.command("enqueue", run);
     assert.notEqual(duplicate.status, 0);
@@ -180,21 +161,21 @@ test("compatible admission enqueues exact bytes and keeps historical receipt acr
   } finally { fixture.dispose(); }
 });
 
-test("admission ignores a missing reconciler and a forged consumer file, and rejects a stale loaded identity", liveDagu, () => {
+test("admission ignores station files, forged consumer templates, and notice-only plugin identity", liveDagu, () => {
   const fixture = admissionFixture();
   try {
     assert.equal(existsSync(join(fixture.home, "dags", "reconcile.yaml")), false);
     const absentRun = testRunId("reconciler-absent");
     const absent = fixture.command("enqueue", absentRun);
     assert.equal(absent.status, 0, absent.stderr);
-    assert.equal(JSON.parse(readFileSync(fixture.receipt(absentRun), "utf8")).initial.deployment.installedReconciler.state, "absent");
     const consumer = fixture.dag;
     mkdirSync(join(consumer, ".."), { recursive: true });
     writeFileSync(consumer, "# injected code\n");
     const forged = fixture.command("enqueue", testRunId("forged"));
     assert.equal(forged.status, 0, forged.stderr);
-    const stale = fixture.command("enqueue", testRunId("stale"), { DAGU_ADMISSION_SESSION: JSON.stringify({ extensionDigest: "old-loaded-digest", transcriptRoot: "/session" }) });
-    assert.notEqual(stale.status, 0);
-    assert.match(stale.stderr, /loaded extension digest=old-loaded-digest.*restart OMP/);
+    const staleRun = testRunId("stale");
+    const stale = fixture.command("enqueue", staleRun, { DAGU_ADMISSION_SESSION: JSON.stringify({ extensionDigest: "old-loaded-digest", transcriptRoot: "/session" }) });
+    assert.equal(stale.status, 0, stale.stderr);
+    assert.deepEqual(JSON.parse(readFileSync(fixture.receipt(absentRun), "utf8")).artifact, JSON.parse(readFileSync(fixture.receipt(staleRun), "utf8")).artifact);
   } finally { fixture.dispose(); }
 });

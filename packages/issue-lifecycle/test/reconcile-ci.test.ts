@@ -1,7 +1,7 @@
 import { liveDagu, liveDaguVersion } from "./fixtures/live-dagu.ts";
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,6 +15,8 @@ import { BUNDLE_VERSION } from "../src/bundle.ts";
 import { admissionFixture } from "./fixtures/admission.ts";
 import { withResourceGuard } from "./resource-fixtures.ts";
 import { testRunId } from "./fixtures/run-id.ts";
+import { a4sBin } from "./fixtures/a4s.ts";
+import { roleAdmission } from "./role-job-fixtures.ts";
 const feature = readFileSync(new URL("../skills/issue-execution/feature.yaml", import.meta.url), "utf8");
 const reconcile = readFileSync(new URL("../skills/issue-execution/reconcile.yaml", import.meta.url), "utf8");
 
@@ -97,10 +99,6 @@ function fixture(run = "ci226"): Fixture {
   writeFileSync(join(primary, ".git/info/exclude"), "/.workspace/\n");
   git(primary, "worktree", "add", "-b", branch, worktree, "origin/main");
   mkdirSync(bin);
-  symlinkSync(fileURLToPath(new URL("../bin/dagu-pr-body.mjs", import.meta.url)), join(bin, "dagu-pr-body"));
-  symlinkSync(fileURLToPath(new URL("../bin/dagu-codeql.ts", import.meta.url)), join(bin, "dagu-codeql"));
-  symlinkSync(fileURLToPath(new URL("../bin/dagu-gate.cjs", import.meta.url)), join(bin, "dagu-gate"));
-  symlinkSync(fileURLToPath(new URL("../bin/dagu-feature-protect.ts", import.meta.url)), join(bin, "dagu-feature-protect"));
   const control = join(root, "control.json");
   const calls = join(root, "calls.jsonl");
   writeFileSync(calls, "");
@@ -173,10 +171,11 @@ else if(a[0]==='human-task') {
   writeFileSync(join(state, "identity"), identity);
   writeFileSync(git(worktree, "rev-parse", "--path-format=absolute", "--git-path", "dagu-feature-owner"), identity);
   writeFileSync(join(state, "base"), git(primary, "rev-parse", "HEAD") + "\n");
-  const env: NodeJS.ProcessEnv = { ...process.env, LC_ALL: "C", PATH: `${bin}:${process.env.PATH}`, PRIMARY: primary, WORKTREE: worktree, BRANCH: branch, ISSUE: "226", RUN: run, PR_NUMBER: "", BASE_BRANCH: "main", GATE: "true", OMP_SESSION_ID: "ci226-owner", CI_REMOTE: remote, CI_CONTROL: control, CI_CALLS: calls, DAGU_OUTPUT_FILE: join(root, "outputs") };
+  const env: NodeJS.ProcessEnv = { ...process.env, A4S_BIN: a4sBin, DAGU_HOME: join(root, "dagu-home"), LC_ALL: "C", PATH: `${bin}:${process.env.PATH}`, PRIMARY: primary, WORKTREE: worktree, BRANCH: branch, ISSUE: "226", RUN: run, PR_NUMBER: "", BASE_BRANCH: "main", GATE: "true", OMP_SESSION_ID: "ci226-owner", CI_REMOTE: remote, CI_CONTROL: control, CI_CALLS: calls, DAGU_OUTPUT_FILE: join(root, "outputs") };
   env.CODEQL_SECURITY_THRESHOLD = "high_or_higher";
   env.CODEQL_ALERTS_THRESHOLD = "errors";
   env.IMPLEMENTER = "ImplementTest";
+  writeFileSync(join(state, "receipt.json"), JSON.stringify(roleAdmission(primary, env.DAGU_HOME!, run, feature)));
   delete env.DAGU_PARAMS_JSON;
   return { root, primary, remote, worktree, bin, branch, control, calls, state, env, base: git(primary, "rev-parse", "HEAD") };
 }
@@ -539,7 +538,7 @@ test(`Dagu ${liveDaguVersion}: paired root waits return to implement/rebase and 
   await new Promise<void>((resolve, reject) => listener.close(error => error ? reject(error) : resolve()));
   f.env.DAGU_HOME = home;
   writeFileSync(join(home, "config.yaml"), `auth:\n  mode: none\ncoordinator:\n  enabled: false\nqueues:\n  enabled: true\n  config:\n    - name: ci226\n      max_active_runs: 1\n`);
-  const fixtureEnv = ["PATH", "CI_REMOTE", "CI_CONTROL", "CI_CALLS"].map(key => `  - ${key}: ${JSON.stringify(f.env[key])}\n`).join("");
+  const fixtureEnv = ["A4S_BIN", "PATH", "CI_REMOTE", "CI_CONTROL", "CI_CALLS"].map(key => `  - ${key}: ${JSON.stringify(f.env[key])}\n`).join("");
   const definition = `type: graph\nshell: bash\nmax_active_steps: 1\nqueue: ci226\nparams:\n  - ISSUE: "226"\n  - PRIMARY: ${f.primary}\n  - BRANCH: ${f.branch}\n  - PR_NUMBER: "77"\nenv:\n${fixtureEnv}  - WORKTREE: ${f.worktree}\n  - RUN: ${id}\nsteps:\n  - id: implement\n    action: human.task\n    with:\n      prompt: Correct candidate\n  - id: rebase\n    depends: implement\n    run: echo rebased\n  - id: auto_merge\n    depends: rebase\n    run: echo observed-publication\n${["await_ci", "await_ci_cancellation", "await_merge", "await_merge_cancellation", "authorize_ci"].map(id => step(feature, id).replace("rewind_to: implement_budget", "rewind_to: implement").replace("rewind_to: rebase_budget", "rewind_to: rebase")).join("")}`;
   const path = join(home, "dags/feature.yaml");
   writeFileSync(path, definition);
@@ -670,7 +669,8 @@ test("off code scanning admits and reaches the close success contract when the A
     admitted.writeConfig({ codeScanning: "off" });
     const bin = join(admitted.root, "dagu-bin");
     mkdirSync(bin);
-    writeFileSync(join(bin, "dagu"), `#!/bin/sh\nif [ "$1" = version ]; then printf '%s\\n' '2.24.0'; exit 0; fi\nprintf 'unexpected dagu %s\\n' "$*" >&2\nexit 1\n`);
+    const enqueues = join(admitted.root, "enqueues");
+    writeFileSync(join(bin, "dagu"), `#!/bin/sh\nif [ "$1" = version ]; then printf '%s\\n' '2.24.0'; exit 0; fi\nif [ "$1" = enqueue ]; then printf '%s\\n' "$*" >> ${JSON.stringify(enqueues)}; exit 0; fi\nprintf 'unexpected dagu %s\\n' "$*" >&2\nexit 1\n`);
     chmodSync(join(bin, "dagu"), 0o755);
     const result = admitted.command("admit", "code-scanning-off", { PATH: `${bin}:${process.env.PATH ?? ""}` });
     assert.equal(result.status, 0, result.stderr);
@@ -686,6 +686,7 @@ test("off code scanning admits and reaches the close success contract when the A
     const overridden = admitted.command("admit", "code-scanning-override", { PATH: `${bin}:${process.env.PATH ?? ""}` }, ["CODE_SCANNING=required"]);
     assert.notEqual(overridden.status, 0);
     assert.match(overridden.stderr, /admission rejected run parameter: CODE_SCANNING/);
+    assert.equal(readFileSync(enqueues, "utf8").trim().split("\n").length, 2);
 
     f.env.CODE_SCANNING = "off";
     f.env.REQUIRED_CHECK = "validate";

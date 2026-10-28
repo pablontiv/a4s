@@ -3,7 +3,7 @@ import { liveDagu, liveDaguVersion } from "./fixtures/live-dagu.ts";
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { testRunId } from "./fixtures/run-id.ts";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -11,9 +11,9 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { readConfigFile } from "../src/config.ts";
+import { a4sBin } from "./fixtures/a4s.ts";
+import { roleAdmission } from "./role-job-fixtures.ts";
 
-const protectBin = mkdtempSync(join(tmpdir(), "a4s-protect-bin-"));
-symlinkSync(fileURLToPath(new URL("../bin/dagu-feature-protect.ts", import.meta.url)), join(protectBin, "dagu-feature-protect"));
 const resolver = fileURLToPath(new URL("../bin/dagu-bundle-rebase.mjs", import.meta.url));
 const template = fileURLToPath(new URL("../skills/issue-execution/feature.yaml", import.meta.url));
 const rendered = fileURLToPath(new URL(renderedFeature, import.meta.url));
@@ -108,7 +108,8 @@ function fixture(upstream = "0.3.18", proposed = "0.3.18", mode = "clean", legac
   put(state, "candidate.json", JSON.stringify({ sha: before, base, tree: git(worktree, "rev-parse", "HEAD^{tree}"), iteration: 0, message: "feat: candidate B", summary: "Candidate B", implementer: "ImplementTest" }) + "\n");
   put(state, "diff.patch", git(worktree, "diff", "--binary", base, before) + "\n");
   put(state, "gate.json", JSON.stringify({ sha: before, gate: "old gate" }) + "\n");
-  const env = { HOME: process.env.HOME, PATH: `${protectBin}:${process.env.PATH}`, PRIMARY: primary, WORKTREE: worktree, BRANCH: branch, BASE_BRANCH: "main", RUN: id, OMP_SESSION_ID: "", REBASE_RESOLVER: `node ${JSON.stringify(resolver)}`, GATE: "true" };
+  const env = { HOME: process.env.HOME, A4S_BIN: a4sBin, PATH: process.env.PATH, DAGU_HOME: join(root, "dagu-home"), PRIMARY: primary, WORKTREE: worktree, BRANCH: branch, BASE_BRANCH: "main", RUN: id, OMP_SESSION_ID: "", REBASE_RESOLVER: `node ${JSON.stringify(resolver)}`, GATE: "true" };
+  put(state, "receipt.json", JSON.stringify(roleAdmission(primary, env.DAGU_HOME, id, readFileSync(template, "utf8"))));
   return { root, primary, worktree, branch, state, before, env };
 }
 function run(repo: Fixture, file = template, id = "rebase") {
@@ -209,13 +210,13 @@ test("isolated Dagu rebases colliding candidates before gate and publishes the n
   await new Promise<void>(resolve => listener.close(() => resolve()));
   put(home, "config.yaml", `host: 127.0.0.1\nport: ${port}\nauth:\n  mode: none\ncoordinator:\n  enabled: false\nscheduler:\n  port: 0\n`);
   const bin = join(repo.root, "bin"); put(bin, "gh", "#!/bin/sh\nprintf 'fixture/repository\\n'\n"); chmodSync(join(bin, "gh"), 0o755);
-  const env = { ...repo.env, PATH: `${bin}:${protectBin}:${process.env.PATH}`, DAGU_HOME: home, DAGU_COORDINATOR_ENABLED: "false" };
+  const env = { ...repo.env, PATH: `${bin}:${process.env.PATH}`, DAGU_HOME: home, DAGU_COORDINATOR_ENABLED: "false" };
   repo.env.GATE = `gh repo view >/dev/null && node -e 'const fs=require("fs"); const p=JSON.parse(fs.readFileSync("${manifest}")); if(p.version!=="0.3.19") process.exit(1)'`;
   const source = readFileSync(template, "utf8");
   const file = join(home, "dags/feature.yaml");
   const staged = join(repo.root, "staged/config.json");
   const adoptionEnv = {
-    ...env, STAGE: staged, SKILL_DIR: dirname(template), REPO: "fixture", BASE_BRANCH: "main",
+    ...env, STAGE: staged, REPO: "fixture", BASE_BRANCH: "main",
     GATE: repo.env.GATE, REQUIRED_CHECK: "validate", TEST_PATHS: "(^|/)test/",
     REBASE_RESOLVER: repo.env.REBASE_RESOLVER, BUNDLE_NAME: "@a4s/issue-lifecycle",
     BUNDLE_VERSION: "0.3.18", DAGU_VERSION: "2.24.0", SOURCE_NWO: "fixture/repository",
@@ -239,7 +240,7 @@ test("isolated Dagu rebases colliding candidates before gate and publishes the n
   }
   try {
     await until("Dagu ready", async () => { try { return (await fetch(`${api}/dag-runs`)).ok ? true : undefined; } catch { return undefined; } });
-    execFileSync("bash", ["-c", script(join(dirname(template), "dagu-feature-bootstrap.yaml"), "render")], { cwd: repo.root, env: adoptionEnv });
+    execFileSync("bash", ["-c", script(join(dirname(template), "dagu-feature-bootstrap.yaml"), "write_config")], { cwd: repo.root, env: adoptionEnv });
     assert.equal(readConfigFile(staged).gate, repo.env.GATE);
     command("validate", rendered); command("validate", file);
     command("enqueue", "--run-id", id, "feature");

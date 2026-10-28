@@ -8,7 +8,7 @@ import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
-import { after, test } from "node:test";
+import { test } from "node:test";
 import { Transitions } from "../src/status/progress.ts";
 import type { RunDetails } from "../src/status/progress.ts";
 import { readConfigFile } from "../src/config.ts";
@@ -23,12 +23,7 @@ import { copyRepositorySeed, normalizedFixtureSnapshot, SEED_COMMIT_DATE, settle
 import { testRunId } from "./fixtures/run-id.ts";
 import { renderedFeature, renderedPoc } from "./fixtures/rendered-feature.ts";
 import { readAdminEvents, STALE_PROCESS_ERROR } from "../src/stale-recovery.ts";
-
-const timingBin = mkdtempSync(join(tmpdir(), "a4s-gate-cli-"));
-symlinkSync(fileURLToPath(new URL("../bin/dagu-gate.cjs", import.meta.url)), join(timingBin, "dagu-gate"));
-symlinkSync(fileURLToPath(new URL("../bin/dagu-feature-protect.ts", import.meta.url)), join(timingBin, "dagu-feature-protect"));
-process.env.PATH = `${timingBin}:${process.env.PATH ?? ""}`;
-after(() => rmSync(timingBin, { recursive: true, force: true }));
+import { a4sBin } from "./fixtures/a4s.ts";
 
 const definitions = [
   ["template", fileURLToPath(new URL("../skills/issue-execution/feature.yaml", import.meta.url))],
@@ -154,6 +149,7 @@ function materializeFeature(run: string, fresh: boolean): Repository {
     state: join(root, "primary", ".git", "dagu-feature", "runs", run),
   };
   if (!fresh) settleCopiedRepository([repo.primary, repo.worktree]);
+  writeFileSync(join(repo.state, "receipt.json"), JSON.stringify(roleAdmission(repo.primary, join(root, "dagu-home"), run, readFileSync(definitions[0][1], "utf8"))));
   return repo;
 }
 
@@ -224,9 +220,7 @@ function stubGh(repo: Repository, stdout: string, status: number, stderr = ""): 
   chmodSync(executable, 0o755);
 }
 
-type FilesEvidence = { metadata?: string; pages?: string; metadataExit?: number; pagesExit?: number };
-
-function stubSuccessfulCloseGateGh(repo: Repository, files = "README.txt", evidence: FilesEvidence = {}): void {
+function stubSuccessfulCloseGateGh(repo: Repository): void {
   const head = git(repo.worktree, "rev-parse", "HEAD");
   const bin = join(repo.root, "bin");
   mkdirSync(bin, { recursive: true });
@@ -237,90 +231,37 @@ function stubSuccessfulCloseGateGh(repo: Repository, files = "README.txt", evide
 case "$*" in
   "pr view ${repo.branch} --repo ${repo.root}/remote.git --json number,state,headRefOid,mergeCommit") printf '%s\\n' '${JSON.stringify({ number: 190, state: "MERGED", headRefOid: head, mergeCommit: { oid: head } })}' ;;
   "pr checks 190 --repo ${repo.root}/remote.git --required --json name,state --jq "*) printf 'SUCCESS\\n' ;;
-  "repo view ${repo.root}/remote.git --json nameWithOwner --jq .nameWithOwner") printf 'fixture/repo\\n' ;;
-  "api repos/fixture/repo/pulls/190") cat ${JSON.stringify(join(repo.root, "pr-metadata.json"))}; exit ${evidence.metadataExit ?? 0} ;;
-  "api --paginate --slurp repos/fixture/repo/pulls/190/files?per_page=100") cat ${JSON.stringify(join(repo.root, "pr-files.json"))}; exit ${evidence.pagesExit ?? 0} ;;
   *) printf 'unexpected gh invocation: %s\\n' "$*" >&2; exit 1 ;;
 esac
 `,
   );
-  writeFileSync(join(repo.root, "pr-metadata.json"), evidence.metadata ?? JSON.stringify({ changed_files: 1 }));
-  writeFileSync(join(repo.root, "pr-files.json"), evidence.pages ?? JSON.stringify([[{ filename: files }]]));
   chmodSync(executable, 0o755);
 }
 
-const firstFilePage = Array.from({ length: 100 }, (_, index) => ({ filename: `src/file-${index}.ts` }));
-const fileEvidenceCases: Array<{ name: string; evidence: FilesEvidence; bootstrap?: boolean; error?: RegExp }> = [
-  { name: "skill on the second full-response page", evidence: {
-    metadata: '{"changed_files":101}',
-    pages: JSON.stringify([firstFilePage, [{ filename: "packages/issue-lifecycle/skills/issue-execution/feature.yaml" }]]),
-  }, bootstrap: true },
-  { name: "changelog", evidence: { pages: '[[{"filename":"packages/issue-lifecycle/CHANGELOG.md"}]]' }, bootstrap: true },
-  { name: "unrelated path with an embedded newline", evidence: {
-    pages: JSON.stringify([[{ filename: "src/notes\npackages/issue-lifecycle/CHANGELOG.md" }]]),
-  } },
-  { name: "zero changed files", evidence: { metadata: '{"changed_files":0}', pages: "[[]]" } },
-  ...[
-    ["metadata API failure", { metadataExit: 1 }, /metadata lookup failed/],
-    ["files API failure", { pagesExit: 1 }, /pages lookup failed/],
-    ["malformed metadata JSON", { metadata: "{" }, /invalid changed-file metadata/],
-    ["multiple metadata documents", { metadata: '{"changed_files":1}\n{"changed_files":1}' }, /one metadata document/],
-    ["missing count", { metadata: "{}" }, /invalid changed_files/],
-    ["string count", { metadata: '{"changed_files":"1"}' }, /invalid changed_files/],
-    ["fractional count", { metadata: '{"changed_files":1.5}' }, /invalid changed_files/],
-    ["negative count", { metadata: '{"changed_files":-1}' }, /invalid changed_files/],
-    ["exact endpoint ceiling", { metadata: '{"changed_files":3000}' }, /endpoint ceiling/],
-    ["above endpoint ceiling", { metadata: '{"changed_files":3001}' }, /endpoint ceiling/],
-    ["malformed files JSON", { pages: "[" }, /invalid or incomplete/],
-    ["multiple files documents", { pages: '[[]]\n[[]]' }, /one files document/],
-    ["non-array pages", { pages: "{}" }, /invalid files pages/],
-    ["missing zero-file page", { metadata: '{"changed_files":0}', pages: "[]" }, /missing files pages/],
-    ["non-array page", { pages: "[{}]" }, /invalid files page/],
-    ["oversized page", { metadata: '{"changed_files":101}', pages: JSON.stringify([[...firstFilePage, { filename: "extra" }]]) }, /oversized files page/],
-    ["short intermediate page", { metadata: '{"changed_files":2}', pages: '[[{"filename":"one"}],[{"filename":"two"}]]' }, /incomplete files page/],
-    ["non-object record", { pages: '[[null]]' }, /invalid file record/],
-    ["missing filename", { pages: '[[{}]]' }, /invalid filename/],
-    ["non-string filename", { pages: '[[{"filename":7}]]' }, /invalid filename/],
-    ["empty filename", { pages: '[[{"filename":""}]]' }, /empty filename/],
-    ["count mismatch", { metadata: '{"changed_files":2}' }, /count mismatch/],
-    ["duplicate across pages", { metadata: '{"changed_files":101}', pages: JSON.stringify([firstFilePage, [firstFilePage[0]]]) }, /duplicate filenames/],
-  ].map(([name, evidence, error]) => ({ name: name as string, evidence: evidence as FilesEvidence, error: error as RegExp })),
-];
-
-for (const scenario of fileEvidenceCases) {
-  test(`maintained close validates ${scenario.name}`, () => {
-    const repo = repository();
-    try {
-      commit(repo, "packages/issue-lifecycle/package.json", JSON.stringify({ version: BUNDLE_VERSION }));
-      git(repo.primary, "merge", "--ff-only", repo.branch);
-      git(repo.primary, "push", "origin", "main");
-      stubSuccessfulCloseGateGh(repo, "README.txt", scenario.evidence);
-      const log = join(repo.root, "bootstrap.args");
-      const executable = join(repo.root, "bin", "dagu");
-      writeFileSync(executable, `#!/bin/sh\ncase "$1" in\nhistory) printf '[]\\n';;\nenqueue) printf '%s\\n' "$@" > ${JSON.stringify(log)};;\n*) exit 1;;\nesac\n`);
-      chmodSync(executable, 0o755);
-      const result = spawnSync("bash", ["-c", extractScript(definitions[0][1], "  - id: close_gate")], {
-        encoding: "utf8", env: featureScriptEnv(repo),
-      });
-      if (scenario.error) {
-        assert.equal(result.status, 1, result.stdout + result.stderr);
-        assert.match(result.stderr, scenario.error);
-        assert.match(readFileSync(join(repo.state, "cleanup-diagnostic"), "utf8"), /changed-file/);
-        assert.equal(readFileSync(join(repo.state, "cleanup-phase"), "utf8"), "branch-removed\n");
-        assert.equal(existsSync(log), false);
-      } else {
-        assert.equal(result.status, 0, result.stdout + result.stderr);
-        assert.equal(readFileSync(join(repo.state, "cleanup-phase"), "utf8"), "complete\n");
-        assert.equal(existsSync(log), scenario.bootstrap === true);
-        if (scenario.bootstrap) assert.match(readFileSync(log, "utf8"), /dagu-feature-bootstrap\.yaml/);
-      }
-    } finally { rmSync(repo.root, { recursive: true, force: true }); }
-  });
-}
+test("maintained close completes without inspecting changed files or re-sealing the checkout", () => {
+  const repo = repository();
+  try {
+    commit(repo, "packages/issue-lifecycle/skills/issue-execution/feature.yaml", "merged template\n");
+    git(repo.primary, "merge", "--ff-only", repo.branch);
+    git(repo.primary, "push", "origin", "main");
+    stubSuccessfulCloseGateGh(repo);
+    const log = join(repo.root, "bootstrap.args");
+    const executable = join(repo.root, "bin", "dagu");
+    writeFileSync(executable, `#!/bin/sh\ncase "$1" in\nhistory) printf '[]\\n';;\nenqueue) printf '%s\\n' "$@" > ${JSON.stringify(log)};;\n*) exit 1;;\nesac\n`);
+    chmodSync(executable, 0o755);
+    const result = spawnSync("bash", ["-c", extractScript(definitions[0][1], "  - id: close_gate")], {
+      encoding: "utf8", env: featureScriptEnv(repo),
+    });
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.equal(readFileSync(join(repo.state, "cleanup-phase"), "utf8"), "complete\n");
+    assert.equal(existsSync(log), false);
+  } finally { rmSync(repo.root, { recursive: true, force: true }); }
+});
 
 function featureScriptEnv(repo: Repository): NodeJS.ProcessEnv {
   return {
     HOME: process.env.HOME,
+    A4S_BIN: a4sBin,
     DAGU_HOME: join(repo.root, "dagu-home"),
     PATH: `${join(repo.root, "bin")}:${process.env.PATH ?? ""}`,
     DAGU_PARAMS_JSON: "{}",
@@ -522,7 +463,7 @@ test("template captures native implementation and publishes the gated candidate"
   try {
     const definition = definitions[0][1];
     const source = readFileSync(definition, "utf8");
-    const run = "test-run"; const home = join(repo.root, "dagu-home"); mkdirSync(home);
+    const run = "test-run"; const home = join(repo.root, "dagu-home"); mkdirSync(home, { recursive: true });
     const startedAt = "2026-10-22T05:00:00Z";
     const binding: JobBinding = { repo: repo.primary, worktree: repo.worktree, lane: "feature", dag: "feature",
       run, stage: "implement", role: "implement", sha: git(repo.worktree, "rev-parse", "HEAD"), iteration: 0, attempt: `0:${startedAt}` };
@@ -558,21 +499,22 @@ test("template isolated PoC parent succeeds after exactly one child enqueue acro
     const calls = join(repo.root, "external-calls");
     writeFileSync(calls, "");
     writeFileSync(join(bin, "gh"), `#!/bin/bash\nprintf '%s\\n' "gh $*" >> ${JSON.stringify(calls)}\n`);
-    writeFileSync(join(bin, "dagu-poc-scope"), `#!/bin/bash\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(fileURLToPath(new URL("../bin/dagu-poc-scope.ts", import.meta.url)))} "$@"\n`);
-    writeFileSync(join(bin, "dagu-feature-bundle"), `#!/bin/bash
+    writeFileSync(join(bin, "a4s-routing"), `#!/bin/bash
 set -euo pipefail
+if [[ "$1" != enqueue ]]; then exec ${JSON.stringify(a4sBin)} "$@"; fi
 arguments="$*"
 while [[ $# -gt 0 && "$1" != -- ]]; do shift; done
 [[ "$1" == -- ]]
 shift
 for parameter in "$@"; do export "$parameter"; done
-dagu-poc-scope require
-printf '%s\\n' "dagu-feature-bundle $arguments" >> ${JSON.stringify(calls)}
+${JSON.stringify(a4sBin)} poc-scope require
+printf '%s\\n' "a4s $arguments" >> ${JSON.stringify(calls)}
 `);
-    for (const command of ["gh", "dagu-poc-scope", "dagu-feature-bundle"]) chmodSync(join(bin, command), 0o755);
+    for (const command of ["gh", "a4s-routing"]) chmodSync(join(bin, command), 0o755);
     const source = readFileSync(definitions[0][1], "utf8");
     const dag = join(home, "dags", "feature.yaml");
     const variables = {
+      A4S_BIN: join(bin, "a4s-routing"),
       PRIMARY: repo.primary, WORKTREE: repo.worktree, BRANCH: repo.branch,
       RUN: run, ISSUE: "189", BASE_BRANCH: "main", PR_NUMBER: "", VALIDATION: "",
       OMP_SESSION_ID: "parent-id", PATH: `${bin}:${process.env.PATH}`, GATE: "true",
@@ -603,7 +545,7 @@ printf '%s\\n' "dagu-feature-bundle $arguments" >> ${JSON.stringify(calls)}
       authorizedTargets: ["linux-arm64"], basis: "regression test authorized linux-arm64" });
     assert.deepEqual(readFileSync(calls, "utf8").trim().split("\n"), [
       `gh issue comment 189 --body-file ${join(repo.primary, ".git", "dagu-feature", "runs", run, "triage.md")}`,
-      `dagu-feature-bundle enqueue --run-id poc-${run} ${repo.primary}/.workspace/dagu/dags/poc.yaml -- ISSUE=189 QUESTION=runtime behavior OMP_SESSION_ID=parent-id REQUIRED_TARGETS=["linux-arm64"] AUTHORIZED_TARGETS=["linux-arm64"] SCOPE_BASIS=regression test authorized linux-arm64 SCOPE_REQUEST=${request.id}`,
+      `a4s enqueue --parent ${join(repo.primary, ".git", "dagu-feature", "runs", run, "receipt.json")} --run-id poc-${run} ${repo.primary}/.workspace/dagu/dags/poc.yaml -- ISSUE=189 QUESTION=runtime behavior OMP_SESSION_ID=parent-id REQUIRED_TARGETS=["linux-arm64"] AUTHORIZED_TARGETS=["linux-arm64"] SCOPE_BASIS=regression test authorized linux-arm64 SCOPE_REQUEST=${request.id}`,
     ]);
   } finally { rmSync(repo.root, { recursive: true, force: true }); }
 });
@@ -1987,7 +1929,7 @@ async function recoveryFixture(extraConfig = ""): Promise<RecoveryFixture> {
   assert.ok(address && typeof address !== "string");
   const port = address.port;
   await new Promise<void>((resolve, reject) => listener.close(error => error ? reject(error) : resolve()));
-  const env: NodeJS.ProcessEnv = { ...process.env, DAGU_PARAMS_JSON: "{}", DAGU_HOME: home, DAGU_PORT: String(port), DAGU_COORDINATOR_ENABLED: "false" };
+  const env: NodeJS.ProcessEnv = { ...process.env, A4S_BIN: a4sBin, DAGU_PARAMS_JSON: "{}", DAGU_HOME: home, DAGU_PORT: String(port), DAGU_COORDINATOR_ENABLED: "false" };
   // Fixture CLI retries are user requests; its scheduler supplies dispatch context.
   delete env.DAGU_QUEUE_DISPATCH_RETRY;
   delete env.DAG_PUSHBACK_ITERATION;
@@ -2108,6 +2050,8 @@ esac
     rmSync(join(repo.root, "bin", "dagu"));
     const dag = join(home, "dags", "feature.yaml");
     writeFileSync(dag, script);
+    mkdirSync(repo.state, { recursive: true });
+    writeFileSync(join(repo.state, "receipt.json"), JSON.stringify(roleAdmission(repo.primary, home, id, script)));
     const dagu = (...args: string[]) => execFileSync("dagu", args, {
       cwd: root, env: { ...env, PATH: `${bin}:${process.env.PATH}` }, encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
@@ -2224,8 +2168,8 @@ for (const [name, definition] of definitions) {
               chmodSync(gh, 0o755);
               // Admission is exercised against real Dagu in bundle-cli.test.ts;
               // this fixture isolates the lifecycle's post-admission routing.
-              const admission = join(repo.root, "bin", "dagu-feature-bundle");
-              writeFileSync(admission, '#!/bin/sh\ntest "$1" = enqueue || exit 1\nexec dagu "$@"\n');
+              const admission = join(repo.root, "bin", "a4s-routing");
+              writeFileSync(admission, `#!/bin/sh\nif [ "$1" != enqueue ]; then exec ${JSON.stringify(a4sBin)} "$@"; fi\ntest "$2" = --parent || exit 1\nshift 3\nexec dagu enqueue "$@"\n`);
               chmodSync(admission, 0o755);
             } else stubSuccessfulCloseGateGh(repo);
             git(repo.primary, "worktree", "remove", repo.worktree);
@@ -2250,7 +2194,7 @@ for (const [name, definition] of definitions) {
             const script = [
               "type: graph\nshell: bash\nmax_active_steps: 1\n",
               `params:\n  - ISSUE: "189"\n  - PR_NUMBER: ""\n  - OMP_SESSION_ID: close-owner\n`,
-              `env:\n  - PRIMARY: ${JSON.stringify(repo.primary)}\n  - BASE_BRANCH: main\n  - BRANCH: dagu/issue-\${ISSUE}\n  - GATE: "true"\n  - REQUIRED_CHECK: validate\n  - PATH: ${join(repo.root, "bin")}:${process.env.PATH}\n  - WORKTREE: ${repo.worktree}\n  - RUN: \${context.run.id}\n  - DAGU_FEATURE_BUNDLE: test\n`,
+              `env:\n  - A4S_BIN: ${JSON.stringify(mode === "poc" ? join(repo.root, "bin", "a4s-routing") : a4sBin)}\n  - PRIMARY: ${JSON.stringify(repo.primary)}\n  - BASE_BRANCH: main\n  - BRANCH: dagu/issue-\${ISSUE}\n  - GATE: "true"\n  - REQUIRED_CHECK: validate\n  - PATH: ${join(repo.root, "bin")}:${process.env.PATH}\n  - WORKTREE: ${repo.worktree}\n  - RUN: \${context.run.id}\n  - DAGU_FEATURE_BUNDLE: test\n`,
               source.slice(source.indexOf("  - DAGU_RESOURCE_GUARD: |"), source.indexOf("steps:\n")),
               "steps:\n", ...(mode === "poc" ? ["admission", "admit"].map(id => extractStep(source, id)) : []), triage, decision,
               ...(mode === "poc" ? ["poc_scope_prepare", "poc_scope_decision", "poc_scope_resolve", "poc_admit"].map(id => extractStep(source, id)) : []),
@@ -2263,7 +2207,7 @@ for (const [name, definition] of definitions) {
             const dag = join(home, "dags", "feature.yaml");
             writeFileSync(dag, script);
             rmSync(join(repo.root, "bin", "dagu"));
-            const runEnv = { ...env, PATH: `${join(repo.root, "bin")}:${process.env.PATH}` };
+            const runEnv = { ...env, A4S_BIN: mode === "poc" ? join(repo.root, "bin", "a4s-routing") : a4sBin, PATH: `${join(repo.root, "bin")}:${process.env.PATH}` };
             const dagu = (...args: string[]) => execFileSync("dagu", args, {
               cwd: root, env: runEnv, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
             }).trim();
@@ -2407,7 +2351,7 @@ test("concurrent recovery fixtures keep distinct run identities", {
 });
 
 for (const [name, definition] of [definitions[0]]) {
-  test(`${name} real Dagu checks primary freshness before admission and enqueues bootstrap after merge`, {
+  test(`${name} real Dagu checks primary freshness before admission without post-merge bootstrap`, {
     ...liveDagu,
     timeout: 115_000,
   }, async (t) => {
@@ -2421,7 +2365,7 @@ for (const [name, definition] of [definitions[0]]) {
     const port = address.port;
     await new Promise<void>(resolve => listener.close(() => resolve()));
     writeFileSync(join(home, "config.yaml"), `host: 127.0.0.1\nport: ${port}\nauth:\n  mode: none\ncoordinator:\n  enabled: false\nscheduler:\n  port: 0\n`);
-    const env = { ...process.env, DAGU_PARAMS_JSON: "{}", DAGU_HOME: home, DAGU_COORDINATOR_ENABLED: "false" };
+    const env = { ...process.env, A4S_BIN: a4sBin, DAGU_PARAMS_JSON: "{}", DAGU_HOME: home, DAGU_COORDINATOR_ENABLED: "false" };
     const binary = execFileSync("which", ["dagu"], { encoding: "utf8" }).trim();
     t.diagnostic(`isolated Dagu binary=${binary} version=${liveDaguVersion} home=${home} port=${port}`);
     let serviceLog = "";
@@ -2510,22 +2454,15 @@ for (const [name, definition] of [definitions[0]]) {
           commit(repo, changed, "merged change\n");
           git(repo.primary, "merge", "--ff-only", repo.branch);
           git(repo.primary, "push", "origin", "main");
-          stubSuccessfulCloseGateGh(repo, changed);
+          stubSuccessfulCloseGateGh(repo);
           const log = join(repo.root, "bootstrap.args");
           const stub = join(repo.root, "bin", "dagu");
           writeFileSync(stub, `#!/bin/sh\ncase "$1" in\n  history) printf '[]\\n' ;;\n  enqueue) printf '%s\\n' "$@" > ${JSON.stringify(log)} ;;\n  *) exit 1 ;;\nesac\n`);
           chmodSync(stub, 0o755);
           const result = await execute(repo, "close_gate");
           assert.equal(result.status, "succeeded", JSON.stringify(result));
-          if (changed.startsWith("packages/issue-lifecycle/")) {
-            const skill = join(repo.primary, "packages/issue-lifecycle/skills/issue-execution");
-            assert.deepEqual(readFileSync(log, "utf8").trim().split("\n"), [
-              "enqueue", "--run-id", `bootstrap-a4s-v${BUNDLE_VERSION.replace(/\./g, "-")}`,
-              join(skill, "dagu-feature-bootstrap.yaml"), "--", `PRIMARY=${repo.primary}`, `SKILL_DIR=${skill}`,
-            ]);
-          } else {
-            assert.match(result.stdout, /cleanup worktree=.*remote=absent/);
-          }
+          assert.equal(existsSync(log), false);
+          assert.match(result.stdout, /cleanup worktree=.*remote=absent/);
           t.diagnostic(`close_gate ${changed}: ${result.id} ${result.status}`);
         } finally { rmSync(repo.root, { recursive: true, force: true }); }
       }
@@ -2719,26 +2656,26 @@ for (const [name, definition] of definitions) {
     writeFileSync(join(state, "identity"), identity);
     writeFileSync(git(repo.worktree, "rev-parse", "--path-format=absolute", "--git-path", "dagu-feature-owner"), identity);
     const fixtureBin = join(repo.root, "role-bin"); mkdirSync(fixtureBin);
-    const env: NodeJS.ProcessEnv = { ...process.env, PATH: `${fixtureBin}:${process.env.PATH}`, DAGU_PARAMS_JSON: "{}", DAGU_HOME: home, DAGU_PORT: String(port), DAGU_COORDINATOR_ENABLED: "false" };
+    const env: NodeJS.ProcessEnv = { ...process.env, A4S_BIN: join(fixtureBin, "a4s"), PATH: `${fixtureBin}:${process.env.PATH}`, DAGU_PARAMS_JSON: "{}", DAGU_HOME: home, DAGU_PORT: String(port), DAGU_COORDINATOR_ENABLED: "false" };
     // This scheduler owns a new run's iteration independently of the parent role job.
     delete env.DAG_PUSHBACK_ITERATION;
     writeFileSync(join(home, "config.yaml"), `host: 127.0.0.1\nport: ${port}\nauth:\n  mode: none\ncoordinator:\n  enabled: false\n`);
     const source = readFileSync(definition, "utf8");
-    const commandImplementation = extractStep(source, "implement").includes("dagu-role-jobs stage implement");
+    const commandImplementation = extractStep(source, "implement").includes('"$A4S_BIN" role-jobs stage implement');
     const implementationReady = join(repo.root, "implementation-ready");
     const executor = join(fixtureBin, "execute.ts");
-    writeFileSync(executor, `import {existsSync,rmSync} from "node:fs";
+    writeFileSync(executor, `import {appendFileSync,existsSync,rmSync} from "node:fs";
 import {setTimeout as delay} from "node:timers/promises";
 import {dispatchStage} from ${JSON.stringify(new URL("../src/role-dispatch.ts", import.meta.url).href)};
 import {roleExecution} from ${JSON.stringify(new URL("./role-job-fixtures.ts", import.meta.url).href)};
-await dispatchStage("implement",(name,value)=>require("node:fs").appendFileSync(process.env.DAGU_OUTPUT_FILE,name+"="+value+"\\n"),async(job,assignment)=>{
+await dispatchStage("implement",(name,value)=>appendFileSync(process.env.DAGU_OUTPUT_FILE,name+"="+value+"\\n"),async(job,assignment)=>{
   while(!existsSync(${JSON.stringify(implementationReady)})) await delay(100);
   rmSync(${JSON.stringify(implementationReady)});
   return roleExecution(job,assignment);
 });
 `);
-    writeFileSync(join(fixtureBin, "dagu-role-jobs"), `#!/bin/sh\nexec bun ${JSON.stringify(executor)} "$@"\n`);
-    chmodSync(join(fixtureBin, "dagu-role-jobs"), 0o755);
+    writeFileSync(join(fixtureBin, "a4s"), `#!/bin/sh\nif [ "$1 $2 $3" = "role-jobs stage implement" ]; then exec ${JSON.stringify(process.execPath)} --import ${JSON.stringify(import.meta.resolve("tsx"))} ${JSON.stringify(executor)}; fi\nexec ${JSON.stringify(a4sBin)} "$@"\n`);
+    chmodSync(join(fixtureBin, "a4s"), 0o755);
     writeFileSync(join(fixtureBin, "gh"), '#!/bin/sh\nprintf \'{"title":"Fixture","body":"Acceptance","comments":[]}\\n\'\n');
     chmodSync(join(fixtureBin, "gh"), 0o755);
     const steps = ["implement_budget", "escalation", "escalation_decision", "implement", "capture", "rebase", "conflict_review", "gate", "recover_gate",
@@ -2747,7 +2684,7 @@ await dispatchStage("implement",(name,value)=>require("node:fs").appendFileSync(
         .replace(/    depends: rebase_escalation_decision\n/, "    depends: capture\n")).join("\n");
     const dag = join(home, "dags", "feature.yaml");
     writeFileSync(dag, `name: feature\ntype: graph\nshell: bash\nmax_active_steps: 1\nparams:\n  - ISSUE: "189"\n  - OMP_SESSION_ID: parent-id\nenv:\n${Object.entries({
-      ISSUE: "189", PRIMARY: repo.primary, WORKTREE: repo.worktree, BRANCH: repo.branch, PATH: env.PATH,
+      ISSUE: "189", PRIMARY: repo.primary, WORKTREE: repo.worktree, BRANCH: repo.branch, PATH: env.PATH, A4S_BIN: env.A4S_BIN,
       BASE_BRANCH: "main", GATE: "test -f acceptance.txt", VALIDATION: "", OMP_SESSION_ID: "parent-id", RUN: "${context.run.id}", DAGU_PORT: String(port),
     }).map(([key, value]) => `  - ${key}: ${JSON.stringify(value)}`).join("\n")}\nsteps:\n  - id: triage\n    run: echo POC=no >> "$DAGU_OUTPUT_FILE"\n    outputs:\n      - name: POC\n  - id: recover_start_gate\n    depends: triage\n    run: "true"\n${steps}\n  - id: after_push\n    depends: push\n    action: human.task\n    with:\n      prompt: "Observe published candidate or rebase in this same run."\n      push_back:\n        rewind_to: rebase\nhandler_on:\n  wait:\n    run: |\n${extractScript(definition, "  wait:").split("\n").map(line => `      ${line}`).join("\n")}\n`);
     writeFileSync(join(state, "receipt.json"), JSON.stringify(roleAdmission(repo.primary, home, run, readFileSync(dag, "utf8"))));
@@ -2845,7 +2782,7 @@ test("adopted policy rejects run overrides before repository writes and admits o
   const port = address.port;
   await new Promise<void>(resolve => listener.close(() => resolve()));
   const env = {
-    ...process.env, DAGU_PARAMS_JSON: "{}", DAGU_HOME: home, DAGU_PORT: String(port), PRIMARY: repo.primary, A4S_PRIMARY: repo.primary, SKILL_DIR: skillDir,
+    ...process.env, A4S_BIN: a4sBin, DAGU_PARAMS_JSON: "{}", DAGU_HOME: home, DAGU_PORT: String(port), PRIMARY: repo.primary, A4S_PRIMARY: repo.primary,
     GATE: "printf adopted-gate", REQUIRED_CHECK: "adopted-check", REPO: "fixture", BASE_BRANCH: "main",
     REBASE_RESOLVER: "printf adopted-resolver",
     STAGE: stage, TEST_PATHS: "test/", BUNDLE_NAME: "@a4s/issue-lifecycle", BUNDLE_VERSION,
@@ -2884,11 +2821,11 @@ test("adopted policy rejects run overrides before repository writes and admits o
       await delay(150);
     }
     assert.ok(ready, `isolated Dagu API ready\n${serviceLog}`);
-    const rendered = spawnSync("bash", ["-c", extractScript(join(skillDir, "dagu-feature-bootstrap.yaml"), "  - id: render")], { encoding: "utf8", env });
+    const rendered = spawnSync("bash", ["-c", extractScript(join(skillDir, "dagu-feature-bootstrap.yaml"), "  - id: write_config")], { encoding: "utf8", env });
     assert.equal(rendered.status, 0, rendered.stdout + rendered.stderr);
     const config = readConfigFile(stage);
     for (const name of ["feature.yaml", "poc.yaml"] as const) {
-      writeFileSync(join(repo.root, "staged", name), materializeDag(packageDir, name, config, { version: BUNDLE_VERSION, source: `fixture/repo@${"1".repeat(40)}` }));
+      writeFileSync(join(repo.root, "staged", name), materializeDag(packageDir, name, config, { version: BUNDLE_VERSION, source: `fixture/repo@${"1".repeat(40)}`, executable: a4sBin }));
     }
     for (const name of ["feature", "poc"]) {
       const definition = join(repo.root, "staged", `${name}.yaml`);
@@ -2929,13 +2866,13 @@ test("adopted policy rejects run overrides before repository writes and admits o
     mkdirSync(bin);
     writeFileSync(join(bin, "gh"), '#!/bin/sh\ncase "$1" in issue) cat "$POLICY_FIXTURE/issue.json";; api) cat "$POLICY_FIXTURE/comments.json";; *) exit 1;; esac\n');
     chmodSync(join(bin, "gh"), 0o755);
-    writeFileSync(join(bin, "dagu-feature-bundle"), '#!/bin/sh\nexec dagu "$@"\n');
-    chmodSync(join(bin, "dagu-feature-bundle"), 0o755);
+    writeFileSync(join(bin, "a4s-routing"), '#!/bin/sh\ntest "$1" = enqueue && test "$2" = --parent || exit 1\nshift 3\nexec dagu enqueue "$@"\n');
+    chmodSync(join(bin, "a4s-routing"), 0o755);
     const adoptedDirectory = join(repo.primary, ".workspace", "dagu", "dags");
     mkdirSync(adoptedDirectory, { recursive: true });
     writeFileSync(join(adoptedDirectory, "feature.yaml"), adopted);
     const promoted = spawnSync("bash", ["-c", promotion], { encoding: "utf8", env: {
-      ...env, RUN: promotionRun, PROMOTE: "yes", OMP_SESSION_ID: "owner-session",
+      ...env, A4S_BIN: join(bin, "a4s-routing"), RUN: promotionRun, PROMOTE: "yes", OMP_SESSION_ID: "owner-session",
       POLICY_FIXTURE: repo.root, PATH: `${bin}:${process.env.PATH}`,
     } });
     assert.equal(promoted.status, 0, promoted.stdout + promoted.stderr);
@@ -3041,16 +2978,11 @@ test("real Dagu automatically recovers a stale Failed feature in one reconcile t
     const before = (await response.json() as { dagRunDetails: LiveDetail }).dagRunDetails;
     assert.equal(before.statusLabel, "failed");
     assert.equal(before.dagRunId, id);
-    const bin = join(fixture.root, "bin");
-    mkdirSync(bin);
-    const cli = fileURLToPath(new URL("../bin/dagu-stale-recovery.ts", import.meta.url));
-    const loader = import.meta.resolve("tsx");
-    writeFileSync(join(bin, "dagu-stale-recovery"), `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} --import ${JSON.stringify(loader)} ${JSON.stringify(cli)} "$@"\n`, { mode: 0o755 });
     const script = extractScript(fileURLToPath(new URL("../skills/issue-execution/reconcile.yaml", import.meta.url)), "  - id: recover_stale");
     const tick = join(fixture.home, "dags", "recovery-tick.yaml");
     writeFileSync(tick, `name: recovery-tick\nshell: bash\nsteps:\n  - id: recover_stale\n    run: |\n${script.split("\n").map(line => `      ${line}`).join("\n")}\n`);
     const retried = spawn("dagu", ["start", "--run-id", `tick-${fixture.suffix}`, tick], {
-      env: { ...fixture.env, PATH: `${bin}:${fixture.env.PATH}` }, stdio: ["ignore", "pipe", "pipe"],
+      env: fixture.env, stdio: ["ignore", "pipe", "pipe"],
     });
     let retryLog = "";
     retried.stdout.on("data", chunk => { retryLog += chunk; });
@@ -3096,6 +3028,9 @@ function gateExclusionFixture() {
   mkdirSync(second.state);
   writeFileSync(join(second.state, "base"), git(second.worktree, "rev-parse", "HEAD"));
   recordCandidate(second);
+  for (const [repo, run] of [[first, firstRun], [second, secondRun]] as const) {
+    writeFileSync(join(repo.state, "receipt.json"), JSON.stringify(roleAdmission(repo.primary, join(first.root, "dagu-home"), run, readFileSync(definitions[0][1], "utf8"))));
+  }
   const body = join(first.root, "gate-body.py");
   const eventsFile = join(first.root, "events.jsonl");
   writeFileSync(body, `
@@ -3513,7 +3448,7 @@ test("seeded feature repository matches a fresh fixture and stays isolated", () 
     assert.equal(view(other, "feature-isolated"), baseline);
     assert.equal(view(again, "test-run"), baseline);
     assert.equal(git(copy.primary, "config", "--get", "remote.origin.url"), join(copy.root, "remote.git"));
-    assert.equal(readlinkSync(join(copy.root, "bin", "dagu-pr-body")), readlinkSync(join(fresh.root, "bin", "dagu-pr-body")));
+    assert.equal(readlinkSync(join(copy.root, "bin", "a4s")), readlinkSync(join(fresh.root, "bin", "a4s")));
     assert.notEqual(copy.root, other.root);
     commit(copy, "README.txt", "mutated\n");
     git(copy.primary, "config", "user.name", "Mutated Observer");

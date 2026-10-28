@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
@@ -134,12 +134,14 @@ test("handoff stages all checked units for one planning run and saves lens histo
     const log = join(root, "enqueue.json");
     mkdirSync(bin);
     mkdirSync(outDir);
-    writeFileSync(join(bin, "dagu-feature-bundle"), `#!/bin/bash
+    mkdirSync(join(outDir, "primary"));
+    execFileSync("git", ["init", "-q", join(outDir, "primary")]);
+    writeFileSync(join(bin, "a4s"), `#!/bin/bash
 set -euo pipefail
 test "$1" = enqueue
 jq -nc --args '$ARGS.positional' -- "$@" >> "$FAKE_DAGU_LOG"
 `);
-    chmodSync(join(bin, "dagu-feature-bundle"), 0o755);
+    chmodSync(join(bin, "a4s"), 0o755);
     const units = [
       { id: "unit-defect", title: "Defect", body: "## Problem\nDefect\n## Change\nFix\n## Acceptance\nWorks", classification: "defecto", findings: ["f1"] },
       { id: "unit-improvement", title: "Improvement", body: "## Problem\nSlow\n## Change\nImprove\n## Acceptance\nFast", classification: "mejora", findings: ["f2"] },
@@ -151,7 +153,7 @@ jq -nc --args '$ARGS.positional' -- "$@" >> "$FAKE_DAGU_LOG"
       finding: id, verdict: "confirmado", basis: "independent evidence", live: false,
     }))));
     jsonl(join(outDir, "temporal-0.jsonl"), [{ id: "f1", lens: "0", temporal: "nuevo" }]);
-    const env: NodeJS.ProcessEnv = { ...baseEnv(outDir), FAKE_DAGU_LOG: log, PATH: `${bin}:${process.env.PATH ?? ""}` };
+    const env: NodeJS.ProcessEnv = { ...baseEnv(outDir), A4S_BIN: join(bin, "a4s"), FAKE_DAGU_LOG: log, PATH: `${bin}:${process.env.PATH ?? ""}` };
     const checked = run(extractScript(definitions[0][1], "  - id: check_units"), env);
     assert.equal(checked.status, 0, checked.stderr);
     const result = run(extractScript(definitions[0][1], "  - id: handoff"), env);
@@ -159,12 +161,13 @@ jq -nc --args '$ARGS.positional' -- "$@" >> "$FAKE_DAGU_LOG"
     const invocations = readFileSync(log, "utf8").trim().split("\n").map(line => JSON.parse(line) as string[]);
     assert.equal(invocations.length, 1);
     const args = invocations[0]!;
-    assert.deepEqual(args.slice(0, 4), [
-      "enqueue", "--run-id", "breakdown-discovery-run",
+    assert.deepEqual(args.slice(0, 6), [
+      "enqueue", "--parent", join(outDir, "primary", ".git", "dagu-feature", "runs", "discovery-run", "receipt.json"),
+      "--run-id", "breakdown-discovery-run",
       join(outDir, "primary", ".workspace", "dagu", "dags", "planning.yaml"),
     ]);
-    assert.equal(args[4], "--");
-    const params = Object.fromEntries(args.slice(5).map(arg => {
+    assert.equal(args[6], "--");
+    const params = Object.fromEntries(args.slice(7).map(arg => {
       const separator = arg.indexOf("=");
       return [arg.slice(0, separator), arg.slice(separator + 1)];
     }));

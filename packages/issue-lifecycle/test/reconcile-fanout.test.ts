@@ -6,6 +6,9 @@ import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 import test from "node:test";
 import { parseAllDocuments } from "yaml";
+import { compiledA4sBin } from "./fixtures/admission.ts";
+
+const a4sBin = compiledA4sBin();
 
 const reconcile = readFileSync(new URL("../skills/issue-execution/reconcile.yaml", import.meta.url), "utf8");
 const documents = parseAllDocuments(reconcile).map(document => document.toJS() as Record<string, unknown>);
@@ -72,7 +75,7 @@ function parseDeclaredStepOutputs(text: string, names: readonly string[]): Recor
 function runBash(source: string, env: NodeJS.ProcessEnv): Promise<{ status: number | null; stdout: string; stderr: string }> {
   const started = performance.now();
   return new Promise(resolve => {
-    const child = spawn("bash", ["-c", source], { env });
+    const child = spawn("bash", ["-c", source], { env: { A4S_BIN: a4sBin, ...env } });
     let stdout = "", stderr = "";
     child.stdout.on("data", chunk => { stdout += chunk; });
     child.stderr.on("data", chunk => { stderr += chunk; });

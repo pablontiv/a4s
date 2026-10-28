@@ -4,6 +4,7 @@ import { basename, dirname, join } from "node:path";
 import { clearInterval, setInterval } from "node:timers";
 import { setTimeout as delay } from "node:timers/promises";
 import { atomicJson } from "./role-jobs.ts";
+import { spawnEngine } from "./executable.ts";
 
 export const LONG_COMPUTATION_CONTRACT = [
   "Long computation contract: before a long computation, run a bounded representative sample and record measured throughput and the projected duration.",
@@ -552,7 +553,7 @@ export async function runShards(directory: string, runShard: (shard: PlannedShar
   return "interrupted";
 }
 
-export async function computationCommand(args: string[], options: { script: string }): Promise<void> {
+export async function computationCommand(args: string[]): Promise<void> {
   const [command, ...rest] = args;
   const flags = new Map<string, string>();
   for (let index = 0; index < rest.length; index += 1) {
@@ -621,9 +622,8 @@ export async function computationCommand(args: string[], options: { script: stri
     }
     rmSync(join(dir, "worker.json"), { force: true });
     const forwarded = rest.filter(token => token !== "--background");
-    const runtime = process.execArgv.filter((token, index, all) => token !== "--test" && !token.startsWith("--test-") && all[index - 1] !== "--test-reporter" && all[index - 1] !== "--test-name-pattern" && all[index - 1] !== "--test-skip-pattern");
     const log = openSync(join(dir, "worker.log"), "a", 0o600);
-    const child = spawn(process.execPath, [...runtime, options.script, "computation", "run", ...forwarded], {
+    const child = spawnEngine("role-jobs", ["computation", "run", ...forwarded], {
       detached: true, stdio: ["ignore", log, log], env: { ...process.env, A4S_COMPUTATION_WORKER: "1" },
     });
     child.unref();

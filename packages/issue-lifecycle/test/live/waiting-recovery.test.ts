@@ -11,6 +11,7 @@ import { liveDagu } from "../fixtures/live-dagu.ts";
 import { PocDiagnostics } from "../fixtures/poc-diagnostics.ts";
 import { waitingSnapshot } from "../fixtures/waiting-snapshot.ts";
 import { testRunId } from "../fixtures/run-id.ts";
+import { a4sBin } from "../fixtures/a4s.ts";
 
 type Step = {
   id: string;
@@ -31,7 +32,7 @@ test("distributed waiting checkpoints cancel before recovery, publication and pr
   const effects = join(root, "effects");
   writeFileSync(effects, "");
   writeFileSync(join(bin, "gh"), `#!/bin/sh\ncase "$1 $2" in\n  "pr view") printf '{"state":"OPEN"}\\n' ;;\n  *) printf '%s\\n' "$*" >> '${effects}'; exit 1 ;;\nesac\n`, { mode: 0o755 });
-  writeFileSync(join(bin, "dagu-feature-bundle"), `#!/bin/sh\nprintf 'enqueue %s\\n' "$*" >> '${effects}'\nexit 1\n`, { mode: 0o755 });
+  writeFileSync(join(bin, "a4s"), `#!/bin/sh\nif [ "$1" = enqueue ]; then printf 'enqueue %s\\n' "$*" >> '${effects}'; exit 1; fi\nexec '${a4sBin}' "$@"\n`, { mode: 0o755 });
   const socket = createServer();
   await new Promise<void>(resolve => {
     socket.listen(0, "127.0.0.1", resolve);
@@ -43,7 +44,7 @@ test("distributed waiting checkpoints cancel before recovery, publication and pr
     socket.close(() => resolve());
   });
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("DAGU_")));
-  Object.assign(env, { DAGU_HOME: home, DAGU_PORT: String(port), DAGU_COORDINATOR_ENABLED: "false", PATH: `${bin}:${process.env.PATH}`, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" });
+  Object.assign(env, { A4S_BIN: join(bin, "a4s"), DAGU_HOME: home, DAGU_PORT: String(port), DAGU_COORDINATOR_ENABLED: "false", PATH: `${bin}:${process.env.PATH}`, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" });
   writeFileSync(join(home, "config.yaml"), `host: 127.0.0.1\nport: ${port}\nauth:\n  mode: none\ncoordinator:\n  enabled: false\n`);
   const service = spawn("dagu", ["start-all", "--host", "127.0.0.1", "--port", String(port)], { env, stdio: ["ignore", "pipe", "pipe"] });
   let logs = "";
@@ -131,7 +132,7 @@ test("distributed waiting checkpoints cancel before recovery, publication and pr
           // Completion is exercised here; rewind targets preceding this isolated suffix are outside the fixture.
           for (const step of steps) if (step.with) delete step.with.push_back;
           delete steps.find(step => step.id === `${checkpoint.id}_cancellation`)!.preconditions;
-          const environment = Object.assign({}, ...source.env, { PRIMARY: primary, WORKTREE: worktree, BRANCH: branch, RUN: run, ISSUE: "290", BASE_BRANCH: "main", PR_NUMBER: "", OMP_SESSION_ID: "", VALIDATION: "procedure", REQUIRED_CHECK: "test" });
+          const environment = Object.assign({}, ...source.env, { A4S_BIN: join(bin, "a4s"), PRIMARY: primary, WORKTREE: worktree, BRANCH: branch, RUN: run, ISSUE: "290", BASE_BRANCH: "main", PR_NUMBER: "", OMP_SESSION_ID: "", VALIDATION: "procedure", REQUIRED_CHECK: "test" });
           const replaceSnapshot = (value: unknown): unknown => typeof value === "string" ? value.replaceAll("${steps.snapshot.outputs.OUT_DIR}", out).replaceAll("${steps.snapshot.outputs.SNAPSHOT}", join(out, "snapshot")) : Array.isArray(value) ? value.map(replaceSnapshot) : value && typeof value === "object" ? Object.fromEntries(Object.entries(value).map(([key, child]) => [key, replaceSnapshot(child)])) : value;
           const handler = { exit: source.handler_on.exit, ...(kind === "poc" ? { failure: source.handler_on.failure } : {}) };
           const definition = join(home, "dags", `${kind}.yaml`);

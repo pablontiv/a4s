@@ -80,41 +80,39 @@ release asset named `<archive>.sha256`, identifying that archive and its full
 64-character lowercase hexadecimal digest. The digest belongs to that platform
 archive, not to the tag text, executable alone or extracted directory.
 
-### Verified baseline source inventory
+### Verified source inventory
 
-All paths in this inventory are relative to `packages/issue-lifecycle/`. This is
-the existing source inventory, not an instruction to ship obsolete files.
+All paths in this inventory are relative to `packages/issue-lifecycle/`. Source
+tooling is not an instruction to ship development wrappers in the release.
 
 - `bin/`: `dagu-bundle-rebase.mjs`, `dagu-codeql.ts`, `dagu-feature-bundle.ts`,
   `dagu-feature-prioritize.ts`, `dagu-feature-protect.ts`, `dagu-gate.cjs`,
   `dagu-poc-scope.ts`, `dagu-pr-body.mjs`, `dagu-role-jobs.ts`,
-  `dagu-stale-recovery.ts`, `dagu-station-executor.ts`, `dagu-station-install.ts`,
-  `gate-cache.cjs`, `gate-cache-run.cjs`, `heavy-slot.py`.
-- `src/` top-level: `admission.ts`, `agent-directory.ts`, `bundle.ts`,
-  `code-scanning.ts`, `config.ts`, `integration-protection.ts`, `long-computation.ts`,
+  `dagu-stale-recovery.ts`, `gate-cache.cjs`, `gate-cache-run.cjs`, `heavy-slot.py`.
+- `src/` top-level: `admission.ts`, `agent-directory.ts`, `artifact-cache.ts`,
+  `artifact-receipt.ts`, `bundle.ts`, `cli.ts`, `code-scanning.ts`, `config.ts`,
+  `executable.ts`, `file-lock.ts`, `identity.ts`, `integration-protection.ts`, `long-computation.ts`,
   `materialize.ts`, `planning-validator.ts`, `poc-scope.ts`, `primary.ts`,
-  `queue.ts`, `receipt-version.ts`, `resources.ts`, `role-dispatch.ts`, `role-jobs.ts`, `role-runtime.ts`,
-  `run-primary.ts`, `stale-recovery.ts`, `station-executors.ts`,
-  `transcript-identity.ts`, `type-guard.ts`.
+  `queue.ts`, `receipt-version.ts`, `release.ts`, `resources.ts`, `role-dispatch.ts`, `role-jobs.ts`, `role-runtime.ts`,
+  `run-primary.ts`, `stale-recovery.ts`, `transcript-identity.ts`, `type-guard.ts`.
 - `src/status/`: `activity.ts`, `event-log.ts`, `index.ts`, `issue-title.ts`,
   `progress.ts`, `reloadable.ts`, `repository.ts`, `sse.ts`.
   `src/triage/`: `guard.ts`, `index.ts`, `native.ts`, `reloadable.ts`, `schema.ts`.
 - `extensions/` does **not** exist. The two extension entries are
   `src/status/reloadable.ts` and `src/triage/reloadable.ts`, as declared in
-  `packages/issue-lifecycle/package.json:35`.
+  `package.json`.
 - `agents/`: `plan-reviewer.md`, `triage-reviewer.md`.
 - `skills/`: `backlog-breakdown`, `issue-execution`, `refine`,
   `repository-discovery`, `sprint-planning`, `sprint-retrospective`,
   `sprint-review`; each contains `SKILL.md`.
-  `issue-execution/` also contains the five DAG templates,
-  `dagu-feature-bootstrap.yaml` and `escalation.py`.
+  `issue-execution/` also contains the five DAG templates and adoption-only
+  `dagu-feature-bootstrap.yaml`.
   `repository-discovery/` also contains `CONTRACT.md`, `METHOD.md` and
   `lenses/{0-cobertura-funcional,1-limites-de-confianza,2-integridad-y-ciclo-de-vida-de-datos,3-resiliencia-y-concurrencia,4-cadena-de-suministro-y-publicacion}.md`.
 
-The baseline gate dependency is visible at
-`packages/issue-lifecycle/bin/dagu-gate.cjs:6` and
-`packages/issue-lifecycle/bin/dagu-gate.cjs:63`; the Python heavy-slot call is at
-`packages/issue-lifecycle/skills/issue-execution/feature.yaml:1112`.
+The gate preload and its two CommonJS dependencies remain real Node files.
+Python heavy-slot is retained only for npm development tooling; release templates
+invoke `"$A4S_BIN" heavy-slot`.
 
 ## Committed consumer configuration
 
@@ -283,10 +281,10 @@ checkpoint, and which role-job-store versions it supports. Receipts MUST preserv
 that declaration as well as the selected versions; unknown or missing declarations
 are not compatibility.
 
-Current admissions write receipt `schemaVersion: 2` at
-`packages/issue-lifecycle/src/admission.ts:245`. Current readers accept versions 1
-and 2 at `packages/issue-lifecycle/src/receipt-version.ts:3`; version 1 read support
-continues already-admitted runs, not new version 1 writes. This baseline read
+Current admissions write receipt `schemaVersion: 2` in
+`packages/issue-lifecycle/src/admission.ts`. Observation readers accept versions 1
+and 2 in `packages/issue-lifecycle/src/receipt-version.ts`; version 1 read support
+preserves historical reporting, not permission to continue legacy runs. This read
 compatibility neither waives I1 nor supplies missing artifact identity.
 
 The artifact contract uses config schema 1, receipt schema 2, role-job-store

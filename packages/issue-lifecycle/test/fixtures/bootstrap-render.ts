@@ -2,6 +2,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { exampleConfig } from "../../src/config.ts";
 import { materializeDag, type LifecycleDag } from "../../src/materialize.ts";
+import { a4sBin } from "./a4s.ts";
 
 const dags: LifecycleDag[] = ["feature.yaml", "poc.yaml", "discovery.yaml", "planning.yaml", "reconcile.yaml"];
 
@@ -27,6 +28,6 @@ export function bootstrapRender(options: {
     blockerReporting: "ask",
     ...(options.codeScanning === "off" ? { codeScanning: "off" as const } : {}),
   });
-  const identity = { version: options.version, source: `${options.sourceNwo}@${options.sourceSha}` };
+  const identity = { version: options.version, source: `${options.sourceNwo}@${options.sourceSha}`, executable: a4sBin };
   for (const name of dags) writeFileSync(join(options.directory, name), materializeDag(options.packageDir, name, config, identity));
 }

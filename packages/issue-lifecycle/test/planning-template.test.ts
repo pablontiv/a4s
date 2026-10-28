@@ -12,6 +12,7 @@ import { nativeEvidence } from "../src/role-runtime.ts";
 import { planningReviewer } from "../src/transcript-identity.ts";
 import { liveDagu, liveDaguVersion } from "./fixtures/live-dagu.ts";
 import { testRunId } from "./fixtures/run-id.ts";
+import { a4sBin } from "./fixtures/a4s.ts";
 
 const definition = parse(readFileSync(new URL("../skills/issue-execution/planning.yaml", import.meta.url), "utf8"));
 function script(id: string): string {
@@ -41,7 +42,6 @@ function fixture(): Fixture {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "breakdown-")));
   const bin = join(root, "bin"), out = join(root, "out"), primary = join(root, "primary"), upstream = join(root, "upstream.jsonl");
   for (const dir of [bin, out, primary, join(root, "tmp")]) mkdirSync(dir);
-  executable(join(bin, "dagu-feature-bundle"), `#!/bin/bash\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(fileURLToPath(new URL("../bin/dagu-feature-bundle.ts", import.meta.url)))} "$@"\n`);
   writeFileSync(join(root, "external-issues.json"), JSON.stringify([{ number: 442 }]));
   writeFileSync(join(root, "issues.json"), "[]\n");
   executable(join(bin, "gh"), `#!/bin/bash\nexport PLANNING_GH_STATE=${JSON.stringify(root)}\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(fileURLToPath(new URL("./fixtures/planning-github-state.cjs", import.meta.url)))} "$@"\n`);
@@ -53,7 +53,7 @@ jq -nc --argjson iteration "\${FAKE_ITERATION:-0}" --argjson nodes "\${FAKE_REVI
       (if $iteration == 0 then {} else {approvalIteration:$iteration} end)] end)}}
 '
 `);
-  const env = { ...process.env, HOME: root, TMPDIR: join(root, "tmp"), PRIMARY: primary, OUT_DIR: out, UNITS_FROM: upstream, NWO: "owner/repo", RUN: testRunId("repo-breakdown-test"), SOURCE: "plan", OMP_SESSION_ID: "owner-session", DAGU_OUTPUT_FILE: join(root, "outputs"), PATH: `${bin}:${process.env.PATH}` };
+  const env = { ...process.env, A4S_BIN: a4sBin, HOME: root, TMPDIR: join(root, "tmp"), PRIMARY: primary, OUT_DIR: out, UNITS_FROM: upstream, NWO: "owner/repo", RUN: testRunId("repo-breakdown-test"), SOURCE: "plan", OMP_SESSION_ID: "owner-session", DAGU_OUTPUT_FILE: join(root, "outputs"), PATH: `${bin}:${process.env.PATH}` };
   const run = (id: string, extra: NodeJS.ProcessEnv = {}) => spawnSync("bash", ["-c", script(id)], { env: { ...env, ...extra }, encoding: "utf8" });
   const importRows = (rows: unknown[]) => { jsonl(upstream, rows); return run("import_units"); };
   return { root, bin, out, upstream, env, run, importRows, close: () => rmSync(root, { recursive: true, force: true }) };

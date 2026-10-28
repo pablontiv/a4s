@@ -87,7 +87,7 @@ steps:
         printf '{"line":1,"field":"$input","rule":"import-units","expected":"completed upstream import","observed":"import-error"}\n' | tee "$OUT_DIR/findings.md" >&2
         exit 1
       fi
-      dagu-feature-bundle validate-planning-units --input "$OUT_DIR/units.jsonl" \
+      "$A4S_BIN" planning validate-planning-units --input "$OUT_DIR/units.jsonl" \
         --snapshot "$OUT_DIR/validated-units.jsonl" --findings "$OUT_DIR/findings.md"
     outputs:
       - name: GENERATION
@@ -187,7 +187,7 @@ steps:
         elif $data.verdict == "accept" and ($data.findings | any(.severity == "blocker")) then error("accept has blocker")
         else $data end
       ' "$transcript" > "$OUT_DIR/review-$iteration.json.tmp"
-      reviewer=$(dagu-feature-bundle planning-reviewer-identity --transcript "$transcript")
+      reviewer=$("$A4S_BIN" planning planning-reviewer-identity --transcript "$transcript")
       jq --argjson reviewer "$reviewer" '. + {reviewer: $reviewer}' "$OUT_DIR/review-$iteration.json.tmp" > "$OUT_DIR/review-$iteration.json.merged"
       mv "$OUT_DIR/review-$iteration.json.merged" "$OUT_DIR/review-$iteration.json"
       rm -f "$OUT_DIR/review-$iteration.json.tmp"
@@ -341,7 +341,7 @@ steps:
         if $number != null and (has("revision") | not)
         then . + {revision:{issue:$number,fields:[]}} else . end
       ' "$OUT_DIR/materialization-plan.json" > "$OUT_DIR/materialization-validation-units.jsonl"
-      if ! dagu-feature-bundle validate-planning-units \
+      if ! "$A4S_BIN" planning validate-planning-units \
         --input "$OUT_DIR/materialization-validation-units.jsonl" \
         --findings "$OUT_DIR/materialization-validation-findings.jsonl"; then
         cat "$OUT_DIR/materialization-validation-findings.jsonl" >> "$OUT_DIR/findings.md"

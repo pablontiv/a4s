@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { stubHistory, withResourceGuard } from "./resource-fixtures.ts";
+import { a4sBin } from "./fixtures/a4s.ts";
 
 const featureDefinitions = [
   ["template", fileURLToPath(new URL("../skills/issue-execution/feature.yaml", import.meta.url))],
@@ -168,15 +169,12 @@ exec ${JSON.stringify(realGit)} "$@"
 }
 
 function run(script: string, repo: Repo, extra: Record<string, string> = {}) {
-  const bin = join(repo.root, "bin");
-  mkdirSync(bin, { recursive: true });
-  const protect = join(bin, "dagu-feature-protect");
-  if (!existsSync(protect)) symlinkSync(fileURLToPath(new URL("../bin/dagu-feature-protect.ts", import.meta.url)), protect);
   return spawnSync("bash", ["-c", script], {
     cwd: repo.outside,
     encoding: "utf8",
     env: {
       HOME: process.env.HOME,
+      A4S_BIN: a4sBin,
       PATH: `${join(repo.root, "bin")}:${process.env.PATH ?? ""}`,
       ISSUE: "209",
       PR_NUMBER: "",
@@ -535,7 +533,7 @@ for (const [branch, worktreeName] of [["dagu/issue-209", "issue-209"], ["poc/tes
       assert.equal(view(other), baseline);
       assert.equal(view(again), baseline);
       assert.equal(git(copy.primary, "config", "--get", "remote.origin.url"), copy.remote);
-      assert.equal(readlinkSync(join(copy.root, "bin", "dagu-pr-body")), readlinkSync(join(fresh.root, "bin", "dagu-pr-body")));
+      assert.equal(readlinkSync(join(copy.root, "bin", "a4s")), readlinkSync(join(fresh.root, "bin", "a4s")));
       assert.notEqual(copy.root, other.root);
       writeFileSync(join(copy.worktree, "value.txt"), "mutated\n");
       git(copy.worktree, "add", "value.txt");

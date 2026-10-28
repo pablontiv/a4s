@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
-import { closeSync, copyFileSync, existsSync, fstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { closeSync, copyFileSync, existsSync, fstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -8,6 +8,8 @@ import { test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { parse } from "yaml";
 import { liveDagu, liveDaguVersion } from "./fixtures/live-dagu.ts";
+import { a4sBin } from "./fixtures/a4s.ts";
+import { roleAdmission } from "./role-job-fixtures.ts";
 
 const packageRoot = fileURLToPath(new URL("../", import.meta.url));
 const sourceRoot = fileURLToPath(new URL("../../../", import.meta.url));
@@ -49,9 +51,8 @@ function fixture() {
     const state = join(repo, ".git/dagu-feature/runs", repo === primary ? "holder" : "waiter");
     mkdirSync(state, { recursive: true });
     writeFileSync(join(state, "candidate.json"), JSON.stringify({ sha: git(repo, "rev-parse", "HEAD") }));
-  }
-  for (const name of ["dagu-gate.cjs", "dagu-feature-protect.ts"]) {
-    symlinkSync(join(packageRoot, "bin", name), join(bin, name.replace(/\.(?:cjs|ts)$/, "")));
+    const run = repo === primary ? "holder" : "waiter";
+    writeFileSync(join(state, "receipt.json"), JSON.stringify(roleAdmission(repo, home, run, readFileSync(join(packageRoot, "skills/issue-execution/feature.yaml"), "utf8"))));
   }
   const body = join(root, "body.py");
   writeFileSync(body, `import json, os, pathlib, sys, time
@@ -68,7 +69,7 @@ sys.exit(int(release.read_text()))
 `);
   const processes: Running[] = [];
   const env = (run: string): NodeJS.ProcessEnv => {
-    const result: NodeJS.ProcessEnv = { ...process.env, DAGU_HOME: home, PATH: `${bin}:${process.env.PATH}`, RUN: run };
+    const result: NodeJS.ProcessEnv = { ...process.env, A4S_BIN: a4sBin, DAGU_HOME: home, PATH: `${bin}:${process.env.PATH}`, RUN: run };
     delete result.A4S_HEAVY_SLOT_HELD;
     delete result.A4S_GATE_JOURNAL;
     delete result.NODE_OPTIONS;

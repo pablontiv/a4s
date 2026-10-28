@@ -1,14 +1,13 @@
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
 import { once } from "node:events";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import test from "node:test";
-import { exampleConfig, serializeConfig } from "../src/config.ts";
 import { queueReadiness, serviceEnvironmentReadiness } from "../src/queue.ts";
 
 const cli = fileURLToPath(new URL("../bin/dagu-feature-bundle.ts", import.meta.url));
@@ -86,29 +85,6 @@ test("readiness inspects the running scheduler PATH rather than the caller PATH"
   const service = spawn(process.execPath, ["-e", "process.stdin.resume(); console.log('ready')", "start-all"], { argv0: "dagu", env: { DAGU_HOME: home, PATH: "/missing-service-tools" }, stdio: ["pipe", "pipe", "pipe"] });
   try {
     await once(service.stdout!, "data");
-    assert.match(serviceEnvironmentReadiness(home), /scheduler PATH is missing bash, git, gh, jq, node, bun, python3, omp, dagu/);
+    assert.match(serviceEnvironmentReadiness(home), /scheduler PATH is missing bash, git, gh, jq, node, omp, dagu/);
   } finally { service.kill(); await once(service, "exit"); rmSync(home, { recursive: true, force: true }); }
-});
-
-test("install-reconciler creates a missing station DAG and leaves identical bytes untouched", async () => {
-  const home = mkdtempSync(join(tmpdir(), "a4s-reconciler-install-"));
-  try {
-    const config = join(home, "config.json");
-    const dest = join(home, "dags", "reconcile.yaml");
-    const configText = (ciBlocked: number) => serializeConfig(exampleConfig({ lane: "fixture", escalation: { pushbacks: 3, findings: 2, seconds: 3600, ciBlocked, pocInconclusive: 2 } }));
-    writeFileSync(config, configText(2));
-    await exec(process.execPath, [cli, "install-reconciler", config, dest]);
-    const bytes = readFileSync(dest, "utf8");
-    assert.match(bytes, /ESCALATION_CI_BLOCKED: "2"/);
-    const stamped = new Date(Date.now() - 60_000);
-    utimesSync(dest, stamped, stamped);
-    const mtime = statSync(dest).mtimeMs;
-    await exec(process.execPath, [cli, "install-reconciler", config, dest]);
-    assert.equal(readFileSync(dest, "utf8"), bytes);
-    assert.equal(statSync(dest).mtimeMs, mtime);
-    writeFileSync(config, configText(5));
-    await exec(process.execPath, [cli, "install-reconciler", config, dest]);
-    assert.match(readFileSync(dest, "utf8"), /ESCALATION_CI_BLOCKED: "5"/);
-    assert.equal(readdirSync(join(home, "dags")).some(name => name.startsWith(".reconcile-")), false);
-  } finally { rmSync(home, { recursive: true, force: true }); }
 });
