@@ -145,12 +145,16 @@ test("install-reconciler creates a missing station DAG and leaves identical byte
   try {
     const answers = join(f.home, "answers.json");
     const dest = join(f.home, "dags", "reconcile.yaml");
-    writeFileSync(answers, answersText());
+    const reconcilerAnswers = (ciBlocked: number) => serializeAnswers(exampleAnswers({
+      lane: "a4s", queueConcurrency: 8, gate: "true", requiredCheck: "validate", testPaths: "test",
+      escalation: { pushbacks: 3, findings: 2, seconds: 3600, ciBlocked, pocInconclusive: 2 },
+    }));
+    writeFileSync(answers, reconcilerAnswers(2));
     const created = spawnSync(process.execPath, [cli, "install-reconciler", answers, dest], { encoding: "utf8" });
     assert.equal(created.status, 0, created.stderr);
     assert.match(created.stdout, new RegExp(`^reconcile=${dest}\\n$`));
     const bytes = readFileSync(dest, "utf8");
-    assert.match(bytes, /dagu-feature-queue-concurrency=8/);
+    assert.match(bytes, /ESCALATION_CI_BLOCKED: "2"/);
     const stamped = new Date(Date.now() - 60_000);
     utimesSync(dest, stamped, stamped);
     const mtime = fileMtime(dest);
@@ -158,10 +162,10 @@ test("install-reconciler creates a missing station DAG and leaves identical byte
     assert.equal(again.status, 0, again.stderr);
     assert.equal(readFileSync(dest, "utf8"), bytes);
     assert.equal(fileMtime(dest), mtime);
-    writeFileSync(answers, answersText(4));
+    writeFileSync(answers, reconcilerAnswers(5));
     const replaced = spawnSync(process.execPath, [cli, "install-reconciler", answers, dest], { encoding: "utf8" });
     assert.equal(replaced.status, 0, replaced.stderr);
-    assert.match(readFileSync(dest, "utf8"), /dagu-feature-queue-concurrency=4/);
+    assert.match(readFileSync(dest, "utf8"), /ESCALATION_CI_BLOCKED: "5"/);
     assert.notEqual(fileMtime(dest), mtime);
     assert.equal(readdirSync(join(f.home, "dags")).some(name => name.startsWith(".reconcile-")), false);
   } finally { f.dispose(); }
