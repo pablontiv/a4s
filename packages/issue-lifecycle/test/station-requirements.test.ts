@@ -17,8 +17,9 @@ test("bootstrap checks one release executable and never installs station assets"
   const spec = bootstrap();
   assert.deepEqual(spec.steps.map(step => step.id), ["detect", "config", "worktrees", "write_config", "readiness", "github", "confirm"]);
   const detect = spec.steps.find(step => step.id === "detect")!.run!;
-  assert.match(detect, /for tool in git gh jq dagu "\$A4S_BIN"; do/);
+  assert.match(detect, /for tool in git gh jq curl dagu "\$A4S_BIN"; do/);
   assert.match(detect, /"\$A4S_BIN" role-jobs detect/);
+  assert.match(detect, /"\$A4S_BIN" queue --lane "\$repo"/);
   const scripts = spec.steps.map(step => step.run ?? "").join("\n");
   assert.doesNotMatch(scripts, /install-reconciler|seal-checkout|SOURCE_SHA|SOURCE_NWO|SKILL_DIR|\$DAGU_HOME\/dags|dagu validate/);
   for (const id of ["readiness", "confirm"]) {

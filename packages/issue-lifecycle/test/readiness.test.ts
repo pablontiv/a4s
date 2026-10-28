@@ -26,3 +26,4 @@ test("station queue reports configured capacity without changing foreign station
     assert.equal(readFileSync(join(home, "config.yaml"), "utf8"), config);
   } finally { rmSync(home, { recursive: true, force: true }); }
 });
+

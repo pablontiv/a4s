@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.3
+
+- Bootstrap rejects missing or incorrect `auth.mode: none` / `coordinator.enabled: true` station config before adoption and probes its existing run-spec API through unauthenticated loopback access, the same route used by feature admission. Failures identify the operator-owned config merge and service restart; readiness never modifies station files (#673).
+
 ## 0.7.2
 
 - Make the default workspace test gate in-process and enforce its no-subprocess contract with a shared spawn guard (only direct `git`/`tar` allowed). Preserve real CLI, compiled-release, YAML, Dagu, OS-lock and timing assertions in explicit `test:live`/`test:compiled` lanes; remove the heavy-slot wrapper and forced serial execution from default suites (#683).
