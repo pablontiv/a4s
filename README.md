@@ -22,6 +22,8 @@ workspaces, not public npm publication.
 - [Agent operating contract](AGENTS.md).
 - [OMP session-log compressor](docs/architecture/omp-session-log-compressor.md):
   spike #688 decision, descartar.
+- [Tern meta-harness](docs/architecture/tern-meta-harness.md):
+  spike #690 decision, descartar.
 
 ## Delivered components
 
