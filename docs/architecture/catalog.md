@@ -58,6 +58,8 @@ and [`triage-reviewer`](../../packages/issue-lifecycle/agents/triage-reviewer.md
 The six independent generic native roles and their installation are in
 [the agent catalog](agents.md). Each role has one canonical `.omp/agents/<role>.md`
 definition; the catalog is explanatory, not another runtime provider.
+Spike #691 discarded a trailing per-turn TLDR in the operating contract; see
+[AGENTS.md TLDR per turn](agents-tldr-per-turn.md).
 
 ## Independent repository skills
 
