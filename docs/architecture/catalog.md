@@ -25,6 +25,9 @@ The MQTT adapter connects to a separately owned broker. It does not start the
 broker. The technical `synagent/v2/<to>` topic and persisted `synagent-*` entries
 are wire/storage contracts, not package installation names. The broker is
 unauthenticated loopback transport; local publishers can impersonate senders.
+Spike #690 compared Tern's agent panes with this session addressing and with
+native `task`/`wait`, and discarded adoption; see
+[Tern meta-harness](tern-meta-harness.md).
 
 ## Lifecycle skills
 
