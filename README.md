@@ -20,6 +20,8 @@ workspaces, not public npm publication.
 - [Dated v1 walkthrough](docs/operations/v1-walkthrough.md): exercised commands,
   native source selection and isolated bootstrap/admission evidence, not deployment.
 - [Agent operating contract](AGENTS.md).
+- [OMP session-log compressor](docs/architecture/omp-session-log-compressor.md):
+  spike #688 decision, descartar.
 
 ## Delivered components
 
