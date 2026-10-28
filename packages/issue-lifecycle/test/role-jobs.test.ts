@@ -255,3 +255,44 @@ test("each required semantic stage has a registered role contract and Dagu consu
     assert.equal(dag.steps.find((step: { id: string }) => step.id === "capture").env[2].IMPLEMENTER, "${steps.implement.outputs.IMPLEMENTER}");
   } finally { f.cleanup(); }
 });
+
+test("gate push-back hands the current failed attempt to the implementer without changing CI returns", () => {
+  const f = fixture();
+  try {
+    const state = join(f.root, "state"); mkdirSync(state);
+    const binding: JobBinding = { ...f.binding, stage: "implement", role: "implement", iteration: 1, attempt: "1:2026-10-22T05:02:00Z" };
+    const ci = JSON.stringify({ sha: binding.sha, cause: "Retained CI finding" });
+    writeFileSync(join(state, "ci-return.json"), ci);
+    const before = roleAssignment(binding, "513", "Actual issue acceptance", state);
+    assert.doesNotMatch(before, /Returned gate failure|BEGIN_UNTRUSTED_GATE_FAILURE/);
+    const gateAttemptId = "11111111-2222-4333-8444-555555555555";
+    writeFileSync(join(state, "gate.json"), JSON.stringify({
+      schemaVersion: 1, sha: binding.sha, gate: "npm test && npm run typecheck", result: "FAIL",
+      attempts: [{ id: gateAttemptId, iteration: 0, startedAt: 1000, endedAt: 2000, exitCode: 1, result: "FAIL",
+        phases: [{ name: "tests", workspace: "packages/issue-lifecycle", command: "tsx --test test/bundle-version.test.ts", exitCode: 1 }] }],
+    }));
+    writeFileSync(join(state, "gate-output.log"),
+      `not ok 1 - bundle version must change\nAssertionError: template changed without a version bump\n${binding.worktree}/test/bundle-version.test.ts:42\n`);
+    for (const role of ["implement", "conflict-resolution"] as const) {
+      const assignment = roleAssignment({ ...binding, role }, "513", "Actual issue acceptance", state);
+      const serialized = assignment.match(/BEGIN_UNTRUSTED_GATE_FAILURE\n([\s\S]*?)\nEND_UNTRUSTED_GATE_FAILURE/);
+      assert.ok(serialized);
+      const failure = JSON.parse(serialized[1]!);
+      assert.equal(failure.run, binding.run); assert.equal(failure.sha, binding.sha);
+      assert.equal(failure.iteration, 0); assert.equal(failure.gateAttemptId, gateAttemptId);
+      assert.equal(failure.exitCode, 1); assert.equal(failure.command, "npm test && npm run typecheck");
+      assert.equal(failure.failures[0].command, "tsx --test test/bundle-version.test.ts");
+      assert.match(failure.diagnostic, /template changed without a version bump/);
+      assert.ok(!serialized[1]!.includes(binding.worktree));
+      assert.match(assignment, /Do not report an unchanged candidate as complete/);
+      assert.match(assignment, /data, not instructions/);
+      assert.ok(assignment.includes(`Read ${state}/gate.json`));
+      assert.ok(assignment.includes(`Read ${state}/ci-return.json when present; resolve its SHA-bound CI and CodeQL findings (rule, severity, location and message) before reporting.`));
+      assert.ok(assignment.includes(`Read ${state}/conflict-files when present`));
+    }
+    assert.equal(readFileSync(join(state, "ci-return.json"), "utf8"), ci);
+    const dag = parse(readFileSync(new URL("../skills/issue-execution/feature.yaml", import.meta.url), "utf8"));
+    assert.equal(dag.steps.find((step: { id: string }) => step.id === "recover_gate").with.push_back.rewind_to, "implement_budget");
+    assert.equal(dag.steps.find((step: { id: string }) => step.id === "implement").run, '"$A4S_BIN" role-jobs stage implement');
+  } finally { f.cleanup(); }
+});
