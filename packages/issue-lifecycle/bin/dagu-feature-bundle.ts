@@ -10,7 +10,7 @@ import { validatePlanningUnitsCommand } from "../src/planning-validator.ts";
 import { planningReviewer, type TranscriptRow } from "../src/transcript-identity.ts";
 import { BUNDLE_VERSION, lifecycleProtocolToken } from "../src/bundle.ts";
 import { dagName, materializeInstalled } from "../src/materialize.ts";
-import { currentQueueConcurrency, queueCompatibility, queueFromConfigFile, reconcileQueue } from "../src/queue.ts";
+import { queueReadiness, stationReadiness } from "../src/queue.ts";
 
 function readIfPresent(path: string): string | undefined {
   try {
@@ -56,11 +56,10 @@ function inspectConfig(repo: string): boolean {
   const path = join(repo, CONFIG_PATH);
   try {
     const loaded = readCommittedConfig(repo);
-    const queue = queueFromConfigFile(path);
-    const report = queueCompatibility(process.env.DAGU_HOME || join(homedir(), ".dagu"), queue);
+    const report = queueReadiness(process.env.DAGU_HOME || join(homedir(), ".dagu"), loaded.config.lane);
     console.log(`config path=${CONFIG_PATH} schema=${loaded.config.schemaVersion} digest=${loaded.digest} lane=${loaded.config.lane} base=${loaded.config.baseBranch} ${report}`);
     console.log(`config policy gate=${JSON.stringify(loaded.config.gate)} requiredCheck=${JSON.stringify(loaded.config.requiredCheck)} testPaths=${JSON.stringify(loaded.config.testPaths)}`);
-    return report.endsWith("compat=ok");
+    return report.includes("ready=yes");
   } catch (error) {
     console.log(`config path=${path} compat=invalid cause=${JSON.stringify(error instanceof Error ? error.message : String(error))}`);
     return false;
@@ -76,7 +75,7 @@ function resolveRepository(argument: string): string | undefined {
   }
 }
 
-function main(): void {
+async function main(): Promise<void> {
   const [command, ...args] = process.argv.slice(2);
   if (command === "escalation") {
     const result = spawnSync("python3", [fileURLToPath(new URL("../skills/issue-execution/escalation.py", import.meta.url)), ...args], { stdio: "inherit" });
@@ -117,7 +116,7 @@ function main(): void {
         const file = args[0];
         if (!file) throw new Error("config-check requires the consumer config path");
         const config = readConfigFile(file);
-        console.log(`config=${file} schema=${config.schemaVersion} lane=${config.lane} queue=${config.queueConcurrency}`);
+        console.log(`config=${file} schema=${config.schemaVersion} lane=${config.lane}`);
       } else {
         const [file, dest] = args;
         if (!file || !dest) throw new Error("install-reconciler requires <config> <reconcile.yaml>");
@@ -132,20 +131,14 @@ function main(): void {
     }
     return;
   }
-  if (command === "queue-default" || command === "queue-reconcile" || command === "queue-check") {
+  if (command === "readiness") {
     try {
-      if (command === "queue-default") console.log(currentQueueConcurrency(args));
-      else {
-        if (args.length !== 1) throw new Error(`${command} requires one config file`);
-        const queue = queueFromConfigFile(args[0]!);
-        const home = process.env.DAGU_HOME || join(homedir(), ".dagu");
-        if (command === "queue-reconcile") console.log(reconcileQueue(home, queue));
-        else {
-          const report = queueCompatibility(home, queue);
-          console.log(report);
-          if (!report.endsWith("compat=ok")) process.exitCode = 1;
-        }
-      }
+      const lane = args.length === 2 && args[0] === "--lane" ? args[1]
+        : args.length === 1 ? readConfigFile(args[0]!).lane : undefined;
+      if (!lane) throw new Error("Usage: readiness <config> | readiness --lane <lane>");
+      const report = await stationReadiness(process.env.DAGU_HOME || join(homedir(), ".dagu"), lane);
+      console.log(report.checks.join("\n"));
+      process.exitCode = report.ready ? 0 : 1;
     } catch (error) {
       console.error(error instanceof Error ? error.message : String(error));
       process.exitCode = 1;
@@ -204,4 +197,4 @@ console.log(`dagu version=${observed}`);
 ok = daguOk && ok;
 process.exitCode = ok ? 0 : 1;
 }
-main();
+await main();

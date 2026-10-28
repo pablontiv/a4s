@@ -9,12 +9,11 @@ const cli = fileURLToPath(new URL("../../bin/dagu-station-install.ts", import.me
 export function fixture() {
   const root = mkdtempSync(join(tmpdir(), "dagu-station-test-"));
   const home = join(root, "Dagu & workflows");
-  const agent = join(root, "LaunchAgents", "local.dagu.server.plist");
   mkdirSync(home);
   return {
-    root, home, agent,
+    root, home,
     run(extra: string[] = [], env: NodeJS.ProcessEnv = {}) {
-      return spawnSync(process.execPath, [cli, "--launch-agent", agent, ...extra], {
+      return spawnSync(process.execPath, [cli, ...extra], {
         encoding: "utf8", env: { ...process.env, DAGU_PARAMS_JSON: "{}", DAGU_HOME: home, ...env },
       });
     },

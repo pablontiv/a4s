@@ -102,7 +102,7 @@ test("admission hook blocks enqueue when the committed config file is missing", 
     assert.equal(removed.status, 0, removed.stderr);
     const committed = spawnSync("git", ["-C", fixture.packageDir, "commit", "-qm", "remove config"], { encoding: "utf8" });
     assert.equal(committed.status, 0, committed.stderr);
-    const rejected = admissionDecision({ toolName: "bash", toolCallId: "incompatible", input: { command: `dagu enqueue --run-id blocked feature -- ISSUE=277` } }, undefined, fixture.packageDir);
+    const rejected = admissionDecision({ toolName: "bash", toolCallId: "incompatible", input: { command: `dagu enqueue --run-id blocked feature -- ISSUE=277 OMP_SESSION_ID=owner-session` } }, undefined, fixture.packageDir);
     assert.ok(rejected && "block" in rejected);
     assert.match(rejected.reason, /DAGU_ADMISSION_REJECTED.*missing committed config file/);
   } finally { fixture.dispose(); }

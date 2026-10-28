@@ -21,11 +21,11 @@ export function admissionFixture() {
   mkdirSync(dirname(configPath), { recursive: true });
   const git = (...args: string[]): string => execFileSync("git", ["-C", packageDir, ...args], { encoding: "utf8" }).trim();
   const writeConfig = (overrides: Partial<LifecycleConfig> = {}): void => {
-    writeFileSync(configPath, serializeConfig(exampleConfig({ lane: "fixture", queueConcurrency: 1, gate: "true", rebaseResolver: "", ...overrides })));
+    writeFileSync(configPath, serializeConfig(exampleConfig({ lane: "fixture", gate: "true", rebaseResolver: "", ...overrides })));
     git("add", CONFIG_PATH);
     if (git("status", "--porcelain", "--", CONFIG_PATH)) git("commit", "-qm", "config");
   };
-  writeFileSync(configPath, serializeConfig(exampleConfig({ lane: "fixture", queueConcurrency: 1, gate: "true", rebaseResolver: "" })));
+  writeFileSync(configPath, serializeConfig(exampleConfig({ lane: "fixture", gate: "true", rebaseResolver: "" })));
   git("init", "-b", "main");
   git("config", "user.name", "Admission Test");
   git("config", "user.email", "admission@example.test");
@@ -34,7 +34,7 @@ export function admissionFixture() {
   git("commit", "-qm", "fixture package 0.3.1");
   const dag = join(packageDir, ".workspace", "dagu", "dags", "feature.yaml");
   const cli = join(packageDir, "bin", "dagu-feature-bundle.ts");
-  const command = (subcommand: string, run: string, env: NodeJS.ProcessEnv = {}, params: string[] = [], dagArg = dag) => spawnSync(process.execPath, [cli, subcommand, "--run-id", run, dagArg, "--", "ISSUE=277", ...params], { cwd: packageDir, env: { ...process.env, DAGU_HOME: home, A4S_PRIMARY: packageDir, ...env }, encoding: "utf8", timeout: 30000 });
+  const command = (subcommand: string, run: string, env: NodeJS.ProcessEnv = {}, params: string[] = [], dagArg = dag, owner = "owner-session") => spawnSync(process.execPath, [cli, subcommand, "--run-id", run, dagArg, "--", "ISSUE=277", ...(params.some(param => param.startsWith("OMP_SESSION_ID=")) || !owner ? [] : [`OMP_SESSION_ID=${owner}`]), ...params], { cwd: packageDir, env: { ...process.env, DAGU_HOME: home, A4S_PRIMARY: packageDir, ...env }, encoding: "utf8", timeout: 30000 });
   const receipt = (run: string): string => join(packageDir, ".git", "dagu-feature", "runs", run, "receipt.json");
   const observe = (run: string, observation: object) => spawnSync(process.execPath, [cli, "observe", run, JSON.stringify(observation)], { cwd: packageDir, env: { ...process.env, DAGU_HOME: home, A4S_PRIMARY: packageDir }, encoding: "utf8" });
   const previousDaguHome = process.env.DAGU_HOME;

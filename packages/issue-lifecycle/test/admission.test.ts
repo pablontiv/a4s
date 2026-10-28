@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import { admissionFixture } from "./fixtures/admission.ts";
 import { lifecycleProtocolToken } from "../src/bundle.ts";
-import { CONFIG_PATH } from "../src/config.ts";
-import { appendObservation, observeRunReceipt } from "../src/admission.ts";
+import { CONFIG_PATH, POLICY_PARAMETERS } from "../src/config.ts";
+import { admit, appendObservation, enqueue, observeRunReceipt } from "../src/admission.ts";
 import { runBundle } from "../src/station-executors.ts";
 import { dispatchStage } from "../src/role-dispatch.ts";
 import { roleAdmission } from "./role-job-fixtures.ts";
@@ -42,7 +42,7 @@ test("planning CLI admission materializes the installed template and enqueue sub
     const bin = join(fixture.root, "bin");
     const calls = join(fixture.root, "enqueue-calls.jsonl");
     fakeDagu(bin, calls);
-    const params = [`PRIMARY=${fixture.packageDir}`, `UNITS_FROM=${join(fixture.root, "units.jsonl")}`, "SOURCE=refine", "OMP_SESSION_ID=planning-owner"];
+    const params = [`UNITS_FROM=${join(fixture.root, "units.jsonl")}`, "SOURCE=refine", "OMP_SESSION_ID=planning-owner"];
     const command = (subcommand: string, run: string) => spawnSync(process.execPath, [fixture.cli, subcommand, "--run-id", run, dag, "--", ...params], {
       cwd: fixture.packageDir,
       env: { ...process.env, DAGU_HOME: fixture.home, PATH: `${bin}:${process.env.PATH ?? ""}`, ADMISSION_ENQUEUE_CALLS: calls, A4S_PRIMARY: fixture.packageDir },
@@ -72,7 +72,8 @@ test("planning CLI admission materializes the installed template and enqueue sub
     assert.match(receipt.initial.deployment.config.digest, /^[a-f0-9]{64}$/);
     assert.equal(receipt.initial.deployment.installedDAG.configDigest, receipt.initial.deployment.config.digest);
     assert.equal(receipt.initial.deployment.generatedDagDigest, receipt.initial.deployment.installedDAG.generatedDigest);
-    assert.equal(receipt.initial.execution.dagSnapshot, receipt.initial.deployment.installedDAG.snapshot);
+    assert.match(receipt.initial.execution.dagSnapshot, /PRIMARY: "\//);
+    assert.match(receipt.initial.deployment.installedDAG.snapshot, /PRIMARY: "\$\{A4S_PRIMARY\}"/);
     assert.match(receipt.initial.execution.dagSnapshot, /queue: fixture/);
     assert.equal(receipt.initial.deployment.relationships.installedToSource, "materialized-from-config");
     assert.equal(receipt.initial.deployment.relationships.compatibility, "installed-template");
@@ -182,26 +183,61 @@ test("admission rejects missing, invalid and overridden config before enqueue", 
   } finally { fixture.dispose(); }
 });
 
-test("feature admission rejects policy overrides and records the resolved primary", () => {
+test("every lifecycle admission rejects all policy overrides before writes or enqueue", () => {
   const fixture = admissionFixture();
   try {
     const bin = join(fixture.root, "bin");
     const calls = join(fixture.root, "enqueue-calls.jsonl");
     fakeDagu(bin, calls);
     const env = { PATH: `${bin}:${process.env.PATH ?? ""}`, ADMISSION_ENQUEUE_CALLS: calls };
-    for (const parameter of ["GATE=true", "TEST_PATHS=other", "VALIDATION=smoke", "QUEUE_CONCURRENCY=1", "LANE=other", "PRIMARY=/foreign"]) {
-      const field = parameter.slice(0, parameter.indexOf("="));
-      const result = fixture.command("enqueue", `rejected-${field.toLowerCase()}`, env, [parameter]);
-      assert.notEqual(result.status, 0, parameter);
-      assert.match(result.stderr, new RegExp(`admission rejected run parameter: ${field}`));
-      assert.equal(existsSync(fixture.receipt(`rejected-${field.toLowerCase()}`)), false);
+    const before = { git: readdirSync(join(fixture.packageDir, ".git")), home: readdirSync(fixture.home) };
+    for (const dag of ["feature", "poc", "discovery", "planning"]) {
+      for (const field of [...POLICY_PARAMETERS, "ESCALATION_PUSHBACKS", "ESCALATION_FINDINGS", "ESCALATION_SECONDS", "ESCALATION_CI_BLOCKED", "ESCALATION_POC_INCONCLUSIVE"]) {
+        for (const command of ["admit", "enqueue"]) {
+          const run = `rejected-${dag}-${command}-${field.toLowerCase()}`;
+          const params = ["ISSUE=277", "OMP_SESSION_ID=owner-session", `${field}=override`];
+          assert.throws(() => command === "admit"
+            ? admit({ cwd: fixture.packageDir, dag, run, params })
+            : enqueue(["--run-id", run, dag, "--", ...params], fixture.packageDir),
+          new RegExp(`admission rejected run parameter: ${field}`), `${dag} ${command} ${field}`);
+          assert.equal(existsSync(fixture.receipt(run)), false);
+        }
+      }
     }
+    assert.deepEqual({ git: readdirSync(join(fixture.packageDir, ".git")), home: readdirSync(fixture.home) }, before);
     const accepted = fixture.command("admit", "operational-policy", env, ["PR_NUMBER=327", "OMP_SESSION_ID=owner-session"]);
     assert.equal(accepted.status, 0, accepted.stderr);
     const receipt = JSON.parse(readFileSync(fixture.receipt("operational-policy"), "utf8"));
     assert.equal(receipt.initial.execution.primary, fixture.packageDir);
+    assert.equal(receipt.initial.execution.ompSession, "owner-session");
+    assert.match(receipt.initial.execution.dagSnapshot, /BASE_BRANCH: "main"/);
     assert.deepEqual(receipt.initial.execution.parameters, ["ISSUE=277", "PR_NUMBER=327", "OMP_SESSION_ID=owner-session"]);
     assert.equal(readFileSync(calls, "utf8"), "");
+  } finally { fixture.dispose(); }
+});
+
+test("missing, malformed and duplicate owners fail before receipts, stores or enqueue", () => {
+  const fixture = admissionFixture();
+  try {
+    const before = { git: readdirSync(join(fixture.packageDir, ".git")), home: readdirSync(fixture.home) };
+    for (const dag of ["feature", "poc", "discovery", "planning"]) {
+      for (const owner of [[], ["OMP_SESSION_ID="], ["OMP_SESSION_ID=bad session"], ["OMP_SESSION_ID=bad\nsession"], [`OMP_SESSION_ID=${"x".repeat(201)}`], ["OMP_SESSION_ID=one", "OMP_SESSION_ID=two"]]) {
+        for (const command of ["admit", "enqueue"]) {
+          const run = `invalid-owner-${dag}-${command}`;
+          const params = ["ISSUE=277", ...owner];
+          assert.throws(() => command === "admit"
+            ? admit({ cwd: fixture.packageDir, dag, run, params })
+            : enqueue(["--run-id", run, dag, "--", ...params], fixture.packageDir), owner.length > 1 ? /OMP_SESSION_ID requires a valid owning session|Ambiguous admission parameters/ : /OMP_SESSION_ID requires a valid owning session/);
+          assert.equal(existsSync(fixture.receipt(run)), false);
+        }
+      }
+    }
+    for (const command of ["admit", "enqueue"]) {
+      const result = fixture.command(command, `owner-cli-${command}`, {}, [], "feature", "");
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /OMP_SESSION_ID requires a valid owning session/);
+    }
+    assert.deepEqual({ git: readdirSync(join(fixture.packageDir, ".git")), home: readdirSync(fixture.home) }, before);
   } finally { fixture.dispose(); }
 });
 

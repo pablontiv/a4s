@@ -50,17 +50,15 @@ test("bootstrap renders optional validation as the sole adopted value", {
           SKILL_DIR: fileURLToPath(new URL("../skills/issue-execution", import.meta.url)),
           STAGE: stage, REPO: "fixture", BASE_BRANCH: "main", PRIMARY: root,
           GATE: "true", REQUIRED_CHECK: "validate", TEST_PATHS: "^test/",
-          QUEUE_CONCURRENCY: "", CURRENT_QUEUE_CONCURRENCY: "8",
           REBASE_RESOLVER: "node packages/issue-lifecycle/bin/dagu-bundle-rebase.mjs",
           VALIDATION: validation, BUNDLE_NAME, BUNDLE_VERSION,
           DAGU_VERSION: "2.24.0", SOURCE_NWO: "owner/repo", SOURCE_SHA: "a".repeat(40),
         },
       });
       assert.equal(result.status, 0, result.stdout + result.stderr);
-      const config = JSON.parse(readFileSync(stage, "utf8")) as { validation: string; rebaseResolver: string; queueConcurrency: number; lane: string };
+      const config = JSON.parse(readFileSync(stage, "utf8")) as { validation: string; rebaseResolver: string; lane: string };
       assert.equal(config.validation, validation);
       assert.equal(config.rebaseResolver, "node packages/issue-lifecycle/bin/dagu-bundle-rebase.mjs");
-      assert.equal(config.queueConcurrency, 8);
       assert.equal(config.lane, "fixture");
     }
   } finally { rmSync(root, { recursive: true, force: true }); }

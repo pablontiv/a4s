@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.5.32
+
+- Consumer policy comes only from committed `config.json`: admission rejects policy parameters (including `BASE_BRANCH`), templates bind policy as fixed environment, and successors stop forwarding `BASE_BRANCH`/`PRIMARY`. Owner-session validation runs before any admission side effect. `queueConcurrency`, queue repair and station config/service install modes are removed; `dagu-feature-bundle readiness` checks the station read-only (#708).
+
 ## 0.5.31
 
 - Role jobs read the OMP runtime root only from an explicit absolute `DAGU_OMP_ROLE_RUNTIME` (Dagu forwards `DAGU_*` to steps); `OMP_ROLE_RUNTIME` and PATH discovery are removed. Bootstrap runs `dagu-role-jobs detect`, which resolves the runtime and the `triage-reviewer`/`task` agents the way role jobs do (#674).

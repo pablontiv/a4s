@@ -31,7 +31,6 @@ export interface LifecycleConfig {
   schemaVersion: 1;
   lane: string;
   baseBranch: string;
-  queueConcurrency: number;
   gate: string;
   requiredCheck: string;
   testPaths: string;
@@ -46,9 +45,9 @@ export interface LifecycleConfig {
 
 /** Enqueue names that would override committed policy. */
 export const POLICY_PARAMETERS = [
-  "PRIMARY", "A4S_PRIMARY", "BRANCH", "GATE", "REBASE_RESOLVER", "REQUIRED_CHECK",
+  "PRIMARY", "A4S_PRIMARY", "BRANCH", "BASE_BRANCH", "GATE", "REBASE_RESOLVER", "REQUIRED_CHECK",
   "A4S_BLOCKER_REPORTING", "CODEQL_SECURITY_THRESHOLD", "CODEQL_ALERTS_THRESHOLD",
-  "CODE_SCANNING", "TEST_PATHS", "VALIDATION", "QUEUE_CONCURRENCY", "LANE",
+  "CODE_SCANNING", "TEST_PATHS", "VALIDATION", "QUEUE_CONCURRENCY", "LANE", "REPO",
 ] as const;
 
 export interface CommittedConfig {
@@ -117,7 +116,6 @@ export function parseConfig(value: unknown): LifecycleConfig {
     schemaVersion: CONFIG_SCHEMA_VERSION,
     lane: text(take(source, "lane", "config file"), "config lane", LANE),
     baseBranch: text(take(source, "baseBranch", "config file"), "config baseBranch", BRANCH),
-    queueConcurrency: positiveInteger(take(source, "queueConcurrency", "config file"), "config queueConcurrency"),
     gate: text(take(source, "gate", "config file"), "config gate"),
     requiredCheck: text(take(source, "requiredCheck", "config file"), "config requiredCheck"),
     testPaths: text(take(source, "testPaths", "config file"), "config testPaths"),
@@ -149,7 +147,6 @@ export function exampleConfig(overrides: Partial<LifecycleConfig> = {}): Lifecyc
     schemaVersion: CONFIG_SCHEMA_VERSION,
     lane: overrides.lane ?? "fixture",
     baseBranch: overrides.baseBranch ?? "main",
-    queueConcurrency: overrides.queueConcurrency ?? 1,
     gate: overrides.gate ?? "true",
     requiredCheck: overrides.requiredCheck ?? "validate",
     testPaths: overrides.testPaths ?? "test",
@@ -187,7 +184,6 @@ export function configFromEnvironment(env: NodeJS.ProcessEnv): LifecycleConfig {
     schemaVersion: CONFIG_SCHEMA_VERSION,
     lane: required("REPO"),
     baseBranch: required("BASE_BRANCH"),
-    queueConcurrency: environmentInteger(env, "QUEUE_CONCURRENCY"),
     gate: required("GATE"),
     requiredCheck: required("REQUIRED_CHECK"),
     testPaths: required("TEST_PATHS"),

@@ -116,7 +116,7 @@ node packages/issue-lifecycle/bin/dagu-feature-bundle.ts validate-planning-units
 node "$CONTROLLER_CLI" enqueue --run-id "<repo>-breakdown-<slug>" \
   planning -- \
   UNITS_FROM="<absolute-units.jsonl>" SOURCE=refine \
-  PRIMARY="<absolute-independent-primary>" OMP_SESSION_ID="<persistent-session>"
+  OMP_SESSION_ID="<persistent-session>"
 ```
 
 Validation reports independent mechanical failures as ordered JSONL (`line`,
@@ -136,28 +136,36 @@ display classification, not proof of admission. Native semantic jobs support
 `dagu-role-jobs stage triage|implement`; resource recovery and exact receipt
 binding are detailed in the architecture and execution skill.
 
-## Repository-owned queue capacity
+## Station-owned queue capacity and readiness
 
-Bootstrap's `QUEUE_CONCURRENCY` answer is a positive integer. Blank preserves
-`queueConcurrency` in `.workspace/dagu/config.json`; the initial value is 1.
-a4s commits **8**, the operator-approved installed capacity.
+The committed `.workspace/dagu/config.json` selects the lane and lifecycle policy,
+including its base branch. Queue capacity belongs exclusively to the station
+operator's `$DAGU_HOME/config.yaml`, not consumer policy or run parameters.
+Admission rejects policy overrides and requires a valid persistent
+`OMP_SESSION_ID` before writing a receipt, touching stores or enqueueing.
+Successor runs carry operational inputs and the same owner, never policy.
 
-The config file is the source of truth. Bootstrap derives its named
-`queues.config` entry in `$DAGU_HOME/config.yaml`, preserving other queues,
-metadata, shared keys and comments. An unchanged entry keeps bytes and scheduler
-intact. A changed entry requires the running launchd `local.dagu.server` to use
-`dagu start-all` and the same Dagu home, then requests `launchctl kickstart -k`.
-Waiting human tasks keep their persisted state. A failed restart atomically
-restores the previous config for retry.
+```sh
+node packages/issue-lifecycle/bin/dagu-feature-bundle.ts readiness \
+  .workspace/dagu/config.json
+# Before first adoption, select the station lane to inspect:
+node packages/issue-lifecycle/bin/dagu-feature-bundle.ts readiness --lane a4s
+```
 
-`dagu-feature-bundle <repo>` and `queue-check <config.json>` report queue drift as
-`compat=incompatible action=re-run-bootstrap`. Re-run bootstrap when the config
-file should change. Station installation manages shared defaults and preserves
-repository queue limits; its drained activation requires
-`--apply --repo-dag <config.json>` and the existing operator-owned admission
-and restart hooks, and verifies that capacity with N+1 barrier runs.
-Queue capacity counts Dagu runs; the independently managed role-job capacity
-counts semantic jobs and remains controlled by `dagu-role-jobs capacity`.
+Readiness exits 0 only when the named global queue exists in station config and
+the running Dagu API, the scheduler is active, and its service environment can
+resolve lifecycle tools. It diagnoses missing queues, endpoint/auth failures
+and service PATH/home problems. Linux reads the running scheduler's `/proc`
+environment; macOS reads the running launchd service's configured environment.
+It performs only file reads and HTTP GETs, including on a missing or empty
+Dagu home. Bootstrap checks readiness but never repairs station configuration,
+installs a service unit or restarts Dagu. Resolve failures with the station
+operator; the API must be unauthenticated and loopback-only.
+
+`dagu-station-install` now manages explicit executor operations only. It does
+not install station configuration or offer service activation modes.
+Dagu run capacity remains separate from the semantic-job capacity controlled by
+`dagu-role-jobs capacity`.
 
 ## Development and real-Dagu fixtures
 

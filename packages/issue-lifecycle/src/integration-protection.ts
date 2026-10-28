@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { closeSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { isRecord } from "./type-guard.ts";
+import { requireOwnerSession } from "./owner-session.ts";
 
 /** Visible checkpoint named in gate, push and auto-merge logs and [DAGU STATE]. */
 export const INTEGRATION_HOLD_CHECKPOINT = "integration_hold";
@@ -74,7 +75,6 @@ export interface AdmitResult {
 const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,200}$/;
 const ISSUE = /^\d{1,10}$/;
 const SHA = /^[a-f0-9]{40}$/;
-const SESSION = /^[^\s\u0000-\u001f\u007f]{1,200}$/;
 
 function git(cwd: string, args: string[]): string {
   const result = spawnSync("git", ["-C", cwd, ...args], { encoding: "utf8" });
@@ -260,8 +260,7 @@ function withGateLock<T>(primary: string, body: () => T): T {
 function sessionProvenance(command: string, sessionId: string | undefined): ProtectionProvenance {
   const provenance: ProtectionProvenance = { recordedAt: new Date().toISOString(), command };
   if (sessionId) {
-    if (!SESSION.test(sessionId)) throw new Error("integration protection: invalid session id");
-    provenance.sessionId = sessionId;
+    provenance.sessionId = requireOwnerSession(sessionId);
   }
   return provenance;
 }

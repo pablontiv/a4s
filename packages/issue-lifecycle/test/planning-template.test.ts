@@ -353,7 +353,7 @@ test("native planning push-back uses structured iteration across mechanical cons
   const native = structuredClone(definition);
   native.labels = ["workspace=planning-regression"];
   delete native.queue;
-  native.env = Object.entries(f.env).filter(([key]) => ["HOME", "TMPDIR", "PATH", "DAGU_HOME", "DAGU_PORT"].includes(key))
+  native.env = Object.entries(f.env).filter(([key]) => ["HOME", "TMPDIR", "PATH", "DAGU_HOME", "DAGU_PORT", "PRIMARY"].includes(key))
     .map(([key, value]) => ({ [key]: value }));
   native.env.push({ RUN: "${context.run.id}" }, { FEEDBACK: "" });
   native.steps.find((step: { id: string }) => step.id === "init").run =
@@ -409,7 +409,7 @@ test("native planning push-back uses structured iteration across mechanical cons
       try { return (await fetch(`${api}/dag-runs`)).ok ? true : undefined; } catch { return undefined; }
     });
     dagu("validate", path);
-    dagu("enqueue", "--run-id", f.env.RUN!, path, "--", `UNITS_FROM=${f.upstream}`, `PRIMARY=${f.env.PRIMARY}`, "SOURCE=refine", `OMP_SESSION_ID=${f.env.OMP_SESSION_ID}`);
+    dagu("enqueue", "--run-id", f.env.RUN!, path, "--", `UNITS_FROM=${f.upstream}`, "SOURCE=refine", `OMP_SESSION_ID=${f.env.OMP_SESSION_ID}`);
     const initial = await state("check_plan", "running");
     mechanical(initial, "check_plan", 0);
     assert.equal(Object.hasOwn(reviewNode(initial), "approvalIteration"), false, "present initial review node omits its zero counter");

@@ -170,55 +170,38 @@ The new step `startedAt` authorizes a fresh claim while preserving the old recei
 Foreign-host ownership stays uncertain/live. Operator recovery remains explicit.
 Database terminal results repair missing materialized result files on redelivery.
 
-## Global station installation
+## Operator-owned station readiness
 
-a4s owns the macOS service template and shared defaults in `../../dagu/`.
-From a clean primary checkout after merge, the operator creates or updates the
-installation with the Node.js requirement in root `package.json` `engines.node`
-and official Dagu 2.23.0 or newer on `PATH`:
+The station operator owns Dagu installation, `$DAGU_HOME/config.yaml`,
+`base.yaml`, service units and activation. a4s never writes these files or
+restarts the service. The operator supplies Dagu 2.23.0 or newer, an
+unauthenticated loopback API, enabled queues/coordinator and the named global
+lane queue with operator-selected capacity. The scheduler's own PATH must
+resolve `bash`, `git`, `gh`, `jq`, `node`, `bun`, `python3`, `omp` and `dagu`;
+an interactive shell's PATH does not establish service readiness.
+
+Before adoption, inspect without changing the station:
 
 ```sh
-package="$PWD/packages/issue-lifecycle"
-export DAGU_HOME="$HOME/.dagu"
-node "$package/bin/dagu-station-install.ts" \
-  --launch-agent "$HOME/Library/LaunchAgents/local.dagu.server.plist" \
-  --log-dir "$HOME/Library/Logs/Dagu"
+node packages/issue-lifecycle/bin/dagu-feature-bundle.ts readiness --lane "<lane>"
+# After a consumer config exists:
+node packages/issue-lifecycle/bin/dagu-feature-bundle.ts readiness \
+  .workspace/dagu/config.json
 ```
 
-The installer reports the observed `dagu version` without an exact version check,
-validates a minimal DAG inheriting the versioned base in an isolated temporary home, and
-checks the rendered plist with `plutil` on macOS before installing. `cmp` and
-`install -m 0644` make repeated installs byte- and mtime-stable. `base.yaml` and
-the rendered plist are fully owned. `config.yaml` merges the leaves in the
-versioned `dagu/config.yaml` (`auth.mode`, `queues.enabled`, `host`, `port`,
-`coordinator.enabled`). Repository bootstrap derives each named `queues.config`
-entry from the committed config file, preserving other queues, metadata,
-keys and comments. For a4s, `queueConcurrency` is 8, the operator-approved
-installed capacity. A blank bootstrap answer keeps that committed value.
-Foreign paths stay untouched during validation. The plist captures the
-operator's current `PATH` and resolved Dagu binary; use the same environment on
-updates. With a custom `DAGU_HOME`, the default plist destination is
-`$DAGU_HOME/LaunchAgent.plist`, so a temporary-home install stays isolated.
+Exit 0 means the lane queue is valid in station config and present in the
+running API, an active scheduler is reported, and its service environment is
+readable with the required tools. Exit 1 reports missing queues, endpoint/auth
+failures, inactive schedulers or service PATH/home problems with an operator
+action. Linux inspects the running process's `/proc` environment; macOS
+inspects the running launchd service's configured environment. The check uses
+only file reads and HTTP GETs, including with an empty or missing Dagu home.
+Bootstrap runs this check before adoption and again before confirmation;
+readiness never creates files, enqueues probes or activates services.
 
-Repeat the same command with `--check` to compare all three desired files:
-exit 0 means byte-identical, exit 1 reports drift or a validation error.
-`cmp "$package/dagu/base.yaml" "$DAGU_HOME/base.yaml"` also compares the base
-directly. Config is a merge and plist is a render, rather than raw template copies.
-
-Service activation is an operator action. For an already loaded service, at a
-safe point after reviewing active runs, use `launchctl bootout
-"gui/$(id -u)/local.dagu.server"`, then `launchctl bootstrap "gui/$(id -u)"
-"$HOME/Library/LaunchAgents/local.dagu.server.plist"` and `launchctl kickstart
-"gui/$(id -u)/local.dagu.server"`. A first installation starts with `bootstrap`.
-Observe `launchctl print "gui/$(id -u)/local.dagu.server"` (`state = running`),
-`curl -fsS http://127.0.0.1:8080/api/v1/health` (`healthy`) and the installer's
-`--check` before repository bootstrap.
-For drained station activation, `--apply --repo-dag <config.json>` requires the
-config-file queue to match the installed config, plus explicit `--admission-close`,
-`--restart-command` and `--admission-open` hooks. It drains running/queued runs,
-requests TERM restart, verifies N running and one queued barrier run for capacity
-N, then reopens admission.
-This skill does not install Dagu, and it carries no logic specific to any repository. Bootstrap renders repository policy; run parameters carry operational issue inputs.
+The separate executor command has no station-config install/check/apply modes.
+This skill does not install Dagu and has no repository-specific service logic.
+Bootstrap writes consumer policy; runtime parameters carry operational inputs.
 
 Station executor installation is a separate explicit operation:
 `dagu-station-install --executor-action install --source "$PRIMARY" --commit
@@ -270,19 +253,12 @@ carries `dagu-feature-bundle=<version>` and
 the admitting package, not a consumer stamp. In-flight runs keep the snapshot
 they were admitted with.
 
-Feature, PoC and discovery snapshots also carry
-`dagu-feature-queue-concurrency=<n>` as a reflection of `queueConcurrency`.
-Bootstrap's optional `QUEUE_CONCURRENCY` answer accepts a positive integer;
-blank preserves the committed config value (initial default 1). The repository
-owns this value and bootstrap derives its global queue entry in
-`$DAGU_HOME/config.yaml`. A changed entry requires the running launchd
-`local.dagu.server` to use `dagu start-all` with the same home, then runs
-`launchctl kickstart -k`. Identical entries keep bytes and service intact;
-persisted waiting human tasks remain available after restart. A failed restart
-atomically restores the prior config for retry. Bundle inspection and
-`queue-check <config.json>` classify global drift as
-`compat=incompatible action=re-run-bootstrap`. Station installation preserves
-repository limits.
+Queue capacity is station policy only. The consumer config selects its lane,
+not a concurrency value, and materialized DAGs do not carry a capacity stamp.
+`dagu-feature-bundle readiness <config.json>` checks the lane's installed and
+running global queue without changing its operator-owned capacity. Ask the
+station operator to configure or reload missing queues; re-running bootstrap
+does not repair station configuration.
 
 This Dagu run capacity is independent of semantic role-job capacity. The latter
 remains operator-changeable through `dagu-role-jobs capacity` under the persisted
@@ -506,20 +482,19 @@ The bootstrap renders the repository DAG templates when a repository adopts the 
 | Placeholder | Meaning | rootline | homeserver |
 |---|---|---|---|
 | `TEMPLATE_REPO` | Repository name, used in `labels: [workspace=<repo>]` and `queue: <repo>` | `rootline` | `homeserver` |
-| `TEMPLATE_QUEUE_CONCURRENCY` | Repository-owned positive integer from bootstrap's `QUEUE_CONCURRENCY`, versioned beside the bundle label | `1` | `1` |
-| `TEMPLATE_BASE_BRANCH` | Default of `BASE_BRANCH`, the default branch. The DAG uses `origin/$BASE_BRANCH` as the source ref. | `master` | `main` |
+| `TEMPLATE_BASE_BRANCH` | Committed `baseBranch`, bound as policy environment `BASE_BRANCH`, never a run parameter. The DAG uses `origin/$BASE_BRANCH` as the source ref. | `master` | `main` |
 | `__GATE__` | Adoption-fixed `GATE`, the local gate command, run with `bash -euo pipefail -c` in the worktree | `just check && just test` | `make hook-validate` |
 | `__REBASE_RESOLVER__` | Adoption-fixed `REBASE_RESOLVER`, repository conflict-resolution command; empty selects manual conflict recovery | `""` | `""` |
 | `__REQUIRED_CHECK__` | Adoption-fixed `REQUIRED_CHECK`, the GitHub check required on the default branch | `candidate` | `validate` |
 | `__VALIDATION__` | Optional repository procedure after gate, fixed by adoption; empty skips the checkpoint | `""` | `""` |
 | `__A4S_BLOCKER_REPORTING__` | Optional adopted `A4S_BLOCKER_REPORTING`: `ask` (initial default) or explicit opt-in `auto`; blank bootstrap answer preserves installed choice | `ask` | `ask` |
 | `__CODE_SCANNING__` | Adopted `CODE_SCANNING`: `required` (initial default) waits for CodeQL, or `off` neither observes nor waits; blank bootstrap answer preserves the installed choice, and a render without the key stays `required` | `required` | `required` |
-| `__PRIMARY__` | Host reference `"${A4S_PRIMARY}"` written into feature and PoC renders. Not a machine path. See [PRIMARY host binding](#primary-host-binding) | `"${A4S_PRIMARY}"` | `"${A4S_PRIMARY}"` |
+| `__PRIMARY__` | Host reference `"${A4S_PRIMARY}"` in lifecycle renders, resolved before admission. Not a machine path. See [PRIMARY host binding](#primary-host-binding) | `"${A4S_PRIMARY}"` | `"${A4S_PRIMARY}"` |
 | `__TEST_PATHS__` | Bash ERE for repository test paths; every `*.md` also belongs to cutover | `_test\.go$\|^tests/` | `(^\|/)tests/` |
 
 ### PRIMARY host binding
 
-Feature and PoC renders bind `PRIMARY` to `"${A4S_PRIMARY}"`. Bootstrap substitutes `__PRIMARY__` with that reference and does not record the adopting checkout's absolute path, so one bundle runs on every station. Dagu expands `${A4S_PRIMARY}` from the scheduler process environment when it loads a durable render. `dagu-feature-bundle enqueue` resolves the same reference and records the absolute path in the admitted snapshot, which is the spec later readers use.
+Lifecycle renders bind `PRIMARY` to `"${A4S_PRIMARY}"`. Bootstrap substitutes `__PRIMARY__` with that reference and does not record the adopting checkout's absolute path, so one bundle runs on every station. Dagu expands `${A4S_PRIMARY}` from the scheduler process environment when it loads a durable render. `dagu-feature-bundle enqueue` resolves the same reference and records the absolute path in the admitted snapshot, which is the spec later readers use.
 
 Resolution order for the host reference:
 
@@ -536,7 +511,7 @@ hold `.workspace/dagu/config.json` committed at `HEAD`, and its canonical
 identical committed policy, or a bound checkout without committed policy, does
 not qualify. Active feature/PoC run protection is independent of this idle check.
 
-The DAG's fixed invariants: `PRIMARY` is the repository clone, its main working tree, on `BASE_BRANCH` and clean; the run's worktree is always `$PRIMARY/.workspace/worktrees/issue-<n>`, ignored by git; the gate runs with `umask 0022` and without `GH_TOKEN`/`GITHUB_TOKEN`; auto-merge is bound to the tested SHA with `--match-head-commit`; and gate bodies serialize per primary within the repository's declared queue capacity. `start_gate` registers the canonical PRIMARY, worktree, branch and owning run in Git metadata. Both cleanup entry points share the same script. They refresh the remote base and require either candidate ancestry in that base or a MERGED PR whose head equals the recorded tested candidate and whose effective merge SHA is an ancestor of the refreshed base. `cleanup-proof.json` records candidate, base, squash SHA and proof. Ordinary `git worktree remove` protects local files; a dirty worktree is retained. Local branch deletion compares the candidate atomically; remote deletion at merged close uses an exact-SHA lease.
+The DAG's fixed invariants: `PRIMARY` is the repository clone, its main working tree, on `BASE_BRANCH` and clean; the run's worktree is always `$PRIMARY/.workspace/worktrees/issue-<n>`, ignored by git; the gate runs with `umask 0022` and without `GH_TOKEN`/`GITHUB_TOKEN`; auto-merge is bound to the tested SHA with `--match-head-commit`; and gate bodies serialize per primary within the station-configured queue capacity. `start_gate` registers the canonical PRIMARY, worktree, branch and owning run in Git metadata. Both cleanup entry points share the same script. They refresh the remote base and require either candidate ancestry in that base or a MERGED PR whose head equals the recorded tested candidate and whose effective merge SHA is an ancestor of the refreshed base. `cleanup-proof.json` records candidate, base, squash SHA and proof. Ordinary `git worktree remove` protects local files; a dirty worktree is retained. Local branch deletion compares the candidate atomically; remote deletion at merged close uses an exact-SHA lease.
 
 `push` publishes the feature branch for PR delivery after current-candidate verification. Uncaptured files and conflict resolutions remain in their worktree for recovery even when HEAD is on the base.
 
@@ -617,7 +592,7 @@ and ordered `model_change` entries with `resolvedModelIsFallback`.
 node packages/issue-lifecycle/bin/dagu-feature-bundle.ts enqueue \
   --run-id "<repo>-breakdown-<slug>" planning -- \
   UNITS_FROM="/absolute/path/to/units.jsonl" SOURCE=refine \
-  PRIMARY="/absolute/path/to/primary" OMP_SESSION_ID="<dagu_session_id>"
+  OMP_SESSION_ID="<dagu_session_id>"
 ```
 
 The steps are `init`, `import_units`, `check_plan`, `review`, `check_review`, `approve`, and `materialize`. Independent `plan-reviewer` evidence precedes operator approval. Only the operator authorizes all or selected IDs at `approve`; approved subsets close every unit reference. `materialize` creates or reuses issue identities, revises only explicitly declared existing-issue fields, and applies native prerequisite/sub-issue relationships while preserving existing edges. Durable unit/field/edge progress and grouped complete remote readback accompany `issues.jsonl`; conflicting parents, ambiguous identities and mismatches fail with actionable findings. Corrections remain in the upstream refinement source. After correcting it, explicitly push back from `review` or `approve` with the observed run-wide iteration to reimport at `import_units`.
@@ -626,13 +601,13 @@ Sprint Planning in the session alone ranks and enqueues new work. Breakdown crea
 
 ## Continuous discovery
 
-Discovery diagnoses an adopted repository from a default-branch snapshot. The `workspace=<repo>` label identifies the coordinating workspace; `PRIMARY` selects the repository to inspect.
+Discovery diagnoses an adopted repository from the committed base branch. The `workspace=<repo>` label selects its lane; admission resolves canonical `PRIMARY` from the host binding, never a run parameter.
 
 ```sh
 node packages/issue-lifecycle/bin/dagu-feature-bundle.ts enqueue \
   --run-id "discovery-<id>" discovery -- \
   LENSES="0,1,2" SOURCE="<request-context>" LIVE_TARGET="" \
-  PRIMARY="/absolute/path/to/repository" OMP_SESSION_ID="<dagu_session_id>"
+  OMP_SESSION_ID="<dagu_session_id>"
 ```
 
 `snapshot` prints `out_dir`, `sha`, and `snapshot`. The persistent directory is `${DAGU_HOME:-$HOME/.dagu}/data/discovery/<owner>__<repo>/<run-id>/`; its detached `snapshot/` worktree is read-only.
@@ -709,7 +684,7 @@ moving entries. Scheduler consumption or concurrent enqueue can produce an
 for operator inspection. The command preserves the queue's concurrency settings
 and running runs.
 
-Set `PR_NUMBER` only to adopt an existing open PR whose head is `dagu/issue-<ISSUE>`. `OMP_SESSION_ID` targets the persistent main OMP session that enqueued the run. `BASE_BRANCH` defaults to the versioned file. Bootstrap fixes `GATE`, `REBASE_RESOLVER`, `REQUIRED_CHECK` and canonical `PRIMARY` at adoption; the DAG derives `BRANCH=dagu/issue-$ISSUE`. Admission rejects each of those five names as run parameters, naming it before repository state changes. Change adoption policy through bootstrap and version the resulting renders.
+Set `PR_NUMBER` only to adopt an existing open PR whose head is `dagu/issue-<ISSUE>`. `OMP_SESSION_ID` identifies the persistent main OMP session that enqueued the run. Admission requires exactly one valid owner before any receipt, cache/store mutation or enqueue. All policy comes from committed `.workspace/dagu/config.json`: base branch, gate, resolver, required check, test paths, validation, lane, blocker/CodeQL policy and escalation budgets cannot be overridden as run parameters. Canonical `PRIMARY` is host-bound and `BRANCH=dagu/issue-$ISSUE` is derived, not caller-selected. Change consumer policy through bootstrap and commit the config. Feature/PoC/discovery successors preserve the owner and operational artifacts, never `BASE_BRANCH` or `PRIMARY` parameters.
 
 Before `start_gate` and `close_gate`, the DAG detects whether PRIMARY is clean and on
 `BASE_BRANCH`. An unavailable primary pauses the same run at
@@ -1172,7 +1147,7 @@ first-line marker to be PASS/scope:OK with a normalized question matching the
 latest triage question (or the question body for an issue created by record)
 and nonempty required sections outside fences.
 It verifies Después del PASS in the body and enqueues the absolute feature
-DAG with ISSUE, BASE_BRANCH and POC_BASIS pointing to the PASS;
+DAG with ISSUE and POC_BASIS pointing to the PASS;
 the PoC run and promoted `feature-<RUN>` run retain the original run's
 `OMP_SESSION_ID`, so the same coordinating OMP session receives the promoted run's
 notices. Its triage role job reads that PASS URL as review input and produces the
@@ -1341,8 +1316,8 @@ Success, failure, cancellation and SIGKILL close descriptors automatically;
 the slot releases after the holder and all inheriting descendants close their
 copies. A surviving descendant retains exclusion until it exits. Integration
 protection releases the slot before polling a conflicting candidate again.
-Dagu retry/recovery semantics and queue capacities remain unchanged (`a4s=8`
-on main, with foreign queues preserved); unrelated lifecycle steps keep running.
+Dagu retry/recovery semantics and station-owned queue capacities remain unchanged;
+unrelated lifecycle steps keep running.
 
 ### Integration protection
 
@@ -1669,7 +1644,7 @@ record the child used to write, without a sub-run.
 `tick` passes the protected-checkpoint runs to the local `reconcile-run`
 sub-DAG with `parallel.max_concurrent: 4`. `act` uses the same limit for the
 rare non-PR side-effect run. That fan-out is observation capacity for
-independent runs and is distinct from repository queue capacity. A precondition
+independent runs and is distinct from station queue capacity. A precondition
 skips each fan-out when its list is empty. One slow child occupies a single
 slot; the other slots continue.
 

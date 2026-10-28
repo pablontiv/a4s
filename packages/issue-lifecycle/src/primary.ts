@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
 
 /**
- * Durable feature/PoC binding. Dagu expands it from the scheduler environment.
+ * Durable lifecycle binding. Dagu expands it from the scheduler environment.
  * Enqueue and spec recovery resolve it from host env/config; renders do not
  * store a machine path.
  *
@@ -80,10 +80,10 @@ export function primaryFromSpec(spec: string, env: NodeJS.ProcessEnv = process.e
   return value;
 }
 
-/** Admitted feature/PoC snapshots record the resolved checkout. Legacy absolute bindings stay byte-for-byte. */
+/** Admitted lifecycle snapshots record the resolved checkout. Legacy absolute bindings stay byte-for-byte. */
 export function bindSnapshotPrimary(snapshot: string, primary: string): string {
   const match = /^  - PRIMARY: (.+)$/m.exec(snapshot);
-  if (!match?.[1]) throw new Error("feature/poc render has no PRIMARY binding");
+  if (!match?.[1]) throw new Error("lifecycle render has no PRIMARY binding");
   const current: unknown = JSON.parse(match[1]);
   if (current !== HOST_PRIMARY_REFERENCE) return snapshot;
   return snapshot.replace(/^  - PRIMARY: .+$/m, `  - PRIMARY: ${JSON.stringify(primary)}`);

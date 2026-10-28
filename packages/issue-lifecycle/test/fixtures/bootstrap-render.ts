@@ -16,11 +16,9 @@ export function bootstrapRender(options: {
   codeScanning?: string;
 }): void {
   mkdirSync(options.directory, { recursive: true });
-  const requested = Number(process.env.QUEUE_CONCURRENCY ?? 1);
   const config = exampleConfig({
     lane: "fixture",
     baseBranch: "main",
-    queueConcurrency: Number.isSafeInteger(requested) && requested > 0 ? requested : 1,
     gate: "true",
     requiredCheck: "validate",
     testPaths: "test",

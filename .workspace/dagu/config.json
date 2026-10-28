@@ -2,7 +2,6 @@
   "schemaVersion": 1,
   "lane": "a4s",
   "baseBranch": "main",
-  "queueConcurrency": 8,
   "gate": "npm test && npm run typecheck",
   "requiredCheck": "validate",
   "testPaths": "(^|/)(test|tests)/|\\.test\\.(ts|cjs)$",
