@@ -108,8 +108,10 @@ messages and assembles its own output type. `JevClient`, request builders/parser
 with zero runtime dependencies. Trigger state, recent-conversation bounds,
 judgment parsing and adaptive evaluation return decisions; the consumer owns
 invocation and application. This is a reusable core library, not an installed
-OMP compaction integration. The package README contains a direct consumer
-example, observed external-consumer result and behavioral test commands.
+OMP compaction integration. Spike #688 discarded an on-disk session-log
+hygiene skill; see [OMP session-log compressor](omp-session-log-compressor.md).
+The package README contains a direct consumer example, observed
+external-consumer result and behavioral test commands.
 
 ## Preserved architecture and attribution
 
