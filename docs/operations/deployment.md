@@ -15,6 +15,8 @@ and acceptance outcomes.
 
 PRIMARY is a canonical independent clone: its Git dir equals its common Git dir.
 Issue worktrees are linked below that clone's `.workspace/worktrees/issue-N`.
+Spike #694 compared LayerFS workspaces with this layout and discarded adoption;
+see [LayerFS and worktrees](../architecture/layerfs-worktrees.md).
 Start the coordinator in a clean PRIMARY on its declared base. Main is the only
 active lane and owns its admitted issues and issue-numbered remote
 branches/checkpoints. Keep one coordinating owner per canonical repo and
