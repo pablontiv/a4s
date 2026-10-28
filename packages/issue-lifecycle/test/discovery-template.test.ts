@@ -170,7 +170,7 @@ jq -nc --args '$ARGS.positional' -- "$@" >> "$FAKE_DAGU_LOG"
     }));
     assert.equal(isAbsolute(params.UNITS_FROM!), true);
     assert.equal(params.SOURCE, "discovery");
-    assert.equal(params.PRIMARY, env.PRIMARY);
+    assert.deepEqual(Object.keys(params).sort(), ["OMP_SESSION_ID", "SOURCE", "UNITS_FROM"]);
     assert.equal(params.OMP_SESSION_ID, "session");
     const staged = readFileSync(params.UNITS_FROM!, "utf8").trim().split("\n").map(line => JSON.parse(line));
     assert.deepEqual(staged, units.map(({ classification, ...unit }) => ({

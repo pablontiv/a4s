@@ -11,6 +11,7 @@ import { LONG_COMPUTATION_CONTRACT, superviseRunComputations, type StallNotice }
 import { atomicJson, jobId, RoleJobStore, verifyJobResult, type JobBinding, type JobResult } from "./role-jobs.ts";
 import { executeNativeJob, nativeEvidence } from "./role-runtime.ts";
 import { parseReview } from "./triage/schema.ts";
+import { requireOwnerSession } from "./owner-session.ts";
 
 export interface RoleRunOptions {
   home: string; capacity: number | string; binding: JobBinding; directory: string; readyAt: string;
@@ -23,6 +24,7 @@ export interface RoleRunOptions {
 }
 /** Redelivery observes the existing worker/result; it never starts a second session. */
 export async function runRoleJob(options: RoleRunOptions): Promise<JobResult> {
+  if (options.evidenceDir) requireOwnerSession(options.session);
   const store = new RoleJobStore(options.home, Number(options.capacity));
   try {
     const capacity = store.capacity;
@@ -39,7 +41,6 @@ export async function runRoleJob(options: RoleRunOptions): Promise<JobResult> {
       if (claim.kind !== "claimed") { await delay(250); continue; }
       const job = claim.job;
       atomicJson(join(job.directory, "job.json"), job);
-      if (options.evidenceDir && !options.session) throw new Error("Role-job computation supervision requires the owning session");
       const abort = new AbortController();
       const supervision = options.evidenceDir ? superviseRunComputations({
         evidenceDir: options.evidenceDir, session: options.session!, signal: abort.signal,
@@ -142,6 +143,7 @@ export async function dispatchStage(stage: string, emit: (name: string, value: s
   const extension = receipt.initial.deployment.loadedExtension as { digest?: string };
   if (receipt.sourceVersion.version !== BUNDLE_VERSION || extension?.digest !== loadedExtensionDigest ||
       !(receipt.initial.execution.parameters as string[]).includes(`ISSUE=${issue}`)) throw new Error("Role executor/issue differs from the admitted deployment");
+  const session = requireOwnerSession(receipt.initial.execution.ompSession);
   const initial = await stageState(run);
   const node = requireReadyStage(initial, stage, dependencies[stage]!);
   const nativeParams = { params: initial.params } as RunDetails;
@@ -163,8 +165,6 @@ export async function dispatchStage(stage: string, emit: (name: string, value: s
   const roles: JobBinding["role"][] = stage === "triage" ? ["triage"] :
     [existsSync(join(state, "conflict-action")) && readFileSync(join(state, "conflict-action"), "utf8").trim() === "rewind" &&
       existsSync(join(state, "conflict-files")) && readFileSync(join(state, "conflict-files"), "utf8").trim() ? "conflict-resolution" : "implement"];
-  const session = receipt.initial.execution.ompSession;
-  if (typeof session !== "string" || !session) throw new Error("Role-job computation supervision requires the owning session");
   const results = await Promise.all(roles.map(async role => {
     const binding: JobBinding = { repo: primary, worktree, lane: "feature", dag: "feature", run, stage, role, sha, iteration, attempt };
     const directory = join(state, "role-jobs", jobId(binding));

@@ -215,7 +215,7 @@ for (const origin of ["backlog", "feature-triage"] as const) {
       assert.deepEqual(enqueues, [[
         "enqueue", "--run-id", "feature-existing-issue",
         join(fixture.primary, ".workspace", "dagu", "dags", "feature.yaml"), "--",
-        "ISSUE=41", "BASE_BRANCH=main", "OMP_SESSION_ID=same-session",
+        "ISSUE=41", "OMP_SESSION_ID=same-session",
         "POC_BASIS=https://example.test/comments/9",
       ]]);
       const digest = execFileSync("shasum", ["-a", "256", join(fixture.state, "full.patch")], { encoding: "utf8" }).slice(0, 64);
@@ -496,7 +496,7 @@ test("triage compares concrete required targets with the operator-authorized rou
     writeFileSync(dag, "name: poc\n");
     withConsumerConfig(fixture.primary, join(fixture.root, "dagu-home"), () => {
       assert.throws(() => admit({ cwd: fixture.primary, dag, run: "scope-blocked", params: [
-        "ISSUE=41", `QUESTION=${input.question}`, `REQUIRED_TARGETS=${JSON.stringify(input.requiredTargets)}`,
+        "ISSUE=41", "OMP_SESSION_ID=owner-session", `QUESTION=${input.question}`, `REQUIRED_TARGETS=${JSON.stringify(input.requiredTargets)}`,
         `AUTHORIZED_TARGETS=${JSON.stringify(input.authorizedTargets)}`, `SCOPE_BASIS=${input.basis}`,
       ] }), /POC_SCOPE_DECISION_REQUIRED/, "direct bundle admission enforces the same boundary before enqueue");
     });

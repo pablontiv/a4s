@@ -13,13 +13,11 @@ params:
   - name: SOURCE
     type: string
     default: plan
-  - name: PRIMARY
-    type: string
-    required: true
   - name: OMP_SESSION_ID
     type: string
     required: true
 env:
+  - PRIMARY: __PRIMARY__
   - RUN: ${context.run.id}
   - DAGU_FEATURE_BUNDLE: "__DAGU_FEATURE_IDENTITY__"
   - FEEDBACK: ""

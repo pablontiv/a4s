@@ -351,8 +351,8 @@ For the accepted proposal, backlog-breakdown performs this executable enqueue op
 : "${REFINE_STAGE:?Absolute staging directory required}"
 test -r "$PRIMARY/.workspace/dagu/config.json"
 test -r "$REFINE_STAGE/units.jsonl"
-dagu-feature-bundle enqueue --run-id "$BREAKDOWN_RUN_ID" planning -- \
-  UNITS_FROM="$REFINE_STAGE/units.jsonl" PRIMARY="$PRIMARY" SOURCE=refine OMP_SESSION_ID="$OMP_SESSION_ID"
+dagu-feature-bundle enqueue --run-id "$BREAKDOWN_RUN_ID" "$PRIMARY/.workspace/dagu/dags/planning.yaml" -- \
+  UNITS_FROM="$REFINE_STAGE/units.jsonl" SOURCE=refine OMP_SESSION_ID="$OMP_SESSION_ID"
 ```
 
 Follow backlog-breakdown's review, approval, and correction commands for that run.

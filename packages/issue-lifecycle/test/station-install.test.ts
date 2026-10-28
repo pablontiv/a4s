@@ -1,56 +1,27 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { fixture } from "./fixtures/station.ts";
-import { exampleConfig, serializeConfig } from "../src/config.ts";
 
-test("station installer accepts an unpinned runtime and reports its observed version", () => {
+test("station configuration and activation modes fail without changing station files", () => {
   const f = fixture();
   try {
-    const bin = join(f.root, "bin");
-    mkdirSync(bin);
-    writeFileSync(join(bin, "dagu"), "#!/bin/sh\nif [ \"$1\" = version ]; then printf '2.24.0\\n'; fi\n");
-    chmodSync(join(bin, "dagu"), 0o755);
-    const original = "queues:\n  config:\n    - name: antojea-e2e\n      max_concurrency: 4\n";
-    writeFileSync(join(f.home, "config.yaml"), original);
-    const result = f.run([], { PATH: `${bin}:${process.env.PATH}` });
-    assert.equal(result.status, 0, result.stderr);
-    assert.match(result.stdout, /dagu=2\.24\.0 launch-agent=/);
-    assert.match(readFileSync(join(f.home, "config.yaml"), "utf8"), /name: antojea-e2e/);
-  } finally { f.dispose(); }
-});
-
-test("station apply requires explicit admission and restart hooks before writing", () => {
-  const f = fixture();
-  try {
-    const result = f.run(["--apply"]);
-    assert.equal(result.status, 1);
-    assert.match(result.stderr, /requires admission-close, admission-open and restart-command/);
-    assert.equal(existsSync(join(f.home, "config.yaml")), false);
-  } finally { f.dispose(); }
-});
-
-test("station apply binds probes to a stamped render and its derived installed queue", () => {
-  const f = fixture();
-  try {
-    const hooks = ["--apply", "--admission-close", "true", "--admission-open", "true", "--restart-command", "true"];
-    const missing = f.run(hooks);
-    assert.equal(missing.status, 1);
-    assert.match(missing.stderr, /requires --repo-dag/);
-    const bin = join(f.root, "bin");
-    mkdirSync(bin);
-    writeFileSync(join(bin, "dagu"), "#!/bin/sh\nprintf '2.24.0\\n'\n", { mode: 0o755 });
-    const render = join(f.root, "config.json");
-    writeFileSync(render, serializeConfig(exampleConfig({ lane: "example", queueConcurrency: 6 })));
-    const original = "queues:\n  enabled: true\n  config:\n    - name: example\n      max_concurrency: 3\n";
-    writeFileSync(join(f.home, "config.yaml"), original);
-    const drift = f.run([...hooks, "--repo-dag", render], { PATH: `${bin}:${process.env.PATH}` });
-    assert.equal(drift.status, 1);
-    assert.match(drift.stderr, /queue=example max_concurrency=6 compat=incompatible action=re-run-bootstrap/);
-    assert.equal(readFileSync(join(f.home, "config.yaml"), "utf8"), original);
+    const path = join(f.home, "config.yaml");
+    const config = "# operator-owned\nqueues:\n  config:\n    - name: foreign\n      max_concurrency: 11\n";
+    writeFileSync(path, config);
+    const modified = statSync(path).mtimeMs;
+    for (const args of [[], ["--check"], ["--apply"], ["--launch-agent", join(f.root, "service.plist")]]) {
+      const result = f.run(args);
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, /operator-owned|Unknown option/);
+      assert.equal(readFileSync(path, "utf8"), config);
+      assert.equal(statSync(path).mtimeMs, modified);
+      assert.deepEqual(readdirSync(f.home), ["config.yaml"]);
+      assert.deepEqual(readdirSync(f.root), ["Dagu & workflows"]);
+    }
   } finally { f.dispose(); }
 });
 

@@ -22,9 +22,13 @@ preserve the run's original owner. Cross-repository contact carries only its
 explicit request and return channel.
 
 Pass the persistent main-session `dagu_session_id` as `OMP_SESSION_ID` when
-admitting work. A handoff preserves run, candidate, iteration, receipt and
-session ownership; any explicit transfer follows the execution skill. Queue
-capacity, semantic-job capacity and OMP's subagent semaphore are independent.
+admitting work. Missing, malformed or duplicate owners fail before receipts,
+cache/store mutation or enqueue. A handoff preserves run, candidate, iteration,
+receipt and session ownership; any explicit transfer follows the execution skill.
+Committed `.workspace/dagu/config.json` is the only consumer policy authority,
+including base branch. Policy parameters are rejected; successors carry only
+operational inputs and the original owner. Queue capacity is station-owned,
+independent of semantic-job capacity and OMP's subagent semaphore.
 The PRIMARY gate lock serializes the conflicting gate, not unrelated jobs.
 
 The temporary v1 integration lane completed its release into main and was retired
@@ -301,55 +305,38 @@ and writes an immutable snapshot and receipt;
 [architecture](../architecture/issue-lifecycle.md#compatibility-is-more-than-a-version-display)
 details the actual equalities. Version-distance display alone is not admission.
 
-## Station configuration and drained activation
+## Operator-owned station configuration and readiness
 
-`dagu-station-install.ts` owns base.yaml and rendered LaunchAgent bytes; it merges
-owned config leaves and queue entries by name. Its template sets loopback
-`127.0.0.1:8080`, `auth.mode=none`, queues/coordinator enabled and **a4s capacity 8**.
-Applying that template preserves the operator-approved a4s capacity; foreign
-queue entries survive. Review intended capacity before applying.
+The station operator owns Dagu's configuration, capacity, service unit and
+activation. a4s never writes `$DAGU_HOME/config.yaml`, `base.yaml`, launchd or
+systemd units, and never restarts Dagu. `dagu-station-install.ts` supports only
+the explicit executor operations above; its config-install and drained-apply
+modes have been removed.
 
-By default installation writes files and defers restart. File bytes alone do not
-reload the active scheduler. An authorized initial install can use:
-
-```sh
-node "$SOURCE/packages/issue-lifecycle/bin/dagu-station-install.ts" \
-  --dagu-home "$DAGU_HOME" \
-  --launch-agent "$HOME/Library/LaunchAgents/local.dagu.server.plist" \
-  --log-dir "$HOME/Library/Logs/Dagu"
-```
-
-Use the same parameters with `--check` for byte-level drift (exit 0 unchanged,
-1 drift/version/validation failure); `--check` and `--apply` are exclusive.
-For an isolated install, set a fresh Dagu home and omit `--launch-agent` so both
-plist and logs stay there. Actual service activation belongs to the operator.
-
-For an active station, provision actual close/restart/open hooks:
+Provide an unauthenticated loopback API, queues/coordinator enabled, and the
+consumer lane's named global queue in station config. Its `max_concurrency` is
+chosen by the operator, not committed consumer config. Ensure the service's own
+PATH resolves `bash`, `git`, `gh`, `jq`, `node`, `bun`, `python3`, `omp`, `dagu`.
+Use the service's actual home and endpoint for read-only diagnostics:
 
 ```sh
-node "$SOURCE/packages/issue-lifecycle/bin/dagu-station-install.ts" \
-  --dagu-home "$DAGU_HOME" --apply \
-  --admission-close "$CLOSE_ADMISSION" \
-  --restart-command "$RESTART_SERVICE" \
-  --admission-open "$OPEN_ADMISSION"
+node "$SOURCE/packages/issue-lifecycle/bin/dagu-feature-bundle.ts" readiness \
+  "$PRIMARY/.workspace/dagu/config.json"
+# Before initial adoption:
+node "$SOURCE/packages/issue-lifecycle/bin/dagu-feature-bundle.ts" readiness \
+  --lane a4s
 ```
 
-The close hook stops **all** producers, including sessions, CLI/API, automation
-and scheduled triggers, and holds exclusion until open. The installer lock only
-serializes installers. It waits for both queued and running history to empty;
-existing queued runs drain under the previous scheduler. The restart hook sends
-TERM to drained `start-all`, waits for replacement PID/readiness with the same
-home/config, then leaves admission closed. On launchd, the signal operation is
-`launchctl kill SIGTERM "gui/$(id -u)/local.dagu.server"`; readiness belongs in the
-operator hook. The installer then verifies eight held running probes plus one
-queued in a4s and nine successes before opening. A hook of `true` is valid only
-in an isolated environment with no producers or schedules.
+Exit 1 reports missing/invalid lane queues in config or the running API,
+endpoint/auth errors, inactive scheduler or unreadable/incomplete service
+environment. Linux reads the running scheduler's `/proc` environment; macOS
+reads the running launchd service's configured environment. The check performs
+only reads and HTTP GETs, creates no home or probe DAGs, and does not enqueue
+or activate anything. Bootstrap invokes it before adoption and confirmation.
+When readiness fails, request station-operator correction; bootstrap cannot
+repair or reload station configuration. Operator-led service changes must
+preserve active/waiting runs and follow that station's safe activation policy.
 
-The drained TERM restart proof in #255 ran on the then-installed Dagu release;
-it does not establish the current manifest pin, host restart or distributed-worker survival.
-After a failure during closure, admission remains closed. Inspect service,
-history and output before recovery. Preserve `.station-install.lock` barriers
-until outstanding probes finish; remove the completed lock only after recovery.
 Thirty-day global history retention comes from the installed base
 (`packages/issue-lifecycle/dagu/base.yaml`, `hist_retention_days: 30`).
 Feature, PoC and planning runs inherit that horizon. The reconcile root

@@ -15,15 +15,14 @@ import {
 } from "../src/config.ts";
 
 test("config schema rejects unknown fields, bad versions and non-integers", () => {
-  const valid = exampleConfig({ lane: "a4s", queueConcurrency: 8 });
+  const valid = exampleConfig({ lane: "a4s" });
   assert.equal(valid.schemaVersion, CONFIG_SCHEMA_VERSION);
   assert.throws(() => parseConfig({ ...valid, bootstrap: "run" }), /unknown field bootstrap/);
   assert.throws(() => parseConfig({ ...valid, escalation: { ...valid.escalation, extra: 1 } }), /config escalation rejected unknown field/);
   assert.throws(() => parseConfig({ ...valid, schemaVersion: 2 }), /schemaVersion=2 expected 1/);
   assert.throws(() => parseConfig({ ...valid, schemaVersion: "1" }), /schemaVersion="1" expected 1/);
-  for (const queueConcurrency of [0, -1, 1.5, 9007199254740992, "8"]) {
-    assert.throws(() => parseConfig({ ...valid, queueConcurrency }), /queueConcurrency must be a positive integer/);
-  }
+  assert.throws(() => parseConfig({ ...valid, queueConcurrency: 8 }), /unknown field queueConcurrency/);
+  assert.throws(() => parseConfig({ ...valid, escalation: { ...valid.escalation, pushbacks: 0 } }), /positive integer/);
   assert.throws(() => parseConfig({ ...valid, blockerReporting: "sometimes" }), /blockerReporting="sometimes"/);
   assert.throws(() => parseConfig({ ...valid, lane: "" }), /config lane is invalid/);
   assert.equal(serializeConfig(valid).endsWith("\n"), true);
@@ -32,7 +31,7 @@ test("config schema rejects unknown fields, bad versions and non-integers", () =
 
 test("bootstrap environment becomes the strict config document", () => {
   const config = configFromEnvironment({
-    REPO: "a4s", BASE_BRANCH: "main", QUEUE_CONCURRENCY: "8", GATE: "npm test",
+    REPO: "a4s", BASE_BRANCH: "main", GATE: "npm test",
     REQUIRED_CHECK: "validate", TEST_PATHS: "test", REBASE_RESOLVER: "",
     A4S_BLOCKER_REPORTING: "ask", CODE_SCANNING: "required",
     CODEQL_SECURITY_THRESHOLD: "high_or_higher", CODEQL_ALERTS_THRESHOLD: "errors",
@@ -40,16 +39,15 @@ test("bootstrap environment becomes the strict config document", () => {
     ESCALATION_CI_BLOCKED: "2", ESCALATION_POC_INCONCLUSIVE: "2",
   });
   assert.equal(config.lane, "a4s");
-  assert.equal(config.queueConcurrency, 8);
   assert.equal(config.validation, "");
   assert.throws(() => configFromEnvironment({
-    REPO: "a4s", BASE_BRANCH: "main", QUEUE_CONCURRENCY: "0", GATE: "npm test",
+    REPO: "a4s", BASE_BRANCH: "main", GATE: "npm test",
     REQUIRED_CHECK: "validate", TEST_PATHS: "test",
     A4S_BLOCKER_REPORTING: "ask", CODE_SCANNING: "required",
     CODEQL_SECURITY_THRESHOLD: "high_or_higher", CODEQL_ALERTS_THRESHOLD: "errors",
-    ESCALATION_PUSHBACKS: "3", ESCALATION_FINDINGS: "2", ESCALATION_SECONDS: "3600",
+    ESCALATION_PUSHBACKS: "0", ESCALATION_FINDINGS: "2", ESCALATION_SECONDS: "3600",
     ESCALATION_CI_BLOCKED: "2", ESCALATION_POC_INCONCLUSIVE: "2",
-  }), /QUEUE_CONCURRENCY must be a positive integer/);
+  }), /ESCALATION_PUSHBACKS must be a positive integer/);
 });
 
 test("committed config rejects a missing, dirty or invalid file", () => {

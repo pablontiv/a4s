@@ -60,6 +60,7 @@ steps:
       cd "$PRIMARY"
       repo=$(gh repo view --json name --jq .name)
       nwo=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
+      node "$SKILL_DIR/../../bin/dagu-feature-bundle.ts" readiness --lane "$repo"
       base=${BASE_BRANCH:-$(gh repo view --json defaultBranchRef --jq .defaultBranchRef.name)}
       git check-ref-format "refs/heads/$base"
       gh api "repos/$nwo/branches/$base" >/dev/null
@@ -72,7 +73,6 @@ steps:
         checks=$(gh pr checks "$last_pr" --json name --jq '[.[].name] | unique | join(",")' 2>/dev/null || true)
       fi
       config_file="$(pwd -P)/.workspace/dagu/config.json"
-      current_queue_concurrency=1
       current_gate=not-configured
       current_check=not-configured
       current_tests=not-configured
@@ -92,7 +92,6 @@ steps:
         current_codeql_alerts=$(jq -er '.codeqlAlertsThreshold' "$config_file")
         current_code_scanning=$(jq -er '.codeScanning' "$config_file")
         current_tests=$(jq -er '.testPaths' "$config_file")
-        current_queue_concurrency=$(jq -er '.queueConcurrency' "$config_file")
       fi
       for entry in pushbacks:PUSHBACKS:3 findings:FINDINGS:2 seconds:SECONDS:3600 ciBlocked:CI_BLOCKED:2 pocInconclusive:POC_INCONCLUSIVE:2; do
         field=${entry%%:*}
@@ -124,7 +123,6 @@ steps:
         printf 'CURRENT_CODEQL_SECURITY_THRESHOLD=%s\n' "${current_codeql_security:-high_or_higher}"
         printf 'CURRENT_CODEQL_ALERTS_THRESHOLD=%s\n' "${current_codeql_alerts:-errors}"
         printf 'CURRENT_CODE_SCANNING=%s\n' "$current_code_scanning"
-        printf 'CURRENT_QUEUE_CONCURRENCY=%s\n' "$current_queue_concurrency"
       } >> "$DAGU_OUTPUT_FILE"
     outputs:
       - name: REPO
@@ -147,7 +145,6 @@ steps:
       - name: CURRENT_CODEQL_SECURITY_THRESHOLD
       - name: CURRENT_CODEQL_ALERTS_THRESHOLD
       - name: CURRENT_CODE_SCANNING
-      - name: CURRENT_QUEUE_CONCURRENCY
       - name: CURRENT_ESCALATION_PUSHBACKS
       - name: CURRENT_ESCALATION_FINDINGS
       - name: CURRENT_ESCALATION_SECONDS
@@ -189,11 +186,9 @@ steps:
         CODEQL_ALERTS_THRESHOLD: non-security findings used when code scanning is required
         (current: ${steps.detect.outputs.CURRENT_CODEQL_ALERTS_THRESHOLD}; initial: errors).
         Blank preserves installed thresholds. required needs CodeQL analysis and permission to read code-scanning alerts.
-        QUEUE_CONCURRENCY: positive integer; blank keeps the committed config value
-        (${steps.detect.outputs.CURRENT_QUEUE_CONCURRENCY}; initial: 1). For a4s, select 8
-        to preserve the operator-approved installed capacity on first adoption.
-        Bootstrap derives the repository's global queue and restarts its matching
-        launchd scheduler only when the entry changes; waiting human tasks persist.
+        Queue capacity is station configuration only. Bootstrap checks the lane queue,
+        API access and scheduler environment without changing station files or restarting services.
+        Ask the station operator to resolve readiness failures before adoption.
         Escalation budgets: positive integers, blank preserves installed policy.
         Push-backs ${steps.detect.outputs.CURRENT_ESCALATION_PUSHBACKS} (initial 3);
         repeated findings ${steps.detect.outputs.CURRENT_ESCALATION_FINDINGS} (initial 2);
@@ -234,10 +229,6 @@ steps:
             type: string
             enum: ["", none, errors, errors_and_warnings, all]
             default: ""
-          QUEUE_CONCURRENCY:
-            type: string
-            default: ""
-            pattern: "^([1-9][0-9]*)?$"
           ESCALATION_PUSHBACKS: {type: string, pattern: '^$|^[1-9][0-9]*$', default: ""}
           ESCALATION_FINDINGS: {type: string, pattern: '^$|^[1-9][0-9]*$', default: ""}
           ESCALATION_SECONDS: {type: string, pattern: '^$|^[1-9][0-9]*$', default: ""}
@@ -274,8 +265,6 @@ steps:
       - CURRENT_CODEQL_ALERTS_THRESHOLD: ${steps.detect.outputs.CURRENT_CODEQL_ALERTS_THRESHOLD}
       - CODE_SCANNING: ${steps.config.outputs.CODE_SCANNING}
       - CURRENT_CODE_SCANNING: ${steps.detect.outputs.CURRENT_CODE_SCANNING}
-      - QUEUE_CONCURRENCY: ${steps.config.outputs.QUEUE_CONCURRENCY}
-      - CURRENT_QUEUE_CONCURRENCY: ${steps.detect.outputs.CURRENT_QUEUE_CONCURRENCY}
       - ESCALATION_PUSHBACKS: ${steps.config.outputs.ESCALATION_PUSHBACKS}
       - ESCALATION_FINDINGS: ${steps.config.outputs.ESCALATION_FINDINGS}
       - ESCALATION_SECONDS: ${steps.config.outputs.ESCALATION_SECONDS}
@@ -296,9 +285,6 @@ steps:
       umask 0022
       test -n "${DAG_RUN_ID:-}"
       PRIMARY=$(cd "$PRIMARY" && pwd -P)
-      # Empty integer-text inputs preserve the committed repository policy.
-      export QUEUE_CONCURRENCY=${QUEUE_CONCURRENCY:-${CURRENT_QUEUE_CONCURRENCY:-1}}
-      node -e 'const v=process.env.QUEUE_CONCURRENCY; if (!/^[1-9][0-9]*$/.test(v) || !Number.isSafeInteger(Number(v))) process.exit(1)'
       A4S_BLOCKER_REPORTING=${A4S_BLOCKER_REPORTING:-${CURRENT_A4S_BLOCKER_REPORTING:-ask}}
       case "$A4S_BLOCKER_REPORTING" in ask|auto) ;; *) echo 'A4S_BLOCKER_REPORTING must be ask or auto' >&2; exit 1 ;; esac
       CODEQL_SECURITY_THRESHOLD=${CODEQL_SECURITY_THRESHOLD:-${CURRENT_CODEQL_SECURITY_THRESHOLD:-high_or_higher}}
@@ -327,14 +313,11 @@ steps:
       - STAGE: ${steps.detect.outputs.STAGE}
     run: |
       set -euo pipefail
+      node "$SKILL_DIR/../../bin/dagu-feature-bundle.ts" readiness "$STAGE"
       destination="${DAGU_HOME:-$HOME/.dagu}/dags/reconcile.yaml"
       node "$SKILL_DIR/../../bin/dagu-feature-bundle.ts" install-reconciler "$STAGE" "$destination"
       dagu validate "$destination"
-      queue_status=$(node "$SKILL_DIR/../../bin/dagu-feature-bundle.ts" queue-reconcile "$STAGE")
-      printf 'QUEUE_STATUS=%s\n' "$queue_status" >> "$DAGU_OUTPUT_FILE"
       printf 'reconcile=%s\n' "$destination"
-    outputs:
-      - name: QUEUE_STATUS
 
   - id: github
     depends: reconcile
@@ -403,7 +386,6 @@ steps:
       - NWO: ${steps.detect.outputs.NWO}
       - BASE_BRANCH: ${steps.detect.outputs.BASE_BRANCH}
       - STAGE: ${steps.detect.outputs.STAGE}
-      - QUEUE_STATUS: ${steps.reconcile.outputs.QUEUE_STATUS}
     run: |
       set -euo pipefail
       test "$(gh api "repos/$NWO" --jq '.allow_auto_merge and .allow_squash_merge')" = true
@@ -414,8 +396,7 @@ steps:
       destination="${DAGU_HOME:-$HOME/.dagu}/dags/reconcile.yaml"
       node "$SKILL_DIR/../../bin/dagu-feature-bundle.ts" install-reconciler "$STAGE" "$destination"
       dagu validate "$destination"
-      node "$SKILL_DIR/../../bin/dagu-feature-bundle.ts" queue-check "$STAGE"
-      printf '%s\n' "$QUEUE_STATUS"
+      node "$SKILL_DIR/../../bin/dagu-feature-bundle.ts" readiness "$STAGE"
       printf 'config=%s\n' "$STAGE"
       printf 'reconcile=%s\n' "$destination"
       printf 'scheduler=ok\nrepo=%s\nbase_branch=%s\nrequired_check=%s\nstage=%s\n' \

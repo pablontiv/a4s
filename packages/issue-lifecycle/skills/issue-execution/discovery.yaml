@@ -1,7 +1,6 @@
 labels:
   - workspace=TEMPLATE_REPO
   - dagu-feature-bundle=TEMPLATE_DAGU_FEATURE_VERSION
-  - dagu-feature-queue-concurrency=TEMPLATE_QUEUE_CONCURRENCY
 queue: TEMPLATE_REPO
 type: graph
 dotenv: []
@@ -17,13 +16,12 @@ params:
   - name: LIVE_TARGET
     type: string
     default: ""
-  - name: PRIMARY
-    type: string
-    required: true
   - name: OMP_SESSION_ID
     type: string
-    default: ""
+    required: true
 env:
+  - PRIMARY: __PRIMARY__
+  - BASE_BRANCH: TEMPLATE_BASE_BRANCH
   - RUN: ${context.run.id}
   - DAGU_FEATURE_BUNDLE: "__DAGU_FEATURE_IDENTITY__"
 steps:
@@ -37,9 +35,7 @@ steps:
       [[ "$LENSES" =~ ^[0-4](,[0-4])*$ ]]
       test "$(jq -nr --arg value "$LENSES" '$value / "," | length')" = \
         "$(jq -nr --arg value "$LENSES" '$value / "," | unique | length')"
-      metadata=$(cd "$PRIMARY" && gh repo view --json nameWithOwner,defaultBranchRef)
-      NWO=$(jq -er '.nameWithOwner | select(type == "string" and length > 0)' <<<"$metadata")
-      BASE_BRANCH=$(jq -er '.defaultBranchRef.name | select(type == "string" and length > 0)' <<<"$metadata")
+      NWO=$(cd "$PRIMARY" && gh repo view --json nameWithOwner --jq .nameWithOwner)
       owner=${NWO%/*}
       repo=${NWO#*/}
       test "$owner" != "$NWO" && test -n "$owner" && test -n "$repo"
@@ -340,7 +336,7 @@ steps:
       if test -s "$units"; then
         backend_run_id="breakdown-$RUN"
         dagu-feature-bundle enqueue --run-id "$backend_run_id" "$PRIMARY/.workspace/dagu/dags/planning.yaml" -- \
-          UNITS_FROM="$units" SOURCE=discovery PRIMARY="$PRIMARY" \
+          UNITS_FROM="$units" SOURCE=discovery \
           OMP_SESSION_ID="$OMP_SESSION_ID"
       else
         printf 'outcome=no-units\n'

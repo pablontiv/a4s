@@ -1,9 +1,0 @@
-# Owned leaves are merged into config.yaml; all other keys belong to their owners.
-auth:
-  mode: none
-queues:
-  enabled: true
-host: 127.0.0.1
-port: 8080
-coordinator:
-  enabled: true

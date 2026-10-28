@@ -35,7 +35,7 @@ test("CLI reports committed config and the reconciler as compatible", () => {
     mkdirSync(join(daguHome, "dags"), { recursive: true });
     mkdirSync(bin);
     commitConfig(repo, serializeConfig(exampleConfig({
-      lane: "fixture", queueConcurrency: 6, gate: "npm test", requiredCheck: "validate",
+      lane: "fixture", gate: "npm test", requiredCheck: "validate",
     })));
     writeFileSync(join(daguHome, "dags", "reconcile.yaml"), "steps:\n  - run: true\n");
     writeFileSync(join(daguHome, "config.yaml"), "queues:\n  enabled: true\n  config:\n    - name: fixture\n      max_concurrency: 6\n");
@@ -47,7 +47,7 @@ test("CLI reports committed config and the reconciler as compatible", () => {
       env: { ...process.env, DAGU_PARAMS_JSON: "{}", DAGU_HOME: daguHome, PATH: `${bin}:${process.env.PATH ?? ""}` },
     });
     assert.equal(result.status, 0, result.stdout + result.stderr);
-    assert.match(result.stdout, /config path=\.workspace\/dagu\/config\.json schema=1 .*lane=fixture .*queue=fixture max_concurrency=6 compat=ok/);
+    assert.match(result.stdout, /config path=\.workspace\/dagu\/config\.json schema=1 .*lane=fixture .*queue=fixture source=config.yaml max_concurrency=6 ready=yes/);
     assert.match(result.stdout, /config policy gate="npm test" requiredCheck="validate"/);
     assert.match(result.stdout, /reconcile\.yaml path=.* installed=yes/);
     assert.match(result.stdout, /dagu version="2\.24\.0"/);
@@ -91,8 +91,6 @@ test("admission rejects adopted policy parameters before reserving a receipt", l
       const result = fixture.command("enqueue", run, {}, [parameter]);
       assert.notEqual(result.status, 0);
       assert.ok(result.stderr.includes(`admission rejected run parameter: ${field}`), result.stderr);
-      assert.ok(result.stderr.includes(`"PRIMARY":${JSON.stringify(fixture.packageDir)}`), result.stderr);
-      assert.match(result.stderr, /"BRANCH":"dagu\/issue-277"/);
       assert.equal(existsSync(join(fixture.packageDir, ".git", "dagu-feature", "runs", run)), false);
     }
     const accepted = fixture.command("admit", "operational-policy", {}, ["PR_NUMBER=327", "OMP_SESSION_ID=owner-session"]);

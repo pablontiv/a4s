@@ -19,7 +19,7 @@ config file at `.workspace/dagu/config.json`. Its schema version is independent
 of the package version. Admission reads that committed file and materializes the
 requested DAG from the station's installed templates. The scheduled reconciler is
 installed separately at `$DAGU_HOME/dags/reconcile.yaml`. A package release that
-does not change config requires no consumer commit. Feature and PoC `PRIMARY`
+does not change config requires no consumer commit. Lifecycle `PRIMARY`
 in the materialized DAG is the host reference `"${A4S_PRIMARY}"`. Admission
 resolves it from `$DAGU_HOME/primaries/<lane>`, then `A4S_PRIMARY`, then
 `$DAGU_HOME/a4s-primary`, and the per-run snapshot records that absolute checkout.
@@ -32,6 +32,14 @@ that PRIMARY is an independent clone rather than a linked worktree. It writes
 user-level reconciler from the installed template; `github` can change repository
 merge settings and branch protection. These are authorized deployment actions,
 not read-only smoke commands.
+
+Queue capacity, Dagu configuration and service activation are station-operator
+concerns, not consumer config. a4s never writes `$DAGU_HOME/config.yaml`,
+service units or restart commands. `dagu-feature-bundle readiness <config>`
+uses only file reads and API GETs to diagnose missing lane queues in config and
+the running API, endpoint/auth failures, inactive schedulers and service
+PATH/home problems. Bootstrap checks readiness rather than repairing the
+station. Explicit executor installation remains independent of service setup.
 
 ### Compatibility is more than a version display
 
@@ -50,8 +58,11 @@ upgrading historical receipts or reading the retired consumer path.
 
 [`src/admission.ts`](../../packages/issue-lifecycle/src/admission.ts) reads the
 config file from the consumer's committed revision, rejects unknown fields and
-run-time policy overrides, resolves PRIMARY, and writes the immutable per-run
-snapshot and receipt. The receipt records the config digest, package
+run-time policy overrides including `BASE_BRANCH`, and requires exactly one valid
+owner session before receipt writes, cache/store mutation or enqueue. It resolves
+PRIMARY and writes the immutable per-run snapshot and receipt. Base branch and
+all consumer policy come only from committed config; successor calls carry
+operational artifacts and the same owner, not policy. The receipt records the config digest, package
 version/commit, template identity, Dagu runtime and generated DAG digest. A
 corrupt installed template fails before run creation and names the protocol plus
 the bundle version that serves it. Installed package version equals the loaded
@@ -122,8 +133,8 @@ inheriting descriptors close; surviving descendants keep exclusion. The stable
 lock inode is not removed. Single-file `tsx --test` runs and light-workspace
 tests remain unslotted. Integration protection uses a separate short-lived
 per-repository admission lock and releases the station slot while a gate waits
-on protection. Dagu queue capacity stays `a4s=8` on main, foreign queues are
-unchanged, and unrelated lifecycle steps proceed. Deployment acceptance still
+on protection. Dagu queue capacity is station-operator configuration, unrelated
+to consumer config; unrelated lifecycle steps proceed. Deployment acceptance still
 requires operator-observed primary/authorized-clone full-gate windows and an
 agent-session root test waiting behind a gate.
 

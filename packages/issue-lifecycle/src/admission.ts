@@ -8,7 +8,6 @@ import {
   CONFIG_PATH,
   POLICY_PARAMETERS,
   readCommittedConfig,
-  type LifecycleConfig,
 } from "./config.ts";
 import {
   BUNDLE_VERSION,
@@ -23,6 +22,7 @@ import { isRecord } from "./type-guard.ts";
 import { requirePocScope, scopeTargets } from "./poc-scope.ts";
 import { HOST_PRIMARY_REFERENCE, bindSnapshotPrimary, resolvePrimaryBinding } from "./primary.ts";
 import { assertReceiptVersion } from "./receipt-version.ts";
+import { requireOwnerSession } from "./owner-session.ts";
 
 const packageRoot = fileURLToPath(new URL("../", import.meta.url));
 const correction = "Commit .workspace/dagu/config.json in the consumer repository. Admission materializes the DAG from the installed package templates and resolves PRIMARY before enqueue; retry with a new run ID.";
@@ -120,60 +120,33 @@ function consumerRoot(cwd: string, dag: string): string {
   throw new Error(`admission requires a consumer git checkout containing committed ${CONFIG_PATH}`);
 }
 
-function policyRecord(config: LifecycleConfig, primary: string, branch: string): Record<string, unknown> {
-  return {
-    PRIMARY: primary, BRANCH: branch, LANE: config.lane, GATE: config.gate,
-    REBASE_RESOLVER: config.rebaseResolver, REQUIRED_CHECK: config.requiredCheck,
-    TEST_PATHS: config.testPaths, VALIDATION: config.validation,
-    A4S_BLOCKER_REPORTING: config.blockerReporting, CODE_SCANNING: config.codeScanning,
-    CODEQL_SECURITY_THRESHOLD: config.codeqlSecurityThreshold, CODEQL_ALERTS_THRESHOLD: config.codeqlAlertsThreshold,
-    QUEUE_CONCURRENCY: config.queueConcurrency,
-    ESCALATION_PUSHBACKS: config.escalation.pushbacks, ESCALATION_FINDINGS: config.escalation.findings,
-    ESCALATION_SECONDS: config.escalation.seconds, ESCALATION_CI_BLOCKED: config.escalation.ciBlocked,
-    ESCALATION_POC_INCONCLUSIVE: config.escalation.pocInconclusive,
-  };
-}
-
 export function admit(options: AdmissionOptions, persist = true): { path: string; receipt: Receipt } {
   try {
     const name = dagName(options.dag);
+    const rejected = options.params.map(param => param.split("=", 1)[0]!)
+      .filter(field => field.startsWith("ESCALATION_") || field.startsWith("CODEQL_") || (POLICY_PARAMETERS as readonly string[]).includes(field));
+    if (rejected.length) throw new Error(`admission rejected run parameter: ${rejected.join(", ")}; policy comes only from committed ${CONFIG_PATH}`);
+    const owners = options.params.filter(param => param.startsWith("OMP_SESSION_ID="));
+    const owner = requireOwnerSession(owners.length === 1 ? owners[0]!.slice(15) : undefined);
     const hintedRoot = realpathSync(consumerRoot(options.cwd, options.dag));
     const hinted = readCommittedConfig(hintedRoot);
-    let primaryParam = options.params.find(param => param.startsWith("PRIMARY="))?.slice(8);
     let config = hinted.config;
     let configCommit = hinted.commit;
     let configDigest = hinted.digest;
-    let executionSnapshot: string | undefined;
-    if (name === "feature.yaml" || name === "poc.yaml") {
-      const bound = resolvePrimaryBinding(HOST_PRIMARY_REFERENCE, { workspace: config.lane });
-      const resolved = realpathSync(bound);
-      const primaryRepo = realpathSync(git(resolved, "rev-parse", "--show-toplevel"));
-      if (primaryRepo !== hintedRoot) {
-        const canonical = readCommittedConfig(primaryRepo);
-        const again = realpathSync(resolvePrimaryBinding(HOST_PRIMARY_REFERENCE, { workspace: canonical.config.lane }));
-        if (realpathSync(git(again, "rev-parse", "--show-toplevel")) !== primaryRepo) {
-          throw new Error(`config lane=${canonical.config.lane} resolved PRIMARY ${again}, which is not the consumer checkout ${primaryRepo}`);
-        }
-        config = canonical.config;
-        configCommit = canonical.commit;
-        configDigest = canonical.digest;
+    const resolved = realpathSync(resolvePrimaryBinding(HOST_PRIMARY_REFERENCE, { workspace: config.lane }));
+    const primaryRepo = realpathSync(git(resolved, "rev-parse", "--show-toplevel"));
+    if (primaryRepo !== hintedRoot) {
+      const canonical = readCommittedConfig(primaryRepo);
+      const again = realpathSync(resolvePrimaryBinding(HOST_PRIMARY_REFERENCE, { workspace: canonical.config.lane }));
+      if (realpathSync(git(again, "rev-parse", "--show-toplevel")) !== primaryRepo) {
+        throw new Error(`config lane=${canonical.config.lane} resolved PRIMARY ${again}, which is not the consumer checkout ${primaryRepo}`);
       }
-      const issue = options.params.find(param => param.startsWith("ISSUE="))?.slice(6);
-      const branch = name === "feature.yaml" ? `dagu/issue-${issue}` : `poc/${options.run}`;
-      const policy = policyRecord(config, resolved, branch);
-      primaryParam = resolved;
-      const rejected = options.params.map(param => param.slice(0, param.indexOf("=")))
-        .filter(field => field.startsWith("ESCALATION_") || (POLICY_PARAMETERS as readonly string[]).includes(field));
-      if (rejected.length) throw new Error(`admission rejected run parameter: ${rejected.join(", ")}; adopted policy ${JSON.stringify(policy)}`);
-    }
-    const primary = realpathSync(resolve(options.cwd, primaryParam || "."));
-    const repo = realpathSync(git(primary, "rev-parse", "--show-toplevel"));
-    if (name !== "feature.yaml" && name !== "poc.yaml" && hintedRoot !== repo) {
-      const canonical = readCommittedConfig(repo);
       config = canonical.config;
       configCommit = canonical.commit;
       configDigest = canonical.digest;
     }
+    const primary = resolved;
+    const repo = primaryRepo;
     if (name === "poc.yaml") {
       const param = (key: string) => options.params.find(value => value.startsWith(`${key}=`))?.slice(key.length + 1) || "";
       requirePocScope(primary, { issue: param("ISSUE"), question: param("QUESTION"),
@@ -192,8 +165,7 @@ export function admit(options: AdmissionOptions, persist = true): { path: string
     const declared = inferLifecycleProtocols(name, generated);
     const missing = missingLifecycleProtocols(declared);
     if (missing.length) throw new Error(formatProtocolRejection(name, missing));
-    if (name === "feature.yaml" || name === "poc.yaml") executionSnapshot = bindSnapshotPrimary(generated, primary);
-    const snapshot = executionSnapshot ?? generated;
+    const snapshot = name === "reconcile.yaml" ? generated : bindSnapshotPrimary(generated, primary);
     const reconcilerPath = join(daguHome, "dags", "reconcile.yaml");
     let installedReconciler: Record<string, unknown>;
     try {
@@ -246,7 +218,7 @@ export function admit(options: AdmissionOptions, persist = true): { path: string
       initial: {
         admittedAt: new Date().toISOString(), deployment,
         runtimeAndModels: { ...fields("omp systemPromptDigest profile roles roleMapHash requestedRole resolvedModel fallback resolvedModelIsFallback crossFamilyDecision serverPid serverPpid serverStartedAt", "not exposed at admission; append a linked runtime observation when resolved"), node: { version: process.version, path: realpathSync(process.execPath) }, dagu: { version: daguVersion, path: realpathSync(execFileSync("/bin/sh", ["-c", "command -v dagu"], { encoding: "utf8" }).trim()) }, daguHome, endpoint: process.env.DAGU_URL || "http://127.0.0.1:8080", admissionPid: process.pid, admissionPpid: process.ppid, config: runtimeConfig, transcriptRoot: options.session?.transcriptRoot ?? pending("operator CLI has no OMP session context"), model: options.session?.model ?? pending("OMP model not exposed to CLI") },
-        execution: { ...fields("base owner refs step approvalIteration sourceSession destinationSession triageGeneration triageMarker", "not yet resolved at admission"), repo, primary, head: git(primary, "rev-parse", "HEAD"), branch: git(primary, "branch", "--show-current"), worktree: repo, dirty, diffDigest: sha256(diff), parameters: options.params, ompSession: options.params.find(param => param.startsWith("OMP_SESSION_ID="))?.slice(15) ?? pending("OMP_SESSION_ID not supplied"), dagSnapshot: executionSnapshot ?? installedDAG.snapshot },
+        execution: { ...fields("base owner refs step approvalIteration sourceSession destinationSession triageGeneration triageMarker", "not yet resolved at admission"), repo, primary, head: git(primary, "rev-parse", "HEAD"), branch: git(primary, "branch", "--show-current"), worktree: repo, dirty, diffDigest: sha256(diff), parameters: options.params, ompSession: owner, dagSnapshot: snapshot },
         eventsAndExternalState: fields("eventIds cursor source transition destination delivery trigger queue reconcile merge checks configuration locks lockOwner restarts activeRuns exit signal latency errors incidents", "not observed before enqueue; linked observations append without replacing initial state"),
       },
       runReceipt: { dag: name.replace(/\.yaml$/, ""), run: options.run, attempt: 1, observations: [] },
