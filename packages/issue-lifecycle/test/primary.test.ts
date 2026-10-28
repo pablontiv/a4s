@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { BUNDLE_VERSION } from "../src/bundle.ts";
+import { CONFIG_PATH, exampleConfig, serializeConfig } from "../src/config.ts";
 import {
   HOST_PRIMARY_REFERENCE,
   bindSnapshotPrimary,
@@ -201,46 +202,81 @@ else { console.error("unexpected " + JSON.stringify(args)); process.exitCode = 1
   } finally { fixture.dispose(); }
 });
 
-test("resource guard protects only the checkout the host binding names", async () => {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), "a4s-primary-guard-")));
-  const primary = join(root, "primary");
-  const scratch = join(root, "scratch");
-  const bin = join(root, "bin");
-  const previousPath = process.env.PATH;
-  const previousPrimary = process.env.A4S_PRIMARY;
-  const previousHome = process.env.DAGU_HOME;
-  const git = (cwd: string, ...args: string[]) => {
-    const result = spawnSync("git", ["-C", cwd, ...args], { encoding: "utf8" });
-    assert.equal(result.status, 0, result.stderr);
-  };
-  try {
+for (const source of ["workspace", "environment", "station"]) {
+  test(`resource guard protects an idle committed PRIMARY via ${source} binding, not an identical clone`, async t => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "a4s-primary-guard-")));
+    const primary = join(root, "primary");
+    const scratch = join(root, "scratch");
+    const unadopted = join(root, "unadopted");
+    const alias = join(root, "primary alias");
+    const bin = join(root, "bin");
+    const previous = { PATH: process.env.PATH, A4S_PRIMARY: process.env.A4S_PRIMARY, DAGU_HOME: process.env.DAGU_HOME };
+    const git = (cwd: string, ...args: string[]) => {
+      const result = spawnSync("git", ["-C", cwd, ...args], { encoding: "utf8" });
+      assert.equal(result.status, 0, result.stderr);
+    };
+    t.after(() => {
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      rmSync(root, { recursive: true, force: true });
+    });
     mkdirSync(bin);
     writeFileSync(join(bin, "dagu"), "#!/bin/sh\nprintf '[]\\n'\n");
     chmodSync(join(bin, "dagu"), 0o755);
-    process.env.PATH = `${bin}:${previousPath ?? ""}`;
-    process.env.A4S_PRIMARY = primary;
+    process.env.PATH = `${bin}:${previous.PATH ?? ""}`;
     process.env.DAGU_HOME = root;
-    for (const repo of [primary, scratch]) {
-      git(".", "init", "-q", "-b", "main", repo);
+    delete process.env.A4S_PRIMARY;
+    for (const repo of [primary, unadopted]) {
+      git(root, "init", "-q", "-b", "main", repo);
       git(repo, "config", "user.name", "Test");
       git(repo, "config", "user.email", "test@example.com");
       writeFileSync(join(repo, "value"), "base\n");
+      if (repo === primary) {
+        mkdirSync(join(repo, ".workspace", "dagu"), { recursive: true });
+        writeFileSync(join(repo, CONFIG_PATH), serializeConfig(exampleConfig({ lane: "guard-fixture" })));
+      }
       git(repo, "add", ".");
       git(repo, "commit", "-qm", "base");
-      const dags = join(repo, ".workspace", "dagu", "dags");
-      mkdirSync(dags, { recursive: true });
-      writeFileSync(join(dags, "feature.yaml"), `labels:\n  - workspace=a4s\nenv:\n  - PRIMARY: "${HOST_PRIMARY_REFERENCE}"\n`);
     }
+    git(root, "clone", "-q", primary, scratch);
+    symlinkSync(primary, alias);
+    const binding = source === "workspace" ? join(root, "primaries", "guard-fixture") : join(root, "a4s-primary");
+    mkdirSync(join(root, "primaries"));
+    const bind = (path: string) => {
+      if (source === "environment") process.env.A4S_PRIMARY = path;
+      else writeFileSync(binding, `${path}\n`);
+    };
+    // Workspace bindings must take precedence over both lower-priority sources.
+    if (source === "workspace") process.env.A4S_PRIMARY = scratch;
+    if (source !== "station") writeFileSync(join(root, "a4s-primary"), `${scratch}\n`);
+    bind(alias);
+    assert.equal(existsSync(join(primary, ".workspace", "dagu", "dags")), false);
     const event = (command: string) => ({ toolName: "bash", toolCallId: command, input: { command } });
-    const reason = (await resourceDecision(event(`rm -rf '${primary}'`), scratch) as { reason?: string }).reason ?? "";
-    assert.match(reason, /protected primary/);
-    assert.equal(await resourceDecision(event(`rm -rf '${scratch}'`), primary), undefined);
-  } finally {
-    process.env.PATH = previousPath;
-    if (previousPrimary === undefined) delete process.env.A4S_PRIMARY;
-    else process.env.A4S_PRIMARY = previousPrimary;
-    if (previousHome === undefined) delete process.env.DAGU_HOME;
-    else process.env.DAGU_HOME = previousHome;
-    rmSync(root, { recursive: true, force: true });
-  }
-});
+    for (const command of [
+      `rm -rf '${primary}'`, `rm -rf '${alias}'`,
+      `git worktree remove '${primary}'`, `git -C '${primary}' branch -D main`,
+    ]) {
+      const decision = await resourceDecision(event(command), scratch);
+      assert.ok(decision && "block" in decision && decision.block, command);
+      assert.match(decision.reason!, /protected primary/);
+    }
+    const ancestorDecision = await resourceDecision(event(`rm -rf '${root}'`), primary);
+    assert.ok(ancestorDecision && "block" in ancestorDecision && ancestorDecision.block);
+    assert.match(ancestorDecision.reason!, /protected primary/);
+    for (const command of [`rm -rf '${scratch}'`, `git -C '${scratch}' branch -D main`]) {
+      assert.equal(await resourceDecision(event(command), primary), undefined, command);
+    }
+    bind(unadopted);
+    const dags = join(unadopted, ".workspace", "dagu", "dags");
+    mkdirSync(dags, { recursive: true });
+    writeFileSync(join(dags, "feature.yaml"), `env:\n  - PRIMARY: ${JSON.stringify(unadopted)}\n`);
+    for (const command of [`rm -rf '${unadopted}'`, `git -C '${unadopted}' branch -D main`]) {
+      assert.equal(await resourceDecision(event(command), primary), undefined, command);
+    }
+    // A working-tree policy alone does not adopt a checkout.
+    writeFileSync(join(unadopted, CONFIG_PATH), readFileSync(join(primary, CONFIG_PATH)));
+    assert.equal(await resourceDecision(event(`rm -rf '${unadopted}'`), primary), undefined);
+  });
+}

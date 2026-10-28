@@ -1,9 +1,10 @@
 import { execFile } from "node:child_process";
-import { readFile, realpath, stat } from "node:fs/promises";
-import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { realpath, stat } from "node:fs/promises";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import type { CallDecision, Event } from "./triage/guard.ts";
-import { HOST_PRIMARY_REFERENCE, resolveHostPrimary, workspaceLabel } from "./primary.ts";
+import { readCommittedConfig } from "./config.ts";
+import { resolveHostPrimary } from "./primary.ts";
 import { resolveRunPrimary } from "./run-primary.ts";
 
 const exec = promisify(execFile);
@@ -76,33 +77,19 @@ async function primaryAt(path: string): Promise<string> {
   if (!primary) throw new Error(`Cannot locate primary for ${path}`);
   return canonical(primary);
 }
-// Adopted feature/PoC renders name one canonical PRIMARY, either as a recorded
-// absolute path or as the host reference resolved from this station. Another
-// clone of those files is not that checkout and stays outside primary protection.
+// Committed policy identifies an adopted checkout; the host binding identifies
+// which clone is PRIMARY. Neither copied policy nor old renders bind a checkout.
 async function adoptedPrimary(primary: string): Promise<boolean> {
-  for (const name of ["feature.yaml", "poc.yaml"]) {
-    let text: string;
-    try { text = await readFile(join(primary, ".workspace", "dagu", "dags", name), "utf8"); }
-    catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
-      throw error;
-    }
-    const literal = /^  - PRIMARY: (.+)$/m.exec(text)?.[1];
-    if (!literal) continue;
-    try {
-      const recorded: unknown = JSON.parse(literal);
-      if (typeof recorded !== "string") continue;
-      const path = recorded === HOST_PRIMARY_REFERENCE
-        ? resolveHostPrimary({ workspace: workspaceLabel(text) })
-        : recorded;
-      if (typeof path === "string" && isAbsolute(path) && !path.includes("$") && await canonical(path) === primary) return true;
-    } catch (error) {
-      if (error instanceof SyntaxError) continue;
-      if (error instanceof Error && error.message.startsWith("PRIMARY host binding is unset")) continue;
-      throw error;
-    }
+  try {
+    const { config } = readCommittedConfig(primary);
+    return await canonical(resolveHostPrimary({ workspace: config.lane })) === primary;
+  } catch (error) {
+    if (error instanceof Error && (
+      error.message.startsWith("missing committed config file ")
+      || error.message.startsWith("PRIMARY host binding is unset")
+    )) return false;
+    throw error;
   }
-  return false;
 }
 interface Owner { kind: string; run: string; status: string; primary: string; branch: string; issue: string }
 export async function readOwners(): Promise<Owner[]> {
@@ -161,8 +148,8 @@ export async function resourceDecision(event: Event, cwd: string): Promise<CallD
           ? target === await git(primary, "branch", "--show-current")
           : contains(path!, primary);
         // Only a lifecycle primary is protected: an active admitted run's canonical
-        // PRIMARY, or this checkout's adopted feature/PoC render. An independent
-        // clone is its own git primary and stays removable.
+        // PRIMARY, or an adopted checkout matching the canonical host binding.
+        // An independent clone is its own git primary and stays removable.
         if (removesOwnPrimary) {
           try {
             const known = await adoptedPrimary(primary) || (owners ??= await readOwners()).some(owner =>

@@ -133,7 +133,7 @@ test("resource ownership resolves the enqueued adoption snapshot and derived fea
   }
 });
 
-test("resource guard allows independent clone removal and keeps admitted and adopted primaries", async t => {
+test("resource guard allows independent clone removal and keeps active admitted primaries", async t => {
   const repo = fixture(), previousPath = process.env.PATH;
   process.env.PATH = repo.env.PATH;
   t.after(() => { process.env.PATH = previousPath; rmSync(repo.root, { recursive: true, force: true }); });
@@ -162,21 +162,6 @@ test("resource guard allows independent clone removal and keeps admitted and ado
   assert.equal(await resourceDecision(event(`rm -rf '${scratch}'`), scratch), undefined);
 
   repo.history("feature", []);
-  const adopted = join(repo.primary, ".workspace", "dagu", "dags");
-  mkdirSync(adopted, { recursive: true });
-  writeFileSync(join(adopted, "feature.yaml"), `env:\n  - PRIMARY: ${JSON.stringify(repo.primary)}\n`);
-  assert.match(await reason(`rm -rf '${repo.primary}'`, scratch), /protected primary/);
-  assert.equal(await resourceDecision(event(`rm -rf '${scratch}'`), scratch), undefined);
-
-  const carried = join(scratch, ".workspace", "dagu", "dags");
-  mkdirSync(carried, { recursive: true });
-  writeFileSync(join(carried, "feature.yaml"), `env:\n  - PRIMARY: ${JSON.stringify(repo.primary)}\n`);
-  assert.equal(await resourceDecision(event(`rm -rf '${scratch}'`), scratch), undefined);
-  writeFileSync(join(carried, "poc.yaml"), `env:\n  - PRIMARY: ${JSON.stringify(scratch)}\n`);
-  assert.match(await reason(`rm -rf '${scratch}'`, repo.primary), /protected primary/);
-  writeFileSync(join(carried, "feature.yaml"), "env:\n  - PRIMARY: not-json\n");
-  writeFileSync(join(carried, "poc.yaml"), "env:\n  - PRIMARY: not-json\n");
-  assert.equal(await resourceDecision(event(`rm -rf '${scratch}'`), scratch), undefined);
 
   repo.git(repo.primary, "worktree", "add", "-b", repo.branch, repo.worktree, "origin/main");
   repo.history("feature", [repo.row("owner", "waiting")]);

@@ -168,6 +168,14 @@ Admission resolves it from `$DAGU_HOME/primaries/<lane>`, then `A4S_PRIMARY`,
 then `$DAGU_HOME/a4s-primary`, and the admitted snapshot records that absolute
 main checkout. A linked worktree is not a primary.
 
+The OMP resource guard uses that same resolution order and the committed config's
+`lane` to protect an idle PRIMARY. Protection requires
+`.workspace/dagu/config.json` committed at `HEAD` and canonical (`realpath`) equality
+with the bound main checkout. It does not depend on rendered DAGs. Copying the
+committed config into another clone does not protect that clone; binding a
+checkout without committed policy does not adopt it. Active feature/PoC run
+ownership remains independently protected.
+
 ## Versioned source, configuration and runtime state
 
 Git versions source and configuration. That is content written through a pull

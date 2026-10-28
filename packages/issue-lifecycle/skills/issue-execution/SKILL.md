@@ -514,6 +514,13 @@ Resolution order for the host reference:
 
 A JSON absolute path already recorded in a render or run spec stays that checkout. The resolved path is the main checkout, not a linked worktree. Worktrees stay `$PRIMARY/.workspace/worktrees/...`.
 
+The OMP resource guard also protects an idle adopted PRIMARY: the checkout must
+hold `.workspace/dagu/config.json` committed at `HEAD`, and its canonical
+(`realpath`) path must equal this host resolution using the committed config's
+`lane` as `<workspace>`. Rendered DAGs are not required or consulted. A clone with
+identical committed policy, or a bound checkout without committed policy, does
+not qualify. Active feature/PoC run protection is independent of this idle check.
+
 The DAG's fixed invariants: `PRIMARY` is the repository clone, its main working tree, on `BASE_BRANCH` and clean; the run's worktree is always `$PRIMARY/.workspace/worktrees/issue-<n>`, ignored by git; the gate runs with `umask 0022` and without `GH_TOKEN`/`GITHUB_TOKEN`; auto-merge is bound to the tested SHA with `--match-head-commit`; and gate bodies serialize per primary within the repository's declared queue capacity. `start_gate` registers the canonical PRIMARY, worktree, branch and owning run in Git metadata. Both cleanup entry points share the same script. They refresh the remote base and require either candidate ancestry in that base or a MERGED PR whose head equals the recorded tested candidate and whose effective merge SHA is an ancestor of the refreshed base. `cleanup-proof.json` records candidate, base, squash SHA and proof. Ordinary `git worktree remove` protects local files; a dirty worktree is retained. Local branch deletion compares the candidate atomically; remote deletion at merged close uses an exact-SHA lease.
 
 `push` publishes the feature branch for PR delivery after current-candidate verification. Uncaptured files and conflict resolutions remain in their worktree for recovery even when HEAD is on the base.

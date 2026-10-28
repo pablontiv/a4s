@@ -46,6 +46,13 @@ for isolated script scenarios, or `A4S_LIVE_DAGU=1 npx tsx --test test/reconcile
 to include official-Dagu validation, bounded-tick checks and checkpoint/queue scenarios in isolated temporary homes.
 The consumer config file is `.workspace/dagu/config.json`. Admission materializes DAGs from the installed templates.
 
+The OMP resource guard protects an idle PRIMARY when its policy is committed at
+`HEAD` and its canonical path matches the host binding. It resolves
+`$DAGU_HOME/primaries/<lane>`, then `A4S_PRIMARY`, then `$DAGU_HOME/a4s-primary`,
+using the committed config's lane. Rendered DAGs are not adoption evidence;
+an identical-config clone is not protected unless it is the bound PRIMARY.
+Active feature/PoC ownership remains independently protected.
+
 The existing feature lifecycle publishes a gated candidate through
 `push → pr → code_scanning → auto_merge → await_ci → await_merge`. Triage review remains independent;
 optional operator validation is fixed in the config file (a4s currently uses an empty
