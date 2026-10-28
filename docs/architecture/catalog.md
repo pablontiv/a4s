@@ -79,6 +79,10 @@ native skill root, or configure `skills.customDirectories`; see
 | [`skills/workspace-hygiene/`](../../skills/workspace-hygiene/SKILL.md) | Opt-in repository inventory, classification, approved preservation/publication and cleanup of worktrees, branches, stashes and Orca contexts; foreign repositories remain under their owning sessions |
 | [`skills/sandbox-threat-model/`](../../skills/sandbox-threat-model/SKILL.md) | Classify execution controls as prompt, advisory, or enforced before calling one a sandbox; #689 decision is skill, with no mantis product install and no CI gate |
 
+Spike #693 compared 1Password for Agents with operator-owned credentials and
+discarded product adoption and a secret-injection skill; see
+[1Password Agents](onepassword-agents.md).
+
 ### Conditional #311 ingestion
 
 The #428 inventory inspected main `2e6ba63ae2ff1ae3f30beb24024d5c5157ce6e22`
